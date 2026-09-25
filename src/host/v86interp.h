@@ -860,14 +860,38 @@ static int istep(icpu *c)
     /* LAHF (9F) / SAHF (9E): AH <-> SF ZF AF PF CF (bit 1 reads as 1). Bubbles: 16,586. */
     if (op == 0x9F) { s8(c, 4, (uint8_t)((c->flags & 0xD5u) | 0x02u)); c->ip = (uint16_t)(c->ip + idx); return 1; }
     if (op == 0x9E) { c->flags = (c->flags & ~0xD5u) | (g8(c, 4) & 0xD5u); c->ip = (uint16_t)(c->ip + idx); return 1; }
-    if (op == 0x98) {                                  /* CBW: AX <- sign(AL) */
-        if (osz) return 0;                             /* CWDE: TODO */
-        s16(c, 0, (uint16_t)(int16_t)(int8_t)(c->r[0] & 0xFF));
+    if (op == 0x98) {                                  /* CBW: AX <- sign(AL); 66: CWDE */
+        if (osz) c->r[0] = (uint32_t)(int32_t)(int16_t)(c->r[0] & 0xFFFF);
+        else     s16(c, 0, (uint16_t)(int16_t)(int8_t)(c->r[0] & 0xFF));
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
-    if (op == 0x99) {                                  /* CWD: DX <- sign(AX) */
-        if (osz) return 0;                             /* CDQ: TODO */
-        s16(c, 2, (c->r[0] & 0x8000u) ? 0xFFFFu : 0u);
+    if (op == 0x99) {                                  /* CWD: DX <- sign(AX); 66: CDQ */
+        /* CDQ is s80's: Wolf3D's FixedByFrac (`cdq / idiv dword`) declined it 1,074
+           times under a multi-plane mask, handing its renderer to the real CPU. */
+        if (osz) c->r[2] = (c->r[0] & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+        else     s16(c, 2, (c->r[0] & 0x8000u) ? 0xFFFFu : 0u);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    /* ---- IMUL reg, r/m, imm (69: imm16/32, 6B: sign-extended imm8). s80: Mario's
+     * `6b f8 0a` = imul di,ax,10 was 7,978 of its declines under a multi-plane mask.
+     * Destination is the reg field; CF=OF=1 when the signed product does not fit the
+     * destination width. SF/ZF/AF/PF are undefined by the spec and left alone. */
+    if (op == 0x69 || op == 0x6B) {
+        int w = W, ovf;
+        int64_t a, b, prod;
+        uint32_t r;
+        modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+        if (m.is_mem && m.lin >= GUEST_HI) return 0;
+        { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+          a = (w == 4) ? (int64_t)(int32_t)e : (int64_t)(int16_t)e; }
+        if (op == 0x6B) { b = (int8_t)rd_mem(cb + idx, 1); idx += 1; }
+        else { uint32_t iv = rd_mem(cb + idx, w); idx += w;
+               b = (w == 4) ? (int64_t)(int32_t)iv : (int64_t)(int16_t)iv; }
+        prod = a * b;
+        r = (uint32_t)prod & wmask(w);
+        ovf = (w == 4) ? (prod != (int64_t)(int32_t)r) : (prod != (int64_t)(int16_t)r);
+        srw(c, m.g, w, r);
+        c->flags = (c->flags & ~(F_CF | F_OF)) | (ovf ? (F_CF | F_OF) : 0);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xD7) {                                  /* XLAT: AL <- [DS:BX+AL] */

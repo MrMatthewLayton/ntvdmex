@@ -273,6 +273,11 @@ static BOOL oscompat_attach_console(DWORD pid)
    the DEFAULT because the page trap demonstrably freezes the guest on real
    hardware; this knob exists so the old path is still one file away. */
 #define P12OFF_FLAG   CFG_("p12off.flag")
+/* North star 1 (s80): present = do NOT interpret mode-Y multi-plane / latch windows,
+   i.e. go back to the scratch + fan-out approximation. The A/B and rollback lever. */
+#define MYINTERP_OFF_FLAG CFG_("modeyinterp_off.flag")
+/* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
+#define MYRING_FLAG CFG_("myring.flag")
 /* Create every Settings page off-screen at startup and log whether the templates
    still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
@@ -1066,6 +1071,9 @@ static int      g_ui_forced;                              /* this body run was r
 #define KEYLAT_RING 32
 static uint32_t qpc_us(LONGLONG d);          /* fwd: defined with the lock instruments */
 static void modey_tl_report(void);          /* fwd: north star 1, with the mode-Y remap */
+static int  modey_interp_serves(void);      /* fwd: north star 1, design C */
+static void my_ring_dump(const char *why);  /* fwd: north star 1, design C */
+static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp);
 static int host_readable(const void *addr, SIZE_T len);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_keylat_t[KEYLAT_RING];
 static volatile LONG     g_keylat_head, g_keylat_tail;
@@ -1705,6 +1713,11 @@ static int            g_opltrace_on   = 0;
 static DWORD          g_p12_batches   = 0;
 static DWORD          g_p12_instrs    = 0;
 static DWORD          g_p12_bails     = 0;
+/* North star 1, design C (s80) -- see modey_needs_interp(). */
+static int            g_my_interp_off = 0;  /* MYINTERP_OFF_FLAG                          */
+static int            g_my_interp     = 0;  /* inside host_interp on mode Y's behalf       */
+static DWORD          g_my_slices = 0, g_my_instrs = 0, g_my_bails = 0, g_my_bail_mp = 0;
+static int            g_my_ring_on    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: v86_run keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -3579,6 +3592,7 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
     WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
     DWORD efl = VDM_REG(tib, VTIB_EFLAGS);
     WORD fl = (WORD)efl;                           /* push the live frame's FLAGS */
+    my_ring_note_irq(vec, cs, ip, ss, sp);         /* north star 1: where did it land? */
     /* ★ Fold VIF into the pushed IF. On VME hardware the guest's REAL interrupt-enable
        lives in EFLAGS.VIF (bit 19), because that is what its own STI sets -- but an IRET
        frame is 16 bits wide, so a straight truncation drops VIF and pushes IF=0. The
@@ -6014,7 +6028,12 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
    both exec loops -- and wakes any blocked reader. Started only when g_headless. */
 static DWORD WINAPI headless_deadline_thread(LPVOID pv)
 {
-    char b[512], *q = b;
+    /* ⛔ 2048, NOT 512 (s80). The hot-ports line alone is up to IO_HOT_MAX (48) x ~22
+         chars = ~1.1 KB -- IO_HOT_MAX grew from 12 and this buffer did not, so a run with
+         many hot ports smashed the stack and the host faulted INSIDE the report meant to
+         explain the run (`HOSTFAULT at=0x36303030`, i.e. "0006" as a return address).
+         Worst case per flush: ~1.1 KB, then ~0.6 KB (unclaimed + VESA). */
+    char b[2048], *q = b;
     DWORD f_cs = 0, f_ip = 0, f_efl = 0, f_tick = 0;
     BYTE  f_bytes[12];
     int   f_ok = 0;
@@ -11639,6 +11658,8 @@ static DWORD  g_ysel_zero  = 0;   /* ...and the mask selected no plane at all   
                 whole defect); a trap-per-write design would pay per store
          us     host time spent inside this function     (the current design's own cost)
          flip   CRTC 0Ch (start address high) writes      (guest frames, for page-flippers)
+         ins    instructions interpreted for mode Y        (design C, modey_needs_interp)
+         ius    host time spent interpreting them          (compare with `us`)
      Timed with RDTSC, not QPC: on XP QPC can be the ACPI PM timer at ~1 us a read, and
      this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
      the thing measured. Cycles are converted to us once, at report time, against QPC. */
@@ -11659,6 +11680,8 @@ static DWORD  g_yfan_bytes = 0;   /* changed bytes fanned out, whole run */
 static BYTE   g_yshadow[MODEY_WIN];
 static DWORD  g_yfan_new = 0;
 static DWORD  g_ytl_fann[YTL_SECS];
+static DWORD  g_ytl_ins[YTL_SECS];   /* instructions interpreted for mode Y (s80, design C) */
+static unsigned long long g_ytl_icyc[YTL_SECS];   /* ...and the host cycles that took */
 static unsigned long long ytl_rdtsc(void)
 {
     unsigned lo, hi;
@@ -12008,6 +12031,10 @@ static void modey_remap_select(void *ctx, int mask)
     unsigned long long c0;
     DWORD sec, sw0, fan0, fb0, fn0;
     if (!g_yremap) return;
+    /* The timeline measures MODE Y. A planar 16-colour guest (mode 12h) also moves this
+       window on every map-mask write, and the RDTSC/GetTickCount toll cost Lemmings'
+       interpreted run ~4% of its throughput -- so it goes straight to the work. */
+    if (g_vid.mkind != VID_KIND_LINEAR8) { modey_remap_select_body(ctx, mask); return; }
     if (!g_ytl_t0) {
         LARGE_INTEGER q; QueryPerformanceCounter(&q);
         g_ytl_t0 = GetTickCount(); g_ytl_tsc0 = ytl_rdtsc(); g_ytl_qpc0 = q.QuadPart;
@@ -12033,15 +12060,29 @@ static void modey_remap_select(void *ctx, int mask)
    mode-Y activity, so a row reads straight across as a rate. Called from BOTH exits:
    a DOS/4GW guest leaves through the watchdog's forced exit and never reaches the STAGE2
    summary, and Doom is the guest this exists for. Prints once. */
+#define MY_SITE_MAX 16
+static struct { DWORD cs, ip, n; BYTE b[8]; } g_my_site[MY_SITE_MAX];
+static unsigned g_my_site_n = 0;
+static void modey_bail_note(DWORD cs, DWORD ip, const volatile BYTE *b)
+{
+    unsigned k, j;
+    for (k = 0; k < g_my_site_n; ++k)
+        if (g_my_site[k].cs == cs && g_my_site[k].ip == ip) { g_my_site[k].n++; return; }
+    if (g_my_site_n >= MY_SITE_MAX) return;
+    g_my_site[k].cs = cs; g_my_site[k].ip = ip; g_my_site[k].n = 1;
+    for (j = 0; j < 8; ++j) g_my_site[k].b[j] = b[j];
+    ++g_my_site_n;
+}
 static void modey_tl_report(void)
 {
     static int done = 0;
     char b[1400], *p = b;
     LARGE_INTEGER qn; unsigned long long cpu; DWORD us_run, t, last = 0;
     int row;
-    static const char *nm[7] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN" };
+    static const char *nm[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
     if (done || !g_ytl_t0) return;
     done = 1;
+    if (g_my_slices && g_my_ring_on) my_ring_dump("at exit -- the last instructions interpreted for mode Y");
     QueryPerformanceCounter(&qn);
     us_run = qpc_us(qn.QuadPart - g_ytl_qpc0);
     cpu = us_run ? (ytl_rdtsc() - g_ytl_tsc0) / us_run : 0;    /* cycles per us */
@@ -12050,7 +12091,21 @@ static void modey_tl_report(void)
     p = zput(p, " secs="); p = zdec(p, last + 1);
     p = zput(p, " fanB_total="); p = zdec(p, g_yfan_bytes);
     p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
-    for (row = 0; row < 7; ++row) {
+    p = zput(p, "STAGE2: MODEY-INTERP "); p = zput(p, g_my_interp_off ? "OFF (knob)" : "on");
+    p = zput(p, " slices="); p = zdec(p, g_my_slices);
+    p = zput(p, " instrs="); p = zdec(p, g_my_instrs);
+    p = zput(p, " bails="); p = zdec(p, g_my_bails);
+    p = zput(p, " bails_under_multiplane="); p = zdec(p, g_my_bail_mp);
+    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+    { unsigned k, j;
+      for (k = 0; k < g_my_site_n; ++k) {
+          p = zput(p, "  MODEY-INTERP bail cs:ip="); p = zhex(p, g_my_site[k].cs);
+          p = zput(p, ":"); p = zhex(p, g_my_site[k].ip);
+          p = zput(p, " n="); p = zdec(p, g_my_site[k].n); p = zput(p, " bytes:");
+          for (j = 0; j < 8; ++j) { p = zput(p, " "); p = zhexb(p, g_my_site[k].b[j]); }
+          p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+      } }
+    for (row = 0; row < 9; ++row) {
         DWORD prevflip = 0;
         p = zput(p, "STAGE2: MODEYTL "); p = zput(p, nm[row]); p = zput(p, "=");
         for (t = 0; t <= last; ++t) {
@@ -12064,6 +12119,8 @@ static void modey_tl_report(void)
             case 5: v = g_ytl_flip[t] ? g_ytl_flip[t] - prevflip : 0;
                     if (g_ytl_flip[t]) prevflip = g_ytl_flip[t]; break;
             case 6: v = g_ytl_fann[t]; break;
+            case 7: v = g_ytl_ins[t];  break;
+            case 8: v = cpu ? (DWORD)(g_ytl_icyc[t] / cpu) : 0; break;
             }
             p = zput(p, t ? "," : ""); p = zdec(p, v);
         }
@@ -12096,9 +12153,14 @@ static void modey_remap_select_body(void *ctx, int mask)
     if (g_ycur == 5 && g_yprev_mask) {
         unsigned k;
         const BYTE *sc = (const BYTE *)g_yview[5];
+        /* fanN is mode Y's measurement; a planar guest pays nothing for it -- a
+           separate pass rather than a per-byte test, because this loop is hot for a
+           mode-12h guest (Lemmings: ~38k windows a run) and -O2 does not unswitch. */
+        if (g_vid.mkind == VID_KIND_LINEAR8)
+            for (k = 0; k < MODEY_WIN; ++k)
+                if (sc[k] != g_yshadow[k]) { ++g_yfan_new; g_yshadow[k] = sc[k]; }
         for (k = 0; k < MODEY_WIN; ++k) {
             BYTE b;
-            if (sc[k] != g_yshadow[k]) { ++g_yfan_new; g_yshadow[k] = sc[k]; }
             if (sc[k] == g_yseed[k]) continue;   /* untouched: not this mask's business */
             ++g_yfan_bytes;
             b = sc[k];
@@ -12114,6 +12176,12 @@ static void modey_remap_select_body(void *ctx, int mask)
         if (!n) { ++g_ysel_zero; return; }                /* mask 0: nothing to point at */
         want = (n == 1) ? sel[0] : 5;
         g_yprev_mask = (n == 1) ? 0 : mask;
+        /* The interpreter serves this window (modey_needs_interp): its stores never
+           touch A0000's mapping, so there is nothing to seed and nothing to fan out --
+           which was ~93% of Doom-low's time and ~38% of Wolf3D's. Point the window at
+           the first selected plane so an instruction the interpreter declines (it runs
+           natively, counted as bail_mp) still lands in one right plane. */
+        if (n > 1 && modey_interp_serves()) { want = sel[0]; g_yprev_mask = 0; }
     }
     if (want == g_ycur) { ++g_ysel_same; return; }
     /* Before the mapping moves: what did the plane we are leaving actually receive? */
@@ -12125,7 +12193,9 @@ static void modey_remap_select_body(void *ctx, int mask)
                                                             fan-out can tell writes from
                                                             bytes nobody touched */
         unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
-        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; g_yshadow[k] = s2[k]; }
+        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; }
+        if (g_vid.mkind == VID_KIND_LINEAR8)
+            for (k = 0; k < MODEY_WIN; ++k) g_yshadow[k] = s2[k];
     }
     if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
@@ -12420,6 +12490,40 @@ static void video_trap_sync(void)
     else                      { a000_protect(planar); g_p12_interp = 0; }
 }
 
+/* ── ★★★ NORTH STAR 1: MODE Y'S MULTI-PLANE STORES GO THROUGH THE ADDRESS GENERATOR. ──
+     (s80, design C of docs/research/modey-cost-measurement.md -- the user's choice.)
+     The remap serves a SINGLE-plane mask exactly: A0000 is that plane's own section and
+     a native store lands where the hardware would put it. Two cases have no mapping at
+     all, because one virtual page cannot store into several planes:
+       - a MULTI-PLANE map mask (Doom's low detail 0x03/0x0c, Wolf3D's wall columns,
+         Mario's 0x05/0x0a), and
+       - WRITE MODE != 0 (a latch copy moves all four planes at once).
+     For those the scratch + fan-out approximated -- wrongly, because a value diff cannot
+     see a store of the value already there -- and slowly (measured: Doom low ~93% of
+     every second, Wolf3D ~38%).
+   ► So for exactly those windows the host interpreter is the CPU, and every A0000 store
+     goes through vga_planar_write() into every selected plane AT THE TIME OF THE WRITE.
+     The window is known exactly -- it opens and closes on a trapped OUT to 3C5h/3CFh --
+     so the rest of the program runs natively. It cannot be entered by a page fault:
+     protecting A0000 freezes a V86 guest on real hardware (see above).
+   ⚠ REAL MODE ONLY for now: v86interp.h is 16-bit. Doom's renderer is 32-bit protected-
+     mode code and keeps the old path (g_dpmi_pm) until the interpreter learns 32-bit
+     addressing -- the second half of this north star. */
+/* Does the interpreter serve mode Y's multi-plane windows for this guest at all? Then
+   the remap need not build a scratch window for them (see modey_remap_select_body). */
+static int modey_interp_serves(void)
+{
+    return !g_my_interp_off && !g_dpmi_pm && g_vid.mkind == VID_KIND_LINEAR8;
+}
+/* Is the guest RIGHT NOW in a window no mapping can serve? */
+static int modey_needs_interp(void)
+{
+    uint8_t m;
+    if (!g_yremap || !modey_interp_serves() || g_vid.chain4) return 0;
+    m = (uint8_t)(g_vid.map_mask & 0x0F);
+    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.write_mode & 3) != 0;
+}
+
 /* ====================================================================== *
  *  Mode-12h fill-loop fast path: a small, bounded, flags-accurate 8086    *
  *  interpreter.                                                           *
@@ -12558,40 +12662,134 @@ static uint32_t host_guest_pc(void) { return g_ipc; }
 #define TIER1_CAP  2000000L      /* interpreter iteration ceiling once escalated        */
 #define P12_SLICE     20000L     /* planar mode: instructions per interpreter slice     */
 
+/* ── WHAT DID THE INTERPRETER JUST RUN? (s80, north star 1) ──────────────────────────
+     Design C hands Wolf3D's renderer to the interpreter, and the first run ended with the
+     guest executing the interrupt vector table (0000:0078) as code -- an instruction we
+     MODEL got something wrong (an unmodelled one bails to the real CPU, which cannot).
+     A ring of the last 64 interpreted instructions, written only while interpreting for
+     mode Y, dumped once when the guest lands at CS=0: the culprit is in it. */
+#define MY_RING 64
+static struct { WORD cs, ip, sp, ss; BYTE b[6]; } g_my_ring[MY_RING];
+static unsigned g_my_ring_pos = 0;
+static int      g_my_ring_dumped = 0;
+static void my_ring_dump(const char *why)
+{
+    char lb[160], *q;
+    unsigned k, j;
+    if (g_my_ring_dumped) return;
+    g_my_ring_dumped = 1;
+    q = lb; q = zput(q, "MODEY-INTERP RING ("); q = zput(q, why); q = zput(q, "), oldest first:\r\n");
+    log_append(LOG_PATH, lb, q);
+    for (k = 0; k < MY_RING; ++k) {
+        unsigned i = (g_my_ring_pos + k) % MY_RING;
+        if (!g_my_ring[i].cs && !g_my_ring[i].ip) continue;
+        q = lb;
+        q = zput(q, "  "); q = zhex(q, g_my_ring[i].cs); q = zput(q, ":"); q = zhex(q, g_my_ring[i].ip);
+        q = zput(q, " ss:sp="); q = zhex(q, g_my_ring[i].ss); q = zput(q, ":"); q = zhex(q, g_my_ring[i].sp);
+        q = zput(q, "  ");
+        for (j = 0; j < 6; ++j) { q = zhexb(q, g_my_ring[i].b[j]); q = zput(q, " "); }
+        q = zput(q, "\r\n"); log_append(LOG_PATH, lb, q);
+    }
+}
+
+/* An injected interrupt, as a ring entry: cs=FFFE, ip=vector, ss:sp = the cs:ip it
+   interrupted. Only once mode Y has been interpreted -- the ring is its instrument. */
+static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp)
+{
+    unsigned i, j;
+    (void)ss; (void)sp;
+    if (!g_my_ring_on || !g_my_slices || g_my_ring_dumped) return;
+    i = g_my_ring_pos++ % MY_RING;
+    g_my_ring[i].cs = 0xFFFE; g_my_ring[i].ip = (WORD)vec;
+    g_my_ring[i].ss = cs;     g_my_ring[i].sp = ip;
+    for (j = 0; j < 6; ++j) g_my_ring[i].b[j] = 0;
+}
+
 static long host_interp(volatile BYTE *tib, long cap)
 {
-    icpu c; long iters;
+    icpu c; long iters; int my;
 
-    c.r[0] = (uint16_t)VDM_REG(tib, VTIB_EAX); c.r[1] = (uint16_t)VDM_REG(tib, VTIB_ECX);
-    c.r[2] = (uint16_t)VDM_REG(tib, VTIB_EDX); c.r[3] = (uint16_t)VDM_REG(tib, VTIB_EBX);
-    c.r[4] = (uint16_t)VDM_REG(tib, VTIB_ESP); c.r[5] = (uint16_t)VDM_REG(tib, VTIB_EBP);
-    c.r[6] = (uint16_t)VDM_REG(tib, VTIB_ESI); c.r[7] = (uint16_t)VDM_REG(tib, VTIB_EDI);
+    /* ── ★★ THE FULL 32-BIT REGISTERS, IN AND OUT. (s80) ──────────────────────────────
+         This loaded and stored 16 bits, so the high half of every register was ZEROED
+         on the way in and DROPPED on the way out. Pure 16-bit code cannot tell; a 386
+         real-mode program can. Measured on Wolf3D under mode-Y interpretation: its
+         FixedByFrac runs `mov eax,[bp+6]` (interpreted, 0x66) then `cdq / idiv dword`
+         (declined -> the real CPU) -- which divided a truncated EAX, overflowed, took
+         INT 0, and the IRET chain ended at 0000:0078 with the game dead. The
+         interpreter's own 8/16-bit writes (s8/s16) preserve the high halves, so
+         carrying all 32 bits is transparent to 16-bit code and correct for 386 code.
+         ESP keeps its own high word: V86 addresses the stack through SP only. */
+    c.r[0] = VDM_REG(tib, VTIB_EAX); c.r[1] = VDM_REG(tib, VTIB_ECX);
+    c.r[2] = VDM_REG(tib, VTIB_EDX); c.r[3] = VDM_REG(tib, VTIB_EBX);
+    c.r[4] = (uint16_t)VDM_REG(tib, VTIB_ESP); c.r[5] = VDM_REG(tib, VTIB_EBP);
+    c.r[6] = VDM_REG(tib, VTIB_ESI); c.r[7] = VDM_REG(tib, VTIB_EDI);
     c.seg[0] = (uint16_t)VDM_REG(tib, VTIB_ES); c.seg[1] = (uint16_t)VDM_REG(tib, VTIB_CS);
     c.seg[2] = (uint16_t)VDM_REG(tib, VTIB_SS); c.seg[3] = (uint16_t)VDM_REG(tib, VTIB_DS);
     c.seg[4] = (uint16_t)VDM_REG(tib, VTIB_FS); c.seg[5] = (uint16_t)VDM_REG(tib, VTIB_GS);
     c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
+    /* Mode Y (s80): the guest's interrupt flag is IF OR VIF -- a native STI under VME sets
+       only VIF -- so give the interpreter the same answer the gate uses. See the
+       write-back, which carries the interpreted flag back into both. */
+    if (g_my_interp && (c.flags & EFLAGS_VIF_BIT)) c.flags |= 0x200u;
 
     HOST_LOCK();
     g_interp_c = &c;
-    for (iters = 0; iters < cap; ++iters) {
-        if (!istep(&c)) break;
-        /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
-           middle of a loop; the interpreter is standing in for that CPU and must
-           do the same, or a guest whose loop can only END when an interrupt
-           fires runs here forever.
-           This is not hypothetical -- it is why mode 12h never worked. BLIT's
-           outer loop is `DO WHILE INKEY$ = ""`, and QuickBASIC polls for the key
-           in memory. Escalated to the interpreter, that loop burned the whole
-           2,000,000-iteration cap with no way for a keystroke or a tick to ever
-           reach it, returned, re-faulted, re-escalated: TEN I/O events in thirty
-           seconds and a frozen screen, while the same program with the A0000
-           trap disabled produced 22.5 MILLION.
-           Checked every 256 instructions so the cost is negligible against the
-           fill loops this batching exists to accelerate. */
-        if ((iters & 0xFF) == 0xFF) {
-            int q, pend = (g_irq0_pending != 0);
-            for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
-            if (pend) { ++iters; break; }
+    /* Hoisted: a global read after every istep() call is a reload the compiler cannot
+       drop, and it cost the mode-12h path ~6% of its throughput (Lemmings, two
+       interleaved A/B pairs: 1.044G vs 1.108G instructions in the same 54 s). */
+    my = g_my_interp;
+    if (!my) {
+        /* THE MODE-12h LOOP, EXACTLY AS IT WAS. Mode Y's checks live in the copy below:
+           two extra tests per instruction cost Lemmings ~2% of its interpreted
+           throughput (interleaved A/B against the confirmed build), and that path is
+           user-confirmed as it stands. */
+        for (iters = 0; iters < cap; ++iters) {
+            if (!istep(&c)) break;
+            /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
+               middle of a loop; the interpreter is standing in for that CPU and must
+               do the same, or a guest whose loop can only END when an interrupt
+               fires runs here forever.
+               This is not hypothetical -- it is why mode 12h never worked. BLIT's
+               outer loop is `DO WHILE INKEY$ = ""`, and QuickBASIC polls for the key
+               in memory. Escalated to the interpreter, that loop burned the whole
+               2,000,000-iteration cap with no way for a keystroke or a tick to ever
+               reach it, returned, re-faulted, re-escalated: TEN I/O events in thirty
+               seconds and a frozen screen, while the same program with the A0000
+               trap disabled produced 22.5 MILLION.
+               Checked every 256 instructions so the cost is negligible against the
+               fill loops this batching exists to accelerate. */
+            if ((iters & 0xFF) == 0xFF) {
+                int q, pend = (g_irq0_pending != 0);
+                for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
+                if (pend) { ++iters; break; }
+            }
+        }
+    } else {
+        /* MODE Y (north star 1). Same loop, plus: the optional instruction ring
+           (MYRING_FLAG), a stop the moment the guest lands in the vector table, an IRQ
+           yield only when the guest's IF would let it be taken, and a hand-back when
+           the multi-plane / latch window closes. */
+        const int ring = g_my_ring_on;
+        for (iters = 0; iters < cap; ++iters) {
+            if (ring) {
+                unsigned i = g_my_ring_pos++ % MY_RING, j;
+                const volatile BYTE *ib = (const volatile BYTE *)(((uint32_t)c.seg[1] << 4) + c.ip);
+                g_my_ring[i].cs = c.seg[1]; g_my_ring[i].ip = c.ip;
+                g_my_ring[i].ss = c.seg[2]; g_my_ring[i].sp = (WORD)c.r[4];
+                for (j = 0; j < 6; ++j) g_my_ring[i].b[j] = ib[j];
+            }
+            if (!istep(&c)) break;
+            if (c.seg[1] == 0 && c.ip < 0x400) { ++iters; my_ring_dump("interpreter reached CS=0"); break; }
+            if ((iters & 0xFF) == 0xFF) {
+                int q, pend = (g_irq0_pending != 0);
+                for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
+                /* Only when the guest could TAKE it: yielding inside a CLI region hands
+                   the loop a chance to inject there (see the write-back below). */
+                if (pend && (c.flags & 0x200)) { ++iters; break; }
+                /* The window has closed (single-plane mask / write mode 0 again): hand
+                   the CPU back. Staying would still be CORRECT, only slower. */
+                if (!modey_needs_interp()) { ++iters; break; }
+            }
         }
     }
     g_interp_c = NULL;
@@ -12599,10 +12797,10 @@ static long host_interp(volatile BYTE *tib, long cap)
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
 
-    VDM_SET16(tib, VTIB_EAX, c.r[0]); VDM_SET16(tib, VTIB_ECX, c.r[1]);
-    VDM_SET16(tib, VTIB_EDX, c.r[2]); VDM_SET16(tib, VTIB_EBX, c.r[3]);
-    VDM_SET16(tib, VTIB_ESP, c.r[4]); VDM_SET16(tib, VTIB_EBP, c.r[5]);
-    VDM_SET16(tib, VTIB_ESI, c.r[6]); VDM_SET16(tib, VTIB_EDI, c.r[7]);
+    VDM_REG(tib, VTIB_EAX) = c.r[0]; VDM_REG(tib, VTIB_ECX) = c.r[1];
+    VDM_REG(tib, VTIB_EDX) = c.r[2]; VDM_REG(tib, VTIB_EBX) = c.r[3];
+    VDM_SET16(tib, VTIB_ESP, c.r[4]); VDM_REG(tib, VTIB_EBP) = c.r[5];
+    VDM_REG(tib, VTIB_ESI) = c.r[6]; VDM_REG(tib, VTIB_EDI) = c.r[7];
     VDM_SET16(tib, VTIB_EIP, c.ip);
     /* SEGMENTS TOO. They were loaded but never stored, so every segment load the
        interpreter modelled (POP ES / MOV DS,AX / far CALL / INT / IRET) was thrown
@@ -12615,6 +12813,17 @@ static long host_interp(volatile BYTE *tib, long cap)
     VDM_REG(tib, VTIB_FS) = c.seg[4]; VDM_REG(tib, VTIB_GS) = c.seg[5];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.flags & 0xFFFFu);
+    /* ── ★ AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
+         VIF is set (guest_if_enabled), because under VME a native STI sets VIF. An
+         interpreted CLI clears only IF here -- VIF stayed set, the gate saw "enabled",
+         and an IRQ was injected into a region the guest had closed: Wolf3D's ISR tail
+         (`pop ax / pop ds / iret`) ran on a frame that was not its own and IRET'd to
+         0000:0078. Keep the two in step so the interpreter's answer is the answer.
+       ⚠ Mode Y only: the mode-12h path (Lemmings) is user-confirmed as it stands. */
+    if (g_my_interp) {
+        if (c.flags & 0x200) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF_BIT;
+        else                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
+    }
     return iters;
 }
 
@@ -22797,6 +23006,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_my_interp_off = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_my_ring_on    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     g_opltrace_on = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     if (g_opltrace_on) g_opl.trace = opl_trace_write;
@@ -25107,6 +25318,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 } else ++g_p12_site_lost;
               } }
             g_p12_bails++;
+        }
+        if (!g_p12_interp && modey_needs_interp()) {
+            long ran;
+            unsigned long long ic0 = ytl_rdtsc();
+            g_my_interp = 1;
+            ran = host_interp_paced(tib, P12_SLICE);
+            g_my_interp = 0;
+            if (g_ytl_t0) { DWORD sec = (GetTickCount() - g_ytl_t0) / 1000u;
+                            if (sec < YTL_SECS) { if (ran > 0) g_ytl_ins[sec] += (DWORD)ran;
+                                                  g_ytl_icyc[sec] += ytl_rdtsc() - ic0; } }
+            if (ran > 0) { g_my_slices++; g_my_instrs += (DWORD)ran; continue; }
+            if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == 0) my_ring_dump("guest at CS=0 after a slice");
+            /* Declined (a BOP, or an opcode it does not model): that ONE instruction
+               runs natively. Under a multi-plane mask a native A0000 store reaches only
+               the first selected plane -- so count these separately; they are the
+               remaining way this window can be wrong. */
+            { DWORD c3 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i3 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+              const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
+              if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
+                  uint8_t mm = (uint8_t)(g_vid.map_mask & 0x0F);
+                  ++g_my_bails;
+                  if (mm & (uint8_t)(mm - 1)) ++g_my_bail_mp;
+                  modey_bail_note(c3, i3, ip3);
+              } }
         }
         InterlockedExchange(&g_in_exec, 1);
         exec_enter_mark();               /* guest-execution clock starts (throttle) */

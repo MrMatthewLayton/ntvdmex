@@ -87,3 +87,61 @@ An address generator that routes stores at write time fixes both; the fan-out fi
 - Instructions-per-store for C are estimates, not measurements; interpreter speed is from
   16-bit code. The first step of C should measure both on the real guests.
 - One run per guest, headless, on one machine.
+
+---
+
+## Design C, built — Wolf3D and Mario (s80, the user's choice: "C: Wolf3D/Mario first")
+
+**How it works.** `modey_needs_interp()` is true while the guest is in unchained 256-colour
+mode with a **multi-plane map mask or write mode ≠ 0** — the two cases no mapping can serve.
+While it holds, the V86 loop runs the guest in the host interpreter (as mode 12h already does),
+and every A0000 access goes through `vga_planar_write`/`vga_planar_read` — the full VGA
+pipeline (write modes 0–3, latches, set/reset, bit mask, GR4), which already targets the
+host's four plane sections. The window opens and closes on a trapped `OUT`, so it cannot miss
+one; a page trap is not an option (it freezes V86 guests on real hardware). While the
+interpreter serves a multi-plane window the remap points A0000 at the first selected plane
+instead of the scratch, so the seed + fan-out are gone. Knob: `cfg\modeyinterp_off.flag`.
+
+**Three defects the first runs found:**
+
+1. **`host_interp` carried registers 16 bits wide** — high halves zeroed on entry, dropped on
+   exit. Wolf3D's `FixedByFrac` (`mov eax,[bp+6]` interpreted; `cdq / idiv dword` declined to
+   the real CPU) divided a truncated EAX, took INT 0, and IRET'd to `0000:0078`. Now 32-bit.
+   Latent for the mode-12h path too; Lemmings is pure 16-bit and never showed it.
+2. **VIF was not kept in step with an interpreted `cli`**, so the loop's gate (`IF | VIF`) could
+   inject inside a closed region. Mode Y now writes VIF back with IF, and only yields to a
+   pending IRQ when the guest's IF would let it be taken.
+3. **Declined opcodes under a multi-plane mask:** a decline runs natively *until the next
+   trap*, so a native A0000 store in that stretch reaches one plane. Added `cdq`/`cwde`
+   (`66 99`/`66 98`) and `imul r,r/m,imm` (`69`/`6B`) — 11 new checks in `interp_test`.
+   Wolf3D's declines went 1,077 → 3 (startup only: `rep outsb`, x87 `fild`); Mario's 8,084 → 0.
+
+Found by an instruction ring (`cfg\myring.flag`, last 64 interpreted instructions, dumped when
+the guest lands at CS=0) — kept, off by default.
+
+**Results (rig, host `0473d95d`):**
+
+| | Before (fan-out) | Design C |
+|---|---|---|
+| Wolf3D status bar | FLOOR/SCORE/LIVES/AMMO numbers and weapon **missing** | **all present** (`runs/s80_ns1/OFF_02.png` vs `wF_02.png`) |
+| Wolf3D frames/s in play | 70 | 70 |
+| Wolf3D host CPU | ~38% (fan-out) | **~70–82% (interpreting)** |
+| Mario frames/s | 70 | 70 |
+| Mario host CPU in play | ~13% | ~12% (remap) + ~2% (interp) |
+| Mario declines under multi-plane | 8,084 | 0 |
+
+⚠ **Wolf3D is interpreted almost continuously**, not only while drawing: it leaves a
+multi-plane mask or write mode set through its game logic. ~18 M instructions/s ≈ 155 cycles
+per instruction. Frame rate is unaffected on this 3.3 GHz box; a slower machine would feel it.
+The interpreter's own speed is now the lever (decode caching), not the design.
+
+**Regression, mode 12h (Lemmings), interleaved A/B against the confirmed build `b6a8a95b`:**
+interpreted throughput first measured −6%; the per-instruction checks, the timing wrapper and
+the `fanN` shadow were each confined to mode Y, leaving **−1.5%** (1.093 G vs 1.110 G
+instructions in 54 s) with guest frames unchanged (1,617–1,623 retrace edges in every run).
+
+Other regressions green: Skyroads (`n8=0 max_ms=6`), Doom direct (719/719 ISRs, no fault),
+Win16 Notepad, off-VM battery (interp_test 181 checks).
+
+**Still open for north star 1:** Doom (32-bit protected mode — the interpreter needs 32-bit
+addressing), and the chain-4 → unchained de-interleave (`p_vgamem`).

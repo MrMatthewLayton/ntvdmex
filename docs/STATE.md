@@ -139,7 +139,7 @@ The full surface list, with the primary source named for each, is in
 | # | North star | State |
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 📏 **MEASURED (s80)** — [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md). Today's approximation costs Doom low ~93% CPU (16 fps vs 35). Trap-per-store infeasible; **interpret-while-multi-plane** projects to ~5–20%. ⛔ **Awaiting the user's design decision.** |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 **Design C (user's choice) built for real-mode guests (s80)** — Wolf3D's status bar now draws, Mario clean, both 70 fps; ⚠ Wolf3D ~70–82% host CPU interpreting. **Doom still needs the 32-bit interpreter.** Awaiting the user's hand test. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**

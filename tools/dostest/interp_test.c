@@ -782,6 +782,48 @@ int main(void)
       step1(&c);
       CHECK((c.flags & 0xD5) == (F_PF | F_AF), "9E: SAHF loads PF/AF from AH, clears the rest"); }
 
+    /* ---- s80, north star 1: what Wolf3D and Mario declined under a multi-plane mask.
+       A declined instruction runs natively UNTIL THE NEXT TRAP, and any A0000 store in
+       that stretch reaches one plane only -- so these are correctness, not speed. ---- */
+    /* CDQ (66 99): Wolf3D's FixedByFrac `cdq / idiv dword [bp+0Ah]`, 1,074 declines. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x99 };
+      c.r[0] = 0x80000000u; c.r[2] = 0x12345678u; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[2] == 0xFFFFFFFFu && c.r[0] == 0x80000000u, "cdq: EAX<0 -> EDX=FFFFFFFF, EAX kept");
+      CHECK(c.ip == 2, "cdq: IP advances past the prefix and opcode"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x99 };
+      c.r[0] = 0x7FFFFFFFu; c.r[2] = 0xFFFFFFFFu; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[2] == 0, "cdq: EAX>=0 -> EDX=0"); }
+    /* CWDE (66 98): EAX <- sign-extend AX, whatever the high half held. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x98 };
+      c.r[0] = 0x12348001u; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[0] == 0xFFFF8001u, "cwde: AX=8001 -> EAX=FFFF8001"); }
+    /* IMUL r16, r/m16, imm8 (6B): Mario's `6b f8 0a` = imul di,ax,10 (7,978 declines). */
+    { icpu c = mkcpu(); BYTE p[] = { 0x6B, 0xF8, 0x0A };
+      c.r[0] = 0x0007; c.r[7] = 0xABCD0000u; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[7] == 0xABCD0046u, "imul 6B: di = ax*10 = 70, high half of EDI kept");
+      CHECK(!(c.flags & (F_CF | F_OF)) && c.ip == 3, "imul 6B: no overflow -> CF=OF=0, IP+3"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x6B, 0xC3, 0xFE };          /* imul ax,bx,-2 */
+      c.r[3] = 0x0003; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0xFFFA, "imul 6B: imm8 is SIGN-extended (3 * -2 = -6)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x6B, 0xC3, 0x04 };          /* imul ax,bx,4 */
+      c.r[3] = 0x4000; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0 && (c.flags & F_CF) && (c.flags & F_OF),
+            "imul 6B: 4000h*4 overflows 16 bits -> AX=0, CF=OF=1"); }
+    /* Mario's memory form: `6b 06 cc 00 5a` = imul ax, [00CCh], 5Ah (DS-relative). */
+    { icpu c = mkcpu(); BYTE p[] = { 0x6B, 0x06, 0xCC, 0x00, 0x5A };
+      c.seg[3] = 0x2000; MEM[0x200CC] = 0x03; MEM[0x200CD] = 0x00;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[0] & 0xFFFF) == 0x010E && c.ip == 5, "imul 6B: [disp16] * 5Ah = 3*90 = 10Eh, IP+5"); }
+    /* IMUL r16, r/m16, imm16 (69): imul bx,cx,1234h. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x69, 0xD9, 0x34, 0x12 };
+      c.r[1] = 0x0002; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[3] & 0xFFFF) == 0x2468 && c.ip == 4, "imul 69: bx = cx*1234h = 2468h, IP+4"); }
+    /* 66 6B: imul eax,eax,10 -- 32-bit, signed overflow. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x6B, 0xC0, 0x0A };
+      c.r[0] = 0x10000000u; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[0] == 0xA0000000u && (c.flags & F_CF) && (c.flags & F_OF),
+            "imul 66 6B: eax*10 wraps to A0000000h, CF=OF=1"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
