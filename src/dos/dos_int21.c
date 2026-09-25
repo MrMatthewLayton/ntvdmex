@@ -14,6 +14,22 @@
 int g_dos_int21_pm = 0;
 void dos_int21_set_pm(int on) { g_dos_int21_pm = on ? 1 : 0; }
 
+/* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
+   row was measured and why this is a table and not a switch. Defaults = the stock
+   ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
+   ⚠ CHANGING A DEFAULT HERE IS A BEHAVIOUR CHANGE FOR EVERY GUEST -- the knob exists
+     so an experiment does not have to be one. */
+dos_int53_ans_t g_dos_int53[DOS_INT53_N] = {
+    /* AL=00 */ { 0x0005, 0 },   /* documented form, asked with SI=BP=0             */
+    /* AL=01 */ { 0x0001, 1 },   /* genuinely unsupported: DOS "invalid function"   */
+    /* AL=02 */ { 0x5300, 0 },   /* top of COMMAND.COM's main loop -- CF is the gate */
+    /* AL=03 */ { 0x0001, 1 },   /* genuinely unsupported                            */
+    /* AL=04 */ { 0x5300, 0 },
+    /* AL=05 */ { 0x5301, 0 },   /* -> [0x327]; ⚠ context-dependent, see the handler */
+    /* AL=06 */ { 0x5300, 0 },
+    /* AL=07 */ { 0x5301, 0 },   /* -> [0x328]                                       */
+};
+
 /* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
  *
  * This is the line between "we are missing something" and "DOS has nothing here
@@ -1304,23 +1320,46 @@ int dos_int21(dos_machine_t *m)
            ⛔⛔ AND THE ORIGINAL "UNIMPLEMENTED" WAS ACCIDENTALLY RIGHT. It returned
              AX=1, i.e. AL=1 -- exactly what stock returns for AL=5 and AL=7, the two
              COMMAND.COM stores. I then "fixed" it to AX=0 on the theory that [0x327]=1
-             was blocking the interactive path, and made it WRONG. The theory was wrong
-             too: stock sets [0x327]=1 and IS interactive, so that gate does not mean
-             what I read it to mean.
-             ⇒ It was marked provisional, and that is the only reason this is a
-               correction rather than a fact. **Guessing a value for a private call is
-               not cheaper than measuring it; it is the same work done twice.**
+             was blocking the interactive path, and made it WRONG -- against the only
+             measurement there is. Reverted, and marked provisional, which is the only
+             reason that was a correction rather than a fact. **Guessing a value for a
+             private call is not cheaper than measuring it; it is the same work twice.**
+
+           ★★★ AND THE THEORY IT WAS REVERTED WITH IS NOW DISPROVED FROM THE GUEST'S
+             OWN CODE (s79). The revert carried a second claim -- "stock sets [0x327]=1
+             and IS interactive, so that gate does not mean what I read it to mean" --
+             which was an INFERENCE from the standalone probe, not an observation. XP's
+             COMMAND.COM disassembles as follows (transient origin = file offset
+             0x2470; `tools/ntvdm/cmdcom.py` re-derives all of this):
+
+               * the read-a-line routine is transient 0x0A0D, `AL=0` reads the keyboard
+                 and `AL!=0` does not. It has exactly FOUR callers, and the only two
+                 that pass AL=0 are 0x0924 and 0x0C33.
+               * BOTH of them sit directly behind `cmp byte [0x327],1 / jz away`.
+
+             There is therefore NO path in the image by which COMMAND.COM reads the
+             keyboard while [0x327] == 1, and [0x327] has exactly ONE writer:
+             `mov al,5 / mov ah,53h / int 21h / mov [0x327],al` at resident 0x169B.
+             Stock IS interactive. Therefore, IN THE SHELL'S CONTEXT, stock's
+             AX=5305h returns AL=0 -- and our probe measured AL=1.
+
+           ⇒ **AL=5 IS CONTEXT-DEPENDENT, and the 8/8 "agreement" is an agreement about
+             the context we measured in.** The prime suspect is the measurement rig
+             itself: probe.inc reports through INT 21h AH=02 and every stock run is
+             captured with `> file`, so the oracle was asked "are you interactive?"
+             with its own output redirected. `tools/dostest/p_int53f.asm` asks the same
+             eight questions but writes its answers through AH=3Ch/40h, so it can be run
+             with NOTHING redirected.
 
            ⚠ AL=00's row was measured with SI=0 and BP=0, as COMMAND.COM issues it. It
              is NOT a claim about the documented BPB->DPB call given a real BPB, which we
              still do not implement. */
         { uint8_t al53 = (uint8_t)(R_AX & 0xFF);
-          switch (al53) {
-          case 0x00:                       SETAX(0x0005); OKCF();  break;
-          case 0x02: case 0x04: case 0x06: SETAX(0x5300); OKCF();  break;
-          case 0x05: case 0x07:            SETAX(0x5301); OKCF();  break;
-          default:                         SETAX(0x0001); ERRCF(); break;
-          } }
+          if (al53 < DOS_INT53_N) {
+              SETAX(g_dos_int53[al53].ax);
+              if (g_dos_int53[al53].cf) ERRCF(); else OKCF();
+          } else { SETAX(0x0001); ERRCF(); }
+        }
     } else if (ah == 0x5E) {                    /* network machine name / printer */
         uint8_t al5e = (uint8_t)(R_AX & 0xFF);
         if (al5e == 0x00) {                     /* oracle: AX=0, CF=0 */

@@ -132,6 +132,19 @@ void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor);
    AH=0Eh with it) -- and the host must not re-derive the same policy separately, which
    is how `vdrive` would have been silently dropped. */
 uint8_t dos_int21_cur_drive(const dos_machine_t *m);
+
+/* ── INT 21h AH=53h, THE PRIVATE SUB-FUNCTIONS, AS A TABLE RATHER THAN A SWITCH. ──
+     Documented AH=53h is BPB->DPB and has no AL selector; NT's NTDOS.SYS overloads it
+     as a private query and XP's COMMAND.COM reads the answer out of AL. The defaults
+     here are the values MEASURED against stock ntvdm (see the handler), but that
+     measurement was taken by a probe whose output was REDIRECTED TO A FILE, and at
+     least one of these sub-functions is suspected of depending on exactly that -- so
+     the table is a knob (`cfg\int53.txt`) and not a constant. Index = AL, 0..7; AL>7
+     keeps DOS's "invalid function" (AX=1, CF=1). */
+typedef struct { uint16_t ax; uint8_t cf; } dos_int53_ans_t;
+#define DOS_INT53_N 8
+extern dos_int53_ans_t g_dos_int53[DOS_INT53_N];
+
 int dos_int21(dos_machine_t *m);
 
 #endif /* DOS_INT21_H */
