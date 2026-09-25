@@ -591,6 +591,44 @@ repaired by hand (`reg add`, then a probe run confirming our host answered again
 **A bracket whose restore can be skipped by the thing it brackets is not a bracket.**
 Fixed, and re-run to prove the restore now happens.
 
+### ⛔ The banner is COMMAND.COM's own, behind THREE gates
+
+Stock's extra output is not a mystery of ours: **`Microsoft(R) Windows DOS` /
+`(C)Copyright Microsoft Corp 1990-2001` lives inside `COMMAND.COM`**, in the same
+counted-message table as `Incorrect DOS version` (guest `0x21D7`), at guest `0x220A`.
+`ntdos.sys`, `ntio.sys` and `ntvdm.exe` do not contain it. (*"The Vdm Redirector is
+already loaded"* comes from `redir`, an `autoexec.nt` TSR we deliberately do not load --
+that line is **expected** to be absent.)
+
+Its print site, resident guest `0x1C22`:
+
+```
+cmp byte [0x326],1 ; jz  -> skip
+cmp byte [0x327],1 ; jz  -> skip          <- from AH=53h AL=5
+cmp word [0x2B1],0 ; jnz -> skip
+mov dx,0x220A ; call print                <- the banner
+```
+
+### ⛔⛔ AND THIS QUALIFIES THE 8/8 RESULT
+
+Stock **prints** the banner. Our probe says stock's `AH=53h AL=5` returns `AL=1`. A `1`
+in `[0x327]` **skips** the banner. Both cannot be true of the same run, so one of these
+holds:
+
+- more gates decide it (**confirmed**: forcing `AL=5 -> 0` did *not* produce the banner,
+  so `[0x326]` and/or `[0x2B1]` also block), or
+- **the private query is context-dependent** -- our probe asked it as a standalone `.COM`,
+  and COMMAND.COM asks it as the shell during start-up.
+
+⚠ **So `8/8 AGREE` means "agrees in the context we measured", not "is the right answer
+for the shell".** A private call measured outside the caller's own situation is a
+one-machine, one-moment reading. The values are kept -- they are still the only measured
+ones -- but the row is marked *provisional-in-context* rather than verified.
+
+⚠ The experiment that established this (`AL=5 -> 0`) was **reverted**: it disagreed with
+the only measurement we have, and a guess that contradicts an oracle is worse than no
+change.
+
 ### ⛔ Real MS-DOS cannot be asked at all
 
 `tools/dostest/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
