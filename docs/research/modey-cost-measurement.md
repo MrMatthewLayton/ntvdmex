@@ -145,3 +145,46 @@ Win16 Notepad, off-VM battery (interp_test 181 checks).
 
 **Still open for north star 1:** Doom (32-bit protected mode — the interpreter needs 32-bit
 addressing), and the chain-4 → unchained de-interleave (`p_vgamem`).
+
+---
+
+## Design C for Doom — the flat 32-bit interpreter (s80)
+
+**What runs where.** A map-mask site recorder (`MODEY-PM site`) showed Doom sets its two-plane
+masks in exactly two places: the top of its low-detail column drawer (`0435bd17`) and span
+drawer (`0435c165`). Both are self-contained assembly — `pushad`, set the mask, an unrolled
+store loop, `popad; ret` — and everything that touches A0000 is inside them. The C renderer
+between them runs with the mask still multi-plane but stores nothing to video memory.
+
+So Doom is interpreted **from the trapped `OUT` until the drawer returns**, not for as long as
+the mask is multi-plane (which would interpret the whole renderer). `src/host/pm32interp.h`
+is a new, host-agnostic flat 32-bit interpreter — 32-bit addressing with SIB, the integer set
+Watcom and id's assembly emit, exact flags, and an **exact decline** (an unmodelled instruction
+changes nothing). 39 off-VM checks in `tools/dostest/pm32interp_test.c`, including a
+drawer-shaped routine end to end.
+
+**The stop rule needed one refinement, found by measurement.** Doom also writes masks through a
+generic helper (`out dx,ax; pop ebx; ret`) and does the work in the caller — the status-bar
+latch copies and `0Fh` clears. Stopping at the helper's own `ret` handed that work to the real
+CPU. `cfg\modeypm_detect.flag` (keeps the scratch window during native stretches so stray
+native stores show up in `fanN`) measured up to **1,233 native stores/s** under a multi-plane
+mask. Rule now: stop at a return only once the run has touched the aperture. Re-measured with
+the detector: **0 native multi-plane stores across the whole run.**
+
+**Results (rig, host `8d795b96`):**
+
+| | Before | Design C |
+|---|---|---|
+| Doom **low** frames/s | ~16 | **35** |
+| Doom low status bar (`doomdetail`; 0.28 = correct, 0.75 = defect) | 0.75–0.77 | **0.294** |
+| Doom low host CPU in remap/fan-out | ~93% | ~5% (+ interpreting ~240 M instructions over the run) |
+| Doom **high** status bar / frames/s | 0.28–0.29 / 35 | 0.293 / 35 (unchanged) |
+
+Drawer runs ended by the drawer returning: 377,753 of 378,501. Declines: 505 (`sti`/`popf`
+in interrupt paths). Cap hits: 109.
+
+Regressions: Doom high and direct, Hexen, Heretic (A/B'd on the confirmed build — it never
+reaches mode Y headless on either), Wolf3D, Mario, Skyroads; off-VM battery 1,641 checks.
+
+Knobs: `cfg\modeypm_off.flag` (disable), `cfg\modeypm_detect.flag` (count native stores).
+**Still open:** the chain-4 → unchained de-interleave (`p_vgamem`).

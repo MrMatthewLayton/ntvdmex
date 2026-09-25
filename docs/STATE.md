@@ -139,7 +139,7 @@ The full surface list, with the primary source named for each, is in
 | # | North star | State |
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 **Wolf3D + Mario ✅ USER-CONFIRMED 2026-09-25** (design C, `0473d95d`). ▶ **Doom low detail next — needs 32-bit interpretation.** Then the chain-4 de-interleave. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 Wolf3D + Mario ✅ user-confirmed. **Doom low detail fixed on the rig (s80)**: 35 fps (was ~16), status bar 0.294 (0.28 = correct, 0.75 = defect), via a new flat 32-bit interpreter for its drawers. ⛔ Awaiting the user's hand test. Then the chain-4 de-interleave. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**

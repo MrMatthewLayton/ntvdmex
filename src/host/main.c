@@ -278,6 +278,11 @@ static BOOL oscompat_attach_console(DWORD pid)
 #define MYINTERP_OFF_FLAG CFG_("modeyinterp_off.flag")
 /* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
 #define MYRING_FLAG CFG_("myring.flag")
+/* North star 1 for PROTECTED-mode guests (Doom): present = do not interpret its drawers. */
+#define MYPM_OFF_FLAG    CFG_("modeypm_off.flag")
+/* Present = keep the scratch window while a PM guest runs NATIVELY under a multi-plane
+   mask, so any store its own code makes there is counted (fanN) instead of assumed away. */
+#define MYPM_DETECT_FLAG CFG_("modeypm_detect.flag")
 /* Create every Settings page off-screen at startup and log whether the templates
    still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
@@ -1718,6 +1723,10 @@ static int            g_my_interp_off = 0;  /* MYINTERP_OFF_FLAG                
 static int            g_my_interp     = 0;  /* inside host_interp on mode Y's behalf       */
 static DWORD          g_my_slices = 0, g_my_instrs = 0, g_my_bails = 0, g_my_bail_mp = 0;
 static int            g_my_ring_on    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
+static int            g_my_pm_off     = 0;  /* MYPM_OFF_FLAG                               */
+static int            g_my_pm_detect  = 0;  /* MYPM_DETECT_FLAG                            */
+static DWORD          g_mypm_runs = 0, g_mypm_instrs = 0, g_mypm_bails = 0, g_mypm_bail_mp = 0;
+static DWORD          g_mypm_stop[5];       /* returned, window closed, declined, cap, not32 */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: v86_run keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -12025,6 +12034,35 @@ static long modey_latch_delta(void)
 
 static void ygr4_close_run(void);       /* defined with the GR4 counters below */
 
+/* ── WHERE DOES A PROTECTED-MODE GUEST WRITE THE MAP MASK? (s80, north star 1) ────────
+     Design C for Doom needs a 32-bit interpreter, and how much of one depends on what
+     code runs between Doom's map-mask writes. The OUT that writes SR2 traps, and the main
+     loop has just recorded its CS:EIP (g_dpmi_last_*), so each distinct site is known --
+     with the masks it writes and the bytes around it, which anchor a disassembly of the
+     LE image. Bounded: 16 sites. */
+#define YPM_SITES 16
+static struct { DWORD lin, n, multi; WORD masks; BYTE b[48]; } g_ypm_site[YPM_SITES];
+static unsigned g_ypm_n = 0, g_ypm_lost = 0;
+static void ypm_site_note(int mask)
+{
+    DWORD lin; unsigned k, j;
+    if (!g_dpmi_pm || !g_dpmi_last_cs) return;
+    lin = dpmi_sel_base((WORD)g_dpmi_last_cs) + g_dpmi_last_eip;
+    for (k = 0; k < g_ypm_n; ++k) if (g_ypm_site[k].lin == lin) break;
+    if (k == g_ypm_n) {
+        const BYTE *cp = (const BYTE *)(ULONG_PTR)(lin - 32);
+        if (g_ypm_n >= YPM_SITES) { ++g_ypm_lost; return; }
+        g_ypm_site[k].lin = lin;
+        if (host_readable(cp, 48)) for (j = 0; j < 48; ++j) g_ypm_site[k].b[j] = cp[j];
+        ++g_ypm_n;
+    }
+    g_ypm_site[k].n++;
+    if (mask >= 0) {
+        g_ypm_site[k].masks |= (WORD)(1u << (mask & 0x0F));
+        if ((mask & 0x0F) & ((mask & 0x0F) - 1)) g_ypm_site[k].multi++;
+    }
+}
+
 static void modey_remap_select_body(void *ctx, int mask);
 static void modey_remap_select(void *ctx, int mask)
 {
@@ -12040,6 +12078,7 @@ static void modey_remap_select(void *ctx, int mask)
         g_ytl_t0 = GetTickCount(); g_ytl_tsc0 = ytl_rdtsc(); g_ytl_qpc0 = q.QuadPart;
     }
     sec = (GetTickCount() - g_ytl_t0) / 1000u;
+    ypm_site_note(mask);
     sw0 = g_yswaps; fan0 = g_yfanouts; fb0 = g_yfan_bytes; fn0 = g_yfan_new;
     c0 = ytl_rdtsc();
     modey_remap_select_body(ctx, mask);
@@ -12097,7 +12136,26 @@ static void modey_tl_report(void)
     p = zput(p, " bails="); p = zdec(p, g_my_bails);
     p = zput(p, " bails_under_multiplane="); p = zdec(p, g_my_bail_mp);
     p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+    p = zput(p, "STAGE2: MODEY-PM "); p = zput(p, (g_my_pm_off || g_my_interp_off) ? "OFF (knob)" : "on");
+    p = zput(p, g_my_pm_detect ? " DETECT" : "");
+    p = zput(p, " runs="); p = zdec(p, g_mypm_runs);
+    p = zput(p, " instrs="); p = zdec(p, g_mypm_instrs);
+    p = zput(p, " stop[returned,closed,declined,cap,not32]=");
+    { int k2; for (k2 = 0; k2 < 5; ++k2) { p = zput(p, k2 ? "," : ""); p = zdec(p, g_mypm_stop[k2]); } }
+    p = zput(p, " bails_under_multiplane="); p = zdec(p, g_mypm_bail_mp);
+    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
     { unsigned k, j;
+      for (k = 0; k < g_ypm_n; ++k) {
+          p = zput(p, "  MODEY-PM site lin=0x"); p = zhex(p, g_ypm_site[k].lin);
+          p = zput(p, " n="); p = zdec(p, g_ypm_site[k].n);
+          p = zput(p, " multi="); p = zdec(p, g_ypm_site[k].multi);
+          p = zput(p, " masks=0x"); p = zhex(p, g_ypm_site[k].masks);
+          p = zput(p, " bytes[-32..+16]:");
+          for (j = 0; j < 48; ++j) { p = zput(p, " "); p = zhexb(p, g_ypm_site[k].b[j]); }
+          p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+      }
+      if (g_ypm_lost) { p = zput(p, "  MODEY-PM sites lost="); p = zdec(p, g_ypm_lost);
+                        p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b; }
       for (k = 0; k < g_my_site_n; ++k) {
           p = zput(p, "  MODEY-INTERP bail cs:ip="); p = zhex(p, g_my_site[k].cs);
           p = zput(p, ":"); p = zhex(p, g_my_site[k].ip);
@@ -12513,7 +12571,11 @@ static void video_trap_sync(void)
    the remap need not build a scratch window for them (see modey_remap_select_body). */
 static int modey_interp_serves(void)
 {
-    return !g_my_interp_off && !g_dpmi_pm && g_vid.mkind == VID_KIND_LINEAR8;
+    if (g_my_interp_off || g_vid.mkind != VID_KIND_LINEAR8) return 0;
+    /* A PM guest's drawers are interpreted (modey_pm_run); its OTHER code runs natively,
+       so with the detector on keep the scratch window to catch what that code stores. */
+    if (g_dpmi_pm) return !g_my_pm_off && !g_my_pm_detect;
+    return 1;
 }
 /* Is the guest RIGHT NOW in a window no mapping can serve? */
 static int modey_needs_interp(void)
@@ -12613,6 +12675,129 @@ static void iio_out(uint16_t port, int width, uint32_t val)
   if (port == 0x40) host_pit_resync_check(); }         /* and the same resync rule           */
 
 #include "v86interp.h"
+
+/* ── THE FLAT 32-BIT INTERPRETER'S HOST HOOKS (north star 1, Doom). ───────────────────
+     Same division as imem_*: A0000-AFFFF goes through the VGA engine (a read loads the
+     latches, a write reaches every plane the map mask selects), everything else is flat
+     host memory -- a DOS/4GW client's linear addresses ARE host VAs. p32_ok() is the
+     guard that turns a stray pointer into a DECLINE instead of a host access violation:
+     a small page cache over VirtualQuery, so the syscall happens once per page. */
+#define P32_PGC 256
+static struct { DWORD pg; BYTE ok; } g_p32_pgc[P32_PGC];
+static int p32_page_ok(DWORD pg, int wr)
+{
+    unsigned h = (unsigned)(pg * 2654435761u) >> 24;
+    if (g_p32_pgc[h].pg != pg + 1) {
+        MEMORY_BASIC_INFORMATION mbi; BYTE ok = 0;
+        if (VirtualQuery((LPCVOID)(ULONG_PTR)(pg << 12), &mbi, sizeof mbi) == sizeof mbi
+            && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            ok = 1;
+            if (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY
+                               | PAGE_EXECUTE_WRITECOPY)) ok = 3;
+        }
+        g_p32_pgc[h].pg = pg + 1; g_p32_pgc[h].ok = ok;
+    }
+    return wr ? (g_p32_pgc[h].ok & 2) != 0 : (g_p32_pgc[h].ok & 1) != 0;
+}
+static DWORD g_p32_vga_n = 0;      /* aperture accesses by the interpreter (modey_pm_run) */
+static uint8_t p32_rd8(uint32_t lin)
+{
+    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; return vga_planar_read(&g_vid, lin - A000_LO); }
+    return *(volatile BYTE *)(ULONG_PTR)lin;
+}
+static void p32_wr8(uint32_t lin, uint8_t v)
+{
+    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; vga_planar_write(&g_vid, lin - A000_LO, v); return; }
+    *(volatile BYTE *)(ULONG_PTR)lin = v;
+}
+static int p32_ok(uint32_t lin, int w, int wr)
+{
+    uint32_t end = lin + (uint32_t)w - 1;
+    if (end < lin) return 0;
+    if (lin >= A000_LO && end < A000_HI) return 1;
+    if (lin < A000_HI && end >= A000_LO) return 0;          /* straddles the aperture */
+    if (!p32_page_ok(lin >> 12, wr)) return 0;
+    return ((end >> 12) == (lin >> 12)) || p32_page_ok(end >> 12, wr);
+}
+static uint32_t p32_in(uint16_t port, int w)             { return iio_in(port, w); }
+static void     p32_out(uint16_t port, int w, uint32_t v) { iio_out(port, w, v); }
+
+#include "pm32interp.h"
+
+/* Is a PROTECTED-mode guest in a window no mapping can serve? (The real-mode twin is
+   modey_needs_interp.) */
+static int modey_pm_needs_interp(void)
+{
+    uint8_t m;
+    if (!g_dpmi_pm || g_my_pm_off || g_my_interp_off || !g_yremap) return 0;
+    if (g_vid.mkind != VID_KIND_LINEAR8 || g_vid.chain4) return 0;
+    m = (uint8_t)(g_vid.map_mask & 0x0F);
+    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.write_mode & 3) != 0;
+}
+
+/* ── ★★★ DOOM'S DRAWERS THROUGH THE ADDRESS GENERATOR. (s80, north star 1) ─────────────
+     Doom sets its two-plane mask with an OUT at the top of R_DrawColumnLow / the span
+     drawer; that OUT has just trapped and been serviced. Run the guest here from the next
+     instruction until the drawer RETURNS -- a RET that takes ESP above where we started --
+     so every store it makes goes through vga_planar_write into both planes.
+   ► ...BUT ONLY ONCE THE RUN HAS TOUCHED THE APERTURE. Doom also sets masks through a
+     generic helper (`out dx,ax / pop ebx / ret`) and then does the work in the CALLER --
+     the status-bar latch copies, the 0Fh clears. Stopping at the helper's own RET handed
+     that work to the real CPU, and the detector (modeypm_detect.flag) measured it: up to
+     1,233 native stores a second under a multi-plane mask. A drawer writes and returns;
+     a helper returns having written nothing, and interpretation follows it home. Also stop when
+     the window closes (a single-plane mask is served natively and exactly), on a decline
+     (that instruction, and what follows until the next trap, runs natively -- counted),
+     or at a cap. Everything Doom does between drawers stays on the real CPU: interpreting
+     the whole renderer while the mask happens to be multi-plane would cost it its frame
+     rate (docs/research/modey-cost-measurement.md). */
+#define MYPM_CAP 400000L
+static void modey_pm_run(volatile BYTE *tib)
+{
+    p32cpu c; long n = 0; uint32_t esp0; int why;
+    WORD sel[6];
+    int k;
+    WORD cs = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF), ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+    if (!dpmi_sel_is32(cs) || !dpmi_sel_is32(ss)) { g_mypm_stop[4]++; return; }
+    sel[0] = (WORD)VDM_REG(tib, VTIB_ES); sel[1] = cs; sel[2] = ss;
+    sel[3] = (WORD)VDM_REG(tib, VTIB_DS); sel[4] = (WORD)VDM_REG(tib, VTIB_FS);
+    sel[5] = (WORD)VDM_REG(tib, VTIB_GS);
+    for (k = 0; k < 6; ++k) c.base[k] = (sel[k] & 0xFFFC) ? dpmi_sel_base(sel[k]) : 0;
+    c.r[0] = VDM_REG(tib, VTIB_EAX); c.r[1] = VDM_REG(tib, VTIB_ECX);
+    c.r[2] = VDM_REG(tib, VTIB_EDX); c.r[3] = VDM_REG(tib, VTIB_EBX);
+    c.r[4] = VDM_REG(tib, VTIB_ESP); c.r[5] = VDM_REG(tib, VTIB_EBP);
+    c.r[6] = VDM_REG(tib, VTIB_ESI); c.r[7] = VDM_REG(tib, VTIB_EDI);
+    c.eip = VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
+    esp0 = c.r[4];
+    { DWORD vga0 = g_p32_vga_n;
+    HOST_LOCK();
+    for (;;) {
+        uint8_t op0 = p32_rd8(c.base[1] + c.eip);
+        int was_ret = (op0 == 0xC3 || op0 == 0xC2);
+        if (n >= MYPM_CAP) { why = 3; break; }
+        if (!p32_step(&c)) { why = 2; break; }
+        ++n;
+        if (was_ret && c.r[4] > esp0 && g_p32_vga_n != vga0) { why = 0; break; }
+        if ((n & 0x3F) == 0 && !modey_pm_needs_interp()) { why = 1; break; }
+    }
+    HOST_UNLOCK();
+    }
+    g_mypm_runs++; g_mypm_instrs += (DWORD)n; g_mypm_stop[why]++;
+    if (why == 2) {
+        uint8_t mm = (uint8_t)(g_vid.map_mask & 0x0F);
+        g_mypm_bails++;
+        if (mm & (uint8_t)(mm - 1)) g_mypm_bail_mp++;
+        modey_bail_note(cs, c.eip, (const volatile BYTE *)(ULONG_PTR)(c.base[1] + c.eip));
+    }
+    if (!n) return;
+    VDM_REG(tib, VTIB_EAX) = c.r[0]; VDM_REG(tib, VTIB_ECX) = c.r[1];
+    VDM_REG(tib, VTIB_EDX) = c.r[2]; VDM_REG(tib, VTIB_EBX) = c.r[3];
+    VDM_REG(tib, VTIB_ESP) = c.r[4]; VDM_REG(tib, VTIB_EBP) = c.r[5];
+    VDM_REG(tib, VTIB_ESI) = c.r[6]; VDM_REG(tib, VTIB_EDI) = c.r[7];
+    VDM_REG(tib, VTIB_EIP) = c.eip;
+    /* the arithmetic flags and DF only: IF, IOPL, VM and the rest are the monitor's */
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x0CD5u) | (c.flags & 0x0CD5u);
+}
 
 /* The interpreter's live register file, for the fatal dump and the OOR logger. A
    crash or a stray access inside istep (s69) leaves the VDM context a whole slice
@@ -23008,6 +23193,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_interp_off = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_ring_on    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_my_pm_off     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     g_opltrace_on = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     if (g_opltrace_on) g_opl.trace = opl_trace_write;
@@ -27995,7 +28182,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         HOST_LOCK();
                         io_h = host_try_io_pm(tib, &g_bus);
                         HOST_UNLOCK();
-                        if (io_h) continue;   /* serviced the port op -> keep running */
+                        if (io_h) {
+                            /* North star 1: the OUT that just trapped may have opened a
+                               multi-plane window -- Doom's drawers start exactly so. */
+                            if (modey_pm_needs_interp()) modey_pm_run(tib);
+                            continue;         /* serviced the port op -> keep running */
+                        }
                         /* not a decodable I/O op -> fall through to the normal dispatch/stop */
                     }
                     /* BARE-METAL diagnostic (GH #18): dump the faulting PM instruction bytes for
