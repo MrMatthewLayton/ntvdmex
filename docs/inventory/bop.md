@@ -645,7 +645,7 @@ cc[0x320..0x32F] = 00 00 00 00 01 00 01 01 01 00 01 00 00 00 00 00
 | `[0x326]` | **01** | banner gate A — **1 skips the banner** |
 | `[0x327]` | **01** | banner gate B, and the `jz` at guest `0x0BF5` — from `AH=53h AL=5` |
 | `[0x328]` | 01 | from `AH=53h AL=7` |
-| `[0x32A]` | **01** | **"ask for a command" vs "prompt" — 1 IS THE LOOP** |
+| `[0x32A]` | **01** | ⛔ **"1 IS THE LOOP" WAS BACKWARDS — see the correction below** |
 | `[0x32B]/[0x32D]` | 00 00 | our `blk+0x12` ✅ |
 | `[0x32F]` | 00 | our `blk+0x1A` ✅ |
 
@@ -680,8 +680,139 @@ answer it either, so a handler must not claim the whole `55xx` range.
 ⚠ **NOT IMPLEMENTED, deliberately.** COMMAND.COM *stores* that `DS:SI` and uses it later.
 Returning `AX=0` with a pointer to something we invented would be an unimplemented call
 answering at random -- the exact failure this file already records twice. The banner is
-cosmetic; the **loop** (`[0x32A]=1`) is the real defect, and it is gated by `[0x327]`,
-i.e. by `AH=53h AL=5`, whose shell-context value is still unmeasured.
+cosmetic.
+
+---
+
+## ★★★★★ XP's COMMAND.COM IS AN INTERACTIVE SHELL (2026-09-25, s79)
+
+```
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom>ver
+
+MS-DOS Version 5.00.500
+
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom>dir
+
+ Volume in drive C has no label
+ Volume Serial Number is 0C09-23F0
+ Directory of C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom
+.            <DIR>         09-24-26   5:18p
+..           <DIR>         09-24-26   5:18p
+        2 file(s)              0 bytes
+             268,431,360 bytes free
+
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom>_
+```
+
+Keystrokes scripted through `cfg\keys.txt` with `qimode=0x20`, shots by
+`cfg\capture.flag`. **991 prompts per 30-second run became 3.** That matters for the
+product: 6.22's shell is Microsoft's and cannot ship, so this is the shell a stock XP
+box actually has.
+
+### ⛔⛔⛔ The last bug was a buffer WE corrupted, one field wide
+
+Our `sub 01` "no command" answer wrote `c[0] = 0`. That read of `[0]` came from the
+guest's own copy loop at transient `0x06C7` (`mov cl,[0x9327] / add cx,3 / rep movsb`),
+which does treat `[0]` as a count -- and it is completely wrong about the buffer,
+because **the same buffer is handed to `INT 21h AH=0Ah`**:
+
+```
+transient 0x018D   mov byte [ss:0x9327],0x80    <- ONCE, during start-up
+transient 0x0A21   mov dx,0x9327 / mov ah,0Ah / int 21h
+```
+
+`0x80` is DOS's buffered-input **maximum**, set a single time and never re-set. We
+zeroed it on the first BOP, our `AH=0Ah` computed `maxn - 1 = -1`, returned an empty
+line without waiting, and COMMAND.COM saw a `CR` at `[2]` and printed its prompt again.
+For ever. **The log said so the whole time:**
+
+```
+INT21 AH=0A line max=00 n=00 [0d ]            x991
+INT21 AH=0A line max=80 n=03 [76 65 72 0d ]   <- after the fix: "ver"
+INT21 AH=0A line max=80 n=03 [64 69 72 0d ]   <- "dir"
+```
+
+⇒ **Write the length at `[1]`, where DOS puts it, and never touch `[0]`.** Nothing
+downstream needs the length — the copy at `0x06C7` takes `[0]+3` bytes (a superset) and
+the parser scans from `+2` for the `CR`, so the `CR` is the only load-bearing byte. The
+request block's `+0x0C` already told us the capacity was `0x0080`: two independent
+sources, and the one we overwrote was the same number.
+
+⚠ **The shell was AT the keyboard read and we were answering it with EOF.** Several
+turns read the symptom — *"it prints a prompt and goes straight back to asking"* — as a
+gate we had not satisfied. Every gate was satisfied.
+
+### ⛔ `[0x32A] = 1` IS NOT THE LOOP. It is a linked-in image default.
+
+`tools/ntvdm/cmdcom.py` settles it mechanically: `[0x32A]` has **exactly one writer in
+the entire binary**, at transient `0x0C2A`, and it writes **0** — two instructions
+before the keyboard read. The `01` in the dump is the image's own static initialiser
+(`[0x320..0x32F] = 00 00 00 00 01 00 00 00 00 00 01 00 00 00 00 00` as linked). So `1`
+is the value that **passes** the gate at `0x0C03`/`0x0C15`, not the one that traps it.
+
+### ★ The loop's top is `INT 21h AX=5302h`, and the gate is its CARRY FLAG
+
+Transient `0x0341`:
+
+```
+0341: push ax/si/bp ; xor si,si ; xor bp,bp
+0348: mov al,2 ; mov ah,53h ; int 21h      ; ** THE TOP OF THE SHELL'S MAIN LOOP **
+0351: jnc 0x0358
+0353: jmp 0x0BF5                           ; CF=1 -> THE GATE CHAIN (prompt/keyboard)
+0356: jmp 0x0361                           ; <- where the gate chain's "away" lands
+0358: cmp byte [0x32A],1
+035D: jz  0x0361                           ; =1 -> ask the HOST for a command
+035F: jmp 0x0353                           ; !=1 -> the gate chain
+0361: ...build the request block... 03CE: BOP 0x54 sub 01
+```
+
+With `CF=0` and `[0x32A]=1` — both true of every run before this session — the gate
+chain is **never entered at all**, which is why `sub 0x10` had never once fired. Both
+answers have to change together, and that was measured one at a time on the rig:
+
+| `AL=2` | `AL=5` | result |
+|---|---|---|
+| `CF=0` (default) | `AL=1` (default) | 32× `sub 01`, 32× `sub 0E`, `sub 0x10` never reached |
+| **`CF=1`** | `AL=1` | **identical** — the chain bails at its first gate, `[0x327]` |
+| **`CF=1`** | **`AL=0`** | `sub 0x10` fires for the first time; the spin stops dead |
+
+### ⇒ `AH=53h AL=5` IS CONTEXT-DEPENDENT, and this is a proof rather than a theory
+
+The read-a-line routine is transient `0x0A0D`; `AL=0` reads the keyboard and `AL≠0`
+only prints the prompt. It has four callers, and **both** of the `AL=0` ones (`0x0924`
+and `0x0C33`) sit directly behind `cmp byte [0x327],1 / jz away`. `[0x327]` has exactly
+one writer, `resident 0x169B`:
+
+```
+mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
+```
+
+Stock's COMMAND.COM **is** interactive. Therefore stock answers `AL=0` when the shell
+asks. Our probe measured `AL=1`. Both cannot be true of the same question, so they are
+not the same question.
+
+⛔ **The likely difference is the harness.** `probe.inc` reports through `INT 21h AH=02`
+and every stock measurement is captured with `> FILE` — so the oracle was asked *"is
+this console interactive?"* with its own output redirected. **A probe that reports
+through stdout cannot measure anything that depends on stdout.**
+`tools/dostest/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh` and
+needs no redirection; run it **both ways** against stock and diff, because one run
+cannot tell *"the value is X"* from *"the value is X when redirected"*.
+
+⇒ Until that is measured, the two values live in **`cfg\int53.txt`** and the built-in
+defaults stay exactly as measured. A run with no file behaves as it did before. **This
+is deliberately not a fix** — the whole reason the earlier `AL=5 -> 0` experiment had to
+be retracted was that it was a guess against the only measurement there was.
+
+⚠ And the claim that retraction rested on — *"stock sets `[0x327]=1` and IS interactive,
+so that gate does not mean what I read it to mean"* — was an inference from the
+standalone probe, not an observation. The gate means exactly what it looked like.
+
+⚠ The earlier experiment was also graded on the **wrong symptom**: it checked for the
+banner, which `[0x326]` blocks independently, so it could not have shown the keyboard
+path opening even when it did.
+
+---
 
 ### ⚠ The bracket needed fixing TWICE
 
@@ -733,16 +864,21 @@ Written out longhand now. *A probe that looks fine and measures nothing is the w
 Both were previously answered with **no register set at all**, i.e. the guest read
 whatever it happened to be holding.
 
-### ⛔ It is not interactive yet
+### ⛔ ~~It is not interactive yet~~ — ✅ CLOSED 2026-09-25, and read this as a lesson
 
-The prompt prints; the keyboard is not read. Keys reach the guest — `sc_push=0x10`,
-`irq1_inj=0x10`, `KEYLAT deliver n=0x0F` — and nothing consumes them: `int16=[0,0,0,0]`,
-and the `sub 01` spin continues at ~1.25M per run. So COMMAND.COM writes a prompt and then
-goes back to asking for a command instead of entering its `AH=0Ah` read.
+*Kept because the reasoning in it was sound and still pointed the wrong way.*
 
-▶ Next: the gate chain at guest `0x0BF5`…`0x0C2F` (see above) is still the map. `sub 0x10`
-and the `+0x12`/`+0x1A` fields are answered; `[0x327]` and `[0x32A]` are not yet traced to
-a source.
+> The prompt prints; the keyboard is not read. Keys reach the guest — `sc_push=0x10`,
+> `irq1_inj=0x10`, `KEYLAT deliver n=0x0F` — and nothing consumes them: `int16=[0,0,0,0]`,
+> and the `sub 01` spin continues at ~1.25M per run.
+
+⚠ **`int16=[0,0,0,0]` is not evidence that nothing consumed them.** Our `AH=0Ah` reads the
+host's own key ring through `m->coninnb`; it never issues `INT 16h`, so that counter reads
+zero on a shell that is working perfectly. It reads zero in the ✅ run above too. The
+counter that actually moved was `INT21 AH=0A line max=`, and it was in the log all along.
+
+⇒ See **XP's COMMAND.COM IS AN INTERACTIVE SHELL** above: the gate chain was the right
+map, `[0x327]` was the right gate, and the last step was a buffer we corrupted ourselves.
 
 ### ⛔ The earlier wall, for the record: an empty command line makes it RESTART
 

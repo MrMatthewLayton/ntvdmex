@@ -7,6 +7,23 @@ do the same"* — and the right shape for that is not a shell we write, it is
 
 ---
 
+## ★★★★★ SUPERSEDED AT THE TOP: XP's COMMAND.COM IS AN INTERACTIVE SHELL (2026-09-25)
+
+Everything below is the investigation that got there and is kept for its reasoning, but
+the headline is settled: **XP's own `C:\WINDOWS\System32\COMMAND.COM` runs as an
+interactive DOS shell under NTVDMEX** — prompt, `ver`, `dir`, cursor waiting.
+
+The last defect was not a BOP field and not a DOS gap. Our `sub 01` reply wrote `[0]` of
+the command-tail buffer, which is **DOS's `AH=0Ah` maximum** — COMMAND.COM hands the same
+buffer to the keyboard read, and sets that byte exactly once at transient `0x018D`.
+
+⇒ Read **[`../inventory/bop.md`](../inventory/bop.md)** first; it carries the current
+picture, the proof from the guest's image, and the one open question (`AH=53h` measured
+with the harness's own redirect in place). `tools/ntvdm/cmdcom.py` re-derives every
+address either file quotes.
+
+---
+
 ## ✅✅✅ THERE IS A WORKING DOS PROMPT (s78) — with **6.22's** COMMAND.COM
 
 Everything below this heading is about **XP's** `COMMAND.COM`, which is NTVDM-aware and

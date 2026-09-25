@@ -133,6 +133,43 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
+▶ **★★★★★ XP's OWN `COMMAND.COM` IS AN INTERACTIVE SHELL (2026-09-25).** A **stock XP
+box** now gets a working DOS prompt from the shell it already has — prompt, `ver` →
+`MS-DOS Version 5.00.500`, `dir` with volume serial and free space, cursor waiting at
+the next prompt. That closes the product question below: no Microsoft 6.22 shell is
+needed to ship. **991 prompts per 30-second run became 3.**
+  - **The last bug was ours, one field wide.** Our `BOP 0x54 sub 01` reply wrote `[0]`
+    of the command-tail buffer — which is **DOS's `AH=0Ah` maximum**, set once at
+    transient `0x018D` to `0x80` and never re-set, because COMMAND.COM hands the *same
+    buffer* to the keyboard read. We zeroed it, our `AH=0Ah` returned an empty line
+    without waiting, and the shell printed its prompt again for ever. The log had said
+    `INT21 AH=0A line max=00` ×991 the whole time. Fixed: write the length at `[1]`,
+    never touch `[0]`.
+  - **⚠ The shell was AT the keyboard read and we were answering it with EOF.** Several
+    turns read *"prints a prompt, goes back to asking"* as a gate we had not satisfied.
+    Every gate was satisfied.
+  - **⚠ `int16=[0,0,0,0]` was never evidence of anything.** Our `AH=0Ah` reads the host
+    key ring directly and never issues `INT 16h`, so that counter reads zero on a shell
+    that works. It reads zero in the successful run too.
+  - **⛔ NOT ON BY DEFAULT.** Two `INT 21h AH=53h` answers have to change with it and
+    they **contradict the only stock measurement we have**, so they live in
+    `cfg\int53.txt` and the built-ins are unchanged. See the next item.
+
+▶ **⛔ THE OPEN QUESTION: `AH=53h` IS CONTEXT-DEPENDENT AND OUR HARNESS IS THE CONTEXT.**
+XP's COMMAND.COM cannot read a key while `[0x327]=1`, proved from its own image
+(`tools/ntvdm/cmdcom.py`): the read-a-line routine is transient `0x0A0D`, its only two
+`AL=0` callers both sit behind `cmp byte [0x327],1 / jz`, and `[0x327]`'s single writer
+is `mov al,5 / mov ah,53h / int 21h / mov [0x327],al`. **Stock is interactive, so stock
+answers `AL=0`; our probe measured `AL=1`.** The likely difference: `probe.inc` reports
+through `INT 21h AH=02` and every stock run is captured with `> FILE`, so we asked the
+oracle *"is this console interactive?"* **with its own output redirected**.
+**A probe that reports through stdout cannot measure anything that depends on stdout.**
+▶ **NEXT, and it needs a human at the box:** run `tools/dostest/p_int53f.com` (writes its
+dump with `AH=3Ch/40h/3Eh`, needs no redirection) against **stock ntvdm**, both with and
+without `> FILE`, and diff. The IFEO bracket is the documented rig-bricking hazard and is
+**not run unattended**. If it confirms `AL=5 → 0` and `AL=2 → CF=1`, promote them to the
+built-in defaults in `dos_int21.c` and delete the knob's reason for existing.
+
 ▶ **✅✅✅ THERE IS A WORKING DOS PROMPT (2026-09-24).** **MS-DOS 6.22's `COMMAND.COM`
 runs under NTVDMEX**: banner, prompt, `ver`, and a real `dir` with volume serial and
 free space — 141 INT 21h calls, keystrokes scripted through `cfg\keys.txt`. And a launch
@@ -141,9 +178,11 @@ that names **no** program now loads a shell, from `cfg\shell.txt` first and
 CSRSS/`target.txt`/title — verified not to disturb the harness. ⛔ I scored this same run
 as *"zero INT 21h calls"* earlier the same day: the check grepped `INT21`, the trace
 prints `  21:`. **A pattern that cannot match is not a measurement.**
-▶ **The product question, not a code question:** 6.22's shell is Microsoft's and cannot
+▶ ~~**The product question, not a code question:** 6.22's shell is Microsoft's and cannot
 ship in a public repo, so a stock XP box still falls to XP's own `COMMAND.COM` and still
-stops at the BOP below. Either the BOP work happens or the shell is user-supplied.
+stops at the BOP below. Either the BOP work happens or the shell is user-supplied.~~
+**✅ ANSWERED 2026-09-25 — the BOP work happened.** XP's own shell works (top of this
+section). It still needs `cfg\int53.txt` until the un-redirected stock measurement lands.
 
 ▶ **★ XP's COMMAND.COM IS NOT A DOS PROBLEM (2026-09-24).** XP's `COMMAND.COM` does not
 fail a DOS call and give up — **it never reaches one.** It is NTVDM-*aware*: its image
