@@ -709,6 +709,38 @@ Keystrokes scripted through `cfg\keys.txt` with `qimode=0x20`, shots by
 product: 6.22's shell is Microsoft's and cannot ship, so this is the shell a stock XP
 box actually has.
 
+### ✅ And it EXECs a child, and gets control back
+
+Typing the name of a `.COM` in the current directory runs it, its output lands on the
+shell's screen, and the shell reprompts:
+
+```
+C:\DOCUME~1\...\cmdcom>pv
+
+#PROBE dosver
+CASE=int21.30 SIG=AX,BX,CX AX=0005 BX=FF00 ...
+#END
+
+C:\DOCUME~1\...\cmdcom>_
+```
+
+```
+EXEC: "C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom\PV.COM"
+EXEC: child at seg=0x0241 entry=0241:0100 (COM) depth=01
+EXEC: child exited rc=0x00, parent resumed (depth=00)
+```
+
+⇒ **The whole shell contract turns**: read a line, parse it, `AH=4Bh` a child, let the
+child write, take control back, prompt again. That is the broad, boring slice of the DOS
+API no game exercises, and it is the reason a shell was chosen as the M9 test.
+
+### ▶ How to turn it on
+
+The two `AH=53h` rows it needs are **not** the built-in defaults (see the open question
+below). `scripts/bm/int53-interactive.txt` is the ready-made file; copy it to
+`cfg\int53.txt`. The host prints the whole table **and its source** every run, so it can
+never be on silently — which is the guard the `dosver.txt` incident bought.
+
 ### ⛔⛔⛔ The last bug was a buffer WE corrupted, one field wide
 
 Our `sub 01` "no command" answer wrote `c[0] = 0`. That read of `[0]` came from the
