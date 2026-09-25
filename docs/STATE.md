@@ -25,10 +25,10 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`b6a8a95b`** — promoted
-  2026-09-25 (s80) after the user confirmed execution chaining by hand: executables from
-  the shell, and Setup → game for Doom, Hexen and Duke3D. The displaced `d57d586c` (the
-  s79 whole-shelf build) is kept as `debug\prev\ntvdmhost_d57d586c.exe`.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`0473d95d`** — promoted
+  2026-09-25 (s80) after the user confirmed by hand: *"Mario and Wolf3D working!"* (north
+  star 1, design C, real mode). Before it: `b6a8a95b` (execution chaining, user-confirmed),
+  kept as `debug\prev\ntvdmhost_b6a8a95b.exe`; `d57d586c` as `ntvdmhost_d57d586c.exe`.
   ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
   `d57d586c`. **md5 the slot; do not trust this line.**
   ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
@@ -139,7 +139,7 @@ The full surface list, with the primary source named for each, is in
 | # | North star | State |
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 **Design C (user's choice) built for real-mode guests (s80)** — Wolf3D's status bar now draws, Mario clean, both 70 fps; ⚠ Wolf3D ~70–82% host CPU interpreting. **Doom still needs the 32-bit interpreter.** Awaiting the user's hand test. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 **Wolf3D + Mario ✅ USER-CONFIRMED 2026-09-25** (design C, `0473d95d`). ▶ **Doom low detail next — needs 32-bit interpretation.** Then the chain-4 de-interleave. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
