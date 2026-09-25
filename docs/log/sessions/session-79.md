@@ -274,3 +274,31 @@ substitute for measuring it.
 ★ **"It works" and "someone can use it" are different claims, and only the user can tell
 you which one you have.** Every piece of this had been built and tested; the product was
 still unreachable, and one line of feedback found that in a sentence.
+
+
+---
+
+## Handoff — where session 79 stopped
+
+**Ended:** 2026-09-25, at the point of agreeing what to do next. **No work has started on
+any of it.** The user paused to update their CLI and will resume in a fresh session.
+
+**Confirmed by hand this session:**
+- the whole shelf on `d57d586c` — *"I tested all the usual suspects and they were fine"*
+- the double-click launcher on `1ea8829d` — *"tested and working!"*
+- **still wrong:** Doom low res, Wolf3D, Mario — *"not entirely, just not correct"*
+
+`debug\prev\ntvdmhost_prev.exe` promoted to `d57d586c` (the shelf-confirmed one);
+`bin\` holds `1ea8829d`, which adds only the launcher.
+
+**The three north stars the user set, in the agreed order `3 → 1 → 2`, are written up at
+the TOP of [`../../STATE.md`](../../STATE.md)** with the reproduction log for #3, the
+measurement to take before designing #1, and the documentation gap behind #2.
+
+**Two questions were asked and never answered. Ask them again:**
+1. Graphics: what is the performance bar — is "correct but slower" acceptable?
+2. Sound: may we work from the publicly archived Gravis GUS SDK and cite it?
+
+⚠ **Do not re-derive the chaining reproduction.** It is in STATE.md with the exact log,
+the two defects it exposes, and the note that `SETUP.EXE` does *not* reproduce it
+reliably while the shell route does.

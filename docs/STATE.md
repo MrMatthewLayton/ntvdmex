@@ -131,6 +131,90 @@ The full surface list, with the primary source named for each, is in
 
 ---
 
+## ▶▶▶ START HERE — the three north stars, set by the user 2026-09-25 (end of s79)
+
+**Agreed order: `3 → 1 → 2`.** Work on them has **NOT STARTED**; s79 ended at this line.
+
+| # | North star | State |
+|---|---|---|
+| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **REPRODUCED with a log**, root cause identified. Start here. |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | One root cause, parked on a performance judgement. Needs a measurement before a design. |
+| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. |
+
+⛔ **Two questions were asked and NOT answered — ask them again before starting 1 or 2:**
+1. **Graphics: what is the performance bar?** Correct mode-Y may cost frame rate. Is
+   "correct but slower" acceptable, or must it stay at today's speed? *A product call.*
+2. **Sound: may we work from the publicly archived Gravis GUS SDK** and write our own
+   `docs/ref/gus.md` citing it (as with the 82077AA and 16550)? The repo is public, so
+   the SDK itself will not be mirrored here.
+
+### ▶ 3. Execution chaining — REPRODUCED, and it is two defects
+
+The user's report: *"Inside DOOM Setup, save settings and run Doom, crashes. Same for
+Heretic, Hexen, Duke3D setups"* and *"double-click, command.com, navigate to
+demo\msdos\doom and run DOOM — crashes."*
+
+Reproduced deterministically: 6.22's `COMMAND.COM` with cwd `demo\msdos\doom`, keys
+typing `doom`. **Do not re-derive this — it is the starting point:**
+
+```
+INT21 AH=0A line max=80 n=04 [64 6f 6f 6d 0d ]          <- the shell read "doom"
+EXEC: child at seg=0x242 entry=040f:2372 (EXE) depth=01 <- EXEC worked
+... DOS/4GW starts, finds DPMI (2F/1687), runs ~4400 INT 31h services ...
+INT21h AH=4Ch -> client EXIT after 0x1134 svc
+DPMI: *** PM ISR ABANDONED after 0x34b phases -- the client's interrupt state is
+      now INCONSISTENT (vec 0x09, last cs:eip=0x0f:0x7251)
+DPMI FATAL: exception code=0xc0000005 at 0x0f16d929
+```
+
+1. **The DPMI client's PM `INT 21h AH=4Ch` tears down the whole VDM.** The handler is a
+   bare `return 0` (`main.c`, the `vec == 0x21 / ah == 0x4C` arm in the PM INT path) with
+   **no notion of the EXEC parent** — `depth=01` says COMMAND.COM is waiting for it.
+2. **Then the host itself access-violates** (`0xC0000005` in our own 32-bit code) because
+   it unwinds with a protected-mode ISR mid-flight. ⛔ **A guest exiting must never fault
+   the host, whatever else is wrong.** Fix this one first — it is the serious half.
+
+⚠ Why it was never caught: launched directly, Doom never exits — the headless deadline
+kills it. **The exit-with-a-parent path has essentially never run.** Any fix needs a
+regression test that actually exercises it.
+⚠ The `<<< MISMATCH >>>` on that line is a **stale debug canary** from an old spike (it
+reads a word at linear `0x1600` and expects `0x005A`). Not the bug. Delete it.
+⚠ `SETUP.EXE` was tried first and did **not** reproduce — blind menu keys missed the
+"save and launch" item and SETUP exited cleanly. The shell route is the reliable repro.
+
+### ▶ 1. Graphics — one root cause, and the parked verdict may be about the wrong design
+
+Wolf3D, Mario and Doom low detail are all **unchained (mode-Y) planar** rendering — one
+cause, not three. The spec side is **done**: `ref/vga.md` is 9/9 against a real AMI BIOS
+and the IBM VGA ROM, and the register file is at 99.9%. What is missing is *observation*,
+and `vdd_video.c` says so itself:
+
+> *"The A0000 aperture is one flat buffer — the page trap is deliberately not armed,
+> because arming it makes the interpreter the CPU and collapses the run — so a guest
+> write lands there with no record of which plane the map mask had selected."*
+
+⇒ Everything downstream (`modey_copy`, `MODEY_GAP_DEFAULT`) is *guessing which planes a
+write went to*, and a guess cannot be made correct.
+
+★ **Do this first, before any design:** the parked objection is about trapping **every
+write**. Planar code sets the Map Mask (SR2) and *then* writes a run — so trapping on
+**map-mask change** may cost one fault per run instead of one per byte. **Measure the
+actual SR2 write rate in Wolf3D, Mario and Doom low detail** before choosing. That
+measurement is cheap and nobody has taken it. It may make the trade-off question moot.
+
+### ▶ 2. Sound — the surface with specs named and no documents at all
+
+`ref/SOURCES.md` already names *Gravis Ultrasound — Gravis GUS SDK / Programmer's Guide —
+GF1 voices, DRAM, the DMA/IRQ contract*, so this is inside the period-correct hardware
+contract and is **not** app-driven. But `inventory/README.md` shows the whole sound row as
+`— | —`: **Sound Blaster, OPL and GUS all have a named authority and neither a `ref/` nor
+an `inventory/` doc.** SB and OPL were written app-first years ago and never inventoried.
+So this north star starts with the two-docs-per-surface work the programme requires.
+GUS is a large surface: 32 GF1 voices, on-card DRAM the host DMAs samples into, its own
+IRQ/DMA contract, registers at `2X0h`. Heaven7 needs it for music.
+
+---
+
 ## Next actions, in order
 
 ▶ **★★★★★ YOU CAN NOW JUST OPEN NTVDMEX AND GET A DOS PROMPT (2026-09-25).** Run
@@ -228,22 +312,28 @@ at `SS:SP`, not in `VTIB_CS:EIP`, which is where the handler is**. Order of work
 (4) auto-report DOS **5.00** for `command.com` — the guest does `cmp ax,5` on the whole
 word, so 5.00 exactly — then the no-guest default, then PIF.
 
-▶ **Rig status, 2026-09-25 end of session 79.** `bin\ntvdmhost.exe` = **`d57d586c`**
-(three changes on top of `297e2172`: the `cfg\int53.txt` knob, the command-tail `[0]`
-fix, and `DPMI_CPU_CLASS = 4`). `debug\prev\ntvdmhost_prev.exe` is **untouched at
-`297e2172`** — the last build a human confirmed. `cfg\` is **clean**: no `int53.txt`,
-`dosver.txt`, `keys.txt`, `qimode.txt`, `capture.flag` or `dostrace.flag` left behind, so
-the box behaves as a fresh one. The ready-made knob is parked at
-`debug\rig\int53-interactive.txt` (repo copy: `scripts/bm/int53-interactive.txt`), where
-it cannot fire by accident.
-▶ **Run headless on `d57d586c`:** 6.22's `COMMAND.COM` (banner/`ver`/`dir`), XP's
-`COMMAND.COM` (prompt/`ver`/`dir`/EXEC, with the knob), Doom, Skyroads, heaven7, duke3d,
-ZAR, and the Win16 kernel probe. Off-VM 1591/1591.
-▶ **Owed from a human:** a by-hand pass — **these are headless runs, so they say the
-guests reach the same states, not that they look or sound right.** Specifically: Doom
-(including **low detail**, which no check here has ever covered), ZAR, and a Win16 app,
-because `DPMI_CPU_CLASS` is observable to every DPMI guest even though the interleaved
-A/B in `runs/s79_cl_ab/` found nothing.
+▶ **Rig status, 2026-09-25 end of session 79 — and both builds are USER-CONFIRMED.**
+`bin\ntvdmhost.exe` = **`1ea8829d`** (the launcher). `debug\prev\ntvdmhost_prev.exe` was
+promoted to **`d57d586c`**, which is the one the user ran the **whole shelf** against:
+*"I tested all the usual suspects and they were fine."* `1ea8829d` adds only the launcher
+on top of it and carries a **one-item** confirmation: *"double-click bin\ntvdmhost.exe —
+tested and working!"* Rolling back to `prev` therefore costs exactly the launcher and
+nothing else.
+  - ⚠ **The checkpoint commit has still not moved** — it names `ff0d956`/`71ef4737`.
+    Moving it is a deliberate act; it is now well behind two confirmed builds.
+  - `cfg\` is **clean** — no `int53.txt`, `dosver.txt`, `keys.txt`, `qimode.txt`,
+    `capture.flag` or `dostrace.flag` — so the box behaves as a fresh one, and a
+    double-click gives a prompt with no files at all. `scripts/bm/int53-interactive.txt`
+    is parked at `debug\rig\` where it cannot fire by accident (it is no longer needed:
+    the NTVDM-aware detection replaced it).
+  - ⚠ `demo\msdos\doom\COMMAND.COM` was copied in for the chaining repro and **removed
+    again** — the folder is back as the user left it.
+▶ **What the user has confirmed by hand (2026-09-25):** the whole shelf on `d57d586c`;
+the double-click launcher on `1ea8829d`. **Still broken, and now north star 1:** Doom low
+res, Wolf3D, Mario.
+▶ **Run headless on `1ea8829d`:** 6.22's `COMMAND.COM`, XP's `COMMAND.COM` from a bare
+double-click (prompt / `ver` / `dir` / EXEC), Doom, Skyroads, heaven7, duke3d, ZAR, and
+the Win16 kernel probe. Off-VM 1591/1591.
 
 ▶ **Rig status (older):** the watcher is live and everything below has been run through it.
 `p_vgaext` came back `1010`, byte for byte with PCem. VGA register parity is **99.9%**
