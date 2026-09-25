@@ -341,6 +341,12 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* cpuaff.txt = 1 -> pin the guest to a core of its own (see cpuaff_apply). */
 #define CPUAFF_PATH      CFG_("cpuaff.txt")
 #define DOSVER_PATH      CFG_("dosver.txt")
+/* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
+   measured IN A CONTEXT (a probe whose stdout was redirected) and at least AL=5 is
+   suspected of depending on it -- see dos_int21.c. One row per line:
+       <AL hex> <AX hex> <CF 0|1>        e.g.  05 5300 0
+   `;` or `#` starts a comment; absent rows keep the built-in measured default. */
+#define INT53_PATH       CFG_("int53.txt")
 /* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
    See dos_env_build_card for why this exists -- a DOS program configured through its
    environment could not be configured at all before it. */
@@ -23327,6 +23333,62 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (m.ver_minor < 10) p = zput(p, "0");
     p = zdec(p, m.ver_minor);
     p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
+    /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
+         XP's COMMAND.COM asks AH=53h with AL as a selector and stores AL=5's answer in
+         [0x327]. Its own code makes [0x327]==1 unreachable-from-the-keyboard: the only
+         two call sites that pass AL=0 to the read-a-line routine (transient 0x0924 and
+         0x0C33) both sit behind `cmp byte [0x327],1 / jz away`. Stock IS interactive,
+         so stock must answer AL=0 there -- while our probe measured AL=1 with its
+         output redirected to a file. Until that is re-measured un-redirected, the
+         answers are a table a run can change, not a constant a rebuild can.
+       ⚠ THE DEFAULT IS THE MEASURED VALUE, so a run with no file behaves exactly as
+         before. This is deliberately NOT a fix.
+       ⚠ And it prints unconditionally, with its source -- the dosver knob had two
+         sources and logged a line only when one of them won, which is how the rig
+         reported DOS 5.00 to every guest for an unknown number of sessions. */
+    { const char *i53_src = "built-in (measured vs stock ntvdm, 2026-09-25)";
+      HANDLE h = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c[512]; DWORD rd = 0, i = 0;
+          ReadFile(h, c, sizeof c - 1, &rd, NULL); CloseHandle(h);
+          while (i < rd) {
+              unsigned v[3]; int nf = 0;
+              /* one line */
+              while (i < rd && (c[i] == ' ' || c[i] == '\t')) ++i;
+              if (i < rd && (c[i] == ';' || c[i] == '#')) { while (i < rd && c[i] != '\n') ++i; }
+              while (i < rd && c[i] != '\n' && nf < 3) {
+                  unsigned val = 0; int got = 0;
+                  while (i < rd && (c[i] == ' ' || c[i] == '\t')) ++i;
+                  while (i < rd) {
+                      char ch = c[i];
+                      int d = (ch >= '0' && ch <= '9') ? ch - '0'
+                            : (ch >= 'a' && ch <= 'f') ? ch - 'a' + 10
+                            : (ch >= 'A' && ch <= 'F') ? ch - 'A' + 10 : -1;
+                      if (d < 0) break;
+                      val = val * 16u + (unsigned)d; got = 1; ++i;
+                  }
+                  if (!got) break;
+                  v[nf++] = val;
+              }
+              if (nf == 3 && v[0] < DOS_INT53_N) {
+                  g_dos_int53[v[0]].ax = (uint16_t)v[1];
+                  g_dos_int53[v[0]].cf = (uint8_t)(v[2] ? 1 : 0);
+                  i53_src = "cfg\\int53.txt";
+              }
+              while (i < rd && c[i] != '\n') ++i;
+              if (i < rd) ++i;
+          }
+      }
+      p = zput(p, "STAGE2: INT 21h AH=53h answers (source: ");
+      p = zput(p, i53_src); p = zput(p, ")");
+      { unsigned k;
+        for (k = 0; k < DOS_INT53_N; ++k) {
+            p = zput(p, " "); p = zhexb(p, (BYTE)k); p = zput(p, "=");
+            p = zhex(p, g_dos_int53[k].ax);
+            p = zput(p, g_dos_int53[k].cf ? "/C" : "/c");
+        } }
+      p = zput(p, "\r\n"); }
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
       for (k = 0; k < sizeof(dos_tab_upper);   ++k) ct[DOS_CTAB_UPPER   + k] = dos_tab_upper[k];
@@ -27272,8 +27334,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          / jnz back`. With no CR in the buffer SI walks the WHOLE 64K
                          segment and never leaves -- which is precisely the "spinning in
                          V86 with no traps" the headless deadline was killing.
-                         Layout, from the guest's own copy loop (`cl=[buf]; cx+=3`):
-                           [0] = length, [1] = ?, [2..] = text, then CR. */
+
+                       ⛔⛔⛔ AND `[0]` IS NOT OURS. IT IS DOS'S AH=0Ah MAXIMUM, AND
+                         WRITING IT COST THE INTERACTIVE PROMPT. (s79)
+                         This used to write `c[0] = length`, read off the guest's own
+                         copy loop at 0x06C7 (`mov cl,[0x9327] / add cx,3 / rep movsb`),
+                         which does treat [0] as a count. That reading was not wrong
+                         about THAT loop and was completely wrong about the buffer,
+                         because **the same buffer is handed to INT 21h AH=0Ah**:
+                           transient 0x018D  mov byte [ss:0x9327],0x80   <- ONCE, at start
+                           transient 0x0A21  mov dx,0x9327 / mov ah,0Ah / int 21h
+                         0x80 is the buffered-input MAXIMUM, set a single time and never
+                         re-set. Our "empty tail" answer zeroed it on the first BOP, so
+                         every later AH=0Ah saw a zero-capacity buffer, returned an empty
+                         line immediately, and COMMAND.COM printed its prompt again --
+                         991 prompts in one 30-second run, with `INT21 AH=0A line max=00`
+                         in the log the whole time. The shell was AT the keyboard read;
+                         we were answering it with EOF.
+                         ⚠ The `+0x0C` field of the request block is 0x0080 -- the guest
+                           tells us the capacity there. Two independent sources, and the
+                           one we overwrote was the same number.
+                       ⇒ WRITE THE LENGTH AT [1], WHERE DOS PUTS IT, AND NEVER TOUCH [0].
+                         Nothing downstream needs the length: the copy at 0x06C7 takes
+                         [0]+3 = 0x83 bytes (a superset) and the parser scans from +2
+                         for the CR, so the CR is the only load-bearing byte.
+                         Layout: [0] = max (the GUEST's, leave alone), [1] = length,
+                                 [2..] = text, then CR. */
                     /* ── ONE COMMAND, ONCE, FROM cfg\bopcmd.txt. ──────────────────
                          An empty answer proves only that the guest accepted one. This
                          hands it a REAL command line exactly once and empties every
@@ -27297,11 +27383,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                     if (cn) {
                         DWORD k;
-                        c[0] = (BYTE)cn; c[1] = 0;
+                        c[1] = (BYTE)cn;                /* [0] is the guest's AH=0Ah max */
                         for (k = 0; k < cn; ++k) c[2 + k] = (BYTE)cmdbuf[k];
                         c[2 + cn] = 0x0D;
                     } else {
-                        c[0] = 0; c[1] = 0; c[2] = 0x0D;
+                        c[1] = 0; c[2] = 0x0D;          /* ditto: [0] is NOT ours */
                     }
                     if (!quiet) { p = zput(p, "         cmdline buf 0x"); p = zhex(p, cb);
                                   if (cn) { p = zput(p, " <- ["); 
