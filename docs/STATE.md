@@ -199,7 +199,24 @@ at `SS:SP`, not in `VTIB_CS:EIP`, which is where the handler is**. Order of work
 (4) auto-report DOS **5.00** for `command.com` — the guest does `cmp ax,5` on the whole
 word, so 5.00 exactly — then the no-guest default, then PIF.
 
-▶ **Rig status:** the watcher is live and everything below has been run through it.
+▶ **Rig status, 2026-09-25 end of session 79.** `bin\ntvdmhost.exe` = **`d57d586c`**
+(three changes on top of `297e2172`: the `cfg\int53.txt` knob, the command-tail `[0]`
+fix, and `DPMI_CPU_CLASS = 4`). `debug\prev\ntvdmhost_prev.exe` is **untouched at
+`297e2172`** — the last build a human confirmed. `cfg\` is **clean**: no `int53.txt`,
+`dosver.txt`, `keys.txt`, `qimode.txt`, `capture.flag` or `dostrace.flag` left behind, so
+the box behaves as a fresh one. The ready-made knob is parked at
+`debug\rig\int53-interactive.txt` (repo copy: `scripts/bm/int53-interactive.txt`), where
+it cannot fire by accident.
+▶ **Run headless on `d57d586c`:** 6.22's `COMMAND.COM` (banner/`ver`/`dir`), XP's
+`COMMAND.COM` (prompt/`ver`/`dir`/EXEC, with the knob), Doom, Skyroads, heaven7, duke3d,
+ZAR, and the Win16 kernel probe. Off-VM 1591/1591.
+▶ **Owed from a human:** a by-hand pass — **these are headless runs, so they say the
+guests reach the same states, not that they look or sound right.** Specifically: Doom
+(including **low detail**, which no check here has ever covered), ZAR, and a Win16 app,
+because `DPMI_CPU_CLASS` is observable to every DPMI guest even though the interleaved
+A/B in `runs/s79_cl_ab/` found nothing.
+
+▶ **Rig status (older):** the watcher is live and everything below has been run through it.
 `p_vgaext` came back `1010`, byte for byte with PCem. VGA register parity is **99.9%**
 (`689/690` of the bytes the two oracles agree on) — `tools/vgaparity.py`, **re-run, never
 quote**, and not comparable to the void 89.7%. Doom and Skyroads confirmed by hand after
