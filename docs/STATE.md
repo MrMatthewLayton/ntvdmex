@@ -133,6 +133,35 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
+▶ **★★★★★ YOU CAN NOW JUST OPEN NTVDMEX AND GET A DOS PROMPT (2026-09-25).** Run
+`ntvdmhost.exe` with no arguments — double-click, shortcut, Start menu — and a DOS
+session comes up with XP's own `COMMAND.COM`, ready to type at. **No `cfg\` files, no
+arguments, no knobs.** It refuses with an explanation if NTVDMEX is not installed,
+because without the IFEO key the session would silently be *stock* ntvdm's.
+  - A bare launch used to reach STAGE1, be refused VDM privilege
+    (`NtVdmControl` → `0xC0000022`) and vanish with no window and no message. VDM
+    privilege is not askable: NT grants it to a process CSRSS made for a 16-bit image.
+    So the launcher writes a four-byte DOS stub and runs *that*; the IFEO key hands the
+    VDM back to us with the privilege.
+  - ⛔ **The stub's name must be 8.3.** `ntvdmex-shell.com` came back as `NTVDME~1.COM`
+    and the whole thing fell through silently.
+  - The two things XP's shell needs (DOS 5.00, the private `AH=53h` answers) are no
+    longer `cfg\` knobs: they key off a **measured property of the image** — an
+    NTVDM-aware guest carries `C4 C4 54` BOPs and XP's shell has fifteen — and only for
+    a program loaded *as the shell*. 6.22's `COMMAND.COM` has none and is untouched.
+
+▶ **⛔ THE VISIBLE-QUALITY BLOCKER IS ONE ROOT CAUSE, NOT THREE.** The user's 2026-09-25
+by-hand pass: *"Doom low res, Wolf3D and Mario are all still graphically broken (not
+entirely, just not correct)"* — everything else fine. All three are **unchained /
+mode-Y** rendering, and `vdd_video.c` says why in its own words: *"The A0000 aperture is
+one flat buffer — the page trap is deliberately not armed, because arming it makes the
+interpreter the CPU and collapses the run — so a guest write lands there with no record
+of which plane the map mask had selected."*
+  ⇒ It is **parked on a performance judgement, not an impossibility**, and that judgement
+  is now the thing standing between NTVDMEX and looking right. **Unparking it is a
+  product decision** — it means a write hook on A0000 and paying for it. That call is
+  the user's, and it is the next big question.
+
 ▶ **★★★★★ XP's OWN `COMMAND.COM` IS AN INTERACTIVE SHELL (2026-09-25).** A **stock XP
 box** now gets a working DOS prompt from the shell it already has — prompt, `ver` →
 `MS-DOS Version 5.00.500`, `dir` with volume serial and free space, cursor waiting at

@@ -3,8 +3,10 @@
 **Date:** 2026-09-25 · **Branch:** `m9/completeness` · **Rig:** bare-metal XP box, watcher live.
 **Host builds:** `3eb6f8dc` (the `AH=53h` knob) → `63e21be9` (the command-tail fix)
 → **`d57d586c`** (the DPMI CPU class). `d57d586c` is what is on the rig now.
-**Two results:** XP's shell became interactive, and the open Win16 `GetWinFlags`
-mismatch turned out to be a DPMI bug.
+**Three results:** XP's shell became interactive; the open Win16 `GetWinFlags` mismatch
+turned out to be a DPMI bug; and **NTVDMEX can now just be opened** — no arguments, no
+`cfg\` files — and gives a DOS prompt.
+**Final build: `1ea8829d`.**
 
 ---
 
@@ -215,3 +217,60 @@ installation check, three layers down, in a value chosen as a placeholder years 
 ## Commits
 
 `fb8a501` · `9effc64` · `5fa4286` · `bbcc0f6` · `f882732` · `096c313`
+
+
+---
+
+## Third result: you can just open it
+
+The user's verdict on everything above was the one that mattered:
+
+> *"Didn't run command.com because that's a bit long winded. Until I can just open
+> NTVDMEX on its own and see it, I'm not really interested in testing it. I want to test
+> it from a user experience perspective."*
+
+Fair, and it exposed that a bare launch did **the worst possible thing — nothing,
+silently**:
+
+```
+STAGE0: cmdline=["...\bin\ntvdmhost.exe" ]
+STAGE1: v86_init NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
+STAGE1: GetNextVDMCommand FALSE err=0x57
+```
+
+No window, no message, process gone. **VDM privilege is not something a process can ask
+for** — NT grants it to a process CSRSS created for a 16-bit image. So the launcher does
+not try: it writes a four-byte DOS stub (`mov ah,4Ch; int 21h`) to `%TEMP%` and runs it,
+Windows builds a real VDM, the IFEO key routes it back to us, and *that* instance has the
+privilege. The stub never executes — we recognise its name and load a shell instead.
+
+★ **Everything needed already existed.** The last-resort shell branch, the
+`dosstub.com`-style name check, the `AH=53h` work, the 5.00 requirement — all of it was
+built over the previous two sessions for the *test harness*. What was missing was the
+seventeen lines that let a human reach it.
+
+⛔⛔ **The stub's name has to be 8.3, and the first cut was not.** `ntvdmex-shell.com` came
+back from CSRSS as **`NTVDME~1.COM`**, so the basename never matched, the branch never
+fired, and the launch fell through to running the stub for real — a VDM that came up
+perfectly and exited immediately, with nothing on screen. That is the third time this
+rule has bitten in two days (`p_dpmiins.com` in the probe harness, krnl386 in the Win16
+one). **The DOS side of this system sees 8.3 names and only 8.3 names.**
+
+★ **And the two knobs became a measured property instead.** XP's shell needs DOS 5.00 and
+the private `AH=53h` answers. As `cfg\` files that is fine for an experiment and useless
+for a product — "double-click and get a prompt" cannot require two files. They now key off
+whether the loaded image **carries NTVDM's own `C4 C4 54` BOPs** (XP's shell has fifteen;
+threshold 8; count logged), and only for a program loaded *as the shell*. A filename check
+would have been a guess; the BOPs are what actually make it NT-aware. 6.22's `COMMAND.COM`
+has none, keeps 6.22, and keeps the measured `AH=53h` answers.
+
+⚠ The `AH=53h` values are still **provisional** and say so in the log
+(`source: NTVDM-aware shell (PROVISIONAL -- see p_int53f)`). Modelling the
+context-dependence is narrower than overriding the measurement, but it is not a
+substitute for measuring it.
+
+### Lesson
+
+★ **"It works" and "someone can use it" are different claims, and only the user can tell
+you which one you have.** Every piece of this had been built and tested; the product was
+still unreachable, and one line of feedback found that in a sentence.
