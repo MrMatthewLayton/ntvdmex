@@ -27291,7 +27291,70 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   else      p = zput(p, " <- empty tail (len=0, CR)");
                                   p = zput(p, "\r\n"); }
                 }
-                BW(0x10, 0);                       /* flags: nothing to run */
+                BW(0x10, 0);                       /* flags: nothing was redirected */
+                /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
+                     sub 01 returns THREE things, not one: a command TAIL (+0x08:+0x0A,
+                     written above), a program NAME (+0x1C:+0x1E, capacity +0x20), and
+                     that program's TYPE at +0x22. XP's handler picks the type by
+                     comparing the last four characters of the name (0x0F00AEA8..AF1E):
+                       `.EXE` -> 4   `.COM` -> 8   `.BAT` -> 2   shorter than 7 -> 9
+                     -- the three strings are at VA 0x0F0037B0/B8/C0 and read `.BAT`,
+                     `.COM`, `.EXE`, so this is a file-extension dispatch and not a
+                     status word. ⛔ I had guessed "status enumeration"; it is not.
+                   ▸ A zero-length name therefore means type 9, and the guest agrees:
+                     at guest 0x3167 it loads +0x22 and, on the no-program path, writes
+                     a 0 to the FIRST BYTE of the name buffer at 0x9473 -- which is
+                     exactly the +0x1C:+0x1E we are handed (`+1C:1E=0x9342:0x9473`).
+                   ⚠ We had been leaving both alone, i.e. handing the shell whatever was
+                     in its own memory. `ver` and `dir` worked anyway -- a builtin needs
+                     only the tail -- but that was luck, not an answer. */
+                {   DWORD nb = ((DWORD)(*(volatile WORD *)(b + 0x1C)) << 4)
+                             + *(volatile WORD *)(b + 0x1E);
+                    DWORD ncap = *(volatile WORD *)(b + 0x20);
+                    volatile BYTE *nm = (volatile BYTE *)(ULONG_PTR)nb;
+                    /* ── ★ HAND BACK WHAT CSRSS NAMED -- THE SAME SOURCE XP USES. ────
+                         XP's handler fills this buffer from the VDM_COMMAND_INFO that
+                         GetNextVDMCommand returned, and our STAGE1 already made that
+                         exact call: `STAGE1: command fetch ... app=[...]` lands in
+                         g_app2. Returning it is not a guess about what the shell wants;
+                         it is the same answer from the same place.
+                       ▸ ONCE. The first call is the VDM's reason for existing; after
+                         that there is nothing more to run and the name is empty. A
+                         shell that is handed the same program every time it asks would
+                         exec it for ever.
+                       ⚠ The type is XP's own rule (0x0F00AEA8..AF1E): compare the last
+                         four characters, `.EXE`->4 `.COM`->8 `.BAT`->2, and anything
+                         shorter than 7 characters -> 9. Mirrored, not invented. */
+                    static int named_once = 0;
+                    /* ⚠ progpath FIRST, not g_app2. On the rig CSRSS names
+                       `dosstub.com` -- the harness stub -- and `target.txt` names the
+                       real program, so g_app2 would hand the shell the stub. progpath
+                       is what we actually LOADED, which is the program either way. */
+                    const char *ap = progpath[0] ? progpath : (g_app2[0] ? g_app2 : "");
+                    DWORD al = 0, ty = 9;
+                    if (!named_once && ap[0]) {
+                        while (ap[al] && al + 1 < ncap && al < 260) ++al;
+                        named_once = 1;
+                    }
+                    if (al > 6) {
+                        char e[5]; int k;
+                        for (k = 0; k < 4; ++k) {
+                            char c = ap[al - 4 + k];
+                            e[k] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+                        }
+                        e[4] = 0;
+                        if      (e[1]=='E' && e[2]=='X' && e[3]=='E' && e[0]=='.') ty = 4;
+                        else if (e[1]=='C' && e[2]=='O' && e[3]=='M' && e[0]=='.') ty = 8;
+                        else if (e[1]=='B' && e[2]=='A' && e[3]=='T' && e[0]=='.') ty = 2;
+                    }
+                    { DWORD k; for (k = 0; k < al; ++k) nm[k] = (BYTE)ap[k]; nm[al] = 0; }
+                    BW(0x22, ty);
+                    if (!quiet) {
+                        p = zput(p, "         prog name <- ["); 
+                        { DWORD k; for (k = 0; k < al; ++k) { char t[2]; t[0]=ap[k]; t[1]=0; p = zput(p, t); } }
+                        p = zput(p, "] type="); p = zdec(p, ty); p = zput(p, "\r\n");
+                    }
+                }
                 #undef BW
                 /* +0x12/+0x14 deliberately untouched -- the cookie round-trips.
                    +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,

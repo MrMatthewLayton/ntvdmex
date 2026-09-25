@@ -334,11 +334,53 @@ With an empty answer COMMAND.COM asks again immediately — **1,255,260 `sub 01`
 prints a prompt or reads the keyboard, so nothing yet tells it that no more commands are
 coming and it should go interactive.
 
-▶ Candidates, none verified: the `+0x22` status word (XP writes **4**, **8** or **9** —
-three distinct outcomes for a call that can only "succeed" one way), `+0x00`/`+0x02`, or
-the `CF`/`AX` pair (`AX` is compared against `0x8000` on the failure path). **`+0x22` is
-the one to read next**: three values for one call is a status enumeration, and one of
-them is very likely "no more commands".
+#### ⛔ `+0x22` is NOT a status word — it is a file-extension dispatch
+
+I wrote that three values for one call *"is a status enumeration, and one of them is very
+likely 'no more commands'"*. It is not. `0x0F00AEA8..AF1E`:
+
+```
+ax = [0x0F09BED2]                       ; length of the program name
+if ax <= 6            -> +0x22 = 9      ; too short to carry an extension
+edi = nameptr + ax-5                    ; the last four characters
+strncmp(edi, ".EXE") == 0 -> +0x22 = 4
+strncmp(edi, ".COM") == 0 -> +0x22 = 8
+strncmp(edi, ".BAT") == 0 -> +0x22 = 2   else 9
+```
+
+The three constants are at VA `0x0F0037B0`/`B8`/`C0` and read **`.BAT`**, **`.COM`**,
+**`.EXE`**. ⇒ **`+0x22` is the TYPE of the program to run.**
+
+So `sub 01` returns *three* things, not one: a command **tail** (`+0x08:+0x0A`), a program
+**name** (`+0x1C:+0x1E`, capacity `+0x20`), and that program's **type** (`+0x22`). The
+guest agrees — at guest `0x3167` it loads `+0x22` and, on the no-program path, writes a
+zero to the first byte of the name buffer at `0x9473`, which is exactly the
+`+0x1C:+0x1E` we are handed.
+
+All three are now answered: the tail as before, the name from `progpath` on the first
+call only (⚠ **not** `g_app2` — on the rig CSRSS names `dosstub.com`, the harness stub),
+the type by XP's own extension rule, and empty/`9` on every call after.
+
+### ⛔ The loop is NOT an error path — it is the shell's main loop
+
+Every field is now well-formed and every one matches XP's own rule, and COMMAND.COM
+**still** asks ~1,250,000 times per 30-second run. Three answers tried — nothing,
+its own path with type 8, and `dosstub.com` with type 8 — all identical.
+
+★ That is the point: we already know it **executes** a command when given one and prints
+the result (`ver`, `dir`). So the loop is `for(;;) { get next command; run it; }` working
+exactly as designed — running flat out because our answer returns *immediately*.
+
+▶ **The strongest remaining hypothesis: `GetNextVDMCommand` BLOCKS.** On NT, CSRSS does
+not return until there is a command for this VDM. Our instant "nothing" turns a blocking
+wait into a spin. ⚠ But blocking cannot be the whole story either, because a shell that
+waits for ever never prints a prompt — so something must still distinguish *"wait for
+work"* from *"be the interactive shell"*, and that distinction has not been found.
+
+⚠ **Do not implement the block until that second half is understood.** Parking the exec
+thread is the exact defect the `retry` pattern exists to avoid ([[dos-shell-and-settings]]:
+`AH=0Ah` blocking the exec thread deadlocked a shell), and it would turn a visible spin
+into an invisible hang.
 
 ---
 
