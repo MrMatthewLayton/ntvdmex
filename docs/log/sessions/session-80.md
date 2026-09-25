@@ -174,3 +174,23 @@ Hexen, Duke3D."* `debug\prev\ntvdmhost_prev.exe` promoted to `b6a8a95b`.
 
 ▶ **Next:** user's hand test of Wolf3D/Mario on `0473d95d`; then Doom (32-bit interpreter) and
 the chain-4 de-interleave. ⚠ Interpreter speed (~155 cycles/instruction) is now the lever.
+
+---
+
+## Part 4 — Doom's low detail (after the user confirmed Wolf3D and Mario)
+
+✅ **User:** *"Mario and Wolf3D working!"* — prev promoted to `0473d95d`.
+
+Doom fixed on the rig (`3a36b85`, host `8d795b96`, ⚠ not yet hand-confirmed): 35 fps at low
+detail (was ~16), status bar `doomdetail` 0.294 (was 0.75). Method, in order:
+1. A **site recorder** named where Doom writes the map mask — two drawers, self-contained.
+2. A **new flat 32-bit interpreter** (`src/host/pm32interp.h`, 39 off-VM checks), run from the
+   trapped `OUT` until the drawer returns.
+3. A **detector** (`cfg\modeypm_detect.flag`) to test the assumption that nothing else stores
+   under a multi-plane mask. It found 1,233/s — Doom's mask helper returns before its caller's
+   latch copies. Fixed by stopping only once the run has touched the aperture; detector then 0.
+
+★ The detector is the lesson: "only the drawers touch A0000" was an assumption, and it was
+wrong in a way the picture alone would have hidden (the status bar is mostly redrawn by copy).
+
+▶ Next: user's hand test of Doom low detail; then the chain-4 de-interleave (`p_vgamem`).
