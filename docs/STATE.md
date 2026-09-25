@@ -25,11 +25,10 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`8d795b96`** — promoted
-  2026-09-25 (s80) after the user confirmed by hand: *"Doom low and high detail working!"*
-  (north star 1, design C, protected mode). Earlier confirmed builds kept beside it:
-  `ntvdmhost_0473d95d.exe` (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining),
-  `ntvdmhost_d57d586c.exe` (the s79 shelf).
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`a0294462`** — promoted
+  2026-09-26 (s80) after the user confirmed Heaven7's GUS music by hand. Earlier confirmed
+  builds kept beside it: `ntvdmhost_8d795b96.exe` (Doom low/high), `ntvdmhost_0473d95d.exe`
+  (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining), `ntvdmhost_d57d586c.exe`.
   ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
   `d57d586c`. **md5 the slot; do not trust this line.**
   ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
@@ -141,7 +140,7 @@ The full surface list, with the primary source named for each, is in
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
 | **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | ✅ **DONE — USER-CONFIRMED 2026-09-25**: Wolf3D, Mario, Doom low + high detail (`8d795b96`). Left over, no known visible symptom: the chain-4 → unchained de-interleave (`p_vgamem`). [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
-| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | 🟡 **Built on the rig (s80), not yet heard by a human.** New `src/vdd/vdd_gus.c` from [`ref/gus.md`](ref/gus.md), `ULTRASND=240,3,3,11,11`, IRQ 8–15 delivery for it. heaven7 finds the card, fills its DRAM, starts 132 voices; 96% of rendered samples non-zero. Doom/Hexen/ZAR/Skyroads/Wolf3D unchanged. Knob: `cfg\nogus.flag`. [`inventory/gus.md`](inventory/gus.md) |
+| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | ✅ **DONE — USER-CONFIRMED 2026-09-26**: *"Heaven 7 audio works and is accurate!"* (`a0294462`). `src/vdd/vdd_gus.c` from [`ref/gus.md`](ref/gus.md); IRQ 8–15 delivery built for it. Settings checkbox `GusEnabled` (default on). [`inventory/gus.md`](inventory/gus.md) |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
 1. **Graphics performance bar: "measure first, then decide."** Bring back the SR2 write-rate
