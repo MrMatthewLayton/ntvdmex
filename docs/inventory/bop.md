@@ -629,6 +629,69 @@ ones -- but the row is marked *provisional-in-context* rather than verified.
 the only measurement we have, and a guess that contradicts an oracle is worse than no
 change.
 
+### ✅✅ THE STATE BLOCK, DUMPED WHOLE -- the instrument that should have come first
+
+Every decision COMMAND.COM makes about being a shell is a `cmp byte [0x32x],n` against a
+handful of bytes in its **resident** data segment (`0x0100` for a `.COM`; the transient
+reaches them by loading `DS` from `[cs:0x95FE]`). The host now dumps them at each BOP:
+
+```
+cc[0x320..0x32F] = 00 00 00 00 01 00 01 01 01 00 01 00 00 00 00 00
+                               ^324 ^325 ^326 ^327 ^328 ^329 ^32A
+```
+
+| byte | value | meaning |
+|---|---|---|
+| `[0x326]` | **01** | banner gate A — **1 skips the banner** |
+| `[0x327]` | **01** | banner gate B, and the `jz` at guest `0x0BF5` — from `AH=53h AL=5` |
+| `[0x328]` | 01 | from `AH=53h AL=7` |
+| `[0x32A]` | **01** | **"ask for a command" vs "prompt" — 1 IS THE LOOP** |
+| `[0x32B]/[0x32D]` | 00 00 | our `blk+0x12` ✅ |
+| `[0x32F]` | 00 | our `blk+0x1A` ✅ |
+
+★ Five turns of *find a gate, answer it, re-run* produced one caveat. **One dump of the
+whole block produced the entire decision state at once**, and it should have been the
+first instrument, not the sixth. The pattern is the same one the caller-off-the-stack
+instrument taught at the start of this work: *stop deducing state you can print.*
+
+### ✅ `[0x326]` traced: `INT 2Fh AX=5501h`, and stock ANSWERS it
+
+Resident guest `0x16E5`:
+
+```
+mov ax,5501h ; int 2Fh
+or  ax,ax
+jnz -> [0x326] = 1          ; banner SUPPRESSED
+    -> store DS:SI away     ; banner allowed
+```
+
+`tools/dostest/p_2f55.asm`, measured both ways:
+
+| | `AX` in | `AX` out | `DS:SI` |
+|---|---|---|---|
+| **stock** | `5501` | **`0000`** | **`040F:0104`** — a real pointer |
+| **ours** | `5501` | `5501` (unanswered) | unchanged |
+| stock | `5500` | `5500` (**not** answered) | unchanged |
+
+⇒ Stock answers `5501h` with `AX=0` **and a pointer**, so its banner prints; we answer
+nothing, so `[0x326]=1` and ours does not. `5500h` is a useful negative: stock does not
+answer it either, so a handler must not claim the whole `55xx` range.
+
+⚠ **NOT IMPLEMENTED, deliberately.** COMMAND.COM *stores* that `DS:SI` and uses it later.
+Returning `AX=0` with a pointer to something we invented would be an unimplemented call
+answering at random -- the exact failure this file already records twice. The banner is
+cosmetic; the **loop** (`[0x32A]=1`) is the real defect, and it is gated by `[0x327]`,
+i.e. by `AH=53h AL=5`, whose shell-context value is still unmeasured.
+
+### ⚠ The bracket needed fixing TWICE
+
+1. It ran the guest **inline and waited** -- fine for a probe, fatal for `COMMAND.COM /p`,
+   which never exits. Left the rig with no IFEO key (recorded above).
+2. The fix used `start ... > file`, which redirects **START**, not the process it
+   launches -- so the next run captured **nothing**, an empty file that looks exactly
+   like a guest which printed nothing. Now `start "" cmd /c "... > file"`: redirected by
+   the inner shell, detached, and killable.
+
 ### ⛔ Real MS-DOS cannot be asked at all
 
 `tools/dostest/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken

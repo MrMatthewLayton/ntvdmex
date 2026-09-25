@@ -27187,6 +27187,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             /* And the bytes it is about to run either way -- the branch is right there,
                and which way it goes is the whole question. */
             p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
+            /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
+                 Every decision it makes about being a shell is a `cmp byte [0x32x],n`
+                 against a handful of bytes in its RESIDENT data segment -- `[0x326]`
+                 and `[0x327]` gate the banner, `[0x32A]` picks "ask for a command" vs
+                 "prompt", `[0x32B]/[0x32D]` and `[0x32F]` gate the keyboard read. The
+                 transient reaches them by loading DS from `[cs:0x95FE]`; the resident
+                 uses them directly, so they live at the resident segment -- 0x0100 for
+                 a .COM -- and `0x2B1` is in the same block.
+               ⇒ Printing all of them at once turns "find the next gate, answer it,
+                 re-run" into one reading. Five turns of that pattern produced one
+                 caveat; this is the instrument that should have come first.
+               ⚠ The segment is ASSUMED to be 0x0100 (a .COM's PSP). If COMMAND.COM is
+                 ever loaded elsewhere these rows are somebody else's memory -- the
+                 `@0100:` in the trace's call sites is the check that it is not. */
+            { const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(0x0100u << 4);
+              p = zput(p, "\r\n         cc[0x2B0..0x2BF]="); p = zdump(p, (const void *)(st + 0x2B0), 16);
+              p = zput(p, "\r\n         cc[0x320..0x333]="); p = zdump(p, (const void *)(st + 0x320), 20); }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         ntvdm_bop_dispatch:

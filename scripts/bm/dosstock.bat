@@ -57,7 +57,10 @@ rem   its prompt for ever. The restore below is after the run, so it never happe
 rem   the box was left routing every DOS and Win16 launch to stock, silently.
 rem   w16stack.bat had this right and I did not copy it. A bracket whose restore can be
 rem   skipped by the thing it brackets is not a bracket.
-start "" "%D%\%P%" %A% > "%R%" 2>&1
+rem â  REDIRECT INSIDE A NESTED cmd. `start ... > file` redirects START, not the
+rem   process it launches, so the first version of this fix captured NOTHING -- an
+rem   empty output file that looks exactly like a guest that printed nothing.
+start "" cmd /c ""%D%\%P%" %A% > "%R%" 2>&1"
 ping -n 16 127.0.0.1 >nul
 echo ---- run window over ---- >> "%S%"
 
