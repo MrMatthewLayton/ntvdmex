@@ -87,13 +87,67 @@ hand (CRLF). ⚠ `debug\tests\cmdcom\COMMAND.COM` is **XP's**; 6.22's is
 ⚠ `controld exec` needs `cmd /c ""<quoted path>" args"` — a single pair of quotes around
 path-plus-arguments silently runs nothing.
 
-## Next: returning to the EXEC parent
+---
 
-The PM `AH=4Ch` arm returns 0 and the main loop treats that as the end of the VDM.
-Returning to `COMMAND.COM` needs a real **DPMI client teardown**: the switch-in at
-`dpmi_switch_to_pm` is one-shot and builds global state that nothing takes down (LDT and
-`g_ldt_next`, the INT-site patches, `g_pm_int[]`, callbacks, memory blocks, `g_pmret_sel`,
-`g_dpmi_client32`, `g_pm_app_hooked_timer`, …). After teardown, drop to V86 and run the
-real-mode DOS `AH=4Ch` for the current PSP so the parent resumes — and a **second** DPMI
-client (run Doom twice) must then work. `chain.bat quit` is the acceptance test: `ver` must
-print after Doom exits.
+## Part 2 — returning to the EXEC parent (commit after `8fa3065`)
+
+**`doom` → quit → `ver` works, and `doom` → quit → `doom` again works.** Rig, headless,
+host **`b6a8a95b`**; ⚠ not yet confirmed by hand.
+
+```
+INT21h AH=4Ch -> client EXIT after 001faddf svc, code=0x00
+DPMI: client teardown -- released 0xa memory blocks, 0x5 DOS blocks, 0x3b LDT slots
+DPMI: client exited with a parent waiting (depth=01) -- back to real mode, terminating the child there
+  EXEC: freed 0x6 more block(s) the child still owned
+  EXEC: child exited rc=0x00, parent resumed (depth=00)
+...
+C:\...\demo\msdos\doom>ver
+MS-DOS Version 6.22
+```
+
+**The design.** A PM `AH=4Ch` with `g_exec_depth > 0` now runs `dpmi_client_teardown()`,
+clears PE, and hands the child to the same `dos_terminate()` every real-mode child uses —
+which restores the parent's saved V86 frame. The exec loop then just `continue`s. A
+top-level client's exit still ends the run, unchanged.
+
+**What teardown releases:** every live 0501 block (a new `g_dpmi_owned[]` list), every live
+0100 DOS block (`g_dpmi_dosblk[]`), every LDT slot above the switch-time watermark except
+the host's own (default table, fault trampoline, PM-return catcher), vector hooks,
+exception handlers, callbacks, and the interrupt/mode flags. **What it keeps:** the host's
+selectors, reused by the next client.
+
+**Four defects found on the way, each by the run that hit it:**
+
+1. **An orphaned BOP in the parent.** The PM INT-site patcher had rewritten COMMAND.COM's own
+   `int 21h` (AH=4Dh at `0100:0a6e`) to `C4 C4`. Teardown first only *forgot* the patch map,
+   so the shell died on its first call after the child. ⇒ teardown restores every site
+   first, guarded by `VirtualQuery`.
+2. **The patch map outlived 0502.** A block the client released stayed in `pmap`, and the
+   next walk read freed memory (host AV at `0x04581e53`). A latent bug before this session:
+   any 0301 after a 0502 could do it. ⇒ 0502 drops the map entries inside the block, and
+   removes it from `g_dpmi_blk[]` (the code-block scanner walked freed blocks too).
+3. **A child's real-mode allocations were never freed.** `dos_alloc()` stamped every block
+   `DOS_PSP_SEG`, so "free what the dead PSP owns" was impossible. DOS/4GW's five
+   `AH=48h` blocks outlived Doom. ⇒ `AH=48h` stamps the current PSP (unchanged for a
+   top-level program, whose PSP *is* `DOS_PSP_SEG`); child exit frees every block it
+   owns. **This applies to every EXEC'd program, not just DPMI ones.**
+4. **The host's own table split the arena.** For a DOS program the 256-vector default PM
+   table comes from `dos_alloc` (the host pool is WOW's), so it sat at `0x165d` and the
+   second `doom` loaded at `0x169f` instead of `0x242`. ⇒ teardown frees it and keeps the
+   selector; the next client rebases the same slot. Second run: child at `0x242`, table at
+   `0x177:0` linear `0x165e0` — identical to the first.
+
+A new line, **`EXEC: chain after exit:`**, dumps the MCB chain at every child exit. It is
+what named defect 4, and a leak is invisible in any other single line.
+
+| Run (host `b6a8a95b`) | Result |
+|---|---|
+| `chain.bat quit` | ✅ `ver` prints `MS-DOS Version 6.22` after Doom exits |
+| `chain.bat twice` | ✅ second Doom at `0x242`, 1,457 timer ISRs after the 2nd switch, all 2,403 `done=1` |
+| Doom direct | ✅ 649 ISRs `done=1`, 0 abandoned, no fault |
+| Skyroads | ✅ `n8=0 max_ms=7` |
+| Win16 Notepad | ✅ opens, closes, host exits |
+| Off-VM battery | ✅ 1591 checks, 0 failed |
+
+⚠ **Still unmeasured:** SETUP → "save and launch" (same path, by hand); Heretic, Hexen and
+Duke3D setups (the user's other reports); a real-mode TSR loaded before a DPMI client.

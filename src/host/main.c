@@ -1759,6 +1759,19 @@ static struct { WORD sel; DWORD off; BYTE client; } g_pm_int[256];
 #define DPMI_MEMBLK_MAX 64
 static struct { DWORD base, size; BYTE code; } g_dpmi_blk[DPMI_MEMBLK_MAX];
 static int g_dpmi_nblk = 0;
+/* ── WHAT THE CLIENT OWNS, SO IT CAN BE GIVEN BACK WHEN IT EXITS. (s80) ─────────────
+     g_dpmi_blk[] is the patcher's list: capped at 64 and never told about 0502, so it
+     cannot say what is still live. These two can. dpmi_client_teardown() releases
+     whatever is left in them, which is what a DPMI host does when its client ends --
+     and what lets the NEXT client (the user runs Doom twice) find memory at all. */
+#define DPMI_OWNED_MAX 512
+static DWORD g_dpmi_owned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases)  */
+static int   g_dpmi_nowned = 0;
+#define DPMI_DOSBLK_MAX 64
+static WORD  g_dpmi_dosblk[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
+static int   g_dpmi_ndosblk = 0;
+static int   g_ldt_client_mark = 0;          /* g_ldt_next when the client switched in */
+static int   g_pm_exit_code = 0;             /* AL of the client's PM AH=4Ch           */
 
 /* ── THE CLIENT'S EXECUTABLE DECLARES WHICH OF ITS MEMORY IS CODE. ────────────────
    A flat code selector (base 0, limit 4 GB) cannot be scanned for INT sites, so an
@@ -1836,6 +1849,7 @@ static DWORD g_pm_app_timer_off = 0;
 static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
 static DWORD g_pm_defbase = 0;      /* its linear base                   */
 static int   g_pm_defidx  = -1;     /* its LDT slot, so its D/B can follow the client */
+static int   g_pm_def_from_dos = 0; /* the block came from the DOS arena, not the host pool */
 /* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_pm_int on
    purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
    from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
@@ -3636,6 +3650,47 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         if (g_exec[d].child_seg)
             dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
         if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+        /* ...and every OTHER block it still owns, as DOS does on terminate (s80).
+           AH=48h now stamps the child's PSP as owner; a program that exits without
+           freeing its allocations would otherwise shrink the parent's memory for
+           good. Rescan after each free: dos_free coalesces, so the chain moves. */
+        if (g_exec[d].child_seg) {
+            int pass, nfree = 0;
+            for (pass = 0; pass < 64; ++pass) {
+                uint16_t mm = m->first_mcb, hit = 0; int guard = 0;
+                for (;;) {
+                    volatile uint8_t *mc = mcb_at(NULL, mm);
+                    if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 1024) break;
+                    if (mcb_rd16(mc + 1) == g_exec[d].child_seg) { hit = (uint16_t)(mm + 1); break; }
+                    if (mc[0] == 'Z') break;
+                    mm = (uint16_t)(mm + 1 + mcb_rd16(mc + 3));
+                }
+                if (!hit || dos_free(NULL, hit)) break;
+                ++nfree;
+            }
+            if (nfree) {
+                *pp = zput(*pp, "  EXEC: freed 0x"); *pp = zhex(*pp, (DWORD)nfree);
+                *pp = zput(*pp, " more block(s) the child still owned\r\n");
+            }
+        }
+        /* The chain as the parent will find it: what a child LEFT is exactly what the
+           next program cannot have, and a leak is invisible in any one line above. */
+        {   uint16_t mm = m->first_mcb; int guard = 0;
+            *pp = zput(*pp, "  EXEC: chain after exit:");
+            for (;;) {
+                volatile uint8_t *mc = mcb_at(NULL, mm);
+                uint16_t own, sz;
+                if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 48) { *pp = zput(*pp, " <broken>"); break; }
+                own = mcb_rd16(mc + 1); sz = mcb_rd16(mc + 3);
+                *pp = zput(*pp, " "); *pp = zhex(*pp, mm);
+                *pp = zput(*pp, own ? "/own=" : "/FREE"); if (own) *pp = zhex(*pp, own);
+                *pp = zput(*pp, "/sz="); *pp = zhex(*pp, sz);
+                if (mc[0] == 'Z') break;
+                mm = (uint16_t)(mm + 1 + sz);
+            }
+            *pp = zput(*pp, "\r\n");
+            log_append(LOG_PATH, base, *pp); *pp = base;
+        }
         /* And the environment copy EXEC made for it (s74). A TSR keeps its env
            block along with its PSP, which is why this is on the exit arm only. */
         if (g_exec[d].env_seg) { dos_free(NULL, g_exec[d].env_seg); g_exec[d].env_seg = 0; }
@@ -14415,6 +14470,22 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
     volatile BYTE *stub;
     int v, idx;
     char lb[160], *q = lb;
+    /* A SECOND CLIENT (s80): the table is the host's and outlives the first client.
+       If its memory survived teardown (the host pool), point every vector back at it.
+       If it came from DOS memory, teardown gave the block back to the parent and kept
+       only the selector: fall through, allocate again, and rebase that same slot --
+       allocating a new one would leak an LDT slot per program run. */
+    if (g_pm_defsel && g_pm_defbase) {
+        for (v = 0; v < 256; ++v) {
+            g_pm_int[v].sel = g_pm_defsel;
+            g_pm_int[v].off = (DWORD)v * DPMI_PMDEF_STRIDE;
+            g_pm_int[v].client = 0;
+        }
+        q = zput(q, "DPMI: default PM handlers reused at 0x"); q = zhex(q, g_pm_defsel);
+        q = zput(q, " (a previous client's table)\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        return;
+    }
     /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over.
        On the WOW path this MUST come from the host pool -- krnl386 owns the rest of
        conventional memory by now, and a silent failure here shows up as INT 21h AH=35h
@@ -14425,6 +14496,7 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
          step 0x0d with nothing in the log pointing here. A silent return from the
          function that installs 256 interrupt vectors is not a small omission. */
     seg = wow_host_alloc(0x40);
+    g_pm_def_from_dos = !seg;
     if (!seg && (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) {
         q = zput(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
@@ -14432,14 +14504,14 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
         log_append(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
-    if (g_ldt_next >= DPMI_LDT_MAX) {
+    if (g_pm_defidx < 0 && g_ldt_next >= DPMI_LDT_MAX) {
         q = zput(q, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
         log_append(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     g_pm_defbase = (DWORD)seg << 4;
     stub = (volatile BYTE *)(ULONG_PTR)g_pm_defbase;
-    idx = g_ldt_next++;
+    idx = (g_pm_defidx >= 0) ? g_pm_defidx : g_ldt_next++;   /* a previous client's slot, rebased */
     g_ldt[idx].base   = g_pm_defbase;
     g_ldt[idx].limit  = 0x3FF;
     g_ldt[idx].access = 0xFA;                    /* present, DPL3, code, readable */
@@ -19602,6 +19674,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
                                 g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
                                 dpmi_install(idx);
+                                if (g_dpmi_ndosblk < DPMI_DOSBLK_MAX) g_dpmi_dosblk[g_dpmi_ndosblk++] = seg;
                                 VDM_SET16(tib, VTIB_EAX, seg);
                                 VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
                                 p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
@@ -19612,7 +19685,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
                             if (idx >= 3 && idx < DPMI_LDT_MAX) {
                                 DWORD seg = g_ldt[idx].base >> 4;
+                                int bi;
                                 dos_free(NULL, (uint16_t)seg);
+                                for (bi = 0; bi < g_dpmi_ndosblk; ++bi)
+                                    if (g_dpmi_dosblk[bi] == (WORD)seg) { g_dpmi_dosblk[bi] = g_dpmi_dosblk[--g_dpmi_ndosblk]; break; }
                                 g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
                             }
                             p = zput(p, " -> DOSfree");
@@ -20121,6 +20197,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                             if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
                                         p = zput(p, " -> ENOMEM"); break; }
+                            if (g_dpmi_nowned < DPMI_OWNED_MAX)   /* the client owns it until 0502 or exit */
+                                g_dpmi_owned[g_dpmi_nowned++] = (DWORD)(ULONG_PTR)mem;
                             if (g_dpmi_nblk < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
                                 int c; BYTE iscode = 0;
                                 /* Does this allocation match one of the program's EXEC objects?
@@ -20156,7 +20234,31 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x0502: {                             /* free memory block SI:DI = handle */
                             DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            /* ── THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
+                                 every INT site we rewrote, by address, and dpmi_unpatch()
+                                 / dpmi_repatch() dereference all of them on every 0301.
+                                 A block released here left its sites behind, so the next
+                                 walk read freed memory -- found as a host AV at teardown
+                                 (addr 0x04581e53, a site in a block Doom freed on its way
+                                 out). Measure the whole allocation before releasing it. */
+                            if (h) {
+                                DWORD end = h; MEMORY_BASIC_INFORMATION mb; DWORD sl;
+                                while (VirtualQuery((LPCVOID)(ULONG_PTR)end, &mb, sizeof mb) == sizeof mb
+                                       && (DWORD)(ULONG_PTR)mb.AllocationBase == h && mb.RegionSize)
+                                    end = (DWORD)(ULONG_PTR)mb.BaseAddress + (DWORD)mb.RegionSize;
+                                for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl)
+                                    if (g_pmap_lin[sl] >= h && g_pmap_lin[sl] < end) g_pmap_vec[sl] = 0;
+                            }
                             if (h) VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
+                            /* ...and forget it in BOTH lists. g_dpmi_blk[] kept freed blocks,
+                               so the code-block scan could walk released memory, and
+                               teardown would have released it a second time -- by then
+                               possibly someone else's allocation at the same address. */
+                            { int i;
+                              for (i = 0; i < g_dpmi_nowned; ++i)
+                                  if (g_dpmi_owned[i] == h) { g_dpmi_owned[i] = g_dpmi_owned[--g_dpmi_nowned]; break; }
+                              for (i = 0; i < g_dpmi_nblk; ++i)
+                                  if (g_dpmi_blk[i].base == h) { g_dpmi_blk[i] = g_dpmi_blk[--g_dpmi_nblk]; break; } }
                             p = zput(p, " -> freed");
                             break; }
                         case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
@@ -20455,6 +20557,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                expected 0x005A -- a leftover from the first DPMI spike, and
                                it printed "MISMATCH" on every real client's exit.) */
                             g_pm_client_exited = 1;
+                            g_pm_exit_code = (int)(ax & 0xFF);
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
                             p = zput(p, " svc, code=0x"); p = zhexb(p, (BYTE)(ax & 0xFF));
                             p = zput(p, g_in_pm_irq ? " (INSIDE an injected interrupt handler)\r\n"
@@ -21806,6 +21909,138 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
     VDM_SET16(tib,VTIB_FS,sFS); VDM_SET16(tib,VTIB_GS,sGS);
     g_dpmi_vi = prev_vi;
     return done;
+}
+
+/* ── ★★★ THE CLIENT EXITED: GIVE BACK WHAT IT HAD AND LEAVE PROTECTED MODE. (s80) ───
+     A DPMI client's `AH=4Ch` in protected mode ended the WHOLE VDM, because the switch
+     into PM was one-way: dpmi_switch_to_pm() builds global state and nothing ever took
+     it down. That is fine for a program launched on its own and wrong for every other
+     shape -- the user's "save settings and run Doom" from SETUP, `doom` typed at
+     COMMAND.COM -- where a parent is waiting in real mode for its child to return.
+     DPMI 0.9 has the host release the client's resources on its exit and let DOS
+     terminate the real-mode half; this is that release. The caller then clears PE and
+     runs the real-mode terminate (dos_terminate), which restores the parent's frame.
+   ► WHAT IT KEEPS is as important as what it drops: the HOST's own selectors and the
+     default-handler table are used again by the next client. Everything else the
+     client made -- its LDT slots, its 0501/0100 memory, its vector hooks, callbacks,
+     exception handlers -- goes, or the next client inherits a dead one's state.
+   ⛔ THE PATCH MAP IS REBUILT, NOT KEPT. pmap holds the address of every INT site we
+     rewrote in the client's code, and that code lives in the 0501 blocks released
+     below. dpmi_unpatch/dpmi_repatch dereference every entry: left in place, the next
+     client's first 0301 would read freed memory and fault the host. */
+static void dpmi_client_teardown(void)
+{
+    int i, keep_hi = g_ldt_client_mark, freed_ldt = 0, freed_mem = 0, freed_dos = 0;
+    int host_idx[4];
+    char lb[256], *q = lb;
+
+    /* ⛔ PUT EVERY PATCHED INT SITE BACK FIRST, while all of them are still mapped. The
+         patcher's scans are not confined to the client's own blocks: the first version
+         of this function only FORGOT the sites, and the parent came back to its own
+         `int 21h` (AH=4Dh, COMMAND.COM at 0100:0a6e) still reading `C4 C4` -- an
+         orphaned BOP with no client behind it, and the shell died on its first call.
+         Restore `CD nn` wherever the bytes are still ours -- which also reverts the
+         host's default stubs; those are re-planted below.
+       ⚠ GUARDED, unlike dpmi_unpatch(): this runs once, so it can afford to ask
+         whether each site is still mapped and writable rather than trust the map. */
+    {   DWORD sl;
+        for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
+            DWORD a = g_pmap_lin[sl]; BYTE v = g_pmap_vec[sl];
+            MEMORY_BASIC_INFORMATION mb;
+            volatile BYTE *b;
+            if (!a || !v || v == DPMI_BP_VEC) continue;
+            if (VirtualQuery((LPCVOID)(ULONG_PTR)a, &mb, sizeof mb) != sizeof mb
+                || mb.State != MEM_COMMIT || (mb.Protect & PAGE_GUARD)
+                || !(mb.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE
+                                   | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))
+                || a + 2 > (DWORD)(ULONG_PTR)mb.BaseAddress + (DWORD)mb.RegionSize) continue;
+            b = (volatile BYTE *)(ULONG_PTR)a;
+            if (b[0] == 0xC4 && b[1] == 0xC4) { b[0] = 0xCD; b[1] = v; }
+        }
+    }
+
+    /* Memory: whatever the client did not free itself. */
+    for (i = 0; i < g_dpmi_nowned; ++i)
+        if (g_dpmi_owned[i] && VirtualFree((void *)(ULONG_PTR)g_dpmi_owned[i], 0, MEM_RELEASE))
+            ++freed_mem;
+    g_dpmi_nowned = 0;
+    g_dpmi_nblk = 0;
+    for (i = 0; i < g_dpmi_ndosblk; ++i)
+        if (dos_free(NULL, g_dpmi_dosblk[i]) == 0) ++freed_dos;
+    g_dpmi_ndosblk = 0;
+    g_le_ncode = 0; g_le_load_base = 0;
+
+    /* The patch map: forget every client site, keep the host's 256 default stubs. */
+    for (i = 0; i < (int)DPMI_PMAP_SLOTS; ++i) { g_pmap_lin[i] = 0; g_pmap_vec[i] = 0; }
+    g_pmap_n = 0;
+    /* ...unless the table itself lives in the DOS arena. Then it is a 0x40-paragraph
+       block in the middle of the parent's memory: measured, the next `doom` loaded
+       above it at 0x169f instead of 0x242. Give it back; keep the selector, which the
+       next client's install rebases (see dpmi_install_default_pm_handlers). */
+    if (g_pm_defbase && g_pm_def_from_dos) {
+        dos_free(NULL, (uint16_t)(g_pm_defbase >> 4));
+        g_pm_defbase = 0; g_pm_def_from_dos = 0;
+    }
+    if (g_pm_defbase)
+        for (i = 0; i < 256; ++i) {
+            volatile BYTE *st = (volatile BYTE *)(ULONG_PTR)(g_pm_defbase + (DWORD)i * DPMI_PMDEF_STRIDE);
+            st[0] = 0xC4; st[1] = 0xC4; st[2] = 0xCF;       /* BOP ; IRET, as installed */
+            pmap_set(g_pm_defbase + (DWORD)i * DPMI_PMDEF_STRIDE, (BYTE)i);
+        }
+
+    /* LDT: every slot the client allocated goes back. The host's own selectors made
+       during the client's life (default table, fault trampoline, PM-return catcher)
+       stay, so the watermark can only come down as far as the highest of them; any
+       client slot below that goes on the free list instead. */
+    host_idx[0] = g_pm_defidx;
+    host_idx[1] = g_pmret_sel ? (g_pmret_sel >> 3) : -1;
+    host_idx[2] = g_dpmi_fault_sel ? (g_dpmi_fault_sel >> 3) : -1;
+    host_idx[3] = g_dpmi_flt_code_sel ? (g_dpmi_flt_code_sel >> 3) : -1;
+    for (i = 0; i < 4; ++i) if (host_idx[i] >= keep_hi) keep_hi = host_idx[i] + 1;
+    g_ldt_nfree = 0;
+    for (i = g_ldt_client_mark; i < keep_hi; ++i) {
+        int h = 0, k;
+        for (k = 0; k < 4; ++k) if (host_idx[k] == i) h = 1;
+        if (h) continue;
+        g_ldt[i].base = g_ldt[i].limit = 0; g_ldt[i].access = 0; g_ldt[i].flags = 0;
+        if (g_ldt_nfree < DPMI_LDT_MAX) g_ldt_free[g_ldt_nfree++] = (WORD)i;
+        ++freed_ldt;
+    }
+    for (i = keep_hi; i < g_ldt_next; ++i) {
+        g_ldt[i].base = g_ldt[i].limit = 0; g_ldt[i].access = 0; g_ldt[i].flags = 0;
+        ++freed_ldt;
+    }
+    if (g_ldt_client_mark > 0) g_ldt_next = keep_hi;
+
+    /* The client's hooks and handlers. */
+    for (i = 0; i < 256; ++i) {
+        if (g_pm_defsel) { g_pm_int[i].sel = g_pm_defsel; g_pm_int[i].off = (DWORD)i * DPMI_PMDEF_STRIDE; }
+        g_pm_int[i].client = 0;
+        g_pm_disp[i] = 0;
+    }
+    for (i = 0; i < 32; ++i) g_pm_exc[i].set = 0;
+    for (i = 0; i < DPMI_CB_SLOTS; ++i) g_cb[i].used = 0;
+    g_pm_app_hooked_timer = 0; g_pm_app_timer_sel = 0; g_pm_app_timer_off = 0;
+    g_pm_vec8_armed_ms = 0;
+
+    /* Interrupt and mode state: back to "a real-mode program is running". */
+    g_dpmi_vi = 1;
+    g_pm_irq0_latch = 0;
+    InterlockedExchange(&g_pm_tick_owed, 0);
+    InterlockedExchange(&g_async_pm_active, 0);
+    InterlockedExchange(&g_simint_busy, 0);
+    g_in_pm_irq = 0;
+    InterlockedExchange(&g_pm_entry_eip, -1);
+    g_dpmi_pm = 0;
+    g_pm_client_exited = 0;
+
+    q = zput(q, "DPMI: client teardown -- released 0x"); q = zhex(q, (DWORD)freed_mem);
+    q = zput(q, " memory blocks, 0x"); q = zhex(q, (DWORD)freed_dos);
+    q = zput(q, " DOS blocks, 0x"); q = zhex(q, (DWORD)freed_ldt);
+    q = zput(q, " LDT slots (next=0x"); q = zhex(q, (DWORD)g_ldt_next);
+    q = zput(q, ", free-list 0x"); q = zhex(q, (DWORD)g_ldt_nfree);
+    q = zput(q, ")\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* ================================================================================ *
@@ -25577,6 +25812,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_ldt[1 + si].flags  = 0;
                 } }
                 if (g_ldt_next < 4) g_ldt_next = 4;      /* client allocs start at index 4 now */
+                g_ldt_client_mark = g_ldt_next;          /* teardown gives back everything above */
                 /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
                       ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
                    dpmi_switch_to_pm() sets ES = DS (a second copy of the data selector),
@@ -27435,6 +27671,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */
                     break;                  /* 0 = client exited, <0 = unexpected stop */
+                }
+                /* ── ★★★ A CHILD WITH A PARENT GOES BACK TO ITS PARENT. (s80) ─────────
+                     The client said AH=4Ch in protected mode. If something EXEC'd it
+                     (COMMAND.COM, a SETUP program) that parent is parked in real mode
+                     at its own INT 21h, and ending the VDM here is what made "run Doom
+                     from the shell" and "save and launch" come back to nothing. Release
+                     the client, leave PM, and let the real-mode terminate do what it
+                     does for any child: free its PSP block, unwind its vectors, restore
+                     the parent's frame. The exec loop then simply carries on in V86.
+                   ⚠ ONLY with a parent. A top-level client's exit still ends the run,
+                     unchanged -- nothing is waiting for it. */
+                if (g_pm_client_exited && g_exec_depth > 0 && g_running) {
+                    dpmi_client_teardown();
+                    *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
+                    VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
+                    m.exit_code = g_pm_exit_code;
+                    p = zput(p, "DPMI: client exited with a parent waiting (depth=");
+                    p = zhexb(p, (unsigned)g_exec_depth);
+                    p = zput(p, ") -- back to real mode, terminating the child there\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    if (dos_terminate(&m, tib, &p, base)) continue;   /* parent resumed */
                 }
                 g_dpmi_done = 1;            /* PM run finished -> watchdog stands down, window persists */
                 break;

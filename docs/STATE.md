@@ -137,7 +137,7 @@ The full surface list, with the primary source named for each, is in
 
 | # | North star | State |
 |---|---|---|
-| **3** | **Execution chaining** — you cannot get from one program to another | 🟡 **Half done (s80).** Doom now starts and plays when typed at the shell, and quitting no longer faults the host. ⛔ **Quitting still ends the VDM instead of returning to the shell.** |
+| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **Done on the rig (s80), awaiting the user's hand test.** `doom` at the shell plays; quitting returns to the prompt; running it again works. |
 | **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | One root cause. **Measure the SR2 write rate first** — the user decides the speed/correctness trade on that data. |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
@@ -147,29 +147,27 @@ The full surface list, with the primary source named for each, is in
 2. **GUS: yes** — work from the publicly archived Gravis GUS SDK and write our own
    `docs/ref/gus.md` citing it (as with the 82077AA and 16550). Do not mirror the SDK.
 
-### ▶ 3. Execution chaining — the crash is fixed; returning to the parent is next
+### ▶ 3. Execution chaining — fixed on the rig, needs the user's hand test
 
 The user's report: *"Inside DOOM Setup, save settings and run Doom, crashes. Same for
 Heretic, Hexen, Duke3D setups"* and *"double-click, command.com, navigate to
-demo\msdos\doom and run DOOM — crashes."*
+demo\msdos\doom and run DOOM — crashes."* Full account:
+[`log/sessions/session-80.md`](log/sessions/session-80.md).
 
-**s79's reading was wrong about the cause.** Doom never chose to exit: DOS/4GW aborted with
-*"error (2002): transfer stack overflow on interrupt 09h"*. The key that launches the
-program (Enter's break code) reaches DOS/4GW's pass-up `INT 09h` handler before Doom hooks
-its own; that handler chains to our PM default stub, which had **no dispatcher arm for
-09h**, so every such key abandoned the ISR and leaked a transfer-stack frame. The abort's
-`AH=4Ch` then ran *inside* the ISR, the injector resumed the dead client, and the host
-faulted. **Fixed in s80** (host `2f803674`, on the rig, ⚠ not yet confirmed by hand):
-the default handler reflects IRQs 09h–0Fh to the BIOS, and `g_pm_client_exited` stops a
-dead client being resumed. Verified: `chain.bat run`, Doom direct, Skyroads, Win16 Notepad.
+**Two causes, both fixed (host `b6a8a95b` on the rig's `bin\`):**
+1. **The crash** — the Enter that launches the program reached DOS/4GW's pass-up `INT 09h`
+   handler before Doom hooked its own, and our PM default stub had no arm for 09h: every
+   such key abandoned the ISR until DOS/4GW's transfer stack overflowed (*"error (2002)"*).
+   Now reflected to the BIOS.
+2. **No way back** — a PM `AH=4Ch` ended the VDM. Now a client with an EXEC parent is torn
+   down (`dpmi_client_teardown()`) and terminated in real mode, and the parent resumes. A
+   second client then starts in an identical machine.
 
-▶ **Next: the PM `AH=4Ch` must return to the EXEC parent.** It still ends the whole VDM.
-Needs a real DPMI client **teardown** (the switch-in is one-shot global state), then the
-real-mode `AH=4Ch` for the current PSP, then a **second** client must work (Doom twice).
-Acceptance test: `debug\rig\chain.bat quit` — `ver` must print after Doom exits.
-⚠ `chain.bat` is not in `bmstage.sh`'s list; copy it by hand with CRLF.
-⚠ Ask the user to try **SETUP → save and launch** by hand on `2f803674` — the same Enter-key
-path, but not yet run.
+▶ **Owed by a human:** SETUP → save and launch; Heretic / Hexen / Duke3D setups; `doom`,
+quit, `doom` at the prompt by hand. Rig acceptance tests: `debug\rig\chain.bat run|quit|twice`
+(⚠ not in `bmstage.sh`'s list — copy by hand with CRLF).
+⚠ `AH=48h` now stamps the current PSP and a child's exit frees what it owns — this touches
+**every** EXEC'd program. Watch MEM and the TSR rows.
 
 ### ▶ 1. Graphics — one root cause, and the parked verdict may be about the wrong design
 

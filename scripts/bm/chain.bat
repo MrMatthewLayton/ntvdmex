@@ -6,6 +6,8 @@ rem
 rem   chain.bat run   -> type doom, let it play until the headless deadline
 rem   chain.bat quit  -> type doom, then F10 + y to quit it, then "ver" + Enter:
 rem                      if the shell got control back, VER runs after Doom exits
+rem   chain.bat twice -> doom, quit, then doom AGAIN: a second DPMI client after the
+rem                      first one's teardown must start and play
 rem
 rem WHY THIS SHAPE. Launched directly, Doom never exits and no key reaches it before it
 rem hooks INT 09h -- so the exit-with-a-parent path and the pre-hook keyboard path had
@@ -33,9 +35,12 @@ echo "%GD%\COMMAND.COM"> "%CFG%\target.txt"
 echo.> "%CFG%\autoexit"
 echo 20> "%CFG%\qimode.txt"
 echo 60000> "%CFG%\headless_ms.txt"
+if /i "%V%"=="twice" echo 100000> "%CFG%\headless_ms.txt"
 echo 5000> "%CFG%\capture.flag"
 rem   d=20 o=18 o=18 m=32 Enter=1c | F10=44 y=15 | v=2f e=12 r=13 Enter=1c
-if /i "%V%"=="quit" (
+if /i "%V%"=="twice" (
+  echo w6000 20 18 18 32 1c w25000 44 w2500 15 w6000 20 18 18 32 1c w40000> "%CFG%\keys.txt"
+) else if /i "%V%"=="quit" (
   echo w6000 20 18 18 32 1c w25000 44 w2500 15 w6000 2f 12 13 1c w5000> "%CFG%\keys.txt"
 ) else (
   echo w6000 20 18 18 32 1c w40000> "%CFG%\keys.txt"

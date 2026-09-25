@@ -2002,6 +2002,15 @@ int dos_int21(dos_machine_t *m)
         int err = dos_alloc(NULL, m->first_mcb, want, &seg, &max);
         if (err) { SET16(R_AX, err); SET16(R_BX, max); ERRCF(); }
         else     { SET16(R_AX, seg); OKCF(); }
+        /* ── THE BLOCK BELONGS TO THE PROGRAM THAT ASKED. (s80) ───────────────────
+             DOS stamps an allocation with the CURRENT PSP, and that is how it frees a
+             terminated child's memory: every block its PSP owns. dos_alloc() writes
+             DOS_PSP_SEG unconditionally, which is right for the top-level program (its
+             PSP is DOS_PSP_SEG) and wrong for every child -- so nothing a child
+             allocated was ever given back. Measured: DOS/4GW's five real-mode blocks
+             outlived Doom, and the next `doom` loaded 85 KB higher. */
+        if (!err && seg && m->psp_seg)
+            mcb_wr16(mcb_at(NULL, (uint16_t)(seg - 1)) + 1, m->psp_seg);
         tp = zput(tp, "  INT21 AH=48 alloc 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " -> err max=0x" : " -> seg=0x");
         tp = zhex(tp, (*pfl & 1) ? max : (R_AX & 0xFFFF)); tp = zput(tp, "\r\n");
