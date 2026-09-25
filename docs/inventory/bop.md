@@ -16,13 +16,53 @@ measurement are both single opinions.
 
 ---
 
-## 0. ▶ THE DIRECTIVE, AND WHAT IS NOW KNOWN (2026-09-24)
+## 0. ▶ WHY THIS SURFACE IS IN SCOPE — decided 2026-09-25
 
-> **User:** *"We need to support command.com that ships with Windows XP. Running the
-> host with no guest should use /System32/command.com as the guest."*
+> **User:** *"We need to support command.com that ships with Windows XP."*
+> … *"NTVDMEX's hardware/firmware emulation layer should remain fairly rigid … BUT, for
+> MS-DOS, this is something that ultimately I want to be more pluggable."*
 
-Both halves are in. A no-guest launch loads `C:\WINDOWS\SYSTEM32\COMMAND.COM`
-(`cfg\shell.txt` overrides it for testing); the remaining work is this surface.
+**The architecture this settles:**
+
+| layer | pluggable? | rule |
+|---|---|---|
+| hardware / firmware | **no** | implement *the standard* where one exists (VGA BIOS + VBE/VESA — not S3 Trio, not TNT2); implement the *de-facto devices* where none does (SB16, SB Pro, AWE, OPL2/3, GUS), because being a Sound Blaster **is** the standard |
+| DOS | **yes** | our kernel by default, with XP's `System32\command.com` as the shell; `cfg\shell.txt` to bring your own; booting real MS-DOS system files is a future milestone |
+
+⇒ **XP's `COMMAND.COM` is the DEFAULT SHIPPED SHELL, so `BOP 0x54` is the contract
+between our DOS and the shell we ship with — not an application asking for a favour.**
+It belongs here, sized and marked like any other surface.
+
+⚠ **And it is a second contract, deliberately entered.** Our DOS now answers to the
+documented DOS API *for applications* and to NTVDM's private BOP interface *for NT's
+shell*. In that narrow respect our kernel is a drop-in for `ntdos.sys`.
+
+### ⛔ The option that was measured and rejected: "be stock"
+
+Loading XP's `ntio.sys` + `ntdos.sys` + `command.com` — i.e. becoming stock ntvdm — was
+the user's lean until it was costed:
+
+| | BOP codes | sub-functions |
+|---|---|---|
+| our kernel + XP's shell | **2** | ~12 of `0x54`, 1 of `0x50` |
+| `ntio` + `ntdos` + shell | **38 of the 61 real** | **60 distinct** of `BOP 0x50` in `ntdos.sys` alone |
+
+Two things decided it, neither of them the one expected:
+
+1. ⚠ **The hardware risk is NOT there.** `ntio`/`ntdos` are thin shims — 177 `C4 C4`
+   sites and almost no port I/O. They would not stress the PIT, the RTC or the FDC. That
+   risk belongs to *booting a real MS-DOS*, whose `IO.SYS` genuinely drives them.
+2. ★ **Those 60 sub-functions are the ones already built from spec** — `dem*` is open,
+   read, write, find, exec. Being stock means retiring 103 spec-built INT 21h functions
+   for 60 reverse-engineered ones, **and capping the project at parity with `ntvdm` for
+   ever**: if the DOS *is* `ntdos.sys`, a superset is impossible by construction.
+
+### Status
+
+A no-guest launch loads `C:\WINDOWS\SYSTEM32\COMMAND.COM` (`cfg\shell.txt` overrides).
+⚠ In practice nothing reaches that path yet — NT only grants VDM privileges to a process
+it started as the VDM, so the host cannot be run with no guest at all; CSRSS always names
+a program.
 
 ### The collision is resolved by ORIGIN, not by renumbering
 
