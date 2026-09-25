@@ -510,6 +510,27 @@ from `NTDOS.SYS`: a stock ntvdm run is the only oracle for a private call. **Do 
 promote it to a fact without that run.** (6.22's `COMMAND.COM` re-tested after the change:
 unaffected -- prompt, `ver`, `dir` all still correct.)
 
+### ⛔ The oracle for `AH=53h` is stock ntvdm, and ONLY stock ntvdm
+
+`tools/dostest/p_int53.asm` sweeps `AX=5300h`–5307h -- the documented form, the three
+XP's COMMAND.COM issues (`02 05 07`), and the gaps, so that a handler answering only the
+three we know about could not pass.
+
+⛔⛔ **It hangs MS-DOS 6.22.** Measured twice -- once with a broken probe and once with a
+correct one -- so the hang is the **call**, not the probe: `--host msdos622` never reaches
+`QUIT.COM`. Documented `AH=53h` does not *report* anything; it **builds** a DPB from a BPB
+the caller supplies. Handing it a fabricated pointer is not a question, it is a mutation,
+and a real DOS does not survive being asked. PCem and dosbox-x must be assumed the same
+and have not been tried.
+
+⇒ There is **no safe oracle for the documented form**, and the private `AL`
+sub-functions exist only in `NTDOS.SYS`. **Stock ntvdm is the only oracle**, which needs
+the IFEO bracket -- the documented rig-bricking hazard. Not run unattended.
+
+⚠ The probe's first cut built its eight case names with a `%1` substitution NASM did not
+expand, so all eight emitted under ONE name: eight questions collapsed into one answer.
+Written out longhand now. *A probe that looks fine and measures nothing is the worst kind.*
+
 ### ✅ Two more sub-functions answered
 
 | sub | what it is | our answer |
