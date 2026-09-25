@@ -27349,6 +27349,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                     { DWORD k; for (k = 0; k < al; ++k) nm[k] = (BYTE)ap[k]; nm[al] = 0; }
                     BW(0x22, ty);
+                /* ── +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
+                     leave alone. COMMAND.COM keeps its low byte at `[0x32F]` and at
+                     guest 0x0BFC tests `cmp byte [0x32F],0 / jz` -- a non-zero value
+                     jumps AWAY from the prompt. Zero. */
+                BW(0x1A, 0);
                     if (!quiet) {
                         p = zput(p, "         prog name <- ["); 
                         { DWORD k; for (k = 0; k < al; ++k) { char t[2]; t[0]=ap[k]; t[1]=0; p = zput(p, t); } }
@@ -27356,7 +27361,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                 }
                 #undef BW
-                /* +0x12/+0x14 deliberately untouched -- the cookie round-trips.
+                /* ── ★★★ +0x12 IS NOT A COOKIE. IT IS THE INTERACTIVE SWITCH. ───────
+                     I called it a cookie because COMMAND.COM loads it from its own
+                     `[es:0x32B]/[es:0x32D]` before the call and stores it straight back
+                     after -- which looks exactly like carrying an opaque handle. It is
+                     not. At guest 0x0C1C:
+                       cmp word [0x32B],0 / jz  -> AL=0 -> CALL THE PROMPT (AH=0Ah)
+                       cmp word [0x32D],0 / jnz -> AL=1 -> do not
+                     ⇒ a ZERO dword means "nothing is driving me: read from the keyboard".
+                   ★ And XP writes zero there in exactly this case. sub 01's tail calls
+                     0x0F04D568 with `&blk[0x10]`; that routine ORs together one bit per
+                     non-null redirection handle, and when the result is 0 it takes the
+                     early out at 0x0F04D5E4 -- `xor ebx,ebx ... mov eax,ebx ; ret 8` --
+                     returning NULL, which sub 01 stores at +0x12.
+                   ⛔ PRESERVING IT WAS THE BUG. "Round-trip the value you were only
+                     asked to carry" is a good instinct and it was wrong here: the guest
+                     re-loads its own non-zero state, we hand it straight back, and it
+                     concludes it is being driven -- for ever. 1.25M calls a run.
+                   ⇒ Zero, and only because the flags are zero: the two are the SAME
+                     decision in XP's code and must stay tied together here. */
+                *(volatile DWORD *)(b + 0x12) = 0;
+                /* +0x14 is the high half of that dword and is covered by the store above.
                    +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
                    but we cannot yet say WHAT, and a named wrong value is worse than an
                    unchanged right one. Revisit each as its meaning is earned. */
@@ -27368,6 +27393,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
+                VDM_REG(tib, VTIB_EIP) += 4;
+                continue;
+            }
+            /* ── ★ sub 10 = A ONE-BIT QUERY, AND IT GATES THE PROMPT. ───────────────
+                 XP's handler is five instructions (0x0F04C829):
+                     cmp dword [0x0F06BB30],0 ; setnz al ; call setAL ; ret
+                 -- AL is one global being non-zero, nothing more.
+               ★ It sits ON the interactive path. At guest 0x0BED COMMAND.COM issues it
+                 and immediately does `or al,al / jnz` AWAY from the prompt, so a
+                 non-zero AL is "do not read the keyboard". We were not setting AL at
+                 all, leaving whatever the guest happened to have there -- which is how
+                 an unimplemented call still ANSWERS, at random.
+               ▸ AL = 0. Whatever that global tracks, it is not set in a plain VDM that
+                 has been asked to run a shell, and 0 is the value that lets the shell
+                 be a shell. ⚠ Recorded as a reading of ONE global we have not named,
+                 not as a decode of what it means. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x10) {
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFFFF00u;   /* AL = 0 */
+                if (!quiet) {
+                    p = zput(p, "         sub 10 answered: AL=0\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
             }

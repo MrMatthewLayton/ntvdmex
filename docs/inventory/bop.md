@@ -371,7 +371,69 @@ its own path with type 8, and `dosstub.com` with type 8 — all identical.
 the result (`ver`, `dir`). So the loop is `for(;;) { get next command; run it; }` working
 exactly as designed — running flat out because our answer returns *immediately*.
 
-▶ **The strongest remaining hypothesis: `GetNextVDMCommand` BLOCKS.** On NT, CSRSS does
+### ✅ THE INTERACTIVE PATH IS FULLY MAPPED (2026-09-25)
+
+COMMAND.COM has exactly **one** `AH=0Ah` site — guest `0x0A23`, inside a routine at guest
+`0x0A0D` that is called with `AL` as its parameter: **`AL=0` reads a line from the
+keyboard, `AL≠0` does not**. Four callers; the one that matters is guest `0x0C2F`.
+
+The gate chain in front of it, guest `0x0BF5`…`0x0C2F`:
+
+```
+cmp byte [0x327],1   ; jz  -> away          (not from sub 01)
+cmp byte [0x32F],0   ; jnz -> away          <- blk +0x1A, low byte
+C4 C4 54 10          ; or al,al ; jnz -> away   <- BOP 0x54 SUB 0x10
+cmp byte [0x32A],1   ; jnz -> away
+cmp word [0x32B],0   ; jz  -> PROMPT        <- blk +0x12, low half
+cmp word [0x32D],0   ; jnz -> away          <- blk +0x14, high half
+                       AL=0 ; call 0x0A0D   ; ** the prompt **
+```
+
+★★ **`+0x12` is not a cookie — it is the interactive switch.** I called it one because
+COMMAND.COM loads it from its own `[0x32B]/[0x32D]` before the call and stores it
+straight back after, which is exactly what carrying an opaque handle looks like. A
+**zero** dword there means *"nothing is driving me: read the keyboard"*. And XP writes
+zero in precisely this case: sub 01's tail calls `0x0F04D568`, which ORs one bit per
+non-null redirection handle and, when the result is 0, takes the early out at
+`0x0F04D5E4` — `xor ebx,ebx … mov eax,ebx ; ret 8` — returning **NULL**. ⛔ *Preserving*
+it was the bug: the guest reloads its own non-zero state, we hand it back, and it
+concludes it is being driven. Now zeroed, tied to the same condition as the flags.
+
+★ **`BOP 0x54 sub 0x10` is a one-bit query** and it sits on this path.
+`0x0F04C829` is five instructions: `cmp dword [0x0F06BB30],0 ; setnz al ; setAL ; ret`.
+We were not setting `AL` at all — an unimplemented call that still ANSWERS, at random.
+Now `AL = 0`.
+
+`+0x1A` is likewise not ours to leave alone: its low byte becomes `[0x32F]`, tested two
+gates earlier. Zeroed.
+
+### ⛔ THE WALL, located exactly: an empty command line makes it RESTART
+
+Only **two** sub-functions ever fire — `01` and `0E`, 32 of each in a 30-second run. Guest
+`0x0BED` (sub `0x10`) is **never reached**, so none of the gate work above is exercised
+yet. The loop turns back before it.
+
+Guest `0x06C4`…`0x06EF`, straight after the `AH=0Eh` drive select:
+
+```
+copy the counted line at 0x9327 -> 0x93AA
+call 0x31F4          ; the parser
+jz   +8              ; else  jmp <elsewhere>
+call 0x393E          ; "run the command line"
+jnc  +13             ; ** CF SET -> ** jmp 0x0104  = RESTART THE TRANSIENT
+test byte [0x998E],2 ; jnz -> the same restart
+cmp  word [0x9C4C],0 ; jz -> onward, eventually to the prompt
+```
+
+⇒ **`call 0x393E` returns carry on an empty command line, and COMMAND.COM restarts.**
+That is the 1.25M-iteration loop, and it is not the shell's command loop after all — it
+is the transient re-entering itself.
+
+▶ Next: what makes `0x393E` set carry. Either an empty line is simply not a legal
+answer — in which case the real behaviour is that `GetNextVDMCommand` **blocks** — or one
+of `[0x998E]`, `[0x9C4C]` or the line format is wrong.
+
+▶ **The older hypothesis, kept because it is still live: `GetNextVDMCommand` BLOCKS.** On NT, CSRSS does
 not return until there is a command for this VDM. Our instant "nothing" turns a blocking
 wait into a spin. ⚠ But blocking cannot be the whole story either, because a shell that
 waits for ever never prints a prompt — so something must still distinguish *"wait for
