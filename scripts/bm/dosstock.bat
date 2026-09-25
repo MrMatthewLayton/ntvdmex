@@ -60,7 +60,19 @@ rem   skipped by the thing it brackets is not a bracket.
 rem â  REDIRECT INSIDE A NESTED cmd. `start ... > file` redirects START, not the
 rem   process it launches, so the first version of this fix captured NOTHING -- an
 rem   empty output file that looks exactly like a guest that printed nothing.
-start "" cmd /c ""%D%\%P%" %A% > "%R%" 2>&1"
+rem -- NOREDIR: run the probe with NOTHING redirected. A probe built with
+rem    `%%define PROBE_FILE` writes its own dump through AH=3Ch/40h/3Eh, so it needs no
+rem    `>` at all -- and for INT 21h AH=53h AL=5 that is the WHOLE QUESTION, because its
+rem    answer is what XP's COMMAND.COM uses to decide whether to read the keyboard.
+rem    Asking the oracle "is this console interactive?" down a pipe into a file is not
+rem    the same question as asking it at a console. Run it BOTH ways and diff.
+rem    Set NOREDIR=1 in the environment; the probe names its own output file.
+if /i "%NOREDIR%"=="1" (
+  echo ---- NOREDIR: no pipe, the probe writes its own file ---- >> "%S%"
+  start "" "%D%\%P%" %A%
+) else (
+  start "" cmd /c ""%D%\%P%" %A% > "%R%" 2>&1"
+)
 ping -n 16 127.0.0.1 >nul
 echo ---- run window over ---- >> "%S%"
 
