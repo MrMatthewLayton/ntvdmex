@@ -2550,13 +2550,26 @@ static HMENU        g_fs_menu;
    injected as INT (8 + irq), the PC's standard master-PIC vector mapping. Without
    this an SB transfer completes, raises IRQ 5, and the game waits forever for an
    interrupt the host quietly dropped. */
-static volatile LONG  g_irqn_pending[8];
+/* ── SIXTEEN LINES, NOT EIGHT. (s80, north star 2) ─────────────────────────────────────
+     Device IRQs were latched and delivered for the MASTER 8259 only (lines 2-7), though
+     vdd_pic models the slave and the cascade completely. A GUS's period-typical IRQ 11
+     or 12 -- or the RTC's 8 -- could be raised and never reach a guest. The latch now
+     covers all sixteen lines and every cooperative delivery path walks them in the AT's
+     real priority order: the slave's eight hang off IRQ2, so they outrank IRQ 3-7.
+     The ASYNCHRONOUS injector covers the slave too: a latch that only waits for the
+     next trap delivers once per timer tick to a guest that spins -- measured with
+     p_irq8.com, 5 RTC interrupts in 5 BIOS ticks against ~280 on three real machines. */
+static volatile LONG  g_irqn_pending[16];
+static const uint8_t  g_irq_order[14] = { 2, 8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7 };
+/* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
+   interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h. */
+static unsigned irq_pm_vec(unsigned irq) { return irq < 8 ? 0x08u + irq : 0x70u + (irq - 8u); }
 /* Retry accounting for the one-attempt-per-sync device-IRQ offer in host_pit_sync.
    `try` counts syncs where something was pending and we spent a round trip on it;
    `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
    means every device IRQ was placed at its raise instant and this cost nothing. */
 static DWORD g_irqn_retry_try = 0, g_irqn_retry_ok = 0, g_irqn_retry_why = 0;
-static DWORD          g_irq_raised[8];      /* vdd_raise_irq calls, per line */
+static DWORD          g_irq_raised[16];     /* vdd_raise_irq calls, per line */
 static DWORD          g_irq_raised_any = 0;
 /* Async preemption (session 11). g_hcpu is a handle to the thread that runs the guest
    -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
@@ -2838,7 +2851,7 @@ static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flig
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
 static DWORD g_async_pm_inj = 0;             /* delivered                              */
-static DWORD g_async_inj_line[8];            /* ...and which IRQ line each one was      */
+static DWORD g_async_inj_line[16];            /* ...and which IRQ line each one was      */
 static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not commit  */
 #define DPMI_WATCH_MAX 4
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
@@ -3022,6 +3035,7 @@ static volatile LONG g_simint_busy = 0;
 
 static int async_inject_irq(unsigned irq)
 {
+    if (irq >= 16) { async_early_bail(irq, 40); return 0; }
     CONTEXT cx;
     DWORD efl, ss, sp, cs, ip;
     WORD fl;
@@ -3067,7 +3081,7 @@ static int async_inject_irq(unsigned irq)
     { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
       int rm_hooked = !(peekw(v0 * 4 + 2) == DOS_HDLR_SEG
                         && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
-      int pm_hooked = g_dpmi_pm && g_pm_int[0x08u + irq].client;
+      int pm_hooked = g_dpmi_pm && g_pm_int[irq_pm_vec(irq)].client;
       if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(irq, 22); return 0; } }
     /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
        See g_async_ctxwr. Declining is free -- the other owner is placing an interrupt
@@ -3143,7 +3157,7 @@ static int async_inject_irq(unsigned irq)
         else async_why_note(irq, (unsigned)g_async_why);   /* the clause that said no */
         ResumeThread(g_hcpu);
         ASYNC_CTX_RELEASE();
-        if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++;
+        if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 15]++;
                   if (!(irq & 7)) tick_delivered_note(); } else g_async_bail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
            fires at the PIT's rate. Without it an async injection that kills the run is
@@ -3173,13 +3187,13 @@ static int async_inject_irq(unsigned irq)
             /* ► SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
                  had just delivered, so a run could not be asked "did any keyboard
                  interrupt reach the client?" -- every line claimed to be the timer. */
-            pq = zput(pq, "ASYNC-PM vec=0x"); pq = zhexb(pq, 0x08u + irq);
+            pq = zput(pq, "ASYNC-PM vec=0x"); pq = zhexb(pq, irq_pm_vec(irq));
             pq = zput(pq, " ok=0x"); pq = zhex(pq, (DWORD)ok);
             pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
             pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_eip);
-            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(0x08u + irq));
-            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(0x08u + irq));
+            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(irq_pm_vec(irq)));
+            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(irq_pm_vec(irq)));
             pq = zput(pq, " SS:ESP=0x"); pq = zhex(pq, (DWORD)g_async_pm_ss);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_esp);
             pq = zput(pq, " efl=0x");    pq = zhex(pq, g_async_pm_efl);
@@ -3264,7 +3278,7 @@ static int async_inject_irq(unsigned irq)
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_async_inj + g_async_bail <= 4) {
         char ab[256], *aq = ab; int v;
-        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)(8 + irq));
+        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)vdd_pic_vector(&g_pic, (uint8_t)irq));
         aq = zput(aq, " ok=0x");            aq = zhex(aq, (DWORD)ok);
         aq = zput(aq, " from=0x");          aq = zhex(aq, cs);
         aq = zput(aq, ":0x");               aq = zhex(aq, ip);
@@ -3293,7 +3307,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
     /* Every raise, counted by line. sb_blocks reached 1 while irqn_inj AND irqn_refused
        both stayed 0 -- i.e. the SB's completion IRQ was raised but nothing was ever
        latched -- so the line number this arrives on is the missing fact. */
-    g_irq_raised[irq & 7]++;
+    g_irq_raised[irq & 15]++;
     g_irq_raised_any++;
     /* ⚠ ATOMICALLY: the timer's raise now arrives under g_pit_cs while every other
        PIC mutation runs under g_lock, and IRR |= bit compiled as a plain byte RMW
@@ -3477,7 +3491,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
               kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb, kq); serial_out(kb, kq);
           } }
     }
-    else if (irq < 8) {
+    else if (irq < 16) {
         InterlockedExchange(&g_irqn_pending[irq], 1);
         /* A device IRQ is raised from the AUDIO thread, while the guest may be
            spinning in V86 code that never faults -- and our exec loop only gets a
@@ -3504,7 +3518,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            session 10 recorded for Skyroads at 0x0050:0x0037. So the bit is now set only
            when an experiment asks for it; the ICA must be programmed before this can be
            the real delivery path. */
-        if (g_qi_bits) {
+        if (g_qi_bits && irq < 8) {
             /* The kernel dispatches from its virtual PIC, so request the line there
                first -- otherwise the APC wakes up, finds nothing requested, and the
                pending bit just sits there (which is the whole of session 10's
@@ -6120,8 +6134,8 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " raised_any=0x"); q = zhex(q, g_irq_raised_any);
         q = zput(q, " async_inj=0x");  q = zhex(q, g_async_inj);
         q = zput(q, " async_bail=0x"); q = zhex(q, g_async_bail);
-        { int r; q = zput(q, " raised[0..7]=");
-          for (r = 0; r < 8; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
+        { int r; q = zput(q, " raised[0..15]=");
+          for (r = 0; r < 16; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
         q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.irq);
         q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
         q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
@@ -11098,8 +11112,9 @@ static void host_pit_deliver(void)
          clock. So: at most one retry per sync, the first pending hooked line only, and
          nothing at all in the overwhelmingly common case where no device IRQ is
          outstanding -- which is a single predictable branch, not a syscall. */
-    { int q;
-      for (q = 2; q < 8; ++q) {
+    { int k, q;
+      for (k = 0; k < (int)sizeof g_irq_order; ++k) {
+          q = g_irq_order[k];
           if (!g_irqn_pending[q]) continue;
           if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) break;
           ++g_irqn_retry_try;
@@ -12945,7 +12960,7 @@ static long host_interp(volatile BYTE *tib, long cap)
                fill loops this batching exists to accelerate. */
             if ((iters & 0xFF) == 0xFF) {
                 int q, pend = (g_irq0_pending != 0);
-                for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
+                for (q = 0; !pend && q < 16; ++q) pend = (g_irqn_pending[q] != 0);
                 if (pend) { ++iters; break; }
             }
         }
@@ -12967,7 +12982,7 @@ static long host_interp(volatile BYTE *tib, long cap)
             if (c.seg[1] == 0 && c.ip < 0x400) { ++iters; my_ring_dump("interpreter reached CS=0"); break; }
             if ((iters & 0xFF) == 0xFF) {
                 int q, pend = (g_irq0_pending != 0);
-                for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
+                for (q = 0; !pend && q < 16; ++q) pend = (g_irqn_pending[q] != 0);
                 /* Only when the guest could TAKE it: yielding inside a CLI region hands
                    the loop a chance to inject there (see the write-back below). */
                 if (pend && (c.flags & 0x200)) { ++iters; break; }
@@ -19591,10 +19606,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          falling through to the loud stop below rather than being faked.
                          IRQ2-7 get the same treatment with no device work: their real-mode
                          default is a bare IRET that the host EOIs for (async_vec_is_our_stub). */
-                    if (vec >= 0x09 && vec <= 0x0F && async_vec_is_our_stub(vec - 0x08)) {
+                    if (((vec >= 0x09 && vec <= 0x0F && async_vec_is_our_stub(vec - 0x08))
+                         || (vec >= 0x70 && vec <= 0x77 && async_vec_is_our_stub(vec - 0x70 + 8)))) {
+                        uint8_t line = (uint8_t)(vec >= 0x70 ? vec - 0x70 + 8 : vec - 0x08);
                         HOST_LOCK();
                         if (vec == 0x09) vdd_input_bios_consume(&g_in);  /* take the byte, re-arm if more queued */
-                        vdd_pic_eoi(&g_pic, (uint8_t)(vec - 0x08));
+                        vdd_pic_eoi(&g_pic, line);   /* the slave's EOI also releases the cascade */
                         HOST_UNLOCK();
                         if (g_pm_irq_reflect_logged < 16) {
                             ++g_pm_irq_reflect_logged;
@@ -21989,10 +22006,10 @@ static void dpmi_ensure_pmret_sel(void)
 static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
 {
     if (g_pm_client_exited) return 0;          /* nothing left to interrupt */
-    unsigned iv = 0x08 + irq;                    /* IRQ0-7 -> PM vectors 08h-0Fh */
+    unsigned iv = irq_pm_vec(irq);               /* 08h-0Fh, or 70h-77h for the slave */
     DWORD efl = cx->EFlags;
     WORD  ss;
-    if (iv > 0x0F) { g_async_why = 1; return 0; }
+    if (irq >= 16) { g_async_why = 1; return 0; }
     if (g_pm_noirq || g_in_pm_irq) { g_async_why = g_in_pm_irq ? 2 : 3; return 0; }     /* knob off, or a sync injection is running */
     if (g_pmret_sel == 0) { g_async_why = 4; return 0; }              /* no catcher yet -> no way back */
     if (!g_pm_int[iv].client) { g_async_why = 5; return 0; }          /* the client has not hooked this line */
@@ -22771,9 +22788,14 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
   int in_bop = (qcs == DOS_HDLR_SEG &&
                 ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
   if (!in_bop && guest_if_enabled(tib)) {
-      for (q = 2; q < 8; ++q) {
-          if (peekw((8 + q) * 4 + 2) == DOS_HDLR_SEG
-              && peekw((8 + q) * 4) == DOS_IRET_STUB_OFF) {
+      int k;
+      for (k = 0; k < (int)sizeof g_irq_order; ++k) {
+          unsigned vec;
+          q = g_irq_order[k];
+          vec = vdd_pic_vector(&g_pic, (uint8_t)q);        /* 08h+q or 70h+(q-8), as programmed */
+          if (!g_irqn_pending[q]) continue;
+          if (peekw(vec * 4 + 2) == DOS_HDLR_SEG
+              && peekw(vec * 4) == DOS_IRET_STUB_OFF) {
               InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
               continue;
           }
@@ -22782,7 +22804,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
               vdd_pic_acknowledge(&g_pic, (uint8_t)q);
               if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
               g_irqn_inj++;
-              inject_int(tib, (unsigned)(8 + q));
+              inject_int(tib, vec);
               break;                    /* one per turn: let it IRET first */
           }
       }
@@ -22800,7 +22822,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
          4.5M traps all happen in the first 6 s, before the block even exists. Async
          delivery is required; this log stays as the discriminator if that changes. */
       int pend = 0;
-      for (q = 2; q < 8; ++q) if (g_irqn_pending[q]) { pend = q; break; }
+      for (q = 2; q < 16; ++q) if (g_irqn_pending[q]) { pend = q; break; }
       if (pend) g_irqn_refuse_total++;
       if (pend && g_irqn_refuse_log < 16) {
           char rb[256], *rq = rb;
@@ -26984,12 +27006,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         g_in_pm_irq = 0;
                     }
                     if (g_dpmi_vi && !g_pm_noirq && !g_in_pm_irq && !g_async_pm_active) {
-                        int q;
-                        for (q = 2; q < 8; ++q) {
+                        int q, k;
+                        for (k = 0; k < (int)sizeof g_irq_order; ++k) {
+                            /* DPMI 0.9: hardware interrupts arrive at the PM vectors that
+                               match the PIC's -- 08h-0Fh for the master, 70h-77h for the
+                               slave -- which is where a client hooks its IRQ 8-15 handler. */
+                            unsigned iv;
+                            q  = g_irq_order[k];
+                            iv = (q < 8) ? 0x08u + (unsigned)q : 0x70u + (unsigned)(q - 8);
                             if (!g_irqn_pending[q]) continue;
                             /* No PM handler: the client cannot want it. Drop it rather
                                than spin on it forever. */
-                            if (!g_pm_int[0x08u + q].client) {
+                            if (!g_pm_int[iv].client) {
                                 InterlockedExchange(&g_irqn_pending[q], 0);
                                 ++g_pm_devirq_drop;
                                 continue;
@@ -27011,7 +27039,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             uint32_t pred = g_dma.rd_count[1];
                             InterlockedExchange(&g_irqn_pending[q], 0);
                             g_in_pm_irq = 1;
-                            if (dpmi_inject_pm_irq(&m, tib, 0x08u + q, steps)) {
+                            if (dpmi_inject_pm_irq(&m, tib, iv, steps)) {
                                 /* Same acknowledge/EOI rule the async path already uses for
                                    these lines (and which the 2615 delivered ones prove out):
                                    set in-service, and EOI ourselves only when the vector is

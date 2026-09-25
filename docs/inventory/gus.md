@@ -57,15 +57,13 @@ So the first observable step is the environment string, not a register.
 | **Audio mixer** | ✅ ready | `src/vdd/vdd_audio.h:90,103` (`vdd_audio_init`, `vdd_audio_mix`) | the GF1's mixed stereo output becomes one more source summed here, as the SB and OPL are |
 | **8237 DMA** | ✅ ready | `src/vdd/vdd_dma.c:22` — all 8 channels, 16-bit ones address words | DRAM uploads can use a free channel |
 | **8259 slave PIC** | ✅ modelled | `src/vdd/vdd_pic.c:165` (IRQ 8–15, cascade on IRQ2) | the chip can raise 11/12/15… |
-| **Host device-IRQ delivery** | ⛔ **master only** | `src/host/main.c:2553` — `g_irqn_pending[8]`; delivery loops run `q = 2..7` | …but nothing *delivers* a slave line. The GUS's usual IRQ 11/12 cannot reach the guest today. Its master choices are 2, 3, 5, 7 — and the SB holds 5 |
+| **Host device-IRQ delivery** | ✅ **all 16 lines (s80)** | `g_irqn_pending[16]`, `g_irq_order`, `irq_pm_vec` in `src/host/main.c`; proved by `tools/dostest/p_irq8.com` vs three oracles | IRQ 11 reaches a guest. ⚠ The IF/VIF gate lets a handler that EOIs before `iret` be re-entered — see [`pic.md`](pic.md) |
 | **Port base** | ⚠ decision | SB at `220h` (`dos_env.h:98`, `BLASTER=A220 I5 D1 T3`) | the SDK default base `220` collides with the SB; the GUS needs another base (`240h` is the period's common choice) |
 
 ## Decisions to take before the first line of the device
 
-1. **Resources.** A base that does not collide with the SB (`240h`), a free DMA channel (3, or 5
-   for 16-bit), and an IRQ the host can actually deliver — either one of **2/3/7** on the master
-   now, or **extend device-IRQ delivery to the slave** (the correct fix; every slave-line device
-   needs it) and use the period-typical 11 or 12.
+1. **Resources — decided (user, 2026-09-25):** base `240h`, **IRQ 11** (slave delivery built for
+   it, s80), a free DMA channel (3, or 5 for 16-bit). `ULTRASND=240,<dma>,<dma>,11,11`.
 2. **Voice engine timing.** The GF1 produces one output sample per pass over the active voices
    (44.1 kHz at 14 voices, 19.3 kHz at 32). The model renders at the mixer's rate and must
    advance voices by *GF1* time, or pitch shifts with the voice count incorrectly.

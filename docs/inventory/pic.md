@@ -209,6 +209,40 @@ very bit the case exists to see. The case was measuring interrupt latency. It no
 IRQ0 masked across both reads and unmasks afterwards; PCem's answer survived the fix, so
 the split is real.
 
+## Measured, 2026-09-25 (s80) — the slave's lines reach a guest now; `p_irq8.com`
+
+The chip model always had the slave and the cascade (`vdd_pic.c:165`). The **host** did not:
+device IRQs were latched in `g_irqn_pending[8]` and every delivery path walked lines 2–7, so an
+IRQ 8–15 was raised and never delivered. North star 2 needs IRQ 11 for the GUS.
+
+**Now:** a sixteen-line latch, every cooperative path walking the AT's priority order
+(`0, 1, [2 → 8–15], 3–7`, `g_irq_order`), vectors from the PIC's programmed bases, the DPMI
+PM vectors `70h–77h` for the slave (`irq_pm_vec`), and the **asynchronous** injector covering
+the slave too. That last part is not optional: with slave lines cooperative-only, a guest
+spinning in a loop got its RTC interrupt once per timer tick — **5 in 5 BIOS ticks against
+~280** on the oracles.
+
+| case | 6.22/QEMU | dosbox-x | PCem | ours |
+|---|---|---|---|---|
+| `irq8.fired` — the RTC's 1024 Hz periodic IRQ reaches a hooked INT 70h | `1` | `1` | `1` | **`1`** ✅ (was `0`) |
+| `irq8.regc.pf` — PF as the handler sees it | `1` | `1` | `1` | `1` ✅ |
+| `irq8.nested` — handler re-entered while running | `0` | `0` | `0` | **`4`** ⛔ |
+
+### ⛔ `irq8.nested`: the interrupt-enable gate, not the slave — OPEN, deliberately
+
+The probe's handler EOIs *before* its `iret`. A real CPU cleared IF on the way in, so the next
+IRQ 8 waits for the `iret`. Ours re-entered 4 times. The host's gate asks **"IF or VIF"**
+(`if_or_vif`, and the same test inline in `async_inject_irq`), because under VME a V86 guest's
+`cli`/`sti` move only VIF while the kernel keeps IF set — and a guest that never executes `sti`
+has VIF clear with interrupts logically on. So the gate cannot see a handler's closed window.
+**Every line has this**, IRQ 0 and 1 included; `pic.hook.nested` passes only because its
+handler EOIs at the very end.
+
+Not fixed here, on purpose: making VIF authoritative (once it has ever been seen set) changes
+what nested real-mode calls get — DPMI `0301`/`0302` enter V86 with IF set and VIF clear, and
+ZAR's sound init depends on an interrupt arriving there. That fix needs the timing and sound
+regressions re-proven on its own, not as a side effect of the GUS.
+
 ## What to fix, in order
 
 1. ✅ ~~Make `E0h` end the interrupt.~~ **DONE 2026-09-23** — unanimous.
