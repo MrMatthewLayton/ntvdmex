@@ -447,7 +447,57 @@ Now `AL = 0`.
 `+0x1A` is likewise not ours to leave alone: its low byte becomes `[0x32F]`, tested two
 gates earlier. Zeroed.
 
-### ⛔ THE WALL, located exactly: an empty command line makes it RESTART
+### ✅✅✅ XP's COMMAND.COM PRINTS A PROMPT (2026-09-25)
+
+```
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom>
+```
+
+Two things got it there, and **neither was a BOP field I had been staring at**.
+
+**1. `/p` — the permanent-shell switch, on the PSP command tail.** `ntvdm.exe` carries the
+format string `%s=%s%s /p %s\system32`; stock NTVDM launches its shell with `/p`, and we
+were launching it with no arguments at all. Without `/p` COMMAND.COM is a one-shot command
+runner; with it, it is the resident shell. ⚠ This was in the string dump from the start
+and I read straight past it for two sessions, because I was looking for the answer inside
+the BOP interface.
+
+**2. `sub 0x0D` = "give me a path to open" — the startup batch file.** The guest named
+this gap itself: with `/p` it allocates a 7-paragraph block (`AH=48h → 0x0D6D`), issues
+the BOP with `DS:DX` into it, and the **very next instruction** is `mov ax,0x3D00 ;
+int 21h`. We wrote nothing, so it opened `""` and our DOS said "path not found".
+
+XP's handler (`0x0F012C94`) takes a host ANSI string from `[0x0F09BFC4]` through
+`RtlInitAnsiString` → `RtlAnsiStringToUnicodeString` → `RtlUnicodeStringToOemString`,
+writing the OEM result to `(getDS()<<4)+getDX()` with a **`0x40`-byte cap**. Which path is
+an inference from context (`ntvdm.exe` carries `autoexec.nt`, and this is the `/p` startup
+path) — **but it is verified by behaviour**: whatever we write is what the guest opens
+next, and the log now reads
+
+```
+sub 0D answered: startup batch [C:\AUTOEXEC.BAT] at 0x0000D6F0
+INT21 AH=3Dh [C:\AUTOEXEC.BAT] -> AX=0x05
+```
+
+⛔ **We do not default to XP's `AUTOEXEC.NT`, deliberately.** The real one loads
+`mscdexnt.exe`, `redir` and **`dosx`** — NT's DPMI host, which we provide ourselves and
+which has no business in our VDM. `C:\AUTOEXEC.BAT` is the honest default for a DOS that
+is ours; `cfg\autoexec.txt` points it anywhere, including at NT's. ⚠ A path that does not
+exist is the normal case — a DOS with no AUTOEXEC.BAT simply has none. The bug was the
+empty string, not the missing file.
+
+### ⛔ It is not interactive yet
+
+The prompt prints; the keyboard is not read. Keys reach the guest — `sc_push=0x10`,
+`irq1_inj=0x10`, `KEYLAT deliver n=0x0F` — and nothing consumes them: `int16=[0,0,0,0]`,
+and the `sub 01` spin continues at ~1.25M per run. So COMMAND.COM writes a prompt and then
+goes back to asking for a command instead of entering its `AH=0Ah` read.
+
+▶ Next: the gate chain at guest `0x0BF5`…`0x0C2F` (see above) is still the map. `sub 0x10`
+and the `+0x12`/`+0x1A` fields are answered; `[0x327]` and `[0x32A]` are not yet traced to
+a source.
+
+### ⛔ The earlier wall, for the record: an empty command line makes it RESTART
 
 Only **two** sub-functions ever fire — `01` and `0E`, 32 of each in a 30-second run. Guest
 `0x0BED` (sub `0x10`) is **never reached**, so none of the gate work above is exercised

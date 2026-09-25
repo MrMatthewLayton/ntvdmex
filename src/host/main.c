@@ -463,6 +463,9 @@ static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run s
 /* A command line to hand the shell ONCE through BOP 0x54 sub 01, so the path can be
    tested end-to-end rather than only 'it accepted an empty answer'. */
 #define BOPCMD_PATH    CFG_("bopcmd.txt")
+/* The startup batch file BOP 0x54 sub 0x0D hands the shell. Stock NTVDM names
+   AUTOEXEC.NT here; ours defaults to the DOS-native AUTOEXEC.BAT. See the handler. */
+#define BOPAUTO_PATH   CFG_("autoexec.txt")
 /* DPMI 0303 (allocate real-mode callback): planted real-mode BOP entries (one per
    callback slot) that a client's real-mode code far-calls; the host switches V86->PM
    and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
@@ -27393,6 +27396,55 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
+                VDM_REG(tib, VTIB_EIP) += 4;
+                continue;
+            }
+            /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
+                 The guest named this gap itself. With `/p` on its command line COMMAND.COM
+                 allocates a 7-paragraph block (`AH=48h -> 0x0D6D`), issues this BOP with
+                 `DS:DX` pointing into it, and the VERY NEXT instruction is
+                 `mov ax,0x3D00 ; int 21h` -- open. We wrote nothing, so it opened "" and
+                 our DOS answered "path not found".
+               ▸ XP's handler (0x0F012C94) takes a host-side ANSI string from
+                 `[0x0F09BFC4]` and runs it through RtlInitAnsiString ->
+                 RtlAnsiStringToUnicodeString -> RtlUnicodeStringToOemString, writing the
+                 OEM result to `(getDS()<<4)+getDX()` with a **0x40-byte** cap. So: a
+                 path, OEM, at most 64 bytes.
+               ▸ Which path: `ntvdm.exe` carries `autoexec.nt`, and this is the `/p`
+                 (permanent shell) startup path. ⚠ That last step is an INFERENCE from
+                 context, not a decode of the global -- but it is verifiable by behaviour,
+                 because whatever we write here is the path the guest opens next.
+               ⛔ WE DO NOT DEFAULT TO XP's AUTOEXEC.NT, deliberately. The real one loads
+                 `mscdexnt.exe`, `redir` and **`dosx`** -- NT's DPMI host, which we provide
+                 ourselves and which has no business being loaded into our VDM. The
+                 DOS-native `C:\AUTOEXEC.BAT` is the honest default for a DOS that is
+                 ours; `cfg\autoexec.txt` points it anywhere, including at NT's.
+               ⚠ A path that does not exist is FINE and is the normal case -- a DOS with no
+                 AUTOEXEC.BAT simply has none. What was broken was the empty string. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x0D) {
+                DWORD nb = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
+                         + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                volatile BYTE *nm = (volatile BYTE *)(ULONG_PTR)nb;
+                char ab[80]; DWORD an = 0, k;
+                HANDLE ha = CreateFileA(BOPAUTO_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                        NULL, OPEN_EXISTING, 0, NULL);
+                if (ha != INVALID_HANDLE_VALUE) {
+                    ReadFile(ha, ab, sizeof(ab) - 1, &an, NULL); CloseHandle(ha);
+                    while (an && (ab[an-1] == '\r' || ab[an-1] == '\n'
+                                  || ab[an-1] == ' ' || ab[an-1] == '\t')) --an;
+                }
+                if (!an) { const char *dflt = "C:\\AUTOEXEC.BAT";
+                           for (an = 0; dflt[an]; ++an) ab[an] = dflt[an]; }
+                if (an > 0x3F) an = 0x3F;          /* XP's own cap */
+                for (k = 0; k < an; ++k) nm[k] = (BYTE)ab[k];
+                nm[an] = 0;
+                if (!quiet) {
+                    p = zput(p, "         sub 0D answered: startup batch [");
+                    for (k = 0; k < an; ++k) { char t[2]; t[0]=ab[k]; t[1]=0; p = zput(p, t); }
+                    p = zput(p, "] at 0x"); p = zhex(p, nb); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
             }
