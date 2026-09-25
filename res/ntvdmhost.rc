@@ -90,7 +90,7 @@ BEGIN
                     CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     LTEXT           "A guest that refuses to start may just dislike this number. "
                     "6.22 is the reference; Windows XP's own COMMAND.COM requires 5.00.",
-                    IDC_S_DOSVER_NOTE, 14, 39, 266, 20
+                    IDC_S_DOSVER_NOTE, 14, 36, 266, 27
 END
 
 /* ── PAGE: PROCESSOR ─────────────────────────────────────────────────────────────

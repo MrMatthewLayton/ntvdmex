@@ -837,6 +837,10 @@ static sb_state     g_sb;        static ntvdd g_sb_dev;
 static gus_state    g_gus;       static ntvdd g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
 static int          g_gus_on = 0;
+/* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
+   5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
+static int          g_dosver_forced = 0;
+static const char  *g_dosver_why = 0;
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
    Printed from both exits, once. */
 static void gus_report(void)
@@ -9235,8 +9239,11 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
       g_sbcfg.irq = IRQS[s->v[SET_SBIRQ] & 3];
       if (ch < 4) { g_sbcfg.dma8 = ch; g_sbcfg.dma16 = 0; }
       else        { g_sbcfg.dma8 = SB_DEFAULT_DMA8; g_sbcfg.dma16 = ch; } }
-    if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
-                                              (uint8_t)s->v[SET_DOSMIN]);
+    /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
+       startup, so they win here too -- pushing 6.22 into a session whose shell requires
+       5.00 is how its next command would say "Incorrect DOS version". */
+    if (g_dosm && !g_dosver_forced) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
+                                                              (uint8_t)s->v[SET_DOSMIN]);
     /* ⚠ THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
          Granularity defaults to AUTO (g_cpuspd_gran_ms = 0), which is the behaviour
          that made a slow speed smooth, so it needs no control; cpugran.txt still
@@ -9559,6 +9566,16 @@ static void settings_to_dialog(const ntvdmex_settings *s)
     for (i = 0; i < SET_STR_COUNT; ++i) {
         HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
         if (c) SetWindowTextA(c, s->s[i]);
+    }
+    /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
+         command.com but reporting 6.22, is that right?") The box holds the SETTING; a
+         session can be running a different, forced number, and the dialog said nothing. */
+    {   HWND c = settings_ctl(IDC_S_DOSVER_NOTE);
+        if (c && g_dosm && g_dosver_forced && g_dosver_why) {
+            wsprintfA(t, "In force now: %u.%02u -- %s. Your setting applies to other sessions.",
+                      (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor, g_dosver_why);
+            SetWindowTextA(c, t);
+        }
     }
 }
 
@@ -23274,8 +23291,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        built before the devices are added -- and ULTRASND= has to say what the card
        will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
        and a card nothing looked for. */
-    g_gus_on = (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
+    g_gus_on = g_set.v[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
     g_gus.base = GUS_DEFAULT_BASE; g_gus.irq = GUS_DEFAULT_IRQ; g_gus.dma_ch = GUS_DEFAULT_DMA;
+    /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
+       include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
+       one line is a machine nobody could have built. Step aside to the next period
+       choice (ref/gus.md §5 lists what the latches can select). */
+    if (g_sbcfg.base == g_gus.base) g_gus.base = 0x260;
+    if (g_sbcfg.irq == g_gus.irq)   g_gus.irq = 12;
+    if (g_sbcfg.dma8 == g_gus.dma_ch || g_sbcfg.dma16 == g_gus.dma_ch) g_gus.dma_ch = 1;
+    if (g_sbcfg.dma8 == g_gus.dma_ch || g_sbcfg.dma16 == g_gus.dma_ch) g_gus.dma_ch = 6;
     g_my_pm_off     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -24423,6 +24448,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_guest_ntaware) {
         dos_int21_set_version(&m, 5, 0);
         dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
+        g_dosver_forced = 1;
+        g_dosver_why = "this session's shell is Windows XP's COMMAND.COM, which requires 5.00 "
+                       "(what stock NTVDM reports to every program)";
     }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
@@ -24438,6 +24466,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (mj && mj < 256 && mn < 256) {
               dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
               dosver_src = "cfg\\dosver.txt";
+              g_dosver_forced = 1;
+              g_dosver_why = "cfg\\dosver.txt overrides this setting";
           }
       } }
     /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────

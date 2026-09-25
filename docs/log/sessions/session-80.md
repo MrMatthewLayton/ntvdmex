@@ -218,3 +218,17 @@ wrong in a way the picture alone would have hidden (the status bar is mostly red
    devices. Decided at startup now.
 4. **heaven7 plays**: finds the card, fills 66 KB of DRAM by PIO, starts 132 voices; 96% of 1.32 M
    rendered samples non-zero, peak 17,871. Polls — no DMA, no IRQs. ⚠ Not yet heard by a human.
+
+✅ **User:** *"Heaven 7 audio works and is accurate!"* — prev promoted to `a0294462`.
+
+**Two settings-page defects the user found:**
+- **The GUS checkbox did nothing.** `SET_GUS` ("Gus", default off) was read by nothing; only
+  `cfg\nogus.flag` controlled the card. Now `GusEnabled`, default ON, and it decides the card
+  at startup. Renamed on purpose: a dialog ever OK'd had saved `Gus=0`, meaning nothing, and
+  honouring it would have switched off a confirmed card. The GUS also steps off the SB's
+  resources when the SB is set to 240h / IRQ 11 / DMA 3 (all three are SB dialog choices).
+- **"Reporting 6.22 inside XP's COMMAND.COM?"** Programs there were already told 5.00 (the XP
+  shell requires it; stock NTVDM reports it to everything) — the dialog just did not say so,
+  and applying a change pushed the dialog's number into the running session. Now the note under
+  the version box says what is in force and why, and a forced version (XP shell or
+  `cfg\dosver.txt`) is not overwritten live.

@@ -207,7 +207,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
    ★ THE OLD VALUES MIGRATE FOR FREE. This was a checkbox: 0 = off, 1 = on. As
      indices those are exactly Off and Sound card, which is what they meant. */
 { "PcSpeaker",         IDC_S_SPEAKER,     SK_COMBO,      1,  0,   3, "Off|Sound card|Real PC speaker|Both" },
-{ "Gus",               IDC_S_GUS,         SK_CHECK,      0,  0,   1, NULL },
+/* ── THE GUS, WIRED (s80). This row was "Gus", default 0, and nothing read it -- the
+     checkbox did nothing while the card was controlled by cfg\nogus.flag alone. A dialog
+     that was ever OK'd has therefore SAVED Gus=0 to HKCU, meaning nothing; reading that
+     value now would silently switch off a card the user has confirmed works. So the row
+     has a NEW name and the old value is ignored. Default ON: it is part of the machine.
+     Decided at startup (the environment's ULTRASND= is built before the devices), so a
+     change takes effect at the next program start. */
+{ "GusEnabled",        IDC_S_GUS,         SK_CHECK,      1,  0,   1, NULL },
 { "Tandy",             IDC_S_TANDY,       SK_CHECK,      0,  0,   1, NULL },
 
 { "HideHostCursor",    IDC_S_HOSTCURSOR,  SK_CHECK,      0,  0,   1, NULL },
