@@ -1,7 +1,10 @@
 # Session 79 — XP's own COMMAND.COM becomes an interactive shell
 
 **Date:** 2026-09-25 · **Branch:** `m9/completeness` · **Rig:** bare-metal XP box, watcher live.
-**Host builds this session:** `3eb6f8dc` (the knob) → **`63e21be9`** (the fix).
+**Host builds:** `3eb6f8dc` (the `AH=53h` knob) → `63e21be9` (the command-tail fix)
+→ **`d57d586c`** (the DPMI CPU class). `d57d586c` is what is on the rig now.
+**Two results:** XP's shell became interactive, and the open Win16 `GetWinFlags`
+mismatch turned out to be a DPMI bug.
 
 ---
 
@@ -134,8 +137,6 @@ defaults and delete the knob's reason for existing.
   from ~50 KB of guest code that was on disk the whole time. `cmdcom.py` exists so the
   next person does not have to re-read it by hand — and so an off-by-two in a
   disassembler's output cannot survive into a doc, which it did twice today.
-
----
 
 ---
 
