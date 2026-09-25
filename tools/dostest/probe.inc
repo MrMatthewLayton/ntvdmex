@@ -21,6 +21,26 @@
 ; every host.  Nothing here uses a BIOS call, on purpose: this scaffolding must
 ; not itself depend on the layer under test.
 ;
+; ⛔⛔⛔ AND THAT REDIRECT IS PART OF THE MEASUREMENT.  (s79)
+;   Every value this project has ever measured against stock ntvdm was measured
+;   with the guest's stdout pointed at a file, because that is how the harness
+;   reads the answer.  For almost every call that is invisible.  For a call that
+;   ASKS ABOUT THE CONSOLE it is the whole question -- and INT 21h AH=53h AL=5 is
+;   exactly that: XP's COMMAND.COM stores its answer in [0x327] and uses it to
+;   decide whether to read the keyboard at all.  We measured AL=1 ("do not"), and
+;   stock's own shell demonstrably does.  A probe that reports through the thing
+;   it is asking about cannot answer that question.
+;
+;   ⇒ DEFINE `PROBE_FILE` BEFORE THE INCLUDE to write the dump with AH=3Ch/40h/3Eh
+;     instead, so the probe needs no redirection at all:
+;
+;         %define PROBE_FILE "int53f.txt"
+;         %include "probe.inc"
+;
+;     Off by default: existing probes are unchanged, byte for byte.
+;   ⚠ A run with PROBE_FILE and a run without are DIFFERENT QUESTIONS asked of any
+;     host that can tell.  That is the point; label the rows accordingly.
+;
 ; Usage:
 ;       org 100h
 ;       jmp start
@@ -131,8 +151,91 @@ probe_end:
         mov     si, __s_end
         call    probe_puts
         call    probe_crlf
+%ifdef PROBE_FILE
+        call    probe_flush
+%endif
         mov     ax, 4C00h
         int     21h
+
+%ifdef PROBE_FILE
+; ── THE FILE SINK. Only assembled when PROBE_FILE is defined; see the note at the
+;    top for why it exists. AH=3Ch creates/truncates, AH=40h writes, AH=3Eh closes.
+;    ⚠ EXIT CODE CARRIES THE VERDICT, because a probe that cannot write its answer
+;      must not look like one that wrote nothing interesting:
+;         0 = written   1 = create failed   2 = short write   3 = BUFFER OVERFLOWED
+;      An overflow ALSO appends `#TRUNCATED` as the last line, so a truncated dump
+;      can never read as a complete one. A file that stops early and says nothing
+;      is the exact shape of a measurement this project has been burned by twice.
+probe_flush:
+        cmp     word [__fovf], 0
+        je      .create
+        mov     si, __s_trunc           ; loud, in the file itself
+        call    probe_f_puts
+.create:
+        mov     ah, 3Ch
+        xor     cx, cx                  ; normal attributes
+        mov     dx, __fname
+        int     21h
+        jc      .ecreate
+        mov     bx, ax                  ; handle
+        mov     ah, 40h
+        mov     cx, [__flen]
+        mov     dx, __fbuf
+        int     21h
+        jc      .eshort
+        cmp     ax, [__flen]
+        jne     .eshort
+        mov     ah, 3Eh
+        int     21h
+        cmp     word [__fovf], 0
+        jne     .eovf
+        ret
+.ecreate:
+        mov     ax, 4C01h
+        int     21h
+.eshort:
+        mov     ah, 3Eh
+        int     21h
+        mov     ax, 4C02h
+        int     21h
+.eovf:
+        mov     ax, 4C03h
+        int     21h
+
+; append AL to the buffer; sets __fovf and drops the byte if it would not fit.
+probe_f_putc:
+        push    bx
+        mov     bx, [__flen]
+        cmp     bx, __fcap
+        jae     .full
+        mov     [__fbuf + bx], al
+        inc     word [__flen]
+        pop     bx
+        ret
+.full:
+        mov     word [__fovf], 1
+        pop     bx
+        ret
+
+probe_f_puts:                           ; SI = asciiz, straight to the buffer
+        push    ax
+        push    si
+.l:     lodsb
+        or      al, al
+        jz      .d
+        call    probe_f_putc
+        jmp     .l
+.d:     pop     si
+        pop     ax
+        ret
+
+__fname    db PROBE_FILE, 0
+__s_trunc  db 13, 10, '#TRUNCATED -- the buffer filled; this dump is INCOMPLETE', 13, 10, 0
+__flen     dw 0
+__fovf     dw 0
+__fcap     equ 4096
+__fbuf     times __fcap db 0
+%endif
 
 probe_emit:
         mov     si, __s_casee
@@ -217,9 +320,13 @@ probe_putc:                             ; AL = char
         push    dx
         push    si
         push    di
+%ifdef PROBE_FILE
+        call    probe_f_putc            ; no console at all -- see the note at the top
+%else
         mov     dl, al
         mov     ah, 02h
         int     21h
+%endif
         pop     di
         pop     si
         pop     dx
