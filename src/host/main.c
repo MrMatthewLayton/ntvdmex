@@ -441,6 +441,38 @@ static void dsprobe_load(void)
    number to MEM.EXE (GH #47) -- two literals would drift. */
 #define XMS_POOL_KB   16384
 
+/* ── ★ THE CPU CLASS `INT 2Fh AX=1687h` REPORTS IN CL, AND IT IS NOT COSMETIC. ────────
+     `krnl386.exe` builds the ENTIRE Win16 `GetWinFlags` word out of this one byte
+     (segment 1, 0xD68A -- `tools/ne/nedis.py guest/ne/krnl386.exe 1 0xd650 0x70`):
+
+         mov ax,0x1687 ; int 2Fh
+         or  ax,ax  ; jne -> no DPMI host, bail
+         xor bh,bh
+         cmp cl,3   ; jb  -> bail
+         mov bl,4   ; CL == 3  -> WF_CPU386
+         je  +2
+         mov bl,8   ; CL >  3  -> WF_CPU486
+         mov [0x464],bx        ; and GetWinFlags (KERNEL.132) is `mov ax,[0x464]`
+
+   ⇒ CL is an ORDINAL CPU class whose lowest accepted value is 3. That reading is off
+     the binary, not off a spec sheet -- there is no DPMI document in this repo, and
+     `tools/dostest/p_dpmins.com` confirms neither software oracle can be asked:
+     **MS-DOS 6.22 and DOSBox-X both leave every register untouched** (no DPMI host),
+     so only stock ntvdm can answer and that needs the IFEO bracket.
+
+   ⛔ WE HARDCODED 3 AND IT PRODUCED A MEASURED MISMATCH. `tools/wintest` measured
+     `GetWinFlags` = **4C25 from us**, **4C29 from stock**, reproduced twice. The single
+     differing bit is 0x0004 vs 0x0008 -- exactly `bl=4` vs `bl=8` -- so stock's DPMI
+     host returns CL>3 and ours returned 3. **4 is the smallest value consistent with
+     the measurement**, so it is what we report: matching the oracle without claiming
+     anything the measurement does not support.
+   ⚠ "4 means 80486" is the obvious reading and is NOT established by anything here.
+     What IS established: stock returns >3, krnl386 treats >3 as WF_CPU486, and any
+     machine that can run NTVDMEX is past a 386 several times over.
+   ⚠ OBSERVABLE FOR EVERY DPMI GUEST, not just Win16 -- an extender may branch on it.
+     Changed once, with an interleaved before/after on the rig (`runs/s79_cl_ab/`). */
+#define DPMI_CPU_CLASS 0x04
+
 /* DPMI (M4 slice 3, spike): the mode-switch entry far-called by a client after it
    detects DPMI via INT 2Fh AX=1687h. Lives past the INT 67h stub (0x48..0x4B).
    The stub is `BOP 0x50 ; RETF`: the host services the BOP by switching the VDM to
@@ -18920,7 +18952,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                running this guest. Answer identically to the V86 arm. */
                             VDM_SET16(tib, VTIB_EAX, 0);
                             VDM_SET16(tib, VTIB_EBX, 1);
-                            VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x03);
+                            VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | DPMI_CPU_CLASS);
                             VDM_SET16(tib, VTIB_EDX, 0x005A);      /* DPMI 0.90 */
                             VDM_SET16(tib, VTIB_ESI, 0);
                             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
@@ -25097,12 +25129,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
                 VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
             } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
-                /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL=3 (386);
-                   DX=0.90; SI=0 private paras; ES:DI = mode-switch entry to FAR-CALL. A 16-bit
-                   client ignores BX; a 32-bit client reads bit0 to decide to far-call with AX=1. */
+                /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL = the CPU
+                   class (see DPMI_CPU_CLASS); DX=0.90; SI=0 private paras; ES:DI = mode-switch
+                   entry to FAR-CALL. A 16-bit client ignores BX; a 32-bit client reads bit0 to
+                   decide to far-call with AX=1. */
                 VDM_SET16(tib, VTIB_EAX, 0);
                 VDM_SET16(tib, VTIB_EBX, 1);
-                VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x03);
+                VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | DPMI_CPU_CLASS);
                 VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
                 VDM_SET16(tib, VTIB_ESI, 0);
                 VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
