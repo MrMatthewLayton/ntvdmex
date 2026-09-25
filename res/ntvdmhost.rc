@@ -251,8 +251,6 @@ BEGIN
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     CONTROL         "&Gravis Ultrasound", IDC_S_GUS, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 146, 159, 76, 10
-    CONTROL         "&Tandy / CMS", IDC_S_TANDY, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 228, 159, 56, 10
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────

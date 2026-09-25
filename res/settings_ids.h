@@ -85,7 +85,7 @@
 #define IDC_S_SOUNDFONT       289
 #define IDC_S_SPEAKER         290
 #define IDC_S_GUS             291
-#define IDC_S_TANDY           292
+/* 292 was IDC_S_TANDY -- the Tandy / CMS checkbox, removed s80 (never modelled). */
 
 /* ── Input ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_HOSTCURSOR      310   /* checkbox: HIDE the host arrow over the video   */

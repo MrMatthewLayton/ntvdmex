@@ -62,7 +62,7 @@ typedef enum {
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT,
     SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
-    SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS, SET_TANDY,
+    SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS,
     SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
     SET_JOYTYPE, SET_JOYPAD,
     SET_BOOTFROM,
@@ -215,7 +215,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
      Decided at startup (the environment's ULTRASND= is built before the devices), so a
      change takes effect at the next program start. */
 { "GusEnabled",        IDC_S_GUS,         SK_CHECK,      1,  0,   1, NULL },
-{ "Tandy",             IDC_S_TANDY,       SK_CHECK,      0,  0,   1, NULL },
+/* "Tandy" (a Tandy / CMS checkbox) was REMOVED in s80: nothing modelled it, and Tandy
+   sound is part of a whole different MACHINE (PCjr/Tandy 1000 video modes and BIOS ID),
+   not a card a VGA-era PC could carry. A stored HKCU "Tandy" value is simply ignored. */
 
 { "HideHostCursor",    IDC_S_HOSTCURSOR,  SK_CHECK,      0,  0,   1, NULL },
 { "SeamlessMouse",     IDC_S_SEAMLESS,    SK_CHECK,      0,  0,   1, NULL },

@@ -9048,7 +9048,7 @@ static void host_fullscreen_toggle(HWND h)
                        windowed blit does not exist yet (the clipper field is unused).
                        Filtering IS pushed, and GDI honours it in the stretch.
        Opl (OPL2/OPL3)     -- vdd_opl is a 9-channel OPL2. There is no OPL3 to select.
-       SbModel, Midi, Gus, Tandy, KeyboardLayout, Typematic, SeamlessMouse,
+       SbModel, Midi, KeyboardLayout, Typematic, SeamlessMouse,
        A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
        (FloppyAImage IS live: it is what INT 13h opens. JoystickType and
        JoystickGamepad ARE live as of session 62: the gameport VDD and the winmm
