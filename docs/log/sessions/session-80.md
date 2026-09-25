@@ -232,3 +232,31 @@ wrong in a way the picture alone would have hidden (the status bar is mostly red
   and applying a change pushed the dialog's number into the running session. Now the note under
   the version box says what is in force and why, and a forced version (XP shell or
   `cfg\dosver.txt`) is not overwritten live.
+
+**Tandy / CMS checkbox removed** (`655341d`, user decision): nothing modelled it, and Tandy sound
+belongs to a whole different machine (PCjr/Tandy 1000 video + BIOS ID), not a VGA-era card.
+
+---
+
+## Handoff — 2026-09-26 01:00, rig shut down by the user
+
+**All three north stars done and user-confirmed.** Rig `bin\` = `ad6e25cd` (confirmed `a0294462`
++ the two settings commits, **not yet hand-checked**); `debug\prev\ntvdmhost_prev.exe` = `a0294462`.
+
+**Owed by a human first:** the DOS-version note inside XP's `COMMAND.COM`; the Sound page's
+"Other devices" row and the GUS checkbox; Heretic's 3D view at low detail.
+
+**Candidates, no order agreed** (ask): the IF/VIF interrupt gate (`irq8.nested`); interpreter
+speed for mode Y; the chain-4 de-interleave; a shelf sweep → new `dist\` zip + checkpoint; a
+stereo mixer. All listed at the top of [`../../STATE.md`](../../STATE.md).
+
+**Lessons worth carrying:**
+- **When a guest "exits", read what it printed first** — s79's crash reading was wrong; the
+  `AH=06h` bytes inside the ISR said *"transfer stack overflow on interrupt 09h"*.
+- **Test the assumption with an instrument, not the picture** — "only Doom's drawers touch
+  A0000" was false (the mask helper), and only the detector (`modeypm_detect.flag`) showed it.
+- **Any change to `host_interp` gets an INTERLEAVED Lemmings A/B** against the confirmed build;
+  it caught a 6% throughput loss on a user-confirmed path, recovered to 1.5%.
+- **Decide anything the environment advertises at STARTUP** — the env block is built before the
+  devices (the first GUS run had a card and no `ULTRASND=`).
+- **zsh does not word-split `$var`** — a loop over "name EXE" pairs silently queued nothing.

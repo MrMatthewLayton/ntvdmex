@@ -6,7 +6,7 @@
 > session. When this file starts growing session blocks again, split them out; it has
 > happened twice now (`return-ntvdm.md` in August, this file in September).
 
-- **Updated:** 2026-09-25 (session 80)
+- **Updated:** 2026-09-26, 01:00 (end of session 80)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
   `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
@@ -93,17 +93,17 @@ The full surface list, with the primary source named for each, is in
 
 | | Status |
 |---|---|
-| **Doom** | Fully playable at **high detail** — 3D rendering, status bar, menus, PCM + MIDI, keyboard and mouse. Runs its own 32-bit code through DOS/4GW on real silicon. ⛔ **Low detail is broken — see below.** |
+| **Doom** | Fully playable at **high and low detail** (low fixed s80: its drawers run through the VGA address generator, `pm32interp.h`) — 3D rendering, status bar, menus, PCM + MIDI, keyboard and mouse. Runs its own 32-bit code through DOS/4GW on real silicon. Launches from the shell and from SETUP, quits back to the prompt (s80). |
 | **Duke Nukem 3D** | Runs, including its Setup program. |
 | **Heretic / Hexen** | Both run; Hexen's hi-res loader renders. |
-| **Wolfenstein 3D · Skyroads** | Fully playable. |
+| **Wolfenstein 3D · Mario · Skyroads** | Fully playable. Wolf3D's status bar and Mario's mode-Y artefacts fixed s80 (⚠ Wolf3D now ~70–82% of a host core, interpreting). |
 | **ZAR** | Renders, including its VESA modes, and its mouse buttons arrive. **Silent** — pinned in state 4. |
-| **heaven7** | Renders (VBE 2.0 direct colour + linear framebuffer). Music is GUS-only and there is no GUS model yet. |
+| **heaven7** | Renders (VBE 2.0 direct colour + linear framebuffer) **and plays its GUS music** — *"works and is accurate"* (s80). |
 | **MS-DOS 6.22 `COMMAND.COM`** | Runs as a guest: prompt, line editing, internals, and an external program EXEC'd and returned from. |
 | **QBasic / EDIT** | Run, including the Open dialog and building `.EXE`s. |
 | **DOS API** | 103 INT 21h functions. XMS 3.0, EMS (LIM 4.0), DPMI 0.9, INT 13h, TSRs, redirection. |
 | **Video** | Text (authentic IBM ROM font), mode 13h, mode 12h planar, mode Y, VESA banked + LFB, VBE 2.0/3.0 runtime. Windowed GDI + exclusive-fullscreen DirectDraw, Luna-themed. |
-| **Sound** | SB16 PCM at 99.999% delivery, clean-room OPL2/OPL3 FM (MIT; Nuked used only as a black-box oracle), MPU-401 MIDI, PC speaker. |
+| **Sound** | SB16 PCM at 99.999% delivery, clean-room OPL2/OPL3 FM (MIT; Nuked used only as a black-box oracle), MPU-401 MIDI, PC speaker, **Gravis UltraSound** (s80: 240h / IRQ 11 / DMA 3, `ULTRASND=` in the env). ⚠ The mixer is mono. |
 | **Win16** | Notepad edits and saves text; MS Paint draws in colour and saves bitmaps. Real HWNDs, a turning message loop, the host calls 16-bit code. |
 | **Host UI** | Menu bar, status strip, six-tab Settings dialog backed by `HKCU\Software\NTVDMEX`. |
 | **Packaging** | A portable zip with `install.bat` / `uninstall.bat` / `status.bat` / `smoke.bat` / `diag.bat`, installed from scratch on three machines. |
@@ -112,8 +112,9 @@ The full surface list, with the primary source named for each, is in
 
 | | What is known |
 |---|---|
-| **Doom's low detail renders wrong** | User: *"High detail works. Low detail is broken!"* **Measured:** low detail is dominated by **two-plane map masks** (`0x03` and `0x0c`, ~143k writes each, vs ~16.9k per single-plane mask) and our mode-Y path maps the A0000 window to **one plane at a time**. The status bar loses ~70% of its detail although Doom draws it full-res either way. This is the concrete instance of the mode-Y approximation the VGA inventory predicted. **The fix belongs in VGA steps 3–4, not a special case.** [`inventory/vga.md`](inventory/vga.md) |
-| **Mario's mode-Y artefacts** | A strong candidate for the same root cause as the row above. |
+| **A handler that EOIs before `iret` is re-entered** | `p_irq8.com`'s `irq8.nested` = 4 vs 0 on three oracles. The host's interrupt gate asks *IF or VIF* (under VME a V86 `cli` moves only VIF). Every line has it. Fixing it touches nested real-mode calls (ZAR's sound init) — needs its own timing/sound regression pass. [`inventory/pic.md`](inventory/pic.md) |
+| **Chain-4 → unchained de-interleave** | `p_vgamem`'s one open row: writes made in chained 13h are not de-interleaved when a program unchains. No visible symptom known. |
+| **Mode-Y interpretation costs CPU** | Wolf3D is interpreted almost continuously (~155 cycles/instruction). Frame rate held on the rig; a slower machine would feel it. The lever is the interpreter's speed. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **Duke3D took no keyboard on one machine** | Reproduced on a friend's Win98-era box only; works on both of the user's own boxes. |
 | **DOS/4GW guests ran typewriter-slow on one machine, once** | First session on the friend's box; fine after a reboot that *also* changed the BIOS to optimized defaults. **Cause unknown and confounded**; logs unrecoverable. |
 | **ZAR is silent** | Renders and plays, no audio. Eight hypotheses refuted. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
@@ -132,75 +133,47 @@ The full surface list, with the primary source named for each, is in
 
 ---
 
-## ▶▶▶ START HERE — the three north stars, set by the user 2026-09-25 (end of s79)
+## ▶▶▶ START HERE — session 80 closed all three north stars (handoff 2026-09-26 01:00)
 
-**Agreed order: `3 → 1 → 2`.** #3 done (s80); **#1 in progress.** Full account: [`log/sessions/session-80.md`](log/sessions/session-80.md).
+**All three north stars the user set at the end of s79 are DONE and user-confirmed.** The full
+story, with every measurement and every dead end, is in
+[`log/sessions/session-80.md`](log/sessions/session-80.md). Do not re-derive it.
 
-| # | North star | State |
+| # | North star | Result |
 |---|---|---|
-| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | ✅ **DONE — USER-CONFIRMED 2026-09-25**: Wolf3D, Mario, Doom low + high detail (`8d795b96`). Left over, no known visible symptom: the chain-4 → unchained de-interleave (`p_vgamem`). [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
-| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | ✅ **DONE — USER-CONFIRMED 2026-09-26**: *"Heaven 7 audio works and is accurate!"* (`a0294462`). `src/vdd/vdd_gus.c` from [`ref/gus.md`](ref/gus.md); IRQ 8–15 delivery built for it. Settings checkbox `GusEnabled` (default on). [`inventory/gus.md`](inventory/gus.md) |
+| **3** | Execution chaining | ✅ `b6a8a95b` — *"Opening executables from shell, works. Setup > Game works for Doom, Hexen, Duke3D."* DPMI client teardown + child-owned MCBs freed. |
+| **1** | Mode-Y graphics | ✅ `0473d95d` (Wolf3D, Mario) and `8d795b96` (*"Doom low and high detail working!"*) — design C: the multi-plane windows run through the VGA address generator. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
+| **2** | GUS sound | ✅ `a0294462` — *"Heaven 7 audio works and is accurate!"* [`ref/gus.md`](ref/gus.md), [`inventory/gus.md`](inventory/gus.md) |
 
-✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
-1. **Graphics performance bar: "measure first, then decide."** Bring back the SR2 write-rate
-   numbers for Wolf3D / Mario / Doom low detail; the user makes the call on them.
-2. **GUS: yes** — work from the publicly archived Gravis GUS SDK and write our own
-   `docs/ref/gus.md` citing it (as with the 82077AA and 16550). Do not mirror the SDK.
+### The rig at shutdown
 
-### ✅ 3. Execution chaining — done, user-confirmed
+- **`bin\ntvdmhost.exe` = `ad6e25cd`** — the confirmed GUS build plus two settings changes
+  (`f880124`: the GUS checkbox is real as `GusEnabled`, the DOS-version note shows a forced
+  version; `655341d`: the Tandy / CMS checkbox removed). ⚠ **Neither settings change has been
+  checked by a human.**
+- **`debug\prev\ntvdmhost_prev.exe` = `a0294462`** (last user-confirmed). Earlier confirmed
+  builds sit beside it by hash.
+- The user shut the rig down at 01:00. ⚠ **Check `debug\ctl\watcher.txt` is ticking before
+  queuing anything** — see [`baremetal-test-rig`] in memory; a rebooted rig can need `rt.bat setup`.
 
-The user's report: *"Inside DOOM Setup, save settings and run Doom, crashes. Same for
-Heretic, Hexen, Duke3D setups"* and *"double-click, command.com, navigate to
-demo\msdos\doom and run DOOM — crashes."* Full account:
-[`log/sessions/session-80.md`](log/sessions/session-80.md).
+### Owed by a human (next session, first)
 
-**Two causes, both fixed (host `b6a8a95b` on the rig's `bin\`):**
-1. **The crash** — the Enter that launches the program reached DOS/4GW's pass-up `INT 09h`
-   handler before Doom hooked its own, and our PM default stub had no arm for 09h: every
-   such key abandoned the ISR until DOS/4GW's transfer stack overflowed (*"error (2002)"*).
-   Now reflected to the BIOS.
-2. **No way back** — a PM `AH=4Ch` ended the VDM. Now a client with an EXEC parent is torn
-   down (`dpmi_client_teardown()`) and terminated in real mode, and the parent resumes. A
-   second client then starts in an identical machine.
+1. **Settings → DOS:** inside XP's `COMMAND.COM`, does the note under the version box read
+   "In force now: 5.00 — …" and fit its box? Does changing the version leave the session alone?
+2. **Settings → Sound:** "Other devices" shows only PC speaker + Gravis Ultrasound; unticking
+   the GUS removes `ULTRASND=` at the next program start.
+3. **Heretic's 3D view** at low detail — it never reaches it headlessly, so the new drawer path
+   has not been seen on it. (Heretic's SETUP → game was also not in the s80 confirmation.)
 
-✅ **User-confirmed 2026-09-25** on `b6a8a95b`: *"Opening executables from shell, works.
-Setup > Game works for Doom, Hexen, Duke3D."* `debug\prev\ntvdmhost_prev.exe` promoted to
-`b6a8a95b` (the displaced `d57d586c` kept as `ntvdmhost_d57d586c.exe`). Rig acceptance tests: `debug\rig\chain.bat run|quit|twice`
-(⚠ not in `bmstage.sh`'s list — copy by hand with CRLF).
-⚠ `AH=48h` now stamps the current PSP and a child's exit frees what it owns — this touches
-**every** EXEC'd program. Watch MEM and the TSR rows.
+### Then — candidates, no order agreed yet (ask the user)
 
-### ▶ 1. Graphics — one root cause, and the parked verdict may be about the wrong design
-
-Wolf3D, Mario and Doom low detail are all **unchained (mode-Y) planar** rendering — one
-cause, not three. The spec side is **done**: `ref/vga.md` is 9/9 against a real AMI BIOS
-and the IBM VGA ROM, and the register file is at 99.9%. What is missing is *observation*,
-and `vdd_video.c` says so itself:
-
-> *"The A0000 aperture is one flat buffer — the page trap is deliberately not armed,
-> because arming it makes the interpreter the CPU and collapses the run — so a guest
-> write lands there with no record of which plane the map mask had selected."*
-
-⇒ Everything downstream (`modey_copy`, `MODEY_GAP_DEFAULT`) is *guessing which planes a
-write went to*, and a guess cannot be made correct.
-
-★ **Do this first, before any design:** the parked objection is about trapping **every
-write**. Planar code sets the Map Mask (SR2) and *then* writes a run — so trapping on
-**map-mask change** may cost one fault per run instead of one per byte. **Measure the
-actual SR2 write rate in Wolf3D, Mario and Doom low detail** before choosing. That
-measurement is cheap and nobody has taken it. It may make the trade-off question moot.
-
-### ▶ 2. Sound — the surface with specs named and no documents at all
-
-`ref/SOURCES.md` already names *Gravis Ultrasound — Gravis GUS SDK / Programmer's Guide —
-GF1 voices, DRAM, the DMA/IRQ contract*, so this is inside the period-correct hardware
-contract and is **not** app-driven. But `inventory/README.md` shows the whole sound row as
-`— | —`: **Sound Blaster, OPL and GUS all have a named authority and neither a `ref/` nor
-an `inventory/` doc.** SB and OPL were written app-first years ago and never inventoried.
-So this north star starts with the two-docs-per-surface work the programme requires.
-GUS is a large surface: 32 GF1 voices, on-card DRAM the host DMAs samples into, its own
-IRQ/DMA contract, registers at `2X0h`. Heaven7 needs it for music.
+- **The IF/VIF interrupt gate** (row above): the one correctness gap s80 surfaced and left.
+- **Interpreter speed** for mode Y (Wolf3D's host CPU).
+- **Chain-4 de-interleave** (`p_vgamem`).
+- **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`
+  (host `9448cf27`) and the checkpoint commit still `ff0d956` — both several confirmed builds
+  behind. Moving them is a deliberate act that belongs with a whole-shelf sweep.
+- **Stereo mixer** — the GUS's pan (and SB stereo) collapse to mono today.
 
 ---
 
