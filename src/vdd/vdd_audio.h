@@ -24,6 +24,7 @@
 
 #include "vdd_opl.h"
 #include "vdd_sb.h"
+#include "vdd_gus.h"
 #include "vdd_speaker.h"
 
 #define AUDIO_OUT_HZ    44100u    /* host output rate                            */
@@ -56,9 +57,10 @@ typedef struct audio_resampler {
 typedef struct audio_state {
     opl_state *opl;
     sb_state  *sb;
+    gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
     const speaker_state *spk; /* PC speaker; NULL = not fitted                   */
     uint32_t   out_hz;
-    audio_resampler r_opl, r_sb;
+    audio_resampler r_opl, r_sb, r_gus;
     /* Speaker phase as a 16-bit fraction of one cycle, clocked at out_hz. The
        top bit IS the half-cycle, so the sample is one test and no branch on the
        frequency; it persists across calls so a held tone does not restart (and
@@ -93,6 +95,8 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
    0x61 must keep answering, guests time delay loops off its refresh bit -- and
    only stops it being audible. */
 void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable);
+/* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
+void vdd_audio_set_gus(audio_state *st, gus_state *gus);
 
 /* Master volume, 0..100, clamped; `muted` outputs silence without losing it. */
 void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted);

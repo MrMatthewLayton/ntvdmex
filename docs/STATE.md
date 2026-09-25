@@ -141,7 +141,7 @@ The full surface list, with the primary source named for each, is in
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
 | **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | ✅ **DONE — USER-CONFIRMED 2026-09-25**: Wolf3D, Mario, Doom low + high detail (`8d795b96`). Left over, no known visible symptom: the chain-4 → unchained de-interleave (`p_vgamem`). [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
-| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | 🟡 **Started (s80).** [`ref/gus.md`](ref/gus.md) written from the archived SDK v2.22 (cited, not mirrored); [`inventory/gus.md`](inventory/gus.md) — every unit MISS, plus the host surfaces it needs. ⚠ heaven7 never probes: no `ULTRASND=` in the environment. ⛔ Host device-IRQ delivery is master-only (IRQ 2–7). |
+| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | 🟡 **Built on the rig (s80), not yet heard by a human.** New `src/vdd/vdd_gus.c` from [`ref/gus.md`](ref/gus.md), `ULTRASND=240,3,3,11,11`, IRQ 8–15 delivery for it. heaven7 finds the card, fills its DRAM, starts 132 voices; 96% of rendered samples non-zero. Doom/Hexen/ZAR/Skyroads/Wolf3D unchanged. Knob: `cfg\nogus.flag`. [`inventory/gus.md`](inventory/gus.md) |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
 1. **Graphics performance bar: "measure first, then decide."** Bring back the SR2 write-rate

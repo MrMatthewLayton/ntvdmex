@@ -114,6 +114,7 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #include "vdd_dma.h"
 #include "vdd_opl.h"
 #include "vdd_sb.h"
+#include "vdd_gus.h"
 #include "vdd_mpu.h"
 #include "vdd_comm.h"
 #include "../../sdk/include/ntvdmex-vdd.h"
@@ -229,6 +230,8 @@ static BOOL oscompat_attach_console(DWORD pid)
    This file DISABLES it and falls back to the de-interleave heuristic, which is worth
    keeping only because it is what a machine that refuses the remap will use. */
 #define SBDUMP_FLAG  CFG_("sbdump.flag")
+/* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
+#define NOGUS_FLAG   CFG_("nogus.flag")
 #define SBDUMP_PATH  OUT_("sb.raw")
 #define NOREMAP_FLAG CFG_("noremap.flag")
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
@@ -830,6 +833,56 @@ static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
 static dma_state    g_dma;       static ntvdd g_dma_dev;
 static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
+/* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
+static gus_state    g_gus;       static ntvdd g_gus_dev;
+static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
+static int          g_gus_on = 0;
+/* One line: did the guest find the card, fill it, play it, and take its interrupts?
+   Printed from both exits, once. */
+static void gus_report(void)
+{
+    static int done = 0;
+    char b[400], *q = b;
+    unsigned k, running = 0;
+    if (done) return;
+    done = 1;
+    if (!g_gus_on) { q = zput(q, "STAGE2: GUS off (nogus.flag)\r\n"); log_append(LOG_PATH, b, q); return; }
+    for (k = 0; k < GUS_VOICES; ++k) if (!(g_gus.v[k].ctrl & 3)) ++running;
+    q = zput(q, "STAGE2: GUS io_w=");  q = zhex(q, g_gus.io_writes);
+    q = zput(q, " io_r=");            q = zhex(q, g_gus.io_reads);
+    q = zput(q, " reset=0x");         q = zhexb(q, g_gus.reset);
+    q = zput(q, " dram_pokes=");      q = zhex(q, g_gus.dram_pokes);
+    q = zput(q, " dram_peeks=");      q = zhex(q, g_gus.dram_peeks);
+    q = zput(q, " dma_uploads=");     q = zhex(q, g_gus.dma_uploads);
+    q = zput(q, " dma_bytes=");       q = zhex(q, g_gus.dma_bytes);
+    q = zput(q, " active=");          q = zhex(q, g_gus.active);
+    q = zput(q, " voice_starts=");    q = zhex(q, g_gus.voice_starts);
+    q = zput(q, " running_now=");     q = zhex(q, running);
+    q = zput(q, " irqs=");            q = zhex(q, g_gus.irqs_raised);
+    q = zput(q, " fifo_reads=");      q = zhex(q, g_gus.fifo_reads);
+    q = zput(q, " latch_irq/dma=0x"); q = zhexb(q, g_gus.irq_latch);
+    q = zput(q, "/0x");               q = zhexb(q, g_gus.dma_latch);
+    q = zput(q, " locked_out=");      q = zhex(q, g_gus.latch_locked_out);
+    q = zput(q, " samples_out=");     q = zhex(q, g_gus.samples_out);
+    q = zput(q, " nonzero=");         q = zhex(q, g_gus.out_nonzero);
+    q = zput(q, " peak=");            q = zhex(q, g_gus.out_peak);
+    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q);
+}
+
+/* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
+   the start of a line)? No C runtime here, so no strstr. */
+static int strstr_nocase(const char *blk, const char *name)
+{
+    const char *l = blk;
+    while (*l) {
+        const char *a = l, *b = name;
+        while (*b && *a && ((*a | 0x20) == (*b | 0x20) || (*a == *b))) { ++a; ++b; }
+        if (!*b) return 1;
+        while (*l && *l != '\n') ++l;
+        if (*l) ++l;
+    }
+    return 0;
+}
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
 static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
 /* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
@@ -1076,6 +1129,7 @@ static int      g_ui_forced;                              /* this body run was r
 #define KEYLAT_RING 32
 static uint32_t qpc_us(LONGLONG d);          /* fwd: defined with the lock instruments */
 static void modey_tl_report(void);          /* fwd: north star 1, with the mode-Y remap */
+static void gus_report(void);               /* fwd: north star 2, with the GUS globals */
 static int  modey_interp_serves(void);      /* fwd: north star 1, design C */
 static void my_ring_dump(const char *why);  /* fwd: north star 1, design C */
 static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp);
@@ -6177,6 +6231,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
              guests it exists for; that is the "an absence in the report means nothing"
              trap, and it has already cost this project a session on ZAR. */
         modey_tl_report();   /* north star 1: the guests that need it leave this way */
+        gus_report();        /* north star 2: and so does heaven7 */
         {   static char vr2[2048];
             int n2 = vdd_video_regs_dump(&g_vid, vr2, (int)sizeof vr2);
             if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
@@ -23215,6 +23270,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_interp_off = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_ring_on    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* The GUS is decided HERE, with its resources, because the environment block is
+       built before the devices are added -- and ULTRASND= has to say what the card
+       will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
+       and a card nothing looked for. */
+    g_gus_on = (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
+    g_gus.base = GUS_DEFAULT_BASE; g_gus.irq = GUS_DEFAULT_IRQ; g_gus.dma_ch = GUS_DEFAULT_DMA;
     g_my_pm_off     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -24230,6 +24291,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { static char envextra[512]; DWORD eo = 0;
         if (dosenv[0]) { eo = (DWORD)wsprintfA(envextra, "%s", dosenv);
                          if (eo && envextra[eo-1] != '\n') envextra[eo++] = '\n'; }
+        /* ── ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
+             heaven7 never touched a port without it. <base hex>,<DRAM DMA>,<record DMA>,
+             <GF1 IRQ>,<MIDI IRQ> (docs/ref/gus.md §1) -- the numbers the device was built
+             with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins. */
+        if (g_gus_on && !strstr_nocase(envextra, "ULTRASND=")) {
+            eo += (DWORD)wsprintfA(envextra + eo, "ULTRASND=%X,%u,%u,%u,%u\n",
+                                   (unsigned)g_gus.base, (unsigned)g_gus.dma_ch, (unsigned)g_gus.dma_ch,
+                                   (unsigned)g_gus.irq, (unsigned)g_gus.irq);
+        }
         if (g_fetch2_ok) {
             unsigned nv = launcher_compiler_vars(g_env2, sizeof g_env2, envextra + eo,
                                                  (DWORD)sizeof envextra - eo);
@@ -24882,6 +24952,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_mpu.sink = host_midi_sink;
     g_mpu_dev = vdd_mpu_device(&g_mpu);
     vdd_bus_add(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
+    /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
+       ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
+    if (g_gus_on) {                             /* decided at startup: see NOGUS_FLAG's read */
+        g_gus.dma = &g_dma; g_gus.dram = g_gus_dram;
+        g_gus_dev = vdd_gus_device(&g_gus);
+        vdd_bus_add(&g_bus, &g_gus_dev);
+    }
     /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORTS was 16 and
          exactly full; adding one range pushed the LAST device added -- the MPU-401 --
          off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
@@ -24895,6 +24972,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        run even if no sound device opens (audio_wave falls back to silent
        pumping) -- otherwise every SB game hangs on a machine without audio. */
     vdd_audio_init(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
+    vdd_audio_set_gus(&g_audio, g_gus_on ? &g_gus : NULL);
     settings_apply_devices(&g_set);   /* master volume, mute, speaker -- the mixer
                                          zeroes its own struct, so not one line earlier */
     /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
@@ -29294,6 +29372,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           p = zput(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = zhex(p, g_sb.cap_len);
           p = zput(p, " bytes\r\n");
       }
+      gus_report();
       p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.blocks);
         p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.rate_hz);
         p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.xfer_mode);

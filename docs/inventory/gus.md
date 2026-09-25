@@ -3,52 +3,51 @@
 **Spec:** *UltraSound SDK v2.22* (Advanced Gravis / FORTE, 1994), Chapter 2 and the SDK's own
 driver source. **▶ The hardware reference is [`../ref/gus.md`](../ref/gus.md)** — what the card
 *does*.
-**Our implementation:** **none.** No `vdd_gus.c`; nothing in `src/` claims a GUS port.
+**Our implementation:** `src/vdd/vdd_gus.c` (s80), `src/vdd/vdd_gus.h`; mixer source in `src/vdd/vdd_audio.c`; off-VM battery `tools/dostest/gus_test.c` (29 checks).
 **Acceptance guest:** heaven7 (its music is GUS-only; it renders already).
 **Marked:** 2026-09-25 (s80), **from the code**.
 
 ---
 
-## Headline — not a gap in a device, the device itself is absent
+## Headline — heaven7 finds the card, fills it and plays it (s80)
 
-Every unit below is **MISS**. This file therefore does two jobs: it is the checklist the
-implementation works through in the order [`ref/gus.md`](../ref/gus.md) sets out, and it records
-the **host surfaces the card has to plug into** — because three of those are not ready for it
-either, and one of them is the first thing a GUS program reads.
+Rig, host `a0294462`: with `ULTRASND=240,3,3,11,11` in its environment, heaven7 resets the GF1
+to `07h`, sizes and fills its DRAM by programmed I/O (66,272 pokes, 38,374 peeks), starts 132
+voices and leaves 10 running; **96% of the 1.32 M samples rendered are non-zero, peak 17,871**.
+It uses neither DMA nor interrupts — it polls. ⚠ Nobody has *heard* it yet: a headless run
+cannot. The by-hand test is owed.
 
-⛔ **heaven7 never touches a port.** Its run logs no unclaimed port at all
-(`runs/s74_heaven7/`): the environment block carries `BLASTER=` but **no `ULTRASND=`**
-(`src/dos/dos_env.h:98`), and a GUS program reads the variable *before* it probes (ref §1, §8).
-So the first observable step is the environment string, not a register.
+⛔ Found on the way: the environment block is built **before** the devices, so the card must be
+decided at startup — the first run had a GUS on the bus and no `ULTRASND=`, and heaven7 never
+touched a port.
 
 ---
 
 ## The card
 
-| Unit | ref | Status | Notes |
+| Unit | ref | Status | Where / notes |
 |---|---|---|---|
-| `ULTRASND` environment string | §1, §8 | **MISS** | only `BLASTER=` is emitted (`dos_env.h:98`) |
-| Port claims `2X0–2XF`, `3X0–3X7` | §1 | **MISS** | nothing registered on the bus (`src/vdd/vdd_bus.c`) |
-| Register select / data (`3X2`–`3X5`), 8- and 16-bit access | §2 | **MISS** | the SDK uses 16-bit `OUT` to `3X4` for every word register |
-| Global registers `41h–4Ch` | §2.1 | **MISS** | |
-| Reset register `4Ch` (run / DAC / master IRQ) | §2.1 | **MISS** | |
-| Voice registers `00h–0Eh`, reads at `80h–8Eh` | §2.2 | **MISS** | 32 voice banks, page at `3X2` |
-| Self-modifying bits (stopped, direction, IRQ pending) | §2.2 | **MISS** | |
-| DRAM (up to 1 MB) + programmed I/O at `3X7` | §3 | **MISS** | ⚠ also the SDK's *delay*: 7 reads of `3X7` |
-| DRAM DMA (`41h`/`42h`), 16-bit address translation, invert-MSB | §3 | **MISS** | |
-| Voice engine: position, frequency counter, interpolation, end/loop/bidirectional/rollover | §4 | **MISS** | output rate depends on the active-voice count |
-| Logarithmic volume, ramps (rate/start/end, loop, IRQ) | §7 | **MISS** | curve pinned by the SDK's `_gf1_volumes` table |
-| Pan (16 positions) | §7 | **MISS** | |
-| Latches `2XB` via `2X0` bit 6, the next-write lock-out, `2XF` bank | §5 | **MISS** | |
-| Mix control `2X0` (line out active-low, latch enable) | §5 | **MISS** | |
-| IRQ status `2X6` | §6 | **MISS** | |
-| Voice IRQ FIFO `8Fh`, cleared by reading | §6 | **MISS** | |
-| Timers 1/2 (`45h–47h`) and the AdLib-compatible `2X8`/`2X9` | §9 | **MISS** | |
-| MIDI 6850 at `3X0`/`3X1` | §9 | **MISS** | we have an MPU-401 (`src/vdd/vdd_mpu.c`); a 6850 is a different chip |
-| Record path (`48h`, `49h`) | §2.1 | **MISS** | no input source exists; answer the registers, record silence |
-| ICS-2101 mixer, CS4231 codec (UltraMax / daughter card) | §10 | **N/A** | later board options, out of the period base card |
-
----
+| `ULTRASND` environment string | §1, §8 | **IMPL** | `main.c` env build — the device's own numbers; a `dosenv.txt` `ULTRASND` wins. DOS path only: the Win16 block is left exactly as it was |
+| Port claims `2X0–2XF`, `3X0–3X7` | §1 | **IMPL** | `vdd_gus.c:527`; `VDD_MAX_PORTS` 32 → 48 (31 were in use) |
+| Register select / data, 8- and 16-bit access | §2 | **IMPL** | `gus_out`/`gus_in` `:284`/`:335`; a byte to `3X4` latches, `3X5` completes |
+| Global registers `41h–4Ch` | §2.1 | **IMPL** | `gus_reg_write`/`gus_reg_read` `:180`/`:248` |
+| Reset `4Ch` | §2.1 | **IMPL** | bit 0 = 0 runs `gus_chip_reset` `:161` |
+| Voice registers `00h–0Eh` / `80h–8Eh` | §2.2 | **IMPL** | 32 banks via the page |
+| Self-modifying bits | §2.2 | **IMPL** | the engine writes stopped/direction/pending itself; the double-write race is not modelled (it cannot lose a write here) |
+| DRAM + PIO at `3X7` | §3 | **IMPL** | 1 MB (`GUS_DRAM_SIZE`); detection passes (`gus_test` T1) |
+| DRAM DMA, 16-bit translation, invert-MSB | §3 | **IMPL** | `gus_dma_try` `:126` — instantaneous; retried each render if the 8237 is not ready. Card→PC direction not modelled |
+| Voice engine: position, frequency, interpolation, end / loop / bidi / rollover | §4 | **IMPL** | `gus_voice_step` `:397`; rendered at the GF1's own rate (`vdd_gus_rate_hz`) and resampled by the mixer |
+| Logarithmic volume, ramps | §7 | **IMPL** | `vdd_gus_vol_gain` `:372` — curve checked against the SDK table's ratios; `gus_ramp_step` `:424` |
+| Pan | §7 | **PART** | stored and read back; **the mixer is mono**, so pan does not move the sound |
+| Latches `2XB`, the lock-out, `2XF` | §5 | **PART** | IRQ/DMA latches and the next-write lock-out IMPL (only GUS-port writes are seen, so a write to another card's port does not break the arm); `2XF` banks 5/6 accepted and not stored |
+| Mix control `2X0` | §5 | **PART** | stored; line/mic inputs and output enable do not gate anything |
+| IRQ status `2X6` | §6 | **IMPL** | `gus_irq_status` `:67` |
+| Voice IRQ FIFO `8Fh` | §6 | **IMPL** | `gus_irq_fifo` `:102`, cleared by the read, active-low bits |
+| The card's interrupt line | §6 | **IMPL** | edge on any enabled source with 4Ch bit 2; on the latched line or IRQ 11 |
+| Timers 1/2 and `2X8`/`2X9` | §9 | **IMPL** | `gus_timers` `:455`, advanced by rendered GF1 time |
+| MIDI 6850 | §9 | **PART** | status reads "transmitter empty"; data goes nowhere, nothing is ever received |
+| Record path (`48h`, `49h`) | §2.1 | **PART** | registers answer; starting a take completes at once with no data |
+| ICS-2101 mixer, CS4231 codec | §10 | **N/A** | later board options; `7X6` reads `FFh` = "pre-3.7 board" |
 
 ## What the card needs from the host — and what is not ready
 

@@ -16,7 +16,7 @@
 #include "ntvdd.h"
 
 #ifndef VDD_MAX_PORTS
-#define VDD_MAX_PORTS  32       /* claimed port ranges                          */
+#define VDD_MAX_PORTS  48       /* claimed port ranges (s80: 31 of 32 were in use, and the GUS needs two) */
 /* ⚠ THIS WAS 16, AND IT WAS EXACTLY FULL. Adding one CRTC range pushed the LAST
      device added -- the MPU-401 -- off the bus: vdd_claim_ports() returned -1, nobody
      looked, and the guest's MIDI port read 0xFF like an empty ISA slot. Doom's music

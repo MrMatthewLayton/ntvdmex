@@ -78,6 +78,8 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
     st->master = 100;                 /* the struct is zeroed above: 0 would be silence */
 }
 
+void vdd_audio_set_gus(audio_state *st, gus_state *gus) { st->gus = gus; }
+
 void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable)
 {
     st->spk = spk;
@@ -134,6 +136,21 @@ void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
         /* --- PC speaker --------------------------------------------------- */
         /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
            sets the data bit to click the cone makes no tone here either. */
+        /* The Gravis UltraSound: it mixes its own voices at the GF1's service rate
+           (one sample per pass over the active voices), and that rate moves with the
+           active-voice count -- so the resampler is re-aimed every chunk. Rendering is
+           also what advances its voices, ramps and timers and raises its interrupts,
+           exactly as the SB's render walks its DMA. (s80, north star 2) */
+        if (st->gus) {
+            rs_setup(&st->r_gus, vdd_gus_rate_hz(st->gus), st->out_hz);
+            need = rs_need(&st->r_gus, n);
+            vdd_gus_render(st->gus, st->scratch, need);
+            idx = 0;
+            for (i = 0; i < n; ++i) {
+                int32_t v = out[done + i] + rs_step(&st->r_gus, st->scratch, need, &idx);
+                out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+            }
+        }
         if (st->spk && st->spk_level && vdd_speaker_active(st->spk)) {
             uint32_t hz = vdd_speaker_hz(st->spk);
             st->spk_gated += n;

@@ -194,3 +194,27 @@ detail (was ~16), status bar `doomdetail` 0.294 (was 0.75). Method, in order:
 wrong in a way the picture alone would have hidden (the status bar is mostly redrawn by copy).
 
 ▶ Next: user's hand test of Doom low detail; then the chain-4 de-interleave (`p_vgamem`).
+
+---
+
+## Part 5 — north star 2: the Gravis UltraSound
+
+✅ **User:** *"Doom low and high detail working!"* — north star 1 closed; prev promoted to `8d795b96`.
+
+1. **Reference first** (`b3953cb`): `docs/ref/gus.md` from the archived SDK v2.22 (manual Ch. 2 +
+   the SDK's own driver source, cited, not mirrored — the local copy lives in the ignored
+   `reverse/`). `docs/inventory/gus.md`: every unit MISS, plus two host gaps — no `ULTRASND=`,
+   and device-IRQ delivery on the master only.
+2. **Slave-line delivery** (`ba73a91`, user's choice: IRQ 11). New probe `p_irq8.com` (RTC
+   periodic IRQ 8 through INT 70h) vs three oracles: `irq8.fired` now agrees. Cooperative-only
+   delivery was not enough — a spinning guest got 5 interrupts where real machines got ~280 —
+   so the asynchronous injector covers the slave too. ⛔ `irq8.nested` (4 vs 0) is the
+   pre-existing IF-or-VIF gate; recorded in `inventory/pic.md`, deliberately not fixed here.
+3. **The card** (`src/vdd/vdd_gus.c`, 29 off-VM checks written from the reference): register
+   file, 1 MB DRAM by PIO and DMA, the voice engine at the GF1's own rate, logarithmic volume
+   and ramps, the 8Fh FIFO, latches with the lock-out, timers. `ULTRASND=240,3,3,11,11`.
+   `VDD_MAX_PORTS` 32 → 48 (31 were in use).
+   ⛔ First rig run: card on the bus, **no `ULTRASND=`** — the env block is built before the
+   devices. Decided at startup now.
+4. **heaven7 plays**: finds the card, fills 66 KB of DRAM by PIO, starts 132 voices; 96% of 1.32 M
+   rendered samples non-zero, peak 17,871. Polls — no DMA, no IRQs. ⚠ Not yet heard by a human.
