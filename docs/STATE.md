@@ -25,10 +25,11 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`0473d95d`** — promoted
-  2026-09-25 (s80) after the user confirmed by hand: *"Mario and Wolf3D working!"* (north
-  star 1, design C, real mode). Before it: `b6a8a95b` (execution chaining, user-confirmed),
-  kept as `debug\prev\ntvdmhost_b6a8a95b.exe`; `d57d586c` as `ntvdmhost_d57d586c.exe`.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`8d795b96`** — promoted
+  2026-09-25 (s80) after the user confirmed by hand: *"Doom low and high detail working!"*
+  (north star 1, design C, protected mode). Earlier confirmed builds kept beside it:
+  `ntvdmhost_0473d95d.exe` (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining),
+  `ntvdmhost_d57d586c.exe` (the s79 shelf).
   ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
   `d57d586c`. **md5 the slot; do not trust this line.**
   ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
@@ -139,7 +140,7 @@ The full surface list, with the primary source named for each, is in
 | # | North star | State |
 |---|---|---|
 | **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | 🟡 Wolf3D + Mario ✅ user-confirmed. **Doom low detail fixed on the rig (s80)**: 35 fps (was ~16), status bar 0.294 (0.28 = correct, 0.75 = defect), via a new flat 32-bit interpreter for its drawers. ⛔ Awaiting the user's hand test. Then the chain-4 de-interleave. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | ✅ **DONE — USER-CONFIRMED 2026-09-25**: Wolf3D, Mario, Doom low + high detail (`8d795b96`). Left over, no known visible symptom: the chain-4 → unchained de-interleave (`p_vgamem`). [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
 ✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
