@@ -1194,6 +1194,16 @@ static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
+/* ── A CLIENT THAT EXITS INSIDE A NESTED RUN HAS STILL EXITED. (s80) ───────────────────
+     The PM `AH=4Ch` arm answers 0, and the main loop reads 0 as "the client is gone". But
+     the IRQ, mouse-callback and 0303 injectors run the client's code in loops of their
+     own, and to them 0 was just "the handler did not IRET". So an exit taken inside an
+     interrupt handler -- DOS/4GW's own abort path is exactly that -- was logged as
+     "PM ISR ABANDONED", the dead client's context was restored, and the main loop entered
+     it again: every selector freed, and the host access-violated in the fault trampoline
+     (`DPMI FATAL c0000005`, bytes `1f 0f a9 0f a1 61` = pop ds/gs/fs, popa). One flag,
+     set by the one arm that means "exited", checked where the main loop enters PM. */
+static int g_pm_client_exited = 0;
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
 /* ── THE INT->BOP PATCH MAP, KEYED BY LINEAR ADDRESS. ─────────────────────────────
    It used to be keyed by OFFSET INTO A SINGLE 64K WINDOW at g_dpmi_code_base, and that
@@ -1630,6 +1640,8 @@ static int imem_page_ok(uint32_t lin);        /* fwd: page-validity guard, defin
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irq1_inj      = 0;  /* INT 09h injections (should track scancodes) */
+static DWORD          g_pm_irq_reflects = 0;      /* PM default IRQ stub -> BIOS action (s80) */
+static DWORD          g_pm_irq_reflect_logged = 0; /* bounded log budget for the above       */
 static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into the guest */
 static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_irqn_refuse_total = 0;
@@ -18972,6 +18984,49 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
+                    /* ── ★★★ THE DEFAULT HANDLER FOR A HARDWARE IRQ REFLECTS IT TO REAL
+                         MODE -- AND OURS HAD NO ARM FOR THE KEYBOARD. (s80) ────────────
+                         DOS/4GW hooks PM INT 09h at startup (`setPMvec 09 = 1cf:0024`) with
+                         a pass-up handler that CHAINS to the previous PM vector, i.e. to our
+                         `C4 C4 CF` default stub. DPMI 0.9 says that default reflects the
+                         interrupt to the real-mode vector. This dispatcher had no arm for 09h,
+                         so the chain landed in "unexpected PM stop", the injector ABANDONED
+                         the ISR at 0 phases, and the key stayed pending and was re-offered
+                         every pass.
+                       ★ MEASURED -- this is "run Doom from COMMAND.COM crashes". The key
+                         that launches the program (Enter's break code) arrives BEFORE Doom
+                         installs its own INT 09h, so it is DOS/4GW's pass-up handler that
+                         takes it. Eleven abandonments at 177:001b, then the twelfth ran
+                         DOS/4GW's own abort, printed through AH=06h one byte at a time:
+                             DOS/4GW Professional error (2002): transfer stack overflow
+                             on interrupt 09h at 1BF:00000070
+                         -- each abandoned dispatch had leaked one frame of its transfer
+                         stack. Launched directly, no key arrives until Doom has hooked 09h,
+                         which is why this was never seen. SETUP's "save and launch" is the
+                         same Enter key.
+                       ► Reflect only while IVT[n] is still OUR stub (no guest hooked the
+                         real-mode vector); then the real-mode handler is ours and its whole
+                         job is known -- the V86 `BOP 09` arm: consume the byte, and the EOI
+                         the BIOS handler ends with. A guest-hooked real-mode vector needs a
+                         true nested-V86 reflection, which does not exist yet; it keeps
+                         falling through to the loud stop below rather than being faked.
+                         IRQ2-7 get the same treatment with no device work: their real-mode
+                         default is a bare IRET that the host EOIs for (async_vec_is_our_stub). */
+                    if (vec >= 0x09 && vec <= 0x0F && async_vec_is_our_stub(vec - 0x08)) {
+                        HOST_LOCK();
+                        if (vec == 0x09) vdd_input_bios_consume(&g_in);  /* take the byte, re-arm if more queued */
+                        vdd_pic_eoi(&g_pic, (uint8_t)(vec - 0x08));
+                        HOST_UNLOCK();
+                        if (g_pm_irq_reflect_logged < 16) {
+                            ++g_pm_irq_reflect_logged;
+                            p = zput(p, "PM INT 0x"); p = zhexb(p, (BYTE)vec);
+                            p = zput(p, " default handler -> reflected to the BIOS (IVT is ours): consume+EOI\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        }
+                        ++g_pm_irq_reflects;
+                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP -> the stub's IRET */
+                        return 1;
+                    }
                     if (vec == 0x11) {                             /* BIOS equipment, in PM */
                         /* Same answer as the V86 arm below, and now the SAME
                            FUNCTION rather than the same constant copied twice --
@@ -20396,11 +20451,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> 8) & 0xFF;
                         if (ah == 0x4C) {                          /* terminate */
-                            DWORD ver = *(volatile WORD *)(ULONG_PTR)0x1600;
+                            /* (The `ver` canary that stood here read linear 0x1600 and
+                               expected 0x005A -- a leftover from the first DPMI spike, and
+                               it printed "MISMATCH" on every real client's exit.) */
+                            g_pm_client_exited = 1;
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
-                            p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
-                            p = zput(p, (ver == 0x005A) ? "  <<< DPMI client ran + exited cleanly >>>\r\n"
-                                                        : "  <<< MISMATCH >>>\r\n");
+                            p = zput(p, " svc, code=0x"); p = zhexb(p, (BYTE)(ax & 0xFF));
+                            p = zput(p, g_in_pm_irq ? " (INSIDE an injected interrupt handler)\r\n"
+                                                    : "\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             return 0;
                         }
@@ -21320,6 +21378,7 @@ static void dpmi_ensure_pmret_sel(void)
      runs on a different thread from the one that clears it. */
 static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
 {
+    if (g_pm_client_exited) return 0;          /* nothing left to interrupt */
     unsigned iv = 0x08 + irq;                    /* IRQ0-7 -> PM vectors 08h-0Fh */
     DWORD efl = cx->EFlags;
     WORD  ss;
@@ -21412,6 +21471,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
 static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
 {
     char lb[256], *lp = lb;
+    if (g_pm_client_exited) return 0;              /* nothing left to interrupt */
     /* snapshot the interrupted PM register file */
     DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
     DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
@@ -21574,7 +21634,13 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     /* ► AN ABANDONED HANDLER IS A LOUD EVENT. It leaves the client's interrupt
          bookkeeping permanently wrong -- see the phase loop -- so it must never again
          be readable as a routine "done=0". */
-    if (!done) {
+    if (!done && g_pm_client_exited) {
+        char ab2[128], *aq = ab2;
+        aq = zput(aq, "DPMI: the client EXITED inside its vec 0x"); aq = zhexb(aq, iv);
+        aq = zput(aq, " handler after "); aq = zhex(aq, (DWORD)ph);
+        aq = zput(aq, " phases -- not resuming it\r\n");
+        log_append(LOG_PATH, ab2, aq); serial_out(ab2, aq);
+    } else if (!done) {
         char ab2[192], *aq = ab2;
         aq = zput(aq, "DPMI: *** PM ISR ABANDONED after "); aq = zhex(aq, (DWORD)ph);
         aq = zput(aq, " phases / "); aq = zhex(aq, GetTickCount() - t_isr0);
@@ -21633,6 +21699,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
      RETF frame (CS:EIP, no FLAGS) because that is what the handler pops. */
 static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigned steps)
 {
+    if (g_pm_client_exited) return 0;          /* nothing left to call into */
     DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
     DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
     DWORD sEBP=VDM_REG(tib,VTIB_EBP), sEIP=VDM_REG(tib,VTIB_EIP), sESP=VDM_REG(tib,VTIB_ESP);
@@ -25873,6 +25940,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 DWORD pm_start_tick = GetTickCount();   /* headless wall-clock cap origin */
                 for (steps = 0; g_running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD ev, eip, csv, vec; int rc;
+                    if (g_pm_client_exited) break;   /* exited inside a nested run -- see the flag */
                     /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
                        never calls INT 21h 4Ch, so under the SMB auto-exit harness the PM loop
                        would run forever and wedge rt.bat's `start /wait`. Bound it by wall clock
@@ -26429,6 +26497,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              guest is the ONLY thing still running when the process is killed,
                              so this is the last instrument standing -- it has to actually arm. */
                         if (g_bp_n) dpmi_bp_arm();
+                        /* The injections above run the client's own code; if it exited in
+                           there, there is nothing left to enter. See g_pm_client_exited. */
+                        if (g_pm_client_exited) break;
                         QueryPerformanceCounter(&t0);
                         dpmi_enter_pm(tib);
                         QueryPerformanceCounter(&t1);
@@ -28477,6 +28548,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, " int"); p = zhexb(p, (BYTE)sv);
               p = zput(p, "h x"); p = zhex(p, g_simint_vec[sv]); any = 1; }
           if (!any) p = zput(p, " (none -- every simulated interrupt was serviced)"); }
+        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = zput(p, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
+        p = zhex(p, g_pm_irq_reflects);
         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         p = zput(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
         { unsigned dv, da, shown = 0;

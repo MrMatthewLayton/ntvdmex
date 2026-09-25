@@ -6,7 +6,7 @@
 > session. When this file starts growing session blocks again, split them out; it has
 > happened twice now (`return-ntvdm.md` in August, this file in September).
 
-- **Updated:** 2026-09-25 (session 79)
+- **Updated:** 2026-09-25 (session 80)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
   `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
@@ -133,54 +133,43 @@ The full surface list, with the primary source named for each, is in
 
 ## ▶▶▶ START HERE — the three north stars, set by the user 2026-09-25 (end of s79)
 
-**Agreed order: `3 → 1 → 2`.** Work on them has **NOT STARTED**; s79 ended at this line.
+**Agreed order: `3 → 1 → 2`.** s80 started #3. Full account: [`log/sessions/session-80.md`](log/sessions/session-80.md).
 
 | # | North star | State |
 |---|---|---|
-| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **REPRODUCED with a log**, root cause identified. Start here. |
-| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | One root cause, parked on a performance judgement. Needs a measurement before a design. |
-| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. |
+| **3** | **Execution chaining** — you cannot get from one program to another | 🟡 **Half done (s80).** Doom now starts and plays when typed at the shell, and quitting no longer faults the host. ⛔ **Quitting still ends the VDM instead of returning to the shell.** |
+| **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | One root cause. **Measure the SR2 write rate first** — the user decides the speed/correctness trade on that data. |
+| **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
-⛔ **Two questions were asked and NOT answered — ask them again before starting 1 or 2:**
-1. **Graphics: what is the performance bar?** Correct mode-Y may cost frame rate. Is
-   "correct but slower" acceptable, or must it stay at today's speed? *A product call.*
-2. **Sound: may we work from the publicly archived Gravis GUS SDK** and write our own
-   `docs/ref/gus.md` citing it (as with the 82077AA and 16550)? The repo is public, so
-   the SDK itself will not be mirrored here.
+✅ **The two questions — ANSWERED by the user 2026-09-25 (s80):**
+1. **Graphics performance bar: "measure first, then decide."** Bring back the SR2 write-rate
+   numbers for Wolf3D / Mario / Doom low detail; the user makes the call on them.
+2. **GUS: yes** — work from the publicly archived Gravis GUS SDK and write our own
+   `docs/ref/gus.md` citing it (as with the 82077AA and 16550). Do not mirror the SDK.
 
-### ▶ 3. Execution chaining — REPRODUCED, and it is two defects
+### ▶ 3. Execution chaining — the crash is fixed; returning to the parent is next
 
 The user's report: *"Inside DOOM Setup, save settings and run Doom, crashes. Same for
 Heretic, Hexen, Duke3D setups"* and *"double-click, command.com, navigate to
 demo\msdos\doom and run DOOM — crashes."*
 
-Reproduced deterministically: 6.22's `COMMAND.COM` with cwd `demo\msdos\doom`, keys
-typing `doom`. **Do not re-derive this — it is the starting point:**
+**s79's reading was wrong about the cause.** Doom never chose to exit: DOS/4GW aborted with
+*"error (2002): transfer stack overflow on interrupt 09h"*. The key that launches the
+program (Enter's break code) reaches DOS/4GW's pass-up `INT 09h` handler before Doom hooks
+its own; that handler chains to our PM default stub, which had **no dispatcher arm for
+09h**, so every such key abandoned the ISR and leaked a transfer-stack frame. The abort's
+`AH=4Ch` then ran *inside* the ISR, the injector resumed the dead client, and the host
+faulted. **Fixed in s80** (host `2f803674`, on the rig, ⚠ not yet confirmed by hand):
+the default handler reflects IRQs 09h–0Fh to the BIOS, and `g_pm_client_exited` stops a
+dead client being resumed. Verified: `chain.bat run`, Doom direct, Skyroads, Win16 Notepad.
 
-```
-INT21 AH=0A line max=80 n=04 [64 6f 6f 6d 0d ]          <- the shell read "doom"
-EXEC: child at seg=0x242 entry=040f:2372 (EXE) depth=01 <- EXEC worked
-... DOS/4GW starts, finds DPMI (2F/1687), runs ~4400 INT 31h services ...
-INT21h AH=4Ch -> client EXIT after 0x1134 svc
-DPMI: *** PM ISR ABANDONED after 0x34b phases -- the client's interrupt state is
-      now INCONSISTENT (vec 0x09, last cs:eip=0x0f:0x7251)
-DPMI FATAL: exception code=0xc0000005 at 0x0f16d929
-```
-
-1. **The DPMI client's PM `INT 21h AH=4Ch` tears down the whole VDM.** The handler is a
-   bare `return 0` (`main.c`, the `vec == 0x21 / ah == 0x4C` arm in the PM INT path) with
-   **no notion of the EXEC parent** — `depth=01` says COMMAND.COM is waiting for it.
-2. **Then the host itself access-violates** (`0xC0000005` in our own 32-bit code) because
-   it unwinds with a protected-mode ISR mid-flight. ⛔ **A guest exiting must never fault
-   the host, whatever else is wrong.** Fix this one first — it is the serious half.
-
-⚠ Why it was never caught: launched directly, Doom never exits — the headless deadline
-kills it. **The exit-with-a-parent path has essentially never run.** Any fix needs a
-regression test that actually exercises it.
-⚠ The `<<< MISMATCH >>>` on that line is a **stale debug canary** from an old spike (it
-reads a word at linear `0x1600` and expects `0x005A`). Not the bug. Delete it.
-⚠ `SETUP.EXE` was tried first and did **not** reproduce — blind menu keys missed the
-"save and launch" item and SETUP exited cleanly. The shell route is the reliable repro.
+▶ **Next: the PM `AH=4Ch` must return to the EXEC parent.** It still ends the whole VDM.
+Needs a real DPMI client **teardown** (the switch-in is one-shot global state), then the
+real-mode `AH=4Ch` for the current PSP, then a **second** client must work (Doom twice).
+Acceptance test: `debug\rig\chain.bat quit` — `ver` must print after Doom exits.
+⚠ `chain.bat` is not in `bmstage.sh`'s list; copy it by hand with CRLF.
+⚠ Ask the user to try **SETUP → save and launch** by hand on `2f803674` — the same Enter-key
+path, but not yet run.
 
 ### ▶ 1. Graphics — one root cause, and the parked verdict may be about the wrong design
 
