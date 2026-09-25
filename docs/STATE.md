@@ -14,19 +14,14 @@
   *No git tags yet: the first will be `0.0.1` at the first beta.*
   ⚠ **That is a three-item confirmation, not a shelf sweep** — the stable zip below stays
   the anchor until someone runs the whole shelf.
-  ⛔⛔ **AND `git diff ff0d956..HEAD -- src/` IS NO LONGER EMPTY.** This bullet claimed it
-  was, which was true when written and stopped being true one commit later. **TWO
-  unconfirmed `src/` changes are now stacked on the rig**, which breaks the standing rule
-  of one observable change per by-hand test:
-  | commit | change |
-  |---|---|
-  | `8858c52` | RTC **alarm + update-ended** interrupts — landed *after* this checkpoint |
-  | `ea485e7` | the **82077AA floppy controller** |
-  | `d21cc7e5` | INT 2Fh `AX=122Eh` message tables |
-  | `92e2136` | INT 21h caller-from-stack + the BOP fall-through diagnostic |
-  All are dormant unless a guest asks (the last two are log-only), so the by-hand pass is
-  mostly *"did anything break"* rather than *"does the new thing work"*. If either is suspected, roll back to
-  `debug\prev\ntvdmhost_prev.exe` (**`71ef4737`**) FIRST and re-test, then bisect.
+  ✅ **CLEARED 2026-09-25.** Eight `src/` changes had stacked here unconfirmed — the RTC
+  alarm, the 82077AA, the `AX=122Eh` tables, the BOP work, the shell fallback and the log
+  caps — which broke the standing rule of one observable change per by-hand test. The user
+  has now run them: **6.22's `COMMAND.COM` interactive**, and Doom, Skyroads and the rest
+  of the shelf *"still working as they did before"*. `debug\prev\ntvdmhost_prev.exe` was
+  promoted to that build (**`297e2172`**).
+  ⚠ **The checkpoint commit above has NOT moved** — it still names `ff0d956`/`71ef4737`.
+  Moving it is a deliberate act and belongs with a shelf sweep, not with one good day.
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
