@@ -1065,6 +1065,7 @@ static int      g_ui_forced;                              /* this body run was r
      a torn sample costs one bucket, not a wrong conclusion. */
 #define KEYLAT_RING 32
 static uint32_t qpc_us(LONGLONG d);          /* fwd: defined with the lock instruments */
+static void modey_tl_report(void);          /* fwd: north star 1, with the mode-Y remap */
 static int host_readable(const void *addr, SIZE_T len);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_keylat_t[KEYLAT_RING];
 static volatile LONG     g_keylat_head, g_keylat_tail;
@@ -6133,6 +6134,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
              way. An instrument that only reports on the tidy exit cannot see the
              guests it exists for; that is the "an absence in the report means nothing"
              trap, and it has already cost this project a session on ZAR. */
+        modey_tl_report();   /* north star 1: the guests that need it leave this way */
         {   static char vr2[2048];
             int n2 = vdd_video_regs_dump(&g_vid, vr2, (int)sizeof vr2);
             if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
@@ -11623,6 +11625,46 @@ static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
 static DWORD  g_ysel_calls = 0;   /* modey_remap_select() entered with the remap live  */
 static DWORD  g_ysel_same  = 0;   /* ...and the window was already where it wanted     */
 static DWORD  g_ysel_zero  = 0;   /* ...and the mask selected no plane at all          */
+/* ── ★ NORTH STAR 1: WHAT DOES MODE Y COST, PER SECOND? (s80) ─────────────────────────
+     The mode-Y fix was parked on a performance judgement -- "arming the A0000 trap makes
+     the interpreter the CPU" -- that nobody had measured, and the user's bar is "measure
+     first, then decide". Every map-mask write ALREADY traps (it is an OUT to 3C5h) and
+     already remaps the window here, so the question is not "trap per mask change or per
+     write" in the abstract; it is these numbers, per second of play:
+         sel    map-mask writes that reached us        (= SR2 write rate)
+         swap   the ones that actually moved the window (Unmap + MapViewOfFileEx)
+         fan    multi-plane windows closed               (the case one mapping cannot do)
+         fanB   bytes those windows CHANGED -- a LOWER bound on the guest's stores under a
+                multi-plane mask, since a same-value store is invisible (which is the
+                whole defect); a trap-per-write design would pay per store
+         us     host time spent inside this function     (the current design's own cost)
+         flip   CRTC 0Ch (start address high) writes      (guest frames, for page-flippers)
+     Timed with RDTSC, not QPC: on XP QPC can be the ACPI PM timer at ~1 us a read, and
+     this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
+     the thing measured. Cycles are converted to us once, at report time, against QPC. */
+#define YTL_SECS 90
+static DWORD  g_ytl_sel[YTL_SECS], g_ytl_swap[YTL_SECS], g_ytl_fan[YTL_SECS];
+static DWORD  g_ytl_fanb[YTL_SECS], g_ytl_flip[YTL_SECS];
+static unsigned long long g_ytl_cyc[YTL_SECS];
+static DWORD  g_ytl_t0 = 0;
+static unsigned long long g_ytl_tsc0 = 0;
+static LONGLONG g_ytl_qpc0 = 0;
+static DWORD  g_yfan_bytes = 0;   /* changed bytes fanned out, whole run */
+/* ⚠ fanB IS NOT A STORE COUNT. Moving 0x03 -> 0x0c keeps the scratch (both want it), so
+     the diff against the seed ACCUMULATES across windows and the same bytes are counted
+     again each time -- measured ~90M/s in Doom's low detail, which no renderer stores.
+     `fanN` counts bytes that changed SINCE THE PREVIOUS WINDOW CLOSED, against a shadow
+     of the scratch: a true lower bound on the guest's multi-plane stores (a store of the
+     value already there is still invisible -- that is the defect itself). */
+static BYTE   g_yshadow[MODEY_WIN];
+static DWORD  g_yfan_new = 0;
+static DWORD  g_ytl_fann[YTL_SECS];
+static unsigned long long ytl_rdtsc(void)
+{
+    unsigned lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((unsigned long long)hi << 32) | lo;
+}
 /* ── DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE? ──────────────
      `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
      planes, and the fan-out is the only path in this host that writes ONE byte to
@@ -11960,7 +12002,76 @@ static long modey_latch_delta(void)
 
 static void ygr4_close_run(void);       /* defined with the GR4 counters below */
 
+static void modey_remap_select_body(void *ctx, int mask);
 static void modey_remap_select(void *ctx, int mask)
+{
+    unsigned long long c0;
+    DWORD sec, sw0, fan0, fb0, fn0;
+    if (!g_yremap) return;
+    if (!g_ytl_t0) {
+        LARGE_INTEGER q; QueryPerformanceCounter(&q);
+        g_ytl_t0 = GetTickCount(); g_ytl_tsc0 = ytl_rdtsc(); g_ytl_qpc0 = q.QuadPart;
+    }
+    sec = (GetTickCount() - g_ytl_t0) / 1000u;
+    sw0 = g_yswaps; fan0 = g_yfanouts; fb0 = g_yfan_bytes; fn0 = g_yfan_new;
+    c0 = ytl_rdtsc();
+    modey_remap_select_body(ctx, mask);
+    if (sec < YTL_SECS) {
+        g_ytl_cyc[sec]  += ytl_rdtsc() - c0;
+        g_ytl_sel[sec]  += 1;
+        g_ytl_swap[sec] += g_yswaps - sw0;
+        g_ytl_fan[sec]  += g_yfanouts - fan0;
+        g_ytl_fanb[sec] += g_yfan_bytes - fb0;
+        g_ytl_fann[sec] += g_yfan_new - fn0;
+        /* Cumulative, reported as deltas. CR0C (start address HIGH), not the paired
+           counter: Doom flips pages by writing 0Ch alone -- its pages are 0x4000 apart,
+           so the low byte never changes -- and crtc_start_writes counts only on 0Dh. */
+        g_ytl_flip[sec]  = g_vid.crtc_w[0x0C];
+    }
+}
+/* ★ NORTH STAR 1's measurement, printed -- see g_ytl_*. Decimal, one value per second of
+   mode-Y activity, so a row reads straight across as a rate. Called from BOTH exits:
+   a DOS/4GW guest leaves through the watchdog's forced exit and never reaches the STAGE2
+   summary, and Doom is the guest this exists for. Prints once. */
+static void modey_tl_report(void)
+{
+    static int done = 0;
+    char b[1400], *p = b;
+    LARGE_INTEGER qn; unsigned long long cpu; DWORD us_run, t, last = 0;
+    int row;
+    static const char *nm[7] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN" };
+    if (done || !g_ytl_t0) return;
+    done = 1;
+    QueryPerformanceCounter(&qn);
+    us_run = qpc_us(qn.QuadPart - g_ytl_qpc0);
+    cpu = us_run ? (ytl_rdtsc() - g_ytl_tsc0) / us_run : 0;    /* cycles per us */
+    for (t = 0; t < YTL_SECS; ++t) if (g_ytl_sel[t]) last = t;
+    p = zput(p, "STAGE2: MODEYTL cyc_per_us="); p = zdec(p, (DWORD)cpu);
+    p = zput(p, " secs="); p = zdec(p, last + 1);
+    p = zput(p, " fanB_total="); p = zdec(p, g_yfan_bytes);
+    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+    for (row = 0; row < 7; ++row) {
+        DWORD prevflip = 0;
+        p = zput(p, "STAGE2: MODEYTL "); p = zput(p, nm[row]); p = zput(p, "=");
+        for (t = 0; t <= last; ++t) {
+            DWORD v = 0;
+            switch (row) {
+            case 0: v = g_ytl_sel[t];  break;
+            case 1: v = g_ytl_swap[t]; break;
+            case 2: v = g_ytl_fan[t];  break;
+            case 3: v = g_ytl_fanb[t]; break;
+            case 4: v = cpu ? (DWORD)(g_ytl_cyc[t] / cpu) : 0; break;
+            case 5: v = g_ytl_flip[t] ? g_ytl_flip[t] - prevflip : 0;
+                    if (g_ytl_flip[t]) prevflip = g_ytl_flip[t]; break;
+            case 6: v = g_ytl_fann[t]; break;
+            }
+            p = zput(p, t ? "," : ""); p = zdec(p, v);
+        }
+        p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+    }
+}
+
+static void modey_remap_select_body(void *ctx, int mask)
 {
     int want, p, n = 0, sel[4];
     (void)ctx;
@@ -11987,7 +12098,9 @@ static void modey_remap_select(void *ctx, int mask)
         const BYTE *sc = (const BYTE *)g_yview[5];
         for (k = 0; k < MODEY_WIN; ++k) {
             BYTE b;
+            if (sc[k] != g_yshadow[k]) { ++g_yfan_new; g_yshadow[k] = sc[k]; }
             if (sc[k] == g_yseed[k]) continue;   /* untouched: not this mask's business */
+            ++g_yfan_bytes;
             b = sc[k];
             yfan_bar_note(k, g_yprev_mask);      /* is this how the bar collapses? */
             for (p = 0; p < 4; ++p)
@@ -12012,7 +12125,7 @@ static void modey_remap_select(void *ctx, int mask)
                                                             fan-out can tell writes from
                                                             bytes nobody touched */
         unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
-        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; }
+        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; g_yshadow[k] = s2[k]; }
     }
     if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
@@ -29575,6 +29688,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            mode never touches -- so it has reported four zeroes for every mode-Y run
            ever made and told us nothing. These are the arrays a mode-Y frame is
            actually built from, plus the map-mask values the program really used. */
+      modey_tl_report();   /* NORTH STAR 1's measurement -- see g_ytl_* */
       p = zput(p, "STAGE2: modeY remap="); p = zhex(p, (DWORD)g_yremap);
       p = zput(p, " swaps="); p = zhex(p, g_yswaps);
       p = zput(p, " fanouts="); p = zhex(p, g_yfanouts);

@@ -25,11 +25,12 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`297e2172`** — promoted
-  2026-09-25 after the user confirmed by hand: **MS-DOS 6.22's `COMMAND.COM` as an
-  interactive prompt**, plus Doom, Skyroads and the rest of the shelf *"still working
-  as they did before"*. That retires `71ef4737`, which had been the target while eight
-  changes stacked on top of it.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`b6a8a95b`** — promoted
+  2026-09-25 (s80) after the user confirmed execution chaining by hand: executables from
+  the shell, and Setup → game for Doom, Hexen and Duke3D. The displaced `d57d586c` (the
+  s79 whole-shelf build) is kept as `debug\prev\ntvdmhost_d57d586c.exe`.
+  ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
+  `d57d586c`. **md5 the slot; do not trust this line.**
   ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
   HUMAN confirmed"* and every `bmstage --host` run printed
   `ntvdmhost_prev.exe = , the confirmed one, untouched` — **with an empty md5** — and
@@ -133,11 +134,11 @@ The full surface list, with the primary source named for each, is in
 
 ## ▶▶▶ START HERE — the three north stars, set by the user 2026-09-25 (end of s79)
 
-**Agreed order: `3 → 1 → 2`.** s80 started #3. Full account: [`log/sessions/session-80.md`](log/sessions/session-80.md).
+**Agreed order: `3 → 1 → 2`.** #3 done (s80); **#1 in progress.** Full account: [`log/sessions/session-80.md`](log/sessions/session-80.md).
 
 | # | North star | State |
 |---|---|---|
-| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **Done on the rig (s80), awaiting the user's hand test.** `doom` at the shell plays; quitting returns to the prompt; running it again works. |
+| **3** | **Execution chaining** — you cannot get from one program to another | ✅ **DONE — USER-CONFIRMED 2026-09-25** on `b6a8a95b`: executables from the shell, and Setup → game for Doom, Hexen and Duke3D. (Heretic's setup not reported.) |
 | **1** | **Graphics** — Wolf3D, Mario and Doom low-res correct | One root cause. **Measure the SR2 write rate first** — the user decides the speed/correctness trade on that data. |
 | **2** | **Sound** — Gravis Ultrasound, so Heaven7 plays music | In the contract already; sound has **never been inventoried**. **Cleared to use the archived GUS SDK.** |
 
@@ -147,7 +148,7 @@ The full surface list, with the primary source named for each, is in
 2. **GUS: yes** — work from the publicly archived Gravis GUS SDK and write our own
    `docs/ref/gus.md` citing it (as with the 82077AA and 16550). Do not mirror the SDK.
 
-### ▶ 3. Execution chaining — fixed on the rig, needs the user's hand test
+### ✅ 3. Execution chaining — done, user-confirmed
 
 The user's report: *"Inside DOOM Setup, save settings and run Doom, crashes. Same for
 Heretic, Hexen, Duke3D setups"* and *"double-click, command.com, navigate to
@@ -163,8 +164,9 @@ demo\msdos\doom and run DOOM — crashes."* Full account:
    down (`dpmi_client_teardown()`) and terminated in real mode, and the parent resumes. A
    second client then starts in an identical machine.
 
-▶ **Owed by a human:** SETUP → save and launch; Heretic / Hexen / Duke3D setups; `doom`,
-quit, `doom` at the prompt by hand. Rig acceptance tests: `debug\rig\chain.bat run|quit|twice`
+✅ **User-confirmed 2026-09-25** on `b6a8a95b`: *"Opening executables from shell, works.
+Setup > Game works for Doom, Hexen, Duke3D."* `debug\prev\ntvdmhost_prev.exe` promoted to
+`b6a8a95b` (the displaced `d57d586c` kept as `ntvdmhost_d57d586c.exe`). Rig acceptance tests: `debug\rig\chain.bat run|quit|twice`
 (⚠ not in `bmstage.sh`'s list — copy by hand with CRLF).
 ⚠ `AH=48h` now stamps the current PSP and a child's exit frees what it owns — this touches
 **every** EXEC'd program. Watch MEM and the TSR rows.
