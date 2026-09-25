@@ -486,6 +486,40 @@ is ours; `cfg\autoexec.txt` points it anywhere, including at NT's. ⚠ A path th
 exist is the normal case — a DOS with no AUTOEXEC.BAT simply has none. The bug was the
 empty string, not the missing file.
 
+### ⛔⛔ THE PRIVATE NT CONTRACT IS NOT ONLY BOPs -- IT REACHES INTO INT 21h
+
+Tracing the last gate backwards found the blocker **outside this surface entirely**.
+COMMAND.COM's *resident* part, guest `0x1692`:
+
+```
+mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
+mov al,7 ; mov ah,53h ; int 21h ; mov [0x328],al
+```
+
+Documented `AH=53h` is **BPB->DPB**, takes `DS:SI`/`ES:BP`, and has **no `AL`
+sub-function**. XP's COMMAND.COM uses it as a private query with `AL` as a selector and
+reads the answer out of `AL` (it also uses `AL=2`). Our handler returned `AX=1` and
+`CF=1` -- "unimplemented" -- which put a **1** in `[0x327]`, and three separate gates read
+`cmp byte [0x327],1 / jz` as *"do not be the interactive shell"*.
+
+★ So our "unimplemented" was not inert. **It was an answer, and the wrong one.**
+
+⚠ `AX=0` is **provisional and not measured**. It is "not 1", chosen to test whether
+`[0x327]` was the gate -- and it was not enough on its own. The right values can only come
+from `NTDOS.SYS`: a stock ntvdm run is the only oracle for a private call. **Do not
+promote it to a fact without that run.** (6.22's `COMMAND.COM` re-tested after the change:
+unaffected -- prompt, `ver`, `dir` all still correct.)
+
+### ✅ Two more sub-functions answered
+
+| sub | what it is | our answer |
+|---|---|---|
+| `0D` | the startup batch path (above) | `cfg\autoexec.txt`, default `C:\AUTOEXEC.BAT` |
+| `0F` | **the host's `PROMPT`**. `0x0F00BEF6`: if `[0x0F0650BC]` is zero it calls `setBX(0)` and returns; otherwise `GetEnvironmentVariableA` with the name at VA `0x0F00393C` = **`"PROMPT"`** | `BX = 0` -- XP's own zero-path |
+
+Both were previously answered with **no register set at all**, i.e. the guest read
+whatever it happened to be holding.
+
 ### ⛔ It is not interactive yet
 
 The prompt prints; the keyboard is not read. Keys reach the guest — `sc_push=0x10`,

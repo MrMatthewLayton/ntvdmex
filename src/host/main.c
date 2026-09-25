@@ -27399,6 +27399,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
             }
+            /* ── ★ sub 0F = THE HOST'S `PROMPT`, AND IT ANSWERS IN BX. ──────────────
+                 0x0F00BEF6: if the global at [0x0F0650BC] is zero it calls **setBX(0)**
+                 and returns; otherwise it reads an environment variable via
+                 GetEnvironmentVariableA with the name at VA 0x0F00393C -- which is the
+                 string **"PROMPT"** -- into a 0x104 buffer.
+               ⇒ It passes the HOST's PROMPT through to the DOS shell, and reports in BX.
+               ▸ BX = 0, which is exactly the branch XP itself takes when it has nothing
+                 to pass. We were setting no register at all, so the guest read whatever
+                 BX happened to hold -- an unimplemented call answering at random again. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x0F) {
+                VDM_REG(tib, VTIB_EBX) &= 0xFFFF0000u;   /* BX = 0: no host PROMPT */
+                if (!quiet) {
+                    p = zput(p, "         sub 0F answered: no host PROMPT (BX=0)\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                VDM_REG(tib, VTIB_EIP) += 4;
+                continue;
+            }
             /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
                  The guest named this gap itself. With `/p` on its command line COMMAND.COM
                  allocates a 7-paragraph block (`AH=48h -> 0x0D6D`), issues this BOP with

@@ -1281,7 +1281,23 @@ int dos_int21(dos_machine_t *m)
               tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                             "block drivers) -- said once per run\r\n"); } }
         m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));
-        SETAX(1); ERRCF();
+        /* ── ⚠⚠ PROVISIONAL, AND THE REASON IS WORTH MORE THAN THE VALUE. ──────────
+             Documented AH=53h is BPB->DPB and takes DS:SI / ES:BP with NO AL
+             sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
+             selector -- guest 0x1692 in its resident part:
+                 mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
+                 mov al,7 ; mov ah,53h ; int 21h ; mov [0x328],al
+             (and AL=2 elsewhere). It reads the ANSWER OUT OF AL. Returning AX=1 put a
+             1 in [0x327], and three separate gates read `cmp byte [0x327],1 / jz` as
+             "do not be the interactive shell" -- so our "unimplemented" was not inert,
+             it was an ANSWER, and the wrong one.
+           ★ THE PRIVATE NT CONTRACT IS NOT ONLY BOPs. It reaches into INT 21h as
+             sub-functions of a documented call. See docs/inventory/bop.md.
+           ⛔ 0 IS NOT MEASURED. It is "not 1", chosen to test whether [0x327] is the
+             gate -- the right values must come from NTDOS.SYS via a stock ntvdm run,
+             which is the only oracle for a private call. Do not promote this to a
+             fact without that run. */
+        SETAX(0); OKCF();
     } else if (ah == 0x5E) {                    /* network machine name / printer */
         uint8_t al5e = (uint8_t)(R_AX & 0xFF);
         if (al5e == 0x00) {                     /* oracle: AX=0, CF=0 */
