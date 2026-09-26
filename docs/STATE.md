@@ -112,7 +112,6 @@ The full surface list, with the primary source named for each, is in
 
 | | What is known |
 |---|---|
-| **A handler that EOIs before `iret` is re-entered** | `p_irq8.com`'s `irq8.nested` = 4 vs 0 on three oracles. The host's interrupt gate asks *IF or VIF* (under VME a V86 `cli` moves only VIF). Every line has it. Fixing it touches nested real-mode calls (ZAR's sound init) — needs its own timing/sound regression pass. [`inventory/pic.md`](inventory/pic.md) |
 | **Chain-4 → unchained de-interleave** | `p_vgamem`'s one open row: writes made in chained 13h are not de-interleaved when a program unchains. No visible symptom known. |
 | **Mode-Y interpretation costs CPU** | Wolf3D is interpreted almost continuously (~155 cycles/instruction). Frame rate held on the rig; a slower machine would feel it. The lever is the interpreter's speed. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **Duke3D took no keyboard on one machine** | Reproduced on a friend's Win98-era box only; works on both of the user's own boxes. |
@@ -167,9 +166,9 @@ story, with every measurement and every dead end, is in
 
 ### Then — candidates, no order agreed yet (ask the user)
 
-- ▶ **The IF/VIF interrupt gate — USER PICKED THIS (s81).** A census build (`c085c13`, host
-  `82489d48`, **not yet on the rig**) measures what the gate reads before anything changes;
-  the runs to make and the decision rule are in [`log/sessions/session-81.md`](log/sessions/session-81.md).
+- ✅ **The IF/VIF interrupt gate — DONE s81 (rig-verified, NOT yet by hand).** `irq8.nested` 0,
+  agreeing with all oracles; host `f484fc3d` in `bin\`. **Owed by hand: ZAR (its sound init
+  was the named risk), Skyroads by ear.** [`log/sessions/session-81.md`](log/sessions/session-81.md).
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
 - **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`

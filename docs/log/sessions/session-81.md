@@ -1,8 +1,66 @@
 # Session 81 — the IF/VIF interrupt gate (`irq8.nested`)
 
-**Date:** 2026-09-26 · **Branch:** `m9/completeness` · **Rig:** OFF at session start (share not
-mounted, box not answering) — nothing deployed, nothing run.
-**Host build:** `82489d48` built locally, **not on the rig**. `bin\` is still `ad6e25cd`.
+**Date:** 2026-09-26 · **Branch:** `m9/completeness` · **Rig:** on all along. At first I read
+the unmounted share as "rig off"; `mount_smbfs` it after every reboot.
+**Host build:** **`f484fc3d`** in `bin\` (displaced `ad6e25cd` archived under `debug\prev\`;
+`ntvdmhost_prev.exe` = `a0294462`, untouched). **Rig-verified, not yet confirmed by hand.**
+
+---
+
+## ✅ Result
+
+`irq8.nested` **4 → 0**, AGREE with msdos622 / dosbox-x / pcem / pcem-vesa. Regressions:
+the rest of `p_pic` is unchanged (its two DISPUTED rows are the known ones); Skyroads
+`n8=0 max_ms=7`, with the same `irq0_inj` as before the fix; Notepad launches, X closes it,
+the host exits; off-VM battery 1670/0. Logs in `runs/s81_ifv/`.
+
+### What the census measured (runs 1–5, `p_irq8`)
+
+| Question | Answer |
+|---|---|
+| IF in a live V86 frame (async path) | **1 in every sample** — no `00`/`01` states at all |
+| VIF after we `SetThreadContext` it clear, read straight back | stays clear (`10` ×0x8b) — the write sticks |
+| IF in the VTIB after an event exit | the **virtual** flag (IF=0 in 0x25c samples inside the handler) |
+| VIF in the VTIB | never set, in any sample |
+| `0x714` bit 9 | 0 in every sample — uninformative here |
+| Where the re-entries came from | the **cooperative** device path, at the handler's own EOI `out` (`0100:02F9`), VTIB `0x30246` |
+
+**The chain:** an async IRQ 0 was let in while the RTC handler had VIF clear, because live
+IF=1 satisfied "IF or VIF". It pushed a FLAGS image with IF=1; INT 08h's `iret` set VIF
+*inside the RTC handler*; its next I/O exit then honestly reported interrupts on, and the
+cooperative gate re-entered IRQ 8. 5 such IRQ 0 deliveries ↔ 5 corrupted handler runs ↔
+`nested` 4–5.
+
+### The fix
+
+The async V86 gate tests **VIF alone** once any live frame has shown VIF set
+(`g_vif_live_seen`, i.e. proof that VME maintains it). Until then, or on a CPU without VME,
+it keeps the old IF-or-VIF test, so nothing starves. The cooperative gates are unchanged:
+their IF is honest.
+
+### Starvation risk: measured, not argued
+
+| Guest | live samples | VIF-clear stretches | Note |
+|---|---|---|---|
+| Skyroads | all `110` | 0 | identical before/after |
+| ZAR | none | — | its real-mode stretches never reach this gate |
+| Doom | none | — | same |
+| `p_irq8` after fix | `100` ×0x38 (refused, correctly) | max 16 ms | the handler windows |
+
+### Kept as standing instruments
+`STAGE2: IFV census …` (per path, per IF/VIF state, plus shadow and re-entry counts) and the
+`STAGE2: IFV irqNN` delivery trace. Both are now also printed on the headless forced exit
+(`ifv_report()`), which is how ZAR's runs end. The per-delivery `GetThreadContext` readback
+has been removed: its question is answered and it cost a syscall on every injection.
+
+### Owed by hand
+**ZAR** (its sound init was the named risk; still silent for unrelated reasons, so check
+that it *renders and plays as before*), **Skyroads by ear**, plus s80's three settings and
+Heretic items.
+
+---
+
+## The original plan (kept)
 
 ---
 

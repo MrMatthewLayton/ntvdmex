@@ -226,9 +226,23 @@ spinning in a loop got its RTC interrupt once per timer tick — **5 in 5 BIOS t
 |---|---|---|---|---|
 | `irq8.fired` — the RTC's 1024 Hz periodic IRQ reaches a hooked INT 70h | `1` | `1` | `1` | **`1`** ✅ (was `0`) |
 | `irq8.regc.pf` — PF as the handler sees it | `1` | `1` | `1` | `1` ✅ |
-| `irq8.nested` — handler re-entered while running | `0` | `0` | `0` | **`4`** ⛔ |
+| `irq8.nested` — handler re-entered while running | `0` | `0` | `0` | **`0`** ✅ (was `4`; fixed s81) |
 
-### ⛔ `irq8.nested`: the interrupt-enable gate, not the slave — OPEN, deliberately
+### ✅ `irq8.nested`: FIXED s81 — the async gate's live IF was never the guest's
+
+**Measured (s81, census `ifv_note`):** in a *live* V86 frame, the one the async injector reads
+with `GetThreadContext`, IF was 1 in every sample. That includes samples inside a handler
+that had not executed `sti`, and reads straight after we `SetThreadContext` it clear. VIF is
+the only live signal. The VTIB after an event exit is different: there IF *is* the virtual
+flag. The chain that re-entered the handler: an IRQ 0 let in while VIF was clear pushed a
+FLAGS image with IF=1, and its `iret` turned the RTC handler's interrupts **on**. The
+cooperative path then read an honest VTIB that had been made wrong. **Fix:** the async V86
+gate tests VIF alone once any live frame has shown VIF set (proof that VME keeps it); before
+that it falls back to IF-or-VIF. Skyroads' timing is unchanged, the Win16 close works, and
+ZAR's and Doom's real-mode stretches never reach that gate. See
+[`log/sessions/session-81.md`](../log/sessions/session-81.md).
+
+The original analysis, kept for the record:
 
 The probe's handler EOIs *before* its `iret`. A real CPU cleared IF on the way in, so the next
 IRQ 8 waits for the `iret`. Ours re-entered 4 times. The host's gate asks **"IF or VIF"**

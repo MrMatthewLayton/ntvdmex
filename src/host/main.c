@@ -2917,23 +2917,58 @@ static void async_why_note(unsigned irq, unsigned why)
      Both are claims about what the bits READ, so count them rather than argue:
        path 0  the async injector's live V86 frame (GetThreadContext on the CPU thread)
        path 1  the cooperative IRQ0/IRQ1 gate, reading the VTIB after an event exit
-     state = IF<<1 | VIF. "shadow" counts deliveries the current gate made that a VIF-only
-     gate would have refused, per line; `starve` is the longest unbroken stretch in which
-     path 0 saw VIF clear -- how long a VIF-only gate would have held every line off. */
-static DWORD g_ifv_census[2][4];
+       path 2  the cooperative device-line gate (guest_if_enabled), same VTIB
+     state = IF<<2 | VIF<<1 | S, where S is bit 9 of the kernel's FIXED_NTVDMSTATE word
+     at 0x714 -- the VDM's virtual IF, which s11 found the kernel maintaining itself.
+     "shadow" counts deliveries the current gate made that a VIF-only gate would have
+     refused, per line; `starve` is the longest unbroken stretch in which path 0 saw VIF
+     clear -- how long a VIF-only gate would have held every line off.
+     s81 run 1 (p_irq8): live IF was 1 in every sample; the nested IRQ 8s came through
+     path 2, which the first cut did not count -- hence S and the delivery trace. */
+static DWORD g_ifv_census[3][8];
 static DWORD g_ifv_shadow[16];
 static DWORD g_ifv_starve_t0, g_ifv_starve_max_ms, g_ifv_starve_n;
+static int   g_ifv_starve_open;
+static int   g_vif_live_seen;   /* a live V86 frame has shown VIF set: VME is keeping it */
+static DWORD ifv_state(DWORD fl)
+{
+    DWORD s = (*(volatile DWORD *)(ULONG_PTR)0x714 >> 9) & 1u;
+    return ((fl >> 7) & 4u) | ((fl & EFLAGS_VIF_BIT) ? 2u : 0u) | s;
+}
 static void ifv_note(int path, DWORD fl)
 {
     int vif = (fl & EFLAGS_VIF_BIT) != 0;
-    g_ifv_census[path][((fl >> 8) & 2u) | (DWORD)vif]++;
+    g_ifv_census[path][ifv_state(fl)]++;
     if (path != 0) return;
-    if (!vif) { if (!g_ifv_starve_t0) { g_ifv_starve_t0 = GetTickCount() | 1u; ++g_ifv_starve_n; } }
-    else if (g_ifv_starve_t0) {
+    if (!vif) { if (!g_ifv_starve_open) { g_ifv_starve_t0 = GetTickCount(); g_ifv_starve_open = 1; ++g_ifv_starve_n; } }
+    else if (g_ifv_starve_open) {
         DWORD d = GetTickCount() - g_ifv_starve_t0;
         if (d > g_ifv_starve_max_ms) g_ifv_starve_max_ms = d;
-        g_ifv_starve_t0 = 0;
+        g_ifv_starve_open = 0;
     }
+}
+/* Deliveries, with the gate's view of them: enough to see a handler re-entered and what
+   the flags said when it was. A delivery that lands within 0x60 bytes past its OWN
+   vector's entry point is, to a first approximation, the handler being re-entered:
+   counted per line and always traced (the first eight of any kind are traced too, for
+   context). This is the instrument that found irq8.nested's path; it stays as a detector. */
+#define IFV_TRACE_MAX 40
+static struct { BYTE irq, path, st; WORD cs, ip; DWORD fl; } g_ifv_trace[IFV_TRACE_MAX];
+static LONG g_ifv_ntrace;
+static DWORD g_ifv_reenter[16];
+static WORD peekw(DWORD lin);
+static void ifv_trace(unsigned irq, int path, DWORD fl, DWORD cs, DWORD ip)
+{
+    LONG i;
+    unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    int re = (cs == peekw(vec * 4 + 2)) && ((WORD)(ip - peekw(vec * 4)) < 0x60);
+    if (re) ++g_ifv_reenter[irq & 15];
+    if (!re && g_ifv_ntrace >= 8) return;
+    i = InterlockedIncrement(&g_ifv_ntrace) - 1;
+    if (i >= IFV_TRACE_MAX) return;
+    g_ifv_trace[i].irq = (BYTE)irq; g_ifv_trace[i].path = (BYTE)path;
+    g_ifv_trace[i].st = (BYTE)ifv_state(fl); g_ifv_trace[i].fl = fl;
+    g_ifv_trace[i].cs = (WORD)cs; g_ifv_trace[i].ip = (WORD)ip;
 }
 static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flight     */
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
@@ -3308,8 +3343,26 @@ static int async_inject_irq(unsigned irq)
          I/O right up to the death (INT 31h 0302 -> callRM), so the CPU is in V86 for
          most of those attempts and every one of them left here without a word. Give it
          a why code like every other exit; async_early_bail's cap keeps it bounded. */
+    /* ── IN A LIVE V86 FRAME, IF IS NOT THE GUEST'S. VIF IS. (s81, irq8.nested) ─────────
+         Measured with the census (ifv_note): every live V86 frame this function has read
+         has IF=1, including those inside a handler that has not executed STI -- the
+         kernel keeps the real IF on under VME, and reads back IF=1 even straight after we
+         SetThreadContext it clear. So "IF or VIF" here was "always". What that cost was
+         not only the re-entry itself: a tick let in while VIF was clear pushes a FLAGS
+         image with IF=1 (below), and its IRET then turns the interrupted handler's
+         interrupts ON -- which is how p_irq8's INT 70h handler was re-entered 4 times
+         against 0 on three oracles (the re-entries themselves came through the
+         cooperative path, reading an honest VTIB that had been made wrong).
+         So VIF alone decides -- once a live frame has shown VIF set at all, which is the
+         proof that VME is maintaining it. Before that (or on a CPU without VME, where VIF
+         is never set and never means anything) the old test stands, so nothing starves.
+         The fear that parked this -- a guest logically on with VIF clear -- did not show:
+         Skyroads' live frames had VIF set every time, and ZAR's and Doom's real-mode
+         stretches never reach this gate (census live{} empty for both). */
     ifv_note(0, efl);
-    if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
+    if (efl & EFLAGS_VIF_BIT) g_vif_live_seen = 1;
+    if (!(efl & (g_vif_live_seen ? EFLAGS_VIF_BIT : (0x200u | EFLAGS_VIF_BIT)))
+        || cs == DOS_HDLR_SEG) {
         ResumeThread(g_hcpu);
         ASYNC_CTX_RELEASE();
         async_early_bail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
@@ -3330,6 +3383,7 @@ static int async_inject_irq(unsigned irq)
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
     if (ok && !(efl & EFLAGS_VIF_BIT)) ++g_ifv_shadow[irq & 15];   /* see ifv_note */
+    if (ok) ifv_trace(irq, 0, efl, cs, ip);
     if (ok) {
         /* Acknowledge: in service until the guest EOIs.
            Release it immediately for a line vectored at one of OUR default stubs, which
@@ -6132,6 +6186,54 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
     return 0;
 }
 
+/* The IF/VIF census (see ifv_note), on its own so the headless forced exit -- which
+   skips the main report, and is how ZAR's runs end -- can print it too. */
+static void ifv_report(void)
+{
+    char base[4096], *p = base;
+  { int path, st, ln; DWORD smax = g_ifv_starve_max_ms;
+    static const char *const stname[8] = { "000","001","010","011","100","101","110","111" };
+    if (g_ifv_starve_open && GetTickCount() - g_ifv_starve_t0 > smax)
+        smax = GetTickCount() - g_ifv_starve_t0;
+    p = zput(p, "STAGE2: IFV census (IF,VIF,S714)");
+    for (path = 0; path < 3; ++path) {
+        p = zput(p, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
+        for (st = 0; st < 8; ++st) {
+            if (!g_ifv_census[path][st]) continue;
+            p = zput(p, " "); p = zput(p, stname[st]); p = zput(p, "=");
+            p = zhex(p, g_ifv_census[path][st]);
+        }
+        p = zput(p, " }");
+    }
+    p = zput(p, " starve_max_ms="); p = zhex(p, smax);
+    p = zput(p, " stretches=");     p = zhex(p, g_ifv_starve_n);
+    p = zput(p, " shadow{");
+    for (ln = 0; ln < 16; ++ln) {
+        if (!g_ifv_shadow[ln]) continue;
+        p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
+        p = zput(p, "=");    p = zhex(p, g_ifv_shadow[ln]);
+    }
+    p = zput(p, " } reenter{");
+    for (ln = 0; ln < 16; ++ln) {
+        if (!g_ifv_reenter[ln]) continue;
+        p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
+        p = zput(p, "=");    p = zhex(p, g_ifv_reenter[ln]);
+    }
+    p = zput(p, " }\r\n");
+    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    { LONG i, n = g_ifv_ntrace < IFV_TRACE_MAX ? g_ifv_ntrace : IFV_TRACE_MAX;
+      for (i = 0; i < n; ++i) {
+          p = zput(p, "STAGE2: IFV irq"); p = zhexb(p, g_ifv_trace[i].irq);
+          p = zput(p, g_ifv_trace[i].path == 0 ? " async" : " coop");
+          p = zput(p, " st=");  p = zput(p, stname[g_ifv_trace[i].st & 7]);
+          p = zput(p, " fl=0x"); p = zhex(p, g_ifv_trace[i].fl);
+          p = zput(p, " at ");   p = zhex(p, g_ifv_trace[i].cs);
+          p = zput(p, ":");      p = zhex(p, g_ifv_trace[i].ip);
+          p = zput(p, "\r\n");
+      }
+      log_append(LOG_PATH, base, p); serial_out(base, p); p = base; } }
+}
+
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
    guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
    "press any key" prompt or a game menu (host_conin + the INT 16h loops spin until
@@ -6199,6 +6301,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     Sleep(PM_HEADLESS_GRACE_MS);
     if (!g_wound_down) {
         q = b;
+        ifv_report();
         q = zput(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
                     " no traps) -> forcing process exit\r\n");
         /* Report WHERE it froze and what the counters say. Without this the forced
@@ -22891,6 +22994,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
      PC delivers a device IRQ there quite happily. */
   int in_bop = (qcs == DOS_HDLR_SEG &&
                 ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
+  if (!in_bop && qcs != DOS_HDLR_SEG) ifv_note(2, VDM_REG(tib, VTIB_EFLAGS));
   if (!in_bop && guest_if_enabled(tib)) {
       int k;
       for (k = 0; k < (int)sizeof g_irq_order; ++k) {
@@ -22908,6 +23012,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
               vdd_pic_acknowledge(&g_pic, (uint8_t)q);
               if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
               g_irqn_inj++;
+              ifv_trace((unsigned)q, 2, VDM_REG(tib, VTIB_EFLAGS), qcs, qip);
               inject_int(tib, vec);
               break;                    /* one per turn: let it IRET first */
           }
@@ -29605,28 +29710,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
               }
           }
-          /* IF/VIF census -- see ifv_note. A stretch still open at exit counts. */
-          { int path, st, ln; DWORD smax = g_ifv_starve_max_ms;
-            if (g_ifv_starve_t0 && GetTickCount() - g_ifv_starve_t0 > smax)
-                smax = GetTickCount() - g_ifv_starve_t0;
-            p = zput(p, "STAGE2: IFV census (IF,VIF)");
-            for (path = 0; path < 2; ++path) {
-                p = zput(p, path ? " vtib{" : " live{");
-                for (st = 0; st < 4; ++st) {
-                    p = zput(p, st == 0 ? "00=" : st == 1 ? " 01=" : st == 2 ? " 10=" : " 11=");
-                    p = zhex(p, g_ifv_census[path][st]);
-                }
-                p = zput(p, "}");
-            }
-            p = zput(p, " starve_max_ms="); p = zhex(p, smax);
-            p = zput(p, " stretches=");     p = zhex(p, g_ifv_starve_n);
-            p = zput(p, " shadow{");
-            for (ln = 0; ln < 16; ++ln) {
-                if (!g_ifv_shadow[ln]) continue;
-                p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
-                p = zput(p, "=");    p = zhex(p, g_ifv_shadow[ln]);
-            }
-            p = zput(p, " }\r\n"); }
+          ifv_report();   /* IF/VIF census -- see ifv_note */
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
         /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
              nonzero rd_addr on the SB's channel means every refill decision the guest
