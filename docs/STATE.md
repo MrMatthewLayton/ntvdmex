@@ -167,7 +167,9 @@ story, with every measurement and every dead end, is in
 
 ### Then — candidates, no order agreed yet (ask the user)
 
-- **The IF/VIF interrupt gate** (row above): the one correctness gap s80 surfaced and left.
+- ▶ **The IF/VIF interrupt gate — USER PICKED THIS (s81).** A census build (`c085c13`, host
+  `82489d48`, **not yet on the rig**) measures what the gate reads before anything changes;
+  the runs to make and the decision rule are in [`log/sessions/session-81.md`](log/sessions/session-81.md).
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
 - **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`
