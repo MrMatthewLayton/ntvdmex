@@ -2905,6 +2905,36 @@ static void async_why_note(unsigned irq, unsigned why)
     g_async_why = (LONG)why;
     if (why < ASYNC_WHY_MAX) g_async_why_hist[irq & 7][why]++;
 }
+/* ── THE IF/VIF CENSUS (s81). MEASURES; DECIDES NOTHING. ─────────────────────────────
+     `irq8.nested` (4 vs 0 on three oracles) is the gate asking "IF **or** VIF": a handler
+     that EOIs before its IRET is re-entered because something in the frame still reads as
+     "interrupts on". The suspect is IF itself -- a user-mode frame written back through
+     SetThreadContext has IF forced on, so in a LIVE V86 frame it would carry no
+     information and VIF would be the only signal. The fear that parked the fix is the
+     other direction: a guest whose interrupts are logically on while VIF reads clear
+     (never executed STI; DPMI 0301/0302 entering V86 with IF set), which a VIF-only gate
+     would starve.
+     Both are claims about what the bits READ, so count them rather than argue:
+       path 0  the async injector's live V86 frame (GetThreadContext on the CPU thread)
+       path 1  the cooperative IRQ0/IRQ1 gate, reading the VTIB after an event exit
+     state = IF<<1 | VIF. "shadow" counts deliveries the current gate made that a VIF-only
+     gate would have refused, per line; `starve` is the longest unbroken stretch in which
+     path 0 saw VIF clear -- how long a VIF-only gate would have held every line off. */
+static DWORD g_ifv_census[2][4];
+static DWORD g_ifv_shadow[16];
+static DWORD g_ifv_starve_t0, g_ifv_starve_max_ms, g_ifv_starve_n;
+static void ifv_note(int path, DWORD fl)
+{
+    int vif = (fl & EFLAGS_VIF_BIT) != 0;
+    g_ifv_census[path][((fl >> 8) & 2u) | (DWORD)vif]++;
+    if (path != 0) return;
+    if (!vif) { if (!g_ifv_starve_t0) { g_ifv_starve_t0 = GetTickCount() | 1u; ++g_ifv_starve_n; } }
+    else if (g_ifv_starve_t0) {
+        DWORD d = GetTickCount() - g_ifv_starve_t0;
+        if (d > g_ifv_starve_max_ms) g_ifv_starve_max_ms = d;
+        g_ifv_starve_t0 = 0;
+    }
+}
 static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flight     */
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
@@ -3278,6 +3308,7 @@ static int async_inject_irq(unsigned irq)
          I/O right up to the death (INT 31h 0302 -> callRM), so the CPU is in V86 for
          most of those attempts and every one of them left here without a word. Give it
          a why code like every other exit; async_early_bail's cap keeps it bounded. */
+    ifv_note(0, efl);
     if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
         ResumeThread(g_hcpu);
         ASYNC_CTX_RELEASE();
@@ -3298,6 +3329,7 @@ static int async_inject_irq(unsigned irq)
     cx.EFlags = efl & ~(0x300u | EFLAGS_VIF_BIT);
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
+    if (ok && !(efl & EFLAGS_VIF_BIT)) ++g_ifv_shadow[irq & 15];   /* see ifv_note */
     if (ok) {
         /* Acknowledge: in service until the guest EOIs.
            Release it immediately for a line vectored at one of OUR default stubs, which
@@ -25532,6 +25564,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));   /* main-line FLAGS the stub returns to */
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
+                ifv_note(1, fl);
             }
             if (if_or_vif(fl) && irq0_can_deliver()
                 && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
@@ -25561,6 +25594,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
+                ifv_note(1, fl);
             }
             /* ── WHY IS THIS REFUSED? MEASURED, NOT ASSUMED. ─────────────────────────
                  KEYLAT says 90% of keystrokes take >64 ms to reach INT 09h (max 9.6 s)
@@ -29571,6 +29605,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
               }
           }
+          /* IF/VIF census -- see ifv_note. A stretch still open at exit counts. */
+          { int path, st, ln; DWORD smax = g_ifv_starve_max_ms;
+            if (g_ifv_starve_t0 && GetTickCount() - g_ifv_starve_t0 > smax)
+                smax = GetTickCount() - g_ifv_starve_t0;
+            p = zput(p, "STAGE2: IFV census (IF,VIF)");
+            for (path = 0; path < 2; ++path) {
+                p = zput(p, path ? " vtib{" : " live{");
+                for (st = 0; st < 4; ++st) {
+                    p = zput(p, st == 0 ? "00=" : st == 1 ? " 01=" : st == 2 ? " 10=" : " 11=");
+                    p = zhex(p, g_ifv_census[path][st]);
+                }
+                p = zput(p, "}");
+            }
+            p = zput(p, " starve_max_ms="); p = zhex(p, smax);
+            p = zput(p, " stretches=");     p = zhex(p, g_ifv_starve_n);
+            p = zput(p, " shadow{");
+            for (ln = 0; ln < 16; ++ln) {
+                if (!g_ifv_shadow[ln]) continue;
+                p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
+                p = zput(p, "=");    p = zhex(p, g_ifv_shadow[ln]);
+            }
+            p = zput(p, " }\r\n"); }
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
         /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
              nonzero rd_addr on the SB's channel means every refill decision the guest
