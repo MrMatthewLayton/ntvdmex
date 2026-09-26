@@ -25,9 +25,9 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`f484fc3d`** — promoted
-  2026-09-26 (s81) after the user confirmed *"ZAR, Skyroads, and Doom all still play"* on the
-  IF/VIF gate fix. (⚠ It also carries s80's two settings changes, which are still not
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`cd5f9f12`** — promoted
+  2026-09-27 (s81) after the user confirmed ZAR, Doom and Duke3D sound by ear. Before it:
+  `ntvdmhost_f484fc3d.exe` (IF/VIF gate, *"ZAR, Skyroads, and Doom all still play"*). (⚠ It also carries s80's two settings changes, which are still not
   hand-checked.) Earlier confirmed builds kept beside it: `ntvdmhost_a0294462.exe` (GUS),
   `ntvdmhost_8d795b96.exe` (Doom low/high), `ntvdmhost_0473d95d.exe`
   (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining), `ntvdmhost_d57d586c.exe`.
@@ -118,7 +118,7 @@ The full surface list, with the primary source named for each, is in
 | **Mode-Y interpretation costs CPU** | Wolf3D is interpreted almost continuously (~155 cycles/instruction). Frame rate held on the rig; a slower machine would feel it. The lever is the interpreter's speed. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **Duke3D took no keyboard on one machine** | Reproduced on a friend's Win98-era box only; works on both of the user's own boxes. |
 | **DOS/4GW guests ran typewriter-slow on one machine, once** | First session on the friend's box; fine after a reboot that *also* changed the BIOS to optimized defaults. **Cause unknown and confounded**; logs unrecoverable. |
-| **ZAR sound — fixed s81, owed by ear** | Was silent. Streams 268/349 non-flat SB blocks headless. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
+| **ZAR sound — fixed s81, user-confirmed** | Was silent. Streams 268/349 non-flat SB blocks headless. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
 | **Win16 shelf** | X does not close WinMine/Charmap · Calc/Charmap/Clock draw incorrectly · Bubbles palette · Matrix_1 slow · `graphics\VS87.EXE` · MPLAYER GPF `0001:3983`. |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. |
 | **`MEM /C`** | The main report matches the 6.22 oracle row for row; `MEM /C` still says MSDOS is 1,028K, contradicting its own summary. |
@@ -171,13 +171,11 @@ story, with every measurement and every dead end, is in
 - ✅ **The IF/VIF interrupt gate — DONE s81, USER-CONFIRMED** (*"ZAR, Skyroads, and Doom all
   still play"*). `irq8.nested` 0 on all oracles; host `f484fc3d` = `bin\` = `prev`.
   [`log/sessions/session-81.md`](log/sessions/session-81.md).
-- ▶ **ZAR sound — FIXED s81 headless, OWED BY EAR.** Host `cd5f9f12` in `bin\`. Three gaps
-  (nested-call IRQs refused as `not_in_exec`; BIOS tick frozen inside nested calls; no PM→RM
-  reflection for a guest-owned IRQ ISR). DPMI `0300` reflection is now ON by default. **Test:
-  ZAR music + effects, Doom sound, Duke3D sound.** [`log/sessions/session-81.md`](log/sessions/session-81.md) part 2.
+- ✅ **ZAR sound — DONE s81, USER-CONFIRMED** (*"ZAR, Doom, and Duke3D sound all working"*).
+  Host `cd5f9f12` = `bin\` = `prev`. [`log/sessions/session-81.md`](log/sessions/session-81.md) part 2.
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
-- **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`
+- ▶ **A shelf sweep → a new `dist\` zip — IN PROGRESS (s81).** Candidate `dist\ntvdmex-20260927-f5d0f4c.zip` (host `cd5f9f12`) staged on the rig beside the anchor; awaiting the user's by-hand sweep. Previously: The anchor zip is still `ntvdmex-20260917-4847355`
   (host `9448cf27`) and the checkpoint commit still `ff0d956` — both several confirmed builds
   behind. Moving them is a deliberate act that belongs with a whole-shelf sweep.
 - **Stereo mixer** — the GUS's pan (and SB stereo) collapse to mono today.
