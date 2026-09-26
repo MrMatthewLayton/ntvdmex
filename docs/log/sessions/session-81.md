@@ -123,3 +123,54 @@ VIF-only gate is safe as-is. If some guest shows a long stretch, the fix is to m
 host's own V86 entry frames coherent (VIF with IF: `0301`/`0302`, the `0303` callback return,
 program start) before the gate changes — and that needs the s11 "sanitised" result
 re-measured, because it was measured through the VTIB, not through `SetThreadContext`.
+
+---
+
+## Part 2 — ZAR sound (added by the user; "never worked")
+
+**Host `cd5f9f12` in `bin\`. Rig-verified; NOT yet heard by a human.**
+`prev` = `f484fc3d` (the user confirmed ZAR/Skyroads/Doom play on it).
+
+### Result, measured headless (`runs/s81_ifv/zar_refl6.log`)
+Of 349 SB blocks, 268 carry signal (81 flat, which quiet stretches are); `REPLAYED_LOUD=0`;
+10% inserted silence, all of it at startup. 270 IRQ-5 reflections into the Miles ISR, none
+failed. Before: one block, then a wedge (reflection on) or no SB access at all (off).
+
+### It was three gaps, one behind the other
+1. **The nested `0301/0302` loop never set `g_in_exec`.** Every IRQ offered during a
+   real-mode call bailed `why=0x14`. s59 read that as `HOST_CS` (14 decimal); 0x14 is **20,
+   `not_in_exec`**. Now `g_nested_rm` + `g_in_exec` bracket that `v86_run` **only**, and the
+   `g_simint_busy` guard (the E1M1 crash) lets through only device lines whose real-mode
+   vector is guest code. ⇒ Miles' single-cycle self-test IRQ 5 arrived.
+2. **The BIOS tick stood still inside a nested call.** Miles times its self-test on
+   `0040:006C` (SBLASTER.DIG `+0xa53`: `cmp ax,es:[46Ch] / je`). IRQ 0 cannot be delivered
+   there (its vector is our BOP stub), so now the host does the BIOS bookkeeping, using the
+   PM `no_app_timer` rule: billed against owed ticks, pending consumed (`why=31
+   nested_tick`). ⇒ init completed.
+3. **The PM default IRQ stub could not reflect to a guest-owned real-mode ISR.** DOS/4GW's
+   PM pass-up handler for INT 0Dh chains to our `177:0027` stub. The s80 arm handled only
+   IVT-is-ours, so every streaming IRQ was "PM ISR ABANDONED" (3,323 in one run). New:
+   `dpmi_reflect_irq_to_rm()`, which is 0302 without an RMCS: IRET frame to the catcher,
+   IF clear on entry, own stack at `code_base:FB00`. ⇒ streaming.
+
+Then **`0300` reflection is ON by default** (`simintrefl_off.flag` opts out; the old
+opt-in file was removed from the rig). The DPMI spec says `0300` runs the real-mode
+handler; the only reason it was off was the wedge.
+
+### Two host crashes found on the way, both in the heartbeat thread
+- **My own:** the new `pic{}/aw5{}` fields overflowed `char b[640]`, the same trap the file
+  already warns about. Now 2048, with `aw5{}` capped.
+- **Pre-existing, found on Mario:** `pal2668`/`code@csip` read guest memory check-then-deref;
+  the A0000 window was remapped in between and the heartbeat AV'd. All heartbeat guest
+  reads now go through `ReadProcessMemory`. Mario was clean ×2 afterwards.
+
+### Regression (all on the default-on build)
+Skyroads `n8=0 max_ms=7`, `irq0_inj` unchanged · Doom SB blocks 0x97b/0x9a2 against 0x95b
+before (a forced headless ending in 1 of 3 runs is historical variance: 9 of 40 older Doom
+logs end that way) · Duke3D, Heretic, Hexen, Wolf3D, Heaven7 (GUS voices + nonzero samples)
+run with no FATAL, wedge or abandon · `p_irq8`/`p_pic` unchanged · Notepad opens and closes ·
+off-VM 1670/0.
+
+### Owed by hand
+**ZAR with sound, by ear** (music + effects), plus Doom sound and Duke3D sound, because
+both now pass through the new reflection/nested paths.

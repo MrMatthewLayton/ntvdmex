@@ -118,7 +118,7 @@ The full surface list, with the primary source named for each, is in
 | **Mode-Y interpretation costs CPU** | Wolf3D is interpreted almost continuously (~155 cycles/instruction). Frame rate held on the rig; a slower machine would feel it. The lever is the interpreter's speed. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
 | **Duke3D took no keyboard on one machine** | Reproduced on a friend's Win98-era box only; works on both of the user's own boxes. |
 | **DOS/4GW guests ran typewriter-slow on one machine, once** | First session on the friend's box; fine after a reboot that *also* changed the BIOS to optimized defaults. **Cause unknown and confounded**; logs unrecoverable. |
-| **ZAR is silent** | Renders and plays, no audio. Eight hypotheses refuted. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
+| **ZAR sound — fixed s81, owed by ear** | Was silent. Streams 268/349 non-flat SB blocks headless. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
 | **Win16 shelf** | X does not close WinMine/Charmap · Calc/Charmap/Clock draw incorrectly · Bubbles palette · Matrix_1 slow · `graphics\VS87.EXE` · MPLAYER GPF `0001:3983`. |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. |
 | **`MEM /C`** | The main report matches the 6.22 oracle row for row; `MEM /C` still says MSDOS is 1,028K, contradicting its own summary. |
@@ -171,11 +171,10 @@ story, with every measurement and every dead end, is in
 - ✅ **The IF/VIF interrupt gate — DONE s81, USER-CONFIRMED** (*"ZAR, Skyroads, and Doom all
   still play"*). `irq8.nested` 0 on all oracles; host `f484fc3d` = `bin\` = `prev`.
   [`log/sessions/session-81.md`](log/sessions/session-81.md).
-- **ZAR sound — ADDED BY THE USER s81: investigate why it has never worked.** `demo\msdos\zar\SETSOUND.BAT`
-  runs `SOUND\SetSound` (the game's own sound configurator). s59 traced it to one named gap: ZAR
-  calls its **own** real-mode INT 66h driver API through DPMI `0300`, which we serviced host-side
-  and dropped. `simintrefl.flag` routes it to the IVT, but it is OFF because ZAR then programs
-  the SB and **wedges**. Start from memory `zar-dos16m-frontier` and the eight refuted hypotheses.
+- ▶ **ZAR sound — FIXED s81 headless, OWED BY EAR.** Host `cd5f9f12` in `bin\`. Three gaps
+  (nested-call IRQs refused as `not_in_exec`; BIOS tick frozen inside nested calls; no PM→RM
+  reflection for a guest-owned IRQ ISR). DPMI `0300` reflection is now ON by default. **Test:
+  ZAR music + effects, Doom sound, Duke3D sound.** [`log/sessions/session-81.md`](log/sessions/session-81.md) part 2.
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
 - **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`

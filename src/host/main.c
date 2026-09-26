@@ -2956,7 +2956,6 @@ static void ifv_note(int path, DWORD fl)
 static struct { BYTE irq, path, st; WORD cs, ip; DWORD fl; } g_ifv_trace[IFV_TRACE_MAX];
 static LONG g_ifv_ntrace;
 static DWORD g_ifv_reenter[16];
-static WORD peekw(DWORD lin);
 static void ifv_trace(unsigned irq, int path, DWORD fl, DWORD cs, DWORD ip)
 {
     LONG i;
@@ -3155,6 +3154,19 @@ static void async_early_bail(unsigned irq, unsigned why)
      only -- the next tick injects", so the interrupt is simply delivered a moment
      later, once the guest is back in a mode that exists. */
 static volatile LONG g_simint_busy = 0;
+/* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE v86_run IS RUNNING. (s81, ZAR) ──
+     The nested 0301/0302 loop rewrites the TIB to V86, then calls v86_run() exactly as the
+     main loop does -- and for the length of that call the frame is an ordinary V86 one.
+     The guard above covered the whole window, and the loop never set g_in_exec either, so
+     no interrupt could EVER reach a real-mode procedure while it ran. ZAR's Miles driver is
+     one: it starts a single-cycle SB transfer and spins on a memory flag its IRQ 5 ISR sets.
+     IRQ 5 was raised once and refused 1631 times with why=0x14 -- which s59 read as HOST_CS
+     (14) but is 20 decimal, `not_in_exec`: the bracket was missing, not the thread elsewhere.
+   ► So the nested loop sets g_nested_rm (and g_in_exec) around v86_run ONLY, clearing
+     g_in_exec first on return -- the re-check after the suspend then catches a thread that
+     has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
+     through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
+static volatile LONG g_nested_rm = 0;
 
 static int async_inject_irq(unsigned irq)
 {
@@ -3179,7 +3191,29 @@ static int async_inject_irq(unsigned irq)
     if (!g_hcpu || g_in_exec == 0) { async_early_bail(irq, 20); return 0; }
     /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
        g_simint_busy -- this is the Doom E1M1 crash. */
-    if (g_simint_busy) { async_early_bail(irq, 30); return 0; }
+    if (g_simint_busy) {
+        unsigned vn = vdd_pic_vector(&g_pic, (uint8_t)irq);
+        /* ── THE BIOS TICK MUST STILL ADVANCE INSIDE A NESTED REAL-MODE CALL. (s81, ZAR) ──
+             IRQ 0 is not delivered in here (its vector is our BOP stub, which the nested
+             loop does not service), so 0040:006C stood still for the length of every
+             0300/0301/0302. Miles' SB self-test (SBLASTER.DIG +0xa53) times itself by
+             exactly that word -- `mov ax,es:[46Ch] / cmp ax,es:[46Ch] / je $-5`, twice,
+             up to 10 times -- so with its IRQ 5 finally arriving it spun on the clock
+             instead. Do the BIOS's bookkeeping here, the same rule as the PM arm's
+             no_app_timer case: billed against the owed-tick count, pending consumed. */
+        if (irq == 0 && g_nested_rm) {
+            if (pm_tick_take()) {
+                volatile DWORD *t = (volatile DWORD *)(ULONG_PTR)0x46C;
+                DWORD v = *t + 1;
+                if (v >= 0x1800B0u) { v = 0; *(volatile BYTE *)(ULONG_PTR)0x470 = 1; }
+                *t = v;
+                if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
+            }
+            async_early_bail(irq, 31); return 0;
+        }
+        if (!(g_nested_rm && irq >= 2 && peekw(vn * 4 + 2) != DOS_HDLR_SEG)) {
+            async_early_bail(irq, 30); return 0; }
+    }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
@@ -6089,8 +6123,11 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              in a char[256] killed the host once (see dpmi_dispatch_to_pm_handler's lb),
              and this line was 392 bytes in a char[384] from s62's `t_ms=`/`code@csip=`
              until s68 -- an 8-byte stack overwrite on every beat that nothing reported.
-             With the `crtc=` fields it measures ~434. */
-        char b[640], *q = b;
+             With the `crtc=` fields it measures ~434.
+           ⛔ AND AGAIN (s81): the pic{}/pend/ivt0d/aw5{} fields took it past 640 on ZAR and
+             the heartbeat thread died writing " 1f7c=" over the top of its own stack
+             (a host AV on a worker, mid-run). 2048 now, and aw5{} is capped at 6 codes. */
+        char b[2048], *q = b;
         DWORD cs = 0, ip = 0, efl = 0;
         if (g_tib_dbg) {
             cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
@@ -6114,6 +6151,23 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, "/0x");          q = zhex(q, g_irqn_retry_ok);
         q = zput(q, " why=0x");      q = zhex(q, g_irqn_retry_why);
         q = zput(q, " intpend=0x");  q = zhex(q, g_ev_intpend);
+        /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
+           in service, both chips), which lines we still hold pending, and where IRQ 5's
+           real-mode vector points -- the three things that decide it. */
+        { int k; DWORD pm = 0; WORD v5o = peekw(0x0D * 4), v5s = peekw(0x0D * 4 + 2);
+          for (k = 0; k < 16; ++k) if (g_irqn_pending[k]) pm |= 1u << k;
+          q = zput(q, " pic{imr=");  q = zhexb(q, g_pic.m.imr); q = zput(q, "/"); q = zhexb(q, g_pic.s.imr);
+          q = zput(q, " irr=");      q = zhexb(q, g_pic.m.irr); q = zput(q, "/"); q = zhexb(q, g_pic.s.irr);
+          q = zput(q, " isr=");      q = zhexb(q, g_pic.m.isr); q = zput(q, "/"); q = zhexb(q, g_pic.s.isr);
+          q = zput(q, "} pend=0x");  q = zhex(q, pm);
+          q = zput(q, " ivt0d=");    q = zhex(q, v5s); q = zput(q, ":"); q = zhex(q, v5o);
+          q = zput(q, " nested=");   q = zhex(q, (DWORD)g_nested_rm);
+          q = zput(q, " aw5{");
+          { int shown = 0;
+            for (k = 0; k < ASYNC_WHY_MAX && shown < 6; ++k) if (g_async_why_hist[5][k]) {
+                q = zput(q, " "); q = zhex(q, (DWORD)k); q = zput(q, "=");
+                q = zhex(q, g_async_why_hist[5][k]); ++shown; } }
+          q = zput(q, " }"); }
         /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
            proves the completion IRQ was raised only AFTER the exec loop ended, so what
            matters now is WHEN the block starts and how fast it drains -- neither of which
@@ -6151,10 +6205,16 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              the only witness -- and a bare cs:ip in a moving guest names nothing
              once the process is gone. Eight bytes make it decodable after the
              fact. (session 62) */
+        /* ⛔ READ GUEST MEMORY HERE ONLY THROUGH ReadProcessMemory. (s81, Mario) A
+             check-then-dereference is a race on this thread: the A0000 window is remapped
+             under a mode switch, and a pal2668 read with DS=A000 took an AV in between
+             imem_page_ok() and the load -- the diagnostic killed the host it was watching.
+             RPM on our own process fails cleanly instead of faulting. */
         if (cs || ip) {
-            const BYTE *cp = (const BYTE *)(ULONG_PTR)((cs << 4) + ip);
+            BYTE cb8[8]; SIZE_T got = 0;
             q = zput(q, " code@csip=");
-            if (host_readable(cp, 8)) q = zdump(q, cp, 8);
+            if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)((cs << 4) + ip), cb8, 8, &got)
+                && got == 8) q = zdump(q, cb8, 8);
             else q = zput(q, "<unreadable>");
         }
         /* ── s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
@@ -6171,12 +6231,15 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
             q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[2]);
             q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[3]);
             q = zput(q, " lastrow=0x"); q = zhex(q, (DWORD)g_vid.dac_last_row);
+            BYTE pb6[6], pb1; SIZE_T got = 0;
             q = zput(q, " pal2668=");
-            if (imem_page_ok(dsb + 0x2668)) {
-                int j; for (j = 0; j < 6; ++j) { q = zhexb(q, *(volatile BYTE *)(dsb + 0x2668 + j)); }
+            if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x2668), pb6, 6, &got)
+                && got == 6) {
+                int j; for (j = 0; j < 6; ++j) q = zhexb(q, pb6[j]);
             } else q = zput(q, "??");
             q = zput(q, " 1f7c=");
-            if (imem_page_ok(dsb + 0x1f7c)) q = zhexb(q, *(volatile BYTE *)(dsb + 0x1f7c));
+            if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x1f7c), &pb1, 1, &got)
+                && got == 1) q = zhexb(q, pb1);
             else q = zput(q, "??");
         }
         q = zput(q, "\r\n");
@@ -6339,6 +6402,10 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.blocks);
         q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.xfer_mode);
         q = zput(q, " sb_rate=0x");      q = zhex(q, g_sb.rate_hz);
+        /* Is what it streamed SOUND? A forced exit never prints the sb OUTPUT block, and
+           that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
+        q = zput(q, " sb_checked=0x");   q = zhex(q, g_sb.blocks_checked);
+        q = zput(q, " sb_flat=0x");      q = zhex(q, g_sb.blocks_flat);
         q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
@@ -6720,12 +6787,11 @@ static DWORD mouse_i33_off(volatile BYTE *tib, int src, DWORD v)
 }
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
 static DWORD g_simint_unhandled, g_simint_vec[256];
-/* ── ★ simintrefl.flag -- REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER.
-     Off by default; see the long note at the reflection site for why. On, it is what
-     makes ZAR program the Sound Blaster at all -- and then wedges it waiting on an SB
-     completion the nested V86 call never delivers. One file, so the audio thread can be
-     picked up without a rebuild. */
-#define SIMINTREFL_FLAG CFG_("simintrefl.flag")
+/* ── ★ REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
+     It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
+     completion the nested V86 call never delivered. s81 fixed that, and the spec says
+     0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out. */
+#define SIMINTREFL_OFF_FLAG CFG_("simintrefl_off.flag")
 static int g_simint_reflect = 0;
 static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
 static int g_textdump = 0;              /* textdump.flag: dump the text screen too    */
@@ -17653,6 +17719,94 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
 #undef m
 }
 
+/* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
+     VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
+     DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
+     vector. DOS/4GW hooks every IRQ in PM with a pass-up handler that chains to OUR default
+     stub, so every real-mode ISR a DOS/4GW program relies on is reached through here. The
+     IVT-is-ours case was handled (s80, keyboard); this is the other one. ZAR's Miles
+     driver is a REAL-MODE ISR at IVT[0Dh] (SBLASTER.DIG +0x777), and every one of its SB
+     block interrupts arrived at 177:0027 and was abandoned -- 3,323 "PM ISR ABANDONED" in
+     one run -- so the double buffer was never swapped and the card fell silent after init.
+   ► This is 0302 with no RMCS: save the PM register file, enter V86 at IVT[vec] with an
+     IRET frame onto the DPMI_RMRET catcher and interrupts OFF (a hardware ISR is entered
+     with IF clear; the frame carries IF set, which its IRET restores), run it to the
+     catcher, restore PM. General registers are not an input or an output of a hardware
+     ISR, so nothing is marshalled. Returns 1 when the ISR ran to its IRET.
+   ⚠ Its own stack, below 0301's default one (the code segment at FF00), so a reflection
+     can never land on a frame that call is using. */
+static DWORD g_pm_irq_rm_reflects = 0, g_pm_irq_rm_fail = 0;
+static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigned vec)
+{
+    char lb[256], *lp = lb;
+    DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
+          pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
+          pBp=VDM_REG(tib,VTIB_EBP),pDs=VDM_REG(tib,VTIB_DS),pEs=VDM_REG(tib,VTIB_ES),
+          pFs=VDM_REG(tib,VTIB_FS),pGs=VDM_REG(tib,VTIB_GS),pCs=VDM_REG(tib,VTIB_CS),
+          pIp=VDM_REG(tib,VTIB_EIP),pSs=VDM_REG(tib,VTIB_SS),pSp=VDM_REG(tib,VTIB_ESP),
+          pFl=VDM_REG(tib,VTIB_EFLAGS);
+    WORD pMsw = *(volatile WORD *)(tib + VTIB_MSW);
+    WORD rss = (WORD)(g_dpmi_code_base >> 4), rsp = 0xFB00;
+    WORD rcs = peekw(vec * 4 + 2), rip = peekw(vec * 4);
+    unsigned rt; int done = 0;
+    InterlockedExchange(&g_simint_busy, 1);
+    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, 0x0202);          /* FLAGS: IF set, restored by IRET */
+    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);
+    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);
+    dpmi_unpatch();
+    *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);
+    VDM_REG(tib, VTIB_EFLAGS) = 0x20002;                        /* VM, interrupts OFF */
+    VDM_SET16(tib, VTIB_DS, rss); VDM_SET16(tib, VTIB_ES, rss);
+    VDM_SET16(tib, VTIB_FS, rss); VDM_SET16(tib, VTIB_GS, rss);
+    VDM_SET16(tib, VTIB_CS, rcs); VDM_REG(tib, VTIB_EIP) = rip;
+    VDM_SET16(tib, VTIB_SS, rss); VDM_REG(tib, VTIB_ESP) = rsp;
+    for (rt = 0; rt < 128 && !done; ++rt) {
+        LONG rst; DWORD rev, info;
+        InterlockedExchange(&g_nested_rm, 1);
+        InterlockedExchange(&g_in_exec, 1);                     /* see g_nested_rm */
+        rev = v86_run(tib, &rst);
+        InterlockedExchange(&g_in_exec, 0);
+        InterlockedExchange(&g_nested_rm, 0);
+        info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+        if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
+        if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
+            char db[2048]; mp->tp = db; dos_int21(mp);        /* its log text is dropped */
+            VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {      /* the ISR far-called a 0303 callback */
+            int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
+            if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
+                dpmi_invoke_callback(mp, tib, cbslot);
+                continue;
+            }
+        }
+        if (rev == VDM_EVENT_IO || rev == VDM_EVENT_IO_HW || rev == VDM_EVENT_GPFAULT) {
+            int h; HOST_LOCK(); h = host_try_io(tib, &g_bus); HOST_UNLOCK();
+            if (h) continue;
+        }
+        if (g_pm_irq_rm_fail < 16) {
+            lp = zput(lp, "PM IRQ reflect vec=0x"); lp = zhexb(lp, (BYTE)vec);
+            lp = zput(lp, " -> RM ISR: unexpected event=0x"); lp = zhex(lp, rev);
+            lp = zput(lp, " info=0x"); lp = zhex(lp, info);
+            lp = zput(lp, " CS:IP=0x"); lp = zhex(lp, VDM_REG(tib,VTIB_CS)&0xFFFF);
+            lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib,VTIB_EIP)&0xFFFF);
+            lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        }
+        break;
+    }
+    dpmi_repatch();
+    *(volatile WORD *)(tib + VTIB_MSW) = pMsw;
+    VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
+    VDM_REG(tib,VTIB_ESI)=pSi;VDM_REG(tib,VTIB_EDI)=pDi;VDM_REG(tib,VTIB_EBP)=pBp;
+    VDM_SET16(tib,VTIB_DS,pDs);VDM_SET16(tib,VTIB_ES,pEs);VDM_SET16(tib,VTIB_FS,pFs);VDM_SET16(tib,VTIB_GS,pGs);
+    VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
+    VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
+    InterlockedExchange(&g_simint_busy, 0);
+    if (done) ++g_pm_irq_rm_reflects; else ++g_pm_irq_rm_fail;
+    return done;
+}
+
 static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     unsigned steps)
 {
@@ -19830,6 +19984,21 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP -> the stub's IRET */
                         return 1;
                     }
+                    /* ...and when the GUEST owns the real-mode vector, run its ISR there.
+                       See dpmi_reflect_irq_to_rm (s81, ZAR). */
+                    if ((vec >= 0x09 && vec <= 0x0F) || (vec >= 0x70 && vec <= 0x77)) {
+                        if (dpmi_reflect_irq_to_rm(mp, tib, (unsigned)vec)) {
+                            if (g_pm_irq_rm_reflects <= 8) {
+                                p = zput(p, "PM INT 0x"); p = zhexb(p, (BYTE)vec);
+                                p = zput(p, " default handler -> reflected to the guest's real-mode ISR 0x");
+                                p = zhex(p, peekw(vec * 4 + 2)); p = zput(p, ":0x"); p = zhex(p, peekw(vec * 4));
+                                p = zput(p, "\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            }
+                            VDM_REG(tib, VTIB_EIP) += 2;           /* past the BOP -> the stub's IRET */
+                            return 1;
+                        }
+                    }
                     if (vec == 0x11) {                             /* BIOS equipment, in PM */
                         /* Same answer as the V86 arm below, and now the SAME
                            FUNCTION rather than the same constant copied twice --
@@ -20018,7 +20187,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              it was not written for. Those keep today's behaviour and stay
                              visible in `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is
                              where the next one of these will be found. */
-                        /* ── ⚠⚠ ...AND IT IS OFF BY DEFAULT, BECAUSE IT CURRENTLY WEDGES ZAR.
+                        /* ── ✅ s81: NOW ON BY DEFAULT. The wedge below was three gaps, all
+                             closed: the nested loop never set g_in_exec (so IRQ 5 was refused
+                             as not_in_exec, which s59 misread as HOST_CS); the BIOS tick did
+                             not advance inside a nested call (Miles times its self-test by
+                             it); and the PM default IRQ stub could not reflect to a guest-
+                             owned real-mode ISR (dpmi_reflect_irq_to_rm). History kept:
+                           ── ⚠⚠ ...AND IT WAS OFF BY DEFAULT, BECAUSE IT WEDGED ZAR.
                              MEASURED, and the result is worth the knob. With it on, ZAR's
                              INT 66h handler runs and **the Sound Blaster is programmed for
                              the first time** -- `SNDIO out 0x22c`, `sb{blocks=1
@@ -21184,7 +21359,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      was written for. The latch persists, so nothing is
                                      delivered twice and nothing is invented. */
                                 v86_deliver_dev_irq(tib);
+                                InterlockedExchange(&g_nested_rm, 1);
+                                InterlockedExchange(&g_in_exec, 1);   /* see g_nested_rm */
                                 rev = v86_run(tib, &rst);
+                                InterlockedExchange(&g_in_exec, 0);
+                                InterlockedExchange(&g_nested_rm, 0);
                                 DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
                                 if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
                                     done = 1; break;                /* proc RETF'd -> finished */
@@ -25397,16 +25576,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
        default. See the trace at the top of dos_int21(). */
     m.trace_all = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
-    /* simintrefl.flag: reflect DPMI 0300 to the guest's own real-mode handler. Say so,
-       because it is off by default and its effect (ZAR programs the SB, then wedges on
-       an SB completion) is dramatic enough that a silent run would be a mystery. */
-    g_simint_reflect = (GetFileAttributesA(SIMINTREFL_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_simint_reflect) {
+    /* DPMI 0300 reflects to the guest's own real-mode handler -- ON by default since s81,
+       when the wedge that kept it off was found and fixed (see g_nested_rm and the BIOS
+       tick in async_inject_irq). simintrefl_off.flag turns it off for diagnosis; say so,
+       because a guest-owned vector then silently does nothing again. */
+    g_simint_reflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
+    if (!g_simint_reflect) {
         char sb2[224], *sq = sb2;
-        sq = zput(sq, "STAGE1: simintrefl.flag -- DPMI 0300 WILL reflect to the guest's own "
-                      "real-mode IVT handler. Not the default: it makes ZAR program the SB "
-                      "and then wedges it waiting on a completion. See the note at the site."
-                      "\r\n");
+        sq = zput(sq, "STAGE1: simintrefl_off.flag -- DPMI 0300 will NOT reflect to the guest's "
+                      "own real-mode handler; a guest-owned vector is answered host-side or "
+                      "not at all (ZAR: silent). See the note at the site.\r\n");
         log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
@@ -29624,6 +29803,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         p = zput(p, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
         p = zhex(p, g_pm_irq_reflects);
+        p = zput(p, "  -> the guest's real-mode ISR: "); p = zhex(p, g_pm_irq_rm_reflects);
+        p = zput(p, " (failed "); p = zhex(p, g_pm_irq_rm_fail); p = zput(p, ")");
         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         p = zput(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
         { unsigned dv, da, shown = 0;
@@ -29682,7 +29863,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
             "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
             "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
-            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","?1f" };
+            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
           /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many
              were suppressed, so the log's thinness is never read as "it stopped
