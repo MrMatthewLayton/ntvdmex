@@ -25,9 +25,11 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`a0294462`** — promoted
-  2026-09-26 (s80) after the user confirmed Heaven7's GUS music by hand. Earlier confirmed
-  builds kept beside it: `ntvdmhost_8d795b96.exe` (Doom low/high), `ntvdmhost_0473d95d.exe`
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`f484fc3d`** — promoted
+  2026-09-26 (s81) after the user confirmed *"ZAR, Skyroads, and Doom all still play"* on the
+  IF/VIF gate fix. (⚠ It also carries s80's two settings changes, which are still not
+  hand-checked.) Earlier confirmed builds kept beside it: `ntvdmhost_a0294462.exe` (GUS),
+  `ntvdmhost_8d795b96.exe` (Doom low/high), `ntvdmhost_0473d95d.exe`
   (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining), `ntvdmhost_d57d586c.exe`.
   ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
   `d57d586c`. **md5 the slot; do not trust this line.**
@@ -166,9 +168,14 @@ story, with every measurement and every dead end, is in
 
 ### Then — candidates, no order agreed yet (ask the user)
 
-- ✅ **The IF/VIF interrupt gate — DONE s81 (rig-verified, NOT yet by hand).** `irq8.nested` 0,
-  agreeing with all oracles; host `f484fc3d` in `bin\`. **Owed by hand: ZAR (its sound init
-  was the named risk), Skyroads by ear.** [`log/sessions/session-81.md`](log/sessions/session-81.md).
+- ✅ **The IF/VIF interrupt gate — DONE s81, USER-CONFIRMED** (*"ZAR, Skyroads, and Doom all
+  still play"*). `irq8.nested` 0 on all oracles; host `f484fc3d` = `bin\` = `prev`.
+  [`log/sessions/session-81.md`](log/sessions/session-81.md).
+- **ZAR sound — ADDED BY THE USER s81: investigate why it has never worked.** `demo\msdos\zar\SETSOUND.BAT`
+  runs `SOUND\SetSound` (the game's own sound configurator). s59 traced it to one named gap: ZAR
+  calls its **own** real-mode INT 66h driver API through DPMI `0300`, which we serviced host-side
+  and dropped. `simintrefl.flag` routes it to the IVT, but it is OFF because ZAR then programs
+  the SB and **wedges**. Start from memory `zar-dos16m-frontier` and the eight refuted hypotheses.
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
 - **A shelf sweep → a new `dist\` zip.** The anchor zip is still `ntvdmex-20260917-4847355`
