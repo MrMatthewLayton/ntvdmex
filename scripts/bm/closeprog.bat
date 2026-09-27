@@ -8,6 +8,8 @@ rem
 rem   closeprog.bat doom  -> a DPMI client (DOS/4GW): the protected-mode arm
 rem   closeprog.bat sky   -> Skyroads, real mode, hooks INT 08h/09h: the V86 arm
 rem   closeprog.bat doomxp / skyxp -> the same under XP's own COMMAND.COM
+rem   closeprog.bat doomwin / skywin -> the program named DIRECTLY (as a double-click
+rem       does, #208): after Close Program the user should be left at XP's prompt
 rem
 rem Results: debug\out\closeprog_<variant>.log and shot_closeprog_<variant>_*.bmp.
 rem Everything this touches in cfg\ is saved first and restored after.
@@ -19,11 +21,15 @@ set RIG=%SH%\debug\rig
 set V=%1
 if "%V%"=="" set V=sky
 set XP=0
+set WIN=0
+if /i "%V%"=="doomwin" set WIN=1
+if /i "%V%"=="skywin" set WIN=1
 if /i "%V%"=="doomxp" set XP=1
 if /i "%V%"=="skyxp" set XP=1
 set GD=%SH%\demo\msdos\skyroads
 if /i "%V%"=="doom" set GD=%SH%\demo\msdos\doom
 if /i "%V%"=="doomxp" set GD=%SH%\demo\msdos\doom
+if /i "%V%"=="doomwin" set GD=%SH%\demo\msdos\doom
 
 del /q "%OUT%\closeprog_done.txt" "%OUT%\closeprog_%V%.log" "%OUT%\ntvdmhost.log" "%OUT%\shot*.bmp" >nul 2>&1
 del /q "%OUT%\startfail.txt" >nul 2>&1
@@ -32,13 +38,18 @@ taskkill /f /im ntvdmhost.exe >nul 2>&1
 if exist "%CFG%\target.txt" move /y "%CFG%\target.txt" "%CFG%\target.closesaved" >nul
 rem   *xp variants: nothing names a program, so the host loads XP's own COMMAND.COM
 rem   (the product's default shell) in the launch directory.
+if "%WIN%"=="1" set XP=1
+if "%WIN%"=="1" if /i "%V%"=="doomwin" echo "%GD%\DOOM.EXE"> "%CFG%\target.txt"
+if "%WIN%"=="1" if /i "%V%"=="skywin" echo "%GD%\SKYROADS.EXE"> "%CFG%\target.txt"
 if "%XP%"=="0" copy /y "%SH%\debug\tests\dos\COMMAND.COM" "%GD%\COMMAND.COM" >nul
 if "%XP%"=="0" echo "%GD%\COMMAND.COM"> "%CFG%\target.txt"
 echo.> "%CFG%\autoexit"
 echo 20> "%CFG%\qimode.txt"
 echo 60000> "%CFG%\headless_ms.txt"
 rem   d=20 o=18 o=18 m=32 | s=1f k=25 y=15 r=13 o=18 a=1e d=20 s=1f | Enter=1c | v=2f e=12 r=13
-if /i "%GD%"=="%SH%\demo\msdos\doom" (
+if "%WIN%"=="1" (
+  echo w36000 2f 12 13 1c w8000> "%CFG%\keys.txt"
+) else if /i "%GD%"=="%SH%\demo\msdos\doom" (
   echo w6000 20 18 18 32 1c w30000 2f 12 13 1c w8000> "%CFG%\keys.txt"
 ) else (
   echo w6000 1f 25 15 13 18 1e 20 1f 1c w30000 2f 12 13 1c w8000> "%CFG%\keys.txt"

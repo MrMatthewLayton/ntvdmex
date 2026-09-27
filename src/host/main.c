@@ -180,6 +180,9 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* A DOS shell to run when NOTHING named a program. NOT a target: target.txt names THE
    test and is consulted first; this is the last resort. See the STAGE2 block. */
 #define SHELL_PATH  CFG_("shell.txt")
+/* #208: present = load a program started from Windows directly (the pre-#208 way)
+   instead of handing it to XP's COMMAND.COM. An A/B switch, not a setting. */
+#define DIRECTLAUNCH_FLAG CFG_("directlaunch.flag")
 /* ── ★ HOW "JUST OPEN NTVDMEX" WORKS, AND WHY IT NEEDS A FOUR-BYTE DOS PROGRAM. ──────
      Run with no arguments -- double-clicked, or from a shortcut -- this process CANNOT
      become a VDM. Measured on the rig, 2026-09-25:
@@ -546,6 +549,16 @@ static DWORD g_guest_ntvdm_bops = 0;
 static int   g_guest_ntaware    = 0;
 static int   g_shell_getnext_n  = 0;
 static char  g_shell_path[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
+/* ── #208: A PROGRAM STARTED FROM WINDOWS RUNS UNDER XP's COMMAND.COM, AS STOCK DOES. ──
+     Stock ntvdm never loads the program itself: it starts COMMAND.COM /P and answers the
+     shell's first BOP 54 sub 01 ("what next?") with the program. That is what puts a
+     shell UNDER every program -- and File > Close Program needs one to return to. The
+     shell is told 5.00 (it demands it); the program gets the Settings version (the
+     user's choice, SETVER-style -- see g_shell_psp). */
+static int   g_routed;                  /* this run's program is handed over via sub 01 */
+static char  g_first_prog[300];         /* its 8.3 path -- the sub 01 NAME field        */
+static char  g_first_tail[128];         /* its arguments -- the sub 01 command TAIL     */
+static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 = prompt */
 
 /* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
    numbers -- ours above happen to overlap and are told apart by origin, not by value. */
@@ -848,6 +861,7 @@ static int          g_gus_on = 0;
    5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
 static int          g_dosver_forced = 0;
 static const char  *g_dosver_why = 0;
+static int          g_dosver_shell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
    Printed from both exits, once. */
 static void gus_report(void)
@@ -2085,7 +2099,32 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         volatile BYTE *ce;
         if (pe[0] == 0) slen = 1;                   /* empty: one NUL ends the list */
         else { for (slen = 0; slen < 0x7FFE && !(pe[slen] == 0 && pe[slen + 1] == 0); ++slen) ; slen += 2; }
-        while (m->exec_name[nlen] && nlen < sizeof(m->exec_name) - 1) ++nlen;
+        const char *ename = m->exec_name;
+        /* ── ★ THE 64-BYTE argv[0] RULE, AT EXEC TOO. (s81, #208) ─────────────────
+             DOS/4GW 1.97 copies its own path into a 64-byte buffer (see the start-up
+             copy of this rule, "argv[0] MUST BE 8.3"). That rule only guarded a program
+             WE loaded; anything EXEC'd -- typed at the prompt, and since #208 every
+             program started from Windows -- got the full path, and Duke3D's
+             C:\DOCUME~1\...\DUKE3D\DUKE3D.EXE (66 chars) died with "can't find file
+             ...DUKE3D.E>". The same answer here: when the name reaches 64 and the program
+             is in the current directory, the bare file name -- which the guest resolves
+             against that directory exactly as DOS would. */
+        while (ename[nlen] && nlen < sizeof(m->exec_name) - 1) ++nlen;
+        if (nlen >= 64) {
+            char cwd[MAX_PATH], scwd[MAX_PATH]; DWORD cl, sl2;
+            const char *bs = ename, *q;
+            for (q = ename; *q; ++q) if (*q == '\\') bs = q + 1;
+            cl = GetCurrentDirectoryA(sizeof cwd, cwd);
+            sl2 = (cl && cl < sizeof cwd) ? GetShortPathNameA(cwd, scwd, sizeof scwd) : 0;
+            if (sl2 && sl2 < sizeof scwd && bs > ename
+                && (DWORD)(bs - ename - 1) == sl2 && CompareStringA(LOCALE_SYSTEM_DEFAULT,
+                       NORM_IGNORECASE, ename, (int)sl2, scwd, (int)sl2) == CSTR_EQUAL) {
+                p = zput(p, "  EXEC: argv[0] is 64+ chars -- past DOS/4GW's buffer; the bare name ["); 
+                p = zput(p, bs); p = zput(p, "] (it is in the current directory)\r\n");
+                ename = bs;
+                for (nlen = 0; ename[nlen]; ++nlen) ;
+            }
+        }
         total = slen + 2 + nlen + 1;
         if (dos_alloc(NULL, m->first_mcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
             p = zput(p, "  EXEC: no memory for the environment copy\r\n");
@@ -2096,12 +2135,12 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         ce = (volatile BYTE *)((DWORD)envblk << 4);
         for (k = 0; k < slen; ++k) ce[k] = pe[k];
         ce[slen] = 1; ce[slen + 1] = 0;             /* count word 0001 */
-        for (k = 0; k <= nlen; ++k) ce[slen + 2 + k] = (BYTE)m->exec_name[k];
+        for (k = 0; k <= nlen; ++k) ce[slen + 2 + k] = (BYTE)ename[k];
         envseg = envblk;
         p = zput(p, "  EXEC: env copied from 0x"); p = zhex(p, penv);
         p = zput(p, " to 0x"); p = zhex(p, envblk);
         p = zput(p, " ("); p = zhex(p, slen); p = zput(p, " bytes of strings) + name [");
-        p = zput(p, m->exec_name); p = zput(p, "]\r\n");
+        p = zput(p, ename); p = zput(p, "]\r\n");
     }
 
     /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
@@ -2134,6 +2173,12 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     /* Build the child's PSP and copy in its command tail, then load the image. */
     dos_psp_build(NULL, child, envseg, (uint16_t)(child + want));
     mcb_set_name(NULL, child, m->exec_path);        /* DOS 4+: MEM /C and /D read it */
+    /* #208: a SECOND XP shell (the user typed `command`) is told 5.00 as the first one
+       is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
+    {   DWORD k, nb = 0;
+        for (k = 0; k + 3 < nread; ++k)
+            if (exec_filebuf[k] == 0xC4 && exec_filebuf[k+1] == 0xC4 && exec_filebuf[k+2] == 0x54) ++nb;
+        if (nb >= 8) dos_int21_shell_psp(m, child, 1); }
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */
@@ -3874,6 +3919,8 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         /* s81: the parent's handle table back, the child's leftover files closed (not
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
         dos_handles_pop(m, m->tsr_pending);
+        if (g_exec[d].child_seg && !m->tsr_pending)
+            dos_int21_shell_psp(m, g_exec[d].child_seg, 0);   /* #208: its PSP is gone */
         mouse_child_exited();          /* s81: the shell does not own the mouse */
         if (m->tsr_pending) {
             /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
@@ -7468,6 +7515,7 @@ static int close_prog_now(dos_machine_t *m, void *tib, char **pp, char *base)
         *pp = zput(*pp, "CLOSEPROG: ending the program at depth ");
         *pp = zhexb(*pp, (unsigned)g_exec_depth); *pp = zput(*pp, " (File > Close Program)\r\n");
         exec_mach_restore(g_exec_depth - 1, pp);
+        if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
         m->tsr_pending = 0;
         m->exit_code = 0;
         return dos_terminate(m, tib, pp, base);
@@ -10096,6 +10144,10 @@ static void settings_to_dialog(const ntvdmex_settings *s)
             SetWindowTextA(cn, t);
         }
         if (cw) SetWindowTextA(cw, (g_dosm && g_dosver_forced && g_dosver_why) ? g_dosver_why
+            : g_dosver_shell
+            ? "Same as the setting above. Windows XP's DOS prompt itself is told 5.00, "
+              "which it needs; the programs you run get this version. A change takes "
+              "effect for programs you start after pressing OK."
             : "Same as the setting above. A change takes effect for programs you start "
               "after pressing OK.");
     }
@@ -24673,6 +24725,44 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
          ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
            `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
+    /* ── #208: HAND A DOS PROGRAM TO XP's SHELL INSTEAD OF LOADING IT. See g_routed. ──
+         Only when all of these hold, and otherwise exactly as before:
+           - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
+             image under COMMAND.COM just says "requires Microsoft Windows")
+           - this is not a WOW launch, and the program is not itself a COMMAND.COM
+           - the shell would be XP's own (no cfg\shell.txt): only that shell asks
+             BOP 54 sub 01, so only it can be handed a program
+           - its 8.3 path and arguments fit a DOS command line
+           - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
+    if (nread && !g_wow_launch
+        && GetFileAttributesA(SHELL_PATH) == INVALID_FILE_ATTRIBUTES
+        && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
+        int pl = lstrlenA(progpath), is_cmd = 0, is_newexe = 0;
+        char sp[300]; DWORD sl;
+        is_cmd = (pl >= 11 && !lstrcmpiA(progpath + pl - 11, "COMMAND.COM"));
+        if (nread > 0x40 && filebuf[0] == 'M' && filebuf[1] == 'Z') {
+            DWORD lf = *(const DWORD *)(filebuf + 0x3C);
+            if (lf > 0x40 && lf + 2 < nread
+                && ((filebuf[lf] == 'N' && filebuf[lf + 1] == 'E')
+                    || (filebuf[lf] == 'P' && filebuf[lf + 1] == 'E'))) is_newexe = 1;
+        }
+        sl = GetShortPathNameA(progpath, sp, sizeof sp);
+        if (!is_cmd && !is_newexe && sl && sl < 120 && sl + 1 + (DWORD)lstrlenA(args) < 126) {
+            lstrcpynA(g_first_prog, sp, sizeof g_first_prog);
+            lstrcpynA(g_first_tail, args, sizeof g_first_tail);
+            g_routed = 1;
+            nread = 0;                               /* -> the shell block below */
+            args[0] = 0;                             /* they are the program's, not the shell's */
+            p = zput(p, "STAGE2: #208 routing [");  p = zput(p, g_first_prog);
+            p = zput(p, "] args=[");                p = zput(p, g_first_tail);
+            p = zput(p, "] through XP's COMMAND.COM (BOP 54 sub 01), as stock does\r\n");
+        } else {
+            p = zput(p, "STAGE2: #208 NOT routed (");
+            p = zput(p, is_cmd ? "it is a COMMAND.COM" : is_newexe ? "not a DOS image"
+                              : "8.3 path + arguments too long for a DOS command line");
+            p = zput(p, ") -- loading it directly\r\n");
+        }
+    }
     if (!nread) {
         char shell[512]; int sn = 0; HANDLE hs = INVALID_HANDLE_VALUE;
         const char *why = 0;
@@ -24825,7 +24915,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
     hdlr[DOS_IRET_STUB_OFF] = 0xCF;                                /* shared IRET stub    */
     hdlr[DOS_CASEMAP_OFF]   = 0xCB;                                /* AH=38h case map: RETF */
-    { int k; for (k = 0; k < DOS_SDA_LEN; ++k) hdlr[DOS_SDA_OFF + k] = 0; }  /* AH=34h/5D06h */
+    { volatile BYTE *sda = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << 4);   /* AH=34h/5D06h */
+      int k; for (k = 0; k < DOS_SDA_LEN; ++k) sda[DOS_SDA_OFF + k] = 0; }
     for (i = 0x0A; i <= 0x0F; ++i) {
         *(volatile WORD *)(i * 4)     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
@@ -25181,15 +25272,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
          `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
          is untouched -- it keeps 6.22, which is the version it expects. */
+    /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
+         started from Windows now runs UNDER this shell, so forcing the whole session to
+         5.00 would have changed the version every program sees. Only the SHELL'S OWN
+         PROCESS is told 5.00 (dos_int21_shell_psp); what it runs gets the setting. */
     if (g_guest_ntaware) {
-        dos_int21_set_version(&m, 5, 0);
-        settings_note_override(SET_DOSMAJ, "the NTVDM-aware shell (requires 5.00)", 5);
-        settings_note_override(SET_DOSMIN, "the NTVDM-aware shell (requires 5.00)", 0);
-        dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
-        g_dosver_forced = 1;
-        g_dosver_why = "Windows XP's DOS prompt only works as 5.00, so this session -- and "
-                       "anything you start from its prompt -- uses 5.00. The setting above "
-                       "applies when you start a program directly.";
+        dos_int21_shell_psp(&m, DOS_PSP_SEG, 1);
+        dosver_src = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
+        g_dosver_shell = 1;
     }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
@@ -25265,6 +25355,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            become folklore. */
       if (g_guest_ntaware) {
           g_dos_int53[0x02].ax = 0x5300; g_dos_int53[0x02].cf = 1;   /* top of its main loop */
+          /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends
+             its loop to BOP 54 sub 01 ("what next?") instead of the prompt -- so when the
+             program ends the shell ASKS, and we decide: done (close the window) or, after
+             Close Program, the prompt. See the sub 01 arm. */
+          if (g_routed) g_dos_int53[0x02].cf = 0;
           g_dos_int53[0x05].ax = 0x5300; g_dos_int53[0x05].cf = 0;   /* -> [0x327] = 0       */
           i53_src = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
       }
@@ -29179,6 +29274,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     if (g_close_forced) {           /* #152: it did not unhook itself */
                         g_close_forced = 0;
+                        if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
                         exec_mach_restore(g_exec_depth - 1, &p);
                         m.tsr_pending = 0;
                     }
@@ -29381,6 +29477,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      session has no Win32 side to hand anything back, so the second ask
                      means "we are done": end the VDM with the shell's ReturnCode, as stock
                      ends a command.com window. */
+                /* #208: the routed program was ENDED BY CLOSE PROGRAM -- the user asked for the
+                     prompt, not for the window to close. Go interactive from here (AH=53h
+                     AL=2 CF=1, the shell's own prompt path) and answer "nothing", once; the
+                     shell's NEXT sub 01 is then an ordinary EXIT. */
+                if (g_guest_ntaware && g_back_to_prompt && g_shell_getnext_n >= 1) {
+                    g_back_to_prompt = 0;
+                    g_dos_int53[0x02].cf = 1;
+                    p = zput(p, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                } else
                 if (g_guest_ntaware && ++g_shell_getnext_n > 1) {
                     p = zput(p, "         sub 01 again: the shell is handing back control (EXIT)"
                                 " -- ending the VDM, rc=0x");
@@ -29465,6 +29571,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          the mechanism and building a fork bomb. */
                     static int cmd_done = 0;
                     char cmdbuf[128]; DWORD cn = 0;
+                    if (!cmd_done && g_routed) {
+                        /* #208: the program's arguments, as the shell's tail -- it passes
+                           them on as the program's own PSP command tail. */
+                        /* ⚠ THE TAIL IS THE WHOLE COMMAND LINE, VERB FIRST; the NAME field
+                             is only the already-resolved path to run it with. Measured two
+                             ways: tail "hello" + name COMMAND.COM EXEC'd COMMAND.COM, and
+                             tail " " + name HELLO.COM ran NOTHING (a blank line is "no
+                             command" and the shell went to its prompt). */
+                        cmd_done = 1;
+                        {   char *w = cmdbuf, *e = cmdbuf + sizeof(cmdbuf) - 2;
+                            const char *s1 = g_first_prog;
+                            while (*s1 && w < e) *w++ = *s1++;
+                            if (g_first_tail[0] && w < e) {
+                                const char *s2 = g_first_tail;
+                                if (*s2 != ' ') *w++ = ' ';
+                                while (*s2 && w < e) *w++ = *s2++;
+                            }
+                            cn = (DWORD)(w - cmdbuf); }
+                    }
                     if (!cmd_done) {
                         HANDLE hcc = CreateFileA(BOPCMD_PATH, GENERIC_READ, FILE_SHARE_READ,
                                                  NULL, OPEN_EXISTING, 0, NULL);
@@ -29530,7 +29655,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        `dosstub.com` -- the harness stub -- and `target.txt` names the
                        real program, so g_app2 would hand the shell the stub. progpath
                        is what we actually LOADED, which is the program either way. */
-                    const char *ap = progpath[0] ? progpath : (g_app2[0] ? g_app2 : "");
+                    const char *ap = g_routed ? g_first_prog      /* #208: the program */
+                                   : progpath[0] ? progpath : (g_app2[0] ? g_app2 : "");
                     DWORD al = 0, ty = 9;
                     if (!named_once && ap[0]) {
                         while (ap[al] && al + 1 < ncap && al < 260) ++al;

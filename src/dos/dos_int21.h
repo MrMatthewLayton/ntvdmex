@@ -27,6 +27,15 @@ typedef struct {
     uint16_t first_mcb;        /* MCB chain root (AH=48/49/4A)                     */
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
     uint8_t  ver_major, ver_minor;  /* reported DOS version -- GH #28, default 6.22 */
+    /* ── #208, THE USER'S CHOICE: SETVER, NOT A SESSION-WIDE 5.00. ─────────────────
+         XP's COMMAND.COM refuses anything but 5.00, and every program started from
+         Windows now runs UNDER it -- so a session-wide 5.00 would have changed the
+         version every program sees. Instead, like DOS's own SETVER table, the version
+         is answered PER PROCESS: a PSP listed here (an NTVDM-aware shell) is told
+         shell_ver; everything else gets ver_major/ver_minor, the Settings version. */
+#define DOS_V5_PSPS 4
+    uint16_t v5_psp[DOS_V5_PSPS];   /* 0 = unused slot                                */
+    uint8_t  shell_ver_major, shell_ver_minor;
     uint8_t  alloc_strat;      /* AH=58h allocation strategy (0 = first fit)       */
     uint8_t  umb_link;         /* AH=58h UMB link state (0 = not linked)           */
     uint8_t  break_on;         /* AH=33h extended Ctrl-Break checking (BREAK=)     */
@@ -153,6 +162,9 @@ void dos_int21_set_pm(int on);  /* CF/ZF -> live VTIB_EFLAGS, not a V86 FLAGS fr
    because NT's DOS has always reported 5.00 and its shell is built to match.
    Call before dos_int21_init's defaults are wanted, or any time after. */
 void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor);
+/* #208: the process at `psp` is an NTVDM-aware shell and is answered 5.00 by AH=30h
+   and AX=3306h (on=1), or no longer is (on=0, e.g. at its terminate). */
+void dos_int21_shell_psp(dos_machine_t *m, uint16_t psp, int on);
 /* The current drive, 0 = A:. Published because the NTVDM `BOP 0x54 sub 01` answer has
    to carry it (COMMAND.COM reads it out of the reply block and immediately issues
    AH=0Eh with it) -- and the host must not re-derive the same policy separately, which

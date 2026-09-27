@@ -1555,5 +1555,88 @@
   ],
   "recorded": "2026-09-27",
   "why": "AH=33h AL=07h is not an MS-DOS 6.22 sub-function (DOS 7 later used it for the Ctrl-P/PRN toggle). Both genuine Microsoft kernels (msdos622, PCem) answer AL=FFh, the documented reply to an unknown AH=33h sub-function; dosbox-x leaves AL unchanged (07h) -- an answer about its own DOS, not 6.22's. The genuine kernels are definitive."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5501",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5501",
+  "field": "SI",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5501",
+  "field": "DS",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5500",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5500",
+  "field": "SI",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "cmd2f55",
+  "case": "int2f.5500",
+  "field": "DS",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "int2f",
+  "case": "int2f.5501",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
  }
 ]

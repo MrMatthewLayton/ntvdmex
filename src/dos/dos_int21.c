@@ -382,6 +382,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
     m->hdepth = 0;          /* no EXEC in progress: nothing saved */
+    { int k; for (k = 0; k < DOS_V5_PSPS; ++k) m->v5_psp[k] = 0; }
+    m->shell_ver_major = 5; m->shell_ver_minor = 0;   /* what XP's COMMAND.COM demands */
     m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
                                function sets fields one by one -- nothing zeroes it */
     m->vdrive = -1;         /* the current drive is the process current directory's */
@@ -468,6 +470,23 @@ void dos_handles_pop(dos_machine_t *m, int tsr)
         }
     for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = m->hsave[d].fh[i];
     m->std_open = m->hsave[d].std_open;
+}
+
+void dos_int21_shell_psp(dos_machine_t *m, uint16_t psp, int on)
+{
+    int k;
+    for (k = 0; k < DOS_V5_PSPS; ++k) if (m->v5_psp[k] == psp) m->v5_psp[k] = 0;
+    if (on) for (k = 0; k < DOS_V5_PSPS; ++k) if (!m->v5_psp[k]) { m->v5_psp[k] = psp; break; }
+}
+
+/* The version THIS process is told -- see dos_machine_t::v5_psp. */
+static uint16_t dos_version_word(const dos_machine_t *m)
+{
+    int k;
+    for (k = 0; k < DOS_V5_PSPS; ++k)
+        if (m->v5_psp[k] && m->v5_psp[k] == m->psp_seg)
+            return (uint16_t)((m->shell_ver_minor << 8) | m->shell_ver_major);
+    return (uint16_t)((m->ver_minor << 8) | m->ver_major);
 }
 
 void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
@@ -875,7 +894,7 @@ int dos_int21(dos_machine_t *m)
            left in them and read that as our OEM number and serial.  Values
            confirmed against the 6.22 oracle: BH=0xFF (generic MS-DOS), serial 0.
            The version itself is configurable -- see dos_int21_set_version(). */
-        SETAX((uint16_t)((m->ver_minor << 8) | m->ver_major));
+        SETAX(dos_version_word(m));             /* per process: see v5_psp (#208) */
         SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
         SET16(R_CX, 0x0000);                    /* serial low                  */
         OKCF();
@@ -1521,7 +1540,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x54) {                    /* get verify flag */
         SETAX((R_AX & 0xFF00) | m->verify); OKCF();
     } else if (ah == 0x34) {                    /* get InDOS flag -> ES:BX */
-        SET16(R_ES, DOS_HDLR_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
+        SET16(R_ES, DOS_SDA_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
     } else if (ah == 0x5D && ((R_AX & 0xFF) == 0x08 || (R_AX & 0xFF) == 0x09)) {
         /* 5D08h/5D09h set and flush the network redirector's sharing retry
            counts. COMMAND.COM calls both at startup. There is no redirector
@@ -1529,7 +1548,7 @@ int dos_int21(dos_machine_t *m)
            no network, and refusing would make the shell think something failed. */
         OKCF();
     } else if (ah == 0x5D && (R_AX & 0xFF) == 0x06) {   /* get swappable data area */
-        SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_SDA_OFF);
+        SET16(R_DS, DOS_SDA_SEG); SET16(R_SI, DOS_SDA_OFF);
         SET16(R_CX, DOS_SDA_LEN); SET16(R_DX, DOS_SDA_LEN);
         tp = zput(tp, "  INT21 AH=5D06 SDA (minimal: crit-err + InDOS only)\r\n");
         OKCF();
@@ -2260,7 +2279,10 @@ int dos_int21(dos_machine_t *m)
                reports DH=0x10 because that image boots DOS=HIGH -- DH is a
                property of the host's configuration, not of the version, which
                is why the probes do not compare it. */
-            SET16(R_BX, (uint16_t)((m->ver_minor << 8) | m->ver_major));
+            /* ⚠ Real SETVER leaves the TRUE version alone. Ours follows the same
+                 per-process rule anyway: whether XP's shell checks 3306h as well is not
+                 measured, and a shell that refuses to start is the costlier mistake. */
+            SET16(R_BX, dos_version_word(m));
             SET16(R_DX, 0x0000);
             OKCF();
         } else {                                               /* not a 6.22 subfn */

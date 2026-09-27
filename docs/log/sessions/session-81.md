@@ -381,3 +381,29 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
 - Deferred to issues: Close Program on a DOS program started from Windows should land at a
   shell (needs launching through COMMAND.COM as stock does); multiple NTVDMEX instances.
 - ⚠ controld reads 255 bytes of command: long key scripts go in cfg\keys.txt (shell2/3.bat).
+
+## Part 12 — #208: programs started from Windows run under XP's COMMAND.COM
+
+- **Routing.** A DOS program named at launch (CSRSS or target.txt) is no longer loaded
+  directly: XP's COMMAND.COM /P is, and its first BOP 54 sub 01 is answered with the program —
+  as stock ntvdm does. Skipped (loaded directly, and logged why) for Win16/Win32 images, a
+  COMMAND.COM, a cfg\shell.txt shell, or an 8.3 path+args too long for a DOS line; A/B switch
+  `cfg\directlaunch.flag`.
+- **The sub 01 protocol, measured on the rig** (it was only half-known): the TAIL is the whole
+  command line, verb first; the NAME field is the resolved path. A blank tail = "no command"
+  (the shell went to its prompt). AH=53h AL=2 CF=0 keeps the shell asking sub 01 after the
+  program instead of reading the keyboard; on the second sub 01 we end the VDM with the
+  program's exit code (EXIT42.COM → 0x2A reported to CSRSS), or — after Close Program — flip
+  to CF=1 and answer "nothing", leaving the user at the prompt (skywin/doomwin: `ver` works).
+- **DOS version, the user's choice: SETVER-style.** Only an NTVDM-aware shell's own PSP is told
+  5.00 (`dos_int21_shell_psp`, marked at start-up and at EXEC by the same image test);
+  everything it runs gets the Settings version (p_ver clean through the routed path).
+- **Found by the sweep:** the SDA (crit-error + InDOS) at DOS_HDLR_SEG:6C shared its bytes with
+  five planted stubs (DPMI callbacks, PM return, raw switch, fault BOP) — read "10 CF" once the
+  start-up order changed. Moved to DOS_SDA_SEG:00A0, beside SysVars, as on 6.22; tested.
+- **Found by the guards:** DOS/4GW's 64-byte argv[0] rule only guarded programs WE loaded;
+  EXEC'd ones (typed at the prompt, now every launch) got the full 8.3 path — Duke3D (66) and
+  Heretic (68) died "can't find file ...E>". EXEC now hands the bare name under the same
+  condition. Duke3D, Heretic, Hexen, Doom, ZAR run; Mario and Skyroads timing as baseline.
+- p_2f55 / p_int2f 5500h/5501h rows are the resident COMMAND.COM's answers (XP's now, 6.22's on
+  the oracle): recorded in oracle-rules.json. Sweep otherwise as before.

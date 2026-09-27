@@ -43,7 +43,13 @@
      #47's "Extended (XMS) 0K", and it was a LAYOUT COLLISION, not a driver bug.
    0x6C..0x8B is clear: past the IRET stub (0x58), the case-map (0x59) and the
    opt-in VIF trampoline (0x60..0x65), and below the MCB-head word at 0x8E. */
-#define DOS_SDA_OFF     0x006C      /* [0]=crit-err flag, [1]=InDOS, then zeros */
+/* ⛔ s81 (#208): 0x6C..0x8B IN DOS_HDLR_SEG WAS NOT CLEAR. The DPMI callback slots
+     (0x60-0x6F), the PM-return catcher (0x70), the raw-switch entry (0x74) and the fault
+     BOP (0x80) are all planted in it, so the crit-error/InDOS pair read as stub bytes
+     (measured "10 CF" -- CF is an IRET) whenever start-up planted them last. p_err caught
+     it the first time the launch order changed. The SDA now lives where 6.22 keeps it: in
+     DOS's data segment beside SysVars -- DOS_SDA_SEG:DOS_SDA_OFF, below. */
+#define DOS_SDA_OFF     0x00A0      /* in DOS_SDA_SEG: [0]=crit-err flag, [1]=InDOS, zeros */
 #define DOS_SDA_LEN     0x20
 #define DOS_INDOS_OFF   (DOS_SDA_OFF + 1)
 
@@ -98,6 +104,7 @@
 #define DOS_UMBHEAD_OFF 0x008C      /* = SysVars+0x66: first UMB MCB; FFFF = none  */
 #define DOS_UMBHEAD_NONE 0xFFFF
 #define DOS_SYSVARS_LEN 0x0070      /* bytes from SysVars+0 that we own and zero   */
+#define DOS_SDA_SEG     DOS_SYSVARS_SEG   /* the SDA shares DOS's data segment, as on 6.22 */
 
 /* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
    MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").

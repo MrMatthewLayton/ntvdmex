@@ -186,7 +186,7 @@ int main(void)
            nothing else we place in low memory. */
         unsigned sv0 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF - 2u;
         unsigned sv1 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN;
-        unsigned sda0 = DOS_HDLR_SEG * 16u + DOS_SDA_OFF, sda1 = sda0 + DOS_SDA_LEN;
+        unsigned sda0 = DOS_SDA_SEG * 16u + DOS_SDA_OFF, sda1 = sda0 + DOS_SDA_LEN;
         ++checks;
         if (sv0 < 0x600u) {       /* the first MCB header is 0x5F0..0x5FF */
             ++fails; printf("  FAIL %-54s\n", "SysVars must not reach the first MCB (0x5F0)");
@@ -204,9 +204,17 @@ int main(void)
             ++fails; printf("  FAIL %-54s\n", "the SDA must not land on SysVars (this WAS GH #47)");
         }
         ++checks;
-        if (DOS_HDLR_SEG * 16u + DOS_INDOS_OFF
+        if (DOS_SDA_SEG * 16u + DOS_INDOS_OFF
             == DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF + 0x45) {
             ++fails; printf("  FAIL %-54s\n", "InDOS is back on SysVars+0x45 (GH #47 regressed)");
+        }
+        ++checks;
+        if (sda1 > DOS_CTAB_SEG * 16u || sda0 < 0x718u) {
+            ++fails; printf("  FAIL %-54s\n", "the SDA must sit in free DOS data space (s81)");
+        }
+        ++checks;   /* s81: the stubs planted in DOS_HDLR_SEG sat on the old SDA */
+        if (sda0 < DOS_HDLR_SEG * 16u + 0x100u && sda1 > DOS_HDLR_SEG * 16u) {
+            ++fails; printf("  FAIL %-54s\n", "the SDA must not share DOS_HDLR_SEG's stub space");
         }
         ++checks;
         if (DOS_CTAB_SEG * 16u + DOS_WOW_TBL_OFF < DOS_SYSVARS_SEG * 16u) {
