@@ -2944,6 +2944,32 @@ static void irq0_ack(void)
     }
 }
 
+/* ── #173: THE PROTECTED-MODE ARMS HOLD IRQ0 IN SERVICE TOO. ─────────────────────────
+     Until s81 the async PM arm acknowledged IRQ0 and EOI'd it on the spot, and the two
+     synchronous PM injectors (the #2b latch and the catch-up batch) never told the PIC
+     at all. Either way a DPMI client's timer ISR ran with IRQ0 NOT in service, so its own
+     `out 20h,20h` -- a NON-SPECIFIC EOI -- cleared the highest bit that WAS in service:
+     a sound card's or the keyboard's, whose handler was still running. Doom's DMX EOIs
+     every tick it does not chain.
+   ► A synchronous injector claims the line before it runs the handler (the handler EOIs
+     from inside the call, through host_try_io_pm) and hands it back when the injector
+     declined, since then no handler ran to EOI it. A handler that chains to our default
+     PM INT 08h gets the BIOS's EOI there, as the V86 BOP arm gives it. The safety nets
+     (250 ms timeout, auto-EOI fallback) are irq0_can_deliver's and cover these arms. */
+static int irq0_pm_claim(void)
+{
+    if (!irq0_can_deliver()) return 0;
+    irq0_ack();
+    return 1;
+}
+static void irq0_pm_unclaim(void)
+{
+    if (g_irq0_autoeoi || async_vec_is_our_stub(0)) { g_irq0_isr_auto--; return; }
+    vdd_pic_eoi(&g_pic, 0);
+    g_irq0_isr_since = 0;
+    g_irq0_isr_strict--;
+}
+
 
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
@@ -3402,8 +3428,11 @@ static int async_inject_irq(unsigned irq)
         else if (dpmi_async_inject_pm(irq, &cx)) {
             cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
             ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
-            if (ok) { vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
-                      if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq); }
+            /* Same acknowledge as the V86 arm below: IRQ0 in service until the guest
+               EOIs (#173), a stub-vectored line released at once. */
+            if (ok) { if (irq == 0)                        irq0_ack();
+                      else if (async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
+                      else                                 vdd_pic_acknowledge(&g_pic, (uint8_t)irq); }
             else    { g_async_pm_active = 0; }     /* never leave the flag set on failure */
             async_why_note(irq, ok ? 0u : 13u);
         }
@@ -20385,6 +20414,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ntvdd_regs r; regs_load(&r, tib);
                         HOST_LOCK();
                         vdd_bus_deliver_int(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
+                        /* The BIOS timer ISR ends with its EOI; a PM handler that chains
+                           here is relying on it, as in V86 (#173). */
+                        if (vec == 0x08) vdd_pic_eoi(&g_pic, 0);
                         HOST_UNLOCK();
                         regs_store(&r, tib);
                         VDM_REG(tib, VTIB_EIP) += 2;
@@ -27929,8 +27961,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         uint32_t pre8 = g_dma.rd_count[1];
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
-                        if (g_pm_tick_owed > 0 && dpmi_inject_pm_irq(&m, tib, 0x08, steps))
-                            InterlockedDecrement(&g_pm_tick_owed);
+                        if (g_pm_tick_owed > 0 && irq0_pm_claim()) {
+                            if (dpmi_inject_pm_irq(&m, tib, 0x08, steps))
+                                InterlockedDecrement(&g_pm_tick_owed);
+                            else irq0_pm_unclaim();
+                        }
                         g_in_pm_irq = 0;
                         g_coop_dma_polls += g_dma.rd_count[1] - pre8;
                     }
@@ -28435,7 +28470,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  raised; here, consuming early discarded one nobody ran. */
                             for (k = 0; k < DPMI_IRQ0_BATCH; ++k) {
                                 if (g_pm_tick_owed <= 0) break;
-                                if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) break;
+                                if (!irq0_pm_claim()) break;     /* last tick not EOI'd (#173) */
+                                if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) { irq0_pm_unclaim(); break; }
                                 InterlockedDecrement(&g_pm_tick_owed);
                             }
                             g_in_pm_irq = 0;

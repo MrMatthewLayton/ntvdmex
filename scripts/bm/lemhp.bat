@@ -66,5 +66,8 @@ copy /y "%OUT%\ntvdmhost.log" "%OUT%\lemhp_%TAG%_host.txt" >nul 2>&1
 rem ⚠ AND CLOSE THE GAME (s81): this used to leave Lemmings running -- flickering on
 rem   the rig's screen for whoever sits down next. Everything worth keeping is copied above.
 taskkill /f /im ntvdmhost.exe >nul 2>&1
+rem ...and take back the two files this run created: a target.txt left behind makes
+rem   EVERY later bare launch start Lemmings instead of a prompt.
+del /q "%CFG%\target.txt" "%CFG%\livehb.flag" >nul 2>&1
 echo done>> "%OUT%\lemhp_%TAG%.txt"
 endlocal

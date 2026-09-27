@@ -68,8 +68,12 @@ host does not call it for master lines — `main.c:3149` does its own
 line cross-lock. Marked here so the next reader does not "fix" it and quietly move the
 timer's raise onto a slower path.
 
-⚠ **The DPMI / protected-mode delivery arm still auto-EOIs IRQ0.** That is Doom's path,
-it is by-hand only, and no probe here says anything about it. [[irq0-must-be-held-in-service]]
+✅ **The DPMI / protected-mode arms hold IRQ0 in service too (#173, s81).** The async PM
+arm used to EOI on delivery and the two synchronous injectors never told the PIC, so a
+client's non-specific `out 20h,20h` cleared a *lower* line's in-service bit. They now use
+`irq0_ack()` / `irq0_pm_claim()`, and the default PM INT 08h handler EOIs as the BIOS does.
+Rig: Doom `irq0_isr` strict=4061 against 4066 raises, 0 blocked, 0 timeouts, no fallback;
+Skyroads `n8=0 max_ms=7`; Win16 Notepad opens and closes. [[irq0-must-be-held-in-service]]
 
 ## 3. Initialisation — ICW1–ICW4
 
