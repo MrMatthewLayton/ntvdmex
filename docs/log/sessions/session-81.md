@@ -240,3 +240,49 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   (retired); the memory index's open lists.
 - New anchor zip `dist\ntvdmex-20260927-a286862.zip` (host `0e6f5156` = `prev`).
 - Artefacts (local, `runs/` is gitignored): `runs/s81_review/` -- triage.md, harvest.md and the scripts that made every change.
+
+---
+
+## Part 5 — Tier 1 quick wins and the fullscreen blur (`a120883`, `91c83bf`)
+
+- Menus: Save/Load State removed (#145); unimplemented Machine/Debug/Help items removed, not
+  greyed (#148); View cleanup (#156); Renderer = GDI/DirectDraw and actually switching (#147);
+  Show Host Cursor back as a View toggle, greyed while the guest owns the mouse (#157); release
+  hint in fullscreen (#138); Aspect as a 4-way dropdown (#159); Ctrl+Tab in Settings (#137).
+- Also closed: #186 (VGA parity 690/690), #195 (`/uninstall` lockout + `/force`), #182, #169, #198.
+- ⛔ `install_test` printed `ALL PASS: n/n`, a dialect the off-VM runner never parsed: its 30
+  checks counted as zero for as long as it existed. Battery now 1,708 checks.
+- **Blur:** the user's saved Renderer ("DirectDraw", picked while it did nothing) went live with
+  #147 and switched fullscreen to driver-smoothed exclusive mode. The setting moved to a new name
+  so stale values are ignored. User: **LGTM** on host `0e5b10e7`, now `debug\prev\ntvdmhost_prev.exe`.
+
+## Part 6 — File > Close Program (#152), and a watchdog that killed the shell
+
+- **Design.** The menu raises `g_close_req`; the exec thread takes it at the top of the V86 loop
+  or the PM loop (the IRQ-delivery boundary) and ends the INNERMOST program through the same
+  child-terminate path a real `AH=4Ch` takes (`dos_terminate`; for a DPMI client, the s80
+  "child with a parent" path). Greyed at a shell's own prompt, in a Win16 VDM, and once the run
+  is over. At depth 0 with no shell it ends the run, like the program's own exit.
+- **What a killed program leaves broken.** It never unhooks: INT 08h/09h would point into the
+  block `dos_terminate` frees and the shell dies on the next tick or key. EXEC now snapshots the
+  IVT, PIC masks, BDA video mode and PIT channel-0 period (`g_exec_mach`); a FORCED close
+  restores them, clears PIC in-service, resets SB/OPL/GUS/MPU/speaker (an auto-init block would
+  play on) and the INT 33h driver (its event handler is in the freed block). A program's own
+  exit is untouched — DOS does none of this.
+- **Rig, unattended** (`scripts/bm/closeprog.bat <sky|doom|skyxp|doomxp>`: key script starts the
+  game, `rigshot cmd 3` posts Close Program, then `ver` is typed): Skyroads under 6.22's shell and
+  Doom under XP's both come back to a text-mode prompt that answers `ver`. Logs + shots in
+  `runs/s81_closeprog/`.
+- **Found on the way — the free-what-it-owned sweep was capped at 64 passes.** Skyroads owns more;
+  closing it freed exactly 0x40 blocks and stopped. Now 4096.
+- ⛔ **Found on the way — quitting a DPMI program to the prompt got the host killed 3 s later.**
+  The DPMI watchdog stands down only on `g_dpmi_done` (the whole run over). A client that returns
+  to its parent never sets it, the idle prompt never bumps `g_dpmi_iter`, and V86 code never
+  counts as "moving" — so `STAGE3-DPMI: watchdog terminating (wedged)`. Each watchdog now carries
+  a generation (`g_dpmi_wd_gen`) bumped when its client returns to a parent. Verified: the doomxp
+  run logs `watchdog stand-down (client returned to its parent)` and the host is alive at the end.
+- **Not ours, filed separately:** DOS/4GW started from **6.22's** `COMMAND.COM` in this harness
+  #GPs in its own start-up (null ES at `01a7:2efe`) and exits FFh — identical on the previous
+  build `0e5b10e7`, so pre-existing.
+- Guards: Skyroads `n8=0 max_ms=6/7` (×3; one run showed a single 797 ms IFV starve stretch, two
+  re-runs 0); Win16 Notepad launches and closes; off-VM battery 1,708/0.

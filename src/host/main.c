@@ -1545,6 +1545,12 @@ static int   g_bp_n = 0;
    (whether a real exception was ever delivered to us at all). */
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
 static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
+/* ⛔ A CLIENT THAT RETURNS TO ITS PARENT NEVER SET g_dpmi_done -- the run is not over --
+     so its watchdog stayed armed over the shell. An idle prompt does not bump
+     g_dpmi_iter and V86 code never counts as "moving", so quitting Doom to the prompt
+     got the host TerminateProcess'd 3 s later (found s81 testing #152). Each watchdog
+     now owns a generation and stands down when the client it watched is gone. */
+static volatile LONG  g_dpmi_wd_gen   = 0;
 static int            g_headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
 /* Exec-loop instrumentation, reported once at wind-down (cheap counters, no I/O in
    the hot path). These separate the two costs that look identical from outside: how
@@ -1981,6 +1987,23 @@ static struct {
 } g_exec[EXEC_MAX_DEPTH];
 static int g_exec_depth;
 
+/* ── FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152) ────────
+     A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
+     would go on pointing into the block dos_terminate frees, and the shell would die
+     on the next tick or keypress -- so EXEC photographs what the child can break (the
+     IVT, the PIC masks, the video mode, the PIT period) and a forced close puts it
+     back before the ordinary child terminate runs. Only a FORCED close restores: a
+     program's own exit is DOS's business, and DOS does not do this. */
+static struct {
+    WORD  ivt[512];                   /* 0000:0000-03FF as the parent left it */
+    BYTE  imr_m, imr_s, vmode;
+    DWORD pit0;                       /* channel 0's effective reload */
+} g_exec_mach[EXEC_MAX_DEPTH];
+static volatile LONG g_close_req;     /* UI -> exec thread: end the innermost program */
+static int  g_close_forced;           /* the exit in progress is ours, not the guest's */
+static int  g_top_is_shell;           /* depth 0 is a shell: nothing to close there */
+static void exec_mach_save(int d);    /* fwd: defined with close_prog_now */
+
 static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
 
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
@@ -2154,6 +2177,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         return p;
     }
 
+    exec_mach_save(d);                              /* #152: what a forced close restores */
     ++g_exec_depth;
     m->psp_seg = child;
     m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
@@ -3878,7 +3902,9 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
            good. Rescan after each free: dos_free coalesces, so the chain moves. */
         if (g_exec[d].child_seg) {
             int pass, nfree = 0;
-            for (pass = 0; pass < 64; ++pass) {
+            /* ⚠ Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
+                 0x40 and stopped, leaving the rest owned by a PSP that no longer exists. */
+            for (pass = 0; pass < 4096; ++pass) {
                 uint16_t mm = m->first_mcb, hit = 0; int guard = 0;
                 for (;;) {
                     volatile uint8_t *mc = mcb_at(NULL, mm);
@@ -7295,6 +7321,78 @@ static void i33_reset_state(void)
         InterlockedExchange(&g_ms_y, i33_py(cy)); }
 }
 
+/* ── FILE > CLOSE PROGRAM, THE EXEC-THREAD HALF. (GH #152) ─────────────────────────
+     See g_exec_mach. The UI only raises g_close_req; the exec thread takes it at the
+     top of its loop (V86) or of the PM loop, where the guest is stopped and no BOP is
+     half-answered -- the same boundary every injected IRQ uses. */
+static void video_trap_sync(void);             /* fwd */
+static void exec_mach_save(int d)
+{
+    unsigned i;
+    for (i = 0; i < 512; ++i) g_exec_mach[d].ivt[i] = peekw(i * 2);
+    g_exec_mach[d].imr_m = g_pic.m.imr; g_exec_mach[d].imr_s = g_pic.s.imr;
+    g_exec_mach[d].vmode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
+    g_exec_mach[d].pit0  = pit_eff_reload(&g_pit);
+}
+
+/* Put back what the ended child may have left broken. Called with the child still at
+   depth d+1, before dos_terminate frees its memory. */
+static void exec_mach_restore(int d, char **pp)
+{
+    unsigned i;
+    int remode;
+    HOST_LOCK();
+    for (i = 0; i < 512; ++i) pokew(i * 2, g_exec_mach[d].ivt[i]);
+    g_pic.m.imr = g_exec_mach[d].imr_m; g_pic.s.imr = g_exec_mach[d].imr_s;
+    g_pic.m.isr = 0; g_pic.s.isr = 0;           /* a handler it never finished */
+    g_irq0_isr_since = 0;
+    if (pit_eff_reload(&g_pit) != g_exec_mach[d].pit0) {   /* a game's fast timer */
+        uint32_t v = 0x36, n = g_exec_mach[d].pit0 & 0xFFFF;
+        vdd_bus_io(&g_bus, 0x43, 1, 0, &v);
+        v = n & 0xFF;        vdd_bus_io(&g_bus, 0x40, 1, 0, &v);
+        v = (n >> 8) & 0xFF; vdd_bus_io(&g_bus, 0x40, 1, 0, &v);
+    }
+    /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
+       into the shell. */
+    vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
+    vdd_mpu_reset(&g_mpu); vdd_speaker_reset(&g_spk);
+    remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
+              || g_vid.mkind != VID_KIND_TEXT);
+    if (remode) {
+        ntvdd_regs r;
+        ZeroMemory(&r, sizeof r);
+        r.eax = g_exec_mach[d].vmode;           /* AH=00h set mode */
+        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+    }
+    HOST_UNLOCK();
+    if (remode) video_trap_sync();
+    /* Its mouse event handler lives in the block about to be freed. */
+    g_ms_cb_active = 0;
+    i33_reset_state();
+    InterlockedExchange(&g_ms_want_capture, 0);
+    *pp = zput(*pp, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
+    *pp = zput(*pp, remode ? ", video mode 0x" : ")\r\n");
+    if (remode) { *pp = zhexb(*pp, g_exec_mach[d].vmode); *pp = zput(*pp, ")\r\n"); }
+}
+
+/* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
+   started with was ended, so the run is over. */
+static int close_prog_now(dos_machine_t *m, void *tib, char **pp, char *base)
+{
+    if (g_exec_depth > 0) {
+        *pp = zput(*pp, "CLOSEPROG: ending the program at depth ");
+        *pp = zhexb(*pp, (unsigned)g_exec_depth); *pp = zput(*pp, " (File > Close Program)\r\n");
+        exec_mach_restore(g_exec_depth - 1, pp);
+        m->tsr_pending = 0;
+        m->exit_code = 0;
+        return dos_terminate(m, tib, pp, base);
+    }
+    *pp = zput(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
+    log_append(LOG_PATH, base, *pp); *pp = base;
+    m->exit_code = 0;
+    return 0;
+}
+
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
@@ -8810,15 +8908,28 @@ static void menu_check(HWND h, UINT id, int on)
      costs five EnableMenuItem calls on a user action.
    ⚠ NOT the scaffold-stub rule (unimplemented items stay enabled) -- see the note by
      IDM_EDIT_MARK. In text mode these are enabled exactly as before. */
-static void menu_sync_modal(HWND h)
+/* #152: is there a program to close? Greyed at the shell's own prompt, in a Win16
+   VDM, and once the run is over. */
+static int close_prog_available(void)
+{
+    if (g_wow_launch || !g_running || g_wound_down || g_dpmi_done) return 0;
+    return g_exec_depth > 0 || !g_top_is_shell;
+}
+
+static void menu_sync_modal(HWND h, HMENU popup)
 {
     static const UINT TEXT_ONLY[] = { IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN,
                                       IDM_EDIT_PASTE, IDM_EDIT_SELECTALL };
     HMENU m = GetMenu(h);
     UINT  flag;
     unsigned i;
+    /* The tray menu is its own popup, not a child of the menu bar: grey it directly. */
+    if (popup) EnableMenuItem(popup, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
+                              | (close_prog_available() ? MF_ENABLED : MF_GRAYED));
     if (!m) m = g_fs_menu;
     if (!m) return;
+    EnableMenuItem(m, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
+                   | (close_prog_available() ? MF_ENABLED : MF_GRAYED));
     flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
@@ -10606,7 +10717,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        can change video mode whenever it likes, so this is synced at open time
        rather than at mode-set time. */
     case WM_INITMENUPOPUP:
-        menu_sync_modal(h);
+        menu_sync_modal(h, (HMENU)wp);
         return 0;
     case WM_COMMAND:
         /* ── ★ EVERY MENU-BACKED SETTING, IN ONE PLACE. ──────────────────────────
@@ -10645,7 +10756,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
-        case IDM_VIEW_HOSTCURSOR:                      /* #157 -- see build_menu */
+        case IDM_FILE_CLOSEPROG:                       /* #152 -- see close_prog_now */
+            if (!close_prog_available()) return 0;     /* greyed; belt and braces */
+            if (g_captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
+            InterlockedExchange(&g_close_req, 1);
+            return 0;
+        case IDM_VIEW_HOSTCURSOR:                     /* #157 -- see build_menu */
             if (capture_allowed()) return 0;           /* greyed; belt and braces */
             g_set.v[SET_HIDECURSOR] = g_set.v[SET_HIDECURSOR] ? 0u : 1u;
             settings_apply_live(h);
@@ -13892,7 +14008,8 @@ static LONG WINAPI host_unhandled_filter(EXCEPTION_POINTERS *ep)
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
-    static char wb[512]; char *q = wb; LONG prev = -1; (void)param;
+    static char wb[512]; char *q = wb; LONG prev = -1;
+    LONG my_gen = (LONG)(ULONG_PTR)param;          /* see g_dpmi_wd_gen */
     /* ── ★★ AN INSTRUMENT MUST BE ABLE TO PREEMPT WHAT IT INSTRUMENTS. ─────────────
          The thread that RUNS THE GUEST is raised to THREAD_PRIORITY_ABOVE_NORMAL (or
          HIGHEST with execprio>=2) so the audio pump cannot preempt guest code. This
@@ -13939,6 +14056,11 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         if (g_dpmi_done) {                              /* client exited cleanly -> keep the window */
             q = zput(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
             log_append(WDLOG_PATH, wb, q); serial_out(wb, q);
+            return 0;
+        }
+        if (g_dpmi_wd_gen != my_gen) {                  /* its client went back to a parent */
+            q = zput(q, "STAGE3-DPMI: watchdog stand-down (client returned to its parent)\r\n");
+            log_append(WDLOG_PATH, wb, q); log_append(LOG_PATH, wb, q);
             return 0;
         }
         /* ⚠ A TICK MARKER, so "no samples" can be told apart from "never woke up".
@@ -14103,7 +14225,8 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              3s throws away every later sample, i.e. the whole trace of where it sits.
              wowrun.bat already bounds the run (75s, then taskkill) and the headless
              deadline bounds the rest, so nothing here is unbounded. */
-        if (frozen >= (g_wow_nmod ? 600u : 12u)) break;  /* 3s normally; 150s on a WOW run */
+        if (frozen >= (g_wow_nmod ? 600u : 12u)          /* 3s normally; 150s on a WOW run */
+            && g_dpmi_wd_gen == my_gen) break;           /* ...and only while its client lives */
       }
     }
     q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
@@ -24461,6 +24584,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 ++g_guest_ntvdm_bops;
     }
     g_guest_ntaware = (was_shell && g_guest_ntvdm_bops >= 8);
+    /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
+       chose the shell or something named COMMAND.COM explicitly. */
+    {   int pl = lstrlenA(progpath);
+        g_top_is_shell = was_shell
+            || (pl >= 11 && !lstrcmpiA(progpath + pl - 11, "COMMAND.COM")); }
     /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
          ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
          launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
@@ -25951,6 +26079,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             break;
         }
+        /* File > Close Program (#152). Here, not mid-dispatch: the guest is stopped at
+           an event boundary, which is also where every injected IRQ is delivered. */
+        if (g_close_req && !g_wow_launch) {
+            InterlockedExchange(&g_close_req, 0);
+            if (g_exec_depth > 0 || !g_top_is_shell) {
+                if (close_prog_now(&m, (void *)tib, &p, base)) continue;
+                break;
+            }
+        }
         /* Pump the PIT tick from THIS thread's wall clock. Normally the UI thread
            raises IRQ0, but a heavy I/O-trap loop (e.g. Skyroads' OPL/timer delay poll
            that faults on every IN 388h) starves the UI thread, so the guest's timer
@@ -27010,7 +27147,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 }
                 /* Safety watchdog (kernel PM path only): an un-terminable spin still self-kills
                    after ~3s so the batch dumps the log. */
-                { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
+                { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog,
+                                           (LPVOID)(ULONG_PTR)g_dpmi_wd_gen, 0, NULL);
                   if (wd) CloseHandle(wd);
                   /* Prove creation FROM THIS THREAD. The watchdog's own first line is
                      written by the new thread, so its absence is ambiguous -- it cannot
@@ -27291,6 +27429,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 DWORD pm_start_tick = GetTickCount();   /* headless wall-clock cap origin */
                 for (steps = 0; g_running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD ev, eip, csv, vec; int rc;
+                    /* #152: Close Program ends a PM client exactly as its own AH=4Ch
+                       would; the child-with-a-parent path below does the rest. */
+                    if (g_close_req && !g_wow_launch) {
+                        InterlockedExchange(&g_close_req, 0);
+                        g_close_forced = 1;
+                        g_pm_client_exited = 1; g_pm_exit_code = 0;
+                        p = zput(p, "CLOSEPROG: ending the DPMI client (File > Close Program)\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
                     if (g_pm_client_exited) break;   /* exited inside a nested run -- see the flag */
                     /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
                        never calls INT 21h 4Ch, so under the SMB auto-exit harness the PM loop
@@ -28809,6 +28956,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    ⚠ ONLY with a parent. A top-level client's exit still ends the run,
                      unchanged -- nothing is waiting for it. */
                 if (g_pm_client_exited && g_exec_depth > 0 && g_running) {
+                    InterlockedIncrement(&g_dpmi_wd_gen);   /* its watchdog stands down */
                     dpmi_client_teardown();
                     *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
                     VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
@@ -28817,8 +28965,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     p = zhexb(p, (unsigned)g_exec_depth);
                     p = zput(p, ") -- back to real mode, terminating the child there\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    if (g_close_forced) {           /* #152: it did not unhook itself */
+                        g_close_forced = 0;
+                        exec_mach_restore(g_exec_depth - 1, &p);
+                        m.tsr_pending = 0;
+                    }
                     if (dos_terminate(&m, tib, &p, base)) continue;   /* parent resumed */
                 }
+                g_close_forced = 0;
                 g_dpmi_done = 1;            /* PM run finished -> watchdog stands down, window persists */
                 break;
             }
