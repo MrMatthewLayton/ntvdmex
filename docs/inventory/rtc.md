@@ -177,11 +177,5 @@ telling software when it may read, never software telling the chip anything.
 
 ## What to fix, in order
 
-1. ✅ ~~The periodic interrupt on IRQ8.~~ **DONE 2026-09-23** — on the PIT's own pacer,
-   dormant unless the guest programs it, timing canary re-run.
-2. **The extended-memory CMOS bytes** should follow the host's configured XMS size, not
-   sit at zero — one more instance of *"two doors onto one fact"*.
-3. ✅ ~~The CMOS checksum at `2Eh`/`2Fh`.~~ **DONE 2026-09-23.**
-4. ✅ ~~Alarm and update-ended interrupts.~~ **DONE 2026-09-23.**
-5. **The day of week.** Either the host's clock reading grows a weekday field, or this
-   stays honestly wrong and documented. It should not be computed here.
+Tracked in GitHub: [#182](https://github.com/MrMatthewLayton/ntvdmex/issues/182) (the list that was here was moved there verbatim, 2026-09-27).
+

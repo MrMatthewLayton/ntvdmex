@@ -222,3 +222,21 @@ Mario side-scroll jitter (needs a stock comparison), install-from-zip, 6.22's CO
 - **Follow-up (user):** after `/P` the prompt was `C>`. A `/P` shell builds a fresh environment
   and asks NTVDM for the rest via BOP 54 sub 0F; we answered "none". Implemented the two-call
   protocol (`1ab02af`, host `ab108d55`); the prompt is the full path again.
+
+---
+
+## Part 4 — review: all outstanding work moved to GitHub (2026-09-27)
+
+User: *"Sort any remaining work so it all lives in GH and no outstanding work items are
+persisted locally."* Everything above that reads as open/owed/next is now an issue.
+
+- **17 closed** with evidence (done: #3 #4 #6 #13 #16 #23 #44 #45 #49 #50 #52 #133 #134 #135;
+  obsolete: #15 #17 #129); **20 commented** with what remains; 4 retitled; 11 relabelled.
+- **60 new issues** (#141–#200), one per surface for small items; **#201** host-UI epic;
+  **#202** the agreed work order, pinned.
+- Local lists removed: `STATE.md` (open defects, parked, owed, candidates, the "Next actions"
+  log → archived verbatim to `log/state-archive-2026-09-27.md`); 11 inventory "what to fix"
+  sections (moved verbatim into their issues as comments); `scripts/gh-bootstrap-issues.sh`
+  (retired); the memory index's open lists.
+- New anchor zip `dist\ntvdmex-20260927-a286862.zip` (host `0e6f5156` = `prev`).
+- Artefacts (local, `runs/` is gitignored): `runs/s81_review/` -- triage.md, harvest.md and the scripts that made every change.

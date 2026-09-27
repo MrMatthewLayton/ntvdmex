@@ -1,42 +1,25 @@
 # Project state — start here
 
-> **This is the canonical resume point.** Read it top to bottom and you will know where the
-> project is, what works, what does not, and what to do next. It is deliberately short.
-> **History does not live here** — it lives in [`log/sessions/`](log/sessions/), one file per
-> session. When this file starts growing session blocks again, split them out; it has
-> happened twice now (`return-ntvdm.md` in August, this file in September).
+> **This is the canonical resume point** for what the project IS and where it stands.
+> **All outstanding work lives in GitHub issues — nothing to-do is kept in this repo.**
+> Start with the pinned **[#202 Work order](https://github.com/MrMatthewLayton/ntvdmex/issues/202)**,
+> then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
+> (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-09-26, 01:00 (end of session 80)
+- **Updated:** 2026-09-27 (session 81)
 - **Branch:** `m9/completeness`
-- **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
-  `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
-  **typing, a Win16 app, and the text cursor**, on top of Doom and Skyroads run headlessly.
-  *No git tags yet: the first will be `0.0.1` at the first beta.*
-  ⚠ **That is a three-item confirmation, not a shelf sweep** — the stable zip below stays
-  the anchor until someone runs the whole shelf.
-  ✅ **CLEARED 2026-09-25.** Eight `src/` changes had stacked here unconfirmed — the RTC
-  alarm, the 82077AA, the `AX=122Eh` tables, the BOP work, the shell fallback and the log
-  caps — which broke the standing rule of one observable change per by-hand test. The user
-  has now run them: **6.22's `COMMAND.COM` interactive**, and Doom, Skyroads and the rest
-  of the shelf *"still working as they did before"*. `debug\prev\ntvdmhost_prev.exe` was
-  promoted to that build (**`297e2172`**).
-  ⚠ **The checkpoint commit above has NOT moved** — it still names `ff0d956`/`71ef4737`.
-  Moving it is a deliberate act and belongs with a shelf sweep, not with one good day.
-- **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
-  (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
-  shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`cd5f9f12`** — promoted
-  2026-09-27 (s81) after the user confirmed ZAR, Doom and Duke3D sound by ear. Before it:
-  `ntvdmhost_f484fc3d.exe` (IF/VIF gate, *"ZAR, Skyroads, and Doom all still play"*). (⚠ It also carries s80's two settings changes, which are still not
-  hand-checked.) Earlier confirmed builds kept beside it: `ntvdmhost_a0294462.exe` (GUS),
-  `ntvdmhost_8d795b96.exe` (Doom low/high), `ntvdmhost_0473d95d.exe`
-  (Wolf3D + Mario), `ntvdmhost_b6a8a95b.exe` (execution chaining), `ntvdmhost_d57d586c.exe`.
-  ⚠ This line had gone stale before s80 — it still named `297e2172` while the slot held
-  `d57d586c`. **md5 the slot; do not trust this line.**
-  ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
-  HUMAN confirmed"* and every `bmstage --host` run printed
-  `ntvdmhost_prev.exe = , the confirmed one, untouched` — **with an empty md5** — and
-  nobody read it. The rollback story had no rollback in it for as long as anyone can tell.
+- **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
+  the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
+  Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
+  next zip by the user. Previous anchor: `ntvdmex-20260917-4847355.zip` (host `9448cf27`,
+  tag `release-20260917b`). ⚠ No git tag has been made for the new anchor yet. `bin\` on the
+  rig is free to churn; a `dist\` zip is immutable.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`0e6f5156`** (user-confirmed
+  2026-09-27). Earlier confirmed builds sit beside it by hash (`cd5f9f12` ZAR sound,
+  `f484fc3d` IF/VIF gate, `a0294462` GUS, `8d795b96`, `0473d95d`, `b6a8a95b`, `d57d586c`).
+  **md5 the slot; do not trust this line.**
+- **Checkpoint commit:** still `ff0d956` — ⚠ several confirmed builds behind; moving it is a
+  deliberate act (the anchor above is the better rollback reference now).
 - **Tracker:** [issues](https://github.com/MrMatthewLayton/ntvdmex/issues) ·
   **Knowledge base:** [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki) ·
   **History:** [`log/sessions/`](log/sessions/)
@@ -96,11 +79,12 @@ The full surface list, with the primary source named for each, is in
 | | Status |
 |---|---|
 | **Doom** | Fully playable at **high and low detail** (low fixed s80: its drawers run through the VGA address generator, `pm32interp.h`) — 3D rendering, status bar, menus, PCM + MIDI, keyboard and mouse. Runs its own 32-bit code through DOS/4GW on real silicon. Launches from the shell and from SETUP, quits back to the prompt (s80). |
-| **Duke Nukem 3D** | Runs, including its Setup program. |
+| **Duke Nukem 3D** | Runs, including its Setup program, VESA 800x600, with sound. |
 | **Heretic / Hexen** | Both run; Hexen's hi-res loader renders. |
 | **Wolfenstein 3D · Mario · Skyroads** | Fully playable. Wolf3D's status bar and Mario's mode-Y artefacts fixed s80 (⚠ Wolf3D now ~70–82% of a host core, interpreting). |
-| **ZAR** | Renders, including its VESA modes, and its mouse buttons arrive. **Silent** — pinned in state 4. |
+| **ZAR** | Renders (VESA 800x600), mouse, and **sound effects** (s81: the Miles driver's IRQs now reach real-mode calls). |
 | **heaven7** | Renders (VBE 2.0 direct colour + linear framebuffer) **and plays its GUS music** — *"works and is accurate"* (s80). |
+| **XP's own `COMMAND.COM`** | The default DOS prompt when NTVDMEX is opened: full-path prompt, `dir` (8.3 names), EXEC and return, `exit` closes the window (s81, user-confirmed). |
 | **MS-DOS 6.22 `COMMAND.COM`** | Runs as a guest: prompt, line editing, internals, and an external program EXEC'd and returned from. |
 | **QBasic / EDIT** | Run, including the Open dialog and building `.EXE`s. |
 | **DOS API** | 103 INT 21h functions. XMS 3.0, EMS (LIM 4.0), DPMI 0.9, INT 13h, TSRs, redirection. |
@@ -110,292 +94,18 @@ The full surface list, with the primary source named for each, is in
 | **Host UI** | Menu bar, status strip, six-tab Settings dialog backed by `HKCU\Software\NTVDMEX`. |
 | **Packaging** | A portable zip with `install.bat` / `uninstall.bat` / `status.bat` / `smoke.bat` / `diag.bat`, installed from scratch on three machines. |
 
-### ⛔ Open defects
 
-| | What is known |
-|---|---|
-| **Chain-4 → unchained de-interleave** | `p_vgamem`'s one open row: writes made in chained 13h are not de-interleaved when a program unchains. No visible symptom known. |
-| **Mode-Y interpretation costs CPU** | Wolf3D is interpreted almost continuously (~155 cycles/instruction). Frame rate held on the rig; a slower machine would feel it. The lever is the interpreter's speed. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
-| **Duke3D took no keyboard on one machine** | Reproduced on a friend's Win98-era box only; works on both of the user's own boxes. |
-| **DOS/4GW guests ran typewriter-slow on one machine, once** | First session on the friend's box; fine after a reboot that *also* changed the BIOS to optimized defaults. **Cause unknown and confounded**; logs unrecoverable. |
-| **ZAR sound — fixed s81, user-confirmed** | Was silent. Streams 268/349 non-flat SB blocks headless. [`zar-dos16m`](log/sessions/) · user framing: *"if ZAR doesn't work then NTVDMEX doesn't work."* |
-| **Win16 shelf** | X does not close WinMine/Charmap · Calc/Charmap/Clock draw incorrectly · Bubbles palette · Matrix_1 slow · `graphics\VS87.EXE` · MPLAYER GPF `0001:3983`. |
-| **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. |
-| **`MEM /C`** | The main report matches the 6.22 oracle row for row; `MEM /C` still says MSDOS is 1,028K, contradicting its own summary. |
-| **Parity, open rows** | **7 of 677 comparable rows, every one accounted for.** `p_tsr` paras-still-held · `xms.08` BH (undefined by spec) · `p_vgamem` the one 13h→unchained case (mode-Y, parked) · `kbc.outport.d0` bits 2/3/6/7 (**one oracle — recorded, deliberately unfixed**) · `dma.status.idle` (channel 2's TC — needs the FDC's data path, not the DMA model) · `fdc.alt.3f6` (**the ATA surface's, not the FDC's**) · `fdc.dumpreg` byte 1 (where the head is; not adjudicable). |
-| **`/uninstall` can lock the user out** | It refuses when the IFEO value names a third binary, which the displaced-value restore can produce. Needs a `/force` or a message naming the path. |
+### ⛔ Known defects and all remaining work → GitHub
 
-### ⏸ Parked
+Nothing is tracked here any more. The order of work is **[#202](https://github.com/MrMatthewLayton/ntvdmex/issues/202)**;
+the host-UI programme is **[#201](https://github.com/MrMatthewLayton/ntvdmex/issues/201)**; every
+known defect, parity gap and inventory gap is an open issue with a `P0`/`P1`/`P2` label. The
+session-81 review that moved them there is recorded in
+[`log/sessions/session-81.md`](log/sessions/session-81.md) part 4.
 
-- **Windows 2000** — the host loads (four XP-only imports bound at run time, `ffebdab`), but the
-  `NtVdmControl` / WOW contract is unmeasured there. Parked at the user's request; the user's
-  second box triple-boots 98/2000/XP and they test by hand.
-- **Windows 7** — on the list, 32-bit only. No machine.
-
----
-
-## ▶▶▶ START HERE — session 80 closed all three north stars (handoff 2026-09-26 01:00)
-
-**All three north stars the user set at the end of s79 are DONE and user-confirmed.** The full
-story, with every measurement and every dead end, is in
-[`log/sessions/session-80.md`](log/sessions/session-80.md). Do not re-derive it.
-
-| # | North star | Result |
-|---|---|---|
-| **3** | Execution chaining | ✅ `b6a8a95b` — *"Opening executables from shell, works. Setup > Game works for Doom, Hexen, Duke3D."* DPMI client teardown + child-owned MCBs freed. |
-| **1** | Mode-Y graphics | ✅ `0473d95d` (Wolf3D, Mario) and `8d795b96` (*"Doom low and high detail working!"*) — design C: the multi-plane windows run through the VGA address generator. [`research/modey-cost-measurement.md`](research/modey-cost-measurement.md) |
-| **2** | GUS sound | ✅ `a0294462` — *"Heaven 7 audio works and is accurate!"* [`ref/gus.md`](ref/gus.md), [`inventory/gus.md`](inventory/gus.md) |
-
-### The rig at shutdown
-
-- **`bin\ntvdmhost.exe` = `ad6e25cd`** — the confirmed GUS build plus two settings changes
-  (`f880124`: the GUS checkbox is real as `GusEnabled`, the DOS-version note shows a forced
-  version; `655341d`: the Tandy / CMS checkbox removed). ⚠ **Neither settings change has been
-  checked by a human.**
-- **`debug\prev\ntvdmhost_prev.exe` = `a0294462`** (last user-confirmed). Earlier confirmed
-  builds sit beside it by hash.
-- The user shut the rig down at 01:00. ⚠ **Check `debug\ctl\watcher.txt` is ticking before
-  queuing anything** — see [`baremetal-test-rig`] in memory; a rebooted rig can need `rt.bat setup`.
-
-### Owed by a human (next session, first)
-
-1. **Settings → DOS:** inside XP's `COMMAND.COM`, does the note under the version box read
-   "In force now: 5.00 — …" and fit its box? Does changing the version leave the session alone?
-2. **Settings → Sound:** "Other devices" shows only PC speaker + Gravis Ultrasound; unticking
-   the GUS removes `ULTRASND=` at the next program start.
-3. **Heretic's 3D view** at low detail — it never reaches it headlessly, so the new drawer path
-   has not been seen on it. (Heretic's SETUP → game was also not in the s80 confirmation.)
-
-### Then — candidates, no order agreed yet (ask the user)
-
-- ✅ **The IF/VIF interrupt gate — DONE s81, USER-CONFIRMED** (*"ZAR, Skyroads, and Doom all
-  still play"*). `irq8.nested` 0 on all oracles; host `f484fc3d` = `bin\` = `prev`.
-  [`log/sessions/session-81.md`](log/sessions/session-81.md).
-- ✅ **ZAR sound — DONE s81, USER-CONFIRMED** (*"ZAR, Doom, and Duke3D sound all working"*).
-  Host `cd5f9f12` = `bin\` = `prev`. [`log/sessions/session-81.md`](log/sessions/session-81.md) part 2.
-- **Interpreter speed** for mode Y (Wolf3D's host CPU).
-- **Chain-4 de-interleave** (`p_vgamem`).
-- ▶ **A shelf sweep → a new `dist\` zip — SWEPT, NOT PROMOTED (s81).** Candidate `ntvdmex-20260927-f5d0f4c` failed on DIR/exit/Notepad paste/Paint; DIR + exit + DOS note + the prompt fixed in `ab108d55` (owed a by-hand re-check). **User 2026-09-27: cut the zip once DIR/exit/DOS note pass; Notepad Paste + Paint tools go into the NEXT zip; Doom's quit sound is folded into the mode-Y/port-trap speed work.** Triage, the user's decisions and the menu inventory: [`log/sessions/session-81.md`](log/sessions/session-81.md) part 3. Previously: The anchor zip is still `ntvdmex-20260917-4847355`
-  (host `9448cf27`) and the checkpoint commit still `ff0d956` — both several confirmed builds
-  behind. Moving them is a deliberate act that belongs with a whole-shelf sweep.
-- **Stereo mixer** — the GUS's pan (and SB stereo) collapse to mono today.
-
----
-
-## Next actions, in order
-
-▶ **★★★★★ YOU CAN NOW JUST OPEN NTVDMEX AND GET A DOS PROMPT (2026-09-25).** Run
-`ntvdmhost.exe` with no arguments — double-click, shortcut, Start menu — and a DOS
-session comes up with XP's own `COMMAND.COM`, ready to type at. **No `cfg\` files, no
-arguments, no knobs.** It refuses with an explanation if NTVDMEX is not installed,
-because without the IFEO key the session would silently be *stock* ntvdm's.
-  - A bare launch used to reach STAGE1, be refused VDM privilege
-    (`NtVdmControl` → `0xC0000022`) and vanish with no window and no message. VDM
-    privilege is not askable: NT grants it to a process CSRSS made for a 16-bit image.
-    So the launcher writes a four-byte DOS stub and runs *that*; the IFEO key hands the
-    VDM back to us with the privilege.
-  - ⛔ **The stub's name must be 8.3.** `ntvdmex-shell.com` came back as `NTVDME~1.COM`
-    and the whole thing fell through silently.
-  - The two things XP's shell needs (DOS 5.00, the private `AH=53h` answers) are no
-    longer `cfg\` knobs: they key off a **measured property of the image** — an
-    NTVDM-aware guest carries `C4 C4 54` BOPs and XP's shell has fifteen — and only for
-    a program loaded *as the shell*. 6.22's `COMMAND.COM` has none and is untouched.
-
-▶ **⛔ THE VISIBLE-QUALITY BLOCKER IS ONE ROOT CAUSE, NOT THREE.** The user's 2026-09-25
-by-hand pass: *"Doom low res, Wolf3D and Mario are all still graphically broken (not
-entirely, just not correct)"* — everything else fine. All three are **unchained /
-mode-Y** rendering, and `vdd_video.c` says why in its own words: *"The A0000 aperture is
-one flat buffer — the page trap is deliberately not armed, because arming it makes the
-interpreter the CPU and collapses the run — so a guest write lands there with no record
-of which plane the map mask had selected."*
-  ⇒ It is **parked on a performance judgement, not an impossibility**, and that judgement
-  is now the thing standing between NTVDMEX and looking right. **Unparking it is a
-  product decision** — it means a write hook on A0000 and paying for it. That call is
-  the user's, and it is the next big question.
-
-▶ **★★★★★ XP's OWN `COMMAND.COM` IS AN INTERACTIVE SHELL (2026-09-25).** A **stock XP
-box** now gets a working DOS prompt from the shell it already has — prompt, `ver` →
-`MS-DOS Version 5.00.500`, `dir` with volume serial and free space, cursor waiting at
-the next prompt. That closes the product question below: no Microsoft 6.22 shell is
-needed to ship. **991 prompts per 30-second run became 3.**
-  - **The last bug was ours, one field wide.** Our `BOP 0x54 sub 01` reply wrote `[0]`
-    of the command-tail buffer — which is **DOS's `AH=0Ah` maximum**, set once at
-    transient `0x018D` to `0x80` and never re-set, because COMMAND.COM hands the *same
-    buffer* to the keyboard read. We zeroed it, our `AH=0Ah` returned an empty line
-    without waiting, and the shell printed its prompt again for ever. The log had said
-    `INT21 AH=0A line max=00` ×991 the whole time. Fixed: write the length at `[1]`,
-    never touch `[0]`.
-  - **⚠ The shell was AT the keyboard read and we were answering it with EOF.** Several
-    turns read *"prints a prompt, goes back to asking"* as a gate we had not satisfied.
-    Every gate was satisfied.
-  - **⚠ `int16=[0,0,0,0]` was never evidence of anything.** Our `AH=0Ah` reads the host
-    key ring directly and never issues `INT 16h`, so that counter reads zero on a shell
-    that works. It reads zero in the successful run too.
-  - **⛔ NOT ON BY DEFAULT.** Two `INT 21h AH=53h` answers have to change with it and
-    they **contradict the only stock measurement we have**, so they live in
-    `cfg\int53.txt` and the built-ins are unchanged. See the next item.
-
-▶ **⛔ THE OPEN QUESTION: `AH=53h` IS CONTEXT-DEPENDENT AND OUR HARNESS IS THE CONTEXT.**
-XP's COMMAND.COM cannot read a key while `[0x327]=1`, proved from its own image
-(`tools/ntvdm/cmdcom.py`): the read-a-line routine is transient `0x0A0D`, its only two
-`AL=0` callers both sit behind `cmp byte [0x327],1 / jz`, and `[0x327]`'s single writer
-is `mov al,5 / mov ah,53h / int 21h / mov [0x327],al`. **Stock is interactive, so stock
-answers `AL=0`; our probe measured `AL=1`.** The likely difference: `probe.inc` reports
-through `INT 21h AH=02` and every stock run is captured with `> FILE`, so we asked the
-oracle *"is this console interactive?"* **with its own output redirected**.
-**A probe that reports through stdout cannot measure anything that depends on stdout.**
-▶ **NEXT, and it needs a human at the box:** run `tools/dostest/p_int53f.com` (writes its
-dump with `AH=3Ch/40h/3Eh`, needs no redirection) against **stock ntvdm**, both with and
-without `> FILE`, and diff. The IFEO bracket is the documented rig-bricking hazard and is
-**not run unattended**. If it confirms `AL=5 → 0` and `AL=2 → CF=1`, promote them to the
-built-in defaults in `dos_int21.c` and delete the knob's reason for existing.
-
-▶ **✅✅✅ THERE IS A WORKING DOS PROMPT (2026-09-24).** **MS-DOS 6.22's `COMMAND.COM`
-runs under NTVDMEX**: banner, prompt, `ver`, and a real `dir` with volume serial and
-free space — 141 INT 21h calls, keystrokes scripted through `cfg\keys.txt`. And a launch
-that names **no** program now loads a shell, from `cfg\shell.txt` first and
-`C:\WINDOWS\SYSTEM32\COMMAND.COM` second, in the last-resort branch strictly below
-CSRSS/`target.txt`/title — verified not to disturb the harness. ⛔ I scored this same run
-as *"zero INT 21h calls"* earlier the same day: the check grepped `INT21`, the trace
-prints `  21:`. **A pattern that cannot match is not a measurement.**
-▶ ~~**The product question, not a code question:** 6.22's shell is Microsoft's and cannot
-ship in a public repo, so a stock XP box still falls to XP's own `COMMAND.COM` and still
-stops at the BOP below. Either the BOP work happens or the shell is user-supplied.~~
-**✅ ANSWERED 2026-09-25 — the BOP work happened.** XP's own shell works (top of this
-section). It still needs `cfg\int53.txt` until the un-redirected stock measurement lands.
-
-▶ **★ XP's COMMAND.COM IS NOT A DOS PROBLEM (2026-09-24).** XP's `COMMAND.COM` does not
-fail a DOS call and give up — **it never reaches one.** It is NTVDM-*aware*: its image
-issues `C4 C4 54` fifteen times (plus one `C4 C4 50`), and the exec loop's last arm
-hands **any BOP no arm matched** to `dos_int21()`, where the guest's `AH` picks a DOS
-function. `BOP 0x54 / sub 01` arrives with `AX=0x0002`, reads as `AH=00` = *terminate*,
-and we report a **clean exit, code 0**. Our `0x50` and `0x54` are DPMI's; the number
-space is NTVDM's. Full surface: **[`inventory/bop.md`](inventory/bop.md)**; the
-investigation, including three readings it retires: [`research/xp-command-com.md`](research/xp-command-com.md).
-The instrument that settled it was one 32-bit load — **the caller is on the guest stack
-at `SS:SP`, not in `VTIB_CS:EIP`, which is where the handler is**. Order of work:
-(1) gate the fall-through once the battery says what reaches it, (2) un-double-book
-`0x57`, (3) measure what `BOP 0x54`'s sub-functions mean against stock ntvdm,
-(4) auto-report DOS **5.00** for `command.com` — the guest does `cmp ax,5` on the whole
-word, so 5.00 exactly — then the no-guest default, then PIF.
-
-▶ **Rig status, 2026-09-25 end of session 79 — and both builds are USER-CONFIRMED.**
-`bin\ntvdmhost.exe` = **`1ea8829d`** (the launcher). `debug\prev\ntvdmhost_prev.exe` was
-promoted to **`d57d586c`**, which is the one the user ran the **whole shelf** against:
-*"I tested all the usual suspects and they were fine."* `1ea8829d` adds only the launcher
-on top of it and carries a **one-item** confirmation: *"double-click bin\ntvdmhost.exe —
-tested and working!"* Rolling back to `prev` therefore costs exactly the launcher and
-nothing else.
-  - ⚠ **The checkpoint commit has still not moved** — it names `ff0d956`/`71ef4737`.
-    Moving it is a deliberate act; it is now well behind two confirmed builds.
-  - `cfg\` is **clean** — no `int53.txt`, `dosver.txt`, `keys.txt`, `qimode.txt`,
-    `capture.flag` or `dostrace.flag` — so the box behaves as a fresh one, and a
-    double-click gives a prompt with no files at all. `scripts/bm/int53-interactive.txt`
-    is parked at `debug\rig\` where it cannot fire by accident (it is no longer needed:
-    the NTVDM-aware detection replaced it).
-  - ⚠ `demo\msdos\doom\COMMAND.COM` was copied in for the chaining repro and **removed
-    again** — the folder is back as the user left it.
-▶ **What the user has confirmed by hand (2026-09-25):** the whole shelf on `d57d586c`;
-the double-click launcher on `1ea8829d`. **Still broken, and now north star 1:** Doom low
-res, Wolf3D, Mario.
-▶ **Run headless on `1ea8829d`:** 6.22's `COMMAND.COM`, XP's `COMMAND.COM` from a bare
-double-click (prompt / `ver` / `dir` / EXEC), Doom, Skyroads, heaven7, duke3d, ZAR, and
-the Win16 kernel probe. Off-VM 1591/1591.
-
-▶ **Rig status (older):** the watcher is live and everything below has been run through it.
-`p_vgaext` came back `1010`, byte for byte with PCem. VGA register parity is **99.9%**
-(`689/690` of the bytes the two oracles agree on) — `tools/vgaparity.py`, **re-run, never
-quote**, and not comparable to the void 89.7%. Doom and Skyroads confirmed by hand after
-the Input Status 0 change. ▶ **Owed from a human: a by-hand look after the mode-set fix**,
-which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0E`),
-**and after the floppy controller** (`ea485e7`, host `bbea3134`) — a device that did not
-exist before, so the risk to existing guests is low and Doom + Skyroads measure it low,
-but it is an observable change and the rule is one at a time with a human in between.
-
-1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** Done so far: the **8254**
-   (5 fixes, clean against oracle consensus), the **VGA register file** (99.9%), and the
-   **8259A** (2 fixes) and the **8042 keyboard controller** — `ref/kbc.md`, inventory
-   marked from the code, and the status register, the command set, the output port,
-   port `92h` and **a single converged A20 bit** all implemented.
-   **8237A DMA** (spare page latches), and the **MC146818 RTC/CMOS** — which did not
-   exist at all: ports `70h`/`71h` were claimed by nothing, so Status A's UIP bit read
-   as set for ever and **the canonical "poll UIP, then read the time" loop never
-   exited**. New `vdd_cmos.{c,h}`.
-   The RTC's **periodic IRQ8** followed — on the PIT's own pacer, dormant unless a guest
-   programs it, timing canary re-run (`n8=0 max_ms=7`).
-   The **16550 UART** followed and is the first surface that needed **no fix**: four of
-   five probe cases agree on all four hosts, including the loopback modem-line pairing
-   and the DLAB bank switch. ⚠ *My prediction that the UART and the FDC would both show
-   the "firmware present, chip absent" split was half right* — the FDC is absent, the
-   UART was there and in good shape.
-   The **82077AA floppy controller** followed, and it was the **third**
-   "firmware present, chip absent" hole in a row — and the worst-shaped. Nothing
-   claimed `3F0h`–`3F7h`, so `3F4h` (the Main Status Register) read `FFh`, which
-   is `RQM=1, DIO=1`: *"ready, and I am the one talking"*. The command-write loop
-   out of the datasheet — the loop in every BIOS and every driver —
-   `and al,0C0h / cmp al,80h / jne` — **never matched and never exited.** Not a
-   plausible wrong value: a machine that stops, with nothing in any log.
-   ⛔ **`00h` would hang too** (RQM clear is also *wait*), so no bus default could
-   have saved it — only the chip. New `vdd_fdc.{c,h}`: the register file, the
-   three-phase command protocol, and every command that does not move sector data.
-   **MEASURED on the rig, `fdc.cmdwait`: `01C0` → `0080`**, where `AH` is *"the
-   loop never terminated"*. Two oracles agree on every load-bearing row
-   (`fdc.version` = `0190`, `fdc.dumpreg` = ten result bytes).
-   ⛔⛔ **And one row was a manufactured agreement.** `fdc.dor.low` masked DOR to
-   bits 3:0 — and `FFh & 0Fh` is `0Fh`, a plausible DOR — so a port that did not
-   exist scored a **MATCH** against PCem. *A mask can manufacture an agreement out
-   of an absent device; check what `FFh` becomes after your mask.*
-   ▶ **Next candidates in the contract:** the FDC's **data path** (READ/WRITE over
-   DMA channel 2, against the image handle INT 13h already holds — marked **PART**
-   with an off-VM check asserting the gap so closing it cannot be silent), the
-   **IDE/ATA** surface (`3F6h` answers `FFh` where both oracles say `50h` — found
-   by the FDC probe, filed against ATA rather than "fixed" by claiming a register
-   that is somebody else's), the UART's OUT2 interrupt gate.
-   Pick by the contract, not by a guest.
-   ⚠ **Owed:** a `p_rtc` case that sets PIE and counts periodic interrupts. The existing
-   `statusc.clear` row reads `0000h` because the probe never enables the interrupt, not
-   because nothing can raise one.
-   ⛔ **Recorded and deliberately unfixed:** the PIC's ICW1 read-select reset and the
-   8042 output port's undefined bits are both **blocked on a second oracle** (only PCem
-   can see either); we implement Special Fully Nested Mode unconditionally while never
-   reading the ICW4 bit that requests it; and keyboard-side commands are still never
-   ACKed with `FAh`.
-2. ✅ ~~**Populate the VGA mode tables.**~~ **DONE** — and it was **one** defect, not five:
-   the table was right, but six registers are read back from a *live shadow* rather than
-   from the register file, and the mode set never seeded them. **92.0% → 99.9%.**
-   ▶ **One byte left**, recorded rather than bundled: `modeX` `CR0F`, where `crtc_in`
-   *derives* the cursor address instead of storing it. Fixing it properly means the BIOS
-   cursor calls must write `CR0E`/`CR0F`, which touches every path that moves the cursor.
-3. ✅ ~~**Deterministic Win16 tests**~~ — **the harness exists** (`ea485e7`.. `tools/ne/mkne.py`
-   + `tools/wintest/`). The blocker was never the tests: **nothing here could BUILD a Win16
-   binary** — no OpenWatcom on the machine, none in Homebrew, none in the tree. nasm now
-   writes the 16-bit code and `mkne.py` writes the NE around it, every field read off
-   `TASKMAN.EXE` with our own `nedump.py`/`nedis.py`. First run on the rig:
-   `InitTask`/`WaitEvent`/`InitApp` all succeed, `kernel.getversion` = `5F03`,
-   `kernel.getwinflags` = `4C25`.
-   ✅ **And compared against stock `ntvdm`** (`tools/wintest/stock.sh`, which drops the
-   IFEO key and restores it, refusing to exit quietly unless it proves the key came back):
-   `kernel.getversion` **AGREES** — the first Win16 row this project can call *verified* —
-   and `kernel.getwinflags` **MISMATCHES**, `4C25` against stock's `4C29`, reproduced
-   twice. ⚠ Neither value is ours: both runs load the same `KRNL386.EXE`, so the
-   difference is what our VDM presents to it. ⚠ The `WF_CPU386`-vs-`WF_CPU486` reading of
-   those bits is an **interpretation from memory, not confirmed**.
-   ✅ **CLOSED 2026-09-25, and it was a DPMI bug wearing a Win16 costume.** `GetWinFlags`
-   is KERNEL.132 = seg 3:`0x4B` and it is just `mov ax,[0x464]`; `[0x464]` is built at
-   seg 1:`0xD68A` out of **`INT 2Fh AX=1687h`'s `CL`** (`cmp cl,3 / je bl=4 / else bl=8`).
-   **We hardcoded `CL=3`** at two sites. `DPMI_CPU_CLASS = 4` and the row now reads
-   **`4C29`**, the value stock was measured to produce. ⛔ The `AC`-flag hypothesis is
-   refuted — nothing on that path tests a flag. ⚠ Not a same-day side-by-side; re-running
-   `stock.sh` needs a human (it drops the IFEO key). A/B on the rig in `runs/s79_cl_ab/`.
-   See [`inventory/win16.md`](inventory/win16.md).
-4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
-   A0000 aperture is mapped RAM with no write hook, so mode-Y exactness needs an
-   architecture change, not a patch. Instrument in place (`tools/doomdetail.py`).
-5. **Then outward**, per [`inventory/README.md`](inventory/README.md).
-
-⚠ **One observable change at a time, with a by-hand check between.** Read-back fidelity is a
-guest-visible behaviour change. **The regression set must include Doom at low detail** — every
-Doom check this project has ever run was high detail.
+The previous contents of this section (open-defect table, parked list, the s80 handoff, and
+the long "Next actions" log) are preserved verbatim, as history, in
+[`log/state-archive-2026-09-27.md`](log/state-archive-2026-09-27.md).
 
 ---
 

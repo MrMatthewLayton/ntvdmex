@@ -221,31 +221,7 @@ relation to time. A recorded approximation, not an oversight.
 
 ## What to fix, in order
 
-1. ✅ ~~Alias modes 6 and 7 to 2 and 3.~~ **DONE 2026-09-23.** Skyroads re-run as the
-   timing canary after it: `n8=0 max_ms=6`, the documented guard, unchanged.
-2. ✅ ~~Make `41h`/`42h` readable as real counters.~~ **DONE 2026-09-23.** `p_pit`
-   `ch1.counting` and `ch2.counting` both moved MISMATCH → AGREE. Skyroads re-run:
-   `n8=0 max_ms=6`, unchanged.
-3. ✅ ~~Implement the Read-Back Command and the status byte.~~ **DONE 2026-09-23** —
-   `p_pit` 4 mismatches → 1.
-4. ✅ ~~Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.~~
-   **DONE 2026-09-23** — `p_pit` now has **zero mismatches against oracle consensus**.
-5. ✅ ~~Honour the BCD bit.~~ **DONE 2026-09-23, FROM THE DATASHEET** — and the "blocked on
-   PCem" that stood here was a conflation worth naming. The rule this programme runs on is
-   *never write an expectation from **memory***; Intel 231164-005 is a **cited source**, not
-   a memory, and a `0` from two emulators that do not implement the feature is the absence of
-   a measurement rather than a measurement of absence. So: implemented, marked
-   spec-implemented / unverifiable, evidence in `pit_test.c` T12 (8 of 14 checks failed on
-   the old code), abstention recorded in `oracle-rules.json`. See §2.
-6. **Model the OUT pin as state for all six modes**, which is what (3) and (4) both need.
-
-⚠ **None of this is verified against an oracle yet.** `tools/dostest/pit_test.c` is an
-off-VM battery written against our own model, so it encodes our behaviour, not the
-datasheet's — the audit the inventory README calls for applies here. **A DOS probe
-(`p_pit.asm`) asking the six questions above of both NTVDMEX and 6.22 does not exist and
-is the next thing to write**, before any of the fixes.
-
----
+Tracked in GitHub: [#175](https://github.com/MrMatthewLayton/ntvdmex/issues/175) (the list that was here was moved there verbatim, 2026-09-27).
 
 ## Re-verified on a quiet rig (2026-09-23)
 

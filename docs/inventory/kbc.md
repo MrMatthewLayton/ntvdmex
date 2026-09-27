@@ -189,18 +189,5 @@ pass**, so those are left alone and recorded here rather than copied.
 
 ## What to fix, in order
 
-1. ✅ ~~The status register.~~ **DONE** — unanimous.
-2. ✅ ~~`D0h`/`D1h` and the output port, with A20 on the same flag XMS uses.~~ **DONE.**
-3. ✅ ~~Claim port `92h`.~~ **DONE**, on the same bit.
-4. **ACK keyboard commands with `FAh`**, and answer `EEh` / `F2h` / `FFh`. Still MISS.
-   The reply byte added for the controller is the mechanism it needs — a keyboard ACK is
-   the same one-deep buffer — but the ACK *sequences* are multi-byte (`EDh` → `FAh` →
-   parameter → `FAh`), so it wants a small queue rather than a byte, and **no oracle
-   disagreement is driving it yet**: the probe does not ask, because a keyboard command
-   on a machine with a real keyboard attached has effects a headless run cannot undo.
-5. **The output port's undefined bits** — blocked on a second oracle, as above.
-6. **`ADh`/`AEh` should actually stop and start the scancode flow.** They set and clear
-   the command byte's clock-disable bits now, and nothing reads them: our FIFO is
-   host-driven, so "disable the keyboard" quiets nothing. Harmless today because the
-   guests that send it send `AEh` a few instructions later, which is a statement about
-   guests rather than about the chip.
+Tracked in GitHub: [#180](https://github.com/MrMatthewLayton/ntvdmex/issues/180) (the list that was here was moved there verbatim, 2026-09-27).
+

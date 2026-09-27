@@ -1136,16 +1136,5 @@ matters.
 
 ## 4. Owed
 
-1. ~~Gate the fall-through.~~ ✅ done, measured — see §1.
-2. **Resolve the `0x57` double-booking** between `DPMI_FAULT_BOP` and
-   `WOWCALL_BOP_CODE`. They are probably never live in the same guest, but "probably" is
-   how the `0x54` collision survived too.
-3. **Re-number ours out of the range real NTVDM guests use**, or dispatch on more than
-   the code byte. A collision is only invisible until an NTVDM-aware guest turns up.
-4. **Measure `BOP 0x54`'s sub-functions against stock ntvdm** — `tools/wintest/stock.sh`
-   is the pattern for dropping the IFEO key (⛔ read its warnings first). The refusal log
-   line now prints `AX`, `BX`, `DX` and the sub-function byte, so a side-by-side against
-   stock has something to compare.
-5. **6.22's own `COMMAND.COM` loads, runs, and makes ZERO INT 21h calls** (this battery,
-   `result_dos.log`). It issues no BOPs either, so it is a different question entirely
-   and has not been looked at.
+Tracked in GitHub: [#170](https://github.com/MrMatthewLayton/ntvdmex/issues/170) (the list that was here was moved there verbatim, 2026-09-27).
+

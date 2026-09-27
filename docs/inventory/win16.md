@@ -196,19 +196,9 @@ DOS; it is about scaffolding. Output now goes through `INT 21h`.
 
 ## Open questions this raised
 
-| | |
-|---|---|
-| **A relative path does not land in the launch directory** | The probe's `INT 21h AH=3Ch` on `W16OUT.TXT` **succeeds** (`-> AX=5 CF=0`) but the file is not in the folder the app was launched from. The WOW command fetch reports `cur=[…\demo\win16\w16kern]`, while the DOS kernel resolves the relative name against its **own** current directory. ⚠ Unresolved: should the DOS CDS follow the `cur=` the WOW fetch hands us? The probe names its file absolutely rather than depend on the answer |
-| ~~`kernel.getwinflags` `4C25` vs stock `4C29`~~ | ✅ **CLOSED 2026-09-25.** It was `INT 2Fh AX=1687h`'s **CL**, which we hardcoded to 3; krnl386 turns `CL>3` into the other bit. **A Win16 mismatch whose cause was in the DPMI layer.** |
-| `WowFailedExec` is **not** a failure signal | It appears once in a **successful** Notepad run too. I briefly took it as proof the module had been rejected. It is not |
+Tracked in GitHub: [#164](https://github.com/MrMatthewLayton/ntvdmex/issues/164) (the list that was here was moved there verbatim, 2026-09-27).
 
 ## Next
 
-1. ✅ ~~**Run the same `.EXE` under stock `ntvdm`**~~ — done, `tools/wintest/stock.sh`.
-2. ✅ ~~★★★ **Find out where `GetWinFlags`'s value comes from**~~ — **DONE**, by reading KERNEL.132 out of
-   `krnl386.exe` rather than theorising about it.
-3. **Widen the cases** — KERNEL's memory API (GlobalAlloc/Size/Free round-trips),
-   `lstrlen`/`lstrcmp`, the file API, then USER and GDI. The harness makes each of these
-   a handful of lines.
-5. **Fold the output into `dosdiff.py`'s parser**, which already understands
-   `#PROBE`/`CASE=`/`#END`, so Win16 rows join the same diff table as everything else.
+Tracked in GitHub: [#163](https://github.com/MrMatthewLayton/ntvdmex/issues/163) (the list that was here was moved there verbatim, 2026-09-27).
+

@@ -88,14 +88,5 @@ with the mechanism recorded rather than the value.
 
 ## What to fix, in order
 
-1. **OUT2 as the interrupt gate.** Small, well-defined, and the only row here where a
-   guest's explicit instruction is ignored. ⚠ It needs a probe case that can see an
-   interrupt, which this one cannot — loopback plus IER plus a real IRQ4 is a bigger test
-   than anything here so far.
-2. **A real FIFO**, if anything is ever measured wanting one. Recorded, not scheduled:
-   the visible behaviour is already correct.
-3. **COM3/COM4.** Two more entries in a fixed array; no oracle disagreement drives it.
+Tracked in GitHub: [#181](https://github.com/MrMatthewLayton/ntvdmex/issues/181) (the list that was here was moved there verbatim, 2026-09-27).
 
-⚠ **Nothing above is a defect the probe found.** They came from marking the code against
-the datasheet, which is the point — the probe confirmed the parts that *are* implemented
-are implemented right.

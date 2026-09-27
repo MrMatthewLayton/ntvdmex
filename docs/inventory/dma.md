@@ -136,19 +136,5 @@ one 16-bit poll is two 8-bit reads. That is a good note and it stays.
 
 ## What to fix, in order
 
-1. ✅ ~~The nine spare page latches.~~ **DONE 2026-09-23.**
-2. **The status register's DRQ bits.** We know when a channel has a request pending —
-   the sound path drives it — so bits 7:4 are derivable rather than new state.
-3. **The command register should be readable in the sense that matters**: nothing
-   consumes `cmd[]`, so bit 2 (controller disable) is accepted and ignored. A guest that
-   disables the controller and expects transfers to stop is not served.
-4. **The temporary register and the request register**, together with memory-to-memory
-   transfer — they are one feature. Lowest priority: no DOS guest here uses it.
+Tracked in GitHub: [#176](https://github.com/MrMatthewLayton/ntvdmex/issues/176) (the list that was here was moved there verbatim, 2026-09-27).
 
-⚠ **`p_dma.asm` has a safety constraint the other probes did not**, and it is written
-into its header: **channel 2 is the floppy the probe writes its own output through, and a
-master clear sets every mask bit.** Any case that touches the mask register, or channel 2,
-destroys the run's own evidence — and a probe whose failure mode is *"no output at all"*
-is indistinguishable from a harness fault, which is the one shape to avoid. Channel 1 is
-the victim throughout: no DOS component uses it and no oracle here has a driver that
-would.

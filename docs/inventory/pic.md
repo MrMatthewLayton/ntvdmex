@@ -259,15 +259,5 @@ regressions re-proven on its own, not as a side effect of the GUS.
 
 ## What to fix, in order
 
-1. ✅ ~~Make `E0h` end the interrupt.~~ **DONE 2026-09-23** — unanimous.
-2. ✅ ~~Implement the Poll command.~~ **DONE 2026-09-23** — spec-implemented on a 1–2
-   split, abstention recorded.
-3. ⛔ **ICW1 must reset the read select to IRR.** Cheap and guest-visible, but **blocked
-   on a second oracle** — see above. Do not fix it on PCem alone.
-4. **Consult the master's IR2-in-service for slave delivery**, and honour ICW4 bit 4, so
-   Special Fully Nested Mode is something a guest asks for rather than something we do
-   unconditionally (§6). Needs a probe that can get two slave lines in flight, which
-   nothing here can do yet.
-5. **Priority rotation** (a rotation register, then `A0h`/`C0h`/`E0h` rotating), and then
-   **Special Mask Mode** on top of it. Lowest priority: no oracle disagreement to chase
-   and nothing on the shelf exercises either.
+Tracked in GitHub: [#174](https://github.com/MrMatthewLayton/ntvdmex/issues/174), [#173](https://github.com/MrMatthewLayton/ntvdmex/issues/173) (the list that was here was moved there verbatim, 2026-09-27).
+

@@ -209,25 +209,9 @@ known gap **so that closing it cannot be silent.**
 
 ## 5. Still open
 
-| Row | Verdict |
-|---|---|
-| **`fdc.alt.3f6`** — we read `FFh`, both oracles `50h` | ⛔ **A REAL GAP THAT IS NOT THIS SURFACE'S.** `3F6h` is the ATA alternate status register (`50h` = DRDY\|DSC). Claiming the whole eight-port block would have turned the row green by taking a register that belongs to somebody else. **Filed against the IDE/ATA surface.** |
-| **`fdc.dumpreg`** — `0A00` against `0A01` | ⚠ The count agrees; the first byte is **PCN of drive 0**, i.e. where the head is. Both oracles read 1 because their BIOS seeked there to load the program; ours reads 0 because **INT 13h does not drive the chip**. Truthful, and it is exactly the "two state machines over one chip" problem in [`ref/fdc.md` §10](../ref/fdc.md). See the next step below. |
-| `fdc.dor.raw`, `fdc.dir.raw`, `fdc.sra.srb` | **Not adjudicable** — the oracles disagree among themselves. PCem reads DOR as `FFh` (a genuinely write-only AT part); QEMU's `1Ch` has a motor still spinning. On SRA both oracles say `FFh` and **we now match**. |
-| BDA `0040:003E`–`0048` | ⛔ **MISS** — INT 13h writes none of the BIOS's documented floppy state. Consistent today, and it stops being consistent the moment either door starts moving the other's state |
-
----
+Tracked in GitHub: [#178](https://github.com/MrMatthewLayton/ntvdmex/issues/178), [#179](https://github.com/MrMatthewLayton/ntvdmex/issues/179) (the list that was here was moved there verbatim, 2026-09-27).
 
 ## What to fix, in order
 
-1. ★★ **READ DATA / WRITE DATA over DMA channel 2**, against the same image handle INT 13h
-   already holds. The largest remaining piece and the only one that needs the 8237A. The
-   host hook goes in the way `rtc_now` did, so the chip stays pure C.
-2. ★★ **One medium, two doors, one answer** — INT 13h should move the modelled head, so
-   DUMPREG and SENSE DRIVE STATUS report where the drive actually is. This is the same
-   rule the A20 gate and the RTC both arrived at, and `fdc.dumpreg`'s `0A00` is it showing
-   up as a number.
-3. ★ **The BDA floppy fields**, for the same reason.
-4. **Motor-off timing**, and non-DMA execution (MSR bit 5) — both only matter once there
-   is data to move.
-5. **FORMAT TRACK**, last, as the only destructive command.
+Tracked in GitHub: [#178](https://github.com/MrMatthewLayton/ntvdmex/issues/178) (the list that was here was moved there verbatim, 2026-09-27).
+

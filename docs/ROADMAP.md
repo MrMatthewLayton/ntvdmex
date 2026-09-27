@@ -5,16 +5,15 @@ something runnable/observable. Win16 is intentionally late: it is built on the s
 foundation as everything before it.
 
 > **Open work now lives in [GitHub Issues](https://github.com/MrMatthewLayton/ntvdmex/issues)** —
-> epics are **milestones** (M4–M10), plus unmilestoned bugs/follow-ups. This file is the narrative
-> roadmap + stage-history. Re-run
-> [`scripts/gh-bootstrap-issues.sh`](../scripts/gh-bootstrap-issues.sh) to sync newly-added items
-> (idempotent).
+> epics are labelled `epic`, work items carry `P0`/`P1`/`P2`. This file is the narrative roadmap +
+> stage-history. (The one-time `scripts/gh-bootstrap-issues.sh` was retired in s81: GitHub is the
+> list now, and new work is filed there directly.)
 >
-> ⚠ **The tracker is not the source of truth for "what's done".** Several M9 issues are still
-> open there against work that has since been finished and gated on hardware (#44, #45, #47,
-> #49, #50, #52 among them). Where this file and the tracker disagree, the arbiter is
-> **`./tools/score/score.py`** — the one number in this project with a model behind it rather
-> than a judgement. **Run it; do not quote a figure from any document, including this one.**
+> ✅ **The tracker IS the source of truth for open work (session-81 review, 2026-09-27).**
+> Every open item from `STATE.md`, the inventories, the session logs and the notes was moved
+> into GitHub issues, and done/obsolete issues were closed with evidence
+> (`docs/log/sessions/session-81.md` part 4). The order of work is the pinned **#202**. The unchecked boxes below
+> are narrative pointers to those issues, not a separate list.
 
 ## Where it is, as of session 54 (2026-09-06)
 
@@ -328,7 +327,7 @@ NTVDMEX is not ground truth.
   can hand out. **Still to do:** the user's own acceptance bar — whether the five demos *feel*
   period-correct, judged on the box.
 - [ ] Configurable DOS version (#28); VESA 4F0A PM bank switching (#53); INT 15h C0h/87h (#54)
-- [ ] `$p` prompt degrades after an EXEC (#134); XP's own `COMMAND.COM` exits during init (#135)
+- [x] `$p` prompt after an EXEC (#134) and XP's own `COMMAND.COM` as an interactive shell (#135) — closed s81
 - [ ] Verify the BIOS layer against real hardware end to end (#51)
 - **Exit:** a DOS program cannot tell us from MS-DOS 6.22 without looking for the difference.
 
@@ -352,7 +351,7 @@ Making NTVDMEX the machine's VDM, **reversibly**. This is what turns a host into
   each with a real two-host comparison and screenshots **diffed rather than eyeballed**. Row 2
   is a genuine superset result: stock refuses 6.22's `MEM.EXE` with `Incorrect DOS version`.
   Gap: rows 4–5 (DPMI client, in-guest redirection) have no stock half.
-- [ ] **Console/stdio integration (#131)** — a DOS program launched from `cmd.exe` should run
+- [ ] **Console/stdio integration (#131)** — ⚠ *s81: redirection now works (`793e641`); what remains is inline-console output and the always-a-window behaviour; the text below is history.* — a DOS program launched from `cmd.exe` should run
   *inline in that console*, so `myprog.exe > out.txt` behaves. **Located, not fixed.** Five
   routes to the handle are eliminated by measurement (inheritance, `ATTACH_PARENT_PROCESS`,
   explicit parent pid, CSRSS's `STARTUPINFO`, and `VDM_COMMAND_INFO`'s own
