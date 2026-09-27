@@ -100,6 +100,8 @@ def rule_for(rules, probe, case, field):
     out = {"abstain": [], "ignore_bytes": [], "why": ""}
     whys = []
     for r in hits:
+        if r.get("subject_expect"):
+            out["subject_expect"] = r["subject_expect"]
         out["abstain"] += r.get("abstain", [])
         out["ignore_bytes"] += r.get("ignore_bytes", [])
         if r.get("why") and r["why"] not in whys:
@@ -325,6 +327,7 @@ class NtvdmexRig(Host):
 
     def __init__(self, share=None):
         Host.__init__(self, "ntvdmex")
+        self.last_log = ""
         self.share = share or os.environ.get("NTVDMEX_SHARE", "/tmp/xpshare")
 
     def available(self):
@@ -404,6 +407,7 @@ class NtvdmexRig(Host):
             with open(log, "rb") as f:
                 text = f.read().decode("cp437", "replace")
             if "#END" in text or "STAGE2: complete" in text:
+                self.last_log = text
                 return self._dos_output(text)
         raise RuntimeError("no result_Probe.log newer than the queue time")
 
@@ -493,7 +497,7 @@ def all_hosts():
 
 # --------------------------------------------------------------------- diff
 
-def diff(results, hosts, probe=None, rules=()):
+def diff(results, hosts, probe=None, rules=(), expect=None):
     """Build the per-field agreement table.
 
     results: {host name: [Case]}
@@ -552,7 +556,20 @@ def diff(results, hosts, probe=None, rules=()):
             match = None
             missing = [h for h in list(oracles) + list(subjects)
                        if vals.get(h) is None]
-            if truth is not None and subjects:
+            # ── #168: A ROW WHOSE RIGHT ANSWER IS A SETTING. The reported DOS version
+            #    is selectable on the subject, so "matches 6.22" tests the setting,
+            #    not the implementation -- the rig went 5.00 for weeks and this row
+            #    said so only by chance. With `subject_expect` the subject is held to
+            #    what ITS OWN LOG says is configured; the oracle column still prints.
+            sexp = expect.get(rule.get("subject_expect")) if rule and expect else None
+            if rule and rule.get("subject_expect") and subjects:
+                sv = [vals[h] for h in subjects if vals.get(h) is not None]
+                if sexp is None or not sv:
+                    verdict, truth = "NO-DATA", None
+                else:
+                    verdict, truth = "CONFIG", sexp
+                    match = all(v == sexp for v in sv)
+            elif truth is not None and subjects:
                 sv = [vals[h] for h in subjects if vals.get(h) is not None]
                 if sv:
                     match = all(v == truth for v in sv)
@@ -568,8 +585,24 @@ def diff(results, hosts, probe=None, rules=()):
                          "verdict": verdict, "truth": truth,
                          "subject_matches": match, "width": width,
                          "abstain": sorted(abstain), "why": rule["why"] if rule else None,
+                         "expect": sexp,
                          "missing": missing})
     return rows, oracles, subjects
+
+
+def subject_expectations(hosts, results):
+    """What the subject's own log says it is configured to answer (#168).
+
+    `DOS version reported = 6.22` -> int21.30's AX and 3306h's BX are both
+    minor<<8 | major. None when the line is missing: an expectation we could not
+    read must come out as NO-DATA, never as a pass."""
+    out = {}
+    for h in hosts:
+        log = getattr(h, "last_log", "") if h.name in results else ""
+        m = re.search(r"DOS version reported = (\d+)\.(\d+)", log or "")
+        if m:
+            out["dosver"] = (int(m.group(2)) << 8) | int(m.group(1))
+    return out
 
 
 def fmt(v, width):
@@ -608,9 +641,11 @@ def report(probe, rows, oracles, subjects, unavailable):
         line += " ".join("%-*s" % (w, fmt(r["values"].get(c), r["width"]))
                          for c in cols)
         v = r["verdict"]
-        if v == "AGREE" and r["subject_matches"] is False:
-            v = "MISMATCH"
+        if v in ("AGREE", "CONFIG") and r["subject_matches"] is False:
+            v = "MISMATCH" if v == "AGREE" else "MISMATCH (config %s)" % fmt(r["expect"], r["width"])
             failed += 1
+        elif v == "CONFIG":
+            v = "AGREE (config)"
         elif v == "DISPUTED":
             disputed += 1
         elif v == "NO-DATA":
@@ -693,7 +728,8 @@ def main():
             continue
         results[h.name] = cases
 
-    rows, oracles, subjects = diff(results, hosts, probe_name, load_rules())
+    rows, oracles, subjects = diff(results, hosts, probe_name, load_rules(),
+                                   subject_expectations(hosts, results))
 
     if a.json:
         print(json.dumps({"probe": probe_name, "oracles": oracles,

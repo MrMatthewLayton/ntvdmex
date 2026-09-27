@@ -67,6 +67,23 @@ static int dos622_defines(uint8_t ah)
     }
 }
 
+/* ── OPEN WITH THE RIGHT TO RE-STAMP IT. (#168) ────────────────────────────────────
+     DOS lets AX=5701h set a file's date and time through ANY handle, read-only ones
+     included -- it only updates the SFT and writes the entry at close. NT's
+     SetFileTime needs FILE_WRITE_ATTRIBUTES on the handle, which GENERIC_READ lacks,
+     so on a 3D00h handle it failed and the file kept "now" (p_file int21.5700.stamp:
+     6.22 read back 12:34:56 2001-09-17, we read back the wall clock). Ask for it too,
+     and fall back to the plain request where it is refused (a read-only medium or
+     share) -- the open must never be lost for the sake of the stamp. Attribute
+     rights are not subject to sharing, so this changes no share-mode outcome. */
+static HANDLE dos_open_stampable(const char *fn, DWORD acc, DWORD shr, DWORD disp, DWORD attr)
+{
+    HANDLE f = CreateFileA(fn, acc | FILE_WRITE_ATTRIBUTES, shr, NULL, disp, attr, NULL);
+    if (f == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
+        f = CreateFileA(fn, acc, shr, NULL, disp, attr, NULL);
+    return f;
+}
+
 /* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
  *
  * TRANSCRIBED FROM THE ORACLE, byte for byte (tools/dostest/p_ctry.asm):
@@ -818,8 +835,7 @@ int dos_int21(dos_machine_t *m)
             DWORD mode = R_AX & 7;
             DWORD acc = (mode == 1) ? GENERIC_WRITE
                       : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
-            f = CreateFileA(fn, acc, shr, NULL, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, NULL);
+            f = dos_open_stampable(fn, acc, shr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
         }
         if (f != INVALID_HANDLE_VALUE) {
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
@@ -1739,9 +1755,12 @@ int dos_int21(dos_machine_t *m)
         else if (exists == 0 && missing == 1) disp = CREATE_NEW;
         else if (exists == 2 && missing == 0) disp = TRUNCATE_EXISTING;
         else                                  disp = OPEN_EXISTING;
-        f = CreateFileA(fn, acc, FILE_SHARE_READ, NULL, disp,
-                        (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
-                                             : FILE_ATTRIBUTE_NORMAL, NULL);
+        /* FILE_SHARE_WRITE too: we do not emulate SHARE.EXE, so a second open of a
+           file this VDM holds must not fail -- the rule AH=3Dh learned in session 37
+           and this twin had not (#168). */
+        f = dos_open_stampable(fn, acc, FILE_SHARE_READ | FILE_SHARE_WRITE, disp,
+                               (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
+                                                    : FILE_ATTRIBUTE_NORMAL);
         if (f == INVALID_HANDLE_VALUE) {
             /* Same collapse as AH=3Dh had, same fix -- see dos_err_from_win32(). */
             DWORD we = GetLastError(); unsigned short de;

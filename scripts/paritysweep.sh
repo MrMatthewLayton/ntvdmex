@@ -113,8 +113,8 @@ for p in "${probes[@]}"; do
         extra="$extra --host $o"
     done
     out="$(/usr/bin/python3 "$ROOT/scripts/dosdiff.py" "$D/$p.com" --host msdos622 $extra --host ntvdmex 2>&1)"
-    rows="$(printf '%s\n' "$out" | grep -cE '  (AGREE|MISMATCH|ABSTAINED|DISPUTED|NO-DATA)( \[[0-9]+\])?$')"
-    bad="$(printf  '%s\n' "$out" | grep -cE '  MISMATCH( \[[0-9]+\])?$')"
+    rows="$(printf '%s\n' "$out" | grep -cE '  (AGREE|MISMATCH|ABSTAINED|DISPUTED|NO-DATA)( \(config[ 0-9A-F]*\))?( \[[0-9]+\])?$')"
+    bad="$(printf  '%s\n' "$out" | grep -cE '  MISMATCH( \(config[ 0-9A-F]*\))?( \[[0-9]+\])?$')"
     abs="$(printf  '%s\n' "$out" | grep -cE '  ABSTAINED( \[[0-9]+\])?$')"
     nod="$(printf  '%s\n' "$out" | grep -cE '  NO-DATA( \[[0-9]+\])?$')"
     if [ "$rows" -eq 0 ]; then

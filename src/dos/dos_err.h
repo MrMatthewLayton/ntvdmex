@@ -133,6 +133,8 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
 #define W32_PATH_NOT_FOUND      3u
 #define W32_TOO_MANY_OPEN       4u
 #define W32_ACCESS_DENIED       5u
+#define W32_FILE_EXISTS        80u
+#define W32_ALREADY_EXISTS    183u
 
 static int dos_err_from_win32(unsigned long e, unsigned short *dos)
 {
@@ -147,6 +149,11 @@ static int dos_err_from_win32(unsigned long e, unsigned short *dos)
          of its own slots, so the two names denote one condition. NOT provoked by
          a probe: to promote it, extend p_err.asm to exhaust the handle table. */
     case W32_TOO_MANY_OPEN:  *dos = 0x04; return 1;
+    /* #168: p_file int21.6C.exists -- 6Ch "fail if it exists" on a file that does:
+         6.22 answers AX=0050. CREATE_NEW reports ERROR_FILE_EXISTS; CreateDirectory
+         and MoveFile say ERROR_ALREADY_EXISTS for the same condition. */
+    case W32_FILE_EXISTS:
+    case W32_ALREADY_EXISTS: *dos = 0x50; return 1;
     default: *dos = 0x02; return 0;                  /* caller logs win32= and keeps 2 */
     }
 }

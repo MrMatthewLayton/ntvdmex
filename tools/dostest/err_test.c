@@ -150,6 +150,12 @@ int main(void)
                        "not-found / path / denied must stay distinct", a, b, c); }
         }
 
+        ++checks;
+        d = 0;
+        if (!dos_err_from_win32(W32_FILE_EXISTS, &d)) { ++fails;
+            printf("  FAIL %-56s unmapped\n", "win32 FILE_EXISTS"); }
+        eq("6Ch exists+fail -> 0x50 (p_file int21.6C.exists)", d, 0x50);
+
         /* An unmapped code must NOT invent an answer: it keeps the old 2 and
            reports 0 so the handler can log UNMAPPED -- the same refusal
            dos_err_classify() makes for an unmeasured class. */

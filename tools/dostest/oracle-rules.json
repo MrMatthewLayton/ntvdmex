@@ -1,6 +1,7 @@
 [
  {
   "probe": "dosver",
+  "subject_expect": "dosver",
   "case": "int21.30",
   "field": "AX",
   "abstain": [
@@ -11,6 +12,7 @@
  },
  {
   "probe": "dosver",
+  "subject_expect": "dosver",
   "case": "int21.3306",
   "field": "BX",
   "abstain": [
