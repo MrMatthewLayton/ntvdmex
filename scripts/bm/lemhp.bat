@@ -63,5 +63,8 @@ tasklist | find "ntvdmhost" >> "%OUT%\lemhp_%TAG%.txt"
 if errorlevel 1 echo HOST IS GONE -- process not in tasklist>> "%OUT%\lemhp_%TAG%.txt"
 type "%SH%\rigshot.txt" >> "%OUT%\lemhp_%TAG%.txt" 2>&1
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\lemhp_%TAG%_host.txt" >nul 2>&1
+rem ⚠ AND CLOSE THE GAME (s81): this used to leave Lemmings running -- flickering on
+rem   the rig's screen for whoever sits down next. Everything worth keeping is copied above.
+taskkill /f /im ntvdmhost.exe >nul 2>&1
 echo done>> "%OUT%\lemhp_%TAG%.txt"
 endlocal
