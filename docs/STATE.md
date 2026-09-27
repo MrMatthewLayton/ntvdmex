@@ -7,15 +7,18 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-09-27 (session 81)
-- **Branch:** `m9/completeness`
+- **Branch:** `m9/completeness` — ⚠ s81's last commits (`323b35c`, `2c9220b`) are LOCAL,
+  not pushed. Rig `bin\` = `6821f496` (= `2c9220b`), not user-confirmed.
+- **Resume:** [`log/sessions/session-81.md`](log/sessions/session-81.md) Part 14, then #202
+  (next: #203).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
   next zip by the user. Previous anchor: `ntvdmex-20260917-4847355.zip` (host `9448cf27`,
   tag `release-20260917b`). ⚠ No git tag has been made for the new anchor yet. `bin\` on the
   rig is free to churn; a `dist\` zip is immutable.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`0e6f5156`** (user-confirmed
-  2026-09-27). Earlier confirmed builds sit beside it by hash (`cd5f9f12` ZAR sound,
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` md5s as **`0e5b10e7`** (user-approved
+  s81; this line said `0e6f5156` until the end of s81 — the anchor zip's host). Earlier confirmed builds sit beside it by hash (`cd5f9f12` ZAR sound,
   `f484fc3d` IF/VIF gate, `a0294462` GUS, `8d795b96`, `0473d95d`, `b6a8a95b`, `d57d586c`).
   **md5 the slot; do not trust this line.**
 - **Checkpoint commit:** still `ff0d956` — ⚠ several confirmed builds behind; moving it is a

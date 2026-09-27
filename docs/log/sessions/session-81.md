@@ -430,3 +430,39 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   noted in case it recurs.
 - ★ LEMMINGS.BAT launched from Windows now RUNS (through the shell); the old direct loader
   could not run a batch file at all.
+
+## Part 14 — Tier 2 continued: #173, #153, #211 (evening, 2026-09-27)
+
+Commits (local, **not pushed**): `323b35c` (#173), `2c9220b` (#153 + #211). Rig `bin\` =
+`6821f496` (= `2c9220b`); nothing user-confirmed yet. `debug\prev\ntvdmhost_prev.exe` md5s as
+**`0e5b10e7`** (bmstage.sh's report) — STATE.md said `0e6f5156`; corrected there.
+
+- **#173 closed — PM arms hold IRQ0 in service.** The async PM arm acknowledged and EOI'd at
+  once; the two synchronous injectors (#2b latch, catch-up batch) never touched the PIC — so a
+  client's non-specific `out 20h,20h` cleared a LOWER line's in-service bit. Now `irq0_ack()` /
+  `irq0_pm_claim()`/`unclaim()`, and the default PM INT 08h (what DOS/4GW's pass-up handler
+  chains to) sends the BIOS's EOI. Doom: strict=4061 vs 4066 raises, 0 blocks/timeouts/fallback.
+- **#153 (open, owed by hand: the file dialog itself).** Open Executable / Open Recent. At the
+  top-level shell's prompt (`g_top_is_shell`, depth 0, `m->line_active`) the program is TYPED —
+  drive, `CD`, name — through `g_typein`, a queue `host_coninnb` drains before the keyboard;
+  otherwise `CreateProcess(CREATE_NEW_CONSOLE)` (without it CSRSS queues the program to THIS
+  VDM). MRU = `HKCU\Software\NTVDMEX\Recent1..8`; recorded at start (not Win16-from-Windows)
+  and on every open. `Ctrl+O` label dropped. Rig: `opentest.bat`.
+- **#211 (open, owed by hand: two windows for real).** User asked "why can't we run multiple?"
+  — the s63 guard. Now an instance number: host N writes to `debug\out\N\` (`g_out_sub`), host
+  1 unchanged. `STAGE2: instance N` (a STAGE0 line is wiped by the later truncating writes).
+  ⛔ **Two busy hosts at normal class starved the whole 2-core rig** — tasklist/taskkill
+  never ran for minutes; `rigshot close` (WM_CLOSE) recovered it. Fix: `bg_prio_tick` — with
+  another host running and our window not in front → guest thread BELOW_NORMAL + process
+  **IDLE class**. Skyroads in front of busy QBasic, interleaved: before n8=0xb2/0xab (2.7 s
+  stall); thread-priority-only and a 10% duty throttle both measured no better (0xa3–0xad);
+  idle class n8=0x0e/0x07, max 14–17 ms; alone n8=0 max 6/7 (unchanged). Rig: `multitest.bat`.
+- Regressions checked: battery 1,741/0, Skyroads alone, Win16 Notepad, Doom. ⚠ Doom headless
+  "exec loop never wound down" forced exit is intermittent AND PRE-EXISTING (A/B vs
+  `bc647f0a`: old 2/2 forced, new 1/2).
+- Housekeeping: `lemhp.bat` now deletes the `cfg\target.txt` + `livehb.flag` it creates (a
+  left target.txt would hijack harness launches); `rt.bat` still leaves its own target.txt.
+- `gh` needs `dangerouslyDisableSandbox` here (the sandbox's TLS interception fails x509).
+
+**Next (per #202 Tier 2):** #203 (Settings entry for a bring-your-own COMMAND.COM), then #168,
+then Tier 3 from #160.
