@@ -175,7 +175,7 @@ story, with every measurement and every dead end, is in
   Host `cd5f9f12` = `bin\` = `prev`. [`log/sessions/session-81.md`](log/sessions/session-81.md) part 2.
 - **Interpreter speed** for mode Y (Wolf3D's host CPU).
 - **Chain-4 de-interleave** (`p_vgamem`).
-- ▶ **A shelf sweep → a new `dist\` zip — SWEPT, NOT PROMOTED (s81).** Candidate `ntvdmex-20260927-f5d0f4c` failed on DIR/exit/Notepad paste/Paint; DIR + exit + DOS note fixed in `e37cb278` (owed a by-hand re-check). Triage, the user's decisions and the menu inventory: [`log/sessions/session-81.md`](log/sessions/session-81.md) part 3. Previously: The anchor zip is still `ntvdmex-20260917-4847355`
+- ▶ **A shelf sweep → a new `dist\` zip — SWEPT, NOT PROMOTED (s81).** Candidate `ntvdmex-20260927-f5d0f4c` failed on DIR/exit/Notepad paste/Paint; DIR + exit + DOS note fixed in `e37cb278` (owed a by-hand re-check). **User 2026-09-27: cut the zip once DIR/exit/DOS note pass; Notepad Paste + Paint tools go into the NEXT zip; Doom's quit sound is folded into the mode-Y/port-trap speed work.** Triage, the user's decisions and the menu inventory: [`log/sessions/session-81.md`](log/sessions/session-81.md) part 3. Previously: The anchor zip is still `ntvdmex-20260917-4847355`
   (host `9448cf27`) and the checkpoint commit still `ff0d956` — both several confirmed builds
   behind. Moving them is a deliberate act that belongs with a whole-shelf sweep.
 - **Stereo mixer** — the GUS's pan (and SB stereo) collapse to mono today.
