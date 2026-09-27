@@ -173,25 +173,45 @@ int main(void)
        DOS_UMBHEAD_OFF, 0x8C);
     eq("...and 0xFFFF there means NO block is upper (6.22's own value)",
        DOS_UMBHEAD_NONE, 0xFFFF);
-    eq("...with the first-MCB word immediately above it, as on 6.22",
-       DOS_SYSVARS_OFF - 2, DOS_UMBHEAD_OFF + 2);
-    ++checks;
-    if (DOS_UMBHEAD_OFF < DOS_SDA_OFF + DOS_SDA_LEN) {
-        ++fails;
-        printf("  FAIL %-54s\n", "the UMB word must not land inside the SDA");
-    }
-    ++checks;
-    if (DOS_SDA_OFF + DOS_SDA_LEN > DOS_SYSVARS_OFF) {
-        ++fails;
-        printf("  FAIL %-54s\n", "the SDA must not land on SysVars (this WAS GH #47)");
-    }
-    /* ⚠ THE SDA'S OLD HOME IS THE OTHER HALF OF THE SAME BUG. MEM reads
-         SysVars+0x45 for the extended-memory size; DOS_SDA_OFF was SysVars+0x44,
-         so the InDOS byte WAS that word's low half and MEM read zero. */
-    ++checks;
-    if (DOS_INDOS_OFF == DOS_SYSVARS_OFF + 0x45) {
-        ++fails;
-        printf("  FAIL %-54s\n", "InDOS is back on SysVars+0x45 (GH #47 regressed)");
+    /* ── ★★ s81 (#47, MEM /C): 0x8C IS NOT "A FIXED ADDRESS BESIDE SysVars". It is
+         SysVars+0x66, because 6.22 keeps SysVars at offset 0x26 of its segment -- the
+         evidence dump above says so. MEM /C reads the same word RELATIVELY, and with
+         SysVars at 0x90 it got the first MCB's reserved bytes (0000) instead. */
+    eq("SysVars sits at 6.22's own offset in its segment", DOS_SYSVARS_OFF, 0x26);
+    eq("...so absolute 0x8C and SysVars+0x66 are ONE field",
+       DOS_UMBHEAD_OFF, DOS_SYSVARS_OFF + 0x66);
+    eq("...and 0x8E (first MCB on 6.22) is SysVars+0x68",
+       DOS_UMBHEAD_OFF + 2, DOS_SYSVARS_OFF + 0x68);
+    {   /* linear ranges: SysVars (MCB word at -2 through DOS_SYSVARS_LEN) must hit
+           nothing else we place in low memory. */
+        unsigned sv0 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF - 2u;
+        unsigned sv1 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN;
+        unsigned sda0 = DOS_HDLR_SEG * 16u + DOS_SDA_OFF, sda1 = sda0 + DOS_SDA_LEN;
+        ++checks;
+        if (sv0 < 0x600u) {       /* the first MCB header is 0x5F0..0x5FF */
+            ++fails; printf("  FAIL %-54s\n", "SysVars must not reach the first MCB (0x5F0)");
+        }
+        ++checks;
+        if (sv0 < 0x718u && sv1 > 0x714u) {
+            ++fails; printf("  FAIL %-54s\n", "SysVars must not touch the kernel's [0x714]");
+        }
+        ++checks;
+        if (sv1 > DOS_CTAB_SEG * 16u) {
+            ++fails; printf("  FAIL %-54s\n", "SysVars must end below DOS_CTAB_SEG");
+        }
+        ++checks;
+        if (sv0 < sda1 && sda0 < sv1) {
+            ++fails; printf("  FAIL %-54s\n", "the SDA must not land on SysVars (this WAS GH #47)");
+        }
+        ++checks;
+        if (DOS_HDLR_SEG * 16u + DOS_INDOS_OFF
+            == DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF + 0x45) {
+            ++fails; printf("  FAIL %-54s\n", "InDOS is back on SysVars+0x45 (GH #47 regressed)");
+        }
+        ++checks;
+        if (DOS_CTAB_SEG * 16u + DOS_WOW_TBL_OFF < DOS_SYSVARS_SEG * 16u) {
+            ++fails; printf("  FAIL %-54s\n", "krnl386's table must be reachable from SysVars' segment");
+        }
     }
 
     printf("== %d checks, %d failed\n", checks, fails);

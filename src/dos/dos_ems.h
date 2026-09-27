@@ -55,6 +55,7 @@ typedef struct {
     /* EMS 4.0 page-map save/restore (fn 47h/48h): one snapshot of the 4 windows. */
     uint8_t  saved;
     struct { uint16_t handle, logical; uint8_t mapped; } save[EMS_PHYS_PAGES];
+    uint8_t  name[8];      /* fn 53h handle name; all zero = unnamed (LIM 4.0)      */
 } ems_handle;
 
 typedef struct {
@@ -70,6 +71,10 @@ typedef struct {
     void  *ctx;
 } ems_state;
 
+static inline void ems_name_clear(ems_handle *h) {
+    int k; for (k = 0; k < 8; ++k) h->name[k] = 0;
+}
+
 /* --- bring-up -------------------------------------------------------------- */
 
 static inline void ems_init(ems_state *e, uint16_t frame_seg, uint16_t total_pages,
@@ -83,7 +88,7 @@ static inline void ems_init(ems_state *e, uint16_t frame_seg, uint16_t total_pag
     e->frame = frame;
     for (p = 0; p < EMS_PHYS_PAGES; ++p) { e->phys[p].handle = 0; e->phys[p].logical = 0; e->phys[p].mapped = 0; }
     for (i = 0; i < EMS_MAX_HANDLES; ++i) {
-        e->h[i].used = 0; e->h[i].pages = 0; e->h[i].mem = 0; e->h[i].saved = 0;
+        e->h[i].used = 0; e->h[i].pages = 0; e->h[i].mem = 0; e->h[i].saved = 0; ems_name_clear(&e->h[i]);
     }
     e->alloc = alloc; e->free = free; e->ctx = ctx;
 }
@@ -126,7 +131,7 @@ static inline int ems_alloc(ems_state *e, uint16_t pages, uint16_t *out_handle, 
     if (i == EMS_MAX_HANDLES) { if (err) *err = EMSERR_NOHANDLES; return 0; }
     buf = e->alloc ? e->alloc(e->ctx, pages) : 0;
     if (!buf) { if (err) *err = EMSERR_NOTENOUGH; return 0; }
-    e->h[i].used = 1; e->h[i].pages = pages; e->h[i].mem = buf; e->h[i].saved = 0;
+    e->h[i].used = 1; e->h[i].pages = pages; e->h[i].mem = buf; e->h[i].saved = 0; ems_name_clear(&e->h[i]);
     e->used_pages += pages;
     if (out_handle) *out_handle = (uint16_t)i;
     if (err) *err = EMS_OK;
@@ -164,7 +169,7 @@ static inline int ems_free(ems_state *e, uint16_t handle, uint8_t *err) {
         if (e->phys[p].mapped && e->phys[p].handle == handle) e->phys[p].mapped = 0;
     if (h->mem && e->free) e->free(e->ctx, h->mem, h->pages);
     e->used_pages -= h->pages;
-    h->used = 0; h->pages = 0; h->mem = 0; h->saved = 0;
+    h->used = 0; h->pages = 0; h->mem = 0; h->saved = 0; ems_name_clear(h);
     if (err) *err = EMS_OK;
     return 1;
 }
@@ -183,6 +188,40 @@ static inline int ems_handle_count(const ems_state *e) {
     int i, n = 0;
     for (i = 0; i < EMS_MAX_HANDLES; ++i) if (e->h[i].used) ++n;
     return n;
+}
+
+/* --- fn 4Dh: get all handle pages ------------------------------------------- *
+ * LIM 4.0: ES:DI receives one {handle, pages} word pair per ACTIVE handle, BX the
+ * count. Missing until s81 (#47): MEM /D calls it and, with AH=84h and BX left as
+ * whatever it held, listed 256 handles of 4000h pages each. `out` may be 0 to count
+ * only; otherwise it must hold EMS_MAX_HANDLES pairs (4 bytes each). */
+static inline int ems_all_handle_pages(const ems_state *e, uint8_t *out) {
+    int i, n = 0;
+    for (i = 0; i < EMS_MAX_HANDLES; ++i) {
+        if (!e->h[i].used) continue;
+        if (out) {
+            out[n * 4 + 0] = (uint8_t)(i & 0xFF);
+            out[n * 4 + 1] = (uint8_t)(i >> 8);
+            out[n * 4 + 2] = (uint8_t)(e->h[i].pages & 0xFF);
+            out[n * 4 + 3] = (uint8_t)(e->h[i].pages >> 8);
+        }
+        ++n;
+    }
+    return n;
+}
+
+/* --- fn 53h: get (AL=0) / set (AL=1) a handle's 8-byte name ---------------- *
+ * LIM 4.0. A bad handle is 83h -- and that is what matters most: MEM /D walks
+ * handles 0-255 with 4Ch and 53h and lists every one not refused as BAD HANDLE, so
+ * while 53h answered 84h (undefined function) it listed all 256 (s81, #47). */
+static inline int ems_handle_name(ems_state *e, uint16_t handle, int set,
+                                  volatile uint8_t *buf, uint8_t *err) {
+    ems_handle *h = ems_get(e, handle);
+    int k;
+    if (!h) { if (err) *err = EMSERR_BADHANDLE; return 0; }
+    for (k = 0; k < 8; ++k) { if (set) h->name[k] = buf[k]; else buf[k] = h->name[k]; }
+    if (err) *err = EMS_OK;
+    return 1;
 }
 
 /* --- fn 51h: reallocate a handle's page count ------------------------------ *

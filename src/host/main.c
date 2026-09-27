@@ -2133,6 +2133,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
 
     /* Build the child's PSP and copy in its command tail, then load the image. */
     dos_psp_build(NULL, child, envseg, (uint16_t)(child + want));
+    mcb_set_name(NULL, child, m->exec_path);        /* DOS 4+: MEM /C and /D read it */
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */
@@ -6767,6 +6768,24 @@ static void host_ems(volatile BYTE *tib)
         if (ems_handle_pages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err)) { E_SETBX(p16); E_SETAH(EMS_OK); }
         else E_SETAH(err);
         break;
+    case 0x4D: {                                        /* all handle pages -> ES:DI, BX */
+        uint8_t pairs[EMS_MAX_HANDLES * 4];
+        volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)
+            (((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+        int n = ems_all_handle_pages(&g_ems, pairs), k;
+        for (k = 0; k < n * 4; ++k) d[k] = pairs[k];
+        E_SETBX((uint16_t)n); E_SETAH(EMS_OK);
+        break; }
+    case 0x53: {                                        /* handle name: AL=0 get ES:DI, 1 set DS:SI */
+        DWORD al53 = VDM_REG(tib, VTIB_EAX) & 0xFF;
+        volatile BYTE *nb = (al53 == 0)
+            ? (volatile BYTE *)(ULONG_PTR)(((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_EDI) & 0xFFFF))
+            : (volatile BYTE *)(ULONG_PTR)(((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_ESI) & 0xFFFF));
+        if (al53 > 1) E_SETAH(0x8F);                    /* LIM: invalid subfunction */
+        else if (ems_handle_name(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
+                                 (int)al53, nb, &err)) E_SETAH(EMS_OK);
+        else E_SETAH(err);
+        break; }
     case 0x51:                                          /* reallocate: BX pages, DX handle */
         if (ems_realloc(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
                         (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), &err)) {
@@ -14878,7 +14897,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          affected by this. When a DOS program needs the SFT, this moves. */
     {   WORD sft = wow_host_alloc(DOS_SFT_PARAS);
         volatile BYTE *sv = (volatile BYTE *)(ULONG_PTR)
-                            (((DWORD)DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF);
+                            (((DWORD)DOS_SYSVARS_SEG << 4) + DOS_SYSVARS_OFF);
         q = m; q = zput(q, "WOWV86: SFT ");
         if (!sft) {
             q = zput(q, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
@@ -23409,12 +23428,15 @@ static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
 static void dos_wow_publish(volatile BYTE *hdlr, volatile BYTE *ct,
                             unsigned cur_drive)
 {
-    /* Offsets of the two blocks as seen from DOS_HDLR_SEG, which is the segment
-       krnl386 will build its selector on. */
+    /* Offsets of the two blocks as seen from the SysVars SEGMENT, which is the one
+       krnl386 builds its selector on (AH=52h's ES). ⚠ s81: that is DOS_SYSVARS_SEG
+       now, not DOS_HDLR_SEG -- see dos_layout.h. Both blocks are ABOVE it, so the
+       offsets stay positive. */
     const WORD tbl  = (WORD)(((DOS_CTAB_SEG << 4) + DOS_WOW_TBL_OFF)
-                             - (DOS_HDLR_SEG << 4));
+                             - (DOS_SYSVARS_SEG << 4));
     const WORD vars = (WORD)(((DOS_CTAB_SEG << 4) + DOS_WOW_VARS_OFF)
-                             - (DOS_HDLR_SEG << 4));
+                             - (DOS_SYSVARS_SEG << 4));
+    volatile BYTE *svs = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << 4);
     unsigned k;
     volatile BYTE *t = ct + DOS_WOW_TBL_OFF;
     volatile BYTE *v = ct + DOS_WOW_VARS_OFF;
@@ -23426,7 +23448,7 @@ static void dos_wow_publish(volatile BYTE *hdlr, volatile BYTE *ct,
        unread entry left at 0:0 is a landmine for the next thing that reads it. */
     for (k = 0; k < DOS_WOW_TBL_N; ++k) {
         *(volatile WORD *)(t + k * 4 + 0) = vars;
-        *(volatile WORD *)(t + k * 4 + 2) = DOS_HDLR_SEG;
+        *(volatile WORD *)(t + k * 4 + 2) = DOS_SYSVARS_SEG;
     }
     *(volatile WORD *)(t + DOS_WOW_E_LASTDRV) = (WORD)(DOS_SYSVARS_OFF + 0x21);
     *(volatile WORD *)(t + DOS_WOW_E_CURDRV)  = (WORD)(vars + 0);
@@ -23435,11 +23457,12 @@ static void dos_wow_publish(volatile BYTE *hdlr, volatile BYTE *ct,
     *(volatile WORD *)(t + DOS_WOW_E_D)       = (WORD)(vars + 6);
     *(volatile WORD *)(t + DOS_WOW_E_F)       = (WORD)(vars + 8);
 
-    /* ⚠ THE WORD AT SysVars+0x6A LANDS AT DOS_HDLR_SEG:0x00FA, and that segment
-         only has 256 bytes before DOS_ENV_SEG. 0xD4-0xF3 is the swappable data
-         area, so 0xFA-0xFB is free -- but only just, and the next thing added
-         here will not fit. Checked, not assumed. */
-    *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x6A) = tbl;
+    /* ⛔ THIS COMMENT USED TO SAY SysVars+0x6A "LANDS AT DOS_HDLR_SEG:0x00FA ... FREE".
+         It was the NAME FIELD OF THE FIRST MCB (0x5F:000A), and SysVars+0x60 onward was
+         that MCB's whole header -- the defect behind MEM /C's 1 MB "MSDOS" (#47). In
+         SysVars' own segment it is simply SysVars+0x6A. */
+    (void)hdlr;
+    *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x6A) = tbl;
 }
 
 /* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
@@ -25068,6 +25091,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "]\r\n"); }
     {   uint16_t first_mcb = dos_mcb_init(NULL);
         dos_int21_init(&m, first_mcb);
+        /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
+           dos_mcb_init, which lays the chain and clears the name byte. */
+        mcb_set_name(NULL, DOS_PSP_SEG, progpath);
         /* The CDS array's block, at the top of the chain (see DOS_LASTDRIVE). The
            PSP was built with DOS_MEM_TOP as its memory top; the program's block now
            ends one paragraph below the reserved block's data, and PSP+2 must say so
@@ -25296,20 +25322,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
                 SysVars+0x6A table below, so zero here means it believes there
                 are no drives at all.
-       ⚠ The clear stops at +0x40 ON PURPOSE: DOS_SDA_OFF (the AH=34h InDOS flag
-         and the AH=5D06h swappable data area) sits at +0x44 and is planted
-         elsewhere. Widening this loop wipes it. */
-    { int k; for (k = -2; k < 0x40; ++k) hdlr[DOS_SYSVARS_OFF + k] = 0; }
-    *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF - 2) = m.first_mcb;
-    /* ⚠⚠ AND THE "FIRST UMB" WORD AT ABSOLUTE 0x008C -- see DOS_UMBHEAD_OFF. MEM
-         keeps the SysVars SEGMENT, discards the offset, and reads this word as the
-         line between conventional and upper memory. Zero means "everything is
-         upper", which is what it has been reporting. 0xFFFF means "nothing is",
-         which is the truth on a machine that refuses AH=5803. */
-    *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
-    hdlr[DOS_SYSVARS_OFF + 0x20] = 1;                     /* block devices       */
-    hdlr[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;         /* LASTDRIVE           */
-    m.sysvars_seg = DOS_HDLR_SEG;
+       ★ s81: SysVars has its OWN segment now (DOS_SYSVARS_SEG, see dos_layout.h), so
+         the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
+         limit was a symptom of it sharing DOS_HDLR_SEG. */
+    volatile BYTE *svs = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << 4);
+    { int k; for (k = -2; k < DOS_SYSVARS_LEN; ++k) svs[DOS_SYSVARS_OFF + k] = 0; }
+    *(volatile WORD *)(svs + DOS_SYSVARS_OFF - 2) = m.first_mcb;
+    /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
+         also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
+         on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
+         chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
+         does on 6.22 and PCem (p_sysvar). */
+    *(volatile WORD *)(svs + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
+    *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x68) = m.first_mcb;
+    svs[DOS_SYSVARS_OFF + 0x20] = 1;                      /* block devices       */
+    svs[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;          /* LASTDRIVE           */
+    m.sysvars_seg = DOS_SYSVARS_SEG;
     m.sysvars_off = DOS_SYSVARS_OFF;
     /* ── ★ THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) ────────────
          Until now everything above +0x20 was deliberately zero, and that choice was
@@ -25374,20 +25402,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 { spc = 8; bps = 512; totc = 0xFFF0; }
             dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, 512,
                           (totc > 0xFFFE) ? 0xFFFE : totc + 1, 0xF8,
-                          DOS_HDLR_SEG, DOS_SYSVARS_OFF + SV_NUL,
+                          DOS_SYSVARS_SEG, DOS_SYSVARS_OFF + SV_NUL,
                           last ? 0xFFFF : DOS_CTAB_SEG,
                           last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (n + 1) * DPB_LEN));
             for (k = 0; k < DPB_LEN; ++k)
                 ct[DOS_DPBCHAIN_OFF + n * DPB_LEN + k] = dp[k];
         }
         if (nd) {
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB)     = DOS_DPBCHAIN_OFF;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB + 2) = DOS_CTAB_SEG;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB)     = DOS_DPBCHAIN_OFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB + 2) = DOS_CTAB_SEG;
         } else {                                  /* no chain is better than a bad one */
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB)     = 0xFFFF;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB + 2) = 0xFFFF;
         }
-        *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_MAXSEC) = 512;
+        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_MAXSEC) = 512;
         /* ── ★ SYSVARS+0x45: EXTENDED MEMORY, IN KB. THE ANSWER TO GH #47. ────
              MEM.EXE does not get this from the XMS driver. It reads it straight
              out of SysVars and skips its entire extended-memory report when the
@@ -25399,20 +25427,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              area used to be planted at SysVars+0x44, so the InDOS byte WAS
              this field. The SDA has moved; see DOS_SDA_OFF.
            The value is the XMS pool, so the two cannot disagree. */
-        *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x45) = (WORD)XMS_POOL_KB;
+        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x45) = (WORD)XMS_POOL_KB;
         /* ⚠ GH #47: SysVars +0x43 = 0x0103, +0x49 = 0xFFFF and +0x4B = 0x0001
            (6.22's values, where ours are zero) were planted together as a
            diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
            +0x49 was the prime suspect on the theory that zero reads as "the UMB
            chain starts at segment 0". It does not. Seventh refutation. */
-        hdlr[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
+        svs[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
         /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
                to one (measured on 6.22), and it TERMINATES: we install no block or
                character drivers, so FFFF:FFFF is the truthful end of the chain. */
         {   BYTE nul[SV_NUL_LEN]; unsigned k;
             dos_nul_build(nul, 0xFFFF, 0xFFFF);
             for (k = 0; k < SV_NUL_LEN; ++k)
-                hdlr[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k]; }
+                svs[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k]; }
         /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
                because it is INDEXED by drive and a walker reads all of them
                whatever we populate. Entries for drives that exist carry flags
@@ -25437,11 +25465,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 for (k = 0; k < CDS_LEN; ++k)
                     cd[di2 * CDS_LEN + k] = cds[k];
             }
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = 0x0000;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = g_cds_seg;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS)     = 0x0000;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS + 2) = g_cds_seg;
         } else {                                  /* no block: no array, say so */
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = 0xFFFF;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS + 2) = 0xFFFF;
         }
         /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
                INT 21h layer can really open (dos_machine_t::fh[]). Same shape the
@@ -25459,11 +25487,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(sf + 0) = 0xFFFF;             /* next offset: last block */
             *(volatile WORD *)(sf + 2) = 0xFFFF;             /* next segment            */
             *(volatile WORD *)(sf + 4) = DOS_SFT_ENTRIES;    /* entries in this block   */
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT)     = 0x0000;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT + 2) = g_sft_seg;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT)     = 0x0000;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT + 2) = g_sft_seg;
         } else {
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT)     = 0xFFFF;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT + 2) = 0xFFFF;
         }
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);

@@ -132,6 +132,28 @@ int main(void)
     CHECK(!ems_free(&e, h1, &err) && err == EMSERR_BADHANDLE, "fn45: double-free rejected (83h)");
     CHECK(ems_handle_count(&e) == 0, "fn4B: 0 open handles at end");
 
+    /* T12: fn 4Dh lists exactly the active handles, {handle, pages} each --- */
+    {   uint16_t ha, hb; uint8_t pr[EMS_MAX_HANDLES * 4];
+        CHECK(ems_all_handle_pages(&e, pr) == 0, "fn4D: no handles -> count 0");
+        ems_alloc(&e, 3, &ha, &err); ems_alloc(&e, 5, &hb, &err);
+        CHECK(ems_all_handle_pages(&e, pr) == 2, "fn4D: two handles -> count 2");
+        CHECK((pr[0] | pr[1] << 8) == ha && (pr[2] | pr[3] << 8) == 3,
+              "fn4D: first pair = {handle, 3 pages}");
+        CHECK((pr[4] | pr[5] << 8) == hb && (pr[6] | pr[7] << 8) == 5,
+              "fn4D: second pair = {handle, 5 pages}");
+        {   uint8_t nm[8] = { 'G','A','M','E',0,0,0,0 }, got[8];
+            CHECK(ems_handle_name(&e, ha, 1, nm, &err), "fn53 AL=1: set name");
+            CHECK(ems_handle_name(&e, ha, 0, got, &err) && memcmp(got, nm, 8) == 0,
+                  "fn53 AL=0: reads back the name");
+            CHECK(!ems_handle_name(&e, 200, 0, got, &err) && err == EMSERR_BADHANDLE,
+                  "fn53: unused handle -> 83h (what MEM /D relies on)"); }
+        ems_free(&e, ha, &err); ems_free(&e, hb, &err);
+        {   uint16_t hc; uint8_t got[8];
+            ems_alloc(&e, 1, &hc, &err);
+            CHECK(ems_handle_name(&e, hc, 0, got, &err) && got[0] == 0,
+                  "fn53: a reused handle starts unnamed");
+            ems_free(&e, hc, &err); } }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

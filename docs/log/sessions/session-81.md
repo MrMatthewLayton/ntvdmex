@@ -339,3 +339,24 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   Guards: XP shell runs/closes Skyroads and answers `ver`; Skyroads `n8=0`; Notepad; battery.
 - Left in #165: `4B05h` (set execution state) and `6901h` (set serial) — neither probed, on
   purpose (one changes DOS's loader state, the other writes the oracle's boot sector).
+
+## Part 10 — MEM /C and /D (#47): SysVars moves to 6.22's own offset
+
+- **MEM /C** listed MSDOS at ~1,062,250 bytes. Cause: SysVars lived at `0050:0090` and is ~0x70
+  bytes long, so SysVars+0x60 onward WAS THE FIRST MCB's HEADER (linear 0x5F0). MEM /C reads
+  SysVars+0x66 ("first MCB in upper memory"): it got that MCB's reserved bytes, 0000, walked the
+  IVT as a UMB chain and booked ~1 MB to DOS. The krnl386 table word at SysVars+0x6A sat in the
+  same MCB's name field under a comment calling it "free".
+- **The fix is 6.22's layout, not a patch**: 6.22 keeps SysVars at offset **0x26** of its
+  segment, which is WHY MEM's "absolute 0x8C" read (s72's fix) is SysVars+0x66 there. SysVars is
+  now `0072:0026` (linear 0x746, unused DOS-filler space past [0x714]); +0x66 = FFFF, +0x68 =
+  first MCB, as on 6.22 and PCem (p_sysvar widened to 0x72 bytes to see it). krnl386's table
+  offsets re-based on the new segment; `sysvars_test` pins the offset, the one-field identity
+  and every non-overlap.
+- **MEM /D**: program names written into MCBs at load and EXEC (`mcb_set_name`, DOS 4+) —
+  "MEM Program"; **INT 67h 4Dh and 53h** implemented (MEM walked 256 handles and listed all).
+  Left: the IO/MSDOS "System Data" rows need our first MCB (0x5F) above SysVars — a memory-map
+  change that once broke DOS/4GW; filed separately.
+- Guards: full parity sweep — no new mismatch (p_2f55, p_int2f, p_dpmins identical on the
+  previous build; the other six are the recorded ones); ZAR (EXECs DOS4GW) and Doom DPMI traffic
+  as baseline; Skyroads `n8=0`; Win16 Notepad and Calculator; XP shell; battery.

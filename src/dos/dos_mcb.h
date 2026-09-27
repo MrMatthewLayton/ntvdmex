@@ -55,6 +55,26 @@ static inline void mcb_lay(volatile uint8_t *base, uint16_t seg,
     mc[8] = 0;
 }
 
+/* --- the owner name DOS 4+ writes into a program's MCB ---------------------- *
+ * Bytes 8-15 of the MCB IN FRONT OF A PSP hold the program's base name: the last
+ * path component up to the '.', at most 8 characters, NUL-padded when shorter. MEM
+ * /C and /D read it to say which program owns a block (6.22: "MEM  Program",
+ * "COMMAND  Environment"); nothing wrote it here, so every block read as nameless
+ * (s81, #47). Upper-cased because DOS's own EXEC path is. */
+static inline void mcb_set_name(volatile uint8_t *base, uint16_t psp_seg, const char *path) {
+    volatile uint8_t *mc = mcb_at(base, (uint16_t)(psp_seg - 1));
+    const char *s = path, *p;
+    int k;
+    for (p = path; *p; ++p) if (*p == '\\' || *p == '/' || *p == ':') s = p + 1;
+    for (k = 0; k < 8; ++k) {
+        char c = s[k];
+        if (!c || c == '.' || c == ' ') break;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 0x20);
+        mc[8 + k] = (uint8_t)c;
+    }
+    for (; k < 8; ++k) mc[8 + k] = 0;
+}
+
 /* --- chain bring-up -------------------------------------------------------- */
 
 /* Lay down the initial MCB chain over conventional memory and return the chain

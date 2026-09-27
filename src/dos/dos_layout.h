@@ -74,17 +74,30 @@
      are "first UMB" / "first MCB", and our MCB head already lands on 0x8E because
      DOS_SYSVARS_OFF is 0x90. That was luck, not design; this makes the pair
      deliberate.
+   ⚠ (s81: SUPERSEDED -- SysVars DID move, to 6.22's own offset in its own segment,
+     which is what makes 0x8C a SysVars field rather than a neighbour. See below.)
    ⚠ SO DOS_SYSVARS_OFF IS NOT FREE TO MOVE. Two absolute offsets in this segment
      are load-bearing for MEM (0x8C here, and the SDA collision at SysVars+0x45
      that #47 already cost a session to find). Moving SysVars moves neither. */
-#define DOS_UMBHEAD_OFF 0x008C      /* first UMB segment; 0xFFFF = there are none */
+/* ── ★★ s81 (#47, MEM /C): THE PAIR IS NOT "LUCK", IT IS 6.22's OWN LAYOUT. ──────
+     6.22 puts SysVars at OFFSET 0x26 of its segment (0116:0026). So its absolute
+     0x8C is SysVars+0x66 and 0x8E is SysVars+0x68: MEM's "absolute" read and MEM /C's
+     RELATIVE read of SysVars+0x66 are THE SAME FIELD there -- "first MCB in upper
+     memory", FFFFh when there is none (measured: p_sysvar, 6.22 and PCem).
+   ⛔ OURS WAS AT 0050:0090, and SysVars is ~0x70 bytes long, so SysVars+0x60 onward
+     WAS THE FIRST MCB HEADER at linear 0x5F0. MEM /C read SysVars+0x66 -- that MCB's
+     reserved bytes, 0000 -- as "the upper-memory chain starts at segment 0", walked the
+     IVT as an MCB, and booked ~1 MB to MSDOS. And the krnl386 table pointer at
+     SysVars+0x6A was sitting in that MCB's name field, commented as "free".
+   ⇒ SysVars now lives at DOS_SYSVARS_SEG:0x0026, exactly 6.22's offset, in the DOS-
+     resident filler block (linear 0x720-0x8FF is otherwise unused; it is past the
+     kernel's [0x714] dword and below DOS_CTAB_SEG). Both MEM reads now hit one field
+     for the same reason they do on real DOS. */
+#define DOS_SYSVARS_SEG 0x0072      /* SysVars' segment: AH=52h returns ES=this    */
+#define DOS_SYSVARS_OFF 0x0026      /* 6.22's offset; MCB head word at -2 (GH #35) */
+#define DOS_UMBHEAD_OFF 0x008C      /* = SysVars+0x66: first UMB MCB; FFFF = none  */
 #define DOS_UMBHEAD_NONE 0xFFFF
-
-/* AH=52h hands back DOS_HDLR_SEG:this. It lived in main.c until GH #47 showed
-   that two FIXED addresses in this segment are load-bearing for MEM.EXE, at
-   which point the constant they are measured against belongs in the file that
-   documents the segment map -- and can be asserted against them off-VM. */
-#define DOS_SYSVARS_OFF 0x0090      /* MCB head at -2 (GH #35)                  */
+#define DOS_SYSVARS_LEN 0x0070      /* bytes from SysVars+0 that we own and zero   */
 
 /* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
    MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").

@@ -86,12 +86,14 @@ start:
         ; extended-memory report when that word is zero (GH #47, disassembled:
         ; 07B5 cmp word [es:bx+0x45],0 / jz 0x907). The old 0x42 stopped at
         ; SysVars+0x3F -- six bytes short of the field that decides it.
-        mov     cx, 62h
+        ; ★ 0x72 (s81, #47): MEM /C walks the UPPER-memory chain from SysVars+0x66,
+        ; which 0x62 stopped four bytes short of.
+        mov     cx, 72h
         push    ds
         mov     ds, ax
         rep     movsb
         pop     ds
-        EMIT_BUF "sysvars.raw", sbuf, 62h
+        EMIT_BUF "sysvars.raw", sbuf, 72h
 
         ; ---- the DPB chain.  sbuf+0 is the MCB word, so SysVars+0 is sbuf+2.
         ; A drive parameter block per drive, linked; MEM and CHKDSK walk it.
@@ -141,7 +143,7 @@ start:
         PROBE_END
 
 fptr     dd 0
-sbuf     times 62h db 0
+sbuf     times 72h db 0
 dbuf     times 30h db 0
 fbuf     times 30h db 0
 cbuf     times 60h db 0
