@@ -9794,14 +9794,18 @@ static void settings_to_dialog(const ntvdmex_settings *s)
     /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
          command.com but reporting 6.22, is that right?") The box holds the SETTING; a
          session can be running a different, forced number, and the dialog said nothing. */
-    {   HWND c = settings_ctl(IDC_S_DOSVER_NOTE);
-        if (c && g_dosm && g_dosver_forced && g_dosver_why) {
-            /* s81 sweep: the user read the old wording and did not understand it. Say
-               what programs see, why, and when the box above DOES apply -- in that order. */
-            wsprintfA(t, "This session reports %u.%02u: %s.",
-                      (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor, g_dosver_why);
-            SetWindowTextA(c, t);
+    /* ⇒ s81, the user's redesign: the SETTING and the SESSION each get their own row.
+         One combo plus a note that contradicted it ("6.22" above, "reports 5.00" below)
+         read as a bug. Row two states the number this session is really using and, in
+         one sentence, why -- or that it is simply the setting. */
+    {   HWND cn = settings_ctl(IDC_S_DOSVER_NOW), cw = settings_ctl(IDC_S_DOSVER_WHY);
+        if (cn && g_dosm) {
+            wsprintfA(t, "%u.%02u", (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
+            SetWindowTextA(cn, t);
         }
+        if (cw) SetWindowTextA(cw, (g_dosm && g_dosver_forced && g_dosver_why) ? g_dosver_why
+            : "Same as the setting above. A change takes effect for programs you start "
+              "after pressing OK.");
     }
 }
 
@@ -24811,8 +24815,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         dos_int21_set_version(&m, 5, 0);
         dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
         g_dosver_forced = 1;
-        g_dosver_why = "the DOS prompt is Windows XP's own COMMAND.COM, which only works as "
-                       "5.00. The version above applies when you start a program directly";
+        g_dosver_why = "Windows XP's DOS prompt only works as 5.00, so this session -- and "
+                       "anything you start from its prompt -- uses 5.00. The setting above "
+                       "applies when you start a program directly.";
     }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
@@ -24829,7 +24834,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
               dosver_src = "cfg\\dosver.txt";
               g_dosver_forced = 1;
-              g_dosver_why = "the file cfg\\dosver.txt overrides the box above";
+              g_dosver_why = "The file cfg\\dosver.txt overrides the setting above.";
           }
       } }
     /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────

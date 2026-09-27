@@ -84,14 +84,20 @@ IDD_PAGE_GENERAL DIALOGEX 0, 0, 292, 181
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "DOS", -1, 4, 4, 284, 62
-    LTEXT           "Reported MS-DOS &version:", -1, 14, 21, 90, 8
-    COMBOBOX        IDC_S_DOSVER, 108, 19, 60, 90,
+    /* s81 (user redesign): TWO numbers, each on its own labelled row -- the setting,
+       and what this session is actually using -- because one box plus a note that
+       contradicted it read as a bug. The second row is filled at run time. */
+    GROUPBOX        "MS-DOS version", -1, 4, 4, 284, 120
+    LTEXT           "Version reported to &programs:", -1, 14, 20, 150, 8
+    COMBOBOX        IDC_S_DOSVER, 214, 18, 64, 90,
                     CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "The version number DOS programs are told. Some refuse to run "
-                    "unless they like it; 6.22 suits almost everything. (The DOS prompt "
-                    "always runs as 5.00 -- Windows XP's COMMAND.COM needs that.)",
-                    IDC_S_DOSVER_NOTE, 14, 36, 266, 27
+    LTEXT           "What DOS programs are told when you start them directly. Some "
+                    "refuse to run unless they like the number; 6.22 suits almost "
+                    "everything.",
+                    IDC_S_DOSVER_NOTE, 22, 34, 258, 24
+    LTEXT           "This session is using:", -1, 14, 66, 150, 8
+    RTEXT           "", IDC_S_DOSVER_NOW, 214, 66, 64, 8
+    LTEXT           "Same as the setting above.", IDC_S_DOSVER_WHY, 22, 80, 258, 38
 END
 
 /* ── PAGE: PROCESSOR ─────────────────────────────────────────────────────────────

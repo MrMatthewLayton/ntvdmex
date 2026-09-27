@@ -36,6 +36,8 @@
 /* ── General ──────────────────────────────────────────────────────────────────── */
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */
 #define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
+#define IDC_S_DOSVER_NOW      294   /* static:   the version THIS session reports (s81) */
+#define IDC_S_DOSVER_WHY      295   /* static:   why the session differs, or "same"   */
 
 /* ── Advanced (was on General) ──────────────────────────────────────────────────
      Internal pacing knobs. They are not "General" and they are certainly not the
