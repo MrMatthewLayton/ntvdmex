@@ -153,9 +153,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   2, "1x|2x|3x" },
 /* s81 (#147), user decision: GDI + DirectDraw only, and the choice is REAL. The window is
    always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing, but
-   the driver may filter the stretch) instead of the sharp borderless GDI window. There
-   was never Direct3D or OpenGL code. A stored 2/3 clamps back to GDI. */
-{ "Renderer",          IDC_S_RENDERER,    SK_COMBO,      0,  0,   1, "GDI|DirectDraw" },
+   the driver filters the stretch -- visibly soft) instead of the sharp borderless GDI
+   window. There was never Direct3D or OpenGL code.
+   ⛔ A NEW REGISTRY NAME, DELIBERATELY. The old "Renderer" value was stored for months
+     while it did nothing, so machines carry whatever was once clicked -- the rig had 1.
+     Honouring it made the user's fullscreen suddenly blurry (s81 check, "a regression").
+     A value chosen when it meant nothing must not start meaning something. */
+{ "FullscreenRenderer", IDC_S_RENDERER,   SK_COMBO,      0,  0,   1,
+                                          "GDI (sharp)|DirectDraw (soft)" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
 { "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
 /* ── ★ WAS A CHECKBOX, IS NOW THE ASPECT LOCK. (session 54) ─────────────────────

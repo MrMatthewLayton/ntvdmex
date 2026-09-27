@@ -104,6 +104,26 @@ static HBRUSH scanline_brush(void)
  *   strip to reserve room for, and the fit is snapped to whole multiples. */
 static const uint32_t *row_pal(present_ddraw *pd, int y);   /* fwd: with _snapshot */
 static uint32_t snap_px(present_ddraw *pd, int y, int x);   /* fwd: depth-agnostic pixel */
+/* #138: the release hint, top centre of the picture, while it is due. Drawn after the
+   frame on BOTH fullscreen paths (the GDI window here, the DirectDraw back buffer via
+   GetDC in fs_present), so every present repaints it until it expires. s81: the user
+   saw it windowed and not in fullscreen -- fullscreen was on the DirectDraw path. */
+static void hint_draw(present_ddraw *pd, HDC hdc, int dx, int dy, int dw)
+{
+    SIZE ts; int n = 0, tx, ty = dy + 12;
+    if (!pd->hint_text || (long)(pd->hint_until - GetTickCount()) <= 0) return;
+    while (pd->hint_text[n]) ++n;
+    SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+    GetTextExtentPoint32A(hdc, pd->hint_text, n, &ts);
+    tx = dx + (dw - ts.cx) / 2;
+    { RECT box; box.left = tx - 10; box.top = ty - 5;
+      box.right = tx + ts.cx + 10; box.bottom = ty + ts.cy + 5;
+      FillRect(hdc, &box, (HBRUSH)GetStockObject(BLACK_BRUSH)); }
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    TextOutA(hdc, tx, ty, pd->hint_text, n);
+}
+
 static void gdi_present(present_ddraw *pd)
 {
     HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
@@ -182,21 +202,7 @@ static void gdi_present(present_ddraw *pd)
             SelectObject(hdc, old);
         }
     }
-    /* #138: the release hint, top centre, while it is due. Drawn after the frame so
-       every present repaints it; it simply stops being drawn when it expires. */
-    if (pd->hint_text && (long)(pd->hint_until - GetTickCount()) > 0) {
-        SIZE ts; int n = 0, tx, ty = dy + 12;
-        while (pd->hint_text[n]) ++n;
-        SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-        GetTextExtentPoint32A(hdc, pd->hint_text, n, &ts);
-        tx = dx + (dw - ts.cx) / 2;
-        { RECT box; box.left = tx - 10; box.top = ty - 5;
-          box.right = tx + ts.cx + 10; box.bottom = ty + ts.cy + 5;
-          FillRect(hdc, &box, (HBRUSH)GetStockObject(BLACK_BRUSH)); }
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(255, 255, 255));
-        TextOutA(hdc, tx, ty, pd->hint_text, n);
-    }
+    hint_draw(pd, hdc, dx, dy, dw);                 /* #138 */
     ReleaseDC(pd->hwnd, hdc);
 }
 
@@ -405,6 +411,11 @@ static void fs_present(present_ddraw *pd)
         done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
     }
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
+    {   HDC hd;                                   /* #138 on the exclusive path */
+        if (pd->hint_text && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
+            hint_draw(pd, hd, fx, fy, fw);
+            IDirectDrawSurface7_ReleaseDC(bk, hd);
+        } }
 
     if (IDirectDrawSurface7_Flip(SURF(pd->primary), NULL, DDFLIP_WAIT) == DDERR_SURFACELOST)
         IDirectDrawSurface7_Restore(SURF(pd->primary));

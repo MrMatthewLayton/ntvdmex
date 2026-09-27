@@ -8461,8 +8461,8 @@ static HMENU build_menu(void)
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
     menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    mi(m,"Wait for VSync",IDM_VIEW_VSYNC);           /* user, s81: with the picture group */
     msep(m);
-    mi(m,"Wait for VSync",IDM_VIEW_VSYNC);
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     /* ── ★ AND BACK, AS THE USER SPECIFIED IT (s81, #157): Show Host Cursor is a View
          toggle for programs that do NOT use the mouse, and is forced off and greyed
@@ -8501,7 +8501,6 @@ static HMENU build_menu(void)
          Debug submenu, Help's Quick Start / Keyboard Shortcuts. They are recorded for
          review in #149, #150 and #151. This reverses the old scaffold-stubs-enabled rule
          for these items: the user found dead menu items worse than absent ones. */
-    m = mpop();                                                   /* Tools>Machine*/
     /* ── ★ THE APPROXIMATE-SPEED DROPDOWN. (GH #56) ──────────────────────────────
          The user asked for this in the MENU, and the menu is where it belongs: it
          is a knob you reach for while watching something run too fast, not one you
@@ -8511,12 +8510,12 @@ static HMENU build_menu(void)
          arrived: a speed tried from the menu became the machine's permanent speed,
          while a scaler tried from the menu did not. One rule -- the menu is for
          trying things, the dialog is for keeping them. */
-    menu_combo(m, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
-    msep(m);
+    /* user, s81: with only two items left, Machine is flattened into Tools itself. */
+    menu_combo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
-    mi(m,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
-    msub(tools, "Machine", m);
+    mi(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
+    msep(tools);
 
     m = mpop();                                                   /* Tools>Capture*/
     mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
