@@ -1638,5 +1638,41 @@
   ],
   "recorded": "2026-09-27",
   "why": "INT 2Fh AX=5500h/5501h is the COMMAND.COM interface, answered by WHICHEVER COMMAND.COM is resident -- it is not a DOS kernel function. Since #208 (s81) every program NTVDMEX starts runs under Windows XP's own COMMAND.COM, exactly as in the stock XP DOS box; the oracles run their probes under MS-DOS 6.22's COMMAND.COM (and PCem under its own). So these rows compare two different shells' answers, which cannot agree and say nothing about our DOS. Before #208 no shell was resident under a probe and the rows mismatched for the opposite reason (nothing answered). Stock ntvdm is the authoritative comparison here (tools/dostest/p_2f55.asm header)."
+ },
+ {
+  "probe": "defs",
+  "case": "edge.71",
+  "field": "CF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "AH=71h is the LONG-FILENAME API. MS-DOS 6.22 predates it and answers as for any undefined function: AL cleared, CF clear (AX=7100h). That reads as SUCCESS to a client written for a DOS that HAS long filenames -- and the stock XP NTVDM does (its LFN API), so XP's own EDIT.COM trusted CF, took 7100h for a file handle and failed with 'Error 6' on EDIT.INI (s81, user report). Until the API is implemented, NTVDMEX gives the documented 'no LFN API here' answer, AX=7100h WITH CF SET, which every LFN-aware program is written to fall back from. AX still agrees with 6.22; only CF differs, deliberately."
+ },
+ {
+  "probe": "subfn",
+  "case": "int21.716C",
+  "field": "CF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "AH=71h is the LONG-FILENAME API. MS-DOS 6.22 predates it and answers as for any undefined function: AL cleared, CF clear (AX=7100h). That reads as SUCCESS to a client written for a DOS that HAS long filenames -- and the stock XP NTVDM does (its LFN API), so XP's own EDIT.COM trusted CF, took 7100h for a file handle and failed with 'Error 6' on EDIT.INI (s81, user report). Until the API is implemented, NTVDMEX gives the documented 'no LFN API here' answer, AX=7100h WITH CF SET, which every LFN-aware program is written to fall back from. AX still agrees with 6.22; only CF differs, deliberately."
+ },
+ {
+  "probe": "subfn",
+  "case": "int21.7147",
+  "field": "CF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "AH=71h is the LONG-FILENAME API. MS-DOS 6.22 predates it and answers as for any undefined function: AL cleared, CF clear (AX=7100h). That reads as SUCCESS to a client written for a DOS that HAS long filenames -- and the stock XP NTVDM does (its LFN API), so XP's own EDIT.COM trusted CF, took 7100h for a file handle and failed with 'Error 6' on EDIT.INI (s81, user report). Until the API is implemented, NTVDMEX gives the documented 'no LFN API here' answer, AX=7100h WITH CF SET, which every LFN-aware program is written to fall back from. AX still agrees with 6.22; only CF differs, deliberately."
  }
 ]

@@ -407,3 +407,26 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   condition. Duke3D, Heretic, Hexen, Doom, ZAR run; Mario and Skyroads timing as baseline.
 - p_2f55 / p_int2f 5500h/5501h rows are the resident COMMAND.COM's answers (XP's now, 6.22's on
   the oracle): recorded in oracle-rules.json. Sweep otherwise as before.
+
+## Part 13 — the user's round 3 (`runs/s81_round3/sweep_user.txt`), steps 1-10
+
+- **7. ENDOOM's bright words pale blue** (and the earlier "white shows faint blue"): the mode
+  set ran `pal_refresh()` inside `load_default_palette()` BEFORE setting the new mode's kind, so
+  leaving mode 13h rebuilt the text colours with the 8bpp rule (colour n = DAC n). Colour 0Fh drew
+  as DAC 0Fh = AAAAFF. The machine state was right (a report after the exit read DAC 3F=FFFFFF);
+  the renderer's table was stale. Refresh after the kind is set; the DAC pixel mask is reset too.
+- **2. `mem` → "Incorrect DOS version"**: XP's DOS tools are DOS 5 programs; under the SETVER rule
+  they were told 6.22. Programs run from Windows' system directory now get 5.00 — SETVER's own
+  job, per program.
+- **3. `edit` → "Error 6" on EDIT.INI**: EDIT calls the LFN API (INT 21h AH=71h) and trusts CF.
+  We answered "undefined" with AX UNCHANGED — which turned out to be half a measurement: every
+  probe of undefined functions had called with AL=00h. With AL≠0 (p_subfn 716Ch/7147h; p_unimp
+  now has two such rows) 6.22 and PCem return AL=00 → AX=7100h. Undefined functions now clear
+  AL; AH=71h additionally sets CF (the documented "no LFN API" answer, recorded in
+  oracle-rules.json) until the API is implemented. EDIT now opens cleanly.
+- Guards: video + DOS probes clean (with the recorded AH=71h CF rows); Skyroads/Mario timing and
+  Doom DPMI traffic as baseline; Lemmings (LEMVGA /v and lemhp.bat) reaches its level. One routed
+  lemhp run sat at F000:0034 after keys arrived during start-up; the repeat was normal — timing,
+  noted in case it recurs.
+- ★ LEMMINGS.BAT launched from Windows now RUNS (through the shell); the old direct loader
+  could not run a batch file at all.

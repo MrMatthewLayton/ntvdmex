@@ -2179,6 +2179,24 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         for (k = 0; k + 3 < nread; ++k)
             if (exec_filebuf[k] == 0xC4 && exec_filebuf[k+1] == 0xC4 && exec_filebuf[k+2] == 0x54) ++nb;
         if (nb >= 8) dos_int21_shell_psp(m, child, 1); }
+    /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
+       "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
+       EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
+       exactly that. This is SETVER's own job: a per-PROGRAM version, not a per-session
+       one. Compared on the directory, long or 8.3 form. */
+    {   char sd[MAX_PATH], ssd[MAX_PATH]; DWORD n1, n2 = 0, dl = 0; const char *q;
+        for (q = m->exec_path; *q; ++q) if (*q == '\\') dl = (DWORD)(q - m->exec_path);
+        n1 = GetSystemDirectoryA(sd, sizeof sd);
+        if (n1 && n1 < sizeof sd) n2 = GetShortPathNameA(sd, ssd, sizeof ssd);
+        if (dl && ((n1 && n1 < sizeof sd && dl == n1
+                    && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
+                                      m->exec_path, (int)dl, sd, (int)n1) == CSTR_EQUAL)
+                   || (n2 && n2 < sizeof ssd && dl == n2
+                    && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
+                                      m->exec_path, (int)dl, ssd, (int)n2) == CSTR_EQUAL))) {
+            dos_int21_shell_psp(m, child, 1);
+            p = zput(p, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
+        } }
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */

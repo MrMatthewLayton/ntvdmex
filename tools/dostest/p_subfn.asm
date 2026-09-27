@@ -175,6 +175,29 @@ start:
         mov     dx, 0FFFFh
         int     21h
 
+        ; ---- AH=71h: the LONG-FILENAME API (s81). Not a 6.22 function; XP's EDIT.COM
+        ; calls 716Ch first and took our "nothing happened" answer as a handle. What
+        ; does a DOS without LFN answer? AX and CF are the whole question -- an LFN
+        ; client decides "unsupported" from exactly these two.
+        ; 716Ch extended open: BX=mode 0 (read), CX=attr 0, DX=1 (open existing),
+        ; DS:SI -> name. A file that exists, so a DOS WITH LFN would open it.
+        mov     ax, 716Ch
+        mov     bx, 0
+        xor     cx, cx
+        mov     dx, 1
+        mov     si, fname
+        mov     di, 0
+        int     21h
+        call    probe_capture
+        EMIT    "int21.716C", "AX,CF"
+        ; 7147h get current directory: DL=0, DS:SI -> 64-byte buffer
+        mov     ax, 7147h
+        xor     dl, dl
+        mov     si, cbuf
+        int     21h
+        call    probe_capture
+        EMIT    "int21.7147", "AX,CF"
+
         PROBE_END
 
 ; ---- data -----------------------------------------------------------------

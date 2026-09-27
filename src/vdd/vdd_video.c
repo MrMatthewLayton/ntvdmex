@@ -1270,6 +1270,18 @@ static void int10(void *self, ntvdd_regs *r)
                     if (!noclear) clear_text(st, 0x07);
                 }
             }
+            /* ── ★ THE COLOURS ARE REBUILT AFTER THE MODE'S KIND IS KNOWN. (s81, user:
+                 "white shows faint blue" after Doom; ENDOOM's bright words pale blue.)
+                 load_default_palette() above runs pal_refresh() while mkind is still
+                 the OLD mode's -- so leaving mode 13h built the text colours with the
+                 8bpp rule (colour n = DAC n, no attribute palette): bright white 0Fh
+                 drew as DAC 0Fh = AAAAFF, yellow as AAAA55, light cyan as 00AAFF. The
+                 machine state was right (a report after the exit read vpal[15]=3F,
+                 DAC 3F=FFFFFF); only the renderer's table was stale, and grey 07h looks
+                 the same either way, which is why a shell prompt hid it. And the BIOS
+                 resets the DAC pixel mask on a mode set as well. */
+            st->dac_mask = 0xFF;
+            pal_refresh(st);
             /* ── AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
                  on the AMI 486 ROM under PCem and on SeaBIOS alike (p_plan12: AX=0020
                  after mode 12h); RBIL documents it for Phoenix/AMI: 20h for modes > 7,

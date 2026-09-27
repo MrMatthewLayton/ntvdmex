@@ -64,6 +64,21 @@ start:
         call    probe_capture
         EMIT    "int21.88", "AX,CF"
 
+        ; ---- ⚠ AND WITH AL NON-ZERO (s81). Every row above calls with AL=00h, which
+        ; cannot tell "AX unchanged" from "AL cleared" -- and DOS clears AL (716Ch came
+        ; back 7100h on 6.22 and PCem). These two are what make the rows above mean it.
+        POISON
+        mov     ax, 0FF5Ah
+        int     21h
+        call    probe_capture
+        EMIT    "int21.FF.al", "AX,CF"
+
+        POISON
+        mov     ax, 07347h
+        int     21h
+        call    probe_capture
+        EMIT    "int21.73.al", "AX,CF"
+
         ; ---- the null-vector landmine.
         ; 21h is the CONTROL: it is planted on every host, so if this one ever
         ; reports null the probe itself is broken and the rest means nothing.

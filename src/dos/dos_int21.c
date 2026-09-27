@@ -2306,16 +2306,36 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x2B || ah == 0x2D) {      /* set date/time -> report success */
         SETAX(R_AX & 0xFF00);                   /* AL=0 = ok */
         OKCF();
+    } else if (ah == 0x71) {                    /* the long-filename API: not here */
+        /* ── AH=71h IS A DIFFERENT QUESTION FROM "AN UNDEFINED FUNCTION". (s81) ─────
+             6.22 answers AX=7100h CF=0 (p_subfn int21.716C) -- right for a DOS that
+             predates long filenames, and it reads as SUCCESS to a client written for one
+             that has them. XP's EDIT.COM is such a client (stock NTVDM implements the LFN
+             API): it trusted CF, took 7100h for a handle, and failed "Error 6" on
+             EDIT.INI. AX=7100h WITH CF SET is the documented "no LFN API here" answer
+             every LFN-aware program is written to fall back from. Until the API itself
+             is implemented (as stock has it), that is the honest answer. */
+        tp = zput(tp, "  INT21 AH=71 AL=0x"); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+        tp = zput(tp, " long-filename API not provided -> AX=7100 CF=1 (LFN clients fall back)\r\n");
+        SETAX(0x7100);
+        ERRCF();
     } else if (!dos622_defines(ah)) {
         /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
-           return with AX unchanged and CF clear, touching nothing.  Measured on
+           return with AL cleared and CF clear, touching nothing else.  Measured on
            the oracle (tools/dostest/p_defs.asm) -- AH=6Dh..E0h, plus the
            documented null functions, all come back with every poisoned output
            register intact.  Failing loudly here would be US inventing an error
            that real DOS does not report, which breaks programs that probe for
            an extension by calling it and checking CF. */
+        /* ⛔ "AX unchanged" WAS HALF A MEASUREMENT (s81). p_defs and p_unimp both
+             called with AL=00h, so "AX unchanged" and "AL cleared" read the same. With
+             AL non-zero (p_subfn: AX=716Ch, 7147h) 6.22 and PCem both answer AX=7100h:
+             DOS ZEROES AL. And that is load-bearing: AX=7100h is exactly how a long-
+             filename client learns there is no LFN API -- XP's EDIT.COM took our
+             unchanged 716Ch for a file handle and reported "Error 6" on EDIT.INI. */
+        SETAX(R_AX & 0xFF00);
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
-        tp = zput(tp, " undefined on 6.22 -- no-op (matches DOS)\r\n");
+        tp = zput(tp, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
         m->noop21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
         OKCF();
     } else {                                    /* unhandled service */
