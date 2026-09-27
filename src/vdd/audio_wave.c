@@ -1,5 +1,6 @@
 /* audio_wave.c -- see audio_wave.h.  waveOut/midiOut bound at runtime. */
 #include "audio_wave.h"
+#include "audio_rec.h"    /* the ONE includer -- see its header */
 
 /* Bits of mmsystem we need, declared here rather than pulling in <mmsystem.h>:
    this file is compiled freestanding and only ever calls through the pointers
@@ -60,6 +61,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
         h->dwFlags = 0; h->dwLoops = 0; h->dwUser = 0;
         p_waveOutPrepare(aw->hwo, h, sizeof(AW_WAVEHDR));
         aw->fill(aw->ctx, aw->buf[i], aw->nframes);
+        audio_rec_feed(aw->buf[i], aw->nframes);
         p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR));
     }
 
@@ -68,6 +70,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             /* No device: still pump the mixer at real-time pace, because that is
                what advances SB playback and raises its IRQ. */
             aw->fill(aw->ctx, aw->buf[0], aw->nframes);
+            audio_rec_feed(aw->buf[0], aw->nframes);
             Sleep((aw->nframes * 1000) / (aw->hz ? aw->hz : 44100));
             continue;
         }
@@ -86,6 +89,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             if (!(h->dwFlags & WHDR_DONE)) continue;
             h->dwFlags &= ~WHDR_DONE;
             aw->fill(aw->ctx, aw->buf[i], aw->nframes);
+        audio_rec_feed(aw->buf[i], aw->nframes);
             if (p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR)) != 0) aw->underruns++;
         }
         /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
@@ -191,3 +195,9 @@ void audio_wave_midi(audio_wave *aw, uint32_t msg)
 {
     if (aw->hmidi && p_midiOutShortMsg) p_midiOutShortMsg(aw->hmidi, msg);
 }
+
+/* Recording what we play -- see audio_rec.h. Exported so the host can drive it. */
+int      aw_rec_start(const char *path, uint32_t hz) { return audio_rec_start(path, hz); }
+uint32_t aw_rec_stop(void)    { return audio_rec_stop(); }
+int      aw_rec_active(void)  { return audio_rec_active(); }
+uint32_t aw_rec_dropped(void) { return g_arec.dropped; }

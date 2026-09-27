@@ -111,4 +111,11 @@ void audio_wave_stop(audio_wave *aw);
    Safe to call when MIDI never opened -- it is simply dropped. */
 void audio_wave_midi(audio_wave *aw, uint32_t msg);
 
+/* Record exactly what reaches waveOut to a mono 16-bit .WAV (s81; see audio_rec.h).
+   start: 0 = recording, -1 = already recording / cannot create. stop: samples written. */
+int      aw_rec_start(const char *path, uint32_t hz);
+uint32_t aw_rec_stop(void);
+int      aw_rec_active(void);
+uint32_t aw_rec_dropped(void);
+
 #endif /* NTVDMEX_AUDIO_WAVE_H */

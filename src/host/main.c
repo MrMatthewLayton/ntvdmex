@@ -233,6 +233,10 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
 #define NOGUS_FLAG   CFG_("nogus.flag")
 #define SBDUMP_PATH  OUT_("sb.raw")
+/* s81: record the audio output (audio_rec.h via aw_rec_*). The flag is the harness's
+   switch; Tools > Capture > Record Audio will drive the same recorder. */
+#define WAVREC_FLAG  CFG_("wavrec.flag")
+#define WAVREC_PATH  OUT_("capture_audio.wav")
 #define NOREMAP_FLAG CFG_("noremap.flag")
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
    writes land in the raw aperture instead of the VGA engine, so the PICTURE will
@@ -6250,6 +6254,22 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
     return 0;
 }
 
+/* Finish an audio recording (cfg\wavrec.flag or, later, the Capture menu): patch the
+   WAV sizes and say what was captured. Every exit path calls it -- a recording whose
+   header still says "0 bytes" is a file most players refuse. Idempotent. */
+static void host_rec_finish(void)
+{
+    char rb[160], *rq = rb;
+    uint32_t n, dr;
+    if (!aw_rec_active()) return;
+    dr = aw_rec_dropped();
+    n  = aw_rec_stop();
+    rq = zput(rq, "STAGE2: audio recording closed: samples=0x"); rq = zhex(rq, n);
+    rq = zput(rq, " dropped=0x"); rq = zhex(rq, dr);
+    rq = zput(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
+    log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+}
+
 /* The IF/VIF census (see ifv_note), on its own so the headless forced exit -- which
    skips the main report, and is how ZAR's runs end -- can print it too. */
 static void ifv_report(void)
@@ -6442,6 +6462,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         {   static char vr2[2048];
             int n2 = vdd_video_regs_dump(&g_vid, vr2, (int)sizeof vr2);
             if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
+        host_rec_finish();
         ExitProcess(3);
     }
     return 0;
@@ -10927,6 +10948,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            fill callbacks, so no audio thread is inside vdd_audio_mix when the OPL
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
+        host_rec_finish();       /* before the device stops feeding it */
         audio_wave_stop(&g_wave);
         /* ⚠ AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
              keeps sounding after the process that started it exits -- the note
@@ -13509,6 +13531,7 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
     log_append(LOG_PATH, cb, p);
     serial_out(cb, p);
     tray_remove(g_hwnd);      /* the VEH exits without unwinding the UI thread */
+    host_rec_finish();
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
 }
 
@@ -14037,6 +14060,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     tray_remove(g_hwnd);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
+    host_rec_finish();
     TerminateProcess(GetCurrentProcess(), 0xDD0);
     return 0;
 }
@@ -25591,6 +25615,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    /* cfg\wavrec.flag: record the whole run's audio -- see host_rec_finish. */
+    if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
+        int rr = aw_rec_start(WAVREC_PATH, g_wave.hz);
+        p = zput(p, rr == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
+                            : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
+        p = zdec(p, g_wave.hz); p = zput(p, " Hz\r\n");
+    }
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
     /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
@@ -30943,6 +30974,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_headless) {
         DeleteFileA(AUTOEXIT_PATH);
         tray_remove(g_hwnd);     /* ExitProcess runs no window cleanup -- see below */
+        host_rec_finish();
         ExitProcess(0);
     }
     /* ── ★★★★ A WIN16 HOST MUST NOT OUTLIVE ITS GUEST. (session 56) ────────────
