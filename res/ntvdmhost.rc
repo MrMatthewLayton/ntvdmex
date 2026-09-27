@@ -191,10 +191,14 @@ BEGIN
     LTEXT           "Frame s&kip:", -1, 14, 86, 44, 8
     COMBOBOX        IDC_S_FRAMESKIP, 62, 84, 40, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    CONTROL         "&Aspect ratio correction", IDC_S_ASPECT, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 120, 10
+    /* s81 (#159): Aspect is a four-way setting (None / 4:3 / 16:9 / 16:10, the View
+       menu's list), so it is a dropdown here too -- a checkbox could not show or set
+       16:9 or 16:10, and the generic code was sending combo messages to a button. */
+    LTEXT           "&Aspect:", -1, 138, 86, 34, 8
+    COMBOBOX        IDC_S_ASPECT, 180, 84, 82, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Wait for monitor &VSync (can drop frames)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 140, 104, 140, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 250, 10
     CONTROL         "&Blink the text-mode cursor, as a real CRTC does",
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
                     14, 122, 250, 10

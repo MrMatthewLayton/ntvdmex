@@ -80,13 +80,27 @@ static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
  * filler holds -- and which real DOS keeps in its resident data just the same.
  * The top of the program's block moves down by exactly that much, and PSP+2
  * must be built from the value this returns minus one, not from DOS_MEM_TOP. */
+/* ⚠ s81 (#169): SAFE TO CALL TWICE. It used to split whatever block was last -- and after
+     one reservation the last block IS that reservation (owner 8), so a second call carved
+     the new block out of the first one's data. Now a DOS-owned last block means "a
+     reservation is already on top": the new one is carved from the TOP of the block
+     before it, and slots in between, so every reservation keeps its bytes. */
 static inline uint16_t dos_mcb_reserve_top(volatile uint8_t *base, uint16_t first_mcb,
                                            uint16_t paras) {
-    uint16_t m = first_mcb;
-    int guard = 0;
+    uint16_t m = first_mcb, prev = 0;
+    int guard = 0, have_prev = 0;
     for (;;) {
         volatile uint8_t *mc = mcb_at(base, m);
         uint16_t sz = mcb_rd16(mc + 3);
+        if (mc[0] == 'Z' && mcb_rd16(mc + 1) == 0x0008 && have_prev) {
+            volatile uint8_t *pc = mcb_at(base, prev);
+            uint16_t psz = mcb_rd16(pc + 3), nb;
+            if (psz < (uint16_t)(paras + 2)) return 0;
+            mcb_wr16(pc + 3, (uint16_t)(psz - paras - 1));
+            nb = (uint16_t)(prev + 1 + (psz - paras - 1));          /* ends exactly at m */
+            mcb_lay(base, nb, 'M', 0x0008, paras);
+            return (uint16_t)(nb + 1);
+        }
         if (mc[0] == 'Z') {
             uint16_t newtop;
             if (sz < (uint16_t)(paras + 2)) return 0;
@@ -97,6 +111,7 @@ static inline uint16_t dos_mcb_reserve_top(volatile uint8_t *base, uint16_t firs
             return (uint16_t)(newtop + 1);
         }
         if (mc[0] != 'M' || ++guard > 0x1000) return 0;
+        prev = m; have_prev = 1;
         m = (uint16_t)(m + 1 + sz);
     }
 }

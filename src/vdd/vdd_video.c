@@ -2284,9 +2284,16 @@ static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     case 0x13: *v = st->crtc_offset; break;
     case 0x0A: *v = (uint8_t)((st->cur_shape >> 8) & 0x3F); break;
     case 0x0B: *v = (uint8_t)(st->cur_shape & 0x1F); break;
-    /* Read back what the BIOS path set, in the hardware's own units. */
-    case 0x0E: *v = (uint8_t)(crtc_cursor_of(st) >> 8); break;
-    case 0x0F: *v = (uint8_t)(crtc_cursor_of(st) & 0xFF); break;
+    /* Read back what the BIOS path set, in the hardware's own units -- in TEXT modes.
+       ► In a graphics mode the BIOS never writes CR0E/CR0F (there is no hardware
+         cursor to place), so they hold what the mode set loaded, or what the guest
+         wrote: plain storage. Deriving them there leaked the text cursor into Mode X
+         (`modeX.320x240` CR0F: hardware 0x00, ours 0xA0 -- the last 1/690 VGA parity
+         byte; s81, #186). The text-mode cursor paths are untouched. */
+    case 0x0E: *v = st->mkind == VID_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) >> 8)
+                                               : st->crtc_reg[0x0E]; break;
+    case 0x0F: *v = st->mkind == VID_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) & 0xFF)
+                                               : st->crtc_reg[0x0F]; break;
     default:   *v = st->crtc_reg[st->crtc_index & 31]; break;  /* CR00-05/11/17 read back */
     }
 }

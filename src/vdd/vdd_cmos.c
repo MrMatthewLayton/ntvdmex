@@ -107,7 +107,7 @@ static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out)
     struct vdd_rtc n;
     if (!st->rtc_now) return 0;
     n.cent = 20; n.year = 0; n.month = 1; n.day = 1;
-    n.hour = 0;  n.min = 0;  n.sec = 0;
+    n.hour = 0;  n.min = 0;  n.sec = 0;  n.dow = 0;
     st->rtc_now(st->rtc_ctx, &n);
     switch (reg) {
     case CMOS_SEC:     *out = clkval(st, n.sec);   return 1;
@@ -132,12 +132,14 @@ static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out)
     case CMOS_MONTH:   *out = clkval(st, n.month); return 1;
     case CMOS_YEAR:    *out = clkval(st, n.year);  return 1;
     case CMOS_CENTURY: *out = clkval(st, n.cent);  return 1;
-    /* ⚠ THE DAY OF WEEK IS NOT DERIVED AND THE REASON IS WORTH RECORDING. The
-         host's clock reading (struct vdd_rtc) does not carry one, and computing
-         it here would mean a calendar rule in a device model. It reads from
-         `ram`, where reset leaves 1 (Sunday) -- a fixed, wrong-six-days-in-seven
-         answer. Nothing on the shelf reads it; recorded in inventory/rtc.md
-         rather than quietly derived from an algorithm nobody checked. */
+    /* ── THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
+         was fixed at 1 (Sunday) because the clock reading carried no weekday and a
+         device model should not hold calendar arithmetic. Windows' GetLocalTime
+         already knows it, so the host passes it through (1 = Sunday, the chip's
+         numbering); a reader with no weekday (0) still falls back to ram[]. */
+    case CMOS_DOW:
+        if (!n.dow) return 0;
+        *out = clkval(st, n.dow); return 1;
     default: return 0;
     }
 }
@@ -274,6 +276,12 @@ void vdd_cmos_reset(void *self)
     st->ram[0x10]       = 0x40;              /* one 1.44M floppy               */
     st->ram[CMOS_EQUIP] = 0x25;              /* 1 floppy, colour 80x25, FPU    */
     st->ram[0x15]       = 0x80; st->ram[0x16] = 0x02;   /* 640 KB base memory  */
+    /* ── EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
+         configured and 30h/31h the POST-detected KB above 1 MB; a real BIOS answers
+         INT 15h AH=88h from the latter. Ours answers 88h with 0x3C00 (15 MB, main.c),
+         so CMOS says the same -- two views of one machine must not disagree. */
+    st->ram[0x17] = (uint8_t)(CMOS_EXT_KB & 0xFF); st->ram[0x18] = (uint8_t)(CMOS_EXT_KB >> 8);
+    st->ram[0x30] = (uint8_t)(CMOS_EXT_KB & 0xFF); st->ram[0x31] = (uint8_t)(CMOS_EXT_KB >> 8);
     /* ── THE CHECKSUM OVER 10h-2Dh, WHICH A BIOS VERIFIES AT BOOT. ───────────
          A setup program that writes a configuration byte and does not fix this
          makes the BIOS declare the CMOS invalid next time. We are not that

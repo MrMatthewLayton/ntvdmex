@@ -81,6 +81,11 @@ typedef struct present_ddraw {
     uint32_t snap_frame_no;
     int      snap_split;
     uint32_t rowpal[256]; int rowpal_y;   /* the palette resolved for one row       */
+    /* s81 (#138): a transient line of text drawn over the picture until `hint_until`
+       (GetTickCount ms) -- "press the Windows key to release the mouse" in fullscreen,
+       where there is no status strip to say it. GDI path only. */
+    const char *hint_text;
+    unsigned long hint_until;
 } present_ddraw;
 
 /* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */

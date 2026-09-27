@@ -149,8 +149,13 @@ static const set_def SET_DEFS[SET_COUNT] = {
      1280x800 client -- wider than the 1024x768 desktop the test rig runs. The
      rule at the top of this file is that THE DEFAULTS ARE THE SHIPPED BEHAVIOUR,
      and the shipped behaviour is one pixel per pixel. */
-{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   3, "1x|2x|3x|Custom" },
-{ "Renderer",          IDC_S_RENDERER,    SK_COMBO,      0,  0,   3, "GDI|DirectDraw|Direct3D 9|OpenGL" },
+/* s81 (#156): "Custom" removed -- it behaved as 1x. A stored 3 clamps back to the default. */
+{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   2, "1x|2x|3x" },
+/* s81 (#147), user decision: GDI + DirectDraw only, and the choice is REAL. The window is
+   always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing, but
+   the driver may filter the stretch) instead of the sharp borderless GDI window. There
+   was never Direct3D or OpenGL code. A stored 2/3 clamps back to GDI. */
+{ "Renderer",          IDC_S_RENDERER,    SK_COMBO,      0,  0,   1, "GDI|DirectDraw" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
 { "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
 /* ── ★ WAS A CHECKBOX, IS NOW THE ASPECT LOCK. (session 54) ─────────────────────

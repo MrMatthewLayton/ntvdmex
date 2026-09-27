@@ -97,6 +97,42 @@ typedef enum {
     INSTALL_ACT_REFUSE        /* somebody else's value -- not ours to touch */
 } install_action;
 
+static install_action install_plan(install_state st, int want_installed, int have_prev);
+
+/* ── IS THE VALUE ANOTHER COPY OF US? (s81, #195) A Debugger value naming some OTHER
+     ntvdmhost.exe -- installed from an extracted zip, then uninstalling from bin\ -- was
+     classified as a stranger's and refused, which locked the user out of uninstalling
+     with the copy they had. The file name is the test: `ntvdmhost.exe`, any folder. */
+static int install_names_ntvdmex(const char *cur)
+{
+    static const char want[] = "ntvdmhost.exe";
+    const char *s, *b; int i, n = 0;
+    if (!cur) return 0;
+    while (*cur == ' ' || *cur == '\t' || *cur == '"') ++cur;
+    for (s = cur; *s && *s != '"'; ++s) {           /* up to a closing quote */
+        n = (int)(s - cur) + 1;
+        if (n >= 13) {                              /* ends in "ntvdmhost.exe"? */
+            for (i = 0, b = s - 12; i < 13; ++i) {
+                char c = b[i]; if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != want[i]) break;
+            }
+            if (i == 13 && (b == cur || b[-1] == '\\' || b[-1] == '/')
+                && (s[1] == 0 || s[1] == '"' || s[1] == ' ' || s[1] == '\t')) return 1;
+        }
+    }
+    return 0;
+}
+
+/* The full decision. `other_is_us`: an INSTALL_OTHER value names an ntvdmhost.exe.
+   `force`: /uninstall /force -- remove whatever is there (the message names it). */
+static install_action install_plan_ex(install_state st, int want_installed, int have_prev,
+                                      int other_is_us, int force)
+{
+    if (!want_installed && st == INSTALL_OTHER && (other_is_us || force))
+        return have_prev ? INSTALL_ACT_RESTORE : INSTALL_ACT_DELETE;
+    return install_plan(st, want_installed, have_prev);
+}
+
 static install_action install_plan(install_state st, int want_installed, int have_prev)
 {
     if (want_installed)

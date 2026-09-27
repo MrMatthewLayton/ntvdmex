@@ -27,7 +27,7 @@ static void fake_rtc(void *ctx, struct vdd_rtc *out)
 {
     (void)ctx;
     out->cent = 20; out->year = 26; out->month = 9; out->day = 23;
-    out->hour = 14; out->min = 7;   out->sec = 42;
+    out->hour = 14; out->min = 7;   out->sec = 42; out->dow = 4;   /* 2026-09-23 was a Wednesday */
 }
 
 static uint8_t g_flat[0x1000];
@@ -72,6 +72,11 @@ int main(void)
     CHECK(rd(&bus, CMOS_MONTH) == 0x09, "clock: month is BCD");
     CHECK(rd(&bus, CMOS_YEAR)  == 0x26, "clock: year is BCD");
     CHECK(rd(&bus, CMOS_CENTURY) == 0x20, "clock: the century lives in CMOS 32h");
+    /* #182: the weekday is the host's (1 = Sunday), and the extended-memory bytes
+       agree with INT 15h AH=88h's 15 MB. */
+    CHECK(rd(&bus, CMOS_DOW) == 0x04, "clock: day of week from the host (Wednesday = 4)");
+    CHECK(rd(&bus, 0x17) == 0x00 && rd(&bus, 0x18) == 0x3C, "ext mem: 17h/18h = 0x3C00 KB");
+    CHECK(rd(&bus, 0x30) == 0x00 && rd(&bus, 0x31) == 0x3C, "ext mem: 30h/31h = 0x3C00 KB");
 
     /* ⛔ THE BIT THE HANG WAS ABOUT. UIP must be CLEAR: with 0xFF coming back
        from an unclaimed port it was set for ever, and the canonical

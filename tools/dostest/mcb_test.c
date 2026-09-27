@@ -85,6 +85,21 @@ int main(void) {
               "reserve_top: program block is M and paras+1 smaller");
         CHECK(sig_of(cs - 1) == 'Z' && own_of(cs - 1) == 0x0008 && sz_of(cs - 1) == 0x8F,
               "reserve_top: the reserved block is Z / DOS / paras");
+        /* #169: a SECOND reservation must not eat the first. Mark the first block's
+           data, reserve again, and the mark must survive with both blocks intact. */
+        {   volatile uint8_t *d1 = mcb_at(mem, cs);
+            uint16_t cs2;
+            d1[0] = 0xA5; d1[0x8F * 16 - 1] = 0x5A;
+            cs2 = dos_mcb_reserve_top(mem, first, 0x20);
+            CHECK(cs2 == cs - 1 - 0x20, "reserve_top x2: second block sits just below the first");
+            CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "reserve_top x2: chain consistent");
+            CHECK(sig_of(cs2 - 1) == 'M' && own_of(cs2 - 1) == 0x0008 && sz_of(cs2 - 1) == 0x20,
+                  "reserve_top x2: new block is M / DOS / paras");
+            CHECK(sig_of(cs - 1) == 'Z' && sz_of(cs - 1) == 0x8F && d1[0] == 0xA5
+                  && d1[0x8F * 16 - 1] == 0x5A, "reserve_top x2: the first block is untouched");
+            CHECK(sz_of(0xFF) == PROG - 0x8F - 1 - 0x20 - 1,
+                  "reserve_top x2: program block shrank by the second reservation");
+        }
         first = dos_mcb_init(mem);
     }
 

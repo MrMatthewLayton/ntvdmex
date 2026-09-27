@@ -26,9 +26,10 @@ ping -n 2 127.0.0.1 >nul
 for %%L in (%LETTERS%) do (
     "%RIG%\rigshot.exe" key %%L
   ping -n 6 127.0.0.1 >nul
-  rem the host's own Capture > Take Screenshot (IDM_CAP_SHOT = 8): a desktop BitBlt cannot
+  rem the host's own Capture > Take Screenshot (IDM_CAP_SHOT = 7 since IDM_INPUT_CURSOR was retired;
+  rem 8 is now About -- s81, #198): a desktop BitBlt cannot
   rem see a DirectDraw fullscreen surface, the host's frame copy can -- shot_manual_NN.bmp
-  "%RIG%\rigshot.exe" cmd 8
+  "%RIG%\rigshot.exe" cmd 7
   ping -n 2 127.0.0.1 >nul
   "%RIG%\rigshot.exe" key 27
   ping -n 3 127.0.0.1 >nul

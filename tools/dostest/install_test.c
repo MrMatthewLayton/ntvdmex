@@ -65,6 +65,16 @@ int main(void)
 
     CHECK(install_plan(INSTALL_ABSENT, 0, 0) == INSTALL_ACT_NOTHING,
           "uninstall on a clean machine is already done, not an error");
+    /* #195: another COPY of NTVDMEX is ours to uninstall; a stranger only with /force. */
+    CHECK(install_names_ntvdmex("\"C:\\zip\\ntvdmex\\bin\\ntvdmhost.exe\""), "names_ntvdmex: quoted path");
+    CHECK(install_names_ntvdmex("C:\\X\\NTVDMHOST.EXE"), "names_ntvdmex: unquoted, upper case");
+    CHECK(!install_names_ntvdmex("C:\\tools\\myntvdmhost.exe"), "names_ntvdmex: suffix match is not a name");
+    CHECK(!install_names_ntvdmex("C:\\dbg\\windbg.exe"), "names_ntvdmex: a stranger");
+    CHECK(install_plan_ex(INSTALL_OTHER, 0, 0, 1, 0) == INSTALL_ACT_DELETE, "plan_ex: uninstall another NTVDMEX copy = DELETE");
+    CHECK(install_plan_ex(INSTALL_OTHER, 0, 1, 1, 0) == INSTALL_ACT_RESTORE, "plan_ex: ...with a saved value = RESTORE");
+    CHECK(install_plan_ex(INSTALL_OTHER, 0, 0, 0, 0) == INSTALL_ACT_REFUSE, "plan_ex: a stranger without /force = REFUSE");
+    CHECK(install_plan_ex(INSTALL_OTHER, 0, 0, 0, 1) == INSTALL_ACT_DELETE, "plan_ex: a stranger with /force = DELETE");
+    CHECK(install_plan_ex(INSTALL_OTHER, 1, 0, 1, 1) == INSTALL_ACT_WRITE, "plan_ex: install is unaffected by the new inputs");
     CHECK(install_plan(INSTALL_OURS, 0, 0) == INSTALL_ACT_DELETE,
           "uninstall with nothing displaced deletes the value");
     CHECK(install_plan(INSTALL_OURS, 0, 1) == INSTALL_ACT_RESTORE,
@@ -89,5 +99,8 @@ int main(void)
     CHECK(strcmp(INSTALL_VAL, "Debugger") == 0, "the value is named Debugger");
 
     printf("\n%s: %d/%d\n", fails ? "FAILURES" : "ALL PASS", total - fails, total);
+    /* The runner (scripts/offvm.sh) reads this dialect; without it the battery counted
+       this whole test as 0 checks, which reads as a pass that asserted nothing. (s81) */
+    printf("== %d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

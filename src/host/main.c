@@ -4132,11 +4132,12 @@ static char *install_resident_text(char *p, int n)
      registry value that reads correctly and does not route, and by a write that
      silently did nothing; reporting success on the strength of a return code alone
      is the same class of claim. Read it again and classify it again. */
-static int install_perform(int want, char *msg, DWORD cap)
+static int install_perform(int want, int force, char *msg, DWORD cap)
 {
     char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
+    char cur0[NTVDMEX_PATH_MAX];
     char *p = msg;
-    install_state st;
+    install_state st, st0;
     install_action act;
     LONG rc = ERROR_SUCCESS;
     int have_prev;
@@ -4145,8 +4146,14 @@ static int install_perform(int want, char *msg, DWORD cap)
     install_self_path(self, sizeof self);
     install_read(cur, sizeof cur);
     have_prev = install_prev_read(prev, sizeof prev);
+    /* #195, measured on the rig: installing from copy B saved copy A (bin\) as "the
+       value to restore", so uninstalling from A "restored" A itself and then failed its
+       own read-back. A saved value that is another NTVDMEX is not somebody else's
+       setting to give back -- ignore it (and never save one, below). */
+    if (have_prev && install_names_ntvdmex(prev)) have_prev = 0;
     st  = install_classify(cur[0] ? cur : NULL, self);
-    act = install_plan(st, want, have_prev);
+    st0 = st; zput(cur0, cur);                      /* what was there, for the report */
+    act = install_plan_ex(st, want, have_prev, install_names_ntvdmex(cur), force);
 
     switch (act) {
     case INSTALL_ACT_NOTHING:
@@ -4157,13 +4164,14 @@ static int install_perform(int want, char *msg, DWORD cap)
         p = zput(p, "REFUSED: the ntvdm.exe Debugger value points at another "
                     "program, not at NTVDMEX:\r\n    ");
         p = zput(p, cur);
-        p = zput(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n");
+        p = zput(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n"
+                    "If you are sure it should go, run:  ntvdmhost.exe /uninstall /force\r\n");
         return 0;
     case INSTALL_ACT_WRITE:
         /* Save what we are about to displace, so uninstall can put it back. Only
            when it is somebody else's -- overwriting our own path with our own path
            must not record US as the thing to restore. */
-        if (st == INSTALL_OTHER) install_prev_write(cur);
+        if (st == INSTALL_OTHER && !install_names_ntvdmex(cur)) install_prev_write(cur);
         rc = install_write(self);
         break;
     case INSTALL_ACT_RESTORE:
@@ -4208,6 +4216,12 @@ static int install_perform(int want, char *msg, DWORD cap)
             ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
             : "UNINSTALLED. This machine uses its own ntvdm.exe again.\r\n");
         if (act == INSTALL_ACT_RESTORE) { p = zput(p, cur); p = zput(p, "\r\n"); }
+        if (st0 == INSTALL_OTHER) {                 /* #195: say what we removed */
+            p = zput(p, "Removed a Debugger value that named ");
+            p = zput(p, install_names_ntvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
+                                                    : "another program (/force):\r\n    ");
+            p = zput(p, cur0); p = zput(p, "\r\n");
+        }
     }
     return 1;
 }
@@ -4266,6 +4280,19 @@ static int install_verb(const char *cmd)
         if (!V[i][k] && (!cmd[k] || cmd[k] == ' ' || cmd[k] == '\t')) return i;
     }
     return -1;
+}
+
+/* `/force` anywhere after the verb (#195): /uninstall /force removes a value that names
+   another program. Deliberately only a command-line switch, never a menu item. */
+static int cmdline_has_force(const char *cmd)
+{
+    const char *s;
+    if (!cmd) return 0;
+    for (s = cmd; *s; ++s)
+        if ((*s == '/' || *s == '-') && (s[1]|0x20) == 'f' && (s[2]|0x20) == 'o'
+            && (s[3]|0x20) == 'r' && (s[4]|0x20) == 'c' && (s[5]|0x20) == 'e'
+            && (!s[6] || s[6] == ' ' || s[6] == '\t' || s[6] == '"')) return 1;
+    return 0;
 }
 
 /* Does this command line carry NOTHING after argv[0]? That is the double-click / Start
@@ -7751,6 +7778,7 @@ enum {                                       /* wired command IDs               
     IDM_EDIT_SELECTALL,
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
+    IDM_VIEW_HOSTCURSOR,                     /* s81 #157: inverse of HideHostCursor */
 
     /* ── ★ ONE CONTIGUOUS RANGE PER DROPDOWN SETTING. ────────────────────────────
          Every combo on the Display page, plus the CPU speed, appears in a menu as a
@@ -8386,9 +8414,8 @@ static HMENU build_menu(void)
     m = mpop();                                                   /* File         */
     mi(m, "Open Executable...\tCtrl+O", IDM_STUB);
     msub(m, "Open Recent", (s=mpop(), mi(s,"(empty)",IDM_STUB), s));
-    msep(m);
-    msub(m, "Save State", (s=mpop(), mi(s,"Quick-Save\tF5",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
-    msub(m, "Load State", (s=mpop(), mi(s,"Quick-Load\tF9",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
+    /* Save State / Load State removed (s81, #145, user decision); what a real
+       implementation would need is #146. */
     msep(m);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
@@ -8418,11 +8445,9 @@ static HMENU build_menu(void)
          changes only what is in force right now (g_set) and never touches the
          registry, so anything tried here is gone at the next launch. That is the
          whole point: experimenting must not silently reconfigure the machine.
-       ⚠ Renderer's four entries are NOT all implemented -- the windowed path is
-         GDI and the fullscreen one is DirectDraw, and there is no Direct3D or
-         OpenGL code at all. They are listed anyway, enabled, which is this
-         project's standing decision about scaffold items (do not re-litigate); the
-         list itself comes from SET_DEFS so it says exactly what the dialog says. */
+       ► Renderer is GDI | DirectDraw and both are real (s81, #147): the window is
+         always GDI, and DirectDraw makes FULLSCREEN the exclusive DirectDraw mode.
+         The list comes from SET_DEFS so it says exactly what the dialog says. */
     m = mpop();                                                   /* View         */
     mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
     msep(m);
@@ -8439,7 +8464,13 @@ static HMENU build_menu(void)
     msep(m);
     mi(m,"Wait for VSync",IDM_VIEW_VSYNC);
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
-    msep(m);
+    /* ── ★ AND BACK, AS THE USER SPECIFIED IT (s81, #157): Show Host Cursor is a View
+         toggle for programs that do NOT use the mouse, and is forced off and greyed
+         for one that does -- there the pointer belongs to the guest and the capture
+         policy governs it. It is the inverse of the HideHostCursor setting, and like
+         every View item it is session-only. The historical note below explains why it
+         had been removed; the difference now is the greying. */
+    mi(m,"Show Host Cursor",IDM_VIEW_HOSTCURSOR);
     /* ⚠ "Show Host Cursor" AND ITS Ctrl+F8 HOTKEY WERE REMOVED HERE, DELIBERATELY.
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
@@ -8465,10 +8496,12 @@ static HMENU build_menu(void)
          be the thing your hand lands on. */
     tools = mpop();                                               /* Tools        */
 
+    /* ── s81 (#148), user decision: every UNIMPLEMENTED item is removed -- Restart,
+         Pause, Ctrl+Alt+Del, Key Mapper, the mount/boot/swap/drive items, the whole
+         Debug submenu, Help's Quick Start / Keyboard Shortcuts. They are recorded for
+         review in #149, #150 and #151. This reverses the old scaffold-stubs-enabled rule
+         for these items: the user found dead menu items worse than absent ones. */
     m = mpop();                                                   /* Tools>Machine*/
-    mi(m,"Restart Machine",IDM_STUB);
-    mi(m,"Pause / Resume\tPause",IDM_STUB);
-    msep(m);
     /* ── ★ THE APPROXIMATE-SPEED DROPDOWN. (GH #56) ──────────────────────────────
          The user asked for this in the MENU, and the menu is where it belongs: it
          is a knob you reach for while watching something run too fast, not one you
@@ -8483,14 +8516,6 @@ static HMENU build_menu(void)
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
     mi(m,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
-    mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
-    mi(m,"Key Mapper...",IDM_STUB);
-    msep(m);
-    mi(m,"Mount Folder as Drive...",IDM_STUB); mi(m,"Mount Disk / CD Image...",IDM_STUB);
-    mi(m,"Mount Physical Drive...",IDM_STUB); msub(m,"Unmount",(s=mpop(),mi(s,"(none)",IDM_STUB),s));
-    msep(m);
-    mi(m,"Boot from Drive / Image...",IDM_STUB); mi(m,"Swap Disk\tCtrl+F4",IDM_STUB);
-    mi(m,"Drive Status...",IDM_STUB);
     msub(tools, "Machine", m);
 
     m = mpop();                                                   /* Tools>Capture*/
@@ -8500,13 +8525,6 @@ static HMENU build_menu(void)
     msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
     mi(m,"Open Capture Folder",IDM_STUB); mi(m,"Capture Settings...",IDM_STUB);
     msub(tools, "Capture", m);
-
-    m = mpop();                                                   /* Tools>Debug  */
-    mi(m,"Step Instruction",IDM_STUB);
-    mi(m,"Debugger Console...",IDM_STUB); mi(m,"Registers / Memory / Disassembly",IDM_STUB); msep(m);
-    msub(m,"Logging",(s=mpop(),mi(s,"Levels...",IDM_STUB),mi(s,"Log to file",IDM_STUB),s));
-    mi(m,"Performance Overlay",IDM_STUB);
-    msub(tools, "Debug", m);
 
     msep(tools);
     /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
@@ -8525,7 +8543,6 @@ static HMENU build_menu(void)
     msub(bar, "Tools", tools);
 
     m = mpop();                                                   /* Help         */
-    mi(m,"Quick Start",IDM_STUB); mi(m,"Keyboard Shortcuts...",IDM_STUB); msep(m);
     mi(m,"About",IDM_HELP_ABOUT);
     msub(bar, "Help", m);
     return bar;
@@ -8980,6 +8997,12 @@ static void capture_clip_apply(HWND h)
     ClipCursor(&rc);
 }
 
+/* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
+static void fs_release_hint(void)
+{
+    g_pd.hint_text  = "Mouse captured -- press the Windows key to release it";
+    g_pd.hint_until = GetTickCount() + 4000;
+}
 static void input_capture_set(HWND h, int on)
 {
     /* RULE 1. Refuse rather than assert: this is reached from the menu, the click
@@ -8988,6 +9011,7 @@ static void input_capture_set(HWND h, int on)
     if (on && !capture_allowed()) return;
     if (on == g_captured) return;
     InterlockedExchange(&g_captured, on ? 1 : 0);
+    if (on && g_pd.fullscreen) fs_release_hint();
     if (on) {
         /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
              WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
@@ -9184,6 +9208,7 @@ static void host_fullscreen_toggle(HWND h)
             host_fullscreen_toggle_restore(h);
             return;
         }
+        if (g_captured) fs_release_hint();          /* #138 */
     } else {
         present_ddraw_set_fullscreen(&g_pd, 0);
         host_fullscreen_toggle_restore(h);
@@ -9522,7 +9547,10 @@ static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
     /* Neither of these is a user setting -- see the note in settings.h about why
        fullscreen ended up with none. Both are file knobs, both default OFF. */
     pd->fs_integer   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
-    pd->fs_use_ddraw = (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* Renderer = DirectDraw is the user-facing switch for the exclusive path (#147);
+       the old file knob still forces it, for comparisons. */
+    pd->fs_use_ddraw = (s->v[SET_RENDERER] == 1)
+                    || (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 
 static void settings_apply_devices(const ntvdmex_settings *s)
@@ -9636,6 +9664,11 @@ static void menu_view_sync(HWND h)
          INTO. An enabled item that silently does nothing is the worse answer. */
     EnableMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
                    | (capture_allowed() ? MF_ENABLED : MF_GRAYED));
+    /* #157: the guest owns the pointer once it has used INT 33h -- then off and greyed. */
+    EnableMenuItem(m, IDM_VIEW_HOSTCURSOR, MF_BYCOMMAND
+                   | (capture_allowed() ? MF_GRAYED : MF_ENABLED));
+    CheckMenuItem(m, IDM_VIEW_HOSTCURSOR, MF_BYCOMMAND
+                  | ((!capture_allowed() && !g_set.v[SET_HIDECURSOR]) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
                   | (g_captured ? MF_CHECKED : MF_UNCHECKED));
 }
@@ -9908,11 +9941,44 @@ static void settings_show_page(int idx)
         if (g_spage[i]) ShowWindow(g_spage[i], i == idx ? SW_SHOW : SW_HIDE);
 }
 
+/* ── Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PgDn / Ctrl+PgUp) switch pages. (s81, #137) ──
+     A modal dialog's own loop runs IsDialogMessage on every key, so a Ctrl+Tab never
+     reaches settings_dlgproc -- the dialog manager takes it as a plain Tab and moves
+     focus. A property sheet gets this behaviour for free; a hand-built tab dialog has
+     to ask for it, and a message-filter hook on this thread, for the dialog's lifetime,
+     is the documented way to see a dialog's messages before the dialog manager does. */
+static HWND  g_settings_dlg;
+static HHOOK g_settings_hook;
+static LRESULT CALLBACK settings_msgfilter(int code, WPARAM wp, LPARAM lp)
+{
+    MSG *mm = (MSG *)lp;
+    if (code == MSGF_DIALOGBOX && g_settings_dlg && mm->message == WM_KEYDOWN
+        && (GetKeyState(VK_CONTROL) & 0x8000)
+        && (mm->wParam == VK_TAB || mm->wParam == VK_NEXT || mm->wParam == VK_PRIOR)) {
+        HWND tab = GetDlgItem(g_settings_dlg, IDC_S_TAB);
+        int n = (int)SendMessageA(tab, TCM_GETITEMCOUNT, 0, 0);
+        int cur = (int)SendMessageA(tab, TCM_GETCURSEL, 0, 0);
+        int back = (mm->wParam == VK_PRIOR)
+                || (mm->wParam == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000));
+        if (n > 0) {
+            int nx = (cur + (back ? n - 1 : 1)) % n;
+            SendMessageA(tab, TCM_SETCURSEL, (WPARAM)nx, 0);
+            settings_show_page(nx);
+            return 1;                                  /* eaten: not a focus move */
+        }
+    }
+    return CallNextHookEx(g_settings_hook, code, wp, lp);
+}
+
 static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_INITDIALOG: {
         HWND tab = GetDlgItem(dlg, IDC_S_TAB);
+        g_settings_dlg = dlg;
+        if (!g_settings_hook)
+            g_settings_hook = SetWindowsHookExA(WH_MSGFILTER, settings_msgfilter, NULL,
+                                                GetCurrentThreadId());
         HINSTANCE hi = GetModuleHandleA(NULL);
         RECT rc; TCITEMA ti; int i;
         for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
@@ -9988,6 +10054,8 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
         return FALSE;
     case WM_DESTROY: {
         int i;                                /* so a second open cannot use stale HWNDs */
+        if (g_settings_hook) { UnhookWindowsHookEx(g_settings_hook); g_settings_hook = 0; }
+        g_settings_dlg = 0;
         for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
             if (g_spage[i]) DestroyWindow(g_spage[i]);
             g_spage[i] = NULL;
@@ -10578,6 +10646,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
+        case IDM_VIEW_HOSTCURSOR:                      /* #157 -- see build_menu */
+            if (capture_allowed()) return 0;           /* greyed; belt and braces */
+            g_set.v[SET_HIDECURSOR] = g_set.v[SET_HIDECURSOR] ? 0u : 1u;
+            settings_apply_live(h);
+            menu_view_sync(h);
+            return 0;
         case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
         /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
              the machine starts, and both outlive this process -- an accidental
@@ -10597,7 +10671,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     "NTVDMEX", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
                 return 0;
             msg[0] = 0;
-            ok = install_perform(want, msg, sizeof msg);
+            ok = install_perform(want, 0, msg, sizeof msg);
             MessageBoxA(h, msg, "NTVDMEX",
                         MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
@@ -11239,6 +11313,7 @@ static void host_rtc_now(void *ctx, struct vdd_rtc *out)
     out->hour  = (unsigned)lt.wHour;
     out->min   = (unsigned)lt.wMinute;
     out->sec   = (unsigned)lt.wSecond;
+    out->dow   = (unsigned)lt.wDayOfWeek + 1u;   /* Windows 0=Sunday; the chip 1=Sunday */
 }
 
 static void host_pit_guard(void *ctx, int enter)
@@ -23331,7 +23406,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 install_report(vmsg, 1);
                 return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
             }
-            ok = install_perform(want, vmsg, sizeof vmsg);
+            ok = install_perform(want, cmdline_has_force(GetCommandLineA()), vmsg, sizeof vmsg);
             install_report(vmsg, ok);
             return ok ? 0 : 1;
         } }

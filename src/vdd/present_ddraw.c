@@ -182,6 +182,21 @@ static void gdi_present(present_ddraw *pd)
             SelectObject(hdc, old);
         }
     }
+    /* #138: the release hint, top centre, while it is due. Drawn after the frame so
+       every present repaints it; it simply stops being drawn when it expires. */
+    if (pd->hint_text && (long)(pd->hint_until - GetTickCount()) > 0) {
+        SIZE ts; int n = 0, tx, ty = dy + 12;
+        while (pd->hint_text[n]) ++n;
+        SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        GetTextExtentPoint32A(hdc, pd->hint_text, n, &ts);
+        tx = dx + (dw - ts.cx) / 2;
+        { RECT box; box.left = tx - 10; box.top = ty - 5;
+          box.right = tx + ts.cx + 10; box.bottom = ty + ts.cy + 5;
+          FillRect(hdc, &box, (HBRUSH)GetStockObject(BLACK_BRUSH)); }
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        TextOutA(hdc, tx, ty, pd->hint_text, n);
+    }
     ReleaseDC(pd->hwnd, hdc);
 }
 

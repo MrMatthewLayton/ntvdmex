@@ -21,7 +21,8 @@
 #define PIT_DEFAULT_FRAME_US 16667u    /* ~60 Hz host frame tick                */
 
 /* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
-struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec; };
+/* dow: 1 = Sunday .. 7 = Saturday, the MC146818's own numbering; 0 = unknown (s81, #182). */
+struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec, dow; };
 
 /* ── ★★★ BCD IS A BOUNDARY FORMAT, NOT A SECOND SET OF ARITHMETIC. ───────────────
      Control Word bit 0 selects four-decade BCD counting: the counter runs

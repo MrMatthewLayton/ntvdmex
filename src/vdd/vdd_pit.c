@@ -494,7 +494,7 @@ static unsigned pit_bcd(unsigned v) { return ((v / 10) % 10) * 16 + (v % 10); }
 static int pit_rtc(pit_state *st, struct vdd_rtc *out)
 {
     if (!st->rtc_now) return 0;
-    out->cent = 20; out->year = 0; out->month = 1; out->day = 1;
+    out->cent = 20; out->year = 0; out->month = 1; out->day = 1; out->dow = 0;
     out->hour = 0;  out->min = 0;  out->sec = 0;
     st->rtc_now(st->rtc_ctx, out);
     return 1;
