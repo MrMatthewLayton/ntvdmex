@@ -9512,6 +9512,67 @@ static void joy_poll_ensure(void)
 static ntvdmex_settings g_set;
 static ntvdmex_settings g_set_disk;
 
+/* ── EVERY SETTING SAYS ITS VALUE AND WHERE IT CAME FROM. (GH #144) ──────────────
+     See knob-with-two-sources: the reported DOS version sat at 5.00 on the rig from a
+     registry value nobody could see, because only the FILE override ever printed. A
+     file override changes a machine variable, not g_set, so it is noted here at the
+     point it is read; settings_log_sources() prints the lot once they have all run. */
+static const char *g_set_ovr[SET_COUNT];      /* what overrode the row, if anything */
+static DWORD       g_set_ovr_v[SET_COUNT];    /* ...and the value it put in force   */
+static void settings_note_override(int id, const char *by, DWORD v)
+{
+    g_set_ovr[id] = by; g_set_ovr_v[id] = v;
+}
+
+/* ⚠ THE ROWS settings_apply() AND ITS NEIGHBOURS ACTUALLY READ. A row not in this
+     list is stored and shown in the dialog and changes nothing (GH #136), and the log
+     says so rather than letting its value look like a claim about the machine. Keep
+     it in step with settings_apply: adding a read there means adding the id here. */
+static const BYTE SET_LIVE_IDS[] = {
+    SET_DOSMAJ, SET_DOSMIN, SET_PITPACE, SET_UITICK, SET_SPEEDMODE, SET_XMS, SET_EMS,
+    SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT, SET_FRAMESKIP,
+    SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_VOLUME, SET_MUTE, SET_RATE,
+    SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
+    SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
+};
+static int settings_is_live(int id)
+{
+    unsigned i;
+    for (i = 0; i < sizeof SET_LIVE_IDS; ++i) if (SET_LIVE_IDS[i] == id) return 1;
+    return 0;
+}
+
+static void settings_log_sources(void)
+{
+    static const char *const SRC[] = { "default", "registry",
+                                       "registry value OUT OF RANGE -> default" };
+    static char b[12288];            /* 41 rows + four 260-byte paths */
+    char *q = b, item[64];
+    int i;
+    q = zput(q, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
+    for (i = 0; i < SET_COUNT; ++i) {
+        const set_def *d = &SET_DEFS[i];
+        q = zput(q, "  "); q = zput(q, d->reg); q = zput(q, " = ");
+        q = zdec(q, g_set.v[i]);
+        if (d->kind == SK_COMBO && settings_item(d->items, (int)g_set.v[i], item, sizeof item)) {
+            q = zput(q, " \""); q = zput(q, item); q = zput(q, "\"");
+        }
+        q = zput(q, " ["); q = zput(q, SRC[g_set.src[i] < 3 ? g_set.src[i] : 0]); q = zput(q, "]");
+        if (g_set_ovr[i]) {
+            q = zput(q, " OVERRIDDEN by "); q = zput(q, g_set_ovr[i]);
+            q = zput(q, " -> "); q = zdec(q, g_set_ovr_v[i]);
+        }
+        q = zput(q, settings_is_live(i) ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+    }
+    for (i = 0; i < SET_STR_COUNT; ++i) {
+        q = zput(q, "  "); q = zput(q, SET_STR_DEFS[i].reg); q = zput(q, " = \"");
+        q = zput(q, g_set.s[i]); q = zput(q, "\" [");
+        q = zput(q, SRC[g_set.src_s[i] < 3 ? g_set.src_s[i] : 0]); q = zput(q, "]");
+        q = zput(q, i == SET_STR_FLOPPYA ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+    }
+    log_append(LOG_PATH, b, q);
+}
+
 /* ── START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
      ever turns fullscreen ON: Alt+Enter owns everything after that. `graphics` says
      whether the guest is in a graphics mode right now -- Always fires regardless,
@@ -23837,6 +23898,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
        and a card nothing looked for. */
     g_gus_on = g_set.v[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
+    if (g_set.v[SET_GUS] && !g_gus_on) settings_note_override(SET_GUS, "cfg\\nogus.flag", 0);
+    if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
+        settings_note_override(SET_RENDERER, "cfg\\ddrawfs.flag", 1);
     g_gus.base = GUS_DEFAULT_BASE; g_gus.irq = GUS_DEFAULT_IRQ; g_gus.dma_ch = GUS_DEFAULT_DMA;
     /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
@@ -25015,6 +25079,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          is untouched -- it keeps 6.22, which is the version it expects. */
     if (g_guest_ntaware) {
         dos_int21_set_version(&m, 5, 0);
+        settings_note_override(SET_DOSMAJ, "the NTVDM-aware shell (requires 5.00)", 5);
+        settings_note_override(SET_DOSMIN, "the NTVDM-aware shell (requires 5.00)", 0);
         dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
         g_dosver_forced = 1;
         g_dosver_why = "Windows XP's DOS prompt only works as 5.00, so this session -- and "
@@ -25034,6 +25100,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           if (mj && mj < 256 && mn < 256) {
               dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
+              settings_note_override(SET_DOSMAJ, "cfg\\dosver.txt", mj);
+              settings_note_override(SET_DOSMIN, "cfg\\dosver.txt", mn);
               dosver_src = "cfg\\dosver.txt";
               g_dosver_forced = 1;
               g_dosver_why = "The file cfg\\dosver.txt overrides the setting above.";
@@ -25621,6 +25689,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           ReadFile(hp2, c, sizeof c, &rd, NULL); CloseHandle(hp2);
           if (rd && c[0] >= '0' && c[0] <= '9') g_pitpace_ms = c[0] - '0';
           g_pitpace_on = (g_pitpace_ms != 0);
+          settings_note_override(SET_PITPACE, "cfg\\pitpace.txt (ms)", (DWORD)g_pitpace_ms);
       } }
     /* The pacer's two OTHER levers -- see pit_pacer_thread. Absent file = as shipped. */
     { HANDLE hp3 = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -25668,7 +25737,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (c[i] < '0' || c[i] > '9') break;
               v = v * 10 + (c[i] - '0');
           }
-          if (rd && c[0] >= '0' && c[0] <= '9' && v <= 100) g_ui_tick_min_ms = v;
+          if (rd && c[0] >= '0' && c[0] <= '9' && v <= 100) {
+              g_ui_tick_min_ms = v;
+              settings_note_override(SET_UITICK, "cfg\\uitick.txt (ms)", (DWORD)v);
+          }
       } }
     /* wowidle.txt -- how long a Win16 task blocked in GetMessage waits. 0 = forever. */
     { HANDLE hpw = CreateFileA(WOWIDLE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -25710,7 +25782,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           ReadFile(hp7, c, sizeof c, &rd, NULL); CloseHandle(hp7);
           for (j = 0; j < (int)rd; ++j) { if (c[j] < '0' || c[j] > '9') break;
                                           v2 = v2 * 10 + (c[j] - '0'); }
-          if (v2 >= 10 && v2 <= 1000) g_ms_sens = v2;
+          if (v2 >= 10 && v2 <= 1000) {
+              g_ms_sens = v2;
+              settings_note_override(SET_MSENS, "cfg\\msens.txt", (DWORD)v2);
+          }
       } }
     /* ── GH #56: the calibration and a one-run speed override, both from the share.
          ⚠ THESE RUN BEFORE cpuspd_recompute() BELOW, which is the whole point: the
@@ -25755,7 +25830,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           ReadFile(hp9, c, sizeof c, &rd, NULL); CloseHandle(hp9);
           for (j9 = 0; j9 < (int)rd; ++j9) { if (c[j9] < '0' || c[j9] > '9') break;
                                              v9 = v9 * 10u + (unsigned)(c[j9] - '0'); }
-          if (j9 > 0 && v9 < (unsigned)CPUSPEED_COUNT) g_cpuspd_idx = (int)v9;
+          if (j9 > 0 && v9 < (unsigned)CPUSPEED_COUNT) {
+              g_cpuspd_idx = (int)v9;
+              settings_note_override(SET_SPEEDMODE, "cfg\\cpuspd.txt", v9);
+          }
       } }
     /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
          0 or absent = AUTO (measure the suspend round trip and pick the finest
@@ -25984,6 +26062,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    /* #144. HERE, not with the other STAGE0 lines: this is the last truncating write
+       (an append before it is wiped -- the first cut of this was), and the ~7 KB table
+       would overflow the 8 KB preamble buffer. Every file override has been read. */
+    settings_log_sources();
     /* ── THIRD-PARTY VDDs LOAD HERE, AND THE PLACE IS THE POINT. ─────────────
          Two constraints, and only this line satisfies both:
          (1) AFTER every built-in device is on the bus, so a third-party claim

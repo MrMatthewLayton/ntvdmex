@@ -247,9 +247,19 @@ static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
 { "SoundFontPath",IDC_S_SOUNDFONT, "" },
 };
 
+/* ── WHERE A VALUE CAME FROM. (GH #144) ─────────────────────────────────────────
+     The DOS version once read 5.00 on every rig run from a registry value nobody had
+     looked at, because only the FILE override ever printed a line. Every row now
+     carries its source so the startup log can say it for all of them. A file override
+     is recorded by the host (it changes a machine variable, not v[]); see
+     settings_note_override in main.c. */
+enum { SETSRC_DEFAULT = 0, SETSRC_REG, SETSRC_REG_BAD };
+
 typedef struct {
     DWORD v[SET_COUNT];
     char  s[SET_STR_COUNT][NTVDMEX_PATH_MAX];
+    BYTE  src[SET_COUNT];                 /* SETSRC_*, as loaded at startup */
+    BYTE  src_s[SET_STR_COUNT];
 } ntvdmex_settings;
 
 /* ── Named access, so callers read like they used to. ───────────────────────────
@@ -270,9 +280,11 @@ static void settings_strcpy(char *dst, const char *src, int cap)
 static void settings_defaults(ntvdmex_settings *s)
 {
     int i;
-    for (i = 0; i < SET_COUNT; ++i) s->v[i] = SET_DEFS[i].dflt;
-    for (i = 0; i < SET_STR_COUNT; ++i)
+    for (i = 0; i < SET_COUNT; ++i) { s->v[i] = SET_DEFS[i].dflt; s->src[i] = SETSRC_DEFAULT; }
+    for (i = 0; i < SET_STR_COUNT; ++i) {
         settings_strcpy(s->s[i], SET_STR_DEFS[i].dflt, NTVDMEX_PATH_MAX);
+        s->src_s[i] = SETSRC_DEFAULT;
+    }
 }
 
 /* Clamp on the way IN, not only at the dialog. A hand-edited registry value of zero
@@ -284,23 +296,20 @@ static void settings_clamp(ntvdmex_settings *s)
     int i;
     for (i = 0; i < SET_COUNT; ++i) {
         const set_def *d = &SET_DEFS[i];
-        if (d->kind == SK_COMBO) { if (s->v[i] > d->hi) s->v[i] = d->dflt; }
-        else if (s->v[i] < d->lo || s->v[i] > d->hi) s->v[i] = d->dflt;
+        int bad = (d->kind == SK_COMBO) ? (s->v[i] > d->hi)
+                                        : (s->v[i] < d->lo || s->v[i] > d->hi);
+        if (bad) {
+            s->v[i] = d->dflt;
+            if (s->src[i] == SETSRC_REG) s->src[i] = SETSRC_REG_BAD;   /* say so */
+        }
     }
     /* A version is a PAIR: an out-of-range major that fell back to 6 with a minor of
        00 would report "6.00", a DOS that never shipped. Reset both together. */
     if (s->v[SET_DOSMAJ] == SET_DEFS[SET_DOSMAJ].dflt
-        && s->v[SET_DOSMIN] > SET_DEFS[SET_DOSMIN].hi)
+        && s->v[SET_DOSMIN] > SET_DEFS[SET_DOSMIN].hi) {
         s->v[SET_DOSMIN] = SET_DEFS[SET_DOSMIN].dflt;
-}
-
-static DWORD settings_reg_get(HKEY k, const char *name, DWORD dflt)
-{
-    DWORD v = 0, cb = sizeof v, type = 0;
-    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)&v, &cb) == ERROR_SUCCESS
-        && type == REG_DWORD && cb == sizeof v)
-        return v;
-    return dflt;
+        if (s->src[SET_DOSMIN] == SETSRC_REG) s->src[SET_DOSMIN] = SETSRC_REG_BAD;
+    }
 }
 
 static void settings_reg_put(HKEY k, const char *name, DWORD v)
@@ -308,14 +317,24 @@ static void settings_reg_put(HKEY k, const char *name, DWORD v)
     RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v, sizeof v);
 }
 
-static void settings_reg_get_sz(HKEY k, const char *name, char *out, int cap)
+/* 1 = the value was there and was used. A value of the wrong TYPE is not "there". */
+static int settings_reg_try(HKEY k, const char *name, DWORD *out)
+{
+    DWORD v = 0, cb = sizeof v, type = 0;
+    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)&v, &cb) == ERROR_SUCCESS
+        && type == REG_DWORD && cb == sizeof v) { *out = v; return 1; }
+    return 0;
+}
+
+static int settings_reg_get_sz(HKEY k, const char *name, char *out, int cap)
 {
     DWORD cb = (DWORD)cap, type = 0;
     if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)out, &cb) != ERROR_SUCCESS
         || type != REG_SZ || cb == 0)
-        return;                                  /* leave the default in place        */
+        return 0;                                /* leave the default in place        */
     if ((int)cb >= cap) cb = (DWORD)cap - 1;
     out[cb] = 0;                                 /* RegQueryValueEx may not NUL it    */
+    return 1;
 }
 
 /* HKEY_CURRENT_USER, not LOCAL_MACHINE: the VDM runs as the logged-in user and must
@@ -327,9 +346,10 @@ static void settings_load(ntvdmex_settings *s)
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &k) != ERROR_SUCCESS)
         return;                                  /* never stored yet -> defaults      */
     for (i = 0; i < SET_COUNT; ++i)
-        s->v[i] = settings_reg_get(k, SET_DEFS[i].reg, s->v[i]);
+        if (settings_reg_try(k, SET_DEFS[i].reg, &s->v[i])) s->src[i] = SETSRC_REG;
     for (i = 0; i < SET_STR_COUNT; ++i)
-        settings_reg_get_sz(k, SET_STR_DEFS[i].reg, s->s[i], NTVDMEX_PATH_MAX);
+        if (settings_reg_get_sz(k, SET_STR_DEFS[i].reg, s->s[i], NTVDMEX_PATH_MAX))
+            s->src_s[i] = SETSRC_REG;
     RegCloseKey(k);
     settings_clamp(s);
 }

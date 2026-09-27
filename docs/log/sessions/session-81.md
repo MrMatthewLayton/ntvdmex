@@ -286,3 +286,19 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   build `0e5b10e7`, so pre-existing.
 - Guards: Skyroads `n8=0 max_ms=6/7` (×3; one run showed a single 797 ms IFV starve stretch, two
   re-runs 0); Win16 Notepad launches and closes; off-VM battery 1,708/0.
+
+## Part 7 — every setting logs its value and its source (#144)
+
+- `STAGE2: settings -- value, source, and whether the host uses it` follows the preamble in
+  every log: one row per setting with its value (combo text too), `[default]` / `[registry]` /
+  `[registry value OUT OF RANGE -> default]`, `OVERRIDDEN by <file> -> <value>` where a share
+  file or the NTVDM-aware shell took over, and `(stored only -- not used, GH #136)` for the
+  rows nothing reads.
+- Overrides noted where they are read: `dosver.txt`, the XP shell's forced 5.00, `pitpace.txt`,
+  `uitick.txt`, `msens.txt`, `cpuspd.txt`, `nogus.flag`, `ddrawfs.flag`.
+- ⚠ First cut appended the table next to the other STAGE0 lines and it vanished: startup lines
+  collect in an 8 KB buffer that a later `log_write` TRUNCATES the file with. It is now printed
+  right after that last truncating write.
+- Rig (`runs/s81_settings/`): with `cfg\dosver.txt`=5.0 the DOS rows read `6/22 [registry]
+  OVERRIDDEN by cfg\dosver.txt -> 5/0`. The rig's stored KeyboardLayout is **United Kingdom**,
+  a row the host never reads.
