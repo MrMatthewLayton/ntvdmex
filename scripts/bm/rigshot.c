@@ -641,7 +641,49 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* ── `clipset "<text>"` / `clipget` -- THE HOST CLIPBOARD, SET AND READ. (#160)
+         The Win16 clipboard bridge is judged by what crosses it: put known text on
+         the host side, paste it in the guest; copy in the guest, read it here. XP
+         has no clip.exe, so the rig needs its own. `clipget` logs the CF_TEXT it
+         finds, or says there is none -- never an empty line that reads as text. */
+    if (seq(verb, "clipset")) {
+        int n = 0, j;
+        HGLOBAL g;
+        char *d;
+        while (arg1[n]) ++n;
+        g = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n + 1);
+        d = g ? (char *)GlobalLock(g) : NULL;
+        if (!d || !OpenClipboard(NULL)) { logline("clipset: FAILED"); return 1; }
+        for (j = 0; j <= n; ++j) d[j] = arg1[j];
+        GlobalUnlock(g);
+        EmptyClipboard();
+        if (!SetClipboardData(CF_TEXT, g)) { CloseClipboard(); logline("clipset: REFUSED"); return 1; }
+        CloseClipboard();
+        { char m[360], *p = m; p = sput(p, "clipset: ["); p = sput(p, arg1); sput(p, "]"); logline(m); }
+        return 0;
+    }
+    if (seq(verb, "clipget")) {
+        char m[600], *p = m;
+        HANDLE g;
+        const char *s;
+        if (!OpenClipboard(NULL)) { logline("clipget: could not open the clipboard"); return 1; }
+        g = GetClipboardData(CF_TEXT);
+        s = g ? (const char *)GlobalLock(g) : NULL;
+        if (!s) p = sput(p, "clipget: NO CF_TEXT on the clipboard");
+        else {
+            int j;
+            p = sput(p, "clipget: [");
+            for (j = 0; s[j] && j < 500; ++j) *p++ = (s[j] == '\r' || s[j] == '\n') ? '|' : s[j];
+            *p = 0;
+            p = sput(p, "]");
+            GlobalUnlock(g);
+        }
+        CloseClipboard();
+        logline(m);
+        return 0;
+    }
+
     logline("rigshot: unknown verb"
-            " (shot|list|tree|fg|click|drag|key|close|capture|cmd)");
+            " (shot|list|tree|fg|click|drag|key|close|capture|cmd|clipset|clipget)");
     return 2;
 }

@@ -188,6 +188,15 @@
      rule is "next item"; see src/wow/wowenum.h. `actarg` = the item's window
      handle where it has one, for the log. */
 #define WOWCALL_ACT_ENUMNEXT  5
+/* ── THE CLIPBOARD BRIDGE (#160). Text crosses in guest GLOBAL memory, which only
+     krnl386 can hand out, so each direction is a short chain of its calls:
+       GetClipboardData: GlobalAlloc -> CLIPLOCK: GlobalLock -> CLIPFILL: copy the
+                         host text in, GlobalUnlock.        actarg = the handle
+       SetClipboardData: GlobalLock -> CLIPPUT: copy the guest text out to the host
+                         clipboard, GlobalUnlock.           actarg = the handle */
+#define WOWCALL_ACT_CLIPLOCK  6
+#define WOWCALL_ACT_CLIPFILL  7
+#define WOWCALL_ACT_CLIPPUT   8
 
 /* ── THE ENUMERATION SOURCES, DECLARED HERE FOR THE INCLUDE ORDER. ───────────
      The walk itself is src/wow/wowenum.h, which is compiled AFTER the two

@@ -18921,6 +18921,77 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     " locked");
                 }
             }
+            /* ── THE CLIPBOARD BRIDGE (#160). See WOWCALL_ACT_CLIP* in wowcall.h.
+                 Each step runs with the parked caller restored, exactly like the EDIT
+                 chain above, so a follow-up call re-parks it at the same SS:SP. */
+            if (act == WOWCALL_ACT_CLIPLOCK || act == WOWCALL_ACT_CLIPFILL
+                || act == WOWCALL_ACT_CLIPPUT) {
+                WORD  crsel = wow_callback_selector();
+                DWORD cssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                WORD  cds   = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                WORD  harg  = (act == WOWCALL_ACT_CLIPLOCK) ? (WORD)res : actarg;
+                DWORD fplin = 0;
+                if (act != WOWCALL_ACT_CLIPLOCK && (res >> 16))
+                    fplin = dpmi_sel_base((WORD)(res >> 16)) + (res & 0xFFFF);
+                if (act == WOWCALL_ACT_CLIPLOCK) {
+                    p = zput(p, " -- CLIP GlobalAlloc -> 0x"); p = zhex(p, harg);
+                } else if (act == WOWCALL_ACT_CLIPFILL) {
+                    /* GlobalAlloc was sized n+1, so the copy is bounded by what was
+                       asked for; the NUL goes in with it. */
+                    int i;
+                    p = zput(p, " -- CLIP fill 0x"); p = zhex(p, (DWORD)g_wu_clipn);
+                    p = zput(p, " byte(s) at 0x"); p = zhex(p, res);
+                    if (fplin && mem_readable((ULONG_PTR)fplin, (DWORD)g_wu_clipn + 1)) {
+                        volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)fplin;
+                        for (i = 0; i <= g_wu_clipn; ++i) d[i] = (BYTE)g_wu_clip[i];
+                    } else p = zput(p, " -- ★ GlobalLock gave no usable pointer; the"
+                                       " block stays EMPTY");
+                } else {
+                    /* The guest's text, to a block the HOST clipboard will own. */
+                    int n = 0;
+                    p = zput(p, " -- CLIP put from 0x"); p = zhex(p, res);
+                    if (fplin) {
+                        const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)fplin;
+                        while (n < (int)sizeof g_wu_clip - 1
+                               && mem_readable((ULONG_PTR)(s + n), 1) && s[n])
+                            { g_wu_clip[n] = (char)s[n]; ++n; }
+                    }
+                    g_wu_clip[n] = 0;
+                    if (fplin) {
+                        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n + 1);
+                        char *hp = hg ? (char *)GlobalLock(hg) : NULL;
+                        int i;
+                        if (hp) {
+                            for (i = 0; i <= n; ++i) hp[i] = g_wu_clip[i];
+                            GlobalUnlock(hg);
+                        }
+                        if (hp && SetClipboardData(g_wu_clipfmt, hg)) {
+                            p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
+                            p = zput(p, " byte(s) on the host's clipboard");
+                        } else {
+                            if (hg) GlobalFree(hg);
+                            p = zput(p, " -- ★ the host clipboard REFUSED it (not open?)");
+                        }
+                    } else p = zput(p, " -- ★ GlobalLock gave no usable pointer; nothing"
+                                       " was copied");
+                }
+                /* Next link: Alloc -> Lock, and Lock -> Unlock once the bytes moved. */
+                if (harg && g_wu_krnl_seg && crsel && cssb) {
+                    WORD a1 = harg;
+                    DWORD proc = ((DWORD)g_wu_krnl_seg << 16)
+                               | (act == WOWCALL_ACT_CLIPLOCK ? KRNL_GLOBALLOCK_OFF
+                                                              : KRNL_GLOBALUNLOCK_OFF);
+                    if (wowcall_enter(tib, cssb, crsel, proc, cds, &a1, 1, 0,
+                                      WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, 0)) {
+                        if (act == WOWCALL_ACT_CLIPLOCK && g_wc_depth > 0) {
+                            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_CLIPFILL;
+                            g_wc[g_wc_depth - 1].actarg = harg;
+                        }
+                        p = zput(p, act == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
+                                                                : "; GlobalUnlock in flight");
+                    } else p = zput(p, "; ★ the next KERNEL call was REFUSED");
+                }
+            }
             /* ── ★★★★★ THE MODAL LOOP'S NEXT TURN. (session 57) ───────────────
                  A dialog procedure has just returned, so the question the loop
                  exists to ask can be asked again: has EndDialog been called? If

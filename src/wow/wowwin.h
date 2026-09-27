@@ -70,6 +70,9 @@
    pump on the wrong thread can be refused rather than silently doing nothing. */
 static DWORD g_ww_thread = 0;
 static DWORD g_ww_created = 0, g_ww_msgs = 0;
+/* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
+static DWORD g_ww_menudefer = 0;
+static int   g_ww_replaying = 0;
 /* Times Alt/F10 had to take the mouse capture off a guest window so the menu
    could open. Non-zero is normal for a paint program; zero on a session where
    the menu is dead means the cause is something else. */
@@ -85,6 +88,7 @@ static WORD  wowwin_hwnd16(HWND h);
 static wowuser_win_t *wowuser_findwin(WORD hwnd);
 static int   wowuser_is_mdichild(const wowuser_win_t *w);
 static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
+static HWND  wowuser_hwnd32(WORD hwnd);
 static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
 static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
 
@@ -444,6 +448,38 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             ++g_ww_msgs;
         }
         break;
+    /* ── ★★★ #160: THE MENU MUST WAIT FOR THE APPLICATION TO SET IT UP. ─────────
+         WM_INITMENUPOPUP is where a Win16 program greys and ungreys its items --
+         Notepad enables Cut/Copy/Delete there from EM_GETSEL. But the real menu's
+         modal loop runs INSIDE this thread's pump, where the guest cannot run, so
+         the posted init was handled only after the menu had CLOSED: Copy was shown
+         grey on every first open and its mnemonic did nothing (measured, clip16).
+       ⇒ Hold the menu back one turn of the guest's loop: post WM_INITMENU and a
+         WM_INITMENUPOPUP for every popup on the bar, then a marker, and open the
+         menu only when the guest's GetMessage reaches the marker -- by which time
+         it has handled every init (wowmsg.h, WOWMSG_MENUREPLAY; the replay itself
+         is wowwin_menu_replay, run from the GetMessage service).
+       ⚠ The real inits still arrive while the menu is open and are posted as
+         before; handled afterwards, they set the state the menu already has. */
+    case WM_SYSCOMMAND:
+        if (h16 && !g_ww_replaying
+            && ((wp & 0xFFF0) == SC_KEYMENU || (wp & 0xFFF0) == SC_MOUSEMENU)
+            && GetMenu(h)) {
+            HMENU bar = GetMenu(h);
+            int i, nb = GetMenuItemCount(bar);
+            DWORD t = GetTickCount();
+            wowmsg_post(h16, 0x0116 /* WM_INITMENU */, wowuser_menu16(bar), 0, t, ptx, pty);
+            for (i = 0; i < nb && i < 32; ++i) {
+                HMENU sub = GetSubMenu(bar, i);
+                if (sub) wowmsg_post(h16, 0x0117 /* WM_INITMENUPOPUP */,
+                                     wowuser_menu16(sub), (DWORD)i, t, ptx, pty);
+            }
+            if (wowmsg_post(h16, (WORD)WOWMSG_MENUREPLAY, (WORD)wp, (DWORD)lp, t, ptx, pty)) {
+                ++g_ww_menudefer;
+                return 0;                       /* opened later, by the replay */
+            }
+        }
+        break;
     case WM_COMMAND:
         if (h16) {
             WORD id     = (WORD)LOWORD(wp);
@@ -506,6 +542,17 @@ static int wowwin_pump(int budget)
     QueryPerformanceCounter(&t1);
     g_ww_qpc += t1.QuadPart - t0.QuadPart;
     return n;
+}
+
+/* #160: open the menu a WM_SYSCOMMAND was held back for (see that case). Runs the
+   real modal menu loop here, on this thread, exactly where the pump would have. */
+static void wowwin_menu_replay(const wowmsg_t *r)
+{
+    HWND h = wowuser_hwnd32(r->hwnd);
+    if (!h || !IsWindow(h)) return;
+    g_ww_replaying = 1;
+    SendMessageA(h, WM_SYSCOMMAND, (WPARAM)r->wparam, (LPARAM)r->lparam);
+    g_ww_replaying = 0;
 }
 
 /* Register a real Win32 class for a Win16 one. Returns 1 if the class is usable.

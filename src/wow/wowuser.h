@@ -733,20 +733,36 @@ static const char *wowuser_sysres_name(WORD h)
 #define MDR_ARG_RECT     0
 #define MDR_ARG_HDLG     4
 
-/* ── ⚠⚠ THE CLIPBOARD PAIR, AND WHY BOTH ANSWER "NOTHING". ────────────────────
+/* ── THE CLIPBOARD PAIR -- AND THE BRIDGE THAT LETS BOTH TELL THE TRUTH. (#160) ──
      GetClipboardData must hand back a handle the GUEST can lock -- a 16-bit
-     global handle in its own address space. The real Win32 handle is not that,
-     and there is no bridge yet that copies the host clipboard into guest global
-     memory. So the honest pair is: report NO format available, and return NO
-     data. A guest then greys its Paste and never asks, which is consistent.
-   ⚠ THE TEMPTING VERSION IS WORSE: answering IsClipboardFormatAvailable
-     truthfully from the host while GetClipboardData returns 0 tells the guest
-     "there is text" and then hands it nothing -- available-but-empty is a state
-     no real clipboard is ever in, and CALC would paste garbage or fault. Say
-     "empty" with one voice until the bridge exists. */
+     global handle in its own address space. The real Win32 handle is not that, so
+     for s40-s81 the honest pair was "nothing available, nothing returned".
+   ★ The bridge: for TEXT (CF_TEXT, CF_OEMTEXT) the host asks krnl386 itself for a
+     global block (KERNEL.15 GlobalAlloc through wowcall), locks it (KERNEL.18),
+     copies the host clipboard's text in and unlocks it (KERNEL.19) -- the chain in
+     WOWCALL_ACT_CLIP*. The guest gets a handle its own KERNEL made.
+   ⚠ ONE VOICE STILL: availability is answered from the host ONLY for the formats
+     the bridge can deliver, and only when it can run (callbacks on, krnl386's
+     segment known). Available-but-empty is a state no real clipboard is ever in.
+   ⚠ The block is GMEM_DDESHARE and belongs to the asking task; it is freed when
+     that task ends, so each paste costs one block for the task's lifetime. */
 #define WOWUSER_GETCLIPBOARDDATA     0x008e
 #define WOWUSER_ISCLIPBOARDFORMATAVAILABLE 0x00c1
 #define CB_ARG_FORMAT    0
+/* HANDLE SetClipboardData(UINT fmt, HANDLE hMem) -- USER.141, between Empty (139),
+   GetClipboardOwner (140) and Get (142). Pascal: hMem is the last argument, so it
+   sits lowest. */
+#define WOWUSER_SETCLIPBOARDDATA     0x008d
+#define SCD_ARG_HMEM     0
+#define SCD_ARG_FORMAT   2
+#define CF_TEXT16        1
+#define CF_OEMTEXT16     7
+#define GMEM_MOVEABLE_DDESHARE16 0x2002
+/* The host-side copy of the text in flight. One transfer at a time is all the
+   exec thread can have: a chain runs to completion before the guest's next call. */
+static char g_wu_clip[65536];
+static int  g_wu_clipn;
+static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
 
 /* ── ★★★ THE SHELF, BATCH TWO: RECORDER, MPLAYER AND CHARMAP. (session 53) ────
      Priced by neneeds.py at 9, 11 and 13 services. Most are a Win32 call with a
@@ -1615,6 +1631,15 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define KRNL_LOCALREALLOC_OFF 0x3e1f
 #define KRNL_LOCALLOCK_OFF   0x3e0b
 #define KRNL_LOCALUNLOCK_OFF 0x3e55
+/* ★ #160: the GLOBAL trio, from the same entry table (all FIXED, segment 1) and
+     the same non-resident names -- 15 GLOBALALLOC, 18 GLOBALLOCK, 19 GLOBALUNLOCK
+     -- cross-checked by the three Local* offsets above coming out of the same parse.
+     The bytes pin the frames: GlobalAlloc reads its flags at [bp+0x0a] (the first
+     argument, a WORD) above a DWORD size and ends `retf 6`; Lock and Unlock read one
+     WORD at [bp+6] and end `retf 2`. GlobalLock answers a far pointer in DX:AX. */
+#define KRNL_GLOBALALLOC_OFF  0x3ac3
+#define KRNL_GLOBALLOCK_OFF   0x3b10
+#define KRNL_GLOBALUNLOCK_OFF 0x3b63
 /* LMEM_MOVEABLE | LMEM_ZEROINIT -- the same flags SYSEDIT itself passes to
    LocalReAlloc at `seg3:0x012a` (`push 0x42`), so the block it grows is the kind
    it expects to be growing. */
@@ -2485,6 +2510,12 @@ static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
 #define WM_SETTEXT16        0x000C
 #define WM_GETTEXT16        0x000D
 #define WM_GETTEXTLENGTH16  0x000E
+/* #160: the edit commands -- also shared numbers. */
+#define WM_CUT16            0x0300
+#define WM_COPY16           0x0301
+#define WM_PASTE16          0x0302
+#define WM_CLEAR16          0x0303
+#define WM_UNDO16           0x0304
 
 /* Resolve a 16:16 far pointer VALUE (as carried in an lParam) to a host address.
    ⚠ Null selector yields NULL rather than the LDT base, the same rule
@@ -2861,7 +2892,53 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
         return 1;
     }
 
+    /* ── #160: THE EDIT MENU. Cut, Copy, Paste, Delete and Undo are parameterless
+         and Win16 and Win32 share their numbers, so the real control does the work
+         -- including reaching the host clipboard, which is why Notepad's copy and
+         paste need no bridge of their own. */
+    case WM_CUT16: case WM_COPY16: case WM_PASTE16: case WM_CLEAR16: case WM_UNDO16: {
+        LRESULT r = w->hwnd32 ? SendMessageA(w->hwnd32, msg, 0, 0) : 0;
+        wu_puts(note, notecap, &k, "edit command msg 0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, w->hwnd32 ? " -> the real control"
+                                             : " -- no real control; answered 0");
+        return (LONG)r;
+    }
+
     default:
+        /* ── #160: THE EM_ MESSAGES AN EDIT MENU ASKS. Win16 numbers them WM_USER+n
+             (0x400+n), Win32 0xB0+n with the same n -- EM_SETHANDLE/GETHANDLE above
+             are n=12/13 of the same list. Only for a real EDIT: 0x400+n is also
+             listbox and combobox territory, where the same number means something else.
+             Only the ones with no pointer in them; EM_SETSEL's arguments move from
+             lParam's two halves (Win16) to wParam/lParam (Win32). */
+        if (msg >= 0x0400 && msg <= 0x041D && w->hwnd32) {
+            static const BYTE EM_OK[30] = {
+                /* n: 0 GETSEL, 1 SETSEL, 8 GETMODIFY, 9 SETMODIFY, 10 GETLINECOUNT,
+                      11 LINEINDEX, 17 LINELENGTH, 21 LIMITTEXT, 22 CANUNDO, 23 UNDO,
+                      25 LINEFROMCHAR, 29 EMPTYUNDOBUFFER */
+                1,1,0,0,0,0,0,0, 1,1,1,1,0,0,0,0, 0,1,0,0,0,1,1,1, 0,1,0,0,0,1 };
+            char cn[16];
+            int  n = msg - 0x0400;
+            if (EM_OK[n] && GetClassNameA(w->hwnd32, cn, sizeof cn)
+                && !lstrcmpiA(cn, "Edit")) {
+                WPARAM wp32 = wparam; LPARAM lp32 = (LPARAM)lparam;
+                LRESULT r;
+                if (n == 1) {                                 /* EM_SETSEL */
+                    WORD a = (WORD)(lparam & 0xFFFF), b = (WORD)(lparam >> 16);
+                    wp32 = (a == 0xFFFF) ? (WPARAM)-1 : a;
+                    lp32 = (b == 0xFFFF || b == 0x7FFF) ? (LPARAM)-1 : b;
+                } else if ((n == 11 || n == 17 || n == 25) && wparam == 0xFFFF) {
+                    wp32 = (WPARAM)-1;                        /* "the current line" */
+                }
+                r = SendMessageA(w->hwnd32, (UINT)(0xB0 + n), wp32, lp32);
+                wu_puts(note, notecap, &k, "EM_ n=0x");
+                wu_puthex(note, notecap, &k, (DWORD)n, 2);
+                wu_puts(note, notecap, &k, " -> the real EDIT -> 0x");
+                wu_puthex(note, notecap, &k, (DWORD)r, 8);
+                return (LONG)r;
+            }
+        }
         wu_puts(note, notecap, &k, "default procedure: msg 0x");
         wu_puthex(note, notecap, &k, msg, 4);
         wu_puts(note, notecap, &k, " not implemented, answered 0");
@@ -3848,7 +3925,30 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        if (wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m)) {
+        {   /* #160: a menu held back for this application's inits is opened HERE,
+                 once the take has passed its marker -- see WOWMSG_MENUREPLAY. */
+            int got = wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m);
+            if (g_wm_replay_due) {
+                wowmsg_t r = g_wm_replay;
+                g_wm_replay_due = 0;
+                if (got && (rem & PM_REMOVE16) == 0) got = 0;   /* re-peek after */
+                if (!got) {
+                    wowwin_menu_replay(&r);
+                    got = wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m);
+                    /* ⚠ An EMPTY queue after the menu closed must not read as the
+                         expired wait that means WM_QUIT: hand back a WM_NULL, which
+                         the loop dispatches to nothing and then asks again. */
+                    if (!got && !peek) {
+                        m.hwnd = r.hwnd; m.msg = 0; m.wparam = 0; m.lparam = 0;
+                        m.time = GetTickCount(); m.ptx = r.ptx; m.pty = r.pty;
+                        got = 1;
+                    }
+                } else {
+                    g_wm_replay = r; g_wm_replay_due = 1;   /* run it next call */
+                }
+                wu_puts(note, notecap, &k, "[menu opened after its inits] ");
+            }
+            if (got) {
             wowmsg_write(lp, &m);
             wu_puts(note, notecap, &k, peek ? "PeekMessage -> hwnd=0x"
                                             : "GetMessage -> hwnd=0x");
@@ -3867,6 +3967,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  non-zero for it would dispatch a message meant to stop it. */
             wow32_setret(f, (m.msg == WM_QUIT16 && !peek) ? 0 : 1);
             return 1;
+            }
         }
         if (!peek && g_wm_quit) {
             m.hwnd = 0; m.msg = WM_QUIT16; m.wparam = g_wm_quitcode;
@@ -5424,19 +5525,93 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
-    /* ── ⚠⚠ THE CLIPBOARD, WITH ONE VOICE: EMPTY. See the note by the ids. ──── */
-    case WOWUSER_ISCLIPBOARDFORMATAVAILABLE:
+    /* ── THE CLIPBOARD, WITH ONE VOICE. See the note by the ids (#160). ────── */
+    case WOWUSER_ISCLIPBOARDFORMATAVAILABLE: {
+        WORD fmt = wow32_argw(f, CB_ARG_FORMAT);
+        int  k = 0, can = (fmt == CF_TEXT16 || fmt == CF_OEMTEXT16)
+                          && f->cbok && g_wu_krnl_seg;
+        int  r = can && IsClipboardFormatAvailable(fmt) ? 1 : 0;
+        wu_puts(note, notecap, &k, "IsClipboardFormatAvailable fmt=0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, r ? " -> 1 (the host's clipboard has it)"
+                                  : can ? " -> 0 (not on the host's clipboard)"
+                                        : " -> 0 (the bridge cannot deliver this"
+                                          " format, so it is not offered)");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
     case WOWUSER_GETCLIPBOARDDATA: {
         WORD fmt = wow32_argw(f, CB_ARG_FORMAT);
         int  k = 0;
-        wu_puts(note, notecap, &k, (f->id == WOWUSER_GETCLIPBOARDDATA)
-                ? "GetClipboardData fmt=0x" : "IsClipboardFormatAvailable fmt=0x");
+        HANDLE hd;
+        wu_puts(note, notecap, &k, "GetClipboardData fmt=0x");
         wu_puthex(note, notecap, &k, fmt, 4);
-        wu_puts(note, notecap, &k, " -- ★ NO HOST->GUEST CLIPBOARD BRIDGE YET, so "
-                                   "NOTHING is available AND nothing is returned. "
-                                   "Answering `available` here and 0 there would be "
-                                   "available-but-empty, a state no clipboard is in.");
         wow32_setret(f, 0);
+        if (!(fmt == CF_TEXT16 || fmt == CF_OEMTEXT16) || !f->cbok || !g_wu_krnl_seg) {
+            wu_puts(note, notecap, &k, " -> 0 (not a format the bridge carries)");
+            return 1;
+        }
+        hd = GetClipboardData(fmt);
+        {   const char *s = hd ? (const char *)GlobalLock(hd) : NULL;
+            int n = 0;
+            if (s) {
+                while (n < (int)sizeof g_wu_clip - 1 && s[n]) { g_wu_clip[n] = s[n]; ++n; }
+                GlobalUnlock(hd);
+            }
+            g_wu_clip[n] = 0;
+            g_wu_clipn = n;
+            if (!s) {
+                wu_puts(note, notecap, &k, " -> 0 (the host's clipboard has no such"
+                                           " data, or is not open)");
+                return 1;
+            }
+        }
+        f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_GLOBALALLOC_OFF;
+        f->cbds     = f->gds;
+        f->cbarg[0] = GMEM_MOVEABLE_DDESHARE16;
+        f->cbarg[1] = 0;                                  /* dwBytes, high word */
+        f->cbarg[2] = (WORD)(g_wu_clipn + 1);             /* ...and low        */
+        f->cbnarg   = 3;
+        f->cbret    = WOWCALL_RET_RESULTW;   /* the guest gets GlobalAlloc's handle */
+        f->cbsink   = NULL;
+        f->cbact    = WOWCALL_ACT_CLIPLOCK;
+        f->cbactarg = fmt;
+        wu_puts(note, notecap, &k, " -- 0x");
+        wu_puthex(note, notecap, &k, (DWORD)g_wu_clipn, 4);
+        wu_puts(note, notecap, &k, " byte(s) of host text; asking KERNEL.15 GlobalAlloc"
+                                   " for the guest's block");
+        return 1;
+    }
+    /* ★ The other direction. Text only, same reason; anything else is refused with 0,
+         which a Win16 program reads as "the clipboard did not take it". A NULL hMem is
+         delayed rendering, which would need WM_RENDERFORMAT sent back into the guest --
+         not built, and refused rather than half-promised. */
+    case WOWUSER_SETCLIPBOARDDATA: {
+        WORD hmem = wow32_argw(f, SCD_ARG_HMEM);
+        WORD fmt  = wow32_argw(f, SCD_ARG_FORMAT);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "SetClipboardData fmt=0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, " hMem=0x");
+        wu_puthex(note, notecap, &k, hmem, 4);
+        if ((fmt == CF_TEXT16 || fmt == CF_OEMTEXT16) && hmem && f->cbok && g_wu_krnl_seg) {
+            f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_GLOBALLOCK_OFF;
+            f->cbds     = f->gds;
+            f->cbarg[0] = hmem;
+            f->cbnarg   = 1;
+            f->cbret    = WOWCALL_RET_KEEP;       /* the answer is hMem, set here */
+            f->cbsink   = NULL;
+            f->cbact    = WOWCALL_ACT_CLIPPUT;
+            f->cbactarg = hmem;
+            g_wu_clipfmt = fmt;
+            wow32_setret(f, hmem);
+            wu_puts(note, notecap, &k, " -- locking it (KERNEL.18) to copy the text"
+                                       " to the host's clipboard");
+        } else {
+            wow32_setret(f, 0);
+            wu_puts(note, notecap, &k, hmem ? " -> 0 (not a format the bridge carries)"
+                                            : " -> 0 (delayed rendering is not supported)");
+        }
         return 1;
     }
 

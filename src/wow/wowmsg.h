@@ -292,12 +292,33 @@ static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
      up one slot and advance the head, which is a rotate of the prefix rather
      than a swap -- a swap would deliver messages out of order, and message order
      is the one thing a Win16 program is entitled to assume. */
+/* ── #160: A MENU THAT WAITS FOR ITS APPLICATION. See wowwin.h, WM_SYSCOMMAND.
+     The marker is posted behind the WM_INITMENU/WM_INITMENUPOPUP it follows; when
+     a take reaches it, every one of those has been handed to the guest, so the
+     menu can open. It is ours, never the guest's: whichever take passes it
+     consumes it -- filtered or not, peek or not -- and leaves the replay due for
+     the GetMessage/PeekMessage service to run (not here: the menu loop posts into
+     this very ring). 0xBF7E sits in a range Win16 never allocates. */
+#define WOWMSG_MENUREPLAY 0xBF7Eu
+static int      g_wm_replay_due = 0;
+static wowmsg_t g_wm_replay;
+
 static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *out)
 {
     int n, i;
     if (!g_wm_count) return 0;
     for (n = 0; n < g_wm_count; ++n) {
         wowmsg_t *e = &g_wm_ring[(g_wm_head + n) % WOWMSG_MAX];
+        if (e->msg == WOWMSG_MENUREPLAY) {
+            g_wm_replay = *e; g_wm_replay_due = 1;
+            for (i = n; i > 0; --i)
+                g_wm_ring[(g_wm_head + i) % WOWMSG_MAX] =
+                    g_wm_ring[(g_wm_head + i - 1) % WOWMSG_MAX];
+            g_wm_head = (g_wm_head + 1) % WOWMSG_MAX;
+            --g_wm_count;
+            --n;                          /* the next entry now sits at n */
+            continue;
+        }
         if (hwnd && e->hwnd != hwnd) continue;
         if ((minf || maxf) && (e->msg < minf || e->msg > maxf)) continue;
         *out = *e;
