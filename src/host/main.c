@@ -543,7 +543,8 @@ static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run s
    what earns it DOS 5.00 and the private AH=53h answers. */
 static DWORD g_guest_ntvdm_bops = 0;
 static int   g_guest_ntaware    = 0;
-static int   g_shell_getnext_n  = 0;   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
+static int   g_shell_getnext_n  = 0;
+static char  g_shell_path[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
 
 /* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
    numbers -- ours above happen to overlap and are told apart by origin, not by value. */
@@ -24396,6 +24397,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         dir[cut ? cut : dn] = 0;
         if (!GetShortPathNameA(dir, sdir, sizeof sdir)) zput(sdir, dir);
         wsprintfA(args, "/P %s", sdir);
+        if (!GetShortPathNameA(progpath, g_shell_path, sizeof g_shell_path)) zput(g_shell_path, progpath);
         p = zput(p, "STAGE2: NTVDM-aware shell -> command tail [");
         p = zput(p, args); p = zput(p, "] (permanent, as stock launches it)\r\n");
     }
@@ -28884,7 +28886,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  `@0100:` in the trace's call sites is the check that it is not. */
             { const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(0x0100u << 4);
               p = zput(p, "\r\n         cc[0x2B0..0x2BF]="); p = zdump(p, (const void *)(st + 0x2B0), 16);
-              p = zput(p, "\r\n         cc[0x320..0x333]="); p = zdump(p, (const void *)(st + 0x320), 20); }
+              p = zput(p, "\r\n         cc[0x320..0x333]="); p = zdump(p, (const void *)(st + 0x320), 20);
+              /* s81: the environment the shell ACTUALLY has (PSP:2Ch), as text -- the
+                 prompt came up `C>` under /P, i.e. without the PROMPT we passed. */
+              { WORD es2 = *(const volatile WORD *)(st + 0x2C); int q;
+                const volatile BYTE *e2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)es2 << 4);
+                p = zput(p, "\r\n         shell env seg=0x"); p = zhex(p, es2); p = zput(p, " [");
+                for (q = 0; q < 160 && !(e2[q] == 0 && e2[q + 1] == 0); ++q) {
+                    char c1[2]; c1[0] = e2[q] ? (char)e2[q] : '|'; c1[1] = 0;
+                    if (c1[0] < 0x20 || c1[0] > 0x7e) c1[0] = '.';
+                    p = zput(p, c1); }
+                p = zput(p, "]"); } }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         ntvdm_bop_dispatch:
@@ -29148,10 +29160,55 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                ▸ BX = 0, which is exactly the branch XP itself takes when it has nothing
                  to pass. We were setting no register at all, so the guest read whatever
                  BX happened to hold -- an unimplemented call answering at random again. */
+            /* ── ★ sub 0F = "GIVE ME THE INITIAL ENVIRONMENT". (s81: the `C>` prompt) ──
+                 Under /P, XP's COMMAND.COM builds a FRESH environment, as DOS's primary
+                 shell does -- `PATH=` and a COMSPEC, nothing else -- and asks NTVDM for the
+                 rest here (stock hands it the Win32 environment, PROMPT included). We said
+                 "none", so the user's shell came up `C>`: DOS's default, with no PROMPT.
+                 The protocol, read off the caller (COMMAND.COM 0x3A8 / 0x3CB):
+                   call 1: BX=0 in  -> BX out = EXTRA paragraphs needed (0 = keep the old
+                           environment); the shell grows its block by that much
+                   call 2: ES:0 = the new block, BX = its size in paragraphs
+                           -> the variables, double-NUL ended; BX out = paragraphs used,
+                           which must not exceed what came in (else it gives up)
+                 We answer with the environment we built for it (seg DOS_ENV_SEG: PROMPT,
+                 PATH, BLASTER, ULTRASND...), snapshotted on call 1 while it is intact, with
+                 COMSPEC pointed at the real shell. */
             if (bn == NTVDM_BOP_CMD && sub == 0x0F) {
-                VDM_REG(tib, VTIB_EBX) &= 0xFFFF0000u;   /* BX = 0: no host PROMPT */
+                static char envsnap[1024]; static DWORD envlen;
+                DWORD bx0 = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                if (bx0 == 0) {
+                    const volatile BYTE *e0 = (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_ENV_SEG << 4);
+                    DWORD i0 = 0, o0 = 0;
+                    while (i0 < 900 && !(e0[i0] == 0 && e0[i0 + 1] == 0)) {
+                        DWORD st0 = i0;
+                        while (e0[i0] && i0 < 900) ++i0;
+                        if ((e0[st0] | 0x20) == 'c' && e0[st0 + 7] == '=' &&
+                            (e0[st0 + 1] | 0x20) == 'o' && (e0[st0 + 2] | 0x20) == 'm') {
+                            o0 = (DWORD)(zput(envsnap + o0, "COMSPEC=") - envsnap);
+                            o0 = (DWORD)(zput(envsnap + o0, g_shell_path[0] ? g_shell_path
+                                                           : "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM") - envsnap);
+                        } else {
+                            DWORD k0; for (k0 = st0; k0 < i0; ++k0) envsnap[o0++] = (char)e0[k0];
+                        }
+                        envsnap[o0++] = 0;
+                        ++i0;
+                    }
+                    envsnap[o0++] = 0;
+                    envlen = o0;
+                    VDM_SET16(tib, VTIB_EBX, (WORD)((envlen + 15) / 16 + 1));
+                } else {
+                    volatile BYTE *e1 = (volatile BYTE *)(ULONG_PTR)((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4);
+                    DWORD k1, used = (envlen + 15) / 16;
+                    if (envlen && used <= bx0) {
+                        for (k1 = 0; k1 < envlen; ++k1) e1[k1] = (BYTE)envsnap[k1];
+                        VDM_SET16(tib, VTIB_EBX, (WORD)used);
+                    } else VDM_SET16(tib, VTIB_EBX, 0);
+                }
                 if (!quiet) {
-                    p = zput(p, "         sub 0F answered: no host PROMPT (BX=0)\r\n");
+                    p = zput(p, bx0 ? "         sub 0F (2/2): environment written, paras=0x"
+                                    : "         sub 0F (1/2): environment needs extra paras=0x");
+                    p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
