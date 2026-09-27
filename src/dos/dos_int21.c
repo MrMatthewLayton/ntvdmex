@@ -247,6 +247,75 @@ static void fcb_put_name(volatile BYTE *d, const char *nm)
     }
 }
 
+/* ── ★ A DOS SEARCH MATCHES THE 8.3 NAME AGAINST AN 11-BYTE TEMPLATE. (s81 sweep) ──
+     We handed DOS patterns straight to FindFirstFileA, which matches them against the
+     LONG name. XP's COMMAND.COM lists a directory with an FCB search (AH=11h/12h) on
+     `????????.???`, and `ntvdmhost.exe` -- nine characters before the dot -- does not
+     fit that as a long name, so the user's `dir` in bin\ printed only `.` and `..`.
+     Real NTVDM matches the SHORT name (NTVDMH~1.EXE), which is the only name DOS has.
+   ► So enumerate the directory with `*` and decide each entry DOS's way: its 8.3 name
+     (the short alias, or the long name when that is already a legal 8.3 name -- and
+     no name at all otherwise: such a file is invisible to DOS, as it is on NTVDM),
+     laid out as 11 bytes, matched position by position, `?` matching anything. */
+static int dos_83_of(const WIN32_FIND_DATAA *fd, BYTE out[11])
+{
+    const char *bn = fd->cAlternateFileName[0] ? fd->cAlternateFileName : fd->cFileName;
+    if (!fd->cAlternateFileName[0] && bn[0] != '.') {       /* the long name must BE 8.3 */
+        int b = 0, e = -1, i;
+        for (i = 0; bn[i]; ++i) {
+            if (bn[i] == '.') { if (e >= 0) return 0; e = 0; continue; }
+            if (bn[i] == ' ' || fcb_name_ends((unsigned char)bn[i])) return 0;
+            if (e >= 0) { if (++e > 3) return 0; } else if (++b > 8) return 0;
+        }
+        if (!b) return 0;
+    }
+    fcb_put_name((volatile BYTE *)out, bn);
+    return 1;
+}
+static int dos_tmpl_match(const BYTE t[11], const BYTE n[11])
+{
+    int k;
+    for (k = 0; k < 11; ++k) {
+        BYTE c = t[k];
+        if (c == '?') continue;
+        if (c >= 'a' && c <= 'z') c = (BYTE)(c - 32);
+        if (c != n[k]) return 0;
+    }
+    return 1;
+}
+static int dos_find_match(const WIN32_FIND_DATAA *fd, const BYTE t[11], uint16_t mask)
+{
+    BYTE n[11];
+    return dta_match(fd->dwFileAttributes, mask) && dos_83_of(fd, n) && dos_tmpl_match(t, n);
+}
+/* Split a host path pattern into "directory\*" (for FindFirstFileA) and the final
+   component's 11-byte template. */
+static void dos_find_split(const char *pat, char *all, int allsz, BYTE t[11])
+{
+    int i, cut = 0;
+    for (i = 0; pat[i]; ++i) if (pat[i] == '\\' || pat[i] == '/' || pat[i] == ':') cut = i + 1;
+    for (i = 0; i < cut && i < allsz - 2; ++i) all[i] = pat[i];
+    all[i++] = '*'; all[i] = 0;
+    fcb_put_name((volatile BYTE *)t, pat + cut);
+}
+/* FindFirstFileA + skip to the first DOS match; INVALID_HANDLE_VALUE if none (the
+   handle is closed then, and *nodir says whether the DIRECTORY itself was missing). */
+static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
+                             WIN32_FIND_DATAA *fd, int *nodir)
+{
+    HANDLE h = FindFirstFileA(all, fd);
+    *nodir = 0;
+    if (h == INVALID_HANDLE_VALUE) { *nodir = (GetLastError() == ERROR_PATH_NOT_FOUND); return h; }
+    while (!dos_find_match(fd, t, mask))
+        if (!FindNextFileA(h, fd)) { FindClose(h); return INVALID_HANDLE_VALUE; }
+    return h;
+}
+static int dos_find_next(HANDLE h, const BYTE t[11], uint16_t mask, WIN32_FIND_DATAA *fd)
+{
+    do { if (!FindNextFileA(h, fd)) return 0; } while (!dos_find_match(fd, t, mask));
+    return 1;
+}
+
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
 static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 {
@@ -765,48 +834,31 @@ int dos_int21(dos_machine_t *m)
             for (slot = 0; slot < 8 && m->find_h[slot]; ++slot) {}
             if (slot >= 8) { slot = 0;                       /* recycle the oldest */
                              FindClose(m->find_h[0]); m->find_h[0] = 0; }
-            { HANDLE hf = FindFirstFileA(pat, &fd);
+            { char all[300]; BYTE tm[11]; int nodir;
+              HANDLE hf;
+              dos_find_split(pat, all, sizeof all, tm);          /* DOS matching: see dos_find_match */
+              hf = dos_find_first(all, tm, mask, &fd, &nodir);
               if (m->trace_all) { tp = zput(tp, "  INT21 AH=4E ["); tp = zput(tp, pat);
                                   tp = zput(tp, "] attr=0x"); tp = zhex(tp, mask);
-                                  tp = zput(tp, hf == INVALID_HANDLE_VALUE ? " -> none (0x" : " -> found (0x");
-                                  tp = zhex(tp, hf == INVALID_HANDLE_VALUE ? GetLastError() : 0);
-                                  tp = zput(tp, ")\r\n"); }
+                                  tp = zput(tp, hf == INVALID_HANDLE_VALUE ? " -> none" : " -> found");
+                                  tp = zput(tp, nodir ? " (no such directory)\r\n" : "\r\n"); }
               if (hf == INVALID_HANDLE_VALUE) {
-                  DWORD e = GetLastError();
                   /* ORACLE-CONFIRMED, and not what memory suggests: a pattern
                      that matches nothing inside an EXISTING directory is
                      AX=18 "no more files", not AX=2 "file not found". A missing
                      directory is AX=3. */
-                  SETAX(e == ERROR_PATH_NOT_FOUND ? 3 : 18);
+                  SETAX(nodir ? 3 : 18);
                   ERRCF();
               } else {
                   m->find_h[slot] = hf;
                   ok = 1;
-                  while (!dta_match(fd.dwFileAttributes, mask)) {
-                      if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
-                  }
                   /* Fill DOS's private search area deterministically.  It is
                      DOS-private, but leaving the caller's bytes lying in it
                      means the DTA differs run to run for no reason; real 6.22
                      puts the EXPANDED 11-byte search template there (a "*.*"
                      search reads back as eleven '?'), so do the same. */
-                  { const char *q = pat; int bi = 0, ei, dot = 0;
-                    for (bi = 0; bi < 11; ++bi) d[1 + bi] = ' ';
-                    /* skip any path, match on the final component only */
-                    { const char *r2 = pat;
-                      for (; *r2; ++r2) if (*r2 == '\\' || *r2 == '/' || *r2 == ':') q = r2 + 1; }
-                    for (bi = 0; bi < 8 && q[dot] && q[dot] != '.'; ++dot) {
-                        if (q[dot] == '*') { while (bi < 8) d[1 + bi++] = '?'; 
-                                             while (q[dot] && q[dot] != '.') ++dot; break; }
-                        d[1 + bi++] = (BYTE)(q[dot] >= 'a' && q[dot] <= 'z'
-                                             ? q[dot] - 32 : q[dot]);
-                    }
-                    if (q[dot] == '.') ++dot;
-                    for (ei = 0; ei < 3 && q[dot]; ++dot) {
-                        if (q[dot] == '*') { while (ei < 3) d[9 + ei++] = '?'; break; }
-                        d[9 + ei++] = (BYTE)(q[dot] >= 'a' && q[dot] <= 'z'
-                                             ? q[dot] - 32 : q[dot]);
-                    } }
+                  /* The template, exactly as matched -- 4Fh reads it back from here. */
+                  { int bi; for (bi = 0; bi < 11; ++bi) d[1 + bi] = tm[bi]; }
                   d[0] = 3;                                  /* drive C:        */
                   d[12] = (BYTE)(mask & 0xFF);
                   d[13] = 0; d[14] = 0; d[15] = 0; d[16] = 0;
@@ -818,11 +870,10 @@ int dos_int21(dos_machine_t *m)
         } else {                                             /* 4Fh: continue   */
             mask = (uint16_t)d[12];
             if (d[19] == DOS_FIND_MAGIC && d[20] < 8 && m->find_h[d[20]]) {
+                BYTE tm[11]; int k;
                 slot = d[20];
-                ok = 1;
-                do {
-                    if (!FindNextFileA(m->find_h[slot], &fd)) { ok = 0; break; }
-                } while (!dta_match(fd.dwFileAttributes, mask));
+                for (k = 0; k < 11; ++k) tm[k] = d[1 + k];   /* the template 4Eh stored */
+                ok = dos_find_next(m->find_h[slot], tm, mask, &fd);
             } else {
                 SETAX(18); ERRCF();                          /* no search live  */
             }
@@ -938,21 +989,25 @@ int dos_int21(dos_machine_t *m)
                 goto fcb_done;
             }
             if (ah == 0x11) {
-                HANDLE hf;
-                fcb_name(f, nm);
+                /* The FCB's own 11 bytes ARE the template (`????????.???` for DIR), matched
+                   against each entry's 8.3 name -- see dos_find_match. The drive byte
+                   picks the directory: "X:*" is that drive's current directory. */
+                HANDLE hf; char all[8]; int k, nodir, n = 0;
                 if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
-                hf = FindFirstFileA(nm, &fd);
-                if (hf != INVALID_HANDLE_VALUE) {
-                    m->fcb_find = hf; got = 1;
-                    while (!dta_match(fd.dwFileAttributes, fmask)) {
-                        if (!FindNextFileA(hf, &fd)) { got = 0; break; }
-                    }
-                }
+                for (k = 0; k < 11; ++k) m->fcb_tmpl[k] = f[1 + k];
+                if (f[0]) { all[n++] = (char)('A' + f[0] - 1); all[n++] = ':'; }
+                all[n++] = '*'; all[n] = 0;
+                hf = dos_find_first(all, m->fcb_tmpl, fmask, &fd, &nodir);
+                if (hf != INVALID_HANDLE_VALUE) { m->fcb_find = hf; got = 1; }
+                if (m->trace_all) { char cwd[260]; int q;
+                    GetCurrentDirectoryA(sizeof cwd, cwd);
+                    tp = zput(tp, "  INT21 AH=11 ["); tp = zput(tp, all);
+                    tp = zput(tp, "] in ["); tp = zput(tp, cwd); tp = zput(tp, "] tmpl=[");
+                    for (q = 0; q < 11; ++q) { char c1[2]; c1[0] = (char)m->fcb_tmpl[q]; c1[1] = 0; tp = zput(tp, c1); }
+                    tp = zput(tp, "] mask=0x"); tp = zhex(tp, fmask);
+                    tp = zput(tp, got ? " -> found\r\n" : " -> none\r\n"); }
             } else if (m->fcb_find) {
-                got = 1;
-                do {
-                    if (!FindNextFileA(m->fcb_find, &fd)) { got = 0; break; }
-                } while (!dta_match(fd.dwFileAttributes, fmask));
+                got = dos_find_next(m->fcb_find, m->fcb_tmpl, fmask, &fd);
                 if (!got) { FindClose(m->fcb_find); m->fcb_find = 0; }
             }
             /* ── A FAILED SEARCH MUST SAY WHY, OR THE LAST FAILURE SPEAKS FOR IT. ──
@@ -1102,6 +1157,18 @@ int dos_int21(dos_machine_t *m)
             char in[300];
             volatile BYTE *dst = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
             int i2 = 0, wild = 0, k;
+            /* ── ★ AL's CONTROL BITS SAY WHAT A MISSING PART LEAVES ALONE. (s81 sweep) ──
+                 bit 1: no drive given -> keep the FCB's drive (else 0 = default)
+                 bit 2: no name given  -> keep the FCB's name
+                 bit 3: no extension   -> keep the FCB's extension
+                 Unanimous on msdos622 / dosbox-x / pcem / pcem-vesa (p_fcb.asm
+                 int21.29.keepext/keepall/blank). XP's COMMAND.COM builds DIR's search
+                 FCB as ??????????? and parses "*" with AL=0Eh; blanking the extension
+                 regardless made the template ????????+3 spaces and DIR listed only
+                 `.` and `..` -- the user's sweep finding. */
+            uint8_t al29 = (uint8_t)(R_AX & 0xFF);
+            BYTE keep[12]; int j, has_name, has_ext;
+            for (k = 0; k < 12; ++k) keep[k] = dst[k];
             v86_str(R_DS, R_SI, in, sizeof(in));
             while (in[i2] == ' ' || in[i2] == 9) ++i2;
             dst[0] = 0;
@@ -1109,8 +1176,13 @@ int dos_int21(dos_machine_t *m)
                 char dch = in[i2];
                 dst[0] = (BYTE)((dch >= 'a' ? dch - 32 : dch) - 'A' + 1);
                 i2 += 2;
-            }
+            } else if (al29 & 0x02) dst[0] = keep[0];
+            for (j = i2; !fcb_name_ends((unsigned char)in[j]) && in[j] != '.'; ++j) {}
+            has_name = (j > i2);
+            has_ext  = (in[j] == '.');
             fcb_put_name(dst + 1, in + i2);
+            if (!has_name && (al29 & 0x04)) for (k = 1; k <= 8;  ++k) dst[k] = keep[k];
+            if (!has_ext  && (al29 & 0x08)) for (k = 9; k <= 11; ++k) dst[k] = keep[k];
             for (k = 1; k <= 11; ++k) if (dst[k] == '?' || dst[k] == '*') wild = 1;
             for (k = 12; k <= 15; ++k) dst[k] = 0;
             SETAX((R_AX & 0xFF00) | (wild ? 1 : 0));

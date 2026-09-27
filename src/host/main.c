@@ -539,6 +539,7 @@ static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run s
    what earns it DOS 5.00 and the private AH=53h answers. */
 static DWORD g_guest_ntvdm_bops = 0;
 static int   g_guest_ntaware    = 0;
+static int   g_shell_getnext_n  = 0;   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
 
 /* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
    numbers -- ours above happen to overlap and are told apart by origin, not by value. */
@@ -9773,7 +9774,9 @@ static void settings_to_dialog(const ntvdmex_settings *s)
          session can be running a different, forced number, and the dialog said nothing. */
     {   HWND c = settings_ctl(IDC_S_DOSVER_NOTE);
         if (c && g_dosm && g_dosver_forced && g_dosver_why) {
-            wsprintfA(t, "In force now: %u.%02u -- %s. Your setting applies to other sessions.",
+            /* s81 sweep: the user read the old wording and did not understand it. Say
+               what programs see, why, and when the box above DOES apply -- in that order. */
+            wsprintfA(t, "This session reports %u.%02u: %s.",
                       (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor, g_dosver_why);
             SetWindowTextA(c, t);
         }
@@ -24355,6 +24358,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 ++g_guest_ntvdm_bops;
     }
     g_guest_ntaware = (was_shell && g_guest_ntvdm_bops >= 8);
+    /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
+         ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
+         launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
+         XP's EXIT takes DOS's ordinary return-to-parent path -- which for a top-level
+         shell is ITSELF, and the prompt just comes back (the sweep's "exit does not
+         work"). The directory argument is COMMAND.COM's own COMSPEC location, which
+         also replaces the C:\COMMAND.COM the environment otherwise names. */
+    if (g_guest_ntaware && !args[0]) {
+        char dir[300], sdir[300]; int dn = 0, cut = 0;
+        for (dn = 0; progpath[dn] && dn < (int)sizeof dir - 1; ++dn) {
+            dir[dn] = progpath[dn]; if (progpath[dn] == '\\') cut = dn; }
+        dir[cut ? cut : dn] = 0;
+        if (!GetShortPathNameA(dir, sdir, sizeof sdir)) zput(sdir, dir);
+        wsprintfA(args, "/P %s", sdir);
+        p = zput(p, "STAGE2: NTVDM-aware shell -> command tail [");
+        p = zput(p, args); p = zput(p, "] (permanent, as stock launches it)\r\n");
+    }
     p = zput(p, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
     p = zdec(p, g_guest_ntvdm_bops);
     p = zput(p, g_guest_ntaware
@@ -24765,8 +24785,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         dos_int21_set_version(&m, 5, 0);
         dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
         g_dosver_forced = 1;
-        g_dosver_why = "this session's shell is Windows XP's COMMAND.COM, which requires 5.00 "
-                       "(what stock NTVDM reports to every program)";
+        g_dosver_why = "the DOS prompt is Windows XP's own COMMAND.COM, which only works as "
+                       "5.00. The version above applies when you start a program directly";
     }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
@@ -24783,7 +24803,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
               dosver_src = "cfg\\dosver.txt";
               g_dosver_forced = 1;
-              g_dosver_why = "cfg\\dosver.txt overrides this setting";
+              g_dosver_why = "the file cfg\\dosver.txt overrides the box above";
           }
       } }
     /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
@@ -28863,6 +28883,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 DWORD blk = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
                           + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                 volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)blk;
+                /* ── ★ THE SECOND "WHAT NEXT?" IS THE SHELL LEAVING. (s81 sweep: `exit`) ──
+                     The block is NT's CMDINFO -- +04 CurDrive, +0C CmdLineSize, +0E
+                     ReturnCode, +18 fTSRExit, +1C:1E/+20 ExecPath -- every measured value
+                     lines up. Sub 01 is GetNextVDMCommand: the DOS side has finished and
+                     asks the Win32 side for work. XP's permanent shell asks once at start-
+                     up and again when the user types EXIT (never after an internal or an
+                     EXEC'd command -- measured: `dir` does not call it). A bare-launched
+                     session has no Win32 side to hand anything back, so the second ask
+                     means "we are done": end the VDM with the shell's ReturnCode, as stock
+                     ends a command.com window. */
+                if (g_guest_ntaware && ++g_shell_getnext_n > 1) {
+                    p = zput(p, "         sub 01 again: the shell is handing back control (EXIT)"
+                                " -- ending the VDM, rc=0x");
+                    p = zhex(p, *(volatile WORD *)(b + 0x0E)); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    m.exit_code = *(volatile WORD *)(b + 0x0E) & 0xFF;
+                    break;
+                }
                 #define BW(o, v) (*(volatile WORD *)(b + (o)) = (WORD)(v))
                 /* ⚠ DUMPED BEFORE WE WRITE ANYTHING. Logging it after the BW()s below
                      would show our own zeros back and read as the guest's input --
@@ -29181,6 +29219,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                ▸ We answer 0 = no keyboard driver, which is TRUE of us: we do not load
                  KB16.COM or KEYBOARD.SYS. Explicitly, rather than by leaving DX alone
                  and getting 0 because that is what happened to be in it. */
+            /* ── sub 00 = VDDTerminateVDM: THE PERMANENT SHELL'S EXIT. (s81 sweep) ──────
+                 XP's EXIT (COMMAND.COM 0x4F11) ends the VDM through here when PERMCOM
+                 ([0x2B0], set by /P) is non-zero and SINGLECOM ([0x2B1]) is not -1.
+                 It had no arm, so it fell to the generic "skip the BOP" below and EXIT
+                 did nothing. End the run exactly as a top-level AH=4Ch does. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x00) {
+                p = zput(p, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                m.exit_code = 0;
+                break;
+            }
             if (bn == NTVDM_BOP_CMD && sub == 0x0E) {
                 VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;   /* DX = 0: no KEYB to run */
                 if (!quiet) {

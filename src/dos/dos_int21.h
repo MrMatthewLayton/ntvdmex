@@ -112,6 +112,9 @@ typedef struct {
        duplicate the console into any free slot, which is how a shell saves stdout
        before redirecting -- see DOS_DEV_SLOTS in dos_fh.h. */
     uint32_t std_open;
+    /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
+       see dos_find_match in dos_int21.c. */
+    uint8_t  fcb_tmpl[11];
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */

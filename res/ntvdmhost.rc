@@ -88,8 +88,9 @@ BEGIN
     LTEXT           "Reported MS-DOS &version:", -1, 14, 21, 90, 8
     COMBOBOX        IDC_S_DOSVER, 108, 19, 60, 90,
                     CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "A guest that refuses to start may just dislike this number. "
-                    "6.22 is the reference; Windows XP's own COMMAND.COM requires 5.00.",
+    LTEXT           "The version number DOS programs are told. Some refuse to run "
+                    "unless they like it; 6.22 suits almost everything. (The DOS prompt "
+                    "always runs as 5.00 -- Windows XP's COMMAND.COM needs that.)",
                     IDC_S_DOSVER_NOTE, 14, 36, 266, 27
 END
 
