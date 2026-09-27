@@ -174,3 +174,48 @@ off-VM 1670/0.
 ### Owed by hand
 **ZAR with sound, by ear** (music + effects), plus Doom sound and Duke3D sound, because
 both now pass through the new reflection/nested paths.
+
+---
+
+## Part 3 — the shelf sweep (`runs/s81_sweep/sweep.txt`, the user's own words)
+
+Candidate zip `dist\ntvdmex-20260927-f5d0f4c.zip` (host `cd5f9f12`). **Not promoted.**
+User decisions (2026-09-27): **sweep defects first**, then the host-UI programme, with
+**Save/Load State removed + a GH issue**, **Renderer = GDI + DirectDraw only** (the menu
+choice made real, D3D9/OpenGL removed), and **unimplemented Machine/Debug/Help items
+removed + GH issues**.
+
+### Fixed this part (host `e37cb278` in `bin\`, NOT yet re-checked by hand)
+- **DIR showed only `.` and `..`** — two defects. (1) AH=29h ignored AL's control bits.
+  XP's DIR parses `*` with AL=0Eh into a pre-filled `???????????`, and we blanked the
+  extension. `p_fcb` grew five cases, all four oracles unanimous. (2) DOS searches matched
+  LONG names; they now match each entry's 8.3 name against the 11-byte template, as NTVDM
+  does. Live: `dir` lists `LONGFI~1.TXT` and every other file.
+- **`exit` did nothing** — stock launches XP's shell `/P <dir>`, and the bare launch had
+  lost that. With `/P`, EXIT hands back through BOP 54 sub 01 (GetNextVDMCommand, NT's
+  CMDINFO block) a second time; a bare session now ends the VDM there. Sub 00 got an arm
+  too. Live: dir → an EXEC'd program → exit closes the window.
+- **Settings → DOS note** rewritten in plain language.
+
+### Measured, not fixed
+- **Doom's quit sound.** Recorded (new WAV recorder, `cfg\wavrec.flag`). `IRQ0TL`: the
+  timer runs ~0x85/s in play and collapses to **0x15–0x22/s** for the seconds of the quit
+  wait (`I_WaitVBL` polling 3DAh) — **identical on `a0294462`**, so pre-existing, not an s81
+  regression. Delivery is 99% of raises; the ticks are never *raised* in those seconds —
+  consistent with the port-trap ceiling (every 3DAh read traps under `g_lock`, starving the
+  pacer). In-game "95% OK" is the known one-block replay race (`REPLAYED_LOUD` 0x14 this
+  run, 0x36 before s81).
+- **Notepad Edit → Paste** — by design today: the WOW clipboard answers "empty" because
+  there is no bridge that puts host clipboard text into guest global memory
+  (`wowuser.h`, "THE CLIPBOARD PAIR"). Needs the host to call krnl386's GlobalAlloc
+  (`wowcall.h` has the host→16-bit mechanism). A WOW feature, not a bug.
+- **Paint tools/resize** — not yet investigated.
+- **Menu inventory** (agent report, all `main.c`): Close Program has an ID and no handler;
+  Open Executable/Recent, Save/Load State, all of Edit, Machine (except Limit Speed/Capture
+  Mouse), Debug, Capture recording, Help Quick Start are `IDM_STUB`; Renderer is read by
+  nothing; hq2x is a no-op; Show Host Cursor was removed earlier (only the Settings
+  checkbox remains); View ends in a stray separator; Settings' Aspect is a checkbox over a
+  four-way setting; Take Screenshot silently does nothing outside 8-bit frames.
+
+### Still the user's
+Mario side-scroll jitter (needs a stock comparison), install-from-zip, 6.22's COMMAND.COM.
