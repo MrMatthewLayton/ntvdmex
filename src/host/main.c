@@ -53,9 +53,15 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #define NTVDMEX_DIR ntvdmex_root()
 #define NTVDMEX_CFG   ntvdmex_path("cfg\\", "")
 #define NTVDMEX_DEBUG ntvdmex_path("debug\\", "")        /* parent of out\; created first */
-#define NTVDMEX_OUT   ntvdmex_path("debug\\out\\", "")
+/* #211: the FIRST host writes to debug\out\ as always; a second one running at the
+   same time writes to debug\out\2\, and so on -- see the instance claim in WinMain.
+   Everything it writes goes through these two, so no host clears another's log. */
+static char g_out_sub[24] = "debug\\out\\";
+static int  g_instance = 1, g_instance_abandoned;
+
+#define NTVDMEX_OUT   ntvdmex_path(g_out_sub, "")
 #define CFG_(n)       ntvdmex_path("cfg\\", n)
-#define OUT_(n)       ntvdmex_path("debug\\out\\", n)
+#define OUT_(n)       ntvdmex_path(g_out_sub, n)
 /* The log is the one path log.h owns; define it before including so its #ifndef
    defers to us rather than putting the log back on C:. */
 #define LOG_PATH    OUT_("ntvdmhost.log")
@@ -4174,6 +4180,51 @@ static void install_prev_write(const char *v)
     RegCloseKey(k);
 }
 
+/* ── #153: FILE > OPEN RECENT. Every program this host was started with, and every one
+     opened from the menu, newest first, `Recent1`..`Recent8` beside the settings.
+     (A Win16 program started from Windows is not recorded: its path arrives inside
+     WOW, not here.) */
+#define MRU_MAX 8
+static int mru_load(char out[MRU_MAX][MAX_PATH])
+{
+    HKEY k; int n = 0, i;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS)
+        return 0;
+    for (i = 0; i < MRU_MAX; ++i) {
+        char name[16], *q = zput(name, "Recent"); DWORD ty = 0, cb = MAX_PATH;
+        q = zdec(q, (DWORD)(i + 1)); *q = 0;
+        if (RegQueryValueExA(k, name, NULL, &ty, (LPBYTE)out[n], &cb) != ERROR_SUCCESS
+            || ty != REG_SZ || cb < 2) continue;
+        out[n][cb < MAX_PATH ? cb : MAX_PATH - 1] = 0;
+        if (out[n][0]) ++n;
+    }
+    RegCloseKey(k);
+    return n;
+}
+static void mru_add(const char *path)
+{
+    char list[MRU_MAX][MAX_PATH], longp[MAX_PATH];
+    HKEY k; DWORD disp, ln; int n, i, w = 0;
+    const char *bn;
+    if (!path || !path[0] || lstrlenA(path) >= MAX_PATH) return;
+    /* CSRSS hands us 8.3 names; the menu is for a person. */
+    ln = GetLongPathNameA(path, longp, sizeof longp);
+    if (ln && ln < sizeof longp) path = longp;
+    for (bn = path, i = 0; path[i]; ++i) if (path[i] == '\\') bn = path + i + 1;
+    if (!lstrcmpiA(bn, LAUNCH_STUB_NAME) || !lstrcmpiA(bn, "dosstub.com")) return;   /* ours */
+    n = mru_load(list);
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, &disp) != ERROR_SUCCESS) return;
+    for (i = -1; i < n && w < MRU_MAX; ++i) {
+        const char *v = (i < 0) ? path : list[i];
+        char name[16], *q = zput(name, "Recent");
+        if (i >= 0 && !lstrcmpiA(v, path)) continue;          /* moved to the front */
+        q = zdec(q, (DWORD)(++w)); *q = 0;
+        RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)v, (DWORD)lstrlenA(v) + 1);
+    }
+    RegCloseKey(k);
+}
+
 /* Set (v non-NULL) or delete (v NULL) the IFEO Debugger value. Returns a Win32
    error code; ERROR_SUCCESS means the machine now says what we asked it to. */
 static LONG install_write(const char *v)
@@ -6624,6 +6675,39 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     return 0;
 }
 
+/* ── #153: TEXT THE HOST TYPES AT THE SHELL'S PROMPT (File > Open Executable). ───────
+     Characters queued here are read by the console input BEFORE the keyboard, so the
+     shell's AH=0Ah line reader sees them exactly as if they had been typed -- echoed,
+     with no length limit and no scancode translation. Only File > Open fills it, and
+     only while the top-level shell is sitting in that line read (open_at_prompt).
+     Head/tail under g_lock. */
+#define TYPEIN_CAP 512
+static char g_typein[TYPEIN_CAP];
+static int  g_typein_head, g_typein_tail;
+static int typein_pop(void)
+{
+    int c = -1;
+    if (g_typein_head != g_typein_tail) {
+        c = (BYTE)g_typein[g_typein_head];
+        g_typein_head = (g_typein_head + 1) % TYPEIN_CAP;
+    }
+    return c;
+}
+/* Queue a string. All or nothing: a half-typed command is worse than none. */
+static int typein_push(const char *s)
+{
+    int n = lstrlenA(s), used, i;
+    HOST_LOCK();
+    used = (g_typein_tail - g_typein_head + TYPEIN_CAP) % TYPEIN_CAP;
+    if (used + n >= TYPEIN_CAP - 1) { HOST_UNLOCK(); return 0; }
+    for (i = 0; i < n; ++i) {
+        g_typein[g_typein_tail] = s[i];
+        g_typein_tail = (g_typein_tail + 1) % TYPEIN_CAP;
+    }
+    HOST_UNLOCK();
+    return 1;
+}
+
 /* Non-blocking console read (INT 21h AH=06 DL=FF): a key char, or -1 if none. */
 static int host_coninnb(void *ctx)
 {
@@ -6632,6 +6716,7 @@ static int host_coninnb(void *ctx)
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
     if (g_stdin_h) return stdin_read_byte();   /* a file is always ready */
     HOST_LOCK();
+    { int c = typein_pop(); if (c >= 0) { HOST_UNLOCK(); return c; } }
     got = vdd_input_pop(&g_in, &k);
     HOST_UNLOCK();
     if (!got) return -1;
@@ -6653,6 +6738,7 @@ static int host_conpeek(void *ctx)
          left to give, which is the hang this whole route exists to remove. */
     if (g_stdin_h) return 1;
     HOST_LOCK();
+    if (g_typein_head != g_typein_tail) { HOST_UNLOCK(); return 1; }
     got = vdd_input_peek(&g_in, &k);
     HOST_UNLOCK();
     return got;
@@ -8034,6 +8120,7 @@ static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my
 enum {                                       /* wired command IDs                */
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
+    IDM_FILE_OPEN,                           /* #153: Open Executable...          */
     IDM_DISP_FULLSCREEN,
     IDM_INPUT_CAPTURE,          /* (IDM_INPUT_CURSOR retired -- see g_cursor_show) */
     IDM_FILE_SETTINGS,
@@ -8072,6 +8159,7 @@ enum {                                       /* wired command IDs               
          overflowing collides with nothing -- the extra items simply do not appear,
          which is visible, rather than silently invoking the next setting along. */
 #define IDM_COMBO_SPAN 32
+    IDM_RECENT_0    = 180,                   /* #153: Open Recent, MRU_MAX items  */
     IDM_COMBO_BASE  = 200,
     IDM_SPEED_0     = IDM_COMBO_BASE + 0 * IDM_COMBO_SPAN,   /* CPU speed (#56)   */
     IDM_WINSIZE_0   = IDM_COMBO_BASE + 1 * IDM_COMBO_SPAN,
@@ -8686,12 +8774,16 @@ static int wow_refuse(const char *cmd)
      usually by keystroke. A command you reach for mid-game does not belong behind an
      OK button, so View and Machine keep them.
    The rest is still scaffold: items carrying IDM_STUB no-op until they are wired. */
+static HMENU g_recent_menu;                  /* File > Open Recent (#153)         */
 static HMENU build_menu(void)
 {
     HMENU bar = CreateMenu(), m, s, tools;
     m = mpop();                                                   /* File         */
-    mi(m, "Open Executable...\tCtrl+O", IDM_STUB);
-    msub(m, "Open Recent", (s=mpop(), mi(s,"(empty)",IDM_STUB), s));
+    /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
+       Open Recent list is filled when it opens -- see menu_recent_fill. */
+    mi(m, "Open Executable...", IDM_FILE_OPEN);
+    g_recent_menu = mpop();
+    msub(m, "Open Recent", g_recent_menu);
     /* Save State / Load State removed (s81, #145, user decision); what a real
        implementation would need is #146. */
     msep(m);
@@ -9339,6 +9431,206 @@ static void input_capture_set(HWND h, int on)
     /* The status strip says how to get back out. It is repainted from the UI tick,
        which is where SendMessage to the control is safe -- input_capture_set is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
+}
+
+/* ── #153: FILE > OPEN EXECUTABLE / OPEN RECENT. ─────────────────────────────────────
+     User decision (s81): if this window is sitting at the top-level shell's prompt,
+     TYPE the program into it -- drive, `CD`, name -- so it runs here and the prompt
+     comes back afterwards. Otherwise start it in a new window, as a double-click does.
+   ► "At the prompt" is read off the DOS kernel, not guessed: the top-level program is a
+     shell, nothing is EXEC'd under it, and it is inside its AH=0Ah line read. Anything
+     already typed on that line is rubbed out first (our AH=0Ah honours backspace).
+   ⚠ A NEW WINDOW NEEDS CREATE_NEW_CONSOLE. This process IS a VDM, and a DOS program
+     started from its console is queued by CSRSS to THIS VDM -- the relaunch case in the
+     task-done path -- rather than getting a machine of its own.
+   ⚠ Only a DOS image is typed: a Win16/Win32 one at a DOS prompt just says it needs
+     Windows. And the directory must fit DOS's 64-character current-directory limit. */
+/* ── #211: TWO BUSY GUESTS MUST NOT STARVE THE MACHINE. ──────────────────────────────
+     The thread that runs the guest is ABOVE_NORMAL (execprio), and a DOS program that
+     polls its keyboard keeps it busy for ever -- QBasic idling in its editor is a whole
+     core. Measured on the 2-core rig (s81): QBasic in one host and Skyroads in another
+     took both cores, and every NORMAL process -- cmd, tasklist, the rig's own harness
+     -- stopped dead until the hosts were killed.
+   ► So while ANOTHER NTVDMEX is running, a host whose window is not in the foreground
+     drops its guest to BELOW_NORMAL, and gets its own priority back when it is brought
+     forward. A host running alone is never touched: its priority is exactly what it was,
+     which is what the Skyroads timing guard and every rig measurement assume. */
+static HANDLE g_hexec;                        /* the exec (guest) thread               */
+static int    g_exec_prio_fg = THREAD_PRIORITY_NORMAL;
+static int    g_exec_prio_now = 0x7FFF;       /* what bg_prio_tick last set             */
+static int other_hosts_running(void)
+{
+    int n; char nm[48];
+    for (n = 1; n <= 16; ++n) {
+        HANDLE m; char *q = zput(nm, "Global\\ntvdmex_host_single");
+        if (n == g_instance) continue;
+        if (n > 1) { *q++ = '_'; q = zdec(q, (unsigned)n); }
+        m = OpenMutexA(SYNCHRONIZE, FALSE, nm);
+        if (m) { CloseHandle(m); return 1; }
+    }
+    return 0;
+}
+
+/* See other_hosts_running. From the UI timer, at most twice a second.
+   ► PRIORITY ALONE WAS MEASURED NOT TO BE ENOUGH (s81 rig, interleaved A/B): with QBasic
+     idling in a background host at BELOW_NORMAL, the foreground Skyroads went from
+     n8=0 max_ms=6 (alone, twice) to n8=0xb2/0xab with one 2.7 s stall -- and holding
+     the background guest to 10% speed through the CPU-speed duty cycle changed nothing
+     (n8=0xa3/0xa4/0xad). The stretches were 8-32 ms, i.e. scheduler quanta: the
+     background host's OTHER threads share the foreground guest's core at its level.
+     Dropping the whole background process to the idle class took n8 to 0xf/0x16/0xb,
+     max_ms 0x11/0xe/0x15. The idle class costs a background host nothing when the CPU
+     is free (it runs at full speed); it only yields. A throttle would slow two DOS
+     windows to a crawl the moment the user clicked on anything else. */
+static void bg_prio_tick(HWND h)
+{
+    static DWORD s_last; static int s_logged;
+    DWORD now = GetTickCount();
+    HWND fg; int want, bg;
+    if (!g_hexec || now - s_last < 500) return;
+    s_last = now;
+    fg = GetForegroundWindow();
+    bg = !(fg && (fg == h || GetAncestor(fg, GA_ROOTOWNER) == h)) && other_hosts_running();
+    want = bg ? THREAD_PRIORITY_BELOW_NORMAL : g_exec_prio_fg;
+    if (want == g_exec_prio_now) return;
+    if (!SetThreadPriority(g_hexec, want)) return;
+    g_exec_prio_now = want;
+    /* ...and the whole PROCESS, because its other threads (courier and watchdog at
+       HIGHEST, the throttle at ABOVE_NORMAL) otherwise share the foreground guest's
+       core at its own level. In the idle class all of them sit below it; only the
+       audio pump (TIME_CRITICAL, 15 in any class) keeps its place. */
+    SetPriorityClass(GetCurrentProcess(), bg ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
+    if (s_logged++ < 32) {
+        char b[128], *q = zput(b, "PRIO: guest thread -> ");
+        q = zput(q, bg ? "idle class (background, another host running)"
+                       : "its own priority");
+        q = zput(q, " (#211)\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+}
+
+static int open_at_prompt(void)
+{
+    return g_running && !g_wound_down && !g_wow_launch && !g_dpmi_done
+        && g_exec_depth == 0 && g_top_is_shell && g_mach && g_mach->line_active;
+}
+
+/* A DOS image: .COM or .BAT by name, or an MZ .EXE without an NE/PE header. */
+static int open_is_dos_image(const char *path)
+{
+    int n = lstrlenA(path);
+    BYTE b[0x40]; DWORD got = 0, lf, got2 = 0; BYTE sig[2];
+    HANDLE f;
+    if (n >= 4 && (!lstrcmpiA(path + n - 4, ".COM") || !lstrcmpiA(path + n - 4, ".BAT"))) return 1;
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    if (!ReadFile(f, b, sizeof b, &got, NULL) || got < sizeof b || b[0] != 'M' || b[1] != 'Z') {
+        CloseHandle(f); return 0; }
+    lf = *(const DWORD *)(b + 0x3C);
+    if (lf >= 0x40 && SetFilePointer(f, (LONG)lf, NULL, FILE_BEGIN) == lf
+        && ReadFile(f, sig, 2, &got2, NULL) && got2 == 2
+        && ((sig[0] == 'N' && sig[1] == 'E') || (sig[0] == 'P' && sig[1] == 'E'))) {
+        CloseHandle(f); return 0; }
+    CloseHandle(f);
+    return 1;
+}
+
+/* Build "<backspaces>X:\r CD \dir\r NAME.EXT\r" from an 8.3 path; 0 if it cannot. */
+static int open_prompt_line(const char *sp, int rub, char *out, int cap)
+{
+    int n = lstrlenA(sp), slash = -1, i, dl;
+    char *q = out, *e = out + cap - 1;
+    for (i = 0; i < n; ++i) if (sp[i] == '\\') slash = i;
+    if (n < 4 || sp[1] != ':' || sp[2] != '\\' || slash < 2) return 0;
+    dl = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
+    if (dl > 63 || n - slash - 1 > 12 || rub + n + 16 > cap) return 0;
+    for (i = 0; i < rub; ++i) *q++ = 0x08;
+    *q++ = sp[0]; *q++ = ':'; *q++ = '\r';
+    q = zput(q, "CD ");
+    for (i = 2; i < (slash == 2 ? 3 : slash); ++i) *q++ = sp[i];
+    *q++ = '\r';
+    for (i = slash + 1; i < n; ++i) *q++ = sp[i];
+    *q++ = '\r';
+    if (q > e) return 0;
+    *q = 0;
+    return 1;
+}
+
+static void open_program(HWND h, const char *path)
+{
+    char sp[MAX_PATH], dir[MAX_PATH], cmd[MAX_PATH + 4], line[512];
+    DWORD a = GetFileAttributesA(path), sl;
+    int i, cut = -1;
+    STARTUPINFOA si; PROCESS_INFORMATION pi;
+    if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) {
+        char m[MAX_PATH + 64], *q = zput(m, "This program could not be found:\n\n");
+        zput(q, path);
+        MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+    mru_add(path);
+    if (g_captured) input_capture_set(h, 0);
+    sl = GetShortPathNameA(path, sp, sizeof sp);
+    if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
+        && open_prompt_line(sp, g_mach->line_n, line, (int)sizeof line)
+        && typein_push(line)) {
+        char lb[MAX_PATH + 64], *lq = zput(lb, "OPEN: typed at the prompt [");
+        lq = zput(lq, sp); lq = zput(lq, "]\r\n");
+        log_append(LOG_PATH, lb, lq);
+        return;
+    }
+    lstrcpynA(dir, path, sizeof dir);
+    for (i = 0; dir[i]; ++i) if (dir[i] == '\\') cut = i;
+    if (cut >= 0) dir[cut == 2 ? 3 : cut] = 0;
+    cmd[0] = '"'; lstrcpynA(cmd + 1, path, MAX_PATH); zput(cmd + lstrlenA(cmd), "\"");
+    for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
+    si.cb = sizeof si;
+    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                       cut >= 0 ? dir : NULL, &si, &pi)) {
+        char lb[MAX_PATH + 64], *lq = zput(lb, "OPEN: started in a new window [");
+        lq = zput(lq, path); lq = zput(lq, "]\r\n");
+        log_append(LOG_PATH, lb, lq);
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    } else {
+        char m[MAX_PATH + 96], *q = zput(m, "NTVDMEX could not start:\n\n");
+        q = zput(q, path); q = zput(q, "\n\nWindows error 0x"); q = zhex(q, GetLastError()); *q = 0;
+        MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONERROR);
+    }
+}
+
+static void open_program_dialog(HWND h)
+{
+    char file[MAX_PATH]; OPENFILENAMEA of; int i;
+    file[0] = 0;
+    for (i = 0; i < (int)sizeof of; ++i) ((char *)&of)[i] = 0;
+    of.lStructSize = sizeof of;
+    of.hwndOwner   = h;
+    of.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0All files (*.*)\0*.*\0";
+    of.lpstrFile   = file;
+    of.nMaxFile    = sizeof file;
+    of.lpstrTitle  = "Open Executable";
+    of.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (g_captured) input_capture_set(h, 0);   /* the dialog needs the pointer */
+    if (GetOpenFileNameA(&of)) open_program(h, file);
+}
+
+/* Rebuilt every time the submenu opens, so it always shows the registry's list --
+   including programs other NTVDMEX windows have run since this one started. */
+static void menu_recent_fill(void)
+{
+    char list[MRU_MAX][MAX_PATH];
+    int n, i;
+    if (!g_recent_menu) return;
+    while (GetMenuItemCount(g_recent_menu) > 0) DeleteMenu(g_recent_menu, 0, MF_BYPOSITION);
+    n = mru_load(list);
+    if (!n) { AppendMenuA(g_recent_menu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
+    for (i = 0; i < n; ++i) {
+        char t[2 * MAX_PATH + 8], *q = t; const char *s;
+        *q++ = '&'; *q++ = (char)('1' + i); *q++ = ' ';
+        for (s = list[i]; *s; ++s) { if (*s == '&') *q++ = '&'; *q++ = *s; }   /* a literal & */
+        *q = 0;
+        AppendMenuA(g_recent_menu, MF_STRING, IDM_RECENT_0 + (UINT)i, t);
+    }
 }
 
 /* ── ⛔⛔⛔ GIVE THE MACHINE BACK. CALL THIS BEFORE ANY TEARDOWN PATH. ─────────────
@@ -10501,6 +10793,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            messages. Taken FIRST, before any of the frame work below, so the beat means
            "this thread reached its timer", not "this thread finished a frame". */
         InterlockedIncrement(&g_ui_beat);
+        bg_prio_tick(h);                        /* #211 */
         /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
              SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
              is 15.6 ms, so this body has ALWAYS run at ~64 Hz -- which is exactly the
@@ -10967,6 +11260,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        can change video mode whenever it likes, so this is synced at open time
        rather than at mode-set time. */
     case WM_INITMENUPOPUP:
+        if ((HMENU)wp == g_recent_menu) menu_recent_fill();
         menu_sync_modal(h, (HMENU)wp);
         return 0;
     case WM_COMMAND:
@@ -11004,8 +11298,16 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 }
             }
         }
+        /* #153: Open Recent's items are a range, like the combos above. */
+        if (LOWORD(wp) >= IDM_RECENT_0 && LOWORD(wp) < IDM_RECENT_0 + MRU_MAX) {
+            char list[MRU_MAX][MAX_PATH];
+            int n = mru_load(list), k = LOWORD(wp) - IDM_RECENT_0;
+            if (k < n) open_program(h, list[k]);
+            return 0;
+        }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
+        case IDM_FILE_OPEN: open_program_dialog(h); return 0;   /* #153 */
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see close_prog_now */
             if (!close_prog_available()) return 0;     /* greyed; belt and braces */
             if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
@@ -23837,29 +24139,48 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          window-close path now TerminateProcess()es (see ui_thread), so the common
          zombie is gone at the source; this makes the guard safe against any that slip
          through rather than turning them into a permanent lockout. */
-    {   HANDLE once; DWORD gle;
-        SetLastError(0);
-        once = CreateMutexA(NULL, TRUE, "Global\\ntvdmex_host_single");
-        gle  = GetLastError();
-        if (once && gle == ERROR_ALREADY_EXISTS) {
-            DWORD w = WaitForSingleObject(once, 200);   /* brief: a live host never yields it */
-            if (w == WAIT_TIMEOUT) {
-                char sb[176], *sq = sb;
-                sq = zput(sq, "REFUSED: another ntvdmhost is LIVE (owns the single-instance "
-                              "mutex) -- this instance is exiting\r\n");
-                log_append(LOG_PATH, sb, sq);
-                return 0;
+    /* ── #211: MORE THAN ONE HOST AT A TIME. (s81) ───────────────────────────────
+         Stock XP runs one ntvdm.exe per DOS window, and so do we now. The mutex below
+         was a one-host-only guard (s63); it is now a CLAIM ON AN INSTANCE NUMBER. The
+         first host takes instance 1 under the original name and changes nothing --
+         same log, same debug\out\, so the rig harness is untouched. A host started
+         while it runs takes the lowest free number N and writes to debug\out\N\.
+       ► What the old guard protected is covered elsewhere now: the keyboard hook and
+         the cursor clip are held only while a window has captured the mouse (and only
+         one can), and a closed window's process is terminated, so the half-dead host
+         that "basically crashed Windows" no longer outlives its window.
+       ⚠ The acquire rule is unchanged, per name: TRY to take it. A live host never
+         yields its mutex (the wait times out -> next number); a dead one's is released
+         or ABANDONED (-> we take that number). */
+    {   int n; char nm[48];
+        for (n = 1; n <= 16 && !g_once_mutex; ++n) {
+            HANDLE once; DWORD gle, w = WAIT_OBJECT_0;
+            char *q = zput(nm, "Global\\ntvdmex_host_single");
+            if (n > 1) { *q++ = '_'; q = zdec(q, (unsigned)n); }
+            /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
+                 it first; CreateMutexA does not clear it on success. (The first cut of
+                 the guard read CreateDirectoryA's ERROR_ALREADY_EXISTS and refused.) */
+            SetLastError(0);
+            once = CreateMutexA(NULL, TRUE, nm);
+            gle  = GetLastError();
+            if (!once) continue;
+            if (gle == ERROR_ALREADY_EXISTS) {
+                w = WaitForSingleObject(once, 200);   /* brief: a live host never yields it */
+                if (w == WAIT_TIMEOUT) { CloseHandle(once); continue; }
             }
-            /* WAIT_OBJECT_0 / WAIT_ABANDONED: the previous holder is gone -- we now own
-               it, so carry on as the sole host. */
-            { char sb[176], *sq = sb;
-              sq = zput(sq, "single-instance: prior holder was ");
-              sq = zput(sq, w == WAIT_ABANDONED ? "ABANDONED (zombie thread died)"
-                                                : "released");
-              sq = zput(sq, " -- taking ownership and running\r\n");
-              log_append(LOG_PATH, sb, sq); }
+            g_once_mutex = once;
+            if (n > 1) {
+                char *o = zput(g_out_sub, "debug\\out\\");
+                o = zdec(o, (unsigned)n); zput(o, "\\");
+                CreateDirectoryA(NTVDMEX_OUT, NULL);
+            }
+            g_instance = n; g_instance_abandoned = (w == WAIT_ABANDONED);   /* reported at STAGE0 */
         }
-        g_once_mutex = once; }
+        if (!g_once_mutex) {
+            static const char msg[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
+            log_append(LOG_PATH, msg, msg + sizeof(msg) - 1);
+            return 0;
+        } }
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
@@ -24217,6 +24538,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_exec_prio = prio;
       if (prio == 1) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
       else if (prio >= 2) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+      g_exec_prio_fg = GetThreadPriority(GetCurrentThread());
+      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                      &g_hexec, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: bg_prio_tick */
     }
     if (g_qi_bits) {
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
@@ -24784,6 +25108,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              BOP 54 sub 01, so only it can be handed a program
            - its 8.3 path and arguments fit a DOS command line
            - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
+    /* #153: File > Open Recent lists every program this host was started with. */
+    if (nread && !g_wow_launch && progpath[0]) mru_add(progpath);
     if (nread && !g_wow_launch
         && GetFileAttributesA(SHELL_PATH) == INVALID_FILE_ATTRIBUTES
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
@@ -26329,6 +26655,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    {   /* #211. After the last truncating write, for the same reason as #144 below. */
+        char ib[200], *iq = zput(ib, "STAGE2: instance "); iq = zdec(iq, (unsigned)g_instance);
+        if (g_instance > 1) { iq = zput(iq, " (another NTVDMEX was running) -> output in "); iq = zput(iq, g_out_sub); }
+        if (g_instance_abandoned) iq = zput(iq, " -- prior holder ABANDONED (zombie thread died)");
+        iq = zput(iq, " (#211)\r\n");
+        log_append(LOG_PATH, ib, iq); }
     /* #144. HERE, not with the other STAGE0 lines: this is the last truncating write
        (an append before it is wiped -- the first cut of this was), and the ~7 KB table
        would overflow the 8 KB preamble buffer. Every file override has been read. */
