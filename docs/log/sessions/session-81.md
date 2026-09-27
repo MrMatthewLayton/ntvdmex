@@ -219,3 +219,6 @@ removed + GH issues**.
 
 ### Still the user's
 Mario side-scroll jitter (needs a stock comparison), install-from-zip, 6.22's COMMAND.COM.
+- **Follow-up (user):** after `/P` the prompt was `C>`. A `/P` shell builds a fresh environment
+  and asks NTVDM for the rest via BOP 54 sub 0F; we answered "none". Implemented the two-call
+  protocol (`1ab02af`, host `ab108d55`); the prompt is the full path again.
