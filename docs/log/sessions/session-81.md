@@ -302,3 +302,23 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
 - Rig (`runs/s81_settings/`): with `cfg\dosver.txt`=5.0 the DOS rows read `6/22 [registry]
   OVERRIDDEN by cfg\dosver.txt -> 5/0`. The rig's stored KeyboardLayout is **United Kingdom**,
   a row the host never reads.
+
+## Part 8 — INT 15h AH=C0h and AH=87h (#54)
+
+- **Probe first:** `tools/dostest/p_int15.asm` — C0h status + table, C1h, 86h, and an 87h round
+  trip through an XMS block it allocates and LOCKS for its address (the oracles' low extended
+  memory may be SMARTDRV's; the probe never picks an address itself). Before: we failed every
+  contract row. All three oracles agreed on them.
+- **C0h:** table at `DOS_CTAB_SEG:DOS_SYSCONF_OFF` = `08 00 FC 01 00 60 40 00 00 00`. Model
+  triple from PCem's AMI 486 (the period machine); feature bits only where OUR machine does it —
+  no INT 09h→INT 15h AH=4Fh intercept (the AMI sets that bit; we don't do it), no EBDA.
+- **87h:** our extended memory is not at fixed addresses (an EMB is a host-heap buffer), so a
+  guest's GDT base is RESOLVED (`src/dos/dos_extmem.h`): below the HMA top → guest memory;
+  inside an allocated EMB → that block; otherwise up to 16 MB → a private 15 MB buffer backing
+  what AH=88h already claims; anything else → AH=02 CF=1. Never a write into host memory.
+  `extmem_test.c` (18 checks) pins the refusals.
+- After: every contract row AGREES; the table row and C1h are recorded in `oracle-rules.json`
+  (they describe the machine). PM INT 15h still refuses C0h — deliberately, see the comment
+  there (a Win16 driver branches on the model byte; needs its own Win16-gated change).
+- Guards: Skyroads `n8=0 max_ms=6`; Doom's INT 15h traffic identical to the s81 baseline
+  (DOS/4GW's own BFxx probes only); Win16 Notepad opens and closes; battery 1,726/0.

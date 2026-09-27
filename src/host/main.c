@@ -101,6 +101,7 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
 #include "dos_xms.h"
+#include "dos_extmem.h"      /* GH #54: INT 15h AH=87h address resolution */
 #include "dos_ems.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
@@ -7325,6 +7326,52 @@ static void i33_reset_state(void)
      See g_exec_mach. The UI only raises g_close_req; the exec thread takes it at the
      top of its loop (V86) or of the PM loop, where the guest is stopped and no BOP is
      half-answered -- the same boundary every injected IRQ uses. */
+/* ── INT 15h AH=87h: MOVE EXTENDED MEMORY BLOCK. (GH #54) ──────────────────────────
+     ES:SI -> the caller's GDT, CX = words (at most 8000h). Every address goes through
+     extmem_resolve -- see dos_extmem.h for why a guest's linear address above the HMA
+     is NOT something we may simply write to. Returns the AH status: 00 done, 02 (the
+     BIOS's "exception interrupt error") for anything unresolvable. memmove, because a
+     caller may overlap source and destination and a real BIOS copies forwards through
+     a descriptor pair that does not care. */
+static uint8_t *g_extmem_raw;                  /* AH=88h's 15 MB, allocated on first use */
+static DWORD    g_i15_87_n, g_i15_87_refused;
+static unsigned int15_move_block(volatile BYTE *tib)
+{
+    DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+    DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, n = cx * 2u;
+    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)((es << 4) + si);
+    uint32_t src, dst;
+    uint8_t *ps, *pd;
+    unsigned rc = 0;
+    if (cx == 0) return 0;                      /* nothing to move: done */
+    if (cx > 0x8000u) { rc = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
+    src = extmem_desc_base(gdt + 0x10);
+    dst = extmem_desc_base(gdt + 0x18);
+    if (!g_extmem_raw && (extmem_classify(&g_xms, src, n) == EXTMEM_RAW
+                          || extmem_classify(&g_xms, dst, n) == EXTMEM_RAW))
+        g_extmem_raw = (uint8_t *)VirtualAlloc(NULL, EXTMEM_RAW_LEN,
+                                               MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    ps = extmem_resolve(&g_xms, 0, g_extmem_raw, src, n);
+    pd = extmem_resolve(&g_xms, 0, g_extmem_raw, dst, n);
+    if (!ps || !pd) { rc = 0x02; goto out; }
+    MoveMemory(pd, ps, n);
+out:
+    ++g_i15_87_n;
+    if (rc) ++g_i15_87_refused;
+    if (g_i15_87_n <= 8 || rc) {                /* the first few, and every refusal */
+        static DWORD said_refused = 0;
+        if (!rc || ++said_refused <= 16) {
+            char b[160], *q = b;
+            q = zput(q, "  INT15 AH=87h move 0x"); q = zhex(q, n);
+            q = zput(q, " bytes src=0x"); q = zhex(q, gdt ? extmem_desc_base(gdt + 0x10) : 0);
+            q = zput(q, " dst=0x");       q = zhex(q, gdt ? extmem_desc_base(gdt + 0x18) : 0);
+            q = zput(q, rc ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
+            log_append(LOG_PATH, b, q);
+        }
+    }
+    return rc;
+}
+
 static void video_trap_sync(void);             /* fwd */
 static void exec_mach_save(int d)
 {
@@ -20328,7 +20375,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              down the path a real PC/AT without the call takes; a fabricated
                              table sends it down a path chosen by a number we made up.
                              If a later run shows a driver needs the table, build it from the
-                             oracle, not from memory. */
+                             oracle, not from memory.
+                           ⚠ s81 (#54): THE V86 ARM NOW ANSWERS C0h, from the oracle, so the
+                             two modes DISAGREE here, knowingly. Answering in PM means handing
+                             back a SELECTOR for DOS_CTAB_SEG:DOS_SYSCONF_OFF and sending that
+                             Win16 driver down its "model FC" path, which nothing has tested --
+                             a change to do deliberately with the Win16 shelf re-run, not in
+                             passing. Likewise 87h stays V86-only. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
                               VDM_SET16(tib, VTIB_EAX, 0x3C00);
@@ -25219,7 +25272,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            left there -- and this is exactly the region where a stale pointer had
            krnl386 writing into our own handler code. Cheap to be certain.
          ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
-      for (k = 0; k < 192; ++k) ct[DOS_INT2F_TBL_A + k] = 0; }
+      for (k = 0; k < 192; ++k) ct[DOS_INT2F_TBL_A + k] = 0;
+      /* ── INT 15h AH=C0h: THE SYSTEM CONFIGURATION TABLE. (GH #54) ──────────────
+           Measured (tools/dostest/p_int15.asm): PCem's real AMI 486 says FC 01 00
+           70 00; SeaBIOS FC 00 01 74 40; dosbox-x FC 00 01 70 40. The model triple
+           is the AMI's -- the period machine. The FEATURE BITS ARE NOT COPIED from
+           anyone: each one is a claim about THIS machine, and a claim a guest can
+           act on, so only the true ones are set.
+             f1 bit 6  second 8259 present ............ yes (vdd_pic)
+             f1 bit 5  real-time clock present ........ yes (vdd_cmos)
+             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... NO -- our keyboard path does
+                       not call the intercept; the AMI sets it because its BIOS does
+             f1 bit 2  EBDA allocated ................. NO -- AH=C1h answers CF=1,
+                       as it does on the AMI and on dosbox-x
+             f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
+      {   static const BYTE sysconf[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
+                                            0x60, 0x40, 0x00, 0x00, 0x00 };
+          for (k = 0; k < sizeof sysconf; ++k) ct[DOS_SYSCONF_OFF + k] = sysconf[k]; } }
     /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
        left zero -- see the handler for why a null stub beats a plausible-looking
        one. Only fields with a caller that demonstrably reads them are filled:
@@ -26725,9 +26794,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                         BCF_SET();
                     }
-                } else if (ah15 == 0xC0) {         /* get system config table */
-                    BSETAX(0x8600); BCF_SET();     /* not provided -> unsupported */
-                    g_bios_unimpl[0x15] = 1;
+                } else if (ah15 == 0xC0) {         /* get system config table (#54) */
+                    VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
+                    VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
+                    BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));   /* AH=0 */
+                    BCF_CLR();
+                } else if (ah15 == 0x87) {         /* move extended memory block (#54) */
+                    BSETAX((WORD)((int15_move_block(tib) << 8)
+                                  | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                    /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 */
+                    if ((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF) { BCF_SET(); *pflg &= (WORD)~0x40; }
+                    else                                      { BCF_CLR(); *pflg |= 0x40; }
                 } else {
                     /* ► LOG BEFORE BSETAX, NOT AFTER. The first cut printed AX *after*
                          this arm had already overwritten AH with 0x86, so the log said

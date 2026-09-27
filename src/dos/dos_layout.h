@@ -269,6 +269,11 @@
 #define DOS_INT2F_TBL_C   0x0560   /* 64 bytes: DL=8                         */
 /* ...ending at 0x5A0, well inside the block, which runs to 0x6F0 (linear 0xFF0,
    the next MCB header). */
+/* ── GH #54: INT 15h AH=C0h's SYSTEM CONFIGURATION TABLE, 10 bytes. ──────────────
+   Size word 8, model FC / submodel 01 / revision 00 (an AT-class machine, which is
+   what PCem's real AMI 486 BIOS reports), then five feature bytes that DESCRIBE THIS
+   MACHINE -- see dos_sysconf_table() in main.c for what each bit claims and why. */
+#define DOS_SYSCONF_OFF   0x05A0
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

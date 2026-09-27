@@ -1523,5 +1523,27 @@
   ],
   "recorded": "2026-09-23",
   "why": "A SERIAL MOUSE, NOT A CHIP DIFFERENCE -- AND THE PROBE CAUSED IT. PCem alone reports LSR bit 0 (Data Ready) set at idle, 61h against 60h on the other two hosts and on NTVDMEX. A companion case (uart.idle.pending) drains the byte and names it: 4Dh, which is 'M' -- the byte a MICROSOFT SERIAL MOUSE sends to identify itself when DTR and RTS are asserted. PCem's config is the only one of the three with a mouse_type set. Three independent things agree: the byte is the Microsoft mouse ID, it arrived on COM1 immediately after a DTR/RTS transition, and only on the host configured with a mouse. \u26a0 THE PROBE BROKE ITS OWN STATED RULE TO PRODUCE THIS. Its header says 'no case reads a byte that the outside world would have to supply' -- the whole reason every test is built on loopback, which disconnects the pins. But THE EXIT FROM LOOPBACK RE-APPLIES MCR TO THE REAL PINS, and that transition is itself a stimulus. A probe can isolate the chip while it is INSIDE loopback; it cannot isolate it on the way out. \u21d2 Both rows measure what is plugged into COM1, which is a property of the MACHINE and not of the UART -- the same shape as the CMOS equipment byte. Abstained with the mechanism recorded rather than the value. The other four cases in this probe agree on all four hosts."
+ },
+ {
+  "probe": "int15",
+  "case": "int15.c0.table",
+  "field": "BUF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-27",
+  "why": "The AH=C0h table DESCRIBES THE MACHINE, and its feature bits are promises a guest acts on. Measured: PCem's real AMI 486 BIOS 08 00 FC 01 00 70 00; SeaBIOS (msdos622's QEMU) 08 00 FC 00 01 74 40; dosbox-x 08 00 FC 00 01 70 40. Ours is 08 00 FC 01 00 60 40: the model triple is the AMI's (the period machine), and each feature bit is set only if OUR machine does it -- second 8259 and RTC yes; INT 09h calling INT 15h AH=4Fh NO (the AMI and dosbox-x set bit 4 because their BIOSes do; ours does not, GH #54); EBDA NO (AH=C1h answers CF=1); INT 16h AH=09h yes (vdd_input). The contract rows (c0.status, c0.size_ok) are compared normally. A DEFECT would be this row changing without the code it describes changing -- e.g. adding the 4Fh intercept must set bit 4."
+ },
+ {
+  "probe": "int15",
+  "case": "int15.c1.status",
+  "field": "CF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-27",
+  "why": "Whether an Extended BIOS Data Area exists is a property of the BIOS. SeaBIOS allocates one (CF=0); the period AMI 486 (PCem) and dosbox-x do not (CF=1), and neither do we -- consistent with our AH=C0h table's feature-1 bit 2 being clear. PCem is the period machine, so its answer and dosbox-x's stand."
  }
 ]
