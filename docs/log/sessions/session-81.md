@@ -322,3 +322,20 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
   there (a Win16 driver branches on the model byte; needs its own Win16-gated change).
 - Guards: Skyroads `n8=0 max_ms=6`; Doom's INT 15h traffic identical to the s81 baseline
   (DOS/4GW's own BFxx probes only); Win16 Notepad opens and closes; battery 1,726/0.
+
+## Part 9 — INT 21h sub-functions (#165)
+
+- **Probe first:** `tools/dostest/p_subfn.asm`. 6.22 and PCem (both genuine Microsoft kernels)
+  agreed on every row; we mismatched 22 fields.
+- **Real gaps, now implemented:** Ctrl-Break is STATE (`3301` used to accept a value and drop
+  it; `3302` swap returns the old one); `6520h/21h/22h` capitalise through the oracle-dumped
+  CP437 table (`dos_upcase437`), `6523h` yes/no; set-country to the current country succeeds,
+  every other set/get fails **AX=1** (was 2) — DOS without COUNTRY.SYS.
+- **Not gaps, relabelled:** `33h` unknown AL → AL=FF (was CF=1); `4302h`, `5804h`, `6508h`
+  already answered AX=1 CF=1 exactly as DOS does — they no longer count as UNIMPLEMENTED.
+- ⚠ `dos_int21_init` sets fields one by one on a STACK local — a new field is garbage unless
+  added there. `break_on` was, until checked; the probe could not see it (it sets before reading).
+- After: `p_subfn`, `p_ctry`, `p_misc`, `p_unimp` all clean; 3307 recorded (dosbox-x abstains).
+  Guards: XP shell runs/closes Skyroads and answers `ver`; Skyroads `n8=0`; Notepad; battery.
+- Left in #165: `4B05h` (set execution state) and `6901h` (set serial) — neither probed, on
+  purpose (one changes DOS's loader state, the other writes the oracle's boot sector).

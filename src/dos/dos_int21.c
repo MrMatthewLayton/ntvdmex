@@ -381,6 +381,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->child_rc = 0;
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
+    m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
+                               function sets fields one by one -- nothing zeroes it */
     m->vdrive = -1;         /* the current drive is the process current directory's */
     m->psp_seg = DOS_PSP_SEG;
     m->exec_pending = 0;
@@ -1512,8 +1514,8 @@ int dos_int21(dos_machine_t *m)
             else { SETAX(2); ERRCF(); }
         } else {
             tp = zput(tp, "  INT21 AH=43 AL=0x"); tp = zhexb(tp, al43);
-            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
-            m->unimpl21[0x43 >> 3] |= (uint8_t)(1u << (0x43 & 7));
+            /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.4302). */
+            tp = zput(tp, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x45 || ah == 0x46) {      /* dup / dup2 */
@@ -1771,10 +1773,31 @@ int dos_int21(dos_machine_t *m)
             d[1] = (BYTE)(off & 0xFF);        d[2] = (BYTE)(off >> 8);
             d[3] = (BYTE)(DOS_CTAB_SEG & 0xFF); d[4] = (BYTE)(DOS_CTAB_SEG >> 8);
             SETAX(0x01B5); OKCF();
+        } else if (al65 >= 0x20 && al65 <= 0x22) {
+            /* ── CAPITALISE: a character (DL), CX bytes at DS:DX, or ASCIIZ at DS:DX.
+                 (GH #165) Through the SAME uppercase table AL=02 hands out (dumped
+                 from 6.22), so a program that capitalises through DOS and one that
+                 reads the table agree. Measured: 'a'->'A', 81h->9Ah, digits kept. */
+            if (al65 == 0x20) {
+                SET16(R_DX, (R_DX & 0xFF00) | dos_upcase437((uint8_t)(R_DX & 0xFF)));
+            } else {
+                volatile BYTE *s = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+                uint32_t k, n = (al65 == 0x21) ? (uint32_t)(R_CX & 0xFFFF) : 0x10000u;
+                for (k = 0; k < n; ++k) {
+                    if (al65 == 0x22 && s[k] == 0) break;
+                    s[k] = dos_upcase437(s[k]);
+                }
+            }
+            OKCF();
+        } else if (al65 == 0x23) {
+            /* YES/NO for the country: AX = 0 no, 1 yes, 2 neither. Country 1 only,
+               like everything else here. Measured: 'y'->1, 'N'->0, 'q'->2. */
+            uint8_t c = dos_upcase437((uint8_t)(R_DX & 0xFF));
+            SETAX(c == 'Y' ? 1 : c == 'N' ? 0 : 2); OKCF();
         } else {
             tp = zput(tp, "  INT21 AH=65 AL=0x"); tp = zhex(tp, al65);
-            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
-            m->unimpl21[0x65 >> 3] |= (uint8_t)(1u << (0x65 & 7));
+            /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.6508). */
+            tp = zput(tp, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x69) {                    /* get/set volume serial number */
@@ -1925,9 +1948,17 @@ int dos_int21(dos_machine_t *m)
         uint16_t want = (al38 == 0xFF) ? (uint16_t)(R_BX & 0xFFFF)
                                        : (uint16_t)(al38 ? al38 : 1);
         if ((R_DX & 0xFFFF) == 0xFFFF) {        /* DX=FFFF selects SET, not GET */
-            tp = zput(tp, "  INT21 AH=38 SET country UNIMPLEMENTED\r\n");
-            m->unimpl21[0x38 >> 3] |= (uint8_t)(1u << (0x38 & 7));
-            SETAX(2); ERRCF();
+            /* ── MEASURED, 6.22 AND PCem, NO COUNTRY.SYS (p_subfn): setting the
+                 CURRENT country succeeds (AX=1 CF=0); any other fails AX=1 CF=1,
+                 because the data for it would come from COUNTRY.SYS and none was
+                 loaded. We are that machine: country 1 and nothing else. (GH #165) */
+            SETAX(1);
+            if (want == 1) OKCF();
+            else {
+                tp = zput(tp, "  INT21 AH=38 SET country 0x"); tp = zhex(tp, want);
+                tp = zput(tp, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
+                ERRCF();
+            }
         } else if (want == 1) {                 /* USA -- the only block we have */
             volatile BYTE *b = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
             int k;
@@ -1941,10 +1972,11 @@ int dos_int21(dos_machine_t *m)
             /* We only have measured data for country 1. Inventing a block for
                another country would be exactly the from-memory guess the
                programme forbids, so say so rather than fabricate one. */
+            /* ...and 6.22 without COUNTRY.SYS answers exactly this: AX=1 CF=1
+               (p_subfn int21.382C.get). It was AX=2. */
             tp = zput(tp, "  INT21 AH=38 country 0x"); tp = zhex(tp, want);
-            tp = zput(tp, " UNIMPLEMENTED (only country 1 measured)\r\n");
-            m->unimpl21[0x38 >> 3] |= (uint8_t)(1u << (0x38 & 7));
-            SETAX(2); ERRCF();
+            tp = zput(tp, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
+            SETAX(1); ERRCF();
         }
     } else if (ah == 0x58) {                    /* get/set memory allocation strategy */
         uint8_t al58 = (uint8_t)(R_AX & 0xFF);
@@ -1976,8 +2008,8 @@ int dos_int21(dos_machine_t *m)
         }
         else {
             tp = zput(tp, "  INT21 AH=58 AL=0x"); tp = zhex(tp, al58);
-            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
-            m->unimpl21[0x58 >> 3] |= (uint8_t)(1u << (0x58 & 7));
+            /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.5804). */
+            tp = zput(tp, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x52) {                    /* get list of lists -> ES:BX */
@@ -2154,8 +2186,18 @@ int dos_int21(dos_machine_t *m)
         OKCF();
     } else if (ah == 0x33) {                    /* get/set Ctrl-Break, get true version */
         uint8_t al33 = (uint8_t)(R_AX & 0xFF);
-        if (al33 == 0x00) { SET16(R_DX, 0); OKCF(); }          /* get: break off  */
-        else if (al33 == 0x01) { OKCF(); }                     /* set: accepted   */
+        /* ── THE FLAG IS STATE, NOT A CONSTANT. (GH #165) ──────────────────────
+             Get used to answer "off" and set accepted a value and dropped it, so a
+             program that turned checking on read back off. Measured, 6.22 and PCem
+             (tools/dostest/p_subfn.asm): 3301 DL=1 then 3300 -> DL=1; 3302 swaps
+             and returns the OLD state in DL. DH is left alone -- 6.22 does. */
+        if (al33 == 0x00) { SET16(R_DX, (R_DX & 0xFF00) | m->break_on); OKCF(); }
+        else if (al33 == 0x01) { m->break_on = (uint8_t)((R_DX & 0xFF) ? 1 : 0); OKCF(); }
+        else if (al33 == 0x02) {
+            uint8_t old = m->break_on;
+            m->break_on = (uint8_t)((R_DX & 0xFF) ? 1 : 0);
+            SET16(R_DX, (R_DX & 0xFF00) | old); OKCF();
+        }
         else if (al33 == 0x05) { SET16(R_DX, 3); OKCF(); }     /* boot drive = C: */
         else if (al33 == 0x06) {                               /* get TRUE version */
             /* BL=major BH=minor DL=revision DH=flags.  DH bit 3 = DOS in ROM,
@@ -2166,11 +2208,12 @@ int dos_int21(dos_machine_t *m)
             SET16(R_BX, (uint16_t)((m->ver_minor << 8) | m->ver_major));
             SET16(R_DX, 0x0000);
             OKCF();
-        } else {                                               /* unknown subfn   */
+        } else {                                               /* not a 6.22 subfn */
+            /* Not a gap: 6.22 and PCem both answer AL=FFh (p_subfn int21.3307) and
+               leave the carry alone, so we do exactly that. */
             tp = zput(tp, "  INT21 AH=33 AL=0x"); tp = zhex(tp, al33);
-            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
-            m->unimpl21[0x33 >> 3] |= (uint8_t)(1u << (0x33 & 7));
-            ERRCF();
+            tp = zput(tp, " not a 6.22 subfunction -> AL=FF (matches DOS)\r\n");
+            SETAX((R_AX & 0xFF00) | 0xFF);
         }
     } else if (ah == 0x2A) {                    /* get date: CX=yr DH=mon DL=day AL=dow */
         SYSTEMTIME t; GetLocalTime(&t);

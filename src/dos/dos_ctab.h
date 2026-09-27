@@ -32,6 +32,16 @@ static const uint8_t dos_tab_upper[130] = {
     0xFE, 0xFF
 };
 
+/* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
+   Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
+   agree by construction. */
+static inline uint8_t dos_upcase437(uint8_t c)
+{
+    if (c >= 'a' && c <= 'z') return (uint8_t)(c - 0x20);
+    if (c >= 0x80) return dos_tab_upper[2 + (c - 0x80)];
+    return c;
+}
+
 /* AL=04 filename uppercase (same data as AL=02 on 6.22) */
 static const uint8_t dos_tab_fnupper[130] = {
     0x80, 0x00, 0x80, 0x9A, 0x45, 0x41, 0x8E, 0x41, 0x8F, 0x80, 0x45, 0x45, 0x45, 0x49, 0x49, 0x49,

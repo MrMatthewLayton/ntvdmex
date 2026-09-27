@@ -1545,5 +1545,15 @@
   ],
   "recorded": "2026-09-27",
   "why": "Whether an Extended BIOS Data Area exists is a property of the BIOS. SeaBIOS allocates one (CF=0); the period AMI 486 (PCem) and dosbox-x do not (CF=1), and neither do we -- consistent with our AH=C0h table's feature-1 bit 2 being clear. PCem is the period machine, so its answer and dosbox-x's stand."
+ },
+ {
+  "probe": "subfn",
+  "case": "int21.3307",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-27",
+  "why": "AH=33h AL=07h is not an MS-DOS 6.22 sub-function (DOS 7 later used it for the Ctrl-P/PRN toggle). Both genuine Microsoft kernels (msdos622, PCem) answer AL=FFh, the documented reply to an unknown AH=33h sub-function; dosbox-x leaves AL unchanged (07h) -- an answer about its own DOS, not 6.22's. The genuine kernels are definitive."
  }
 ]

@@ -29,6 +29,7 @@ typedef struct {
     uint8_t  ver_major, ver_minor;  /* reported DOS version -- GH #28, default 6.22 */
     uint8_t  alloc_strat;      /* AH=58h allocation strategy (0 = first fit)       */
     uint8_t  umb_link;         /* AH=58h UMB link state (0 = not linked)           */
+    uint8_t  break_on;         /* AH=33h extended Ctrl-Break checking (BREAK=)     */
     uint16_t sysvars_seg, sysvars_off;  /* AH=52h list of lists, planted by the host */
     HANDLE   find_h[8];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
     uint16_t last_err;         /* AH=59h extended error -- last failing call's AX   */
