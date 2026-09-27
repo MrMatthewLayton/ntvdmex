@@ -1,7 +1,7 @@
 @echo off
-rem pbtree.bat [x y] -- #161 Paintbrush's window layout, and optionally one click.
+rem pbtree.bat [x y] -- #161 Paintbrush's window layout, and optionally one click at CLIENT x y.
 rem Launches PBRUSH, records every child window's position (rigshot tree) and a shot,
-rem then -- given a screen x y -- clicks there once and records the tree and a shot
+rem then -- given a client x y -- clicks there once and records the tree and a shot
 rem again, so "did the click reach the toolbox or the canvas" is read off the log.
 rem Report: debug\out\pbtree.txt (+ pbtree_*.bmp, pbtree_host.log). Closes Paintbrush.
 setlocal
@@ -26,7 +26,7 @@ ping -n 18 127.0.0.1 >nul
 "%R%" tree "Paintbrush - (Untitled)"
 "%R%" shot "%OUT%\pbtree_0.bmp"
 if "%2"=="" goto done
-"%R%" click %1 %2
+"%R%" wclick "Paintbrush - (Untitled)" %1 %2
 ping -n 3 127.0.0.1 >nul
 "%R%" shot "%OUT%\pbtree_1.bmp"
 :done

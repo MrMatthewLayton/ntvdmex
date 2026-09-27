@@ -5343,7 +5343,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          A window we have no record of is genuinely not a window of the guest's,
          so that answers FALSE for both -- which is also the right answer for a
          handle it has already destroyed. */
-    case WOWUSER_ISWINDOW:
+    /* ⛔ #161: `case WOWUSER_ISWINDOW:` USED TO SIT HERE, and s53 inserted the
+         ArrangeIconicWindows case between it and its body -- so every IsWindow was
+         answered by ArrangeIconicWindows (0 for a non-minimised window). Paint's
+         WM_SIZE handler re-lays out only `if (IsWindow(canvas))` (pbrush seg3:0x1138),
+         so its canvas kept the whole client, on top of the toolbox: clicks on the
+         tools drew on the canvas and resizing moved nothing. The label now sits on
+         the IsWindowVisible case below, which was always written for both ids. */
     /* ── ★★ TASKMAN: ARRANGE THE ICONS, AND SWITCH TO A TASK. ─────────────── */
     case WOWUSER_ARRANGEICONICWINDOWS: {
         WORD hwnd = wow32_argw(f, AIW_ARG_HWND);
@@ -6661,6 +6667,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    case WOWUSER_ISWINDOW:
     case WOWUSER_ISWINDOWVISIBLE: {
         int  wantvis = (f->id == WOWUSER_ISWINDOWVISIBLE);
         WORD hwnd = wow32_argw(f, IW_ARG_HWND);

@@ -591,6 +591,29 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* `wclick "<caption>" x y` -- a click at a CLIENT coordinate of that window. A
+       Win16 frame opens wherever the cascade puts it, so a screen coordinate that
+       hit the toolbox on one run hits the canvas on the next (#161). */
+    if (seq(verb, "wclick")) {
+        char m[400], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        POINT pt;
+        if (!w) { p = sput(p, "wclick: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        pt.x = satoi(arg2); pt.y = satoi(arg3);
+        ClientToScreen(w, &pt);
+        SetForegroundWindow(w);
+        Sleep(80);
+        SetCursorPos(pt.x, pt.y);
+        Sleep(80);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(60);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        p = sput(p, "wclick: client "); p = sput(p, arg2); p = sput(p, ",");
+        p = sput(p, arg3); p = sput(p, " of "); sput(p, arg1);
+        logline(m);
+        return 0;
+    }
+
     /* ★ `drag x1 y1 x2 y2` -- press, MOVE IN STEPS, release. A paint program
          draws on the moves BETWEEN the press and the release, so a click verb
          cannot test drawing at all: it produces a down and an up at one point
