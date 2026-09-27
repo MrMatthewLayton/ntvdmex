@@ -72,6 +72,7 @@ typedef enum {
 /* ── THE STRING SETTINGS, kept separate because REG_SZ is a different call. ───── */
 typedef enum {
     SET_STR_DRIVEC = 0, SET_STR_FLOPPYA, SET_STR_CDROM, SET_STR_SOUNDFONT,
+    SET_STR_SHELL,
     SET_STR_COUNT
 } set_str_id;
 
@@ -245,6 +246,9 @@ static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
 { "FloppyAImage", IDC_S_FLOPPYA,   "" },
 { "CdRomImage",   IDC_S_CDROM,     "" },
 { "SoundFontPath",IDC_S_SOUNDFONT, "" },
+/* #203: the COMMAND.COM the DOS prompt runs. Empty = Windows XP's own. The file is the
+   user's to supply (a 6.22 copy is Microsoft's); cfg\shell.txt still outranks it. */
+{ "DosPrompt",    IDC_S_SHELL,     "" },
 };
 
 /* ── WHERE A VALUE CAME FROM. (GH #144) ─────────────────────────────────────────

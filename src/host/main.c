@@ -9998,6 +9998,7 @@ static void settings_note_override(int id, const char *by, DWORD v)
 {
     g_set_ovr[id] = by; g_set_ovr_v[id] = v;
 }
+static const char *g_shell_ovr;               /* #203: cfg\shell.txt beat DosPrompt */
 
 /* ⚠ THE ROWS settings_apply() AND ITS NEIGHBOURS ACTUALLY READ. A row not in this
      list is stored and shown in the dialog and changes nothing (GH #136), and the log
@@ -10043,7 +10044,11 @@ static void settings_log_sources(void)
         q = zput(q, "  "); q = zput(q, SET_STR_DEFS[i].reg); q = zput(q, " = \"");
         q = zput(q, g_set.s[i]); q = zput(q, "\" [");
         q = zput(q, SRC[g_set.src_s[i] < 3 ? g_set.src_s[i] : 0]); q = zput(q, "]");
-        q = zput(q, i == SET_STR_FLOPPYA ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+        if (i == SET_STR_SHELL && g_shell_ovr) {
+            q = zput(q, " OVERRIDDEN by "); q = zput(q, g_shell_ovr);
+        }
+        q = zput(q, (i == SET_STR_FLOPPYA || i == SET_STR_SHELL)
+                    ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
     }
     log_append(LOG_PATH, b, q);
 }
@@ -10440,6 +10445,35 @@ static void settings_fill_combos(void)
         SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)VERS[i]);
 }
 
+/* #203: the DOS prompt's two radios, and the path box + Browse only live under "Another". */
+static void settings_shell_radios(int own)
+{
+    HWND xp = settings_ctl(IDC_S_SHELL_XP), ow = settings_ctl(IDC_S_SHELL_OWN);
+    HWND ed = settings_ctl(IDC_S_SHELL),    br = settings_ctl(IDC_S_SHELL_BROWSE);
+    if (xp) SendMessageA(xp, BM_SETCHECK, own ? BST_UNCHECKED : BST_CHECKED, 0);
+    if (ow) SendMessageA(ow, BM_SETCHECK, own ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (ed) EnableWindow(ed, own);
+    if (br) EnableWindow(br, own);
+}
+
+static void settings_shell_browse(HWND page)
+{
+    char file[MAX_PATH]; OPENFILENAMEA of; int i;
+    HWND ed = settings_ctl(IDC_S_SHELL);
+    file[0] = 0;
+    if (ed) GetWindowTextA(ed, file, sizeof file);
+    for (i = 0; i < (int)sizeof of; ++i) ((char *)&of)[i] = 0;
+    of.lStructSize = sizeof of;
+    of.hwndOwner   = GetParent(page);
+    of.lpstrFilter = "COMMAND.COM\0COMMAND.COM\0DOS programs (*.com;*.exe)\0*.com;*.exe\0"
+                     "All files (*.*)\0*.*\0";
+    of.lpstrFile   = file;
+    of.nMaxFile    = sizeof file;
+    of.lpstrTitle  = "Choose the DOS prompt's COMMAND.COM";
+    of.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameA(&of) && ed) SetWindowTextA(ed, file);
+}
+
 static void settings_to_dialog(const ntvdmex_settings *s)
 {
     char t[NTVDMEX_PATH_MAX]; int i;
@@ -10470,6 +10504,7 @@ static void settings_to_dialog(const ntvdmex_settings *s)
         HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
         if (c) SetWindowTextA(c, s->s[i]);
     }
+    settings_shell_radios(s->s[SET_STR_SHELL][0] != 0);
     /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
          command.com but reporting 6.22, is that right?") The box holds the SETTING; a
          session can be running a different, forced number, and the dialog said nothing. */
@@ -10529,6 +10564,10 @@ static void settings_from_dialog(ntvdmex_settings *n)
         GetWindowTextA(c, t, NTVDMEX_PATH_MAX);
         settings_strcpy(n->s[i], t, NTVDMEX_PATH_MAX);
     }
+    /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
+    {   HWND xp = settings_ctl(IDC_S_SHELL_XP);
+        if (xp && SendMessageA(xp, BM_GETCHECK, 0, 0) == BST_CHECKED) n->s[SET_STR_SHELL][0] = 0;
+    }
 }
 
 /* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
@@ -10580,6 +10619,13 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
         if (g_etdt) g_etdt(dlg, 0x00000006);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
         settings_fill_cpuinfo(dlg);            /* no-op on pages without the static */
         return TRUE;
+    }
+    if (msg == WM_COMMAND && HIWORD(wp) == BN_CLICKED) {   /* #203, the General page */
+        switch (LOWORD(wp)) {
+        case IDC_S_SHELL_XP:     settings_shell_radios(0); return TRUE;
+        case IDC_S_SHELL_OWN:    settings_shell_radios(1); return TRUE;
+        case IDC_S_SHELL_BROWSE: settings_shell_browse(dlg); return TRUE;
+        }
     }
     return FALSE;
 }
@@ -25104,14 +25150,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
              image under COMMAND.COM just says "requires Microsoft Windows")
            - this is not a WOW launch, and the program is not itself a COMMAND.COM
-           - the shell would be XP's own (no cfg\shell.txt): only that shell asks
+           - the shell would be XP's own (no cfg\shell.txt, no Settings choice -- #203): only that shell asks
              BOP 54 sub 01, so only it can be handed a program
            - its 8.3 path and arguments fit a DOS command line
            - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
+    /* ── #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
+         (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
+         the harness is never overridden by whatever was last picked in the dialog. The
+         #208 routing below and the shell load after it both read this one answer; they
+         used to test the file separately, which a registry setting would have split. */
+    char shell_cfg[512]; const char *shell_src = 0;
+    shell_cfg[0] = 0;
+    {   HANDLE hc = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (hc != INVALID_HANDLE_VALUE) {
+            DWORD cn = 0; int sn;
+            ReadFile(hc, shell_cfg, sizeof(shell_cfg) - 1, &cn, NULL); CloseHandle(hc);
+            shell_cfg[cn < sizeof(shell_cfg) ? cn : sizeof(shell_cfg) - 1] = 0;
+            /* Trim the newline the file almost certainly ends with, and any spaces --
+               the same trap target.txt's reader already documents. */
+            for (sn = 0; shell_cfg[sn]; ++sn) ;
+            while (sn > 0 && (shell_cfg[sn-1] == '\r' || shell_cfg[sn-1] == '\n'
+                              || shell_cfg[sn-1] == ' ' || shell_cfg[sn-1] == '\t'))
+                shell_cfg[--sn] = 0;
+            if (sn) {
+                shell_src = "cfg\\shell.txt";
+                if (g_set.s[SET_STR_SHELL][0]) g_shell_ovr = "cfg\\shell.txt";
+            }
+        }
+        if (!shell_cfg[0] && g_set.s[SET_STR_SHELL][0]) {
+            lstrcpynA(shell_cfg, g_set.s[SET_STR_SHELL], sizeof shell_cfg);
+            shell_src = "Settings > General > DOS prompt";
+        }
+    }
     /* #153: File > Open Recent lists every program this host was started with. */
     if (nread && !g_wow_launch && progpath[0]) mru_add(progpath);
-    if (nread && !g_wow_launch
-        && GetFileAttributesA(SHELL_PATH) == INVALID_FILE_ATTRIBUTES
+    if (nread && !g_wow_launch && !shell_cfg[0]
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         int pl = lstrlenA(progpath), is_cmd = 0, is_newexe = 0;
         char sp[300]; DWORD sl;
@@ -25140,26 +25214,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     if (!nread) {
-        char shell[512]; int sn = 0; HANDLE hs = INVALID_HANDLE_VALUE;
+        char shell[512]; HANDLE hs = INVALID_HANDLE_VALUE;
         const char *why = 0;
-        { HANDLE hc = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                  NULL, OPEN_EXISTING, 0, NULL);
-          if (hc != INVALID_HANDLE_VALUE) {
-              DWORD cn = 0;
-              ReadFile(hc, shell, sizeof(shell) - 1, &cn, NULL); CloseHandle(hc);
-              shell[cn < sizeof(shell) ? cn : sizeof(shell) - 1] = 0;
-              /* Trim the newline the file almost certainly ends with, and any spaces --
-                 the same trap target.txt's reader already documents. */
-              for (sn = 0; shell[sn]; ++sn) ;
-              while (sn > 0 && (shell[sn-1] == '\r' || shell[sn-1] == '\n'
-                                || shell[sn-1] == ' ' || shell[sn-1] == '\t')) shell[--sn] = 0;
-              if (sn) {
-                  hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                   OPEN_EXISTING, 0, NULL);
-                  why = (hs != INVALID_HANDLE_VALUE) ? "cfg\\shell.txt"
-                                                     : "cfg\\shell.txt NAMES A FILE THAT WILL NOT OPEN";
-              }
-          } }
+        static char whybuf[96];
+        if (shell_cfg[0]) {
+            lstrcpynA(shell, shell_cfg, sizeof shell);
+            hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
+                             OPEN_EXISTING, 0, NULL);
+            why = shell_src;
+            if (hs == INVALID_HANDLE_VALUE) {
+                zput(zput(whybuf, shell_src), " NAMES A FILE THAT WILL NOT OPEN");
+                why = whybuf;
+            } else {
+                /* ⛔ A Windows program is not a DOS shell. The Browse filter allows *.exe
+                     (a DOS shell can be one), so a user can pick cmd.exe; loaded as a DOS
+                     guest a PE image just runs its stub or worse. Refuse it and fall back. */
+                BYTE hd[0x44]; DWORD hn = 0;
+                ReadFile(hs, hd, sizeof hd, &hn, NULL);
+                if (hn == sizeof hd && hd[0] == 'M' && hd[1] == 'Z') {
+                    DWORD lf = *(const DWORD *)(hd + 0x3C); BYTE sg[2]; DWORD gn = 0;
+                    if (lf >= 0x40 && SetFilePointer(hs, (LONG)lf, NULL, FILE_BEGIN) == lf
+                        && ReadFile(hs, sg, 2, &gn, NULL) && gn == 2
+                        && ((sg[0] == 'N' && sg[1] == 'E') || (sg[0] == 'P' && sg[1] == 'E'))) {
+                        CloseHandle(hs); hs = INVALID_HANDLE_VALUE;
+                        zput(zput(whybuf, shell_src), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
+                        why = whybuf;
+                    }
+                }
+                if (hs != INVALID_HANDLE_VALUE) SetFilePointer(hs, 0, NULL, FILE_BEGIN);
+            }
+        }
         if (hs == INVALID_HANDLE_VALUE) {
             zput(shell, "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM");
             hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,

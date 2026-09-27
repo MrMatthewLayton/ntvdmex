@@ -50,6 +50,7 @@ IDI_MAINICON ICON "MAINICON.ico"
 #define DS_CONTROL         0x0400L
 #define BS_AUTOCHECKBOX    0x00000003L
 #define BS_GROUPBOX        0x00000007L
+#define BS_AUTORADIOBUTTON 0x00000009L
 #define BS_DEFPUSHBUTTON   0x00000001L
 #define ES_AUTOHSCROLL     0x0080L
 #define ES_NUMBER          0x2000L
@@ -98,6 +99,18 @@ BEGIN
     LTEXT           "This session is using:", -1, 14, 66, 150, 8
     RTEXT           "", IDC_S_DOSVER_NOW, 214, 66, 64, 8
     LTEXT           "Same as the setting above.", IDC_S_DOSVER_WHY, 22, 80, 258, 38
+
+    /* #203: which COMMAND.COM the prompt runs. The path box IS the setting (empty =
+       XP's own); the radios only show and set that, so they are not table rows. */
+    GROUPBOX        "DOS prompt", -1, 4, 128, 284, 52
+    CONTROL         "&Windows XP's own COMMAND.COM", IDC_S_SHELL_XP, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 140, 200, 10
+    CONTROL         "&Another:", IDC_S_SHELL_OWN, "Button",
+                    BS_AUTORADIOBUTTON, 14, 156, 44, 10
+    EDITTEXT        IDC_S_SHELL, 60, 154, 164, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "&Browse...", IDC_S_SHELL_BROWSE, 228, 154, 50, 14, WS_TABSTOP
+    LTEXT           "For example MS-DOS 6.22's. Used by the next prompt that opens.",
+                    -1, 22, 170, 258, 8
 END
 
 /* ── PAGE: PROCESSOR ─────────────────────────────────────────────────────────────
