@@ -360,3 +360,24 @@ persisted locally."* Everything above that reads as open/owed/next is now an iss
 - Guards: full parity sweep — no new mismatch (p_2f55, p_int2f, p_dpmins identical on the
   previous build; the other six are the recorded ones); ZAR (EXECs DOS4GW) and Doom DPMI traffic
   as baseline; Skyroads `n8=0`; Win16 Notepad and Calculator; XP shell; battery.
+
+## Part 11 — the user's by-hand round (`sweep.txt`, 17:00)
+
+- **The shell hung after Doom's SETUP** (flashing cursor). Reproduced with SETUP alone. SETUP
+  closes its handle 1; OUR HANDLE TABLE WAS ONE TABLE FOR EVERY PROCESS, so it closed the
+  SHELL's stdout, and XP's COMMAND.COM spun printing "Invalid handle" (read out of its own
+  file, offset 0xA74) to a handle that could print nothing. Fix: DOS's rule, done where the
+  table lives (`dos_handles_push/pop`, `dos_handle_release`) — EXEC saves the parent's table,
+  a child's close/dup2 of a Win32 handle a parent holds only unbinds it, terminate closes the
+  child's leftovers (not a TSR's) and restores the parent's. p_redir/exec/file/fcb/psp/err clean.
+- **`mem` → "Bad command or file name"**: the /P shell's PATH was `C:\`. Sub 0F now passes the
+  Windows PATH in 8.3, capped at 250 chars; XP's MEM.EXE runs by name.
+- **Close Program on Win16** was greyed by design; the user's rule is that it ends the program
+  AND NTVDMEX (no shell under a Win16 program). Now so (`w16cp.bat`: Notepad gone, host gone).
+- **Mouse stays captured after a game quits**: the grab was latched per process. Every return
+  to a parent now releases it and clears the latch, so the next program can grab again.
+- Not reproduced: "white shows faint blue" after Doom — the rig's text after quitting Doom is
+  grey. Asked the user for a screenshot.
+- Deferred to issues: Close Program on a DOS program started from Windows should land at a
+  shell (needs launching through COMMAND.COM as stock does); multiple NTVDMEX instances.
+- ⚠ controld reads 255 bytes of command: long key scripts go in cfg\keys.txt (shell2/3.bat).

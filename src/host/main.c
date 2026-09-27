@@ -2180,6 +2180,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     }
 
     exec_mach_save(d);                              /* #152: what a forced close restores */
+    dos_handles_push(m);                            /* s81: the child works on a copy */
     ++g_exec_depth;
     m->psp_seg = child;
     m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
@@ -3859,6 +3860,7 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
      EXEC simply never reported.
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
+static void mouse_child_exited(void);          /* fwd: see g_ms_want_release */
 static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
 {
     char *p = *pp;
@@ -3869,6 +3871,10 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         int d = --g_exec_depth;
         volatile WORD *pfl2;
         m->child_rc = (WORD)(m->exit_code & 0xFF);
+        /* s81: the parent's handle table back, the child's leftover files closed (not
+           a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
+        dos_handles_pop(m, m->tsr_pending);
+        mouse_child_exited();          /* s81: the shell does not own the mouse */
         if (m->tsr_pending) {
             /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
                  The block is RESIZED, not freed, and the vectors are
@@ -7191,6 +7197,19 @@ static volatile LONG g_captured = 0;
      latch every one of those polls would drag the pointer straight back in. */
 static volatile LONG g_ms_want_capture = 0;   /* guest used the mouse; UI: please grab */
 static volatile LONG g_ms_autocap_done = 0;   /* we have grabbed once; never again     */
+/* ── ★ A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) ──────
+     The grab above is latched per PROCESS, so after a game quit to the prompt the
+     pointer stayed captured over a shell that has no use for it -- and the next game
+     could never be auto-captured again. On every return to a parent the exec thread
+     clears the request and the latch and asks the UI thread (the owner of ClipCursor)
+     to let go. */
+static volatile LONG g_ms_want_release = 0;
+static void mouse_child_exited(void)
+{
+    InterlockedExchange(&g_ms_want_capture, 0);
+    InterlockedExchange(&g_ms_autocap_done, 0);
+    InterlockedExchange(&g_ms_want_release, 1);
+}
 /* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
    and we did not" are different outcomes and a headless run must be able to tell
    them apart. want=1 fired=0 means the request was raised and the window was not in
@@ -8974,11 +8993,14 @@ static void menu_check(HWND h, UINT id, int on)
      costs five EnableMenuItem calls on a user action.
    ⚠ NOT the scaffold-stub rule (unimplemented items stay enabled) -- see the note by
      IDM_EDIT_MARK. In text mode these are enabled exactly as before. */
-/* #152: is there a program to close? Greyed at the shell's own prompt, in a Win16
-   VDM, and once the run is over. */
+/* #152: is there a program to close? Greyed at the shell's own prompt and once the
+   run is over. In a Win16 VDM it is always there -- the user's rule (s81): Close
+   Program on a Win16 program ends it AND NTVDMEX, since there is no shell under it. */
 static int close_prog_available(void)
 {
-    if (g_wow_launch || !g_running || g_wound_down || g_dpmi_done) return 0;
+    if (!g_running || g_wound_down) return 0;
+    if (g_wow_launch) return 1;
+    if (g_dpmi_done) return 0;
     return g_exec_depth > 0 || !g_top_is_shell;
 }
 
@@ -10572,6 +10594,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              whatever the user is actually doing, because a DOS program in another
              window polled its mouse, is exactly the behaviour that makes capture
              feel like something being done TO you. */
+        if (InterlockedExchange(&g_ms_want_release, 0) && g_captured)
+            input_capture_set(h, 0);      /* the program that owned it has exited */
         if (g_ms_want_capture && !g_ms_autocap_done && !g_captured
             && GetForegroundWindow() == h) {
             InterlockedExchange(&g_ms_autocap_done, 1);
@@ -10885,6 +10909,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see close_prog_now */
             if (!close_prog_available()) return 0;     /* greyed; belt and braces */
+            if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
             if (g_captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
             InterlockedExchange(&g_close_req, 1);
             return 0;
@@ -21979,7 +22004,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         if (ah == 0x3E) {                          /* close: BX=handle */
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                             int was = (h < DOS_MAX_FILES && m.fh[h]) ? 1 : 0;
-                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
+                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) dos_handle_release(&m, h);   /* s81: a parent may hold it */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             /* Silent until session 37, which needed to know whether a handle
                                was still open when the NEXT open of the same file failed --
@@ -29603,6 +29628,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     while (i0 < 900 && !(e0[i0] == 0 && e0[i0 + 1] == 0)) {
                         DWORD st0 = i0;
                         while (e0[i0] && i0 < 900) ++i0;
+                        /* ── PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
+                             or file name") We handed the shell `PATH=C:\`, so nothing in
+                             SYSTEM32 -- MEM, EDIT, DEBUG, every XP DOS tool -- could be run by
+                             name. Stock passes the Win32 environment; this passes its PATH,
+                             each entry shortened (a DOS program cannot open a long name) and
+                             the whole kept under 250 characters, dropping entries past that
+                             rather than cutting one in half. */
+                        if ((e0[st0] | 0x20) == 'p' && (e0[st0 + 1] | 0x20) == 'a' &&
+                            (e0[st0 + 2] | 0x20) == 't' && (e0[st0 + 3] | 0x20) == 'h' &&
+                            e0[st0 + 4] == '=') {
+                            char wp[2048], sh[MAX_PATH]; DWORD wn, start = o0, n0 = 0;
+                            char *q0 = wp, *e;
+                            wn = GetEnvironmentVariableA("PATH", wp, sizeof wp);
+                            o0 = (DWORD)(zput(envsnap + o0, "PATH=") - envsnap);
+                            if (wn && wn < sizeof wp) {
+                                while (*q0) {
+                                    DWORD sl;
+                                    e = q0; while (*e && *e != ';') ++e;
+                                    if (*e) *e++ = 0; else e = q0 + lstrlenA(q0);
+                                    sl = *q0 ? GetShortPathNameA(q0, sh, sizeof sh) : 0;
+                                    if (sl && sl < sizeof sh && (o0 - start) + sl + 1 < 250) {
+                                        if (n0++) envsnap[o0++] = ';';
+                                        o0 = (DWORD)(zput(envsnap + o0, sh) - envsnap);
+                                    }
+                                    q0 = e;
+                                }
+                            }
+                            if (!n0) o0 = (DWORD)(zput(envsnap + o0, "C:\\") - envsnap);
+                        } else
                         if ((e0[st0] | 0x20) == 'c' && e0[st0 + 7] == '=' &&
                             (e0[st0 + 1] | 0x20) == 'o' && (e0[st0 + 2] | 0x20) == 'm') {
                             o0 = (DWORD)(zput(envsnap + o0, "COMSPEC=") - envsnap);

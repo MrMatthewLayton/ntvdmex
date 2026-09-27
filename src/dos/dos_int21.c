@@ -381,6 +381,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->child_rc = 0;
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
+    m->hdepth = 0;          /* no EXEC in progress: nothing saved */
     m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
                                function sets fields one by one -- nothing zeroes it */
     m->vdrive = -1;         /* the current drive is the process current directory's */
@@ -415,6 +416,60 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
 
 /* See the header. The comment at AH=30h has promised this function since GH #28;
    COMMAND.COM is what finally needed it. */
+/* ── PER-PROCESS HANDLE TABLES. (s81) See dos_machine_t::hsave for why. ────────── */
+/* Does any SAVED (i.e. parent's) table still hold this Win32 handle? Then a child
+   closing or overwriting it must not CloseHandle it -- the parent gets it back. */
+static int dos_handle_held_by_parent(const dos_machine_t *m, HANDLE h)
+{
+    int d, i;
+    if (!h) return 0;
+    for (d = 0; d < m->hdepth && d < DOS_HSTACK; ++d)
+        for (i = 0; i < DOS_MAX_FILES; ++i)
+            if (m->hsave[d].fh[i] == h) return 1;
+    return 0;
+}
+
+/* Take a Win32 handle out of the current table: closed for real only if no parent
+   still holds it. Every site that used to CloseHandle(m->fh[x]) comes through here. */
+void dos_handle_release(dos_machine_t *m, unsigned slot)
+{
+    if (slot >= DOS_MAX_FILES || !m->fh[slot]) return;
+    if (!dos_handle_held_by_parent(m, m->fh[slot])) CloseHandle(m->fh[slot]);
+    m->fh[slot] = 0;
+}
+
+void dos_handles_push(dos_machine_t *m)
+{
+    int i;
+    if (m->hdepth >= DOS_HSTACK) { ++m->hdepth; return; }   /* too deep: counted, not saved */
+    for (i = 0; i < DOS_MAX_FILES; ++i) m->hsave[m->hdepth].fh[i] = m->fh[i];
+    m->hsave[m->hdepth].std_open = m->std_open;
+    ++m->hdepth;
+}
+
+void dos_handles_pop(dos_machine_t *m, int tsr)
+{
+    int i, d;
+    if (m->hdepth <= 0) return;
+    d = --m->hdepth;
+    if (d >= DOS_HSTACK) return;                             /* matched an unsaved push */
+    /* What the child still has open and the parent never had: DOS closes those at
+       terminate. Checked against the parent table being restored, and against every
+       older one, so nothing a caller further up holds is touched. A TSR keeps its. */
+    if (!tsr)
+        for (i = 0; i < DOS_MAX_FILES; ++i) {
+            HANDLE h = m->fh[i];
+            int k, dup = 0;
+            if (!h || dos_handle_held_by_parent(m, h)) continue;
+            for (k = 0; k < DOS_MAX_FILES; ++k)
+                if (m->hsave[d].fh[k] == h) { dup = 1; break; }
+            for (k = 0; k < i && !dup; ++k) if (m->fh[k] == h) dup = 1;  /* closed already */
+            if (!dup) CloseHandle(h);
+        }
+    for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = m->hsave[d].fh[i];
+    m->std_open = m->hsave[d].std_open;
+}
+
 void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
 {
     if (!m || !major) return;                   /* major 0 is not a DOS version */
@@ -770,7 +825,7 @@ int dos_int21(dos_machine_t *m)
         DWORD h = R_BX & 0xFFFF;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        if (dos_fh_is_file((void *const *)m->fh, h)) dos_handle_release(m, h);
         else dos_fh_set_device(&m->std_open, h, 0);         /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
@@ -940,7 +995,7 @@ int dos_int21(dos_machine_t *m)
             }
         } else if (ah == 0x10) {                /* close */
             if (f[24] == FCB_MAGIC && f[25] < DOS_MAX_FILES && m->fh[f[25]]) {
-                CloseHandle(m->fh[f[25]]); m->fh[f[25]] = 0; f[24] = 0; FCB_OK();
+                dos_handle_release(m, f[25]); f[24] = 0; FCB_OK();
             } else FCB_FAIL();
         } else if (ah == 0x11 || ah == 0x12) {  /* find first / find next */
             volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
@@ -1561,7 +1616,7 @@ int dos_int21(dos_machine_t *m)
                     tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
                     SETAX(4); ERRCF();
                 }
-                else { if (m->fh[dst]) CloseHandle(m->fh[dst]);
+                else { dos_handle_release(m, dst);
                        m->fh[dst] = nh;                 /* 0 when src is a device */
                        if (!src_dev) dos_fh_set_device(&m->std_open, dst, 0);
                        OKCF(); }

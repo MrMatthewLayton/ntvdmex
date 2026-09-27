@@ -113,6 +113,19 @@ typedef struct {
        duplicate the console into any free slot, which is how a shell saves stdout
        before redirecting -- see DOS_DEV_SLOTS in dos_fh.h. */
     uint32_t std_open;
+    /* ── ★★ EACH PROGRAM HAS ITS OWN HANDLE TABLE ON DOS. OURS IS ONE TABLE. (s81) ──
+         fh[]/std_open are the machine's ONLY handle table, so a child that closed its
+         handle 1 closed the SHELL's stdout: Doom's SETUP does exactly that, and XP's
+         COMMAND.COM came back unable to print its prompt or the "Invalid handle" error
+         about it -- a silent spin the user saw as a flashing cursor. On DOS the child
+         works on a COPY (the PSP's JFT) and its closes are its own.
+       ⇒ EXEC pushes the parent's table here; while a child runs, closing or dup2-ing
+         over a Win32 handle the parent still holds only UNBINDS it; terminate closes
+         whatever the child still has open (as DOS does) and pops the parent's table
+         back. See dos_handles_push/pop. */
+#define DOS_HSTACK 8
+    struct { HANDLE fh[DOS_MAX_FILES]; uint32_t std_open; } hsave[DOS_HSTACK];
+    int      hdepth;
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
        see dos_find_match in dos_int21.c. */
     uint8_t  fcb_tmpl[11];
@@ -120,6 +133,15 @@ typedef struct {
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);
+
+/* Per-process handle tables, DOS-style (see dos_machine_t::hsave). push at EXEC,
+   pop at the child's terminate; `tsr` = the child stays resident, so the files it
+   still holds stay open (DOS does not close a TSR's handles). */
+void dos_handles_push(dos_machine_t *m);
+void dos_handles_pop(dos_machine_t *m, int tsr);
+/* Close DOS handle `slot` in the current table -- for real only if no parent still
+   holds the same Win32 handle. Use instead of CloseHandle(m->fh[slot]). */
+void dos_handle_release(dos_machine_t *m, unsigned slot);
 
 /* Service one INT 21h BOP (function in AH). Returns 1 to continue the guest, 0 to
    terminate (AH=4Ch). Appends a trace via m->tp; writes console output to m->out. */
