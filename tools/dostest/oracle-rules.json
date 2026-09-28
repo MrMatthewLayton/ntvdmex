@@ -1755,5 +1755,45 @@
   ],
   "recorded": "2026-09-28",
   "why": "#175. Mode 5 (hardware-triggered strobe) is started, like mode 1, only by a GATE rising edge, which counter 0 (gate tied high) never sees: by the datasheet no IRQ0. All three emulators answer 1, i.e. they run it as mode 4 on the count write -- PCem inconsistently so, since it answers mode 1 by the reference. None of them is real hardware, so the row is not a contract; tools/dostest/pit_test.c holds the model to the datasheet's 0."
+ },
+ {
+  "probe": "exec4b05",
+  "case": "int21.4B05.set",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "DOSBox-X does not implement INT 21h AX=4B05h (set execution state) and answers CF=1 AX=000B. MS-DOS 6.22 (QEMU) and 6.22 on PCem's genuine AMI BIOS both answer AX=0000 CF=0. An emulator missing the call, not a different DOS. (#165, s84)"
+ },
+ {
+  "probe": "exec4b05",
+  "case": "int21.6901.set",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "DOSBox-X does not implement INT 21h AX=6901h (set volume serial) on its mounted drive and answers CF=1 AX=0005, so the marker never reads back. Real MS-DOS 6.22 (QEMU and PCem) writes it and 6900h reads it back. (#165, s84)"
+ },
+ {
+  "probe": "exec4b05",
+  "case": "int21.6901.readback",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "DOSBox-X does not implement INT 21h AX=6901h (set volume serial) on its mounted drive and answers CF=1 AX=0005, so the marker never reads back. Real MS-DOS 6.22 (QEMU and PCem) writes it and 6900h reads it back. (#165, s84)"
+ },
+ {
+  "probe": "exec4b05",
+  "case": "int21.6901.restore",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "DOSBox-X does not implement INT 21h AX=6901h (set volume serial) on its mounted drive and answers CF=1 AX=0005, so the marker never reads back. Real MS-DOS 6.22 (QEMU and PCem) writes it and 6900h reads it back. (#165, s84)"
  }
 ]

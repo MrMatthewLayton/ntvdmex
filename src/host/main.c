@@ -2249,6 +2249,11 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
         p = zput(p, " stack="); p = zhex(p, img.ss); p = zput(p, ":");
         p = zhex(p, sp01); p = zput(p, " (block KEPT)\r\n");
+        /* #165: AND THE CHILD IS NOW THE CURRENT PROCESS. Measured (p_4b05): after
+           4B01h, AH=62h returns the child's PSP on 6.22, DOSBox-X and PCem alike --
+           which is why a loader puts its own back with AH=50h, and why 4B05h then
+           leaves it alone. We kept the loader's. */
+        m->psp_seg = child;
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;

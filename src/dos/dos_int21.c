@@ -357,6 +357,17 @@ static uint8_t dos_cur_drive(const dos_machine_t *m)
    not re-derive it -- a second copy of the rule would drop `vdrive`. */
 uint8_t dos_int21_cur_drive(const dos_machine_t *m) { return dos_cur_drive(m); }
 
+/* #165: 6901h's serial, label and file-system type, per drive, for this session only
+   (see the 6901h arm). 23 bytes = the 6900h/6901h block from offset 2. */
+static uint8_t g_dos_serial_set[26];
+static uint8_t g_dos_serial_info[26][23];
+/* BL as 69h takes it: 0 = the default drive, 1 = A:, ... -> 0-based, 26 if invalid. */
+static uint8_t dos_serial_drive(const dos_machine_t *m, uint8_t bl)
+{
+    if (bl == 0) return dos_cur_drive(m);
+    return (uint8_t)(bl <= 26 ? bl - 1 : 26);
+}
+
 /* Keep Win32's per-drive current directory in step. GetFullPathNameA("X:") and
    SetCurrentDirectoryA("X:") read the hidden `=X:` environment variable, which
    cmd.exe and the CRT maintain and SetCurrentDirectoryA itself does NOT -- so
@@ -1334,8 +1345,19 @@ int dos_int21(dos_machine_t *m)
             m->exec_mode = 0x03;
             m->exec_pending = 1;
             OKCF();
+        } else if (al4b == 0x05) {
+            /* ── SET EXECUTION STATE (#165). The second half of a loader's own EXEC:
+                 AX=4B01h loaded the program, the loader did its own work, and this
+                 tells DOS control is about to go to it. Measured (p_4b05, 6.22 and
+                 PCem agree): AX=0000 CF=0, and the CURRENT PSP IS NOT CHANGED -- 4B01h
+                 already switched it. DOS uses the block for SETVER's per-program
+                 version; we keep no SETVER table, so there is nothing else to do.
+                 DOSBox-X refuses it (CF=1 AX=000B): an emulator without the call,
+                 not a different DOS. */
+            tp = zput(tp, "  INT21 AX=4B05 set execution state -- accepted\r\n");
+            SETAX(0); OKCF();
         } else {
-            /* AL=02/04/05 are not DOS 6.22 functions we have measured. */
+            /* AL=02/04 are not DOS 6.22 functions we have measured. */
             tp = zput(tp, "  INT21 AH=4B AL=0x"); tp = zhexb(tp, al4b);
             tp = zput(tp, " UNIMPLEMENTED (overlay load)\r\n");
             m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
@@ -1904,7 +1926,11 @@ int dos_int21(dos_machine_t *m)
             int k;
             for (k = 0; k < 64; ++k) label[k] = 0;
             for (k = 0; k < 32; ++k) fstype[k] = 0;
-            if (GetVolumeInformationA(NULL, label, sizeof(label), &serial,
+            uint8_t drv = dos_serial_drive(m, (uint8_t)(R_BX & 0xFF));
+            if (drv < 26 && g_dos_serial_set[drv]) {         /* #165: set this session */
+                for (k = 0; k < 23; ++k) d[2 + k] = g_dos_serial_info[drv][k];
+                OKCF();
+            } else if (GetVolumeInformationA(NULL, label, sizeof(label), &serial,
                                       &maxc, &flags, fstype, sizeof(fstype))) {
                 d[2] = (BYTE)( serial        & 0xFF);
                 d[3] = (BYTE)((serial >> 8)  & 0xFF);
@@ -1914,9 +1940,25 @@ int dos_int21(dos_machine_t *m)
                 for (k = 0; k < 8;  ++k) d[17 + k] = (BYTE)(fstype[k] ? fstype[k] : ' ');
                 OKCF();
             } else { SETAX(0x0F); ERRCF(); }
+        } else if (al69 == 0x01) {
+            /* ── SET SERIAL (#165). Real DOS writes serial, label and file-system type
+                 into the disk's boot record (p_4b05: 6.22 and PCem accept it and 6900h
+                 reads the new serial back; DOSBox-X refuses). Our drives are the host's
+                 own disks, so by the user's decision (2026-09-28) it is SESSION-ONLY:
+                 remembered per drive, answered by 6900h until this VDM ends, and
+                 nothing is written to the host disk. Same 25-byte layout as 6900h. */
+            const volatile BYTE *sb = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+            uint8_t drv = dos_serial_drive(m, (uint8_t)(R_BX & 0xFF));
+            int k;
+            if (drv < 26) {
+                for (k = 0; k < 23; ++k) g_dos_serial_info[drv][k] = sb[2 + k];
+                g_dos_serial_set[drv] = 1;
+                tp = zput(tp, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
+                OKCF();
+            } else { SETAX(0x0F); ERRCF(); }
         } else {
             tp = zput(tp, "  INT21 AH=69 AL=0x"); tp = zhex(tp, al69);
-            tp = zput(tp, " UNIMPLEMENTED (set serial)\r\n");
+            tp = zput(tp, " UNIMPLEMENTED\r\n");
             m->unimpl21[0x69 >> 3] |= (uint8_t)(1u << (0x69 & 7));
             SETAX(1); ERRCF();
         }
