@@ -1676,5 +1676,61 @@
   ],
   "recorded": "2026-09-27",
   "why": "AH=71h is the LONG-FILENAME API. MS-DOS 6.22 predates it and answers as for any undefined function: AL cleared, CF clear (AX=7100h). That reads as SUCCESS to a client written for a DOS that HAS long filenames -- and the stock XP NTVDM does (its LFN API), so XP's own EDIT.COM trusted CF, took 7100h for a file handle and failed with 'Error 6' on EDIT.INI (s81, user report). Until the API is implemented, NTVDMEX gives the documented 'no LFN API here' answer, AX=7100h WITH CF SET, which every LFN-aware program is written to fall back from. AX still agrees with 6.22; only CF differs, deliberately."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.m1.wait.out",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Mode 1 (hardware retriggerable one-shot): the Control Word puts OUT in its initial state, HIGH, and it only goes low on the CLK after a GATE trigger (docs/ref/pit.md mode table; Intel 8254 231164-005). PCem (a real-chip model on a genuine AMI BIOS) answers 0080h with the reference; QEMU and DOSBox-X answer 0, i.e. they drive OUT low as if mode 0. The spec outranks the two omissions."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.m1.gatelow.counting",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. In mode 1 GATE is a TRIGGER, not an enable: once triggered the count runs whatever the gate's level (docs/ref/pit.md). QEMU and PCem keep counting with the gate low, with the reference; DOSBox-X pauses it as it would in mode 0."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.m5.trig.out",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Mode 5 (hardware triggered strobe) is mode 4 started by a GATE edge: OUT stays HIGH while counting and strobes low for ONE clock at terminal count (docs/ref/pit.md). DOSBox-X answers 0080h with the reference; QEMU and PCem answer 0 (OUT low while counting, the mode-1 shape)."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.m1.wait.counting",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Whether the counting element keeps decrementing between a mode-1 Control Word and the first GATE trigger is not something the reference states (the datasheet says only that the count is not LOADED until the trigger). The oracles split 1/0/0 and nothing observable depends on it; the row is kept for the record, not as a contract."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.m5.wait.counting",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Same as pit.m1.wait.counting, for mode 5: the reference is silent on the CE before the trigger; the oracles split 1/0/1. Not a contract."
  }
 ]

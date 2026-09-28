@@ -84,7 +84,9 @@ typedef struct {
     uint64_t gate_elapsed;  /* clocks counted when the gate last went LOW, so a
                                gate that comes back high RESUMES rather than
                                restarts -- which is the difference between a
-                               paused stopwatch and a reset one.                 */
+                               paused stopwatch and a reset one (modes 0 and 4). */
+    uint8_t  trig;          /* #175: modes 1/5 -- a GATE rising edge has started
+                               the count since the Control Word / count write.   */
 } pit_chan;
 
 typedef struct pit_state {

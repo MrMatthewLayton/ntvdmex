@@ -587,6 +587,40 @@ int main(void)
         w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
     }
 
+    /* ---- #175: THE GATE AS A TRIGGER (docs/ref/pit.md §5; p_pit section H). ---- */
+    {   uint32_t w;
+        unsigned a, b;
+        vdd_pit_ch2_gate(&pit, 0);
+        w = 0xB2; vdd_bus_io(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 1  */
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x80; vdd_bus_io(&bus, 0x42, 1, 0, &w);          /* 0x8000            */
+        vdd_pit_add_clocks(&pit, 100);
+        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 1: OUT high until a GATE trigger");
+        vdd_pit_ch2_gate(&pit, 1);                           /* rising edge       */
+        vdd_pit_add_clocks(&pit, 10);
+        CHECK(vdd_pit_ch2_out(&pit) == 0, "mode 1: triggered -- OUT low while counting");
+        a = pit_latched_ch2(&bus);
+        vdd_pit_ch2_gate(&pit, 0);                           /* level low: ignored */
+        vdd_pit_add_clocks(&pit, 50);
+        b = pit_latched_ch2(&bus);
+        CHECK(a - b == 50, "mode 1: the count runs on with GATE low (a trigger, not an enable)");
+        vdd_pit_add_clocks(&pit, 0x8000);
+        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 1: OUT high again at terminal count");
+
+        w = 0xB4; vdd_bus_io(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 2  */
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0xF0; vdd_bus_io(&bus, 0x42, 1, 0, &w);          /* 0xF000            */
+        vdd_pit_ch2_gate(&pit, 1);
+        vdd_pit_add_clocks(&pit, 0x4000);
+        a = pit_latched_ch2(&bus);
+        vdd_pit_ch2_gate(&pit, 0);
+        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 2: GATE low forces OUT high");
+        vdd_pit_ch2_gate(&pit, 1);                           /* rising: reload    */
+        b = pit_latched_ch2(&bus);
+        CHECK(a == 0xB000 && b == 0xF000,
+              "mode 2: a GATE rising edge RELOADS the count (all three oracles agree)");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

@@ -71,7 +71,9 @@ static uint16_t pit_count_value(uint8_t bcd, uint16_t written)
    whatever it had reached. */
 static uint64_t chan_elapsed(const pit_state *st, const pit_chan *c)
 {
-    if (!c->gate) return c->gate_elapsed;
+    /* #175: in modes 1 and 5 the gate is a TRIGGER, not an enable -- once started
+       the count runs whatever the gate's level (docs/ref/pit.md §5, mode table). */
+    if (!c->gate && c->mode != 1 && c->mode != 5) return c->gate_elapsed;
     return (st->total_clocks >= c->load_clocks) ? st->total_clocks - c->load_clocks : 0;
 }
 
@@ -89,15 +91,41 @@ void vdd_pit_ch2_gate(pit_state *st, int on)
 {
     pit_chan *c = &st->c2;
     if (!!on == !!c->gate) return;
+    /* ── #175: WHAT A GATE EDGE MEANS DEPENDS ON THE MODE (docs/ref/pit.md §5).
+         1, 5  a rising edge TRIGGERS: (re)load the count and start; the level is
+               otherwise ignored.
+         2, 3  a falling edge stops the count and forces OUT high; a rising edge
+               RELOADS -- measured on all three oracles (p_pit pit.m2.retrig.reload),
+               where this used to resume.
+         0, 4  the gate is an enable: low pauses, high resumes where it left off. */
+    if (c->mode == 1 || c->mode == 5) {
+        if (on) { c->load_clocks = st->total_clocks; c->trig = 1; }
+        c->gate = (uint8_t)(on ? 1 : 0);
+        return;
+    }
+    if (c->mode == 2 || c->mode == 3) {
+        if (on) { c->load_clocks = st->total_clocks; c->gate = 1; }
+        else    { c->gate_elapsed = chan_elapsed(st, c); c->gate = 0; }
+        return;
+    }
     if (on) { c->load_clocks = st->total_clocks - c->gate_elapsed; c->gate = 1; }
     else    { c->gate_elapsed = chan_elapsed(st, c);               c->gate = 0; }
+}
+
+/* #175: a channel's OUT pin, with the two gate rules the count law cannot see:
+   modes 1/5 hold OUT high until triggered, and modes 2/3 force it high while the
+   gate is low. Everything else is pit_out_pin's function of mode and elapsed. */
+static int chan_out(const pit_state *st, const pit_chan *c)
+{
+    if ((c->mode == 1 || c->mode == 5) && !c->trig) return 1;
+    if ((c->mode == 2 || c->mode == 3) && !c->gate) return 1;
+    return pit_out_pin(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c));
 }
 
 /* Counter 2's OUT pin, as port 61h bit 5 reports it. */
 int vdd_pit_ch2_out(const pit_state *st)
 {
-    const pit_chan *c = &st->c2;
-    return pit_out_pin(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c));
+    return chan_out(st, &st->c2);
 }
 
 /* A count write, lo/hi buffered exactly as counter 0 does it: a HALF-WRITTEN
@@ -114,6 +142,7 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
         c->wr_flip = 0;
     }
     c->reload = pit_count_value(c->bcd, v);   /* BCD in, binary stored */
+    if (c->mode == 1 || c->mode == 5) c->trig = 0;   /* #175: armed, not started */
     c->null_cnt = 0;                 /* the count has reached the CE        */
     c->load_clocks = st->total_clocks;
 }
@@ -141,6 +170,7 @@ static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
         return;
     }
     c->access   = acc;
+    c->trig     = 0;                 /* #175: a new mode waits for its own trigger */
     c->mode_raw = (uint8_t)((val >> 1) & 7);
     c->mode     = (c->mode_raw >= 6) ? (uint8_t)(c->mode_raw - 4) : c->mode_raw;
     c->bcd      = (uint8_t)(val & 1);
@@ -278,10 +308,8 @@ static uint8_t pit_status_of(const pit_state *st, int n)
         const pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
         acc = c->access ? c->access : 3; mode_raw = c->mode_raw; bcd = c->bcd;
         null_cnt = c->null_cnt;
-        R = pit_chan_eff_reload(c);
-        elapsed = (st->total_clocks >= c->load_clocks)
-                ? st->total_clocks - c->load_clocks : 0;
-        out = pit_out_pin(c->mode, R, elapsed);
+        (void)R; (void)elapsed;
+        out = chan_out(st, c);
     }
     return (uint8_t)((out ? 0x80 : 0) | (null_cnt ? 0x40 : 0)
                      | ((acc & 3) << 4) | ((mode_raw & 7) << 1) | (bcd & 1));

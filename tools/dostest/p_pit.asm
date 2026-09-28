@@ -85,6 +85,32 @@ rdback_status:                          ; AL = counter select bit -> AL = status
         pop     dx
         ret
 
+; Two latched counter-2 reads around a short burn -> AX = 1 if they differ.
+ch2_counting:
+        push    si
+        mov     cl, 2
+        call    latch_read
+        mov     si, ax
+        mov     cx, 400h
+.b:     loop    .b
+        mov     cl, 2
+        call    latch_read
+        xor     ax, si
+        mov     ax, 0
+        jz      .s
+        inc     ax
+.s:     pop     si
+        ret
+
+; Counter 2's OUT pin through Read-Back status -> AX = status & 80h.
+ch2_out:
+        mov     al, 8                   ; select counter 2
+        call    rdback_status
+        in      al, 042h
+        and     al, 080h
+        xor     ah, ah
+        ret
+
 start:
         PROBE_BEGIN "pit"
 
@@ -290,6 +316,107 @@ start:
         POISON
         call    probe_capture
         EMIT    "pit.61h.bit5.toggles", "AX"    ; expect 1
+
+; ════════════════════════════════════════════════════════════════════════════
+; H. THE GATE AS A TRIGGER.   Intel 8254 datasheet 231164-005, modes 1, 2, 5 (s82, #175)
+;
+;    Counter 2 is the one counter whose GATE a PC wires to something (61h bit 0).
+;    Modes 1 and 5 do NOT count until a GATE rising edge, then load and count down
+;    regardless of the gate; mode 1 drives OUT low until terminal count, mode 5 only
+;    strobes it at TC. In mode 2 a GATE rising edge RELOADS the count. Each case is a
+;    yes/no a timing difference cannot flip: "did two latched reads differ", "is OUT
+;    (status bit 7) high", "is the count after a re-trigger higher than before it".
+; ════════════════════════════════════════════════════════════════════════════
+        in      al, 061h
+        and     al, 0FCh                ; gate LOW, speaker data off
+        out     061h, al
+
+; -- mode 1, before any trigger
+        mov     al, 0B2h                ; 10 11 001 0: ch2, lo/hi, mode 1, binary
+        call    out43
+        xor     al, al
+        out     042h, al
+        mov     al, 080h
+        out     042h, al                ; count = 0x8000
+        call    ch2_counting            ; AX = 1 if two reads differ
+        POISON
+        call    probe_capture
+        EMIT    "pit.m1.wait.counting", "AX"    ; datasheet: 0 (waits for GATE)
+        call    ch2_out
+        POISON
+        call    probe_capture
+        EMIT    "pit.m1.wait.out", "AX"         ; datasheet: 0080h (OUT high)
+
+; -- mode 1, triggered
+        in      al, 061h
+        or      al, 1                   ; GATE rising edge = trigger
+        out     061h, al
+        call    ch2_counting
+        POISON
+        call    probe_capture
+        EMIT    "pit.m1.trig.counting", "AX"    ; datasheet: 1
+        call    ch2_out
+        POISON
+        call    probe_capture
+        EMIT    "pit.m1.trig.out", "AX"         ; datasheet: 0 (low until TC)
+        in      al, 061h
+        and     al, 0FCh                ; GATE low: mode 1 ignores the level
+        out     061h, al
+        call    ch2_counting
+        POISON
+        call    probe_capture
+        EMIT    "pit.m1.gatelow.counting", "AX" ; datasheet: 1
+
+; -- mode 5, before and after a trigger
+        mov     al, 0BAh                ; 10 11 101 0: ch2, lo/hi, mode 5, binary
+        call    out43
+        xor     al, al
+        out     042h, al
+        mov     al, 080h
+        out     042h, al
+        call    ch2_counting
+        POISON
+        call    probe_capture
+        EMIT    "pit.m5.wait.counting", "AX"    ; datasheet: 0
+        in      al, 061h
+        or      al, 1
+        out     061h, al
+        call    ch2_counting
+        POISON
+        call    probe_capture
+        EMIT    "pit.m5.trig.counting", "AX"    ; datasheet: 1
+        call    ch2_out
+        POISON
+        call    probe_capture
+        EMIT    "pit.m5.trig.out", "AX"         ; datasheet: 0080h (strobe only at TC)
+
+; -- mode 2: a GATE rising edge reloads the count
+        mov     al, 0B4h                ; 10 11 010 0: ch2, lo/hi, mode 2, binary
+        call    out43
+        xor     al, al
+        out     042h, al
+        mov     al, 0F0h
+        out     042h, al                ; count = 0xF000 (~51 ms period)
+        mov     cx, 4000h
+.w8:    loop    .w8                     ; let it run well down
+        mov     cl, 2
+        call    latch_read
+        mov     si, ax                  ; before the re-trigger
+        in      al, 061h
+        and     al, 0FCh
+        out     061h, al                ; GATE low...
+        or      al, 1
+        out     061h, al                ; ...and high: re-trigger
+        mov     cl, 2
+        call    latch_read
+        cmp     ax, si
+        mov     ax, 0
+        jbe     .noreload
+        inc     ax                      ; 1 = higher after = reloaded
+.noreload:
+        POISON
+        call    probe_capture
+        EMIT    "pit.m2.retrig.reload", "AX"    ; datasheet: 1
 
 ; ---- put counter 2 and the speaker back.
         mov     al, 0B6h                ; ch2, lo/hi, mode 3, binary -- the usual state
