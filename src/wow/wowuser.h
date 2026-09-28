@@ -2955,6 +2955,69 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
  * ⚠ CALLED ONLY WHEN THE STUB IS USER'S. The caller checks; this file must never
  *   be reachable from krnl386's id space or the whole point of splitting it is lost.
  */
+/* The guest's DestroyWindow: the real window goes, its child records are released,
+   and the guest is TOLD (WM_DESTROY) -- lifted out of USER 0x35 in s82 so that
+   DefWindowProc's WM_CLOSE (#162) destroys a window the same way. Appends to `note`
+   at *k; returns 0 if there is no such window. */
+static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
+{
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = *kp, i, kids = 0;
+        HWND h32;
+        wu_puts(note, notecap, &k, "DestroyWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW"); *kp = k; return 0; }
+        h32 = w->hwnd32;
+        for (i = 0; i < g_wu_nwin; ++i) {
+            wowuser_win_t *c = &g_wu_win[i];
+            if (c->hwnd && c != w && c->hwnd32 && h32 && IsChild(h32, c->hwnd32)) {
+                c->hwnd = 0; c->hwnd32 = NULL; ++kids;
+            }
+        }
+        /* ── ★★★★★ AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) ──
+             REPORTED BY THE USER: Win16 tray icons "stacking up". ⚠ I called
+             them live hosts rather than ghosts and the user refuted it in one
+             line -- "they all disappear when the mouse hovers over them", which
+             only a DEAD owner's icon does. Measured: 5 icons, 0 processes.
+             The chain is: this missing message left the host ALIVE with nothing
+             to do, the next launch's `taskkill /f` killed it without cleanup, and
+             its icon became a ghost. Fixing this line means no host is left to
+             kill. See the note in main.c's exec-loop tail.
+             A Win16 application ends when its window does: WM_CLOSE ->
+             DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
+             returns 0 -> WinMain returns -> the task exits -> the VDM has
+             nothing left to run. We relayed WM_CLOSE (wowwin.h) and implemented
+             DestroyWindow, and then dropped the middle link: WM_DESTROY was
+             delivered by nothing, anywhere. So the guest destroyed its window
+             and went straight back to GetMessage, where it blocked FOREVER --
+             measured, `WOWMSG: blocked 0x7f23 ms` and climbing, with the window
+             already gone from the desktop.
+           ⚠ ORDER: post BEFORE releasing the record, and KEEP the Win16 handle
+             until the message is dispatched. DispatchMessage resolves the window
+             procedure THROUGH this record (wowuser_findwin), so clearing `hwnd`
+             here -- which is what the note above rightly wants for a dead
+             window -- would make the message we just posted undeliverable. The
+             record is marked `dying` instead and released the moment its
+             WM_DESTROY is dispatched.
+           ⚠ ON REAL WINDOWS WM_DESTROY IS **SENT**, NOT POSTED. Same caveat, and
+             for the same reason, as WM_SIZE and WM_SETFOCUS in wowwin.h: sending
+             it means re-entering the guest from inside a service. Posted, the
+             guest sees it at its next GetMessage, which for this message is
+             precisely where its message loop already is. */
+        wowmsg_post(hwnd, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
+        w->dying  = 1;
+        w->hwnd32 = NULL;              /* the real window is going NOW... */
+        if (g_wm_focus == hwnd) g_wm_focus = 0;
+        if (h32) DestroyWindow(h32);
+        wu_puts(note, notecap, &k, " -> destroyed, WM_DESTROY posted to the guest");
+        if (kids) { wu_puts(note, notecap, &k, ", with 0x");
+                    wu_puthex(note, notecap, &k, (DWORD)kids, 2);
+                    wu_puts(note, notecap, &k, " child record(s) released too"); }
+        *kp = k;
+        return 1;
+}
+
+
 static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 {
     if (notecap) note[0] = 0;
@@ -5466,11 +5529,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     }
 
     /* ── ★★ CALC: THE DIALOG HELPERS. ────────────────────────────────────────
-         ⚠ IsDialogMessage DISPATCHES what it handles. That is not a side effect
-           to be avoided -- it is the whole function -- and it lands in our own
-           window procedure, which relays to the guest queue like any other
-           message. The guest skipping TranslateMessage/DispatchMessage when we
-           answer TRUE is exactly the contract. */
+         ⚠ IsDialogMessage DISPATCHES what it handles, into our own window procedure,
+           which relays to the guest queue. For a message the dialog manager GENERATES
+           that is right; for the one the guest just handed us it was a loop (#162) --
+           see g_ww_isdlg in wowwin.h. */
     case WOWUSER_ISDIALOGMESSAGE: {
         WORD hdlg = wow32_argw(f, IDM_ARG_HDLG);
         volatile BYTE *m16 = wow32_argptr(f, IDM_ARG_MSG);
@@ -5493,7 +5555,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         m32.time    = GetTickCount();
         m32.pt.x = 0; m32.pt.y = 0;
         wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, m32.message, 4);
+        /* #162: see g_ww_isdlg in wowwin.h -- a bounce is answered FALSE. */
+        g_ww_isdlg = 1; g_ww_isdlg_bounced = 0;
+        g_ww_isdlg_hwnd = m32.hwnd; g_ww_isdlg_msg = m32.message;
         r = IsDialogMessageA(w->hwnd32, &m32) ? 1 : 0;
+        g_ww_isdlg = 0;
+        if (g_ww_isdlg_bounced) {
+            r = 0;
+            wu_puts(note, notecap, &k, " -> FALSE (would have come straight back to the"
+                                       " guest's queue; its own loop dispatches it)");
+        } else
         wu_puts(note, notecap, &k, r ? " -> TRUE (the dialog took it)" : " -> FALSE");
         wow32_setret(f, (DWORD)r);
         return 1;
@@ -6102,6 +6173,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, msg, 4);
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
                                 wow32_setret(f, 0); return 1; }
+        /* #162: a DIALOG's WM_CLOSE is a Cancel: Win16's DefDlgProc posts
+           WM_COMMAND(IDCANCEL, BN_CLICKED) to the dialog, and the program's own
+           IDCANCEL handling decides what closing means (Charmap: end the program).
+           The real DefWindowProc destroyed the real window behind its back. */
+        if (msg == 0x0010) {
+            HWND cb = GetDlgItem(w->hwnd32, 2 /* IDCANCEL */);
+            WORD c16 = cb ? wowwin_hwnd16(cb) : 0;
+            wowmsg_post(hdlg, 0x0111 /* WM_COMMAND */, 2 /* IDCANCEL */,
+                        (DWORD)c16 | (0u /* BN_CLICKED */ << 16), GetTickCount(), 0, 0);
+            wu_puts(note, notecap, &k, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
+                                       " dialog, as Win16's DefDlgProc does");
+            wow32_setret(f, 0);
+            return 1;
+        }
         r = DefWindowProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
         wu_puts(note, notecap, &k, " -> DefWindowProc (see the note: no dialog"
                                    " keyboard defaults) = 0x");
@@ -7038,61 +7123,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          records are stale the moment this returns. They are cleared here rather
          than left for whoever notices, and the count is logged. */
     case WOWUSER_DESTROYWINDOW: {
-        WORD hwnd = wow32_argw(f, DW_ARG_HWND);
-        wowuser_win_t *w = wowuser_findwin(hwnd);
-        int k = 0, i, kids = 0;
-        HWND h32;
-        wu_puts(note, notecap, &k, "DestroyWindow 0x");
-        wu_puthex(note, notecap, &k, hwnd, 4);
-        if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
-                  wow32_setret(f, 0); return 1; }
-        h32 = w->hwnd32;
-        for (i = 0; i < g_wu_nwin; ++i) {
-            wowuser_win_t *c = &g_wu_win[i];
-            if (c->hwnd && c != w && c->hwnd32 && h32 && IsChild(h32, c->hwnd32)) {
-                c->hwnd = 0; c->hwnd32 = NULL; ++kids;
-            }
-        }
-        /* ── ★★★★★ AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) ──
-             REPORTED BY THE USER: Win16 tray icons "stacking up". ⚠ I called
-             them live hosts rather than ghosts and the user refuted it in one
-             line -- "they all disappear when the mouse hovers over them", which
-             only a DEAD owner's icon does. Measured: 5 icons, 0 processes.
-             The chain is: this missing message left the host ALIVE with nothing
-             to do, the next launch's `taskkill /f` killed it without cleanup, and
-             its icon became a ghost. Fixing this line means no host is left to
-             kill. See the note in main.c's exec-loop tail.
-             A Win16 application ends when its window does: WM_CLOSE ->
-             DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
-             returns 0 -> WinMain returns -> the task exits -> the VDM has
-             nothing left to run. We relayed WM_CLOSE (wowwin.h) and implemented
-             DestroyWindow, and then dropped the middle link: WM_DESTROY was
-             delivered by nothing, anywhere. So the guest destroyed its window
-             and went straight back to GetMessage, where it blocked FOREVER --
-             measured, `WOWMSG: blocked 0x7f23 ms` and climbing, with the window
-             already gone from the desktop.
-           ⚠ ORDER: post BEFORE releasing the record, and KEEP the Win16 handle
-             until the message is dispatched. DispatchMessage resolves the window
-             procedure THROUGH this record (wowuser_findwin), so clearing `hwnd`
-             here -- which is what the note above rightly wants for a dead
-             window -- would make the message we just posted undeliverable. The
-             record is marked `dying` instead and released the moment its
-             WM_DESTROY is dispatched.
-           ⚠ ON REAL WINDOWS WM_DESTROY IS **SENT**, NOT POSTED. Same caveat, and
-             for the same reason, as WM_SIZE and WM_SETFOCUS in wowwin.h: sending
-             it means re-entering the guest from inside a service. Posted, the
-             guest sees it at its next GetMessage, which for this message is
-             precisely where its message loop already is. */
-        wowmsg_post(hwnd, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
-        w->dying  = 1;
-        w->hwnd32 = NULL;              /* the real window is going NOW... */
-        if (g_wm_focus == hwnd) g_wm_focus = 0;
-        if (h32) DestroyWindow(h32);
-        wu_puts(note, notecap, &k, " -> destroyed, WM_DESTROY posted to the guest");
-        if (kids) { wu_puts(note, notecap, &k, ", with 0x");
-                    wu_puthex(note, notecap, &k, (DWORD)kids, 2);
-                    wu_puts(note, notecap, &k, " child record(s) released too"); }
-        wow32_setret(f, 1);
+        int k = 0;
+        wow32_setret(f, (DWORD)wowuser_destroy(wow32_argw(f, DW_ARG_HWND), note, notecap, &k));
         return 1;
     }
 
@@ -7506,6 +7538,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ")");
         if (!h) {
             wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* #162: WM_CLOSE's default is DestroyWindow -- OURS, which tells the guest
+           (WM_DESTROY -> PostQuitMessage -> the task ends). The real DefWindowProc
+           destroyed only the real window: WinMine vanished from the screen and its
+           task waited in GetMessage forever, host and all. */
+        if (msg == 0x0010) {
+            wu_puts(note, notecap, &k, " -> WM_CLOSE: ");
+            wowuser_destroy(hwnd, note, notecap, &k);
             wow32_setret(f, 0);
             return 1;
         }

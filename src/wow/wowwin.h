@@ -177,11 +177,31 @@ static int wowwin_paint_take(WORD h16, RECT *out, int *erase)
    ⚠ SCREEN, NOT CLIENT. lParam already carries the client point; `pt` is the
      other one, and filling it from lParam would be a plausible-looking value
      that fails the same test. */
+/* ── #162: A MESSAGE THE GUEST JUST TOOK MUST NOT BE HANDED BACK TO IT. ─────────────
+     USER's IsDialogMessage (wowuser.h) lets the REAL dialog manager see the guest's
+     message, and that manager DISPATCHES what it does not use -- to the real window,
+     i.e. to this procedure, which relays it to the guest queue. For the very message
+     the guest had just taken out of that queue, that is a loop: Charmap's main window
+     is a dialog, and its WM_PAINT/WM_SETFOCUS pair went round ~4,000 times a
+     millisecond, as did the X button's WM_CLOSE (~99,000 in ten seconds), and the
+     program never saw any of them. While IsDialogMessage runs, the SAME message for the
+     SAME window is recorded as bounced and not relayed; IsDialogMessage then answers
+     FALSE, so the guest's loop dispatches it to its own 16-bit procedure, which is where
+     it belongs. What the dialog manager GENERATES (Enter -> WM_COMMAND for the default
+     button, focus moving to a real control) still flows as before. */
+static int  g_ww_isdlg, g_ww_isdlg_bounced;
+static HWND g_ww_isdlg_hwnd;
+static UINT g_ww_isdlg_msg;
+
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
     POINT wwpt;
     WORD  ptx, pty;
+    if (g_ww_isdlg && h == g_ww_isdlg_hwnd && msg == g_ww_isdlg_msg) {
+        g_ww_isdlg_bounced = 1;
+        return 0;
+    }
     GetCursorPos(&wwpt);
     ptx = (WORD)(short)wwpt.x;
     pty = (WORD)(short)wwpt.y;
