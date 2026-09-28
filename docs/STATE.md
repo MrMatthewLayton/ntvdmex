@@ -7,10 +7,10 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-09-28 (session 83)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `74610909` (= `da49025`, the
-  #213 ZAR sound fix). The user confirmed most of round 5 (`runs/s83/sweep.txt`); #213 is owed by ear.
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `22822729` (= `2234471`, #175 on
+  top of the #213 ZAR sound fix). The user confirmed most of round 5 (`runs/s83/sweep.txt`); #213 is owed by ear.
 - **Resume:** [`log/sessions/session-83.md`](log/sessions/session-83.md), then #202
-  (#175 one-shot IRQ0, #162 synchronous delivery, #183 cheaper waits — all decided by the user).
+  (#212 `sti` does not stick — `p_pit0.com` reproduces it; then #162, #183).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the

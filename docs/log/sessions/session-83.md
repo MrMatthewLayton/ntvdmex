@@ -29,6 +29,18 @@ Win16 Notepad closes on its X.
 ⚠ **The rollback build `0e5b10e7` is s81 Part 5**, not the end of s81: every s81 change after
 Part 5 (#152, #208, #173, #153, #211, …) was as unconfirmed as s82's.
 
+## #175 — IRQ0 in one-shot modes: `2234471`, bin `22822729`
+Probe first (`tools/dostest/p_pit0.asm`: counter 0 per mode, 220 ms timed by counter 2): all
+three oracles give exactly 1 IRQ0 for modes 0, 4 and a bare mode-0 re-write after TC; modes 1/5
+follow the datasheet (0, gate tied high), with rationales in `oracle-rules.json`. The model now
+raises once per count in 0/4 and never in 1/5; `pit_test` T_IRQ0; STAGE2 `oneshot_loads`.
+A/B against `74610909` (`runs/s83/ab175/ab.sh`): Skyroads, Doom, ZAR and the 16-program shelf are
+unchanged.
+
+⚠ **Found on the way (#212):** on NTVDMEX the probe reads 0 after its first case because an
+explicit `sti` does not stick (captured FL=3293 straight after `sti`; 17 IRQ0s in the whole run,
+every async attempt `why=0x14`). That is a deterministic reproducer for #212 and probably #172.
+
 ## Next
-#213 by ear, then #202's order with the user's decisions: #175 IRQ0 in one-shot modes (A/B),
-#162 synchronous delivery, #183 cheaper waits.
+#213 by ear. Then #212 (`sti` does not stick; `p_pit0.com` reproduces it), which likely
+underlies #172; then #162 synchronous delivery and #183 cheaper waits.
