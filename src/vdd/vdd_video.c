@@ -2229,6 +2229,46 @@ static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x3D4 || port == 0x3B4) { vga_idx_data(&st->crtc_index, w, v, crtc_set_data, st); return; }
     crtc_set_data(st, v);
 }
+/* ── #187: THE VERTICAL-RETRACE INTERRUPT LATCH, Input Status 0 bit 7. ──────────────
+     IBM VGA: CR11 bit 5 = 0 ENABLES the vertical interrupt (active low), bit 4 = 0
+     CLEARS it and holds it clear; with the interrupt enabled and not held, the start of
+     vertical retrace sets the latch, which reads back as 3C2 bit 7. DOSBox-X does this;
+     PCem's IBM VGA never sets the bit (p_vgaext is0.vsync) -- the spec outranks the
+     oracle that leaves it out, so it is built.
+   ⚠ THE LATCH ONLY. The card would also raise IRQ 2 (cascaded to 9), and we do NOT:
+     that line is a jumper left open on most VGA cards, and every BIOS mode set writes
+     CR11 with bit 5 = 0 -- the interrupt nominally ENABLED -- so raising it would fire an
+     unexpected IRQ 9 into every graphics program. The BIOS modes also write bit 4 = 0,
+     so an ordinary program still reads 0x10, as both oracles do.
+   Evaluated lazily at the read, from the same beam clock as the 3DA status bits. */
+static void vint_cr11(video_state *st, uint8_t v)
+{
+    int en = !(v & 0x20), hold_clear = !(v & 0x10);
+    if (hold_clear) { st->vint_pend = 0; st->vint_armed = 0; return; }
+    if (!en)        { st->vint_armed = 0; return; }
+    if (!st->vint_armed) {
+        st->vint_armed = 1;
+        st->vint_arm_t = st->time_us ? st->time_us() : 0;
+    }
+}
+static uint8_t vint_status(video_state *st)
+{
+    uint64_t now, next, vbo;
+    uint32_t F, vt, vd, vb, fno, line;
+    if (st->vint_armed && !st->vint_pend) {
+        if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) {
+            st->vint_pend = 1;                       /* no clock: a retrace has passed */
+        } else {
+            (void)vd; (void)fno; (void)line;
+            vbo  = (uint64_t)vb * F / vt;             /* retrace start within a frame */
+            next = (st->vint_arm_t / F) * F + vbo;    /* this frame's retrace start   */
+            if (next <= st->vint_arm_t) next += F;    /* ...already gone: the next one */
+            if (now >= next) st->vint_pend = 1;
+        }
+    }
+    return st->vint_pend ? 0x80 : 0x00;
+}
+
 static void crtc_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
@@ -2249,6 +2289,7 @@ static void crtc_set_data(void *self, uint32_t v)
        falls into `default:` is exactly the one the inventory needs to hear about. */
     st->crtc_reg[st->crtc_index & 31] = (uint8_t)v;
     st->crtc_w  [st->crtc_index & 31]++;
+    if ((st->crtc_index & 31) == 0x11) vint_cr11(st, (uint8_t)v);   /* #187 */
     switch (st->crtc_index) {
     /* ── THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
          two writes it holds a value the guest never asked for -- half of the old
@@ -2680,7 +2721,9 @@ static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
        ⚠ A CONSTANT IS THE RIGHT SHAPE FOR US even though the real bit is a
          comparator: the sense line reports the monitor, and ours is fixed. What
          was wrong was the value, not the constancy.
-       ⛔ BIT 7 STAYS 0, AND THAT IS A RECORDED GAP, NOT AN OVERSIGHT. p_vgaext's
+       ✅ #187 (s84): BIT 7 IS NOW BUILT -- see vint_cr11. What follows is why it was
+         once left out, kept because the reasoning about the oracles still holds.
+       ⛔ BIT 7 STAYED 0, AND THAT WAS A RECORDED GAP, NOT AN OVERSIGHT. p_vgaext's
          is0.vsync case enables the vertical-retrace interrupt in CR11 and looks:
          dosbox-x sets bit 7 and clears it through CR11 bit 4; PCem's IBM VGA never
          sets it at all. So the oracles split 1-2 AGAINST the feature, the IBM VGA
@@ -2688,7 +2731,7 @@ static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          vertical interrupt is famously unreliable and IBM's own documentation
          steers software away from it. Implementing it would be a guest-visible
          change with no guest to check it against. See docs/inventory/vga.md. */
-    case 0x3C2: *v = 0x10; break;
+    case 0x3C2: *v = 0x10u | vint_status(st); break;   /* bit 7: #187, see vint_cr11 */
     case 0x3C3: *v = st->vga_enable; break;
     case 0x3C6: *v = st->dac_mask;   break;
     case 0x3CA: *v = st->feat_ctrl;  break;   /* Feature Control read  */

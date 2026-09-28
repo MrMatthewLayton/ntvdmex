@@ -545,6 +545,14 @@ spec does describe it, and no DOS guest this project has met uses the VGA vertic
 interrupt. Implementing it would be a guest-visible change with no guest to check it
 against — so it is written down rather than built.
 
+**✅ Built in s84 (#187), the latch only.** The standing rule is that the spec outranks the
+oracles, and the spec describes the bit, so `vdd_video.c` `vint_cr11`/`vint_status` now
+latch it at the first retrace start after CR11 bit 5 = 0 / bit 4 = 1, clear it on bit 4 = 0,
+and read it back as `3C2` bit 7 (`is0.vsync` should now read `0001`, with DOSBox-X). **No
+IRQ 2 is raised**: that line is an open jumper on most cards, and every BIOS mode set writes
+CR11 with bit 5 = 0, so an IRQ would fire into every graphics program. The BIOS modes also
+write bit 4 = 0, so an ordinary program still reads `0x10`. Pinned in `video_test.c`.
+
 **Feature Control cannot be adjudicated by any oracle we have.** Two hosts accept the write
 and return `0x00` regardless; PCem returns `0xFF` to every read, which is an undecoded port
 floating high, not a measurement. We are the only host that implements the read-back the

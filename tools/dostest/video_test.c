@@ -1435,14 +1435,50 @@ int main(void)
          Switch Sense -- measured on PCem's genuine IBM VGA ROM in all twelve
          modes p_vgareg sets, and dosbox-x drives bit 4 too. Pinned here so the
          value has a check of its own rather than living only in a switch arm.
-       ⛔ BIT 7, the CRT interrupt, IS DELIBERATELY 0 and that is a recorded gap:
-         p_vgaext's is0.vsync case enables the vertical-retrace interrupt and
-         looks, and PCem's IBM VGA never sets the bit at all. See vdd_video.c. */
+       ★ BIT 7, the CRT interrupt, reads 0 HERE because the mode's CR11 holds it
+         clear (bit 4 = 0), as every BIOS mode does; with it enabled it latches at
+         retrace -- #187, pinned just below. */
     {
         uint32_t v;
         vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
         CHECK(v == 0x10, "ext: Input Status 0 reads 0x10 -- bit 4 Switch Sense");
         CHECK((v & 0x80) == 0, "ext: ...and bit 7, the CRT interrupt, stays low");
+
+        /* #187: BIT 7 IS THE VERTICAL-RETRACE INTERRUPT LATCH (IBM VGA). CR11 bit 5 = 0
+           enables, bit 4 = 0 clears and holds clear; the first retrace start after it
+           is armed sets it. 70 Hz: F = 14285 us, retrace from line 400 (~12726 us). */
+        {   const uint64_t F = 14285u, T = 2000u * 14285u;
+            uint32_t cr11, w;
+            uint64_t (*old_clock)(void) = vid.time_us;
+            uint32_t old_gh = vid.gh;
+            vid.time_us = fake_clock; vid.gh = 200;
+            w = 0x11; vdd_bus_io(&bus,0x3D4,1,0,&w); vdd_bus_io(&bus,0x3D5,1,1,&cr11);
+            g_fake_us = T + 1000;                                   /* in the picture */
+            w = (cr11 & 0x4F) | 0x10; vdd_bus_io(&bus,0x3D5,1,0,&w);   /* enable, not held */
+            g_fake_us = T + 2000;  vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK((v & 0x80) == 0, "vint: armed in the picture -- no retrace yet, bit 7 low");
+            g_fake_us = T + 13000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK(v == 0x90, "vint: the retrace start sets bit 7 (0x90)");
+            g_fake_us = T + F + 1000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK(v == 0x90, "vint: ...and it stays latched into the next picture");
+            w = cr11 & 0x4F; vdd_bus_io(&bus,0x3D5,1,0,&w);            /* bit 4 = 0: clear */
+            g_fake_us = T + 2*F + 13000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK(v == 0x10, "vint: CR11 bit 4 = 0 clears it and holds it clear");
+            g_fake_us = T + 2*F + 13500;                             /* inside a retrace */
+            w = (cr11 & 0x4F) | 0x10; vdd_bus_io(&bus,0x3D5,1,0,&w);
+            g_fake_us = T + 2*F + 14000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK((v & 0x80) == 0, "vint: re-armed mid-retrace -- that retrace began before it");
+            g_fake_us = T + 3*F + 13000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK(v == 0x90, "vint: ...the next retrace sets it");
+            w = (cr11 & 0x4F) | 0x30; vdd_bus_io(&bus,0x3D5,1,0,&w);   /* bit 5 = 1: disabled */
+            w = cr11 & 0x4F;          vdd_bus_io(&bus,0x3D5,1,0,&w);   /* clear it */
+            w = (cr11 & 0x4F) | 0x30; vdd_bus_io(&bus,0x3D5,1,0,&w);
+            g_fake_us = T + 5*F + 13000; vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+            CHECK(v == 0x10, "vint: disabled (bit 5 = 1), a retrace sets nothing");
+            vdd_bus_io(&bus,0x3D5,1,0,&cr11);                           /* put CR11 back */
+            vid.time_us = old_clock; vid.gh = old_gh;
+            vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+        }
 
         /* Feature Control is storage: write at 3DA, read back at 3CA. NO ORACLE
            CAN ADJUDICATE THIS -- 6.22 and dosbox-x both read 0x00 whatever is

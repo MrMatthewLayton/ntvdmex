@@ -620,6 +620,11 @@ typedef struct video_state {
        real hardware refuses them and we used to accept them. Counted rather than
        silent: an absence in a report means nothing. */
     uint32_t crtc_wp_refused;
+    /* #187: Input Status 0 bit 7, the vertical-retrace interrupt latch. Armed while
+       CR11 bit 5 = 0 (enable, active low) and bit 4 = 1 (not clearing); set by the
+       first retrace start after vint_arm_t; cleared by writing CR11 bit 4 = 0. */
+    uint8_t  vint_armed, vint_pend;
+    uint64_t vint_arm_t;
 } video_state;
 
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
