@@ -26200,10 +26200,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            NTVDM-AWARE SHELL gets the answers that make it a shell; every other guest,
            and every probe, still gets the measured ones. That is narrower than the
            `cfg\int53.txt` knob it replaces, and it cannot affect anything else.
-         ⚠ STILL PROVISIONAL. `tools/dostest/p_int53f.com` asks the same eight questions
-           with nothing redirected; run it against stock and this branch either becomes
-           a measurement or gets corrected. It is marked here so it cannot quietly
-           become folklore. */
+         ⚠ STILL PROVISIONAL, BUT NARROWER (s84, #142). `p_int53f.com` under stock, with
+           and without redirection, answers IDENTICALLY (5305 -> AL=1 both ways), so
+           redirection is NOT the context that flips it. What is left is the caller:
+           a probe is always a CHILD of stock's shell, and only the shell itself can be
+           asked for the AL=0 answer this branch gives it. Kept as the model until
+           that can be measured. It is marked here so it cannot quietly become folklore. */
       if (g_guest_ntaware) {
           g_dos_int53[0x02].ax = 0x5300; g_dos_int53[0x02].cf = 1;   /* top of its main loop */
           /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends

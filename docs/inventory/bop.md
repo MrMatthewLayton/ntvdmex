@@ -831,6 +831,12 @@ through stdout cannot measure anything that depends on stdout.**
 needs no redirection; run it **both ways** against stock and diff, because one run
 cannot tell *"the value is X"* from *"the value is X when redirected"*.
 
+✅ **Measured (s84, #142): redirection is NOT the difference.** Stock, both ways, answers
+all eight identically (`5305 → AX=5301`, `5302 → 5300 CF=0`); only DS differs
+(`runs/s84/stock/`). So the remaining difference is the **caller**: a probe is always a
+child of stock's shell, and the AL=0 answer can only come when the shell itself asks. The
+NTVDM-aware-shell branch in `main.c` stays the model, still marked provisional.
+
 ⇒ Until that is measured, the two values live in **`cfg\int53.txt`** and the built-in
 defaults stay exactly as measured. A run with no file behaves as it did before. **This
 is deliberately not a fix** — the whole reason the earlier `AL=5 -> 0` experiment had to
