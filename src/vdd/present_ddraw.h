@@ -91,6 +91,12 @@ typedef struct present_ddraw {
     int   sel_on, sel_x0, sel_y0, sel_x1, sel_y1;
     int   last_dx, last_dy, last_dw, last_dh, last_sw, last_sh;
     unsigned long hint_until;
+    /* #217: the two Display settings, stored INVERTED so a zeroed presenter is the
+       shipped default (messages shown, picture composed off-screen). The off-screen
+       picture is a memory DC over a DIB section, kept while the client size holds. */
+    int   osd_off, unbuffered;
+    void *mem_dc, *mem_bmp, *mem_old;
+    int   mem_w, mem_h;
 } present_ddraw;
 
 /* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */

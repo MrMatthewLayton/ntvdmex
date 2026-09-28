@@ -111,6 +111,7 @@ static uint32_t snap_px(present_ddraw *pd, int y, int x);   /* fwd: depth-agnost
 static void hint_draw(present_ddraw *pd, HDC hdc, int dx, int dy, int dw)
 {
     SIZE ts; int n = 0, tx, ty = dy + 12;
+    if (pd->osd_off) return;                        /* #217: Show on-screen messages off */
     if (!pd->hint_text || (long)(pd->hint_until - GetTickCount()) <= 0) return;
     while (pd->hint_text[n]) ++n;
     SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
@@ -124,9 +125,37 @@ static void hint_draw(present_ddraw *pd, HDC hdc, int dx, int dy, int dw)
     TextOutA(hdc, tx, ty, pd->hint_text, n);
 }
 
+/* ── #217: THE OFF-SCREEN PICTURE. A memory DC over a DIB section the size of the
+     picture area, recreated only when that size changes. NULL = draw to the window, as
+     before (the setting is off, or GDI could not give us one). */
+static HDC mem_target(present_ddraw *pd, HDC win, int cw, int ch)
+{
+    if (pd->unbuffered) return NULL;
+    if (pd->mem_dc && (pd->mem_w != cw || pd->mem_h != ch)) {
+        SelectObject((HDC)pd->mem_dc, (HGDIOBJ)pd->mem_old);
+        DeleteObject((HGDIOBJ)pd->mem_bmp); DeleteDC((HDC)pd->mem_dc);
+        pd->mem_dc = pd->mem_bmp = pd->mem_old = 0;
+    }
+    if (!pd->mem_dc) {
+        HDC m = CreateCompatibleDC(win);
+        HBITMAP b = m ? CreateCompatibleBitmap(win, cw, ch) : NULL;
+        if (!b) { if (m) DeleteDC(m); return NULL; }
+        pd->mem_old = SelectObject(m, b);
+        pd->mem_dc = m; pd->mem_bmp = b; pd->mem_w = cw; pd->mem_h = ch;
+    }
+    return (HDC)pd->mem_dc;
+}
+static void mem_release(present_ddraw *pd)
+{
+    if (!pd->mem_dc) return;
+    SelectObject((HDC)pd->mem_dc, (HGDIOBJ)pd->mem_old);
+    DeleteObject((HGDIOBJ)pd->mem_bmp); DeleteDC((HDC)pd->mem_dc);
+    pd->mem_dc = pd->mem_bmp = pd->mem_old = 0; pd->mem_w = pd->mem_h = 0;
+}
+
 static void gdi_present(present_ddraw *pd)
 {
-    HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
+    HDC hdc, win, mem; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
@@ -135,14 +164,18 @@ static void gdi_present(present_ddraw *pd)
        does -- it is already ARGB, so it needs no resolving, just no palette. */
     int direct = (pd->snap_bpp == 32);
     int split = !direct && pd->snap_split && sw <= 640 && sh <= 480;
-    hdc = GetDC(pd->hwnd);
-    if (!hdc) return;
+    win = GetDC(pd->hwnd);
+    if (!win) return;
     GetClientRect(pd->hwnd, &rc);
     cw = rc.right;
     ch = rc.bottom - (pd->fullscreen ? 0
                                      : (pd->status_h ? pd->status_h : PRESENT_STATUS_H));
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
+    /* #217: everything below draws into `hdc` -- the off-screen picture when buffered,
+       the window otherwise -- and a buffered picture reaches the window in ONE blit. */
+    mem = mem_target(pd, win, cw, ch);
+    hdc = mem ? mem : win;
 
     /* Scale2x first: it is a property of the FRAME, so it happens before the
        stretch and the stretch then works from a source with twice the detail. */
@@ -182,7 +215,7 @@ static void gdi_present(present_ddraw *pd)
         present_fit_int(cw, ch, sw, sh, pd->aspect, &dx, &dy, &dw, &dh);
     else
         present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
-    wait_vblank(pd);
+    if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
        frame, at the previous size -- would otherwise stay on screen forever. */
@@ -214,7 +247,11 @@ static void gdi_present(present_ddraw *pd)
         InvertRect(hdc, &sr);
     }
     hint_draw(pd, hdc, dx, dy, dw);                 /* #138 */
-    ReleaseDC(pd->hwnd, hdc);
+    if (mem) {
+        wait_vblank(pd);
+        BitBlt(win, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
+    }
+    ReleaseDC(pd->hwnd, win);
 }
 
 /* ---- fullscreen: DirectDraw 7 ------------------------------------------- */
@@ -423,7 +460,7 @@ static void fs_present(present_ddraw *pd)
     }
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
     {   HDC hd;                                   /* #138 on the exclusive path */
-        if (pd->hint_text && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
+        if (pd->hint_text && !pd->osd_off && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
             hint_draw(pd, hd, fx, fy, fw);
             IDirectDrawSurface7_ReleaseDC(bk, hd);
         } }
@@ -455,6 +492,7 @@ int present_ddraw_init(present_ddraw *pd, HWND hwnd)
 
 void present_ddraw_shutdown(present_ddraw *pd)
 {
+    mem_release(pd);                                /* #217 */
     if (pd->fullscreen && pd->dd) { fs_teardown(pd); IDirectDraw7_RestoreDisplayMode(DD); }
     if (pd->dd) { IDirectDraw7_Release(DD); pd->dd = 0; }
     if (pd->ddmod) { FreeLibrary(pd->ddmod); pd->ddmod = 0; }

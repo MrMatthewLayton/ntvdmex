@@ -210,11 +210,16 @@ BEGIN
     LTEXT           "&Aspect:", -1, 138, 86, 34, 8
     COMBOBOX        IDC_S_ASPECT, 180, 84, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    CONTROL         "Wait for monitor &VSync (can drop frames)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 250, 10
-    CONTROL         "&Blink the text-mode cursor, as a real CRTC does",
+    CONTROL         "Wait for &VSync (can drop frames)", IDC_S_VSYNC, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 128, 10
+    CONTROL         "&Blink the text-mode cursor",
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
-                    14, 122, 250, 10
+                    14, 122, 128, 10
+    /* #217: both default on. */
+    CONTROL         "&Draw off-screen first (no flicker)", IDC_S_BUFFERED, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 104, 136, 10
+    CONTROL         "Show on-screen &messages", IDC_S_OSD, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 122, 136, 10
 
     GROUPBOX        "Fullscreen", -1, 4, 146, 284, 32
     LTEXT           "Start &fullscreen:", -1, 14, 162, 60, 8

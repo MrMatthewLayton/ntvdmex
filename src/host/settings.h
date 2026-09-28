@@ -60,7 +60,7 @@ typedef enum {
     SET_SPEEDMODE,
     SET_CONVKB, SET_XMS, SET_EMS, SET_UMB, SET_A20,
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT,
-    SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS,
+    SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_OSD, SET_BUFFERED,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS,
     SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
@@ -187,6 +187,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
      per process and never touches Alt+Enter -- the user can still flip by hand either
      way. Default Never = the shipped behaviour to date. Values: AUTOFS_* below. */
 { "StartFullscreen",   IDC_S_AUTOFS,      SK_COMBO,      2,  0,   2, "Always|Graphics only|Never" },
+/* ── #217 (user, s83 sweep): the messages drawn over the picture (the mouse-capture
+     hint, the Mark hint) FLICKERED, because the window was painted in three strokes --
+     bars, frame, then the message -- and the screen showed the frame alone in between.
+     Now the whole picture is composed off-screen and blitted once. Both are choices
+     because "some users won't want the messages, or buffering"; both default ON
+     (user decision, 2026-09-28). */
+{ "OnScreenMessages",  IDC_S_OSD,         SK_CHECK,      1,  0,   1, NULL },
+{ "BufferedDrawing",   IDC_S_BUFFERED,    SK_CHECK,      1,  0,   1, NULL },
 /* ⛔ FULLSCREEN HAS NO SETTINGS AT ALL, AND THAT IS THE FIX. (s64)
      It briefly had two -- a resolution list and a "sharp pixels" checkbox -- and the
      user's verdict was "there's a lot of knobs to fiddle now, and none of them seem
