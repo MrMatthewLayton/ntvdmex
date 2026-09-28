@@ -619,6 +619,16 @@ int main(void)
         b = pit_latched_ch2(&bus);
         CHECK(a == 0xB000 && b == 0xF000,
               "mode 2: a GATE rising edge RELOADS the count (all three oracles agree)");
+
+        w = 0xB8; vdd_bus_io(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 4  */
+        w = 0x10; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);          /* 0x0010            */
+        vdd_pit_add_clocks(&pit, 0x10);
+        CHECK(vdd_pit_ch2_out(&pit) == 0, "mode 4: the one-clock strobe at terminal count");
+        vdd_pit_add_clocks(&pit, 0x10);
+        a = pit_latched_ch2(&bus);
+        CHECK(a == 0xFFF0 && vdd_pit_ch2_out(&pit) == 1,
+              "mode 4: a one-shot -- past TC it runs on through FFFFh, no reload, no 2nd strobe");
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

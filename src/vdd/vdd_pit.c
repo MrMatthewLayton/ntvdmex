@@ -18,7 +18,8 @@
        mode 0   N - elapsed, on past terminal count through 0xFFFF (one-shot)
        mode 3   "decremented by two on succeeding CLK pulses" and reloaded at zero,
                 so the count runs N, N-2, ... twice per period; never an odd LSB
-       others   N - (elapsed mod N), reloading at the period (modes 2, 4, 5; mode 1)
+       mode 2   N - (elapsed mod N), reloading at the period
+       1, 4, 5  one-shots: as mode 0 (#175)
    ⚠ s69 HISTORY: this model was shipped, blamed for a blank screen, and reverted. The
      blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
      (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
@@ -31,7 +32,10 @@ static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed);
    (65536, or 10000 in BCD -- see pit_wrap). */
 static uint32_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed, uint32_t wrap)
 {
-    if (mode == 0) {
+    /* #175: modes 1, 4 and 5 are ONE-SHOTS too -- after terminal count the counter
+       runs on through the wrap, it does not reload (docs/ref/pit.md mode table). They
+       used the periodic law below, which reloads every R clocks. */
+    if (mode == 0 || mode == 1 || mode == 4 || mode == 5) {
         /* One-shot: counting does not stop at terminal count, it runs on through
            the wrap. In binary that was `(uint16_t)(R - elapsed)`, i.e. mod 65536
            by truncation; BCD wraps at 10000 instead, so do the modulus openly. */
