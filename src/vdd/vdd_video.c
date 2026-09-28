@@ -98,6 +98,7 @@ static void vga_defaults_for(uint8_t mode,
      all-ones "no split" rather than a zero we merely happen to treat as inert. */
 static void crtc_lc_update(video_state *st);
 static void crtc_vt_update(video_state *st);
+static void vid_latch(video_state *st, int at_frame);   /* display start/pan schedule (s83) */
 static void load_default_crtc(video_state *st)
 {
     const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->mode)]];
@@ -105,6 +106,8 @@ static void load_default_crtc(video_state *st)
     st->crtc_offset = c[VGA_CRTC_OFFSET];
     st->crtc_start = (uint32_t)(((unsigned)c[VGA_CRTC_START_HI] << 8) | c[VGA_CRTC_START_LO]);
     st->crtc_start_live = (uint16_t)st->crtc_start;   /* the display follows at once */
+    st->start_vs        = (uint16_t)st->crtc_start;
+    st->latch_t         = 0;                           /* vid_latch: take everything as-is */
     st->crtc_start_pend = 0;
     st->crtc_off_seen = 0;
     st->crtc_overflow   = c[0x07];
@@ -287,6 +290,7 @@ static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x3C1) return;                       /* data port is read-only       */
     if (!st->attr_ff) { st->attr_index = val; st->attr_ff = 1; return; }
     st->attr_ff = 0;
+    if ((st->attr_index & 0x1F) == 0x13) vid_latch(st, 0);   /* pel panning: see vid_latch */
     st->attr_reg[st->attr_index & 0x1F] = val;
     st->attr_w  [st->attr_index & 0x1F]++;
     switch (st->attr_index & 0x1F) {
@@ -2252,9 +2256,11 @@ static void crtc_set_data(void *self, uint32_t v)
          showed a garbage address -- a whole-screen flicker on any guest that scrolls
          or page-flips, which is every scrolling game. crtc_start_half counts how
          often a frame was built mid-pair; crtc_start_live is what the renderer uses. */
-    case 0x0C: st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
+    case 0x0C: vid_latch(st, 0);          /* boundaries passed BEFORE this write see the old value */
+               st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
                st->crtc_seen = 1; st->crtc_start_pend ^= 1; st->dirty = 1; break;
-    case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
+    case 0x0D: vid_latch(st, 0);
+               st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
                st->crtc_seen = 1; st->crtc_start_pend ^= 1;
                if (!st->crtc_start_pend) st->crtc_start_writes++;
                st->dirty = 1; break;
@@ -2564,6 +2570,60 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
     /* SCALE FIRST, DIVIDE ONCE -- see status_in for why line_us must not be an integer. */
     *line     = (uint32_t)((in_frame * (uint64_t)*vtotal) / *frame_us);
     return 1;
+}
+
+/* ── ★ THE DISPLAYED FRAME'S START ADDRESS AND PEL PANNING, ON THE HARDWARE'S SCHEDULE. ──
+     (s83, Mario vs Windows 98 and stock NTVDM: "butter smooth" there, "jagged, jarring"
+     here.) Mario's scroll routine, from its binary:
+         cli / wait 3DA bit 3 CLEAR           ; in the picture
+         out 3D4: 0Ch,0Dh = y*90 + x/4        ; coarse position, whole bytes
+         wait 3DA bit 3 SET                   ; retrace
+         out 3C0: 33h, (x*2) & 7              ; AR13 pel panning: the 0-3 pixel remainder
+     On a VGA the address counter LOADS the start address at the start of vertical
+     retrace, and the panning written inside that retrace applies as the next picture
+     begins -- so the pair lands together on the next frame. We took the start address
+     whenever the host happened to draw and ignored AR13 altogether: the view moved in
+     4-pixel jumps and, drawn at the wrong moment, a frame out of step with its pan.
+   ► THE RULE, computed from the same beam clock the 3DA status read uses (so a guest
+     that saw bit 3 set is past the latch point, and one that saw it clear is before it):
+       * at each retrace start (the blanking line vid_beam reports) start_vs := register;
+       * at each frame start (line 0) the display takes start_vs and the current AR13.
+     Called BEFORE every write to 0Ch/0Dh/AR13 and when a frame is built, so the register
+     values between two calls are constant and "the value at that boundary" is simply
+     the value now. No clock (off-VM) or a long gap: take everything as it stands. */
+static void vid_latch(video_state *st, int at_frame)
+{
+    uint64_t now, t0, ds, vbo;
+    uint32_t F, vt, vd, vb, fno, line;
+    if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) {
+        /* No beam clock: the frame build IS the retrace, as before s83. */
+        if (!at_frame) return;
+        if (st->crtc_start_pend) st->crtc_start_half++;
+        st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
+        st->disp_pan = st->attr_reg[0x13];
+        return;
+    }
+    (void)vd; (void)fno; (void)line;
+    t0 = st->latch_t; st->latch_t = now;
+    if (!t0 || now < t0 || now - t0 > 4u * (uint64_t)F) {
+        st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
+        st->disp_pan = st->attr_reg[0x13];
+        return;
+    }
+    vbo = (uint64_t)vb * F / vt;                    /* retrace start, within the frame */
+    ds  = (now / F) * F;                            /* the last frame start <= now     */
+    if (ds > t0) {                                  /* a new picture began since t0    */
+        if (ds >= F && ds - F + vbo > t0) {         /* ...and its retrace was after t0 */
+            if (st->crtc_start_pend) st->crtc_start_half++;   /* loaded mid-pair: torn */
+            st->start_vs = (uint16_t)st->crtc_start;
+        }
+        st->crtc_start_live = st->start_vs;
+        st->disp_pan        = st->attr_reg[0x13];
+    }
+    if (ds + vbo <= now && ds + vbo > t0) {         /* this frame's retrace began      */
+        if (st->crtc_start_pend) st->crtc_start_half++;
+        st->start_vs = (uint16_t)st->crtc_start;
+    }
 }
 
 /* ── ★ THE EXTERNAL REGISTERS -- CLAIMED AT LAST. (docs/inventory/vga.md, step 1) ──
@@ -3050,18 +3110,35 @@ static void render_planar(video_state *st)
         if (lc >= (uint32_t)gh && (lc / 2u) < (uint32_t)gh) lc /= 2u;
         if (lc < (uint32_t)gh) split = lc;
     }
+    /* ► PEL PANNING (AR13): shift the picture left 0-7 pixels, the fine half of a smooth
+         scroll (s83). Below the split line the pan is dropped when AR10 bit 5 (PPM) is
+         set -- which is how a panel stays still under a panning playfield. */
+    uint32_t pan  = (st->disp_pan & 0x0Fu) < 8u ? (uint32_t)(st->disp_pan & 7u) : 0u;
+    int      ppm  = (st->attr_mode >> 5) & 1;
     if (!pitch) pitch = bytes;
     for (y = 0; y < gh; ++y) {
         uint32_t row = (y < (int)split) ? base + (uint32_t)y * pitch
                                         : (uint32_t)(y - (int)split) * pitch;
+        uint32_t sh  = (y >= (int)split && ppm) ? 0u : pan;
         uint8_t *out = &st->fb[y * gw];
-        for (xb = 0; xb < (int)bytes; ++xb) {
-            uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;
-            uint8_t p0 = PL(st,0)[o], p1 = PL(st,1)[o];
-            uint8_t p2 = PL(st,2)[o], p3 = PL(st,3)[o];
-            for (b = 0; b < 8; ++b) {
-                uint8_t m = (uint8_t)(0x80 >> b);
-                out[xb*8 + b] = (uint8_t)(((p0&m)?1:0) | ((p1&m)?2:0) | ((p2&m)?4:0) | ((p3&m)?8:0));
+        if (!sh) {
+            for (xb = 0; xb < (int)bytes; ++xb) {
+                uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;
+                uint8_t p0 = PL(st,0)[o], p1 = PL(st,1)[o];
+                uint8_t p2 = PL(st,2)[o], p3 = PL(st,3)[o];
+                for (b = 0; b < 8; ++b) {
+                    uint8_t m = (uint8_t)(0x80 >> b);
+                    out[xb*8 + b] = (uint8_t)(((p0&m)?1:0) | ((p1&m)?2:0) | ((p2&m)?4:0) | ((p3&m)?8:0));
+                }
+            }
+        } else {
+            int x;
+            for (x = 0; x < gw; ++x) {
+                uint32_t sx = (uint32_t)x + sh;
+                uint32_t o  = (row + (sx >> 3)) % (uint32_t)VID_PLANE_SIZE;
+                uint8_t  m  = (uint8_t)(0x80 >> (sx & 7));
+                out[x] = (uint8_t)(((PL(st,0)[o]&m)?1:0) | ((PL(st,1)[o]&m)?2:0)
+                                 | ((PL(st,2)[o]&m)?4:0) | ((PL(st,3)[o]&m)?8:0));
             }
         }
     }
@@ -3114,7 +3191,12 @@ static void render_modey(video_state *st)
          and the handler took the whole word as an index and dropped the data, so
          claiming the port broke the flip outright -- strictly worse than not claiming
          it. With index+data writes honoured, the register is the answer. */
-    uint32_t start = st->crtc_seen ? st->crtc_start : modey_page(st);
+    uint32_t start = st->crtc_seen ? st->crtc_start_live : modey_page(st);
+    /* ► PEL PANNING (AR13), IN 256-COLOUR UNITS: the value counts half-pixels here, so
+         0/2/4/6 shift the picture left by 0-3 pixels -- the part of a smooth scroll the
+         whole-byte start address cannot express (4 pixels per byte in this mode). The
+         shifted row simply reads on into the next bytes, as the address counter does. */
+    uint32_t pan = (uint32_t)((st->disp_pan & 7u) >> 1);
     /* ► THE SELECTED PLANE IS READ LIVE. Its most recent bytes are in the aperture
          and nowhere else -- once a static screen stops changing the mask, no further
          flush ever comes, and that plane's columns would render as whatever was last
@@ -3134,7 +3216,8 @@ static void render_modey(video_state *st)
           uint32_t row = start + (uint32_t)y * pitch;
           uint8_t *dst = st->fb + (uint32_t)y * st->gw;
           for (x2 = 0; x2 < st->gw; ++x2)
-              dst[x2] = pl[x2 & 3][(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
+          { uint32_t sx = (uint32_t)x2 + pan;
+            dst[x2] = pl[sx & 3][(row + (sx >> 2)) & (VID_Y_PLANE - 1u)]; }
       } }
 }
 
@@ -3152,8 +3235,7 @@ static void vid_frame(void *self)
        ⚠ MEASURED ON LEMMINGS: 941 completed pairs, crtc_start_half = 0. So this is
          NOT the cause of the flicker it was written to explain. Kept because it is
          what the hardware does and the hazard is real for other guests. */
-    st->crtc_start_live = (uint16_t)st->crtc_start;
-    if (st->crtc_start_pend) st->crtc_start_half++;
+    vid_latch(st, 1);                /* start address + pel panning as displayed (s83) */
     if (st->in_vesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h;

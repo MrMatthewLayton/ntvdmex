@@ -1155,6 +1155,52 @@ int main(void)
             CHECK(vid.crtc_start_half==before+1,
                   "a frame latched mid-pair is COUNTED -- hardware tears there too"); } }
 
+    /* T22b: THE HARDWARE'S SCHEDULE, ON A CLOCK (s83, Mario). The start address loads at
+       the start of vertical retrace; pel panning (AR13) is taken as the next picture
+       begins. Mario writes the start during display, waits for retrace, writes the pan:
+       both must appear TOGETHER on the next frame -- not the start early, not the pan
+       never. 0Dh: 70 Hz, F = 14285 us, 449 lines, retrace from line 400 (~12726 us). */
+    {   uint32_t v; const uint64_t F = 14285u, T = 1000u * 14285u;
+        v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x00; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        v = 0x0D; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x00; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        vid.time_us = fake_clock; vid.gh = 200; vid.latch_t = 0;
+        g_fake_us = T + 1000; vid.dirty=1; vdd_bus_frame(&bus);       /* sync: start 0  */
+        g_fake_us = T + 2000;                                          /* in the picture */
+        v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x01; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        v = 0x0D; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x08; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0, "clocked: a start written in the picture is not shown yet");
+        g_fake_us = T + 13000;                                         /* in retrace     */
+        vdd_bus_io(&bus,0x3DA,1,1,&v);                                 /* reset the AC flip-flop */
+        v = 0x33; vdd_bus_io(&bus,0x3C0,1,0,&v); v = 0x03; vdd_bus_io(&bus,0x3C0,1,0,&v);
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0 && vid.disp_pan==0,
+              "clocked: during the retrace the old picture is still up (start and pan)");
+        g_fake_us = T + F + 500;                                       /* next picture   */
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0x0108 && vid.disp_pan==3,
+              "clocked: the next frame shows the new start AND the new pan together");
+        /* A start written INSIDE the retrace missed that load: a frame later. */
+        g_fake_us = T + F + 13000;
+        v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x02; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        v = 0x0D; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x00; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        g_fake_us = T + 2*F + 500; vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0x0108, "clocked: a start written inside the retrace waits a frame");
+        g_fake_us = T + 3*F + 500; vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0x0200, "clocked: ...and is shown on the one after");
+        /* Pel panning moves planar pixels: pan 1 shows the byte's SECOND pixel first. */
+        memset(vid.plane[0], 0, 0x400); memset(vid.plane[1], 0, 0x400);
+        memset(vid.plane[2], 0, 0x400); memset(vid.plane[3], 0, 0x400);
+        vid.plane[0][0x200] = 0x40;                                    /* pixel 1 = colour 1 */
+        vid.disp_pan = 1; vid.time_us = 0; vid.attr_reg[0x13] = 1;
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.fb[0]==1 && vid.fb[1]==0, "planar: AR13=1 shifts the picture left one pixel");
+        vid.attr_reg[0x13] = 0; vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.fb[0]==0 && vid.fb[1]==1, "planar: AR13=0 shows it where it is");
+        v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x00; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        v = 0x0D; vdd_bus_io(&bus,0x3D4,1,0,&v); v = 0x00; vdd_bus_io(&bus,0x3D5,1,0,&v);
+        vid.dirty=1; vdd_bus_frame(&bus); }
+
     /* T-OWED: A SCANLINE COUNTER MUST NOT SKIP LINES BECAUSE OUR PORT IS SLOW -------
      * Lemmings' HP calibration counts 320 hblanks on bit 0 (`wait while set; wait
      * while clear` per line) against the 8254, and the tick that count programs is

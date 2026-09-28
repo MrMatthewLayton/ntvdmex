@@ -219,6 +219,16 @@ typedef struct video_state {
     uint8_t  crtc_start_pend;   /* 0x0C written, 0x0D not yet                       */
     uint32_t crtc_start_writes; /* completed pairs                                   */
     uint32_t crtc_start_half;   /* frames built mid-pair -- would have been torn      */
+    /* ── WHAT THE DISPLAYED FRAME USES, ON THE HARDWARE'S SCHEDULE (s83, Mario). ─────
+         The address counter loads the start address at the START OF VERTICAL RETRACE;
+         pel panning (AR13) is taken as the next frame's picture begins. A smooth
+         scroller writes the start during display, waits for retrace, then writes the
+         pan -- both land on the SAME next frame. We used to take the start whenever the
+         host drew and ignored AR13, so Mario moved in 4-pixel jumps, a frame out of
+         step. See vid_latch(). */
+    uint16_t start_vs;          /* start address as loaded at the last retrace start */
+    uint8_t  disp_pan;          /* AR13 as the displayed frame uses it               */
+    uint64_t latch_t;           /* when vid_latch last ran (0 = never / reset)       */
     /* ── ATTRIBUTE CONTROLLER (0x3C0/0x3C1). ──────────────────────────────────
          In every 16-colour planar and text mode the 4-bit pixel value indexes
          THESE registers (vpal, above), and the result indexes the DAC. Not
