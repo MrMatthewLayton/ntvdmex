@@ -3994,6 +3994,24 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         if (g_exec[d].child_seg && !m->tsr_pending)
             dos_int21_shell_psp(m, g_exec[d].child_seg, 0);   /* #208: its PSP is gone */
         mouse_child_exited();          /* s81: the shell does not own the mouse */
+        /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
+           left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
+           were already in XP's synth. Every child exit comes through here (its own
+           AH=4Ch, a DPMI client's teardown, Close Program), so: every MIDI note off on
+           the host synth, and every OPL voice keyed off -- pitch kept, so each one
+           releases through its own envelope instead of clicking off. A TSR is still
+           running, so it is left alone. */
+        if (!m->tsr_pending) {
+            unsigned ch;
+            audio_wave_midi_silence(&g_wave);
+            HOST_LOCK();
+            for (ch = 0; ch < 9; ++ch)
+                if (g_opl.reg[0xB0 + ch] & 0x20)
+                    vdd_opl_write_reg(&g_opl, (uint8_t)(0xB0 + ch), (uint8_t)(g_opl.reg[0xB0 + ch] & ~0x20));
+            if (g_opl.reg[0xBD] & 0x1F)                 /* rhythm-mode drums, keyed separately */
+                vdd_opl_write_reg(&g_opl, 0xBD, (uint8_t)(g_opl.reg[0xBD] & ~0x1F));
+            HOST_UNLOCK();
+        }
         if (m->tsr_pending) {
             /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
                  The block is RESIZED, not freed, and the vectors are

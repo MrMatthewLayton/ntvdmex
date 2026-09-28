@@ -111,6 +111,9 @@ void audio_wave_stop(audio_wave *aw);
 /* Send one packed MIDI short message (status | d1<<8 | d2<<16) to the host synth.
    Safe to call when MIDI never opened -- it is simply dropped. */
 void audio_wave_midi(audio_wave *aw, uint32_t msg);
+/* #214: silence the host synth -- sustain up, all sound/notes off, controllers reset on
+   all 16 channels, then midiOutReset. Called whenever a program is torn down. */
+void audio_wave_midi_silence(audio_wave *aw);
 
 /* Record exactly what reaches waveOut to a mono 16-bit .WAV (s81; see audio_rec.h).
    start: 0 = recording, -1 = already recording / cannot create. stop: samples written. */

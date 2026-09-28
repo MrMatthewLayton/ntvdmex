@@ -35,6 +35,7 @@ static PFN_waveOutVol    p_waveOutGetVolume;
 static PFN_midiOutOpen   p_midiOutOpen;
 static PFN_midiOutShort  p_midiOutShortMsg;
 static PFN_midiOutClose  p_midiOutClose;
+static PFN_midiOutClose  p_midiOutReset;     /* same shape: UINT (HMIDIOUT) */
 
 static AW_WAVEHDR *hdr_of(audio_wave *aw, int i)
 { return (AW_WAVEHDR *)aw->hdr[i]; }
@@ -119,6 +120,7 @@ static int aw_bind(audio_wave *aw)
     p_midiOutOpen       = (PFN_midiOutOpen) GetProcAddress(aw->mod, "midiOutOpen");
     p_midiOutShortMsg   = (PFN_midiOutShort)GetProcAddress(aw->mod, "midiOutShortMsg");
     p_midiOutClose      = (PFN_midiOutClose)GetProcAddress(aw->mod, "midiOutClose");
+    p_midiOutReset      = (PFN_midiOutClose)GetProcAddress(aw->mod, "midiOutReset");
     return p_waveOutOpen && p_waveOutPrepare && p_waveOutWrite &&
            p_waveOutReset && p_waveOutClose;
 }
@@ -185,6 +187,7 @@ void audio_wave_stop(audio_wave *aw)
     if (aw->event) SetEvent(aw->event);
     if (aw->thread) { WaitForSingleObject(aw->thread, 500); CloseHandle(aw->thread); }
     if (!aw->silent && aw->hwo && p_waveOutClose) p_waveOutClose(aw->hwo);
+    audio_wave_midi_silence(aw);          /* #214: a held note must not outlive us */
     if (aw->hmidi && p_midiOutClose) p_midiOutClose(aw->hmidi);
     if (aw->event) CloseHandle(aw->event);
     if (aw->mod) FreeLibrary(aw->mod);
@@ -194,6 +197,26 @@ void audio_wave_stop(audio_wave *aw)
 void audio_wave_midi(audio_wave *aw, uint32_t msg)
 {
     if (aw->hmidi && p_midiOutShortMsg) p_midiOutShortMsg(aw->hmidi, msg);
+}
+
+/* #214: EVERY NOTE OFF, ON EVERY CHANNEL. The emulated MPU-401 can be reset, but the
+   notes it already sent live in XP's synth, which knows nothing about a program ending:
+   Close Program on Doom left them sounding. Per channel: sustain pedal up (a held pedal
+   outlives a note-off), All Sound Off (120), All Notes Off (123), Reset All Controllers
+   (121, so pitch bend and modulation do not carry into the next program); then
+   midiOutReset, which is winmm's own "turn off all notes". Program changes are left
+   alone -- every program sets its own. */
+void audio_wave_midi_silence(audio_wave *aw)
+{
+    uint32_t ch;
+    if (!aw->hmidi || !p_midiOutShortMsg) return;
+    for (ch = 0; ch < 16; ++ch) {
+        p_midiOutShortMsg(aw->hmidi, 0xB0u | ch | (64u  << 8));             /* sustain 0 */
+        p_midiOutShortMsg(aw->hmidi, 0xB0u | ch | (120u << 8));             /* sound off */
+        p_midiOutShortMsg(aw->hmidi, 0xB0u | ch | (123u << 8));             /* notes off */
+        p_midiOutShortMsg(aw->hmidi, 0xB0u | ch | (121u << 8));             /* reset CCs */
+    }
+    if (p_midiOutReset) p_midiOutReset(aw->hmidi);
 }
 
 /* Recording what we play -- see audio_rec.h. Exported so the host can drive it. */
