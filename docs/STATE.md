@@ -7,8 +7,8 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-09-28 (session 83)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `526b1090` (#175 one-shot IRQ0 +
-  the counter-2 wait fix, on top of the #213 ZAR sound fix). The user confirmed most of round 5 (`runs/s83/sweep.txt`); #213 is owed by ear.
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `6b833b1f` (#221 pel panning +
+  start/pan latch, on top of #175 and #213, all user-confirmed except #221's final say).
 - **Resume:** [`log/sessions/session-83.md`](log/sessions/session-83.md), then #202
   (#212 IF at program start, then #162, #183).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
