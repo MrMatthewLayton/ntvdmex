@@ -2787,6 +2787,10 @@ static volatile LONG  g_in_exec       = 0;
    ⚠ The CPU throttle also suspends this thread, and that stays safe without taking
      this: it only READS the context, and suspend counts nest. */
 static volatile LONG  g_async_ctxwr   = 0;   /* 1 while a thread owns the guest CONTEXT */
+/* #219: the window is inactive, so the machine is paused -- see host_pause_set(). */
+static volatile LONG  g_pause_want    = 0;
+static int            g_pause_susp    = 0;   /* the CPU thread is suspended BY THE PAUSE */
+static DWORD          g_pause_n, g_pause_coop, g_pause_ms;
 /* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
    Declared here because host_irq_sink is above the courier itself; see
    tick_courier_thread for what waits on it. */
@@ -5951,6 +5955,14 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
 static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 {
     (void)ctx;
+    /* #219: paused -> silence, and the devices are NOT rendered, so a Sound Blaster
+       block, the OPL envelopes and the GUS voices all stand still and carry on from
+       the same sample on resume. */
+    if (g_pause_want) {
+        uint32_t k;
+        for (k = 0; k < frames * 2u; ++k) out[k] = 0;
+        return;
+    }
     dmx_sample();
     HOST_LOCK();
     vdd_audio_mix_st(&g_audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
@@ -11049,6 +11061,56 @@ static void host_release_modifiers(void)
 }
 
 /* --- the UI thread: window + present + frame timer ------------------------- */
+/* ── #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
+     always, no setting) Skyroads and Doom side by side were "very jittery": two guests
+     each burning a core. So a window that loses focus is paused COMPLETELY -- CPU,
+     timers, sound, input -- and carries on exactly where it was when it gets focus back.
+   ► THE CPU: the thread running the guest is suspended while it is INSIDE GUEST CODE,
+     by the same handshake the async injectors use (own g_async_ctxwr, suspend, read the
+     context so the suspend has landed, and only keep it if g_in_exec is still 1 -- a
+     thread in host code might hold g_lock). Holding g_async_ctxwr for the whole pause
+     also makes every injector decline. If the thread is in host code at that moment it
+     parks itself at the top of its exec loop instead (the two `while (g_pause_want)`s).
+   ► TIME: host_pit_generate drops the paused interval instead of owing it, so there is
+     no burst of ticks on resume; host_audio_fill returns silence without rendering any
+     device, so a DMA block or an envelope resumes from the same sample.
+   ► SOUND THAT IS NOT OURS TO FREEZE: notes already in XP's MIDI synth are silenced
+     (they cannot be held), and the real speaker is switched off.
+   ⚠ NOT WIN16 (-w): its windows are real desktop windows and one WOW VDM hosts several
+     tasks, so "the window lost focus" does not mean "this program is in the background".
+   ⚠ NOT HEADLESS: the rig harness runs unattended with nothing focused. */
+static void host_pause_set(int on)
+{
+    if (on) {
+        DWORD i;
+        if (g_pause_want || g_headless || g_wow_launch || !g_hcpu) return;
+        InterlockedExchange(&g_pause_want, 1);
+        g_pause_ms = GetTickCount();
+        ++g_pause_n;
+        audio_wave_midi_silence(&g_wave);
+        if (g_spk_real) pcspk_set(&g_pcspk, 0);
+        for (i = 0; i < 200 && g_pause_want; ++i) {
+            CONTEXT cx;
+            if (InterlockedCompareExchange(&g_async_ctxwr, 1, 0) != 0) { Sleep(1); continue; }
+            if (SuspendThread(g_hcpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); break; }
+            cx.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(g_hcpu, &cx) && g_in_exec == 1) { g_pause_susp = 1; break; }
+            ResumeThread(g_hcpu); ASYNC_CTX_RELEASE();
+            Sleep(1);
+        }
+        if (g_hwnd) InvalidateRect(g_hwnd, NULL, FALSE);
+    } else {
+        if (!g_pause_want) return;
+        if (g_pause_susp) { g_pause_susp = 0; ResumeThread(g_hcpu); ASYNC_CTX_RELEASE(); }
+        InterlockedExchange(&g_pause_want, 0);
+        {   char b[160], *q = b;
+            q = zput(q, "PAUSE: resumed after "); q = zdec(q, GetTickCount() - g_pause_ms);
+            q = zput(q, " ms (pauses="); q = zdec(q, g_pause_n);
+            q = zput(q, " parked-in-loop="); q = zdec(q, g_pause_coop); q = zput(q, ")\r\n");
+            log_append(LOG_PATH, b, q); }
+    }
+}
+
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -11356,7 +11418,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (!g_autofs_done)                   /* "Graphics only": the first graphics mode */
             host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
-        if (g_spk_real) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
+        if (g_spk_real && !g_pause_want) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
            is verifiable off the SMB share -- VNC capture is dead on the real box. The
@@ -11739,6 +11801,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              the menu would steal focus and returning to the window would re-capture
              instantly, making the release feel dead. */
         if (LOWORD(wp) != WA_INACTIVE) input_capture_set(h, 1);
+        host_pause_set(LOWORD(wp) == WA_INACTIVE);   /* #219 */
         break;                           /* let DefWindowProc do the focus bookkeeping */
     case WM_KEYDOWN:
         /* Our own Start-menu-suppression Ctrl tap (see the VK_LWIN handler) comes back
@@ -11940,6 +12003,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (prev != b) mouse_btn_edges(prev, b); }
         return 0; }
     case WM_DESTROY:
+        host_pause_set(0);               /* #219: a paused CPU thread must be let go */
         /* GIVE THE MACHINE BACK FIRST -- before g_running, before the audio unwind,
            before anything that can block. Everything below this line is about our
            process; this line is about the user's computer. See host_panic_release. */
@@ -12328,6 +12392,15 @@ static void host_pit_generate(void)
         return;
     }
     if (!QueryPerformanceCounter(&now) || now.QuadPart <= s_last.QuadPart) {
+        LeaveCriticalSection(&g_pit_cs);
+        return;
+    }
+    /* #219: PAUSED TIME IS NOT GUEST TIME. The crystal does not run while the window is
+       paused, and the time is dropped rather than owed -- resuming must not replay the
+       pause as a burst of ticks (the clock would jump, and s22 measured what compressing
+       game time does). The 8254 and the RTC's periodic interrupt both ride this delta. */
+    if (g_pause_want) {
+        s_last = now;
         LeaveCriticalSection(&g_pit_cs);
         return;
     }
@@ -15039,6 +15112,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              See g_wm_inwait in wowmsg.h. The streak is RESET rather than the
              sample skipped, so a guest that wakes, wedges and is not in the wait
              still gets the full 150 s from the moment it stopped advancing. */
+        if (g_pause_want && frozen) frozen = 0;   /* #219: paused, not wedged */
         if (g_wm_inwait && frozen) {
             if (!wd_said_wait) {
                 wd_said_wait = 1;
@@ -27473,6 +27547,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   modey_bail_note(c3, i3, ip3);
               } }
         }
+        while (g_pause_want && g_running) { ++g_pause_coop; Sleep(20); }   /* #219 */
         InterlockedExchange(&g_in_exec, 1);
         exec_enter_mark();               /* guest-execution clock starts (throttle) */
         {   LARGE_INTEGER vt0, vt1; DWORD vdt;
@@ -29181,6 +29256,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            while SS is 16-bit. Do not read this as the argument fix. */
                     if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
                         VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
+                    while (g_pause_want && g_running) { ++g_pause_coop; Sleep(20); }   /* #219 */
                     InterlockedExchange(&g_in_exec, 1);
                     exec_enter_mark();   /* guest-execution clock starts (throttle) */
                     if (g_dpmi_use_kernel) {
