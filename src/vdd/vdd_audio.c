@@ -154,7 +154,7 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
            the block-completion IRQ the game is waiting for. */
         if (st->sb) {
             int32_t g = mix_gain(st->sb, 0x04);
-            rs_setup(&st->r_sb, st->sb->rate_hz, st->out_hz);
+            rs_setup(&st->r_sb, vdd_sb_frame_hz(st->sb), st->out_hz);
             need = rs_need(&st->r_sb, n);
             vdd_sb_render_st(st->sb, st->scratch, need);
             idx = 0;

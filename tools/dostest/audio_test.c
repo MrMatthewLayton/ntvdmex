@@ -336,6 +336,35 @@ int main(void)
         vdd_audio_mix(&mix, buf, 4096);
     }
 
+    /* ---- #189: AN SB PRO STEREO TRANSFER. Mixer 0Eh bit 1 selects stereo for the DSP
+       1.x-3.x commands, and the time constant counts BOTH channels: TC 233 is ~43.5 kHz
+       of bytes = ~21.7 kHz of L/R frames. High-speed auto-init (0x90), 4096-byte blocks:
+       a second of output is ~10.6 blocks. Treating the byte rate as the frame rate would
+       race through ~21 of them and play an octave high. */
+    {   static int16_t st2[2 * 1024];
+        int blocks;
+        mix.opl = NULL; mix.sb = &sb;
+        for (i = 0; i < 8192; i += 2) { g_flat[0x70000 + i] = 0xFF; g_flat[0x70000 + i + 1] = 0x00; }
+        wr(BASE + 4, 0x0E); wr(BASE + 5, 0x02);              /* mixer: stereo on     */
+        dma_program(0x70000, 8192, 1);
+        wr(BASE + 0xC, 0x40); wr(BASE + 0xC, 233);           /* TC: 2 x 21.7 kHz     */
+        wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x0F);   /* 4096 B */
+        g_irq_count = 0;
+        wr(BASE + 0xC, 0x90);                                /* high-speed auto-init */
+        vdd_audio_mix_st(&mix, st2, 1024);
+        printf("        SB Pro stereo frame 500: L=%d R=%d\n", st2[1000], st2[1001]);
+        CHECK(st2[1000] > 10000 && st2[1001] < -10000,
+              "SB Pro stereo (mixer 0Eh bit 1): left and right on their own channels");
+        for (i = 0; i < 43; ++i) vdd_audio_mix_st(&mix, st2, 1024);   /* ~1 s in all */
+        blocks = g_irq_count;
+        printf("        SB Pro stereo: %d block IRQs in ~1 s (frame rate, ~10.6 expected)\n", blocks);
+        CHECK(blocks >= 9 && blocks <= 12,
+              "SB Pro stereo: the time constant counts both channels (frames at half the byte rate)");
+        wr(BASE + 0xC, 0xDA);                                /* leave auto-init      */
+        wr(BASE + 4, 0x0E); wr(BASE + 5, 0x00);              /* mixer: stereo off    */
+        vdd_audio_mix(&mix, buf, 8192);
+    }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

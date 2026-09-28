@@ -100,6 +100,7 @@ static void sb_exec(sb_state *st)
         st->xfer_16bit  = (uint8_t)is16;
         st->xfer_signed = (a[0] & 0x10) ? 1 : 0;
         st->xfer_stereo = (a[0] & 0x20) ? 1 : 0;
+        st->xfer_legacy = 0;                    /* SB16: the rate IS the frame rate */
         if (input) { st->xfer_mode = SB_XFER_IDLE; return; }
         sb_start_block(st, (units + 1) * (is16 ? 2u : 1u), autoin);
         return;
@@ -107,13 +108,27 @@ static void sb_exec(sb_state *st)
     switch (c) {
     case 0x10:                                  /* direct DAC write: no DMA       */
         break;
+    /* ── #189: THE SB PRO'S STEREO IS A MIXER SWITCH. A DSP 1.x-3.x output command is
+         mono or stereo according to mixer register 0Eh bit 1 at the moment it starts,
+         and the time constant was programmed for BOTH channels -- so a stereo frame
+         (one byte each side) comes at half the byte rate (xfer_legacy + vdd_sb_frame_hz).
+         0x1C used to keep whatever stereo flag the last SB16 command had left behind.
+         0x90/0x91 are the high-speed forms (length from 0x48), which is how an SB Pro
+         program plays 22 kHz stereo; they were not modelled at all. */
     case 0x14: case 0x16: case 0x17:            /* 8-bit single-cycle DMA output  */
-        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_stereo = 0;
+        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
+        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
         sb_start_block(st, ((uint32_t)a[0] | ((uint32_t)a[1] << 8)) + 1, 0);
         break;
-    case 0x1C: case 0x2C:                       /* 8-bit auto-init DMA output     */
-        st->xfer_16bit = 0; st->xfer_signed = 0;
+    case 0x1C: case 0x2C: case 0x90:            /* 8-bit auto-init (0x90: high-speed) */
+        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
+        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
         sb_start_block(st, st->block_len, 1);
+        break;
+    case 0x91:                                  /* high-speed 8-bit single-cycle   */
+        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
+        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
+        sb_start_block(st, st->block_len, 0);
         break;
     case 0x40:
         st->rate_hz = sb_rate_from_tc(a[0]);
@@ -557,6 +572,8 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
 
 uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
 { return sb_render(st, out, frames, 0); }
+uint32_t vdd_sb_frame_hz(const sb_state *st)
+{ return (st->xfer_legacy && st->xfer_stereo) ? st->rate_hz / 2u : st->rate_hz; }
 uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames)
 { return sb_render(st, out, frames, 1); }
 

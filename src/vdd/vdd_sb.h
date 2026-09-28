@@ -85,6 +85,7 @@ typedef struct sb_state {
     uint8_t  xfer_mode;        /* SB_XFER_*                                       */
     uint8_t  xfer_16bit;       /* 16-bit samples (DMA channel dma16)              */
     uint8_t  xfer_stereo;
+    uint8_t  xfer_legacy;      /* #189: a DSP 1.x-3.x command started it (rate = BYTE rate) */
     uint8_t  xfer_signed;
     uint8_t  paused;
     uint32_t block_len;        /* bytes per block, from the length the game set   */
@@ -244,6 +245,9 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames);
 /* #189: the same transport, rendering interleaved L/R pairs (2*frames samples). An
    8-bit or 16-bit MONO transfer gives L = R. */
 uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames);
+/* #189: frames per second of the transfer in progress -- the programmed rate, halved
+   for an SB Pro stereo transfer (its time constant counts both channels). */
+uint32_t vdd_sb_frame_hz(const sb_state *st);
 
 /* True while a programmed transfer is running (test/mixer convenience). */
 static inline int vdd_sb_active(const sb_state *st)
