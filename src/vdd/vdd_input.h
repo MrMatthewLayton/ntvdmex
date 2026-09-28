@@ -123,6 +123,7 @@ typedef struct input_state {
     uint64_t sc_hold_until;     /* the next byte is not presented before this     */
     uint8_t  sc_irq_up;         /* IRQ1 raised for the byte at the head, not yet popped */
     uint32_t sc_held_reads;     /* port 60h reads answered with the same byte (held) */
+    uint8_t  layout;            /* #136: 0 US, 1 UK, 2 German, 3 French (SET_KBLAYOUT) */
 } input_state;
 #define KBD_XFER_US 900u        /* ~11 bits at the keyboard's ~12 kHz clock       */
 /* Present the next queued byte once the transfer delay has passed: raises IRQ1 if one
@@ -139,6 +140,9 @@ int  vdd_input_peek(input_state *st, uint16_t *key);  /* 1 if a key is available
 
 /* raw scancode FIFO ops (ports 0x60/0x64) -- UI thread pushes, V86 drains. */
 void vdd_input_push_scancode(input_state *st, uint8_t sc);
+/* #136: which key (and Shift) types character `ch` on the active layout -- the
+   reverse of the BIOS translation, for typing text in (Edit > Paste). 0 = none. */
+int vdd_input_char_to_key(const input_state *st, uint8_t ch, uint8_t *sc, int *shift);
 int  vdd_input_sc_pending(const input_state *st);     /* 1 if a scancode waits   */
 
 /* THE BIOS INT 09h HANDLER. Takes the byte out of the controller, re-asserts the line if

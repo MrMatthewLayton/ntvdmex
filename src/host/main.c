@@ -9324,22 +9324,6 @@ static void text_copy(HWND h, int all)
     } else GlobalFree(g);
 }
 
-/* US layout, as the keyboard is today (the layout setting is not yet used, #136):
-   the make code for each printable ASCII, and whether it needs Shift. */
-static const BYTE PASTE_SC[95][2] = {
- {0x39,0},{0x02,1},{0x28,1},{0x04,1},{0x05,1},{0x06,1},{0x08,1},{0x28,0},  /*  !"#$%&' */
- {0x0A,1},{0x0B,1},{0x09,1},{0x0D,1},{0x33,0},{0x0C,0},{0x34,0},{0x35,0},  /* ()*+,-./ */
- {0x0B,0},{0x02,0},{0x03,0},{0x04,0},{0x05,0},{0x06,0},{0x07,0},{0x08,0},  /* 01234567 */
- {0x09,0},{0x0A,0},{0x27,1},{0x27,0},{0x33,1},{0x0D,0},{0x34,1},{0x35,1},  /* 89:;<=>? */
- {0x03,1},{0x1E,1},{0x30,1},{0x2E,1},{0x20,1},{0x12,1},{0x21,1},{0x22,1},  /* @ABCDEFG */
- {0x23,1},{0x17,1},{0x24,1},{0x25,1},{0x26,1},{0x32,1},{0x31,1},{0x18,1},  /* HIJKLMNO */
- {0x19,1},{0x10,1},{0x13,1},{0x1F,1},{0x14,1},{0x16,1},{0x2F,1},{0x11,1},  /* PQRSTUVW */
- {0x2D,1},{0x15,1},{0x2C,1},{0x1A,0},{0x2B,0},{0x1B,0},{0x07,1},{0x0C,1},  /* XYZ[\]^_ */
- {0x29,0},{0x1E,0},{0x30,0},{0x2E,0},{0x20,0},{0x12,0},{0x21,0},{0x22,0},  /* `abcdefg */
- {0x23,0},{0x17,0},{0x24,0},{0x25,0},{0x26,0},{0x32,0},{0x31,0},{0x18,0},  /* hijklmno */
- {0x19,0},{0x10,0},{0x13,0},{0x1F,0},{0x14,0},{0x16,0},{0x2F,0},{0x11,0},  /* pqrstuvw */
- {0x2D,0},{0x15,0},{0x2C,0},{0x1A,1},{0x2B,1},{0x1B,1},{0x29,1}            /* xyz{|}~  */
-};
 
 /* Typed, not injected: ~30 characters a second, so a guest that reads slowly (or a
    BIOS ring of 15 keys) is not overrun. One paste at a time; a new one while typing
@@ -9353,7 +9337,8 @@ static DWORD WINAPI paste_thread(LPVOID pv)
         if (ch == '\r') { sc = 0x1C; if (s[i + 1] == '\n') ++i; }
         else if (ch == '\n') sc = 0x1C;
         else if (ch == '\t') sc = 0x0F;
-        else if (ch >= 0x20 && ch <= 0x7E) { sc = PASTE_SC[ch - 0x20][0]; sh = PASTE_SC[ch - 0x20][1]; }
+        else { uint8_t k; int kk;                           /* #136: on the active layout */
+               if (vdd_input_char_to_key(&g_in, ch, &k, &kk)) { sc = k; sh = (BYTE)kk; } }
         if (!sc) continue;                                  /* not typeable: skipped */
         if (sh) host_key_scancode(0x2A, 0, 0);
         host_key_scancode(sc, 0, 0);
@@ -10209,6 +10194,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_VOLUME, SET_MUTE, SET_RATE,
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
+    SET_KBLAYOUT,                                /* s82 #136 */
 };
 static int settings_is_live(int id)
 {
@@ -10291,6 +10277,9 @@ static int g_xms_on = 1, g_ems_on = 1;
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
     g_ms_sens        = (int)s->v[SET_MSENS];
+    /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
+       tables). Live: the next keystroke uses it. */
+    g_in.layout      = (uint8_t)(s->v[SET_KBLAYOUT] <= 3 ? s->v[SET_KBLAYOUT] : 0);
     /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the

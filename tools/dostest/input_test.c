@@ -404,6 +404,35 @@ int main(void)
         vdd_input_reset(&in);
     }
 
+    /* #136: KEYBOARD LAYOUTS (tables from XP's own layouts, runs/s82/kbdmap.txt). */
+    {   uint16_t k; uint8_t sc; int sh;
+#define TYPE1(code) do { vdd_input_push_scancode(&in, (code)); vdd_input_bios_consume(&in); \
+                         vdd_input_push_scancode(&in, (uint8_t)((code) | 0x80)); vdd_input_bios_consume(&in); } while (0)
+#define SHIFTED(code) do { vdd_input_push_scancode(&in, 0x2A); vdd_input_bios_consume(&in); TYPE1(code); \
+                           vdd_input_push_scancode(&in, 0xAA); vdd_input_bios_consume(&in); } while (0)
+        fresh(&in, &bus);
+        in.layout = 1;                                         /* United Kingdom */
+        SHIFTED(0x03); CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x0322, "UK: Shift+2 is \" (0322h)");
+        SHIFTED(0x04); CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x049C, "UK: Shift+3 is \x9C (the pound sign in CP437)");
+        SHIFTED(0x28); CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x2840, "UK: Shift+' is @");
+        TYPE1(0x2B);   CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x2B23, "UK: the key beside Enter is #");
+        TYPE1(0x1E);   CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x1E61, "UK: an unchanged key is untouched (a)");
+        CHECK(vdd_input_char_to_key(&in, '@', &sc, &sh) && sc == 0x28 && sh == 1,
+              "UK paste: '@' is typed as Shift + the ' key");
+        in.layout = 0;                                         /* US again */
+        SHIFTED(0x03); CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x0340, "US: Shift+2 is still @");
+        CHECK(vdd_input_char_to_key(&in, '@', &sc, &sh) && sc == 0x03 && sh == 1,
+              "US paste: '@' is Shift+2");
+        in.layout = 2;                                         /* German: Y and Z swap */
+        TYPE1(0x15);   CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x157A, "DE: the key at US-Y types z");
+        vdd_input_push_scancode(&in, 0x1D); vdd_input_bios_consume(&in);  /* Ctrl down */
+        TYPE1(0x15);   CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x151A, "DE: Ctrl+ that key is Ctrl+Z (1Ah)");
+        vdd_input_push_scancode(&in, 0x9D); vdd_input_bios_consume(&in);  /* Ctrl up */
+        in.layout = 0;
+#undef TYPE1
+#undef SHIFTED
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

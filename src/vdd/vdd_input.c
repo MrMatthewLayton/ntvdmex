@@ -263,10 +263,109 @@ static uint16_t sc_ext_plain(uint8_t code)
 {
     return (uint16_t)((code << 8) | (code == 0x1C ? 0x0D : code == 0x35 ? '/' : 0));
 }
-static int sc_is_letter(uint8_t code)
+/* ── #136: KEYBOARD LAYOUTS, TAKEN FROM WINDOWS XP'S OWN TABLES. ─────────────────────
+     The table above is the US BIOS. A layout only changes what the PLAIN and SHIFT
+     columns produce for some keys, so each layout is an overlay of (scan code, plain,
+     shift) in the DOS code page. The rows were NOT typed from memory: `rigshot kbdmap
+     <KLID>` asked XP (LoadKeyboardLayout -> ToAsciiEx -> CharToOem) what every scan
+     code produces on the rig, and the tables are the differences from its US answer
+     (runs/s82/kbdmap.txt; the US dump matches this BIOS table except Shift+Tab and
+     keypad 5, where the BIOS deliberately differs). Dead keys (German ^ and the accent
+     key, French ^) keep the US character: composition is not modelled. Ctrl and Alt
+     columns are unchanged, except that a letter which MOVED (German Y/Z, French A/Q/
+     W/Z/M) gets the Ctrl code of the letter it now types. Index = SET_KBLAYOUT's item:
+     US | United Kingdom | German | French. */
+typedef struct { uint8_t sc, plain, shift; } kbd_over;
+/* United Kingdom (XP layout 00000809): 5 keys differ from US. */
+static const kbd_over KBD_UK[] = {
+    { 0x03, 0x32, 0x22 },
+    { 0x04, 0x33, 0x9C },
+    { 0x28, 0x27, 0x40 },
+    { 0x29, 0x60, 0xAA },
+    { 0x2B, 0x23, 0x7E },
+    { 0, 0, 0 }
+};
+/* German (XP layout 00000407): 19 keys differ from US. */
+static const kbd_over KBD_DE[] = {
+    { 0x03, 0x32, 0x22 },
+    { 0x04, 0x33, 0xF5 },
+    { 0x07, 0x36, 0x26 },
+    { 0x08, 0x37, 0x2F },
+    { 0x09, 0x38, 0x28 },
+    { 0x0A, 0x39, 0x29 },
+    { 0x0B, 0x30, 0x3D },
+    { 0x0C, 0xE1, 0x3F },
+    { 0x15, 0x7A, 0x5A },
+    { 0x1A, 0x81, 0x9A },
+    { 0x1B, 0x2B, 0x2A },
+    { 0x27, 0x94, 0x99 },
+    { 0x28, 0x84, 0x8E },
+    { 0x2B, 0x23, 0x27 },
+    { 0x2C, 0x79, 0x59 },
+    { 0x33, 0x2C, 0x3B },
+    { 0x34, 0x2E, 0x3A },
+    { 0x35, 0x2D, 0x5F },
+    { 0x56, 0x3C, 0x3E },
+    { 0, 0, 0 }
+};
+/* French (XP layout 0000040C): 25 keys differ from US. */
+static const kbd_over KBD_FR[] = {
+    { 0x02, 0x26, 0x31 },
+    { 0x03, 0x82, 0x32 },
+    { 0x04, 0x22, 0x33 },
+    { 0x05, 0x27, 0x34 },
+    { 0x06, 0x28, 0x35 },
+    { 0x07, 0x2D, 0x36 },
+    { 0x08, 0x8A, 0x37 },
+    { 0x09, 0x5F, 0x38 },
+    { 0x0A, 0x87, 0x39 },
+    { 0x0B, 0x85, 0x30 },
+    { 0x0C, 0x29, 0xF8 },
+    { 0x10, 0x61, 0x41 },
+    { 0x11, 0x7A, 0x5A },
+    { 0x1B, 0x24, 0x9C },
+    { 0x1E, 0x71, 0x51 },
+    { 0x27, 0x6D, 0x4D },
+    { 0x28, 0x97, 0x25 },
+    { 0x29, 0xFD, 0x00 },
+    { 0x2B, 0x2A, 0xE6 },
+    { 0x2C, 0x77, 0x57 },
+    { 0x32, 0x2C, 0x3F },
+    { 0x33, 0x3B, 0x2E },
+    { 0x34, 0x3A, 0x2F },
+    { 0x35, 0x21, 0xF5 },
+    { 0x56, 0x3C, 0x3E },
+    { 0, 0, 0 }
+};
+
+static const kbd_over *const KBD_LAYOUT[4] = { 0, KBD_UK, KBD_DE, KBD_FR };
+
+/* The plain (shift=0) or shifted character of a key on the active layout; 0 = none. */
+static uint8_t kbd_char(const input_state *st, uint8_t code, int shift)
 {
-    uint16_t k = sc_key[code][0] & 0xFF;
+    const kbd_over *o = (st->layout < 4) ? KBD_LAYOUT[st->layout] : 0;
+    for (; o && o->sc; ++o) if (o->sc == code) return shift ? o->shift : o->plain;
+    if (code > SC_TABLE_MAX) return 0;
+    return (uint8_t)(sc_key[code][shift ? 1 : 0] & 0xFF);
+}
+
+static int sc_is_letter_on(const input_state *st, uint8_t code)
+{
+    uint8_t k = kbd_char(st, code, 0);
     return k >= 'a' && k <= 'z';
+}
+
+int vdd_input_char_to_key(const input_state *st, uint8_t ch, uint8_t *sc, int *shift)
+{
+    uint8_t c;
+    int sh;
+    for (sh = 0; sh < 2; ++sh)
+        for (c = 0x02; c <= SC_TABLE_MAX; ++c) {
+            if (c == 0x0F && sh) continue;          /* Shift+Tab is back-tab, not a char */
+            if (c >= 0x47 && c <= 0x53) continue;   /* the keypad: NumLock decides it   */
+            if (kbd_char(st, c, sh) == ch) { *sc = c; *shift = sh; return 1; }
+        }
+    return 0;
 }
 
 /* Shift-state bits in 0040:0017, as every DOS program expects to find them. */
@@ -328,13 +427,19 @@ static void bios_translate(input_state *st, uint8_t sc)
         key = sc_key[code][3];
     } else if (fl & KF_CTRL) {
         key = sc_key[code][2];
+        if (st->layout && sc_is_letter_on(st, code))           /* #136: a moved letter */
+            key = (uint16_t)((code << 8) | (kbd_char(st, code, 0) & 0x1F));
     } else {
         int shifted = (fl & (KF_LSHIFT | KF_RSHIFT)) != 0;
         /* CapsLock inverts Shift for LETTERS only; NumLock inverts it for the KEYPAD
            only. Neither touches anything else, so '1' stays '1' with Caps on. */
-        if ((fl & KF_CAPS) && sc_is_letter(code)) shifted = !shifted;
+        if ((fl & KF_CAPS) && sc_is_letter_on(st, code)) shifted = !shifted;
         if ((fl & KF_NUM) && code >= 0x47 && code <= 0x53) shifted = !shifted;
         key = sc_key[code][shifted ? 1 : 0];
+        if (st->layout && !(code >= 0x47 && code <= 0x53) && !(code == 0x0F && shifted)) {
+            uint8_t ch = kbd_char(st, code, shifted);        /* #136: the layout's char */
+            if ((key & 0xFF) != ch) key = ch ? (uint16_t)((code << 8) | ch) : 0;
+        }
     }
     if (key) vdd_input_push(st, key);                  /* 0 = the BIOS stores nothing */
     (void)ascii;

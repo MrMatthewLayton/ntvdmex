@@ -706,7 +706,49 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* ── `kbdmap <KLID>` -- WHAT DOES EACH KEY TYPE, ON THIS LAYOUT, IN THE DOS CODE PAGE?
+         (#136) The host's keyboard layouts are built from XP's own tables rather than from
+         memory: load the layout (e.g. 00000809 = United Kingdom), and for every scan code
+         ask ToAsciiEx what it produces plain and with Shift, then CharToOem it (a DOS guest
+         sees OEM bytes: '£' is 9Ch there, A3h in ANSI). One line per code:
+             kbdmap SC plain shift     (hex; 00 = nothing, D-- = a dead key) */
+    if (seq(verb, "kbdmap")) {
+        HKL hkl = LoadKeyboardLayoutA(arg1, KLF_NOTELLSHELL);
+        BYTE ks[256];
+        unsigned scn;
+        char m[160], *p;
+        if (!hkl) { logline("kbdmap: LoadKeyboardLayout FAILED"); return 1; }
+        { char h[80]; p = sput(h, "kbdmap: layout "); p = sput(p, arg1); logline(h); }
+        for (scn = 0x02; scn <= 0x58; ++scn) {
+            UINT vk = MapVirtualKeyExA(scn, 1 /* MAPVK_VSC_TO_VK */, hkl);
+            int lvl;
+            char out[2][4];
+            if (!vk) continue;
+            for (lvl = 0; lvl < 2; ++lvl) {
+                WORD ch[2] = { 0, 0 };
+                int r;
+                for (i = 0; i < 256; ++i) ks[i] = 0;
+                if (lvl) { ks[VK_SHIFT] = 0x80; ks[VK_LSHIFT] = 0x80; }
+                r = ToAsciiEx(vk, scn, ks, ch, 0, hkl);
+                if (r < 0) {                                   /* a dead key: flush it */
+                    WORD d[2]; ToAsciiEx(VK_SPACE, 0x39, ks, d, 0, hkl);
+                    out[lvl][0] = 'D'; out[lvl][1] = '-'; out[lvl][2] = '-'; out[lvl][3] = 0;
+                } else if (r == 1) {
+                    char a = (char)(ch[0] & 0xFF), o = 0;
+                    CharToOemBuffA(&a, &o, 1);
+                    wsprintfA(out[lvl], "%02X", (unsigned)(BYTE)o);
+                } else {
+                    out[lvl][0] = '0'; out[lvl][1] = '0'; out[lvl][2] = 0;
+                }
+            }
+            p = m;
+            wsprintfA(m, "kbdmap %02X %s %s", scn, out[0], out[1]);
+            logline(m);
+        }
+        return 0;
+    }
+
     logline("rigshot: unknown verb"
-            " (shot|list|tree|fg|click|drag|key|close|capture|cmd|clipset|clipget)");
+            " (shot|list|tree|fg|click|drag|key|close|capture|cmd|clipset|clipget|kbdmap)");
     return 2;
 }
