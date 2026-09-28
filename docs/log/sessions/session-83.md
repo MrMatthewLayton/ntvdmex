@@ -37,10 +37,16 @@ raises once per count in 0/4 and never in 1/5; `pit_test` T_IRQ0; STAGE2 `onesho
 A/B against `74610909` (`runs/s83/ab175/ab.sh`): Skyroads, Doom, ZAR and the 16-program shelf are
 unchanged.
 
-⚠ **Found on the way (#212):** on NTVDMEX the probe reads 0 after its first case because an
-explicit `sti` does not stick (captured FL=3293 straight after `sti`; 17 IRQ0s in the whole run,
-every async attempt `why=0x14`). That is a deterministic reproducer for #212 and probably #172.
+⚠ **Found on the way: counter 2's wait was broken, and I first blamed IF.** On NTVDMEX the probe
+read 0 after its first case. I read `FL=3293` as IF=0 and posted "sti does not stick" on #212 —
+wrong (`0x3293 & 0x200` = `0x200`), corrected there, and `p_vif.asm` confirmed IF stays 1. The
+real cause, found by replaying the probe's port sequence against the model off-VM: a gate-low
+edge froze counter 2's elapsed count past terminal count, and a new count did not clear it, so
+every "time it with counter 2" wait after the first returned at once. Fixed (`pit_test` T_WAIT);
+now `p_pit0` AGREEs on every row on the rig, and `p_pit` is unchanged.
+⛔ **Lesson: decode a flags word bit by bit before quoting it, and when a probe's result looks
+impossible, check the probe's own instrument (here its timer) on the subject before the subject.**
 
 ## Next
-#213 by ear. Then #212 (`sti` does not stick; `p_pit0.com` reproduces it), which likely
-underlies #172; then #162 synchronous delivery and #183 cheaper waits.
+#213 by ear. Then #212 (IF at program start, as originally reported), #162 synchronous
+delivery, #183 cheaper waits.

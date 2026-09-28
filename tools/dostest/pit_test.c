@@ -631,6 +631,26 @@ int main(void)
               "mode 4: a one-shot -- past TC it runs on through FFFFh, no reload, no 2nd strobe");
     }
 
+    /* T_WAIT: THE "TIME IT WITH COUNTER 2" IDIOM, TWICE (#175, s83). Gate low, mode 0,
+       count 0xFFFF, gate high, poll 61h bit 5 until OUT rises -- then do it again. The
+       gate-low edge froze the elapsed count at "past terminal count", and a new count did
+       not clear it, so the SECOND wait resumed from the old count and returned at once:
+       p_pit0's 220 ms waits collapsed to one 55 ms, and the probe saw no IRQ0s at all. */
+    {
+        uint32_t w; int k2; unsigned long n[2];
+        for (k2 = 0; k2 < 2; ++k2) {
+            vdd_pit_ch2_gate(&pit, 0);
+            w = 0xB0; vdd_bus_io(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 0  */
+            w = 0xFF; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+            w = 0xFF; vdd_bus_io(&bus, 0x42, 1, 0, &w);          /* 0xFFFF            */
+            vdd_pit_ch2_gate(&pit, 1);
+            n[k2] = 0;
+            while (!vdd_pit_ch2_out(&pit) && n[k2] < 100000ul) { vdd_pit_add_clocks(&pit, 64); ++n[k2]; }
+        }
+        CHECK(n[0] >= 1020 && n[0] <= 1025, "counter 2 mode 0: a 0xFFFF wait takes 65535 clocks");
+        CHECK(n[1] == n[0], "counter 2 mode 0: the SECOND wait is as long -- a new count clears the gate-frozen elapsed");
+    }
+
     /* T_IRQ0: IRQ0 IS COUNTER 0's OUT PIN, and the PIC counts its RISING EDGES (#175).
        Measured by tools/dostest/p_pit0.asm on QEMU, DOSBox-X and PCem, and the Intel 8254
        datasheet (231164-005) where they split:

@@ -188,8 +188,13 @@ a bare re-write after TC included. Modes 1 and 5: **none**, because counter 0's 
 high and never rises. Until s83 every mode raised once per period.
 Evidence: `tools/dostest/p_pit0.asm` on QEMU, DOSBox-X and PCem (modes 0, 4 and the bare
 re-write agree at 1; modes 1 and 5 split from the datasheet, with rationales in
-`oracle-rules.json`), and `pit_test.c` T_IRQ0. ⚠ On NTVDMEX that probe currently reads 0
-everywhere after its first case, because of #212 (`sti` does not stick), not because of this rule.
+`oracle-rules.json`), and `pit_test.c` T_IRQ0. NTVDMEX agrees with the reference on every row.
+
+✅ **Counter 2's "time it" idiom, twice in a row (s83).** Gate low, a new mode-0 count, gate
+high, poll 61h bit 5: the SECOND wait returned at once, because a gate-low edge froze the
+elapsed count past terminal count and a new count did not clear it. That is what made `p_pit0`
+read 0 on NTVDMEX at first (every 220 ms wait collapsed). A count or control word now clears the
+frozen elapsed; `pit_test.c` T_WAIT.
 
 ✅ **The load rule is right, and it was expensive to learn:** a Control Word arms the next
 count write to load and restart; a bare count in a periodic mode waits for the end of the

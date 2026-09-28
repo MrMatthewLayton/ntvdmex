@@ -149,6 +149,11 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
     if (c->mode == 1 || c->mode == 5) c->trig = 0;   /* #175: armed, not started */
     c->null_cnt = 0;                 /* the count has reached the CE        */
     c->load_clocks = st->total_clocks;
+    c->gate_elapsed = 0;             /* a NEW count: nothing counted of it yet. Keeping the
+                                        old count's gate-frozen elapsed made the next gate
+                                        rise resume past terminal count -- OUT high at once,
+                                        so a second "time it with counter 2" wait returned
+                                        immediately (s83, p_pit0; pit_test T_WAIT). */
 }
 
 /* A read, honouring the latch and the access mode -- the same contract as 0x40. */
@@ -181,6 +186,7 @@ static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
     c->wr_flip  = 0;
     c->null_cnt = 1;                 /* CR written-to-be, CE not yet loaded */
     c->load_clocks = st->total_clocks;
+    c->gate_elapsed = 0;             /* see chan_write_count */
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
