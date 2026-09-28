@@ -4409,26 +4409,44 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                      ? wowres_accel_first(acc, WOWRES_MAX_ACCEL, &accres) : 0;
             }
             if (nacc > 0 && lp) {
+                /* ── #215: TWO KINDS OF ENTRY, MATCHED AGAINST TWO KINDS OF MESSAGE. ──
+                     A VIRTKEY entry names a virtual key and is matched on WM_KEYDOWN /
+                     WM_SYSKEYDOWN with its Shift/Ctrl/Alt bits. An entry WITHOUT the
+                     VIRTKEY bit is an ASCII accelerator -- `"^C"` in an .RC file -- and
+                     names a CHARACTER: it matches WM_CHAR (WM_SYSCHAR with Alt) whose
+                     wParam is that code, the Shift/Ctrl already folded into it.
+                     Only the first kind was handled, so Calc's Ctrl+C (0x03 -> 300) and
+                     Ctrl+V (0x16 -> 301), and Paint's and Write's cut/copy/paste/undo,
+                     all ASCII, never matched. The WM_CHAR is here to be matched because
+                     the OS translated the key on our side and it was relayed verbatim.
+                   ★ WM_COMMAND from an accelerator carries notify code 1 in lParam's
+                     high word (0 is a menu); Win16 apps may tell the two apart. */
                 wowmsg_read(lp, &m);
-                if (m.msg == WM_KEYDOWN16 || m.msg == 0x0104 /* WM_SYSKEYDOWN */) {
+                if (m.msg == WM_KEYDOWN16 || m.msg == 0x0104 /* WM_SYSKEYDOWN */
+                    || m.msg == 0x0102 /* WM_CHAR */ || m.msg == 0x0106 /* WM_SYSCHAR */) {
                     int shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
                     int ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
                     int alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+                    int ischar = (m.msg == 0x0102 || m.msg == 0x0106);
                     int i;
+                    if (m.msg == 0x0106) alt = 1;
                     for (i = 0; i < nacc; ++i) {
-                        if (!(acc[i].flags & WOWRES_ACCEL_VIRTKEY)) continue;
+                        int vk = (acc[i].flags & WOWRES_ACCEL_VIRTKEY) != 0;
+                        if (vk == ischar) continue;             /* wrong kind of message */
                         if (acc[i].key != m.wparam) continue;
-                        if (!!(acc[i].flags & WOWRES_ACCEL_SHIFT)   != shift) continue;
-                        if (!!(acc[i].flags & WOWRES_ACCEL_CONTROL) != ctrl)  continue;
+                        if (vk) {
+                            if (!!(acc[i].flags & WOWRES_ACCEL_SHIFT)   != shift) continue;
+                            if (!!(acc[i].flags & WOWRES_ACCEL_CONTROL) != ctrl)  continue;
+                        }
                         if (!!(acc[i].flags & WOWRES_ACCEL_ALT)     != alt)   continue;
                         /* ★ A MATCH IS A WM_COMMAND, and the caller's `or ax,ax /
                              jne` must see non-zero so it does NOT also translate
                              and dispatch the keystroke. */
                         wowmsg_post(wow32_argw(f, TA_ARG_HWND), WM_COMMAND16,
-                                    acc[i].id, 0, GetTickCount(), 0, 0);
+                                    acc[i].id, 0x00010000u, GetTickCount(), 0, 0);
                         wu_puts(note, notecap, &k, " -> ACCELERATOR #");
                         wu_puthex(note, notecap, &k, accres, 4);
-                        wu_puts(note, notecap, &k, " matched vk 0x");
+                        wu_puts(note, notecap, &k, vk ? " matched vk 0x" : " matched char 0x");
                         wu_puthex(note, notecap, &k, m.wparam, 4);
                         wu_puts(note, notecap, &k, " -> WM_COMMAND 0x");
                         wu_puthex(note, notecap, &k, acc[i].id, 4);
