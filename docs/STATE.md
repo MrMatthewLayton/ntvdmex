@@ -7,7 +7,7 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-09-28 (session 82, unattended night)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `f211af49` (= `a6aabd3`),
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `001de0d2` (= `b401f99`),
   **not user-confirmed**: s82's changes await the by-hand checklist (`checks.txt`, round 5).
 - **Resume:** [`log/sessions/session-82.md`](log/sessions/session-82.md), then #202
   (#172 deferred until #212 is understood; then #201).

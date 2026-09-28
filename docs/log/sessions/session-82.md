@@ -39,6 +39,13 @@ messages on a sorted whitelist (seg1:38fe) and returns 0 having done nothing for
 after the 16-bit one returns, which works because it SENDS WM_CLOSE synchronously; we POST it.
 A structural gap for every message off that list; needs the nested-run design.
 
+### #136 keyboard layout (`b401f99`, bin `001de0d2`)
+UK/DE/FR override tables generated on the rig from XP's own layouts (`rigshot kbdmap`:
+ToAsciiEx + CharToOem over every scancode, output `runs/s82/kbdmap.txt`), applied in the BIOS
+translation; the setting is live. Paste maps characters back to keys through the same table.
+`kbtest.bat` round-trips `echo A@B#C~D` under UK. ⚠ Its first restore (`reg export`/`import`)
+left `KeyboardLayout` DELETED on XP; it now re-adds the queried value. The rig's value is 0x1 (UK).
+
 ## Findings worth keeping
 
 ### ★ The Win16 Edit-menu defect was a MENU defect, not a clipboard one
