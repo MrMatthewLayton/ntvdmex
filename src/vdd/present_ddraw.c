@@ -29,17 +29,22 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
      of the blank, and spin only the last millisecond. The monitor's line count and
      refresh are read once (GetDisplayMode / GetMonitorFrequency) and fall back to
      60 Hz if the driver will not say. Bounded: at most ~2 frames however it goes. */
-static void wait_vblank(present_ddraw *pd)
+static void mon_query(present_ddraw *pd)
 {
-    DWORD sl = 0, height, hz, per_us, k;
-    HRESULT hr;
-    if (!pd->vsync || !pd->dd) return;
-    if (!pd->mon_h) {
-        DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    DWORD hz;
+    if (pd->mon_h || !pd->dd) return;
+    {   DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
         pd->mon_h = (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwHeight) ? (int)d.dwHeight : 0;
         pd->mon_hz = (SUCCEEDED(IDirectDraw7_GetMonitorFrequency(DD, &hz)) && hz >= 40 && hz <= 240) ? (int)hz : 60;
-        if (!pd->mon_h) pd->mon_h = -1;               /* asked once; unknown: spin-free fallback below */
-    }
+        if (!pd->mon_h) pd->mon_h = -1; }             /* asked once; unknown: spin-free fallback below */
+}
+
+static void wait_vblank(present_ddraw *pd)
+{
+    DWORD sl = 0, height, per_us, k;
+    HRESULT hr;
+    if (!pd->vsync || !pd->dd) return;
+    mon_query(pd);
     height = pd->mon_h > 0 ? (DWORD)pd->mon_h : 0;
     per_us = 1000000u / (DWORD)(pd->mon_hz ? pd->mon_hz : 60);
     hr = IDirectDraw7_GetScanLine(DD, &sl);
@@ -537,6 +542,26 @@ static const uint32_t *row_pal(present_ddraw *pd, int y)
     for (i = 0; i < 256; ++i) pd->rowpal[i] = ntvdd_frame_pal_at(&f, (unsigned)y, i);
     pd->rowpal_y = y;
     return pd->rowpal;
+}
+
+/* How long ago the monitor's vertical blank began, from its scanline (#221: the guest's
+   retrace is phase-locked to it when "Match the display's refresh" is on). Returns 0
+   when it cannot tell -- no DirectDraw, an unknown mode, or the beam inside the blank
+   itself, where GetScanLine gives no position. `total` is the same 5%-blanking
+   estimate wait_vblank uses; the error is a fraction of a millisecond. */
+int present_ddraw_since_vbl(present_ddraw *pd, uint32_t *us_since, uint32_t *period_us)
+{
+    DWORD sl = 0, height, total, per_us;
+    if (!pd->dd) return 0;
+    mon_query(pd);
+    if (pd->mon_h <= 0) return 0;
+    if (IDirectDraw7_GetScanLine(DD, &sl) != DD_OK) return 0;
+    height = (DWORD)pd->mon_h; total = height * 21u / 20u;
+    if (sl >= height) return 0;
+    per_us = 1000000u / (DWORD)(pd->mon_hz ? pd->mon_hz : 60);
+    *us_since  = (uint32_t)((uint64_t)(sl + (total - height)) * per_us / total);
+    *period_us = per_us;
+    return 1;
 }
 
 /* blit the back-buffer to the screen, vsync'd (call outside the lock). */

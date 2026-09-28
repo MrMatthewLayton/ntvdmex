@@ -229,6 +229,16 @@ typedef struct video_state {
     uint16_t start_vs;          /* start address as loaded at the last retrace start */
     uint8_t  disp_pan;          /* AR13 as the displayed frame uses it               */
     uint64_t latch_t;           /* when vid_latch last ran (0 = never / reset)       */
+    /* ── MATCH THE DISPLAY'S REFRESH (s83, #221, user setting, default off). ────────
+         A 70 Hz guest on a 60 Hz panel loses one frame in seven: a smooth scroll jumps
+         ten times a second. When lock_us is set the beam clock runs at the MONITOR's
+         period instead of the mode's, phase-locked so our retrace begins as the
+         monitor's blank does -- every guest frame gets exactly one refresh. Costs
+         speed in retrace-paced games (60/70); the PIT is untouched. 0 = accurate. */
+    uint32_t lock_us;           /* the monitor's frame period, or 0 (set LAST)       */
+    uint32_t lock_phase;        /* the monitor's blank starts at t % lock_us == this.
+                                   32-bit on purpose: written by the UI thread, read by
+                                   the guest's, and a 64-bit store can tear on XP-32. */
     /* Guest pacing (s83, #221): retrace periods between successive completed start-
        address pairs. A smooth 70 Hz scroller is all 1s; a 2 is a frame the guest missed. */
     uint32_t start_prev_frame;  /* frame number of the previous completed pair       */

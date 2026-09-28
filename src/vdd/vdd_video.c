@@ -1906,25 +1906,21 @@ static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
 uint32_t vdd_video_frame_us(const video_state *st)
 {
     uint32_t t, a, b; int tall = (st->gh > VID_VACTIVE_LO);
+    if (st->lock_us) return st->lock_us;                        /* #221: the monitor's */
     if (vga_vtiming(st, &t, &a, &b)) tall = (t >= 500u);
     return 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
 }
 int vdd_video_present_ready(video_state *st)
 {
-    uint32_t frame_us, pm, t, a, b;
-    int act, tall;
+    /* The same beam the 0x3DA read uses -- vid_beam() -- so the present window moves
+       with it when the clock is locked to the monitor (#221). The picture ends at
+       vdisp: 914/891 permille in the two BIOS cases, 780 in 640x350. */
+    uint64_t now; uint32_t F, vt, vd, vb, fno, line; int act, pm;
     if (!st->time_us) return 1;                 /* no clock: present every tick   */
-    /* Same geometry the 0x3DA read uses, and for the same reason: 914/891 permille
-       are the two BIOS cases, and 640x350 is neither -- its picture ends at 350 of
-       449 lines, 780 permille. Presenting at 891 there meant building the frame 1.6ms
-       into the blanking interval rather than at the end of the picture. */
-    tall = (st->gh > VID_VACTIVE_LO);
-    act  = tall ? 914 : 891;
-    if (vga_vtiming(st, &t, &a, &b)) { tall = (t >= 500u); act = (int)(a * 1000u / t); }
-    frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
-    if (!frame_us) return 1;
-    pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
-    return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
+    if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !vt) return 1;
+    act = (int)(vd * 1000u / vt);
+    pm  = (int)(line * 1000u / vt);
+    return pm >= act - VID_PRESENT_WINDOW_PM && pm < act;
 }
 
 /* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
@@ -2553,6 +2549,23 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
      (the off-VM default). `now` is the model's microseconds; `frame_us` the frame
      period; `vtotal`/`vdisp`/`vblank` the line counts (total, display end, blank
      start); `frame_no` = now / frame_us; `line` = the scanline the beam is on. */
+/* The beam clock's "now", in time_us units, and the frame period it runs at. Normally
+   the host's clock and the mode's 60/70 Hz. With lock_us set (Match the display's
+   refresh, #221) the period is the monitor's and the time is shifted so the frame's
+   blanking line lands where the monitor's blank starts (t % lock_us == lock_phase).
+   The shift is a constant between host samples, so frame numbers stay continuous. */
+static uint64_t vid_clock(const video_state *st, uint32_t *frame_us, uint32_t vblank, uint32_t vtotal)
+{
+    uint64_t t = st->time_us();
+    uint32_t F = st->lock_us;
+    if (F && vtotal) {
+        uint64_t vbo = (uint64_t)vblank * F / vtotal;
+        *frame_us = F;
+        return t + vbo + (F - st->lock_phase % F) + (uint64_t)F * 4u;  /* (t - blank) + vbo */
+    }
+    return t;
+}
+
 static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line)
@@ -2577,7 +2590,7 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
         tall = (t >= 500u);
     }
     *frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
-    *now      = st->time_us();
+    *now      = vid_clock(st, frame_us, *vblank, *vtotal);
     *frame_no = (uint32_t)(*now / *frame_us);
     in_frame  = *now % (uint64_t)*frame_us;
     /* SCALE FIRST, DIVIDE ONCE -- see status_in for why line_us must not be an integer. */
@@ -2617,7 +2630,11 @@ static void vid_latch(video_state *st, int at_frame)
         return;
     }
     (void)vd; (void)fno; (void)line;
-    t0 = st->latch_t; st->latch_t = now;
+    t0 = st->latch_t;
+    /* A clock that stepped BACK a little (the #221 lock correcting its phase) is not a
+       reason to resync: keep the old reference, nothing new has been crossed. */
+    if (t0 && now < t0 && t0 - now < (uint64_t)F) return;
+    st->latch_t = now;
     if (!t0 || now < t0 || now - t0 > 4u * (uint64_t)F) {
         st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
         st->disp_pan = st->attr_reg[0x13];

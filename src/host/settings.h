@@ -60,7 +60,7 @@ typedef enum {
     SET_SPEEDMODE,
     SET_CONVKB, SET_XMS, SET_EMS, SET_UMB, SET_A20,
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT,
-    SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS,
+    SET_FRAMESKIP, SET_VSYNC, SET_MATCHHZ, SET_BLINKCURSOR, SET_AUTOFS,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS,
     SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
@@ -180,6 +180,10 @@ static const set_def SET_DEFS[SET_COUNT] = {
      delays the NEXT frame's render to a random phase and cost 3% of BOUNCEBX's
      frames on the rig. Stock NTVDM does not vsync its blit either, and it is smooth. */
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      0,  0,   1, NULL },
+/* #221 (s83, user: "add a setting, default off"): run the guest's retrace at the
+     monitor's refresh, phase-locked to its blank. Smooth scrolling on a 60 Hz panel;
+     retrace-paced games run 60/70 of their speed. Off = accurate 70/60 Hz timing. */
+{ "MatchRefresh",      IDC_S_MATCHHZ,     SK_CHECK,      0,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
 /* ── START FULLSCREEN (s68, user ask). Always = every program starts fullscreen;
      Graphics only = a program that begins in text mode (DOOM) starts in a window and
