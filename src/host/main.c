@@ -5956,26 +5956,30 @@ static void host_screenshot(void)
     static int seq = 0;
     BITMAPINFOHEADER *bih;
     HGLOBAL hmem;
-    DWORD w, h, stride, pal_n, img_sz, dib_sz;
+    DWORD w, h, stride, pal_n, img_sz, dib_sz, bpp;
     BYTE *dib, *bits;
     const uint8_t *src;
 
+    /* #155: 8-bit AND direct-colour (32bpp, VBE 2 LFB) frames. It returned silently for
+       anything but 8-bit -- the user pressed Ctrl+F5 in Heaven7's direct-colour part and
+       got nothing, with nothing said. */
     HOST_LOCK();
-    w = g_vid.frame.w; h = g_vid.frame.h;
+    w = g_vid.frame.w; h = g_vid.frame.h; bpp = g_vid.frame.bpp;
     src = g_vid.frame.pixels;
-    if (!src || !w || !h || g_vid.frame.bpp != 8) { HOST_UNLOCK(); return; }
-    stride = (w + 3) & ~3u;                  /* DIB rows are 4-byte aligned          */
-    pal_n  = 256;
+    if (!src || !w || !h || (bpp != 8 && bpp != 32)) { HOST_UNLOCK(); return; }
+    stride = (bpp == 8) ? ((w + 3) & ~3u) : w * 4u;    /* DIB rows are 4-byte aligned */
+    pal_n  = (bpp == 8) ? 256 : 0;
     img_sz = stride * h;
     dib_sz = sizeof(BITMAPINFOHEADER) + pal_n * 4 + img_sz;
     hmem = GlobalAlloc(GMEM_MOVEABLE, dib_sz);
     if (!hmem) { HOST_UNLOCK(); return; }
     dib = (BYTE *)GlobalLock(hmem);
+    if (!dib) { GlobalFree(hmem); HOST_UNLOCK(); return; }
     { unsigned i; for (i = 0; i < dib_sz; ++i) dib[i] = 0; }
     bih = (BITMAPINFOHEADER *)dib;
     bih->biSize = sizeof(BITMAPINFOHEADER);
     bih->biWidth = (LONG)w; bih->biHeight = (LONG)h;   /* positive => bottom-up      */
-    bih->biPlanes = 1; bih->biBitCount = 8; bih->biCompression = 0;
+    bih->biPlanes = 1; bih->biBitCount = (WORD)bpp; bih->biCompression = 0;
     bih->biSizeImage = img_sz; bih->biClrUsed = pal_n; bih->biClrImportant = pal_n;
     { DWORD i; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
       for (i = 0; i < pal_n; ++i) {
@@ -5986,26 +5990,23 @@ static void host_screenshot(void)
           pal[i*4+3] = 0;
       } }
     bits = dib + sizeof(BITMAPINFOHEADER) + pal_n * 4;
-    { DWORD y, x;
+    { DWORD y, x, rowb = (bpp == 8) ? w : w * 4u;
       for (y = 0; y < h; ++y) {                    /* flip: DIB row 0 is the bottom   */
           const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.frame.stride;
           BYTE *dr = bits + (size_t)y * stride;
-          for (x = 0; x < w; ++x) dr[x] = sr[x];
+          for (x = 0; x < rowb; ++x) dr[x] = sr[x];
+          if (bpp == 32) for (x = 3; x < rowb; x += 4) dr[x] = 0;   /* XRGB: no alpha */
       } }
     HOST_UNLOCK();
 
-    if (OpenClipboard(g_hwnd)) {                   /* paste-into-Paint path           */
-        EmptyClipboard();
-        if (!SetClipboardData(CF_DIB, hmem)) GlobalFree(hmem);   /* else clipboard owns it */
-        CloseClipboard();
-    } else GlobalFree(hmem);
-
-    /* ...and the same image on the share, so it can be read from the build machine. */
+    /* The file FIRST, while the block is still ours. It used to be written after the
+       block had been handed to the clipboard -- or FREED, when OpenClipboard failed:
+       a use-after-free on exactly the path nobody tests. */
     {
-        char path[160];
+        char path[MAX_PATH];
         const char *dir = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         int i = 0, j;
-        while (dir[i]) { path[i] = dir[i]; ++i; }
+        while (dir[i] && i < MAX_PATH - 24) { path[i] = dir[i]; ++i; }
         { const char *nm = "shot_manual_00.bmp";
           for (j = 0; nm[j]; ++j) path[i + j] = nm[j];
           path[i + 12] = (char)('0' + (seq / 10) % 10);
@@ -6025,7 +6026,45 @@ static void host_screenshot(void)
               CloseHandle(f);
           } }
     }
-    if (GlobalLock(hmem)) GlobalUnlock(hmem);
+    GlobalUnlock(hmem);
+    if (OpenClipboard(g_hwnd)) {                   /* paste-into-Paint path           */
+        EmptyClipboard();
+        if (!SetClipboardData(CF_DIB, hmem)) GlobalFree(hmem);   /* else clipboard owns it */
+        CloseClipboard();
+    } else GlobalFree(hmem);
+}
+
+static void host_rec_finish(void);        /* below: patches the header, logs */
+/* #155: Tools > Capture > Record Audio -- a toggle over the recorder cfg\wavrec.flag
+   already drives. Each recording is its own numbered file in the capture folder, so a
+   second one never overwrites the first; stopping patches the header (host_rec_finish). */
+static void host_rec_toggle(void)
+{
+    static int seq = 0;
+    char path[MAX_PATH], *q;
+    if (aw_rec_active()) { host_rec_finish(); return; }
+    q = zput(path, NTVDMEX_OUT); q = zput(q, "capture_audio_");
+    *q++ = (char)('0' + (seq / 10) % 10); *q++ = (char)('0' + seq % 10);
+    q = zput(q, ".wav");
+    ++seq;
+    if (aw_rec_start(path, g_wave.hz) == 0) {
+        char lb[MAX_PATH + 64], *lq = zput(lb, "STAGE2: audio recording started -> ");
+        lq = zput(lq, path); lq = zput(lq, "\r\n"); log_append(LOG_PATH, lb, lq);
+    }
+}
+
+/* #155: the folder screenshots and recordings land in, in Explorer. CreateProcess on
+   explorer.exe rather than ShellExecute: no new import for one button. */
+static void host_open_capture_folder(void)
+{
+    char cmd[MAX_PATH + 32], *q;
+    STARTUPINFOA si; PROCESS_INFORMATION pi; int i;
+    q = zput(cmd, "explorer.exe \""); q = zput(q, NTVDMEX_OUT); q = zput(q, "\"");
+    for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
+    si.cb = sizeof si;
+    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    }
 }
 
 /* ► THE SOURCE BESIDE THE PICTURE. (s68) A planar frame is st->fb rendered from
@@ -8150,6 +8189,9 @@ enum {                                       /* wired command IDs               
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
     IDM_VIEW_HOSTCURSOR,                     /* s81 #157: inverse of HideHostCursor */
+    /* #155. APPENDED, not beside IDM_CAP_SHOT: the rig scripts post these ids as
+       NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it. */
+    IDM_CAP_AUDIO, IDM_CAP_FOLDER,
 
     /* ── ★ ONE CONTIGUOUS RANGE PER DROPDOWN SETTING. ────────────────────────────
          Every combo on the Display page, plus the CPU speed, appears in a menu as a
@@ -8898,9 +8940,9 @@ static HMENU build_menu(void)
     m = mpop();                                                   /* Tools>Capture*/
     mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
     msub(m,"Record Video (AVI)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
-    msub(m,"Record Audio (WAV)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
+    mi(m,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
     msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
-    mi(m,"Open Capture Folder",IDM_STUB); mi(m,"Capture Settings...",IDM_STUB);
+    mi(m,"Open Capture Folder",IDM_CAP_FOLDER); mi(m,"Capture Settings...",IDM_STUB);
     msub(tools, "Capture", m);
 
     msep(tools);
@@ -9358,6 +9400,7 @@ static void menu_sync_modal(HWND h, HMENU popup)
     flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
+    CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (aw_rec_active() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED) {
         if (!g_sel_on) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
@@ -11578,6 +11621,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
         case IDM_CAP_SHOT: host_screenshot(); return 0;
+        case IDM_CAP_AUDIO: host_rec_toggle(); return 0;              /* #155 */
+        case IDM_CAP_FOLDER: host_open_capture_folder(); return 0;    /* #155 */
         /* ── ★ THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES. ───
              ShellAbout is the shared About dialog every Win16 and early Win32
              application on this desktop puts behind Help > About -- Program
