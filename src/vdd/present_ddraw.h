@@ -106,7 +106,6 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f);
 
 /* Blit the snapshot to the screen, vsync'd -- call OUTSIDE the lock (the slow
    blit then never starves the V86 thread). */
-int  present_ddraw_since_vbl(present_ddraw *pd, uint32_t *us_since, uint32_t *period_us); /* #221 */
 void present_ddraw_present(present_ddraw *pd);
 
 /* Snapshot + present in one call (for the standalone present_demo). */

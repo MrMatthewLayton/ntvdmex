@@ -10188,34 +10188,6 @@ static const char *g_shell_ovr;               /* #203: cfg\shell.txt beat DosPro
      list is stored and shown in the dialog and changes nothing (GH #136), and the log
      says so rather than letting its value look like a claim about the machine. Keep
      it in step with settings_apply: adding a read there means adding the id here. */
-/* ── #221: PHASE-LOCK THE GUEST'S RETRACE TO THE MONITOR. ──────────────────────────
-     After each present, ask where the monitor's beam is; the time its blank began is a
-     phase in its period. The first sample sets period and phase; later ones pull the
-     phase a quarter of the way to each new reading, which follows a 59.94 Hz panel's
-     drift without letting one noisy sample move a frame boundary far. */
-static int g_matchhz = 0;
-static uint32_t g_lock_samples = 0;
-static void host_lock_sample(void)
-{
-    uint32_t since, F, ph; int32_t e;
-    if (!g_matchhz || !present_ddraw_since_vbl(&g_pd, &since, &F) || !F) return;
-    ph = (uint32_t)((host_time_us() - since) % F);
-    ++g_lock_samples;
-    if (g_vid.lock_us != F) {               /* first sample, or the monitor changed    */
-        g_vid.lock_us = 0; g_vid.lock_phase = ph; g_vid.lock_us = F;
-        return;
-    }
-    e = (int32_t)ph - (int32_t)g_vid.lock_phase;
-    if (e >  (int32_t)(F / 2)) e -= (int32_t)F;
-    if (e < -(int32_t)(F / 2)) e += (int32_t)F;
-    /* A correction moves the guest's clock by -e/8 (a later blank = an earlier "now"),
-       i.e. possibly BACKWARDS by a fraction of a millisecond. Ignore sampling noise
-       (the scanline estimate is good to ~0.3 ms) and take small steps: a 59.94 Hz
-       panel drifts ~17 us a frame, which this follows easily. */
-    if (e > -200 && e < 200) return;
-    g_vid.lock_phase = (uint32_t)(((int64_t)g_vid.lock_phase + e / 8 + (int64_t)F) % F);
-}
-
 static const BYTE SET_LIVE_IDS[] = {
     SET_DOSMAJ, SET_DOSMIN, SET_PITPACE, SET_UITICK, SET_SPEEDMODE, SET_XMS, SET_EMS,
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT, SET_FRAMESKIP,
@@ -10223,7 +10195,6 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
-    SET_MATCHHZ,                                 /* s83 #221 */
 };
 static int settings_is_live(int id)
 {
@@ -10309,10 +10280,6 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
        tables). Live: the next keystroke uses it. */
     g_in.layout      = (uint8_t)(s->v[SET_KBLAYOUT] <= 3 ? s->v[SET_KBLAYOUT] : 0);
-    /* #221: Match the display's refresh. Off drops the lock at once; on arms it, and
-       the first present that can read the monitor's scanline sets the period. */
-    g_matchhz        = (int)(s->v[SET_MATCHHZ] ? 1 : 0);
-    if (!g_matchhz) g_vid.lock_us = 0;
     /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the
@@ -11344,9 +11311,6 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      snapshot too would leave a stale picture on screen after a
                      window move, which is a bug, not a setting. Skipping only the
                      blit gives back exactly what the blit costs. */
-                /* #221: sample the monitor's beam BEFORE the blit -- a vsync'd blit
-                   ends inside the blank, where GetScanLine gives no position. */
-                host_lock_sample();
                 {   static unsigned s_fs;
                     if (g_frameskip <= 0 || (s_fs++ % (unsigned)(g_frameskip + 1)) == 0)
                         present_ddraw_present(&g_pd);  /* vsync'd blit OUTSIDE the lock */
@@ -32166,9 +32130,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " live="); p = zdec(p, g_vid.crtc_start_live);
         p = zput(p, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
         { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = zput(p, "/"); p = zdec(p, g_vid.start_gap_hist[gi]); } }
-        p = zput(p, " matchhz="); p = zdec(p, (DWORD)g_matchhz);
-        p = zput(p, " lock_us="); p = zdec(p, g_vid.lock_us);
-        p = zput(p, " lock_samples="); p = zdec(p, g_lock_samples);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);

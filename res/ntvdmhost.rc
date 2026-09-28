@@ -211,12 +211,10 @@ BEGIN
     COMBOBOX        IDC_S_ASPECT, 180, 84, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Wait for monitor &VSync (can drop frames)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 102, 250, 10
-    CONTROL         "&Match the display's refresh (smoother; some games run slower)",
-                    IDC_S_MATCHHZ, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 114, 266, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 250, 10
     CONTROL         "&Blink the text-mode cursor, as a real CRTC does",
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
-                    14, 126, 250, 10
+                    14, 122, 250, 10
 
     GROUPBOX        "Fullscreen", -1, 4, 146, 284, 32
     LTEXT           "Start &fullscreen:", -1, 14, 162, 60, 8
