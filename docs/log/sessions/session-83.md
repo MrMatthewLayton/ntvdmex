@@ -57,6 +57,19 @@ goes to standby, and XP stays alive. The first "crash" was that plus a manual re
 without a reboot: end stock's `ntvdm.exe`, then `rigshot dispreset`
 (`ChangeDisplaySettings(CDS_RESET)` with the registry mode) brings the display back.
 
+## #221 — Mario's scrolling (user: jagged here, butter-smooth on Windows 98 and stock)
+Mario is UPX-packed; unpacked, its `SetView` (image 0x24AF7) writes CRTC 0Ch/0Dh during the
+picture, waits for 3DA bit 3, then writes AR13 pel panning. We ignored AR13 (4-pixel jumps) and
+took the start address whenever the host drew. **`5f92501`**: pel panning in mode X and planar,
+and `vid_latch()` (start loaded at the retrace start, pan taken at frame start, off the 3DA beam
+clock). User: *"definitely smoother"*. **`3ccf62f`**: STAGE2 `gap_frames` (Mario: 1550 single-
+frame gaps, 8 misses), which proved the rest is 70 Hz frames on a 60 Hz panel.
+**Tried and removed:** "Match the display's refresh" (`dc0f4ec`, reverted `7f49f4c`): retrace at
+the monitor's rate, phase-locked. It slowed Skyroads and DOOM too (both retrace-paced). The design
+notes for reviving it are on #221.
+⚠ Skyroads' headless n8 read 0x14-0x35 on EVERY build late on (526b1090 included, 0 at 21:57):
+not code (interleaved A/B). `winvnc.exe` was running; unconfirmed.
+
 ## Next
 #213 by ear. Then #212 (IF at program start, as originally reported), #162 synchronous
 delivery, #183 cheaper waits.
