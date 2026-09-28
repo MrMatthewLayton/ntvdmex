@@ -179,6 +179,18 @@ guard.
 | 4 | Software Triggered Strobe | **PART** | generic count law; the one-clock OUT strobe is not modelled |
 | 5 | Hardware Triggered Strobe | **MISS** | needs a GATE edge, which does not exist |
 
+> ⚠ **The table above predates s82/s83 and is superseded for counters 1/2 by #175** (modes
+> 1/5 GATE triggers on counter 2, one-shot count laws, the mode-4 strobe; `p_pit` section H).
+
+✅ **IRQ0 in each mode (#175, s83).** IRQ0 is counter 0's OUT pin and the PIC counts rising
+edges. Mode 2/3: one per period. Modes 0 and 4: **one per count loaded** (at terminal count),
+a bare re-write after TC included. Modes 1 and 5: **none**, because counter 0's GATE is tied
+high and never rises. Until s83 every mode raised once per period.
+Evidence: `tools/dostest/p_pit0.asm` on QEMU, DOSBox-X and PCem (modes 0, 4 and the bare
+re-write agree at 1; modes 1 and 5 split from the datasheet, with rationales in
+`oracle-rules.json`), and `pit_test.c` T_IRQ0. ⚠ On NTVDMEX that probe currently reads 0
+everywhere after its first case, because of #212 (`sti` does not stick), not because of this rule.
+
 ✅ **The load rule is right, and it was expensive to learn:** a Control Word arms the next
 count write to load and restart; a bare count in a periodic mode waits for the end of the
 current period (`vdd_pit.c:137-150`, `vdd_pit.h:42-47`). The comment there records that the

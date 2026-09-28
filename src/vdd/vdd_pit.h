@@ -116,6 +116,11 @@ typedef struct pit_state {
     uint8_t  next_pending;  /* modes 2/3, count written WITHOUT a Control Word: it is
                                held here and loaded at the end of the current period  */
     uint16_t next_reload;   /* ...that held count                                */
+    uint8_t  irq_armed;     /* modes 0/4: a count was loaded and its terminal count
+                               has not raised IRQ0 yet. OUT rises ONCE per count in a
+                               one-shot mode, and the PIC counts rising edges (#175). */
+    uint32_t oneshot_loads; /* counter-0 counts loaded in modes 0/1/4/5: whether a guest
+                               was exposed to the one-shot IRQ0 rule at all (STAGE2) */
     uint32_t restarts;      /* loads that RESTARTED the period (CW+count / one-shot
                                modes); the host watches it -- see host_pit_resync_check */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */

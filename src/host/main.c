@@ -31032,6 +31032,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           p = zput(p, "=0x"); p = zhex(p, g_io_hot[i].n);
       }
       p = zput(p, "\r\nSTAGE2: pit_reload=0x"); p = zhex(p, (DWORD)g_pit.reload);
+      p = zput(p, " oneshot_loads=0x"); p = zhex(p, g_pit.oneshot_loads);   /* #175 */
       p = zput(p, " skip_if=0x");   p = zhex(p, g_irq0_skip_if);
       p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
       p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);

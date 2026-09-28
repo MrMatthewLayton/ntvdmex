@@ -1732,5 +1732,28 @@
   ],
   "recorded": "2026-09-28",
   "why": "#175. Same as pit.m1.wait.counting, for mode 5: the reference is silent on the CE before the trigger; the oracles split 1/0/1. Not a contract."
+ },
+ {
+  "probe": "pit0",
+  "case": "pit0.m1.irqs",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Mode 1 is a HARDWARE-triggered one-shot: the count is loaded and counting starts on a GATE rising edge (Intel 8254 231164-005; docs/ref/pit.md). Counter 0's GATE is tied high on a PC, so writing a count never starts it and OUT never rises: no IRQ0. PCem answers 0 with the reference; QEMU (1) and DOSBox-X (2) start counting on the count write, as in mode 0. The spec outranks the two simplifications."
+ },
+ {
+  "probe": "pit0",
+  "case": "pit0.m5.irqs",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-28",
+  "why": "#175. Mode 5 (hardware-triggered strobe) is started, like mode 1, only by a GATE rising edge, which counter 0 (gate tied high) never sees: by the datasheet no IRQ0. All three emulators answer 1, i.e. they run it as mode 4 on the count write -- PCem inconsistently so, since it answers mode 1 by the reference. None of them is real hardware, so the row is not a contract; tools/dostest/pit_test.c holds the model to the datasheet's 0."
  }
 ]

@@ -631,6 +631,51 @@ int main(void)
               "mode 4: a one-shot -- past TC it runs on through FFFFh, no reload, no 2nd strobe");
     }
 
+    /* T_IRQ0: IRQ0 IS COUNTER 0's OUT PIN, and the PIC counts its RISING EDGES (#175).
+       Measured by tools/dostest/p_pit0.asm on QEMU, DOSBox-X and PCem, and the Intel 8254
+       datasheet (231164-005) where they split:
+         mode 2        a pulse every period -> one IRQ0 per period (all agree)
+         mode 0        OUT low at the CW, high at TC, stays high -> ONE (all agree)
+         mode 0 bare   a new count after TC, no CW -> ONE more (all agree; datasheet silent)
+         mode 4        one-clock strobe at TC -> ONE (all agree)
+         mode 1 / 5    wait for a GATE rising edge; counter 0's gate is tied high and never
+                       rises -> NONE (datasheet; oracles split, see oracle-rules.json) */
+    {
+        uint32_t w;
+        static const struct { uint8_t cw; int want; const char *what; } k[] = {
+            { 0x34, 64, "mode 2: IRQ0 every period (64 periods -> 64)" },
+            { 0x30,  1, "mode 0: ONE IRQ0, at terminal count" },
+            { 0x38,  1, "mode 4: ONE IRQ0, at the strobe" },
+            { 0x32,  0, "mode 1: NO IRQ0 -- counter 0's GATE never rises" },
+            { 0x3A,  0, "mode 5: NO IRQ0 -- counter 0's GATE never rises" },
+        };
+        unsigned i;
+        for (i = 0; i < sizeof k / sizeof k[0]; ++i) {
+            w = k[i].cw; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+            w = 0x00;    vdd_bus_io(&bus, 0x40, 1, 0, &w);
+            w = 0x10;    vdd_bus_io(&bus, 0x40, 1, 0, &w);       /* 0x1000            */
+            g_irq = 0;
+            vdd_pit_add_clocks(&pit, 64u * 0x1000u);
+            CHECK(g_irq == k[i].want, k[i].what);
+            if (k[i].cw == 0x30) {                               /* bare rewrite      */
+                w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+                w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+                g_irq = 0;
+                vdd_pit_add_clocks(&pit, 0x0FFF);
+                CHECK(g_irq == 0, "mode 0 bare rewrite: nothing before the new terminal count");
+                vdd_pit_add_clocks(&pit, 64u * 0x1000u);
+                CHECK(g_irq == 1, "mode 0 bare rewrite after TC: ONE more IRQ0 (all three oracles)");
+            }
+        }
+        /* The BIOS's own mode comes back periodic: a one-shot must not leave it latched. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        g_irq = 0;
+        vdd_pit_add_clocks(&pit, 4u * 0x1000u);
+        CHECK(g_irq == 4, "back to mode 2 after the one-shots: periodic again");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

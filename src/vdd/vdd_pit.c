@@ -189,6 +189,21 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
     uint32_t R = pit_eff_reload(st);
     int guard = 0;
     st->total_clocks += clocks;
+    /* ── IRQ0 IS OUT's RISING EDGE, AND A ONE-SHOT HAS ONE (#175). ───────────────────
+         Mode 0: OUT low at the Control Word, high at terminal count, and it stays high.
+         Mode 4: a one-clock strobe low at terminal count. Either way ONE edge per count
+         loaded -- measured on QEMU, DOSBox-X and PCem (tools/dostest/p_pit0.asm), a bare
+         re-write after terminal count included. Modes 1 and 5 start on a GATE rising
+         edge, and counter 0's gate is tied high on a PC, so they never start: no edge.
+         Until #175 every mode raised once per period, as if it were mode 2. */
+    if (st->mode != 2 && st->mode != 3) {
+        st->accum = 0;
+        if (st->irq_armed && st->total_clocks - st->load_clocks >= R) {
+            st->irq_armed = 0;
+            vdd_raise_irq(st->bus, 0);
+        }
+        return;
+    }
     st->accum += clocks;
     while (st->accum >= R && guard++ < 100000) {
         st->accum -= R;
@@ -244,6 +259,8 @@ static void pit_load(pit_state *st, uint16_t written)
     st->accum        = 0;
     st->cw_armed     = 0;
     st->next_pending = 0;
+    st->irq_armed    = (uint8_t)(st->mode == 0 || st->mode == 4);   /* see add_clocks */
+    if (!periodic) st->oneshot_loads++;
     st->restarts++;
 }
 
@@ -387,6 +404,8 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
             st->mode = (st->mode_raw >= 6) ? (uint8_t)(st->mode_raw - 4) : st->mode_raw;
             st->access = acc; st->bcd = (uint8_t)(val & 1); st->wr_flip = 0;
             st->cw_armed = 1; st->next_pending = 0;
+            st->irq_armed = 0;           /* a CW restarts the mode: OUT at its initial
+                                            level, no edge until a count is loaded */
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */
         /* ── ★★★★ A HALF-WRITTEN COUNT IS NOT A COUNT. ──────────────────────────────
