@@ -4,7 +4,7 @@
 **Mode:** the user left me unattended overnight with the rig to myself (their decisions, asked
 before they left: push as I go; follow #202's order; deploy and launch on the rig freely; issues
 get a comment and stay open until confirmed by hand).
-**Host build:** rig `bin\` = **`e9fd2e4c`** (= `a65d989`). `debug\prev\ntvdmhost_prev.exe` =
+**Host build:** rig `bin\` = **`f211af49`** (= `a6aabd3`). `debug\prev\ntvdmhost_prev.exe` =
 `0e5b10e7` (untouched). **Nothing tonight is user-confirmed.**
 
 ---
@@ -21,7 +21,23 @@ get a comment and stay open until confirmed by hand).
 | #189 | `d08b739` | **Stereo output**: SB16 stereo and GUS pan; OPL/speaker centred; waveOut + WAV recorder 2-channel | Heaven7 L/R corr 0.958, Doom 0.932 (mono = 1.000); Skyroads n8=0 max 7 |
 | #184 | `a65d989` | Leaving chain-4 scatters the linear aperture into the planes (and gathers back) | `p_vgamem` clean on every row; Wolf3D/Mario 70 fps, Doom 35 |
 
+| #154 | `ed02762` | Host Edit menu in text mode: Mark (drag, inverted), Select All, Copy, Copy Whole Screen, Paste (typed as scancodes) | `textedit.bat`: paste `echo PASTE154 OK` + Enter, copy shows the output |
+| #155 | `0ac96ca` | Record Audio toggle, Open Capture Folder; screenshot use-after-free fixed and 32bpp frames saved | `capture.bat`: 4.05 s stereo WAV + BMP |
+| #162 | `d51201e` | IsDialogMessage no longer bounces the guest's own message back to its queue (Charmap's 4k-calls/ms spin and 99k WM_CLOSE flood); Win16 WM_CLOSE defaults | Charmap one WM_CLOSE; Calc/Notepad close; clip16 unchanged |
+| #189 | `ac05b26` | SB Pro stereo: mixer 0Eh bit 1, both-channel time constant, 0x90/0x91 | audio_test (fails with the halving removed); Skyroads unchanged |
+| #175 | `ff895b6` `a6aabd3` | 8254: counter 2's GATE as a trigger (modes 1/5), mode 2/3 rising edge reloads, modes 1/4/5 one-shot count law | `p_pit` section H: `m2.retrig.reload` MISMATCH → AGREE; disputed rows get recorded rationales; pit_test 82 |
+
+**Win16 shelf A/B** (`scripts/w16shelf.sh`, tonight vs the rollback `0e5b10e7`): identical on all
+16 programs — no launch/close regressions from the menu, IsDialogMessage and IsWindow changes.
+
 New issue **#212** (P1): programs start with interrupts disabled (IF=0); every oracle says IF=1.
+
+### ★ Why WinMine and Charmap still don't end on the X (#162)
+Read off XP's own USER.EXE: `DefWindowProc` (USER.107, seg1:1d5e) forwards to WOW32 only the
+messages on a sorted whitelist (seg1:38fe) and returns 0 having done nothing for the rest --
+**WM_CLOSE is not on it**. So real WOW applies the default in WOW32's 32-bit window procedure
+after the 16-bit one returns, which works because it SENDS WM_CLOSE synchronously; we POST it.
+A structural gap for every message off that list; needs the nested-run design.
 
 ## Findings worth keeping
 
