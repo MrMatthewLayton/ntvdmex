@@ -202,6 +202,17 @@ static void gdi_present(present_ddraw *pd)
             SelectObject(hdc, old);
         }
     }
+    /* #154: remember where the frame went, and show a text selection by inverting it. */
+    pd->last_dx = dx; pd->last_dy = dy; pd->last_dw = dw; pd->last_dh = dh;
+    pd->last_sw = pd->snap_w; pd->last_sh = pd->snap_h;
+    if (pd->sel_on && pd->snap_w > 0 && pd->snap_h > 0) {
+        RECT sr;
+        sr.left   = dx + pd->sel_x0 * dw / pd->snap_w;
+        sr.right  = dx + pd->sel_x1 * dw / pd->snap_w;
+        sr.top    = dy + pd->sel_y0 * dh / pd->snap_h;
+        sr.bottom = dy + pd->sel_y1 * dh / pd->snap_h;
+        InvertRect(hdc, &sr);
+    }
     hint_draw(pd, hdc, dx, dy, dw);                 /* #138 */
     ReleaseDC(pd->hwnd, hdc);
 }

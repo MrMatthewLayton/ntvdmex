@@ -85,6 +85,11 @@ typedef struct present_ddraw {
        (GetTickCount ms) -- "press the Windows key to release the mouse" in fullscreen,
        where there is no status strip to say it. GDI path only. */
     const char *hint_text;
+    /* #154: a character-cell selection, inverted after each GDI present, in SOURCE
+       frame pixels (sel_on 0 = none) -- and where the last frame went, so the host
+       can turn a click into a cell. */
+    int   sel_on, sel_x0, sel_y0, sel_x1, sel_y1;
+    int   last_dx, last_dy, last_dw, last_dh, last_sw, last_sh;
     unsigned long hint_until;
 } present_ddraw;
 

@@ -8135,10 +8135,10 @@ enum {                                       /* wired command IDs               
     IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
     IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
     /* ── THE EDIT ITEMS HAVE REAL IDS PURELY SO THEY CAN BE ADDRESSED. ───────────
-         They are still scaffold and still no-ops (they fall to the WM_COMMAND
-         `default:` arm exactly as IDM_STUB does), but "grey these five in a
-         graphics mode" needs to name them one at a time, and EnableMenuItem with
-         MF_BYCOMMAND cannot distinguish five items that all carry IDM_STUB.
+         Implemented since s82 (#154 -- see g_mark_mode); they needed their own
+         ids first because "grey these five in a graphics mode" names them one at a
+         time, and EnableMenuItem with MF_BYCOMMAND cannot distinguish five items
+         that all carry IDM_STUB.
        ⚠ THIS IS NOT THE SCAFFOLD-STUB DECISION BEING RE-LITIGATED. That decision
          says an UNIMPLEMENTED item stays enabled, and in text mode these still are.
          Greying them in a graphics mode is a different claim -- mark, copy and
@@ -8806,8 +8806,10 @@ static HMENU build_menu(void)
          are greyed rather than left to fail silently -- see the note by
          IDM_EDIT_MARK for why that is not the scaffold-stub rule being bent. */
     m = mpop();                                                   /* Edit         */
-    mi(m,"Mark / Select Region",IDM_EDIT_MARK); mi(m,"Copy\tCtrl+C",IDM_EDIT_COPY);
-    mi(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); mi(m,"Paste\tCtrl+V",IDM_EDIT_PASTE);
+    /* #154: no Ctrl+C / Ctrl+V labels -- those keys belong to the DOS program (Ctrl+C
+       is Break), and a label naming a shortcut that does not exist is a small lie. */
+    mi(m,"Mark / Select Region",IDM_EDIT_MARK); mi(m,"Copy",IDM_EDIT_COPY);
+    mi(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); mi(m,"Paste",IDM_EDIT_PASTE);
     mi(m,"Select All",IDM_EDIT_SELECTALL);
     msub(bar, "Edit", m);
 
@@ -9197,6 +9199,148 @@ static int close_prog_available(void)
     return g_exec_depth > 0 || !g_top_is_shell;
 }
 
+/* ── #154: THE EDIT MENU, ON THE CHARACTER GRID. ───────────────────────────────────
+     The five items were greyed outside text mode and did nothing inside it. The grid
+     is page 0 at VID_TEXT_OFF, 8x16 cells -- exactly what the text renderer draws, so
+     what is copied is what is seen.
+       Mark        the next left drag selects a rectangle of cells (Esc cancels)
+       Select All  the whole grid
+       Copy        the selection, as CF_OEMTEXT (the grid is code page 437; Windows
+                   converts), lines right-trimmed, CRLF between them
+       Copy Whole Screen   the same, for every cell
+       Paste       the clipboard, TYPED: real scancodes through the same path as a
+                   keypress, so a prompt, EDIT and a program reading port 60h all get it
+   The selection is shown by the presenter inverting it after each frame. */
+static int g_mark_mode, g_mark_drag, g_sel_on;
+static int g_sel_c0, g_sel_r0, g_sel_c1, g_sel_r1;
+static volatile LONG g_paste_busy;
+
+static void sel_publish(void)
+{
+    int cols = g_vid.cols, rows = g_vid.rows;
+    int c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1, c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
+    int r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1, r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    g_pd.sel_on = g_sel_on;
+    g_pd.sel_x0 = c0 * VID_CELL_W;        g_pd.sel_x1 = (c1 + 1) * VID_CELL_W;
+    g_pd.sel_y0 = r0 * VID_CELL_H;        g_pd.sel_y1 = (r1 + 1) * VID_CELL_H;
+    HOST_LOCK(); g_vid.dirty = 1; HOST_UNLOCK();
+    if (g_pd.hwnd) InvalidateRect(g_pd.hwnd, NULL, FALSE);
+}
+
+static void sel_clear(void) { g_mark_mode = g_mark_drag = 0; g_sel_on = 0; sel_publish(); }
+
+/* Client pixel -> cell, through the rectangle the last frame was drawn into. */
+static int client_to_cell(int x, int y, int *c, int *r)
+{
+    int sx, sy;
+    if (g_pd.last_dw <= 0 || g_pd.last_dh <= 0 || g_vid.cols < 1 || g_vid.rows < 1) return 0;
+    sx = (x - g_pd.last_dx) * g_pd.last_sw / g_pd.last_dw;
+    sy = (y - g_pd.last_dy) * g_pd.last_sh / g_pd.last_dh;
+    *c = sx / VID_CELL_W; *r = sy / VID_CELL_H;
+    if (*c < 0) *c = 0;
+    if (*r < 0) *r = 0;
+    if (*c >= g_vid.cols) *c = g_vid.cols - 1;
+    if (*r >= g_vid.rows) *r = g_vid.rows - 1;
+    return 1;
+}
+
+static void text_copy(HWND h, int all)
+{
+    int c0, c1, r0, r1, r, c, n = 0;
+    static char t[132 * 60 * 2 + 256];
+    HGLOBAL g; char *d;
+    if (g_vid.mkind != VID_KIND_TEXT || !g_vid.vmem) return;
+    if (all || !g_sel_on) { c0 = 0; r0 = 0; c1 = g_vid.cols - 1; r1 = g_vid.rows - 1; }
+    else {
+        c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1; c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
+        r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1; r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
+    }
+    HOST_LOCK();
+    for (r = r0; r <= r1 && n < (int)sizeof t - 140; ++r) {
+        int start = n;
+        for (c = c0; c <= c1; ++c) {
+            uint8_t ch = g_vid.vmem[VID_TEXT_OFF + (r * g_vid.cols + c) * 2];
+            t[n++] = (char)(ch ? ch : ' ');
+        }
+        while (n > start && t[n - 1] == ' ') --n;          /* right-trim the line */
+        if (r < r1) { t[n++] = '\r'; t[n++] = '\n'; }
+    }
+    HOST_UNLOCK();
+    while (n >= 2 && t[n - 2] == '\r' && t[n - 1] == '\n') n -= 2;   /* the empty rows below */
+    t[n] = 0;
+    g = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n + 1);
+    d = g ? (char *)GlobalLock(g) : NULL;
+    if (!d) { if (g) GlobalFree(g); return; }
+    for (c = 0; c <= n; ++c) d[c] = t[c];
+    GlobalUnlock(g);
+    if (OpenClipboard(h)) {
+        EmptyClipboard();
+        if (!SetClipboardData(CF_OEMTEXT, g)) GlobalFree(g);
+        CloseClipboard();
+    } else GlobalFree(g);
+}
+
+/* US layout, as the keyboard is today (the layout setting is not yet used, #136):
+   the make code for each printable ASCII, and whether it needs Shift. */
+static const BYTE PASTE_SC[95][2] = {
+ {0x39,0},{0x02,1},{0x28,1},{0x04,1},{0x05,1},{0x06,1},{0x08,1},{0x28,0},  /*  !"#$%&' */
+ {0x0A,1},{0x0B,1},{0x09,1},{0x0D,1},{0x33,0},{0x0C,0},{0x34,0},{0x35,0},  /* ()*+,-./ */
+ {0x0B,0},{0x02,0},{0x03,0},{0x04,0},{0x05,0},{0x06,0},{0x07,0},{0x08,0},  /* 01234567 */
+ {0x09,0},{0x0A,0},{0x27,1},{0x27,0},{0x33,1},{0x0D,0},{0x34,1},{0x35,1},  /* 89:;<=>? */
+ {0x03,1},{0x1E,1},{0x30,1},{0x2E,1},{0x20,1},{0x12,1},{0x21,1},{0x22,1},  /* @ABCDEFG */
+ {0x23,1},{0x17,1},{0x24,1},{0x25,1},{0x26,1},{0x32,1},{0x31,1},{0x18,1},  /* HIJKLMNO */
+ {0x19,1},{0x10,1},{0x13,1},{0x1F,1},{0x14,1},{0x16,1},{0x2F,1},{0x11,1},  /* PQRSTUVW */
+ {0x2D,1},{0x15,1},{0x2C,1},{0x1A,0},{0x2B,0},{0x1B,0},{0x07,1},{0x0C,1},  /* XYZ[\]^_ */
+ {0x29,0},{0x1E,0},{0x30,0},{0x2E,0},{0x20,0},{0x12,0},{0x21,0},{0x22,0},  /* `abcdefg */
+ {0x23,0},{0x17,0},{0x24,0},{0x25,0},{0x26,0},{0x32,0},{0x31,0},{0x18,0},  /* hijklmno */
+ {0x19,0},{0x10,0},{0x13,0},{0x1F,0},{0x14,0},{0x16,0},{0x2F,0},{0x11,0},  /* pqrstuvw */
+ {0x2D,0},{0x15,0},{0x2C,0},{0x1A,1},{0x2B,1},{0x1B,1},{0x29,1}            /* xyz{|}~  */
+};
+
+/* Typed, not injected: ~30 characters a second, so a guest that reads slowly (or a
+   BIOS ring of 15 keys) is not overrun. One paste at a time; a new one while typing
+   is refused rather than interleaved. */
+static DWORD WINAPI paste_thread(LPVOID pv)
+{
+    char *s = (char *)pv;
+    int i;
+    for (i = 0; s[i] && g_running; ++i) {
+        BYTE ch = (BYTE)s[i], sc = 0, sh = 0;
+        if (ch == '\r') { sc = 0x1C; if (s[i + 1] == '\n') ++i; }
+        else if (ch == '\n') sc = 0x1C;
+        else if (ch == '\t') sc = 0x0F;
+        else if (ch >= 0x20 && ch <= 0x7E) { sc = PASTE_SC[ch - 0x20][0]; sh = PASTE_SC[ch - 0x20][1]; }
+        if (!sc) continue;                                  /* not typeable: skipped */
+        if (sh) host_key_scancode(0x2A, 0, 0);
+        host_key_scancode(sc, 0, 0);
+        Sleep(12);
+        host_key_scancode(sc, 0, 1);
+        if (sh) host_key_scancode(0x2A, 0, 1);
+        Sleep(20);
+    }
+    HeapFree(GetProcessHeap(), 0, s);
+    InterlockedExchange(&g_paste_busy, 0);
+    return 0;
+}
+
+static void text_paste(HWND h)
+{
+    HANDLE g; const char *src; char *s; int n = 0;
+    if (InterlockedExchange(&g_paste_busy, 1)) return;
+    if (!OpenClipboard(h)) { InterlockedExchange(&g_paste_busy, 0); return; }
+    g = GetClipboardData(CF_TEXT);
+    src = g ? (const char *)GlobalLock(g) : NULL;
+    s = src ? (char *)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
+    if (s) { while (n < 4096 && src[n]) { s[n] = src[n]; ++n; } s[n] = 0; }
+    if (src) GlobalUnlock(g);
+    CloseClipboard();
+    if (!s || !n) { if (s) HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_paste_busy, 0); return; }
+    { HANDLE t = CreateThread(NULL, 0, paste_thread, s, 0, NULL);
+      if (t) CloseHandle(t); else { HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_paste_busy, 0); } }
+}
+
 static void menu_sync_modal(HWND h, HMENU popup)
 {
     static const UINT TEXT_ONLY[] = { IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN,
@@ -9214,6 +9358,12 @@ static void menu_sync_modal(HWND h, HMENU popup)
     flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
+    /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
+    if (flag == MF_ENABLED) {
+        if (!g_sel_on) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
+        if (g_paste_busy || !IsClipboardFormatAvailable(CF_TEXT))
+            EnableMenuItem(m, IDM_EDIT_PASTE, MF_BYCOMMAND | MF_GRAYED);
+    }
 }
 
 
@@ -11360,6 +11510,24 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
         case IDM_FILE_OPEN: open_program_dialog(h); return 0;   /* #153 */
+        /* #154: the text-mode Edit menu -- see g_mark_mode. */
+        case IDM_EDIT_MARK:
+            if (g_vid.mkind == VID_KIND_TEXT) {
+                if (g_captured) input_capture_set(h, 0);   /* the drag needs the pointer */
+                g_mark_mode = 1; g_mark_drag = 0; g_sel_on = 0; sel_publish();
+                g_pd.hint_text  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
+                g_pd.hint_until = GetTickCount() + 5000;
+            }
+            return 0;
+        case IDM_EDIT_SELECTALL:
+            if (g_vid.mkind == VID_KIND_TEXT) {
+                g_sel_c0 = 0; g_sel_r0 = 0; g_sel_c1 = g_vid.cols - 1; g_sel_r1 = g_vid.rows - 1;
+                g_sel_on = 1; g_mark_mode = 1; g_mark_drag = 0; sel_publish();
+            }
+            return 0;
+        case IDM_EDIT_COPY:       text_copy(h, 0); sel_clear(); return 0;
+        case IDM_EDIT_COPYSCREEN: text_copy(h, 1); return 0;
+        case IDM_EDIT_PASTE:      text_paste(h); return 0;
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see close_prog_now */
             if (!close_prog_available()) return 0;     /* greyed; belt and braces */
             if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
@@ -11508,6 +11676,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* Our own Start-menu-suppression Ctrl tap (see the VK_LWIN handler) comes back
            to us as a normal keystroke; drop it so it never reaches the guest. */
         if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG) return 0;
+        /* #154: while marking, Esc cancels and Enter copies -- the Windows console's own
+           keys -- and nothing typed reaches the guest until the mark is over. */
+        if (g_mark_mode) {
+            if (wp == VK_ESCAPE) sel_clear();
+            else if (wp == VK_RETURN) { if (g_sel_on) text_copy(h, 0); sel_clear(); }
+            return 0;
+        }
         key_msg_note();
         /* ── ★ RULE 4: THE WINDOWS KEY ALONE RELEASES THE CAPTURE. ───────────────────
              The lineage, because each step was a real fix: Ctrl+F10 (broken twice over
@@ -11629,6 +11804,23 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
         RECT rc; int cw, ch, fw, fh; LONG b = 0;
+        /* #154: Mark owns the mouse until the selection is copied or cancelled. The
+           guest sees none of it -- a drag that also clicked in the program would do two
+           things at once. A right click cancels, as in the console. */
+        if (g_mark_mode) {
+            int mc, mr, mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
+            if (msg == WM_RBUTTONDOWN) { sel_clear(); return 0; }
+            if (msg == WM_LBUTTONDOWN && client_to_cell(mx, my, &mc, &mr)) {
+                SetCapture(h);
+                g_mark_drag = 1; g_sel_on = 1;
+                g_sel_c0 = g_sel_c1 = mc; g_sel_r0 = g_sel_r1 = mr; sel_publish();
+            } else if (msg == WM_MOUSEMOVE && g_mark_drag && client_to_cell(mx, my, &mc, &mr)) {
+                if (mc != g_sel_c1 || mr != g_sel_r1) { g_sel_c1 = mc; g_sel_r1 = mr; sel_publish(); }
+            } else if (msg == WM_LBUTTONUP && g_mark_drag) {
+                g_mark_drag = 0; ReleaseCapture();
+            }
+            return 0;
+        }
         /* ── ★ RULE 5: A CLICK IN THE VIDEO RE-CAPTURES. ONLY THE VIDEO. ────────────
              This replaces Win+Click (s63), which was a toggle and needed a modifier
              precisely BECAUSE it was one -- a plain click that could also release
