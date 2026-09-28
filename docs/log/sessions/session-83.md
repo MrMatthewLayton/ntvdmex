@@ -47,6 +47,16 @@ now `p_pit0` AGREEs on every row on the rig, and `p_pit` is unchanged.
 ⛔ **Lesson: decode a flags word bit by bit before quoting it, and when a probe's result looks
 impossible, check the probe's own instrument (here its timer) on the subject before the subject.**
 
+## Round 6 (user, by hand) and the stock comparisons
+Confirmed and closed: #213 (ZAR sound through a real game), #175 (timing and sound in every game,
+PC speaker), #161 (PBrush vs stock side by side: functionally ~identical, ours has the Luna
+theme). `scripts/bm/handstock.bat` starts programs under stock for a person, removing the IFEO
+value only while they start.
+⚠ **Stock Mario cannot be compared on this rig:** stock runs it in real full-screen, the display
+goes to standby, and XP stays alive. The first "crash" was that plus a manual restart. Recovery
+without a reboot: end stock's `ntvdm.exe`, then `rigshot dispreset`
+(`ChangeDisplaySettings(CDS_RESET)` with the registry mode) brings the display back.
+
 ## Next
 #213 by ear. Then #212 (IF at program start, as originally reported), #162 synchronous
 delivery, #183 cheaper waits.

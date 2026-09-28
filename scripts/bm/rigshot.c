@@ -564,6 +564,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
          its WM_CLOSE handler, its "save changes?" prompt, its PostQuitMessage.
          DestroyWindow would tear the window down behind the program's back and
          prove nothing about whether the program can exit. */
+    /* Re-apply the desktop's registry display mode, forcing a real mode set (CDS_RESET).
+       s83: stock ntvdm's full-screen Mario left the monitor in standby after the VDM was
+       ended; this is the remote way back without a reboot. */
+    if (seq(verb, "dispreset")) {
+        DEVMODEA dm; LONG r1, r2; char m[160], *p = m;
+        ZeroMemory(&dm, sizeof dm); dm.dmSize = sizeof dm;
+        r1 = EnumDisplaySettingsA(NULL, ENUM_REGISTRY_SETTINGS, &dm) ? 1 : 0;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+        r2 = ChangeDisplaySettingsA(r1 ? &dm : NULL, CDS_RESET);
+        wsprintfA(p, "dispreset: registry=%ld %lux%lux%lu@%lu -> ChangeDisplaySettings(CDS_RESET)=%ld",
+                  r1, dm.dmPelsWidth, dm.dmPelsHeight, dm.dmBitsPerPel, dm.dmDisplayFrequency, r2);
+        logline(m);
+        return r2 == DISP_CHANGE_SUCCESSFUL ? 0 : 1;
+    }
+
     if (seq(verb, "close")) {
         HWND w = FindWindowA(NULL, arg1);
         char m[400], *p = m;
