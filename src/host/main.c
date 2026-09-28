@@ -28937,19 +28937,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  completion, which is when a refill is actually DUE -- is
                                  the more natural place for a driver to look, and nothing
                                  has excluded it. Same snapshot, same exactness. */
+                            /* ── AND THE PIC IS TOLD BEFORE THE HANDLER RUNS, NOT AFTER (#213).
+                                 The ISR runs inside dpmi_inject_pm_irq() and sends its EOI
+                                 from in there; acknowledging afterwards set the in-service bit
+                                 AFTER that EOI, so the line stayed in service for good. Until
+                                 #173 the next timer tick's non-specific EOI happened to clear
+                                 it (IRQ0 was never in service to take it); once IRQ0 was held
+                                 properly, ZAR's IRQ5 went dead after its first SB block.
+                                 Same acknowledge/EOI rule as the async path: in service, and
+                                 released at once when the vector is still our own stub. */
                             uint32_t pred = g_dma.rd_count[1];
                             InterlockedExchange(&g_irqn_pending[q], 0);
+                            if (async_vec_is_our_stub((unsigned)q))
+                                vdd_pic_ack_autoeoi(&g_pic, (uint8_t)q);
+                            else vdd_pic_acknowledge(&g_pic, (uint8_t)q);
                             g_in_pm_irq = 1;
                             if (dpmi_inject_pm_irq(&m, tib, iv, steps)) {
-                                /* Same acknowledge/EOI rule the async path already uses for
-                                   these lines (and which the 2615 delivered ones prove out):
-                                   set in-service, and EOI ourselves only when the vector is
-                                   still our own stub, because then no guest ISR will. */
-                                vdd_pic_acknowledge(&g_pic, (uint8_t)q);
-                                if (async_vec_is_our_stub((unsigned)q))
-                                    vdd_pic_eoi(&g_pic, (uint8_t)q);
                                 ++g_pm_devirq_inj;
                             } else {
+                                /* No handler ran, so nothing will EOI: hand the line back. */
+                                vdd_pic_eoi(&g_pic, (uint8_t)q);
+                                vdd_pic_raise(&g_pic, (uint8_t)q);
                                 InterlockedExchange(&g_irqn_pending[q], 1);
                                 ++g_pm_devirq_fail;
                             }
