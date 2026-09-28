@@ -563,6 +563,7 @@ typedef struct video_state {
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */
     uint32_t gr4_hist[4];               /* GR4 read-plane values written, by value      */
+    uint32_t chain4_xfers;              /* #184: chain-4 <-> unchained moves of the 64K */
     uint32_t chain4_sel;                /* ymap_select calls made by a CHAIN4 change,
                                            not by a map-mask write -- the map-mask
                                            identity has to subtract these or it will

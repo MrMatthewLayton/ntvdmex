@@ -2386,9 +2386,33 @@ static void seq_set_data(void *self, uint32_t v)
     else if (st->seq_index == 4) {                 /* Memory Mode: bit 3 = Chain-4 */
         uint8_t c4 = (uint8_t)((v >> 3) & 1);
         if (c4 != st->chain4) {
+            /* ── #184: THE SAME BYTES, TWO ADDRESSINGS. A chain-4 store at CPU address A
+                 lands in plane A&3 at plane offset A&~3 (docs/ref/vga.md §8) -- so a program
+                 that draws chained and then unchains (Doom, and p_vgamem's chain4.abcd)
+                 must find those bytes spread across the planes. Here the chained view is the
+                 linear aperture and the unchained one is the four plane sections, so the
+                 switch has to MOVE them: scatter on the way out of chain-4, gather on the way
+                 back in. Snapshot first -- the aperture changes meaning at the remap, and a
+                 host may back the linear view with plane 0 itself. */
+            static uint8_t xfer[VID_Y_PLANE];
+            uint32_t a;
+            int linear = (st->mkind == VID_KIND_LINEAR8 && st->vmem);
+            if (linear && !c4) for (a = 0; a < VID_Y_PLANE; ++a) xfer[a] = st->vmem[a];
+            if (linear && c4)
+                for (a = 0; a < VID_Y_PLANE; ++a) xfer[a] = PL(st, (int)(a & 3))[a & ~3u];
             st->chain4 = c4; st->y_mask = st->map_mask;
             st->chain4_sel++;
             if (st->ymap_select) st->ymap_select(st->ymap_ctx, c4 ? -1 : (int)st->map_mask);
+            if (linear && !c4) {
+                for (a = 0; a < VID_Y_PLANE; ++a) PL(st, (int)(a & 3))[a & ~3u] = xfer[a];
+                if (!st->ymap_plane)                      /* the no-host fallback's copy */
+                    for (a = 0; a < VID_Y_PLANE; ++a) st->yplane[a & 3][a & ~3u] = xfer[a];
+                ++st->chain4_xfers;
+            }
+            if (linear && c4) {
+                for (a = 0; a < VID_Y_PLANE; ++a) st->vmem[a] = xfer[a];
+                ++st->chain4_xfers;
+            }
             st->dirty = 1;
         }
     }

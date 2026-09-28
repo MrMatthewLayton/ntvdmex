@@ -32079,6 +32079,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " maskacct: writes="); p = zhex(p, mw);
         p = zput(p, " = sel_calls="); p = zhex(p, g_ysel_calls);
         p = zput(p, " - c4sel="); p = zhex(p, g_vid.chain4_sel);
+        p = zput(p, " c4xfer="); p = zhex(p, g_vid.chain4_xfers);
         p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.mask_skip_chain4);
         p = zput(p, " [redundant_same="); p = zhex(p, g_vid.mask_skip_same);
         p = zput(p, ", informational]");
