@@ -99,6 +99,9 @@ static void vga_defaults_for(uint8_t mode,
 static void crtc_lc_update(video_state *st);
 static void crtc_vt_update(video_state *st);
 static void vid_latch(video_state *st, int at_frame);   /* display start/pan schedule (s83) */
+static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+                    uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
+                    uint32_t *frame_no, uint32_t *line);
 static void load_default_crtc(video_state *st)
 {
     const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->mode)]];
@@ -2262,7 +2265,17 @@ static void crtc_set_data(void *self, uint32_t v)
     case 0x0D: vid_latch(st, 0);
                st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
                st->crtc_seen = 1; st->crtc_start_pend ^= 1;
-               if (!st->crtc_start_pend) st->crtc_start_writes++;
+               if (!st->crtc_start_pend) {
+                   st->crtc_start_writes++;
+                   if (st->time_us) {           /* pacing: frames since the last pair */
+                       uint64_t n0; uint32_t F0, a0, b0, c0, fno, ln;
+                       if (vid_beam(st, &n0, &F0, &a0, &b0, &c0, &fno, &ln)) {
+                           uint32_t g = st->start_prev_frame ? fno - st->start_prev_frame : 1u;
+                           st->start_gap_hist[g < 4u ? g : 4u]++;
+                           st->start_prev_frame = fno;
+                       }
+                   }
+               }
                st->dirty = 1; break;
     case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
     /* Line Compare, and the two registers that carry its top two bits. */

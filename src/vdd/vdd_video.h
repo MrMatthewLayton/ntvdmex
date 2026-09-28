@@ -229,6 +229,10 @@ typedef struct video_state {
     uint16_t start_vs;          /* start address as loaded at the last retrace start */
     uint8_t  disp_pan;          /* AR13 as the displayed frame uses it               */
     uint64_t latch_t;           /* when vid_latch last ran (0 = never / reset)       */
+    /* Guest pacing (s83, #221): retrace periods between successive completed start-
+       address pairs. A smooth 70 Hz scroller is all 1s; a 2 is a frame the guest missed. */
+    uint32_t start_prev_frame;  /* frame number of the previous completed pair       */
+    uint32_t start_gap_hist[5]; /* 0, 1, 2, 3, 4+ frames between pairs               */
     /* ── ATTRIBUTE CONTROLLER (0x3C0/0x3C1). ──────────────────────────────────
          In every 16-colour planar and text mode the 4-bit pixel value indexes
          THESE registers (vpal, above), and the result indexes the DAC. Not

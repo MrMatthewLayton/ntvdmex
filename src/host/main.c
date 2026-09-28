@@ -32128,6 +32128,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.crtc_start_writes);
         p = zput(p, " torn_avoided="); p = zdec(p, g_vid.crtc_start_half);
         p = zput(p, " live="); p = zdec(p, g_vid.crtc_start_live);
+        p = zput(p, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
+        { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = zput(p, "/"); p = zdec(p, g_vid.start_gap_hist[gi]); } }
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
