@@ -824,6 +824,26 @@ int main(void)
       CHECK(step1(&c) && c.r[0] == 0xA0000000u && (c.flags & F_CF) && (c.flags & F_OF),
             "imul 66 6B: eax*10 wraps to A0000000h, CF=OF=1"); }
 
+    /* ---- #183: 16-bit address size counts in CX and walks SI/DI, and the HIGH halves
+       of ECX/ESI/EDI are the guest's (s80 carries all 32 bits). The interpreter took
+       the REP count from ECX -- up to 4G stores -- and zeroed the high halves after. */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF3, 0xAA };     /* REP STOSB */
+      uint32_t i;
+      for (i = 0; i < 16; ++i) MEM[0x20000 + i] = 0;
+      c.seg[0] = 0x2000; c.r[7] = 0xABCD0000u; c.r[1] = 0x00010003u; c.r[0] = 0x5A;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(MEM[0x20000] == 0x5A && MEM[0x20002] == 0x5A && MEM[0x20003] == 0,
+            "rep stosb: CX=3 stores exactly 3 bytes although ECX=0x00010003");
+      CHECK(c.r[1] == 0x00010000u, "rep stosb: ECX high half kept, CX counted to 0");
+      CHECK(c.r[7] == 0xABCD0003u, "rep stosb: EDI high half kept, DI advanced by 3"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xE2, 0xFE };     /* LOOP $ */
+      c.r[1] = 0x00050002u; load(&c, 0x1000, 0, p, sizeof p);
+      step1(&c); CHECK(c.ip == 0 && c.r[1] == 0x00050001u, "loop: CX 2->1, jumps, ECX high kept");
+      step1(&c); CHECK(c.ip == 2 && c.r[1] == 0x00050000u, "loop: CX 1->0 falls through (ECX high ignored)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xE3, 0x10 };     /* JCXZ +16 */
+      c.r[1] = 0x00070000u; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 0x12, "jcxz: taken when CX=0 although ECX!=0"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

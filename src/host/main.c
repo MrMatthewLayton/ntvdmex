@@ -295,6 +295,12 @@ static BOOL oscompat_attach_console(DWORD pid)
 #define MYINTERP_OFF_FLAG CFG_("modeyinterp_off.flag")
 /* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
 #define MYRING_FLAG CFG_("myring.flag")
+static BYTE g_tramp_save[6];
+static int  g_tramp_saved;
+/* #183: present = sample the exec thread's host EIP ~1 kHz and log the hottest 16-byte
+   buckets at exit (STAGE2: HOSTPROF). Map them with `i686-w64-mingw32-nm -n`. */
+#define HOSTPROF_FLAG CFG_("hostprof.flag")
+static void hostprof_dump(void);
 /* North star 1 for PROTECTED-mode guests (Doom): present = do not interpret its drawers. */
 #define MYPM_OFF_FLAG    CFG_("modeypm_off.flag")
 /* Present = keep the scratch window while a PM guest runs NATIVELY under a multi-plane
@@ -13226,8 +13232,9 @@ static void modey_tl_report(void)
     LARGE_INTEGER qn; unsigned long long cpu; DWORD us_run, t, last = 0;
     int row;
     static const char *nm[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
-    if (done || !g_ytl_t0) return;
+    if (done || !g_ytl_t0) { if (!done) hostprof_dump(); return; }
     done = 1;
+    hostprof_dump();
     if (g_my_slices && g_my_ring_on) my_ring_dump("at exit -- the last instructions interpreted for mode Y");
     QueryPerformanceCounter(&qn);
     us_run = qpc_us(qn.QuadPart - g_ytl_qpc0);
@@ -13995,6 +14002,92 @@ static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp)
     g_my_ring[i].cs = 0xFFFE; g_my_ring[i].ip = (WORD)vec;
     g_my_ring[i].ss = cs;     g_my_ring[i].sp = ip;
     for (j = 0; j < 6; ++j) g_my_ring[i].b[j] = 0;
+}
+
+/* ── #183: WHERE DOES THE HOST'S TIME GO? A SAMPLING PROFILER, OPT-IN. ──────────────
+     The interpreter's cost was estimated from the outside (instructions/s, us/s), and a
+     change aimed at the estimate -- a jump table for opcode dispatch, +42% off-VM --
+     moved the rig by nothing. So measure the inside: a thread suspends the exec thread
+     about every millisecond, reads its EIP, and if it lies in our own image counts it in
+     a 16-byte bucket. Suspending a thread that holds a lock is safe here because the
+     sampler takes none. Buckets are RVAs; `nm -n` on the same build names them. */
+#define HPROF_SHIFT 4
+static volatile LONG g_hprof_on;
+static HANDLE   g_hprof_th;
+static DWORD   *g_hprof;                 /* one counter per 16 bytes of the image */
+static DWORD    g_hprof_n, g_hprof_samples, g_hprof_in, g_hprof_base, g_hprof_size;
+/* ...and everything that is NOT our image, because half the samples were not: the
+   guest running natively (VM flag), the kernel, and other user-mode code by 64 KB. */
+static DWORD    g_hprof_v86, g_hprof_kern, g_hprof_other;
+static DWORD    g_hprof_seg[0x8000];     /* user space below 2 GB, per 64 KB */
+static DWORD WINAPI hostprof_thread(LPVOID pv)
+{
+    (void)pv;
+    while (g_hprof_on) {
+        CONTEXT cx;
+        Sleep(1);
+        if (SuspendThread(g_hprof_th) == (DWORD)-1) break;
+        cx.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(g_hprof_th, &cx)) {
+            ++g_hprof_samples;
+            if (cx.EFlags & 0x20000) ++g_hprof_v86;
+            else if (cx.Eip >= g_hprof_base && cx.Eip < g_hprof_base + g_hprof_size) {
+                ++g_hprof_in;
+                ++g_hprof[(cx.Eip - g_hprof_base) >> HPROF_SHIFT];
+            } else if (cx.Eip >= 0x80000000u) ++g_hprof_kern;
+            else { ++g_hprof_other; ++g_hprof_seg[cx.Eip >> 16]; }
+        }
+        ResumeThread(g_hprof_th);
+    }
+    return 0;
+}
+static void hostprof_start(void)
+{
+    const BYTE *mz = (const BYTE *)GetModuleHandleA(NULL);
+    DWORD lf, sz;
+    if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES) return;
+    lf = *(const DWORD *)(mz + 0x3C);
+    sz = *(const DWORD *)(mz + lf + 0x50);                     /* SizeOfImage */
+    g_hprof_base = (DWORD)(ULONG_PTR)mz; g_hprof_size = sz;
+    g_hprof_n = (sz >> HPROF_SHIFT) + 1;
+    g_hprof = (DWORD *)VirtualAlloc(NULL, g_hprof_n * sizeof(DWORD), MEM_COMMIT, PAGE_READWRITE);
+    if (!g_hprof) return;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                    &g_hprof_th, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    g_hprof_on = 1;
+    { HANDLE t = CreateThread(NULL, 0, hostprof_thread, NULL, 0, NULL);
+      if (t) { SetThreadPriority(t, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(t); } }
+}
+static void hostprof_dump(void)
+{
+    char b[160], *p;
+    int k;
+    if (!g_hprof) return;
+    g_hprof_on = 0; Sleep(5);
+    p = zput(b, "STAGE2: HOSTPROF samples="); p = zdec(p, g_hprof_samples);
+    p = zput(p, " in_host_image="); p = zdec(p, g_hprof_in);
+    p = zput(p, " image_base=0x"); p = zhex(p, g_hprof_base);
+    p = zput(p, " (RVA buckets of 16 bytes, hottest first)\r\n"); log_append(LOG_PATH, b, p);
+    p = zput(b, "STAGE2: HOSTPROF guest_v86="); p = zdec(p, g_hprof_v86);
+    p = zput(p, " kernel="); p = zdec(p, g_hprof_kern);
+    p = zput(p, " other_user="); p = zdec(p, g_hprof_other); p = zput(p, "\r\n");
+    log_append(LOG_PATH, b, p);
+    for (k = 0; k < 12; ++k) {
+        DWORD i, best = 0, bi = 0;
+        for (i = 0; i < 0x8000; ++i) if (g_hprof_seg[i] > best) { best = g_hprof_seg[i]; bi = i; }
+        if (!best) break;
+        p = zput(b, "  HOSTPROF other_user 64K@0x"); p = zhex(p, bi << 16);
+        p = zput(p, " n="); p = zdec(p, best); p = zput(p, "\r\n"); log_append(LOG_PATH, b, p);
+        g_hprof_seg[bi] = 0;
+    }
+    for (k = 0; k < 400; ++k) {
+        DWORD i, best = 0, bi = 0;
+        for (i = 0; i < g_hprof_n; ++i) if (g_hprof[i] > best) { best = g_hprof[i]; bi = i; }
+        if (!best) break;
+        p = zput(b, "  HOSTPROF rva=0x"); p = zhex(p, bi << HPROF_SHIFT);
+        p = zput(p, " n="); p = zdec(p, best); p = zput(p, "\r\n"); log_append(LOG_PATH, b, p);
+        g_hprof[bi] = 0;
+    }
 }
 
 static long host_interp(volatile BYTE *tib, long cap)
@@ -24659,6 +24752,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                       &g_hexec, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: bg_prio_tick */
     }
+    hostprof_start();                                 /* #183: cfg\hostprof.flag */
     if (g_qi_bits) {
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
@@ -26774,9 +26868,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        RESULT: this does NOT unblock delivery -- and note qirq.com already executed its own
        sti before spinning, so the "guest never sets VIF" hypothesis was in truth already
        refuted by the earlier runs. Kept as an opt-in knob (it is the faithful entry
-       sequence regardless) but it is not the missing piece. */
+       sequence regardless) but it is not the missing piece.
+     ⚠ s82: THE ORACLES DISAGREE WITH US, AND THIS DOES NOT FIX IT. p_ifst.com asks FLAGS
+       at a program's first instruction: MS-DOS 6.22, DOSBox-X and PCem all answer IF=1; we
+       answer IF=0, and keep answering it after INT 10h and INT 21h. A program that never
+       executes STI (mybench.com) then has every timer tick refused by our own gate, which
+       reads that virtual IF, and 0040:006C stands still. Defaulting this trampoline was
+       tried: the guest's STI did not stick (first exit still VTIB EFLAGS=0x30002), with or
+       without VIP cleared first -- the wall s11 recorded. Still opt-in. See GH issue. */
     if (g_qi_vif) {
         volatile BYTE *tr = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << 4) + 0x60);
+        /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
+             (dos_layout.h). Keep what was there; the exec loop puts it back at the first
+             exit outside the trampoline. Opt-in, this never mattered; default, it would
+             send a client's first callback into `sti; jmp far <program entry>`. */
+        { int k; for (k = 0; k < 6; ++k) g_tramp_save[k] = tr[k]; g_tramp_saved = 1; }
         tr[0] = 0xFB;                                   /* sti                       */
         tr[1] = 0xEA;                                   /* jmp far cs:ip             */
         tr[2] = (BYTE)img.ip; tr[3] = (BYTE)(img.ip >> 8);
@@ -27090,6 +27196,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             QueryPerformanceCounter(&vt0);
             ev = v86_run(tib, &st);
             QueryPerformanceCounter(&vt1);
+            /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes. The first
+               exit that is not inside it hands them back -- long before any client can
+               have allocated, let alone called, a callback. */
+            if (g_tramp_saved) {
+                DWORD tcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, tip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                if (!(tcs == DOS_HDLR_SEG && tip >= 0x60 && tip < 0x66)) {
+                    volatile BYTE *tr = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << 4) + 0x60);
+                    int k;
+                    for (k = 0; k < 6; ++k) tr[k] = g_tramp_save[k];
+                    g_tramp_saved = 0;
+                    {   char tb[200], *tq = zput(tb, "STAGE2: entry trampoline done -- first exit ev=0x");
+                        tq = zhex(tq, (DWORD)ev); tq = zput(tq, " at 0x"); tq = zhex(tq, tcs);
+                        tq = zput(tq, ":0x"); tq = zhex(tq, tip); tq = zput(tq, " VTIB EFLAGS=0x");
+                        tq = zhex(tq, VDM_REG(tib, VTIB_EFLAGS)); tq = zput(tq, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
+                        log_append(LOG_PATH, tb, tq); }
+                }
+            }
             /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
                  wobble, s61.) The big timer gaps are low-I/O, so the guest is not
                  hammering ports -- it is inside ONE long v86_run stretch (a spin, a

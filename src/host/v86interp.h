@@ -702,25 +702,25 @@ static int istep(icpu *c)
     if (op == 0xAA || op == 0xAB) {                   /* STOS ES:DI <- AL/AX */
         int w = (op == 0xAB) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         if (osz) return 0;                            /* 32-bit string op: TODO */
-        uint32_t cnt = rep ? c->r[1] : 1, es = c->seg[0], al = c->r[0]; uint16_t di = c->r[7];
+        uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, es = c->seg[0], al = c->r[0]; uint16_t di = c->r[7];
         while (cnt) { uint32_t lin = (seg_base(es)) + di;
                       imem_w8(lin, (uint8_t)al);
                       if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1), (uint8_t)(al >> 8));
                       di = (uint16_t)(di + dir); cnt--; }
-        c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
+        s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xA4 || op == 0xA5) {                   /* MOVS ES:DI <- DS:SI */
         int w = (op == 0xA5) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         if (osz) return 0;                            /* 32-bit string op: TODO */
-        uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3], es = c->seg[0];
+        uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3], es = c->seg[0];
         uint16_t si = c->r[6], di = c->r[7];
         while (cnt) { uint32_t sl = (seg_base(ss)) + si, dl = (seg_base(es)) + di;
                       imem_w8(dl, imem_r8(sl));
                       if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1),
                                           imem_r8((seg_base(ss)) + (uint16_t)(si + 1)));
                       si = (uint16_t)(si + dir); di = (uint16_t)(di + dir); cnt--; }
-        c->r[6] = si; c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
+        s16(c, 6, si); s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     /* ── CMPS (A6/A7) and SCAS (AE/AF), with REPE (F3) / REPNE (F2). ─────────────
@@ -740,7 +740,7 @@ static int istep(icpu *c)
     if (op == 0xA6 || op == 0xA7 || op == 0xAE || op == 0xAF) {
         int w = (op & 1) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         int scas = (op >= 0xAE);
-        uint32_t cnt = rep ? c->r[1] : 1, es = c->seg[0];
+        uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, es = c->seg[0];
         uint32_t ss = c->seg[(segov >= 0) ? segov : 3];
         uint16_t si = c->r[6], di = c->r[7];
         if (osz) return 0;                            /* 32-bit string op: TODO */
@@ -760,19 +760,19 @@ static int istep(icpu *c)
             if (rep == 1 && !(c->flags & F_ZF)) break;               /* REPE  */
             if (rep == 2 &&  (c->flags & F_ZF)) break;               /* REPNE */
         }
-        if (!scas) c->r[6] = si;
-        c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
+        if (!scas) s16(c, 6, si);
+        s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX <- DS:SI */
         int w = (op == 0xAD) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         if (osz) return 0;                            /* 32-bit string op: TODO */
-        uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3]; uint16_t si = c->r[6];
+        uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3]; uint16_t si = c->r[6];
         while (cnt) { uint32_t sl = (seg_base(ss)) + si, v = imem_r8(sl);
                       if (w == 2) v |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
                       if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v);
                       si = (uint16_t)(si + dir); cnt--; }
-        c->r[6] = si; if (rep) c->r[1] = (uint16_t)cnt;
+        s16(c, 6, si); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -912,9 +912,11 @@ static int istep(icpu *c)
     }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;
-        if (op == 0xE3) take = (c->r[1] == 0);        /* JCXZ */
-        else { c->r[1] = (uint16_t)(c->r[1] - 1);
-               int cx = (c->r[1] != 0);
+        /* #183: CX, not ECX -- 16-bit address size counts in CX and leaves the high
+           half alone, and since s80 carried all 32 bits in, the high half is real. */
+        if (op == 0xE3) take = ((uint16_t)c->r[1] == 0);        /* JCXZ */
+        else { s16(c, 1, (uint16_t)(c->r[1] - 1));
+               int cx = ((uint16_t)c->r[1] != 0);
                take = (op == 0xE2) ? cx                                   /* LOOP   */
                     : (op == 0xE1) ? (cx && (c->flags & F_ZF))            /* LOOPE  */
                                    : (cx && !(c->flags & F_ZF)); }        /* LOOPNE */
