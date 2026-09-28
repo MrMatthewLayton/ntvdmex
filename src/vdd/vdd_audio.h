@@ -39,6 +39,7 @@ typedef struct audio_resampler {
     uint32_t step;            /* (src_hz << 16) / out_hz                         */
     uint32_t frac;            /* 16.16 position between prev and cur             */
     int32_t  prev, cur;       /* the two source samples being interpolated       */
+    int32_t  prev_r, cur_r;   /* #189: ...and the right channel's, for a stereo source */
     int      primed;
 } audio_resampler;
 
@@ -72,7 +73,7 @@ typedef struct audio_state {
        underneath it. 0..100; `muted` is separate so muting does not lose it. */
     uint32_t   master;
     int        muted;
-    int16_t    scratch[AUDIO_SRC_MAX];
+    int16_t    scratch[2 * AUDIO_SRC_MAX];   /* #189: room for interleaved L/R */
     uint32_t   frames_mixed;  /* diagnostics: total output frames produced       */
     /* ── AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
          FOUR CAUSES AND NO LOG DISTINGUISHED THEM. Counted where the decision is
@@ -105,5 +106,8 @@ void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted);
    Always produces exactly `frames` samples (silence when nothing is playing), so
    a host audio thread can call it unconditionally. */
 void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames);
+/* #189: the same mix in stereo -- `frames` interleaved L/R pairs (2*frames samples).
+   This is what the host plays; vdd_audio_mix is this folded to mono. */
+void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames);
 
 #endif /* NTVDMEX_VDD_AUDIO_H */

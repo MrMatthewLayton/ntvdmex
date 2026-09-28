@@ -5922,7 +5922,7 @@ static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
     (void)ctx;
     dmx_sample();
     HOST_LOCK();
-    vdd_audio_mix(&g_audio, out, frames);
+    vdd_audio_mix_st(&g_audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
     HOST_UNLOCK();
 }
 
@@ -6477,7 +6477,7 @@ static void host_rec_finish(void)
     if (!aw_rec_active()) return;
     dr = aw_rec_dropped();
     n  = aw_rec_stop();
-    rq = zput(rq, "STAGE2: audio recording closed: samples=0x"); rq = zhex(rq, n);
+    rq = zput(rq, "STAGE2: audio recording closed: frames=0x"); rq = zhex(rq, n);   /* stereo L/R pairs (#189) */
     rq = zput(rq, " dropped=0x"); rq = zhex(rq, dr);
     rq = zput(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
     log_append(LOG_PATH, rb, rq); serial_out(rb, rq);

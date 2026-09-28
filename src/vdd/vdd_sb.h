@@ -113,6 +113,7 @@ typedef struct sb_state {
     uint8_t  gate_on;          /* 0=off 1=ACK gate (VDMSound) 2=POLL gate           */
     uint32_t gate_mark;        /* dma->count_reads as of the last block IRQ         */
     int16_t  last_sample;      /* held while the gate is closed                     */
+    int16_t  last_l, last_r;   /* #189: the same, as the pair the stereo render holds */
     uint32_t gate_wait;        /* samples the gate has held THIS time               */
     uint32_t gate_stalled;     /* total samples held                                */
     uint32_t gate_forced;      /* times the safety yielded -- must be ~0            */
@@ -240,6 +241,9 @@ static inline ntvdd vdd_sb_device(sb_state *st)
    IRQ when a block ends. Returns frames produced; silence (zeros) when idle, so
    the mixer can always call it. */
 uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames);
+/* #189: the same transport, rendering interleaved L/R pairs (2*frames samples). An
+   8-bit or 16-bit MONO transfer gives L = R. */
+uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames);
 
 /* True while a programmed transfer is running (test/mixer convenience). */
 static inline int vdd_sb_active(const sb_state *st)

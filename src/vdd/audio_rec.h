@@ -26,7 +26,7 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define AREC_RING (1u << 18)                 /* 262144 samples: ~5.9 s at 44.1 kHz */
+#define AREC_RING (1u << 18)                 /* 262144 samples: ~3 s of stereo at 44.1 kHz */
 
 typedef struct audio_rec {
     HANDLE          file, thread;
@@ -54,10 +54,10 @@ static void arec_header(BYTE h[44], uint32_t hz, uint32_t data)
     arec_put32(h + 4, 36 + data);
     arec_put32(h + 16, 16);                  /* fmt chunk size   */
     arec_put16(h + 20, 1);                   /* PCM              */
-    arec_put16(h + 22, 1);                   /* mono             */
+    arec_put16(h + 22, 2);                   /* stereo (#189)    */
     arec_put32(h + 24, hz);
-    arec_put32(h + 28, hz * 2);              /* bytes per second */
-    arec_put16(h + 32, 2);                   /* block align      */
+    arec_put32(h + 28, hz * 4);              /* bytes per second */
+    arec_put16(h + 32, 4);                   /* block align: L+R */
     arec_put16(h + 34, 16);                  /* bits per sample  */
     h[36] = 'd'; h[37] = 'a'; h[38] = 't'; h[39] = 'a';
     arec_put32(h + 40, data);
@@ -123,7 +123,7 @@ static uint32_t audio_rec_stop(void)
     SetFilePointer(r->file, 0, NULL, FILE_BEGIN);
     WriteFile(r->file, h, sizeof h, &wr, NULL);
     CloseHandle(r->file); r->file = 0;
-    return r->data_bytes / 2;
+    return r->data_bytes / 4;                  /* frames (L/R pairs) */
 }
 
 /* Audio thread: copy `n` samples in, or drop them if the ring is full. Never blocks. */

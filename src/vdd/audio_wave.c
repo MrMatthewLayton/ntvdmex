@@ -57,11 +57,11 @@ static DWORD WINAPI aw_thread(LPVOID pv)
     for (i = 0; i < aw->nbufs && !aw->silent; ++i) {
         AW_WAVEHDR *h = hdr_of(aw, i);
         h->lpData = (LPSTR)aw->buf[i];
-        h->dwBufferLength = aw->nframes * sizeof(int16_t);
+        h->dwBufferLength = aw->nframes * AW_CHANNELS * sizeof(int16_t);
         h->dwFlags = 0; h->dwLoops = 0; h->dwUser = 0;
         p_waveOutPrepare(aw->hwo, h, sizeof(AW_WAVEHDR));
         aw->fill(aw->ctx, aw->buf[i], aw->nframes);
-        audio_rec_feed(aw->buf[i], aw->nframes);
+        audio_rec_feed(aw->buf[i], aw->nframes * AW_CHANNELS);
         p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR));
     }
 
@@ -70,7 +70,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             /* No device: still pump the mixer at real-time pace, because that is
                what advances SB playback and raises its IRQ. */
             aw->fill(aw->ctx, aw->buf[0], aw->nframes);
-            audio_rec_feed(aw->buf[0], aw->nframes);
+            audio_rec_feed(aw->buf[0], aw->nframes * AW_CHANNELS);
             Sleep((aw->nframes * 1000) / (aw->hz ? aw->hz : 44100));
             continue;
         }
@@ -89,7 +89,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             if (!(h->dwFlags & WHDR_DONE)) continue;
             h->dwFlags &= ~WHDR_DONE;
             aw->fill(aw->ctx, aw->buf[i], aw->nframes);
-        audio_rec_feed(aw->buf[i], aw->nframes);
+        audio_rec_feed(aw->buf[i], aw->nframes * AW_CHANNELS);
             if (p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR)) != 0) aw->underruns++;
         }
         /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
@@ -149,7 +149,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
 
     if (aw_bind(aw)) {
         fmt.wFormatTag = WAVE_FORMAT_PCM;
-        fmt.nChannels = 1;
+        fmt.nChannels = AW_CHANNELS;          /* #189 */
         fmt.nSamplesPerSec = aw->hz;
         fmt.wBitsPerSample = 16;
         fmt.nBlockAlign = (WORD)(fmt.nChannels * fmt.wBitsPerSample / 8);

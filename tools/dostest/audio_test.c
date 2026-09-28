@@ -315,6 +315,27 @@ int main(void)
         CHECK(fresh.out_hz == 22050, "a requested output rate is honoured");
     }
 
+    /* ---- #189: AN SB16 STEREO TRANSFER KEEPS ITS TWO CHANNELS. 8-bit unsigned pairs,
+       left at FFh and right at 00h: the stereo mix must put + on the left and - on the
+       right, and the mono mix -- which always averaged them -- must still average. */
+    {   static int16_t st2[2 * 1024], mono[1024];
+        mix.opl = NULL; mix.sb = &sb; vdd_audio_set_speaker(&mix, NULL, 0);
+        vdd_audio_set_master(&mix, 100, 0);
+        for (i = 0; i < 4096; i += 2) { g_flat[0x60000 + i] = 0xFF; g_flat[0x60000 + i + 1] = 0x00; }
+        dma_program(0x60000, 4096, 1);
+        wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 22050 >> 8); wr(BASE + 0xC, 22050 & 0xFF);
+        wr(BASE + 0xC, 0xC6); wr(BASE + 0xC, 0x20);           /* 8-bit auto, STEREO   */
+        wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x07);           /* 2048 units           */
+        vdd_audio_mix_st(&mix, st2, 1024);
+        printf("        SB16 stereo frame 500: L=%d R=%d\n", st2[1000], st2[1001]);
+        CHECK(st2[1000] > 10000 && st2[1001] < -10000,
+              "SB16 stereo: left and right come out on their own channels");
+        vdd_audio_mix(&mix, mono, 1024);
+        CHECK(mono[500] > -200 && mono[500] < 200, "SB16 stereo, mono fold: still the average");
+        wr(BASE + 0xC, 0xDA);                                  /* exit auto-init 8-bit */
+        vdd_audio_mix(&mix, buf, 4096);
+    }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

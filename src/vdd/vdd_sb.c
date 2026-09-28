@@ -293,8 +293,8 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 /* --- playback ------------------------------------------------------------- */
 /* Pull one sample's worth of bytes through the DMA controller and turn it into a
    signed 16-bit value. 8-bit SB data is UNSIGNED (0x80 is silence) unless the
-   game said otherwise; 16-bit is signed. Stereo is folded to mono by averaging,
-   which is honest for a first cut and keeps the mixer single-channel. */
+   game said otherwise; 16-bit is signed. Returns the MONO fold (the average, as it
+   always has); the L/R pair itself is left in last_l/last_r for the stereo render. */
 static int16_t sb_fetch_sample(sb_state *st, int *ended)
 {
     uint8_t ch = st->xfer_16bit ? st->dma16 : st->dma8;
@@ -358,16 +358,22 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
         for (i2 = 0; i2 < want; ++i2) st->cap_buf[st->cap_len++] = raw[i2];
     }
     st->block_left = (st->block_left > want) ? (st->block_left - want) : 0;
+    st->last_l = (int16_t)l; st->last_r = (int16_t)r;   /* #189: the pair, for stereo */
     return (int16_t)((l + r) / 2);
 }
 
-uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
+/* #189: ONE render loop, two output shapes. `stereo` 0 writes out[n] as it always
+   did (the average); 1 writes the pair at out[2n], out[2n+1]. The mono entry point is
+   kept so sb_test still checks exactly what it checked. */
+#define SB_PUT(n, mono, l, r) do { if (stereo) { out[2*(n)] = (l); out[2*(n)+1] = (r); } \
+                                   else out[(n)] = (mono); } while (0)
+static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stereo)
 {
     uint32_t n;
     for (n = 0; n < frames; ++n) {
         int ended = 0;
         if (st->xfer_mode == SB_XFER_IDLE || st->paused) {
-            out[n] = 0;
+            SB_PUT(n, 0, 0, 0);
             if (st->paused) st->out_paused++; else st->out_idle++;
             st->idle_run++;
             continue;
@@ -423,7 +429,7 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
             && !st->xfer_16bit) {
             if (st->gate_wait < st->block_len * 2u) {
                 st->gate_wait++; st->gate_stalled++;
-                out[n] = st->last_sample;
+                SB_PUT(n, st->last_sample, st->last_l, st->last_r);
                 continue;
             }
             st->gate_forced++;
@@ -432,7 +438,7 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
             if (st->gate_wait < st->block_len * 2u) {
                 st->gate_wait++;
                 st->gate_stalled++;
-                out[n] = st->last_sample;       /* hold, do not inject a zero: a DC hold
+                SB_PUT(n, st->last_sample, st->last_l, st->last_r);   /* hold, do not inject a zero: a DC hold
                                                    is inaudible for a few samples where
                                                    a silence notch is a click */
                 continue;
@@ -449,8 +455,9 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
         }
         st->out_active++;
 
-        out[n] = sb_fetch_sample(st, &ended);
-        st->last_sample = out[n];
+        st->last_sample = sb_fetch_sample(st, &ended);
+        if (ended) st->last_l = st->last_r = 0;          /* the fetch returned 0: no pair */
+        SB_PUT(n, st->last_sample, st->last_l, st->last_r);
 
         if (st->block_left == 0 || ended) {
             /* Block complete: this is the interrupt the game is waiting for. In
@@ -546,6 +553,12 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
     }
     return frames;
 }
+#undef SB_PUT
+
+uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
+{ return sb_render(st, out, frames, 0); }
+uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames)
+{ return sb_render(st, out, frames, 1); }
 
 /* --- lifecycle ------------------------------------------------------------ */
 void vdd_sb_reset(void *self)

@@ -94,6 +94,8 @@ uint32_t vdd_gus_rate_hz(const gus_state *st);
 /* Render `n` mono samples at vdd_gus_rate_hz(), advancing every voice, volume ramp and
    timer by that much GF1 time, and raising the interrupts that time produces. */
 void vdd_gus_render(gus_state *st, int16_t *out, uint32_t n);
+/* #189: the same, as panned interleaved L/R pairs (2*n samples). */
+void vdd_gus_render_st(gus_state *st, int16_t *out, uint32_t n);
 
 /* The linear gain (Q16) of a 12-bit GF1 volume (ref §7). Exposed for the test. */
 uint32_t vdd_gus_vol_gain(uint16_t vol12);

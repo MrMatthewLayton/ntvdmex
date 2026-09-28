@@ -155,6 +155,34 @@ int main(void)
     vdd_gus_render(&gus, out, 16);                         /* 16 x ~22.7 us > 160 us */
     CHECK((rd(B + 0x006) & 0x04) && g_irq_count >= 1, "timer 1: expired, 2X6 bit 2, IRQ");
 
+    /* ---- #189: PAN. The same kind of voice, looped, at three pan positions, rendered
+       in stereo. Balance law: the near side keeps full level, the far side falls. */
+    {   static int16_t st2[2 * 64];
+        int p, l0 = 0, r0 = 0, l7 = 0, r7 = 0, l15 = 0, r15 = 0, vv;
+        /* All other voices silent: a STOPPED GF1 voice still outputs its held sample at
+           its volume (programs ramp to zero), so stop AND mute. */
+        for (vv = 0; vv < 32; ++vv) { wr(B + 0x102, (uint8_t)vv); reg8(0x00, 0x03); reg16(0x09, 0); }
+        for (p = 0; p < 3; ++p) {
+            uint8_t pan = (uint8_t)(p == 0 ? 0 : p == 1 ? 7 : 15);
+            wr(B + 0x102, 5);
+            vaddr(0x02, 0x1000); vaddr(0x04, 0x1000 + 120); vaddr(0x0A, 0x1000);
+            reg16(0x01, 0x0400); reg16(0x09, 0xFFF0); reg8(0x0D, 0x03);
+            reg8(0x0C, pan);
+            reg8(0x00, 0x08);                          /* go, 8-bit, LOOP, no IRQ */
+            vdd_gus_render_st(&gus, st2, 64);
+            if (p == 0) { l0 = st2[20]; r0 = st2[21]; }
+            if (p == 1) { l7 = st2[20]; r7 = st2[21]; }
+            if (p == 2) { l15 = st2[20]; r15 = st2[21]; }
+            reg8(0x00, 0x03);                          /* stop it again */
+        }
+        printf("        pan 0: L=%d R=%d   pan 7: L=%d R=%d   pan 15: L=%d R=%d\n",
+               l0, r0, l7, r7, l15, r15);
+        CHECK(l0 > 0 && r0 == 0, "pan 0: hard LEFT -- the right channel is silent");
+        CHECK(r15 > 0 && l15 == 0, "pan 15: hard RIGHT -- the left channel is silent");
+        CHECK(l7 == l0 && r7 > 0 && r7 < l7, "pan 7: left at full level, right just below it");
+        CHECK(r15 == l0, "the near side of a hard pan is as loud as a centred voice's");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

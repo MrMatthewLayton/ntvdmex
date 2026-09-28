@@ -92,18 +92,50 @@ void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted)
     st->muted  = muted ? 1 : 0;
 }
 
-void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
+/* ── #189: STEREO. A source that has two channels now keeps them: the SB's stereo
+     transfers (they were averaged) and the GUS's per-voice pan (voices were summed).
+     OPL (this synth is OPL2: one output) and the PC speaker sit in the middle. Output
+     is interleaved L/R, 2*frames samples. For a mono source L = R and both equal what
+     the mono mixer produced, which is why vdd_audio_mix below can simply fold this. */
+static int16_t mix_clip(int32_t v) { return (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v)); }
+
+/* One output frame from an INTERLEAVED stereo source: the same walk as rs_step, with
+   the right channel's pair carried beside the left (prev/cur for L, prev_r/cur_r). */
+static void rs_step_st(audio_resampler *r, const int16_t *src, uint32_t n, uint32_t *idx,
+                       int32_t *ol, int32_t *or_)
+{
+    if (!r->primed) {
+        if (*idx < n) { r->prev = src[2 * *idx]; r->prev_r = src[2 * *idx + 1]; ++*idx; }
+        else          { r->prev = r->prev_r = 0; }
+        if (*idx < n) { r->cur = src[2 * *idx]; r->cur_r = src[2 * *idx + 1]; ++*idx; }
+        else          { r->cur = r->prev; r->cur_r = r->prev_r; }
+        r->primed = 1;
+        r->frac = 0;
+    }
+    *ol  = r->prev   + (((r->cur   - r->prev)   * (int32_t)(r->frac >> 8)) >> 8);
+    *or_ = r->prev_r + (((r->cur_r - r->prev_r) * (int32_t)(r->frac >> 8)) >> 8);
+    r->frac += r->step;
+    while (r->frac >= 0x10000u) {
+        r->frac -= 0x10000u;
+        r->prev = r->cur; r->prev_r = r->cur_r;
+        if (*idx < n) { r->cur = src[2 * *idx]; r->cur_r = src[2 * *idx + 1]; ++*idx; }
+    }
+}
+
+void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
 {
     uint32_t done = 0;
 
     while (done < frames) {
         uint32_t n = frames - done;
         uint32_t i, need, idx;
+        int16_t *o;
         if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        o = out + 2 * done;
 
-        for (i = 0; i < n; ++i) out[done + i] = 0;
+        for (i = 0; i < 2 * n; ++i) o[i] = 0;
 
-        /* --- FM ----------------------------------------------------------- */
+        /* --- FM (mono: both channels) ------------------------------------ */
         if (st->opl) {
             int32_t g = mix_gain(st->sb, 0x26);
             rs_setup(&st->r_opl, OPL_NATIVE_HZ, st->out_hz);
@@ -111,57 +143,57 @@ void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
             vdd_opl_render(st->opl, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
-                int32_t v = out[done + i]
-                          + ((rs_step(&st->r_opl, st->scratch, need, &idx) * g) >> 8);
-                out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+                int32_t v = (rs_step(&st->r_opl, st->scratch, need, &idx) * g) >> 8;
+                o[2*i]   = mix_clip(o[2*i]   + v);
+                o[2*i+1] = mix_clip(o[2*i+1] + v);
             }
         }
 
-        /* --- sampled audio ------------------------------------------------ */
+        /* --- sampled audio: the SB's own L/R ------------------------------ */
         /* Called even while idle: this is what walks the DMA buffer and raises
            the block-completion IRQ the game is waiting for. */
         if (st->sb) {
             int32_t g = mix_gain(st->sb, 0x04);
             rs_setup(&st->r_sb, st->sb->rate_hz, st->out_hz);
             need = rs_need(&st->r_sb, n);
-            vdd_sb_render(st->sb, st->scratch, need);
+            vdd_sb_render_st(st->sb, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
-                int32_t v = out[done + i]
-                          + ((rs_step(&st->r_sb, st->scratch, need, &idx) * g) >> 8);
-                out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+                int32_t l, r;
+                rs_step_st(&st->r_sb, st->scratch, need, &idx, &l, &r);
+                o[2*i]   = mix_clip(o[2*i]   + ((l * g) >> 8));
+                o[2*i+1] = mix_clip(o[2*i+1] + ((r * g) >> 8));
             }
         }
 
-        /* --- PC speaker --------------------------------------------------- */
-        /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
-           sets the data bit to click the cone makes no tone here either. */
-        /* The Gravis UltraSound: it mixes its own voices at the GF1's service rate
-           (one sample per pass over the active voices), and that rate moves with the
-           active-voice count -- so the resampler is re-aimed every chunk. Rendering is
-           also what advances its voices, ramps and timers and raises its interrupts,
-           exactly as the SB's render walks its DMA. (s80, north star 2) */
+        /* --- the GUS, panned per voice (see vdd_gus.c) -------------------- */
         if (st->gus) {
             rs_setup(&st->r_gus, vdd_gus_rate_hz(st->gus), st->out_hz);
             need = rs_need(&st->r_gus, n);
-            vdd_gus_render(st->gus, st->scratch, need);
+            vdd_gus_render_st(st->gus, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
-                int32_t v = out[done + i] + rs_step(&st->r_gus, st->scratch, need, &idx);
-                out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+                int32_t l, r;
+                rs_step_st(&st->r_gus, st->scratch, need, &idx, &l, &r);
+                o[2*i]   = mix_clip(o[2*i]   + l);
+                o[2*i+1] = mix_clip(o[2*i+1] + r);
             }
         }
+
+        /* --- PC speaker (mono: both channels) ------------------------------ */
+        /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
+           sets the data bit to click the cone makes no tone here either. */
         if (st->spk && st->spk_level && vdd_speaker_active(st->spk)) {
             uint32_t hz = vdd_speaker_hz(st->spk);
             st->spk_gated += n;
             st->spk_hz = hz;
             if (hz >= AUDIO_SPK_HZ_MIN && hz <= AUDIO_SPK_HZ_MAX) {
-                st->spk_frames += n;
                 uint32_t step = (uint32_t)(((uint64_t)hz << 16) / st->out_hz);
+                st->spk_frames += n;
                 for (i = 0; i < n; ++i) {
-                    int32_t v = out[done + i]
-                              + ((st->spk_phase & 0x8000u) ? st->spk_level : -st->spk_level);
-                    out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+                    int32_t v = (st->spk_phase & 0x8000u) ? st->spk_level : -st->spk_level;
+                    o[2*i]   = mix_clip(o[2*i]   + v);
+                    o[2*i+1] = mix_clip(o[2*i+1] + v);
                     st->spk_phase = (uint16_t)(st->spk_phase + step);
                 }
             }
@@ -169,14 +201,30 @@ void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
 
         /* --- master attenuator -------------------------------------------- */
         if (st->muted) {
-            for (i = 0; i < n; ++i) out[done + i] = 0;
+            for (i = 0; i < 2 * n; ++i) o[i] = 0;
         } else if (st->master < 100) {
             int32_t g = (int32_t)((st->master * 256u) / 100u);   /* 0..256 */
-            for (i = 0; i < n; ++i)
-                out[done + i] = (int16_t)((out[done + i] * g) >> 8);
+            for (i = 0; i < 2 * n; ++i) o[i] = (int16_t)((o[i] * g) >> 8);
         }
 
         st->frames_mixed += n;
+        done += n;
+    }
+}
+
+/* The mono mixer, as it always was to its callers: the stereo mix folded. For every
+   mono source L = R, so (L + R) / 2 is exactly the old sample -- audio_test's checks
+   are unchanged. (The SB's stereo was always averaged here; a GUS voice panned hard
+   to one side now folds to half its old level -- nothing but the tests calls this.) */
+void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
+{
+    int16_t tmp[2 * AUDIO_CHUNK];
+    uint32_t done = 0, i;
+    while (done < frames) {
+        uint32_t n = frames - done;
+        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        vdd_audio_mix_st(st, tmp, n);
+        for (i = 0; i < n; ++i) out[done + i] = (int16_t)(((int32_t)tmp[2*i] + tmp[2*i+1]) / 2);
         done += n;
     }
 }

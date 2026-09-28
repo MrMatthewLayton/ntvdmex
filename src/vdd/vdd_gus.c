@@ -476,13 +476,25 @@ static void gus_timers(gus_state *st, uint32_t ns)
     }
 }
 
-void vdd_gus_render(gus_state *st, int16_t *out, uint32_t n)
+/* ── #189: PAN. The GF1 places each voice at one of 16 positions (reg 0Ch: 0 = hard
+     left, 15 = hard right, 7/8 = the middle). This is a BALANCE law, not a split: a side
+     stays at full level until the voice moves away from it, so a centred voice comes
+     out of each channel exactly as loud as the old mono sum -- nothing a program already
+     plays gets quieter -- and a hard-panned one is silent on the far side. Q8 gains. */
+static int32_t gus_pan_l(uint8_t p) { int32_t g = (int32_t)(15 - (p & 15)) * 512 / 15; return g > 256 ? 256 : g; }
+static int32_t gus_pan_r(uint8_t p) { int32_t g = (int32_t)(p & 15) * 512 / 15;        return g > 256 ? 256 : g; }
+static int16_t gus_clip(int32_t a) { return (int16_t)(a > 32767 ? 32767 : (a < -32768 ? -32768 : a)); }
+
+/* One render loop, two output shapes (as vdd_sb): `stereo` 0 writes the mono sum it
+   always did, 1 writes panned L/R pairs at out[2i], out[2i+1]. */
+static void gus_render(gus_state *st, int16_t *out, uint32_t n, int stereo)
 {
     uint32_t i, k, ns = 1000000000u / (vdd_gus_rate_hz(st) ? vdd_gus_rate_hz(st) : 44100u);
     st->renders++;
     gus_dma_try(st);                                 /* a DMA that was waiting on the 8237 */
     for (i = 0; i < n; ++i) {
-        int32_t acc = 0;
+        int32_t acc = 0, accl = 0, accr = 0;
+        int16_t m;
         if (st->dram && (st->reset & 0x03) == 0x03) {   /* running, DAC enabled */
             for (k = 0; k < st->active && k < GUS_VOICES; ++k) {
                 gus_voice *v = &st->v[k];
@@ -493,17 +505,21 @@ void vdd_gus_render(gus_state *st, int16_t *out, uint32_t n)
                     s0 = gus_fetch(st, v, addr);
                     s1 = gus_fetch(st, v, addr + 1);
                     s  = s0 + (((s1 - s0) * (int32_t)frac) >> 9);
-                    acc += (s * g) >> 16;
+                    s  = (s * g) >> 16;
+                    acc += s;
+                    if (stereo) { accl += (s * gus_pan_l(v->pan)) >> 8;
+                                  accr += (s * gus_pan_r(v->pan)) >> 8; }
                 }
                 gus_voice_step(st, v);
                 gus_ramp_step(v);
             }
         }
         gus_timers(st, ns);
-        acc >>= 1;                                   /* headroom for many voices */
-        out[i] = (int16_t)(acc > 32767 ? 32767 : (acc < -32768 ? -32768 : acc));
-        if (out[i]) {                                /* is anything actually audible? */
-            uint32_t a = (uint32_t)(out[i] < 0 ? -out[i] : out[i]);
+        m = gus_clip(acc >> 1);                      /* headroom for many voices */
+        if (stereo) { out[2*i] = gus_clip(accl >> 1); out[2*i+1] = gus_clip(accr >> 1); }
+        else          out[i] = m;
+        if (m) {                                     /* is anything actually audible? */
+            uint32_t a = (uint32_t)(m < 0 ? -m : m);
             st->out_nonzero++;
             if (a > st->out_peak) st->out_peak = a;
         }
@@ -511,6 +527,9 @@ void vdd_gus_render(gus_state *st, int16_t *out, uint32_t n)
     st->samples_out += n;
     gus_irq_update(st);
 }
+
+void vdd_gus_render(gus_state *st, int16_t *out, uint32_t n)    { gus_render(st, out, n, 0); }
+void vdd_gus_render_st(gus_state *st, int16_t *out, uint32_t n) { gus_render(st, out, n, 1); }
 
 /* ---- the bus ------------------------------------------------------------------- */
 
