@@ -6,11 +6,11 @@
 > then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-09-27 (session 81)
-- **Branch:** `m9/completeness` — ⚠ s81's last commits (`323b35c`, `2c9220b`) are LOCAL,
-  not pushed. Rig `bin\` = `6821f496` (= `2c9220b`), not user-confirmed.
-- **Resume:** [`log/sessions/session-81.md`](log/sessions/session-81.md) Part 14, then #202
-  (next: #203).
+- **Updated:** 2026-09-28 (session 82, unattended night)
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `e9fd2e4c` (= `a65d989`),
+  **not user-confirmed**: s82's seven changes await the by-hand checklist.
+- **Resume:** [`log/sessions/session-82.md`](log/sessions/session-82.md), then #202
+  (#172 deferred until #212 is understood; then #201).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
