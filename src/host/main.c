@@ -2263,6 +2263,14 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     VDM_REG(tib, VTIB_SS)  = img.ss; VDM_REG(tib, VTIB_ESP) = img.sp;
     VDM_REG(tib, VTIB_DS)  = child;  VDM_REG(tib, VTIB_ES)  = child;
     VDM_REG(tib, VTIB_EAX) = 0;
+    /* #212: THE CHILD STARTS WITH INTERRUPTS ON, as DOS's EXEC enters it. These flags
+       are the parent's AT THE BOP -- inside our INT 21h stub, where the INT has already
+       cleared IF -- so without this every program ran from its first instruction with
+       the virtual IF clear (p_ifst: 0000 vs 0200 on 6.22, DOSBox-X and PCem), and one
+       that never executes STI had every timer tick refused (mybench: 0040:006C frozen).
+       IF in the VTIB after an event exit IS the virtual flag (s81, VME), so setting it
+       here is what the child sees. TF off too: a trace flag must not follow into it. */
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x100u) | 0x200u;
     p = zput(p, "  EXEC: child at seg=0x"); p = zhex(p, child);
     p = zput(p, " entry="); p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
     p = zput(p, img.is_exe ? " (EXE)" : " (COM)");
@@ -27103,7 +27111,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        executes STI (mybench.com) then has every timer tick refused by our own gate, which
        reads that virtual IF, and 0040:006C stands still. Defaulting this trampoline was
        tried: the guest's STI did not stick (first exit still VTIB EFLAGS=0x30002), with or
-       without VIP cleared first -- the wall s11 recorded. Still opt-in. See GH issue. */
+       without VIP cleared first -- the wall s11 recorded. Still opt-in. See GH issue.
+     ✅ #212, s84: FIXED ELSEWHERE, AND THIS WAS NEVER THE PLACE. Every program is started
+       by a shell's EXEC, and the EXEC path handed the child the parent's flags from
+       INSIDE our INT 21h stub, where IF is already clear -- so the trampoline's STI ran
+       for the shell, not the program. exec_begin() now enters the child with IF set;
+       p_ifst agrees with all three oracles. */
     if (g_qi_vif) {
         volatile BYTE *tr = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << 4) + 0x60);
         /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
