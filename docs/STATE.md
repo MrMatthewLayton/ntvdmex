@@ -6,11 +6,11 @@
 > then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-09-28 (session 82, unattended night)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `001de0d2` (= `b401f99`),
-  **not user-confirmed**: s82's changes await the by-hand checklist (`checks.txt`, round 5).
-- **Resume:** [`log/sessions/session-82.md`](log/sessions/session-82.md), then #202
-  (#172 deferred until #212 is understood; then #201).
+- **Updated:** 2026-09-28 (session 83)
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `74610909` (= `da49025`, the
+  #213 ZAR sound fix). The user confirmed most of round 5 (`runs/s83/sweep.txt`); #213 is owed by ear.
+- **Resume:** [`log/sessions/session-83.md`](log/sessions/session-83.md), then #202
+  (#175 one-shot IRQ0, #162 synchronous delivery, #183 cheaper waits — all decided by the user).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
@@ -18,7 +18,7 @@
   tag `release-20260917b`). ⚠ No git tag has been made for the new anchor yet. `bin\` on the
   rig is free to churn; a `dist\` zip is immutable.
 - **Rollback host:** `debug\prev\ntvdmhost_prev.exe` md5s as **`0e5b10e7`** (user-approved
-  s81; this line said `0e6f5156` until the end of s81 — the anchor zip's host). Earlier confirmed builds sit beside it by hash (`cd5f9f12` ZAR sound,
+  s81 **Part 5** — everything after Part 5 was unconfirmed; this line said `0e6f5156` until the end of s81 — the anchor zip's host). Earlier confirmed builds sit beside it by hash (`cd5f9f12` ZAR sound,
   `f484fc3d` IF/VIF gate, `a0294462` GUS, `8d795b96`, `0473d95d`, `b6a8a95b`, `d57d586c`).
   **md5 the slot; do not trust this line.**
 - **Checkpoint commit:** still `ff0d956` — ⚠ several confirmed builds behind; moving it is a
