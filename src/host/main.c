@@ -23246,11 +23246,28 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            get/set file date-time and DCh get-logical-drive-map are all
                            register-only in both directions -- krnl386 asks for 0Eh, 57h and
                            DCh within the first dozen calls, and every one of them was
-                           landing in the TODO arm for want of an entry in this list. */
+                           landing in the TODO arm for want of an entry in this list.
+                         ── #166: THE REST OF DOS'S REGISTER-ONLY FUNCTIONS, NOT JUST THE
+                           ONES A MEASURED GUEST ASKED FOR. The list grew one TODO line at a
+                           time, and "this path has broken krnl386 several times" is what
+                           that costs. Added, each taking and returning registers only:
+                           03/04/05 AUX and printer I/O, 0Bh input status, 0Dh disk reset,
+                           2Bh/2Dh set date/time, 2Eh/54h verify flag, 36h free space (DL
+                           in, AX/BX/CX/DX out), 37h switch character, 4Dh child return
+                           code, 5Ch lock/unlock (BX, CX:DX, SI:DI), 66h code page, 67h
+                           handle count, 68h/6Ah commit.
+                         ⚠ NOT 01h/07h/08h/0Ch: those READ THE KEYBOARD by re-entering
+                           (`m->retry`), which this synchronous path cannot honour -- they
+                           would return with no key. They stay in the loud arm. */
                         if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
                             ah == 0x33 || ah == 0x58 || ah == 0x06 || ah == 0x44 ||
                             ah == 0x0E || ah == 0x3E || ah == 0x42 || ah == 0x45 ||
-                            ah == 0x46 || ah == 0x57 || ah == 0xDC) {
+                            ah == 0x46 || ah == 0x57 || ah == 0xDC ||
+                            ah == 0x03 || ah == 0x04 || ah == 0x05 || ah == 0x0B ||
+                            ah == 0x0D || ah == 0x2B || ah == 0x2D || ah == 0x2E ||
+                            ah == 0x36 || ah == 0x37 || ah == 0x4D || ah == 0x54 ||
+                            ah == 0x5C || ah == 0x66 || ah == 0x67 || ah == 0x68 ||
+                            ah == 0x6A) {
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
