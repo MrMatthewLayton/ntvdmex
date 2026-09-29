@@ -11,6 +11,11 @@
  * non-contiguous operator mapping (channel 3 is offsets 0x08/0x0B, not 0x06/0x09),
  * timer periods of (256 - preset) steps, mask bits suppressing flags, and the
  * key-on/key-off edges that drive the envelope generator.
+ *
+ * T11-T17 are the OPL3 (#232): what an OPL2 must NOT answer (0x38A/0x38B float,
+ * ID bits 0x06), the second array behind 0x38A, the single 9-bit latch, and NEW
+ * gating the 4-operator pairing. What the pairing and NEW do to the SOUND is
+ * opl_synth_test's job.
  */
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +39,16 @@ static uint8_t status(void)
 {
     uint32_t v = 0; vdd_bus_io(&bus, 0x388, 1, 1, &v); return (uint8_t)v;
 }
+/* The OPL3's array-1 pair: address to 0x38A, data to 0x38B. */
+static void wr3(uint8_t reg, uint8_t val)
+{
+    uint32_t v = reg; vdd_bus_io(&bus, 0x38A, 1, 0, &v);
+    v = val;          vdd_bus_io(&bus, 0x38B, 1, 0, &v);
+}
+static uint8_t rdp(uint16_t port)
+{
+    uint32_t v = 0; vdd_bus_io(&bus, port, 1, 1, &v); return (uint8_t)v;
+}
 
 int main(void)
 {
@@ -41,12 +56,12 @@ int main(void)
     ntvdd dev = vdd_opl_device(&opl);
     int m, c;
 
-    printf("== sound epic: AdLib/OPL2 register + timer battery ==\n");
+    printf("== sound epic: AdLib/OPL2 + OPL3 register + timer battery ==\n");
 
     vdd_bus_init(&bus, g_flat);
     vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: opl device ok");
-    CHECK(status() == 0, "reset: status register clear");
+    CHECK(status() == 0x06, "reset: OPL2 status = flags clear + ID bits 1-2 set (0x06)");
 
     /* T1: the operator mapping ---------------------------------------------- */
     CHECK(vdd_opl_op_index(0,0) == 0  && vdd_opl_op_index(0,1) == 3,  "ch0 -> ops 0/3");
@@ -93,17 +108,19 @@ int main(void)
     /* T4: THE ADLIB DETECTION SEQUENCE (what a real game does) --------------- */
     wr(0x04, 0x60);                                  /* mask both timers          */
     wr(0x04, 0x80);                                  /* reset IRQ + flags         */
-    CHECK(status() == 0x00, "detect: status reads 0x00 after reset");
+    /* A detect masks with 0xE0 -- the low bits are the chip ID (see T11).        */
+    CHECK((status() & 0xE0) == 0x00, "detect: status & 0xE0 reads 0x00 after reset");
 
     wr(0x02, 0xFF);                                  /* T1 preset: one 80us tick  */
     wr(0x04, 0x21);                                  /* start T1, T1 unmasked     */
-    CHECK(status() == 0x00, "detect: status still 0x00 before the delay");
+    CHECK((status() & 0xE0) == 0x00, "detect: status still 0x00 before the delay");
     vdd_opl_add_us(&opl, 80);                        /* the game's ~80us delay    */
-    CHECK(status() == 0xC0, "detect: status reads 0xC0 (IRQ|T1) after 80us  <-- THE TEST");
+    CHECK((status() & 0xE0) == 0xC0, "detect: status & 0xE0 reads 0xC0 (IRQ|T1) after 80us  <-- THE TEST");
+    CHECK(status() == 0xC6, "detect: an OPL2 reads 0xC6 whole (ID bits say YM3812)");
 
     wr(0x04, 0x60);
     wr(0x04, 0x80);
-    CHECK(status() == 0x00, "detect: flags reset again -> card confirmed present");
+    CHECK((status() & 0xE0) == 0x00, "detect: flags reset again -> card confirmed present");
 
     /* T5: timer period is (256 - preset) steps ------------------------------- */
     vdd_opl_reset(&opl);
@@ -134,13 +151,13 @@ int main(void)
     wr(0x02, 0xFF);
     wr(0x04, 0x41);                                  /* start T1 but MASK it      */
     vdd_opl_add_us(&opl, 400);
-    CHECK(status() == 0x00, "masked timer1: overflow raises no flag");
+    CHECK((status() & 0xE0) == 0x00, "masked timer1: overflow raises no flag");
 
     /* T8: a stopped timer does not advance ----------------------------------- */
     vdd_opl_reset(&opl);
     wr(0x02, 0xFF);
     vdd_opl_add_us(&opl, 4000);
-    CHECK(status() == 0x00, "stopped timer: no flag no matter how much time passes");
+    CHECK((status() & 0xE0) == 0x00, "stopped timer: no flag no matter how much time passes");
 
     /* T9: the data port is write-only on an OPL2 ---------------------------- */
     { uint32_t v = 0; vdd_bus_io(&bus, 0x389, 1, 1, &v);
@@ -155,6 +172,93 @@ int main(void)
     CHECK((status() & OPL_ST_T1) == 0, "frame tick: 16.7ms is short of 20.48ms");
     vdd_bus_frame(&bus);
     CHECK((status() & OPL_ST_T1) != 0, "frame tick: two frames pass 20.48ms -> flag");
+
+    /* ── OPL3 (YMF262), GH #232 ─────────────────────────────────────────────── */
+
+    /* T11: OPL2 fitted -- 0x38A/0x38B are not there, exactly as on an AdLib -- */
+    vdd_opl_reset(&opl);                             /* opl.opl3 == 0 (zeroed)    */
+    CHECK(status() == 0x06 && (status() & 0x06) != 0, "OPL2: the OPL3 detect ((status & 6) == 0) FAILS");
+    wr3(0xE0, 0x07);                                 /* array-1 waveform, op 18   */
+    wr(0x20, 0x01);                                  /* put something in array 0  */
+    wr3(0x20, 0x0F);
+    CHECK(opl.reg[0x1E0] == 0 && opl.reg[0x120] == 0 && opl.op[18].mult == 0,
+          "OPL2: writes through 0x38A/0x38B go nowhere");
+    CHECK(opl.op[0].mult == 1, "OPL2: ...and do not leak into array 0");
+    CHECK(rdp(0x38A) == 0xFF && rdp(0x38B) == 0xFF, "OPL2: 0x38A/0x38B read 0xFF (floating bus)");
+    vdd_opl_write_reg(&opl, 0x1B0, 0x20);
+    CHECK(opl.reg[0x1B0] == 0 && opl.ch[9].keyon == 0, "OPL2: a direct array-1 write is dropped too");
+
+    /* T12: OPL3 fitted -- the ID bits and the detect ------------------------- */
+    opl.opl3 = 1; vdd_opl_reset(&opl);
+    CHECK(opl.opl3 == 1, "OPL3: chip type survives vdd_opl_reset");
+    CHECK(status() == 0x00, "OPL3: status idles at 0x00 (ID bits 1-2 clear)");
+    wr(0x04, 0x60); wr(0x04, 0x80);
+    wr(0x02, 0xFF); wr(0x04, 0x21);
+    vdd_opl_add_us(&opl, 80);
+    CHECK(status() == 0xC0, "OPL3: the AdLib detect still reads 0xC0 -- an OPL3 IS an AdLib");
+    CHECK(rdp(0x38A) == 0xC0, "OPL3: status readable at 0x38A too");
+    CHECK(rdp(0x38B) == 0xFF && rdp(0x389) == 0xFF, "OPL3: the data ports stay write-only");
+    wr(0x04, 0x80);
+
+    /* T13: array 1 through 0x38A/0x38B lands on operators 18-35, channels 9-17 - */
+    wr3(0x20, 0x0A);                                 /* array 1, op offset 0      */
+    CHECK(opl.reg[0x120] == 0x0A && opl.op[18].mult == 0x0A, "array 1: 0x120 -> operator 18");
+    CHECK(opl.op[0].mult != 0x0A, "array 1: ...not operator 0");
+    wr3(0x2B, 0x05);                                 /* offset 0x0B = ch3 carrier */
+    CHECK(opl.op[vdd_opl_op_index(12, 1)].mult == 5 && vdd_opl_op_index(12, 1) == 27,
+          "array 1: 0x12B -> operator 27 (channel 12's carrier)");
+    wr3(0xA2, 0x44); wr3(0xB2, 0x0D);
+    CHECK(opl.ch[11].fnum == 0x144 && opl.ch[11].block == 3, "array 1: 0x1A2/0x1B2 -> channel 11");
+    CHECK(vdd_opl_op_index(9, 0) == 18 && vdd_opl_op_index(17, 1) == 35, "ch9 -> op 18 ... ch17 -> op 35");
+    /* ONE latch: address written at 0x38A, data through EITHER data port        */
+    { uint32_t v = 0x40; vdd_bus_io(&bus, 0x38A, 1, 0, &v);
+      v = 0x3F;          vdd_bus_io(&bus, 0x389, 1, 0, &v); }
+    CHECK(opl.reg[0x140] == 0x3F && opl.op[18].tl == 0x3F, "one 9-bit latch: 0x38A then 0x389 writes array 1");
+    /* array 1's 0x104 is the 4-op register, NOT timer control                   */
+    wr(0x04, 0x00);                                  /* T1 stopped (T12 ran it)   */
+    wr3(0x04, 0x01);
+    CHECK(opl.t1_run == 0 && opl.reg[0x104] == 0x01, "0x104 is 4-op connect, not array 0's timer control");
+    wr3(0x04, 0x00);
+
+    /* T14: NEW gates the OPL3's extensions ---------------------------------- */
+    CHECK(!vdd_opl_new_mode(&opl), "NEW: clear after reset (the OPL3 powers up OPL2-compatible)");
+    wr3(0x04, 0x01);                                 /* pair 0+3 -- but NEW clear */
+    CHECK(opl_4op_role(&opl, 0) == 0, "NEW clear: 0x104 latches but pairs nothing");
+    wr3(0x05, 0x01);
+    CHECK(vdd_opl_new_mode(&opl), "NEW: 0x105 bit 0 sets it");
+    CHECK(opl_4op_role(&opl, 0) == 1 && opl_4op_role(&opl, 3) == 2 && opl_4op_role(&opl, 1) == 0,
+          "NEW set: 0x104 bit 0 pairs channel 0 (lead) with 3");
+    wr3(0x04, 0x38);
+    CHECK(opl_4op_role(&opl, 9) == 1 && opl_4op_role(&opl, 12) == 2 &&
+          opl_4op_role(&opl, 11) == 1 && opl_4op_role(&opl, 14) == 2 && opl_4op_role(&opl, 0) == 0,
+          "0x104 bits 3-5 pair array 1's 9+12, 10+13, 11+14");
+    wr3(0x04, 0x01);
+
+    /* T15: a 4-op voice is keyed from its FIRST channel, all four operators -- */
+    wr(0xB3, 0x20);                                  /* the second channel's key  */
+    CHECK(opl.op[vdd_opl_op_index(3, 0)].eg_state == OPL_EG_OFF,
+          "4-op: the second channel's key-on is ignored");
+    wr(0xB0, 0x31);
+    CHECK(opl.op[0].eg_state == OPL_EG_ATTACK && opl.op[3].eg_state == OPL_EG_ATTACK &&
+          opl.op[6].eg_state == OPL_EG_ATTACK && opl.op[9].eg_state == OPL_EG_ATTACK,
+          "4-op: key-on at 0xB0 starts operators 0, 3, 6 and 9");
+    wr(0xB0, 0x11);
+    CHECK(opl.op[6].eg_state == OPL_EG_RELEASE && opl.op[9].eg_state == OPL_EG_RELEASE,
+          "4-op: key-off releases all four");
+
+    /* T16: all-notes-off reaches array 1 ------------------------------------ */
+    wr3(0xB4, 0x2A);                                 /* channel 13, an ordinary one */
+    CHECK(opl.ch[13].keyon == 1 && opl.op[vdd_opl_op_index(13, 1)].eg_state == OPL_EG_ATTACK,
+          "array 1: 0x1B4 keys channel 13");
+    vdd_opl_all_notes_off(&opl);
+    CHECK((opl.reg[0x1B4] & 0x20) == 0 && opl.ch[13].fnum == 0x200 &&
+          opl.op[vdd_opl_op_index(13, 1)].eg_state == OPL_EG_RELEASE,
+          "all-notes-off: array-1 voices released too, F-number kept");
+
+    /* T17: reset clears NEW but keeps the chip ------------------------------- */
+    vdd_opl_reset(&opl);
+    CHECK(opl.opl3 == 1 && !vdd_opl_new_mode(&opl) && opl.reg[0x104] == 0, "reset: NEW and 0x104 clear, chip still OPL3");
+    opl.opl3 = 0; vdd_opl_reset(&opl);
 
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;

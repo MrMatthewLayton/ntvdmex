@@ -188,11 +188,20 @@ static void sb_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     uint8_t off = (uint8_t)(port - st->base), val = (uint8_t)v;
     (void)w;
     switch (off) {
-    case 0x0: case 0x2: case 0x8:               /* FM address (mirrors of 0x388)   */
-        if (st->opl) st->opl->index = val;
+    /* ── FM. 2x8/2x9 are the AdLib-compatible pair (0x388/0x389) on every card.
+         2x0-2x3 are the chip's own four ports on an SB16/AWE32's OPL3: 2x0 the
+         array-0 address, 2x2 the ARRAY-1 address (A1 high, = 0x38A), 2x1/2x3 data
+         (#232). With an OPL2 fitted there is no array 1, and 2x2 keeps its old
+         meaning of another array-0 address mirror -- the SB Pro 1's second (right)
+         OPL2 is not modelled. */
+    case 0x0: case 0x8:                         /* FM address, array 0             */
+        if (st->opl) vdd_opl_write_addr(st->opl, 0, val);
+        break;
+    case 0x2:                                   /* FM address, array 1 on an OPL3  */
+        if (st->opl) vdd_opl_write_addr(st->opl, st->opl->opl3 ? 1 : 0, val);
         break;
     case 0x1: case 0x3: case 0x9:               /* FM data                         */
-        if (st->opl) vdd_opl_write_reg(st->opl, st->opl->index, val);
+        if (st->opl) vdd_opl_write_data(st->opl, val);
         break;
     case 0x4: st->mix_index = val; break;
     case 0x5: st->mix[st->mix_index] = val; break;
@@ -225,7 +234,10 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     (void)w;
     switch (off) {
     case 0x0: case 0x8:                         /* FM status through the mirror    */
-        *v = st->opl ? st->opl->status : 0xFF;
+        *v = st->opl ? vdd_opl_read_status(st->opl) : 0xFF;
+        break;
+    case 0x2:                                   /* OPL3: status at A1 high too     */
+        *v = (st->opl && st->opl->opl3) ? vdd_opl_read_status(st->opl) : 0xFF;
         break;
     case 0x5:                                   /* mixer data                      */
         /* 0x82 is the IRQ-status register: bit 0 = 8-bit DMA, bit 1 = 16-bit. */
