@@ -529,6 +529,80 @@ int main(void)
       CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==6, "dac6: INT 10h AH=00h returns the width to 6");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
+    /* T12h: 4F07h BL=80h WAITS FOR THE RETRACE, and the start rides the latch (#226). --
+       VBE 2.0 §4.10 "Set Display Start during Vertical Retrace". It returned at once and
+       paced nothing. A VESA mode also runs on its OWN timing now, not the last VGA
+       mode's CRTC: 0x101 is 640x480 at 60 Hz, 525 lines, retrace from line 480 --
+       F = 16666 us, retrace start at 480*F/525 = 15237 us into each frame. */
+    { const uint64_t F = 16666u, T = 1000u * 16666u, VB = (480u * 16666u) / 525u;
+      uint32_t v;
+      vid.time_us = fake_clock; vid.latch_t = 0;
+      g_fake_us = T + 1000; vid.dirty=1; vdd_bus_frame(&bus);              /* sync the latch */
+      CHECK(vdd_video_frame_us(&vid)==16666u, "vesa beam: 640x480 is a 60 Hz frame, whatever the last VGA mode was");
+      vdd_bus_io(&bus,0x3DA,1,1,&v);
+      CHECK((v & 8)==0, "vesa beam: 3DAh in the picture at +1000us");
+      g_fake_us = T + VB + 20; vdd_bus_io(&bus,0x3DA,1,1,&v);
+      CHECK((v & 8)!=0, "vesa beam: 3DAh in retrace from line 480 of 525 (+15237us)");
+      g_fake_us = T + 2000;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==T+VB && vdd_video_int10_wait_us(&vid)==(uint32_t)(VB-2000u),
+            "4F07 BL=80h in the picture: completes at the retrace start (host waits the rest)");
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "4F07 BL=80h: the old page is still displayed before the retrace");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_cx(&r)==0 && r_dx(&r)==480, "4F07 BL=01h reports the start just set (the register), (0,480)");
+      g_fake_us = T + VB + 50;
+      CHECK(vdd_video_int10_wait_us(&vid)==0 && vid.int10_wait_until==0, "the wait ends once the beam is in retrace, and clears");
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "during the retrace the old picture is still the one up");
+      g_fake_us = T + F + 100; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram + 480u*640u, "the next picture shows page 2 -- the retrace loaded it");
+      /* called INSIDE a retrace nobody has used: returns at once, and THAT retrace takes it */
+      g_fake_us = T + F + VB + 30;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0 && vdd_video_int10_wait_us(&vid)==0,
+            "4F07 BL=80h inside a fresh retrace: completes at once");
+      g_fake_us = T + 2*F + 100; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "...and page 1 is on the very next picture");
+      /* a SECOND call in the same retrace is paced to the next one: one flip a frame */
+      g_fake_us = T + 2*F + VB + 10;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.int10_wait_until==0, "first call in this retrace: at once");
+      g_fake_us = T + 2*F + VB + 40;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.int10_wait_until==T+3*F+VB, "second call in the same retrace: waits for the next one");
+      /* BL=00h stays immediate: no wait, the display takes it now */
+      g_fake_us = T + 3*F + 1000;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.int10_wait_until==0 && vid.frame.pixels==vid.vesa_vram + 480u*640u, "4F07 BL=00h: no wait, shown at once (unchanged)");
+      /* 3.0 BL=02h: schedule a BYTE address, return at once; BL=04h reports the flip */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0, "4F07 BL=02h (3.0): scheduled, returns at once");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x04); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_cx(&r)==0, "4F07 BL=04h: the flip has not happened in the picture");
+      g_fake_us = T + 3*F + VB + 10;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x04); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_cx(&r)!=0, "4F07 BL=04h: ...and has once the retrace loaded it");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=640u*100u+8u; vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_cx(&r)==8 && r_dx(&r)==100, "4F07 BL=02h byte address 640*100+8 reads back as (8,100)");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=VID_VESA_VRAM; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x024F, "4F07 BL=02h past memory: AH=02");
+      /* 3.0 BL=82h waits like 80h */
+      g_fake_us = T + 4*F + 500;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x82); r.ecx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==T+4*F+VB, "4F07 BL=82h (3.0): waits for the retrace too");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x014F, "4F07 BL=03h stereo: 014Fh, no such hardware");
+      /* a stale stamp can never park the guest */
+      vid.int10_wait_until = g_fake_us + 5000000u;
+      CHECK(vdd_video_int10_wait_us(&vid)==0 && vid.int10_wait_until==0, "a wait stamp > 1 s out is dropped, not honoured");
+      vid.time_us = 0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0 && vdd_video_int10_wait_us(&vid)==0, "no clock: BL=80h never waits");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(vid.mode==0x12, "int10/00: mode set to 12h");

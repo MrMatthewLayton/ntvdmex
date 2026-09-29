@@ -130,6 +130,7 @@ static void vga_defaults_for(uint8_t mode,
 static void crtc_lc_update(video_state *st);
 static void crtc_vt_update(video_state *st);
 static void vid_latch(video_state *st, int at_frame);   /* display start/pan schedule (s83) */
+static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl);   /* 4F07 BL=80h (#226) */
 static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line);
@@ -584,12 +585,54 @@ static int vesa_find_text(uint16_t num, uint8_t *cols, uint8_t *rows, uint8_t *c
 }
 /* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
 static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
-/* Byte offset into vesa_vram of the pixel shown top-left: the 4F07 display start at
-   the 4F06 logical pitch. (0,0) at the mode's own pitch until a guest moves it. */
-static uint32_t vesa_origin(const video_state *st)
+/* Byte offset into vesa_vram of the pixel shown top-left, as the start REGISTER holds
+   it (4F07 at the 4F06 pitch; 0 after a mode set). What is actually on screen is
+   vesa_org_live -- the same value once the retrace has loaded it (vid_latch). */
+static uint32_t vesa_origin(const video_state *st) { return st->vesa_org; }
+/* (x, y) at the current pitch -> the byte offset the register holds. */
+static uint32_t vesa_xy_org(const video_state *st, uint32_t x, uint32_t y)
+{ return y * st->vesa_stride + x * vesa_bypp(st->vesa_bpp); }
+/* §4.10: "if the requested Display Start coordinates do not allow for a full page of
+   video memory ... the Function call should fail and no changes should be made". */
+static int vesa_org_fits(const video_state *st, uint32_t org)
 {
-    return (uint32_t)st->vesa_start_y * st->vesa_stride
-         + (uint32_t)st->vesa_start_x * vesa_bypp(st->vesa_bpp);
+    uint64_t end = (uint64_t)org + (uint64_t)(st->vesa_h ? st->vesa_h - 1u : 0u) * st->vesa_stride
+                 + (uint64_t)st->vesa_w * vesa_bypp(st->vesa_bpp);
+    return end <= VID_VESA_VRAM;
+}
+
+/* ── ★ THE CRT A VESA MODE RUNS ON (#226). ────────────────────────────────────────────
+     The retrace model (vid_beam) took its geometry from the CRTC registers the LAST
+     STANDARD MODE left behind -- a 4F02h programs none of them -- so a 640x480 VESA
+     mode set from text mode "ran" at text mode's 449 lines and 70 Hz, and from mode
+     12h at 60 Hz. Harmless while nothing in a VESA mode asked the beam anything but
+     3DAh; 4F07h BL=80h now waits for it, so the answer must be the mode's own.
+   ► THE VESA MODES' OWN TIMINGS, not the VGA CRTC's: a VBE BIOS programs its own
+     (extended) timing for these, and the published ones are the VESA DMT set at
+     60 Hz -- 525 total lines for 480, 628 for 600, 806 for 768, 1066 for 1024 --
+     with the two VGA-derived heights kept at the VGA's numbers: 400 lines is the
+     449-line 70 Hz frame, and the 200/240-line modes are DOUBLE-SCANNED to 400/480
+     as mode 13h is (so 320x200 is 70 Hz and 320x240 is 60 Hz). Blanking starts at
+     the end of the picture: the DMT modes carry no border. Anything else scales the
+     480-line frame. Only the ratios and the rate matter to the model.
+   Returns 0 outside a VESA graphics mode: the caller keeps the VGA path unchanged. */
+static int vesa_vgeom(const video_state *st, uint32_t *vtotal, uint32_t *vdisp,
+                      uint32_t *vblank, uint32_t *hz)
+{
+    uint32_t lines;
+    if (!st->in_vesa || !st->vesa_h) return 0;
+    lines = st->vesa_h <= 240u ? st->vesa_h * 2u : st->vesa_h;   /* double scan */
+    *hz = 60u;
+    switch (lines) {
+    case 400:  *vtotal = 449u;  *hz = 70u; break;
+    case 480:  *vtotal = 525u;  break;
+    case 600:  *vtotal = 628u;  break;
+    case 768:  *vtotal = 806u;  break;
+    case 1024: *vtotal = 1066u; break;
+    default:   *vtotal = lines * 525u / 480u; if (*vtotal <= lines) *vtotal = lines + 1u; break;
+    }
+    *vdisp = *vblank = lines;
+    return 1;
 }
 /* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
 static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
@@ -646,7 +689,7 @@ static void vesa_sync(video_state *st)
 static void vesa_scan_written(video_state *st)
 {
     uint32_t i, lo = 0xFFFFFFFFu, hi = 0, nz = 0;
-    uint32_t end = vesa_origin(st) + st->vesa_stride * st->vesa_h;
+    uint32_t end = st->vesa_org_live + st->vesa_stride * st->vesa_h;   /* the displayed page */
     if (!end || end > VID_VESA_VRAM) end = VID_VESA_VRAM;
     for (i = 0; i < end; ++i)
         if (st->vesa_vram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
@@ -657,7 +700,7 @@ static void vesa_scan_written(video_state *st)
 static void vesa_to_argb(video_state *st)
 {
     uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
-    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = vesa_origin(st);
+    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = st->vesa_org_live;  /* as displayed (vid_latch) */
     if (!w || !h || !pitch) return;
     if (w > VID_VESA_MAXW || h > VID_VESA_MAXH) return;   /* cannot happen: vesa_find caps it */
     for (y = 0; y < h; ++y) {
@@ -733,6 +776,9 @@ static int vid_state_load(video_state *st, const uint8_t *b)
         st->vesa_stride   = (uint32_t)b[20] | ((uint32_t)b[21] << 8) | ((uint32_t)b[22] << 16) | ((uint32_t)b[23] << 24);
         st->vesa_start_x  = (uint16_t)(b[24] | (b[25] << 8));
         st->vesa_start_y  = (uint16_t)(b[26] | (b[27] << 8));
+        st->vesa_org = st->vesa_org_vs = st->vesa_org_live =   /* shown at once (#226) */
+            vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y))
+                ? vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y) : 0u;
     } else {                                      /* a standard mode, bit 7 = no clear */
         s_ah(&m, 0x00); s_al(&m, (uint8_t)(b[8] | 0x80)); int10(st, &m);
     }
@@ -943,6 +989,8 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->vesa_bpp = mbpp;
             st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
             st->vesa_start_x = st->vesa_start_y = 0;   /* a mode set shows page 1 */
+            st->vesa_org = st->vesa_org_vs = st->vesa_org_live = 0;   /* ...on every stage */
+            st->vesa_07_vbl = 0; st->int10_wait_until = 0;
             st->vesa_dacwidth = 6;                     /* §4.11: any mode set -> 6 bits */
             st->vesa_bank = 0;
             /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
@@ -1000,9 +1048,13 @@ static void vesa(video_state *st, ntvdd_regs *r)
             if (want < minb || want > maxb) { s_ax(r, 0x024F); break; }
             st->vesa_stride = want;
             /* a start that no longer leaves a full page at the new pitch is reset,
-               which is what a BIOS that re-latches its CRTC offset does in effect */
-            if (vesa_origin(st) + (uint32_t)(st->vesa_h - 1) * want + minb > VID_VESA_VRAM)
+               which is what a BIOS that re-latches its CRTC offset does in effect.
+               The (x, y) start is kept and re-derived at the new pitch, at once (the
+               behaviour this call has always had; #226 keeps it). */
+            if (!vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y)))
                 st->vesa_start_x = st->vesa_start_y = 0;
+            st->vesa_org = st->vesa_org_vs = st->vesa_org_live =
+                vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y);
             st->dirty = 1;
         } else if (bl == 0x03) {                  /* get maximum                   */
             s_bx(r, (uint16_t)maxb); s_cx(r, (uint16_t)(maxb / bypp));
@@ -1017,22 +1069,63 @@ static void vesa(video_state *st, ntvdd_regs *r)
     case 0x07: {                                  /* get/set display start         */
         uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
         if (!st->in_vesa) { s_ax(r, 0x034F); break; }
+        /* ── #226: THE START ON THE RETRACE'S SCHEDULE, AND 80h WAITS FOR IT. ────────
+             BL=00h  set now: register, retrace load and display all take it at once --
+                     the behaviour this call has always had, kept deliberately (a guest
+                     that pans with 00h and draws straight after sees what it expects);
+             BL=80h  set "during vertical retrace": the register takes it, the retrace
+                     loads it (vid_latch) and the call does not complete before that
+                     retrace -- int10_wait_until, which the HOST honours outside its
+                     lock (vdd_video_int10_wait_us). heaven7's 15,900 (0,0) calls a run
+                     are this idiom and were paced by nothing;
+             BL=02h  (3.0) schedule a start given as a BYTE address; return at once;
+             BL=82h  (3.0) the same, and wait as 80h does;
+             BL=04h  (3.0) has the scheduled flip happened? CX = 0 not yet, 1 done --
+                     "done" meaning the retrace has loaded the register (vs == reg);
+             BL=03h/83h/05h/06h  stereo: no such hardware (ModeAttributes D11/D12 = 0,
+                     Capabilities D3 = 0), so 014Fh -- which 3.0's implementation note
+                     prescribes for a card without it. */
         if (bl == 0x01) {                         /* get                           */
             s_cx(r, st->vesa_start_x); s_dx(r, st->vesa_start_y); s_bx(r, 0);
             s_ax(r, 0x004F);
-        } else if (bl == 0x00 || bl == 0x80) {    /* set (80h: during retrace)     */
-            uint32_t bypp = vesa_bypp(st->vesa_bpp);
-            uint32_t org  = (uint32_t)r_dx(r) * st->vesa_stride + (uint32_t)r_cx(r) * bypp;
-            if (r_cx(r) > st->vesa_07_maxx) st->vesa_07_maxx = r_cx(r);   /* inventory */
-            if (r_dx(r) > st->vesa_07_maxy) st->vesa_07_maxy = r_dx(r);
+        } else if (bl == 0x04) {                  /* 3.0: scheduled flip status    */
+            vid_latch(st, 0);                     /* bring the schedule up to now  */
+            s_cx(r, (uint16_t)(st->vesa_org_vs == st->vesa_org ? 1 : 0));
+            s_ax(r, 0x004F);
+        } else if (bl == 0x00 || bl == 0x80 || bl == 0x02 || bl == 0x82) {
+            uint32_t bypp = vesa_bypp(st->vesa_bpp), org, x, y;
+            if (bl == 0x02 || bl == 0x82) {       /* ECX = byte address (3.0)      */
+                org = r->ecx;
+                y = st->vesa_stride ? org / st->vesa_stride : 0;
+                x = st->vesa_stride ? (org % st->vesa_stride) / bypp : 0;
+            } else {
+                x = r_cx(r); y = r_dx(r);
+                org = vesa_xy_org(st, x, y);
+            }
+            if (x > st->vesa_07_maxx) st->vesa_07_maxx = (uint16_t)(x > 0xFFFFu ? 0xFFFFu : x);   /* inventory */
+            if (y > st->vesa_07_maxy) st->vesa_07_maxy = (uint16_t)(y > 0xFFFFu ? 0xFFFFu : y);
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
-            if (org + (uint32_t)(st->vesa_h - 1) * st->vesa_stride
-                    + (uint32_t)st->vesa_w * bypp > VID_VESA_VRAM) { st->vesa_07_rej++; s_ax(r, 0x024F); break; }
-            st->vesa_start_x = r_cx(r); st->vesa_start_y = r_dx(r);
+            if (!vesa_org_fits(st, org)) { st->vesa_07_rej++; s_ax(r, 0x024F); break; }
+            vid_latch(st, 0);                     /* boundaries already passed keep the old start */
+            st->vesa_start_x = (uint16_t)x; st->vesa_start_y = (uint16_t)y;
+            st->vesa_org = org;
+            if (bl == 0x00) {
+                st->vesa_org_vs = st->vesa_org_live = org;          /* at once, as always */
+            } else if (bl & 0x80) {
+                int in_vbl = 0;
+                uint64_t until = vesa_vbl_release(st, &in_vbl);
+                if (in_vbl) st->vesa_org_vs = org;  /* this retrace loads it: next picture */
+                st->int10_wait_until = until;
+                if (until && st->time_us) {
+                    uint64_t now = st->time_us();
+                    st->vesa_07_waits++;
+                    if (until > now) st->vesa_07_wait_us += until - now;
+                }
+            }                                     /* 02h: the latch takes it at the retrace */
             st->dirty = 1;
             s_ax(r, 0x004F);
-        } else s_ax(r, 0x014F);                   /* VBE 3.0 sub-functions: not here */
+        } else s_ax(r, 0x014F);                   /* 03h/83h/05h/06h stereo, unknown BL */
         break; }
     case 0x08: {                                  /* get/set DAC palette width     */
         /* VBE 2.0 §4.11: BL=00 set (BH = wanted bits), BL=01 get; BH out = current.
@@ -1220,6 +1313,7 @@ static void int10(void *self, ntvdd_regs *r)
     video_state *st = (video_state *)self;
     uint8_t ah = r_ah(r), al = r_al(r);
     st->dirty = 1;
+    st->int10_wait_until = 0;          /* every call completes at once unless it says otherwise (#226) */
     switch (ah) {
     case 0x00:                                        /* set video mode          */
         /* ── ▶ AL BIT 7 = "DO NOT CLEAR VIDEO MEMORY", AND IT IS NOT DECORATION. ────
@@ -1962,15 +2056,21 @@ static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
    model makes -- for the host's Auto fallback floor. 1/60 s when there is no clock. */
 uint32_t vdd_video_frame_us(const video_state *st)
 {
-    uint32_t t, a, b; int tall = (st->gh > VID_VACTIVE_LO);
+    uint32_t t, a, b, hz; int tall = (st->gh > VID_VACTIVE_LO);
+    if (vesa_vgeom(st, &t, &a, &b, &hz)) return 1000000u / hz;   /* #226: the VESA mode's */
     if (vga_vtiming(st, &t, &a, &b)) tall = (t >= 500u);
     return 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
 }
 int vdd_video_present_ready(video_state *st)
 {
-    uint32_t frame_us, pm, t, a, b;
+    uint32_t frame_us, pm, t, a, b, hz;
     int act, tall;
     if (!st->time_us) return 1;                 /* no clock: present every tick   */
+    if (vesa_vgeom(st, &t, &a, &b, &hz)) {      /* #226: the VESA mode's own frame */
+        frame_us = 1000000u / hz; act = (int)(a * 1000u / t);
+        pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
+        return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
+    }
     /* Same geometry the 0x3DA read uses, and for the same reason: 914/891 permille
        are the two BIOS cases, and 640x350 is neither -- its picture ends at 350 of
        449 lines, 780 permille. Presenting at 891 there meant building the frame 1.6ms
@@ -2655,8 +2755,17 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line)
 {
-    int tall; uint32_t t, a, b; uint64_t in_frame;
+    int tall; uint32_t t, a, b, hz; uint64_t in_frame;
     if (!st->time_us) return 0;
+    /* A VESA graphics mode runs on its own timing, not the last VGA mode's (#226). */
+    if (vesa_vgeom(st, vtotal, vdisp, vblank, &hz)) {
+        *frame_us = 1000000u / hz;
+        *now      = st->time_us();
+        *frame_no = (uint32_t)(*now / *frame_us);
+        in_frame  = *now % (uint64_t)*frame_us;
+        *line     = (uint32_t)((in_frame * (uint64_t)*vtotal) / *frame_us);
+        return 1;
+    }
     /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
        320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
        the choice off the DISPLAYED height, not the mode number. */
@@ -2712,6 +2821,7 @@ static void vid_latch(video_state *st, int at_frame)
         if (st->crtc_start_pend) st->crtc_start_half++;
         st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
         st->disp_pan = st->attr_reg[0x13];
+        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
         return;
     }
     (void)vd; (void)fno; (void)line;
@@ -2719,22 +2829,71 @@ static void vid_latch(video_state *st, int at_frame)
     if (!t0 || now < t0 || now - t0 > 4u * (uint64_t)F) {
         st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
         st->disp_pan = st->attr_reg[0x13];
+        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
         return;
     }
+    /* ► THE VESA DISPLAY START RIDES THE SAME SCHEDULE (#226): a VBE BIOS implements
+         4F07h by writing the CRTC start (plus its extension bits), so it loads at the
+         retrace start and shows from the next picture exactly as 0Ch/0Dh do. */
     vbo = (uint64_t)vb * F / vt;                    /* retrace start, within the frame */
     ds  = (now / F) * F;                            /* the last frame start <= now     */
     if (ds > t0) {                                  /* a new picture began since t0    */
         if (ds >= F && ds - F + vbo > t0) {         /* ...and its retrace was after t0 */
             if (st->crtc_start_pend) st->crtc_start_half++;   /* loaded mid-pair: torn */
             st->start_vs = (uint16_t)st->crtc_start;
+            st->vesa_org_vs = st->vesa_org;
         }
         st->crtc_start_live = st->start_vs;
         st->disp_pan        = st->attr_reg[0x13];
+        st->vesa_org_live   = st->vesa_org_vs;
     }
     if (ds + vbo <= now && ds + vbo > t0) {         /* this frame's retrace began      */
         if (st->crtc_start_pend) st->crtc_start_half++;
         st->start_vs = (uint16_t)st->crtc_start;
+        st->vesa_org_vs = st->vesa_org;
     }
+}
+
+/* ── #226: WHEN MAY A 4F07h BL=80h/82h CALL RETURN? ────────────────────────────────────
+     "Set Display Start during Vertical Retrace" (VBE 2.0 §4.10; 3.0 adds 82h, which
+     "schedule[s] the display start address change to occur, and then wait[s] until the
+     address has changed before returning"). The rule, on the beam clock 3DAh uses:
+       * the beam is IN a retrace that has not yet released such a call: return now, and
+         the start is the one this retrace loads (it shows from the next picture);
+       * otherwise wait for the NEXT retrace start -- which also means a guest that calls
+         twice inside one retrace is paced to one flip per frame, as the Bochs/SeaVGABIOS
+         style `wait while in retrace; wait until in retrace` loop would pace it.
+     Returns the model time the call completes at (0 = now) and says whether this call's
+     start should be taken by the CURRENT retrace (1) or left to the latch (0). */
+static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl)
+{
+    uint64_t now, vbo, ds, vstart;
+    uint32_t F, vt, vd, vb, fno, line;
+    *now_in_vbl = 0;
+    if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) return 0;
+    (void)vd; (void)line;
+    vbo    = (uint64_t)vb * F / vt;
+    ds     = (now / F) * F;
+    vstart = ds + vbo;                              /* this frame's retrace start   */
+    if (now >= vstart) {                            /* in retrace now               */
+        if (st->vesa_07_vbl != fno + 1u) { st->vesa_07_vbl = fno + 1u; *now_in_vbl = 1; return 0; }
+        st->vesa_07_vbl = fno + 2u;                 /* taken: the next one          */
+        return vstart + F;
+    }
+    st->vesa_07_vbl = fno + 1u;
+    return vstart;
+}
+
+uint32_t vdd_video_int10_wait_us(video_state *st)
+{
+    uint64_t now, until = st->int10_wait_until;
+    if (!until) return 0;
+    if (!st->time_us) { st->int10_wait_until = 0; return 0; }
+    now = st->time_us();
+    /* Done, or a stamp more than a second out (a clock that went backwards, a stale
+       value): never park the guest on it. */
+    if (now >= until || until - now > 1000000u) { st->int10_wait_until = 0; return 0; }
+    return (uint32_t)(until - now);
 }
 
 /* ── ★ THE EXTERNAL REGISTERS -- CLAIMED AT LAST. (docs/inventory/vga.md, step 1) ──
@@ -3366,7 +3525,7 @@ static void vid_frame(void *self)
                  And the pitch is the 4F06 LOGICAL one, the origin the 4F07 start:
                  a page flip is nothing more than this pointer moving. */
             st->frame.stride = st->vesa_stride ? st->vesa_stride : st->vesa_w;
-            st->frame.pixels = st->vesa_vram + vesa_origin(st); st->frame.palette = st->pal;
+            st->frame.pixels = st->vesa_vram + st->vesa_org_live; st->frame.palette = st->pal;
         }
     } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
         /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,

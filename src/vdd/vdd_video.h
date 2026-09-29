@@ -147,6 +147,23 @@ typedef struct video_state {
     uint8_t  vpal[17];                  /* the 16 EGA palette registers + border     */
     uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start (pixels, rows); the      */
                                         /* 4F06 logical pitch lives in vesa_stride    */
+    /* ── THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
+         as the CRTC start (crtc_start -> start_vs -> crtc_start_live, see vid_latch):
+         the start as a BYTE offset into vesa_vram as the "register" holds it, as loaded
+         at the last retrace start, and as the displayed frame uses it. A byte offset
+         because VBE 3.0's 4F07 BL=02h/82h hand one over directly; BL=00h/80h derive it
+         from (x, y) at the current pitch. vesa_start_x/y stay what BL=01h reports. */
+    uint32_t vesa_org, vesa_org_vs, vesa_org_live;
+    /* ── 4F07 BL=80h/82h "SET DISPLAY START DURING VERTICAL RETRACE" MUST NOT RETURN
+         BEFORE THE RETRACE. The INT 10h handler runs under the host lock, so it cannot
+         spin there; it computes when the call completes, in the model's microseconds
+         (st->time_us), and the HOST honours it after releasing the lock -- see
+         vdd_video_int10_wait_us(). 0 = the last call completes at once. */
+    uint64_t int10_wait_until;
+    uint32_t vesa_07_vbl;               /* 1 + frame number whose retrace last released a
+                                           BL=80h/82h call: one release per retrace       */
+    uint32_t vesa_07_waits;             /* BL=80h/82h calls that had to wait (STAGE2)     */
+    uint64_t vesa_07_wait_us;           /* ...and the total they were asked to wait        */
     uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8) -- the */
                                         /* RAMDAC's width: 3C9h, AH=10h and 4F09 all */
                                         /* obey it (#226); any mode set resets it to 6 */
@@ -690,6 +707,22 @@ int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h     
    the object is simply missing. Returns 1 unconditionally with no clock injected. */
 int     vdd_video_present_ready(video_state *st);
 uint32_t vdd_video_frame_us(const video_state *st);   /* 16667 or 14286 (s73) */
+/* ── #226: AN INT 10h CALL THAT MUST WAIT FOR THE BEAM. ──────────────────────────────
+     VBE 4F07h BL=80h (and 3.0's 82h) is "set display start DURING VERTICAL RETRACE":
+     the call is not complete until the retrace has begun, and a guest that calls it
+     once a frame is paced by it -- that is the whole VESA vsync idiom (heaven7 makes
+     ~16,000 such calls a run). The VDD cannot spin inside int10(): the host delivers
+     INT 10h under its lock, and holding that for up to a frame would stall the UI,
+     the presenter and IRQ delivery. So the handler applies the start to the latch
+     schedule, stamps st->int10_wait_until, and returns.
+   ► THE HOST'S HALF: after vdd_bus_deliver_int(..., 0x10, ...) and HOST_UNLOCK(),
+       while (vdd_video_int10_wait_us(&g_vid)) { spin / yield, keep g_dpmi_iter alive }
+     before advancing the guest past the INT. Returns the microseconds still to wait
+     on st->time_us's clock (0 = done, and the stamp is cleared), so a stale stamp can
+     never park a guest. Without that loop the call behaves as it always did -- it
+     returns at once -- and only the pacing is lost; the start itself is still shown
+     from the retrace the call names (vid_latch). 0 always with no clock (off-VM). */
+uint32_t vdd_video_int10_wait_us(video_state *st);
 
 /* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
    INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of
