@@ -17,13 +17,44 @@ static void vga_load_modedef(video_state *st, uint8_t mode);
    unless mode 10h's measured DAC matches what ega64_rgb() computed entry for entry,
    so retiring the formula shifted no colour anywhere. */
 
-/* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. */
+/* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. (This was dac_pack();
+   it is dac_pack_w() below now, which also knows the 4F08h width.) */
 /* ⚠ This is <<2, so a guest writing 0x3F gets 252 and not 255 -- it disagrees by a
    few counts with the (v<<2)|(v>>4) the generated defaults use. Pre-existing, and
    left alone deliberately: it is on the path of every guest that programs a palette,
-   so it wants its own before/after rather than riding along with this one. */
-static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
-{ return 0xFF000000u | ((uint32_t)(r << 2) << 16) | ((uint32_t)(g << 2) << 8) | (uint32_t)(b << 2); }
+   so it wants its own before/after rather than riding along with this one. It is also
+   what makes the width switch lossless: v<<2 >>2 is v again. */
+
+/* ── ★★ THE DAC WIDTH IS A PROPERTY OF THE RAMDAC, SO EVERY PATH INTO IT OBEYS IT. (#226)
+     VBE 4F08h switches the DAC between 6 and 8 bits per primary. We accepted the switch
+     and honoured it in 4F09h ONLY: port 3C9h still stored `value & 3Fh` and read back
+     `>> 2`, so a guest that did what VBE 2.0 §4.11/§4.12 tell it to -- check
+     Capabilities D0, set 8 bits, then load its palette the usual way, through the
+     ports -- lost the top two bits of every primary (80h became 00h) with a 004Fh in
+     hand. Capabilities D0 = 1 was a promise kept for one function out of three.
+   ► THE REPRESENTATION DOES NOT CHANGE. dac[] has always held 8 bits per primary; a
+     6-bit write is stored as v<<2 (dac_pack) and read back >>2. That is how a
+     switchable RAMDAC behaves too: in 6-bit mode the value occupies the top six bits
+     of an 8-bit register, so switching the width re-interprets what is there rather
+     than rescaling it (6-bit 3Fh reads back FCh at 8 bits). So the renderer, pal[],
+     the raster split and the 4F04/AH=1Ch state block are width-blind by construction,
+     and only the two conversions below know the width.
+   ► THE RESET IS THE SPEC'S: "The DAC palette width is assumed to be reset to the
+     standard VGA value of 6 bits per primary color during any mode set" (VBE 2.0
+     §4.11) -- INT 10h AH=00h, 4F02h (both arms) and power-on all put it back to 6.
+     A width of 0 (a state nothing initialised) reads as 6. */
+static int dac_is8(const video_state *st) { return st->vesa_dacwidth == 8; }
+/* one primary as the guest wrote it -> the 8-bit component dac[] holds */
+static uint8_t dac_to8(const video_state *st, uint8_t v)
+{ return dac_is8(st) ? v : (uint8_t)((v & 0x3Fu) << 2); }
+/* ...and back, for a read */
+static uint8_t dac_from8(const video_state *st, uint8_t c)
+{ return dac_is8(st) ? c : (uint8_t)(c >> 2); }
+static uint32_t dac_pack_w(const video_state *st, uint8_t r, uint8_t g, uint8_t b)
+{
+    return 0xFF000000u | ((uint32_t)dac_to8(st, r) << 16)
+                       | ((uint32_t)dac_to8(st, g) << 8) | (uint32_t)dac_to8(st, b);
+}
 
 /* ── ★★ THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
      A 4-bit pixel does NOT index the DAC. It indexes one of the AC's sixteen palette
@@ -1008,9 +1039,17 @@ static void vesa(video_state *st, ntvdd_regs *r)
            "If the hardware cannot select the requested width, the NEXT LOWER value it
            can is selected" -- we have 6 and 8, so 10 -> 8 and 7 -> 6 (this used to send
            anything but exactly 8 to 6). AH=03 in a direct-colour mode; the width is
-           reset to 6 by any mode set (done in 4F02 and the standard AH=00). */
+           reset to 6 by any mode set (done in 4F02 and the standard AH=00).
+         ► THE WIDTH NOW REACHES THE PORTS (#226) -- 3C9h and the INT 10h AH=10h DAC
+           calls convert through dac_to8/dac_from8 -- so it is a real switch, not a
+           4F09-only flag.
+         ► AND IT IS NOT CONFINED TO VESA MODES. §4.11 refuses the call in "a direct
+           color or YUV mode" and nowhere else; the DAC is one device, and mode 13h (or
+           a text mode, whose colours are DAC entries through the attribute controller)
+           drives the same RAMDAC. We answered 034Fh outside a VESA mode, which a
+           mode-13h game that wants 8-bit primaries reads as "not in this mode". */
         uint8_t bl8 = (uint8_t)(r_bx(r) & 0xFF);
-        if (!st->in_vesa || st->vesa_bpp > 8) { s_ax(r, 0x034F); break; }
+        if (st->in_vesa && st->vesa_bpp > 8) { s_ax(r, 0x034F); break; }
         if (bl8 == 0x00) {
             uint8_t w8 = (uint8_t)((r_bx(r) >> 8) & 0xFF);
             st->vesa_dacwidth = (uint8_t)(w8 >= 8 ? 8 : 6);
@@ -1028,21 +1067,22 @@ static void vesa(video_state *st, ntvdd_regs *r)
         uint8_t bl9 = (uint8_t)(r_bx(r) & 0xFF);
         uint16_t first = r_dx(r), n = r_cx(r), i;
         uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
-        uint8_t sh = (uint8_t)(st->vesa_dacwidth == 8 ? 0 : 2);
         if (bl9 == 0x02 || bl9 == 0x03) { s_ax(r, 0x024F); break; }
         if (bl9 != 0x00 && bl9 != 0x01 && bl9 != 0x80) { s_ax(r, 0x014F); break; }
         if ((uint32_t)first + n > 256) { s_ax(r, 0x024F); break; }   /* fail, change nothing */
+        /* The same conversion the ports use (dac_to8/dac_from8). ⚠ (#226) The 6-bit set
+           used to shift WITHOUT masking, so bits 6-7 of green and blue spilled into the
+           low bits of red and green (`t << 2` of a byte, OR'd into its neighbour's
+           field). §4.12: "When in 6 bit mode, the format of the 6 bits is LSB" -- the
+           top two bits are not part of the value, as on the port. */
         for (i = 0; i < n && (first + i) < 256; ++i) {
             if (bl9 == 0x00 || bl9 == 0x80)
-                st->dac[first + i] = 0xFF000000u
-                    | ((uint32_t)(t[i*4+2] << sh) << 16)
-                    | ((uint32_t)(t[i*4+1] << sh) << 8)
-                    |  (uint32_t)(t[i*4+0] << sh);
+                st->dac[first + i] = dac_pack_w(st, t[i*4+2], t[i*4+1], t[i*4+0]);
             else {
                 uint32_t v = st->dac[first + i];
-                t[i*4+0] = (uint8_t)((v & 0xFF) >> sh);
-                t[i*4+1] = (uint8_t)(((v >> 8) & 0xFF) >> sh);
-                t[i*4+2] = (uint8_t)(((v >> 16) & 0xFF) >> sh);
+                t[i*4+0] = dac_from8(st, (uint8_t)v);
+                t[i*4+1] = dac_from8(st, (uint8_t)(v >> 8));
+                t[i*4+2] = dac_from8(st, (uint8_t)(v >> 16));
                 t[i*4+3] = 0;
             }
         }
@@ -1375,18 +1415,21 @@ static void int10(void *self, ntvdd_regs *r)
         s_bx(r, (uint16_t)((st->page << 8) | (r_bx(r) & 0xFF)));
         break;
     case 0x10:                                        /* palette / DAC            */
+        /* ⚠ THE DAC CALLS BELOW GO THROUGH dac_pack_w / dac_from8, i.e. AT THE DAC
+             WIDTH (#226). A VGA BIOS implements them as plain OUTs to 3C8h/3C9h and INs
+             from 3C7h/3C9h -- it does not know the RAMDAC was switched -- so after 4F08h
+             BH=8 a real card takes these values as 8-bit too. Same device, same rule. */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = r_bx(r);
             st->dac_block[((idx & 0xFF) >> 4) & 15]++;
-            st->dac[idx & 0xFF] = dac_pack((uint8_t)(r_dx(r) >> 8) & 0x3F,
-                                           (uint8_t)(r_cx(r) >> 8) & 0x3F,
-                                           (uint8_t)(r_cx(r) & 0x3F));
+            st->dac[idx & 0xFF] = dac_pack_w(st, (uint8_t)(r_dx(r) >> 8),
+                                             (uint8_t)(r_cx(r) >> 8), (uint8_t)r_cx(r));
             pal_refresh(st);
         } else if (al == 0x12) {                      /* set block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
-                { st->dac[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+                { st->dac[first + i] = dac_pack_w(st, t[i*3], t[i*3+1], t[i*3+2]);
                   st->dac_block[((first + i) >> 4) & 15]++;
                   if (((first + i) & 0xF0) == 0x30) st->dac_hi_since_reset++; }
             st->dac_writes += n;
@@ -1422,16 +1465,17 @@ static void int10(void *self, ntvdd_regs *r)
             st->dac_page = (uint8_t)(r_bx(r) >> 8);
         } else if (al == 0x15) {                      /* get one DAC register     */
             uint32_t v = st->dac[r_bx(r) & 0xFF];
-            s_dx(r, (uint16_t)(((v >> 18) & 0x3F) << 8));
-            s_cx(r, (uint16_t)(((((v >> 10) & 0x3F)) << 8) | ((v >> 2) & 0x3F)));
+            s_dx(r, (uint16_t)((uint16_t)dac_from8(st, (uint8_t)(v >> 16)) << 8));
+            s_cx(r, (uint16_t)(((uint16_t)dac_from8(st, (uint8_t)(v >> 8)) << 8)
+                              | dac_from8(st, (uint8_t)v)));
         } else if (al == 0x17) {                      /* get block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i) {
                 uint32_t v = st->dac[first + i];
-                t[i*3] = (uint8_t)((v >> 18) & 0x3F);
-                t[i*3+1] = (uint8_t)((v >> 10) & 0x3F);
-                t[i*3+2] = (uint8_t)((v >> 2) & 0x3F);
+                t[i*3]   = dac_from8(st, (uint8_t)(v >> 16));
+                t[i*3+1] = dac_from8(st, (uint8_t)(v >> 8));
+                t[i*3+2] = dac_from8(st, (uint8_t)v);
             }
         } else if (al == 0x1A) {                      /* get DAC page state       */
             s_bx(r, (uint16_t)((st->dac_page << 8) | 0));
@@ -1701,9 +1745,12 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x3C8) { st->dac_widx = val; st->dac_comp = 0; }
     else if (port == 0x3C7) { st->dac_ridx = val; st->dac_comp = 0; }
     else if (port == 0x3C9) {
-        st->dac_latch[st->dac_comp++] = val & 0x3F;
+        /* The byte as written; the width decides at the third primary what it means
+           (6 bits: the low six, bits 6-7 ignored as the hardware ignores them; 8 bits:
+           all of it). See dac_to8 -- this used to mask to 6 bits whatever 4F08 said. */
+        st->dac_latch[st->dac_comp++] = val;
         if (st->dac_comp >= 3) {
-            st->dac[st->dac_widx] = dac_pack(st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
+            st->dac[st->dac_widx] = dac_pack_w(st, st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
             st->dac_block[(st->dac_widx >> 4) & 15]++;
             if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
             st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
@@ -1727,9 +1774,9 @@ static void dac_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     if (port != 0x3C9) { *v = 0xFF; return; }
     p = st->dac[st->dac_ridx];
     switch (st->dac_comp) {
-    case 0: *v = ((p >> 16) & 0xFF) >> 2; break;      /* R 8->6                  */
-    case 1: *v = ((p >> 8) & 0xFF) >> 2; break;       /* G                       */
-    default:*v = (p & 0xFF) >> 2; st->dac_ridx++; break;/* B, then advance        */
+    case 0: *v = dac_from8(st, (uint8_t)(p >> 16)); break;   /* R, at the DAC width */
+    case 1: *v = dac_from8(st, (uint8_t)(p >> 8));  break;   /* G                   */
+    default:*v = dac_from8(st, (uint8_t)p); st->dac_ridx++; break;   /* B, then advance */
     }
     if (++st->dac_comp >= 3) st->dac_comp = 0;
 }
@@ -3469,6 +3516,7 @@ void vdd_video_reset(void *self)
     st->read_mode = st->col_compare = st->col_dontcare = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
+    st->vesa_dacwidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);
     vdd_video_bda_sync(st);

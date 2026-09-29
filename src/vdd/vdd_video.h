@@ -147,7 +147,9 @@ typedef struct video_state {
     uint8_t  vpal[17];                  /* the 16 EGA palette registers + border     */
     uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start (pixels, rows); the      */
                                         /* 4F06 logical pitch lives in vesa_stride    */
-    uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8)        */
+    uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8) -- the */
+                                        /* RAMDAC's width: 3C9h, AH=10h and 4F09 all */
+                                        /* obey it (#226); any mode set resets it to 6 */
     uint8_t  cur_row, cur_col;
     uint16_t cur_shape;                 /* INT 10h AH=01 CX: start/end scan lines    */
     uint8_t  cursor_blink;              /* host setting: blink it, as a real CRTC does */

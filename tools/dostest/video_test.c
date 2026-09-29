@@ -473,6 +473,62 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0002); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK((r_bx(&r)>>8)==0x00, "vesa/4F10 set on, get: on");
 
+    /* T12g: THE 4F08 DAC WIDTH REACHES THE PORTS (#226, VBE 2.0 §4.11). -----------------
+       Capabilities D0 says the DAC switches to 8 bits; 4F08 BH=8 said it had. Port 3C9h
+       still stored `v & 3Fh` and read back `>> 2`, so a guest that switched and then
+       loaded its palette the usual way lost the top two bits of every primary. Every
+       expectation is the RAMDAC's: 8 bits in, 8 bits out; 6 bits = the low six, stored
+       as the top six of the register (so a width switch re-interprets, not rescales). */
+    { uint32_t v; uint16_t seg=0x3200; uint8_t *t=&g_flat[(seg<<4)];
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==8, "dac8: 4F08 BH=8 in 0x101 -> 8 bits");
+      v=0x40; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0x80; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0xC0; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0xFF; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.dac[0x40]==0xFF80C0FFu && vid.pal[0x40]==0xFF80C0FFu,
+            "dac8: 3C9h carries all 8 bits (80,C0,FF) -- was masked to 00,00,3F<<2");
+      { uint32_t a=0,b=0,c=0; v=0x40; vdd_bus_io(&bus,0x3C7,1,0,&v);
+        vdd_bus_io(&bus,0x3C9,1,1,&a); vdd_bus_io(&bus,0x3C9,1,1,&b); vdd_bus_io(&bus,0x3C9,1,1,&c);
+        CHECK(a==0x80 && b==0xC0 && c==0xFF, "dac8: 3C9h reads back 8 bits, no >>2"); }
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x10); s_bx(&r,0x41);
+      s_dx(&r,0xFF00); s_cx(&r,0x8001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.dac[0x41]==0xFFFF8001u, "dac8: INT 10h 1010h stores 8-bit primaries (a VGA BIOS just OUTs to 3C9h)");
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x15); s_bx(&r,0x41); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_dx(&r)>>8)==0xFF && r_cx(&r)==0x8001, "dac8: INT 10h 1015h reads them back at 8 bits");
+      memset(t,0xEE,8);
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x17); s_bx(&r,0x40); s_cx(&r,2); r.es=seg; s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(t[0]==0x80 && t[1]==0xC0 && t[2]==0xFF && t[3]==0xFF && t[4]==0x80 && t[5]==0x01 && t[6]==0xEE,
+            "dac8: INT 10h 1017h block read at 8 bits, exactly 2x3 bytes");
+      memset(t,0xEE,8);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0001); s_cx(&r,1); s_dx(&r,0x40); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(t[0]==0xFF && t[1]==0xC0 && t[2]==0x80 && t[3]==0, "dac8: 4F09 get agrees with the port (B,G,R,0)");
+      /* A mode set returns the width to 6 (§4.11) and the SAME register reads as its top six bits. */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x8101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_bx(&r)>>8)==6, "dac6: 4F02 put the width back to 6");
+      vid.dac[0x40] = 0xFF80C0FFu;
+      { uint32_t a=0,b=0,c=0; v=0x40; vdd_bus_io(&bus,0x3C7,1,0,&v);
+        vdd_bus_io(&bus,0x3C9,1,1,&a); vdd_bus_io(&bus,0x3C9,1,1,&b); vdd_bus_io(&bus,0x3C9,1,1,&c);
+        CHECK(a==0x20 && b==0x30 && c==0x3F, "dac6: the port reads the top six bits again (80,C0,FF -> 20,30,3F)"); }
+      v=0x42; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0xFF; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x40; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x3F; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.dac[0x42]==0xFFFC00FCu, "dac6: 3C9h ignores bits 6-7 at 6 bits, as before (FF->3F, 40->00)");
+      /* 4F09's 6-bit set used to shift without masking, spilling bits 6-7 into the next field */
+      t[0]=0xFF; t[1]=0xC0; t[2]=0x00; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,0x43); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.dac[0x43]==0xFF0000FCu, "dac6: 4F09 set masks each primary to 6 bits (no spill into G/R)");
+      /* 4F08 in a standard mode: §4.11 refuses only direct colour/YUV. Mode 13h drives the same DAC. */
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==8, "dac8: 4F08 works in mode 13h (was 034Fh outside VESA)");
+      v=0x05; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0x81; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x82; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x83; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.pal[0x05]==0xFF818283u, "dac8: mode 13h pixel 5 renders the 8-bit entry");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==6, "dac6: INT 10h AH=00h returns the width to 6");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(vid.mode==0x12, "int10/00: mode set to 12h");
