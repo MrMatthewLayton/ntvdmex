@@ -46,27 +46,8 @@ static uint32_t rs_need(const audio_resampler *r, uint32_t frames)
     return n > AUDIO_SRC_MAX ? AUDIO_SRC_MAX : n;
 }
 
-/* Advance one output frame, consuming source samples from `src` as needed.
-   `*idx` walks the source buffer; it never runs past `n` because rs_need()
-   sized the buffer for exactly this walk. */
-static int32_t rs_step(audio_resampler *r, const int16_t *src, uint32_t n, uint32_t *idx)
-{
-    int32_t out;
-    if (!r->primed) {                           /* load the first pair            */
-        r->prev = (*idx < n) ? src[(*idx)++] : 0;
-        r->cur  = (*idx < n) ? src[(*idx)++] : r->prev;
-        r->primed = 1;
-        r->frac = 0;
-    }
-    out = r->prev + (((r->cur - r->prev) * (int32_t)(r->frac >> 8)) >> 8);
-    r->frac += r->step;
-    while (r->frac >= 0x10000u) {
-        r->frac -= 0x10000u;
-        r->prev = r->cur;
-        r->cur  = (*idx < n) ? src[(*idx)++] : r->cur;
-    }
-    return out;
-}
+/* (The mono walk, rs_step, went with #232: the OPL was its last caller, and every
+   source is now stereo -- rs_step_st below, whose left channel is that walk.) */
 
 void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_hz)
 {
@@ -94,13 +75,16 @@ void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted)
 
 /* ── #189: STEREO. A source that has two channels now keeps them: the SB's stereo
      transfers (they were averaged) and the GUS's per-voice pan (voices were summed).
-     OPL (this synth is OPL2: one output) and the PC speaker sit in the middle. Output
+     The OPL (#232: an OPL3 with NEW set routes each channel left/right; otherwise one
+     output, in the middle) and the PC speaker (middle). Output
      is interleaved L/R, 2*frames samples. For a mono source L = R and both equal what
      the mono mixer produced, which is why vdd_audio_mix below can simply fold this. */
 static int16_t mix_clip(int32_t v) { return (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v)); }
 
-/* One output frame from an INTERLEAVED stereo source: the same walk as rs_step, with
-   the right channel's pair carried beside the left (prev/cur for L, prev_r/cur_r). */
+/* One output frame from an INTERLEAVED stereo source, consuming source frames as
+   needed; the right channel's pair is carried beside the left (prev/cur for L,
+   prev_r/cur_r). `*idx` walks the source buffer in frames and never runs past `n`,
+   because rs_need() sized the buffer for exactly this walk. */
 static void rs_step_st(audio_resampler *r, const int16_t *src, uint32_t n, uint32_t *idx,
                        int32_t *ol, int32_t *or_)
 {
@@ -135,17 +119,21 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
 
         for (i = 0; i < 2 * n; ++i) o[i] = 0;
 
-        /* --- FM (mono: both channels) ------------------------------------ */
+        /* --- FM: the OPL's own L/R (#232) ---------------------------------- */
+        /* An OPL2, or an OPL3 before NEW, renders the same signal to both sides,
+           and on L == R this walk is the old mono one exactly -- so an OPL2 mixes
+           to the same samples it did as a mono source (audio_test's golden). */
         if (st->opl) {
             int32_t g = mix_gain(st->sb, 0x26);
             rs_setup(&st->r_opl, OPL_NATIVE_HZ, st->out_hz);
             need = rs_need(&st->r_opl, n);
-            vdd_opl_render(st->opl, st->scratch, need);
+            vdd_opl_render_st(st->opl, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
-                int32_t v = (rs_step(&st->r_opl, st->scratch, need, &idx) * g) >> 8;
-                o[2*i]   = mix_clip(o[2*i]   + v);
-                o[2*i+1] = mix_clip(o[2*i+1] + v);
+                int32_t l, r;
+                rs_step_st(&st->r_opl, st->scratch, need, &idx, &l, &r);
+                o[2*i]   = mix_clip(o[2*i]   + ((l * g) >> 8));
+                o[2*i+1] = mix_clip(o[2*i+1] + ((r * g) >> 8));
             }
         }
 

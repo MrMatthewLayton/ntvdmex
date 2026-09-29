@@ -175,6 +175,19 @@ int main(void)
     vdd_opl_add_us(&opl, 80);
     CHECK((rd(BASE + 0x8) & OPL_ST_T1) != 0, "FM mirror: OPL status readable at 2x8");
 
+    /* T11b: 2x2/2x3 -- array 1 on an OPL3, another array-0 mirror on an OPL2 (#232) */
+    wr(BASE + 0x2, 0xA5); wr(BASE + 0x3, 0x5A);         /* OPL2 fitted (opl3 = 0) */
+    CHECK(opl.reg[0xA5] == 0x5A && opl.reg[0x1A5] == 0, "FM mirror, OPL2: 2x2/2x3 write array 0");
+    CHECK(rd(BASE + 0x2) == 0xFF, "FM mirror, OPL2: 2x2 reads 0xFF");
+    opl.opl3 = 1;
+    wr(BASE + 0x2, 0xA6); wr(BASE + 0x3, 0x77);
+    CHECK(opl.reg[0x1A6] == 0x77 && opl.reg[0xA6] == 0, "FM mirror, OPL3: 2x2/2x3 write ARRAY 1 (0x1A6)");
+    wr(BASE + 0x0, 0xA7); wr(BASE + 0x1, 0x33);
+    CHECK(opl.reg[0xA7] == 0x33 && opl.reg[0x1A7] == 0, "FM mirror, OPL3: 2x0/2x1 stay array 0");
+    CHECK((rd(BASE + 0x0) & 0x06) == 0 && (rd(BASE + 0x2) & 0xE0) == (rd(BASE + 0x0) & 0xE0),
+          "FM mirror, OPL3: status at 2x0 and 2x2, ID bits clear");
+    opl.opl3 = 0;
+
     /* T12: a reset mid-transfer stops everything ---------------------------- */
     dma_program(0x31000, 64, 1);
     wr(BASE + 0xC, 0x1C);

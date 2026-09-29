@@ -1,5 +1,13 @@
-/* vdd_opl_synth.c -- OPL2 (YM3812) FM synthesis for vdd_opl.c.  Pure C, no
- * <windows.h>, no libm: all transcendentals come from the generated tables.
+/* vdd_opl_synth.c -- OPL2 (YM3812) and OPL3 (YMF262) FM synthesis for vdd_opl.c.
+ * Pure C, no <windows.h>, no libm: all transcendentals come from the generated
+ * tables.
+ *
+ * The OPL3 is the OPL2 twice over plus three things, each gated on NEW (0x105
+ * bit 0) and each below: waveforms 4-7 (opl_wave), 4-operator voices
+ * (opl_voice4), and per-channel stereo routing (opl_route). With NEW clear the
+ * output is the OPL2's, sample for sample -- held by a golden checksum in
+ * tools/dostest/opl_synth_test.c. Written, like the rest, from the Yamaha
+ * datasheet; the reference core is an oracle for measurements only.
  *
  * Written from the documented YM3812 behaviour rather than ported from an
  * existing core, so it is ours and MIT-clean. The structure follows the real
@@ -95,11 +103,38 @@ static int32_t opl_logsin_full(uint32_t phase_idx, int *neg)
 }
 
 /* The OPL2's four waveforms are cheap edits of the sine: 1 clips the negative
-   half to zero, 2 rectifies it, 3 keeps only the rising quarters. */
+   half to zero, 2 rectifies it, 3 keeps only the rising quarters.
+   The OPL3 adds four more (YMF262 datasheet, waveform figure), all of which live
+   in the FIRST half-cycle or are antisymmetric about its end:
+     4  a full sine at twice the rate in the first half, silence in the second
+     5  the same, rectified ("camel")
+     6  a square: full level, positive then negative
+     7  the "derived square": an exponential fall from full level across the first
+        half, and its point-mirror (negative, rising back to full) across the second.
+   In the log domain 7 is a straight line -- attenuation growing linearly with
+   phase. ⚠ The datasheet draws the curve but gives no slope; this uses one log
+   unit per 1/8 phase step, i.e. a factor of two every 32 of the 512 steps, so the
+   curve reaches silence by the end of its half-cycle. That slope is owed an
+   `oplprobe wave` measurement against the oracle, as every constant here was. */
+#define OPL_W7_SLOPE_SHIFT 3
+
 static int32_t opl_wave(uint8_t wave, uint32_t phase_idx, int *neg, int *mute)
 {
     *mute = 0;
     switch (wave) {
+    case 4:                                     /* double-rate sine, 1st half     */
+        if (phase_idx & 0x200) { *mute = 1; *neg = 0; return 0; }
+        return opl_logsin_full((phase_idx << 1) & 0x3FF, neg);
+    case 5:                                     /* double-rate |sine|, 1st half   */
+        if (phase_idx & 0x200) { *mute = 1; *neg = 0; return 0; }
+        { int32_t v = opl_logsin_full((phase_idx << 1) & 0x3FF, neg); *neg = 0; return v; }
+    case 6:                                     /* square                         */
+        *neg = (phase_idx & 0x200) ? 1 : 0;
+        return 0;
+    case 7:                                     /* derived square (log sawtooth)  */
+        *neg = (phase_idx & 0x200) ? 1 : 0;
+        return (int32_t)(*neg ? ((phase_idx & 0x1FF) ^ 0x1FF) : (phase_idx & 0x1FF))
+               << OPL_W7_SLOPE_SHIFT;
     case 1:                                     /* half-wave rectified            */
         if (phase_idx & 0x200) { *mute = 1; *neg = 0; return 0; }
         return opl_logsin_full(phase_idx, neg);
@@ -111,6 +146,22 @@ static int32_t opl_wave(uint8_t wave, uint32_t phase_idx, int *neg, int *mute)
     default:
         return opl_logsin_full(phase_idx, neg);
     }
+}
+
+/* ── WHICH WAVEFORM ACTUALLY PLAYS. Three chips' worth of rules over one 3-bit
+     field, decided HERE (at render time) because the gating registers can be
+     written after the waveform is:
+       OPL2         2 bits, and only while WSE (0x01 bit 5) is set -- with WSE
+                    clear the YM3812 plays a sine whatever 0xE0 says (YM3812
+                    application manual, register 01). Programs that forget WSE
+                    exist, and on the real card they get sines.
+       OPL3, NEW=0  2 bits. The YMF262 has no WSE: its register 0x01 is the LSI
+                    test register only, and the OPL2 waveforms are always live.
+       OPL3, NEW=1  all 3 bits -- waveforms 4-7. */
+static uint8_t opl_eff_wave(const opl_state *st, const opl_op *o)
+{
+    if (st->opl3) return (uint8_t)(o->wave & ((st->reg[OPL3_REG_NEW] & 1) ? 7 : 3));
+    return (st->reg[0x01] & 0x20) ? (uint8_t)(o->wave & 3) : 0;
 }
 
 /* --- envelope ------------------------------------------------------------- */
@@ -283,7 +334,7 @@ static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
     if (o->eg_state == OPL_EG_OFF) return 0;
 
     idx  = ((o->phase >> 10) + (uint32_t)mod) & 0x3FF;
-    logv = opl_wave(o->wave, idx, &neg, &mute);
+    logv = opl_wave(opl_eff_wave(st, o), idx, &neg, &mute);
     if (mute) return 0;
 
     att = logv + (o->env >> OPL_ENV_SHIFT) * OPL_ENV_TO_LOG + opl_static_att(st, chi, o);
@@ -320,10 +371,14 @@ static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
  *   counted instead (prof_rhythm_hits), so a run says out loud what it could not
  *   play. The measurements needed to derive them are recorded above and in
  *   return-ntvdm.md.                                                              */
-static int32_t opl_rhythm_sample(opl_state *st)
+/* Returns the drums per CHANNEL -- bass drum on channel 6, tom-tom on channel 8 --
+   because on an OPL3 with NEW set each channel's C0 bits route it left or right,
+   and a drum goes where its channel register sends it. */
+static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v8)
 {
-    int32_t acc = 0, mo, co, fbmod = 0;
+    int32_t mo, co, fbmod = 0;
     opl_op *m = &st->op[12], *cr = &st->op[15];
+    *v6 = *v8 = 0;
 
     /* BASS DRUM -- channel 6, an ordinary two-operator voice. */
     if (m->eg_state != OPL_EG_OFF || cr->eg_state != OPL_EG_OFF) {
@@ -331,14 +386,14 @@ static int32_t opl_rhythm_sample(opl_state *st)
         mo = opl_op_sample(st, 6, 12, fbmod);
         m->out2 = m->out1; m->out1 = mo;
         opl_env_tick(st, 6, 12);
-        if (st->ch[6].cnt) { co = opl_op_sample(st, 6, 15, 0); acc += (mo + co) * 2; }
-        else               { co = opl_op_sample(st, 6, 15, mo); acc += co * 2; }
+        if (st->ch[6].cnt) { co = opl_op_sample(st, 6, 15, 0); *v6 = (mo + co) * 2; }
+        else               { co = opl_op_sample(st, 6, 15, mo); *v6 = co * 2; }
         opl_env_tick(st, 6, 15);
     }
 
     /* TOM-TOM -- op14 alone, on channel 8's pitch. */
     if (st->op[14].eg_state != OPL_EG_OFF) {
-        acc += opl_op_sample(st, 8, 14, 0) * 2;
+        *v8 = opl_op_sample(st, 8, 14, 0) * 2;
         opl_env_tick(st, 8, 14);
     }
 
@@ -348,49 +403,153 @@ static int32_t opl_rhythm_sample(opl_state *st)
     if (st->op[13].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 13);
     if (st->op[16].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 16);
     if (st->op[17].eg_state != OPL_EG_OFF) opl_env_tick(st, 8, 17);
-    return acc;
+}
+
+/* --- one voice ------------------------------------------------------------ */
+/* An ordinary two-operator channel: its contribution to the output, or 0 when
+   both operators are off -- in which case neither phase nor envelope moves. An
+   idle voice costs nothing, and the OPL2 golden depends on that staying so. */
+static int32_t opl_voice2(opl_state *st, int c)
+{
+    int mi = vdd_opl_op_index(c, 0), ci = vdd_opl_op_index(c, 1);
+    opl_op *m = &st->op[mi], *cr = &st->op[ci];
+    int32_t mo, co, fbmod = 0, v;
+
+    if (m->eg_state == OPL_EG_OFF && cr->eg_state == OPL_EG_OFF) return 0;
+
+    /* Feedback uses the mean of the operator's last two outputs, which is
+       what keeps a self-modulating operator stable instead of screaming. */
+    if (st->ch[c].fb)
+        fbmod = (m->out1 + m->out2) >> (9 - st->ch[c].fb);
+
+    mo = opl_op_sample(st, c, mi, fbmod);
+    m->out2 = m->out1; m->out1 = mo;
+    opl_env_tick(st, c, mi);
+
+    if (st->ch[c].cnt) {                        /* additive: both operators heard  */
+        co = opl_op_sample(st, c, ci, 0);
+        v = mo + co;
+    } else {                                    /* FM: modulator bends the carrier */
+        co = opl_op_sample(st, c, ci, mo);
+        v = co;
+    }
+    opl_env_tick(st, c, ci);
+    return v;
+}
+
+/* ── A 4-OPERATOR VOICE (OPL3, NEW set, channel `c` leads the pair c / c+3).
+     Operators 1-2 are channel c's, 3-4 channel c+3's. The two CNT bits -- c's
+     first, c+3's second -- choose the algorithm (YMF262 datasheet, 4-operator
+     connection figure); "->" is phase modulation, "+" is summed to the output:
+       CNT 0,0   1 -> 2 -> 3 -> 4                 one FM chain; 4 is heard
+       CNT 1,0   1  +  (2 -> 3 -> 4)              1 and 4 heard
+       CNT 0,1   (1 -> 2)  +  (3 -> 4)            2 and 4 heard
+       CNT 1,1   1  +  (2 -> 3)  +  4             1, 3 and 4 heard
+     Everything the voice has ONE of comes from channel c: the pitch (all four
+     operators run on c's F-number and block, key scaling included), the key-on,
+     the output routing, and the feedback -- which only ever applies to operator 1.
+     Channel c+3's own F-number, block, key, feedback and routing are ignored
+     while it is paired. */
+static int32_t opl_voice4(opl_state *st, int c)
+{
+    int o1 = vdd_opl_op_index(c, 0),     o2 = vdd_opl_op_index(c, 1);
+    int o3 = vdd_opl_op_index(c + 3, 0), o4 = vdd_opl_op_index(c + 3, 1);
+    opl_op *p1 = &st->op[o1];
+    int cnt1 = st->ch[c].cnt, cnt2 = st->ch[c + 3].cnt;
+    int32_t s1, s2, s3, s4, fbmod = 0;
+
+    if (p1->eg_state == OPL_EG_OFF && st->op[o2].eg_state == OPL_EG_OFF &&
+        st->op[o3].eg_state == OPL_EG_OFF && st->op[o4].eg_state == OPL_EG_OFF)
+        return 0;
+
+    if (st->ch[c].fb) fbmod = (p1->out1 + p1->out2) >> (9 - st->ch[c].fb);
+    s1 = opl_op_sample(st, c, o1, fbmod);
+    p1->out2 = p1->out1; p1->out1 = s1;
+    opl_env_tick(st, c, o1);
+
+    s2 = opl_op_sample(st, c, o2, cnt1 ? 0 : s1);           /* 1 -> 2 unless CNT1   */
+    opl_env_tick(st, c, o2);
+    s3 = opl_op_sample(st, c, o3, (cnt2 && !cnt1) ? 0 : s2); /* 2 -> 3 except 0,1   */
+    opl_env_tick(st, c, o3);
+    s4 = opl_op_sample(st, c, o4, (cnt1 && cnt2) ? 0 : s3);  /* 3 -> 4 except 1,1   */
+    opl_env_tick(st, c, o4);
+
+    if (!cnt1 && !cnt2) return s4;              /* FM-FM                           */
+    if ( cnt1 && !cnt2) return s1 + s4;         /* AM-FM                           */
+    if (!cnt1 &&  cnt2) return s2 + s4;         /* FM-AM                           */
+    return s1 + s3 + s4;                        /* AM-AM                           */
+}
+
+/* Add channel `c`'s output to the two sides. Without NEW the chip has one output
+   and it goes to both, as it always did. With NEW, C0 bits 4/5 (outputs A/B) are
+   the SB16's left/right; C/D (bits 6/7) reach no DAC on that card and are dropped
+   -- a voice routed only there is silent, as on the real card, and so is a voice
+   with no routing bits at all (a driver that sets NEW must set them). */
+static void opl_route(const opl_state *st, int newm, int c, int32_t v, int32_t *l, int32_t *r)
+{
+    uint8_t c0;
+    if (!newm) { *l += v; *r += v; return; }
+    c0 = st->reg[(c / OPL_NUM_CH) * 0x100 + 0xC0 + c % OPL_NUM_CH];
+    if (c0 & OPL_C0_CHA) *l += v;
+    if (c0 & OPL_C0_CHB) *r += v;
+}
+
+/* One native sample, both sides, unclipped. The ORDER is the OPL2's exactly --
+   rhythm, then the LFO tick, then channels 0-8 -- because opl_synth_test's golden
+   checksum holds OPL2 output bit-identical to the build before OPL3 existed. */
+static void opl_sample_lr(opl_state *st, int32_t *pl, int32_t *pr)
+{
+    int newm = vdd_opl_new_mode(st);
+    int rhythm = (st->reg[0xBD] & OPL_BD_RHY) ? 1 : 0;
+    int nch = newm ? OPL3_NUM_CH : OPL_NUM_CH, c;
+    int32_t l = 0, r = 0;
+
+    if (rhythm) {
+        int32_t v6, v8;
+        opl_rhythm_sample(st, &v6, &v8);
+        opl_route(st, newm, 6, v6, &l, &r);
+        opl_route(st, newm, 8, v8, &l, &r);
+    }
+    /* Outside the channel loop, and before the early-outs below: the LFOs run
+       whether or not anything is sounding. Advancing them only while a note
+       plays would restart the sweep at every silence. */
+    st->lfo_count++;
+    for (c = 0; c < nch; ++c) {
+        int role;
+        if (rhythm && c >= 6 && c <= 8) continue;   /* 6-8 are percussion in rhythm */
+        role = newm ? opl_4op_role(st, c) : 0;
+        if (role == 2) continue;                    /* rendered with its leader     */
+        opl_route(st, newm, c, role ? opl_voice4(st, c) : opl_voice2(st, c), &l, &r);
+    }
+    *pl = l; *pr = r;
+}
+
+static int16_t opl_clip(int32_t v)
+{
+    return (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
 }
 
 /* --- public: render ------------------------------------------------------- */
 void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
 {
     uint32_t n;
-    int rhythm = (st->reg[0xBD] & OPL_BD_RHY) ? 1 : 0;
-    int nmelodic = rhythm ? 6 : OPL_NUM_CH;     /* 6-8 are percussion in rhythm    */
     for (n = 0; n < frames; ++n) {
-        int32_t acc = rhythm ? opl_rhythm_sample(st) : 0;
-        int c;
-        /* Outside the channel loop, and before the early-out below: the LFOs run
-           whether or not anything is sounding. Advancing them only while a note
-           plays would restart the sweep at every silence. */
-        st->lfo_count++;
-        for (c = 0; c < nmelodic; ++c) {
-            int mi = vdd_opl_op_index(c, 0), ci = vdd_opl_op_index(c, 1);
-            opl_op *m = &st->op[mi], *cr = &st->op[ci];
-            int32_t mo, co, fbmod = 0;
+        int32_t l, r;
+        opl_sample_lr(st, &l, &r);
+        /* Without NEW, l == r IS the chip's one output: returned as it always was.
+           With NEW, the fold the mixer's own mono path uses. */
+        out[n] = vdd_opl_new_mode(st) ? (int16_t)(((int32_t)opl_clip(l) + opl_clip(r)) / 2)
+                                      : opl_clip(l);
+    }
+}
 
-            if (m->eg_state == OPL_EG_OFF && cr->eg_state == OPL_EG_OFF) continue;
-
-            /* Feedback uses the mean of the operator's last two outputs, which is
-               what keeps a self-modulating operator stable instead of screaming. */
-            if (st->ch[c].fb)
-                fbmod = (m->out1 + m->out2) >> (9 - st->ch[c].fb);
-
-            mo = opl_op_sample(st, c, mi, fbmod);
-            m->out2 = m->out1; m->out1 = mo;
-            opl_env_tick(st, c, mi);
-
-            if (st->ch[c].cnt) {                /* additive: both operators heard  */
-                co = opl_op_sample(st, c, ci, 0);
-                acc += mo + co;
-            } else {                            /* FM: modulator bends the carrier */
-                co = opl_op_sample(st, c, ci, mo);
-                acc += co;
-            }
-            opl_env_tick(st, c, ci);
-        }
-        if (acc >  32767) acc =  32767;
-        if (acc < -32768) acc = -32768;
-        out[n] = (int16_t)acc;
+void vdd_opl_render_st(opl_state *st, int16_t *out, uint32_t frames)
+{
+    uint32_t n;
+    for (n = 0; n < frames; ++n) {
+        int32_t l, r;
+        opl_sample_lr(st, &l, &r);
+        out[2 * n]     = opl_clip(l);
+        out[2 * n + 1] = opl_clip(r);
     }
 }

@@ -365,6 +365,70 @@ int main(void)
         vdd_audio_mix(&mix, buf, 8192);
     }
 
+    /* ── #232: THE OPL THROUGH THE STEREO MIXER. Its own chip and mixer, so nothing
+         above leaks in. Two claims: an OPL2 still mixes to EXACTLY the samples it did
+         when the mixer took it as a mono source (a golden taken from 42a9029, the
+         build before the OPL3 -- the same register sequence as opl_synth_test's), and
+         an OPL3 voice routed left arrives on the left and nowhere else. */
+    {   static opl_state o3; static audio_state m3;
+        static int16_t sb2[2 * 8192];
+        uint32_t h = 2166136261u;
+        int c, k;
+        #define M3_EAT(n) do { int _n = (n) * 44100 / 49716, _i;                        \
+            vdd_audio_mix_st(&m3, sb2, (uint32_t)_n);                                 \
+            for (_i = 0; _i < 2 * _n; ++_i) {                                         \
+                h ^= (uint8_t)sb2[_i]; h *= 16777619u;                                \
+                h ^= (uint8_t)((uint16_t)sb2[_i] >> 8); h *= 16777619u; } } while (0)
+        #define M3_W(r, v) vdd_opl_write_reg(&o3, (uint8_t)(r), (uint8_t)(v))
+        memset(&o3, 0, sizeof o3); vdd_opl_reset(&o3);
+        vdd_audio_init(&m3, &o3, NULL, 44100);
+        M3_W(0x01, 0x20); M3_W(0xBD, 0xC0);
+        for (c = 0; c < 9; ++c) {
+            int mo_ = vdd_opl_op_index(c, 0), cr_ = vdd_opl_op_index(c, 1);
+            unsigned mo = (unsigned)(mo_ + 2 * (mo_ / 6)), co = (unsigned)(cr_ + 2 * (cr_ / 6));
+            M3_W(0x20 + mo, 0x21 | ((c & 1) << 7) | ((c & 2) << 5) | (c & 4 ? 0x10 : 0) | (c % 5));
+            M3_W(0x20 + co, 0x21 | ((c & 2) << 6));
+            M3_W(0x40 + mo, (unsigned)(0x10 + c * 3) | ((c % 4) << 6));
+            M3_W(0x40 + co, (unsigned)(c * 2) | (((c + 1) % 4) << 6));
+            M3_W(0x60 + mo, 0xF0 - (unsigned)c * 0x11 + 3);
+            M3_W(0x60 + co, 0xD2 + (unsigned)c);
+            M3_W(0x80 + mo, 0x35 + (unsigned)c * 0x10);
+            M3_W(0x80 + co, 0x24 + (unsigned)c);
+            M3_W(0xE0 + mo, (unsigned)c & 3);
+            M3_W(0xE0 + co, (unsigned)(c + 1) & 3);
+            M3_W(0xC0 + c, (unsigned)((c * 3) & 0x0E) | (unsigned)(c & 1));
+            M3_W(0xA0 + c, 0x40 + (unsigned)c * 23);
+            M3_W(0xB0 + c, 0x20 | (unsigned)((2 + c % 5) << 2) | (unsigned)(c & 3));
+            M3_EAT(700);
+        }
+        M3_EAT(6000);
+        for (c = 0; c < 9; c += 2) { M3_W(0xB0 + c, o3.reg[0xB0 + c] & ~0x20); M3_EAT(900); }
+        M3_W(0xBD, 0xE0 | 0x10 | 0x04); M3_EAT(4000);
+        M3_W(0xBD, 0xE0 | 0x0B);        M3_EAT(3000);
+        M3_W(0xBD, 0x00);
+        for (k = 0; k < 8; ++k) M3_EAT(4000);
+        printf("        OPL2 through the mixer: fnv=0x%08X (golden 0x6CA12225)\n", h);
+        CHECK(h == 0x6CA12225u, "mix: an OPL2 mixes bit-identically to the pre-OPL3 (mono-source) build");
+        #undef M3_EAT
+        #undef M3_W
+
+        /* OPL3, NEW set, one voice on channel 0 routed LEFT only (C0 = 0x11)     */
+        memset(&o3, 0, sizeof o3); o3.opl3 = 1; vdd_opl_reset(&o3);
+        vdd_audio_init(&m3, &o3, NULL, 44100);
+        vdd_opl_write_reg(&o3, 0x105, 0x01);
+        vdd_opl_write_reg(&o3, 0x20, 0x21); vdd_opl_write_reg(&o3, 0x40, 0x3F);
+        vdd_opl_write_reg(&o3, 0x23, 0x21); vdd_opl_write_reg(&o3, 0x43, 0x00);
+        vdd_opl_write_reg(&o3, 0x63, 0xF0); vdd_opl_write_reg(&o3, 0x83, 0x0F);
+        vdd_opl_write_reg(&o3, 0xC0, 0x11);
+        vdd_opl_write_reg(&o3, 0xA0, 0x00);
+        vdd_opl_write_reg(&o3, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
+        vdd_audio_mix_st(&m3, sb2, 4096);
+        { long long l = 0, r = 0; int i2;
+          for (i2 = 0; i2 < 4096; ++i2) { l += (long long)sb2[2*i2] * sb2[2*i2]; r += (long long)sb2[2*i2+1] * sb2[2*i2+1]; }
+          printf("        OPL3 left-only voice through the mixer: L energy %lld, R energy %lld\n", l, r);
+          CHECK(l > 0 && r == 0, "mix: an OPL3 voice routed left (C0 bit 4) is heard on the left ONLY"); }
+    }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }
