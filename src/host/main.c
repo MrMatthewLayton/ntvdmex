@@ -122,6 +122,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "vdd_opl.h"
 #include "vdd_sb.h"
 #include "vdd_gus.h"
+#include "vdd_emu8k.h"   /* #233: the AWE32's wavetable chip */
 #include "vdd_mpu.h"
 #include "vdd_comm.h"
 #include "../../sdk/include/ntvdmex-vdd.h"
@@ -869,6 +870,10 @@ static sb_state     g_sb;        static ntvdd g_sb_dev;
 static gus_state    g_gus;       static ntvdd g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
 static int          g_gus_on = 0;
+/* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
+static emu8k_state  g_emu8k;     static ntvdd g_emu8k_dev;
+static uint16_t     g_emu8k_dram[EMU8K_DRAM_WORDS];
+static int          g_awe_on = 0;
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
    5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
 static int          g_dosver_forced = 0;
@@ -7784,6 +7789,7 @@ static void exec_mach_restore(int d, char **pp)
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
     vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
+    if (g_awe_on) vdd_emu8k_reset(&g_emu8k);    /* #233 */
     vdd_mpu_reset(&g_mpu); vdd_speaker_reset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
               || g_vid.mkind != VID_KIND_TEXT);
@@ -10476,6 +10482,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
     {   uint8_t model = (uint8_t)(s->v[SET_SBMODEL] <= 2 ? s->v[SET_SBMODEL] : 0);
         g_sb.model = model;
+        g_sbcfg.emu = (model == SB_MODEL_AWE32) ? (uint16_t)(g_sbcfg.base + 0x400) : 0;  /* #233 */
         if (model == SB_MODEL_SBPRO) {
             g_sbcfg.type = 4; g_sbcfg.dma16 = 0; g_sbcfg.mpu = 0;
             if (!g_dspver_forced) { g_sb_ver_major = 3; g_sb_ver_minor = 2; }
@@ -27052,6 +27059,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_gus_dev = vdd_gus_device(&g_gus);
         vdd_bus_add(&g_bus, &g_gus_dev);
     }
+    /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,
+       E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
+    g_awe_on = (g_set.v[SET_SBMODEL] == SB_MODEL_AWE32);
+    if (g_awe_on) {
+        g_emu8k.base = (uint16_t)(g_sbcfg.base + 0x400);
+        g_emu8k.dram = g_emu8k_dram; g_emu8k.dram_words = EMU8K_DRAM_WORDS;
+        g_emu8k_dev = vdd_emu8k_device(&g_emu8k);
+        vdd_bus_add(&g_bus, &g_emu8k_dev);
+    }
     /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORTS was 16 and
          exactly full; adding one range pushed the LAST device added -- the MPU-401 --
          off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
@@ -27066,6 +27082,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        pumping) -- otherwise every SB game hangs on a machine without audio. */
     vdd_audio_init(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
     vdd_audio_set_gus(&g_audio, g_gus_on ? &g_gus : NULL);
+    vdd_audio_set_emu8k(&g_audio, g_awe_on ? &g_emu8k : NULL);   /* #233 */
     settings_apply_devices(&g_set);   /* master volume, mute, speaker -- the mixer
                                          zeroes its own struct, so not one line earlier */
     /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
