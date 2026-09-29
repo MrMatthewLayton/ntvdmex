@@ -8951,7 +8951,11 @@ static HMENU build_menu(void)
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
     menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
-    mi(m,"Wait for VSync",IDM_VIEW_VSYNC);           /* user, s81: with the picture group */
+    /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
+       what this always did -- every blit is timed to the monitor's blank whether or
+       not the guest waits for retrace -- so it is named for that. DirectDraw's
+       fullscreen flip waits for the blank regardless. */
+    mi(m,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
     msep(m);
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     /* ── ★ AND BACK, AS THE USER SPECIFIED IT (s81, #157): Show Host Cursor is a View
