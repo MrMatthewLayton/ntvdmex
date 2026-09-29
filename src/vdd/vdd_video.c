@@ -17,13 +17,44 @@ static void vga_load_modedef(video_state *st, uint8_t mode);
    unless mode 10h's measured DAC matches what ega64_rgb() computed entry for entry,
    so retiring the formula shifted no colour anywhere. */
 
-/* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. */
+/* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. (This was dac_pack();
+   it is dac_pack_w() below now, which also knows the 4F08h width.) */
 /* ⚠ This is <<2, so a guest writing 0x3F gets 252 and not 255 -- it disagrees by a
    few counts with the (v<<2)|(v>>4) the generated defaults use. Pre-existing, and
    left alone deliberately: it is on the path of every guest that programs a palette,
-   so it wants its own before/after rather than riding along with this one. */
-static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
-{ return 0xFF000000u | ((uint32_t)(r << 2) << 16) | ((uint32_t)(g << 2) << 8) | (uint32_t)(b << 2); }
+   so it wants its own before/after rather than riding along with this one. It is also
+   what makes the width switch lossless: v<<2 >>2 is v again. */
+
+/* ── ★★ THE DAC WIDTH IS A PROPERTY OF THE RAMDAC, SO EVERY PATH INTO IT OBEYS IT. (#226)
+     VBE 4F08h switches the DAC between 6 and 8 bits per primary. We accepted the switch
+     and honoured it in 4F09h ONLY: port 3C9h still stored `value & 3Fh` and read back
+     `>> 2`, so a guest that did what VBE 2.0 §4.11/§4.12 tell it to -- check
+     Capabilities D0, set 8 bits, then load its palette the usual way, through the
+     ports -- lost the top two bits of every primary (80h became 00h) with a 004Fh in
+     hand. Capabilities D0 = 1 was a promise kept for one function out of three.
+   ► THE REPRESENTATION DOES NOT CHANGE. dac[] has always held 8 bits per primary; a
+     6-bit write is stored as v<<2 (dac_pack) and read back >>2. That is how a
+     switchable RAMDAC behaves too: in 6-bit mode the value occupies the top six bits
+     of an 8-bit register, so switching the width re-interprets what is there rather
+     than rescaling it (6-bit 3Fh reads back FCh at 8 bits). So the renderer, pal[],
+     the raster split and the 4F04/AH=1Ch state block are width-blind by construction,
+     and only the two conversions below know the width.
+   ► THE RESET IS THE SPEC'S: "The DAC palette width is assumed to be reset to the
+     standard VGA value of 6 bits per primary color during any mode set" (VBE 2.0
+     §4.11) -- INT 10h AH=00h, 4F02h (both arms) and power-on all put it back to 6.
+     A width of 0 (a state nothing initialised) reads as 6. */
+static int dac_is8(const video_state *st) { return st->vesa_dacwidth == 8; }
+/* one primary as the guest wrote it -> the 8-bit component dac[] holds */
+static uint8_t dac_to8(const video_state *st, uint8_t v)
+{ return dac_is8(st) ? v : (uint8_t)((v & 0x3Fu) << 2); }
+/* ...and back, for a read */
+static uint8_t dac_from8(const video_state *st, uint8_t c)
+{ return dac_is8(st) ? c : (uint8_t)(c >> 2); }
+static uint32_t dac_pack_w(const video_state *st, uint8_t r, uint8_t g, uint8_t b)
+{
+    return 0xFF000000u | ((uint32_t)dac_to8(st, r) << 16)
+                       | ((uint32_t)dac_to8(st, g) << 8) | (uint32_t)dac_to8(st, b);
+}
 
 /* ── ★★ THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
      A 4-bit pixel does NOT index the DAC. It indexes one of the AC's sixteen palette
@@ -99,6 +130,7 @@ static void vga_defaults_for(uint8_t mode,
 static void crtc_lc_update(video_state *st);
 static void crtc_vt_update(video_state *st);
 static void vid_latch(video_state *st, int at_frame);   /* display start/pan schedule (s83) */
+static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl);   /* 4F07 BL=80h (#226) */
 static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line);
@@ -441,7 +473,9 @@ void vdd_video_bda_sync(video_state *st)
       b[0x63] = (uint8_t)crtc; b[0x64] = (uint8_t)(crtc >> 8); }
     b[0x84] = (uint8_t)(st->rows ? st->rows - 1 : 24);
     b[0x85] = st->cell_h; b[0x86] = 0;
-    b[0x87] = 0x60;                                    /* 256K, EGA/VGA active, cursor emulation on */
+    /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
+       bit 7, or 4F02h D15) did not clear memory -- see int10 AH=00h and vesa 4F02h. */
+    b[0x87] = (uint8_t)(0x60 | (st->modeset_noclear ? 0x80 : 0x00));
     b[0x88] = 0x09;                                    /* feature/switch bits: enhanced colour */
     /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
     b[0x89] = (uint8_t)((st->gh == 200) ? 0x81 : (st->gh == 350) ? 0x01 : 0x11);
@@ -553,12 +587,54 @@ static int vesa_find_text(uint16_t num, uint8_t *cols, uint8_t *rows, uint8_t *c
 }
 /* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
 static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
-/* Byte offset into vesa_vram of the pixel shown top-left: the 4F07 display start at
-   the 4F06 logical pitch. (0,0) at the mode's own pitch until a guest moves it. */
-static uint32_t vesa_origin(const video_state *st)
+/* Byte offset into vesa_vram of the pixel shown top-left, as the start REGISTER holds
+   it (4F07 at the 4F06 pitch; 0 after a mode set). What is actually on screen is
+   vesa_org_live -- the same value once the retrace has loaded it (vid_latch). */
+static uint32_t vesa_origin(const video_state *st) { return st->vesa_org; }
+/* (x, y) at the current pitch -> the byte offset the register holds. */
+static uint32_t vesa_xy_org(const video_state *st, uint32_t x, uint32_t y)
+{ return y * st->vesa_stride + x * vesa_bypp(st->vesa_bpp); }
+/* §4.10: "if the requested Display Start coordinates do not allow for a full page of
+   video memory ... the Function call should fail and no changes should be made". */
+static int vesa_org_fits(const video_state *st, uint32_t org)
 {
-    return (uint32_t)st->vesa_start_y * st->vesa_stride
-         + (uint32_t)st->vesa_start_x * vesa_bypp(st->vesa_bpp);
+    uint64_t end = (uint64_t)org + (uint64_t)(st->vesa_h ? st->vesa_h - 1u : 0u) * st->vesa_stride
+                 + (uint64_t)st->vesa_w * vesa_bypp(st->vesa_bpp);
+    return end <= VID_VESA_VRAM;
+}
+
+/* ── ★ THE CRT A VESA MODE RUNS ON (#226). ────────────────────────────────────────────
+     The retrace model (vid_beam) took its geometry from the CRTC registers the LAST
+     STANDARD MODE left behind -- a 4F02h programs none of them -- so a 640x480 VESA
+     mode set from text mode "ran" at text mode's 449 lines and 70 Hz, and from mode
+     12h at 60 Hz. Harmless while nothing in a VESA mode asked the beam anything but
+     3DAh; 4F07h BL=80h now waits for it, so the answer must be the mode's own.
+   ► THE VESA MODES' OWN TIMINGS, not the VGA CRTC's: a VBE BIOS programs its own
+     (extended) timing for these, and the published ones are the VESA DMT set at
+     60 Hz -- 525 total lines for 480, 628 for 600, 806 for 768, 1066 for 1024 --
+     with the two VGA-derived heights kept at the VGA's numbers: 400 lines is the
+     449-line 70 Hz frame, and the 200/240-line modes are DOUBLE-SCANNED to 400/480
+     as mode 13h is (so 320x200 is 70 Hz and 320x240 is 60 Hz). Blanking starts at
+     the end of the picture: the DMT modes carry no border. Anything else scales the
+     480-line frame. Only the ratios and the rate matter to the model.
+   Returns 0 outside a VESA graphics mode: the caller keeps the VGA path unchanged. */
+static int vesa_vgeom(const video_state *st, uint32_t *vtotal, uint32_t *vdisp,
+                      uint32_t *vblank, uint32_t *hz)
+{
+    uint32_t lines;
+    if (!st->in_vesa || !st->vesa_h) return 0;
+    lines = st->vesa_h <= 240u ? st->vesa_h * 2u : st->vesa_h;   /* double scan */
+    *hz = 60u;
+    switch (lines) {
+    case 400:  *vtotal = 449u;  *hz = 70u; break;
+    case 480:  *vtotal = 525u;  break;
+    case 600:  *vtotal = 628u;  break;
+    case 768:  *vtotal = 806u;  break;
+    case 1024: *vtotal = 1066u; break;
+    default:   *vtotal = lines * 525u / 480u; if (*vtotal <= lines) *vtotal = lines + 1u; break;
+    }
+    *vdisp = *vblank = lines;
+    return 1;
 }
 /* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
 static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
@@ -615,7 +691,7 @@ static void vesa_sync(video_state *st)
 static void vesa_scan_written(video_state *st)
 {
     uint32_t i, lo = 0xFFFFFFFFu, hi = 0, nz = 0;
-    uint32_t end = vesa_origin(st) + st->vesa_stride * st->vesa_h;
+    uint32_t end = st->vesa_org_live + st->vesa_stride * st->vesa_h;   /* the displayed page */
     if (!end || end > VID_VESA_VRAM) end = VID_VESA_VRAM;
     for (i = 0; i < end; ++i)
         if (st->vesa_vram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
@@ -626,7 +702,7 @@ static void vesa_scan_written(video_state *st)
 static void vesa_to_argb(video_state *st)
 {
     uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
-    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = vesa_origin(st);
+    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = st->vesa_org_live;  /* as displayed (vid_latch) */
     if (!w || !h || !pitch) return;
     if (w > VID_VESA_MAXW || h > VID_VESA_MAXH) return;   /* cannot happen: vesa_find caps it */
     for (y = 0; y < h; ++y) {
@@ -702,6 +778,9 @@ static int vid_state_load(video_state *st, const uint8_t *b)
         st->vesa_stride   = (uint32_t)b[20] | ((uint32_t)b[21] << 8) | ((uint32_t)b[22] << 16) | ((uint32_t)b[23] << 24);
         st->vesa_start_x  = (uint16_t)(b[24] | (b[25] << 8));
         st->vesa_start_y  = (uint16_t)(b[26] | (b[27] << 8));
+        st->vesa_org = st->vesa_org_vs = st->vesa_org_live =   /* shown at once (#226) */
+            vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y))
+                ? vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y) : 0u;
     } else {                                      /* a standard mode, bit 7 = no clear */
         s_ah(&m, 0x00); s_al(&m, (uint8_t)(b[8] | 0x80)); int10(st, &m);
     }
@@ -751,13 +830,28 @@ static void vesa(video_state *st, ntvdd_regs *r)
         wr32(b + 10, 1);                          /* capabilities: D0 DAC switchable */
         wr32(b + 14, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + MODES) & 0xFFFF));  /* mode list  */
         wr16(b + 18, VID_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
-        if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
-            wr16(b + 20, 0x0100);                 /* OEM software rev             */
-            wr32(b + 22, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* vendor  */
-            wr32(b + 26, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* product */
-            wr32(b + 30, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* rev     */
-        }
         { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[OEM + i] = (uint8_t)o[i]; b[OEM+i]=0; }
+        if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
+            /* ── THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). §4.3: "VBE
+                 2.0 BIOS implementations must place this string [OemString] in the
+                 OemData area within the VbeInfoBlock if 'VBE2' is preset", and "The
+                 OemVendorName string, OemProductName string and OemProductRev string
+                 are copied into this area by the VBE implementation" -- so a protected-
+                 mode client can turn each far pointer into an offset in ITS copy of the
+                 block. All four pointed at the OEM string at +22h: inside the block,
+                 but in the Reserved area §4.3 keeps for the mode list, and three of
+                 them named the wrong thing. A 1.x caller (no 'VBE2', 256 bytes) keeps
+                 the +22h string: it has no OemData, and +100h is not its memory. */
+            static const char *const strs[4] = { "NTVDMEX VESA", "NTVDMEX", "NTVDMEX VBE", "1.00" };
+            static const unsigned ptro[4] = { 6, 22, 26, 30 };   /* OemString, Vendor, Product, Rev */
+            unsigned at = 0x100, k;
+            wr16(b + 20, 0x0100);                 /* OEM software rev 1.00        */
+            for (k = 0; k < 4; ++k) {
+                wr32(b + ptro[k], ((uint32_t)r->es << 16) | (((uint16_t)r->edi + at) & 0xFFFF));
+                for (i = 0; strs[k][i]; ++i) b[at++] = (uint8_t)strs[k][i];
+                b[at++] = 0;
+            }
+        }
         for (i = 0; i < sizeof(vesa_modes)/sizeof(vesa_modes[0]); ++i)
             wr16(b + MODES + i*2, vesa_modes[i].num);
         { unsigned t;
@@ -797,7 +891,32 @@ static void vesa(video_state *st, ntvdd_regs *r)
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
             uint32_t bypp = vesa_bypp(mbpp), pitch = (uint32_t)w * bypp;
             for (i = 0; i < 256; ++i) b[i] = 0;
-            wr16(b + 0, 0x009B);                  /* attrs: supported|color|graphics */
+            /* ── MODEATTRIBUTES D5 = 1: NOT A VGA-COMPATIBLE MODE (#226). ──────────────
+                 VBE 2.0 §4.4: "Bit D5 is used to indicate if the mode is compatible with
+                 the VGA hardware registers and I/O ports. If this bit is set, then the
+                 mode is NOT VGA compatible and no assumptions should be made about the
+                 availability of any VGA registers. If clear, then the standard VGA I/O
+                 ports and frame buffer address defined in WinASegment ... can be
+                 assumed." We said 0 (0x9B) for every mode, and ours are not: the picture
+                 of a VESA mode is built from the VBE layer's own geometry -- 4F06h's
+                 pitch and 4F07h's start, the VESA timing -- and the VGA CRTC does NOT
+                 drive it (a guest that pans with CR0C/0D or sets the pitch with CR13
+                 sees nothing move), nor do the sequencer/GC reach the window. That is
+                 the Bochs DISPI architecture, and QEMU's SeaVGABIOS VBE (the msdos622
+                 oracle's; p_vesa in build/dosdiff-cache) says 0xBB, D5 set, for every
+                 packed and direct mode; the Tseng ET4000/W32p ROM under PCem
+                 (runs/s74b_lazy32/pcem_p_vesa_et4000.txt), whose extended modes ARE
+                 CRTC-driven, says 1Fh/1Bh, D5 clear. The two measured BIOSes split
+                 along exactly the line the spec draws.
+                 ModeAttributes is an ungraded card property in oracle-rules.json, so
+                 parity does not move. What still works through VGA ports in a VESA mode
+                 (the DAC at 3C7h-3C9h, 3DAh on the VESA timing) keeps working; D5 only
+                 stops PROMISING the rest. The text modes 108h-10Ch stay 0: they are
+                 VGA text modes, cursor, attribute controller and fonts included.
+               ⚠ One observable change for a guest that filters on D5: rig re-gate
+                 heaven7, ZAR and vesacube (none of which is known to test it --
+                 vesacube's source does not). Rolling back is this one constant. */
+            wr16(b + 0, 0x00BB);                  /* supported|1|colour|graphics|NOT VGA|LFB */
             b[2] = 0x07; b[3] = 0x00;             /* WinA r/w/exists; WinB none    */
             wr16(b + 4, 64); wr16(b + 6, 64);     /* granularity / size (KB)       */
             wr16(b + 8, 0xA000); wr16(b + 10, 0); /* WinA seg / WinB seg           */
@@ -861,7 +980,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  including 320x200x16 and 640x480x16, and refused every one without
                  ever calling 4F02 -- measured twice, before and after the list grew.
                  A 2000-era demo will not paginate a 64KB window to raytrace. */
-            /* ⚠ 0x9B ALREADY CARRIES D7 (LFB available) -- D0|D1|D3|D4|D7. An earlier
+            /* ⚠ 0x9B (0xBB since #226, D5 above) ALREADY CARRIES D7 (LFB available) -- D0|D1|D3|D4|D7. An earlier
                  note here claimed bit 7 was 0 and OR'd 0x80 in; that was a no-op and
                  the claim was wrong. What was actually missing was PhysBasePtr, which
                  D7 is worthless without. VBE 2.0 §4.4 D7/D6 table: D7=1,D6=0 means
@@ -888,6 +1007,15 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  mode set clears it (that path zeroes it below). */
               ntvdd_regs m; unsigned k;
               for (k = 0; k < sizeof m; ++k) ((uint8_t *)&m)[k] = 0;
+              /* §4.5: "If D14 is set, and a linear frame buffer model is not available
+                 then the call will fail." A text mode has none (its ModeInfoBlock says
+                 D7 = 0), so fail before anything changes (#226; we used to accept it). */
+              if (r_bx(r) & 0x4000) {
+                  vesa_note(st, 0x02, r_bx(r), 0);
+                  st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 0;
+                  s_ax(r, 0x014F);
+                  break;
+              }
               vesa_note(st, 0x02, r_bx(r), 1);
               st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 1;
               s_ah(&m, 0x00); s_al(&m, (uint8_t)(0x03 | ((r_bx(r) & 0x8000) ? 0x80 : 0x00)));
@@ -896,6 +1024,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
               st->gw = (uint16_t)(tc * VID_CELL_W); st->gh = (uint16_t)(tr * th);
               if (!(r_bx(r) & 0x8000)) clear_text(st, 0x07);
               st->vesa_text_mode = (uint16_t)(r_bx(r) & 0x3FFF);
+              st->vesa_mode_flags = (uint16_t)(r_bx(r) & 0x8000);   /* 4F03 D15 (#226) */
               st->dirty = 1; s_ax(r, 0x004F);
               break;
           } }
@@ -912,6 +1041,8 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->vesa_bpp = mbpp;
             st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
             st->vesa_start_x = st->vesa_start_y = 0;   /* a mode set shows page 1 */
+            st->vesa_org = st->vesa_org_vs = st->vesa_org_live = 0;   /* ...on every stage */
+            st->vesa_07_vbl = 0; st->int10_wait_until = 0;
             st->vesa_dacwidth = 6;                     /* §4.11: any mode set -> 6 bits */
             st->vesa_bank = 0;
             /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
@@ -925,6 +1056,59 @@ static void vesa(video_state *st, ntvdd_regs *r)
                 for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
                 for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
             }
+            /* ── 4F03h REPORTS D14/D15 AS THIS CALL SET THEM, AND 40:87h BIT 7 RECORDS
+                 D15 (#226). §4.6: BX D14 = linear, D15 = "memory not cleared at last mode
+                 set", and the Version 2.x note: "Unlike version 1.x VBE implementations,
+                 the memory clear flag will be returned". §4.5: "VBE BIOS 2.0
+                 implementations should also update the BIOS Data Area 40:87 memory clear
+                 bit so that VBE Function 03h can return this flag." We stored the mode
+                 `& 3FFFh`, so a guest that saves 4F03 and re-sets it with 4F02 came back
+                 BANKED -- and vesa_sync then painted the stale A0000 window over the LFB
+                 it was still drawing into, every frame. */
+            st->vesa_mode_flags = (uint16_t)(r_bx(r) & 0xC000);
+            st->modeset_noclear = (uint8_t)((r_bx(r) & 0x8000) ? 1 : 0);
+            /* ── ★★ THE VGA LAYER UNDER A VESA MODE (#226). ─────────────────────────────
+                 4F02h used to set the VESA fields and nothing else: `mkind`, the
+                 sequencer/GC shadows, gw/gh, the text geometry and 40:49h all kept
+                 the PREVIOUS standard mode's values. The hazard that left, read from the
+                 code (not yet seen on a guest): after mode 12h, mkind stayed
+                 VID_KIND_PLANAR and chain4 0, so
+                   * vdd_video_planar_active() said 1 and the host (video_trap_sync)
+                     kept running the guest in its INTERPRETER, whose A0000 stores go
+                     through vga_planar_write() into the four planes -- not into the
+                     A0000 window vesa_sync copies into vesa_vram. A banked VESA guest
+                     would have drawn into planes nothing displays, at interpreter speed;
+                   * the host's A0000 mapping stayed on a plane section (ymap_select was
+                     last told the planar map mask), so even native stores missed vmem;
+                   * write mode / read mode / bit mask stayed mode 12h's.
+                 And ModeAttributes told the guest the mode was VGA-compatible.
+               ► WHAT A VBE BIOS DOES, so what we do: it programs the VGA for a CHAINED
+                 256-colour pixel pipe and extends it -- measured in QEMU's SeaVGABIOS
+                 binary (vgabios-stdvga.bin, qemu 10.2.1: SR4 |= 08h chain-4, GR5 = 40h
+                 256-colour shift, AR index 20h video on) -- then fills the BDA from the
+                 mode. So: mode 13h's register file (vga_load_modedef), kind LINEAR8 with
+                 chain-4 on and the host window back on the linear section (the same arm
+                 as the INT 10h mode-13h set), and the mode's geometry in gw/gh.
+               ► THE BDA, FROM THE SAME BINARY'S vga_set_mode(): 40:49h = the mode if it
+                 fits a byte, else FFh -- a VBE mode number does not, so FFh (Bochs's
+                 older VGABIOS leaves 40:49h alone; SeaVGABIOS is the one we can read,
+                 and "the last standard mode" is the lie that let a TSR believe mode 12h
+                 was still set); 40:4Ah = XRes / 8; 40:84h = YRes / char height - 1;
+                 40:85h = the char height (the YCharSize 4F01h reports); cursors and page
+                 zeroed; 40:87h = 60h | (D15 ? 80h : 0). vdd_video_bda_sync derives all
+                 of those from the fields set here. */
+            st->mode   = 0xFF;
+            vga_load_modedef(st, 0x13);               /* the chained 256-colour register file */
+            st->mkind  = VID_KIND_LINEAR8;
+            st->map_mask = 0x0F; st->y_mask = 0x0F;
+            if (!st->chain4) { st->chain4 = 1; st->chain4_sel++;
+                               if (st->ymap_select) st->ymap_select(st->ymap_ctx, -1); }
+            st->gw = w; st->gh = h;
+            st->cell_h = (uint8_t)(h <= 200 ? 8 : h <= 350 ? 14 : 16);
+            st->cols   = (uint8_t)(w / 8u);
+            st->rows   = (uint8_t)(h / st->cell_h);
+            st->cur_row = st->cur_col = 0; st->page = 0;
+            st->vesa_text_mode = 0;
             pal_refresh(st);                           /* identity DAC path, see pal_refresh */
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
@@ -941,7 +1125,14 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x014F);
         break; }
     case 0x03:                                    /* get the current VBE mode      */
-        s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->vesa_text_mode ? st->vesa_text_mode : st->mode));
+        /* D0-D13 the mode, D14 linear, D15 not cleared -- as the last mode set left
+           them (#226, §4.6; see 4F02). A standard mode reports its number and D15 from
+           AL bit 7, which is what SeaVGABIOS's 4F03h does (it returns the word its
+           vga_set_mode() stored for EVERY mode set, flags included); §4.6 itself only
+           promises an accurate answer after a 4F02h. */
+        if (st->in_vesa)             s_bx(r, (uint16_t)(st->vesa_mode | st->vesa_mode_flags));
+        else if (st->vesa_text_mode) s_bx(r, (uint16_t)(st->vesa_text_mode | (st->vesa_mode_flags & 0x8000u)));
+        else                         s_bx(r, (uint16_t)(st->mode | (st->modeset_noclear ? 0x8000u : 0u)));
         s_ax(r, 0x004F);
         break;
     /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
@@ -969,9 +1160,13 @@ static void vesa(video_state *st, ntvdd_regs *r)
             if (want < minb || want > maxb) { s_ax(r, 0x024F); break; }
             st->vesa_stride = want;
             /* a start that no longer leaves a full page at the new pitch is reset,
-               which is what a BIOS that re-latches its CRTC offset does in effect */
-            if (vesa_origin(st) + (uint32_t)(st->vesa_h - 1) * want + minb > VID_VESA_VRAM)
+               which is what a BIOS that re-latches its CRTC offset does in effect.
+               The (x, y) start is kept and re-derived at the new pitch, at once (the
+               behaviour this call has always had; #226 keeps it). */
+            if (!vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y)))
                 st->vesa_start_x = st->vesa_start_y = 0;
+            st->vesa_org = st->vesa_org_vs = st->vesa_org_live =
+                vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y);
             st->dirty = 1;
         } else if (bl == 0x03) {                  /* get maximum                   */
             s_bx(r, (uint16_t)maxb); s_cx(r, (uint16_t)(maxb / bypp));
@@ -986,31 +1181,80 @@ static void vesa(video_state *st, ntvdd_regs *r)
     case 0x07: {                                  /* get/set display start         */
         uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
         if (!st->in_vesa) { s_ax(r, 0x034F); break; }
+        /* ── #226: THE START ON THE RETRACE'S SCHEDULE, AND 80h WAITS FOR IT. ────────
+             BL=00h  set now: register, retrace load and display all take it at once --
+                     the behaviour this call has always had, kept deliberately (a guest
+                     that pans with 00h and draws straight after sees what it expects);
+             BL=80h  set "during vertical retrace": the register takes it, the retrace
+                     loads it (vid_latch) and the call does not complete before that
+                     retrace -- int10_wait_until, which the HOST honours outside its
+                     lock (vdd_video_int10_wait_us). heaven7's 15,900 (0,0) calls a run
+                     are this idiom and were paced by nothing;
+             BL=02h  (3.0) schedule a start given as a BYTE address; return at once;
+             BL=82h  (3.0) the same, and wait as 80h does;
+             BL=04h  (3.0) has the scheduled flip happened? CX = 0 not yet, 1 done --
+                     "done" meaning the retrace has loaded the register (vs == reg);
+             BL=03h/83h/05h/06h  stereo: no such hardware (ModeAttributes D11/D12 = 0,
+                     Capabilities D3 = 0), so 014Fh -- which 3.0's implementation note
+                     prescribes for a card without it. */
         if (bl == 0x01) {                         /* get                           */
             s_cx(r, st->vesa_start_x); s_dx(r, st->vesa_start_y); s_bx(r, 0);
             s_ax(r, 0x004F);
-        } else if (bl == 0x00 || bl == 0x80) {    /* set (80h: during retrace)     */
-            uint32_t bypp = vesa_bypp(st->vesa_bpp);
-            uint32_t org  = (uint32_t)r_dx(r) * st->vesa_stride + (uint32_t)r_cx(r) * bypp;
-            if (r_cx(r) > st->vesa_07_maxx) st->vesa_07_maxx = r_cx(r);   /* inventory */
-            if (r_dx(r) > st->vesa_07_maxy) st->vesa_07_maxy = r_dx(r);
+        } else if (bl == 0x04) {                  /* 3.0: scheduled flip status    */
+            vid_latch(st, 0);                     /* bring the schedule up to now  */
+            s_cx(r, (uint16_t)(st->vesa_org_vs == st->vesa_org ? 1 : 0));
+            s_ax(r, 0x004F);
+        } else if (bl == 0x00 || bl == 0x80 || bl == 0x02 || bl == 0x82) {
+            uint32_t bypp = vesa_bypp(st->vesa_bpp), org, x, y;
+            if (bl == 0x02 || bl == 0x82) {       /* ECX = byte address (3.0)      */
+                org = r->ecx;
+                y = st->vesa_stride ? org / st->vesa_stride : 0;
+                x = st->vesa_stride ? (org % st->vesa_stride) / bypp : 0;
+            } else {
+                x = r_cx(r); y = r_dx(r);
+                org = vesa_xy_org(st, x, y);
+            }
+            if (x > st->vesa_07_maxx) st->vesa_07_maxx = (uint16_t)(x > 0xFFFFu ? 0xFFFFu : x);   /* inventory */
+            if (y > st->vesa_07_maxy) st->vesa_07_maxy = (uint16_t)(y > 0xFFFFu ? 0xFFFFu : y);
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
-            if (org + (uint32_t)(st->vesa_h - 1) * st->vesa_stride
-                    + (uint32_t)st->vesa_w * bypp > VID_VESA_VRAM) { st->vesa_07_rej++; s_ax(r, 0x024F); break; }
-            st->vesa_start_x = r_cx(r); st->vesa_start_y = r_dx(r);
+            if (!vesa_org_fits(st, org)) { st->vesa_07_rej++; s_ax(r, 0x024F); break; }
+            vid_latch(st, 0);                     /* boundaries already passed keep the old start */
+            st->vesa_start_x = (uint16_t)x; st->vesa_start_y = (uint16_t)y;
+            st->vesa_org = org;
+            if (bl == 0x00) {
+                st->vesa_org_vs = st->vesa_org_live = org;          /* at once, as always */
+            } else if (bl & 0x80) {
+                int in_vbl = 0;
+                uint64_t until = vesa_vbl_release(st, &in_vbl);
+                if (in_vbl) st->vesa_org_vs = org;  /* this retrace loads it: next picture */
+                st->int10_wait_until = until;
+                if (until && st->time_us) {
+                    uint64_t now = st->time_us();
+                    st->vesa_07_waits++;
+                    if (until > now) st->vesa_07_wait_us += until - now;
+                }
+            }                                     /* 02h: the latch takes it at the retrace */
             st->dirty = 1;
             s_ax(r, 0x004F);
-        } else s_ax(r, 0x014F);                   /* VBE 3.0 sub-functions: not here */
+        } else s_ax(r, 0x014F);                   /* 03h/83h/05h/06h stereo, unknown BL */
         break; }
     case 0x08: {                                  /* get/set DAC palette width     */
         /* VBE 2.0 §4.11: BL=00 set (BH = wanted bits), BL=01 get; BH out = current.
            "If the hardware cannot select the requested width, the NEXT LOWER value it
            can is selected" -- we have 6 and 8, so 10 -> 8 and 7 -> 6 (this used to send
            anything but exactly 8 to 6). AH=03 in a direct-colour mode; the width is
-           reset to 6 by any mode set (done in 4F02 and the standard AH=00). */
+           reset to 6 by any mode set (done in 4F02 and the standard AH=00).
+         ► THE WIDTH NOW REACHES THE PORTS (#226) -- 3C9h and the INT 10h AH=10h DAC
+           calls convert through dac_to8/dac_from8 -- so it is a real switch, not a
+           4F09-only flag.
+         ► AND IT IS NOT CONFINED TO VESA MODES. §4.11 refuses the call in "a direct
+           color or YUV mode" and nowhere else; the DAC is one device, and mode 13h (or
+           a text mode, whose colours are DAC entries through the attribute controller)
+           drives the same RAMDAC. We answered 034Fh outside a VESA mode, which a
+           mode-13h game that wants 8-bit primaries reads as "not in this mode". */
         uint8_t bl8 = (uint8_t)(r_bx(r) & 0xFF);
-        if (!st->in_vesa || st->vesa_bpp > 8) { s_ax(r, 0x034F); break; }
+        if (st->in_vesa && st->vesa_bpp > 8) { s_ax(r, 0x034F); break; }
         if (bl8 == 0x00) {
             uint8_t w8 = (uint8_t)((r_bx(r) >> 8) & 0xFF);
             st->vesa_dacwidth = (uint8_t)(w8 >= 8 ? 8 : 6);
@@ -1028,21 +1272,22 @@ static void vesa(video_state *st, ntvdd_regs *r)
         uint8_t bl9 = (uint8_t)(r_bx(r) & 0xFF);
         uint16_t first = r_dx(r), n = r_cx(r), i;
         uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
-        uint8_t sh = (uint8_t)(st->vesa_dacwidth == 8 ? 0 : 2);
         if (bl9 == 0x02 || bl9 == 0x03) { s_ax(r, 0x024F); break; }
         if (bl9 != 0x00 && bl9 != 0x01 && bl9 != 0x80) { s_ax(r, 0x014F); break; }
         if ((uint32_t)first + n > 256) { s_ax(r, 0x024F); break; }   /* fail, change nothing */
+        /* The same conversion the ports use (dac_to8/dac_from8). ⚠ (#226) The 6-bit set
+           used to shift WITHOUT masking, so bits 6-7 of green and blue spilled into the
+           low bits of red and green (`t << 2` of a byte, OR'd into its neighbour's
+           field). §4.12: "When in 6 bit mode, the format of the 6 bits is LSB" -- the
+           top two bits are not part of the value, as on the port. */
         for (i = 0; i < n && (first + i) < 256; ++i) {
             if (bl9 == 0x00 || bl9 == 0x80)
-                st->dac[first + i] = 0xFF000000u
-                    | ((uint32_t)(t[i*4+2] << sh) << 16)
-                    | ((uint32_t)(t[i*4+1] << sh) << 8)
-                    |  (uint32_t)(t[i*4+0] << sh);
+                st->dac[first + i] = dac_pack_w(st, t[i*4+2], t[i*4+1], t[i*4+0]);
             else {
                 uint32_t v = st->dac[first + i];
-                t[i*4+0] = (uint8_t)((v & 0xFF) >> sh);
-                t[i*4+1] = (uint8_t)(((v >> 8) & 0xFF) >> sh);
-                t[i*4+2] = (uint8_t)(((v >> 16) & 0xFF) >> sh);
+                t[i*4+0] = dac_from8(st, (uint8_t)v);
+                t[i*4+1] = dac_from8(st, (uint8_t)(v >> 8));
+                t[i*4+2] = dac_from8(st, (uint8_t)(v >> 16));
                 t[i*4+3] = 0;
             }
         }
@@ -1180,6 +1425,7 @@ static void int10(void *self, ntvdd_regs *r)
     video_state *st = (video_state *)self;
     uint8_t ah = r_ah(r), al = r_al(r);
     st->dirty = 1;
+    st->int10_wait_until = 0;          /* every call completes at once unless it says otherwise (#226) */
     switch (ah) {
     case 0x00:                                        /* set video mode          */
         /* ── ▶ AL BIT 7 = "DO NOT CLEAR VIDEO MEMORY", AND IT IS NOT DECORATION. ────
@@ -1199,6 +1445,11 @@ static void int10(void *self, ntvdd_regs *r)
         {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->vesa_text_mode = 0;                       /* ...including a VESA text mode */
+        /* 40:87h bit 7 is "the last mode set did not clear memory" -- IBM's EGA/VGA
+           BIOS copies AL bit 7 there, and VBE 2.0 §4.5/§4.6 builds 4F02h's D15 on the
+           same bit (#226). It read 60h always. */
+        st->modeset_noclear = (uint8_t)(noclear ? 1 : 0);
+        st->vesa_mode_flags = 0;
         st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
         /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
@@ -1375,18 +1626,21 @@ static void int10(void *self, ntvdd_regs *r)
         s_bx(r, (uint16_t)((st->page << 8) | (r_bx(r) & 0xFF)));
         break;
     case 0x10:                                        /* palette / DAC            */
+        /* ⚠ THE DAC CALLS BELOW GO THROUGH dac_pack_w / dac_from8, i.e. AT THE DAC
+             WIDTH (#226). A VGA BIOS implements them as plain OUTs to 3C8h/3C9h and INs
+             from 3C7h/3C9h -- it does not know the RAMDAC was switched -- so after 4F08h
+             BH=8 a real card takes these values as 8-bit too. Same device, same rule. */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = r_bx(r);
             st->dac_block[((idx & 0xFF) >> 4) & 15]++;
-            st->dac[idx & 0xFF] = dac_pack((uint8_t)(r_dx(r) >> 8) & 0x3F,
-                                           (uint8_t)(r_cx(r) >> 8) & 0x3F,
-                                           (uint8_t)(r_cx(r) & 0x3F));
+            st->dac[idx & 0xFF] = dac_pack_w(st, (uint8_t)(r_dx(r) >> 8),
+                                             (uint8_t)(r_cx(r) >> 8), (uint8_t)r_cx(r));
             pal_refresh(st);
         } else if (al == 0x12) {                      /* set block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
-                { st->dac[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+                { st->dac[first + i] = dac_pack_w(st, t[i*3], t[i*3+1], t[i*3+2]);
                   st->dac_block[((first + i) >> 4) & 15]++;
                   if (((first + i) & 0xF0) == 0x30) st->dac_hi_since_reset++; }
             st->dac_writes += n;
@@ -1422,16 +1676,17 @@ static void int10(void *self, ntvdd_regs *r)
             st->dac_page = (uint8_t)(r_bx(r) >> 8);
         } else if (al == 0x15) {                      /* get one DAC register     */
             uint32_t v = st->dac[r_bx(r) & 0xFF];
-            s_dx(r, (uint16_t)(((v >> 18) & 0x3F) << 8));
-            s_cx(r, (uint16_t)(((((v >> 10) & 0x3F)) << 8) | ((v >> 2) & 0x3F)));
+            s_dx(r, (uint16_t)((uint16_t)dac_from8(st, (uint8_t)(v >> 16)) << 8));
+            s_cx(r, (uint16_t)(((uint16_t)dac_from8(st, (uint8_t)(v >> 8)) << 8)
+                              | dac_from8(st, (uint8_t)v)));
         } else if (al == 0x17) {                      /* get block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i) {
                 uint32_t v = st->dac[first + i];
-                t[i*3] = (uint8_t)((v >> 18) & 0x3F);
-                t[i*3+1] = (uint8_t)((v >> 10) & 0x3F);
-                t[i*3+2] = (uint8_t)((v >> 2) & 0x3F);
+                t[i*3]   = dac_from8(st, (uint8_t)(v >> 16));
+                t[i*3+1] = dac_from8(st, (uint8_t)(v >> 8));
+                t[i*3+2] = dac_from8(st, (uint8_t)v);
             }
         } else if (al == 0x1A) {                      /* get DAC page state       */
             s_bx(r, (uint16_t)((st->dac_page << 8) | 0));
@@ -1701,9 +1956,12 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x3C8) { st->dac_widx = val; st->dac_comp = 0; }
     else if (port == 0x3C7) { st->dac_ridx = val; st->dac_comp = 0; }
     else if (port == 0x3C9) {
-        st->dac_latch[st->dac_comp++] = val & 0x3F;
+        /* The byte as written; the width decides at the third primary what it means
+           (6 bits: the low six, bits 6-7 ignored as the hardware ignores them; 8 bits:
+           all of it). See dac_to8 -- this used to mask to 6 bits whatever 4F08 said. */
+        st->dac_latch[st->dac_comp++] = val;
         if (st->dac_comp >= 3) {
-            st->dac[st->dac_widx] = dac_pack(st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
+            st->dac[st->dac_widx] = dac_pack_w(st, st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
             st->dac_block[(st->dac_widx >> 4) & 15]++;
             if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
             st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
@@ -1727,9 +1985,9 @@ static void dac_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     if (port != 0x3C9) { *v = 0xFF; return; }
     p = st->dac[st->dac_ridx];
     switch (st->dac_comp) {
-    case 0: *v = ((p >> 16) & 0xFF) >> 2; break;      /* R 8->6                  */
-    case 1: *v = ((p >> 8) & 0xFF) >> 2; break;       /* G                       */
-    default:*v = (p & 0xFF) >> 2; st->dac_ridx++; break;/* B, then advance        */
+    case 0: *v = dac_from8(st, (uint8_t)(p >> 16)); break;   /* R, at the DAC width */
+    case 1: *v = dac_from8(st, (uint8_t)(p >> 8));  break;   /* G                   */
+    default:*v = dac_from8(st, (uint8_t)p); st->dac_ridx++; break;   /* B, then advance */
     }
     if (++st->dac_comp >= 3) st->dac_comp = 0;
 }
@@ -1915,15 +2173,21 @@ static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
    model makes -- for the host's Auto fallback floor. 1/60 s when there is no clock. */
 uint32_t vdd_video_frame_us(const video_state *st)
 {
-    uint32_t t, a, b; int tall = (st->gh > VID_VACTIVE_LO);
+    uint32_t t, a, b, hz; int tall = (st->gh > VID_VACTIVE_LO);
+    if (vesa_vgeom(st, &t, &a, &b, &hz)) return 1000000u / hz;   /* #226: the VESA mode's */
     if (vga_vtiming(st, &t, &a, &b)) tall = (t >= 500u);
     return 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
 }
 int vdd_video_present_ready(video_state *st)
 {
-    uint32_t frame_us, pm, t, a, b;
+    uint32_t frame_us, pm, t, a, b, hz;
     int act, tall;
     if (!st->time_us) return 1;                 /* no clock: present every tick   */
+    if (vesa_vgeom(st, &t, &a, &b, &hz)) {      /* #226: the VESA mode's own frame */
+        frame_us = 1000000u / hz; act = (int)(a * 1000u / t);
+        pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
+        return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
+    }
     /* Same geometry the 0x3DA read uses, and for the same reason: 914/891 permille
        are the two BIOS cases, and 640x350 is neither -- its picture ends at 350 of
        449 lines, 780 permille. Presenting at 891 there meant building the frame 1.6ms
@@ -2608,8 +2872,17 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line)
 {
-    int tall; uint32_t t, a, b; uint64_t in_frame;
+    int tall; uint32_t t, a, b, hz; uint64_t in_frame;
     if (!st->time_us) return 0;
+    /* A VESA graphics mode runs on its own timing, not the last VGA mode's (#226). */
+    if (vesa_vgeom(st, vtotal, vdisp, vblank, &hz)) {
+        *frame_us = 1000000u / hz;
+        *now      = st->time_us();
+        *frame_no = (uint32_t)(*now / *frame_us);
+        in_frame  = *now % (uint64_t)*frame_us;
+        *line     = (uint32_t)((in_frame * (uint64_t)*vtotal) / *frame_us);
+        return 1;
+    }
     /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
        320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
        the choice off the DISPLAYED height, not the mode number. */
@@ -2665,6 +2938,7 @@ static void vid_latch(video_state *st, int at_frame)
         if (st->crtc_start_pend) st->crtc_start_half++;
         st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
         st->disp_pan = st->attr_reg[0x13];
+        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
         return;
     }
     (void)vd; (void)fno; (void)line;
@@ -2672,22 +2946,71 @@ static void vid_latch(video_state *st, int at_frame)
     if (!t0 || now < t0 || now - t0 > 4u * (uint64_t)F) {
         st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
         st->disp_pan = st->attr_reg[0x13];
+        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
         return;
     }
+    /* ► THE VESA DISPLAY START RIDES THE SAME SCHEDULE (#226): a VBE BIOS implements
+         4F07h by writing the CRTC start (plus its extension bits), so it loads at the
+         retrace start and shows from the next picture exactly as 0Ch/0Dh do. */
     vbo = (uint64_t)vb * F / vt;                    /* retrace start, within the frame */
     ds  = (now / F) * F;                            /* the last frame start <= now     */
     if (ds > t0) {                                  /* a new picture began since t0    */
         if (ds >= F && ds - F + vbo > t0) {         /* ...and its retrace was after t0 */
             if (st->crtc_start_pend) st->crtc_start_half++;   /* loaded mid-pair: torn */
             st->start_vs = (uint16_t)st->crtc_start;
+            st->vesa_org_vs = st->vesa_org;
         }
         st->crtc_start_live = st->start_vs;
         st->disp_pan        = st->attr_reg[0x13];
+        st->vesa_org_live   = st->vesa_org_vs;
     }
     if (ds + vbo <= now && ds + vbo > t0) {         /* this frame's retrace began      */
         if (st->crtc_start_pend) st->crtc_start_half++;
         st->start_vs = (uint16_t)st->crtc_start;
+        st->vesa_org_vs = st->vesa_org;
     }
+}
+
+/* ── #226: WHEN MAY A 4F07h BL=80h/82h CALL RETURN? ────────────────────────────────────
+     "Set Display Start during Vertical Retrace" (VBE 2.0 §4.10; 3.0 adds 82h, which
+     "schedule[s] the display start address change to occur, and then wait[s] until the
+     address has changed before returning"). The rule, on the beam clock 3DAh uses:
+       * the beam is IN a retrace that has not yet released such a call: return now, and
+         the start is the one this retrace loads (it shows from the next picture);
+       * otherwise wait for the NEXT retrace start -- which also means a guest that calls
+         twice inside one retrace is paced to one flip per frame, as the Bochs/SeaVGABIOS
+         style `wait while in retrace; wait until in retrace` loop would pace it.
+     Returns the model time the call completes at (0 = now) and says whether this call's
+     start should be taken by the CURRENT retrace (1) or left to the latch (0). */
+static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl)
+{
+    uint64_t now, vbo, ds, vstart;
+    uint32_t F, vt, vd, vb, fno, line;
+    *now_in_vbl = 0;
+    if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) return 0;
+    (void)vd; (void)line;
+    vbo    = (uint64_t)vb * F / vt;
+    ds     = (now / F) * F;
+    vstart = ds + vbo;                              /* this frame's retrace start   */
+    if (now >= vstart) {                            /* in retrace now               */
+        if (st->vesa_07_vbl != fno + 1u) { st->vesa_07_vbl = fno + 1u; *now_in_vbl = 1; return 0; }
+        st->vesa_07_vbl = fno + 2u;                 /* taken: the next one          */
+        return vstart + F;
+    }
+    st->vesa_07_vbl = fno + 1u;
+    return vstart;
+}
+
+uint32_t vdd_video_int10_wait_us(video_state *st)
+{
+    uint64_t now, until = st->int10_wait_until;
+    if (!until) return 0;
+    if (!st->time_us) { st->int10_wait_until = 0; return 0; }
+    now = st->time_us();
+    /* Done, or a stamp more than a second out (a clock that went backwards, a stale
+       value): never park the guest on it. */
+    if (now >= until || until - now > 1000000u) { st->int10_wait_until = 0; return 0; }
+    return (uint32_t)(until - now);
 }
 
 /* ── ★ THE EXTERNAL REGISTERS -- CLAIMED AT LAST. (docs/inventory/vga.md, step 1) ──
@@ -3334,7 +3657,7 @@ static void vid_frame(void *self)
                  And the pitch is the 4F06 LOGICAL one, the origin the 4F07 start:
                  a page flip is nothing more than this pointer moving. */
             st->frame.stride = st->vesa_stride ? st->vesa_stride : st->vesa_w;
-            st->frame.pixels = st->vesa_vram + vesa_origin(st); st->frame.palette = st->pal;
+            st->frame.pixels = st->vesa_vram + st->vesa_org_live; st->frame.palette = st->pal;
         }
     } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
         /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,
@@ -3484,6 +3807,8 @@ void vdd_video_reset(void *self)
     st->read_mode = st->col_compare = st->col_dontcare = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
+    st->vesa_mode_flags = 0; st->modeset_noclear = 0;   /* 40:87h = 60h at power-on */
+    st->vesa_dacwidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);
     vdd_video_bda_sync(st);

@@ -235,7 +235,18 @@ int main(void)
       vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK(r_ax(&r)==0x004F && b[0]=='V'&&b[1]=='E'&&b[2]=='S'&&b[3]=='A' && (b[4]|(b[5]<<8))==0x0200,
             "vesa/4F00 (VBE2): signature rewritten, version 2.0");
-      CHECK(b[511]==0, "vesa/4F00 (VBE2): 512-byte block initialised"); }
+      CHECK(b[511]==0, "vesa/4F00 (VBE2): 512-byte block initialised");
+      /* §4.3: with 'VBE2' the OEM string -- and the vendor, product and revision strings --
+         are copied into OemData (+100h). They all pointed at one string at +22h. #226 */
+      { unsigned po[4] = { 6, 22, 26, 30 }, k, inside = 1, distinct = 1;
+        for (k = 0; k < 4; ++k) {
+          unsigned o = b[po[k]] | (b[po[k]+1] << 8), sg = b[po[k]+2] | (b[po[k]+3] << 8);
+          if (sg != seg || o < 0x100 || o >= 0x200) inside = 0;
+          if (k && o == (unsigned)(b[po[k-1]] | (b[po[k-1]+1] << 8))) distinct = 0;
+        }
+        CHECK(inside && distinct && memcmp(&b[b[6]|(b[7]<<8)], "NTVDMEX VESA", 13)==0
+              && memcmp(&b[b[22]|(b[23]<<8)], "NTVDMEX", 8)==0,
+              "vesa/4F00 (VBE2): OEM/vendor/product/rev strings are four strings in OemData (+100h)"); } }
 
     /* T10: VESA 4F01 mode info for 0x101 (640x480x8) -------------------- */
     { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)];
@@ -244,6 +255,12 @@ int main(void)
       CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==640 && (b[20]|(b[21]<<8))==480 && b[25]==8,
             "vesa/4F01: 0x101 = 640x480x8");
       CHECK(b[29]==(VID_VESA_VRAM/(640u*480u))-1 && b[30]==1, "vesa/4F01: NumberOfImagePages = pages-1 (was 0, oracle row), Reserved=1");
+      /* §4.4 D5: set = "NOT VGA compatible" -- our VESA picture is not driven by the VGA
+         CRTC (4F06/4F07 are the only pitch/start), as on Bochs/SeaVGABIOS (0xBB). #226 */
+      CHECK((b[0]|(b[1]<<8))==0x00BB, "vesa/4F01: 0x101 ModeAttributes = BBh (D5 = not VGA-compatible, D7 = LFB)");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x109); r.es=seg; r.edi=0;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(!(b[0] & 0x20), "vesa/4F01: VESA text mode 0x109 stays VGA-compatible (D5 = 0)");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=0; memset(b,0,512); vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK((b[10]|(b[11]<<8)|(b[12]<<16)|(b[13]<<24))==1, "vesa/4F00: Capabilities D0 = DAC switchable (we honour 4F08 BH=8)"); }
 
@@ -472,6 +489,193 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0002); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK((r_bx(&r)>>8)==0x00, "vesa/4F10 set on, get: on");
+
+    /* T12g: THE 4F08 DAC WIDTH REACHES THE PORTS (#226, VBE 2.0 §4.11). -----------------
+       Capabilities D0 says the DAC switches to 8 bits; 4F08 BH=8 said it had. Port 3C9h
+       still stored `v & 3Fh` and read back `>> 2`, so a guest that switched and then
+       loaded its palette the usual way lost the top two bits of every primary. Every
+       expectation is the RAMDAC's: 8 bits in, 8 bits out; 6 bits = the low six, stored
+       as the top six of the register (so a width switch re-interprets, not rescales). */
+    { uint32_t v; uint16_t seg=0x3200; uint8_t *t=&g_flat[(seg<<4)];
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==8, "dac8: 4F08 BH=8 in 0x101 -> 8 bits");
+      v=0x40; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0x80; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0xC0; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0xFF; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.dac[0x40]==0xFF80C0FFu && vid.pal[0x40]==0xFF80C0FFu,
+            "dac8: 3C9h carries all 8 bits (80,C0,FF) -- was masked to 00,00,3F<<2");
+      { uint32_t a=0,b=0,c=0; v=0x40; vdd_bus_io(&bus,0x3C7,1,0,&v);
+        vdd_bus_io(&bus,0x3C9,1,1,&a); vdd_bus_io(&bus,0x3C9,1,1,&b); vdd_bus_io(&bus,0x3C9,1,1,&c);
+        CHECK(a==0x80 && b==0xC0 && c==0xFF, "dac8: 3C9h reads back 8 bits, no >>2"); }
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x10); s_bx(&r,0x41);
+      s_dx(&r,0xFF00); s_cx(&r,0x8001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.dac[0x41]==0xFFFF8001u, "dac8: INT 10h 1010h stores 8-bit primaries (a VGA BIOS just OUTs to 3C9h)");
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x15); s_bx(&r,0x41); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_dx(&r)>>8)==0xFF && r_cx(&r)==0x8001, "dac8: INT 10h 1015h reads them back at 8 bits");
+      memset(t,0xEE,8);
+      memset(&r,0,sizeof r); s_ah(&r,0x10); s_al(&r,0x17); s_bx(&r,0x40); s_cx(&r,2); r.es=seg; s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(t[0]==0x80 && t[1]==0xC0 && t[2]==0xFF && t[3]==0xFF && t[4]==0x80 && t[5]==0x01 && t[6]==0xEE,
+            "dac8: INT 10h 1017h block read at 8 bits, exactly 2x3 bytes");
+      memset(t,0xEE,8);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0001); s_cx(&r,1); s_dx(&r,0x40); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(t[0]==0xFF && t[1]==0xC0 && t[2]==0x80 && t[3]==0, "dac8: 4F09 get agrees with the port (B,G,R,0)");
+      /* A mode set returns the width to 6 (§4.11) and the SAME register reads as its top six bits. */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x8101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_bx(&r)>>8)==6, "dac6: 4F02 put the width back to 6");
+      vid.dac[0x40] = 0xFF80C0FFu;
+      { uint32_t a=0,b=0,c=0; v=0x40; vdd_bus_io(&bus,0x3C7,1,0,&v);
+        vdd_bus_io(&bus,0x3C9,1,1,&a); vdd_bus_io(&bus,0x3C9,1,1,&b); vdd_bus_io(&bus,0x3C9,1,1,&c);
+        CHECK(a==0x20 && b==0x30 && c==0x3F, "dac6: the port reads the top six bits again (80,C0,FF -> 20,30,3F)"); }
+      v=0x42; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0xFF; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x40; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x3F; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.dac[0x42]==0xFFFC00FCu, "dac6: 3C9h ignores bits 6-7 at 6 bits, as before (FF->3F, 40->00)");
+      /* 4F09's 6-bit set used to shift without masking, spilling bits 6-7 into the next field */
+      t[0]=0xFF; t[1]=0xC0; t[2]=0x00; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,0x43); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.dac[0x43]==0xFF0000FCu, "dac6: 4F09 set masks each primary to 6 bits (no spill into G/R)");
+      t[0]=0x01; t[1]=0x02; t[2]=0x03; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0080); s_cx(&r,1); s_dx(&r,0x44); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.dac[0x44]==0xFF0C0804u && vid.pal[0x44]==0xFF0C0804u,
+            "4F09 BL=80h (set during retrace, blank bit): a set like 00h -- Capabilities D2 = 0");
+      /* 4F08 in a standard mode: §4.11 refuses only direct colour/YUV. Mode 13h drives the same DAC. */
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==8, "dac8: 4F08 works in mode 13h (was 034Fh outside VESA)");
+      v=0x05; vdd_bus_io(&bus,0x3C8,1,0,&v);
+      v=0x81; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x82; vdd_bus_io(&bus,0x3C9,1,0,&v); v=0x83; vdd_bus_io(&bus,0x3C9,1,0,&v);
+      CHECK(vid.pal[0x05]==0xFF818283u, "dac8: mode 13h pixel 5 renders the 8-bit entry");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==6, "dac6: INT 10h AH=00h returns the width to 6");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
+    /* T12h: 4F07h BL=80h WAITS FOR THE RETRACE, and the start rides the latch (#226). --
+       VBE 2.0 §4.10 "Set Display Start during Vertical Retrace". It returned at once and
+       paced nothing. A VESA mode also runs on its OWN timing now, not the last VGA
+       mode's CRTC: 0x101 is 640x480 at 60 Hz, 525 lines, retrace from line 480 --
+       F = 16666 us, retrace start at 480*F/525 = 15237 us into each frame. */
+    { const uint64_t F = 16666u, T = 1000u * 16666u, VB = (480u * 16666u) / 525u;
+      uint32_t v;
+      vid.time_us = fake_clock; vid.latch_t = 0;
+      g_fake_us = T + 1000; vid.dirty=1; vdd_bus_frame(&bus);              /* sync the latch */
+      CHECK(vdd_video_frame_us(&vid)==16666u, "vesa beam: 640x480 is a 60 Hz frame, whatever the last VGA mode was");
+      vdd_bus_io(&bus,0x3DA,1,1,&v);
+      CHECK((v & 8)==0, "vesa beam: 3DAh in the picture at +1000us");
+      g_fake_us = T + VB + 20; vdd_bus_io(&bus,0x3DA,1,1,&v);
+      CHECK((v & 8)!=0, "vesa beam: 3DAh in retrace from line 480 of 525 (+15237us)");
+      g_fake_us = T + 2000;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==T+VB && vdd_video_int10_wait_us(&vid)==(uint32_t)(VB-2000u),
+            "4F07 BL=80h in the picture: completes at the retrace start (host waits the rest)");
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "4F07 BL=80h: the old page is still displayed before the retrace");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_cx(&r)==0 && r_dx(&r)==480, "4F07 BL=01h reports the start just set (the register), (0,480)");
+      g_fake_us = T + VB + 50;
+      CHECK(vdd_video_int10_wait_us(&vid)==0 && vid.int10_wait_until==0, "the wait ends once the beam is in retrace, and clears");
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "during the retrace the old picture is still the one up");
+      g_fake_us = T + F + 100; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram + 480u*640u, "the next picture shows page 2 -- the retrace loaded it");
+      /* called INSIDE a retrace nobody has used: returns at once, and THAT retrace takes it */
+      g_fake_us = T + F + VB + 30;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0 && vdd_video_int10_wait_us(&vid)==0,
+            "4F07 BL=80h inside a fresh retrace: completes at once");
+      g_fake_us = T + 2*F + 100; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.pixels==vid.vesa_vram, "...and page 1 is on the very next picture");
+      /* a SECOND call in the same retrace is paced to the next one: one flip a frame */
+      g_fake_us = T + 2*F + VB + 10;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.int10_wait_until==0, "first call in this retrace: at once");
+      g_fake_us = T + 2*F + VB + 40;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.int10_wait_until==T+3*F+VB, "second call in the same retrace: waits for the next one");
+      /* BL=00h stays immediate: no wait, the display takes it now */
+      g_fake_us = T + 3*F + 1000;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.int10_wait_until==0 && vid.frame.pixels==vid.vesa_vram + 480u*640u, "4F07 BL=00h: no wait, shown at once (unchanged)");
+      /* 3.0 BL=02h: schedule a BYTE address, return at once; BL=04h reports the flip */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0, "4F07 BL=02h (3.0): scheduled, returns at once");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x04); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_cx(&r)==0, "4F07 BL=04h: the flip has not happened in the picture");
+      g_fake_us = T + 3*F + VB + 10;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x04); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_cx(&r)!=0, "4F07 BL=04h: ...and has once the retrace loaded it");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=640u*100u+8u; vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_cx(&r)==8 && r_dx(&r)==100, "4F07 BL=02h byte address 640*100+8 reads back as (8,100)");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x02); r.ecx=VID_VESA_VRAM; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x024F, "4F07 BL=02h past memory: AH=02");
+      /* 3.0 BL=82h waits like 80h */
+      g_fake_us = T + 4*F + 500;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x82); r.ecx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==T+4*F+VB, "4F07 BL=82h (3.0): waits for the retrace too");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x014F, "4F07 BL=03h stereo: 014Fh, no such hardware");
+      /* a stale stamp can never park the guest */
+      vid.int10_wait_until = g_fake_us + 5000000u;
+      CHECK(vdd_video_int10_wait_us(&vid)==0 && vid.int10_wait_until==0, "a wait stamp > 1 s out is dropped, not honoured");
+      vid.time_us = 0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,0); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0 && vdd_video_int10_wait_us(&vid)==0, "no clock: BL=80h never waits");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
+    /* T12i: 4F03h RETURNS D14/D15, 40:87h BIT 7 RECORDS D15, AND A VESA MODE IS NOT THE
+       PREVIOUS VGA MODE WEARING A NEW NUMBER (#226). ----------------------------------
+       §4.6: BX D14 linear, D15 memory not cleared; §4.5: 2.0 BIOSes update 40:87h bit 7.
+       And after mode 12h, 4F02h left mkind PLANAR and chain-4 off -- the host kept
+       interpreting the guest and routing A0000 stores into the planes. The BDA values
+       are SeaVGABIOS's vga_set_mode(), read from QEMU's vgabios-stdvga.bin. */
+    { static uint8_t tb[0x100]; vid.bda = tb;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0xC101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_bx(&r)==0xC101, "4F03 after 4F02 C101h: C101h -- D14 and D15 kept (was 0101h)");
+      CHECK(tb[0x87]==0xE0, "40:87h bit 7 set by 4F02 D15 (60h -> E0h)");
+      { uint16_t saved = r_bx(&r);                 /* the save/restore idiom: 4F03 -> 4F02 */
+        memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.vesa_lfb==0 && tb[0x87]==0x60, "4F02 0101h: banked, 40:87h bit 7 clear");
+        memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,saved); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(r_ax(&r)==0x004F && vid.vesa_lfb==1, "re-setting what 4F03 returned comes back LINEAR, not banked"); }
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x83); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x87]==0xE0 && r_bx(&r)==0x8003, "INT 10h AH=00h AL=83h: 40:87h bit 7 set, 4F03 = 8003h");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x87]==0x60, "INT 10h AH=00h AL=03h: 40:87h back to 60h");
+      /* §4.5: D14 on a mode with no linear frame buffer (a text mode) fails, nothing changes */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x4109); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x014F && vid.cols==80 && vid.vesa_text_mode==0, "4F02 4109h (text + LFB): 014Fh, still mode 3");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x8109); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_bx(&r)==0x8109, "4F03 in a VESA text mode set with D15: 8109h");
+      /* mode 12h, then a VESA mode: the planar machinery must not survive into it */
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
+      gc_w(&bus, 0x05, 0x02);                      /* write mode 2, as a planar guest leaves it */
+      CHECK(vdd_video_planar_active(&vid) && vid.chain4==0, "mode 12h: planar, chain-4 off (the precondition)");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(!vdd_video_planar_active(&vid) && vid.mkind==VID_KIND_LINEAR8 && vid.chain4==1
+            && vid.write_mode==0 && vid.map_mask==0x0F,
+            "4F02 after 12h: not planar (host stops interpreting), chained, write mode 0 -- was PLANAR");
+      { uint32_t v = 0x04; vdd_bus_io(&bus,0x3C4,1,0,&v); v = 0; vdd_bus_io(&bus,0x3C5,1,1,&v);
+        CHECK((v & 0x08)!=0, "4F02: SR4 reads back chain-4 on (mode 13h's register file)"); }
+      CHECK(vid.gw==640 && vid.gh==480, "4F02: gw/gh are the VESA mode's extent (were mode 12h's by luck)");
+      CHECK(tb[0x49]==0xFF && tb[0x4A]==80 && tb[0x84]==29 && tb[0x85]==16 && tb[0x62]==0,
+            "4F02 0101h BDA: 40:49=FFh, 4A=80 cols, 84=29, 85=16 (SeaVGABIOS vga_set_mode)");
+      memset(&r,0,sizeof r); s_ah(&r,0x0F); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_al(&r)==0xFF && (r_ax(&r)>>8)==80, "INT 10h AH=0Fh in a VESA mode: AL=FFh (40:49h), AH=80");
+      g_vmem[5] = 0x33; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.vesa_vram[5]==0x33 && vid.frame.pixels[5]==0x33, "4F02 after 12h: an A0000 store reaches the VESA picture");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x010E); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x4A]==40 && tb[0x84]==24 && tb[0x85]==8, "4F02 010Eh (320x200): 40 cols, 25 rows of 8x8");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0107); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x4A]==160 && tb[0x84]==63, "4F02 0107h (1280x1024): 160 cols, 64 rows");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x49]==0x03 && vid.mkind==VID_KIND_TEXT, "INT 10h AH=00h 03h after VESA: 40:49=03h, text");
+      vid.bda = 0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
