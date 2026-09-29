@@ -235,7 +235,18 @@ int main(void)
       vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK(r_ax(&r)==0x004F && b[0]=='V'&&b[1]=='E'&&b[2]=='S'&&b[3]=='A' && (b[4]|(b[5]<<8))==0x0200,
             "vesa/4F00 (VBE2): signature rewritten, version 2.0");
-      CHECK(b[511]==0, "vesa/4F00 (VBE2): 512-byte block initialised"); }
+      CHECK(b[511]==0, "vesa/4F00 (VBE2): 512-byte block initialised");
+      /* §4.3: with 'VBE2' the OEM string -- and the vendor, product and revision strings --
+         are copied into OemData (+100h). They all pointed at one string at +22h. #226 */
+      { unsigned po[4] = { 6, 22, 26, 30 }, k, inside = 1, distinct = 1;
+        for (k = 0; k < 4; ++k) {
+          unsigned o = b[po[k]] | (b[po[k]+1] << 8), sg = b[po[k]+2] | (b[po[k]+3] << 8);
+          if (sg != seg || o < 0x100 || o >= 0x200) inside = 0;
+          if (k && o == (unsigned)(b[po[k-1]] | (b[po[k-1]+1] << 8))) distinct = 0;
+        }
+        CHECK(inside && distinct && memcmp(&b[b[6]|(b[7]<<8)], "NTVDMEX VESA", 13)==0
+              && memcmp(&b[b[22]|(b[23]<<8)], "NTVDMEX", 8)==0,
+              "vesa/4F00 (VBE2): OEM/vendor/product/rev strings are four strings in OemData (+100h)"); } }
 
     /* T10: VESA 4F01 mode info for 0x101 (640x480x8) -------------------- */
     { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)];
@@ -523,6 +534,10 @@ int main(void)
       t[0]=0xFF; t[1]=0xC0; t[2]=0x00; t[3]=0;
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,0x43); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK(r_ax(&r)==0x004F && vid.dac[0x43]==0xFF0000FCu, "dac6: 4F09 set masks each primary to 6 bits (no spill into G/R)");
+      t[0]=0x01; t[1]=0x02; t[2]=0x03; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0080); s_cx(&r,1); s_dx(&r,0x44); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.dac[0x44]==0xFF0C0804u && vid.pal[0x44]==0xFF0C0804u,
+            "4F09 BL=80h (set during retrace, blank bit): a set like 00h -- Capabilities D2 = 0");
       /* 4F08 in a standard mode: §4.11 refuses only direct colour/YUV. Mode 13h drives the same DAC. */
       memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);

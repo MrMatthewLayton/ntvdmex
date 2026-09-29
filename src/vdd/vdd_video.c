@@ -830,13 +830,28 @@ static void vesa(video_state *st, ntvdd_regs *r)
         wr32(b + 10, 1);                          /* capabilities: D0 DAC switchable */
         wr32(b + 14, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + MODES) & 0xFFFF));  /* mode list  */
         wr16(b + 18, VID_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
-        if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
-            wr16(b + 20, 0x0100);                 /* OEM software rev             */
-            wr32(b + 22, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* vendor  */
-            wr32(b + 26, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* product */
-            wr32(b + 30, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* rev     */
-        }
         { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[OEM + i] = (uint8_t)o[i]; b[OEM+i]=0; }
+        if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
+            /* ── THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). §4.3: "VBE
+                 2.0 BIOS implementations must place this string [OemString] in the
+                 OemData area within the VbeInfoBlock if 'VBE2' is preset", and "The
+                 OemVendorName string, OemProductName string and OemProductRev string
+                 are copied into this area by the VBE implementation" -- so a protected-
+                 mode client can turn each far pointer into an offset in ITS copy of the
+                 block. All four pointed at the OEM string at +22h: inside the block,
+                 but in the Reserved area §4.3 keeps for the mode list, and three of
+                 them named the wrong thing. A 1.x caller (no 'VBE2', 256 bytes) keeps
+                 the +22h string: it has no OemData, and +100h is not its memory. */
+            static const char *const strs[4] = { "NTVDMEX VESA", "NTVDMEX", "NTVDMEX VBE", "1.00" };
+            static const unsigned ptro[4] = { 6, 22, 26, 30 };   /* OemString, Vendor, Product, Rev */
+            unsigned at = 0x100, k;
+            wr16(b + 20, 0x0100);                 /* OEM software rev 1.00        */
+            for (k = 0; k < 4; ++k) {
+                wr32(b + ptro[k], ((uint32_t)r->es << 16) | (((uint16_t)r->edi + at) & 0xFFFF));
+                for (i = 0; strs[k][i]; ++i) b[at++] = (uint8_t)strs[k][i];
+                b[at++] = 0;
+            }
+        }
         for (i = 0; i < sizeof(vesa_modes)/sizeof(vesa_modes[0]); ++i)
             wr16(b + MODES + i*2, vesa_modes[i].num);
         { unsigned t;
