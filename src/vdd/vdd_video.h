@@ -656,6 +656,8 @@ void vdd_video_text_cursor(video_state *st, int col, int row,
                            uint16_t and_mask, uint16_t xor_mask);
 /* Write the display's BDA fields from the current state (see `bda` above). */
 void vdd_video_bda_sync(video_state *st);
+/* #183: microseconds until 3DAh bit 3 reads `want_set` (0 = now, UINT32_MAX = unknown). */
+uint32_t vdd_video_us_to_vr(video_state *st, int want_set);
 /* ── ★ CURSOR EMULATION: AN 8-LINE SHAPE ON A 16-LINE CELL. ─────────────────────
      DOS asks for its cursor in SCAN LINES, and it asks in the units of the machine
      it was written for -- an 8-line character cell, where an underline is lines 6-7

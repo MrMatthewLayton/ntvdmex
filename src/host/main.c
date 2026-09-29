@@ -12912,6 +12912,50 @@ static DWORD host_io_loop_burst(volatile BYTE *tib, vdd_bus *bus,
    the faulting instruction was a (supported) I/O op we handled, 0 if it was a
    genuine GP fault the caller should stop on. No per-call logging -- I/O traps
    are hot (a palette set is ~768 OUTs); flushing the trace file each one stalls. */
+/* ── #183: A RETRACE WAIT SLEEPS INSTEAD OF SPINNING. The standing decision: make the
+     waits cheaper. A guest waiting for vertical retrace spins `in al,dx / test al,8 /
+     jz back` against 3DAh, trapping every iteration -- 3M traps a second, a whole core,
+     and (#172) the timer's pacer starved of CPU on a small machine. The handler notes
+     the read here (under the lock); after the lock is dropped rt_idle() decodes the
+     guest's OWN next instructions, and if they are exactly that loop and the edge it is
+     waiting for is more than 1.5 ms away, sleeps ONE millisecond. The guest then loops
+     once and traps again: interrupts are still delivered between iterations (Lemmings'
+     timer ISR spins here with IF on; Skyroads ticks at 180 Hz), and once the edge is
+     close it spins as before, so the edge is caught exactly. V86 only; cfg\rtidle.off
+     turns it off. */
+static volatile DWORD g_rt_pend, g_rt_cs, g_rt_ip, g_rt_al, g_rt_idles;
+static int g_rt_off = -1;
+static void rt_note(volatile BYTE *tib, uint16_t port, int is_in, DWORD cs, DWORD ip_after)
+{
+    if (!is_in || port != 0x3DA) return;
+    g_rt_cs = cs; g_rt_ip = ip_after; g_rt_al = VDM_REG(tib, VTIB_EAX) & 0xFF; g_rt_pend = 1;
+}
+static void rt_idle(void)
+{
+    const volatile BYTE *c;
+    int want, bit3;
+    DWORD ip;
+    uint32_t us;
+    if (!g_rt_pend) return;
+    g_rt_pend = 0;
+    if (g_rt_off < 0) g_rt_off = (GetFileAttributesA(CFG_("rtidle.off")) != INVALID_FILE_ATTRIBUTES);
+    if (g_rt_off) return;
+    ip = g_rt_ip;
+    c = (const volatile BYTE *)(ULONG_PTR)((g_rt_cs << 4) + ip);
+    /* test al,08h (A8 08) or and al,08h (24 08), then jz/jnz (74/75) back to the IN */
+    if (!((c[0] == 0xA8 || c[0] == 0x24) && c[1] == 0x08 && (c[2] == 0x74 || c[2] == 0x75)))
+        return;
+    {   int target = (int)((ip + 4 + (signed char)c[3]) & 0xFFFF);
+        if (target > (int)ip || (int)ip - target > 3) return;    /* must jump back to the IN */ }
+    want = (c[2] == 0x74);             /* jz loops while clear -> waiting for bit 3 SET */
+    bit3 = (g_rt_al & 0x08) != 0;
+    if (bit3 == want) return;          /* the loop exits this time round */
+    us = vdd_video_us_to_vr(&g_vid, want);
+    if (us == 0xFFFFFFFFu || us < 1500u) return;
+    ++g_rt_idles;
+    Sleep(1);
+}
+
 static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
@@ -12942,6 +12986,7 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
 
     host_io_do(tib, bus, port, is_in, width);
     VDM_REG(tib, VTIB_EIP) = (ip + len) & 0xFFFF;          /* step past I/O    */
+    rt_note(tib, port, is_in, cs, (ip + len) & 0xFFFF);    /* #183 */
     /* ...and if a LOOP over this very instruction follows, drain it here. */
     host_io_loop_burst(tib, bus, (volatile const BYTE *)(cs << 4),
                        (ip + len) & 0xFFFF, ip, port, is_in, width, 0);
@@ -12979,6 +13024,7 @@ static int host_try_io_retro(volatile BYTE *tib, vdd_bus *bus)
         return 0;                                                 /* no I/O ends here */
     }
     host_io_do(tib, bus, port, is_in, width);
+    rt_note(tib, port, is_in, VDM_REG(tib, VTIB_CS) & 0xFFFF, ip);   /* #183 */
     /* EIP is already past the I/O, so the guest is sitting on whatever follows --
        if that is a LOOP back to this same I/O (the OPL write-delay idiom), drain
        the iterations here rather than paying one #GP reflect per read. */
@@ -27893,6 +27939,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             HOST_LOCK();
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             HOST_UNLOCK();
+            rt_idle();                              /* #183: outside the lock */
             if (handled) { g_ev_io++; g_io_via_direct++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
@@ -27900,6 +27947,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 HOST_LOCK();
                 handled = host_try_io_retro(tib, &g_bus);
                 HOST_UNLOCK();
+                rt_idle();                          /* #183: outside the lock */
                 if (handled) { g_ev_io++; g_io_via_retro++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
@@ -31411,6 +31459,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            -- our own service calls -- and the throttle is reaching a fraction of
            its execution. That is a real limit of the mechanism and it should be
            legible in the log rather than inferred from a stopwatch. */
+      p = zput(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = zdec(p, g_rt_idles);  /* #183 */
       p = zput(p, "\r\nSTAGE2: host cpu ~MHz="); p = zdec(p, host_cpu_mhz());   /* #224 */
       p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
       p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT

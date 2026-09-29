@@ -2758,6 +2758,21 @@ static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     st->feat_ctrl = (uint8_t)v; st->feat_w++;
 }
 #define VID_HBL_DEBT_MAX 16u   /* lines: further apart than this, a poll is not counting lines */
+/* #183: how long until 3DAh bit 3 (vertical retrace: blank start to frame end) READS
+   `want_set`? 0 = it already does. UINT32_MAX = no beam clock to say. The host uses this
+   to sleep through a retrace-wait loop instead of trapping on every iteration. */
+uint32_t vdd_video_us_to_vr(video_state *st, int want_set)
+{
+    uint64_t now, in_frame, vbo;
+    uint32_t F, vt, vd, vb, fno, line;
+    if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) return 0xFFFFFFFFu;
+    (void)vd; (void)fno; (void)line;
+    in_frame = now % (uint64_t)F;
+    vbo = (uint64_t)vb * F / vt;                      /* retrace (bit 3) starts here */
+    if (want_set) return in_frame >= vbo ? 0u : (uint32_t)(vbo - in_frame);
+    return in_frame < vbo ? 0u : (uint32_t)((uint64_t)F - in_frame);
+}
+
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)port; (void)w;
