@@ -160,15 +160,17 @@ static const set_def SET_DEFS[SET_COUNT] = {
 /* s81 (#156): "Custom" removed -- it behaved as 1x. A stored 3 clamps back to the default. */
 { "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   2, "1x|2x|3x" },
 /* s81 (#147), user decision: GDI + DirectDraw only, and the choice is REAL. The window is
-   always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing, but
-   the driver filters the stretch -- visibly soft) instead of the sharp borderless GDI
-   window. There was never Direct3D or OpenGL code.
+   always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing)
+   instead of the borderless GDI window. There was never Direct3D or OpenGL code.
+   #237 (user, s84): the "(sharp)" / "(soft)" suffixes are gone -- since #223 DirectDraw
+   stretches with StretchDIBits into the back buffer's DC and is as sharp as GDI; any
+   smoothing now comes only from Scaler / Filtering.
    ⛔ A NEW REGISTRY NAME, DELIBERATELY. The old "Renderer" value was stored for months
      while it did nothing, so machines carry whatever was once clicked -- the rig had 1.
      Honouring it made the user's fullscreen suddenly blurry (s81 check, "a regression").
      A value chosen when it meant nothing must not start meaning something. */
 { "FullscreenRenderer", IDC_S_RENDERER,   SK_COMBO,      0,  0,   1,
-                                          "GDI (sharp)|DirectDraw (soft)" },
+                                          "GDI|DirectDraw" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
 { "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
 /* ── ★ WAS A CHECKBOX, IS NOW THE ASPECT LOCK. (session 54) ─────────────────────

@@ -66,11 +66,12 @@ enum {
     PRESENT_ASPECT_4_3,
     PRESENT_ASPECT_16_9,
     PRESENT_ASPECT_16_10,
+    PRESENT_ASPECT_STRETCH,           /* #228: Auto in a window; FILL fullscreen / maximised */
     PRESENT_ASPECT_COUNT
 };
 #define PRESENT_ASPECT_AUTO   PRESENT_ASPECT_NONE
 #define PRESENT_ASPECT_FIXED  0x10000
-#define PRESENT_ASPECT_ITEMS "Auto|4:3|16:9|16:10"
+#define PRESENT_ASPECT_ITEMS "Auto|4:3|16:9|16:10|Stretch"
 
 /* Resolve the SETTING against the mode on screen. Auto: the VGA and text modes (up to
    720x480) are shown 4:3, as a CRT showed them -- 320x200 had tall pixels; a VESA mode
@@ -79,6 +80,7 @@ enum {
 static int present_aspect_auto(int setting, int mode_w, int mode_h, int vesa)
 {
     int a, b, t;
+    if (setting == PRESENT_ASPECT_STRETCH) setting = PRESENT_ASPECT_AUTO;   /* the window's shape */
     if (setting != PRESENT_ASPECT_AUTO) return setting;
     if (mode_w < 1 || mode_h < 1 || !vesa || (mode_w <= 720 && mode_h <= 480))
         return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
@@ -86,6 +88,19 @@ static int present_aspect_auto(int setting, int mode_w, int mode_h, int vesa)
     while (b) { t = a % b; a = b; b = t; }
     if ((mode_w / a) > 255 || (mode_h / a) > 255) return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
     return PRESENT_ASPECT_FIXED | ((mode_w / a) << 8) | (mode_h / a);
+}
+
+/* ── #228 (user, s84): STRETCH. "In a window, this is actually the same as Auto. On a
+     physical screen, in fullscreen, or when the window is maximized, we stretch the
+     image to fit the available space." So the WINDOW's shape resolves as Auto (above),
+     and only the fit into an area the user did not size -- fullscreen, or maximised --
+     fills it: 0 = unresolved = 0/0 = fill, which present_fit reads as the whole area. */
+static int present_stretch_fills(int setting, int area_is_screen)
+{ return setting == PRESENT_ASPECT_STRETCH && area_is_screen; }
+static int present_aspect_for_area(int setting, int mode_w, int mode_h, int vesa, int area_is_screen)
+{
+    if (present_stretch_fills(setting, area_is_screen)) return 0;
+    return present_aspect_auto(setting, mode_w, mode_h, vesa);
 }
 
 /* The ratio as a fraction. An unresolved Auto gives 0/0, which callers read as "fill". */
@@ -261,7 +276,15 @@ static void present_scale2x_8(const uint8_t *src, int sw, int sh, int sstride,
      8-bit frame costs 256 operations whatever its size. Direct-colour frames pay per
      pixel, and only when a filter is chosen.
    Monochrome is luminance (Rec. 601: 0.299 R + 0.587 G + 0.114 B) scaled into the
-   phosphor's colour. Sepia is the usual matrix, as a photograph browns. */
+   phosphor's colour.
+   Sepia is WASHED-OUT COLOUR, not a brown monochrome (user, s84: "I was hoping for
+   washed out color (sepia color), not black and off-white" -- the first cut was the
+   usual photo matrix, which throws the hue away). Three steps, in integers:
+     1. keep 40% of each channel's distance from the luminance (the hue survives);
+     2. a warm cast: red x1.08, green x0.98, blue x0.80;
+     3. fade: lift black to a dark brown (30,22,12), as an old print's blacks fade.
+   So pure red stays the reddest thing on the screen, only muted and warm; white is
+   cream; black is brown. */
 enum {
     PRESENT_TINT_DEFAULT = 0,
     PRESENT_TINT_SEPIA,
@@ -279,14 +302,24 @@ static uint32_t present_tint(uint32_t argb, int tint)
     uint32_t y = (r * 299u + g * 587u + b * 114u + 500u) / 1000u;   /* 0..255 */
     uint32_t pr, pg, pb;
     switch (tint) {
-    case PRESENT_TINT_SEPIA:
-        pr = (r * 393u + g * 769u + b * 189u) / 1000u;
-        pg = (r * 349u + g * 686u + b * 168u) / 1000u;
-        pb = (r * 272u + g * 534u + b * 131u) / 1000u;
-        if (pr > 255u) pr = 255u;
-        if (pg > 255u) pg = 255u;
-        if (pb > 255u) pb = 255u;
-        return a | (pr << 16) | (pg << 8) | pb;
+    case PRESENT_TINT_SEPIA: {
+        /* 1. desaturate to 40%: c' = y + 0.4 (c - y), signed */
+        int dr = (int)y + ((int)r - (int)y) * 2 / 5;
+        int dg = (int)y + ((int)g - (int)y) * 2 / 5;
+        int db = (int)y + ((int)b - (int)y) * 2 / 5;
+        /* 2. warm cast */
+        dr = dr * 108 / 100; dg = dg * 98 / 100; db = db * 80 / 100;
+        if (dr > 255) dr = 255;
+        if (dg > 255) dg = 255;
+        if (db > 255) db = 255;
+        if (dr < 0) dr = 0;
+        if (dg < 0) dg = 0;
+        if (db < 0) db = 0;
+        /* 3. fade: black -> (30,22,12), full scale stays full scale */
+        pr = 30u + (uint32_t)dr * 225u / 255u;
+        pg = 22u + (uint32_t)dg * 233u / 255u;
+        pb = 12u + (uint32_t)db * 243u / 255u;
+        return a | (pr << 16) | (pg << 8) | pb; }
     case PRESENT_TINT_MONO_WHITE:  pr = 255u; pg = 255u; pb = 255u; break;
     case PRESENT_TINT_MONO_GREEN:  pr = 51u;  pg = 255u; pb = 51u;  break;   /* P1 */
     case PRESENT_TINT_MONO_ORANGE: pr = 255u; pg = 176u; pb = 0u;   break;   /* amber */

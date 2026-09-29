@@ -8513,7 +8513,8 @@ enum {                                       /* wired command IDs               
     IDM_SCALER_0    = IDM_COMBO_BASE + 3 * IDM_COMBO_SPAN,
     IDM_FILTER_0    = IDM_COMBO_BASE + 4 * IDM_COMBO_SPAN,
     IDM_FSKIP_0     = IDM_COMBO_BASE + 5 * IDM_COMBO_SPAN,
-    IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN
+    IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN,
+    IDM_TINT_0      = IDM_COMBO_BASE + 7 * IDM_COMBO_SPAN    /* #229 (user, s84) */
 };
 
 /* Which setting each range drives. The ONLY place the two are tied together. */
@@ -8521,7 +8522,7 @@ static const struct { UINT base; int set; } MENU_COMBOS[] = {
     { IDM_SPEED_0,   SET_SPEEDMODE }, { IDM_WINSIZE_0, SET_WINSIZE   },
     { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
     { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
-    { IDM_ASPECT_0,  SET_ASPECT    },
+    { IDM_ASPECT_0,  SET_ASPECT    }, { IDM_TINT_0,    SET_TINT      },
 };
 #define MENU_COMBO_N ((int)(sizeof MENU_COMBOS / sizeof MENU_COMBOS[0]))
 
@@ -9179,6 +9180,8 @@ static HMENU build_menu(void)
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
     menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    /* #229 (user, s84): "Nice, working! Can you add these to the View menu as well." */
+    menu_combo(m, "Colour Filter", SET_TINT,     IDM_TINT_0);
     /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
        what this always did -- every blit is timed to the monitor's blank whether or
        not the guest waits for retrace -- so it is named for that. DirectDraw's
@@ -10921,7 +10924,8 @@ static void aspect_auto_follow(HWND h)
 {
     static int last = -1;
     int now;
-    if (g_set.v[SET_ASPECT] != PRESENT_ASPECT_AUTO || !g_pd.snap_valid || g_pd.fullscreen) return;
+    if ((g_set.v[SET_ASPECT] != PRESENT_ASPECT_AUTO && g_set.v[SET_ASPECT] != PRESENT_ASPECT_STRETCH)
+        || !g_pd.snap_valid || g_pd.fullscreen) return;
     now = host_aspect();
     if (last == -1) { last = now; return; }
     if (now != last) { last = now; host_apply_winsize(h, g_winsize_live != 0xFFFFFFFFu

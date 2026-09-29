@@ -223,13 +223,14 @@ static void gdi_present(present_ddraw *pd)
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
          and put the uneven pixels straight back. */
-    if (pd->fullscreen && pd->fs_integer)
-        present_fit_int(cw, ch, sw, sh,
-                        present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
-                        &dx, &dy, &dw, &dh);
-    else
-        present_fit(cw, ch, present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
-                    &dx, &dy, &dw, &dh);
+    {   /* #228: Stretch fills a fullscreen or maximised area -- and a fill is not a
+             whole multiple, so it takes the plain fit even with sharp pixels on. */
+        int screen = pd->fullscreen || IsZoomed(pd->hwnd);
+        int asp = present_aspect_for_area(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa, screen);
+        if (pd->fullscreen && pd->fs_integer && !present_stretch_fills(pd->aspect, screen))
+            present_fit_int(cw, ch, sw, sh, asp, &dx, &dy, &dw, &dh);
+        else
+            present_fit(cw, ch, asp, &dx, &dy, &dw, &dh); }
     if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
@@ -490,14 +491,12 @@ static void fs_present(present_ddraw *pd)
        ★ ...unless sharp pixels were asked for, in which case each axis snaps to a
          whole multiple of the FRAME -- which is why this needs snap_w/snap_h and the
          windowed caller does not. See present_fit_int. */
-    if (pd->fs_integer)
-        present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
-                        present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
-                        &fx, &fy, &fw, &fh);
-    else
-        present_fit(pd->fs_w, pd->fs_h,
-                    present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
-                    &fx, &fy, &fw, &fh);
+    {   /* #228: exclusive fullscreen is always "the screen" for Stretch. */
+        int asp = present_aspect_for_area(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa, 1);
+        if (pd->fs_integer && !present_stretch_fills(pd->aspect, 1))
+            present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h, asp, &fx, &fy, &fw, &fh);
+        else
+            present_fit(pd->fs_w, pd->fs_h, asp, &fx, &fy, &fw, &fh); }
 
     /* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
          from scaler/filter. With them off it should be stretched, sharp pixels,

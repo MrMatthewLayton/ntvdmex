@@ -193,6 +193,19 @@ int main(void)
             present_fit(1000, 1000, present_aspect_auto(PRESENT_ASPECT_AUTO, 320, 200, 0), &x, &y, &w, &h);
             CHECK(w == 1000 && h == 750 && y == 125, "auto: the fit letterboxes a 4:3 mode in a square client"); } }
 
+    /* #228 (user, s84): Stretch is Auto for the window's shape, and fills an area the user
+       did not size -- fullscreen or maximised -- with no bars. */
+    {   int x, y, w, h, n, d;
+        CHECK(PRESENT_ASPECT_STRETCH == 4, "stretch is APPENDED, so every stored aspect keeps its meaning");
+        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_STRETCH, 320, 200, 0), &n, &d);
+        CHECK(n == 4 && d == 3, "stretch: the window's shape is Auto's (320x200 -> 4:3)");
+        present_fit(1000, 400, present_aspect_for_area(PRESENT_ASPECT_STRETCH, 320, 200, 0, 0), &x, &y, &w, &h);
+        CHECK(w == 533 && h == 400, "stretch: in a window it letterboxes like Auto");
+        present_fit(1680, 1050, present_aspect_for_area(PRESENT_ASPECT_STRETCH, 320, 200, 0, 1), &x, &y, &w, &h);
+        CHECK(x == 0 && y == 0 && w == 1680 && h == 1050, "stretch: fullscreen/maximised fills the whole area");
+        present_fit(1680, 1050, present_aspect_for_area(PRESENT_ASPECT_AUTO, 320, 200, 0, 1), &x, &y, &w, &h);
+        CHECK(w == 1400 && h == 1050, "auto: fullscreen still keeps 4:3 -- only Stretch fills"); }
+
     /* #229: the colour filters recolour a COLOUR; Default must be the identity. */
     CHECK(present_tint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
     CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_WHITE) == 0xFFFFFFFFu, "tint: white stays white on a paper-white screen");
@@ -200,7 +213,24 @@ int main(void)
     CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_ORANGE) == 0xFFFFB000u, "tint: full brightness is amber");
     CHECK(present_tint(0xFF000000u, PRESENT_TINT_MONO_ORANGE) == 0xFF000000u, "tint: black stays black");
     CHECK(present_tint(0xFFFF0000u, PRESENT_TINT_MONO_WHITE) == 0xFF4C4C4Cu, "tint: pure red is 29.9% grey (Rec. 601)");
-    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_SEPIA) == 0xFFFFFFEEu, "tint: sepia clamps and browns");
+    /* #229 (user, s84): sepia is washed-out COLOUR -- the hue survives, muted and warm. */
+    {   uint32_t w = present_tint(0xFFFFFFFFu, PRESENT_TINT_SEPIA);
+        uint32_t k = present_tint(0xFF000000u, PRESENT_TINT_SEPIA);
+        uint32_t rd = present_tint(0xFFFF0000u, PRESENT_TINT_SEPIA);
+        uint32_t bl = present_tint(0xFF0000FFu, PRESENT_TINT_SEPIA);
+        #define CH(c, sh) (((c) >> (sh)) & 0xFFu)
+        CHECK(CH(w,16) >= CH(w,8) && CH(w,8) > CH(w,0) && CH(w,0) >= 0xC0u,
+              "tint: sepia white is cream -- warm, and still bright");
+        CHECK(CH(k,16) > CH(k,8) && CH(k,8) > CH(k,0) && CH(k,16) < 0x40u,
+              "tint: sepia black is a dark brown, not black");
+        CHECK(CH(rd,16) > CH(rd,8) + 60u && CH(rd,16) > CH(rd,0) + 60u,
+              "tint: sepia keeps the hue -- pure red is still clearly red");
+        CHECK(CH(rd,16) < 0xE0u && CH(rd,8) > 0x30u,
+              "tint: ...but washed out: less saturated than the input");
+        CHECK(CH(bl,0) > CH(bl,16) && CH(bl,0) > CH(bl,8),
+              "tint: sepia pure blue is still bluest (hue survives the warm cast)");
+        #undef CH
+    }
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }
