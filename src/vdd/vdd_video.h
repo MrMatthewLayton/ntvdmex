@@ -406,6 +406,14 @@ typedef struct video_state {
     uint8_t  p3da_last_bit0, p3da_have_last;
     uint32_t p3da_hbl_owed;   /* blanks reported by that rule (STAGE2)               */
     uint8_t  p3da_last_vbl;   /* the previous poll was in vertical blanking          */
+    /* #225: the same rule for bit 3, ONLY while the host's CPU throttle is on. A
+       throttled guest is held for milliseconds at a time and a vertical retrace is
+       ~1.5 ms, so it slept through most of them (Skyroads at 486DX2-66: 13 edges/s
+       where it draws 35). A real slow CPU polls continuously and never misses one.
+       Set by the host (vbl_owe_on); off = byte-identical to before. */
+    uint8_t  vbl_owe_on;
+    uint32_t p3da_last_frame; /* frame_no of the previous poll                        */
+    uint32_t p3da_vbl_owed;   /* retraces reported by that rule (STAGE2)             */
     /* ── ⚠ DEBUG SCAFFOLDING, OFF UNLESS ASKED FOR. ─────────────────────────────────
          The last VID_P3DA_RING polls: model microseconds and the byte returned. A
          scanline-counting loop is ~1000 polls in 85 million, invisible in any

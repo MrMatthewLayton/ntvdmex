@@ -3143,6 +3143,17 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
         in_hbl = ((uint64_t)(pos % frame_us) * 100u >= (uint64_t)frame_us * VID_HACTIVE_PCT);
     }
     in_vbl = (line >= (uint32_t)vactive);
+    /* ── #225: A RETRACE THAT STARTED AND ENDED BETWEEN TWO POLLS HAPPENED TOO -- but
+         only while the CPU throttle holds the guest (vbl_owe_on). The previous poll
+         saw the active picture of an EARLIER frame, so that frame's retrace passed
+         unseen during a hold; report it ONCE, as the bit-0 rule below does for a line,
+         and let the next poll read the true phase. One per poll, however many frames
+         were skipped: a slow machine loses real time, it does not get extra frames. */
+    if (st->vbl_owe_on && !in_vbl && st->p3da_have_last && !st->p3da_last_vbl
+        && frame_no != st->p3da_last_frame) {
+        in_vbl = 1; st->p3da_vbl_owed++;
+    }
+    st->p3da_last_frame = frame_no;
     /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
        DIFFERENT signal on a real card -- it changes per scanline, not per frame -- so
        toggling the two together, as we used to, was doubly wrong.

@@ -782,6 +782,39 @@ int main(void)
       }
       CHECK(hi > 0 && lo > 0, "3DA: 70 Hz modes also retrace once per frame");
 
+      /* --- #225: a THROTTLED guest held across a whole retrace is owed it, once.
+       *     Polls at 1 ms into consecutive 70 Hz frames never land in the ~1.2 ms
+       *     blank. Off (the default): bit 3 is never seen. On: the first poll in the
+       *     next frame reads it, the one after reads the true phase, and skipping
+       *     several frames still owes only ONE. -------------------------------- */
+      { uint32_t a, b, c, d, o0; uint64_t t, s1 = 0, s2 = 0, F, P;
+        /* The frame is MEASURED off the model rather than assumed: find two
+           successive retrace starts, then poll 2 ms before one (active picture). */
+        vid.vbl_owe_on = 0;
+        for (t = 0; t < 100000 && !s2; ++t) {
+            g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+            if ((a & 0x08) && t && !(c & 0x08)) { if (!s1) s1 = t; else s2 = t; }
+            c = a;
+        }
+        F = s2 - s1; P = s2 + 10*F - 2000;       /* active, well clear of the blank */
+        vid.p3da_have_last = 0;
+        g_fake_us = P;     vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        g_fake_us = P + F; vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
+        CHECK(F > 10000 && F < 20000 && !(a & 0x08) && !(b & 0x08),
+              "3DA #225: off, a retrace slept through stays unseen");
+        vid.vbl_owe_on = 1; o0 = vid.p3da_vbl_owed;
+        g_fake_us = P + 2*F;      vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        g_fake_us = P + 2*F + 10; vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
+        CHECK((a & 0x09) == 0x09, "3DA #225: on, the missed retrace is reported on the next poll");
+        CHECK(!(b & 0x08), "3DA #225: ...once; the following poll reads the true phase");
+        g_fake_us = P + 6*F;      vdd_bus_io(&bus, 0x3DA, 1, 1, &c);
+        g_fake_us = P + 6*F + 10; vdd_bus_io(&bus, 0x3DA, 1, 1, &d);
+        CHECK((c & 0x08) && !(d & 0x08) && vid.p3da_vbl_owed == o0 + 2,
+              "3DA #225: four frames skipped still owe ONE retrace");
+        g_fake_us = P + 6*F + 20; vdd_bus_io(&bus, 0x3DA, 1, 1, &c);
+        CHECK(!(c & 0x08), "3DA #225: nothing owed within one frame");
+        vid.vbl_owe_on = 0; }
+
       /* --- bit 0 is a DIFFERENT signal: it must change WITHIN one scanline,
        *     which the old code (toggling it with bit 3) could never do. ----- */
       { int changed = 0; uint32_t prev = 0xFF;

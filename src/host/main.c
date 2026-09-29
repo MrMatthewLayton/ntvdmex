@@ -5690,6 +5690,8 @@ static volatile LONG g_cpuspd_duty = 10000;   /* basis points, read by the threa
 static HANDLE g_cpuspd_thread;
 static DWORD  g_cpuspd_run_ms, g_cpuspd_held_ms;   /* what the throttle really did */
 static DWORD  g_cpuspd_missed;   /* held millisecond the guest was not in exec for */
+static DWORD  g_cpuspd_hold_max_us;   /* #225: the longest single hold, and */
+static DWORD  g_cpuspd_debt_max_us;   /*   the largest debt it was cut from */
 /* ★ THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
      feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
      Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
@@ -5828,6 +5830,82 @@ static LONG exec_us_now(void)
     return acc;
 }
 
+/* ── ★★ #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
+     crossfade, keyboard input") The throttle catches the guest by suspending it
+     INSIDE v86_run; a guest that is in OUR servicing (a port trap, a BOP) cannot be
+     suspended, so it ran free -- 56,820 missed catches in one Skyroads run at
+     486DX2-66 -- and the debt came back as one hold of up to a second. A 178 ms hold
+     overflows the four-tick IRQ0 latch (22 ms at 180 Hz), so game time was thrown
+     away: IRQ0 fell from 180/s to 91..170/s exactly when the game was busiest.
+   ► So when the throttle wants the guest and finds it outside v86_run, it RAISES
+     g_cpuspd_catch_req, and the exec thread parks here at its next re-entry -- the
+     spot the #219 pause already parks at, where it holds no lock -- until the
+     throttle has taken its hold and lowers the request. The guest never runs free for
+     more than one trap, so the holds stay at their normal size.
+   ► Only a throttle raises the request, so at Unlimited this is one volatile read.
+   ⚠ BOUNDED: a throttle that stops answering (its thread wedged, g_running falling)
+     cannot park the guest for longer than the longest legal hold plus slack. */
+static volatile LONG g_cpuspd_catch_req;   /* throttle -> exec: park at the re-entry   */
+static volatile LONG g_cpuspd_parked;      /* exec -> throttle: parked, not in exec     */
+static HANDLE        g_cpuspd_release;     /* auto-reset: wakes the park early          */
+static DWORD         g_cpuspd_coop_catches, g_cpuspd_coop_timeouts;
+static void cpuspd_coop_park(void)
+{
+    DWORD t0;
+    if (!g_cpuspd_catch_req) return;
+    t0 = GetTickCount();
+    InterlockedExchange(&g_cpuspd_parked, 1);
+    while (g_cpuspd_catch_req && g_running && !g_pause_want) {
+        if (GetTickCount() - t0 > CPUSPEED_MAX_OFF_MS + 250u) { ++g_cpuspd_coop_timeouts; break; }
+        if (g_cpuspd_release) WaitForSingleObject(g_cpuspd_release, 5);
+        else Sleep(1);
+    }
+    InterlockedExchange(&g_cpuspd_parked, 0);
+}
+
+/* ── #225: WHAT THE THROTTLE DID, SECOND BY SECOND, on IRQ0TL's time base, so a
+     dip in the guest's clock can be read against exec / hold / missed catches /
+     port traps / timer raises in that same second. Written by the throttle thread
+     only (the io and raise columns are snapshots of counters owned elsewhere). */
+static DWORD g_ctl_exec_us[IRQ0TL_SECS], g_ctl_hold_us[IRQ0TL_SECS], g_ctl_missed[IRQ0TL_SECS];
+static DWORD g_ctl_coop[IRQ0TL_SECS], g_ctl_io[IRQ0TL_SECS], g_ctl_raise[IRQ0TL_SECS];
+static DWORD g_ctl_run_us[IRQ0TL_SECS];
+static int cpuspd_tl_sec(void)
+{
+    LARGE_INTEGER n; DWORD sec;
+    if (!g_irq0_t0) return -1;
+    QueryPerformanceCounter(&n);
+    sec = qpc_us(n.QuadPart - g_irq0_t0) / 1000000u;
+    if (sec >= IRQ0TL_SECS) return -1;
+    g_ctl_io[sec] = g_ev_io; g_ctl_raise[sec] = g_irq0_raise_ct;
+    return (int)sec;
+}
+static void cpuspd_tl_dump(const char *tag)
+{
+    static const char *const nm[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
+    char b[1400], *q; unsigned c, t, last = 0;
+    for (t = 0; t < IRQ0TL_SECS; ++t) if (g_ctl_exec_us[t] || g_ctl_hold_us[t]) last = t;
+    for (c = 0; c < 7; ++c) {
+        DWORD prev = 0;
+        q = b; q = zput(q, tag); q = zput(q, " "); q = zput(q, nm[c]); q = zput(q, "=");
+        for (t = 0; t <= last; ++t) {
+            DWORD v = 0;
+            switch (c) {
+            case 0: v = g_ctl_exec_us[t] / 1000u; break;
+            case 1: v = g_ctl_hold_us[t] / 1000u; break;
+            case 2: v = g_ctl_missed[t]; break;
+            case 3: v = g_ctl_coop[t]; break;
+            case 4: v = g_ctl_io[t]    ? g_ctl_io[t]    - prev : 0; if (g_ctl_io[t])    prev = g_ctl_io[t];    break;
+            case 5: v = g_ctl_raise[t] ? g_ctl_raise[t] - prev : 0; if (g_ctl_raise[t]) prev = g_ctl_raise[t]; break;
+            case 6: v = g_ctl_run_us[t]; break;
+            }
+            q = zput(q, t ? "," : ""); q = zdec(q, v);
+        }
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+}
+
 /* Recompute the duty from the setting. One function so the menu, the dialog and
    the file knob cannot each arrive at a different answer. */
 static void cpuspd_recompute(void)
@@ -5836,6 +5914,8 @@ static void cpuspd_recompute(void)
     InterlockedExchange(&g_cpuspd_duty, bp);
     /* Pay for the per-trap timestamping only while it is actually being used. */
     InterlockedExchange(&g_exec_timing_on, bp < 10000 ? 1 : 0);
+    /* #225: a held guest must still see every vertical retrace (see vbl_owe_on). */
+    g_vid.vbl_owe_on = (uint8_t)(bp < 10000 ? 1 : 0);
     /* The period depends on the duty, so a speed change invalidates it. Zero means
        "work it out again on the next pass" -- including re-running auto-detect's
        arithmetic, which is why the measured round trip is kept separately. */
@@ -5892,6 +5972,7 @@ static void cpuaff_apply(void)
     }
 }
 
+#define CPUSPD_RUN_MIN_US 100ul   /* #225: shortest spun run slice */
 static DWORD WINAPI cpuspeed_thread(LPVOID param)
 {
     /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is cpuspeed_step (the
@@ -5917,6 +5998,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
     LONG e_run0;                         /* exec clock at the last resume (run start)  */
     unsigned long long E = 0ull;         /* guest execution this window, microseconds  */
     int clock_set = 0;                   /* g_start_ms anchored at first throttled catch */
+    unsigned last_duty = 10000u;         /* the duty the current window was priced at   */
     const unsigned long long CAP_US = (unsigned long long)CPUSPEED_MAX_OFF_MS * 1000ull;
     (void)param;
     /* Above the guest, so a hold is actually a hold; below the audio pump and the PIT
@@ -5931,9 +6013,32 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
     while (g_running) {
         unsigned duty = (unsigned)InterlockedCompareExchange(&g_cpuspd_duty, 0, 0);
         if (duty >= 10000u) {            /* Unlimited: no hold, no window to keep */
-            E = 0ull; clock_set = 0; Sleep(4);
+            if (g_cpuspd_catch_req) { InterlockedExchange(&g_cpuspd_catch_req, 0);
+                                      if (g_cpuspd_release) SetEvent(g_cpuspd_release); }
+            E = 0ull; clock_set = 0; last_duty = duty; Sleep(4);
             QueryPerformanceCounter(&w_win); w_run0 = w_win; e_run0 = exec_us_now();
             continue;
+        }
+        /* ── ⚠⚠ #225 (user, round 9): "the speeds degrade over time", and 100 -> 66 MHz
+             "pretty much locked up" while Unlimited always recovered. TWO DEBTS THE
+             WINDOW NEVER FORGAVE, both of which only the Unlimited branch above cleared:
+           ► A #219 PAUSE WAS BILLED AS EXECUTION. The pause suspends the guest INSIDE
+             v86_run, so g_in_exec stays 1 and exec_us_now()'s open interval runs on for
+             the whole pause: E grew by the pause's full length, and the hold priced off
+             it (E/duty - T) was minutes of 1 s holds at a slow rung -- until the 60 s
+             window cap finally rebaselined. So do not catch or bill while paused, and
+             start a fresh window when the pause ends.
+           ► A SPEED CHANGE KEPT THE OLD RUNG'S EXECUTION. E earned at 100 MHz, re-priced
+             at 66 MHz's duty, is a debt of E x (1/d66 - 1/d100) that the guest never ran
+             up. A new rung is a new window. */
+        if (g_pause_want || duty != last_duty) {
+            E = 0ull; last_duty = duty;
+            QueryPerformanceCounter(&w_win); w_run0 = w_win; e_run0 = exec_us_now();
+            if (g_pause_want) {
+                if (g_cpuspd_catch_req) { InterlockedExchange(&g_cpuspd_catch_req, 0);
+                                          if (g_cpuspd_release) SetEvent(g_cpuspd_release); }
+                Sleep(4); continue;
+            }
         }
         /* ── THE RUN SLICE, AND IT MUST BE AT LEAST A MILLISECOND. ────────────────
              The invariant delivers the requested duty EXACTLY given a clean run and
@@ -5964,7 +6069,33 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                 ? (unsigned long)g_cpuspd_gran_ms * 1000ul * duty / 10000ul : 0ul;
             if (duty >= CPUSPEED_RUN_FLOOR_BP && run_us < 1000ul)
                 run_us = 1000ul;                       /* Sleep-able floor, fast half */
+            /* ── #225: A CYCLE SHORTER THAN THE GUEST'S TIMER. The per-second record
+                 put Skyroads' slow seconds on pure compute, IRQ0 capped at 97..133/s of
+                 180: a tick placed during a hold stays in service until the handler runs
+                 in the NEXT run slice, so one run+hold cycle passes at most one tick --
+                 and at 486DX2-66 a 1 ms run earns a 7.2 ms hold, an 8.3 ms cycle against
+                 a 5.6 ms tick. (Where the guest traps, each trap is another chance,
+                 which is why busy I/O seconds reached 180.) So shorten the run until a
+                 cycle is at most HALF the guest's timer period: the duty -- the speed --
+                 is the same, only the rhythm is finer. Sub-millisecond runs cannot be
+                 Slept, so they spin on the clock, yielding; only ever SHORTER than the
+                 1 ms floor, so a guest on the BIOS 18.2 Hz tick is untouched. Placing
+                 ticks from this thread instead was tried and REJECTED: without g_lock it
+                 raced the PIT's own delivery and injected 12,170 ticks of 5,934 raised. */
+            if (run_us == 1000ul && duty < 10000u) {
+                DWORD rl = g_pit.reload ? (DWORD)g_pit.reload : 65536u;
+                unsigned long tick_us = (unsigned long)((unsigned long long)rl * 1000000ull / 1193182ull);
+                unsigned long want = (unsigned long)((unsigned long long)(tick_us / 2ul) * duty / 10000u);   /* cycle = run/duty */
+                if (want < 1000ul) run_us = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
+            }
+            {   int ts = cpuspd_tl_sec(); if (ts >= 0) g_ctl_run_us[ts] = (DWORD)run_us; }
             if (run_us >= 1000ul) Sleep((DWORD)(run_us / 1000ul));
+            else if (run_us && duty >= CPUSPEED_RUN_FLOOR_BP) {
+                LARGE_INTEGER r0, rn;
+                QueryPerformanceCounter(&r0);
+                do { SwitchToThread(); QueryPerformanceCounter(&rn); }
+                while (g_running && qpc_us(rn.QuadPart - r0.QuadPart) < run_us);
+            }
             /* else: immediate catch -- correct for the slow half. */
         }
         /* ── CATCH THE GUEST INSIDE v86_run, measure, hold. The retry YIELDS rather
@@ -5975,22 +6106,42 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
              at-or-ahead step forgives it). */
         {   DWORD started = GetTickCount();
             int done = 0, spins = 0;
+            LARGE_INTEGER d0;
+            QueryPerformanceCounter(&d0);
 #define CPUSPD_YIELD_BURST 200
-            while (!done && g_running && GetTickCount() - started < 400u) {
-                CONTEXT cx; LARGE_INTEGER rt0, rt1, now; int gotctx;
+            while (!done && g_running && !g_pause_want && GetTickCount() - started < 400u) {
+                CONTEXT cx; LARGE_INTEGER rt0, rt1, now; int gotctx, caught = 0;
                 if (!g_hcpu || g_in_exec == 0) {
-                    ++g_cpuspd_missed;
-                    if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
-                    continue;
+                    /* #225: outside v86_run -- ask it to park at its next re-entry. */
+                    if (g_hcpu) {
+                        InterlockedExchange(&g_cpuspd_catch_req, 1);
+                        if (g_cpuspd_parked && g_in_exec == 0) caught = 2;
+                    }
+                    if (!caught) {
+                        ++g_cpuspd_missed;
+                        { int ts = cpuspd_tl_sec(); if (ts >= 0) ++g_ctl_missed[ts]; }
+                        if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                        continue;
+                    }
+                } else {
+                    QueryPerformanceCounter(&rt0);
+                    if (SuspendThread(g_hcpu) == (DWORD)-1) { ++g_cpuspd_missed; Sleep(1); continue; }
+                    cx.ContextFlags = CONTEXT_CONTROL;
+                    gotctx = GetThreadContext(g_hcpu, &cx);
+                    QueryPerformanceCounter(&rt1);
+                    cpuspd_note_rt((unsigned long)qpc_us(rt1.QuadPart - rt0.QuadPart));
+                    if (gotctx && g_in_exec != 0) caught = 1;
+                    else {
+                        ResumeThread(g_hcpu);
+                        ++g_cpuspd_missed;
+                        if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                        continue;
+                    }
                 }
-                QueryPerformanceCounter(&rt0);
-                if (SuspendThread(g_hcpu) == (DWORD)-1) { ++g_cpuspd_missed; Sleep(1); continue; }
-                cx.ContextFlags = CONTEXT_CONTROL;
-                gotctx = GetThreadContext(g_hcpu, &cx);
-                QueryPerformanceCounter(&rt1);
-                cpuspd_note_rt((unsigned long)qpc_us(rt1.QuadPart - rt0.QuadPart));
-                if (gotctx && g_in_exec != 0) {
-                    unsigned long long T, hold_us; int reset;
+                /* Caught: suspended inside v86_run (1) or parked at the re-entry (2).
+                   Parked, the exec clock has no open interval, so the same
+                   accounting holds -- the servicing time was never guest execution. */
+                {   unsigned long long T, hold_us; int reset;
                     unsigned dexec;
                     LONG e_now = exec_us_now();
                     QueryPerformanceCounter(&now);
@@ -6007,21 +6158,31 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                     E += (unsigned long long)dexec;
                     T = qpc_us64(now.QuadPart - w_win.QuadPart);  /* window wall, holds in */
                     hold_us = cpuspeed_step(E, T, duty, CAP_US, &reset);
+                    {   unsigned long long raw = cpuspeed_hold_for(E, T, duty);
+                        if (raw > g_cpuspd_debt_max_us) g_cpuspd_debt_max_us = raw > 0xFFFFFFFFull ? 0xFFFFFFFFu : (DWORD)raw;
+                        if (hold_us > g_cpuspd_hold_max_us) g_cpuspd_hold_max_us = (DWORD)hold_us; }
                     g_cpuspd_ran_us   = dexec;
                     g_cpuspd_wall_us  = (DWORD)T;
-                    g_cpuspd_run_ms  += (DWORD)((dexec + 500u) / 1000u); /* lifetime exec */
-                    g_cpuspd_held_ms += (DWORD)(hold_us / 1000ull);      /* lifetime hold */
+                    /* Carry the sub-millisecond remainders: with #225's short runs
+                       (~340 us) rounding each one reported half the real exec. */
+                    {   static DWORD run_rem, hold_rem;
+                        run_rem  += dexec;           g_cpuspd_run_ms  += run_rem / 1000u;  run_rem  %= 1000u;
+                        hold_rem += (DWORD)hold_us;  g_cpuspd_held_ms += hold_rem / 1000u; hold_rem %= 1000u; }
                     ++g_cpuspd_periods;
+                    if (caught == 2) ++g_cpuspd_coop_catches;
+                    {   int ts = cpuspd_tl_sec();
+                        if (ts >= 0) { g_ctl_exec_us[ts] += dexec; g_ctl_hold_us[ts] += (DWORD)hold_us;
+                                       if (caught == 2) ++g_ctl_coop[ts]; } }
                     if (hold_us >= 1000ull) Sleep((DWORD)(hold_us / 1000ull));
-                    ResumeThread(g_hcpu);
+                    /* Release: lower the request FIRST, so a parked guest cannot see it
+                       still raised and park again, then let it go. */
+                    InterlockedExchange(&g_cpuspd_catch_req, 0);
+                    if (caught == 1) ResumeThread(g_hcpu);
+                    else if (g_cpuspd_release) SetEvent(g_cpuspd_release);
                     QueryPerformanceCounter(&w_run0);
                     e_run0 = exec_us_now();           /* new run baseline, POST-hold */
                     if (reset) { w_win = w_run0; E = 0ull; }
                     done = 1;
-                } else {
-                    ResumeThread(g_hcpu);
-                    ++g_cpuspd_missed;
-                    if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
                 }
             }
 #undef CPUSPD_YIELD_BURST
@@ -12243,6 +12404,29 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = zput(cq, " ui_gap_us=");  cq = zhex(cq, g_ui_gap_us);
             cq = zput(cq, "\r\n");
             log_append(LOG_PATH, cb, cq); serial_out(cb, cq); }
+        /* #225: ...AND THE SPEED LIMIT'S, for the same reason. The user plays with the
+             throttle on and closes the window, so "slow in-game" came back with no
+             duty, no holds and no per-second clock. Second line, same rules. */
+        {   char cb[2048], *cq = cb; unsigned t; DWORD last = 0;   /* 90 x 9 + ~350 */
+            cq = zput(cq, "CLOSE2: cpuspd idx="); cq = zhex(cq, (DWORD)g_cpuspd_idx);
+            cq = zput(cq, " duty_bp=");     cq = zhex(cq, (DWORD)g_cpuspd_duty);
+            cq = zput(cq, " delivered_bp="); cq = zhex(cq, cpuspeed_delivered_bp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
+            cq = zput(cq, " exec_ms=");     cq = zhex(cq, g_cpuspd_run_ms);
+            cq = zput(cq, " held_ms=");     cq = zhex(cq, g_cpuspd_held_ms);
+            cq = zput(cq, " periods=");     cq = zhex(cq, g_cpuspd_periods);
+            cq = zput(cq, " coop=");        cq = zhex(cq, g_cpuspd_coop_catches);
+            cq = zput(cq, " coop_to=");     cq = zhex(cq, g_cpuspd_coop_timeouts);
+            cq = zput(cq, " missed=");      cq = zhex(cq, g_cpuspd_missed);
+            cq = zput(cq, " hold_max_us="); cq = zhex(cq, g_cpuspd_hold_max_us);
+            cq = zput(cq, " vbl_edges=");   cq = zhex(cq, g_vid.vbl_edges);
+            cq = zput(cq, " vbl_owed=");    cq = zhex(cq, g_vid.p3da_vbl_owed);
+            cq = zput(cq, " p3da=");        cq = zhex(cq, g_vid.p3da_reads);
+            cq = zput(cq, " irq0tl=");
+            for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
+            for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) { cq = zput(cq, t ? "," : ""); cq = zhex(cq, g_irq0_tl[t]); }
+            cq = zput(cq, "\r\n");
+            log_append(LOG_PATH, cb, cq);
+            if (g_cpuspd_periods) cpuspd_tl_dump("CLOSE2:"); }
         /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
            Closing the window used to leave notes sounding until the host was
            restarted (user, 2026-08-21). Nothing ever called audio_wave_stop -- it
@@ -12957,9 +13141,24 @@ static void int10_wait_after(void)
 
 static volatile DWORD g_rt_pend, g_rt_cs, g_rt_ip, g_rt_al, g_rt_idles;
 static int g_rt_off = -1;
+/* What follows the guests' 3DAh reads, site by site: the loops rt_idle() must recognise
+   are the ones real programs use, so they are MEASURED here, not assumed (STAGE2). */
+#define RT_SITES 8
+static struct { DWORD cs, ip, n; BYTE b[10]; } g_rt_site[RT_SITES];
 static void rt_note(volatile BYTE *tib, uint16_t port, int is_in, DWORD cs, DWORD ip_after)
 {
     if (!is_in || port != 0x3DA) return;
+    {   int k;
+        for (k = 0; k < RT_SITES; ++k) {
+            if (g_rt_site[k].n && g_rt_site[k].cs == cs && g_rt_site[k].ip == ip_after) { g_rt_site[k].n++; break; }
+            if (!g_rt_site[k].n) {
+                const volatile BYTE *c = (const volatile BYTE *)(ULONG_PTR)((cs << 4) + ip_after);
+                int j;
+                g_rt_site[k].cs = cs; g_rt_site[k].ip = ip_after; g_rt_site[k].n = 1;
+                for (j = 0; j < 10; ++j) g_rt_site[k].b[j] = c[j];
+                break;
+            }
+        } }
     g_rt_cs = cs; g_rt_ip = ip_after; g_rt_al = VDM_REG(tib, VTIB_EAX) & 0xFF; g_rt_pend = 1;
 }
 static void rt_idle(void)
@@ -27369,6 +27568,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    if (tbp2) tbp2(1); }
     }
     cpuspd_recompute();
+    g_cpuspd_release = CreateEventA(NULL, FALSE, FALSE, NULL);   /* #225, auto-reset */
     g_cpuspd_thread = CreateThread(NULL, 0, cpuspeed_thread, NULL, 0, NULL);
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
@@ -27830,6 +28030,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               } }
         }
         while (g_pause_want && g_running) { ++g_pause_coop; Sleep(20); }   /* #219 */
+        cpuspd_coop_park();                                                  /* #225 */
         InterlockedExchange(&g_in_exec, 1);
         exec_enter_mark();               /* guest-execution clock starts (throttle) */
         {   LARGE_INTEGER vt0, vt1; DWORD vdt;
@@ -29542,6 +29743,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
                         VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                     while (g_pause_want && g_running) { ++g_pause_coop; Sleep(20); }   /* #219 */
+                    cpuspd_coop_park();                                                  /* #225 */
                     InterlockedExchange(&g_in_exec, 1);
                     exec_enter_mark();   /* guest-execution clock starts (throttle) */
                     if (g_dpmi_use_kernel) {
@@ -31508,6 +31710,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            legible in the log rather than inferred from a stopwatch. */
       p = zput(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = zdec(p, g_rt_idles);  /* #183 */
       p = zput(p, "\r\nSTAGE2: VBE 4F07h retrace waits="); p = zdec(p, g_vbe_waits);           /* #226 */
+      {   int k;
+          for (k = 0; k < RT_SITES && g_rt_site[k].n; ++k) {
+              p = zput(p, "\r\nSTAGE2: 3DAh site "); p = zhex(p, g_rt_site[k].cs); p = zput(p, ":");
+              p = zhex(p, g_rt_site[k].ip); p = zput(p, " n="); p = zdec(p, g_rt_site[k].n);
+              p = zput(p, " next="); p = zdump(p, (const void *)g_rt_site[k].b, 10);
+          } }
       p = zput(p, "\r\nSTAGE2: host cpu ~MHz="); p = zdec(p, host_cpu_mhz());   /* #224 */
       p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
       p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
@@ -31534,6 +31742,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " exec_ms="); p = zhex(p, g_cpuspd_run_ms);
         p = zput(p, " wall_ms="); p = zhex(p, wall_ms); }
       p = zput(p, " held_ms="); p = zhex(p, g_cpuspd_held_ms);
+      p = zput(p, " hold_max_us="); p = zhex(p, g_cpuspd_hold_max_us);   /* #225 */
+      p = zput(p, " debt_max_us="); p = zhex(p, g_cpuspd_debt_max_us);
+      p = zput(p, " coop="); p = zhex(p, g_cpuspd_coop_catches);        /* #225 */
+      p = zput(p, " coop_to="); p = zhex(p, g_cpuspd_coop_timeouts);
       p = zput(p, " ran_us="); p = zhex(p, g_cpuspd_ran_us);
       p = zput(p, " win_wall_us="); p = zhex(p, g_cpuspd_wall_us);
       p = zput(p, " missed="); p = zhex(p, g_cpuspd_missed);
@@ -32263,6 +32475,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
         p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.p3da_hbl_owed);
+        p = zput(p, " vbl_owed=");               p = zhex(p, g_vid.p3da_vbl_owed);   /* #225 */
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
@@ -32945,6 +33158,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
     }
+    if (g_cpuspd_periods) cpuspd_tl_dump("STAGE2: CTL");                 /* #225 */
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 
