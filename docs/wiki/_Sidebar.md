@@ -2,6 +2,9 @@
 
 **[Home](Home)**
 
+**Use it**
+- [Quick start and keyboard shortcuts](Quick-start)
+
 **Understand it**
 - [Motivations and decisions](Motivations-and-decisions)
 - [Architecture](Architecture)
