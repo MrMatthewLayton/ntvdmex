@@ -109,6 +109,16 @@ int main(void)
     /* T8: Move error paths ------------------------------------------------ */
     {
         xms_move_t mv;
+        /* s84: an offset near 4 GB used to WRAP past the bounds check and a conventional
+           endpoint had no ceiling -- both reached host memory outside the guest's. */
+        mv.length = 0x2000; mv.src_handle = h1; mv.src_offset = 0xFFFFF000u;
+        mv.dst_handle = h2; mv.dst_offset = 0;
+        CHECK(!xms_move(&x, NULL, &mv, &err) && err == XMSERR_BADSRCO, "fn0B: 32-bit wrap of src offset refused (A4)");
+        mv.src_offset = 0; mv.dst_offset = 0xFFFFF000u;
+        CHECK(!xms_move(&x, NULL, &mv, &err) && err == XMSERR_BADDSTO, "fn0B: 32-bit wrap of dst offset refused (A6)");
+        mv.length = 0x20; mv.src_handle = 0; mv.src_offset = 0xFFFF0000u | 0xFFF0u;  /* FFFF:FFF0 */
+        mv.dst_handle = h2; mv.dst_offset = 0;
+        CHECK(!xms_move(&x, NULL, &mv, &err) && err == XMSERR_BADSRCO, "fn0B: conventional source past FFFF:FFFF refused");
         mv.length = 15; mv.src_handle = h1; mv.src_offset = 0; mv.dst_handle = h2; mv.dst_offset = 0;
         CHECK(!xms_move(&x, NULL, &mv, &err) && err == XMSERR_BADLEN, "fn0B: odd length rejected (A7)");
         mv.length = 16; mv.src_handle = 99;

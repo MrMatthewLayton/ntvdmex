@@ -230,6 +230,12 @@ static inline int xms_unlock(xms_state *x, uint16_t handle, uint8_t *err) {
  * (NULL => absolute V86 addressing: linear = (seg<<4)+off). An endpoint with a
  * nonzero handle is an EMB: its offset is a byte offset into that block.
  * Returns 1 on success; 0 with *err set on a bad handle/offset/length. */
+/* s84: THE MOVE MUST STAY INSIDE WHAT IT NAMES. `offset + len > size` wrapped at 32
+   bits (offset FFFFF000h, length 2000h passed), and a conventional endpoint had no
+   limit at all -- either one let a DOS program read or write the HOST's memory past
+   the block or past the first megabyte. A real-mode far pointer reaches at most
+   FFFF:FFFF = 10FFEFh, so that is the conventional ceiling. */
+#define XMS_CONV_LIMIT 0x10FFF0u
 static inline int xms_move(xms_state *x, volatile uint8_t *conv_base,
                            const xms_move_t *mv, uint8_t *err) {
     volatile uint8_t *src, *dst;
@@ -239,20 +245,24 @@ static inline int xms_move(xms_state *x, volatile uint8_t *conv_base,
 
     if (mv->src_handle == 0) {
         uint32_t seg = (mv->src_offset >> 16) & 0xFFFF, off = mv->src_offset & 0xFFFF;
+        if ((seg << 4) + off + len > XMS_CONV_LIMIT) { if (err) *err = XMSERR_BADSRCO; return 0; }
         src = (volatile uint8_t *)((uintptr_t)conv_base + (seg << 4) + off);
     } else {
         xms_handle *h = xms_get(x, mv->src_handle);
         if (!h) { if (err) *err = XMSERR_BADSRCH; return 0; }
-        if (mv->src_offset + len > h->size_kb * 1024u) { if (err) *err = XMSERR_BADSRCO; return 0; }
+        if (mv->src_offset > h->size_kb * 1024u
+            || len > h->size_kb * 1024u - mv->src_offset) { if (err) *err = XMSERR_BADSRCO; return 0; }   /* no 32-bit wrap */
         src = (volatile uint8_t *)((uint8_t *)h->mem + mv->src_offset);
     }
     if (mv->dst_handle == 0) {
         uint32_t seg = (mv->dst_offset >> 16) & 0xFFFF, off = mv->dst_offset & 0xFFFF;
+        if ((seg << 4) + off + len > XMS_CONV_LIMIT) { if (err) *err = XMSERR_BADDSTO; return 0; }
         dst = (volatile uint8_t *)((uintptr_t)conv_base + (seg << 4) + off);
     } else {
         xms_handle *h = xms_get(x, mv->dst_handle);
         if (!h) { if (err) *err = XMSERR_BADDSTH; return 0; }
-        if (mv->dst_offset + len > h->size_kb * 1024u) { if (err) *err = XMSERR_BADDSTO; return 0; }
+        if (mv->dst_offset > h->size_kb * 1024u
+            || len > h->size_kb * 1024u - mv->dst_offset) { if (err) *err = XMSERR_BADDSTO; return 0; }   /* no 32-bit wrap */
         dst = (volatile uint8_t *)((uint8_t *)h->mem + mv->dst_offset);
     }
     /* Overlap-safe copy (real HIMEM permits an overlapping move within a block). */
