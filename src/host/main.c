@@ -5614,6 +5614,23 @@ static DWORD WINAPI tick_courier_thread(LPVOID pv)
      would on a slow real machine, rather than a compressed clock. Session 22
      proved that compressing game time is catastrophic; this deliberately does not. */
 static int    g_cpuspd_idx      = 0;      /* CPUSPEED_* index; 0 = unlimited      */
+/* #224: THIS PC's own clock in MHz (0 = unknown), from the CPU's ~MHz registry value
+   -- what Windows itself shows in System Properties. Rungs at or above it are greyed. */
+static unsigned host_cpu_mhz(void)
+{
+    static unsigned mhz = 0xFFFFFFFFu;
+    if (mhz == 0xFFFFFFFFu) {
+        HKEY k; DWORD v = 0, n = sizeof v, t = 0;
+        mhz = 0;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                          0, KEY_READ, &k) == ERROR_SUCCESS) {
+            if (RegQueryValueExA(k, "~MHz", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS
+                && t == REG_DWORD) mhz = (unsigned)v;
+            RegCloseKey(k);
+        }
+    }
+    return mhz;
+}
 static unsigned g_cpuspd_ref_mhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
 static volatile LONG g_cpuspd_duty = 10000;   /* basis points, read by the thread */
 static HANDLE g_cpuspd_thread;
@@ -8985,6 +9002,10 @@ static HMENU build_menu(void)
          trying things, the dialog is for keeping them. */
     /* user, s81: with only two items left, Machine is flattened into Tools itself. */
     menu_combo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
+    {   unsigned n;                                  /* #224: faster than this PC -> grey */
+        for (n = 1; n < CPUSPEED_COUNT; ++n)
+            if (!cpuspeed_available(n, host_cpu_mhz()))
+                EnableMenuItem(tools, IDM_SPEED_0 + n, MF_BYCOMMAND | MF_GRAYED); }
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
     mi(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
@@ -10864,6 +10885,39 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
         }
         if (g_etdt) g_etdt(dlg, 0x00000006);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
         settings_fill_cpuinfo(dlg);            /* no-op on pages without the static */
+        return TRUE;
+    }
+    /* ── #224: THE SPEED LIST, OWNER-DRAWN. A rung at or above this PC's own clock
+         cannot be a throttle, so it is drawn greyed and choosing it snaps back to the
+         last rung that can. Host shows the PC's own speed beside it. */
+    if (msg == WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlID == IDC_S_SPEEDMODE) {
+        ((MEASUREITEMSTRUCT *)lp)->itemHeight = 14;
+        return TRUE;
+    }
+    if (msg == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlID == IDC_S_SPEEDMODE) {
+        DRAWITEMSTRUCT *di = (DRAWITEMSTRUCT *)lp;
+        char t[96];
+        int sel = (di->itemState & ODS_SELECTED) != 0;
+        int ok  = (int)di->itemID < 0 || cpuspeed_available((unsigned)di->itemID, host_cpu_mhz());
+        FillRect(di->hDC, &di->rcItem, GetSysColorBrush(sel && ok ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+        if ((int)di->itemID >= 0) {
+            SendMessageA(di->hwndItem, CB_GETLBTEXT, di->itemID, (LPARAM)t);
+            if (di->itemID == 0 && host_cpu_mhz())
+                wsprintfA(t + lstrlenA(t), " - this PC, %u MHz", host_cpu_mhz());
+            SetBkMode(di->hDC, TRANSPARENT);
+            SetTextColor(di->hDC, GetSysColor(!ok ? COLOR_GRAYTEXT
+                                              : sel ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+            di->rcItem.left += 3;
+            DrawTextA(di->hDC, t, -1, &di->rcItem, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        }
+        return TRUE;
+    }
+    if (msg == WM_COMMAND && LOWORD(wp) == IDC_S_SPEEDMODE && HIWORD(wp) == CBN_SELCHANGE) {
+        static LRESULT last_ok = 0;
+        LRESULT s = SendMessageA((HWND)lp, CB_GETCURSEL, 0, 0);
+        if (s != CB_ERR && !cpuspeed_available((unsigned)s, host_cpu_mhz()))
+            SendMessageA((HWND)lp, CB_SETCURSEL, (WPARAM)last_ok, 0);
+        else if (s != CB_ERR) last_ok = s;
         return TRUE;
     }
     if (msg == WM_COMMAND && HIWORD(wp) == BN_CLICKED) {   /* #203, the General page */
@@ -31240,6 +31294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            -- our own service calls -- and the throttle is reaching a fraction of
            its execution. That is a real limit of the mechanism and it should be
            legible in the log rather than inferred from a stopwatch. */
+      p = zput(p, "\r\nSTAGE2: host cpu ~MHz="); p = zdec(p, host_cpu_mhz());   /* #224 */
       p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
       p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
                                         ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u);

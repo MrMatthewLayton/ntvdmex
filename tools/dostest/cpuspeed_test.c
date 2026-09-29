@@ -77,7 +77,11 @@ int main(void)
          somebody's registry keeps its meaning across the upgrade. If this ever
          fails, an existing installation silently acquires a throttle. */
     CHECK(CPUSPEED_MHZ[0] == 0, "index 0 is Unlimited, so old SpeedMode=0 still means no throttle");
-    CHECK(strcmp(CPUSPEED_NAMES[0], "Unlimited") == 0, "...and it says so");
+    CHECK(strcmp(CPUSPEED_NAMES[0], "Host (Unlimited)") == 0, "...and it says so (#224)");
+    CHECK(cpuspeed_available(0, 500), "#224: Host is always available");
+    CHECK(!cpuspeed_available(2, 500) && cpuspeed_available(3, 500),
+          "#224: a 500 MHz host greys Pentium III 600 and offers Pentium II 300");
+    CHECK(cpuspeed_available(1, 0), "#224: an unknown host speed offers everything");
 
     /* Fastest first: the old "Maximum" (1) lands on the fastest throttled speed. */
     {   int desc = 1;
@@ -129,7 +133,7 @@ int main(void)
     /* ⚠ THE ROUND-TO-ZERO TRAP. On a very fast host the slowest setting divides to
          under half a basis point. Truncating that to 0 would HOLD THE GUEST FOREVER
          -- a hang wearing a setting's clothes -- so it must clamp to 1. */
-    CHECK(cpuspeed_duty_bp(idx_of(8), 4000000u) >= 1, "an absurd reference still leaves the guest some time");
+    CHECK(cpuspeed_duty_bp(idx_of(16), 4000000u) >= 1, "an absurd reference still leaves the guest some time");
 
     /* A target at or above the reference is a ceiling, not a boost: we cannot make
        the host faster and must not pretend by handing back more than 100%. */
@@ -244,7 +248,7 @@ int main(void)
     /* One slice can never sleep more than the ceiling, however wild the arithmetic. */
     {   cpuspeed_pace p; int ms;
         memset(&p, 0, sizeof p);
-        ms = cpuspeed_charge(&p, 100000000ul, cpuspeed_ips(idx_of(8)), 0ll);
+        ms = cpuspeed_charge(&p, 100000000ul, cpuspeed_ips(idx_of(16)), 0ll);
         CHECK(ms <= 100, "one slice's debt is capped, so a stall cannot become a freeze"); }
 
     CHECK(cpuspeed_charge(&(cpuspeed_pace){0}, 1000000ul, 0ul, 0ll) == 0,

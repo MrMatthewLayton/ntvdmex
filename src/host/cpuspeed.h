@@ -61,25 +61,47 @@
    ⚠ ORDERING IS STILL THE CONTRACT: a new entry goes in its right place and
      renumbers the slower ones. The permanent fix (store MHz, not an index) is still
      the right thing the next time this needs to change without disturbing anyone. */
-#define CPUSPEED_COUNT   6
+/* ── #224 (s84): THE USER'S LADDER, from docs/EMULATION.md -- real CPUs a person owned,
+     fastest first, index 0 still Unlimited ("Host"). The 8 MHz rung is gone (not on
+     the list). Rungs at or above THIS PC's own speed are greyed where the list is
+     shown (cpuspeed_available), because a throttle is a ceiling, never a boost.
+   ⚠ The registry row is "CpuSpeed", NEW with this list, so an index saved against the
+     old six-entry ladder cannot silently become a different speed. */
+#define CPUSPEED_COUNT   11
 static const unsigned CPUSPEED_MHZ[CPUSPEED_COUNT] = {
-    0,      /* 0: Unlimited -- the host's own speed, and the default             */
-    100,    /* 1: Pentium / 486DX4                                               */
-    66,     /* 2: 486DX2-66                                                      */
-    33,     /* 3: 486DX-33 / 386DX-33                                            */
-    16,     /* 4: 386SX-16 -- Skyroads' stated target hardware                   */
-    8       /* 5: 8088 / 286 era                                                 */
+    0,      /*  0: Host (Unlimited) -- the default                                */
+    1000,   /*  1: Intel Pentium III 1 GHz                                        */
+    600,    /*  2: Intel Pentium III 600 MHz                                      */
+    300,    /*  3: Intel Pentium II 300 MHz                                       */
+    200,    /*  4: Intel Pentium MMX 200 MHz                                      */
+    133,    /*  5: Intel Pentium 133 MHz                                          */
+    100,    /*  6: Intel 486DX4 100 MHz                                           */
+    66,     /*  7: Intel 486DX2 66 MHz                                            */
+    50,     /*  8: Intel 486DX 50 MHz                                             */
+    33,     /*  9: Intel 386DX 33 MHz                                             */
+    16      /* 10: Intel 386DX 16 MHz                                             */
 };
 static const char *const CPUSPEED_NAMES[CPUSPEED_COUNT] = {
-    "Unlimited", "100 MHz", "66 MHz", "33 MHz", "16 MHz", "8 MHz"
+    "Host (Unlimited)", "Intel Pentium III 1 GHz", "Intel Pentium III 600 MHz",
+    "Intel Pentium II 300 MHz", "Intel Pentium MMX 200 MHz", "Intel Pentium 133 MHz",
+    "Intel 486DX4 100 MHz", "Intel 486DX2 66 MHz", "Intel 486DX 50 MHz",
+    "Intel 386DX 33 MHz", "Intel 386DX 16 MHz"
 };
 /* The '|'-separated form SET_DEFS wants. Kept adjacent to the table above so the
-   two cannot drift; cpuspeed_test.c checks that they still agree.
- ⚠ A speed AT OR ABOVE the host's own is not a throttle and cannot be: it clamps to
-   flat out (see cpuspeed_duty_bp), so on a slow enough host the faster entries just
-   behave as Unlimited -- honest, they are ceilings and never boosts. */
+   two cannot drift; cpuspeed_test.c checks that they still agree. */
 #define CPUSPEED_ITEMS \
-    "Unlimited|100 MHz|66 MHz|33 MHz|16 MHz|8 MHz"
+    "Host (Unlimited)|Intel Pentium III 1 GHz|Intel Pentium III 600 MHz|" \
+    "Intel Pentium II 300 MHz|Intel Pentium MMX 200 MHz|Intel Pentium 133 MHz|" \
+    "Intel 486DX4 100 MHz|Intel 486DX2 66 MHz|Intel 486DX 50 MHz|" \
+    "Intel 386DX 33 MHz|Intel 386DX 16 MHz"
+
+/* Can THIS PC offer rung `idx`? Host is always there; a rung is only a real throttle
+   below the host's own clock (`host_mhz`, 0 = unknown -> offer everything). */
+static int cpuspeed_available(unsigned idx, unsigned host_mhz)
+{
+    if (idx == 0u || idx >= CPUSPEED_COUNT) return idx == 0u;
+    return host_mhz == 0u || CPUSPEED_MHZ[idx] < host_mhz;
+}
 
 /* ── THE ONE CALIBRATION CONSTANT. ───────────────────────────────────────────────
      "How fast does an unthrottled NTVDMEX look to a DOS program, in MHz?"

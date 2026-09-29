@@ -141,7 +141,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
      machine never throttles. ⚠ A CHOSEN value does not survive the session-60 trim
      of the ladder (18 entries -> 6); an out-of-range stored index clamps back to
      Unlimited, which is visible rather than silently wrong. */
-{ "SpeedMode",         IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
+{ "CpuSpeed",          IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
                                           CPUSPEED_COUNT - 1, CPUSPEED_ITEMS },
 { "ConventionalKB",    IDC_S_CONVKB,      SK_UINT,     640, 64,  640, NULL },
 { "Xms",               IDC_S_XMS,         SK_CHECK,      1,  0,   1, NULL },

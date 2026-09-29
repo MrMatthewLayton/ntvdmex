@@ -57,6 +57,7 @@ IDI_MAINICON ICON "MAINICON.ico"
 #define CBS_DROPDOWN       0x0002L
 #define CBS_DROPDOWNLIST   0x0003L
 #define CBS_HASSTRINGS     0x0200L
+#define CBS_OWNERDRAWFIXED 0x0010L
 #define SS_LEFT            0x00000000L
 #define IDOK               1
 #define IDCANCEL           2
@@ -138,8 +139,9 @@ BEGIN
 
     GROUPBOX        "Speed", -1, 4, 64, 284, 56
     LTEXT           "&Limit to:", -1, 14, 81, 40, 8
-    COMBOBOX        IDC_S_SPEEDMODE, 60, 79, 74, 90,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    /* #224: owner-drawn so rungs faster than this PC can be shown GREYED. */
+    COMBOBOX        IDC_S_SPEEDMODE, 60, 79, 150, 140,
+                    CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     LTEXT           "Slows software that runs too fast on a modern PC (a delay-loop "
                     "game or an unpaced demo). Speeds are approximate.",
                     -1, 14, 99, 266, 16
