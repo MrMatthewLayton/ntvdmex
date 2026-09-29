@@ -533,6 +533,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* `wcmd "<caption>" <id>` -- post WM_COMMAND <id> to a top-level window found by
+       caption (#216): a Win16 program's menu command, sent the way its menu sends it,
+       so a command that does nothing can be told from a menu that never sent it. */
+    if (seq(verb, "wcmd")) {
+        HWND w = FindWindowA(NULL, arg1);
+        char m[400], *p = m;
+        if (!w) { p = sput(p, "wcmd: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        PostMessageA(w, WM_COMMAND, (WPARAM)satoi(arg2), 0);
+        p = sput(p, "wcmd: posted WM_COMMAND "); p = sput(p, arg2);
+        p = sput(p, " to "); p = sput(p, arg1);
+        logline(m);
+        return 0;
+    }
+
     if (seq(verb, "fg")) {
         HWND w = FindWindowA(NULL, arg1);
         char m[400], *p = m;
