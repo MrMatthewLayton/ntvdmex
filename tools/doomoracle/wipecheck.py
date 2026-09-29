@@ -48,28 +48,36 @@ def best_offset(ref, shot, x, h):
     return best
 
 
-def judge(ref, path):
+GOOD = 0.02          # a column "is" a reference if at most 2% of its compared pixels differ
+MIN_COLUMNS = 40     # ...and a frame is a melt frame only if this many moving columns are
+
+
+def judge(ref, dref, path):
+    """Each moving column is matched against the TRUE start screen and against the
+    DEFECT-SHAPED one (every 4-pixel group holding one plane's byte -- what the old
+    I_ReadScreen bug produced). Good = matches the true one; bad = matches only the
+    defect; neither = not start-screen content (the incoming picture, a menu, the
+    game) and not judged. Without the second reference a frame of ordinary gameplay
+    and a pixelated melt look alike: both simply fail to match."""
     w, h, rows = read_bmp(path)
     if (w, h) != (320, 200):
         return "%s: %dx%d is not a 320x200 frame" % (path, w, h), None
-    moving = exact = 0
-    worst = (0, 1, -1)
+    good = bad = 0
     for x in range(0, 320, 2):
-        d, bad, n = best_offset(ref, rows, x, h)
-        if d == 0:
+        d, miss, n = best_offset(ref, rows, x, h)
+        if d == 0 and miss == 0:
+            continue                               # settled start screen: not moving
+        if miss <= GOOD * n:
+            good += 1
             continue
-        moving += 1
-        if bad == 0:
-            exact += 1
-        elif bad / n > worst[0] / worst[1]:
-            worst = (bad, n, x)
-    if moving == 0:
-        return "%s: no column has moved -- NOT-A-MELT" % path, None
-    ok = (exact == moving)
-    msg = "%s: moving=%d exact=%d" % (path, moving, exact)
-    if not ok:
-        msg += " worst=%d/%d at x=%d" % worst
-    return msg + (" -- PASS" if ok else " -- FAIL"), ok
+        dd, dmiss, dn = best_offset(dref, rows, x, h)
+        if dmiss <= GOOD * dn and dd > 0:
+            bad += 1
+    if good + bad < MIN_COLUMNS:
+        return "%s: %d start-screen columns moving -- NOT-A-MELT" % (path, good + bad), None
+    ok = (bad == 0)
+    return "%s: melt columns good=%d defect-shaped=%d -- %s" % (
+        path, good, bad, "PASS" if ok else "FAIL"), ok
 
 
 def main():
@@ -79,9 +87,13 @@ def main():
     lo, ls = lumps[sys.argv[2]]
     _w, _h, px, _op = decode_patch(d, lo, ls)
     ref = [bytes(r) for r in px]
+    dref = [bytes(r[x & ~3] for x in range(len(r))) for r in px]
     verdicts = []
     for p in sys.argv[3:]:
-        msg, ok = judge(ref, p)
+        try:
+            msg, ok = judge(ref, dref, p)
+        except SystemExit as e:                    # a 24bpp shot: say so, keep going
+            msg, ok = "%s: %s" % (p, e), None
         print(msg)
         if ok is not None:
             verdicts.append(ok)
