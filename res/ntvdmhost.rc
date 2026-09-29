@@ -250,46 +250,51 @@ IDD_PAGE_AUDIO DIALOGEX 0, 0, 292, 181
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Output", -1, 4, 4, 284, 40
-    LTEXT           "&Master volume:", -1, 14, 22, 52, 8
-    EDITTEXT        IDC_S_VOLUME, 68, 20, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
-    LTEXT           "%", -1, 100, 22, 8, 8
+    GROUPBOX        "Output", -1, 4, 2, 284, 44
+    LTEXT           "&Master volume:", -1, 14, 16, 52, 8
+    EDITTEXT        IDC_S_VOLUME, 68, 14, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
+    LTEXT           "%", -1, 100, 16, 8, 8
     CONTROL         "M&ute", IDC_S_MUTE, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 116, 21, 40, 10
-    LTEXT           "Sample &rate:", -1, 168, 22, 44, 8
-    COMBOBOX        IDC_S_RATE, 214, 20, 50, 80,
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 116, 15, 40, 10
+    LTEXT           "Sample &rate:", -1, 168, 16, 44, 8
+    COMBOBOX        IDC_S_RATE, 214, 14, 50, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    /* #234: WinMM or DirectSound; opened once, so it applies at the next program. */
+    LTEXT           "Output &via:", -1, 14, 31, 40, 8
+    COMBOBOX        IDC_S_AUDIOAPI, 68, 29, 70, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "(from the next program started)", -1, 146, 31, 130, 8
 
-    GROUPBOX        "Sound Blaster", -1, 4, 48, 284, 40
-    LTEXT           "Mo&del:", -1, 14, 66, 26, 8
-    COMBOBOX        IDC_S_SBMODEL, 42, 64, 54, 80,
+    GROUPBOX        "Sound Blaster", -1, 4, 48, 284, 36
+    LTEXT           "Mo&del:", -1, 14, 64, 26, 8
+    COMBOBOX        IDC_S_SBMODEL, 42, 62, 54, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Address:", -1, 104, 66, 30, 8
-    COMBOBOX        IDC_S_SBADDR, 136, 64, 40, 80,
+    LTEXT           "&Address:", -1, 104, 64, 30, 8
+    COMBOBOX        IDC_S_SBADDR, 136, 62, 40, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "&IRQ:", -1, 184, 66, 18, 8
-    COMBOBOX        IDC_S_SBIRQ, 202, 64, 32, 80,
+    LTEXT           "&IRQ:", -1, 184, 64, 18, 8
+    COMBOBOX        IDC_S_SBIRQ, 202, 62, 32, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "D&MA:", -1, 238, 66, 18, 8
-    COMBOBOX        IDC_S_SBDMA, 258, 64, 26, 80,
+    LTEXT           "D&MA:", -1, 238, 64, 18, 8
+    COMBOBOX        IDC_S_SBDMA, 258, 62, 26, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Music", -1, 4, 92, 284, 48
-    LTEXT           "Ad&Lib / OPL:", -1, 14, 110, 46, 8
-    COMBOBOX        IDC_S_OPL, 62, 108, 50, 80,
+    GROUPBOX        "Music", -1, 4, 86, 284, 48
+    LTEXT           "Ad&Lib / OPL:", -1, 14, 102, 46, 8
+    COMBOBOX        IDC_S_OPL, 62, 100, 50, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "MI&DI:", -1, 122, 110, 20, 8
-    COMBOBOX        IDC_S_MIDI, 144, 108, 70, 80,
+    LTEXT           "MI&DI:", -1, 122, 102, 20, 8
+    COMBOBOX        IDC_S_MIDI, 144, 100, 70, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "SoundF&ont:", -1, 14, 128, 42, 8
-    EDITTEXT        IDC_S_SOUNDFONT, 62, 126, 216, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "SoundF&ont:", -1, 14, 120, 42, 8
+    EDITTEXT        IDC_S_SOUNDFONT, 62, 118, 216, 13, ES_AUTOHSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Other devices", -1, 4, 144, 284, 32
-    LTEXT           "PC spea&ker:", -1, 14, 160, 42, 8
-    COMBOBOX        IDC_S_SPEAKER, 58, 158, 80, 80,
+    GROUPBOX        "Other devices", -1, 4, 136, 284, 40
+    LTEXT           "PC spea&ker:", -1, 14, 152, 42, 8
+    COMBOBOX        IDC_S_SPEAKER, 58, 150, 80, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     CONTROL         "&Gravis Ultrasound", IDC_S_GUS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 146, 159, 76, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 146, 151, 76, 10
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────

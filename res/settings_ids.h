@@ -82,6 +82,7 @@
 #define IDC_S_OSD             269   /* checkbox: #217 show on-screen messages          */
 #define IDC_S_BUFFERED        270   /* checkbox: #217 compose off-screen, blit once    */
 #define IDC_S_TINT            271   /* combo:    #229 colour filter                    */
+#define IDC_S_AUDIOAPI        292   /* combo:    #234 WinMM / DirectSound              */
 #define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */
@@ -97,7 +98,7 @@
 #define IDC_S_SOUNDFONT       289
 #define IDC_S_SPEAKER         290
 #define IDC_S_GUS             291
-/* 292 was IDC_S_TANDY -- the Tandy / CMS checkbox, removed s80 (never modelled). */
+/* 292 was IDC_S_TANDY (Tandy / CMS, removed s80); reused s84 for IDC_S_AUDIOAPI. */
 
 /* ── Input ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_HOSTCURSOR      310   /* checkbox: HIDE the host arrow over the video   */

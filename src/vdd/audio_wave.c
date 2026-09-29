@@ -1,6 +1,8 @@
 /* audio_wave.c -- see audio_wave.h.  waveOut/midiOut bound at runtime. */
 #include "audio_wave.h"
 #include "audio_rec.h"    /* the ONE includer -- see its header */
+#define COBJMACROS
+#include <dsound.h>       /* #234: interfaces only -- dsound.dll is bound at runtime */
 
 /* Bits of mmsystem we need, declared here rather than pulling in <mmsystem.h>:
    this file is compiled freestanding and only ever calls through the pointers
@@ -106,6 +108,87 @@ static DWORD WINAPI aw_thread(LPVOID pv)
     return 0;
 }
 
+/* ── #234: THE DIRECTSOUND OUTPUT. One looping secondary buffer holding the same
+     lead as the waveOut queue (nbufs x nframes), filled ahead of the play cursor a
+     chunk at a time from the same mixer callback, and fed to the same recorder. The
+     cursor tells us how far ahead we are, so starvation is MEASURED rather than
+     inferred: `starved` counts passes where the play cursor had caught up with us.
+     GLOBALFOCUS so it keeps playing when the window is not in front (the pause in
+     #219 is what silences a background window, not the output). */
+typedef HRESULT (WINAPI *PFN_DirectSoundCreate)(LPCGUID, LPDIRECTSOUND *, LPUNKNOWN);
+
+static int aw_ds_open(audio_wave *aw, const AW_WAVEFORMATEX *fmt)
+{
+    HMODULE m = LoadLibraryA("dsound.dll");
+    PFN_DirectSoundCreate create;
+    LPDIRECTSOUND ds = NULL; LPDIRECTSOUNDBUFFER b = NULL;
+    DSBUFFERDESC d; WAVEFORMATEX wf;
+    void *p1, *p2; DWORD n1, n2;
+    if (!m) return 0;
+    create = (PFN_DirectSoundCreate)GetProcAddress(m, "DirectSoundCreate");
+    if (!create || FAILED(create(NULL, &ds, NULL))) return 0;
+    if (FAILED(IDirectSound_SetCooperativeLevel(ds, GetDesktopWindow(), DSSCL_NORMAL))) {
+        IDirectSound_Release(ds); return 0;
+    }
+    ZeroMemory(&wf, sizeof wf);
+    wf.wFormatTag = WAVE_FORMAT_PCM; wf.nChannels = fmt->nChannels;
+    wf.nSamplesPerSec = fmt->nSamplesPerSec; wf.wBitsPerSample = fmt->wBitsPerSample;
+    wf.nBlockAlign = fmt->nBlockAlign; wf.nAvgBytesPerSec = fmt->nAvgBytesPerSec;
+    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    d.dwFlags = DSBCAPS_GLOBALFOCUS | DSBCAPS_GETCURRENTPOSITION2;
+    aw->ds_bytes = aw->nbufs * aw->nframes * AW_CHANNELS * (uint32_t)sizeof(int16_t);
+    d.dwBufferBytes = aw->ds_bytes; d.lpwfxFormat = &wf;
+    if (FAILED(IDirectSound_CreateSoundBuffer(ds, &d, &b, NULL))) {
+        IDirectSound_Release(ds); return 0;
+    }
+    /* Start from silence; the thread fills ahead of the cursor from here. */
+    if (SUCCEEDED(IDirectSoundBuffer_Lock(b, 0, aw->ds_bytes, &p1, &n1, &p2, &n2, 0))) {
+        ZeroMemory(p1, n1); if (p2) ZeroMemory(p2, n2);
+        IDirectSoundBuffer_Unlock(b, p1, n1, p2, n2);
+    }
+    aw->ds = ds; aw->dsb = b; aw->ds_wpos = 0;
+    if (FAILED(IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING))) {
+        IDirectSoundBuffer_Release(b); IDirectSound_Release(ds);
+        aw->ds = aw->dsb = NULL; return 0;
+    }
+    return 1;
+}
+
+static DWORD WINAPI aw_ds_thread(LPVOID pv)
+{
+    audio_wave *aw = (audio_wave *)pv;
+    LPDIRECTSOUNDBUFFER b = (LPDIRECTSOUNDBUFFER)aw->dsb;
+    uint32_t chunk = aw->nframes * AW_CHANNELS * (uint32_t)sizeof(int16_t);
+    if (!SetThreadPriority(GetCurrentThread(), 15 /* THREAD_PRIORITY_TIME_CRITICAL */))
+        SetThreadPriority(GetCurrentThread(), 2 /* THREAD_PRIORITY_HIGHEST */);
+    while (aw->running) {
+        DWORD play = 0, wr = 0;
+        uint32_t ahead, space;
+        if (FAILED(IDirectSoundBuffer_GetCurrentPosition(b, &play, &wr))) { Sleep(5); continue; }
+        ahead = (aw->ds_wpos + aw->ds_bytes - play) % aw->ds_bytes;   /* queued, not played */
+        space = aw->ds_bytes - ahead;
+        if (ahead < chunk) ++aw->starved;               /* the cursor caught up with us */
+        {   uint32_t queued_bufs = ahead / chunk, back = aw->nbufs - (queued_bufs < aw->nbufs ? queued_bufs : aw->nbufs);
+            if (back > aw->drain_max) aw->drain_max = back;
+            aw->drain_hist[back <= AW_BUFFERS ? back : AW_BUFFERS]++; }
+        while (space >= chunk) {
+            void *p1, *p2; DWORD n1, n2;
+            aw->fill(aw->ctx, aw->buf[0], aw->nframes);
+            audio_rec_feed(aw->buf[0], aw->nframes * AW_CHANNELS);
+            if (SUCCEEDED(IDirectSoundBuffer_Lock(b, aw->ds_wpos, chunk, &p1, &n1, &p2, &n2, 0))) {
+                CopyMemory(p1, aw->buf[0], n1);
+                if (p2) CopyMemory(p2, (BYTE *)aw->buf[0] + n1, n2);
+                IDirectSoundBuffer_Unlock(b, p1, n1, p2, n2);
+            } else aw->underruns++;
+            aw->ds_wpos = (aw->ds_wpos + chunk) % aw->ds_bytes;
+            space -= chunk;
+        }
+        Sleep(2);
+    }
+    IDirectSoundBuffer_Stop(b);
+    return 0;
+}
+
 static int aw_bind(audio_wave *aw)
 {
     aw->mod = LoadLibraryA("winmm.dll");
@@ -135,6 +218,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
          wrong would silently pin the experiment at one value while appearing to vary it,
          which is the failure mode this counter exists to avoid. */
     uint32_t want_bufs = aw->nbufs, want_frames = aw->nframes;
+    int want_ds = aw->want_ds;                  /* #234: preserved like the lead */
     for (i = 0; i < sizeof(*aw); ++i) p[i] = 0;
     if (!want_bufs)   want_bufs   = AW_DEF_BUFFERS;     /* 0 = "leave it alone"  */
     if (want_bufs < 2) want_bufs = 2;
@@ -144,6 +228,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     if (want_frames > AW_FRAMES)     want_frames = AW_FRAMES;
     aw->nbufs   = want_bufs;
     aw->nframes = want_frames;
+    aw->want_ds = want_ds;
 
     aw->hz = hz ? hz : 44100;
     aw->fill = fill; aw->ctx = ctx;
@@ -158,13 +243,15 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
         fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
         fmt.cbSize = 0;
         aw->event = CreateEventA(NULL, FALSE, FALSE, NULL);
-        if (p_waveOutOpen(&aw->hwo, WAVE_MAPPER, &fmt,
+        if (aw->want_ds && aw_ds_open(aw, &fmt)) {     /* #234: DirectSound first...   */
+            aw->using_ds = 1; aw->silent = 0;
+        } else if (p_waveOutOpen(&aw->hwo, WAVE_MAPPER, &fmt,  /* ...WinMM otherwise */
                           (DWORD_PTR)aw->event, 0, CALLBACK_EVENT) == 0)
             aw->silent = 0;
         /* ⚠ ASK THE DRIVER WHAT ITS VOLUME IS. Every other counter here can read
              perfect while the machine is silent, because Windows' own WAVE slider
              attenuates after us. Read, never written -- see audio_wave.h. */
-        if (!aw->silent && p_waveOutGetVolume) {
+        if (!aw->silent && !aw->using_ds && p_waveOutGetVolume) {
             DWORD v = 0;
             if (p_waveOutGetVolume(aw->hwo, &v) == 0) {
                 aw->dev_volume = (uint32_t)v; aw->dev_volume_ok = 1;
@@ -175,7 +262,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     }
 
     aw->running = 1;
-    aw->thread = CreateThread(NULL, 0, aw_thread, aw, 0, NULL);
+    aw->thread = CreateThread(NULL, 0, aw->using_ds ? aw_ds_thread : aw_thread, aw, 0, NULL);
     if (!aw->thread) { aw->running = 0; return 1; }
     return aw->silent ? 1 : 0;
 }
@@ -187,6 +274,8 @@ void audio_wave_stop(audio_wave *aw)
     if (aw->event) SetEvent(aw->event);
     if (aw->thread) { WaitForSingleObject(aw->thread, 500); CloseHandle(aw->thread); }
     if (!aw->silent && aw->hwo && p_waveOutClose) p_waveOutClose(aw->hwo);
+    if (aw->dsb) { IDirectSoundBuffer_Release((LPDIRECTSOUNDBUFFER)aw->dsb); aw->dsb = NULL; }
+    if (aw->ds)  { IDirectSound_Release((LPDIRECTSOUND)aw->ds); aw->ds = NULL; }
     audio_wave_midi_silence(aw);          /* #214: a held note must not outlive us */
     if (aw->hmidi && p_midiOutClose) p_midiOutClose(aw->hmidi);
     if (aw->event) CloseHandle(aw->event);

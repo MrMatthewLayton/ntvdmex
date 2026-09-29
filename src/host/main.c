@@ -10273,6 +10273,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_OSD, SET_BUFFERED,                       /* #217 */
     SET_BEHAVE,                                  /* #167 */
     SET_TINT,                                    /* #229 */
+    SET_AUDIOAPI,                                /* #234 */
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
@@ -27196,7 +27197,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
+    g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
+        aq = zput(aq, g_wave.using_ds ? "DirectSound" : g_wave.silent ? "none (silent pump)" : "WinMM");
+        if (g_wave.want_ds && !g_wave.using_ds) aq = zput(aq, " (DirectSound asked for, would not open)");
+        aq = zput(aq, "\r\n"); log_append(LOG_PATH, ab, aq); }
     /* cfg\wavrec.flag: record the whole run's audio -- see host_rec_finish. */
     if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
         int rr = aw_rec_start(WAVREC_PATH, g_wave.hz);

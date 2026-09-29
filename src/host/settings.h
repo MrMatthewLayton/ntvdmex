@@ -68,6 +68,7 @@ typedef enum {
     SET_BOOTFROM,
     SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
     SET_TINT,                   /* #229: colour filter                            */
+    SET_AUDIOAPI,               /* #234: WinMM / DirectSound                      */
     SET_COUNT
 } set_id;
 
@@ -261,6 +262,8 @@ static const set_def SET_DEFS[SET_COUNT] = {
 /* #229 (docs/EMULATION.md): Default / Sepia / Monochrome white, green, orange. */
 { "ColourFilter",      IDC_S_TINT,        SK_COMBO,      0,  0,
                                           PRESENT_TINT_COUNT - 1, PRESENT_TINT_ITEMS },
+/* #234: default WinMM, what every build so far has used; DirectSound falls back to it. */
+{ "AudioOutput",       IDC_S_AUDIOAPI,    SK_COMBO,      0,  0,   1, "WinMM|DirectSound" },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {

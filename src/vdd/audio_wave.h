@@ -97,6 +97,13 @@ typedef struct audio_wave {
     int       dev_volume_ok;            /* 0 = the driver would not tell us        */
     uint32_t  nbufs;                    /* buffers actually queued: the LEAD     */
     uint32_t  nframes;                  /* frames per buffer: the GRANULARITY    */
+    /* #234 (docs/EMULATION.md): WinMM or DirectSound. Set by the caller BEFORE
+       audio_wave_start (preserved across its zeroing, like nbufs); `using_ds` says
+       which one actually opened -- DirectSound falls back to WinMM if it will not. */
+    int       want_ds;
+    int       using_ds;
+    void     *ds, *dsb;                 /* IDirectSound, IDirectSoundBuffer      */
+    uint32_t  ds_bytes, ds_wpos;        /* ring size, next byte we write         */
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
     unsigned char hdr[AW_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */
