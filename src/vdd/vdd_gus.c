@@ -42,18 +42,55 @@ static uint16_t pos_get_lo(uint32_t pos, int nine_bit_frac)
 
 /* ---- the latches (ref §5) ---------------------------------------------------------- */
 
+/* The two 3-bit codes of the 2XB latches. Code 0 is "no line" in both tables. */
 static const uint8_t k_irq_map[8] = { 0, 2, 5, 3, 7, 11, 12, 15 };
 static const uint8_t k_dma_map[8] = { 0, 1, 3, 5, 6, 7, 0, 0 };
-static uint8_t gus_irq_line(const gus_state *st)
+static uint8_t gus_code_of(const uint8_t *map, uint8_t line)
 {
-    uint8_t l = k_irq_map[st->irq_latch & 7];
-    return l ? l : st->irq;
+    uint8_t c;
+    for (c = 1; c < 8; ++c) if (map[c] && map[c] == line) return c;
+    return 0;
 }
-static uint8_t gus_dma_line(const gus_state *st)
+
+/* #190: decode the latches into the lines the card drives (ref §5).
+     IRQ latch: bits 2-0 GF1, 5-3 MIDI, bit 6 = both on the GF1 line.
+     DMA latch: bits 2-0 DRAM, 5-3 record, bit 6 = both on the DRAM channel.
+   2X0 bit 4 is the mix register's own "combine the GF1 and MIDI IRQs"; either asks
+   for one line. */
+static void gus_latch_decode(gus_state *st)
 {
-    uint8_t l = k_dma_map[st->dma_latch & 7];
-    return l ? l : st->dma_ch;
+    st->gf1_irq_line  = k_irq_map[st->irq_latch & 7];
+    st->midi_irq_line = ((st->irq_latch & 0x40) || (st->mix & 0x10))
+                      ? st->gf1_irq_line : k_irq_map[(st->irq_latch >> 3) & 7];
+    st->dram_dma_line = k_dma_map[st->dma_latch & 7];
+    st->rec_dma_line  = (st->dma_latch & 0x40) ? st->dram_dma_line
+                                               : k_dma_map[(st->dma_latch >> 3) & 7];
 }
+
+/* 2X0 bit 3 powers the IRQ and DMA drivers: with it clear the card drives NO line,
+   whatever the latches say (ref §5). */
+static int gus_drivers_on(const gus_state *st) { return (st->mix & 0x08) != 0; }
+static uint8_t gus_dram_dma(const gus_state *st) { return gus_drivers_on(st) ? st->dram_dma_line : 0; }
+static uint8_t gus_rec_dma(const gus_state *st)  { return gus_drivers_on(st) ? st->rec_dma_line  : 0; }
+
+/* ---- the MIDI UART, a 6850 (ref §9) ---------------------------------------------- */
+
+/* The ACIA's own interrupt request: receive full with CR7 (receive IRQ enable), or
+   transmit empty with CR6-5 = 01 -- the only one of the four transmit-control codes
+   that enables the transmit IRQ (the others are RTS high, and RTS low + break).
+   While CR1-0 = 11 the ACIA is held in master reset and requests nothing. */
+static int gus_midi_tx_irq(const gus_state *st)
+{
+    return (st->midi_ctrl & 0x03) != 0x03 && (st->midi_ctrl & 0x60) == 0x20
+        && (st->midi_stat & GUS_ACIA_TDRE);
+}
+static int gus_midi_rx_irq(const gus_state *st)
+{
+    return (st->midi_ctrl & 0x03) != 0x03 && (st->midi_ctrl & 0x80)
+        && (st->midi_stat & GUS_ACIA_RDRF);
+}
+/* 2XB bank 6 bit 1: the MIDI port's address decode. Off, 3X0/3X1 are an empty bus. */
+static int gus_midi_decoded(const gus_state *st) { return (st->jumper & 0x02) != 0; }
 
 /* ---- interrupts (ref §6) -------------------------------------------------------- */
 
@@ -72,6 +109,8 @@ static uint8_t gus_irq_status(const gus_state *st)     /* 2X6 */
         if (st->v[i].ctrl & 0x80)  wave = 1;
         if (st->v[i].vctrl & 0x80) vol = 1;
     }
+    if (gus_midi_tx_irq(st)) s |= 0x01;              /* #190: the UART's two sources */
+    if (gus_midi_rx_irq(st)) s |= 0x02;
     if (st->t1_exp) s |= 0x04;
     if (st->t2_exp) s |= 0x08;
     if (wave)       s |= 0x20;
@@ -79,22 +118,33 @@ static uint8_t gus_irq_status(const gus_state *st)     /* 2X6 */
     if (st->dma_tc || st->samp_tc) s |= 0x80;
     return s;
 }
-/* The card's line is asserted while any ENABLED source is pending and the master IRQ
-   enable (4Ch bit 2) is on. The host latches an interrupt per call, so raise on the
-   rising edge only: a source the guest has not cleared does not interrupt twice. */
+/* One physical line: raise on its rising edge only (the host latches an interrupt per
+   call, so a source the guest has not cleared must not interrupt twice). */
+static void gus_line(gus_state *st, uint8_t line, int level, uint8_t *up)
+{
+    if (!line) level = 0;
+    if (level && !*up && st->bus) {
+        vdd_raise_irq(st->bus, line);
+        st->irqs_raised++;
+    }
+    *up = (uint8_t)(level != 0);
+}
+/* The card's lines are asserted while any ENABLED source is pending, the master IRQ
+   enable (4Ch bit 2) is on and 2X0 bit 3 powers the drivers (ref §5, §6).
+   #190: the GF1 sources go out on the IRQ latch's GF1 line, the UART's on its MIDI
+   line -- which is the GF1 line itself when the latch or 2X0 bit 4 combines them. */
 static void gus_irq_update(gus_state *st)
 {
-    int any = gus_voice_pending(st)
+    int gf1 = gus_voice_pending(st)
            || (st->dma_tc && (st->dma_ctrl & 0x20))
            || (st->samp_tc && (st->samp_ctrl & 0x20))
            || (st->t1_exp && (st->timer_ctrl & 0x04))
            || (st->t2_exp && (st->timer_ctrl & 0x08));
-    if (!(st->reset & 0x04)) any = 0;
-    if (any && !st->line_up && st->bus) {
-        vdd_raise_irq(st->bus, gus_irq_line(st));
-        st->irqs_raised++;
-    }
-    st->line_up = (uint8_t)(any != 0);
+    int midi = gus_midi_tx_irq(st) || gus_midi_rx_irq(st);
+    uint8_t gl = st->gf1_irq_line, ml = st->midi_irq_line;
+    if (!(st->reset & 0x04) || !gus_drivers_on(st)) gf1 = midi = 0;
+    if (ml == gl) { gus_line(st, gl, gf1 || midi, &st->line_up); st->midi_line_up = 0; }
+    else          { gus_line(st, gl, gf1, &st->line_up); gus_line(st, ml, midi, &st->midi_line_up); }
 }
 
 /* 8Fh: one pending voice event per read, cleared by the read (ref §6). Bits 7/6 are
@@ -123,37 +173,105 @@ static uint8_t gus_irq_fifo(gus_state *st)
 /* The 16-bit-channel address translation, undone (ref §2.1). */
 static uint32_t gus_untranslate16(uint32_t t) { return ((t & 0x1FFFFu) << 1) | (t & 0xC0000u); }
 
+/* Is the 8237 ready to serve a DRQ on `ch`? A masked channel is not: the card holds
+   DRQ and waits, exactly as it would on the bus. (vdd_dma_remaining cannot say so --
+   it is count + 1 and never 0.) */
+static int gus_dma_ready(const gus_state *st, uint8_t ch)
+{
+    return st->dma && ch && !st->dma->ch[ch & 7].masked;
+}
+
+/* The DRAM DMA (ref §3), both directions, instantaneous once the 8237 serves it.
+     41h bit 1 = 0: PC -> card, an upload (vdd_dma_read pulls guest memory).
+     41h bit 1 = 1: card -> PC, #190: DRAM contents pushed into guest memory through
+                    vdd_dma_write -- the guest programs its 8237 channel for a WRITE
+                    (device -> memory) transfer, as for any card that is read.
+   Bit 7 inverts the MSB of the data passing through, in both directions: it is a
+   sign conversion, and converting on the way out undoes converting on the way in. */
 static void gus_dma_try(gus_state *st)
 {
-    uint8_t ch = gus_dma_line(st);
+    uint8_t ch = gus_dram_dma(st);
     uint32_t left, addr, n;
-    int tc = 0;
+    int tc = 0, card_to_pc;
     uint8_t buf[512];
-    if (!st->dma_waiting || !st->dma || !ch || !st->dram) return;
+    if (!st->dma_waiting || !st->dram || !gus_dma_ready(st, ch)) return;
     left = vdd_dma_remaining(st->dma, ch);
-    if (!left) return;                                  /* the 8237 is not ready yet */
+    card_to_pc = (st->dma_ctrl & 0x02) != 0;
     addr = (uint32_t)st->dma_addr << 4;
     if (st->dma_ctrl & 0x04) addr = gus_untranslate16(addr);
     while (left && !tc) {
         uint32_t k, chunk = left > sizeof buf ? (uint32_t)sizeof buf : left;
-        if (st->dma_ctrl & 0x02) break;                 /* card -> PC: not modelled   */
-        n = vdd_dma_read(st->dma, ch, buf, chunk, &tc);
-        if (!n) break;
-        for (k = 0; k < n; ++k) {
-            uint8_t b = buf[k];
-            /* bit 7 = invert the MSB: bit 7 of every byte for 8-bit data, bit 15 of
-               every word (the odd byte) for 16-bit data (41h bit 6 written = 16-bit). */
-            if (st->dma_ctrl & 0x80) {
-                if (!(st->dma_ctrl & 0x40) || ((addr + k) & 1)) b ^= 0x80;
+        if (card_to_pc) {
+            for (k = 0; k < chunk; ++k) {
+                uint8_t b = st->dram[(addr + k) & (GUS_DRAM_SIZE - 1)];
+                if ((st->dma_ctrl & 0x80) && (!(st->dma_ctrl & 0x40) || ((addr + k) & 1))) b ^= 0x80;
+                buf[k] = b;
             }
-            st->dram[(addr + k) & (GUS_DRAM_SIZE - 1)] = b;
+            n = vdd_dma_write(st->dma, ch, buf, chunk, &tc);
+            st->dma_down_bytes += n;
+        } else {
+            n = vdd_dma_read(st->dma, ch, buf, chunk, &tc);
+            for (k = 0; k < n; ++k) {
+                uint8_t b = buf[k];
+                /* bit 7 = invert the MSB: bit 7 of every byte for 8-bit data, bit 15 of
+                   every word (the odd byte) for 16-bit data (41h bit 6 written = 16-bit). */
+                if (st->dma_ctrl & 0x80) {
+                    if (!(st->dma_ctrl & 0x40) || ((addr + k) & 1)) b ^= 0x80;
+                }
+                st->dram[(addr + k) & (GUS_DRAM_SIZE - 1)] = b;
+            }
+            st->dma_bytes += n;
         }
-        addr += n; left -= n; st->dma_bytes += n;
+        if (!n) break;
+        addr += n; left -= n;
     }
     st->dma_waiting = 0;
-    st->dma_uploads++;
+    if (card_to_pc) st->dma_downloads++; else st->dma_uploads++;
     st->dma_tc = 1;
     gus_irq_update(st);
+}
+
+/* ---- the record path (ref §2.1: 48h rate, 49h control) ------------------------------ */
+
+/* #190: sampling. 49h bit 0 starts the ADC; each sample goes card -> PC through the
+   8237 on the RECORD DMA channel (the DMA latch's bits 5-3, or the DRAM channel when
+   bit 6 combines them) at 9 878 400 / (16 x (48h + 2)) Hz, two bytes a sample when
+   bit 1 asks for stereo. There is no input device behind line in or the mic, so every
+   byte is the ADC's MIDSCALE: 80h -- 8-bit offset binary, the PC's unsigned sample
+   format -- or 00h when 49h bit 7 inverts the MSB for signed data. Paced by rendered
+   GF1 time, like the timers, so a program that times its take sees the rate it asked
+   for; at terminal count the take stops (bit 0 is dropped) and 49h reports TC pending
+   in bit 6, interrupting when bit 5 asked. A masked channel holds the ADC, as on the
+   bus. */
+static void gus_record(gus_state *st, uint32_t ns)
+{
+    uint8_t ch = gus_rec_dma(st), buf[2];
+    uint32_t rate, per, unit;
+    int tc = 0;
+    if (!(st->samp_ctrl & 0x01)) return;
+    if (!gus_dma_ready(st, ch)) return;
+    unit = (ch & 4) ? 2u : 1u;                       /* a 16-bit channel moves words */
+    rate = 9878400u / (16u * ((uint32_t)st->samp_freq + 2u));
+    per  = 1000000000u / (rate ? rate : 1u);
+    st->samp_acc_ns += ns;
+    while (st->samp_acc_ns >= per && (st->samp_ctrl & 0x01)) {
+        st->samp_acc_ns -= per;
+        st->samp_pend = (uint8_t)(st->samp_pend + ((st->samp_ctrl & 0x02) ? 2 : 1));
+        while (st->samp_pend >= unit) {
+            uint32_t n;
+            buf[0] = buf[1] = (st->samp_ctrl & 0x80) ? 0x00 : 0x80;
+            n = vdd_dma_write(st->dma, ch, buf, unit, &tc);
+            if (!n) return;                          /* masked under us: hold the ADC */
+            st->samp_pend = (uint8_t)(st->samp_pend - n);
+            st->samp_bytes += n;
+            if (tc) {
+                st->samp_ctrl &= (uint8_t)~0x01;
+                st->samp_tc = 1; st->samp_acc_ns = 0; st->samp_pend = 0;
+                gus_irq_update(st);
+                return;
+            }
+        }
+    }
 }
 
 /* ---- the chip reset (4Ch bit 0 = 0) ------------------------------------------------- */
@@ -171,8 +289,9 @@ static void gus_chip_reset(gus_state *st)
     st->active = 14;
     st->dma_ctrl = 0; st->dma_tc = 0; st->dma_waiting = 0;
     st->timer_ctrl = 0; st->samp_ctrl = 0; st->samp_tc = 0;
+    st->samp_acc_ns = 0; st->samp_pend = 0;
     st->t1_run = st->t2_run = 0; st->t1_exp = st->t2_exp = 0;
-    st->line_up = 0;
+    st->line_up = 0; st->midi_line_up = 0;
 }
 
 /* ---- register write / read ------------------------------------------------------- */
@@ -232,8 +351,12 @@ static void gus_reg_write(gus_state *st, uint8_t r, uint16_t val)
     case 0x47: st->t2_load = b; st->t2_val = b; break;
     case 0x48: st->samp_freq = b; break;
     case 0x49:
+        /* #190: a take runs through the 8237 at the 48h rate -- see gus_record. */
+        if ((b & 0x01) && !(st->samp_ctrl & 0x01)) {
+            st->samp_acc_ns = 0; st->samp_pend = 0; st->samp_takes++;
+        }
         st->samp_ctrl = b;
-        if (b & 0x01) { st->samp_tc = 1; gus_irq_update(st); }   /* no input: an empty take */
+        gus_irq_update(st);
         break;
     case 0x4B: st->jtrim = b; break;
     case 0x4C:
@@ -288,7 +411,17 @@ static void gus_out(void *self, uint16_t port, uint8_t w, uint32_t val)
     int arm = 0;
     st->io_writes++;
     switch (off) {
-    case 0x000: st->mix = (uint8_t)val; arm = 1; break;
+    case 0x000:
+        /* Mix control (ref §5). Bit 0 line in off and bit 2 mic on reach nothing here --
+           there is no input device, the ADC hears silence either way; bit 1 (line out
+           off) mutes the render; bit 3 powers the IRQ/DMA drivers; bit 4 combines the
+           GF1 and MIDI IRQs; bit 5 loops the UART's transmit back to its receive; bit 6
+           picks which latch the next 2XB write reaches. */
+        st->mix = (uint8_t)val; arm = 1;
+        gus_latch_decode(st);
+        gus_irq_update(st);
+        gus_dma_try(st);                             /* drivers just powered: a DRQ waits */
+        break;
     case 0x008: st->adlib_idx = (uint8_t)val; break;
     case 0x009:
         if (st->adlib_idx == 4) {
@@ -302,15 +435,56 @@ static void gus_out(void *self, uint16_t port, uint8_t w, uint32_t val)
     case 0x00B:
         /* The write must be the NEXT one after 2X0, or it is locked out (ref §5). */
         if (!st->latch_armed) { st->latch_locked_out++; break; }
-        if (st->regctl == 0) {
+        /* #190: 2XF picks the bank behind 2XB (board rev 3.4+, ref §5). */
+        switch (st->regctl) {
+        case 0:                                      /* the classic IRQ / DMA latches */
             if (st->mix & 0x40) st->irq_latch = (uint8_t)(val & 0x7F);
             else                st->dma_latch = (uint8_t)(val & 0x7F);
+            gus_latch_decode(st);
+            gus_irq_update(st);
+            gus_dma_try(st);
+            break;
+        case 5:
+            /* "Write 0 to clear power-up IRQs": whatever the card was asserting when
+               it powered up is let go. The lines drop, so a source still pending
+               afterwards interrupts afresh on the next update. */
+            st->reg_clr = (uint8_t)val;
+            if (!(val & 0xFF)) { st->line_up = 0; st->midi_line_up = 0; }
+            break;
+        case 6:                                      /* the jumper register */
+            st->jumper = (uint8_t)val;
+            break;
+        default: break;                              /* no register behind the rest */
         }
-        /* regctl 5 = "write 0 to clear power-up IRQs", 6 = the jumper register: stored nowhere */
         break;
     case 0x00F: st->regctl = (uint8_t)(val & 7); break;
-    case 0x100: st->midi_ctrl = (uint8_t)val; break;
-    case 0x101: break;                               /* MIDI transmit: no port behind it */
+    case 0x100:
+        /* 6850 control (ref §9). CR1-0 = 11 is master reset: receive emptied, overrun
+           cleared, transmitter empty -- and the ACIA held until a different code. */
+        if (!gus_midi_decoded(st)) break;
+        st->midi_ctrl = (uint8_t)val;
+        if ((val & 0x03) == 0x03) { st->midi_stat = GUS_ACIA_TDRE; st->midi_rx = 0; }
+        gus_irq_update(st);
+        break;
+    case 0x101: {
+        /* 6850 transmit. The byte leaves at once (the wire is not modelled at 31 250
+           baud: the synth behind the sink is not a wire), so TDRE is back before the
+           guest can look -- but it DID drop: with the transmit IRQ on, each byte is a
+           fresh empty edge, which is what a driver's IRQ-driven send loop waits for.
+           2X0 bit 5 loops TxD to RxD inside the card: the byte is received, and does
+           not reach MIDI OUT. */
+        uint8_t byte = (uint8_t)val;
+        if (!gus_midi_decoded(st) || (st->midi_ctrl & 0x03) == 0x03) break;
+        st->midi_stat &= (uint8_t)~GUS_ACIA_TDRE;
+        gus_irq_update(st);
+        if (st->mix & 0x20) {
+            if (st->midi_stat & GUS_ACIA_RDRF) st->midi_stat |= GUS_ACIA_OVRN;
+            st->midi_rx = byte; st->midi_stat |= GUS_ACIA_RDRF; st->midi_rx_bytes++;
+        } else if (st->midi_sink) st->midi_sink(st->midi_sink_ctx, byte);
+        st->midi_tx++;
+        st->midi_stat |= GUS_ACIA_TDRE;
+        gus_irq_update(st);
+        break; }
     case 0x102: st->page = (uint8_t)(val & 0x1F); break;
     case 0x103: st->sel = (uint8_t)val; break;
     case 0x104:
@@ -345,8 +519,17 @@ static void gus_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
                 if (r) r |= 0x80;
                 break;
     case 0x00F: r = st->regctl; break;
-    case 0x100: r = 0x02; break;                     /* 6850 status: transmitter empty */
-    case 0x101: r = 0x00; break;
+    case 0x100:                                      /* 6850 status (ref §9) */
+        if (!gus_midi_decoded(st)) break;
+        r = st->midi_stat;
+        if (gus_midi_tx_irq(st) || gus_midi_rx_irq(st)) r |= GUS_ACIA_IRQ;
+        break;
+    case 0x101:                                      /* 6850 receive: clears RDRF, OVRN */
+        if (!gus_midi_decoded(st)) break;
+        r = st->midi_rx;
+        st->midi_stat &= (uint8_t)~(GUS_ACIA_RDRF | GUS_ACIA_OVRN);
+        gus_irq_update(st);
+        break;
     case 0x102: r = st->page; break;
     case 0x103: r = st->sel; break;
     case 0x104: {
@@ -515,6 +698,10 @@ static void gus_render(gus_state *st, int16_t *out, uint32_t n, int stereo)
             }
         }
         gus_timers(st, ns);
+        gus_record(st, ns);
+        /* #190: 2X0 bit 1 = line out DISABLED (active-high, ref §5). The voices still
+           run -- the GF1 does not know the amplifier is off -- but nothing is heard. */
+        if (st->mix & 0x02) { acc = accl = accr = 0; st->out_muted++; }
         m = gus_clip(acc >> 1);                      /* headroom for many voices */
         if (stereo) { out[2*i] = gus_clip(accl >> 1); out[2*i+1] = gus_clip(accr >> 1); }
         else          out[i] = m;
@@ -538,8 +725,29 @@ void vdd_gus_reset(void *self)
     gus_state *st = (gus_state *)self;
     st->page = st->sel = 0; st->lo_latch = 0;
     st->reset = 0; st->dram_io = 0; st->dma_addr = 0;
-    st->mix = 0x03; st->latch_armed = 0; st->irq_latch = st->dma_latch = 0; st->regctl = 0;
-    st->adlib_idx = 0; st->adlib_mask = 0; st->midi_ctrl = 0;
+    st->latch_armed = 0; st->regctl = 0; st->reg_clr = 0;
+    st->adlib_idx = 0; st->adlib_mask = 0;
+    /* #190: the card as ULTRINIT leaves it, because that is the card every DOS program
+       meets -- nothing on a PC runs before the boot-time init that a real GUS owner
+       has in AUTOEXEC.BAT, and a program that only POLLS (heaven7) never programs
+       the board itself. So: the latches hold ULTRASND's own numbers, combined where
+       they are equal (as the SDK's UltraSetInterface does), line out on, line in off,
+       drivers powered (2X0 = 09h, the SDK's final write, ref §5), both decodes
+       enabled in the jumper register. A value with no code in the latch table cannot
+       be latched, and is driven as it is. */
+    st->mix = 0x09;
+    st->jumper = 0x06;
+    {
+        uint8_t mi = st->midi_irq ? st->midi_irq : st->irq;
+        uint8_t rd = st->rec_dma  ? st->rec_dma  : st->dma_ch;
+        st->irq_latch = (uint8_t)(gus_code_of(k_irq_map, st->irq)
+                      | (mi == st->irq ? 0x40 : (gus_code_of(k_irq_map, mi) << 3)));
+        st->dma_latch = (uint8_t)(gus_code_of(k_dma_map, st->dma_ch)
+                      | (rd == st->dma_ch ? 0x40 : (gus_code_of(k_dma_map, rd) << 3)));
+        st->gf1_irq_line = st->irq; st->dram_dma_line = st->dma_ch;
+        st->midi_irq_line = mi;     st->rec_dma_line  = rd;
+    }
+    st->midi_ctrl = 0x00; st->midi_stat = GUS_ACIA_TDRE; st->midi_rx = 0;   /* reset, then released */
     gus_chip_reset(st);
 }
 

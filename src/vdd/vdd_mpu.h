@@ -57,6 +57,15 @@ typedef struct mpu_state {
 
 int  vdd_mpu_init(vdd_bus *b, void *self);
 void vdd_mpu_reset(void *self);
+
+/* #190: one raw MIDI byte into this instance's message assembler (running status,
+   realtime, sysex -- the same rules as the data port in UART mode), whatever mode the
+   instance is in and without touching its ports. This is how ANOTHER device's MIDI
+   byte stream reaches the synth: the GUS's 6850 UART transmits bytes, and the host
+   gives it a private mpu_state (never added to the bus) whose `sink` is the synth.
+   A private one, because two byte streams sharing one assembler would corrupt each
+   other's running status. */
+void vdd_mpu_feed(mpu_state *st, uint8_t byte);
 static inline ntvdd vdd_mpu_device(mpu_state *st)
 { ntvdd d; d.name = "mpu401"; d.init = vdd_mpu_init; d.reset = vdd_mpu_reset;
   d.shutdown = 0; d.self = st; return d; }
