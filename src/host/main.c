@@ -6053,6 +6053,12 @@ static void host_midi_sink(void *ctx, uint32_t msg)
     audio_wave_midi(&g_wave, msg);
 }
 
+/* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
+   the bus) turns them into MIDI messages for the same synth. Its own, not g_mpu's: two
+   byte streams through one assembler would corrupt each other's running status. */
+static mpu_state g_gusmidi;
+static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; vdd_mpu_feed(&g_gusmidi, b); }
+
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
    thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
    Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
@@ -27077,6 +27083,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
     if (g_gus_on) {                             /* decided at startup: see NOGUS_FLAG's read */
         g_gus.dma = &g_dma; g_gus.dram = g_gus_dram;
+        g_gusmidi.sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
+        g_gus.midi_sink = gus_midi_to_synth;
         g_gus_dev = vdd_gus_device(&g_gus);
         vdd_bus_add(&g_bus, &g_gus_dev);
     }
