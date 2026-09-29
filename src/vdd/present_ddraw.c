@@ -153,17 +153,58 @@ static void mem_release(present_ddraw *pd)
     pd->mem_dc = pd->mem_bmp = pd->mem_old = 0; pd->mem_w = pd->mem_h = 0;
 }
 
-static void gdi_present(present_ddraw *pd)
+/* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
+   the frame is direct colour or raster-split. Shared by the window/borderless path and
+   (#223) the exclusive DirectDraw path, so both draw the same picture the same way.
+   `scale2x` lets the caller ask for the pixel-art doubler first (GDI's Scaler). */
+typedef struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } snap_dib_t;
+static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int *psh,
+                               int scale2x)
 {
-    HDC hdc, win, mem; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
+    static uint32_t s_rgb32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* a split frame resolved per row, or ARGB */
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
-    struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
-    static uint32_t s_rgb32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* a split frame resolved per row, or ARGB */
+    unsigned i;
     /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
        does -- it is already ARGB, so it needs no resolving, just no palette. */
     int direct = (pd->snap_bpp == 32);
     int split = !direct && pd->snap_split && sw <= 640 && sh <= 480;
+    /* Scale2x first: it is a property of the FRAME, so it happens before the
+       stretch and the stretch then works from a source with twice the detail.
+       (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
+       snap32 either.) */
+    if (scale2x && !split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
+        && sw * 2 <= 1280 && sh * 2 <= 960) {
+        present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
+        pix = s_scaled; sw *= 2; sh *= 2;
+    }
+    ZeroMemory(bi, sizeof *bi);
+    bi->h.biSize = sizeof(BITMAPINFOHEADER);
+    bi->h.biWidth = (LONG)sw; bi->h.biHeight = -(LONG)sh;                /* top-down */
+    bi->h.biPlanes = 1; bi->h.biBitCount = 8; bi->h.biCompression = BI_RGB;
+    for (i = 0; i < 256; ++i) {
+        uint32_t a = pd->snap_pal[i];
+        bi->c[i].rgbRed = (BYTE)(a >> 16); bi->c[i].rgbGreen = (BYTE)(a >> 8);
+        bi->c[i].rgbBlue = (BYTE)a; bi->c[i].rgbReserved = 0;
+    }
+    if (split || direct) {             /* resolve to a 32bpp DIB */
+        int y, x;
+        for (y = 0; y < sh; ++y) {
+            uint32_t *drow = s_rgb32 + (size_t)y * sw;
+            for (x = 0; x < sw; ++x) drow[x] = snap_px(pd, y, x) & 0x00FFFFFFu;
+        }
+        bi->h.biBitCount = 32; pix = (const uint8_t *)s_rgb32;
+    }
+    *psw = sw; *psh = sh;
+    return pix;
+}
+
+static void gdi_present(present_ddraw *pd)
+{
+    HDC hdc, win, mem; RECT rc; int cw, ch, dx, dy, dw, dh;
+    const uint8_t *pix;
+    int sw, sh;
+    snap_dib_t bi;
     win = GetDC(pd->hwnd);
     if (!win) return;
     GetClientRect(pd->hwnd, &rc);
@@ -177,36 +218,7 @@ static void gdi_present(present_ddraw *pd)
     mem = mem_target(pd, win, cw, ch);
     hdc = mem ? mem : win;
 
-    /* Scale2x first: it is a property of the FRAME, so it happens before the
-       stretch and the stretch then works from a source with twice the detail. */
-    /* (A split frame skips scale2x: the doubled source would need a doubled
-        32bpp buffer, and the combination is rare -- a 16-colour raster trick under a
-        pixel-art scaler. The picture is still right, just not doubled.) */
-    /* scale2x is an 8bpp pixel-art scaler; a 16/24bpp photo-real frame is not its
-       job and it cannot read snap32 anyway. */
-    if (!split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
-        && sw * 2 <= 1280 && sh * 2 <= 960) {
-        present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
-        pix = s_scaled; sw *= 2; sh *= 2;
-    }
-
-    ZeroMemory(&bi, sizeof bi);
-    bi.h.biSize = sizeof(BITMAPINFOHEADER);
-    bi.h.biWidth = (LONG)sw; bi.h.biHeight = -(LONG)sh;                  /* top-down */
-    bi.h.biPlanes = 1; bi.h.biBitCount = 8; bi.h.biCompression = BI_RGB;
-    for (i = 0; i < 256; ++i) {
-        uint32_t a = pd->snap_pal[i];
-        bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
-        bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
-    }
-    if (split || direct) {             /* resolve to a 32bpp DIB */
-        int y, x;
-        for (y = 0; y < sh; ++y) {
-            uint32_t *drow = s_rgb32 + (size_t)y * sw;
-            for (x = 0; x < sw; ++x) drow[x] = snap_px(pd, y, x) & 0x00FFFFFFu;
-        }
-        bi.h.biBitCount = 32; pix = (const uint8_t *)s_rgb32;
-    }
+    pix = snap_dib(pd, &bi, &sw, &sh, 1);
     /* ⚠ THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
@@ -400,47 +412,6 @@ static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
     return 0;
 }
 
-/* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (user, s84: "Smoothness should come from
-     scaler/filter. With them off it should be stretched, sharp pixels, regardless of
-     which renderer is used.") A stretching Blt is FILTERED BY THE DRIVER, and
-     DirectDraw has no way to forbid it -- that was the whole softness. So with
-     Filtering = Nearest the frame is scaled HERE, nearest-neighbour, straight to its
-     final fw x fh in the staging surface, and the Blt that follows is 1:1, which a
-     driver copies as-is. Each source row is converted once; a destination row that
-     maps to the same source row is a memcpy of the previous one. 0 = ok. */
-static int fs_stage_scaled(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb, int fw, int fh)
-{
-    static int xmap[4096];
-    DDSURFACEDESC2 d;
-    DWORD bpp, bypp; int rsh,rb,gsh,gb,bsh,bb; int y, x, prev = -1;
-    BYTE *prow = NULL;
-    if (fw <= 0 || fh <= 0 || fw > 4096 || pd->snap_w <= 0 || pd->snap_h <= 0) return -1;
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    if (FAILED(IDirectDrawSurface7_Lock(fb, NULL, &d,
-                                        DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)))
-        return -1;
-    if ((int)d.dwWidth < fw || (int)d.dwHeight < fh) {
-        IDirectDrawSurface7_Unlock(fb, NULL);
-        return -1;
-    }
-    bpp = d.ddpfPixelFormat.dwRGBBitCount;
-    bypp = (bpp + 7) / 8;
-    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
-    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
-    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
-    for (x = 0; x < fw; ++x) xmap[x] = (int)((long long)x * pd->snap_w / fw);
-    for (y = 0; y < fh; ++y) {
-        BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
-        int sy = (int)((long long)y * pd->snap_h / fh);
-        if (sy == prev && prow) { CopyMemory(drow, prow, (size_t)fw * bypp); continue; }
-        for (x = 0; x < fw; ++x)
-            put_px(drow, x, bpp, snap_px(pd, sy, xmap[x]), rsh,rb,gsh,gb,bsh,bb);
-        prev = sy; prow = drow;
-    }
-    IDirectDrawSurface7_Unlock(fb, NULL);
-    return 0;
-}
-
 /* The fallback: nearest-neighbour straight into the back buffer, honouring the same
    fitted rectangle. Only reached if the driver refuses a stretch blt. */
 static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
@@ -522,16 +493,36 @@ static void fs_present(present_ddraw *pd)
     else
         present_fit(pd->fs_w, pd->fs_h, pd->aspect, &fx, &fy, &fw, &fh);
 
-    /* Filtering = Nearest: scale here, blit 1:1 (sharp). Bilinear: stage at frame
-       size and let the driver stretch -- its filtering IS the bilinear the user chose. */
-    {   int sharp = !pd->filter;
-        int sw = sharp ? fw : pd->snap_w, sh = sharp ? fh : pd->snap_h;
-        fb = fs_stage_surface(pd, sw, sh);
-    if (fb && pd->snap_w > 0 && pd->snap_h > 0
-        && (sharp ? fs_stage_scaled(pd, fb, fw, fh) : fs_stage(pd, fb)) == 0) {
+    /* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
+         from scaler/filter. With them off it should be stretched, sharp pixels,
+         regardless of which renderer is used.") A stretching Blt is FILTERED BY THE
+         DRIVER and DirectDraw cannot forbid it. With Filtering = Nearest the frame is
+         drawn into the back buffer's DC by GDI's StretchDIBits in COLORONCOLOR mode --
+         the same exact-pixel routine, and the same picture (snap_dib, with Scale2x),
+         as the GDI renderer. ⚠ Not a hand-written per-pixel stretch into video memory:
+         that was tried first and was unplayably slow on the rig (it read VRAM back to
+         copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear. */
+    if (!pd->filter && pd->snap_w > 0 && pd->snap_h > 0) {
+        HDC hd;
+        if (fx || fy) {                          /* letterboxed -> clear the bars */
+            DDBLTFX bfx;
+            ZeroMemory(&bfx, sizeof bfx); bfx.dwSize = sizeof bfx; bfx.dwFillColor = 0;
+            IDirectDrawSurface7_Blt(bk, NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
+        }
+        if (SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
+            snap_dib_t bi; int sw, sh;
+            const uint8_t *pix = snap_dib(pd, &bi, &sw, &sh, 1);
+            SetStretchBltMode(hd, COLORONCOLOR);
+            done = StretchDIBits(hd, fx, fy, fw, fh, 0, 0, sw, sh, pix,
+                                 (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY) > 0;
+            IDirectDrawSurface7_ReleaseDC(bk, hd);
+        }
+    }
+    fb = done ? NULL : fs_stage_surface(pd, pd->snap_w, pd->snap_h);
+    if (!done && fb && pd->snap_w > 0 && pd->snap_h > 0 && fs_stage(pd, fb) == 0) {
         RECT src, dst;
         src.left = 0; src.top = 0;
-        src.right = sw; src.bottom = sh;
+        src.right = pd->snap_w; src.bottom = pd->snap_h;
         dst.left = fx; dst.top = fy; dst.right = fx + fw; dst.bottom = fy + fh;
         if (fx || fy) {                          /* letterboxed -> clear the bars */
             DDBLTFX bfx;
@@ -540,7 +531,7 @@ static void fs_present(present_ddraw *pd)
                                     DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
         }
         done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
-    } }
+    }
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
     {   HDC hd;                                   /* #138 on the exclusive path */
         if (pd->hint_text && !pd->osd_off && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
