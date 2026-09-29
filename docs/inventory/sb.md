@@ -204,7 +204,7 @@ bit 1 (stereo, `vdd_sb.c:120`) are consumed; `80h`–`82h` are answered from sta
 | Resources: base `220/240/260/280`, IRQ `5/7/10/11`, DMA `1/3/5`, one struct for the card and `BLASTER` | **IMPL** | `main.c` `settings_apply` ≈`:10379`; applied at `g_sb.base = g_sbcfg.base` ≈`:26822`; `dos_env_blaster` `dos_env.h:101` | untested |
 | DSP version (`cfg\dspver.txt`, default 4.05) | **PART** | changes the `E1h` reply (`vdd_sb.c:26`, `:155-156`; read in `main.c` near `DSPVER_PATH`) and nothing else: an "SB 2.01" still accepts every 4.xx command and answers mixer `80h`–`82h`. It does choose the guest's driver path (DMX: `vdd_sb.h:43-53`) | Doom (`vdd_sb.h:43-53`) |
 | `SbModel` setting (`SB16|AWE32|SB Pro`) | **STORE** | `settings.h:217`; `SET_SBMODEL` is **read by nothing** in `src/` — the dialog offers three cards and every choice is the same one | — |
-| AWE32: EMU8000 wavetable (`6x0h`, `Ax0h`, `Ex0h`) | **MISS** | not modelled | — |
+| AWE32: EMU8000 wavetable (`6x0h`, `Ax0h`, `Ex0h`) | **PART** | the chip is modelled (`src/vdd/vdd_emu8k.c`, #233 — register by register in [emu8k.md](emu8k.md)) but **not on the host's bus yet**: no `E620` in `BLASTER`, not registered in `main.c` | `emu8k_test` (off-VM) |
 | `BLASTER` `T` and `H` | **PART** | `T3` (an SB 2.0) against a 4.05 DSP, recorded and left deliberately (`dos_env.h:71-77`); `H` omitted by default (`dos_env.h:59-63`) while mixer `81h` reports DMA 5 | Doom confirmed against this string (`dos_env.h:71-76`) |
 | No card fitted (`cfg\nosb.flag`): reset withholds `AAh` | **IMPL** | `vdd_sb.c:205-213`; read at `main.c` near `NOSB_PATH` | untested |
 | ACK gate (`cfg\sbgate.txt`) | **N/A** | a deliberate deviation from the hardware, **off by default** (`vdd_sb.c:27-33`, `:396-462`) | — |
