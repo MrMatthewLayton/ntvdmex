@@ -10510,9 +10510,14 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
      ⚠ VIDEO area, not client area: the status bar lives inside the client and must
        not be counted into the picture's aspect, or the lock is wrong by 23 pixels
        and gets wronger the smaller the window is. */
+/* #228: the aspect in force NOW -- the setting, with Auto resolved against the mode. */
+static int host_aspect(void)
+{
+    return present_aspect_auto((int)g_set.v[SET_ASPECT], g_pd.snap_w, g_pd.snap_h, g_pd.mode_vesa);
+}
 static void host_video_base(int *w, int *h)
 {
-    present_min_client((int)g_set.v[SET_ASPECT], w, h);
+    present_min_client(host_aspect(), w, h);
 }
 
 /* What the frame adds around the video: borders, caption, menu bar, status strip.
@@ -10647,6 +10652,20 @@ static void host_apply_winsize(HWND h, DWORD idx)
      business, which is the thing that makes people stop touching the menu. */
 static DWORD g_winsize_live = 0xFFFFFFFFu;   /* what the window is currently AT */
 static DWORD g_aspect_live  = 0xFFFFFFFFu;   /* ...and the shape it is that size IN */
+
+/* ── #228: AUTO FOLLOWS THE MODE. When the resolved shape changes -- a game switching
+     from 320x200 to a 1280x1024 VESA mode -- the window takes the new shape at the same
+     size setting. Fullscreen is left alone: its output is fitted per frame anyway. */
+static void aspect_auto_follow(HWND h)
+{
+    static int last = -1;
+    int now;
+    if (g_set.v[SET_ASPECT] != PRESENT_ASPECT_AUTO || !g_pd.snap_valid || g_pd.fullscreen) return;
+    now = host_aspect();
+    if (last == -1) { last = now; return; }
+    if (now != last) { last = now; host_apply_winsize(h, g_winsize_live != 0xFFFFFFFFu
+                                                         ? g_winsize_live : g_set.v[SET_WINSIZE]); }
+}
 
 static void settings_apply_live(HWND h)
 {
@@ -11467,8 +11486,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                        (int)g_vid.frame.stride, g_ms_x, g_ms_y);
                 }
                 vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
+                g_pd.mode_vesa = g_vid.in_vesa;             /* #228: Auto aspect needs it */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
                 HOST_UNLOCK();
+                aspect_auto_follow(h);                       /* #228: reshape on a mode change */
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
                      The snapshot is what keeps our copy of the frame current, and
                      WM_PAINT blits that copy on every expose -- so skipping the
@@ -11605,7 +11626,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (!g_pd.fullscreen) {
             RECT *r = (RECT *)lp;
             int n, d, ex, ey, vw, vh;
-            present_aspect_ratio((int)g_set.v[SET_ASPECT], &n, &d);
+            present_aspect_ratio(host_aspect(), &n, &d);          /* #228: Auto resolved */
             if (n && d) {
                 host_frame_extra(h, &ex, &ey);
                 vw = (r->right - r->left) - ex;

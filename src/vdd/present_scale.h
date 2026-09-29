@@ -55,18 +55,43 @@ static int present_scaler_scanlines(int scaler)
      was "correct aspect", which was 4:3 -- so an existing registry value migrates
      for free and nobody's window changes shape on upgrade. The new ratios are
      appended, which is exactly the discipline the CPU speed list did NOT manage. */
+/* ── #228 (docs/EMULATION.md): index 0 is AUTO -- the window/output takes the shape
+     the CURRENT MODE is displayed at -- where it used to be None (free, fill). Auto is
+     a setting, not a ratio: present_aspect_auto() RESOLVES it against the mode into an
+     encoded fixed ratio (PRESENT_ASPECT_FIXED | n<<8 | d), which every fit below reads
+     like the named ones. Callers resolve once and pass the result through unchanged.
+     Stored 0 (None) becomes Auto on upgrade, which is the replacement the spec asks for. */
 enum {
-    PRESENT_ASPECT_NONE = 0,
+    PRESENT_ASPECT_NONE = 0,          /* = AUTO as a setting; 0/0 ("fill") only if unresolved */
     PRESENT_ASPECT_4_3,
     PRESENT_ASPECT_16_9,
     PRESENT_ASPECT_16_10,
     PRESENT_ASPECT_COUNT
 };
-#define PRESENT_ASPECT_ITEMS "None|4:3|16:9|16:10"
+#define PRESENT_ASPECT_AUTO   PRESENT_ASPECT_NONE
+#define PRESENT_ASPECT_FIXED  0x10000
+#define PRESENT_ASPECT_ITEMS "Auto|4:3|16:9|16:10"
 
-/* The ratio as a fraction. NONE gives 0/0, which every caller reads as "fill". */
+/* Resolve the SETTING against the mode on screen. Auto: the VGA and text modes (up to
+   720x480) are shown 4:3, as a CRT showed them -- 320x200 had tall pixels; a VESA mode
+   has square pixels, so its own w:h (1280x1024 -> 5:4, 640x400 -> 16:10). Named ratios
+   pass through. No frame yet -> 4:3. */
+static int present_aspect_auto(int setting, int mode_w, int mode_h, int vesa)
+{
+    int a, b, t;
+    if (setting != PRESENT_ASPECT_AUTO) return setting;
+    if (mode_w < 1 || mode_h < 1 || !vesa || (mode_w <= 720 && mode_h <= 480))
+        return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
+    a = mode_w; b = mode_h;                        /* reduce w:h */
+    while (b) { t = a % b; a = b; b = t; }
+    if ((mode_w / a) > 255 || (mode_h / a) > 255) return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
+    return PRESENT_ASPECT_FIXED | ((mode_w / a) << 8) | (mode_h / a);
+}
+
+/* The ratio as a fraction. An unresolved Auto gives 0/0, which callers read as "fill". */
 static void present_aspect_ratio(int aspect, int *n, int *d)
 {
+    if (aspect & PRESENT_ASPECT_FIXED) { *n = (aspect >> 8) & 0xFF; *d = aspect & 0xFF; return; }
     switch (aspect) {
     case PRESENT_ASPECT_4_3:   *n = 4;  *d = 3;  break;
     case PRESENT_ASPECT_16_9:  *n = 16; *d = 9;  break;

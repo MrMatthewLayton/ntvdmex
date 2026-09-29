@@ -224,9 +224,12 @@ static void gdi_present(present_ddraw *pd)
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
          and put the uneven pixels straight back. */
     if (pd->fullscreen && pd->fs_integer)
-        present_fit_int(cw, ch, sw, sh, pd->aspect, &dx, &dy, &dw, &dh);
+        present_fit_int(cw, ch, sw, sh,
+                        present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
+                        &dx, &dy, &dw, &dh);
     else
-        present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
+        present_fit(cw, ch, present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
+                    &dx, &dy, &dw, &dh);
     if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
@@ -488,10 +491,13 @@ static void fs_present(present_ddraw *pd)
          whole multiple of the FRAME -- which is why this needs snap_w/snap_h and the
          windowed caller does not. See present_fit_int. */
     if (pd->fs_integer)
-        present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h, pd->aspect,
+        present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
+                        present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
                         &fx, &fy, &fw, &fh);
     else
-        present_fit(pd->fs_w, pd->fs_h, pd->aspect, &fx, &fy, &fw, &fh);
+        present_fit(pd->fs_w, pd->fs_h,
+                    present_aspect_auto(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa),
+                    &fx, &fy, &fw, &fh);
 
     /* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
          from scaler/filter. With them off it should be stretched, sharp pixels,

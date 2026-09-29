@@ -177,6 +177,22 @@ int main(void)
         }
         CHECK(ok2, "no aspect can produce a minimum below 640x480 -- that is the floor"); }
 
+    /* #228: Auto resolves against the mode: VGA/text 4:3 (a CRT's shape), VESA square. */
+    {   int n, d;
+        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 320, 200, 0), &n, &d);
+        CHECK(n == 4 && d == 3, "auto: 320x200 (mode 13h) shows 4:3, tall pixels as on a CRT");
+        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 720, 400, 0), &n, &d);
+        CHECK(n == 4 && d == 3, "auto: 720x400 text shows 4:3");
+        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 1280, 1024, 1), &n, &d);
+        CHECK(n == 5 && d == 4, "auto: VESA 1280x1024 is square-pixel 5:4");
+        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 1024, 768, 1), &n, &d);
+        CHECK(n == 4 && d == 3, "auto: VESA 1024x768 is 4:3");
+        CHECK(present_aspect_auto(PRESENT_ASPECT_16_9, 320, 200, 0) == PRESENT_ASPECT_16_9,
+              "auto: a named ratio passes straight through");
+        {   int x, y, w, h;
+            present_fit(1000, 1000, present_aspect_auto(PRESENT_ASPECT_AUTO, 320, 200, 0), &x, &y, &w, &h);
+            CHECK(w == 1000 && h == 750 && y == 125, "auto: the fit letterboxes a 4:3 mode in a square client"); } }
+
     /* #229: the colour filters recolour a COLOUR; Default must be the identity. */
     CHECK(present_tint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
     CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_WHITE) == 0xFFFFFFFFu, "tint: white stays white on a paper-white screen");
