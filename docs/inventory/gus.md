@@ -3,9 +3,9 @@
 **Spec:** *UltraSound SDK v2.22* (Advanced Gravis / FORTE, 1994), Chapter 2 and the SDK's own
 driver source. **▶ The hardware reference is [`../ref/gus.md`](../ref/gus.md)** — what the card
 *does*.
-**Our implementation:** `src/vdd/vdd_gus.c` (s80), `src/vdd/vdd_gus.h`; mixer source in `src/vdd/vdd_audio.c`; off-VM battery `tools/dostest/gus_test.c` (29 checks).
+**Our implementation:** `src/vdd/vdd_gus.c` (s80), `src/vdd/vdd_gus.h`; mixer source in `src/vdd/vdd_audio.c`; off-VM battery `tools/dostest/gus_test.c` (76 checks; #190 added the latches, mix control, UART, record and card→PC rows).
 **Acceptance guest:** heaven7 (its music is GUS-only; it renders already).
-**Marked:** 2026-09-25 (s80), **from the code**.
+**Marked:** 2026-09-25 (s80), **from the code**; #190 rows re-marked 2026-09-29.
 
 ---
 
@@ -28,26 +28,47 @@ touched a port.
 | Unit | ref | Status | Where / notes |
 |---|---|---|---|
 | `ULTRASND` environment string | §1, §8 | **IMPL** | `main.c` env build — the device's own numbers; a `dosenv.txt` `ULTRASND` wins. DOS path only: the Win16 block is left exactly as it was |
-| Port claims `2X0–2XF`, `3X0–3X7` | §1 | **IMPL** | `vdd_gus.c:527`; `VDD_MAX_PORTS` 32 → 48 (31 were in use) |
+| Port claims `2X0–2XF`, `3X0–3X7` | §1 | **IMPL** | `vdd_gus_init` `vdd_gus.c:754`; `VDD_MAX_PORTS` 32 → 48 (31 were in use) |
 | Register select / data, 8- and 16-bit access | §2 | **IMPL** | `gus_out`/`gus_in` `:284`/`:335`; a byte to `3X4` latches, `3X5` completes |
 | Global registers `41h–4Ch` | §2.1 | **IMPL** | `gus_reg_write`/`gus_reg_read` `:180`/`:248` |
 | Reset `4Ch` | §2.1 | **IMPL** | bit 0 = 0 runs `gus_chip_reset` `:161` |
 | Voice registers `00h–0Eh` / `80h–8Eh` | §2.2 | **IMPL** | 32 banks via the page |
 | Self-modifying bits | §2.2 | **IMPL** | the engine writes stopped/direction/pending itself; the double-write race is not modelled (it cannot lose a write here) |
 | DRAM + PIO at `3X7` | §3 | **IMPL** | 1 MB (`GUS_DRAM_SIZE`); detection passes (`gus_test` T1) |
-| DRAM DMA, 16-bit translation, invert-MSB | §3 | **IMPL** | `gus_dma_try` `:126` — instantaneous; retried each render if the 8237 is not ready. Card→PC direction not modelled |
+| DRAM DMA, 16-bit translation, invert-MSB | §3 | **IMPL** | `gus_dma_try` `:191` — instantaneous once the 8237 serves it; **a masked channel holds DRQ** and it is retried on each render / latch / 2X0 write (it used to 'complete' with no data, because `vdd_dma_remaining` is never 0) |
+| DRAM DMA **card→PC** (41h bit 1 = 1) | §2.1, §3 | **IMPL** (#190) | `gus_dma_try` `:191` — DRAM bytes through `vdd_dma_write` (the guest's channel in *write* mode), TC + IRQ as for an upload; bit 7 inverts the MSB on the way out too (decision: a sign conversion undoes itself) |
 | Voice engine: position, frequency, interpolation, end / loop / bidi / rollover | §4 | **IMPL** | `gus_voice_step` `:397`; rendered at the GF1's own rate (`vdd_gus_rate_hz`) and resampled by the mixer |
 | Logarithmic volume, ramps | §7 | **IMPL** | `vdd_gus_vol_gain` `:372` — curve checked against the SDK table's ratios; `gus_ramp_step` `:424` |
-| Pan | §7 | **PART** | stored and read back; **the mixer is mono**, so pan does not move the sound |
-| Latches `2XB`, the lock-out, `2XF` | §5 | **PART** | IRQ/DMA latches and the next-write lock-out IMPL (only GUS-port writes are seen, so a write to another card's port does not break the arm); `2XF` banks 5/6 accepted and not stored |
-| Mix control `2X0` | §5 | **PART** | stored; line/mic inputs and output enable do not gate anything |
+| Pan | §7 | **IMPL** | #189 — `gus_pan_l`/`gus_pan_r` `:667`, a balance law, in `vdd_gus_render_st` |
+| Latches `2XB`, the lock-out | §5 | **IMPL** (#190) | `gus_out` `2XB` `:435`, `gus_latch_decode` `:60` — the latch **drives** the lines: GF1 IRQ (bits 2–0), MIDI IRQ (5–3), bit 6 combine; DRAM DMA (2–0), record DMA (5–3), bit 6 combine. Code 0 = no line. Next-write lock-out (only GUS-port writes are seen, so a write to another card's port does not break the arm) |
+| Latch state at power-on | §5 | **IMPL — decision** | `vdd_gus_reset` `:723`: the card **as ULTRINIT leaves it** — latches = ULTRASND's own numbers (combined when equal, as `UltraSetInterface` does), `2X0 = 09h`. Every DOS program meets a card its owner's AUTOEXEC already initialised; heaven7 never programs the board |
+| `2XF` banks 5 and 6 | §5 | **IMPL** (#190) | bank 5: a write of 0 drops the asserted lines ("clear power-up IRQs"), so a still-pending source re-edges; bank 6 (jumper): bit 1 = MIDI port decode (off → `3X0/3X1` float `FFh`), bit 2 = joystick decode — **stored only**, the gameport at `201h` is its own device and is not gated. ⚠ bit positions as the SDK's rev-3.4 text; not re-read in this pass |
+| Mix control `2X0` | §5 | **IMPL** (#190) | `gus_out` `:414`: bit 1 line out **off mutes the render** (voices keep running; `out_muted` counts it); bit 3 powers the IRQ/DMA drivers (off → no line, a DRQ waits); bit 4 combines the IRQs; bit 5 MIDI loopback; bit 6 latch select. Bits 0 (line in) and 2 (mic) are stored and reach nothing — **N/A**: there is no input device, the ADC hears silence either way |
 | IRQ status `2X6` | §6 | **IMPL** | `gus_irq_status` `:67` |
 | Voice IRQ FIFO `8Fh` | §6 | **IMPL** | `gus_irq_fifo` `:102`, cleared by the read, active-low bits |
-| The card's interrupt line | §6 | **IMPL** | edge on any enabled source with 4Ch bit 2; on the latched line or IRQ 11 |
+| The card's interrupt lines | §6 | **IMPL** | `gus_irq_update` `:136`: edge per physical line on any enabled source, gated by 4Ch bit 2 **and** 2X0 bit 3; GF1 sources on the GF1 line, UART sources on the MIDI line (one line when combined) |
 | Timers 1/2 and `2X8`/`2X9` | §9 | **IMPL** | `gus_timers` `:455`, advanced by rendered GF1 time |
-| MIDI 6850 | §9 | **PART** | status reads "transmitter empty"; data goes nowhere, nothing is ever received |
-| Record path (`48h`, `49h`) | §2.1 | **PART** | registers answer; starting a take completes at once with no data |
+| MIDI 6850 | §9 | **IMPL** (#190) | `gus_out`/`gus_in` `3X0`/`3X1`, `gus_midi_tx_irq`/`_rx_irq` `:82`: master reset (CR1–0 = 11), transmit IRQ only for CR6–5 = 01, receive IRQ CR7; status RDRF/TDRE/OVRN/IRQ; transmit is instant (each byte is a fresh TDRE edge) to **`gus_state.midi_sink`** (raw bytes); loopback fills RDRF (overrun on a second byte). 2X6 bits 0/1, on the latched MIDI IRQ. Receive from outside: **N/A** (no MIDI IN device). ⚠ **Host wiring owed** — see below |
+| Record path (`48h`, `49h`) | §2.1 | **IMPL** (#190) | `gus_record` `:246`: a take runs card→PC on the **record** DMA channel at `9878400/(16·(48h+2))` Hz (stereo = 2 bytes/sample; a 16-bit channel moves pairs), paced by rendered GF1 time; bytes are midscale silence (`80h`, or `00h` with 49h bit 7). At TC the take stops (bit 0 dropped), 49h bit 6 + 2X6 bit 7 + IRQ if bit 5. Decision: stop at TC even on an auto-init channel |
 | ICS-2101 mixer, CS4231 codec | §10 | **N/A** | later board options; `7X6` reads `FFh` = "pre-3.7 board" |
+
+## Host wiring owed (#190)
+
+The MIDI UART's `midi_sink` is **not connected** in `src/host/main.c` yet, so a GUS MIDI stream
+is still silent on the rig. The connection, reproduced by `gus_test` T11:
+
+```c
+static mpu_state g_gusmidi;                     /* PRIVATE assembler: never vdd_bus_add'ed */
+static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; vdd_mpu_feed(&g_gusmidi, b); }
+...
+g_gusmidi.sink = host_midi_sink;                /* the same synth as the MPU-401 */
+g_gus.midi_sink = gus_midi_to_synth;            /* before vdd_bus_add(&g_gus_dev) */
+```
+
+A private `mpu_state`, not `g_mpu`: two byte streams sharing one assembler corrupt each other's
+running status. `midi_sink` survives `vdd_gus_reset`. Worth adding to `gus_report`: `mix`,
+`out_muted`, `midi_tx`, `samp_takes`, `dma_downloads` — **⚠ re-run heaven7 on the rig**: if it
+writes `2X0` with bit 1 set (line out off) it is now silent, as on a real card.
 
 ## What the card needs from the host — and what is not ready
 

@@ -158,7 +158,9 @@ active-low), bit 2 mic in, **bit 3 enable the latches** (power to the IRQ/DMA dr
 turn it off again), bit 4 combine the GF1 and MIDI IRQs, bit 5 MIDI loopback, bit 6 latch select.
 
 **Board rev 3.4+:** `2XF` selects a bank behind `2XB` — `0` the classic latches, `5` "write 0
-to clear power-up IRQs", `6` the jumper register (MIDI/joystick decode enables).
+to clear power-up IRQs", `6` the jumper register (MIDI/joystick decode enables — bit 1 the MIDI
+ports, bit 2 the joystick; ⚠ bit positions as recalled from the SDK's rev-3.4 text, not re-read
+when #190 used them).
 
 The SDK's order (`INIT.C`, `UltraSetInterface`): `2XF←5; 2X0←mix; 2XB←0; 2XF←0;` then DMA latch
 with bit 7 set, IRQ latch, DMA latch, IRQ latch, a write to `3X2` "to lock out writes", and
@@ -221,6 +223,10 @@ timer at the GUS base.
 **MIDI.** A 6850 ACIA at `3X0`/`3X1` — control bits 0–1 master reset, bits 5–6 transmit-IRQ
 enable, bit 7 receive-IRQ enable; status bit 0 receive full, 1 transmit empty, 4 framing error,
 5 overrun, 7 IRQ pending. Reading or writing data clears the IRQ.
+The 6850's own data sheet (Motorola MC6850) pins the transmit field: CR6–5 = `00` RTS low, transmit
+IRQ off; `01` RTS low, **transmit IRQ on**; `10` RTS high, off; `11` RTS low, off, send break — so
+only `01` interrupts on transmit-empty. CR1–0 = `11` holds the ACIA in master reset. The IRQ is a
+*level*: transmit-empty with `01` requests continuously until the driver turns it off.
 
 ## 10. What this document deliberately leaves out
 

@@ -79,6 +79,8 @@ static void mpu_midi_byte(mpu_state *st, uint8_t b)
     }
 }
 
+void vdd_mpu_feed(mpu_state *st, uint8_t byte) { mpu_midi_byte(st, byte); }
+
 static void mpu_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     mpu_state *st = (mpu_state *)self;
