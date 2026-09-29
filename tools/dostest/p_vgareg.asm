@@ -253,6 +253,25 @@ start:
         call    do_mode
         EMIT_BUF "vga.mode11", regbuf, 64
 
+        ; ---- #188: THE CGA-ERA MODES NOBODY MEASURED. 01h's cursor was the 8-line
+        ;      0x0607 fallback where PCem's IBM VGA leaves 0x0D0E, because these
+        ;      modes had no row and got guessed values.
+        mov     al, 00h                 ; 40x25 text, colour burst off
+        call    do_mode
+        EMIT_BUF "vga.mode00", regbuf, 64
+
+        mov     al, 01h                 ; 40x25 text
+        call    do_mode
+        EMIT_BUF "vga.mode01", regbuf, 64
+
+        mov     al, 02h                 ; 80x25 text, colour burst off
+        call    do_mode
+        EMIT_BUF "vga.mode02", regbuf, 64
+
+        mov     al, 05h                 ; CGA 320x200 4-colour, colour burst off
+        call    do_mode
+        EMIT_BUF "vga.mode05", regbuf, 64
+
         ; ---- MODE Y AND MODE X ARE NOT BIOS MODES. A program makes them, and
         ;      this is the sequence Doom and every Mode-X engine uses. Capturing
         ;      the file AFTER the unchain is the only way to know what the

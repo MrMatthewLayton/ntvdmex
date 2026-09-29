@@ -637,6 +637,27 @@ static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     }
 }
 
+/* ── #188: WHAT AN 83-KEY PROGRAM IS ALLOWED TO SEE. ───────────────────────────────
+     AH=00h/01h are the pre-101-key calls, and IBM's BIOS filters the ring for them
+     (the K1S translation in the PC/AT BIOS listing): a code only an enhanced keyboard
+     can make is DISCARDED -- consumed, head moved on -- and the gray-key E0 forms are
+     rewritten to their 83-key equivalents. AH=10h/11h see everything unaltered.
+     Measured (p_kbd 16.01.enh, F11 = 8500h): PCem's genuine AMI BIOS answers "empty"
+     with the head advanced past it; QEMU's SeaBIOS hands 8500h back. The genuine ROM
+     is the reference. Returns 0 = discard, 1 = deliver *key (possibly rewritten). */
+static int kb_compat(uint16_t *key)
+{
+    uint8_t sc = (uint8_t)(*key >> 8), ch = (uint8_t)*key;
+    if (sc == 0xE0) {                       /* keypad Enter / keypad '/'            */
+        *key = (uint16_t)(((ch == 0x0D || ch == 0x0A) ? 0x1C00 : 0x3500) | ch);
+        return 1;
+    }
+    if (sc > 0x84) return 0;                /* F11/F12, Ctrl+arrows, Alt+Enter ...  */
+    if (ch == 0xF0) return sc == 0 ? 1 : 0; /* fill-ins; 00F0 is Alt+keypad 240     */
+    if (ch == 0xE0 && sc != 0) *key = (uint16_t)(sc << 8);   /* gray arrows etc.   */
+    return 1;
+}
+
 /* INT 16h -- BIOS keyboard. ZF semantics: AH=01 sets ZF=1 when no key is ready.
    AH=00 here is non-blocking (the host loops + waits on a key event, re-issuing
    until ZF=0); it sets ZF=1 + leaves AX when the buffer is empty. */
@@ -652,14 +673,24 @@ static void int16(void *self, ntvdd_regs *r)
     }
     switch (r_ah(r)) {
     case 0x00:                              /* read key (host blocks on empty)    */
+        r->zf = 1;                          /* #188: enhanced-only codes discarded */
+        while (vdd_input_pop(st, &key))
+            if (kb_compat(&key)) { s_ax(r, key); r->zf = 0; break; }
+        break;
     case 0x10:                              /* read key, enhanced (101-key)        */
         if (vdd_input_pop(st, &key)) { s_ax(r, key); r->zf = 0; }
         else r->zf = 1;
         break;
     case 0x01:                              /* check key (non-blocking)           */
+        r->zf = 1;                          /* ZF=1 => no key (QB's INKEY$ -> "") */
+        while (vdd_input_peek(st, &key)) {  /* #188: a discard CONSUMES the entry  */
+            if (kb_compat(&key)) { s_ax(r, key); r->zf = 0; break; }
+            (void)vdd_input_pop(st, &key);
+        }
+        break;
     case 0x11:                              /* check key, enhanced (101-key)       */
         if (vdd_input_peek(st, &key)) { s_ax(r, key); r->zf = 0; }
-        else r->zf = 1;                     /* ZF=1 => no key (QB's INKEY$ -> "") */
+        else r->zf = 1;
         break;
     case 0x02:                              /* shift status, from 0040:0017        */
         s_al(r, kb_flags(st)); r->zf = 0;
@@ -688,9 +719,16 @@ static void int16(void *self, ntvdd_regs *r)
         r->cf = 0; r->zf = 0;
         break;
     case 0x09:                              /* which INT 16h functions exist -> AL  */
-        /* 0x30 is MEASURED on the 6.22 oracle, not derived from the bit definitions
-           (which disagree between references). See docs/inventory/keyboard.md. */
-        s_al(r, 0x30);
+        /* #188: 0xB1, MEASURED on PCem's genuine AMI BIOS (DOSBox-X agrees); 0x30 was
+           QEMU's SeaBIOS. Bits: 0 = 0300h default rate, 4 = 0Ah keyboard ID (below),
+           5 = 10h-12h enhanced, 7 = as the AMI ROM sets it. */
+        s_al(r, 0xB1);
+        r->cf = 0; r->zf = 0;
+        break;
+    case 0x0A:                              /* #188: get keyboard ID -> BX          */
+        /* 41ABh = an MF2 (101/102-key) keyboard behind a translating 8042, the ID
+           bit 4 of AH=09h promises. */
+        s_bx(r, 0x41AB);
         r->cf = 0; r->zf = 0;
         break;
     default:                                /* unknown fn: report "no key", never  */

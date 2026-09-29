@@ -149,7 +149,10 @@ def main():
     want = [("vga.mode03", 0x03), ("vga.mode04", 0x04), ("vga.mode06", 0x06),
             ("vga.mode0D", 0x0D), ("vga.mode0E", 0x0E), ("vga.mode10", 0x10),
             ("vga.mode11", 0x11), ("vga.mode12", 0x12), ("vga.mode13", 0x13),
-            ("vga.mode07mono", 0x07)]
+            ("vga.mode07mono", 0x07),
+            # #188 (s84): the CGA-era modes, added to p_vgareg.
+            ("vga.mode00", 0x00), ("vga.mode01", 0x01), ("vga.mode02", 0x02),
+            ("vga.mode05", 0x05)]
     rows = []
     for label, num in want:
         d = modes.get(label)

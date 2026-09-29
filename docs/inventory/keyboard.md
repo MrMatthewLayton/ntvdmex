@@ -29,7 +29,7 @@
 | `AH=02h/12h` shift status | verified | reads the same `0017`/`0018` the guest can |
 | **`AH=09h` supported-function mask** | verified | **was MISSING**; `0x30`, measured not derived |
 | `AH=03h` set typematic | verified | answered; `CF=0` |
-| `16.01.enh` — does `AH=01h` SKIP an enhanced key? | ⚠ **provisional** | oracle says **no** (returns `8500h`, head unmoved) and we match it. The documented IBM rule is that `AH=00h/01h` skip codes only a 101-key keyboard can make. **SeaBIOS may simply not implement the skip.** Re-ask on PCem before trusting either behaviour. |
+| `16.01.enh` — does `AH=01h` SKIP an enhanced key? | ✅ **verified on PCem (s84, #188)** | PCem's genuine AMI BIOS **discards** it (`AX=0000`, ZF=1, head advanced `001E→0020`) — the IBM rule. QEMU's SeaBIOS returns `8500h`; that was the provisional row we matched. `vdd_input.c` `kb_compat` now applies IBM's K1S translation for `AH=00h/01h` (discard scan > 84h and `xxF0` fill-ins, rewrite E0 forms); `AH=10h/11h` are unfiltered. `AH=09h` is now `B1h` (PCem + DOSBox-X; SeaBIOS said `30h`) and `AH=0Ah` answers `41ABh`, which bit 4 promises. |
 
 ### Gaps this found and closed (s72, `c5c3e60`)
 

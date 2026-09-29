@@ -1207,6 +1207,16 @@ static void int10(void *self, ntvdd_regs *r)
            0x0607 comes from. A mode nobody measured still gets a sane cursor and
            blink enabled rather than zeros. */
         st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
+        /* #188: 0040:0065/0066, the CGA mode-select and palette registers, are the
+           standard CGA table for modes 00h-07h and are LEFT ALONE by the EGA/VGA
+           modes -- measured (p_video2) on PCem's genuine IBM VGA ROM and DOSBox-X:
+           0Dh-11h read back 05h's 2E after it, 12h/13h read 06h's 1E/3F. 0066 is 30h,
+           3Fh in mode 6. We wrote 29h/30h once at start-up and never again. */
+        if (st->bda && st->mode <= 0x07) {
+            static const uint8_t cga_msr[8] = { 0x2C, 0x28, 0x2D, 0x29, 0x2A, 0x2E, 0x1E, 0x29 };
+            st->bda[0x65] = cga_msr[st->mode];
+            st->bda[0x66] = (uint8_t)(st->mode == 0x06 ? 0x3F : 0x30);
+        }
         st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
         st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);   /* the register agrees    */
         st->user_font_on = 0;                         /* the ROM font comes back with the mode */

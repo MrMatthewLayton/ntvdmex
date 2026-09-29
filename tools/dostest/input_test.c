@@ -314,12 +314,36 @@ int main(void)
         CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x3930,
               "int16/05: ...and the OLDEST key survived the refusal");
 
-        /* AH=09h: 0x30 is MEASURED on the 6.22 oracle, not derived -- the bit
-           definitions disagree between references, which is exactly the kind of
-           expectation M9 forbids writing from memory. */
+        /* AH=09h: MEASURED, not derived -- the bit definitions disagree between
+           references. #188: 0xB1 on PCem's genuine AMI BIOS (and DOSBox-X); the old
+           0x30 was QEMU's SeaBIOS. Bit 4 promises AH=0Ah, so that answers too. */
         memset(&r, 0, sizeof r); s_ah(&r, 0x09); s_al(&r, 0xB1);
         vdd_bus_deliver_int(&bus, 0x16, &r);
-        CHECK(r_al(&r) == 0x30, "int16/09: supported-function mask = 30 (oracle-measured)");
+        CHECK(r_al(&r) == 0xB1, "int16/09: supported-function mask = B1 (PCem AMI BIOS)");
+        memset(&r, 0, sizeof r); s_ah(&r, 0x0A); r.ebx = 0xB1B1;
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK((r.ebx & 0xFFFF) == 0x41AB, "int16/0A: keyboard ID 41AB (MF2), as 09h bit 4 promises");
+
+        /* #188: AH=00h/01h DISCARD a code only a 101-key keyboard makes (F11 = 8500h),
+           consuming it -- p_kbd 16.01.enh on PCem: empty, head moved on -- while
+           AH=11h still sees it. Gray-key E0 forms are rewritten for 00h/01h. */
+        vdd_input_reset(&in);
+        vdd_input_push(&in, 0x8500);
+        memset(&r, 0, sizeof r); s_ah(&r, 0x11);
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.zf == 0 && r_ax(&r) == 0x8500, "int16/11: the enhanced call sees F11");
+        memset(&r, 0, sizeof r); s_ah(&r, 0x01);
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.zf == 1, "int16/01: F11 alone reads as empty to an 83-key call");
+        CHECK(vdd_input_peek(&in, &k) == 0, "int16/01: ...and it was CONSUMED, not skipped over");
+        vdd_input_push(&in, 0x8500); vdd_input_push(&in, 0x4BE0); vdd_input_push(&in, 0xE00D);
+        memset(&r, 0, sizeof r); s_ah(&r, 0x00);
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.zf == 0 && r_ax(&r) == 0x4B00, "int16/00: F11 discarded, gray Left 4BE0 -> 4B00");
+        memset(&r, 0, sizeof r); s_ah(&r, 0x00);
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.zf == 0 && r_ax(&r) == 0x1C0D, "int16/00: keypad Enter E00D -> 1C0D");
+        vdd_input_reset(&in);
 
         /* AH=03h stores nothing, but it must be ANSWERED: a guest that sets the
            typematic rate and gets CF=1 can conclude there is no BIOS here at all. */

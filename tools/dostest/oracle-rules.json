@@ -1795,5 +1795,165 @@
   ],
   "recorded": "2026-09-29",
   "why": "DOSBox-X does not implement INT 21h AX=6901h (set volume serial) on its mounted drive and answers CF=1 AX=0005, so the marker never reads back. Real MS-DOS 6.22 (QEMU and PCem) writes it and 6900h reads it back. (#165, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.00",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.01",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.02",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.03",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.04",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.05",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.0D",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.0E",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.10",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.11",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.06",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.12",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.13",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-29",
+  "why": "0040:0065/0066 (CGA mode-select and palette registers). QEMU runs SeaVGABIOS, which never writes these bytes (0000 for every mode) -- an observation about that reimplementation, not about a VGA. PCem's genuine IBM VGA ROM and DOSBox-X both store the CGA table for modes 00h-07h and leave the bytes alone for the EGA/VGA modes. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.06",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "Mode 6's CGA mode-select byte: PCem's genuine IBM VGA ROM stores 1E (the IBM CGA table), DOSBox-X 3E. The genuine ROM is the reference. 12h/13h do not write the byte, so they read back 06h's value, which the probe sets just before them. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.12",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "Mode 6's CGA mode-select byte: PCem's genuine IBM VGA ROM stores 1E (the IBM CGA table), DOSBox-X 3E. The genuine ROM is the reference. 12h/13h do not write the byte, so they read back 06h's value, which the probe sets just before them. (#188, s84)"
+ },
+ {
+  "probe": "video2",
+  "case": "cga.13",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-29",
+  "why": "Mode 6's CGA mode-select byte: PCem's genuine IBM VGA ROM stores 1E (the IBM CGA table), DOSBox-X 3E. The genuine ROM is the reference. 12h/13h do not write the byte, so they read back 06h's value, which the probe sets just before them. (#188, s84)"
  }
 ]
