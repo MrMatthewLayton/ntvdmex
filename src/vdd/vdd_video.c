@@ -876,7 +876,32 @@ static void vesa(video_state *st, ntvdd_regs *r)
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
             uint32_t bypp = vesa_bypp(mbpp), pitch = (uint32_t)w * bypp;
             for (i = 0; i < 256; ++i) b[i] = 0;
-            wr16(b + 0, 0x009B);                  /* attrs: supported|color|graphics */
+            /* ── MODEATTRIBUTES D5 = 1: NOT A VGA-COMPATIBLE MODE (#226). ──────────────
+                 VBE 2.0 §4.4: "Bit D5 is used to indicate if the mode is compatible with
+                 the VGA hardware registers and I/O ports. If this bit is set, then the
+                 mode is NOT VGA compatible and no assumptions should be made about the
+                 availability of any VGA registers. If clear, then the standard VGA I/O
+                 ports and frame buffer address defined in WinASegment ... can be
+                 assumed." We said 0 (0x9B) for every mode, and ours are not: the picture
+                 of a VESA mode is built from the VBE layer's own geometry -- 4F06h's
+                 pitch and 4F07h's start, the VESA timing -- and the VGA CRTC does NOT
+                 drive it (a guest that pans with CR0C/0D or sets the pitch with CR13
+                 sees nothing move), nor do the sequencer/GC reach the window. That is
+                 the Bochs DISPI architecture, and QEMU's SeaVGABIOS VBE (the msdos622
+                 oracle's; p_vesa in build/dosdiff-cache) says 0xBB, D5 set, for every
+                 packed and direct mode; the Tseng ET4000/W32p ROM under PCem
+                 (runs/s74b_lazy32/pcem_p_vesa_et4000.txt), whose extended modes ARE
+                 CRTC-driven, says 1Fh/1Bh, D5 clear. The two measured BIOSes split
+                 along exactly the line the spec draws.
+                 ModeAttributes is an ungraded card property in oracle-rules.json, so
+                 parity does not move. What still works through VGA ports in a VESA mode
+                 (the DAC at 3C7h-3C9h, 3DAh on the VESA timing) keeps working; D5 only
+                 stops PROMISING the rest. The text modes 108h-10Ch stay 0: they are
+                 VGA text modes, cursor, attribute controller and fonts included.
+               ⚠ One observable change for a guest that filters on D5: rig re-gate
+                 heaven7, ZAR and vesacube (none of which is known to test it --
+                 vesacube's source does not). Rolling back is this one constant. */
+            wr16(b + 0, 0x00BB);                  /* supported|1|colour|graphics|NOT VGA|LFB */
             b[2] = 0x07; b[3] = 0x00;             /* WinA r/w/exists; WinB none    */
             wr16(b + 4, 64); wr16(b + 6, 64);     /* granularity / size (KB)       */
             wr16(b + 8, 0xA000); wr16(b + 10, 0); /* WinA seg / WinB seg           */
@@ -940,7 +965,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  including 320x200x16 and 640x480x16, and refused every one without
                  ever calling 4F02 -- measured twice, before and after the list grew.
                  A 2000-era demo will not paginate a 64KB window to raytrace. */
-            /* ⚠ 0x9B ALREADY CARRIES D7 (LFB available) -- D0|D1|D3|D4|D7. An earlier
+            /* ⚠ 0x9B (0xBB since #226, D5 above) ALREADY CARRIES D7 (LFB available) -- D0|D1|D3|D4|D7. An earlier
                  note here claimed bit 7 was 0 and OR'd 0x80 in; that was a no-op and
                  the claim was wrong. What was actually missing was PhysBasePtr, which
                  D7 is worthless without. VBE 2.0 §4.4 D7/D6 table: D7=1,D6=0 means
