@@ -114,3 +114,37 @@ of it done."* Filed as #224–#235 under epic #236.
 does nothing" (index 7 of a six-rung ladder); a 10-minute headless cap hid the slow rungs; ask the
 host which build is in `bin\` before believing a calibration run. **#222 needs the user's decision**
 (options on the issue).
+
+---
+
+## Evening, 2026-09-29: the CPU speed limit, by focused rig rounds (#225)
+
+The user's rule from round 8 on: **one focused test per round**, `checks.txt` = one test, `report.txt`
+empty. Rounds 8-15 are in `runs/s84/round*/`; the rig's unattended runs are in `runs/s84/coop/`,
+`runs/s84/rm/`, `runs/s84/calib/`.
+
+| Round | Found | Fixed |
+|---|---|---|
+| 9 | "Speeds degrade over time"; 100 -> 66 MHz nearly locked up | A #219 pause was billed as execution; a speed change re-priced the old rung's execution. Both rebaseline the window |
+| 10 | 486DX2-66 got 2x its CPU share yet felt < 33 MHz: 13 retraces/s against 36 | A retrace that passes unseen during a hold is reported once (`vbl_owe_on`, only while throttled) |
+| 11-12 | Slow at "busy" moments: IRQ0 91..170/s, holds up to 178 ms | Cooperative catch: the exec thread parks at its next re-entry when the throttle cannot suspend it |
+| 13 | Pure-compute seconds capped IRQ0 at ~120/s | One run+hold cycle passes one tick; the run is shortened until a cycle is <= half the guest's timer period |
+| 14-15 | Still ~2x slow in-game at 486DX2-66, while Doom was right | Real-mode programs get their own share: Doom's x2 (by ear) |
+
+`fae9e45` + `860877d`. **User-confirmed:** Skyroads, Gothica and Doom "have the performance characteristics
+I would expect from a 66 MHz CPU".
+
+⚠ **Lessons:**
+- **A game's feel needs the numbers from the run the user actually played.** Closing the window skipped
+  STAGE2, so `CLOSE2:` now writes the throttle, the per-second timer and the retrace counts.
+- **Per-second records beat totals.** `STAGE2: CTL` put the slow seconds on pure compute, which no run
+  total could have done.
+- **Three plausible fixes measured wrong** (defer holds while a tick is pending; hold only with VIF on;
+  inject from the throttle thread). The third was UNSAFE: without `g_lock` it raced the PIT's own
+  delivery and injected 12,170 ticks of 5,934 raised.
+- **This host is not a fixed multiple of a 486.** Doom's 32-bit code and Skyroads' 16-bit real-mode code
+  differ by ~2x at the same share, with both clocks verified honest.
+- 3DBench V1.0 (the measured replacement for the x2) times itself on a 1 kHz timer we deliver ~44% of,
+  even at Unlimited: **#238**.
+- The rig's SAVED speed is Pentium III 1 GHz (set by the user in round 8), so un-forced harness runs are
+  throttled. Force with `cfg\cpuspd.txt` and delete it afterwards.
