@@ -262,6 +262,7 @@ int main(void) {
         static uint8_t g[0x1000];
         dos_sbcfg sb;
         int i, found;
+        memset(&sb, 0, sizeof sb);                 /* #231: .mpu is new */
         /* Find "BLASTER=" in the built block and compare the rest of that string. */
         found = 0;
         dos_env_build(g, 0x0000, "C:\\T.COM");

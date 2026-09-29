@@ -38,6 +38,12 @@
 
 /* DSP version we report to command 0xE1. 4.05 = a Sound Blaster 16, which is what
    a game needs to see before it will use the 16-bit and auto-init commands. */
+/* #231 (docs/EMULATION.md): three cards, in the Settings list's order. The SB Pro's
+   DSP is 3.02 and has none of the SB16 commands; the AWE32 carries the SB16 DSP (4.12)
+   and, with #233, the EMU8000. */
+#define SB_MODEL_SB16   0
+#define SB_MODEL_AWE32  1
+#define SB_MODEL_SBPRO  2
 #define SB_DSP_VER_MAJOR 4
 #define SB_DSP_VER_MINOR 5
 /* ── ...AND THAT CHOICE SELECTS THE GUEST'S ENTIRE DRIVER PATH. ──────────────────
@@ -71,6 +77,7 @@ typedef struct sb_state {
 
     uint16_t base;             /* 0x220 by default                               */
     uint8_t  irq, dma8, dma16;
+    uint8_t  model;             /* #231: SB_MODEL_* -- which card this DSP is      */
 
     /* DSP command state machine */
     uint8_t  cmd;              /* command awaiting arguments (0 = none)          */

@@ -10274,6 +10274,8 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_BEHAVE,                                  /* #167 */
     SET_TINT,                                    /* #229 */
     SET_AUDIOAPI,                                /* #234 */
+    SET_SBMODEL,                                 /* #231 */
+    SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235 (read at start-up) */
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
@@ -10348,7 +10350,8 @@ static int g_frameskip;
      numbers exist once and every consumer reads them from here. */
 static dos_sbcfg g_sbcfg = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
                              0 /* H is not advertised by default -- see dos_env.h */,
-                             DOS_SB_DEFAULT_TYPE };
+                             DOS_SB_DEFAULT_TYPE, 0 };
+static int g_dspver_forced;                /* cfg\dspver.txt beat the model's version */
 
 /* Whether the extended/expanded memory managers announce themselves at all. Off
    means INT 2Fh AX=4300 does not answer and there is no INT 67h vector, which is
@@ -10410,6 +10413,26 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
       g_sbcfg.irq = IRQS[s->v[SET_SBIRQ] & 3];
       if (ch < 4) { g_sbcfg.dma8 = ch; g_sbcfg.dma16 = 0; }
       else        { g_sbcfg.dma8 = SB_DEFAULT_DMA8; g_sbcfg.dma16 = ch; } }
+    /* ── #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
+         all three answered as one SB16 that called itself an SB 2.0 (T3) in BLASTER.
+         Now each is itself -- the DSP version it reports, the commands it has, and
+         the BLASTER string a real one's installer writes:
+             SB Pro   DSP 3.02   A220 I5 D1 T4               (no 16-bit channel)
+             SB16     DSP 4.05   A220 I5 D1 H5 P330 T6
+             AWE32    DSP 4.12   A220 I5 D1 H5 P330 T6       (E620 with #233's EMU8000)
+         A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
+    {   uint8_t model = (uint8_t)(s->v[SET_SBMODEL] <= 2 ? s->v[SET_SBMODEL] : 0);
+        g_sb.model = model;
+        if (model == SB_MODEL_SBPRO) {
+            g_sbcfg.type = 4; g_sbcfg.dma16 = 0; g_sbcfg.mpu = 0;
+            if (!g_dspver_forced) { g_sb_ver_major = 3; g_sb_ver_minor = 2; }
+        } else {
+            {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
+                g_sbcfg.type = 6;                         /* P follows the MPU's port (#235) */
+                g_sbcfg.mpu = MPUB[s->v[SET_MPUADDR] <= 4 ? s->v[SET_MPUADDR] : 3]; }
+            if (!g_sbcfg.dma16) g_sbcfg.dma16 = 5;
+            if (!g_dspver_forced) { g_sb_ver_major = 4; g_sb_ver_minor = model == SB_MODEL_AWE32 ? 12 : 5; }
+        } }
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
        startup, so they win here too -- pushing 6.22 into a session whose shell requires
        5.00 is how its next command would say "Incorrect DOS version". */
@@ -25179,7 +25202,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mj = mj * 10 + (c[i++] - '0');
           while (i < (int)rd && (c[i] == ' ' || c[i] == '.')) ++i;
           while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mn = mn * 10 + (c[i++] - '0');
-          if (mj > 0 && mj < 256) { g_sb_ver_major = (uint8_t)mj; g_sb_ver_minor = (uint8_t)mn; }
+          if (mj > 0 && mj < 256) { g_sb_ver_major = (uint8_t)mj; g_sb_ver_minor = (uint8_t)mn;
+                                    g_dspver_forced = 1; }
       } }
     { HANDLE hg = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);

@@ -66,6 +66,7 @@ typedef struct dos_sbcfg {
     uint8_t  dma8;      /* 8-bit DMA channel -> "D"                              */
     uint8_t  dma16;     /* 16-bit channel -> "H"; 0 = do not advertise one       */
     uint8_t  type;      /* BLASTER "T" value                                     */
+    uint16_t mpu;       /* #231: MPU-401 base -> "P330"; 0 = do not advertise one */
 } dos_sbcfg;
 
 /* T3 = an SB 2.0-class card. ⚠ THAT DISAGREES WITH THE DSP VERSION WE REPORT
@@ -103,7 +104,7 @@ static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile ui
     dos_sbcfg dflt;
     if (!sb) {
         dflt.base = 0x220; dflt.irq = 5; dflt.dma8 = 1; dflt.dma16 = 0;
-        dflt.type = DOS_SB_DEFAULT_TYPE;
+        dflt.type = DOS_SB_DEFAULT_TYPE; dflt.mpu = 0;
         sb = &dflt;
     }
     p = dos_env_putv(p, end, "BLASTER=A");
@@ -111,6 +112,7 @@ static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile ui
     p = dos_env_putv(p, end, " I");   p = dos_env_put_u(p, end, sb->irq);
     p = dos_env_putv(p, end, " D");   p = dos_env_put_u(p, end, sb->dma8);
     if (sb->dma16) { p = dos_env_putv(p, end, " H"); p = dos_env_put_u(p, end, sb->dma16); }
+    if (sb->mpu)   { p = dos_env_putv(p, end, " P"); p = dos_env_put_x3(p, end, sb->mpu); }
     p = dos_env_putv(p, end, " T");   p = dos_env_put_u(p, end, sb->type);
     return p;
 }

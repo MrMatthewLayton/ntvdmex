@@ -64,9 +64,19 @@ static uint32_t sb_rate_from_tc(uint8_t tc)
     return d ? (1000000u / d) : 4000u;
 }
 
-/* How many argument bytes each command consumes after its opcode. */
-static uint8_t sb_cmd_args(uint8_t c)
+/* #231: the commands a DSP 3.xx (SB Pro) does not have -- the SB16's rate commands,
+   programmed transfers and 16-bit DMA pause/continue/exit. On an SB Pro they are
+   unknown opcodes: ignored, and taking NO argument bytes, as on the real card. */
+static int sb_sb16_only(uint8_t c)
 {
+    return (c >= 0xB0 && c <= 0xCF) || c == 0x41 || c == 0x42
+        || c == 0xD5 || c == 0xD6 || c == 0xD9;
+}
+
+/* How many argument bytes each command consumes after its opcode. */
+static uint8_t sb_cmd_args(const sb_state *st, uint8_t c)
+{
+    if (st->model == SB_MODEL_SBPRO && sb_sb16_only(c)) return 0;   /* #231 */
     if (c >= 0xB0 && c <= 0xCF) return 3;       /* mode byte + 16-bit length      */
     switch (c) {
     case 0x10: return 1;                        /* direct DAC sample              */
@@ -91,6 +101,7 @@ static void sb_exec(sb_state *st)
        (it streams). That one bit decides whether the output is gapped by construction,
        and it has never been recorded. */
     st->cmd_hist[c]++;
+    if (st->model == SB_MODEL_SBPRO && sb_sb16_only(c)) return;     /* #231: not a 3.02 command */
 
     if (c >= 0xB0 && c <= 0xCF) {               /* SB16 programmed transfers      */
         int is16   = (c & 0xF0) == 0xB0;
@@ -177,7 +188,7 @@ static void sb_dsp_write(sb_state *st, uint8_t v)
     }
     st->cmd = v;
     st->nargs = 0;
-    st->want_args = sb_cmd_args(v);
+    st->want_args = sb_cmd_args(st, v);
     if (!st->want_args) { sb_exec(st); st->cmd = 0; }
 }
 

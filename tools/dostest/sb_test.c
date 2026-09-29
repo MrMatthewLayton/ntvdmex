@@ -182,6 +182,20 @@ int main(void)
     CHECK(dsp_reset(), "reset: handshake still works mid-transfer");
     CHECK(!vdd_sb_active(&sb), "reset: transfer stopped");
 
+    /* #231: as an SB Pro (DSP 3.02) the SB16-only commands are unknown opcodes -- ignored
+       and taking NO argument bytes -- so the byte after C6h is a command in its own right. */
+    {   extern uint8_t g_sb_ver_major, g_sb_ver_minor;
+        uint8_t om = g_sb_ver_major, on = g_sb_ver_minor, maj, min;
+        g_sb_ver_major = 3; g_sb_ver_minor = 2;
+        sb.model = SB_MODEL_SBPRO;
+        dsp_reset();
+        wr(BASE + 0xC, 0xC6);                   /* SB16 8-bit auto-init: not on an SB Pro */
+        wr(BASE + 0xC, 0xE1);                   /* ...so this is read as a command        */
+        maj = rd(BASE + 0xA); min = rd(BASE + 0xA);
+        CHECK(maj == 3 && min == 2, "SB Pro: C6h is ignored with no arguments; E1h answers 3.02");
+        CHECK(sb.xfer_mode == SB_XFER_IDLE, "SB Pro: ...and no transfer started");
+        sb.model = SB_MODEL_SB16; g_sb_ver_major = om; g_sb_ver_minor = on;
+        dsp_reset(); }
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }
