@@ -25115,7 +25115,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (c[i] < '0' || c[i] > '9') break;      /* stop at CR/LF/junk */
               v = v * 10 + (DWORD)(c[i] - '0');
           }
-          if (v > PM_HEADLESS_MS_DEFAULT && v <= 600000) g_headless_ms = v;
+          if (v > PM_HEADLESS_MS_DEFAULT && v <= 3600000) g_headless_ms = v;   /* s84: an hour, for slow-rung timedemos */
       } }
     /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
        VdmQueueInterrupt takes, and this thread is the one that will be running the

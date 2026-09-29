@@ -142,17 +142,55 @@ static int cpuspeed_available(unsigned idx, unsigned host_mhz)
 /* Duty cycle in BASIS POINTS (1/10000) for a speed index against a reference.
    10000 = run flat out. A target at or above the reference cannot be delivered by
    slowing down, so it clamps to 10000 and the setting is a CEILING, never a boost. */
+/* ── #225: WHAT A RUNG MEANS IS WHAT THAT MACHINE DID, NOT ITS CLOCK. ─────────────
+     The user: "Doom and Skyroads play easily on a 486DX2-66, but NTVDMEX at 100 MHz is
+     unplayable." The old duty was MHz / ref, ref being this host's raw ALU rate (3704
+     here) -- honest for a pure arithmetic loop, and ruinous for a game: Doom's guest
+     time is dominated by traps and emulated video, not ALU, so unthrottled it runs as
+     a Pentium II-350 (121 fps), and 66/3704 gave the 486DX2 rung a 1.8% share it could
+     not finish demo3 in. Measured on the rig (s84, runs/s84/td/): throttled, fps is
+     LINEAR in the share -- fps = 2134 x duty / E, with E = 8.67 s of guest time for the
+     whole demo -- so 246 fps at a 100% share, i.e. 0.0664 fps per host ALU-MHz.
+   ⇒ Each rung carries the REAL MACHINE's Doom 1.9s `-timedemo demo3` rate
+     (CPUSPEED_DOOM_FPS10, tenths of fps; thandor.net/benchmark/32, one tester, PCI
+     video on the 486s, 430VX on the Pentiums, see #225), and the share is
+         duty = target_fps / (CPUSPEED_FPS_PER_KMHZ x ref_mhz / 1000)
+     which carries to another PC through the ONE per-host number we already measure
+     (ref_mhz, cpubench / cpuref.txt).
+   ⚠ THE TRADE, STATED: labels now mean "plays like that machine" for games. A pure
+     ALU delay loop runs faster than it did on the real chip (the 486DX2 rung is ~13%
+     of a 3.7 GHz ALU, ~500 MHz of arithmetic). The acceptance test is the calibration
+     (memory: acceptance-test-is-the-calibration), and the user's test is games. */
+/* 73.0 fps per 1000 ref-MHz, in tenths. First derived as 66.4 (246 fps / 3.704) from a
+   run whose guest time E included Doom's start-up; the rungs then measured ~10% fast
+   (486DX2-66 37.1 vs 33.1, DX4-100 48.6 vs 43.8, P133 86.2 vs 80.2), so 664 x 1.10. */
+#define CPUSPEED_FPS_PER_KMHZ10 730u
+static const unsigned CPUSPEED_DOOM_FPS10[CPUSPEED_COUNT] = {
+    0,      /*  0: Host -- unthrottled                                           */
+    2100,   /*  1: Pentium III 1 GHz   (TU Wien PIII-800 188-202; above any cap)  */
+    1900,   /*  2: Pentium III 600     (TU Wien PIII-500 183-191)                 */
+    1150,   /*  3: Pentium II 300      (between PII-233 105.4 and PII-350 122.4)  */
+    976,    /*  4: Pentium MMX 200     (thandor 97.63)                            */
+    802,    /*  5: Pentium 133         (thandor 80.23)                            */
+    438,    /*  6: 486DX4 100          (thandor 43.75)                            */
+    331,    /*  7: 486DX2 66           (thandor 33.12)                            */
+    280,    /*  8: 486DX 50            (thandor 28.00)                            */
+    75,     /*  9: 386DX 33            (thandor Am386DX-33 7.47)                  */
+    29      /* 10: 386DX 16            (386DX-25 4.58 scaled by clock, 16/25)     */
+};
+
 static unsigned cpuspeed_duty_bp(unsigned idx, unsigned ref_mhz)
 {
-    unsigned mhz;
-    if (idx >= CPUSPEED_COUNT) return 10000u;
-    mhz = CPUSPEED_MHZ[idx];
-    if (mhz == 0u || ref_mhz == 0u || mhz >= ref_mhz) return 10000u;
-    /* Round UP, and never to zero: a duty of 0 would stop the guest dead, which is
-       a hang wearing a setting's clothes. The slowest expressible speed is one
-       millisecond in every ten thousand, which is far below 8 MHz on any host. */
-    {   unsigned bp = (mhz * 10000u + ref_mhz - 1u) / ref_mhz;
-        return bp ? bp : 1u; }
+    unsigned long long ceil10;                   /* fps x 10 at a 100% share, this host */
+    unsigned fps10;
+    if (idx >= CPUSPEED_COUNT || ref_mhz == 0u) return 10000u;
+    fps10 = CPUSPEED_DOOM_FPS10[idx];
+    if (fps10 == 0u) return 10000u;
+    ceil10 = (unsigned long long)CPUSPEED_FPS_PER_KMHZ10 * ref_mhz / 1000ull;
+    if (ceil10 == 0ull || fps10 >= ceil10) return 10000u;   /* a ceiling, never a boost */
+    /* Round UP, and never to zero: a duty of 0 would stop the guest dead. */
+    {   unsigned long long bp = ((unsigned long long)fps10 * 10000ull + ceil10 - 1ull) / ceil10;
+        return bp ? (unsigned)bp : 1u; }
 }
 
 /* ── THE V86 HALF: HOW LONG THE GUEST RUNS, AND HOW LONG IT IS HELD. ─────────────

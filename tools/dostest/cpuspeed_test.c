@@ -109,11 +109,15 @@ int main(void)
     CHECK(cpuspeed_duty_bp(99, 700) == 10000, "an index off the end runs flat out, not at zero");
     CHECK(cpuspeed_duty_bp(idx_of(33), 0) == 10000, "a zero reference cannot throttle (never divide by it)");
 
-    /* 33 of 700 = 4.71% -> 472bp with the round-up. The exact value matters less
-       than that it is in the right neighbourhood and monotonic; a 10x error here
-       is the difference between "slow" and "stopped". */
-    {   unsigned bp = cpuspeed_duty_bp(idx_of(33), 700);
-        CHECK(bp >= 460 && bp <= 480, "33 MHz against a 700 MHz reference is ~4.7% duty"); }
+    /* #225: a rung's share is its real machine's Doom rate over this host's ceiling
+       (66.4 fps per 1000 ref-MHz). The rig (ref 3704 -> 246 fps): 486DX2-66 = 33.1 fps
+       -> 13.5%; measured 1.8% before this, which could not finish demo3. */
+    {   unsigned bp = cpuspeed_duty_bp(idx_of(66), 3704);
+        CHECK(bp >= 1210 && bp <= 1240, "#225: 486DX2-66 on the rig is ~12.2% (was 1.8%)"); }
+    {   unsigned bp = cpuspeed_duty_bp(idx_of(133), 3704);
+        CHECK(bp >= 2950 && bp <= 2980, "#225: Pentium 133 on the rig is ~29.7%"); }
+    CHECK(cpuspeed_duty_bp(idx_of(600), 700) == 10000,
+          "#225: a rung above a slow host's Doom ceiling (46 fps at ref 700) runs flat out");
 
     /* ⚠ MONOTONIC ONLY BELOW THE REFERENCE, and the exception is the point. Every
          speed at or above the host's own clamps to flat out, so on a 50 MHz box the
