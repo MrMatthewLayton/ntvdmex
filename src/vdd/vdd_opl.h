@@ -85,6 +85,12 @@
 #define OPL_BD_DVB  0x40        /* vibrato depth: 1 = double                      */
 #define OPL_BD_RHY  0x20        /* rhythm mode enable                             */
 
+/* The noise LFSR's power-on contents: ONE set bit. MEASURED, not chosen
+   (`oplprobe noise`): the reference's hi-hat and snare noise, read out of its
+   output, solves to exactly this state at the point our renderer starts from
+   after reset (it is stepped before each sample). See vdd_opl_synth.c. */
+#define OPL_NOISE_SEED 0x100000u
+
 /* register 0x04 (timer control) bits */
 #define OPL_TC_T1_START 0x01
 #define OPL_TC_T2_START 0x02
@@ -157,6 +163,16 @@ typedef struct opl_state {
        the effect sound like an instrument rather than a wobble. */
     uint32_t lfo_count;
 
+    /* The chip's NOISE generator: a 23-bit LFSR, also free-running from power-on
+       and never restarted by key-on. Only the hi-hat and snare read it. Held as
+       the last 23 bits it produced (bit 0 oldest); vdd_opl_reset() seeds it with
+       OPL_NOISE_SEED. See opl_noise_step() in vdd_opl_synth.c for how, and how
+       much of that was measured. */
+    uint32_t noise;
+    /* Bit 0 op13, bit 1 op17: keyed on in rhythm mode since the last sample, so
+       the accumulator restarts one step further on (see opl_rhythm_sample). */
+    uint8_t  rhy_restart;
+
     uint32_t sample_hz;                 /* render rate (0 => OPL_DEFAULT_HZ)       */
     uint32_t frame_us;                  /* microseconds per bus frame tick         */
     uint8_t  ext_clock;                 /* 1 = host drives time via vdd_opl_add_us,
@@ -194,9 +210,9 @@ typedef struct opl_state {
     uint32_t prof_keyon_vib;            /* notes started with VIB on either op      */
     /* Percussion hits by voice: hi-hat, cymbal, tom-tom, snare, bass drum. EDGES,
        not an OR over the run -- a counter that only says a feature was TOUCHED
-       once produced a confident wrong answer about this very register. Three of
-       these five voices are not synthesised yet, so this is also the loud-failure
-       report for them: a run says how much percussion it could not play. */
+       once produced a confident wrong answer about this very register. (Until
+       #139 three of the five were silent and this was their loud-failure report;
+       all five are synthesised now.) */
     uint32_t prof_rhythm_hits[5];
 } opl_state;
 

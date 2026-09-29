@@ -113,27 +113,60 @@ static void opl_key_op(opl_state *st, int opi, int on)
        bit 0 hi-hat -> op13      bit 1 cymbal -> op17     bit 2 tom-tom -> op14
        bit 3 snare  -> op16      bit 4 bass drum -> channel 6, BOTH operators
    The bass drum is an ordinary two-operator FM voice; the other four are single
-   operators heard directly. */
+   operators heard directly.
+
+   ── A DRUM BIT AND ITS CHANNEL'S OWN KEY BIT ARE OR'D (#139). MEASURED
+      (`oplprobe keyor`): with channel 8's B0 key already on, setting the tom-tom
+      bit leaves the reference's output bit-identical -- no restart, because the
+      operator was already keyed -- and a channel 6-8 key bit written DURING
+      rhythm mode still keys that channel's operators, which then sound as the
+      drums they now are. So each of operators 12-17 is keyed while (its channel's
+      key bit) OR (its drum bit, in rhythm mode) is set, and restarts only on a
+      rising edge of that OR. This once ignored channel keys in rhythm mode and
+      re-keyed on every drum bit, which restarted drums that were already sounding
+      -- harmless while three of them were silent, audible once they were not. */
+static const uint8_t opl_rhy_bit[6] = { 0x10, 0x01, 0x04, 0x10, 0x08, 0x02 };  /* op12-17 */
+
+static int opl_rhy_held(int opi, uint8_t bd, uint8_t chkeys)
+{
+    int c = (opi - 12) % 3;                         /* op12,15->ch6 13,16->7 14,17->8 */
+    return ((chkeys >> c) & 1) || ((bd & OPL_BD_RHY) && (bd & opl_rhy_bit[opi - 12]));
+}
+
+static uint8_t opl_rhy_chkeys(const opl_state *st)
+{
+    return (uint8_t)(st->ch[6].keyon | (st->ch[7].keyon << 1) | (st->ch[8].keyon << 2));
+}
+
+/* Re-key operators 12-17 for a change of 0xBD and/or of channels 6-8's key bits
+   (`ck` bit n = channel 6+n). Only an edge of the OR moves an envelope. */
+static void opl_rhythm_rekey(opl_state *st, uint8_t bd0, uint8_t ck0, uint8_t bd1, uint8_t ck1)
+{
+    int opi;
+    for (opi = 12; opi < 18; ++opi) {
+        int was = opl_rhy_held(opi, bd0, ck0), now = opl_rhy_held(opi, bd1, ck1);
+        if (was == now) continue;
+        opl_key_op(st, opi, now);
+        /* Hi-hat / cymbal accumulator restarted in a running chip: each feeds the
+           other's phase bit, so the restart POINT matters -- measured, see
+           opl_rhythm_sample (vdd_opl_synth.c). */
+        if (now && (opi == 13 || opi == 17) && (bd1 & OPL_BD_RHY) && st->lfo_count)
+            st->rhy_restart |= (uint8_t)(opi == 13 ? 1 : 2);
+    }
+}
+
 static void opl_rhythm_write(opl_state *st, uint8_t old, uint8_t val)
 {
-    static const uint8_t drum_op[4] = { 13, 17, 14, 16 };   /* HH, TC, TT, SD     */
+    uint8_t ck = opl_rhy_chkeys(st);
     int b;
-    if (!(val & OPL_BD_RHY)) {                  /* leaving rhythm mode: all quiet */
-        if (old & OPL_BD_RHY)
-            for (b = 12; b < 18; ++b) opl_key_op(st, b, 0);
-        return;
+    /* The hit counters count DRUM-BIT rising edges, as they always have: bits 0-4
+       are hi-hat, cymbal, tom-tom, snare, bass drum, prof_rhythm_hits' order. */
+    if (val & OPL_BD_RHY) {
+        uint8_t was = (old & OPL_BD_RHY) ? old : 0;     /* entering: every set bit is new */
+        for (b = 0; b < 5; ++b)
+            if (((val & ~was) >> b) & 1) st->prof_rhythm_hits[b]++;
     }
-    if (!(old & OPL_BD_RHY)) old = 0;           /* entering: every set bit is new */
-    for (b = 0; b < 4; ++b)
-        if (((val >> b) & 1) != ((old >> b) & 1)) {
-            opl_key_op(st, drum_op[b], (val >> b) & 1);
-            if ((val >> b) & 1) st->prof_rhythm_hits[b]++;
-        }
-    if ((val & 0x10) != (old & 0x10)) {         /* bass drum keys both operators  */
-        opl_key_op(st, 12, val & 0x10);
-        opl_key_op(st, 15, val & 0x10);
-        if (val & 0x10) st->prof_rhythm_hits[4]++;
-    }
+    opl_rhythm_rekey(st, old, ck, val, ck);
 }
 
 /* Key-on / key-off edge for channel `c` -- both its operators, or all four when it
@@ -267,10 +300,18 @@ void vdd_opl_write_reg(opl_state *st, uint16_t reg9, uint8_t val)
         st->ch[c].fnum  = (uint16_t)((st->ch[c].fnum & 0xFF) | ((val & 3) << 8));
         st->ch[c].block = (val >> 2) & 7;
         /* In rhythm mode channels 6-8 ARE the percussion voices, keyed from 0xBD.
-           Their own key-on bit is not theirs to use any more -- but the F-number
-           and block above still are, because that is how a driver tunes the drums.
-           Array 0 only: rhythm mode has no counterpart in array 1. */
-        if (c >= 6 && c <= 8 && (st->reg[0xBD] & OPL_BD_RHY)) return;
+           The F-number and block above still apply -- that is how a driver tunes
+           the drums -- and the key bit is OR'd with the drum bits rather than
+           driving a melodic voice. Array 0 only: rhythm mode has no counterpart
+           in array 1. */
+        if (c >= 6 && c <= 8 && (st->reg[0xBD] & OPL_BD_RHY)) {
+            /* ...but the key bit still counts, OR'd with the drum bits (see
+               opl_rhythm_rekey): it keys this channel's operators as drums. */
+            uint8_t ck0 = opl_rhy_chkeys(st);
+            st->ch[c].keyon = (uint8_t)kon;
+            opl_rhythm_rekey(st, st->reg[0xBD], ck0, st->reg[0xBD], opl_rhy_chkeys(st));
+            return;
+        }
         /* The second channel of a 4-op pair has no key of its own: its F-number
            and block are latched above (and ignored), its key-on bit is ignored. */
         if (opl_4op_role(st, c) == 2) return;
@@ -391,6 +432,7 @@ void vdd_opl_reset(void *self)
     st->sample_hz = shz ? shz : OPL_DEFAULT_HZ;
     st->ext_clock = ext;
     st->opl3      = opl3;       /* the card, not the guest's state: NEW is 0 again */
+    st->noise     = OPL_NOISE_SEED;   /* an all-zero LFSR would never leave zero  */
     /* SILENT MEANS FULLY ATTENUATED, NOT ZERO. env counts attenuation, so zeroing
        the struct leaves every operator at FULL VOLUME waiting for its first note.
        Key-on does not reset env -- measured: the reference resumes an interrupted

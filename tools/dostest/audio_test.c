@@ -403,12 +403,19 @@ int main(void)
         }
         M3_EAT(6000);
         for (c = 0; c < 9; c += 2) { M3_W(0xB0 + c, o3.reg[0xB0 + c] & ~0x20); M3_EAT(900); }
+        /* #139 made the hi-hat, cymbal and snare sound and OR'd each drum bit with
+           its channel's key bit, so from the rhythm write on the hash moved -- see
+           opl_synth_test's golden for the why. Everything BEFORE it must not. */
+        {   uint32_t h_mel = h;
+            printf("        OPL2 through the mixer, before rhythm mode: fnv=0x%08X (golden 0x%08X)\n",
+                   h_mel, 0x44CCD995u);
+            CHECK(h_mel == 0x44CCD995u, "mix: an OPL2 mixes bit-identically to the pre-OPL3 build up to rhythm mode"); }
         M3_W(0xBD, 0xE0 | 0x10 | 0x04); M3_EAT(4000);
         M3_W(0xBD, 0xE0 | 0x0B);        M3_EAT(3000);
         M3_W(0xBD, 0x00);
         for (k = 0; k < 8; ++k) M3_EAT(4000);
-        printf("        OPL2 through the mixer: fnv=0x%08X (golden 0x6CA12225)\n", h);
-        CHECK(h == 0x6CA12225u, "mix: an OPL2 mixes bit-identically to the pre-OPL3 (mono-source) build");
+        printf("        OPL2 through the mixer: fnv=0x%08X (golden 0x%08X; 0x6CA12225 before #139)\n", h, 0x3B2BE715u);
+        CHECK(h == 0x3B2BE715u, "mix: an OPL2 mixes bit-identically to the #139 build");
         #undef M3_EAT
         #undef M3_W
 

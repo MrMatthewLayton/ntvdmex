@@ -32500,12 +32500,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
            cannot tell "set once at init" from "drums play throughout" -- it once
            produced a confident wrong answer about exactly this register. These are
-           key-on edges per voice, and the last three are NOT SYNTHESISED YET, so
-           this doubles as their loud-failure report: the run says how many hits it
-           could not play rather than going quietly silent. */
+           key-on edges per voice. All five are synthesised since #139 (hi-hat,
+           snare and cymbal were silent before it and this line said so); the counts
+           stay because they say how much percussion a game actually uses. */
         p = zput(p, "STAGE2: opl rhythm: bassdrum="); p = zhex(p, g_opl.prof_rhythm_hits[4]);
         p = zput(p, " tomtom=");                      p = zhex(p, g_opl.prof_rhythm_hits[2]);
-        p = zput(p, "  NOT SYNTHESISED hihat=");      p = zhex(p, g_opl.prof_rhythm_hits[0]);
+        p = zput(p, " hihat=");                       p = zhex(p, g_opl.prof_rhythm_hits[0]);
         p = zput(p, " snare=");                       p = zhex(p, g_opl.prof_rhythm_hits[3]);
         p = zput(p, " cymbal=");                      p = zhex(p, g_opl.prof_rhythm_hits[1]);
         p = zput(p, "\r\n");

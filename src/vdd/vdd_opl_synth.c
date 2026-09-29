@@ -24,9 +24,8 @@
  *     oscillating into noise.
  *
  * Rendered at the chip's native 49716 Hz (3.579545 MHz / 72) so the phase maths
- * is exact; the mixer resamples to the host rate. Deliberately NOT modelled yet:
- * tremolo/vibrato depth (0xBD) and rhythm mode -- both are additive on top of
- * this and neither affects pitch or note timing.
+ * is exact; the mixer resamples to the host rate. Tremolo/vibrato and all five
+ * rhythm-mode drums are modelled below, each from measurement.
  *
  * CALIBRATION. Every scaling constant below is MEASURED, not guessed: driven into
  * both this core and a reference one from an identical register stream, one
@@ -322,25 +321,30 @@ static int32_t opl_static_att(const opl_state *st, int chi, const opl_op *o)
    ► Feedback measured the same way: our FB=n matched the reference's FB=n-1 step
      for step, the same factor of two, in the same place.                          */
 
-/* One operator sample. `mod` is a phase offset in sine-table steps (FM input). */
-static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
+/* An operator's output at phase index `idx` (0-1023): waveform, envelope, level,
+   tremolo. Split out of opl_op_sample for the rhythm voices, whose phase is not
+   their own accumulator's. */
+static int32_t opl_op_out(const opl_state *st, int chi, const opl_op *o, uint32_t idx)
 {
-    opl_op *o = &st->op[opi];
-    uint32_t idx;
     int32_t logv, att, amp;
     int neg = 0, mute = 0;
 
-    o->phase += opl_phase_inc(st, chi, o);
-    if (o->eg_state == OPL_EG_OFF) return 0;
-
-    idx  = ((o->phase >> 10) + (uint32_t)mod) & 0x3FF;
-    logv = opl_wave(opl_eff_wave(st, o), idx, &neg, &mute);
+    logv = opl_wave(opl_eff_wave(st, o), idx & 0x3FF, &neg, &mute);
     if (mute) return 0;
 
     att = logv + (o->env >> OPL_ENV_SHIFT) * OPL_ENV_TO_LOG + opl_static_att(st, chi, o);
     if (o->am) att += opl_trem_units(st) * OPL_ENV_TO_LOG;
     amp = opl_exp2neg(att);
     return neg ? -amp : amp;
+}
+
+/* One operator sample. `mod` is a phase offset in sine-table steps (FM input). */
+static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
+{
+    opl_op *o = &st->op[opi];
+    o->phase += opl_phase_inc(st, chi, o);
+    if (o->eg_state == OPL_EG_OFF) return 0;
+    return opl_op_out(st, chi, o, (o->phase >> 10) + (uint32_t)mod);
 }
 
 /* --- rhythm mode ---------------------------------------------------------- *
@@ -362,23 +366,109 @@ static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
  * at DOUBLE amplitude. A tom-tom peaks at 8170 where an ordinary operator at the
  * same settings peaks at 4085.
  *
- * ► THE LAST THREE ARE NOT IMPLEMENTED, DELIBERATELY. Snare, hi-hat and cymbal
- *   need the chip's special phase generator -- a boolean function of bits taken
- *   from two different phase accumulators, plus a noise source. That is precisely
- *   the kind of detail this project's cardinal rule exists for: writing it from
- *   half-memory would produce something plausible that is wrong, and the harness
- *   would score it as an improvement because ANY sound beats silence. They are
- *   counted instead (prof_rhythm_hits), so a run says out loud what it could not
- *   play. The measurements needed to derive them are recorded above and in
- *   return-ntvdm.md.                                                              */
-/* Returns the drums per CHANNEL -- bass drum on channel 6, tom-tom on channel 8 --
-   because on an OPL3 with NEW set each channel's C0 bits route it left or right,
-   and a drum goes where its channel register sends it. */
-static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v8)
+ * ── SNARE, HI-HAT AND CYMBAL (#139). These three read a PHASE THEY DO NOT OWN: a
+ *    10-bit index built from bits of op13's and op17's accumulators and from a
+ *    noise bit, which then goes through the operator's waveform, envelope and level
+ *    exactly as an ordinary phase would. Everything here was READ OUT of the
+ *    reference's output, never taken from its source (`oplprobe rphase`, `noise`):
+ *    run the drum eight times, once per waveform, and invert the eight output
+ *    samples against a table of the same eight waveforms measured on the tom-tom
+ *    (an ordinary operator) -- which gives the 10-bit phase index the drum used at
+ *    every sample. What came out:
+ *
+ *      voice    phase index (measured, 0 mispredictions in 11936 samples, on a
+ *               register setup the fit never saw)
+ *      hi-hat   B<<9 | (B ^ noise ? 0x0D0 : 0x034)
+ *      snare    S<<9 | (S ^ noise) << 8          S = bit 8 of op13's index
+ *      cymbal   B<<9 | 0x080
+ *
+ *    where B, "the phase bit", is a function of five accumulator bits and nothing
+ *    else. A search over every subset of up to five of the twenty bits of the two
+ *    indices found exactly ONE subset that determines it -- op13 bits 2, 3, 7 and
+ *    op17 bits 3, 5 -- and its truth table is zero in exactly four of 32 cells:
+ *      B = (p13.2 ^ p13.7) | (p13.3 ^ p17.5) | (p17.3 ^ p17.5)
+ *    (p13.3 ^ p17.3 in the middle term is the same function.) ⚠ Not a guess to be
+ *    "corrected" from memory: the obvious-looking alternative with p13.3 OR'd in on
+ *    its own is REFUTED by the table -- cell 11010 reads 0.
+ *
+ *    TIMING, also measured (the subset search fits the sample offsets too): the
+ *    hi-hat sees op13's index for THIS sample but op17's from the PREVIOUS one; the
+ *    cymbal and snare see both current. The reference also delivers its carrier
+ *    slots one sample later than ours -- snare and cymbal best-align at lag +4
+ *    like the bass drum, the hi-hat at +3 like the tom-tom. That is the pipeline,
+ *    not the waveform: see the lag note in `oplprobe rhythm`.
+ *
+ *    op13 and op17 run their phase every sample in rhythm mode whether or not
+ *    their own drum is keyed (the hi-hat alone still reads op17's bits). A drum's
+ *    key-on restarts its own operator's accumulator -- and WHERE it restarts
+ *    matters here as it does nowhere else, because the other accumulator is not
+ *    restarted with it. MEASURED (`oplprobe restart`, key-on at samples 1, 2, 37,
+ *    3001): a key-on restarts the accumulator ONE STEP FURTHER ON than the
+ *    running one's own start from reset would put it -- so its first sample reads
+ *    two steps, not one (rhy_restart, set in vdd_opl.c). A key-on before the
+ *    first sample after reset is the exception and reads like reset itself, which
+ *    is why the default experiment never saw it. Without this the hi-hat and
+ *    cymbal keyed into a running chip score 0.71 / 0.70; with it 0.9999, the rest
+ *    being two samples of key-on latency the tom-tom shares. (Ordinary operators
+ *    restart the same way, but there it is a one-sample shift of a lone waveform
+ *    against its envelope -- inaudible, invisible at best lag, and the OPL2
+ *    golden holds it -- so only these two accumulators model it.)
+ *
+ * ── THE NOISE (`oplprobe noise`). With op13/op17 frozen (F-num 0) B is 0, so the
+ *    hi-hat and snare phases above carry nothing but the noise bit. Both streams
+ *    have linear complexity 23 (Berlekamp-Massey) with the SAME recurrence,
+ *        s[n] = s[n-1] ^ s[n-8] ^ s[n-9] ^ s[n-23]
+ *    which is precisely the trinomial LFSR  u[i] = u[i-9] ^ u[i-23]  (period
+ *    2^23-1) sampled once every 9*2^k of its own steps -- and 72 = 9*8 is the
+ *    chip's master clocks per output sample. The decimation is not a free choice:
+ *    solving for the one state that yields the hi-hat's stream, the snare's stream
+ *    turns out to be the SAME register read 66 steps (0.917 samples) earlier under
+ *    72 steps per sample (or 33 / 132 under 36 / 144, the same thing scaled),
+ *    while under 9 or 18 it is on no shared register at all. 72 it is, and the
+ *    state it solves to is ONE SET BIT (OPL_NOISE_SEED) at exactly the point our
+ *    renderer starts from after reset. So the noise is sample-exact from
+ *    power-on, not merely statistically alike: the hi-hat's and snare's decoded
+ *    noise bits match the model at every one of 3936 samples.
+ *    In our frame the snare's output sits one sample after the hi-hat's (the lag
+ *    note above), so "66 steps before the hi-hat's NEXT sample" is bit 6 of the
+ *    same 23-bit window whose bit 0 the hi-hat reads.
+ *
+ * Summed at double amplitude like the other drums. Hi-hat and snare follow channel
+ * 7's C0 routing and the cymbal channel 8's, like the tom-tom -- measured, OPL3
+ * with NEW set, one channel routed left at a time (`oplprobe drums`). The hit
+ * counters (prof_rhythm_hits) stay: they say how much percussion a game uses. */
+
+/* The noise register: 72 steps of u[i] = u[i-9] ^ u[i-23] per sample. `w` holds
+   the last 23 outputs, bit 0 the oldest; the nearest tap is 9 back, so nine new
+   bits can be made at once and eight of those make one sample's 72. */
+#define OPL_NOISE_STEPS_PER_SAMPLE 72
+static uint32_t opl_noise_step(uint32_t w)
+{
+    int k;
+    if (!w) w = OPL_NOISE_SEED;         /* a never-reset struct: zero is a dead state */
+    for (k = 0; k < OPL_NOISE_STEPS_PER_SAMPLE / 9; ++k)
+        w = (w >> 9) | ((((w >> 14) ^ w) & 0x1FF) << 14);
+    return w;
+}
+#define OPL_NOISE_BIT_HH 0      /* which bit of the window each drum reads -- the */
+#define OPL_NOISE_BIT_SD 6      /* snare 6 steps later (see `oplprobe noise`)     */
+
+/* The phase bit B from op13's and op17's 10-bit indices. */
+static uint32_t opl_rhythm_bit(uint32_t p13, uint32_t p17)
+{
+    return (((p13 >> 2) ^ (p13 >> 7)) | ((p13 >> 3) ^ (p17 >> 5)) | ((p17 >> 3) ^ (p17 >> 5))) & 1;
+}
+
+/* Returns the drums per CHANNEL -- bass drum on channel 6, hi-hat and snare on 7,
+   tom-tom and cymbal on 8 -- because on an OPL3 with NEW set each channel's C0
+   bits route it left or right, and a drum goes where its channel register sends it. */
+static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v7, int32_t *v8)
 {
     int32_t mo, co, fbmod = 0;
     opl_op *m = &st->op[12], *cr = &st->op[15];
-    *v6 = *v8 = 0;
+    opl_op *hh = &st->op[13], *sd = &st->op[16], *cy = &st->op[17];
+    uint32_t p13, p17, p17_prev, b;
+    *v6 = *v7 = *v8 = 0;
 
     /* BASS DRUM -- channel 6, an ordinary two-operator voice. */
     if (m->eg_state != OPL_EG_OFF || cr->eg_state != OPL_EG_OFF) {
@@ -397,12 +487,34 @@ static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v8)
         opl_env_tick(st, 8, 14);
     }
 
-    /* Snare (op16), hi-hat (op13) and cymbal (op17) belong here. Their envelopes
-       still run so that a key-on is not left latched forever, but they produce no
-       sound: see the note above. */
-    if (st->op[13].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 13);
-    if (st->op[16].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 16);
-    if (st->op[17].eg_state != OPL_EG_OFF) opl_env_tick(st, 8, 17);
+    /* The two accumulators the other three read. They run every sample, keyed or
+       not; the hi-hat takes op17's index from BEFORE this sample's step. */
+    p17_prev = (cy->phase >> 10) & 0x3FF;
+    hh->phase += opl_phase_inc(st, 7, hh) << (st->rhy_restart & 1);
+    cy->phase += opl_phase_inc(st, 8, cy) << ((st->rhy_restart >> 1) & 1);
+    st->rhy_restart = 0;
+    p13 = (hh->phase >> 10) & 0x3FF;
+    p17 = (cy->phase >> 10) & 0x3FF;
+
+    /* HI-HAT -- op13's envelope and level, channel 7. */
+    if (hh->eg_state != OPL_EG_OFF) {
+        b = opl_rhythm_bit(p13, p17_prev);
+        *v7 += opl_op_out(st, 7, hh, (b << 9) |
+                          ((b ^ (st->noise >> OPL_NOISE_BIT_HH)) & 1 ? 0x0D0u : 0x034u)) * 2;
+        opl_env_tick(st, 7, 13);
+    }
+    /* SNARE -- op16's envelope and level, on op13's bit 8, channel 7. */
+    if (sd->eg_state != OPL_EG_OFF) {
+        b = (p13 >> 8) & 1;
+        *v7 += opl_op_out(st, 7, sd, (b << 9) |
+                          (((b ^ (st->noise >> OPL_NOISE_BIT_SD)) & 1) << 8)) * 2;
+        opl_env_tick(st, 7, 16);
+    }
+    /* CYMBAL -- op17's envelope and level, channel 8. */
+    if (cy->eg_state != OPL_EG_OFF) {
+        *v8 += opl_op_out(st, 8, cy, (opl_rhythm_bit(p13, p17) << 9) | 0x080u) * 2;
+        opl_env_tick(st, 8, 17);
+    }
 }
 
 /* --- one voice ------------------------------------------------------------ */
@@ -504,10 +616,14 @@ static void opl_sample_lr(opl_state *st, int32_t *pl, int32_t *pr)
     int nch = newm ? OPL3_NUM_CH : OPL_NUM_CH, c;
     int32_t l = 0, r = 0;
 
+    /* The noise generator runs from power-on whatever the mode, like the LFOs:
+       the drums read it where it has got to, never from a restart. */
+    st->noise = opl_noise_step(st->noise);
     if (rhythm) {
-        int32_t v6, v8;
-        opl_rhythm_sample(st, &v6, &v8);
+        int32_t v6, v7, v8;
+        opl_rhythm_sample(st, &v6, &v7, &v8);
         opl_route(st, newm, 6, v6, &l, &r);
+        opl_route(st, newm, 7, v7, &l, &r);
         opl_route(st, newm, 8, v8, &l, &r);
     }
     /* Outside the channel loop, and before the early-outs below: the LFOs run

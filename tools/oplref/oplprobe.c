@@ -22,7 +22,8 @@
  * magnitude is exact rather than approximate.
  *
  *   Build:  tools/oplref/build.sh        Run:  build/oplref/oplprobe <experiment>
- *   Experiments: validate tl mod fb wave env ksl mult all
+ *   Experiments: validate tl mod fb wave env ksl mult lfo rhythm all, and for the
+ *   snare / hi-hat / cymbal (#139): rphase restart keyor noise drums
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1184,6 +1185,651 @@ static void exp_mult(void)
     }
 }
 
+/* ============================================================================ *
+ * EXPERIMENTS N, N2, O, P, Q -- SNARE, HI-HAT AND CYMBAL (#139).
+ *
+ * Experiment M says WHICH operators these three use; these say WHAT they do with
+ * them, still strictly from the outside.
+ *
+ * THE INSTRUMENT: A PHASE READ-BACK. An operator at full level with a held
+ * envelope outputs a known function of its 10-bit phase index, one per waveform.
+ * Measure that function on the tom-tom -- an ordinary operator, driven at exactly
+ * one index step per sample -- for all eight waveforms (OPL3, NEW set). Then run
+ * a drum eight times, identically but for its waveform, and at every sample pick
+ * the index whose eight tabulated outputs are nearest the eight observed ones.
+ * That is the phase the drum USED, sample by sample. Tolerant (nearest, not
+ * equal) because the idle operators add a few LSBs of offset; a sample whose best
+ * match is still far off is reported as undecodable rather than guessed.
+ * ⚠ Near a sine peak several indices give the same eight outputs (the table is
+ *   flat there), so 0x300 can read back as 0x301-0x304. The rules below are
+ *   checked with that one known ambiguity allowed and nothing else.
+ * ============================================================================ */
+typedef struct { uint8_t reg, val; int at; } tev_t;      /* a write at sample `at` */
+
+typedef struct {
+    uint8_t  bd;                    /* 0xBD drum bits                              */
+    uint16_t f7, f8;                /* channel 7 / 8 F-number                      */
+    uint8_t  b7, b8;                /* ... and block                               */
+    uint8_t  m13, m17;              /* op13 / op17 MULT                            */
+    uint8_t  ws;                    /* waveform for all six rhythm operators       */
+    uint8_t  newm;                  /* OPL3 with NEW set (waveforms 4-7)           */
+    uint8_t  tlmask;                /* bit i: operator 12+i at TL=63               */
+    uint8_t  ad, sr, egt;           /* 0x60 / 0x80 values, EGT                     */
+    uint8_t  bdhi;                  /* DAM/DVB bits for 0xBD                       */
+    uint8_t  amvib;                 /* 0x80/0x40 bits for all six 0x20 registers   */
+    int      key_at;                /* sample at which the 0xBD drum bits go on    */
+} dcfg_t;
+
+static const dcfg_t DCFG0 = { 0, 0x200, 0x200, 4, 4, 1, 1, 0, 0, 0, 0xF0, 0x0F, 1, 0, 0, 0 };
+
+static void both_write9(uint16_t reg, uint8_t val)
+{
+    vdd_opl_write_reg(&g_ours, reg, val);
+    OPL3_WriteReg(&g_ref, reg, val);
+}
+
+static const uint8_t g_mult2[16] = { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
+static tev_t g_dev[64];
+static int   g_ndev;
+
+/* Program a drum setup into both cores and render n samples of it, plus any
+   extra timed writes queued in g_dev. */
+static void drum_run(const dcfg_t *c, int n)
+{
+    int i, e = 0;
+    memset(&g_ours, 0, sizeof g_ours);
+    g_ours.sample_hz = RATE; g_ours.ext_clock = 1; g_ours.opl3 = c->newm;
+    vdd_opl_reset(&g_ours);
+    OPL3_Reset(&g_ref, RATE);
+    if (c->newm) both_write9(0x105, 1); else both_write(0x01, 0x20);
+    for (i = 0; i < 6; i++) {
+        uint8_t o = g_rop[i];
+        uint8_t mult = (12 + i == 13) ? c->m13 : (12 + i == 17) ? c->m17 : 1;
+        both_write((uint8_t)(0x20 + o), (uint8_t)(c->amvib | (c->egt ? 0x20 : 0) | mult));
+        both_write((uint8_t)(0x40 + o), (uint8_t)((c->tlmask >> i) & 1 ? 0x3F : 0x00));
+        both_write((uint8_t)(0x60 + o), c->ad);
+        both_write((uint8_t)(0x80 + o), c->sr);
+        both_write((uint8_t)(0xE0 + o), c->ws);
+    }
+    for (i = 6; i < 9; i++) {
+        uint16_t f = i == 6 ? TEST_FNUM : i == 7 ? c->f7 : c->f8;
+        uint8_t  b = i == 6 ? TEST_BLOCK : i == 7 ? c->b7 : c->b8;
+        both_write((uint8_t)(0xC0 + i), c->newm ? 0x30 : 0x00);
+        both_write((uint8_t)(0xA0 + i), (uint8_t)(f & 0xFF));
+        both_write((uint8_t)(0xB0 + i), (uint8_t)((b << 2) | ((f >> 8) & 3)));
+    }
+    both_write(0xBD, (uint8_t)(c->bdhi | OPL_BD_RHY | (c->key_at ? 0 : c->bd)));
+    for (i = 0; i < n; i++) {
+        int16_t s = 0, buf[2] = { 0, 0 };
+        if (c->key_at && i == c->key_at) both_write(0xBD, (uint8_t)(c->bdhi | OPL_BD_RHY | c->bd));
+        while (e < g_ndev && g_dev[e].at == i) { both_write(g_dev[e].reg, g_dev[e].val); e++; }
+        vdd_opl_render(&g_ours, &s, 1);
+        OPL3_GenerateResampled(&g_ref, buf);
+        g_a[i] = s; g_b[i] = buf[0];
+    }
+}
+
+/* Best-lag correlation of ours against the reference over [from, from+n). */
+static double lagcorr(size_t from, size_t n, int *lag_out, double *lag0)
+{
+    double best = -2; int lag, bestlag = 0;
+    for (lag = -8; lag <= 8; lag++) {
+        double ca = 0, cb = 0, cc = 0, r; size_t j;
+        for (j = 16; j < n - 16; j++) {
+            double x = g_a[from + j], y = g_b[from + j + lag];
+            ca += x * x; cb += y * y; cc += x * y;
+        }
+        r = (ca > 0 && cb > 0) ? cc / sqrt(ca * cb) : (ca == 0 && cb == 0 ? 1.0 : 0.0);
+        if (lag == 0 && lag0) *lag0 = r;
+        if (r > best) { best = r; bestlag = lag; }
+    }
+    if (lag_out) *lag_out = bestlag;
+    return best;
+}
+
+/* --- the phase read-back ------------------------------------------------------ */
+#define RB_N 12000
+static int16_t g_rbtab[2][8][1024];             /* [core][waveform][index]         */
+static int16_t g_rbrun[2][8][RB_N];             /* [core][waveform][sample]        */
+static int     g_rbph[2][RB_N];                 /* decoded index, -1 = undecodable */
+
+static void readback_calibrate(void)
+{
+    dcfg_t c = DCFG0;
+    int w, n, core, L[2];
+    c.bd = 0x04; c.newm = 1; c.f8 = 0x200; c.b8 = 1;  /* tom: one index per sample */
+    /* Align each core's table on its own: waveform 1 goes silent at index 512. */
+    c.ws = 1; drum_run(&c, 4096);
+    for (core = 0; core < 2; core++) {
+        const int16_t *s = core ? g_b : g_a;
+        for (n = 101; n < 4096; n++) if (s[n - 1] != 0 && s[n] == 0) break;
+        L[core] = n - 512;
+    }
+    for (w = 0; w < 8; w++) {
+        c.ws = (uint8_t)w; drum_run(&c, 4096);
+        for (core = 0; core < 2; core++)
+            for (n = 2048; n < 3072; n++)
+                g_rbtab[core][w][(n - L[core]) & 1023] = (core ? g_b : g_a)[n];
+    }
+}
+
+static void readback(const dcfg_t *base, int n)
+{
+    int w, i, k, core;
+    dcfg_t c = *base;
+    c.newm = 1;
+    for (w = 0; w < 8; w++) {
+        c.ws = (uint8_t)w; drum_run(&c, n);
+        memcpy(g_rbrun[0][w], g_a, n * sizeof(int16_t));
+        memcpy(g_rbrun[1][w], g_b, n * sizeof(int16_t));
+    }
+    for (core = 0; core < 2; core++)
+        for (i = 0; i < n; i++) {
+            int best = 1 << 30, bk = -1;
+            for (k = 0; k < 1024; k++) {
+                int s = 0;
+                for (w = 0; w < 8 && s < best; w++) s += abs(g_rbtab[core][w][k] - g_rbrun[core][w][i]);
+                if (s < best) { best = s; bk = k; }
+            }
+            g_rbph[core][i] = best > 400 ? -1 : bk;
+        }
+}
+
+/* Our model of the index each voice uses, for checking the reference's against:
+   the rules in vdd_opl_synth.c, restated here from the measurement so that the
+   probe checks the synth rather than trusting it. `n` is the REFERENCE's sample. */
+static uint32_t ref_index(const dcfg_t *c, int op, long n)
+{
+    uint32_t inc = op == 13 ? ((uint32_t)(c->f7 << c->b7) * g_mult2[c->m13]) >> 1
+                            : ((uint32_t)(c->f8 << c->b8) * g_mult2[c->m17]) >> 1;
+    return n < 0 ? 0 : (((uint32_t)n * inc) >> 10) & 1023;
+}
+static uint32_t rbit(uint32_t p13, uint32_t p17)
+{
+    return (((p13 >> 2) ^ (p13 >> 7)) | ((p13 >> 3) ^ (p17 >> 5)) | ((p17 >> 3) ^ (p17 >> 5))) & 1;
+}
+static uint32_t nstep(uint32_t w, int k)
+{
+    while (k-- > 0) w = (w >> 1) | ((((w >> 14) ^ w) & 1) << 22);
+    return w;
+}
+
+/* EXPERIMENT N -- what phase each voice runs on, and the rule behind it. */
+static void exp_rphase(void)
+{
+    static const char *nm[3] = { "hi-hat", "snare", "cymbal" };
+    static const uint8_t bit[3] = { 0x01, 0x08, 0x02 };
+    /* The FIT setup, and a HELD-OUT one the rules are then checked on. */
+    dcfg_t fit = DCFG0, held = DCFG0;
+    int v, i, n = RB_N, d13, d17;
+    fit.f7 = 0x1A3; fit.b7 = 5; fit.m13 = 3; fit.f8 = 0x2F1; fit.b8 = 4; fit.m17 = 5;
+    held.f7 = 0x0B7; held.b7 = 6; held.m13 = 1; held.f8 = 0x3E5; held.b8 = 2; held.m17 = 7;
+
+    readback_calibrate();
+    printf("  PHASE INDICES EACH VOICE USES (read back from the output; ref | ours)\n");
+    for (v = 0; v < 3; v++) {
+        int core;
+        dcfg_t c = fit; c.bd = bit[v];
+        readback(&c, n);
+        for (core = 1; core >= 0; core--) {
+            static int hist[1025];
+            int k, shown = 0;
+            memset(hist, 0, sizeof hist);
+            for (i = 64; i < n; i++) hist[g_rbph[core][i] < 0 ? 1024 : g_rbph[core][i]]++;
+            printf("  %-7s %-4s", core ? nm[v] : "", core ? "ref" : "ours");
+            for (k = 0; k < 1025; k++)
+                if (hist[k] && shown++ < 8) {
+                    if (k == 1024) printf(" undecodable:%d", hist[k]);
+                    else printf(" %03x:%d", k, hist[k]);
+                }
+            printf("\n");
+        }
+    }
+
+    /* THE PHASE BIT. For the cymbal (no noise in it), which subset of the twenty
+       accumulator bits -- op13's index bits 0-9, op17's 0-9 -- determines bit 9 of
+       its phase, and at which sample offsets? Every subset of up to five bits is
+       tried; "determines" means no two samples with equal inputs disagree. */
+    printf("\n  WHICH ACCUMULATOR BITS DETERMINE THE CYMBAL'S PHASE BIT (fit setup)\n");
+    {
+        dcfg_t c = fit; c.bd = 0x02;
+        static int tgt[RB_N];
+        int found = 0;
+        readback(&c, n);
+        for (i = 0; i < n; i++) tgt[i] = g_rbph[1][i] < 0 ? -1 : (g_rbph[1][i] >> 9) & 1;
+        for (d13 = 2; d13 <= 3; d13++) for (d17 = 2; d17 <= 3; d17++) {
+            uint32_t a, b, cc, dd, ee;
+            for (a = 0; a < 20; a++) for (b = a; b < 20; b++) for (cc = b; cc < 20; cc++)
+            for (dd = cc; dd < 20; dd++) for (ee = dd; ee < 20; ee++) {
+                uint32_t bits[5] = { a, b, cc, dd, ee };
+                signed char tab[32];
+                int bad = 0, j;
+                memset(tab, -1, sizeof tab);
+                for (i = 64; i < n && !bad; i++) {
+                    uint32_t full, key = 0;
+                    if (tgt[i] < 0) continue;
+                    full = ref_index(&c, 13, i - d13) | (ref_index(&c, 17, i - d17) << 10);
+                    for (j = 0; j < 5; j++) key |= ((full >> bits[j]) & 1) << j;
+                    if (tab[key] < 0) tab[key] = (signed char)tgt[i];
+                    else if (tab[key] != tgt[i]) bad = 1;
+                }
+                if (!bad) {
+                    uint32_t m = 0;
+                    for (j = 0; j < 5; j++) m |= 1u << bits[j];
+                    printf("    offsets op13 -%d op17 -%d: op13 bits", d13, d17);
+                    for (j = 0; j < 10; j++) if (m >> j & 1) printf(" %d", j);
+                    printf(", op17 bits");
+                    for (j = 10; j < 20; j++) if (m >> j & 1) printf(" %d", j - 10);
+                    printf("\n");
+                    found++;
+                    if (found == 1) {
+                        int k;
+                        printf("      truth table, zero cells (p17.5 p17.3 p13.7 p13.3 p13.2):");
+                        for (k = 0; k < 32; k++) {
+                            uint32_t p13 = ((k & 1) << 2) | ((k >> 1 & 1) << 3) | ((k >> 2 & 1) << 7);
+                            uint32_t p17 = ((k >> 3 & 1) << 3) | ((k >> 4 & 1) << 5);
+                            if (!rbit(p13, p17)) printf(" %d%d%d%d%d", k >> 4 & 1, k >> 3 & 1,
+                                                        k >> 2 & 1, k >> 1 & 1, k & 1);
+                        }
+                        printf("\n");
+                    }
+                }
+            }
+        }
+        printf("    %d determining subset(s) of <= 5 bits\n", found);
+    }
+
+    /* THE RULES, checked on the HELD-OUT setup against the reference's read-back,
+       with the noise predicted from the LFSR model (experiment O). Reference
+       sample n <-> the model's window after 72*(n-2) steps from OPL_NOISE_SEED --
+       ours is one output sample ahead of the reference for these voices. */
+    printf("\n  RULES vs REFERENCE READ-BACK, held-out setup (f7=%03x b7=%d m13=%d, f8=%03x b8=%d m17=%d)\n",
+           held.f7, held.b7, held.m13, held.f8, held.b8, held.m17);
+    for (v = 0; v < 3; v++) {
+        dcfg_t c = held; c.bd = bit[v];
+        int bad = 0, tot = 0, undec = 0;
+        uint32_t wprev;
+        readback(&c, n);
+        {
+            static uint32_t W[RB_N];
+            W[2] = OPL_NOISE_SEED;                /* = reference sample 2's window  */
+            for (i = 3; i < n; i++) W[i] = nstep(W[i - 1], 72);
+            for (i = 64; i < n; i++) {
+                uint32_t b, pred, got = (uint32_t)g_rbph[1][i];
+                if (g_rbph[1][i] < 0) { undec++; continue; }
+                wprev = W[i - 1];
+                if (v == 0) {
+                    b = rbit(ref_index(&c, 13, i - 2), ref_index(&c, 17, i - 3));
+                    pred = (b << 9) | ((b ^ W[i]) & 1 ? 0x0D0 : 0x034);
+                } else if (v == 1) {
+                    b = (ref_index(&c, 13, i - 3) >> 8) & 1;
+                    pred = (b << 9) | (((b ^ (wprev >> 6)) & 1) << 8);
+                } else {
+                    pred = (rbit(ref_index(&c, 13, i - 3), ref_index(&c, 17, i - 3)) << 9) | 0x080;
+                }
+                tot++;
+                if (got != pred && !(pred == 0x300 && got > 0x300 && got <= 0x30A)) bad++;
+            }
+        }
+        printf("    %-7s %d of %d samples mispredicted (%d undecodable)\n", nm[v], bad, tot, undec);
+    }
+}
+
+/* EXPERIMENT N2 -- WHERE A KEY-ON RESTARTS THE ACCUMULATOR. The hi-hat and cymbal
+   read two accumulators at once, so a restart one step early or late is not a
+   harmless lag: it changes which bits co-occur. Key each at sample K (the other
+   accumulator running since reset) and fit, from the read-back, the offset each
+   accumulator is at: index = (n - K - keyed_offset)*inc for the keyed one,
+   (n - free_offset)*inc for the other. Then show what is left over sample by
+   sample once the synth models it (`drums` has the correlations). */
+static void exp_restart(void)
+{
+    static const int Ks[5] = { 0, 1, 2, 37, 3001 };
+    int v, ki, d13, d17, i, n = 8000;
+    readback_calibrate();
+    for (v = 0; v < 2; v++) for (ki = 0; ki < 5; ki++) {
+        dcfg_t c = DCFG0;
+        int K = Ks[ki];
+        c.f7 = 0x1A3; c.b7 = 5; c.m13 = 3; c.f8 = 0x2F1; c.b8 = 4; c.m17 = 5;
+        c.bd = v ? 0x02 : 0x01; c.key_at = K;
+        readback(&c, n);
+        for (d13 = -1; d13 <= 5; d13++) for (d17 = -1; d17 <= 5; d17++) {
+            int bad = 0, tot = 0;
+            static uint32_t W[RB_N];
+            W[2] = OPL_NOISE_SEED;
+            for (i = 3; i < n; i++) W[i] = nstep(W[i - 1], 72);
+            for (i = K + 64; i < n; i++) {
+                uint32_t p13, p17, b, pred;
+                if (g_rbph[1][i] < 0) continue;
+                p13 = v == 0 ? ref_index(&c, 13, i - K - d13) : ref_index(&c, 13, i - d13);
+                p17 = v == 1 ? ref_index(&c, 17, i - K - d17) : ref_index(&c, 17, i - d17);
+                b = rbit(p13, p17);
+                pred = v == 0 ? ((b << 9) | ((b ^ W[i]) & 1 ? 0x0D0 : 0x034)) : ((b << 9) | 0x80);
+                tot++; bad += pred != (uint32_t)g_rbph[1][i];
+            }
+            if (bad == 0) printf("  %-7s keyed at %4d: keyed accumulator offset %d, free one %d  (0 of %d wrong)\n",
+                                 v ? "cymbal" : "hi-hat", K, v ? d17 : d13, v ? d13 : d17, tot);
+        }
+    }
+    for (v = 0; v < 2; v++) {
+        dcfg_t c = DCFG0; int bad = 0;
+        c.key_at = 3001; c.f7 = 0x1A3; c.b7 = 5; c.f8 = 0x2F1; c.b8 = 4; c.bd = v ? 2 : 1;
+        drum_run(&c, 8000);
+        printf("  %-7s keyed at 3001, samples where |ours[t] - ref[t%+d]| > 40:", v ? "cymbal" : "hi-hat", 3 + v);
+        for (i = 0; i < 7990; i++)
+            if (abs(g_a[i] - g_b[i + 3 + v]) > 40 && bad++ < 8) printf(" t=%d (%d vs %d)", i, g_a[i], g_b[i + 3 + v]);
+        printf("  [%d in all]\n", bad);
+    }
+}
+
+/* EXPERIMENT Q -- A DRUM BIT AND ITS CHANNEL'S KEY BIT. Is an operator of channels
+   6-8 keyed by its 0xBD drum bit, by its channel's B0 key bit, or by either?
+   Decaying envelopes (DR=4) make a restart visible as a jump in level. */
+static void exp_keyor(void)
+{
+    static const char *what[5] = {
+        "B8 key on, rhythm on, TT bit set at 6000",
+        "B8 key on, rhythm on, nothing else",
+        "TT bit at 0, off at 5990, on again at 6000",
+        "TT bit held from 0, B8 key set at 6000",
+        "B7 key on, rhythm on, HH+SD bits set at 6000" };
+    int mode, i;
+    printf("  RMS over sample windows, reference | ours; then best-lag correlation\n");
+    printf("  %-46s %-14s %-14s %-14s %-14s\n", "scenario", "100-600", "5400-5900", "6100-6600", "11000-11500");
+    for (mode = 0; mode < 5; mode++) {
+        static const int win[4] = { 100, 5400, 6100, 11000 };
+        int k, lag;
+        double r;
+        memset(&g_ours, 0, sizeof g_ours);
+        g_ours.sample_hz = RATE; g_ours.ext_clock = 1;
+        vdd_opl_reset(&g_ours);
+        OPL3_Reset(&g_ref, RATE);
+        both_write(0x01, 0x20);
+        for (i = 0; i < 6; i++) {
+            uint8_t o = g_rop[i];
+            both_write((uint8_t)(0x20 + o), 0x01); both_write((uint8_t)(0x40 + o), 0x00);
+            both_write((uint8_t)(0x60 + o), 0xF4); both_write((uint8_t)(0x80 + o), 0xF4);
+            both_write((uint8_t)(0xE0 + o), 0x00);
+        }
+        for (i = 6; i < 9; i++) {
+            both_write((uint8_t)(0xC0 + i), 0x00);
+            both_write((uint8_t)(0xA0 + i), TEST_FNUM & 0xFF);
+            both_write((uint8_t)(0xB0 + i), (uint8_t)(((mode <= 1 && i == 8) || (mode == 4 && i == 7) ? 0x20 : 0) |
+                                                      (TEST_BLOCK << 2) | ((TEST_FNUM >> 8) & 3)));
+        }
+        both_write(0xBD, (uint8_t)(OPL_BD_RHY | (mode == 2 || mode == 3 ? 0x04 : 0)));
+        for (i = 0; i < 12000; i++) {
+            int16_t s = 0, buf[2] = { 0, 0 };
+            if (i == 5990 && mode == 2) both_write(0xBD, OPL_BD_RHY);
+            if (i == 6000 && (mode == 0 || mode == 2)) both_write(0xBD, OPL_BD_RHY | 0x04);
+            if (i == 6000 && mode == 3) both_write(0xB8, (uint8_t)(0x20 | (TEST_BLOCK << 2) | ((TEST_FNUM >> 8) & 3)));
+            if (i == 6000 && mode == 4) both_write(0xBD, OPL_BD_RHY | 0x09);
+            vdd_opl_render(&g_ours, &s, 1);
+            OPL3_GenerateResampled(&g_ref, buf);
+            g_a[i] = s; g_b[i] = buf[0];
+        }
+        printf("  %-46s", what[mode]);
+        for (k = 0; k < 4; k++)
+            printf(" %5.0f|%-5.0f   ", rms_of(g_b, win[k], 500), rms_of(g_a, win[k], 500));
+        r = lagcorr(64, 11900, &lag, NULL);
+        printf(" %+.4f @%+d\n", r, lag);
+    }
+    printf("  (rows 1 and 2 of the reference are identical: the TT bit does nothing to an\n"
+           "   operator its channel key already holds; row 4: a B0 key written in rhythm\n"
+           "   mode still keys ch8's operators, the tom-tom's restart and the cymbal.\n"
+           "   Row 5's lower correlation is the MIX, not either voice: the reference\n"
+           "   delivers the snare one sample after the hi-hat (experiment M's lags,\n"
+           "   +4 vs +3) and two noise signals one sample apart do not correlate --\n"
+           "   `drums` scores each voice alone)\n");
+}
+
+/* EXPERIMENT O -- the noise source. op13/op17 frozen (F-num 0) makes the phase
+   bit 0, so the hi-hat's and snare's phases carry only the noise. */
+static int bm_complexity(const int *s, int n, int *taps, int *ntaps)
+{
+    static int C[512], B[512], T[512];
+    int L = 0, m = 1, i, j;
+    memset(C, 0, sizeof C); memset(B, 0, sizeof B);
+    C[0] = B[0] = 1;
+    for (i = 0; i < n; i++) {
+        int d = s[i];
+        for (j = 1; j <= L; j++) d ^= C[j] & s[i - j];
+        if (!d) { m++; continue; }
+        memcpy(T, C, sizeof T);
+        for (j = 0; j + m < 512; j++) C[j + m] ^= B[j];
+        if (2 * L <= i) { L = i + 1 - L; memcpy(B, T, sizeof B); m = 1; } else m++;
+    }
+    *ntaps = 0;
+    for (j = 1; j <= L; j++) if (C[j]) taps[(*ntaps)++] = j;
+    return L;
+}
+
+static void exp_noise(void)
+{
+    static int hh[RB_N], sd[RB_N];
+    dcfg_t c = DCFG0;
+    int i, n = 4000, taps[64], nt, L, k, from = 16;
+    c.f7 = 0; c.f8 = 0;
+    readback_calibrate();
+    c.bd = 0x01; readback(&c, n);
+    for (i = 0; i < n; i++) hh[i] = g_rbph[1][i] == 0x0D0 ? 1 : g_rbph[1][i] == 0x034 ? 0 : -1;
+    c.bd = 0x08; readback(&c, n);
+    for (i = 0; i < n; i++) sd[i] = g_rbph[1][i] == 0x100 ? 1 : g_rbph[1][i] == 0x000 ? 0 : -1;
+    for (i = from; i < n; i++) if (hh[i] < 0 || sd[i] < 0) { printf("  undecodable sample %d\n", i); return; }
+    printf("  hi-hat noise, reference samples 0-79: ");
+    for (i = 0; i < 80; i++) putchar(hh[i] < 0 ? '?' : '0' + hh[i]);
+    printf("\n  snare  noise, reference samples 0-79: ");
+    for (i = 0; i < 80; i++) putchar(sd[i] < 0 ? '?' : '0' + sd[i]);
+    printf("\n");
+    L = bm_complexity(hh + from, n - from, taps, &nt);
+    printf("  hi-hat: linear complexity %d, recurrence s[n] = XOR of s[n-k], k =", L);
+    for (k = 0; k < nt; k++) printf(" %d", taps[k]);
+    L = bm_complexity(sd + from, n - from, taps, &nt);
+    printf("\n  snare:  linear complexity %d, recurrence s[n] = XOR of s[n-k], k =", L);
+    for (k = 0; k < nt; k++) printf(" %d", taps[k]);
+    printf("\n");
+
+    /* Which plain trinomial LFSR, stepped how many times per sample, has that
+       recurrence? Decimate each candidate and Berlekamp-Massey it. */
+    printf("  trinomial u[i] = u[i-a] ^ u[i-23], stepped K times per sample, giving the same recurrence:\n");
+    {
+        static int u[23 + 150 * 200], dsq[150];
+        int a, K, ok, tt[64], ntt;
+        int want[64], nwant = nt;
+        memcpy(want, taps, sizeof want);
+        for (a = 1; a < 23; a++) {
+            for (i = 0; i < 23; i++) u[i] = i == 0;
+            for (i = 23; i < (int)(sizeof u / sizeof u[0]); i++) u[i] = u[i - a] ^ u[i - 23];
+            for (K = 1; K < 200; K++) {
+                for (i = 0; i < 150; i++) dsq[i] = u[i * K];
+                bm_complexity(dsq, 150, tt, &ntt);
+                ok = ntt == nwant;
+                for (k = 0; ok && k < ntt; k++) ok = tt[k] == want[k];
+                if (ok) printf("    a=%d K=%d\n", a, K);
+            }
+        }
+    }
+
+    /* Every K above fits EACH stream alone. What tells them apart is whether ONE
+       register explains BOTH drums: solve (GF(2) elimination) for the 23-bit state
+       that yields the hi-hat's stream at K steps per sample, then look for the
+       snare's stream anywhere within +-3 samples' worth of steps of it. */
+    {
+        static const int Ks[5] = { 9, 18, 36, 72, 144 };
+        static uint32_t mask[144 * 1200 + 1024];
+        static uint8_t  u[144 * 1200 + 1024];
+        int nk = 1000, ki;
+        for (ki = 0; ki < 5; ki++) {
+            int K = Ks[ki], j, cc, found = 0, rank = 0;
+            uint32_t piv[23], pb[23], x = 0;
+            int lim = K * nk + 4 * K;
+            memset(piv, 0, sizeof piv);
+            for (j = 0; j < lim; j++) mask[j] = j < 23 ? 1u << j : mask[j - 9] ^ mask[j - 23];
+            for (i = from; i < nk; i++) {           /* hh[i] = u[K*i]                  */
+                uint32_t m = mask[K * i], b = (uint32_t)hh[i];
+                int p;
+                for (p = 22; p >= 0; p--) if ((m >> p & 1) && piv[p]) { m ^= piv[p]; b ^= pb[p]; }
+                if (!m) continue;
+                for (p = 22; !(m >> p & 1); p--) ;
+                piv[p] = m; pb[p] = b; rank++;
+            }
+            if (rank < 23) { printf("    K=%3d: underdetermined\n", K); continue; }
+            for (j = 0; j < 23; j++) {              /* back-substitute                 */
+                uint32_t m = piv[j], b = pb[j]; int q;
+                for (q = 0; q < j; q++) if (m >> q & 1) b ^= (x >> q) & 1;
+                if (b) x |= 1u << j;
+            }
+            for (j = 0; j < lim; j++) u[j] = j < 23 ? (uint8_t)(x >> j & 1) : u[j - 9] ^ u[j - 23];
+            for (i = from; i < nk && (int)u[K * i] == hh[i]; i++) ;
+            if (i < nk) { printf("    K=%3d: no single state explains the hi-hat\n", K); continue; }
+            for (cc = -3 * K; cc <= 3 * K; cc++) {
+                int ok = 1;
+                for (i = 64; i < nk && ok; i++) ok = (int)u[K * i + cc] == sd[i];
+                if (ok) { printf("    K=%3d: snare = the hi-hat's register %+d steps (%+.3f samples)\n",
+                                 K, cc, (double)cc / K); found = 1; }
+            }
+            if (!found) printf("    K=%3d: the snare is NOT on the hi-hat's register (within +-3 samples)\n", K);
+        }
+    }
+
+    /* And the seed. Straight out of reset our renderer holds OPL_NOISE_SEED, one
+       set bit, and steps it 72 times before each sample; ours leads the reference
+       by one sample on these voices, so reference sample 2's window IS that seed.
+       Check both drums from there: hi-hat bit 0 of this sample's window, snare
+       bit 6 of the previous sample's (66 steps behind). */
+    {
+        static uint32_t W[RB_N];
+        int okh = 1, oks = 1;
+        W[2] = OPL_NOISE_SEED;
+        for (i = 3; i < n; i++) W[i] = nstep(W[i - 1], 72);
+        for (i = 64; i < n; i++) {
+            if ((int)(W[i] & 1) != hh[i]) okh = 0;
+            if ((int)((W[i - 1] >> 6) & 1) != sd[i]) oks = 0;
+        }
+        printf("  seed %06X, 72 steps/sample: hi-hat %s, snare %s (reference samples 64-%d)\n",
+               OPL_NOISE_SEED, okh ? "MATCHES every sample" : "does NOT match",
+               oks ? "MATCHES every sample" : "does NOT match", n - 1);
+    }
+}
+
+/* EXPERIMENT P -- the three voices against the reference, isolated and in harder
+   company: other pitches, waveforms, real envelopes with key-off, LFOs, keying
+   after a delay (so the noise and the accumulators have to have been running),
+   and all five drums at once with the others muted by TL (so every interaction
+   stays and only the output is isolated). */
+static void exp_drums(void)
+{
+    /* The tom-tom rides along as a CONTROL: an ordinary operator, already matched,
+       so whatever residual it shows in a scenario is not the phase generator's. */
+    static const char *nm[4] = { "hi-hat", "snare", "cymbal", "tom-tom (control)" };
+    static const uint8_t bit[4] = { 0x01, 0x08, 0x02, 0x04 };
+    static const uint8_t opbit[4] = { 1 << 1, 1 << 4, 1 << 5, 1 << 2 };   /* op13 16 17 14 */
+    struct { const char *what; dcfg_t c; int keyoff; } sc[12];
+    int ns = 0, s, v, n = NMAX;
+    dcfg_t c;
+
+    c = DCFG0; sc[ns].what = "default (experiment M's setup)"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.f7 = 0x1A3; c.b7 = 5; c.m13 = 3; c.f8 = 0x2F1; c.b8 = 4; c.m17 = 5;
+    sc[ns].what = "other pitches and MULTs"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.f7 = 0x0B7; c.b7 = 6; c.f8 = 0x3E5; c.b8 = 2; c.m17 = 7;
+    sc[ns].what = "held-out pitches"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.ws = 2; sc[ns].what = "waveform 2 (OPL2, WSE)"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.ws = 3; sc[ns].what = "waveform 3 (OPL2, WSE)"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.ws = 5; c.newm = 1; sc[ns].what = "waveform 5 (OPL3, NEW)"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.ad = 0xA5; c.sr = 0x46; c.egt = 0; sc[ns].what = "AR10 DR5 SL4 RR6, key-off at 6000"; sc[ns].c = c; sc[ns++].keyoff = 6000;
+    c = DCFG0; c.bdhi = 0xC0; c.amvib = 0xC0; sc[ns].what = "deep tremolo + vibrato"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.key_at = 3001; c.f7 = 0x1A3; c.b7 = 5; c.f8 = 0x2F1; c.b8 = 4;
+    sc[ns].what = "keyed 3001 samples into rhythm mode"; sc[ns].c = c; sc[ns++].keyoff = 0;
+    c = DCFG0; c.tlmask = 0; c.f7 = 0x1A3; c.b7 = 5; c.f8 = 0x2F1; c.b8 = 4;
+    sc[ns].what = "all five drums keyed, others muted by TL"; sc[ns].c = c; sc[ns++].keyoff = -1;
+
+    printf("  best-lag correlation, ours vs reference, @ best lag, then the largest |ours - ref|\n"
+           "  at the voice's own lag (0 = sample-exact; the 16-bit output's LSB noise is ~10)\n");
+    printf("  %-42s %-21s %-21s %-21s %-21s\n", "scenario", nm[0], nm[1], nm[2], nm[3]);
+    for (s = 0; s < ns; s++) {
+        printf("  %-42s", sc[s].what);
+        for (v = 0; v < 4; v++) {
+            double r, ra, rb; int lag;
+            c = sc[s].c;
+            if (sc[s].keyoff == -1) { c.bd = 0x1F; c.tlmask = (uint8_t)(0x3F & ~opbit[v]); }
+            else c.bd = bit[v];
+            g_ndev = 0;
+            if (sc[s].keyoff > 0) { g_dev[0].at = sc[s].keyoff; g_dev[0].reg = 0xBD;
+                                    g_dev[0].val = (uint8_t)(c.bdhi | OPL_BD_RHY); g_ndev = 1; }
+            drum_run(&c, n);
+            g_ndev = 0;
+            r = lagcorr(64, (size_t)n - 80, &lag, NULL);
+            ra = rms_of(g_a, 64, (size_t)n - 80); rb = rms_of(g_b, 64, (size_t)n - 80);
+            {   /* the largest sample difference at the voice's own lag (+3 hi-hat,
+                   +4 snare/cymbal, from experiment M) -- 0 is sample-exact. A
+                   constant or silent signal correlates at ANY lag, so this column
+                   is the one that decides there. Skips 4 samples at a key edge. */
+                int j, lg = (v == 0 || v == 3) ? 3 : 4, md = 0, ko = sc[s].keyoff > 0 ? sc[s].keyoff : -99;
+                for (j = 64; j < n - 16; j++) {
+                    int dd = abs(g_a[j] - g_b[j + lg]);
+                    if (j >= ko - 4 && j <= ko + 4) continue;
+                    if (c.key_at && j >= c.key_at - 4 && j <= c.key_at + 4) continue;
+                    if (dd > md) md = dd;
+                }
+                if (ra < 16 && rb < 16) printf(" silent in both %5d  ", md);
+                else printf(" %+.4f @%+d %5d  ", r, lag, md);
+            }
+        }
+        printf("\n");
+    }
+
+    /* OPL3 routing: which channel's C0 sends each drum left or right. Route the
+       channel under test LEFT and the other two rhythm channels RIGHT. */
+    printf("\n  OPL3 ROUTING: RMS left/right with only the named channel routed left\n");
+    {
+        static const char *dn[5] = { "hi-hat", "cymbal", "tom-tom", "snare", "bass drum" };
+        int rc, d, i;
+        for (d = 0; d < 5; d++) {
+            printf("    %-9s", dn[d]);
+            for (rc = 6; rc <= 8; rc++) {
+                double el = 0, er = 0, ol = 0, orr = 0;
+                memset(&g_ours, 0, sizeof g_ours);
+                g_ours.sample_hz = RATE; g_ours.ext_clock = 1; g_ours.opl3 = 1;
+                vdd_opl_reset(&g_ours);
+                OPL3_Reset(&g_ref, RATE);
+                both_write9(0x105, 1);
+                for (i = 0; i < 6; i++) {
+                    uint8_t o = g_rop[i];
+                    both_write((uint8_t)(0x20 + o), 0x21); both_write((uint8_t)(0x40 + o), 0x00);
+                    both_write((uint8_t)(0x60 + o), 0xF0); both_write((uint8_t)(0x80 + o), 0x0F);
+                    both_write((uint8_t)(0xE0 + o), 0x00);
+                }
+                for (i = 6; i < 9; i++) {
+                    both_write((uint8_t)(0xC0 + i), i == rc ? 0x10 : 0x20);
+                    both_write((uint8_t)(0xA0 + i), TEST_FNUM & 0xFF);
+                    both_write((uint8_t)(0xB0 + i), (uint8_t)((TEST_BLOCK << 2) | ((TEST_FNUM >> 8) & 3)));
+                }
+                both_write(0xBD, (uint8_t)(OPL_BD_RHY | (1 << d)));
+                for (i = 0; i < 8000; i++) {
+                    int16_t b[2], s2[2];
+                    OPL3_GenerateResampled(&g_ref, b);
+                    vdd_opl_render_st(&g_ours, s2, 1);
+                    if (i < 100) continue;
+                    el += (double)b[0] * b[0];   er  += (double)b[1] * b[1];
+                    ol += (double)s2[0] * s2[0]; orr += (double)s2[1] * s2[1];
+                }
+                printf("  ch%d left: ref %4.0f/%-4.0f ours %4.0f/%-4.0f", rc,
+                       sqrt(el / 7900), sqrt(er / 7900), sqrt(ol / 7900), sqrt(orr / 7900));
+            }
+            printf("\n");
+        }
+    }
+
+    /* Character, in our own output now: the tonality experiment M measured on the
+       reference (0.509 / 0.003 / 0.749). */
+    printf("\n  tonality (fraction of energy on harmonics of the test note), default setup\n");
+    for (v = 0; v < 3; v++) {
+        c = DCFG0; c.bd = bit[v];
+        drum_run(&c, NMAX);
+        printf("    %-7s ours %.3f  ref %.3f\n", nm[v], tonality(g_a), tonality(g_b));
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *what = (argc > 1) ? argv[1] : "all";
@@ -1203,6 +1849,11 @@ int main(int argc, char **argv)
     if (all || !strcmp(what, "kslrom")) { printf("== K. KSL ROM READ-OUT ==\n"); exp_kslrom(); printf("\n"); }
     if (all || !strcmp(what, "lfo"))  { printf("== L. TREMOLO / VIBRATO LFOs ==\n"); exp_lfo(); printf("\n"); }
     if (all || !strcmp(what, "rhythm")) { printf("== M. RHYTHM MODE ==\n"); exp_rhythm(); printf("\n"); }
+    if (all || !strcmp(what, "rphase")) { printf("== N. RHYTHM PHASE READ-BACK ==\n"); exp_rphase(); printf("\n"); }
+    if (all || !strcmp(what, "restart")) { printf("== N2. RHYTHM KEY-ON RESTART POINT ==\n"); exp_restart(); printf("\n"); }
+    if (all || !strcmp(what, "keyor"))  { printf("== Q. DRUM BIT OR CHANNEL KEY ==\n"); exp_keyor(); printf("\n"); }
+    if (all || !strcmp(what, "noise"))  { printf("== O. RHYTHM NOISE ==\n"); exp_noise(); printf("\n"); }
+    if (all || !strcmp(what, "drums"))  { printf("== P. SNARE / HI-HAT / CYMBAL vs REFERENCE ==\n"); exp_drums(); printf("\n"); }
     if (all || !strcmp(what, "env"))  { printf("== E. ENVELOPE RATES ==\n");    exp_env();  printf("\n"); }
     if (all || !strcmp(what, "egrate")) { printf("== H. ENVELOPE RATE LAW ==\n"); exp_egrate(); printf("\n"); }
     if (all || !strcmp(what, "retrig")) { printf("== I. RETRIGGER ==\n");         exp_retrig(); printf("\n"); }

@@ -134,9 +134,23 @@ static uint32_t fnv16(uint32_t h, const int16_t *s, int n)
      tom-tom -- rendered and hashed. The checksum was taken from the build BEFORE
      the OPL3 existed (42a9029); an OPL2 must still produce it sample for sample,
      and so must an OPL3 with NEW clear. `which` selects the render path:
-     0 mono, 1 the left of the stereo render, 2 its right. */
-#define OPL2_GOLDEN 0xA60B79B9u
-static uint32_t g_hash;
+     0 mono, 1 the left of the stereo render, 2 its right.
+
+   ⚠ #139 CHANGED THE FULL HASH, DELIBERATELY, AND ONLY FROM THE RHYTHM WRITE ON.
+     The sequence enters rhythm mode with channel 7 still keyed and then keys the
+     hi-hat, cymbal and snare -- three voices that were silent before #139 -- and a
+     drum bit is now OR'd with its channel's key bit (as the reference does), which
+     also changes what is still sounding after rhythm mode is left. So the golden is
+     now TWO numbers: OPL2_GOLDEN_MELODIC hashes the 16800 samples BEFORE the first
+     0xBD rhythm write and is the pre-OPL3 value's own prefix, unchanged by #139
+     (a sample-by-sample dump of the old and new builds differs first at sample
+     16800); OPL2_GOLDEN is the whole run, re-taken at #139. Against the reference,
+     the three segments after that point moved from 0.975/0.966/0.980 best-lag
+     correlation to 0.988/0.983/0.998, the melodic one stayed at 0.9995. */
+#define OPL2_GOLDEN_MELODIC 0xD827E8E0u     /* samples 0-16799: must NEVER change    */
+#define OPL2_GOLDEN         0x48947CCEu     /* the whole run, as of #139 (it was
+                                               0xA60B79B9 from 42a9029 until then)  */
+static uint32_t g_hash, g_hash_melodic;
 static void g_eat(int which, int n)
 {
     int i;
@@ -173,6 +187,7 @@ static uint32_t golden_run(int chip_opl3, int which)
     }
     g_eat(which, 6000);
     for (c = 0; c < 9; c += 2) { g_w(0xB0 + c, opl.reg[0xB0 + c] & ~0x20); g_eat(which, 900); }
+    g_hash_melodic = g_hash;                         /* everything before rhythm  */
     g_w(0xBD, 0xE0 | 0x10 | 0x04);                   /* rhythm: bass drum + tom   */
     g_eat(which, 4000);
     g_w(0xBD, 0xE0 | 0x0B);
@@ -180,6 +195,199 @@ static uint32_t golden_run(int chip_opl3, int which)
     g_w(0xBD, 0x00);
     for (k = 0; k < 8; ++k) g_eat(which, 4000);
     return g_hash;
+}
+
+/* ── RHYTHM MODE: SNARE, HI-HAT, CYMBAL (#139) ──────────────────────────────────
+     The rules in vdd_opl_synth.c were measured against a reference core
+     (tools/oplref/oplprobe rphase / noise / restart / keyor); these checks need no
+     reference. They restate each rule HERE, independently -- the noise as a
+     one-bit-at-a-time LFSR rather than the synth's nine-at-once, the phases from
+     the published F-number formula -- and hold the synth's output to it sample by
+     sample, through what can be read off a sample without inverting anything:
+       cymbal  phase B<<9 | 0x080       -> sign is B, magnitude sin(45 deg)
+       snare   phase S<<9 | (S^n)<<8    -> loud iff S^n, and then its sign is S
+       hi-hat  phase B<<9 | 0x0D0/0x034 -> sign is B, loud (0x0D0) iff B^n
+     Each stream is checked from the SECOND sample after its key-on: the first is
+     still at the envelope's starting attenuation (silent) and carries no phase. */
+static const uint8_t t_mult2[16] = { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
+static uint32_t t_inc(uint16_t f, uint8_t b, uint8_t mult) { return ((uint32_t)(f << b) * t_mult2[mult]) >> 1; }
+static uint32_t t_bit(uint32_t p13, uint32_t p17)
+{
+    return (((p13 >> 2) ^ (p13 >> 7)) | ((p13 >> 3) ^ (p17 >> 5)) | ((p17 >> 3) ^ (p17 >> 5))) & 1;
+}
+/* The noise, one step at a time: u[i] = u[i-9] ^ u[i-23], seeded with the synth's
+   power-on window (bit k = u[k]); sample m reads u[72(m+1)] (hi-hat) and
+   u[72(m+1)+6] (snare). */
+#define T_NSAMP 6000
+static uint8_t t_u[72 * (T_NSAMP + 2) + 32];
+static void t_noise_init(void)
+{
+    int i, n = (int)sizeof t_u;
+    for (i = 0; i < 23; ++i) t_u[i] = (uint8_t)((OPL_NOISE_SEED >> i) & 1);
+    for (i = 23; i < n; ++i) t_u[i] = t_u[i - 9] ^ t_u[i - 23];
+}
+static void rhy_setup(uint16_t f7, uint8_t b7, uint16_t f8, uint8_t b8, uint8_t m13, uint8_t m17)
+{
+    int i;
+    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    vdd_opl_write_reg(&opl, 0x01, 0x20);
+    for (i = 0; i < 6; ++i) {
+        uint8_t o = (uint8_t)(0x10 + i), mult = (uint8_t)(i == 1 ? m13 : i == 5 ? m17 : 1);
+        vdd_opl_write_reg(&opl, (uint8_t)(0x20 + o), (uint8_t)(0x20 | mult));   /* EGT     */
+        vdd_opl_write_reg(&opl, (uint8_t)(0x40 + o), 0x00);
+        vdd_opl_write_reg(&opl, (uint8_t)(0x60 + o), 0xF0);                     /* AR=15   */
+        vdd_opl_write_reg(&opl, (uint8_t)(0x80 + o), 0x0F);
+        vdd_opl_write_reg(&opl, (uint8_t)(0xE0 + o), 0x00);
+    }
+    vdd_opl_write_reg(&opl, 0xA6, 0x00); vdd_opl_write_reg(&opl, 0xB6, 0x10);
+    vdd_opl_write_reg(&opl, 0xA7, (uint8_t)f7); vdd_opl_write_reg(&opl, 0xB7, (uint8_t)((b7 << 2) | (f7 >> 8)));
+    vdd_opl_write_reg(&opl, 0xA8, (uint8_t)f8); vdd_opl_write_reg(&opl, 0xB8, (uint8_t)((b8 << 2) | (f8 >> 8)));
+}
+/* Mean-removed autocorrelation at `lag`, normalised: the fraction of a signal that
+   repeats with that period. No libm needed. */
+static double t_periodicity(const int16_t *s, int n, int lag)
+{
+    double mean = 0, num = 0, den = 0; int i;
+    for (i = 0; i < n; ++i) mean += s[i];
+    mean /= n;
+    for (i = 0; i + lag < n; ++i) { num += (s[i] - mean) * (s[i + lag] - mean); den += (s[i] - mean) * (s[i] - mean); }
+    return den > 0 ? num / den : 0;
+}
+
+static void rhythm_tests(void)
+{
+    static int16_t a[T_NSAMP], b[T_NSAMP];
+    /* The register setups: the default test pitch, and two with unrelated pitches
+       and MULTs so the five accumulator bits vary independently. */
+    static const struct { uint16_t f7; uint8_t b7; uint16_t f8; uint8_t b8; uint8_t m13, m17; } su[3] = {
+        { 0x200, 4, 0x200, 4, 1, 1 }, { 0x1A3, 5, 0x2F1, 4, 3, 5 }, { 0x0B7, 6, 0x3E5, 2, 1, 7 } };
+    int k, m, bad;
+    char msg[160];
+    t_noise_init();
+
+    for (k = 0; k < 3; ++k) {
+        uint32_t i13 = t_inc(su[k].f7, su[k].b7, su[k].m13), i17 = t_inc(su[k].f8, su[k].b8, su[k].m17);
+        /* CYMBAL */
+        rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
+        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x02);
+        vdd_opl_render(&opl, a, T_NSAMP);
+        for (bad = 0, m = 1; m < T_NSAMP; ++m) {
+            uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, p17 = (((uint32_t)(m + 1) * i17) >> 10) & 1023;
+            int want = t_bit(p13, p17) ? -1 : 1;
+            if (!((a[m] > 5000 && want > 0) || (a[m] < -5000 && want < 0))) bad++;
+        }
+        snprintf(msg, sizeof msg, "cymbal, setup %d: sign stream is the phase bit B, every sample (%d wrong)", k, bad);
+        CHECK(bad == 0, msg);
+        /* SNARE */
+        rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
+        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x08);
+        vdd_opl_render(&opl, a, T_NSAMP);
+        for (bad = 0, m = 1; m < T_NSAMP; ++m) {
+            uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, s = (p13 >> 8) & 1;
+            uint32_t loud = s ^ t_u[72 * (m + 1) + 6];
+            if (loud ? !((s && a[m] < -7000) || (!s && a[m] > 7000)) : (a[m] > 200 || a[m] < -200)) bad++;
+        }
+        snprintf(msg, sizeof msg, "snare, setup %d: loud iff S^noise, sign = op13 bit 8, every sample (%d wrong)", k, bad);
+        CHECK(bad == 0, msg);
+        /* HI-HAT */
+        rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
+        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x01);
+        vdd_opl_render(&opl, a, T_NSAMP);
+        for (bad = 0, m = 1; m < T_NSAMP; ++m) {
+            uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, p17p = (((uint32_t)m * i17) >> 10) & 1023;
+            uint32_t bb = t_bit(p13, p17p), loud = bb ^ t_u[72 * (m + 1)];
+            int mag = a[m] < 0 ? -a[m] : a[m];
+            if ((bb ? a[m] >= 0 : a[m] <= 0) || (loud ? mag < 6000 : (mag < 1500 || mag > 3500))) bad++;
+        }
+        snprintf(msg, sizeof msg, "hi-hat, setup %d: sign = B (op17 one sample behind), loud iff B^noise (%d wrong)", k, bad);
+        CHECK(bad == 0, msg);
+    }
+
+    /* The noise alone: op13/op17 frozen (F-num 0) makes B = 0, so the hi-hat's
+       loud/quiet stream IS the noise -- and it must be the LFSR's, from power-on. */
+    rhy_setup(0, 0, 0, 0, 1, 1);
+    vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x01);
+    vdd_opl_render(&opl, a, T_NSAMP);
+    {   int ones = 0;
+        for (bad = 0, m = 1; m < T_NSAMP; ++m) {
+            int loud = a[m] > 6000;
+            ones += loud;
+            if (loud != t_u[72 * (m + 1)]) bad++;
+        }
+        snprintf(msg, sizeof msg, "noise: hi-hat with frozen accumulators follows the 23-bit LFSR from reset (%d wrong, %d/%d ones)",
+                 bad, ones, T_NSAMP);
+        CHECK(bad == 0 && ones > T_NSAMP * 4 / 10 && ones < T_NSAMP * 6 / 10, msg); }
+
+    /* A key-on into a RUNNING chip restarts op13 one step further on than reset
+       does (oplprobe restart): the hi-hat keyed at sample 1000, op17 free-running. */
+    {   uint32_t i13 = t_inc(0x1A3, 5, 3), i17 = t_inc(0x2F1, 4, 5);
+        const int K = 1000;
+        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5);
+        vdd_opl_write_reg(&opl, 0xBD, 0x20);
+        vdd_opl_render(&opl, a, K);
+        vdd_opl_write_reg(&opl, 0xBD, 0x21);
+        vdd_opl_render(&opl, a + K, T_NSAMP - K);
+        for (bad = 0, m = K + 1; m < T_NSAMP; ++m) {
+            uint32_t p13 = (((uint32_t)(m - K + 2) * i13) >> 10) & 1023, p17p = (((uint32_t)m * i17) >> 10) & 1023;
+            uint32_t bb = t_bit(p13, p17p);
+            if (bb ? a[m] >= 0 : a[m] <= 0) bad++;
+        }
+        snprintf(msg, sizeof msg, "restart: hi-hat keyed into a running chip -- op13 restarts one step on (%d wrong)", bad);
+        CHECK(bad == 0, msg); }
+
+    /* Character, without a reference: how much of each voice repeats with the
+       128-sample period of the default test pitch. Measured on the reference as
+       tonality 0.003 / 0.509 / 0.749 (hi-hat / snare / cymbal). */
+    {   double ph, ps, pc;
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x21);
+        vdd_opl_render(&opl, a, T_NSAMP); ph = t_periodicity(a, T_NSAMP, 128);
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x28);
+        vdd_opl_render(&opl, a, T_NSAMP); ps = t_periodicity(a, T_NSAMP, 128);
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x22);
+        vdd_opl_render(&opl, a, T_NSAMP); pc = t_periodicity(a, T_NSAMP, 128);
+        printf("        periodic fraction at the note's period: hi-hat %.3f snare %.3f cymbal %.3f\n", ph, ps, pc);
+        CHECK(ph < 0.1, "character: the hi-hat is noise -- no dominant tone");
+        CHECK(ps > 0.35 && ps < 0.65, "character: the snare is half tone, half noise");
+        CHECK(pc > 0.95, "character: the cymbal is fully periodic -- no noise in it"); }
+
+    /* Determinism: the whole kit, twice from reset, bit-identical. */
+    {   uint32_t h1, h2;
+        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); vdd_opl_write_reg(&opl, 0xBD, 0x3F);
+        vdd_opl_render(&opl, a, T_NSAMP); h1 = fnv16(2166136261u, a, T_NSAMP);
+        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); vdd_opl_write_reg(&opl, 0xBD, 0x3F);
+        vdd_opl_render(&opl, b, T_NSAMP); h2 = fnv16(2166136261u, b, T_NSAMP);
+        CHECK(h1 == h2 && rms(a, T_NSAMP) > 1000000, "determinism: all five drums, twice from reset, bit-identical"); }
+
+    /* A drum bit and its channel's key bit are OR'd (oplprobe keyor): with channel
+       8's key already holding op14, the tom-tom bit changes nothing at all. */
+    {   int i;
+        for (i = 0; i < 2; ++i) {
+            rhy_setup(0x200, 4, 0x200, 4, 1, 1);
+            vdd_opl_write_reg(&opl, 0x72, 0xF4);                          /* op14 AR15 DR4  */
+            vdd_opl_write_reg(&opl, 0x92, 0xF4);                          /* SL15 RR4       */
+            vdd_opl_write_reg(&opl, 0xB8, 0x20 | (4 << 2) | 2);           /* ch8 key on     */
+            vdd_opl_write_reg(&opl, 0xBD, 0x20);
+            vdd_opl_render(&opl, i ? b : a, 3000);
+            if (i) vdd_opl_write_reg(&opl, 0xBD, 0x24);                   /* + tom-tom bit  */
+            vdd_opl_render(&opl, (i ? b : a) + 3000, T_NSAMP - 3000);
+        }
+        CHECK(fnv16(2166136261u, a, T_NSAMP) == fnv16(2166136261u, b, T_NSAMP) && rms(a + 3000, 2000) > 0,
+              "keying: a drum bit on an operator its channel key already holds restarts nothing");
+        CHECK(opl.prof_rhythm_hits[2] == 1, "keying: ... and the tom-tom hit is still counted"); }
+
+    /* OPL3 routing: hi-hat and snare follow channel 7's C0, the cymbal channel 8's. */
+    {   long l, r;
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1);         /* an OPL2 reset ...          */
+        opl.opl3 = 1; w9(0x105, 0x01);                /* ... made an OPL3, NEW set  */
+        w9(0xC6, 0x20); w9(0xC7, 0x10); w9(0xC8, 0x20);                  /* ch7 left only  */
+        w9(0xBD, 0x20 | 0x09);                                            /* hi-hat + snare */
+        vdd_opl_render_st(&opl, st_buf, 4096);
+        l = rms_side(st_buf, 4096, 0); r = rms_side(st_buf, 4096, 1);
+        CHECK(l > 1000000 && r == 0, "OPL3 routing: hi-hat and snare go where channel 7's C0 sends them");
+        w9(0xBD, 0x20); w9(0xBD, 0x20 | 0x02);                            /* cymbal         */
+        vdd_opl_render_st(&opl, st_buf, 8192);
+        l = rms_side(st_buf + 2 * 4096, 4096, 0); r = rms_side(st_buf + 2 * 4096, 4096, 1);
+        CHECK(r > 1000000 && l < r / 1000, "OPL3 routing: the cymbal goes where channel 8's C0 sends it"); }
 }
 
 int main(void)
@@ -278,8 +486,11 @@ int main(void)
 
     /* T7: the OPL2 golden -- nothing the OPL3 added leaks into OPL2 output ---- */
     { uint32_t h;
-      h = golden_run(0, 0); printf("        OPL2 mono  fnv=0x%08X (golden 0x%08X)\n", h, OPL2_GOLDEN);
-      CHECK(h == OPL2_GOLDEN, "golden: OPL2 mono render bit-identical to the pre-OPL3 build");
+      h = golden_run(0, 0); printf("        OPL2 mono  fnv=0x%08X (golden 0x%08X), melodic prefix 0x%08X (golden 0x%08X)\n",
+                                   h, OPL2_GOLDEN, g_hash_melodic, OPL2_GOLDEN_MELODIC);
+      CHECK(g_hash_melodic == OPL2_GOLDEN_MELODIC,
+            "golden: everything before rhythm mode bit-identical to the pre-OPL3 build");
+      CHECK(h == OPL2_GOLDEN, "golden: OPL2 mono render bit-identical to the #139 build");
       CHECK(golden_run(0, 1) == OPL2_GOLDEN && golden_run(0, 2) == OPL2_GOLDEN,
             "golden: OPL2 stereo render -- left AND right are that same signal");
       CHECK(golden_run(1, 0) == OPL2_GOLDEN && golden_run(1, 1) == OPL2_GOLDEN &&
@@ -504,6 +715,9 @@ int main(void)
               "18 channels at once: both sides carry signal");
         printf("        %d of %d stereo samples at the clip rail\n", clipped, 2 * 8192);
     }
+
+    /* ══ RHYTHM MODE: SNARE, HI-HAT, CYMBAL (#139) ══════════════════════════════ */
+    rhythm_tests();
 
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
