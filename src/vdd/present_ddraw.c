@@ -539,6 +539,17 @@ static void fs_present(present_ddraw *pd)
         done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
     }
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
+    /* #227: the Scanlines/CRT scaler on the exclusive path too -- the same AND pattern
+       the GDI path lays over its stretched picture, on the back buffer's DC. */
+    if (present_scaler_scanlines(pd->scaler)) {
+        HDC hd; HBRUSH br = scanline_brush();
+        if (br && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
+            HGDIOBJ old = SelectObject(hd, br);
+            PatBlt(hd, fx, fy, fw, fh, 0x00A000C9L);      /* PATAND */
+            SelectObject(hd, old);
+            IDirectDrawSurface7_ReleaseDC(bk, hd);
+        }
+    }
     {   HDC hd;                                   /* #138 on the exclusive path */
         if (pd->hint_text && !pd->osd_off && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
             hint_draw(pd, hd, fx, fy, fw);
