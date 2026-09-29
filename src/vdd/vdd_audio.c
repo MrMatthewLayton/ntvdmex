@@ -79,6 +79,7 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
 }
 
 void vdd_audio_set_gus(audio_state *st, gus_state *gus) { st->gus = gus; }
+void vdd_audio_set_emu8k(audio_state *st, emu8k_state *emu) { st->emu8k = emu; }
 
 void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable)
 {
@@ -175,6 +176,22 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
             for (i = 0; i < n; ++i) {
                 int32_t l, r;
                 rs_step_st(&st->r_gus, st->scratch, need, &idx, &l, &r);
+                o[2*i]   = mix_clip(o[2*i]   + l);
+                o[2*i+1] = mix_clip(o[2*i+1] + r);
+            }
+        }
+
+        /* --- the AWE32's EMU8000, panned per channel (see vdd_emu8k.c) ----- */
+        /* At its own fixed 44.1 kHz. Summed at unity, as the GUS is: the route through
+           the CT1745 mixer on a real AWE32 is not modelled (docs/inventory/emu8k.md). */
+        if (st->emu8k) {
+            rs_setup(&st->r_emu8k, vdd_emu8k_rate_hz(st->emu8k), st->out_hz);
+            need = rs_need(&st->r_emu8k, n);
+            vdd_emu8k_render_st(st->emu8k, st->scratch, need);
+            idx = 0;
+            for (i = 0; i < n; ++i) {
+                int32_t l, r;
+                rs_step_st(&st->r_emu8k, st->scratch, need, &idx, &l, &r);
                 o[2*i]   = mix_clip(o[2*i]   + l);
                 o[2*i+1] = mix_clip(o[2*i+1] + r);
             }
