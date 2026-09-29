@@ -148,3 +148,25 @@ I would expect from a 66 MHz CPU".
   even at Unlimited: **#238**.
 - The rig's SAVED speed is Pentium III 1 GHz (set by the user in round 8), so un-forced harness runs are
   throttled. Force with `cfg\cpuspd.txt` and delete it afterwards.
+
+---
+
+## Night, 2026-09-29/30 (unattended after the user's go-ahead)
+
+| # | Commit | What | Verified |
+|---|---|---|---|
+| #237 #229 #228 | `f9e1138` | Renderer names "GDI"/"DirectDraw"; View > Colour Filter; Sepia as washed-out colour (hue kept at 40%, warm cast, faded blacks); new **Stretch** aspect (Auto in a window, fills fullscreen/maximised) | present_test +10; rig guard |
+| #183 | `0298db5` | rt_idle recognises LOOPZ/LOOPNZ retrace waits; STAGE2 `host cpu ms` | Rig A/B ×2: Skyroads guest thread CPU **16.0 s vs 29.6 s** per 30 s; retraces/IRQ0/guard unchanged |
+| #139 | `c97c6c3` (worktree agent) | Snare, hi-hat and cymbal synthesised, clean-room (Nuked as black box only) | 1.0000 per drum vs the oracle; battery 2,085/0; rig Skyroads sounds 30/30 s |
+
+**Stopped on purpose:**
+- **#238** (1 kHz IRQ0 ~44%): the attempts find 3DBench with interrupts off 78% of the time. The fix is deliver-at-STI, and every route is closed (VIP fatal, courier refuted, STI patching hazardous). Measured and recorded; the 3DBench calibration stays blocked.
+- **#180** (keyboard ACKs): the code warns the last two attempts went wrong, and headless can't judge keyboard feel.
+
+⚠ **#239, found by the gate:** ZAR's sound fails intermittently **after the rig's reboot**. This morning's approved `af53da5c` fails 3/3 now (6/6 this morning), so it isn't code. In a failing run ZAR's IRQ self-test never gets IRQ5 delivered (no `vec=0x0d` attempt at all), so it switches sound off. Suspect: load on the rig (a VNC client?). Not solved.
+
+⚠ **Lessons:**
+- **A gate regression must be re-run on the BASELINE too, interleaved.** One silent ZAR run on the new build looked like a regression; the baseline then failed as well.
+- `gate.sh` doesn't force a speed, and the rig's saved speed is P3 1 GHz. `runs/s84/night/gate.sh` forces `cfg\cpuspd.txt`=0.
+
+Morning test (`checks.txt`): the FM drums in Skyroads' music.
