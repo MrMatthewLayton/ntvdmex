@@ -6,11 +6,12 @@
 > then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-09-28 (session 83)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = `6b833b1f` (#221 pel panning +
-  start/pan latch, on top of #175 and #213, all user-confirmed except #221's final say).
-- **Resume:** [`log/sessions/session-83.md`](log/sessions/session-83.md), then #202
-  (#212 IF at program start, then #162, #183).
+- **Updated:** 2026-09-29 (session 84, unattended)
+- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = **`af53da5c`**: tonight's
+  Tier 1/2 night (#212, #165, #166, #214, #215, #187, #217, #219, #188, #167, the XMS move
+  fix), rig-gated against `6b833b1f` and **not yet user-confirmed** — `checks.txt` on the share.
+- **Resume:** [`log/sessions/session-84.md`](log/sessions/session-84.md) and the user's answers
+  to `checks.txt`, then #202 (#183, #172).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
