@@ -5223,7 +5223,7 @@ static int host_conin(void *ctx)
    only ever takes it modulo a frame period, so the origin does not matter.
    Same source as host_pit_sync(): QueryPerformanceCounter, which is why the guest's
    retrace and its PIT cannot drift against each other. */
-static uint64_t host_time_us(void)
+static uint64_t host_time_us_qpc(void)
 {
     static LARGE_INTEGER s_freq, s_base;
     LARGE_INTEGER now;
@@ -5233,6 +5233,58 @@ static uint64_t host_time_us(void)
     }
     QueryPerformanceCounter(&now);
     return (uint64_t)(((now.QuadPart - s_base.QuadPart) * 1000000) / s_freq.QuadPart);
+}
+
+/* ── #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
+     for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
+     of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
+     system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
+     interpolated between QPC ANCHORS taken at most every ~2 ms, with the divide turned
+     into a multiply. Per thread (__thread), so no lock and no torn shared state; the
+     rate is re-derived at every anchor, so a CPU that changes its clock cannot drift
+     us more than one anchor interval; and it never runs backwards within a thread.
+     Falls back to plain QPC until the first two anchors have given it a rate. */
+typedef struct { uint64_t tsc0, us0, last, resync; uint32_t mul; } host_clk_t;
+static DWORD g_clk_tls = TLS_OUT_OF_INDEXES;
+static uint64_t host_time_us(void)
+{
+    uint32_t lo, hi;
+    uint64_t tsc, us;
+    host_clk_t *c;
+    /* Per thread through Win32 TLS (this build has no CRT, so no __thread): the slot
+       is allocated once, and each thread's clock on its first call. */
+    if (g_clk_tls == TLS_OUT_OF_INDEXES) {
+        DWORD t = TlsAlloc();
+        if (t == TLS_OUT_OF_INDEXES) return host_time_us_qpc();
+        if (InterlockedCompareExchange((volatile LONG *)&g_clk_tls, (LONG)t,
+                                       (LONG)TLS_OUT_OF_INDEXES) != (LONG)TLS_OUT_OF_INDEXES)
+            TlsFree(t);                            /* another thread won the race */
+    }
+    c = (host_clk_t *)TlsGetValue(g_clk_tls);
+    if (!c) {
+        c = (host_clk_t *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *c);
+        if (!c) return host_time_us_qpc();
+        TlsSetValue(g_clk_tls, c);
+    }
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    tsc = ((uint64_t)hi << 32) | lo;
+    if (!c->mul || tsc - c->tsc0 >= c->resync) {
+        uint64_t q = host_time_us_qpc();
+        if (c->tsc0 && q > c->us0 && tsc > c->tsc0) {
+            uint64_t dt = tsc - c->tsc0, du = q - c->us0;
+            if (du >= 500) {                       /* a usable interval: re-derive rate */
+                uint64_t m = (du << 32) / dt;
+                c->mul = (uint32_t)(m > 0xFFFFFFFFull ? 0xFFFFFFFFull : m);
+                if (c->mul) c->resync = (2000ull << 32) / c->mul;   /* ~2 ms of ticks */
+            }
+        }
+        if (!c->mul || !c->tsc0 || q - c->us0 >= 500) { c->tsc0 = tsc; c->us0 = q; }
+        if (!c->mul) { if (q > c->last) c->last = q; return c->last; }
+    }
+    us = c->us0 + (((tsc - c->tsc0) * (uint64_t)c->mul) >> 32);
+    if (us < c->last) us = c->last;            /* never backwards within a thread */
+    c->last = us;
+    return us;
 }
 
 /* The trace hook handed to the OPL VDD. Timestamped from the same clock the CRT
