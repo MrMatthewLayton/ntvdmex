@@ -155,7 +155,7 @@ Each surface gets two documents, doing two different jobs:
 |---|---|---|---|
 | MS-DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) | — |
 | INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) | — |
-| XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | partial | — |
+| XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units, 88 MISS (EMS 4.0 subfunctions, VCPI) (s84) | — |
 | **DPMI 1.0** | DPMI 1.0 spec | partial — live frontier | — |
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | partial | — |
 | MSCDEX | MSCDEX spec | — | — |
