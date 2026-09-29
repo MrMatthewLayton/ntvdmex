@@ -199,6 +199,9 @@ typedef struct video_state {
     uint8_t  vesa_bpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
     uint32_t vesa_stride;               /* bytes per scan line of the current mode  */
     uint8_t  vesa_lfb;                  /* the mode was set with bit 14: LFB in use  */
+    uint16_t vesa_mode_flags;           /* D14|D15 of the last 4F02 (4F03 returns them, #226) */
+    uint8_t  modeset_noclear;           /* the last mode set (AH=00h AL bit 7 / 4F02h D15) did
+                                           not clear memory: BDA 40:87h bit 7 (#226)    */
     /* Where the guest ACTUALLY wrote in the framebuffer, in raw buffer offsets --
        independent of how WE choose to interpret stride/origin. The only way to tell
        "the demo put its picture there" from "we are reading the buffer wrong". */

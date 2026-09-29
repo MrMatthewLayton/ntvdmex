@@ -473,7 +473,9 @@ void vdd_video_bda_sync(video_state *st)
       b[0x63] = (uint8_t)crtc; b[0x64] = (uint8_t)(crtc >> 8); }
     b[0x84] = (uint8_t)(st->rows ? st->rows - 1 : 24);
     b[0x85] = st->cell_h; b[0x86] = 0;
-    b[0x87] = 0x60;                                    /* 256K, EGA/VGA active, cursor emulation on */
+    /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
+       bit 7, or 4F02h D15) did not clear memory -- see int10 AH=00h and vesa 4F02h. */
+    b[0x87] = (uint8_t)(0x60 | (st->modeset_noclear ? 0x80 : 0x00));
     b[0x88] = 0x09;                                    /* feature/switch bits: enhanced colour */
     /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
     b[0x89] = (uint8_t)((st->gh == 200) ? 0x81 : (st->gh == 350) ? 0x01 : 0x11);
@@ -965,6 +967,15 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  mode set clears it (that path zeroes it below). */
               ntvdd_regs m; unsigned k;
               for (k = 0; k < sizeof m; ++k) ((uint8_t *)&m)[k] = 0;
+              /* §4.5: "If D14 is set, and a linear frame buffer model is not available
+                 then the call will fail." A text mode has none (its ModeInfoBlock says
+                 D7 = 0), so fail before anything changes (#226; we used to accept it). */
+              if (r_bx(r) & 0x4000) {
+                  vesa_note(st, 0x02, r_bx(r), 0);
+                  st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 0;
+                  s_ax(r, 0x014F);
+                  break;
+              }
               vesa_note(st, 0x02, r_bx(r), 1);
               st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 1;
               s_ah(&m, 0x00); s_al(&m, (uint8_t)(0x03 | ((r_bx(r) & 0x8000) ? 0x80 : 0x00)));
@@ -973,6 +984,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
               st->gw = (uint16_t)(tc * VID_CELL_W); st->gh = (uint16_t)(tr * th);
               if (!(r_bx(r) & 0x8000)) clear_text(st, 0x07);
               st->vesa_text_mode = (uint16_t)(r_bx(r) & 0x3FFF);
+              st->vesa_mode_flags = (uint16_t)(r_bx(r) & 0x8000);   /* 4F03 D15 (#226) */
               st->dirty = 1; s_ax(r, 0x004F);
               break;
           } }
@@ -1004,6 +1016,59 @@ static void vesa(video_state *st, ntvdd_regs *r)
                 for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
                 for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
             }
+            /* ── 4F03h REPORTS D14/D15 AS THIS CALL SET THEM, AND 40:87h BIT 7 RECORDS
+                 D15 (#226). §4.6: BX D14 = linear, D15 = "memory not cleared at last mode
+                 set", and the Version 2.x note: "Unlike version 1.x VBE implementations,
+                 the memory clear flag will be returned". §4.5: "VBE BIOS 2.0
+                 implementations should also update the BIOS Data Area 40:87 memory clear
+                 bit so that VBE Function 03h can return this flag." We stored the mode
+                 `& 3FFFh`, so a guest that saves 4F03 and re-sets it with 4F02 came back
+                 BANKED -- and vesa_sync then painted the stale A0000 window over the LFB
+                 it was still drawing into, every frame. */
+            st->vesa_mode_flags = (uint16_t)(r_bx(r) & 0xC000);
+            st->modeset_noclear = (uint8_t)((r_bx(r) & 0x8000) ? 1 : 0);
+            /* ── ★★ THE VGA LAYER UNDER A VESA MODE (#226). ─────────────────────────────
+                 4F02h used to set the VESA fields and nothing else: `mkind`, the
+                 sequencer/GC shadows, gw/gh, the text geometry and 40:49h all kept
+                 the PREVIOUS standard mode's values. The hazard that left, read from the
+                 code (not yet seen on a guest): after mode 12h, mkind stayed
+                 VID_KIND_PLANAR and chain4 0, so
+                   * vdd_video_planar_active() said 1 and the host (video_trap_sync)
+                     kept running the guest in its INTERPRETER, whose A0000 stores go
+                     through vga_planar_write() into the four planes -- not into the
+                     A0000 window vesa_sync copies into vesa_vram. A banked VESA guest
+                     would have drawn into planes nothing displays, at interpreter speed;
+                   * the host's A0000 mapping stayed on a plane section (ymap_select was
+                     last told the planar map mask), so even native stores missed vmem;
+                   * write mode / read mode / bit mask stayed mode 12h's.
+                 And ModeAttributes told the guest the mode was VGA-compatible.
+               ► WHAT A VBE BIOS DOES, so what we do: it programs the VGA for a CHAINED
+                 256-colour pixel pipe and extends it -- measured in QEMU's SeaVGABIOS
+                 binary (vgabios-stdvga.bin, qemu 10.2.1: SR4 |= 08h chain-4, GR5 = 40h
+                 256-colour shift, AR index 20h video on) -- then fills the BDA from the
+                 mode. So: mode 13h's register file (vga_load_modedef), kind LINEAR8 with
+                 chain-4 on and the host window back on the linear section (the same arm
+                 as the INT 10h mode-13h set), and the mode's geometry in gw/gh.
+               ► THE BDA, FROM THE SAME BINARY'S vga_set_mode(): 40:49h = the mode if it
+                 fits a byte, else FFh -- a VBE mode number does not, so FFh (Bochs's
+                 older VGABIOS leaves 40:49h alone; SeaVGABIOS is the one we can read,
+                 and "the last standard mode" is the lie that let a TSR believe mode 12h
+                 was still set); 40:4Ah = XRes / 8; 40:84h = YRes / char height - 1;
+                 40:85h = the char height (the YCharSize 4F01h reports); cursors and page
+                 zeroed; 40:87h = 60h | (D15 ? 80h : 0). vdd_video_bda_sync derives all
+                 of those from the fields set here. */
+            st->mode   = 0xFF;
+            vga_load_modedef(st, 0x13);               /* the chained 256-colour register file */
+            st->mkind  = VID_KIND_LINEAR8;
+            st->map_mask = 0x0F; st->y_mask = 0x0F;
+            if (!st->chain4) { st->chain4 = 1; st->chain4_sel++;
+                               if (st->ymap_select) st->ymap_select(st->ymap_ctx, -1); }
+            st->gw = w; st->gh = h;
+            st->cell_h = (uint8_t)(h <= 200 ? 8 : h <= 350 ? 14 : 16);
+            st->cols   = (uint8_t)(w / 8u);
+            st->rows   = (uint8_t)(h / st->cell_h);
+            st->cur_row = st->cur_col = 0; st->page = 0;
+            st->vesa_text_mode = 0;
             pal_refresh(st);                           /* identity DAC path, see pal_refresh */
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
@@ -1020,7 +1085,14 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x014F);
         break; }
     case 0x03:                                    /* get the current VBE mode      */
-        s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->vesa_text_mode ? st->vesa_text_mode : st->mode));
+        /* D0-D13 the mode, D14 linear, D15 not cleared -- as the last mode set left
+           them (#226, §4.6; see 4F02). A standard mode reports its number and D15 from
+           AL bit 7, which is what SeaVGABIOS's 4F03h does (it returns the word its
+           vga_set_mode() stored for EVERY mode set, flags included); §4.6 itself only
+           promises an accurate answer after a 4F02h. */
+        if (st->in_vesa)             s_bx(r, (uint16_t)(st->vesa_mode | st->vesa_mode_flags));
+        else if (st->vesa_text_mode) s_bx(r, (uint16_t)(st->vesa_text_mode | (st->vesa_mode_flags & 0x8000u)));
+        else                         s_bx(r, (uint16_t)(st->mode | (st->modeset_noclear ? 0x8000u : 0u)));
         s_ax(r, 0x004F);
         break;
     /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
@@ -1333,6 +1405,11 @@ static void int10(void *self, ntvdd_regs *r)
         {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->vesa_text_mode = 0;                       /* ...including a VESA text mode */
+        /* 40:87h bit 7 is "the last mode set did not clear memory" -- IBM's EGA/VGA
+           BIOS copies AL bit 7 there, and VBE 2.0 §4.5/§4.6 builds 4F02h's D15 on the
+           same bit (#226). It read 60h always. */
+        st->modeset_noclear = (uint8_t)(noclear ? 1 : 0);
+        st->vesa_mode_flags = 0;
         st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
         /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
@@ -3675,6 +3752,7 @@ void vdd_video_reset(void *self)
     st->read_mode = st->col_compare = st->col_dontcare = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
+    st->vesa_mode_flags = 0; st->modeset_noclear = 0;   /* 40:87h = 60h at power-on */
     st->vesa_dacwidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);

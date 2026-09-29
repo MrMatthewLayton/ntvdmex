@@ -603,6 +603,59 @@ int main(void)
       CHECK(r_ax(&r)==0x004F && vid.int10_wait_until==0 && vdd_video_int10_wait_us(&vid)==0, "no clock: BL=80h never waits");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
+    /* T12i: 4F03h RETURNS D14/D15, 40:87h BIT 7 RECORDS D15, AND A VESA MODE IS NOT THE
+       PREVIOUS VGA MODE WEARING A NEW NUMBER (#226). ----------------------------------
+       §4.6: BX D14 linear, D15 memory not cleared; §4.5: 2.0 BIOSes update 40:87h bit 7.
+       And after mode 12h, 4F02h left mkind PLANAR and chain-4 off -- the host kept
+       interpreting the guest and routing A0000 stores into the planes. The BDA values
+       are SeaVGABIOS's vga_set_mode(), read from QEMU's vgabios-stdvga.bin. */
+    { static uint8_t tb[0x100]; vid.bda = tb;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0xC101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_bx(&r)==0xC101, "4F03 after 4F02 C101h: C101h -- D14 and D15 kept (was 0101h)");
+      CHECK(tb[0x87]==0xE0, "40:87h bit 7 set by 4F02 D15 (60h -> E0h)");
+      { uint16_t saved = r_bx(&r);                 /* the save/restore idiom: 4F03 -> 4F02 */
+        memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.vesa_lfb==0 && tb[0x87]==0x60, "4F02 0101h: banked, 40:87h bit 7 clear");
+        memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,saved); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(r_ax(&r)==0x004F && vid.vesa_lfb==1, "re-setting what 4F03 returned comes back LINEAR, not banked"); }
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x83); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x87]==0xE0 && r_bx(&r)==0x8003, "INT 10h AH=00h AL=83h: 40:87h bit 7 set, 4F03 = 8003h");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x87]==0x60, "INT 10h AH=00h AL=03h: 40:87h back to 60h");
+      /* §4.5: D14 on a mode with no linear frame buffer (a text mode) fails, nothing changes */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x4109); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x014F && vid.cols==80 && vid.vesa_text_mode==0, "4F02 4109h (text + LFB): 014Fh, still mode 3");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x8109); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_bx(&r)==0x8109, "4F03 in a VESA text mode set with D15: 8109h");
+      /* mode 12h, then a VESA mode: the planar machinery must not survive into it */
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
+      gc_w(&bus, 0x05, 0x02);                      /* write mode 2, as a planar guest leaves it */
+      CHECK(vdd_video_planar_active(&vid) && vid.chain4==0, "mode 12h: planar, chain-4 off (the precondition)");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(!vdd_video_planar_active(&vid) && vid.mkind==VID_KIND_LINEAR8 && vid.chain4==1
+            && vid.write_mode==0 && vid.map_mask==0x0F,
+            "4F02 after 12h: not planar (host stops interpreting), chained, write mode 0 -- was PLANAR");
+      { uint32_t v = 0x04; vdd_bus_io(&bus,0x3C4,1,0,&v); v = 0; vdd_bus_io(&bus,0x3C5,1,1,&v);
+        CHECK((v & 0x08)!=0, "4F02: SR4 reads back chain-4 on (mode 13h's register file)"); }
+      CHECK(vid.gw==640 && vid.gh==480, "4F02: gw/gh are the VESA mode's extent (were mode 12h's by luck)");
+      CHECK(tb[0x49]==0xFF && tb[0x4A]==80 && tb[0x84]==29 && tb[0x85]==16 && tb[0x62]==0,
+            "4F02 0101h BDA: 40:49=FFh, 4A=80 cols, 84=29, 85=16 (SeaVGABIOS vga_set_mode)");
+      memset(&r,0,sizeof r); s_ah(&r,0x0F); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_al(&r)==0xFF && (r_ax(&r)>>8)==80, "INT 10h AH=0Fh in a VESA mode: AL=FFh (40:49h), AH=80");
+      g_vmem[5] = 0x33; vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.vesa_vram[5]==0x33 && vid.frame.pixels[5]==0x33, "4F02 after 12h: an A0000 store reaches the VESA picture");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x010E); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x4A]==40 && tb[0x84]==24 && tb[0x85]==8, "4F02 010Eh (320x200): 40 cols, 25 rows of 8x8");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0107); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x4A]==160 && tb[0x84]==63, "4F02 0107h (1280x1024): 160 cols, 64 rows");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(tb[0x49]==0x03 && vid.mkind==VID_KIND_TEXT, "INT 10h AH=00h 03h after VESA: 40:49=03h, text");
+      vid.bda = 0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(vid.mode==0x12, "int10/00: mode set to 12h");
