@@ -400,6 +400,47 @@ static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
     return 0;
 }
 
+/* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (user, s84: "Smoothness should come from
+     scaler/filter. With them off it should be stretched, sharp pixels, regardless of
+     which renderer is used.") A stretching Blt is FILTERED BY THE DRIVER, and
+     DirectDraw has no way to forbid it -- that was the whole softness. So with
+     Filtering = Nearest the frame is scaled HERE, nearest-neighbour, straight to its
+     final fw x fh in the staging surface, and the Blt that follows is 1:1, which a
+     driver copies as-is. Each source row is converted once; a destination row that
+     maps to the same source row is a memcpy of the previous one. 0 = ok. */
+static int fs_stage_scaled(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb, int fw, int fh)
+{
+    static int xmap[4096];
+    DDSURFACEDESC2 d;
+    DWORD bpp, bypp; int rsh,rb,gsh,gb,bsh,bb; int y, x, prev = -1;
+    BYTE *prow = NULL;
+    if (fw <= 0 || fh <= 0 || fw > 4096 || pd->snap_w <= 0 || pd->snap_h <= 0) return -1;
+    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    if (FAILED(IDirectDrawSurface7_Lock(fb, NULL, &d,
+                                        DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)))
+        return -1;
+    if ((int)d.dwWidth < fw || (int)d.dwHeight < fh) {
+        IDirectDrawSurface7_Unlock(fb, NULL);
+        return -1;
+    }
+    bpp = d.ddpfPixelFormat.dwRGBBitCount;
+    bypp = (bpp + 7) / 8;
+    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
+    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
+    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
+    for (x = 0; x < fw; ++x) xmap[x] = (int)((long long)x * pd->snap_w / fw);
+    for (y = 0; y < fh; ++y) {
+        BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
+        int sy = (int)((long long)y * pd->snap_h / fh);
+        if (sy == prev && prow) { CopyMemory(drow, prow, (size_t)fw * bypp); continue; }
+        for (x = 0; x < fw; ++x)
+            put_px(drow, x, bpp, snap_px(pd, sy, xmap[x]), rsh,rb,gsh,gb,bsh,bb);
+        prev = sy; prow = drow;
+    }
+    IDirectDrawSurface7_Unlock(fb, NULL);
+    return 0;
+}
+
 /* The fallback: nearest-neighbour straight into the back buffer, honouring the same
    fitted rectangle. Only reached if the driver refuses a stretch blt. */
 static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
@@ -439,11 +480,10 @@ static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
      to the frame when the frame outgrows it -- video memory if the driver gives it,
      system memory if not -- and if neither, drop it: fs_present then takes the
      software path, which needs no staging surface. Returns the surface or NULL. */
-static LPDIRECTDRAWSURFACE7 fs_stage_surface(present_ddraw *pd)
+static LPDIRECTDRAWSURFACE7 fs_stage_surface(present_ddraw *pd, int w, int h)
 {
     DDSURFACEDESC2 d;
     void *fb = 0;
-    int w = pd->snap_w, h = pd->snap_h;
     if (pd->fbsurf && w <= pd->fb_w && h <= pd->fb_h) return SURF(pd->fbsurf);
     rel_surf(&pd->fbsurf);
     pd->fb_w = pd->fb_h = 0;
@@ -466,7 +506,7 @@ static LPDIRECTDRAWSURFACE7 fs_stage_surface(present_ddraw *pd)
 
 static void fs_present(present_ddraw *pd)
 {
-    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb = fs_stage_surface(pd);
+    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb;
     int fx, fy, fw, fh, done = 0;
     if (!bk) return;
     /* ★ THE SAME FIT THE WINDOW USES. present_fit centres an on-aspect rectangle in
@@ -482,10 +522,16 @@ static void fs_present(present_ddraw *pd)
     else
         present_fit(pd->fs_w, pd->fs_h, pd->aspect, &fx, &fy, &fw, &fh);
 
-    if (fb && pd->snap_w > 0 && pd->snap_h > 0 && fs_stage(pd, fb) == 0) {
+    /* Filtering = Nearest: scale here, blit 1:1 (sharp). Bilinear: stage at frame
+       size and let the driver stretch -- its filtering IS the bilinear the user chose. */
+    {   int sharp = !pd->filter;
+        int sw = sharp ? fw : pd->snap_w, sh = sharp ? fh : pd->snap_h;
+        fb = fs_stage_surface(pd, sw, sh);
+    if (fb && pd->snap_w > 0 && pd->snap_h > 0
+        && (sharp ? fs_stage_scaled(pd, fb, fw, fh) : fs_stage(pd, fb)) == 0) {
         RECT src, dst;
         src.left = 0; src.top = 0;
-        src.right = pd->snap_w; src.bottom = pd->snap_h;
+        src.right = sw; src.bottom = sh;
         dst.left = fx; dst.top = fy; dst.right = fx + fw; dst.bottom = fy + fh;
         if (fx || fy) {                          /* letterboxed -> clear the bars */
             DDBLTFX bfx;
@@ -494,7 +540,7 @@ static void fs_present(present_ddraw *pd)
                                     DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
         }
         done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
-    }
+    } }
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
     {   HDC hd;                                   /* #138 on the exclusive path */
         if (pd->hint_text && !pd->osd_off && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
