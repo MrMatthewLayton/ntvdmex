@@ -5687,6 +5687,7 @@ static unsigned host_cpu_mhz(void)
 }
 static unsigned g_cpuspd_ref_mhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
 static volatile LONG g_cpuspd_duty = 10000;   /* basis points, read by the thread */
+static volatile LONG g_cpuspd_duty_rm = 10000;   /* #225: the same, for a real-mode program */
 static HANDLE g_cpuspd_thread;
 static DWORD  g_cpuspd_run_ms, g_cpuspd_held_ms;   /* what the throttle really did */
 static DWORD  g_cpuspd_missed;   /* held millisecond the guest was not in exec for */
@@ -5912,6 +5913,7 @@ static void cpuspd_recompute(void)
 {
     LONG bp = (LONG)cpuspeed_duty_bp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz);
     InterlockedExchange(&g_cpuspd_duty, bp);
+    InterlockedExchange(&g_cpuspd_duty_rm, (LONG)cpuspeed_duty_rm_bp((unsigned)bp));   /* #225 */
     /* Pay for the per-trap timestamping only while it is actually being used. */
     InterlockedExchange(&g_exec_timing_on, bp < 10000 ? 1 : 0);
     /* #225: a held guest must still see every vertical retrace (see vbl_owe_on). */
@@ -6011,7 +6013,11 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
     w_run0 = w_win;
     e_run0 = exec_us_now();
     while (g_running) {
-        unsigned duty = (unsigned)InterlockedCompareExchange(&g_cpuspd_duty, 0, 0);
+        /* #225: a real-mode program has its own share -- see cpuspeed_duty_rm_bp. g_dpmi_pm
+           is set for the whole life of a protected-mode client, so this does not flip at
+           every reflected real-mode interrupt (a flip would rebaseline the window). */
+        unsigned duty = (unsigned)InterlockedCompareExchange(g_dpmi_pm ? &g_cpuspd_duty
+                                                                       : &g_cpuspd_duty_rm, 0, 0);
         if (duty >= 10000u) {            /* Unlimited: no hold, no window to keep */
             if (g_cpuspd_catch_req) { InterlockedExchange(&g_cpuspd_catch_req, 0);
                                       if (g_cpuspd_release) SetEvent(g_cpuspd_release); }
@@ -12410,6 +12416,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         {   char cb[2048], *cq = cb; unsigned t; DWORD last = 0;   /* 90 x 9 + ~350 */
             cq = zput(cq, "CLOSE2: cpuspd idx="); cq = zhex(cq, (DWORD)g_cpuspd_idx);
             cq = zput(cq, " duty_bp=");     cq = zhex(cq, (DWORD)g_cpuspd_duty);
+            cq = zput(cq, " duty_rm_bp=");  cq = zhex(cq, (DWORD)g_cpuspd_duty_rm);
+            cq = zput(cq, " pm=");          cq = zhex(cq, (DWORD)g_dpmi_pm);
             cq = zput(cq, " delivered_bp="); cq = zhex(cq, cpuspeed_delivered_bp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
             cq = zput(cq, " exec_ms=");     cq = zhex(cq, g_cpuspd_run_ms);
             cq = zput(cq, " held_ms=");     cq = zhex(cq, g_cpuspd_held_ms);
@@ -31735,6 +31743,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            out of it. That is why the old execnet/held-subtraction dance is gone --
            the number is clean at the source instead of patched at the report. */
       p = zput(p, " duty_bp="); p = zhex(p, (DWORD)g_cpuspd_duty);
+      p = zput(p, " duty_rm_bp="); p = zhex(p, (DWORD)g_cpuspd_duty_rm);   /* #225 */
       { DWORD wall_ms = GetTickCount() - g_start_ms;
         /* Units cancel in the ratio, so ms goes straight in. */
         p = zput(p, " delivered_bp=");

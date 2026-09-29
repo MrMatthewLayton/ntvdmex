@@ -144,6 +144,19 @@ int main(void)
     CHECK(cpuspeed_duty_bp(idx_of(100), 66) == 10000,
           "a speed above the reference clamps to flat out -- a ceiling, never a boost");
 
+    /* #225: a real-mode program's share is the protected-mode share x CPUSPEED_RM_PCT,
+       clamped to flat out, and Unlimited stays Unlimited. */
+    {   unsigned d66 = cpuspeed_duty_bp(idx_of(66), CPUSPEED_REF_MHZ_DEFAULT);
+        CHECK(cpuspeed_duty_rm_bp(d66) == d66 * CPUSPEED_RM_PCT / 100u,
+              "#225: real mode at 486DX2-66 gets the protected-mode share x CPUSPEED_RM_PCT");
+        CHECK(cpuspeed_duty_rm_bp(10000u) == 10000u, "#225: Unlimited is Unlimited in real mode too");
+        CHECK(cpuspeed_duty_rm_bp(9000u) == 10000u, "#225: a scaled share past 100% clamps to flat out");
+        {   int mono = 1;
+            for (i = 2; i < CPUSPEED_COUNT; ++i)
+                if (cpuspeed_duty_rm_bp(cpuspeed_duty_bp(i, CPUSPEED_REF_MHZ_DEFAULT)) >
+                    cpuspeed_duty_rm_bp(cpuspeed_duty_bp(i - 1, CPUSPEED_REF_MHZ_DEFAULT))) mono = 0;
+            CHECK(mono, "#225: the real-mode ladder still gets slower rung by rung"); } }
+
     printf("== CPU speed: the throttle delivers the requested duty (deterministic) ==\n");
 
     /* The cap on one hold, in microseconds (CPUSPEED_MAX_OFF_MS = 1000 ms). Below

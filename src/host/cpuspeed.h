@@ -193,6 +193,29 @@ static unsigned cpuspeed_duty_bp(unsigned idx, unsigned ref_mhz)
         return bp ? (unsigned)bp : 1u; }
 }
 
+/* ── #225: A REAL-MODE PROGRAM GETS ITS OWN SHARE. ─────────────────────────────────
+     The ladder above is Doom's: 32-bit protected-mode code, verified on the rig (the
+     486DX2-66 run counted 62.0 s of Doom time in 63.3 s of wall, incl. load; no
+     interpreted slices). At that share Skyroads -- 16-bit real-mode code -- drew ~16
+     frames/s in-game where a real 486DX2-66 drew ~35 (user, rounds 11-14), with its
+     timer and retrace both delivered in full. So this host is not a fixed multiple of
+     a 486: how much faster it is depends on the code, and 16-bit real-mode code gains
+     far less than Doom's 32-bit code did. One ladder cannot be right for both.
+   ⇒ A program with no protected-mode client (the host's g_dpmi_pm) is throttled at
+     the protected-mode share scaled by CPUSPEED_RM_PCT, clamped to flat out.
+   ⚠ 200 IS BY EAR, AND LABELLED SO: Skyroads' in-game rate at 486DX2-66 against the
+     user's memory of the real machine. The measured replacement is 3DBench V1.0
+     against published real-486 results, blocked on #238 (it times itself on a 1 kHz
+     timer we deliver ~44% of). */
+#define CPUSPEED_RM_PCT 200u
+static unsigned cpuspeed_duty_rm_bp(unsigned pm_bp)
+{
+    unsigned long long bp;
+    if (pm_bp == 0u || pm_bp >= 10000u) return 10000u;
+    bp = (unsigned long long)pm_bp * CPUSPEED_RM_PCT / 100u;
+    return bp >= 10000ull ? 10000u : (unsigned)bp;
+}
+
 /* ── THE V86 HALF: HOW LONG THE GUEST RUNS, AND HOW LONG IT IS HELD. ─────────────
      One millisecond is the floor: Sleep() cannot express less even with the
      multimedia timer resolution raised. So the slice is a PAIR -- run for on_ms,
