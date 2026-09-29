@@ -4015,11 +4015,8 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
             unsigned ch;
             audio_wave_midi_silence(&g_wave);
             HOST_LOCK();
-            for (ch = 0; ch < 9; ++ch)
-                if (g_opl.reg[0xB0 + ch] & 0x20)
-                    vdd_opl_write_reg(&g_opl, (uint8_t)(0xB0 + ch), (uint8_t)(g_opl.reg[0xB0 + ch] & ~0x20));
-            if (g_opl.reg[0xBD] & 0x1F)                 /* rhythm-mode drums, keyed separately */
-                vdd_opl_write_reg(&g_opl, 0xBD, (uint8_t)(g_opl.reg[0xBD] & ~0x1F));
+            (void)ch;
+            vdd_opl_all_notes_off(&g_opl);              /* both banks, and the rhythm drums (#232) */
             HOST_UNLOCK();
         }
         if (m->tsr_pending) {
@@ -10327,6 +10324,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_TINT,                                    /* #229 */
     SET_AUDIOAPI,                                /* #234 */
     SET_SBMODEL,                                 /* #231 */
+    SET_OPL,                                     /* #232 */
     SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235 (read at start-up) */
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
@@ -10430,6 +10428,9 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
     g_behave_dos622 = (s->v[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
+    /* #232: OPL2 (an AdLib: bank-1 ports dead) or OPL3 (YMF262). Live -- the chip model
+       reads it on every access, as a jumpered card would at power-up. */
+    g_opl.opl3 = (uint8_t)(s->v[SET_OPL] == 1 ? 1 : 0);
     g_frameskip      = (int)s->v[SET_FRAMESKIP];
     g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
     g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);
