@@ -63,8 +63,8 @@ struct, `g_sbcfg`, which also writes `BLASTER` (`main.c` `g_sbcfg` ≈`:10322`; 
 
 | Port | Access | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|---|
-| `2x0`/`2x1` | R/W | FM address/data — SB Pro left OPL2, SB16 OPL3 bank 0 | **PART** | writes reach the OPL (`vdd_sb.c:191-196`); `2x0` read is OPL status (`:227-229`); `2x1` read returns `FFh`. The OPL itself is OPL2 only (`vdd_opl.c:285` claims `388h`/`389h`, no `38Ah`) | untested |
-| `2x2`/`2x3` | R/W | FM — SB Pro **right** OPL2, SB16 OPL3 **bank 1** | **PART** | ⛔ written into the **same** OPL2 register file as `2x0`/`2x1` (`:191-196`), so a bank-1 or right-chip write overwrites bank-0 registers; `2x2` read returns `FFh` (`:304`), not status | untested |
+| `2x0`/`2x1` | R/W | FM address/data — SB Pro left OPL2, SB16 OPL3 bank 0 | **IMPL** | array-0 address / data (`vdd_sb.c` `sb_out`, #232); `2x0` read is OPL status incl. the chip-ID bits (`sb_in` → `vdd_opl_read_status`); `2x1` read returns `FFh`. The chip itself: [opl.md](opl.md) | `sb_test.c` T11b |
+| `2x2`/`2x3` | R/W | FM — SB Pro **right** OPL2, SB16 OPL3 **bank 1** | **PART** | #232: with an OPL3 fitted, `2x2` addresses **array 1** and reads status; with an OPL2, `2x2` stays an array-0 mirror and reads `FFh` — the SB Pro 1's second (right) OPL2 is not modelled | `sb_test.c` T11b |
 | `2x4` | W / R | mixer index | **PART** | write latches (`:197`); read falls to `FFh` (`:304`). Whether the real index reads back is an oracle question | untested |
 | `2x5` | R/W | mixer data | **IMPL** | transport only; each register is marked in §4 (`:198`, `:230-293`) | `sb_test.c:125-126` |
 | `2x6` | W | DSP reset | **IMPL** | 1 then 0; the falling edge queues `AAh` (`:199-215`) | `sb_test.c:40-46`, `:83` |

@@ -133,7 +133,7 @@ Each surface gets two documents, doing two different jobs:
 | MC146818 RTC + CMOS map | Motorola MC146818 datasheet | [rtc.md](rtc.md) | ✅ [`ref/rtc.md`](../ref/rtc.md) |
 | PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 | [`ref/pit.md`](../ref/pit.md) §2 |
 | Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | [sb.md](sb.md) — 112 units, 34 PART (s84) | — |
-| OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | — | — |
+| OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | [opl.md](opl.md) — OPL3 built in #232; 3 inferences owed a measurement | — |
 | Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [gus.md](gus.md) — built in s80–s82 (#189 stereo); remainder is #190 | ✅ [`ref/gus.md`](../ref/gus.md) |
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | [mpu401.md](mpu401.md) — 32 units (s84) | — |
 | 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
