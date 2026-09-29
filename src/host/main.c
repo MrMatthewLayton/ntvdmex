@@ -1787,6 +1787,9 @@ static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
 static int      g_unclaimed_n = 0;
 
 static unsigned       g_capture_ms    = 300; /* CAPTURE_FLAG contents: ms between shots */
+/* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
+   so the 40-shot budget can be spent on one moment (Doom's melt) instead of the start. */
+static DWORD          g_capture_delay_ms, g_capture_t0;
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static int            g_no_pmpatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
@@ -11449,7 +11452,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                  when what actually happened is that nobody was looking. capture.flag's
                  CONTENTS are the period in milliseconds now; empty keeps the 300 ms
                  default, and 1100 spans a whole 45 s headless run. */
-            if ((cap_tick++ % (g_capture_ms / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
+            if (GetTickCount() - g_capture_t0 >= g_capture_delay_ms        /* #58 */
+                && (cap_tick++ % (g_capture_ms / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
                 /* ── ⛔⛔ THESE INDICES WERE HARDCODED, AND THE PATH MOVED UNDER THEM.
                      They were 15 and 16, which addressed the two digits back when this
                      was `C:\ntvdmex\shot00.bmp`. The s61 one-folder move made it
@@ -24942,6 +24946,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             for (i3 = 0; i3 < rd3 && cb3[i3] >= '0' && cb3[i3] <= '9'; ++i3)
                 v3 = v3 * 10 + (DWORD)(cb3[i3] - '0');
             if (v3 >= 50 && v3 <= 60000) g_capture_ms = v3;
+            {   DWORD d3 = 0;                                 /* #58: "period delay" */
+                while (i3 < rd3 && cb3[i3] == ' ') ++i3;
+                for (; i3 < rd3 && cb3[i3] >= '0' && cb3[i3] <= '9'; ++i3)
+                    d3 = d3 * 10 + (DWORD)(cb3[i3] - '0');
+                if (d3 <= 600000) g_capture_delay_ms = d3; }
+            g_capture_t0 = GetTickCount();
         }
     }
     /* ⚠ THESE BELONG WITH THE OTHER STARTUP FLAGS, NOT IN THE DPMI BLOCK. Read from
