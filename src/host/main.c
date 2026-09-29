@@ -10406,7 +10406,7 @@ static int g_frameskip;
      numbers exist once and every consumer reads them from here. */
 static dos_sbcfg g_sbcfg = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
                              0 /* H is not advertised by default -- see dos_env.h */,
-                             DOS_SB_DEFAULT_TYPE, 0 };
+                             DOS_SB_DEFAULT_TYPE, 0, 0 };
 static int g_dspver_forced;                /* cfg\dspver.txt beat the model's version */
 
 /* Whether the extended/expanded memory managers announce themselves at all. Off
@@ -12930,6 +12930,25 @@ static DWORD host_io_loop_burst(volatile BYTE *tib, vdd_bus *bus,
      timer ISR spins here with IF on; Skyroads ticks at 180 Hz), and once the edge is
      close it spins as before, so the edge is caught exactly. V86 only; cfg\rtidle.off
      turns it off. */
+/* ── #226: VBE 4F07h BL=80h/82h "set display start DURING VERTICAL RETRACE". The
+     video device answers the call and records when it may complete; the host waits
+     that out here, after dropping the lock -- sleeping while the retrace is more than
+     1.5 ms away, spinning for the last stretch -- so a guest that flips pages with it
+     gets at most one flip per frame, as on a real card. Bounded at 50 ms. */
+static DWORD g_vbe_waits;
+static void int10_wait_after(void)
+{
+    DWORD t0 = GetTickCount();
+    uint32_t us;
+    int waited = 0;
+    while ((us = vdd_video_int10_wait_us(&g_vid)) != 0) {
+        waited = 1;
+        if (GetTickCount() - t0 > 50u) break;
+        if (us > 1500u) Sleep(1); else Sleep(0);
+    }
+    if (waited) ++g_vbe_waits;
+}
+
 static volatile DWORD g_rt_pend, g_rt_cs, g_rt_ip, g_rt_al, g_rt_idles;
 static int g_rt_off = -1;
 static void rt_note(volatile BYTE *tib, uint16_t port, int is_in, DWORD cs, DWORD ip_after)
@@ -21449,6 +21468,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         HOST_LOCK();
                         vdd_bus_deliver_int(&g_bus, 0x10, &r);
                         HOST_UNLOCK();
+                        int10_wait_after();                     /* #226: 4F07h BL=80h */
                         regs_store(&r, tib);
                         video_trap_sync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -22796,6 +22816,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 HOST_LOCK();
                                 vdd_bus_deliver_int(&g_bus, 0x10, &vr);
                                 HOST_UNLOCK();
+                                int10_wait_after();                     /* #226: 4F07h BL=80h */
                                 regs_store(&vr, tib);
                                 video_trap_sync();   /* mode 12h: interpret; no-op in 13h */
                             }
@@ -28055,6 +28076,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             HOST_LOCK();
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             HOST_UNLOCK();
+            int10_wait_after();                     /* #226: 4F07h BL=80h */
             regs_store(&r, tib);
             video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
             VDM_REG(tib, VTIB_EIP) += 3;
@@ -31477,6 +31499,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            its execution. That is a real limit of the mechanism and it should be
            legible in the log rather than inferred from a stopwatch. */
       p = zput(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = zdec(p, g_rt_idles);  /* #183 */
+      p = zput(p, "\r\nSTAGE2: VBE 4F07h retrace waits="); p = zdec(p, g_vbe_waits);           /* #226 */
       p = zput(p, "\r\nSTAGE2: host cpu ~MHz="); p = zdec(p, host_cpu_mhz());   /* #224 */
       p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
       p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
