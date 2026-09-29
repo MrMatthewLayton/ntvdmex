@@ -66,6 +66,7 @@ typedef enum {
     SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
     SET_JOYTYPE, SET_JOYPAD,
     SET_BOOTFROM,
+    SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
     SET_COUNT
 } set_id;
 
@@ -77,6 +78,9 @@ typedef enum {
 } set_str_id;
 
 enum { AUTOFS_ALWAYS = 0, AUTOFS_GRAPHICS = 1, AUTOFS_NEVER = 2 };
+
+/* BehaveLike's values (#167). */
+enum { BEHAVE_NTVDM = 0, BEHAVE_DOS622 };
 
 /* PcSpeaker's values. Named, because `s->v[SET_SPEAKER] == 2` at a call site is
    a number nobody can check against the item list four hundred lines away. */
@@ -247,6 +251,12 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "JoystickGamepad",   IDC_S_JOYPAD,      SK_CHECK,      0,  0,   1, NULL },
 
 { "BootFrom",          IDC_S_BOOTFROM,    SK_COMBO,      0,  0,   2, "Hard disk (C:)|Floppy (A:)|CD-ROM (D:)" },
+/* ── #167: ONE CHOICE FOR EVERY ROW WHERE THE TWO REFERENCES DISAGREE. (user, 2026-09-28)
+     Some answers differ between genuine MS-DOS 6.22 and the Windows XP NTVDM this
+     project replaces, and neither is a defect. Rather than a knob per register, one
+     setting says which machine to be; each such row reads it. Default NTVDM: that is
+     what NTVDMEX stands in for. Values: BEHAVE_* below. First member: XMS 08h's BH. */
+{ "BehaveLike",        IDC_S_BEHAVE,      SK_COMBO,      0,  0,   1, "Windows XP NTVDM|MS-DOS 6.22" },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {

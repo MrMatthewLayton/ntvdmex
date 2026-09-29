@@ -2789,6 +2789,9 @@ static volatile LONG  g_in_exec       = 0;
 static volatile LONG  g_async_ctxwr   = 0;   /* 1 while a thread owns the guest CONTEXT */
 /* #219: the window is inactive, so the machine is paused -- see host_pause_set(). */
 static volatile LONG  g_pause_want    = 0;
+/* #167: Settings > General "behave like" = MS-DOS 6.22 (0 = Windows XP NTVDM, the default).
+   Mirrored from g_set by settings_apply, for the device code that runs before it. */
+static int            g_behave_dos622 = 0;
 static int            g_pause_susp    = 0;   /* the CPU thread is suspended BY THE PAUSE */
 static DWORD          g_pause_n, g_pause_coop, g_pause_ms;
 /* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
@@ -6927,6 +6930,10 @@ static void host_xms(volatile BYTE *tib)
         X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
         X_SETDX(totfree > 0xFFFF ? 0xFFFF : totfree);
         X_SETBL(largest ? 0 : XMSERR_NOMEM);
+        /* #167: BH is undefined for 08h and the references disagree: stock NTVDM leaves
+           it alone (p_xms: BX=B100 over the poison), 6.22's HIMEM writes AAh (BX=AA00).
+           Settings > General > "behave like" picks which. */
+        if (g_behave_dos622) X_SETBH(0xAA);
         break;
     case 0x09:                                  /* allocate EMB: DX=KB */
         if (xms_alloc(&g_xms, VDM_REG(tib, VTIB_EDX) & 0xFFFF, &nh, &err)) { X_SETAX(1); X_SETDX(nh); }
@@ -10236,6 +10243,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT, SET_FRAMESKIP,
     SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_VOLUME, SET_MUTE, SET_RATE,
     SET_OSD, SET_BUFFERED,                       /* #217 */
+    SET_BEHAVE,                                  /* #167 */
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
@@ -10336,6 +10344,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
+    g_behave_dos622 = (s->v[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
     g_frameskip      = (int)s->v[SET_FRAMESKIP];
     g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
     g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);

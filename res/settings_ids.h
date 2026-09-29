@@ -38,6 +38,7 @@
 #define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
 #define IDC_S_DOSVER_NOW      294   /* static:   the version THIS session reports (s81) */
 #define IDC_S_DOSVER_WHY      295   /* static:   why the session differs, or "same"   */
+#define IDC_S_BEHAVE          293   /* combo:    #167 behave like NTVDM / MS-DOS 6.22  */
 /* #203: which COMMAND.COM the DOS prompt runs. The radios are not table rows -- the
    path edit IS the setting (empty = Windows XP's own) and the radios show that. */
 #define IDC_S_SHELL_XP        296   /* radio:    Windows XP's own COMMAND.COM         */

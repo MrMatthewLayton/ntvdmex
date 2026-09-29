@@ -98,7 +98,11 @@ BEGIN
                     IDC_S_DOSVER_NOTE, 22, 34, 258, 24
     LTEXT           "This session is using:", -1, 14, 66, 150, 8
     RTEXT           "", IDC_S_DOSVER_NOW, 214, 66, 64, 8
-    LTEXT           "Same as the setting above.", IDC_S_DOSVER_WHY, 22, 80, 258, 38
+    LTEXT           "Same as the setting above.", IDC_S_DOSVER_WHY, 22, 78, 258, 24
+    /* #167: where the two references answer differently. */
+    LTEXT           "Where MS-DOS and NTVDM differ, &behave like:", -1, 14, 106, 170, 8
+    COMBOBOX        IDC_S_BEHAVE, 190, 104, 88, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
     /* #203: which COMMAND.COM the prompt runs. The path box IS the setting (empty =
        XP's own); the radios only show and set that, so they are not table rows. */
