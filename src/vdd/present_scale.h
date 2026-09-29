@@ -229,4 +229,45 @@ static void present_scale2x_8(const uint8_t *src, int sw, int sh, int sstride,
     }
 }
 
+/* ── #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
+     monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and
+     orange (amber). Applied per COLOUR, never per pixel where a palette exists: the
+     presenter recolours the 256 palette entries (and the split-palette tables), so an
+     8-bit frame costs 256 operations whatever its size. Direct-colour frames pay per
+     pixel, and only when a filter is chosen.
+   Monochrome is luminance (Rec. 601: 0.299 R + 0.587 G + 0.114 B) scaled into the
+   phosphor's colour. Sepia is the usual matrix, as a photograph browns. */
+enum {
+    PRESENT_TINT_DEFAULT = 0,
+    PRESENT_TINT_SEPIA,
+    PRESENT_TINT_MONO_WHITE,
+    PRESENT_TINT_MONO_GREEN,
+    PRESENT_TINT_MONO_ORANGE,
+    PRESENT_TINT_COUNT
+};
+#define PRESENT_TINT_ITEMS "Default|Sepia|Monochrome white|Monochrome green|Monochrome orange"
+
+static uint32_t present_tint(uint32_t argb, int tint)
+{
+    uint32_t a = argb & 0xFF000000u;
+    uint32_t r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+    uint32_t y = (r * 299u + g * 587u + b * 114u + 500u) / 1000u;   /* 0..255 */
+    uint32_t pr, pg, pb;
+    switch (tint) {
+    case PRESENT_TINT_SEPIA:
+        pr = (r * 393u + g * 769u + b * 189u) / 1000u;
+        pg = (r * 349u + g * 686u + b * 168u) / 1000u;
+        pb = (r * 272u + g * 534u + b * 131u) / 1000u;
+        if (pr > 255u) pr = 255u;
+        if (pg > 255u) pg = 255u;
+        if (pb > 255u) pb = 255u;
+        return a | (pr << 16) | (pg << 8) | pb;
+    case PRESENT_TINT_MONO_WHITE:  pr = 255u; pg = 255u; pb = 255u; break;
+    case PRESENT_TINT_MONO_GREEN:  pr = 51u;  pg = 255u; pb = 51u;  break;   /* P1 */
+    case PRESENT_TINT_MONO_ORANGE: pr = 255u; pg = 176u; pb = 0u;   break;   /* amber */
+    default: return argb;
+    }
+    return a | (((y * pr) / 255u) << 16) | (((y * pg) / 255u) << 8) | ((y * pb) / 255u);
+}
+
 #endif /* NTVDMEX_PRESENT_SCALE_H */

@@ -81,6 +81,7 @@
 #define IDC_S_BLINKCURSOR     267   /* checkbox: blink the text-mode cursor           */
 #define IDC_S_OSD             269   /* checkbox: #217 show on-screen messages          */
 #define IDC_S_BUFFERED        270   /* checkbox: #217 compose off-screen, blit once    */
+#define IDC_S_TINT            271   /* combo:    #229 colour filter                    */
 #define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */

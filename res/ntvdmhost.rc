@@ -200,7 +200,7 @@ BEGIN
     COMBOBOX        IDC_S_RENDERER, 180, 20, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Image", -1, 4, 48, 284, 94
+    GROUPBOX        "Image", -1, 4, 48, 284, 104
     LTEXT           "&Scaler:", -1, 14, 66, 30, 8
     COMBOBOX        IDC_S_SCALER, 48, 64, 76, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
@@ -216,22 +216,26 @@ BEGIN
     LTEXT           "&Aspect:", -1, 138, 86, 34, 8
     COMBOBOX        IDC_S_ASPECT, 180, 84, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    /* #229: the colour filter. */
+    LTEXT           "C&olour:", -1, 14, 106, 30, 8
+    COMBOBOX        IDC_S_TINT, 48, 104, 100, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Wait for &VSync (can drop frames)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 128, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 124, 128, 10
     CONTROL         "&Blink the text-mode cursor",
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
-                    14, 122, 128, 10
+                    14, 138, 128, 10
     /* #217: both default on. */
     CONTROL         "&Draw off-screen first (no flicker)", IDC_S_BUFFERED, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 104, 136, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 124, 136, 10
     CONTROL         "Show on-screen &messages", IDC_S_OSD, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 122, 136, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 148, 138, 136, 10
 
-    GROUPBOX        "Fullscreen", -1, 4, 146, 284, 32
-    LTEXT           "Start &fullscreen:", -1, 14, 162, 60, 8
-    COMBOBOX        IDC_S_AUTOFS, 78, 160, 84, 80,
+    GROUPBOX        "Fullscreen", -1, 4, 154, 284, 26
+    LTEXT           "Start &fullscreen:", -1, 14, 166, 60, 8
+    COMBOBOX        IDC_S_AUTOFS, 78, 164, 84, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "Alt+Enter still toggles at any time.", -1, 170, 162, 112, 8
+    LTEXT           "Alt+Enter still toggles at any time.", -1, 170, 166, 112, 8
 
     /* ⛔ THERE IS NO "FULLSCREEN" GROUP, AND THAT IS THE FIX -- see the note over
          the Display settings in src/host/settings.h. Fullscreen is a borderless

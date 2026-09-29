@@ -177,6 +177,14 @@ int main(void)
         }
         CHECK(ok2, "no aspect can produce a minimum below 640x480 -- that is the floor"); }
 
+    /* #229: the colour filters recolour a COLOUR; Default must be the identity. */
+    CHECK(present_tint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
+    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_WHITE) == 0xFFFFFFFFu, "tint: white stays white on a paper-white screen");
+    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_GREEN) == 0xFF33FF33u, "tint: full brightness is the P1 green");
+    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_ORANGE) == 0xFFFFB000u, "tint: full brightness is amber");
+    CHECK(present_tint(0xFF000000u, PRESENT_TINT_MONO_ORANGE) == 0xFF000000u, "tint: black stays black");
+    CHECK(present_tint(0xFFFF0000u, PRESENT_TINT_MONO_WHITE) == 0xFF4C4C4Cu, "tint: pure red is 29.9% grey (Rec. 601)");
+    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_SEPIA) == 0xFFFFFFEEu, "tint: sepia clamps and browns");
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

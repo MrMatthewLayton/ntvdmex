@@ -10268,6 +10268,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_VOLUME, SET_MUTE, SET_RATE,
     SET_OSD, SET_BUFFERED,                       /* #217 */
     SET_BEHAVE,                                  /* #167 */
+    SET_TINT,                                    /* #229 */
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
@@ -10459,6 +10460,7 @@ static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
     pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
     pd->filter = (int)(s->v[SET_FILTER] ? 1 : 0);
     pd->osd_off    = s->v[SET_OSD]      ? 0 : 1;      /* #217 */
+    pd->tint       = (int)s->v[SET_TINT];             /* #229 */
     pd->unbuffered = s->v[SET_BUFFERED] ? 0 : 1;
     pd->aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
     pd->scaler = (int)s->v[SET_SCALER];

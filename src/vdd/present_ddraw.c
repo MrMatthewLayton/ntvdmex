@@ -618,6 +618,10 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
         pd->snap_split = 0;
         pd->rowpal_y = -1;
         pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
+        if (pd->tint) {                                  /* #229: per pixel, only here */
+            size_t i, n = (size_t)f->w * f->h;
+            for (i = 0; i < n; ++i) pd->snap32[i] = present_tint(pd->snap32[i], pd->tint);
+        }
         return;
     }
     for (y = 0; y < (int)f->h; ++y)
@@ -630,6 +634,16 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
         CopyMemory(pd->snap_split_frame,f->split_frame,   256 * sizeof(uint32_t));
         CopyMemory(pd->snap_split_row,  f->split_row,     256 * sizeof(uint16_t));
         pd->snap_frame_no = f->frame_no;
+    }
+    if (pd->tint) {                         /* #229: recolour the COLOURS, not the pixels */
+        int i;
+        for (i = 0; i < 256; ++i) {
+            pd->snap_pal[i] = present_tint(pd->snap_pal[i], pd->tint);
+            if (pd->snap_split) {
+                pd->snap_pal_base[i]  = present_tint(pd->snap_pal_base[i],  pd->tint);
+                pd->snap_pal_split[i] = present_tint(pd->snap_pal_split[i], pd->tint);
+            }
+        }
     }
     pd->rowpal_y = -1;
     pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;

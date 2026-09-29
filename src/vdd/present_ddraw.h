@@ -95,6 +95,7 @@ typedef struct present_ddraw {
        shipped default (messages shown, picture composed off-screen). The off-screen
        picture is a memory DC over a DIB section, kept while the client size holds. */
     int   osd_off, unbuffered;
+    int   tint;          /* #229: PRESENT_TINT_* (present_scale.h), 0 = Default */
     void *mem_dc, *mem_bmp, *mem_old;
     int   mem_w, mem_h;
 } present_ddraw;

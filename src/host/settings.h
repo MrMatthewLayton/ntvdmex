@@ -67,6 +67,7 @@ typedef enum {
     SET_JOYTYPE, SET_JOYPAD,
     SET_BOOTFROM,
     SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
+    SET_TINT,                   /* #229: colour filter                            */
     SET_COUNT
 } set_id;
 
@@ -257,6 +258,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
      setting says which machine to be; each such row reads it. Default NTVDM: that is
      what NTVDMEX stands in for. Values: BEHAVE_* below. First member: XMS 08h's BH. */
 { "BehaveLike",        IDC_S_BEHAVE,      SK_COMBO,      0,  0,   1, "Windows XP NTVDM|MS-DOS 6.22" },
+/* #229 (docs/EMULATION.md): Default / Sepia / Monochrome white, green, orange. */
+{ "ColourFilter",      IDC_S_TINT,        SK_COMBO,      0,  0,
+                                          PRESENT_TINT_COUNT - 1, PRESENT_TINT_ITEMS },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
