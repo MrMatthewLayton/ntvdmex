@@ -382,6 +382,11 @@ static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
     if (FAILED(IDirectDrawSurface7_Lock(fb, NULL, &d,
                                         DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)))
         return -1;
+    /* Belt and braces: never write more than the surface the driver handed back. */
+    if ((int)d.dwWidth < pd->snap_w || (int)d.dwHeight < pd->snap_h) {
+        IDirectDrawSurface7_Unlock(fb, NULL);
+        return -1;
+    }
     bpp = d.ddpfPixelFormat.dwRGBBitCount;
     mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
     mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
@@ -427,9 +432,41 @@ static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
     IDirectDrawSurface7_Unlock(bk, NULL);
 }
 
+/* ── THE STAGING SURFACE MUST HOLD THE WHOLE FRAME. (s84, user: "fullscreen VESA --
+     ZAR, Duke3D, VESACUBE -- crashes NTVDMEX with DirectDraw") It was created once at
+     640x480, and fs_stage copies snap_w x snap_h into it: a 1024x768 or 800x600 VESA
+     frame wrote past the end of the surface (HOSTFAULT write AV in fs_present). Grow it
+     to the frame when the frame outgrows it -- video memory if the driver gives it,
+     system memory if not -- and if neither, drop it: fs_present then takes the
+     software path, which needs no staging surface. Returns the surface or NULL. */
+static LPDIRECTDRAWSURFACE7 fs_stage_surface(present_ddraw *pd)
+{
+    DDSURFACEDESC2 d;
+    void *fb = 0;
+    int w = pd->snap_w, h = pd->snap_h;
+    if (pd->fbsurf && w <= pd->fb_w && h <= pd->fb_h) return SURF(pd->fbsurf);
+    rel_surf(&pd->fbsurf);
+    pd->fb_w = pd->fb_h = 0;
+    if (w <= 0 || h <= 0) return NULL;
+    if (w < 640) w = 640;
+    if (h < 480) h = 480;
+    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    d.dwWidth = (DWORD)w; d.dwHeight = (DWORD)h;
+    d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
+    if (FAILED(IDirectDraw7_CreateSurface(DD, &d, (LPDIRECTDRAWSURFACE7 *)&fb, NULL))) {
+        d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        if (FAILED(IDirectDraw7_CreateSurface(DD, &d, (LPDIRECTDRAWSURFACE7 *)&fb, NULL)))
+            fb = 0;
+    }
+    pd->fbsurf = fb;
+    if (fb) { pd->fb_w = w; pd->fb_h = h; }
+    return SURF(fb);
+}
+
 static void fs_present(present_ddraw *pd)
 {
-    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb = SURF(pd->fbsurf);
+    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb = fs_stage_surface(pd);
     int fx, fy, fw, fh, done = 0;
     if (!bk) return;
     /* ★ THE SAME FIT THE WINDOW USES. present_fit centres an on-aspect rectangle in
