@@ -25110,7 +25110,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_set.v[SET_GUS] && !g_gus_on) settings_note_override(SET_GUS, "cfg\\nogus.flag", 0);
     if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
         settings_note_override(SET_RENDERER, "cfg\\ddrawfs.flag", 1);
-    g_gus.base = GUS_DEFAULT_BASE; g_gus.irq = GUS_DEFAULT_IRQ; g_gus.dma_ch = GUS_DEFAULT_DMA;
+    /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
+    {   static const uint8_t GIRQ[7] = { 2, 3, 5, 7, 11, 12, 15 };
+        static const uint8_t GDMA[5] = { 1, 3, 5, 6, 7 };
+        g_gus.base   = (uint16_t)(0x210 + 0x10 * (g_set.v[SET_GUSADDR] <= 5 ? g_set.v[SET_GUSADDR] : 3));
+        g_gus.irq    = GIRQ[g_set.v[SET_GUSIRQ] <= 6 ? g_set.v[SET_GUSIRQ] : 4];
+        g_gus.dma_ch = GDMA[g_set.v[SET_GUSDMA] <= 4 ? g_set.v[SET_GUSDMA] : 1]; }
     /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
        one line is a machine nobody could have built. Step aside to the next period
@@ -26937,6 +26942,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_sb_dev = vdd_sb_device(&g_sb);
     vdd_bus_add(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     g_mpu.sink = host_midi_sink;
+    {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
+        g_mpu.base = MPUB[g_set.v[SET_MPUADDR] <= 4 ? g_set.v[SET_MPUADDR] : 3]; }
     g_mpu_dev = vdd_mpu_device(&g_mpu);
     vdd_bus_add(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).

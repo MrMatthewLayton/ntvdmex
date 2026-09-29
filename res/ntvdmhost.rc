@@ -289,12 +289,25 @@ BEGIN
     LTEXT           "SoundF&ont:", -1, 14, 120, 42, 8
     EDITTEXT        IDC_S_SOUNDFONT, 62, 118, 216, 13, ES_AUTOHSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Other devices", -1, 4, 136, 284, 40
-    LTEXT           "PC spea&ker:", -1, 14, 152, 42, 8
-    COMBOBOX        IDC_S_SPEAKER, 58, 150, 80, 80,
+    GROUPBOX        "Other devices", -1, 4, 136, 284, 42
+    LTEXT           "PC spea&ker:", -1, 14, 148, 42, 8
+    COMBOBOX        IDC_S_SPEAKER, 58, 146, 80, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     CONTROL         "&Gravis Ultrasound", IDC_S_GUS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 146, 151, 76, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 146, 147, 76, 10
+    /* #235: the GUS's jumpers and the MPU-401's port. */
+    LTEXT           "GUS at:", -1, 14, 164, 26, 8
+    COMBOBOX        IDC_S_GUSADDR, 42, 162, 36, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "IRQ:", -1, 82, 164, 16, 8
+    COMBOBOX        IDC_S_GUSIRQ, 100, 162, 30, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "DMA:", -1, 134, 164, 18, 8
+    COMBOBOX        IDC_S_GUSDMA, 154, 162, 28, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "MPU-401 at:", -1, 190, 164, 42, 8
+    COMBOBOX        IDC_S_MPUADDR, 234, 162, 40, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────

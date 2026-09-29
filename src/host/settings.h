@@ -69,6 +69,7 @@ typedef enum {
     SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
     SET_TINT,                   /* #229: colour filter                            */
     SET_AUDIOAPI,               /* #234: WinMM / DirectSound                      */
+    SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235: device resources */
     SET_COUNT
 } set_id;
 
@@ -264,6 +265,13 @@ static const set_def SET_DEFS[SET_COUNT] = {
                                           PRESENT_TINT_COUNT - 1, PRESENT_TINT_ITEMS },
 /* #234: default WinMM, what every build so far has used; DirectSound falls back to it. */
 { "AudioOutput",       IDC_S_AUDIOAPI,    SK_COMBO,      0,  0,   1, "WinMM|DirectSound" },
+/* #235 (docs/EMULATION.md): the other cards' resources, as their jumpers offered them.
+   Defaults are the cards as built so far: GUS 240h / IRQ 11 / DMA 3, MPU-401 330h. The
+   OPL has no such choice on any real card (AdLib is 388h), so it has no row. */
+{ "GusAddress",        IDC_S_GUSADDR,     SK_COMBO,      3,  0,   5, "210|220|230|240|250|260" },
+{ "GusIrq",            IDC_S_GUSIRQ,      SK_COMBO,      4,  0,   6, "2|3|5|7|11|12|15" },
+{ "GusDma",            IDC_S_GUSDMA,      SK_COMBO,      1,  0,   4, "1|3|5|6|7" },
+{ "MpuAddress",        IDC_S_MPUADDR,     SK_COMBO,      3,  0,   4, "300|310|320|330|340" },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {

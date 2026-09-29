@@ -83,6 +83,10 @@
 #define IDC_S_BUFFERED        270   /* checkbox: #217 compose off-screen, blit once    */
 #define IDC_S_TINT            271   /* combo:    #229 colour filter                    */
 #define IDC_S_AUDIOAPI        292   /* combo:    #234 WinMM / DirectSound              */
+#define IDC_S_GUSADDR         272   /* combo:    #235 GUS base                         */
+#define IDC_S_GUSIRQ          273   /* combo:    #235 GUS IRQ                          */
+#define IDC_S_GUSDMA          274   /* combo:    #235 GUS DMA                          */
+#define IDC_S_MPUADDR         275   /* combo:    #235 MPU-401 base                     */
 #define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */
