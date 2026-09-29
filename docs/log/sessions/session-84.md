@@ -79,3 +79,38 @@ cooperative park (Skyroads traps constantly), IRQ0 delivery resumed, the game ke
 
 The morning checklist, then #202's order: #183 (cheaper waits first), #172. #216's follow-up
 is USER cursor/icon loading (`0x16C`, `0x217` for non-accelerator kinds).
+
+---
+
+## Day, 2026-09-29: the emulation spec (`docs/EMULATION.md`, epic #236)
+
+The user's morning checks (`runs/s84/morning/sweep.txt`): #219, #214, #215 and #188 confirmed and closed,
+#217 confirmed, #167 parked by the user. New: DirectDraw fullscreen crashed on VESA → **#223**, a
+fixed 640x480 staging surface overrun by 1024x768/800x600 frames (fixed); then the user asked for
+sharp pixels on DirectDraw too, since smoothing should come only from scaler/filter. A hand-written
+per-pixel stretch into VRAM was **unplayably slow** (rolled back at once); `StretchDIBits` into the
+back buffer's DC (the GDI routine) is the fix.
+
+Then the user's spec, *"review today's capabilities against the spec, and fill in the gaps. Get all
+of it done."* Filed as #224–#235 under epic #236.
+
+| # | Commit | What |
+|---|---|---|
+| #224 | `9359228` | The spec's CPU ladder; rungs above this PC's `~MHz` greyed (owner-drawn Settings list) |
+| #225 | `8a01b11` | **Rungs calibrated on Doom 1.9s `-timedemo demo3`** against thandor.net / TU Wien: 386DX33 8.2 fps (real 7.47), 486DX2-66 34.2 (33.1), DX4-100 ~44, P133 ~80. Fps is linear in the share; E = 8.67 s |
+| #229 | `bccc677` | Colour filters (palette recoloured: free in 8-bit modes) |
+| #228 | `27fa29d` | Aspect Auto (VGA 4:3, VESA square), window follows the mode |
+| #230 | `2638b0e` | VSync renamed Force VSync |
+| #227 | `2df3519` | Scanlines/CRT on DirectDraw |
+| #234 | `42a9029` | WinMM / DirectSound output |
+| #231 | `1e3cf18` | SB Pro / 16 / AWE32 as distinct cards (DSP version, commands, BLASTER) |
+| #235 | `68a211e` | GUS / MPU-401 resource settings |
+| #232 | merge + `588409a` | Real OPL3 (worktree agent), default now OPL3 |
+| #226 | merge + `0e7ec0d` | VBE gaps (worktree agent): 8-bit DAC on the ports, 4F07h BL=80h waits, 4F03h flags, 4F02h mode state |
+| #233 | merge + `e0d54b8` | AWE32 EMU8000 (worktree agent), no GM ROM |
+| #183 | `def6eb2`, `edf2263` | 3DAh clock from the TSC (no syscall per read); retrace-wait loops sleep 1 ms |
+
+⚠ **Lessons:** a file knob that is silently range-checked by an OLD build reads as "the throttle
+does nothing" (index 7 of a six-rung ladder); a 10-minute headless cap hid the slow rungs; ask the
+host which build is in `bin\` before believing a calibration run. **#222 needs the user's decision**
+(options on the issue).
