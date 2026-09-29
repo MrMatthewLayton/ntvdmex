@@ -13151,7 +13151,7 @@ static void int10_wait_after(void)
     if (waited) ++g_vbe_waits;
 }
 
-static volatile DWORD g_rt_pend, g_rt_cs, g_rt_ip, g_rt_al, g_rt_idles;
+static volatile DWORD g_rt_pend, g_rt_cs, g_rt_ip, g_rt_al, g_rt_cx, g_rt_idles;
 static int g_rt_off = -1;
 /* What follows the guests' 3DAh reads, site by site: the loops rt_idle() must recognise
    are the ones real programs use, so they are MEASURED here, not assumed (STAGE2). */
@@ -13171,7 +13171,8 @@ static void rt_note(volatile BYTE *tib, uint16_t port, int is_in, DWORD cs, DWOR
                 break;
             }
         } }
-    g_rt_cs = cs; g_rt_ip = ip_after; g_rt_al = VDM_REG(tib, VTIB_EAX) & 0xFF; g_rt_pend = 1;
+    g_rt_cs = cs; g_rt_ip = ip_after; g_rt_al = VDM_REG(tib, VTIB_EAX) & 0xFF;
+    g_rt_cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF; g_rt_pend = 1;
 }
 static void rt_idle(void)
 {
@@ -13185,12 +13186,20 @@ static void rt_idle(void)
     if (g_rt_off) return;
     ip = g_rt_ip;
     c = (const volatile BYTE *)(ULONG_PTR)((g_rt_cs << 4) + ip);
-    /* test al,08h (A8 08) or and al,08h (24 08), then jz/jnz (74/75) back to the IN */
-    if (!((c[0] == 0xA8 || c[0] == 0x24) && c[1] == 0x08 && (c[2] == 0x74 || c[2] == 0x75)))
+    /* test al,08h (A8 08) or and al,08h (24 08), then back to the IN with jz/jnz (74/75)
+       -- or, #183 (s84 census: Skyroads' only hot site, 276:6287, 5.5M reads a run), with
+       loopz/loopnz (E1/E0): the same wait with a CX timeout. */
+    if (!((c[0] == 0xA8 || c[0] == 0x24) && c[1] == 0x08
+          && (c[2] == 0x74 || c[2] == 0x75 || c[2] == 0xE1 || c[2] == 0xE0)))
         return;
     {   int target = (int)((ip + 4 + (signed char)c[3]) & 0xFFFF);
         if (target > (int)ip || (int)ip - target > 3) return;    /* must jump back to the IN */ }
-    want = (c[2] == 0x74);             /* jz loops while clear -> waiting for bit 3 SET */
+    /* A LOOP whose CX runs out THIS time round exits on its own: leave it be. (It
+       decrements first, so CX == 1 is the last pass.) Sleeping otherwise only spends
+       fewer iterations of the timeout per millisecond, which a real slow bus did too. */
+    if ((c[2] == 0xE1 || c[2] == 0xE0) && g_rt_cx <= 1u) return;
+    /* jz / loopz loop while the bit is CLEAR -> waiting for bit 3 SET */
+    want = (c[2] == 0x74 || c[2] == 0xE1);
     bit3 = (g_rt_al & 0x08) != 0;
     if (bit3 == want) return;          /* the loop exits this time round */
     us = vdd_video_us_to_vr(&g_vid, want);
@@ -31721,6 +31730,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            its execution. That is a real limit of the mechanism and it should be
            legible in the log rather than inferred from a stopwatch. */
       p = zput(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = zdec(p, g_rt_idles);  /* #183 */
+      /* #183 (user, 2026-09-28: the concern is host CPU AND frame rate): what the host
+         actually spent, from Windows' own accounting -- the process, and the thread that
+         runs the guest -- so a cheaper wait shows up as a number, not an impression. */
+      {   FILETIME c0, e0, k0, u0; ULONGLONG pk = 0, pu = 0, tk = 0, tu = 0;
+          if (GetProcessTimes(GetCurrentProcess(), &c0, &e0, &k0, &u0)) {
+              pk = ((ULONGLONG)k0.dwHighDateTime << 32 | k0.dwLowDateTime) / 10000u;
+              pu = ((ULONGLONG)u0.dwHighDateTime << 32 | u0.dwLowDateTime) / 10000u; }
+          if (g_hcpu && GetThreadTimes(g_hcpu, &c0, &e0, &k0, &u0)) {
+              tk = ((ULONGLONG)k0.dwHighDateTime << 32 | k0.dwLowDateTime) / 10000u;
+              tu = ((ULONGLONG)u0.dwHighDateTime << 32 | u0.dwLowDateTime) / 10000u; }
+          p = zput(p, "\r\nSTAGE2: host cpu ms: process user="); p = zdec(p, (DWORD)pu);
+          p = zput(p, " kernel="); p = zdec(p, (DWORD)pk);
+          p = zput(p, " | guest thread user="); p = zdec(p, (DWORD)tu);
+          p = zput(p, " kernel="); p = zdec(p, (DWORD)tk);
+          p = zput(p, " | run_ms="); p = zdec(p, GetTickCount() - g_run_start_tick); }
       p = zput(p, "\r\nSTAGE2: VBE 4F07h retrace waits="); p = zdec(p, g_vbe_waits);           /* #226 */
       {   int k;
           for (k = 0; k < RT_SITES && g_rt_site[k].n; ++k) {
