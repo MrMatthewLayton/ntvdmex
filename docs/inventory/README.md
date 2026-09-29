@@ -124,19 +124,19 @@ Each surface gets two documents, doing two different jobs:
 | **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | ✅ [`ref/vga.md`](../ref/vga.md) |
 | **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | [PDFs held](../ref/) |
 | **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) | ✅ [`ref/pit.md`](../ref/pit.md) |
-| 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | — |
-| 8237A DMA controller | Intel 8237A datasheet | — | — |
-| 8042 keyboard controller | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
+| 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | ✅ [`ref/pic.md`](../ref/pic.md) |
+| 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) | ✅ [`ref/dma.md`](../ref/dma.md) |
+| 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) | ✅ [`ref/kbc.md`](../ref/kbc.md) |
 | Keyboard (scan code sets 1–3) | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
 | PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) | — |
-| Gameport / joystick | IBM Game Control Adapter | — | — |
-| MC146818 RTC + CMOS map | Motorola MC146818 datasheet | — | — |
+| Gameport / joystick | IBM Game Control Adapter | [gameport.md](gameport.md) — 22 units (s84) | — |
+| MC146818 RTC + CMOS map | Motorola MC146818 datasheet | [rtc.md](rtc.md) | ✅ [`ref/rtc.md`](../ref/rtc.md) |
 | PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 | [`ref/pit.md`](../ref/pit.md) §2 |
-| Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | — | — |
+| Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | [sb.md](sb.md) — 112 units, 34 PART (s84) | — |
 | OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | — | — |
-| Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [`ref/gus.md`](../ref/gus.md) | [`gus.md`](gus.md) — all MISS |
-| MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | — | — |
-| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | — | — |
+| Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [gus.md](gus.md) — built in s80–s82 (#189 stereo); remainder is #190 | ✅ [`ref/gus.md`](../ref/gus.md) |
+| MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | [mpu401.md](mpu401.md) — 32 units (s84) | — |
+| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
 | **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited** | ✅ [`ref/fdc.md`](../ref/fdc.md) |
 | IDE / ATA + ATAPI | ATA-x, ATAPI specs | — ⚠ `3F6h` (alternate status) answers `FFh`; both oracles say `50h`. Found by the FDC probe, filed here | — |
 | **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
