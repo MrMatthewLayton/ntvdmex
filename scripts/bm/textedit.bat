@@ -12,7 +12,7 @@ set CFG=%SH%\cfg
 set OUT=%SH%\debug\out
 set R=%RIG%\rigshot.exe
 set L=%SH%\debug\ctl\rigshot.txt
-set T=Microsoft Windows XP Virtual DOS Machine
+set T=Windows NT Virtual DOS Machine
 set REP=%OUT%\textedit.txt
 tasklist | find /i "ntvdmhost" >nul
 if not errorlevel 1 ( echo ABORT: an NTVDMEX is already running -- not touching it> "%REP%" & goto :eof )

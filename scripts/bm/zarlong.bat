@@ -23,7 +23,7 @@ if "%WAIT%"=="" set WAIT=90
 del /q "%RES%\zarlong_done.txt" "%RES%\zarlong.bmp" >nul 2>&1
 > "%LOG%" echo ==== zarlong: %DATE% %TIME%  (wait %WAIT%s) ====
 
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1
@@ -48,7 +48,7 @@ ping -n %WAIT% 127.0.0.1 >nul
 
 rem ⚠ FORCE A REPAINT BEFORE THE SHOT -- the desktop keeps stale pixels and session 57
 rem   read that as a paint defect twice before shooting after `fg`.
-"%BM%\rigshot.exe" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 del /q "%RES%\rigshot.txt" >nul 2>&1
 "%BM%\rigshot.exe" shot "%RES%\zarlong.bmp" >nul 2>&1

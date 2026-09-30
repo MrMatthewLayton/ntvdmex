@@ -9386,7 +9386,9 @@ static HWND g_status;                        /* the native comctl32 status bar  
      longer push the release chord off the end of a caption the window manager is
      free to truncate. The window is a DOS machine whatever happens to be running
      inside it, so the title says exactly that and nothing else. */
-#define VDM_WIN_TITLE "Microsoft Windows XP Virtual DOS Machine"
+/* User, s84: "Windows NT Virtual DOS Machine" (was "Microsoft Windows XP ..."). The rig
+   harness finds the window by this string -- scripts/bm/*.bat and rigshot.c follow it. */
+#define VDM_WIN_TITLE "Windows NT Virtual DOS Machine"
 
 /* ── THE STATUS STRIP. ───────────────────────────────────────────────────────────
      PROG.EXE ┃ 16-bit Real mode ┃ the input-capture state and the chord for it.

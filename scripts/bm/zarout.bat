@@ -30,7 +30,7 @@ del /q "%RES%\zarout_ours.txt" "%RES%\zarout_stock.txt" >nul 2>&1
 del /q C:\game\o_ours.txt C:\game\o_stock.txt >nul 2>&1
 > "%LOG%" echo ==== zarout: ZAR stdout under both hosts, %DATE% %TIME% ====
 
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1

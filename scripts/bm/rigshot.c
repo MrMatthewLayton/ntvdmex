@@ -41,7 +41,7 @@
 #include <tlhelp32.h>
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
-#define VDM_TITLE "Microsoft Windows XP Virtual DOS Machine"
+#define VDM_TITLE "Windows NT Virtual DOS Machine"
 #define LOGF SHARE "\\debug\\ctl\\rigshot.txt"   /* with the watcher's control channel (s73) */
 
 /* ── tiny no-CRT helpers ─────────────────────────────────────────────────────── */

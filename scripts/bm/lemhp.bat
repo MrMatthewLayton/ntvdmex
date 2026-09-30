@@ -34,23 +34,23 @@ rem and the guest never sees them -- which reads as "the run survived" while the
 rem in fact never started (io=0, no calibration). Cost a whole 8-round A/B.
 rem "1" = VGA game, "2" = High Performance PCs, RETURN = confirm. THIS is the path:
 rem option 1 (PC compatibles) takes a FIXED reload and never calibrates.
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 "%R%" key 49 >nul 2>&1
 ping -n 3 127.0.0.1 >nul
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 "%R%" key 50 >nul 2>&1
 ping -n 3 127.0.0.1 >nul
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 "%R%" key 13 >nul 2>&1
 ping -n 6 127.0.0.1 >nul
 rem F1 = single player -> the instruction screen -> the level. The crash lands here.
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 "%R%" key 112 >nul 2>&1
 ping -n 5 127.0.0.1 >nul
 "%R%" shot "%OUT%\lemhp_%TAG%_1.bmp" >nul 2>&1
 rem a mouse click / space to leave the instruction screen for the level
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 "%R%" key 32 >nul 2>&1
 ping -n 6 127.0.0.1 >nul
 "%R%" shot "%OUT%\lemhp_%TAG%_2.bmp" >nul 2>&1

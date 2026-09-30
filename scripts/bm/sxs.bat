@@ -50,7 +50,7 @@ if not exist C:\ntvdmex md C:\ntvdmex
 rem -- clear the decks once, then deploy once.  A host left running from an earlier
 rem    invocation holds C:\ntvdmex\ntvdmhost.exe open, `copy` then fails SILENTLY,
 rem    and the OLD binary runs while this script reports success.  That has happened.
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1

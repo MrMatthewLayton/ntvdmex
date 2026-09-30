@@ -46,7 +46,7 @@ echo list: %LIST% >> "%LOG%"
 if not exist C:\ntvdmex md C:\ntvdmex
 rem -- one deploy for the whole sweep; each guest re-copies nothing, so a host left
 rem    holding the file cannot make a later guest run a stale binary.
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1
@@ -113,7 +113,7 @@ if errorlevel 1 (echo   !! IFEO RESTORE FAILED -- STOP, everything after this me
 goto :eof
 
 :stop
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1

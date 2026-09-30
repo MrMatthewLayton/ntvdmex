@@ -63,9 +63,9 @@ tasklist | find /i "ntvdmhost" >> "%REP%"
 find "STAGE2: instance" "%OUT%\ntvdmhost.log" >> "%REP%" 2>&1
 find "OPEN:" "%OUT%\ntvdmhost.log" >> "%REP%" 2>&1
 
-"%R%" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 4 127.0.0.1 >nul
-"%R%" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 4 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 for %%i in (1 2 3 4 5 6 7 8) do reg delete "%K%" /v Recent%%i /f >nul 2>&1

@@ -59,7 +59,7 @@ rem    The host's own window (hidden for a Win16 run, but present) answers
 rem    WM_CLOSE by destroying itself, which removes the icon on the way out. So
 rem    ask first, give it a moment, and keep the kill as the FALLBACK it should
 rem    always have been -- an unconditional `taskkill` is a leak generator.
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe     >nul 2>&1

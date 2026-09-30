@@ -11,7 +11,7 @@ set CFG=%SH%\cfg
 set OUT=%SH%\debug\out
 set R=%RIG%\rigshot.exe
 set L=%SH%\debug\ctl\rigshot.txt
-set T=Microsoft Windows XP Virtual DOS Machine
+set T=Windows NT Virtual DOS Machine
 set K=HKCU\Software\NTVDMEX
 set REP=%OUT%\kbtest.txt
 tasklist | find /i "ntvdmhost" >nul

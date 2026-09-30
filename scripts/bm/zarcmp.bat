@@ -37,7 +37,7 @@ rem   four multi-megabyte .SFS archives; a game that exits in half a second havi
 rem   printed nothing looks identical whether the fault is ours or the staging's.
 dir C:\game >> "%LOG%" 2>&1
 
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1
@@ -60,7 +60,7 @@ type "%RES%\rigshot.txt" >> "%LOG%" 2>&1
 tasklist /fi "imagename eq ntvdmhost.exe" >> "%LOG%" 2>&1
 copy /y C:\ntvdmex\ntvdmhost.log "%RES%\zar_ours.log" >nul 2>&1
 
-"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" close "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 ping -n 3 127.0.0.1 >nul

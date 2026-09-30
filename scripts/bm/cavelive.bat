@@ -81,7 +81,7 @@ rem   UNDERNEATH a menu, which reads as "the run left a menu open" rather than a
 rem   input going somewhere unintended. Clicking in the picture puts the focus where
 rem   the keystroke is meant to go. CAVE has no mouse handling, so the click itself
 rem   is inert.
-"%BM%\rigshot.exe" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 "%BM%\rigshot.exe" click 496 450 >nul 2>&1
 ping -n 2 127.0.0.1 >nul
@@ -104,6 +104,6 @@ ping -n 2 127.0.0.1 >nul
 "%BM%\rigshot.exe" shot "%RES%\cave_b.bmp" >nul 2>&1
 
 rem Leave the guest's window in front, ready for a human.
-"%BM%\rigshot.exe" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%BM%\rigshot.exe" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 echo done> "%RES%\cavelive_done.txt"
 endlocal

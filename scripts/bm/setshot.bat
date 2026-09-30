@@ -39,7 +39,7 @@ cd /d C:\test
 start "" C:\test\dosstub.com
 ping -n 9 127.0.0.1 >nul
 
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 rem the "Tools" title on the menu bar (window lands at 132,174 on this desktop)
 "%R%" click 235 213 >nul 2>&1

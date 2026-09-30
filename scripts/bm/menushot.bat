@@ -46,7 +46,7 @@ ping -n 9 127.0.0.1 >nul
 echo ---- is it up, and is it OURS? ---- > "%RES%\menushot.txt"
 tasklist /fi "imagename eq ntvdmhost.exe" | find "ntvdmhost" >> "%RES%\menushot.txt"
 if not exist C:\ntvdmex\ntvdmhost.log echo ^*^*^* NO HOST LOG -- stock ntvdm ran this >> "%RES%\menushot.txt"
-"%R%" fg "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+"%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 "%R%" shot "%RES%\menushot.bmp" >nul 2>&1
 echo ---- windows on the desktop ---- >> "%RES%\menushot.txt"
