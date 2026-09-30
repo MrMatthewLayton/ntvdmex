@@ -29727,19 +29727,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     : 7;
                         g_pm_coop_gate[gi]++;
                     }
-                    /* ── #172: THE OWED COUNT OPENS THIS, NOT ONLY THE LATCH. ─────────────
-                         The latch is built by InterlockedExchange(&g_irq0_pending, 0) above,
-                         which folds up to IRQ0_PENDING_MAX raises into ONE boolean -- and one
-                         latch delivers one tick. Every other raise stayed in g_pm_tick_owed
-                         with nothing left to offer it. Measured on Doom's quit wait (a PM
-                         3DAh poll, where the async arm bails why=20 on half its attempts):
-                         PMCOOP gate latch=0x1b52 against tried=0x66 -- ticks owed, the loop
-                         passing through here every trap, and the arm shut. IRQ0 fell from
-                         140/s to 25-42/s and the DMX mixer it feeds stuttered. The owed
-                         count is the 8259's request STATE, the same rule as the keyboard's
-                         arm below; one tick per pass, each run to its IRET, so a backlog
-                         drains as catch-up, never as a re-entrant pile. */
-                    if ((g_pm_irq0_latch || g_pm_tick_owed > 0)
+                    /* ── #172: THE LATCH OPENS THIS, NOT THE OWED COUNT. (s85) ────────────
+                         s84 opened the arm on `g_pm_tick_owed > 0` as well, on the theory
+                         that the quit wait's backlog was stuck here. The real cause was
+                         modey_pm_run holding g_lock (stop reason `irq`), and isolated on the
+                         menu-quit route (runs/s85/owed/, interleaved x3) the owed-count arm
+                         bought nothing: quit window 139/s either way, REPLAYED_LOUD 48-50
+                         with it against 44-45 without, plus ~5,800 injections declined per
+                         run in DOS/4GW's 16-bit start-up. Latch only. */
+                    if (g_pm_irq0_latch
                         && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
                         && !g_pm_noirq && !g_async_pm_active
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
