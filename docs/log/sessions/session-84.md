@@ -170,3 +170,25 @@ I would expect from a 66 MHz CPU".
 - `gate.sh` doesn't force a speed, and the rig's saved speed is P3 1 GHz. `runs/s84/night/gate.sh` forces `cfg\cpuspd.txt`=0.
 
 Morning test (`checks.txt`): the FM drums in Skyroads' music.
+
+---
+
+## Morning, 2026-09-30: the user's round (one focused test at a time)
+
+| Result | Commit |
+|---|---|
+| **#139 FM drums**: user heard no difference in Skyroads ("has sounded correct for a while anyway"). Skyroads uses them lightly; the oracle match is the evidence. Left OPEN for the user to decide. | `c97c6c3` |
+| **#218 smart mouse**: "MUCH improved, the UX is excellent". One bug: focus via the TITLE BAR captured, but Windows' move loop left the cursor unclipped, so the pointer walked onto the desktop. Fixed: re-clip at WM_EXITSIZEMOVE + a UI-tick clip guard (CLOSE2 `clip_repairs`). **User-confirmed: "Mouse capture is working perfectly now."** | `d569f09`, `782e3e5` |
+| Window title "Windows NT Virtual DOS Machine", Settings "Windows NT Virtual DOS Machine Settings" (user ask). ⚠ The harness finds the window BY TITLE: `scripts/bm/*.bat`, the rig's `debug\rig\*.bat`, `rigshot.c` (rebuilt + deployed) and `runs/s84/*/gate.sh`/`zarab.sh` all follow it. | `8f13b8a` |
+| Status strip to the user's layout: `name │ 16/32-bit Real/Protected Mode │ 66 MHz / 1 GHz / Unlimited │ Press WIN to release mouse / Click video to capture mouse`. Each part sized to its text, left-aligned; the 4th part only for a mouse-using program. | `782e3e5` |
+| Strip bug: the name was always COMMAND.COM (set once, from the first program loaded). EXEC now saves the parent's name per level and dos_terminate restores it. **Deployed, NOT yet user-tested.** | `4769ed8` |
+
+**Where it stands:** rig `bin\` = **`24901cd7`** (= HEAD `4769ed8`'s host). `checks.txt` = the status-strip
+name test (DOOM.EXE → back to COMMAND.COM at the prompt → MEM/EDIT follow). `report.txt` empty.
+**15 commits are NOT pushed** (since `c0e54bb`); push only when the user asks.
+
+**Still owed to the user, one test at a time, after the name test:** the display items (#228 Stretch,
+#229 View > Colour Filter + sepia, #237 labels); #223 (DirectDraw fullscreen on VESA: ZAR/Duke3D/VESACUBE);
+#234 (what exactly is "buggy" about DirectSound); #227 (scalers blur in DirectDraw fullscreen).
+**Open, investigated:** #239 ZAR sound intermittent since the rig reboot (not code; its IRQ5 self-test
+never gets an interrupt delivered); #238 1 kHz IRQ0 (needs deliver-at-STI; every route closed).

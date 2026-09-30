@@ -6,12 +6,13 @@
 > then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-09-29 (session 84, unattended)
-- **Branch:** `m9/completeness` — everything pushed. Rig `bin\` = **`af53da5c`**: tonight's
-  Tier 1/2 night (#212, #165, #166, #214, #215, #187, #217, #219, #188, #167, the XMS move
-  fix), rig-gated against `6b833b1f` and **not yet user-confirmed** — `checks.txt` on the share.
-- **Resume:** [`log/sessions/session-84.md`](log/sessions/session-84.md) and the user's answers
-  to `checks.txt`, then #202 (#183, #172).
+- **Updated:** 2026-09-30 (session 84, morning)
+- **Branch:** `m9/completeness`. ⚠ **15 commits NOT pushed** (since `c0e54bb`); push only when the
+  user asks. Rig `bin\` = **`24901cd7`** (HEAD `4769ed8`'s host). User-confirmed this session: #225
+  CPU speed (486DX2-66 "spot on"), #218 smart mouse incl. the title-bar fix. **Not yet confirmed:**
+  the status-strip program name (`checks.txt` on the share), and the night's display items.
+- **Resume:** the last section of [`log/sessions/session-84.md`](log/sessions/session-84.md) and the
+  user's answer to `checks.txt`; then the owed tests listed there, one per round; then #202.
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
