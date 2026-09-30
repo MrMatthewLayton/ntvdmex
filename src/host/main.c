@@ -2033,11 +2033,13 @@ static struct {
     WORD  ivt[512];                   /* 0000:0000-03FF as the parent left it */
     BYTE  imr_m, imr_s, vmode;
     DWORD pit0;                       /* channel 0's effective reload */
+    char  progname[64];               /* the PARENT's status-strip name (user, s84) */
 } g_exec_mach[EXEC_MAX_DEPTH];
 static volatile LONG g_close_req;     /* UI -> exec thread: end the innermost program */
 static int  g_close_forced;           /* the exit in progress is ours, not the guest's */
 static int  g_top_is_shell;           /* depth 0 is a shell: nothing to close there */
 static void exec_mach_save(int d);    /* fwd: defined with close_prog_now */
+static char g_progname[64];           /* fwd: the status strip's name (defined below) */
 
 static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
 
@@ -2268,6 +2270,16 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     }
 
     exec_mach_save(d);                              /* #152: what a forced close restores */
+    /* ── THE STRIP NAMES THE PROGRAM RUNNING NOW, NOT THE SHELL. (user, s84: "the exe/com
+         name is always COMMAND.COM") It was set once, from the program NTVDMEX loaded
+         first -- which is the shell whenever a game is started from a prompt or by
+         double-click through it. Save the parent's name with this level; dos_terminate
+         puts it back (a Close Program ends through there too). */
+    {   const char *bn = m->exec_path, *q; int k = 0;
+        for (k = 0; k < 63 && g_progname[k]; ++k) g_exec_mach[d].progname[k] = g_progname[k];
+        g_exec_mach[d].progname[k] = 0;
+        for (q = m->exec_path; *q; ++q) if (*q == '\\' || *q == '/' || *q == ':') bn = q + 1;
+        if (*bn) { for (k = 0; bn[k] && k < 63; ++k) g_progname[k] = bn[k]; g_progname[k] = 0; } }
     dos_handles_push(m);                            /* s81: the child works on a copy */
     ++g_exec_depth;
     m->psp_seg = child;
@@ -4003,6 +4015,8 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         int d = --g_exec_depth;
         volatile WORD *pfl2;
         m->child_rc = (WORD)(m->exit_code & 0xFF);
+        if (g_exec_mach[d].progname[0])             /* the strip names the parent again */
+            zput(g_progname, g_exec_mach[d].progname);
         /* s81: the parent's handle table back, the child's leftover files closed (not
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
         dos_handles_pop(m, m->tsr_pending);
@@ -7330,7 +7344,7 @@ static void host_ems(volatile BYTE *tib)
 }
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static char g_progname[64] = "(none)";      /* left half of the status strip     */
+static char g_progname[64] = "(none)";      /* first part of the status strip    */
 
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
