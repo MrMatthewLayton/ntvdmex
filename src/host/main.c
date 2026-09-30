@@ -9411,8 +9411,15 @@ static HWND g_status;                        /* the native comctl32 status bar  
    until now the only way to know it had happened was to read the log afterwards.
    ⚠ IN EXCLUSIVE FULLSCREEN NEITHER PART IS VISIBLE: the DirectDraw primary covers
      the strip exactly as it covers the menu bar. Win+F10 still releases. */
-static int  g_status_right_w = 190;          /* pixels reserved for the right part  */
-static char g_status_l[128], g_status_m[64], g_status_r[64];  /* what is ON it now  */
+/* ── ★ s84 (user spec): EVERY PART LEFT-ALIGNED, EACH SIZED TO ITS TEXT. ───────────
+       appname.exe │ 16-bit Real Mode │ 66 MHz
+       appname.exe │ 32-bit Protected Mode │ 133 MHz │ Press WIN to release mouse
+       appname.exe │ 32-bit Protected Mode │ Unlimited │ Click video to capture mouse
+     The capture message used to live in a fixed-width part against the RIGHT edge,
+     which cut it off; it now follows the speed. A program that never used the mouse
+     gets no fourth part at all -- there is nothing to say about capture. The speed is
+     the clock alone ("66 MHz", "Unlimited"), never the CPU's name. */
+static char g_status_l[128], g_status_m[64], g_status_s[32], g_status_r[64];  /* ON it now */
 
 static int zsame(const char *a, const char *b)
 {
@@ -9441,71 +9448,71 @@ static int status_text_w(const char *s)
     return w;
 }
 
-/* ── ★ THE NAME PART HUGS THE NAME. ─────────────────────────────────────────────
-     The first cut reserved fixed widths from the RIGHT edge and gave the program
-     name everything left over, which put the divider two thirds of the way across
-     an empty field and left the machine state sitting out in the middle of the
-     strip, nowhere near the program it describes. Measure the name instead, so the
-     divider lands just after it and the mode reads as the next word along:
-         CAVE.EXE │ 16-bit Real mode                    Win+F10 captures input
-   ⚠ CLAMPED AT BOTH ENDS. A 63-character program name must not push the mode field
-     off the strip, and a one-character name must not produce a sliver. */
-static void status_set_parts(void)
+/* ── ★ EACH PART HUGS ITS TEXT (s84: extended from the name to every part). ─────────
+     Measure each string in the bar's own font, add the control's inset, and lay the
+     parts out left to right; the LAST part runs to the edge (-1) so the size grip has
+     somewhere to sit. Re-cut whenever any text changes: re-partitioning blanks every
+     part, so status_update re-pushes all of them after it.
+   ⚠ CLAMPED: a 63-character program name must not push everything else off the strip. */
+static void status_set_parts(const char *const *txt, int n)
 {
-    RECT rc; int parts[3], name_w;
-    if (!g_status) return;
-    GetClientRect(g_status, &rc);
-    name_w = status_text_w(g_progname) + 18;      /* the control's own left inset */
-    if (name_w < 70)  name_w = 70;
-    if (name_w > 260) name_w = 260;
-    parts[0] = name_w;
-    parts[1] = rc.right - g_status_right_w;
-    if (parts[1] < parts[0] + 40) parts[1] = parts[0] + 40;
-    parts[2] = -1;                           /* the right part runs to the edge     */
-    SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
-    g_status_l[0] = g_status_m[0] = g_status_r[0] = 0;  /* re-partitioning blanks it */
+    int parts[4], i, x = 0;
+    if (!g_status || n < 1 || n > 4) return;
+    for (i = 0; i < n; ++i) {
+        int w = status_text_w(txt[i]) + 18;       /* the control's own left inset */
+        if (i == 0 && w > 260) w = 260;
+        if (w < 40) w = 40;
+        x += w;
+        parts[i] = (i == n - 1) ? -1 : x;
+    }
+    SendMessageA(g_status, SB_SETPARTS, (WPARAM)n, (LPARAM)parts);
 }
 
-/* Compose both parts, and push each only when it CHANGES.
+/* The CPU speed as the strip shows it: the clock only, no CPU name (user, s84). */
+static void status_speed_text(char *out)
+{
+    unsigned mhz = ((unsigned)g_cpuspd_idx < CPUSPEED_COUNT) ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u;
+    char *q = out;
+    if (!mhz) { zput(out, "Unlimited"); return; }
+    if (mhz >= 1000u && mhz % 1000u == 0u) { q = zdec(q, mhz / 1000u); zput(q, " GHz"); }
+    else                                   { q = zdec(q, mhz);         zput(q, " MHz"); }
+}
+
+/* Compose the parts, and push them only when something CHANGES.
    ⚠ This is POLLED from the UI tick rather than driven by a dirty flag, deliberately.
-     Two of the three facts it reports -- g_dpmi_pm and g_dpmi_client32 -- are set on
-     the V86 thread deep inside the DPMI mode switch, and a flag there would be one
-     more thing every future site that changes mode has to remember. Comparing two
-     short strings once per frame costs nothing and cannot be forgotten. */
+     The mode facts -- g_dpmi_pm and g_dpmi_client32 -- are set on the V86 thread deep
+     inside the DPMI mode switch, and a flag there would be one more thing every future
+     site that changes mode has to remember. Comparing short strings once per frame
+     costs nothing and cannot be forgotten. */
 static void status_update(void)
 {
-    const char *l, *m, *r;
+    const char *txt[4];
+    char spd[32];
+    int n;
     if (!g_status) return;
-    l = g_progname;
+    txt[0] = g_progname;
     /* One field, because they are one fact: 32-bit only ever means a DPMI client in
-       protected mode, so the four-way grid the old two fields implied never existed. */
-    m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected mode"
-      : g_dpmi_pm                      ? "16-bit Protected mode"
-                                       : "16-bit Real mode";
-    /* THREE STATES, NOT TWO. The strip used to offer a chord unconditionally, so a
-       guest that never touches the mouse -- where capture is refused by rule 1 and
-       nothing at all will happen -- still advertised one. Say which case this is. */
-    r = g_captured        ? "Mouse captured -- press Windows key to release"
-      : capture_allowed() ? "Click the screen to capture the mouse"
-                          : "Mouse belongs to the desktop";
-    /* ⚠ THE NAME DECIDES THE FIRST PART'S WIDTH, so a new program has to
-         re-partition BEFORE anything is pushed -- otherwise the divider stays where
-         the previous program left it and a long name is truncated against a boundary
-         measured for a short one. Re-partitioning blanks every part, which is why
-         all three are re-pushed below rather than only the one that changed. */
-    if (!zsame(l, g_status_l)) status_set_parts();
-    if (!zsame(l, g_status_l)) {
-        zput(g_status_l, l);
-        SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)l);
-    }
-    if (!zsame(m, g_status_m)) {
-        zput(g_status_m, m);
-        SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)m);
-    }
-    if (!zsame(r, g_status_r)) {
-        zput(g_status_r, r);
-        SendMessageA(g_status, SB_SETTEXTA, 2, (LPARAM)r);
-    }
+       protected mode. Title case (user, s84). */
+    txt[1] = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected Mode"
+           : g_dpmi_pm                      ? "16-bit Protected Mode"
+                                            : "16-bit Real Mode";
+    status_speed_text(spd);
+    txt[2] = spd;
+    /* Only a program that asked for the mouse has anything to say about capture
+       (rule 1); exactly the user's wording. */
+    txt[3] = g_captured        ? "Press WIN to release mouse"
+           : capture_allowed() ? "Click video to capture mouse"
+                               : "";
+    n = txt[3][0] ? 4 : 3;
+    if (zsame(txt[0], g_status_l) && zsame(txt[1], g_status_m) &&
+        zsame(txt[2], g_status_s) && zsame(txt[3], g_status_r)) return;
+    status_set_parts(txt, n);
+    zput(g_status_l, txt[0]); zput(g_status_m, txt[1]);
+    zput(g_status_s, txt[2]); zput(g_status_r, txt[3]);
+    SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)txt[0]);
+    SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)txt[1]);
+    SendMessageA(g_status, SB_SETTEXTA, 2, (LPARAM)txt[2]);
+    if (n == 4) SendMessageA(g_status, SB_SETTEXTA, 3, (LPARAM)txt[3]);
 }
 
 /* Create the native status bar child; record its height so the video blit reserves
@@ -9521,7 +9528,7 @@ static void make_status(HWND parent, HINSTANCE hi)
        at 0x0 has a zero client rect, so the split would be computed against nothing
        and would stay wrong until the first user resize. */
     SendMessageA(g_status, WM_SIZE, 0, 0);
-    status_set_parts();
+    g_status_l[0] = 0;                       /* force the first cut + push */
     status_update();
     GetWindowRect(g_status, &sr);
     if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
@@ -9875,16 +9882,43 @@ static void host_cursor_refresh(HWND h)
    while captured and the clip is still the OLD window, so the mouse is fenced into a
    corner of the screen the picture no longer occupies. Anything that changes the
    window's shape must re-apply it. */
+static void capture_clip_rect(HWND h, RECT *rc)
+{
+    POINT tl;
+    GetClientRect(h, rc);
+    tl.x = rc->left; tl.y = rc->top;
+    ClientToScreen(h, &tl);
+    rc->left = tl.x; rc->top = tl.y;
+    rc->right += tl.x; rc->bottom += tl.y;
+}
 static void capture_clip_apply(HWND h)
 {
-    RECT rc; POINT tl;
+    RECT rc;
     if (!h || !g_captured) return;
-    GetClientRect(h, &rc);
-    tl.x = rc.left; tl.y = rc.top;
-    ClientToScreen(h, &tl);
-    rc.left = tl.x; rc.top = tl.y;
-    rc.right += tl.x; rc.bottom += tl.y;
+    capture_clip_rect(h, &rc);
     ClipCursor(&rc);
+}
+/* ── ★ CAPTURED MEANS THE POINTER NEVER REACHES THE DESKTOP. (user, s84) ──────────
+     Focusing the window from its TITLE BAR captured (WM_ACTIVATE, rule 5) -- and then
+     the press on the caption entered Windows' own move loop, which leaves the cursor
+     UNCLIPPED when it ends. So we believed we were captured, the pointer was hidden over
+     the video, and it walked straight out onto the desktop. ClipCursor is global state
+     anyone can change, so re-applying it at WM_EXITSIZEMOVE is not enough on its own:
+     from the UI tick, while captured and in front (and not mid-drag, where Windows owns
+     the clip), check the clip is still OURS and restore it if not. Counted. */
+static int   g_in_sizemove;
+static DWORD g_clip_repairs;
+static void capture_clip_guard(HWND h)
+{
+    RECT want, cur;
+    if (!h || !g_captured || g_in_sizemove || GetForegroundWindow() != h) return;
+    capture_clip_rect(h, &want);
+    if (!GetClipCursor(&cur)) return;
+    if (cur.left != want.left || cur.top != want.top ||
+        cur.right != want.right || cur.bottom != want.bottom) {
+        ClipCursor(&want);
+        ++g_clip_repairs;
+    }
 }
 
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
@@ -11505,6 +11539,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            "this thread reached its timer", not "this thread finished a frame". */
         InterlockedIncrement(&g_ui_beat);
         cursor_idle_tick(h);                    /* #218: 5 s still over the video -> hide */
+        capture_clip_guard(h);                  /* captured -> the clip is still ours */
         bg_prio_tick(h);                        /* #211 */
         /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
              SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
@@ -11971,7 +12006,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
         if (g_status) {
             SendMessageA(g_status, WM_SIZE, 0, 0);            /* let it re-dock     */
-            status_set_parts();      /* ...and re-cut the two parts to the new width */
+            g_status_l[0] = 0;       /* force a re-cut; the last part follows the width */
             status_update();         /* re-partitioning blanks them; fill them again */
         }
         return 0;
@@ -12171,6 +12206,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         input_capture_set(h, 0);         /* never strand the user in a captured window */
         host_release_modifiers();        /* ...nor the guest with Alt held forever     */
         return 0;
+    case WM_ENTERSIZEMOVE: g_in_sizemove = 1; break;
+    case WM_EXITSIZEMOVE:                /* Windows' move/size loop leaves the cursor unclipped */
+        g_in_sizemove = 0;
+        capture_clip_apply(h);
+        break;
     case WM_ACTIVATE:
         /* ── RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
              for the mouse. The click-in-the-video path (below) already covers "click the
@@ -12462,6 +12502,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = zput(cq, " vbl_edges=");   cq = zhex(cq, g_vid.vbl_edges);
             cq = zput(cq, " vbl_owed=");    cq = zhex(cq, g_vid.p3da_vbl_owed);
             cq = zput(cq, " p3da=");        cq = zhex(cq, g_vid.p3da_reads);
+            cq = zput(cq, " clip_repairs=");cq = zhex(cq, g_clip_repairs);
             cq = zput(cq, " irq0tl=");
             for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
             for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) { cq = zput(cq, t ? "," : ""); cq = zhex(cq, g_irq0_tl[t]); }
