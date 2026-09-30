@@ -63,7 +63,7 @@ typedef enum {
     SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS, SET_OSD, SET_BUFFERED,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS,
-    SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
+    SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
     SET_JOYTYPE, SET_JOYPAD,
     SET_BOOTFROM,
     SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
@@ -247,7 +247,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
    sound is part of a whole different MACHINE (PCjr/Tandy 1000 video modes and BIOS ID),
    not a card a VGA-era PC could carry. A stored HKCU "Tandy" value is simply ignored. */
 
-{ "HideHostCursor",    IDC_S_HOSTCURSOR,  SK_CHECK,      0,  0,   1, NULL },
+/* "HideHostCursor" was REMOVED by #218 (user, s83 sweep: the toggle "feels jaggy"):
+   the pointer now hides by itself after 5 s still over the video. A stored value is
+   simply never read again (settings persist by name). */
 { "SeamlessMouse",     IDC_S_SEAMLESS,    SK_CHECK,      0,  0,   1, NULL },
 { "MouseSensitivity",  IDC_S_MSENS,       SK_UINT,     100, 10, 1000, NULL },
 { "KeyboardLayout",    IDC_S_KBLAYOUT,    SK_COMBO,      0,  0,   3, "US|United Kingdom|German|French" },

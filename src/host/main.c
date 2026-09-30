@@ -7674,6 +7674,8 @@ static void host_mouse_button(int btn, int down)
    Two controls for one idea is how a UI starts disagreeing with itself -- the user
    put it plainly: the pointer "belongs to the Windows XP desktop, and NTVDMEX at
    the same time", which is exactly what a separate toggle produces.
+ ⛔ SUPERSEDED BY #218 (below): the setting and its menu item are gone; what follows
+   is the history of how it got there.
  ⚠ THE SETTING SURVIVES AND IS STILL LIVE. `ShowHostCursor` now means "show the
    desktop arrow over the video WHEN NOT CAPTURED" (default 1). Capture overrides
    it unconditionally; there is no state in which an exclusive-mode guest shows the
@@ -7687,7 +7689,17 @@ static void host_mouse_button(int btn, int down)
    keeping the old name with the opposite meaning, because a stored 1 that used to
    mean "show" and now means "hide" is a value that silently flips on upgrade. A new
    name simply defaults, and the default is the behaviour everyone already had. */
-static volatile LONG g_cursor_hide = 0;
+/* ── ★ #218 (user, s83 sweep): SMART MOUSE, which REPLACES the setting above. ────────
+     A program that does NOT use the mouse keeps the Windows pointer; once it has sat
+     still over the video for CURSOR_IDLE_MS it hides, and any movement brings it back
+     -- "like Windows Media Player over a video" -- in a window and fullscreen alike.
+     A program that DOES use the mouse is governed by capture alone (rules 1-6 below).
+     The HideHostCursor setting and View > Show Host Cursor are gone: the toggle "feels
+     jaggy", and a pointer that hides itself needs no knob. UI thread only. */
+#define CURSOR_IDLE_MS 5000u
+static DWORD g_cursor_moved_ms;         /* GetTickCount of the last real movement   */
+static POINT g_cursor_last_pt = { -1, -1 };
+static int   g_cursor_idle;             /* hidden for stillness, until it next moves */
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
    status_update, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
@@ -8486,7 +8498,7 @@ enum {                                       /* wired command IDs               
     IDM_EDIT_SELECTALL,
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
-    IDM_VIEW_HOSTCURSOR,                     /* s81 #157: inverse of HideHostCursor */
+    IDM_VIEW_HOSTCURSOR,                     /* RETIRED by #218; kept so later ids keep their numbers */
     /* #155. APPENDED, not beside IDM_CAP_SHOT: the rig scripts post these ids as
        NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it. */
     IDM_CAP_AUDIO, IDM_CAP_FOLDER,
@@ -9189,13 +9201,9 @@ static HMENU build_menu(void)
     mi(m,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
     msep(m);
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
-    /* ── ★ AND BACK, AS THE USER SPECIFIED IT (s81, #157): Show Host Cursor is a View
-         toggle for programs that do NOT use the mouse, and is forced off and greyed
-         for one that does -- there the pointer belongs to the guest and the capture
-         policy governs it. It is the inverse of the HideHostCursor setting, and like
-         every View item it is session-only. The historical note below explains why it
-         had been removed; the difference now is the greying. */
-    mi(m,"Show Host Cursor",IDM_VIEW_HOSTCURSOR);
+    /* #218 (user, s83 sweep): "Show Host Cursor" (#157) is GONE AGAIN, for good -- it
+         "feels jaggy". A program that does not use the mouse now keeps the pointer and
+         it hides itself after 5 s still over the video; see CURSOR_IDLE_MS. */
     /* ⚠ "Show Host Cursor" AND ITS Ctrl+F8 HOTKEY WERE REMOVED HERE, DELIBERATELY.
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
@@ -9838,8 +9846,10 @@ static int pt_over_video(HWND h, int cx, int cy)
                      arrow and its size grip whatever the checkbox says. */
 static int host_cursor_visible_at(int over_video)
 {
-    if (g_captured || g_pd.fullscreen) return 0;
-    return over_video ? !g_cursor_hide : 1;
+    if (g_captured) return 0;
+    /* #218: fullscreen no longer hides it outright -- a program that does not use the
+       mouse keeps a usable pointer there too, and the idle rule applies to both. */
+    return !(over_video && g_cursor_idle && !capture_allowed());
 }
 
 /* Apply it NOW rather than waiting for WM_SETCURSOR, which only fires when the mouse
@@ -10195,11 +10205,35 @@ static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
     return 0;
 }
 
-/* Set the hide-the-arrow-over-the-video flag and make it visible immediately.
-   The decision itself lives in host_cursor_visible_at -- this only owns the flag. */
-static void host_cursor_set(HWND h, int hide)
+/* #218: the idle clock. A MOVE is a real change of screen position -- Windows also
+   sends WM_MOUSEMOVE when nothing moved (a window appearing under a still pointer, a
+   SetCursor), and counting those would keep a still pointer visible for ever. */
+static void cursor_idle_note_move(HWND h)
 {
-    InterlockedExchange(&g_cursor_hide, hide ? 1 : 0);
+    POINT pt;
+    if (!GetCursorPos(&pt)) return;
+    if (pt.x == g_cursor_last_pt.x && pt.y == g_cursor_last_pt.y) return;
+    g_cursor_last_pt = pt;
+    g_cursor_moved_ms = GetTickCount();
+    if (g_cursor_idle) { g_cursor_idle = 0; host_cursor_refresh(h); }
+}
+/* From the UI tick: still for CURSOR_IDLE_MS over OUR video -> hide. Only for a program
+   that does not use the mouse (one that does is governed by capture), and never while
+   the pointer is over someone else's window or our status strip. */
+static void cursor_idle_tick(HWND h)
+{
+    POINT pt, c; HWND w;
+    if (g_cursor_idle || g_captured || capture_allowed()) return;
+    if (!g_cursor_moved_ms) { g_cursor_moved_ms = GetTickCount(); return; }
+    if (GetTickCount() - g_cursor_moved_ms < CURSOR_IDLE_MS) return;
+    if (!GetCursorPos(&pt)) return;
+    if (pt.x != g_cursor_last_pt.x || pt.y != g_cursor_last_pt.y) {   /* moved elsewhere */
+        g_cursor_last_pt = pt; g_cursor_moved_ms = GetTickCount(); return; }
+    w = WindowFromPoint(pt);
+    if (w != h) return;
+    c = pt; ScreenToClient(h, &c);
+    if (!pt_over_video(h, c.x, c.y)) return;
+    g_cursor_idle = 1;
     host_cursor_refresh(h);
 }
 
@@ -10508,7 +10542,7 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_SBMODEL,                                 /* #231 */
     SET_OPL,                                     /* #232 */
     SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235 (read at start-up) */
-    SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS, SET_HIDECURSOR,
+    SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
 };
@@ -10682,8 +10716,6 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          future re-test, not for a user to find. */
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
-    if (live && h) host_cursor_set(h, (int)s->v[SET_HIDECURSOR]);
-    else InterlockedExchange(&g_cursor_hide, s->v[SET_HIDECURSOR] ? 1 : 0);
 }
 
 /* The display half. Separate because the UI thread builds its presenter long after
@@ -10853,11 +10885,6 @@ static void menu_view_sync(HWND h)
          INTO. An enabled item that silently does nothing is the worse answer. */
     EnableMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
                    | (capture_allowed() ? MF_ENABLED : MF_GRAYED));
-    /* #157: the guest owns the pointer once it has used INT 33h -- then off and greyed. */
-    EnableMenuItem(m, IDM_VIEW_HOSTCURSOR, MF_BYCOMMAND
-                   | (capture_allowed() ? MF_GRAYED : MF_ENABLED));
-    CheckMenuItem(m, IDM_VIEW_HOSTCURSOR, MF_BYCOMMAND
-                  | ((!capture_allowed() && !g_set.v[SET_HIDECURSOR]) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
                   | (g_captured ? MF_CHECKED : MF_UNCHECKED));
 }
@@ -11475,6 +11502,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            messages. Taken FIRST, before any of the frame work below, so the beat means
            "this thread reached its timer", not "this thread finished a frame". */
         InterlockedIncrement(&g_ui_beat);
+        cursor_idle_tick(h);                    /* #218: 5 s still over the video -> hide */
         bg_prio_tick(h);                        /* #211 */
         /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
              SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
@@ -11865,14 +11893,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              hit-test on every part of this window, ours or a child's.
              Otherwise fall back to the per-area decision, which is the only place
              the Hide-over-video setting applies. */
-        if (g_captured || g_pd.fullscreen) { SetCursor(NULL); return TRUE; }
-        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && g_cursor_hide) {
+        if (g_captured) { SetCursor(NULL); return TRUE; }
+        /* #218: otherwise only the idle rule hides it, and only over the video. */
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && g_cursor_idle) {
             POINT c;
             if (GetCursorPos(&c)) {
                 ScreenToClient(h, &c);
-                if (pt_over_video(h, c.x, c.y)) { SetCursor(NULL); return TRUE; }
+                if (!host_cursor_visible_at(pt_over_video(h, c.x, c.y))) { SetCursor(NULL); return TRUE; }
             }
         }
+        /* Fullscreen has no frame, so the default would be whatever class cursor is
+           there; give it the plain arrow a usable pointer means. */
+        if (g_pd.fullscreen && LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorA(NULL, IDC_ARROW)); return TRUE; }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
         PAINTSTRUCT ps; BeginPaint(h, &ps);
@@ -12016,12 +12048,6 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
             if (g_captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
             InterlockedExchange(&g_close_req, 1);
-            return 0;
-        case IDM_VIEW_HOSTCURSOR:                     /* #157 -- see build_menu */
-            if (capture_allowed()) return 0;           /* greyed; belt and braces */
-            g_set.v[SET_HIDECURSOR] = g_set.v[SET_HIDECURSOR] ? 0u : 1u;
-            settings_apply_live(h);
-            menu_view_sync(h);
             return 0;
         case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
         /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
@@ -12222,7 +12248,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
              argument was "fullscreen is when you most want it and there is no menu
              bar to reach" -- which is true of EXCLUSIVE MODE, and that is a mode, not
-             a cursor knob. One idea, one control; see the note on g_cursor_hide.
+             a cursor knob. One idea, one control; see CURSOR_IDLE_MS (#218).
              Removing it also gives the F-key back to the guest. */
         /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
@@ -12290,6 +12316,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
         RECT rc; int cw, ch, fw, fh; LONG b = 0;
+        if (msg == WM_MOUSEMOVE) cursor_idle_note_move(h);          /* #218 */
         /* #154: Mark owns the mouse until the selection is copied or cancelled. The
            guest sees none of it -- a drag that also clicked in the program would do two
            things at once. A right click cancels, as in the console. */
@@ -25337,7 +25364,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        push into the machine. The stored-but-not-yet-honoured ones would make this
        line four times longer and every value in it would be a claim the run cannot
        support. Two lines because there are now enough of them to wrap. */
-    p = zput(p, "STAGE0: settings hidecur="); p = zhex(p, g_set.v[SET_HIDECURSOR]);
+    p = zput(p, "STAGE0: settings hidecur=retired(#218)");
     p = zput(p, " blink=");   p = zhex(p, g_set.v[SET_BLINKCURSOR]);
     p = zput(p, " msens=");   p = zhex(p, g_set.v[SET_MSENS]);
     p = zput(p, " dosver=");  p = zhex(p, g_set.v[SET_DOSMAJ]);
