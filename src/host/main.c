@@ -1831,7 +1831,7 @@ static int            g_my_ring_on    = 0;  /* MYRING_FLAG: record the ring (a c
 static int            g_my_pm_off     = 0;  /* MYPM_OFF_FLAG                               */
 static int            g_my_pm_detect  = 0;  /* MYPM_DETECT_FLAG                            */
 static DWORD          g_mypm_runs = 0, g_mypm_instrs = 0, g_mypm_bails = 0, g_mypm_bail_mp = 0;
-static DWORD          g_mypm_stop[5];       /* returned, window closed, declined, cap, not32 */
+static DWORD          g_mypm_stop[6];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: v86_run keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -3187,6 +3187,43 @@ static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reac
      Count the cooperative arm per VECTOR and print both arms against `raises`, so the
      line answers the question it appears to answer. */
 static DWORD g_pm_coop_line[8];
+/* ── #172: WHY THE PER-PASS TIMER LATCH LEFT A BACKLOG STANDING. ─────────────────
+     Doom's quit wait (I_WaitVBL, a PM 3DAh poll) drops IRQ0 to ~25/s, and s81 filed it
+     as ticks never RAISED. The same run's IRQ0WHY says otherwise -- gen=0 del=0x9e: every
+     long gap had the ticks raised and not delivered -- and the async arm is expected to
+     miss during a trap storm (why=20, the CPU thread is in host code). Every trap returns
+     to the PM loop, so the per-pass latch should catch up within microseconds. It does
+     not, and this names the gate. Counted per PASS with >= 2 ticks owed (the `del`
+     signature), first failing gate only:
+       0 no latch   1 vIF=0   2 no INT 08h hook   3 in a PM IRQ   4 noirq
+       5 async injection in flight   6 vec 8 armed < 55 ms ago
+       7 all gates open (the pass tried)   8 claim refused (IRQ0 masked/in service)
+       9 the injector declined (guest in the extender's 16-bit code)
+     7 counts the pass; 8/9 are that pass's failures, so 7 - 8 - 9 = delivered. */
+static DWORD g_pm_coop_gate[10];
+/* ...and when `decl` dominates (it did once the latch was fixed: tried=0x171c decl=0x169d),
+   WHICH refusal inside dpmi_inject_pm_irq: [0] the interrupted CS is 16-bit (the
+   extender's code), [1] the application has no timer hook. Per second on IRQ0TL's clock,
+   and the 16-bit sites by CS:EIP, so the refusals can be laid against the quit wait. */
+#define PMINJ_SITES 6
+static DWORD g_pminj_decl[2], g_pminj_decl_tl[IRQ0TL_SECS];
+static struct { WORD cs; DWORD eip, n; } g_pminj_site[PMINJ_SITES];
+static void pminj_decl_note(int why, WORD cs, DWORD eip)
+{
+    g_pminj_decl[why]++;
+    if (g_irq0_t0) {
+        LARGE_INTEGER n; QueryPerformanceCounter(&n);
+        { DWORD sec = qpc_us(n.QuadPart - g_irq0_t0) / 1000000u;
+          if (sec < IRQ0TL_SECS) g_pminj_decl_tl[sec]++; }
+    }
+    if (why == 0) {
+        int k;
+        for (k = 0; k < PMINJ_SITES; ++k) {
+            if (g_pminj_site[k].n && g_pminj_site[k].cs == cs && g_pminj_site[k].eip == eip) { g_pminj_site[k].n++; return; }
+            if (!g_pminj_site[k].n) { g_pminj_site[k].cs = cs; g_pminj_site[k].eip = eip; g_pminj_site[k].n = 1; return; }
+        }
+    }
+}
 /* ── WHICH INJECTION PATH ACTUALLY PRODUCES A REFILL? ────────────────────────────────
      Measured: DMX polls the 8237's channel-1 CURRENT COUNT ~55 times a second (all
      8-bit reads, so two per poll) while 82 DMA blocks complete -- and 32% of audible
@@ -14140,8 +14177,8 @@ static void modey_tl_report(void)
     p = zput(p, g_my_pm_detect ? " DETECT" : "");
     p = zput(p, " runs="); p = zdec(p, g_mypm_runs);
     p = zput(p, " instrs="); p = zdec(p, g_mypm_instrs);
-    p = zput(p, " stop[returned,closed,declined,cap,not32]=");
-    { int k2; for (k2 = 0; k2 < 5; ++k2) { p = zput(p, k2 ? "," : ""); p = zdec(p, g_mypm_stop[k2]); } }
+    p = zput(p, " stop[returned,closed,declined,cap,not32,irq]=");
+    { int k2; for (k2 = 0; k2 < 6; ++k2) { p = zput(p, k2 ? "," : ""); p = zdec(p, g_mypm_stop[k2]); } }
     p = zput(p, " bails_under_multiplane="); p = zdec(p, g_mypm_bail_mp);
     p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
     { unsigned k, j;
@@ -14752,9 +14789,28 @@ static int modey_pm_needs_interp(void)
      the whole renderer while the mask happens to be multi-plane would cost it its frame
      rate (docs/research/modey-cost-measurement.md). */
 #define MYPM_CAP 400000L
+/* ── #172: AN INTERRUPT IS WAITING AND THE RUN HAS STOPPED DRAWING. ────────────────────
+     Doom's quit prompt leaves the map mask multi-plane, so every 3DAh read of I_WaitVBL
+     trapped straight in here -- and a poll loop never RETURNS and never touches the
+     aperture, so each run went to MYPM_CAP: 400,000 interpreted instructions, ~27 ms on
+     the rig, holding g_lock. No tick could be placed (the cooperative check is in the PM
+     loop; the async arm needs g_lock) and the mixer waited behind the lock too. Measured:
+     54 IRQ0s in the 1.45 s wait (37/s against the 140 Doom programmed), each 27 ms apart,
+     all at the poll loop's EIP. Real hardware takes the interrupt between instructions.
+     So stop when something is waiting to be delivered -- but only after MYPM_IDLE
+     instructions WITHOUT an aperture access: a drawer stores every few instructions and
+     is never cut short (the rest of it would run natively under a multi-plane mask and
+     leak). A poll loop is released within MYPM_IDLE instructions, ~0.6 ms. */
+#define MYPM_IDLE 4096L
+static int modey_pm_irq_waiting(void)
+{
+    return g_pm_tick_owed > 0 || g_irq1_pending > 0
+        || (g_pic.m.irr & (uint8_t)~g_pic.m.imr) != 0;
+}
 static void modey_pm_run(volatile BYTE *tib)
 {
-    p32cpu c; long n = 0; uint32_t esp0; int why;
+    p32cpu c; long n = 0, idle_from = 0; uint32_t esp0; int why;
+    DWORD vga_seen;
     WORD sel[6];
     int k;
     WORD cs = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF), ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
@@ -14770,6 +14826,7 @@ static void modey_pm_run(volatile BYTE *tib)
     c.eip = VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
     esp0 = c.r[4];
     { DWORD vga0 = g_p32_vga_n;
+    vga_seen = vga0;
     HOST_LOCK();
     for (;;) {
         uint8_t op0 = p32_rd8(c.base[1] + c.eip);
@@ -14778,7 +14835,11 @@ static void modey_pm_run(volatile BYTE *tib)
         if (!p32_step(&c)) { why = 2; break; }
         ++n;
         if (was_ret && c.r[4] > esp0 && g_p32_vga_n != vga0) { why = 0; break; }
-        if ((n & 0x3F) == 0 && !modey_pm_needs_interp()) { why = 1; break; }
+        if ((n & 0x3F) == 0) {
+            if (!modey_pm_needs_interp()) { why = 1; break; }
+            if (g_p32_vga_n != vga_seen) { vga_seen = g_p32_vga_n; idle_from = n; }
+            else if (n - idle_from >= MYPM_IDLE && modey_pm_irq_waiting()) { why = 5; break; }
+        }
     }
     HOST_UNLOCK();
     }
@@ -24410,6 +24471,9 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
 
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
+    /* #172 census: which of the two refusals below, when, and where the guest was. */
+    if (iv == 0x08 && g_dpmi_client32 && (!dpmi_sel_is32(sCS) || !g_pm_app_hooked_timer))
+        pminj_decl_note(!dpmi_sel_is32(sCS) ? 0 : 1, sCS, sEIP);
     /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
          Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
          21h thunk epilogue, on ITS internal 16-bit stack (SS=0xcf, SP=0x1a74) -- and the
@@ -29515,7 +29579,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          and a second tick would re-enter it on top of itself. Measured: the
                          run died on such an injection taken at obj1+0x153dc, i.e. inside the
                          very delay loop the tick exists to release. */
-                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
+                    /* #172: which gate turned an OWED tick away. See g_pm_coop_gate. */
+                    int owed2 = (g_pm_tick_owed >= 2);
+                    if (owed2) {
+                        unsigned gi = !(g_pm_irq0_latch || g_pm_tick_owed > 0) ? 0 : !g_dpmi_vi ? 1
+                                    : !g_pm_int[0x08].client ? 2 : g_in_pm_irq ? 3
+                                    : g_pm_noirq ? 4 : g_async_pm_active ? 5
+                                    : (GetTickCount() - g_pm_vec8_armed_ms) < DPMI_IRQ0_ARM_QUIET_MS ? 6
+                                    : 7;
+                        g_pm_coop_gate[gi]++;
+                    }
+                    /* ── #172: THE OWED COUNT OPENS THIS, NOT ONLY THE LATCH. ─────────────
+                         The latch is built by InterlockedExchange(&g_irq0_pending, 0) above,
+                         which folds up to IRQ0_PENDING_MAX raises into ONE boolean -- and one
+                         latch delivers one tick. Every other raise stayed in g_pm_tick_owed
+                         with nothing left to offer it. Measured on Doom's quit wait (a PM
+                         3DAh poll, where the async arm bails why=20 on half its attempts):
+                         PMCOOP gate latch=0x1b52 against tried=0x66 -- ticks owed, the loop
+                         passing through here every trap, and the arm shut. IRQ0 fell from
+                         140/s to 25-42/s and the DMX mixer it feeds stuttered. The owed
+                         count is the 8259's request STATE, the same rule as the keyboard's
+                         arm below; one tick per pass, each run to its IRET, so a backlog
+                         drains as catch-up, never as a re-entrant pile. */
+                    if ((g_pm_irq0_latch || g_pm_tick_owed > 0)
+                        && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
                         && !g_pm_noirq && !g_async_pm_active
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         uint32_t pre8 = g_dma.rd_count[1];
@@ -29524,8 +29611,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (g_pm_tick_owed > 0 && irq0_pm_claim()) {
                             if (dpmi_inject_pm_irq(&m, tib, 0x08, steps))
                                 InterlockedDecrement(&g_pm_tick_owed);
-                            else irq0_pm_unclaim();
-                        }
+                            else { irq0_pm_unclaim(); if (owed2) g_pm_coop_gate[9]++; }
+                        } else if (owed2) g_pm_coop_gate[8]++;
                         g_in_pm_irq = 0;
                         g_coop_dma_polls += g_dma.rd_count[1] - pre8;
                     }
@@ -32030,6 +32117,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zhex(p, g_irq0_wst_att);   p = zput(p, ",");
         p = zhex(p, g_irq0_wst_nie);   p = zput(p, ",");
         p = zhex(p, g_irq0_wst_yield);
+        /* #172: see g_pm_coop_gate for the ten columns. */
+        p = zput(p, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
+        { int gi; for (gi = 0; gi < 10; ++gi) { p = zput(p, gi ? "," : ""); p = zhex(p, g_pm_coop_gate[gi]); } }
+        p = zput(p, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); p = zhex(p, g_pminj_decl[0]);
+        p = zput(p, ","); p = zhex(p, g_pminj_decl[1]);
+        { int t, last = -1;
+          for (t = 0; t < IRQ0TL_SECS; ++t) if (g_pminj_decl_tl[t]) last = t;
+          p = zput(p, " persec=");
+          for (t = 0; t <= last; ++t) { p = zput(p, t ? "," : ""); p = zhex(p, g_pminj_decl_tl[t]); } }
+        { int k; p = zput(p, " cs16 sites:");
+          for (k = 0; k < PMINJ_SITES && g_pminj_site[k].n; ++k) {
+              p = zput(p, " "); p = zhex(p, g_pminj_site[k].cs); p = zput(p, ":");
+              p = zhex(p, g_pminj_site[k].eip); p = zput(p, "x"); p = zhex(p, g_pminj_site[k].n); } }
         /* ── ★ WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
              the raise site had already given away to a key. Read it against IRQ0WHY's
              yld -- if inj is a large fraction of yld the courier is collecting exactly

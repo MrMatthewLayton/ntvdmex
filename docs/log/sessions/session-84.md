@@ -181,7 +181,7 @@ Morning test (`checks.txt`): the FM drums in Skyroads' music.
 | **#218 smart mouse**: "MUCH improved, the UX is excellent". One bug: focus via the TITLE BAR captured, but Windows' move loop left the cursor unclipped, so the pointer walked onto the desktop. Fixed: re-clip at WM_EXITSIZEMOVE + a UI-tick clip guard (CLOSE2 `clip_repairs`). **User-confirmed: "Mouse capture is working perfectly now."** | `d569f09`, `782e3e5` |
 | Window title "Windows NT Virtual DOS Machine", Settings "Windows NT Virtual DOS Machine Settings" (user ask). ⚠ The harness finds the window BY TITLE: `scripts/bm/*.bat`, the rig's `debug\rig\*.bat`, `rigshot.c` (rebuilt + deployed) and `runs/s84/*/gate.sh`/`zarab.sh` all follow it. | `8f13b8a` |
 | Status strip to the user's layout: `name │ 16/32-bit Real/Protected Mode │ 66 MHz / 1 GHz / Unlimited │ Press WIN to release mouse / Click video to capture mouse`. Each part sized to its text, left-aligned; the 4th part only for a mouse-using program. | `782e3e5` |
-| Strip bug: the name was always COMMAND.COM (set once, from the first program loaded). EXEC now saves the parent's name per level and dos_terminate restores it. **Deployed, NOT yet user-tested.** | `4769ed8` |
+| Strip bug: the name was always COMMAND.COM (set once, from the first program loaded). EXEC now saves the parent's name per level and dos_terminate restores it. **User-confirmed: "status strip is good now."** | `4769ed8` |
 
 **Where it stands:** rig `bin\` = **`24901cd7`** (= HEAD `4769ed8`'s host). `checks.txt` = the status-strip
 name test (DOOM.EXE → back to COMMAND.COM at the prompt → MEM/EDIT follow). `report.txt` empty.
@@ -192,3 +192,32 @@ name test (DOOM.EXE → back to COMMAND.COM at the prompt → MEM/EDIT follow). 
 #234 (what exactly is "buggy" about DirectSound); #227 (scalers blur in DirectDraw fullscreen).
 **Open, investigated:** #239 ZAR sound intermittent since the rig reboot (not code; its IRQ5 self-test
 never gets an interrupt delivered); #238 1 kHz IRQ0 (needs deliver-at-STI; every route closed).
+
+---
+
+## Late morning, 2026-09-30: #172 re-read, one instrument
+
+**#172's premise is refuted by its own run.** s81 filed Doom's quit-wait IRQ0 collapse (0x85/s → 0x15–0x22/s)
+as ticks never *raised*, from the run-wide raises:delivered ratio. The same log's gap classifier says
+`IRQ0WHY gen=0 del=0x9e`: every long gap held ≥2 raised, undelivered ticks. In those gaps the async arm made 0x1d4
+attempts and 0xf4 bailed `why=20` (CPU thread in host code, i.e. in a 3DAh trap), which is expected. The
+cooperative per-pass latch in the PM loop runs after every PM port trap and should catch up in microseconds.
+It doesn't, and IRQ0-in-service is ruled out (`irq0_isr blocks=0`).
+
+New `STAGE2: PMCOOP owed>=2 gate[...]`: per PM pass with ≥2 ticks owed, the first gate that refused
+(observe-only). Host **`2de5e9b6`** deployed; rollback `debug\prev\ntvdmhost_24901cd7.exe`.
+`checks.txt` = Doom quit by hand (user). Not posted to #172 until that run names the gate.
+
+**Found (unattended, `runs/s84/day/`).** The owed-count latch fix (`8540f7ef`) moved PMCOOP's refusals from
+`latch` to `decl`, and the census showed every `decl` was DOS/4GW start-up, not the quit. The quit window measured
+directly (`qwin.py`, Y → text mode): the user's runs had 57–69 timer entries/s, but my F10 quits had 139/s. The user
+quits through the MENU, which leaves the map mask multi-plane. `I_WaitVBL`'s 3DAh traps then land in
+`modey_pm_run`, which ran the poll loop to MYPM_CAP (400,000 instructions, ~27 ms) holding g_lock (the user's
+worst `hold_us` was 57 ms at that line; q1 had 87 cap stops against 2 headless). Fix: stop the interpreter when an
+interrupt is waiting AND the run has gone MYPM_IDLE=4096 instructions without touching the aperture (a drawer
+is never cut short). Menu-route A/B ×2 (`dq.sh`, keys Esc/Up/Enter/Y): **timer in the quit 59/s → 139/s;
+REPLAYED_LOUD 79/90 → 45/46** (the F10 baseline level, i.e. the #57 race). Detector A/B (`modeypm_detect.flag`):
+native multi-plane store sites identical. Gate ×2: Skyroads/Doom/Win16 shelf unchanged; ZAR silent on BOTH builds
+at random (#239); a 9-run ZAR series (stopped at 7) had silent runs on baseline and fix alike.
+**User (a07f0e88): "better but not perfect"; Doom sound ~98% on WinMM, remaining pops/static (#57);
+DirectSound still buggy (#234).** Not isolated: whether the latch change is needed (the tested build has both).
