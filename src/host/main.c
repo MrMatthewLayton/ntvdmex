@@ -23299,10 +23299,33 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
                             else if (intno == 0x10) {
                                 ntvdd_regs vr; regs_load(&vr, tib);
+                                WORD in_ax = (WORD)vr.eax, in_cx = (WORD)vr.ecx;
                                 HOST_LOCK();
                                 vdd_bus_deliver_int(&g_bus, 0x10, &vr);
                                 HOST_UNLOCK();
                                 int10_wait_after();                     /* #226: 4F07h BL=80h */
+                                /* s84: ZAR stopped seeing VESA. Its VBE traffic arrives HERE
+                                   (int86 = 0300 BL=10h), where nothing counted it and the
+                                   close path skips the STAGE2 summary. Say what we answered,
+                                   bounded. For 4F01 the ModeAttributes word leads the block. */
+                                if ((in_ax >> 8) == 0x4F) {
+                                    static int s_vbe_logged;
+                                    if (s_vbe_logged++ < 48) {
+                                        char vb[160], *vq = vb;
+                                        vq = zput(vq, "SIMINT10 VBE in=0x"); vq = zhex(vq, in_ax);
+                                        vq = zput(vq, " cx=0x"); vq = zhex(vq, in_cx);
+                                        vq = zput(vq, " -> ax=0x"); vq = zhex(vq, (WORD)vr.eax);
+                                        if (in_ax == 0x4F01 || in_ax == 0x4F00) {
+                                            DWORD lin = ((DWORD)(WORD)vr.es << 4) + (WORD)vr.edi;
+                                            if (host_readable((const void *)(ULONG_PTR)lin, 8)) {
+                                                vq = zput(vq, in_ax == 0x4F01 ? " attr=0x" : " sig/ver=");
+                                                vq = zhex(vq, *(volatile DWORD *)(ULONG_PTR)lin);
+                                                if (in_ax == 0x4F00) { vq = zput(vq, "/0x"); vq = zhex(vq, *(volatile WORD *)(ULONG_PTR)(lin + 4)); }
+                                            }
+                                        }
+                                        vq = zput(vq, "\r\n"); log_append(LOG_PATH, vb, vq);
+                                    }
+                                }
                                 regs_store(&vr, tib);
                                 video_trap_sync();   /* mode 12h: interpret; no-op in 13h */
                             }

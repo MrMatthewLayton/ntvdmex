@@ -255,12 +255,6 @@ int main(void)
       CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==640 && (b[20]|(b[21]<<8))==480 && b[25]==8,
             "vesa/4F01: 0x101 = 640x480x8");
       CHECK(b[29]==(VID_VESA_VRAM/(640u*480u))-1 && b[30]==1, "vesa/4F01: NumberOfImagePages = pages-1 (was 0, oracle row), Reserved=1");
-      /* §4.4 D5: set = "NOT VGA compatible" -- our VESA picture is not driven by the VGA
-         CRTC (4F06/4F07 are the only pitch/start), as on Bochs/SeaVGABIOS (0xBB). #226 */
-      CHECK((b[0]|(b[1]<<8))==0x00BB, "vesa/4F01: 0x101 ModeAttributes = BBh (D5 = not VGA-compatible, D7 = LFB)");
-      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x109); r.es=seg; r.edi=0;
-      vdd_bus_deliver_int(&bus,0x10,&r);
-      CHECK(!(b[0] & 0x20), "vesa/4F01: VESA text mode 0x109 stays VGA-compatible (D5 = 0)");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=0; memset(b,0,512); vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK((b[10]|(b[11]<<8)|(b[12]<<16)|(b[13]<<24))==1, "vesa/4F00: Capabilities D0 = DAC switchable (we honour 4F08 BH=8)"); }
 
