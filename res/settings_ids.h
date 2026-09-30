@@ -22,16 +22,17 @@
 #define IDD_SETTINGS          200
 #define IDC_S_TAB             201   /* the SysTabControl32 that owns the pages        */
 #define IDC_S_DEFAULTS        202   /* button:   restore every page's defaults        */
+#define IDC_S_APPLY           203   /* button:   commit without closing (s84 redesign) */
 
-#define IDD_PAGE_GENERAL      210
-#define IDD_PAGE_CPU          211   /* the "Processor" tab (id kept; it is only a number) */
-#define IDD_PAGE_DISPLAY      212
+/* s84 (the user's redesign): six tabs. Memory (216) and Advanced (217) folded into
+   Machine; the ids below are only numbers, so the old names are kept. */
+#define IDD_PAGE_GENERAL      210   /* the "MS-DOS" tab                               */
+#define IDD_PAGE_CPU          211   /* the "Machine" tab: processor, memory, timing   */
+#define IDD_PAGE_DISPLAY      212   /* the "Graphics" tab                             */
 #define IDD_PAGE_AUDIO        213
 #define IDD_PAGE_INPUT        214
 #define IDD_PAGE_DRIVES       215
-#define IDD_PAGE_MEMORY       216   /* split out of the old CPU page (session 60)     */
-#define IDD_PAGE_ADVANCED     217   /* the internal pacing knobs live here now        */
-#define NTVDMEX_PAGE_COUNT      8
+#define NTVDMEX_PAGE_COUNT      6
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */

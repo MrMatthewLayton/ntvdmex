@@ -310,6 +310,9 @@ static void hostprof_dump(void);
 /* Create every Settings page off-screen at startup and log whether the templates
    still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
+/* s84: open Settings at startup on the tab numbered in this file (0 = MS-DOS), so the
+   rig can photograph each page without clicking at coordinates. Test-only. */
+#define SETSHOT_PATH CFG_("setshot.txt")
 /* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
    default) the host still refuses Win16 loudly -- an experiment must never become the
    shipped behaviour by accident. */
@@ -11068,12 +11071,14 @@ static void settings_apply_live(HWND h)
      display rectangle. Nothing below is written per-control -- every fill and every
      read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
      one line of .rc layout, not four edits in four functions that can disagree. */
+/* s84, the user's redesign: six tabs. Processor, Memory and Advanced became one
+   "Machine" page; General is "MS-DOS" and Display is "Graphics". */
 static const int SETTINGS_PAGES[NTVDMEX_PAGE_COUNT] = {
-    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_MEMORY, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES, IDD_PAGE_ADVANCED
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
 };
 static const char *const SETTINGS_TABS[NTVDMEX_PAGE_COUNT] = {
-    "General", "Processor", "Memory", "Display", "Audio", "Input", "Drives", "Advanced"
+    "MS-DOS", "Machine", "Graphics", "Audio", "Input", "Drives"
 };
 static HWND g_spage[NTVDMEX_PAGE_COUNT];
 
@@ -11181,16 +11186,16 @@ static void settings_to_dialog(const ntvdmex_settings *s)
          one sentence, why -- or that it is simply the setting. */
     {   HWND cn = settings_ctl(IDC_S_DOSVER_NOW), cw = settings_ctl(IDC_S_DOSVER_WHY);
         if (cn && g_dosm) {
-            wsprintfA(t, "%u.%02u", (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
+            wsprintfA(t, "MS-DOS version %u.%02u", (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
             SetWindowTextA(cn, t);
         }
+        /* s84 redesign: the line says why the session differs, and is EMPTY when it
+           does not -- then the page reads exactly like the user's layout. */
         if (cw) SetWindowTextA(cw, (g_dosm && g_dosver_forced && g_dosver_why) ? g_dosver_why
             : g_dosver_shell
-            ? "Same as the setting above. Windows XP's DOS prompt itself is told 5.00, "
-              "which it needs; the programs you run get this version. A change takes "
-              "effect for programs you start after pressing OK."
-            : "Same as the setting above. A change takes effect for programs you start "
-              "after pressing OK.");
+            ? "Windows XP's own prompt is told 5.00, which it needs; the programs you run "
+              "from it are told the version below."
+            : "");
     }
 }
 
@@ -11268,7 +11273,10 @@ static void settings_fill_cpuinfo(HWND dlg)
         && type == REG_SZ && cb) {
         name[cb < sizeof name ? cb : sizeof name - 1] = 0;
         while (*p == ' ') ++p;                 /* Intel pads the string with spaces */
-        wsprintfA(out, "Running on: %s", p);
+        {   char *q = out;                     /* ...inside it too: "CPU     E8600  @" */
+            for (; *p && q < out + sizeof out - 1; ++p)
+                if (*p != ' ' || (q > out && q[-1] != ' ')) *q++ = *p;
+            *q = 0; }                          /* s84: the row's label says what it is */
         SetWindowTextA(c, out);
     }
     RegCloseKey(k);
@@ -11405,6 +11413,17 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
              experiment permanent. See the note by g_set_disk. */
         settings_to_dialog(&g_set_disk);
         settings_show_page(0);
+        {   char b[8]; DWORD got = 0; int pg;          /* SETSHOT_PATH: start on page N */
+            HANDLE f = CreateFileA(SETSHOT_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                   OPEN_EXISTING, 0, NULL);
+            if (f != INVALID_HANDLE_VALUE) {
+                if (ReadFile(f, b, 1, &got, NULL) && got && b[0] >= '0'
+                    && (pg = b[0] - '0') < NTVDMEX_PAGE_COUNT) {
+                    SendMessageA(tab, TCM_SETCURSEL, (WPARAM)pg, 0);
+                    settings_show_page(pg);
+                }
+                CloseHandle(f);
+            } }
         return TRUE; }
     case WM_NOTIFY:
         if (((NMHDR *)lp)->idFrom == IDC_S_TAB && ((NMHDR *)lp)->code == (UINT)TCN_SELCHANGE) {
@@ -11422,6 +11441,7 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             ntvdmex_settings d; settings_defaults(&d);
             settings_to_dialog(&d);           /* shown, not applied -- OK commits */
             return TRUE; }
+        case IDC_S_APPLY:                     /* s84: OK's commit, without closing */
         case IDOK: {
             ntvdmex_settings n = g_set_disk;
             settings_from_dialog(&n);
@@ -11441,6 +11461,10 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
                  Blaster that changes port while a game is mid-transfer, or an XMS
                  driver that vanishes from under a program that holds handles, is a
                  crash dressed up as a feature. */
+            if (LOWORD(wp) == IDC_S_APPLY) {
+                settings_to_dialog(&g_set_disk);   /* the clamped values, and the session row */
+                return TRUE;
+            }
             EndDialog(dlg, IDOK);
             return TRUE; }
         case IDCANCEL:
@@ -12634,7 +12658,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          there, log it, and destroy them. Deterministic, needs no clicking, and it
          runs in a headless test -- which matters because the alternative (driving the
          menu with synthetic clicks) lands on the desktop of whoever is using the box.
-       ⚠ Behind a flag: eight dialogs at every startup is a cost no shipped run needs
+       ⚠ Behind a flag: six dialogs at every startup is a cost no shipped run needs
          to pay, and this answers a question that only changes when the .rc does. */
     if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES) {
         char cb[512], *cq = cb;
@@ -12650,8 +12674,8 @@ static DWORD WINAPI ui_thread(LPVOID arg)
                 /* A control that must exist on THIS page, by id, so "the page was
                    created" cannot be mistaken for "the controls I moved are on it".
                    Each is 0 on every page but the one that owns it -- which is the
-                   point: it proves the split (Processor=speed, Memory=convkb,
-                   Advanced=pitpace) actually landed. */
+                   point: it proves the pages hold what they should (s84: all four are on
+                   Machine, and 0 on every other page). */
                 cq = zput(cq, " speed=");  cq = zhex(cq, GetDlgItem(pg, IDC_S_SPEEDMODE) ? 1u : 0u);
                 cq = zput(cq, " cpuinfo=");cq = zhex(cq, GetDlgItem(pg, IDC_S_CPUINFO) ? 1u : 0u);
                 cq = zput(cq, " convkb="); cq = zhex(cq, GetDlgItem(pg, IDC_S_CONVKB) ? 1u : 0u);
@@ -12662,6 +12686,8 @@ static DWORD WINAPI ui_thread(LPVOID arg)
             log_append(LOG_PATH, cb, cq); cq = cb;
         }
     }
+    if (GetFileAttributesA(SETSHOT_PATH) != INVALID_FILE_ATTRIBUTES)   /* s84, test-only */
+        PostMessageA(g_hwnd, WM_COMMAND, IDM_FILE_SETTINGS, 0);
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
