@@ -24,15 +24,18 @@
 #define IDC_S_DEFAULTS        202   /* button:   restore every page's defaults        */
 #define IDC_S_APPLY           203   /* button:   commit without closing (s84 redesign) */
 
-/* s84 (the user's redesign): six tabs. Memory (216) and Advanced (217) folded into
-   Machine; the ids below are only numbers, so the old names are kept. */
+/* s84 (the user's redesign): eight tabs, sized to fit an 800 x 600 screen. Memory
+   and Advanced folded into Machine; Window split out of Graphics and Sound Cards out
+   of Audio, reusing the two freed numbers. The ids are only numbers. */
 #define IDD_PAGE_GENERAL      210   /* the "MS-DOS" tab                               */
 #define IDD_PAGE_CPU          211   /* the "Machine" tab: processor, memory, timing   */
-#define IDD_PAGE_DISPLAY      212   /* the "Graphics" tab                             */
-#define IDD_PAGE_AUDIO        213
+#define IDD_PAGE_DISPLAY      212   /* the "Graphics" tab: image, drawing             */
+#define IDD_PAGE_AUDIO        213   /* output, music                                  */
 #define IDD_PAGE_INPUT        214
 #define IDD_PAGE_DRIVES       215
-#define NTVDMEX_PAGE_COUNT      6
+#define IDD_PAGE_WINDOW       216   /* window size, fullscreen (was Memory's number)  */
+#define IDD_PAGE_CARDS        217   /* "Sound Cards": SB, GUS, MPU, speaker           */
+#define NTVDMEX_PAGE_COUNT      8
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */

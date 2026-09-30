@@ -11071,14 +11071,15 @@ static void settings_apply_live(HWND h)
      display rectangle. Nothing below is written per-control -- every fill and every
      read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
      one line of .rc layout, not four edits in four functions that can disagree. */
-/* s84, the user's redesign: six tabs. Processor, Memory and Advanced became one
-   "Machine" page; General is "MS-DOS" and Display is "Graphics". */
+/* s84, the user's redesign: Processor, Memory and Advanced became one "Machine" page;
+   General is "MS-DOS". To fit an 800 x 600 screen, Display split into Window and
+   Graphics, and Audio into Audio and Sound Cards. */
 static const int SETTINGS_PAGES[NTVDMEX_PAGE_COUNT] = {
-    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_WINDOW, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_CARDS, IDD_PAGE_INPUT, IDD_PAGE_DRIVES
 };
 static const char *const SETTINGS_TABS[NTVDMEX_PAGE_COUNT] = {
-    "MS-DOS", "Machine", "Graphics", "Audio", "Input", "Drives"
+    "MS-DOS", "Machine", "Window", "Graphics", "Audio", "Sound Cards", "Input", "Drives"
 };
 static HWND g_spage[NTVDMEX_PAGE_COUNT];
 
@@ -12658,7 +12659,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          there, log it, and destroy them. Deterministic, needs no clicking, and it
          runs in a headless test -- which matters because the alternative (driving the
          menu with synthetic clicks) lands on the desktop of whoever is using the box.
-       ⚠ Behind a flag: six dialogs at every startup is a cost no shipped run needs
+       ⚠ Behind a flag: eight dialogs at every startup is a cost no shipped run needs
          to pay, and this answers a question that only changes when the .rc does. */
     if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES) {
         char cb[512], *cq = cb;
