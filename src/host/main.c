@@ -4723,6 +4723,24 @@ static void recovery_uninstall(char **pp)
    runtime-derived now; a settings value points this INTO g_set as before. */
 static const char   *g_floppy_img = NULL;
 static const char   *floppy_img_path(void) { return g_floppy_img ? g_floppy_img : FLOPPY_IMG_PATH; }
+/* ── s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL? ──────────────────────
+     GetDriveType reads the drive's TYPE, never its media, so it cannot raise an
+     "insert a disk" prompt or spin a drive up. With no physical drive the Drives tab
+     greys the choice and the host treats the setting as "mounted image". */
+static int host_has_floppy(void)
+{
+    return GetDriveTypeA("A:\\") == DRIVE_REMOVABLE || GetDriveTypeA("B:\\") == DRIVE_REMOVABLE;
+}
+static int host_has_cdrom(void)
+{
+    DWORD m = GetLogicalDrives(); char r[4] = "C:\\"; int d;
+    for (d = 2; d < 26; ++d) {
+        if (!(m & (1u << d))) continue;
+        r[0] = (char)('A' + d);
+        if (GetDriveTypeA(r) == DRIVE_CDROM) return 1;
+    }
+    return 0;
+}
 static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
 static dos_disk_geom g_disk_g[1];
 static int           g_disk_tried[1];
@@ -7751,6 +7769,9 @@ static void host_mouse_button(int btn, int down)
      The HideHostCursor setting and View > Show Host Cursor are gone: the toggle "feels
      jaggy", and a pointer that hides itself needs no knob. UI thread only. */
 #define CURSOR_IDLE_MS 5000u
+/* s84 (user): Settings > Input > Show Host Mouse Cursor -- HOSTCUR_* in settings.h.
+   Smart is the rule above; Always never hides over the video, Never always does. */
+static int   g_hostcur_mode = HOSTCUR_SMART;
 static DWORD g_cursor_moved_ms;         /* GetTickCount of the last real movement   */
 static POINT g_cursor_last_pt = { -1, -1 };
 static int   g_cursor_idle;             /* hidden for stillness, until it next moves */
@@ -9910,9 +9931,11 @@ static int pt_over_video(HWND h, int cx, int cy)
 static int host_cursor_visible_at(int over_video)
 {
     if (g_captured) return 0;
+    if (!over_video || g_hostcur_mode == HOSTCUR_ALWAYS) return 1;   /* s84 */
+    if (g_hostcur_mode == HOSTCUR_NEVER) return 0;
     /* #218: fullscreen no longer hides it outright -- a program that does not use the
        mouse keeps a usable pointer there too, and the idle rule applies to both. */
-    return !(over_video && g_cursor_idle && !capture_allowed());
+    return !(g_cursor_idle && !capture_allowed());
 }
 
 /* Apply it NOW rather than waiting for WM_SETCURSOR, which only fires when the mouse
@@ -10314,6 +10337,7 @@ static void cursor_idle_tick(HWND h)
 {
     POINT pt, c; HWND w;
     if (g_cursor_idle || g_captured || capture_allowed()) return;
+    if (g_hostcur_mode != HOSTCUR_SMART) return;          /* s84: the idle rule is Smart's */
     if (!g_cursor_moved_ms) { g_cursor_moved_ms = GetTickCount(); return; }
     if (GetTickCount() - g_cursor_moved_ms < CURSOR_IDLE_MS) return;
     if (!GetCursorPos(&pt)) return;
@@ -10760,7 +10784,14 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          knob comes to do something its label does not say. */
     if (s->v[SET_TYPEMATIC] >= 2)
         g_ty_period_us = 1000000u / (uint32_t)s->v[SET_TYPEMATIC];
-    g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : NULL;
+    /* s84 (user): the physical drive, or a mounted image. The physical one needs no
+       setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
+       forced because this PC has no floppy drive) names a file here. A blank image
+       path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
+       only on the test rig (the harness's disk), so on a user's PC it is simply absent. */
+    g_floppy_img     = ((!s->v[SET_FLOPPYPHYS] || !host_has_floppy()) && s->s[SET_STR_FLOPPYA][0])
+                     ? s->s[SET_STR_FLOPPYA] : NULL;
+    g_hostcur_mode   = (int)s->v[SET_HOSTCURSOR];                   /* s84 */
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -11071,15 +11102,14 @@ static void settings_apply_live(HWND h)
      display rectangle. Nothing below is written per-control -- every fill and every
      read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
      one line of .rc layout, not four edits in four functions that can disagree. */
-/* s84, the user's redesign: Processor, Memory and Advanced became one "Machine" page;
-   General is "MS-DOS". To fit an 800 x 600 screen, Display split into Window and
-   Graphics, and Audio into Audio and Sound Cards. */
+/* s84, the user's redesign: six tabs in a 640 x 480 dialog. Processor, Memory and
+   Advanced became "Machine"; General is "MS-DOS"; Display is "Video". */
 static const int SETTINGS_PAGES[NTVDMEX_PAGE_COUNT] = {
-    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_WINDOW, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_CARDS, IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
 };
 static const char *const SETTINGS_TABS[NTVDMEX_PAGE_COUNT] = {
-    "MS-DOS", "Machine", "Window", "Graphics", "Audio", "Sound Cards", "Input", "Drives"
+    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
 };
 static HWND g_spage[NTVDMEX_PAGE_COUNT];
 
@@ -11116,6 +11146,14 @@ static void settings_fill_combos(void)
     c = settings_ctl(IDC_S_DOSVER);
     if (c) for (i = 0; i < (int)(sizeof VERS / sizeof VERS[0]); ++i)
         SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)VERS[i]);
+    /* s84: the Video tab's three-column boxes are narrow; let their LISTS open wide
+       enough for the longest item ("Monochrome orange", "Graphics only"). */
+    {   static const int NARROW[] = { IDC_S_RENDERER, IDC_S_WINSIZE, IDC_S_AUTOFS,
+                                      IDC_S_SCALER, IDC_S_FILTER, IDC_S_ASPECT,
+                                      IDC_S_TINT, IDC_S_FRAMESKIP };
+        for (i = 0; i < (int)(sizeof NARROW / sizeof NARROW[0]); ++i)
+            if ((c = settings_ctl(NARROW[i])) != NULL) SendMessageA(c, CB_SETDROPPEDWIDTH, 130, 0);
+    }
 }
 
 /* #203: the DOS prompt's two radios, and the path box + Browse only live under "Another". */
@@ -11129,22 +11167,55 @@ static void settings_shell_radios(int own)
     if (br) EnableWindow(br, own);
 }
 
-static void settings_shell_browse(HWND page)
+/* One Open dialog for every path box: the shell, the floppy and ISO images, the
+   SoundFont. The box's current text is where it starts. */
+static void settings_browse(HWND page, int edit_id, const char *filter, const char *title)
 {
     char file[MAX_PATH]; OPENFILENAMEA of; int i;
-    HWND ed = settings_ctl(IDC_S_SHELL);
+    HWND ed = settings_ctl(edit_id);
     file[0] = 0;
     if (ed) GetWindowTextA(ed, file, sizeof file);
     for (i = 0; i < (int)sizeof of; ++i) ((char *)&of)[i] = 0;
     of.lStructSize = sizeof of;
     of.hwndOwner   = GetParent(page);
-    of.lpstrFilter = "COMMAND.COM\0COMMAND.COM\0DOS programs (*.com;*.exe)\0*.com;*.exe\0"
-                     "All files (*.*)\0*.*\0";
+    of.lpstrFilter = filter;
     of.lpstrFile   = file;
     of.nMaxFile    = sizeof file;
-    of.lpstrTitle  = "Choose the DOS prompt's COMMAND.COM";
+    of.lpstrTitle  = title;
     of.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
     if (GetOpenFileNameA(&of) && ed) SetWindowTextA(ed, file);
+}
+static void settings_shell_browse(HWND page)
+{
+    settings_browse(page, IDC_S_SHELL,
+        "COMMAND.COM\0COMMAND.COM\0DOS programs (*.com;*.exe)\0*.com;*.exe\0"
+        "All files (*.*)\0*.*\0", "Choose the DOS prompt's COMMAND.COM");
+}
+
+/* ── s84 (user): EACH REMOVABLE DRIVE IS THE PHYSICAL ONE OR A MOUNTED IMAGE. ──────
+     The PHYS radio is the table row (SK_CHECK); this keeps its partner opposite, the
+     path box and Browse live only under "image", and -- with no physical drive on this
+     PC -- greys the physical choice and selects the image. */
+static void settings_drive_radios(int phys_id, int img_id, int edit_id, int browse_id,
+                                  int have, int phys)
+{
+    HWND ph = settings_ctl(phys_id), im = settings_ctl(img_id);
+    HWND ed = settings_ctl(edit_id), br = settings_ctl(browse_id);
+    if (!have) phys = 0;
+    if (ph) { EnableWindow(ph, have); SendMessageA(ph, BM_SETCHECK, phys ? BST_CHECKED : BST_UNCHECKED, 0); }
+    if (im) SendMessageA(im, BM_SETCHECK, phys ? BST_UNCHECKED : BST_CHECKED, 0);
+    if (ed) EnableWindow(ed, !phys);
+    if (br) EnableWindow(br, !phys);
+}
+static void settings_floppy_radios(int phys)
+{
+    settings_drive_radios(IDC_S_FLOPPY_PHYS, IDC_S_FLOPPY_IMG, IDC_S_FLOPPYA,
+                          IDC_S_FLOPPY_BROWSE, host_has_floppy(), phys);
+}
+static void settings_cd_radios(int phys)
+{
+    settings_drive_radios(IDC_S_CD_PHYS, IDC_S_CD_IMG, IDC_S_CDROM,
+                          IDC_S_CD_BROWSE, host_has_cdrom(), phys);
 }
 
 static void settings_to_dialog(const ntvdmex_settings *s)
@@ -11178,6 +11249,8 @@ static void settings_to_dialog(const ntvdmex_settings *s)
         if (c) SetWindowTextA(c, s->s[i]);
     }
     settings_shell_radios(s->s[SET_STR_SHELL][0] != 0);
+    settings_floppy_radios(s->v[SET_FLOPPYPHYS] != 0);                /* s84 */
+    settings_cd_radios(s->v[SET_CDPHYS] != 0);
     /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
          command.com but reporting 6.22, is that right?") The box holds the SETTING; a
          session can be running a different, forced number, and the dialog said nothing. */
@@ -11185,18 +11258,15 @@ static void settings_to_dialog(const ntvdmex_settings *s)
          One combo plus a note that contradicted it ("6.22" above, "reports 5.00" below)
          read as a bug. Row two states the number this session is really using and, in
          one sentence, why -- or that it is simply the setting. */
-    {   HWND cn = settings_ctl(IDC_S_DOSVER_NOW), cw = settings_ctl(IDC_S_DOSVER_WHY);
+    /* s84 (the user's layout): one line, "MS-DOS 6.22" -- plus, only when a cfg file
+       forces a different number than the setting, which file. */
+    {   HWND cn = settings_ctl(IDC_S_DOSVER_NOW);
         if (cn && g_dosm) {
-            wsprintfA(t, "MS-DOS version %u.%02u", (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
+            wsprintfA(t, "The current session is reporting: MS-DOS %u.%02u",
+                      (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
+            if (g_dosver_forced && g_dosver_why) lstrcatA(t, " (set by cfg\\dosver.txt)");
             SetWindowTextA(cn, t);
         }
-        /* s84 redesign: the line says why the session differs, and is EMPTY when it
-           does not -- then the page reads exactly like the user's layout. */
-        if (cw) SetWindowTextA(cw, (g_dosm && g_dosver_forced && g_dosver_why) ? g_dosver_why
-            : g_dosver_shell
-            ? "Windows XP's own prompt is told 5.00, which it needs; the programs you run "
-              "from it are told the version below."
-            : "");
     }
 }
 
@@ -11334,6 +11404,23 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
         case IDC_S_SHELL_XP:     settings_shell_radios(0); return TRUE;
         case IDC_S_SHELL_OWN:    settings_shell_radios(1); return TRUE;
         case IDC_S_SHELL_BROWSE: settings_shell_browse(dlg); return TRUE;
+        /* s84: the Drives tab's radio pairs and the three new Browse buttons. */
+        case IDC_S_FLOPPY_PHYS:  settings_floppy_radios(1); return TRUE;
+        case IDC_S_FLOPPY_IMG:   settings_floppy_radios(0); return TRUE;
+        case IDC_S_CD_PHYS:      settings_cd_radios(1); return TRUE;
+        case IDC_S_CD_IMG:       settings_cd_radios(0); return TRUE;
+        case IDC_S_FLOPPY_BROWSE:
+            settings_browse(dlg, IDC_S_FLOPPYA, "Floppy disk images (*.img;*.ima;*.flp)\0*.img;*.ima;*.flp\0"
+                            "All files (*.*)\0*.*\0", "Choose a floppy disk image");
+            return TRUE;
+        case IDC_S_CD_BROWSE:
+            settings_browse(dlg, IDC_S_CDROM, "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0",
+                            "Choose an ISO disk image");
+            return TRUE;
+        case IDC_S_SF_BROWSE:
+            settings_browse(dlg, IDC_S_SOUNDFONT, "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0",
+                            "Choose a SoundFont");
+            return TRUE;
         }
     }
     return FALSE;
@@ -12008,7 +12095,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              the Hide-over-video setting applies. */
         if (g_captured) { SetCursor(NULL); return TRUE; }
         /* #218: otherwise only the idle rule hides it, and only over the video. */
-        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && g_cursor_idle) {
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT
+            && (g_cursor_idle || g_hostcur_mode == HOSTCUR_NEVER)) {
             POINT c;
             if (GetCursorPos(&c)) {
                 ScreenToClient(h, &c);
@@ -12659,7 +12747,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          there, log it, and destroy them. Deterministic, needs no clicking, and it
          runs in a headless test -- which matters because the alternative (driving the
          menu with synthetic clicks) lands on the desktop of whoever is using the box.
-       ⚠ Behind a flag: eight dialogs at every startup is a cost no shipped run needs
+       ⚠ Behind a flag: six dialogs at every startup is a cost no shipped run needs
          to pay, and this answers a question that only changes when the .rc does. */
     if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES) {
         char cb[512], *cq = cb;
@@ -31907,6 +31995,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      /* s84 (user): the cost of drawing the picture, per present, by path -- the number
+         that decides whether a windowed DirectDraw renderer is worth building. Decimal
+         microseconds: mean and worst. `win` = GDI (window or borderless fullscreen). */
+      p = zput(p, "\r\nSTAGE2: present us win n="); p = zdec(p, (DWORD)g_pd.pt_win_n);
+      p = zput(p, " mean="); p = zdec(p, g_pd.pt_win_n ? (DWORD)(g_pd.pt_win_us / g_pd.pt_win_n) : 0);
+      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.pt_win_max);
+      p = zput(p, " | fs(ddraw) n="); p = zdec(p, (DWORD)g_pd.pt_fs_n);
+      p = zput(p, " mean="); p = zdec(p, g_pd.pt_fs_n ? (DWORD)(g_pd.pt_fs_us / g_pd.pt_fs_n) : 0);
+      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.pt_fs_max);
+      p = zput(p, " winsize="); p = zdec(p, g_set.v[SET_WINSIZE] + 1);
+      p = zput(p, "x scaler="); p = zdec(p, g_set.v[SET_SCALER]);
       p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);
       p = zput(p, " calls="); p = zhex(p, g_pitpace_calls);
       p = zput(p, " prio="); p = zhex(p, (DWORD)g_pitpace_prio);

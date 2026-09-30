@@ -65,17 +65,18 @@ typedef enum {
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS,
     SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
     SET_JOYTYPE, SET_JOYPAD,
-    SET_BOOTFROM,
     SET_BEHAVE,                 /* #167: where MS-DOS 6.22 and stock NTVDM differ */
     SET_TINT,                   /* #229: colour filter                            */
     SET_AUDIOAPI,               /* #234: WinMM / DirectSound                      */
     SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235: device resources */
+    SET_HOSTCURSOR,             /* s84: Always / Never / Smart (#218's idle rule)  */
+    SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image      */
     SET_COUNT
 } set_id;
 
 /* ── THE STRING SETTINGS, kept separate because REG_SZ is a different call. ───── */
 typedef enum {
-    SET_STR_DRIVEC = 0, SET_STR_FLOPPYA, SET_STR_CDROM, SET_STR_SOUNDFONT,
+    SET_STR_FLOPPYA = 0, SET_STR_CDROM, SET_STR_SOUNDFONT,
     SET_STR_SHELL,
     SET_STR_COUNT
 } set_str_id;
@@ -84,6 +85,11 @@ enum { AUTOFS_ALWAYS = 0, AUTOFS_GRAPHICS = 1, AUTOFS_NEVER = 2 };
 
 /* BehaveLike's values (#167). */
 enum { BEHAVE_NTVDM = 0, BEHAVE_DOS622 };
+
+/* ShowHostCursor's values (s84). Smart is #218's rule: hide after CURSOR_IDLE_MS still
+   over the video. Always never hides it there; Never always does. Captured, the
+   pointer is hidden whatever this says. */
+enum { HOSTCUR_ALWAYS = 0, HOSTCUR_NEVER, HOSTCUR_SMART };
 
 /* PcSpeaker's values. Named, because `s->v[SET_SPEAKER] == 2` at a call site is
    a number nobody can check against the item list four hundred lines away. */
@@ -132,7 +138,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
      response (Skyroads, s61), which is why 15 was the floor before Auto existed.
      New registry name so an old "UiTickMs"=15 is not read as index 15. */
 { "UiTickMode",        IDC_S_UITICK,      SK_COMBO,      0,  0,   4,
-  "Auto (recommended)|5 ms (fast - may cost input response)|10 ms|15 ms|20 ms" },
+  "Auto (Recommended)|5 ms (fast - may cost input response)|10 ms|15 ms|20 ms" },
 
 /* ── ★ THE ONE PROCESSOR CONTROL: AN OPTIONAL SPEED LIMIT. ──────────────────────
      Off (Unlimited) by default. It slows software that runs too fast on a modern
@@ -162,6 +168,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
 /* s81 (#147), user decision: GDI + DirectDraw only, and the choice is REAL. The window is
    always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing)
    instead of the borderless GDI window. There was never Direct3D or OpenGL code.
+   s84 (user): the dialog calls it "Renderer", for the window AND fullscreen. The window
+   stays GDI until the present-timing measurement says a windowed DirectDraw path would
+   buy anything (it would look the same and cannot flip; see STAGE2 `present`).
    #237 (user, s84): the "(sharp)" / "(soft)" suffixes are gone -- since #223 DirectDraw
    stretches with StretchDIBits into the back buffer's DC and is as sharp as GDI; any
    smoothing now comes only from Scaler / Filtering.
@@ -219,7 +228,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "MasterVolume",      IDC_S_VOLUME,      SK_UINT,     100,  0, 100, NULL },
 { "Mute",              IDC_S_MUTE,        SK_CHECK,      0,  0,   1, NULL },
 { "SampleRate",        IDC_S_RATE,        SK_COMBO,      1,  0,   2, "22050|44100|48000" },
-{ "SbModel",           IDC_S_SBMODEL,     SK_COMBO,      0,  0,   2, "SB16|AWE32|SB Pro" },
+{ "SbModel",           IDC_S_SBMODEL,     SK_COMBO,      0,  0,   2, "Sound Blaster 16|Sound Blaster AWE32|Sound Blaster Pro" },
 { "SbAddress",         IDC_S_SBADDR,      SK_COMBO,      0,  0,   3, "220|240|260|280" },
 { "SbIrq",             IDC_S_SBIRQ,       SK_COMBO,      0,  0,   3, "5|7|10|11" },
 { "SbDma",             IDC_S_SBDMA,       SK_COMBO,      0,  0,   2, "1|3|5" },
@@ -234,7 +243,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
      src/host/pcspeaker.h). Neither is right for everyone, so it is a choice.
    ★ THE OLD VALUES MIGRATE FOR FREE. This was a checkbox: 0 = off, 1 = on. As
      indices those are exactly Off and Sound card, which is what they meant. */
-{ "PcSpeaker",         IDC_S_SPEAKER,     SK_COMBO,      1,  0,   3, "Off|Sound card|Real PC speaker|Both" },
+{ "PcSpeaker",         IDC_S_SPEAKER,     SK_COMBO,      1,  0,   3, "Off|Sound Card|Real PC Speaker|Both" },
 /* ── THE GUS, WIRED (s80). This row was "Gus", default 0, and nothing read it -- the
      checkbox did nothing while the card was controlled by cfg\nogus.flag alone. A dialog
      that was ever OK'd has therefore SAVED Gus=0 to HKCU, meaning nothing; reading that
@@ -257,13 +266,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "JoystickType",      IDC_S_JOYTYPE,     SK_COMBO,      0,  0,   2, "None|2 axis, 2 button|4 axis, 4 button" },
 { "JoystickGamepad",   IDC_S_JOYPAD,      SK_CHECK,      0,  0,   1, NULL },
 
-{ "BootFrom",          IDC_S_BOOTFROM,    SK_COMBO,      0,  0,   2, "Hard disk (C:)|Floppy (A:)|CD-ROM (D:)" },
+/* "BootFrom" and "DriveCPath" were REMOVED in s84 (user): both were stored and read by
+   nothing -- the VDM already reaches the host's own drives. A stored value is ignored. */
 /* ── #167: ONE CHOICE FOR EVERY ROW WHERE THE TWO REFERENCES DISAGREE. (user, 2026-09-28)
      Some answers differ between genuine MS-DOS 6.22 and the Windows XP NTVDM this
      project replaces, and neither is a defect. Rather than a knob per register, one
      setting says which machine to be; each such row reads it. Default NTVDM: that is
      what NTVDMEX stands in for. Values: BEHAVE_* below. First member: XMS 08h's BH. */
-{ "BehaveLike",        IDC_S_BEHAVE,      SK_COMBO,      0,  0,   1, "Windows XP NTVDM|MS-DOS 6.22" },
+{ "BehaveLike",        IDC_S_BEHAVE,      SK_COMBO,      0,  0,   1, "Windows XP NTVDM|Genuine MS-DOS" },
 /* #229 (docs/EMULATION.md): Default / Sepia / Monochrome white, green, orange. */
 { "ColourFilter",      IDC_S_TINT,        SK_COMBO,      0,  0,
                                           PRESENT_TINT_COUNT - 1, PRESENT_TINT_ITEMS },
@@ -276,10 +286,20 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "GusIrq",            IDC_S_GUSIRQ,      SK_COMBO,      4,  0,   6, "2|3|5|7|11|12|15" },
 { "GusDma",            IDC_S_GUSDMA,      SK_COMBO,      1,  0,   4, "1|3|5|6|7" },
 { "MpuAddress",        IDC_S_MPUADDR,     SK_COMBO,      3,  0,   4, "300|310|320|330|340" },
+/* s84 (user): #218's smart hide becomes one of three. Default Smart = the behaviour since
+   #218. ⛔ A NEW NAME, DELIBERATELY: "ShowHostCursor" was an old 0/1 checkbox (644a6e0),
+   and the rig still carried a 0 that read as "Always" the first time this row used that
+   name -- and "HideHostCursor" meant something else again. */
+{ "HostCursorMode",    IDC_S_HOSTCURSOR,  SK_COMBO,      2,  0,   2, "Always|Never|Smart" },
+/* s84 (user): each removable drive is the PHYSICAL one or a mounted image, shown as a
+   pair of radios whose first one is the row's control. With no physical drive the dialog
+   greys that radio and the host treats the setting as "image"; a blank image path is an
+   EMPTY drive. See settings_drive_radios / settings_apply in main.c. */
+{ "FloppyUsePhysical", IDC_S_FLOPPY_PHYS, SK_CHECK,      1,  0,   1, NULL },
+{ "CdRomUsePhysical",  IDC_S_CD_PHYS,     SK_CHECK,      1,  0,   1, NULL },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
-{ "DriveCPath",   IDC_S_DRIVEC,    "" },
 { "FloppyAImage", IDC_S_FLOPPYA,   "" },
 { "CdRomImage",   IDC_S_CDROM,     "" },
 { "SoundFontPath",IDC_S_SOUNDFONT, "" },

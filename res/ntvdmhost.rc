@@ -21,26 +21,24 @@ IDI_MAINICON ICON "MAINICON.ico"
    Sizes are dialog units, not pixels, so this stays right at other DPI settings.
 
    IDD_SETTINGS is only the FRAME: a tab control, Restore Defaults, Apply, OK and
-   Cancel. The eight pages are separate child dialogs (DS_CONTROL | WS_CHILD, no
+   Cancel. The six pages are separate child dialogs (DS_CONTROL | WS_CHILD, no
    caption, no border) that main.c creates and parks in the tab's display rectangle.
    DS_CONTROL is what makes a dialog usable as a page: it implies WS_EX_CONTROLPARENT,
    so Tab walks into and out of the page instead of stopping dead at its edge.
 
-   ★ IT MUST FIT AN 800 x 600 SCREEN (user, s84: era-correct resolutions). With XP's
-     taskbar that leaves ~570 px for the whole window, i.e. ~320 DLU of dialog at
-     96 DPI (1 DLU ~ 1.65 px down, ~1.5 px across). The frame is 400 x 315; a page's
-     content must end by y = 246. A page that would not fit is split into two tabs
-     rather than squeezed: Window/Graphics and Audio/Sound Cards were one each.
-   ★ ONE GRID FOR EVERY PAGE (s84, the user's redesign). A page is ~380 x 250 DLU.
-       group box        x 6, width 368 (6..374), 6 DLU between groups
-       inner margins    16 .. 364 -- a description spans the whole 348
-       row label        x 16, up to 192 wide, 2 DLU below its control's top
-       control column   x 214, width 150 -- EVERY dropdown sits here, so they line up
-                        down the page and from tab to tab; a unit ("KB", "%") goes
-                        inside the column, after a shorter box
-       path boxes       x 80 .. 364 (or .. 310 plus Browse), because a path needs room
-       checkbox columns x 16 and x 192, 170 wide
-       rows             16 DLU apart; a group ends 7-8 DLU under its last control
+   ★ 640 x 480, WITH A FIXED SINGLE BORDER (user, s84). No DS_MODALFRAME: a thin,
+     non-resizing frame. At 96 DPI one DLU is ~1.5 px across and ~1.63 px down, so the
+     frame is 424 x 280 DLU (a few px over 480 tall, which the user allowed rather than
+     crowd the Machine and Audio tabs). A page is ~404 x 228; content ends by y = 224.
+   ★ THE GRID (the user's designs, one per tab):
+       group box        x 6, width 392 (6..398), 4 DLU between groups
+       inner margins    14 .. 390 -- a description spans the whole 376
+       one-control rows label at 14, control in the right column x 240, width 150
+       three-column rows columns start 14 / 140 / 266 (124 wide); label 58, control 64
+       card jumpers     Address 214..256, IRQ 282..320, DMA 350..390 -- shared by the
+                        Sound Blaster and Gravis Ultrasound rows so they line up
+       path rows        edit to 334, Browse... at 340..390
+       checkbox columns x 14 and x 202 (Drawing) or x 240 (Memory, the control column)
    Each group opens with a sentence saying what its settings do, where one is needed.
 
    ⚠ COMBO ITEMS ARE NOT LISTED HERE. Every drop-list is declared empty and filled at
@@ -83,312 +81,307 @@ IDI_MAINICON ICON "MAINICON.ico"
 /* TCS_TABS is 0 and every other tab style here is a default, so the tab control
    needs no style bits of its own beyond the window ones. */
 
-IDD_SETTINGS DIALOGEX 0, 0, 400, 315
-STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+IDD_SETTINGS DIALOGEX 0, 0, 424, 280
+STYLE DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Windows NT Virtual DOS Machine Settings"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     CONTROL         "", IDC_S_TAB, "SysTabControl32",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS,
-                    7, 7, 386, 281
-    PUSHBUTTON      "Restore &Defaults", IDC_S_DEFAULTS, 7, 294, 80, 14
-    PUSHBUTTON      "&Apply", IDC_S_APPLY, 235, 294, 50, 14
-    DEFPUSHBUTTON   "OK", IDOK, 289, 294, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 343, 294, 50, 14
+                    7, 7, 410, 246
+    PUSHBUTTON      "Restore &Defaults", IDC_S_DEFAULTS, 7, 259, 80, 14
+    PUSHBUTTON      "&Apply", IDC_S_APPLY, 259, 259, 50, 14
+    DEFPUSHBUTTON   "OK", IDOK, 313, 259, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 367, 259, 50, 14
 END
 
-/* ── PAGE: MS-DOS (was General) ─────────────────────────────────────────────────
-   Which shell, and what machine programs are told they are on. */
-IDD_PAGE_GENERAL DIALOGEX 0, 0, 380, 250
+/* ── PAGE: MS-DOS ───────────────────────────────────────────────────────────────
+   #203: the path box IS the shell setting (empty = XP's own); the radios only show
+   and set that. The session line is filled at run time (s81: setting and session
+   each get their own row). */
+IDD_PAGE_GENERAL DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    /* #203: which COMMAND.COM the prompt runs. The path box IS the setting (empty =
-       XP's own); the radios only show and set that, so they are not table rows. */
-    GROUPBOX        "MS-DOS shell", -1, 6, 4, 368, 66
-    CONTROL         "Use &Windows XP's own COMMAND.COM", IDC_S_SHELL_XP, "Button",
-                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 16, 18, 300, 10
-    LTEXT           "Or you can use an older MS-DOS shell; for example, COMMAND.COM from "
-                    "MS-DOS 6.22.",
-                    -1, 16, 33, 348, 8
-    CONTROL         "An&other:", IDC_S_SHELL_OWN, "Button",
-                    BS_AUTORADIOBUTTON, 16, 50, 60, 10
-    EDITTEXT        IDC_S_SHELL, 80, 48, 230, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
-    PUSHBUTTON      "&Browse...", IDC_S_SHELL_BROWSE, 314, 48, 50, 14, WS_TABSTOP
+    GROUPBOX        "Shell", -1, 6, 4, 392, 64
+    LTEXT           "You can use either Windows XP's built-in COMMAND.COM, or you can install "
+                    "a custom version from a previous version of MS-DOS.",
+                    -1, 14, 16, 376, 16
+    CONTROL         "&Windows XP's own COMMAND.COM", IDC_S_SHELL_XP, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 36, 200, 10
+    CONTROL         "&Other:", IDC_S_SHELL_OWN, "Button",
+                    BS_AUTORADIOBUTTON, 14, 50, 40, 10
+    EDITTEXT        IDC_S_SHELL, 58, 48, 276, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "&Browse...", IDC_S_SHELL_BROWSE, 340, 48, 50, 14, WS_TABSTOP
 
-    /* s81 (user): the SETTING and the SESSION each get their own row. The session's
-       row is filled at run time; the line under it says why they differ, and is
-       empty when they do not. */
-    GROUPBOX        "MS-DOS version", -1, 6, 76, 368, 130
-    LTEXT           "Some programs check the MS-DOS version and refuse to run if it is not "
-                    "one they support. You can choose which version is reported; 6.22 suits "
-                    "almost everything. A change applies to programs started afterwards.",
-                    IDC_S_DOSVER_NOTE, 16, 90, 348, 24
-    LTEXT           "The current session is reporting:", -1, 16, 118, 192, 8
-    RTEXT           "", IDC_S_DOSVER_NOW, 214, 118, 150, 8
-    LTEXT           "", IDC_S_DOSVER_WHY, 16, 128, 348, 16
-    LTEXT           "&Reported MS-DOS version:", -1, 16, 148, 192, 8
-    COMBOBOX        IDC_S_DOSVER, 214, 146, 150, 90,
+    GROUPBOX        "Version", -1, 6, 72, 392, 72
+    LTEXT           "Some programs check the MS-DOS version and refuse to run if it is not the "
+                    "one they support. You can choose which version is reported. 6.22 suits "
+                    "almost everything. A change applies to programs started after the "
+                    "version has been applied.",
+                    IDC_S_DOSVER_NOTE, 14, 84, 376, 24
+    LTEXT           "The current session is reporting:", IDC_S_DOSVER_NOW, 14, 112, 376, 8
+    LTEXT           "&Reported MS-DOS Version:", -1, 14, 127, 200, 8
+    COMBOBOX        IDC_S_DOSVER, 240, 125, 150, 90,
                     CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+
     /* #167: where the two references answer differently. */
-    LTEXT           "Where genuine MS-DOS 6.22 and Windows XP's NTVDM would answer a "
-                    "program differently, you can choose which of the two machines this "
-                    "VDM copies.",
-                    -1, 16, 166, 348, 16
-    LTEXT           "Where MS-DOS and NTVDM differ, behave &like:", -1, 16, 188, 192, 8
-    COMBOBOX        IDC_S_BEHAVE, 214, 186, 150, 80,
+    GROUPBOX        "Behavior", -1, 6, 148, 392, 50
+    LTEXT           "Genuine MS-DOS and NTVDM can answer programs differently. You can choose "
+                    "whether this VDM copies genuine MS-DOS or NTVDM.",
+                    -1, 14, 160, 376, 16
+    LTEXT           "This VDM Behaves &Like:", -1, 14, 181, 200, 8
+    COMBOBOX        IDC_S_BEHAVE, 240, 179, 150, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 END
 
-/* ── PAGE: MACHINE (was Processor, Memory and Advanced) ─────────────────────────
+/* ── PAGE: MACHINE ──────────────────────────────────────────────────────────────
    ⚠ THE OLD CPU PAGE WAS MOSTLY FICTION (session 60): Type, Core and Cycles were
-   DOSBox vocabulary read by nothing. There is nothing to configure about the
-   processor -- it is the user's own, running in V86 -- so the group SAYS that and
-   offers the one real lever: an optional speed limit. Timing is internal pacing,
-   last on the page because most people never touch it. */
-IDD_PAGE_CPU DIALOGEX 0, 0, 380, 250
+   DOSBox vocabulary read by nothing. The processor is the user's own, running in
+   V86, so the group SAYS that and offers the one real lever: a speed limit. */
+IDD_PAGE_CPU DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Processor", -1, 6, 4, 368, 74
-    LTEXT           "MS-DOS and 16-bit Windows programs run directly on your real CPU, in "
+    GROUPBOX        "Processor", -1, 6, 4, 392, 61
+    LTEXT           "MS-DOS and 16-bit Windows programs run directly on your CPU, in "
                     "Virtual-8086 mode.",
-                    -1, 16, 18, 348, 8
-    LTEXT           "Your machine's CPU:", -1, 16, 30, 90, 8
+                    -1, 14, 16, 376, 8
+    LTEXT           "Your machine's CPU:", -1, 14, 25, 72, 8
     /* Filled at WM_INITDIALOG from the registry's ProcessorNameString -- see
        settings_fill_cpuinfo. The placeholder shows if that read ever fails. */
-    RTEXT           "Unknown", IDC_S_CPUINFO, 110, 30, 254, 8
-    LTEXT           "Some programs run too fast on a modern PC; a speed limit slows them "
-                    "down. The speeds are approximate.",
-                    -1, 16, 44, 348, 8
-    LTEXT           "&Limit CPU speed to:", -1, 16, 60, 192, 8
+    LTEXT           "Unknown", IDC_S_CPUINFO, 88, 25, 302, 8
+    LTEXT           "Some programs run too fast on a modern PC. You can throttle the CPU to "
+                    "approximate an older, slower machine.",
+                    -1, 14, 34, 376, 8
+    LTEXT           "&Limit CPU Speed To:", -1, 14, 48, 200, 8
     /* #224: owner-drawn so rungs faster than this PC can be shown GREYED. */
-    COMBOBOX        IDC_S_SPEEDMODE, 214, 58, 150, 140,
+    COMBOBOX        IDC_S_SPEEDMODE, 240, 46, 150, 140,
                     CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
 
-    GROUPBOX        "Memory", -1, 6, 84, 368, 62
-    LTEXT           "Con&ventional memory:", -1, 16, 100, 192, 8
-    EDITTEXT        IDC_S_CONVKB, 214, 98, 134, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
-    LTEXT           "KB", -1, 352, 100, 12, 8
-    CONTROL         "&XMS (extended memory)", IDC_S_XMS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 118, 170, 10
-    CONTROL         "&EMS (expanded memory)", IDC_S_EMS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 192, 118, 170, 10
-    CONTROL         "&UMB (upper memory blocks)", IDC_S_UMB, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 130, 170, 10
-    CONTROL         "&A20 line always enabled", IDC_S_A20, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 192, 130, 170, 10
+    GROUPBOX        "Memory", -1, 6, 69, 392, 54
+    LTEXT           "&Conventional Memory:", -1, 14, 83, 200, 8
+    EDITTEXT        IDC_S_CONVKB, 240, 81, 132, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
+    LTEXT           "KB", -1, 376, 83, 14, 8
+    CONTROL         "&XMS (Extended Memory)", IDC_S_XMS, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 97, 180, 10
+    CONTROL         "&EMS (Expanded Memory)", IDC_S_EMS, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 240, 97, 150, 10
+    CONTROL         "&UMB (Upper Memory Blocks)", IDC_S_UMB, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 108, 180, 10
+    CONTROL         "&A20 Line Always Enabled", IDC_S_A20, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 240, 108, 150, 10
 
-    GROUPBOX        "Timing", -1, 6, 152, 368, 90
-    LTEXT           "How the host paces the program's clock and its own redraw. Leave these "
-                    "alone unless something tells you otherwise.",
-                    -1, 16, 166, 348, 16
-    CONTROL         "&Pace the Programmable Interval Timer (PIT) from a dedicated thread "
-                    "(keeps timer ticks even)",
+    GROUPBOX        "Timing (Advanced)", -1, 6, 127, 392, 93
+    LTEXT           "How the host paces the program's clock and its own redraw. Modifying these "
+                    "settings is not recommended without good reason.",
+                    -1, 14, 139, 376, 16
+    CONTROL         "&Pace the Programmable Interval Timer (PIT) from a dedicated thread",
                     IDC_S_PITPACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
-                    16, 186, 348, 10
-    LTEXT           "Auto redraws the window each time the program finishes a frame (when "
-                    "it waits for the vertical retrace), or at the display's rate if it "
-                    "never does. A fixed interval redraws on a timer.",
-                    -1, 16, 202, 348, 16
-    LTEXT           "&Screen update:", -1, 16, 224, 192, 8
-    COMBOBOX        IDC_S_UITICK, 214, 222, 150, 90,
+                    14, 159, 376, 10
+    LTEXT           "How the host redraws the window. Auto redraws when the program finishes a "
+                    "frame, waits for the vertical retrace, or at the display's refresh rate. "
+                    "Alternatively, you can redraw at fixed, timed intervals.",
+                    -1, 14, 173, 376, 24
+    LTEXT           "&Screen Redraw Update:", -1, 14, 203, 200, 8
+    COMBOBOX        IDC_S_UITICK, 240, 201, 150, 90,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END
 
-/* ── PAGE: WINDOW (split from Graphics so the dialog fits 800 x 600) ───────────
-   s81 (#147): the window is always GDI; DirectDraw makes FULLSCREEN the exclusive
-   DirectDraw mode instead of a borderless GDI window, so the renderer lives with
-   fullscreen. */
-IDD_PAGE_WINDOW DIALOGEX 0, 0, 380, 250
+/* ── PAGE: VIDEO ────────────────────────────────────────────────────────────────
+   s84 (user): Renderer is for the window AND fullscreen. The window still draws with
+   GDI whichever is chosen -- DirectDraw applies to exclusive fullscreen -- until the
+   STAGE2 `present` timing says a windowed DirectDraw path would buy anything. */
+IDD_PAGE_DISPLAY DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Window", -1, 6, 4, 368, 46
+    GROUPBOX        "Display", -1, 6, 4, 392, 51
     LTEXT           "The window's size is a multiple of the program's own screen size.",
-                    -1, 16, 18, 348, 8
-    LTEXT           "&Window size:", -1, 16, 32, 192, 8
-    COMBOBOX        IDC_S_WINSIZE, 214, 30, 150, 80,
+                    -1, 14, 16, 376, 8
+    LTEXT           "ALT+ENTER switches between the window and fullscreen at any time.",
+                    -1, 14, 24, 376, 8
+    LTEXT           "&Renderer:", -1, 14, 38, 58, 8
+    COMBOBOX        IDC_S_RENDERER, 74, 36, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-
-    GROUPBOX        "Fullscreen", -1, 6, 56, 368, 64
-    LTEXT           "Alt+Enter switches between the window and fullscreen at any time.",
-                    -1, 16, 70, 348, 8
-    LTEXT           "Start f&ullscreen:", -1, 16, 86, 192, 8
-    COMBOBOX        IDC_S_AUTOFS, 214, 84, 150, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "Fullscreen &renderer:", -1, 16, 102, 192, 8
-    COMBOBOX        IDC_S_RENDERER, 214, 100, 150, 80,
+    LTEXT           "&Window Size:", -1, 140, 38, 58, 8
+    COMBOBOX        IDC_S_WINSIZE, 200, 36, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-END
-
-/* ── PAGE: GRAPHICS (was Display) ───────────────────────────────────────────────
-   s81 (#159): Aspect is a five-way setting (the View menu's list), so it is a
-   dropdown -- a checkbox could not show or set 16:9. */
-IDD_PAGE_DISPLAY DIALOGEX 0, 0, 380, 250
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 8, "MS Shell Dlg", 400, 0, 0x1
-BEGIN
-    GROUPBOX        "Image", -1, 6, 4, 368, 114
-    LTEXT           "How the program's picture is scaled, shaped and coloured on your screen.",
-                    -1, 16, 18, 348, 8
-    LTEXT           "&Scaler:", -1, 16, 36, 192, 8
-    COMBOBOX        IDC_S_SCALER, 214, 34, 150, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Filtering:", -1, 16, 52, 192, 8
-    COMBOBOX        IDC_S_FILTER, 214, 50, 150, 80,
+    LTEXT           "Start F&ullscreen:", -1, 266, 38, 58, 8
+    COMBOBOX        IDC_S_AUTOFS, 326, 36, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "&Aspect ratio:", -1, 16, 68, 192, 8
-    COMBOBOX        IDC_S_ASPECT, 214, 66, 150, 80,
+
+    /* s81 (#159): Aspect is a five-way setting (the View menu's list). */
+    GROUPBOX        "Image", -1, 6, 59, 392, 61
+    LTEXT           "How the program's picture is scaled, shaped, and colored on your screen.",
+                    -1, 14, 71, 376, 8
+    LTEXT           "&Scaler:", -1, 14, 87, 58, 8
+    COMBOBOX        IDC_S_SCALER, 74, 85, 64, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    LTEXT           "F&iltering:", -1, 140, 87, 58, 8
+    COMBOBOX        IDC_S_FILTER, 200, 85, 64, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&Aspect Ratio:", -1, 266, 87, 58, 8
+    COMBOBOX        IDC_S_ASPECT, 326, 85, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     /* #229: the colour filter. */
-    LTEXT           "C&olour filter:", -1, 16, 84, 192, 8
-    COMBOBOX        IDC_S_TINT, 214, 82, 150, 80,
+    LTEXT           "&Color Filter:", -1, 14, 103, 58, 8
+    COMBOBOX        IDC_S_TINT, 74, 101, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Frame s&kip:", -1, 16, 100, 192, 8
-    COMBOBOX        IDC_S_FRAMESKIP, 214, 98, 150, 80,
+    LTEXT           "Frame S&kip:", -1, 140, 103, 58, 8
+    COMBOBOX        IDC_S_FRAMESKIP, 200, 101, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    /* #217: buffered drawing and on-screen messages both default on. */
-    GROUPBOX        "Drawing", -1, 6, 124, 368, 44
-    CONTROL         "Force &VSync (every frame)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 16, 138, 170, 10
-    CONTROL         "&Draw off-screen first (no flicker)", IDC_S_BUFFERED, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 192, 138, 170, 10
-    CONTROL         "&Blink the text-mode cursor", IDC_S_BLINKCURSOR, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 150, 170, 10
-    CONTROL         "Show on-screen &messages", IDC_S_OSD, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 192, 150, 170, 10
+    /* #217: double-buffering and on-screen messages both default on. */
+    GROUPBOX        "Drawing", -1, 6, 124, 392, 40
+    CONTROL         "Force &VSync (Every Frame)", IDC_S_VSYNC, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 14, 136, 180, 10
+    CONTROL         "Use &Double-Buffering (Reduces Flicker)", IDC_S_BUFFERED, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 136, 188, 10
+    CONTROL         "&Blink The Text Mode Cursor", IDC_S_BLINKCURSOR, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 148, 180, 10
+    CONTROL         "Show On-Screen &Messages", IDC_S_OSD, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 148, 188, 10
 END
 
 /* ── PAGE: AUDIO ────────────────────────────────────────────────────────────────
    Defaults describe the card we really emulate: SB16 at 220/IRQ 5/DMA 1, OPL3,
-   44100 Hz. See the note over SET_DEFS in src/host/settings.h. The cards' jumpers
-   are on the next tab, Sound Cards (split so the dialog fits 800 x 600). */
-IDD_PAGE_AUDIO DIALOGEX 0, 0, 380, 250
+   44100 Hz. See the note over SET_DEFS in src/host/settings.h. */
+IDD_PAGE_AUDIO DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     /* #234: WinMM or DirectSound; opened once, so it applies at the next program. */
-    GROUPBOX        "Output", -1, 6, 4, 368, 90
-    LTEXT           "How sound reaches this PC's speakers. A change of output or sample "
-                    "rate applies to programs started afterwards.",
-                    -1, 16, 18, 348, 16
-    LTEXT           "Output &via:", -1, 16, 44, 192, 8
-    COMBOBOX        IDC_S_AUDIOAPI, 214, 42, 150, 80,
+    GROUPBOX        "Output", -1, 6, 4, 392, 51
+    LTEXT           "How the sound reaches this PC's speakers. A change of output or sample "
+                    "rate applies to programs started after the change has been applied.",
+                    -1, 14, 16, 376, 16
+    LTEXT           "Mi&xer:", -1, 14, 38, 24, 8
+    COMBOBOX        IDC_S_AUDIOAPI, 40, 36, 70, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "Sample &rate (Hz):", -1, 16, 60, 192, 8
-    COMBOBOX        IDC_S_RATE, 214, 58, 150, 80,
+    LTEXT           "Sample &Rate (Hz):", -1, 120, 38, 62, 8
+    COMBOBOX        IDC_S_RATE, 184, 36, 48, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "&Master volume:", -1, 16, 76, 192, 8
-    EDITTEXT        IDC_S_VOLUME, 214, 74, 40, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "%", -1, 258, 76, 10, 8
+    LTEXT           "Master &Volume:", -1, 244, 38, 52, 8
+    EDITTEXT        IDC_S_VOLUME, 298, 36, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     CONTROL         "M&ute", IDC_S_MUTE, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 290, 75, 74, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 346, 37, 44, 10
 
-    GROUPBOX        "Music", -1, 6, 100, 368, 68
-    LTEXT           "Ad&Lib / OPL chip:", -1, 16, 116, 192, 8
-    COMBOBOX        IDC_S_OPL, 214, 114, 150, 80,
+    GROUPBOX        "Music", -1, 6, 59, 392, 48
+    LTEXT           "Ad&Lib / OPL Chip:", -1, 14, 73, 62, 8
+    COMBOBOX        IDC_S_OPL, 78, 71, 118, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "M&IDI:", -1, 16, 132, 192, 8
-    COMBOBOX        IDC_S_MIDI, 214, 130, 150, 80,
+    LTEXT           "M&IDI:", -1, 206, 73, 22, 8
+    COMBOBOX        IDC_S_MIDI, 230, 71, 160, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "SoundF&ont:", -1, 16, 148, 60, 8
-    EDITTEXT        IDC_S_SOUNDFONT, 80, 146, 284, 13, ES_AUTOHSCROLL | WS_TABSTOP
-END
+    LTEXT           "SoundF&ont:", -1, 14, 89, 40, 8
+    EDITTEXT        IDC_S_SOUNDFONT, 58, 87, 276, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "&Browse...", IDC_S_SF_BROWSE, 340, 87, 50, 14, WS_TABSTOP
 
-/* ── PAGE: SOUND CARDS (split from Audio so the dialog fits 800 x 600) ─────────
-   A card's jumpers (address, IRQ, DMA) share one row inside the control column.
-   #235: the GUS's jumpers and the MPU-401's port. */
-IDD_PAGE_CARDS DIALOGEX 0, 0, 380, 250
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 8, "MS Shell Dlg", 400, 0, 0x1
-BEGIN
-    GROUPBOX        "Sound Blaster", -1, 6, 4, 368, 64
-    LTEXT           "A program must be set up with the same address, IRQ and DMA as the "
-                    "card here.",
-                    -1, 16, 18, 348, 8
-    LTEXT           "Mo&del:", -1, 16, 34, 192, 8
-    COMBOBOX        IDC_S_SBMODEL, 214, 32, 150, 80,
+    GROUPBOX        "Sound Blaster", -1, 6, 111, 392, 43
+    LTEXT           "A program must be set up with the same address, IRQ, and DMA as "
+                    "specified below.",
+                    -1, 14, 123, 376, 8
+    LTEXT           "Mo&del:", -1, 14, 137, 24, 8
+    COMBOBOX        IDC_S_SBMODEL, 40, 135, 130, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Address, IRQ, DMA:", -1, 16, 50, 192, 8
-    COMBOBOX        IDC_S_SBADDR, 214, 48, 48, 80,
+    LTEXT           "&Address:", -1, 180, 137, 32, 8
+    COMBOBOX        IDC_S_SBADDR, 214, 135, 42, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    COMBOBOX        IDC_S_SBIRQ, 266, 48, 48, 80,
+    LTEXT           "IR&Q:", -1, 264, 137, 16, 8
+    COMBOBOX        IDC_S_SBIRQ, 282, 135, 38, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    COMBOBOX        IDC_S_SBDMA, 318, 48, 46, 80,
+    LTEXT           "D&MA:", -1, 328, 137, 20, 8
+    COMBOBOX        IDC_S_SBDMA, 350, 135, 40, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Other devices", -1, 6, 74, 368, 66
-    LTEXT           "PC spea&ker:", -1, 16, 90, 192, 8
-    COMBOBOX        IDC_S_SPEAKER, 214, 88, 150, 80,
+    /* #235: the GUS's jumpers, on the same columns as the Sound Blaster's. */
+    GROUPBOX        "Gravis Ultrasound", -1, 6, 158, 392, 31
+    CONTROL         "&Enabled", IDC_S_GUS, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 171, 80, 10
+    LTEXT           "Address:", -1, 180, 172, 32, 8
+    COMBOBOX        IDC_S_GUSADDR, 214, 170, 42, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "IRQ:", -1, 264, 172, 16, 8
+    COMBOBOX        IDC_S_GUSIRQ, 282, 170, 38, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "DMA:", -1, 328, 172, 20, 8
+    COMBOBOX        IDC_S_GUSDMA, 350, 170, 40, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+
+    GROUPBOX        "Other Devices", -1, 6, 193, 392, 31
+    LTEXT           "PC Spea&ker:", -1, 14, 207, 44, 8
+    COMBOBOX        IDC_S_SPEAKER, 60, 205, 136, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    CONTROL         "&Gravis Ultrasound -- address, IRQ, DMA:", IDC_S_GUS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 105, 192, 10
-    COMBOBOX        IDC_S_GUSADDR, 214, 104, 48, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    COMBOBOX        IDC_S_GUSIRQ, 266, 104, 48, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    COMBOBOX        IDC_S_GUSDMA, 318, 104, 46, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "MPU-401 &port:", -1, 16, 122, 192, 8
-    COMBOBOX        IDC_S_MPUADDR, 214, 120, 48, 80,
+    LTEXT           "MPU-401 &Port:", -1, 206, 207, 52, 8
+    COMBOBOX        IDC_S_MPUADDR, 260, 205, 130, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────
-   Sensitivity is LIVE; the rest is stored only. (#218: the hide-cursor box is gone --
-   the pointer hides itself after 5 s still over the video.) */
-IDD_PAGE_INPUT DIALOGEX 0, 0, 380, 250
+   Sensitivity is LIVE. s84 (user): Show Host Mouse Cursor -- Always / Never / Smart,
+   where Smart is #218's rule (hide after 5 s still over the video). */
+IDD_PAGE_INPUT DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Mouse", -1, 6, 4, 368, 74
-    LTEXT           "Click the video to capture the mouse, and press the Windows key to "
-                    "release it. In seamless mode the program's pointer follows Windows' "
-                    "own, and no capture is needed.",
-                    -1, 16, 18, 348, 16
-    CONTROL         "&Seamless mouse (no capture needed)", IDC_S_SEAMLESS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 16, 40, 348, 10
-    LTEXT           "Se&nsitivity (100 = the mouse's own movement, unscaled):",
-                    -1, 16, 58, 192, 8
-    EDITTEXT        IDC_S_MSENS, 214, 56, 40, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "%", -1, 258, 58, 10, 8
+    GROUPBOX        "Mouse", -1, 6, 4, 392, 88
+    LTEXT           "Click the video to capture the mouse, and press the WIN key to release it. "
+                    "In seamless mode the program's pointer follows Windows' own pointer, and "
+                    "no capture is needed.",
+                    -1, 14, 16, 376, 24
+    CONTROL         "&Seamless Mouse (No Capture Needed)", IDC_S_SEAMLESS, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 14, 44, 376, 10
+    LTEXT           "Show &Host Mouse Cursor:", -1, 14, 59, 200, 8
+    COMBOBOX        IDC_S_HOSTCURSOR, 240, 57, 150, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Se&nsitivity (100 = the mouse's own movement, unscaled):", -1, 14, 75, 220, 8
+    EDITTEXT        IDC_S_MSENS, 240, 73, 132, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "%", -1, 376, 75, 14, 8
 
-    GROUPBOX        "Keyboard", -1, 6, 84, 368, 50
-    LTEXT           "&Layout:", -1, 16, 100, 192, 8
-    COMBOBOX        IDC_S_KBLAYOUT, 214, 98, 150, 80,
+    GROUPBOX        "Keyboard", -1, 6, 96, 392, 31
+    LTEXT           "&Layout:", -1, 14, 110, 28, 8
+    COMBOBOX        IDC_S_KBLAYOUT, 44, 108, 106, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "T&ypematic rate (key repeat):", -1, 16, 116, 192, 8
-    EDITTEXT        IDC_S_TYPEMATIC, 214, 114, 40, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "characters per second", -1, 258, 116, 106, 8
+    LTEXT           "&Typematic Rate:", -1, 170, 110, 56, 8
+    EDITTEXT        IDC_S_TYPEMATIC, 228, 108, 30, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "Characters Per Second", -1, 262, 110, 128, 8
 
-    GROUPBOX        "Joystick", -1, 6, 140, 368, 48
-    LTEXT           "&Type:", -1, 16, 156, 192, 8
-    COMBOBOX        IDC_S_JOYTYPE, 214, 154, 150, 80,
+    GROUPBOX        "Joysticks && Gamepads", -1, 6, 131, 392, 31
+    LTEXT           "T&ype:", -1, 14, 145, 22, 8
+    COMBOBOX        IDC_S_JOYTYPE, 38, 143, 192, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    CONTROL         "&Map to an XInput gamepad", IDC_S_JOYPAD, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 172, 348, 10
+    CONTROL         "&Map to an XInput Gamepad", IDC_S_JOYPAD, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 282, 144, 108, 10
 END
 
 /* ── PAGE: DRIVES ───────────────────────────────────────────────────────────────
-   The persistent form of what used to be the Drive menu's Mount... commands. There
-   is no Browse button yet here: typing a path works. */
-IDD_PAGE_DRIVES DIALOGEX 0, 0, 380, 250
+   s84 (user): the VDM already reaches the host's drives, so there is no drive C
+   folder and no boot choice. Each removable drive is the PHYSICAL one or a mounted
+   image; with no physical drive, main.c greys that radio and selects the image. A
+   blank image path is an empty drive. ⚠ Mounting: a floppy image reaches INT 13h
+   today; mounting it as DOS drive A:, and ISO images at all, are open issues. */
+IDD_PAGE_DRIVES DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Mounted media", -1, 6, 4, 368, 80
-    LTEXT           "Leave a field empty to leave that drive unmounted.", -1, 16, 18, 348, 8
-    LTEXT           "Drive &C: folder:", -1, 16, 34, 62, 8
-    EDITTEXT        IDC_S_DRIVEC, 80, 32, 284, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "Floppy &A: image:", -1, 16, 50, 62, 8
-    EDITTEXT        IDC_S_FLOPPYA, 80, 48, 284, 13, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "CD-ROM &D: image:", -1, 16, 66, 62, 8
-    EDITTEXT        IDC_S_CDROM, 80, 64, 284, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    GROUPBOX        "Floppy Drive", -1, 6, 4, 392, 58
+    LTEXT           "You can either use a physical floppy drive, or mount a floppy disk image.",
+                    -1, 14, 16, 376, 8
+    CONTROL         "Use The &Physical Floppy Drive", IDC_S_FLOPPY_PHYS, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 30, 200, 10
+    CONTROL         "&Mount Floppy Disk Image:", IDC_S_FLOPPY_IMG, "Button",
+                    BS_AUTORADIOBUTTON, 14, 44, 100, 10
+    EDITTEXT        IDC_S_FLOPPYA, 116, 42, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "&Browse...", IDC_S_FLOPPY_BROWSE, 340, 42, 50, 14, WS_TABSTOP
 
-    GROUPBOX        "Startup", -1, 6, 90, 368, 34
-    LTEXT           "Boot &from:", -1, 16, 106, 192, 8
-    COMBOBOX        IDC_S_BOOTFROM, 214, 104, 150, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    GROUPBOX        "CD-ROM Drive", -1, 6, 66, 392, 58
+    LTEXT           "You can either use a physical CD-ROM drive, or mount an ISO disk image.",
+                    -1, 14, 78, 376, 8
+    CONTROL         "Use The Physical &CD-ROM Drive", IDC_S_CD_PHYS, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 92, 200, 10
+    CONTROL         "Mount &ISO Disk Image:", IDC_S_CD_IMG, "Button",
+                    BS_AUTORADIOBUTTON, 14, 106, 100, 10
+    EDITTEXT        IDC_S_CDROM, 116, 104, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "B&rowse...", IDC_S_CD_BROWSE, 340, 104, 50, 14, WS_TABSTOP
 END

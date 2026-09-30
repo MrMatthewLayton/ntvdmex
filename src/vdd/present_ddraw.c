@@ -688,8 +688,17 @@ void present_ddraw_present(present_ddraw *pd)
     /* `back` is only non-NULL when the exclusive path actually set up, so this also
        covers "we asked for DirectDraw fullscreen and it refused" -- which must fall
        back to drawing something rather than to drawing nothing. */
-    if (pd->fullscreen && pd->dd && pd->back) fs_present(pd);
-    else                                      gdi_present(pd);
+    LARGE_INTEGER f, t0, t1;
+    int fs = (pd->fullscreen && pd->dd && pd->back);
+    QueryPerformanceCounter(&t0);
+    if (fs) fs_present(pd);
+    else    gdi_present(pd);
+    QueryPerformanceCounter(&t1);
+    if (QueryPerformanceFrequency(&f) && f.QuadPart) {                  /* s84 */
+        unsigned long us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000) / f.QuadPart);
+        if (fs) { pd->pt_fs_n++;  pd->pt_fs_us  += us; if (us > pd->pt_fs_max)  pd->pt_fs_max  = us; }
+        else    { pd->pt_win_n++; pd->pt_win_us += us; if (us > pd->pt_win_max) pd->pt_win_max = us; }
+    }
 }
 
 void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)

@@ -78,6 +78,13 @@ typedef struct present_ddraw {
        is 0 for the ordinary one-palette frame, which keeps the fast paths. */
     uint32_t snap_pal_base[256], snap_pal_split[256], snap_split_frame[256];
     uint16_t snap_split_row[256];
+    /* ── s84 (user): WHAT DOES DRAWING THE PICTURE COST? Measured before anyone builds a
+         windowed DirectDraw path: per present, split by path, in microseconds (QPC).
+         `win` is the GDI path (window, or borderless fullscreen), `fs` exclusive
+         DirectDraw. Includes the VSync wait when Force VSync is on (default off). */
+    unsigned long pt_win_n, pt_fs_n;
+    unsigned long long pt_win_us, pt_fs_us;
+    unsigned long pt_win_max, pt_fs_max;
     uint32_t snap_frame_no;
     int      snap_split;
     uint32_t rowpal[256]; int rowpal_y;   /* the palette resolved for one row       */

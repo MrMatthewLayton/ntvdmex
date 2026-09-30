@@ -24,24 +24,20 @@
 #define IDC_S_DEFAULTS        202   /* button:   restore every page's defaults        */
 #define IDC_S_APPLY           203   /* button:   commit without closing (s84 redesign) */
 
-/* s84 (the user's redesign): eight tabs, sized to fit an 800 x 600 screen. Memory
-   and Advanced folded into Machine; Window split out of Graphics and Sound Cards out
-   of Audio, reusing the two freed numbers. The ids are only numbers. */
+/* s84 (the user's redesign): six tabs in a 640 x 480 dialog -- MS-DOS, Machine, Video,
+   Audio, Input, Drives. The ids are only numbers, so the old names are kept. */
 #define IDD_PAGE_GENERAL      210   /* the "MS-DOS" tab                               */
 #define IDD_PAGE_CPU          211   /* the "Machine" tab: processor, memory, timing   */
-#define IDD_PAGE_DISPLAY      212   /* the "Graphics" tab: image, drawing             */
-#define IDD_PAGE_AUDIO        213   /* output, music                                  */
+#define IDD_PAGE_DISPLAY      212   /* the "Video" tab                                */
+#define IDD_PAGE_AUDIO        213
 #define IDD_PAGE_INPUT        214
 #define IDD_PAGE_DRIVES       215
-#define IDD_PAGE_WINDOW       216   /* window size, fullscreen (was Memory's number)  */
-#define IDD_PAGE_CARDS        217   /* "Sound Cards": SB, GUS, MPU, speaker           */
-#define NTVDMEX_PAGE_COUNT      8
+#define NTVDMEX_PAGE_COUNT      6
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */
 #define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
 #define IDC_S_DOSVER_NOW      294   /* static:   the version THIS session reports (s81) */
-#define IDC_S_DOSVER_WHY      295   /* static:   why the session differs, or "same"   */
 #define IDC_S_BEHAVE          293   /* combo:    #167 behave like NTVDM / MS-DOS 6.22  */
 /* #203: which COMMAND.COM the DOS prompt runs. The radios are not table rows -- the
    path edit IS the setting (empty = Windows XP's own) and the radios show that. */
@@ -109,7 +105,7 @@
 /* 292 was IDC_S_TANDY (Tandy / CMS, removed s80); reused s84 for IDC_S_AUDIOAPI. */
 
 /* ── Input ────────────────────────────────────────────────────────────────────── */
-#define IDC_S_HOSTCURSOR      310   /* checkbox: HIDE the host arrow over the video   */
+#define IDC_S_HOSTCURSOR      310   /* combo:    s84 show host cursor Always/Never/Smart */
 #define IDC_S_SEAMLESS        311
 #define IDC_S_MSENS           312   /* edit:     mouse sensitivity, percent           */
 #define IDC_S_KBLAYOUT        313
@@ -118,9 +114,15 @@
 #define IDC_S_JOYPAD          316
 
 /* ── Drives ───────────────────────────────────────────────────────────────────── */
-#define IDC_S_DRIVEC          330
-#define IDC_S_FLOPPYA         331
-#define IDC_S_CDROM           332
-#define IDC_S_BOOTFROM        333
+/* s84 (user): physical drive, or a mounted image. The PHYS radio is the table row. */
+#define IDC_S_FLOPPY_PHYS     330   /* radio:    use the physical floppy drive        */
+#define IDC_S_FLOPPYA         331   /* edit:     the floppy image path                */
+#define IDC_S_CDROM           332   /* edit:     the ISO image path                   */
+#define IDC_S_FLOPPY_IMG      333   /* radio:    mount a floppy disk image            */
+#define IDC_S_FLOPPY_BROWSE   334
+#define IDC_S_CD_PHYS         335   /* radio:    use the physical CD-ROM drive        */
+#define IDC_S_CD_IMG          336   /* radio:    mount an ISO disk image              */
+#define IDC_S_CD_BROWSE       337
+#define IDC_S_SF_BROWSE       338   /* button:   SoundFont Browse...                  */
 
 #endif
