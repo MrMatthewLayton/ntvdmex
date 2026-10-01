@@ -1,14 +1,31 @@
 # The full probe sweep, and its triage
 
-> **Carried over from `docs/PARITY.md` on 2026-09-23**, which is now retired — this is
-> the same measured data in the inventory's home. See
+> **Carried over from `docs/PARITY.md` on 2026-09-23**, which is now retired. See
 > [`README.md`](README.md) for the method and the status vocabulary.
 >
-> ⚠ **The `state` column below is still PARITY's four-state vocabulary**
-> (`missing` / `guessed` / `implemented` / `verified`). Re-marking it against the code
-> in IMPL / PART / STORE / MISS / N-A, with a `file:line` per row, is owed — and is the
-> point of doing it: a row that reads `implemented` here may well be **PART**, which is
-> the state that returns a plausible wrong answer.
+> **This file is a triage log, not a unit inventory.** It has no per-unit status column
+> to re-mark: its rows are *probe disagreements*, and each one belongs to a surface whose
+> inventory now carries the IMPL / PART / STORE / MISS mark with a `file:line`. The table
+> directly below (re-checked against the code 2026-10-01) says where each open row lives
+> and what it is marked there. The sections after it are the measured history and are
+> kept as written, with two stale passages corrected in place.
+
+## Where every open row lives now (2026-10-01)
+
+| Probe row | Inventory | Unit, as marked there |
+|---|---|---|
+| `p_tsr tsr.paras.still.held` (`0x26` vs `0x21`) | [dos-services.md](dos-services.md) §2 `31h` | **IMPL**, with this row open and uninvestigated |
+| `p_xms xms.08.queryfree` BH | [xms-ems.md](xms-ems.md) §`08h` | **IMPL**; BH is now a "behave like" setting (#167): `AAh` as 6.22/PCem, poison as stock NTVDM |
+| `p_sysvar` 6 BUF rows | [dos-services.md](dos-services.md) §3 `52h` | **PART** — SFT/CDS/DPB chains are stubs (`dos_int21.c:2163-2179`) |
+| `p_vgamem` mode 13h → unchained | [vga.md](vga.md) | owned there; not re-adjudicated here |
+| `p_kbc kbc.outport.d0` (`01CF` vs `0103`) | [kbc.md](kbc.md) | bits 0–1 agree; PCem's extra bits are one oracle's answer |
+| `p_dma dma.status.idle` (`0400` vs `0000`) | [dma.md](dma.md); [dos-services.md](dos-services.md) §6 | the 8237 latch is **IMPL**; INT 13h does not drive the FDC's DMA path (**PART**) |
+| `p_fdc alt.3f6` (`0050` vs `00FF`) | README hardware table, IDE/ATA row | no inventory yet — the ATA alternate status register is unclaimed |
+| `p_fdc dumpreg` byte 0 | [fdc.md](fdc.md); [dos-services.md](dos-services.md) §6 | INT 13h never moves the FDC's head (**PART**) |
+| `p_lpt` ×5 (`int11`, `int17.00` ×2, `int14.03`, `int14.02`) | [bios-misc.md](bios-misc.md) §1, §5, §6 | **IMPL**; verification *blocked on PCem* |
+| `p_plan12 int10.set.mode12` | [video-bios.md](video-bios.md) §1 `00h` | ✅ settled on PCem: AL = `20h` mode flag (`vdd_video.c:1542`) |
+| `p_kbd 16.01.enh`, `p_video bda.crtc` (`0065h`) | [keyboard.md](keyboard.md) §1; [video-bios.md](video-bios.md) §6 | ✅ settled on PCem in #188 |
+| `p_ver int21.30` | [dos-services.md](dos-services.md) §2 `30h` | **IMPL**; the row tests a setting — see below |
 
 > ## ⛔⛔⛔ 2026-09-24 — everything below this line was scored by an instrument that
 > ## had stopped asking ten of its questions
@@ -113,12 +130,13 @@ the other two probes.
 at the top of this file says the QEMU oracle is SeaBIOS, *a rewrite*. It joins
 `16.01.enh` and `bda.crtc` as **blocked on PCem**, not as a defect.
 
-### `p_disk` — a real gap the probe cannot fairly measure
-We answer `AH=80h` (timeout) and leave **BX/CX/DX holding the probe's poison**, i.e.
-INT 13h is unimplemented rather than answering. But the probe targets **floppy drive
-0**, and the rig's A: is empty (`~A` in the boot line), where "not ready" is a
-defensible answer. ▶ Needs a probe aimed at a drive the machine actually has before
-any of it can be called a defect.
+### `p_disk` — ~~a real gap the probe cannot fairly measure~~ → not a gap (corrected)
+~~We answer `AH=80h` (timeout) and leave BX/CX/DX holding the probe's poison, i.e. INT 13h
+is unimplemented rather than answering.~~ ⚠ **Corrected the same session:** INT 13h was
+implemented all along against "a drive is an image file or it is absent"; with no
+`cfg\FLOPPY.IMG` it correctly said *not ready*, and a failed call does not write the
+registers. Given the image, all 18 rows agree — [dos-services.md](dos-services.md) §6 and
+its *Measured history*.
 
 ---
 
@@ -135,7 +153,7 @@ and only the first is work on NTVDMEX.
 | `xms.08.queryfree` BH | oracle `0xAA`, ours leaves poison | BH is undefined for `AH=08h`; the oracle writes something deliberate. Undecided — do not "fix" without provoking it. |
 | `p_tsr` `tsr.paras.still.held` | oracle `0x26`, ours `0x21` | The block a TSR still holds. 5 paragraphs apart; the free-memory rows beside it are abstained, this one is not. Uninvestigated. |
 | `p_sysvar` 6 BUF rows | `sysvars.sft0` comes back as **`EEEEEEEE` — the probe's own poison** | DOS internals (List of Lists, DPB, SFT, CDS, NUL). Poison means *we never wrote it*. `cds0`/`cds2` start correctly (`"A:\"`, `"C:\"`) and then diverge. krnl386 walks the SFT, so this is WOW-relevant. |
-| `p_disk` INT 13h | `AH=80h` + poison in BX/CX/DX | Unimplemented rather than answering — but the probe targets **floppy drive 0** and the rig's A: is empty, where "not ready" is defensible. **Needs a probe aimed at a drive the machine has.** |
+| ~~`p_disk` INT 13h~~ | ~~`AH=80h` + poison in BX/CX/DX~~ | ✅ **Not a gap** — no image was mounted; with `cfg\FLOPPY.IMG` all 18 rows agree ([dos-services.md](dos-services.md) §6). |
 
 ## 2. BLOCKED ON PCem — measured against a BIOS that is a REIMPLEMENTATION
 
@@ -192,7 +210,7 @@ every probe that had stopped asking was silently improving the number.
 |---|---|---|
 | `p_tsr` | paras-still-held | long-standing, recorded |
 | `p_xms` | `xms.08` BH | **undefined by the spec** — nothing to match |
-| `p_vgamem` | the one `13h`→unchained case | mode-Y exactness is **PARKED**: `vdd_video.c:1991` has no address generator, and A0000 is mapped RAM with no write hook |
+| `p_vgamem` | the one `13h`→unchained case | mode-Y exactness was **PARKED** at the time (the LINEAR8 path had no address generator). ⚠ The `vdd_video.c:1991` citation is stale; [vga.md](vga.md) owns the current state |
 | `p_kbc` | `kbc.outport.d0` `01CF` vs `0103` | bits 0 and 1 — **the two with a meaning to software** — match. PCem additionally sets 2, 3, 6, 7 (keyboard clock/data, two undefined). **One oracle is not a pass**; recorded rather than copied |
 | `p_dma` | `dma.status.idle` `0400` vs `0000` | channel 2's **TC**, latched by the floppy read that loaded the probe. ⚠ Sharper than it was: we now *have* an FDC, so this is attributable to its **DMA data path** (inventory step 1) rather than to the 8237A model |
 | `p_fdc` | `alt.3f6` `0050` vs `00FF` | **the ATA alternate status register — not the FDC's.** Filed against the IDE/ATA surface; claiming the port would turn the row green by taking somebody else's register |

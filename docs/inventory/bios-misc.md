@@ -1,30 +1,133 @@
-# Misc BIOS — INT 11h, 12h, 1Ah, 1Ch
+# Inventory — system BIOS services: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch
 
-> **Carried over from `docs/PARITY.md` on 2026-09-23**, which is now retired — this is
-> the same measured data in the inventory's home. See
-> [`README.md`](README.md) for the method and the status vocabulary.
->
-> ⚠ **The `state` column below is still PARITY's four-state vocabulary**
-> (`missing` / `guessed` / `implemented` / `verified`). Re-marking it against the code
-> in IMPL / PART / STORE / MISS / N-A, with a `file:line` per row, is owed — and is the
-> point of doing it: a row that reads `implemented` here may well be **PART**, which is
-> the state that returns a plausible wrong answer.
+**Spec:** IBM PC/AT and PS/2 BIOS Technical References; Ralf Brown's Interrupt List.
+⚠ **Not held in the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md). The tick and RTC
+hardware under these calls is [pit.md](pit.md) and [rtc.md](rtc.md); the UART and printer
+port are [uart.md](uart.md). **INT 13h/25h/26h** are in [dos-services.md](dos-services.md)
+§4; **INT 10h** is [video-bios.md](video-bios.md); **INT 16h/09h** is
+[keyboard.md](keyboard.md); **INT 33h** is [mouse.md](mouse.md).
+**Our implementation:** the V86 BIOS arm in `src/host/main.c` (≈`:29037-29383`, *"BIOS
+services: INT 11h/12h/13h/14h/15h/17h/25h/26h"*), its PM twins (≈`:22263-22404`), INT 08h/1Ah
+in `src/vdd/vdd_pit.c` (`:517-599`), INT 14h in `src/vdd/vdd_comm.c` (`:224-271`).
+**Probes:** `p_bios.asm`, `p_int15.asm`, `p_lpt.asm`. **Off-VM:** `pit_test.c` (T7, T8,
+T16), `comm_test.c`.
+**Marked:** 2026-10-01, **from the code**. Carried over from `docs/PARITY.md` (retired
+2026-09-23) and re-marked; this file now also covers INT 08h, 14h, 15h and 17h, which
+had no inventory.
 
-# Misc BIOS — INT 11h, 12h, 1Ah, 1Ch (`p_bios.asm`)
+⚠ **Verification.** `p_bios` was compared against 6.22 under QEMU, i.e. **SeaBIOS** — a
+reimplementation, so those rows are **provisional**. `p_int15` was asked of PCem's real
+AMI 486 BIOS (s81, #54) and those rows are **oracle**. `p_lpt`'s five rows are recorded in
+[sweep.md](sweep.md) as *blocked on PCem*.
 
-| item | state | notes |
-|---|---|---|
-| `INT 12h` conventional memory | verified | `027Fh` = 639 KB, same as the oracle |
-| `INT 1Ah AH=00h` tick count advances | verified | |
-| `INT 1Ah AH=00h` midnight flag | verified | `0`, and cleared by the read |
-| **`INT 1Ah AH=02h` RTC time in BCD** | verified | **was unimplemented** — see below |
-| **`INT 1Ah AH=04h` RTC date in BCD** | verified | **was unimplemented** |
-| ★ **`INT 1Ch` is called, once per tick, never re-entered** | verified | the vector a game actually hooks |
-| `INT 11h` equipment word | abstained | describes the machine; ours says 2 serial ports because 2 are fitted. Must stay consistent with `vdd_comm_fitted()` |
-| `INT 1Ah AH=03h/05h` set time/date | **missing, deliberately** | we cannot move the host clock, and accepting with `CF=0` would be the "runs but lies" shape — `TIME` would report success and change nothing. Unmeasured on the reference too |
-| `INT 1Ah AH=06h/07h` alarm | missing | never asked by a guest we run |
+---
 
-### The gap this found and closed (s72)
+## Headline
+
+**The tick, the RTC read, the equipment word and memory size are right and measured.**
+INT 15h is where the surface thins: `AH=88h` reports the extended memory that XMS also owns, and the post-1994 memory calls
+(`E801h`, `E820h`) and A20 calls (`2400h`–`2403h`) are refused. INT 17h ignores `DX`, so
+every printer number is LPT1. (#206, merged while this was being marked, made `AH=86h` and
+`83h` really wait in V86 and answered `4Fh`; the PM arm still returns `86h` at once.)
+
+| Group | Units | IMPL | PART | STORE | MISS | N/A |
+|---|---|---|---|---|---|---|
+| §1 INT 11h / 12h | 2 | 2 | — | — | — | — |
+| §2 INT 1Ah | 7 | 4 | — | — | 2 | 1 |
+| §3 INT 08h / INT 1Ch | 4 | 3 | — | — | 1 | — |
+| §4 INT 15h | 17 | 2 | 5 | — | 8 | 2 |
+| §5 INT 14h | 5 | 4 | — | — | 1 | — |
+| §6 INT 17h | 4 | 2 | 1 | — | 1 | — |
+| **Total** | **39** | **17** | **6** | **—** | **13** | **3** |
+
+---
+
+## 1. INT 11h and INT 12h
+
+| Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|
+| INT 11h equipment word | **IMPL** | `bios_equipment_word` (`main.c:2470-2494`): floppy, 80x25 colour, one LPT, the serial count **from the UART VDD**, bit 1 from the `Fpu` setting, bit 12 from the joystick setting. V86 `:29054-29059`; PM twin uses the same function (`:22335-22348`) | abstained (`int11.equip`: it describes the machine); `p_lpt int11.equipment` blocked on PCem |
+| INT 12h conventional memory | **IMPL** | `main.c:29060-29068`, derived from `DOS_MEM_TOP` = 639 KB. ⚠ The comment says the top 1 KB is the EBDA, but `0040:000E` is written `0` (`main.c:27908`), INT 15h `C1h` answers CF=1 and the `C0h` table says *no EBDA* — three answers that there is none. See the BDA/EBDA row in the README | provisional (`int12.memk` = `027Fh`) |
+
+## 2. INT 1Ah
+
+`pit_int1a`, `vdd_pit.c:560-599`; stub `DOS_HDLR_SEG:003C` (`main.c:27022`), V86 arm
+`main.c:29384-29393`, PM arm `:22263-22274`.
+
+| AH | Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|---|
+| `00h` | read tick count, midnight flag | **IMPL** | `:566-572`; AL = flag, cleared by the read | provisional (`int1a.00.midnight`, `.advances`); pit_test T7 |
+| `01h` | set tick count | **IMPL** | `:573-577` | pit_test T8 |
+| `02h` | read RTC time, BCD | **IMPL** | `:578-585`; host clock via `rtc_now` (`main.c:13185`, local time). DL (DST) = 0. No clock installed → not answered | provisional (`int1a.02.isbcd`); pit_test T16 |
+| `04h` | read RTC date, BCD | **IMPL** | `:586-591` | provisional (`int1a.04.isbcd`) |
+| `03h`/`05h` | set RTC time / date | **N/A** | `:592-597`: deliberately not answered — we cannot move the host clock, and `CF=0` with no effect would be the "runs but lies" shape. Same decision as the CMOS clock registers (`vdd_cmos.c:202-206`). ⚠ `AH=01h` *does* keep a guest-local tick, so a per-VDM offset is possible | unmeasured on any oracle |
+| `06h`/`07h` | set / reset RTC alarm | **MISS** | `default:` — registers and CF as passed | — |
+| other | unknown function | **MISS** | `default:` leaves **CF as the caller had it** rather than setting it, so an unsupported call can read as success | — |
+
+## 3. INT 08h and INT 1Ch
+
+| Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|
+| INT 08h: tick `0040:006C` += 1, midnight rollover into `0040:0070` | **IMPL** | `pit_int08` `vdd_pit.c:526-534`; stub `BOP 08h; INT 1Ch; IRET` (`main.c:25783`), arm `:29026-29035`; PM `:22263-22274` | pit_test |
+| INT 08h ends with the EOI | **IMPL** | `vdd_pic_eoi(&g_pic, 0)` `main.c:29031`, PM `:22269` | by hand (a 30 s run once got exactly one tick without it) |
+| INT 08h counts down the diskette motor (`0040:0040`) and turns it off | **MISS** | no writer; the FDC exists now ([fdc.md](fdc.md)), so this is a real gap, not a missing device | — |
+| INT 1Ch: called once per tick, default `IRET` | **IMPL** | `bop1c` `main.c:25784`, planted `:26994` | provisional (`int1c.called`, `.perTick`, `.nested`) |
+
+## 4. INT 15h
+
+V86 arm `main.c:29069-29214`; PM arm `:22349-22404`. Anything not listed: `AH=86h`, CF=1,
+logged as `INT15 UNIMPL` (`:29193-29208`).
+
+| AH | Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|---|
+| `24h` | A20 gate: disable / enable / status / support (`2400h`–`2403h`) | **MISS** | refused. The A20 flag already exists and is shared by the 8042, port `92h` and XMS (`vdd_input_a20_*`, `vdd_input.c:491-494`) | — |
+| `4Fh` | keyboard intercept (a hook the BIOS calls) | **IMPL** | #206: an explicit default handler, CF=1 with AL untouched — "process this key" (`main.c:29139-29143`). That our INT 09h never *calls* it is [keyboard.md](keyboard.md) §3 | **oracle** (`p_int15w`, 6.22 + DOSBox-X; PCem's AMI answers `AH=86h` and is recorded as such in `oracle-rules.json`) |
+| `80h`–`82h` | device open / close / program terminate (hooks) | **MISS** | refused with CF=1 | — |
+| `83h` | event wait (set bit 7 of `ES:BX` after CX:DX µs; `AL=01h` cancels) | **PART** | #206, V86: `main.c:29118-29138`; the BDA mirrors it (`0040:0098`–`00A0`); the flag is posted from the 1 kHz pacer (`i15_event_poll`, `main.c:5639-5650`); a second request while one runs is refused `AH=83h` CF=1. **PM refuses it** (`:22387-22391`) | **oracle** (`p_int15w`: 6.22, DOSBox-X, PCem and ours agree, #206) |
+| `84h` | joystick | **IMPL** | `:29144-29181`, from the gameport VDD's sample; no stick → `AH=86h` CF=1 | untested ([gameport.md](gameport.md)) |
+| `85h` | SysReq (a hook the BIOS calls) | **MISS** | never called (keyboard.md §3) | — |
+| `86h` | wait CX:DX microseconds | **PART** | #206, V86: `main.c:29096-29117` re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. ⛔ **The PM arm still returns at once**, CF=0 (`:22385-22386`) — a DPMI client that waits with `86h` waits zero | **oracle** for V86 (`p_int15w`, four hosts, #206) |
+| `87h` | move extended memory block | **PART** | V86 **IMPL** (`int15_move_block` `:8205`, arm `:29187-29192`; success = AH=0, CF=0, ZF=1); **PM refuses** it (`:22380`) | **oracle** for the V86 round trip (`p_int15` on PCem) |
+| `88h` | extended memory size | **PART** | `:29071-29095`: always `3C00h` (15 MB). ⚠ **The same memory is also handed out by XMS**; a real machine with HIMEM reports 0 here. Recorded in the code and deliberately not changed | untested |
+| `89h` | switch to protected mode | **N/A** | a V86 guest cannot be handed the CPU; DPMI is the route | — |
+| `90h`/`91h` | device busy / interrupt complete (hooks) | **MISS** | never called by our INT 13h/16h waits | — |
+| `C0h` | system configuration table | **PART** | V86 **IMPL**: `ES:BX` → `DOS_CTAB_SEG:DOS_SYSCONF_OFF`, model bytes `FC 01 00` from PCem's AMI, feature bits set only where true (`:27516-27533`, arm `:29182-29186`). **PM refuses it**, knowingly (`:22367-22380`) | **oracle** (`p_int15` C0h on PCem) |
+| `C1h` | EBDA segment | **MISS** | CF=1 — matches the AMI under PCem, but contradicts INT 12h's 639 KB (§1) | **oracle** (`p_int15`) |
+| `C2h` | PS/2 pointing device | **MISS** | [mouse.md](mouse.md) §3 | — |
+| `C3h`/`C4h` | watchdog / POS (MCA) | **N/A** | Micro Channel only | — |
+| `E801h` | extended memory, large configurations | **MISS** | refused; DOS extenders and newer HIMEMs ask this before `88h` | — |
+| `E820h` | system memory map | **MISS** | refused | — |
+
+## 5. INT 14h
+
+`comm_int14`, `vdd_comm.c:224-271`; the V86 arm only delivers it (`main.c:29215-29238`).
+The BIOS and the UART registers are one device.
+
+| AH | Unit | Status | Where | Verification |
+|---|---|---|---|---|
+| `00h` | initialise (baud/parity/stop/length → divisor, LCR) | **IMPL** | `:238-249` | comm_test |
+| `01h` | send AL | **IMPL** | `:250-255`; loopback or the host sink | comm_test |
+| `02h` | receive | **IMPL** | `:256-263`; `AH=80h` timeout when empty | blocked on PCem (`int14.02.recv.timeout`) |
+| `03h` | status | **IMPL** | `:264-266` | blocked on PCem (`int14.03.status`) |
+| `04h`/`05h` | extended initialise / modem control (PS/2) | **MISS** | `default:` `AX=8000h` (`:267-269`) | — |
+
+## 6. INT 17h
+
+V86 arm `main.c:29239-29271`; one printer, spooled to a file and shared with the `378h`
+port model (`lpt_spool_put`).
+
+| AH | Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|---|
+| `00h` | print AL | **IMPL** | `:29247-29263`; `90h` ready, or `28h` (I/O error + out of paper) when the byte went nowhere | blocked on PCem (`int17.00.print` ×2) |
+| `01h`/`02h` | initialise / status | **IMPL** | `:29264-29267` | — |
+| `DX` | printer number | **PART** | ⛔ never read — `DX=1`/`2` (LPT2/LPT3, not fitted) is served as LPT1 instead of answering *timeout* | — |
+| other | unknown function | **MISS** | answers `90h` "ready", CF=0 (`:29268-29270`) — success for a call that does nothing | — |
+
+---
+
+## Measured history (kept)
+
+### The gap the probe found and closed (s72)
 
 **`INT 1Ah` AH=02h and AH=04h fell into `default:`** — a comment reading "RTC subfns
 not modelled yet" — which leaves every register exactly as the caller passed it. The
@@ -33,25 +136,28 @@ oracle answers with the time and date. Guests use these for file timestamps, sav
 dates and as a seed. **BCD is the contract**: a guest reads them as BCD because that
 is what a BIOS returns, so a binary 34 would be read as 22.
 
-The clock is now **host-supplied** through a `rtc_now` hook on the PIT VDD rather than
+The clock is **host-supplied** through a `rtc_now` hook on the PIT VDD rather than
 `<time.h>` — which the XP-targeting CRT does not link anyway, and which would have put
 libc time inside a portable VDD. With no clock installed the call is still **not
-answered**: fabricating a date is worse than silence, because a guest would stamp
-every file with it. The battery injects a fixed instant so the BCD conversion is
-pinned rather than read off the wall.
+answered**: fabricating a date is worse than silence.
 
-### ⚠ A second harness artifact, same shape as the video one
+### ⚠ A harness artefact
 
 `int1a.00.advances` reported **"the clock does not advance"** on the rig and nowhere
 else. It was the probe: a 400-unit spin is longer than a tick on the emulated 486 and
-*shorter* than one on the rig, so the probe gave up before the counter moved. Raising
-the bound to the one every other wait uses made it agree. ▶ Same lesson as the cursor
-rows: **when a row fails on one host only, check the probe's own assumptions about
-time before you touch the host.**
-
-▶ And a third, in the battery rather than a probe: the first `int1a/02` check asserted
-`0x1729` for 23:41, which is simply wrong arithmetic — BCD 23:41 is `0x2341`. It
-failed on its first run, which is exactly why the expectation is written down and
+*shorter* than one on the rig, so the probe gave up before the counter moved. ▶ **When a
+row fails on one host only, check the probe's own assumptions about time before you
+touch the host.** And the first `int1a/02` off-VM check asserted `0x1729` for 23:41 —
+BCD 23:41 is `0x2341`. It failed on its first run, which is why expectations are
 executed rather than reasoned about.
 
----
+## What to fix, in order
+
+1. INT 15h `86h`/`83h` from protected mode: the PM arm still answers `86h` at once and
+   refuses `83h`; give it #206's V86 behaviour.
+2. INT 15h `2400h`–`2403h` on the shared A20 flag; `E801h`/`E820h` from the same
+   numbers `88h` and XMS use.
+3. INT 17h: honour `DX`; refuse unknown functions.
+4. Settle the EBDA question (INT 12h vs `C1h` vs `0040:000E`), and decide `88h` vs XMS
+   deliberately, with Doom and the batteries re-gated.
+5. INT 08h's diskette-motor countdown, now that the FDC exists.

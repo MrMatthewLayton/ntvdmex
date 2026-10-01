@@ -8,9 +8,11 @@ licence forbids redistribution). `§n`/`p.n` below are the guide's.
 `src/vdd/vdd_audio.c` (`vdd_audio_set_emu8k`); off-VM battery `tools/dostest/emu8k_test.c`
 (58 checks). **Clean-room:** written from the guide's prose. No other emulator's EMU8000 was
 read.
-**Marked:** 2026-09-29, **from the code**. ⚠ **The chip is not on the host's bus yet.**
-`main.c` does not register it, and `BLASTER` carries no `E`. Every mark below describes the
-device model; the host steps are at the end.
+**Marked:** 2026-09-29, **from the code**. **Host wiring re-checked 2026-10-01:** the chip
+*is* on the bus now (`e0d54b8`) — fitted when the SB model is AWE32 (`main.c:27952-27960`),
+reset on the host's reset path (`main.c:8272`), mixed (`main.c:27975`), and advertised as
+`BLASTER` `E` (`main.c:11036`, `dos_env.h:117`). Every mark below describes the device
+model; the host steps still open are at the end.
 
 **Verification:** everything is **untested** in the README's sense. It is exercised off-VM
 against the guide's own numbers and has never been compared with an oracle. PCem and
@@ -129,7 +131,12 @@ what is in it. They use **preset tables that already know the ROM's addresses**:
   (4) voice stealing across the 32 channels. That is a synth built on this chip, not the chip
   itself, so it is not implemented here.
 
-## What the host must add (not done: `main.c` is untouched)
+## What the host must add — status 2026-10-01
+
+✅ Steps 1, 2, 3, 5, 6 and 7 are done (`e0d54b8`; citations in the header). ⛔ **Still open:**
+step 4 (no `g_emu8k.clock` is fitted, so WC counts in whole mix chunks) and step 8 (there is
+no STAGE2 diagnostics line for the chip). The original list follows unchanged.
+
 
 1. **Decide the card at startup**, alongside `g_gus_on` (`main.c` near `:25086`):
    `g_awe_on = (g_set.v[SET_SBMODEL] == 1)`. Index 1 is `"AWE32"` in `"SB16|AWE32|SB Pro"`
