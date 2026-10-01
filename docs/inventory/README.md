@@ -166,7 +166,7 @@ Each surface gets two documents, doing two different jobs:
 | XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units: 65 IMPL, 17 PART, 88 MISS (EMS 4.0 subfunctions, VCPI), 17 N/A (s84) | — |
 | **DPMI 1.0** | DPMI 1.0 spec | — **still to write**; the code is `src/vdm/dpmi.c` and the `INT 31h` arms in `main.c` | — |
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | — still to write | — |
-| MSCDEX | MSCDEX spec | — still to write; INT 2Fh `1500h` is passed through, so it reads "no CD drives" only to a caller that zeroes `BX` first ([dos-services.md](dos-services.md) §5) | — |
+| MSCDEX + CD audio | MSCDEX spec | [mscdex.md](mscdex.md) — 26 units, 22 MISS: data CDs read as files, but `1500h` is passed through (the answer is the caller's own `BX`) and there is no CD audio (2026-10-01) | — |
 | Executable formats: MZ, LE, NE, PE | MS format specs | — still to write (`ne_test` exists) | — |
 | **Win16 KERNEL / USER / GDI** | Win3.1 SDK; Wine; ReactOS | [win16.md](win16.md) — **deterministic tests now exist**; `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
 | WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | `docs/research/wow32-call-surface.md` | — |
