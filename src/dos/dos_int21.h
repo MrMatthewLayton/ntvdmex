@@ -100,6 +100,12 @@ typedef struct {
        not a continuation. See the handler. */
     uint16_t line_seg, line_off;
     int      line_n, line_active;
+    /* #251: AH=3Fh FROM THE CONSOLE IS DOS's OWN LINE EDITOR, and unlike AH=0Ah its
+       line lives on DOS's side: it is read whole (127 characters + CR LF) and handed
+       out across as many reads as the caller makes. con_n counts what is typed while
+       collecting; con_len/con_pos are what is left to hand out. */
+    BYTE     con_line[130];
+    int      con_n, con_len, con_pos, con_collecting;
     int      trace_all;        /* log EVERY INT 21h call -- see the trace at entry */
     DWORD    trace_n;          /* how many have been printed; capped at DOS_TRACE_MAX */
     /* THE CURRENT DRIVE WHEN WIN32 CANNOT STAND ON IT. -1 = the current drive is the

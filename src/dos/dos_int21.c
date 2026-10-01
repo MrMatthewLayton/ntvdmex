@@ -894,6 +894,41 @@ int dos_int21(dos_machine_t *m)
             tp = zput(tp, " first="); tp = zdump(tp, (const BYTE *)b, (rd >= 8) ? 8 : 0);
             tp = zput(tp, "\r\n");
         }
+        else if (h == 0 && dos_fh_is_device((void *const *)m->fh, m->std_open, h)) {
+            /* ── #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT. ──────────
+                 This answered 0 bytes -- end of file -- so any program reading its
+                 input through handle 0 (C's gets/scanf/fgets do) saw an empty stream
+                 and gave up. DOS's console read is cooked: it echoes, honours
+                 backspace, ends at Enter, and returns the line WITH CR LF; a line
+                 longer than the caller asked for is handed out over later reads.
+                 Collected across retries like AH=0Ah, so the guest keeps running
+                 (and taking its interrupts) while it waits for keys. */
+            volatile BYTE *bv = (volatile BYTE *)b;
+            int c;
+            DWORD n = 0;
+            if (m->con_pos >= m->con_len) {             /* nothing pending: collect a line */
+                if (!m->con_collecting) { m->con_collecting = 1; m->con_n = 0; }
+                for (;;) {
+                    c = m->coninnb ? m->coninnb(m->cinctx) : 0x0D;
+                    if (c < 0) { m->retry = 1; break; }
+                    if (c == 0x0D) break;
+                    if (c == 0x08) {
+                        if (m->con_n > 0) { --m->con_n; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+                        continue;
+                    }
+                    if (c == 0x00) continue;            /* extended key: no ASCII */
+                    if (m->con_n >= 127) continue;      /* full: only Enter ends it */
+                    m->con_line[m->con_n++] = (BYTE)c; OUTC(c);
+                }
+                if (m->retry) goto read_done;
+                m->con_line[m->con_n] = 0x0D; m->con_line[m->con_n + 1] = 0x0A;
+                m->con_len = m->con_n + 2; m->con_pos = 0; m->con_collecting = 0;
+                OUTC(0x0D); OUTC(0x0A);
+            }
+            while (n < cnt && m->con_pos < m->con_len) bv[n++] = m->con_line[m->con_pos++];
+            SETAX(n); OKCF();
+        read_done: ;
+        }
         else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
              { SETAX(0); OKCF(); }              /* an unredirected device: EOF for now */
         else { SETAX(6); ERRCF(); }
