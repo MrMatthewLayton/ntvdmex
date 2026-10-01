@@ -362,6 +362,47 @@ int main(void)
         CHECK(g_flat[0x32000] == 0x00 && g_flat[0x32009] == 0x00 && g_flat[0x3200A] == 0x80,
               "record with 49h bit 7: silence is 00h (signed), 10 bytes");
         (void)rreg8(0x49);
+
+        /* ---- T16b: #176 -- the 8237's CONTROLLER DISABLE holds the card exactly as the
+           mask does, and the waiting DREQ shows in the 8237's status bits 7:4 ---- */
+        {   uint32_t s;
+            for (i = 0; i < 16; ++i) g_flat[0x33000 + i] = (uint8_t)(0x50 + i);
+            memset(g_dram + 0x6000, 0, 16);
+            DMAW(0x08, 0x04);                                  /* command: disable ctrl 1 */
+            DMAW(0x0C, 0); DMAW(0x02, 0x00); DMAW(0x02, 0x30); DMAW(0x03, 15); DMAW(0x03, 0);
+            DMAW(0x83, 0x03);                                  /* ch 1 -> 33000h */
+            DMAW(0x0B, 0x48 | 0x01);                           /* single, read, ch 1 */
+            DMAW(0x0A, 0x01);                                  /* UNMASKED -- only disabled */
+            reg16(0x42, 0x6000 >> 4);
+            reg8(0x41, 0x01);                                  /* go, PC -> card */
+            vdd_gus_render(&gus, out, 1);
+            CHECK(gus.dma_waiting && g_dram[0x6000] == 0, "8237 disabled: the upload holds DRQ and waits");
+            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            CHECK((s & 0x20) != 0, "8237 status 08h: DRQ1 pending while the controller refuses it");
+            DMAW(0x08, 0x00);                                  /* re-enable */
+            vdd_gus_render(&gus, out, 1);
+            CHECK(!gus.dma_waiting && g_dram[0x6000] == 0x50 && g_dram[0x600F] == 0x5F,
+                  "8237 re-enabled: the upload runs");
+            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            CHECK((s & 0xF0) == 0 && (s & 0x02), "8237 status 08h: DRQ1 gone, TC1 latched");
+            (void)rreg8(0x41);
+
+            /* the ADC: sampling on, controller disabled -> no byte, DRQ3 pending */
+            memset(g_flat + 0x32000, 0xEE, 16);
+            DMAW(0x0C, 0); DMAW(0x06, 0x00); DMAW(0x06, 0x20); DMAW(0x07, 7); DMAW(0x07, 0);
+            DMAW(0x0A, 0x03);
+            DMAW(0x08, 0x04);
+            reg8(0x49, 0x01);                                  /* go, mono */
+            vdd_gus_render(&gus, out, 200);
+            CHECK(g_flat[0x32000] == 0xEE, "8237 disabled: the ADC moves no byte");
+            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            CHECK((s & 0x80) != 0, "8237 status 08h: DRQ3 pending for the record channel");
+            DMAW(0x08, 0x00);
+            vdd_gus_render(&gus, out, 200);
+            CHECK(g_flat[0x32000] == 0x80 && g_flat[0x32007] == 0x80 && g_flat[0x32008] == 0xEE,
+                  "8237 re-enabled: the take completes, 8 bytes");
+            (void)rreg8(0x49);
+        }
         #undef DMAW
     }
 

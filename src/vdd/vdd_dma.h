@@ -39,6 +39,53 @@
 #define DMA_MODE_DECREMENT 0x20    /* walk the address downwards                 */
 #define DMA_MODE_SELECT    0xC0    /* 00 demand, 01 single, 10 block, 11 cascade */
 
+/* ── THE COMMAND REGISTER (0x08 / 0xD0), per the Intel 8237A datasheet. ───────────
+     Written per controller, cleared by master clear. ONE bit is honoured; the rest
+     are STORED and nothing reads them -- see docs/inventory/dma.md for why each is
+     safe to leave that way on a PC, and what honouring it would take.
+       bit 0  memory-to-memory (ch0 -> ch1 through the temporary register)  stored
+       bit 1  channel 0 address hold (only meaningful with bit 0)           stored
+       bit 2  CONTROLLER DISABLE -- no DACK is given on ANY of its four     HONOURED
+              channels, so no byte moves and no TC is reached; DREQs stay
+              pending (status bits 7:4) until the guest re-enables it
+       bit 3  compressed timing (a bus-cycle length: nothing to model)      stored
+       bit 4  rotating priority (we serve one channel per call: no arbiter) stored
+       bit 5  extended write (a strobe width: nothing to model)             stored
+       bit 6  DREQ sense active-LOW                                         stored
+       bit 7  DACK sense active-HIGH                                        stored
+   ⚠ Bits 6 and 7 are the board's WIRING contract, not a mode: a PC's cards drive
+     DREQ active-high, so a guest that flips bit 6 has told the chip every idle line
+     is a request. Nothing in the period software we know does it, and modelling it
+     would mean inventing transfers no device asked for. */
+#define DMA_CMD_MEM2MEM    0x01
+#define DMA_CMD_ADDRHOLD   0x02
+#define DMA_CMD_DISABLE    0x04
+#define DMA_CMD_COMPRESSED 0x08
+#define DMA_CMD_ROTATE     0x10
+#define DMA_CMD_EXTWRITE   0x20
+#define DMA_CMD_DREQ_LOW   0x40
+#define DMA_CMD_DACK_HIGH  0x80
+
+/* status register (read 0x08 / 0xD0) */
+#define DMA_STATUS_TC      0x0F    /* terminal count, ch 0-3 of this controller; clear on read */
+#define DMA_STATUS_DRQ     0xF0    /* request pending, ch 0-3 of this controller; DERIVED      */
+
+/* ── WHO IS ASSERTING DREQ? THE DEVICE KNOWS; THE 8237 ONLY SEES THE PIN. ─────────
+     Status bits 7:4 report each channel's DREQ input. On the bus that is a wire the
+     card drives; here the card's own state already says whether it wants the bus (an
+     SB with a transfer armed, a GUS whose 41h "go" is waiting on the 8237), so the
+     bits are DERIVED at the moment of the status read rather than latched -- a second
+     copy of the same fact would only be a second thing to get out of step.
+     A device that can request DMA registers one function at init; it returns a mask
+     of the channels 0-7 whose DREQ it is asserting right now.
+   ★ Independent of the MASK and of the CONTROLLER-DISABLE bit, by design: those decide
+     whether the 8237 ANSWERS a request, not whether one is being made. A request that
+     the controller is refusing is exactly the one a status read must show.
+   ⚠ It is the wiring of the machine, so it SURVIVES vdd_dma_reset -- a guest's master
+     clear does not unplug the sound card. */
+typedef uint8_t (*dma_dreq_fn)(const void *ctx);
+#define DMA_DREQ_MAX 4
+
 typedef struct dma_chan {
     uint16_t base_addr, cur_addr;   /* byte offset (ch0-3) or word offset (ch4-7) */
     uint16_t base_count, cur_count; /* transfers-1, as the guest programmed it     */
@@ -65,7 +112,10 @@ typedef struct dma_state {
        ⚠ We answered 0xFF, which describes an EMPTY BUS rather than a machine.
          Indexed by the low nibble of the port; the mapped ports never reach it. */
     uint8_t  page_spare[16];
-    uint8_t  cmd[2];                /* per-controller command register             */
+    uint8_t  cmd[2];                /* per-controller command register; DMA_CMD_*  */
+    dma_dreq_fn dreq_fn[DMA_DREQ_MAX];   /* who drives DREQ -- host wiring, see above */
+    const void *dreq_ctx[DMA_DREQ_MAX];
+    uint8_t  dreq_n;
     /* ── DOES THE GUEST ASK US WHERE THE PLAY HEAD IS? ───────────────────────────
          A double-buffering sound driver has two ways to decide which half of the
          DMA ring is safe to write: count the block-completion IRQs, or READ THE
@@ -110,11 +160,34 @@ uint32_t vdd_dma_cur_phys(const dma_state *st, uint8_t ch);
 /* Bytes still to transfer before terminal count (count+1 units, scaled to bytes). */
 uint32_t vdd_dma_remaining(const dma_state *st, uint8_t ch);
 
+/* ── WOULD THE 8237 ANSWER A DREQ ON `ch` RIGHT NOW? ──────────────────────────────
+     The ONE question every DMA-moving path asks, so the conditions live in one place:
+     the channel's mask bit is clear AND its controller is not disabled (command bit 2).
+     vdd_dma_read/_write ask it themselves; a device that must decide whether to HOLD
+     its own state machine (an SB that must not end its block, a GUS whose upload must
+     wait) asks it before it pulls, rather than reading `masked` or `cmd[]` itself.
+   ⚠ Not modelled: the AT cascade. Controller 1 reaches the bus through channel 4, so
+     on a real AT masking channel 4 or disabling controller 2 also starves channels
+     0-3. We do not run the BIOS that unmasks channel 4 (master clear leaves it set),
+     so honouring it would silence every 8-bit transfer. See docs/inventory/dma.md. */
+int vdd_dma_grants(const dma_state *st, uint8_t ch);
+
+/* The DREQ lines, channels 0-7 as bits 0-7, from every registered device. Channel 4
+   is controller 1's HRQ (the cascade): asserted while controller 1 has a request it
+   would serve. */
+uint8_t vdd_dma_dreq(const dma_state *st);
+
+/* A device that can request DMA calls this once, from its init. Returns -1 if the
+   table is full; registering the same (fn, ctx) twice is harmless. */
+int vdd_dma_add_dreq(dma_state *st, dma_dreq_fn fn, const void *ctx);
+
 /* Pull up to `n` bytes from guest memory into `dst` (memory -> device: playback).
    Stops early at terminal count on a non-auto-init channel (and masks it, as the
    8237 does); an auto-init channel reloads and keeps going, so a ring buffer
-   streams forever. Returns bytes actually transferred; 0 if the channel is
-   masked. `tc_out` (optional) is set non-zero if terminal count was reached. */
+   streams forever. Returns bytes actually transferred; 0 if the 8237 would not
+   serve the channel (vdd_dma_grants: masked, or its controller disabled) -- no
+   byte moves, the address and count stand still, and no TC is raised.
+   `tc_out` (optional) is set non-zero if terminal count was reached. */
 uint32_t vdd_dma_read(dma_state *st, uint8_t ch, uint8_t *dst, uint32_t n, int *tc_out);
 
 /* Push `n` bytes into guest memory (device -> memory: recording). Same rules. */

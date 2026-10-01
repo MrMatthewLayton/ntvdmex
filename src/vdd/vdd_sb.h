@@ -130,6 +130,8 @@ typedef struct sb_state {
     uint32_t out_active;       /* output samples actually fetched from the ring   */
     uint32_t out_idle;         /* ...zeros emitted because the DSP was un-armed   */
     uint32_t out_paused;       /* ...zeros emitted because the guest paused it    */
+    uint32_t out_nodack;       /* ...because the 8237 would not serve the channel
+                                  (masked, or its controller disabled) -- #176     */
     uint32_t idle_run;         /* current run of consecutive inserted zeros       */
     uint32_t idle_runs[8];     /* run lengths, log2 buckets: 1,2,4,8,...,128+     */
     uint32_t cmd_hist[256];    /* DSP commands the guest issued, by opcode        */
