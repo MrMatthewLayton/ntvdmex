@@ -1787,6 +1787,38 @@ static uint16_t g_io_last_port = 0;      /* port the last serviced access touche
 static DWORD g_io_via_direct = 0, g_io_via_retro = 0;
 #define EV_HIST_MAX 16
 static DWORD g_ev_hist[EV_HIST_MAX];
+/* ── #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85) ─────────────────
+     3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
+     traps a second -- so the thread was somewhere in the host between v86_runs most of
+     the time. Split the wall clock: microseconds inside v86_run, and the host time
+     between one v86_run's return and the next's entry, charged to the event that
+     returned (whatever the loop did to service it, interpreter slices included). */
+static DWORD g_v86_us_total, g_host_us_ev[EV_HIST_MAX];
+static LONGLONG g_host_t_last;           /* QPC of the last v86_run return; 0 = none */
+static int  g_host_ev_last;
+static DWORD g_bop_hist[256];            /* V86 BOP events by number (the busiest are printed) */
+/* ...and the same, second by second, so a run with two phases (3DBench: a title wait
+   spinning on INT 16h, then the benchmark) is not read as one average. Cumulative
+   snapshots at the first v86_run return of each second; the report prints deltas. */
+#define XS_SECS 40
+enum { XS_RAISE, XS_ASYNC, XS_COOP, XS_NIE, XS_BOP, XS_IO, XS_HOSTMS, XS_PACE, XS_N };
+static DWORD g_pitpace_calls;              /* pit_pacer_thread wakes (declared here for g_xs_snap) */
+static DWORD g_xs_t0, g_xs_sec, g_xs_snap[XS_SECS][XS_N];
+/* The cooperative IRQ0 gate's IF refusals inside one of our stubs, by the caller's
+   return CS:IP (the INT's frame) and the stub offset. */
+#define SKIPIF_SITES 6
+static struct { WORD cs, ip, stub; DWORD n; } g_skipif_site[SKIPIF_SITES];
+static void skipif_site_note(DWORD cs, DWORD ip, DWORD stub)
+{
+    int k;
+    for (k = 0; k < SKIPIF_SITES; ++k) {
+        if (g_skipif_site[k].n && g_skipif_site[k].cs == cs && g_skipif_site[k].ip == ip) { g_skipif_site[k].n++; return; }
+        if (!g_skipif_site[k].n) {
+            g_skipif_site[k].cs = (WORD)cs; g_skipif_site[k].ip = (WORD)ip;
+            g_skipif_site[k].stub = (WORD)stub; g_skipif_site[k].n = 1; return;
+        }
+    }
+}
 static struct { uint16_t port; DWORD n; } g_io_hot[IO_HOT_MAX];
 static int   g_io_hot_n = 0;
 static DWORD g_io_site_logged = 0;
@@ -5504,7 +5536,6 @@ static void dmx_sample(void)
 typedef MMRESULT (WINAPI *PFN_timeBeginPeriod)(UINT);
 static HANDLE g_pitpace_thread;
 static int    g_pitpace_on = 1, g_pitpace_ms = 1;
-static DWORD  g_pitpace_calls;
 /* ── TWO LEVERS, BECAUSE THE PERIOD IS NOT ONE. ──────────────────────────────────────
      Session 26, user-confirmed on bare metal: the pacer costs SKYROADS its input --
      "pressing left/right arrows throws you off the road", gone the moment pitpace=0.
@@ -5540,6 +5571,30 @@ static DWORD  g_pitpace_calls;
      validated one. */
 static int  g_pitpace_prio = THREAD_PRIORITY_NORMAL;
 static int  g_pitpace_inject = 1;
+/* ── #238: THE PACER WOKE 485 TIMES A SECOND, NOT 1000. (s85) ─────────────────────────
+     Sleep(1) on XP, even under timeBeginPeriod(1), sleeps until the SECOND timer
+     interrupt -- ~2 ms. Measured on the rig (3DBench, runs/s85/3db/pace): 483-494 wakes
+     per second, every second. And the pacer is the only thread whose async attempt can
+     land on a guest that runs without trapping: the exec thread's own attempts bail
+     `not_in_exec` by construction (it cannot suspend itself), and the cooperative gate
+     only sees the guest at a trap. One wake places at most one tick, so a 1 kHz timer
+     got ~500/s and its program's clock ran at half speed.
+   ► A periodic multimedia timer fires on the 1 ms period itself; TIME_CALLBACK_EVENT_SET
+     makes its callback a SetEvent, so nothing of ours runs on winmm's thread. Bound by
+     name like every other winmm call. If it cannot be had, the Sleep loop is unchanged. */
+typedef MMRESULT (WINAPI *PFN_timeSetEvent)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
+static HANDLE   g_pitpace_evt;
+static MMRESULT g_pitpace_timer;
+static void pit_pacer_timer_start(HMODULE mm)
+{
+    PFN_timeSetEvent tse = mm ? (PFN_timeSetEvent)GetProcAddress(mm, "timeSetEvent") : NULL;
+    if (!tse || g_pitpace_ms <= 0) return;
+    g_pitpace_evt = CreateEventA(NULL, FALSE, FALSE, NULL);      /* auto-reset */
+    if (!g_pitpace_evt) return;
+    g_pitpace_timer = tse((UINT)g_pitpace_ms, 0, (LPTIMECALLBACK)g_pitpace_evt, 0,
+                          TIME_PERIODIC | TIME_CALLBACK_EVENT_SET);
+    if (!g_pitpace_timer) { CloseHandle(g_pitpace_evt); g_pitpace_evt = NULL; }
+}
 static DWORD WINAPI pit_pacer_thread(LPVOID param)
 {
     (void)param;
@@ -5553,7 +5608,9 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
         host_pit_generate();
         if (g_pitpace_inject) host_pit_deliver();
         ++g_pitpace_calls;
-        Sleep((DWORD)g_pitpace_ms);
+        /* The timeout only matters if the timer stops: then this is the Sleep loop. */
+        if (g_pitpace_timer) WaitForSingleObject(g_pitpace_evt, (DWORD)g_pitpace_ms * 4u);
+        else                 Sleep((DWORD)g_pitpace_ms);
     }
     return 0;
 }
@@ -6887,6 +6944,100 @@ static void host_rec_finish(void)
     log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
 }
 
+/* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` give the shortfall as one
+     subtraction and no reason for it; this names every refusal. Read bucket 14 (the CPU
+     thread was in HOST code) against 10 (an injection still in flight) and 7/8 (the client
+     has interrupts off) -- they need three completely different fixes, and session 23
+     spent a rig run on the one fix that could not have helped any of them. On its own
+     (s85) so the headless forced exit prints it too: 3DBench's runs end that way, and
+     #238 was diagnosed without it. */
+static void async_why_report(void)
+{
+    static const char *const whyname[ASYNC_WHY_MAX] = {
+        "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
+        "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
+        "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
+        "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
+        "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
+    char base[1024], *p = base;
+    unsigned wl, wc;
+    /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many were
+       suppressed, so the log's thinness is never read as "it stopped happening". The
+       histogram below is the complete account either way. */
+    p = zput(p, "STAGE2: async early-bail lines logged=");
+    p = zhex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
+                  ? g_async_early_bail_logged : ASYNC_EARLY_BAIL_LOG_MAX);
+    p = zput(p, " of ");   p = zhex(p, g_async_early_bail_logged);
+    p = zput(p, " (cap "); p = zhex(p, ASYNC_EARLY_BAIL_LOG_MAX);
+    p = zput(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
+    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    for (wl = 0; wl < 8; ++wl) {     /* one line per IRQ, flushed each: <= 32 x 24 chars */
+        unsigned tot = 0;
+        for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_async_why_hist[wl][wc];
+        if (!tot) continue;
+        p = zput(p, "STAGE2: async why irq"); p = zhexb(p, (BYTE)wl);
+        p = zput(p, " total=");               p = zhex(p, tot);
+        for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) {
+            if (!g_async_why_hist[wl][wc]) continue;
+            p = zput(p, " "); p = zput(p, whyname[wc]);
+            p = zput(p, "="); p = zhex(p, g_async_why_hist[wl][wc]);
+        }
+        p = zput(p, "\r\n");
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    }
+}
+
+/* #238: guest time against host time, the host's share charged per event (g_host_us_ev). */
+static void exec_share_report(void)
+{
+    char base[1024], *p = base;
+    int e;
+    p = zput(p, "STAGE2: exec share (#238) v86_ms="); p = zdec(p, g_v86_us_total / 1000u);
+    p = zput(p, " host_ms_after_event[ev:ms/count]=");
+    for (e = 0; e < EV_HIST_MAX; ++e) {
+        if (!g_host_us_ev[e] && !g_ev_hist[e]) continue;
+        p = zput(p, " "); p = zhex(p, (DWORD)e); p = zput(p, ":");
+        p = zdec(p, g_host_us_ev[e] / 1000u); p = zput(p, "/"); p = zdec(p, g_ev_hist[e]);
+    }
+    {   /* the six busiest BOP numbers */
+        DWORD seen[256]; int k, j;
+        for (k = 0; k < 256; ++k) seen[k] = g_bop_hist[k];
+        p = zput(p, " bops:");
+        for (j = 0; j < 6; ++j) {
+            int best = -1;
+            for (k = 0; k < 256; ++k) if (seen[k] && (best < 0 || seen[k] > seen[best])) best = k;
+            if (best < 0) break;
+            p = zput(p, " "); p = zhexb(p, (BYTE)best); p = zput(p, "="); p = zdec(p, seen[best]);
+            seen[best] = 0;
+        }
+    }
+    p = zput(p, "\r\nSTAGE2: irq0 coop skip="); p = zdec(p, g_irq0_skip);
+    p = zput(p, " if="); p = zdec(p, g_irq0_skip_if);
+    p = zput(p, " stub="); p = zdec(p, g_irq0_skip_stub);
+    p = zput(p, " inj="); p = zdec(p, g_irq0_inj);
+    p = zput(p, " if-off callers of our stubs:");
+    for (e = 0; e < SKIPIF_SITES && g_skipif_site[e].n; ++e) {
+        p = zput(p, " "); p = zhex(p, g_skipif_site[e].cs); p = zput(p, ":");
+        p = zhex(p, g_skipif_site[e].ip); p = zput(p, "(stub+"); p = zhex(p, g_skipif_site[e].stub);
+        p = zput(p, ")x"); p = zdec(p, g_skipif_site[e].n);
+    }
+    p = zput(p, "\r\n");
+    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    {   static const char *const xn[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
+        int c; DWORD sN;
+        for (c = 0; c < XS_N; ++c) {
+            p = zput(p, "STAGE2: persec "); p = zput(p, xn[c]); p = zput(p, "=");
+            for (sN = 1; sN < g_xs_sec; ++sN) {
+                p = zput(p, sN > 1 ? "," : "");
+                p = zdec(p, g_xs_snap[sN][c] - g_xs_snap[sN - 1][c]);
+            }
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        }
+    }
+    log_append(LOG_PATH, base, p); serial_out(base, p);
+}
+
 /* The IF/VIF census (see ifv_note), on its own so the headless forced exit -- which
    skips the main report, and is how ZAR's runs end -- can print it too. */
 static void ifv_report(void)
@@ -7002,6 +7153,8 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     Sleep(PM_HEADLESS_GRACE_MS);
     if (!g_wound_down) {
         q = b;
+        async_why_report();
+        exec_share_report();
         ifv_report();
         q = zput(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
                     " no traps) -> forcing process exit\r\n");
@@ -27841,6 +27994,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (mm) { PFN_timeBeginPeriod tbp =
                       (PFN_timeBeginPeriod)GetProcAddress(mm, "timeBeginPeriod");
                   if (tbp) tbp(1); }
+        pit_pacer_timer_start(mm);                /* #238: a true 1 ms wake */
         g_pitpace_thread = CreateThread(NULL, 0, pit_pacer_thread, NULL, 0, NULL);
     }
     /* The capture watchdog runs for every guest, throttled or not, headless or not:
@@ -28220,7 +28374,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 static int s_bud_skip = 6;
                 g_irq0_skip++;                  /* IF=0 or inside our own INT 08h */
                 if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A) g_irq0_skip_stub++;
-                else if (!if_or_vif(fl))                           g_irq0_skip_if++;
+                else if (!if_or_vif(fl)) {
+                    g_irq0_skip_if++;
+                    if (cs == DOS_HDLR_SEG) {   /* #238: who called our stub with IF off */
+                        DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                        skipif_site_note(peekw((ss << 4) + ((sp + 2) & 0xFFFF)),
+                                         peekw((ss << 4) + (sp & 0xFFFF)), ip);
+                    }
+                }
                 vdmstate_sample("irq0-skip", tib, &s_bud_skip);
             }
         }
@@ -28343,8 +28504,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         {   LARGE_INTEGER vt0, vt1; DWORD vdt;
             DWORD ecs = VDM_REG(tib, VTIB_CS) & 0xFFFF, eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             QueryPerformanceCounter(&vt0);
+            if (g_host_t_last)                                   /* #238: see g_host_us_ev */
+                g_host_us_ev[g_host_ev_last] += qpc_us(vt0.QuadPart - g_host_t_last);
             ev = v86_run(tib, &st);
             QueryPerformanceCounter(&vt1);
+            g_v86_us_total += qpc_us(vt1.QuadPart - vt0.QuadPart);
+            g_host_t_last = vt1.QuadPart;
+            g_host_ev_last = ev < EV_HIST_MAX ? ev : EV_HIST_MAX - 1;
+            {   DWORD now = GetTickCount();                     /* #238: g_xs_snap */
+                if (!g_xs_t0) g_xs_t0 = now;
+                while (g_xs_sec < XS_SECS && now - g_xs_t0 >= g_xs_sec * 1000u) {
+                    DWORD *s = g_xs_snap[g_xs_sec++], hu = 0; int e;
+                    for (e = 0; e < EV_HIST_MAX; ++e) hu += g_host_us_ev[e] / 1000u;
+                    s[XS_RAISE] = g_irq_raised[0]; s[XS_ASYNC] = g_async_inj;
+                    s[XS_COOP] = g_irq0_inj;       s[XS_NIE] = g_async_why_hist[0][20];
+                    s[XS_BOP] = g_ev_hist[4];      s[XS_IO] = g_ev_hist[0];
+                    s[XS_HOSTMS] = hu;     s[XS_PACE] = g_pitpace_calls;
+                } }
             /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes. The first
                exit that is not inside it hands them back -- long before any client can
                have allocated, let alone called, a callback. */
@@ -28584,6 +28760,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         {
             DWORD bcs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
             g_bop_from_guest = (bcs != DOS_HDLR_SEG && bcs != DOS_CTAB_SEG);
+            ++g_bop_hist[VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF];     /* #238 */
         }
         /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
            the bus), else INT 21h. */
@@ -32485,50 +32662,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, " irq"); p = zhexb(p, cl);
               p = zput(p, "=");    p = zhex(p, g_pm_coop_line[cl]); } }
         p = zput(p, "\r\n");
-        /* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` above give the
-             shortfall as one subtraction and no reason for it; this names every refusal.
-             Read bucket 14 (the CPU thread was in HOST code) against 10 (an injection
-             still in flight) and 7/8 (the client has interrupts off) -- they need three
-             completely different fixes, and session 23 spent a rig run on the one fix
-             that could not have helped any of them. Flushed first, deliberately: `base`
-             points past the preamble, so report[] has well under 8 KB of headroom and
-             the sbblk ledger below eats most of what is left. */
-        { unsigned wl, wc;
-          static const char *const whyname[ASYNC_WHY_MAX] = {
-            "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
-            "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
-            "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
-            "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
-            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
-          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-          /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many
-             were suppressed, so the log's thinness is never read as "it stopped
-             happening". The histogram below is the complete account either way. */
-          p = zput(p, "STAGE2: async early-bail lines logged=");
-          p = zhex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
-                        ? g_async_early_bail_logged : ASYNC_EARLY_BAIL_LOG_MAX);
-          p = zput(p, " of ");   p = zhex(p, g_async_early_bail_logged);
-          p = zput(p, " (cap "); p = zhex(p, ASYNC_EARLY_BAIL_LOG_MAX);
-          p = zput(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
-          for (wl = 0; wl < 8; ++wl) {
-              unsigned tot = 0;
-              for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_async_why_hist[wl][wc];
-              if (!tot) continue;
-              p = zput(p, "STAGE2: async why irq"); p = zhexb(p, wl);
-              p = zput(p, " total=");               p = zhex(p, tot);
-              for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) {
-                  if (!g_async_why_hist[wl][wc]) continue;
-                  p = zput(p, " "); p = zput(p, whyname[wc]);
-                  p = zput(p, "="); p = zhex(p, g_async_why_hist[wl][wc]);
-              }
-              p = zput(p, "\r\n");
-              /* Bound against report[] itself, not p - base: see the sbblk loop below. */
-              if ((size_t)(p - report) > sizeof report - 512) {
-                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-              }
-          }
-          ifv_report();   /* IF/VIF census -- see ifv_note */
-          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+        /* Flushed first, deliberately: `base` points past the preamble, so report[] has
+           well under 8 KB of headroom and the sbblk ledger below eats most of what is
+           left. Then which clause said no, per line (async_why_report). */
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        async_why_report();
+        exec_share_report();
+        ifv_report();   /* IF/VIF census -- see ifv_note */
         /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
              nonzero rd_addr on the SB's channel means every refill decision the guest
              makes is downstream of our cur_addr, which advances on the audio thread in
