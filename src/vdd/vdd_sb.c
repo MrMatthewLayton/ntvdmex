@@ -485,6 +485,23 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
         }
         st->gate_wait = 0;
 
+        /* ── #176: NO DACK, NO SAMPLE -- AND NO END OF BLOCK. ────────────────────────
+             The DSP asks for its next byte on DREQ and waits for the 8237's DACK.
+             If the channel is masked or its controller is disabled (command bit 2)
+             the DACK never comes: the DSP's block counter does not move, it does
+             not interrupt, and it carries on the moment the guest re-enables the
+             channel. Before #176 a refused fetch came back short and was read as
+             "the block ended" -- an IRQ the card never raised, and the transfer
+             dropped to IDLE so that re-enabling resumed nothing.
+           ⚠ Silence while it waits, counted, and part of the same inserted-zero run
+             the gap histogram measures: from the speaker's side it IS a gap. */
+        if (st->dma && !vdd_dma_grants(st->dma, st->xfer_16bit ? st->dma16 : st->dma8)) {
+            SB_PUT(n, 0, 0, 0);
+            st->out_nodack++;
+            st->idle_run++;
+            continue;
+        }
+
         if (st->idle_run) {                     /* a gap just ended: bucket its length */
             uint32_t r = st->idle_run, b = 0;
             while (r > 1 && b < 7) { r >>= 1; ++b; }
@@ -619,10 +636,28 @@ void vdd_sb_reset(void *self)
     st->mix[0x04] = 0xCC;                       /* voice volume                     */
 }
 
+/* ── #176: THE DSP'S DREQ, AS THE 8237's STATUS REGISTER SEES IT. ──────────────────
+     Asserted on the transfer's channel for as long as a transfer is armed and not
+     paused -- whether or not the 8237 is answering, which is the point: a masked or
+     disabled channel with an SB waiting on it is a PENDING request (status bit 4+n).
+   ⚠ On the wire DREQ pulses once per byte (dropped by each DACK, raised again when
+     the DSP's FIFO wants the next). We have no byte clock on the CPU's side of the
+     card, so "a transfer is running" is the whole request; a guest that polls the
+     bit sees it steady rather than flickering. */
+static uint8_t sb_dreq(const void *ctx)
+{
+    const sb_state *st = (const sb_state *)ctx;
+    uint8_t ch;
+    if (!vdd_sb_active(st)) return 0;
+    ch = st->xfer_16bit ? st->dma16 : st->dma8;
+    return (uint8_t)(1u << (ch & 7));
+}
+
 int vdd_sb_init(vdd_bus *b, void *self)
 {
     sb_state *st = (sb_state *)self;
     st->bus = b;
+    if (st->dma) vdd_dma_add_dreq(st->dma, sb_dreq, st);
     if (!st->base)  st->base  = SB_DEFAULT_BASE;
     if (!st->irq)   st->irq   = SB_DEFAULT_IRQ;
     if (!st->dma8)  st->dma8  = SB_DEFAULT_DMA8;

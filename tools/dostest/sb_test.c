@@ -209,6 +209,54 @@ int main(void)
         CHECK(sb.xfer_mode == SB_XFER_IDLE, "SB Pro: ...and no transfer started");
         sb.model = SB_MODEL_SB16; g_sb_ver_major = om; g_sb_ver_minor = on;
         dsp_reset(); }
+
+    /* ── T13: #176 -- NO DACK, NO SAMPLE, AND NO END OF BLOCK. ─────────────────
+       With the 8237 refusing the channel (command bit 2, or the mask bit) the DSP
+       waits on its DREQ: silence, no IRQ, the transfer still armed, the 8237's
+       address standing still -- and the DREQ visible in status bit 5. Re-enabling
+       resumes at the byte it stopped on. Before #176 the refused fetch was taken
+       for the end of the block: an IRQ the card never raises, and the transfer
+       dropped to IDLE so re-enabling resumed nothing. */
+    {   uint32_t nd0, s;
+        for (i = 0; i < 64; ++i) g_flat[0x33000 + i] = (uint8_t)i;
+        dma_program(0x33000, 64, 1);
+        g_irq_count = 0;
+        wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0x1F); wr(BASE + 0xC, 0x00);  /* block=32 */
+        wr(BASE + 0xC, 0x1C);                                              /* auto-init */
+        vdd_sb_render(&sb, pcm, 8);
+        CHECK(pcm[0] == (int16_t)(-128 * 256) && pcm[7] == (int16_t)((7 - 128) * 256),
+              "8237 disable: 8 samples play while the controller is enabled");
+        (void)rd(0x08);                                  /* drop TC1 the earlier rings latched */
+
+        wr(0x08, DMA_CMD_DISABLE);                       /* command: disable ctrl 1 */
+        nd0 = sb.out_nodack;
+        vdd_sb_render(&sb, pcm, 64);
+        CHECK(pcm[0] == 0 && pcm[63] == 0, "8237 disable: the DSP renders silence");
+        CHECK(sb.out_nodack - nd0 == 64, "8237 disable: ...counted as no-DACK, every sample");
+        CHECK(g_irq_count == 0, "8237 disable: NO IRQ -- the block did not end");
+        CHECK(vdd_sb_active(&sb), "8237 disable: the transfer is still armed");
+        CHECK(vdd_dma_cur_phys(&dma, 1) == 0x33008, "8237 disable: the 8237 address stood still");
+        s = rd(0x08);
+        CHECK((s & 0x20) != 0 && (s & 0x02) == 0, "8237 disable: status shows DRQ1 pending, no TC1");
+
+        wr(0x08, 0x00);                                  /* re-enable               */
+        vdd_sb_render(&sb, pcm, 1);
+        CHECK(pcm[0] == (int16_t)((8 - 128) * 256), "8237 re-enable: resumes at byte 8, not the base");
+        vdd_sb_render(&sb, pcm, 23);
+        CHECK(g_irq_count == 1, "8237 re-enable: the block ends where it would have -- one IRQ");
+
+        wr(0x0A, 0x05);                                  /* mask channel 1          */
+        vdd_sb_render(&sb, pcm, 16);
+        CHECK(g_irq_count == 1 && vdd_sb_active(&sb) && pcm[0] == 0,
+              "8237 mask: the same hold -- silence, no IRQ, still armed");
+        wr(0x0A, 0x01);                                  /* unmask                  */
+        vdd_sb_render(&sb, pcm, 1);
+        CHECK(pcm[0] == (int16_t)((32 - 128) * 256), "8237 unmask: resumes where it stopped");
+
+        CHECK(dsp_reset(), "dreq: reset the DSP");
+        s = rd(0x08);
+        CHECK((s & 0xF0) == 0, "dreq: no transfer armed -> no DRQ in status");
+    }
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

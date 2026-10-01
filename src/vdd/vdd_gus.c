@@ -173,12 +173,29 @@ static uint8_t gus_irq_fifo(gus_state *st)
 /* The 16-bit-channel address translation, undone (ref §2.1). */
 static uint32_t gus_untranslate16(uint32_t t) { return ((t & 0x1FFFFu) << 1) | (t & 0xC0000u); }
 
-/* Is the 8237 ready to serve a DRQ on `ch`? A masked channel is not: the card holds
-   DRQ and waits, exactly as it would on the bus. (vdd_dma_remaining cannot say so --
-   it is count + 1 and never 0.) */
+/* Is the 8237 ready to serve a DRQ on `ch`? A masked channel is not, and since #176
+   neither is one whose controller is disabled (command bit 2) -- both are the 8237's
+   one question, vdd_dma_grants: the card holds DRQ and waits, exactly as it would on
+   the bus. (vdd_dma_remaining cannot say so -- it is count + 1 and never 0.) */
 static int gus_dma_ready(const gus_state *st, uint8_t ch)
 {
-    return st->dma && ch && !st->dma->ch[ch & 7].masked;
+    return st->dma && ch && vdd_dma_grants(st->dma, ch);
+}
+
+/* #176: the card's DREQ lines, for the 8237's status bits 7:4. The DRAM DMA requests
+   from the 41h "go" until the 8237 has served the whole block (dma_waiting -- which
+   only stays set while the channel is refused, since an answered request completes at
+   once); the ADC requests while sampling is on. Channel 0 means "no line driven"
+   (drivers off, or nothing latched), as everywhere in this file. */
+static uint8_t gus_dreq(const void *ctx)
+{
+    const gus_state *st = (const gus_state *)ctx;
+    uint8_t m = 0, ch;
+    ch = gus_dram_dma(st);
+    if (st->dma_waiting && ch) m |= (uint8_t)(1u << (ch & 7));
+    ch = gus_rec_dma(st);
+    if ((st->samp_ctrl & 0x01) && ch) m |= (uint8_t)(1u << (ch & 7));
+    return m;
 }
 
 /* The DRAM DMA (ref §3), both directions, instantaneous once the 8237 serves it.
@@ -758,6 +775,7 @@ int vdd_gus_init(vdd_bus *b, void *self)
     if (!st->base)   st->base   = GUS_DEFAULT_BASE;
     if (!st->irq)    st->irq    = GUS_DEFAULT_IRQ;
     if (!st->dma_ch) st->dma_ch = GUS_DEFAULT_DMA;
+    if (st->dma) vdd_dma_add_dreq(st->dma, gus_dreq, st);
     vdd_gus_reset(st);
     if (vdd_claim_ports(b, st->base, (uint16_t)(st->base + 0x0F), gus_in, gus_out, st)) return -1;
     if (vdd_claim_ports(b, (uint16_t)(st->base + 0x100), (uint16_t)(st->base + 0x107), gus_in, gus_out, st)) return -1;

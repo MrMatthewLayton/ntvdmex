@@ -68,13 +68,52 @@ static int dma_step(dma_state *st, uint8_t ch, uint8_t *dst, const uint8_t *src,
     return 1;
 }
 
+/* ── THE GRANT. Mask bit AND controller-disable, asked in one place (see the header).
+     Before #176 this was `if (c->masked) return 0;` inline, and the command register's
+     bit 2 was stored and read by nothing -- a guest that disabled the controller to
+     stop a transfer got the transfer anyway. */
+int vdd_dma_grants(const dma_state *st, uint8_t ch)
+{
+    ch &= 7;
+    if (st->ch[ch].masked) return 0;
+    if (st->cmd[ch >> 2] & DMA_CMD_DISABLE) return 0;   /* ch0-3 -> cmd[0], 4-7 -> cmd[1] */
+    return 1;
+}
+
+int vdd_dma_add_dreq(dma_state *st, dma_dreq_fn fn, const void *ctx)
+{
+    unsigned i;
+    for (i = 0; i < st->dreq_n; ++i)
+        if (st->dreq_fn[i] == fn && st->dreq_ctx[i] == ctx) return 0;
+    if (st->dreq_n >= DMA_DREQ_MAX) return -1;
+    st->dreq_fn[st->dreq_n] = fn; st->dreq_ctx[st->dreq_n] = ctx; ++st->dreq_n;
+    return 0;
+}
+
+/* ── THE DREQ PINS, DERIVED. ───────────────────────────────────────────────────────
+     Every device answers for itself (see dma_dreq_fn in the header). Channel 4 is not
+     a device's: on an AT it is the CASCADE, wired to controller 1's HRQ, and the
+     8237A raises HRQ when it has a request it is prepared to serve -- an unmasked
+     channel on an enabled controller. So bit 4 is derived from bits 0-3 through the
+     same grant every transfer uses. ⚠ Whatever a device claims for channel 4 is
+     dropped: nothing on an AT can drive that line except controller 1. */
+uint8_t vdd_dma_dreq(const dma_state *st)
+{
+    uint8_t m = 0, c;
+    unsigned i;
+    for (i = 0; i < st->dreq_n; ++i) m |= st->dreq_fn[i](st->dreq_ctx[i]);
+    m &= (uint8_t)~0x10;
+    for (c = 0; c < 4; ++c)
+        if ((m & (1u << c)) && vdd_dma_grants(st, c)) { m |= 0x10; break; }
+    return m;
+}
+
 static uint32_t dma_xfer(dma_state *st, uint8_t ch, uint8_t *dst, const uint8_t *src,
                          uint32_t n, int *tc_out)
 {
-    dma_chan *c = &st->ch[ch & 7];
     uint32_t unit = ((ch & 7) < 4) ? 1u : 2u, done = 0;
     if (tc_out) *tc_out = 0;
-    if (c->masked) return 0;
+    if (!vdd_dma_grants(st, ch)) return 0;      /* no DACK: nothing moves, no TC   */
     while (done + unit <= n) {
         if (!dma_step(st, ch, dst ? dst + done : 0, src ? src + done : 0, &done, tc_out))
             break;                              /* stopped at terminal count       */
@@ -142,7 +181,9 @@ static void dma_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         return;
     }
     switch (reg) {
-    case 0x8: st->cmd[ctrl] = val; break;                /* command                */
+    case 0x8: st->cmd[ctrl] = val; break;                /* command: bit 2 is read by
+                                                            vdd_dma_grants; the rest
+                                                            are stored (see the header) */
     case 0x9: break;                                     /* software DRQ: unused   */
     case 0xA:                                            /* single mask bit        */
         chan = (ctrl ? 4 : 0) + (val & 3);
@@ -206,6 +247,11 @@ static void dma_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
             if (st->ch[chan].tc) s |= (uint8_t)(1 << i);
             st->ch[chan].tc = 0;                 /* reading status clears TC        */
         }
+        /* ── BITS 7:4 -- "set whenever their corresponding channel is requesting
+             service" (8237A datasheet). They always read 0 before #176. Derived, not
+             latched, so the read that clears TC cannot touch them: a request is still
+             pending after you look at it, until the device stops making it. */
+        s |= (uint8_t)(((vdd_dma_dreq(st) >> (ctrl ? 4 : 0)) & 0x0F) << 4);
         *val = s;
         return;
     }
@@ -217,9 +263,15 @@ void vdd_dma_reset(void *self)
 {
     dma_state *st = (dma_state *)self;
     vdd_bus *bus = st->bus;
+    dma_dreq_fn fn[DMA_DREQ_MAX]; const void *ctx[DMA_DREQ_MAX];
+    uint8_t n = st->dreq_n;
     unsigned i; uint8_t *p = (uint8_t *)st;
+    for (i = 0; i < DMA_DREQ_MAX; ++i) { fn[i] = st->dreq_fn[i]; ctx[i] = st->dreq_ctx[i]; }
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
     st->bus = bus;
+    /* the DREQ wiring is the machine's, not the chip's: a reset keeps it */
+    for (i = 0; i < DMA_DREQ_MAX; ++i) { st->dreq_fn[i] = fn[i]; st->dreq_ctx[i] = ctx[i]; }
+    st->dreq_n = n;
     dma_master_clear(st, 0);
     dma_master_clear(st, 1);
 }
