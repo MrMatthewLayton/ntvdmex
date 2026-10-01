@@ -4006,10 +4006,23 @@ static WORD peekw(DWORD lin)
    handler. A 16-bit FLAGS image pushed on the guest stack is unaffected: VME pushes the
    virtual flag into the IF bit position. */
 static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
+/* ── #206: OUR BIOS STUBS ARE OUR STUBS TOO. ──────────────────────────────────────────
+     Inside one of our INT stubs the live IF is the stub's -- the INT that vectored in
+     cleared it -- and the guest's own is the FLAGS the stub will IRET to, at SS:SP+4.
+     That was honoured for DOS_HDLR_SEG only; the BIOS stubs (INT 11h-29h, at
+     DOS_CTAB_SEG:DOS_BIOS_STUBS) read the live IF, i.e. always "off". Harmless while
+     every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
+     its BOP, because a real BIOS takes interrupts during that wait. */
+#define DOS_BIOS_STUB_N 12            /* entries in WinMain's bios_ints[] */
+static int our_stub_cs_ip(DWORD cs, DWORD ip)
+{
+    if (cs == DOS_HDLR_SEG) return 1;
+    return cs == DOS_CTAB_SEG && ip >= DOS_BIOS_STUBS && ip < DOS_BIOS_STUBS + DOS_BIOS_STUB_N * 4;
+}
 static int guest_if_enabled(volatile BYTE *tib)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-    if (cs == DOS_HDLR_SEG) {
+    if (our_stub_cs_ip(cs, VDM_REG(tib, VTIB_EIP) & 0xFFFF)) {
         DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
         return (peekw((ss << 4) + ((sp + 4) & 0xFFFF)) & 0x200) != 0;
     }
@@ -5597,6 +5610,40 @@ static int  g_pitpace_inject = 1;
    ► A periodic multimedia timer fires on the 1 ms period itself; TIME_CALLBACK_EVENT_SET
      makes its callback a SetEvent, so nothing of ours runs on winmm's thread. Bound by
      name like every other winmm call. If it cannot be had, the Sleep loop is unchanged. */
+/* ── #206: INT 15h AH=83h/86h, THE AT BIOS'S TWO TIMED WAITS. ─────────────────────────
+     AH=86h waits CX:DX microseconds and returns; AH=83h starts the same countdown and
+     returns at once, and when it runs out the BIOS sets bit 7 of the caller's flag byte
+     (ES:BX), which the caller polls. A real BIOS counts them on the RTC's periodic
+     interrupt; one of them at a time, and a second request while one runs is refused
+     (CF=1, AH=83h, "busy"). The BIOS data area mirrors it: 40:98 the flag's far
+     pointer, 40:9C the microsecond count, 40:A0 the wait-active flag.
+   ► AH=86h used to return at once ("the PIT already paces us"), so a program using it
+     as a delay got none. It now re-executes its BOP until the deadline, like INT 16h's
+     blocking read, so interrupts are still taken while it waits.
+   ► AH=83h is posted from the pacer thread (1 kHz), because the caller polls MEMORY and
+     need not trap at all while it does. */
+static volatile LONGLONG g_i15_wait_end;    /* QPC of the AH=86h deadline; 0 = none     */
+static volatile LONGLONG g_i15_evt_end;     /* QPC of the AH=83h deadline; 0 = none     */
+static volatile DWORD    g_i15_evt_lin;     /* linear address of its flag byte          */
+static DWORD g_i15_waits, g_i15_events, g_i15_posted, g_i15_busy;
+static LONGLONG i15_qpc_after_us(DWORD us)
+{
+    LARGE_INTEGER n, f;
+    QueryPerformanceCounter(&n); QueryPerformanceFrequency(&f);
+    return n.QuadPart + (LONGLONG)(((unsigned long long)us * (unsigned long long)f.QuadPart) / 1000000ull);
+}
+static void i15_event_poll(void)            /* pacer thread */
+{
+    LONGLONG end = g_i15_evt_end;
+    LARGE_INTEGER n;
+    if (!end) return;
+    QueryPerformanceCounter(&n);
+    if (n.QuadPart < end) return;
+    g_i15_evt_end = 0;
+    *(volatile BYTE *)(ULONG_PTR)g_i15_evt_lin |= 0x80;      /* the caller's flag: time is up */
+    *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;               /* 40:A0 wait no longer active  */
+    ++g_i15_posted;
+}
 typedef MMRESULT (WINAPI *PFN_timeSetEvent)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
 static HANDLE   g_pitpace_evt;
 static MMRESULT g_pitpace_timer;
@@ -5622,6 +5669,7 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
            shared sink. It can no longer be made to wait by the renderer. */
         host_pit_generate();
         if (g_pitpace_inject) host_pit_deliver();
+        i15_event_poll();                                    /* #206 */
         ++g_pitpace_calls;
         /* The timeout only matters if the timer stops: then this is the Sleep loop. */
         if (g_pitpace_timer) WaitForSingleObject(g_pitpace_evt, (DWORD)g_pitpace_ms * 4u);
@@ -28436,7 +28484,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_irq0_pending) {
             DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD fl;
-            if (cs == DOS_HDLR_SEG) {
+            if (our_stub_cs_ip(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));   /* main-line FLAGS the stub returns to */
             } else {
@@ -28457,7 +28505,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A) g_irq0_skip_stub++;
                 else if (!if_or_vif(fl)) {
                     g_irq0_skip_if++;
-                    if (cs == DOS_HDLR_SEG) {   /* #238: who called our stub with IF off */
+                    if (our_stub_cs_ip(cs, ip)) {   /* #238: who called our stub with IF off */
                         DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                         skipif_site_note(peekw((ss << 4) + ((sp + 2) & 0xFFFF)),
                                          peekw((ss << 4) + (sp & 0xFFFF)), ip);
@@ -28473,7 +28521,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_irq1_pending > 0) {
             DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD fl;
-            if (cs == DOS_HDLR_SEG) {
+            if (our_stub_cs_ip(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));
             } else {
@@ -28972,8 +29020,54 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     { char x8[128], *x8q = x8;
                       x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
                       log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
-                } else if (ah15 == 0x86) {         /* wait CX:DX microseconds */
-                    BCF_CLR();                     /* the PIT already paces us */
+                } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
+                    DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                    LARGE_INTEGER n;
+                    QueryPerformanceCounter(&n);
+                    if (g_i15_evt_end) {           /* an AH=83h event is counting: busy */
+                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
+                        BCF_SET(); ++g_i15_busy;
+                    } else if (!g_i15_wait_end) {  /* first pass: start the countdown   */
+                        if (us == 0) BCF_CLR();
+                        else { g_i15_wait_end = i15_qpc_after_us(us); ++g_i15_waits; handled = 4; }
+                    } else if (n.QuadPart >= g_i15_wait_end) {
+                        g_i15_wait_end = 0;        /* elapsed                           */
+                        BCF_CLR();
+                    } else {
+                        /* Still waiting: re-execute the BOP (handled = 4). Sleep when there
+                           is time to, so a long wait does not burn the CPU the guest's own
+                           interrupts and the host's threads need -- a 1 ms nap is far
+                           below any wait a program asks this for. */
+                        LARGE_INTEGER f; QueryPerformanceFrequency(&f);
+                        if ((g_i15_wait_end - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
+                        handled = 4;
+                    }
+                } else if (ah15 == 0x83) {         /* event wait (#206) */
+                    unsigned al83 = VDM_REG(tib, VTIB_EAX) & 0xFF;
+                    if (al83 == 0x01) {            /* cancel                            */
+                        g_i15_evt_end = 0;
+                        *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;
+                        BCF_CLR();
+                    } else if (g_i15_evt_end || g_i15_wait_end) {
+                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
+                        BCF_SET(); ++g_i15_busy;   /* one countdown at a time           */
+                    } else {
+                        DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                        WORD es = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF), bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                        g_i15_evt_lin = ((DWORD)es << 4) + bx;
+                        *(volatile WORD  *)(ULONG_PTR)0x498 = bx;    /* 40:98 flag pointer  */
+                        *(volatile WORD  *)(ULONG_PTR)0x49A = es;
+                        *(volatile DWORD *)(ULONG_PTR)0x49C = us;    /* 40:9C count, us     */
+                        *(volatile BYTE  *)(ULONG_PTR)0x4A0 = 0x01;  /* 40:A0 wait active   */
+                        ++g_i15_events;
+                        g_i15_evt_end = i15_qpc_after_us(us ? us : 1);
+                        BCF_CLR();
+                    }
+                } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
+                    /* The default handler: CF=1 and AL untouched, "process this key".
+                       A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
+                       CALL this yet -- see the C0h table's feature byte.) */
+                    BCF_SET();
                 } else if (ah15 == 0x84) {
                     /* ── BIOS joystick support (session 62). DX picks the half:
                          0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
@@ -29211,6 +29305,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             #undef BSETAX
             if (handled == 2) break;               /* terminate: the run is over  */
             if (handled == 3) continue;            /* a child exited: parent is back */
+            if (handled == 4) continue;            /* #206: still waiting -- re-run the BOP */
             if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
