@@ -57,12 +57,19 @@ Two things decided it, neither of them the one expected:
    for 60 reverse-engineered ones, **and capping the project at parity with `ntvdm` for
    ever**: if the DOS *is* `ntdos.sys`, a superset is impossible by construction.
 
-### Status
+### Status (re-checked against the code 2026-10-01)
 
-A no-guest launch loads `C:\WINDOWS\SYSTEM32\COMMAND.COM` (`cfg\shell.txt` overrides).
-⚠ In practice nothing reaches that path yet — NT only grants VDM privileges to a process
-it started as the VDM, so the host cannot be run with no guest at all; CSRSS always names
-a program.
+✅ **XP's `COMMAND.COM` is the default shell and it is interactive** — prompt, `ver`, `dir`,
+and an EXEC'd child that returns (s79, below). ✅ **A no-argument launch reaches it**: the
+host writes a four-byte DOS stub and runs it, so CSRSS builds a VDM that the IFEO key
+routes back to us (`LAUNCH_STUB_NAME` `main.c:223`, the launcher `main.c:4644`). The
+older note here — *"nothing reaches that path yet"* — predates that and is withdrawn.
+
+The interactive `AH=53h` answers are **built in** for an NTVDM-aware shell, detected by
+its BOP count (`g_guest_ntaware`, `main.c:26820`; the table `main.c:27318-27346`).
+`cfg\int53.txt` still overrides them (`main.c:27347-27374`) and the source is printed every
+run. ⚠ The model is still **provisional** (#142): only the shell itself can be asked for
+the `AL=0` answer it is given.
 
 ### The collision is resolved by ORIGIN, not by renumbering
 
@@ -736,10 +743,9 @@ API no game exercises, and it is the reason a shell was chosen as the M9 test.
 
 ### ▶ How to turn it on
 
-The two `AH=53h` rows it needs are **not** the built-in defaults (see the open question
-below). `scripts/bm/int53-interactive.txt` is the ready-made file; copy it to
-`cfg\int53.txt`. The host prints the whole table **and its source** every run, so it can
-never be on silently — which is the guard the `dosver.txt` incident bought.
+~~Copy `scripts/bm/int53-interactive.txt` to `cfg\int53.txt`.~~ **Superseded (s79):** it is
+on by default for an NTVDM-aware shell — see *Status* at the top. `cfg\int53.txt` remains
+an explicit override, and the host prints the table and its source every run.
 
 ### ⛔⛔⛔ The last bug was a buffer WE corrupted, one field wide
 
@@ -960,20 +966,20 @@ into an invisible hang.
 ## 1. The problem this file exists to record
 
 **The number space is NTVDM's, and we have been allocating out of it as if it were
-ours.** Our codes are assigned in `src/host/main.c` (the map comment at ~line 499) and
+ours.** Our codes are assigned in `src/host/main.c` (the `#define`s at `:550-699`) and
 were chosen freely. At least two of them collide with numbers a real NTVDM guest
 actually issues:
 
 | code | what a real NTVDM guest uses it for | what WE do with it | source |
 |---|---|---|---|
-| `0x50` | issued once by XP's `COMMAND.COM` | `DPMI_BOP` — real→protected mode switch | `main.c:441` |
-| `0x54` | issued **15×** by XP's `COMMAND.COM`, with a sub-function byte | `DPMI_RMRET_BOP` — DPMI 0301 return catcher | `main.c:448` |
+| `0x50` | issued once by XP's `COMMAND.COM` | `DPMI_BOP` — real→protected mode switch | `main.c:550` |
+| `0x54` | issued **15×** by XP's `COMMAND.COM`, with a sub-function byte | `DPMI_RMRET_BOP` — DPMI 0301 return catcher | `main.c:557` |
 
 And a collision *inside* our own allocations, worth fixing on sight:
 
 | code | use A | use B |
 |---|---|---|
-| `0x57` | `DPMI_FAULT_BOP` (`main.c:527`) | `WOWCALL_BOP_CODE` (`wow/wowcall.h:89`) |
+| `0x57` | `DPMI_FAULT_BOP` (`main.c:684`) | `WOWCALL_BOP_CODE` (`wow/wowcall.h:89`) — still shared, 2026-10-01 |
 
 ### ✅ The fall-through is gated (2026-09-24)
 
@@ -1031,34 +1037,58 @@ STAGE2: BOP FALL-THROUGH -> INT21: bop=0x54 next=0x01 at 0x9342:0x03ce ax=0x0002
 
 ## 2. Our allocations
 
-Read off the code, `file:line` each. Status is about *our* implementation.
+Read off the code, `file:line` each, **re-cited 2026-10-01** (the previous citations were
+from before `main.c` grew by ~6,000 lines). Status is about *our* implementation. Every
+BOP we plant lives at `DOS_HDLR_SEG` or `DOS_CTAB_SEG`; anything executed elsewhere is the
+guest's (`g_bop_from_guest`, `main.c:560`, set at `:28843`).
 
-| code | name | purpose | status | where |
+| code | name | purpose | status | planted / handled |
 |---|---|---|---|---|
-| `0x08` | — | INT 08h timer tick stub | IMPL | `main.c:21965` |
-| `0x09` | — | INT 09h BIOS keyboard | IMPL | `main.c:21972` |
-| `0x10` | — | INT 10h video | IMPL | `main.c:21959` |
-| `0x16` | — | INT 16h keyboard | IMPL | `main.c:21960` |
-| `0x1A` | — | INT 1Ah BIOS time | IMPL | `main.c:21973` |
-| `0x20` | — | **INT 21h DOS** | IMPL | `main.c:21958` |
-| `0x2F` | — | INT 2Fh multiplex | IMPL | `main.c:21974` |
-| `0x33` | — | INT 33h mouse | IMPL | `main.c:21961` |
-| `0x35` | `MS_CB_BOP` | mouse callback return | IMPL | `main.c:6384` |
-| `0x43` | — | XMS far-call entry | IMPL | `main.c:21977` |
-| `0x50` | `DPMI_BOP` | DPMI real→PM switch | IMPL | `main.c:441` ⚠ **collides** |
-| `0x54` | `DPMI_RMRET_BOP` | DPMI 0301 return catcher | IMPL | `main.c:448` ⚠ **collides** |
-| `0x55` | `DPMI_CB_BOP` | DPMI 0303 callback entry | IMPL | `main.c:454` |
-| `0x56` | `DPMI_PMRET_BOP` | DPMI PM-return catcher | IMPL | `main.c:457` |
-| `0x57` | `DPMI_FAULT_BOP` | PM fault trampoline | IMPL | `main.c:527` ⚠ **shared** |
-| `0x57` | `WOWCALL_BOP_CODE` | WOW 16-bit call return | IMPL | `wowcall.h:89` ⚠ **shared** |
-| `0x58` | `DPMI_RAW2PM_BOP` | DPMI 0306 real→PM | IMPL | `main.c:470` |
-| `0x59` | `DPMI_RAW2RM_BOP` | DPMI 0306 PM→real | IMPL | `main.c:472` |
-| `0x5A` | `DPMI_FLTRET_BOP` | fault-handler return | IMPL | `main.c:542` |
-| `0x67` | — | INT 67h EMM | IMPL | `main.c:21978` |
-| `0x11`–`0x17`, `0x25`–`0x30` | — | BIOS services (equipment, memory, disk, …) | IMPL/PART | `main.c:21988`, arm at `~24575` |
-| *else* | — | refused + logged, exit `0xBD` | ✅ gated | `main.c` ~26950 |
+| `0x08` | — | INT 08h timer tick (`BOP; INT 1Ch; IRET`) | IMPL | `main.c:25677` / `:28902-28914` |
+| `0x09` | — | INT 09h BIOS keyboard | IMPL | `:25684` / `:28884-28899` |
+| `0x10` | — | INT 10h video | IMPL | `:25671` / `:28848-28858` |
+| `0x16` | — | INT 16h keyboard | IMPL | `:25672` / `:28859-28874` |
+| `0x1A` | — | INT 1Ah BIOS time | IMPL | `:25685` / `:29216-29225` |
+| `0x20` | — | **INT 21h DOS** | IMPL | `:25670`, `:26865` / `dos_int21` (the exec loop's last arm, `:32039`) |
+| `0x2F` | — | INT 2Fh multiplex | IMPL | `:25686` / `:29226-29362` |
+| `0x33` | — | INT 33h mouse | IMPL | `:25673` / `:28875-28879` |
+| `0x35` | `MS_CB_BOP` | mouse callback return | IMPL | `:7808` / `:28880-28883` |
+| `0x43` | — | XMS far-call entry (`RETF`) | IMPL | `:25689` / `:29363-29391` |
+| `0x50` | `DPMI_BOP` | DPMI real→PM switch | IMPL | `:550` / `:29405-29406`, gated on origin ⚠ **collides** |
+| `0x54` | `DPMI_RMRET_BOP` | DPMI 0300/0301 return catcher | IMPL | `:557`, `:26941` / `:19923`, `:23625` ⚠ **collides** |
+| `0x55` | `DPMI_CB_BOP` | DPMI 0303 real-mode callback entry | IMPL | `:598`, `:26946` / `:19929`, `:23634` |
+| `0x56` | `DPMI_PMRET_BOP` | DPMI PM-return catcher | IMPL | `:601`, `:26949` |
+| `0x57` | `DPMI_FAULT_BOP` | PM fault trampoline | IMPL | `:684`, `:17595`, `:17635` ⚠ **shared** |
+| `0x57` | `WOWCALL_BOP_CODE` | WOW 16-bit call return | IMPL | `wowcall.h:89`, `main.c:16771` ⚠ **shared** |
+| `0x58` | `DPMI_RAW2PM_BOP` | DPMI 0306 real→PM | IMPL | `:614`, `:26956` |
+| `0x59` | `DPMI_RAW2RM_BOP` | DPMI 0306 PM→real | IMPL | `:616`, `:26958` |
+| `0x5A` | `DPMI_FLTRET_BOP` | fault-handler return | IMPL | `:699`, `:17640` |
+| `0x67` | — | INT 67h EMM | IMPL | `:25690` / `:29393-29400` |
+| `0x11`–`0x17`, `0x25`–`0x29`, `0x30` (INT 20h) | — | BIOS and DOS-adjacent services | IMPL/PART | table `:25700-25705` / arm `:28916-29215` — marked per unit in [bios-misc.md](bios-misc.md) and [dos-services.md](dos-services.md) |
+| *else* | — | refused + logged, exit `0xBD` | ✅ gated | `:32039-32045` |
 
----
+### 2b. The guest's BOPs we answer: `0x54` and `0x50`
+
+Arm: `main.c:31441-32037`, entered only when `g_bop_from_guest` (`:31441-31443`). An
+unhandled sub-function is answered with `CF` from `cfg\bop54.txt` (default **`CF=0`**,
+`:31448-31464`) and skipped (`EIP += 4`).
+
+| BOP / sub | Meaning, as far as it is established | Status | Where |
+|---|---|---|---|
+| `54/00` | end the VDM (`EXIT`) — `VDDTerminateVDM` in stock | **IMPL** | `:32018-32023` |
+| `54/01` | get the next command (line, cookie, the routed program) | **IMPL** | `:31569-31850` |
+| `54/02` | shell state query (`AL` output) | **MISS** | default arm; meaning not established |
+| `54/03` | — | **N/A** | the unimplemented stub in stock's own table |
+| `54/04`, `05`, `07` | used by `ntdos.sys` only | **N/A** | our DOS replaces `ntdos.sys`; never issued here |
+| `54/06` | (`CF` output, `BX/AX` = `[0x32B]/[0x32D]`) | **MISS** | default arm |
+| `54/08`, `0A` | stack-frame calls (`CF` output) | **MISS** | default arm |
+| `54/09`, `0C` | used by `ntio.sys` (and `09` once by the shell) | **MISS** | default arm |
+| `54/0B` | (`CF` output) | **MISS** | default arm |
+| `54/0D` | the startup batch file (AUTOEXEC) | **IMPL** | `:31943-31969`; `cfg\autoexec.txt` |
+| `54/0E` | keyboard / code-page configuration | **IMPL** | `:32024-32030`; `DX=0`, no KEYB |
+| `54/0F` | the environment for a `/P` shell | **IMPL** | `:31851-31942` |
+| `54/10` | one unnamed global (`AL` output) | **PART** | `:31983-31992`: `AL=0`, recorded as a reading, not a decode |
+| `50/3D` | the shell's version-refusal path | **MISS** | default arm; only reached by a wrong DOS version |
 
 ## 3. What XP's `COMMAND.COM` actually issues
 
