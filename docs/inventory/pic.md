@@ -3,20 +3,25 @@
 **Spec:** Intel 8259A datasheet; IBM AT TechRef for the wiring.
 **▶ The hardware reference is [`../ref/pic.md`](../ref/pic.md)** — what the chip *does*.
 This file is the companion: what **we** do about it.
-**Our implementation:** `src/vdd/vdd_pic.c` (199 lines), `src/vdd/vdd_pic.h`;
+**Our implementation:** `src/vdd/vdd_pic.c` (364 lines), `src/vdd/vdd_pic.h`;
 the host's delivery decisions in `src/host/main.c`.
 **Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem (real AMI 486 BIOS). Off-VM:
 `tools/dostest/pic_test.c`. DOS probe: `tools/dostest/p_pic.asm`.
-**Marked:** 2026-09-23, **from the code**, with citations. Re-mark after any change.
+**Marked:** 2026-09-23, **from the code**, with citations. **Re-marked 2026-10-01 for #174**
+(rotation, Special Mask Mode, ICW1's resets, SFNM) — line numbers below are post-#174.
 
 ---
 
 ## Headline
 
-**The delivery path is right and it was expensive to get right; the PROGRAMMING
-INTERFACE is half a chip.** Everything a handler does — mask, EOI, read the ISR, not be
-re-entered — works and has a regression test. Everything a guest might do to
-*reconfigure* the chip is either dropped or silently approximated.
+**The delivery path is right and it was expensive to get right.** Everything a handler
+does — mask, EOI, read the ISR, not be re-entered — works and has a regression test.
+**Since #174 (2026-10-01) the programming interface is the datasheet's too:** priority
+rotation (all four OCW2 forms), Special Mask Mode, ICW1's side effects and SFNM. Those
+are **spec-derived and off-VM-tested only** — no oracle probe asks them yet, apart from
+`E0h`'s EOI half. Still dropped: ICW3 (correct in effect on a PC), ICW4's µPM and BUF and
+ICW1's LTIM (no visible effect without a bus), and the host's *choice between* pending
+lines under rotation (§4).
 
 > ⚠ **The previous version of this file said "10 fields, all AGREE" and left it there**,
 > in the retired PARITY vocabulary, with a note that re-marking against the code was
@@ -26,12 +31,12 @@ re-entered — works and has a regression test. Everything a guest might do to
 
 | Group | Marked from the code |
 |---|---|
-| IRR / ISR / IMR and the priority rule | **IMPL** — and it is the good part |
-| ICW1–ICW4 sequence | **PART** — the sequence is walked, but 3 of ICW1's 6 side effects and most of ICW4 are dropped |
+| IRR / ISR / IMR and the priority rule | **IMPL** — and it is the good part; the rule follows the rotation since #174 |
+| ICW1–ICW4 sequence | **IMPL** for everything a PC can see — ICW1's resets, ICW4's AEOI and SFNM; ICW3, µPM, BUF, LTIM dropped (§3) |
 | OCW1 (mask) | **IMPL** |
-| OCW2 (EOI family) | **PART** — the two EOIs are right, all four **rotation** forms are not modelled |
-| OCW3 (read select / poll / SMM) | **PART** — read select and **Poll** done; Special Mask Mode absent |
-| Cascade | **PART** — hard-wired to IRQ2 (correct on a PC) but **behaves as if SFNM were on** |
+| OCW2 (EOI family) | **IMPL** in the chip *(#174)* — ⚠ the host still walks pending lines in the fixed order (§4) |
+| OCW3 (read select / poll / SMM) | **IMPL** *(SMM: #174)* |
+| Cascade | **IMPL** *(#174)* — hard-wired to IRQ2 (correct on a PC); fully nested by default, SFNM on request |
 
 ---
 
@@ -39,29 +44,34 @@ re-entered — works and has a regression test. Everything a guest might do to
 
 | Port | Access | Register | Status | Evidence |
 |---|---|---|---|---|
-| `20h`/`A0h` | W | ICW1 · OCW2 · OCW3 | **PART** | `pic_cmd_write`, `vdd_pic.c:39` — decodes all three, see §3–§5 |
-| `20h`/`A0h` | R | IRR · ISR · **poll** | **IMPL** | `pic_in`, `vdd_pic.c:148`; the poll arm at `:157` |
-| `21h`/`A1h` | W | ICW2/3/4 · OCW1 | **PART** | `pic_data_write`, `vdd_pic.c:71` |
-| `21h`/`A1h` | R | IMR | **IMPL** | `vdd_pic.c:153` |
+| `20h`/`A0h` | W | ICW1 · OCW2 · OCW3 | **IMPL** | `pic_cmd_write`, `vdd_pic.c:101` — decodes all three, see §3–§5 |
+| `20h`/`A0h` | R | IRR · ISR · **poll** | **IMPL** | `pic_in`, `vdd_pic.c:246`; the poll arm at `:255` |
+| `21h`/`A1h` | W | ICW2/3/4 · OCW1 | **PART** | `pic_data_write`, `vdd_pic.c:198` — ICW3 dropped (§3) |
+| `21h`/`A1h` | R | IMR | **IMPL** | `vdd_pic.c:252` |
 
 ## 2. The three registers and the priority rule — the part that works
 
 | Item | Status | Evidence |
 |---|---|---|
-| IMR blocks delivery | **IMPL** | `vdd_pic_can_deliver`, `vdd_pic.c:176` |
-| ISR blocks its own line **and all lower priority** | **IMPL** | `vdd_pic.c:122` — `isr & ((bit << 1) - 1)` |
-| ISR set at delivery unless AEOI | **IMPL** | `vdd_pic_acknowledge`, `vdd_pic.c:139` |
-| Non-specific EOI clears the **highest-priority** ISR bit | **IMPL** | `vdd_pic.c:54` via `pic_top` |
-| Specific EOI clears the named bit | **IMPL** | `vdd_pic.c:58` |
-| A slave line also puts IR2 in service, and both need an EOI | **IMPL** | `vdd_pic.c:140` and `:166` |
-| Host-vectored lines the guest will never EOI are auto-EOI'd | **IMPL** | `vdd_pic_ack_autoeoi`, `vdd_pic.c:155` |
-| ISR/IRR updates are **atomic** across threads | **IMPL** | `ISR_SET`/`ISR_CLR`/`IRR_CLR`, `vdd_pic.c:30-34` |
+| IMR blocks delivery | **IMPL** | `pic_line_open`, `vdd_pic.c:55`; `vdd_pic_can_deliver`, `:267` |
+| ISR blocks its own line **and all lower priority** — in the current rotation | **IMPL** | `pic_blockers`, `vdd_pic.c:40`; ranks from `pic_rank`, `:11` |
+| ISR set at delivery unless AEOI | **IMPL** | `pic_intack`, `vdd_pic.c:92`, from `vdd_pic_acknowledge`, `:292` |
+| Non-specific EOI clears the **highest-priority** ISR bit | **IMPL** | `vdd_pic.c:156` via `pic_top` (`:17`) |
+| Specific EOI clears the named bit | **IMPL** | `vdd_pic.c:160` |
+| A slave line also puts IR2 in service, and both need an EOI | **IMPL** | `vdd_pic.c:301` and `:326` |
+| Host-vectored lines the guest will never EOI are auto-EOI'd | **IMPL** | `vdd_pic_ack_autoeoi`, `vdd_pic.c:316` |
+| ISR/IRR updates are **atomic** across threads | **IMPL** | `ISR_SET`/`ISR_CLR`/`IRR_CLR`, `vdd_pic.c:80-84` |
+
+★ **The default state is pinned EXHAUSTIVELY** (`pic_test.c`, *"default: master resolver ==
+the old lowest-bit-first rule"*): every ISR byte × four IMRs × eight lines answers exactly
+as the pre-#174 test `isr & ((bit << 1) - 1)` did. With `prio_low = 7`, `pic_rank` is the
+identity, so rotation costs a guest that never rotates nothing.
 
 ✅ **This is where the two worst bugs in the project lived** — the keyboard
 re-entrancy hang and Lemmings' timer — and both are now regression-tested, off-VM and
 by probe. Nothing below detracts from that.
 
-⚠ **`vdd_pic_raise` is a plain read-modify-write on `irr` (`vdd_pic.c:108`)** while
+⚠ **`vdd_pic_raise` is a plain read-modify-write on `irr` (`vdd_pic.c:261`)** while
 everything around it is atomic. **NOT a defect, and marked N/A rather than PART:** the
 host does not call it for master lines — `main.c:3149` does its own
 `__sync_fetch_and_or` — and the comment there records that nothing raises a *slave*
@@ -79,20 +89,30 @@ Skyroads `n8=0 max_ms=7`; Win16 Notepad opens and closes. [[irq0-must-be-held-in
 
 | Item | Status | Evidence |
 |---|---|---|
-| ICW1 recognised, sequence walked | **IMPL** | `vdd_pic.c:41-46`, `:73-79` |
-| ICW1 clears the IMR | **IMPL** | `vdd_pic.c:45` |
-| **ICW1 resets the status read to IRR** | ⛔ **MISS** | nothing clears `read_isr`; `vdd_pic.c:41-46` |
-| **ICW1 resets priority rotation / slave address / edge sense** | **N/A** | there is no rotation or edge-sense state to reset — see §4, §6 |
-| **ICW1 clears Special Mask Mode** | **N/A** | SMM does not exist — §5 |
-| ICW2 sets the vector base | **IMPL** | `vdd_pic.c:74`; `vdd_pic_vector`, `:169` |
-| **ICW3 — the cascade map** | ⛔ **DROP** | `vdd_pic.c:75` consumes the byte and discards it; the cascade is hard-coded to IRQ2 (`:125`, `:140`) |
-| ICW4 bit 1 — AEOI | **IMPL** | `vdd_pic.c:76` |
-| **ICW4 bit 0 (µPM), bit 3 (BUF), bit 4 (SFNM)** | ⛔ **DROP** | `vdd_pic.c:76` reads only bit 1 |
+| ICW1 recognised, sequence walked | **IMPL** | `vdd_pic.c:103-125`, `:198-210` |
+| ICW1 clears the IMR | **IMPL** | `vdd_pic.c:107` |
+| **ICW1 resets the status read to IRR** | ✅ **IMPL** *(#174 — spec-derived, see below)* | `vdd_pic.c:119` |
+| **ICW1 assigns IR7 the lowest priority** | ✅ **IMPL** *(#174)* | `vdd_pic.c:120` |
+| **ICW1 clears Special Mask Mode** | ✅ **IMPL** *(#174)* | `vdd_pic.c:120` |
+| ICW1 clears rotate-in-AEOI | **IMPL** — *not on Intel's list*; QEMU's init reset does it | `vdd_pic.c:120` |
+| **ICW1 with IC4 = 0 zeroes the ICW4 functions** | ✅ **IMPL** *(#174)* | `vdd_pic.c:123` — AEOI and SFNM |
+| ICW1 resets the edge-sense circuit | **IMPL** in effect | `vdd_pic.c:106` clears the IRR (see the 2026-09-23 split below) |
+| ICW1 sets the slave-mode address to 7 | **N/A** | no slave-address state; ICW3 is dropped |
+| ICW2 sets the vector base | **IMPL** | `vdd_pic.c:201`; `vdd_pic_vector`, `:334` |
+| **ICW3 — the cascade map** | ⛔ **DROP** | `vdd_pic.c:202` consumes the byte and discards it; the cascade is hard-coded to IRQ2 (`:288`, `:301`) |
+| ICW4 bit 1 — AEOI | **IMPL** | `vdd_pic.c:203` |
+| ICW4 bit 4 — **SFNM** | ✅ **IMPL** *(#174)* | `vdd_pic.c:207`; used by `pic_blockers`, `:47` |
+| ICW4 bit 0 (µPM), bit 3 (BUF) · ICW1 LTIM | **DROP** | no effect a host without a bus cycle can show |
 
-⛔ **ICW1's read-select reset is the one that is guest-visible and cheap.** The
-datasheet lists it with the IMR clear, and we implement one and not the other. A guest
-that selects the ISR, re-initialises the chip and then reads `20h` gets our ISR where
-hardware gives the IRR.
+⚠ **ICW1's read-select reset is SPEC-DERIVED AND UNVERIFIED BY ORACLE.** Implemented to the
+datasheet (#174). The only oracle whose answer discriminates it is PCem, and PCem does
+**not** reset it (2026-09-23 table below); QEMU and dosbox-x clear the IRR at ICW1, so their
+read cannot say which register came back. One emulator against the datasheet is not a
+second oracle. ⚠ **Our own `pic.icw1.readsel` answer does not move** (`0000` before and
+after): we clear the IRR at ICW1, so both registers read zero and the probe cannot see
+the fix on our host either. A discriminating probe needs a request latched *after* ICW1
+and before the read — the shape `pic_test.c` uses ("icw1: ...so a read with no OCW3
+returns the IRR").
 
 ⚠ **ICW3 being dropped is correct in effect on a PC** (the slave is always on IR2) but
 it is an *assumption*, not a decision, until it is written down. It is now.
@@ -101,31 +121,42 @@ it is an *assumption*, not a decision, until it is written down. It is now.
 
 | Command | Status | Evidence |
 |---|---|---|
-| `20h` non-specific EOI | **IMPL** | `vdd_pic.c:54` |
-| `60h` specific EOI | **IMPL** | `vdd_pic.c:58` |
-| `A0h` rotate on non-specific EOI | ⛔ **PART** | `vdd_pic.c:61` — **clears the bit, does not rotate** |
-| `E0h` rotate on specific EOI | ✅ **PART** *(2026-09-23)* | `vdd_pic.c:91` — now **EOIs**; the rotation half still has no priority state |
-| `C0h` set priority | ⛔ **MISS** | `default:` |
-| `80h`/`00h` rotate in AEOI | ⛔ **MISS** | `default:` |
+| `20h` non-specific EOI | **IMPL** | `vdd_pic.c:156` — the highest in the *current* rotation |
+| `60h` specific EOI | **IMPL** | `vdd_pic.c:160` |
+| `A0h` rotate on non-specific EOI | ✅ **IMPL** *(#174)* | `vdd_pic.c:165` — EOIs, then the ended line is the lowest; nothing in service ⇒ no rotation (as QEMU) |
+| `E0h` rotate on specific EOI | ✅ **IMPL** *(EOI 2026-09-23, rotation #174)* | `vdd_pic.c:177` |
+| `C0h` set priority | ✅ **IMPL** *(#174)* | `vdd_pic.c:182` — not an EOI |
+| `80h`/`00h` rotate in AEOI | ✅ **IMPL** *(#174)* | `vdd_pic.c:187-188`; acts at acknowledge — `pic_intack` `:92`, `vdd_pic_ack_autoeoi` `:323` |
+| `40h` no-op | **IMPL** | `default:` |
 
-⛔ **There is no priority state at all.** `pic_top` (`vdd_pic.c:6`) is hard-coded
-lowest-bit-first, so "rotate" has nothing to rotate — both rotate forms end the
-interrupt and then do not rotate. That is the *right* half to have: **an ISR bit that is
-never cleared does not cost one interrupt, it kills that priority level and everything
-below it for the rest of the run**, whereas a missing rotation only costs fairness
-between devices in a scheme a PC BIOS never programs.
+✅ **Priority is a ring now** (`prio_low`, the lowest-priority IR; `pic_rank`). It drives
+the ISR blocking rule, the non-specific EOI and the poll — everything the *chip* decides.
+Spec-derived; no probe asks any rotation question yet.
 
-⚠ **A PC BIOS never rotates and DOS software rarely does**, so this is low-frequency —
-but "low-frequency" is a guess about guests, and the scope rule says a device is in
-because it is in the hardware contract. Recorded as a real gap, priced honestly.
+⚠ **NOT DONE: the host's choice between pending lines.** The 8259A delivers the
+highest-priority pending request; ours has no wire, so the host picks. It walks
+`g_irq_order` (`main.c:2822`: `0, 1, [2 → 8–15], 3–7`, IRQ0/IRQ1 on dedicated paths) and
+asks `vdd_pic_can_deliver` line by line — the fixed order. After a guest rotates,
+`can_deliver` still refuses everything an in-service line outranks, so **re-entrancy and
+nesting follow the rotation**; but with two lines pending and neither in service, the host
+may take the one the rotated chip ranks lower. Fixing it means re-ordering three host loops
+plus the IRQ0/IRQ1 paths. Consulting the IRR from inside `can_deliver` instead is
+**unsafe**: the host clears its own latch without clearing the IRR when it drops an
+unhooked line (`main.c:25579`), so a stale IRR bit would block a lower line for good.
+Recorded, not faked. A PC BIOS never rotates and DOS software rarely does.
 
 ## 5. OCW3 — read select, Poll, Special Mask Mode
 
 | Field | Status | Evidence |
 |---|---|---|
-| RR/RIS read select, and only when bit 1 is set | **IMPL** | `vdd_pic.c:49` |
-| **P — Poll command** | ✅ **IMPL** *(2026-09-23)* | `pic_poll_read`, `vdd_pic.c:133`; armed at `:66`, one-shot at `:157` |
-| **ESMM/SMM — Special Mask Mode** | ⛔ **MISS** | bits 6:5 discarded |
+| RR/RIS read select, and only when bit 1 is set | **IMPL** | `vdd_pic.c:127` |
+| **P — Poll command** | ✅ **IMPL** *(2026-09-23)* | `pic_poll_read`, `vdd_pic.c:235`; armed at `:146`, one-shot at `:255`; follows rotation and SMM since #174 |
+| **ESMM/SMM — Special Mask Mode** | ✅ **IMPL** *(#174)* | set/clear `vdd_pic.c:130`; the effect is in `pic_blockers`, `:44` |
+
+**SMM as modelled:** the resolver sees `ISR & ~IMR` — a *masked* in-service line stops
+blocking anything; an *unmasked* in-service line still blocks itself and below (QEMU, MAME
+and Bochs read the datasheet the same way). The non-specific EOI still works from the full
+ISR: the datasheet says a guest in SMM must use a specific EOI. Spec-derived; no probe.
 
 ⛔⛔ **POLL WAS THE DANGEROUS ONE, because it is the "runs but lies" shape** — and that
 is why it was worth implementing on a 1-vs-2 oracle split. A poll read and a status read
@@ -139,20 +170,27 @@ that polled did not get an error — it got the **IRR byte**, and read it as
 
 | Item | Status | Evidence |
 |---|---|---|
-| Slave lines gated by the master's IRQ2 mask | **IMPL** | `vdd_pic.c:125` |
-| Slave lines outranked by master IRQ0/IRQ1 | **IMPL** | `vdd_pic.c:126` |
-| Slave line sets IR2 in service; EOI of the last slave line releases it | **IMPL** | `vdd_pic.c:140`, `:166` |
-| **A second slave line while IR2 is in service** | ⛔ **WRONG DEFAULT** | `vdd_pic.c:122-127` — the master's IR2-in-service is never consulted |
+| Slave lines gated by the master's IRQ2 mask | **IMPL** | `vdd_pic.c:288` → `pic_line_open(&m, 2)` |
+| Slave lines outranked by whatever outranks IR2 on the master | **IMPL** | `vdd_pic.c:288` — IRQ0/IRQ1 by default, the rotation otherwise |
+| Slave line sets IR2 in service; EOI of the last slave line releases it | **IMPL** | `vdd_pic.c:301`, `:326` |
+| **A second slave line while IR2 is in service** | ✅ **IMPL** *(#174)* | held (fully nested) unless the master's ICW4 set SFNM; `pic_blockers`, `vdd_pic.c:47` |
 
-⛔ **We implement Special Fully Nested Mode without being asked for it.** `can_deliver`
-checks the *slave's* own ISR for priority and the master's ISR only for bits 0:1, so a
-second slave interrupt gets through while IR2 is still in service. On a real AT, with
-SFNM off (which is what the BIOS programs), it must not. ICW4 bit 4 — the bit that
-would *request* this behaviour — is discarded (§3).
+✅ **Fully nested by default, SFNM on request (#174).** `can_deliver` used to check the
+master's ISR for bits 0:1 only, so a second slave interrupt got in while IR2 was still in
+service — SFNM without anyone asking. Now IR2 in service holds the whole slave until the
+master is EOI'd, as on an AT whose BIOS wrote ICW4 = `01h`. A master ICW4 with bit 4 set
+lets a *higher* slave line through (the slave's own ISR still nests); IR2 in service still
+blocks IRQ3–7 in either mode.
 
-⚠ Direction of the error matters: we are **more permissive** than the hardware, so the
-symptom is a slave handler being re-entered, not an interrupt going missing. Nothing on
-the shelf has shown it, because almost nothing here uses IRQ8–15 heavily.
+⚠ **THIS IS THE ONE DEFAULT-STATE BEHAVIOUR CHANGE IN #174.** It is safe for the host
+because **IR2 in service already blocked IRQ3–7** — any path that left IR2 set was
+already killing five master lines. Every host path that sets it releases it:
+`vdd_pic_eoi` on a slave line clears IR2 with the last slave ISR bit (our stubs, the PM
+default-handler reflection at `main.c:22314`, a failed PM inject at `main.c:30336`),
+`vdd_pic_ack_autoeoi` does acknowledge + EOI, and a guest handler's own `out 20h,20h`
+does the rest. What it CAN change: a guest whose slave handler EOIs the master and `sti`s
+long before its `iret` now gets the next slave interrupt only then (as on an AT); one that
+never EOIs the master already lost IRQ3–7 and now loses the rest of the slave too.
 
 ---
 
@@ -165,7 +203,7 @@ questions still agree; none of them was on the list, which was the point.**
 |---|---|---|---|---|
 | `pic.ocw2.rot.speoi` — does `E0h` end the interrupt? | `0000` | `0000` | `0000` | `0001` → **`0000`** ✅ |
 | `pic.ocw3.poll` — poll with nothing pending | **`0000`** | `0001` | `0001` | `0001` → **`0000`** ✅ |
-| `pic.icw1.readsel` — what ICW1 resets | `0000` | `0000` | `0001` | `0000` ⛔ **open** |
+| `pic.icw1.readsel` — what ICW1 resets | `0000` | `0000` | `0001` | `0000` — *implemented to the datasheet by #174; this case cannot see it (§3)* |
 
 ### ✅ 1. `E0h` is still an EOI — unanimous, so no judgement was needed
 
@@ -192,7 +230,10 @@ interrupt pending"* because bit 7 is clear, an IRR of `0x80` reads as *"pending,
 0"*. `pic_test.c` pins the acknowledge side too (a poll read sets ISR and clears IRR) and
 the one-shot rule. **6 of its checks failed against the previous code.**
 
-### ⛔ 3. ICW1's read-select reset — OPEN, and deliberately not fixed
+### ⚠ 3. ICW1's read-select reset — implemented to the DATASHEET by #174, still unverified
+
+> *(2026-10-01)* The fix went in on the datasheet's authority alone (§3). Everything below
+> about the oracles still stands: no second machine has been seen to answer.
 
 All three hosts answer `AH = 0x00`, but **that only discriminates on PCem.** QEMU and
 dosbox-x report `AL = 0x00` as well — their ICW1 clears the IRR, so both registers are
