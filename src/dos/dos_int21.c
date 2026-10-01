@@ -2268,14 +2268,47 @@ int dos_int21(dos_machine_t *m)
         tp = zhex(tp, (*pfl & 1) ? max : (R_AX & 0xFFFF)); tp = zput(tp, "\r\n");
     } else if (ah == 0x49) {                    /* free block: ES=segment */
         int err = dos_free(NULL, (uint16_t)(R_ES & 0xFFFF));
-        if (err) { SET16(R_AX, err); ERRCF(); } else OKCF();
+        /* ── #258: AND A SUCCESSFUL FREE LEAVES AX = THE BLOCK'S MCB. ────────────────
+             Undocumented, measured (tools/dostest/p_memax): MS-DOS 6.22 and PCem's
+             MS-DOS both return AX = ES-1; dosbox-x leaves AX alone. The Microsoft
+             kernel is the authority. We left AX as the caller's 49xx. */
+        if (err) { SET16(R_AX, err); ERRCF(); }
+        else { SET16(R_AX, (uint16_t)((R_ES & 0xFFFF) - 1)); OKCF(); }
         tp = zput(tp, "  INT21 AH=49 free seg=0x"); tp = zhex(tp, R_ES & 0xFFFF);
         tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
+        /* A refused free names a block the caller believes in and we do not: show
+           what is actually at seg-1, and the chain, so the two can be compared. */
+        if (err) {
+            const volatile BYTE *mb = (const volatile BYTE *)(((R_ES & 0xFFFF) - 1u) << 4);
+            uint16_t s;
+            int k, n = 0;
+            tp = zput(tp, "    at seg-1: ");
+            for (k = 0; k < 16; ++k) { tp = zhexb(tp, mb[k]); tp = zput(tp, " "); }
+            tp = zput(tp, "\r\n    chain:");
+            s = m->first_mcb;
+            while (s && n++ < 40) {
+                const volatile BYTE *mc = (const volatile BYTE *)((DWORD)s << 4);
+                uint16_t own = (uint16_t)(mc[1] | (mc[2] << 8)), sz = (uint16_t)(mc[3] | (mc[4] << 8));
+                tp = zput(tp, " "); tp = zhex(tp, s); tp = zput(tp, mc[0] == 'Z' ? "Z" : mc[0] == 'M' ? "M" : "?");
+                tp = zput(tp, "/"); tp = zhex(tp, own); tp = zput(tp, "/"); tp = zhex(tp, sz);
+                if (mc[0] != 'M') break;
+                s = (uint16_t)(s + 1 + sz);
+            }
+            tp = zput(tp, "\r\n");
+        }
     } else if (ah == 0x4A) {                    /* resize: ES=block BX=new paras */
         uint16_t want = (uint16_t)(R_BX & 0xFFFF), max = 0;
         int err = dos_resize(NULL, (uint16_t)(R_ES & 0xFFFF), want, &max);
+        /* ── #258: A SUCCESSFUL RESIZE LEAVES AX = THE BLOCK'S SEGMENT. ──────────────
+             Undocumented, and QuickBASIC 4.5 depends on it: its Quick Library loader
+             takes AX after shrinking a top-of-memory block as the block's segment.
+             We left the caller's 4Axx there, so `QB /L` loaded the library at 4Axx,
+             freed a block that never existed at Make EXE ("Error in loading file
+             (QB.QLB) - Internal error") and wrote a garbage .LIB into the link.
+             Measured (tools/dostest/p_memax): MS-DOS 6.22, dosbox-x and PCem all
+             return AX = ES for a shrink, a grow and a same-size resize. */
         if (err) { SET16(R_AX, err); if (err == 8) SET16(R_BX, max); ERRCF(); }
-        else OKCF();
+        else { SET16(R_AX, (uint16_t)(R_ES & 0xFFFF)); OKCF(); }
         tp = zput(tp, "  INT21 AH=4A resize seg=0x"); tp = zhex(tp, R_ES & 0xFFFF);
         tp = zput(tp, " -> 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");

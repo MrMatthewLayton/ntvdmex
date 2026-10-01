@@ -2227,6 +2227,12 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     }
     /* The env block belongs to the child, as DOS records it (MCB owner = its PSP). */
     if (envblk) mcb_wr16((volatile uint8_t *)((DWORD)(envblk - 1) << 4) + 1, child);
+    /* ── #243: AND SO DOES THE PROGRAM'S OWN BLOCK. (s86) ───────────────────────────
+         dos_alloc stamps DOS_PSP_SEG (0100h) on what it hands out, and only the env
+         block was put right -- so a child's own memory read as the SHELL's (measured,
+         QB.EXE /L: `026C M owner=0100`). DOS makes the program block's owner the
+         child's PSP, and a program that walks the chain for "my blocks" depends on it. */
+    mcb_wr16((volatile uint8_t *)((DWORD)(child - 1) << 4) + 1, child);
 
     /* Snapshot the parent BEFORE anything is overwritten. */
     g_exec[d].eax = VDM_REG(tib, VTIB_EAX); g_exec[d].ebx = VDM_REG(tib, VTIB_EBX);

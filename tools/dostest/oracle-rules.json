@@ -1965,5 +1965,25 @@
   ],
   "recorded": "2026-10-01",
   "why": "AH=4Fh is the keyboard intercept: INT 09h calls it with the scancode in AL and CF=1, and a handler that wants the key processed returns CF=1 with AL (possibly changed). The unhooked default is therefore 'CF=1, AL unchanged'. SeaBIOS (msdos622) and dosbox-x return AX unchanged (4F1E). PCem's AMI 486 BIOS returns AH=86h ('function not supported') with CF=1 -- its INT 09h calls 4Fh (C0h feature bit 4 is set) but its INT 15h does not implement the function, so AH is the unsupported-function code. CF agrees on all three and is the part INT 09h reads; AH after a CF=1 return is consumed by no one. Ours follows the two that answer the function (GH #206)."
+ },
+ {
+  "probe": "memax",
+  "case": "mem.49.ax",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-01",
+  "why": "What AX holds after a SUCCESSFUL INT 21h AH=49h is undocumented. Both genuine Microsoft kernels (MS-DOS 6.22 under QEMU, and PCem's MS-DOS) return AX = ES-1, the freed block's MCB; dosbox-x leaves the caller's AX. DOSBox's DOS is a reimplementation and its silence here is not evidence about MS-DOS (GH #258 -- the 4Ah sibling of this answer is what QuickBASIC's /L loader depends on)."
+ },
+ {
+  "probe": "memax",
+  "case": "mem.49.ax_minus_seg",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-01",
+  "why": "What AX holds after a SUCCESSFUL INT 21h AH=49h is undocumented. Both genuine Microsoft kernels (MS-DOS 6.22 under QEMU, and PCem's MS-DOS) return AX = ES-1, the freed block's MCB; dosbox-x leaves the caller's AX. DOSBox's DOS is a reimplementation and its silence here is not evidence about MS-DOS (GH #258 -- the 4Ah sibling of this answer is what QuickBASIC's /L loader depends on)."
  }
 ]

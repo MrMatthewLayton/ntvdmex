@@ -5,6 +5,9 @@ rem   qbmake.bat cli host      BC then LINK from a command line, under NTVDMEX
 rem   qbmake.bat cli stock     the same two commands under STOCK ntvdm (the oracle)
 rem   qbmake.bat qb            QB.EXE itself: Run > Make EXE File..., by key script,
 rem                            with every INT 21h traced (the user's actual shape)
+rem   qbmake.bat qb slashl [lib] QB.EXE PERSONAL\T_CAVE.BAS /L [lib]: a Quick Library loaded (#258)
+rem   qbmake.bat qb pif         the same through qb45\T_QB.PIF (a copy of the user's QB.PIF
+rem                            whose program, directory and params point at the share's QB)
 rem
 rem What the user left behind in demo\msdos\qb45 on the 15th: CAVE.OBJ compiled /O
 rem (stand-alone, default library BCOM45), CAVE.EXE of 3,772 bytes with NO relocations
@@ -88,7 +91,10 @@ del /q "%OUT%\ntvdmhost.log" >nul 2>&1
 del /q "%OUT%\shot??.bmp" >nul 2>&1
 del /q "%OUT%\shot??.txt" >nul 2>&1
 del /q "%QB%\~QB*.TMP" >nul 2>&1
-> "%CFG%\target.txt" echo "%QB%\QB.EXE" PERSONAL\T_CAVE.BAS
+if "%2"=="pif" (> "%CFG%\target.txt" echo "%QB%\T_QB.PIF") else (> "%CFG%\target.txt" echo "%QB%\QB.EXE" PERSONAL\T_CAVE.BAS)
+if "%2"=="pif" set R=%OUT%\qbmake_qb_pif.txt
+if "%2"=="slashl" (> "%CFG%\target.txt" echo "%QB%\QB.EXE" PERSONAL\T_CAVE.BAS /L %3)
+if "%2"=="slashl" set R=%OUT%\qbmake_qb_slashl.txt
 copy /y "%QB%\Personal\CAVE.BAS" "%QB%\Personal\T_CAVE.BAS" >nul
 > "%CFG%\qimode.txt" echo 20
 > "%CFG%\dostrace.flag" echo.
