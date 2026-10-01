@@ -144,7 +144,7 @@ Each surface gets two documents, doing two different jobs:
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | [mpu401.md](mpu401.md) — 32 units (s84) | — |
 | 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) — marked 2026-09-23, measured on three oracles (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
 | **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited**. ⚠ INT 13h still does not drive it ([dos-services.md](dos-services.md) §6) | ✅ [`ref/fdc.md`](../ref/fdc.md) |
-| IDE / ATA + ATAPI | ATA-x, ATAPI specs | — ⚠ `3F6h` (alternate status) answers `FFh`; both oracles say `50h`. Found by the FDC probe, filed here | — |
+| IDE / ATA + ATAPI | ATA-x, ATAPI specs | [ide.md](ide.md) — 34 units, 30 MISS: **no adapter**, by accident rather than decision; `3F6h` answers `FFh` (BSY set) where both oracles say `50h` (2026-10-01) | — |
 | **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
 
 ### Firmware
