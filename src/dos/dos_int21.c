@@ -2265,7 +2265,18 @@ int dos_int21(dos_machine_t *m)
             tp = zput(tp, " DX=0x"); tp = zhex(tp, R_DX & 0xFFFF);
             tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
         }
-        else                   { OKCF(); }
+        /* ── #251: WHAT DOS SUPPORTS SUCCEEDS; THE REST IS "INVALID FUNCTION". ───────
+             Every other sub-function answered CF=0 -- success, with nothing done.
+             Measured (tools/dostest/p_ioctl2) on msdos622, dosbox-x and pcem alike:
+             02h/04h (read control data), 0Ch/10h on CON, and the unassigned 12h/1Fh
+             answer AX=0001 CF=1; 0Ah, 0Dh and 11h on a fixed disk answer CF=0.
+             0Ah reports a local handle (DX bit 15 clear). 0Dh/11h keep today's bare
+             success -- a disk-parameter block is a separate piece of work, and turning
+             a success into a refusal there would break callers that work now. */
+        else if (al == 0x01 || al == 0x0B || al == 0x0D || al == 0x0F) { OKCF(); }
+        else if (al == 0x0A) { SET16(R_DX, 0x0000); OKCF(); }
+        else if (al == 0x11) { SETAX(R_AX & 0xFF00); OKCF(); }   /* AL=0: supported */
+        else                 { SETAX(0x0001); ERRCF(); }
         if (al != 0x08 && al != 0x09 && al != 0x0E) {
             tp = zput(tp, "  INT21 AH=44 ioctl AL=0x"); tp = zhex(tp, al);
             tp = zput(tp, " BX=0x"); tp = zhex(tp, bx); tp = zput(tp, "\r\n");

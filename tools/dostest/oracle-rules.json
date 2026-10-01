@@ -1985,5 +1985,17 @@
   ],
   "recorded": "2026-10-01",
   "why": "What AX holds after a SUCCESSFUL INT 21h AH=49h is undocumented. Both genuine Microsoft kernels (MS-DOS 6.22 under QEMU, and PCem's MS-DOS) return AX = ES-1, the freed block's MCB; dosbox-x leaves the caller's AX. DOSBox's DOS is a reimplementation and its silence here is not evidence about MS-DOS (GH #258 -- the 4Ah sibling of this answer is what QuickBASIC's /L loader depends on)."
+ },
+ {
+  "probe": "ioctl2",
+  "case": "int21.4411.C.60",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-10-01",
+  "why": "AH=44h AL=11h (query generic IOCTL capability) reports 'supported' as AL=00h with CF=0; AH is not part of the answer. The two Microsoft kernels leave AH=D1h (an internal value), dosbox-x 00h, and we leave 44h. CF (compared) and AL=0 are the contract; the whole word is not (GH #251)."
  }
 ]
