@@ -38,7 +38,19 @@
 
 #include "vdd_bus.h"
 
-#define COMM_MAX_PORTS 2
+/* ── FOUR SLOTS, BECAUSE THE PC HAS FOUR COM ADDRESSES. (GH #181) ────────────
+     COM1 3F8h/IRQ4, COM2 2F8h/IRQ3, COM3 3E8h/IRQ4, COM4 2E8h/IRQ3 -- the
+     IBM PC TechRef assignments, docs/ref/uart.md section 1. The device holds
+     all four and claims whichever the HOST marks fitted; it does not decide
+     how many ports the machine has. That decision is the host's, and it is
+     the one that has to agree with the equipment word (INT 11h bits 9-11) and
+     the BDA base table at 0040:0000 -- see main.c, which derives both from
+     vdd_comm_fitted() rather than from a second list.
+   ⚠ COM3 AND COM4 SHARE A LINE WITH COM1 AND COM2. Nothing here arbitrates:
+     each port raises its own IRQ number and the PIC sees one edge per raise,
+     which is what two UARTs on one wire do. Whether the guest's drivers
+     cooperate over the shared line is their business, as it was in 1990. */
+#define COMM_MAX_PORTS 4
 #define COMM_RX_RING   256      /* host input waiting for the guest             */
 
 /* register offsets from the port base */

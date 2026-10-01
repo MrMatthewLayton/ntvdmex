@@ -2,9 +2,9 @@
 
 **Spec:** National Semiconductor 8250/16450/16550A datasheets; IBM PC TechRef.
 **▶ The hardware reference is [`../ref/uart.md`](../ref/uart.md)** — what the chip *does*.
-**Our implementation:** `src/vdd/vdd_comm.c` (402 lines), `src/vdd/vdd_comm.h`.
+**Our implementation:** `src/vdd/vdd_comm.c` (419 lines), `src/vdd/vdd_comm.h`.
 **Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. DOS probe: `tools/dostest/p_uart.asm`.
-**Marked:** 2026-09-23, **from the code**.
+**Marked:** 2026-09-23, **from the code**; OUT2 and COM3/COM4 rows re-marked 2026-10-01 (#181).
 
 ---
 
@@ -73,6 +73,8 @@ with the mechanism recorded rather than the value.
 | IIR — the read **is** the THRE acknowledgement | **IMPL** | |
 | IIR bits 7:6 gated on FCR bit 0 | **IMPL** | answering `C0h` on a part behaving like an 8250 would tell a 16550-aware driver it may write 16 bytes between interrupts |
 | **Loopback as a rewiring, with the correct four-line pairing** | ✅ **IMPL** | measured |
+| **MCR bit 3 (OUT2) as the interrupt gate** | **IMPL** | `vdd_comm.c:49` — `comm_update_irq` returns before `vdd_raise_irq` with OUT2 clear; `comm_iir` never reads MCR, so **IIR still names the source**; the MCR write re-runs the check, so setting OUT2 onto a pending source raises at once. Off-VM: `comm_test.c:201` (fails 5 checks with the gate removed). ⚠ **This row was marked MISS on 2026-09-23 and the gate had been there since the first commit (`f547336`)** — the mark was taken from the inventory's expectation, not the line |
+| OUT2 gate **in loopback** | ⚠ **PART** | the bit is honoured as written in loopback too (the IRQ is delivered with OUT2 set). The 8250/16550 datasheets say loopback forces the modem-control output *pins* inactive, which on an IBM-style card would close the buffer regardless; Super I/O parts that gate OUT2 internally document it differently. **Unsettled — needs an oracle**, not pinned by a test |
 
 ## 2. What is not there
 
@@ -80,9 +82,8 @@ with the mechanism recorded rather than the value.
 |---|---|---|
 | A real 16-byte **FIFO** | ⛔ **PART** | FCR is stored and gates IIR's bits, but there is no depth behind it. A 16550-aware driver told it may write 16 bytes is served one at a time — correct, just not faster |
 | The **baud divisor has no effect** | ⚠ **N/A-by-design** | there is no wire and no timing to slow down; the value round-trips, which is all a driver checks |
-| **MCR bit 3 (OUT2) as the interrupt gate** | ⛔ **MISS** | on a PC the IRQ line runs through a buffer OUT2 enables. A guest that clears OUT2 should get **no interrupts**; we deliver them anyway. The direction is permissive, so nothing breaks — but a driver using OUT2 to mask its own port is not served |
 | Break generation (LCR bit 6) | ⛔ **MISS** | |
-| COM3 / COM4 | ⛔ **MISS** | `COMM_MAX_PORTS 2` |
+| COM3 / COM4 | **PART** | the device has four slots (`vdd_comm.h:53`, `COMM_MAX_PORTS 4`) and a fitted COM3 3E8h/IRQ4 or COM4 2E8h/IRQ3 works on every route (`comm_test.c:267`). **The host fits only COM1/COM2** (`main.c:27775`); the BDA rows 0040:0000–0007 (`main.c:27797`) and the INT 11h serial count (`main.c:2474`) are both derived from `vdd_comm_fitted`, so fitting one is a single line. Not done because it changes INT 11h (2 → 4 ports) and the BDA — an oracle question (#181) |
 
 ---
 

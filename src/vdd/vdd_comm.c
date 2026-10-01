@@ -22,10 +22,27 @@ static uint8_t comm_iir(comm_port *c)
     return 0x01;                                  /* bit 0 set = nothing owed  */
 }
 
-/* Raise the line if anything is owed. OUT2 gates the IRQ on a PC -- the UART's
-   interrupt pin reaches the PIC through a buffer that OUT2 enables -- which is
-   why every DOS serial driver sets MCR bit 3 and why forgetting it here would
-   make interrupt-driven receive work in emulation and nowhere else. */
+/* ── OUT2 IS THE INTERRUPT GATE, AND IT GATES THE PIN, NOT THE PART. ────────
+     Raise the line if anything is owed. OUT2 gates the IRQ on a PC -- the
+     UART's interrupt pin reaches the PIC through a buffer that OUT2 enables
+     (IBM PC TechRef; docs/ref/uart.md section 4) -- which is why every DOS
+     serial driver sets MCR bit 3 and why forgetting it here would make
+     interrupt-driven receive work in emulation and nowhere else.
+   ★ THE GATE IS OUTSIDE THE CHIP, SO IT STOPS ONLY THE PIC FROM HEARING.
+     With OUT2 clear the part still decides an interrupt is pending and IIR
+     still names it -- comm_iir() never looks at MCR. A driver that polls IIR
+     with its line masked off this way reads the true source, as on hardware.
+   ★ OPENING THE GATE ONTO A PENDING SOURCE IS AN EDGE. The part's INTR pin is
+     already high; enabling the buffer is what lets the PIC see it rise. That
+     is why the MCR write below calls this function, and why setting OUT2 late
+     -- after IER, the usual driver order -- still delivers the interrupt that
+     was waiting.
+   ⚠ NOT SETTLED: LOOPBACK. The 8250/16550 datasheets say loopback forces the
+     modem-control OUTPUT PINS to their inactive state, which on an IBM-style
+     card would close this buffer whatever MCR bit 3 says; Super I/O parts that
+     gate OUT2 internally document it differently, and no oracle has been asked
+     (GH #181). Until one is, the bit is honoured as written in loopback too --
+     the behaviour this file has always had, rather than a new guess. */
 static void comm_update_irq(comm_state *st, comm_port *c)
 {
     if (!st->bus || !c->fitted) return;

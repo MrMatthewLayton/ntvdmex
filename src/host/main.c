@@ -2421,7 +2421,11 @@ static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying
 static HANDLE g_com_spool[COMM_MAX_PORTS];
 static int    g_com_failed[COMM_MAX_PORTS];
 /* Composed at open time (the root is runtime-derived now, see NTVDMEX_DIR). */
-static const char *const g_com_spool_name[COMM_MAX_PORTS] = { "SERIAL1.TXT", "SERIAL2.TXT" };
+/* ⚠ One name per VDD slot, fitted or not (GH #181 grew the slots to four): a
+     slot with no name would hand OUT_() a NULL the first time a later change
+     fits COM3 and a guest transmits on it. */
+static const char *const g_com_spool_name[COMM_MAX_PORTS] =
+    { "SERIAL1.TXT", "SERIAL2.TXT", "SERIAL3.TXT", "SERIAL4.TXT" };
 #define g_com_spool_path(i) OUT_(g_com_spool_name[i])
 /* Opened lazily on the first byte, so a run that never transmits leaves no file
    to confuse the next one -- and flushed per byte, because a VDM is far more
@@ -27780,9 +27784,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          refused for want of a bus table slot is not fitted, and writing its base
          here anyway would recreate the very inconsistency this block exists to
          fix, one layer down. */
-      bda[0] = (WORD)(vdd_comm_fitted(&g_comm, 0) ? 0x03F8 : 0);
-      bda[1] = (WORD)(vdd_comm_fitted(&g_comm, 1) ? 0x02F8 : 0);
-      bda[2] = 0; bda[3] = 0;                           /* COM3..COM4: none fitted   */
+      /* ── ★ ONE LOOP OVER THE VDD'S SLOTS, NOT FOUR LITERALS. (GH #181) ──
+           The table has room for COM1..COM4 and the VDD now has four slots,
+           so the row for each comes from the slot's own base and fitted flag
+           -- the same source bios_equipment_word() counts. COM3/COM4 are not
+           fitted above (that is an oracle question: whether a period machine
+           of the kind we model declares four ports, #181), so they still read
+           0 here; the point is that fitting one is now a single line above
+           and this table and INT 11h follow it without being edited. */
+      { int ci;
+        for (ci = 0; ci < 4; ++ci)
+            bda[ci] = (WORD)(vdd_comm_fitted(&g_comm, ci) ? g_comm.p[ci].base : 0); }
       bda[4] = (WORD)(vdd_lpt_fitted(&g_comm, 0) ? 0x0378 : 0);   /* LPT1          */
       bda[5] = 0; bda[6] = 0; bda[7] = 0; }             /* LPT2..LPT4: none fitted   */
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
