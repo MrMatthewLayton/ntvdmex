@@ -9,8 +9,8 @@ port are [uart.md](uart.md). **INT 13h/25h/26h** are in [dos-services.md](dos-se
 **Our implementation:** the V86 BIOS arm in `src/host/main.c` (≈`:29037-29383`, *"BIOS
 services: INT 11h/12h/13h/14h/15h/17h/25h/26h"*), its PM twins (≈`:22263-22404`), INT 08h/1Ah
 in `src/vdd/vdd_pit.c` (`:517-599`), INT 14h in `src/vdd/vdd_comm.c` (`:224-271`).
-**Probes:** `p_bios.asm`, `p_int15.asm`, `p_lpt.asm`. **Off-VM:** `pit_test.c` (T7, T8,
-T16), `comm_test.c`.
+**Probes:** `p_bios.asm`, `p_int15.asm`, `p_lpt.asm`. **Off-VM:** `bda_test.c` (#253), `pit_test.c` (T7, T8,
+T16, T17), `comm_test.c`.
 **Marked:** 2026-10-01, **from the code**. Carried over from `docs/PARITY.md` (retired
 2026-09-23) and re-marked; this file now also covers INT 08h, 14h, 15h and 17h, which
 had no inventory.
@@ -35,10 +35,10 @@ every printer number is LPT1. (#206, merged while this was being marked, made `A
 | §1 INT 11h / 12h | 2 | 2 | — | — | — | — |
 | §2 INT 1Ah | 7 | 4 | — | — | 2 | 1 |
 | §3 INT 08h / INT 1Ch | 4 | 3 | — | — | 1 | — |
-| §4 INT 15h | 17 | 2 | 5 | — | 8 | 2 |
+| §4 INT 15h | 17 | 2 | 6 | — | 7 | 2 |
 | §5 INT 14h | 5 | 4 | — | — | 1 | — |
 | §6 INT 17h | 4 | 2 | 1 | — | 1 | — |
-| **Total** | **39** | **17** | **6** | **—** | **13** | **3** |
+| **Total** | **39** | **17** | **7** | **—** | **12** | **3** |
 
 ---
 
@@ -46,8 +46,8 @@ every printer number is LPT1. (#206, merged while this was being marked, made `A
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| INT 11h equipment word | **IMPL** | `bios_equipment_word` (`main.c:2470-2494`): floppy, 80x25 colour, one LPT, the serial count **from the UART VDD**, bit 1 from the `Fpu` setting, bit 12 from the joystick setting. V86 `:29054-29059`; PM twin uses the same function (`:22335-22348`) | abstained (`int11.equip`: it describes the machine); `p_lpt int11.equipment` blocked on PCem |
-| INT 12h conventional memory | **IMPL** | `main.c:29060-29068`, derived from `DOS_MEM_TOP` = 639 KB. ⚠ The comment says the top 1 KB is the EBDA, but `0040:000E` is written `0` (`main.c:27908`), INT 15h `C1h` answers CF=1 and the `C0h` table says *no EBDA* — three answers that there is none. See the BDA/EBDA row in the README | provisional (`int12.memk` = `027Fh`) |
+| INT 11h equipment word | **IMPL** | `bios_equipment_word` (`main.c:2477-2501`): floppy, 80x25 colour, one LPT, the serial count **from the UART VDD**, bit 1 from the `Fpu` setting, bit 12 from the joystick setting. V86 `:29102-29107`; PM twin uses the same function (`:22358-22371`). ★ #253: `0040:0010` is written from the same function at start-up (`bios_bda_init`, `main.c:27955`) and re-written when the joystick setting changes (`bios_bda_refresh_equipment`, `:2509-2513`, called from `settings_apply` `:10998`) | abstained (`int11.equip`: it describes the machine); `p_lpt int11.equipment` blocked on PCem |
+| INT 12h conventional memory | **IMPL** | `main.c:29108-29119`: `BIOS_BASE_MEM_KB` (`src/dos/bios_bda.h`) = `DOS_MEM_TOP` in KB = 639. ★ #253: the withheld kilobyte is now a real 1 KB EBDA at `9FC0h` — `0040:000E`, INT 15h `C1h` and the `C0h` feature bit 2 all say so, and `0040:0013` holds the same constant ([bda.md](bda.md) §1, §6) | provisional (`int12.memk` = `027Fh`, agrees with 6.22) |
 
 ## 2. INT 1Ah
 
@@ -56,7 +56,7 @@ every printer number is LPT1. (#206, merged while this was being marked, made `A
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `00h` | read tick count, midnight flag | **IMPL** | `:566-572`; AL = flag, cleared by the read | provisional (`int1a.00.midnight`, `.advances`); pit_test T7 |
+| `00h` | read tick count, midnight flag | **IMPL** | `:566-572`; AL = flag, cleared by the read. ★ #253: the count is ticks since midnight — seeded at start-up from the same `rtc_now` AH=02h reads (`vdd_pit_seed_time_of_day`, `vdd_pit.c:560-570`; called `main.c:27812`) | provisional (`int1a.00.midnight`, `.advances`); pit_test T7, T17 (seed, and AH=00h/02h agree to the second) |
 | `01h` | set tick count | **IMPL** | `:573-577` | pit_test T8 |
 | `02h` | read RTC time, BCD | **IMPL** | `:578-585`; host clock via `rtc_now` (`main.c:13185`, local time). DL (DST) = 0. No clock installed → not answered | provisional (`int1a.02.isbcd`); pit_test T16 |
 | `04h` | read RTC date, BCD | **IMPL** | `:586-591` | provisional (`int1a.04.isbcd`) |
@@ -91,8 +91,8 @@ logged as `INT15 UNIMPL` (`:29193-29208`).
 | `88h` | extended memory size | **PART** | `:29071-29095`: always `3C00h` (15 MB). ⚠ **The same memory is also handed out by XMS**; a real machine with HIMEM reports 0 here. Recorded in the code and deliberately not changed | untested |
 | `89h` | switch to protected mode | **N/A** | a V86 guest cannot be handed the CPU; DPMI is the route | — |
 | `90h`/`91h` | device busy / interrupt complete (hooks) | **MISS** | never called by our INT 13h/16h waits | — |
-| `C0h` | system configuration table | **PART** | V86 **IMPL**: `ES:BX` → `DOS_CTAB_SEG:DOS_SYSCONF_OFF`, model bytes `FC 01 00` from PCem's AMI, feature bits set only where true (`:27516-27533`, arm `:29182-29186`). **PM refuses it**, knowingly (`:22367-22380`) | **oracle** (`p_int15` C0h on PCem) |
-| `C1h` | EBDA segment | **MISS** | CF=1 — matches the AMI under PCem, but contradicts INT 12h's 639 KB (§1) | **oracle** (`p_int15`) |
+| `C0h` | system configuration table | **PART** | V86 **IMPL**: `ES:BX` → `DOS_CTAB_SEG:DOS_SYSCONF_OFF`, model bytes `FC 01 00` from PCem's AMI, feature bits set only where true (`:27543-27560`, arm `:29239-29243`) — feature 1 is `64h` since #253 (bit 2, EBDA, set; was `60h`). **PM refuses it**, knowingly (`:22390-22407`) | **oracle** (`p_int15` C0h on PCem) |
+| `C1h` | EBDA segment | **PART** | #253: V86 **IMPL** — `ES=9FC0h`, CF=0, AX untouched (`main.c:29233-29238`), agreeing with INT 12h's 639 KB and `0040:000E`. **PM refuses it** (`:22404-22407`), like `C0h`: a segment in a PM `ES` would be a raw paragraph, not a selector. Now SeaBIOS-shaped; PCem's AMI and dosbox-x have no EBDA and abstain (`oracle-rules.json`) | **oracle** vs 6.22/SeaBIOS (`p_int15`) — owed a re-run |
 | `C2h` | PS/2 pointing device | **MISS** | [mouse.md](mouse.md) §3 | — |
 | `C3h`/`C4h` | watchdog / POS (MCA) | **N/A** | Micro Channel only | — |
 | `E801h` | extended memory, large configurations | **MISS** | refused; DOS extenders and newer HIMEMs ask this before `88h` | — |
@@ -158,6 +158,6 @@ executed rather than reasoned about.
 2. INT 15h `2400h`–`2403h` on the shared A20 flag; `E801h`/`E820h` from the same
    numbers `88h` and XMS use.
 3. INT 17h: honour `DX`; refuse unknown functions.
-4. Settle the EBDA question (INT 12h vs `C1h` vs `0040:000E`), and decide `88h` vs XMS
-   deliberately, with Doom and the batteries re-gated.
+4. ~~Settle the EBDA question~~ — #253: a real 1 KB EBDA at `9FC0h`. Still owed: decide
+   `88h` vs XMS deliberately, with Doom and the batteries re-gated.
 5. INT 08h's diskette-motor countdown, now that the FDC exists.

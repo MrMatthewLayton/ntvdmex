@@ -97,6 +97,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
 #include "dos_mcb.h"
+#include "bios_bda.h"       /* GH #253: 0040:000E/0010/0013 and the EBDA, from one source */
 #include "dos_loader.h"
 #include "dos_psp.h"
 #include "dos_env.h"
@@ -2495,6 +2496,20 @@ static WORD bios_equipment_word(void)
        business (an empty gameport still answers), not the equipment word's. */
     if (g_joy.type != JOY_TYPE_NONE) w |= 0x1000;
     return w;
+}
+
+/* ── ★ AND 0040:0010 SAYS THE SAME THING. (GH #253) ───────────────────────────────
+     A real BIOS's INT 11h is a read of 0040:0010; ours computes, so the BDA copy has to
+     be WRITTEN from this function or the two doors disagree (see bios_bda.h). Written
+     once at start-up by bios_bda_init(), and again here whenever a setting that feeds
+     the word changes while the guest runs (the joystick type -> bit 12).
+   ⚠ g_bda_ready gates it: settings_apply() first runs at the top of WinMain, before
+     v86_init() has committed the guest's low memory, and a write to linear 0x410 then
+     would fault the host. It is set by the start-up block that calls bios_bda_init(). */
+static int g_bda_ready;
+static void bios_bda_refresh_equipment(void)
+{
+    if (g_bda_ready) bios_bda_set_equipment(NULL, bios_equipment_word());
 }
 static void serial_init(void)
 {
@@ -10980,6 +10995,8 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     joy_poll_ensure();               /* spawns the winmm poll thread ONLY if a
                                         joystick is configured -- no thread, and no
                                         timing risk, in the default (None) config */
+    bios_bda_refresh_equipment();    /* #253: bit 12 (game adapter) follows the type
+                                        into 0040:0010 as well as INT 11h */
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
@@ -22383,7 +22400,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              back a SELECTOR for DOS_CTAB_SEG:DOS_SYSCONF_OFF and sending that
                              Win16 driver down its "model FC" path, which nothing has tested --
                              a change to do deliberately with the Win16 shelf re-run, not in
-                             passing. Likewise 87h stays V86-only. */
+                             passing. Likewise 87h stays V86-only.
+                           ⚠ #253: AND C1h. The V86 arm now hands back the EBDA segment
+                             (9FC0h) in ES; in PM that would be a raw paragraph loaded into
+                             a selector register, and no PM caller of C1h has been seen.
+                             Refused here until one is, and then answered with a selector. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
                               VDM_SET16(tib, VTIB_EAX, 0x3C00);
@@ -27529,11 +27550,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              f1 bit 5  real-time clock present ........ yes (vdd_cmos)
              f1 bit 4  INT 09h calls INT 15h AH=4Fh ... NO -- our keyboard path does
                        not call the intercept; the AMI sets it because its BIOS does
-             f1 bit 2  EBDA allocated ................. NO -- AH=C1h answers CF=1,
-                       as it does on the AMI and on dosbox-x
+             f1 bit 2  EBDA allocated ................. YES (#253) -- 1 KB at 9FC0h,
+                       which is what INT 12h's 639 KB always implied; AH=C1h and
+                       0040:000E now say so too. Was NO (60h) while C1h refused --
+                       see bios_bda.h for why the EBDA, not 640 KB, is the answer
              f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
       {   static const BYTE sysconf[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
-                                            0x60, 0x40, 0x00, 0x00, 0x00 };
+                                            0x64, 0x40, 0x00, 0x00, 0x00 };
           for (k = 0; k < sizeof sysconf; ++k) ct[DOS_SYSCONF_OFF + k] = sysconf[k]; } }
     /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
        left zero -- see the handler for why a null stub beats a plausible-looking
@@ -27781,6 +27804,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
+    /* ── ★ 0040:006C IS TICKS SINCE MIDNIGHT, SO SET IT TO THAT. (GH #253) ──
+         POST does this from the RTC; nothing here did, so every launch began at
+         00:00:00 by the BIOS's clock while INT 1Ah AH=02h read the real time. Seeded
+         from the SAME hook AH=02h answers from (host_rtc_now), after the PIT is on
+         the bus and before anything can take IRQ0. See vdd_pit_seed_time_of_day. */
+    vdd_pit_seed_time_of_day(&g_pit);
     /* ── THE RTC/CMOS TAKES THE SAME CLOCK INT 1Ah DOES. ─────────────────────
          Registers 00h-09h and INT 1Ah AH=02h/04h are two doors onto ONE clock,
          and a guest may use either -- so they are given the same hook and their
@@ -27911,7 +27940,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (ci = 0; ci < 4; ++ci)
             bda[ci] = (WORD)(vdd_comm_fitted(&g_comm, ci) ? g_comm.p[ci].base : 0); }
       bda[4] = (WORD)(vdd_lpt_fitted(&g_comm, 0) ? 0x0378 : 0);   /* LPT1          */
-      bda[5] = 0; bda[6] = 0; bda[7] = 0; }             /* LPT2..LPT4: none fitted   */
+      bda[5] = 0; bda[6] = 0; }                         /* LPT2..LPT3: none fitted   */
+    /* ── ★★ 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
+         0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
+         used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
+         INT 12h said 639 KB, i.e. that one exists. bios_bda.h settles it: there is a
+         1 KB EBDA at 9FC0h, and 000E, INT 15h C1h and the C0h table all say so.
+         0010 and 0013 were never written at all; they now hold bios_equipment_word()
+         and BIOS_BASE_MEM_KB, the same expressions INT 11h and INT 12h return, so a
+         guest that reads the BDA and one that calls the interrupt see one machine.
+       ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
+         settings_apply() has set the joystick type (bit 12). g_bda_ready lets a later
+         settings change re-write 0010 -- see bios_bda_refresh_equipment. */
+    bios_bda_init(NULL, bios_equipment_word());
+    g_bda_ready = 1;
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
     vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
@@ -29069,8 +29111,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
                    this still claimed 640. Real DOS reports 639 for exactly that
                    reason -- the top 1KB is the Extended BIOS Data Area. Derived
-                   from the map rather than typed, so the two cannot drift. */
-                BSETAX((WORD)((DOS_MEM_TOP * 16u) / 1024u));
+                   from the map rather than typed, so the two cannot drift.
+                   ★ #253: and that kilobyte now really IS an EBDA (0040:000E,
+                   AH=C1h, C0h bit 2), and 0040:0013 holds this same constant --
+                   bios_bda.h. */
+                BSETAX((WORD)BIOS_BASE_MEM_KB);
                 BCF_CLR();
             } else if (bn == 0x15) {
                 unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
@@ -29185,6 +29230,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                         BCF_SET();
                     }
+                } else if (ah15 == 0xC1) {         /* EBDA segment (#253)          */
+                    /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it
+                       (p_int15 int15.c1.status). Used to fall to the UNIMPL arm
+                       below: CF=1, "no EBDA", while INT 12h withheld its kilobyte. */
+                    VDM_SET16(tib, VTIB_ES, BIOS_EBDA_SEG);
+                    BCF_CLR();
                 } else if (ah15 == 0xC0) {         /* get system config table (#54) */
                     VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
                     VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);

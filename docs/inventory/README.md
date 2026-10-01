@@ -151,11 +151,11 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| PC BIOS: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) — 39 units: 17 IMPL, 6 PART, 13 MISS, 3 N/A (2026-10-01, after #206) | — |
+| PC BIOS: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) — 39 units: 17 IMPL, 7 PART, 12 MISS, 3 N/A (2026-10-01, after #206, #253) | — |
 | PC BIOS: INT 09h, 16h (keyboard) | IBM AT / PS/2 TechRef (K1S) | [keyboard.md](keyboard.md) — 39 units: 19 IMPL, 4 PART, 11 MISS, 5 N/A (2026-10-01) | — |
 | PC BIOS: INT 13h, 25h, 26h (disk) | IBM TechRef; RBIL | [dos-services.md](dos-services.md) §6 — 13 units | — |
 | VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | [video-bios.md](video-bios.md) — 75 units: 36 IMPL, 19 PART, 1 STORE, 17 MISS, 2 N/A (2026-10-01) | — |
-| BIOS Data Area (0040:) + EBDA | IBM TechRef; RBIL `MEMORY.LST` | [bda.md](bda.md) — 38 units: 14 IMPL, 2 PART, 17 MISS, 5 N/A (2026-10-01) | — |
+| BIOS Data Area (0040:) + EBDA | IBM TechRef; RBIL `MEMORY.LST` | [bda.md](bda.md) — 38 units: 18 IMPL, 2 PART, 14 MISS, 4 N/A (2026-10-01, #253) | — |
 
 ### Software
 
