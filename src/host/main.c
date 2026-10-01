@@ -665,7 +665,20 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
      0x4f6efd reads it; 0x4f6d3c validates CS as code + EIP<=limit.
    So we need TWO selectors + a table: a data stack selector and a code selector with a BOP,
    and the table[6] = {code_sel, bop_off}, with [VDM_TIB+8] pointing at the table. */
-#define DPMI_FAULT_STK_SEG 0x0200    /* stack sel base = 0x2000; Sd:0x1000 = linear 0x3000 */
+/* ── #205: THE FAULT STACK WAS IN THE PROGRAM. (s85) ──────────────────────────────────
+     It was based at linear 0x2000 (segment 0x200), "below the program" when programs
+     loaded at segment 0x1000. They load at ~0x243 now, so every reflected PM fault
+     wrote its frame at 0x2FC0..0x2FDF -- inside the running program's own image. Typed
+     at 6.22's COMMAND.COM, DOS/4GW's data segment starts at 0x2530 and its selector-table
+     pointer ([0AA2h]) is 0x2FD2: the reflect of its first raw INT 21h zeroed it, and its
+     next allocation stored through ES=0 (#GP, exit FFh). Under XP's larger shell the
+     program sits 448 bytes higher and the frame missed. Watched on the rig: the byte
+     went 0xAF -> 0x00 across exactly that reflect.
+   ► The stack now lives in the HOST image (g_flt_stack), where no guest can own it --
+     like the class table g_flt_tbl beside it. 64 KB because the selector's limit is
+     0xFFFF and it is a 16-bit stack: even a wrapped SP stays inside the buffer. The top
+     is still :0x1000, the 4 KB a DPMI 0.9 exception handler is promised. */
+#define DPMI_FAULT_STK_SIZE 0x10000
 #define DPMI_FAULT_COFF    0x0080    /* BOP offset within the handler code selector (linear 0x580) */
 #define DPMI_FAULT_BOP     0x57      /* BOP number planted at the handler code:COFF        */
 #define DPMI_FLT_CLASS_GP  6         /* KiTrap0D's fault class for a #GP (push 6)           */
@@ -2348,6 +2361,7 @@ static WORD  g_pmret_sel = 0;
 static WORD  g_dpmi_fault_sel = 0;
 static WORD  g_dpmi_flt_code_sel = 0;
 static BYTE  g_flt_tbl[DOS_FLTSITE_N * 0x10] __attribute__((aligned(16)));
+static BYTE  g_flt_stack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
@@ -17556,7 +17570,7 @@ static void dpmi_install(int idx)
 }
 
 /* GH #18 (run 67 corrected): install the PM-fault reflect machinery. Two LDT selectors:
-   a writable-DATA stack selector (g_dpmi_fault_sel, based at DPMI_FAULT_STK_SEG<<4 so
+   a writable-DATA stack selector (g_dpmi_fault_sel, based at the host's g_flt_stack so
    its :0x1000 is a valid scratch stack top) written to [TIB+0x638]; and a CODE selector
    (g_dpmi_flt_code_sel, based at DOS_HDLR_SEG<<4) with a BOP at DPMI_FAULT_COFF. The
    handler table g_flt_tbl[class]=({code_sel,COFF}) is what the kernel reads via
@@ -17580,7 +17594,7 @@ static void dpmi_install_fault_trampoline(void)
     hdlr[DPMI_FAULT_COFF + 2] = DPMI_FAULT_BOP;
     /* the handler STACK selector (writable-data) */
     si = g_ldt_next++;
-    g_ldt[si].base   = (DWORD)DPMI_FAULT_STK_SEG << 4;  /* 0x2000 -> stack:0x1000 = 0x3000 */
+    g_ldt[si].base   = (DWORD)(ULONG_PTR)g_flt_stack;   /* #205: not guest memory */
     g_ldt[si].limit  = 0xFFFF;
     g_ldt[si].access = 0xF2;                       /* data read/write, DPL3, present      */
     g_ldt[si].flags  = 0;
@@ -30529,7 +30543,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              printed with the dwords for exactly that reason: a dump whose
                              columns you have to count is half an instrument.
                              Read it, THEN write the decode. */
-                        { DWORD stkb = (DWORD)DPMI_FAULT_STK_SEG << 4;
+                        { DWORD stkb = (DWORD)(ULONG_PTR)g_flt_stack;
                           const volatile DWORD *fr = (const volatile DWORD *)(ULONG_PTR)(stkb + 0x0FC0);
                           int fi;
                           p = zput(p, "\r\n  FLTSTK sel=0x"); p = zhex(p, g_dpmi_fault_sel);
