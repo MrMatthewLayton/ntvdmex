@@ -73,3 +73,31 @@ Recorder harness TIMEOUT on N1 (4/4 on re-run). PIF launch re-checked on the com
 - Closed: #171 #172 #193 #206 #181 #176 #164 #200. Open for the user: #243 (PIF).
   Filed: #244 (INT 09h → 4Fh, PM C0h/87h), #245 (UART), #246 (DMA), #247–#256 (inventory
   gaps), #257 (inventory leftovers).
+
+---
+
+## Afternoon batch (user: "#258 plus another batch; test this afternoon; then a zip for a friend")
+
+User's report on #243: QB loads from QB.PIF and MOUSE.BAS (CALL ABSOLUTE) works; Make EXE
+from the PIF failed.
+
+- **#258 (`5d0676b`)** — not the PIF: `QB.EXE /L` direct failed the same. QB's Quick Library
+  loader takes **AX after a successful AH=4Ah** as the block's segment; we left the caller's
+  `4Axx`, so QB.QLB loaded at 4AD1h (block was 9CD1h), `~QBLNK.TMP` got a garbage `.LIB`, and
+  Make EXE freed a block that never existed ("Error in loading file (QB.QLB) - Internal
+  error"). New probe `p_memax`: all three oracles return AX=ES after 4Ah; the Microsoft
+  kernels return AX=ES-1 after 49h (dosbox-x leaves it). Fixed both; QB /L direct and via a
+  PIF now build T_CAVE.EXE linked with QB.LIB. On the way: EXEC re-owns the child's program
+  block (was 0100h).
+- **#251, two parts (`043b5cc`, `316fd16`)** — stdin through a handle is a cooked console
+  line (was EOF), rig-tested with `t_stdin`; IOCTL 44h unsupported sub-functions answer
+  invalid-function (new `p_ioctl2`, every row agrees except an AH the oracles dispute).
+  AUX/PRN still open.
+- **Agents, merged:** #253 BDA (0010/0013 written, 006C seeded, a real 1 KB EBDA at 9FC0h,
+  C1h answers it), #174 8259A (rotation, SMM, ICW1 resets, fully nested slave — slave held
+  while master IR2 in service), #247 DPMI 0300h (every vector through IVT[BL], all registers
+  written back, BIOS stubs serviced in nested loops via `v86_bios_bop()`; rollback knob
+  `cfg\simintrefl_off.flag`). The #247 merge conflicted with the BDA edits in the moved BIOS
+  block; ported INT 12h and C1h into `v86_bios_bop()`. Probes p_int15/int15w/bios/memax/
+  ioctl2: 0 mismatches on the merged build. Battery 2340/0.
+- README refreshed for the zip (`78d6942`).
