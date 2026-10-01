@@ -73,6 +73,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "pcspeaker.h"  /* the OTHER speaker: the one on the motherboard */
 #include "install.h"    /* GH #13: becoming the machine's VDM, reversibly */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
+#include "dpmi_rmcs.h"  /* GH #247: the real-mode call structure, and 0300h's routing */
 #include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
@@ -7706,7 +7707,11 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
 /* ── ★ REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
      It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
      completion the nested V86 call never delivered. s81 fixed that, and the spec says
-     0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out. */
+     0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out.
+   ► #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (simint_route
+     in dpmi_rmcs.h). The flag restores the pre-#247 ROUTING: 21h/33h/10h host-side,
+     everything else not run. (Not the pre-#247 marshalling: the full register write-back
+     and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing. */
 #define SIMINTREFL_OFF_FLAG CFG_("simintrefl_off.flag")
 static int g_simint_reflect = 0;
 static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
@@ -19573,6 +19578,30 @@ static DWORD dpmi_rmcs_ptr(volatile BYTE *tib, DWORD esb)
     return esb + dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
 }
 
+/* The RMCS register file into / out of the TIB (GH #247; layout and rules in dpmi_rmcs.h).
+   FLAGS is deliberately NOT moved by rmcs_to_tib: each caller decides what the live
+   EFLAGS are (V86 entry state for the nested call, a carrier word for the host-side
+   fast path), and passes the word to report back to tib_to_rmcs. */
+static void rmcs_to_tib(volatile BYTE *tib, const rmcs_regs *g)
+{
+    VDM_REG(tib, VTIB_EDI) = g->edi; VDM_REG(tib, VTIB_ESI) = g->esi;
+    VDM_REG(tib, VTIB_EBP) = g->ebp; VDM_REG(tib, VTIB_EBX) = g->ebx;
+    VDM_REG(tib, VTIB_EDX) = g->edx; VDM_REG(tib, VTIB_ECX) = g->ecx;
+    VDM_REG(tib, VTIB_EAX) = g->eax;
+    VDM_REG(tib, VTIB_ES) = g->es; VDM_REG(tib, VTIB_DS) = g->ds;
+    VDM_REG(tib, VTIB_FS) = g->fs; VDM_REG(tib, VTIB_GS) = g->gs;
+}
+static void tib_to_rmcs(volatile BYTE *tib, rmcs_regs *g, WORD flags)
+{
+    g->edi = VDM_REG(tib, VTIB_EDI); g->esi = VDM_REG(tib, VTIB_ESI);
+    g->ebp = VDM_REG(tib, VTIB_EBP); g->ebx = VDM_REG(tib, VTIB_EBX);
+    g->edx = VDM_REG(tib, VTIB_EDX); g->ecx = VDM_REG(tib, VTIB_ECX);
+    g->eax = VDM_REG(tib, VTIB_EAX);
+    g->flags = flags;
+    g->es = (uint16_t)VDM_REG(tib, VTIB_ES); g->ds = (uint16_t)VDM_REG(tib, VTIB_DS);
+    g->fs = (uint16_t)VDM_REG(tib, VTIB_FS); g->gs = (uint16_t)VDM_REG(tib, VTIB_GS);
+}
+
 static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD intno)
 {
     static BYTE s_seen[5][256];
@@ -19974,6 +20003,13 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
     return p;
 #undef m
 }
+
+/* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
+   real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
+#define V86BOP_NONE  0      /* not one of v86_bios_bop's numbers                         */
+#define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
+#define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
+static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base);
 
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
@@ -22550,20 +22586,39 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              correct default is OFF and the correct shape is a one-file
                              switch -- the same call `wowquiet.txt` and `pitinj.txt` make.
                              ▶ Turn it on to work the audio thread; leave it off to play. */
-                        if (ax == 0x0300 && g_simint_reflect) {
+                        /* ── ★★★★★ GH #247: 0300h RUNS WHATEVER THE IVT HOLDS -- OURS INCLUDED. ──
+                             The guard above ("ONLY WHEN THE GUEST OWNS THE VECTOR") left every
+                             vector whose IVT entry is one of OUR stubs -- 16h, 1Ah, 2Fh, 67h, the
+                             BIOS block -- answered by nothing: registers echoed, CF=0. A
+                             Watcom/DJGPP int86() for the keyboard, the clock, INT 15h or the
+                             multiplex got its own question back as the answer. And the BIOS
+                             block's stubs live at DOS_CTAB_SEG, not DOS_HDLR_SEG, so they DID
+                             pass the guard -- into a nested loop that did not know their BOPs,
+                             which abandoned the call as an "unexpected RM event".
+                           ► Now ONE rule, the spec's: run IVT[BL] in V86 through the 0302
+                             machinery. The nested loop services our stubs' BOPs through
+                             v86_bios_bop(), the same code the exec loop runs, so "our stub" is
+                             just another real-mode handler and needs no special case.
+                           ► The host-side 21h/33h/10h arms in `case 0x0300` stay as a FAST
+                             PATH, and only where they give the same answer -- see
+                             simint_route() in dpmi_rmcs.h for exactly when, and why INT 21h
+                             is always one.
+                           ⚠ THE CALLER'S RMCS CS:IP IS NO LONGER WRITTEN. The first cut of the
+                             reflection borrowed 0302 by storing IVT[BL] into RMCS.CS:IP; the
+                             spec says 0300h ignores that field on the way in and leaves it
+                             unmodified on the way out. The target now travels in simint_cs/ip. */
+                        int simint_vec = -1; WORD simint_cs = 0, simint_ip = 0;
+                        if (ax == 0x0300) {
                             DWORD iv = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            if (iv != 0x21 && iv != 0x33 && iv != 0x10) {
-                                WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
-                                if (hs && hs != DOS_HDLR_SEG) {
-                                    DWORD esb0 = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                                    volatile BYTE *r0 =
-                                        (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb0);
-                                    *(volatile WORD *)(r0 + 0x2C) = hs;   /* RMCS.CS */
-                                    *(volatile WORD *)(r0 + 0x2A) = ho;   /* RMCS.IP */
-                                    p = zput(p, " [simInt 0x"); p = zhexb(p, (BYTE)iv);
-                                    p = zput(p, " -> the guest's OWN real-mode handler]");
-                                    ax = 0x0302;      /* ...which is a real-mode call with an IRET frame */
-                                }
+                            WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
+                            if (simint_route(iv, hs, ho, g_simint_reflect, DOS_HDLR_SEG) == SIMINT_RUN) {
+                                simint_vec = (int)iv; simint_cs = hs; simint_ip = ho;
+                                p = zput(p, " [simInt 0x"); p = zhexb(p, (BYTE)iv);
+                                p = zput(p, (hs == DOS_HDLR_SEG || hs == DOS_CTAB_SEG)
+                                            ? " -> our real-mode stub 0x"
+                                            : " -> the guest's OWN real-mode handler 0x");
+                                p = zhex(p, hs); p = zput(p, ":0x"); p = zhex(p, ho); p = zput(p, "]");
+                                ax = 0x0302;      /* ...which is a real-mode call with an IRET frame */
                             }
                         }
                         switch (ax) {
@@ -23511,19 +23566,51 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             dpmi_rmcs_probe(tib, esb, 0, intno);   /* observation only */
+                            /* ── #247: ONLY TWO WAYS IN HERE NOW. The decision site above sent every
+                                 vector simint_route() calls SIMINT_RUN to the 0302 arm; what is
+                                 left is SIMINT_FAST (21h; 33h/10h while the IVT holds our stub)
+                                 and SIMINT_NONE (a null vector, or simintrefl_off.flag), which
+                                 runs nothing and is counted below, as every vector but three
+                                 used to be. */
+                            { WORD hs = peekw(intno * 4 + 2), ho = peekw(intno * 4);
+                              if (simint_route(intno, hs, ho, g_simint_reflect, DOS_HDLR_SEG) != SIMINT_FAST) {
+                                  g_simint_unhandled++;
+                                  if (intno < 256) g_simint_vec[intno]++;
+                                  p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
+                                  p = zput(p, (hs | ho) ? " NOT RUN (simintrefl_off.flag)" : " NOT RUN (null vector)");
+                                  break;
+                              } }
                             InterlockedExchange(&g_simint_busy, 1);  /* no async injection in here */
                             /* save the client's PM register file */
                             DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
                                   sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
                                   sBp=VDM_REG(tib,VTIB_EBP),sDs=VDM_REG(tib,VTIB_DS),sEs=VDM_REG(tib,VTIB_ES),
+                                  sFs=VDM_REG(tib,VTIB_FS),sGs=VDM_REG(tib,VTIB_GS),
                                   sSs=VDM_REG(tib,VTIB_SS),sSp=VDM_REG(tib,VTIB_ESP),sFl=VDM_REG(tib,VTIB_EFLAGS);
-                            /* load the real-mode register block from the RMCS (WORD reads -> clean high) */
-                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
-                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
-                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
-                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C); VDM_REG(tib,VTIB_ES)=*(volatile WORD*)(r+0x22);
-                            VDM_REG(tib,VTIB_DS)=*(volatile WORD*)(r+0x24);
-                            VDM_REG(tib,VTIB_SS)=0x0100; VDM_REG(tib,VTIB_ESP)=0xFF00;  /* host scratch stack */
+                            rmcs_regs rg;
+                            /* ── ★★★ #247: THE WHOLE REGISTER FILE IN, AND FLAGS WHERE THE ANSWER LANDS.
+                                 This loaded the low WORD of seven registers plus ES and DS, and
+                                 parked SS:SP on a "host scratch stack" at 0100:FF00 -- which is
+                                 DOS_PSP_SEG, the FIRST PROGRAM'S OWN SEGMENT, not ours.
+                               ⛔ AND THAT IS WHERE EVERY INT 21h ERROR WENT. dos_int21() returns
+                                 CF/ZF by editing the FLAGS word of the caller's IRET frame at
+                                 SS:SP+4 -- so each 0300h INT 21h OR'd its carry into linear
+                                 0x10F04, inside the guest's image, and the RMCS got the CLIENT'S
+                                 protected-mode flags with CF already cleared at the top of the
+                                 INT 31h dispatcher. 0300h INT 21h has never once reported a DOS
+                                 error. Same shape as the 0301 FLAGS bug below, one level deeper.
+                               ► Serve the call the way the dispatcher serves a PM client's own
+                                 INT 21h: dos_int21_set_pm(1) points dos_int21's CF/ZF at the live
+                                 VTIB_EFLAGS, which is loaded with RMCS.FLAGS first -- so FLAGS comes
+                                 back exactly as an IRET from the stub would return it (the
+                                 caller's flags, with CF/ZF as DOS set them), and no stack is
+                                 touched at all. 33h and 10h never write the frame, so for them
+                                 FLAGS is the caller's own, echoed -- also what the stub's IRET
+                                 gives.
+                               ► The full 32-bit fields, and FS/GS: see dpmi_rmcs.h. */
+                            rmcs_read(r, &rg);
+                            rmcs_to_tib(tib, &rg);
+                            VDM_REG(tib,VTIB_EFLAGS) = (sFl & 0xFFFF0000u) | rg.flags;
                             /* ── 0300 SERVICED EXACTLY ONE VECTOR, AND THAT IS THE BUG. ──
                                  Everything except INT 21h loaded the real-mode register
                                  block, did NOTHING, and copied it straight back -- so the
@@ -23569,7 +23656,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  dpmi_service_pm_int_body), video_trap_sync() included, so
                                  the two cannot drift into disagreeing about what a video
                                  BIOS call does depending on how the guest asked. */
-                            if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
+                            if (intno == 0x21) {
+                                /* CF/ZF into VTIB_EFLAGS, not into an IRET frame there is none of --
+                                   see the #247 note above. */
+                                m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            }
                             else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
                             else if (intno == 0x10) {
                                 ntvdd_regs vr; regs_load(&vr, tib);
@@ -23603,25 +23694,31 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 regs_store(&vr, tib);
                                 video_trap_sync();   /* mode 12h: interpret; no-op in 13h */
                             }
-                            else { g_simint_unhandled++;
-                                   if (intno < 256) g_simint_vec[intno]++; }
-                            /* write results back into the RMCS */
-                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
-                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
-                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
-                            *(volatile WORD*)(r+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);   /* FLAGS -- see 0301 */
+                            /* ── #247: write back EVERYTHING the spec returns. This wrote AX BX CX
+                                 DX SI DI FLAGS and dropped BP, ES and DS -- so every INT 21h that
+                                 answers in ES:BX (35h get vector, 2Fh DTA, 34h InDOS, 52h List of
+                                 Lists) handed the caller back its OWN ES, and an INT 10h answer in
+                                 ES:BP (AX=1130h, the font pointer) reached the client as its own
+                                 ES and BP.
+                                 regs_store() was fixed for exactly this in the V86 path ("STORE
+                                 EVERYTHING LOAD READS"); this was the last copy of the old shape.
+                               ⚠ CS:IP and SS:SP are NOT written -- rmcs_write() has no way to. */
+                            tib_to_rmcs(tib, &rg, (WORD)VDM_REG(tib, VTIB_EFLAGS));
+                            rmcs_write(r, &rg);
                             /* restore the client's PM register file */
                             VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
                             VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
-                            VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
+                            VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_FS)=sFs;VDM_REG(tib,VTIB_GS)=sGs;
+                            VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
                             InterlockedExchange(&g_simint_busy, 0);
                             p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
                             break; }
                         case 0x0302:                               /* ...with an IRET frame */
                         case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
-                            /* This is the first PM->V86->PM round-trip. Unlike 0300 (which fakes a
-                               real-mode INT by calling dos_int21 host-side), 0301 must actually RUN
+                            /* This is the first PM->V86->PM round-trip. Unlike 0300's fast path (which
+                               answers 21h/33h/10h host-side -- since #247 every OTHER 0300 comes
+                               through here), 0301 must actually RUN
                                the client's real-mode procedure in V86: we rewrite the CONTEXT to
                                V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
                                run v86_run() until that BOP (servicing any INT 21h the proc makes),
@@ -23637,9 +23734,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                it starts handling calls itself (session 17), because the real-mode
                                DOS entry it forwards to is an interrupt handler and returns by
                                IRET; giving it a RETF frame would leave FLAGS on the stack. */
+                            /* ── #247: AND 0300h IS THIS CALL TOO, with CS:IP = IVT[BL] (simint_vec >= 0,
+                                 set at the decision site above the switch). Everything below is
+                                 shared; the three places 0300h differs say so. */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
-                            dpmi_rmcs_probe(tib, esb, (ax == 0x0302) ? 2 : 1, 0);  /* observation only */
+                            if (simint_vec >= 0) dpmi_rmcs_probe(tib, esb, 0, (DWORD)simint_vec);
+                            else dpmi_rmcs_probe(tib, esb, (ax == 0x0302) ? 2 : 1, 0);  /* observation only */
                             /* --- save the client's PM CONTEXT (full register file + MSW) --- */
                             DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
                                   pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
@@ -23652,6 +23753,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             WORD rcs = *(volatile WORD*)(r+0x2C), rip = *(volatile WORD*)(r+0x2A);
                             WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
                             unsigned rt; int done = 0;
+                            DWORD cxw = pC & 0xFFFF;   /* words of PM stack to copy (DPMI 0.9) */
+                            rmcs_regs rg;
+                            /* 0300h: the target is the IVT's, never the structure's. See the decision
+                               site: RMCS.CS:IP is ignored on the way in and not written on the way out. */
+                            if (simint_vec >= 0) { rcs = simint_cs; rip = simint_ip; }
                             /* 0301h/0302h rewrite the VDM into V86 and back for real, so they are
                                the SAME window as 0300h and share its guard -- see g_simint_busy. */
                             InterlockedExchange(&g_simint_busy, 1);
@@ -23659,6 +23765,33 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
                             p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
                             p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
+                            /* ── #247: CX WORDS OF THE PROTECTED-MODE STACK. All three services take
+                                 them, and all three ignored them -- a real-mode procedure that reads
+                                 its arguments off its stack read whatever was below our frame.
+                                 They go above the return frame, in order (rmcs_stack_plan). The
+                                 PM stack top is the client's SS:(E)SP exactly as it executed
+                                 INT 31h: the INT is a patched BOP here, so nothing was pushed.
+                               ⚠ A CX THAT DOES NOT FIT, OR A PM STACK WE CANNOT READ, COPIES
+                                 NOTHING and the call runs exactly as it did before #247, with a
+                                 log line saying so. A stale CX in a client that never meant to
+                                 pass arguments must not turn a call that has always worked into
+                                 a refused one. */
+                            if (cxw) {
+                                WORD nsp; WORD pss = (WORD)(pSs & 0xFFFF);
+                                DWORD poff = dpmi_sel_is32(pss) ? pSp : (pSp & 0xFFFF);
+                                const BYTE *src = (const BYTE *)(ULONG_PTR)(dpmi_sel_base(pss) + poff);
+                                p = zput(p, " copy=0x"); p = zhex(p, cxw);
+                                if (rmcs_stack_plan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
+                                    && host_readable(src, cxw * 2u)) {
+                                    DWORD k;
+                                    for (k = 0; k < cxw * 2u; ++k)
+                                        *(volatile BYTE *)(ULONG_PTR)(((DWORD)rss << 4) + (WORD)(nsp + k)) = src[k];
+                                    rsp = nsp;
+                                    p = zput(p, " words");
+                                } else {
+                                    p = zput(p, " words NOT COPIED (do not fit below SP, or PM stack unreadable)");
+                                }
+                            }
                             /* ► THE POINTER ARGUMENT, BECAUSE THAT IS WHAT GOES WRONG HERE.
                                  Every pointer-taking DOS call arrives as DS:DX in the RMCS, and
                                  the client is responsible for having copied the string DOWN into
@@ -23696,12 +23829,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
                             VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
-                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
-                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
-                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
-                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C);
-                            VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(r+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(r+0x24));
-                            VDM_SET16(tib,VTIB_FS,rss); VDM_SET16(tib,VTIB_GS,rss);
+                            /* ── #247: THE WHOLE REGISTER FILE, 32 BITS WIDE, FS AND GS INCLUDED. ──
+                                 This read the low WORD of each general register (zeroing the top
+                                 half a 386 real-mode handler may take as input) and set FS = GS =
+                                 the stack segment, where the spec loads them from the structure
+                                 like ES and DS. See dpmi_rmcs.h for the layout and the rule. */
+                            rmcs_read(r, &rg);
+                            rmcs_to_tib(tib, &rg);
+                            /* ── 0300h: AN INTERRUPT IS ENTERED WITH THE CALLER'S STATUS FLAGS. A real
+                                 `INT nn` pushes FLAGS and leaves CF/ZF/SF/OF/PF/AF/DF as they were, so
+                                 a handler that reads one as an input (and the IRET frame below
+                                 carries the same word out) sees the caller's. 0301h/0302h keep their
+                                 measured entry state (flags clean) -- unchanged by #247.
+                               ⚠ IF STAYS SET, AGAINST THE LETTER OF THE SPEC ("called with the
+                                 interrupt and trace flags clear"). Deliberately: this is the entry
+                                 state ZAR's INT 66h (Miles) handler was proven on in s81, with its
+                                 SB IRQ 5 delivered INTO this nested call -- and our own stubs do
+                                 not care. Clearing it is a change to make with ZAR on the rig. */
+                            if (simint_vec >= 0)
+                                VDM_REG(tib,VTIB_EFLAGS) |= (DWORD)(rg.flags & 0x0CD5u);  /* CF PF AF ZF SF DF OF */
                             VDM_SET16(tib,VTIB_CS,rcs); VDM_REG(tib,VTIB_EIP)=rip;
                             VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
                             /* --- nested V86 run loop: run the proc until the return-BOP --- */
@@ -23746,6 +23892,27 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     break;
                                 }
+                                /* ── #247: OUR STUBS' BOPS, through the exec loop's own code. This is
+                                     what lets 0300h run IVT[BL] when it is ours (INT 16h, 1Ah, 2Fh,
+                                     67h, the BIOS block), and a 0301h/0302h procedure call the BIOS,
+                                     instead of stopping here as an "unexpected RM event".
+                                   ⚠ ONLY FROM OUR OWN SEGMENTS -- the s78 rule: a BOP is ours by
+                                     where it executes, never by its number. A guest's own
+                                     `C4 C4 16` still falls through to the stop below.
+                                   ⚠ A RERUN (INT 16h AH=00h with no key; INT 15h AH=86h waiting)
+                                     costs one of this loop's 128 passes like any other event, so
+                                     a wait that outlasts them ends as NO-RET rather than parking
+                                     the thread -- the keyboard IRQ is not delivered in here (our
+                                     INT 09h stub is not a guest-owned vector), so a key could
+                                     never arrive to end an INT 16h wait anyway. */
+                                if (rev == VDM_EVENT_BOP) {
+                                    DWORD bcs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+                                    if ((bcs == DOS_HDLR_SEG || bcs == DOS_CTAB_SEG)
+                                        && v86_bios_bop(tib, info, &p, base) != V86BOP_NONE) {
+                                        if (p != base) { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                                        continue;
+                                    }
+                                }
                                 if (rev == VDM_EVENT_IO || rev == VDM_EVENT_IO_HW || rev == VDM_EVENT_GPFAULT) {
                                     int h; HOST_LOCK();
                                     h = host_try_io(tib, &g_bus); HOST_UNLOCK();
@@ -23759,12 +23926,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 break;
                             }
                             dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
-                            /* --- copy the real-mode register file back into the RMCS --- */
-                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
-                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
-                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
-                            *(volatile WORD*)(r+0x08)=VDM_REG(tib,VTIB_EBP);
-                            *(volatile WORD*)(r+0x22)=VDM_REG(tib,VTIB_ES);  *(volatile WORD*)(r+0x24)=VDM_REG(tib,VTIB_DS);
+                            /* --- copy the real-mode register file back into the RMCS ---
+                               #247: all of it -- 32-bit general registers, FLAGS, ES DS FS GS -- and
+                               never CS:IP/SS:SP (rmcs_write cannot). Was: the low words, ES, DS. */
+                            tib_to_rmcs(tib, &rg, (WORD)VDM_REG(tib, VTIB_EFLAGS));
+                            rmcs_write(r, &rg);
                             /* ── AND THE FLAGS, WHICH ARE THE ANSWER, NOT A DETAIL. ─────────────
                                  This block copied eight registers back and silently dropped the
                                  ninth. Every DOS service reports failure in CF, so discarding
@@ -23780,8 +23946,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  eax,1` folds CF into the sign bit of EAX and branches on it, so
                                  CF is not one output among many -- it is the only one it reads.
                                  The DPMI 0.9 spec is explicit that 0300/0301/0302 return the
-                                 real-mode register state in the RMCS, and FLAGS is part of it. */
-                            *(volatile WORD*)(r+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
+                                 real-mode register state in the RMCS, and FLAGS is part of it.
+                                 (Written by rmcs_write above since #247.) */
                             /* --- restore the client's PM CONTEXT --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
                             VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
@@ -23791,7 +23957,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
                             InterlockedExchange(&g_simint_busy, 0);
-                            p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
+                            if (simint_vec >= 0) {
+                                /* A 0300h that did not come back is a vector we did not service:
+                                   it belongs in the same STAGE2 count the unrun ones go to. */
+                                if (!done) { g_simint_unhandled++; g_simint_vec[simint_vec & 0xFF]++; }
+                                p = zput(p, "0300 -> simInt 0x"); p = zhexb(p, (BYTE)simint_vec);
+                                p = zput(p, " RM handler returned after ");
+                            } else p = zput(p, "0301 -> RM proc returned after ");
+                            p = zhex(p, rt);
                             p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
                             break; }
                         case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
@@ -25619,6 +25792,568 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
 
     return injected;
 }
+
+/* ── ★★★ OUR BIOS AND DRIVER STUBS, SERVICED FROM ONE PLACE. (GH #247) ─────────────────
+     Every stub we plant in the IVT is `BOP nn ; IRET` (or RETF), and until #247 the only
+     code that knew what each `nn` MEANS was the body of WinMain's exec loop. So a stub
+     reached from anywhere ELSE -- a DPMI 0301h/0302h real-mode procedure that calls
+     INT 16h, or 0300h simulating INT 1Ah -- arrived in the nested V86 loop as an
+     "unexpected RM event" and the call was abandoned half-way. 0300h dodged that by
+     never running our stubs at all: it serviced 21h/33h/10h host-side and returned
+     every other vector's registers unchanged with CF=0.
+   ► Moved here VERBATIM (the arms, their comments, their order) so the exec loop and the
+     nested loop run one copy of each answer, and cannot drift apart about what
+     INT 15h AH=88h returns depending on who asked.
+   ⚠ NOT HERE, ON PURPOSE: INT 08h/09h and the INT 33h callback return (their EOI and
+     their re-entry rules belong to IRQ delivery, which the nested loop does not do for
+     our stubs -- see g_nested_rm), and INT 20h/27h (they END the program, which only the
+     exec loop can do). A nested loop that meets one of those still stops and says so.
+   Returns V86BOP_NONE (not one of these -- the caller carries on down its own chain),
+   V86BOP_DONE (serviced, EIP past the BOP, onto the stub's IRET/RETF) or V86BOP_RERUN
+   (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
+   with no key, INT 15h AH=86h mid-countdown). */
+#define V86BOP_RET(v) do { *pp = p; return (v); } while (0)
+static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
+{
+    char *p = *pp;
+    if (bn == 0x10) {
+        ntvdd_regs r; regs_load(&r, tib);
+        HOST_LOCK();
+        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+        HOST_UNLOCK();
+        int10_wait_after();                     /* #226: 4F07h BL=80h */
+        regs_store(&r, tib);
+        video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
+        VDM_REG(tib, VTIB_EIP) += 3;
+        V86BOP_RET(V86BOP_DONE);
+    }
+    if (bn == 0x16) {
+        ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
+        HOST_LOCK();
+        vdd_bus_deliver_int(&g_bus, 0x16, &r);
+        HOST_UNLOCK();
+        /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
+           stops the guest dead, so its timer, its music and its screen freeze until a key
+           arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
+           the BOP instead: the guest re-executes INT 16h and keeps taking timer
+           interrupts while it waits, which is what a real BIOS spin does. */
+        if ((ah16 == 0x00 || ah16 == 0x10) && r.zf != 0 && g_running) V86BOP_RET(V86BOP_RERUN);
+        regs_store(&r, tib);
+        host_set_flags(tib, r.cf, r.zf);
+        VDM_REG(tib, VTIB_EIP) += 3;
+        V86BOP_RET(V86BOP_DONE);
+    }
+    if (bn == 0x33) {   /* INT 33h mouse  */
+        mouse_int33(tib, I33_SRC_V86);
+        VDM_REG(tib, VTIB_EIP) += 3;
+        V86BOP_RET(V86BOP_DONE);
+    }
+    {   /* ---- BIOS services: INT 11h/12h/13h/14h/15h/17h/25h/26h ---------
+           GH #43/#44/#45. Every one of these was previously an IRET that
+           returned whatever the caller already had in its registers.
+           NOTE ON EVIDENCE: the 6.22 oracle is NOT truth here -- QEMU runs
+           SeaBIOS, so a BIOS answer from it is another reimplementation's
+           opinion (epic #24). The equipment word and memory size are
+           statements about OUR virtual machine's configuration, which is
+           ours to declare; the rest report "not present" honestly and log,
+           rather than pretending hardware exists. */
+        int handled = 1;
+        WORD *pflg = (WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                              + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+        #define BCF_SET() (*pflg |= 1)
+        #define BCF_CLR() (*pflg &= (WORD)~1)
+        #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
+            (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
+        if (bn == 0x11) {
+            /* Equipment word -- see bios_equipment_word(). The serial count
+               comes from the VDD that claimed the ports, so this and the
+               0040:0000 port base table cannot drift apart. */
+            BSETAX(bios_equipment_word());
+            BCF_CLR();
+        } else if (bn == 0x12) {
+            /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
+               once DOS_MEM_TOP moved to the real EBDA boundary: the MCB chain
+               ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
+               this still claimed 640. Real DOS reports 639 for exactly that
+               reason -- the top 1KB is the Extended BIOS Data Area. Derived
+               from the map rather than typed, so the two cannot drift. */
+            BSETAX((WORD)((DOS_MEM_TOP * 16u) / 1024u));
+            BCF_CLR();
+        } else if (bn == 0x15) {
+            unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+            if (ah15 == 0x88) {                /* extended memory, KB */
+                /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
+                     A serviced call that leaves no trace is indistinguishable in a
+                     log from one that never happened, and session 58 read exactly
+                     that backwards twice while chasing ZAR (GH #23): the absence of
+                     an AH=88h line was taken as "the guest never asks", then as
+                     "the guest must ask". It does NOT ask -- DOS/16M installs its
+                     OWN protected-mode INT 15h handler (that is what its 33 INT 31h
+                     AX=0205 calls are for) and answers the extended-memory question
+                     internally, so this arm is never reached by that guest at all.
+                   ⚠ AND A REAL DEFECT IS RECORDED HERE RATHER THAN QUIETLY FIXED:
+                     0x3C00 "matching the XMS pool" hands the SAME memory out twice
+                     -- once here as raw extended memory a caller may take for
+                     itself, and again through XMS. A real machine cannot do that,
+                     because HIMEM.SYS hooks AH=88h and reports what is left after it
+                     has claimed extended memory, which is ZERO. Changing it was
+                     tried and REVERTED: it is inert for ZAR (never called) and is an
+                     unvalidated behaviour change for every other guest. It is worth
+                     doing deliberately, with Doom and the DOS batteries re-gated on
+                     it -- on its own merits, not as a ZAR fix. */
+                BSETAX(0x3C00);                /* 15 MB, matching the XMS pool */
+                BCF_CLR();
+                { char x8[128], *x8q = x8;
+                  x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
+                  log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
+            } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
+                DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                LARGE_INTEGER n;
+                QueryPerformanceCounter(&n);
+                if (g_i15_evt_end) {           /* an AH=83h event is counting: busy */
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
+                    BCF_SET(); ++g_i15_busy;
+                } else if (!g_i15_wait_end) {  /* first pass: start the countdown   */
+                    if (us == 0) BCF_CLR();
+                    else { g_i15_wait_end = i15_qpc_after_us(us); ++g_i15_waits; handled = 4; }
+                } else if (n.QuadPart >= g_i15_wait_end) {
+                    g_i15_wait_end = 0;        /* elapsed                           */
+                    BCF_CLR();
+                } else {
+                    /* Still waiting: re-execute the BOP (handled = 4). Sleep when there
+                       is time to, so a long wait does not burn the CPU the guest's own
+                       interrupts and the host's threads need -- a 1 ms nap is far
+                       below any wait a program asks this for. */
+                    LARGE_INTEGER f; QueryPerformanceFrequency(&f);
+                    if ((g_i15_wait_end - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
+                    handled = 4;
+                }
+            } else if (ah15 == 0x83) {         /* event wait (#206) */
+                unsigned al83 = VDM_REG(tib, VTIB_EAX) & 0xFF;
+                if (al83 == 0x01) {            /* cancel                            */
+                    g_i15_evt_end = 0;
+                    *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;
+                    BCF_CLR();
+                } else if (g_i15_evt_end || g_i15_wait_end) {
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
+                    BCF_SET(); ++g_i15_busy;   /* one countdown at a time           */
+                } else {
+                    DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                    WORD es = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF), bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                    g_i15_evt_lin = ((DWORD)es << 4) + bx;
+                    *(volatile WORD  *)(ULONG_PTR)0x498 = bx;    /* 40:98 flag pointer  */
+                    *(volatile WORD  *)(ULONG_PTR)0x49A = es;
+                    *(volatile DWORD *)(ULONG_PTR)0x49C = us;    /* 40:9C count, us     */
+                    *(volatile BYTE  *)(ULONG_PTR)0x4A0 = 0x01;  /* 40:A0 wait active   */
+                    ++g_i15_events;
+                    g_i15_evt_end = i15_qpc_after_us(us ? us : 1);
+                    BCF_CLR();
+                }
+            } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
+                /* The default handler: CF=1 and AL untouched, "process this key".
+                   A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
+                   CALL this yet -- see the C0h table's feature byte.) */
+                BCF_SET();
+            } else if (ah15 == 0x84) {
+                /* ── BIOS joystick support (session 62). DX picks the half:
+                     0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
+                     the port), 1 = the four resistive inputs. The values
+                     come from the same host-fed sample the gameport VDD
+                     answers with, so the two interfaces cannot disagree.
+                     No stick (or JoystickType None) -> AH=86h CF=1, which
+                     is what sends a well-behaved game to its keyboard
+                     path. Logged once, not per call -- a game polls this
+                     at frame rate and a trace the guest drives outruns
+                     the guest. */
+                unsigned dx84 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                { static int said = 0;
+                  if (!said) { said = 1;
+                    char jb[64], *jq = jb;
+                    jq = zput(jq, "  INT15 AH=84h joystick, dx=0x");
+                    jq = zhex(jq, dx84);
+                    jq = zput(jq, joy_live(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
+                    log_append(LOG_PATH, jb, jq); serial_out(jb, jq); } }
+                if (!joy_live(&g_joy)) {
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                    BCF_SET();
+                } else if (dx84 == 0x0000) {
+                    unsigned mask = (1u << joy_buttons_wired(&g_joy)) - 1u;
+                    BSETAX((WORD)(((~g_joy.buttons & mask) & 0x0F) << 4));
+                    BCF_CLR();
+                } else if (dx84 == 0x0001) {
+                    BSETAX((WORD)g_joy.axis[0]);
+                    VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF0000u) | g_joy.axis[1];
+                    VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & 0xFFFF0000u)
+                                           | (joy_axes(&g_joy) >= 4 ? g_joy.axis[2] : 0u);
+                    VDM_REG(tib, VTIB_EDX) = (VDM_REG(tib, VTIB_EDX) & 0xFFFF0000u)
+                                           | (joy_axes(&g_joy) >= 4 ? g_joy.axis[3] : 0u);
+                    BCF_CLR();
+                } else {
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                    BCF_SET();
+                }
+            } else if (ah15 == 0xC0) {         /* get system config table (#54) */
+                VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
+                VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
+                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));   /* AH=0 */
+                BCF_CLR();
+            } else if (ah15 == 0x87) {         /* move extended memory block (#54) */
+                BSETAX((WORD)((int15_move_block(tib) << 8)
+                              | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 */
+                if ((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF) { BCF_SET(); *pflg &= (WORD)~0x40; }
+                else                                      { BCF_CLR(); *pflg |= 0x40; }
+            } else {
+                /* ► LOG BEFORE BSETAX, NOT AFTER. The first cut printed AX *after*
+                     this arm had already overwritten AH with 0x86, so the log said
+                     "ax=0x86de" and only AL was the guest's -- the instrument
+                     reporting its own write back as the guest's request. */
+                { char xb[96], *xq = xb;
+                  xq = zput(xq, "  INT15 UNIMPL ax=0x");
+                  xq = zhex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                  xq = zput(xq, " bx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                  xq = zput(xq, " cx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                  xq = zput(xq, " dx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                  xq = zput(xq, " es=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                  xq = zput(xq, "\r\n"); log_append(LOG_PATH, xb, xq); serial_out(xb, xq); }
+                BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                BCF_SET();                     /* AH=86h: unsupported fn */
+                g_bios_unimpl[0x15] = 1;
+                /* ► WHICH function, because "INT15" alone does not say. This arm is
+                     the only difference between a Doom run that works and one given
+                     a command-line argument: with an argument the trace is identical
+                     until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
+                     (STAGE2: complete, run_ms=0x148) without printing a character. */
+            }
+        } else if (bn == 0x14) {               /* SERIAL.  GH #45, #9     */
+            /* ── ★★★ NOW ANSWERED BY THE PART, NOT BY THIS ARM. (GH #9) ──
+                 What used to be here was a plausible set of status bits and
+                 a transmit that wrote to g_serial -- THE HOST'S OWN DEBUG
+                 CHANNEL, which interleaved guest bytes with our log. Worse,
+                 receive returned TIMEOUT unconditionally, because there was
+                 nothing to receive FROM: ports 0x3F8.. were unclaimed and no
+                 byte could enter the machine by any route. The port was
+                 declared in the equipment word and could never be used.
+                 vdd_comm.c is a real 8250/16550A, so INT 14h and the port
+                 registers are now two views of ONE device -- a byte sent
+                 through the BIOS in local loopback is readable from RBR, and
+                 a byte the host pushes arrives whichever way the guest reads.
+               ⚠ The 6.22 oracle is still NOT truth here -- QEMU runs SeaBIOS,
+                 so its answer is another reimplementation's opinion
+                 (epic #24). These bits are a statement about OUR machine, and
+                 the thing that pins them is the loopback self-test, which is
+                 the part's own documented behaviour rather than an opinion. */
+            ntvdd_regs r14; regs_load(&r14, tib);
+            HOST_LOCK();
+            vdd_bus_deliver_int(&g_bus, 0x14, &r14);
+            HOST_UNLOCK();
+            regs_store(&r14, tib);
+            BCF_CLR();
+        } else if (bn == 0x17) {               /* PRINTER, LPT1.  GH #45  */
+            /* Printed output goes to a SPOOL FILE, which is a real printer
+               as far as a DOS program can tell and is inspectable afterwards
+               -- the alternative was reporting "selected, out of paper"
+               forever, which is a port that exists and can never be used.
+               Status bits: 7 not busy, 6 acknowledge, 4 selected, 3 I/O
+               error, 0 timeout. 0x90 = not busy + selected = ready. */
+            unsigned ah17 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+            if (ah17 == 0x00) {                /* print AL                 */
+                BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
+                /* Shared with the 0x378 port model -- see lpt_spool_put.
+                   One printer, two ways in. */
+                if (lpt_spool_put(c)) {
+                    BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                } else {
+                    /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──
+                         The first cut did exactly that: status 0x90 on every
+                         call while no file was ever created, so the probe
+                         passed every check and the feature did not work.
+                         Bit 3 is I/O ERROR and bit 5 is OUT OF PAPER; a
+                         program that checks either can now tell. */
+                    BSETAX((WORD)(0x2800 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                    g_bios_unimpl[0x17] = 1;
+                }
+                BCF_CLR();
+            } else if (ah17 == 0x01 || ah17 == 0x02) {  /* init / status   */
+                BSETAX((WORD)((g_lpt_failed ? 0x2800 : 0x9000)
+                              | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                BCF_CLR();
+            } else {
+                BSETAX(0x9000); BCF_CLR();
+                g_bios_unimpl[0x17] = 1;
+            }
+        } else if (bn == 0x13) {               /* disk services  GH #44   */
+            unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+            unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
+            dos_disk_geom *g13 = disk_for(dl13);
+            if (ah13 == 0x00) { BSETAX(0); g_disk_status = 0; BCF_CLR(); }
+            else if (ah13 == 0x01) { BSETAX((WORD)(g_disk_status << 8)); BCF_CLR(); }
+            else if (!g13) {
+                /* No image behind this drive letter. AH=80 is "drive not
+                   ready", which is what a real machine says for a floppy
+                   bay with nothing in it -- and is distinguishable from
+                   AH=01 "bad command", which would mean the SERVICE does
+                   not exist. Those are different answers to a guest. */
+                BSETAX(0x8000); g_disk_status = 0x80; BCF_SET();
+                g_bios_unimpl[0x13] = 1;
+            } else if (ah13 == 0x08) {          /* get drive parameters    */
+                /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
+                   call made with BX poisoned to B1B1. Keeping the caller's
+                   BH would hand back its own junk in half the register. */
+                VDM_SET16(tib, VTIB_EBX, (WORD)g13->drive_type);
+                VDM_SET16(tib, VTIB_ECX, dos_disk_pack_cx(g13));
+                VDM_SET16(tib, VTIB_EDX,
+                          (WORD)(((g13->heads - 1) << 8) | g_disk_count));
+                BSETAX(0); g_disk_status = 0; BCF_CLR();
+            } else if (ah13 == 0x15) {          /* get disk type           */
+                /* AH=01: floppy WITHOUT change-line support, which is what
+                   6.22 answered (AX=0100) and is the truthful claim -- we
+                   cannot detect a media swap under an image file. */
+                BSETAX(0x0100); BCF_CLR();
+            } else if (ah13 == 0x02 || ah13 == 0x03 || ah13 == 0x04) {
+                unsigned nsec = VDM_REG(tib, VTIB_EAX) & 0xFF;
+                unsigned cx13 = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                unsigned sec  = cx13 & 0x3F;
+                unsigned cyl  = ((cx13 >> 8) & 0xFF) | ((cx13 & 0xC0) << 2);
+                unsigned head = (VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF;
+                uint32_t lba = 0;
+                if (!dos_disk_chs_to_lba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
+                    || lba + nsec > g13->total_sectors) {
+                    BSETAX(0x0400); g_disk_status = 0x04;  /* sector not found */
+                    BCF_SET();
+                } else if (ah13 == 0x04) {      /* verify: bounds only     */
+                    BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR();
+                } else {
+                    DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
+                              + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                    int ok = disk_io(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
+                                     ah13 == 0x03);
+                    if (ok) { BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR(); }
+                    else    { BSETAX(0x0400); g_disk_status = 0x04; BCF_SET(); }
+                }
+            } else {
+                BSETAX(0x0100); BCF_SET();      /* bad command             */
+                g_bios_unimpl[0x13] = 1;
+            }
+        } else if (bn == 0x28) {               /* DOS idle                 */
+            BCF_CLR();                         /* nothing to yield to      */
+        } else if (bn == 0x29) {               /* fast console output      */
+            /* AL is the character. Programs that hook this expect it to
+               PRINT; leaving it as an IRET swallowed the output silently. */
+            vdd_video_putc(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
+            BCF_CLR();
+        } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
+            /* AL = drive (0 = A:), CX = sector count, DX = first sector,
+               DS:BX = buffer. LBA directly -- no CHS, which is the whole
+               point of this pair. The stub RETFs, leaving the caller's
+               pushed FLAGS for it to discard; see the stub planting. */
+            unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
+            unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+            uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+            dos_disk_geom *g25 = disk_for(drv);
+            DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
+                      + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            if (!g25) { BSETAX(0x0201); BCF_SET(); g_bios_unimpl[bn] = 1; }
+            else if (sec + cnt > g25->total_sectors) { BSETAX(0x0208); BCF_SET(); }
+            else if (disk_io(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
+                 { BSETAX(0); BCF_CLR(); }
+            else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
+        } else handled = 0;
+        #undef BCF_SET
+        #undef BCF_CLR
+        #undef BSETAX
+        if (handled == 4) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
+        if (handled) { VDM_REG(tib, VTIB_EIP) += 3; V86BOP_RET(V86BOP_DONE); }
+    }
+    if (bn == 0x1A) {   /* INT 1Ah BIOS time */
+        ntvdd_regs r; regs_load(&r, tib);
+        HOST_LOCK();
+        vdd_bus_deliver_int(&g_bus, 0x1A, &r);
+        HOST_UNLOCK();
+        regs_store(&r, tib);
+        host_set_flags(tib, r.cf, r.zf);
+        VDM_REG(tib, VTIB_EIP) += 3;
+        V86BOP_RET(V86BOP_DONE);
+    }
+    if (bn == 0x2F) {   /* INT 2Fh multiplex */
+        DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+        /* ── AX ALONE IS NOT THE CALL. ───────────────────────────────────────
+             INT 2Fh is a multiplex: the function is AX, but the REQUEST is in
+             the other registers and the ANSWER goes back through them too. We
+             pass everything we do not recognise straight through, so the guest
+             reads its own registers back as our reply -- the same "does nothing,
+             reports success" shape as the DPMI 0300 bug -- and logging AX alone
+             cannot show it. XP's COMMAND.COM asks 122Eh five times and 5501h
+             once, then terminates without printing, so those registers are the
+             evidence. Print them. */
+        /* ── ⛔ CAPPED. The FOURTH instrument in one session to need this, and the
+             last one standing after the BOP logger (268 MB, twice) and the INT 21h
+             trace (2,166,824 lines). XP's COMMAND.COM loops through its whole
+             init -- INT 2Fh included -- so an uncapped per-call line here wrote
+             211 MB on its own. LOG_MAX_BYTES stops the DISK filling; it does not
+             make a log readable, and a 211 MB file over SMB is its own outage.
+           ⇒ 512 lines, then one line saying so. The first 512 are where any
+             INT 2Fh answer worth reading is. */
+        { static DWORD n2f = 0;
+          if (++n2f == 513) {
+              p = zput(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
+              log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+          }
+          if (n2f > 512) goto bop2f_serviced; }
+        p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax);
+        p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+        p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+        p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        p = zput(p, " ds:si=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+        p = zput(p, " es:di=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+        p = zput(p, " from=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+        p = zput(p, "\r\n");
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    bop2f_serviced:
+        /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
+             A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
+             keeps whatever the caller put there and the caller reads "not
+             80h" -- which is exactly what a real one sees. Returning an entry
+             point that then refuses every call would be a driver that lies
+             about being installed. */
+        if (ax == 0x4300 && g_xms_on) {                     /* XMS installation check */
+            VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
+        } else if (ax == 0x4310 && g_xms_on) {              /* get XMS entry -> ES:BX */
+            VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
+            VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
+        } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
+            /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL = the CPU
+               class (see DPMI_CPU_CLASS); DX=0.90; SI=0 private paras; ES:DI = mode-switch
+               entry to FAR-CALL. A 16-bit client ignores BX; a 32-bit client reads bit0 to
+               decide to far-call with AX=1. */
+            VDM_SET16(tib, VTIB_EAX, 0);
+            VDM_SET16(tib, VTIB_EBX, 1);
+            VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | DPMI_CPU_CLASS);
+            VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
+            VDM_SET16(tib, VTIB_ESI, 0);
+            VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
+            VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
+            p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
+            p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        } else if (ax == 0x122E) {
+            /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
+                 DL selects; ES:DI comes back as a far pointer. It zeroes
+                 ES:DI, calls five times (DL = 0,2,4,6,8) and STORES each
+                 answer -- so passing the call through, which is what we did,
+                 handed it back the 0000:0000 it supplied and left it holding
+                 five null pointers.
+               ★ MEASURED against two real Microsoft kernels before a line of
+                 this was written (tools/dostest/p_int2f.asm):
+                     DL=0 0001:0D8F   DL=2 0001:0B3B   DL=4 0001:0D8F
+                     DL=6 0000:0000   DL=8 03E7:0188
+                 DL=0 and DL=4 return the SAME pointer on both, so they share
+                 one table here. DL=6 is legitimately NULL on both, so null
+                 is the right answer and not a gap.
+               ⚠ THE CONTENTS ARE BUILD-SPECIFIC (6.22 and PCem disagree on
+                 DL=0/2/4), so there is nothing canonical to copy and these
+                 are zero-filled -- grounded in PCem, where COMMAND.COM runs
+                 perfectly, returning a DL=0 table whose first 32 bytes are
+                 all zero. Thirty-two bytes is all that was measured.
+               ⚠ AX IS LEFT ALONE. Real DOS does not report anything in it
+                 here, and inventing a success code would be a claim we have
+                 not measured. */
+            DWORD dl2e = VDM_REG(tib, VTIB_EDX) & 0xFF;
+            WORD  toff = 0;
+            if (dl2e == 0x00 || dl2e == 0x04) toff = DOS_INT2F_TBL_A;
+            else if (dl2e == 0x02)            toff = DOS_INT2F_TBL_B;
+            else if (dl2e == 0x08)            toff = DOS_INT2F_TBL_C;
+            if (toff) {
+                VDM_SET16(tib, VTIB_ES,  DOS_CTAB_SEG);
+                VDM_SET16(tib, VTIB_EDI, toff);
+            } else {
+                VDM_SET16(tib, VTIB_ES,  0);      /* DL=6, and anything else */
+                VDM_SET16(tib, VTIB_EDI, 0);
+            }
+            p = zput(p, "STAGE2: 2F/122E dl="); p = zhexb(p, (unsigned)dl2e);
+            p = zput(p, " -> ES:DI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        } else if (ax == 0x1684) {                          /* get device API entry point */
+            /* ES:DI = 0:0 means "no API for that device ID", and we have none.
+               ⚠ Leaving the registers alone would be a POINTER-RETURNING call
+                 that returns whatever was in ES:DI -- the caller then far-calls
+                 into it. krnl386 happens to be safe (it does `xor di,di / mov
+                 es,di` at seg1:0x2814 immediately before asking for device 9,
+                 then `or ax,di / jz` after), but that is the CALLER being
+                 careful, and it is not something to rely on from callers we
+                 have not read. */
+            VDM_SET16(tib, VTIB_ES, 0);
+            VDM_SET16(tib, VTIB_EDI, 0);
+            p = zput(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        }
+        /* ── The rest of what krnl386 asks INT 2Fh, and why leaving it alone is
+             the RIGHT answer rather than merely the easy one. Read off the
+             binary (tools/ne/neints.py, then the call sites):
+
+             1600h  "is enhanced-mode Windows running?" AL unchanged = 0x00 =
+                    no. Which is true. krnl386 then does `cmp al,3` at
+                    seg1:0xc14b and DISCARDS the flags -- there is no branch on
+                    it -- so this steers nothing anyway.
+             1689h  kernel idle call. Fire-and-forget: seg1:0x2f5f jumps away
+                    immediately afterwards without reading a single register.
+             168Ah  get vendor-specific API entry. AL unchanged = 0x8A, and
+                    krnl386 tests exactly that (`cmp al,0x8a / jz`) at
+                    seg1:0xd6e9 to mean "not supported", then carries on.
+                    Its vendor string at autodata:0x172a is "MS-DOS" -- so the
+                    thing it is looking for is NTVDM's private WOW API. It
+                    TOLERATES being refused, which is why WOW work can start
+                    without it. */
+        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
+        V86BOP_RET(V86BOP_DONE);
+    }
+    if (bn == 0x43) {   /* XMS API far-call entry */
+        /* ── LOG WHO CALLED, NOT JUST WHAT THEY ASKED. (GH #47) ───────────
+             This printed AH and nothing else, so "MEM asks the version twice
+             and stops" was all we could see -- not WHERE it stops, which is
+             the actual question. The entry is reached by FAR CALL, so the
+             return address is sitting on the guest stack at SS:SP: offset
+             first, then segment.
+           ★ IT ALSO CRACKS THE SEGMENT MAP. MEM.EXE is relocation-free
+             (e_crlc=0) and computes its own segment bases at run time, so
+             static analysis cannot place the code -- a scan for callers of
+             its AH=08h wrappers found only coincidences. One logged CS:IP
+             pins the base, because we know which wrapper that return
+             address follows. */
+        {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                       + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+            const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
+            p = zput(p, " XMS AH=0x");
+            p = zhexb(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
+            p = zput(p, " BL=0x"); p = zhexb(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
+            p = zput(p, " DX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = zput(p, " <- caller ");
+            p = zhex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
+            p = zput(p, ":");
+            p = zhex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
+            p = zput(p, "\r\n"); }
+        log_append(LOG_PATH, base, p); p = base;
+        host_xms(tib);
+        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
+        V86BOP_RET(V86BOP_DONE);
+    }
+    if (bn == 0x67) {   /* INT 67h EMM (EMS) */
+        p = zput(p, " EMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
+        log_append(LOG_PATH, base, p); p = base;
+        HOST_LOCK();
+        host_ems(tib);
+        HOST_UNLOCK();
+        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
+        V86BOP_RET(V86BOP_DONE);
+    }
+    V86BOP_RET(V86BOP_NONE);
+}
+#undef V86BOP_RET
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
@@ -28261,9 +28996,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_simint_reflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
     if (!g_simint_reflect) {
         char sb2[224], *sq = sb2;
-        sq = zput(sq, "STAGE1: simintrefl_off.flag -- DPMI 0300 will NOT reflect to the guest's "
-                      "own real-mode handler; a guest-owned vector is answered host-side or "
-                      "not at all (ZAR: silent). See the note at the site.\r\n");
+        sq = zput(sq, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
+                      "33h/10h host-side, EVERY other vector NOT RUN (ZAR: silent). See "
+                      "simint_route().\r\n");
         log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
@@ -28964,39 +29699,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             g_bop_from_guest = (bcs != DOS_HDLR_SEG && bcs != DOS_CTAB_SEG);
             ++g_bop_hist[VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF];     /* #238 */
         }
-        /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
-           the bus), else INT 21h. */
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
-            ntvdd_regs r; regs_load(&r, tib);
-            HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, 0x10, &r);
-            HOST_UNLOCK();
-            int10_wait_after();                     /* #226: 4F07h BL=80h */
-            regs_store(&r, tib);
-            video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
-            VDM_REG(tib, VTIB_EIP) += 3;
-            continue;
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x16) {
-            ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
-            HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, 0x16, &r);
-            HOST_UNLOCK();
-            /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
-               stops the guest dead, so its timer, its music and its screen freeze until a key
-               arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
-               the BOP instead: the guest re-executes INT 16h and keeps taking timer
-               interrupts while it waits, which is what a real BIOS spin does. */
-            if ((ah16 == 0x00 || ah16 == 0x10) && r.zf != 0 && g_running) continue;
-            regs_store(&r, tib);
-            host_set_flags(tib, r.cf, r.zf);
-            VDM_REG(tib, VTIB_EIP) += 3;
-            continue;
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x33) {   /* INT 33h mouse  */
-            mouse_int33(tib, I33_SRC_V86);
-            VDM_REG(tib, VTIB_EIP) += 3;
-            continue;
+        /* Route the BOP by its number.
+           ── The BOP numbers our stubs share with the nested DPMI loop: INT 10h/16h/33h,
+             the BIOS block (11h-17h, 25h/26h, 28h/29h), 1Ah, 2Fh, the XMS entry and
+             INT 67h. One copy, in v86_bios_bop() (GH #247). */
+        {   int vb = v86_bios_bop(tib, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF, &p, base);
+            if (vb != V86BOP_NONE) continue;          /* DONE or RERUN: both resume the guest */
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == MS_CB_BOP) {   /* INT 33h handler returned */
             mouse_cb_return(tib);
@@ -29034,295 +29742,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
             continue;
         }
-        {   /* ---- BIOS services: INT 11h/12h/13h/14h/15h/17h/25h/26h ---------
-               GH #43/#44/#45. Every one of these was previously an IRET that
-               returned whatever the caller already had in its registers.
-               NOTE ON EVIDENCE: the 6.22 oracle is NOT truth here -- QEMU runs
-               SeaBIOS, so a BIOS answer from it is another reimplementation's
-               opinion (epic #24). The equipment word and memory size are
-               statements about OUR virtual machine's configuration, which is
-               ours to declare; the rest report "not present" honestly and log,
-               rather than pretending hardware exists. */
+        {   /* ---- INT 20h / 22h (BOP 30h) and INT 27h: they END the program, so they stay
+               here -- only the exec loop can terminate a run or return to a parent.
+               The rest of the BIOS block moved to v86_bios_bop() (GH #247). */
             unsigned bn = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
             int handled = 1;
-            WORD *pflg = (WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
-                                  + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
-            #define BCF_SET() (*pflg |= 1)
-            #define BCF_CLR() (*pflg &= (WORD)~1)
-            #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
-                (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
-            if (bn == 0x11) {
-                /* Equipment word -- see bios_equipment_word(). The serial count
-                   comes from the VDD that claimed the ports, so this and the
-                   0040:0000 port base table cannot drift apart. */
-                BSETAX(bios_equipment_word());
-                BCF_CLR();
-            } else if (bn == 0x12) {
-                /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
-                   once DOS_MEM_TOP moved to the real EBDA boundary: the MCB chain
-                   ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
-                   this still claimed 640. Real DOS reports 639 for exactly that
-                   reason -- the top 1KB is the Extended BIOS Data Area. Derived
-                   from the map rather than typed, so the two cannot drift. */
-                BSETAX((WORD)((DOS_MEM_TOP * 16u) / 1024u));
-                BCF_CLR();
-            } else if (bn == 0x15) {
-                unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-                if (ah15 == 0x88) {                /* extended memory, KB */
-                    /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
-                         A serviced call that leaves no trace is indistinguishable in a
-                         log from one that never happened, and session 58 read exactly
-                         that backwards twice while chasing ZAR (GH #23): the absence of
-                         an AH=88h line was taken as "the guest never asks", then as
-                         "the guest must ask". It does NOT ask -- DOS/16M installs its
-                         OWN protected-mode INT 15h handler (that is what its 33 INT 31h
-                         AX=0205 calls are for) and answers the extended-memory question
-                         internally, so this arm is never reached by that guest at all.
-                       ⚠ AND A REAL DEFECT IS RECORDED HERE RATHER THAN QUIETLY FIXED:
-                         0x3C00 "matching the XMS pool" hands the SAME memory out twice
-                         -- once here as raw extended memory a caller may take for
-                         itself, and again through XMS. A real machine cannot do that,
-                         because HIMEM.SYS hooks AH=88h and reports what is left after it
-                         has claimed extended memory, which is ZERO. Changing it was
-                         tried and REVERTED: it is inert for ZAR (never called) and is an
-                         unvalidated behaviour change for every other guest. It is worth
-                         doing deliberately, with Doom and the DOS batteries re-gated on
-                         it -- on its own merits, not as a ZAR fix. */
-                    BSETAX(0x3C00);                /* 15 MB, matching the XMS pool */
-                    BCF_CLR();
-                    { char x8[128], *x8q = x8;
-                      x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
-                      log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
-                } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
-                    DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                    LARGE_INTEGER n;
-                    QueryPerformanceCounter(&n);
-                    if (g_i15_evt_end) {           /* an AH=83h event is counting: busy */
-                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
-                        BCF_SET(); ++g_i15_busy;
-                    } else if (!g_i15_wait_end) {  /* first pass: start the countdown   */
-                        if (us == 0) BCF_CLR();
-                        else { g_i15_wait_end = i15_qpc_after_us(us); ++g_i15_waits; handled = 4; }
-                    } else if (n.QuadPart >= g_i15_wait_end) {
-                        g_i15_wait_end = 0;        /* elapsed                           */
-                        BCF_CLR();
-                    } else {
-                        /* Still waiting: re-execute the BOP (handled = 4). Sleep when there
-                           is time to, so a long wait does not burn the CPU the guest's own
-                           interrupts and the host's threads need -- a 1 ms nap is far
-                           below any wait a program asks this for. */
-                        LARGE_INTEGER f; QueryPerformanceFrequency(&f);
-                        if ((g_i15_wait_end - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
-                        handled = 4;
-                    }
-                } else if (ah15 == 0x83) {         /* event wait (#206) */
-                    unsigned al83 = VDM_REG(tib, VTIB_EAX) & 0xFF;
-                    if (al83 == 0x01) {            /* cancel                            */
-                        g_i15_evt_end = 0;
-                        *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;
-                        BCF_CLR();
-                    } else if (g_i15_evt_end || g_i15_wait_end) {
-                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
-                        BCF_SET(); ++g_i15_busy;   /* one countdown at a time           */
-                    } else {
-                        DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                        WORD es = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF), bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                        g_i15_evt_lin = ((DWORD)es << 4) + bx;
-                        *(volatile WORD  *)(ULONG_PTR)0x498 = bx;    /* 40:98 flag pointer  */
-                        *(volatile WORD  *)(ULONG_PTR)0x49A = es;
-                        *(volatile DWORD *)(ULONG_PTR)0x49C = us;    /* 40:9C count, us     */
-                        *(volatile BYTE  *)(ULONG_PTR)0x4A0 = 0x01;  /* 40:A0 wait active   */
-                        ++g_i15_events;
-                        g_i15_evt_end = i15_qpc_after_us(us ? us : 1);
-                        BCF_CLR();
-                    }
-                } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
-                    /* The default handler: CF=1 and AL untouched, "process this key".
-                       A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
-                       CALL this yet -- see the C0h table's feature byte.) */
-                    BCF_SET();
-                } else if (ah15 == 0x84) {
-                    /* ── BIOS joystick support (session 62). DX picks the half:
-                         0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
-                         the port), 1 = the four resistive inputs. The values
-                         come from the same host-fed sample the gameport VDD
-                         answers with, so the two interfaces cannot disagree.
-                         No stick (or JoystickType None) -> AH=86h CF=1, which
-                         is what sends a well-behaved game to its keyboard
-                         path. Logged once, not per call -- a game polls this
-                         at frame rate and a trace the guest drives outruns
-                         the guest. */
-                    unsigned dx84 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-                    { static int said = 0;
-                      if (!said) { said = 1;
-                        char jb[64], *jq = jb;
-                        jq = zput(jq, "  INT15 AH=84h joystick, dx=0x");
-                        jq = zhex(jq, dx84);
-                        jq = zput(jq, joy_live(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
-                        log_append(LOG_PATH, jb, jq); serial_out(jb, jq); } }
-                    if (!joy_live(&g_joy)) {
-                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
-                        BCF_SET();
-                    } else if (dx84 == 0x0000) {
-                        unsigned mask = (1u << joy_buttons_wired(&g_joy)) - 1u;
-                        BSETAX((WORD)(((~g_joy.buttons & mask) & 0x0F) << 4));
-                        BCF_CLR();
-                    } else if (dx84 == 0x0001) {
-                        BSETAX((WORD)g_joy.axis[0]);
-                        VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF0000u) | g_joy.axis[1];
-                        VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & 0xFFFF0000u)
-                                               | (joy_axes(&g_joy) >= 4 ? g_joy.axis[2] : 0u);
-                        VDM_REG(tib, VTIB_EDX) = (VDM_REG(tib, VTIB_EDX) & 0xFFFF0000u)
-                                               | (joy_axes(&g_joy) >= 4 ? g_joy.axis[3] : 0u);
-                        BCF_CLR();
-                    } else {
-                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
-                        BCF_SET();
-                    }
-                } else if (ah15 == 0xC0) {         /* get system config table (#54) */
-                    VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
-                    VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
-                    BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));   /* AH=0 */
-                    BCF_CLR();
-                } else if (ah15 == 0x87) {         /* move extended memory block (#54) */
-                    BSETAX((WORD)((int15_move_block(tib) << 8)
-                                  | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
-                    /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 */
-                    if ((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF) { BCF_SET(); *pflg &= (WORD)~0x40; }
-                    else                                      { BCF_CLR(); *pflg |= 0x40; }
-                } else {
-                    /* ► LOG BEFORE BSETAX, NOT AFTER. The first cut printed AX *after*
-                         this arm had already overwritten AH with 0x86, so the log said
-                         "ax=0x86de" and only AL was the guest's -- the instrument
-                         reporting its own write back as the guest's request. */
-                    { char xb[96], *xq = xb;
-                      xq = zput(xq, "  INT15 UNIMPL ax=0x");
-                      xq = zhex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                      xq = zput(xq, " bx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                      xq = zput(xq, " cx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                      xq = zput(xq, " dx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                      xq = zput(xq, " es=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                      xq = zput(xq, "\r\n"); log_append(LOG_PATH, xb, xq); serial_out(xb, xq); }
-                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
-                    BCF_SET();                     /* AH=86h: unsupported fn */
-                    g_bios_unimpl[0x15] = 1;
-                    /* ► WHICH function, because "INT15" alone does not say. This arm is
-                         the only difference between a Doom run that works and one given
-                         a command-line argument: with an argument the trace is identical
-                         until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
-                         (STAGE2: complete, run_ms=0x148) without printing a character. */
-                }
-            } else if (bn == 0x14) {               /* SERIAL.  GH #45, #9     */
-                /* ── ★★★ NOW ANSWERED BY THE PART, NOT BY THIS ARM. (GH #9) ──
-                     What used to be here was a plausible set of status bits and
-                     a transmit that wrote to g_serial -- THE HOST'S OWN DEBUG
-                     CHANNEL, which interleaved guest bytes with our log. Worse,
-                     receive returned TIMEOUT unconditionally, because there was
-                     nothing to receive FROM: ports 0x3F8.. were unclaimed and no
-                     byte could enter the machine by any route. The port was
-                     declared in the equipment word and could never be used.
-                     vdd_comm.c is a real 8250/16550A, so INT 14h and the port
-                     registers are now two views of ONE device -- a byte sent
-                     through the BIOS in local loopback is readable from RBR, and
-                     a byte the host pushes arrives whichever way the guest reads.
-                   ⚠ The 6.22 oracle is still NOT truth here -- QEMU runs SeaBIOS,
-                     so its answer is another reimplementation's opinion
-                     (epic #24). These bits are a statement about OUR machine, and
-                     the thing that pins them is the loopback self-test, which is
-                     the part's own documented behaviour rather than an opinion. */
-                ntvdd_regs r14; regs_load(&r14, tib);
-                HOST_LOCK();
-                vdd_bus_deliver_int(&g_bus, 0x14, &r14);
-                HOST_UNLOCK();
-                regs_store(&r14, tib);
-                BCF_CLR();
-            } else if (bn == 0x17) {               /* PRINTER, LPT1.  GH #45  */
-                /* Printed output goes to a SPOOL FILE, which is a real printer
-                   as far as a DOS program can tell and is inspectable afterwards
-                   -- the alternative was reporting "selected, out of paper"
-                   forever, which is a port that exists and can never be used.
-                   Status bits: 7 not busy, 6 acknowledge, 4 selected, 3 I/O
-                   error, 0 timeout. 0x90 = not busy + selected = ready. */
-                unsigned ah17 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-                if (ah17 == 0x00) {                /* print AL                 */
-                    BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
-                    /* Shared with the 0x378 port model -- see lpt_spool_put.
-                       One printer, two ways in. */
-                    if (lpt_spool_put(c)) {
-                        BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
-                    } else {
-                        /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──
-                             The first cut did exactly that: status 0x90 on every
-                             call while no file was ever created, so the probe
-                             passed every check and the feature did not work.
-                             Bit 3 is I/O ERROR and bit 5 is OUT OF PAPER; a
-                             program that checks either can now tell. */
-                        BSETAX((WORD)(0x2800 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
-                        g_bios_unimpl[0x17] = 1;
-                    }
-                    BCF_CLR();
-                } else if (ah17 == 0x01 || ah17 == 0x02) {  /* init / status   */
-                    BSETAX((WORD)((g_lpt_failed ? 0x2800 : 0x9000)
-                                  | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
-                    BCF_CLR();
-                } else {
-                    BSETAX(0x9000); BCF_CLR();
-                    g_bios_unimpl[0x17] = 1;
-                }
-            } else if (bn == 0x13) {               /* disk services  GH #44   */
-                unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-                unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
-                dos_disk_geom *g13 = disk_for(dl13);
-                if (ah13 == 0x00) { BSETAX(0); g_disk_status = 0; BCF_CLR(); }
-                else if (ah13 == 0x01) { BSETAX((WORD)(g_disk_status << 8)); BCF_CLR(); }
-                else if (!g13) {
-                    /* No image behind this drive letter. AH=80 is "drive not
-                       ready", which is what a real machine says for a floppy
-                       bay with nothing in it -- and is distinguishable from
-                       AH=01 "bad command", which would mean the SERVICE does
-                       not exist. Those are different answers to a guest. */
-                    BSETAX(0x8000); g_disk_status = 0x80; BCF_SET();
-                    g_bios_unimpl[0x13] = 1;
-                } else if (ah13 == 0x08) {          /* get drive parameters    */
-                    /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
-                       call made with BX poisoned to B1B1. Keeping the caller's
-                       BH would hand back its own junk in half the register. */
-                    VDM_SET16(tib, VTIB_EBX, (WORD)g13->drive_type);
-                    VDM_SET16(tib, VTIB_ECX, dos_disk_pack_cx(g13));
-                    VDM_SET16(tib, VTIB_EDX,
-                              (WORD)(((g13->heads - 1) << 8) | g_disk_count));
-                    BSETAX(0); g_disk_status = 0; BCF_CLR();
-                } else if (ah13 == 0x15) {          /* get disk type           */
-                    /* AH=01: floppy WITHOUT change-line support, which is what
-                       6.22 answered (AX=0100) and is the truthful claim -- we
-                       cannot detect a media swap under an image file. */
-                    BSETAX(0x0100); BCF_CLR();
-                } else if (ah13 == 0x02 || ah13 == 0x03 || ah13 == 0x04) {
-                    unsigned nsec = VDM_REG(tib, VTIB_EAX) & 0xFF;
-                    unsigned cx13 = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-                    unsigned sec  = cx13 & 0x3F;
-                    unsigned cyl  = ((cx13 >> 8) & 0xFF) | ((cx13 & 0xC0) << 2);
-                    unsigned head = (VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF;
-                    uint32_t lba = 0;
-                    if (!dos_disk_chs_to_lba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
-                        || lba + nsec > g13->total_sectors) {
-                        BSETAX(0x0400); g_disk_status = 0x04;  /* sector not found */
-                        BCF_SET();
-                    } else if (ah13 == 0x04) {      /* verify: bounds only     */
-                        BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR();
-                    } else {
-                        DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
-                                  + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                        int ok = disk_io(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
-                                         ah13 == 0x03);
-                        if (ok) { BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR(); }
-                        else    { BSETAX(0x0400); g_disk_status = 0x04; BCF_SET(); }
-                    }
-                } else {
-                    BSETAX(0x0100); BCF_SET();      /* bad command             */
-                    g_bios_unimpl[0x13] = 1;
-                }
-            } else if (bn == 0x30) {               /* INT 20h: terminate       */
+            if (bn == 0x30) {               /* INT 20h: terminate       */
                 /* INT 20h is AH=4Ch with an exit code of 0. Routing it here
                    rather than leaving an IRET means a program that exits this
                    way actually exits, instead of returning into itself. */
@@ -29349,223 +29774,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.tp = p; dos_int21(&m); p = m.tp;
                 handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
-            } else if (bn == 0x28) {               /* DOS idle                 */
-                BCF_CLR();                         /* nothing to yield to      */
-            } else if (bn == 0x29) {               /* fast console output      */
-                /* AL is the character. Programs that hook this expect it to
-                   PRINT; leaving it as an IRET swallowed the output silently. */
-                vdd_video_putc(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
-                BCF_CLR();
-            } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
-                /* AL = drive (0 = A:), CX = sector count, DX = first sector,
-                   DS:BX = buffer. LBA directly -- no CHS, which is the whole
-                   point of this pair. The stub RETFs, leaving the caller's
-                   pushed FLAGS for it to discard; see the stub planting. */
-                unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
-                unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-                uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-                dos_disk_geom *g25 = disk_for(drv);
-                DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
-                          + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                if (!g25) { BSETAX(0x0201); BCF_SET(); g_bios_unimpl[bn] = 1; }
-                else if (sec + cnt > g25->total_sectors) { BSETAX(0x0208); BCF_SET(); }
-                else if (disk_io(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
-                     { BSETAX(0); BCF_CLR(); }
-                else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
             } else handled = 0;
-            #undef BCF_SET
-            #undef BCF_CLR
-            #undef BSETAX
             if (handled == 2) break;               /* terminate: the run is over  */
             if (handled == 3) continue;            /* a child exited: parent is back */
-            if (handled == 4) continue;            /* #206: still waiting -- re-run the BOP */
             if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
-            ntvdd_regs r; regs_load(&r, tib);
-            HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, 0x1A, &r);
-            HOST_UNLOCK();
-            regs_store(&r, tib);
-            host_set_flags(tib, r.cf, r.zf);
-            VDM_REG(tib, VTIB_EIP) += 3;
-            continue;
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x2F) {   /* INT 2Fh multiplex */
-            DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-            /* ── AX ALONE IS NOT THE CALL. ───────────────────────────────────────
-                 INT 2Fh is a multiplex: the function is AX, but the REQUEST is in
-                 the other registers and the ANSWER goes back through them too. We
-                 pass everything we do not recognise straight through, so the guest
-                 reads its own registers back as our reply -- the same "does nothing,
-                 reports success" shape as the DPMI 0300 bug -- and logging AX alone
-                 cannot show it. XP's COMMAND.COM asks 122Eh five times and 5501h
-                 once, then terminates without printing, so those registers are the
-                 evidence. Print them. */
-            /* ── ⛔ CAPPED. The FOURTH instrument in one session to need this, and the
-                 last one standing after the BOP logger (268 MB, twice) and the INT 21h
-                 trace (2,166,824 lines). XP's COMMAND.COM loops through its whole
-                 init -- INT 2Fh included -- so an uncapped per-call line here wrote
-                 211 MB on its own. LOG_MAX_BYTES stops the DISK filling; it does not
-                 make a log readable, and a 211 MB file over SMB is its own outage.
-               ⇒ 512 lines, then one line saying so. The first 512 are where any
-                 INT 2Fh answer worth reading is. */
-            { static DWORD n2f = 0;
-              if (++n2f == 513) {
-                  p = zput(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
-                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-              }
-              if (n2f > 512) goto bop2f_serviced; }
-            p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax);
-            p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-            p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            p = zput(p, " ds:si=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-            p = zput(p, " es:di=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-            p = zput(p, " from=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-        bop2f_serviced:
-            /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
-                 A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
-                 keeps whatever the caller put there and the caller reads "not
-                 80h" -- which is exactly what a real one sees. Returning an entry
-                 point that then refuses every call would be a driver that lies
-                 about being installed. */
-            if (ax == 0x4300 && g_xms_on) {                     /* XMS installation check */
-                VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
-            } else if (ax == 0x4310 && g_xms_on) {              /* get XMS entry -> ES:BX */
-                VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
-                VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
-            } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
-                /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL = the CPU
-                   class (see DPMI_CPU_CLASS); DX=0.90; SI=0 private paras; ES:DI = mode-switch
-                   entry to FAR-CALL. A 16-bit client ignores BX; a 32-bit client reads bit0 to
-                   decide to far-call with AX=1. */
-                VDM_SET16(tib, VTIB_EAX, 0);
-                VDM_SET16(tib, VTIB_EBX, 1);
-                VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | DPMI_CPU_CLASS);
-                VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
-                VDM_SET16(tib, VTIB_ESI, 0);
-                VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
-                VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
-                p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
-                p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            } else if (ax == 0x122E) {
-                /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
-                     DL selects; ES:DI comes back as a far pointer. It zeroes
-                     ES:DI, calls five times (DL = 0,2,4,6,8) and STORES each
-                     answer -- so passing the call through, which is what we did,
-                     handed it back the 0000:0000 it supplied and left it holding
-                     five null pointers.
-                   ★ MEASURED against two real Microsoft kernels before a line of
-                     this was written (tools/dostest/p_int2f.asm):
-                         DL=0 0001:0D8F   DL=2 0001:0B3B   DL=4 0001:0D8F
-                         DL=6 0000:0000   DL=8 03E7:0188
-                     DL=0 and DL=4 return the SAME pointer on both, so they share
-                     one table here. DL=6 is legitimately NULL on both, so null
-                     is the right answer and not a gap.
-                   ⚠ THE CONTENTS ARE BUILD-SPECIFIC (6.22 and PCem disagree on
-                     DL=0/2/4), so there is nothing canonical to copy and these
-                     are zero-filled -- grounded in PCem, where COMMAND.COM runs
-                     perfectly, returning a DL=0 table whose first 32 bytes are
-                     all zero. Thirty-two bytes is all that was measured.
-                   ⚠ AX IS LEFT ALONE. Real DOS does not report anything in it
-                     here, and inventing a success code would be a claim we have
-                     not measured. */
-                DWORD dl2e = VDM_REG(tib, VTIB_EDX) & 0xFF;
-                WORD  toff = 0;
-                if (dl2e == 0x00 || dl2e == 0x04) toff = DOS_INT2F_TBL_A;
-                else if (dl2e == 0x02)            toff = DOS_INT2F_TBL_B;
-                else if (dl2e == 0x08)            toff = DOS_INT2F_TBL_C;
-                if (toff) {
-                    VDM_SET16(tib, VTIB_ES,  DOS_CTAB_SEG);
-                    VDM_SET16(tib, VTIB_EDI, toff);
-                } else {
-                    VDM_SET16(tib, VTIB_ES,  0);      /* DL=6, and anything else */
-                    VDM_SET16(tib, VTIB_EDI, 0);
-                }
-                p = zput(p, "STAGE2: 2F/122E dl="); p = zhexb(p, (unsigned)dl2e);
-                p = zput(p, " -> ES:DI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            } else if (ax == 0x1684) {                          /* get device API entry point */
-                /* ES:DI = 0:0 means "no API for that device ID", and we have none.
-                   ⚠ Leaving the registers alone would be a POINTER-RETURNING call
-                     that returns whatever was in ES:DI -- the caller then far-calls
-                     into it. krnl386 happens to be safe (it does `xor di,di / mov
-                     es,di` at seg1:0x2814 immediately before asking for device 9,
-                     then `or ax,di / jz` after), but that is the CALLER being
-                     careful, and it is not something to rely on from callers we
-                     have not read. */
-                VDM_SET16(tib, VTIB_ES, 0);
-                VDM_SET16(tib, VTIB_EDI, 0);
-                p = zput(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            }
-            /* ── The rest of what krnl386 asks INT 2Fh, and why leaving it alone is
-                 the RIGHT answer rather than merely the easy one. Read off the
-                 binary (tools/ne/neints.py, then the call sites):
-
-                 1600h  "is enhanced-mode Windows running?" AL unchanged = 0x00 =
-                        no. Which is true. krnl386 then does `cmp al,3` at
-                        seg1:0xc14b and DISCARDS the flags -- there is no branch on
-                        it -- so this steers nothing anyway.
-                 1689h  kernel idle call. Fire-and-forget: seg1:0x2f5f jumps away
-                        immediately afterwards without reading a single register.
-                 168Ah  get vendor-specific API entry. AL unchanged = 0x8A, and
-                        krnl386 tests exactly that (`cmp al,0x8a / jz`) at
-                        seg1:0xd6e9 to mean "not supported", then carries on.
-                        Its vendor string at autodata:0x172a is "MS-DOS" -- so the
-                        thing it is looking for is NTVDM's private WOW API. It
-                        TOLERATES being refused, which is why WOW work can start
-                        without it. */
-            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
-            continue;
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x43) {   /* XMS API far-call entry */
-            /* ── LOG WHO CALLED, NOT JUST WHAT THEY ASKED. (GH #47) ───────────
-                 This printed AH and nothing else, so "MEM asks the version twice
-                 and stops" was all we could see -- not WHERE it stops, which is
-                 the actual question. The entry is reached by FAR CALL, so the
-                 return address is sitting on the guest stack at SS:SP: offset
-                 first, then segment.
-               ★ IT ALSO CRACKS THE SEGMENT MAP. MEM.EXE is relocation-free
-                 (e_crlc=0) and computes its own segment bases at run time, so
-                 static analysis cannot place the code -- a scan for callers of
-                 its AH=08h wrappers found only coincidences. One logged CS:IP
-                 pins the base, because we know which wrapper that return
-                 address follows. */
-            {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
-                           + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-                const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
-                p = zput(p, " XMS AH=0x");
-                p = zhexb(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
-                p = zput(p, " BL=0x"); p = zhexb(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
-                p = zput(p, " DX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                p = zput(p, " <- caller ");
-                p = zhex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
-                p = zput(p, ":");
-                p = zhex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
-                p = zput(p, "\r\n"); }
-            log_append(LOG_PATH, base, p); p = base;
-            host_xms(tib);
-            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
-            continue;
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x67) {   /* INT 67h EMM (EMS) */
-            p = zput(p, " EMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); p = base;
-            HOST_LOCK();
-            host_ems(tib);
-            HOST_UNLOCK();
-            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
-            continue;
         }
         /* ⚠ `!g_bop_from_guest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
              site, in its "Incorrect DOS version" path). Without the origin test that

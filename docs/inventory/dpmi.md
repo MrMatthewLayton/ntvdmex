@@ -27,17 +27,13 @@ Heretic, Hexen, Duke3D, ZAR, heaven7, Win16's krnl386) — **untested** in the R
 ## Headline
 
 **Everything DOS/4GW, DOS/16M and krnl386 have been seen to call is implemented, and the
-holes are exactly where no shelf guest has walked.** Four of them are in DPMI **0.9** core,
-not 1.0:
+holes are exactly where no shelf guest has walked.** Four of them were in DPMI **0.9** core,
+not 1.0 (the first is closed by #247):
 
-1. **`0300h` (simulate real-mode interrupt) services three vectors** — INT 21h, 33h and
-   10h (`:23572-23605`). For every other vector it loads the register block, does nothing,
-   copies it back and returns **CF=0** — the caller's own registers as a "successful" answer
-   (`:23606-23617`). A Watcom/DJGPP `int86()` for INT 16h (keyboard), 1Ah (time), 15h,
-   2Fh, 13h or 67h gets nothing. The unhandled vectors are counted (`g_simint_vec`), not
-   refused. And `0300h` writes back `AX BX CX DX SI DI FLAGS` but **not `ES`, `DS` or `BP`**
-   (`:23609-23612`), so an INT 21h that answers in `ES:BX` (`35h`, `2Fh`, `34h`, `52h`)
-   comes back with the caller's `ES`.
+1. ~~**`0300h` (simulate real-mode interrupt) services three vectors**~~ — **fixed by #247**
+   (see §5): every vector now runs from the real-mode IVT, ours included, and every
+   register is written back. Was: INT 21h, 33h and 10h only; every other vector echoed
+   with **CF=0**; `ES`/`DS`/`BP` dropped; and INT 21h's carry never reached the RMCS at all.
 2. **`0503h` (resize memory block) is UNSUP.** A client that grows its heap with `0503h`
    rather than allocate-copy-free is refused.
 3. **`0304h` (free real-mode callback) is UNSUP, and there are only 4 callback slots**
@@ -55,13 +51,13 @@ client. The s79 GetWinFlags fix (`runs/s79_cl_ab/`, `main.c:540-542`) changed th
 | §2 Descriptors `0000h`–`000Fh` | 15 | 7 | 6 | — | 1 | 1 |
 | §3 DOS memory `0100h`–`0102h` | 3 | 2 | 1 | — | — | — |
 | §4 Interrupts, exceptions, virtual IF | 9 | 8 | 1 | — | — | — |
-| §5 Translation `0300h`–`0306h` | 7 | 2 | 4 | — | 1 | — |
+| §5 Translation `0300h`–`0306h` | 7 | 3 | 3 | — | 1 | — |
 | §6 Version and capabilities `0400h`/`0401h` | 2 | — | 1 | — | 1 | — |
 | §7 Memory `0500h`–`050Bh` | 6 | 2 | 1 | — | 3 | — |
 | §8 Paging, physical mapping, vendor, debug | 7 | 4 | 1 | — | 2 | — |
 | §9 DPMI 1.0 extras, and NTVDM's private pair | 5 | 2 | — | — | 3 | — |
 | §10 INT 21h from protected mode | 6 | 2 | 3 | — | — | 1 |
-| **Total** | **64** | **32** | **19** | **—** | **11** | **2** |
+| **Total** | **64** | **33** | **18** | **—** | **11** | **2** |
 
 ---
 
@@ -120,9 +116,9 @@ client. The s79 GetWinFlags fix (`runs/s79_cl_ab/`, `main.c:540-542`) changed th
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0300h` | simulate real-mode interrupt | **PART** | `:23509-23620`: ⛔ only INT 21h, 33h, 10h are serviced; every other vector returns its own registers with **CF=0**. `ES`/`DS`/`BP` are not written back. The RMCS's SS:SP is ignored (a host scratch stack is used, `:23526`). Only the low 16 bits of each RMCS register are read and written. (`cfg` opt-in `g_simint_reflect` sends some vectors to the guest's own real-mode handler, `:22553-22568`; default off) |
-| `0301h` | call real-mode far procedure | **PART** | `:23621-23796`: runs it in V86 for real; **`CX` (words of stack to copy) is ignored**; after 128 nested events without a return it gives up and still returns **CF=0** (`:23792-23795`) |
-| `0302h` | call real-mode procedure with IRET frame | **PART** | same arm, FLAGS pushed; same two gaps |
+| `0300h` | simulate real-mode interrupt | **IMPL** (#247) | Routing `simint_route()` (`src/host/dpmi_rmcs.h`), decided above the INT 31h switch: **every vector runs from the real-mode IVT** through the `0302h` arm — the guest's handler or our own stub, whose BOP the nested loop now services through `v86_bios_bop()`, the exec loop's own code. Fast path in `case 0x0300`: INT 21h always, 33h/10h while the IVT holds our stub, host-side with no stack and CF/ZF returned through FLAGS (was: written into a frame at `0100:FF04` inside the guest, RMCS got CF=0). All 32-bit registers, FLAGS, `ES DS FS GS` read and written; CS:IP/SS:SP never written; RMCS SS:SP honoured (zero → host default `code_base:FF00`); `CX` words copied. ⚠ Deviations kept on purpose: a guest-hooked real-mode INT 21h is still answered host-side; the handler is entered with IF **set** (ZAR's s81 proof). A null vector is not run. Rollback lever `cfg\simintrefl_off.flag` = pre-#247 routing. Off-VM: `tools/dostest/rmcs_test.c` |
+| `0301h` | call real-mode far procedure | **PART** | runs it in V86 for real; `CX` words copied (#247; a CX that does not fit is logged and NOT copied rather than refused); full 32-bit + FS/GS marshalling (#247); a BIOS call from the procedure is serviced (#247). ⛔ after 128 nested events without a return it gives up and still returns **CF=0** |
+| `0302h` | call real-mode procedure with IRET frame | **PART** | same arm, FLAGS pushed; same remaining gap |
 | `0303h` | allocate real-mode callback | **PART** | `:23797-23815`; **4 slots** (`DPMI_CB_SLOTS`, `:600`) where the spec requires at least 16 |
 | `0304h` | free real-mode callback | **MISS** | `default:` — a callback, once allocated, is never released |
 | `0305h` | state save/restore addresses | **IMPL** | `:23319-23337`; both routines are register-preserving no-ops, buffer size 40h — nothing of ours needs saving across a raw switch |
@@ -186,13 +182,11 @@ calls the shelf makes, translating pointers through the client's selectors.
 
 ## What to fix, in order
 
-1. `0300h`: service every vector the way a host does — reflect to the real-mode IVT
-   entry (ours or the guest's) through the same nested V86 loop `0301h` already runs — and
-   write back `ES`, `DS`, `BP`; honour the RMCS stack.
+1. ~~`0300h`: service every vector the way a host does~~ — done, #247.
 2. `0503h`, then `0304h` with at least 16 callback slots.
 3. Make `0400h`'s CL agree with `1687h`.
 4. `0001h`/`0007h`–`000Ah`/`0101h`: report `8022h` for a bad selector; return freed
    selectors to the free list.
-5. `0301h`/`0302h`: copy `CX` words of stack; return CF=1 when the procedure never returns.
+5. `0301h`/`0302h`: return CF=1 when the procedure never returns (the `CX` copy landed with #247).
 6. `0500h` from the real pool; the default exception action.
 7. PM INT 21h `40h`: honour redirection, as the V86 path does.
