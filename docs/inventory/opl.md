@@ -14,9 +14,9 @@ Off-VM: `opl_test.c` (64 checks), `opl_synth_test.c` (41), `sb_test.c` T11/T11b,
 **Marked:** 2026-09-29 (#232), **from the code**.
 
 **Chip select:** `opl_state.opl3` — 0 = YM3812, 1 = YMF262. Survives `vdd_opl_reset`
-(`vdd_opl.c` `vdd_opl_reset`). ⚠ **The host does not set it yet**: the `Opl` setting
-(`SET_OPL`, `settings.h`, default OPL3) is read by nothing, so every run is an OPL2 until it is
-wired.
+(`vdd_opl.c` `vdd_opl_reset`). ✅ **The host sets it** (re-checked 2026-10-01, `588409a`): the
+`Opl` setting (`OPL2|OPL3`, default OPL3, `settings.h:235`) is applied live,
+`g_opl.opl3 = (SET_OPL == 1)` (`main.c:10931`).
 
 ---
 
@@ -101,5 +101,5 @@ extension, and the extensions are gated on NEW).
 - **Wave 7's slope**, **`38Ah` read**, **array-1 voice with NEW clear**: an `oplprobe` experiment
   each (black-box, one variable), then a real SB16 if one is available.
 - The register-trace hook (`opl_state.trace`) is 8-bit: array-1 writes are not captured.
-- Host: set `opl3` from `SET_OPL`; call `vdd_opl_all_notes_off` on program exit (the current
-  loop in `main.c` stops at channel 8).
+- ~~Host: set `opl3` from `SET_OPL`; call `vdd_opl_all_notes_off` on program exit.~~ ✅ Done in
+  `588409a` (`main.c:10931`; program exit `main.c:4125`, both banks and the rhythm drums).
