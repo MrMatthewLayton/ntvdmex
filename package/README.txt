@@ -56,7 +56,10 @@ IF SOMETHING GOES WRONG
 
 WHAT TO EXPECT (tested by hand on real hardware before this build)
   MS-DOS: COMMAND.COM, DOOM (with sound and mouse), Skyroads, Lemmings, the
-  QBasic and EDIT text-mode editors (typing, menus, mouse).
+  QBasic and EDIT text-mode editors (typing, menus, mouse), ZAR (with sound,
+  VESA modes included), Duke Nukem 3D, and QuickBASIC 4.5 including Make EXE.
+  .PIF files work: double-clicking one runs the program it names, in its start
+  folder, with its parameters (e.g. QuickBASIC's own QB.PIF with /L).
   Win16: Notepad and Paint from Windows 3.11 (Paint draws and saves files);
   Write, Cardfile, Calc, Clock, CharMap, Solitaire, Minesweeper, Recorder,
   Sound Recorder, Terminal, SysEdit, TaskMan, Packager and Program Manager put
@@ -75,6 +78,8 @@ ENVIRONMENT VARIABLES
       set LIB=C:\QB45\LIB
       QB
   Use 8.3 names (no spaces) in such paths: a 1988 linker cannot read long ones.
+  Alternatively set them inside QuickBASIC (Options > Set Paths: Executables,
+  Libraries, Include), which saves them to QB.INI.
 
   On the demo USB, demo\msdos\qb45 has two helpers that do this for you:
       MKEXE CAVE    compiles CAVE.BAS straight to a working standalone CAVE.EXE
@@ -85,8 +90,7 @@ ENVIRONMENT VARIABLES
 
 KNOWN LIMITS
   Hardware-level access is slower than a real PC (every port access is a trap),
-  so timing-critical games run at roughly a 386-class pace. There is no
-  direct-memory-access hardware for user programs. Running several DOS programs
+  so timing-critical games run at roughly a 386-class pace. Running several DOS programs
   one after another from one batch file works, but the second and later ones
   are started a moment after the batch has moved on to its next line, so a
   batch that runs a tool and then immediately reads its output can get ahead
