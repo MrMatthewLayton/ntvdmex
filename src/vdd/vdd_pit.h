@@ -181,6 +181,26 @@ static inline ntvdd vdd_pit_device(pit_state *st)
 { ntvdd d; d.name = "pit"; d.init = vdd_pit_init; d.reset = vdd_pit_reset;
   d.shutdown = 0; d.self = st; return d; }
 
+/* ── ★★ THE TICK COUNT IS THE TIME OF DAY. (GH #253) ─────────────────────────────
+     0040:006C is not "ticks since the machine started": POST reads the RTC and sets it
+     to the ticks since MIDNIGHT, and INT 1Ah AH=00h, DOS's clock, and every program
+     that reads 006C directly all treat it as such. Ours was never seeded, so it counted
+     up from whatever the VDM's low memory held -- zero, i.e. 00:00:00 at every launch.
+     One tick is 65536 PIT input clocks, so the count at a given instant is
+     seconds * 1193182 / 65536 (~18.2065/s), floored. 23:59:59 gives 1,573,024, under
+     the BIOS's own rollover at PIT_TICKS_PER_DAY, so a seeded count can never start
+     at or past midnight. Seconds resolution, as POST has: the RTC has no finer field. */
+static inline uint32_t pit_ticks_since_midnight(unsigned hour, unsigned min, unsigned sec)
+{ uint64_t s = (uint64_t)hour * 3600u + (uint64_t)min * 60u + sec;
+  return (uint32_t)((s * PIT_INPUT_HZ) / 65536u); }
+
+/* Seed 0040:006C from rtc_now (the same clock INT 1Ah AH=02h answers from, so the
+   two halves of INT 1Ah cannot disagree about the time) and clear the midnight flag
+   at 0040:0070. Returns 1 if seeded; 0 -- touching nothing -- when there is no clock
+   or it read an impossible time, which leaves the old count rather than a made-up one.
+   Call once the PIT is on the bus (it writes through the bus's flat map). */
+int  vdd_pit_seed_time_of_day(pit_state *st);
+
 /* Advance time by `clocks` PIT input clocks, emitting IRQ0 per elapsed reload.
    Exposed (not just driven by the frame tick) so tests can feed exact counts. */
 void vdd_pit_add_clocks(pit_state *st, uint32_t clocks);

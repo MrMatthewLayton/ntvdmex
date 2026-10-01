@@ -1536,17 +1536,18 @@
    "pcem"
   ],
   "recorded": "2026-09-27",
-  "why": "The AH=C0h table DESCRIBES THE MACHINE, and its feature bits are promises a guest acts on. Measured: PCem's real AMI 486 BIOS 08 00 FC 01 00 70 00; SeaBIOS (msdos622's QEMU) 08 00 FC 00 01 74 40; dosbox-x 08 00 FC 00 01 70 40. Ours is 08 00 FC 01 00 60 40: the model triple is the AMI's (the period machine), and each feature bit is set only if OUR machine does it -- second 8259 and RTC yes; INT 09h calling INT 15h AH=4Fh NO (the AMI and dosbox-x set bit 4 because their BIOSes do; ours does not, GH #54); EBDA NO (AH=C1h answers CF=1); INT 16h AH=09h yes (vdd_input). The contract rows (c0.status, c0.size_ok) are compared normally. A DEFECT would be this row changing without the code it describes changing -- e.g. adding the 4Fh intercept must set bit 4."
+  "why": "The AH=C0h table DESCRIBES THE MACHINE, and its feature bits are promises a guest acts on. Measured: PCem's real AMI 486 BIOS 08 00 FC 01 00 70 00; SeaBIOS (msdos622's QEMU) 08 00 FC 00 01 74 40; dosbox-x 08 00 FC 00 01 70 40. Ours is 08 00 FC 01 00 64 40: the model triple is the AMI's (the period machine), and each feature bit is set only if OUR machine does it -- second 8259 and RTC yes; INT 09h calling INT 15h AH=4Fh NO (the AMI and dosbox-x set bit 4 because their BIOSes do; ours does not, GH #54); EBDA YES since GH #253 (1 KB at 9FC0h: AH=C1h answers ES=9FC0 CF=0 and 0040:000E = 9FC0 -- it was 60h, bit 2 clear, while C1h refused, which contradicted INT 12h's 639 KB); INT 16h AH=09h yes (vdd_input). The contract rows (c0.status, c0.size_ok) are compared normally. A DEFECT would be this row changing without the code it describes changing -- e.g. adding the 4Fh intercept must set bit 4."
  },
  {
   "probe": "int15",
   "case": "int15.c1.status",
   "field": "CF",
   "abstain": [
-   "msdos622"
+   "dosbox-x",
+   "pcem"
   ],
-  "recorded": "2026-09-27",
-  "why": "Whether an Extended BIOS Data Area exists is a property of the BIOS. SeaBIOS allocates one (CF=0); the period AMI 486 (PCem) and dosbox-x do not (CF=1), and neither do we -- consistent with our AH=C0h table's feature-1 bit 2 being clear. PCem is the period machine, so its answer and dosbox-x's stand."
+  "recorded": "2026-10-01",
+  "why": "Whether an Extended BIOS Data Area exists is a property of the BIOS. SeaBIOS (msdos622's QEMU) allocates 1 KB at 9FC0h (CF=0, ES=9FC0); the period AMI 486 (PCem) and dosbox-x do not (CF=1). Until GH #253 we answered CF=1 like PCem -- while our INT 12h said 639 KB and our MCB chain ended at 9FC0h, i.e. withheld a kilobyte for an EBDA we denied having. Both of those values are measured on msdos622 and agree with it; PCem's INT 12h has never been measured. So the EBDA side was made to match them rather than the other way round: CF=0, ES=9FC0, 0040:000E = 9FC0, C0h feature-1 bit 2 set (src/dos/bios_bda.h). That makes this row a SeaBIOS-shaped answer: msdos622 is compared, PCem and dosbox-x abstain, with the reason being the machine, not a defect. A DEFECT would be this row disagreeing with int12.memk / mcb.chain.ends.at -- 639 KB with CF=1, or 640 KB with CF=0."
  },
  {
   "probe": "subfn",

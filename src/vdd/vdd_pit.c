@@ -557,6 +557,18 @@ static int pit_rtc(pit_state *st, struct vdd_rtc *out)
     return 1;
 }
 
+int vdd_pit_seed_time_of_day(pit_state *st)
+{
+    struct vdd_rtc n;
+    uint8_t *bda;
+    if (!st->bus || !pit_rtc(st, &n)) return 0;
+    if (n.hour > 23 || n.min > 59 || n.sec > 59) return 0;
+    bda = pit_bda(st);
+    *(uint32_t *)(bda + 0x6C) = pit_ticks_since_midnight(n.hour, n.min, n.sec);
+    bda[0x70] = 0;
+    return 1;
+}
+
 static void pit_int1a(void *self, ntvdd_regs *r)
 {
     pit_state *st = (pit_state *)self;

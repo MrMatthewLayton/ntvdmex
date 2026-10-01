@@ -315,6 +315,44 @@ int main(void)
         ps->rtc_now = fake_rtc;
     }
 
+    /* T17: ★ 0040:006C IS SEEDED WITH THE TIME OF DAY. (GH #253)
+         Nothing set it, so INT 1Ah AH=00h counted from 0 -- midnight -- at every launch
+         while AH=02h read the real time. The seed is ticks since midnight at the PIT's
+         own 1193182/65536 Hz, from the SAME clock AH=02h uses, so the two halves of
+         INT 1Ah agree: a seeded count read back through AH=00h divides back to the
+         second AH=02h reports. Expected values worked by hand, not by the function:
+           00:00:00 -> 0;  01:00:00 -> 3600*1193182/65536 = 65543.04 -> 65543 (the IBM
+           BIOS's own hourly constant);  23:41:07 (fake_rtc) -> 85267 s -> 1552414.6
+           -> 1552414;  23:59:59 -> 1573024, under the 1573040 rollover. */
+    {   pit_state *ps = &pit;
+        CHECK(pit_ticks_since_midnight(0, 0, 0) == 0, "tod: 00:00:00 -> 0 ticks");
+        CHECK(pit_ticks_since_midnight(1, 0, 0) == 65543u, "tod: one hour -> 65543 ticks (IBM's constant)");
+        CHECK(pit_ticks_since_midnight(23, 59, 59) == 1573024u
+              && pit_ticks_since_midnight(23, 59, 59) < PIT_TICKS_PER_DAY,
+              "tod: 23:59:59 -> 1573024, below the midnight rollover");
+
+        *bda_tick() = 0xDEADBEEF; *bda_flag() = 1;
+        ps->rtc_now = fake_rtc;
+        CHECK(vdd_pit_seed_time_of_day(ps) == 1, "seed: clock present -> seeded");
+        CHECK(*bda_tick() == 1552414u, "seed: 23:41:07 -> 0040:006C = 1552414");
+        CHECK(*bda_flag() == 0, "seed: midnight flag cleared");
+
+        memset(&r, 0, sizeof r); s_ah(&r, 0x00);
+        vdd_bus_deliver_int(&bus, 0x1A, &r);
+        {   uint32_t t = ((uint32_t)r_cx(&r) << 16) | r_dx(&r);
+            uint32_t secs = (uint32_t)(((uint64_t)t * 65536u + PIT_INPUT_HZ - 1) / PIT_INPUT_HZ);
+            CHECK(t == 1552414u && r_al(&r) == 0, "seed: INT 1Ah AH=00h returns the seeded count, AL=0");
+            CHECK(secs == 23u * 3600u + 41u * 60u + 7u,
+                  "seed: AH=00h's count and AH=02h's 23:41:07 are the same second");
+        }
+
+        ps->rtc_now = 0;
+        *bda_tick() = 0x1234; *bda_flag() = 1;
+        CHECK(vdd_pit_seed_time_of_day(ps) == 0 && *bda_tick() == 0x1234 && *bda_flag() == 1,
+              "seed: no clock -> count and flag left alone, not invented");
+        ps->rtc_now = fake_rtc;
+    }
+
 
     /* T9: MODES 6 AND 7 ARE ALIASES FOR 2 AND 3. -----------------------------
        docs/ref/pit.md 3: the Control Word's mode field is three bits, but only
