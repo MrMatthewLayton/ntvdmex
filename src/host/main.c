@@ -73,6 +73,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "pcspeaker.h"  /* the OTHER speaker: the one on the motherboard */
 #include "install.h"    /* GH #13: becoming the machine's VDM, reversibly */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
+#include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
 #include "../wow/wowanchors.h" /* GH #128: ...and how a thunk module's segment is RECOGNISED */
@@ -26633,6 +26634,72 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (!shell_cfg[0] && g_set.s[SET_STR_SHELL][0]) {
             lstrcpynA(shell_cfg, g_set.s[SET_STR_SHELL], sizeof shell_cfg);
             shell_src = "Settings > General > DOS prompt";
+        }
+    }
+    /* ── A .PIF NAMES A PROGRAM; IT IS NOT ONE. (s85) See pif.h. ─────────────────────
+         Explorer queues the PIF itself as the program, and we handed its bytes to
+         COMMAND.COM to execute. Stock NTVDM reads it: the program, its parameters (the
+         WINDOWS 386 section's copy when there is one) and its start directory. A
+         relative program is looked for in the start directory, then beside the PIF,
+         then on the PATH. Arguments typed after the PIF follow the PIF's own. */
+    if (nread && !g_wow_launch && progpath[0]) {
+        int pl = lstrlenA(progpath);
+        pif_info pi;
+        if (pl > 4 && !lstrcmpiA(progpath + pl - 4, ".PIF")
+            && pif_parse(filebuf, nread, &pi)) {
+            char prog[MAX_PATH], dir[MAX_PATH], pifdir[MAX_PATH], cand[MAX_PATH], extra[256];
+            HANDLE hp = INVALID_HANDLE_VALUE;
+            int k;
+            ExpandEnvironmentStringsA(pi.prog, prog, sizeof prog);
+            ExpandEnvironmentStringsA(pi.dir, dir, sizeof dir);
+            lstrcpynA(pifdir, progpath, sizeof pifdir);
+            for (k = lstrlenA(pifdir); k > 0 && pifdir[k - 1] != '\\'; --k) ;
+            pifdir[k > 0 ? k - 1 : 0] = 0;
+            if (dir[0] && GetFileAttributesA(dir) == INVALID_FILE_ATTRIBUTES) {
+                p = zput(p, "STAGE2: PIF start directory ["); p = zput(p, dir);
+                p = zput(p, "] does not exist -- ignored\r\n");
+                dir[0] = 0;
+            }
+            if (prog[0] == '\\' || (prog[0] && prog[1] == ':')) {
+                lstrcpynA(cand, prog, sizeof cand);
+                hp = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            } else {
+                const char *roots[2]; int r;
+                roots[0] = dir; roots[1] = pifdir;
+                for (r = 0; r < 2 && hp == INVALID_HANDLE_VALUE; ++r) {
+                    char *w;
+                    if (!roots[r][0]) continue;
+                    w = zput(cand, roots[r]); w = zput(w, "\\"); zput(w, prog);
+                    hp = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                }
+                if (hp == INVALID_HANDLE_VALUE && SearchPathA(NULL, prog, NULL, sizeof cand, cand, NULL))
+                    hp = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            }
+            lstrcpynA(extra, args, sizeof extra);
+            p = zput(p, "STAGE2: PIF ["); p = zput(p, progpath);
+            p = zput(p, "] -> program ["); p = zput(p, prog);
+            p = zput(p, "] dir=["); p = zput(p, dir);
+            p = zput(p, "] params=["); p = zput(p, pi.params);
+            p = zput(p, pi.params_from_386 ? "] (WINDOWS 386 section)" : "] (basic section)");
+            if (hp == INVALID_HANDLE_VALUE) {
+                /* Not found: do NOT run the PIF's bytes. A shell is the honest answer. */
+                nread = 0; progpath[0] = 0; args[0] = 0;
+                p = zput(p, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
+            } else {
+                char *w;
+                nread = 0;
+                ReadFile(hp, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hp);
+                lstrcpynA(progpath, cand, sizeof progpath);
+                /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
+                w = zput(args, (pi.params[0] == '?' && !pi.params[1]) ? "" : pi.params);
+                if (extra[0]) { if (args[0]) w = zput(w, " "); zput(w, extra); }
+                zput(g_wow_cmd_prog, progpath); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
+                zput(g_wow_cmd_args, args);
+                if (dir[0]) { lstrcpynA(g_cur, dir, sizeof g_cur); SetCurrentDirectoryA(g_cur); }
+                p = zput(p, " -- loaded 0x"); p = zhex(p, nread);
+                p = zput(p, " from ["); p = zput(p, progpath);
+                p = zput(p, "] args=["); p = zput(p, args); p = zput(p, "]\r\n");
+            }
         }
     }
     /* #153: File > Open Recent lists every program this host was started with. */
