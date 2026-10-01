@@ -19,6 +19,11 @@
  *     "runs but lies" class
  *   - INT 14h and the port registers describe ONE part: a byte sent through the
  *     BIOS in loopback is readable from RBR, and vice versa
+ *   - MCR bit 3 (OUT2) gates the IRQ LINE, not the part: with it clear nothing
+ *     reaches the PIC but IIR still names the source, and setting it onto a
+ *     pending source raises at once (GH #181)
+ *   - COM3 (3E8h) and COM4 (2E8h) are four slots of one device, each with its
+ *     own registers, on the line it shares with COM1/COM2 (GH #181)
  */
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +41,12 @@ static uint8_t g_tx[CAP];
 static int     g_ntx;
 static void sink(void *ctx, int port, uint8_t b)
 { (void)ctx; (void)port; if (g_ntx < CAP) g_tx[g_ntx++] = b; }
+
+/* Every IRQ the device raised, by line. The device has no "lower" -- the PIC
+   sees an edge per raise -- so a COUNT is the whole observable. */
+static int g_irq[16];
+static void irqsink(void *ctx, uint8_t irq)
+{ (void)ctx; if (irq < 16) ++g_irq[irq]; }
 
 static uint8_t g_lpt_b[CAP];
 static int     g_nlpt;
@@ -63,11 +74,14 @@ int main(void)
     memset(&com, 0, sizeof com);
     com.p[0].base = BASE;   com.p[0].irq = 4; com.p[0].fitted = 1;
     com.p[1].base = 0x2F8;  com.p[1].irq = 3; com.p[1].fitted = 1;
+    com.p[2].base = 0x3E8;  com.p[2].irq = 4; com.p[2].fitted = 1;   /* COM3 */
+    com.p[3].base = 0x2E8;  com.p[3].irq = 3; com.p[3].fitted = 1;   /* COM4 */
     com.l[0].base = 0x378;  com.l[0].fitted = 1;
     com.sink = sink; com.sink_ctx = 0;
     com.lpt_sink = lptsink; com.lpt_sink_ctx = 0;
     vdd_bus_init(&bus, 0);
     { ntvdd d = vdd_comm_device(&com); vdd_bus_add(&bus, &d); }
+    vdd_bus_set_sinks(&bus, irqsink, 0, 0, 0);
 
     /* ---- reset state ------------------------------------------------------ */
     CHECK(rd(BASE + COMM_LSR) == (LSR_THRE | LSR_TEMT),
@@ -184,6 +198,45 @@ int main(void)
     CHECK((rd(BASE + COMM_LSR) & LSR_DR) == LSR_DR, "...which sets data-ready");
     CHECK(rd(BASE + COMM_RBR) == 'H', "...and reads out of RBR");
 
+    /* ---- OUT2 GATES THE LINE, NOT THE PART (GH #181) ------------------------
+       All out of loopback, deliberately: whether loopback closes the gate is
+       the one question here the datasheets and the Super I/O parts answer
+       differently, and it is not pinned until an oracle is asked. */
+    wr(BASE + COMM_MCR, 0x00);                     /* OUT2 clear                */
+    wr(BASE + COMM_IER, IER_RDA);
+    memset(g_irq, 0, sizeof g_irq);
+    vdd_comm_rx(&com, 0, 'i');
+    CHECK(g_irq[4] == 0,
+          "OUT2 clear: a received byte with RDA enabled raises NO IRQ (the buffer "
+          "between the part and the PIC is off)");
+    CHECK(rd(BASE + COMM_IIR) == 0x04,
+          "...but IIR still reports received-data-available (0x04) -- the gate is "
+          "outside the chip, so a polling driver reads the true source");
+    wr(BASE + COMM_MCR, MCR_OUT2);
+    CHECK(g_irq[4] == 1,
+          "setting OUT2 with that interrupt still pending raises IRQ4 at once "
+          "(the late-OUT2 driver order still gets its interrupt)");
+    CHECK(rd(BASE + COMM_RBR) == 'i', "...and the byte that was waiting is the one read");
+    CHECK((rd(BASE + COMM_IIR) & 0x01) == 1, "...after which nothing is owed");
+    vdd_comm_rx(&com, 0, 'j');
+    CHECK(g_irq[4] == 2, "OUT2 set: a received byte with RDA enabled raises IRQ4");
+    CHECK(g_irq[3] == 0, "...on COM1's line only, not COM2's");
+    rd(BASE + COMM_RBR);
+    wr(BASE + COMM_MCR, 0x00);                     /* close the gate again      */
+    wr(BASE + COMM_IER, IER_THRE);
+    memset(g_irq, 0, sizeof g_irq);
+    g_ntx = 0;
+    wr(BASE + COMM_RBR, 't');                      /* to the sink: THRE owed    */
+    CHECK(g_ntx == 1 && g_irq[4] == 0,
+          "OUT2 clear: a transmit with THRE enabled raises NO IRQ either");
+    CHECK(rd(BASE + COMM_IIR) == 0x02,
+          "...while IIR still reports THRE (0x02), and that read acknowledges it");
+    wr(BASE + COMM_MCR, MCR_OUT2);
+    CHECK(g_irq[4] == 0,
+          "opening the gate after THRE was acknowledged raises nothing -- nothing is owed");
+    wr(BASE + COMM_IER, 0x00);
+    wr(BASE + COMM_MCR, 0x00);
+
     /* ---- INT 14h describes THE SAME PART ----------------------------------- */
     wr(BASE + COMM_MCR, MCR_LOOP);
     int14(0x01, 'Z', 0, &r);                       /* BIOS send, in loopback    */
@@ -208,8 +261,54 @@ int main(void)
 
     int14(0x03, 0, 1, &r);
     CHECK((r.eax & 0xFFFF) != 0x8000, "COM2 is fitted and answers INT 14h AH=03");
+    int14(0x03, 0, 4, &r);
+    CHECK((r.eax & 0xFFFF) == 0x8000, "a port index past COM4 reports TIMEOUT");
+
+    /* ---- COM3 and COM4: two more slots of the same device (GH #181) --------- */
+    wr(0x3E8 + COMM_SCR, 0x33);
+    wr(0x2E8 + COMM_SCR, 0x44);
+    CHECK(rd(0x3E8 + COMM_SCR) == 0x33 && rd(0x2E8 + COMM_SCR) == 0x44,
+          "COM3 (3E8h) and COM4 (2E8h) each answer the scratch probe");
+    CHECK(rd(BASE + COMM_SCR) != 0x33 && rd(0x2F8 + COMM_SCR) != 0x44,
+          "...with their OWN registers, not aliases of COM1/COM2");
+    wr(0x3E8 + COMM_MCR, (uint8_t)(MCR_LOOP | MCR_DTR | MCR_RTS));
+    wr(0x3E8 + COMM_RBR, 0xC3);
+    CHECK(rd(0x3E8 + COMM_RBR) == 0xC3 && (rd(0x3E8 + COMM_MSR) & 0xF0) == (MSR_DSR | MSR_CTS),
+          "COM3 passes the loopback self-test (byte echo + DTR/RTS -> DSR/CTS)");
+    CHECK((rd(BASE + COMM_LSR) & LSR_DR) == 0, "...and COM1's receiver saw none of it");
+    wr(0x3E8 + COMM_MCR, MCR_OUT2);
+    wr(0x3E8 + COMM_IER, IER_RDA);
+    wr(0x2E8 + COMM_MCR, MCR_OUT2);
+    wr(0x2E8 + COMM_IER, IER_RDA);
+    memset(g_irq, 0, sizeof g_irq);
+    vdd_comm_rx(&com, 2, 'c');
+    CHECK(g_irq[4] == 1 && g_irq[3] == 0, "COM3 raises IRQ4, the line it shares with COM1");
+    vdd_comm_rx(&com, 3, 'd');
+    CHECK(g_irq[3] == 1 && g_irq[4] == 1, "COM4 raises IRQ3, the line it shares with COM2");
+    CHECK(rd(0x3E8 + COMM_RBR) == 'c' && rd(0x2E8 + COMM_RBR) == 'd',
+          "each byte arrives on the port it was pushed to");
+    int14(0x03, 0, 2, &r);
+    CHECK((r.eax & 0xFFFF) != 0x8000, "a fitted COM3 answers INT 14h DX=2");
     int14(0x03, 0, 3, &r);
-    CHECK((r.eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT");
+    CHECK((r.eax & 0xFFFF) != 0x8000, "a fitted COM4 answers INT 14h DX=3");
+    wr(0x3E8 + COMM_IER, 0); wr(0x3E8 + COMM_MCR, 0);
+    wr(0x2E8 + COMM_IER, 0); wr(0x2E8 + COMM_MCR, 0);
+
+    /* A slot that is NOT fitted -- the host's default for COM3/COM4 -- must be
+       absent on every route at once: no registers, no INT 14h, not counted. */
+    { static vdd_bus b2; static comm_state c2; ntvdd_regs r2; uint32_t x = 0;
+      memset(&c2, 0, sizeof c2);
+      c2.p[0].base = BASE;  c2.p[0].irq = 4; c2.p[0].fitted = 1;
+      c2.p[1].base = 0x2F8; c2.p[1].irq = 3; c2.p[1].fitted = 1;
+      vdd_bus_init(&b2, 0);
+      { ntvdd d = vdd_comm_device(&c2); vdd_bus_add(&b2, &d); }
+      CHECK(vdd_bus_io(&b2, 0x3E8 + COMM_SCR, 1, 1, &x) == 0,
+            "an unfitted COM3 leaves 3E8h unclaimed (the guest reads the bus float)");
+      CHECK(vdd_comm_fitted(&c2, 2) == 0 && vdd_comm_fitted(&c2, 3) == 0,
+            "...and vdd_comm_fitted says so, which is what INT 11h and the BDA read");
+      memset(&r2, 0, sizeof r2); r2.eax = 0x0300; r2.edx = 3;
+      vdd_bus_deliver_int(&b2, 0x14, &r2);
+      CHECK((r2.eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT"); }
 
     /* ---- the parallel port: the byte leaves on the STROBE EDGE ------------- */
     g_nlpt = 0;
@@ -230,6 +329,9 @@ int main(void)
     wr8(0x378, 'Q'); wr8(0x37A, LPT_CT_STROBE);
     CHECK(g_nlpt == 2 && g_lpt_b[1] == 'Q', "the next latch+strobe prints the next byte");
 
-    printf("\n%d/%d checks passed\n", total - fails, total);
+    /* ⚠ In a dialect scripts/offvm.sh parses. This line used to read "N/M checks
+         passed", which the runner does not know -- so the whole battery ran on
+         its exit status and was counted as 0 checks. */
+    printf("\n== %d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
