@@ -4,9 +4,9 @@
 Interrupt List, `MEMORY.LST` (`0040:xxxx`). ⚠ **Not held in the repo** —
 [`../ref/SOURCES.md`](../ref/SOURCES.md) names them. No `docs/ref/bda.md` yet.
 **Our implementation:** there is no BDA module. The area is guest memory at linear `400h`,
-and each device writes its own fields: the keyboard VDD (`g_in.bda`, `main.c:27732`), the
-video VDD (`g_vid.bda`, `main.c:27697`), the PIT VDD (`pit_bda`, `vdd_pit.c:520`), and one
-block of host code for the port tables (`main.c:27778-27787`).
+and each device writes its own fields: the keyboard VDD (`g_in.bda`, `main.c:27845`), the
+video VDD (`g_vid.bda`, `main.c:27810`), the PIT VDD (`pit_bda`, `vdd_pit.c:520`), and one
+block of host code for the port tables (`main.c:27891-27908`).
 **Probes:** `p_kbd`, `p_video`, `p_video2`, `p_bios`, `p_lpt`, and `bdaprobe.asm`.
 **Marked:** 2026-10-01, **from the code** — every row says which code writes the field.
 A field nothing in `src/` writes is **MISS**, whatever value happens to be there: it holds
@@ -22,7 +22,7 @@ are the "two doors onto one value" shape this project has paid for before (the e
 word vs `0040:0000`, cost a session for COMM.DRV):
 
 1. **`0040:0010` (equipment) and `0040:0013` (memory size) are never written**, while INT 11h
-   and INT 12h compute their answers (`bios_equipment_word`, `main.c:2466-2490`;
+   and INT 12h compute their answers (`bios_equipment_word`, `main.c:2470-2494`;
    `DOS_MEM_TOP`). A program that reads the BDA directly — which is what INT 11h *is* on a
    real BIOS — gets a different machine from one that calls the interrupt.
 2. **The tick count `0040:006C` is never set to the time of day.** It counts up from
@@ -42,9 +42,9 @@ comment for that says the top 1 KB *is* the EBDA (`dos_mcb.h:35`).
 | §2 Keyboard (`17h`–`3Dh`, `71h`, `80h`–`83h`, `96h`–`97h`) | 9 | 3 | 1 | — | 5 | — |
 | §3 Diskette and fixed disk (`3Eh`–`48h`, `74h`–`77h`, `8Bh`–`95h`) | 6 | — | — | — | 6 | — |
 | §4 Video (`49h`–`66h`, `84h`–`8Ah`, `A8h`) | 6 | 4 | 1 | — | 1 | — |
-| §5 Timer, reset, timeouts, wait flags (`67h`–`7Fh`, `98h`–`A0h`) | 7 | 2 | — | — | 3 | 2 |
+| §5 Timer, reset, timeouts, wait flags (`67h`–`7Fh`, `98h`–`A0h`) | 7 | 3 | — | — | 2 | 2 |
 | §6 The rest (`F0h`–`FFh`, `0050:0000`, the EBDA) | 3 | 1 | — | — | 1 | 1 |
-| **Total** | **38** | **13** | **2** | **—** | **18** | **5** |
+| **Total** | **38** | **14** | **2** | **—** | **17** | **5** |
 
 ---
 
@@ -52,12 +52,12 @@ comment for that says the top 1 KB *is* the EBDA (`dos_mcb.h:35`).
 
 | Offset | Field | Status | Who writes it / what is missing | Verification |
 |---|---|---|---|---|
-| `00h`–`07h` | COM1–COM4 base ports | **IMPL** | `main.c:27783-27785`: `3F8h`, `2F8h` — exactly the UARTs that claimed their ports — then 0, 0 | by hand (COMM.DRV loads, #128) |
-| `08h`–`0Dh` | LPT1–LPT3 base ports | **IMPL** | `main.c:27786-27787`: `378h` if LPT1 is fitted, then 0 | `p_lpt` (blocked on PCem) |
-| `0Eh` | EBDA segment (AT and later) | **IMPL** | `main.c:27787` (`bda[7] = 0`): "no EBDA" — consistent with INT 15h `C1h` (§6) | — |
-| `10h` | equipment word | **MISS** | **not written.** INT 11h answers from `bios_equipment_word()` (`main.c:2466-2490`) and the two can disagree | — |
+| `00h`–`07h` | COM1–COM4 base ports | **IMPL** | `main.c:27904-27906`: one loop over the UART VDD's four slots (#181) — each slot's own base if it is fitted, else 0. COM1/COM2 (`3F8h`, `2F8h`) are fitted; COM3/COM4 exist as slots but are not fitted, so they read 0 | by hand (COMM.DRV loads, #128) |
+| `08h`–`0Dh` | LPT1–LPT3 base ports | **IMPL** | `main.c:27907-27908`: `378h` if LPT1 is fitted, then 0 | `p_lpt` (blocked on PCem) |
+| `0Eh` | EBDA segment (AT and later) | **IMPL** | `main.c:27908` (`bda[7] = 0`): "no EBDA" — consistent with INT 15h `C1h` (§6) | — |
+| `10h` | equipment word | **MISS** | **not written.** INT 11h answers from `bios_equipment_word()` (`main.c:2470-2494`) and the two can disagree | — |
 | `12h` | POST / manufacturing test flags | **N/A** | no POST runs | — |
-| `13h` | memory size, KB | **MISS** | **not written.** INT 12h answers `DOS_MEM_TOP`-derived 639 (`main.c:28939-28947`) | — |
+| `13h` | memory size, KB | **MISS** | **not written.** INT 12h answers `DOS_MEM_TOP`-derived 639 (`main.c:29060-29068`) | — |
 | `15h`–`16h` | adapter memory / PS/2 error codes | **N/A** | vendor- and model-specific | — |
 
 ## 2. Keyboard
@@ -82,7 +82,7 @@ Marked in full in [keyboard.md](keyboard.md) §2; summarised here so the area is
 |---|---|---|---|
 | `3Eh` | diskette recalibrate status | **MISS** | INT 13h reads the image directly ([dos-services.md](dos-services.md) §6) and the FDC is never driven |
 | `3Fh`–`40h` | motor status / motor-off countdown | **MISS** | INT 08h never counts it down ([bios-misc.md](bios-misc.md) §3) |
-| `41h` | last diskette operation status | **MISS** | INT 13h keeps it in `g_disk_status` (`main.c:29109-29157`); `AH=01h` answers from there, and the BDA byte never changes |
+| `41h` | last diskette operation status | **MISS** | INT 13h keeps it in `g_disk_status` (`main.c:29276-29324`); `AH=01h` answers from there, and the BDA byte never changes |
 | `42h`–`48h` | FDC result bytes | **MISS** | |
 | `74h`–`77h` | fixed disk status, **number of fixed disks**, control, port offset | **MISS** | `0040:0075` (the count of hard disks a program may read before using INT 13h `80h`) is not written; we expose no fixed disks by design |
 | `8Bh`–`95h` | data rate, fixed-disk status/error/interrupt flags, media state, current cylinders | **MISS** | |
@@ -104,13 +104,13 @@ Marked in full in [video-bios.md](video-bios.md) §6.
 
 | Offset | Field | Status | Who writes it / what is missing | Verification |
 |---|---|---|---|---|
-| `6Ch`–`6Fh` | tick count | **IMPL** | `pit_int08` (`vdd_pit.c:526-534`), and two host paths that do the BIOS's bookkeeping while a guest cannot take IRQ0 (`main.c:3467-3470`, `:24688-24691`) | provisional (`int1a.00.advances`) |
+| `6Ch`–`6Fh` | tick count | **IMPL** | `pit_int08` (`vdd_pit.c:526-534`), and two host paths that do the BIOS's bookkeeping while a guest cannot take IRQ0 (`main.c:3471-3474`, `:24794-24797`) | provisional (`int1a.00.advances`) |
 | — | the tick count **is time of day** (seeded at start from the clock) | **MISS** | ⛔ nothing seeds `006C`: the only writers are the increments above. INT 1Ah `AH=00h` and every direct reader get "ticks since an unknown start", not ticks since midnight | — |
 | `70h` | midnight rollover flag | **IMPL** | `vdd_pit.c:533`, cleared by INT 1Ah (`:569-575`) | provisional (`int1a.00.midnight`) |
 | `67h`–`6Ah` | shutdown / reset re-entry pointer | **N/A** | the VDM is never reset into real mode | — |
-| `6Bh` | last unexpected interrupt | **N/A** | written only by a BIOS's default IRQ handler; ours are bare `IRET`s (`main.c:26895`, `:26898-26905`) | — |
+| `6Bh` | last unexpected interrupt | **N/A** | written only by a BIOS's default IRQ handler; ours are bare `IRET`s (`main.c:27008`, `:27011-27018`) | — |
 | `78h`–`7Fh` | printer and serial timeouts | **MISS** | not written; INT 14h/17h do not use them | — |
-| `98h`–`A0h` | user wait flag pointer / count / active flag (INT 15h `83h`/`86h`) | **MISS** | INT 15h `83h` is refused and `86h` returns at once ([bios-misc.md](bios-misc.md) §4) | — |
+| `98h`–`A0h` | user wait flag pointer / count / active flag (INT 15h `83h`) | **IMPL** | #206: written by INT 15h `83h` (`main.c:29131-29134`), cleared when the event posts (`main.c:5648`) or is cancelled (`main.c:29122`) | **oracle** via `p_int15w` (the event itself; the BDA bytes are not compared) |
 
 ## 6. The rest
 

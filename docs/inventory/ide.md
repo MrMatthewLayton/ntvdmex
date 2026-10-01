@@ -5,9 +5,9 @@ for the PACKET command set; IBM PC/AT TechRef for the board wiring (IRQ14, the `
 blocks). ⚠ **Not held in the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md). No
 `docs/ref/ide.md`.
 **Our implementation:** **none.** No VDD claims `1F0h`–`1F7h`, `3F6h`, `170h`–`177h` or
-`376h`. An unclaimed port reads `FFh` and a write is dropped (`main.c:13429-13444`, the
+`376h`. An unclaimed port reads `FFh` and a write is dropped (`main.c:13481-13496`, the
 "unclaimed ISA port floats high" rule), and the port is listed in the run's
-`unclaimed ports touched` line (`io_unclaimed_note`, `main.c:13069-13076`).
+`unclaimed ports touched` line (`io_unclaimed_note`, `main.c:13121-13128`).
 **Probe:** `tools/dostest/p_fdc.asm` asks `3F6h` as its `fdc.alt.3f6` case — that is how
 this surface was found ([sweep.md](sweep.md)). No ATA probe exists.
 **Marked:** 2026-10-01, **from the code** — i.e. from the absence of any claim
@@ -71,7 +71,7 @@ repeated here.)
 
 | Unit | Status | Notes |
 |---|---|---|
-| IRQ14 (primary) / IRQ15 (secondary) | **MISS** | nothing raises them; the vectors (`76h`/`77h`) point at our shared `IRET` stub (`main.c:26898-26905`) |
+| IRQ14 (primary) / IRQ15 (secondary) | **MISS** | nothing raises them; the vectors (`76h`/`77h`) point at our shared `IRET` stub (`main.c:27011-27018`) |
 | Bus-master / multiword DMA | **MISS** | no PCI IDE function, no `8237` channel use |
 
 ## 4. Command set

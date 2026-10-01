@@ -130,7 +130,7 @@ Each surface gets two documents, doing two different jobs:
 | **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 171 units: 139 IMPL, 7 PART, 2 STORE, 20 MISS, 3 N/A | [PDFs held](../ref/) |
 | **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) — 34 units: 26 IMPL, 4 PART, 1 STORE, 3 N/A (re-cited 2026-10-01) | ✅ [`ref/pit.md`](../ref/pit.md) |
 | 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) — marked 2026-09-23, group table | ✅ [`ref/pic.md`](../ref/pic.md) |
-| 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) — marked 2026-09-23, group table | ✅ [`ref/dma.md`](../ref/dma.md) |
+| 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) — marked 2026-09-23; status DRQ bits and command bit 2 re-marked 2026-10-01 (#176) | ✅ [`ref/dma.md`](../ref/dma.md) |
 | 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) — marked 2026-09-23; ⚠ its `vdd_input.c` line numbers predate #188 | ✅ [`ref/kbc.md`](../ref/kbc.md) |
 | Keyboard device (commands, ACKs, scan code sets) | IBM AT TechRef | [kbc.md](kbc.md) §5 — ACKs MISS | — |
 | PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) §3 — **all MISS**: no aux device, no INT 15h `C2h`, no serial mouse | — |
@@ -142,7 +142,7 @@ Each surface gets two documents, doing two different jobs:
 | AWE32 EMU8000 wavetable | Creative *AWE32/EMU8000 Programmer's Guide* rev 1.00 | [emu8k.md](emu8k.md) — built in #233; on the bus for the AWE32 model (`BLASTER E`); WC clock and diagnostics owed | — |
 | Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [gus.md](gus.md) — built in s80–s82 (#189 stereo); remainder is #190 | ✅ [`ref/gus.md`](../ref/gus.md) |
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | [mpu401.md](mpu401.md) — 32 units (s84) | — |
-| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) — marked 2026-09-23, measured on three oracles (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
+| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) — marked 2026-09-23, measured on three oracles; OUT2 and COM3/COM4 re-marked 2026-10-01 (#181) (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
 | **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited**. ⚠ INT 13h still does not drive it ([dos-services.md](dos-services.md) §6) | ✅ [`ref/fdc.md`](../ref/fdc.md) |
 | IDE / ATA + ATAPI | ATA-x, ATAPI specs | [ide.md](ide.md) — 34 units, 30 MISS: **no adapter**, by accident rather than decision; `3F6h` answers `FFh` (BSY set) where both oracles say `50h` (2026-10-01) | — |
 | **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
@@ -151,11 +151,11 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| PC BIOS: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) — 39 units: 16 IMPL, 5 PART, 14 MISS, 4 N/A (2026-10-01) | — |
+| PC BIOS: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) — 39 units: 17 IMPL, 6 PART, 13 MISS, 3 N/A (2026-10-01, after #206) | — |
 | PC BIOS: INT 09h, 16h (keyboard) | IBM AT / PS/2 TechRef (K1S) | [keyboard.md](keyboard.md) — 39 units: 19 IMPL, 4 PART, 11 MISS, 5 N/A (2026-10-01) | — |
 | PC BIOS: INT 13h, 25h, 26h (disk) | IBM TechRef; RBIL | [dos-services.md](dos-services.md) §6 — 13 units | — |
 | VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | [video-bios.md](video-bios.md) — 75 units: 36 IMPL, 19 PART, 1 STORE, 17 MISS, 2 N/A (2026-10-01) | — |
-| BIOS Data Area (0040:) + EBDA | IBM TechRef; RBIL `MEMORY.LST` | [bda.md](bda.md) — 38 units: 13 IMPL, 2 PART, 18 MISS, 5 N/A (2026-10-01) | — |
+| BIOS Data Area (0040:) + EBDA | IBM TechRef; RBIL `MEMORY.LST` | [bda.md](bda.md) — 38 units: 14 IMPL, 2 PART, 17 MISS, 5 N/A (2026-10-01) | — |
 
 ### Software
 

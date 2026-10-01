@@ -9,9 +9,9 @@ licence forbids redistribution). `§n`/`p.n` below are the guide's.
 (58 checks). **Clean-room:** written from the guide's prose. No other emulator's EMU8000 was
 read.
 **Marked:** 2026-09-29, **from the code**. **Host wiring re-checked 2026-10-01:** the chip
-*is* on the bus now (`e0d54b8`) — fitted when the SB model is AWE32 (`main.c:27831-27839`),
-reset on the host's reset path (`main.c:8220`), mixed (`main.c:27854`), and advertised as
-`BLASTER` `E` (`main.c:10984`, `dos_env.h:117`). Every mark below describes the device
+*is* on the bus now (`e0d54b8`) — fitted when the SB model is AWE32 (`main.c:27952-27960`),
+reset on the host's reset path (`main.c:8272`), mixed (`main.c:27975`), and advertised as
+`BLASTER` `E` (`main.c:11036`, `dos_env.h:117`). Every mark below describes the device
 model; the host steps still open are at the end.
 
 **Verification:** everything is **untested** in the README's sense. It is exercised off-VM

@@ -247,10 +247,10 @@ relation to time. A recorded approximation, not an oversight.
 
 Not a register; recorded because every IRQ0-timing defect has lived here rather than in
 the chip. The chip advances only when the host adds clocks (`vdd_pit_add_clocks`,
-`vdd_pit.c:193-227`). The host's **pacer** (`pit_pacer_thread`, `main.c:5613`) wakes on a
-1 ms multimedia timer since #238 (`timeSetEvent`, `main.c:5600-5605`; `Sleep(1)` woke
-~485 times a second on XP), advances the chip (`host_pit_sync`, `main.c:13349`) and hands
-delivery to `host_pit_deliver` (`main.c:13237`). IRQ0 is held in service until the guest's
+`vdd_pit.c:193-227`). The host's **pacer** (`pit_pacer_thread`, `main.c:5664`) wakes on a
+1 ms multimedia timer since #238 (`timeSetEvent`, `main.c:5651-5656`; `Sleep(1)` woke
+~485 times a second on XP), advances the chip (`host_pit_sync`, `main.c:13401`) and hands
+delivery to `host_pit_deliver` (`main.c:13289`). IRQ0 is held in service until the guest's
 EOI ([pic.md](pic.md)). With a pacer, `frame_us = 0` and the VDD's own frame hook does
 nothing (`vdd_pit.c:277-289`).
 

@@ -8,7 +8,7 @@ INT 09h, BDA `0040:0017`–`0040:0097`). ⚠ **Not held in the repo** —
 set, keyboard-side ACKs) are **[kbc.md](kbc.md)**. This file is the firmware on top.
 **Our implementation:** `src/vdd/vdd_input.c` (788 lines), `src/vdd/vdd_input.h`; the
 INT 09h/16h stubs and their BOP arms in `src/host/main.c`; host keys enter at
-`host_key_scancode` (`main.c:6546`).
+`host_key_scancode` (`main.c:6598`).
 **Off-VM:** `tools/dostest/input_test.c`. **DOS probe:** `tools/dostest/p_kbd.asm`.
 **Oracles:** MS-DOS 6.22 under QEMU (SeaBIOS — a reimplementation, so **provisional** for a
 BIOS row), PCem with a genuine AMI 486 BIOS (**oracle**), DOSBox-X.
@@ -44,16 +44,16 @@ calls that exist to tell a grey arrow from a keypad arrow, cannot.
 
 ## 1. INT 16h
 
-The vector is planted at `DOS_HDLR_SEG:0028` as `BOP 16h; IRET` (`main.c:26872`). V86
-reaches the VDD through the BOP arm (`main.c:28859-28874`); protected mode through the
-PM BOP arm (`main.c:22134-22151`). Dispatcher: `int16` (`vdd_input.c:664-738`).
+The vector is planted at `DOS_HDLR_SEG:0028` as `BOP 16h; IRET` (`main.c:26985`). V86
+reaches the VDD through the BOP arm (`main.c:28980-28995`); protected mode through the
+PM BOP arm (`main.c:22240-22257`). Dispatcher: `int16` (`vdd_input.c:664-738`).
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `00h` | read key, 83-key form | **IMPL** | `vdd_input.c:675-679`; IBM's K1S filter `kb_compat` (`:648-659`) discards enhanced-only codes and rewrites `E0` forms. Empty ring: V86 leaves EIP on the BOP so the guest re-executes and keeps taking IRQs (`main.c:28869`); PM waits on `g_key_event` (`main.c:22136-22143`) | provisional (`16.00.read`, `.head`, `.drained`, `.arrow`); input_test `:72-76`, `:342-345` |
+| `00h` | read key, 83-key form | **IMPL** | `vdd_input.c:675-679`; IBM's K1S filter `kb_compat` (`:648-659`) discards enhanced-only codes and rewrites `E0` forms. Empty ring: V86 leaves EIP on the BOP so the guest re-executes and keeps taking IRQs (`main.c:28990`); PM waits on `g_key_event` (`main.c:22242-22249`) | provisional (`16.00.read`, `.head`, `.drained`, `.arrow`); input_test `:72-76`, `:342-345` |
 | `01h` | check key, 83-key form | **IMPL** | `:684-690`; a discarded code is **consumed**, head moved on (the PCem answer) | **oracle** for `16.01.enh` (PCem, #188); provisional for `16.01.peek`, `.nocons`, `.empty` |
 | `02h` | shift flags → AL | **IMPL** | `:695-697`, reads `0040:0017` | provisional (`16.02.shift`); input_test `:133` |
-| `03h` | typematic rate / delay | **N/A** | `:703-710`: answered `CF=0`, nothing stored. The host OS owns key repeat (the host repeats keys itself, `main.c:6559`) and the BIOS keeps no readable copy. `AL=06h` (get) is not claimed by `AH=09h` | provisional (`16.03.typematic`) |
+| `03h` | typematic rate / delay | **N/A** | `:703-710`: answered `CF=0`, nothing stored. The host OS owns key repeat (the host repeats keys itself, `main.c:6611`) and the BIOS keeps no readable copy. `AL=06h` (get) is not claimed by `AH=09h` | provisional (`16.03.typematic`) |
 | `04h` | keyclick on/off | **N/A** | PCjr / Convertible only; not in the AT or PS/2 BIOS. Falls to `default:` (`:734-736`) | — |
 | `05h` | store keystroke CH:CL | **IMPL** | `:711-720`; `AL=1` when full (`vdd_input_push` `:19-42`) | provisional (`16.05.push`, `.tail`, `.readback`, `.full`); input_test `:295-313` |
 | `09h` | supported-function mask | **IMPL** | `:721-727`, `AL=B1h` | **oracle** (PCem + DOSBox-X, #188); input_test `:322` |
@@ -68,7 +68,7 @@ PM BOP arm (`main.c:22134-22151`). Dispatcher: `int16` (`vdd_input.c:664-738`).
 ## 2. BDA keyboard fields
 
 The BDA is guest memory at `0040:0000`; the VDD writes it through `g_in.bda`
-(`main.c:27732`). Offsets are named in `vdd_input.h:28-33`.
+(`main.c:27845`). Offsets are named in `vdd_input.h:28-33`.
 
 | Offset | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
@@ -85,24 +85,24 @@ The BDA is guest memory at `0040:0000`; the VDD writes it through `g_in.bda`
 
 ## 3. The BIOS INT 09h handler
 
-Default vector `DOS_HDLR_SEG:004C` = `BOP 09h; IRET` (`main.c:25684`, planted `:26884`).
-V86 arm: `main.c:28884-28899` (consume, then the EOI the BIOS ends with). PM default
-handler reflected to it: `main.c:22197-22213`.
+Default vector `DOS_HDLR_SEG:004C` = `BOP 09h; IRET` (`main.c:25790`, planted `:26997`).
+V86 arm: `main.c:29005-29020` (consume, then the EOI the BIOS ends with). PM default
+handler reflected to it: `main.c:22303-22319`.
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
 | Consume the presented byte and translate it | **IMPL** | `vdd_input_bios_consume` `vdd_input.c:453-469` | untested |
 | A guest hook that read `60h` itself and then chains: the BIOS re-reads the **same** byte | **IMPL** | `sc_bios_owed` (`:459-464`, set at `:560`) | untested |
-| The EOI at the end of the handler | **IMPL** | `vdd_pic_eoi(&g_pic, 1)` (`main.c:28897`); measured as the QBasic keyboard fix | by hand (QBasic) |
+| The EOI at the end of the handler | **IMPL** | `vdd_pic_eoi(&g_pic, 1)` (`main.c:29018`); measured as the QBasic keyboard fix | by hand (QBasic) |
 | Make / break, the `E0` prefix, the fake shifts `E0 2A`/`E0 AA` | **IMPL** | `:394-406` | input_test |
 | Modifier and lock state into `0040:0017` | **IMPL** | `:404-412` (Insert excepted, §2) | provisional |
 | Four columns (plain / Shift / Ctrl / Alt), Caps for letters, NumLock for the keypad | **IMPL** | `sc_key` (`:154-246`), precedence `:419-443`. From the IBM table, not from a machine | untested; input_test T10 (`:187`) pins the table |
 | Grey keys: Alt forms (`9B00h` …) | **IMPL** | `sc_ext_alt` (`:250-260`) | untested |
 | Grey keys: plain / Shift **`E0` forms** (`4BE0h`, keypad Enter `E00Dh`, keypad `/` `E02Fh`) | **PART** | ⛔ `sc_ext_plain` (`:262-265`) stores `4B00h`, `1C0Dh`, `352Fh` — the **83-key** forms. `kb_compat` (`:651-657`) rewrites `E0` forms for `AH=00h/01h`, but nothing ever produces one, so `AH=10h/11h` cannot tell grey Left from keypad Left. input_test `:339` pushes `4BE0h` by hand, so it does not catch this | untested |
 | Keyboard layouts (UK / German / French) | **IMPL** | #136, `:266-343`, `:430-442`; dead keys not composed. An extension, not a BIOS unit | untested |
-| INT 15h `AH=4Fh` keyboard intercept | **MISS** | never called. The `C0h` system table says so honestly (feature bit 4 clear, `main.c:27411`) | — |
+| INT 15h `AH=4Fh` keyboard intercept | **MISS** | never called. The `C0h` system table says so honestly (feature bit 4 clear, `main.c:27524`) | — |
 | Ctrl-Break → INT 1Bh, `0000h` in the ring, `0071h` bit 7 | **MISS** | scan `46h` only toggles Scroll Lock (`:412`), with or without Ctrl or `E0` | — |
-| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **MISS** | `E1` is dropped (`:401`); the host never sends one (`main.c:6549-6550` sends only `E0` prefixes) | — |
+| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **MISS** | `E1` is dropped (`:401`); the host never sends one (`main.c:6601-6602` sends only `E0` prefixes) | — |
 | Print Screen → INT 05h | **MISS** | INT 05h is never called. Alt+SysRq `54h` stores nothing (`:239`); `E0 37` goes through `sc_ext_plain` and stores **`3700h`**, a keystroke the BIOS never stores | — |
 | SysReq → INT 15h `AH=85h` | **MISS** | | — |
 | Ctrl+Alt+Del → reboot | **N/A** | a VDD cannot reboot its host — the same reasoning as 8042 `FEh` ([kbc.md](kbc.md)) | — |

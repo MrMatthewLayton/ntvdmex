@@ -7,8 +7,8 @@ repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md). The *chip* is [vga.md](vga.
 firmware: what the BIOS calls do to that chip and to the BDA.
 **Our implementation:** `int10` in `src/vdd/vdd_video.c` (`:1406-1933`) and its helpers
 (`cell`, `scroll_up`, `teletype`, `glyph_12h`), the BDA writer `vdd_video_bda_sync`
-(`:436-482`). The stub is `DOS_HDLR_SEG:0020` = `BOP 10h; IRET` (`main.c:26869-26871`);
-V86 arm `main.c:28848-28858`, PM arm `:22120-22133`.
+(`:436-482`). The stub is `DOS_HDLR_SEG:0020` = `BOP 10h; IRET` (`main.c:26982-26984`);
+V86 arm `main.c:28969-28979`, PM arm `:22226-22239`.
 **Probes:** `p_video.asm`, `p_video2.asm` (#188), `p_plan12.asm`, `p_vgareg.asm` (mode
 tables). **Off-VM:** `video_test.c`, `vgarom_test.c`.
 **Marked:** 2026-10-01, **from the code**. Carried over from `docs/PARITY.md` (retired

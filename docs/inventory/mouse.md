@@ -4,9 +4,9 @@
 (INT 33h, including the v7/v8 additions `25h`–`35h`); IBM PS/2 TechRef (the auxiliary
 device on the 8042, INT 15h `AH=C2h`); the Microsoft serial-mouse protocol. ⚠ **Not held in
 the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md). No `docs/ref/mouse.md` yet.
-**Our implementation:** `mouse_int33` in `src/host/main.c` (≈`:8263-8517`), its state and
-coordinate helpers (≈`:7590-8130`), the callback injector `mouse_cb_try` (≈`:8521`) and
-`dpmi_inject_pm_mousecb` (≈`:24990`). The driver is **host code, not a VDD**: there is no
+**Our implementation:** `mouse_int33` in `src/host/main.c` (≈`:8315-8569`), its state and
+coordinate helpers (≈`:7642-8182`), the callback injector `mouse_cb_try` (≈`:8573`) and
+`dpmi_inject_pm_mousecb` (≈`:25096`). The driver is **host code, not a VDD**: there is no
 mouse device on the bus.
 **DOS probe:** `tools/dostest/p_mouse.asm` (with `p_mouse.pre`/`.deps`: the oracle loads the
 real `MOUSE.COM` first). **Oracle:** Microsoft `MOUSE.COM` 6.24 on MS-DOS 6.22 under QEMU — a
@@ -44,73 +44,73 @@ with the real driver.** Three things are not what they look like:
 
 ## 1. INT 33h functions
 
-Entry: the vector is `DOS_HDLR_SEG:0030` = `BOP 33h; IRET` (`main.c:26875`). V86 arm
-`main.c:28875-28879`, PM arm `:22152-22156`, DPMI `0300h` simulation `:23467`. Every entry
+Entry: the vector is `DOS_HDLR_SEG:0030` = `BOP 33h; IRET` (`main.c:26988`). V86 arm
+`main.c:28996-29000`, PM arm `:22258-22262`, DPMI `0300h` simulation `:23573`. Every entry
 reaches the one `mouse_int33`. Coordinates live in a **virtual screen derived from the
-mode** (`g_vid.gw/gh`, `i33_w`/`i33_h` `:7711-7739`), with text-mode 8-pixel cell
+mode** (`g_vid.gw/gh`, `i33_w`/`i33_h` `:7763-7791`), with text-mode 8-pixel cell
 snapping (`i33_snap`).
 
 | AX | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `0000h` | reset and status | **IMPL** | `:8314-8319`; `AX=FFFFh BX=2`; centres the pointer; `nomouse.flag` answers "no driver" (`:7660`) | **oracle** (`i33.00.reset`, `i33.03.afterreset`) |
-| `0001h` | show cursor | **IMPL** | `:8320-8322`, hide count never below 0. The pointer is drawn by the host overlay, on 8-bpp frames only (`:12136`) — the real driver does not draw in VESA direct-colour modes either | **oracle** (`i33.01.show`, survivable) |
-| `0002h` | hide cursor | **IMPL** | `:8323-8325` | untested |
-| `0003h` | position and buttons | **IMPL** | `:8326-8330` | **oracle** (`i33.03.afterreset`) |
-| `0004h` | set position | **IMPL** | `:8331-8336`, clamped and snapped | **oracle** (`i33.04.setpos`, `.odd`) |
-| `0005h`/`0006h` | press / release counts | **IMPL** | `:8343-8360`; count drained by the read; position of the last transition, or the current one if none | **oracle** (`i33.05.press`, `i33.06.release`) |
-| `0007h`/`0008h` | horizontal / vertical range | **IMPL** | `:8361-8372`, `i33_set_range` `:8030`; the pointer is re-clamped at once | **oracle** (`i33.07.clamp.hi`, `.lo`) |
-| `0009h` | define graphics cursor | **MISS** | `:8373-8379`: counted (`g_ms_shape_sets`) and **discarded** — the host overlay always draws its own arrow, so a game's crosshair is never seen | — |
-| `000Ah` | define text cursor | **PART** | `:8380-8391`: `BX=0` (software cursor, AND/XOR masks) is drawn (`vdd_video_text_cursor`); `BX=1` (use the hardware cursor, scan lines CX..DX) is counted and drawn as the software default | untested (QBasic uses `BX=0`, by hand) |
-| `000Bh` | motion counters | **IMPL** | `:8392-8408`; raw device counts when available, zeroed by the read, clamped to signed 16 bits | **oracle** (`i33.0B.motion`, `.again`) |
-| `000Ch` | set event handler | **IMPL** | `:8414-8419`; a flat PM client's 32-bit offset is kept whole (`mouse_i33_off` `:7647`). Delivery: §2 | untested (QBasic, ZAR by hand) |
-| `000Dh`/`000Eh` | light-pen emulation on / off | **MISS** | `default:` (`:8515`) | — |
-| `000Fh` | mickeys per 8 pixels | **STORE** | `:8430-8435`; read back by `1Bh`, saved by `16h`, **never applied** to motion | **oracle** for "does not disturb the position" (`i33.0F.after`) only |
-| `0010h` | conditional-off region | **N/A** | `:8436-8441`: accepted, no effect. The frame is re-rendered from VRAM every present and the pointer overlaid on top, so there is no saved-under cursor to corrupt. ⚠ The pointer stays visible inside the region | — |
-| `0013h` | double-speed threshold | **STORE** | `:8442-8444`; never consumed | untested |
-| `0014h` | exchange event handler | **IMPL** | `:8420-8429`; returns the previous mask/segment/offset | untested |
-| `0015h` | state buffer size | **IMPL** | `:8445-8447`, `sizeof(i33_state)` | abstained (`i33.15.statesize`: each driver's private size) |
-| `0016h`/`0017h` | save / restore state | **IMPL** | `:8448-8456`, `i33_state_save`/`_load` `:8050-8083`; a versioned block; a bad pointer or foreign block is refused, not faulted (`i33_guest_ptr` `:8085`) | untested — self-consistent by construction, never round-tripped by a probe |
+| `0000h` | reset and status | **IMPL** | `:8366-8371`; `AX=FFFFh BX=2`; centres the pointer; `nomouse.flag` answers "no driver" (`:7712`) | **oracle** (`i33.00.reset`, `i33.03.afterreset`) |
+| `0001h` | show cursor | **IMPL** | `:8372-8374`, hide count never below 0. The pointer is drawn by the host overlay, on 8-bpp frames only (`:12188`) — the real driver does not draw in VESA direct-colour modes either | **oracle** (`i33.01.show`, survivable) |
+| `0002h` | hide cursor | **IMPL** | `:8375-8377` | untested |
+| `0003h` | position and buttons | **IMPL** | `:8378-8382` | **oracle** (`i33.03.afterreset`) |
+| `0004h` | set position | **IMPL** | `:8383-8388`, clamped and snapped | **oracle** (`i33.04.setpos`, `.odd`) |
+| `0005h`/`0006h` | press / release counts | **IMPL** | `:8395-8412`; count drained by the read; position of the last transition, or the current one if none | **oracle** (`i33.05.press`, `i33.06.release`) |
+| `0007h`/`0008h` | horizontal / vertical range | **IMPL** | `:8413-8424`, `i33_set_range` `:8082`; the pointer is re-clamped at once | **oracle** (`i33.07.clamp.hi`, `.lo`) |
+| `0009h` | define graphics cursor | **MISS** | `:8425-8431`: counted (`g_ms_shape_sets`) and **discarded** — the host overlay always draws its own arrow, so a game's crosshair is never seen | — |
+| `000Ah` | define text cursor | **PART** | `:8432-8443`: `BX=0` (software cursor, AND/XOR masks) is drawn (`vdd_video_text_cursor`); `BX=1` (use the hardware cursor, scan lines CX..DX) is counted and drawn as the software default | untested (QBasic uses `BX=0`, by hand) |
+| `000Bh` | motion counters | **IMPL** | `:8444-8460`; raw device counts when available, zeroed by the read, clamped to signed 16 bits | **oracle** (`i33.0B.motion`, `.again`) |
+| `000Ch` | set event handler | **IMPL** | `:8466-8471`; a flat PM client's 32-bit offset is kept whole (`mouse_i33_off` `:7699`). Delivery: §2 | untested (QBasic, ZAR by hand) |
+| `000Dh`/`000Eh` | light-pen emulation on / off | **MISS** | `default:` (`:8567`) | — |
+| `000Fh` | mickeys per 8 pixels | **STORE** | `:8482-8487`; read back by `1Bh`, saved by `16h`, **never applied** to motion | **oracle** for "does not disturb the position" (`i33.0F.after`) only |
+| `0010h` | conditional-off region | **N/A** | `:8488-8493`: accepted, no effect. The frame is re-rendered from VRAM every present and the pointer overlaid on top, so there is no saved-under cursor to corrupt. ⚠ The pointer stays visible inside the region | — |
+| `0013h` | double-speed threshold | **STORE** | `:8494-8496`; never consumed | untested |
+| `0014h` | exchange event handler | **IMPL** | `:8472-8481`; returns the previous mask/segment/offset | untested |
+| `0015h` | state buffer size | **IMPL** | `:8497-8499`, `sizeof(i33_state)` | abstained (`i33.15.statesize`: each driver's private size) |
+| `0016h`/`0017h` | save / restore state | **IMPL** | `:8500-8508`, `i33_state_save`/`_load` `:8102-8135`; a versioned block; a bad pointer or foreign block is refused, not faulted (`i33_guest_ptr` `:8137`) | untested — self-consistent by construction, never round-tripped by a probe |
 | `0018h`/`0019h` | set / get alternate (shift-qualified) handler | **MISS** | `default:` | — |
-| `001Ah` | set sensitivity | **STORE** | `:8457-8463`; stores `0Fh`'s and `13h`'s values, consumed by nothing | **oracle** (`i33.1B.sensitivity` round trip) |
-| `001Bh` | get sensitivity | **IMPL** | `:8464-8468`, returns what was stored | **oracle** (`i33.1B.sensitivity`) |
+| `001Ah` | set sensitivity | **STORE** | `:8509-8515`; stores `0Fh`'s and `13h`'s values, consumed by nothing | **oracle** (`i33.1B.sensitivity` round trip) |
+| `001Bh` | get sensitivity | **IMPL** | `:8516-8520`, returns what was stored | **oracle** (`i33.1B.sensitivity`) |
 | `001Ch` | set interrupt rate | **MISS** | `default:` | — |
 | `001Dh`/`001Eh` | set / get display page | **MISS** | `default:`; `1Eh` returns the caller's `BX` | — |
-| `001Fh` | disable driver | **N/A** | `:8487-8489`: answers the documented failure `AX=FFFFh`. We are the driver; there is no earlier INT 33h vector to hand back in `ES:BX` | untested |
-| `0020h` | enable driver | **PART** | `:8469-8478`: shares `21h`'s arm, so enabling **also resets** the driver (ranges, handler, counts) — enable should not | untested |
-| `0021h` | software reset | **IMPL** | `:8469-8478` | **oracle** (`i33.21.softreset`) |
+| `001Fh` | disable driver | **N/A** | `:8539-8541`: answers the documented failure `AX=FFFFh`. We are the driver; there is no earlier INT 33h vector to hand back in `ES:BX` | untested |
+| `0020h` | enable driver | **PART** | `:8521-8530`: shares `21h`'s arm, so enabling **also resets** the driver (ranges, handler, counts) — enable should not | untested |
+| `0021h` | software reset | **IMPL** | `:8521-8530` | **oracle** (`i33.21.softreset`) |
 | `0022h`/`0023h` | set / get language | **MISS** | `default:`; `23h` returns the caller's `BX` where the US driver says `0` | — |
-| `0024h` | version, type, IRQ | **IMPL** | `:8490-8495`; `BX=0800h` (8.00), `CX=04FFh` (PS/2, IRQ `FFh` as the real driver says) | **oracle** for `CX`; `BX` abstained (which `MOUSE.COM` is on the disk) |
+| `0024h` | version, type, IRQ | **IMPL** | `:8542-8547`; `BX=0800h` (8.00), `CX=04FFh` (PS/2, IRQ `FFh` as the real driver says) | **oracle** for `CX`; `BX` abstained (which `MOUSE.COM` is on the disk) |
 | `0025h` | general driver information | **MISS** | `default:` — reachable, because we claim 8.00 | — |
-| `0026h` | maximum virtual coordinates | **IMPL** | `:8496-8500` | abstained — `MOUSE.COM` 6.24 lacks `26h`; checked for internal consistency |
+| `0026h` | maximum virtual coordinates | **IMPL** | `:8548-8552` | abstained — `MOUSE.COM` 6.24 lacks `26h`; checked for internal consistency |
 | `0027h` | screen/cursor masks and mickey counts | **MISS** | `default:` | — |
 | `0028h`/`0029h` | set / enumerate video modes | **MISS** | `default:` | — |
 | `002Ah` | cursor hot spot | **MISS** | `default:` | — |
 | `002Bh`–`002Eh` | acceleration profiles | **MISS** | `default:` | — |
 | `002Fh` | mouse hardware reset | **MISS** | `default:` | — |
 | `0030h` | BallPoint information | **N/A** | BallPoint hardware only | — |
-| `0031h` | current min/max virtual coordinates | **MISS** | `default:` — the values exist (`i33_rangex_*` `:8017-8020`) | — |
+| `0031h` | current min/max virtual coordinates | **MISS** | `default:` — the values exist (`i33_rangex_*` `:8069-8072`) | — |
 | `0032h` | active advanced functions | **MISS** | ⛔ `default:` returns the caller's `AX` as the function bitmask | — |
 | `0033h` | switch settings and acceleration data | **MISS** | `default:` | — |
 | `0034h` | `MOUSE.INI` path | **MISS** | `default:` | — |
 | `0035h` | LCD large pointer | **N/A** | LCD-panel driver support only | — |
-| `53C1h` | Logitech CyberMan / SWIFT probe | **IMPL** | `:8505-8507`, `AX=0` = "no SWIFT support". Doom asks and prints the answer | untested |
-| any other | — | **IMPL** | `:8515`: counted in `g_ms_i33_unimpl`, registers untouched; the site and `AX` are recorded (`:8269-8299`) | — |
+| `53C1h` | Logitech CyberMan / SWIFT probe | **IMPL** | `:8557-8559`, `AX=0` = "no SWIFT support". Doom asks and prints the answer | untested |
+| any other | — | **IMPL** | `:8567`: counted in `g_ms_i33_unimpl`, registers untouched; the site and `AX` are recorded (`:8321-8351`) | — |
 
 ## 2. Event-handler delivery
 
 | Unit | Status | Where | Verification |
 |---|---|---|---|
-| Event bits 0–6: motion, L/R/M press and release | **IMPL** | `mouse_evt_raise` `:7846-7864`, raised at `:7881`, `:7884`, `:12682`, `:12749` | untested |
-| One callback per event, in order, with that moment's buttons and position; motion coalesced, buttons never | **IMPL** | 32-entry ring (`MS_EVQ`, `:7823-7826`) | untested |
-| V86 delivery: a far call with `AX`=condition, `BX`=buttons, `CX/DX`=position, returning to `BOP 35h` | **IMPL** | `mouse_cb_try` `:8521-8600`; return stub `DOS_HDLR_SEG:00E0` (`:7807`), re-verified before every call | by hand (QBasic) |
-| PM delivery to a DPMI client's handler | **IMPL** | `dpmi_inject_pm_mousecb` `:24990` | by hand (ZAR, s74c) |
+| Event bits 0–6: motion, L/R/M press and release | **IMPL** | `mouse_evt_raise` `:7898-7916`, raised at `:7933`, `:7936`, `:12734`, `:12801` | untested |
+| One callback per event, in order, with that moment's buttons and position; motion coalesced, buttons never | **IMPL** | 32-entry ring (`MS_EVQ`, `:7875-7878`) | untested |
+| V86 delivery: a far call with `AX`=condition, `BX`=buttons, `CX/DX`=position, returning to `BOP 35h` | **IMPL** | `mouse_cb_try` `:8573-8652`; return stub `DOS_HDLR_SEG:00E0` (`:7859`), re-verified before every call | by hand (QBasic) |
+| PM delivery to a DPMI client's handler | **IMPL** | `dpmi_inject_pm_mousecb` `:25096` | by hand (ZAR, s74c) |
 
 ## 3. Pointing hardware
 
 | Unit | Status | Notes |
 |---|---|---|
 | PS/2 auxiliary device on the 8042 (`D4h` write-to-aux, `AUXB` status, IRQ12) | **MISS** | `kbd_hw_out` handles `A7h`/`A8h` as command-byte bits only (`vdd_input.c:605-606`); `D4h` is not decoded and nothing raises IRQ12 |
-| INT 15h `AH=C2h` PS/2 pointing-device BIOS | **MISS** | falls to the INT 15h unimplemented arm, `AH=86h CF=1` (`main.c:29026-29041`) |
+| INT 15h `AH=C2h` PS/2 pointing-device BIOS | **MISS** | falls to the INT 15h unimplemented arm, `AH=86h CF=1` (`main.c:29193-29208`) |
 | Serial mouse on COM1 (the `'M'` identification, 3-byte packets) | **MISS** | `vdd_comm.c` has no mouse source; the host never feeds pointer data into a UART. ([uart.md](uart.md) records PCem's `'M'` byte) |
 | A guest that loads its **own** `MOUSE.COM` | **MISS** | follows from the three above: its INT 33h replaces ours and then finds no device. Nobody has tried it |
 

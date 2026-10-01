@@ -6,12 +6,12 @@ Microsoft's *New Executable* format description (Windows 3.x SDK); the IBM/Micro
 [`../ref/SOURCES.md`](../ref/SOURCES.md).
 **Our implementation:**
 - `.COM` and MZ: `dos_load` and `dos_load_overlay` in `src/dos/dos_loader.h` (115 lines),
-  called for the first program (`main.c:26862`) and for EXEC (`main.c:2284`); the EXEC
+  called for the first program (`main.c:26975`) and for EXEC (`main.c:2284`); the EXEC
   memory, PSP and entry state around it in `main.c` ≈`:2100-2350`.
 - NE: `src/wow/ne.h` (545 lines), parse + entry table + names + relocations + a module
-  registry, used by the WOW boot (`ne_parse`, `main.c:9259`).
+  registry, used by the WOW boot (`ne_parse`, `main.c:9311`).
 - LE: not loaded by us — the extender loads its own image. `dpmi_le_learn`
-  (`main.c:18217`) reads the LE object table only to know which objects are code.
+  (`main.c:18271`) reads the LE object table only to know which objects are code.
 **Off-VM:** `tools/dostest/mcb_test.c` (MZ/COM), `ne_test.c` (NE).
 **Probes:** `p_exec`, `p_ovl` (EXEC, `4B01h`, `4B03h`), `p_4b05`.
 **Marked:** 2026-10-01, **from the code**.
@@ -34,7 +34,7 @@ and iterated segments.
 **EXEC of a Windows program from the DOS prompt runs its MZ stub.** The EXEC path does not
 look for an NE or PE header, so `notepad.exe` typed at our prompt prints "This program
 cannot be run in DOS mode" where stock XP NTVDM starts it. The **Open** dialog already
-makes the distinction (`open_is_dos_image`, `main.c:10302-10320`); EXEC does not.
+makes the distinction (`open_is_dos_image`, `main.c:10354-10372`); EXEC does not.
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
@@ -54,7 +54,7 @@ makes the distinction (`open_is_dos_image`, `main.c:10302-10320`); EXEC does not
 | Image copied to `PSP:0100h`, CS=DS=ES=SS=PSP, IP=0100h | **IMPL** | `dos_loader.h:60-67`; DS/ES set by EXEC (`main.c:2338`) | **oracle** (`p_exec`) |
 | Size limit | **PART** | `:61`: anything past **`FE00h`** bytes is silently cut; DOS's own ceiling is higher (the 64 KB segment less the PSP and the initial stack word) and it refuses rather than truncates | untested |
 | SP = `FFFEh` | **IMPL** | `:64` (DOS lowers it when less than 64 KB is free; we always give the child all of memory, §2) | untested |
-| A `0000h` word at the top of the stack, so a final `RET` reaches `INT 20h` | **PART** | written for the **first** program only (`main.c:28280-28281`); an EXEC'd `.COM` child has whatever was at `FFFEh` | untested |
+| A `0000h` word at the top of the stack, so a final `RET` reaches `INT 20h` | **PART** | written for the **first** program only (`main.c:28401-28402`); an EXEC'd `.COM` child has whatever was at `FFFEh` | untested |
 | AL/AH on entry = drive validity of the two FCBs (`00h` or `FFh`) | **MISS** | EXEC sets `AX = 0` (`main.c:2339`) whatever the command line's drives | — |
 
 ## 2. MZ
@@ -101,14 +101,14 @@ Resources are [win16.md](win16.md)'s (`wowres.h`), not counted here.
 | Unit | Status | Notes |
 |---|---|---|
 | Loading an LE image | **N/A** | the extender (DOS/4GW) loads its own program through DPMI; we never place an LE object |
-| Reading the object table to learn which objects are code | **IMPL** | `dpmi_le_learn` `main.c:18217`, header found by validated search (`:18209-18215`) — instrumentation for the INT-site patcher, not a loader |
+| Reading the object table to learn which objects are code | **IMPL** | `dpmi_le_learn` `main.c:18271`, header found by validated search (`:18263-18269`) — instrumentation for the INT-site patcher, not a loader |
 
 ## 5. PE, and EXEC of a Windows program
 
 | Unit | Status | Notes |
 |---|---|---|
 | Loading a PE image | **N/A** | a Win32 program is not a VDM guest |
-| EXEC (`4B00h`) of an NE or PE file from DOS | **MISS** | no header check in the EXEC path (`main.c:2116-2284`), so the MZ stub runs. Stock NTVDM hands a PE to Win32 and an NE to WOW. The Open dialog's test (`main.c:10302-10320`) is the one to reuse |
+| EXEC (`4B00h`) of an NE or PE file from DOS | **MISS** | no header check in the EXEC path (`main.c:2116-2284`), so the MZ stub runs. Stock NTVDM hands a PE to Win32 and an NE to WOW. The Open dialog's test (`main.c:10354-10372`) is the one to reuse |
 
 ---
 

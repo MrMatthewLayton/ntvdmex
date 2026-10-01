@@ -16,7 +16,7 @@
 |---|---|---|
 | `p_tsr tsr.paras.still.held` (`0x26` vs `0x21`) | [dos-services.md](dos-services.md) §2 `31h` | **IMPL**, with this row open and uninvestigated |
 | `p_xms xms.08.queryfree` BH | [xms-ems.md](xms-ems.md) §`08h` | **IMPL**; BH is now a "behave like" setting (#167): `AAh` as 6.22/PCem, poison as stock NTVDM |
-| `p_sysvar` 6 BUF rows | [dos-services.md](dos-services.md) §3 `52h` | **PART** — SFT/CDS/DPB chains are stubs (`dos_int21.c:2150-2166`) |
+| `p_sysvar` 6 BUF rows | [dos-services.md](dos-services.md) §3 `52h` | **PART** — SFT/CDS/DPB chains are stubs (`dos_int21.c:2163-2179`) |
 | `p_vgamem` mode 13h → unchained | [vga.md](vga.md) | owned there; not re-adjudicated here |
 | `p_kbc kbc.outport.d0` (`01CF` vs `0103`) | [kbc.md](kbc.md) | bits 0–1 agree; PCem's extra bits are one oracle's answer |
 | `p_dma dma.status.idle` (`0400` vs `0000`) | [dma.md](dma.md); [dos-services.md](dos-services.md) §6 | the 8237 latch is **IMPL**; INT 13h does not drive the FDC's DMA path (**PART**) |

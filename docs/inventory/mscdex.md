@@ -4,12 +4,12 @@
 interface and the device-driver request headers it forwards); Ralf Brown's Interrupt List
 (INT 2Fh `15xxh`). ⚠ **Not held in the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md).
 **Our implementation:** **none.** INT 2Fh passes every `15xxh` call through with the
-caller's registers (`main.c:29226-29362`; nothing matches `AX=15xxh`). There is no CD-ROM
+caller's registers (`main.c:29394-29530`; nothing matches `AX=15xxh`). There is no CD-ROM
 device driver, no ATAPI device ([ide.md](ide.md)), and no Red Book audio path.
 **What does work:** a host CD-ROM drive is an ordinary DOS drive letter. INT 21h file I/O
 goes through Win32 (`v86_path` → `CreateFileA` …), so a program that simply opens
 `D:\DATA\FILE.DAT` reads the disc. IOCTL `4408h` reports it removable
-(`dos_int21.c:2203`).
+(`dos_int21.c:2216`).
 **Marked:** 2026-10-01, **from the code**.
 
 ---
@@ -25,7 +25,7 @@ ZAR and many period games carry their soundtrack (#191) — has no path at all.
 
 Two smaller shapes follow from the same absence:
 
-- IOCTL `4409h` (is the drive remote?) answers `0` for a CD drive (`dos_int21.c:2204-2207`,
+- IOCTL `4409h` (is the drive remote?) answers `0` for a CD drive (`dos_int21.c:2217-2220`,
   only `DRIVE_REMOTE` sets bit 12). Under real MSCDEX a CD drive *is* a redirected drive, and
   some programs find the CD by that bit.
 - `5F02h` (redirection list) refuses (`dos_int21.c:1556-1558`), so a CD drive cannot be
@@ -84,7 +84,7 @@ driver, all **MISS**.
 | Unit | Status | Where / notes |
 |---|---|---|
 | Files on a host CD drive through INT 21h | **IMPL** | the ordinary file path; the drive letter is the host's |
-| IOCTL `4408h` / `4409h` for a CD drive | **PART** | `4408h` removable ✓ (`dos_int21.c:2203`); `4409h` not remote (`:2204-2207`), where MSCDEX makes it so |
+| IOCTL `4408h` / `4409h` for a CD drive | **PART** | `4408h` removable ✓ (`dos_int21.c:2216`); `4409h` not remote (`:2217-2220`), where MSCDEX makes it so |
 | `5F02h` redirection list including the CD | **MISS** | `dos_int21.c:1556-1558` refuses |
 
 ---
