@@ -47,7 +47,7 @@ not 1.0:
 
 And one inconsistency: **`1687h` reports CL = 4 (486, `DPMI_CPU_CLASS`, `main.c:542`) while
 `0400h` reports CL = 3 (386, `main.c:22467`)** — one machine described two ways to the same
-client. #79's GetWinFlags fix changed the first and not the second.
+client. The s79 GetWinFlags fix (`runs/s79_cl_ab/`, `main.c:540-542`) changed the first and not the second.
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
