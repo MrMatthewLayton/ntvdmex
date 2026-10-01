@@ -167,7 +167,7 @@ Each surface gets two documents, doing two different jobs:
 | **DPMI 0.9 / 1.0** | DPMI 0.9 and 1.0 specs | [dpmi.md](dpmi.md) — 64 units: 32 IMPL, 19 PART, 11 MISS, 2 N/A; ⚠ `0300h` serves only INT 21h/33h/10h and answers CF=0 for the rest; `0503h`/`0304h` absent (2026-10-01) | — |
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | — still to write | — |
 | MSCDEX + CD audio | MSCDEX spec | [mscdex.md](mscdex.md) — 26 units, 22 MISS: data CDs read as files, but `1500h` is passed through (the answer is the caller's own `BX`) and there is no CD audio (2026-10-01) | — |
-| Executable formats: MZ, LE, NE, PE | MS format specs | — still to write (`ne_test` exists) | — |
+| Executable formats: `.COM`, MZ, NE, LE, PE | MS format specs | [exe-formats.md](exe-formats.md) — 36 units: 20 IMPL, 2 PART, 10 MISS, 4 N/A; ⚠ EXEC ignores `e_minalloc`/`e_maxalloc` and runs a Windows program's MZ stub (2026-10-01) | — |
 | **Win16 KERNEL / USER / GDI** | Win3.1 SDK; Wine; ReactOS | [win16.md](win16.md) — **deterministic tests now exist**; `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
 | WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | `docs/research/wow32-call-surface.md` | — |
 | NTVDM BOP interface (`C4 C4 nn`) | *no spec* — XP's `ntvdm.exe` dispatch table + stock as oracle | [bop.md](bop.md) — our allocations re-cited 2026-10-01; `BOP 54h` subs: 5 IMPL, 1 PART, 6 MISS, 2 N/A | — |
