@@ -164,7 +164,7 @@ Each surface gets two documents, doing two different jobs:
 | MS-DOS INT 21h/2Fh/20h–29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) — 132 units (every INT 21h function): 89 IMPL, 23 PART, 17 MISS, 3 N/A (2026-10-01) | — |
 | INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) — 51 units: 22 IMPL, 2 PART, 3 STORE, 20 MISS, 4 N/A; ⚠ we claim v8.00 and none of `25h`–`34h` exists (2026-10-01) | — |
 | XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units: 65 IMPL, 17 PART, 88 MISS (EMS 4.0 subfunctions, VCPI), 17 N/A (s84) | — |
-| **DPMI 1.0** | DPMI 1.0 spec | — **still to write**; the code is `src/vdm/dpmi.c` and the `INT 31h` arms in `main.c` | — |
+| **DPMI 0.9 / 1.0** | DPMI 0.9 and 1.0 specs | [dpmi.md](dpmi.md) — 64 units: 32 IMPL, 19 PART, 11 MISS, 2 N/A; ⚠ `0300h` serves only INT 21h/33h/10h and answers CF=0 for the rest; `0503h`/`0304h` absent (2026-10-01) | — |
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | — still to write | — |
 | MSCDEX + CD audio | MSCDEX spec | [mscdex.md](mscdex.md) — 26 units, 22 MISS: data CDs read as files, but `1500h` is passed through (the answer is the caller's own `BX`) and there is no CD audio (2026-10-01) | — |
 | Executable formats: MZ, LE, NE, PE | MS format specs | — still to write (`ne_test` exists) | — |
