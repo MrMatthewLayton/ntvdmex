@@ -202,7 +202,7 @@ which for an installation check (`AL=00h` in, `AL=00h` out) is the correct "not 
 | `1684h` | device API entry point | **IMPL** | `:29329-29341`: `ES:DI=0` = none | untested |
 | `1600h`, `1689h`, `168Ah` | the Windows queries krnl386 makes | **IMPL** | passed through on purpose; the reasoning per call is recorded at `:29343-29359` | by hand (Win16 boots) |
 | `4A01h`/`4A02h` | query free HMA / allocate HMA space (DOS 5+) | **MISS** | passed through: `BX` and `ES:DI` come back as the caller's own — a plausible wrong answer rather than DOS-low's `BX=0`, `ES:DI=FFFF:FFFF` | — |
-| other | installation checks for absent TSRs (`1000h` SHARE, `1100h` redirector, `1500h` MSCDEX, `1A00h` ANSI, `B700h` APPEND …) | **N/A** | absent, and answered as absent | — |
+| other | installation checks for absent TSRs (`1000h` SHARE, `1100h` redirector, `1A00h` ANSI, `B700h` APPEND …) | **N/A** | absent, and answered as absent: `AL=00h` in, `AL=00h` out. ⚠ `1500h` (MSCDEX) answers in **`BX`** (drive count), so pass-through reads "none" only for a caller that zeroed `BX` | — |
 
 ## 6. INT 13h, 25h, 26h
 

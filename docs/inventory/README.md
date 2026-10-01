@@ -61,9 +61,14 @@ express PART at all. Both are now recorded:
 | **provisional** | Compared, but against a reimplementation (SeaBIOS, QEMU) rather than real hardware — re-ask on PCem |
 | **untested** | Implemented and perhaps exercised by a guest, never compared |
 
-⚠ The surfaces carried over from PARITY.md still carry the **old four-state column**.
-Re-marking them on both axes, with a `file:line` per row, is owed — and is the point:
-a row that reads `implemented` may well be **PART**.
+✅ **The surfaces carried over from PARITY.md are re-marked on both axes** (2026-10-01,
+#200): `keyboard.md`, `mouse.md`, `bios-misc.md`, `video-bios.md` and `dos-services.md` now
+mark every unit IMPL / PART / STORE / MISS / N/A with a `file:line`, and carry a
+verification column. `sweep.md` is a triage log, not a unit inventory; it now maps each open
+row to the inventory that owns it. The old column's `verified` split three ways in the
+re-mark: **oracle** where a real machine or real DOS answered, **provisional** where the
+answer came from SeaBIOS/SeaVGABIOS under QEMU, and **untested** where only our own
+batteries ran.
 
 ## Verification
 
@@ -121,24 +126,24 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | ✅ [`ref/vga.md`](../ref/vga.md) |
-| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 170 units, 15 PART, 26 MISS (s84) | [PDFs held](../ref/) |
-| **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) | ✅ [`ref/pit.md`](../ref/pit.md) |
-| 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | ✅ [`ref/pic.md`](../ref/pic.md) |
-| 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) | ✅ [`ref/dma.md`](../ref/dma.md) |
-| 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) | ✅ [`ref/kbc.md`](../ref/kbc.md) |
-| Keyboard (scan code sets 1–3) | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
-| PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) | — |
+| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** (2026-09-22) | ✅ [`ref/vga.md`](../ref/vga.md) |
+| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 171 units: 139 IMPL, 7 PART, 2 STORE, 20 MISS, 3 N/A | [PDFs held](../ref/) |
+| **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) — 34 units: 26 IMPL, 4 PART, 1 STORE, 3 N/A (re-cited 2026-10-01) | ✅ [`ref/pit.md`](../ref/pit.md) |
+| 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) — marked 2026-09-23, group table | ✅ [`ref/pic.md`](../ref/pic.md) |
+| 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) — marked 2026-09-23, group table | ✅ [`ref/dma.md`](../ref/dma.md) |
+| 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) — marked 2026-09-23; ⚠ its `vdd_input.c` line numbers predate #188 | ✅ [`ref/kbc.md`](../ref/kbc.md) |
+| Keyboard device (commands, ACKs, scan code sets) | IBM AT TechRef | [kbc.md](kbc.md) §5 — ACKs MISS | — |
+| PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) §3 — **all MISS**: no aux device, no INT 15h `C2h`, no serial mouse | — |
 | Gameport / joystick | IBM Game Control Adapter | [gameport.md](gameport.md) — 22 units (s84) | — |
-| MC146818 RTC + CMOS map | Motorola MC146818 datasheet | [rtc.md](rtc.md) | ✅ [`ref/rtc.md`](../ref/rtc.md) |
-| PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 | [`ref/pit.md`](../ref/pit.md) §2 |
-| Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | [sb.md](sb.md) — 112 units, 34 PART (s84) | — |
-| OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | [opl.md](opl.md) — OPL3 built in #232; 3 inferences owed a measurement | — |
-| AWE32 EMU8000 wavetable | Creative *AWE32/EMU8000 Programmer's Guide* rev 1.00 | [emu8k.md](emu8k.md) — built in #233 (device + mixer hook) | — |
+| MC146818 RTC + CMOS map | Motorola MC146818 datasheet | [rtc.md](rtc.md) — marked 2026-09-23 | ✅ [`ref/rtc.md`](../ref/rtc.md) |
+| PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 — 6 units; bit 1 as a PWM sample output is PART | [`ref/pit.md`](../ref/pit.md) §2 |
+| Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | [sb.md](sb.md) — 112 units: 29 IMPL, 34 PART, 21 STORE, 23 MISS, 5 N/A (s84) | — |
+| OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | [opl.md](opl.md) — OPL3 built in #232 and selected by the `Opl` setting; 3 inferences owed a measurement | — |
+| AWE32 EMU8000 wavetable | Creative *AWE32/EMU8000 Programmer's Guide* rev 1.00 | [emu8k.md](emu8k.md) — built in #233; on the bus for the AWE32 model (`BLASTER E`); WC clock and diagnostics owed | — |
 | Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [gus.md](gus.md) — built in s80–s82 (#189 stereo); remainder is #190 | ✅ [`ref/gus.md`](../ref/gus.md) |
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | [mpu401.md](mpu401.md) — 32 units (s84) | — |
-| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
-| **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited** | ✅ [`ref/fdc.md`](../ref/fdc.md) |
+| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | [uart.md](uart.md) — marked 2026-09-23, measured on three oracles (LPT: —) | ✅ [`ref/uart.md`](../ref/uart.md) |
+| **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited**. ⚠ INT 13h still does not drive it ([dos-services.md](dos-services.md) §6) | ✅ [`ref/fdc.md`](../ref/fdc.md) |
 | IDE / ATA + ATAPI | ATA-x, ATAPI specs | — ⚠ `3F6h` (alternate status) answers `FFh`; both oracles say `50h`. Found by the FDC probe, filed here | — |
 | **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
 
@@ -146,20 +151,23 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| PC BIOS INT 10h–1Ah | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) | — |
-| VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | [video-bios.md](video-bios.md) | — |
-| BIOS Data Area (0040:) + EBDA | IBM TechRef | — | — |
+| PC BIOS: INT 08h, 11h, 12h, 14h, 15h, 17h, 1Ah, 1Ch | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) — 39 units: 16 IMPL, 5 PART, 14 MISS, 4 N/A (2026-10-01) | — |
+| PC BIOS: INT 09h, 16h (keyboard) | IBM AT / PS/2 TechRef (K1S) | [keyboard.md](keyboard.md) — 39 units: 19 IMPL, 4 PART, 11 MISS, 5 N/A (2026-10-01) | — |
+| PC BIOS: INT 13h, 25h, 26h (disk) | IBM TechRef; RBIL | [dos-services.md](dos-services.md) §6 — 13 units | — |
+| VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | [video-bios.md](video-bios.md) — 75 units: 36 IMPL, 19 PART, 1 STORE, 17 MISS, 2 N/A (2026-10-01) | — |
+| BIOS Data Area (0040:) + EBDA | IBM TechRef; RBIL `MEMORY.LST` | [bda.md](bda.md) — 38 units: 13 IMPL, 2 PART, 18 MISS, 5 N/A (2026-10-01) | — |
 
 ### Software
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| MS-DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) | — |
-| INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) | — |
-| XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units, 88 MISS (EMS 4.0 subfunctions, VCPI) (s84) | — |
-| **DPMI 1.0** | DPMI 1.0 spec | partial — live frontier | — |
-| DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | partial | — |
-| MSCDEX | MSCDEX spec | — | — |
-| Executable formats: MZ, LE, NE, PE | MS format specs | partial (`ne_test`) | — |
+| MS-DOS INT 21h/2Fh/20h–29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) — 132 units (every INT 21h function): 89 IMPL, 23 PART, 17 MISS, 3 N/A (2026-10-01) | — |
+| INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) — 51 units: 22 IMPL, 2 PART, 3 STORE, 20 MISS, 4 N/A; ⚠ we claim v8.00 and none of `25h`–`34h` exists (2026-10-01) | — |
+| XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units: 65 IMPL, 17 PART, 88 MISS (EMS 4.0 subfunctions, VCPI), 17 N/A (s84) | — |
+| **DPMI 1.0** | DPMI 1.0 spec | — **still to write**; the code is `src/vdm/dpmi.c` and the `INT 31h` arms in `main.c` | — |
+| DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | — still to write | — |
+| MSCDEX | MSCDEX spec | — still to write; INT 2Fh `1500h` is passed through, so it reads "no CD drives" only to a caller that zeroes `BX` first ([dos-services.md](dos-services.md) §5) | — |
+| Executable formats: MZ, LE, NE, PE | MS format specs | — still to write (`ne_test` exists) | — |
 | **Win16 KERNEL / USER / GDI** | Win3.1 SDK; Wine; ReactOS | [win16.md](win16.md) — **deterministic tests now exist**; `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
 | WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | `docs/research/wow32-call-surface.md` | — |
+| NTVDM BOP interface (`C4 C4 nn`) | *no spec* — XP's `ntvdm.exe` dispatch table + stock as oracle | [bop.md](bop.md) — our allocations re-cited 2026-10-01; `BOP 54h` subs: 5 IMPL, 1 PART, 6 MISS, 2 N/A | — |
