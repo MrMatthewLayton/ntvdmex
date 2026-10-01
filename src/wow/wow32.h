@@ -579,6 +579,8 @@ typedef struct {
      is NOT the same as an error. See the 0x70 case. */
 static char g_wow_cmd_prog[512] = { 0 };   /* full path of the Win16 program   */
 static char g_wow_cmd_args[192] = { 0 };   /* its arguments, without a leading space */
+static char g_wow_cmd_dir[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
+static void wow32_curdir_set(const char *dir);  /* #164: main.c's per-task directory table */
 static int  g_wow_cmd_taken     = 0;       /* delivered already -- deliver once */
 /* ── ★ WIN16 SEES 8.3 NAMES, AND ONLY 8.3 NAMES. (s73) ──────────────────────────
      krnl386's loader opens the program through INT 21h, and a Win16 DOS world has no
@@ -1142,7 +1144,10 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
             wow32_setret(f, 0xFFFFFFFFu);
             return 1;
         }
-        wow32_setret(f, SetCurrentDirectoryA(dir) ? 0 : 0xFFFFFFFFu);
+        if (SetCurrentDirectoryA(dir)) {
+            wow32_curdir_set(dir);              /* #164: per task, see main.c */
+            wow32_setret(f, 0);
+        } else wow32_setret(f, 0xFFFFFFFFu);
         return 1;
     }
 
@@ -1370,11 +1375,22 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
            stack looking for its double NUL. */
         { volatile BYTE *e = wow32_farat(f, ci, WOWCMD_LPENV);
           if (e) { e[0] = 0; e[1] = 0; } }
-        /* The third buffer is uninitialised stack in the caller's frame and it is
-           passed on unconditionally -- terminate it rather than let it travel. */
-        { volatile BYTE *c = wow32_farat(f, ci, WOWCMD_LPBUFC);
-          if (c) c[0] = 0; }
-        wow32_pokew(ci + WOWCMD_CBBUFC, 0);
+        /* ── #164: THE THIRD BUFFER IS THE CURRENT DIRECTORY. (s85) ───────────────
+             It was "uninitialised stack, passed on unconditionally" and we sent "".
+             Passed on to WHAT is in the log: WOWEXEC's next call is 0x82
+             SetCurrentDirectory with this buffer, which failed on the empty string,
+             so WOWEXEC stayed in C:\WINDOWS for LoadModule and the new task inherited
+             it -- a relative CreateFile landed in C:\WINDOWS. Stock (w_cwd under
+             stock.sh, the same rig) gives the task the folder it was launched from,
+             which is CSRSS's cur= for the launch. So that is what goes here. */
+        if (g_wow_cmd_dir[0]) {
+            if (wow32_farput(f, ci, WOWCMD_LPBUFC, WOWCMD_CBBUFC, g_wow_cmd_dir) < 0)
+                wow32_pokew(ci + WOWCMD_CBBUFC, 0);
+        } else {
+            volatile BYTE *c = wow32_farat(f, ci, WOWCMD_LPBUFC);
+            if (c) c[0] = 0;
+            wow32_pokew(ci + WOWCMD_CBBUFC, 0);
+        }
 
         /* Drive letter of the program's own path, 0-based -- the caller turns it
            back into a letter with `add al,0x41`. Default to C: when the path is

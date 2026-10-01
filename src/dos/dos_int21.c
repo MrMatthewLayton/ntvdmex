@@ -2017,6 +2017,19 @@ int dos_int21(dos_machine_t *m)
             volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
             const char *p47 = cwd;
             int k = 0;
+            /* ── #164: SHORT AND UPPER CASE, AS DOS KEEPS IT. (s85) ─────────────────
+                 The host hands back whatever case and length the directory was
+                 entered with ("...\ntvdmex\demo\win16"). DOS's CDS holds an upper-case
+                 8.3 path, and stock NTVDM answers exactly that -- measured beside
+                 ours by tools/wintest/w_cwd on the rig: ours `...\ntvdmex\demo\...`,
+                 stock `...\NTVDMEX\DEMO\...`. */
+            {   char sp47[300];
+                DWORD sn = GetShortPathNameA(cwd, sp47, sizeof sp47);
+                int u;
+                if (sn && sn < sizeof sp47) lstrcpynA(cwd, sp47, sizeof cwd);
+                for (u = 0; cwd[u]; ++u)
+                    if (cwd[u] >= 'a' && cwd[u] <= 'z') cwd[u] = (char)(cwd[u] - 32);
+            }
             if (cwd[1] == ':') p47 += 2;              /* drop "C:"            */
             if (*p47 == '\\' || *p47 == '/') ++p47;   /* drop the separator   */
             while (p47[k] && k < 63) { dst[k] = (BYTE)p47[k]; ++k; }

@@ -17719,6 +17719,8 @@ static DWORD dpmi_sel_base(WORD sel)
     return g_dpmi_code_base;                                    /* null / unknown selector */
 }
 
+
+
 /* Descriptor introspection for the PM interpreter's LAR/LSL (run 55). Returns 1 if
    `sel` names a populated descriptor (access byte != 0) and fills the access-rights
    in LAR format (access byte at bits 8-15, the G/D/AVL flag nibble at 20-23) + the
@@ -18942,6 +18944,56 @@ static WORD wowsched_curtask(void)
     if (!b) return 0xFFFF;
     d = (const volatile BYTE *)(ULONG_PTR)b;
     return (WORD)(d[0x228] | (d[0x229] << 8));
+}
+
+/* ── #164: A TASK RUNS IN ITS OWN CURRENT DIRECTORY. (s85) ──────────────────────────
+     DOS has one current directory and Win16 one per task. On NT the 32-bit side keeps
+     them (krnl386's TDB holds only the drive -- measured: TDB+0x66 = 0x82, +0x67
+     empty, for WOWEXEC and the task alike) and puts a task's back when it runs. Here
+     OUR scheduler switches tasks, so this is that table. Measured with
+     tools/wintest/w_cwd: the launched task parked at its first WaitEvent, WOWEXEC
+     changed back to C:\WINDOWS, and the task resumed there -- its relative CreateFile
+     landed in C:\WINDOWS, where stock puts it in the launch folder.
+   ► A task's entry is written when it parks at its launch (it inherits the directory
+     its creator chose for LoadModule -- WOWEXEC sets it from the launch's cur= just
+     before) and whenever it calls WOW32 0x82; it is restored when it is resumed. */
+#define WOW_TASK_DIRS 8
+static struct { WORD task; char dir[MAX_PATH]; } g_wow_task_dir[WOW_TASK_DIRS];
+static void wow_task_dir_note(WORD task, const char *dir)
+{
+    int k, free_k = -1;
+    if (!task || task == 0xFFFF) return;
+    for (k = 0; k < WOW_TASK_DIRS; ++k) {
+        if (g_wow_task_dir[k].task == task) break;
+        if (!g_wow_task_dir[k].task && free_k < 0) free_k = k;
+    }
+    if (k == WOW_TASK_DIRS) { if (free_k < 0) return; k = free_k; }
+    g_wow_task_dir[k].task = task;
+    lstrcpynA(g_wow_task_dir[k].dir, dir, sizeof g_wow_task_dir[k].dir);
+}
+static void wow_task_dir_here(WORD task)          /* record the host's directory now */
+{
+    char d[MAX_PATH];
+    if (GetCurrentDirectoryA(sizeof d, d)) wow_task_dir_note(task, d);
+}
+static void wow32_curdir_set(const char *dir)    /* WOW32 0x82 succeeded (wow32.h) */
+{
+    wow_task_dir_note(wowsched_curtask(), dir);
+}
+static void wow_task_chdir(WORD task, char **pp)
+{
+    int k;
+    static int s_logged;
+    for (k = 0; k < WOW_TASK_DIRS; ++k) if (g_wow_task_dir[k].task == task) break;
+    if (k == WOW_TASK_DIRS) return;
+    {   int ok = SetCurrentDirectoryA(g_wow_task_dir[k].dir) != 0;
+        if (s_logged < 12) {
+            ++s_logged;
+            *pp = zput(*pp, "  WOWSCHED: task 0x"); *pp = zhex(*pp, task);
+            *pp = zput(*pp, " resumes in ["); *pp = zput(*pp, g_wow_task_dir[k].dir);
+            *pp = zput(*pp, ok ? "]\r\n" : "] -- SetCurrentDirectory FAILED\r\n");
+        }
+    }
 }
 
 /* ── ★★ [0x228] IS PART OF THE CONTEXT, NOT A LEVER. (session 39) ─────────────
@@ -20958,6 +21010,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              the value krnl386 itself writes, and a mismatch is loud. */
                         if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
                         wowsched_save(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
+                        wow_task_dir_here(cur);             /* #164: its launch directory */
                         wow32_setret(&f, hinst);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
                         ++g_ws_switches;
@@ -21016,6 +21069,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
                         wowsched_swap(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
                         wowsched_setcur(to);
+                        wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
                         p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
                         p = zput(p, " waited for a message -- YIELDING to parked task 0x");
@@ -26421,7 +26475,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             zput(progpath, g_wow_cmd_prog);
             hw = CreateFileA(g_wow_cmd_prog, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hw != INVALID_HANDLE_VALUE) { ReadFile(hw, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hw); }
-            if (g_cur2[0]) SetCurrentDirectoryA(g_cur2);
+            if (g_cur2[0]) {
+                SetCurrentDirectoryA(g_cur2);
+                /* #164: WOWEXEC changes to this before LoadModule, so the task starts
+                   in the folder it was launched from -- 8.3, as krnl386 sees paths. */
+                if (!GetShortPathNameA(g_cur2, g_wow_cmd_dir, sizeof g_wow_cmd_dir)
+                    || lstrlenA(g_wow_cmd_dir) >= 0x10C)
+                    g_wow_cmd_dir[0] = 0;
+            }
             p = zput(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = zput(p, g_wow_cmd_prog);
             p = zput(p, "] loaded 0x"); p = zhex(p, nread); p = zput(p, " (target.txt NOT consulted)\r\n");
             if (!nread) wow_cmd_from_csrss = 0;          /* unreadable: fall back as before */
@@ -31105,6 +31166,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                          context and not the ruled-out "write
                                          [0x228] to yield". */
                                     wowsched_setcur(to);
+                                    wow_task_chdir(to, &p);   /* #164 */
                                 }
                                 ++g_ws_switches;
                                 continue;
