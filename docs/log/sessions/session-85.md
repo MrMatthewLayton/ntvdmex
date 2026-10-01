@@ -77,3 +77,13 @@ shell. Battery green.
 ---
 
 **Rig `bin\`** and **`checks.txt`**: see the end of this file.
+
+## Where it stands (end of night)
+
+- **HEAD `53ba893`**, rig `bin\` = **`b709ec6a`** (= HEAD's host). Rollback
+  `debug\prev\ntvdmhost_67ae89bf.exe` (yesterday's; that file had been holding tonight's
+  latch-only test variant `10bd5a99` by mistake, now corrected and md5-checked).
+- **`checks.txt`**: one test, Skyroads by hand (steering, music, speed) on the new pacer;
+  quit from inside the game. `report.txt` empty.
+- Issues: #172, #226, #238, #205 have tonight's findings. #238 and #205 left open for
+  the user. Nothing pushed.
