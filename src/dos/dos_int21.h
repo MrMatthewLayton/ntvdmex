@@ -162,6 +162,17 @@ typedef struct {
        and its write. NULL (off-VM) = the ticks are left alone. */
     void   (*set_ticks)(void *ctx, uint32_t ticks);
     void    *ticks_ctx;
+    /* ── GH #34: INT 24h, THE CRITICAL-ERROR HANDLER. dos_int21 only DETECTS one
+         (a disk call failing for a hardware reason: extended error 13h-1Fh) and
+         records what the handler is to be told; the host makes the call into the
+         guest and acts on the answer, because only the exec loop can redirect the
+         guest's CS:IP and re-run, fail or end the call. See crit_raise in main.c. */
+    int      crit_pending;     /* this call hit one: the host must raise INT 24h     */
+    uint8_t  crit_ah;          /* INT 24h AH: bit 0 write, 1-2 area, 3-5 allowed     */
+    uint8_t  crit_al;          /* INT 24h AL: the drive, 0 = A:                      */
+    uint8_t  crit_code;        /* INT 24h DI: 0 write-protect .. 0Ch general failure */
+    int      crit_active;      /* the guest's handler is running: never re-raised    */
+    uint8_t  term_type;        /* AH of the next AH=4Dh: 0 normal, 2 critical abort  */
 } dos_machine_t;
 
 /* GH #250: the host's local time as fields, and the VDM's reading of a clock that is

@@ -110,6 +110,7 @@ typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
 #include "dos_recovery.h"   /* GH #132: what to do when we will not start */
+#include "dos_err.h"       /* #34: the INT 24h contract (dos_crit_*) */
 #include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
 #include "dos_xms.h"
@@ -2459,6 +2460,110 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     p = zput(p, "\r\n");
     return p;
 }
+/* ── ★ GH #34: INT 24h, THE CRITICAL-ERROR HANDLER. ───────────────────────────────
+     A disk call that failed for a HARDWARE reason (extended error 13h-1Fh: write-
+     protected, not ready, CRC, ... general failure) is not simply returned on DOS: DOS
+     calls the program's INT 24h with AH = what it was doing and which answers are
+     allowed, AL = the drive, DI = the error, BP:SI = the device header, and does what
+     the handler says in AL -- 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. That is the "Not
+     ready reading drive A / Abort, Retry, Fail?" prompt (COMMAND.COM's handler), and
+     a program that installs its own (every editor that saves to floppy) decides for
+     itself. Nothing of it existed: the error went straight back to the caller.
+   ► HOW: INT 21h is serviced here, host-side, so the call into the guest is made by
+     redirecting the guest. crit_snapshot keeps the INT 21h call's INPUT registers;
+     dos_int21 sets m->crit_pending instead of finishing; crit_raise points CS:IP at
+     DOS_CRIT_RAISE (`int 24h / bop 20h`) with the handler's registers loaded; the
+     handler IRETs onto the BOP and crit_return puts the inputs back and acts:
+       RETRY  -> CS:IP back ON the INT 21h BOP, so the whole call is made again;
+       FAIL   -> the call returns CF=1 with the measured AX, 59h then says 53h;
+       IGNORE -> not allowed for a path call (AH bit 5 clear, measured), so FAIL;
+       ABORT  -> the program ends (AH=4Dh AH=02h), through dos_terminate.
+     An answer the handler was not allowed to give is converted as DOS converts it:
+     ignore/retry -> fail, fail -> abort.
+   ⚠ REAL MODE ONLY. A DPMI client's INT 21h is serviced with the client in protected
+     mode; reflecting INT 24h to it is a separate piece of work (the error goes
+     straight back to it, as before). And never while a handler is already running:
+     DOS does not nest INT 24h. */
+static struct {
+    DWORD eax, ebx, ecx, edx, esi, edi, ebp, eip;
+    WORD  cs, ds, es;
+    BYTE  ah;                                  /* what the handler was told it may answer */
+    BYTE  fn;                                  /* the INT 21h function that failed        */
+} g_crit;
+
+static void crit_snapshot(volatile BYTE *tib)
+{
+    g_crit.eax = VDM_REG(tib, VTIB_EAX); g_crit.ebx = VDM_REG(tib, VTIB_EBX);
+    g_crit.ecx = VDM_REG(tib, VTIB_ECX); g_crit.edx = VDM_REG(tib, VTIB_EDX);
+    g_crit.esi = VDM_REG(tib, VTIB_ESI); g_crit.edi = VDM_REG(tib, VTIB_EDI);
+    g_crit.ebp = VDM_REG(tib, VTIB_EBP); g_crit.eip = VDM_REG(tib, VTIB_EIP);
+    g_crit.cs  = (WORD)VDM_REG(tib, VTIB_CS);
+    g_crit.ds  = (WORD)VDM_REG(tib, VTIB_DS); g_crit.es = (WORD)VDM_REG(tib, VTIB_ES);
+}
+
+static void crit_raise(dos_machine_t *m, volatile BYTE *tib, char **pp)
+{
+    volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
+    g_crit.ah = m->crit_ah;
+    g_crit.fn = (BYTE)(g_crit.eax >> 8);
+    *pp = zput(*pp, "  INT24 raised: fn=0x"); *pp = zhexb(*pp, g_crit.fn);
+    *pp = zput(*pp, " AH=0x"); *pp = zhexb(*pp, m->crit_ah);
+    *pp = zput(*pp, " drive="); **pp = (char)('A' + m->crit_al); ++*pp;
+    *pp = zput(*pp, ": DI=0x"); *pp = zhexb(*pp, m->crit_code);
+    *pp = zput(*pp, " -> the guest's handler at 0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4 + 2));
+    *pp = zput(*pp, ":0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4)); *pp = zput(*pp, "\r\n");
+    VDM_SET16(tib, VTIB_EAX, ((WORD)m->crit_ah << 8) | m->crit_al);
+    VDM_SET16(tib, VTIB_EDI, m->crit_code);
+    VDM_SET16(tib, VTIB_EBP, DOS_SYSVARS_SEG);           /* BP:SI = the device header -- */
+    VDM_SET16(tib, VTIB_ESI, DOS_SYSVARS_OFF + SV_NUL);  /* the one our DPBs name        */
+    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+    VDM_SET16(tib, VTIB_EIP, DOS_CRIT_RAISE);
+    sda[0] = 1;                                          /* SDA+0: in a critical error   */
+    m->crit_pending = 0;
+    m->crit_active = 1;
+}
+
+/* Returns 1 for ABORT (the caller terminates the program), 0 to resume the guest. */
+static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
+{
+    volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
+    BYTE act = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF), said = act, ah = g_crit.ah;
+    volatile WORD *pfl;
+    sda[0] = 0;
+    m->crit_active = 0;
+    if (act > 3) act = 3;
+    if (act == 0 && !(ah & 0x20)) act = 3;               /* ignore not allowed -> fail */
+    if (act == 1 && !(ah & 0x10)) act = 3;               /* retry not allowed  -> fail */
+    if (act == 3 && !(ah & 0x08)) act = 2;               /* fail not allowed   -> abort */
+    *pp = zput(*pp, "  INT24 answered AL=0x"); *pp = zhexb(*pp, said);
+    *pp = zput(*pp, act == 0 ? " -> IGNORE" : act == 1 ? " -> RETRY"
+                  : act == 2 ? " -> ABORT" : " -> FAIL");
+    *pp = zput(*pp, "\r\n");
+    /* the INT 21h call's own registers, and CS:IP back ON its BOP */
+    VDM_REG(tib, VTIB_EAX) = g_crit.eax; VDM_REG(tib, VTIB_EBX) = g_crit.ebx;
+    VDM_REG(tib, VTIB_ECX) = g_crit.ecx; VDM_REG(tib, VTIB_EDX) = g_crit.edx;
+    VDM_REG(tib, VTIB_ESI) = g_crit.esi; VDM_REG(tib, VTIB_EDI) = g_crit.edi;
+    VDM_REG(tib, VTIB_EBP) = g_crit.ebp; VDM_REG(tib, VTIB_EIP) = g_crit.eip;
+    VDM_SET16(tib, VTIB_CS, g_crit.cs);
+    VDM_SET16(tib, VTIB_DS, g_crit.ds); VDM_SET16(tib, VTIB_ES, g_crit.es);
+    if (act == 1) return 0;                              /* RETRY: the BOP runs again */
+    if (act == 2) {                                      /* ABORT */
+        m->exit_code = DOS_CRIT_ABORT_RC;
+        m->term_type = 2;
+        return 1;
+    }
+    /* FAIL, and IGNORE where it was allowed (only 3Fh/40h -- unmeasured, so it fails
+       too rather than inventing success): the call returns an error.
+       CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
+    pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                            + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+    VDM_SET16(tib, VTIB_EAX, dos_crit_fail_ax(g_crit.fn, m->crit_code));
+    *pfl |= 1;
+    m->last_err = DOS_ERR_FAIL_I24;
+    VDM_REG(tib, VTIB_EIP) += 3;                         /* past the BOP -> the IRET */
+    return 0;
+}
+
 static WORD  g_pmret_sel = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_dpmi_fault_sel = the handler STACK selector (writable-data) written to [TIB+0x638];
@@ -4253,7 +4358,9 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
            Put the parent's frame back and let it continue. */
         int d = --g_exec_depth;
         volatile WORD *pfl2;
-        m->child_rc = (WORD)(m->exit_code & 0xFF);
+        /* AH = how it ended (#34): 0 normally, 2 when its INT 24h answered ABORT. */
+        m->child_rc = (WORD)(((WORD)m->term_type << 8) | (m->exit_code & 0xFF));
+        m->term_type = 0;
         if (g_exec_mach[d].progname[0])             /* the strip names the parent again */
             zput(g_progname, g_exec_mach[d].progname);
         /* s81: the parent's handle table back, the child's leftover files closed (not
@@ -28583,6 +28690,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         bs[o+8] = 0xB0; bs[o+9] = 0x03; bs[o+10] = 0xCF;         /* mov al,3 ; iret */
         *(volatile WORD *)(0x24 * 4)     = (WORD)(o + 8);        /* INT 24h */
         *(volatile WORD *)(0x24 * 4 + 2) = DOS_CTAB_SEG;
+        /* #34: the site DOS calls the guest's INT 24h from -- see crit_raise. */
+        bs[DOS_CRIT_RAISE + 0] = 0xCD; bs[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
+        bs[DOS_CRIT_RETURN + 0] = VDM_BOP0; bs[DOS_CRIT_RETURN + 1] = VDM_BOP1;
+        bs[DOS_CRIT_RETURN + 2] = 0x20;                                 /* bop 20h  */
     }
     /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
        dos_auxprn.asm for why it is guest code and what it was measured against. */
@@ -33210,6 +33321,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             m.exit_code = 0xBD;
             break;
         }
+        /* ── #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
+             also the INT 21h BOP, and this one sits at DOS_CRIT_RETURN, where only
+             crit_raise ever sends the guest. */
+        if (!g_bop_from_guest && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG
+            && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_CRIT_RETURN) {
+            int ab = crit_return(&m, tib, &p);
+            log_append(LOG_PATH, base, p); p = base;
+            if (ab) {                                /* ABORT: end the program, as 4Ch */
+                if (dos_terminate(&m, tib, &p, base)) continue;
+                break;
+            }
+            continue;                                /* RETRY re-runs it; FAIL/IGNORE resume */
+        }
+        if (!m.crit_active) crit_snapshot(tib);      /* #34: the call's INPUT registers (not the handler's own calls) */
         m.tp = p;
         m.retry = 0;
         m.v86_tramp_ok = 1;                         /* #251: we can resume elsewhere */
@@ -33227,6 +33352,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             m.v86_tramp = 0;
             log_append(LOG_PATH, base, p); p = base;
             continue;
+        }
+        if (m.crit_pending) {                       /* #34: call the guest's INT 24h */
+            crit_raise(&m, tib, &p);
+            log_append(LOG_PATH, base, p); p = base;
+            continue;                               /* CS:IP is now the INT 24h site */
         }
         if (m.exec_pending) {                       /* GH #30: AH=4Bh */
             m.exec_pending = 0;

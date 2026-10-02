@@ -256,6 +256,13 @@
    Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
    inside COMMAND.COM. */
 #define DOS_CRIT_STUBS    0x04D0   /* 3 stubs x 4 bytes: INT 22h, 23h, 24h */
+/* ── GH #34: WHERE DOS CALLS THE GUEST'S INT 24h FROM. `CD 24 / C4 C4 20` -- INT 24h,
+     then BOP 20h at +2, which the exec loop recognises by its ADDRESS (not its
+     number: 20h is the INT 21h BOP) and takes as "the handler answered in AL".
+     Five bytes, 0x4DB..0x4DF: the gap between the INT 24h default stub (0x4D8..0x4DA)
+     and the INT 2Fh tables at 0x4E0. */
+#define DOS_CRIT_RAISE    0x04DB
+#define DOS_CRIT_RETURN   (DOS_CRIT_RAISE + 2)
 /* ── ⛔ DOS_CDS_OFF IS DEAD, AND THE SPACE IT DESCRIBED IS RECLAIMED BELOW. ────
    It read: "the CDS array, 88 bytes each, LASTDRIVE of them ... 5 x 88 = 440
    bytes, ending at 0x697, inside the block."  That stopped being true in s71,

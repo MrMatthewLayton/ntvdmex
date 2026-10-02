@@ -73,6 +73,9 @@ static const dos_err_row_t dos_err_table[] = {
        for the current directory of a drive with nothing behind it. Provoked, not
        reasoned about -- err.after.47.baddrive AX=000F BX=0803 CX=02C1. */
     { 0x0F, 0x0803, 0x02, "err.after.47.baddrive"  },
+    /* #34: after an INT 24h answered FAIL -- class 0Dh, action 04h, locus 1 (unknown).
+       p_crit crit.4e.fail.59 AX=0053 BX=0D04 CX=0100, 6.22/QEMU and PCem alike. */
+    { 0x53, 0x0D04, 0x01, "crit.4e.fail.59"        },
 };
 #define DOS_ERR_ROWS (sizeof(dos_err_table) / sizeof(dos_err_table[0]))
 
@@ -154,8 +157,60 @@ static int dos_err_from_win32(unsigned long e, unsigned short *dos)
          and MoveFile say ERROR_ALREADY_EXISTS for the same condition. */
     case W32_FILE_EXISTS:
     case W32_ALREADY_EXISTS: *dos = 0x50; return 1;
+    /* ── #34: THE HARDWARE ERRORS, 19-31, ARE THE SAME NUMBERS ON BOTH SIDES. Win32
+         kept DOS's codes for them (ERROR_WRITE_PROTECT 19 .. ERROR_GEN_FAILURE 31;
+         an empty floppy drive is ERROR_NOT_READY, 21). An identity, and labelled as
+         one -- and the code that matters: 19-31 is what turns a failure into a
+         CRITICAL error that goes to the program's INT 24h (dos_crit_*, below). */
+    case 19: case 20: case 21: case 22: case 23: case 24: case 25:
+    case 26: case 27: case 28: case 29: case 30: case 31:
+        *dos = (unsigned short)e; return 1;
     default: *dos = 0x02; return 0;                  /* caller logs win32= and keeps 2 */
     }
+}
+
+/* ── #34: THE CRITICAL-ERROR CONTRACT (INT 24h), the pure half. ─────────────────
+     A DOS error 19-31 from a disk call is a HARDWARE error, and DOS does not just
+     return it: it calls INT 24h with
+        AH  bit 7 = 0 (a disk); bit 0 = 1 for a WRITE; bits 2-1 = the area (0 DOS
+            system, 1 FAT, 2 directory, 3 data); bits 3/4/5 = FAIL/RETRY/IGNORE are
+            allowed answers
+        AL  the drive (0 = A:)      DI  the error, low byte = code - 19 (2 = not ready)
+     and the handler answers 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. Every value below is
+     a row p_crit.asm measured on 6.22 (QEMU) and PCem with drive A: failed "not
+     ready" -- see the evidence beside each. */
+#define DOS_ERR_FAIL_I24   0x53     /* 59h after a FAILed critical error: "fail on INT 24" */
+#define DOS_CRIT_ABORT_RC  0x00     /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
+
+static inline int dos_crit_is_hw(unsigned short code) { return code >= 19 && code <= 31; }
+
+/* AH for INT 24h, from the INT 21h function that failed. */
+/* AH for INT 24h, from the INT 21h function that failed.
+   ★ MEASURED: a path call (4Eh, 3Dh, 3Ch) on a drive that is not ready gives AH=1Ah
+     on both genuine kernels -- a READ (bit 0 clear, even for a create: DOS fails
+     reading the disk before it gets to write anything), area 1 = the FAT (the first
+     thing DOS reads from a changed disk), FAIL and RETRY allowed and IGNORE NOT.
+     (6.22 under QEMU said 1Ch -- the directory -- once its FAT was cached; PCem said
+     1Ah every time. We hold no FAT, so the uncached answer is the consistent one.)
+   ⚠ 3Fh/40h on an already-open file (area 3, data; write bit for 40h) are NOT
+     measured -- p_crit fails the drive before any handle is open. Spec-derived. */
+static inline unsigned char dos_crit_ah(unsigned char fn)
+{
+    if (fn == 0x3F) return 0x18 | (3 << 1);
+    if (fn == 0x40) return 0x18 | (3 << 1) | 1;
+    return 0x1A;                                 /* p_crit crit.*.int24 BX=1A00 */
+}
+
+/* AX the failed call returns when the handler answers FAIL (59h then says 53h).
+   ★ MEASURED: find-first returns 0003 "path not found" on both genuine kernels
+     (crit.4e.fail.call); open and create return 0003 on PCem (QEMU, with its FAT
+     cached, 0002/0005 -- recorded as state, not contract). The path calls all get 3.
+   ⚠ Anything else is unmeasured and gets 53h itself, RBIL's "fail on INT 24h". */
+static inline unsigned short dos_crit_fail_ax(unsigned char fn, unsigned char code)
+{
+    (void)code;
+    if (fn == 0x3F || fn == 0x40) return DOS_ERR_FAIL_I24;
+    return 0x0003;
 }
 
 #endif /* DOS_ERR_H */

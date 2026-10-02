@@ -2727,5 +2727,146 @@
   ],
   "recorded": "2026-10-02",
   "why": "6.22 under QEMU answers with SeaVGABIOS, a rewrite of the VGA BIOS -- provisional for every INT 10h row. AH=09h with BH=1 in mode 0Dh writes nothing to page 1 (A000:2000 stays 0); PCem's IBM VGA ROM and DOSBox-X draw the glyph there."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.int24",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.int24",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.int24",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.sda",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.59",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.59",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.*.59",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's DOS never calls INT 24h for its mounted drives (the probe's handler count is 0 and every handler-side field keeps the probe's poison EEEE): its drive A: is not a BIOS disk, so the INT 13h failure the probe injects never reaches it. It is not evidence about the critical-error contract; 6.22 under QEMU and PCem's AMI 486 are (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.4e.ignore.call",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.3d.fail.call",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.3c.fail.call",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.4e.ignore.int24",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.3d.fail.int24",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.3c.fail.int24",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The two genuine kernels disagree here because of DISK-CACHE STATE, not the contract: after the first cases 6.22 under QEMU has the floppy's FAT in its buffers, so the next failure comes from reading the DIRECTORY (INT 24h AH=1Ch instead of 1Ah) and the failed call reports a later-stage code (0002/0005/0012). PCem fails at the FAT every time (AH=1Ah, call AX=0003), which is the uncached answer and the only one a host with no FAT of its own can mean. Both agree on every allowed-answer bit, the drive, DI and 59h (GH #34)."
+ },
+ {
+  "probe": "crit",
+  "case": "crit.abort.4d",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Only PCem reached the abort: its child's find-first raised INT 24h, the child's handler answered ABORT and AH=4Dh reports AX=0200 (AH=02h ended by a critical error, AL=00). Under QEMU the child's find-first was served from 6.22's cached directory and never failed (exit code 07 = 'not aborted'); DOSBox-X never raises INT 24h. A SINGLE-ORACLE row, recorded as such; RBIL documents AH=02h for this case (GH #34)."
  }
 ]

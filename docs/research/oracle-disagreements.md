@@ -443,3 +443,18 @@ machine**, and that is stated on the inventory page rather than glossed.
 ⚠ One race was a probe defect, not a dispute: reading back `23:59:59.99` straight after
 setting it gave `0000` on PCem and `173B` on QEMU — it is one hundredth from midnight. The
 readback now sets `23:59:58.00` instead. All three rationales are in `oracle-rules.json`.
+
+## `p_crit` (GH #34, 2026-10-02) — the critical-error contract, and what the disk CACHE does to it
+
+The probe hooks INT 13h on the oracles so that drive 0 answers "changed" and then "timeout" while it is armed. On the rig, A: really is an empty drive. 6.22 under QEMU and PCem's AMI 486 agree on everything that is contract:
+- the handler is called once for FAIL and twice for RETRY-then-FAIL;
+- DI = 02 (not ready); FAIL and RETRY are allowed and IGNORE is not, so an IGNORE answer is turned into FAIL;
+- inside the handler SDA+0 = 1 and InDOS = 0;
+- after FAIL, 59h = 0053 / 0D04 / CH 01.
+
+| Row | 6.22/QEMU | PCem | Settled as |
+|---|---|---|---|
+| `int24` AH on the 2nd–5th failure | `1C` (directory) | `1A` (FAT) | **`1A`.** QEMU's 6.22 has the FAT cached after the first case, so it fails one step later in the path walk. A host with no FAT means the uncached answer. `msdos622` abstains. |
+| the failed call's AX (`ignore`/`3d`/`3c`) | `0012`/`0002`/`0005` | `0003` ×3 | **`0003`**, for the same reason. On the first find-first, which is uncached on both, both kernels say `0003`. |
+| `crit.abort.4d` | `0007` (never aborted) | `0200` | **`0200`.** The QEMU child was served from cache and never failed. ⚠ This is a **single-oracle** row. |
+| everything handler-side | | | DOSBox-X never raises INT 24h for its mounted drives, so it abstains. |
