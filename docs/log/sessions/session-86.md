@@ -101,3 +101,12 @@ from the PIF failed.
   block; ported INT 12h and C1h into `v86_bios_bop()`. Probes p_int15/int15w/bios/memax/
   ioctl2: 0 mismatches on the merged build. Battery 2340/0.
 - README refreshed for the zip (`78d6942`).
+
+## Evening (2026-10-01/02) — Duke3D input lockup, DirectDraw tearing
+
+- **#259 Duke3D fullscreen input lockup.** `GetMessage` serves posted messages before input; `WM_APP_PRESENT` is re-posted as soon as the frame body starts, so once a body took ~a frame period input was never reached (40 keys held 11 s, raw mouse frozen, Alt+Enter dead — the guest and the frame body ran on). Fix: the top-level pump drains queued input before each present. Worst key latency 31 ms after. Logs: `runs/s86_duke/`.
+- **#260 DirectDraw fullscreen tore more than GDI.** The flip ignored VSync. Round 1 timed it ourselves (wait_vblank + NOVSYNC): tear-free, but the new flip counters showed the driver (Quadro K4000, NVIDIA 321.01) **already syncs every flip** — we waited twice, present cost a whole frame (16 ms), snapshots landed mid-frame and Mario's text flickered. Round 2 (shipped): two back buffers + `DDFLIP_DONOTWAIT`, drop a frame rather than block; fallback to our timing if flips land at once. Present 1–3 ms; user: Doom/Duke3D/ZAR/Mario butter smooth. User also felt Doom's audio improve — plausible (less UI time under `g_lock`), **not measured**.
+- Rig display: Quadro K4000 / 321.01 (FX 1800 removed); UltraVNC mirror driver `mv2` installed (`scripts/bm/gpuinfo.bat`; its dxdiag half produced nothing).
+- Duke3D `DUKE3D.CFG` on the rig remapped to modern FPS keys (backup `DUKE3D.CFG.bak`; mouse look = U toggle).
+- Gate `runs/s86_gate/` (A=799968bd, B=978589de, ×2): Skyroads/Doom/ZAR/shelf unchanged; A1 ZAR silent was a single baseline-side run; B2 shelf cut off by session end (B1 = A1 = A2).
+- Commit `5e1b739`; rig `bin\` = `978589de`. Nothing pushed.
