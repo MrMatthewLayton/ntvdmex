@@ -512,6 +512,13 @@ typedef struct video_state {
     uint8_t  vesa_pm_state;             /* 4F10 VBE/PM: 0 on 1 standby 2 suspend 4 off 8 reduced-on */
     uint16_t vesa_07_maxx, vesa_07_maxy;/* largest display start a guest asked for  */
     uint32_t vesa_07_rej;               /* 4F07 sets refused (would not fit)         */
+    /* ── #53: THE PORTS THE 4F0Ah PROTECTED-MODE CODE DRIVES (01CEh index, 01CFh data;
+         see vbe_pm.asm). vbe_idx = the selected index, vbe_start_lo the low word of a
+         display start awaiting its high word. The counters are the STAGE2 evidence that
+         a client is calling the PM block instead of INT 10h: banks set, starts set, and
+         writes refused (no VESA mode, out of range). */
+    uint16_t vbe_idx, vbe_start_lo;
+    uint32_t vbe_pm_bank_n, vbe_pm_start_n, vbe_pm_rej;
     ntvdd_frame frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
        counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,
@@ -758,6 +765,11 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
 #define VDD_FONT8X16_SEG 0xB000       /* 256 chars * 16 bytes = 0x1000 */
 #define VDD_FONT8X8_SEG  0xB100       /* 256 chars *  8 bytes = 0x0800 */
 #define VDD_FONT8X14_SEG 0xB180       /* 256 chars * 14 bytes = 0x0E00 (B1800..B25FF) */
+/* #53: the VBE 2.0 protected-mode interface block (vbe_pm.h, < 256 bytes) right after the
+   fonts, for the same reason they are here: real-mode-addressable RAM a VGA game leaves
+   alone. 4F0Ah returns B260:0000; vdd_video_install_fonts writes it, and 4F0Ah writes it
+   again on every call so a guest that scribbled on it gets a good copy. */
+#define VDD_VBEPM_SEG    0xB260       /* B2600..B26FF */
 
 /* `int10_11_calls` is counted so the next round is not another guess: the font-pointer fix
    assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.

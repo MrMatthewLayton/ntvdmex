@@ -2868,5 +2868,57 @@
   ],
   "recorded": "2026-10-02",
   "why": "Only PCem reached the abort: its child's find-first raised INT 24h, the child's handler answered ABORT and AH=4Dh reports AX=0200 (AH=02h ended by a critical error, AL=00). Under QEMU the child's find-first was served from 6.22's cached directory and never failed (exit code 07 = 'not aborted'); DOSBox-X never raises INT 24h. A SINGLE-ORACLE row, recorded as such; RBIL documents AH=02h for this case (GH #34)."
+ },
+ {
+  "probe": "vesapm",
+  "case": "int10.4F0A.pm.iface",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem",
+   "pcem-vesa",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "#53: VBE 2.0 \u00a74.13 calls 4F0Ah 'required'. Every BIOS we can execute declines it -- SeaVGABIOS (msdos622) and the Tseng ET4000/W32p ROM (pcem-vesa) answer AX=0100h -- and we did too while there was nothing to hand out. Now we hand out a real block (src/vdd/vbe_pm.asm): AX=004Fh, CX = its length, the table's four offsets, and 32-bit code whose first bytes are ours. No executed oracle has an answer to compare; the spec is the reference, and tools/dostest/vbepm_test.c (off-VM, the code run through pm32interp after a copy) plus p_vbepm.asm (on the rig, a DPMI client calling the copy) are the tests."
+ },
+ {
+  "probe": "vesapm",
+  "case": "int10.4F0A.pm.iface",
+  "field": "CX",
+  "abstain": [
+   "msdos622",
+   "pcem",
+   "pcem-vesa",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "#53: VBE 2.0 \u00a74.13 calls 4F0Ah 'required'. Every BIOS we can execute declines it -- SeaVGABIOS (msdos622) and the Tseng ET4000/W32p ROM (pcem-vesa) answer AX=0100h -- and we did too while there was nothing to hand out. Now we hand out a real block (src/vdd/vbe_pm.asm): AX=004Fh, CX = its length, the table's four offsets, and 32-bit code whose first bytes are ours. No executed oracle has an answer to compare; the spec is the reference, and tools/dostest/vbepm_test.c (off-VM, the code run through pm32interp after a copy) plus p_vbepm.asm (on the rig, a DPMI client calling the copy) are the tests."
+ },
+ {
+  "probe": "vesapm",
+  "case": "vesapm.table",
+  "field": "BUF",
+  "abstain": [
+   "msdos622",
+   "pcem",
+   "pcem-vesa",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "#53: VBE 2.0 \u00a74.13 calls 4F0Ah 'required'. Every BIOS we can execute declines it -- SeaVGABIOS (msdos622) and the Tseng ET4000/W32p ROM (pcem-vesa) answer AX=0100h -- and we did too while there was nothing to hand out. Now we hand out a real block (src/vdd/vbe_pm.asm): AX=004Fh, CX = its length, the table's four offsets, and 32-bit code whose first bytes are ours. No executed oracle has an answer to compare; the spec is the reference, and tools/dostest/vbepm_test.c (off-VM, the code run through pm32interp after a copy) plus p_vbepm.asm (on the rig, a DPMI client calling the copy) are the tests."
+ },
+ {
+  "probe": "vesapm",
+  "case": "vesapm.setwindow.code",
+  "field": "BUF",
+  "abstain": [
+   "msdos622",
+   "pcem",
+   "pcem-vesa",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "#53: VBE 2.0 \u00a74.13 calls 4F0Ah 'required'. Every BIOS we can execute declines it -- SeaVGABIOS (msdos622) and the Tseng ET4000/W32p ROM (pcem-vesa) answer AX=0100h -- and we did too while there was nothing to hand out. Now we hand out a real block (src/vdd/vbe_pm.asm): AX=004Fh, CX = its length, the table's four offsets, and 32-bit code whose first bytes are ours. No executed oracle has an answer to compare; the spec is the reference, and tools/dostest/vbepm_test.c (off-VM, the code run through pm32interp after a copy) plus p_vbepm.asm (on the rig, a DPMI client calling the copy) are the tests."
  }
 ]

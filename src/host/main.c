@@ -7532,6 +7532,10 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
           for (i = 0; i < 0x16; ++i) if (g_vid.vesa_calls[i]) {
               any = 1; q = zput(q, " 4F"); q = zhexb(q, (unsigned)i); q = zput(q, "x"); q = zhex(q, g_vid.vesa_calls[i]); }
           if (!any) q = zput(q, " none");
+          if (g_vid.vbe_pm_bank_n | g_vid.vbe_pm_start_n | g_vid.vbe_pm_rej) {   /* #53 */
+              q = zput(q, " | 4F0A-block banks=0x"); q = zhex(q, g_vid.vbe_pm_bank_n);
+              q = zput(q, " starts=0x"); q = zhex(q, g_vid.vbe_pm_start_n);
+              q = zput(q, " refused=0x"); q = zhex(q, g_vid.vbe_pm_rej); }
           q = zput(q, "\r\n"); }
         log_append(LOG_PATH, b, q); serial_out(b, q);
         /* ── ⛔ AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH. ──────────
@@ -34958,6 +34962,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " | 4F07 max start=("); p = zhex(p, (DWORD)g_vid.vesa_07_maxx);
             p = zput(p, ","); p = zhex(p, (DWORD)g_vid.vesa_07_maxy);
             p = zput(p, ") refused="); p = zhex(p, g_vid.vesa_07_rej);
+        }
+        /* #53: the 4F0Ah block's port writes -- a client switching banks without INT 10h
+           shows here and NOT in the 4F05 count above. */
+        if (g_vid.vbe_pm_bank_n | g_vid.vbe_pm_start_n | g_vid.vbe_pm_rej) {
+            p = zput(p, " | 4F0A-block banks=0x"); p = zhex(p, g_vid.vbe_pm_bank_n);
+            p = zput(p, " starts=0x"); p = zhex(p, g_vid.vbe_pm_start_n);
+            p = zput(p, " refused=0x"); p = zhex(p, g_vid.vbe_pm_rej);
         }
         p = zput(p, "\r\n");
         log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }

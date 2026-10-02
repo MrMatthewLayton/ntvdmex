@@ -13,7 +13,9 @@ the window and frame plumbing `:555-652`, the state block `:654-717`, the frame 
 (the 1280x1024 frame cap). The LFB mapping is DPMI `0800h` in `src/host/main.c`.
 **Off-VM:** `tools/dostest/video_test.c` T9–T12f (`:215-474` before #226) and #226's T12g–T12i (`:493-677`: DAC width, retrace wait on a fake clock, 4F02/4F03 and the VGA layer) and the 4F0A check at `:485-486`.
 **DOS probes:** `tools/dostest/p_vesa.asm` (4F00 block and every ModeInfoBlock, bytes 0–49) and
-`tools/dostest/p_vesapm.asm` (4F0Ah), both `ORACLE-ALSO: pcem-vesa`. **No probe exercises
+`tools/dostest/p_vesapm.asm` (4F0Ah), both `ORACLE-ALSO: pcem-vesa`; `tools/dostest/p_vbepm.asm` (#53: a DPMI
+client calls a COPY of the 4F0Ah block; no oracle can run it). Off-VM, `tools/dostest/vbepm_test.c` runs the
+block's code through `pm32interp.h`. **No probe exercises
 4F02–4F09** — the runtime half has no oracle at all.
 **Marked:** 2026-09-29, **from the code**, with citations. ⚠ `src/host/main.c` was being edited
 in the working tree while this was written; its citations give the **function name** and an
@@ -39,8 +41,8 @@ completes at the retrace** (the VDD stamps the wait; ⚠ **the host's wait loop 
 until `main.c` honours `vdd_video_int10_wait_us()` the call returns at once and only the pacing is
 missing), **4F03 returns D14/D15** with `40:87h` bit 7 behind it, and **4F02 leaves a coherent VGA
 layer** (kind, chain-4, register file, BDA) instead of the previous mode's; ModeAttributes D5 now
-says what our modes are. Still absent: a protected-mode or far-call bank switch of either kind
-(4F0Ah, WinFuncPtr), 4F06/4F07 in VESA text modes, and the runtime half still has no oracle.
+says what our modes are. Still absent: the far-call bank switch (WinFuncPtr), 4F06/4F07 in VESA text modes, and the
+runtime half still has no oracle. **4F0Ah, the protected-mode interface, exists since #53** (§13).
 ⚠ **Not yet on the rig** — every #226 row below is off-VM evidence (`video_test.c` T12g–T12i).
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
@@ -57,12 +59,12 @@ says what our modes are. Still absent: a protected-mode or far-call bank switch 
 | §10 4F07h display start | 8 | 4 | 2 | — | 1 | 1 |
 | §11 4F08h DAC width | 4 | 4 | — | — | — | — |
 | §12 4F09h palette data | 6 | 6 | — | — | — | — |
-| §13 4F0Ah protected-mode interface | 6 | — | — | — | 6 | — |
+| §13 4F0Ah protected-mode interface | 6 | 5 | — | — | 1 | — |
 | §14 VBE 3.0 4F0Bh and the supplemental functions | 7 | 4 | — | 1 | 1 | 1 |
 | §15 The linear frame buffer | 5 | 3 | 1 | — | — | 1 |
 | §16 Presentation | 8 | 7 | — | — | 1 | — |
 | §17 The mode list | 34 | 28 | — | — | 6 | — |
-| **Total** | **171** | **139** | **7** | **2** | **20** | **3** |
+| **Total** | **171** | **144** | **7** | **2** | **15** | **3** |
 
 Before #226: 170 units, 124 IMPL, 15 PART, 2 STORE, 26 MISS, 3 N/A. #226 added one unit (§16,
 the VESA mode's own display timing) and moved 15 rows (9 PART→IMPL, 5 MISS→IMPL, 1 MISS→PART);
@@ -74,7 +76,7 @@ the two §10 rows at PART are PART only for want of the host's wait loop (§10).
 |---|---|
 | `p_vesa` against QEMU's Bochs VBE and the Tseng ET4000/W32p ROM (`pcem-vesa`): **131 rows, 128 comparable, 100 % agree, 3 abstained** (2026-09-17). ⚠ A recorded score, not a re-run; the rules that shape it are `oracle-rules.json:1235-1336` | `session-74.md:222-236` |
 | Found by that oracle and fixed: Capabilities D0 was 0; NumberOfImagePages was 0; YCharSize 8 in 200-line modes; DirectColorModeInfo D1 for 5:5:5; Lin/Bnk image pages | `session-74.md:226-229` |
-| `p_vesapm`: 4F0Ah answers `AX=0100` on both real BIOSes, as we do | `session-74.md:246-249` |
+| `p_vesapm`: 4F0Ah answers `AX=0100` on both real BIOSes -- as we did until #53 (those rows now abstain: neither BIOS has the interface) | `session-74.md:246-249` |
 | Heretic: 4F00 through DPMI `0300` with a 256-byte DOS block; our old handler wrote the OEM string at `+100h`, over the next MCB | `session-74.md:511-535` |
 | heaven7: 4F00/01/02/07 only; sets `0x4170` (320x240x16, LFB); 16,389 4F07 calls in one run, 15,900 in another, all `(0,0)` — a vsync idiom on one buffer | `session-74.md:51`, `:165-168`, `:180` |
 | heaven7 (before 320x240 existed): `BX=4112h` accepted, DPMI `0800` mapped `E0000000h` size `E1000h` = 640·480·3 | `session-74.md:383-387` |
@@ -272,17 +274,39 @@ ours (`:654-668`).
 
 ## 13. 4F0Ah — Return VBE Protected Mode Interface (§4.13; 3.0 PM entry)
 
-§4.13 calls 4F0Ah "required". Both real BIOSes we measured decline it as we do, so our answer
-agrees with the oracles while the function is absent.
+§4.13 calls 4F0Ah "required". **Implemented by #53 (2026-10-02).** Both real BIOSes we can
+execute decline it (`AX=0100h` -- SeaVGABIOS and the Tseng ET4000/W32p ROM, `p_vesapm`), and we
+did too while there was no code to hand out; those rows now abstain with the reason. The block
+is `src/vdd/vbe_pm.asm` (32-bit, relocatable: relative jumps, the stack and port I/O only),
+assembled into `vbe_pm.h` by `tools/gen-vbepm.py`, written to `B260:0000` (after the fonts) at
+start-up and again on every 4F0Ah call. It drives the card through our index/data pair
+`01CEh`/`01CFh` (`vbe_port_in`/`_out` in `vdd_video.c`: index `05h` bank -- Bochs's number for
+it -- `10h`/`11h` display start in dwords, high word commits; `03h`/`06h` read bpp and the line
+in pixels; `00h` reads 0, so no Bochs driver mistakes us for one) and the VGA DAC/status ports.
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| BL=00h: ES:DI → table, CX = length | **MISS** | `AX=0100h` (`:1053-1061`); flagged in `unimpl_fn` | **oracle** agrees (`session-74.md:246-248`, `p_vesapm`); `video_test.c:485-486` |
-| Table `+0`: 32-bit Set Window code | **MISS** | — every bank switch from a protected-mode client is a DPMI `0300h` round trip (ZAR: 4,735) | — |
-| Table `+2`: 32-bit Set Display Start code (DX:CX address form) | **MISS** | — | — |
-| Table `+4`: 32-bit Set Primary Palette code | **MISS** | — | — |
-| Table `+6`: ports/memory sub-table | **MISS** | — | — |
-| 3.0: the `'PMID'` PMInfoBlock in the ROM image (PMInitialize, 16-bit PM entry) | **MISS** | no `PMID` anywhere in `src/` | — |
+| BL=00h: ES:DI → table, CX = length; other BL → `014Fh` | **IMPL** | `vesa()` `case 0x0A`; `ES:DI = B260:0000`, `CX = VBE_PM_LEN` | off-VM `vbepm_test.c`; rig `p_vbepm` (`vbepm.4F0A`) |
+| Table `+0`: 32-bit Set Window code (BH=00h, BL=window, DX=position) | **IMPL** | port `05h` → `vesa_set_bank`, the function 4F05h now shares; window B and out-of-range refused (counted `vbe_pm_rej`) | `vbepm_test.c` (copied, interpreted, compared with 4F05h get and the VRAM it flushed); rig `p_vbepm` (`vbepm.win.via.4F05`, `vbepm.vram.via.4F05`) |
+| Table `+2`: 32-bit Set Display Start (BL=00h/80h, DX:CX = start in DWORDS) | **IMPL** | ports `10h`/`11h`; BL=80h polls `3DAh` bit 3 in the block itself before the commit | `vbepm_test.c` (4F07h get agrees; the retrace wait reads `3DAh`); rig `p_vbepm` (`vbepm.start.via.4F07`) |
+| Table `+4`: 32-bit Set Primary Palette (BL=00h/80h, CX count, DX first, ES:EDI B,G,R,pad) | **IMPL** | `3C8h`/`3C9h`, so the 4F08h DAC width applies as for any port write | `vbepm_test.c` (4F09h get reads back the same bytes); rig `p_vbepm` (`vbepm.pal.via.3C9`) |
+| Table `+6`: ports/memory sub-table | **IMPL** | `01CEh 01CFh 03C8h 03C9h 03DAh FFFFh`, empty memory list `FFFFh` | `vbepm_test.c` |
+| 3.0: the `'PMID'` PMInfoBlock in the ROM image (PMInitialize, 16-bit PM entry) | **MISS** | we claim VBE 2.0; no `PMID` anywhere in `src/` | — |
+
+⚠ **STAGE2 shows who uses it**: `VESA calls by sub-function: ... | 4F0A-block banks= starts=
+refused=` -- a client switching banks through the block appears there and NOT in the 4F05
+count.
+
+★ **DUKE3D USES IT** (measured 2026-10-02, headless 30 s, `runs/vm249/`): it asks 4F0Ah once
+and, offered the block, page-flips through SetDisplayStart -- `4F0A-block starts=0x25a3
+refused=0`, and **no 4F07 calls at all**, where the base build (4F0Ah declined) shows
+`4F07x24bf` with starts up to y=0x1068 (4200 lines = 3.36 MB at 800 bytes a line). Zero
+refusals over that range is also the units check: had Duke passed BYTES, ×4 would have run
+past the 4 MB of VRAM from page 2 on. Mode `4103h` (800x600x8 LFB) on both. ⚠ The headless
+capture cannot save an 800x600 frame on either build (`CAPTURE: save_bmp FAILED ... w=800
+h=600`), so the picture is owed BY HAND. ZAR (VESA2 LFB) never asks for 4F0Ah: unchanged.
+Units: VBE 2.0 §4.13 leaves them unstated; the block takes DX:CX in DWORDS, as Bochs's PM
+code and the clients written against it do.
 
 ## 14. VBE 3.0 4F0Bh and the supplemental functions (§5.7)
 
@@ -391,11 +415,10 @@ VGA layer, `mkind`, `40:49h`, D5), 3 (4F07 BL=80h — VDD half), 4 (4F03 D14/D15
    maxima, 4F07 refusals, 4F08 then a port read-back, 4F04 sizes) against the Tseng ROM and
    SeaVGABIOS would turn the #226 rows into comparisons — and answers the open
    DAC-on-mode-set question (§5).
-5. **A direct bank-switch entry of either kind** (§8, §13). WinFuncPtr is NULL (legal, but a
-   VBE 1.x program that calls it blindly jumps to `0000:0000`) and 4F0Ah is declined (as the
-   two measured BIOSes also do). Every banked protected-mode frame pays a DPMI `0300h` round
-   trip per bank. The real-mode stub fits in `vdd_video.c` (§8 says how) once DPMI `0301h` is
-   known to service the INT 10h it makes; the 4F0Ah code block is larger.
+5. **The far-call bank switch** (§8). 4F0Ah's protected-mode block exists since #53 (§13);
+   WinFuncPtr is still NULL (legal, but a VBE 1.x program that calls it blindly jumps to
+   `0000:0000`). The real-mode stub can now be a few bytes doing the same `01CEh`/`01CFh`
+   writes as the PM block's SetWindow.
 6. **INT 10h AH=0Fh AL bit 7** — the IBM BIOS returns `40:87h` bit 7 there (VBE 2.0 §4.6's 1.x
    note). The bit is now maintained; AH=0Fh does not report it yet (`video-bios.md`'s surface).
 7. **DPMI `0800h` at an offset into the aperture** (§15): accept any `[E0000000h, +4 MB)`

@@ -6,6 +6,7 @@
 #include "vga_font_8x8.h"
 #include "vga_font_8x14.h"
 #include "vga_defaults.h"
+#include "vbe_pm.h"
 
 static void vga_load_modedef(video_state *st, uint8_t mode);
 
@@ -922,6 +923,96 @@ static void vesa_sync(video_state *st)
     for (i = 0; i < VID_VESA_WIN; ++i) st->vesa_vram[off + i] = st->vmem[i];
 }
 
+/* Window A to bank `n` (64 KB units): flush the live window into its bank, load the new
+   one. 0 = refused (no banked VESA mode, or past the end of VRAM) and nothing changes.
+   ONE implementation for INT 10h 4F05h and the 4F0Ah protected-mode code's port write
+   (#53), so the two cannot disagree about what a bank switch is. */
+static int vesa_set_bank(video_state *st, uint32_t n)
+{
+    uint32_t off = n * VID_VESA_WIN; unsigned k;
+    if (!st->in_vesa || st->vesa_lfb) return 0;
+    if (off + VID_VESA_WIN > VID_VESA_VRAM) return 0;
+    vesa_sync(st);                            /* flush the current bank first */
+    st->vesa_bank = (uint16_t)n;
+    for (k = 0; k < VID_VESA_WIN; ++k) st->vmem[k] = st->vesa_vram[off + k];
+    st->dirty = 1;
+    return 1;
+}
+
+/* ══ #53: THE 4F0Ah PROTECTED-MODE INTERFACE. ══════════════════════════════════════
+     4F0Ah answered AX=0100h ("no such function") on purpose: there was no code to hand
+     out, and 004Fh with a null pointer would have had a client call into nothing. Now
+     there is: src/vdd/vbe_pm.asm, assembled into vbe_pm.h -- relocatable 32-bit code
+     that drives the card through two ports, as a real card's block drives its own
+     registers. A protected-mode client copies it and calls SetWindow / SetDisplayStart /
+     SetPalette with a near call: no INT 10h, no mode switch, so a banked frame stops
+     costing a DPMI 0300h round trip per bank.
+   ► THE PORTS (ours; index at 01CEh, data at 01CFh -- the pair Bochs's VBE uses, and 05h
+     is its bank index too; nothing else here is Bochs's, so index 00h, its ID register,
+     reads 0 and no Bochs driver will take us for one):
+       05h  bank: what 4F05h BH=00h BL=00h does (vesa_set_bank); reads back the bank
+       10h  display start, bits 0-15, in DWORDS (byte address / 4)
+       11h  display start, bits 16-31 -- the write that COMMITS, as 4F07h BL=00h: at once.
+            The "during retrace" form waited on 3DAh in the guest's own code before this.
+       03h  (read) bits per pixel, 06h (read) logical line in pixels -- what a client that
+            wants to compute a start for itself needs; writes ignored.
+     A write when no banked VESA mode is set (or one that would not fit) is refused and
+     counted (vbe_pm_rej), and changes nothing -- the INT 10h forms answer 03h/02h there. */
+static void vbe_pm_install(video_state *st)
+{
+    uint8_t *p;
+    unsigned i;
+    if (!st || !st->bus) return;
+    p = (uint8_t *)vdd_map_flat(st->bus, VDD_VBEPM_SEG, 0);
+    if (!p) return;
+    for (i = 0; i < VBE_PM_LEN; ++i) p[i] = vbe_pm_block[i];
+}
+
+static void vbe_port_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self;
+    uint16_t d = (uint16_t)(w >= 2 ? v : (v & 0xFF));
+    if (port == 0x1CE) { st->vbe_idx = d; return; }
+    switch (st->vbe_idx) {
+    case 0x05:
+        if (vesa_set_bank(st, d)) st->vbe_pm_bank_n++; else st->vbe_pm_rej++;
+        break;
+    case 0x10:
+        st->vbe_start_lo = d;
+        break;
+    case 0x11: {
+        uint32_t org = (((uint32_t)d << 16) | st->vbe_start_lo) * 4u;
+        uint32_t bypp = vesa_bypp(st->vesa_bpp);
+        if (!st->in_vesa || !st->vesa_stride || !vesa_org_fits(st, org)) { st->vbe_pm_rej++; break; }
+        vid_latch(st, 0);                     /* boundaries already passed keep the old start */
+        st->vesa_start_y = (uint16_t)(org / st->vesa_stride);
+        st->vesa_start_x = (uint16_t)((org % st->vesa_stride) / bypp);
+        st->vesa_org = st->vesa_org_vs = st->vesa_org_live = org;
+        st->vbe_pm_start_n++;
+        st->dirty = 1;
+        break; }
+    default:
+        break;                                /* not a register here */
+    }
+}
+
+static void vbe_port_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self;
+    uint32_t r = 0;
+    (void)w;
+    if (port == 0x1CE) { *v = st->vbe_idx; return; }
+    switch (st->vbe_idx) {
+    case 0x03: r = st->in_vesa ? st->vesa_bpp : 0; break;
+    case 0x05: r = st->vesa_bank; break;
+    case 0x06: r = (st->in_vesa && st->vesa_bpp) ? st->vesa_stride / vesa_bypp(st->vesa_bpp) : 0; break;
+    case 0x10: r = (st->vesa_org / 4u) & 0xFFFFu; break;
+    case 0x11: r = (st->vesa_org / 4u) >> 16; break;
+    default:   r = 0; break;                  /* 00h (ID) and the rest: 0 */
+    }
+    *v = r;
+}
+
 /* ── DIRECT COLOUR -> ARGB, ONCE PER FRAME. (s74) ─────────────────────────────────
      The frame contract has a bpp field, but every consumer of it indexed a palette --
      so a 15/16/24bpp mode has to be converted somewhere, and this is the only place
@@ -1522,13 +1613,20 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x004F);
         break; }
     case 0x0A:                                    /* protected-mode interface      */
-        /* There is no PM bank-switching stub to hand out. ⚠ (s74b) The answer for a
-           function we do not provide is AL != 4Fh -- "no such function" -- which is
-           what BOTH the Tseng ET4000/W32p ROM and Bochs return for 4F0A (AX=0100,
-           p_vesapm). 014F says "supported, but this call failed", and a client that
-           tests AL first reads that as a PM interface that is present and broken. */
-        s_ax(r, 0x0100);
-        VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
+        /* ── #53: BL=00h -> ES:DI = the block, CX = its length (VBE 2.0 §4.13). See
+             vbe_pm_install. It is rewritten on every call, so the copy a client takes
+             is always the real one. Any other BL: 014Fh (the function exists; that
+             subfunction does not).
+           ⚠ (s74b) The answer was AX=0100h, which BOTH measured real BIOSes give (the
+             Tseng ET4000/W32p ROM and Bochs's -- p_vesapm), and which was right while
+             there was nothing to hand out. Neither is an oracle for the block now:
+             the spec is (VBE 2.0 §4.13), and video_test.c runs the code it returns. */
+        if ((r_bx(r) & 0xFF) != 0x00) { s_ax(r, 0x014F); break; }
+        vbe_pm_install(st);
+        r->es = VDD_VBEPM_SEG;
+        r->edi = (r->edi & 0xFFFF0000u);
+        s_cx(r, (uint16_t)VBE_PM_LEN);
+        s_ax(r, 0x004F);
         break;
     case 0x10: {                                  /* VBE/PM: display power (DPMS)  */
         /* VBE/PM 1.0. BL=00 report: BL=version 10h (BCD), BH=states supported
@@ -1610,12 +1708,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
         if (!st->in_vesa || st->vesa_lfb) { s_ax(r, 0x034F); break; }
         if (bl != 0x00) { s_ax(r, 0x014F); break; }
         if (bh == 0x00) {                         /* set window A                  */
-            uint32_t off = (uint32_t)r_dx(r) * VID_VESA_WIN; unsigned k;
-            if (off + VID_VESA_WIN > VID_VESA_VRAM) { s_ax(r, 0x024F); break; }
-            vesa_sync(st);                        /* flush current bank            */
-            st->vesa_bank = r_dx(r);
-            for (k = 0; k < VID_VESA_WIN; ++k) st->vmem[k] = st->vesa_vram[off + k];
-            st->dirty = 1;
+            if (!vesa_set_bank(st, r_dx(r))) { s_ax(r, 0x024F); break; }   /* past VRAM */
         } else if (bh == 0x01) {                  /* get window A                  */
             s_dx(r, st->vesa_bank);
         } else { s_ax(r, 0x014F); break; }
@@ -3605,6 +3698,7 @@ void vdd_video_install_fonts(video_state *st)
         for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];
         for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
     }
+    vbe_pm_install(st);                    /* #53: the 4F0Ah block, beside them */
 }
 
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
@@ -4211,6 +4305,7 @@ int vdd_video_init(vdd_bus *b, void *self)
     if (vdd_claim_ports(b, 0x3CA, 0x3CC, ext_in, ext_out, st)) return -1;  /* FeatCtl/MiscOut */
     if (vdd_claim_ports(b, 0x3B4, 0x3B5, crtc_in, crtc_out, st)) return -1; /* mono CRTC */
     if (vdd_claim_ports(b, 0x3BA, 0x3BA, status_in, status_out, st)) return -1; /* mono status */
+    if (vdd_claim_ports(b, 0x1CE, 0x1CF, vbe_port_in, vbe_port_out, st)) return -1; /* #53: 4F0Ah's ports */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;
 }
