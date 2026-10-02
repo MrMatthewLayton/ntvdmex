@@ -297,6 +297,17 @@ in pixels; `00h` reads 0, so no Bochs driver mistakes us for one) and the VGA DA
 refused=` -- a client switching banks through the block appears there and NOT in the 4F05
 count.
 
+★ **DUKE3D USES IT** (measured 2026-10-02, headless 30 s, `runs/vm249/`): it asks 4F0Ah once
+and, offered the block, page-flips through SetDisplayStart -- `4F0A-block starts=0x25a3
+refused=0`, and **no 4F07 calls at all**, where the base build (4F0Ah declined) shows
+`4F07x24bf` with starts up to y=0x1068 (4200 lines = 3.36 MB at 800 bytes a line). Zero
+refusals over that range is also the units check: had Duke passed BYTES, ×4 would have run
+past the 4 MB of VRAM from page 2 on. Mode `4103h` (800x600x8 LFB) on both. ⚠ The headless
+capture cannot save an 800x600 frame on either build (`CAPTURE: save_bmp FAILED ... w=800
+h=600`), so the picture is owed BY HAND. ZAR (VESA2 LFB) never asks for 4F0Ah: unchanged.
+Units: VBE 2.0 §4.13 leaves them unstated; the block takes DX:CX in DWORDS, as Bochs's PM
+code and the clients written against it do.
+
 ## 14. VBE 3.0 4F0Bh and the supplemental functions (§5.7)
 
 | Function | Unit | Status | Where / what is missing | Verification |
