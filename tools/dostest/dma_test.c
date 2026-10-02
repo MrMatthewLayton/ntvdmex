@@ -108,6 +108,13 @@ int main(void)
     CHECK(tc, "terminal count reported");
     CHECK(dma.ch[1].masked == 1, "8237 masks a non-auto-init channel at TC");
     CHECK(buf[59] == 99, "last byte of the block is correct");
+    /* #246: "TC when the word count goes from 0000h to FFFFh" -- the count wraps,
+       and a driver polling it for FFFFh to see a single-cycle block end needs it to.
+       It rested at 0000h before; p_dma2's TC rows made that visible. */
+    { uint32_t lo = 0, hi = 0;
+      v = 0; vdd_bus_io(&bus, 0x0C, 1, 0, &v);
+      vdd_bus_io(&bus, 0x03, 1, 1, &lo); vdd_bus_io(&bus, 0x03, 1, 1, &hi);
+      CHECK(lo == 0xFF && hi == 0xFF, "TC: the current count reads FFFFh through the port"); }
     got = vdd_dma_read(&dma, 1, buf, 8, &tc);
     CHECK(got == 0, "channel is finished: no further transfer");
 
@@ -202,6 +209,10 @@ int main(void)
 
         v = 0; vdd_bus_io(&bus, 0x0D, 1, 0, &v);         /* master clear ctrl 1   */
         v = 0; vdd_bus_io(&bus, 0xDA, 1, 0, &v);         /* master clear ctrl 2   */
+        /* ...which masks channel 4, the cascade, and so disconnects controller 1
+           (#246). Put it back the way POST does: cascade mode, unmasked. */
+        v = 0xC0; vdd_bus_io(&bus, 0xD6, 1, 0, &v);
+        v = 0x00; vdd_bus_io(&bus, 0xD4, 1, 0, &v);
         g_dreq = 0;
         vdd_bus_io(&bus, 0x08, 1, 1, &s);
         CHECK((s & DMA_STATUS_DRQ) == 0, "status 08h: no device requesting -> bits 7:4 clear");
@@ -283,16 +294,35 @@ int main(void)
         CHECK(got == 24 && tc, "re-enable: the remaining 24 bytes move, then TC");
         CHECK(buf[0] == 0x88 && buf[23] == 0x9F, "re-enable: resumed at byte 8, not the base");
 
-        /* controller 2's own bit, at D0h, stops channel 5 and not channel 1 */
+        /* controller 2's own bit, at D0h, stops channel 5 -- AND, on an AT, channel
+           1 as well: controller 1 reaches the bus only through channel 4 (#246).
+           Before #246 this case asserted the opposite ("the cascade is not
+           modelled"); that was a statement about our model, not the board. */
         program(&bus, 5, 0x86000, 1, DMA_MODE_XFER_READ);
         program(&bus, 1, 0x77000, 3, DMA_MODE_XFER_READ);
+        v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v);                   /* drop TC1   */
         v = DMA_CMD_DISABLE; vdd_bus_io(&bus, 0xD0, 1, 0, &v);
-        CHECK(!vdd_dma_grants(&dma, 5) && vdd_dma_grants(&dma, 1),
-              "disable D0h: refuses channels 4-7 only");
+        CHECK(!vdd_dma_grants(&dma, 5) && !vdd_dma_grants(&dma, 1) && !vdd_dma_grants(&dma, 3),
+              "disable D0h: refuses channels 4-7 AND, through the cascade, 0-3");
         got = vdd_dma_read(&dma, 5, buf, 4, &tc);
         CHECK(got == 0 && !tc, "disable D0h: channel 5 moves nothing");
         got = vdd_dma_read(&dma, 1, buf, 4, &tc);
-        CHECK(got == 4, "disable D0h: channel 1 is untouched (the cascade is not modelled)");
+        CHECK(got == 0 && !tc, "disable D0h: channel 1 moves nothing either (the AT cascade)");
+        g_dreq = 0x02;
+        vdd_bus_io(&bus, 0xD0, 1, 1, &v);
+        CHECK((v & 0x10) != 0,
+              "disable D0h: controller 1 still RAISES HRQ (DREQ4) -- it is the far end that refuses");
+        g_dreq = 0;
+        v = 0; vdd_bus_io(&bus, 0xD0, 1, 0, &v);                   /* re-enable  */
+        CHECK(vdd_dma_grants(&dma, 1), "enable D0h: channel 1 is served again");
+        /* masking channel 4 alone does the same thing */
+        v = 0x04; vdd_bus_io(&bus, 0xD4, 1, 0, &v);                /* mask ch4   */
+        CHECK(!vdd_dma_grants(&dma, 1) && vdd_dma_grants(&dma, 5),
+              "cascade: masking channel 4 starves channel 1, not channel 5");
+        v = 0x00; vdd_bus_io(&bus, 0xD4, 1, 0, &v);                /* unmask ch4 */
+        CHECK(vdd_dma_grants(&dma, 1), "cascade: unmasking channel 4 reconnects controller 1");
+        got = vdd_dma_read(&dma, 1, buf, 4, &tc);
+        CHECK(got == 4 && tc, "cascade: and the stalled 4-byte block then completes");
 
         /* master clear clears the command register -- the controller is enabled
            again, and every channel masked (datasheet) */
@@ -304,6 +334,143 @@ int main(void)
         /* the DREQ wiring is the machine's: a device reset keeps it */
         vdd_dma_reset(&dma);
         CHECK(dma.dreq_n == 1 && dma.dreq_fn[0] == fake_dreq, "reset: the DREQ registration survives");
+        /* ...and a reset leaves what POST leaves: channel 4 cascade, unmasked */
+        CHECK((dma.ch[4].mode & DMA_MODE_SELECT) == DMA_MODE_SELECT && !dma.ch[4].masked,
+              "reset: channel 4 in cascade mode and unmasked, as POST leaves it");
+    }
+
+    /* ── T13: THE REQUEST REGISTER (09h). #246. ───────────────────────────────
+       8237A datasheet: a request bit per channel, set/reset by bits 2 and 1:0,
+       NON-MASKABLE, cleared at TC and by master clear. With no device on DACK the
+       controller carries the cycles out itself. Channel 1 in VERIFY mode: the walk
+       happens, memory is not touched, TC latches. */
+    {
+        uint32_t s;
+        vdd_dma_reset(&dma);
+        for (i = 0; i < 32; ++i) g_flat[0x78000 + i] = (uint8_t)(0x40 + i);
+        program(&bus, 1, 0x78000, 15, 0x80 /* block */ | DMA_MODE_XFER_VERIFY);
+        v = 0x05; vdd_bus_io(&bus, 0x0A, 1, 0, &v);                /* MASK ch1   */
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);                /* request 1  */
+        CHECK(dma.ch[1].cur_count == 0xFFFF && dma.ch[1].cur_addr == 0x8010,
+              "request: a masked channel is served anyway -- 16 verify cycles, count FFFFh");
+        CHECK(g_flat[0x78000] == 0x40 && g_flat[0x7800F] == 0x4F, "request: verify touched no memory");
+        CHECK(dma.req[0] == 0, "request: the bit cleared itself at TC");
+        vdd_bus_io(&bus, 0x08, 1, 1, &s);
+        CHECK(s == 0x02, "request: status shows TC1 and no request left pending");
+
+        /* write type: memory gets the undriven bus -- FFh */
+        program(&bus, 1, 0x78000, 3, 0x80 | DMA_MODE_XFER_WRITE);
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(g_flat[0x78000] == 0xFF && g_flat[0x78003] == 0xFF && g_flat[0x78004] == 0x44,
+              "request, write type: exactly 4 bytes of float (FFh), not 5");
+        CHECK(dma.ch[1].masked, "request: a non-auto-init channel masks itself at TC");
+
+        /* held off by a disabled controller: pending, visible, then served */
+        program(&bus, 1, 0x78000, 7, 0x80 | DMA_MODE_XFER_VERIFY);
+        v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v);                   /* drop TCs   */
+        v = DMA_CMD_DISABLE; vdd_bus_io(&bus, 0x08, 1, 0, &v);
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(dma.ch[1].cur_count == 7, "request + disabled controller: nothing moves");
+        vdd_bus_io(&bus, 0x08, 1, 1, &s);
+        CHECK(s == 0x20, "request + disabled controller: status bit 5 -- pending");
+        v = 0; vdd_bus_io(&bus, 0x08, 1, 0, &v);                   /* enable     */
+        CHECK(dma.ch[1].cur_count == 0xFFFF && dma.ch[1].cur_addr == 0x8008 && dma.req[0] == 0,
+              "request: served the moment the controller is enabled");
+
+        /* reset by bit 2 = 0, before it is served */
+        program(&bus, 1, 0x78000, 7, 0x80 | DMA_MODE_XFER_VERIFY);
+        v = 0x04; vdd_bus_io(&bus, 0xD4, 1, 0, &v);                /* cascade off */
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(dma.req[0] == 0x02 && dma.ch[1].cur_count == 7,
+              "request + cascade down: latched, not served");
+        v = 0x01; vdd_bus_io(&bus, 0x09, 1, 0, &v);                /* reset req 1 */
+        CHECK(dma.req[0] == 0, "request: bit 2 = 0 resets the request");
+        v = 0x00; vdd_bus_io(&bus, 0xD4, 1, 0, &v);
+        CHECK(dma.ch[1].cur_count == 7, "...so restoring the cascade serves nothing");
+
+        /* master clear clears it */
+        v = 0x04; vdd_bus_io(&bus, 0xD4, 1, 0, &v);
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        v = 0; vdd_bus_io(&bus, 0x0D, 1, 0, &v);
+        CHECK(dma.req[0] == 0, "request: master clear clears the request register");
+        v = 0x00; vdd_bus_io(&bus, 0xD4, 1, 0, &v);
+
+        /* a cascade-mode channel performs no cycles of its own */
+        program(&bus, 3, 0x78000, 3, DMA_MODE_SELECT | DMA_MODE_XFER_WRITE);
+        g_flat[0x78000] = 0x11;
+        v = 0x07; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(g_flat[0x78000] == 0x11 && dma.ch[3].cur_count == 3,
+              "request: a channel in cascade mode does no cycles");
+        v = 0x03; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+    }
+
+    /* ── T14: MEMORY-TO-MEMORY + THE TEMPORARY REGISTER. #246. ────────────────
+       Command bit 0; started by channel 0's software request; byte by byte through
+       the temporary register from channel 0's address to channel 1's; channel 1's
+       count runs and its TC ends it. The temporary register then reads the LAST
+       byte moved. */
+    {
+        uint32_t s;
+        vdd_dma_reset(&dma);
+        for (i = 0; i < 16; ++i) { g_flat[0x79000 + i] = (uint8_t)(0xA0 + i); g_flat[0x7A000 + i] = 0; }
+        program(&bus, 0, 0x79000, 0xFFFF, 0x80 | DMA_MODE_XFER_READ);  /* source  */
+        program(&bus, 1, 0x7A000, 9, 0x80 | DMA_MODE_XFER_WRITE);      /* 10 dest */
+        v = DMA_CMD_MEM2MEM; vdd_bus_io(&bus, 0x08, 1, 0, &v);
+        v = 0x04; vdd_bus_io(&bus, 0x09, 1, 0, &v);                    /* req ch0 */
+        CHECK(memcmp(&g_flat[0x7A000], &g_flat[0x79000], 10) == 0 && g_flat[0x7A00A] == 0,
+              "m2m: ten bytes copied, the eleventh untouched");
+        v = 0; vdd_bus_io(&bus, 0x0D, 1, 1, &v);
+        CHECK(v == 0xA9, "m2m: the temporary register holds the last byte moved (A9h)");
+        CHECK(dma.ch[1].cur_count == 0xFFFF && dma.ch[0].cur_count == 0xFFFF,
+              "m2m: channel 1's count ran out; channel 0's was not consulted");
+        CHECK(dma.ch[0].cur_addr == 0x900A, "m2m: channel 0's address stepped ten times");
+        vdd_bus_io(&bus, 0x08, 1, 1, &s);
+        CHECK((s & 0x0F) == 0x02 && dma.req[0] == 0, "m2m: TC on channel 1, request cleared");
+
+        /* address hold: channel 0 stays on one byte -- a block fill */
+        program(&bus, 0, 0x79003, 0, 0x80 | DMA_MODE_XFER_READ);
+        program(&bus, 1, 0x7A000, 15, 0x80 | DMA_MODE_XFER_WRITE);
+        v = DMA_CMD_MEM2MEM | DMA_CMD_ADDRHOLD; vdd_bus_io(&bus, 0x08, 1, 0, &v);
+        v = 0x04; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(g_flat[0x7A000] == 0xA3 && g_flat[0x7A00F] == 0xA3 && dma.ch[0].cur_addr == 0x9003,
+              "m2m + address hold: sixteen copies of one byte, channel 0 never moved");
+
+        /* channel 1's request alone does not start the copy */
+        program(&bus, 1, 0x7A000, 3, 0x80 | DMA_MODE_XFER_WRITE);
+        g_flat[0x7A000] = 0x00;
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(g_flat[0x7A000] == 0x00 && dma.ch[1].cur_count == 3,
+              "m2m: a request on channel 1 alone starts nothing");
+        v = 0x01; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+
+        /* without command bit 0, channel 0's request is an ordinary device-less one */
+        v = 0; vdd_bus_io(&bus, 0x08, 1, 0, &v);
+        program(&bus, 0, 0x79000, 1, 0x80 | DMA_MODE_XFER_VERIFY);
+        g_flat[0x7A001] = 0x55;
+        v = 0x04; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        CHECK(dma.ch[0].cur_count == 0xFFFF && dma.ch[0].cur_addr == 0x9002 && g_flat[0x7A001] == 0x55,
+              "no command bit 0: channel 0's request is an ordinary block, no copy");
+
+        /* master clear clears the temporary register */
+        v = 0; vdd_bus_io(&bus, 0x0D, 1, 0, &v);
+        v = 0xEE; vdd_bus_io(&bus, 0x0D, 1, 1, &v);
+        CHECK(v == 0, "temporary register: master clear clears it");
+    }
+
+    /* ── T15: STATUS SHOWS A SOFTWARE REQUEST, AND IT RAISES HRQ. #246. ───────── */
+    {
+        uint32_t s;
+        vdd_dma_reset(&dma);
+        program(&bus, 1, 0x78000, 3, 0x80 | DMA_MODE_XFER_VERIFY);
+        v = DMA_CMD_DISABLE; vdd_bus_io(&bus, 0xD0, 1, 0, &v);     /* cascade off */
+        v = 0x05; vdd_bus_io(&bus, 0x09, 1, 0, &v);
+        vdd_bus_io(&bus, 0x08, 1, 1, &s);
+        CHECK((s & 0xF0) == 0x20, "status 08h: a pending software request shows as DRQ1");
+        vdd_bus_io(&bus, 0xD0, 1, 1, &s);
+        CHECK((s & 0x10) == 0x10, "status D0h: and controller 1 raises HRQ for it");
+        v = 0; vdd_bus_io(&bus, 0xD0, 1, 0, &v);
+        vdd_bus_io(&bus, 0x08, 1, 1, &s);
+        CHECK(s == 0x02, "status 08h: served on re-enable -- TC1, nothing pending");
     }
 
     printf("-- %d checks, %d failures --\n", total, fails);
