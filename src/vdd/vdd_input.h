@@ -124,7 +124,27 @@ typedef struct input_state {
     uint8_t  sc_irq_up;         /* IRQ1 raised for the byte at the head, not yet popped */
     uint32_t sc_held_reads;     /* port 60h reads answered with the same byte (held) */
     uint8_t  layout;            /* #136: 0 US, 1 UK, 2 German, 3 French (SET_KBLAYOUT) */
+    uint8_t  e1_pending;        /* #254: bytes left of an E1 (Pause) sequence      */
+    uint32_t bios_actions[6];   /* #254: KB_ACT_* raised, by kind (STAGE2 counter)  */
 } input_state;
+
+/* ── #254: WHAT THE BIOS INT 09h DOES BESIDES STORE A KEY. ───────────────────────────
+     vdd_input_bios_consume() returns one of these; the caller that can run guest code
+     (the V86 INT 09h arm) resumes the guest in the matching BIOS routine -- INT 1Bh for
+     Ctrl-Break, INT 05h for Print Screen, INT 15h AH=85h for SysReq, the pause loop.
+     The BDA side (ring flush, 0040:0071, 0040:0018) is already done by then. */
+#define KB_ACT_NONE    0
+#define KB_ACT_BREAK   1        /* Ctrl-Break: INT 1Bh (0000h stored, 0071h bit 7)  */
+#define KB_ACT_PRTSC   2        /* Print Screen: INT 05h                            */
+#define KB_ACT_SYSRQ_D 3        /* SysReq pressed:  INT 15h AX=8500h                */
+#define KB_ACT_SYSRQ_U 4        /* SysReq released: INT 15h AX=8501h                */
+#define KB_ACT_PAUSE   5        /* Pause: spin until 0040:0018 bit 3 clears         */
+/* The pause flag must not outlive a caller that cannot run the loop (PM, nested). */
+void vdd_input_pause_cancel(input_state *st);
+/* #254: a ring entry as DOS's CON reads it -- the grey-key E0 forms folded to the
+   83-key ones (AL E0h -> 00h, scan E0h -> the keypad Enter / slash scan), so a
+   DOS line editor never sees 0E0h as a character. */
+uint16_t vdd_input_dos_key(uint16_t key);
 #define KBD_XFER_US 900u        /* ~11 bits at the keyboard's ~12 kHz clock       */
 /* Present the next queued byte once the transfer delay has passed: raises IRQ1 if one
    is not already up. Cheap when nothing is queued; the host calls it every exec-loop
@@ -151,7 +171,7 @@ int  vdd_input_sc_pending(const input_state *st);     /* 1 if a scancode waits  
    keys, which is what makes an arrow an arrow) and stores it in the ring at 0040:001E.
    It used to consume the byte and DISCARD it -- the FIFO drained, so keystrokes kept
    interrupting, but a guest that had not hooked INT 09h could never see a key at all. */
-void vdd_input_bios_consume(input_state *st);
+int  vdd_input_bios_consume(input_state *st);         /* -> KB_ACT_* (#254)     */
 
 int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);

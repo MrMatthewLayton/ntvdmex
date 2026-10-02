@@ -35,10 +35,10 @@ calls that exist to tell a grey arrow from a keypad arrow, cannot.
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
-| §1 INT 16h functions | 14 | 9 | 1 | — | 1 | 3 |
-| §2 BDA keyboard fields | 10 | 2 | 2 | — | 5 | 1 |
-| §3 INT 09h BIOS handler | 15 | 8 | 1 | — | 5 | 1 |
-| **Total** | **39** | **19** | **4** | **—** | **11** | **5** |
+| §1 INT 16h functions | 14 | 10 | — | — | 1 | 3 |
+| §2 BDA keyboard fields | 10 | 6 | — | — | 3 | 1 |
+| §3 INT 09h BIOS handler | 15 | 11 | 2 | — | 1 | 1 |
+| **Total** | **39** | **27** | **2** | **—** | **5** | **5** |
 
 ---
 
@@ -60,7 +60,7 @@ PM BOP arm (`main.c:22240-22257`). Dispatcher: `int16` (`vdd_input.c:664-738`).
 | `0Ah` | keyboard ID → BX | **IMPL** | `:728-733`, `41ABh` (MF2 behind a translating 8042), as `09h` bit 4 promises | untested — never compared; input_test `:325` |
 | `10h` | read key, enhanced | **IMPL** | `:680-683`, unfiltered. Same blocking arms as `00h`. ⚠ But see §3: the grey-key `E0` forms it should return are never stored | provisional (`16.10.enh`); input_test `:151-152` |
 | `11h` | check key, enhanced | **IMPL** | `:691-694` | provisional (`16.11.enh`, `.empty`); input_test `:144-148` |
-| `12h` | extended shift flags → AX | **PART** | `:698-702`: AL right; **AH is the raw byte at `0040:0018`**, which nothing writes (§2), and whose layout is not `AH`'s anyway — `AH` bit 2/3 are **right** Ctrl/Alt and bit 7 SysReq, where `0040:0018` has SysReq at bit 2, Pause at bit 3 and Insert at bit 7. So `AH` is always `00h` | provisional (`16.12.ext`) — ⚠ **agrees by luck**: nothing is held when the probe asks |
+| `12h` | extended shift flags → AX | **IMPL** | #254: `AH` is built in its own layout from `0040:0018` (bits 0/1/4–6; SysReq bit 2 → `AH` bit 7) and `0040:0096` bits 2/3 (right Ctrl/Alt), which INT 09h now maintains. It used to copy `0018` whole | **oracle** (`p_kbd2`: the probe writes the BDA bytes and asks) |
 | `20h`–`22h` | 122-key keyboard calls | **N/A** | not claimed (`09h` bit 6 clear); the AMI BIOS does not offer them | — |
 | — | unknown `AH` | **IMPL** | `:734-736`: `ZF=1`, registers untouched — never a phantom key | input_test `:155` |
 | — | the wait loop calls INT 15h `AH=90h` (device busy) | **MISS** | the AT BIOS calls it while `00h`/`10h` waits so a multitasker can switch tasks; ours never does | — |
@@ -72,15 +72,15 @@ The BDA is guest memory at `0040:0000`; the VDD writes it through `g_in.bda`
 
 | Offset | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `0017h` | shift flags | **PART** | bits 0–6 (shifts, Ctrl, Alt, Scroll/Num/Caps toggles) are maintained by `bios_translate` (`vdd_input.c:404-412`). **Bit 7, Insert active, is never toggled** — there is no flag for it (`:372-378`); `52h` only stores a keystroke | provisional (`16.02.shift`) |
-| `0018h` | extended shift flags (left Ctrl/Alt held, SysReq, Pause, keys held) | **MISS** | only cleared at reset (`:769`); no writer anywhere | — |
+| `0017h` | shift flags | **IMPL** | bits 0–6 by `bios_translate`; Ctrl/Alt (bits 2/3) follow BOTH sides' held bits (#254: releasing left Ctrl while right is held no longer clears Ctrl); lock keys toggle once per press, not per typematic repeat; bit 7 Insert toggles on an Insert press (#254) | provisional (`16.02.shift`); input_test T12 |
+| `0018h` | extended shift flags (left Ctrl/Alt held, SysReq, Pause, keys held) | **IMPL** | #254: all eight bits maintained by `bios_translate` | input_test T12; `p_kbd2` (via `AH=12h`) |
 | `0019h` | Alt+keypad accumulator | **MISS** | the keypad rows' Alt column stores nothing (`:150-152`, `:227-237`), so Alt+0+6+5 does not type `A` | — |
 | `001Ah`/`001Ch` | ring head / tail | **IMPL** | `:9-67`; a pointer pair the guest has scribbled on is reset rather than trusted (`:27-31`) | provisional (`bda.buffer`) |
 | `001Eh`–`003Dh` | the 16-slot ring | **IMPL** | `BDA_KB_START`/`END` (`vdd_input.h:30-31`); 15 usable slots, wrap at the end (`:16-17`) | provisional (`ring.wrap.*`); input_test `:84-86` |
-| `0071h` | Ctrl-Break flag (bit 7) | **MISS** | no writer (§3) | — |
+| `0071h` | Ctrl-Break flag (bit 7) | **IMPL** | #254: set by Ctrl-Break | input_test T12 |
 | `0072h` | reset flag (`1234h` = warm boot) | **N/A** | a VDM is never rebooted; nothing reads it | — |
 | `0080h`/`0082h` | ring start / end pointers | **MISS** | **nothing in `src/` writes or reads them**: the ring wraps at the constants. A TSR that enlarges the keyboard buffer by moving these is ignored. The probe's `001E`/`003E` agreed because the values were already there, not because we model them | provisional (`bda.buffer`) — the value, not the mechanism |
-| `0096h` | keyboard mode / type | **PART** | bit 4 (enhanced keyboard) is set at reset (`:774`). Bits 0/1 (last code was `E1`/`E0`) are never written | provisional (`bda.enhanced`) |
+| `0096h` | keyboard mode / type | **IMPL** | bit 4 (enhanced) at reset; #254: bits 0/1 (last code E1/E0) and 2/3 (right Ctrl/Alt held) maintained | provisional (`bda.enhanced`); input_test T12 |
 | `0097h` | LED / keyboard status | **MISS** | no writer; LED commands to the keyboard are not sent either ([kbc.md](kbc.md) §5) | — |
 
 ## 3. The BIOS INT 09h handler
@@ -98,13 +98,13 @@ handler reflected to it: `main.c:22303-22319`.
 | Modifier and lock state into `0040:0017` | **IMPL** | `:404-412` (Insert excepted, §2) | provisional |
 | Four columns (plain / Shift / Ctrl / Alt), Caps for letters, NumLock for the keypad | **IMPL** | `sc_key` (`:154-246`), precedence `:419-443`. From the IBM table, not from a machine | untested; input_test T10 (`:187`) pins the table |
 | Grey keys: Alt forms (`9B00h` …) | **IMPL** | `sc_ext_alt` (`:250-260`) | untested |
-| Grey keys: plain / Shift **`E0` forms** (`4BE0h`, keypad Enter `E00Dh`, keypad `/` `E02Fh`) | **PART** | ⛔ `sc_ext_plain` (`:262-265`) stores `4B00h`, `1C0Dh`, `352Fh` — the **83-key** forms. `kb_compat` (`:651-657`) rewrites `E0` forms for `AH=00h/01h`, but nothing ever produces one, so `AH=10h/11h` cannot tell grey Left from keypad Left. input_test `:339` pushes `4BE0h` by hand, so it does not catch this | untested |
+| Grey keys: plain / Shift / Ctrl **`E0` forms** (`4BE0h`, keypad Enter `E00Dh`, keypad `/` `E02Fh`, Ctrl+grey Left `73E0h`) | **IMPL** | #254: `sc_ext_plain`/`sc_ext_ctrl`; `kb_compat` folds them back for `AH=00h/01h`, and DOS's CON reads through `vdd_input_dos_key` (same fold), so INT 21h input is unchanged | input_test T7/T10/T12 — ⚠ not oracle-measured: a headless oracle cannot press a key |
 | Keyboard layouts (UK / German / French) | **IMPL** | #136, `:266-343`, `:430-442`; dead keys not composed. An extension, not a BIOS unit | untested |
 | INT 15h `AH=4Fh` keyboard intercept | **MISS** | never called. The `C0h` system table says so honestly (feature bit 4 clear, `main.c:27524`) | — |
-| Ctrl-Break → INT 1Bh, `0000h` in the ring, `0071h` bit 7 | **MISS** | scan `46h` only toggles Scroll Lock (`:412`), with or without Ctrl or `E0` | — |
-| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **MISS** | `E1` is dropped (`:401`); the host never sends one (`main.c:6601-6602` sends only `E0` prefixes) | — |
-| Print Screen → INT 05h | **MISS** | INT 05h is never called. Alt+SysRq `54h` stores nothing (`:239`); `E0 37` goes through `sc_ext_plain` and stores **`3700h`**, a keystroke the BIOS never stores | — |
-| SysReq → INT 15h `AH=85h` | **MISS** | | — |
+| Ctrl-Break → INT 1Bh, `0000h` in the ring, `0071h` bit 7 | **IMPL** | #254: Ctrl + `46h` (E0 or not): ring emptied, `0000h` stored, `0071h` bit 7, then INT 1Bh run as guest code (`bios_kbdact.asm`) — skipped if IVT[1Bh] lands on a ROM BOP | input_test T12, kbdact_test |
+| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **PART** | #254: the BIOS side is done (E1 sequence, Ctrl+NumLock, the spin loop with IF=1, the next keystroke ends it and is discarded). ⛔ **Our host never sends `E1 1D 45`**: Win32 delivers Pause as a plain `45` (and NumLock as `E0 45`), so the real Pause key still reaches the BIOS as NumLock — a host scancode-mapping change (port 60h bytes), left for a deliberate decision | input_test T12, kbdact_test |
+| Print Screen → INT 05h | **PART** | #254: `E0 37` calls INT 05h (guest code) and stores nothing (was `3700h`); Ctrl+PrtSc stores `7200h`. ⚠ No BIOS print-screen routine of our own behind INT 05h, and Windows usually delivers only the key-UP for PrtSc | input_test T12, kbdact_test |
+| SysReq → INT 15h `AH=85h` | **IMPL** | #254: `54h` press → `AX=8500h`, release → `8501h`, held bit `0018h` bit 2; our INT 15h `85h` default answers `AH=0` CF=0 | input_test T12, kbdact_test; `p_kbd2` (`int15.85.*`) |
 | Ctrl+Alt+Del → reboot | **N/A** | a VDD cannot reboot its host — the same reasoning as 8042 `FEh` ([kbc.md](kbc.md)) | — |
 
 ---
@@ -131,11 +131,9 @@ SeaBIOS said `30h`) and `AH=0Ah` answers `41ABh`, which bit 4 promises.
 
 ## What to fix, in order
 
-1. Store the grey-key `E0` forms (`sc_ext_plain`), so `AH=10h/11h` can tell the two
-   key sets apart — `kb_compat` already undoes them for the 83-key calls.
-2. Maintain `0040:0018` and the Insert bit, and build `AH=12h`'s `AH` from the BIOS
-   layout rather than copying the byte.
-3. Ctrl-Break (INT 1Bh + `0000h`), then the INT 15h `AH=4Fh` intercept (set `C0h`
-   feature bit 4 in the same commit), then Print Screen / SysReq / Pause.
+1. ~~Grey-key `E0` forms; `0040:0018`/`0096`/Insert; `AH=12h`; Ctrl-Break, Print Screen,
+   SysReq, Pause~~ — #254 (BIOS side). Left: the INT 15h `AH=4Fh` intercept (#244); the
+   host sending Pause as `E1 1D 45` (a port-60h change, needs a decision); a BIOS
+   print-screen routine behind INT 05h.
 4. Honour `0040:0080/0082` as the ring bounds.
 5. A PCem row-by-row read of `p_kbd`, to move the provisional rows.

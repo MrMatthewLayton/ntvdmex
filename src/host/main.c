@@ -105,6 +105,9 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_int21.h"
 #include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
 typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
+#include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
+typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
+                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -2723,6 +2726,37 @@ static void lpt_tx_sink(void *ctx, int port, uint8_t b)
 /* #251: DOS's PRN/AUX output when the guest cannot be resumed in the driver code
    (dos_auxprn.h) -- a DPMI client's INT 21h. Same devices, without the IVT hop. */
 static int dos_prnout(void *ctx, uint8_t c) { (void)ctx; return lpt_spool_put(c); }
+/* #254: which bios_kbdact.asm entry a KB_ACT_* runs, or -1 for none.
+   ⛔ NEVER INTO A ROM BOP. A fresh VDM leaves some vectors on the VDM's own ROM at
+     F000, and a handler there that is an NTVDM BOP (`C4 C4 xx`) is not ours: the exec
+     loop refuses a guest-origin BOP and ENDS THE RUN. So INT 1Bh / INT 05h are called
+     only when the vector has left the ROM (hooked by a guest, a TSR or a DOS) and
+     does not land on such a BOP. INT 15h is always ours (DOS_CTAB_SEG). */
+static int kbdact_entry(int act)
+{
+    unsigned vec;
+    switch (act) {
+    case KB_ACT_BREAK:  vec = 0x1B; break;
+    case KB_ACT_PRTSC:  vec = 0x05; break;
+    case KB_ACT_SYSRQ_D: return KBDACT_SYSD;
+    case KB_ACT_SYSRQ_U: return KBDACT_SYSU;
+    case KB_ACT_PAUSE:  return KBDACT_PAUSE;
+    default:            return -1;
+    }
+    {   WORD off = *(volatile WORD *)(ULONG_PTR)(vec * 4);
+        WORD seg = *(volatile WORD *)(ULONG_PTR)(vec * 4 + 2);
+        const volatile BYTE *t = (const volatile BYTE *)(ULONG_PTR)(((DWORD)seg << 4) + off);
+        if ((seg | off) == 0) return -1;
+        /* MEASURED (p_ivtkbd, rig): a fresh VDM has IVT[05h] = F000:FF54 (`E9 3D A4`, a
+           jump deeper into the VDM's ROM) and IVT[1Bh] = F000:FF53 (`CF`). The jump's
+           target is not ours to vouch for, so the VDM's ROM is never entered from
+           here: the call is made only once a guest, a TSR or a DOS has hooked the
+           vector -- which is the case Ctrl-Break / Print Screen handling exists for. */
+        if (seg >= 0xF000) return -1;
+        if (t[0] == 0xC4 && t[1] == 0xC4 && seg != DOS_HDLR_SEG && seg != DOS_CTAB_SEG) return -1;
+    }
+    return act == KB_ACT_BREAK ? KBDACT_BRK : KBDACT_PRT;
+}
 static void dos_auxout(void *ctx, uint8_t c)
 {
     ntvdd_regs r;
@@ -5379,6 +5413,7 @@ static int host_conin(void *ctx)
         got = vdd_input_pop(&g_in, &k);
         HOST_UNLOCK();
         if (got) {
+            k = vdd_input_dos_key(k);           /* #254: grey-key E0 forms -> 83-key */
             if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
             return k & 0xFF;
         }
@@ -7393,6 +7428,7 @@ static int host_coninnb(void *ctx)
     got = vdd_input_pop(&g_in, &k);
     HOST_UNLOCK();
     if (!got) return -1;
+    k = vdd_input_dos_key(k);                   /* #254: grey-key E0 forms -> 83-key */
     if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
     return k & 0xFF;
 }
@@ -22412,7 +22448,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          || (vec >= 0x70 && vec <= 0x77 && async_vec_is_our_stub(vec - 0x70 + 8)))) {
                         uint8_t line = (uint8_t)(vec >= 0x70 ? vec - 0x70 + 8 : vec - 0x08);
                         HOST_LOCK();
-                        if (vec == 0x09) vdd_input_bios_consume(&g_in);  /* take the byte, re-arm if more queued */
+                        /* take the byte, re-arm if more queued. #254: no guest code runs from
+                           here, so a Pause cannot spin -- drop its flag rather than let it
+                           swallow the next key. (Ctrl-Break's ring/0071h part is done.) */
+                        if (vec == 0x09 && vdd_input_bios_consume(&g_in) == KB_ACT_PAUSE)
+                            vdd_input_pause_cancel(&g_in);
                         vdd_pic_eoi(&g_pic, line);   /* the slave's EOI also releases the cascade */
                         HOST_UNLOCK();
                         if (g_pm_irq_reflect_logged < 16) {
@@ -26101,6 +26141,12 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                     g_i15_evt_end = i15_qpc_after_us(us ? us : 1);
                     BCF_CLR();
                 }
+            } else if (ah15 == 0x85) {         /* SysReq key (#254)              */
+                /* The hook our INT 09h now calls on SysReq press (AL=0) / release
+                   (AL=1). The BIOS's own default does nothing and returns AH=0,
+                   CF=0 -- a multitasker hooks it. (p_kbd2 int15.85) */
+                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));
+                BCF_CLR();
             } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
                 /* The default handler: CF=1 and AL untouched, "process this key".
                    A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
@@ -28034,6 +28080,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     {   volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
         unsigned k;
         for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
+        /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
+        for (k = 0; k < sizeof(bios_kbdact_code); ++k) bs[DOS_KBDACT_OFF + k] = bios_kbdact_code[k];
     }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -29911,7 +29959,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
             HOST_LOCK();
-            vdd_input_bios_consume(&g_in);      /* take the byte, re-arm if more queued */
+            int kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
             /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
                  A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
                  acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
@@ -29924,6 +29972,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  EOI'd before chaining: the bit is already clear. */
             vdd_pic_eoi(&g_pic, 1);
             HOST_UNLOCK();
+            /* ── #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
+                 Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
+                 resume the guest in bios_kbdact.asm's routine (after the EOI, as the
+                 BIOS does), which IRETs to the interrupted code. Only guest-side
+                 calls -- nothing here reaches the host. */
+            {   int ko = kbdact_entry(kact);
+                if (ko >= 0) {
+                    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + ko);
+                    continue;
+                }
+                if (kact == KB_ACT_PAUSE) { HOST_LOCK(); vdd_input_pause_cancel(&g_in); HOST_UNLOCK(); }
+            }
             VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
             continue;
         }

@@ -257,11 +257,28 @@ static uint16_t sc_ext_alt(uint8_t code)
     default:   return 0;
     }
 }
-/* A plain E0 key: the two the enhanced BIOS gives an ASCII to (keypad Enter and /),
-   the rest AL=0. */
+/* ── #254: A PLAIN E0 KEY, IN THE ENHANCED BIOS's OWN FORM. ─────────────────────────
+     The grey cluster is what AH=10h/11h exist to tell apart from the keypad, and the
+     enhanced BIOS marks it in the code itself: AL=E0h for the grey arrows / nav keys
+     (grey Left = 4BE0h, keypad Left = 4B00h), and AH=E0h for keypad Enter (E00Dh) and
+     keypad slash (E02Fh). This stored the 83-key forms (4B00h, 1C0Dh, 352Fh), so the
+     two clusters were indistinguishable. kb_compat() folds these back for AH=00h/01h,
+     as IBM's K1S translation does; DOS's CON reads through vdd_input_dos_key(). */
 static uint16_t sc_ext_plain(uint8_t code)
 {
-    return (uint16_t)((code << 8) | (code == 0x1C ? 0x0D : code == 0x35 ? '/' : 0));
+    if (code == 0x1C) return 0xE00D;                 /* keypad Enter */
+    if (code == 0x35) return 0xE02F;                 /* keypad /     */
+    return (uint16_t)((code << 8) | 0xE0);
+}
+/* ...and with Ctrl: the keypad's Ctrl code with AL=E0h for the grey nav keys (Ctrl+
+   grey Left = 73E0h), keypad Enter E00Ah, keypad slash 9500h (RBIL's INT 16h table). */
+static uint16_t sc_ext_ctrl(uint8_t code)
+{
+    if (code == 0x1C) return 0xE00A;
+    if (code == 0x35) return 0x9500;
+    if (code >= 0x47 && code <= 0x53 && code != 0x4A && code != 0x4C && code != 0x4E)
+        return (uint16_t)((sc_key[code][2] & 0xFF00) | 0xE0);
+    return 0;
 }
 /* ── #136: KEYBOARD LAYOUTS, TAKEN FROM WINDOWS XP'S OWN TABLES. ─────────────────────
      The table above is the US BIOS. A layout only changes what the PLAIN and SHIFT
@@ -387,9 +404,51 @@ static void kb_flags_set(input_state *st, uint8_t bit, int on)
     else    st->bda[BDA_KB_FLAGS] = (uint8_t)(st->bda[BDA_KB_FLAGS] & ~bit);
 }
 
+/* ── #254: THE REST OF THE BIOS's KEYBOARD STATE. ─────────────────────────────────────
+     0040:0018 (KB_FLAG_1): bit 0 LEFT Ctrl held, 1 LEFT Alt held, 2 SysReq held,
+       3 PAUSE active, 4 Scroll held, 5 NumLock held, 6 Caps held, 7 Insert held.
+     0040:0096 (KB_FLAG_3): bit 0 last code was E1h, 1 last code was E0h, 2 RIGHT Ctrl
+       held, 3 RIGHT Alt held, 4 enhanced keyboard (set at reset).
+     0040:0017 bit 2/3 (Ctrl/Alt) are "either side", so they follow the two held bits
+     rather than the last make/break -- releasing left Ctrl while right is held used to
+     clear Ctrl. The lock keys toggle once per PRESS: a held key's typematic repeats
+     arrive as more makes, and the "held" bit is what stops them re-toggling. */
+#define KF1_LCTRL  0x01
+#define KF1_LALT   0x02
+#define KF1_SYSRQ  0x04
+#define KF1_PAUSE  0x08
+#define KF1_SCROLL 0x10
+#define KF1_NUM    0x20
+#define KF1_CAPS   0x40
+#define KF1_INS    0x80
+#define KF3_E1     0x01
+#define KF3_E0     0x02
+#define KF3_RCTRL  0x04
+#define KF3_RALT   0x08
+#define KF_INS     0x80
+#define BDA_KB_FLAGS3 0x96
+#define BDA_BREAK     0x71
+
+static uint8_t kbf(const input_state *st, int off) { return st->bda ? st->bda[off] : 0; }
+static void kbf_set(input_state *st, int off, uint8_t bit, int on)
+{
+    if (!st->bda) return;
+    if (on) st->bda[off] = (uint8_t)(st->bda[off] | bit);
+    else    st->bda[off] = (uint8_t)(st->bda[off] & ~bit);
+}
+/* A lock key: toggle `lock` in 0017 on the first make only; track `held` in 0018. */
+static void kb_lock_key(input_state *st, uint8_t lock, uint8_t held, int is_break)
+{
+    if (is_break) { kbf_set(st, BDA_KB_FLAGS2, held, 0); return; }
+    if (kbf(st, BDA_KB_FLAGS2) & held) return;           /* typematic repeat */
+    kbf_set(st, BDA_KB_FLAGS2, held, 1);
+    kb_flags_set(st, lock, !(kb_flags(st) & lock));
+}
+
 /* One scancode -> the BIOS's view of it: update the shift state, and for a make code
-   that denotes a character or a named key, store AH=scancode AL=ascii in the ring. */
-static void bios_translate(input_state *st, uint8_t sc)
+   that denotes a character or a named key, store AH=scancode AL=ascii in the ring.
+   Returns a KB_ACT_* for the caller to run (#254). */
+static int bios_translate(input_state *st, uint8_t sc)
 {
     int is_break = (sc & 0x80) != 0;
     uint8_t code = (uint8_t)(sc & 0x7F);
@@ -397,23 +456,114 @@ static void bios_translate(input_state *st, uint8_t sc)
     uint8_t fl, ascii = 0;
     uint16_t key;
 
-    if (sc == 0xE0) { st->ext_pending = 1; return; }   /* prefix: the next code is extended */
-    if (sc == 0xE1) { st->ext_pending = 0; return; }   /* Pause: ignored, not a key event   */
+    if (sc == 0xE0) {                                  /* prefix: the next code is extended */
+        st->ext_pending = 1;
+        kbf_set(st, BDA_KB_FLAGS3, KF3_E0, 1);
+        return KB_ACT_NONE;
+    }
+    if (sc == 0xE1) {                                  /* Pause: E1 1D 45 / E1 9D C5        */
+        st->ext_pending = 0; st->e1_pending = 2;
+        kbf_set(st, BDA_KB_FLAGS3, KF3_E1, 1);
+        return KB_ACT_NONE;
+    }
     st->ext_pending = 0;
+    kbf_set(st, BDA_KB_FLAGS3, KF3_E0 | KF3_E1, 0);
+    if (st->e1_pending) {
+        /* ── PAUSE. The make sequence is E1 1D 45, the break E1 9D C5, and neither is
+             a Ctrl or a NumLock (the E1 is there so an old BIOS reads it as
+             Ctrl+NumLock, the 83-key pause). The BIOS sets 0018 bit 3 and spins in
+             its handler, interrupts on, until the next keystroke. */
+        if (--st->e1_pending) return KB_ACT_NONE;      /* the 1D / 9D                       */
+        if (is_break || (kbf(st, BDA_KB_FLAGS2) & KF1_PAUSE)) return KB_ACT_NONE;
+        kbf_set(st, BDA_KB_FLAGS2, KF1_PAUSE, 1);
+        st->bios_actions[KB_ACT_PAUSE]++;
+        return KB_ACT_PAUSE;
+    }
 
     switch (code) {                                    /* modifiers: state, never a keystroke */
-    case 0x2A: if (!ext) kb_flags_set(st, KF_LSHIFT, !is_break); return;  /* E0 2A is the
-                  fake shift the controller brackets some extended keys with -- not a shift */
-    case 0x36: kb_flags_set(st, KF_RSHIFT, !is_break); return;
-    case 0x1D: kb_flags_set(st, KF_CTRL,   !is_break); return;
-    case 0x38: kb_flags_set(st, KF_ALT,    !is_break); return;
-    case 0x3A: if (!is_break) kb_flags_set(st, KF_CAPS,   !(kb_flags(st) & KF_CAPS));   return;
-    case 0x45: if (!is_break) kb_flags_set(st, KF_NUM,    !(kb_flags(st) & KF_NUM));    return;
-    case 0x46: if (!is_break) kb_flags_set(st, KF_SCROLL, !(kb_flags(st) & KF_SCROLL)); return;
+    case 0x2A: if (!ext) kb_flags_set(st, KF_LSHIFT, !is_break); return KB_ACT_NONE;
+               /* E0 2A is the fake shift the controller brackets some extended keys
+                  with -- not a shift. Likewise E0 36. */
+    case 0x36: if (!ext) kb_flags_set(st, KF_RSHIFT, !is_break); return KB_ACT_NONE;
+    case 0x1D:
+        if (ext) kbf_set(st, BDA_KB_FLAGS3, KF3_RCTRL, !is_break);
+        else     kbf_set(st, BDA_KB_FLAGS2, KF1_LCTRL, !is_break);
+        kb_flags_set(st, KF_CTRL, (kbf(st, BDA_KB_FLAGS2) & KF1_LCTRL) || (kbf(st, BDA_KB_FLAGS3) & KF3_RCTRL));
+        return KB_ACT_NONE;
+    case 0x38:
+        if (ext) kbf_set(st, BDA_KB_FLAGS3, KF3_RALT, !is_break);
+        else     kbf_set(st, BDA_KB_FLAGS2, KF1_LALT, !is_break);
+        kb_flags_set(st, KF_ALT, (kbf(st, BDA_KB_FLAGS2) & KF1_LALT) || (kbf(st, BDA_KB_FLAGS3) & KF3_RALT));
+        return KB_ACT_NONE;
+    case 0x3A: kb_lock_key(st, KF_CAPS, KF1_CAPS, is_break); return KB_ACT_NONE;
+    case 0x45:
+        /* ⚠ Plain 45 is NumLock on the keyboard; our host sends NumLock as E0 45 (the
+             Win32 extended bit), so both forms are NumLock here. Ctrl + a plain 45 is
+             the 83-key PAUSE. */
+        if (!ext && !is_break && (kb_flags(st) & KF_CTRL)) {
+            if (kbf(st, BDA_KB_FLAGS2) & KF1_PAUSE) return KB_ACT_NONE;
+            kbf_set(st, BDA_KB_FLAGS2, KF1_PAUSE, 1);
+            st->bios_actions[KB_ACT_PAUSE]++;
+            return KB_ACT_PAUSE;
+        }
+        kb_lock_key(st, KF_NUM, KF1_NUM, is_break); return KB_ACT_NONE;
+    case 0x46:
+        /* ── CTRL-BREAK. The Break key sends E0 46 with Ctrl held (and Ctrl+Scroll Lock
+             is Break on the 83-key board). The BIOS empties the ring, sets 0040:0071
+             bit 7, calls INT 1Bh, and stores 0000h. Not a Scroll Lock toggle. */
+        if (!is_break && (kb_flags(st) & KF_CTRL)) {
+            if (st->bda) {
+                st->bda[BDA_KB_HEAD] = st->bda[BDA_KB_TAIL];
+                st->bda[BDA_KB_HEAD + 1] = st->bda[BDA_KB_TAIL + 1];
+                st->bda[BDA_BREAK] = (uint8_t)(st->bda[BDA_BREAK] | 0x80);
+            }
+            vdd_input_push(st, 0x0000);
+            st->bios_actions[KB_ACT_BREAK]++;
+            return KB_ACT_BREAK;
+        }
+        if (ext) return KB_ACT_NONE;                   /* E0 46 without Ctrl: nothing    */
+        kb_lock_key(st, KF_SCROLL, KF1_SCROLL, is_break); return KB_ACT_NONE;
+    case 0x54:
+        /* ── SYSREQ (Alt+Print Screen). Held bit 0018 bit 2; INT 15h AX=8500h on the
+             press, 8501h on the release. Stores nothing. */
+        if (is_break) {
+            if (!(kbf(st, BDA_KB_FLAGS2) & KF1_SYSRQ)) return KB_ACT_NONE;
+            kbf_set(st, BDA_KB_FLAGS2, KF1_SYSRQ, 0);
+            st->bios_actions[KB_ACT_SYSRQ_U]++;
+            return KB_ACT_SYSRQ_U;
+        }
+        if (kbf(st, BDA_KB_FLAGS2) & KF1_SYSRQ) return KB_ACT_NONE;   /* repeat */
+        kbf_set(st, BDA_KB_FLAGS2, KF1_SYSRQ, 1);
+        st->bios_actions[KB_ACT_SYSRQ_D]++;
+        return KB_ACT_SYSRQ_D;
+    case 0x52:
+        /* ── INSERT. 0018 bit 7 while held; 0017 bit 7 toggles on the press when the
+             key is acting as Insert (grey, or keypad with NumLock and Shift agreeing)
+             and Alt/Ctrl are up. The keystroke is stored as well. */
+        if (is_break) { kbf_set(st, BDA_KB_FLAGS2, KF1_INS, 0); return KB_ACT_NONE; }
+        fl = kb_flags(st);
+        if (!(kbf(st, BDA_KB_FLAGS2) & KF1_INS) && !(fl & (KF_ALT | KF_CTRL))
+            && (ext || !(fl & KF_NUM) == !(fl & (KF_LSHIFT | KF_RSHIFT))))
+            kb_flags_set(st, KF_INS, !(fl & KF_INS));
+        kbf_set(st, BDA_KB_FLAGS2, KF1_INS, 1);
+        break;
     default: break;
     }
-    if (is_break) return;                              /* releases change no buffer content */
-    if (code > SC_TABLE_MAX || code == 0) return;
+    if (is_break) return KB_ACT_NONE;                  /* releases change no buffer content */
+    /* ── WHILE PAUSED, the next keystroke ends the pause and is thrown away. */
+    if (kbf(st, BDA_KB_FLAGS2) & KF1_PAUSE) {
+        kbf_set(st, BDA_KB_FLAGS2, KF1_PAUSE, 0);
+        return KB_ACT_NONE;
+    }
+    /* ── PRINT SCREEN: E0 37 (the grey key). Ctrl+PrtSc is the 7200h keystroke; on
+         its own it calls INT 05h and stores nothing (it used to store 3700h). */
+    if (ext && code == 0x37) {
+        if (kb_flags(st) & KF_CTRL) { vdd_input_push(st, 0x7200); return KB_ACT_NONE; }
+        if (kb_flags(st) & KF_ALT)  return KB_ACT_NONE;
+        st->bios_actions[KB_ACT_PRTSC]++;
+        return KB_ACT_PRTSC;
+    }
+    if (code > SC_TABLE_MAX || code == 0) return KB_ACT_NONE;
 
     fl = kb_flags(st);
     /* ── THE COLUMN IS DECIDED BY PRECEDENCE: Alt beats Ctrl beats Shift. ────────────
@@ -421,7 +571,7 @@ static void bios_translate(input_state *st, uint8_t sc)
          what makes Alt+Shift+F still 2100h. */
     if (ext) {
         if      (fl & KF_ALT)  key = sc_ext_alt(code);
-        else if (fl & KF_CTRL) key = sc_key[code][2];
+        else if (fl & KF_CTRL) key = sc_ext_ctrl(code);
         else                   key = sc_ext_plain(code);   /* Shift changes nothing */
     } else if (fl & KF_ALT) {
         key = sc_key[code][3];
@@ -443,6 +593,18 @@ static void bios_translate(input_state *st, uint8_t sc)
     }
     if (key) vdd_input_push(st, key);                  /* 0 = the BIOS stores nothing */
     (void)ascii;
+    return KB_ACT_NONE;
+}
+
+void vdd_input_pause_cancel(input_state *st)
+{ kbf_set(st, BDA_KB_FLAGS2, KF1_PAUSE, 0); }
+
+uint16_t vdd_input_dos_key(uint16_t key)
+{
+    uint8_t sc = (uint8_t)(key >> 8), ch = (uint8_t)key;
+    if (sc == 0xE0) return (uint16_t)(((ch == 0x0D || ch == 0x0A) ? 0x1C00 : 0x3500) | ch);
+    if (ch == 0xE0 && sc != 0) return (uint16_t)(sc << 8);
+    return key;
 }
 
 /* The BIOS INT 09h arm. Normally the byte is still in the FIFO; but a guest that hooked
@@ -450,22 +612,23 @@ static void bios_translate(input_state *st, uint8_t sc)
    and the real BIOS would simply read the same byte again from the 8042. So: FIFO first,
    the owed byte second, and nothing if neither -- a spurious INT 09h with no key must
    not re-translate a stale byte. */
-void vdd_input_bios_consume(input_state *st)
+int vdd_input_bios_consume(input_state *st)
 {
     uint8_t sc;
+    int act;
     /* Chained after a hook that read the byte: the output buffer still shows that
        byte (the keyboard has not sent the next one yet), so that is what the BIOS
        reads -- NOT the next queued byte, which belongs to the next interrupt. */
     if (st->sc_bios_owed) {
         st->sc_bios_owed = 0;
         st->sc_owed_served++;
-        bios_translate(st, st->sc_last);
-        return;
+        return bios_translate(st, st->sc_last);
     }
-    if (!sc_avail(st)) return;              /* spurious: nothing presented           */
+    if (!sc_avail(st)) return KB_ACT_NONE;  /* spurious: nothing presented           */
     sc = sc_pop(st);
-    bios_translate(st, sc);                 /* <- what the stub never did: make it a KEY */
+    act = bios_translate(st, sc);           /* <- what the stub never did: make it a KEY */
     vdd_input_poll(st);                     /* next byte: now (no clock) or after the hold */
+    return act;
 }
 
 /* "Is a byte presented?" -- OBF, as the host's delivery gates ask it. */
@@ -695,11 +858,16 @@ static void int16(void *self, ntvdd_regs *r)
     case 0x02:                              /* shift status, from 0040:0017        */
         s_al(r, kb_flags(st)); r->zf = 0;
         break;
-    case 0x12:                              /* extended shift status: AL=0017 AH=0018 */
+    case 0x12: {                            /* extended shift status                  */
+        /* ── #254: AH IS ITS OWN LAYOUT, NOT A COPY OF 0040:0018. ─────────────────────
+             AH: 0 LCtrl 1 LAlt 2 RCtrl 3 RAlt 4 Scroll 5 Num 6 Caps 7 SysReq (held).
+             0018 has SysReq at bit 2, Pause at 3 and Insert at 7; the right-hand keys
+             live in 0096 bits 2/3. This copied 0018 whole, which nothing wrote. */
+        uint8_t f1 = kbf(st, BDA_KB_FLAGS2), f3 = kbf(st, BDA_KB_FLAGS3);
         s_al(r, kb_flags(st));
-        s_ah(r, st->bda ? st->bda[BDA_KB_FLAGS2] : 0);
+        s_ah(r, (uint8_t)((f1 & 0x73) | (f3 & 0x0C) | ((f1 & KF1_SYSRQ) ? 0x80 : 0)));
         r->zf = 0;
-        break;
+        break; }
     case 0x03:                              /* set typematic rate/delay (AL=05)    */
         /* There is nothing to store: the repeat rate is the host OS's, and the BIOS
            keeps no readable copy of it. What matters is that the call is ANSWERED --
@@ -745,6 +913,7 @@ void vdd_input_reset(void *self)
     st->sc_bios_owed = 0;
     st->sc_hold_until = 0; st->sc_irq_up = 0;
     st->ext_pending = 0;
+    st->e1_pending = 0;
     /* ── THE CONTROLLER'S POST STATE. ────────────────────────────────────────
          A machine DOS is running on has been through POST, so: the keyboard
          interrupt and translation are enabled in the command byte, and the
@@ -771,7 +940,7 @@ void vdd_input_reset(void *self)
            program checks before it uses INT 16h AH=10h/11h and the F11/F12 and grey
            key codes -- edit.com and QBasic among them. We serve those functions, so
            say so; a zero here makes them fall back to the 83-key subset. */
-        st->bda[0x96] = (uint8_t)(st->bda[0x96] | 0x10);
+        st->bda[0x96] = (uint8_t)((st->bda[0x96] & 0xF0) | 0x10);   /* #254: E0/E1/RCtrl/RAlt clear */
     }
 }
 
