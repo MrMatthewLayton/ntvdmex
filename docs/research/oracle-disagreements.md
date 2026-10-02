@@ -431,3 +431,15 @@ runs has ever issued a deleted-data command.
 would read as **our** mismatch, and the obvious repair would be to delete a command the
 part actually has. Those two opcodes are implemented **from the spec and confirmed by no
 machine**, and that is stated on the inventory page rather than glossed.
+
+## `p_clock` (GH #250, 2026-10-02) — three disputes, each one emulator against two Microsoft kernels
+
+| Row | 6.22/QEMU | PCem | DOSBox-X | Settled as |
+|---|---|---|---|---|
+| `clk.2b.y2100` AX | `2BFF` | `2BFF` | `2B00` | **refused.** RBIL's range is 1980–2099 and both genuine kernels refuse; DOSBox-X's check is wider. `dosbox-x` abstains. |
+| `clk.1a04.after.2b` DX | `0329` | `0229` | `0229` | **`0229`.** After DOS sets 2004-02-29, QEMU's emulated MC146818 reads back *March* 29 — DOS's own `2Ah` readback of the same date is `021D` on all three, so the fault is QEMU's RTC, not DOS. SeaBIOS/QEMU is not evidence about a BIOS. `msdos622` abstains on this field only. |
+| `clk.midnight.2a` AX/CX/DX | 2000-01-01 Sat | 2000-01-01 Sat | 1999-12-31 Fri | **rolls over.** DOSBox-X's DOS date never turns over at midnight. `dosbox-x` abstains. |
+
+⚠ One race was a probe defect, not a dispute: reading back `23:59:59.99` straight after
+setting it gave `0000` on PCem and `173B` on QEMU — it is one hundredth from midnight. The
+readback now sets `23:59:58.00` instead. All three rationales are in `oracle-rules.json`.

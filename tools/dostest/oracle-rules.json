@@ -2044,6 +2044,56 @@
   "why": "3F6h is the ATA alternate status register, not the FDC's. MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree. Since #179 we OWN the register (00h, BSY clear) -- the condition docs/inventory/sweep.md set for closing this row; before, it was the unclaimed FFh, BSY set, a hang for the ATA's own wait."
  },
  {
+  "probe": "clock",
+  "case": "clk.2b.y2100",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X accepts 2100-01-01 (AL=00); genuine MS-DOS 6.22 under QEMU and on PCem's AMI 486 both refuse it (AL=FF), and RBIL documents the range as 1980-2099 -- DOS's date is a day count from 1980 that its own tables stop at 2099. Two Microsoft kernels plus the spec against one emulator's wider check (GH #250)."
+ },
+ {
+  "probe": "clock",
+  "case": "clk.1a04.after.2b",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "After AH=2Bh 2004-02-29, INT 1Ah AH=04h reads DX=0229 on PCem's real AMI BIOS and on DOSBox-X, but 0329 under QEMU: QEMU's emulated MC146818/SeaBIOS turns a Feb 29 write into March -- a property of that emulated RTC, not of DOS (DOS's own 2Ah readback of the same date agrees on all three). SeaBIOS is a reimplementation and is not evidence about a BIOS (PARITY.md); the real ROM is (GH #250)."
+ },
+ {
+  "probe": "clock",
+  "case": "clk.midnight.2a",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "From 1999-12-31 23:59:59 genuine 6.22 (QEMU and PCem) rolls the date over to 2000-01-01, a Saturday; DOSBox-X keeps answering 1999-12-31 -- its DOS date does not advance at midnight. The probe waits on 0040:006C directly so it never eats the BIOS midnight flag itself. Two Microsoft kernels against one emulator defect (GH #250)."
+ },
+ {
+  "probe": "clock",
+  "case": "clk.midnight.2a",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Same as clk.midnight.2a/AX: DOSBox-X does not turn its DOS date over at midnight (GH #250)."
+ },
+ {
+  "probe": "clock",
+  "case": "clk.midnight.2a",
+  "field": "DX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Same as clk.midnight.2a/AX: DOSBox-X does not turn its DOS date over at midnight (GH #250)."
+ },
+ {
   "probe": "dma2",
   "case": "dma2.*",
   "field": "AX",

@@ -14,6 +14,27 @@
 int g_dos_int21_pm = 0;
 void dos_int21_set_pm(int on) { g_dos_int21_pm = on ? 1 : 0; }
 
+/* ── THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
+     time, moved only by a guest's own set calls. */
+dclk_state g_dos_clock;
+
+void dos_clock_host_now(dclk_t *t)
+{
+    SYSTEMTIME lt;
+    GetLocalTime(&lt);
+    t->year = lt.wYear; t->month = lt.wMonth; t->day = lt.wDay;
+    t->hour = lt.wHour; t->min = lt.wMinute; t->sec = lt.wSecond;
+    t->cs = (unsigned)(lt.wMilliseconds / 10); t->dow = lt.wDayOfWeek;
+}
+
+void dos_clock_read(int64_t off, dclk_t *out)
+{
+    dclk_t host;
+    dos_clock_host_now(&host);
+    if (off == 0) { *out = host; return; }      /* the common case, exactly as before */
+    dclk_read(&host, off, out);
+}
+
 /* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
    row was measured and why this is a table and not a switch. Defaults = the stock
    ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
@@ -410,6 +431,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
     m->hdepth = 0;          /* no EXEC in progress: nothing saved */
+    m->set_ticks = 0; m->ticks_ctx = 0;   /* the host wires these after init (#250) */
     { int k; for (k = 0; k < DOS_V5_PSPS; ++k) m->v5_psp[k] = 0; }
     m->shell_ver_major = 5; m->shell_ver_minor = 0;   /* what XP's COMMAND.COM demands */
     m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
@@ -2446,18 +2468,50 @@ int dos_int21(dos_machine_t *m)
             SETAX((R_AX & 0xFF00) | 0xFF);
         }
     } else if (ah == 0x2A) {                    /* get date: CX=yr DH=mon DL=day AL=dow */
-        SYSTEMTIME t; GetLocalTime(&t);
-        SET16(R_CX, t.wYear);
-        SET16(R_DX, ((t.wMonth & 0xFF) << 8) | (t.wDay & 0xFF));
-        SETAX((R_AX & 0xFF00) | (t.wDayOfWeek & 0xFF));
+        /* The VDM's clock, not the host's: host-now + whatever 2Bh/2Dh set. See
+           dos_clock.h. With nothing set the offset is 0 and this is GetLocalTime. */
+        dclk_t g; dos_clock_read(g_dos_clock.dos_off, &g);
+        SET16(R_CX, g.year);
+        SET16(R_DX, ((g.month & 0xFF) << 8) | (g.day & 0xFF));
+        SETAX((R_AX & 0xFF00) | (g.dow & 0xFF));
         OKCF();
     } else if (ah == 0x2C) {                    /* get time: CH=hr CL=min DH=sec DL=cs */
-        SYSTEMTIME t; GetLocalTime(&t);
-        SET16(R_CX, ((t.wHour & 0xFF) << 8) | (t.wMinute & 0xFF));
-        SET16(R_DX, ((t.wSecond & 0xFF) << 8) | ((t.wMilliseconds / 10) & 0xFF));
+        dclk_t g; dos_clock_read(g_dos_clock.dos_off, &g);
+        SET16(R_CX, ((g.hour & 0xFF) << 8) | (g.min & 0xFF));
+        SET16(R_DX, ((g.sec & 0xFF) << 8) | (g.cs & 0xFF));
         OKCF();
-    } else if (ah == 0x2B || ah == 0x2D) {      /* set date/time -> report success */
-        SETAX(R_AX & 0xFF00);                   /* AL=0 = ok */
+    } else if (ah == 0x2B || ah == 0x2D) {      /* set date / set time */
+        /* ── ★ GH #250: THESE ANSWERED "DONE" AND CHANGED NOTHING. ──────────────────
+             A program that set the date and read it back got today. Now they move the
+             VDM's clock -- an OFFSET from the host's, so the machine's own clock is
+             never touched (dos_clock.h says why that is the only safe shape). AL=FFh
+             for anything DOS refuses, and a refused call leaves the clock alone --
+             p_clock.asm measured both, on 6.22, PCem and DOSBox-X.
+           ► AND THE OTHER TWO CLOCKS FOLLOW, as they do on an AT, because DOS's CLOCK$
+             driver writes them: the RTC (INT 1Ah AH=02h/04h, CMOS 00h-09h) is synced
+             to the new reading, and on a time set the BIOS tick count at 0040:006C is
+             reloaded with the ticks since midnight (p_clock clk.1a02.after.2d,
+             clk.1a00.after.2d, clk.1a04.after.2b). */
+        dclk_t host; int ok;
+        dos_clock_host_now(&host);
+        if (ah == 0x2B) {
+            unsigned y = R_CX & 0xFFFF, mo = (R_DX >> 8) & 0xFF, d = R_DX & 0xFF;
+            ok = dclk_dos_date_ok(y, mo, d);
+            if (ok) dclk_set_date(&host, &g_dos_clock.dos_off, y, mo, d);
+        } else {
+            unsigned h = (R_CX >> 8) & 0xFF, mi = R_CX & 0xFF;
+            unsigned s = (R_DX >> 8) & 0xFF, cs = R_DX & 0xFF;
+            ok = dclk_time_ok(h, mi, s, cs);
+            if (ok) {
+                dclk_set_time(&host, &g_dos_clock.dos_off, h, mi, s, cs);
+                if (m->set_ticks) m->set_ticks(m->ticks_ctx, dclk_ticks(h, mi, s, cs));
+            }
+        }
+        if (ok) g_dos_clock.rtc_off = g_dos_clock.dos_off;
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (unsigned)ah);
+        tp = zput(tp, ok ? " VDM clock set (host clock untouched)\r\n"
+                         : " refused: invalid -> AL=FF, clock unchanged\r\n");
+        SETAX((R_AX & 0xFF00) | (ok ? 0x00 : 0xFF));
         OKCF();
     } else if (ah == 0x71) {                    /* the long-filename API: not here */
         /* ── AH=71h IS A DIFFERENT QUESTION FROM "AN UNDEFINED FUNCTION". (s81) ─────

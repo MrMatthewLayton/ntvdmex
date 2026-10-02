@@ -2112,6 +2112,57 @@ static char g_progname[64];           /* fwd: the status strip's name (defined b
 
 static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
 
+/* ── ★ GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM. ──────
+     `kind` from dos_exe_kind. CreateProcess does what stock's EXEC does with a
+     non-DOS binary: Windows itself routes it -- a PE to Win32, an NE to WOW (which,
+     with NTVDMEX installed, is another NTVDMEX). Command line = the quoted path plus
+     the DOS command tail; the working directory is the process's, which is the DOS
+     current directory.
+   ► WAIT FOR A CONSOLE PROGRAM, NOT FOR A WINDOW. EXEC is synchronous by contract
+     and AH=4Dh then has the child's exit code -- so a console PE is waited for (in
+     its own console window: our DOS screen is not a console it can write to). A GUI
+     PE or an NE is started and EXEC returns at once, as cmd.exe does: a DOS shell
+     frozen until Notepad closes would be the surprising answer.
+     ⚠ UNMEASURED AGAINST STOCK -- that needs a supervised stock run (stock.sh drops
+       the IFEO key). The wait/no-wait split is a decision, flagged on #255.
+   Returns 1 if Windows took it (EXEC succeeds, child rc in m->child_rc); 0 if it
+   would not -- e.g. a "PE" that is a DOS extender's 32-bit image Windows refuses --
+   and the caller then runs the MZ stub, which is what DOS would have done. */
+static int exec_windows(dos_machine_t *m, int kind, unsigned subsys, char **pp)
+{
+    char cmd[MAX_PATH + 160];
+    STARTUPINFOA si; PROCESS_INFORMATION pi;
+    const volatile BYTE *tail = (const volatile BYTE *)
+        (((DWORD)m->exec_tail_seg << 4) + m->exec_tail_off);
+    int n = tail[0] > 126 ? 126 : tail[0], k, wait = (kind == DOS_EXE_PE && subsys == 3);
+    char *q = cmd;
+    DWORD rc = 0;
+    *q++ = '"'; q = zput(q, m->exec_path); *q++ = '"';
+    for (k = 0; k < n && tail[1 + k] != 0x0D; ++k) *q++ = (char)tail[1 + k];
+    *q = 0;
+    for (k = 0; k < (int)sizeof si; ++k) ((char *)&si)[k] = 0;
+    si.cb = sizeof si;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
+                        wait ? CREATE_NEW_CONSOLE : 0, NULL, NULL, &si, &pi)) {
+        *pp = zput(*pp, "  EXEC: Windows would not start it (error 0x");
+        *pp = zhex(*pp, GetLastError());
+        *pp = zput(*pp, ") -- running its MZ stub, as DOS would\r\n");
+        return 0;
+    }
+    *pp = zput(*pp, kind == DOS_EXE_NE ? "  EXEC: a Windows (NE) program -> handed to Windows/WOW"
+                                       : "  EXEC: a Win32 (PE) program -> handed to Windows");
+    *pp = zput(*pp, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
+    if (wait) {
+        while (WaitForSingleObject(pi.hProcess, 100) == WAIT_TIMEOUT)
+            if (!g_running || g_wound_down) break;       /* the host is closing */
+        if (!GetExitCodeProcess(pi.hProcess, &rc) || rc == STILL_ACTIVE) rc = 0;
+        *pp = zput(*pp, "  EXEC: it exited, rc=0x"); *pp = zhex(*pp, rc); *pp = zput(*pp, "\r\n");
+    }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    m->child_rc = (uint16_t)(rc & 0xFF);                 /* AH=4Dh: AH=0 normal end */
+    return 1;
+}
+
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
 static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
 {
@@ -2120,7 +2171,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     uint16_t child = 0, maxpara = 0, want, envseg = 0, envblk = 0;
     dos_image_t img;
     volatile WORD *pfl;
-    int d = g_exec_depth;
+    int d = g_exec_depth, load_high = 0;
 
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
            + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
@@ -2143,6 +2194,19 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     }
     ReadFile(hf, exec_filebuf, sizeof(exec_filebuf), &nread, NULL);
     CloseHandle(hf);
+
+    /* GH #255: a Windows program is Windows's to run (see exec_windows). Load-and-go
+       only: AL=01 asks for an IMAGE in memory and AL=03 for an overlay, and for those
+       the MZ part is the only thing DOS could give. */
+    if (m->exec_mode == 0x00) {
+        unsigned sub = 0;
+        int kind = dos_exe_kind(exec_filebuf, nread, &sub);
+        if (kind != DOS_EXE_DOS && exec_windows(m, kind, sub, &p)) {
+            VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+            *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
+            return p;
+        }
+    }
 
     /* ── AL=03, THE OVERLAY: BRANCH BEFORE ANY OF THE PROCESS MACHINERY. ───────
          It is not a process. No memory is allocated, no PSP is built, no parent
@@ -2234,10 +2298,21 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         p = zput(p, ename); p = zput(p, "]\r\n");
     }
 
-    /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
-       least its minalloc. Probe the largest block by asking for too much. */
+    /* ── HOW MUCH: THE HEADER DECIDES, NOT "EVERYTHING". (GH #255) ─────────────
+         Probe the largest block by asking for too much, then size from it: a .COM
+         takes it all; an MZ gets 10h + image + e_maxalloc (capped at the block), is
+         REFUSED with 8 when 10h + image + e_minalloc does not fit -- before anything
+         is loaded -- and with min = max = 0 takes the whole block and is loaded at
+         its TOP. dos_exec_size has the measurements. Every child used to get the
+         whole block, so a program linked to leave memory for its own children found
+         none, and one that could not fit was loaded anyway. */
     if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
-    want = maxpara;
+    want = 0;
+    if (maxpara && dos_exec_size(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
+        p = zput(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = zhex(p, maxpara);
+        p = zput(p, " paras -> error 8, not loaded\r\n");
+        want = 0;
+    }
     if (!want || dos_alloc(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
         p = zput(p, "  EXEC: no memory\r\n");
         if (envblk) dos_free(NULL, envblk);
@@ -2307,7 +2382,11 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
       dpsp[0x16] = (BYTE)(m->psp_seg & 0xFF);       /* parent PSP */
       dpsp[0x17] = (BYTE)(m->psp_seg >> 8); }
 
-    img = dos_load(NULL, exec_filebuf, nread, child);
+    /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
+    img = dos_load_at(NULL, exec_filebuf, nread, child,
+                      load_high ? (uint16_t)(child + want - dos_image_paras(exec_filebuf, nread)) : 0);
+    if (load_high) { p = zput(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
+                     p = zhex(p, img.cs); p = zput(p, "\r\n"); }
 
     if (m->exec_mode == 0x01) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
@@ -13255,19 +13334,54 @@ static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clo
      CRT does not link in any case), so the host hands it the reading. Local time,
      not UTC: a DOS guest's clock is the wall clock on the machine in front of you,
      and that is what `DATE` and `TIME` and every file timestamp are compared against. */
+/* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_dos_clock.rtc_off,
+     which a guest's INT 1Ah AH=03h/05h or INT 21h AH=2Bh/2Dh sets (dos_clock.h). Zero
+     until a guest sets it, so an untouched VDM reads exactly GetLocalTime as before. */
 static void host_rtc_now(void *ctx, struct vdd_rtc *out)
 {
-    SYSTEMTIME lt;
+    dclk_t g;
     (void)ctx;
-    GetLocalTime(&lt);
-    out->cent  = (unsigned)(lt.wYear / 100);
-    out->year  = (unsigned)(lt.wYear % 100);
-    out->month = (unsigned)lt.wMonth;
-    out->day   = (unsigned)lt.wDay;
-    out->hour  = (unsigned)lt.wHour;
-    out->min   = (unsigned)lt.wMinute;
-    out->sec   = (unsigned)lt.wSecond;
-    out->dow   = (unsigned)lt.wDayOfWeek + 1u;   /* Windows 0=Sunday; the chip 1=Sunday */
+    dos_clock_read(g_dos_clock.rtc_off, &g);
+    out->cent  = g.year / 100u;
+    out->year  = g.year % 100u;
+    out->month = g.month;
+    out->day   = g.day;
+    out->hour  = g.hour;
+    out->min   = g.min;
+    out->sec   = g.sec;
+    out->dow   = g.dow + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
+}
+
+/* INT 1Ah AH=03h (what=0: hour/min/sec) and AH=05h (what=1: century/year/month/day),
+   already decoded from BCD by the PIT. Moves only the RTC's offset: DOS keeps its own
+   clock, as on an AT (p_clock clk.2c.after.1a03 / clk.2a.after.1a05). Returns 0 --
+   the clock untouched -- for a reading no calendar has. */
+static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
+{
+    dclk_t host;
+    (void)ctx;
+    dos_clock_host_now(&host);
+    if (what == 0) {
+        if (!dclk_time_ok(in->hour, in->min, in->sec, 0)) return 0;
+        dclk_set_time(&host, &g_dos_clock.rtc_off, in->hour, in->min, in->sec, 0);
+    } else {
+        unsigned y = in->cent * 100u + in->year;
+        if (!dclk_date_real(y, in->month, in->day)) return 0;
+        dclk_set_date(&host, &g_dos_clock.rtc_off, y, in->month, in->day);
+    }
+    return 1;
+}
+
+/* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
+   AH=01h -- the new count, midnight flag cleared. Under the crystal's lock so it
+   cannot interleave with anything that holds it while touching the count. */
+static void host_set_ticks(void *ctx, uint32_t ticks)
+{
+    (void)ctx;
+    EnterCriticalSection(&g_pit_cs);
+    *(volatile DWORD *)(ULONG_PTR)0x46C = ticks;
+    *(volatile BYTE *)(ULONG_PTR)0x470 = 0;
+    LeaveCriticalSection(&g_pit_cs);
 }
 
 static void host_pit_guard(void *ctx, int enter)
@@ -28830,6 +28944,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit.guard_ctx = NULL;
     g_pit.rtc_now = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
     g_pit.rtc_ctx = NULL;
+    g_pit.rtc_set = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);
@@ -29365,6 +29480,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
+    m.set_ticks = host_set_ticks;               /* AH=2Dh reloads 0040:006C (#250) */
+    m.ticks_ctx = NULL;
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */

@@ -601,11 +601,36 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         s_dx(r, (uint16_t)((pit_bcd(n.month) << 8) | pit_bcd(n.day)));
         r->cf = 0;
         break; }
+    case 0x03:                               /* set RTC time, BCD               */
+    case 0x05: {                             /* set RTC date, BCD               */
+        /* ── GH #250: SET, BUT NOT THE HOST'S CLOCK. ──────────────────────────────
+             These were refused because "we cannot move the host's clock" -- true, and
+             not the question: the VDM's RTC is host-now plus an offset the host keeps
+             (src/dos/dos_clock.h), and setting it moves only that. Measured on 6.22,
+             PCem and DOSBox-X by p_clock.asm: the RTC reads back what was set
+             (clk.1a02.after.1a03, clk.1a04.after.1a05) and DOS's own clock does NOT
+             follow (clk.2c.after.1a03).
+           ⚠ A REAL BIOS STORES WHATEVER IT IS GIVEN; this one cannot store a time no
+             calendar has (invalid BCD, hour 25, February 30), so those are refused
+             with CF=1 and the clock is left alone. DL (the DST flag) is accepted and
+             not kept -- AH=02h reports standard time, see above. */
+        struct vdd_rtc in;
+        unsigned ch = r_cx(r) >> 8, cl = r_cx(r) & 0xFF, dh = r_dx(r) >> 8, dl = r_dx(r) & 0xFF;
+        int what = (r_ah(r) == 0x05);
+        unsigned v[4]; unsigned k; int bad = 0;
+        v[0] = ch; v[1] = cl; v[2] = dh; v[3] = dl;
+        for (k = 0; k < (what ? 4u : 3u); ++k) {
+            if ((v[k] & 0x0F) > 9 || (v[k] >> 4) > 9) bad = 1;
+            v[k] = (v[k] >> 4) * 10 + (v[k] & 0x0F);
+        }
+        in.cent = in.year = in.month = in.day = in.hour = in.min = in.sec = in.dow = 0;
+        if (what) { in.cent = v[0]; in.year = v[1]; in.month = v[2]; in.day = v[3]; }
+        else      { in.hour = v[0]; in.min = v[1]; in.sec = v[2]; }
+        r->cf = (uint8_t)((!bad && st->rtc_set && st->rtc_set(st->rtc_ctx, &in, what)) ? 0 : 1);
+        break; }
     default:
-        /* 03h/05h (set time/date) and 06h/07h (alarm) are deliberately NOT answered:
-           we cannot move the host's clock, and accepting the call with CF=0 would be
-           the "runs but lies" shape -- TIME would report success and change nothing.
-           Unmeasured on the reference too; p_bios.asm is where to add them. */
+        /* 06h/07h (alarm) are not answered here; the alarm lives in the CMOS model
+           (vdd_cmos.c), which a guest can program through ports 70h/71h. */
         break;
     }
 }
@@ -616,6 +641,8 @@ void vdd_pit_reset(void *self)
     pit_state *st = (pit_state *)self;
     vdd_bus *bus = st->bus; uint32_t fus = st->frame_us;
     void (*guard)(void *, int) = st->guard; void *gctx = st->guard_ctx;
+    void (*rnow)(void *, struct vdd_rtc *) = st->rtc_now; void *rctx = st->rtc_ctx;
+    int  (*rset)(void *, const struct vdd_rtc *, int) = st->rtc_set;
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
     st->bus = bus;
@@ -641,6 +668,7 @@ void vdd_pit_reset(void *self)
     st->mode = 3; st->mode_raw = 3;
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
+    st->rtc_now = rnow; st->rtc_ctx = rctx; st->rtc_set = rset;   /* and so does the clock */
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
          On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
          leaves it alone forever; its gate is tied high. A guest that simply READS
