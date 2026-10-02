@@ -338,12 +338,21 @@ static void dos_find_split(const char *pat, char *all, int allsz, BYTE t[11])
 }
 /* FindFirstFileA + skip to the first DOS match; INVALID_HANDLE_VALUE if none (the
    handle is closed then, and *nodir says whether the DIRECTORY itself was missing). */
+/* #34: the Win32 error of the last FindFirstFileA that failed outright, so a drive
+   that is NOT READY (21) can be told from "no such file" -- the first is a critical
+   error and goes to INT 24h, the second is an ordinary answer. 0 = it did not fail. */
+static DWORD s_find_w32;
 static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
                              WIN32_FIND_DATAA *fd, int *nodir)
 {
     HANDLE h = FindFirstFileA(all, fd);
     *nodir = 0;
-    if (h == INVALID_HANDLE_VALUE) { *nodir = (GetLastError() == ERROR_PATH_NOT_FOUND); return h; }
+    s_find_w32 = 0;
+    if (h == INVALID_HANDLE_VALUE) {
+        s_find_w32 = GetLastError();
+        *nodir = (s_find_w32 == ERROR_PATH_NOT_FOUND);
+        return h;
+    }
     while (!dos_find_match(fd, t, mask))
         if (!FindNextFileA(h, fd)) { FindClose(h); return INVALID_HANDLE_VALUE; }
     return h;
@@ -432,6 +441,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
     m->hdepth = 0;          /* no EXEC in progress: nothing saved */
     m->set_ticks = 0; m->ticks_ctx = 0;   /* the host wires these after init (#250) */
+    m->crit_pending = 0; m->crit_active = 0; m->term_type = 0;   /* #34 */
     { int k; for (k = 0; k < DOS_V5_PSPS; ++k) m->v5_psp[k] = 0; }
     m->shell_ver_major = 5; m->shell_ver_minor = 0;   /* what XP's COMMAND.COM demands */
     m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
@@ -631,6 +641,7 @@ int dos_int21(dos_machine_t *m)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
+    m->crit_pending = 0;      /* #34: only ever about THIS call; see the tail */
 
     /* ── ★★ WHO CALLED, OFF THE GUEST STACK. ───────────────────────────────────
          VTIB_CS:EIP is where the HANDLER is, not where the guest is. Last session
@@ -1008,6 +1019,10 @@ int dos_int21(dos_machine_t *m)
                      AX=18 "no more files", not AX=2 "file not found". A missing
                      directory is AX=3. */
                   SETAX(nodir ? 3 : 18);
+                  /* #34: a HARDWARE failure (not ready, write-protected, ...) is its
+                     own DOS code -- Win32 kept DOS's numbers for 19-31 -- and the
+                     dispatcher's tail turns it into an INT 24h. */
+                  if (s_find_w32 >= 19 && s_find_w32 <= 31) SETAX(s_find_w32);
                   ERRCF();
               } else {
                   m->find_h[slot] = hf;
@@ -2564,6 +2579,25 @@ int dos_int21(dos_machine_t *m)
        the guest is about to see. 59h itself is excluded so reading the error
        does not overwrite it. */
     if (ah != 0x59 && (*pfl & 1)) m->last_err = (uint16_t)(R_AX & 0xFFFF);
+
+    /* ── #34: A HARDWARE ERROR IS A CRITICAL ERROR. Codes 19-31 (not ready, write-
+         protected, ...) go to the program's INT 24h before the call returns; the host
+         makes that call (crit_raise in main.c) and acts on the answer. Here we only
+         say so, and what the handler is to be told. Real mode only (a DPMI client's
+         reflection is separate work), and never while a handler is already running:
+         DOS does not nest INT 24h -- inside one, the call just fails. */
+    if ((*pfl & 1) && !g_dos_int21_pm && !m->crit_active
+        && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
+        const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+        int pathcall = (ah == 0x3C || ah == 0x3D || ah == 0x4E || ah == 0x39 || ah == 0x3A
+                        || ah == 0x3B || ah == 0x41 || ah == 0x43 || ah == 0x5A || ah == 0x5B);
+        uint8_t drv = dos_cur_drive(m);
+        if (pathcall && pn[1] == ':') drv = (uint8_t)((pn[0] | 0x20) - 'a');
+        m->crit_pending = 1;
+        m->crit_al = drv;
+        m->crit_ah = dos_crit_ah((unsigned char)ah);
+        m->crit_code = (uint8_t)((R_AX & 0xFF) - 19);
+    }
 
     /* ── AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING. ──────────────
          The entry trace above prints the call; it did not print the RESULT, so a

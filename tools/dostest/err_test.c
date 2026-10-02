@@ -166,6 +166,25 @@ int main(void)
         eq("unmapped keeps the historical 2 (no invention)", d, 0x02);
     }
 
+    /* #34: the INT 24h contract, from tools/dostest/p_crit.asm (6.22 + PCem) */
+    {
+        unsigned short bx; unsigned char ch;
+        int ok = dos_err_classify(0x53, &bx, &ch);
+        eq("crit.4e.fail.59 is a measured row", ok, 1);
+        eq("crit.4e.fail.59 BX=0D04", bx, 0x0D04);
+        eq("crit.4e.fail.59 CH=01", ch, 0x01);
+        eq("crit.4e.fail.int24 AH=1A (find-first)", dos_crit_ah(0x4E), 0x1A);
+        eq("crit.3c.fail.int24 AH=1A (create: a READ of the FAT)", dos_crit_ah(0x3C), 0x1A);
+        eq("ignore is NOT allowed on a path call (bit 5)", dos_crit_ah(0x3D) & 0x20, 0);
+        eq("crit.4e.fail.call AX=0003", dos_crit_fail_ax(0x4E, 2), 0x0003);
+        eq("crit.3d.fail.call AX=0003 (PCem)", dos_crit_fail_ax(0x3D, 2), 0x0003);
+        eq("21 (not ready) is a hardware error", dos_crit_is_hw(21), 1);
+        eq("18 (no more files) is not", dos_crit_is_hw(18), 0);
+        {   unsigned short d = 0;
+            eq("win32 21 -> DOS 21 (identity)", dos_err_from_win32(21, &d), 1);
+            eq("...value", d, 21); }
+    }
+
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }
