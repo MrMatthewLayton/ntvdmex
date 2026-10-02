@@ -155,6 +155,57 @@ DOSBox-X both leave every register untouched** — neither has a DPMI host at al
 
 ---
 
+## ★ Widened (#163, 2026-10-02): KERNEL memory / strings / files, USER, GDI — 99 rows
+
+`tools/wintest/w16.inc` is now the skeleton **once** (manifest, IAT called `call far
+[cs:slot]`, TASKMAN's startup, report through INT 21h, absolute 8.3 output path), so a test
+is its imports and its cases. Five new tests; every ordinal read off
+`guest/ne/{krnl386,user,gdi}.exe` (⚠ `lstrcmp`/`lstrcmpi` are **USER**.430/471, not KERNEL).
+
+**Expected values come from the Windows 3.1 SDK contract**, reduced to what it promises
+(nonzero / ≥ N / sign of a comparison / bytes preserved). What the contract leaves open or
+what describes the machine is emitted as a `*.raw` row with its **stock value OWED** —
+`tools/wintest/stock.sh` needs supervision (it drops the IFEO key) and was not run.
+
+Measured on the rig (host `b0e3b5b9`), runs `runs/s87_ide/w16/`:
+
+| test | rows | match the contract | ⛔ differ | raw / owed |
+|---|---|---|---|---|
+| `w_kmem` — Global/Local alloc, lock, size, realloc, zero-init, free | 16 | 14 | — | `gsize.raw` `0400`, `gflags.raw` `0000` |
+| `w_kstr` — lstrlen/cpy/cat/cpyn/cmp/cmpi, AnsiUpper/Lower, IsChar*, wvsprintf | 18 | 18 | — | — |
+| `w_kfile` — _lcreat/_lwrite/_llseek/_lread/_lclose/_lopen, OpenFile, GetDriveType, dirs | 22 | 18 | `of.cbytes`, `sysdir.colon` | `windir.len` `000A`, `sysdir.len` `0007` |
+| `w_user` — RECT arithmetic, desktop window, metrics | 23 | 17 | `desktop.ok`, `desktop.iswindow` | `cxscreen` `0690`, `cyscreen` `041A`, `dblclick` `01F4`, `syscolor.window` `FFFF` |
+| `w_gdi` — memory DC, mono bitmap, PatBlt/Set/GetPixel, DC defaults | 20 | 17 | `bkmode` | `bitspixel` `0020`, `planes` `0001` |
+
+**What differs, and what it is:**
+- ⛔ **`gdi.bkmode` `0000`** (SDK default OPAQUE = 2): GetBkMode (GDI.76, WOW id `0x4c`) is
+  **UNIMPLEMENTED, STEPPED OVER** in our WOW32 — the log says so; the 0 is the harness
+  sentinel, not an answer.
+- ⛔ **`user.desktop.ok` / `.iswindow` `0000`**: GetDesktopWindow answers NULL **by
+  decision** (`wowuser.h`: "0 travels correctly" into `GetDC`). The SDK contract is a real
+  handle, and `IsWindow` of it TRUE — the decision is now contradicted by a test.
+- ⛔ **`kfile.sysdir.colon` `0000`, `sysdir.len` `0007`**: GetSystemDirectory (KERNEL.135)
+  returns a 7-character string with no drive. No WOW32 call is made for it (krnl386 answers
+  from its own state); GetWindowsDirectory beside it is right (`C:\WINDOWS`, 10).
+- ⚠ **`kfile.of.cbytes` `0040`** where the SDK's `sizeof(OFSTRUCT)` is `0088`: `0040` is
+  8 + the 56-character path, i.e. krnl386 records the bytes it filled. OpenFile ran inside
+  krnl386 and DOS with no WOW32 thunk, so this is very likely **stock's answer too** —
+  owed a stock run before it is called a defect.
+- (Test defect, found and fixed: `kstr.lstrcat.ret` first read `15F4` because the probe kept
+  a value in BX across a call — the callee preserves DS/SI/DI/BP only. Now `0001`.)
+
+**Stock values owed** (run `tools/wintest/stock.sh <test>` under supervision): every row of
+the five tests, and specifically the raw rows above plus `kfile.of.cbytes`.
+
+✅ Scratch hygiene: `w_kfile`'s only file is absolute (`debug\out\W16F.TMP`) and its
+`OF_DELETE` case removes it — measured `0001`, then `OF_EXIST` `FFFF` / nErrCode 2. Nothing
+lands in the rig's `C:\WINDOWS`.
+
+Not done from #163's list: folding these outputs into `dosdiff.py`'s parser (item 5) —
+filed as a remainder.
+
+---
+
 ## Three mistakes, and the one that mattered
 
 ### ⛔⛔⛔ A near `call` into a far-returning stub
