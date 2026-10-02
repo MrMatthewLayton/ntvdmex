@@ -294,6 +294,10 @@
    what PCem's real AMI 486 BIOS reports), then five feature bytes that DESCRIBE THIS
    MACHINE -- see dos_sysconf_table() in main.c for what each bit claims and why. */
 #define DOS_SYSCONF_OFF   0x05A0
+/* GH #251: the AUX/PRN driver code (dos_auxprn.h, 169 bytes -> 0x659), below the
+   block's end at 0x6F0. */
+#define DOS_AUXPRN_OFF    0x05B0
+#define DOS_AUXPRN_LEN    0x00B0
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

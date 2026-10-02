@@ -103,6 +103,8 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_psp.h"
 #include "dos_env.h"
 #include "dos_int21.h"
+#include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
+typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -2718,6 +2720,20 @@ static int lpt_spool_put(BYTE c)
 }
 static void lpt_tx_sink(void *ctx, int port, uint8_t b)
 { (void)ctx; (void)port; lpt_spool_put(b); }
+/* #251: DOS's PRN/AUX output when the guest cannot be resumed in the driver code
+   (dos_auxprn.h) -- a DPMI client's INT 21h. Same devices, without the IVT hop. */
+static int dos_prnout(void *ctx, uint8_t c) { (void)ctx; return lpt_spool_put(c); }
+static void dos_auxout(void *ctx, uint8_t c)
+{
+    ntvdd_regs r;
+    (void)ctx;
+    r.eax = 0x0100u | c;                         /* INT 14h AH=01h, COM1 (DX=0) */
+    r.ebx = r.ecx = r.edx = r.esi = r.edi = r.ebp = 0;
+    r.ds = r.es = 0; r.cf = r.zf = 0;
+    HOST_LOCK();
+    vdd_bus_deliver_int(&g_bus, 0x14, &r);
+    HOST_UNLOCK();
+}
 
 /* ── ★★★★ THE Win16 COMM API, ON THE REAL UART. (GH #9 + #128, session 56) ──
      wowuser.h answered the whole comm family with IE_BADID, and its note gave
@@ -23934,7 +23950,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     done = 1; break;                /* proc RETF'd -> finished */
                                 }
                                 if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
-                                    m.tp = p; dos_int21(&m); p = m.tp;
+                                    m.tp = p; m.v86_tramp_ok = 1; dos_int21(&m); m.v86_tramp_ok = 0; p = m.tp;
+                                    if (m.v86_tramp) {               /* #251: AUX/PRN driver code; its */
+                                        VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);   /* INT 14h/17h are */
+                                        VDM_REG(tib, VTIB_EIP) = m.v86_tramp;    /* served below    */
+                                        m.v86_tramp = 0;
+                                    } else
                                     VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     continue;
@@ -27921,6 +27942,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         *(volatile WORD *)(0x24 * 4)     = (WORD)(o + 8);        /* INT 24h */
         *(volatile WORD *)(0x24 * 4 + 2) = DOS_CTAB_SEG;
     }
+    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
+       dos_auxprn.asm for why it is guest code and what it was measured against. */
+    {   volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
+        unsigned k;
+        for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
+    }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
        that INTs it to 0000:0000, where it executes the interrupt vector table
@@ -29086,6 +29113,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
+    m.prnout  = dos_prnout;                     /* #251: PRN/AUX when not in V86 */
+    m.auxout  = dos_auxout;  m.devctx = NULL;
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */
@@ -32520,12 +32549,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         m.tp = p;
         m.retry = 0;
+        m.v86_tramp_ok = 1;                         /* #251: we can resume elsewhere */
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
+            m.v86_tramp_ok = 0;
             p = m.tp;
             if (dos_terminate(&m, tib, &p, base)) continue;
             break;
         }
+        m.v86_tramp_ok = 0;
         p = m.tp;
+        if (m.v86_tramp) {                          /* #251: into DOS's AUX/PRN driver code */
+            VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+            VDM_REG(tib, VTIB_EIP) = m.v86_tramp;
+            m.v86_tramp = 0;
+            log_append(LOG_PATH, base, p); p = base;
+            continue;
+        }
         if (m.exec_pending) {                       /* GH #30: AH=4Bh */
             m.exec_pending = 0;
             p = exec_begin(&m, tib, p);
