@@ -107,7 +107,7 @@ start:
         xor     cx, cx
         xor     dx, dx
         int     21h
-        call    probe_capture
+        call    pmcap
         EMIT    "pm.int21.40.redirected.size", "AX,DX,CF"
 
         mov     ax, 0002h                       ; a selector for 0040h
@@ -123,7 +123,7 @@ start:
         mov     cx, 0003h
         mov     dx, 0D40h
         int     15h
-        call    probe_capture
+        call    pmcap
         push    es
         mov     es, [sel40]
         call    tickverdict_es
@@ -142,6 +142,22 @@ start:
         call    probe_capture
         EMIT    "dpmi.entered", "AX"
 .out:   PROBE_END
+
+; pmcap -- probe_capture for protected mode. probe_capture reloads DS from CS,
+; and in PM a code selector in DS is read-only: its first store #GPs. DS here is
+; already the data selector over the same base, so just store.
+pmcap:
+        pushf
+        mov     [__ax], ax
+        mov     [__bx], bx
+        mov     [__cx], cx
+        mov     [__dx], dx
+        mov     [__si], si
+        mov     [__di], di
+        mov     [__es], es
+        mov     [__ds], ds
+        pop     word [__fl]
+        ret
 
 ; AX := 1 if 3..6 ticks passed since [t0], else 0x8000 + ticks. CF in [__fl] kept.
 tickverdict:

@@ -2920,5 +2920,69 @@
   ],
   "recorded": "2026-10-02",
   "why": "#53: VBE 2.0 \u00a74.13 calls 4F0Ah 'required'. Every BIOS we can execute declines it -- SeaVGABIOS (msdos622) and the Tseng ET4000/W32p ROM (pcem-vesa) answer AX=0100h -- and we did too while there was nothing to hand out. Now we hand out a real block (src/vdd/vbe_pm.asm): AX=004Fh, CX = its length, the table's four offsets, and 32-bit code whose first bytes are ours. No executed oracle has an answer to compare; the spec is the reference, and tools/dostest/vbepm_test.c (off-VM, the code run through pm32interp after a copy) plus p_vbepm.asm (on the rig, a DPMI client calling the copy) are the tests."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int16.12.sysreq",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 16h AH=12h is a BIOS answer, and the msdos622 oracle's BIOS is QEMU's SeaBIOS, a reimplementation. PCem's genuine AMI 486 BIOS and DOSBox-X agree: SysReq held (0040:0018 bit 2) is AH bit 7, and Insert/Pause (0018 bits 7/3) are NOT reported in AH. SeaBIOS copies 0018 bit 7 into AH and ignores SysReq. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int16.12.ins.pause",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 16h AH=12h is a BIOS answer, and the msdos622 oracle's BIOS is QEMU's SeaBIOS, a reimplementation. PCem's genuine AMI 486 BIOS and DOSBox-X agree: SysReq held (0040:0018 bit 2) is AH bit 7, and Insert/Pause (0018 bits 7/3) are NOT reported in AH. SeaBIOS copies 0018 bit 7 into AH and ignores SysReq. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int15.85.press",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 15h AH=85h is the SysReq hook the BIOS INT 09h calls. PCem's genuine AMI 486 BIOS -- the AT-class BIOS whose own INT 09h makes the call -- answers AH=00h CF=0, i.e. 'nothing to do'. SeaBIOS and DOSBox-X answer AH=86h CF=1 'unsupported'. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int15.85.press",
+  "field": "CF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 15h AH=85h is the SysReq hook the BIOS INT 09h calls. PCem's genuine AMI 486 BIOS -- the AT-class BIOS whose own INT 09h makes the call -- answers AH=00h CF=0, i.e. 'nothing to do'. SeaBIOS and DOSBox-X answer AH=86h CF=1 'unsupported'. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int15.85.release",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 15h AH=85h is the SysReq hook the BIOS INT 09h calls. PCem's genuine AMI 486 BIOS -- the AT-class BIOS whose own INT 09h makes the call -- answers AH=00h CF=0, i.e. 'nothing to do'. SeaBIOS and DOSBox-X answer AH=86h CF=1 'unsupported'. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "kbd2",
+  "case": "int15.85.release",
+  "field": "CF",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "INT 15h AH=85h is the SysReq hook the BIOS INT 09h calls. PCem's genuine AMI 486 BIOS -- the AT-class BIOS whose own INT 09h makes the call -- answers AH=00h CF=0, i.e. 'nothing to do'. SeaBIOS and DOSBox-X answer AH=86h CF=1 'unsupported'. The genuine ROM is the reference (GH #254)."
  }
 ]

@@ -121,10 +121,10 @@ int main(void)
       vdd_input_push_scancode(&in, 0xE0); vdd_input_bios_consume(&in);
       CHECK(vdd_input_pop(&in, &k) == 0, "int09: E0 prefix alone stores nothing");
       vdd_input_push_scancode(&in, 0x48); vdd_input_bios_consume(&in);
-      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x4800, "int09: E0 48 -> UP (AH=48 AL=0)");
+      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x48E0 && vdd_input_dos_key(k) == 0x4800, "int09: E0 48 -> grey UP 48E0h; DOS CON (the Skyroads menu route) still sees AH=48 AL=0");
       vdd_input_push_scancode(&in, 0xE0); vdd_input_bios_consume(&in);
       vdd_input_push_scancode(&in, 0x4D); vdd_input_bios_consume(&in);
-      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x4D00, "int09: E0 4D -> RIGHT");
+      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x4DE0 && vdd_input_dos_key(k) == 0x4D00, "int09: E0 4D -> grey RIGHT 4DE0h (CON: 4D00h)");
 
       /* INT 16h AH=02 must report the live shift state, not a hardcoded zero. */
       vdd_input_push_scancode(&in, 0x1D); vdd_input_bios_consume(&in);      /* Ctrl down */
@@ -200,7 +200,7 @@ int main(void)
       KEY(0x1D); KEY(0x3B); KEY(0xBB); KEY(0x9D);              /* Ctrl+F1             */
       EXPECT(0x5E00, "int09: Ctrl+F1 -> 5E00h");
       KEY(0x1D); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0x9D);   /* Ctrl+Left */
-      EXPECT(0x7300, "int09: Ctrl+Left (E0 4B) -> 7300h (word left in every editor)");
+      EXPECT(0x73E0, "int09: Ctrl+grey Left (E0 4B) -> 73E0h (#254: AH=00h folds it to 7300h)");
       KEY(0x38); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0xB8);   /* Alt+Left  */
       EXPECT(0x9B00, "int09: Alt+Left -> 9B00h (enhanced BIOS)");
       KEY(0x1D); KEY(0x02); KEY(0x82); KEY(0x9D);              /* Ctrl+1              */
@@ -225,7 +225,7 @@ int main(void)
       KEY(0x2A); KEY(0x47); KEY(0xC7); KEY(0xAA);
       EXPECT(0x4700, "int09: Shift undoes NumLock -> Home again");
       KEY(0xE0); KEY(0x1C); KEY(0xE0); KEY(0x9C);              /* keypad Enter        */
-      EXPECT(0x1C0D, "int09: keypad Enter (E0 1C) -> 1C0Dh");
+      EXPECT(0xE00D, "int09: keypad Enter (E0 1C) -> E00Dh (#254: AH=00h folds it to 1C0Dh)");
       KEY(0x57); KEY(0xD7);
       EXPECT(0x8500, "int09: F11 -> 8500h");
       CHECK((bda[BDA_KB_FLAGS] & 0x0F) == 0, "int09: no modifier left held after all that");
@@ -455,6 +455,121 @@ int main(void)
         in.layout = 0;
 #undef TYPE1
 #undef SHIFTED
+    }
+
+    /* T12: #254 -- the grey-key E0 forms, AH=12h's layout, and what the BIOS INT 09h
+     * does besides store a key (Ctrl-Break, Print Screen, SysReq, Pause, Insert). */
+    { int act;
+      fresh(&in, &bus);
+#define KEY(sc) (vdd_input_push_scancode(&in, (uint8_t)(sc)), vdd_input_bios_consume(&in))
+#define EXPECT(code, msg) CHECK(vdd_input_pop(&in, &k) == 1 && k == (code), msg)
+#define NOKEY(msg) CHECK(vdd_input_pop(&in, &k) == 0, msg)
+#define AH12() (memset(&r, 0, sizeof r), s_ah(&r, 0x12), vdd_bus_deliver_int(&bus, 0x16, &r), (uint8_t)(r_ax(&r) >> 8))
+      KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB);
+      EXPECT(0x4BE0, "e0: grey Left -> 4BE0h");
+      KEY(0x4B); KEY(0xCB);
+      EXPECT(0x4B00, "e0: keypad Left (no E0) -> 4B00h -- the two clusters now differ");
+      KEY(0x2A); KEY(0xE0); KEY(0x48); KEY(0xE0); KEY(0xC8); KEY(0xAA);
+      EXPECT(0x48E0, "e0: Shift+grey Up -> 48E0h (Shift changes nothing)");
+      KEY(0xE0); KEY(0x35); KEY(0xE0); KEY(0xB5);
+      EXPECT(0xE02F, "e0: keypad / -> E02Fh");
+      KEY(0x1D); KEY(0xE0); KEY(0x1C); KEY(0xE0); KEY(0x9C); KEY(0x9D);
+      EXPECT(0xE00A, "e0: Ctrl+keypad Enter -> E00Ah");
+      KEY(0x1D); KEY(0xE0); KEY(0x48); KEY(0xE0); KEY(0xC8); KEY(0x9D);
+      EXPECT(0x8DE0, "e0: Ctrl+grey Up -> 8DE0h");
+      CHECK(vdd_input_dos_key(0x4BE0) == 0x4B00 && vdd_input_dos_key(0xE00D) == 0x1C0D
+            && vdd_input_dos_key(0xE02F) == 0x352F && vdd_input_dos_key(0x1E61) == 0x1E61,
+            "e0: DOS's CON sees the 83-key forms (no 0E0h character)");
+      vdd_input_push(&in, 0x8DE0); vdd_input_push(&in, 0x73E0);
+      memset(&r, 0, sizeof r); s_ah(&r, 0x00); vdd_bus_deliver_int(&bus, 0x16, &r);
+      CHECK(r.zf == 0 && r_ax(&r) == 0x7300, "e0: AH=00h discards Ctrl+Up (no 83-key code), folds 73E0h -> 7300h");
+
+      /* AH=12h, and the left/right halves of Ctrl and Alt */
+      CHECK(AH12() == 0x00, "12h: nothing held -> AH=00");
+      KEY(0x1D);
+      CHECK(AH12() == 0x01 && (bda[BDA_KB_FLAGS] & 0x04), "12h: left Ctrl -> AH bit 0, 0017 Ctrl");
+      KEY(0xE0); KEY(0x1D);
+      CHECK(AH12() == 0x05, "12h: + right Ctrl -> AH bits 0 and 2");
+      KEY(0x9D);
+      CHECK(AH12() == 0x04 && (bda[BDA_KB_FLAGS] & 0x04),
+            "12h: left released, right still held -> 0017 Ctrl STAYS set");
+      KEY(0xE0); KEY(0x9D);
+      CHECK(AH12() == 0x00 && !(bda[BDA_KB_FLAGS] & 0x04), "12h: both released -> Ctrl clear");
+      KEY(0xE0); KEY(0x38);
+      CHECK(AH12() == 0x08 && (bda[0x96] & 0x08), "12h: right Alt -> AH bit 3, 0096 bit 3");
+      KEY(0xE0); KEY(0xB8);
+      KEY(0x3A);
+      CHECK(AH12() == 0x40 && (bda[BDA_KB_FLAGS] & 0x40), "12h: Caps held -> AH bit 6, Caps on");
+      KEY(0x3A);                                           /* typematic repeat */
+      CHECK(bda[BDA_KB_FLAGS] & 0x40, "lock: a held key's repeats do not re-toggle Caps");
+      KEY(0xBA); KEY(0x3A); KEY(0xBA);
+      CHECK(!(bda[BDA_KB_FLAGS] & 0x40) && AH12() == 0x00, "lock: a second press toggles Caps off");
+
+      /* SysReq */
+      act = KEY(0x54);
+      CHECK(act == KB_ACT_SYSRQ_D && AH12() == 0x80 && (bda[BDA_KB_FLAGS2] & 0x04),
+            "sysrq: press -> INT 15h 8500h, AH=12h bit 7, 0018 bit 2");
+      act = KEY(0xD4);
+      CHECK(act == KB_ACT_SYSRQ_U && AH12() == 0x00, "sysrq: release -> INT 15h 8501h");
+      NOKEY("sysrq: stores nothing");
+
+      /* Print Screen */
+      act = KEY(0xE0); act = KEY(0x37);
+      CHECK(act == KB_ACT_PRTSC, "prtsc: E0 37 -> INT 05h");
+      KEY(0xE0); KEY(0xB7);
+      NOKEY("prtsc: stores nothing (was 3700h)");
+      KEY(0x37); KEY(0xB7);
+      EXPECT(0x372A, "prtsc: keypad * (no E0) is still '*'");
+      KEY(0x1D); KEY(0xE0); KEY(0x37); KEY(0xE0); KEY(0xB7); KEY(0x9D);
+      EXPECT(0x7200, "prtsc: Ctrl+PrtSc -> 7200h");
+
+      /* Ctrl-Break */
+      vdd_input_push(&in, 0x1E61); vdd_input_push(&in, 0x1F73);
+      bda[0x71] = 0;
+      KEY(0x1D); KEY(0xE0); act = KEY(0x46);
+      CHECK(act == KB_ACT_BREAK, "break: Ctrl + E0 46 -> INT 1Bh");
+      CHECK(bda[0x71] & 0x80, "break: 0040:0071 bit 7 set");
+      EXPECT(0x0000, "break: the ring was emptied and 0000h stored");
+      NOKEY("break: nothing else left in the ring");
+      KEY(0xE0); KEY(0xC6); KEY(0x9D);
+      CHECK(!(bda[BDA_KB_FLAGS] & 0x10), "break: Scroll Lock NOT toggled");
+      KEY(0x46); KEY(0xC6);
+      CHECK(bda[BDA_KB_FLAGS] & 0x10, "break: plain Scroll Lock still toggles");
+      KEY(0x46); KEY(0xC6);
+
+      /* Pause */
+      act = KEY(0xE1); act = KEY(0x1D); act = KEY(0x45);
+      CHECK(act == KB_ACT_PAUSE && (bda[BDA_KB_FLAGS2] & 0x08), "pause: E1 1D 45 -> pause, 0018 bit 3");
+      CHECK(!(bda[BDA_KB_FLAGS] & 0x24), "pause: neither Ctrl nor NumLock changed");
+      KEY(0xE1); KEY(0x9D); KEY(0xC5);
+      CHECK(bda[BDA_KB_FLAGS2] & 0x08, "pause: its break sequence does not end it");
+      KEY(0x2A); KEY(0xAA);
+      CHECK(bda[BDA_KB_FLAGS2] & 0x08, "pause: a shift key does not end it");
+      KEY(0x1E); KEY(0x9E);
+      CHECK(!(bda[BDA_KB_FLAGS2] & 0x08), "pause: the next keystroke ends it...");
+      NOKEY("pause: ...and is thrown away");
+      act = KEY(0xE1); act = KEY(0x1D); act = KEY(0x45);
+      vdd_input_pause_cancel(&in);
+      CHECK(!(bda[BDA_KB_FLAGS2] & 0x08), "pause: cancel (a caller that cannot spin) clears it");
+      KEY(0xE1); KEY(0x9D); KEY(0xC5);
+
+      /* Insert */
+      KEY(0xE0); KEY(0x52);
+      CHECK((bda[BDA_KB_FLAGS] & 0x80) && (bda[BDA_KB_FLAGS2] & 0x80), "ins: grey Insert toggles 0017 bit 7, held 0018 bit 7");
+      EXPECT(0x52E0, "ins: and is stored (52E0h)");
+      KEY(0xE0); KEY(0x52);                                /* repeat */
+      CHECK(bda[BDA_KB_FLAGS] & 0x80, "ins: a repeat does not toggle back");
+      (void)vdd_input_pop(&in, &k);
+      KEY(0xE0); KEY(0xD2);
+      CHECK(!(bda[BDA_KB_FLAGS2] & 0x80), "ins: release clears the held bit");
+      KEY(0x45); KEY(0xC5);                                /* NumLock on */
+      KEY(0x52); KEY(0xD2);
+      CHECK(bda[BDA_KB_FLAGS] & 0x80, "ins: keypad 0 with NumLock on is '0', no toggle");
+      EXPECT(0x5230, "ins: ...stored as '0'");
+#undef KEY
+#undef EXPECT
+#undef NOKEY
+#undef AH12
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

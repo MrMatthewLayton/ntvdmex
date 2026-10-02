@@ -305,6 +305,9 @@
    block's end at 0x6F0. */
 #define DOS_AUXPRN_OFF    0x05B0
 #define DOS_AUXPRN_LEN    0x00B0
+/* GH #254: the BIOS INT 09h side-calls (bios_kbdact.h, 41 bytes). */
+#define DOS_KBDACT_OFF    0x0660
+#define DOS_KBDACT_LEN    0x0040
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */
