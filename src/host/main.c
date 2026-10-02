@@ -15092,6 +15092,15 @@ static inline __attribute__((always_inline)) void imem_w8(uint32_t lin, uint8_t 
 { if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
       { *(volatile BYTE *)lin = v; return; }
   imem_w8_slow(lin, v); }
+/* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
+   bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
+   aperture -- exactly the bytes imem_r8's fast path would have read one at a time. */
+#define V86I_CODE_PTR 1
+static inline __attribute__((always_inline)) const volatile BYTE *imem_code_ptr(uint32_t lin)
+{ if (lin < 0x100000u && (lin & 0xFFFu) <= 0xFF0u && g_pagemap[lin >> 12] == 1
+      && (lin < A000_LO || lin >= A000_HI))
+      return (const volatile BYTE *)(ULONG_PTR)lin;
+  return 0; }
 
 /* Port I/O dispatched to the device bus (same path as host_try_io). The
    interpreter already runs under g_lock, which is what the bus needs. */
