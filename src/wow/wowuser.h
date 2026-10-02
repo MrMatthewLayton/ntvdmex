@@ -1683,6 +1683,30 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
      are actually implemented, the bytes must be COPIED here, while they are
      locked, or asked for again through FindResource/LoadResource. */
 #define WOWNOTIFY_ACCEL         3
+/* ── ⛔⛔⛔ wKind 4: USER'S START-UP CALL -- AND WHY NO WIN16 X BUTTON EVER WORKED. ──
+     (s88, user: "some close buttons (X) don't work") XP's DefWindowProc (USER.107,
+     seg1:0x1d5e) forwards to WOW32 0x6b through `seg1:0x03e8`, which first calls
+     `seg1:0x013c`: msg > WORD cs:[0x137] -> return 0; else bit (msg) of the bitmap
+     at cs:0x00d0 clear -> return 0. NOTHING IS FORWARDED UNLESS ITS BIT IS SET --
+     and in the FILE the maximum is 0 and all 0x65 bitmap bytes are zero. WOW32
+     fills them when USER's init (seg1:0x3c9e) calls NotifyWow(4, &block); this
+     host stepped that call over, so DefWindowProc reached us ZERO times in 16
+     shelf apps, and every app that leaves WM_CLOSE to DefWindowProc (Clock: its
+     dispatch has no 0x10 arm and falls to USER.107 at seg1:0x2161) could not end.
+   ★ The block (seg1:0x3c9e, read store by store): +0x0e/+0x10 far ptr to the WORD
+     maximum (cs:0x137), +0x12/+0x14 far ptr to the bitmap (cs:0x00d0), +0x16 its
+     byte count (cs:[0x135] = 0x65 -> messages 0..0x327).
+   ⚠ ONLY MESSAGES THE 0x6b HANDLER CAN TAKE RAW. It passes wParam/lParam straight
+     to DefWindowProcA; a message carrying a 16:16 pointer (WM_SETTEXT) or a GDI
+     token (WM_ERASEBKGND's HDC) would hand Windows a value it cannot use. Each
+     message joins this list when its parameters are translated AND a run needs it. */
+#define WOWNOTIFY_USERINIT      4
+#define NOTIFY_UI_MAX_OFF       0x0e
+#define NOTIFY_UI_BITS_OFF      0x12
+#define NOTIFY_UI_BITS_CB       0x16
+static const WORD g_dwp_forward[] = {
+    0x0010,             /* WM_CLOSE: its default is DestroyWindow (see 0x6b) */
+};
 #define NOTIFY_ARG_BLOCK        0
 #define NOTIFY_ARG_KIND         4
 #define NOTIFY_HINSTANCE        0x00
@@ -3934,6 +3958,38 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         volatile BYTE *b = wow32_argptr(f, NOTIFY_ARG_BLOCK);
         WORD kind = wow32_argw(f, NOTIFY_ARG_KIND);
         int k = 0;
+        if (kind == WOWNOTIFY_USERINIT && b) {
+            volatile BYTE *mx   = wow32_farat(f, b, NOTIFY_UI_MAX_OFF);
+            volatile BYTE *bits = wow32_farat(f, b, NOTIFY_UI_BITS_OFF);
+            WORD cb = wowuser_peek(b, NOTIFY_UI_BITS_CB), top = 0;
+            unsigned i;
+            wu_puts(note, notecap, &k, "NotifyWow(USER init) DefWindowProc forward table: ");
+            if (!mx || !bits || !cb || cb > 0x100) {
+                wu_puts(note, notecap, &k, "★ UNREADABLE BLOCK -- nothing forwarded");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            for (i = 0; i < cb; ++i) bits[i] = 0;
+            for (i = 0; i < sizeof g_dwp_forward / sizeof g_dwp_forward[0]; ++i) {
+                WORD m = g_dwp_forward[i];
+                if ((unsigned)(m >> 3) >= cb) continue;
+                bits[m >> 3] = (BYTE)(bits[m >> 3] | (1u << (m & 7)));
+                if (m > top) top = m;
+                wu_puts(note, notecap, &k, "0x"); wu_puthex(note, notecap, &k, m, 4);
+                wu_puts(note, notecap, &k, " ");
+            }
+            wow32_pokew(mx, top);
+            wu_puts(note, notecap, &k, "max=0x"); wu_puthex(note, notecap, &k, top, 4);
+            wu_puts(note, notecap, &k, " cb=0x"); wu_puthex(note, notecap, &k, cb, 4);
+            /* ⚠ 0, DELIBERATELY. USER stores the answer at [0x158] (seg1:0x3cfe) and,
+                 if it is non-zero, runs seg1:0x6947 -- which PATCHES USER'S OWN CODE,
+                 writing a `jmp` at each site of a (from,to) table at ds:0xaa..0xda.
+                 Whether real WOW32 asks for that is not read yet, and the stepped-over
+                 call has always answered 0, so those patches have never run here.
+                 Only the table changes in this step. */
+            wow32_setret(f, 0);
+            return 1;
+        }
         if (kind != WOWNOTIFY_ACCEL || !b) return 0;
         wu_puts(note, notecap, &k, "NotifyWow(RT_ACCELERATOR) hInst=0x");
         wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_HINSTANCE), 4);

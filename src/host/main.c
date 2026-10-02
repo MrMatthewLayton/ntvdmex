@@ -9445,10 +9445,16 @@ static int wow_module_of_sel(WORD sel)
      every USER call stays honestly unimplemented. */
 static WORD g_wow_user_seg = 0;
 
+/* ⛔ s88: NotifyWow (0x217, 6 args, retstub 0x12ea) too -- USER's OWN INIT calls it
+     (seg1:0x3cf9, wKind 4: the DefWindowProc forward table) BEFORE any RegisterClass,
+     so with only the two anchors above that call was "?'s table" and stepped over,
+     the table stayed empty, and DefWindowProc forwarded nothing for the whole run.
+     The triple is USER's: later calls carrying it were already dispatched as USER. */
 static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
 {
     return (id == 0x190 && argb == 0 && retstub == 0x0659)
-        || (id == 0x039 && argb == 4 && retstub == 0x0c25);
+        || (id == 0x039 && argb == 4 && retstub == 0x0c25)
+        || (id == 0x217 && argb == 6 && retstub == 0x12ea);
 }
 
 /* ── ★★★ SHELL.DLL's TABLE -- A FOURTH ID SPACE. See src/wow/wowshell.h. ──────
