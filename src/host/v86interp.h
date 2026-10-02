@@ -41,13 +41,27 @@ typedef struct {
     uint32_t flags;
 } icpu;
 
-static int iparity(uint8_t v) { v ^= v >> 4; v ^= v >> 2; v ^= v >> 1; return !(v & 1); }
+/* ── #183: THE HOT HELPERS ARE FORCED INLINE. (s87) ─────────────────────────────────
+     A rig profile of mybench.com (CPU-bound, multi-plane mask) found do_add, do_sub,
+     do_logic, do_alu, grw, srw, rd_mem, wr_mem and decode_modrm all compiled as SEPARATE
+     functions: istep() is so large that GCC's large-function-growth limit refuses to
+     inline anything more into it, so every interpreted `add si,3` paid about ten cdecl
+     calls (stack args, i686). IINL overrides that for the small leaf helpers only. */
+#if defined(__GNUC__)
+#define IINL static inline __attribute__((always_inline))
+#else
+#define IINL static inline
+#endif
+
+/* PF = even parity of the low byte. 0x6996 is the 16-entry odd-parity table as a bit
+   string: one fold to a nibble and a shift, instead of three folds. Same answer. */
+IINL int iparity(uint8_t v) { v ^= v >> 4; return !((0x6996u >> (v & 0xFu)) & 1u); }
 
 /* Operand-width helpers: w is 1/2/4 bytes. The 4-byte path exists for 16-bit code
    that uses the 0x66 operand-size prefix (386 32-bit register math -- e.g. a C
    runtime's MOVZX ESI,SI / SHL ESI,4). run 54. */
-static uint32_t wmask(int w) { return (w == 1) ? 0xFFu : (w == 2) ? 0xFFFFu : 0xFFFFFFFFu; }
-static uint32_t wsign(int w) { return (w == 1) ? 0x80u : (w == 2) ? 0x8000u : 0x80000000u; }
+IINL uint32_t wmask(int w) { return (w == 1) ? 0xFFu : (w == 2) ? 0xFFFFu : 0xFFFFFFFFu; }
+IINL uint32_t wsign(int w) { return (w == 1) ? 0x80u : (w == 2) ? 0x8000u : 0x80000000u; }
 
 /* Segment-register -> linear-base resolver. NULL = V86 semantics (base = seg<<4).
    For protected mode (DPMI, GH #2) the host sets this to an LDT-selector->base
@@ -58,7 +72,7 @@ static uint32_t wsign(int w) { return (w == 1) ? 0x80u : (w == 2) ? 0x8000u : 0x
    type/limit, so e.g. a write through a code-typed SS (what #GP's the real CPU in
    run 51's I310102) simply succeeds here. */
 static uint32_t (*g_seg2lin)(uint16_t seg) = 0;
-static uint32_t seg_base(uint16_t seg)
+IINL uint32_t seg_base(uint16_t seg)
 { return g_seg2lin ? g_seg2lin(seg) : ((uint32_t)seg << 4); }
 
 /* Descriptor-introspection hook for PM (LAR/LSL, run 55). Given a selector, returns
@@ -69,12 +83,12 @@ static uint32_t seg_base(uint16_t seg)
    host sets this to read its g_ldt[] table. */
 static int (*g_sel_desc)(uint16_t sel, uint32_t *ar, uint32_t *limit) = 0;
 
-static uint32_t rd_mem(uint32_t lin, int w)
+IINL uint32_t rd_mem(uint32_t lin, int w)
 { uint32_t v = imem_r8(lin);
   if (w >= 2) v |= (uint32_t)imem_r8(lin + 1) << 8;
   if (w == 4) v |= ((uint32_t)imem_r8(lin + 2) << 16) | ((uint32_t)imem_r8(lin + 3) << 24);
   return v; }
-static void wr_mem(uint32_t lin, int w, uint32_t v)
+IINL void wr_mem(uint32_t lin, int w, uint32_t v)
 { imem_w8(lin, (uint8_t)v);
   if (w >= 2) imem_w8(lin + 1, (uint8_t)(v >> 8));
   if (w == 4) { imem_w8(lin + 2, (uint8_t)(v >> 16)); imem_w8(lin + 3, (uint8_t)(v >> 24)); } }
@@ -82,61 +96,68 @@ static void wr_mem(uint32_t lin, int w, uint32_t v)
 /* CPU register file access by x86 encoding. Sub-register writes preserve the bits
    they don't touch: a 16-bit write keeps E-reg[31:16]; an 8-bit write keeps the
    other 24 bits (x86 partial-register semantics). */
-static uint16_t g16(icpu *c, int e) { return (uint16_t)c->r[e & 7]; }
-static void     s16(icpu *c, int e, uint16_t v) { c->r[e & 7] = (c->r[e & 7] & 0xFFFF0000u) | v; }
-static uint8_t  g8(icpu *c, int e)
+IINL uint16_t g16(icpu *c, int e) { return (uint16_t)c->r[e & 7]; }
+IINL void     s16(icpu *c, int e, uint16_t v) { c->r[e & 7] = (c->r[e & 7] & 0xFFFF0000u) | v; }
+IINL uint8_t  g8(icpu *c, int e)
 { return (e < 4) ? (uint8_t)c->r[e] : (uint8_t)(c->r[e - 4] >> 8); }
-static void     s8(icpu *c, int e, uint8_t v)
+IINL void     s8(icpu *c, int e, uint8_t v)
 { if (e < 4) c->r[e] = (c->r[e] & 0xFFFFFF00u) | v;
   else c->r[e - 4] = (c->r[e - 4] & 0xFFFF00FFu) | ((uint32_t)v << 8); }
 /* read/write a register by operand width (1/2/4). */
-static uint32_t grw(icpu *c, int e, int w)
+IINL uint32_t grw(icpu *c, int e, int w)
 { return (w == 1) ? g8(c, e) : (w == 2) ? (uint32_t)(uint16_t)c->r[e & 7] : c->r[e & 7]; }
-static void srw(icpu *c, int e, int w, uint32_t v)
+IINL void srw(icpu *c, int e, int w, uint32_t v)
 { if (w == 1) s8(c, e, (uint8_t)v); else if (w == 2) s16(c, e, (uint16_t)v); else c->r[e & 7] = v; }
 
 /* Flag-computing ALU primitives (result masked to operand width w). */
-static uint32_t do_add(icpu *c, uint32_t a, uint32_t b, int cin, int w)
+/* Carry without 64-bit arithmetic (i686 pays for every uint64_t): below 32 bits the
+   sum cannot wrap a uint32_t, so CF is "the sum exceeds the mask"; at 32 bits it wrapped
+   iff the result is below an operand (or equal to it with a carry in). SUB borrows iff
+   a < b + cin, i.e. a <= b with a borrow in, a < b without. Flags are built in a local
+   and stored once. Same answers as before -- scripts/interpfuzz.sh holds the digest. */
+IINL uint32_t do_add(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 {
     uint32_t m = wmask(w), sb = wsign(w);
     uint32_t fa = a & m, fb = b & m;
-    uint64_t full = (uint64_t)fa + fb + (uint32_t)cin;   /* 64-bit: carry-safe for w==4 */
-    uint32_t res = (uint32_t)(full & m);
-    c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
-    if (full & ((uint64_t)m + 1))               c->flags |= F_CF;
-    if ((fa ^ fb ^ res) & 0x10u)                c->flags |= F_AF;
-    if (!res)                                   c->flags |= F_ZF;
-    if (res & sb)                               c->flags |= F_SF;
-    if (iparity((uint8_t)res))                  c->flags |= F_PF;
-    if ((~(fa ^ fb) & (fa ^ res)) & sb)         c->flags |= F_OF;
+    uint32_t full = fa + fb + (uint32_t)cin;
+    uint32_t res = full & m, f = c->flags & ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
+    if (w == 4 ? (cin ? full <= fa : full < fa) : (full > m)) f |= F_CF;
+    if ((fa ^ fb ^ res) & 0x10u)                f |= F_AF;
+    if (!res)                                   f |= F_ZF;
+    if (res & sb)                               f |= F_SF;
+    if (iparity((uint8_t)res))                  f |= F_PF;
+    if ((~(fa ^ fb) & (fa ^ res)) & sb)         f |= F_OF;
+    c->flags = f;
     return res;
 }
-static uint32_t do_sub(icpu *c, uint32_t a, uint32_t b, int cin, int w)
+IINL uint32_t do_sub(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 {
     uint32_t m = wmask(w), sb = wsign(w);
     uint32_t fa = a & m, fb = b & m, res = (fa - fb - (uint32_t)cin) & m;
-    c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
-    if ((uint64_t)fa < (uint64_t)fb + (uint32_t)cin)  c->flags |= F_CF;
-    if ((fa ^ fb ^ res) & 0x10u)                c->flags |= F_AF;
-    if (!res)                                   c->flags |= F_ZF;
-    if (res & sb)                               c->flags |= F_SF;
-    if (iparity((uint8_t)res))                  c->flags |= F_PF;
-    if (((fa ^ fb) & (fa ^ res)) & sb)          c->flags |= F_OF;
+    uint32_t f = c->flags & ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
+    if (cin ? fa <= fb : fa < fb)               f |= F_CF;
+    if ((fa ^ fb ^ res) & 0x10u)                f |= F_AF;
+    if (!res)                                   f |= F_ZF;
+    if (res & sb)                               f |= F_SF;
+    if (iparity((uint8_t)res))                  f |= F_PF;
+    if (((fa ^ fb) & (fa ^ res)) & sb)          f |= F_OF;
+    c->flags = f;
     return res;
 }
-static void do_logic(icpu *c, uint32_t res, int w)
+IINL void do_logic(icpu *c, uint32_t res, int w)
 {
     uint32_t m = wmask(w), sb = wsign(w);
+    uint32_t f = c->flags & ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);   /* CF=OF=0 */
     res &= m;
-    c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);   /* CF=OF=0 */
-    if (!res)                  c->flags |= F_ZF;
-    if (res & sb)              c->flags |= F_SF;
-    if (iparity((uint8_t)res)) c->flags |= F_PF;
+    if (!res)                  f |= F_ZF;
+    if (res & sb)              f |= F_SF;
+    if (iparity((uint8_t)res)) f |= F_PF;
+    c->flags = f;
 }
 
 /* aluop encoding 0..7 = ADD OR ADC SBB AND SUB XOR CMP. Returns result;
    CMP (7) computes flags only. */
-static uint32_t do_alu(icpu *c, int aluop, uint32_t a, uint32_t b, int w)
+IINL uint32_t do_alu(icpu *c, int aluop, uint32_t a, uint32_t b, int w)
 {
     switch (aluop) {
     case 0: return do_add(c, a, b, 0, w);
@@ -189,7 +210,7 @@ static uint32_t do_shrot(icpu *c, int sub, uint32_t v, int cnt, int w)
     return v;
 }
 
-static int icond(icpu *c, int t)
+IINL int icond(icpu *c, int t)
 {
     int cf = !!(c->flags & F_CF), zf = !!(c->flags & F_ZF), sf = !!(c->flags & F_SF),
         of = !!(c->flags & F_OF), pf = !!(c->flags & F_PF);
