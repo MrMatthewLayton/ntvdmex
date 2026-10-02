@@ -1998,5 +1998,537 @@
   ],
   "recorded": "2026-10-01",
   "why": "AH=44h AL=11h (query generic IOCTL capability) reports 'supported' as AL=00h with CF=0; AH is not part of the answer. The two Microsoft kernels leave AH=D1h (an internal value), dosbox-x 00h, and we leave 44h. CF (compared) and AL=0 are the contract; the whole word is not (GH #251)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.vector",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "The SEGMENT of the INT 33h handler: wherever each host's driver lives. Only zero (no driver) means anything."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.00.reset",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver; INT 33h is a BIOS dummy that answers the reset with AX=0. The probe stops there."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.00.reset",
+  "field": "BX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver; INT 33h is a BIOS dummy that answers the reset with AX=0. The probe stops there."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.00.reset",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Button count: DOSBox-X emulates a three-button mouse; the Microsoft driver on a two-button mouse (and we) say 2."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.25.info",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.25.info",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.25.info",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.25.info",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.reset",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.reset",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.reset",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.reset",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.set",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.27.masks.set",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.reset",
+  "field": "AL",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.reset",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.reset",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.reset",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.shown",
+  "field": "AL",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.hotspot",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2A.hotspot",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.31.range",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.31.range",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.31.range",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.31.range",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.26.fenced",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.26.fenced",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.26.fenced",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2F.hwreset",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.30.ballpoint",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.29.enum",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MOUSE.COM 6.24 predates the v7/v8 functions 25h-34h: the probe POISONs every output register first and the oracle hands the poison (and its own AX) back -- its answer to 'is this implemented' is no, and 24h says 6.24, so it never promised it. Graded on the Microsoft Mouse 7.x/8.x contract (RBIL INT 33h) and DOSBox-X's driver, which claims 8.05 (#249)."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X claims 8.05 in 24h and does not implement 32h -- the poison comes back, the same defect #249 fixed here. Spec (RBIL AX=0032h): AX = bit 15 for 25h ... bit 0 for 34h, set for each function serviced; BX/CX/DX reserved = 0. Ours is E43Ch: 25h 26h 27h 2Ah 2Fh 30h 31h 32h."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X claims 8.05 in 24h and does not implement 32h -- the poison comes back, the same defect #249 fixed here. Spec (RBIL AX=0032h): AX = bit 15 for 25h ... bit 0 for 34h, set for each function serviced; BX/CX/DX reserved = 0. Ours is E43Ch: 25h 26h 27h 2Ah 2Fh 30h 31h 32h."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X claims 8.05 in 24h and does not implement 32h -- the poison comes back, the same defect #249 fixed here. Spec (RBIL AX=0032h): AX = bit 15 for 25h ... bit 0 for 34h, set for each function serviced; BX/CX/DX reserved = 0. Ours is E43Ch: 25h 26h 27h 2Ah 2Fh 30h 31h 32h."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.32.active",
+  "field": "DX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X claims 8.05 in 24h and does not implement 32h -- the poison comes back, the same defect #249 fixed here. Spec (RBIL AX=0032h): AX = bit 15 for 25h ... bit 0 for 34h, set for each function serviced; BX/CX/DX reserved = 0. Ours is E43Ch: 25h 26h 27h 2Ah 2Fh 30h 31h 32h."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.25.info",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X answers a constant 4101h (integrated, rate code 1, one display driver). Bits 11-8 are 1Ch's rate and 7-0 the count of loaded Mouse Display Drivers -- facts about each driver. Ours: 4300h = integrated (bit 14), software text cursor (13-12 = 00 in mode 3), rate code 3 (100 reports/s, the PS/2 aux default), no MDDs. BX/CX/DX (lock/busy flags) are graded."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.2F.hwreset",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X does not implement 2Fh (AX comes back 002Fh). RBIL: AX = FFFFh on success, 0 on failure. Spec-only row."
+ },
+ {
+  "probe": "mouse2",
+  "case": "i33.30.ballpoint",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X does not implement 30h. RBIL: AX = button status, FFFFh if no BallPoint is attached. Spec-only row."
+ },
+ {
+  "probe": "mouse",
+  "case": "*",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver (p_mouse.pre is applied to the 6.22 oracle only): INT 33h is a BIOS dummy at 0116h that answers the reset with AX=0, so every row after it reads the probe's own registers back. Not a vote on INT 33h. (Found while adding p_mouse2, #249.)"
+ },
+ {
+  "probe": "mouse",
+  "case": "*",
+  "field": "BX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver (p_mouse.pre is applied to the 6.22 oracle only): INT 33h is a BIOS dummy at 0116h that answers the reset with AX=0, so every row after it reads the probe's own registers back. Not a vote on INT 33h. (Found while adding p_mouse2, #249.)"
+ },
+ {
+  "probe": "mouse",
+  "case": "*",
+  "field": "CX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver (p_mouse.pre is applied to the 6.22 oracle only): INT 33h is a BIOS dummy at 0116h that answers the reset with AX=0, so every row after it reads the probe's own registers back. Not a vote on INT 33h. (Found while adding p_mouse2, #249.)"
+ },
+ {
+  "probe": "mouse",
+  "case": "*",
+  "field": "DX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver (p_mouse.pre is applied to the 6.22 oracle only): INT 33h is a BIOS dummy at 0116h that answers the reset with AX=0, so every row after it reads the probe's own registers back. Not a vote on INT 33h. (Found while adding p_mouse2, #249.)"
+ },
+ {
+  "probe": "mouse",
+  "case": "*",
+  "field": "CF",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's DOS loads no mouse driver (p_mouse.pre is applied to the 6.22 oracle only): INT 33h is a BIOS dummy at 0116h that answers the reset with AX=0, so every row after it reads the probe's own registers back. Not a vote on INT 33h. (Found while adding p_mouse2, #249.)"
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.vector",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "As for msdos622: the handler's segment is wherever DOSBox-X's built-in driver lives (C402). With PCem abstaining (no driver) DOSBox-X would otherwise be the lone voice on a value no host shares."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.24.version",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "DOSBox-X's built-in driver says 8.05, MOUSE.COM 6.24 says 6.24, we say 8.00 -- each driver's own version (see the msdos622 rationale). What 8.00 promises is graded function by function in p_mouse2 (#249)."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.24.version",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "CL = IRQ: DOSBox-X answers 00; the real Microsoft driver answers FFh for a PS/2 mouse (measured s72, p_mouse) and so do we. CH = 04 (PS/2) on both."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.15.statesize",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Each driver's private save-state size (DOSBox-X 0240h, MOUSE.COM 0172h, ours sizeof(i33_state)); see the msdos622 rationale."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.00.reset",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Button count: DOSBox-X emulates a three-button mouse; the Microsoft driver on a two-button mouse (and we) say 2."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.21.softreset",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "Button count, as i33.00.reset/BX."
  }
 ]

@@ -7826,6 +7826,25 @@ static volatile LONG g_ms_minx = -1, g_ms_maxx = -1, g_ms_miny = -1, g_ms_maxy =
    horizontally, 16 vertically (a mouse moves further across a screen than down it),
    and a 64 mickey/second double-speed threshold. */
 static volatile LONG g_ms_mick_x = 8, g_ms_mick_y = 16, g_ms_dbl_thresh = 64;
+/* ── 1Ah/1Bh SPEED IS NOT 0Fh's RATIO. (#249) ─────────────────────────────────────
+     1Ah sets the horizontal/vertical SPEED (0-100, default 50) and the double-speed
+     threshold ON THE SAME 0-100 SCALE (default 50); 0Fh sets the mickey-to-pixel
+     RATIO and 13h the threshold in MICKEYS/SECOND (default 64). Every arm used to
+     write the one set of variables, so a guest that set a speed and then a ratio read
+     its ratio back from 1Bh. Measured (p_mouse2): MOUSE.COM 6.24 and DOSBox-X agree
+     -- after a reset 1Bh says 50/50/50, after 1Ah 40/60/32 + 0Fh 8/16 it still says
+     40/60/32, and 13h DX=100 leaves 1Bh's DX at 32.
+   ⚠ None of them is APPLIED -- the pointer follows the host cursor and 0Bh reports
+     device counts scaled by msens; see docs/inventory/mouse.md (N/A). */
+static volatile LONG g_ms_spd_x = 50, g_ms_spd_y = 50, g_ms_spd_dbl = 50;
+/* ── THE v7/v8 STATE THAT 25h-34h REPORT (#249). ───────────────────────────────────
+     09h's hot spot (2Ah reads it back), whether 0Ah asked for the HARDWARE text cursor
+     and its scan lines (25h bits 13-12, 27h AX/BX), 1Dh's display page and 1Ch's
+     report rate (25h bits 11-8). Each is reset by 00h/21h like the rest. */
+static volatile LONG g_ms_hot_x = 0, g_ms_hot_y = 0;
+static volatile LONG g_ms_tc_hw = 0, g_ms_tc_hw_lo = 0, g_ms_tc_hw_hi = 0;
+static volatile LONG g_ms_page = 0;
+static volatile LONG g_ms_rate = 3;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
 
 /* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
      A guest installs a far pointer and a call mask and expects the driver to CALL IT
@@ -8118,13 +8137,14 @@ static void i33_set_range(volatile LONG *lo, volatile LONG *hi, LONG a, LONG b)
 /* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
    and only ever hands the same buffer back to 17h, so nothing outside this file
    reads it. Versioned so a restore cannot be fed a block from an older build. */
-#define I33_STATE_MAGIC 0x3833564EuL       /* 'NV38'                                 */
+#define I33_STATE_MAGIC 0x3933564EuL       /* 'NV39' (#249 added the speed/v8 fields) */
 typedef struct {
     DWORD magic;
     LONG  x, y, hidden;
     LONG  minx, maxx, miny, maxy;
     LONG  mick_x, mick_y, dbl;
     LONG  evt_mask, evt_seg, evt_off;
+    LONG  spd_x, spd_y, spd_dbl, hot_x, hot_y, page, rate;
 } i33_state;
 
 static void i33_state_save(volatile BYTE *p)
@@ -8136,6 +8156,8 @@ static void i33_state_save(volatile BYTE *p)
     s.miny = g_ms_miny; s.maxy = g_ms_maxy;
     s.mick_x = g_ms_mick_x; s.mick_y = g_ms_mick_y; s.dbl = g_ms_dbl_thresh;
     s.evt_mask = g_ms_evt_mask; s.evt_seg = g_ms_evt_seg; s.evt_off = g_ms_evt_off;
+    s.spd_x = g_ms_spd_x; s.spd_y = g_ms_spd_y; s.spd_dbl = g_ms_spd_dbl; s.hot_x = g_ms_hot_x; s.hot_y = g_ms_hot_y;
+    s.page = g_ms_page; s.rate = g_ms_rate;
     { unsigned i; const BYTE *q = (const BYTE *)&s;
       for (i = 0; i < sizeof s; ++i) p[i] = q[i]; }
 }
@@ -8155,6 +8177,9 @@ static void i33_state_load(volatile BYTE *p)
     InterlockedExchange(&g_ms_evt_mask, s.evt_mask);
     InterlockedExchange(&g_ms_evt_seg, s.evt_seg);
     InterlockedExchange(&g_ms_evt_off, s.evt_off);
+    InterlockedExchange(&g_ms_spd_x, s.spd_x); InterlockedExchange(&g_ms_spd_y, s.spd_y); InterlockedExchange(&g_ms_spd_dbl, s.spd_dbl);
+    InterlockedExchange(&g_ms_hot_x, s.hot_x); InterlockedExchange(&g_ms_hot_y, s.hot_y);
+    InterlockedExchange(&g_ms_page, s.page);   InterlockedExchange(&g_ms_rate, s.rate);
 }
 
 /* Resolve a guest ES:DX to something we may touch. The segment means different things
@@ -8199,6 +8224,10 @@ static void i33_reset_state(void)
     InterlockedExchange(&g_ms_evt_seg, 0);
     InterlockedExchange(&g_ms_evt_off, 0);
     InterlockedExchange(&g_ms_tc_and, 0x77FF); InterlockedExchange(&g_ms_tc_xor, 0x7700);
+    InterlockedExchange(&g_ms_spd_x, 50); InterlockedExchange(&g_ms_spd_y, 50); InterlockedExchange(&g_ms_spd_dbl, 50);
+    InterlockedExchange(&g_ms_hot_x, 0);  InterlockedExchange(&g_ms_hot_y, 0);
+    InterlockedExchange(&g_ms_tc_hw, 0);
+    InterlockedExchange(&g_ms_page, 0);   InterlockedExchange(&g_ms_rate, 3);
     for (i = 0; i < MS_BTNS; ++i) {
         InterlockedExchange(&g_ms_press_n[i], 0);
         InterlockedExchange(&g_ms_rel_n[i], 0);
@@ -8337,12 +8366,47 @@ static int close_prog_now(dos_machine_t *m, void *tib, char **pp, char *base)
     return 0;
 }
 
+/* The mickeys moved since the last read, DRAINED -- 0Bh's arithmetic, lifted out
+   unchanged so 27h (#249) reads the same counters the same way: the driver has ONE
+   pair of motion accumulators and both calls reset it. Clamped to signed 16 bits
+   (a guest reads them as such; a big sweep must not wrap round and turn the player
+   the wrong way). x/y = the pointer now, for the no-raw-input fallback. */
+static void i33_take_motion(LONG x, LONG y, LONG *pdx, LONG *pdy)
+{
+    static LONG last_x = 320, last_y = 240;             /* fallback only (exec thread) */
+    LONG dx, dy;
+    if (g_ms_raw_ok) {                                  /* the device's own counts */
+        dx = InterlockedExchange(&g_ms_dx, 0);
+        dy = InterlockedExchange(&g_ms_dy, 0);
+        dx = dx * g_ms_sens / 100; dy = dy * g_ms_sens / 100;
+    } else {                                            /* fallback: absolute-derived */
+        dx = (x - last_x) * 8; dy = (y - last_y) * 8;
+        last_x = x; last_y = y;
+    }
+    if (dx >  32767) dx =  32767; else if (dx < -32768) dx = -32768;
+    if (dy >  32767) dy =  32767; else if (dy < -32768) dy = -32768;
+    *pdx = dx; *pdy = dy;
+}
+
+/* ── 32h's ANSWER: WHICH OF 25h-34h THIS DRIVER REALLY SERVICES. (#249) ────────────
+     Bit 15 = 25h ... bit 0 = 34h (RBIL INT 33h AX=0032h). We report 8.00 in 24h, so a
+     guest may call any of them -- and 32h is the call a careful one makes FIRST. It
+     used to fall into `default:` and hand the guest its own AX (0032h) back as the
+     mask: "26h and 2Fh exist", from a driver that had neither. A bit is set ONLY where
+     the arm below gives the documented answer:
+       25h 26h 27h 2Ah 2Fh 30h 31h 32h  -> set
+       28h/29h  answered ("cannot set" / "no modes to list"), but no mode list exists,
+                so not claimed;
+       2Bh-2Eh acceleration profiles, 33h switch settings, 34h MOUSE.INI -> MISS,
+                they still reach `default:`; the clear bit is the honest signpost. */
+#define I33_ACTIVE_FNS  (0x8000u | 0x4000u | 0x2000u | 0x0400u    /* 25h 26h 27h 2Ah */ \
+                       | 0x0020u | 0x0010u | 0x0008u | 0x0004u)   /* 2Fh 30h 31h 32h */
+
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
 static void mouse_int33(volatile BYTE *tib, int src)
 {
-    static LONG last_x = 320, last_y = 240;             /* for AX=0B motion (V86 thread only) */
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     LONG x = g_ms_x, y = g_ms_y, b = g_ms_btn;
     if (ax < 16) g_ms_i33[ax]++; else g_ms_i33_other++;
@@ -8454,7 +8518,11 @@ static void mouse_int33(volatile BYTE *tib, int src)
         /* Accepted and ignored ON PURPOSE: the host draws its own overlay pointer
            (overlay_cursor), so a guest-supplied bitmap has nowhere to go. Unlike the
            old `default:` this is a decision, and it is counted below so a guest whose
-           pointer looks wrong can be told apart from one we never heard from. */
+           pointer looks wrong can be told apart from one we never heard from.
+           ► The HOT SPOT (BX, CX; -16..16) is kept (#249): 2Ah reports it back, and a
+             guest that saves and restores its cursor reads it from there. */
+        InterlockedExchange(&g_ms_hot_x, (LONG)(SHORT)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
+        InterlockedExchange(&g_ms_hot_y, (LONG)(SHORT)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         ++g_ms_shape_sets;
         break;
     case 0x000A:                                        /* define text cursor      */
@@ -8467,22 +8535,17 @@ static void mouse_int33(volatile BYTE *tib, int src)
         if ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) == 0) {
             InterlockedExchange(&g_ms_tc_and, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
             InterlockedExchange(&g_ms_tc_xor, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        } else ++g_ms_shape_sets;
+            InterlockedExchange(&g_ms_tc_hw, 0);
+        } else {                                        /* 25h/27h report it (#249) */
+            InterlockedExchange(&g_ms_tc_hw_lo, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+            InterlockedExchange(&g_ms_tc_hw_hi, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+            InterlockedExchange(&g_ms_tc_hw, 1);
+            ++g_ms_shape_sets;
+        }
         break;
     case 0x000B: {                                      /* read relative motion    */
         LONG dx, dy;
-        if (g_ms_raw_ok) {                              /* the device's own counts */
-            dx = InterlockedExchange(&g_ms_dx, 0);
-            dy = InterlockedExchange(&g_ms_dy, 0);
-            dx = dx * g_ms_sens / 100; dy = dy * g_ms_sens / 100;
-        } else {                                        /* fallback: absolute-derived */
-            dx = (x - last_x) * 8; dy = (y - last_y) * 8;
-            last_x = x; last_y = y;
-        }
-        /* 0Bh is SIGNED 16-bit and the guest reads it as such; clamp rather than let a
-           big sweep wrap round and turn the player the wrong way. */
-        if (dx >  32767) dx =  32767; else if (dx < -32768) dx = -32768;
-        if (dy >  32767) dy =  32767; else if (dy < -32768) dy = -32768;
+        i33_take_motion(x, y, &dx, &dy);                /* SIGNED 16-bit, drained  */
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
         break; }
@@ -8534,19 +8597,62 @@ static void mouse_int33(volatile BYTE *tib, int src)
         if (!p) { ++g_ms_state_badptr; break; }          /* refuse, do not fault    */
         if (ax == 0x0016) i33_state_save(p); else i33_state_load(p);
         break; }
-    case 0x001A:                                        /* set sensitivity         */
-        {   LONG mx = (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            LONG my = (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-            if (mx > 0) InterlockedExchange(&g_ms_mick_x, mx);
-            if (my > 0) InterlockedExchange(&g_ms_mick_y, my);
-            InterlockedExchange(&g_ms_dbl_thresh, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)); }
+    case 0x001A:                                        /* set sensitivity (SPEED) */
+        /* The speeds, NOT 0Fh's mickey ratio -- see g_ms_spd_x. */
+        InterlockedExchange(&g_ms_spd_x, (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
+        InterlockedExchange(&g_ms_spd_y, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        InterlockedExchange(&g_ms_spd_dbl, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         break;
     case 0x001B:                                        /* get sensitivity         */
-        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_mick_x);
-        VDM_SET16(tib, VTIB_ECX, (WORD)g_ms_mick_y);
-        VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_dbl_thresh);
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_spd_x);
+        VDM_SET16(tib, VTIB_ECX, (WORD)g_ms_spd_y);
+        VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_spd_dbl);
         break;
+    /* ── 1Ch, 1Dh/1Eh, 22h/23h: THE SMALL SETTINGS, ANSWERED. (#249) ───────────────
+         All four used to reach `default:` -- so 1Eh "get page" and 23h "get language"
+         handed the caller's own BX back as the answer. 1Ch's rate is reported by 25h;
+         1Dh's page is stored and read back (the pointer is drawn by the host on
+         whatever is displayed, so there is no per-page cursor to move). 22h is
+         accepted and 23h says 0, English: this is the US driver, whose messages are
+         not translated -- the same answer the US MOUSE.COM gives whatever it was told. */
+    case 0x001C:                                        /* set interrupt rate      */
+        {   LONG rt = (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            if (rt <= 4) InterlockedExchange(&g_ms_rate, rt); }
+        break;
+    case 0x001D:                                        /* set display page        */
+        InterlockedExchange(&g_ms_page, (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
+        break;
+    case 0x001E:                                        /* get display page        */
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_page);
+        break;
+    case 0x0022:                                        /* set language            */
+        break;
+    case 0x0023:                                        /* get language: English   */
+        VDM_SET16(tib, VTIB_EBX, 0x0000);
+        break;
+    /* 0Dh/0Eh light-pen emulation on/off: no outputs, and there is no light pen for
+       INT 10h AH=04h to report -- nothing to switch. Named so it is not counted as
+       an unknown call. */
+    case 0x000D: case 0x000E:
+        break;
+    /* ── 18h/19h ALTERNATE (SHIFT-QUALIFIED) HANDLERS: REFUSED, HONESTLY. ───────────
+         18h answers AX=0018h on success, FFFFh on error -- and through `default:` the
+         caller's own 0018h came back, i.e. "installed", for a handler that would
+         never be called. FFFFh until the shift-state delivery exists; 19h says "no
+         handler for that mask" (CX=0). */
+    case 0x0018:
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        break;
+    case 0x0019:
+        VDM_SET16(tib, VTIB_ECX, 0x0000);
+        break;
+    /* ── 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
+         wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
+         (p_mouse2 i33.20.*): MOUSE.COM 6.24 and DOSBox-X both return AX untouched
+         (0020h) and keep a 07h fence across it. We are never disabled (1Fh refuses), so
+         there is nothing to re-enable. */
     case 0x0020:                                        /* enable driver           */
+        break;
     case 0x0021:                                        /* software reset          */
         /* 21h differs from 00h: it does NOT re-probe the hardware, and it answers in
            AX/BX the same way. We have no hardware to re-probe, so the two are the
@@ -8577,6 +8683,76 @@ static void mouse_int33(volatile BYTE *tib, int src)
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
         VDM_SET16(tib, VTIB_ECX, (WORD)i33_rangex_max());
         VDM_SET16(tib, VTIB_EDX, (WORD)i33_rangey_max());
+        break;
+    /* ══ 25h-34h: WHAT 24h's "8.00" PROMISES. (#249) ═══════════════════════════════
+         Every one of these reached `default:` and returned the caller's registers, so
+         a version-gated guest was told "success, and here is what you passed". The
+         ones below answer as RBIL's MS Mouse 7.x/8.x entries document; 32h says which. */
+    case 0x0025: {                                      /* general driver info     */
+        /* AX: bit 15 = loaded as a device driver (no: we are the TSR shape), 14 = the
+           newer integrated driver (yes -- every 7.x/8.x driver is; DOSBox-X's 8.05 sets
+           it too), 13-12 = cursor type (00 software text, 01 hardware text, 1x
+           graphics), 11-8 = 1Ch's interrupt rate, 7-0 = Mouse Display Drivers loaded
+           (none). BX/CX/DX = cursor lock / in mouse code / mouse busy: all 0 -- the
+           driver is host code and is never "busy" from the guest's side. */
+        WORD ctype = (WORD)(g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa ? 2
+                            : g_ms_tc_hw ? 1 : 0);
+        VDM_SET16(tib, VTIB_EAX, (WORD)(0x4000u | (ctype << 12) | ((g_ms_rate & 0x0F) << 8)));
+        VDM_SET16(tib, VTIB_EBX, 0x0000);
+        VDM_SET16(tib, VTIB_ECX, 0x0000);
+        VDM_SET16(tib, VTIB_EDX, 0x0000);
+        break; }
+    case 0x0027: {                                      /* masks + mickey counts   */
+        /* AX/BX = the text cursor's screen/cursor masks, or the hardware cursor's scan
+           lines when 0Ah BX=1 chose it; CX/DX = mickeys since the last read -- the SAME
+           counters 0Bh drains (i33_take_motion), signed. */
+        LONG dx, dy;
+        i33_take_motion(x, y, &dx, &dy);
+        VDM_SET16(tib, VTIB_EAX, (WORD)(g_ms_tc_hw ? g_ms_tc_hw_lo : g_ms_tc_and));
+        VDM_SET16(tib, VTIB_EBX, (WORD)(g_ms_tc_hw ? g_ms_tc_hw_hi : g_ms_tc_xor));
+        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
+        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
+        break; }
+    case 0x0028:                                        /* set video mode          */
+        /* The driver sets modes only from its own list (29h), and it has none: the
+           mode set belongs to INT 10h. CL != 0 = failed. */
+        VDM_SET16(tib, VTIB_ECX, (WORD)((VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x00FF));
+        break;
+    case 0x0029:                                        /* enumerate video modes   */
+        /* CX = 0: the end of the list, at once. (DS:DX would name the mode; DX = 0 and
+           DS is left alone -- writing DS from here would be loaded into a PM caller's
+           selector too.) */
+        VDM_SET16(tib, VTIB_ECX, 0x0000);
+        VDM_SET16(tib, VTIB_EDX, 0x0000);
+        break;
+    case 0x002A:                                        /* cursor hot spot         */
+        /* AX = the visibility counter as the MS driver keeps it: 0 shown, negative
+           hidden (we count hides up from 0, so it is our count negated); BX/CX = 09h's
+           hot spot; DX = mouse type, 4 = PS/2 (as 24h's CH). */
+        VDM_SET16(tib, VTIB_EAX, (WORD)(SHORT)(-g_ms_hidden));
+        VDM_SET16(tib, VTIB_EBX, (WORD)(SHORT)g_ms_hot_x);
+        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)g_ms_hot_y);
+        VDM_SET16(tib, VTIB_EDX, 0x0004);
+        break;
+    case 0x002F:                                        /* mouse hardware reset    */
+        /* FFFFh = done. There is no device under us to re-initialise; the driver's
+           own state is untouched, as the call documents (00h/21h reset that). */
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        break;
+    case 0x0030:                                        /* BallPoint information   */
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* FFFFh = no BallPoint    */
+        break;
+    case 0x0031:                                        /* current min/max virtual */
+        VDM_SET16(tib, VTIB_EAX, (WORD)i33_rangex_min());
+        VDM_SET16(tib, VTIB_EBX, (WORD)i33_rangey_min());
+        VDM_SET16(tib, VTIB_ECX, (WORD)i33_rangex_max());
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_rangey_max());
+        break;
+    case 0x0032:                                        /* active advanced fns     */
+        VDM_SET16(tib, VTIB_EAX, (WORD)I33_ACTIVE_FNS);
+        VDM_SET16(tib, VTIB_EBX, 0x0000);               /* BX/CX/DX reserved = 0   */
+        VDM_SET16(tib, VTIB_ECX, 0x0000);
+        VDM_SET16(tib, VTIB_EDX, 0x0000);
         break;
     /* Logitech CyberMan / SWIFT probe. Doom makes it once and PRINTS the answer, so
        this is the one unimplemented call whose behaviour was already measured: the
