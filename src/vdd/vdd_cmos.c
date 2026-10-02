@@ -196,14 +196,15 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     }
     /* Port 0x71 write. The clock registers and the status registers are derived
        or read-only here; everything else is battery-backed RAM and takes it.
-       ⚠ WE DO NOT LET A GUEST SET THE CLOCK. Writing 00h-09h would have to move
-         the HOST's clock, which we cannot do -- and accepting the write while
-         changing nothing is the "runs but lies" shape this project rules out.
-         Same reasoning as INT 1Ah AH=03h/05h, which are deliberately not
-         answered (see vdd_pit.c). */
-    /* ⚠ THE CLOCK STAYS REFUSED -- we cannot move the host's clock, and accepting
-         the write while changing nothing is the "runs but lies" shape (same
-         reasoning as INT 1Ah AH=03h/05h, deliberately not answered). THE CONTROL
+       ⚠ WE DO NOT YET LET A GUEST SET THE CLOCK THROUGH THESE PORTS. The reason
+         given here was "it would have to move the HOST's clock" -- and that is no
+         longer the only way: since GH #250 the VDM has its own clock, an offset
+         from the host's (src/dos/dos_clock.h), which INT 21h 2Bh/2Dh and INT 1Ah
+         03h/05h now set. The register path is not wired to it yet (#261: Status
+         B's SET bit and the DM bit want a probe first), so a write here is still
+         dropped rather than accepted and ignored. */
+    /* ⚠ THE CLOCK STAYS REFUSED HERE (#261) -- accepting the write while changing
+         nothing would be the "runs but lies" shape. THE CONTROL
          REGISTERS ARE A DIFFERENT MATTER: PIE, the rate select and the data-mode
          bits are the guest's to set, and refusing them is what made the periodic
          interrupt unreachable. */

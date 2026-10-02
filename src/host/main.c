@@ -13238,19 +13238,54 @@ static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clo
      CRT does not link in any case), so the host hands it the reading. Local time,
      not UTC: a DOS guest's clock is the wall clock on the machine in front of you,
      and that is what `DATE` and `TIME` and every file timestamp are compared against. */
+/* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_dos_clock.rtc_off,
+     which a guest's INT 1Ah AH=03h/05h or INT 21h AH=2Bh/2Dh sets (dos_clock.h). Zero
+     until a guest sets it, so an untouched VDM reads exactly GetLocalTime as before. */
 static void host_rtc_now(void *ctx, struct vdd_rtc *out)
 {
-    SYSTEMTIME lt;
+    dclk_t g;
     (void)ctx;
-    GetLocalTime(&lt);
-    out->cent  = (unsigned)(lt.wYear / 100);
-    out->year  = (unsigned)(lt.wYear % 100);
-    out->month = (unsigned)lt.wMonth;
-    out->day   = (unsigned)lt.wDay;
-    out->hour  = (unsigned)lt.wHour;
-    out->min   = (unsigned)lt.wMinute;
-    out->sec   = (unsigned)lt.wSecond;
-    out->dow   = (unsigned)lt.wDayOfWeek + 1u;   /* Windows 0=Sunday; the chip 1=Sunday */
+    dos_clock_read(g_dos_clock.rtc_off, &g);
+    out->cent  = g.year / 100u;
+    out->year  = g.year % 100u;
+    out->month = g.month;
+    out->day   = g.day;
+    out->hour  = g.hour;
+    out->min   = g.min;
+    out->sec   = g.sec;
+    out->dow   = g.dow + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
+}
+
+/* INT 1Ah AH=03h (what=0: hour/min/sec) and AH=05h (what=1: century/year/month/day),
+   already decoded from BCD by the PIT. Moves only the RTC's offset: DOS keeps its own
+   clock, as on an AT (p_clock clk.2c.after.1a03 / clk.2a.after.1a05). Returns 0 --
+   the clock untouched -- for a reading no calendar has. */
+static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
+{
+    dclk_t host;
+    (void)ctx;
+    dos_clock_host_now(&host);
+    if (what == 0) {
+        if (!dclk_time_ok(in->hour, in->min, in->sec, 0)) return 0;
+        dclk_set_time(&host, &g_dos_clock.rtc_off, in->hour, in->min, in->sec, 0);
+    } else {
+        unsigned y = in->cent * 100u + in->year;
+        if (!dclk_date_real(y, in->month, in->day)) return 0;
+        dclk_set_date(&host, &g_dos_clock.rtc_off, y, in->month, in->day);
+    }
+    return 1;
+}
+
+/* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
+   AH=01h -- the new count, midnight flag cleared. Under the crystal's lock so it
+   cannot interleave with anything that holds it while touching the count. */
+static void host_set_ticks(void *ctx, uint32_t ticks)
+{
+    (void)ctx;
+    EnterCriticalSection(&g_pit_cs);
+    *(volatile DWORD *)(ULONG_PTR)0x46C = ticks;
+    *(volatile BYTE *)(ULONG_PTR)0x470 = 0;
+    LeaveCriticalSection(&g_pit_cs);
 }
 
 static void host_pit_guard(void *ctx, int enter)
@@ -28565,6 +28600,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit.guard_ctx = NULL;
     g_pit.rtc_now = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
     g_pit.rtc_ctx = NULL;
+    g_pit.rtc_set = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);
@@ -29086,6 +29122,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
+    m.set_ticks = host_set_ticks;               /* AH=2Dh reloads 0040:006C (#250) */
+    m.ticks_ctx = NULL;
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */

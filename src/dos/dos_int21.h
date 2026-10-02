@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "ntvdm.h"
 #include "dos_layout.h"   /* DOS_MAX_FILES -- the capacity fh[] must match */
+#include "dos_clock.h"    /* the VDM's own clock -- GH #250 */
 
 
 /* A trace is opt-in via cfg\dostrace.flag, which says who PAYS for it and nothing
@@ -144,7 +145,19 @@ typedef struct {
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
        see dos_find_match in dos_int21.c. */
     uint8_t  fcb_tmpl[11];
+    /* GH #250: AH=2Dh reloads the BIOS tick count (0040:006C) the way DOS's CLOCK$
+       does. A hook rather than a store, because the pacer thread increments that
+       dword under the PIT's own lock and a bare write could be lost between its read
+       and its write. NULL (off-VM) = the ticks are left alone. */
+    void   (*set_ticks)(void *ctx, uint32_t ticks);
+    void    *ticks_ctx;
 } dos_machine_t;
+
+/* GH #250: the host's local time as fields, and the VDM's reading of a clock that is
+   `off` centiseconds from it (g_dos_clock.dos_off / .rtc_off). Win32 lives here, the
+   arithmetic in dos_clock.h. */
+void dos_clock_host_now(dclk_t *t);
+void dos_clock_read(int64_t off, dclk_t *out);
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);

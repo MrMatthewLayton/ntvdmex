@@ -154,6 +154,11 @@ typedef struct pit_state {
          these because it already owns INT 1Ah (the tick half of the same service). */
     void   (*rtc_now)(void *ctx, struct vdd_rtc *out);
     void    *rtc_ctx;
+    /* ── AND THE OTHER DIRECTION: INT 1Ah AH=03h (what=0, hour/min/sec) and AH=05h
+         (what=1, cent/year/month/day), decoded from BCD. Returns 1 if the clock took
+         it. GH #250: the host moves the VDM's RTC offset, never the machine's clock.
+         NULL = refused, as before (CF=1). Shares rtc_ctx. */
+    int    (*rtc_set)(void *ctx, const struct vdd_rtc *in, int what);
 } pit_state;
 
 /* Effective reload. `reload` is always BINARY (decoded at the write); 0 means the
