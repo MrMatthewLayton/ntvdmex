@@ -74,6 +74,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "install.h"    /* GH #13: becoming the machine's VDM, reversibly */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "dpmi_rmcs.h"  /* GH #247: the real-mode call structure, and 0300h's routing */
+#include "dpmi_svc.h"   /* GH #248: INT 31h's spec-decided answers (selectors, callbacks, 0503h) */
 #include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
@@ -541,8 +542,11 @@ static void dsprobe_load(void)
      What IS established: stock returns >3, krnl386 treats >3 as WF_CPU486, and any
      machine that can run NTVDMEX is past a 386 several times over.
    ⚠ OBSERVABLE FOR EVERY DPMI GUEST, not just Win16 -- an extender may branch on it.
-     Changed once, with an interleaved before/after on the rig (`runs/s79_cl_ab/`). */
-#define DPMI_CPU_CLASS 0x04
+     Changed once, with an interleaved before/after on the rig (`runs/s79_cl_ab/`).
+   ⛔ #248: AND ONLY ONE OF ITS TWO SITES WAS CHANGED. INT 31h 0400h reports the same CL,
+     and kept the hardcoded 3 this note replaced -- one machine, described two ways to the
+     same client. The define now lives in dpmi_svc.h with the rest of 0400h's answer, and
+     every site (1687h, 0400h on both PM paths) reads it from there. */
 
 /* DPMI (M4 slice 3, spike): the mode-switch entry far-called by a client after it
    detects DPMI via INT 2Fh AX=1687h. Lives past the INT 67h stub (0x48..0x4B).
@@ -597,10 +601,11 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
    callback slot) that a client's real-mode code far-calls; the host switches V86->PM
    and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
    handler IRETs to (reached via g_pmret_sel, a code selector based at DOS_HDLR_SEG).
-   All within the 0x500..0x5FF handler segment (env seg starts at 0x600). */
+   All within the 0x500..0x5FF handler segment (env seg starts at 0x600).
+   #248: DPMI_CB_SLOTS (16, the spec's minimum -- was 4) lives in dpmi_svc.h, and the
+   slots moved to 0x90..0xCF to make room; see the segment map below. */
 #define DPMI_CB_BOP      0x55
-#define DPMI_CB_BASE_OFF 0x0060      /* slot i entry at DOS_HDLR_SEG:(base + i*4) */
-#define DPMI_CB_SLOTS    4
+#define DPMI_CB_BASE_OFF 0x0090      /* slot i entry at DOS_HDLR_SEG:(base + i*4), 0x90..0xCF */
 #define DPMI_PMRET_BOP   0x56
 #define DPMI_PMRET_OFF   0x0070
 /* INT 31h 0306 RAW MODE SWITCH (Doom/DOS/4GW needs it -- it tests CF from 0306 and
@@ -644,8 +649,13 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
  *   0x00-0x1F  INT 21h BOP + DBCS(0x18) + EMM name(0x0A)
  *   0x20,0x28,0x30,0x34,0x3A,0x3C,0x40,0x48,0x4C  INT 10/16/33/08/1C/1A/2F/67/09 stubs
  *   0x44       XMS entry          0x50-0x53  DPMI entry     0x54-0x56  DPMI RMRET
- *   0x58       >>> this stub <<<  0x60-0x6F  DPMI CB slots  0x70-0x72  DPMI PMRET
- *   0x80       DPMI fault BOP (code selector)
+ *   0x58       >>> this stub <<<  0x59 AH=38h case map      0x5C-0x5E  DPMI raw RM->PM
+ *   0x60-0x65  opt-in entry trampoline (qimode VIF; empty since the CB slots moved)
+ *   0x70-0x72  DPMI PMRET         0x74-0x76  DPMI raw PM->RM     0x78  DPMI 0305 RETF
+ *   0x80-0x82  DPMI fault BOP (code selector)
+ *   0x90-0xCF  DPMI CB slots (16 x 4; #248 -- were 4 slots at 0x60-0x6F)
+ *   0xE0-0xE3  INT 33h event-handler return (MS_CB_RET_OFF)
+ *   free:      0x83-0x8F, 0xD0-0xDF, 0xE4-0xFF
  */
 #define DOS_IRET_STUB_OFF 0x0058
 /* DOS_SYSVARS_OFF lives in dos_layout.h with the rest of this segment map -- the
@@ -1945,8 +1955,13 @@ static int g_dpmi_nblk = 0;
      g_dpmi_blk[] is the patcher's list: capped at 64 and never told about 0502, so it
      cannot say what is still live. These two can. dpmi_client_teardown() releases
      whatever is left in them, which is what a DPMI host does when its client ends --
-     and what lets the NEXT client (the user runs Doom twice) find memory at all. */
-#define DPMI_OWNED_MAX 512
+     and what lets the NEXT client (the user runs Doom twice) find memory at all.
+   #248: g_dpmi_owned[] is now also THE HANDLE RECORD -- 0502h and 0503h accept only a
+     handle that is in it (8023h otherwise), because a handle here is a host address and
+     VirtualFree() on an arbitrary one would release OUR memory. So it may not silently
+     overflow any more: 0501h refuses (8016h) when it is full. 4096 live blocks is ~36x
+     the most any shelf guest has held (ZAR, 114 allocations in a whole run). */
+#define DPMI_OWNED_MAX 4096
 static DWORD g_dpmi_owned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases)  */
 static int   g_dpmi_nowned = 0;
 #define DPMI_DOSBLK_MAX 64
@@ -16005,11 +16020,13 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
         cx->EFlags &= ~1u;                              /* default: CF=0 (success)          */
         switch (func) {
         case 0x0400:                                    /* get DPMI version                 */
-            cx->Eax = (cx->Eax & 0xFFFF0000) | 0x005A;  /* AH=0 major, AL=0x5A (90) minor    */
-            cx->Ebx = (cx->Ebx & 0xFFFF0000) | 0x0000;  /* BX flags: 16-bit host             */
-            cx->Ecx = (cx->Ecx & 0xFFFF0000) | 0x0003;  /* CL=3 (80386)                      */
-            cx->Edx = (cx->Edx & 0xFFFF0000) | 0x7008;  /* DH=slave 0x70, DL=master 0x08 PIC  */
-            p = zput(p, " -> DPMI 0.90 (386)");
+            /* #248: the same answer as the main 0400h arm (dpmi_svc.h) -- this spike path
+               said CL=3 and swapped the PIC bases (DH is the MASTER base). */
+            cx->Eax = (cx->Eax & 0xFFFF0000) | DPMI_VER_AX;
+            cx->Ebx = (cx->Ebx & 0xFFFF0000) | DPMI_VER_BX;
+            cx->Ecx = (cx->Ecx & 0xFFFF0000) | DPMI_CPU_CLASS;
+            cx->Edx = (cx->Edx & 0xFFFF0000) | DPMI_VER_DX;
+            p = zput(p, " -> DPMI 0.90");
             break;
         case 0x0000:                                    /* allocate LDT descriptors (CX=count) */
             cx->Eax = (cx->Eax & 0xFFFF0000) | 0x001F;  /* base selector 0x1F (spike stub)    */
@@ -19812,6 +19829,47 @@ static DWORD g_wow_sync_writes = 0;      /* how many entries krnl386 has changed
      anybody having to pretend it succeeded. */
 static BYTE *g_wow_seen = NULL;          /* last shadow contents we processed */
 
+/* #248: the index of a live 0501h handle in g_dpmi_owned[], or -1. */
+static int dpmi_owned_find(DWORD h)
+{
+    int i;
+    if (!h) return -1;
+    for (i = 0; i < g_dpmi_nowned; ++i) if (g_dpmi_owned[i] == h) return i;
+    return -1;
+}
+
+/* #248: give LDT index `idx` back -- null descriptor installed, index on the free list.
+   One body for 0001h and 0101h (0101h used to zero the base and keep the index for ever). */
+static void dpmi_ldt_release(int idx)
+{
+    g_ldt[idx].base = g_ldt[idx].limit = 0;
+    g_ldt[idx].access = 0;                          /* not present */
+    g_ldt[idx].flags = 0;
+    dpmi_install(idx);
+    if (g_ldt_nfree < DPMI_LDT_MAX) g_ldt_free[g_ldt_nfree++] = (WORD)idx;
+}
+
+/* ...and take one: the free list first, as 0000h does for a single descriptor, then the
+   high-water mark. -1 = the table is full. Without the free list, 0101h giving indices
+   back would not stop a 0100h/0101h loop from running the table dry. */
+static int dpmi_ldt_take(void)
+{
+    if (g_ldt_nfree > 0) return g_ldt_free[--g_ldt_nfree];
+    if (g_ldt_next >= DPMI_LDT_MAX) return -1;
+    return g_ldt_next++;
+}
+
+/* #248: may the client name `sel` in 0001h/0007h-000Ah/0101h? The rule and the krnl386
+   exception (under WOW the guest owns the table, so only the range is ours to check) are
+   in dpmi_svc.h; this binds it to our table. "Allocated" = a non-zero access byte, which
+   is what 0001h's free (access = 0) and 0000h's allocate (0xF2) maintain. */
+static int dpmi_client_sel_ok(WORD sel)
+{
+    int idx = sel >> 3;
+    int alloc = (idx >= 1 && idx < DPMI_LDT_MAX) && g_ldt[idx].access != 0;
+    return dpmi_sel_valid(sel, DPMI_LDT_MAX, alloc, g_wow_shadow != NULL);
+}
+
 static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
 {
     DWORD lo, hi, *e;
@@ -20143,8 +20201,9 @@ static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigne
             continue;
         }
         if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {      /* the ISR far-called a 0303 callback */
-            int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
-            if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
+            int cbslot = dpmi_cb_slot_at(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS), DOS_HDLR_SEG,
+                                         (WORD)VDM_REG(tib,VTIB_EIP));
+            if (cbslot >= 0 && g_cb[cbslot].used) {
                 dpmi_invoke_callback(mp, tib, cbslot);
                 continue;
             }
@@ -22703,11 +22762,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                         switch (ax) {
                         case 0x0400:                               /* get DPMI version */
-                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 */
-                            VDM_SET16(tib, VTIB_EBX, 0x0001);
-                            VDM_SET16(tib, VTIB_ECX, 0x0003);      /* CL=3 (80386) */
-                            VDM_SET16(tib, VTIB_EDX, 0x0870);
-                            p = zput(p, " -> ver 0.90");
+                            /* ── #248: CL IS THE SAME BYTE 1687h REPORTS. It was a hardcoded 3
+                                 here while 1687h said DPMI_CPU_CLASS (4) -- the s79 GetWinFlags
+                                 fix changed one site of two. CH stays 0, as it always was here. */
+                            VDM_SET16(tib, VTIB_EAX, DPMI_VER_AX);  /* 0.90 */
+                            VDM_SET16(tib, VTIB_EBX, DPMI_VER_BX);
+                            VDM_SET16(tib, VTIB_ECX, DPMI_CPU_CLASS);
+                            VDM_SET16(tib, VTIB_EDX, DPMI_VER_DX);
+                            p = zput(p, " -> ver 0.90 cpu "); p = zhexb(p, DPMI_CPU_CLASS);
                             break;
                         case 0x0000: {                             /* allocate CX descriptors */
                             DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
@@ -22747,22 +22809,38 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                and environment descriptors, and the stubs/trampoline. A client
                                is entitled to free anything it was given, but it was not given
                                these, and handing one back out later would pull the floor up. */
-                            int reserved = (idx < DPMI_LDT_RESERVED)
-                                || fsel == g_dpmi_hdlr_sel || fsel == g_pmret_sel
-                                || fsel == g_dpmi_fault_sel || fsel == g_dpmi_flt_code_sel;
+                            /* ⚠ idx >= 1 GUARDS THE WHOLE TEST, not just the range: the
+                                 host selectors below are 0 until first used, so selector 0
+                                 "matched" g_pmret_sel and the null free answered success
+                                 (#248, measured by p_dpmi31 on the first cut). */
+                            int reserved = idx >= 1
+                                && (idx < DPMI_LDT_RESERVED
+                                    || fsel == g_dpmi_hdlr_sel || fsel == g_pmret_sel
+                                    || fsel == g_dpmi_fault_sel || fsel == g_dpmi_flt_code_sel);
+                            /* ── #248: A SELECTOR THAT WAS NEVER THE CLIENT'S IS 8022h, NOT
+                                 SUCCESS. This arm used to fall through to "kept" with CF=0 for
+                                 a null, GDT, out-of-range, unallocated or already-freed
+                                 selector alike -- a double free read as a free. Our OWN
+                                 selectors (`reserved`) still answer success: the client was
+                                 handed the initial CS/DS/SS, PSP and environment selectors as
+                                 its own and may free them; we just never recycle them. ⚠ Under
+                                 WOW only the range is checked (dpmi_svc.h), and a double free
+                                 is then krnl386's own business. */
+                            if (!reserved && !dpmi_client_sel_ok(fsel)) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
+                                p = zput(p, " -> free REFUSED: invalid selector (8022h)");
+                                break;
+                            }
                             if (idx >= 1 && idx < DPMI_LDT_MAX && !reserved
                                 && g_ldt[idx].access != 0 && g_ldt_nfree < DPMI_LDT_MAX) {
                                 int d, dup = 0;
                                 for (d = 0; d < g_ldt_nfree; ++d)   /* refuse a double free */
                                     if (g_ldt_free[d] == (WORD)idx) { dup = 1; break; }
                                 if (!dup) {
-                                    g_ldt[idx].base = g_ldt[idx].limit = 0;
-                                    g_ldt[idx].access = 0;          /* not present */
-                                    g_ldt[idx].flags = 0;
-                                    dpmi_install(idx);
+                                    dpmi_ldt_release(idx);          /* not present, on the free list */
                                     /* If this was a 0002 mapping, stop claiming it. */
                                     dpmi_s2d_forget(fsel);
-                                    g_ldt_free[g_ldt_nfree++] = (WORD)idx;
                                     p = zput(p, " -> freed sel 0x"); p = zhex(p, fsel);
                                     p = zput(p, " ("); p = zhex(p, (DWORD)g_ldt_nfree);
                                     p = zput(p, " on the free list)");
@@ -23010,7 +23088,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
                             int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
-                            if (err || g_ldt_next >= DPMI_LDT_MAX) {
+                            int idx = err ? -1 : dpmi_ldt_take();   /* #248: free list first */
+                            if (!err && idx < 0) {                 /* no descriptor: give the block back */
+                                dos_free(NULL, seg);
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
+                                p = zput(p, " -> DOSmem: no descriptor (8011h)");
+                                break;
+                            }
+                            if (err) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
                                 VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
@@ -23027,6 +23113,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     for (;;) {
                                         volatile BYTE *mc = (volatile BYTE *)((DWORD)mm << 4);
                                         BYTE sig = mc[0];
+                                        /* ⛔ #248: THIS WALK OVERRAN `report` AND KILLED THE HOST.
+                                             48 blocks x ~40 characters is ~1.9 KB on top of the
+                                             line so far, in a 2 KB stack buffer: p_dpmi31's
+                                             0100h/0101h loop on the pre-#248 host fragmented the
+                                             chain, hit ENOMEM, and the host died with an AV at
+                                             an EIP made of ASCII (runs/s87_dpmi). Stop with room
+                                             to spare and say so. */
+                                        if (p - base > 1600) { p = zput(p, " ...(chain dump truncated)"); break; }
                                         WORD own = (WORD)(mc[1] | (mc[2] << 8));
                                         WORD sz  = (WORD)(mc[3] | (mc[4] << 8));
                                         if ((sig != 'M' && sig != 'Z') || ++guard2 > 48) {
@@ -23049,7 +23143,6 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     }
                                     p = zput(p, "\r\n"); }
                             } else {
-                                int idx = g_ldt_next++;
                                 g_ldt[idx].base = (DWORD)seg << 4;
                                 g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
                                 g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
@@ -23062,16 +23155,43 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                             break; }
                         case 0x0101: {                             /* free DOS memory: DX = selector */
-                            int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
-                            if (idx >= 3 && idx < DPMI_LDT_MAX) {
-                                DWORD seg = g_ldt[idx].base >> 4;
-                                int bi;
-                                dos_free(NULL, (uint16_t)seg);
+                            /* ── #248: TWO DEFECTS. (1) A bad selector answered success -- and
+                                 "bad" included any selector that was not a 0100h block: the
+                                 PSP selector would have freed the program's own memory. Now
+                                 the selector must be valid AND name a block 0100h handed out
+                                 (8022h otherwise), and DOS's own refusal (9: not a block)
+                                 comes back as DOS's error code, as the spec has it.
+                               (2) The descriptor LEAKED: base/limit were zeroed but it never
+                                 went back on the free list, so a client that allocates and
+                                 frees DOS memory in a loop ran the LDT dry after ~2000 calls.
+                                 It is released exactly as 0001h releases one. */
+                            WORD dsel = (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            int idx = dsel >> 3, bi, known = -1, derr;
+                            WORD seg = 0;
+                            if (dpmi_client_sel_ok(dsel)) {
+                                seg = (WORD)(g_ldt[idx].base >> 4);
                                 for (bi = 0; bi < g_dpmi_ndosblk; ++bi)
-                                    if (g_dpmi_dosblk[bi] == (WORD)seg) { g_dpmi_dosblk[bi] = g_dpmi_dosblk[--g_dpmi_ndosblk]; break; }
-                                g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
+                                    if (g_dpmi_dosblk[bi] == seg && (g_ldt[idx].base & 0xF) == 0) { known = bi; break; }
                             }
-                            p = zput(p, " -> DOSfree");
+                            /* The record is capped at DPMI_DOSBLK_MAX; past that a genuine block
+                               may be unrecorded, so a full record cannot refuse -- DOS decides. */
+                            if (known < 0 && !(g_dpmi_ndosblk >= DPMI_DOSBLK_MAX && seg)) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
+                                p = zput(p, " -> DOSfree REFUSED: not a 0100h selector (8022h)");
+                                break;
+                            }
+                            derr = dos_free(NULL, (uint16_t)seg);
+                            if (derr) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, (WORD)derr);
+                                p = zput(p, " -> DOSfree FAILED, DOS error "); p = zhex(p, (DWORD)derr);
+                                break;
+                            }
+                            if (known >= 0) g_dpmi_dosblk[known] = g_dpmi_dosblk[--g_dpmi_ndosblk];
+                            dpmi_ldt_release(idx);
+                            p = zput(p, " -> DOSfree seg=0x"); p = zhex(p, seg);
+                            p = zput(p, " sel 0x"); p = zhex(p, dsel); p = zput(p, " released");
                             break; }
                         case 0x0102: {                             /* resize DOS memory block: BX=new paras, DX=sel */
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
@@ -23297,14 +23417,27 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            code/data/stack selectors (0x0F/0x17/0x1F) in g_ldt[1..3], a client that
                            reconfigures its INITIAL selectors (e.g. a C runtime narrowing DS's limit)
                            must take effect -- else the change silently no-ops and the client faults. */
-                        case 0x0007: {                             /* set base of sel BX = CX:DX */
+                        /* ── #248: AN INVALID SELECTOR IS 8022h, NOT A SILENT NO-OP. 0007h-0009h
+                             ignored a selector that was null, GDT, off the table or never
+                             allocated and returned CF=0, so the client believed a descriptor
+                             had been set that never was. dpmi_client_sel_ok() is the rule
+                             (and its WOW exception: krnl386 owns its table). */
+                        case 0x0007: case 0x0008: case 0x0009:
+                            if (!dpmi_client_sel_ok((WORD)VDM_REG(tib, VTIB_EBX))) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
+                                p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                                p = zput(p, " -> REFUSED: invalid selector (8022h)");
+                                break;
+                            }
+                            if (ax == 0x0007) {                    /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             if (idx >= 1 && idx < DPMI_LDT_MAX) { g_ldt[idx].base = b; dpmi_install(idx); }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setbase 0x"); p = zhex(p, b);
                             break; }
-                        case 0x0008: {                             /* set limit of sel BX = CX:DX */
+                            if (ax == 0x0008) {                    /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             /* 0008's limit is in BYTES and the host chooses G (dpmi_install
@@ -23319,7 +23452,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
                             break; }
-                        case 0x0009: {                             /* set access rights of sel BX (CX) */
+                            {                                      /* 0009: set access rights of sel BX (CX) */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                 /* CL = access byte (P|DPL|S|type). CH = descriptor byte 6
@@ -23350,10 +23483,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x000A: {                             /* create data alias of sel BX */
                             int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
-                            if (g_ldt_next >= DPMI_LDT_MAX) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
+                            /* #248: an invalid source is 8022h. It used to alias the CODE BASE
+                               instead -- a working selector onto memory the client never named. */
+                            if (!dpmi_client_sel_ok((WORD)VDM_REG(tib, VTIB_EBX))) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
+                                p = zput(p, " -> alias REFUSED: invalid selector (8022h)");
+                                break;
+                            }
+                            if (g_ldt_next >= DPMI_LDT_MAX) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
+                                p = zput(p, " -> ENOMEM"); break; }
                             idx = g_ldt_next++;
-                            if (src >= 1 && src < DPMI_LDT_MAX) g_ldt[idx] = g_ldt[src];
-                            else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
+                            g_ldt[idx] = g_ldt[src];
                             g_ldt[idx].access = 0xF2;              /* data alias */
                             dpmi_install(idx);
                             VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
@@ -23574,11 +23716,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break;
                         case 0x0501: {                             /* allocate memory block BX:CX bytes */
                             DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                            void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                            void *mem;
+                            if (g_dpmi_nowned >= DPMI_OWNED_MAX) {  /* #248: no handle to give */
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_HANDLE_UNAVAIL);
+                                p = zput(p, " -> no handle (8016h)"); break; }
+                            mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                             if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
                                         p = zput(p, " -> ENOMEM"); break; }
-                            if (g_dpmi_nowned < DPMI_OWNED_MAX)   /* the client owns it until 0502 or exit */
-                                g_dpmi_owned[g_dpmi_nowned++] = (DWORD)(ULONG_PTR)mem;
+                            g_dpmi_owned[g_dpmi_nowned++] = (DWORD)(ULONG_PTR)mem;   /* the client's until 0502 or exit */
                             if (g_dpmi_nblk < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
                                 int c; BYTE iscode = 0;
                                 /* Does this allocation match one of the program's EXEC objects?
@@ -23614,6 +23759,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x0502: {                             /* free memory block SI:DI = handle */
                             DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            /* ── #248: ONLY A HANDLE WE GAVE OUT. The handle is a host address,
+                                 and this arm VirtualFree'd whatever it was handed -- a stale or
+                                 corrupt handle would have released the HOST's memory. 8023h. */
+                            if (dpmi_owned_find(h) < 0) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_HANDLE);
+                                p = zput(p, " handle 0x"); p = zhex(p, h);
+                                p = zput(p, " -> REFUSED: not a live 0501h handle (8023h)");
+                                break;
+                            }
                             /* ── THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
                                  every INT site we rewrote, by address, and dpmi_unpatch()
                                  / dpmi_repatch() dereference all of them on every 0301.
@@ -23640,6 +23794,71 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                               for (i = 0; i < g_dpmi_nblk; ++i)
                                   if (g_dpmi_blk[i].base == h) { g_dpmi_blk[i] = g_dpmi_blk[--g_dpmi_nblk]; break; } }
                             p = zput(p, " -> freed");
+                            break; }
+                        case 0x0503: {                             /* resize memory block: BX:CX = size, SI:DI = handle */
+                            /* ── ★ #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A client that grows its
+                                 heap by resizing (rather than allocate-copy-free) was refused, and
+                                 most give up there. Plan in dpmi_svc.h: in place while the new size
+                                 fits the pages the block already has; otherwise a new block, the old
+                                 contents copied, the old one freed -- and BX:CX / SI:DI name the NEW
+                                 address and handle, which the spec allows. Fixing up descriptors
+                                 that pointed at the old block is the client's job (spec).
+                               ⚠ THE PATCH MAP MOVES WITH THE BYTES. INT sites we rewrote in the
+                                 old block are copied as BOPs; their pmap entries are re-keyed to
+                                 the new addresses, or dpmi_unpatch()/repatch() would walk freed
+                                 memory (0502h's s80 teardown AV) and the copies would never be
+                                 restored. */
+                            DWORD h  = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            DWORD nsz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            int oi = dpmi_owned_find(h), plan, bi;
+                            DWORD end = h, committed, nh; uint32_t copy = 0;
+                            MEMORY_BASIC_INFORMATION mb;
+                            p = zput(p, " handle 0x"); p = zhex(p, h); p = zput(p, " size 0x"); p = zhex(p, nsz);
+                            if (oi < 0) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_HANDLE);
+                                p = zput(p, " -> REFUSED: not a live 0501h handle (8023h)"); break;
+                            }
+                            while (VirtualQuery((LPCVOID)(ULONG_PTR)end, &mb, sizeof mb) == sizeof mb
+                                   && (DWORD)(ULONG_PTR)mb.AllocationBase == h && mb.RegionSize
+                                   && mb.State == MEM_COMMIT)
+                                end = (DWORD)(ULONG_PTR)mb.BaseAddress + (DWORD)mb.RegionSize;
+                            committed = end - h;
+                            plan = dpmi_resize_plan(nsz, committed, &copy);
+                            if (plan == DPMI_RESIZE_BAD) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
+                                p = zput(p, " -> REFUSED: size 0 (8021h)"); break;
+                            }
+                            nh = h;
+                            if (plan == DPMI_RESIZE_MOVE) {
+                                void *mem = VirtualAlloc(NULL, nsz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                                DWORD sl, delta, moved = 0;
+                                if (!mem) {
+                                    VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_PHYS_UNAVAIL);
+                                    p = zput(p, " -> ENOMEM (block unchanged)"); break;
+                                }
+                                nh = (DWORD)(ULONG_PTR)mem;
+                                memcpy(mem, (const void *)(ULONG_PTR)h, copy);
+                                delta = nh - h;
+                                for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl)
+                                    if (g_pmap_lin[sl] >= h && g_pmap_lin[sl] < end && g_pmap_vec[sl]) {
+                                        pmap_set(g_pmap_lin[sl] + delta, g_pmap_vec[sl]);
+                                        g_pmap_vec[sl] = 0;            /* tombstone the old key */
+                                        ++moved;
+                                    }
+                                VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
+                                g_dpmi_owned[oi] = nh;
+                                if (g_le_load_base == h) g_le_load_base = nh;
+                                p = zput(p, " -> MOVED to 0x"); p = zhex(p, nh);
+                                p = zput(p, " (copied 0x"); p = zhex(p, copy);
+                                p = zput(p, ", 0x"); p = zhex(p, moved); p = zput(p, " patch sites re-keyed)");
+                                need_scan = 1;
+                            } else {
+                                p = zput(p, " -> in place (committed 0x"); p = zhex(p, committed); p = zput(p, ")");
+                            }
+                            for (bi = 0; bi < g_dpmi_nblk; ++bi)
+                                if (g_dpmi_blk[bi].base == h) { g_dpmi_blk[bi].base = nh; g_dpmi_blk[bi].size = nsz; break; }
+                            VDM_SET16(tib, VTIB_EBX, (WORD)(nh >> 16)); VDM_SET16(tib, VTIB_ECX, (WORD)(nh & 0xFFFF));
+                            VDM_SET16(tib, VTIB_ESI, (WORD)(nh >> 16)); VDM_SET16(tib, VTIB_EDI, (WORD)(nh & 0xFFFF));
                             break; }
                         case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
                             DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
@@ -23964,8 +24183,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     continue;
                                 }
                                 if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
-                                    int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
-                                    if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
+                                    int cbslot = dpmi_cb_slot_at(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS),
+                                                                 DOS_HDLR_SEG, (WORD)VDM_REG(tib,VTIB_EIP));
+                                    if (cbslot >= 0 && g_cb[cbslot].used) {
                                         dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
                                         continue;
                                     }
@@ -24052,19 +24272,39 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             dpmi_ensure_pmret_sel();   /* lazily install the PM-return catcher selector */
                             for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
                             if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8015);
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_CB_UNAVAIL);
                                 p = zput(p, " -> cb ENOMEM"); break;
                             }
                             g_cb[s].used = 1;
+                            /* #248: the entry address comes from dpmi_cb_entry(), the same
+                               function 0304h decodes it with. */
                             /* DS:(E)SI handler and ES:(E)DI RMCS follow the caller's D/B bit (dpmi_caller_off):
                                a flat 32-bit client's handler offset is its linear address. */
                             g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = dpmi_caller_off(tib, VDM_REG(tib, VTIB_ESI));
                             g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
                             VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
-                            VDM_SET16(tib, VTIB_EDX, DPMI_CB_BASE_OFF + s*4);
+                            VDM_SET16(tib, VTIB_EDX, dpmi_cb_entry(DPMI_CB_BASE_OFF, s));
                             p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
-                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DPMI_CB_BASE_OFF + s*4);
+                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, dpmi_cb_entry(DPMI_CB_BASE_OFF, s));
                             p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
+                            break; }
+                        case 0x0304: {                             /* free real-mode callback CX:DX */
+                            /* ── #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A callback, once
+                                 allocated, was held for the life of the client -- with four
+                                 slots, the fifth allocation of a client that hooks and unhooks
+                                 failed for good. The address must be EXACTLY one we handed out
+                                 and still live; anything else is 8024h. */
+                            WORD fcs = (WORD)VDM_REG(tib, VTIB_ECX), fdx = (WORD)VDM_REG(tib, VTIB_EDX);
+                            int s = dpmi_cb_slot_of(DPMI_CB_BASE_OFF, fcs, DOS_HDLR_SEG, fdx);
+                            p = zput(p, " cb 0x"); p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, fdx);
+                            if (s < 0 || !g_cb[s].used) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_CB);
+                                p = zput(p, " -> free REFUSED: not a live callback (8024h)");
+                                break;
+                            }
+                            g_cb[s].used = 0;
+                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " freed");
                             break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
@@ -27875,9 +28115,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     hdlr[DPMI_RMRET_OFF + 2] = DPMI_RMRET_BOP;
     /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
     { int s; for (s = 0; s < DPMI_CB_SLOTS; ++s) {
-        hdlr[DPMI_CB_BASE_OFF + s*4 + 0] = VDM_BOP0;
-        hdlr[DPMI_CB_BASE_OFF + s*4 + 1] = VDM_BOP1;
-        hdlr[DPMI_CB_BASE_OFF + s*4 + 2] = DPMI_CB_BOP;
+        WORD e = dpmi_cb_entry(DPMI_CB_BASE_OFF, s);
+        hdlr[e + 0] = VDM_BOP0;
+        hdlr[e + 1] = VDM_BOP1;
+        hdlr[e + 2] = DPMI_CB_BOP;
     } }
     hdlr[DPMI_PMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_PMRET_OFF + 1] = VDM_BOP1;
     hdlr[DPMI_PMRET_OFF + 2] = DPMI_PMRET_BOP;
@@ -29240,7 +29481,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
              (dos_layout.h). Keep what was there; the exec loop puts it back at the first
              exit outside the trampoline. Opt-in, this never mattered; default, it would
-             send a client's first callback into `sti; jmp far <program entry>`. */
+             send a client's first callback into `sti; jmp far <program entry>`.
+           (#248: the callback slots moved to 0x90, so these bytes are now unused; the
+             save/restore stays because it costs nothing and keeps the area as found.) */
         { int k; for (k = 0; k < 6; ++k) g_tramp_save[k] = tr[k]; g_tramp_saved = 1; }
         tr[0] = 0xFB;                                   /* sti                       */
         tr[1] = 0xEA;                                   /* jmp far cs:ip             */
@@ -29579,7 +29822,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     s[XS_BOP] = g_ev_hist[4];      s[XS_IO] = g_ev_hist[0];
                     s[XS_HOSTMS] = hu;     s[XS_PACE] = g_pitpace_calls;
                 } }
-            /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes. The first
+            /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes (#248: the
+               slots have since moved to 0x90; the bytes are spare now). The first
                exit that is not inside it hands them back -- long before any client can
                have allocated, let alone called, a callback. */
             if (g_tramp_saved) {

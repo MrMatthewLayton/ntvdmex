@@ -66,6 +66,271 @@ static int test_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
     }
 }
 
+/* ── #194: THE 0x66 STACK / STRING / CONTROL-TRANSFER FORMS, AND IRET IN PM. ─────────
+   Expectations are the SDM's where it decides, and the rig's (tools/dostest/p_o32.com,
+   runs/s87_dpmi) where it does not: a 32-bit PUSH sreg keeps the slot's upper half, a
+   32-bit far CALL zero-extends its CS slot, MOV r32,sreg zero-extends, and PUSHFD's
+   upper half is the NT V86 monitor's (VM|RF, VIF = IF, AC/ID as they stand). */
+static uint32_t t_seg2lin(uint16_t sel) { return 0x30000u + (uint32_t)(sel & 0xFFF8u) * 0x100u; }
+/* 0x08: 16-bit code, limit 0x7FFF. 0x10: data. 0x18: 32-bit code. Anything else invalid. */
+static int t_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
+{
+    switch (sel & 0xFFF8) {
+    case 0x08: *ar = 0xFAu << 8;                  *limit = 0x7FFF; return 1;
+    case 0x10: *ar = 0xF2u << 8;                  *limit = 0xFFFF; return 1;
+    case 0x18: *ar = (0xFAu << 8) | (0x4u << 20); *limit = 0xFFFF; return 1;
+    default: return 0;
+    }
+}
+static void put32(uint32_t lin, uint32_t v)
+{ MEM[lin] = (BYTE)v; MEM[lin+1] = (BYTE)(v >> 8); MEM[lin+2] = (BYTE)(v >> 16); MEM[lin+3] = (BYTE)(v >> 24); }
+
+static void o32_battery(void)
+{
+    printf("== #194: 0x66 stack/string/transfer forms, PM IRET ==\n");
+    /* PUSHFD: low word as PUSHF; upper = VM|RF, VIF since IF=1 (measured image 000B0297). */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x9C };
+      c.flags = 0x0297; c.seg[2] = 0x2000; c.r[4] = 0x0100; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[4] & 0xFFFF) == 0xFC && rd_mem(0x200FC, 4) == 0x000B0297u,
+            "66 9C pushfd: 4 bytes, image 000B0297 (the rig's, IF=1)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x9C };
+      c.flags = 0x0097; c.seg[2] = 0x2000; c.r[4] = 0x0100; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && rd_mem(0x200FC, 4) == 0x00030097u, "66 9C pushfd: IF=0 -> no VIF"); }
+    /* POPFD: loads AC and ID (they stick on the rig), the arithmetic flags, IF. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x9D, 0x66, 0x9C };
+      c.flags = 0x0202; c.seg[2] = 0x2000; c.r[4] = 0x00FC; put32(0x200FC, 0x002400C1u);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[4] & 0xFFFF) == 0x100 && (c.flags & 0xFFFF) == 0x00C3
+            && (c.flags & 0x00240000u) == 0x00240000u, "66 9D popfd: CF ZF SF, IF cleared, AC+ID set, SP+4");
+      CHECK(step1(&c) && (rd_mem(0x200FC, 4) & 0x00240000u) == 0x00240000u,
+            "pushfd after popfd: AC/ID read back (the 486/CPUID toggle tests pass)"); }
+    /* 66 PUSH ES / 66 POP DS: a WORD store into a 4-byte slot (upper kept), SP -/+ 4. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x06, 0x66, 0x1F };
+      c.seg[0] = 0x1234; c.seg[2] = 0x2000; c.r[4] = 0x0100; put32(0x200FC, 0xDEADBEEFu);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[4] & 0xFFFF) == 0xFC && rd_mem(0x200FC, 4) == 0xDEAD1234u,
+            "66 06: SP-4, low word = ES, upper half of the slot untouched (measured)");
+      CHECK(step1(&c) && c.seg[3] == 0x1234 && (c.r[4] & 0xFFFF) == 0x100, "66 1F: DS = low word, SP+4"); }
+    /* PUSH FS / POP GS: the 0F map, both widths. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0xA0, 0x66, 0x0F, 0xA8, 0x66, 0x0F, 0xA9, 0x0F, 0xA1 };
+      c.seg[4] = 0x4444; c.seg[5] = 0x5555; c.seg[2] = 0x2000; c.r[4] = 0x0100; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[4] & 0xFFFF) == 0xFE && rd_mem(0x200FE, 2) == 0x4444, "0F A0 push fs: 2 bytes");
+      CHECK(step1(&c) && (c.r[4] & 0xFFFF) == 0xFA && rd_mem(0x200FA, 2) == 0x5555, "66 0F A8 push gs: 4 bytes");
+      c.seg[5] = 0;
+      CHECK(step1(&c) && c.seg[5] == 0x5555 && (c.r[4] & 0xFFFF) == 0xFE, "66 0F A9 pop gs: SP+4");
+      c.seg[4] = 0;
+      CHECK(step1(&c) && c.seg[4] == 0x4444 && (c.r[4] & 0xFFFF) == 0x100 && c.ip == 10, "0F A1 pop fs: SP+2"); }
+    /* REP MOVSD forward, then MOVSD backward. */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF3, 0x66, 0xA5, 0xFD, 0x66, 0xA5 };
+      c.seg[3] = 0x2000; c.seg[0] = 0x3000; c.r[6] = 0x10; c.r[7] = 0x20; c.r[1] = 2;
+      put32(0x20010, 0x11223344u); put32(0x20014, 0x55667788u); put32(0x30020, 0); put32(0x30024, 0);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && rd_mem(0x30020, 4) == 0x11223344u && rd_mem(0x30024, 4) == 0x55667788u
+            && (c.r[6] & 0xFFFF) == 0x18 && (c.r[7] & 0xFFFF) == 0x28 && (c.r[1] & 0xFFFF) == 0,
+            "rep movsd: 2 dwords, SI/DI +8, CX 0");
+      step1(&c);                                         /* STD */
+      c.r[6] = 0x10; c.r[7] = 0x40;
+      CHECK(step1(&c) && rd_mem(0x30040, 4) == 0x11223344u && (c.r[6] & 0xFFFF) == 0x0C
+            && (c.r[7] & 0xFFFF) == 0x3C, "movsd DF=1: SI/DI -4"); }
+    /* STOSD / LODSD / REPE CMPSD / REPNE SCASD. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xAB, 0x66, 0xAD };
+      c.seg[0] = 0x3000; c.seg[3] = 0x3000; c.r[7] = 0x50; c.r[6] = 0x50; c.r[0] = 0xCAFEBABEu;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && rd_mem(0x30050, 4) == 0xCAFEBABEu && (c.r[7] & 0xFFFF) == 0x54, "stosd: EAX stored, DI+4");
+      c.r[0] = 0;
+      CHECK(step1(&c) && c.r[0] == 0xCAFEBABEu && (c.r[6] & 0xFFFF) == 0x54, "lodsd: EAX loaded, SI+4"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xF3, 0x66, 0xA7 };       /* repe cmpsd -- p_o32 items 16/17 */
+      c.seg[3] = 0x2000; c.seg[0] = 0x3000; c.r[6] = 0; c.r[7] = 0; c.r[1] = 3;
+      put32(0x20000, 0xA1A2A3A4u); put32(0x20004, 0xB1B2B3B4u); put32(0x20008, 0xC1C2C3C4u);
+      put32(0x30000, 0xA1A2A3A4u); put32(0x30004, 0xB1B2B300u); put32(0x30008, 0xC1C2C3C4u);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[1] & 0xFFFF) == 1 && (c.r[6] & 0xFFFF) == 8 && (c.flags & 0x08D5) == 0x0004,
+            "repe cmpsd: stops at dword 1, CX=1, SI+8, flags = PF only (the rig's)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xF2, 0x66, 0xAF };       /* repne scasd -- p_o32 items 18/19 */
+      c.seg[0] = 0x2000; c.r[7] = 0; c.r[1] = 5; c.r[0] = 0xC1C2C3C4u;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && (c.r[1] & 0xFFFF) == 2 && (c.r[7] & 0xFFFF) == 12 && (c.flags & 0x08D5) == 0x0044,
+            "repne scasd: found at dword 2, CX=2, DI+12, ZF+PF"); }
+    /* CALL rel32 / RET / RET imm16 / bail past 64 KB. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xE8, 0x10, 0x00, 0x00, 0x00 };
+      c.seg[2] = 0x2000; c.r[4] = 0x100; load(&c, 0x1000, 0x20, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x36 && (c.r[4] & 0xFFFF) == 0xFC && rd_mem(0x200FC, 4) == 0x26,
+            "66 E8: target next+rel32, 4-byte return EIP"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xE8, 0x00, 0x00, 0x01, 0x00 };   /* rel32 = 10000h */
+      c.seg[2] = 0x2000; c.r[4] = 0x100; load(&c, 0x1000, 0x20, p, sizeof p);
+      CHECK(step1(&c) == 0 && c.ip == 0x20 && (c.r[4] & 0xFFFF) == 0x100,
+            "66 E8 past 64 KB: bails, nothing moved (the CPU's #GP)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xE9, 0xF0, 0xFF, 0xFF, 0xFF };   /* jmp -16 */
+      load(&c, 0x1000, 0x40, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x36, "66 E9: jmp rel32 backwards"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC3 };
+      c.seg[2] = 0x2000; c.r[4] = 0xF8; put32(0x200F8, 0x1234); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x1234 && (c.r[4] & 0xFFFF) == 0xFC, "66 C3: pops a 4-byte EIP"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC2, 0x04, 0x00 };
+      c.seg[2] = 0x2000; c.r[4] = 0xF8; put32(0x200F8, 0x1234); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x1234 && (c.r[4] & 0xFFFF) == 0x100, "66 C2 4: EIP + 4 bytes of arguments"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC3 };
+      c.seg[2] = 0x2000; c.r[4] = 0xF8; put32(0x200F8, 0x00011234u); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 0 && c.ip == 0 && (c.r[4] & 0xFFFF) == 0xF8, "66 C3 to EIP > FFFFh: bails untouched"); }
+    /* RETF dword (real mode): EIP then a CS dword; RETF 8. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xCA, 0x08, 0x00 };
+      c.seg[2] = 0x2000; c.r[4] = 0xE0; put32(0x200E0, 0x0456); put32(0x200E4, 0xABCD2345u);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x0456 && c.seg[1] == 0x2345 && (c.r[4] & 0xFFFF) == 0xF0,
+            "66 CA 8: CS = low word of its dword, SP += 8 + 8"); }
+    /* FF /2 /4 /6 /3 under 66. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xFF, 0x16, 0x00, 0x05 };       /* call dword [0500h] */
+      c.seg[3] = 0x2000; c.seg[2] = 0x2000; c.r[4] = 0x100; put32(0x20500, 0x0777);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x0777 && rd_mem(0x200FC, 4) == 5, "66 FF /2: near call [m32], 4-byte return"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xFF, 0xE0 };                   /* jmp eax */
+      c.r[0] = 0x0000ABCDu; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0xABCD, "66 FF /4: jmp eax"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xFF, 0x36, 0x00, 0x05 };       /* push dword [0500h] */
+      c.seg[3] = 0x2000; c.seg[2] = 0x2000; c.r[4] = 0x100; put32(0x20500, 0x12345678u);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && rd_mem(0x200FC, 4) == 0x12345678u && (c.r[4] & 0xFFFF) == 0xFC, "66 FF /6: push dword [m]"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xFF, 0x1E, 0x00, 0x05 };       /* call far [0500h] m16:32 */
+      c.seg[3] = 0x2000; c.seg[2] = 0x2000; c.r[4] = 0x100;
+      put32(0x20500, 0x0321); MEM[0x20504] = 0x34; MEM[0x20505] = 0x12;
+      put32(0x200FC, 0xFACE0000u);                                          /* sentinel in the CS slot */
+      load(&c, 0x1000, 0x10, p, sizeof p);
+      CHECK(step1(&c) && c.seg[1] == 0x1234 && c.ip == 0x0321 && (c.r[4] & 0xFFFF) == 0xF8
+            && rd_mem(0x200FC, 4) == 0x00001000u && rd_mem(0x200F8, 4) == 0x15,
+            "66 FF /3: far call m16:32, CS slot ZERO-extended (measured), EIP slot"); }
+    /* 66 9A / 66 EA ptr16:32. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x9A, 0x21, 0x03, 0x00, 0x00, 0x34, 0x12 };
+      c.seg[2] = 0x2000; c.r[4] = 0x100; put32(0x200FC, 0xFACE0000u); load(&c, 0x1000, 0x10, p, sizeof p);
+      CHECK(step1(&c) && c.seg[1] == 0x1234 && c.ip == 0x0321 && rd_mem(0x200FC, 4) == 0x1000
+            && rd_mem(0x200F8, 4) == 0x18, "66 9A: far call ptr16:32, CS dword, EIP dword"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xEA, 0x21, 0x03, 0x00, 0x00, 0x34, 0x12 };
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.seg[1] == 0x1234 && c.ip == 0x0321, "66 EA: far jmp ptr16:32"); }
+    /* 66 8F /0, 66 C4, 66 C9. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x8F, 0x06, 0x00, 0x05 };
+      c.seg[3] = 0x2000; c.seg[2] = 0x2000; c.r[4] = 0xFC; put32(0x200FC, 0xCAFEBABEu);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && rd_mem(0x20500, 4) == 0xCAFEBABEu && (c.r[4] & 0xFFFF) == 0x100, "66 8F: pop dword [m]"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC4, 0x0E, 0x00, 0x05 };       /* les ecx,[0500h] */
+      c.seg[3] = 0x2000; put32(0x20500, 0x87654321u); MEM[0x20504] = 0x99; MEM[0x20505] = 0x88;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[1] == 0x87654321u && c.seg[0] == 0x8899, "66 C4: les ecx, m16:32"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC9 };                         /* p_o32 items 36/37 */
+      c.seg[2] = 0x2000; c.r[4] = 0xABCD00F2u; c.r[5] = 0x777700FCu; put32(0x200FC, 0x11223344u);
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[5] == 0x11223344u && c.r[4] == 0xABCD0100u,
+            "66 C9 leave: SP = BP (16-bit stack, ESP high kept), EBP = pop32"); }
+    /* IRETD, real mode. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xCF };
+      c.seg[2] = 0x2000; c.r[4] = 0xF0; put32(0x200F0, 0x0456); put32(0x200F4, 0x2345);
+      put32(0x200F8, 0x00240203u); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.ip == 0x0456 && c.seg[1] == 0x2345 && (c.r[4] & 0xFFFF) == 0xFC
+            && (c.flags & 0xFFFF) == 0x0203 && (c.flags & 0x00240000u) == 0x00240000u,
+            "66 CF iretd: EIP, CS, EFLAGS dwords (12 bytes), as POPFD loads them"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xCF };
+      c.seg[2] = 0x2000; c.r[4] = 0xF0; put32(0x200F0, 0x00010456u); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 0 && (c.r[4] & 0xFFFF) == 0xF0, "66 CF to EIP > FFFFh: bails"); }
+    /* 66 8C: register zero-extends (measured), memory is a word. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x8C, 0xD8, 0x66, 0x8C, 0x1E, 0x00, 0x05 };
+      c.r[0] = 0xDEADBEEFu; c.seg[3] = 0x2000; put32(0x20500, 0xFFFFFFFFu); load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[0] == 0x2000, "66 8C D8 mov eax,ds: zero-extended (measured)");
+      CHECK(step1(&c) && rd_mem(0x20500, 4) == 0xFFFF2000u, "66 8C to memory: a word store"); }
+    /* IN EAX: a 4-byte port access now. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xE5, 0x60 };
+      c.r[0] = 0xDEADBEEFu; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) && c.r[0] == 0xA5, "66 E5 in eax,60h: all 32 bits written"); }
+
+    /* ---- IRET and RETF dword in 16-bit PROTECTED mode ---- */
+    g_seg2lin = t_seg2lin; g_sel_desc = t_sel_desc;
+    { icpu c = mkcpu(); uint32_t ss = t_seg2lin(0x17), lin = t_seg2lin(0x0F) + 0x20;
+      c.seg[1] = 0x000F; c.seg[2] = 0x0017; c.r[4] = 0x100; c.flags = 0x0002; c.ip = 0x20; MEM[lin] = 0xCF;
+      MEM[ss + 0x100] = 0x34; MEM[ss + 0x101] = 0x12; MEM[ss + 0x102] = 0x0F; MEM[ss + 0x103] = 0x00;
+      MEM[ss + 0x104] = 0x03; MEM[ss + 0x105] = 0x02;                       /* FLAGS 0203 */
+      CHECK(step1(&c) && c.ip == 0x1234 && c.seg[1] == 0x000F && (c.r[4] & 0xFFFF) == 0x106
+            && (c.flags & 0xFFFF) == 0x0203, "PM iret: same ring, 16-bit code target, FLAGS loaded"); }
+    { icpu c = mkcpu(); uint32_t ss = t_seg2lin(0x17), lin = t_seg2lin(0x0F) + 0x20;
+      c.seg[1] = 0x000F; c.seg[2] = 0x0017; c.r[4] = 0x100; c.ip = 0x20; MEM[lin] = 0xCF;
+      MEM[ss + 0x100] = 0x34; MEM[ss + 0x101] = 0x12; MEM[ss + 0x102] = 0x17; MEM[ss + 0x103] = 0x00;
+      CHECK(step1(&c) == 0 && c.ip == 0x20 && (c.r[4] & 0xFFFF) == 0x100, "PM iret to a DATA selector: bails");
+      MEM[ss + 0x102] = 0x1F;
+      CHECK(step1(&c) == 0, "PM iret to a 32-bit code segment: bails (not decodable here)");
+      MEM[ss + 0x102] = 0x0C;
+      CHECK(step1(&c) == 0, "PM iret to RPL 0 (a ring change, SS:SP too): bails");
+      MEM[ss + 0x102] = 0x0F; MEM[ss + 0x101] = 0x90;                       /* IP 9034 > limit 7FFF */
+      CHECK(step1(&c) == 0, "PM iret past the target's limit: bails");
+      MEM[ss + 0x102] = 0x27; MEM[ss + 0x101] = 0x12;
+      CHECK(step1(&c) == 0, "PM iret to an invalid selector: bails"); }
+    { icpu c = mkcpu(); uint32_t ss = t_seg2lin(0x17), lin = t_seg2lin(0x0F) + 0x20;
+      c.seg[1] = 0x000F; c.seg[2] = 0x0017; c.r[4] = 0x100; c.ip = 0x20; MEM[lin] = 0x66; MEM[lin + 1] = 0xCB;
+      put32(ss + 0x100, 0x00000456u); put32(ss + 0x104, 0x0000000Fu);
+      CHECK(step1(&c) && c.ip == 0x456 && c.seg[1] == 0x0F && (c.r[4] & 0xFFFF) == 0x108,
+            "PM 66 CB retfd: to a 16-bit code segment, SP+8");
+      c.ip = 0x20; c.r[4] = 0x100; put32(ss + 0x104, 0x1F);
+      CHECK(step1(&c) == 0, "PM 66 CB retfd to a 32-bit segment: bails"); }
+    { icpu c = mkcpu(); uint32_t lin = t_seg2lin(0x0F) + 0x20;
+      c.seg[1] = 0x000F; c.seg[2] = 0x0017; c.r[4] = 0x100; c.ip = 0x20; MEM[lin] = 0x66; MEM[lin + 1] = 0xCF;
+      CHECK(step1(&c) == 0, "PM 66 CF iretd: still the CPU's (bails)"); }
+    g_seg2lin = 0; g_sel_desc = 0;
+}
+
+/* ── #194: REPLAY p_o32.com THROUGH THE INTERPRETER AND COMPARE WITH THE RIG'S CPU. ────
+   p_o32's `measure` section is pure computation into `res` (no INT, no I/O, no absolute
+   segment value stored), so the very bytes the rig ran under XP's V86 monitor can be run
+   here. p_o32.ref.txt is the rig's `BUF=res` line, recorded by
+   `dosdiff.py tools/dostest/p_o32.com --host ntvdmex` (runs/s87_dpmi). Equal buffers =
+   the interpreter answers every case as the machine it stands in for does -- including
+   the parts the manual leaves to the implementation.
+   ⚠ A missing .COM or reference is a FAILURE, not a skip (offvm.sh's rule). */
+static int hexval(int ch) { return (ch >= '0' && ch <= '9') ? ch - '0' : (ch >= 'A' && ch <= 'F') ? ch - 'A' + 10
+                                   : (ch >= 'a' && ch <= 'f') ? ch - 'a' + 10 : -1; }
+static void o32_replay(void)
+{
+    FILE *f; static BYTE com[0x10000]; size_t n; char line[4096]; BYTE ref[1024]; int nref = 0;
+    uint16_t measure, res, reslen; icpu c; long steps = 0; int i, first = -1;
+    printf("== #194: p_o32.com replayed through the interpreter vs the rig ==\n");
+    f = fopen("p_o32.com", "rb");
+    CHECK(f != NULL, "p_o32.com present (run from tools/dostest)");
+    if (!f) return;
+    n = fread(com, 1, sizeof com, f); fclose(f);
+    f = fopen("p_o32.ref.txt", "r");
+    CHECK(f != NULL, "p_o32.ref.txt present (the rig's dump)");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        char *q = strstr(line, "BUF=res ");
+        if (!q) continue;
+        for (q += 8; hexval(q[0]) >= 0 && hexval(q[1]) >= 0 && nref < (int)sizeof ref; q += 2)
+            ref[nref++] = (BYTE)(hexval(q[0]) * 16 + hexval(q[1]));
+    }
+    fclose(f);
+    measure = (uint16_t)(com[3] | (com[4] << 8));
+    res     = (uint16_t)(com[7] | (com[8] << 8));
+    reslen  = (uint16_t)(com[9] | (com[10] << 8));
+    CHECK(nref == reslen, "reference length = the probe's RES_LEN");
+    memset(MEM + 0x10000, 0, 0x10000);
+    memcpy(MEM + 0x10100, com, n);
+    c = mkcpu();
+    for (i = 0; i < 4; ++i) c.seg[i] = 0x1000;
+    c.flags = 0x0202;                                  /* IF=1, as the rig ran it */
+    c.r[4] = 0xFFFC; MEM[0x1FFFC] = 0xF0; MEM[0x1FFFD] = 0xFF;   /* return to FFF0: the end */
+    c.ip = measure;
+    while (c.ip != 0xFFF0 && steps < 200000 && istep(&c)) ++steps;
+    if (c.ip != 0xFFF0) {
+        uint32_t lin = ((uint32_t)c.seg[1] << 4) + c.ip;
+        printf("  bailed at %04X:%04X bytes %02X %02X %02X %02X after %ld steps\n",
+               c.seg[1], c.ip, MEM[lin], MEM[lin + 1], MEM[lin + 2], MEM[lin + 3], steps);
+    }
+    CHECK(c.ip == 0xFFF0, "the whole measure section runs in the interpreter (no bail)");
+    for (i = 0; i < nref && i < reslen; ++i)
+        if (MEM[0x10000 + res + i] != ref[i]) { first = i; break; }
+    if (first >= 0) {
+        int k = first / 4;
+        printf("  first difference in item %d: interp %02X%02X%02X%02X rig %02X%02X%02X%02X (bytes, LE)\n", k,
+               MEM[0x10000 + res + 4*k], MEM[0x10000 + res + 4*k + 1], MEM[0x10000 + res + 4*k + 2], MEM[0x10000 + res + 4*k + 3],
+               ref[4*k], ref[4*k + 1], ref[4*k + 2], ref[4*k + 3]);
+    }
+    CHECK(first < 0 && nref == reslen, "res buffer identical to the rig's, byte for byte");
+}
+
 int main(void)
 {
     printf("== mode-12h fill-loop interpreter battery ==\n");
@@ -843,6 +1108,9 @@ int main(void)
     { icpu c = mkcpu(); BYTE p[] = { 0xE3, 0x10 };     /* JCXZ +16 */
       c.r[1] = 0x00070000u; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
       CHECK(c.ip == 0x12, "jcxz: taken when CX=0 although ECX!=0"); }
+
+    o32_battery();
+    o32_replay();
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
