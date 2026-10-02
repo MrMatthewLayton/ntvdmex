@@ -157,7 +157,20 @@ def run_program(program, args="", timeout=240, budget=None):
              "C:",
              "ECHO [END] >> A:\\OUT.TXT"]
     floppy = os.path.join(BUILD, "pcem_scratch.img")
-    make_floppy(floppy, "\r\n".join(lines) + "\r\n", [(program, name)])
+    # ⚠ THE .deps COMPANIONS GO ON THE FLOPPY TOO (s87). Only the probe was staged, so
+    #   every probe that EXECs a child (p_exec, p_exmem, p_crit) got AX=0002 "file not
+    #   found" from PCem alone -- read as a DISPUTE between oracles, when it was this
+    #   runner not copying the file. Same sidecar rule as dosoracle.py and dosdiff.py.
+    payload = [(program, name)]
+    side = os.path.splitext(program)[0] + ".deps"
+    if os.path.exists(side):
+        with open(side) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    payload.append((os.path.join(os.path.dirname(program), line),
+                                    os.path.basename(line).upper()))
+    make_floppy(floppy, "\r\n".join(lines) + "\r\n", payload)
     limit = budget if budget else timeout
     proc = launch(floppy)
     t0 = time.time()

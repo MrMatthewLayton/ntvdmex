@@ -2095,6 +2095,57 @@ static char g_progname[64];           /* fwd: the status strip's name (defined b
 
 static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
 
+/* ── ★ GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM. ──────
+     `kind` from dos_exe_kind. CreateProcess does what stock's EXEC does with a
+     non-DOS binary: Windows itself routes it -- a PE to Win32, an NE to WOW (which,
+     with NTVDMEX installed, is another NTVDMEX). Command line = the quoted path plus
+     the DOS command tail; the working directory is the process's, which is the DOS
+     current directory.
+   ► WAIT FOR A CONSOLE PROGRAM, NOT FOR A WINDOW. EXEC is synchronous by contract
+     and AH=4Dh then has the child's exit code -- so a console PE is waited for (in
+     its own console window: our DOS screen is not a console it can write to). A GUI
+     PE or an NE is started and EXEC returns at once, as cmd.exe does: a DOS shell
+     frozen until Notepad closes would be the surprising answer.
+     ⚠ UNMEASURED AGAINST STOCK -- that needs a supervised stock run (stock.sh drops
+       the IFEO key). The wait/no-wait split is a decision, flagged on #255.
+   Returns 1 if Windows took it (EXEC succeeds, child rc in m->child_rc); 0 if it
+   would not -- e.g. a "PE" that is a DOS extender's 32-bit image Windows refuses --
+   and the caller then runs the MZ stub, which is what DOS would have done. */
+static int exec_windows(dos_machine_t *m, int kind, unsigned subsys, char **pp)
+{
+    char cmd[MAX_PATH + 160];
+    STARTUPINFOA si; PROCESS_INFORMATION pi;
+    const volatile BYTE *tail = (const volatile BYTE *)
+        (((DWORD)m->exec_tail_seg << 4) + m->exec_tail_off);
+    int n = tail[0] > 126 ? 126 : tail[0], k, wait = (kind == DOS_EXE_PE && subsys == 3);
+    char *q = cmd;
+    DWORD rc = 0;
+    *q++ = '"'; q = zput(q, m->exec_path); *q++ = '"';
+    for (k = 0; k < n && tail[1 + k] != 0x0D; ++k) *q++ = (char)tail[1 + k];
+    *q = 0;
+    for (k = 0; k < (int)sizeof si; ++k) ((char *)&si)[k] = 0;
+    si.cb = sizeof si;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
+                        wait ? CREATE_NEW_CONSOLE : 0, NULL, NULL, &si, &pi)) {
+        *pp = zput(*pp, "  EXEC: Windows would not start it (error 0x");
+        *pp = zhex(*pp, GetLastError());
+        *pp = zput(*pp, ") -- running its MZ stub, as DOS would\r\n");
+        return 0;
+    }
+    *pp = zput(*pp, kind == DOS_EXE_NE ? "  EXEC: a Windows (NE) program -> handed to Windows/WOW"
+                                       : "  EXEC: a Win32 (PE) program -> handed to Windows");
+    *pp = zput(*pp, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
+    if (wait) {
+        while (WaitForSingleObject(pi.hProcess, 100) == WAIT_TIMEOUT)
+            if (!g_running || g_wound_down) break;       /* the host is closing */
+        if (!GetExitCodeProcess(pi.hProcess, &rc) || rc == STILL_ACTIVE) rc = 0;
+        *pp = zput(*pp, "  EXEC: it exited, rc=0x"); *pp = zhex(*pp, rc); *pp = zput(*pp, "\r\n");
+    }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    m->child_rc = (uint16_t)(rc & 0xFF);                 /* AH=4Dh: AH=0 normal end */
+    return 1;
+}
+
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
 static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
 {
@@ -2103,7 +2154,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     uint16_t child = 0, maxpara = 0, want, envseg = 0, envblk = 0;
     dos_image_t img;
     volatile WORD *pfl;
-    int d = g_exec_depth;
+    int d = g_exec_depth, load_high = 0;
 
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
            + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
@@ -2126,6 +2177,19 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     }
     ReadFile(hf, exec_filebuf, sizeof(exec_filebuf), &nread, NULL);
     CloseHandle(hf);
+
+    /* GH #255: a Windows program is Windows's to run (see exec_windows). Load-and-go
+       only: AL=01 asks for an IMAGE in memory and AL=03 for an overlay, and for those
+       the MZ part is the only thing DOS could give. */
+    if (m->exec_mode == 0x00) {
+        unsigned sub = 0;
+        int kind = dos_exe_kind(exec_filebuf, nread, &sub);
+        if (kind != DOS_EXE_DOS && exec_windows(m, kind, sub, &p)) {
+            VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+            *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
+            return p;
+        }
+    }
 
     /* ── AL=03, THE OVERLAY: BRANCH BEFORE ANY OF THE PROCESS MACHINERY. ───────
          It is not a process. No memory is allocated, no PSP is built, no parent
@@ -2217,10 +2281,21 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         p = zput(p, ename); p = zput(p, "]\r\n");
     }
 
-    /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
-       least its minalloc. Probe the largest block by asking for too much. */
+    /* ── HOW MUCH: THE HEADER DECIDES, NOT "EVERYTHING". (GH #255) ─────────────
+         Probe the largest block by asking for too much, then size from it: a .COM
+         takes it all; an MZ gets 10h + image + e_maxalloc (capped at the block), is
+         REFUSED with 8 when 10h + image + e_minalloc does not fit -- before anything
+         is loaded -- and with min = max = 0 takes the whole block and is loaded at
+         its TOP. dos_exec_size has the measurements. Every child used to get the
+         whole block, so a program linked to leave memory for its own children found
+         none, and one that could not fit was loaded anyway. */
     if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
-    want = maxpara;
+    want = 0;
+    if (maxpara && dos_exec_size(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
+        p = zput(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = zhex(p, maxpara);
+        p = zput(p, " paras -> error 8, not loaded\r\n");
+        want = 0;
+    }
     if (!want || dos_alloc(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
         p = zput(p, "  EXEC: no memory\r\n");
         if (envblk) dos_free(NULL, envblk);
@@ -2290,7 +2365,11 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
       dpsp[0x16] = (BYTE)(m->psp_seg & 0xFF);       /* parent PSP */
       dpsp[0x17] = (BYTE)(m->psp_seg >> 8); }
 
-    img = dos_load(NULL, exec_filebuf, nread, child);
+    /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
+    img = dos_load_at(NULL, exec_filebuf, nread, child,
+                      load_high ? (uint16_t)(child + want - dos_image_paras(exec_filebuf, nread)) : 0);
+    if (load_high) { p = zput(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
+                     p = zhex(p, img.cs); p = zput(p, "\r\n"); }
 
     if (m->exec_mode == 0x01) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
