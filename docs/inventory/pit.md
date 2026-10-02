@@ -56,7 +56,7 @@ history; the narrative below keeps each fix and what it cost.)*
 | `40h` | R | Counter 0 count read | **IMPL** | `vdd_pit.c:497-505` — latch, access mode and the lo/hi toggle all honoured |
 | `41h` | W | Counter 1 count write | **IMPL** | `chan_write_count(&st->c1)` (`:469-470`, `:138-157`) |
 | `41h` | R | Counter 1 count read | **IMPL** | `chan_read_count` (`:493`, `:160-170`) — free-running from POST (`:639`, `:659-662`) |
-| `42h` | W | Counter 2 count write | **PART** | the **counter view** is right (`chan_write_count`, `:467-468`), but the **speaker divisor** `ch2_reload` is still read-modify-written (`:457-463`): an LSB-only or MSB-only write keeps the stale other half — the defect counter 0 had fixed (`:438-442`) |
+| `42h` | W | Counter 2 count write | **IMPL** | the counter view (`chan_write_count`) and, since #256, the **speaker divisor** `ch2_reload` follow the 8254: an LSB-only / MSB-only write zeroes the other half, and a lo/hi pair loads once, on the MSB (the LSB alone no longer re-tunes the speaker) | pit_test (#256 rows) |
 | `42h` | R | Counter 2 count read | **IMPL** | `chan_read_count(&st->c2)` (`:494`) |
 | `43h` | W | Control Word / Read-Back | **IMPL** | `:375-415`, all four counter selects, incl. `11` = Read-Back (`:384`) |
 | `43h` | R | *(undefined on hardware)* | **N/A** | `:497` returns `0xFF`; consistent, and recorded here so it is a decision rather than an accident |

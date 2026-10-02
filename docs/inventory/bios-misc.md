@@ -26,9 +26,8 @@ AMI 486 BIOS (s81, #54) and those rows are **oracle**. `p_lpt`'s five rows are r
 
 **The tick, the RTC read, the equipment word and memory size are right and measured.**
 INT 15h is where the surface thins: `AH=88h` reports the extended memory that XMS also owns, and the post-1994 memory calls
-(`E801h`, `E820h`) and A20 calls (`2400h`–`2403h`) are refused. INT 17h ignores `DX`, so
-every printer number is LPT1. (#206, merged while this was being marked, made `AH=86h` and
-`83h` really wait in V86 and answered `4Fh`; the PM arm still returns `86h` at once.)
+(`E801h`, `E820h`) and A20 calls (`2400h`–`2403h`) are refused. (#206 made `AH=86h` and `83h` really wait in V86 and answered `4Fh`;
+#256 made the PM `86h` wait too -- PM `83h` is still refused -- and INT 17h honour `DX`.)
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
@@ -37,7 +36,7 @@ every printer number is LPT1. (#206, merged while this was being marked, made `A
 | §3 INT 08h / INT 1Ch | 4 | 3 | — | — | 1 | — |
 | §4 INT 15h | 17 | 2 | 6 | — | 7 | 2 |
 | §5 INT 14h | 5 | 4 | — | — | 1 | — |
-| §6 INT 17h | 4 | 2 | 1 | — | 1 | — |
+| §6 INT 17h | 4 | 4 | — | — | — | — |
 | **Total** | **39** | **17** | **7** | **—** | **12** | **3** |
 
 ---
@@ -86,7 +85,7 @@ logged as `INT15 UNIMPL` (`:29193-29208`).
 | `83h` | event wait (set bit 7 of `ES:BX` after CX:DX µs; `AL=01h` cancels) | **PART** | #206, V86: `main.c:29118-29138`; the BDA mirrors it (`0040:0098`–`00A0`); the flag is posted from the 1 kHz pacer (`i15_event_poll`, `main.c:5639-5650`); a second request while one runs is refused `AH=83h` CF=1. **PM refuses it** (`:22387-22391`) | **oracle** (`p_int15w`: 6.22, DOSBox-X, PCem and ours agree, #206) |
 | `84h` | joystick | **IMPL** | `:29144-29181`, from the gameport VDD's sample; no stick → `AH=86h` CF=1 | untested ([gameport.md](gameport.md)) |
 | `85h` | SysReq (a hook the BIOS calls) | **MISS** | never called (keyboard.md §3) | — |
-| `86h` | wait CX:DX microseconds | **PART** | #206, V86: `main.c:29096-29117` re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. ⛔ **The PM arm still returns at once**, CF=0 (`:22385-22386`) — a DPMI client that waits with `86h` waits zero | **oracle** for V86 (`p_int15w`, four hosts, #206) |
+| `86h` | wait CX:DX microseconds | **IMPL** | #206, V86: re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. #256, PM: from the top-level PM loop the BOP is re-executed the same way (the loop keeps ticking the BIOS clock and delivering IRQ0); from a nested dispatch (an injected ISR, a callback) it waits in place with interrupts held | **oracle** for V86 (`p_int15w`, four hosts); PM on the rig only (`p_pm256` — no oracle runs a DPMI host) |
 | `87h` | move extended memory block | **PART** | V86 **IMPL** (`int15_move_block` `:8205`, arm `:29187-29192`; success = AH=0, CF=0, ZF=1); **PM refuses** it (`:22380`) | **oracle** for the V86 round trip (`p_int15` on PCem) |
 | `88h` | extended memory size | **PART** | `:29071-29095`: always `3C00h` (15 MB). ⚠ **The same memory is also handed out by XMS**; a real machine with HIMEM reports 0 here. Recorded in the code and deliberately not changed | untested |
 | `89h` | switch to protected mode | **N/A** | a V86 guest cannot be handed the CPU; DPMI is the route | — |
@@ -120,8 +119,8 @@ port model (`lpt_spool_put`).
 |---|---|---|---|---|
 | `00h` | print AL | **IMPL** | `:29247-29263`; `90h` ready, or `28h` (I/O error + out of paper) when the byte went nowhere | blocked on PCem (`int17.00.print` ×2) |
 | `01h`/`02h` | initialise / status | **IMPL** | `:29264-29267` | — |
-| `DX` | printer number | **PART** | ⛔ never read — `DX=1`/`2` (LPT2/LPT3, not fitted) is served as LPT1 instead of answering *timeout* | — |
-| other | unknown function | **MISS** | answers `90h` "ready", CF=0 (`:29268-29270`) — success for a call that does nothing | — |
+| `DX` | printer number | **IMPL** | #256: the port comes from `0040:0008+2*DX`; no port there (or `DX` > 2, or a base other than our fitted 378h) returns at once with every register as passed | **oracle** (`p_int17` LPT3 / `DX=3`: 6.22, DOSBox-X, PCem agree) |
+| other | unknown function | **IMPL** | #256: `AX` as passed (6.22/SeaBIOS, DOSBox-X). PCem's AMI answers the status instead -- disputed, recorded in `oracle-rules.json` | **oracle** (`p_int17`, two of three; AMI abstains with a rationale) |
 
 ---
 
@@ -157,7 +156,7 @@ executed rather than reasoned about.
    refuses `83h`; give it #206's V86 behaviour.
 2. INT 15h `2400h`–`2403h` on the shared A20 flag; `E801h`/`E820h` from the same
    numbers `88h` and XMS use.
-3. INT 17h: honour `DX`; refuse unknown functions.
+3. ~~INT 17h: honour `DX`; refuse unknown functions~~ — #256.
 4. ~~Settle the EBDA question~~ — #253: a real 1 KB EBDA at `9FC0h`. Still owed: decide
    `88h` vs XMS deliberately, with Doom and the batteries re-gated.
 5. INT 08h's diskette-motor countdown, now that the FDC exists.

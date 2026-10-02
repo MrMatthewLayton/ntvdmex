@@ -454,12 +454,18 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
             else { pit_load(st, (uint16_t)(((uint16_t)val << 8) | st->wr_lo)); st->wr_flip = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
+        /* ── #256: THE SPEAKER DIVISOR FOLLOWS COUNTER 0's RULE (above). ───────────
+             This was read-modify-written: an LSB-only or MSB-only write kept the stale
+             other half, and the LSB of a lo/hi pair re-tuned the speaker for the gap
+             before its MSB. The 8254 zeroes the other half on a single-byte access and
+             loads a lo/hi count when the MSB arrives. Only the TONE moves here -- the
+             counter view below (and IRQ0) is untouched. */
         uint8_t acc = st->ch2_access ? st->ch2_access : 3;
-        if (acc == 1) st->ch2_reload = (uint16_t)((st->ch2_reload & 0xFF00) | val);
-        else if (acc == 2) st->ch2_reload = (uint16_t)((st->ch2_reload & 0x00FF) | ((uint16_t)val << 8));
-        else {                               /* lo then hi                      */
-            if (!st->ch2_wr_flip) { st->ch2_reload = (uint16_t)((st->ch2_reload & 0xFF00) | val); st->ch2_wr_flip = 1; }
-            else { st->ch2_reload = (uint16_t)((st->ch2_reload & 0x00FF) | ((uint16_t)val << 8)); st->ch2_wr_flip = 0; }
+        if (acc == 1) st->ch2_reload = (uint16_t)val;                     /* MSB := 0 */
+        else if (acc == 2) st->ch2_reload = (uint16_t)((uint16_t)val << 8);   /* LSB := 0 */
+        else {                               /* lo then hi -- ONE load          */
+            if (!st->ch2_wr_flip) { st->ch2_wr_lo = val; st->ch2_wr_flip = 1; }
+            else { st->ch2_reload = (uint16_t)(((uint16_t)val << 8) | st->ch2_wr_lo); st->ch2_wr_flip = 0; }
         }
         /* ...and the same byte, into the COUNTER view. The speaker only ever
            wanted a divisor; a guest that programs counter 2 to MEASURE something

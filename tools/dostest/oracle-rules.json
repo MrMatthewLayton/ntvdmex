@@ -1998,5 +1998,55 @@
   ],
   "recorded": "2026-10-01",
   "why": "AH=44h AL=11h (query generic IOCTL capability) reports 'supported' as AL=00h with CF=0; AH is not part of the answer. The two Microsoft kernels leave AH=D1h (an internal value), dosbox-x 00h, and we leave 44h. CF (compared) and AL=0 are the contract; the whole word is not (GH #251)."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.02.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.02.lpt2",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "bda.lpt.ports",
+  "field": "BUF",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.03.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "An unknown INT 17h function (AH=03h, FFh) on a printer that exists. MS-DOS 6.22's SeaBIOS and DOSBox-X return with AX as passed; PCem's AMI BIOS answers the printer STATUS for it (48h, the same as its AH=02h). Neither is an IBM-documented function. We follow the two that leave AX alone: the defect being fixed was answering 90h 'ready', i.e. success for a call that does nothing (GH #256). AMI's status answer is recorded, not adopted."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.ff.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "An unknown INT 17h function (AH=03h, FFh) on a printer that exists. MS-DOS 6.22's SeaBIOS and DOSBox-X return with AX as passed; PCem's AMI BIOS answers the printer STATUS for it (48h, the same as its AH=02h). Neither is an IBM-documented function. We follow the two that leave AX alone: the defect being fixed was answering 90h 'ready', i.e. success for a call that does nothing (GH #256). AMI's status answer is recorded, not adopted."
  }
 ]
