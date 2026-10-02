@@ -37,6 +37,12 @@ static uint32_t iio_in(uint16_t port, int width) { hmix(0x1000000ULL | port | ((
 static void iio_out(uint16_t port, int width, uint32_t val)
 { hmix(0x2000000ULL | port | ((uint64_t)width << 16) | ((uint64_t)val << 32)); }
 
+/* #183 (s87): the code-pointer fetch path. Half the address space answers NULL so both
+   paths (pointer and imem_r8) run in every fuzz; an older header ignores the hook. */
+#define V86I_CODE_PTR 1
+static const volatile BYTE *imem_code_ptr(uint32_t lin)
+{ return (lin + 16 <= sizeof MEM && !(lin & 0x100)) ? (const volatile BYTE *)&MEM[lin] : 0; }
+
 #ifndef INTERP_H
 #define INTERP_H "../../src/host/v86interp.h"
 #endif

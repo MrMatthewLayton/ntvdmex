@@ -15073,14 +15073,36 @@ static int imem_page_ok(uint32_t lin)
 /* Flat/planar guest memory for the interpreter: A0000 goes through the VGA
    engine (a read loads the latches), everything else is the directly-mapped
    V86 address space. These are the host hooks v86interp.h requires. */
-static uint8_t imem_r8(uint32_t lin)
+/* #183 (s87): inline, with everything but "a known-good page of plain RAM" out of line.
+   The interpreter fetches every code byte through imem_r8, and it was a real cdecl call
+   per byte. g_pagemap[pg]==1 is exactly the old imem_page_ok() answer for a page already
+   probed below 1 MB; anything else (the aperture, HMA, an unprobed or bad page) takes
+   the slow path, which is the old function unchanged. */
+static __attribute__((noinline)) uint8_t imem_r8_slow(uint32_t lin)
 { if (lin >= A000_LO && lin < A000_HI) return vga_planar_read(&g_vid, lin - A000_LO);
   if (!imem_page_ok(lin)) { g_imem_bad_reads++; imem_bad_note(lin, 0); return 0xFF; }
   return *(volatile BYTE *)lin; }
-static void imem_w8(uint32_t lin, uint8_t v)
+static __attribute__((noinline)) void imem_w8_slow(uint32_t lin, uint8_t v)
 { if (lin >= A000_LO && lin < A000_HI) { vga_planar_write(&g_vid, lin - A000_LO, v); return; }
   if (!imem_page_ok(lin)) { g_imem_bad_writes++; imem_bad_note(lin, 1); return; }
   *(volatile BYTE *)lin = v; }
+static inline __attribute__((always_inline)) uint8_t imem_r8(uint32_t lin)
+{ if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
+      return *(volatile BYTE *)lin;
+  return imem_r8_slow(lin); }
+static inline __attribute__((always_inline)) void imem_w8(uint32_t lin, uint8_t v)
+{ if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
+      { *(volatile BYTE *)lin = v; return; }
+  imem_w8_slow(lin, v); }
+/* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
+   bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
+   aperture -- exactly the bytes imem_r8's fast path would have read one at a time. */
+#define V86I_CODE_PTR 1
+static inline __attribute__((always_inline)) const volatile BYTE *imem_code_ptr(uint32_t lin)
+{ if (lin < 0x100000u && (lin & 0xFFFu) <= 0xFF0u && g_pagemap[lin >> 12] == 1
+      && (lin < A000_LO || lin >= A000_HI))
+      return (const volatile BYTE *)(ULONG_PTR)lin;
+  return 0; }
 
 /* Port I/O dispatched to the device bus (same path as host_try_io). The
    interpreter already runs under g_lock, which is what the bus needs. */
