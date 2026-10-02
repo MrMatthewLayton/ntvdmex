@@ -42,7 +42,6 @@
 #define IDM_G_EXITALL   3
 #define IDM_P_BASE      1000
 #define IDM_P_SHOW      0
-#define IDM_P_SETTINGS  1
 #define IDM_P_CLOSE     2
 
 typedef struct {
@@ -169,9 +168,9 @@ static void tray_menu(void)
         i = order[j];
         if (!sub) continue;
         id = IDM_P_BASE + i * 8;
+        /* No per-program Settings (user, s88): settings are global, so they live
+           once, below, and not in every submenu. */
         AppendMenuA(sub, MF_STRING, id + IDM_P_SHOW,     "Show");
-        AppendMenuA(sub, MF_STRING, id + IDM_P_SETTINGS, "Settings...");
-        AppendMenuA(sub, MF_SEPARATOR, 0, NULL);
         AppendMenuA(sub, MF_STRING, id + IDM_P_CLOSE,    "Close Program");
         AppendMenuA(m, MF_POPUP | MF_STRING, (UINT_PTR)sub,
                     g_s[i].name[0] ? g_s[i].name : "(starting)");
@@ -197,7 +196,6 @@ static void on_command(UINT id)
         i = (int)(id - IDM_P_BASE) / 8;
         switch ((id - IDM_P_BASE) % 8) {
         case IDM_P_SHOW:     sess_cmd(i, MGRCMD_SHOW);      break;
-        case IDM_P_SETTINGS: sess_cmd(i, MGRCMD_SETTINGS);  break;
         case IDM_P_CLOSE:    sess_cmd(i, MGRCMD_CLOSEPROG); break;
         }
         return;

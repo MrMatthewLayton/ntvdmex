@@ -10251,8 +10251,8 @@ static void tray_menu(HWND h)
     HMENU m = CreatePopupMenu();
     POINT pt;
     if (!m) return;
-    AppendMenuA(m, MF_STRING, IDM_TRAY_SHOW,      "Show NTVDMEX Window");
-    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    /* s88 (user): a Win16 host's machine window is never shown, so there is no
+       "Show NTVDMEX Window" here any more (this menu only exists for Win16). */
     AppendMenuA(m, MF_STRING, IDM_FILE_SETTINGS,  "Settings...");
     AppendMenuA(m, MF_STRING, IDM_CAP_SHOT,       "Take Screenshot");
     AppendMenuA(m, MF_STRING, IDM_HELP_ABOUT,     "About");
@@ -13163,8 +13163,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          else on this desktop. */
     case WM_TRAY:
         if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { tray_menu(h); return 0; }
-        if (lp == WM_LBUTTONDBLCLK) { ShowWindow(h, SW_SHOW);
-                                      SetForegroundWindow(h); return 0; }
+        /* s88: double-click no longer shows the hidden Win16 machine window. */
         return 0;
     case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
         /* ── WIN+F10 IS THE HOST KEY. ────────────────────────────────────────────────
@@ -13633,7 +13632,11 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     /* GH #281: with the manager present, IT owns the tray icon -- for this host and
        every other. Without it (ntvdmex.exe missing) a Win16 host keeps its own. */
     mgr_start();
-    if (g_wow_launch && !g_mgr_avail) { tray_add(hi, g_hwnd); }
+    /* ⛔ A Win16 host's window is NEVER shown (user, s88: "Win16 apps should not
+         show an NTVDMEX host window ... at all"). 9b69fe1 folded the manager test
+         into this condition and a Win16 launch WITH a manager fell into the else:
+         every Win16 program came up with a black machine window beside it. */
+    if (g_wow_launch) { if (!g_mgr_avail) tray_add(hi, g_hwnd); }
     else              { ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd); }
     /* ★ THE START HAS SUCCEEDED -- say so NOW, not at exit. (GH #132, 2026-09-12)
          From here the user can close us, so the "no working VDM on the box" failure
