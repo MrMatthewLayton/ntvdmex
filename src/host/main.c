@@ -10128,7 +10128,7 @@ static void text_copy(HWND h, int all)
     for (r = r0; r <= r1 && n < (int)sizeof t - 140; ++r) {
         int start = n;
         for (c = c0; c <= c1; ++c) {
-            uint8_t ch = g_vid.vmem[VID_TEXT_OFF + (r * g_vid.cols + c) * 2];
+            uint8_t ch = g_vid.vmem[VID_TEXT_OFF + ((g_vid.crtc_start_live * 2u + (unsigned)(r * g_vid.cols + c) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
             t[n++] = (char)(ch ? ch : ' ');
         }
         while (n > start && t[n - 1] == ' ') --n;          /* right-trim the line */

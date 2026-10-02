@@ -2530,5 +2530,46 @@
   ],
   "recorded": "2026-10-02",
   "why": "Button count, as i33.00.reset/BX."
+ },
+ {
+  "probe": "vidtxt",
+  "case": "t12.30.mode3",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "6.22 under QEMU answers with SeaVGABIOS, a rewrite of the VGA BIOS -- provisional for every INT 10h row. It answers AH=12h BL=30h with AL=12h and then IGNORES the selection: mode 3 comes up 8x16. PCem's genuine IBM VGA ROM and DOSBox-X both give 8x14 (0040:0085 = 0Eh) after BL=30h AL=1."
+ },
+ {
+  "probe": "vidtxt",
+  "case": "t12.30.mode3",
+  "field": "CX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-02",
+  "why": "0040:0089 after a 350-line mode 3. PCem's genuine IBM VGA ROM: 01h (VGA active, 350 lines). SeaVGABIOS and DOSBox-X also set bit 6 (41h, 'display switching enabled'). The IBM ROM is the period card; bit 6 is a property of the BIOS build, not of the VGA."
+ },
+ {
+  "probe": "vidtxt",
+  "case": "t12.55.unknown",
+  "field": "AL",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "6.22 under QEMU answers with SeaVGABIOS, a rewrite of the VGA BIOS -- provisional for every INT 10h row. For a BL it does not implement it leaves AL as passed (77h); PCem's IBM VGA ROM and DOSBox-X return AL=00h -- 'not supported' is not AL=12h, which is what we used to answer for every BL."
+ },
+ {
+  "probe": "vidtxt",
+  "case": "t0D.09.page1",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-02",
+  "why": "6.22 under QEMU answers with SeaVGABIOS, a rewrite of the VGA BIOS -- provisional for every INT 10h row. AH=09h with BH=1 in mode 0Dh writes nothing to page 1 (A000:2000 stays 0); PCem's IBM VGA ROM and DOSBox-X draw the glyph there."
  }
 ]

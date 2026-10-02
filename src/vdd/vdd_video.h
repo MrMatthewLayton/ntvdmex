@@ -171,6 +171,16 @@ typedef struct video_state {
     uint16_t cur_shape;                 /* INT 10h AH=01 CX: start/end scan lines    */
     uint8_t  cursor_blink;              /* host setting: blink it, as a real CRTC does */
     uint8_t  page;
+    /* ── #252: THE BIOS KEEPS ONE CURSOR PER PAGE (0040:0050, eight words). cur_row/
+         cur_col stay THE ACTIVE PAGE's (everything that draws the cursor reads them);
+         pg_row/pg_col hold the other seven, swapped in and out by AH=05h. */
+    uint8_t  pg_row[8], pg_col[8];
+    /* AH=12h state a later call or mode set acts on (#252):
+         scan_sel   BL=30h: 0 = 200, 1 = 350, 2 = 400 lines for the next TEXT mode set
+         grey_sum   BL=33h: sum the DAC to grey on mode-set / AH=10h DAC loads
+         cur_emul_off BL=34h: CGA cursor emulation off -- AH=01h CX taken literally
+         vid_off    BL=32h: CPU addressing of video memory disabled (recorded only)  */
+    uint8_t  scan_sel, grey_sum, cur_emul_off, vid_off;
     /* ── TWO TABLES, AND CONFLATING THEM IS A BUG. ────────────────────────────
          dac[]  is the DAC: 256 ARGB entries, written by port 0x3C9 and the INT 10h
                 palette calls. It is what the GUEST programs.

@@ -10,7 +10,7 @@ firmware: what the BIOS calls do to that chip and to the BDA.
 (`:436-482`). The stub is `DOS_HDLR_SEG:0020` = `BOP 10h; IRET` (`main.c:26982-26984`);
 V86 arm `main.c:28969-28979`, PM arm `:22226-22239`.
 **Probes:** `p_video.asm`, `p_video2.asm` (#188), `p_plan12.asm`, `p_vgareg.asm` (mode
-tables). **Off-VM:** `video_test.c`, `vgarom_test.c`.
+tables), `p_vidtxt.asm` (#252: the frame buffer after the character/pixel services, pages, `12h`). **Off-VM:** `video_test.c`, `vgarom_test.c`.
 **Marked:** 2026-10-01, **from the code**. Carried over from `docs/PARITY.md` (retired
 2026-09-23) and re-marked.
 
@@ -24,30 +24,30 @@ s84 (#188, `9a91149`) PCem's genuine IBM VGA ROM answered `p_video2`: the page s
 
 ## Headline
 
-**The mode set, the BDA, the palette/DAC calls and the font calls are solid; the
-character and pixel services are a text-mode-and-mode-12h subset.** The shape of the gap:
+**The mode set, the BDA, the palette/DAC calls and the font calls are solid -- and since #252
+(2026-10-02) the character and pixel services work in every mode we set, on every page.**
+`p_vidtxt.asm` reads the frame buffer back after each call and compares it with PCem's genuine
+IBM VGA ROM (and DOSBox-X): the glyph rows in 13h, 04h, 06h, 0Dh and 10h, `AH=05h`'s CRTC start,
+per-page cursors and writes, and `AH=12h`'s answers. Before #252:
 
-- **Text output in the other graphics modes goes into the text buffer.** `09h`, `0Ah`,
-  `0Eh` and `13h` write `(char, attr)` pairs through `cell()` (`:398-399`), which always
-  addresses `B800:0`. In mode **13h** that is memory the screen does not show; in the
-  **CGA modes 04h–06h** it *is* the frame buffer, so the bytes appear as pixel noise.
-  Only the planar modes get glyphs, and those are drawn **8x16 at a 640-pixel stride**
-  (`glyph_12h` `:1389-1401`) — right for 11h/12h, wrong for 0Dh, 0Eh, 0Fh and 10h.
-- **Pages are bookkeeping only.** `05h` stores the page and the BDA follows (oracle-
-  verified), but the CRTC start address is never moved and every write still lands on
-  page 0. `02h`/`03h`/`08h`–`0Ah`/`13h` ignore `BH`.
-- **`12h` answers "supported" for every `BL` it does not implement** (`:1897`) — the
-  shape that hid `BL=31h` from Lemmings until it was fixed.
+- text output in mode **13h** and the **CGA modes** went to `B800:0` as `(char, attr)` pairs --
+  invisible in 13h, pixel noise in CGA; the planar modes got an 8x16 glyph at a 640-pixel stride
+  in all of them, with a background taken from `BL` bits 4-7;
+- `05h` flipped the BDA and nothing else: the CRTC never moved and every write landed on page 0;
+- `12h` answered "supported" for every `BL`.
+
+What is left is listed per row: `04h` light pen, `0Bh` in graphics modes, `10h AL=18h/19h`,
+`11h AL=03h/20h-24h`, `1Ah AL=01h`, and the vectors/`0040:00A8` in §6.
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
-| §1 Mode, cursor, page, scroll, characters, pixels (`00h`–`0Fh`) | 16 | 2 | 12 | 1 | 1 | — |
+| §1 Mode, cursor, page, scroll, characters, pixels (`00h`–`0Fh`) | 16 | 13 | 2 | — | 1 | — |
 | §2 `10h` palette and DAC | 17 | 13 | 2 | — | 2 | — |
 | §3 `11h` character generator | 6 | 3 | 1 | — | 2 | — |
-| §4 `12h` alternate select | 9 | 2 | — | — | 6 | 1 |
-| §5 `13h`, `1Ah`–`1Ch`, the rest (`4Fh` → vesa.md) | 6 | 2 | 2 | — | 1 | 1 |
-| §6 BDA video block and video vectors | 21 | 14 | 2 | — | 5 | — |
-| **Total** | **75** | **36** | **19** | **1** | **17** | **2** |
+| §4 `12h` alternate select | 10 | 6 | 2 | — | 1 | 1 |
+| §5 `13h`, `1Ah`–`1Ch`, the rest (`4Fh` → vesa.md) | 6 | 3 | 1 | — | 1 | 1 |
+| §6 BDA video block and video vectors | 21 | 15 | 1 | — | 5 | — |
+| **Total** | **76** | **53** | **9** | **—** | **12** | **2** |
 
 ---
 
@@ -57,19 +57,19 @@ character and pixel services are a text-mode-and-mode-12h subset.** The shape of
 |---|---|---|---|---|
 | `00h` | set mode | **IMPL** | `:1413-1553`: modes 00h–07h and 0Dh–13h (`vid_modes` `:380-396`); AL bit 7 keeps VRAM (`:1428`, recorded in `0040:0087`); reloads DAC, register file (`vga_load_modedef`, measured tables), CRTC, sequencer chain-4, blink, ROM font; returns the *mode flag* in AL (`:1542`). Modes 08h–0Ch are not VGA modes and are logged as unimplemented | **oracle** for the register tables ([vga.md](vga.md), `p_vgareg` on PCem) and AL (`p_plan12` on PCem); provisional for the BDA rows |
 | `01h` | set cursor shape | **PART** | `:1554` stores CX raw (CRTC `0Ah`/`0Bh` read the same state, `:2614-2615`). ⚠ **CGA cursor emulation** — `0040:0087` bit 0 clear says it is on (`:478`), so the BIOS should scale an 8-line shape to the 16-line cell — is not done | untested |
-| `02h` | set cursor position | **PART** | `:1555`; **`BH` (page) ignored** — one cursor for all pages | provisional (`p_video` set/get round trip, page 0) |
-| `03h` | get cursor position and shape | **PART** | `:1556-1563`; shape `0000` in graphics modes (measured fix); `BH` ignored | provisional |
-| `04h` | read light pen | **MISS** | `default:` (`:1927-1930`) leaves `AH=04h`; the VGA BIOS answers `AH=00h`, "not triggered" | — |
-| `05h` | select active page | **STORE** | `:1564` stores `st->page`, and the BDA follows (§6). **The CRTC start address is not moved**, and `cell()` always writes page 0 — the displayed page never changes | **oracle** for the BDA effect (`p_video2`, #188) |
-| `06h` | scroll up | **PART** | `scroll_up` `:484-500`: text modes only — in a graphics mode it shifts bytes at `B800:0` | provisional (text) |
-| `07h` | scroll down | **PART** | `:1689-1711`; text only, as `06h` | untested |
-| `08h` | read character and attribute | **PART** | `:1569-1570`: text only, page ignored. Reading a character back from **graphics** pixels (the BIOS matches the glyph) is not done | untested |
-| `09h` | write character and attribute | **PART** | `:1571-1581`: text ✓; planar modes as 8x16 glyphs at 640-pixel stride (wrong for 0Dh/0Eh/0Fh/10h); **mode 13h and CGA modes write into `B800:0`**; `BL` bit 7 (XOR) ignored; page ignored | untested |
-| `0Ah` | write character only | **PART** | same arm as `09h` | untested |
-| `0Bh` | set border / background / CGA palette | **PART** | `:1712-1715`: `BH=0` sets the overscan (border) — right in text, but in graphics modes it should set the **background** (palette 0) and the CGA intensity bit; `BH=1` selects the CGA palette (consumed by `render_cga` `:3460`) | untested |
-| `0Ch` | write pixel | **PART** | `:1582-1597`: mode 13h ✓; planar at **640x480 geometry** for every planar mode; **CGA modes not written**; `AL` bit 7 (XOR) ignored; page ignored | untested |
-| `0Dh` | read pixel | **PART** | `:1716-1731`: mode 13h and planar (stride from `gw` ✓); **CGA modes read 0** | untested |
-| `0Eh` | teletype | **PART** | `:1598-1603`, `teletype` `:513-529`: text ✓ (BEL, BS, CR, LF, scroll); planar = `glyph_12h` (geometry as `09h`); **mode 13h and CGA go to `B800:0`**; colour in `BL` used only by the planar path | provisional (text, via DOS output) |
+| `02h` | set cursor position | **IMPL** | page `BH`'s cursor (#252): the active page's is `cur_row`/`cur_col`, the other seven `pg_row`/`pg_col` (`0040:0050`) | **oracle** (`p_vidtxt` `t03.03.page1`/`.page0`, PCem IBM ROM); provisional (`p_video` round trip, page 0) |
+| `03h` | get cursor position and shape | **IMPL** | page `BH`'s cursor (#252); shape `0000` in graphics modes (measured fix) | **oracle** (`t03.03.page0` -- page 0 keeps its own cursor while page 1's moves) |
+| `04h` | read light pen | **MISS** | `default:` leaves `AH=04h`; the VGA BIOS answers `AH=00h`, "not triggered" | -- |
+| `05h` | select active page | **IMPL** | stores `st->page`, swaps the cursor, and **loads the CRTC start** (#252): page × page size in WORDS in text (80x25 page 1 = `0800h`), in BYTES in the planar modes (`0Dh` page 1 = `2000h`). The text renderer reads the latched start (`dcell`), so the page shown is the page selected -- and a guest's own `CR0C`/`CR0D` write pages text too. One-page modes (CGA, `11h`-`13h`) keep the number only | **oracle** (`t03.05.crtc`, `t0D.05.crtc`, `.back`; the BDA side `p_video2`, #188) |
+| `06h` | scroll up | **IMPL** | text: cells on the active page; graphics (#252): `gfx_scroll` moves pixel rows by a character row in the mode's own layout and fills with `BH` | **oracle** (`t13.06.row0`/`.row1`); provisional (text) |
+| `07h` | scroll down | **IMPL** | as `06h`, downwards (#252 added graphics) | off-VM (`video_test.c` #252 block covers `06h`; `07h` shares `gfx_scroll`) |
+| `08h` | read character and attribute | **IMPL** | page `BH`'s cursor; text from the cell; graphics (#252) by reading the cell's pixels back and matching the font (`gfx_read_char`), `AH=0` | **oracle** (`t13.08.read`) |
+| `09h` | write character and attribute | **IMPL** | `CX` copies at page `BH`'s cursor. Text: `(char, attr)`. Graphics (#252, `gfx_glyph`): the ROM glyph for the mode's cell (8x8 / 8x14 / 8x16) in the mode's layout -- 13h one byte a pixel (no XOR: `BL` is the colour), CGA 2/1 bits a pixel across the two banks, planar one bit per plane at `gw/8` a line on page `BH`; foreground `BL`, background 0, `BL` bit 7 = XOR (not 13h). It wrote `(char, attr)` to `B800:0` in 13h and CGA, and 8x16 at a 640 stride in every planar mode | **oracle** (`t13.09.A`, `.xor`, `t04.09.A`, `.xor`, `t06.09.A`, `t0D.09.A`, `.xor`, `.page1`, `t10.09.A.p0/.p1`, `t03.09.page1`) |
+| `0Ah` | write character only | **IMPL** | `09h`'s arm; in graphics `BL` is the colour too (RBIL) | as `09h` (shared path) |
+| `0Bh` | set border / background / CGA palette | **PART** | `BH=0` sets the overscan (border) -- right in text, but in graphics modes it should set the **background** (palette 0) and the CGA intensity bit; `BH=1` selects the CGA palette (consumed by `render_cga`) | untested |
+| `0Ch` | write pixel | **IMPL** | (#252) each mode's geometry: 13h one byte, planar `gw/8` a line on page `BH`, CGA modes 2/1 bits a pixel in the banks (were not written at all); `AL` bit 7 = XOR except 13h | **oracle** (`t04.0C.byte`) |
+| `0Dh` | read pixel | **IMPL** | 13h, planar (page `BH`), and CGA (#252; read 0 before) | **oracle** (`t04.0D.read`) |
+| `0Eh` | teletype | **IMPL** | on the **active** page whatever `BH` says (PCem's IBM ROM: `t03.0E.which`); text as before; graphics (#252): the glyph in `BL`, scrolling by pixel rows with background 0. DOS console output (`vdd_video_putc`) takes this path with `BL=07h`, as DOS's CON driver calls it -- so `INT 21h` text in mode 13h now SHOWS, as on DOS | **oracle** (`t13.0E.B`, `.cursor`, `t04.0E.B`, `t03.0E.which`) |
 | `0Fh` | get mode, columns, page | **IMPL** | `:1604-1610`; `BL` preserved (measured fix) | **oracle** for `BH` after a page flip (#188); provisional for `BL` |
 
 ## 2. `AH=10h` — palette and DAC
@@ -112,26 +112,29 @@ BIOS's `OUT`s would (#226).
 
 ## 4. `AH=12h` — alternate select
 
-`:1876-1898`. ⛔ **Every `BL` without an arm answers `AL=12h` — "supported" — and does
-nothing** (`:1897`).
+Since #252 every `BL` without an arm answers **`AL=00h`** -- what PCem's IBM VGA ROM and
+DOSBox-X return (`p_vidtxt` `t12.55.unknown`; SeaVGABIOS leaves `AL` and abstains). It answered
+`AL=12h`, "supported", and did nothing -- the shape that hid `BL=31h` from Lemmings. An `AL`
+out of range for the five on/off calls is refused the same way.
 
 | BL | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `10h` | get EGA/VGA information | **IMPL** | `:1878`: `BX=0003h` (colour, 256 KB), `CX=0009h` | untested |
-| `20h` | alternate print-screen handler | **MISS** | reports success | — |
-| `30h` | select scan lines for text modes (200/350/400) | **MISS** | reports success; the next text-mode set is always 400 lines | — |
-| `31h` | default palette loading on/off | **IMPL** | `:1893-1896` | by hand (Lemmings) |
-| `32h` | video addressing on/off | **MISS** | reports success | — |
-| `33h` | grey-scale summing on/off | **MISS** | reports success; `10h/1Bh` exists, but a mode set never sums | — |
-| `34h` | cursor emulation on/off | **MISS** | reports success (see `01h`) | — |
-| `35h` | display switch | **N/A** | for machines with two display adapters | — |
-| `36h` | video refresh on/off | **MISS** | reports success | — |
+| `10h` | get EGA/VGA information | **IMPL** | `BX=0003h` (colour, 256 KB), `CX=0009h` | untested |
+| `20h` | alternate print-screen handler | **MISS** | refused (`AL=00h`) since #252; there is no print-screen routine to install | -- |
+| `30h` | select scan lines for text modes (200/350/400) | **IMPL** | (#252) kept in `scan_sel`; the next colour text-mode set (00h-03h) comes up 8x8 / 8x14 / 8x16 in 200 / 350 / 400 lines, and `0040:0085`/`0089` follow | **oracle** (`t12.30`, `t12.30.mode3`: PCem 8x14, `0089=01h`; SeaVGABIOS ignores the selection and abstains) |
+| `31h` | default palette loading on/off | **IMPL** | `def_pal_off` | by hand (Lemmings) |
+| `32h` | video addressing on/off | **PART** | (#252) recorded in Misc Output bit 1 (`3CCh` reads it back), `AL=12h`; the aperture is host memory and is not cut off -- a [vga.md](vga.md) gap | **oracle** for `AL` (`t12.32`) |
+| `33h` | grey-scale summing on/off | **IMPL** | (#252) `grey_sum`: a mode set's palette and `10h AL=10h/12h` loads are summed (`dac_grey`, 30/59/11) | **oracle** for `AL` (`t12.33`); the summing off-VM (`video_test.c` #252) |
+| `34h` | cursor emulation on/off | **IMPL** | (#252) `cur_emul_off`: off = `01h`'s `CX` drawn literally (`draw_hw_cursor`); `0040:0087` bit 0 | **oracle** for `AL` (`t12.34`); off-VM |
+| `35h` | display switch | **N/A** | for machines with two display adapters; refused (`AL=00h`) | -- |
+| `36h` | video refresh on/off | **PART** | (#252) recorded as Clocking Mode (SR1) bit 5, `AL=12h`; the renderer does not blank on SR1 -- a [vga.md](vga.md) gap | **oracle** for `AL` (`t12.36`) |
+| other | -- | **IMPL** | `AL=00h` (#252) | **oracle** (`t12.55.unknown`) |
 
 ## 5. `AH=13h`, `1Ah`–`1Ch`, and the rest
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `13h` | write string | **PART** | `:1746-1756`: **always moves the cursor** (AL bit 0 clear should leave it); BEL/BS/CR/LF are **stored as glyphs**, not executed; text modes only; page ignored | untested |
+| `13h` | write string | **IMPL** | (#252) `AL` bit 0 = leave the cursor after the string (else it is put back), bit 1 = `(char, attr)` pairs; page `BH`; BEL/BS/CR/LF executed; graphics modes draw through `gfx_glyph`. Scrolling past the bottom happens on the active page only | off-VM shares the `09h`/teletype paths; untested by a probe |
 | `1Ah` `AL=00h` | get display combination | **IMPL** | `:1899-1902`, `BX=0008h` (VGA colour, no secondary) | untested |
 | `1Ah` `AL=01h` | set display combination | **MISS** | not distinguished from `00h`: the caller's `BX` is overwritten with `0008h` | — |
 | `1Bh` | functionality / state information | **PART** | `:1903-1925`: mode, columns, rows, cell height are live; **256 colours, 8 pages and scan-line code 0 for every mode**, and the static table is a constant | untested |
@@ -150,7 +153,7 @@ frame — *derived, not maintained*.
 | `004Ah` | columns | **IMPL** | `:442` | as `0049h` |
 | `004Ch` | page size | **IMPL** | `:443-463`; per mode (was a flat `2000h`) | **oracle** (06h/12h/13h on 6.22; the rest on PCem, #188) |
 | `004Eh` | current page offset | **IMPL** | `:464-465` | **oracle** (`AH=05h` flips, #188) |
-| `0050h`–`005Fh` | cursor position, per page | **PART** | `:466-467`: only the **active** page's slot is written, from the single cursor; the other seven are never kept | — |
+| `0050h`–`005Fh` | cursor position, per page | **IMPL** | all eight slots written (#252): the active page from `cur_row`/`cur_col`, the others from `pg_row`/`pg_col` | **oracle** via `AH=03h` (`t03.03.*`) |
 | `0060h` | cursor shape | **IMPL** | `:468-470`; `0000h` in graphics modes | provisional |
 | `0062h` | active page | **IMPL** | `:471` | **oracle** (#188) |
 | `0063h` | CRTC base port | **IMPL** | `:472-473`; `3B4h` in mode 07h | provisional |
@@ -158,7 +161,7 @@ frame — *derived, not maintained*.
 | `0066h` | CGA palette register | **IMPL** | `:1452` | **oracle** (#188) |
 | `0084h` | rows − 1 | **IMPL** | `:474` | provisional |
 | `0085h` | character height | **IMPL** | `:475` | provisional |
-| `0087h` | EGA/VGA control (256 KB, bit 7 = last mode set kept VRAM) | **IMPL** | `:478` | untested |
+| `0087h` | EGA/VGA control (256 KB, bit 7 = last mode set kept VRAM, bit 0 = cursor emulation off) | **IMPL** | bit 0 follows `12h BL=34h` (#252) | untested |
 | `0088h` | switch settings | **IMPL** | `:479`, `09h` | untested |
 | `0089h` | VGA flags: VGA active, scan-line selection | **PART** | `:481`: bits 7/4 are **derived from the current mode's height**; the BIOS keeps the count chosen by `12h BL=30h` for the next text-mode set (which is MISS, §4) | untested |
 | `008Ah` | display-combination index | **MISS** | not written | — |
@@ -205,11 +208,9 @@ verified. Mode 01h's cursor became the ROM's `0D0E`.
 
 ## What to fix, in order
 
-1. Text output (`09h`/`0Ah`/`0Eh`/`13h`) in mode 13h and the CGA modes, and the planar
-   glyph path at each mode's own cell size and stride. Then `0Ch`/`0Dh` for CGA.
-2. Pages that page: `05h` moves the CRTC start address, and the character services
-   honour `BH` and the per-page cursors in `0040:0050`.
-3. `12h`: refuse what is not implemented, or implement `30h` and `34h` (both change what
-   a later mode set does).
-4. `11h AL=03h` must not drop a user font; `11h AL=20h–24h` and INT 1Fh/43h.
-5. `0040:00A8` (the Video Save Pointer table) and INT 1Dh.
+1. ~~Text output in 13h and the CGA modes; the planar glyph at each mode's cell and stride;
+   `0Ch`/`0Dh` for CGA~~ -- done, #252.
+2. ~~Pages that page: `05h` moves the CRTC start; `BH` and the per-page cursors~~ -- done, #252.
+3. ~~`12h`: refuse what is not implemented; implement `30h`/`34h`~~ -- done, #252.
+4. The rest -- `0Bh` in graphics, `11h AL=03h` and `20h`-`24h` with INT 1Fh/43h, `04h`,
+   `0040:00A8`/INT 1Dh, SR1 screen-off -- is **#266**.

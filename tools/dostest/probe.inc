@@ -154,9 +154,47 @@ probe_end:
 %ifdef PROBE_FILE
         call    probe_flush
 %endif
+%ifdef PROBE_DEFER
+        call    probe_flush_con
+%endif
         mov     ax, 4C00h
         int     21h
 
+; ── PROBE_DEFER: THE DUMP WAITS UNTIL THE SCREEN IS NOT THE SUBJECT. (#252)
+;    A probe that measures what INT 10h draws into a GRAPHICS frame buffer cannot
+;    print as it goes: on a host whose console is the screen (ours -- DOS output goes
+;    to the teletype), every EMIT line would itself be drawn into the frame the next
+;    case reads back. The oracles redirect stdout to a file and never see it, so the
+;    disagreement would be manufactured by the reporting. Define PROBE_DEFER and the
+;    dump is buffered (as PROBE_FILE does) and written to handle 1 with AH=40h at
+;    PROBE_END -- after the probe has set its last mode. Same exit codes as the file
+;    sink; an overflow appends #TRUNCATED. Off by default: other probes unchanged.
+%ifdef PROBE_DEFER
+probe_flush_con:
+        cmp     word [__fovf], 0
+        je      .w
+        mov     si, __s_trunc
+        call    probe_f_puts
+.w:     mov     ah, 40h
+        mov     bx, 1
+        mov     cx, [__flen]
+        mov     dx, __fbuf
+        int     21h
+        jc      .e
+        cmp     word [__fovf], 0
+        jne     .eovf
+        ret
+.e:     mov     ax, 4C02h
+        int     21h
+.eovf:  mov     ax, 4C03h
+        int     21h
+%define __PROBE_SINK
+%endif
+%ifdef PROBE_FILE
+%define __PROBE_SINK
+%endif
+
+%ifdef __PROBE_SINK
 %ifdef PROBE_FILE
 ; ── THE FILE SINK. Only assembled when PROBE_FILE is defined; see the note at the
 ;    top for why it exists. AH=3Ch creates/truncates, AH=40h writes, AH=3Eh closes.
@@ -201,6 +239,7 @@ probe_flush:
 .eovf:
         mov     ax, 4C03h
         int     21h
+%endif
 
 ; append AL to the buffer; sets __fovf and drops the byte if it would not fit.
 probe_f_putc:
@@ -229,11 +268,17 @@ probe_f_puts:                           ; SI = asciiz, straight to the buffer
         pop     ax
         ret
 
+%ifdef PROBE_FILE
 __fname    db PROBE_FILE, 0
+%endif
 __s_trunc  db 13, 10, '#TRUNCATED -- the buffer filled; this dump is INCOMPLETE', 13, 10, 0
 __flen     dw 0
 __fovf     dw 0
+%ifdef PROBE_FCAP
+__fcap     equ PROBE_FCAP
+%else
 __fcap     equ 4096
+%endif
 __fbuf     times __fcap db 0
 %endif
 
@@ -320,7 +365,7 @@ probe_putc:                             ; AL = char
         push    dx
         push    si
         push    di
-%ifdef PROBE_FILE
+%ifdef __PROBE_SINK
         call    probe_f_putc            ; no console at all -- see the note at the top
 %else
         mov     dl, al
