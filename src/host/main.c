@@ -1171,6 +1171,7 @@ static DWORD    g_ui_tick_skips;
 static DWORD    g_ui_hook_presents, g_ui_timer_presents;  /* who raised each present   */
 static volatile LONG g_ui_present_pending;                /* one WM_APP_PRESENT in flight */
 static int      g_ui_forced;                              /* this body run was raised by the hook */
+static DWORD    g_ui_input_first;                         /* input served ahead of a queued present */
 
 /* ── MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED. ──────────
      Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
@@ -7734,6 +7735,7 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
      everything else not run. (Not the pre-#247 marshalling: the full register write-back
      and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing. */
 #define SIMINTREFL_OFF_FLAG CFG_("simintrefl_off.flag")
+#define DDFLIP_DRIVER_FLAG  CFG_("ddflip_driver.flag")   /* s86: DirectDraw flip timed by the driver (old path) */
 static int g_simint_reflect = 0;
 static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
 static int g_textdump = 0;              /* textdump.flag: dump the text screen too    */
@@ -12034,6 +12036,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                       kq = zput(kq, "x");  kq = zhex(kq, g_simint_vec[sv]); } }
                 kq = zput(kq, " || ui_gap_us="); kq = zhex(kq, g_ui_gap_us);
                 kq = zput(kq, " lk_wait_us="); kq = zhex(kq, g_lk_wait_us);
+                kq = zput(kq, " in_first="); kq = zhex(kq, g_ui_input_first);
                 kq = zput(kq, " || IRQ1GATE checks="); kq = zhex(kq, g_irq1_checks);
                 kq = zput(kq, " no_if=");   kq = zhex(kq, g_irq1_no_if);
                 kq = zput(kq, " in_08h=");  kq = zhex(kq, g_irq1_in_08);
@@ -13027,6 +13030,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         PostMessageA(g_hwnd, WM_COMMAND, IDM_FILE_SETTINGS, 0);
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
+    g_pd.fl_drv = GetFileAttributesA(DDFLIP_DRIVER_FLAG) != INVALID_FILE_ATTRIBUTES;
     make_status(g_hwnd, hi);                     /* native themed status bar          */
     /* ── ★ AND NOW RE-SIZE TO THE STATUS BAR'S REAL HEIGHT. ─────────────────────
          The window was created against PRESENT_STATUS_H, a compile-time GUESS at
@@ -13053,7 +13057,32 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         log_append(LOG_PATH, sb, sq); }
     host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
-    while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+    /* ── ⛔⛔ A POSTED PRESENT MUST NOT STARVE INPUT. (user, s86: Duke3D fullscreen) ──
+         GetMessage hands out POSTED messages before keyboard and mouse input. The guest
+         posts WM_APP_PRESENT from its own retrace poll, one in flight, cleared at the
+         START of the frame body -- so when the body takes about a frame period (Duke3D,
+         fullscreen, a busy scene) the next present is already queued every time we come
+         back here, and input is never reached. Measured: 40 keystrokes held 11 s in our
+         queue (KEYLAT max_ms=0x2ae9), raw mouse frozen, Alt+Enter dead, while the guest
+         and this thread's frame body both ran on. The machine's input was never stuck;
+         ours was.
+       ► So before a present is dispatched, everything input-class already queued goes
+         first. Here, at the TOP-LEVEL pump only: a modal loop (menu, size/move) never
+         runs this, so nothing re-enters the frame body. Spelled out rather than
+         PM_QS_INPUT because the header's QS_INPUT only includes QS_RAWINPUT (WM_INPUT,
+         the captured mouse) for _WIN32_WINNT >= 0x0501. */
+    while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        if (msg.message == WM_APP_PRESENT) {
+            MSG im;
+            while (PeekMessageA(&im, NULL, 0, 0, PM_REMOVE |
+                                ((0x0001u | 0x0002u | 0x0004u | 0x0400u) << 16))) {  /* KEY MOUSEMOVE MOUSEBUTTON RAWINPUT */
+                if (im.message == WM_QUIT) { PostQuitMessage((int)im.wParam); break; }
+                ++g_ui_input_first;
+                TranslateMessage(&im); DispatchMessageA(&im);
+            }
+        }
+        TranslateMessage(&msg); DispatchMessageA(&msg);
+    }
     tray_remove(g_hwnd);            /* or the icon outlives the process */
     present_ddraw_shutdown(&g_pd);
     /* ── ⛔⛔ THE WINDOW CLOSING MUST KILL THE PROCESS, NOT JUST THIS THREAD. (s63) ──
@@ -32716,6 +32745,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " | fs(ddraw) n="); p = zdec(p, (DWORD)g_pd.pt_fs_n);
       p = zput(p, " mean="); p = zdec(p, g_pd.pt_fs_n ? (DWORD)(g_pd.pt_fs_us / g_pd.pt_fs_n) : 0);
       p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.pt_fs_max);
+      p = zput(p, " flips{done="); p = zdec(p, (DWORD)g_pd.fl_done);   /* s86 */
+      p = zput(p, " pend=");       p = zdec(p, (DWORD)g_pd.fl_pend);
+      p = zput(p, " mid=");        p = zdec(p, (DWORD)g_pd.fl_mid);
+      p = zput(p, " drop=");       p = zdec(p, (DWORD)g_pd.fl_drop);
+      p = zput(p, " bufs=");       p = zdec(p, (DWORD)g_pd.fl_bufs);
+      p = zput(p, " ourwait=");    p = zdec(p, (DWORD)g_pd.fl_ourwait);
+      p = zput(p, g_pd.fl_drv ? " path=driverflag}" : " path=triple}");
       p = zput(p, " winsize="); p = zdec(p, g_set.v[SET_WINSIZE] + 1);
       p = zput(p, "x scaler="); p = zdec(p, g_set.v[SET_SCALER]);
       p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);

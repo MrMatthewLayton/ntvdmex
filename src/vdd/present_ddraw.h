@@ -85,6 +85,15 @@ typedef struct present_ddraw {
     unsigned long pt_win_n, pt_fs_n;
     unsigned long long pt_win_us, pt_fs_us;
     unsigned long pt_win_max, pt_fs_max;
+    /* s86: DID THE EXCLUSIVE FLIP WAIT FOR THE BLANK? Right after Flip, GetFlipStatus:
+       `done` = the flip had already happened (nobody waited for a retrace), `pend` = it
+       was queued for one. `mid` = the beam was mid-screen when we flipped. `drop` = a
+       frame skipped because the previous flip was still queued. `bufs` = surfaces in
+       the flip chain. `ourwait` = flips never waited, so we time them (see fs_present).
+       `drv` = 1 when cfg\ddflip_driver.flag restores the old path (one back buffer,
+       blocking driver-timed flip). */
+    unsigned long fl_done, fl_pend, fl_mid, fl_drop;
+    int           fl_drv, fl_bufs, fl_ourwait, fl_streak;
     uint32_t snap_frame_no;
     int      snap_split;
     uint32_t rowpal[256]; int rowpal_y;   /* the palette resolved for one row       */

@@ -29,17 +29,21 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
      of the blank, and spin only the last millisecond. The monitor's line count and
      refresh are read once (GetDisplayMode / GetMonitorFrequency) and fall back to
      60 Hz if the driver will not say. Bounded: at most ~2 frames however it goes. */
-static void wait_vblank(present_ddraw *pd)
+static void mon_query(present_ddraw *pd)
 {
-    DWORD sl = 0, height, hz, per_us, k;
-    HRESULT hr;
-    if (!pd->vsync || !pd->dd) return;
-    if (!pd->mon_h) {
-        DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    DWORD hz;
+    if (pd->mon_h || !pd->dd) return;
+    {   DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
         pd->mon_h = (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwHeight) ? (int)d.dwHeight : 0;
         pd->mon_hz = (SUCCEEDED(IDirectDraw7_GetMonitorFrequency(DD, &hz)) && hz >= 40 && hz <= 240) ? (int)hz : 60;
-        if (!pd->mon_h) pd->mon_h = -1;               /* asked once; unknown: spin-free fallback below */
-    }
+        if (!pd->mon_h) pd->mon_h = -1; }             /* asked once; unknown: spin-free fallback below */
+}
+static void wait_vblank(present_ddraw *pd)
+{
+    DWORD sl = 0, height, per_us, k;
+    HRESULT hr;
+    if (!pd->vsync || !pd->dd) return;
+    mon_query(pd);
     height = pd->mon_h > 0 ? (DWORD)pd->mon_h : 0;
     per_us = 1000000u / (DWORD)(pd->mon_hz ? pd->mon_hz : 60);
     hr = IDirectDraw7_GetScanLine(DD, &sl);
@@ -305,6 +309,7 @@ static void fs_teardown(present_ddraw *pd)
 static int fs_setup(present_ddraw *pd)
 {
     DDSURFACEDESC2 d; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 pr = 0, bk = 0, fb = 0;
+    int nb;
 
     /* ★ AN EXPLICIT MODE IS TRIED FIRST, AND ONLY IF THE USER ASKED FOR ONE. Try 32bpp
          then 16, the same pair this always used; if the display refuses both, fall
@@ -333,10 +338,18 @@ static int fs_setup(present_ddraw *pd)
         }
     }
 
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    d.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; d.dwBackBufferCount = 1;
-    d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
-    if (FAILED(IDirectDraw7_CreateSurface(DD, &d, &pr, NULL))) return -1;
+    /* s86: TRIPLE-BUFFERED, so the buffer we draw into is never the one on screen nor
+       the one queued for the next retrace -- see the flip in fs_present. Two back
+       buffers first; one if the card will not give us two (or ddflip_driver.flag). */
+    pd->fl_bufs = 0;
+    for (nb = pd->fl_drv ? 1 : 2; nb >= 1 && !pr; --nb) {
+        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+        d.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; d.dwBackBufferCount = (DWORD)nb;
+        d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
+        if (SUCCEEDED(IDirectDraw7_CreateSurface(DD, &d, &pr, NULL))) pd->fl_bufs = nb + 1;
+        else pr = 0;
+    }
+    if (!pr) return -1;
     pd->primary = pr;
     ZeroMemory(&caps, sizeof caps); caps.dwCaps = DDSCAPS_BACKBUFFER;
     if (FAILED(IDirectDrawSurface7_GetAttachedSurface(pr, &caps, &bk))) return -1;
@@ -555,8 +568,48 @@ static void fs_present(present_ddraw *pd)
             IDirectDrawSurface7_ReleaseDC(bk, hd);
         } }
 
-    if (IDirectDrawSurface7_Flip(SURF(pd->primary), NULL, DDFLIP_WAIT) == DDERR_SURFACELOST)
-        IDirectDrawSurface7_Restore(SURF(pd->primary));
+    /* ── ⛔ THE FLIP: TRIPLE-BUFFERED, NEVER BLOCKING, THE DRIVER TIMES IT. (user, s86) ──
+         With one back buffer and DDFLIP_WAIT, DirectDraw fullscreen tore far more than
+         GDI. The first fix timed the flip ourselves (wait_vblank + NOVSYNC) -- no
+         tearing, but the counters below then showed EVERY flip still pending a retrace:
+         this driver (Quadro K4000, 321.01) already waits, so we were waiting TWICE.
+         Present cost a whole frame (16 ms mean), the UI thread fell behind a 70 Hz
+         guest, and each snapshot was taken mid-way through the guest's NEXT frame --
+         Mario's menu and status text, erased and redrawn every frame, flickered.
+       ► So: two back buffers, and Flip with DONOTWAIT. The buffer we draw into is never
+         on screen nor queued; if a flip is still pending, this frame is DROPPED rather
+         than waited for (the next present carries a newer one), so the UI thread stays
+         on the guest's beat. The driver's own vsync does the timing.
+       ► A driver whose flips do NOT wait (they land at once -- a mirror driver can do
+         that) gets our timing back automatically: 30 such flips in a row with VSync on
+         switches to wait_vblank + NOVSYNC, which measured tear-free.
+       ⚠ Only one back buffer (the card refused two, or ddflip_driver.flag): the old
+         blocking DDFLIP_WAIT, since dropping would mean drawing into the queued buffer. */
+    {   LPDIRECTDRAWSURFACE7 pr = SURF(pd->primary);
+        DWORD fl, sl = 0; HRESULT hr;
+        int ours = pd->vsync && pd->fl_ourwait;
+        mon_query(pd);
+        if (ours)                 { wait_vblank(pd); fl = DDFLIP_WAIT | DDFLIP_NOVSYNC; }
+        else if (pd->fl_bufs >= 3) fl = DDFLIP_DONOTWAIT;
+        else                       fl = DDFLIP_WAIT;
+        if (IDirectDraw7_GetScanLine(DD, &sl) == DD_OK && pd->mon_h > 0 &&
+            sl >= 32 && sl + 32 < (DWORD)pd->mon_h)
+            ++pd->fl_mid;
+        hr = IDirectDrawSurface7_Flip(pr, NULL, fl);
+        if (hr == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(pr); return; }
+        if (hr == DDERR_WASSTILLDRAWING) { ++pd->fl_drop; return; }
+        if (hr == DD_OK) {
+            hr = IDirectDrawSurface7_GetFlipStatus(pr, DDGFS_ISFLIPDONE);
+            if (hr == DD_OK) {
+                ++pd->fl_done;
+                if (!ours && pd->vsync && !pd->fl_drv && ++pd->fl_streak >= 30)
+                    pd->fl_ourwait = 1;
+            } else {
+                if (hr == DDERR_WASSTILLDRAWING) ++pd->fl_pend;
+                pd->fl_streak = 0;
+            }
+        }
+    }
 }
 
 /* ---- public API --------------------------------------------------------- */
