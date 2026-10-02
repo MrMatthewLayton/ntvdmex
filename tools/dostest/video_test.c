@@ -8,6 +8,7 @@
 #include "vdd_video.h"
 #include "vga_font_8x16.h"
 #include "vga_font_8x8.h"
+#include "vga_font_8x14.h"
 
 /* True if some VDD claimed `port` -- used instead of asserting a range count. */
 static int claims_port(const vdd_bus *b, uint16_t port)
@@ -1779,6 +1780,131 @@ int main(void)
 
         memset(&rr, 0, sizeof rr); s_ah(&rr, 0x00); s_al(&rr, 0x03);
         vdd_bus_deliver_int(&bus, 0x10, &rr);
+    }
+
+    /* T#252: THE CHARACTER SERVICES IN THE GRAPHICS MODES, PAGES, AND AH=12h. Every
+       expectation is a byte PCem's genuine IBM VGA ROM wrote in p_vidtxt (DOSBox-X
+       agrees on each), re-derived here from the ROM font so a font edit cannot hide a
+       layout bug. Before #252 all of these failed: the glyphs went to B800:0 as
+       (char, attr) pairs, 05h never moved the CRTC, and 12h said "supported" to all. */
+    {
+        ntvdd_regs rr; static uint8_t tb[0x100]; int y, ok; uint32_t v;
+        vid.bda = tb;
+#define I10(ax_, bx_, cx_, dx_) do { memset(&rr, 0, sizeof rr); rr.eax = (ax_); rr.ebx = (bx_); \
+            rr.ecx = (cx_); rr.edx = (dx_); vdd_bus_deliver_int(&bus, 0x10, &rr); } while (0)
+        /* mode 13h: 'A' in colour 0Eh over a 55h fill -> glyph bits 0Eh, the rest 00h */
+        I10(0x0013, 0, 0, 0);
+        memset(g_vmem, 0x55, 8 * 320);
+        I10(0x0941, 0x000E, 1, 0);
+        for (ok = 1, y = 0; y < 8; ++y) { int x;
+            for (x = 0; x < 8; ++x)
+                if (g_vmem[y * 320 + x] != ((vga_font_8x8['A'][y] & (0x80 >> x)) ? 0x0E : 0x00)) ok = 0; }
+        CHECK(ok, "#252 13h: AH=09h draws the 8x8 glyph at A000:0, background 00h (was (char,attr) at B800:0)");
+        CHECK(g_vmem[VID_TEXT_OFF] != 'A' || g_vmem[VID_TEXT_OFF + 1] != 0x0E,
+              "#252 13h: ...and nothing is written to B800:0 as a text cell");
+        I10(0x0941, 0x008E, 1, 0);           /* bit 7 is part of the colour in 13h, not XOR */
+        CHECK(g_vmem[2] == 0x8E && g_vmem[0] == 0x00, "#252 13h: BL=8Eh is the colour 8Eh (no XOR in 256 colours -- PCem)");
+        I10(0x0200, 0, 0, 0x0001);
+        I10(0x0E42, 0x000C, 0, 0);
+        CHECK(g_vmem[8 + 0] == ((vga_font_8x8['B'][0] & 0x80) ? 0x0C : 0) && vid.cur_col == 2,
+              "#252 13h: AH=0Eh draws 'B' at column 1 in BL and advances the cursor to 2");
+        I10(0x0200, 0, 0, 0x0001);
+        I10(0x0800, 0, 0, 0);
+        CHECK((rr.eax & 0xFF) == 'B', "#252 13h: AH=08h reads 'B' back from the pixels");
+        /* 06h in 13h: row 1 moves up to row 0, row 1 filled with BH */
+        I10(0x0013, 0, 0, 0);
+        I10(0x0200, 0, 0, 0x0100);
+        I10(0x0958, 0x000F, 1, 0);
+        I10(0x0601, 0x0700, 0, 0x0127);
+        CHECK(g_vmem[1] == ((vga_font_8x8['X'][0] & 0x40) ? 0x0F : 0) && g_vmem[8 * 320] == 0x07
+              && g_vmem[8 * 320 + 319] == 0x07,
+              "#252 13h: AH=06h scrolls pixels by a character row and fills with BH");
+        /* mode 04h: two bits a pixel across the interleaved banks */
+        I10(0x0004, 0, 0, 0);
+        I10(0x0941, 0x0003, 1, 0);
+        for (ok = 1, y = 0; y < 8; ++y) {
+            uint32_t off = VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            uint16_t w = 0; int k;
+            for (k = 0; k < 8; ++k) if (vga_font_8x8['A'][y] & (0x80 >> k)) w |= (uint16_t)(3u << (14 - 2 * k));
+            if (g_vmem[off] != (uint8_t)(w >> 8) || g_vmem[off + 1] != (uint8_t)w) ok = 0;
+        }
+        CHECK(ok, "#252 04h: AH=09h draws 'A' two bits a pixel, even lines at B800:0, odd at B800:2000");
+        I10(0x0941, 0x0083, 1, 0);
+        CHECK(g_vmem[VID_TEXT_OFF] == 0 && g_vmem[VID_TEXT_OFF + 0x2000] == 0, "#252 04h: BL bit 7 XORs it off again");
+        I10(0x0C02, 0, 5, 5);
+        I10(0x0D00, 0, 5, 5);
+        CHECK(g_vmem[VID_TEXT_OFF + 0x2000 + 2 * 80 + 1] == 0x20 && (rr.eax & 0xFF) == 2,
+              "#252 04h: AH=0Ch/0Dh write and read pixel (5,5) = 2 -- byte 20h at B800:20A1 (was not written, read 0)");
+        /* mode 0Dh: planes, the 8x8 cell, 40 bytes a line, BL bits 4-6 not a background */
+        I10(0x000D, 0, 0, 0);
+        I10(0x0200, 0, 0, 0x0001);
+        I10(0x0941, 0x001E, 1, 0);
+        for (ok = 1, y = 0; y < 8; ++y) {
+            if (vid.plane[0][y * 40 + 1] != 0) ok = 0;
+            if (vid.plane[1][y * 40 + 1] != vga_font_8x8['A'][y]) ok = 0;
+            if (vid.plane[3][y * 40 + 1] != vga_font_8x8['A'][y]) ok = 0;
+        }
+        CHECK(ok, "#252 0Dh: 'A' in colour Eh at 40 bytes a line, 8 lines; plane 0 stays 0 (BL bit 4 is not a background)");
+        /* 05h: page 1 of 0Dh = CRTC start 2000h, and a write to page 1 lands there */
+        I10(0x0501, 0, 0, 0);
+        v = 0x0C; vdd_bus_io(&bus, 0x3D4, 1, 0, &v); v = 0; vdd_bus_io(&bus, 0x3D5, 1, 1, &v);
+        CHECK(v == 0x20 && vid.crtc_start_live == 0x2000, "#252 0Dh: AH=05h AL=1 loads the CRTC start with 2000h (bytes)");
+        I10(0x0500, 0, 0, 0);
+        /* mode 10h: the 8x14 cell at 80 bytes a line */
+        I10(0x0010, 0, 0, 0);
+        I10(0x0200, 0, 0, 0x0101);
+        I10(0x0941, 0x000E, 1, 0);
+        for (ok = 1, y = 0; y < 14; ++y)
+            if (vid.plane[1][(14 + y) * 80 + 1] != vga_font_8x14['A'][y]) ok = 0;
+        CHECK(ok, "#252 10h: 'A' is the 8x14 glyph at row 1 (line 14), 80 bytes a line (was 8x16 at 640/8 of 480)");
+        /* mode 3 pages */
+        I10(0x0003, 0, 0, 0);
+        I10(0x0501, 0, 0, 0);
+        v = 0x0C; vdd_bus_io(&bus, 0x3D4, 1, 0, &v); v = 0; vdd_bus_io(&bus, 0x3D5, 1, 1, &v);
+        CHECK(v == 0x08, "#252 03h: AH=05h AL=1 loads the CRTC start with 0800h (words)");
+        I10(0x0200, 0x0100, 0, 0x0203);
+        I10(0x0300, 0x0000, 0, 0);
+        CHECK((rr.edx & 0xFFFF) == 0x0000, "#252 03h: page 0's cursor is its own (BH=0 reads 0000 while page 1's is 0203)");
+        I10(0x095A, 0x011F, 1, 0);
+        CHECK(g_vmem[VID_TEXT_OFF + 0x1000 + (2 * 80 + 3) * 2] == 'Z' && g_vmem[VID_TEXT_OFF + (2 * 80 + 3) * 2] != 'Z',
+              "#252 03h: AH=09h BH=1 writes page 1 (B900) at page 1's cursor, not page 0");
+        I10(0x0E51, 0x0007, 0, 0);
+        CHECK(g_vmem[VID_TEXT_OFF + 0x1000 + (2 * 80 + 3) * 2] == 'Q',
+              "#252 03h: AH=0Eh writes the ACTIVE page whatever BH says (PCem's IBM ROM)");
+        g_vmem[VID_TEXT_OFF + (2 * 80 + 3) * 2] = 'W';      /* page 0, same cell: must NOT show */
+        g_vmem[VID_TEXT_OFF + (2 * 80 + 3) * 2 + 1] = 0x1F;
+        vdd_video_render(&vid);
+        for (ok = 1, y = 0; y < 16; ++y) { int x;
+            for (x = 0; x < 8; ++x)
+                if (vid.fb[(2 * 16 + y) * 640 + 3 * 8 + x] != ((vga_font_8x16['Q'][y] & (0x80 >> x)) ? 0x0F : 0x01)) ok = 0; }
+        CHECK(ok, "#252 03h: the renderer SHOWS page 1 (from the CRTC start) -- 'Q' in 1Fh at row 2, column 3");
+        I10(0x0500, 0, 0, 0);
+        /* AH=12h */
+        I10(0x1201, 0x0030, 0, 0);
+        CHECK((rr.eax & 0xFF) == 0x12, "#252 12h BL=30h: AL=12h");
+        I10(0x0003, 0, 0, 0);
+        CHECK(vid.cell_h == 14 && tb[0x85] == 14 && tb[0x84] == 24 && tb[0x89] == 0x01,
+              "#252 12h BL=30h AL=1, then mode 3: 8x14 cell, 25 rows, 0040:0089 = 01h (PCem)");
+        I10(0x1202, 0x0030, 0, 0);
+        I10(0x0003, 0, 0, 0);
+        CHECK(vid.cell_h == 16, "#252 12h BL=30h AL=2: back to 400 lines");
+        I10(0x1277, 0x0055, 0, 0);
+        CHECK((rr.eax & 0xFF) == 0x00, "#252 12h unknown BL: AL=00h (PCem's IBM ROM) -- not 12h");
+        I10(0x1201, 0x0033, 0, 0);
+        CHECK((rr.eax & 0xFF) == 0x12 && vid.grey_sum == 0, "#252 12h BL=33h AL=1: summing off, AL=12h");
+        I10(0x1200, 0x0033, 0, 0);
+        I10(0x0013, 0, 0, 0);
+        { uint32_t c = vid.dac[1]; CHECK(((c >> 16) & 0xFF) == ((c >> 8) & 0xFF) && ((c >> 8) & 0xFF) == (c & 0xFF),
+              "#252 12h BL=33h AL=0: the next mode set's DAC comes up grey"); }
+        I10(0x1201, 0x0033, 0, 0);
+        I10(0x0003, 0, 0, 0);
+        I10(0x1201, 0x0034, 0, 0);
+        CHECK((rr.eax & 0xFF) == 0x12 && vid.cur_emul_off == 1 && (tb[0x87] & 1), "#252 12h BL=34h AL=1: emulation off, 0040:0087 bit 0");
+        I10(0x1200, 0x0034, 0, 0);
+        I10(0x1203, 0x0036, 0, 0);
+        CHECK((rr.eax & 0xFF) == 0x00, "#252 12h BL=36h AL=3: out of range, refused");
+#undef I10
+        vid.bda = 0;
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

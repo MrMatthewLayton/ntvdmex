@@ -276,6 +276,20 @@ void vdd_video_frame_touch(video_state *st)
                        ? frame_no : st->pal_frame_no;
 }
 
+/* AH=10h AL=1Bh's sum (30% red, 59% green, 11% blue), over DAC entries [first,
+   first+n) -- and since #252 also what AH=12h BL=33h's summing applies to a mode
+   set's palette and to AH=10h AL=10h/12h loads. */
+static void dac_grey(video_state *st, unsigned first, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n && (first + i) < 256; ++i) {
+        uint32_t v = st->dac[first + i];
+        uint32_t g = ((((v >> 16) & 0xFF) * 30) + (((v >> 8) & 0xFF) * 59)
+                      + ((v & 0xFF) * 11)) / 100;
+        st->dac[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
+    }
+}
+
 /* A mode set reloads the DAC and the AC palette. Real hardware does this, and
    without it a program that reprogrammed the palette leaves the NEXT program (or
    the text screen it returns to) drawn in its colours -- usually near-black, so
@@ -305,6 +319,7 @@ static void load_default_palette(video_state *st)
     st->vpal[16] = 0;
     st->attr_ff = st->attr_index = st->attr_mode = st->attr_cse = 0;
     for (i = 0; i < 256; ++i)  st->dac[i] = 0xFF000000u | (uint32_t)dc[i];
+    if (st->grey_sum) dac_grey(st, 0, 256);           /* AH=12h BL=33h (#252) */
     pal_refresh(st);
 }
 
@@ -395,8 +410,29 @@ static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes
     { 0x13, VID_KIND_LINEAR8, 40, 25,   320, 200 },
 };
 
+/* ── #252: THREE WAYS TO NAME A TEXT CELL, because a page is three things. ──────────
+     pcell  page N's (r,c): where the character services write when the caller names
+            a page (AH=09h/0Ah/02h... BH).
+     cell   the ACTIVE page's (r,c): teletype, scroll, read -- what AH=05h selected.
+     dcell  the DISPLAYED (r,c): from the CRTC start address, which is what the card
+            shows. AH=05h moves it to the active page, and so does a guest that writes
+            CR0C/CR0D itself (a text-mode page flip or smooth scroll).
+   All three used to be one function that always meant page 0 at B800:0 -- so 05h
+   flipped the BDA and nothing else, and a write to page 1 landed on page 0. The text
+   window is 32 KB (B800-BFFF); an address past it wraps, as the card's does. */
+static unsigned vid_page_size(const video_state *st);
+static uint8_t *pcell(video_state *st, int pg, int r, int c)
+{
+    unsigned off = (unsigned)(pg & 7) * vid_page_size(st) + (unsigned)(r * st->cols + c) * 2u;
+    return st->vmem + VID_TEXT_OFF + (off & 0x7FFFu);
+}
 static uint8_t *cell(video_state *st, int r, int c)   /* -> char byte of (r,c)    */
-{ return st->vmem + VID_TEXT_OFF + (r * st->cols + c) * 2; }
+{ return pcell(st, st->page, r, c); }
+static uint8_t *dcell(video_state *st, int r, int c)
+{
+    unsigned off = (unsigned)st->crtc_start_live * 2u + (unsigned)(r * st->cols + c) * 2u;
+    return st->vmem + VID_TEXT_OFF + (off & 0x7FFFu);
+}
 
 /* ── ONE BACKING STORE FOR A BIT-PLANE, WHOEVER WRITES IT. (s74b) ─────────────────
      The mode-12h engine wrote its four planes into st->plane[] and render_planar read
@@ -433,13 +469,12 @@ static uint8_t text_rows_for(uint8_t cell_h)
      that checks before it asks for 50 lines. Cheap enough to redo after every INT
      10h call and every frame -- a few dozen byte writes -- and correct by
      construction, since it is derived rather than maintained. */
-void vdd_video_bda_sync(video_state *st)
+/* The BIOS page size, 0040:004C -- and (#252) the stride AH=05h moves the CRTC start
+   by and the character services address a page at. One function, so the BDA, the
+   display and the writes cannot disagree about where page N is. */
+static unsigned vid_page_size(const video_state *st)
 {
-    uint8_t *b = st->bda;
     unsigned psize;
-    if (!b) return;
-    b[0x49] = st->mode;
-    b[0x4A] = st->cols; b[0x4B] = 0;
     if (st->mkind == VID_KIND_TEXT) {
         psize = ((unsigned)st->cols * st->rows * 2u + 0xFFu) & ~0xFFu;
         if (psize < 0x800u) psize = 0x800u;
@@ -460,11 +495,29 @@ void vdd_video_bda_sync(video_state *st)
         default:                         psize = 0x2000u; break;
         }
     }
+    return psize;
+}
+
+void vdd_video_bda_sync(video_state *st)
+{
+    uint8_t *b = st->bda;
+    unsigned psize;
+    if (!b) return;
+    b[0x49] = st->mode;
+    b[0x4A] = st->cols; b[0x4B] = 0;
+    psize = vid_page_size(st);
     b[0x4C] = (uint8_t)psize; b[0x4D] = (uint8_t)(psize >> 8);
     { unsigned poff = (unsigned)st->page * psize;
       b[0x4E] = (uint8_t)poff; b[0x4F] = (uint8_t)(poff >> 8); }
-    { unsigned pg = st->page & 7;
-      b[0x50 + pg * 2] = st->cur_col; b[0x51 + pg * 2] = st->cur_row; }
+    /* All eight cursors (#252) -- the active page's from cur_row/cur_col, the rest
+       from the per-page store. Only the active slot used to be written, so a guest
+       reading another page's cursor from the BDA read whatever was left there. */
+    { unsigned pg;
+      for (pg = 0; pg < 8; ++pg) {
+          int act = (pg == (unsigned)(st->page & 7));
+          b[0x50 + pg * 2] = act ? st->cur_col : st->pg_col[pg];
+          b[0x51 + pg * 2] = act ? st->cur_row : st->pg_row[pg];
+      } }
     {   /* 0040:0060 follows the same rule as AH=03h: no text cursor in graphics. */
         uint16_t shp = (st->mkind == VID_KIND_TEXT) ? st->cur_shape : 0;
         b[0x60] = (uint8_t)shp; b[0x61] = (uint8_t)(shp >> 8); }
@@ -475,16 +528,196 @@ void vdd_video_bda_sync(video_state *st)
     b[0x85] = st->cell_h; b[0x86] = 0;
     /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
        bit 7, or 4F02h D15) did not clear memory -- see int10 AH=00h and vesa 4F02h. */
-    b[0x87] = (uint8_t)(0x60 | (st->modeset_noclear ? 0x80 : 0x00));
+    b[0x87] = (uint8_t)(0x60 | (st->modeset_noclear ? 0x80 : 0x00)
+                        | (st->cur_emul_off ? 0x01 : 0x00));      /* bit 0: 12h BL=34h (#252) */
     b[0x88] = 0x09;                                    /* feature/switch bits: enhanced colour */
     /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
     b[0x89] = (uint8_t)((st->gh == 200) ? 0x81 : (st->gh == 350) ? 0x01 : 0x11);
+}
+
+/* ══ #252: THE CHARACTER SERVICES IN A GRAPHICS MODE DRAW, IN THAT MODE'S LAYOUT. ══
+     AH=09h/0Ah/0Eh/13h used to write (char, attr) pairs through cell() -- B800:0 --
+     in EVERY mode. In mode 13h that is memory the screen does not show (text
+     vanished); in the CGA modes 04h-06h it IS the frame buffer, so the pairs came out
+     as pixel noise; and the planar modes alone got a glyph, always 8x16 at a 640-pixel
+     stride, which is right for 11h/12h only. A VGA BIOS draws the ROM glyph for the
+     mode's own cell (8x8 at 200 lines, 8x14 at 350, 8x16 at 480 -- cell_h) into the
+     mode's own memory:
+       13h      one byte a pixel, `gw` bytes a line, foreground BL, background 0;
+       04h/05h  two bits a pixel across the two interleaved CGA banks (even lines at
+                B800:0, odd at B800:2000), 80 bytes a line, colour BL&3;
+       06h      one bit a pixel, same banks, colour BL&1;
+       0Dh-12h  one bit a pixel per PLANE, gw/8 bytes a line, page N at N*pagesize,
+                colour BL&0Fh written plane by plane (bits 4-6 are NOT a background
+                -- the old planar path took one from them).
+     BL bit 7 = XOR the glyph onto what is there, in every mode but 13h (p_vidtxt:
+     PCem's IBM VGA ROM is the authority). Background pixels are written 0 otherwise.
+     Measured against PCem's IBM VGA ROM, DOSBox-X and SeaVGABIOS by p_vidtxt.asm. */
+static const uint8_t *gfx_font(const video_state *st, uint8_t ch, int *h)
+{
+    *h = st->cell_h == 14 ? 14 : st->cell_h == 16 ? 16 : 8;
+    return *h == 8 ? vga_font_8x8[ch] : *h == 14 ? vga_font_8x14[ch] : vga_font_8x16[ch];
+}
+
+/* One glyph row's worth of pixels at character cell (col,row) of page pg -- the
+   address arithmetic for every graphics kind lives here and in gfx_row_addr, so the
+   draw, the scroll and the read-back cannot disagree. */
+static void gfx_glyph(video_state *st, int pg, int col, int row, uint8_t ch, uint8_t colour)
+{
+    int h, gy, p, x = (colour & 0x80) != 0;
+    const uint8_t *gl = gfx_font(st, ch, &h);
+    /* A VESA mode: our ModeInfoBlock says D2 = 0, "BIOS TTY output not supported",
+       and the A0000 window is one bank of a bigger picture -- draw nothing. */
+    /* ...nor in an UNCHAINED 256-colour mode (mode Y: chain-4 off): A0000 is then the
+       plane-mapped window and a chained byte store would land in one plane. */
+    if (st->in_vesa || (st->mkind == VID_KIND_LINEAR8 && !st->chain4)) return;
+    if (col < 0 || row < 0 || col >= st->cols || row >= st->rows) return;
+    if (st->mkind == VID_KIND_LINEAR8) {
+        uint32_t w = st->gw ? st->gw : VID_G13_W;
+        for (gy = 0; gy < h; ++gy) {
+            uint32_t off = (uint32_t)(row * h + gy) * w + (uint32_t)col * 8u;
+            int gx;
+            if (off + 8u > VID_APERTURE_SIZE) return;
+            for (gx = 0; gx < 8; ++gx)
+                st->vmem[off + gx] = (gl[gy] & (0x80 >> gx)) ? colour : 0;
+        }
+    } else if (st->mkind == VID_KIND_PLANAR) {
+        uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
+        uint32_t base = (uint32_t)(pg & 7) * vid_page_size(st);
+        for (gy = 0; gy < h; ++gy) {
+            uint32_t off = base + (uint32_t)(row * h + gy) * bpr + (uint32_t)col;
+            if (off >= VID_PLANE_SIZE) return;
+            for (p = 0; p < 4; ++p) {
+                uint8_t fg = (uint8_t)(((colour >> p) & 1) ? gl[gy] : 0);
+                if (x) PL(st,p)[off] ^= fg; else PL(st,p)[off] = fg;
+            }
+        }
+    } else if (st->mkind == VID_KIND_CGA) {
+        uint8_t *m = st->vmem + VID_TEXT_OFF;
+        for (gy = 0; gy < h; ++gy) {
+            int y = row * h + gy;
+            uint32_t off = ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            uint8_t bits = gl[gy];
+            if (st->cga_bpp == 1) {
+                uint8_t v = (uint8_t)((colour & 1) ? bits : 0);
+                off += (uint32_t)col;
+                if (x) m[off] ^= v; else m[off] = v;
+            } else {
+                uint16_t v = 0; int k;
+                for (k = 0; k < 8; ++k)              /* 8 pixels -> 16 bits, MSB first */
+                    if (bits & (0x80 >> k)) v |= (uint16_t)((colour & 3u) << (14 - 2 * k));
+                off += (uint32_t)col * 2u;
+                if (x) { m[off] ^= (uint8_t)(v >> 8); m[off + 1] ^= (uint8_t)v; }
+                else   { m[off]  = (uint8_t)(v >> 8); m[off + 1]  = (uint8_t)v; }
+            }
+        }
+    }
+    st->dirty = 1;
+}
+
+/* AH=08h in a graphics mode: there is no character code in memory, so the BIOS reads
+   the cell's pixels back (non-zero = foreground) and looks the pattern up in the font
+   it draws with. No match = 0. */
+static uint8_t gfx_read_char(video_state *st, int pg, int col, int row)
+{
+    uint8_t pat[16];
+    int h, gy, c;
+    (void)gfx_font(st, 0, &h);
+    if (st->in_vesa || col < 0 || row < 0 || col >= st->cols || row >= st->rows) return 0;
+    for (gy = 0; gy < h; ++gy) {
+        int y = row * h + gy, gx;
+        uint8_t b = 0;
+        if (st->mkind == VID_KIND_LINEAR8) {
+            uint32_t w = st->gw ? st->gw : VID_G13_W, off = (uint32_t)y * w + (uint32_t)col * 8u;
+            if (off + 8u > VID_APERTURE_SIZE) return 0;
+            for (gx = 0; gx < 8; ++gx) if (st->vmem[off + gx]) b |= (uint8_t)(0x80 >> gx);
+        } else if (st->mkind == VID_KIND_PLANAR) {
+            uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
+            uint32_t off = (uint32_t)(pg & 7) * vid_page_size(st) + (uint32_t)y * bpr + (uint32_t)col;
+            int p;
+            if (off >= VID_PLANE_SIZE) return 0;
+            for (p = 0; p < 4; ++p) b |= PL(st, p)[off];
+        } else if (st->mkind == VID_KIND_CGA) {
+            const uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            if (st->cga_bpp == 1) b = m[col];
+            else {
+                uint16_t v = (uint16_t)((m[col * 2] << 8) | m[col * 2 + 1]);
+                for (gx = 0; gx < 8; ++gx) if ((v >> (14 - 2 * gx)) & 3u) b |= (uint8_t)(0x80 >> gx);
+            }
+        } else return 0;
+        pat[gy] = b;
+    }
+    for (c = 0; c < 256; ++c) {
+        int hh; const uint8_t *g = gfx_font(st, (uint8_t)c, &hh);
+        for (gy = 0; gy < h && g[gy] == pat[gy]; ++gy) ;
+        if (gy == h) return (uint8_t)c;
+    }
+    return 0;
+}
+
+/* The bytes of one pixel line y (0..gh-1) for character columns [left, right], and
+   how many: the unit gfx_scroll moves. Planar returns plane 0's; the caller adds
+   the same offset into the other three. */
+static uint8_t *gfx_row_addr(video_state *st, int pl, int y, int left, int right, uint32_t *n)
+{
+    if (st->mkind == VID_KIND_LINEAR8) {
+        uint32_t w = st->gw ? st->gw : VID_G13_W, off = (uint32_t)y * w + (uint32_t)left * 8u;
+        *n = (uint32_t)(right - left + 1) * 8u;
+        return (off + *n <= VID_APERTURE_SIZE) ? st->vmem + off : 0;
+    }
+    if (st->mkind == VID_KIND_PLANAR) {
+        uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
+        uint32_t off = (uint32_t)(st->page & 7) * vid_page_size(st) + (uint32_t)y * bpr + (uint32_t)left;
+        *n = (uint32_t)(right - left + 1);
+        return (off + *n <= VID_PLANE_SIZE) ? PL(st, pl) + off : 0;
+    }
+    if (st->mkind == VID_KIND_CGA) {
+        uint32_t per = st->cga_bpp == 1 ? 1u : 2u;
+        uint32_t off = ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u + (uint32_t)left * per;
+        *n = (uint32_t)(right - left + 1) * per;
+        return (off + *n <= 0x4000u) ? st->vmem + VID_TEXT_OFF + off : 0;
+    }
+    *n = 0; return 0;
+}
+
+/* AH=06h/07h and the teletype's scroll in a graphics mode: whole character rows of
+   the window move by `lines` (up or down), and the rows uncovered are filled with
+   colour `fill` -- BH for 06h/07h, 0 for the teletype. lines = 0 (or more than the
+   window) clears it. */
+static void gfx_scroll(video_state *st, int lines, int top, int left, int bot, int right,
+                       uint8_t fill, int up)
+{
+    int ch = st->cell_h == 14 ? 14 : st->cell_h == 16 ? 16 : 8;
+    int y, y0, y1, pl, npl = st->mkind == VID_KIND_PLANAR ? 4 : 1;
+    if (st->in_vesa || (st->mkind == VID_KIND_LINEAR8 && !st->chain4)) return;   /* as gfx_glyph */
+    if (right >= st->cols) right = st->cols - 1;
+    if (bot >= st->rows) bot = st->rows - 1;
+    if (left > right || top > bot) return;
+    if (lines <= 0 || lines > bot - top + 1) lines = bot - top + 1;
+    y0 = top * ch; y1 = (bot + 1) * ch - 1;
+    for (pl = 0; pl < npl; ++pl) {
+        uint8_t fb;
+        if (st->mkind == VID_KIND_PLANAR)    fb = (uint8_t)(((fill >> pl) & 1) ? 0xFF : 0x00);
+        else if (st->mkind == VID_KIND_CGA)  fb = (uint8_t)(st->cga_bpp == 1 ? ((fill & 1) ? 0xFF : 0)
+                                                                            : (fill & 3) * 0x55);
+        else                                 fb = fill;
+        for (y = up ? y0 : y1; up ? (y <= y1) : (y >= y0); y += up ? 1 : -1) {
+            int ys = up ? y + lines * ch : y - lines * ch;
+            uint32_t n, ns, k;
+            uint8_t *d = gfx_row_addr(st, pl, y, left, right, &n), *s;
+            if (!d) continue;
+            s = (ys >= y0 && ys <= y1) ? gfx_row_addr(st, pl, ys, left, right, &ns) : 0;
+            for (k = 0; k < n; ++k) d[k] = s ? s[k] : fb;
+        }
+    }
+    st->dirty = 1;
 }
 
 static void scroll_up(video_state *st, int lines, int top, int left,
                       int bot, int right, uint8_t attr)
 {
     int r, c;
+    if (st->mkind != VID_KIND_TEXT) { gfx_scroll(st, lines, top, left, bot, right, attr, 1); return; }
     if (lines <= 0 || lines > (bot - top + 1)) {
         for (r = top; r <= bot; ++r)
             for (c = left; c <= right; ++c) { uint8_t *p = cell(st, r, c); p[0]=' '; p[1]=attr; }
@@ -499,34 +732,44 @@ static void scroll_up(video_state *st, int lines, int top, int left,
         for (c = left; c <= right; ++c) { uint8_t *p = cell(st, r, c); p[0]=' '; p[1]=attr; }
 }
 
+/* The teletype's scroll fill: attribute 07h in text (as before), colour 0 -- the
+   background -- in a graphics mode. */
+static uint8_t tty_fill(const video_state *st) { return (uint8_t)(st->mkind == VID_KIND_TEXT ? 0x07 : 0x00); }
+
 static void advance(video_state *st)
 {
     if (++st->cur_col >= st->cols) {
         st->cur_col = 0;
         if (++st->cur_row >= st->rows) {
-            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, 0x07);
+            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
             st->cur_row = st->rows - 1;
         }
     }
 }
 
-static void teletype(video_state *st, uint8_t ch)
+/* AH=0Eh, and DOS console output (vdd_video_putc), on the ACTIVE page. `colour` is
+   BL -- the glyph's foreground in a graphics mode, unused in text (the cell keeps
+   its attribute). DOS's CON driver calls 0Eh with BL=07h, so that is what
+   vdd_video_putc passes. */
+static void teletype_c(video_state *st, uint8_t ch, uint8_t colour)
 {
     switch (ch) {
     case 0x0D: st->cur_col = 0; break;
     case 0x0A:
         if (++st->cur_row >= st->rows) {
-            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, 0x07);
+            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
             st->cur_row = st->rows - 1;
         }
         break;
     case 0x08: if (st->cur_col) st->cur_col--; break;
     case 0x07: break;
     default:
-        cell(st, st->cur_row, st->cur_col)[0] = ch;
+        if (st->mkind == VID_KIND_TEXT) cell(st, st->cur_row, st->cur_col)[0] = ch;
+        else gfx_glyph(st, st->page, st->cur_col, st->cur_row, ch, colour);
         advance(st);
     }
 }
+static void teletype(video_state *st, uint8_t ch) { teletype_c(st, ch, 0x07); }
 
 /* --- VESA VBE 2.0 (banked, packed-256) ----------------------------------- */
 /* supported modes: {VBE number, width, height} (all 8bpp packed) */
@@ -1382,25 +1625,9 @@ static void vesa(video_state *st, ntvdd_regs *r)
     }
 }
 
-/* Render an 8x16 glyph into the mode-12h bit-planes at text cell (col,row), so
-   BIOS character output (INT 10h AH=09/0A/0E) shows up in graphics mode --
-   QuickBASIC draws SCREEN 12 text exactly this way (LOCATE -> AH=02, then AH=09).
-   fg/bg are 4-bit colour indices; each glyph row maps to one byte per plane. */
-static void glyph_12h(video_state *st, int col, int row, uint8_t ch, uint8_t fg, uint8_t bg)
-{
-    const uint8_t *gl = vga_font_8x16[ch];
-    int gy, p;
-    if (col < 0 || row < 0 || col >= (VID_G12_W / 8) || (row * 16 + 15) >= VID_G12_H) return;
-    for (gy = 0; gy < 16; ++gy) {
-        uint8_t bits = gl[gy];
-        uint32_t off = (uint32_t)(row * 16 + gy) * (VID_G12_W / 8) + (uint32_t)col;
-        for (p = 0; p < 4; ++p) {
-            uint8_t fgb = ((fg >> p) & 1) ? 0xFF : 0x00;
-            uint8_t bgb = ((bg >> p) & 1) ? 0xFF : 0x00;
-            PL(st,p)[off] = (uint8_t)((bits & fgb) | ((uint8_t)~bits & bgb));
-        }
-    }
-}
+/* (glyph_12h -- the 8x16-at-640-stride planar glyph, with a background taken from
+   BL bits 4-7 -- was replaced by gfx_glyph for #252. QuickBASIC's SCREEN 12 text,
+   the case it was written for, is the 8x16 row of gfx_glyph's planar arm.) */
 
 /* INT 10h text + mode + palette services. */
 static void int10(void *self, ntvdd_regs *r)
@@ -1435,6 +1662,7 @@ static void int10(void *self, ntvdd_regs *r)
         st->vesa_mode_flags = 0;
         st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
+        {   int pg; for (pg = 0; pg < 8; ++pg) st->pg_row[pg] = st->pg_col[pg] = 0; }   /* #252 */
         /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
            vga_load_modedef below overrides all of them from the measured table for
            every mode it knows, which is where 0x0D0E rather than this 8-line
@@ -1531,6 +1759,14 @@ static void int10(void *self, ntvdd_regs *r)
                  DAC 3F=FFFFFF); only the renderer's table was stale, and grey 07h looks
                  the same either way, which is why a shell prompt hid it. And the BIOS
                  resets the DAC pixel mask on a mode set as well. */
+            /* ── AH=12h BL=30h CHOSE THE SCAN LINES FOR THIS (#252). The colour text modes
+                 come up in 200, 350 or 400 lines with the font that fills 25 rows of
+                 them -- 8x8, 8x14, 8x16. It answered "supported" and every text mode
+                 came up at 400 regardless. */
+            if (st->mkind == VID_KIND_TEXT && st->mode <= 0x03 && st->scan_sel < 2) {
+                st->cell_h = (uint8_t)(st->scan_sel == 0 ? 8 : 14);
+                st->gh = (uint16_t)(st->rows * st->cell_h);
+            }
             st->dac_mask = 0xFF;
             pal_refresh(st);
             /* ── AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
@@ -1552,54 +1788,120 @@ static void int10(void *self, ntvdd_regs *r)
         } }
         break;
     case 0x01: st->cur_shape = r_cx(r); break;
-    case 0x02: st->cur_row = (uint8_t)(r_dx(r) >> 8); st->cur_col = (uint8_t)(r_dx(r) & 0xFF); break;
-    case 0x03:
+    /* ── 02h/03h: THE CURSOR OF PAGE BH (#252). Eight cursors, one per page -- the
+         active page's is cur_row/cur_col, the rest pg_row/pg_col (0040:0050). BH was
+         ignored, so positioning page 1's cursor moved the one on screen. */
+    case 0x02: {
+        uint8_t pg = (uint8_t)((r_bx(r) >> 8) & 7);
+        if (pg == (st->page & 7)) { st->cur_row = (uint8_t)(r_dx(r) >> 8); st->cur_col = (uint8_t)(r_dx(r) & 0xFF); }
+        else { st->pg_row[pg] = (uint8_t)(r_dx(r) >> 8); st->pg_col[pg] = (uint8_t)(r_dx(r) & 0xFF); }
+        break; }
+    case 0x03: {
         /* THERE IS NO TEXT CURSOR IN A GRAPHICS MODE, and the BIOS says so: CX comes
            back 0000 in 06h/12h/13h, where we were still handing out the text
            underline shape 0607. Measured, p_video.asm int10.03.<mode>. The stored
            shape is left alone so returning to a text mode restores it. */
-        s_dx(r, (uint16_t)((st->cur_row << 8) | st->cur_col));
+        uint8_t pg = (uint8_t)((r_bx(r) >> 8) & 7);
+        int act = (pg == (st->page & 7));
+        s_dx(r, (uint16_t)(((act ? st->cur_row : st->pg_row[pg]) << 8) | (act ? st->cur_col : st->pg_col[pg])));
         s_cx(r, (uint16_t)(st->mkind == VID_KIND_TEXT ? st->cur_shape : 0));
-        break;
-    case 0x05: st->page = al; break;
+        break; }
+    /* ── 05h: SELECT THE ACTIVE PAGE, AND SHOW IT (#252). It stored the number and the
+         BDA followed (oracle-verified, #188) -- but the CRTC start address never moved,
+         so the screen stayed on page 0. The BIOS loads CR0C/CR0D with the page's offset:
+         in WORDS in the text modes (page 1 of 80x25 = 0800h), in BYTES in the planar
+         modes (0Dh page 1 = 2000h) -- p_vidtxt t03/t0D.05.crtc on PCem's IBM ROM. The
+         renderers read the latched start (crtc_start_live), so it is loaded at once, as
+         load_default_crtc does. The cursor swaps with the page. Modes with one page
+         (CGA, 11h-13h) keep the number only. */
+    case 0x05: {
+        uint8_t np = (uint8_t)(al & 7), op = (uint8_t)(st->page & 7);
+        st->pg_row[op] = st->cur_row; st->pg_col[op] = st->cur_col;
+        st->page = al;
+        st->cur_row = st->pg_row[np]; st->cur_col = st->pg_col[np];
+        if (st->mkind == VID_KIND_TEXT || (st->mkind == VID_KIND_PLANAR && st->mode <= 0x10)) {
+            uint32_t off = (uint32_t)np * vid_page_size(st);
+            if (st->mkind == VID_KIND_TEXT) off >>= 1;
+            st->crtc_start = (uint16_t)off;
+            st->crtc_start_live = st->start_vs = (uint16_t)off;
+            st->crtc_start_pend = 0;
+            if (st->mkind == VID_KIND_PLANAR) st->crtc_seen = 1;   /* render_planar reads it */
+        }
+        break; }
     case 0x06:
         scroll_up(st, al, (uint8_t)(r_cx(r) >> 8), (uint8_t)(r_cx(r) & 0xFF),
                   (uint8_t)(r_dx(r) >> 8), (uint8_t)(r_dx(r) & 0xFF), (uint8_t)(r_bx(r) >> 8));
         break;
-    case 0x08: { uint8_t *p = cell(st, st->cur_row, st->cur_col);
-                 s_ax(r, (uint16_t)((p[1] << 8) | p[0])); } break;
+    /* ── 08h: READ THE CHARACTER AT PAGE BH's CURSOR -- from the cell in text, from
+         the PIXELS in a graphics mode (gfx_read_char), AH = 0 there. */
+    case 0x08: {
+        uint8_t pg = (uint8_t)((r_bx(r) >> 8) & 7);
+        int act = (pg == (st->page & 7));
+        int rr = act ? st->cur_row : st->pg_row[pg], cc = act ? st->cur_col : st->pg_col[pg];
+        if (st->mkind == VID_KIND_TEXT) {
+            uint8_t *p = pcell(st, pg, rr, cc);
+            s_ax(r, (uint16_t)((p[1] << 8) | p[0]));
+        } else s_ax(r, gfx_read_char(st, pg, cc, rr));
+        break; }
+    /* ── 09h/0Ah: CX copies at page BH's cursor, cursor not moved. Text: the (char,
+         attr) pairs on THAT page. Graphics: the glyph, BL = colour (0Ah too -- RBIL:
+         "BL = colour in graphics modes"), bit 7 XOR; see gfx_glyph. */
     case 0x09:
     case 0x0A: {
         uint16_t n = r_cx(r); uint8_t attr = (uint8_t)(r_bx(r) & 0xFF);
-        int c = st->cur_col, rr = st->cur_row; if (!n) n = 1;
+        uint8_t pg = (uint8_t)((r_bx(r) >> 8) & 7);
+        int act = (pg == (st->page & 7));
+        int c = act ? st->cur_col : st->pg_col[pg], rr = act ? st->cur_row : st->pg_row[pg];
+        if (!n) n = 1;
         while (n-- && rr < st->rows) {
-            uint8_t *p = cell(st, rr, c); p[0] = al; if (ah == 0x09) p[1] = attr;
-            if (st->mkind == VID_KIND_PLANAR)         /* draw the glyph as pixels */
-                glyph_12h(st, c, rr, al, (uint8_t)(attr & 0x0F), (uint8_t)((attr >> 4) & 0x0F));
+            if (st->mkind == VID_KIND_TEXT) {
+                uint8_t *p = pcell(st, pg, rr, c); p[0] = al; if (ah == 0x09) p[1] = attr;
+            } else gfx_glyph(st, pg, c, rr, al, attr);
             if (++c >= st->cols) { c = 0; if (++rr >= st->rows) break; }
         }
         break; }
-    case 0x0C:                                        /* write graphics pixel    */
+    /* ── 0Ch/0Dh: ONE PIXEL, IN THE MODE'S OWN GEOMETRY (#252). The planar arm used a
+         640-pixel stride in every planar mode and ignored the page; the CGA modes were
+         not written at all (and read 0). AL bit 7 = XOR, except in 13h (one byte a
+         pixel: the colour is all eight bits). BH = page in the planar modes. */
+    case 0x0C: {
+        uint32_t x = r_cx(r), y = r_dx(r);
+        int xr = (al & 0x80) != 0;
+        if (st->in_vesa) break;
         if (st->mkind == VID_KIND_LINEAR8) {
-            uint32_t x = r_cx(r), y = r_dx(r);
-            if (x < VID_G13_W && y < VID_G13_H) st->vmem[y * VID_G13_W + x] = al;
-        } else if (st->mkind == VID_KIND_PLANAR) {    /* planar: set 4-bit colour */
-            uint32_t x = r_cx(r), y = r_dx(r);
-            if (x < VID_G12_W && y < VID_G12_H) {
-                uint32_t byte = y * (VID_G12_W / 8) + (x >> 3);
+            if (x < st->gw && y < st->gh && y * st->gw + x < VID_APERTURE_SIZE) st->vmem[y * st->gw + x] = al;
+        } else if (st->mkind == VID_KIND_PLANAR) {
+            if (x < st->gw && y < st->gh) {
+                uint32_t byte = (uint32_t)((r_bx(r) >> 8) & 7) * vid_page_size(st) + y * (st->gw / 8u) + (x >> 3);
                 uint8_t  bit = (uint8_t)(0x80 >> (x & 7)), p;
-                for (p = 0; p < 4; ++p) {
-                    if (al & (1 << p)) PL(st,p)[byte] |= bit;
-                    else               PL(st,p)[byte] &= (uint8_t)~bit;
+                if (byte < VID_PLANE_SIZE)
+                    for (p = 0; p < 4; ++p) {
+                        if (xr) { if (al & (1 << p)) PL(st,p)[byte] ^= bit; }
+                        else if (al & (1 << p)) PL(st,p)[byte] |= bit;
+                        else                    PL(st,p)[byte] &= (uint8_t)~bit;
+                    }
+            }
+        } else if (st->mkind == VID_KIND_CGA) {
+            if (x < st->gw && y < st->gh) {
+                uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (y >> 1) * 80u;
+                if (st->cga_bpp == 1) {
+                    uint8_t bit = (uint8_t)(0x80 >> (x & 7));
+                    if (xr) { if (al & 1) m[x >> 3] ^= bit; }
+                    else m[x >> 3] = (uint8_t)((m[x >> 3] & ~bit) | ((al & 1) ? bit : 0));
+                } else {
+                    unsigned sh = 6u - 2u * (x & 3u);
+                    uint8_t v = (uint8_t)((al & 3u) << sh);
+                    if (xr) m[x >> 2] ^= v;
+                    else m[x >> 2] = (uint8_t)((m[x >> 2] & ~(3u << sh)) | v);
                 }
             }
         }
-        break;
-    case 0x0E:                                        /* teletype                */
-        if (st->mkind == VID_KIND_PLANAR && al >= 0x20) { /* graphics: glyph + advance */
-            glyph_12h(st, st->cur_col, st->cur_row, al, (uint8_t)(r_bx(r) & 0x0F), 0);
-            advance(st);
-        } else teletype(st, al);
+        break; }
+    /* ── 0Eh: TELETYPE ON THE ACTIVE PAGE; BL = foreground in graphics (#252). BH is
+         not consulted -- p_vidtxt t03.0E.which: with page 1 active a BH=0 teletype
+         lands on page 1 (PCem's IBM ROM). */
+    case 0x0E:
+        teletype_c(st, al, (uint8_t)(r_bx(r) & 0xFF));
         break;
     case 0x0F:
         /* BH is the active page; BL IS NOT DEFINED BY THIS CALL and the real BIOS
@@ -1618,6 +1920,7 @@ static void int10(void *self, ntvdd_regs *r)
             st->dac_block[((idx & 0xFF) >> 4) & 15]++;
             st->dac[idx & 0xFF] = dac_pack_w(st, (uint8_t)(r_dx(r) >> 8),
                                              (uint8_t)(r_cx(r) >> 8), (uint8_t)r_cx(r));
+            if (st->grey_sum) dac_grey(st, idx & 0xFF, 1);   /* 12h BL=33h (#252) */
             pal_refresh(st);
         } else if (al == 0x12) {                      /* set block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
@@ -1627,6 +1930,7 @@ static void int10(void *self, ntvdd_regs *r)
                   st->dac_block[((first + i) >> 4) & 15]++;
                   if (((first + i) & 0xF0) == 0x30) st->dac_hi_since_reset++; }
             st->dac_writes += n;
+            if (st->grey_sum) dac_grey(st, first, n);   /* 12h BL=33h (#252) */
             pal_refresh(st);
         } else if (al == 0x00) {                      /* set one palette register */
             uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
@@ -1674,13 +1978,7 @@ static void int10(void *self, ntvdd_regs *r)
         } else if (al == 0x1A) {                      /* get DAC page state       */
             s_bx(r, (uint16_t)((st->dac_page << 8) | 0));
         } else if (al == 0x1B) {                      /* convert to grey scale    */
-            uint16_t first = r_bx(r), n = r_cx(r), i;
-            for (i = 0; i < n && (first + i) < 256; ++i) {
-                uint32_t v = st->dac[first + i];
-                uint32_t g = ((((v >> 16) & 0xFF) * 30) + (((v >> 8) & 0xFF) * 59)
-                              + ((v & 0xFF) * 11)) / 100;
-                st->dac[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
-            }
+            dac_grey(st, r_bx(r), r_cx(r));
             pal_refresh(st);
         } else {
             VID_UNIMPL_SET(st->unimpl_fn, 0x10);      /* name it, do not ignore it */
@@ -1693,6 +1991,10 @@ static void int10(void *self, ntvdd_regs *r)
         uint8_t bot = (uint8_t)(r_dx(r) >> 8), rgt = (uint8_t)(r_dx(r) & 0xFF);
         uint8_t attr = (uint8_t)(r_bx(r) >> 8);
         int rr, cc, k;
+        if (st->mkind != VID_KIND_TEXT) {              /* graphics: pixels, BH = fill colour (#252) */
+            gfx_scroll(st, n, top, lft, bot, rgt, attr, 0);
+            break;
+        }
         if (!n || n > (bot - top + 1)) {               /* 0 or oversized = clear  */
             for (rr = top; rr <= bot; ++rr)
                 for (cc = lft; cc <= rgt; ++cc)
@@ -1718,14 +2020,18 @@ static void int10(void *self, ntvdd_regs *r)
         uint8_t v = 0;
         if (st->mkind == VID_KIND_LINEAR8) {
             if (x < st->gw && y < st->gh) v = st->vmem[y * st->gw + x];
-        } else if (st->mkind == VID_KIND_PLANAR) {
-            uint32_t byi = y * (st->gw / 8) + (x >> 3);
+        } else if (st->mkind == VID_KIND_PLANAR) {     /* page BH (#252) */
+            uint32_t byi = (uint32_t)((r_bx(r) >> 8) & 7) * vid_page_size(st) + y * (st->gw / 8) + (x >> 3);
             uint8_t  msk = (uint8_t)(0x80 >> (x & 7));
             if (byi < VID_PLANE_SIZE)
                 v = (uint8_t)(((PL(st,0)[byi] & msk) ? 1 : 0)
                             | ((PL(st,1)[byi] & msk) ? 2 : 0)
                             | ((PL(st,2)[byi] & msk) ? 4 : 0)
                             | ((PL(st,3)[byi] & msk) ? 8 : 0));
+        } else if (st->mkind == VID_KIND_CGA && x < st->gw && y < st->gh) {   /* #252: read 0 before */
+            const uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            v = st->cga_bpp == 1 ? (uint8_t)((m[x >> 3] >> (7 - (x & 7))) & 1)
+                                 : (uint8_t)((m[x >> 2] >> (6 - 2 * (x & 3))) & 3);
         }
         s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | v));
         break; }
@@ -1743,15 +2049,40 @@ static void int10(void *self, ntvdd_regs *r)
             s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C));
         }
         break; }
-    case 0x13: {                                       /* write string ES:BP      */
+    /* ── 13h WRITE STRING (#252). AL bit 0 = leave the cursor after the string (clear:
+         put it back), bit 1 = the string is (char, attr) pairs (else BL for all); BH =
+         page; DH/DL = where. BEL, BS, CR and LF are EXECUTED, as the teletype does --
+         they were stored as glyphs, the cursor was always moved, the page ignored, and
+         a graphics mode got (char, attr) pairs at B800:0. Scrolling past the bottom
+         happens on the active page only. */
+    case 0x13: {
         uint16_t n = r_cx(r), i; uint8_t mode = al, attr = (uint8_t)(r_bx(r) & 0xFF);
+        uint8_t pg = (uint8_t)((r_bx(r) >> 8) & 7);
+        int act = (pg == (st->page & 7));
+        int rr = (uint8_t)(r_dx(r) >> 8), cc = (uint8_t)(r_dx(r) & 0xFF);
         uint8_t *s = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebp);
-        st->cur_row = (uint8_t)(r_dx(r) >> 8); st->cur_col = (uint8_t)(r_dx(r) & 0xFF);
+        if (!s) break;
         for (i = 0; i < n; ++i) {
             uint8_t ch = *s++; if (mode & 0x02) attr = *s++;
-            cell(st, st->cur_row, st->cur_col)[0] = ch;
-            cell(st, st->cur_row, st->cur_col)[1] = attr;
-            advance(st);
+            if (ch == 0x0D) { cc = 0; continue; }
+            if (ch == 0x08) { if (cc) --cc; continue; }
+            if (ch == 0x07) continue;
+            if (ch != 0x0A) {
+                if (rr < st->rows && cc < st->cols) {
+                    if (st->mkind == VID_KIND_TEXT) { uint8_t *p = pcell(st, pg, rr, cc); p[0] = ch; p[1] = attr; }
+                    else gfx_glyph(st, pg, cc, rr, ch, attr);
+                }
+                if (++cc < st->cols) continue;
+                cc = 0;
+            }
+            if (++rr >= st->rows) {
+                if (act) scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
+                rr = st->rows - 1;
+            }
+        }
+        if (mode & 0x01) {
+            if (act) { st->cur_row = (uint8_t)rr; st->cur_col = (uint8_t)cc; }
+            else     { st->pg_row[pg] = (uint8_t)rr; st->pg_col[pg] = (uint8_t)cc; }
         }
         break; }
     case 0x11:                                         /* character generator     */
@@ -1894,7 +2225,31 @@ static void int10(void *self, ntvdd_regs *r)
             st->def_pal_off = (uint8_t)((r_ax(r) & 0xFF) ? 1 : 0);
             s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12));
         }
-        else            { s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12)); } /* supported */
+        /* ── #252: THE REST OF THE VGA's BL TABLE, EACH DOING ITS JOB -- and anything
+             else REFUSED. The `else` used to answer AL=12h for every BL, so 30h/32h/33h/
+             34h/36h each said "done" and did nothing. AL in = 0 enable / 1 disable (30h:
+             0/1/2 = 200/350/400 lines); AL out = 12h. An AL out of range is refused too.
+               30h  the next colour TEXT mode set comes up in that many lines (int10 AH=00h);
+               32h  CPU access to video memory: MiscOut bit 1 is the switch on the card.
+                    Recorded in the register (3CCh reads it back); our aperture is host
+                    memory and is not cut off -- a docs/inventory/vga.md gap, not this one;
+               33h  grey-scale summing of later DAC loads (mode set, AH=10h AL=10h/12h);
+               34h  CGA cursor emulation -- off, AH=01h's CX is drawn literally;
+               36h  video refresh: Clocking Mode (SR1) bit 5 "screen off", recorded the
+                    same way as 32h (the renderer does not blank on SR1 -- vga.md).
+             Unknown BL: PCem's IBM VGA ROM (and DOSBox-X) return AL=00h -- p_vidtxt
+             t12.55.unknown -- so does this. (SeaVGABIOS leaves AL: provisional.) */
+        else if (bl == 0x30 || bl == 0x32 || bl == 0x33 || bl == 0x34 || bl == 0x36) {
+            uint8_t a = (uint8_t)(r_ax(r) & 0xFF);
+            if (a > (bl == 0x30 ? 2 : 1)) { s_ax(r, (uint16_t)(r_ax(r) & 0xFF00)); break; }
+            if (bl == 0x30)      st->scan_sel = a;
+            else if (bl == 0x32) { st->vid_off = a; st->misc_out = (uint8_t)(a ? (st->misc_out & ~0x02u) : (st->misc_out | 0x02u)); }
+            else if (bl == 0x33) st->grey_sum = (uint8_t)(a == 0);
+            else if (bl == 0x34) st->cur_emul_off = a;
+            else                 st->seq_reg[1] = (uint8_t)(a ? (st->seq_reg[1] | 0x20u) : (st->seq_reg[1] & ~0x20u));
+            s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12));
+        }
+        else            { s_ax(r, (uint16_t)(r_ax(r) & 0xFF00)); }   /* not supported: AL=00h */
         break; }
     case 0x1A:                                         /* get display combination */
         s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1A));/* AL=1A: function present */
@@ -3314,7 +3669,7 @@ int vdd_video_text_snapshot(video_state *st, char *out, int cap)
     if (!out || cap < 16) return 0;
     for (r = 0; r < st->rows; ++r) {
         for (c = 0; c < st->cols && n < cap - 2; ++c) {
-            uint8_t ch = cell(st, r, c)[0];
+            uint8_t ch = dcell(st, r, c)[0];
             out[n++] = (ch >= 32 && ch < 127) ? (char)ch : '.';
         }
         if (n < cap - 2) out[n++] = '\n';
@@ -3322,7 +3677,7 @@ int vdd_video_text_snapshot(video_state *st, char *out, int cap)
     if (n < cap - 8) { const char *h = "--attr--\n"; while (*h && n < cap - 2) out[n++] = *h++; }
     for (r = 0; r < st->rows; ++r) {
         for (c = 0; c < st->cols && n < cap - 3; ++c) {
-            uint8_t a = cell(st, r, c)[1];
+            uint8_t a = dcell(st, r, c)[1];
             out[n++] = hexd[(a >> 4) & 0xF]; out[n++] = hexd[a & 0xF];
         }
         if (n < cap - 2) out[n++] = '\n';
@@ -3339,7 +3694,7 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
                               ? ((st->time_us() % 1066000u) >= 533000u) : 0);
     for (r = 0; r < st->rows; ++r)
         for (c = 0; c < st->cols; ++c) {
-            uint8_t *p = cell(st, r, c);
+            uint8_t *p = dcell(st, r, c);
             render_cell(st, r, c, p[0], p[1]);
         }
     draw_hw_cursor(st);
@@ -3351,7 +3706,7 @@ void vdd_video_text_cursor(video_state *st, int col, int row,
     uint8_t *p, ch, attr;
     if (st->mkind != VID_KIND_TEXT) return;
     if (col < 0 || row < 0 || col >= st->cols || row >= st->rows) return;
-    p    = cell(st, row, col);
+    p    = dcell(st, row, col);
     ch   = (uint8_t)((p[0] & (and_mask & 0xFF)) ^ (xor_mask & 0xFF));
     attr = (uint8_t)((p[1] & (and_mask >> 8)) ^ (xor_mask >> 8));
     render_cell(st, row, col, ch, attr);
@@ -3384,6 +3739,11 @@ static void draw_hw_cursor(video_state *st)
         unsigned start, end;
         int hidden, lit = 1;
         vdd_cursor_lines(st->cur_shape, (unsigned)cell_h, &start, &end, &hidden);
+        if (st->cur_emul_off) {                  /* AH=12h BL=34h: CX as written (#252) */
+            start = (st->cur_shape >> 8) & 0x1Fu; end = st->cur_shape & 0x1Fu;
+            hidden = ((st->cur_shape >> 8) & 0x20u) != 0 || start > end || start >= (unsigned)cell_h;
+            if (end >= (unsigned)cell_h) end = (unsigned)cell_h - 1u;
+        }
         if (st->cursor_blink && st->time_us) {
             /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
                half. Integer maths only; no floating point in a VDD. */
@@ -3391,7 +3751,7 @@ static void draw_hw_cursor(video_state *st)
             lit = (ph < 266500u);
         }
         if (!hidden && lit) {
-            uint8_t fg = cell(st, st->cur_row, st->cur_col)[1] & 0x0F;
+            uint8_t fg = dcell(st, st->cur_row, st->cur_col)[1] & 0x0F;
             for (gy = (int)start; gy <= (int)end; ++gy)
                 for (gx = 0; gx < VID_CELL_W; ++gx)
                     st->fb[(st->cur_row*cell_h + gy) * stride
@@ -3792,6 +4152,8 @@ void vdd_video_reset(void *self)
     st->crtc_cursor = 0;
     st->mode_qn = 0;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
+    {   int pg; for (pg = 0; pg < 8; ++pg) st->pg_row[pg] = st->pg_col[pg] = 0; }
+    st->scan_sel = 2; st->grey_sum = 0; st->cur_emul_off = 0; st->vid_off = 0;   /* #252 */
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
     st->seq_index = st->gc_index = 0;
     st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
