@@ -128,6 +128,7 @@ typedef struct pit_state {
                                RAW bytes as written, so pit_ch2_hz decodes BCD     */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
     uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
+    uint8_t  ch2_wr_lo;     /* channel-2 LSB held until the MSB commits (#256)  */
     /* ⚠ ch2_reload/ch2_access/ch2_wr_flip above are the SPEAKER's view and stay
          authoritative for pit_ch2_hz(); c2 below mirrors them and adds what a
          COUNTER needs. Two views of one counter is not lovely, but rewiring the

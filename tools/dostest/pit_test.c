@@ -619,6 +619,20 @@ int main(void)
         CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1000u,
               "bcd: the SAME bytes in BCD are a divisor of 1000, so the tone differs");
 
+        /* -- #256: the speaker divisor is not read-modify-written. ----------- */
+        w = 0xB6; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi, binary     */
+        w = 0x34; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 4096u,
+              "ch2 lo/hi: the LSB alone does not re-tune (still 0x1000)");
+        w = 0x12; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        CHECK(pit.ch2_reload == 0x1234, "ch2 lo/hi: LSB+MSB commit 0x1234 at once");
+        w = 0x96; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 LSB only, mode 3  */
+        w = 0x80; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        CHECK(pit.ch2_reload == 0x0080, "ch2 LSB-only: MSB becomes 0 (was 0x12)");
+        w = 0xA6; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 MSB only, mode 3  */
+        w = 0x05; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        CHECK(pit.ch2_reload == 0x0500, "ch2 MSB-only: LSB becomes 0 (was 0x80)");
+
         /* Leave counter 0 as the BIOS would, binary, for anything after this. */
         w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
         w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);

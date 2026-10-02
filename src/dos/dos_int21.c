@@ -7,6 +7,7 @@
 #include "dos_err.h"      /* AH=59h class/action/locus, measured on the oracle */
 #include "log.h"          /* zput / zhex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
+#include "dos_auxprn.h"   /* #251: the AUX/PRN driver entries (guest code) */
 
 /* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
    mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
@@ -631,6 +632,10 @@ int dos_int21(dos_machine_t *m)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
+    m->v86_tramp = 0;
+    /* #251: resume the V86 guest in the AUX/PRN driver code -- see dos_auxprn.asm. */
+    #define AUXPRN_TRAMP(e) (m->v86_tramp = (uint16_t)(DOS_AUXPRN_OFF + (e)))
+    #define AUXPRN_V86      (m->v86_tramp_ok && !g_dos_int21_pm)
 
     /* ── ★★ WHO CALLED, OFF THE GUEST STACK. ───────────────────────────────────
          VTIB_CS:EIP is where the HANDLER is, not where the guest is. Last session
@@ -832,12 +837,25 @@ int dos_int21(dos_machine_t *m)
              So: a BOUND handle is a file, whatever its number; only an unbound low
              handle is the console. */
         if (dos_fh_is_file((void *const *)m->fh, h)) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
+             (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
+             with error 6 here, after AH=04h/05h had thrown their bytes away. */
+        else if ((h == 3 || h == 4) && dos_fh_is_device((void *const *)m->fh, m->std_open, h)) {
+            if (AUXPRN_V86) AUXPRN_TRAMP(h == 4 ? DOS_AUXPRN_W4 : DOS_AUXPRN_W3);
+            else {
+                DWORD k;
+                for (k = 0; k < cnt; ++k) {
+                    if (h == 4) { if (m->prnout) (void)m->prnout(m->devctx, (uint8_t)b[k]); }
+                    else if (m->auxout) m->auxout(m->devctx, (uint8_t)b[k]);
+                }
+                SETAX(cnt); OKCF();
+            }
+        }
         /* ⚠ ANY device slot, not just 1 and 2 -- after AH=45h the console can be
-             sitting in slot 5. Handles 3/4 stay out: they are AUX and PRN, which
-             AH=04h/05h already accept and discard. A duplicate loses which device
-             it was, so a dup of AUX would print here; nothing does that, and the
-             alternative is a per-slot identity byte we have no caller for. */
-        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h) && h != 3 && h != 4)
+             sitting in slot 5. A duplicate loses which device it was, so a dup of
+             AUX would print here; nothing does that, and the alternative is a
+             per-slot identity byte we have no caller for. */
+        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
              { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
@@ -951,8 +969,10 @@ int dos_int21(dos_machine_t *m)
             SETAX(n); OKCF();
         read_done: ;
         }
+        else if (h == 3 && AUXPRN_V86 && dos_fh_is_device((void *const *)m->fh, m->std_open, h))
+             AUXPRN_TRAMP(DOS_AUXPRN_R3);       /* #251: AUX, through INT 14h */
         else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
-             { SETAX(0); OKCF(); }              /* an unredirected device: EOF for now */
+             { SETAX(0); OKCF(); }              /* PRN, a dup, or AUX in PM: EOF */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
         DWORD h = R_BX & 0xFFFF, meth = R_AX & 0xFF;
@@ -1615,11 +1635,25 @@ int dos_int21(dos_machine_t *m)
         SETAX(1); ERRCF();                      /* invalid function */
     } else if (ah == 0x64) {                    /* set device driver lookahead */
         OKCF();                                 /* internal; accepted, no effect */
-    } else if (ah == 0x03) {                    /* AUX input  */
-        SETAX((R_AX & 0xFF00) | 0x1A);          /* no serial attached -> EOF   */
-        OKCF();
-    } else if (ah == 0x04 || ah == 0x05) {      /* AUX / printer output        */
-        OKCF();                                 /* accepted and discarded      */
+    } else if (ah == 0x03 || ah == 0x04 || ah == 0x05) {   /* AUX in / AUX out / PRN out */
+        /* ── #251: THESE WENT NOWHERE -- "accepted and discarded", and AUX input
+             answered ^Z -- while COM1 and an LPT1 spool both exist. On DOS they are
+             the AUX and PRN drivers, which call INT 14h / INT 17h through the IVT
+             (p_auxprn logs the exact sequence 6.22 makes), so in V86 the guest is
+             resumed in that driver code. In PM the bytes go to the same devices
+             directly, and AUX input stays ^Z (no wait loop to run it in). */
+        if (AUXPRN_V86)
+            AUXPRN_TRAMP(ah == 0x05 ? DOS_AUXPRN_T05 : ah == 0x04 ? DOS_AUXPRN_T04 : DOS_AUXPRN_T03);
+        else if (ah == 0x03) {
+            SETAX((R_AX & 0xFF00) | 0x1A);
+            OKCF();
+        } else {
+            uint8_t c = (uint8_t)(R_DX & 0xFF);
+            if (ah == 0x05) { if (m->prnout) (void)m->prnout(m->devctx, c); }
+            else if (m->auxout) m->auxout(m->devctx, c);
+            SETAX((R_AX & 0xFF00) | c);         /* oracle: AL = the byte sent */
+            OKCF();
+        }
     } else if (ah == 0x0C) {                    /* flush input, then run AL     */
         /* AL names the input function to perform after flushing. Anything else
            is just a flush. Re-dispatching is the whole point of the call. */
@@ -2237,7 +2271,15 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x44) {                    /* IOCTL (C-runtime isatty etc.) */
         BYTE al = (BYTE)(R_AX & 0xFF);
         WORD bx = (WORD)(R_BX & 0xFFFF);
-        if (al == 0x00)        { SET16(R_DX, (bx < 5) ? 0x80D3 : 0x0002); OKCF(); }
+        /* 4400h: the device-information word, in DX AND in AX (6.22 and PCem both
+             return AX = DX, p_ioctl's own captures included). #251: AUX is 80C0h and
+             PRN A0C0h (bit 13, output-until-busy) -- measured, p_auxprn. */
+        if (al == 0x00) {
+            WORD w = (bx < 5) ? 0x80D3 : 0x0002;
+            if ((bx == 3 || bx == 4) && dos_fh_is_device((void *const *)m->fh, m->std_open, bx))
+                w = (bx == 3) ? 0x80C0 : 0xA0C0;
+            SET16(R_DX, w); SETAX(w); OKCF();
+        }
         else if (al == 0x06 || al == 0x07) { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
         /* ── ★★ THE DRIVE-CLASSIFICATION TRIO. (GH #32, #128, session 37) ─────────
              AL = 08h "is this block device removable", 09h "is it remote", 0Eh "get
@@ -2597,5 +2639,7 @@ int dos_int21(dos_machine_t *m)
     #undef SETZF
     #undef CLRZF
     #undef OUTC
+    #undef AUXPRN_TRAMP
+    #undef AUXPRN_V86
     return cont;
 }

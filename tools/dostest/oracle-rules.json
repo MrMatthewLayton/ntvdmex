@@ -2104,5 +2104,55 @@
   ],
   "recorded": "2026-10-02",
   "why": "NO ORACLE IMPLEMENTS THE 8237's OWN TRANSFERS, so none can vote (GH #246). All three answer as if the software request never ran -- count 000Fh untouched, nothing copied, the cascade row 0707h (held, then STILL held after channel 4 is unmasked). QEMU's i8257 latches the request into status bit 5 (2000h) but runs a channel only for a registered device; dosbox-x and PCem's emulated 8237 ignore 09h. 'A 0 from a host that does not implement a feature is the absence of a measurement, not a measurement of absence' -- the pit.bcd template. NTVDMEX follows the Intel 8237A datasheet: request bits are non-maskable and cleared at TC; memory-to-memory copies channel 0 -> temporary register -> channel 1 until channel 1's TC; the count wraps 0000h -> FFFFh at TC; controller 1 is served only through channel 4 (the AT cascade). Spec-implemented, unverifiable on this panel; dma_test.c T13-T15 pin it off-VM."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.02.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.02.lpt2",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "bda.lpt.ports",
+  "field": "BUF",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "PCem's machine is a DIFFERENT MACHINE here, not a different BIOS answer: its BDA lists a second printer port (LPT2 at 278h) and neither port has a printer attached, so its status reads 48h. MS-DOS 6.22/QEMU and DOSBox-X have one LPT1 that reports ready (90h), as ours (a spool) does. The contract p_int17 exists for -- an ABSENT printer number (LPT3, DX=3) returns every register as passed -- is asked on rows all three oracles agree on (GH #256)."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.03.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "An unknown INT 17h function (AH=03h, FFh) on a printer that exists. MS-DOS 6.22's SeaBIOS and DOSBox-X return with AX as passed; PCem's AMI BIOS answers the printer STATUS for it (48h, the same as its AH=02h). Neither is an IBM-documented function. We follow the two that leave AX alone: the defect being fixed was answering 90h 'ready', i.e. success for a call that does nothing (GH #256). AMI's status answer is recorded, not adopted."
+ },
+ {
+  "probe": "int17",
+  "case": "int17.ff.lpt1",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "An unknown INT 17h function (AH=03h, FFh) on a printer that exists. MS-DOS 6.22's SeaBIOS and DOSBox-X return with AX as passed; PCem's AMI BIOS answers the printer STATUS for it (48h, the same as its AH=02h). Neither is an IBM-documented function. We follow the two that leave AX alone: the defect being fixed was answering 90h 'ready', i.e. success for a call that does nothing (GH #256). AMI's status answer is recorded, not adopted."
  }
 ]

@@ -93,6 +93,17 @@ typedef struct {
        a key arrives. A real BIOS spins in the guest with interrupts enabled and the machine
        stays alive; now so do we. */
     int    retry;
+    /* ── #251: AUX AND PRN ARE GUEST CODE THAT CALLS THE BIOS (dos_auxprn.h). ──
+         `v86_tramp_ok` (in): the caller can resume the guest somewhere other than
+         the stub's IRET -- only the V86 exec loops can. `v86_tramp` (out): nonzero =
+         resume at DOS_CTAB_SEG:v86_tramp with the INT 21h frame still on the stack.
+         In protected mode (or a caller that cannot), output falls back to `prnout` /
+         `auxout`, the same devices without the IVT hop. */
+    int      v86_tramp_ok;
+    uint16_t v86_tramp;
+    int    (*prnout)(void *ctx, uint8_t ch);   /* PRN byte -> LPT1; 0 = went nowhere */
+    void   (*auxout)(void *ctx, uint8_t ch);   /* AUX byte -> COM1                   */
+    void    *devctx;
     int    (*conpeek)(void *ctx); /* non-blocking status: 1 if a key is ready       */
     /* AH=0Ah (buffered input) IS A BLOCKING SERVICE THAT SPANS MANY RETRIES, so the
        line it is collecting has to survive them. The characters live in the GUEST's

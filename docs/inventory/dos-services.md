@@ -43,13 +43,13 @@ implemented and agree with real DOS.** The gaps fall into four kinds:
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
-| §1 INT 21h `00h`–`2Fh` | 34 | 24 | 8 | — | 2 | — |
+| §1 INT 21h `00h`–`2Fh` | 34 | 27 | 5 | — | 2 | — |
 | §2 INT 21h `30h`–`4Fh` | 36 | 24 | 8 | — | 4 | — |
 | §3 INT 21h `50h`–`6Ch` and above | 31 | 23 | 5 | — | 3 | — |
 | §4 Other DOS interrupts, and DOS's own machinery | 11 | 6 | 1 | — | 3 | 1 |
 | §5 INT 2Fh | 7 | 5 | — | — | 1 | 1 |
 | §6 INT 13h / 25h / 26h | 13 | 7 | 1 | — | 4 | 1 |
-| **Total** | **132** | **89** | **23** | **—** | **17** | **3** |
+| **Total** | **132** | **92** | **20** | **—** | **17** | **3** |
 
 ---
 
@@ -64,9 +64,9 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `00h` | terminate (CP/M style) | **IMPL** | `:682-710`; = `4Ch` with code 0 | untested (Skyroads exits through it) |
 | `01h`/`07h`/`08h` | character input (01 echoes) | **IMPL** | `:713-721`, non-blocking + retry. Ctrl-C checking is §4 | untested |
 | `02h` | character output | **IMPL** | `:711-712` | via every probe's own output |
-| `03h` | AUX input | **PART** | `:1561-1563`: always `1Ah` (EOF). COM1 exists ([uart.md](uart.md)); AUX is not connected to it | untested |
-| `04h` | AUX output | **PART** | `:1564-1565`: discarded | untested |
-| `05h` | printer output | **PART** | `:1564-1565`: discarded — while INT 17h and port `378h` spool LPT1 to a file (`lpt_spool_put`, [bios-misc.md](bios-misc.md) §6) | untested |
+| `03h` | AUX input | **IMPL** | #251: V86 resumes in DOS's AUX driver code (`dos_auxprn.asm`): INT 14h `03h` then `02h`, through the IVT. PM: still `1Ah` | **oracle** (`p_auxprn`, 6.22 + PCem; DOSBox-X hangs on it) |
+| `04h` | AUX output | **IMPL** | #251: INT 14h `03h` then `01h` (V86, through the IVT); PM straight to COM1 | **oracle** (`p_auxprn`) |
+| `05h` | printer output | **IMPL** | #251: INT 17h `02h`, `02h`, `00h` (V86, through the IVT, so a printer redirector sees it); PM straight to the LPT1 spool. A BIOS error status is not acted on (no retry / INT 24h) | **oracle** (`p_auxprn`) |
 | `06h` | direct console I/O | **IMPL** | `:786-794`; `DL=FFh` reads with ZF | untested |
 | `09h` | print `$`-string | **IMPL** | `:795-798` (capped at 1024 characters) | untested |
 | `0Ah` | buffered line input | **IMPL** | `:722-781`; collected across retries (the s79 shell fix); backspace. The DOS editing keys (F1–F6 and the template) are not | by hand (XP COMMAND.COM) |
@@ -114,7 +114,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `3Dh` | open | **IMPL** | `:845-850`; access mode from AL; sharing bits deliberately not enforced (no SHARE); errors through `dos_err_from_win32` | **oracle** (`p_err` 3D rows, `p_file`) |
 | `3Eh` | close | **IMPL** | `:870-876` | **oracle** (`p_redir`) |
 | `3Fh` | read | **PART** | `:877-899`: files ✓; ⛔ **an unredirected device handle returns 0 bytes (EOF)** (`:897-898`) — reading stdin by handle never reaches the keyboard | **oracle** for files (`p_redir`) |
-| `40h` | write | **PART** | `:799-820`: files and the console ✓; **`CX=0` does not truncate or extend** the file to the current position (DOS's documented way to set a file's size); AUX/PRN discarded | **oracle** (`p_redir`, `p_tsr`) |
+| `40h` | write | **PART** | `:799-820`: files and the console ✓; **`CX=0` does not truncate or extend** the file to the current position (DOS's documented way to set a file's size). Handles 3/4 = AUX/PRN through INT 14h/17h (#251, `p_auxprn`) | **oracle** (`p_redir`, `p_tsr`) |
 | `41h` | delete | **PART** | `:1609-1613`: every failure is `2` — a read-only file should be `5`, a missing path `3` | **oracle** for the absent case (`p_file`) |
 | `42h` | seek | **IMPL** | `:900-917`; any bound handle, including a redirected low one (#133) | **oracle** (`p_redir`) |
 | `43h` | get / set attributes | **IMPL** | `:1614-1632` | **oracle** (`p_file`, `p_subfn`) |

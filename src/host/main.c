@@ -104,6 +104,8 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_psp.h"
 #include "dos_env.h"
 #include "dos_int21.h"
+#include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
+typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -2814,6 +2816,20 @@ static int lpt_spool_put(BYTE c)
 }
 static void lpt_tx_sink(void *ctx, int port, uint8_t b)
 { (void)ctx; (void)port; lpt_spool_put(b); }
+/* #251: DOS's PRN/AUX output when the guest cannot be resumed in the driver code
+   (dos_auxprn.h) -- a DPMI client's INT 21h. Same devices, without the IVT hop. */
+static int dos_prnout(void *ctx, uint8_t c) { (void)ctx; return lpt_spool_put(c); }
+static void dos_auxout(void *ctx, uint8_t c)
+{
+    ntvdd_regs r;
+    (void)ctx;
+    r.eax = 0x0100u | c;                         /* INT 14h AH=01h, COM1 (DX=0) */
+    r.ebx = r.ecx = r.edx = r.esi = r.edi = r.ebp = 0;
+    r.ds = r.es = 0; r.cf = r.zf = 0;
+    HOST_LOCK();
+    vdd_bus_deliver_int(&g_bus, 0x14, &r);
+    HOST_UNLOCK();
+}
 
 /* ── ★★★★ THE Win16 COMM API, ON THE REAL UART. (GH #9 + #128, session 56) ──
      wowuser.h answered the whole comm family with IE_BADID, and its note gave
@@ -5749,6 +5765,10 @@ static volatile LONGLONG g_i15_wait_end;    /* QPC of the AH=86h deadline; 0 = n
 static volatile LONGLONG g_i15_evt_end;     /* QPC of the AH=83h deadline; 0 = none     */
 static volatile DWORD    g_i15_evt_lin;     /* linear address of its flag byte          */
 static DWORD g_i15_waits, g_i15_events, g_i15_posted, g_i15_busy;
+/* #256: 1 while the TOP-LEVEL PM loop is dispatching -- the one place a PM BIOS wait may
+   re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm. */
+static int g_pm_top_dispatch;   /* set by the top-level loop before it dispatches  */
+static int g_pm_dispatch_top;   /* ...as captured by the dispatch it applies to    */
 static LONGLONG i15_qpc_after_us(DWORD us)
 {
     LARGE_INTEGER n, f;
@@ -22672,7 +22692,47 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                               VDM_SET16(tib, VTIB_EAX, 0x3C00);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                           } else if (ah15 == 0x86) {
-                              VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                              /* ── #256: WAIT CX:DX MICROSECONDS, AS THE V86 ARM DOES (#206). ──
+                                   This answered CF=0 at once ("the PIT already paces us"), so a
+                                   DPMI client delaying with it waited zero.
+                                 ► From the top-level PM loop the BOP is RE-EXECUTED until the
+                                   deadline (EIP left on it), so that loop keeps advancing the
+                                   BIOS tick and delivering IRQ0 to a hooked client while it
+                                   waits -- what a real BIOS's wait does with IF=1.
+                                 ► Anywhere else (inside an injected ISR, a callback, a nested
+                                   dispatch) a re-execution would spend that loop's bounded
+                                   phases and could ABANDON the handler, so the wait is served
+                                   here, blocking, with the watchdog fed. Interrupts are held
+                                   until it ends -- the INT 16h PM read's shape. */
+                              DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16)
+                                       | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                              LARGE_INTEGER n, f;
+                              QueryPerformanceCounter(&n); QueryPerformanceFrequency(&f);
+                              if (g_i15_evt_end) {                   /* an 83h countdown runs */
+                                  VDM_SET16(tib, VTIB_EAX,
+                                            (WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
+                                  VDM_REG(tib, VTIB_EFLAGS) |= 1u; ++g_i15_busy;
+                              } else if (g_pm_dispatch_top) {
+                                  if (!g_i15_wait_end) {
+                                      if (us) { g_i15_wait_end = i15_qpc_after_us(us); ++g_i15_waits; }
+                                  } else if (n.QuadPart >= g_i15_wait_end) g_i15_wait_end = 0;
+                                  if (g_i15_wait_end) {              /* not yet: run it again */
+                                      if ((g_i15_wait_end - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
+                                      return 1;                      /* EIP stays on the BOP */
+                                  }
+                                  VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                              } else {
+                                  LONGLONG end = i15_qpc_after_us(us);
+                                  if (us) ++g_i15_waits;
+                                  for (;;) {
+                                      QueryPerformanceCounter(&n);
+                                      if (n.QuadPart >= end || !g_running) break;
+                                      InterlockedIncrement(&g_dpmi_iter);
+                                      if ((end - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
+                                      else Sleep(0);
+                                  }
+                                  VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                              }
                           } else {
                               VDM_SET16(tib, VTIB_EAX,
                                         (WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
@@ -24291,7 +24351,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     done = 1; break;                /* proc RETF'd -> finished */
                                 }
                                 if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
-                                    m.tp = p; dos_int21(&m); p = m.tp;
+                                    m.tp = p; m.v86_tramp_ok = 1; dos_int21(&m); m.v86_tramp_ok = 0; p = m.tp;
+                                    if (m.v86_tramp) {               /* #251: AUX/PRN driver code; its */
+                                        VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);   /* INT 14h/17h are */
+                                        VDM_REG(tib, VTIB_EIP) = m.v86_tramp;    /* served below    */
+                                        m.v86_tramp = 0;
+                                    } else
                                     VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     continue;
@@ -24454,9 +24519,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             char ob[256]; char *op = ob; int k;
                             op = zput(op, "INT21h AH=09 print: \"");
                             for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
-                                if (*s >= 0x20) *op++ = (char)*s;   /* printable -> serial echo */
-                                if (m.conout) m.conout(m.conctx, *s);  /* -> the Luna console */
-                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)*s;
+                                BYTE sc = *s;
+                                if (sc >= 0x20) *op++ = (char)sc;   /* printable -> serial echo */
+                                if (m.fh[1]) {                      /* #256: redirected stdout */
+                                    DWORD w9 = 0; WriteFile(m.fh[1], &sc, 1, &w9, NULL);
+                                    continue;
+                                }
+                                if (m.conout) m.conout(m.conctx, sc);  /* -> the Luna console */
+                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)sc;
                                 else m.out_trunc = 1;
                             }
                             op = zput(op, "\"\r\n");
@@ -24467,9 +24537,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                         if (ah == 0x02) {                          /* print char DL */
                             BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
-                            if (m.conout) m.conout(m.conctx, ch);
-                            if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
-                            else m.out_trunc = 1;
+                            /* #256: standard output, so a redirected handle 1 gets it --
+                               as the V86 OUTC does. */
+                            if (m.fh[1]) { DWORD w1 = 0; WriteFile(m.fh[1], &ch, 1, &w1, NULL); }
+                            else {
+                                if (m.conout) m.conout(m.conctx, ch);
+                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
+                                else m.out_trunc = 1;
+                            }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
@@ -24479,8 +24554,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)
                                 (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            /* ── #256: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER. ──────
+                                 This tested `bh == 1 || bh == 2` FIRST, so a DPMI program run
+                                 as `prog > out.txt` printed to the screen and left out.txt
+                                 empty -- the defect #133 fixed for real mode (see the V86
+                                 AH=40h). The same two rules as there: a bound slot is a file;
+                                 an unbound open device slot is the console, except 3/4,
+                                 which are AUX and PRN (#251). */
+                            int bound = (bh < DOS_MAX_FILES && m.fh[bh] != 0);
+                            int dev   = (!bound && bh < 32 && ((m.std_open >> bh) & 1u));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (bh == 1 || bh == 2) {              /* stdout / stderr */
+                            if (dev && (bh == 3 || bh == 4)) {     /* AUX / PRN */
+                                DWORD k;
+                                for (k = 0; k < cnt; ++k) {
+                                    if (bh == 4) (void)dos_prnout(NULL, b[k]);
+                                    else dos_auxout(NULL, b[k]);
+                                }
+                                VDM_SET16(tib, VTIB_EAX, cnt);
+                            } else if (dev) {                      /* the console */
                                 char ob[300]; char *op = ob; DWORD k;
                                 op = zput(op, "INT21h AH=40 write: \"");
                                 for (k = 0; k < cnt && k < 250; ++k) {
@@ -24492,7 +24583,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 op = zput(op, "\"\r\n");
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
-                            } else if (bh < DOS_MAX_FILES && m.fh[bh]) {      /* file handle */
+                            } else if (bound) {                     /* file handle */
                                 DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
                                 VDM_SET16(tib, VTIB_EAX, w);
                                 p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
@@ -25319,7 +25410,12 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                unsigned steps)
 {
-    int rc = dpmi_service_pm_int_body(mp, tib, vec, steps);
+    int rc;
+    /* #256: only THIS dispatch is top-level; anything it nests (a callback, an
+       injected ISR) dispatches with the flag down. */
+    g_pm_dispatch_top = g_pm_top_dispatch;
+    g_pm_top_dispatch = 0;
+    rc = dpmi_service_pm_int_body(mp, tib, vec, steps);
     if (rc == 1) dpmi_pm_cf_to_frame(tib);
     return rc;
 }
@@ -26497,7 +26593,20 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                Status bits: 7 not busy, 6 acknowledge, 4 selected, 3 I/O
                error, 0 timeout. 0x90 = not busy + selected = ready. */
             unsigned ah17 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-            if (ah17 == 0x00) {                /* print AL                 */
+            unsigned dx17 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+            /* ── #256: DX IS THE PRINTER NUMBER, AND THE BDA SAYS WHICH EXIST. ──────
+                 Every DX was LPT1. A BIOS finds printer DX's port in 0040:0008+2*DX
+                 and, if there is none (or DX > 2), returns AT ONCE with every register
+                 as passed -- p_int17: 6.22/SeaBIOS, DOSBox-X and PCem's AMI agree on
+                 LPT3 and DX=3. Only our one fitted port (378h) is backed, so a guest
+                 that moved a base elsewhere in the table gets "absent" too.
+               ► An unknown AH also leaves AX as passed (SeaBIOS, DOSBox-X). PCem's AMI
+                 answers the status for it instead -- disputed, recorded in
+                 oracle-rules.json; "ready" for a call that does nothing was neither. */
+            WORD base17 = (dx17 < 3) ? *(volatile WORD *)(ULONG_PTR)(0x408 + 2 * dx17) : 0;
+            if (base17 != 0x0378 || !vdd_lpt_fitted(&g_comm, 0)) {
+                /* absent printer: nothing, registers as passed */
+            } else if (ah17 == 0x00) {         /* print AL                 */
                 BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
                 /* Shared with the 0x378 port model -- see lpt_spool_put.
                    One printer, two ways in. */
@@ -26519,8 +26628,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                               | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
                 BCF_CLR();
             } else {
-                BSETAX(0x9000); BCF_CLR();
-                g_bios_unimpl[0x17] = 1;
+                g_bios_unimpl[0x17] = 1;       /* unknown AH: AX as passed */
             }
         } else if (bn == 0x13) {               /* disk services  GH #44   */
             unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
@@ -28300,6 +28408,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         *(volatile WORD *)(0x24 * 4)     = (WORD)(o + 8);        /* INT 24h */
         *(volatile WORD *)(0x24 * 4 + 2) = DOS_CTAB_SEG;
     }
+    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
+       dos_auxprn.asm for why it is guest code and what it was measured against. */
+    {   volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
+        unsigned k;
+        for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
+    }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
        that INTs it to 0000:0000, where it executes the interrupt vector table
@@ -29482,6 +29596,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
     m.set_ticks = host_set_ticks;               /* AH=2Dh reloads 0040:006C (#250) */
     m.ticks_ctx = NULL;
+    m.prnout  = dos_prnout;                     /* #251: PRN/AUX when not in V86 */
+    m.auxout  = dos_auxout;  m.devctx = NULL;
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */
@@ -32214,6 +32330,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                     vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(csv, eip) : 0;
                     g_dpmi_last_vec = vec;
+                    g_pm_top_dispatch = 1;          /* #256: consumed by this dispatch */
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */
                     break;                  /* 0 = client exited, <0 = unexpected stop */
@@ -32919,12 +33036,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         m.tp = p;
         m.retry = 0;
+        m.v86_tramp_ok = 1;                         /* #251: we can resume elsewhere */
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
+            m.v86_tramp_ok = 0;
             p = m.tp;
             if (dos_terminate(&m, tib, &p, base)) continue;
             break;
         }
+        m.v86_tramp_ok = 0;
         p = m.tp;
+        if (m.v86_tramp) {                          /* #251: into DOS's AUX/PRN driver code */
+            VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+            VDM_REG(tib, VTIB_EIP) = m.v86_tramp;
+            m.v86_tramp = 0;
+            log_append(LOG_PATH, base, p); p = base;
+            continue;
+        }
         if (m.exec_pending) {                       /* GH #30: AH=4Bh */
             m.exec_pending = 0;
             p = exec_begin(&m, tib, p);
