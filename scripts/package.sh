@@ -9,7 +9,7 @@
 # on an XP box and running install.bat is the whole install:
 #
 #   install.bat uninstall.bat status.bat smoke.bat README.txt
-#   bin\ntvdmhost.exe  bin\selftest.com
+#   bin\ntvdmhost.exe  bin\ntvdmex.exe (the manager, #281)  bin\selftest.com
 #   cfg\  debug\out\        (empty; the host creates them anyway)
 #
 # No Win16 system files are bundled: the WOW half runs XP's OWN krnl386/gdi/user
@@ -38,6 +38,11 @@ rm -rf "$stage"
 mkdir -p "$stage/bin" "$stage/cfg" "$stage/debug/out"
 
 cp "$HOST" "$stage/bin/ntvdmhost.exe"
+# GH #281: the manager -- one tray icon for every program. It must BE the manager:
+# build/ntvdmex.exe used to be the retired milestone-0 shell preview, same name.
+MGR="$ROOT/build/ntvdmex.exe"
+grep -q "NTVDMEX_Manager" "$MGR" 2>/dev/null || { echo "build/ntvdmex.exe is not the manager (stale M0 preview?) -- rebuild" >&2; exit 1; }
+cp "$MGR" "$stage/bin/ntvdmex.exe"
 cp "$ROOT/tools/dostest/selftest.com" "$stage/bin/selftest.com"
 for f in install.bat uninstall.bat status.bat smoke.bat diag.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"

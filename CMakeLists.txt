@@ -56,18 +56,24 @@ function(ntvdmex_configure_xp_target tgt)
         -Wl,--major-os-version,5        -Wl,--minor-os-version,1)
 endfunction()
 
-# --- ntvdmex.exe: the shell preview (and, later, the VDM host itself) ----------
+# --- ntvdmex.exe: the NTVDMEX MANAGER (GH #281, s88) ---------------------------
+# One tray icon for every running DOS and Win16 program; each program still runs in
+# its own ntvdmhost.exe (NT allows one V86 machine per process). Started on demand by
+# the first host, exits when the last one has gone. See src/manager/manager.c.
+# (This target used to build the milestone-0 shell preview, src/main.c + console.c,
+# which was never shipped and is retired.)
 add_executable(ntvdmex WIN32
-    src/main.c
-    src/console.c
+    src/manager/manager.c
     src/runtime.c
     res/ntvdmex.rc)
 target_include_directories(ntvdmex PRIVATE src)
+set_source_files_properties(res/ntvdmex.rc PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/MAINICON.ico")
 if(NOT NTVDMEX_EMBED_MANIFEST)
     target_compile_definitions(ntvdmex PRIVATE NTVDMEX_NO_MANIFEST)
 endif()
 ntvdmex_configure_xp_target(ntvdmex)
-target_link_libraries(ntvdmex PRIVATE kernel32 user32 gdi32 comctl32 shell32 gcc)
+target_link_libraries(ntvdmex PRIVATE kernel32 user32 shell32 gcc)
 
 # --- wowprobe.exe: Spike-002 harness (WOW registry repoint) --------------------
 # A throwaway stub that proves XP launches us as the VDM support process and

@@ -22,6 +22,10 @@
 1 24 "ntvdmex.manifest"
 #endif
 
+/* The same icon as the host: the tray shows it for every program (GH #281). */
+#define IDI_MAINICON 101
+IDI_MAINICON ICON "MAINICON.ico"
+
 /* Version information block. */
 1 VERSIONINFO
 FILEVERSION     0,1,0,0
@@ -34,7 +38,7 @@ BEGIN
         BLOCK "040904b0"   /* US English, Unicode codepage */
         BEGIN
             VALUE "CompanyName",      "Matthew Layton"
-            VALUE "FileDescription",  "NTVDMEX - New Technology Virtual DOS Manager, Extended"
+            VALUE "FileDescription",  "NTVDMEX Manager - one tray icon for every DOS and Win16 program"
             VALUE "FileVersion",      "0.1.0.0"
             VALUE "InternalName",     "ntvdmex"
             VALUE "LegalCopyright",   "(C) 2026 Matthew Layton. MIT License."

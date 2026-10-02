@@ -70,6 +70,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "csrss.h"
 #include "log.h"
 #include "settings.h"   /* registry-backed knobs + the Settings dialog */
+#include "mgrproto.h"   /* GH #281: the NTVDMEX manager -- one tray icon for every program */
 #include "pcspeaker.h"  /* the OTHER speaker: the one on the motherboard */
 #include "install.h"    /* GH #13: becoming the machine's VDM, reversibly */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
@@ -10117,6 +10118,130 @@ static void tray_remove(HWND h)
     g_tray_on = 0;
 }
 
+/* ── ★★ THE NTVDMEX MANAGER: ONE TRAY ICON FOR EVERY PROGRAM. (GH #281, s88) ───
+     User design: the first host brings up `ntvdmex.exe`, every host (DOS and
+     Win16) appears in its one tray menu, and it exits when the last has gone.
+     Protocol and lifetime in src/host/mgrproto.h; the manager in src/manager/.
+   ► THIS SIDE IS ONE LOW-PRIORITY THREAD that re-announces the host every two
+     seconds. Not the UI thread: a SendMessageTimeout on a frame tick is a stall
+     Skyroads would feel, and the announcement has no deadline worth that.
+   ⚠ IF ntvdmex.exe IS NOT BESIDE US, nothing changes: a Win16 host keeps its own
+     tray icon exactly as before (g_mgr_avail = 0), and a DOS host never had one. */
+static int   g_mgr_avail;                    /* ntvdmex.exe exists beside the host   */
+static UINT  g_mgr_cmdmsg;                   /* the registered manager->host message */
+static char  g_mgr_exe[MAX_PATH];
+static DWORD g_mgr_hellos, g_mgr_launches;   /* for the log                          */
+typedef int (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, int);
+
+/* What the menu calls this program. DOS: the running program's name ("Doom"), or
+   "MS-DOS Prompt" for a bare shell. Win16: its main window's caption up to " - "
+   ("Notepad - (Untitled)" -> "Notepad"), else the program file's name. The caption
+   is read with InternalGetWindowText, which takes it from the window WITHOUT a
+   message -- GetWindowText from this thread would wait on the exec thread, which is
+   usually inside the guest. */
+static void mgr_name(char *out, HWND *show)
+{
+    char raw[MGR_NAME_CB]; int i, k = 0;
+    const char *src = NULL;
+    raw[0] = 0; *show = g_hwnd;
+    if (g_wow_launch) {
+        static PFN_INTGETWT igwt;
+        if (!igwt) igwt = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA("user32.dll"),
+                                                                  "InternalGetWindowText");
+        *show = NULL;
+        for (i = 0; i < WOWUSER_MAX_WIN; ++i) {
+            const wowuser_win_t *w = &g_wu_win[i];
+            HWND h = w->hwnd32;
+            if (!w->hwnd || w->parent || w->dying || !h || !IsWindowVisible(h)) continue;
+            *show = h;
+            if (igwt) {
+                WCHAR wb[MGR_NAME_CB]; int n = igwt(h, wb, MGR_NAME_CB);
+                if (n > 0) WideCharToMultiByte(CP_ACP, 0, wb, n + 1, raw, sizeof raw, NULL, NULL);
+            }
+            break;
+        }
+        if (!raw[0]) src = g_wow_cmd_prog;
+    } else {
+        src = g_progname;
+    }
+    if (src) {
+        const char *bn = src, *q;
+        for (q = src; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
+        if (!*bn || !lstrcmpiA(bn, "COMMAND.COM") || !lstrcmpiA(bn, "CMD.EXE")
+            || !lstrcmpA(bn, "(none)")) {
+            lstrcpynA(out, g_wow_launch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_CB);
+            return;
+        }
+        /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
+        for (i = 0; bn[i] && bn[i] != '.' && k < MGR_NAME_CB - 1; ++i) {
+            char c = bn[i];
+            if (k == 0) { if (c >= 'a' && c <= 'z') c = (char)(c - 32); }
+            else        { if (c >= 'A' && c <= 'Z') c = (char)(c + 32); }
+            raw[k++] = c;
+        }
+        raw[k] = 0;
+    }
+    raw[MGR_NAME_CB - 1] = 0;
+    for (i = 0; raw[i]; ++i)                         /* "Notepad - (Untitled)" -> "Notepad" */
+        if (raw[i] == ' ' && raw[i + 1] == '-' && raw[i + 2] == ' ') { raw[i] = 0; break; }
+    lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_CB);
+}
+
+static DWORD WINAPI mgr_thread(LPVOID unused)
+{
+    DWORD last_launch = 0;
+    (void)unused;
+    while (g_hwnd && IsWindow(g_hwnd)) {
+        HWND m = FindWindowA(MGR_CLASS, NULL);
+        if (!m) {
+            DWORD now = GetTickCount();
+            if (!last_launch || now - last_launch >= 5000) {
+                STARTUPINFOA si; PROCESS_INFORMATION pi;
+                char cl[MAX_PATH + 4];
+                last_launch = now;
+                ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+                cl[0] = '"'; lstrcpynA(cl + 1, g_mgr_exe, MAX_PATH); lstrcatA(cl, "\"");
+                if (CreateProcessA(g_mgr_exe, cl, NULL, NULL, FALSE, DETACHED_PROCESS,
+                                   NULL, NULL, &si, &pi)) {
+                    ++g_mgr_launches;
+                    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                }
+            }
+            Sleep(500);                              /* give it a moment to appear */
+            continue;
+        }
+        {   mgr_msg_t mm; COPYDATASTRUCT cd; HWND show; DWORD_PTR r = 0;
+            ZeroMemory(&mm, sizeof mm);
+            mm.magic = MGR_MAGIC; mm.ver = MGR_VER; mm.cb = sizeof mm;
+            mm.op = MGR_OP_HELLO; mm.pid = GetCurrentProcessId();
+            mm.kind = g_wow_launch ? MGR_KIND_WIN16 : MGR_KIND_DOS;
+            mgr_name(mm.name, &show);
+            mm.cmdhwnd = (DWORD)(ULONG_PTR)g_hwnd; mm.showhwnd = (DWORD)(ULONG_PTR)show;
+            cd.dwData = MGR_MAGIC; cd.cbData = sizeof mm; cd.lpData = &mm;
+            if (SendMessageTimeoutA(m, WM_COPYDATA, (WPARAM)g_hwnd, (LPARAM)&cd,
+                                    SMTO_ABORTIFHUNG, 500, &r) && r)
+                ++g_mgr_hellos;
+        }
+        Sleep(2000);
+    }
+    return 0;
+}
+
+static void mgr_start(void)
+{
+    char *q; HANDLE t;
+    g_mgr_cmdmsg = RegisterWindowMessageA(MGR_CMD_MSGNAME);
+    if (!GetModuleFileNameA(NULL, g_mgr_exe, sizeof g_mgr_exe)) return;
+    for (q = g_mgr_exe + lstrlenA(g_mgr_exe); q > g_mgr_exe && q[-1] != '\\'; --q) ;
+    if (q - g_mgr_exe + lstrlenA(MGR_EXE) >= (int)sizeof g_mgr_exe) return;
+    lstrcpyA(q, MGR_EXE);
+    if (GetFileAttributesA(g_mgr_exe) == INVALID_FILE_ATTRIBUTES) return;
+    g_mgr_avail = 1;
+    t = CreateThread(NULL, 0, mgr_thread, NULL, 0, NULL);
+    if (t) { SetThreadPriority(t, THREAD_PRIORITY_LOWEST); CloseHandle(t); }
+    else g_mgr_avail = 0;
+}
+
 /* The tray's context menu: the items from the menu bar that still MEAN something
    when there is no window to look at. Deliberately short -- a tray menu that
    mirrored the whole bar would offer Fullscreen and Capture Input for a machine
@@ -12386,6 +12511,22 @@ static void host_pause_set(int on)
 
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    /* GH #281: a command from the manager's tray menu, mapped onto this host's own
+       menu so each does exactly what the window's menu does. Show for a Win16 host
+       is the manager's job (it brings the program's own window forward); this host's
+       window is the hidden machine, which is not what anyone wants to see. */
+    if (g_mgr_cmdmsg && msg == g_mgr_cmdmsg) {
+        switch (wp) {
+        case MGRCMD_SHOW:
+            if (!g_wow_launch) { if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+                                 SetForegroundWindow(h); }
+            return 0;
+        case MGRCMD_SETTINGS:  PostMessageA(h, WM_COMMAND, IDM_FILE_SETTINGS, 0);  return 0;
+        case MGRCMD_CLOSEPROG: PostMessageA(h, WM_COMMAND, IDM_FILE_CLOSEPROG, 0); return 0;
+        case MGRCMD_EXIT:      PostMessageA(h, WM_COMMAND, IDM_FILE_EXIT, 0);      return 0;
+        }
+        return 0;
+    }
     switch (msg) {
     case WM_APP_PRESENT:
         InterlockedExchange(&g_ui_present_pending, 0);
@@ -13489,7 +13630,10 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
          is built either way (it owns the present surface, the raw input, the frame
          timer and the tray callbacks); only whether anyone sees it changes. */
-    if (g_wow_launch) { tray_add(hi, g_hwnd); }
+    /* GH #281: with the manager present, IT owns the tray icon -- for this host and
+       every other. Without it (ntvdmex.exe missing) a Win16 host keeps its own. */
+    mgr_start();
+    if (g_wow_launch && !g_mgr_avail) { tray_add(hi, g_hwnd); }
     else              { ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd); }
     /* ★ THE START HAS SUCCEEDED -- say so NOW, not at exit. (GH #132, 2026-09-12)
          From here the user can close us, so the "no working VDM on the box" failure

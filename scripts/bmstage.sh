@@ -116,6 +116,14 @@ if [ "$MODE" = host ]; then
   fi
   echo "host -> bin/"
   stage_bin "$HOST" "$SH/bin/ntvdmhost.exe"
+  # GH #281: the manager beside it. Must BE the manager (the old M0 preview had the
+  # same name). A running manager holds the file open; it exits on its own a few
+  # seconds after the last host, so a failed copy here is retried by the next deploy.
+  if grep -q "NTVDMEX_Manager" "$ROOT/build/ntvdmex.exe" 2>/dev/null; then
+    echo "manager -> bin/"
+    cp "$ROOT/build/ntvdmex.exe" "$SH/bin/ntvdmex.exe" 2>/dev/null \
+      || echo "⚠ bin/ntvdmex.exe busy (a manager is running) -- not replaced" >&2
+  fi
 else
   if [ -f "$SH/bin/ntvdmhost.exe" ]; then
     L=$(md5 -q "$ROOT/build/ntvdmhost.exe" 2>/dev/null || echo none); R=$(md5 -q "$SH/bin/ntvdmhost.exe")
