@@ -10,7 +10,9 @@
  * string ops (REP, honouring DF), MOV, TEST, the flag ops, and Jcc/JMP/LOOP --
  * until we hit an opcode we don't model or an iteration cap, then return to V86.
  * It NEVER derails: any unmodeled byte stops with IP exactly on that
- * instruction so V86 re-executes it. 16-bit only (0x66/0x67/LOCK bail).
+ * instruction so V86 re-executes it. Address size is 16-bit only (0x67 and
+ * LOCK bail); the 0x66 operand-size forms are modelled (run 54, and #194 for
+ * the stack, string and control-transfer forms -- see the #194 note below).
  *
  * The includer MUST, before #include'ing this header, provide:
  *   - the fixed-width int types (uint8_t/uint16_t/uint32_t/int8_t/int16_t) + BYTE
@@ -78,6 +80,93 @@ static void wr_mem(uint32_t lin, int w, uint32_t v)
 { imem_w8(lin, (uint8_t)v);
   if (w >= 2) imem_w8(lin + 1, (uint8_t)(v >> 8));
   if (w == 4) { imem_w8(lin + 2, (uint8_t)(v >> 16)); imem_w8(lin + 3, (uint8_t)(v >> 24)); } }
+
+/* ── #194: THE 0x66 FORMS THAT USED TO BAIL, AND THE TWO THINGS THE MANUAL LEAVES OPEN.
+     PUSHFD/POPFD, 32-bit PUSH/POP of a segment register, the 32-bit string ops, CALL/
+     JMP/RET/RETF/LEAVE/IRETD with 0x66, and IRET in protected mode all declined, each
+     one a hand-back to the real CPU -- and in a planar mode a hand-back is not one
+     instruction, it is everything up to the next event with A0000 unprotected (the
+     s68 scasb lesson). Address size stays 16-bit throughout: SP/SI/DI/CX, never ESP.
+   ► WHAT THE MANUAL LEAVES OPEN WAS MEASURED, NOT RECALLED -- tools/dostest/p_o32.com
+     on the rig's own CPU under XP's V86 monitor, the machine this interpreter stands in
+     for (runs/s87_dpmi; the same bytes are replayed through this file off-VM by
+     interp_test.c against tools/dostest/p_o32.ref.txt):
+       - `66 PUSH sreg` writes the selector as a WORD: the slot's upper half is left as
+         it was (sentinel DEAD survived). Intel allows either; this CPU keeps it.
+       - but a 32-bit FAR CALL writes its CS slot as a DWORD, zero-extended (item 28:
+         the 0x1234 left in that slot was cleared). Different instructions, different
+         answers -- so they are two code paths here, not one helper.
+       - `66 MOV r32,sreg` ZERO-EXTENDS into the register (EAX[31:16] = 0).
+       - PUSHFD/POPFD and IRETD are not the CPU's answer at all in V86 below IOPL 3: they
+         #GP and the NT kernel emulates them. Its PUSHFD image has VM (17) and RF (16)
+         set and VIF (19) following the virtual IF; POPFD toggles AC (18) and ID (21) and
+         they stick. See iflags_image(). IRETD works (p_iretd.com).
+   ► A TARGET PAST THE 64 KB LIMIT BAILS. With 0x66 a near transfer carries a 32-bit
+     EIP; a 16-bit code segment's limit is FFFFh, so EIP > FFFFh is a #GP on the
+     hardware. We hand that instruction back untouched and let the CPU raise it. */
+#define V86I_EFL_AC   0x00040000u
+#define V86I_EFL_ID   0x00200000u
+#define V86I_EFL_HI   (V86I_EFL_AC | V86I_EFL_ID)  /* EFLAGS[31:16] bits POPFD may change */
+
+/* PUSH/POP with an explicit width, SS:SP-relative (16-bit stack address size). */
+static void ipush(icpu *c, int w, uint32_t v)
+{
+    uint16_t sp = (uint16_t)(c->r[4] - w);
+    wr_mem(seg_base(c->seg[2]) + sp, w, v);
+    c->r[4] = (c->r[4] & 0xFFFF0000u) | sp;
+}
+static uint32_t ipop(icpu *c, int w)
+{
+    uint16_t sp = (uint16_t)c->r[4];
+    uint32_t v = rd_mem(seg_base(c->seg[2]) + sp, w);
+    c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + w);
+    return v;
+}
+/* PUSH of a segment register in a W-wide slot. W=4: a WORD store, SP -= 4, the slot's
+   upper half untouched (measured -- see above). Not for a far CALL's CS: that one is a
+   zero-extended dword (ipush(c, 4, cs)). */
+static void ipush_sreg(icpu *c, int W, uint16_t v)
+{
+    uint16_t sp = (uint16_t)(c->r[4] - W);
+    wr_mem(seg_base(c->seg[2]) + sp, 2, v);
+    c->r[4] = (c->r[4] & 0xFFFF0000u) | sp;
+}
+/* The FLAGS image PUSHF(D) writes, and what POPF(D) may load. IF is carried (an
+   interpreted handler's POPF/IRET must restore it); TF/IOPL/NT are not modelled.
+   PUSHFD's upper half is the NT V86 monitor's (measured): AC/ID as they stand, and in
+   V86 mode (no PM resolver) VM and RF always, VIF = the guest's IF. */
+static uint32_t iflags_image(const icpu *c, int w)
+{
+    uint32_t v = (c->flags & 0x0ED5u) | 0x0002u;
+    if (w == 4) {
+        v |= c->flags & V86I_EFL_HI;
+        if (!g_seg2lin) v |= 0x00030000u | ((c->flags & 0x0200u) ? 0x00080000u : 0u);
+    }
+    return v;
+}
+static void iflags_load(icpu *c, uint32_t v, int w)
+{
+    uint32_t low = (v & 0x0ED5u) | 0x0002u;
+    /* The 16-bit form REPLACES the whole register (upper half -> 0), as POPF and IRET
+       always have here -- kept bit for bit, the fuzz pins it. The 32-bit form loads
+       only the modelled upper bits and leaves the rest (VM, VIF ...) as they were. */
+    if (w == 2) c->flags = low;
+    else        c->flags = (c->flags & ~(0xFFFFu | V86I_EFL_HI)) | (v & V86I_EFL_HI) | low;
+}
+
+/* A protected-mode far transfer the interpreter can FOLLOW: a present, 16-bit code
+   segment at the caller's own privilege, with the offset inside its limit. Anything
+   else -- a 32-bit target (this core decodes 16-bit code only), a ring change (which
+   would also switch stacks), a bad selector -- is the real CPU's to take. */
+static int pm_far_ok(const icpu *c, uint16_t sel, uint32_t off)
+{
+    uint32_t ar, lim;
+    if (!g_sel_desc || !g_sel_desc(sel, &ar, &lim)) return 0;
+    if (!(ar & 0x8000u) || !(ar & 0x0800u)) return 0;   /* present, code         */
+    if (ar & (1u << 22)) return 0;                      /* D=1: a 32-bit segment */
+    if ((sel & 3) != (c->seg[1] & 3)) return 0;         /* privilege change      */
+    return off <= lim;
+}
 
 /* CPU register file access by x86 encoding. Sub-register writes preserve the bits
    they don't touch: a 16-bit write keeps E-reg[31:16]; an 8-bit write keeps the
@@ -298,6 +387,16 @@ static int istep(icpu *c)
             } else c->flags &= ~F_ZF;                 /* invalid -> clear ZF, dest unchanged */
             c->ip = (uint16_t)(c->ip + idx); return 1;
         }
+        /* PUSH/POP FS and GS (0F A0/A1/A8/A9), either width -- #194. The 16-bit form
+           was unmodelled too: the 386 encodings live only in the 0F map. */
+        if (op2 == 0xA0 || op2 == 0xA8) {
+            ipush_sreg(c, W, c->seg[op2 == 0xA0 ? 4 : 5]);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
+        if (op2 == 0xA1 || op2 == 0xA9) {
+            c->seg[op2 == 0xA1 ? 4 : 5] = (uint16_t)ipop(c, W);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         return 0;                                     /* other 0F ops: bail */
     }
 
@@ -364,7 +463,28 @@ static int istep(icpu *c)
             else          srw(c, m.rm_reg, w, res);
             c->ip = (uint16_t)(c->ip + idx); return 1;
         }
-        if (op != 0xFF || osz) return 0;               /* FE none; osz push/call/jmp: TODO */
+        if (op != 0xFF) return 0;                      /* FE has nothing past INC/DEC */
+        if (osz) {
+            /* #194: the 32-bit forms. CALL/JMP near take a 32-bit EIP (bail past the
+               64 KB limit -- see the #194 note at the top); PUSH r/m32; and CALL/JMP
+               FAR m16:32 -- offset dword, then the selector -- real mode only, as the
+               16-bit far forms below are. */
+            uint32_t v32 = m.is_mem ? rd_mem(m.lin, 4) : c->r[m.rm_reg & 7];
+            uint32_t nip = (uint32_t)(uint16_t)(c->ip + idx);
+            if (m.g == 2 || m.g == 4) {
+                if (v32 > 0xFFFFu) return 0;
+                if (m.g == 2) ipush(c, 4, nip);
+                c->ip = (uint16_t)v32; return 1;
+            }
+            if (m.g == 6) { ipush(c, 4, v32); c->ip = (uint16_t)nip; return 1; }
+            if ((m.g == 3 || m.g == 5) && m.is_mem && !g_seg2lin) {
+                uint16_t seg = (uint16_t)rd_mem(m.lin + 4, 2);
+                if (v32 > 0xFFFFu) return 0;
+                if (m.g == 3) { ipush(c, 4, c->seg[1]); ipush(c, 4, nip); }  /* CS slot: dword */
+                c->seg[1] = seg; c->ip = (uint16_t)v32; return 1;
+            }
+            return 0;
+        }
         { uint16_t val = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);
           uint16_t nip = (uint16_t)(c->ip + idx);
           if (m.g == 2) {                              /* CALL near indirect */
@@ -566,14 +686,20 @@ static int istep(icpu *c)
      * run 59. */
     if (op == 0x9C) {                                  /* PUSHF */
         uint16_t sp;
-        if (osz) return 0;                             /* PUSHFD (32-bit EFLAGS): TODO */
+        if (osz) {                                     /* PUSHFD (#194): see iflags_image */
+            ipush(c, 4, iflags_image(c, 4));
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         sp = (uint16_t)(c->r[4] - 2);
         wr_mem((seg_base(c->seg[2])) + sp, 2, (uint16_t)((c->flags & 0x0ED5u) | 0x0002u));
         c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0x9D) {                                  /* POPF */
         uint16_t sp;
-        if (osz) return 0;                             /* POPFD (32-bit EFLAGS): TODO */
+        if (osz) {                                     /* POPFD (#194): see iflags_load */
+            iflags_load(c, ipop(c, 4), 4);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         sp = (uint16_t)c->r[4];
         /* IF (0x200) is part of the mask: dropping it made every interpreted POPF
            silently disable the guest's interrupts. */
@@ -614,7 +740,10 @@ static int istep(icpu *c)
     if (op == 0x06 || op == 0x0E || op == 0x16 || op == 0x1E) {        /* PUSH sreg */
         int sr = (op == 0x06) ? 0 : (op == 0x0E) ? 1 : (op == 0x16) ? 2 : 3;
         uint16_t sp;
-        if (osz) return 0;                             /* 32-bit seg push: TODO */
+        if (osz) {                                     /* #194: 4-byte slot */
+            ipush_sreg(c, 4, c->seg[sr]);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         sp = (uint16_t)(c->r[4] - 2);
         wr_mem((seg_base(c->seg[2])) + sp, 2, c->seg[sr]);
         c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -622,7 +751,10 @@ static int istep(icpu *c)
     if (op == 0x07 || op == 0x17 || op == 0x1F) {                      /* POP sreg */
         int sr = (op == 0x07) ? 0 : (op == 0x17) ? 2 : 3;
         uint16_t sp;
-        if (osz) return 0;                             /* 32-bit seg pop: TODO */
+        if (osz) {                                     /* #194: 4-byte slot, low word */
+            c->seg[sr] = (uint16_t)ipop(c, 4);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         sp = (uint16_t)c->r[4];
         c->seg[sr] = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -635,7 +767,11 @@ static int istep(icpu *c)
         if ((m.g & 7) > 5) return 0;
         if (op == 0x8C) {                              /* store Sreg -> r/m16 */
             uint16_t v = c->seg[m.g & 7];
-            if (m.is_mem) wr_mem(m.lin, 2, v); else s16(c, m.rm_reg, v);
+            /* #194: `66 8C` to a REGISTER zero-extends into all 32 bits (measured, p_o32
+               item 4); to memory it is a word store either way. */
+            if (m.is_mem) wr_mem(m.lin, 2, v);
+            else if (osz) c->r[m.rm_reg & 7] = v;
+            else s16(c, m.rm_reg, v);
         } else {                                       /* load Sreg <- r/m16 */
             if ((m.g & 7) == 1) return 0;              /* MOV CS,x is illegal */
             c->seg[m.g & 7] = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);
@@ -669,17 +805,20 @@ static int istep(icpu *c)
     /* ---- IN/OUT via the device bus (E4-E7, EC-EF) -------------------------- *
      * Lets the interpreter run VGA-register-per-pixel plot loops in-host (QB    *
      * reprograms the Graphics Controller bit mask via OUT between pixels).      */
+    /* #194: the word forms follow 0x66 -- IN EAX / OUT EAX are 4-byte port accesses.
+       They used to be executed as 16-bit ones: EAX[31:16] left stale on IN, and a
+       device that decodes 32-bit accesses (none is assumed) handed half a write. */
     if (op == 0xE4 || op == 0xE5 || op == 0xEC || op == 0xED) {          /* IN  */
-        int w = (op & 1) ? 2 : 1;
+        int w = (op & 1) ? W : 1;
         uint16_t port = (op <= 0xE5) ? (uint16_t)CB(idx++) : c->r[2];    /* imm8/DX */
         uint32_t v = iio_in(port, w);
-        if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v);
+        srw(c, 0, w, v & wmask(w));
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xE6 || op == 0xE7 || op == 0xEE || op == 0xEF) {          /* OUT */
-        int w = (op & 1) ? 2 : 1;
+        int w = (op & 1) ? W : 1;
         uint16_t port = (op <= 0xE7) ? (uint16_t)CB(idx++) : c->r[2];    /* imm8/DX */
-        iio_out(port, w, (w == 1) ? g8(c, 0) : g16(c, 0));
+        iio_out(port, w, grw(c, 0, w));
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -699,26 +838,26 @@ static int istep(icpu *c)
     }
 
     /* ---- string ops: STOS (AA/AB), MOVS (A4/A5), LODS (AC/AD) -------------- */
-    if (op == 0xAA || op == 0xAB) {                   /* STOS ES:DI <- AL/AX */
-        int w = (op == 0xAB) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
-        if (osz) return 0;                            /* 32-bit string op: TODO */
+    /* #194: the dword forms (66 AB/A5/A7/AF/AD) are the same loops with w = 4. Each element
+       is still moved a byte at a time, in the order the word forms always used (low
+       byte first; destination before source for CMPS), each byte's offset wrapping at
+       64 KB -- so an A0000 latch read happens exactly where it did. */
+    if (op == 0xAA || op == 0xAB) {                   /* STOS ES:DI <- AL/AX/EAX */
+        int w = (op == 0xAB) ? W : 1, dir = (c->flags & F_DF) ? -w : w, k;
         uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, es = c->seg[0], al = c->r[0]; uint16_t di = c->r[7];
-        while (cnt) { uint32_t lin = (seg_base(es)) + di;
-                      imem_w8(lin, (uint8_t)al);
-                      if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1), (uint8_t)(al >> 8));
+        while (cnt) { for (k = 0; k < w; ++k)
+                          imem_w8((seg_base(es)) + (uint16_t)(di + k), (uint8_t)(al >> (8 * k)));
                       di = (uint16_t)(di + dir); cnt--; }
         s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xA4 || op == 0xA5) {                   /* MOVS ES:DI <- DS:SI */
-        int w = (op == 0xA5) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
-        if (osz) return 0;                            /* 32-bit string op: TODO */
+        int w = (op == 0xA5) ? W : 1, dir = (c->flags & F_DF) ? -w : w, k;
         uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3], es = c->seg[0];
         uint16_t si = c->r[6], di = c->r[7];
-        while (cnt) { uint32_t sl = (seg_base(ss)) + si, dl = (seg_base(es)) + di;
-                      imem_w8(dl, imem_r8(sl));
-                      if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1),
-                                          imem_r8((seg_base(ss)) + (uint16_t)(si + 1)));
+        while (cnt) { for (k = 0; k < w; ++k)
+                          imem_w8((seg_base(es)) + (uint16_t)(di + k),
+                                  imem_r8((seg_base(ss)) + (uint16_t)(si + k)));
                       si = (uint16_t)(si + dir); di = (uint16_t)(di + dir); cnt--; }
         s16(c, 6, si); s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -738,21 +877,19 @@ static int istep(icpu *c)
          element: REPE stops on ZF=0, REPNE on ZF=1. CX=0 with a prefix = no-op and
          the flags are left alone, as on the hardware. */
     if (op == 0xA6 || op == 0xA7 || op == 0xAE || op == 0xAF) {
-        int w = (op & 1) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
+        int w = (op & 1) ? W : 1, dir = (c->flags & F_DF) ? -w : w, k;
         int scas = (op >= 0xAE);
         uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, es = c->seg[0];
         uint32_t ss = c->seg[(segov >= 0) ? segov : 3];
         uint16_t si = c->r[6], di = c->r[7];
-        if (osz) return 0;                            /* 32-bit string op: TODO */
         while (cnt) {
-            uint32_t a, b, dl = (seg_base(es)) + di;
-            b = imem_r8(dl);
-            if (w == 2) b |= (uint32_t)imem_r8((seg_base(es)) + (uint16_t)(di + 1)) << 8;
-            if (scas) a = grw(c, 0, w);                              /* AL/AX */
+            uint32_t a = 0, b = 0;
+            for (k = 0; k < w; ++k)
+                b |= (uint32_t)imem_r8((seg_base(es)) + (uint16_t)(di + k)) << (8 * k);
+            if (scas) a = grw(c, 0, w);                              /* AL/AX/EAX */
             else {
-                uint32_t sl = (seg_base(ss)) + si;
-                a = imem_r8(sl);
-                if (w == 2) a |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
+                for (k = 0; k < w; ++k)
+                    a |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + k)) << (8 * k);
                 si = (uint16_t)(si + dir);
             }
             do_sub(c, a, b, 0, w);                                   /* CMP a,b */
@@ -764,13 +901,13 @@ static int istep(icpu *c)
         s16(c, 7, di); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
-    if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX <- DS:SI */
-        int w = (op == 0xAD) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
-        if (osz) return 0;                            /* 32-bit string op: TODO */
+    if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX/EAX <- DS:SI */
+        int w = (op == 0xAD) ? W : 1, dir = (c->flags & F_DF) ? -w : w, k;
         uint32_t cnt = rep ? (uint32_t)(uint16_t)c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3]; uint16_t si = c->r[6];
-        while (cnt) { uint32_t sl = (seg_base(ss)) + si, v = imem_r8(sl);
-                      if (w == 2) v |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
-                      if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v);
+        while (cnt) { uint32_t v = 0;
+                      for (k = 0; k < w; ++k)
+                          v |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + k)) << (8 * k);
+                      srw(c, 0, w, v);
                       si = (uint16_t)(si + dir); cnt--; }
         s16(c, 6, si); if (rep) s16(c, 1, (uint16_t)cnt);
         c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -785,11 +922,19 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx + (take ? rel : 0)); return 1;
     }
     if (op == 0xEB) { int8_t rel = (int8_t)CB(idx++); c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
-    if (op == 0xE9) { int16_t rel; if (osz) return 0; rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+    /* #194: JMP/CALL rel32 (66 E9/E8): EIP = next + rel32, a 4-byte return slot; bail if
+       the target leaves the 64 KB segment (the CPU's #GP, not ours to fake). */
+    if ((op == 0xE9 || op == 0xE8) && osz) {
+        uint32_t nip = (uint32_t)(uint16_t)(c->ip + idx + 4);
+        uint32_t tgt = nip + rd_mem(cb + idx, 4);
+        if (tgt > 0xFFFFu) return 0;
+        if (op == 0xE8) ipush(c, 4, nip);
+        c->ip = (uint16_t)tgt; return 1;
+    }
+    if (op == 0xE9) { int16_t rel; rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
                       c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
     if (op == 0xE8) {                                  /* CALL near relative */
         int16_t rel; uint16_t nip, sp;
-        if (osz) return 0;                            /* 32-bit near call: TODO */
         rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
         nip = (uint16_t)(c->ip + idx);                 /* return address */
         sp = (uint16_t)(c->r[4] - 2);
@@ -798,7 +943,15 @@ static int istep(icpu *c)
     }
     if (op == 0xC3 || op == 0xC2) {                    /* RET near (+ imm16 pop) */
         uint16_t sp, ret, extra;
-        if (osz) return 0;                            /* 32-bit near ret: TODO */
+        if (osz) {                                     /* #194: a 4-byte EIP slot */
+            uint32_t e;
+            sp = (uint16_t)c->r[4];
+            e = rd_mem(seg_base(c->seg[2]) + sp, 4);
+            if (e > 0xFFFFu) return 0;
+            extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 4 + extra);
+            c->ip = (uint16_t)e; return 1;
+        }
         sp = (uint16_t)c->r[4];
         ret = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
@@ -811,7 +964,16 @@ static int istep(icpu *c)
      * far-transfer idiom (run 56's wall) just follows through. run 57. */
     if (op == 0xCB || op == 0xCA) {
         uint16_t sp, off, sel, extra;
-        if (osz) return 0;                            /* 32-bit far ret: TODO */
+        if (osz) {                                     /* #194: EIP dword, then a CS dword */
+            uint32_t e; uint32_t ssb = seg_base(c->seg[2]);
+            sp  = (uint16_t)c->r[4];
+            e   = rd_mem(ssb + sp, 4);
+            sel = (uint16_t)rd_mem(ssb + (uint16_t)(sp + 4), 2);
+            if (g_seg2lin ? !pm_far_ok(c, sel, e) : (e > 0xFFFFu)) return 0;
+            extra = (op == 0xCA) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 8 + extra);
+            c->seg[1] = sel; c->ip = (uint16_t)e; return 1;
+        }
         sp  = (uint16_t)c->r[4];
         off = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         sel = (uint16_t)rd_mem((seg_base(c->seg[2])) + (uint16_t)(sp + 2), 2);
@@ -827,7 +989,12 @@ static int istep(icpu *c)
      * popped. run 58. */
     if (op == 0xC9) {
         uint16_t sp, bp;
-        if (osz) return 0;                            /* 32-bit LEAVE (ESP/EBP): TODO */
+        if (osz) {                                     /* #194: SP <- BP (16-bit stack), EBP <- pop32 */
+            sp = (uint16_t)c->r[5];
+            c->r[5] = rd_mem(seg_base(c->seg[2]) + sp, 4);
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 4);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         sp = (uint16_t)c->r[5];                        /* SP <- BP */
         bp = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         c->r[5] = (c->r[5] & 0xFFFF0000u) | bp;        /* BP <- pop */
@@ -845,15 +1012,15 @@ static int istep(icpu *c)
        mode 12h): `pop [bx+7]` alone bailed 1,158,586 times in one run -- the QBasic
        runtime's calling convention -- and each bail is a stretch of lost pixels. */
     if (op == 0x8F) {
-        modrm_t m; uint16_t sp, v;
-        if (osz || g_seg2lin) return 0;
+        modrm_t m; uint16_t sp; uint32_t v;
+        if (g_seg2lin) return 0;
         idx += decode_modrm(c, cb, idx, segov, &m);
-        if (m.g != 0 || (m.is_mem && m.lin + 2 > GUEST_HI)) return 0;
+        if (m.g != 0 || (m.is_mem && m.lin + W > GUEST_HI)) return 0;
         sp = (uint16_t)c->r[4];
-        v = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
-        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2);   /* SP moves FIRST:
+        v = rd_mem((seg_base(c->seg[2])) + sp, W);    /* #194: W = 4 under 0x66 */
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + W);   /* SP moves FIRST:
                                                     `pop [sp-relative]` sees the new SP */
-        if (m.is_mem) wr_mem(m.lin, 2, v); else s16(c, m.rm_reg, v);
+        if (m.is_mem) wr_mem(m.lin, W, v); else srw(c, m.rm_reg, W, v);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0x9B) { c->ip = (uint16_t)(c->ip + idx); return 1; }   /* WAIT: no FPU here */
@@ -903,11 +1070,12 @@ static int istep(icpu *c)
     }
     if ((op == 0xC4 || op == 0xC5) && CB(idx) != 0xC4 && (CB(idx) >> 6) != 3) {
         modrm_t m;
-        if (osz || g_seg2lin) return 0;                /* 32-bit / PM: TODO */
+        if (g_seg2lin) return 0;                       /* PM: TODO */
         idx += decode_modrm(c, cb, idx, segov, &m);
-        if (!m.is_mem || m.lin + 4 > GUEST_HI) return 0;
-        s16(c, m.g, (uint16_t)rd_mem(m.lin, 2));
-        c->seg[op == 0xC4 ? 0 : 3] = (uint16_t)rd_mem(m.lin + 2, 2);
+        if (!m.is_mem || m.lin + W + 2 > GUEST_HI) return 0;
+        /* #194: under 0x66 the pointer is m16:32 -- a dword offset, then the segment. */
+        srw(c, m.g, W, rd_mem(m.lin, W));
+        c->seg[op == 0xC4 ? 0 : 3] = (uint16_t)rd_mem(m.lin + W, 2);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op >= 0xE0 && op <= 0xE3) {
@@ -968,7 +1136,41 @@ static int istep(icpu *c)
     }
     if (op == 0xCF) {                                  /* IRET */
         uint32_t ssb; uint16_t sp;
-        if (osz || g_seg2lin) return 0;                /* 32-bit IRETD / PM IRET: TODO   */
+        if (osz && !g_seg2lin) {
+            /* #194: IRETD in real/V86 mode -- EIP, CS and EFLAGS as dwords, 12 bytes. The
+               EIP must fit the 64 KB segment (bail otherwise); EFLAGS loads as POPFD does.
+               PM IRETD still bails: it may return to a 32-bit segment or another ring. */
+            uint32_t e, fl; uint16_t cs;
+            sp  = (uint16_t)c->r[4]; ssb = seg_base(c->seg[2]);
+            e   = rd_mem(ssb + sp, 4);
+            cs  = (uint16_t)rd_mem(ssb + (uint16_t)(sp + 4), 2);
+            fl  = rd_mem(ssb + (uint16_t)(sp + 8), 4);
+            if (e > 0xFFFFu) return 0;
+            c->ip = (uint16_t)e; c->seg[1] = cs;
+            iflags_load(c, fl, 4);
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 12);
+            return 1;
+        }
+        if (osz) return 0;                             /* PM IRETD: the CPU's            */
+        if (g_seg2lin) {
+            /* #194: IRET in 16-bit PROTECTED mode, same privilege -- the return from an
+               interrupt handler the DPMI interpreter path ran (dpmi_run_pm_interp). It
+               follows only a frame pm_far_ok() accepts: a present 16-bit code segment at
+               the current ring, IP inside its limit. A ring change would also pop SS:SP,
+               and a 32-bit target is code this core cannot decode -- both the CPU's.
+               FLAGS load exactly as the real-mode IRET's (IF included, as POPF does on
+               this path: the virtual IF is the DPMI host's to keep, see 0900h-0902h). */
+            uint16_t nip, ncs; uint32_t fl;
+            sp  = (uint16_t)c->r[4]; ssb = seg_base(c->seg[2]);
+            nip = (uint16_t)rd_mem(ssb + sp, 2);
+            ncs = (uint16_t)rd_mem(ssb + (uint16_t)(sp + 2), 2);
+            fl  = rd_mem(ssb + (uint16_t)(sp + 4), 2);
+            if (!pm_far_ok(c, ncs, nip)) return 0;
+            c->ip = nip; c->seg[1] = ncs;
+            iflags_load(c, fl, 2);
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 6);
+            return 1;
+        }
         sp  = (uint16_t)c->r[4]; ssb = seg_base(c->seg[2]);
         c->ip     = (uint16_t)rd_mem(ssb + sp, 2);
         c->seg[1] = (uint16_t)rd_mem(ssb + (uint16_t)(sp + 2), 2);
@@ -977,6 +1179,16 @@ static int istep(icpu *c)
         return 1;
     }
     /* ---- far JMP (EA) / far CALL (9A) to a real-mode seg:off ---------------- */
+    if ((op == 0xEA || op == 0x9A) && osz && !g_seg2lin) {
+        /* #194: ptr16:32 -- a dword offset, then the segment; CALL pushes CS and EIP as
+           dwords. Real mode only, like the 16-bit form below. */
+        uint32_t off32 = rd_mem(cb + idx, 4);
+        uint16_t seg = (uint16_t)(CB(idx + 4) | (CB(idx + 5) << 8));
+        idx += 6;
+        if (off32 > 0xFFFFu) return 0;
+        if (op == 0x9A) { ipush(c, 4, c->seg[1]); ipush(c, 4, (uint16_t)(c->ip + idx)); }  /* CS: dword */
+        c->seg[1] = seg; c->ip = (uint16_t)off32; return 1;
+    }
     if (op == 0xEA || op == 0x9A) {
         uint16_t off, seg;
         if (osz || g_seg2lin) return 0;
