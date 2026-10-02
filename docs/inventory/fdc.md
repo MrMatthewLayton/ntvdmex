@@ -52,7 +52,7 @@ two oracles that agree with each other.
 | `fdc.dir.dskchg` — the disk-change line | `0000` | `0000` | `0080` ⛔ | **`0000`** ✅ |
 | `fdc.version` — count + ID byte | `0190` | `0190` | `FFFF` | **`0190`** ✅ |
 | `fdc.dumpreg` — count + first byte | `0A01` | `0A01` | `FFFF` | `0A00` ⚠ |
-| `fdc.alt.3f6` — *not ours* | `0050` | `0050` | `00FF` | `00FF` ⛔ |
+| `fdc.alt.3f6` — *not ours* | `0050` | `0050` | `00FF` | `0000` ✅ owned by the IDE adapter (#179); the oracles' drive abstained |
 | `fdc.desync` — what we left behind | `0000` | `0000` | `0000` | `0000` ✅ |
 | `fdc.dor.raw` | `001C` | `00FF` | `00FF` | `000C` — *disputed* |
 | `fdc.dir.raw` | `0000` | `0001` | `00FF` | `0000` — *disputed* |

@@ -116,6 +116,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "vdd_pit.h"
 #include "vdd_cmos.h"
 #include "vdd_fdc.h"
+#include "vdd_ide.h"
 #include "vdd_pic.h"
 #include "vdd_video.h"
 #include "vdd_input.h"
@@ -873,6 +874,7 @@ static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
 static cmos_state   g_cmos;      static ntvdd g_cmos_dev;
 static fdc_state    g_fdc;       static ntvdd g_fdc_dev;
+static ide_state    g_ide;       static ntvdd g_ide_dev;
 static pic_state    g_pic;       static ntvdd g_pic_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
@@ -28602,6 +28604,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          at 0xFC. See src/vdd/vdd_fdc.h. */
     g_fdc_dev = vdd_fdc_device(&g_fdc);
     vdd_bus_add(&g_bus, &g_fdc_dev);            /* 82077AA: 3F2h-3F5h, 3F7h     */
+    /* ── THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179) ─────────────
+         Same shape as the FDC above, one surface later: nothing claimed 1F0h-1F7h
+         or 3F6h, FFh there is BSY=1, and the ATA's own "wait until BSY clears"
+         never exited. An adapter with no drives reads 00h everywhere (DD7 pulled
+         down by the ATA document; DD6:0 a recorded choice) and latches nothing,
+         so a detection routine finds the controller, finds no device, and moves
+         on. See src/vdd/vdd_ide.h for why 00h and not 7Fh. */
+    g_ide_dev = vdd_ide_device(&g_ide);
+    vdd_bus_add(&g_bus, &g_ide_dev);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
+    /* ...and the BIOS says the same thing: 0040:0075, the number of fixed disks a
+       program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left
+       to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
+       the BDA, INT 13h, and the adapter's empty channels. */
+    *(volatile BYTE *)(ULONG_PTR)0x475 = 0;
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */

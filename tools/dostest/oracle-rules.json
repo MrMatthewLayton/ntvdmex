@@ -1998,5 +1998,49 @@
   ],
   "recorded": "2026-10-01",
   "why": "AH=44h AL=11h (query generic IOCTL capability) reports 'supported' as AL=00h with CF=0; AH is not part of the answer. The two Microsoft kernels leave AH=D1h (an internal value), dosbox-x 00h, and we leave 44h. CF (compared) and AL=0 are the contract; the whole word is not (GH #251)."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.pri.alt.raw",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.*.echo",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.*.status.alt",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "fdc",
+  "case": "fdc.alt.3f6",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "3F6h is the ATA alternate status register, not the FDC's. MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree. Since #179 we OWN the register (00h, BSY clear) -- the condition docs/inventory/sweep.md set for closing this row; before, it was the unclaimed FFh, BSY set, a hang for the ATA's own wait."
  }
 ]
