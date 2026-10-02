@@ -1195,17 +1195,23 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          If that is wrong the clock shows a WRONG time rather than no time, which is
          a different and much louder symptom than the one being fixed -- so the next
          run distinguishes them without any further instrumentation. */
+    /* ── ⛔ s88: THAT JUDGEMENT WAS WRONG, AND THE CLOCK SAID SO: "?5/00/2074". ──
+         The packing is pinned now by the code that READS it -- krnl386's INT 21h
+         AH=2Ah arm, right after the call (KRNL386.EXE seg1:0x5327):
+             push dx ... pop cx          CX = DX            the YEAR, in full
+             mov dl,ah                   DL = AH            the DAY
+             mov ah,al / shr ah,4        DH = AL >> 4       the MONTH
+             and al,0Fh                  AL = AL & 0Fh      the DAY OF THE WEEK
+         So DX:AX = year : (day << 8 | month << 4 | weekday) -- AH=2Ah's own
+         registers, folded into one DWORD. Not a time at all: Clock's TIME comes from
+         INT 21h AH=2Ch, which krnl386 passes down to DOS. */
     case WOW32_GETDATETIME: {
         SYSTEMTIME st;
-        DWORD date, time;
         GetLocalTime(&st);
-        date = (DWORD)(((st.wYear - 1980) & 0x7F) << 9)
-             | (DWORD)((st.wMonth & 0x0F) << 5)
-             | (DWORD)(st.wDay & 0x1F);
-        time = (DWORD)((st.wHour & 0x1F) << 11)
-             | (DWORD)((st.wMinute & 0x3F) << 5)
-             | (DWORD)((st.wSecond / 2) & 0x1F);
-        wow32_setret(f, (date << 16) | time);
+        wow32_setret(f, ((DWORD)st.wYear << 16)
+                      | ((DWORD)(st.wDay & 0xFF) << 8)
+                      | ((DWORD)(st.wMonth & 0x0F) << 4)
+                      | (DWORD)(st.wDayOfWeek & 0x0F));
         return 1;
     }
 

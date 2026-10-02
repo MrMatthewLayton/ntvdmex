@@ -31,6 +31,8 @@ del /q "%SH%\debug\ctl\rigshot.txt" >nul 2>&1
 "%RIG%\rigshot.exe" list
 ping -n 3 127.0.0.1 >nul
 type "%SH%\debug\ctl\rigshot.txt" >> "%R%" 2>&1
+rem s88: the desktop as the app left it, before the X -- "does it DRAW right" is not in the log.
+"%RIG%\rigshot.exe" shot "%OUT%\w16close_%T%.bmp" >nul 2>&1
 >> "%R%" echo -- sending WM_CLOSE to [%CAP%]:
 del /q "%SH%\debug\ctl\rigshot.txt" >nul 2>&1
 "%RIG%\rigshot.exe" close "%CAP%"

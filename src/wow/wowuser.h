@@ -6932,6 +6932,36 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         have = wowwin_paint_take(hwnd, &r, &erase);
+        /* ── ⛔⛔ BeginPaint VALIDATES, OR A GUEST THAT INVALIDATES IN ITS OWN WM_PAINT
+             NEVER STOPS PAINTING. (user, s88: "Clock flickers") Clock's WM_PAINT opens
+             with `InvalidateRect(hwnd, NULL, TRUE)` and only then calls BeginPaint.
+             On Windows that is harmless -- BeginPaint validates the whole update
+             region, the fresh one included. Ours took only the paint record, so the
+             REAL window stayed dirty: the OS synthesised another WM_PAINT, wowwin's
+             relay erased the background and posted it, and Clock invalidated again --
+             37,702 paints in one short run, each one an erase the user saw.
+           ► So fold whatever the real window still has pending into the rectangle
+             we report, and validate it, exactly as the real BeginPaint does. The
+             pending part was not erased by anyone (ValidateRect does not erase), so
+             it is reported with fErase set and the guest erases it, as it would.
+           ⛔ AND THAT ALONE MEASURED NO CHANGE (36,609 paints): the exec loop pumps
+             the real windows BETWEEN guest calls (wowwin_pump), so the real WM_PAINT
+             is usually handled before the guest's BeginPaint arrives -- the relay
+             validated the region itself and QUEUED a WM_PAINT16 behind the one being
+             answered. The real BeginPaint consumes that: the window's paint is THIS
+             paint. So any WM_PAINT16 already queued for this window goes too (its
+             rectangle is in the paint record, which wowwin_paint_take just took). */
+        {   RECT ur; wowmsg_t pm; int dropped = 0;
+            if (GetUpdateRect(w->hwnd32, &ur, FALSE)) {
+                if (have) UnionRect(&r, &r, &ur); else r = ur;
+                have = 1; erase = 1;
+            }
+            ValidateRect(w->hwnd32, NULL);
+            while (wowmsg_take(hwnd, WM_PAINT16, WM_PAINT16, 1, &pm)) ++dropped;
+            if (dropped) { wu_puts(note, notecap, &k, " [queued paints absorbed 0x");
+                           wu_puthex(note, notecap, &k, (DWORD)dropped, 2);
+                           wu_puts(note, notecap, &k, "]"); }
+        }
         if (!have) {
             GetClientRect(w->hwnd32, &r);
             erase = 1;
