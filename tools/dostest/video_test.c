@@ -682,7 +682,9 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_al(&r)==0x30, "int10/00 mode 3: AL=30h");
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x0A); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
-    CHECK(r_ax(&r)==0x0100, "vesa/4F0A: AX=0100 'no such function' (two real BIOSes), not 014F");
+    /* #53: 4F0Ah now hands out a real PM interface (vbepm_test.c runs its code). It was
+       AX=0100h -- what the two real BIOSes answer -- while there was nothing to hand out. */
+    CHECK(r_ax(&r)==0x004F && r.es==VDD_VBEPM_SEG, "vesa/4F0A: AX=004F, ES:DI = the PM interface block (#53; was 0100)");
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     /* plot (x=9,y=1) colour 0x0A (1010b -> planes 1 and 3) */
     memset(&r,0,sizeof r); s_ah(&r,0x0C); s_al(&r,0x0A); s_cx(&r,9); s_dx(&r,1);
