@@ -93,7 +93,7 @@ Marked in full in [keyboard.md](keyboard.md) §2; summarised here so the area is
 | `3Fh`–`40h` | motor status / motor-off countdown | **MISS** | INT 08h never counts it down ([bios-misc.md](bios-misc.md) §3) |
 | `41h` | last diskette operation status | **MISS** | INT 13h keeps it in `g_disk_status` (`main.c:29276-29324`); `AH=01h` answers from there, and the BDA byte never changes |
 | `42h`–`48h` | FDC result bytes | **MISS** | |
-| `74h`–`77h` | fixed disk status, **number of fixed disks**, control, port offset | **MISS** | `0040:0075` (the count of hard disks a program may read before using INT 13h `80h`) is not written; we expose no fixed disks by design |
+| `74h`–`77h` | fixed disk status, **number of fixed disks**, control, port offset | **PART** | `0040:0075` (the count of hard disks) is **written `0`** since #179, agreeing with INT 13h and the empty IDE channels ([ide.md](ide.md)); `74h`/`76h`/`77h` not written |
 | `8Bh`–`95h` | data rate, fixed-disk status/error/interrupt flags, media state, current cylinders | **MISS** | |
 
 ## 4. Video

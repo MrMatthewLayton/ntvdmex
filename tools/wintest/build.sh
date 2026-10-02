@@ -29,7 +29,7 @@ for src in "$ROOT"/tools/wintest/w_*.asm; do
     # The module name is what krnl386 records; keep it 8.3-safe and uppercase.
     mod="$(printf '%s' "${name#w_}" | tr '[:lower:]' '[:upper:]' | cut -c1-8)"
     exe="$OUT/W16${mod}.EXE"
-    nasm -f bin "$src" -o "$OUT/$name.bin"
+    nasm -f bin -i "$ROOT/tools/wintest/" "$src" -o "$OUT/$name.bin"
     python3 "$ROOT/tools/ne/mkne.py" "$OUT/$name.bin" "$exe" \
         --module "W16$mod" --desc "ntvdmex win16 probe: $name"
     # ⚠ VALIDATE WITH OUR OWN READER. nedump.py is verified against real Win16

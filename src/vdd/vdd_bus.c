@@ -11,6 +11,9 @@ void vdd_bus_init(vdd_bus *b, void *mem_base)
     b->irq_sink = 0; b->irq_ctx = 0;
     b->present_sink = 0; b->present_ctx = 0;
     b->n_ports = 0; b->n_mem = 0; b->n_frame = 0; b->n_dev = 0;
+    /* ⚠ claim_fail too: a bus on the stack (the off-VM tests) otherwise starts
+       with garbage in the one counter that says a device failed to get on. */
+    b->claim_fail = 0;
     for (i = 0; i < 256; ++i) { b->ints[i].svc = 0; b->ints[i].self = 0; }
 }
 

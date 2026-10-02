@@ -32,7 +32,8 @@
 #define VDD_MAX_FRAME  8        /* frame-tick subscribers                       */
 #endif
 #ifndef VDD_MAX_DEV
-#define VDD_MAX_DEV    16       /* devices on the bus                           */
+#define VDD_MAX_DEV    24       /* devices on the bus (s87 #179: was 16, and with
+                                   GUS + EMU8K fitted the IDE adapter made 17)   */
 #endif
 
 typedef struct { uint16_t lo, hi; ntvdd_in_fn in; ntvdd_out_fn out; void *self; } vdd_port_ent;

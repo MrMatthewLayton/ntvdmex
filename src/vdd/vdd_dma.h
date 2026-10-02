@@ -40,11 +40,11 @@
 #define DMA_MODE_SELECT    0xC0    /* 00 demand, 01 single, 10 block, 11 cascade */
 
 /* ── THE COMMAND REGISTER (0x08 / 0xD0), per the Intel 8237A datasheet. ───────────
-     Written per controller, cleared by master clear. ONE bit is honoured; the rest
+     Written per controller, cleared by master clear. Bits 0-2 are honoured; the rest
      are STORED and nothing reads them -- see docs/inventory/dma.md for why each is
      safe to leave that way on a PC, and what honouring it would take.
-       bit 0  memory-to-memory (ch0 -> ch1 through the temporary register)  stored
-       bit 1  channel 0 address hold (only meaningful with bit 0)           stored
+       bit 0  memory-to-memory (ch0 -> ch1 through the temporary register)  HONOURED (#246)
+       bit 1  channel 0 address hold (only meaningful with bit 0)           HONOURED (#246)
        bit 2  CONTROLLER DISABLE -- no DACK is given on ANY of its four     HONOURED
               channels, so no byte moves and no TC is reached; DREQs stay
               pending (status bits 7:4) until the guest re-enables it
@@ -113,6 +113,21 @@ typedef struct dma_state {
          Indexed by the low nibble of the port; the mapped ports never reach it. */
     uint8_t  page_spare[16];
     uint8_t  cmd[2];                /* per-controller command register; DMA_CMD_*  */
+    /* ── THE REQUEST REGISTER (09h / D2h) -- A DREQ WRITTEN BY SOFTWARE. (#246) ──────
+         8237A datasheet: one request bit per channel, "non-maskable and subject to
+         prioritization", set or reset individually by a write (bits 1:0 the channel,
+         bit 2 set/reset), "cleared upon generation of a TC or external EOP", and the
+         whole register cleared by a reset (master clear). Bit c of req[ctrl] is
+         channel (ctrl*4 + c). ORed into vdd_dma_dreq, so it shows in status 7:4. */
+    uint8_t  req[2];
+    /* ── THE TEMPORARY REGISTER (read 0Dh / DAh). (#246) ────────────────────────────
+         Holds each byte of a memory-to-memory transfer between its read (channel 0's
+         address) and its write (channel 1's); afterwards "the last word moved can be
+         read by the microprocessor". Cleared by a reset. Controller 2 never does a
+         memory-to-memory transfer on an AT (its channels 0/1 are 4 = the cascade and
+         5), so temp[1] stays 0. */
+    uint8_t  temp[2];
+    uint32_t soft_runs, m2m_runs;      /* diagnostics: requests served by the 8237 itself */
     dma_dreq_fn dreq_fn[DMA_DREQ_MAX];   /* who drives DREQ -- host wiring, see above */
     const void *dreq_ctx[DMA_DREQ_MAX];
     uint8_t  dreq_n;
@@ -166,10 +181,12 @@ uint32_t vdd_dma_remaining(const dma_state *st, uint8_t ch);
      vdd_dma_read/_write ask it themselves; a device that must decide whether to HOLD
      its own state machine (an SB that must not end its block, a GUS whose upload must
      wait) asks it before it pulls, rather than reading `masked` or `cmd[]` itself.
-   ⚠ Not modelled: the AT cascade. Controller 1 reaches the bus through channel 4, so
-     on a real AT masking channel 4 or disabling controller 2 also starves channels
-     0-3. We do not run the BIOS that unmasks channel 4 (master clear leaves it set),
-     so honouring it would silence every 8-bit transfer. See docs/inventory/dma.md. */
+   ★ AND THE AT CASCADE (#246): controller 1 reaches the bus only through channel 4 of
+     controller 2, so for channels 0-3 the grant ALSO needs channel 4 unmasked and
+     controller 2 enabled. Masking channel 4 or disabling controller 2 starves every
+     8-bit channel, as on the board. vdd_dma_reset/init leave the machine as POST does
+     (channel 4 in cascade mode, unmasked) -- before #246 nothing did, which is why
+     this could not be honoured: channel 4 sat masked from the power-on master clear. */
 int vdd_dma_grants(const dma_state *st, uint8_t ch);
 
 /* The DREQ lines, channels 0-7 as bits 0-7, from every registered device. Channel 4

@@ -5,7 +5,7 @@
 **Our implementation:** `src/vdd/vdd_dma.c` (289 lines), `src/vdd/vdd_dma.h`.
 **Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/dma_test.c`.
 DOS probe: `tools/dostest/p_dma.asm`.
-**Marked:** 2026-09-23, **from the code**, with citations. **Re-marked** 2026-10-01 for #176 items 2 and 3 (§5).
+**Marked:** 2026-09-23, **from the code**, with citations. **Re-marked** 2026-10-01 for #176 items 2 and 3 (§5), and **2026-10-02 for #246** (§6). DOS probe for the chip's own transfers: `tools/dostest/p_dma2.asm`.
 
 ⚠ **This surface had never been inventoried and had never been asked of an oracle.**
 `dma_test.c` was an off-VM battery written against our own model, so — exactly as the
@@ -34,9 +34,11 @@ are now fixed (§2, §5); the rest are priced below.
 | Status: TC bits + clear-on-read | **IMPL** |
 | Status: **DRQ bits 7:4** | ~~MISS~~ → ✅ **IMPL** *(2026-10-01, #176)* — derived from the devices, §5 |
 | Command register | ~~STORE~~ → **PART** *(2026-10-01, #176)* — **bit 2 (controller disable) honoured**; the other seven stored, §5 |
-| Request register (`09h`) | ⛔ **MISS** — `case 0x9: break;` |
-| Memory-to-memory transfer | ⛔ **MISS** |
-| Temporary register (read `0Dh`) | ⛔ **MISS** — returns `FFh` |
+| Request register (`09h`) | ~~MISS~~ → ✅ **IMPL** *(2026-10-02, #246)* — spec-implemented, no oracle implements it (§6) |
+| Memory-to-memory transfer | ~~MISS~~ → ✅ **IMPL** *(#246)* — spec-implemented, unverifiable on the panel (§6) |
+| Temporary register (read `0Dh`) | ~~MISS~~ → ✅ **IMPL** *(#246)* (§6) |
+| The AT cascade (channel 4 gates controller 1) | ~~not modelled~~ → ✅ **IMPL** *(#246)* — POST state + the grant (§6) |
+| Count wraps `0000h` → `FFFFh` at TC | ~~rested at `0000h`~~ → ✅ **IMPL** *(#246)* (§6) |
 
 ---
 
@@ -48,12 +50,12 @@ are now fixed (§2, §5); the rest are priced below.
 | `C0h`–`CFh` | R/W | addr/count, channels 4–7 | **IMPL** | same, with the 2× port spacing and word units |
 | `08h`/`D0h` | W | command | **PART** | bit 2 read by `vdd_dma_grants`; bits 0,1,3–7 stored only — §5 |
 | `08h`/`D0h` | R | status | ✅ **IMPL** | TC bits clear on read; DRQ bits 7:4 derived per read from `vdd_dma_dreq` (and not cleared by it) — §5 |
-| `09h`/`D2h` | W | request (software DRQ) | ⛔ **MISS** | `case 0x9: break;` |
+| `09h`/`D2h` | W | request (software DRQ) | ✅ **IMPL** | `req[]`; served by the controller itself — §6 |
 | `0Ah`/`D4h` | W | single mask bit | **IMPL** | |
 | `0Bh`/`D6h` | W | mode | **IMPL** | stored per channel; the engine consumes XFER, AUTOINIT and DECREMENT |
 | `0Ch`/`D8h` | W | clear byte pointer | **IMPL** | |
 | `0Dh`/`DAh` | W | master clear | **IMPL** | `dma_master_clear` — clears cmd, TC and the flip-flop, and **sets every mask bit** |
-| `0Dh`/`DAh` | R | temporary register | ⛔ **MISS** | falls through to `*val = 0xFF` |
+| `0Dh`/`DAh` | R | temporary register | ✅ **IMPL** | `temp[]`, the last byte of a memory-to-memory copy — §6 |
 | `0Eh`/`DCh` | W | clear mask register | **IMPL** | |
 | `0Fh`/`DEh` | W | write all mask bits | **IMPL** | |
 | `80h`–`8Fh` | R/W | page registers | ✅ **IMPL** | seven map to channels, nine latch in `page_spare[]` |
@@ -167,8 +169,8 @@ Reading status still clears the TC bits and **never** the DRQ bits (`dma_test` T
 
 | Bit | Datasheet meaning | Status | Why |
 |---|---|---|---|
-| 0 | memory-to-memory (ch0 → temp → ch1) | **STORE** | item 4, out of scope — see below |
-| 1 | channel 0 address hold (with bit 0) | **STORE** | meaningless without bit 0 |
+| 0 | memory-to-memory (ch0 → temp → ch1) | ✅ **IMPL** *(#246)* | `dma_m2m`, started by channel 0's software request — §6 |
+| 1 | channel 0 address hold (with bit 0) | ✅ **IMPL** *(#246)* | channel 0's address stands still: a block fill |
 | 2 | **controller disable** | ✅ **IMPL** | `vdd_dma_grants` |
 | 3 | compressed timing | **STORE** | a bus-cycle length; we have no bus cycles |
 | 4 | rotating priority | **STORE** | we have no arbiter: each device pulls its own channel on its own thread, so there is no contention to order |
@@ -199,6 +201,8 @@ hardware does. A guest whose DSP length is **longer** than its single-cycle 8237
 used to be rescued by that spurious IRQ; it now waits, as on a real card. **Needs a rig
 re-gate of the audio guests (Doom, ZAR, Skyroads) before it ships.**
 
+✅ **SUPERSEDED by #246 (§6): the cascade IS modelled now.** The paragraph below is the pre-#246 record.
+
 ⚠ **The cascade is NOT modelled for transfers.** On an AT, controller 1 reaches the bus
 through channel 4, so masking channel 4 or disabling controller 2 starves channels 0–3
 too. We do not run the BIOS that unmasks channel 4 (master clear leaves it masked), so
@@ -207,7 +211,7 @@ POST state unmasks channel 4 and programs it for cascade mode, then `vdd_dma_gra
 for ch0–3 also requires `vdd_dma_grants(st, 4)`. Status bit 4 (the cascade's DREQ) *is*
 derived, because it reads a pin, not a grant.
 
-### What item 4 (request + temporary registers, memory-to-memory) would take
+### What item 4 (request + temporary registers, memory-to-memory) would take — ✅ done in #246, see §6
 
 - **Request register (`09h`/`D2h`)**: a per-channel software-request latch (bits 1:0 the
   channel, bit 2 set/reset), cleared at TC and by master clear. It ORs into the DREQ
@@ -225,6 +229,67 @@ derived, because it reads a pin, not a grant.
   (the probe's own output) and never a master clear on controller 1.
 
 ---
+
+## 6. ✅ The chip's own transfers and the AT cascade — #246 (2026-10-02)
+
+**From the Intel 8237A datasheet, and the panel cannot check it:** `p_dma2.asm` asked all
+three oracles and **none implements a software request at all** — QEMU's i8257 latches it into
+status bit 5 and runs nothing (it serves only channels with a registered device), dosbox-x and
+PCem's emulated 8237 ignore `09h`. Their `000Fh` is *the absence of a measurement* (the
+`pit.bcd` template), recorded with that rationale as an all-oracle abstention on `dma2.*`.
+
+| case (`p_dma2`) | 6.22/QEMU | dosbox-x | PCem | ours, first cut (`c533aa71`) | ours **final** (`b0e3b5b9`) | datasheet |
+|---|---|---|---|---|---|---|
+| `dma2.req.count` — 16 verify cycles on a MASKED ch1 | `000F` | `000F` | `000F` | `0000` | **`FFFF`** | `FFFF` (non-maskable; count wraps at TC) |
+| `dma2.req.status.moved` — AH TC1/DRQ1, AL bytes walked | `2000` | `0000` | `0000` | `0210` | **`0210`** | TC1 set, request cleared, 16 walked |
+| `dma2.m2m.copy` — first:tenth byte copied | `0000` | `0000` | `0000` | `A0A9` | **`A0A9`** | `A0A9` |
+| `dma2.m2m.past.temp` — byte 11 : temporary register | `0000` | `00FF` | `0000` | `00A9` | **`00A9`** | `00A9` |
+| `dma2.cascade.held.served` — ch4 masked : unmasked | `0707` | `0707` | `0707` | `0700` | **`07FF`** | held, then served |
+
+The first cut rested the count at `0000h` after TC (the engine's behaviour since the sound
+epic); the datasheet says the count goes `0000h` → `FFFFh` to generate TC, and the probe made
+the difference visible — fixed in the same commit. `p_dma` is unchanged by #246 (4 AGREE, the
+known `dma.status.idle` dispute). The pre-#246 host would answer every row like the oracles:
+`09h` was `case 0x9: break;`.
+
+What was built (`vdd_dma.c`):
+- **Request register** `req[2]`: bit 2 set/reset, bits 1:0 the channel; **non-maskable**;
+  cleared at TC and by master clear; ORed into `vdd_dma_dreq` (status 7:4, and HRQ = DREQ4).
+  With no device on DACK the **controller performs the cycles itself** (`dma_soft_block`):
+  verify walks only; read touches nothing observable; **write stores `FFh`** — the undriven
+  bus, the same float an unclaimed port reads. Runs to TC in demand, single and block mode
+  alike (the request stays asserted until TC); a cascade-mode channel does no cycles.
+- **Memory-to-memory** (command bit 0, controller 1): channel 0's request copies
+  ch0 → **temporary register** → ch1, channel 1's count runs, its TC ends it; bit 1 holds
+  channel 0's address. ⚠ At that EOP each channel auto-initialises or masks by its own mode
+  bit and only channel 1 latches TC — **a reading of the datasheet, not a measurement.**
+- **Temporary register** (read `0Dh`/`DAh`): the last byte moved; cleared by master clear.
+- **The AT cascade:** `vdd_dma_grants` for channels 0–3 also needs channel 4 unmasked and
+  controller 2 enabled. **POST state** (`dma_post`, from `vdd_dma_reset`/`init`): channel 4
+  in cascade mode (`C0h`), unmasked — what the BIOS leaves. HRQ (status D0h bit 4) is still
+  raised by controller 1 when the far end refuses it. Channel 4's *mode* is not asked.
+- **The count wraps `0000h` → `FFFFh` at TC** on a non-auto-init channel (it rested at
+  `0000h`); a driver polling the count for `FFFFh` to see a single-cycle block end needs it.
+- ⚠ **Memory beyond `110000h` is never touched** by these engine-driven cycles: a guest
+  linear address is a host VA only inside the V86 space.
+- A pending request is re-examined after **every** register write (a re-enable, the cascade
+  coming back), since nothing else would wake it.
+
+Off-VM: `dma_test.c` T13–T15 (+ the cascade rows in T12 and the FFFFh row in T4) — 110 checks;
+four mutations (no cascade check, no `req` in DREQ, no clear-at-TC, no POST unmask) each fail
+2–8 of them. ⚠ **Shared with the sound cards** (`vdd_dma_grants` is what SB and GUS ask), so gated on
+the rig, interleaved A/B ×2, headless with `cfg\wavrec.flag` (A = `2ae28649`, #179 only;
+B = `b0e3b5b9`, #246) — `runs/s87_ide/gate.txt`:
+
+| run | Doom sounding s / IRQ5 | ZAR sounding s / IRQ5 |
+|---|---|---|
+| A1 | 49 of 59 / 4998 | 66 of 70 / 712 |
+| B1 | 49 of 61 / 5175 | 65 of 70 / 706 |
+| A2 | 49 of 60 / 5038 | 66 of 70 / 710 |
+| B2 | 49 of 60 / 5018 | 65 of 70 / 705 |
+
+Unchanged within run-to-run spread (Doom identical; ZAR 65 vs 66 on both B runs — one
+second, at the launch/close edge, the same size as A1↔A2 peak variation). Not a listening test.
 
 ## What to fix, in order
 

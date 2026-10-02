@@ -1998,5 +1998,61 @@
   ],
   "recorded": "2026-10-01",
   "why": "AH=44h AL=11h (query generic IOCTL capability) reports 'supported' as AL=00h with CF=0; AH is not part of the answer. The two Microsoft kernels leave AH=D1h (an internal value), dosbox-x 00h, and we leave 44h. CF (compared) and AL=0 are the contract; the whole word is not (GH #251)."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.pri.alt.raw",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.*.echo",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "ide",
+  "case": "ide.*.status.alt",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree."
+ },
+ {
+  "probe": "fdc",
+  "case": "fdc.alt.3f6",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "3F6h is the ATA alternate status register, not the FDC's. MACHINE FACT, not a contract: 6.22/QEMU and PCem have a DRIVE on this channel (status 50h = DRDY|DSC; Sector Count/Number latch 55h/AAh), and NTVDMEX deliberately has none -- an IDE adapter with both channels EMPTY (GH #179, docs/inventory/ide.md decision (b); INT 13h exposes no fixed disk by design). dosbox-x is the same configuration as ours (adapter fitted, no drive) and keeps its vote. The contract rows -- ide.*.bsywait and ide.*.alt.bsy, the canonical BSY wait and the bit it polls -- are compared on all four hosts and agree. Since #179 we OWN the register (00h, BSY clear) -- the condition docs/inventory/sweep.md set for closing this row; before, it was the unclaimed FFh, BSY set, a hang for the ATA's own wait."
+ },
+ {
+  "probe": "dma2",
+  "case": "dma2.*",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-10-02",
+  "why": "NO ORACLE IMPLEMENTS THE 8237's OWN TRANSFERS, so none can vote (GH #246). All three answer as if the software request never ran -- count 000Fh untouched, nothing copied, the cascade row 0707h (held, then STILL held after channel 4 is unmasked). QEMU's i8257 latches the request into status bit 5 (2000h) but runs a channel only for a registered device; dosbox-x and PCem's emulated 8237 ignore 09h. 'A 0 from a host that does not implement a feature is the absence of a measurement, not a measurement of absence' -- the pit.bcd template. NTVDMEX follows the Intel 8237A datasheet: request bits are non-maskable and cleared at TC; memory-to-memory copies channel 0 -> temporary register -> channel 1 until channel 1's TC; the count wraps 0000h -> FFFFh at TC; controller 1 is served only through channel 4 (the AT cascade). Spec-implemented, unverifiable on this panel; dma_test.c T13-T15 pin it off-VM."
  }
 ]
