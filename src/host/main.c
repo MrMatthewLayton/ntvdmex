@@ -20824,6 +20824,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                ⇒ The dispatch below reads these locals, never the frame. */
             act    = fr->action;
             actarg = fr->actarg;
+            /* s88: DefDlgProc's DLGPROC answered (see WOWUSER_DEFDLGPROC). FALSE means
+               "not handled": the dialog manager's default runs and ITS value is what
+               the DefDlgProc caller gets. The frame's slot index is g_wc_depth now
+               that it is popped, which is where the service parked the parameters. */
+            if (act == WOWCALL_ACT_DLGDEFAULT) {
+                DWORD hole = fr->retlin; WORD dmsg = fr->msg;
+                if ((WORD)res == 0) {
+                    char dn[200]; int dk = 0;
+                    LRESULT dr = wowuser_dlg_default(wowuser_findwin(actarg), actarg, dmsg,
+                                                     g_wu_dlgdef[g_wc_depth].wp,
+                                                     g_wu_dlgdef[g_wc_depth].lp,
+                                                     dn, (int)sizeof dn, &dk);
+                    dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
+                    if (hole) {
+                        volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)hole;
+                        DWORD v = (DWORD)dr;
+                        h[0] = (BYTE)v; h[1] = (BYTE)(v >> 8);
+                        h[2] = (BYTE)(v >> 16); h[3] = (BYTE)(v >> 24);
+                    }
+                    p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
+                    p = zput(p, dn);
+                } else {
+                    p = zput(p, " -- DLGPROC handled it");
+                }
+                act = WOWCALL_ACT_NONE;
+            }
             p = zput(p, " from 0x");  p = zhex(p, fr->proc >> 16);
             p = zput(p, ":0x");       p = zhex(p, fr->proc & 0xFFFF);
             p = zput(p, " (hwnd=0x"); p = zhex(p, fr->hwnd);
@@ -21085,6 +21111,23 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 WORD  mrsel = wow_callback_selector();
                 DWORD mssb  = dpmi_sel_base(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                /* s88: the modal loop calls a #32770 dialog's DLGPROC directly, so a
+                   FALSE answer to WM_CLOSE got no DefDlgProc default -- Task List's X
+                   did nothing. Same default as DefDlgProc's (IDCANCEL posted, which
+                   the loop delivers next). WM_CLOSE ONLY: every other default here
+                   would be new behaviour for every modal dialog, unmeasured. */
+                if (g_wd_dlgcall[g_wc_depth] && (WORD)res == 0
+                    && g_wd_dlgmsg[g_wc_depth] == 0x0010) {
+                    char dn[200]; int dk = 0;
+                    wowuser_dlg_default(wowuser_findwin(actarg), actarg, 0x0010,
+                                        g_wu_dlgdef[g_wc_depth].wp,
+                                        g_wu_dlgdef[g_wc_depth].lp,
+                                        dn, (int)sizeof dn, &dk);
+                    dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
+                    p = zput(p, " -- DLGPROC said FALSE to WM_CLOSE; DefDlgProc default:");
+                    p = zput(p, dn);
+                }
+                g_wd_dlgcall[g_wc_depth] = 0;
                 mnote[0] = 0;
                 p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;

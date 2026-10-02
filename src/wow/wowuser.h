@@ -774,6 +774,10 @@ static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
      says so at the site instead of returning something plausible. */
 #define WOWUSER_ISWINDOWENABLED      0x0023
 #define WOWUSER_GETWINDOWTEXTLENGTH  0x0026
+#define WOWUSER_GETWINDOWTEXT        0x0024   /* USER.36, 8 args: see its case */
+#define GWT_ARG_MAX      0
+#define GWT_ARG_BUF      2
+#define GWT_ARG_HWND     6
 #define WOWUSER_WINDOWFROMPOINT      0x001e
 #define WOWUSER_FLASHWINDOW          0x0069
 #define WOWUSER_GETCAPTURE           0x00ec
@@ -3041,6 +3045,50 @@ static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
         return 1;
 }
 
+/* ── s88: the DIALOG MANAGER'S DEFAULT for one message, once the DLGPROC has
+     answered FALSE (or there is none). See WOWUSER_DEFDLGPROC. The two arms are
+     the ones this host always had:
+   ★ #162: a dialog's WM_CLOSE is a Cancel. Win16's DefDlgProc posts
+     WM_COMMAND(IDCANCEL, BN_CLICKED) to the dialog, and the program's own
+     IDCANCEL handling decides what closing means (Charmap: end the program).
+   ⚠ Everything else goes to DefWindowProc on the real window: calling the OS's
+     DefDlgProc on a window WE created with CreateWindow is undefined (it reads
+     the dialog class's extra bytes), so a guest dialog keeps the ordinary
+     defaults and loses the dialog-specific keyboard ones (default button, ESC,
+     tab order) until real dialog creation lands. */
+static struct { WORD wp; DWORD lp; } g_wu_dlgdef[WOWCALL_MAX_DEPTH];
+/* ⚠ AND THE LAST WINDOW WHOSE RECORD DispatchMessage RELEASED. It frees the slot
+     as it dispatches WM_DESTROY (see there), so when that WM_DESTROY reaches
+     DefDlgProc the window can no longer be found -- and WM_DESTROY is where a
+     dialog-as-main-window program (Charmap) calls PostQuitMessage. Measured s88:
+     "DefDlgProc 0x0140 msg=0x0002 -- no real window", the DLGPROC never ran, and
+     the program outlived its window. Its DLGPROC is kept here for that one call. */
+static struct { WORD hwnd; DWORD dlgproc; } g_wu_gone;
+
+static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD wp16,
+                                   DWORD lp32, char *note, int notecap, int *kp)
+{
+    int k = *kp;
+    LRESULT r;
+    if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                            *kp = k; return 0; }
+    if (msg == 0x0010) {
+        HWND cb = GetDlgItem(w->hwnd32, 2 /* IDCANCEL */);
+        WORD c16 = cb ? wowwin_hwnd16(cb) : 0;
+        wowmsg_post(hdlg, 0x0111 /* WM_COMMAND */, 2 /* IDCANCEL */,
+                    (DWORD)c16 | (0u /* BN_CLICKED */ << 16), GetTickCount(), 0, 0);
+        wu_puts(note, notecap, &k, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
+                                   " dialog, as Win16's DefDlgProc does");
+        *kp = k;
+        return 0;
+    }
+    r = DefWindowProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
+    wu_puts(note, notecap, &k, " -> DefWindowProc (no dialog keyboard defaults) = 0x");
+    wu_puthex(note, notecap, &k, (DWORD)r, 8);
+    *kp = k;
+    return r;
+}
+
 
 static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 {
@@ -4247,6 +4295,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  handle any longer is exactly the dangling reference the
                  DestroyWindow note warns about. */
             if (m.msg == WM_DESTROY16 && w->dying) {
+                g_wu_gone.hwnd = w->hwnd; g_wu_gone.dlgproc = w->dlgproc;
                 w->hwnd = 0; w->dying = 0;
                 wu_puts(note, notecap, &k, " (and its record is now released)");
             }
@@ -5785,6 +5834,41 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    /* ── ⛔ 0x24 GetWindowText(hWnd, lpString, nMaxCount) -- SOUND RECORDER'S BLANK
+         LABELS. (user, s88: "Sound Recorder is half working: UI shows, but no text")
+         USER.36 is a WOW32 stub in XP's USER.EXE (seg1:0x0932, 8 arg bytes) and was
+         never implemented: SOUNDREC calls it at seg1:0x241b for each of its controls
+         and draws what it gets back -- nothing, ten times a run. Arguments read off
+         that call (reversed as always): +0 nMaxCount (0x80), +2/+4 lpString,
+         +6 hWnd. The copy is bounded by the guest's own nMaxCount, NUL included. */
+    case WOWUSER_GETWINDOWTEXT: {
+        WORD hwnd = wow32_argw(f, GWT_ARG_HWND);
+        WORD max  = wow32_argw(f, GWT_ARG_MAX);
+        volatile BYTE *dst = wow32_argptr(f, GWT_ARG_BUF);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        char tmp[512];
+        int k = 0, n = 0, i;
+        wu_puts(note, notecap, &k, "GetWindowText 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " max=0x");
+        wu_puthex(note, notecap, &k, max, 4);
+        if (!dst || !max) { wu_puts(note, notecap, &k, " -- no buffer; 0");
+                            wow32_setret(f, 0); return 1; }
+        dst[0] = 0;
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        n = GetWindowTextA(w->hwnd32, tmp, (int)sizeof tmp);
+        if (n < 0) n = 0;
+        if (n > (int)max - 1) n = (int)max - 1;
+        for (i = 0; i < n; ++i) dst[i] = (BYTE)tmp[i];
+        dst[n] = 0;
+        tmp[n] = 0;
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, tmp);
+        wow32_setret(f, (DWORD)n);
+        return 1;
+    }
+
     case WOWUSER_GETCAPTURE: {
         HWND c = GetCapture();
         WORD h16 = c ? wowwin_hwnd16(c) : 0;
@@ -6234,38 +6318,61 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          ordinary messages and loses keyboard defaults. That is a degradation, not
          a lie, and it disappears when real dialog creation lands (USER thunk
          0xEF). */
+    /* ── ⛔⛔ s88: DefDlgProc CALLS THE DIALOG'S OWN PROCEDURE FIRST. (user: "some
+         close buttons (X) don't work") A Win16 program that uses a dialog as its
+         main window (Charmap) registers a class whose window procedure IS
+         DefDlgProc and passes its real DLGPROC to CreateDialog -- so DefDlgProc is
+         the ONLY route to the program's code. The real one calls the DLGPROC and
+         applies the default only if it answers FALSE. Ours went straight to the
+         default: Charmap's X posted IDCANCEL, IDCANCEL came back to DefDlgProc,
+         and the code that ends Charmap on IDCANCEL never saw either.
+       ► So with a DLGPROC: call it (the host's ordinary 16-bit callback) and arm
+         WOWCALL_ACT_DLGDEFAULT, which applies wowuser_dlg_default() when it
+         returns 0. Without one, or when the DLGPROC is already handling this very
+         message for this window (a procedure that calls DefDlgProc on itself),
+         the default runs here. */
     case WOWUSER_DEFDLGPROC: {
         WORD hdlg = wow32_argw(f, DDP_ARG_HDLG);
         WORD msg  = wow32_argw(f, DDP_ARG_MSG);
         WORD wp16 = wow32_argw(f, DDP_ARG_WPARAM);
         DWORD lp32 = wow32_argd(f, DDP_ARG_LPARAM);
         wowuser_win_t *w = wowuser_findwin(hdlg);
-        LRESULT r;
-        int k = 0;
+        DWORD dproc = w ? w->dlgproc
+                        : (hdlg && hdlg == g_wu_gone.hwnd ? g_wu_gone.dlgproc : 0);
+        int k = 0, self = 0;
         wu_puts(note, notecap, &k, "DefDlgProc 0x");
         wu_puthex(note, notecap, &k, hdlg, 4);
         wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, msg, 4);
-        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
-                                wow32_setret(f, 0); return 1; }
-        /* #162: a DIALOG's WM_CLOSE is a Cancel: Win16's DefDlgProc posts
-           WM_COMMAND(IDCANCEL, BN_CLICKED) to the dialog, and the program's own
-           IDCANCEL handling decides what closing means (Charmap: end the program).
-           The real DefWindowProc destroyed the real window behind its back. */
-        if (msg == 0x0010) {
-            HWND cb = GetDlgItem(w->hwnd32, 2 /* IDCANCEL */);
-            WORD c16 = cb ? wowwin_hwnd16(cb) : 0;
-            wowmsg_post(hdlg, 0x0111 /* WM_COMMAND */, 2 /* IDCANCEL */,
-                        (DWORD)c16 | (0u /* BN_CLICKED */ << 16), GetTickCount(), 0, 0);
-            wu_puts(note, notecap, &k, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
-                                       " dialog, as Win16's DefDlgProc does");
-            wow32_setret(f, 0);
+        if (!w && !dproc) { wu_puts(note, notecap, &k, " -- no such window; 0");
+                            wow32_setret(f, 0); return 1; }
+        if (!w) wu_puts(note, notecap, &k, " [its record is released; its DLGPROC kept]");
+        if (g_wc_depth > 0) {
+            const wowcall_frame_t *top = &g_wc[g_wc_depth - 1];
+            self = (top->proc == dproc && top->hwnd == hdlg && top->msg == msg);
+        }
+        if (dproc && !self && g_wc_depth < WOWCALL_MAX_DEPTH) {
+            g_wu_dlgdef[g_wc_depth].wp = wp16;
+            g_wu_dlgdef[g_wc_depth].lp = lp32;
+            f->cbproc   = dproc;
+            f->cbds     = f->gds;
+            f->cbarg[0] = hdlg;
+            f->cbarg[1] = msg;
+            f->cbarg[2] = wp16;
+            f->cbarg[3] = (WORD)(lp32 >> 16);
+            f->cbarg[4] = (WORD)(lp32 & 0xFFFF);
+            f->cbnarg   = 5;
+            f->cbret    = WOWCALL_RET_RESULT;
+            f->cbhwnd   = hdlg;
+            f->cbmsg    = msg;
+            f->cbact    = WOWCALL_ACT_DLGDEFAULT;
+            f->cbactarg = hdlg;
+            wu_puts(note, notecap, &k, " -> its DLGPROC 0x");
+            wu_puthex(note, notecap, &k, dproc, 8);
+            wu_puts(note, notecap, &k, " first; the default only if it answers FALSE");
             return 1;
         }
-        r = DefWindowProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
-        wu_puts(note, notecap, &k, " -> DefWindowProc (see the note: no dialog"
-                                   " keyboard defaults) = 0x");
-        wu_puthex(note, notecap, &k, (DWORD)r, 8);
-        wow32_setret(f, (DWORD)r);
+        wow32_setret(f, (DWORD)wowuser_dlg_default(w, hdlg, msg, wp16, lp32,
+                                                   note, notecap, &k));
         return 1;
     }
 

@@ -110,6 +110,11 @@
    same reasoning, and the same number's worth of it, as WOWCALL_MAX_DEPTH. */
 #define WOWDLG_MAX_MODAL  4
 
+/* s88: per callback depth -- did the modal loop's call go to the dialog's own
+   DLGPROC, and with which message. Read when the call returns (main.c). */
+static int  g_wd_dlgcall[WOWCALL_MAX_DEPTH];
+static WORD g_wd_dlgmsg[WOWCALL_MAX_DEPTH];
+
 typedef struct {
     WORD  hwnd;        /* the dialog's Win16 handle -- the loop's identity      */
     DWORD retlin;      /* THE RETURN HOLE of the DialogBox call we parked       */
@@ -588,6 +593,13 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         if (g_wc_depth > 0) {
             g_wc[g_wc_depth - 1].action = WOWCALL_ACT_MODALPUMP;
             g_wc[g_wc_depth - 1].actarg = d->hwnd;
+            /* s88: say whether THIS call went to the dialog's own DLGPROC, so the
+               return can apply DefDlgProc's WM_CLOSE default (see main.c). */
+            g_wd_dlgcall[g_wc_depth - 1] = (m.hwnd == d->hwnd && proc == d->dlgproc
+                                            && !d->wndproc);
+            g_wd_dlgmsg[g_wc_depth - 1]  = msg;
+            g_wu_dlgdef[g_wc_depth - 1].wp = wparam;
+            g_wu_dlgdef[g_wc_depth - 1].lp = lparam;
         }
         ++d->msgs;
         wu_puts(note, cap, &k, "-> 0x");

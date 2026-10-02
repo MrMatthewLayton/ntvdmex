@@ -197,6 +197,10 @@
 #define WOWCALL_ACT_CLIPLOCK  6
 #define WOWCALL_ACT_CLIPFILL  7
 #define WOWCALL_ACT_CLIPPUT   8
+/* s88: the guest's DLGPROC answered for DefDlgProc; if it said FALSE (0), the
+   dialog manager's DEFAULT runs and its value replaces the answer. The message's
+   parameters wait in g_wu_dlgdef[] at the frame's depth -- actarg is the hdlg. */
+#define WOWCALL_ACT_DLGDEFAULT 9
 
 /* ── THE ENUMERATION SOURCES, DECLARED HERE FOR THE INCLUDE ORDER. ───────────
      The walk itself is src/wow/wowenum.h, which is compiled AFTER the two
