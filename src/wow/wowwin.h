@@ -292,6 +292,17 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          that relies on the DC being CLIPPED to that area is relying on something
          this does not yet reproduce, and that is a known gap rather than a
          surprise waiting to happen. */
+    /* ── s89 (#162, Clock): THE GUEST ERASES FIRST. In Win16 WM_ERASEBKGND goes to
+         the window's procedure, and the class brush is only DefWindowProc's
+         answer for a procedure that passes it on. Letting the OS erase here
+         painted Clock WHITE (its class brush) before Clock -- which fills the
+         button face itself in that handler -- got a turn, and told BeginPaint the
+         background was done. Returning 0 leaves fErase set: the guest's
+         BeginPaint sends it WM_ERASEBKGND (wowuser.h), and DefWindowProc16
+         forwards it to us with its DC (0x6b), where the class brush is applied. */
+    case WM_ERASEBKGND:
+        if (h16) return 0;
+        break;
     case WM_PAINT:
         if (h16) {
             PAINTSTRUCT ps;

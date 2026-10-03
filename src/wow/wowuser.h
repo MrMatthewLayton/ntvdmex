@@ -1797,6 +1797,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define NOTIFY_UI_BITS_CB       0x16
 static const WORD g_dwp_forward[] = {
     0x0010,             /* WM_CLOSE: its default is DestroyWindow (see 0x6b) */
+    0x0014,             /* WM_ERASEBKGND: its DC token is translated (s89)   */
 };
 #define NOTIFY_ARG_BLOCK        0
 #define NOTIFY_ARG_KIND         4
@@ -3224,6 +3225,21 @@ static struct { WORD wp; DWORD lp; } g_wu_dlgdef[WOWCALL_MAX_DEPTH];
      the program outlived its window. Its DLGPROC is kept here for that one call. */
 static struct { WORD hwnd; DWORD dlgproc; } g_wu_gone;
 
+/* s89 (#162): a Win16 message's wParam as the OS's default procedure needs it.
+   WM_ERASEBKGND carries the guest's DC TOKEN; DefWindowProc fills the real DC
+   behind it with the class brush. Everything else still goes raw (see the
+   forward-table note: a message joins when its parameters are translated). */
+static WPARAM wowuser_wp32(WORD msg, WORD wp16)
+{
+    if (msg == 0x0014) {
+        int kind = -1;
+        HGDIOBJ o = wowgdi_h32(wp16, &kind);
+        return (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC))
+               ? (WPARAM)o : 0;
+    }
+    return (WPARAM)wp16;
+}
+
 static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD wp16,
                                    DWORD lp32, char *note, int notecap, int *kp)
 {
@@ -3241,7 +3257,8 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
         *kp = k;
         return 0;
     }
-    r = DefWindowProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
+    if (msg == 0x0014 && !wowuser_wp32(msg, wp16)) { *kp = k; return 0; }
+    r = DefWindowProcA(w->hwnd32, msg, wowuser_wp32(msg, wp16), (LPARAM)lp32);
     wu_puts(note, notecap, &k, " -> DefWindowProc (no dialog keyboard defaults) = 0x");
     wu_puthex(note, notecap, &k, (DWORD)r, 8);
     *kp = k;
@@ -8023,7 +8040,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        r = DefWindowProcA(h, msg, (WPARAM)wp, (LPARAM)lp);
+        if (msg == 0x0014 && !wowuser_wp32(msg, wp)) {
+            wu_puts(note, notecap, &k, " -- ★ WM_ERASEBKGND with no DC we issued; 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = DefWindowProcA(h, msg, wowuser_wp32(msg, wp), (LPARAM)lp);
         wu_puts(note, notecap, &k, " -> 0x");
         wu_puthex(note, notecap, &k, (DWORD)r, 8);
         wow32_setret(f, (DWORD)r);
