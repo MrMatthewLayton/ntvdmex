@@ -36,6 +36,26 @@ void dos_clock_read(int64_t off, dclk_t *out)
     dclk_read(&host, off, out);
 }
 
+/* ── GH #263: A FILE CARRIES DOS'S DATE, NOT THE HOST'S. ─────────────────────────
+     File I/O is Win32's and Win32 stamps a write with the machine's clock, so after
+     INT 21h AH=2Bh set 1999-06-15 a program's new file still said today. DOS stamps
+     a created or written file with ITS clock; ours is host-now + dos_off. Applied
+     at create and after every write, only while a guest has moved the clock
+     (dos_off != 0) -- an untouched VDM never calls this, exactly as before. Local
+     time, the inverse of what AH=57h AL=00h reads back. A refusal (a handle without
+     FILE_WRITE_ATTRIBUTES) leaves Win32's stamp, which is what there was. */
+static void dos_stamp_vdm_now(HANDLE f)
+{
+    dclk_t g; SYSTEMTIME st; FILETIME lf, ft;
+    if (!g_dos_clock.dos_off || !f || f == INVALID_HANDLE_VALUE) return;
+    dos_clock_read(g_dos_clock.dos_off, &g);
+    st.wYear = (WORD)g.year; st.wMonth = (WORD)g.month; st.wDayOfWeek = (WORD)g.dow;
+    st.wDay = (WORD)g.day;   st.wHour = (WORD)g.hour;   st.wMinute = (WORD)g.min;
+    st.wSecond = (WORD)g.sec; st.wMilliseconds = (WORD)(g.cs * 10u);
+    if (SystemTimeToFileTime(&st, &lf) && LocalFileTimeToFileTime(&lf, &ft))
+        SetFileTime(f, NULL, NULL, &ft);
+}
+
 /* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
    row was measured and why this is a table and not a switch. Defaults = the stock
    ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
@@ -847,7 +867,8 @@ int dos_int21(dos_machine_t *m)
              hi.txt on disk, which is the worst of both.
              So: a BOUND handle is a file, whatever its number; only an unbound low
              handle is the console. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        if (dos_fh_is_file((void *const *)m->fh, h)) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF();
+                                                       dos_stamp_vdm_now(m->fh[h]); /* #263 */ }
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
@@ -901,7 +922,8 @@ int dos_int21(dos_machine_t *m)
         }
         if (f != INVALID_HANDLE_VALUE) {
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
+                                        if (ah == 0x3C) dos_stamp_vdm_now(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else {
             /* ── ASK WHY IT FAILED. It used to answer 2 for every cause; see
