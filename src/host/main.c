@@ -372,6 +372,7 @@ static void hostprof_dump(void);
    pre-session-11 behaviour (latch the pending bit only, never queue). */
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
 #define VDDLIST_PATH CFG_("vdd.txt")
+static dos_safe_skips g_safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
 #define QIMODE_PATH CFG_("qimode.txt")
 /* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
    Exists so the rig can try a different starting word without a rebuild -- see the
@@ -2817,6 +2818,7 @@ static void vdd_load_third_party(void)
     HANDLE h;
     char buf[4096];
     DWORD got = 0, i = 0, n = 0, loaded = 0;
+    if (g_safe.vdd_plugins) return;                 /* s90 #132: SAFE MODE */
     h = CreateFileA(VDDLIST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;          /* no list is not an error */
@@ -11251,6 +11253,7 @@ static void host_fullscreen_toggle_restore(HWND h)
 static void host_fullscreen_toggle(HWND h);
 static void host_fullscreen_toggle(HWND h)
 {
+    if (g_safe.fullscreen && !g_pd.fullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
     int want = !g_pd.fullscreen;
     if (want) {
         g_fs_place.length = sizeof g_fs_place;
@@ -11452,7 +11455,7 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
 static LONG g_joy_thread_started = 0;
 static void joy_poll_ensure(void)
 {
-    if (g_joy.type == JOY_TYPE_NONE) return;
+    if (g_joy.type == JOY_TYPE_NONE || g_safe.joystick) return;   /* s90 #132 */
     if (InterlockedExchange(&g_joy_thread_started, 1)) return;   /* once */
     { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
       if (jt) CloseHandle(jt);
@@ -11749,7 +11752,7 @@ static void settings_apply_devices(const ntvdmex_settings *s)
          and they are genuinely independent -- a machine can have speakers plugged
          in, a case speaker, neither, or both, and only the person at it knows. */
     vdd_audio_set_speaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
-    g_spk_real = SPKOUT_TO_REAL(s->v[SET_SPEAKER]);
+    g_spk_real = g_safe.real_speaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
     /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
          it: the driver keeps sounding whatever it was last told to sound. */
     if (!g_spk_real) pcspk_set(&g_pcspk, 0);
@@ -26388,6 +26391,9 @@ static void wow_shims_load(void)
     unsigned i;
     if (done) return;
     done = 1;
+    /* SAFE MODE (#132): read the counter here -- this runs before the recovery
+       decision is taken further down WinMain, and must not wait for it. */
+    if (dos_recovery_skips(dos_recovery_decide(recovery_read())).wow_shims) return;
     api.version = 1; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
     api.handle16 = shim_handle16; api.callback16ex = NULL; api.ica_interrupt = shim_ica;
     api.yield16 = shim_yield; api.log = shim_log;
@@ -28309,7 +28315,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   : g_start_mode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
                                                         : " -> normal\r\n");
         if (g_start_mode == DOS_START_UNINSTALL) recovery_uninstall(&p);
-        log_append(LOG_PATH, report, p); serial_out(report, p); p = report; }
+        g_safe = dos_recovery_skips(g_start_mode);
+        if (g_start_mode == DOS_START_SAFE)
+            p = zput(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
+                        " pump), the real PC speaker, the joystick thread, the WOW"
+                        " shims, fullscreen -- the next clean exit clears it\r\n");
+        /* s90: NOT `p = report` -- the next log_write TRUNCATES the file and re-writes
+           the report buffer, so a line dropped from the buffer here was lost from
+           EVERY log: "consecutive failed starts" never survived since #132 landed. */
+        log_append(LOG_PATH, report, p); serial_out(report, p); }
     serial_out(report, p);
 
     /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
@@ -28344,7 +28358,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
-        p = report;
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
             return wow_refuse(GetCommandLineA());
         /* Experiment opted in: load now, then fall through so the selector stage can
@@ -30765,6 +30778,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
     g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
+    g_wave.force_silent = g_safe.audio_out;                 /* s90 #132: SAFE MODE */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
     {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
         aq = zput(aq, g_wave.using_ds ? "DirectSound" : g_wave.silent ? "none (silent pump)" : "WinMM");
@@ -34432,7 +34446,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        be read -- exactly as #131's stdout line did not. Same trap, same day. */
     p = zput(p, "STAGE2: start mode was ");
     p = zput(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
-             : g_start_mode == DOS_START_SAFE       ? "SAFE" : "normal");
+             : g_start_mode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
+                                                       " output, real speaker, joystick, WOW"
+                                                       " shims, fullscreen)" : "normal");
+    p = zput(p, g_wave.using_ds ? " [audio: DirectSound]" : g_wave.silent ? " [audio: no device, silent pump]"
+                                                                          : " [audio: WinMM]");
     p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
     pcspk_close(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */

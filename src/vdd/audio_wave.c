@@ -219,6 +219,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
          which is the failure mode this counter exists to avoid. */
     uint32_t want_bufs = aw->nbufs, want_frames = aw->nframes;
     int want_ds = aw->want_ds;                  /* #234: preserved like the lead */
+    int force_silent = aw->force_silent;        /* #132: ditto -- the rig caught it wiped */
     for (i = 0; i < sizeof(*aw); ++i) p[i] = 0;
     if (!want_bufs)   want_bufs   = AW_DEF_BUFFERS;     /* 0 = "leave it alone"  */
     if (want_bufs < 2) want_bufs = 2;
@@ -229,12 +230,13 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     aw->nbufs   = want_bufs;
     aw->nframes = want_frames;
     aw->want_ds = want_ds;
+    aw->force_silent = force_silent;
 
     aw->hz = hz ? hz : 44100;
     aw->fill = fill; aw->ctx = ctx;
     aw->silent = 1;                             /* until a device opens           */
 
-    if (aw_bind(aw)) {
+    if (!aw->force_silent && aw_bind(aw)) {
         fmt.wFormatTag = WAVE_FORMAT_PCM;
         fmt.nChannels = AW_CHANNELS;          /* #189 */
         fmt.nSamplesPerSec = aw->hz;

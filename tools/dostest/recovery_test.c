@@ -55,6 +55,23 @@ int main(void)
     eq("corrupt counter -> NORMAL, never uninstall",
        dos_recovery_decide(dos_recovery_parse("????", 4)), DOS_START_NORMAL);
 
+    /* s90: safe mode skips every optional subsystem; normal mode skips none. */
+    {   dos_safe_skips n = dos_recovery_skips(DOS_START_NORMAL);
+        dos_safe_skips f = dos_recovery_skips(DOS_START_SAFE);
+        dos_safe_skips u = dos_recovery_skips(DOS_START_UNINSTALL);
+        eq("NORMAL skips nothing",
+           n.vdd_plugins + n.audio_out + n.real_speaker + n.joystick
+           + n.wow_shims + n.fullscreen, 0);
+        eq("SAFE skips all six",
+           f.vdd_plugins + f.audio_out + f.real_speaker + f.joystick
+           + f.wow_shims + f.fullscreen, 6);
+        eq("UNINSTALL is not safe mode (it hands the machine back instead)",
+           u.vdd_plugins + u.audio_out, 0);
+        eq("two failures -> the skips are on",
+           dos_recovery_skips(dos_recovery_decide(2)).audio_out, 1);
+        eq("one failure -> still normal", dos_recovery_skips(dos_recovery_decide(1)).audio_out, 0);
+    }
+
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

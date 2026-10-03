@@ -67,6 +67,7 @@ typedef struct audio_wave {
     uint32_t  hz;
     aw_fill_fn fill; void *ctx;
     int       silent;                   /* 1 = no device; pump but discard       */
+    int      force_silent;  /* s90 #132: safe mode -- never open a device; the pump still runs */
     uint32_t  underruns;
     /* ── ⚠ `underruns` COUNTS waveOutWrite FAILURES, WHICH IS NOT STARVATION. ────────
          It has read 0 in every run ever made, including runs the user describes as

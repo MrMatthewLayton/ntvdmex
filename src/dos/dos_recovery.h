@@ -60,6 +60,38 @@ static dos_start_mode dos_recovery_decide(unsigned fails)
     return DOS_START_NORMAL;
 }
 
+/* ── SAFE MODE: WHAT IT SKIPS. (s90, the remainder of #132) ─────────────────────
+     Two failed starts in a row mean something in start-up is wedging or crashing
+     the host. Safe mode keeps the machine itself -- CPU, memory, DOS, video in a
+     window, keyboard and mouse -- and drops everything that reaches OUTSIDE the
+     process to optional hardware or foreign code, which is where both s52 wedges
+     and every "host never got a window" report has come from:
+       vdd_plugins   third-party VDD DLLs from cfg\vdd.txt (foreign code, in-process)
+       audio_out     opening waveOut/DirectSound (a broken driver blocks there); the
+                     mixer still runs and still paces the guest, into silence
+       real_speaker  Beep.sys through \\?\GLOBALROOT -- a device open
+       joystick      the joyGetPosEx poll thread (winmm joystick drivers)
+       wow_shims     bin\wowshim\ (two more DLLs loaded into the process)
+       fullscreen    DirectDraw exclusive mode; the window stays a window
+     NOT a skip, deliberately: the physical floppy. The s52 empty-drive wedge was a
+     MODAL ERROR BOX, which SetErrorMode now suppresses for the whole process, and
+     there is no start-up probe of A: left to skip -- a flag here would gate nothing.
+     All or nothing by design: the count says start-up failed, not WHICH part, and a
+     third failure uninstalls us anyway. */
+typedef struct {
+    unsigned char vdd_plugins, audio_out, real_speaker, joystick,
+                  wow_shims, fullscreen;
+} dos_safe_skips;
+
+static dos_safe_skips dos_recovery_skips(dos_start_mode m)
+{
+    dos_safe_skips k;
+    unsigned char on = (m == DOS_START_SAFE) ? 1 : 0;
+    k.vdd_plugins = on; k.audio_out = on; k.real_speaker = on; k.joystick = on;
+    k.wow_shims = on; k.fullscreen = on;
+    return k;
+}
+
 /* Parse the counter file's contents. Anything unreadable counts as ZERO, not as
    a failure: a corrupt counter must not be able to uninstall us on its own, and
    "the file is missing" is the normal state on a healthy machine. */
