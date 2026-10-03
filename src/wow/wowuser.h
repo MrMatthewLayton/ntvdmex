@@ -3664,6 +3664,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         DWORD bu;
         int   bux, buy, usedef = 0;
         char  dface[64] = ""; int dpt = 0; HFONT dfont = NULL;
+        WORD  firstfocus = 0;          /* WM_INITDIALOG's wParam (#162) */
         wowuser_class_t *c;
         wowuser_win_t *w;
         HWND parent32;
@@ -3877,6 +3878,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                              (HMENU)(ULONG_PTR)iid,
                                              GetModuleHandleA(NULL), NULL);
                 if (cw->hwnd32) { ++made; ++g_ww_created;
+                    if (!firstfocus && (istyle & 0x00010000u)) firstfocus = cw->hwnd;  /* WS_TABSTOP */
                     /* #283: the template's font, as the dialog manager gives it */
                     if (dfont) SendMessageA(cw->hwnd32, WM_SETFONT, (WPARAM)dfont, FALSE); }
             }
@@ -4039,6 +4041,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (usedef) wu_puts(note, notecap, &k, " [template said -32768: the OS"
                                                " placed it]");
         wow32_setret(f, w->hwnd);
+        /* ── ⛔ #162 (Charmap): A MODELESS DIALOG GETS WM_INITDIALOG TOO, before
+             CreateDialog returns. Only the modal loop (wowdlg.h) ever sent it, so
+             a program whose main window is a modeless dialog never initialised:
+             Charmap enumerates its fonts, fills its font list and builds its
+             character grid there -- empty list, no grid. Through the window's own
+             procedure (for an app-class dialog that is the class procedure, whose
+             DefDlgProc reaches the DLGPROC); KEEP, so the caller still gets the
+             handle. wParam = the first WS_TABSTOP control, as USER passes it;
+             lParam 0, as the modal loop sends it (CreateDialogParam's value is not
+             pinned in this frame yet). */
+        if (!modal && f->cbok && w->hwnd32 && wowuser_winproc_of(w)) {
+            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                             0x0110 /* WM_INITDIALOG */, firstfocus, 0, WOWCALL_RET_KEEP);
+            wu_puts(note, notecap, &k, " + WM_INITDIALOG (modeless)");
+        }
         return 1;
     }
 
