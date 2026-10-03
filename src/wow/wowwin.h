@@ -433,9 +433,19 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          43, in this very case. Do not re-add it below; it is a duplicate case
          value and the compiler says so. The over-sized toolbox is something
          else. */
+    /* ⚠ #303: for the two FOCUS messages wParam is the OTHER window -- the one
+         losing focus to this one, or gaining it from it -- and it is a real HWND.
+         `(WORD)wp` handed the guest the low word of a Win32 handle, which names
+         some unrelated Win16 window or none. Mapped through the table; a window
+         that is not a guest window is 0, as Win16 reports one from another task.
+         WM_SIZE's wParam is a SIZE_* code and passes as it is. */
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
-        if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
-                               GetTickCount(), ptx, pty); ++g_ww_msgs; }
+        if (h16) {
+            WORD wp16 = (msg == WM_SIZE) ? (WORD)wp
+                                         : wowwin_hwnd16((HWND)wp);
+            wowmsg_post(h16, (WORD)msg, wp16, (DWORD)lp,
+                        GetTickCount(), ptx, pty); ++g_ww_msgs;
+        }
         break;
     /* ── ★★★ WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) ──────
          The menu bar is the application's OWN resource on a real Win32 window,

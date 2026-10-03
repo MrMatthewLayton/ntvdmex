@@ -2793,6 +2793,16 @@ static int wowuser_listmsg(wow32_frame_t *f, wowuser_win_t *w, WORD msg, WORD wp
         if (!gp || len < 0 || len >= (LRESULT)sizeof buf) { *kp = k; *out = -1; return 1; }
         r = SendMessageA(w->hwnd32, m32, wp32, (LPARAM)buf);
         if (r >= 0) for (i = 0; i <= (int)r && i < (int)sizeof buf; ++i) gp[i] = (BYTE)buf[i];
+    } else if (kind == 2) {
+        /* ⚠ #304 (M7): GETTEXT on an owner-draw control WITHOUT strings returns the
+             item's DATA, a DWORD, through lParam. This fell to the raw send below,
+             which handed Win32 the guest's 16:16 pointer as a flat address -- and
+             Win32 wrote four bytes there. The DWORD goes into the guest's buffer. */
+        DWORD dw = 0;
+        gp = wowuser_lin(f, lparam);
+        r = SendMessageA(w->hwnd32, m32, wp32, (LPARAM)&dw);
+        if (gp && r >= 0) { gp[0] = (BYTE)dw; gp[1] = (BYTE)(dw >> 8);
+                            gp[2] = (BYTE)(dw >> 16); gp[3] = (BYTE)(dw >> 24); }
     } else {
         r = SendMessageA(w->hwnd32, m32, wp32, lp32);
     }
@@ -2820,6 +2830,22 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
             if ((iscb || islb)
                 && wowuser_listmsg(f, w, msg, wparam, lparam, iscb, &r, note, notecap, &k))
                 return r;
+            /* ── #301 (M2): A BUTTON's own messages. Win16 BM_GETCHECK..BM_SETSTYLE
+                 are WM_USER+0..4; Win32 moved the same five, same order, to 0xF0.
+                 All plain values (BM_SETSTYLE's lParam is the redraw flag in both),
+                 so the number is the whole translation. Answered 0 before, so a
+                 dialog that set its check boxes by message showed them all clear
+                 and read them back as clear. Keyed on the class, like EM_ and
+                 LB_/CB_: the same numbers mean other things to other controls. */
+            if (!lstrcmpiA(cn, "Button") && msg <= 0x0404) {
+                LRESULT br = SendMessageA(w->hwnd32, (UINT)(0x00F0 + (msg - 0x0400)),
+                                          (WPARAM)wparam, (LPARAM)lparam);
+                wu_puts(note, notecap, &k, "BM_ n=0x");
+                wu_puthex(note, notecap, &k, (DWORD)(msg - 0x0400), 2);
+                wu_puts(note, notecap, &k, " -> the real BUTTON -> 0x");
+                wu_puthex(note, notecap, &k, (DWORD)br, 8);
+                return (LONG)br;
+            }
         }
     }
     switch (msg) {
