@@ -2810,10 +2810,56 @@ static int wowuser_listmsg(wow32_frame_t *f, wowuser_win_t *w, WORD msg, WORD wp
     if (iscb) { n = msg - 0x0400; if (n < 0 || n >= 25) return 0; kind = CB[n]; m32 = 0x0140 + n; }
     else      { n = msg - 0x0401; if (n < 0 || n >= 0x23) return 0; kind = LB[n]; m32 = 0x0180 + n; }
     if (kind == 3) {
+        /* ── #304 (M6, s90): THE STRUCTURE MESSAGES, translated. Win16's INT is a
+             WORD and its RECT four shorts; Win32's are DWORDs and four LONGs, so
+             every one of these is a copy WITH A WIDTH CHANGE, in or out. */
+        volatile BYTE *g = wowuser_lin(f, lparam);
+        LRESULT r3 = 0;
+        int i, done = 1;
+        switch (m32) {
+        case 0x0183: case 0x019C: case 0x019D:     /* SELITEMRANGEEX, SET/GETANCHORINDEX */
+            r3 = SendMessageA(w->hwnd32, m32, (WPARAM)(LONG)(short)wparam, (LPARAM)lparam);
+            break;
+        case 0x0196: {                              /* LB_ADDFILE: a file name, in */
+            char fn[260];
+            for (i = 0; g && i < (int)sizeof fn - 1 && g[i]; ++i) fn[i] = (char)g[i];
+            fn[i] = 0;
+            r3 = g ? SendMessageA(w->hwnd32, m32, 0, (LPARAM)fn) : -1;
+            break; }
+        case 0x0191: {                              /* LB_GETSELITEMS: INT16[] out */
+            static int sel[1024];
+            int want = (int)(wparam > 1024 ? 1024 : wparam);
+            r3 = (g && want) ? SendMessageA(w->hwnd32, m32, (WPARAM)want, (LPARAM)sel) : 0;
+            for (i = 0; g && i < (int)r3 && i < want; ++i) {
+                g[i * 2] = (BYTE)sel[i]; g[i * 2 + 1] = (BYTE)(sel[i] >> 8); }
+            break; }
+        case 0x0192: {                              /* LB_SETTABSTOPS: INT16[] in */
+            static int ts[256];
+            int cnt = (int)(wparam > 256 ? 256 : wparam);
+            for (i = 0; g && i < cnt; ++i) ts[i] = (int)(short)(g[i * 2] | (g[i * 2 + 1] << 8));
+            r3 = SendMessageA(w->hwnd32, m32, (WPARAM)cnt, cnt ? (LPARAM)ts : 0);
+            break; }
+        case 0x0198:                                /* LB_GETITEMRECT: RECT16 out */
+        case 0x0152: {                              /* CB_GETDROPPEDCONTROLRECT   */
+            RECT rc;
+            rc.left = rc.top = rc.right = rc.bottom = 0;
+            r3 = SendMessageA(w->hwnd32, m32, (WPARAM)(LONG)(short)wparam, (LPARAM)&rc);
+            if (g) {
+                LONG v[4]; v[0] = rc.left; v[1] = rc.top; v[2] = rc.right; v[3] = rc.bottom;
+                for (i = 0; i < 4; ++i) { g[i * 2] = (BYTE)v[i]; g[i * 2 + 1] = (BYTE)(v[i] >> 8); }
+            }
+            break; }
+        default: done = 0; break;
+        }
         wu_puts(note, notecap, &k, iscb ? "CB_" : "LB_");
         wu_puts(note, notecap, &k, " n=0x"); wu_puthex(note, notecap, &k, (DWORD)n, 2);
-        wu_puts(note, notecap, &k, " carries a structure -- not translated; 0");
-        *kp = k; *out = 0; return 1;
+        if (!done) {
+            wu_puts(note, notecap, &k, " carries a structure -- not translated; 0");
+            *kp = k; *out = 0; return 1;
+        }
+        wu_puts(note, notecap, &k, " (structure translated) -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)r3, 8);
+        *kp = k; *out = (LONG)r3; return 1;
     }
     if (kind == 4 || kind == 2 || (kind == 1 && wparam == 0xFFFF)) wp32 = (WPARAM)(LONG)(short)wparam;
     if (kind == 1 && strs) {
@@ -3270,8 +3316,73 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                       11 LINEINDEX, 17 LINELENGTH, 21 LIMITTEXT, 22 CANUNDO, 23 UNDO,
                       25 LINEFROMCHAR, 29 EMPTYUNDOBUFFER */
                 1,1,0,0,0,0,0,0, 1,1,1,1,0,0,0,0, 0,1,0,0,0,1,1,1, 0,1,0,0,0,1 };
+            /* #304 (M5, s90): the rest of the list, each by its own shape --
+               2 GETRECT, 3 SETRECT, 4 SETRECTNP (RECT16), 5 SCROLL (values),
+               6 LINESCROLL (Win16 packs vert/horz into lParam; Win32 splits them),
+               18 REPLACESEL (string in), 20 GETLINE (buffer, first WORD = size),
+               24 FMTLINES, 28 SETPASSWORDCHAR (values), 27 SETTABSTOPS (INT16[]).
+               19 SETFONT is Windows 3.0's and "not used" by 3.1's EDIT; 26
+               SETWORDBREAK needs a 16-bit callback inside Win32's EDIT -- both
+               still answer 0, and say so. */
+            static const BYTE EM_X[30] = {
+                0,0,1,1,1,1,1,0, 0,0,0,0,0,0,0,0, 0,0,1,0,1,0,0,0, 1,0,0,1,1,0 };
             char cn[16];
             int  n = msg - 0x0400;
+            if (EM_X[n] && GetClassNameA(w->hwnd32, cn, sizeof cn)
+                && !lstrcmpiA(cn, "Edit")) {
+                volatile BYTE *g = wowuser_lin(f, lparam);
+                LRESULT r = 0;
+                int i;
+                UINT m32 = (UINT)(0xB0 + n);
+                switch (n) {
+                case 2: case 3: case 4: {                     /* RECT16 out / in    */
+                    RECT rc;
+                    rc.left = rc.top = rc.right = rc.bottom = 0;
+                    if (n != 2 && g) {
+                        rc.left  = (short)(g[0] | (g[1] << 8)); rc.top    = (short)(g[2] | (g[3] << 8));
+                        rc.right = (short)(g[4] | (g[5] << 8)); rc.bottom = (short)(g[6] | (g[7] << 8));
+                    }
+                    r = SendMessageA(w->hwnd32, m32, 0, (n != 2 && !g) ? 0 : (LPARAM)&rc);
+                    if (n == 2 && g) {
+                        LONG v[4]; v[0] = rc.left; v[1] = rc.top; v[2] = rc.right; v[3] = rc.bottom;
+                        for (i = 0; i < 4; ++i) { g[i * 2] = (BYTE)v[i]; g[i * 2 + 1] = (BYTE)(v[i] >> 8); }
+                    }
+                    break; }
+                case 5: case 24: case 28:
+                    r = SendMessageA(w->hwnd32, m32, (WPARAM)wparam, (LPARAM)lparam);
+                    break;
+                case 6:                                         /* LINESCROLL */
+                    r = SendMessageA(w->hwnd32, m32, (WPARAM)(LONG)(short)(lparam >> 16),
+                                     (LPARAM)(LONG)(short)(lparam & 0xFFFF));
+                    break;
+                case 18: {                                      /* REPLACESEL */
+                    static char rs[4096];
+                    for (i = 0; g && i < (int)sizeof rs - 1 && g[i]; ++i) rs[i] = (char)g[i];
+                    rs[i] = 0;
+                    r = SendMessageA(w->hwnd32, m32, (WPARAM)wparam, (LPARAM)rs);
+                    break; }
+                case 20: {                                      /* GETLINE    */
+                    static char gl[4096];
+                    WORD cap = g ? (WORD)(g[0] | (g[1] << 8)) : 0;
+                    if (cap > sizeof gl - 1) cap = sizeof gl - 1;
+                    gl[0] = (char)cap; gl[1] = (char)(cap >> 8);
+                    r = (g && cap) ? SendMessageA(w->hwnd32, m32, (WPARAM)(LONG)(short)wparam,
+                                                  (LPARAM)gl) : 0;
+                    for (i = 0; g && i < (int)r && i < cap; ++i) g[i] = (BYTE)gl[i];
+                    break; }
+                case 27: {                                      /* SETTABSTOPS */
+                    static int ts[256];
+                    int cnt = (int)(wparam > 256 ? 256 : wparam);
+                    for (i = 0; g && i < cnt; ++i) ts[i] = (int)(short)(g[i * 2] | (g[i * 2 + 1] << 8));
+                    r = SendMessageA(w->hwnd32, m32, (WPARAM)cnt, cnt ? (LPARAM)ts : 0);
+                    break; }
+                }
+                wu_puts(note, notecap, &k, "EM_ n=0x");
+                wu_puthex(note, notecap, &k, (DWORD)n, 2);
+                wu_puts(note, notecap, &k, " (translated) -> the real EDIT -> 0x");
+                wu_puthex(note, notecap, &k, (DWORD)r, 8);
+                return (LONG)r;
+            }
             if (EM_OK[n] && GetClassNameA(w->hwnd32, cn, sizeof cn)
                 && !lstrcmpiA(cn, "Edit")) {
                 WPARAM wp32 = wparam; LPARAM lp32 = (LPARAM)lparam;

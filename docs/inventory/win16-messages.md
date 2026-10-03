@@ -46,8 +46,10 @@ translation lives (`wowuser.h:~2816–3233`).
 | `0x040C/0x040D` | EM_SETHANDLE / EM_GETHANDLE | ✅ | answered against the guest's local heap |
 | `0x0400+n` COMBOBOX | CB_* → `0x140+n` | ⚠ | n=0..24 all mapped; strings copied (max 255). **18 GETDROPPEDCONTROLRECT (struct) answered 0** |
 | `0x0401+n` LISTBOX | LB_* → `0x180+n` | ⚠ | n=0..0x22 mapped. **Struct/array ones answered 0:** SELITEMRANGEEX, **GETSELITEMS**, **SETTABSTOPS**, ADDFILE, **GETITEMRECT**, anchor index |
-| LB/CB | GETTEXT on owner-draw without HASSTRINGS | ✅ (s89, #304) | the item data is written into the guest's buffer (was: the 16:16 pointer passed as flat) |
-| `0x0400–0x0404` BUTTON | BM_GETCHECK/SETCHECK/GETSTATE/SETSTATE/SETSTYLE → `0xF0+n` | ✅ (s89, #301) | keyed on the class; not yet exercised by a shelf program |
+| LB/CB | GETTEXT on owner-draw without HASSTRINGS | ✅ (s89, #304; **= stock** s90 `w_ctl`) | the item data is written into the guest's buffer (was: the 16:16 pointer passed as flat) |
+| LB/CB | GETSELITEMS, SETTABSTOPS (INT16[]), GETITEMRECT, CB_GETDROPPEDCONTROLRECT (RECT16), ADDFILE (string), SELITEMRANGEEX + anchors (values) | ✅ (s90, #304 M6; **= stock**, `w_ctl`) | widths changed both ways: Win16 INT = WORD, RECT = 4 shorts |
+| `0x0402–0x041C` EDIT | GETRECT/SETRECT/SETRECTNP (RECT16), SCROLL, LINESCROLL (Win16 packs vert/horz in lParam), REPLACESEL (string), GETLINE (first WORD = size), FMTLINES, SETTABSTOPS (INT16[]), SETPASSWORDCHAR | ✅ (s90, #304 M5; **= stock**, `w_ctl`) | SETFONT (3.0's, unused by 3.1) and SETWORDBREAK (needs a 16-bit callback inside Win32's EDIT) still 0 |
+| `0x0400–0x0404` BUTTON | BM_GETCHECK/SETCHECK/GETSTATE/SETSTATE/SETSTYLE → `0xF0+n` | ✅ (s89, #301; **= stock** s90 `w_ctl`) | keyed on the class |
 | `0x0400–0x0401` STATIC | STM_SETICON/GETICON → `0x170+n` | ❌ | |
 | SCROLLBAR | SBM_* (Win16 has none — uses SetScrollPos etc.) | — | the calls, not messages |
 | `0xFFFF` | broadcast (HWND_BROADCAST) | ❌ | SendMessage answers 0; PostMessage does not check the hwnd |
@@ -62,7 +64,7 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 | `0x0001` | WM_CREATE | sent | ✅ | CREATESTRUCT (34 bytes) on the guest stack; -1 fails the create. **Template-built application controls get it too** (s89, #302 -- Sound Recorder's SButton) |
 | `0x0002` | WM_DESTROY | **sent** (nested) | ✅ (s89, #305) | to the window, then each child with its own procedure, all still alive; posted only as a fallback. Charmap now saves its font |
 | `0x0005` | WM_SIZE | **posted** | ⚠ | should be sent |
-| `0x0007/0x0008` | WM_SETFOCUS / WM_KILLFOCUS | **posted** | ⚠ | wParam now mapped to the guest's hwnd (s89, #303); still posted, not sent |
+| `0x0007/0x0008` | WM_SETFOCUS / WM_KILLFOCUS | **posted** | ⚠ | wParam mapped to the guest's hwnd (s89, #303; KILLFOCUS's wParam **= stock** s90 `w_ctl`); still posted, not sent (#305 M10) |
 | `0x000F` | WM_PAINT | posted | ✅ | the host runs Begin/EndPaint; the guest's BeginPaint gets the rectangle and a DC clipped to it (#287) |
 | `0x0010` | WM_CLOSE | posted | ✅ | |
 | `0x0014` | WM_ERASEBKGND | sent from the guest's BeginPaint | ✅ | DC token; the default applies the class brush (s89) |
@@ -129,9 +131,9 @@ a batch is measured against stock.
 | ~~M1~~ ✅ | **WM_HSCROLL / WM_VSCROLL** relayed with the packing converted | translation | any program with its own scroll bars (Write, Cardfile, Charmap, Paintbrush, Terminal) |
 | ~~M2~~ ✅ | **BM_*** on BUTTON controls (`0x400+n → 0xF0+n`) | translation | every dialog with check boxes or radio buttons set by message |
 | ~~M3~~ ✅ | **Owner-draw**: WM_MEASUREITEM / WM_DRAWITEM / WM_DELETEITEM / WM_COMPAREITEM, sent through `wow_call16_sync` with the structures converted | structural | Charmap? File Manager, Control Panel-type lists, #288 |
-| M4 (½ ✅) | WM_SETFOCUS / WM_KILLFOCUS **wParam mapped to the guest's hwnd** — and sent rather than posted, now that sending is possible | bug | anything that checks which window lost focus |
-| M5 | EM_REPLACESEL / EM_GETLINE / EM_SETTABSTOPS / EM_SETFONT / EM_LINESCROLL / EM_GETRECT | translation | Notepad Find/Replace (#285), Write, Terminal, Sysedit |
-| M6 | LB_GETSELITEMS / LB_SETTABSTOPS / LB_GETITEMRECT / CB_GETDROPPEDCONTROLRECT (array/struct) | translation | multi-select lists, tabbed lists (Winfile, Program Manager) |
+| M4 (½ ✅, wParam = stock) | WM_SETFOCUS / WM_KILLFOCUS **wParam mapped to the guest's hwnd** — and sent rather than posted, now that sending is possible | bug | anything that checks which window lost focus |
+| ~~M5~~ ✅ (s90) | EM_REPLACESEL / EM_GETLINE / EM_SETTABSTOPS / EM_SETFONT / EM_LINESCROLL / EM_GETRECT | translation | Notepad Find/Replace (#285), Write, Terminal, Sysedit |
+| ~~M6~~ ✅ (s90) | LB_GETSELITEMS / LB_SETTABSTOPS / LB_GETITEMRECT / CB_GETDROPPEDCONTROLRECT (array/struct) | translation | multi-select lists, tabbed lists (Winfile, Program Manager) |
 | ~~M7~~ ✅ | LB/CB GETTEXT on owner-draw without HASSTRINGS: the 16:16 pointer is passed as flat | **bug** (memory write to a wrong address) | owner-draw lists |
 | M8 | WM_SETFONT / WM_GETFONT to system controls | translation | programs that set a control's font (Charmap, Terminal) |
 | M9 | WM_MENUSELECT, WM_ACTIVATE(APP), WM_SHOWWINDOW, WM_MOVE, WM_GETMINMAXINFO, WM_SYSCHAR | translation | status-bar help, activation-aware programs, minimum sizes (Clock) |

@@ -1,0 +1,32 @@
+#PROBE w16ctl
+CASE=bm.getcheck.0 SIG=AX AX=0000
+CASE=bm.getcheck.1 SIG=AX AX=0001
+CASE=bm.isdlgbuttonchecked SIG=AX AX=0001
+CASE=bm.getstate SIG=AX AX=0005
+CASE=em.linecount SIG=AX AX=0002
+CASE=em.getline.len SIG=AX AX=0005
+CASE=em.getline.01 SIG=AX AX=696C
+CASE=em.replacesel.len SIG=AX AX=000C
+CASE=em.replacesel.01 SIG=AX AX=4548
+CASE=em.getrect.right.wide SIG=AX AX=0001
+CASE=em.settabstops SIG=AX AX=0001
+CASE=em.fmtlines SIG=AX AX=0001
+CASE=em.linescroll SIG=AX AX=0001
+CASE=lb.getselitems.n SIG=AX AX=0002
+CASE=lb.getselitems.0 SIG=AX AX=0000
+CASE=lb.getselitems.1 SIG=AX AX=0002
+CASE=lb.getitemrect.ret SIG=AX AX=0001
+CASE=lb.getitemrect.top SIG=AX AX=0010
+CASE=lb.settabstops SIG=AX AX=0000
+CASE=lb.selitemrangeex SIG=AX AX=0000
+CASE=lb.getselcount SIG=AX AX=0002
+CASE=cb.droppedrect.width SIG=AX AX=0064
+CASE=od.gettext.ret SIG=AX AX=0004
+CASE=od.gettext.lo SIG=AX AX=5678
+CASE=od.gettext.hi SIG=AX AX=1234
+CASE=od.gettext.past SIG=AX AX=EEEE
+CASE=focus.kill.hwnd.is.A SIG=AX AX=0000
+CASE=focus.kill.wparam.is.B SIG=AX AX=0001
+CASE=focus.set.hwnd.is.B SIG=AX AX=0001
+CASE=focus.set.wparam.is.A SIG=AX AX=0000
+#END
