@@ -416,6 +416,8 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_SETCURRENTDRIVE           0xc8   /* read off its call site, see below */
 #define WOW32_GETPROFILEINT             0x39   /* pinned from DGROUP, see below    */
 #define WOW32_GETPROFILESTRING          0x3a   /* ★ IT DECIDES PAINT'S COLOUR MODE */
+#define WOW32_WRITEPROFILESTRING        0x3b   /* #293, the inventory's top gap    */
+#define WOW32_WRITEPRIVATEPROFILESTRING 0x81
 #define WOW32_WOWGETNEXTVDMCOMMAND      0x70
 #define WOW32_OLDYIELD                  0x75
 #define WOW32_REGISTERDOSDATA           0x78   /* named from its call site, below */
@@ -555,6 +557,8 @@ static const char *wow32_name(WORD id)
     case WOW32_SETCURRENTDIR:          return "SetCurrentDirectory";
     case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
     case WOW32_GETPRIVATEPROFILEINT:    return "GetPrivateProfileInt";
+    case WOW32_WRITEPROFILESTRING:      return "WriteProfileString";
+    case WOW32_WRITEPRIVATEPROFILESTRING: return "WritePrivateProfileString";
     default:                           return NULL;
     }
 }
@@ -1129,6 +1133,56 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         wow32_setret(f, got);
         return 1;
     }
+
+    /* ── #293: THE WRITE HALF. 0x3b WriteProfileString(lpAppName, lpKeyName,
+         lpString) and 0x81 WritePrivateProfileString(..., lpFileName). ─────────
+         Found by the s89 inventory (tools/ne/wowinventory.py), not by a run: 14
+         shelf programs import one or the other -- Calc's Scientific mode, Clock's
+         analog/digital, WinMine's best times, Solitaire's options -- and every
+         one was stepped over, so no Win16 program ever saved a setting. Nothing
+         looked broken, because the next launch simply read the defaults back.
+         12 and 16 arg bytes = three and four far pointers, Pascal order like the
+         Get* twins above: FIRST pushed is the HIGHEST offset, so the file (if
+         any) is at 0, lpString next, lpAppName last.
+       ★ NULL HAS MEANING, so `wow32_argstr`'s "no pointer" is passed as NULL:
+         a NULL lpString deletes the key, a NULL lpKeyName deletes the section,
+         and WritePrivateProfileString(NULL, NULL, NULL, file) flushes. Never a
+         string literal in their place (the read-only trap documented at 0x39).
+       ★ The REAL Win32 call against the REAL file, so XP's own IniFileMapping
+         applies exactly as it does for stock WOW, and a bare filename resolves
+         against the Windows directory -- the 16-bit convention.
+         Win16 returns BOOL in AX. */
+    case WOW32_WRITEPROFILESTRING: {
+        char app[256], key[256], val[4096];
+        int  ha = wow32_argstr(f, 8, app, sizeof app);
+        int  hk = wow32_argstr(f, 4, key, sizeof key);
+        int  hv = wow32_argstr(f, 0, val, sizeof val);
+        BOOL ok = WriteProfileStringA(ha ? app : NULL, hk ? key : NULL,
+                                      hv ? val : NULL);
+        wow32_setret(f, ok ? 1 : 0);
+        return 1;
+    }
+    case WOW32_WRITEPRIVATEPROFILESTRING: {
+        char app[256], key[256], val[4096], file[MAX_PATH];
+        int  ha = wow32_argstr(f, 12, app, sizeof app);
+        int  hk = wow32_argstr(f, 8,  key, sizeof key);
+        int  hv = wow32_argstr(f, 4,  val, sizeof val);
+        BOOL ok;
+        if (!wow32_argstr(f, 0, file, sizeof file) || !file[0]) {
+            wow32_setret(f, 0);                  /* no file: nothing to write to */
+            return 1;
+        }
+        ok = WritePrivateProfileStringA(ha ? app : NULL, hk ? key : NULL,
+                                        hv ? val : NULL, file);
+        wow32_setret(f, ok ? 1 : 0);
+        return 1;
+    }
+    /* 0x03 WriteOutProfiles(): Win16's "flush the profile cache". Win32 flushes
+       WIN.INI with an all-NULL write; there is no return value. */
+    case WOW32_WRITEOUTPROFILES:
+        WriteProfileStringA(NULL, NULL, NULL);
+        wow32_setret(f, 0);
+        return 1;
 
     /* ── ★★★★★ 0x82 SetCurrentDirectory -- AND IT IS WHERE `Save As` PUT THE
          FILE. (session 49) ──────────────────────────────────────────────────
