@@ -71,3 +71,21 @@ click; the shelf's posted WM_CLOSE still reaches it).
 - #276 (PM tick during INT 15h AH=86h): data run in the final gate only; the fix touches
   the PM IRQ0 batching Doom's timing was tuned on — not an unattended change.
 - #262 case B, #278 WM_CREATE chain, #269 remainders (listed on the issues).
+
+## Morning (user back): Win16 gaps, compared against stock
+New tool `scripts/bm/w16pair.bat`: one program under ours, then stock, with screenshots
+(`runs/s89/pair*/`, `crop.py` pairs them). Builds `B_w16a..h` (`runs/s89/`); last =
+`5ec08713` (`f7ac308`), shelf 15/16.
+
+| Commit | What | Seen on the rig |
+|---|---|---|
+| `e56c1a2` | dialog base units from the template font (+ font on system controls); MapDialogRect converts itself; BeginPaint sends WM_ERASEBKGND | Calc border right (#282); Terminal dialog 192x130 = stock (#283) |
+| `be1374e`, `1300bc4` | modeless dialogs get WM_INITDIALOG with CreateDialogParam's lParam (+6) and first tab stop; BeginPaint DC clips children | Charmap grid; Sound Recorder title + X (#286) |
+| `67e1d88` | the relay no longer erases for the guest; WM_ERASEBKGND forwarded by USER's DefWindowProc with its DC translated | Clock beige like stock |
+| `54d298f` | font only to system controls; DefDlgProc's erase = dialog colour | |
+| `671cf97`, `0dfbb95` | EnumFontFamilies; GDI dispatch runs enumerations; default WM_PAINT erases what is owed; DC clips siblings by style | Sound Recorder labels/background like stock |
+| `f7ac308` | LB_/CB_ messages translated (WM_USER-based per class); owner-draw dropped for string lists | Charmap font list = stock |
+
+Findings: USER's CreateDialog routine `seg1:0x4b4a` (lParam at frame +6); GDI's
+dispatch never acted on `f.enumreq`; Win16 control messages overlap by class.
+Open (in #162): WM_CTLCOLOR, WM_DRAWITEM, #278, Media Player, XP theme vs classic frames.
