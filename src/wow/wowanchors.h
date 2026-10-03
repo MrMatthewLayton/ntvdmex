@@ -505,4 +505,15 @@ static const wow_anchor_t g_keyboard_anchors[] = {
     { 0x086,  10, 0x00e1 }, { 0x087,  10, 0x00ee },
 };
 
+/* ── SOUND: every stub in the module, generated (s90, #299). Regenerate with
+     `tools/ne/wowthunks.py --anchor guest/ne/sound.drv`. */
+static const wow_anchor_t g_sound_anchors[] = {
+    { 0x001,   0, 0x001d }, { 0x002,   0, 0x002a }, { 0x003,   4, 0x0037 },
+    { 0x004,   8, 0x0044 }, { 0x005,  10, 0x0051 }, { 0x006,   6, 0x005e },
+    { 0x007,   4, 0x006b }, { 0x008,   8, 0x0078 }, { 0x009,   0, 0x0085 },
+    { 0x00a,   0, 0x0092 }, { 0x00b,   2, 0x009f }, { 0x00c,   0, 0x00ac },
+    { 0x00d,   2, 0x00b9 }, { 0x00e,   0, 0x00c6 }, { 0x00f,   0, 0x00d3 },
+    { 0x010,   4, 0x00e0 }, { 0x011,   0, 0x00ed },
+};
+
 #endif /* WOWANCHORS_H */

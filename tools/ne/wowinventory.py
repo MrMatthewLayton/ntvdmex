@@ -77,7 +77,7 @@ SYSMODS = {
     "KEYBOARD": ("guest/ne/keyboard.drv", "src/wow/wowkbd.h",     "keyboard.drv16"),
     "SHELL":    ("guest/ne/shell.dll",    "src/wow/wowshell.h",   "shell.dll16"),
     "COMMDLG":  ("guest/ne/commdlg.dll",  "src/wow/wowcommdlg.h", "commdlg.dll16"),
-    "SOUND":    ("guest/ne/sound.drv",    None,                   "sound.drv16"),
+    "SOUND":    ("guest/ne/sound.drv",    "src/wow/wowsound.h",   "sound.drv16"),
     "SYSTEM":   ("guest/ne/system.drv",   None,                   "system.drv16"),
     "MOUSE":    ("guest/ne/mouse.drv",    None,                   None),
     "COMM":     ("guest/ne/comm.drv",     None,                   None),

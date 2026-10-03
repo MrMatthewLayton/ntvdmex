@@ -99,6 +99,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
+#include "../wow/wowsound.h" /* GH #299: ...and SOUND.DRV's -- stock answers 0 */
 #include "dos_mcb.h"
 #include "bios_bda.h"       /* GH #253: 0040:000E/0010/0013 and the EBDA, from one source */
 #include "dos_loader.h"
@@ -9526,6 +9527,19 @@ static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
     /* s89: the whole table (wowanchors.h), for the same reason as COMMDLG's. */
     return wow_anchor_hit(g_keyboard_anchors,
                           (int)(sizeof g_keyboard_anchors / sizeof g_keyboard_anchors[0]),
+                          id, argb, retstub);
+}
+
+/* ── ★ SOUND.DRV's TABLE (s90, #299). See src/wow/wowsound.h. Checked LAST of the
+     anchored tables, after GDI's, and excluding every segment already identified:
+     its ids are 1..0x11 with small argument counts, the shape most likely to
+     collide with another module's stub before that module is learned. */
+static WORD g_wow_sound_seg = 0;
+
+static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return wow_anchor_hit(g_sound_anchors,
+                          (int)(sizeof g_sound_anchors / sizeof g_sound_anchors[0]),
                           id, argb, retstub);
 }
 
@@ -21601,6 +21615,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, "USER");
                             else if (g_wow_krnl2_seg && sseg == g_wow_krnl2_seg)
                                 p = zput(p, "krnl386 seg2");
+                            else if (g_wow_sound_seg && sseg == g_wow_sound_seg)
+                                p = zput(p, "SOUND");
                             else
                                 p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
                             p = zput(p, "'s table -- a DIFFERENT id space]");
@@ -22768,6 +22784,31 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, "WOWENUM: "); p = zput(p, enote);
                             p = zput(p, "\r\n");
                         }
+                        wowlog_flush(base, &p);
+                        return 1;
+                    }
+                }
+                /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
+                if (!f.krnl && !g_wow_sound_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
+                    && f.stubseg != g_wow_kbd_seg && f.stubseg != g_wow_gdi_seg
+                    && wow_sound_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_sound_seg = f.stubseg;
+                    p = zput(p, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
+                    p = zhex(p, g_wow_sound_seg);
+                    p = zput(p, " (learned from its own stub, not from the module"
+                                " table)");
+                }
+                if (!f.krnl && g_wow_sound_seg && f.stubseg == g_wow_sound_seg) {
+                    char note[160];
+                    if (wowsound_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (SOUND), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }

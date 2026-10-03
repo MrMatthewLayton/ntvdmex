@@ -36,6 +36,7 @@
 K       equ 1                           ; module index: KERNEL
 U       equ 2                           ;               USER
 G       equ 3                           ;               GDI
+X       equ 4                           ;               the optional 4th: W16_HEAD 'SOUND'
 
 ; ── DGROUP scratch. mkne.py zero-fills the data segment (0x200 bytes by default);
 ;    offsets 0..0Fh belong to Windows (the instance-data header), so start at 40h.
@@ -52,14 +53,21 @@ D_BUF           equ 0x60                ; 0x60..0x1FF free for a test (416 bytes
 %assign __nimp __nimp + 1
 %endmacro
 
-%macro W16_HEAD 0
+; W16_HEAD [name] -- with a name, a 4th imported module (index X), e.g. 'SOUND'.
+%macro W16_HEAD 0-1
 manifest:
         db      'NEIM'
         dw      start                   ; entry point
         dw      iat                     ; import address table
         dw      NIMP
+%if %0 == 1
+        dw      4                       ; KERNEL, USER, GDI, %1
+        dw      m_kernel, m_user, m_gdi, m_extra
+%define W16_EXTRA %1
+%else
         dw      3                       ; KERNEL, USER, GDI
         dw      m_kernel, m_user, m_gdi
+%endif
 imports:
         IMP     K, 91, INITTASK
         IMP     K, 30, WAITEVENT
@@ -71,6 +79,9 @@ NIMP    equ     __nimp
 m_kernel:  db   'KERNEL', 0
 m_user:    db   'USER', 0
 m_gdi:     db   'GDI', 0
+%ifdef W16_EXTRA
+m_extra:   db   W16_EXTRA, 0
+%endif
 iat:
 %rep NIMP
         dw      0FFFFh                  ; FF FF 00 00: the unrelocated far pointer

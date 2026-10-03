@@ -74,6 +74,7 @@ DISPATCHERS = {
     "COMMDLG": "src/wow/wowcommdlg.h",
     "KEYBOARD": "src/wow/wowkbd.h",
     "GDI":     "src/wow/wowgdi.h",
+    "SOUND":   "src/wow/wowsound.h",
     # ⚠ A module with no entry here reports 0 SERVICED whatever the host does.
     #   Add the file when its dispatcher appears, or the tool quietly overstates
     #   the work -- which is the same class of lie it exists to prevent.
