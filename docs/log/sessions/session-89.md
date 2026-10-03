@@ -34,6 +34,16 @@ closed), Doom sound "much improved" (#57 commented, left open).
 Shelf on F: 14/16 X-close, identical to s88 (Terminal is now *correctly* inert to a real
 click; the shelf's posted WM_CLOSE still reaches it).
 
+## Final gate (`runs/s89/final/`, 02:50–04:11) — PASSED
+- **Parity sweep on F:** 97.3% (1251 of 1286; s87 was 1233 of 1267). Disagreeing probes
+  identical to s87's list plus **p_tick2c:1** = #262 case B, deliberately left open.
+- **Interleaved P F P F** (P = s87 `56d212e7`): Skyroads n8/max_ms same band; Doom 49/59 s
+  sounding on all four; ZAR sounded on F1 and F2. **P2 (the s87 build) was silent this
+  time.** So the earlier s88 silences were #239's intermittent shape and affect both builds.
+- **Shelf** F = 14/16 (Solitaire, Minesweeper, Charmap, Clock, Task List close; P doesn't).
+- **Lemmings** P F P F identical: complete, 0 planar bail sites (#269's interpreter change).
+- **#276 data:** real mode 3–6 ticks over the 200 ms wait (AX=1); PM still 1 tick (8001).
+
 ## Findings
 - **USER.EXE LoadCursor (`seg1:0x49c0..0x4b46`)**: NotifyWow(2) cache probe → if
   expwinver ≥ 3.0: FindResource(RT_GROUP_CURSOR) → **0x16c** → FindResource(RT_CURSOR) →
