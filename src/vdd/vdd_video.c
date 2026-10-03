@@ -966,7 +966,10 @@ static void vbe_pm_install(video_state *st)
     p = (uint8_t *)vdd_map_flat(st->bus, VDD_VBEPM_SEG, 0);
     if (!p) return;
     for (i = 0; i < VBE_PM_LEN; ++i) p[i] = vbe_pm_block[i];
+    for (i = 0; i < VBE_RM_LEN; ++i) p[VDD_VBERM_OFF + i] = vbe_rm_winfunc[i];   /* #273 */
 }
+/* both fit their 256 bytes without overlapping (a compile error otherwise) */
+typedef char vbe_rm_fits[(VBE_PM_LEN <= VDD_VBERM_OFF && VDD_VBERM_OFF + VBE_RM_LEN <= 256) ? 1 : -1];
 
 static void vbe_port_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
@@ -1237,7 +1240,11 @@ static void vesa(video_state *st, ntvdd_regs *r)
             b[2] = 0x07; b[3] = 0x00;             /* WinA r/w/exists; WinB none    */
             wr16(b + 4, 64); wr16(b + 6, 64);     /* granularity / size (KB)       */
             wr16(b + 8, 0xA000); wr16(b + 10, 0); /* WinA seg / WinB seg           */
-            wr32(b + 12, 0);                      /* WinFuncPtr (use INT 10h 4F05) */
+            /* #273: WinFuncPtr -> the real-mode stub beside the 4F0Ah block (vbe_rm.asm).
+                 It was NULL ("use 4F05h"), legal, but a VBE 1.x program that far-calls it
+                 without checking ran 0000:0000. Re-planted on every 4F01h, like 4F0Ah's. */
+            vbe_pm_install(st);
+            wr32(b + 12, ((uint32_t)VDD_VBEPM_SEG << 16) | VDD_VBERM_OFF);
             wr16(b + 16, (uint16_t)pitch);        /* bytes per scan line           */
             wr16(b + 18, w); wr16(b + 20, h);     /* X / Y resolution              */
             /* char cell: the BIOS font the mode's line count implies -- 8x8 at 200

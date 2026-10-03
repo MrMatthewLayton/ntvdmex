@@ -155,7 +155,7 @@ offer, and we follow the Tseng ROM (`oracle-rules.json:1318-1336`).
 | `+06h` | WinSize 64 KB | **IMPL** | `:802` | ungraded |
 | `+08h` | WinASegment `A000h` (text: `B800h`) | **IMPL** | `:803`, `:780` | ungraded |
 | `+0Ah` | WinBSegment 0 | **IMPL** | `:803` | ungraded |
-| `+0Ch` | WinFuncPtr = NULL | **IMPL** | `:804`. §4.4 permits NULL ("then VBE Function 05h must be used"); the missing far-call entry is its own row in §8 | masked by the probe |
+| `+0Ch` | WinFuncPtr = `B260:00C0` | **IMPL** | #273 (s91): the real-mode stub `src/vdd/vbe_rm.asm`, planted beside the 4F0Ah block by `vbe_pm_install` on every 4F01h; was NULL | `p_vesawf` 10/10 vs pcem-vesa |
 | `+10h` | BytesPerScanLine | **IMPL** | `w × bytes-per-pixel` (`:798`, `:805`); text `cols × 2` (`:782`) | **oracle** |
 | `+12h` | XResolution | **IMPL** | `:806`; text in characters `:783` | **oracle** |
 | `+14h` | YResolution | **IMPL** | `:806`, `:783` | **oracle** |
@@ -226,7 +226,7 @@ ours (`:654-668`).
 | DX past VRAM → `024Fh`, window unchanged | **IMPL** | `:1143` | `video_test.c:268-269` |
 | In an LFB mode → `034Fh` (§4.8, "must fail") | **IMPL** | `:1139` | `video_test.c:270-272` |
 | The window itself: A0000 as a 64 KB view of VRAM | **IMPL** | copied out on each switch and at each frame (`vesa_sync` `:596-604`, `:1144-1146`, `:3305-3306`) | `video_test.c:340-348` (a guest that writes and never switches again, vesacube) |
-| The direct far-call window function (WinFuncPtr) | **MISS** | advertised NULL; §4.4 permits it, but a VBE 1.x program that calls WinFuncPtr without testing it jumps to `0000:0000`. #226 looked at doing it inside `vdd_video.c` — a 6-byte stub `mov ax,4F05h / int 10h / retf` beside the fonts at `B000:2600` (installed by `vdd_video_install_fonts`, RAM the mode-Y remap preserves) — and **left it**: a protected-mode client that sees a non-NULL pointer may start calling it through DPMI `0301h` instead of `0300h`, and whether the `0301h` run loop (`main.c` ≈`:22689`) services the INT 10h BOP the stub makes has not been checked; ZAR does 4,735 bank switches a run through this path. What the host would need: confirm (or add) INT 10h servicing inside `0301h`'s `v86_run`, then the stub is ~10 lines here | — |
+| The direct far-call window function (WinFuncPtr) | **IMPL** | #273 (s91): `src/vdd/vbe_rm.asm`, 34 bytes at `B260:00C0` -- BH=00h set / 01h get, BL=00h, DX=position, every other register kept. It drives the card through the 4F0Ah block's own index/data ports (`01CEh` index 05h), NOT through INT 10h -- which is what retires #226's worry: a PM client far-calling it through DPMI `0301h` makes two trapped OUTs, the same port path as the PM block, not a nested INT 10h BOP. `p_vesawf`: set bank 3 by far call -> 4F05h reads 3; 4F05h sets 5 -> far-call get reads 5; BX/CX/SI/DI preserved -- **10/10 AGREE with the Tseng ET4000/W32p ROM** (pcem-vesa) | `p_vesawf` |
 
 ## 9. 4F06h — Set/Get Logical Scan Line Length (§4.9)
 
@@ -291,7 +291,7 @@ in pixels; `00h` reads 0, so no Bochs driver mistakes us for one) and the VGA DA
 | Table `+2`: 32-bit Set Display Start (BL=00h/80h, DX:CX = start in DWORDS) | **IMPL** | ports `10h`/`11h`; BL=80h polls `3DAh` bit 3 in the block itself before the commit | `vbepm_test.c` (4F07h get agrees; the retrace wait reads `3DAh`); rig `p_vbepm` (`vbepm.start.via.4F07`) |
 | Table `+4`: 32-bit Set Primary Palette (BL=00h/80h, CX count, DX first, ES:EDI B,G,R,pad) | **IMPL** | `3C8h`/`3C9h`, so the 4F08h DAC width applies as for any port write | `vbepm_test.c` (4F09h get reads back the same bytes); rig `p_vbepm` (`vbepm.pal.via.3C9`) |
 | Table `+6`: ports/memory sub-table | **IMPL** | `01CEh 01CFh 03C8h 03C9h 03DAh FFFFh`, empty memory list `FFFFh` | `vbepm_test.c` |
-| 3.0: the `'PMID'` PMInfoBlock in the ROM image (PMInitialize, 16-bit PM entry) | **MISS** | we claim VBE 2.0; no `PMID` anywhere in `src/` | — |
+| 3.0: the `'PMID'` PMInfoBlock in the ROM image (PMInitialize, 16-bit PM entry) | **N/A (decided)** | #273 (s91) DECISION: not provided. We claim VBE 2.0 (4F00h version 0200h), and a client may only look for `PMID` after seeing 3.0; claiming 3.0 would oblige the rest of 3.0 too (4F0Bh, refresh-rate CRTC blocks, MaxPixelClock). Revisit only if a guest that needs 3.0 turns up | — |
 
 ⚠ **STAGE2 shows who uses it**: `VESA calls by sub-function: ... | 4F0A-block banks= starts=
 refused=` -- a client switching banks through the block appears there and NOT in the 4F05

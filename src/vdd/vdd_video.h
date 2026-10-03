@@ -770,6 +770,9 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
    alone. 4F0Ah returns B260:0000; vdd_video_install_fonts writes it, and 4F0Ah writes it
    again on every call so a guest that scribbled on it gets a good copy. */
 #define VDD_VBEPM_SEG    0xB260       /* B2600..B26FF */
+/* #273: the real-mode WinFuncPtr stub (vbe_rm.asm, 34 bytes) in the same 256 bytes, after
+   the 186-byte block: B260:00C0. vbe_pm_install writes both. */
+#define VDD_VBERM_OFF    0x00C0
 
 /* `int10_11_calls` is counted so the next round is not another guess: the font-pointer fix
    assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.
