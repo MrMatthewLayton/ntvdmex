@@ -138,6 +138,8 @@ typedef struct {
        whose owner is the outer dialog must not enable a window it did not
        disable. */
     HWND  owner32;
+    DWORD initparam;   /* DialogBoxParam's lParam, for WM_INITDIALOG (s89)  */
+    WORD  firstfocus;  /* the first WS_TABSTOP control, WM_INITDIALOG's wParam */
 } wowdlg_modal_t;
 
 static wowdlg_modal_t g_wd[WOWDLG_MAX_MODAL];
@@ -245,12 +247,21 @@ static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
          owner is the top-level window: a dialog owned by a child control
          disables the frame around it, as USER's does. */
     d->owner32 = NULL;
+    d->initparam = 0; d->firstfocus = 0;     /* the caller sets them after the push */
     if (owner32) {
         HWND top = GetAncestor(owner32, GA_ROOT);
         if (!top) top = owner32;
         if (IsWindowEnabled(top)) { EnableWindow(top, FALSE); d->owner32 = top; }
     }
     return 1;
+}
+
+/* s89: WM_INITDIALOG's wParam/lParam for the dialog just pushed. */
+static void wowdlg_set_init(DWORD initparam, WORD firstfocus)
+{
+    if (g_wd_depth <= 0) return;
+    g_wd[g_wd_depth - 1].initparam  = initparam;
+    g_wd[g_wd_depth - 1].firstfocus = firstfocus;
 }
 
 /*
@@ -406,7 +417,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
              than left as a silent zero. */
         if (!d->inited) {
             d->inited = 1;
-            msg = WM_INITDIALOG16; wparam = 0; lparam = 0;
+            msg = WM_INITDIALOG16; wparam = d->firstfocus; lparam = d->initparam;
             wu_puts(note, cap, &k, "MODAL 0x");
             wu_puthex(note, cap, &k, d->hwnd, 4);
             wu_puts(note, cap, &k, " -> WM_INITDIALOG ");

@@ -2215,6 +2215,7 @@ static DWORD wowuser_winproc_of(const wowuser_win_t *w)
 static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
                        WORD ds, int defer_show, HWND owner32);
 static int wowdlg_end(WORD hwnd, WORD result);
+static void wowdlg_set_init(DWORD initparam, WORD firstfocus);
 static int wowdlg_active(void);
 
 /* ── s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
@@ -4013,6 +4014,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                            " FULL; returning immediately.");
             } else {
                 f->modaldlg = 1;
+                /* s89: the frame's +6 DWORD is DialogBoxParam's lParam -- USER's
+                   shared routine seg1:0x4b4a pushes it there (0 for DialogBox). */
+                wowdlg_set_init(wow32_argd(f, 6), firstfocus);
                 wu_puts(note, notecap, &k, " -- ★ MODAL: the caller is PARKED here"
                                            " and does not resume until EndDialog."
                                            " Its return value is held open; the"
@@ -4069,8 +4073,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              lParam 0, as the modal loop sends it (CreateDialogParam's value is not
              pinned in this frame yet). */
         if (!modal && f->cbok && w->hwnd32 && wowuser_winproc_of(w)) {
+            /* lParam: CreateDialogParam's value, the frame's +6 DWORD -- USER's shared
+               routine (seg1:0x4b4a) pushes it there; plain CreateDialog pushes 0.
+               ⛔ Passing 0 to a CreateDialogParam caller HID Sound Recorder: it reads
+               its show state from it and called ShowWindow(SW_HIDE). */
             wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
-                             0x0110 /* WM_INITDIALOG */, firstfocus, 0, WOWCALL_RET_KEEP);
+                             0x0110 /* WM_INITDIALOG */, firstfocus, wow32_argd(f, 6),
+                             WOWCALL_RET_KEEP);
             wu_puts(note, notecap, &k, " + WM_INITDIALOG (modeless)");
         }
         return 1;
@@ -7393,7 +7402,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             GetClientRect(w->hwnd32, &r);
             erase = 1;
         }
-        dc = GetDC(w->hwnd32);
+        /* ── s89 (#162, Charmap): CHILDREN CLIPPED OUT. The real controls inside
+             this window are OS windows that painted themselves already; Win16's
+             order (parent erases and paints, then the children) does not hold here,
+             so an unclipped DC let the guest's erase -- now sent from this
+             BeginPaint -- wipe Charmap's font list, labels and buttons after they
+             had drawn. ReleaseDC (EndPaint) takes a GetDCEx DC the same way. */
+        dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN | DCX_CLIPSIBLINGS);
         tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
         if (!tok) {
             if (dc) ReleaseDC(w->hwnd32, dc);
