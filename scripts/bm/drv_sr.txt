@@ -1,0 +1,6 @@
+wait 2
+list
+shot drv_sr_0
+close "Sound Recorder - (Untitled)"
+wait 8
+list

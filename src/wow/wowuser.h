@@ -4457,6 +4457,28 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
+        /* ── #302 (s89): THREE STANDARD FIELDS, from a source and from a guest.
+             GWW_HINSTANCE -6, GWW_HWNDPARENT -8, GWW_ID -12 -- the values Win32
+             kept as GWL_* (Wine include/winuser.h), and Sound Recorder's SButton
+             asked -6 and passed the answer to LoadBitmap as its hInstance: with 0
+             there, BITMAP REWIND was never found and the button drew "#Rewind".
+             The answers are this window's own record: its instance (the class's
+             if the window has none), its parent, its id (a child's hMenu). A set
+             updates the record and returns the previous value. Other negative
+             indexes are still an honest 0. */
+        if (idx == -6 || idx == -8 || idx == -12) {
+            WORD *fld = (idx == -6) ? &w->hinst : (idx == -8) ? &w->parent : &w->menu;
+            WORD cur  = *fld;
+            if (idx == -6 && !cur) cur = g_wu_class[w->cls].hinst;
+            if (set) { *fld = val; wu_puts(note, notecap, &k, " (standard) <- 0x");
+                       wu_puthex(note, notecap, &k, val, 4); }
+            else     { wu_puts(note, notecap, &k, idx == -6 ? " GWW_HINSTANCE -> 0x"
+                                                 : idx == -8 ? " GWW_HWNDPARENT -> 0x"
+                                                             : " GWW_ID -> 0x");
+                       wu_puthex(note, notecap, &k, cur, 4); }
+            wow32_setret(f, cur);
+            return 1;
+        }
         if (idx < 0) {
             wu_puts(note, notecap, &k, " -- a STANDARD field; this host does not"
                                        " answer those yet, returning 0");
@@ -5498,6 +5520,26 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                   wow32_setret(f, 0); return 1; }
         for (i = 0; i < (int)sizeof w->text - 1 && txt[i]; ++i) w->text[i] = txt[i];
         w->text[i] = 0;
+        /* ── ★★ #302: IN Win16, SetWindowText IS SendMessage(WM_SETTEXT). A window
+             with its own procedure sees its new text first. Measured on Sound
+             Recorder (s89): its SButton class turns "#Rewind" into BITMAP REWIND
+             in its WM_SETTEXT handler, and this call went straight to the OS, so
+             the buttons drew their raw text. The program's own string pointer is
+             passed -- it is guest memory already. Then the real window's text is
+             set as before (USER's 16-bit DefWindowProc does not forward
+             WM_SETTEXT here). One level deep: a handler that sets text again is
+             not sent to a second time. */
+        {   static int s_swt = 0;
+            WORD r16;
+            DWORD sp16 = (DWORD)wow32_argw(f, SWT_ARG_TEXT)
+                       | ((DWORD)wow32_argw(f, SWT_ARG_TEXT + 2) << 16);
+            if (!s_swt && g_wu_send16 && w->wndproc && sp16) {
+                ++s_swt;
+                if (g_wu_send16(hwnd, WM_SETTEXT16, 0, sp16, &r16))
+                    wu_puts(note, notecap, &k, " -> WM_SETTEXT SENT to its procedure");
+                --s_swt;
+            }
+        }
         if (w->hwnd32) { SetWindowTextA(w->hwnd32, txt);
                          wu_puts(note, notecap, &k, " -> the OS's"); }
         else             wu_puts(note, notecap, &k, " -- no real window");
