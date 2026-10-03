@@ -115,7 +115,10 @@ exposes. Epic **#292**, with batches **#293–#305**.
 | — | COMMDLG and KEYBOARD anchored by their **whole** stub tables | FindText had been "?'s table" until a program called GetOpenFileName (the SHELL anchor trap again) |
 | #300 ✅ | WM_HSCROLL/VSCROLL **sent** from the tracking loop and repacked; EnableScrollBar | Paintbrush: position 0→0a→14→1e, H 0→8 |
 | #301 / #303 / #304 | BM_* to buttons; focus messages carry the guest's hwnd; owner-draw GETTEXT no longer writes through a 16:16 pointer | implemented; no shelf program exercises them yet |
-| #302 | owner-draw messages through the nested run; **template-built application controls get WM_CREATE** | rig run `inv4` pending: Sound Recorder's SButton loads its bitmap in WM_CREATE, and no template control had ever received one |
+| #302 | owner-draw messages through the nested run; owner-drawn string lists keep their style | Charmap's font list = stock, **TT mark included** (`pairinit`) |
+| #278 (buttons) | three links: template-built app controls get **WM_CREATE**; **SetWindowText sends WM_SETTEXT** to the window's procedure; **GetWindowWord answers -6/-8/-12** | Sound Recorder's transport buttons draw their icons = stock (`drive3`, `inv6`) |
+| #302 | a modeless dialog gets **WM_INITDIALOG sent while still hidden**, then shown (unless the program showed/hid it meanwhile) | Charmap's TT mark (it loads the bitmap after selecting the font); shelf unchanged (`inv6`) |
+| — (side effect) | Media Player now opens and says "no MCI device drivers" instead of dying | `inv4`/`inv6` -- the remaining blocker is MMSYSTEM's 32-bit half (#5/#278) |
 
 - **Tooling.**
   - `wow_call16_sync_ex` takes a structure in and out, with far-pointer fix-ups.
@@ -126,3 +129,6 @@ exposes. Epic **#292**, with batches **#293–#305**.
 - **Found along the way.**
   - **#306**: after Calc closed, its WinHelp kept the host alive at 100% CPU for 30 minutes. That host was ended by PID; its log is in `runs/s89/linger_calc_2220.log`.
   - XP refuses `SetForegroundWindow` to the rig's background process, so keys sent after `fg` alone go to the wrong window. Use `tclick`.
+
+**Shelf at the end of the round** (`runs/s89/inv6`, host `4844507f`): all 16 programs open
+and close; Terminal stays open behind its own modal dialog, as before. Rig `bin\` = that host.

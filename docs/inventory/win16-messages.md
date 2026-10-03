@@ -35,7 +35,7 @@ translation lives (`wowuser.h:~2816–3233`).
 
 | Win16 | message | status | notes |
 |---|---|---|---|
-| `0x000C` | WM_SETTEXT | ✅ | 16:16 → linear, `SetWindowTextA` |
+| `0x000C` | WM_SETTEXT | ✅ | 16:16 → linear, `SetWindowTextA`. **And SetWindowText on a window with its own procedure SENDS it there first** (s89 -- Sound Recorder's buttons) |
 | `0x000D` | WM_GETTEXT | ✅ | writes into the guest buffer, bounded by wParam |
 | `0x000E` | WM_GETTEXTLENGTH | ✅ | also refreshes the EM handle block |
 | `0x0300–0x0304` | WM_CUT/COPY/PASTE/CLEAR/UNDO | ✅ | raw to the real control |
@@ -59,7 +59,7 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 
 | Win16 | message | delivery | status | notes |
 |---|---|---|---|---|
-| `0x0001` | WM_CREATE | sent | ✅ | CREATESTRUCT (34 bytes) on the guest stack; -1 fails the create |
+| `0x0001` | WM_CREATE | sent | ✅ | CREATESTRUCT (34 bytes) on the guest stack; -1 fails the create. **Template-built application controls get it too** (s89, #302 -- Sound Recorder's SButton) |
 | `0x0002` | WM_DESTROY | **sent** (nested) | ✅ (s89, #305) | to the window, then each child with its own procedure, all still alive; posted only as a fallback. Charmap now saves its font |
 | `0x0005` | WM_SIZE | **posted** | ⚠ | should be sent |
 | `0x0007/0x0008` | WM_SETFOCUS / WM_KILLFOCUS | **posted** | ⚠ | wParam now mapped to the guest's hwnd (s89, #303); still posted, not sent |
@@ -70,16 +70,16 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 | `0x0100–0x0102` | WM_KEYDOWN/KEYUP/CHAR | posted | ✅ | |
 | `0x0104/0x0105` | WM_SYSKEYDOWN/UP | posted | ✅ | the OS default also runs (menus) |
 | `0x0106/0x0103/0x0107` | WM_SYSCHAR / WM_DEADCHAR / WM_SYSDEADCHAR | — | ❌ | |
-| `0x0110` | WM_INITDIALOG | sent | ✅ | modal and modeless (s89) |
+| `0x0110` | WM_INITDIALOG | sent | ✅ | modal and modeless; **modeless: sent synchronously while the dialog is still hidden, then shown** (s89, #302 -- Charmap's TT mark) |
 | `0x0111` | WM_COMMAND | posted | ✅ | repacked: Win16 `wParam=id, lParam=MAKELONG(hwnd16, code)` |
 | `0x0112` | WM_SYSCOMMAND | — | ⚠ | only SC_KEYMENU/SC_MOUSEMENU (menu replay); the others go straight to the OS |
 | `0x0113` | WM_TIMER | posted | ✅ | lParam = TIMERPROC; DispatchMessage calls it |
 | `0x0116/0x0117` | WM_INITMENU / WM_INITMENUPOPUP | posted | ✅ | menu token |
 | `0x011F` | WM_MENUSELECT | — | ❌ | status-bar help text (Write, Paintbrush) |
 | `0x0114/0x0115` | WM_HSCROLL / WM_VSCROLL | **sent** (nested) | ✅ (s89, #300, rig-verified on Paintbrush) | repacked: Win16 `wParam=code, lParam=MAKELONG(pos, hwndCtl16)` |
-| `0x002B` | WM_DRAWITEM | — | ❌ | **owner-draw.** DRAWITEMSTRUCT is 26 bytes in Win16 and 48 in Win32 |
-| `0x002C` | WM_MEASUREITEM | — | ❌ | owner-draw |
-| `0x0039/0x002D` | WM_COMPAREITEM / WM_DELETEITEM | — | ❌ | owner-draw |
+| `0x002B` | WM_DRAWITEM | **sent** (nested) | ✅ (s89, #302; Charmap's font list = stock) | DRAWITEMSTRUCT converted (26 bytes Win16, DC token) on the guest stack |
+| `0x002C` | WM_MEASUREITEM | **sent** (nested) | ✅ (s89, #302) | width/height copied back |
+| `0x0039/0x002D` | WM_COMPAREITEM / WM_DELETEITEM | **sent** (nested) | ✅ (s89, #302; not yet exercised) | structures converted; COMPAREITEM's answer = return value |
 | `0x0006/0x001C` | WM_ACTIVATE / WM_ACTIVATEAPP | — | ❌ | Win16 packs `lParam=MAKELONG(hwnd, fMinimized)` |
 | `0x0003` | WM_MOVE | — | ❌ | |
 | `0x0018` | WM_SHOWWINDOW | — | ❌ | |
@@ -128,7 +128,7 @@ a batch is measured against stock.
 |---|---|---|---|
 | ~~M1~~ ✅ | **WM_HSCROLL / WM_VSCROLL** relayed with the packing converted | translation | any program with its own scroll bars (Write, Cardfile, Charmap, Paintbrush, Terminal) |
 | ~~M2~~ ✅ | **BM_*** on BUTTON controls (`0x400+n → 0xF0+n`) | translation | every dialog with check boxes or radio buttons set by message |
-| M3 | **Owner-draw**: WM_MEASUREITEM / WM_DRAWITEM / WM_DELETEITEM / WM_COMPAREITEM, sent through `wow_call16_sync` with the structures converted | structural | Charmap? File Manager, Control Panel-type lists, #288 |
+| ~~M3~~ ✅ | **Owner-draw**: WM_MEASUREITEM / WM_DRAWITEM / WM_DELETEITEM / WM_COMPAREITEM, sent through `wow_call16_sync` with the structures converted | structural | Charmap? File Manager, Control Panel-type lists, #288 |
 | M4 (½ ✅) | WM_SETFOCUS / WM_KILLFOCUS **wParam mapped to the guest's hwnd** — and sent rather than posted, now that sending is possible | bug | anything that checks which window lost focus |
 | M5 | EM_REPLACESEL / EM_GETLINE / EM_SETTABSTOPS / EM_SETFONT / EM_LINESCROLL / EM_GETRECT | translation | Notepad Find/Replace (#285), Write, Terminal, Sysedit |
 | M6 | LB_GETSELITEMS / LB_SETTABSTOPS / LB_GETITEMRECT / CB_GETDROPPEDCONTROLRECT (array/struct) | translation | multi-select lists, tabbed lists (Winfile, Program Manager) |
