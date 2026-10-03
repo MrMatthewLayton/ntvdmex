@@ -22682,8 +22682,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          written afterwards. Say it before it blocks, or the log
                          looks like a run that stopped at the call before. */
                     if (f.id == WOWCDLG_GETOPENFILENAME
-                        || f.id == WOWCDLG_GETSAVEFILENAME) {
-                        p = zput(p, "\n     WOWCOMMDLG: the file dialog is MODAL --"
+                        || f.id == WOWCDLG_GETSAVEFILENAME
+                        || f.id == WOWCDLG_CHOOSEFONT
+                        || f.id == WOWCDLG_CHOOSECOLOR) {
+                        p = zput(p, "\n     WOWCOMMDLG: this common dialog is MODAL --"
                                     " the VDM stops here until it is dismissed;"
                                     " the SERVICED line follows when it is\r\n");
                         wowlog_flush(base, &p);

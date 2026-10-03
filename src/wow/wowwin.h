@@ -90,6 +90,9 @@ static int   wowuser_is_mdichild(const wowuser_win_t *w);
 static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
 static HWND  wowuser_hwnd32(WORD hwnd);
 static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
+/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
+static int   wowcdlg_relay(UINT msg, LPARAM lp);
+static int   wowcdlg_isdlgmsg(MSG *m);
 static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
 
 /*
@@ -557,6 +560,9 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          DefMDIChildProc, and everything else DefWindowProc. Getting this wrong is
          not cosmetic -- an MDI frame on DefWindowProc loses its children's
          non-client behaviour entirely. */
+    /* #294: a Find/Replace dialog's notification ("commdlg_FindReplace") to its
+         owner -- relayed with the guest's own FINDREPLACE pointer. */
+    if (h16 && msg >= 0xC000 && wowcdlg_relay(msg, lp)) return 0;
     if (h16) {
         wowuser_win_t *w = wowuser_findwin(h16);
         if (w) {
@@ -591,9 +597,10 @@ static int wowwin_pump(int budget)
     QueryPerformanceCounter(&t0);
     ++g_ww_pumpcalls;
     while (n < budget && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+        ++n; ++g_ww_pumped;
+        if (wowcdlg_isdlgmsg(&m)) continue;        /* #294: Find dialog's Tab/Enter */
         TranslateMessage(&m);
         DispatchMessageA(&m);
-        ++n; ++g_ww_pumped;
     }
     QueryPerformanceCounter(&t1);
     g_ww_qpc += t1.QuadPart - t0.QuadPart;

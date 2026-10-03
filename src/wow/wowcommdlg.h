@@ -107,6 +107,137 @@ static void wcd_poked(volatile BYTE *p, int off, DWORD v)
     wow32_pokew(p + off + 2, (WORD)(v >> 16));
 }
 
+/* ── #294: the rest of COMMDLG's table. Ids = export ordinals (see the top). */
+#define WOWCDLG_CHOOSECOLOR   0x0005
+#define WOWCDLG_FINDTEXT      0x000b
+#define WOWCDLG_REPLACETEXT   0x000c
+#define WOWCDLG_CHOOSEFONT    0x000f
+
+/* Win16 FINDREPLACE, 0x24 bytes (3.1 SDK; Wine's FINDREPLACE16 agrees). */
+#define WOW_FR16_SIZE        0x24
+#define FR16_STRUCTSIZE      0x00
+#define FR16_HWNDOWNER       0x04
+#define FR16_FLAGS           0x08
+#define FR16_FINDWHAT        0x0c
+#define FR16_REPLACEWITH     0x10
+#define FR16_FINDWHATLEN     0x14
+#define FR16_REPLACEWITHLEN  0x16
+#define FR16_CUSTDATA        0x18
+#define FR16_HOOKBITS  (0x00000100UL | 0x00000200UL | 0x00002000UL)
+/* FR_ENABLEHOOK | FR_ENABLETEMPLATE | FR_ENABLETEMPLATEHANDLE */
+
+/* Win16 CHOOSECOLOR, 0x20 bytes. */
+#define WOW_CC16_SIZE        0x20
+#define CC16_STRUCTSIZE      0x00
+#define CC16_HWNDOWNER       0x04
+#define CC16_RGBRESULT       0x08
+#define CC16_CUSTCOLORS      0x0c
+#define CC16_FLAGS           0x10
+#define CC16_CUSTDATA        0x14
+#define CC16_HOOKBITS  (0x00000010UL | 0x00000020UL | 0x00000040UL)
+/* CC_ENABLEHOOK | CC_ENABLETEMPLATE | CC_ENABLETEMPLATEHANDLE */
+
+/* Win16 CHOOSEFONT, 0x2e bytes. */
+#define WOW_CF16_SIZE        0x2e
+#define CF16_STRUCTSIZE      0x00
+#define CF16_HWNDOWNER       0x04
+#define CF16_HDC             0x06
+#define CF16_LOGFONT         0x08
+#define CF16_POINTSIZE       0x0c
+#define CF16_FLAGS           0x0e
+#define CF16_RGBCOLORS       0x12
+#define CF16_CUSTDATA        0x16
+#define CF16_HOOK            0x1a
+#define CF16_TEMPLATENAME    0x1e
+#define CF16_HINSTANCE       0x22
+#define CF16_STYLE           0x24
+#define CF16_FONTTYPE        0x28
+#define CF16_SIZEMIN         0x2a
+#define CF16_SIZEMAX         0x2c
+#define CF16_HOOKBITS  (0x00000008UL | 0x00000010UL | 0x00000020UL)
+/* CF_ENABLEHOOK | CF_ENABLETEMPLATE | CF_ENABLETEMPLATEHANDLE */
+
+/* Win16 LOGFONT: five INT16s, eight BYTEs, a 32-byte face -- 50 bytes. */
+static void wcd_lf16_to32(const volatile BYTE *p, LOGFONTA *lf)
+{
+    int i;
+    lf->lfHeight      = (LONG)(short)wow32_peekw((volatile BYTE *)p + 0);
+    lf->lfWidth       = (LONG)(short)wow32_peekw((volatile BYTE *)p + 2);
+    lf->lfEscapement  = (LONG)(short)wow32_peekw((volatile BYTE *)p + 4);
+    lf->lfOrientation = (LONG)(short)wow32_peekw((volatile BYTE *)p + 6);
+    lf->lfWeight      = (LONG)(short)wow32_peekw((volatile BYTE *)p + 8);
+    lf->lfItalic = p[10]; lf->lfUnderline = p[11]; lf->lfStrikeOut = p[12];
+    lf->lfCharSet = p[13]; lf->lfOutPrecision = p[14]; lf->lfClipPrecision = p[15];
+    lf->lfQuality = p[16]; lf->lfPitchAndFamily = p[17];
+    for (i = 0; i < LF_FACESIZE - 1 && p[18 + i]; ++i) lf->lfFaceName[i] = (char)p[18 + i];
+    lf->lfFaceName[i] = 0;
+}
+
+static void wcd_lf32_to16(const LOGFONTA *lf, volatile BYTE *p)
+{
+    int i;
+    wow32_pokew(p + 0, (WORD)(short)lf->lfHeight);
+    wow32_pokew(p + 2, (WORD)(short)lf->lfWidth);
+    wow32_pokew(p + 4, (WORD)(short)lf->lfEscapement);
+    wow32_pokew(p + 6, (WORD)(short)lf->lfOrientation);
+    wow32_pokew(p + 8, (WORD)(short)lf->lfWeight);
+    p[10] = lf->lfItalic; p[11] = lf->lfUnderline; p[12] = lf->lfStrikeOut;
+    p[13] = lf->lfCharSet; p[14] = lf->lfOutPrecision; p[15] = lf->lfClipPrecision;
+    p[16] = lf->lfQuality; p[17] = lf->lfPitchAndFamily;
+    for (i = 0; i < 32; ++i) p[18 + i] = (i < LF_FACESIZE && lf->lfFaceName[i]) ? (BYTE)lf->lfFaceName[i] : 0;
+    p[18 + 31] = 0;
+}
+
+/* One open Find/Replace dialog: the Win32 FINDREPLACE comdlg32 keeps a pointer
+   to for the dialog's whole life, and how to reach the guest's copy. */
+#define WCD_MAX_FIND 4
+typedef struct {
+    HWND           dlg;          /* NULL = free */
+    FINDREPLACEA   fr;
+    volatile BYTE *o;            /* the guest's FINDREPLACE, host linear */
+    DWORD          seg16;        /* ...and as the guest's own 16:16 pointer */
+    WORD           owner16, hwnd16;
+} wcd_find_t;
+static wcd_find_t g_wcd_find[WCD_MAX_FIND];
+static UINT       g_wcd_frmsg = 0;     /* "commdlg_FindReplace" */
+
+/* Called by wowwin_proc for every message to a guest window it would otherwise
+   not relay. Returns 1 if it was a Find/Replace notification and was posted to
+   the guest. The dialog SENDS it (on this thread, from the pump); posting is
+   enough because the program reads everything from its own FINDREPLACE, which
+   is complete before this returns. */
+static int wowcdlg_relay(UINT msg, LPARAM lp)
+{
+    int i;
+    if (!g_wcd_frmsg || msg != g_wcd_frmsg) return 0;
+    for (i = 0; i < WCD_MAX_FIND; ++i) {
+        wcd_find_t *s = &g_wcd_find[i];
+        DWORD fl;
+        if (!s->dlg || (LPARAM)&s->fr != lp) continue;
+        fl = s->fr.Flags;
+        wcd_poked(s->o, FR16_FLAGS, fl & ~FR16_HOOKBITS);
+        wowmsg_post(s->owner16, (WORD)msg, 0, s->seg16, GetTickCount(), 0, 0);
+        if (fl & FR_DIALOGTERM) {
+            wowuser_win_t *w = wowuser_findwin(s->hwnd16);
+            if (w && w->hwnd32 == s->dlg) { w->hwnd = 0; w->hwnd32 = NULL; }
+            s->dlg = NULL;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Called by wowwin_pump for every Win32 message it drains: an open Find/Replace
+   dialog gets its keyboard (Tab, Enter, Esc) the way any modeless dialog does. */
+static int wowcdlg_isdlgmsg(MSG *m)
+{
+    int i;
+    for (i = 0; i < WCD_MAX_FIND; ++i)
+        if (g_wcd_find[i].dlg && IsWindow(g_wcd_find[i].dlg)
+            && IsDialogMessageA(g_wcd_find[i].dlg, m)) return 1;
+    return 0;
+}
+
 /*
  * ⚠ CALLED ONLY WHEN THE STUB IS COMMDLG'S. The caller checks, as it does for
  *   USER and SHELL. `0x01` is MessageBox in USER's table and GetOpenFileName here.
@@ -345,6 +476,219 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
          THREAD, and the thread that just ran the dialog is this one. So it
          reports on the call we actually made. Zero means "cancelled", which is
          what a returning-0-because-we-refused case should also say. */
+    /* ── #294: 0x0b FindText / 0x0c ReplaceText(lpFR) -- THE MODELESS ONES. ──
+         Notepad's Search > Find (#285) and Cardfile's. Same principle as the file
+         dialog: on a real XP box this lands in comdlg32, so the OS's dialog is
+         the answer. What differs is that it is MODELESS: the call returns the
+         dialog's HWND at once, the dialog stays up, and every Find Next / Replace
+         / close is SENT to the owner as the registered message
+         "commdlg_FindReplace" with lParam -> the FINDREPLACE. So three things:
+           1. the Win32 FINDREPLACE outlives the call -- it lives in a slot here,
+              and its two string pointers point straight INTO the guest's own
+              buffers (which the API requires the program to keep alive), so the
+              text the user types is already in the program's buffer;
+           2. the dialog gets a Win16 handle (a window record with no 16-bit
+              procedure), because the program keeps it and passes it to
+              IsDialogMessage in its message loop, and tests it for 0;
+           3. the notification is relayed by wowwin_proc (wowcdlg_relay) to the
+              guest's owner window with lParam = the GUEST's own 16:16 pointer,
+              after copying the flags Win32 set back into the guest's struct.
+         The message number needs no translation: the guest's
+         RegisterWindowMessage is answered by Win32's, so both sides hold the
+         same atom for "commdlg_FindReplace".
+       ⚠ The Win16 FINDREPLACE is 0x24 bytes and NOT the Win32 layout (2-byte
+         hwndOwner/hInstance) -- converted field by field, like OPENFILENAME.
+       ⚠ Hooks and templates are stripped, as for the file dialog: a 16-bit hook
+         is not callable from comdlg32. */
+    case WOWCDLG_FINDTEXT:
+    case WOWCDLG_REPLACETEXT: {
+        volatile BYTE *o = wow32_argptr(f, 0);
+        DWORD seg16 = (DWORD)wow32_argw(f, 0) | ((DWORD)wow32_argw(f, 2) << 16);
+        int repl = (f->id == WOWCDLG_REPLACETEXT);
+        wcd_find_t *s = NULL;
+        wowuser_win_t *ow, *w;
+        wowuser_class_t *c;
+        WORD hwnd16;
+        DWORD flags;
+        HWND dlg;
+        int k = 0, i;
+        wu_puts(note, notecap, &k, repl ? "ReplaceText" : "FindText");
+        if (!o || wcd_peekd(o, FR16_STRUCTSIZE) != WOW_FR16_SIZE) {
+            wu_puts(note, notecap, &k, " -- NULL or lStructSize != 0x24; refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < WCD_MAX_FIND; ++i) if (!g_wcd_find[i].dlg) { s = &g_wcd_find[i]; break; }
+        hwnd16 = wow32_peekw(o + FR16_HWNDOWNER);
+        ow = hwnd16 ? wowuser_findwin(hwnd16) : NULL;
+        c  = wowuser_find("#32770");
+        if (!s || !ow || !ow->hwnd32 || !c) {
+            wu_puts(note, notecap, &k, !s ? " -- all find slots in use"
+                                          : " -- no owner window (FindText requires one)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!g_wcd_frmsg) g_wcd_frmsg = RegisterWindowMessageA(FINDMSGSTRINGA);
+        for (i = 0; i < (int)sizeof s->fr; ++i) ((BYTE *)&s->fr)[i] = 0;
+        flags = wcd_peekd(o, FR16_FLAGS);
+        s->fr.lStructSize      = sizeof s->fr;
+        s->fr.hwndOwner        = ow->hwnd32;
+        s->fr.Flags            = flags & ~FR16_HOOKBITS;
+        s->fr.lpstrFindWhat    = (LPSTR)wow32_farat(f, o, FR16_FINDWHAT);
+        s->fr.lpstrReplaceWith = (LPSTR)wow32_farat(f, o, FR16_REPLACEWITH);
+        s->fr.wFindWhatLen     = wow32_peekw(o + FR16_FINDWHATLEN);
+        s->fr.wReplaceWithLen  = wow32_peekw(o + FR16_REPLACEWITHLEN);
+        s->fr.lCustData        = (LPARAM)wcd_peekd(o, FR16_CUSTDATA);
+        if (!s->fr.lpstrFindWhat || !s->fr.wFindWhatLen
+            || (repl && (!s->fr.lpstrReplaceWith || !s->fr.wReplaceWithLen))) {
+            wu_puts(note, notecap, &k, " -- no string buffer; refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        w = wowuser_newwin();
+        if (!w) { wu_puts(note, notecap, &k, " -- OUT OF WINDOW SLOTS");
+                  wow32_setret(f, 0); return 1; }
+        dlg = repl ? ReplaceTextA(&s->fr) : FindTextA(&s->fr);
+        if (!dlg) {
+            w->hwnd = 0;                               /* give the slot back */
+            wu_puts(note, notecap, &k, " -- comdlg32 refused (err 0x");
+            wu_puthex(note, notecap, &k, CommDlgExtendedError(), 8);
+            wu_puts(note, notecap, &k, ")");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        w->cls = (WORD)(c - g_wu_class);
+        w->style = (DWORD)GetWindowLongA(dlg, GWL_STYLE);
+        w->wndproc = 0;
+        w->parent = hwnd16; w->menu = 0; w->hinst = 0;
+        w->text[0] = 0; w->hmem = 0; w->menuitems = 0; w->dying = 0;
+        for (i = 0; i < WOWUSER_MAX_EXTRA; ++i) w->extra[i] = 0;
+        w->hwnd32 = dlg;
+        s->dlg = dlg; s->o = o; s->seg16 = seg16;
+        s->owner16 = hwnd16; s->hwnd16 = w->hwnd;
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, flags, 8);
+        if (flags & FR16_HOOKBITS)
+            wu_puts(note, notecap, &k, " (hook/template bits STRIPPED)");
+        wu_puts(note, notecap, &k, " what=");
+        wu_putq(note, notecap, &k, s->fr.lpstrFindWhat);
+        wu_puts(note, notecap, &k, " -> MODELESS dialog hwnd16=0x");
+        wu_puthex(note, notecap, &k, w->hwnd, 4);
+        wu_puts(note, notecap, &k, ", notifications as msg 0x");
+        wu_puthex(note, notecap, &k, g_wcd_frmsg, 4);
+        wow32_setret(f, w->hwnd);
+        return 1;
+    }
+
+    /* ── #294: 0x05 ChooseColor(lpCC) -- modal, the OS's dialog. Win16
+         CHOOSECOLOR is 0x20 bytes; lpCustColors points at the guest's own 16
+         COLORREFs, which are the same bytes in both worlds, so comdlg32 reads
+         and updates them in place. rgbResult and Flags are carried back. */
+    case WOWCDLG_CHOOSECOLOR: {
+        volatile BYTE *o = wow32_argptr(f, 0);
+        CHOOSECOLORA cc;
+        wowuser_win_t *ow;
+        DWORD flags;
+        int k = 0, ok, i;
+        wu_puts(note, notecap, &k, "ChooseColor");
+        if (!o || wcd_peekd(o, CC16_STRUCTSIZE) != WOW_CC16_SIZE) {
+            wu_puts(note, notecap, &k, " -- NULL or lStructSize != 0x20; refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof cc; ++i) ((BYTE *)&cc)[i] = 0;
+        ow = wowuser_findwin(wow32_peekw(o + CC16_HWNDOWNER));
+        flags = wcd_peekd(o, CC16_FLAGS);
+        cc.lStructSize  = sizeof cc;
+        cc.hwndOwner    = ow ? ow->hwnd32 : NULL;
+        cc.rgbResult    = wcd_peekd(o, CC16_RGBRESULT);
+        cc.lpCustColors = (COLORREF *)wow32_farat(f, o, CC16_CUSTCOLORS);
+        cc.Flags        = flags & ~CC16_HOOKBITS;
+        cc.lCustData    = (LPARAM)wcd_peekd(o, CC16_CUSTDATA);
+        if (!cc.lpCustColors) {
+            wu_puts(note, notecap, &k, " -- no lpCustColors (required); refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ok = ChooseColorA(&cc);
+        if (ok) {
+            wcd_poked(o, CC16_RGBRESULT, cc.rgbResult);
+            wcd_poked(o, CC16_FLAGS, (cc.Flags & ~CC16_HOOKBITS) | (flags & CC16_HOOKBITS));
+        }
+        wu_puts(note, notecap, &k, ok ? " -> chose 0x" : " -> cancelled; rgb 0x");
+        wu_puthex(note, notecap, &k, cc.rgbResult, 8);
+        wow32_setret(f, (DWORD)(ok ? 1 : 0));
+        return 1;
+    }
+
+    /* ── #294: 0x0f ChooseFont(lpCF) -- modal, the OS's dialog. Win16
+         CHOOSEFONT is 0x2e bytes and its LOGFONT is the 16-bit one (five INT16s,
+         eight BYTEs, a 32-byte face: 50 bytes), so the font is converted both
+         ways rather than pointed at.
+       ⚠ PRINTER FONTS NEED A PRINTER DC, and hDC here is a Win16 GDI token for a
+         DC this host may not have; the flag is narrowed to screen fonts and the
+         line says so. On a machine with no printer (the rig) stock's comdlg32
+         would show screen fonts only anyway.
+       ⚠ CF_USESTYLE's lpszStyle is a guest buffer comdlg32 writes into directly. */
+    case WOWCDLG_CHOOSEFONT: {
+        volatile BYTE *o = wow32_argptr(f, 0);
+        volatile BYTE *lf16;
+        CHOOSEFONTA cf;
+        LOGFONTA lf;
+        wowuser_win_t *ow;
+        DWORD flags;
+        int k = 0, ok, i;
+        wu_puts(note, notecap, &k, "ChooseFont");
+        if (!o || wcd_peekd(o, CF16_STRUCTSIZE) != WOW_CF16_SIZE) {
+            wu_puts(note, notecap, &k, " -- NULL or lStructSize != 0x2e; refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        lf16 = wow32_farat(f, o, CF16_LOGFONT);
+        if (!lf16) {
+            wu_puts(note, notecap, &k, " -- no lpLogFont (required); refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof cf; ++i) ((BYTE *)&cf)[i] = 0;
+        for (i = 0; i < (int)sizeof lf; ++i) ((BYTE *)&lf)[i] = 0;
+        wcd_lf16_to32(lf16, &lf);
+        ow = wowuser_findwin(wow32_peekw(o + CF16_HWNDOWNER));
+        flags = wcd_peekd(o, CF16_FLAGS);
+        cf.lStructSize = sizeof cf;
+        cf.hwndOwner   = ow ? ow->hwnd32 : NULL;
+        cf.lpLogFont   = &lf;
+        cf.iPointSize  = (INT)(short)wow32_peekw(o + CF16_POINTSIZE);
+        cf.Flags       = flags & ~CF16_HOOKBITS;
+        if (cf.Flags & CF_PRINTERFONTS) {
+            cf.Flags = (cf.Flags & ~CF_PRINTERFONTS) | CF_SCREENFONTS;
+            wu_puts(note, notecap, &k, " (printer fonts -> screen fonts: no printer DC)");
+        }
+        cf.rgbColors   = wcd_peekd(o, CF16_RGBCOLORS);
+        cf.lCustData   = (LPARAM)wcd_peekd(o, CF16_CUSTDATA);
+        cf.lpszStyle   = (LPSTR)wow32_farat(f, o, CF16_STYLE);
+        if (!cf.lpszStyle) cf.Flags &= ~CF_USESTYLE;
+        cf.nSizeMin    = (INT)(short)wow32_peekw(o + CF16_SIZEMIN);
+        cf.nSizeMax    = (INT)(short)wow32_peekw(o + CF16_SIZEMAX);
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, flags, 8);
+        wu_puts(note, notecap, &k, " face="); wu_putq(note, notecap, &k, lf.lfFaceName);
+        ok = ChooseFontA(&cf);
+        if (ok) {
+            wcd_lf32_to16(&lf, lf16);
+            wow32_pokew(o + CF16_POINTSIZE, (WORD)cf.iPointSize);
+            wcd_poked(o, CF16_RGBCOLORS, cf.rgbColors);
+            wow32_pokew(o + CF16_FONTTYPE, (WORD)cf.nFontType);
+            wcd_poked(o, CF16_FLAGS, (cf.Flags & ~CF16_HOOKBITS) | (flags & CF16_HOOKBITS));
+            wu_puts(note, notecap, &k, " -> chose ");
+            wu_putq(note, notecap, &k, lf.lfFaceName);
+            wu_puts(note, notecap, &k, " pt10=0x");
+            wu_puthex(note, notecap, &k, (DWORD)cf.iPointSize, 4);
+        } else {
+            wu_puts(note, notecap, &k, " -> cancelled (or failed)");
+        }
+        wow32_setret(f, (DWORD)(ok ? 1 : 0));
+        return 1;
+    }
+
     case WOWCDLG_EXTENDEDERROR: {
         DWORD e = CommDlgExtendedError();
         int k = 0;
