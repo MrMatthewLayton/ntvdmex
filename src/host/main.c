@@ -26173,12 +26173,34 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
    ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
      depth limit. A run that stops without returning unwinds its frame and says so. */
 static int g_ww_nested = 0;
+/* ── s89 (#302): …and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
+     stack below the arguments and its far pointer written into args[blobarg..+1]
+     (high word first, as wowcall_enter does for WM_CREATE). After the procedure
+     returns the same bytes are copied back into `blob`: WM_MEASUREITEM's answer is
+     written INTO the structure. They are intact -- the callee's frame lives below
+     the arguments, and nothing runs between the return and the read. */
+/* ★ POINTERS INSIDE THE STRUCTURE (`fix`, `nfix`): a CREATESTRUCT names its window
+     text and class by far pointer, and the strings travel in the same block. Each
+     `fix[i]` is an offset in `blob` holding a WORD offset WITHIN the blob; it is
+     rewritten as the far pointer ss:(where the blob landed + that offset) -- known
+     only here, because only here is SS:SP known. */
+static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
+                              WORD hwnd, WORD msg, WORD *res,
+                              BYTE *blob, int blobn, int blobarg,
+                              const int *fix, int nfix);
 static int wow_call16_sync(DWORD proc, WORD ds, const WORD *args, int n,
                            WORD hwnd, WORD msg, WORD *res)
 {
+    return wow_call16_sync_ex(proc, ds, args, n, hwnd, msg, res, NULL, 0, -1, NULL, 0);
+}
+static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
+                              WORD hwnd, WORD msg, WORD *res,
+                              BYTE *blob, int blobn, int blobarg,
+                              const int *fix, int nfix)
+{
     volatile BYTE *tib = g_tib_dbg;
     int depth0 = g_wc_depth, ok;
-    WORD sink = 0, rsel;
+    WORD sink = 0, rsel, blobsp = 0;
     DWORD ssb;
     unsigned ph;
     if (!tib || !g_dpmi_pm || !g_wow_launch || !g_dosm || !g_running) return 0;
@@ -26187,8 +26209,23 @@ static int wow_call16_sync(DWORD proc, WORD ds, const WORD *args, int n,
     rsel = wow_callback_selector();
     ssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
     if (!rsel || !ssb) return 0;
+    if (blob && blobn > 0) {
+        WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+        int fi;
+        blobsp = (WORD)((VDM_REG(tib, VTIB_ESP) & 0xFFFF) - ((blobn + 1) & ~1));
+        for (fi = 0; fix && fi < nfix; ++fi) {
+            int o = fix[fi];
+            WORD rel;
+            if (o < 0 || o + 4 > blobn) continue;
+            rel = (WORD)(blob[o] | (blob[o + 1] << 8));
+            rel = (WORD)(blobsp + rel);
+            blob[o] = (BYTE)rel; blob[o + 1] = (BYTE)(rel >> 8);
+            blob[o + 2] = (BYTE)ss; blob[o + 3] = (BYTE)(ss >> 8);
+        }
+    }
     if (!wowcall_enter(tib, ssb, rsel, proc, ds, args, n, 0, WOWCALL_RET_KEEP, &sink,
-                       hwnd, msg, NULL, 0, -1, wowdlg_sel_absent((WORD)(proc >> 16))))
+                       hwnd, msg, blob, blob ? blobn : 0, blob ? blobarg : -1,
+                       wowdlg_sel_absent((WORD)(proc >> 16))))
         return 0;
     ++g_ww_nested;
     for (ph = 0; ph < 500000 && g_wc_depth > depth0 && g_running; ++ph) {
@@ -26218,6 +26255,11 @@ static int wow_call16_sync(DWORD proc, WORD ds, const WORD *args, int n,
         q = zput(q, " (msg 0x"); q = zhex(q, msg);
         q = zput(q, ") did not return -- frame unwound, Windows' default used\r\n");
         log_append(LOG_PATH, b, q);
+    }
+    if (ok && blob && blobn > 0) {
+        int i;
+        for (i = 0; i < blobn; ++i)
+            blob[i] = *(volatile BYTE *)(ULONG_PTR)(ssb + (DWORD)(WORD)(blobsp + i));
     }
     if (res) *res = sink;
     return ok;
@@ -26275,9 +26317,104 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     return 0;
 }
 
+/* ── s89 (#302 M3): OWNER-DRAW, ANSWERED BY THE PROGRAM. Windows SENDS the four
+     owner-draw messages to a control's parent and needs the answer before it goes
+     on -- the control's size before it is laid out (MEASUREITEM), the pixels before
+     the paint ends (DRAWITEM) -- so they go through the nested run like WM_CTLCOLOR,
+     each with its structure converted to the Win16 layout on the guest's stack:
+       DRAWITEMSTRUCT    26 bytes: 5 WORDs, hwndItem, hDC (a DC token), RECT of 4
+                         INT16s, DWORD itemData  (Win32: 48)
+       MEASUREITEMSTRUCT 14 bytes: 5 WORDs, DWORD itemData -- width/height COPIED BACK
+       DELETEITEMSTRUCT  12 bytes: 3 WORDs, hwndItem, DWORD itemData
+       COMPAREITEMSTRUCT 18 bytes: 2 WORDs, hwndItem, id1, DWORD data1, id2, DWORD
+                         data2 -- the answer is the return value (-1/0/1)
+     Win16 itemState has only the first five ODS_ bits. A refusal (no procedure, no
+     nested run possible) leaves Windows' own handling. */
+static void od_w(BYTE *b, int o, WORD v) { b[o] = (BYTE)v; b[o + 1] = (BYTE)(v >> 8); }
+static void od_d(BYTE *b, int o, DWORD v) { od_w(b, o, (WORD)v); od_w(b, o + 2, (WORD)(v >> 16)); }
+static WORD od_rw(const BYTE *b, int o) { return (WORD)(b[o] | (b[o + 1] << 8)); }
+
+static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, int *handled)
+{
+    wowuser_win_t *w = wowuser_findwin(h16);
+    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WORD args[5], res = 0, dtok = 0;
+    BYTE b[32];
+    int n = 0, i, made;
+    *handled = 0;
+    if (!proc || !lp) return 0;
+    for (i = 0; i < (int)sizeof b; ++i) b[i] = 0;
+    switch (msg) {
+    case WM_DRAWITEM: {
+        const DRAWITEMSTRUCT *d = (const DRAWITEMSTRUCT *)lp;
+        dtok = wowgdi_h16((HGDIOBJ)d->hDC, WOWGDI_KIND_DC);
+        if (!dtok) return 0;
+        od_w(b, 0, (WORD)d->CtlType); od_w(b, 2, (WORD)d->CtlID);
+        od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, (WORD)d->itemAction);
+        od_w(b, 8, (WORD)(d->itemState & 0x1F));
+        od_w(b, 10, wowwin_hwnd16(d->hwndItem)); od_w(b, 12, dtok);
+        od_w(b, 14, (WORD)d->rcItem.left);  od_w(b, 16, (WORD)d->rcItem.top);
+        od_w(b, 18, (WORD)d->rcItem.right); od_w(b, 20, (WORD)d->rcItem.bottom);
+        od_d(b, 22, (DWORD)d->itemData);
+        n = 26; break;
+    }
+    case WM_MEASUREITEM: {
+        const MEASUREITEMSTRUCT *m = (const MEASUREITEMSTRUCT *)lp;
+        od_w(b, 0, (WORD)m->CtlType); od_w(b, 2, (WORD)m->CtlID);
+        od_w(b, 4, (WORD)m->itemID);  od_w(b, 6, (WORD)m->itemWidth);
+        od_w(b, 8, (WORD)m->itemHeight); od_d(b, 10, (DWORD)m->itemData);
+        n = 14; break;
+    }
+    case WM_DELETEITEM: {
+        const DELETEITEMSTRUCT *d = (const DELETEITEMSTRUCT *)lp;
+        od_w(b, 0, (WORD)d->CtlType); od_w(b, 2, (WORD)d->CtlID);
+        od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, wowwin_hwnd16(d->hwndItem));
+        od_d(b, 8, (DWORD)d->itemData);
+        n = 12; break;
+    }
+    case WM_COMPAREITEM: {
+        const COMPAREITEMSTRUCT *c = (const COMPAREITEMSTRUCT *)lp;
+        od_w(b, 0, (WORD)c->CtlType); od_w(b, 2, (WORD)c->CtlID);
+        od_w(b, 4, wowwin_hwnd16(c->hwndItem));
+        od_w(b, 6, (WORD)c->itemID1); od_d(b, 8, (DWORD)c->itemData1);
+        od_w(b, 12, (WORD)c->itemID2); od_d(b, 14, (DWORD)c->itemData2);
+        n = 18; break;
+    }
+    default: return 0;
+    }
+    args[0] = h16; args[1] = (WORD)msg; args[2] = (WORD)wp;
+    args[3] = 0; args[4] = 0;                    /* lParam: the structure's far pointer */
+    made = wow_call16_sync_ex(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                              args, 5, h16, (WORD)msg, &res, b, n, 3, NULL, 0);
+    if (dtok) wowgdi_forget(dtok);
+    if (!made) return 0;
+    *handled = 1;
+    if (msg == WM_MEASUREITEM) {
+        MEASUREITEMSTRUCT *m = (MEASUREITEMSTRUCT *)lp;
+        m->itemWidth  = od_rw(b, 6);
+        m->itemHeight = od_rw(b, 8);
+        return TRUE;
+    }
+    if (msg == WM_COMPAREITEM) return (LRESULT)(short)res;
+    return (LRESULT)(res ? TRUE : FALSE);
+}
+
 /* s89 (#305 M10): a message SENT to a guest window, now -- its own procedure and
    instance chosen exactly as DispatchMessage chooses them. wowuser_destroy uses it
    so WM_DESTROY arrives while the window and its children still exist. */
+/* ...and with a structure as lParam (see wow_call16_sync_ex for `fix`). */
+static int wow_send16_blob(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
+                           const int *fix, int nfix, WORD *res)
+{
+    wowuser_win_t *w = wowuser_findwin(h16);
+    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WORD args[5];
+    if (!proc) return 0;
+    args[0] = h16; args[1] = msg; args[2] = wp; args[3] = 0; args[4] = 0;
+    return wow_call16_sync_ex(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                              args, 5, h16, msg, res, blob, n, 3, fix, nfix);
+}
+
 static int wow_send16_now(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res)
 {
     wowuser_win_t *w = wowuser_findwin(h16);
@@ -29826,6 +29963,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
     g_ww_send16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
+    g_ww_ownerdraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
+    g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────

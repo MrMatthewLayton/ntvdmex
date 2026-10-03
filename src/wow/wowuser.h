@@ -3280,6 +3280,10 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
    (main.c wires this to wow_call16_sync with the window's own procedure and
    instance, exactly as DispatchMessage would choose them). 0 = could not. */
 static int (*g_wu_send16)(WORD hwnd, WORD msg, WORD wp, DWORD lp, WORD *res);
+/* ...and with a structure as lParam, placed on the guest's stack; `fix` lists the
+   far pointers inside it that point back into it (main.c: wow_send16_blob). */
+static int (*g_wu_send16b)(WORD hwnd, WORD msg, WORD wp, BYTE *blob, int n,
+                           const int *fix, int nfix, WORD *res);
 
 static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
 {
@@ -4136,6 +4140,44 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                          no text at all (s89). */
                     if (dfont && ic->sysclass)
                         SendMessageA(cw->hwnd32, WM_SETFONT, (WPARAM)dfont, FALSE); }
+            }
+            /* ── ★★★ #302: AN APPLICATION-CLASS CONTROL IS TOLD IT WAS CREATED. ────
+                 Measured on Sound Recorder (s89): its transport buttons are its own
+                 class `SButton`, whose WM_CREATE loads the bitmap its text names
+                 ("#Rewind" -> BITMAP REWIND) and keeps it in window word 6; its
+                 paint reads word 6, finds 0, and falls back to drawing the text --
+                 the "#Rewind" the user saw. No control built from a TEMPLATE ever
+                 got WM_CREATE (CreateWindow's path sends it; this loop did not), so
+                 every custom control in every dialog started uninitialised.
+                 Sent now, through the nested run, as the dialog manager does: one
+                 per control, in template order, before WM_INITDIALOG. The Win16
+                 CREATESTRUCT (34 bytes, the CreateWindow argument block's order --
+                 see wowuser_want_create) is followed by the text and class strings
+                 it points at. A -1 answer fails the control, as on Windows. */
+            if (cw->hwnd32 && cw->wndproc && ic && !ic->sysclass && g_wu_send16b) {
+                BYTE cs[34 + 64 + 64];
+                static const int CSFIX[2] = { 22, 26 };    /* lpszName, lpszClass */
+                int q, tl = 0, cl = 0;
+                WORD r16 = 0;
+                for (q = 0; q < (int)sizeof cs; ++q) cs[q] = 0;
+                cs[4]  = (BYTE)hinst;  cs[5]  = (BYTE)(hinst >> 8);       /* hInstance  */
+                cs[6]  = (BYTE)iid;    cs[7]  = (BYTE)(iid >> 8);         /* hMenu = id */
+                cs[8]  = (BYTE)w->hwnd; cs[9] = (BYTE)(w->hwnd >> 8);     /* hwndParent */
+                cs[10] = (BYTE)cw->cy; cs[11] = (BYTE)(cw->cy >> 8);
+                cs[12] = (BYTE)cw->cx; cs[13] = (BYTE)(cw->cx >> 8);
+                cs[14] = (BYTE)cw->y;  cs[15] = (BYTE)(cw->y >> 8);
+                cs[16] = (BYTE)cw->x;  cs[17] = (BYTE)(cw->x >> 8);
+                cs[18] = (BYTE)istyle; cs[19] = (BYTE)(istyle >> 8);
+                cs[20] = (BYTE)(istyle >> 16); cs[21] = (BYTE)(istyle >> 24);
+                while (tl < 63 && cw->text[tl] && tl < (int)sizeof cw->text) { cs[34 + tl] = (BYTE)cw->text[tl]; ++tl; }
+                while (cl < 63 && icls[cl]) { cs[34 + 64 + cl] = (BYTE)icls[cl]; ++cl; }
+                cs[22] = 34;  cs[23] = 0;                 /* -> fixed up to ss:sp+34 */
+                cs[26] = 34 + 64; cs[27] = 0;
+                if (g_wu_send16b(cw->hwnd, WM_CREATE16, 0, cs, (int)sizeof cs,
+                                 CSFIX, 2, &r16) && r16 == 0xFFFF) {
+                    DestroyWindow(cw->hwnd32);
+                    cw->hwnd32 = NULL; cw->hwnd = 0; --made;
+                }
             }
         }
 

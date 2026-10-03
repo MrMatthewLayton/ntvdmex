@@ -206,6 +206,10 @@ static LRESULT (*g_ww_ctlcolor)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp
 /* s89 (#300): any message SENT to a guest window now, through the same nested run
    (main.c: wow_send16_now). 0 = it could not run; the caller then posts. */
 static int (*g_ww_send16)(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res);
+/* s89 (#302): owner-draw (WM_DRAWITEM/MEASUREITEM/DELETEITEM/COMPAREITEM), the
+   structures converted and the program asked through the nested run (main.c). */
+static LRESULT (*g_ww_ownerdraw)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp,
+                                 int *handled);
 
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -553,6 +557,14 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          program must answer each one (SetScrollPos, redraw) before the next, or
          the bar snaps back and the content moves only on release. Posted only if
          a nested call cannot run here. DefWindowProc does nothing with them. */
+    case WM_DRAWITEM: case WM_MEASUREITEM: case WM_DELETEITEM: case WM_COMPAREITEM:
+        if (h16 && g_ww_ownerdraw) {
+            int handled = 0;
+            LRESULT r = g_ww_ownerdraw(h, h16, msg, wp, lp, &handled);
+            ++g_ww_msgs;
+            if (handled) return r;
+        }
+        break;
     case WM_HSCROLL: case WM_VSCROLL:
         if (h16) {
             WORD code  = (WORD)LOWORD(wp);
