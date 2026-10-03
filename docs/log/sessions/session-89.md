@@ -89,3 +89,40 @@ New tool `scripts/bm/w16pair.bat`: one program under ours, then stock, with scre
 Findings: USER's CreateDialog routine `seg1:0x4b4a` (lParam at frame +6); GDI's
 dispatch never acted on `f.enumreq`; Win16 control messages overlap by class.
 Open (in #162): WM_CTLCOLOR, WM_DRAWITEM, #278, Media Player, XP theme vs classic frames.
+
+## Afternoon: the Win16 surface inventory, then filling it (user: "build the inventory, and continue")
+The user's proposal: work **library-first**, from a complete inventory of what Windows 3.1
+exposes. Epic **#292**, with batches **#293–#305**.
+
+- **`tools/ne/wowinventory.py`** → [`docs/inventory/win16-surface.md`](../../inventory/win16-surface.md).
+  It covers every numbered 16→32 call in 13 modules (XP's thunk copies, not 3.1's), 1256 ids in all.
+  Each row gives:
+  - the export name;
+  - Wine's argument types (kind: values / pointer / callback);
+  - whether the call is handled, taken from the dispatcher `case`s (name-table cases excluded) **and** from the rig logs (`--logs=`), because main.c answers ids that the switches never see;
+  - the shelf programs that reach it, including through their own 16-bit DLLs;
+  - how often the rig **stepped over** it.
+  
+  It started at 79 gaps; after this round it is 75.
+- **[`docs/inventory/win16-messages.md`](../../inventory/win16-messages.md)** is kept by hand, built from a full survey of `src/wow/`. It records every message by direction, plus 13 message gaps (M1–M13).
+- **Filled and verified on the rig:**
+
+| # | What | How it was verified |
+|---|---|---|
+| #293 ✅ | WriteProfileString / WritePrivateProfileString / WriteOutProfiles (14 programs never saved settings) | `tools/wintest/w_kprof`: **12/12 AGREE with stock** |
+| #305 M10 | DestroyWindow **sends** WM_DESTROY while the window and its children exist | Charmap now saves `Font=Symbol` (it was empty: it asks its combo box in WM_DESTROY); clean exits across 13 programs |
+| #294 | FindText/ReplaceText (modeless: notification relayed with the guest's FINDREPLACE), ChooseFont, ChooseColor | Notepad Find end to end (`runs/s89/find4`): Notepad's own "Cannot find "abc""; Write's Font dialog (`drive1`) |
+| — | COMMDLG and KEYBOARD anchored by their **whole** stub tables | FindText had been "?'s table" until a program called GetOpenFileName (the SHELL anchor trap again) |
+| #300 ✅ | WM_HSCROLL/VSCROLL **sent** from the tracking loop and repacked; EnableScrollBar | Paintbrush: position 0→0a→14→1e, H 0→8 |
+| #301 / #303 / #304 | BM_* to buttons; focus messages carry the guest's hwnd; owner-draw GETTEXT no longer writes through a 16:16 pointer | implemented; no shelf program exercises them yet |
+| #302 | owner-draw messages through the nested run; **template-built application controls get WM_CREATE** | rig run `inv4` pending: Sound Recorder's SButton loads its bitmap in WM_CREATE, and no template control had ever received one |
+
+- **Tooling.**
+  - `wow_call16_sync_ex` takes a structure in and out, with far-pointer fix-ups.
+  - Two new hooks: `wow_send16_now` and `wow_send16_blob`.
+  - New rigshot verbs: `tclick` (focus a window by clicking its title bar) and `sbarrow` (click a scroll bar's arrow at the position `GetScrollBarInfo` reports).
+  - `scripts/bm/w16drive.bat` drives any program from a step file.
+  - `neres.py` now decodes named menus.
+- **Found along the way.**
+  - **#306**: after Calc closed, its WinHelp kept the host alive at 100% CPU for 30 minutes. That host was ended by PID; its log is in `runs/s89/linger_calc_2220.log`.
+  - XP refuses `SetForegroundWindow` to the rig's background process, so keys sent after `fg` alone go to the wrong window. Use `tclick`.
