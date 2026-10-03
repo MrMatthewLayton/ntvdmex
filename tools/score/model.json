@@ -93,9 +93,9 @@
     {
      "id": "guest-command",
      "w": 2,
-     "value": 0.7,
+     "value": 0.9,
      "what": "MS-DOS 6.22 COMMAND.COM as a guest",
-     "evidence": "runs, EXECs and returns; GAPS: $p prompt (#134), XP's COMMAND.COM exits (#135)"
+     "evidence": "#134 and #135 CLOSED 2026-09-27, both USER-CONFIRMED: XP's own COMMAND.COM interactive (s79), DIR/EXIT/the /P prompt fixed (s81: 14594a2, 1ab02af); EXEC does not clobber AH=47h (p_curdir, all hosts identical). The ledger still listed both as gaps at s90 -- corrected. 0.9: 6.22's own COMMAND.COM $p-after-EXEC was not re-checked by hand."
     },
     {
      "id": "guest-zar",
@@ -177,9 +177,9 @@
     {
      "id": "vesa-pm",
      "w": 1,
-     "value": 0.0,
+     "value": 0.9,
      "what": "VESA 4F0A PM bank switching",
-     "evidence": "#53"
+     "evidence": "#53 CLOSED 2026-10-02, USER-CONFIRMED (s87): graphics via GDI+DirectDraw (VGA+VESA) in Doom, Duke3D, ZAR, Mario, Skyroads correct and smooth; merged 130d802, gated A/B x2 + full parity sweep. The ledger still read 0 at s90 -- corrected. 0.9: the remainder is #273 (real-mode WinFuncPtr bank switch NULL, no VBE 3.0 PMID)."
     }
    ]
   },
@@ -225,9 +225,9 @@
     {
      "id": "msg-bridge",
      "w": 4,
-     "value": 1.0,
+     "value": 0.9,
      "what": "Message queue + bridging",
-     "evidence": "a host keystroke reaches the guest's own window procedure"
+     "evidence": "s90 CORRECTION DOWNWARD, on docs/inventory/win16-messages.md: the bridge carries keys, mouse, paint, focus, scroll (sent from the tracking loop), owner-draw (nested), WM_CTLCOLOR, WM_SETTEXT to the window's own procedure, and since s90 the MM_* notifications, EM_ pointer/struct messages and LB_/CB_ structure messages (w_ctl 30/30 = stock). Still open: M8-M13 (#305 -- WM_SETFONT, activation, WM_GETMINMAXINFO, focus/size posted not sent, dialog keys, WM_DROPFILES, WM_MDI*), EM_SETWORDBREAK, subclassing refused (#308). Was 1.0 with those open."
     },
     {
      "id": "real-hwnds",
@@ -246,9 +246,9 @@
     {
      "id": "commdlg",
      "w": 2,
-     "value": 1.0,
+     "value": 0.9,
      "what": "Common dialogs (File Open / Save As)",
-     "evidence": "Paint's Save As and Notepad's Open drive the real XP dialogs"
+     "evidence": "s90 CORRECTION DOWNWARD, on the s89 inventory's evidence: FindText/ReplaceText/ChooseFont/ChooseColor/GetOpen/GetSaveFileName answered (Notepad Find user-confirmed s89), but PrintDlg (COMMDLG 0x14) is still stepped over -- 7 of 8 ids (#294). Also s90: a NULL lpstrInitialDir now opens in the task's directory, as 3.1 did. Was 1.0 while PrintDlg was unanswered."
     },
     {
      "id": "gdi-drawing",
@@ -260,9 +260,9 @@
     {
      "id": "flat-thunks",
      "w": 4,
-     "value": 0.25,
+     "value": 0.85,
      "what": "Generic 16:16<->flat thunking (#5)",
-     "evidence": "per-service and ad hoc; no generic mechanism. Fine at 2 guests, not at 20"
+     "evidence": "s90 (2026-10-03), RIG-VERIFIED BOTH DIRECTIONS (#5 closed). 16->32: LoadLibraryEx32W, GetProcAddress32W, FreeLibrary32W, GetVDMPointer32W, CallProc32W, _CallProcEx32W -- tools/wintest/w_gthunk 16/16 EQUAL TO STOCK, including the parameter order and the address-conversion mask's bit order (stock disagreed with the documented guess on 2 cases; fixed). 32->16: bin\\wowshim\\WOW32.DLL + NTVDM.EXE, the modules a thunk DLL finds BY NAME (WOWGetVDMPointer, WOWHandle16/32, call_ica_hw_interrupt -> PM IRQ delivery). END TO END: XP's own 16-bit MMSYSTEM drives XP's 32-bit winmm through all of it -- Sound Recorder opens, plays (Stopped -> Playing 0.98 s -> Stopped 2.00 s) and gets MM_WOM_DONE. 0.85 and not 1.0: WOWCallback16(Ex) and the WOWGlobal*16 family answer 0 (#309) -- no shelf program uses them yet."
     },
     {
      "id": "menu-defect",
@@ -336,16 +336,16 @@
     {
      "id": "serial-vdd",
      "w": 2,
-     "value": 0.85,
+     "value": 0.9,
      "what": "Serial/parallel VDDs",
-     "evidence": "#9 s56. src/vdd/vdd_comm.c is a real 8250/16550A -- RBR/THR, IER, IIR/FCR, LCR, MCR, LSR, MSR, SCR, the divisor latch behind DLAB, a 256-byte receive ring, IRQ4/3 gated on OUT2 -- plus the parallel side's data/status/control at 0x378, where the byte is emitted on the RISING EDGE OF STROBE. The gap was never `INT 14h is missing`: it answered since GH #45, but 0x3F8.. was UNCLAIMED (so a guest driving the hardware read 0xFF from every register), receive returned TIMEOUT unconditionally because there was nothing to receive from, and transmit wrote to g_serial -- THE HOST'S OWN DEBUG CHANNEL. INT 14h is now claimed BY the VDD, so the BIOS and the registers cannot disagree, and the equipment word is COMPUTED from the VDD (both INT 11h arms had a comment claiming `one serial` over a constant whose serial bits were 0). MEASURED off-VM 55/55 (tools/dostest/comm_test.c, built around local loopback because that is the one part of a UART establishable with no peer or cable) and ON THE RIG (tools/dostest/comport.asm): EQUIP=4421 SER=2, BDA COM1=03F8, SCRATCH OK, LOOP TX=5A RX=5A OK, DTR>DSR / RTS>CTS / OUT1>RI / OUT2>DCD all OK, BIOS14 TX=5A RX=5A OK, LPT1 STATUS=D8 OK -- and both spools on the box hold what the guest sent. GAPS, and they are why this is not 1.0: transmit goes to a SPOOL FILE only, with no passthrough to a real \\\\.\\COMn and no settings UI to choose; COM3/COM4 and LPT2/LPT3 are not fitted; baud is stored but paces nothing (deliberate, see the header); and no guest has yet been driven through it end to end -- TERMINAL's Default Serial Port dialog is the obvious next test."
+     "evidence": "#9 s56. src/vdd/vdd_comm.c is a real 8250/16550A -- RBR/THR, IER, IIR/FCR, LCR, MCR, LSR, MSR, SCR, the divisor latch behind DLAB, a 256-byte receive ring, IRQ4/3 gated on OUT2 -- plus the parallel side's data/status/control at 0x378, where the byte is emitted on the RISING EDGE OF STROBE. The gap was never `INT 14h is missing`: it answered since GH #45, but 0x3F8.. was UNCLAIMED (so a guest driving the hardware read 0xFF from every register), receive returned TIMEOUT unconditionally because there was nothing to receive from, and transmit wrote to g_serial -- THE HOST'S OWN DEBUG CHANNEL. INT 14h is now claimed BY the VDD, so the BIOS and the registers cannot disagree, and the equipment word is COMPUTED from the VDD (both INT 11h arms had a comment claiming `one serial` over a constant whose serial bits were 0). MEASURED off-VM 55/55 (tools/dostest/comm_test.c, built around local loopback because that is the one part of a UART establishable with no peer or cable) and ON THE RIG (tools/dostest/comport.asm): EQUIP=4421 SER=2, BDA COM1=03F8, SCRATCH OK, LOOP TX=5A RX=5A OK, DTR>DSR / RTS>CTS / OUT1>RI / OUT2>DCD all OK, BIOS14 TX=5A RX=5A OK, LPT1 STATUS=D8 OK -- and both spools on the box hold what the guest sent. GAPS, and they are why this is not 1.0: transmit goes to a SPOOL FILE only, with no passthrough to a real \\\\.\\COMn and no settings UI to choose; COM3/COM4 and LPT2/LPT3 are not fitted; baud is stored but paces nothing (deliberate, see the header); and no guest has yet been driven through it end to end -- TERMINAL's Default Serial Port dialog is the obvious next test. ★ s90 (#245 closed): the 16550 receive FIFO with trigger levels and character timeout, break, loopback closing the IRQ gate (PC16550D: output pins forced inactive), THRE on ETBEI and on INT 14h AH=01 -- comm_test 77 -> 99 checks; COM3/COM4 FITTED because STOCK declares them (p_com34 under XP NTVDM: INT 11h C823, BDA 03F8 02F8 03E8 02E8 -- ours now the same four). Rig comport.com SER=4, loopback/modem lines/BIOS14/LPT1 all OK. 0.9: no passthrough to a real \\\\.\\COMn (#312); LPT layout differs from stock (3 ports, LPT1=3BCh; #311)."
     },
     {
      "id": "recovery",
      "w": 1,
-     "value": 0.9,
+     "value": 1.0,
      "what": "Recovery path when it won't start",
-     "evidence": "#132 CLOSED-but-for-safe-mode s52, PROVEN END TO END ON THE RIG: consecutive failed starts are counted and cleared only on a clean exit; at 3 the host DROPS ITS OWN IFEO Debugger value and hands the machine back to Microsoft`s ntvdm. Forced the counter to 3 and confirmed the key was genuinely gone by reg query, then restored it. 17 off-VM checks incl. `a corrupt counter must never be able to uninstall us`. GAP: SAFE mode is decided at 2 failures but does not yet skip anything"
+     "evidence": "#132 CLOSED-but-for-safe-mode s52, PROVEN END TO END ON THE RIG: consecutive failed starts are counted and cleared only on a clean exit; at 3 the host DROPS ITS OWN IFEO Debugger value and hands the machine back to Microsoft`s ntvdm. Forced the counter to 3 and confirmed the key was genuinely gone by reg query, then restored it. 17 off-VM checks incl. `a corrupt counter must never be able to uninstall us`. GAP: SAFE mode is decided at 2 failures but does not yet skip anything ★ s90 (#132 closed): SAFE MODE now skips VDD plugins, audio output (silent pump), the real speaker, the joystick thread, the WOW shims and fullscreen -- policy pinned off-VM (recovery_test 22), RIG-VERIFIED: counter=2 -> 'start mode was SAFE (...) [audio: no device, silent pump]', selftest 8/8 PASS, counter cleared by the clean exit; counter=0 -> normal [audio: WinMM]. Three-strikes self-uninstall rig-proven since s52."
     },
     {
      "id": "theming",
@@ -388,12 +388,12 @@
    "note": "s53 USER-CONFIRMED BY HAND: plays properly -- reveals cascade, flags work, the smiley restarts. Counter, timer, smiley and grid all render. Same dialog gap as SOL (Game > Preferences is a sub-dialog)"
   },
   "CLOCK.EXE": {
-   "state": "partial",
-   "note": "s53 LAUNCHES: real 336x361 window with its Settings menu; all 5 missing services implemented (GDI ExtTextOut + 4 USER) and neneeds reports 0 to do. Its ExtTextOut calls arrive with correct digit rects and return drawn. NOT done: THE FACE IS BLANK, and the shape is now pinned even though the cause is not. In 18 s: 19,929 WM_PAINT, 9,964 InvalidateRect(NULL, erase) -- EXACTLY ONE PER PAINT -- 9,964 BeginPaint/EndPaint, 69,745 GetSysColor, and only 50 WM_TIMER. So it is a paint->invalidate->paint loop at ~555/s, not a timer-driven redraw, and the drawing is erased faster than it lands. ⚠ AND IT NEVER CALLS GetCurrentTime (0 calls), so the time it compares against comes from krnl386 16-bit code reading the BDA tick with NO THUNK TO OBSERVE. ▶ NEXT STEP: instrument the BDA tick RATE AS THE GUEST SEES IT -- if it advances faster than 18.2 Hz, Clock believes the time changed on every idle pass, which is exactly this loop"
+   "state": "done",
+   "note": "s89 (2026-10-03) USER-CONFIRMED BY HAND: \"Clock working\" -- beige face like stock since 67e1d88. ★ prior: s53 LAUNCHES: real 336x361 window with its Settings menu; all 5 missing services implemented (GDI ExtTextOut + 4 USER) and neneeds reports 0 to do. Its ExtTextOut calls arrive with correct digit rects and return drawn. NOT done: THE FACE IS BLANK, and the shape is now pinned even though the cause is not. In 18 s: 19,929 WM_PAINT, 9,964 InvalidateRect(NULL, erase) -- EXACTLY ONE PER PAINT -- 9,964 BeginPaint/EndPaint, 69,745 GetSysColor, and only 50 WM_TIMER. So it is a paint->invalidate->paint loop at ~555/s, not a timer-driven redraw, and the drawing is erased faster than it lands. ⚠ AND IT NEVER CALLS GetCurrentTime (0 calls), so the time it compares against comes from krnl386 16-bit code reading the BDA tick with NO THUNK TO OBSERVE. ▶ NEXT STEP: instrument the BDA tick RATE AS THE GUEST SEES IT -- if it advances faster than 18.2 Hz, Clock believes the time changed on every idle pass, which is exactly this loop"
   },
   "CALC.EXE": {
-   "state": "partial",
-   "note": "s56 IT IS A CALCULATOR THAT CALCULATES: clicking 2 then sqrt displays 1.414213562373, correct to every digit shown -- driven by rigshot clicks and read off the screenshot. The blocker was ours and s55 named the WRONG PASS for it. The site was re-patched not by a scanner but by the #GP(IDT) arm, which believes the CPU error code and rewrote `CD 39` to a BOP 120,673 times. In FP-emulator code the CD nn IS the x87 instruction, and WIN87EM.DLL had installed its own PM handlers across the whole range the entire time (`set PM vector 0x34..0x3b = 0x0b57:0x0dd5`, with 0x3c and 0x3d on their own). 0x34..0x3F is now REFLECTED to that handler -- not patched, not serviced -- on the guest own stack, because the handler adjusts its own return address to step over the x87 operand bytes and every host-side mechanism we have would throw that adjustment away. 716 FP instructions reflected in one run across five vectors, and the log went from 137 MB to 2.5 MB. Window as recorded in s55: real 263x294 `Calculator`, own icon, Edit/View/Help, memory keys, all 15 SciCalc controls. NOT done ONLY because it is not yet USER-CONFIRMED -- the arithmetic itself is measured."
+   "state": "done",
+   "note": "s89 (2026-10-03) USER-CONFIRMED BY HAND: \"Calc working\" -- and its grey background matches stock. ★ prior: s56 IT IS A CALCULATOR THAT CALCULATES: clicking 2 then sqrt displays 1.414213562373, correct to every digit shown -- driven by rigshot clicks and read off the screenshot. The blocker was ours and s55 named the WRONG PASS for it. The site was re-patched not by a scanner but by the #GP(IDT) arm, which believes the CPU error code and rewrote `CD 39` to a BOP 120,673 times. In FP-emulator code the CD nn IS the x87 instruction, and WIN87EM.DLL had installed its own PM handlers across the whole range the entire time (`set PM vector 0x34..0x3b = 0x0b57:0x0dd5`, with 0x3c and 0x3d on their own). 0x34..0x3F is now REFLECTED to that handler -- not patched, not serviced -- on the guest own stack, because the handler adjusts its own return address to step over the x87 operand bytes and every host-side mechanism we have would throw that adjustment away. 716 FP instructions reflected in one run across five vectors, and the log went from 137 MB to 2.5 MB. Window as recorded in s55: real 263x294 `Calculator`, own icon, Edit/View/Help, memory keys, all 15 SciCalc controls. NOT done ONLY because it is not yet USER-CONFIRMED -- the arithmetic itself is measured."
   },
   "TASKMAN.EXE": {
    "state": "partial",
@@ -413,7 +413,7 @@
   },
   "SOUNDREC.EXE": {
    "state": "partial",
-   "note": "s55 LAUNCHES in the shelf sweep (scripts/bm/shelfsweep.bat): a real 'Sound Recorder' window, 366x212 with a 360x160 client, on the XP desktop. ★ AND IT IS ON SCREEN AND CORRECTLY LAID OUT, which it was not when the sweep first found it: its own microphone icon, File/Edit/Effects/Help, a taskbar button, the position and length panels, the wave display, the scrollbar and its five transport buttons. The sweep found it at x=-65539, entirely off screen, and the cause was ours and one line: a DLGTEMPLATE says `you place it` with 0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses -- and we scaled it as a number, MulDiv(-32768,8,4) = -65536, which AdjustWindowRect then shifted by the border to exactly -65539. NOT done: the transport buttons are blank and the `Position:`/`Length:` captions do not appear, because those are SOUNDREC's OWN control classes (`noflickertext`, `wavedisplay`, `shadowframe`) and painting them is its window procedure's job, not ours. Nothing has been recorded or played."
+   "note": "s90: OPENS, PLAYS AND FINISHES A WAV on the rig (MMSYSTEM -> winmm via generic thunks + bin\\wowshim): Stopped -> Playing 0.98 s -> Stopped 2.00 s, MM_WOM_DONE delivered. Held PARTIAL: not yet confirmed BY EAR (checks.txt). ★ prior: s55 LAUNCHES in the shelf sweep (scripts/bm/shelfsweep.bat): a real 'Sound Recorder' window, 366x212 with a 360x160 client, on the XP desktop. ★ AND IT IS ON SCREEN AND CORRECTLY LAID OUT, which it was not when the sweep first found it: its own microphone icon, File/Edit/Effects/Help, a taskbar button, the position and length panels, the wave display, the scrollbar and its five transport buttons. The sweep found it at x=-65539, entirely off screen, and the cause was ours and one line: a DLGTEMPLATE says `you place it` with 0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses -- and we scaled it as a number, MulDiv(-32768,8,4) = -65536, which AdjustWindowRect then shifted by the border to exactly -65539. NOT done: the transport buttons are blank and the `Position:`/`Length:` captions do not appear, because those are SOUNDREC's OWN control classes (`noflickertext`, `wavedisplay`, `shadowframe`) and painting them is its window procedure's job, not ours. Nothing has been recorded or played."
   },
   "PACKAGER.EXE": {
    "state": "partial",
