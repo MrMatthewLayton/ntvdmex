@@ -1051,6 +1051,7 @@ static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, 
    8-15 slave (70h-77h). Set from ANY thread; delivered on the guest thread. */
 static volatile LONG g_ica_pending = 0;
 static DWORD g_ica_raised = 0, g_ica_delivered = 0, g_ica_nohandler = 0;
+static DWORD g_wow_idlewaits = 0;              /* #306: krnl386 idle waits that blocked */
 static DWORD g_shim_state[2], g_shim_err[2];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
 static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned steps);
 /* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
@@ -21993,6 +21994,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         return 1;
                     }
                 }
+                /* ── ★ #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
+                     WAIT. The arm above handles it when another task is parked; with
+                     none it fell through to "unimplemented", answered 0 instantly, and
+                     krnl386's idle loop (`seg1:0x07a1 or ax,ax / jne` -> PeekMessage ->
+                     back) ran at 100% CPU -- measured after Calc closed with its Help
+                     task alive: 0x3e46a stepped-over calls, all of them this one.
+                     0 is still the answer (read from the call site: "carry on and
+                     look"); what was missing is the block before it. Real windows
+                     are pumped (that is where a Win16 message comes from), then up to
+                     50 ms of waiting for input -- the same bound and reasoning as the
+                     GetMessage wait -- and any IRQ a 32-bit component raised. */
+                if (f.krnl && f.id == WOW32_WOWWAITFORMSGANDEVENT) {
+                    if (!g_wm_count && !wowwin_pump(64))
+                        MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
+                    if (g_ica_pending) wow_ica_deliver(g_dosm, tib, 0);
+                    wow32_setret(&f, 0);
+                    ++g_wow32_serviced;
+                    ++g_wow_idlewaits;
+                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    if (g_wow_idlewaits <= 4) {
+                        p = zput(p, " -> SERVICED: idle wait (no parked task to yield to),"
+                                    " answered 0 after up to 50 ms\r\n");
+                        wowlog_flush(base, &p);
+                    } else p = base;
+                    return 1;
+                }
                 /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
                      Most of the surface is pure Win32 and lives in wow32.h. A few
                      need the DOS machine, so they are answered here where it is in
@@ -34622,6 +34649,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); p = zhex(p, g_ica_raised);
       p = zput(p, " delivered="); p = zhex(p, g_ica_delivered);
       p = zput(p, " nohandler="); p = zhex(p, g_ica_nohandler);
+      p = zput(p, " idlewaits(#306)="); p = zhex(p, g_wow_idlewaits);
       p = zput(p, " shims[WOW32.DLL,NTVDM.EXE]=["); p = zhex(p, g_shim_state[0]);
       p = zput(p, ","); p = zhex(p, g_shim_state[1]); p = zput(p, "] err=[");
       p = zhex(p, g_shim_err[0]); p = zput(p, ","); p = zhex(p, g_shim_err[1]); p = zput(p, "]");

@@ -26,7 +26,9 @@ start "" "%W16%\%1\%2"
 ping -n 16 127.0.0.1 >nul
 for /f "usebackq delims=" %%L in ("%RIG%\%3.txt") do call :step %%L
 >> "%R%" echo -- host alive at the end?
-tasklist /fi "imagename eq ntvdmhost.exe" >> "%R%" 2>&1
+tasklist /v /fi "imagename eq ntvdmhost.exe" >> "%R%" 2>&1
+ping -n 11 127.0.0.1 >nul
+tasklist /v /fi "imagename eq ntvdmhost.exe" >> "%R%" 2>&1
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\w16drive_%3_host.log" >nul 2>&1
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 >> "%R%" echo == done %TIME%
