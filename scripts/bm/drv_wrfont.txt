@@ -1,0 +1,16 @@
+tclick "Write - (Untitled)"
+wait 2
+key 0x12
+wait 2
+key 0x43
+wait 2
+key 0x46
+wait 5
+list
+shot drv_wrfont_0
+key 0x1B
+wait 3
+list
+close "Write - (Untitled)"
+wait 8
+list

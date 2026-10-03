@@ -185,16 +185,20 @@ def main():
             print("  %-14s %-10s file 0x%06x  %6d bytes" % (t, rid, off, ln))
         return 0
     if a[0] == "menu":
-        want = int(a[2], 0)
+        # a numbered OR a named menu (CLOCK's is "CLOCK", Write's "MW_MENU")
+        try:
+            want = int(a[2], 0)
+        except ValueError:
+            want = a[2].upper()
         for t, rid, off, ln in resources(d):
-            if t == "MENU" and rid == want:
+            if t == "MENU" and (rid == want or str(rid).upper() == str(want)):
                 ver, hdr, lines = decode_menu(d, off, ln)
                 print("MENU %s at file 0x%06x (%d bytes) version=%d header=%d"
                       % (rid, off, ln, ver, hdr))
                 for l in lines:
                     print("   " + l)
                 return 0
-        print("no MENU %d" % want)
+        print("no MENU %s" % want)
         return 1
     if a[0] == "dialog":
         want = a[2] if len(a) > 2 else None

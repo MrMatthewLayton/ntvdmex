@@ -347,6 +347,20 @@ static BOOL CALLBACK enum_tree_cb(HWND h, LPARAM lp)
     return TRUE;
 }
 
+/* sbarrow (s89): the first window in a tree (the top-level one first) with a
+   VISIBLE scroll bar of the wanted kind. */
+static HWND g_sb_hit;
+static LONG g_sb_style;
+static BOOL CALLBACK sb_find(HWND h, LPARAM lp)
+{
+    (void)lp;
+    if (IsWindowVisible(h) && (GetWindowLongA(h, GWL_STYLE) & g_sb_style)) {
+        g_sb_hit = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
     char *a = GetCommandLineA();
@@ -628,6 +642,42 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
             wsprintfA(num, "%d", (int)ht); p = sput(p, num); }
         p = sput(p, IsWindowEnabled(w) ? " enabled " : " DISABLED ");
         sput(p, arg1);
+        logline(m);
+        return 0;
+    }
+
+    /* ── `sbarrow <caption> v|h` -- click a scroll bar's DOWN / RIGHT arrow. (s89)
+         For #300: a program's OWN scroll bars send WM_VSCROLL/WM_HSCROLL to it, and
+         the only honest way to make one is a real click on a real arrow. The
+         geometry comes from GetScrollBarInfo, not from guessing coordinates; the
+         window searched is the top-level one, then its children (a canvas or a
+         document window usually owns the bar, not the frame). */
+    if (seq(verb, "sbarrow")) {
+        char m[400], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        int vert = (arg2[0] != 'h');
+        SCROLLBARINFO sbi;
+        int bx, by;
+        if (!w) { p = sput(p, "sbarrow: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        g_sb_hit = NULL; g_sb_style = vert ? WS_VSCROLL : WS_HSCROLL;
+        if (sb_find(w, 0)) EnumChildWindows(w, sb_find, 0);   /* FALSE = the frame itself has one */
+        if (!g_sb_hit) { p = sput(p, "sbarrow: no visible scroll bar in "); sput(p, arg1);
+                         logline(m); return 1; }
+        sbi.cbSize = sizeof sbi;
+        if (!GetScrollBarInfo(g_sb_hit, vert ? OBJID_VSCROLL : OBJID_HSCROLL, &sbi)) {
+            p = sput(p, "sbarrow: GetScrollBarInfo failed"); logline(m); return 1; }
+        if (vert) { bx = (sbi.rcScrollBar.left + sbi.rcScrollBar.right) / 2;
+                    by = sbi.rcScrollBar.bottom - sbi.dxyLineButton / 2 - 1; }
+        else      { by = (sbi.rcScrollBar.top + sbi.rcScrollBar.bottom) / 2;
+                    bx = sbi.rcScrollBar.right - sbi.dxyLineButton / 2 - 1; }
+        SetCursorPos(bx, by);
+        Sleep(80);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(60);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        {   char num[48];
+            wsprintfA(num, "sbarrow: clicked %d,%d on ", bx, by);
+            p = sput(p, num); p = sput(p, vert ? "V bar of " : "H bar of "); sput(p, arg1); }
         logline(m);
         return 0;
     }
