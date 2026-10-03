@@ -12,7 +12,7 @@ APPS=(
 "calc|Calculator" "cardfile|Cardfile - (Untitled)" "charmap|Character Map" "clock|Clock"
 "mplayer|Media Player" "notepad|Notepad - (Untitled)" "packager|Object Packager - Package"
 "pbrush|Paintbrush - (Untitled)" "recorder|Recorder - (Untitled)" "sol|Solitaire"
-"soundrec|Sound Recorder" "sysedit|System Configuration Editor"
+"soundrec|Sound Recorder - (Untitled)" "sysedit|System Configuration Editor"
 "taskman|Task List" "terminal|Terminal - (Untitled)" "winmine|Minesweeper" "write|Write - (Untitled)"
 )
 echo "== shelf on host $TAG"

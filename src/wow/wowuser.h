@@ -3258,7 +3258,19 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
         *kp = k;
         return 0;
     }
-    if (msg == 0x0014 && !wowuser_wp32(msg, wp16)) { *kp = k; return 0; }
+    /* WM_ERASEBKGND: Win16's DefDlgProc erases with the DIALOG colour (button
+       face; WM_CTLCOLOR(CTLCOLOR_DLG)'s default), not the class brush -- with the
+       class brush Sound Recorder came out black and Charmap white (s89). */
+    if (msg == 0x0014) {
+        HDC edc = (HDC)wowuser_wp32(msg, wp16);
+        RECT er;
+        if (!edc) { *kp = k; return 0; }
+        GetClientRect(w->hwnd32, &er);
+        FillRect(edc, &er, GetSysColorBrush(COLOR_BTNFACE));
+        wu_puts(note, notecap, &k, " -> WM_ERASEBKGND: the dialog colour, as DefDlgProc");
+        *kp = k;
+        return 1;
+    }
     r = DefWindowProcA(w->hwnd32, msg, wowuser_wp32(msg, wp16), (LPARAM)lp32);
     wu_puts(note, notecap, &k, " -> DefWindowProc (no dialog keyboard defaults) = 0x");
     wu_puthex(note, notecap, &k, (DWORD)r, 8);
@@ -3898,7 +3910,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 if (cw->hwnd32) { ++made; ++g_ww_created;
                     if (!firstfocus && (istyle & 0x00010000u)) firstfocus = cw->hwnd;  /* WS_TABSTOP */
                     /* #283: the template's font, as the dialog manager gives it */
-                    if (dfont) SendMessageA(cw->hwnd32, WM_SETFONT, (WPARAM)dfont, FALSE); }
+                    /* ⚠ SYSTEM CONTROLS ONLY. An application class is 16-bit code:
+                         the relay would hand it this raw Win32 HFONT as its 16-bit
+                         font handle, and Sound Recorder's own controls then drew
+                         no text at all (s89). */
+                    if (dfont && ic->sysclass)
+                        SendMessageA(cw->hwnd32, WM_SETFONT, (WPARAM)dfont, FALSE); }
             }
         }
 
