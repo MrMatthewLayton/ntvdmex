@@ -26154,6 +26154,102 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     return 1;
 }
 
+/* ── ★★★ THE NESTED RUN: CALL 16-BIT CODE AND WAIT FOR THE ANSWER. (s89, #162) ─────
+     Every call into Win16 code so far was ARRANGED from a BOP and taken on the way out
+     (wowcall.h): fine for anything the guest asked us to do, impossible for a question
+     WINDOWS asks mid-way through its own work -- WM_CTLCOLOR comes from inside a
+     control's paint and needs a brush before the paint can go on. This runs the call
+     to completion right here: wowcall_enter parks the current context and enters the
+     procedure exactly as a deferred callback would (unloaded segments included), and
+     this loop drives the guest -- servicing every BOP, USER and GDI calls included,
+     the way the PM IRQ injector does -- until the procedure's return stub pops that
+     frame (wowcall_leave restores the parked context), then hands the result back.
+   ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
+     depth limit. A run that stops without returning unwinds its frame and says so. */
+static int g_ww_nested = 0;
+static int wow_call16_sync(DWORD proc, WORD ds, const WORD *args, int n,
+                           WORD hwnd, WORD msg, WORD *res)
+{
+    volatile BYTE *tib = g_tib_dbg;
+    int depth0 = g_wc_depth, ok;
+    WORD sink = 0, rsel;
+    DWORD ssb;
+    unsigned ph;
+    if (!tib || !g_dpmi_pm || !g_wow_launch || !g_dosm || !g_running) return 0;
+    if (GetCurrentThreadId() != g_guest_tid) return 0;
+    if (g_wc_depth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
+    rsel = wow_callback_selector();
+    ssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+    if (!rsel || !ssb) return 0;
+    if (!wowcall_enter(tib, ssb, rsel, proc, ds, args, n, 0, WOWCALL_RET_KEEP, &sink,
+                       hwnd, msg, NULL, 0, -1, wowdlg_sel_absent((WORD)(proc >> 16))))
+        return 0;
+    ++g_ww_nested;
+    for (ph = 0; ph < 500000 && g_wc_depth > depth0 && g_running; ++ph) {
+        DWORD ev, eip, vec; int rc;
+        dpmi_arm_fault_trampoline(tib, 0);
+        dpmi_enter_pm(tib);
+        ev  = VDM_REG(tib, VTIB_EVENT);
+        eip = dpmi_pm_eip(tib);
+        if (ev == 3) continue;
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
+            int io_h;
+            HOST_LOCK();
+            io_h = host_try_io_pm(tib, &g_bus);
+            HOST_UNLOCK();
+            if (io_h) continue;
+        }
+        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        rc = dpmi_service_pm_int(g_dosm, tib, vec, 0);
+        if (rc <= 0) break;
+    }
+    --g_ww_nested;
+    ok = (g_wc_depth == depth0);
+    if (!ok) {
+        char b[160], *q = b;
+        while (g_wc_depth > depth0) wowcall_leave(tib, 0);
+        q = zput(q, "WOWNEST: ★ the nested call to 0x"); q = zhex(q, proc);
+        q = zput(q, " (msg 0x"); q = zhex(q, msg);
+        q = zput(q, ") did not return -- frame unwound, Windows' default used\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+    if (res) *res = sink;
+    return ok;
+}
+
+/* ── WM_CTLCOLOR, ANSWERED BY THE PROGRAM (s89, #162). Win32's seven WM_CTLCOLOR*
+     are Win16's one WM_CTLCOLOR (0x0019) with the type in lParam's HIGH word
+     (MSGBOX 0 .. STATIC 6, in the same order). The program gets a DC token for the
+     real DC -- SetTextColor/SetBkColor on it land on the control's own DC -- and
+     answers a brush token, mapped back to the real brush. 0 or a refusal leaves
+     Windows' default. Calc's display, Cardfile's card bar and Packager's headers are
+     drawn in colours their programs chose here. */
+static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, int *handled)
+{
+    wowuser_win_t *w = wowuser_findwin(h16);
+    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WORD  dtok, child, args[5], res = 0;
+    int   kind = -1, made;
+    HGDIOBJ br;
+    *handled = 0;
+    if (!proc) return 0;
+    child = wowwin_hwnd16((HWND)lp);
+    dtok  = wowgdi_h16((HGDIOBJ)wp, WOWGDI_KIND_DC);
+    if (!dtok) return 0;
+    args[0] = h16; args[1] = 0x0019;
+    args[2] = dtok;
+    args[3] = (WORD)(msg - WM_CTLCOLORMSGBOX);   /* lParam HIGH: the control type */
+    args[4] = child;                             /* lParam LOW: the control       */
+    made = wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                           args, 5, h16, 0x0019, &res);
+    wowgdi_forget(dtok);
+    if (!made || !res) return 0;
+    br = wowgdi_h32(res, &kind);
+    if (!br || kind != WOWGDI_KIND_OBJ) return 0;
+    *handled = 1;
+    return (LRESULT)br;
+}
+
 static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
 {
     char lb[256], *lp = lb;
@@ -29687,6 +29783,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.rtc_now = host_rtc_now;
     g_cmos.rtc_ctx = NULL;
     g_cmos.rtc_set = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
+    g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────

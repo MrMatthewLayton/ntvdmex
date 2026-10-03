@@ -193,6 +193,14 @@ static int  g_ww_isdlg, g_ww_isdlg_bounced;
 static HWND g_ww_isdlg_hwnd;
 static UINT g_ww_isdlg_msg;
 
+/* ── s89 (#162): MESSAGES WINDOWS SENDS AND NEEDS AN ANSWER TO, NOW. ─────────────
+     WM_CTLCOLOR* arrives from inside a control's paint and wants a brush back
+     before the control can draw. Answering it means running the 16-bit window
+     procedure SYNCHRONOUSLY -- the nested run (main.c, wow_call16_sync). main.c
+     wires this hook; NULL (or a refusal) leaves Windows' own default. */
+static LRESULT (*g_ww_ctlcolor)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp,
+                                int *handled);
+
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
@@ -302,6 +310,15 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          forwards it to us with its DC (0x6b), where the class brush is applied. */
     case WM_ERASEBKGND:
         if (h16) return 0;
+        break;
+    case WM_CTLCOLORMSGBOX: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORBTN:    case WM_CTLCOLORDLG:  case WM_CTLCOLORSCROLLBAR:
+    case WM_CTLCOLORSTATIC:
+        if (h16 && g_ww_ctlcolor) {
+            int handled = 0;
+            LRESULT r = g_ww_ctlcolor(h, h16, msg, wp, lp, &handled);
+            if (handled) return r;
+        }
         break;
     case WM_PAINT:
         if (h16) {
