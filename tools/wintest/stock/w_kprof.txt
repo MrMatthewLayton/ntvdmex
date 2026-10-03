@@ -1,0 +1,14 @@
+#PROBE w16kprof
+CASE=kprof.write SIG=AX AX=0001
+CASE=kprof.read.len SIG=AX AX=0005
+CASE=kprof.read.eq SIG=AX AX=0000
+CASE=kprof.delkey SIG=AX AX=0001
+CASE=kprof.delkey.len SIG=AX AX=0004
+CASE=kprof.delkey.eq SIG=AX AX=0000
+CASE=kprof.pwrite SIG=AX AX=0001
+CASE=kprof.pread.len SIG=AX AX=0005
+CASE=kprof.pread.eq SIG=AX AX=0000
+CASE=kprof.pint SIG=AX AX=002A
+CASE=kprof.delsec SIG=AX AX=0001
+CASE=kprof.delsec.int SIG=AX AX=0007
+#END

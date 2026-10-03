@@ -1,0 +1,18 @@
+#PROBE w16kmem
+CASE=kmem.galloc.ok SIG=AX AX=0001
+CASE=kmem.gsize.ge SIG=AX AX=0001
+CASE=kmem.gsize.raw SIG=AX AX=0400
+CASE=kmem.glock.ok SIG=AX AX=0001
+CASE=kmem.gmem.persist SIG=AX AX=0001
+CASE=kmem.ghandle.round SIG=AX AX=0001
+CASE=kmem.gflags.raw SIG=AX AX=0000
+CASE=kmem.grealloc.ok SIG=AX AX=0001
+CASE=kmem.grealloc.ge SIG=AX AX=0001
+CASE=kmem.grealloc.keeps SIG=AX AX=0001
+CASE=kmem.gfree SIG=AX AX=0000
+CASE=kmem.zeroinit SIG=AX AX=0001
+CASE=kmem.lalloc.ok SIG=AX AX=0001
+CASE=kmem.lsize.ge SIG=AX AX=0001
+CASE=kmem.lmem.persist SIG=AX AX=0001
+CASE=kmem.lfree SIG=AX AX=0000
+#END

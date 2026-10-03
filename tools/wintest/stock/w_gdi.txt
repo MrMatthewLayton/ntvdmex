@@ -1,0 +1,22 @@
+#PROBE w16gdi
+CASE=gdi.memdc.ok SIG=AX AX=0001
+CASE=gdi.bitspixel.raw SIG=AX AX=0020
+CASE=gdi.planes.raw SIG=AX AX=0001
+CASE=gdi.bitmap.ok SIG=AX AX=0001
+CASE=gdi.select.prev SIG=AX AX=0001
+CASE=gdi.getobject.ret SIG=AX AX=000E
+CASE=gdi.getobject.wh SIG=AX AX=0808
+CASE=gdi.getobject.fmt SIG=AX AX=0101
+CASE=gdi.patblt SIG=AX AX=0001
+CASE=gdi.getpixel.black SIG=AX AX=0000
+CASE=gdi.setpixel.ret SIG=AX AX=FFFF
+CASE=gdi.getpixel.white SIG=AX AX=FFFF
+CASE=gdi.getpixel.white.hi SIG=AX AX=00FF
+CASE=gdi.setbkcolor.prev SIG=AX AX=FFFF
+CASE=gdi.settextcolor.prev SIG=AX AX=0000
+CASE=gdi.setmapmode.prev SIG=AX AX=0001
+CASE=gdi.bkmode SIG=AX AX=0002
+CASE=gdi.stockobj SIG=AX AX=0001
+CASE=gdi.deleteobject SIG=AX AX=0001
+CASE=gdi.deletedc SIG=AX AX=0001
+#END

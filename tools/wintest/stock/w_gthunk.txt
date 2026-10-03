@@ -1,0 +1,18 @@
+#PROBE w16gthunk
+CASE=llex.k32 SIG=AX AX=0001
+CASE=llex.nosuch SIG=AX AX=0000
+CASE=gpa.muldiv SIG=AX AX=0001
+CASE=gpa.missing SIG=AX AX=0000
+CASE=cp.muldiv SIG=AX AX=0014
+CASE=cpex.muldiv SIG=AX AX=0014
+CASE=cp.lstrlen SIG=AX AX=0005
+CASE=cpex.lstrlen SIG=AX AX=0005
+CASE=cp.mask6.dst01 SIG=AX AX=6568
+CASE=cp.mask3.dst01 SIG=AX AX=0000
+CASE=cpex.mask6.dst01 SIG=AX AX=0000
+CASE=cpex.mask3.dst01 SIG=AX AX=6568
+CASE=gvp.nonnull SIG=AX AX=0001
+CASE=gvp.lstrlen SIG=AX AX=0005
+CASE=gvp.null SIG=AX AX=0000
+CASE=free.k32 SIG=AX AX=0001
+#END

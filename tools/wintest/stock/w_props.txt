@@ -1,0 +1,21 @@
+#PROBE w16props
+CASE=atom SIG=AX AX=0001
+CASE=setprop.atom SIG=AX AX=0001
+CASE=enum.ret SIG=AX AX=0001
+CASE=enum.count SIG=AX AX=0003
+CASE=enum.data0 SIG=AX AX=0011
+CASE=enum.data1 SIG=AX AX=0022
+CASE=enum.data2 SIG=AX AX=0033
+CASE=enum.seg0.nonnull SIG=AX AX=0001
+CASE=enum.seg1.nonnull SIG=AX AX=0001
+CASE=enum.seg2.nonnull SIG=AX AX=0001
+CASE=enum.name0.01 SIG=AX AX=6C41
+CASE=enum.name1.01 SIG=AX AX=6542
+CASE=enum.name2.01 SIG=AX AX=744E
+CASE=enum.stop.ret SIG=AX AX=0000
+CASE=enum.stop.count SIG=AX AX=0001
+CASE=enum.empty.ret SIG=AX AX=0000
+CASE=enum.empty.count SIG=AX AX=0000
+CASE=remove.beta SIG=AX AX=0022
+CASE=enum.after.count SIG=AX AX=0002
+#END

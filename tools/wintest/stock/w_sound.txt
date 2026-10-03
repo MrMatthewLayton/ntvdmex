@@ -1,0 +1,25 @@
+#PROBE w16sound
+CASE=snd.open SIG=AX AX=0000
+CASE=snd.open.again SIG=AX AX=0000
+CASE=snd.qsize SIG=AX AX=0000
+CASE=snd.accent SIG=AX AX=0000
+CASE=snd.note1 SIG=AX AX=0000
+CASE=snd.note.rest SIG=AX AX=0000
+CASE=snd.count2 SIG=AX AX=0000
+CASE=snd.note.bad SIG=AX AX=0000
+CASE=snd.note.voice2 SIG=AX AX=0000
+CASE=snd.vsound SIG=AX AX=0000
+CASE=snd.envelope SIG=AX AX=0000
+CASE=snd.noise SIG=AX AX=0000
+CASE=snd.thresh SIG=AX AX=0000
+CASE=snd.thstatus SIG=AX AX=0000
+CASE=snd.sync SIG=AX AX=0000
+CASE=snd.start SIG=AX AX=0000
+CASE=snd.wait SIG=AX AX=0000
+CASE=snd.count.after SIG=AX AX=0000
+CASE=snd.stop SIG=AX AX=0000
+CASE=snd.close SIG=AX AX=0000
+CASE=snd.note.closed SIG=AX AX=0000
+CASE=snd.count.closed SIG=AX AX=0000
+CASE=snd.reopen SIG=AX AX=0000
+#END

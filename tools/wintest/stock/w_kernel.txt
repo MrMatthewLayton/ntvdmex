@@ -1,0 +1,4 @@
+#PROBE w16kernel
+CASE=kernel.getversion SIG=AX AX=5F03
+CASE=kernel.getwinflags SIG=AX AX=4C29
+#END

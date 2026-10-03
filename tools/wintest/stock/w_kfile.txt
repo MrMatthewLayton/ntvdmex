@@ -1,0 +1,24 @@
+#PROBE w16kfile
+CASE=kfile.lcreat.ok SIG=AX AX=0001
+CASE=kfile.lwrite SIG=AX AX=000A
+CASE=kfile.llseek.end SIG=AX AX=000A
+CASE=kfile.lclose SIG=AX AX=0000
+CASE=kfile.lopen.ok SIG=AX AX=0001
+CASE=kfile.lread SIG=AX AX=000A
+CASE=kfile.lread.same SIG=AX AX=0001
+CASE=kfile.llseek.set SIG=AX AX=0003
+CASE=kfile.lread.at3 SIG=AX AX=3334
+CASE=kfile.lread.eof SIG=AX AX=0000
+CASE=kfile.lclose2 SIG=AX AX=0000
+CASE=kfile.of.exist SIG=AX AX=0001
+CASE=kfile.of.cbytes SIG=AX AX=0040
+CASE=kfile.of.delete SIG=AX AX=0001
+CASE=kfile.of.gone SIG=AX AX=FFFF
+CASE=kfile.of.errcode SIG=AX AX=0002
+CASE=kfile.lopen.missing SIG=AX AX=FFFF
+CASE=kfile.drivetype.c SIG=AX AX=0003
+CASE=kfile.windir.colon SIG=AX AX=0001
+CASE=kfile.windir.len SIG=AX AX=000A
+CASE=kfile.sysdir.len SIG=AX AX=0011
+CASE=kfile.sysdir.colon SIG=AX AX=0001
+#END

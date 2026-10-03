@@ -1,0 +1,20 @@
+#PROBE w16kstr
+CASE=kstr.lstrlen SIG=AX AX=0005
+CASE=kstr.lstrlen.empty SIG=AX AX=0000
+CASE=kstr.lstrcpy.ret SIG=AX AX=0001
+CASE=kstr.lstrcpy.len SIG=AX AX=0005
+CASE=kstr.lstrcat.len SIG=AX AX=000B
+CASE=kstr.lstrcat.ret SIG=AX AX=0001
+CASE=kstr.lstrcmp.lt SIG=AX AX=FFFF
+CASE=kstr.lstrcmp.gt SIG=AX AX=0001
+CASE=kstr.lstrcmp.eq SIG=AX AX=0000
+CASE=kstr.lstrcmpi.eq SIG=AX AX=0000
+CASE=kstr.lstrcpyn.len SIG=AX AX=0003
+CASE=kstr.ansiupper.char SIG=AX AX=0041
+CASE=kstr.ansilower.char SIG=AX AX=0071
+CASE=kstr.ansiupper.str SIG=AX AX=0000
+CASE=kstr.ischaralpha SIG=AX AX=0001
+CASE=kstr.ischarupper SIG=AX AX=0000
+CASE=kstr.wvsprintf.len SIG=AX AX=000B
+CASE=kstr.wvsprintf.eq SIG=AX AX=0000
+#END

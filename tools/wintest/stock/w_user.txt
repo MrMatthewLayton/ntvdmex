@@ -1,0 +1,25 @@
+#PROBE w16user
+CASE=user.setrect SIG=AX AX=0A28
+CASE=user.inflaterect SIG=AX AX=050F
+CASE=user.inflaterect.rb SIG=AX AX=232D
+CASE=user.offsetrect SIG=AX AX=0610
+CASE=user.ptinrect.in SIG=AX AX=0001
+CASE=user.ptinrect.edge SIG=AX AX=0000
+CASE=user.intersect.ret SIG=AX AX=0001
+CASE=user.intersect SIG=AX AX=0505
+CASE=user.intersect.rb SIG=AX AX=0A0A
+CASE=user.intersect.none SIG=AX AX=0000
+CASE=user.intersect.empty SIG=AX AX=0001
+CASE=user.unionrect SIG=AX AX=0014
+CASE=user.equalrect SIG=AX AX=0001
+CASE=user.setrectempty SIG=AX AX=0001
+CASE=user.desktop.ok SIG=AX AX=0001
+CASE=user.desktop.iswindow SIG=AX AX=0001
+CASE=user.iswindow.bogus SIG=AX AX=0000
+CASE=user.cxscreen.pos SIG=AX AX=0001
+CASE=user.cxscreen.raw SIG=AX AX=0690
+CASE=user.cyscreen.raw SIG=AX AX=041A
+CASE=user.mousepresent SIG=AX AX=0001
+CASE=user.dblclick.raw SIG=AX AX=01F4
+CASE=user.syscolor.window SIG=AX AX=FFFF
+#END

@@ -1,0 +1,30 @@
+#PROBE w16genum
+CASE=eobj.pen.ret SIG=AX AX=0001
+CASE=eobj.pen.count SIG=AX AX=0064
+CASE=eobj.pen.first.style SIG=AX AX=0000
+CASE=eobj.pen.first.width SIG=AX AX=0000
+CASE=eobj.brush.ret SIG=AX AX=0001
+CASE=eobj.brush.count SIG=AX AX=008C
+CASE=eobj.brush.first.style SIG=AX AX=0000
+CASE=eobj.brush.first.clr SIG=AX AX=0000
+CASE=eobj.badtype.ret SIG=AX AX=0000
+CASE=eobj.badtype.count SIG=AX AX=0000
+CASE=eobj.stop.ret SIG=AX AX=0000
+CASE=eobj.stop.count SIG=AX AX=0001
+CASE=efont.all.ret SIG=AX AX=0001
+CASE=efont.all.some SIG=AX AX=0001
+CASE=efont.all.count SIG=AX AX=003C
+CASE=efont.arial.ret SIG=AX AX=0001
+CASE=efont.arial.count SIG=AX AX=0018
+CASE=efont.arial.first.height SIG=AX AX=0024
+CASE=efont.stop.ret SIG=AX AX=0000
+CASE=efont.stop.count SIG=AX AX=0001
+CASE=pmf.create SIG=AX AX=0001
+CASE=pmf.close SIG=AX AX=0001
+CASE=pmf.before SIG=AX AX=0000
+CASE=pmf.play.ret SIG=AX AX=0001
+CASE=pmf.after.inside SIG=AX AX=FFFF
+CASE=pmf.after.edge SIG=AX AX=0000
+CASE=pmf.play.null SIG=AX AX=0000
+CASE=pmf.delete SIG=AX AX=0001
+#END
