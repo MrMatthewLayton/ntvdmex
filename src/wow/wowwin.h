@@ -295,11 +295,9 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        ⚠ WHAT THAT COSTS, STATED RATHER THAN DISCOVERED: the guest's own
          BeginPaint can no longer inherit a real update region, because this
          already consumed it. The rectangle is therefore remembered per window
-         and handed back when the guest asks -- see the paint record below. A
-         guest that paints only what it is told to will paint the right area; one
-         that relies on the DC being CLIPPED to that area is relying on something
-         this does not yet reproduce, and that is a known gap rather than a
-         surprise waiting to happen. */
+         and handed back when the guest asks -- see the paint record below. The
+         guest's BeginPaint DC is clipped to that rectangle (#287, wowuser.h), as
+         a Win16 paint DC is; only a true non-rectangular update region is lost. */
     /* ── s89 (#162, Clock): THE GUEST ERASES FIRST. In Win16 WM_ERASEBKGND goes to
          the window's procedure, and the class brush is only DefWindowProc's
          answer for a procedure that passes it on. Letting the OS erase here
