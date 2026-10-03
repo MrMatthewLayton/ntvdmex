@@ -844,8 +844,43 @@ static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
 #define WOWUSER_SYSTEMPARAMETERSINFO 0x01e3
 
 #define W1_ARG_HWND      0      /* every one-word (HWND) call                    */
-#define WFP_ARG_Y        0      /* WindowFromPoint(POINT) -- y then x, reversed  */
-#define WFP_ARG_X        2
+/* ⚠ s90: WAS y-at-+0 FROM s53 TO s90, WRITTEN FROM REASONING AND NEVER MEASURED.
+     w_misc `wfp.visible` (a visible popup at (300,500), point (350,520)) read the
+     window under stock and NOT under ours. The POINT lies in field order: x, y. */
+#define WFP_ARG_X        0      /* WindowFromPoint(POINT)                         */
+#define WFP_ARG_Y        2
+/* ── s90 (#297): the USER singles. Frames reversed as always (+0 = last param). */
+#define WOWUSER_GETCLIPBOARDFORMATNAME 0x0092 /* (fmt, buf, cch)        8 */
+#define GCFN_ARG_CCH     0
+#define GCFN_ARG_BUF     2
+#define GCFN_ARG_FMT     6
+#define WOWUSER_DLGDIRSELECT     0x0063  /* (hDlg, lpString, nIDListBox)  8 */
+#define DDS_ARG_ID       0
+#define DDS_ARG_STR      2
+#define DDS_ARG_HDLG     6
+#define WOWUSER_SETPARENT        0x00e9  /* (hwndChild, hwndNewParent)    4 */
+#define SPA_ARG_NEW      0
+#define SPA_ARG_CHILD    2
+#define WOWUSER_GETCLASSINFO     0x0194  /* (hInst, lpszClass, lpWndClass) 10 */
+#define GCI_ARG_WC       0
+#define GCI_ARG_NAME     4
+#define GCI_ARG_HINST    8
+#define WOWUSER_CHILDWINDOWFROMPOINT 0x00bf /* (hwnd, POINT) -- POINT as WFP_ 6 */
+/* ⚠ MEASURED (w_misc, s90): x at +0, y at +2 -- the POINT lies in the frame in
+     field order. The first cut copied WFP_'s y-first reading and stock disagreed
+     on both asymmetric cases. */
+#define CWFP_ARG_X       0
+#define CWFP_ARG_Y       2
+#define CWFP_ARG_HWND    4
+#define WOWUSER_CALLMSGFILTER    0x007b  /* (lpMsg, nCode)                 6 */
+/* s90 (#296): EnumProps(hwnd, proc) = 6, reversed: +0 proc, +4 hwnd. */
+#define WOWUSER_ENUMPROPS        0x001b
+#define EPR_ARG_PROC     0
+#define EPR_ARG_HWND     4
+/* GetInternalIconHeader(lp, lp) -- undocumented; stock answers 0 (w_misc `giih`). */
+#define WOWUSER_GETINTERNALICONHEADER 0x0174
+#define CMF16_ARG_CODE   0
+#define CMF16_ARG_MSG    2
 #define FW_ARG_INVERT    0
 #define FW_ARG_HWND      2
 #define KS_ARG_BUF       0      /* far pointer to 256 bytes                      */
@@ -6528,6 +6563,240 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
         wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
         wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    /* ── s90 (#297) GetClipboardFormatName(fmt, buf, cch). Format numbers cross
+         unchanged (RegisterClipboardFormat hands back the OS's own), so this is the
+         OS's answer; a predefined format has no name and answers 0 in both. */
+    case WOWUSER_GETCLIPBOARDFORMATNAME: {
+        WORD fmt = wow32_argw(f, GCFN_ARG_FMT);
+        int  cch = (int)(short)wow32_argw(f, GCFN_ARG_CCH);
+        volatile BYTE *dst = wow32_argptr(f, GCFN_ARG_BUF);
+        char nm[256];
+        int  k = 0, n = 0, i;
+        wu_puts(note, notecap, &k, "GetClipboardFormatName(0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (dst && cch > 0) {
+            n = GetClipboardFormatNameA(fmt, nm, cch < (int)sizeof nm ? cch : (int)sizeof nm);
+            if (n < 0) n = 0;
+            for (i = 0; i < n; ++i) dst[i] = (BYTE)nm[i];
+            dst[n] = 0;
+            if (n) { wu_puts(note, notecap, &k, " -> \""); wu_puts(note, notecap, &k, nm);
+                     wu_puts(note, notecap, &k, "\""); }
+        }
+        if (!n) wu_puts(note, notecap, &k, " -> 0 (no name)");
+        wow32_setret(f, (DWORD)n);
+        return 1;
+    }
+
+    /* ── s90 (#297) DlgDirSelect(hDlg, lpString, nIDListBox). The list box is a
+         REAL one that DlgDirList filled, so the selection is the OS's to read --
+         DlgDirSelectExA, which strips the brackets and appends `\` or `:` exactly
+         as Win16's does. ⚠ Win16 passes no buffer size: its contract is a buffer
+         big enough for a path, so at most 128 bytes are written (what Win16's own
+         USER copies), never more. */
+    case WOWUSER_DLGDIRSELECT: {
+        WORD hdlg = wow32_argw(f, DDS_ARG_HDLG);
+        WORD idl  = wow32_argw(f, DDS_ARG_ID);
+        volatile BYTE *dst = wow32_argptr(f, DDS_ARG_STR);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        char sel[128];
+        int  k = 0, r, i;
+        wu_puts(note, notecap, &k, "DlgDirSelect(0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, ", id=0x"); wu_puthex(note, notecap, &k, idl, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!w || !w->hwnd32 || !dst) {
+            wu_puts(note, notecap, &k, " -- no real window or no buffer; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        sel[0] = 0;
+        r = DlgDirSelectExA(w->hwnd32, sel, (int)sizeof sel, idl) ? 1 : 0;
+        for (i = 0; i < (int)sizeof sel - 1 && sel[i]; ++i) dst[i] = (BYTE)sel[i];
+        dst[i] = 0;
+        wu_puts(note, notecap, &k, " -> \""); wu_puts(note, notecap, &k, sel);
+        wu_puts(note, notecap, &k, r ? "\" (directory or drive)" : "\" (file)");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── s90 (#297) SetParent(hwndChild, hwndNewParent) -> the previous parent.
+         The real windows are re-parented by the OS, and the record's own `parent`
+         follows, because GetParent answers from the record. */
+    case WOWUSER_SETPARENT: {
+        WORD hc = wow32_argw(f, SPA_ARG_CHILD);
+        WORD hp = wow32_argw(f, SPA_ARG_NEW);
+        wowuser_win_t *c = wowuser_findwin(hc);
+        wowuser_win_t *np = hp ? wowuser_findwin(hp) : NULL;
+        WORD prev;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "SetParent(0x");
+        wu_puthex(note, notecap, &k, hc, 4);
+        wu_puts(note, notecap, &k, ", 0x"); wu_puthex(note, notecap, &k, hp, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!c || (hp && !np)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        prev = c->parent;
+        if (c->hwnd32) SetParent(c->hwnd32, np ? np->hwnd32 : NULL);
+        c->parent = hp;
+        wu_puts(note, notecap, &k, " -> was 0x"); wu_puthex(note, notecap, &k, prev, 4);
+        wow32_setret(f, prev);
+        return 1;
+    }
+
+    /* ── s90 (#297) ChildWindowFromPoint(hwnd, POINT) -- client coordinates of
+         hwnd; the parent itself when no child is there, 0 when outside it. The
+         OS answers on the real windows (it does not skip hidden or disabled ones,
+         and nor did Win16's), and the answer is translated back. */
+    case WOWUSER_CHILDWINDOWFROMPOINT: {
+        WORD  hp = wow32_argw(f, CWFP_ARG_HWND);
+        POINT pt;
+        wowuser_win_t *w = wowuser_findwin(hp);
+        HWND  r;
+        WORD  h16 = 0;
+        int   k = 0;
+        pt.x = (int)(short)wow32_argw(f, CWFP_ARG_X);
+        pt.y = (int)(short)wow32_argw(f, CWFP_ARG_Y);
+        wu_puts(note, notecap, &k, "ChildWindowFromPoint(0x");
+        wu_puthex(note, notecap, &k, hp, 4);
+        wu_puts(note, notecap, &k, ", "); wu_puthex(note, notecap, &k, (DWORD)pt.x, 4);
+        wu_puts(note, notecap, &k, ","); wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (w && w->hwnd32) {
+            r = ChildWindowFromPoint(w->hwnd32, pt);
+            h16 = !r ? 0 : (r == w->hwnd32 ? hp : wowwin_hwnd16(r));
+        }
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
+        wow32_setret(f, h16);
+        return 1;
+    }
+
+    /* ── s90 (#297) CallMsgFilter(lpMsg, nCode) -> TRUE only if a WH_MSGFILTER /
+         WH_SYSMSGFILTER hook processed the message. This host installs no Win16
+         hooks yet (SetWindowsHook, #298), so there is no filter to call and FALSE
+         is the true answer -- the same one Windows gives with no hook installed.
+         ⚠ When #298 lands, this must call the guest's chain. */
+    case WOWUSER_CALLMSGFILTER: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "CallMsgFilter(code=0x");
+        wu_puthex(note, notecap, &k, wow32_argw(f, CMF16_ARG_CODE), 4);
+        wu_puts(note, notecap, &k, ") -> FALSE (no message-filter hook installed)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── s90 (#296) EnumProps(hwnd, proc) -- proc(hwnd, lpszName, hData) once per
+         property. MEASURED against stock (w_props), and three guesses were wrong:
+         the order is OLDEST FIRST; a property set by ATOM still arrives as a STRING
+         (the atom's name -- "NtvdmexGamma" -- never a null selector); and a window
+         with no properties answers 0, not the documented -1. */
+    case WOWUSER_ENUMPROPS: {
+        WORD  hwnd = wow32_argw(f, EPR_ARG_HWND);
+        DWORD proc = wow32_argd(f, EPR_ARG_PROC);
+        int   k = 0, i, j;
+        g_we_nfont = 0;
+        for (i = 0; i < g_wu_nprop && g_we_nfont < WOWENUM_MAXFONT; ++i) {
+            const wowuser_prop_t *pr = &g_wu_prop[i];
+            BYTE *b;
+            if (pr->hwnd != hwnd || !pr->name[0]) continue;
+            b = g_we_font[g_we_nfont].b;
+            if (pr->name[0] == '#' && pr->name[5] == 0) {     /* "#xxxx" = an atom */
+                WORD a = 0;
+                for (j = 1; j < 5; ++j) {
+                    char c = pr->name[j];
+                    a = (WORD)((a << 4) | (c >= 'a' ? c - 'a' + 10 : c - '0'));
+                }
+                char an[32];
+                int  n = (int)GlobalGetAtomNameA((ATOM)a, an, (int)sizeof an);
+                if (n <= 0) { for (j = 0; j < 5; ++j) an[j] = pr->name[j]; n = 5; }
+                for (j = 0; j < n && j < 31; ++j) b[j] = (BYTE)an[j];
+                b[j] = 0;
+            } else {
+                for (j = 0; j < 31 && pr->name[j]; ++j) b[j] = (BYTE)pr->name[j];
+                b[j] = 0;
+            }
+            g_we_font[g_we_nfont].type = pr->data;
+            ++g_we_nfont;
+        }
+        wu_puts(note, notecap, &k, "EnumProps(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ") -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)g_we_nfont, 4);
+        wu_puts(note, notecap, &k, " propert(ies)");
+        if (!g_we_nfont) { wow32_setret(f, 0); return 1; }
+        wow32_setret(f, 1);                 /* the walk revises it to 0 on a stop */
+        if (!f->cbok) {
+            wu_puts(note, notecap, &k, " -- callbacks are not armed");
+            return 1;
+        }
+        if (wowenum_busy()) {
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!wowenum_begin(WOWENUM_PROPS, proc, f->gds, 0,
+                           (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), hwnd)) {
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        f->enumreq = 1;
+        return 1;
+    }
+
+    case WOWUSER_GETINTERNALICONHEADER: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetInternalIconHeader -- 0, as stock (w_misc)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── s90 (#297) GetClassInfo(hInst, lpszClass, lpWndClass) -> BOOL, filling
+         WNDCLASS16 (26 bytes): style, lpfnWndProc (16:16), cbClsExtra, cbWndExtra,
+         hInstance, hIcon, hCursor, hbrBackground, lpszMenuName, lpszClassName.
+         A program's class answers what it registered; the name pointers are the
+         caller's own lpszClass for the name, and NULL for the menu (the string
+         the program registered with is not kept at a guest address).
+         ⚠ A SYSTEM CLASS IS REFUSED (FALSE): its procedure is the OS's, and there
+           is no 16-bit address to hand a program that wants to superclass it --
+           answering TRUE with a NULL procedure would crash the first
+           CallWindowProc instead of failing here where the caller checks. */
+    case WOWUSER_GETCLASSINFO: {
+        DWORD nmp = wow32_argd(f, GCI_ARG_NAME);
+        volatile BYTE *wc = wow32_argptr(f, GCI_ARG_WC);
+        wowuser_class_t *c = NULL;
+        char nm[64];
+        int  k = 0, i;
+        nm[0] = 0;
+        wowuser_ensure_sysclasses();
+        if (!(nmp >> 16)) c = wowuser_find_atom((WORD)nmp);
+        else if (wow32_argstr(f, GCI_ARG_NAME, nm, (int)sizeof nm)) c = wowuser_find(nm);
+        wu_puts(note, notecap, &k, "GetClassInfo(\"");
+        wu_puts(note, notecap, &k, c ? c->name : nm);
+        wu_puts(note, notecap, &k, "\")");
+        if (!c || !wc || c->sysclass) {
+            wu_puts(note, notecap, &k, !c ? " -- no such class; FALSE"
+                                   : !wc ? " -- no buffer; FALSE"
+                                   : " -- a SYSTEM class: no 16-bit procedure to give; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        {
+            WORD v[13];
+            v[0] = c->style;
+            v[1] = (WORD)(c->wndproc & 0xFFFF); v[2] = (WORD)(c->wndproc >> 16);
+            v[3] = c->clsextra; v[4] = c->wndextra; v[5] = c->hinst;
+            v[6] = c->hicon; v[7] = c->hcursor; v[8] = c->hbrback;
+            v[9] = 0; v[10] = 0;                       /* lpszMenuName */
+            v[11] = (WORD)(nmp & 0xFFFF); v[12] = (WORD)(nmp >> 16);
+            for (i = 0; i < 13; ++i) { wc[i * 2] = (BYTE)v[i]; wc[i * 2 + 1] = (BYTE)(v[i] >> 8); }
+        }
+        wu_puts(note, notecap, &k, " -> TRUE proc=");
+        wu_puthex(note, notecap, &k, c->wndproc, 8);
+        wow32_setret(f, 1);
         return 1;
     }
 

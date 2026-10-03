@@ -224,6 +224,46 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         return 1;
     }
 
+    if (g_we.kind == WOWENUM_PROPS) {
+        /* EnumPropProc(HWND, LPCSTR lpszName, HANDLE hData) -- s90, #296 */
+        const wowenum_font_t *e;
+        int atom, n = 0;
+        if (g_we.idx >= g_we_nfont) {
+            wu_puts(note, cap, &k, "ENUM props complete: 0x");
+            wu_puthex(note, cap, &k, g_we.calls, 4);
+            wu_puts(note, cap, &k, " propert(ies)");
+            wowenum_end();
+            return 0;
+        }
+        e = &g_we_font[g_we.idx++];
+        atom = (e->b[0] == 0);
+        arg[0] = g_we.parent;
+        arg[1] = 0;
+        arg[2] = atom ? (WORD)(e->b[1] | (e->b[2] << 8)) : 0;   /* a string: filled */
+        arg[3] = e->type;
+        if (!atom) while (n < 31 && e->b[n]) ++n;
+        if (!rsel || !ssbase
+            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+                              0, WOWCALL_RET_KEEP, NULL, 0, 0,
+                              atom ? NULL : e->b, atom ? 0 : n + 1, 1,
+                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+            wu_puts(note, cap, &k, "ENUM props -- ★ THE CALL WAS REFUSED; the"
+                                   " enumeration ends here");
+            wowenum_end();
+            return 0;
+        }
+        if (g_wc_depth > 0) {
+            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
+            g_wc[g_wc_depth - 1].actarg = 0;
+        }
+        ++g_we.calls;
+        wu_puts(note, cap, &k, "ENUM prop -> ");
+        if (atom) { wu_puts(note, cap, &k, "atom 0x"); wu_puthex(note, cap, &k, arg[2], 4); }
+        else { wu_puts(note, cap, &k, "\""); wu_puts(note, cap, &k, (const char *)e->b);
+               wu_puts(note, cap, &k, "\""); }
+        return 1;
+    }
+
     if (g_we.kind == WOWENUM_LINE) {
         /* LineDDA(x1, y1, x2, y2, proc, data): proc(x, y, lpData) for each point
            on the line, in order. The points are computed the way a DDA does --

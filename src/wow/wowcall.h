@@ -215,6 +215,9 @@
 #define WOWENUM_FONTS     5     /* every font (family) -- EnumFontFamilies (s89) */
 #define WOWENUM_OBJECTS   6     /* every pen or brush -- EnumObjects (s90); the
                                    LOGPEN16/LOGBRUSH16 blobs reuse g_we_font[]   */
+#define WOWENUM_PROPS     7     /* every property of a window -- EnumProps (s90):
+                                   b[] = the name (b[0]==0: an atom in b[1..2]),
+                                   .type = the data handle                       */
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and

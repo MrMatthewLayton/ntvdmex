@@ -110,6 +110,12 @@
    ⚠ nIconIndex == -1 IS A COUNT QUERY, not an extraction, and it must not mint
      anything: the answer is a number, not a handle. */
 #define WOWSHELL_EXTRACTICON  0x0022
+/* s90 (#297): XP's shell.dll thunks for FindEnvironmentString (ord 38) and
+   InternalExtractIcon (ord 39) carry NO argument bytes (stub `6a 00 68 00 00 68 26 00`)
+   -- XP's WOW never implemented them. Stock answers 0 (and DX 0) to both, measured
+   in w_misc; so does this, on purpose rather than through the step-over. */
+#define WOWSHELL_FINDENVSTRING      0x0026
+#define WOWSHELL_INTERNALEXTRACTICON 0x0027
 #define EXI_ARG_INDEX    0
 #define EXI_ARG_FILE     2               /* far */
 #define EXI_ARG_HINST    6
@@ -390,6 +396,16 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
          through would ask the shell to perform the verb "" -- which is not the
          same thing and fails. The distinction between "no string" and "an empty
          string" is exactly what wow32_argstr's return value is for. */
+    case WOWSHELL_FINDENVSTRING:
+    case WOWSHELL_INTERNALEXTRACTICON: {
+        int k = 0;
+        wu_puts(note, notecap, &k, f->id == WOWSHELL_FINDENVSTRING
+                ? "FindEnvironmentString -- NULL, as stock (XP's thunk has no arguments)"
+                : "InternalExtractIcon -- 0, as stock (XP's thunk has no arguments)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
     case WOWSHELL_EXTRACTICON: {
         WORD hinst = wow32_argw(f, EXI_ARG_HINST);
         int  idx   = (int)(short)wow32_argw(f, EXI_ARG_INDEX);

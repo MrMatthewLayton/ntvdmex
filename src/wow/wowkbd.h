@@ -64,6 +64,9 @@
 #define WKB_ARG_MVTYPE 0
 #define WKB_ARG_MVCODE 2
 
+/* s90 (#297): GetKBCodePage() -- no arguments. Win32's GetKBCodePage is the OEM
+   code page (GetOEMCP), which is what Win16's answered too: 437 on a US machine. */
+#define WOWKBD_GETKBCODEPAGE 0x0084
 #define WOWKBD_ANSITOOEM   0x0005
 #define WOWKBD_OEMTOANSI   0x0006
 
@@ -101,6 +104,14 @@ static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
          the length WITHOUT it. Same in both worlds; checked rather than assumed
          because a length convention off by one writes a NUL past a guest's
          buffer. */
+    case WOWKBD_GETKBCODEPAGE: {
+        UINT cp = GetKBCodePage();
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetKBCodePage() -> ");
+        wu_puthex(note, notecap, &k, cp, 4);
+        wow32_setret(f, (DWORD)(WORD)cp);
+        return 1;
+    }
     case WOWKBD_GETKEYNAMETEXT: {
         DWORD lp  = wow32_argd(f, GKNT_ARG_LPARAM);
         WORD  cch = wow32_argw(f, GKNT_ARG_COUNT);

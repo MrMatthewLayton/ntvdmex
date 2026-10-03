@@ -776,6 +776,13 @@
      ★ PALETTEENTRY IS FOUR BYTES IN BOTH -- peRed, peGreen, peBlue, peFlags --
      so this one really is a copy, and saying which structures are identical
      matters as much as saying which are not. */
+/* s90 (#297): SetPaletteEntries -- the same frame as GetPaletteEntries (GPE_ARG_*). */
+#define WOWGDI_SETPALETTEENTRIES 0x016c  /* ord 364, 10 args */
+/* s90 (#295): the packed-DWORD extent getters. Win16 returns MAKELONG(cx, cy); Win32
+   has only the *Ex forms. One argument each (an HDC, or an HBITMAP). */
+#define WOWGDI_GETVIEWPORTEXT    0x005e  /* ord 94  */
+#define WOWGDI_GETWINDOWEXT      0x0060  /* ord 96  */
+#define WOWGDI_GETBITMAPDIMENSION 0x00a2 /* ord 162 */
 #define WOWGDI_GETPALETTEENTRIES 0x016b  /* ord 363, 10 args */
 #define GPE_ARG_ENTRIES  0               /* far */
 #define GPE_ARG_COUNT    4
@@ -1999,6 +2006,61 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          PALETTEENTRY is four bytes in both worlds, so this one is a copy -- and
          knowing WHICH structures are identical is worth as much as knowing which
          are not (see wowconv.h). */
+    case WOWGDI_SETPALETTEENTRIES: {
+        WORD hpal  = wow32_argw(f, GPE_ARG_HPAL);
+        WORD start = wow32_argw(f, GPE_ARG_START);
+        WORD cnt   = wow32_argw(f, GPE_ARG_COUNT);
+        volatile BYTE *in = wow32_argptr(f, GPE_ARG_ENTRIES);
+        HPALETTE pal = (HPALETTE)wowgdi_h32(hpal, NULL);
+        static PALETTEENTRY pe[256];
+        int  k = 0, i;
+        UINT got = 0;
+        wu_puts(note, notecap, &k, "SetPaletteEntries(0x");
+        wu_puthex(note, notecap, &k, hpal, 4);
+        wu_puts(note, notecap, &k, ", start="); wu_puthex(note, notecap, &k, start, 4);
+        wu_puts(note, notecap, &k, ", n="); wu_puthex(note, notecap, &k, cnt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!pal || GetObjectType((HGDIOBJ)pal) != OBJ_PAL || !in) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR PALETTES (or no entries); 0");
+            wow32_setret(f, 0); return 1;
+        }
+        if (cnt > 256) cnt = 256;
+        for (i = 0; i < cnt; ++i) {             /* four bytes in both: a copy */
+            pe[i].peRed = in[i * 4]; pe[i].peGreen = in[i * 4 + 1];
+            pe[i].peBlue = in[i * 4 + 2]; pe[i].peFlags = in[i * 4 + 3];
+        }
+        got = SetPaletteEntries(pal, start, cnt, pe);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, got, 4);
+        wow32_setret(f, got);
+        return 1;
+    }
+
+    case WOWGDI_GETVIEWPORTEXT:
+    case WOWGDI_GETWINDOWEXT:
+    case WOWGDI_GETBITMAPDIMENSION: {
+        WORD h = wow32_argw(f, 0);
+        int  kind = -1, k = 0, ok = 0;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
+        SIZE sz;
+        const char *nm = f->id == WOWGDI_GETVIEWPORTEXT ? "GetViewportExt(0x"
+                       : f->id == WOWGDI_GETWINDOWEXT   ? "GetWindowExt(0x"
+                       : "GetBitmapDimension(0x";
+        sz.cx = sz.cy = 0;
+        wu_puts(note, notecap, &k, nm); wu_puthex(note, notecap, &k, h, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (o && f->id == WOWGDI_GETBITMAPDIMENSION) {
+            if (GetObjectType(o) == OBJ_BITMAP) ok = GetBitmapDimensionEx((HBITMAP)o, &sz);
+        } else if (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC)) {
+            ok = f->id == WOWGDI_GETVIEWPORTEXT ? GetViewportExtEx((HDC)o, &sz)
+                                                : GetWindowExtEx((HDC)o, &sz);
+        }
+        if (!ok) { sz.cx = sz.cy = 0; wu_puts(note, notecap, &k, " -- ★ not ours; 0"); }
+        else { wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, (DWORD)sz.cx, 4);
+               wu_puts(note, notecap, &k, "x"); wu_puthex(note, notecap, &k, (DWORD)sz.cy, 4); }
+        wow32_setret(f, ((DWORD)(WORD)sz.cy << 16) | (WORD)sz.cx);
+        return 1;
+    }
+
     case WOWGDI_GETPALETTEENTRIES: {
         WORD hpal  = wow32_argw(f, GPE_ARG_HPAL);
         WORD start = wow32_argw(f, GPE_ARG_START);

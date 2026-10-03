@@ -37,6 +37,7 @@ K       equ 1                           ; module index: KERNEL
 U       equ 2                           ;               USER
 G       equ 3                           ;               GDI
 X       equ 4                           ;               the optional 4th: W16_HEAD 'SOUND'
+Y       equ 5                           ;               the optional 5th: W16_HEAD 'SHELL','KEYBOARD'
 
 ; ── DGROUP scratch. mkne.py zero-fills the data segment (0x200 bytes by default);
 ;    offsets 0..0Fh belong to Windows (the instance-data header), so start at 40h.
@@ -53,14 +54,19 @@ D_BUF           equ 0x60                ; 0x60..0x1FF free for a test (416 bytes
 %assign __nimp __nimp + 1
 %endmacro
 
-; W16_HEAD [name] -- with a name, a 4th imported module (index X), e.g. 'SOUND'.
-%macro W16_HEAD 0-1
+; W16_HEAD [name [, name2]] -- extra imported modules, indices X and Y.
+%macro W16_HEAD 0-2
 manifest:
         db      'NEIM'
         dw      start                   ; entry point
         dw      iat                     ; import address table
         dw      NIMP
-%if %0 == 1
+%if %0 == 2
+        dw      5
+        dw      m_kernel, m_user, m_gdi, m_extra, m_extra2
+%define W16_EXTRA %1
+%define W16_EXTRA2 %2
+%elif %0 == 1
         dw      4                       ; KERNEL, USER, GDI, %1
         dw      m_kernel, m_user, m_gdi, m_extra
 %define W16_EXTRA %1
@@ -81,6 +87,9 @@ m_user:    db   'USER', 0
 m_gdi:     db   'GDI', 0
 %ifdef W16_EXTRA
 m_extra:   db   W16_EXTRA, 0
+%endif
+%ifdef W16_EXTRA2
+m_extra2:  db   W16_EXTRA2, 0
 %endif
 iat:
 %rep NIMP
