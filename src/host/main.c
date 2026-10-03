@@ -26228,7 +26228,7 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
 {
     wowuser_win_t *w = wowuser_findwin(h16);
     DWORD proc = w ? wowuser_winproc_of(w) : 0;
-    WORD  dtok, child, args[5], res = 0;
+    WORD  dtok, child, args[5], res = 0, type;
     int   kind = -1, made;
     HGDIOBJ br;
     *handled = 0;
@@ -26236,18 +26236,37 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     child = wowwin_hwnd16((HWND)lp);
     dtok  = wowgdi_h16((HGDIOBJ)wp, WOWGDI_KIND_DC);
     if (!dtok) return 0;
+    /* A Win32 read-only edit reports WM_CTLCOLORSTATIC; a Win16 edit is always
+       CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour. */
+    {   char cn[16];
+        type = (WORD)(msg - WM_CTLCOLORMSGBOX);
+        if (type == 6 && GetClassNameA((HWND)lp, cn, sizeof cn) && !lstrcmpiA(cn, "Edit"))
+            type = 1;
+    }
     args[0] = h16; args[1] = 0x0019;
     args[2] = dtok;
-    args[3] = (WORD)(msg - WM_CTLCOLORMSGBOX);   /* lParam HIGH: the control type */
+    args[3] = type;                              /* lParam HIGH: the control type */
     args[4] = child;                             /* lParam LOW: the control       */
     made = wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
                            args, 5, h16, 0x0019, &res);
     wowgdi_forget(dtok);
-    if (!made || !res) return 0;
-    br = wowgdi_h32(res, &kind);
-    if (!br || kind != WOWGDI_KIND_OBJ) return 0;
-    *handled = 1;
-    return (LRESULT)br;
+    if (made && res) {
+        br = wowgdi_h32(res, &kind);
+        if (br && kind == WOWGDI_KIND_OBJ) { *handled = 1; return (LRESULT)br; }
+    }
+    /* ── THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
+         stock on the rig, s89): edit and list boxes are the WINDOW colour; static
+         text and buttons are the 3-D face inside a DIALOG (16-bit dialogs get the 3-D
+         look -- Charmap's labels) and the WINDOW colour in an ordinary window
+         (Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own
+         background keep Windows' default. */
+    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !w->dlgbux)) {
+        SetTextColor((HDC)wp, GetSysColor(COLOR_WINDOWTEXT));
+        SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
+        *handled = 1;
+        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+    }
+    return 0;
 }
 
 static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)

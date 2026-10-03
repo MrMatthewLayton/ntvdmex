@@ -3374,6 +3374,10 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
         *kp = k;
         return 0;
     }
+    /* WM_CTLCOLOR: "the default" -- 0, which the host turns into the 3.x default
+       (main.c, wow_ctlcolor). Win32's DefWindowProc would answer a 32-bit HBRUSH,
+       truncated to garbage in the 16-bit answer (Charmap: 0x0060). */
+    if (msg == 0x0019) { *kp = k; return 0; }
     if (msg == 0x000F) {
         wowuser_default_paint(w, 1);
         wu_puts(note, notecap, &k, " -> WM_PAINT: erased what was owed, as DefDlgProc");
@@ -8211,6 +8215,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (msg == 0x0010) {
             wu_puts(note, notecap, &k, " -> WM_CLOSE: ");
             wowuser_destroy(hwnd, note, notecap, &k);
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (msg == 0x0019) {                     /* see wowuser_dlg_default */
+            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: 0, the host applies the 3.x default");
             wow32_setret(f, 0);
             return 1;
         }
