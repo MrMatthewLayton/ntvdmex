@@ -335,9 +335,9 @@ BEGIN
     LTEXT           "Show &Host Mouse Cursor:", -1, 14, 59, 200, 8
     COMBOBOX        IDC_S_HOSTCURSOR, 240, 57, 150, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Se&nsitivity (100 = the mouse's own movement, unscaled):", -1, 14, 75, 220, 8
-    EDITTEXT        IDC_S_MSENS, 240, 73, 132, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "%", -1, 376, 75, 14, 8
+    LTEXT           "Se&nsitivity (while the mouse is captured):", -1, 14, 75, 220, 8
+    CONTROL         "", IDC_S_MSENS, "msctls_trackbar32", 0x0010 | WS_TABSTOP, 236, 72, 124, 14
+    LTEXT           "100%", IDC_S_MSENS_VAL, 362, 75, 28, 8
 
     GROUPBOX        "Keyboard", -1, 6, 96, 392, 31
     LTEXT           "&Layout:", -1, 14, 110, 28, 8

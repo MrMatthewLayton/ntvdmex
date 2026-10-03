@@ -107,7 +107,8 @@
 /* ── Input ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_HOSTCURSOR      310   /* combo:    s84 show host cursor Always/Never/Smart */
 #define IDC_S_SEAMLESS        311
-#define IDC_S_MSENS           312   /* edit:     mouse sensitivity, percent           */
+#define IDC_S_MSENS           312   /* trackbar: mouse sensitivity, percent (#291)    */
+#define IDC_S_MSENS_VAL       1312  /* static:   its value, "100%" -- SK_SLIDER's ctl+1000 */
 #define IDC_S_KBLAYOUT        313
 #define IDC_S_TYPEMATIC       314
 #define IDC_S_JOYTYPE         315

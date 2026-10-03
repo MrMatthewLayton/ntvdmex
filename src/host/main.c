@@ -12052,6 +12052,13 @@ static void settings_to_dialog(const ntvdmex_settings *s)
         case SK_UINT:
             wsprintfA(t, "%u", (unsigned)s->v[i]); SetWindowTextA(c, t);
             break;
+        case SK_SLIDER: {                    /* #291: a trackbar and its "N%" label */
+            HWND lbl = settings_ctl(d->ctl + 1000);
+            SendMessageA(c, TBM_SETRANGE, FALSE, MAKELPARAM(d->lo, d->hi));
+            SendMessageA(c, TBM_SETPAGESIZE, 0, 10);
+            SendMessageA(c, TBM_SETPOS, TRUE, (LPARAM)s->v[i]);
+            if (lbl) { wsprintfA(t, "%u%%", (unsigned)s->v[i]); SetWindowTextA(lbl, t); }
+            break; }
         case SK_COMBO:
             SendMessageA(c, CB_SETCURSEL, (WPARAM)s->v[i], 0);
             break;
@@ -12113,6 +12120,10 @@ static void settings_from_dialog(ntvdmex_settings *n)
         case SK_COMBO: {
             LRESULT sel = SendMessageA(c, CB_GETCURSEL, 0, 0);
             if (sel != CB_ERR && (DWORD)sel <= d->hi) n->v[i] = (DWORD)sel;
+            break; }
+        case SK_SLIDER: {
+            LRESULT v = SendMessageA(c, TBM_GETPOS, 0, 0);
+            if ((DWORD)v >= d->lo && (DWORD)v <= d->hi) n->v[i] = (DWORD)v;
             break; }
         case SK_VER:
             if (GetWindowTextA(c, t, 32))
@@ -12176,6 +12187,17 @@ static void settings_fill_cpuinfo(HWND dlg)
 static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     (void)wp; (void)lp;
+    /* #291: a slider's label follows it as it moves. */
+    if (msg == WM_HSCROLL && lp) {
+        int id = GetDlgCtrlID((HWND)lp);
+        HWND lbl = id ? GetDlgItem(dlg, id + 1000) : NULL;
+        if (lbl) {
+            char t[16];
+            wsprintfA(t, "%u%%", (unsigned)SendMessageA((HWND)lp, TBM_GETPOS, 0, 0));
+            SetWindowTextA(lbl, t);
+        }
+        return TRUE;
+    }
     if (msg == WM_INITDIALOG) {
         if (!g_uxtheme) {
             g_uxtheme = LoadLibraryA("uxtheme.dll");
@@ -13343,8 +13365,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                truth about position -- drive the driver cursor from the deltas instead,
                so INT 33h 03h still reports somewhere sensible. */
             if (g_captured && g_vid.frame.w && g_vid.frame.h) {
-                LONG nx = g_ms_x + (LONG)ri.data.mouse.lLastX;
-                LONG ny = g_ms_y + (LONG)ri.data.mouse.lLastY;
+                /* ── #291 (user, s89): SENSITIVITY DRIVES THE CAPTURED POINTER. A game
+                     that reads the POSITION (Lemmings: INT 33h 03h only, never 0Bh)
+                     was never touched by the setting, and a mickey moved it one GAME
+                     pixel -- across a 320-wide picture scaled up on screen, much too
+                     fast. Scaled by Sensitivity here, with the remainder carried in
+                     hundredths so a slow hand still moves the pointer. */
+                static LONG s_fx, s_fy;
+                LONG sx = (LONG)ri.data.mouse.lLastX * g_ms_sens + s_fx;
+                LONG sy = (LONG)ri.data.mouse.lLastY * g_ms_sens + s_fy;
+                LONG nx = g_ms_x + sx / 100;
+                LONG ny = g_ms_y + sy / 100;
+                s_fx = sx % 100; s_fy = sy % 100;
                 if (nx < 0) nx = 0; else if (nx >= (LONG)g_vid.frame.w) nx = (LONG)g_vid.frame.w - 1;
                 if (ny < 0) ny = 0; else if (ny >= (LONG)g_vid.frame.h) ny = (LONG)g_vid.frame.h - 1;
                 if (nx != g_ms_x || ny != g_ms_y) mouse_evt_raise(1);   /* motion event */

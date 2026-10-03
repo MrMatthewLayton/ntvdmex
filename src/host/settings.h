@@ -104,7 +104,8 @@ enum {
     SK_UINT,        /* edit box -> unsigned, clamped to [lo,hi]                  */
     SK_COMBO,       /* drop-list -> zero-based index, clamped to [0,hi]          */
     SK_VER,         /* editable combo holding "major.minor" -- writes TWO rows   */
-    SK_DERIVED      /* no control of its own; written by the SK_VER row above it */
+    SK_DERIVED,     /* no control of its own; written by the SK_VER row above it */
+    SK_SLIDER       /* trackbar -> unsigned in [lo,hi]; its value label is ctl+1000 (#291) */
 };
 
 typedef struct {
@@ -260,7 +261,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
    the pointer now hides by itself after 5 s still over the video. A stored value is
    simply never read again (settings persist by name). */
 { "SeamlessMouse",     IDC_S_SEAMLESS,    SK_CHECK,      0,  0,   1, NULL },
-{ "MouseSensitivity",  IDC_S_MSENS,       SK_UINT,     100, 10, 1000, NULL },
+{ "MouseSensitivity",  IDC_S_MSENS,       SK_SLIDER,   100, 10, 400, NULL },
 { "KeyboardLayout",    IDC_S_KBLAYOUT,    SK_COMBO,      0,  0,   3, "US|United Kingdom|German|French" },
 { "TypematicRate",     IDC_S_TYPEMATIC,   SK_UINT,      10,  2,  30, NULL },
 { "JoystickType",      IDC_S_JOYTYPE,     SK_COMBO,      0,  0,   2, "None|2 axis, 2 button|4 axis, 4 button" },
