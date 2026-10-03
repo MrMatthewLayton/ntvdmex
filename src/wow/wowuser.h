@@ -1798,6 +1798,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 static const WORD g_dwp_forward[] = {
     0x0010,             /* WM_CLOSE: its default is DestroyWindow (see 0x6b) */
     0x0014,             /* WM_ERASEBKGND: its DC token is translated (s89)   */
+    0x000F,             /* WM_PAINT: the default erases + validates (s89)    */
 };
 #define NOTIFY_ARG_BLOCK        0
 #define NOTIFY_ARG_KIND         4
@@ -3241,6 +3242,29 @@ static WPARAM wowuser_wp32(WORD msg, WORD wp16)
     return (WPARAM)wp16;
 }
 
+/* s89: DefWindowProc's / DefDlgProc's WM_PAINT. Win16's does BeginPaint/EndPaint,
+   which erases what is still owed: the class brush for a window, the dialog colour
+   for a dialog. Since the relay stopped erasing on the guest's behalf (Clock), a
+   window that leaves WM_PAINT to the default -- Sound Recorder's dialog -- was
+   never erased at all and showed black. Takes the paint record, so the area is
+   not erased twice; children are clipped out as in BeginPaint. */
+static void wowuser_default_paint(wowuser_win_t *w, int isdlg)
+{
+    RECT r; int erase = 0;
+    HDC dc;
+    if (!w || !w->hwnd32) return;
+    if (!wowwin_paint_take(w->hwnd, &r, &erase) || !erase) return;
+    dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN);
+    if (!dc) return;
+    if (isdlg) FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
+    else {
+        HRGN rg = CreateRectRgnIndirect(&r);
+        if (rg) { SelectClipRgn(dc, rg); DeleteObject(rg); }
+        DefWindowProcA(w->hwnd32, WM_ERASEBKGND, (WPARAM)dc, 0);
+    }
+    ReleaseDC(w->hwnd32, dc);
+}
+
 static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD wp16,
                                    DWORD lp32, char *note, int notecap, int *kp)
 {
@@ -3255,6 +3279,12 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
                     (DWORD)c16 | (0u /* BN_CLICKED */ << 16), GetTickCount(), 0, 0);
         wu_puts(note, notecap, &k, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
                                    " dialog, as Win16's DefDlgProc does");
+        *kp = k;
+        return 0;
+    }
+    if (msg == 0x000F) {
+        wowuser_default_paint(w, 1);
+        wu_puts(note, notecap, &k, " -> WM_PAINT: erased what was owed, as DefDlgProc");
         *kp = k;
         return 0;
     }
@@ -7425,7 +7455,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              so an unclipped DC let the guest's erase -- now sent from this
              BeginPaint -- wipe Charmap's font list, labels and buttons after they
              had drawn. ReleaseDC (EndPaint) takes a GetDCEx DC the same way. */
-        dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN | DCX_CLIPSIBLINGS);
+        /* Siblings only as the window's own style says (Win16's rule): Sound
+           Recorder's text controls sit INSIDE sibling frame controls, and an
+           unconditional DCX_CLIPSIBLINGS clipped every letter away. */
+        dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN
+                     | ((GetWindowLongA(w->hwnd32, GWL_STYLE) & WS_CLIPSIBLINGS)
+                        ? DCX_CLIPSIBLINGS : 0));
         tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
         if (!tok) {
             if (dc) ReleaseDC(w->hwnd32, dc);
@@ -8069,6 +8104,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (msg == 0x0010) {
             wu_puts(note, notecap, &k, " -> WM_CLOSE: ");
             wowuser_destroy(hwnd, note, notecap, &k);
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (msg == 0x000F) {
+            wowuser_default_paint(wowuser_findwin(hwnd), 0);
+            wu_puts(note, notecap, &k, " -> WM_PAINT: erased what was owed (class brush)");
             wow32_setret(f, 0);
             return 1;
         }

@@ -22715,6 +22715,21 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
+                        /* ⛔ s89: AND GDI'S ENUMERATIONS RUN. This branch never acted on
+                             f.enumreq -- only USER's did -- so LineDDA and
+                             EnumFontFamilies armed a walk that never started: Charmap
+                             got "60 fonts" and not one callback, i.e. an empty list.
+                             Same first step as USER's branch. */
+                        if (f.enumreq) {
+                            char enote[256];
+                            WORD  ersel = wow_callback_selector();
+                            DWORD essb  = dpmi_sel_base(
+                                (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            enote[0] = 0;
+                            wowenum_step(tib, essb, ersel, 1, 0, enote, sizeof enote);
+                            p = zput(p, "WOWENUM: "); p = zput(p, enote);
+                            p = zput(p, "\r\n");
+                        }
                         wowlog_flush(base, &p);
                         return 1;
                     }
