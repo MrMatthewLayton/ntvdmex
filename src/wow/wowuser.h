@@ -2198,6 +2198,14 @@ typedef struct wowuser_win_s {
        look -- its static text defaults to the button face (Charmap) -- and a dialog
        without one the window colour (Calc's display). Measured on those two. */
     BYTE  dlg3d;
+    /* #308 (s91): A SUBCLASSED SYSTEM CONTROL. `subproc` is the guest's 16:16
+       procedure installed by SetWindowLong(GWL_WNDPROC) on a real Win32 control
+       (EDIT, LISTBOX...), kept apart from `wndproc` on purpose: every check of
+       `wndproc` in this file means "a window whose CLASS is 16-bit", and this one is
+       not. `orig32` is the control's own Win32 procedure, displaced by
+       wowuser_subproc. 0/NULL = not subclassed. */
+    DWORD   subproc;
+    WNDPROC orig32;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -2211,6 +2219,44 @@ static int           g_wu_nwin = 0;
      a selector krnl386 allocated at run time, which is the same trap that made
      the id-space label print `?` about a segment the dispatcher had identified. */
 static WORD g_wu_krnl_seg = 0;
+
+/* ══ #308 (s91): SUBCLASSING. ═══════════════════════════════════════════════════════
+   ★ HOW XP'S OWN USER.EXE ANSWERS IT, READ OFF THE BINARY (guest/win16/user.exe).
+     It exports one tiny 16-bit procedure per system control -- EDITWNDPROC (301),
+     BUTTONWNDPROC (303), STATICWNDPROC (302), SBWNDPROC (304), LBOXCTLWNDPROC (307),
+     the combo box's (344), MDICLIENTWNDPROC (444) -- each 0x40 bytes of segment 1:
+         inc bp / push bp / mov bp,sp / push ds / mov ds,<DGROUP>
+         push <its own address>  push hwnd msg wParam lParam
+         call far CallWindowProc / ... / retf 0Ah
+         'SCLS' <class index>                               ; at +34h
+     i.e. "call CallWindowProc on MYSELF". That address is what GetWindowLong(
+     GWL_WNDPROC) hands a 16-bit program for a system control, so a subclass that
+     chains -- CallWindowProc(old, ...) or a direct far call to `old` -- lands in
+     USER's CallWindowProc with one of these as the procedure, and the WOW32 side
+     knows from it to call the real control. This host does the same:
+       GetWindowLong  -> USER seg1:<offset below> (signature checked first)
+       SetWindowLong  -> the real control is subclassed with wowuser_subproc, which
+                         SENDS its input/focus messages to the guest's procedure
+                         through the nested run (g_wu_call16, main.c)
+       CallWindowProc(<one of these>) -> the control's own Win32 procedure.
+   ⚠ WHAT THE GUEST'S PROCEDURE SEES: the messages whose parameters mean the same in
+     Win16 and Win32 -- keys, characters, mouse, focus, WM_GETDLGCODE, WM_SETCURSOR,
+     WM_NCHITTEST, WM_TIMER, WM_ENABLE, WM_CANCELMODE. Everything else (WM_PAINT,
+     text and EM_/LB_ messages with pointers) goes straight to the control. Those are
+     the ones subclassers filter -- an edit control that refuses letters, a list box
+     that drags -- and the rest would need the full 32->16 message translation. */
+typedef struct { const char *cls; WORD off; BYTE idx; } wowuser_sysproc_t;
+static const wowuser_sysproc_t g_wu_sysproc[] = {
+    { "BUTTON",    0x43f4, 3 }, { "COMBOBOX",  0x4434, 4 }, { "EDIT",      0x4474, 5 },
+    { "STATIC",    0x4534, 6 }, { "LISTBOX",   0x44b4, 7 }, { "SCROLLBAR", 0x44f4, 8 },
+    { "MDICLIENT", 0x4574, 11 },
+};
+#define WU_NSYSPROC ((int)(sizeof g_wu_sysproc / sizeof g_wu_sysproc[0]))
+/* main.c: a 16-bit procedure, now, through the nested run (wow_call16_sync). */
+static int (*g_wu_call16)(DWORD proc, WORD ds, const WORD *args, int n,
+                          WORD hwnd, WORD msg, WORD *res);
+static HWND     g_wu_subbypass;     /* CallWindowProc(thunk) in progress for this HWND */
+static unsigned g_wu_sub_sent, g_wu_sub_direct, g_wu_sub_chain;   /* for the STAGE2 line */
 
 /* A free window slot with its synthetic handle assigned, or NULL. Factored out
    of CreateWindow the moment a SECOND thing started making windows -- the MDI
@@ -2237,6 +2283,7 @@ static wowuser_win_t *wowuser_newwin(void)
     w->dlgproc = 0;
     w->dlgbux = w->dlgbuy = 0;       /* the same trap: only a dialog sets them */
     w->dlg3d = 0;
+    w->subproc = 0; w->orig32 = NULL;  /* #308: only SetWindowLong sets them */
     return w;
 }
 
@@ -2314,6 +2361,96 @@ static HWND wowuser_hwnd32(WORD hwnd)
 {
     const wowuser_win_t *w = wowuser_findwin(hwnd);
     return w ? w->hwnd32 : NULL;
+}
+
+/* ── #308: the USER thunk standing for this window's system class, or NULL. */
+static const wowuser_sysproc_t *wowuser_sysproc_of(const wowuser_win_t *w)
+{
+    int i, k;
+    if (!w || !g_wu_class[w->cls].sysclass) return NULL;
+    for (i = 0; i < WU_NSYSPROC; ++i) {
+        const char *a = g_wu_class[w->cls].name, *b = g_wu_sysproc[i].cls;
+        for (k = 0; a[k] && b[k]; ++k) {
+            char c = a[k];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            if (c != b[k]) break;
+        }
+        if (!a[k] && !b[k]) return &g_wu_sysproc[i];
+    }
+    return NULL;
+}
+
+/* ...and is this 16:16 procedure one of those thunks? Only in USER's own segment
+   (the stub segment of the call asking), only at a known offset, and only if the
+   bytes there still carry the 'SCLS' signature and that class's index -- a USER.EXE
+   of another build has other offsets, and then nothing is recognised (the caller
+   says so) rather than something guessed. */
+static const wowuser_sysproc_t *wowuser_sysproc_at(const wow32_frame_t *f, DWORD proc)
+{
+    int i;
+    if (!proc || (WORD)(proc >> 16) != f->stubseg) return NULL;
+    for (i = 0; i < WU_NSYSPROC; ++i)
+        if ((WORD)proc == g_wu_sysproc[i].off) {
+            const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)wow32_flat(f, proc);
+            if (b && b[0x34] == 'S' && b[0x35] == 'C' && b[0x36] == 'L' && b[0x37] == 'S'
+                  && b[0x38] == g_wu_sysproc[i].idx)
+                return &g_wu_sysproc[i];
+            return NULL;
+        }
+    return NULL;
+}
+
+/* The messages a subclass procedure is SENT (see the note by g_wu_sysproc). */
+static int wowuser_sub_relays(UINT msg)
+{
+    switch (msg) {
+    case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR: case WM_DEADCHAR:
+    case WM_SYSKEYDOWN: case WM_SYSKEYUP: case WM_SYSCHAR: case WM_SYSDEADCHAR:
+    case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+    case WM_SETFOCUS: case WM_KILLFOCUS: case WM_GETDLGCODE: case WM_SETCURSOR:
+    case WM_NCHITTEST: case WM_TIMER: case WM_ENABLE: case WM_CANCELMODE:
+        return 1;
+    }
+    return 0;
+}
+
+/* The DS a control's procedure runs with: its own instance, else its parent's. */
+static WORD wowuser_inst_of(const wowuser_win_t *w)
+{
+    int depth = 0;
+    while (w && depth++ < 8) {
+        if (w->hinst) return w->hinst;
+        if (g_wu_class[w->cls].hinst) return g_wu_class[w->cls].hinst;
+        w = w->parent ? wowuser_findwin(w->parent) : NULL;
+    }
+    return 0;
+}
+
+/* The Win32 procedure of a subclassed system control. */
+static LRESULT CALLBACK wowuser_subproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    WORD h16 = wowwin_hwnd16(h);
+    wowuser_win_t *w = h16 ? wowuser_findwin(h16) : NULL;
+    WNDPROC orig = w ? w->orig32 : NULL;
+    if (!orig) return DefWindowProcA(h, msg, wp, lp);   /* cannot happen: we set both */
+    if (g_wu_subbypass != h && w->subproc && g_wu_call16 && wowuser_sub_relays(msg)) {
+        WORD args[5], res = 0, wp16 = (WORD)wp, ds = wowuser_inst_of(w);
+        DWORD lp16 = (DWORD)lp;
+        if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_SETCURSOR)
+            wp16 = wowwin_hwnd16((HWND)wp);    /* a real HWND -> the guest's, or 0 */
+        else if (msg == WM_GETDLGCODE || msg == WM_TIMER)
+            lp16 = 0;                          /* Win32: an LPMSG / a TIMERPROC   */
+        args[0] = h16; args[1] = (WORD)msg; args[2] = wp16;
+        args[3] = (WORD)(lp16 >> 16); args[4] = (WORD)(lp16 & 0xFFFF);
+        if (ds && g_wu_call16(w->subproc, ds, args, 5, h16, (WORD)msg, &res)) {
+            ++g_wu_sub_sent;
+            return (msg == WM_NCHITTEST) ? (LRESULT)(short)res : (LRESULT)res;
+        }
+    }
+    ++g_wu_sub_direct;
+    return CallWindowProcA(orig, h, msg, wp, lp);
 }
 
 /* Is this window's parent an MDI client? Decides which default procedure the OS
@@ -3401,6 +3538,26 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                 wu_puthex(note, notecap, &k, (DWORD)r, 8);
                 return (LONG)r;
             }
+        }
+        /* #308 (s91): a SYSTEM control's input/focus messages -- the same scalar set
+           a subclass is sent -- go to the real control, whose answer it is. A 16-bit
+           program SendMessage-ing WM_CHAR to its EDIT typed nothing before (w_subcl:
+           stock's text grows, ours did not). Not for a 16-bit class: there the real
+           window's procedure is wowwin_proc, which would post it straight back. */
+        if (w && w->hwnd32 && g_wu_class[w->cls].sysclass && wowuser_sub_relays(msg)) {
+            WPARAM wp32 = wparam;
+            LPARAM lp32 = (LPARAM)lparam;
+            LRESULT r;
+            if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_SETCURSOR)
+                wp32 = (WPARAM)wowuser_hwnd32(wparam);
+            else if (msg == WM_GETDLGCODE || msg == WM_TIMER)
+                lp32 = 0;
+            r = SendMessageA(w->hwnd32, msg, wp32, lp32);
+            wu_puts(note, notecap, &k, "msg 0x");
+            wu_puthex(note, notecap, &k, msg, 4);
+            wu_puts(note, notecap, &k, " -> the real control -> 0x");
+            wu_puthex(note, notecap, &k, (DWORD)r, 8);
+            return (msg == WM_NCHITTEST) ? (LONG)(short)r : (LONG)r;
         }
         wu_puts(note, notecap, &k, "default procedure: msg 0x");
         wu_puthex(note, notecap, &k, msg, 4);
@@ -6045,6 +6202,49 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- ★ no such window; answered 0");
             wow32_setret(f, 0);
             return 1;
+        }
+        /* #308 (s91): ONE OF USER'S SYSTEM-CONTROL THUNKS -- a subclass chaining to
+           the control it displaced (or calling the thunk directly, which lands here
+           through USER's own code). The control's Win32 procedure answers: scalar
+           messages straight to it, the rest through the same 16->32 translation
+           SendMessage uses (wowuser_defproc) with wowuser_subproc stepped around, so
+           the subclass is not called again for its own chain. */
+        {   const wowuser_sysproc_t *sp = wowuser_sysproc_at(f, proc);
+            if (sp) {
+                HWND h = w->hwnd32;
+                WNDPROC target = w->orig32;
+                LRESULT r = 0;
+                HWND saved = g_wu_subbypass;
+                ++g_wu_sub_chain;
+                wu_puts(note, notecap, &k, " -> USER's ");
+                wu_puts(note, notecap, &k, sp->cls);
+                wu_puts(note, notecap, &k, " thunk: the control's own procedure");
+                if (!h) { wu_puts(note, notecap, &k, " -- no real control; 0");
+                          wow32_setret(f, 0); return 1; }
+                if (!target) target = (WNDPROC)GetWindowLongPtrA(h, GWLP_WNDPROC);
+                if (wowuser_sub_relays(msg)) {
+                    WPARAM wp32 = wp;
+                    LPARAM lp32 = (LPARAM)lp;
+                    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_SETCURSOR)
+                        wp32 = (WPARAM)wowuser_hwnd32(wp);
+                    else if (msg == WM_GETDLGCODE || msg == WM_TIMER)
+                        lp32 = 0;
+                    g_wu_subbypass = h;
+                    r = CallWindowProcA(target, h, msg, wp32, lp32);
+                    g_wu_subbypass = saved;
+                    wow32_setret(f, (msg == WM_NCHITTEST) ? (DWORD)(WORD)(short)r
+                                                          : (DWORD)r);
+                } else {
+                    g_wu_subbypass = h;
+                    wow32_setret(f, (DWORD)wowuser_defproc(f, w, msg, wp, lp,
+                                                           note, notecap));
+                    g_wu_subbypass = saved;
+                }
+                return 1;
+            }
+            if ((WORD)(proc >> 16) == f->stubseg)
+                wu_puts(note, notecap, &k, " -- ⚠ a USER address that is not a known"
+                                           " control thunk; called as 16-bit code");
         }
         wu_puts(note, notecap, &k, " -> the displaced 16-bit procedure");
         wow32_setret(f, 0);              /* overwritten by wowcall.h */
@@ -8943,15 +9143,56 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 if (idx == WOW16_GWL_STYLE) w->style = val;
             }
         } else if (idx == WOW16_GWL_WNDPROC) {
-            prev = w->wndproc;
-            if (isset) {
-                wu_puts(note, notecap, &k, " -- ★ SUBCLASSING IS REFUSED: the"
-                                           " procedure is 16-bit and is entered"
-                                           " through wowcall, so reporting"
-                                           " success without re-pointing it would"
-                                           " be a lie");
-                wow32_setret(f, 0);
-                return 1;
+            /* #308 (s91): SUBCLASSING. A 16-bit class's window: the record's own
+               procedure is re-pointed -- DispatchMessage and every send read it per
+               message (wowuser_winproc_of). A system control: see g_wu_sysproc. */
+            const wowuser_sysproc_t *sp = wowuser_sysproc_of(w);
+            if (sp) {
+                DWORD thunk = ((DWORD)f->stubseg << 16) | sp->off;
+                prev = w->subproc ? w->subproc : thunk;
+                if (isset) {
+                    const wowuser_sysproc_t *back = wowuser_sysproc_at(f, val);
+                    if (!h) {
+                        wu_puts(note, notecap, &k, " -- no real control; refused");
+                        wow32_setret(f, 0);
+                        return 1;
+                    }
+                    if (back == sp || !val) {          /* putting the original back */
+                        if (w->orig32) SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)w->orig32);
+                        w->subproc = 0; w->orig32 = NULL;
+                        wu_puts(note, notecap, &k, " -- subclass REMOVED, the control's"
+                                                   " own procedure restored");
+                    } else if (!g_wu_call16) {
+                        wu_puts(note, notecap, &k, " -- ★ no nested run to SEND the"
+                                                   " subclass its messages; refused");
+                        wow32_setret(f, 0);
+                        return 1;
+                    } else {
+                        if (!w->orig32) {
+                            w->orig32 = (WNDPROC)GetWindowLongPtrA(h, GWLP_WNDPROC);
+                            SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)wowuser_subproc);
+                        }
+                        w->subproc = val;
+                        wu_puts(note, notecap, &k, " -- ★ SUBCLASSED the system ");
+                        wu_puts(note, notecap, &k, sp->cls);
+                        wu_puts(note, notecap, &k, "; input/focus messages go to the"
+                                                   " 16-bit procedure");
+                    }
+                }
+            } else {
+                prev = w->wndproc;
+                if (isset) {
+                    if (!w->wndproc || !val) {
+                        wu_puts(note, notecap, &k, " -- ★ no 16-bit procedure to"
+                                                   " replace (a dialog's, or NULL);"
+                                                   " refused");
+                        wow32_setret(f, 0);
+                        return 1;
+                    }
+                    w->wndproc = val;
+                    wu_puts(note, notecap, &k, " -- ★ SUBCLASSED: the window's 16-bit"
+                                               " procedure re-pointed");
+                }
             }
         } else if (idx >= 0 && idx + 3 < (int)(WOWUSER_MAX_EXTRA * 2)) {
             prev = (DWORD)w->extra[idx / 2] | ((DWORD)w->extra[idx / 2 + 1] << 16);

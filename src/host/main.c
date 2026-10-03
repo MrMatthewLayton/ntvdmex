@@ -30296,6 +30296,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
     g_ww_send16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
+    g_wu_call16    = wow_call16_sync;           /* s91 #308: a subclassed control's messages */
     g_ww_ownerdraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_cmos_dev = vdd_cmos_device(&g_cmos);

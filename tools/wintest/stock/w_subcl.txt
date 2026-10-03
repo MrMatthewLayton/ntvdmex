@@ -1,0 +1,22 @@
+#PROBE w16subcl
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=reg.class SIG=AX AX=0001
+CASE=cw.parent SIG=AX AX=0001
+CASE=cw.edit SIG=AX AX=0001
+CASE=edit.gwl.nonzero SIG=AX AX=0001
+CASE=edit.swl.returns.old SIG=AX AX=0001
+CASE=edit.gwl.is.ours SIG=AX AX=0001
+CASE=edit.sub.nchar SIG=AX AX=0003
+CASE=edit.sub.textlen SIG=AX AX=0002
+CASE=edit.sub.getdlgcode SIG=AX AX=0099
+CASE=edit.direct.textlen SIG=AX AX=0003
+CASE=edit.restore.returns.ours SIG=AX AX=0001
+CASE=edit.restored.nchar SIG=AX AX=0000
+CASE=edit.restored.textlen SIG=AX AX=0004
+CASE=own.gwl.is.class.proc SIG=AX AX=0001
+CASE=own.swl.returns.old SIG=AX AX=0001
+CASE=own.sub.private SIG=AX AX=55AA
+CASE=own.restored.private SIG=AX AX=0000
+#END
