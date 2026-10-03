@@ -106,6 +106,7 @@ echo launched %GDIR%\%EXE% at %TIME% > "%OUT%\result_live.log"
 cd /d "%GDIR%"
 start /wait "" "%RIG%\dosstub.com"
 echo exited at %TIME% >> "%OUT%\result_live.log"
+del /q "%CFG%\target.txt" >nul 2>&1
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 goto :eof
 
@@ -122,6 +123,7 @@ rem ---------------------------------------------------------------------------
 if not exist "%OUT%" md "%OUT%"
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 if not "%2"=="" copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%2.log" >nul 2>&1
+del /q "%CFG%\target.txt" "%CFG%\autoexit" >nul 2>&1
 echo stopped at %TIME% > "%OUT%\result_stop.log"
 goto :eof
 
@@ -279,6 +281,9 @@ start /wait "" "%RIG%\dosstub.com"
 
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 for %%f in ("%OUT%\shot*.bmp") do copy /y "%%f" "%OUT%\shot_%T%_%%~nxf" >nul 2>&1
+rem GH #277: the run is over, so is its target. Left behind, it was what the next
+rem    hand-opened NTVDMEX ran (P_CLOCK.COM, Skyroads) instead of a DOS prompt.
+del /q "%CFG%\target.txt" >nul 2>&1
 del /q "%CFG%\autoexit" >nul 2>&1
 goto :eof
 
