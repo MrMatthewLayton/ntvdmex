@@ -211,6 +211,7 @@ static int (*g_ww_send16)(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res);
 static LRESULT (*g_ww_ownerdraw)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp,
                                  int *handled);
 
+static unsigned g_ww_mmlog;   /* s90: first MM notifications logged */
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
@@ -369,6 +370,34 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        ⚠ A DOUBLE-CLICK ONLY ARRIVES IF THE CLASS ASKED FOR IT (CS_DBLCLKS). We
          register the guest's own class style, so a guest that did not ask gets
          two ordinary clicks -- which is correct, not a gap. */
+    /* ── s90 (#278): THE MULTIMEDIA NOTIFICATIONS. MM_MCINOTIFY (0x3B9), MM_WOM_*
+         (0x3BB-0x3BD), MM_WIM_* (0x3BE-0x3C0), MM_MIM_ and MM_MOM_ (0x3C1-0x3C9), the
+         joystick ones (0x3A0-0x3B8). A Win16 program that opens a device with
+         CALLBACK_WINDOW gets them POSTED BY WINMM to its real window: winmm's WOW
+         layer maps the 16-bit HWND with WOWHandle32 (bin\wowshim\WOW32.DLL) and
+         posts the 16-bit device handle and 16:16 header itself, so they are relayed
+         VERBATIM. Before this they fell to DefWindowProc and Sound Recorder never
+         learned that a buffer had finished playing. */
+    case 0x3A0: case 0x3A1: case 0x3A2: case 0x3A3: case 0x3A4: case 0x3A5:
+    case 0x3A6: case 0x3A7: case 0x3B5: case 0x3B6: case 0x3B7: case 0x3B8:
+    case 0x3B9: case 0x3BA: case 0x3BB: case 0x3BC: case 0x3BD: case 0x3BE:
+    case 0x3BF: case 0x3C0: case 0x3C1: case 0x3C2: case 0x3C3: case 0x3C4:
+    case 0x3C5: case 0x3C6: case 0x3C7: case 0x3C8: case 0x3C9:
+        if (h16) {
+            if (g_ww_mmlog < 12) {
+                char b[160], *q = b;
+                ++g_ww_mmlog;
+                q = zput(q, "WOWWIN: MM notification 0x"); q = zhex(q, msg);
+                q = zput(q, " -> hwnd16 0x"); q = zhex(q, h16);
+                q = zput(q, " wp=0x"); q = zhex(q, (DWORD)wp);
+                q = zput(q, " lp=0x"); q = zhex(q, (DWORD)lp); q = zput(q, "\r\n");
+                log_append(LOG_PATH, b, q);
+            }
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+            ++g_ww_msgs;
+            return 0;
+        }
+        break;
     case WM_MOUSEMOVE:
         if (h16) {
             if (!wowmsg_post_move(h16, (WORD)msg, (WORD)wp, (DWORD)lp,

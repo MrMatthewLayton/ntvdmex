@@ -1,0 +1,27 @@
+wait 4
+close "Application Error"
+wcmd "Sound Recorder - (Untitled)" 12
+wait 3
+list
+tclick "Open"
+key 0x54
+key 0x4F
+key 0x4E
+key 0x45
+key 0xBE
+key 0x57
+key 0x41
+key 0x56
+key 0x0D
+wait 3
+list
+shot s90_srp_0
+wclick "Sound Recorder - TONE.WAV" 158 112
+wait 1
+shot s90_srp_1
+wait 3
+shot s90_srp_2
+list
+close "Sound Recorder - TONE.WAV"
+wait 6
+list

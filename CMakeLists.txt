@@ -141,6 +141,25 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
 target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 comdlg32 advapi32 shell32 gcc)
 
+# --- bin\wowshim\WOW32.DLL + NTVDM.EXE: the host's stand-ins for the two modules a
+# 32-bit thunk DLL looks up by NAME (winmm's WOW layer does; GH #5/#278, s90). One
+# source, built twice; the .EXE is a DLL image -- only its module name matters.
+# Undecorated stdcall exports (--kill-at): callers use GetProcAddress by plain name.
+foreach(shim WOW32 NTVDM)
+    add_library(shim_${shim} SHARED src/shim/wowshim.c)
+    if(shim STREQUAL "NTVDM")
+        set_target_properties(shim_${shim} PROPERTIES OUTPUT_NAME NTVDM PREFIX "" SUFFIX ".EXE")
+    else()
+        set_target_properties(shim_${shim} PROPERTIES OUTPUT_NAME WOW32 PREFIX "" SUFFIX ".DLL")
+    endif()
+    set_target_properties(shim_${shim} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/wowshim"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/wowshim")
+    target_link_options(shim_${shim} PRIVATE -nostdlib -Wl,--kill-at
+        -Wl,--entry,_DllMainCRTStartup@12 -Wl,--enable-stdcall-fixup)
+    target_link_libraries(shim_${shim} PRIVATE kernel32)
+endforeach()
+
 # --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to
 # eyeball the windowed + fullscreen blit path on real XP before it is wired into

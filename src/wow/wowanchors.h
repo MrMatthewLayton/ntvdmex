@@ -516,4 +516,10 @@ static const wow_anchor_t g_sound_anchors[] = {
     { 0x010,   4, 0x00e0 }, { 0x011,   0, 0x00ed },
 };
 
+/* ── MMSYSTEM (s90, #278): its whole WOW table is two stubs, mmsystem.dll seg1:0x611
+     (id 2, 28 bytes) and 0x61e (id 1, 0 bytes). See src/wow/wowmmedia.h. */
+static const wow_anchor_t g_mmedia_anchors[] = {
+    { 0x002,  28, 0x061e }, { 0x001,   0, 0x062b },
+};
+
 #endif /* WOWANCHORS_H */

@@ -5599,6 +5599,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              set as before (USER's 16-bit DefWindowProc does not forward
              WM_SETTEXT here). One level deep: a handler that sets text again is
              not sent to a second time. */
+        /* s90: the REAL text first. Win16's DefWindowProc stores the text DURING
+           WM_SETTEXT, so a control that repaints from GetWindowText inside its handler
+           sees the new text; set after the send, it painted the PREVIOUS one --
+           Sound Recorder's status read "Stopped" while playing and "Playing" after. */
+        if (w->hwnd32) { SetWindowTextA(w->hwnd32, txt);
+                         wu_puts(note, notecap, &k, " -> the OS's"); }
+        else             wu_puts(note, notecap, &k, " -- no real window");
         {   static int s_swt = 0;
             WORD r16;
             DWORD sp16 = (DWORD)wow32_argw(f, SWT_ARG_TEXT)
@@ -5610,9 +5617,6 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 --s_swt;
             }
         }
-        if (w->hwnd32) { SetWindowTextA(w->hwnd32, txt);
-                         wu_puts(note, notecap, &k, " -> the OS's"); }
-        else             wu_puts(note, notecap, &k, " -- no real window");
         wow32_setret(f, 0);
         return 1;
     }
@@ -9727,6 +9731,32 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " = \"");
         wu_puts(note, notecap, &k, buf);
         wu_puts(note, notecap, &k, "\"");
+        /* s90 (#278): Win16's SetDlgItemText IS SetWindowText(GetDlgItem(...)), so an
+           item that is one of OUR windows gets what SetWindowText gives it (s89): its
+           record's text, then WM_SETTEXT sent to its own 16-bit procedure with the
+           program's string, then the real window. Going straight to the OS reached
+           only the relay -- Sound Recorder's "noflickertext" Position readout was set
+           to "1.98 sec." 37 times during playback and kept showing "0.00 sec." */
+        {   HWND ci = GetDlgItem(h, (int)(short)id);
+            WORD c16 = ci ? wowwin_hwnd16(ci) : 0;
+            wowuser_win_t *cw = c16 ? wowuser_findwin(c16) : NULL;
+            if (cw && cw->wndproc) {
+                static int s_sdit = 0;
+                WORD r16;
+                int i;
+                for (i = 0; i < (int)sizeof cw->text - 1 && buf[i]; ++i) cw->text[i] = buf[i];
+                cw->text[i] = 0;
+                SetWindowTextA(ci, buf);           /* first: see SetWindowText */
+                if (!s_sdit && g_wu_send16 && fp) {
+                    ++s_sdit;
+                    if (g_wu_send16(c16, WM_SETTEXT16, 0, fp, &r16))
+                        wu_puts(note, notecap, &k, " -> WM_SETTEXT SENT to the item's procedure");
+                    --s_sdit;
+                }
+                wow32_setret(f, 0);
+                return 1;
+            }
+        }
         SetDlgItemTextA(h, (int)(short)id, buf);
         wow32_setret(f, 0);
         return 1;

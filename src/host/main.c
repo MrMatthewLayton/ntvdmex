@@ -100,6 +100,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
 #include "../wow/wowsound.h" /* GH #299: ...and SOUND.DRV's -- stock answers 0 */
+#include "../wow/wowmmedia.h" /* GH #278: ...and MMSYSTEM's two -- mmCallProc32 */
 #include "dos_mcb.h"
 #include "bios_bda.h"       /* GH #253: 0040:000E/0010/0013 and the EBDA, from one source */
 #include "dos_loader.h"
@@ -1045,6 +1046,13 @@ static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
    the guest with back-to-back timer interrupts. */
 #define IRQ0_PENDING_MAX 4
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+/* s90 (#278): hardware interrupts raised by a 32-bit component (call_ica_hw_interrupt,
+   bin\wowshim\NTVDM.EXE), one bit per PIC line: bits 0-7 master (vectors 08h-0Fh),
+   8-15 slave (70h-77h). Set from ANY thread; delivered on the guest thread. */
+static volatile LONG g_ica_pending = 0;
+static DWORD g_ica_raised = 0, g_ica_delivered = 0, g_ica_nohandler = 0;
+static DWORD g_shim_state[2], g_shim_err[2];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
+static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned steps);
 /* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
      Separate from g_irq0_pending, which SATURATES AT FOUR on purpose (see above) and so
      cannot answer the question. The PM catch-up batch needs a true count, and without
@@ -9535,6 +9543,7 @@ static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
      its ids are 1..0x11 with small argument counts, the shape most likely to
      collide with another module's stub before that module is learned. */
 static WORD g_wow_sound_seg = 0;
+static WORD g_wow_mmedia_seg = 0;   /* s90 #278: MMSYSTEM's stub segment */
 
 static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
 {
@@ -21617,6 +21626,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, "krnl386 seg2");
                             else if (g_wow_sound_seg && sseg == g_wow_sound_seg)
                                 p = zput(p, "SOUND");
+                            else if (g_wow_mmedia_seg && sseg == g_wow_mmedia_seg)
+                                p = zput(p, "MMSYSTEM");
                             else
                                 p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
                             p = zput(p, "'s table -- a DIFFERENT id space]");
@@ -22450,6 +22461,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      idle guest ~100 wake-ups a second and buy
                                      nothing, so it was reverted rather than kept
                                      on the grounds that it "should" help. */
+                                if (g_ica_pending)         /* s90 #278 */
+                                    wow_ica_deliver(g_dosm, tib, 0);
                                 if (!wowwin_pump(64))
                                     MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
                                                               QS_ALLINPUT);
@@ -22806,6 +22819,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (SOUND), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
+                        wowlog_flush(base, &p);
+                        return 1;
+                    }
+                }
+                /* ── ★ MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
+                if (!f.krnl && !g_wow_mmedia_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
+                    && f.stubseg != g_wow_kbd_seg && f.stubseg != g_wow_gdi_seg
+                    && f.stubseg != g_wow_sound_seg
+                    && wow_anchor_hit(g_mmedia_anchors,
+                                      (int)(sizeof g_mmedia_anchors / sizeof g_mmedia_anchors[0]),
+                                      f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_mmedia_seg = f.stubseg;
+                    p = zput(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
+                    p = zhex(p, g_wow_mmedia_seg);
+                }
+                if (!f.krnl && g_wow_mmedia_seg && f.stubseg == g_wow_mmedia_seg) {
+                    char note[200];
+                    if (wowmmedia_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (MMSYSTEM), returned 0x");
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
@@ -26234,6 +26273,185 @@ static int wow_call16_sync(DWORD proc, WORD ds, const WORD *args, int n,
 {
     return wow_call16_sync_ex(proc, ds, args, n, hwnd, msg, res, NULL, 0, -1, NULL, 0);
 }
+/* ── ★★ THE WOW32.DLL / NTVDM.EXE STAND-INS (s90, #5/#278). See src/shim/wowshim.c.
+     Loaded once, at WOW start-up, by FULL PATH from bin\wowshim\ -- a module of that
+     name must be in the process before any 32-bit thunk DLL asks for it by name
+     (winmm asks in NotifyCallbackData, the first thing MMSYSTEM calls). */
+typedef struct {
+    DWORD  version;
+    void  *(*getvdmptr)(DWORD vp, DWORD cb, BOOL pm);
+    HANDLE (*handle32)(WORD h16, DWORD type);
+    WORD   (*handle16)(HANDLE h32, DWORD type);
+    BOOL   (*callback16ex)(DWORD vpfn, DWORD flags, DWORD cb, void *args, DWORD *ret);
+    void   (*ica_interrupt)(int ms, BYTE line, int count);
+    void   (*yield16)(void);
+    void   (*log)(const char *what);
+} ntvdmex_shim_api_t;
+
+
+static void shim_log(const char *what)
+{
+    char b[200], *q = b;
+    q = zput(q, "WOWSHIM: "); q = zput(q, what); q = zput(q, "\r\n");
+    log_append(LOG_PATH, b, q);
+}
+/* WOWGetVDMPointer(vp, cb, fProtectedMode): a 16:16 PM address through our LDT, or
+   seg:off in real mode (which sits at linear 0 of this process, as in NTVDM). */
+static void *shim_getvdmptr(DWORD vp, DWORD cb, BOOL pm)
+{
+    (void)cb;
+    if (!vp) return NULL;
+    if (pm) {
+        DWORD b = dpmi_sel_base((WORD)(vp >> 16));
+        return b ? (void *)(ULONG_PTR)(b + (vp & 0xFFFF)) : NULL;
+    }
+    return (void *)(ULONG_PTR)(((vp >> 16) << 4) + (vp & 0xFFFF));
+}
+/* WOW_TYPE_*: 0 HWND, 1 HMENU, 4 HDC, 5 HFONT, 6 HMETAFILE, 7 HRGN, 8 HBITMAP,
+   9 HBRUSH, 10 HPALETTE, 11 HPEN, 14 FULLHWND. The rest answer 0 and say so. */
+static HANDLE shim_handle32(WORD h, DWORD type)
+{
+    int kind = -1;
+    if (!h) return NULL;
+    switch (type) {
+    case 0: case 14: { wowuser_win_t *w = wowuser_findwin(h); return w ? (HANDLE)w->hwnd32 : NULL; }
+    case 1:  return (HANDLE)wowuser_menu32(h);
+    case 4: case 5: case 6: case 7: case 8: case 9: case 10: case 11:
+        return (HANDLE)wowgdi_h32(h, &kind);
+    }
+    shim_log("WOWHandle32: a handle type this host does not map -- 0");
+    return NULL;
+}
+static WORD shim_handle16(HANDLE h, DWORD type)
+{
+    if (!h) return 0;
+    switch (type) {
+    case 0: case 14: return wowwin_hwnd16((HWND)h);
+    case 4: return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_DC);
+    case 5: case 6: case 7: case 8: case 9: case 10: case 11:
+        return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_OBJ);
+    }
+    shim_log("WOWHandle16: a handle type this host does not map -- 0");
+    return 0;
+}
+static void shim_ica(int ms, BYTE line, int count)
+{
+    (void)count;
+    if (line > 7) return;
+    InterlockedOr(&g_ica_pending, (LONG)(1u << ((ms ? 8 : 0) + line)));
+    if (++g_ica_raised <= 8) {
+        char b[96], *q = b;
+        q = zput(q, "WOWSHIM: call_ica_hw_interrupt ms="); q = zhex(q, (DWORD)ms);
+        q = zput(q, " line="); q = zhex(q, line); q = zput(q, " tid=0x");
+        q = zhex(q, GetCurrentThreadId()); q = zput(q, "\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+    /* wake a GetMessage wait parked in MsgWaitForMultipleObjects */
+    if (g_guest_tid && GetCurrentThreadId() != g_guest_tid)
+        PostThreadMessageA(g_guest_tid, WM_NULL, 0, 0);
+}
+static void shim_yield(void) { Sleep(0); }
+
+static void wow_shims_load(void)
+{
+    static int done;
+    static ntvdmex_shim_api_t api;
+    static const char *const names[] = { "WOW32.DLL", "NTVDM.EXE" };
+    char path[MAX_PATH], b[MAX_PATH + 160], *q;
+    unsigned i;
+    if (done) return;
+    done = 1;
+    api.version = 1; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
+    api.handle16 = shim_handle16; api.callback16ex = NULL; api.ica_interrupt = shim_ica;
+    api.yield16 = shim_yield; api.log = shim_log;
+    for (i = 0; i < 2; ++i) {
+        HMODULE h;
+        BOOL (WINAPI *init)(const ntvdmex_shim_api_t *);
+        int k = 0;
+        const char *r = NTVDMEX_DIR;
+        while (*r && k < MAX_PATH - 40) path[k++] = *r++;
+        r = "bin\\wowshim\\"; while (*r) path[k++] = *r++;
+        r = names[i]; while (*r) path[k++] = *r++;
+        path[k] = 0;
+        h = LoadLibraryExA(path, NULL, 0);
+        init = h ? (BOOL (WINAPI *)(const ntvdmex_shim_api_t *))GetProcAddress(h, "NtvdmexShimInit")
+                 : NULL;
+        q = b; q = zput(q, "WOWSHIM: "); q = zput(q, names[i]);
+        if (!h) { g_shim_state[i] = 2; g_shim_err[i] = GetLastError();
+                  q = zput(q, " NOT LOADED from ["); q = zput(q, path);
+                  q = zput(q, "] err=0x"); q = zhex(q, g_shim_err[i]); }
+        else if (!init || !init(&api)) { g_shim_state[i] = 3;
+                  q = zput(q, " loaded but its init REFUSED the table"); }
+        else { g_shim_state[i] = 1; q = zput(q, " loaded at 0x"); q = zhex(q, (DWORD)(ULONG_PTR)h); }
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+}
+
+/* ── ★★ A FAULT INSIDE A NESTED RUN IS STILL A FAULT. (s90, found tracing #278) ────
+     The main PM loop owns exception delivery: the kernel reflects a fault onto one
+     of our fault sites (`C4 C4 57` in g_dpmi_flt_code_sel), and the main loop hands
+     it to the client's registered handler with our FLTRET BOP as the return
+     address. The NESTED runs -- wow_call16_sync_ex (WM_INITDIALOG, WM_DRAWITEM,
+     WM_CTLCOLOR sent from inside a Win32 call) and the PM IRQ/mouse-callback
+     injectors -- had no such arm: they passed the site's BOP to the service
+     routine, where 0x57 is ALSO the WOW callback id, so it was logged
+     "UNIMPLEMENTED, STEPPED OVER", never delivered, and the guest re-faulted on the
+     same instruction until the loop's budget ran out.
+   ► MEASURED, Sound Recorder (runs/s90/sr1_host.log): MMSYSTEM's init far-calls
+     its segment 8 before it is loaded -- #NP, error code 0x0C44, at 0C77:041E --
+     inside a nested run. krnl386's #NP handler is what LOADS the segment; it was
+     never called, and the BOP was "stepped over" 309,601 times.
+   ⇒ This is the main loop's 16-bit path, reduced to what a nested run needs:
+     deliver a reflected fault to a REGISTERED handler, and resume from the
+     (possibly rewritten) frame at FLTRET. A 32-bit client, a class nobody
+     registered, and a software INT reflected as #GP (IDT bit) are left exactly as
+     before -- the main loop's long arm handles those, and this does not guess. */
+static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
+{
+    DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+    DWORD sb, esp;
+    volatile WORD *fr;
+    char lb[256], *lp = lb;
+    /* ⚠ WOW ONLY. The evidence is a WOW run; DOS clients (ZAR's DOS/16M, Doom's
+         DOS/4GW) go through the IRQ injector too and keep their old behaviour until
+         a DOS case is measured. */
+    if (!g_wow_launch) return 0;
+    if (ev != VDM_EVENT_BOP || csv != (g_dpmi_flt_code_sel & 0xFFFF) || g_dpmi_client32)
+        return 0;
+    sb  = dpmi_sel_base(g_dpmi_fault_sel);
+    esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+    fr  = (volatile WORD *)(ULONG_PTR)(sb + esp);
+    if (!sb || !host_readable((const void *)fr, 0x10)) return 0;
+    if (eip == DPMI_FLTRET_COFF) {
+        /* the handler's RETF popped the two return words: SP is on the error code */
+        VDM_SET16(tib, VTIB_SS, fr[5]); VDM_REG(tib, VTIB_ESP) = fr[4];
+        VDM_SET16(tib, VTIB_CS, fr[2]); VDM_REG(tib, VTIB_EIP) = fr[1];
+        VDM_SET16(tib, VTIB_EFLAGS, fr[3]);
+        lp = zput(lp, "NESTED EXC RETURN -> resume 0x"); lp = zhex(lp, fr[2]);
+        lp = zput(lp, ":0x"); lp = zhex(lp, fr[1]); lp = zput(lp, "\r\n");
+        log_append(LOG_PATH, lb, lp);
+        return 1;
+    }
+    if (eip >= DPMI_FAULT_SITE(0) && eip < DPMI_FAULT_SITE(DOS_FLTSITE_N)
+        && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0) {
+        int exc = (int)((eip - DPMI_FAULT_SITE(0)) / 4);
+        if (exc < 0 || exc >= 32 || !g_pm_exc[exc].set || (fr[2] & 0x2)) return 0;
+        fr[0] = (WORD)DPMI_FLTRET_COFF;
+        fr[1] = g_dpmi_flt_code_sel;
+        VDM_SET16(tib, VTIB_CS, g_pm_exc[exc].sel);
+        VDM_REG(tib, VTIB_EIP) = g_pm_exc[exc].off;
+        lp = zput(lp, "NESTED EXC 0x"); lp = zhex(lp, (DWORD)exc);
+        lp = zput(lp, " err=0x"); lp = zhex(lp, fr[2]);
+        lp = zput(lp, " at 0x"); lp = zhex(lp, fr[4]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[3]);
+        lp = zput(lp, " -> client handler 0x"); lp = zhex(lp, g_pm_exc[exc].sel);
+        lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_exc[exc].off); lp = zput(lp, "\r\n");
+        log_append(LOG_PATH, lb, lp);
+        return 1;
+    }
+    return 0;
+}
+
 static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
                               WORD hwnd, WORD msg, WORD *res,
                               BYTE *blob, int blobn, int blobarg,
@@ -26283,6 +26501,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
             HOST_UNLOCK();
             if (io_h) continue;
         }
+        if (dpmi_nested_fault(tib, ev, eip)) continue;      /* s90: see the helper */
         vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(g_dosm, tib, vec, 0);
         if (rc <= 0) break;
@@ -26624,6 +26843,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
             HOST_UNLOCK();
             if (io_h) continue;
         }
+        if (dpmi_nested_fault(tib, ev, eip)) continue;      /* s90 */
         vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, vec, steps);
         if (rc > 0) continue;
@@ -26685,6 +26905,30 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     VDM_SET16(tib,VTIB_FS,sFS); VDM_SET16(tib,VTIB_GS,sGS);
     g_dpmi_vi = prev_vi;
     return done;
+}
+
+/* ── s90 (#278): deliver IRQs a 32-bit component raised (call_ica_hw_interrupt via
+     bin\wowshim\NTVDM.EXE) to the client's PM handlers. Called from the main PM loop
+     AND from the WOW GetMessage wait: a Win16 program spends a sound's whole playback
+     parked in GetMessage, and on real hardware IRQ 10 would interrupt that idle task,
+     MMSYSTEM's handler would post MM_WOM_DONE, and GetMessage would return it -- so
+     the wait must deliver too, or the callback arrives never. */
+static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned steps)
+{
+    LONG bits;
+    unsigned li;
+    if (!g_ica_pending || g_in_pm_irq || g_pm_noirq || g_async_pm_active) return;
+    bits = InterlockedExchange(&g_ica_pending, 0);
+    for (li = 0; li < 16; ++li) {
+        unsigned iv;
+        if (!(bits & (1L << li))) continue;
+        iv = (li < 8) ? 0x08 + li : 0x70 + (li - 8);
+        if (!g_pm_int[iv].client) { ++g_ica_nohandler; continue; }
+        g_in_pm_irq = 1;
+        if (dpmi_inject_pm_irq(mp, tib, iv, steps)) ++g_ica_delivered;
+        else InterlockedOr(&g_ica_pending, (LONG)(1L << li));       /* retry later */
+        g_in_pm_irq = 0;
+    }
 }
 
 /* ── THE INT 33h EVENT HANDLER, FOR A PROTECTED-MODE CLIENT. (s74c: ZAR's clicks) ───
@@ -26787,6 +27031,7 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
             HOST_UNLOCK();
             if (io_h) continue;
         }
+        if (dpmi_nested_fault(tib, e, eip)) continue;       /* s90 */
         vec = (e == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, vec, steps);
         if (rc > 0) continue;
@@ -27834,6 +28079,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     CreateDirectoryA(NTVDMEX_CFG, NULL);
     CreateDirectoryA(NTVDMEX_DEBUG, NULL);
     CreateDirectoryA(NTVDMEX_OUT, NULL);
+    /* s90 (#278): THE WOW32.DLL / NTVDM.EXE STAND-INS GO IN FIRST, before anything in
+         this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
+         answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
+         loaded at the WOW branch below, the shims arrived after the question had been
+         answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
+    if (launch_is_wow(GetCommandLineA())) wow_shims_load();
 
     /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
          `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
@@ -28066,6 +28317,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
+        p = report;
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
             return wow_refuse(GetCommandLineA());
         /* Experiment opted in: load now, then fall through so the selector stage can
@@ -31922,6 +32174,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         g_in_pm_irq = 0;
                         g_coop_dma_polls += g_dma.rd_count[1] - pre8;
                     }
+                    /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
+                         through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
+                         MMSYSTEM a callback is queued in their shared buffer, and
+                         MMSYSTEM's handler (PM vector 72h) drains it and EOIs both PICs.
+                         Delivered here, by the guest thread, on the same gates as IRQ0;
+                         a line nobody hooked is counted and dropped (real hardware would
+                         reach the default handler, which only EOIs). WOW only. */
+                    if (g_wow_launch && g_ica_pending && g_dpmi_vi)
+                        wow_ica_deliver(&m, tib, steps);
                     /* ── AND THE KEYBOARD, WHICH HAD NO COOPERATIVE PATH AT ALL. ─────────
                          IRQ0 has had one since #2b; IRQ1 had only the asynchronous
                          injector, and that gets ONE attempt per keystroke: the 8042 model
@@ -34358,6 +34619,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " busy_by_task=");
       { unsigned dt; for (dt = 0; dt < 12; ++dt) { p = zput(p, dt ? "," : "");
                                                    p = zhex(p, g_dmx_busy[dt]); } }
+      p = zput(p, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); p = zhex(p, g_ica_raised);
+      p = zput(p, " delivered="); p = zhex(p, g_ica_delivered);
+      p = zput(p, " nohandler="); p = zhex(p, g_ica_nohandler);
+      p = zput(p, " shims[WOW32.DLL,NTVDM.EXE]=["); p = zhex(p, g_shim_state[0]);
+      p = zput(p, ","); p = zhex(p, g_shim_state[1]); p = zput(p, "] err=[");
+      p = zhex(p, g_shim_err[0]); p = zput(p, ","); p = zhex(p, g_shim_err[1]); p = zput(p, "]");
+      p = zput(p, " (1 loaded, 2 not found, 3 init refused)");
       p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_sb_ver_major);
       p = zput(p, "."); p = zhex(p, (DWORD)g_sb_ver_minor);
       p = zput(p, " execprio="); p = zhex(p, g_exec_prio);

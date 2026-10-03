@@ -44,6 +44,14 @@ MGR="$ROOT/build/ntvdmex.exe"
 grep -q "NTVDMEX_Manager" "$MGR" 2>/dev/null || { echo "build/ntvdmex.exe is not the manager (stale M0 preview?) -- rebuild" >&2; exit 1; }
 cp "$MGR" "$stage/bin/ntvdmex.exe"
 cp "$ROOT/tools/dostest/selftest.com" "$stage/bin/selftest.com"
+# s90 (#278): the WOW32.DLL / NTVDM.EXE stand-ins a 32-bit thunk DLL looks up by name
+# (winmm does: Sound Recorder and Media Player need them). The host loads them from
+# bin\wowshim\ by full path; without them Win16 multimedia reports no devices.
+mkdir -p "$stage/bin/wowshim"
+for f in WOW32.DLL NTVDM.EXE; do
+    [ -f "$ROOT/build/wowshim/$f" ] || { echo "build/wowshim/$f missing -- rebuild" >&2; exit 1; }
+    cp "$ROOT/build/wowshim/$f" "$stage/bin/wowshim/$f"
+done
 for f in install.bat uninstall.bat status.bat smoke.bat diag.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"
 done

@@ -313,6 +313,15 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
         w32.lpstrFileTitle    = (LPSTR) wow32_farat(f, o, OFN16_FILETITLE);
         w32.nMaxFileTitle     = wcd_peekd(o, OFN16_MAXFILETITLE);
         w32.lpstrInitialDir   = (LPCSTR)wow32_farat(f, o, OFN16_INITIALDIR);
+        /* s90: NULL means "the current directory" in Win16's COMMDLG -- that is where
+           Windows 3.1 always opened. XP's comdlg32 instead prefers the folder last used
+           by this EXECUTABLE, and every Win16 program here is ntvdmhost.exe, so Sound
+           Recorder's Open dialog came up in Doom's folder (runs/s90/srp0.png). The
+           guest's DOS current directory IS this process's (INT 21h AH=47 reads it). */
+        if (!w32.lpstrInitialDir) {
+            static char cwd16[MAX_PATH];
+            if (GetCurrentDirectoryA(sizeof cwd16, cwd16)) w32.lpstrInitialDir = cwd16;
+        }
         w32.lpstrTitle        = (LPCSTR)wow32_farat(f, o, OFN16_TITLE);
         w32.lpstrDefExt       = (LPCSTR)wow32_farat(f, o, OFN16_DEFEXT);
 
