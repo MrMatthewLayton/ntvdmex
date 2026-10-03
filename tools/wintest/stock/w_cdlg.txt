@@ -1,0 +1,16 @@
+#PROBE w16cdlg
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=pd.badsize.ret SIG=AX AX=0000
+CASE=pd.badsize.err SIG=AX AX=0001
+CASE=pd.default.ret SIG=AX AX=0000
+CASE=pd.default.err SIG=AX AX=1008
+CASE=pd.default.hdevmode SIG=AX AX=0000
+CASE=pd.default.hdevnames SIG=AX AX=0000
+CASE=pd.default.hdc SIG=AX AX=0000
+CASE=pd.defic.ret SIG=AX AX=0000
+CASE=pd.defic.err SIG=AX AX=1008
+CASE=pd.defic.hdc SIG=AX AX=0000
+CASE=pd.defic.ncopies SIG=AX AX=0001
+#END

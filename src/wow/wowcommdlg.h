@@ -157,6 +157,30 @@ static void wcd_poked(volatile BYTE *p, int off, DWORD v)
 #define CF16_HOOKBITS  (0x00000008UL | 0x00000010UL | 0x00000020UL)
 /* CF_ENABLEHOOK | CF_ENABLETEMPLATE | CF_ENABLETEMPLATEHANDLE */
 
+/* Win16 PRINTDLG, 0x34 bytes (3.1 SDK; Wine's PRINTDLG16 agrees). */
+#define WOWCDLG_PRINTDLG     0x0014
+#define WOW_PD16_SIZE        0x34
+#define PD16_STRUCTSIZE      0x00
+#define PD16_HWNDOWNER       0x04
+#define PD16_HDEVMODE        0x06
+#define PD16_HDEVNAMES       0x08
+#define PD16_HDC             0x0a
+#define PD16_FLAGS           0x0c
+#define PD16_FROMPAGE        0x10
+#define PD16_TOPAGE          0x12
+#define PD16_MINPAGE         0x14
+#define PD16_MAXPAGE         0x16
+#define PD16_COPIES          0x18
+#define PD16_CUSTDATA        0x1c
+#define PD16_HOOKBITS  (0x00001000UL | 0x00002000UL | 0x00004000UL | 0x00008000UL \
+                        | 0x00010000UL | 0x00020000UL)
+/* PD_ENABLEPRINTHOOK | PD_ENABLESETUPHOOK | PD_ENABLE{PRINT,SETUP}TEMPLATE[HANDLE] */
+
+/* An answer CommDlgExtendedError owes for a call THIS HOST refused before comdlg32
+   saw it (a wrong lStructSize): comdlg32's own per-thread value would say 0, and
+   stock says CDERR_STRUCTSIZE (w_cdlg). Cleared by every call that reaches comdlg32. */
+static DWORD g_wcd_err = 0;
+
 /* Win16 LOGFONT: five INT16s, eight BYTEs, a 32-byte face -- 50 bytes. */
 static void wcd_lf16_to32(const volatile BYTE *p, LOGFONTA *lf)
 {
@@ -245,6 +269,7 @@ static int wowcdlg_isdlgmsg(MSG *m)
 static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
 {
     if (notecap) note[0] = 0;
+    if (f->id != WOWCDLG_EXTENDEDERROR) g_wcd_err = 0;   /* a new call, a new answer */
     switch (f->id) {
 
     /* ── ★★★★★ 0x01 GetOpenFileName / 0x02 GetSaveFileName(lpOFN) ────────────
@@ -698,8 +723,81 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    /* ── #294 (s91): 0x14 PrintDlg(lpPD) -- modal, the OS's dialog, as WOW does.
+         Converted field by field (2-byte handles in the 16-bit struct). What comes
+         back: the page range, nCopies, Flags, and -- for PD_RETURNDC/PD_RETURNIC --
+         the printer DC as one of our GDI tokens (Win32 draws on it).
+       ⚠ hDevMode/hDevNames ARE NOT CARRIED, either way. They are Win16 GLOBAL
+         handles: krnl386 owns that heap, so reading the guest's needs a GlobalLock
+         call into it and returning new ones a GlobalAlloc chain (the clipboard's
+         shape, wowcall.h). Not built: comdlg32 is given NULL (the default printer)
+         and the guest's two words are left as it set them. Win32's are freed. The
+         line says so whenever the guest offered one.
+       ★ w_cdlg vs stock: a wrong size -> 0 + CDERR_STRUCTSIZE; PD_RETURNDEFAULT on
+         a box with no printer -> 0 + PDERR_NODEFAULTPRN, with and without RETURNIC. */
+    case WOWCDLG_PRINTDLG: {
+        volatile BYTE *o = wow32_argptr(f, 0);
+        PRINTDLGA pd;
+        wowuser_win_t *ow;
+        DWORD flags;
+        WORD dm16, dn16;
+        int k = 0, ok, i;
+        wu_puts(note, notecap, &k, "PrintDlg");
+        if (!o || wcd_peekd(o, PD16_STRUCTSIZE) != WOW_PD16_SIZE) {
+            wu_puts(note, notecap, &k, " -- NULL or lStructSize != 0x34; refused,"
+                                       " CDERR_STRUCTSIZE");
+            g_wcd_err = CDERR_STRUCTSIZE;
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof pd; ++i) ((BYTE *)&pd)[i] = 0;
+        ow = wowuser_findwin(wow32_peekw(o + PD16_HWNDOWNER));
+        flags = wcd_peekd(o, PD16_FLAGS);
+        dm16 = wow32_peekw(o + PD16_HDEVMODE);
+        dn16 = wow32_peekw(o + PD16_HDEVNAMES);
+        pd.lStructSize = sizeof pd;
+        pd.hwndOwner   = ow ? ow->hwnd32 : NULL;
+        pd.Flags       = flags & ~PD16_HOOKBITS;
+        pd.nFromPage   = wow32_peekw(o + PD16_FROMPAGE);
+        pd.nToPage     = wow32_peekw(o + PD16_TOPAGE);
+        pd.nMinPage    = wow32_peekw(o + PD16_MINPAGE);
+        pd.nMaxPage    = wow32_peekw(o + PD16_MAXPAGE);
+        pd.nCopies     = wow32_peekw(o + PD16_COPIES);
+        pd.lCustData   = (LPARAM)wcd_peekd(o, PD16_CUSTDATA);
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, flags, 8);
+        if (flags & PD16_HOOKBITS)
+            wu_puts(note, notecap, &k, " (hook/template bits STRIPPED)");
+        if (dm16 | dn16)
+            wu_puts(note, notecap, &k, " -- ⚠ the guest's hDevMode/hDevNames are NOT"
+                                       " read (Win16 global handles); default printer");
+        ok = PrintDlgA(&pd);
+        if (pd.hDevMode)  GlobalFree(pd.hDevMode);
+        if (pd.hDevNames) GlobalFree(pd.hDevNames);
+        if (ok) {
+            WORD tok = 0;
+            if (pd.hDC) {
+                tok = wowgdi_h16((HGDIOBJ)pd.hDC, WOWGDI_KIND_DC);
+                if (!tok) DeleteDC(pd.hDC);
+            }
+            wow32_pokew(o + PD16_HDC,      tok);
+            wow32_pokew(o + PD16_FROMPAGE, pd.nFromPage);
+            wow32_pokew(o + PD16_TOPAGE,   pd.nToPage);
+            wow32_pokew(o + PD16_COPIES,   pd.nCopies);
+            wcd_poked(o, PD16_FLAGS, (pd.Flags & ~PD16_HOOKBITS) | (flags & PD16_HOOKBITS));
+            wu_puts(note, notecap, &k, " -> OK hDC token 0x");
+            wu_puthex(note, notecap, &k, tok, 4);
+            wu_puts(note, notecap, &k, " copies=");
+            wu_puthex(note, notecap, &k, pd.nCopies, 4);
+        } else {
+            wu_puts(note, notecap, &k, " -> 0, CommDlgExtendedError 0x");
+            wu_puthex(note, notecap, &k, CommDlgExtendedError(), 8);
+        }
+        wow32_setret(f, (DWORD)(ok ? 1 : 0));
+        return 1;
+    }
+
     case WOWCDLG_EXTENDEDERROR: {
-        DWORD e = CommDlgExtendedError();
+        DWORD e = g_wcd_err ? g_wcd_err : CommDlgExtendedError();
         int k = 0;
         wu_puts(note, notecap, &k, "CommDlgExtendedError -> 0x");
         wu_puthex(note, notecap, &k, e, 8);
