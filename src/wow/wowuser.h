@@ -3272,19 +3272,55 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
    and the guest is TOLD (WM_DESTROY) -- lifted out of USER 0x35 in s82 so that
    DefWindowProc's WM_CLOSE (#162) destroys a window the same way. Appends to `note`
    at *k; returns 0 if there is no such window. */
+/* s89 (#305 M10): send a message to a guest window NOW, through the nested run
+   (main.c wires this to wow_call16_sync with the window's own procedure and
+   instance, exactly as DispatchMessage would choose them). 0 = could not. */
+static int (*g_wu_send16)(WORD hwnd, WORD msg, WORD wp, DWORD lp, WORD *res);
+
 static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
 {
         wowuser_win_t *w = wowuser_findwin(hwnd);
-        int k = *kp, i, kids = 0;
+        int k = *kp, i, kids = 0, sent = 0;
         HWND h32;
+        WORD r16;
         wu_puts(note, notecap, &k, "DestroyWindow 0x");
         wu_puthex(note, notecap, &k, hwnd, 4);
         if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW"); *kp = k; return 0; }
+        /* ⚠ RE-ENTRY: a WM_DESTROY handler that destroys its own window again is
+             legal and common. It is already going; say yes and do nothing. */
+        if (w->dying) { wu_puts(note, notecap, &k, " -- already being destroyed");
+                        *kp = k; return 1; }
         h32 = w->hwnd32;
+        /* ── ★★★ #305 (M10): WM_DESTROY IS SENT, WHILE EVERYTHING STILL EXISTS. ──
+             Measured on Charmap (s89, the inventory's profile-write check): it
+             saves its font in its WM_DESTROY handler by asking its own font combo
+             box -- CB_GETCURSEL, CB_GETLBTEXT -- and wrote an EMPTY name, because
+             this function had already destroyed the real window and released
+             every child record before the posted WM_DESTROY reached it ("no real
+             window"). On real Windows DestroyWindow SENDS WM_DESTROY to the window
+             and then to each child, all still alive, and only then takes them
+             down. Any program that saves state on close works that way.
+             The nested run makes that possible now; the old posted path below
+             stays as the fallback for a context where a nested call cannot run. */
+        w->dying = 1;
+        if (g_wu_send16 && wowuser_winproc_of(w)
+            && g_wu_send16(hwnd, WM_DESTROY16, 0, 0, &r16)) {
+            sent = 1;
+            for (i = 0; i < g_wu_nwin; ++i) {
+                wowuser_win_t *c = &g_wu_win[i];
+                if (c->hwnd && c != w && !c->dying && c->hwnd32 && h32
+                    && IsChild(h32, c->hwnd32) && wowuser_winproc_of(c)) {
+                    c->dying = 1;
+                    g_wu_send16(c->hwnd, WM_DESTROY16, 0, 0, &r16);
+                }
+            }
+            h32 = w->hwnd32;            /* the guest may have changed things meanwhile */
+        }
+        w->dying = 0;
         for (i = 0; i < g_wu_nwin; ++i) {
             wowuser_win_t *c = &g_wu_win[i];
             if (c->hwnd && c != w && c->hwnd32 && h32 && IsChild(h32, c->hwnd32)) {
-                c->hwnd = 0; c->hwnd32 = NULL; ++kids;
+                c->hwnd = 0; c->hwnd32 = NULL; c->dying = 0; ++kids;
             }
         }
         /* ── ★★★★★ AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) ──
@@ -3317,6 +3353,19 @@ static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
              it means re-entering the guest from inside a service. Posted, the
              guest sees it at its next GetMessage, which for this message is
              precisely where its message loop already is. */
+        if (sent) {
+            /* Told already, synchronously: the record goes with the window. */
+            w->hwnd = 0; w->dying = 0;
+            w->hwnd32 = NULL;
+            if (g_wm_focus == hwnd) g_wm_focus = 0;
+            if (h32) DestroyWindow(h32);
+            wu_puts(note, notecap, &k, " -> WM_DESTROY SENT (nested), then destroyed");
+            if (kids) { wu_puts(note, notecap, &k, ", with 0x");
+                        wu_puthex(note, notecap, &k, (DWORD)kids, 2);
+                        wu_puts(note, notecap, &k, " child record(s) released too"); }
+            *kp = k;
+            return 1;
+        }
         wowmsg_post(hwnd, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
         w->dying  = 1;
         w->hwnd32 = NULL;              /* the real window is going NOW... */

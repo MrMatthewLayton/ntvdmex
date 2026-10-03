@@ -26271,6 +26271,21 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     return 0;
 }
 
+/* s89 (#305 M10): a message SENT to a guest window, now -- its own procedure and
+   instance chosen exactly as DispatchMessage chooses them. wowuser_destroy uses it
+   so WM_DESTROY arrives while the window and its children still exist. */
+static int wow_send16_now(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res)
+{
+    wowuser_win_t *w = wowuser_findwin(h16);
+    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WORD args[5];
+    if (!proc) return 0;
+    args[0] = h16; args[1] = msg; args[2] = wp;
+    args[3] = (WORD)(lp >> 16); args[4] = (WORD)(lp & 0xFFFF);
+    return wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                           args, 5, h16, msg, res);
+}
+
 static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
 {
     char lb[256], *lp = lb;
@@ -29805,6 +29820,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.rtc_ctx = NULL;
     g_cmos.rtc_set = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
     g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
+    g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
