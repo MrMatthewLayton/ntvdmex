@@ -3284,6 +3284,10 @@ static int (*g_wu_send16)(WORD hwnd, WORD msg, WORD wp, DWORD lp, WORD *res);
    far pointers inside it that point back into it (main.c: wow_send16_blob). */
 static int (*g_wu_send16b)(WORD hwnd, WORD msg, WORD wp, BYTE *blob, int n,
                            const int *fix, int nfix, WORD *res);
+/* s89 (#302): the modeless dialog whose WM_INITDIALOG is running right now, and
+   whether the program called ShowWindow on it meanwhile (CreateDialog, below). */
+static WORD g_wu_initdlg_hwnd = 0;
+static int  g_wu_initdlg_shown = 0;
 
 static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp)
 {
@@ -4047,6 +4051,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 cstyle    &= ~(DWORD)WS_VISIBLE;
                 defer_show = 1;
             }
+            /* ⚠ s89 (#302): AND MODELESS NOW TOO -- the note above predates the
+                 nested run. A modeless dialog was shown before its WM_INITDIALOG,
+                 so everything the program did there painted at once: Charmap
+                 selects a font in its owner-drawn font list FIRST and loads the
+                 TrueType mark it draws beside the name AFTERWARDS, so the list was
+                 drawn without it, and never again. Real USER (Wine's
+                 DIALOG_CreateIndirect agrees) creates the window hidden, sends
+                 WM_INITDIALOG, and only then shows it. See the arm at the end. */
+            if (!modal && g_wu_send16 && f->cbok)
+                cstyle &= ~(DWORD)WS_VISIBLE;
             if (c->reg32) {
                 w->hwnd32 = CreateWindowExA(0, c->cls32, w->text, cstyle,
                                             usedef ? CW_USEDEFAULT32 : rc.left,
@@ -4117,15 +4131,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                     cw->text[n] = (n < (int)sizeof itext) ? itext[n] : 0;
             }
             if (ic && ic->reg32 && w->hwnd32) {
-                /* s89: an OWNER-DRAWN list/combo box that also keeps its strings is
-                   made a plain one. Owner draw needs WM_DRAWITEM delivered to the
-                   16-bit dialog, which this host cannot do yet -- the items were
-                   blank (Charmap's font list). With HASSTRINGS the OS can draw the
-                   text itself; the guest's record keeps the style it asked for. */
+                /* s89: an owner-drawn list/combo box used to be made a plain one here,
+                   because WM_DRAWITEM could not reach a 16-bit dialog and Charmap's
+                   font list came up blank. It can now (#302, wow_ownerdraw in main.c),
+                   so the control is created with the style the template asked for and
+                   the program draws its own items -- Charmap's TrueType marks included. */
                 DWORD cstyle32 = istyle;
-                if (ic->sysclass && ((!lstrcmpiA(ic->name, "COMBOBOX") && (istyle & 0x0200))
-                                  || (!lstrcmpiA(ic->name, "LISTBOX")  && (istyle & 0x0040))))
-                    cstyle32 &= ~0x0030u;
                 cw->hwnd32 = CreateWindowExA(0, ic->cls32, cw->text, cstyle32,
                                              cw->x, cw->y, cw->cx, cw->cy,
                                              w->hwnd32,
@@ -4230,7 +4241,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              return, because it hangs the guest instead of ending it" -- is why
              that file has FOUR named exits and why two paths in the arm below
              still return immediately and say so. */
-        if (w->hwnd32 && !(style & WS_VISIBLE))
+        if (w->hwnd32 && !(style & WS_VISIBLE) && (modal || !g_wu_send16 || !f->cbok))
             ShowWindow(w->hwnd32, SW_SHOW);
 
         /* ★ SAY WHICH ONE THIS IS, EVERY TIME. Until the modal loop exists, a
@@ -4356,10 +4367,33 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                routine (seg1:0x4b4a) pushes it there; plain CreateDialog pushes 0.
                ⛔ Passing 0 to a CreateDialogParam caller HID Sound Recorder: it reads
                its show state from it and called ShowWindow(SW_HIDE). */
-            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
-                             0x0110 /* WM_INITDIALOG */, firstfocus, wow32_argd(f, 6),
-                             WOWCALL_RET_KEEP);
-            wu_puts(note, notecap, &k, " + WM_INITDIALOG (modeless)");
+            WORD r16 = 0, saveh = g_wu_initdlg_hwnd;
+            int  saves = g_wu_initdlg_shown, sent = 0;
+            /* ★ s89 (#302): SENT, before CreateDialog returns, with the window still
+                 hidden -- then shown, as the dialog manager does. If the program
+                 called ShowWindow on it during WM_INITDIALOG (Sound Recorder hides
+                 itself that way), its choice stands. If the nested run cannot go,
+                 the old deferred path below is used unchanged. */
+            if (g_wu_send16) {
+                g_wu_initdlg_hwnd = w->hwnd; g_wu_initdlg_shown = 0;
+                sent = g_wu_send16(w->hwnd, 0x0110 /* WM_INITDIALOG */, firstfocus,
+                                   wow32_argd(f, 6), &r16);
+                if (sent && !g_wu_initdlg_shown && w->hwnd32 && IsWindow(w->hwnd32))
+                    ShowWindow(w->hwnd32, SW_SHOW);
+                if (!sent && w->hwnd32) ShowWindow(w->hwnd32, SW_SHOW);
+                g_wu_initdlg_hwnd = saveh; g_wu_initdlg_shown = saves;
+            }
+            if (sent) {
+                wu_puts(note, notecap, &k, " + WM_INITDIALOG SENT (modeless), then shown");
+            } else {
+                wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                                 0x0110 /* WM_INITDIALOG */, firstfocus, wow32_argd(f, 6),
+                                 WOWCALL_RET_KEEP);
+                wu_puts(note, notecap, &k, " + WM_INITDIALOG (modeless)");
+            }
+        } else if (!modal && w->hwnd32 && !IsWindowVisible(w->hwnd32)
+                   && g_wu_send16 && f->cbok) {
+            ShowWindow(w->hwnd32, SW_SHOW);     /* no procedure: shown as before */
         }
         return 1;
     }
@@ -5140,6 +5174,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         WORD cmd  = wow32_argw(f, SW_ARG_CMDSHOW);
         wowuser_win_t *w = wowuser_findwin(hwnd);
         int k = 0;
+        if (hwnd && hwnd == g_wu_initdlg_hwnd) g_wu_initdlg_shown = 1;   /* see CreateDialog */
         wu_puts(note, notecap, &k, "ShowWindow 0x");
         wu_puthex(note, notecap, &k, hwnd, 4);
         wu_puts(note, notecap, &k, " nCmdShow=0x");
