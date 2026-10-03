@@ -2155,6 +2155,10 @@ typedef struct wowuser_win_s {
        its controls were laid out with, and what MapDialogRect must use. 0 = not
        a dialog (the system's base units apply). */
     WORD  dlgbux, dlgbuy;
+    /* s89: the template named a font (DS_SETFONT). Stock gives such a dialog the 3-D
+       look -- its static text defaults to the button face (Charmap) -- and a dialog
+       without one the window colour (Calc's display). Measured on those two. */
+    BYTE  dlg3d;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -2193,6 +2197,7 @@ static wowuser_win_t *wowuser_newwin(void)
          longer exists. */
     w->dlgproc = 0;
     w->dlgbux = w->dlgbuy = 0;       /* the same trap: only a dialog sets them */
+    w->dlg3d = 0;
     return w;
 }
 
@@ -3884,6 +3889,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             if (dfont && fx > 0 && fy > 0) { bux = fx; buy = fy; }
         }
         w->dlgbux = (WORD)bux; w->dlgbuy = (WORD)buy;
+        w->dlg3d  = (BYTE)((style & WOWDLG_SETFONT) ? 1 : 0);
         w->cx = MulDiv(cx, bux, 4);
         w->cy = MulDiv(cy, buy, 8);
         /* ── ⚠ -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.

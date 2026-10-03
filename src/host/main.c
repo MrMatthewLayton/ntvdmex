@@ -26257,10 +26257,10 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     /* ── THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
          stock on the rig, s89): edit and list boxes are the WINDOW colour; static
          text and buttons are the 3-D face inside a DIALOG (16-bit dialogs get the 3-D
-         look -- Charmap's labels) and the WINDOW colour in an ordinary window
-         (Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own
+         look when its template names a font -- Charmap's labels) and the WINDOW
+         colour otherwise (Calc's display; Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own
          background keep Windows' default. */
-    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !w->dlgbux)) {
+    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !w->dlg3d)) {
         SetTextColor((HDC)wp, GetSysColor(COLOR_WINDOWTEXT));
         SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
         *handled = 1;
