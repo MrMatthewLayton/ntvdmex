@@ -794,6 +794,31 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         wow32_setret(f, (DWORD)GetSystemDefaultLangID());
         return 1;
 
+    /* ── ★★ 0x7b GetShortPathName(lpszLong, lpszShort, cch). (s89, #270) ─────
+         Named, never answered. krnl386's start-up (`seg1:0xceaf`) finds
+         `SYSTEMROOT=` in its environment and calls this with the value, a
+         buffer at ds:0xc3b and cch 0x79; the length it returns goes to [0xbc0]
+         and that many bytes become the PREFIX of the system directory, which
+         `seg1:0xc89f` builds as prefix + "\SYSTEM". Stepped over, the length was
+         0 and KERNEL.135 GetSystemDirectory answered "\SYSTEM" -- 7 characters,
+         no drive (the Win16 test `kfile.sysdir.*`). Frame, reversed: +0 cch,
+         +2 lpszShort far, +6 lpszLong far. Written only if it fits, as Win32
+         does; otherwise 0, so krnl386 never copies a length it was not given. */
+    case WOW32_GETSHORTPATHNAME: {
+        volatile BYTE *dst = wow32_argptr(f, 2);
+        WORD cap = wow32_argw(f, 0);
+        char src[MAX_PATH], out[MAX_PATH];
+        DWORD n;
+        if (!dst || !cap || !wow32_argstr(f, 6, src, sizeof src) || !src[0]) {
+            wow32_setret(f, 0); return 1;
+        }
+        n = GetShortPathNameA(src, out, sizeof out);
+        if (!n || n >= sizeof out || n + 1 > (DWORD)cap) { wow32_setret(f, 0); return 1; }
+        { DWORD k; for (k = 0; k <= n; ++k) dst[k] = (BYTE)out[k]; }
+        wow32_setret(f, n);
+        return 1;
+    }
+
     /* ── ★★ 0xd0 GetWindowsDirectory(lpBuffer, uSize) -- see the note above.
          The real Win32 call against the real directory, for the same reason
          GetDriveType is a pass-through: our DOS layer opens real paths on the

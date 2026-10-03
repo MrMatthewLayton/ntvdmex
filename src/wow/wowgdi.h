@@ -398,6 +398,14 @@
 #define WOWGDI_GETBKCOLOR       0x004b   /* ord 75,  2 args -- PBRUSH.DLL's    */
 #define WOWGDI_GETROP2          0x0055   /* ord 85,  2 args                    */
 #define WOWGDI_UPDATECOLORS     0x016e   /* ord 366, 2 args                    */
+/* s89 (#270): the rest of the one-DC getters, named by GDI.EXE's own export
+   table (wowmap.py: each DIRECT, 2 argument bytes). GetBkMode was the one the
+   Win16 tests caught answering the harness's 0 where the SDK default is OPAQUE. */
+#define WOWGDI_GETBKMODE        0x004c   /* ord 76                              */
+#define WOWGDI_GETMAPMODE       0x0051   /* ord 81                              */
+#define WOWGDI_GETPOLYFILLMODE  0x0054   /* ord 84                              */
+#define WOWGDI_GETSTRETCHBLTMODE 0x0058  /* ord 88                              */
+#define WOWGDI_GETTEXTCOLOR     0x005a   /* ord 90, a DWORD COLORREF            */
 
 #define WOWGDI_CREATERECTRGN    0x0040   /* ord 64,  8 args                    */
 #define RGN_ARG_BOTTOM  0
@@ -2644,14 +2652,24 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          other two are ints, which is the only difference between them here. */
     case WOWGDI_GETBKCOLOR:
     case WOWGDI_GETROP2:
-    case WOWGDI_UPDATECOLORS: {
+    case WOWGDI_UPDATECOLORS:
+    case WOWGDI_GETBKMODE:
+    case WOWGDI_GETMAPMODE:
+    case WOWGDI_GETPOLYFILLMODE:
+    case WOWGDI_GETSTRETCHBLTMODE:
+    case WOWGDI_GETTEXTCOLOR: {
         WORD hdc = wow32_argw(f, ONE_ARG_HANDLE);
         int  kind = -1;
         HGDIOBJ o = wowgdi_h32(hdc, &kind);
         int  k = 0;
         wu_puts(note, notecap, &k,
                 f->id == WOWGDI_GETBKCOLOR ? "GetBkColor(0x" :
-                f->id == WOWGDI_GETROP2    ? "GetROP2(0x"
+                f->id == WOWGDI_GETROP2    ? "GetROP2(0x" :
+                f->id == WOWGDI_GETBKMODE  ? "GetBkMode(0x" :
+                f->id == WOWGDI_GETMAPMODE ? "GetMapMode(0x" :
+                f->id == WOWGDI_GETPOLYFILLMODE ? "GetPolyFillMode(0x" :
+                f->id == WOWGDI_GETSTRETCHBLTMODE ? "GetStretchBltMode(0x" :
+                f->id == WOWGDI_GETTEXTCOLOR ? "GetTextColor(0x"
                                            : "UpdateColors(0x");
         wu_puthex(note, notecap, &k, hdc, 4);
         wu_puts(note, notecap, &k, ")");
@@ -2661,13 +2679,18 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        if (f->id == WOWGDI_GETBKCOLOR) {
-            COLORREF c = GetBkColor((HDC)o);
+        if (f->id == WOWGDI_GETBKCOLOR || f->id == WOWGDI_GETTEXTCOLOR) {
+            COLORREF c = f->id == WOWGDI_GETBKCOLOR ? GetBkColor((HDC)o)
+                                                    : GetTextColor((HDC)o);
             wu_puts(note, notecap, &k, " = 0x");
             wu_puthex(note, notecap, &k, (DWORD)c, 8);
             wow32_setret(f, (DWORD)c);
-        } else if (f->id == WOWGDI_GETROP2) {
-            int v = GetROP2((HDC)o);
+        } else if (f->id != WOWGDI_UPDATECOLORS) {
+            int v = f->id == WOWGDI_GETROP2     ? GetROP2((HDC)o) :
+                    f->id == WOWGDI_GETBKMODE   ? GetBkMode((HDC)o) :
+                    f->id == WOWGDI_GETMAPMODE  ? GetMapMode((HDC)o) :
+                    f->id == WOWGDI_GETPOLYFILLMODE ? GetPolyFillMode((HDC)o)
+                                                : GetStretchBltMode((HDC)o);
             wu_puts(note, notecap, &k, " = ");
             wu_puthex(note, notecap, &k, (DWORD)v, 4);
             wow32_setret(f, (DWORD)(WORD)v);

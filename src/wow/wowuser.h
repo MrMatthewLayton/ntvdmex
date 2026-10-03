@@ -2211,10 +2211,34 @@ static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
 static int wowdlg_end(WORD hwnd, WORD result);
 static int wowdlg_active(void);
 
+/* ── s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
+     on the grounds that GetDC(0) is the screen -- but a program that CENTRES a
+     dialog asks GetWindowRect(GetDesktopWindow()), and IsWindow of it must be
+     TRUE (the Win16 test `user.desktop.*`). One record outside the table: no
+     loop over g_wu_win sees it, so it is never destroyed, enumerated or given a
+     message; every handler that takes an hWnd finds the real desktop behind it.
+     wndproc/dlgproc 0: nothing of the guest's is ever called for it. Below the
+     first synthetic window handle, on the same 0x20 spacing. */
+#define WOWUSER_HWND_DESKTOP 0x00e0
+static wowuser_win_t g_wu_desktop;
+
 static wowuser_win_t *wowuser_findwin(WORD hwnd)
 {
     int i;
     if (!hwnd) return NULL;
+    if (hwnd == WOWUSER_HWND_DESKTOP) {
+        if (!g_wu_desktop.hwnd32) {
+            RECT r;
+            g_wu_desktop.hwnd   = WOWUSER_HWND_DESKTOP;
+            g_wu_desktop.hwnd32 = GetDesktopWindow();
+            g_wu_desktop.style  = (DWORD)GetWindowLongA(g_wu_desktop.hwnd32, GWL_STYLE);
+            if (GetWindowRect(g_wu_desktop.hwnd32, &r)) {
+                g_wu_desktop.x = r.left;  g_wu_desktop.cx = r.right - r.left;
+                g_wu_desktop.y = r.top;   g_wu_desktop.cy = r.bottom - r.top;
+            }
+        }
+        return &g_wu_desktop;
+    }
     for (i = 0; i < g_wu_nwin; ++i)
         if (g_wu_win[i].hwnd == hwnd) return &g_wu_win[i];
     return NULL;
@@ -8081,9 +8105,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  the desktop is not one; but a NULL hWnd is what both Win16 and
                  Win32 accept to mean "the screen" in `GetDC`, which is what a
                  guest asks the desktop window for. So 0 travels correctly. */
-            wu_puts(note, notecap, &k, "GetDesktopWindow() -- answered 0 (NULL),"
-                                       " which is what GetDC reads as the screen");
-            r = 0;
+            wu_puts(note, notecap, &k, "GetDesktopWindow() -- the desktop's"
+                                       " own handle (#270)");
+            r = WOWUSER_HWND_DESKTOP;
             break;
         }
         wu_puts(note, notecap, &k, " = 0x");

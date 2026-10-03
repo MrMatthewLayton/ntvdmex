@@ -18002,6 +18002,13 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              Windows actually is rather than hardcoding it -- a real WOW launch
              inherits the NT environment, which is exactly these two directories. */
         {   char pv[MAX_PATH * 2 + 2]; UINT n;
+            /* s89 (#270): ★ AND SYSTEMROOT, which a real WOW VDM inherits from
+                 NT's environment. krnl386 (`seg1:0xce9f`) builds its SYSTEM
+                 directory from it (see WOW32 0x7b): without it, 16-bit
+                 GetSystemDirectory answered "\SYSTEM" with no drive. One entry,
+                 through `extra`, whose cap note keeps the tail krnl386 reads. */
+            char wowroot[MAX_PATH + 16] = "SYSTEMROOT=";
+            if (!GetWindowsDirectoryA(wowroot + 11, MAX_PATH)) wowroot[0] = 0;
             n = GetSystemDirectoryA(pv, MAX_PATH);
             if (n && n < MAX_PATH) { pv[n] = ';';
                 if (!GetWindowsDirectoryA(pv + n + 1, MAX_PATH)) pv[n] = 0; }
@@ -18013,7 +18020,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
             dos_env_build_card(NULL, DOS_ENV_SEG,
                           g_wow_krnl_path[0] ? g_wow_krnl_path
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
-                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg, NULL);
+                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg,
+                          wowroot[0] ? wowroot : NULL);
             q = m; q = zput(q, "WOWV86: env rebuilt, PATH=");
             q = zput(q, pv[0] ? pv : "(fallback)");
             q = zput(q, " program path = ");
