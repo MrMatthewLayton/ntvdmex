@@ -150,6 +150,20 @@ static inline uint32_t dclk_ticks(unsigned h, unsigned mi, unsigned s, unsigned 
     return t < 0x1800B0u ? t : 0x1800AFu;
 }
 
+/* The other direction (GH #262): the time of day a BIOS tick count stands for, as
+   DOS's CLOCK$ reads it -- centiseconds = ticks * 65536 * 100 / 1193182. A count at
+   or past a day's length is clamped to the last centisecond of it. */
+static inline void dclk_from_ticks(uint32_t ticks, unsigned *h, unsigned *mi,
+                                   unsigned *s, unsigned *cs)
+{
+    uint64_t c = ((uint64_t)ticks * 6553600u) / 1193182u;
+    if (c >= (uint64_t)DCLK_CS_PER_DAY) c = (uint64_t)DCLK_CS_PER_DAY - 1;
+    *cs = (unsigned)(c % 100); c /= 100;
+    *s  = (unsigned)(c % 60);  c /= 60;
+    *mi = (unsigned)(c % 60);  c /= 60;
+    *h  = (unsigned)c;
+}
+
 /* The one clock the whole VDM shares (defined in dos_int21.c). */
 extern dclk_state g_dos_clock;
 

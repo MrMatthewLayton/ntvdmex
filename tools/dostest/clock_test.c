@@ -129,6 +129,18 @@ int main(void)
     eq("ticks 00:00:00.00", dclk_ticks(0, 0, 0, 0), 0);
     eq("ticks 12:34:10.00 (clk.1a00.after.2d CX=000C)", dclk_ticks(12, 34, 10, 0) >> 16, 0xC);
     eq("ticks 12:34:10.00", dclk_ticks(12, 34, 10, 0), 823844);
+    /* #262: the inverse, as CLOCK$ reads a count -- p_tick2c's two targets. */
+    { unsigned h, mi, sx, cs;
+      dclk_from_ticks(0x000A026Cu, &h, &mi, &sx, &cs);
+      eq("from_ticks 000A:026C -> 10h", h, 10); eq("from_ticks 000A:026C -> 00m", mi, 0);
+      eq("from_ticks 000A:026C -> 29.96s (655980 ticks is just short of :30)", sx * 100 + cs, 2996);
+      dclk_from_ticks(0x000B8277u, &h, &mi, &sx, &cs);
+      eq("from_ticks 000B:8277 -> 11h", h, 11); eq("from_ticks 000B:8277 -> 30m", mi, 30);
+      dclk_from_ticks(dclk_ticks(12, 34, 10, 0), &h, &mi, &sx, &cs);
+      /* a tick is ~5.5 cs, so reading a time back from its count is exact only to a tick */
+      eq("from_ticks(ticks(12:34:10)) = 12:34:09.96, within one tick", sx * 100 + cs, 996);
+      dclk_from_ticks(0x1800B0u, &h, &mi, &sx, &cs);
+      eq("from_ticks at a full day clamps to 23h", h, 23); }
     eq("ticks 23:59:59.99 < a day (0x1800B0)", dclk_ticks(23, 59, 59, 99) < 0x1800B0u, 1);
 
     printf("== %d checks, %d failed\n", checks, fails);

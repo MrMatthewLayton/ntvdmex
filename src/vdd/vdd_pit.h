@@ -160,6 +160,10 @@ typedef struct pit_state {
          it. GH #250: the host moves the VDM's RTC offset, never the machine's clock.
          NULL = refused, as before (CF=1). Shares rtc_ctx. */
     int    (*rtc_set)(void *ctx, const struct vdd_rtc *in, int what);
+    /* GH #262: INT 1Ah AH=01h set the tick count. On DOS the CLOCK$ driver reads the
+       time of day FROM that count, so the host moves DOS's clock to match (measured:
+       p_tick2c on 6.22, DOSBox-X and PCem all follow). NULL = the count alone. */
+    void   (*ticks_set)(void *ctx, uint32_t ticks);
 } pit_state;
 
 /* Effective reload. `reload` is always BINARY (decoded at the write); 0 means the

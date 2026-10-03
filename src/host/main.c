@@ -13868,6 +13868,18 @@ static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
     return 1;
 }
 
+/* GH #262: INT 1Ah AH=01h moved the tick count; DOS's clock follows it, as CLOCK$
+   would read it. DOS's DATE is kept (dclk_set_time keeps the guest's date); the RTC is
+   not touched -- on an AT the two clocks are separate (p_clock / p_tick2c). */
+static void host_ticks_set(void *ctx, uint32_t ticks)
+{
+    dclk_t host; unsigned h, mi, s, cs;
+    (void)ctx;
+    dclk_from_ticks(ticks, &h, &mi, &s, &cs);
+    dos_clock_host_now(&host);
+    dclk_set_time(&host, &g_dos_clock.dos_off, h, mi, s, cs);
+}
+
 /* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
    AH=01h -- the new count, midnight flag cleared. Under the crystal's lock so it
    cannot interleave with anything that holds it while touching the count. */
@@ -29602,6 +29614,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit.rtc_now = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
     g_pit.rtc_ctx = NULL;
     g_pit.rtc_set = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
+    g_pit.ticks_set = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);

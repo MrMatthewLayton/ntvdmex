@@ -592,6 +592,7 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         *tick = ((uint32_t)r_cx(r) << 16) | r_dx(r);
         bda[0x70] = 0;
         r->cf = 0;
+        if (st->ticks_set) st->ticks_set(st->rtc_ctx, *tick);   /* #262 */
         break;
     case 0x02: {                             /* get RTC time, BCD               */
         struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
@@ -649,6 +650,7 @@ void vdd_pit_reset(void *self)
     void (*guard)(void *, int) = st->guard; void *gctx = st->guard_ctx;
     void (*rnow)(void *, struct vdd_rtc *) = st->rtc_now; void *rctx = st->rtc_ctx;
     int  (*rset)(void *, const struct vdd_rtc *, int) = st->rtc_set;
+    void (*tset)(void *, uint32_t) = st->ticks_set;
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
     st->bus = bus;
@@ -675,6 +677,7 @@ void vdd_pit_reset(void *self)
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
     st->rtc_now = rnow; st->rtc_ctx = rctx; st->rtc_set = rset;   /* and so does the clock */
+    st->ticks_set = tset;
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
          On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
          leaves it alone forever; its gate is tied high. A guest that simply READS
