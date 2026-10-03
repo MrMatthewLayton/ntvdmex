@@ -2721,10 +2721,102 @@ static volatile BYTE *wowuser_lin(const wow32_frame_t *f, DWORD fp)
     return (volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF));
 }
 
+/* ── s89 (#162, Charmap's font list): LISTBOX AND COMBOBOX MESSAGES. ──────────────
+     Win16 numbers a control's messages from WM_USER per class, so 0x040C is
+     EM_SETHANDLE to an edit control and CB_FINDSTRING to a combo box; everything
+     in this range used to be read as an edit message or answered 0, so every Win16
+     list and combo box stayed EMPTY. Same lists, same order, different bases:
+       CB_*: Win16 0x0400+n -> Win32 0x0140+n   (GETEDITSEL .. FINDSTRINGEXACT)
+       LB_*: Win16 0x0401+n -> Win32 0x0180+n   (ADDSTRING ..)
+     Strings are far pointers into the guest (copied in; GETTEXT copies back out,
+     bounded by the item's own length); an index of -1 travels as 0xFFFF and is
+     sign-extended; LB_ERR/CB_ERR come back as 0xFFFF in the low word. A control
+     without HASSTRINGS keeps lParam as its item data. Messages with structures
+     (GETITEMRECT, GETSELITEMS, GETDROPPEDCONTROLRECT, SETTABSTOPS) are not
+     translated yet and still answer 0. */
+static int wowuser_listmsg(wow32_frame_t *f, wowuser_win_t *w, WORD msg, WORD wparam,
+                           DWORD lparam, int iscb, LONG *out, char *note, int notecap,
+                           int *kp)
+{
+    /* per n: 0 = values only, 1 = lParam IN string, 2 = lParam OUT buffer (text of
+       item wParam), 3 = lParam is a structure (not translated), 4 = wParam index */
+    static const BYTE CB[25] = { 0,0,0,1,4,1,0,0,2,4,1,0,1,1,4,0,4,4,3,4,4,0,0,0,1 };
+    static const BYTE LB[0x23] = {
+        /* 01 ADD 02 INS 03 DEL 04 (SELITEMRANGEEX) 05 RESET 06 SETSEL 07 SETCURSEL
+           08 GETSEL 09 GETCURSEL */
+        1,1,4,3,0,0,4,4,0,
+        /* 0A GETTEXT 0B GETTEXTLEN 0C GETCOUNT 0D SELECTSTRING 0E DIR 0F GETTOPINDEX */
+        2,4,0,1,1,0,
+        /* 10 FINDSTRING 11 GETSELCOUNT 12 GETSELITEMS 13 SETTABSTOPS 14 GETHORZEXT
+           15 SETHORZEXT 16 SETCOLWIDTH 17 (ADDFILE) 18 SETTOPINDEX 19 GETITEMRECT
+           1A GETITEMDATA 1B SETITEMDATA 1C SELITEMRANGE 1D-1E (ANCHOR)
+           1F SETCARETINDEX 20 GETCARETINDEX 21 SETITEMHEIGHT 22 GETITEMHEIGHT
+           23 FINDSTRINGEXACT  -- Win16 WM_USER+n is Win32 0x17F+n throughout */
+        1,0,3,3,0,0,0,3,4,3,4,4,0,3,3,4,0,4,4,1 };
+    int n, kind, k = *kp;
+    UINT m32;
+    WPARAM wp32 = (WPARAM)wparam;
+    LPARAM lp32 = (LPARAM)lparam;
+    char buf[256];
+    volatile BYTE *gp = NULL;
+    LRESULT r;
+    LONG st = GetWindowLongA(w->hwnd32, GWL_STYLE);
+    int strs = iscb ? ((st & 0x0200) || !(st & 0x0030))     /* CBS_HASSTRINGS / not owner-draw */
+                    : ((st & 0x0040) || !(st & 0x0030));    /* LBS_HASSTRINGS / not owner-draw */
+    if (iscb) { n = msg - 0x0400; if (n < 0 || n >= 25) return 0; kind = CB[n]; m32 = 0x0140 + n; }
+    else      { n = msg - 0x0401; if (n < 0 || n >= 0x23) return 0; kind = LB[n]; m32 = 0x0180 + n; }
+    if (kind == 3) {
+        wu_puts(note, notecap, &k, iscb ? "CB_" : "LB_");
+        wu_puts(note, notecap, &k, " n=0x"); wu_puthex(note, notecap, &k, (DWORD)n, 2);
+        wu_puts(note, notecap, &k, " carries a structure -- not translated; 0");
+        *kp = k; *out = 0; return 1;
+    }
+    if (kind == 4 || kind == 2 || (kind == 1 && wparam == 0xFFFF)) wp32 = (WPARAM)(LONG)(short)wparam;
+    if (kind == 1 && strs) {
+        int i;
+        gp = wowuser_lin(f, lparam);
+        if (!gp) { *kp = k; *out = iscb ? -1 : -1; return 1; }
+        for (i = 0; i < (int)sizeof buf - 1 && gp[i]; ++i) buf[i] = (char)gp[i];
+        buf[i] = 0;
+        lp32 = (LPARAM)buf;
+    }
+    if (kind == 2 && strs) {
+        LRESULT len = SendMessageA(w->hwnd32, iscb ? 0x0149 /* CB_GETLBTEXTLEN */
+                                                  : 0x018A /* LB_GETTEXTLEN */, wp32, 0);
+        int i;
+        gp = wowuser_lin(f, lparam);
+        if (!gp || len < 0 || len >= (LRESULT)sizeof buf) { *kp = k; *out = -1; return 1; }
+        r = SendMessageA(w->hwnd32, m32, wp32, (LPARAM)buf);
+        if (r >= 0) for (i = 0; i <= (int)r && i < (int)sizeof buf; ++i) gp[i] = (BYTE)buf[i];
+    } else {
+        r = SendMessageA(w->hwnd32, m32, wp32, lp32);
+    }
+    wu_puts(note, notecap, &k, iscb ? "CB_ n=0x" : "LB_ n=0x");
+    wu_puthex(note, notecap, &k, (DWORD)n, 2);
+    if (kind == 1 && strs) { wu_puts(note, notecap, &k, " \""); wu_puts(note, notecap, &k, buf);
+                             wu_puts(note, notecap, &k, "\""); }
+    wu_puts(note, notecap, &k, " -> the real control -> 0x");
+    wu_puthex(note, notecap, &k, (DWORD)r, 8);
+    *kp = k;
+    *out = (LONG)r;
+    return 1;
+}
+
 static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                             WORD wparam, DWORD lparam, char *note, int notecap)
 {
     int k = 0;
+    /* s89: a list or combo box's own messages, before anything reads the range as
+       an edit control's (0x040C is EM_SETHANDLE only to an EDIT). */
+    if (msg >= 0x0400 && msg <= 0x0430 && w && w->hwnd32) {
+        char cn[16]; LONG r;
+        if (GetClassNameA(w->hwnd32, cn, sizeof cn)) {
+            int iscb = !lstrcmpiA(cn, "ComboBox"), islb = !lstrcmpiA(cn, "ListBox");
+            if ((iscb || islb)
+                && wowuser_listmsg(f, w, msg, wparam, lparam, iscb, &r, note, notecap, &k))
+                return r;
+        }
+    }
     switch (msg) {
 
     /* ── ★★★★★ WM_MDICREATE: MAKE THE CHILD WINDOW ────────────────────────────
@@ -3932,7 +4024,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                     cw->text[n] = (n < (int)sizeof itext) ? itext[n] : 0;
             }
             if (ic && ic->reg32 && w->hwnd32) {
-                cw->hwnd32 = CreateWindowExA(0, ic->cls32, cw->text, istyle,
+                /* s89: an OWNER-DRAWN list/combo box that also keeps its strings is
+                   made a plain one. Owner draw needs WM_DRAWITEM delivered to the
+                   16-bit dialog, which this host cannot do yet -- the items were
+                   blank (Charmap's font list). With HASSTRINGS the OS can draw the
+                   text itself; the guest's record keeps the style it asked for. */
+                DWORD cstyle32 = istyle;
+                if (ic->sysclass && ((!lstrcmpiA(ic->name, "COMBOBOX") && (istyle & 0x0200))
+                                  || (!lstrcmpiA(ic->name, "LISTBOX")  && (istyle & 0x0040))))
+                    cstyle32 &= ~0x0030u;
+                cw->hwnd32 = CreateWindowExA(0, ic->cls32, cw->text, cstyle32,
                                              cw->x, cw->y, cw->cx, cw->cy,
                                              w->hwnd32,
                                              (HMENU)(ULONG_PTR)iid,
