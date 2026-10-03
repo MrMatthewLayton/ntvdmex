@@ -54,6 +54,11 @@ ping -n 5 127.0.0.1 >nul
 rem a mouse click / space to leave the instruction screen for the level
 "%R%" fg "Windows NT Virtual DOS Machine" >nul 2>&1
 "%R%" key 32 >nul 2>&1
+rem #290: the briefing screen wants a MOUSE click; the first may only capture the mouse.
+"%R%" wclick "Windows NT Virtual DOS Machine" 300 200 >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+"%R%" wclick "Windows NT Virtual DOS Machine" 300 200 >nul 2>&1
+ping -n 8 127.0.0.1 >nul
 ping -n 6 127.0.0.1 >nul
 "%R%" shot "%OUT%\lemopt_%TAG%_2.bmp" >nul 2>&1
 ping -n 6 127.0.0.1 >nul
