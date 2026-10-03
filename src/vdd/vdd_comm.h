@@ -71,6 +71,14 @@
 #define LSR_BI   0x10
 #define LSR_THRE 0x20   /* transmit holding empty                               */
 #define LSR_TEMT 0x40   /* transmitter empty                                    */
+#define LSR_FIFOERR 0x80 /* FIFO mode: an error char is somewhere in the RCVR FIFO */
+
+/* FCR (written at the IIR address) and LCR bits used by the #245 FIFO/break model */
+#define FCR_ENABLE   0x01
+#define FCR_RXRESET  0x02
+#define FCR_TXRESET  0x04
+#define COMM_FIFO_DEPTH 16      /* the 16550's receive FIFO                         */
+#define LCR_BREAK    0x40       /* "set break": the TX line held spacing            */
 
 /* MCR */
 #define MCR_DTR  0x01
@@ -114,6 +122,7 @@ typedef struct comm_port {
     uint16_t rx_head, rx_len;
 
     uint32_t tx_count, rx_count, overruns;
+    uint32_t breaks;            /* #245: break conditions the guest sent            */
 } comm_port;
 
 /* ── THE PARALLEL PORT, WHICH IS THREE REGISTERS AND A STROBE. ───────────────

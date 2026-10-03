@@ -237,6 +237,75 @@ int main(void)
     wr(BASE + COMM_IER, 0x00);
     wr(BASE + COMM_MCR, 0x00);
 
+    /* ---- #245 (s90): the 16550 remainder, each line from the PC16550D --------- */
+    /* enabling THRE with the holding register already empty IS a THRE interrupt */
+    wr(BASE + COMM_MCR, MCR_OUT2);
+    wr(BASE + COMM_IER, 0x00);
+    rd(BASE + COMM_IIR);
+    memset(g_irq, 0, sizeof g_irq);
+    wr(BASE + COMM_IER, IER_THRE);
+    CHECK(g_irq[4] == 1, "#245: setting ETBEI with THR empty raises THRE at once (the "
+                         "interrupt-driven transmit kick-start)");
+    CHECK(rd(BASE + COMM_IIR) == 0x02, "...and IIR names it THRE");
+    wr(BASE + COMM_IER, IER_THRE);
+    CHECK((rd(BASE + COMM_IIR) & 0x01) == 1,
+          "re-writing ETBEI when it is ALREADY set is not a new 0->1 edge: nothing owed");
+    /* INT 14h AH=01 owes the same THRE the port write does */
+    memset(g_irq, 0, sizeof g_irq);
+    int14(0x01, 'b', 0, &r);
+    CHECK(g_irq[4] == 1 && rd(BASE + COMM_IIR) == 0x02,
+          "#245: a byte sent through INT 14h raises THRE like a THR write");
+    wr(BASE + COMM_IER, 0x00);
+    /* LOOPBACK CLOSES THE IRQ GATE (output pins forced inactive, OUT2 included) */
+    wr(BASE + COMM_MCR, (uint8_t)(MCR_LOOP | MCR_OUT2));
+    wr(BASE + COMM_IER, IER_RDA);
+    memset(g_irq, 0, sizeof g_irq);
+    wr(BASE + COMM_RBR, 'L');
+    CHECK(g_irq[4] == 0, "#245: in loopback a received byte raises NO IRQ even with OUT2 "
+                         "set -- the OUT2 PIN is forced inactive, and on a PC it is the gate");
+    CHECK(rd(BASE + COMM_IIR) == 0x04, "...while the part still reports RDA in IIR");
+    rd(BASE + COMM_RBR);
+    /* BREAK in loopback: one zero character, BI set, an RLS interrupt owed */
+    wr(BASE + COMM_IER, IER_RLS | IER_RDA);
+    wr(BASE + COMM_LCR, (uint8_t)(0x03 | LCR_BREAK));
+    CHECK(rd(BASE + COMM_IIR) == 0x06, "#245: SET BREAK in loopback owes a line-status "
+                                       "interrupt (IIR 0x06, the highest priority)");
+    { uint8_t l = rd(BASE + COMM_LSR);
+      CHECK((l & (LSR_BI | LSR_DR)) == (LSR_BI | LSR_DR), "...LSR reports BREAK and a character");
+      CHECK((rd(BASE + COMM_LSR) & LSR_BI) == 0, "...and the LSR read clears BI"); }
+    CHECK(rd(BASE + COMM_RBR) == 0x00, "...the character is a single ZERO");
+    CHECK((rd(BASE + COMM_LSR) & LSR_DR) == 0, "...and only one of them");
+    wr(BASE + COMM_LCR, (uint8_t)(0x03 | LCR_BREAK));
+    CHECK((rd(BASE + COMM_LSR) & LSR_DR) == 0, "holding break is not a second break");
+    wr(BASE + COMM_LCR, 0x03);
+    CHECK(com.p[0].breaks == 1, "the break was counted once");
+    /* THE RECEIVE FIFO'S TRIGGER LEVEL, out of loopback */
+    wr(BASE + COMM_MCR, MCR_OUT2);
+    wr(BASE + COMM_IER, IER_RDA);
+    wr(BASE + COMM_IIR, 0x41);                     /* FCR: FIFO on, trigger = 4  */
+    vdd_comm_rx(&com, 0, '1'); vdd_comm_rx(&com, 0, '2');
+    CHECK(rd(BASE + COMM_IIR) == 0xCC, "#245: 2 bytes below a trigger of 4 -> CHARACTER "
+                                       "TIMEOUT (IIR 0xCC with the FIFO bits)");
+    vdd_comm_rx(&com, 0, '3'); vdd_comm_rx(&com, 0, '4');
+    CHECK(rd(BASE + COMM_IIR) == 0xC4, "...4 bytes reach the trigger -> RDA (0xC4)");
+    CHECK(rd(BASE + COMM_RBR) == '1', "...read in order");
+    CHECK(rd(BASE + COMM_IIR) == 0xCC, "...3 left, below the trigger again -> timeout");
+    rd(BASE + COMM_RBR); rd(BASE + COMM_RBR); rd(BASE + COMM_RBR);
+    CHECK((rd(BASE + COMM_IIR) & 0x0F) == 0x01, "...drained: nothing owed");
+    wr(BASE + COMM_IIR, 0xC1);                     /* trigger = 14               */
+    { int i; for (i = 0; i < 20; ++i) vdd_comm_rx(&com, 0, (uint8_t)('a' + i)); }
+    CHECK(rd(BASE + COMM_IIR) == 0xC4, "20 queued, 16 in the FIFO >= 14 -> RDA");
+    CHECK((rd(BASE + COMM_LSR) & LSR_OE) == 0,
+          "...and the 4 beyond the FIFO wait on the WIRE: no overrun for a burst the host queued");
+    wr(BASE + COMM_IIR, 0x07);                     /* clear both FIFOs, FIFO on  */
+    CHECK((rd(BASE + COMM_LSR) & LSR_DR) == 0, "FCR bit 1 empties the receiver");
+    wr(BASE + COMM_IIR, 0x00);                     /* back to 8250 behaviour     */
+    vdd_comm_rx(&com, 0, 'z');
+    CHECK(rd(BASE + COMM_IIR) == 0x04, "FIFO off: one byte is RDA, no timeout, no FIFO bits");
+    rd(BASE + COMM_RBR);
+    wr(BASE + COMM_IER, 0x00);
+    wr(BASE + COMM_MCR, 0x00);
+
     /* ---- INT 14h describes THE SAME PART ----------------------------------- */
     wr(BASE + COMM_MCR, MCR_LOOP);
     int14(0x01, 'Z', 0, &r);                       /* BIOS send, in loopback    */

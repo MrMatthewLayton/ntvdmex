@@ -12,11 +12,32 @@
      detail a driver can work around: the standard transmit loop is "write a
      byte, take the interrupt, read IIR, write the next byte", and an IIR that
      keeps reporting THRE forever gives an interrupt storm instead. */
+/* ── #245: THE 16550's RECEIVE FIFO AND ITS TRIGGER LEVEL (PC16550D, FCR/IIR). ─
+     With the FIFO enabled (FCR bit 0) the part holds up to 16 received bytes and
+     "received data available" fires only when the count reaches the TRIGGER LEVEL
+     that FCR bits 6-7 select -- 1, 4, 8 or 14. Fewer than that waiting is reported
+     as the CHARACTER TIMEOUT interrupt (IIR 0x0C) once the line has been quiet for
+     four character times; our wire delivers instantly and is then quiet, so a
+     below-trigger remainder is owed a timeout as soon as it is there. Same priority
+     as RDA (second), which is what lets a driver drain the tail of a burst.
+   ⚠ The host ring behind it is the WIRE, not the FIFO: bytes wait there and enter
+     the FIFO as it drains, so a 16-byte FIFO never overruns on a burst the host
+     queued -- which is a line that paces itself, not a lost byte. */
+static uint8_t comm_rx_trigger(const comm_port *c)
+{
+    static const uint8_t lvl[4] = { 1, 4, 8, 14 };
+    return (c->fcr & FCR_ENABLE) ? lvl[(c->fcr >> 6) & 3] : 1;
+}
+
 static uint8_t comm_iir(comm_port *c)
 {
     if ((c->ier & IER_RLS)  && (c->lsr & (LSR_OE | LSR_PE | LSR_FE | LSR_BI)))
         return 0x06;
-    if ((c->ier & IER_RDA)  && (c->lsr & LSR_DR))    return 0x04;
+    if ((c->ier & IER_RDA)  && (c->lsr & LSR_DR)) {
+        uint16_t inf = (uint16_t)(c->rx_len < COMM_FIFO_DEPTH ? c->rx_len : COMM_FIFO_DEPTH);
+        if (!(c->fcr & FCR_ENABLE) || inf >= comm_rx_trigger(c)) return 0x04;
+        return 0x0C;                              /* character timeout (FIFO mode) */
+    }
     if ((c->ier & IER_THRE) && c->thre_pending)      return 0x02;
     if ((c->ier & IER_MS)   && (c->msr & 0x0F))      return 0x00;
     return 0x01;                                  /* bit 0 set = nothing owed  */
@@ -37,16 +58,22 @@ static uint8_t comm_iir(comm_port *c)
      is why the MCR write below calls this function, and why setting OUT2 late
      -- after IER, the usual driver order -- still delivers the interrupt that
      was waiting.
-   ⚠ NOT SETTLED: LOOPBACK. The 8250/16550 datasheets say loopback forces the
-     modem-control OUTPUT PINS to their inactive state, which on an IBM-style
-     card would close this buffer whatever MCR bit 3 says; Super I/O parts that
-     gate OUT2 internally document it differently, and no oracle has been asked
-     (GH #181). Until one is, the bit is honoured as written in loopback too --
-     the behaviour this file has always had, rather than a new guess. */
+   ★ LOOPBACK CLOSES THE GATE. (#245, settled by the spec, s90) PC16550D, "Modem
+     Control Register", bit 4: in the diagnostic mode "the four modem control
+     outputs (DTR, RTS, OUT1 and OUT2) are internally connected to the four modem
+     control inputs, and the modem control output PINS are forced to their inactive
+     state". On an IBM-style card OUT2's PIN is what enables the IRQ buffer, so in
+     loopback the PIC hears nothing, whatever MCR bit 3 says -- the part still
+     decides, and IIR still names, what is owed. The datasheet's own note that
+     "the receiver and transmitter interrupts are fully operational" in loopback is
+     about the part, not the board. Super I/O chips that gate OUT2 internally do it
+     differently; the spec (8250/16550 + IBM TechRef wiring) outranks them here,
+     per the project's spec-first rule. This file used to honour MCR bit 3 in
+     loopback "rather than a new guess" -- it is no longer a guess. */
 static void comm_update_irq(comm_state *st, comm_port *c)
 {
     if (!st->bus || !c->fitted) return;
-    if (!(c->mcr & MCR_OUT2)) return;
+    if (!(c->mcr & MCR_OUT2) || (c->mcr & MCR_LOOP)) return;
     if (comm_iir(c) & 0x01) return;               /* nothing pending           */
     vdd_raise_irq(st->bus, c->irq);
 }
@@ -149,7 +176,7 @@ static void comm_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
         *val = c->lsr;
         /* Reading LSR clears the error bits -- that is what makes it a status
            register rather than a log. DR and THRE are NOT errors and stay. */
-        c->lsr &= (uint8_t)~(LSR_OE | LSR_PE | LSR_FE | LSR_BI);
+        c->lsr &= (uint8_t)~(LSR_OE | LSR_PE | LSR_FE | LSR_BI | LSR_FIFOERR);
         break;
     case COMM_MSR:
         *val = c->msr;
@@ -182,6 +209,13 @@ static void comm_out(void *self, uint16_t port, uint8_t width, uint32_t val)
         break;
     case COMM_IER:
         if (c->lcr & 0x80) { c->dlm = v; break; }
+        /* #245: ENABLING THRE WITH THE HOLDING REGISTER ALREADY EMPTY IS ITSELF A
+           THRE INTERRUPT (PC16550D: the source is "THRE set AND ETBEI set", so the
+           0->1 write makes it true). Drivers rely on it -- the classic kick-start
+           of an interrupt-driven transmit is "fill the queue, set ETBEI, let the
+           ISR send the first byte" -- and without it nothing is ever sent. */
+        if (!(c->ier & IER_THRE) && (v & IER_THRE) && (c->lsr & LSR_THRE))
+            c->thre_pending = 1;
         c->ier = (uint8_t)(v & 0x0F);
         comm_update_irq(st, c);
         break;
@@ -189,7 +223,24 @@ static void comm_out(void *self, uint16_t port, uint8_t width, uint32_t val)
         c->fcr = v;
         if (v & 0x02) { c->rx_head = c->rx_len = 0; c->lsr &= (uint8_t)~LSR_DR; }
         break;
-    case COMM_LCR: c->lcr = v; break;
+    case COMM_LCR: {
+        /* #245: SET BREAK (bit 6) holds the TX line spacing. In loopback the
+           receiver sees it: ONE zero character enters the FIFO with BI set
+           (PC16550D, LSR bit 4: "only one zero character is loaded into the FIFO"),
+           which raises the receiver-line-status interrupt. Out of loopback it is a
+           line condition with no byte to send; it is counted, not spooled. */
+        uint8_t was = c->lcr;
+        c->lcr = v;
+        if (!(was & LCR_BREAK) && (v & LCR_BREAK)) {
+            ++c->breaks;
+            if (c->mcr & MCR_LOOP) {
+                comm_push_rx(c, 0x00);
+                c->lsr |= LSR_BI;
+                if (c->fcr & FCR_ENABLE) c->lsr |= LSR_FIFOERR;
+                comm_update_irq(st, c);
+            }
+        }
+        break; }
     case COMM_MCR:
         c->mcr = (uint8_t)(v & 0x1F);
         /* Out of loopback the lines are whatever the host asserts, and with
@@ -251,6 +302,10 @@ static void comm_int14(void *self, ntvdd_regs *r)
         ++c->tx_count;
         if (c->mcr & MCR_LOOP) comm_push_rx(c, (uint8_t)al);
         else if (st->sink)     st->sink(st->sink_ctx, (int)pi, (uint8_t)al);
+        /* #245: the same byte through the BIOS is the same write to THR -- it owes
+           the same THRE interrupt the port write does. */
+        c->thre_pending = 1;
+        comm_update_irq(st, c);
         s_ax(r, (uint16_t)((comm_line_status(c) << 8) | al));
         break;
     case 0x02:                                     /* receive -> AL             */
@@ -367,6 +422,7 @@ void vdd_comm_reset(void *self)
         c->rbr = 0; c->thre_pending = 0;
         c->rx_head = c->rx_len = 0;
         c->tx_count = c->rx_count = c->overruns = 0;
+        c->breaks = 0;
         /* THRE and TEMT set: the transmitter is empty on a part nobody has
            written to yet. A driver that polls THRE before its first write
            would otherwise hang before it ever sent a byte. */

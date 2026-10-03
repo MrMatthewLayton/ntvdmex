@@ -2996,7 +2996,7 @@ static void dos_auxout(void *ctx, uint8_t c)
    ⚠ THESE LIVE HERE, NOT IN wowuser.h, because that header must not see host
      internals -- it gets declarations only. Same rule as the rest of the WOW
      layer. */
-#define WOWCOMM_MAX 2
+#define WOWCOMM_MAX 4   /* #245: COM1-COM4, as the equipment word now says */
 static int  g_wc_open[WOWCOMM_MAX];        /* 1 = this port is open to Win16 */
 static WORD g_wc_evt[WOWCOMM_MAX];         /* the event word SetCommEventMask points at */
 
@@ -30411,6 +30411,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           g_com_spool[ci] = INVALID_HANDLE_VALUE; g_com_failed[ci] = 0; }
       g_comm.p[0].base = 0x03F8; g_comm.p[0].irq = 4; g_comm.p[0].fitted = 1;
       g_comm.p[1].base = 0x02F8; g_comm.p[1].irq = 3; g_comm.p[1].fitted = 1;
+      /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
+         with tools/dostest/p_com34 under XP's own NTVDM on the rig: INT 11h
+         AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
+         02E8. The question #181 left open is answered by the oracle that defines
+         "ntvdm superset", and the device has had the slots since s85. */
+      g_comm.p[2].base = 0x03E8; g_comm.p[2].irq = 4; g_comm.p[2].fitted = 1;
+      g_comm.p[3].base = 0x02E8; g_comm.p[3].irq = 3; g_comm.p[3].fitted = 1;
       g_comm.l[0].base = 0x0378; g_comm.l[0].fitted = 1;   /* LPT1 data/strobe */
       g_comm.sink = com_tx_sink; g_comm.sink_ctx = NULL;
       g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
