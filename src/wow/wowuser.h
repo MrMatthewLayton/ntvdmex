@@ -2149,6 +2149,10 @@ typedef struct wowuser_win_s {
          DispatchMessage finds the procedure THROUGH it. Cleared when that
          message is dispatched. See both arms. */
     BYTE  dying;
+    /* s89 (#283/#282): a dialog's base units, from its TEMPLATE font -- what
+       its controls were laid out with, and what MapDialogRect must use. 0 = not
+       a dialog (the system's base units apply). */
+    WORD  dlgbux, dlgbuy;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -2186,6 +2190,7 @@ static wowuser_win_t *wowuser_newwin(void)
          otherwise be driven by a procedure that belongs to a window that no
          longer exists. */
     w->dlgproc = 0;
+    w->dlgbux = w->dlgbuy = 0;       /* the same trap: only a dialog sets them */
     return w;
 }
 
@@ -2403,6 +2408,49 @@ static const char *wowdlg_class(BYTE b)
     case 0x85: return "COMBOBOX";
     }
     return NULL;
+}
+
+/* ── s89 (#283): A DIALOG IS LAID OUT IN ITS OWN FONT'S UNITS. ─────────────────
+     Dialog units are quarters of the dialog font's average character width and
+     eighths of its height. We used the SYSTEM font's (GetDialogBaseUnits), so
+     every Win16 dialog came out ~13% too big against stock on the same desktop
+     (Terminal's port dialog 218x152 vs 192x130, Calc 294 vs 275 tall, Charmap 702
+     vs 611 wide) and its controls drew in the system font. Measured the way USER32
+     measures it: the alphabet's average width (rounded), and tmHeight. BOLD: a
+     3.x application's dialog font is bold under stock's WOW (its labels are, in
+     the same screenshots). Fonts are kept for the run, one per face+size -- a
+     shelf program opens a handful. */
+#define WOWDLG_MAXFONT 8
+static struct { char face[32]; int pt; HFONT f; int bx, by; } g_wd_font[WOWDLG_MAXFONT];
+static int g_wd_nfont;
+static HFONT wowdlg_font(const char *face, int pt, int *bx, int *by)
+{
+    int i;
+    HDC dc; HFONT f, old; TEXTMETRICA tm; SIZE sz;
+    for (i = 0; i < g_wd_nfont; ++i)
+        if (g_wd_font[i].pt == pt && !lstrcmpiA(g_wd_font[i].face, face)) {
+            *bx = g_wd_font[i].bx; *by = g_wd_font[i].by; return g_wd_font[i].f;
+        }
+    if (g_wd_nfont >= WOWDLG_MAXFONT || !face[0] || pt <= 0) return NULL;
+    dc = GetDC(NULL);
+    if (!dc) return NULL;
+    f = CreateFontA(-MulDiv(pt, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0, FW_BOLD,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
+    if (!f) { ReleaseDC(NULL, dc); return NULL; }
+    old = (HFONT)SelectObject(dc, f);
+    if (!GetTextMetricsA(dc, &tm)
+        || !GetTextExtentPoint32A(dc, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", 52, &sz)) {
+        SelectObject(dc, old); ReleaseDC(NULL, dc); DeleteObject(f); return NULL;
+    }
+    SelectObject(dc, old); ReleaseDC(NULL, dc);
+    i = g_wd_nfont++;
+    lstrcpynA(g_wd_font[i].face, face, sizeof g_wd_font[i].face);
+    g_wd_font[i].pt = pt; g_wd_font[i].f = f;
+    g_wd_font[i].bx = (sz.cx / 26 + 1) / 2;          /* USER32's rounding */
+    g_wd_font[i].by = tm.tmHeight;
+    *bx = g_wd_font[i].bx; *by = g_wd_font[i].by;
+    return f;
 }
 
 /* The class a name is registered under, or NULL. Win16 class names are
@@ -3615,6 +3663,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         int   count, x, y, cx, cy, p, i, k = 0, made = 0;
         DWORD bu;
         int   bux, buy, usedef = 0;
+        char  dface[64] = ""; int dpt = 0; HFONT dfont = NULL;
         wowuser_class_t *c;
         wowuser_win_t *w;
         HWND parent32;
@@ -3639,9 +3688,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         p += wowdlg_nameord(t, p, cname,    sizeof cname,    &clsord);
         p += wowdlg_sz(t, p, caption, sizeof caption);
         if (style & WOWDLG_SETFONT) {
-            char face[64];
+            dpt = (int)(short)wowdlg_w(t, p);
             p += 2;                                   /* WORD point size */
-            p += wowdlg_sz(t, p, face, sizeof face);
+            p += wowdlg_sz(t, p, dface, sizeof dface);
         }
 
         /* ── THE DIALOG'S OWN CLASS. A template may name one, and when it does
@@ -3672,6 +3721,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         bu  = GetDialogBaseUnits();
         bux = (int)LOWORD(bu);
         buy = (int)HIWORD(bu);
+        if (dpt > 0 && dface[0]) {
+            int fx = 0, fy = 0;
+            dfont = wowdlg_font(dface, dpt, &fx, &fy);
+            if (dfont && fx > 0 && fy > 0) { bux = fx; buy = fy; }
+        }
+        w->dlgbux = (WORD)bux; w->dlgbuy = (WORD)buy;
         w->cx = MulDiv(cx, bux, 4);
         w->cy = MulDiv(cy, buy, 8);
         /* ── ⚠ -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
@@ -3821,7 +3876,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                              w->hwnd32,
                                              (HMENU)(ULONG_PTR)iid,
                                              GetModuleHandleA(NULL), NULL);
-                if (cw->hwnd32) { ++made; ++g_ww_created; }
+                if (cw->hwnd32) { ++made; ++g_ww_created;
+                    /* #283: the template's font, as the dialog manager gives it */
+                    if (dfont) SendMessageA(cw->hwnd32, WM_SETFONT, (WPARAM)dfont, FALSE); }
             }
         }
 
@@ -5873,7 +5930,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         r.top    = wowconv_rect16_get(r8, 1);
         r.right  = wowconv_rect16_get(r8, 2);
         r.bottom = wowconv_rect16_get(r8, 3);
-        MapDialogRect(w->hwnd32, &r);
+        /* ── #282: NOT WIN32's MapDialogRect. That only works on a window the OS
+             built as a dialog, and none of ours is one -- every Win16 dialog here
+             is CreateWindowEx'd (CALC's is its own `SciCalc` class) -- so it
+             FAILED and left the rectangle in dialog units. Calc then drew its
+             display's border from unconverted numbers: too small and in the wrong
+             place. Convert with the base units the dialog builder laid the
+             controls out with, so the guest's own drawing lands on them. */
+        {   LONG bu = GetDialogBaseUnits();
+            int  bx = w->dlgbux ? (int)w->dlgbux : (int)LOWORD(bu);
+            int  by = w->dlgbuy ? (int)w->dlgbuy : (int)HIWORD(bu);
+            r.left   = MulDiv(r.left,   bx, 4);
+            r.right  = MulDiv(r.right,  bx, 4);
+            r.top    = MulDiv(r.top,    by, 8);
+            r.bottom = MulDiv(r.bottom, by, 8); }
         wowconv_rect16_put(r8, 0, (int)r.left);
         wowconv_rect16_put(r8, 1, (int)r.top);
         wowconv_rect16_put(r8, 2, (int)r.right);
@@ -7317,6 +7387,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ") -> DC token 0x");
         wu_puthex(note, notecap, &k, tok, 4);
         wow32_setret(f, tok);
+        /* ── #282/#162: AND BeginPaint SENDS WM_ERASEBKGND, as Win16's does, before
+             it returns -- with the paint's own DC. Clock paints its face colour in
+             that handler and nowhere else (its class has no brush; the brush it
+             uses is created after RegisterClass), so ours stayed WHITE where stock
+             is the button face. The relay already erased with the class brush when
+             there is one; a procedure that hands this to DefWindowProc gets 0 back
+             (not in USER's forward table), i.e. nothing further -- same pixels.
+             KEEP: BeginPaint's caller still gets the DC token. fErase is left as
+             reported; a guest that also erases in WM_PAINT paints the same colour. */
+        if (erase && f->cbok && wowuser_winproc_of(w)) {
+            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                             0x0014 /* WM_ERASEBKGND */, tok, 0, WOWCALL_RET_KEEP);
+            wu_puts(note, notecap, &k, " + WM_ERASEBKGND to the window procedure");
+        }
         return 1;
     }
 
