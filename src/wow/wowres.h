@@ -393,9 +393,8 @@ static HICON wowres_icon(WORD groupid, int *picked, int cx, int cy)
 #define WOWRES_RT_CURSOR        1
 #define WOWRES_RT_GROUP_CURSOR 12
 
-static HCURSOR wowres_cursor_named(const char *name)
+static HCURSOR wowres_cursor_at(DWORD goff, DWORD glen)
 {
-    DWORD glen = 0, goff = wowres_find_named(WOWRES_RT_GROUP_CURSOR, name, &glen);
     DWORD clen = 0, coff;
     WORD cnt, id;
     if (!goff || glen < 6 + 14) return NULL;
@@ -408,6 +407,19 @@ static HCURSOR wowres_cursor_named(const char *name)
     if (!coff || !clen) return NULL;
     return (HCURSOR)CreateIconFromResourceEx(g_wr_img + coff, clen, FALSE,
                                              0x00030000, 0, 0, LR_DEFAULTCOLOR);
+}
+
+static HCURSOR wowres_cursor_named(const char *name)
+{
+    DWORD glen = 0, goff = wowres_find_named(WOWRES_RT_GROUP_CURSOR, name, &glen);
+    return wowres_cursor_at(goff, glen);
+}
+
+/* s89 (#216): the same, for a cursor group asked for by ordinal. */
+static HCURSOR wowres_cursor(WORD groupid)
+{
+    DWORD glen = 0, goff = wowres_find(WOWRES_RT_GROUP_CURSOR, groupid, &glen);
+    return wowres_cursor_at(goff, glen);
 }
 
 /* ── ★★★★ AND THE SIZE IS AN ARGUMENT, BECAUSE THE TASKBAR ASKS FOR A SMALL

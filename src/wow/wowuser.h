@@ -56,6 +56,22 @@
      0 services to do, and CALC produced no window at all. (session 55) */
 #define WOWUSER_CREATEDIALOG    0xEF
 #define WOWUSER_NOTIFYWOW       0x217
+/* ── ★★★ 0x16c LookupIconIdFromDirectoryEx(lpDir, fIcon, cx, cy, flags) = 12 ──
+     (s89, #216) USER's own LoadCursor/LoadIcon call this between loading the
+     GROUP resource and finding the entry it names (`user seg1:0x4a8e` cursor,
+     fIcon 0; `seg1:0x4904` icon, fIcon 1; both cx = cy = 0, flags 0x40 =
+     LR_DEFAULTSIZE). Stepped over, it answered 0, FindResource(hInst, 0,
+     RT_CURSOR) failed and LoadCursor returned NULL for EVERY cursor a program
+     ships -- Paintbrush's zoom rectangle among them. The group directory is the
+     same 6-byte header + 14-byte entries in Win16 and Win32, so the bytes go to
+     the OS's own LookupIconIdFromDirectoryEx as they are. Frame, reversed:
+     +0 flags, +2 cy, +4 cx, +6 fIcon, +8 the directory, far. */
+#define WOWUSER_LOOKUPICONID    0x16c
+#define LII_ARG_FLAGS           0
+#define LII_ARG_CY              2
+#define LII_ARG_CX              4
+#define LII_ARG_FICON           6
+#define LII_ARG_DIR             8
 #define WOWUSER_SENDMESSAGE     0x6f
 #define WOWUSER_GETWINDOWWORD   0x85
 #define WOWUSER_SETWINDOWWORD   0x86
@@ -153,6 +169,22 @@
 #define AD_ARG_NAMEHI            16
 #define AD_KIND_PREDEFINED       1
 #define AD_KIND_MODULERES        3
+/* ── ★★ s89 (#216): WHAT `kind` ACTUALLY IS. USER's LoadCursor pushes 1 at BOTH
+     its call sites (NULL hInstance, `seg1:0x49f1`, and the module's own,
+     `seg1:0x4b2f`); LoadIcon pushes 3 at both (`seg1:0x4867` and its module
+     arm). So `kind` is CURSOR (1) or ICON (3), and whether the object is a
+     PREDEFINED one or the MODULE's own is said by the hInstance at +18 --
+     USER pushes 0 there exactly when its module lookup (`seg1:0x4694`) came back
+     0. The token keeps the two names above for what they have always meant
+     (predefined / module), now derived from hInstance; the module arm also
+     passes the RT_CURSOR bytes it has just locked:
+       +2 GetExpWinVer   +4 hResData   +6 SizeofResource (DWORD)
+       +10 LockResource (far)   +14/+16 lpName   +18 hInstance */
+#define AD_KIND_CURSOR           1
+#define AD_KIND_ICON             3
+#define AD_ARG_SIZE              6
+#define AD_ARG_BITS              10
+#define AD_ARG_HINST             18
 /* ── ★ A FOURTH KIND: AN ICON THAT IS ALREADY A REAL OBJECT. (session 57) ────
      The two kinds above are both LAZY -- the token carries an ordinal or a name
      and the resolver goes and gets the image when somebody uses it, because
@@ -231,10 +263,25 @@ typedef struct {
     /* Set only for AD_KIND_REALICON: the object itself, because there is nothing
        to look it up BY -- it came out of a file that is not this module. */
     HICON real;
+    /* s89 (#216): the cursor, once built -- from the bytes USER handed 0xad, or
+       on first use. SetCursor runs on every mouse move; building there each time
+       would leak an object per move. */
+    HCURSOR cur;
 } wowuser_sysres_t;
+
 
 static wowuser_sysres_t g_wu_sysres[WOWUSER_MAX_SYSRES];
 static int              g_wu_nsysres = 0;
+
+/* The slot behind a token, or NULL. */
+static wowuser_sysres_t *wowuser_sysres_slot(WORD h)
+{
+    int i;
+    if (!h) return NULL;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h == h) return &g_wu_sysres[i];
+    return NULL;
+}
 
 /* The ordinal behind a token, or 0 if this is not one of ours. */
 static WORD wowuser_sysres_ord(WORD h)
@@ -1451,6 +1498,7 @@ static WORD wowuser_sysres_mint_icon(HICON ic)
     g_wu_sysres[i].kind = AD_KIND_REALICON;
     g_wu_sysres[i].name[0] = 0;
     g_wu_sysres[i].real = ic;
+    g_wu_sysres[i].cur  = NULL;
     return g_wu_sysres[i].h;
 }
 
@@ -1484,15 +1532,54 @@ static HICON wowuser_sysres_hicon(WORD token, int *picked, int cx, int cy)
      predefined ordinal", which is a different failure from "this application has
      no such named cursor" -- the caller logs them differently because one is our
      assumption being wrong and the other is the guest's resource missing. */
+/* s89 (#216): build a module's cursor from the RT_CURSOR bytes USER's
+   LoadCursor has just locked and passed to 0xad (+10, size at +6). Better than
+   the file: it is the resource of the module USER found, a DLL's included, and
+   it is the exact entry LookupIconIdFromDirectoryEx picked. Win 3.x layout -- a
+   4-byte hotspot, then the DIB -- which is what CreateIconFromResourceEx takes
+   with fIcon FALSE at version 3.0. */
+static void wowuser_sysres_prime(wowuser_sysres_t *r, const wow32_frame_t *f,
+                                 char *note, int notecap, int *k)
+{
+    volatile BYTE *b = wow32_argptr(f, AD_ARG_BITS);
+    DWORD n = wow32_argd(f, AD_ARG_SIZE);
+    if (r->cur) return;
+    if (!b || n < 4 + 40 || n > 0x10000) {
+        wu_puts(note, notecap, k, " [no cursor bytes passed; built on first use]");
+        return;
+    }
+    r->cur = (HCURSOR)CreateIconFromResourceEx((PBYTE)b, n, FALSE, 0x00030000,
+                                               0, 0, LR_DEFAULTCOLOR);
+    wu_puts(note, notecap, k, r->cur ? " [cursor BUILT from USER's bytes, cb=0x"
+                                     : " [★ CreateIconFromResourceEx REFUSED cb=0x");
+    wu_puthex(note, notecap, k, n, 4);
+    wu_puts(note, notecap, k, "]");
+}
+
 static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 {
+    wowuser_sysres_t *r = wowuser_sysres_slot(token);
     WORD ord  = wowuser_sysres_ord(token);
     const char *nm = wowuser_sysres_name(token);
     HCURSOR c;
     if (fell) *fell = 0;
-    if (nm)
-        return wowres_open(g_wow_cmd_prog) ? wowres_cursor_named(nm) : NULL;
+    if (!r) return NULL;
+    if (r->cur) return r->cur;                   /* built once (#216) */
+    if (r->kind == AD_KIND_REALICON) return (HCURSOR)r->real;
+    if (nm) {
+        c = wowres_open(g_wow_cmd_prog) ? wowres_cursor_named(nm) : NULL;
+        r->cur = c;
+        return c;
+    }
     if (!ord) return NULL;
+    /* s89 (#216): a module's own cursor asked for BY ORDINAL is in its file,
+       not in the system's set -- LoadCursorA(NULL, 2) would be a stranger's. */
+    if (r->kind == AD_KIND_MODULERES) {
+        c = wowres_open(g_wow_cmd_prog) ? wowres_cursor(ord) : NULL;
+        r->cur = c;
+        if (!c && fell) *fell = 1;
+        return c;
+    }
     c = LoadCursorA(NULL, MAKEINTRESOURCEA(ord));
     if (!c && fell) *fell = 1;
     return c;
@@ -4002,6 +4089,40 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            Answering every kind would be claiming to have understood a namespace
            of which exactly one member has been measured -- so anything else falls
            through to the honest "unimplemented", and the log says which kind. */
+    /* ── ★★★ 0x16c LookupIconIdFromDirectoryEx -- see the note at the define. */
+    case WOWUSER_LOOKUPICONID: {
+        volatile BYTE *d = wow32_argptr(f, LII_ARG_DIR);
+        WORD fic = wow32_argw(f, LII_ARG_FICON);
+        WORD cx  = wow32_argw(f, LII_ARG_CX), cy = wow32_argw(f, LII_ARG_CY);
+        WORD fl  = wow32_argw(f, LII_ARG_FLAGS);
+        BYTE dir[6 + 64 * 14];
+        WORD cnt;
+        unsigned n, j;
+        int id, k = 0;
+        wu_puts(note, notecap, &k, fic ? "LookupIconIdFromDirectoryEx (icon"
+                                       : "LookupIconIdFromDirectoryEx (cursor");
+        wu_puts(note, notecap, &k, ") cx=0x"); wu_puthex(note, notecap, &k, cx, 2);
+        wu_puts(note, notecap, &k, " cy=0x");  wu_puthex(note, notecap, &k, cy, 2);
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, fl, 4);
+        if (!d) { wu_puts(note, notecap, &k, " -- ★ NO DIRECTORY; answered 0");
+                  wow32_setret(f, 0); return 1; }
+        /* idReserved 0, idType 1 (icon) or 2 (cursor), idCount; then 14-byte
+           entries ending in the WORD id. Copied out: the OS reads it as a whole. */
+        cnt = (WORD)(d[4] | (d[5] << 8));
+        if (cnt == 0 || cnt > 64) {
+            wu_puts(note, notecap, &k, " -- ★ count=0x"); wu_puthex(note, notecap, &k, cnt, 4);
+            wu_puts(note, notecap, &k, " is not a directory; answered 0");
+            wow32_setret(f, 0); return 1;
+        }
+        n = 6u + cnt * 14u;
+        for (j = 0; j < n; ++j) dir[j] = d[j];
+        id = LookupIconIdFromDirectoryEx(dir, fic ? TRUE : FALSE, (short)cx, (short)cy, fl);
+        wu_puts(note, notecap, &k, " entries=0x"); wu_puthex(note, notecap, &k, cnt, 2);
+        wu_puts(note, notecap, &k, " -> id 0x"); wu_puthex(note, notecap, &k, (DWORD)id, 4);
+        wow32_setret(f, (DWORD)(WORD)id);
+        return 1;
+    }
+
     case WOWUSER_NOTIFYWOW: {
         volatile BYTE *b = wow32_argptr(f, NOTIFY_ARG_BLOCK);
         WORD kind = wow32_argw(f, NOTIFY_ARG_KIND);
@@ -4837,6 +4958,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         WORD kind = wow32_argw(f, AD_ARG_KIND);
         WORD lo   = wow32_argw(f, AD_ARG_NAMELO);
         WORD hi   = wow32_argw(f, AD_ARG_NAMEHI);
+        WORD hinst = wow32_argw(f, AD_ARG_HINST);
+        int  iscur = (kind == AD_KIND_CURSOR);
         int k = 0, i;
         wu_puts(note, notecap, &k, "LoadSystemObject kind=0x");
         wu_puthex(note, notecap, &k, kind, 4);
@@ -4845,12 +4968,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              what they put in the middle. So an ordinal is enough to find the
              resource in the application's own file (see wowres.h), and the token
              carries the kind so RegisterClass knows which way to resolve it. */
-        if (kind != AD_KIND_PREDEFINED && kind != AD_KIND_MODULERES) {
+        if (kind != AD_KIND_CURSOR && kind != AD_KIND_ICON) {
             wu_puts(note, notecap, &k, " -- a kind no call site has been read for;"
                                        " answered 0");
             wow32_setret(f, 0);
             return 1;
         }
+        /* s89 (#216): cursor-or-icon came in `kind`; predefined-or-module is the
+           hInstance's to say (see AD_KIND_CURSOR). From here `kind` is the
+           token's meaning, as every resolver reads it. */
+        wu_puts(note, notecap, &k, iscur ? " (cursor" : " (icon");
+        if (hinst) { wu_puts(note, notecap, &k, " of module 0x");
+                     wu_puthex(note, notecap, &k, hinst, 4); }
+        else         wu_puts(note, notecap, &k, ", predefined");
+        wu_puts(note, notecap, &k, ")");
+        kind = hinst ? AD_KIND_MODULERES : AD_KIND_PREDEFINED;
         /* ── ★★★★★ A NAMED RESOURCE IS NOT AN EXOTIC CASE. (session 47) ──────
              This used to answer 0 here and say so, on the grounds that no run
              had shown one. One had -- MS Paint, every time, in silence: its icon
@@ -4883,6 +5015,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                     wu_puts(note, notecap, &k, " -> 0x");
                     wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
                     wu_puts(note, notecap, &k, " (already issued)");
+                    if (iscur && hinst) wowuser_sysres_prime(&g_wu_sysres[i], f, note, notecap, &k);
                     wow32_setret(f, g_wu_sysres[i].h);
                     return 1;
                 }
@@ -4901,6 +5034,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 g_wu_sysres[i].name[j] = 0;
             }
             g_wu_sysres[i].h = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
+            g_wu_sysres[i].cur = NULL;
+            if (iscur && hinst) wowuser_sysres_prime(&g_wu_sysres[i], f, note, notecap, &k);
             wu_puts(note, notecap, &k, " -> token 0x");
             wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
             wu_puts(note, notecap, &k, "; the OS object is fetched when the guest"
@@ -4918,6 +5053,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 wu_puts(note, notecap, &k, " -> 0x");
                 wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
                 wu_puts(note, notecap, &k, " (already issued)");
+                if (iscur && hinst) wowuser_sysres_prime(&g_wu_sysres[i], f, note, notecap, &k);
                 wow32_setret(f, g_wu_sysres[i].h);
                 return 1;
             }
@@ -4931,6 +5067,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         g_wu_sysres[i].kind = kind;
         g_wu_sysres[i].name[0] = 0;
         g_wu_sysres[i].h   = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
+        g_wu_sysres[i].cur = NULL;
+        if (iscur && hinst) wowuser_sysres_prime(&g_wu_sysres[i], f, note, notecap, &k);
         wu_puts(note, notecap, &k, " -> token 0x");
         wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
         wu_puts(note, notecap, &k, "; the OS object is fetched when the guest says"
@@ -7052,14 +7190,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "SetCursor 0x");
         wu_puthex(note, notecap, &k, tok, 4);
         if (tok) {
-            WORD ord  = wowuser_sysres_ord(tok);
-            WORD kind = wowuser_sysres_kind(tok);
-            if (ord && kind != AD_KIND_MODULERES)
-                cur = LoadCursorA(NULL, MAKEINTRESOURCEA(ord));
+            /* s89 (#216): the same resolver RegisterClass uses -- predefined,
+               the module's own by name or ordinal, or built from USER's bytes. */
+            cur = wowuser_sysres_hcursor(tok, NULL);
             if (!cur)
-                wu_puts(note, notecap, &k, " -- ★ NOT A SYSTEM CURSOR TOKEN"
-                                           " (a module's own cursor is not built"
-                                           " yet); the cursor is left alone");
+                wu_puts(note, notecap, &k, " -- ★ NOT A CURSOR TOKEN WE CAN BUILD;"
+                                           " the cursor is left alone");
         } else {
             wu_puts(note, notecap, &k, " (NULL -- hide)");
         }
