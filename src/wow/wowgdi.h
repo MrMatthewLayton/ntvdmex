@@ -589,6 +589,10 @@
 #define WOWGDI_CLOSEMETAFILE    0x007e
 #define WOWGDI_DELETEMETAFILE   0x007f
 #define WOWGDI_COPYMETAFILE     0x0097
+/* s90 (#295): PlayMetaFile(hdc, hmf), GDI.123, 4 bytes reversed: +0 hmf, +2 hdc. */
+#define WOWGDI_PLAYMETAFILE     0x007b
+#define PMF_ARG_HMF      0
+#define PMF_ARG_HDC      2
 #define MF1_ARG_H        0
 #define CPMF_ARG_FILE    0
 #define CPMF_ARG_HMF     4
@@ -793,6 +797,21 @@
    GDI.330, a WRAPPER stub of 14 argument bytes (wowmap.py). Frame, reversed:
    +0 lParam, +4 proc, +8 lpszFamily (far, NULL = one per family), +12 hdc. */
 #define WOWGDI_ENUMFONTFAMILIES 0x014a
+/* s90 (#296): EnumFonts(hdc, lpszFace, proc, lParam), GDI.70, the same 14-byte
+   frame as EnumFontFamilies (EFF_ARG_*); its callback takes LOGFONT + TEXTMETRIC,
+   which are the leading parts of the ENUMLOGFONT/NEWTEXTMETRIC blob it shares. */
+#define WOWGDI_ENUMFONTS        0x0046
+/* s90 (#296): EnumObjects(hdc, nObjectType, proc, lParam), GDI.71, 12 bytes,
+   reversed: +0 lParam, +4 proc, +8 type (1 OBJ_PEN, 2 OBJ_BRUSH), +10 hdc.
+   Callback: int EnumObjectsProc(LPVOID lpLogObject, LPARAM). Win16's structures
+   (windows.h 3.1): LOGPEN {UINT style; POINT width; COLORREF color} = 10 bytes,
+   LOGBRUSH {UINT style; COLORREF color; int hatch} = 8 -- UINT/int/POINT being
+   16-bit is the whole difference from Win32's. */
+#define WOWGDI_ENUMOBJECTS      0x0047
+#define EOB_ARG_LPARAM  0
+#define EOB_ARG_PROC    4
+#define EOB_ARG_TYPE    8
+#define EOB_ARG_HDC     10
 #define EFF_ARG_LPARAM  0
 #define EFF_ARG_PROC    4
 #define EFF_ARG_FAMILY  8
@@ -936,6 +955,9 @@ static void wowgdi_forget(WORD h)
    eight ints, nine bytes, three ints (31); NEWTEXTMETRIC16 adds ntmFlags (DWORD),
    ntmSizeEM, ntmCellHeight, ntmAvgWidth (41). */
 static void wowgdi_put16(BYTE *b, int off, LONG v) { b[off] = (BYTE)v; b[off + 1] = (BYTE)(v >> 8); }
+/* s90: EnumFontsA hands a LOGFONT, not an ENUMLOGFONT -- the full name and style
+   past it are not ours to read, so this says not to. */
+static int g_wg_font_plain;
 static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *tm,
                                         DWORD type, LPARAM unused)
 {
@@ -956,8 +978,10 @@ static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *t
     b[13] = lf->lfCharSet; b[14] = lf->lfOutPrecision; b[15] = lf->lfClipPrecision;
     b[16] = lf->lfQuality; b[17] = lf->lfPitchAndFamily;
     for (i = 0; i < 31 && lf->lfFaceName[i]; ++i) b[18 + i] = (BYTE)lf->lfFaceName[i];
-    for (i = 0; i < 63 && elf->elfFullName[i]; ++i) b[50 + i] = elf->elfFullName[i];
-    for (i = 0; i < 31 && elf->elfStyle[i]; ++i) b[114 + i] = elf->elfStyle[i];
+    if (!g_wg_font_plain) {
+        for (i = 0; i < 63 && elf->elfFullName[i]; ++i) b[50 + i] = elf->elfFullName[i];
+        for (i = 0; i < 31 && elf->elfStyle[i]; ++i) b[114 + i] = elf->elfStyle[i];
+    }
     n = b + WOWENUM_ELF16;
     wowgdi_put16(n, 0, tm->tmHeight);  wowgdi_put16(n, 2, tm->tmAscent);
     wowgdi_put16(n, 4, tm->tmDescent); wowgdi_put16(n, 6, tm->tmInternalLeading);
@@ -969,13 +993,39 @@ static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *t
     n[23] = tm->tmPitchAndFamily; n[24] = tm->tmCharSet;
     wowgdi_put16(n, 25, tm->tmOverhang); wowgdi_put16(n, 27, tm->tmDigitizedAspectX);
     wowgdi_put16(n, 29, tm->tmDigitizedAspectY);
-    if (type & TRUETYPE_FONTTYPE) {          /* the NEW part is only TrueType's */
+    if ((type & TRUETYPE_FONTTYPE) && !g_wg_font_plain) { /* the NEW part: TrueType's */
         n[31] = (BYTE)ntm->ntmFlags; n[32] = (BYTE)(ntm->ntmFlags >> 8);
         n[33] = (BYTE)(ntm->ntmFlags >> 16); n[34] = (BYTE)(ntm->ntmFlags >> 24);
         wowgdi_put16(n, 35, (LONG)ntm->ntmSizeEM); wowgdi_put16(n, 37, (LONG)ntm->ntmCellHeight);
         wowgdi_put16(n, 39, (LONG)ntm->ntmAvgWidth);
     }
     e->type = (WORD)type;
+    return 1;
+}
+
+/* s90: one Win32 pen/brush -> LOGPEN16 (10) / LOGBRUSH16 (8), into g_we_font[]. */
+static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
+{
+    BYTE *b;
+    int i;
+    if (g_we_nfont >= WOWENUM_MAXFONT) return 0;
+    b = g_we_font[g_we_nfont].b;
+    for (i = 0; i < 16; ++i) b[i] = 0;
+    if (type == OBJ_PEN) {
+        const LOGPEN *lp = (const LOGPEN *)lo;
+        wowgdi_put16(b, 0, (LONG)lp->lopnStyle);
+        wowgdi_put16(b, 2, lp->lopnWidth.x); wowgdi_put16(b, 4, lp->lopnWidth.y);
+        wowgdi_put16(b, 6, (LONG)(lp->lopnColor & 0xFFFF));
+        wowgdi_put16(b, 8, (LONG)(lp->lopnColor >> 16));
+    } else {
+        const LOGBRUSH *lb = (const LOGBRUSH *)lo;
+        wowgdi_put16(b, 0, (LONG)lb->lbStyle);
+        wowgdi_put16(b, 2, (LONG)(lb->lbColor & 0xFFFF));
+        wowgdi_put16(b, 4, (LONG)(lb->lbColor >> 16));
+        wowgdi_put16(b, 6, (LONG)lb->lbHatch);
+    }
+    g_we_font[g_we_nfont].type = (WORD)type;
+    ++g_we_nfont;
     return 1;
 }
 
@@ -1996,7 +2046,62 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    case WOWGDI_ENUMOBJECTS: {
+        WORD  hdc  = wow32_argw(f, EOB_ARG_HDC);
+        WORD  typ  = wow32_argw(f, EOB_ARG_TYPE);
+        DWORD proc = wow32_argd(f, EOB_ARG_PROC);
+        DWORD lp   = wow32_argd(f, EOB_ARG_LPARAM);
+        int   kind = -1, k = 0;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HDC   dc;
+        int   own = 0;
+        wu_puts(note, notecap, &k, "EnumObjects(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, typ == OBJ_PEN ? ", OBJ_PEN" :
+                                   typ == OBJ_BRUSH ? ", OBJ_BRUSH" : ", ?");
+        wu_puts(note, notecap, &k, ")");
+        /* GDI's own 16-bit wrapper already refuses a type outside 1..2 before
+           the thunk (gdi.exe seg1:0x1bc4 `cmp ax,1 / jl / cmp ax,2 / jle`); this
+           is belt and braces, answering what that path answers. */
+        if (typ != OBJ_PEN && typ != OBJ_BRUSH) {
+            wu_puts(note, notecap, &k, " -- not a pen or brush; 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, 1);                 /* the walk revises it to 0 on a stop */
+        if (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC)) dc = (HDC)o;
+        else { dc = GetDC(NULL); own = 1; }
+        g_we_nfont = 0;
+        if (dc) {
+            EnumObjects(dc, typ, (GOBJENUMPROC)wowgdi_obj_collect, (LPARAM)typ);
+            if (own) ReleaseDC(NULL, dc);
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)g_we_nfont, 4);
+        wu_puts(note, notecap, &k, " object(s)");
+        if (!g_we_nfont || !f->cbok) {
+            if (!f->cbok) wu_puts(note, notecap, &k, " -- callbacks are not armed");
+            if (!g_we_nfont) wow32_setret(f, 0);
+            return 1;
+        }
+        if (wowenum_busy()) {
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!wowenum_begin(WOWENUM_OBJECTS, proc, f->gds, lp,
+                           (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), 0)) {
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        f->enumreq = 1;
+        return 1;
+    }
+
+    case WOWGDI_ENUMFONTS:
     case WOWGDI_ENUMFONTFAMILIES: {
+        int   plain = (f->id == WOWGDI_ENUMFONTS);
         WORD  hdc  = wow32_argw(f, EFF_ARG_HDC);
         DWORD proc = wow32_argd(f, EFF_ARG_PROC);
         DWORD lp   = wow32_argd(f, EFF_ARG_LPARAM);
@@ -2006,7 +2111,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         HGDIOBJ o = wowgdi_h32(hdc, &kind);
         HDC   dc;
         int   own = 0;
-        wu_puts(note, notecap, &k, "EnumFontFamilies(0x");
+        wu_puts(note, notecap, &k, plain ? "EnumFonts(0x" : "EnumFontFamilies(0x");
         wu_puthex(note, notecap, &k, hdc, 4);
         wu_puts(note, notecap, &k, havefam ? ", \"" : ", NULL");
         if (havefam) { wu_puts(note, notecap, &k, fam); wu_puts(note, notecap, &k, "\""); }
@@ -2016,7 +2121,11 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         else { dc = GetDC(NULL); own = 1; }
         g_we_nfont = 0;
         if (dc) {
-            EnumFontFamiliesA(dc, havefam ? fam : NULL, wowgdi_font_collect, 0);
+            g_wg_font_plain = plain;
+            if (plain) EnumFontsA(dc, havefam ? fam : NULL,
+                                  (FONTENUMPROCA)wowgdi_font_collect, 0);
+            else EnumFontFamiliesA(dc, havefam ? fam : NULL, wowgdi_font_collect, 0);
+            g_wg_font_plain = 0;
             if (own) ReleaseDC(NULL, dc);
         }
         wu_puts(note, notecap, &k, " -> 0x");
@@ -3371,6 +3480,34 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         }
         wu_puts(note, notecap, &k, r ? ") -> deleted"
                                      : ") -- ★ NOT ONE OF OUR METAFILE TOKENS; FALSE");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★ 0x7b PlayMetaFile(hdc, hmf) ── s90, #295. Write and Paintbrush import it.
+         The metafile is one of OUR tokens (CloseMetaFile/CopyMetaFile made it), so
+         this is Win32's own PlayMetaFile on the two real handles. Checked to be a
+         metafile by the OS's own GetObjectType, not by token kind alone -- a pen
+         is an OBJ token too. */
+    case WOWGDI_PLAYMETAFILE: {
+        WORD hdc = wow32_argw(f, PMF_ARG_HDC);
+        WORD tok = wow32_argw(f, PMF_ARG_HMF);
+        int  kd = -1, km = -1, k = 0, r = 0;
+        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
+        HGDIOBJ mf = wowgdi_h32(tok, &km);
+        wu_puts(note, notecap, &k, "PlayMetaFile(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!dc || !(kd == WOWGDI_KIND_DC || kd == WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
+        } else if (!mf || km != WOWGDI_KIND_OBJ || GetObjectType(mf) != OBJ_METAFILE) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR METAFILE TOKENS; FALSE");
+        } else {
+            r = PlayMetaFile((HDC)dc, (HMETAFILE)mf) ? 1 : 0;
+            wu_puts(note, notecap, &k, r ? " -> played" : " -> FAILED");
+        }
         wow32_setret(f, (DWORD)r);
         return 1;
     }

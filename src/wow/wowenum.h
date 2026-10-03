@@ -31,8 +31,11 @@
  *   index into the live table and each step re-validates the slot. A window that
  *   vanished mid-enumeration is skipped, not reported as a stale handle.
  *
- * ── WHAT IS NOT HERE, AND WHY ───────────────────────────────────────────────
- * `EnumFonts`, `EnumFontFamilies` and `EnumObjects` are the same shape and are
+ * ── s89/s90: FONTS AND OBJECTS ARE NOW HERE ─────────────────────────────────
+ * EnumFontFamilies (s89), EnumFonts and EnumObjects (s90, #296) walk Win16
+ * structures built up front in wowgdi.h. The note below is the original reason
+ * they waited, kept because the rule it states still holds:
+ * `EnumFonts`, `EnumFontFamilies` and `EnumObjects` are the same shape and were
  * NOT implemented, because their callbacks receive POINTERS TO STRUCTURES --
  * LOGFONT, TEXTMETRIC, LOGPEN, LOGBRUSH -- whose Win16 layouts differ from
  * Win32's in exactly the way `ABC` and `RECT` do. Building those from memory is
@@ -184,6 +187,40 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                 char c[2]; c[0] = (char)e->b[i]; c[1] = 0; wu_puts(note, cap, &k, c); } }
         wu_puts(note, cap, &k, "\" type=0x");
         wu_puthex(note, cap, &k, e->type, 2);
+        return 1;
+    }
+
+    if (g_we.kind == WOWENUM_OBJECTS) {
+        /* EnumObjectsProc(LPVOID lpLogObject, LPARAM) -- s90, #296 */
+        const wowenum_font_t *e;
+        if (g_we.idx >= g_we_nfont) {
+            wu_puts(note, cap, &k, "ENUM objects complete: 0x");
+            wu_puthex(note, cap, &k, g_we.calls, 4);
+            wu_puts(note, cap, &k, " object(s)");
+            wowenum_end();
+            return 0;
+        }
+        e = &g_we_font[g_we.idx++];
+        arg[0] = 0; arg[1] = 0;             /* lpLogObject: filled by wowcall_enter */
+        arg[2] = (WORD)(g_we.lparam >> 16);
+        arg[3] = (WORD)(g_we.lparam & 0xFFFF);
+        if (!rsel || !ssbase
+            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+                              0, WOWCALL_RET_KEEP, NULL, 0, 0,
+                              e->b, e->type == OBJ_PEN ? 10 : 8, 0,
+                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+            wu_puts(note, cap, &k, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
+                                   " enumeration ends here");
+            wowenum_end();
+            return 0;
+        }
+        if (g_wc_depth > 0) {
+            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
+            g_wc[g_wc_depth - 1].actarg = 0;
+        }
+        ++g_we.calls;
+        wu_puts(note, cap, &k, "ENUM object -> style=0x");
+        wu_puthex(note, cap, &k, (DWORD)(e->b[0] | (e->b[1] << 8)), 4);
         return 1;
     }
 

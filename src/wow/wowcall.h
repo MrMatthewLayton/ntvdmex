@@ -213,6 +213,8 @@
 #define WOWENUM_TASK      3     /* every window of a task                      */
 #define WOWENUM_LINE      4     /* every point on a line (LineDDA)             */
 #define WOWENUM_FONTS     5     /* every font (family) -- EnumFontFamilies (s89) */
+#define WOWENUM_OBJECTS   6     /* every pen or brush -- EnumObjects (s90); the
+                                   LOGPEN16/LOGBRUSH16 blobs reuse g_we_font[]   */
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
