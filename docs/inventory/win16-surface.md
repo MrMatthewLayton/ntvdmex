@@ -5,7 +5,7 @@
 One row is one numbered WOW call a system module's 16-bit code makes to the 32-bit side — the whole of what this host has to answer. Exports that are 16-bit code inside the module are not rows: they run on the real CPU.
 
 - **handled** = the module's dispatcher has a `case` that does more than name the id, **or** the rig log shows it answered (main.c services some ids in front of the dispatchers). *Not* that the answer is right — a row is *verified* only once its batch is checked against stock.
-- **rig** = outcomes in the host logs read (162 logs): `ok` answered, `part` answered but the host's own note says part is not implemented (usually a message — see the message table), **STEPPED** = unimplemented, stepped over, the guest got a sentinel.
+- **rig** = outcomes in the host logs read (265 logs): `ok` answered, `part` answered but the host's own note says part is not implemented (usually a message — see the message table), **STEPPED** = unimplemented, stepped over, the guest got a sentinel.
 - **kind** (Wine's argument types): `values` = words/longs only (handles still need mapping); `pointer` = reads/writes guest memory; `callback` = takes or installs 16-bit code (needs `wow_call16_sync()`); `?` = no Wine entry.
 - **shelf** = programs in `guest/win16/` that import the call; `NAME*` = only through one of the shelf's 16-bit DLLs (an over-count: the program may not reach every call its DLL makes).
 - `(internal)` / `(HOST_NAME)` = a stub no export maps to; the module reaches it from its own 16-bit code (e.g. `LoadIcon` → USER `0xad`). **0 shelf users does not mean unused** — the rig column is the evidence for these.
@@ -15,20 +15,20 @@ One row is one numbered WOW call a system module's 16-bit code makes to the 32-b
 
 | module | ids | handled | used by shelf | used + handled | **gaps** | partial |
 |---|---:|---:|---:|---:|---:|---:|
-| KERNEL | 202 | 32 | 9 | 6 | **12** | 0 |
-| USER | 441 | 203 | 197 | 188 | **13** | 4 |
-| GDI | 365 | 98 | 102 | 93 | **9** | 0 |
-| KEYBOARD | 11 | 5 | 6 | 5 | **1** | 0 |
-| SHELL | 34 | 16 | 18 | 16 | **2** | 0 |
+| KERNEL | 202 | 33 | 9 | 6 | **12** | 0 |
+| USER | 441 | 211 | 197 | 196 | **5** | 4 |
+| GDI | 365 | 105 | 102 | 100 | **2** | 0 |
+| KEYBOARD | 11 | 6 | 6 | 6 | **0** | 0 |
+| SHELL | 34 | 18 | 18 | 18 | **0** | 0 |
 | COMMDLG | 8 | 7 | 5 | 4 | **1** | 0 |
-| SOUND | 17 | 0 | 6 | 0 | **6** | 0 |
+| SOUND | 17 | 17 | 6 | 6 | **0** | 0 |
 | SYSTEM | 1 | 0 | 0 | 0 | **0** | 0 |
 | MOUSE | 0 | 0 | 0 | 0 | **0** | 0 |
 | COMM | 0 | 0 | 0 | 0 | **0** | 0 |
 | TOOLHELP | 3 | 0 | 0 | 0 | **0** | 0 |
 | WINNLS | 8 | 0 | 0 | 0 | **0** | 0 |
 | MMSYSTEM | 166 | 0 | 31 | 0 | **31** | 0 |
-| **all** | 1256 | 361 | 374 | 312 | **75** | 4 |
+| **all** | 1256 | 397 | 374 | 336 | **51** | 4 |
 
 Shelf (21): CALC.EXE, CARDFILE.EXE, CHARMAP.EXE, CLOCK.EXE, DDEML.DLL, LZEXPAND.DLL, MPLAYER.EXE, NOTEPAD.EXE, PACKAGER.EXE, PBRUSH.DLL, PBRUSH.EXE, PROGMAN.EXE, RECORDER.EXE, SOL.EXE, SOUNDREC.EXE, SYSEDIT.EXE, TASKMAN.EXE, TERMINAL.EXE, WINFILE.EXE, WINMINE.EXE, WRITE.EXE
 
@@ -38,26 +38,15 @@ Used by the shelf and unanswered, or stepped over on the rig.
 
 | module | id | name | Wine signature | kind | rig | shelf |
 |---|---|---|---|---|---|---|
-| KERNEL | `0x01e` | WAITEVENT | `(word)` | values | **STEPPED 302** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| KERNEL | `0x01e` | WAITEVENT | `(word)` | values | **STEPPED 374** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | KERNEL | `0x001` | FATALEXIT | `()` | values |  | 16: CALC CARDFILE CHARMAP LZEXPAND MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINMINE WRITE WINFILE* |
-| COMMDLG | `0x014` | PRINTDLG | `(ptr)` | callback | **STEPPED 10** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
-| GDI | `0x07b` | PLAYMETAFILE | `(word word)` | values |  | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| COMMDLG | `0x014` | PRINTDLG | `(ptr)` | callback | **STEPPED 14** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
 | KERNEL | `0x01d` | YIELD | `()` | values |  | 4: DDEML CARDFILE* PACKAGER* WRITE* |
-| USER | `0x01b` | ENUMPROPS | `(word segptr)` | callback | **STEPPED 41** | 3: PACKAGER* PBRUSH* SOUNDREC* |
-| GDI | `0x05e` | GETVIEWPORTEXT | `(word)` | values |  | 3: CARDFILE* PACKAGER* WRITE* |
-| GDI | `0x060` | GETWINDOWEXT | `(word)` | values |  | 3: CARDFILE* PACKAGER* WRITE* |
-| GDI | `0x0a2` | GETBITMAPDIMENSION | `(word)` | values |  | 3: CARDFILE* PACKAGER* WRITE* |
 | GDI | `0x0af` | ENUMMETAFILE | `(word word segptr long)` | callback |  | 3: CARDFILE* PACKAGER* WRITE* |
 | GDI | `0x0b0` | PLAYMETAFILERECORD | `(word ptr ptr word)` | pointer |  | 3: CARDFILE* PACKAGER* WRITE* |
-| USER | `0x092` | GETCLIPBOARDFORMATNAME | `(word ptr s_word)` | pointer |  | 3: CARDFILE* PACKAGER* WRITE* |
-| GDI | `0x046` | ENUMFONTS | `(word str segptr long)` | callback | **STEPPED 42** | 2: TERMINAL WRITE |
 | MMSYSTEM | `0x191` | WAVEOUTGETNUMDEVS | `()` | values |  | 2: MPLAYER SOUNDREC |
 | MMSYSTEM | `0x1f5` | WAVEINGETNUMDEVS | `()` | values |  | 2: MPLAYER SOUNDREC |
-| USER | `0x063` | DLGDIRSELECT | `(word ptr word)` | pointer |  | 2: SYSEDIT TERMINAL |
 | USER | `0x1d0` | DRAGOBJECT | `(word word word word word word)` | values |  | 2: PROGMAN WINFILE |
-| GDI | `0x047` | ENUMOBJECTS | `(word word segptr long)` | callback |  | 1: PBRUSH |
-| GDI | `0x16c` | SETPALETTEENTRIES | `(word word word ptr)` | pointer |  | 1: DDEML |
-| KEYBOARD | `0x084` | GETKBCODEPAGE | `()` | values |  | 1: DDEML |
 | MMSYSTEM | `0x0c9` | MIDIOUTGETNUMDEVS | `()` | values |  | 1: MPLAYER |
 | MMSYSTEM | `0x12d` | MIDIINGETNUMDEVS | `()` | values |  | 1: MPLAYER |
 | MMSYSTEM | `0x15e` | AUXGETNUMDEVS | `()` | values |  | 1: MPLAYER |
@@ -87,49 +76,36 @@ Used by the shelf and unanswered, or stepped over on the rig.
 | MMSYSTEM | `0x4c7` | MMIODESCEND | `(word ptr ptr word)` | pointer |  | 1: SOUNDREC |
 | MMSYSTEM | `0x4c8` | MMIOASCEND | `(word ptr word)` | pointer |  | 1: SOUNDREC |
 | MMSYSTEM | `0x4c9` | MMIOCREATECHUNK | `(word ptr word)` | pointer |  | 1: SOUNDREC |
-| SHELL | `0x026` | FINDENVIRONMENTSTRING | `(ptr)` | pointer |  | 1: WINFILE |
-| SHELL | `0x027` | INTERNALEXTRACTICON | `(word ptr s_word word)` | pointer |  | 1: PROGMAN |
-| SOUND | `0x001` | OPENSOUND | `()` | values |  | 1: WINMINE |
-| SOUND | `0x002` | CLOSESOUND | `()` | values |  | 1: WINMINE |
-| SOUND | `0x004` | SETVOICENOTE | `(word word word word)` | values |  | 1: WINMINE |
-| SOUND | `0x005` | SETVOICEACCENT | `(word word word word word)` | values |  | 1: WINMINE |
-| SOUND | `0x009` | STARTSOUND | `()` | values |  | 1: WINMINE |
-| SOUND | `0x00a` | STOPSOUND | `()` | values |  | 1: WINMINE |
-| USER | `0x07b` | CALLMSGFILTER | `(ptr s_word)` | pointer |  | 1: DDEML |
-| USER | `0x0bf` | CHILDWINDOWFROMPOINT | `(word long)` | values |  | 1: WINFILE* |
-| USER | `0x0e9` | SETPARENT | `(word word)` | values |  | 1: DDEML |
-| USER | `0x174` | GETINTERNALICONHEADER | `()` | values |  | 1: PROGMAN |
-| USER | `0x194` | GETCLASSINFO | `(word segstr ptr)` | pointer |  | 1: WINFILE* |
-| KERNEL | `0x0c6` | (internal) |  | ? | **STEPPED 2290** | 0 |
-| USER | `0x13a` | SIGNALPROC | `(word word word word word)` | callback | **STEPPED 796** | 0 |
-| KERNEL | `0x08a` | (internal) |  | ? | **STEPPED 302** | 0 |
-| KERNEL | `0x02f` | (internal) |  | ? | **STEPPED 188** | 0 |
-| KERNEL | `0x09a` | LOADLIBRARYEX32W | `(ptr long long)` | pointer | **STEPPED 163** | 0 |
-| KERNEL | `0x087` | (internal) |  | ? | **STEPPED 151** | 0 |
-| KERNEL | `0x08b` | WOWREGISTERSHELLWINDOWHANDLE |  | ? | **STEPPED 151** | 0 |
-| KERNEL | `0x09d` | WOWFAILEDEXEC | `()` | values | **STEPPED 151** | 0 |
-| KERNEL | `0x0be` | (internal) |  | ? | **STEPPED 151** | 0 |
-| KERNEL | `0x0c0` | (internal) |  | ? | **STEPPED 151** | 0 |
-| USER | `0x190` | FINALUSERINIT | `()` | values | **STEPPED 151** | 0 |
-| USER | `0x079` | (internal) |  | ? | **STEPPED 25** | 0 |
-| USER | `0x140` | (internal) |  | ? | **STEPPED 4** | 0 |
+| KERNEL | `0x0c6` | (internal) |  | ? | **STEPPED 2805** | 0 |
+| USER | `0x13a` | SIGNALPROC | `(word word word word word)` | callback | **STEPPED 969** | 0 |
+| KERNEL | `0x08a` | (internal) |  | ? | **STEPPED 374** | 0 |
+| KERNEL | `0x02f` | (internal) |  | ? | **STEPPED 215** | 0 |
+| KERNEL | `0x087` | (internal) |  | ? | **STEPPED 187** | 0 |
+| KERNEL | `0x08b` | WOWREGISTERSHELLWINDOWHANDLE |  | ? | **STEPPED 187** | 0 |
+| KERNEL | `0x09d` | WOWFAILEDEXEC | `()` | values | **STEPPED 187** | 0 |
+| KERNEL | `0x0be` | (internal) |  | ? | **STEPPED 187** | 0 |
+| KERNEL | `0x0c0` | (internal) |  | ? | **STEPPED 187** | 0 |
+| USER | `0x190` | FINALUSERINIT | `()` | values | **STEPPED 165** | 0 |
+| KERNEL | `0x09a` | LOADLIBRARYEX32W | `(ptr long long)` | pointer | **STEPPED 164** | 0 |
+| USER | `0x079` | (internal) |  | ? | **STEPPED 30** | 0 |
+| USER | `0x140` | (internal) |  | ? | **STEPPED 6** | 0 |
 
 ## Answered, but partly not implemented (from the host's own notes)
 
 | module | id | name | rig |
 |---|---|---|---|
-| USER | `0x065` | SENDDLGITEMMESSAGE | ok 2471 part 221 |
-| USER | `0x06f` | SENDMESSAGE | ok 518 part 61 |
-| USER | `0x072` | DISPATCHMESSAGE | ok 2726 part 28 |
-| USER | `0x1e3` | SYSTEMPARAMETERSINFO | ok 12 part 14 |
+| USER | `0x065` | SENDDLGITEMMESSAGE | ok 2471 part 227 |
+| USER | `0x06f` | SENDMESSAGE | ok 597 part 75 |
+| USER | `0x072` | DISPATCHMESSAGE | ok 3638 part 33 |
+| USER | `0x1e3` | SYSTEMPARAMETERSINFO | ok 15 part 19 |
 
-## KERNEL — 202 ids, 32 handled, 12 gaps
+## KERNEL — 202 ids, 33 handled, 12 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x01e` | seg1→own thunk 0x2bb6 | 2 | WAITEVENT | `(word)` | values | — | **STEPPED 302** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x01e` | seg1→own thunk 0x2bb6 | 2 | WAITEVENT | `(word)` | values | — | **STEPPED 374** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | `0x001` | seg1→own thunk 0x2bb6 | 2 | FATALEXIT | `()` | values | — |  | 16: CALC CARDFILE CHARMAP LZEXPAND MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINMINE WRITE WINFILE* |
 | `0x01d` | seg1→own thunk 0x2bb6 | 0 | YIELD | `()` | values | — |  | 4: DDEML CARDFILE* PACKAGER* WRITE* |
 | `0x002` | seg1→own thunk 0x2bb6 | 2 | EXITKERNELTHUNK | `()` | values | — |  | 0 |
@@ -141,10 +117,9 @@ Unhandled first, then most-used.
 | `0x029` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | — |  | 0 |
 | `0x02a` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — |  | 0 |
 | `0x02d` | seg1→own thunk 0x2bb6 | 12 | WOWLOADMODULE | `()` | values | — |  | 0 |
-| `0x02f` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 188** | 0 |
+| `0x02f` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 215** | 0 |
 | `0x031` | seg1→own thunk 0x2bb6 | 8 | (internal) |  | ? | — |  | 0 |
 | `0x06e` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
-| `0x06f` | seg1→own thunk 0x2bb6 | 18 | (internal) |  | ? | — |  | 0 |
 | `0x071` | seg1→own thunk 0x2bb6 | 20 | (internal) |  | ? | — |  | 0 |
 | `0x072` | seg1→own thunk 0x2bb6 | 2 | (internal) |  | ? | — |  | 0 |
 | `0x073` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — |  | 0 |
@@ -157,26 +132,26 @@ Unhandled first, then most-used.
 | `0x07e` | seg1→own thunk 0x2bb6 | 6 | (internal) |  | ? | — |  | 0 |
 | `0x083` | seg1→own thunk 0x2bb6 | 2 | WOWWAITFORMSGANDEVENT | `()` | values | — |  | 0 |
 | `0x085` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
-| `0x087` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 151** | 0 |
-| `0x08a` | seg1→own thunk 0x2bb6 | 2 | (internal) |  | ? | — | **STEPPED 302** | 0 |
-| `0x08b` | seg1→own thunk 0x2bb6 | 8 | WOWREGISTERSHELLWINDOWHANDLE |  | ? | — | **STEPPED 151** | 0 |
+| `0x087` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 187** | 0 |
+| `0x08a` | seg1→own thunk 0x2bb6 | 2 | (internal) |  | ? | — | **STEPPED 374** | 0 |
+| `0x08b` | seg1→own thunk 0x2bb6 | 8 | WOWREGISTERSHELLWINDOWHANDLE |  | ? | — | **STEPPED 187** | 0 |
 | `0x08c` | seg1→own thunk 0x2bb6 | 4 | FREELIBRARY32W | `(long)` | values | — |  | 0 |
 | `0x08d` | seg1→own thunk 0x2bb6 | 8 | GETPROCADDRESS32W | `(long str)` | pointer | — |  | 0 |
 | `0x096` | seg1→own thunk 0x2bb6 | 2 | DIRECTEDYIELD | `(word)` | values | — |  | 0 |
 | `0x099` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | — |  | 0 |
-| `0x09a` | seg1→own thunk 0x2bb6 | 12 | LOADLIBRARYEX32W | `(ptr long long)` | pointer | — | **STEPPED 163** | 0 |
+| `0x09a` | seg1→own thunk 0x2bb6 | 12 | LOADLIBRARYEX32W | `(ptr long long)` | pointer | — | **STEPPED 164** | 0 |
 | `0x09b` | seg1→own thunk 0x2bb6 | 8 | WOWQUERYPERFORMANCECOUNTER | `()` | values | — |  | 0 |
 | `0x09c` | seg1→own thunk 0x2bb6 | 4 | WOWCURSORICONOP | `()` | values | — |  | 0 |
-| `0x09d` | seg1→own thunk 0x2bb6 | 0 | WOWFAILEDEXEC | `()` | values | — | **STEPPED 151** | 0 |
+| `0x09d` | seg1→own thunk 0x2bb6 | 0 | WOWFAILEDEXEC | `()` | values | — | **STEPPED 187** | 0 |
 | `0x09e` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
 | `0x09f` | seg1→own thunk 0x2bb6 | 2 | WOWCLOSECOMPORT |  | ? | — |  | 0 |
 | `0x0bd` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
-| `0x0be` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 151** | 0 |
+| `0x0be` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — | **STEPPED 187** | 0 |
 | `0x0bf` | seg1→own thunk 0x2bb6 | 4 | WOWKILLREMOTETASK | `()` | values | — |  | 0 |
-| `0x0c0` | seg1→own thunk 0x2bb6 | 28 | (internal) |  | ? | — | **STEPPED 151** | 0 |
+| `0x0c0` | seg1→own thunk 0x2bb6 | 28 | (internal) |  | ? | — | **STEPPED 187** | 0 |
 | `0x0c3` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
 | `0x0c4` | seg1→own thunk 0x2bb6 | 14 | (WOW32_MESSAGEBOX) |  | ? | — |  | 0 |
-| `0x0c6` | seg1→own thunk 0x2bb6 | 2 | (internal) |  | ? | — | **STEPPED 2290** | 0 |
+| `0x0c6` | seg1→own thunk 0x2bb6 | 2 | (internal) |  | ? | — | **STEPPED 2805** | 0 |
 | `0x0cc` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | — |  | 0 |
 | `0x0cd` | seg1→own thunk 0x2bb6 | 2 | WOWSHUTDOWNTIMER |  | ? | — |  | 0 |
 | `0x0ce` | seg1→own thunk 0x2bb6 | 0 | (internal) |  | ? | — |  | 0 |
@@ -299,54 +274,47 @@ Unhandled first, then most-used.
 | `0x0b6` | seg2→imported thunk | 0 | INVALIDATENLSCACHE | `()` | values | — |  | 0 |
 | `0x0ca` | seg2→imported thunk | 6 | GETPRODUCTNAME | `()` | values | — |  | 0 |
 | `0x0cb` | seg2→imported thunk | 0 | K237 | `()` | values | — |  | 0 |
-| `0x03a` | seg1→own thunk 0x2bb6 | 18 | GETPROFILESTRING | `(str str str ptr word)` | pointer | ✅ | ok 920 | 14: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x039` | seg1→own thunk 0x2bb6 | 10 | GETPROFILEINT | `(str str s_word)` | pointer | ✅ | ok 2913 | 10: CALC CARDFILE CLOCK NOTEPAD PBRUSH RECORDER SOUNDREC TERMINAL WINFILE WRITE |
-| `0x03b` | seg1→own thunk 0x2bb6 | 12 | WRITEPROFILESTRING | `(str str str)` | pointer | ✅ | ok 10 | 8: CALC CARDFILE CHARMAP PBRUSH RECORDER TERMINAL WINFILE WRITE |
-| `0x07f` | seg1→own thunk 0x2bb6 | 14 | GETPRIVATEPROFILEINT | `(str str s_word str)` | pointer | ✅ | ok 1085 | 6: CLOCK MPLAYER PROGMAN SOL WINFILE WINMINE |
-| `0x081` | seg1→own thunk 0x2bb6 | 16 | WRITEPRIVATEPROFILESTRING | `(str str str str)` | pointer | ✅ | ok 22 | 6: CLOCK MPLAYER PROGMAN SOL WINFILE WINMINE |
-| `0x088` | seg1→own thunk 0x2bb6 | 2 | GETDRIVETYPE | `(word)` | values | ✅ | ok 1961 | 5: CARDFILE PROGMAN WINFILE PACKAGER* WRITE* |
+| `0x03a` | seg1→own thunk 0x2bb6 | 18 | GETPROFILESTRING | `(str str str ptr word)` | pointer | ✅ | ok 1028 | 14: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x039` | seg1→own thunk 0x2bb6 | 10 | GETPROFILEINT | `(str str s_word)` | pointer | ✅ | ok 3562 | 10: CALC CARDFILE CLOCK NOTEPAD PBRUSH RECORDER SOUNDREC TERMINAL WINFILE WRITE |
+| `0x03b` | seg1→own thunk 0x2bb6 | 12 | WRITEPROFILESTRING | `(str str str)` | pointer | ✅ | ok 13 | 8: CALC CARDFILE CHARMAP PBRUSH RECORDER TERMINAL WINFILE WRITE |
+| `0x07f` | seg1→own thunk 0x2bb6 | 14 | GETPRIVATEPROFILEINT | `(str str s_word str)` | pointer | ✅ | ok 1392 | 6: CLOCK MPLAYER PROGMAN SOL WINFILE WINMINE |
+| `0x081` | seg1→own thunk 0x2bb6 | 16 | WRITEPRIVATEPROFILESTRING | `(str str str str)` | pointer | ✅ | ok 25 **STEPPED 1** | 6: CLOCK MPLAYER PROGMAN SOL WINFILE WINMINE |
+| `0x088` | seg1→own thunk 0x2bb6 | 2 | GETDRIVETYPE | `(word)` | values | ✅ | ok 2399 | 5: CARDFILE PROGMAN WINFILE PACKAGER* WRITE* |
 | `0x003` | seg1→own thunk 0x2bb6 | 0 | WRITEOUTPROFILES | `()` | values | ✅ |  | 0 |
-| `0x070` | seg1→own thunk 0x2bb6 | 4 | WOWGETNEXTVDMCOMMAND | `()` | values | ✅ | ok 151 | 0 |
-| `0x077` | seg1→own thunk 0x2bb6 | 14 | (internal) |  | ? | ✅ | ok 30 | 0 |
-| `0x078` | seg1→own thunk 0x2bb6 | 4 | (WOW32_REGISTERDOSDATA) |  | ? | ✅ | ok 151 | 0 |
-| `0x07b` | seg1→own thunk 0x2bb6 | 10 | GETSHORTPATHNAME | `(str ptr word)` | pointer | ✅ | ok 302 | 0 |
-| `0x07d` | seg1→own thunk 0x2bb6 | 2 | (WOW32_ACCEPTTASKSELECTOR) |  | ? | ✅ | ok 302 | 0 |
-| `0x080` | seg1→own thunk 0x2bb6 | 22 | (WOW32_GETPRIVATEPROFILESTRING) |  | ? | ✅ | ok 1289 | 0 |
-| `0x082` | seg1→own thunk 0x2bb6 | 4 | (WOW32_SETCURRENTDIR) |  | ? | ✅ | ok 387 | 0 |
+| `0x06f` | seg1→own thunk 0x2bb6 | 18 | (internal) |  | ? | ✅ | ok 790 | 0 |
+| `0x070` | seg1→own thunk 0x2bb6 | 4 | WOWGETNEXTVDMCOMMAND | `()` | values | ✅ | ok 187 | 0 |
+| `0x077` | seg1→own thunk 0x2bb6 | 14 | (internal) |  | ? | ✅ | ok 48 | 0 |
+| `0x078` | seg1→own thunk 0x2bb6 | 4 | (WOW32_REGISTERDOSDATA) |  | ? | ✅ | ok 187 | 0 |
+| `0x07b` | seg1→own thunk 0x2bb6 | 10 | GETSHORTPATHNAME | `(str ptr word)` | pointer | ✅ | ok 322 **STEPPED 52** | 0 |
+| `0x07d` | seg1→own thunk 0x2bb6 | 2 | (WOW32_ACCEPTTASKSELECTOR) |  | ? | ✅ | ok 374 | 0 |
+| `0x080` | seg1→own thunk 0x2bb6 | 22 | (WOW32_GETPRIVATEPROFILESTRING) |  | ? | ✅ | ok 1593 | 0 |
+| `0x082` | seg1→own thunk 0x2bb6 | 4 | (WOW32_SETCURRENTDIR) |  | ? | ✅ | ok 477 | 0 |
 | `0x084` | seg1→own thunk 0x2bb6 | 12 | WOWMSGBOX | `()` | values | ✅ |  | 0 |
-| `0x086` | seg1→own thunk 0x2bb6 | 0 | (WOW32_GETDATETIME) |  | ? | ✅ | ok 695 | 0 |
-| `0x089` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | ✅ | ok 850 | 0 |
-| `0x097` | seg1→own thunk 0x2bb6 | 18 | (internal) |  | ? | ✅ | ok 15838 | 0 |
-| `0x098` | seg1→own thunk 0x2bb6 | 16 | (internal) |  | ? | ✅ | ok 13079 | 0 |
-| `0x0b7` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | ✅ | ok 17 | 0 |
-| `0x0b8` | seg1→own thunk 0x2bb6 | 16 | (WOW32_VIRTUALALLOC) |  | ? | ✅ | ok 453 | 0 |
+| `0x086` | seg1→own thunk 0x2bb6 | 0 | (WOW32_GETDATETIME) |  | ? | ✅ | ok 956 | 0 |
+| `0x089` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | ✅ | ok 1046 | 0 |
+| `0x097` | seg1→own thunk 0x2bb6 | 18 | (internal) |  | ? | ✅ | ok 19264 | 0 |
+| `0x098` | seg1→own thunk 0x2bb6 | 16 | (internal) |  | ? | ✅ | ok 15731 | 0 |
+| `0x0b7` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | ✅ | ok 19 | 0 |
+| `0x0b8` | seg1→own thunk 0x2bb6 | 16 | (WOW32_VIRTUALALLOC) |  | ? | ✅ | ok 561 | 0 |
 | `0x0b9` | seg1→own thunk 0x2bb6 | 12 | (WOW32_VIRTUALFREE) |  | ? | ✅ |  | 0 |
-| `0x0bc` | seg1→own thunk 0x2bb6 | 4 | (WOW32_GLOBALMEMORYSTATUS) |  | ? | ✅ | ok 481 | 0 |
-| `0x0c1` | seg1→own thunk 0x2bb6 | 14 | (internal) |  | ? | ✅ | ok 5926 | 0 |
-| `0x0c2` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | ✅ | ok 2480 | 0 |
-| `0x0c5` | seg1→own thunk 0x2bb6 | 8 | (WOW32_RESOLVEMODULEPATH) |  | ? | ✅ | ok 1886 | 0 |
-| `0x0c7` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | ✅ | ok 7 | 0 |
-| `0x0c8` | seg1→own thunk 0x2bb6 | 2 | (WOW32_SETCURRENTDRIVE) |  | ? | ✅ | ok 3775 | 0 |
-| `0x0c9` | seg1→own thunk 0x2bb6 | 6 | (WOW32_GETCURDIR) |  | ? | ✅ | ok 2434 | 0 |
-| `0x0cf` | seg1→own thunk 0x2bb6 | 0 | GETSYSTEMDEFAULTLANGID |  | ? | ✅ | ok 453 | 0 |
-| `0x0d0` | seg1→own thunk 0x2bb6 | 6 | (WOW32_GETWINDOWSDIRECTORY) |  | ? | ✅ | ok 349 | 0 |
-| `0x0d1` | seg2→imported thunk | 8 | (internal) |  | ? | ✅ | ok 151 | 0 |
+| `0x0bc` | seg1→own thunk 0x2bb6 | 4 | (WOW32_GLOBALMEMORYSTATUS) |  | ? | ✅ | ok 595 | 0 |
+| `0x0c1` | seg1→own thunk 0x2bb6 | 14 | (internal) |  | ? | ✅ | ok 7186 | 0 |
+| `0x0c2` | seg1→own thunk 0x2bb6 | 10 | (internal) |  | ? | ✅ | ok 3040 | 0 |
+| `0x0c5` | seg1→own thunk 0x2bb6 | 8 | (WOW32_RESOLVEMODULEPATH) |  | ? | ✅ | ok 2300 | 0 |
+| `0x0c7` | seg1→own thunk 0x2bb6 | 4 | (internal) |  | ? | ✅ | ok 750 | 0 |
+| `0x0c8` | seg1→own thunk 0x2bb6 | 2 | (WOW32_SETCURRENTDRIVE) |  | ? | ✅ | ok 4675 | 0 |
+| `0x0c9` | seg1→own thunk 0x2bb6 | 6 | (WOW32_GETCURDIR) |  | ? | ✅ | ok 3014 | 0 |
+| `0x0cf` | seg1→own thunk 0x2bb6 | 0 | GETSYSTEMDEFAULTLANGID |  | ? | ✅ | ok 561 | 0 |
+| `0x0d0` | seg1→own thunk 0x2bb6 | 6 | (WOW32_GETWINDOWSDIRECTORY) |  | ? | ✅ | ok 430 | 0 |
+| `0x0d1` | seg2→imported thunk | 8 | (internal) |  | ? | ✅ | ok 187 | 0 |
 
-## USER — 441 ids, 203 handled, 13 gaps
+## USER — 441 ids, 211 handled, 5 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x01b` | seg1→imported thunk | 6 | ENUMPROPS | `(word segptr)` | callback | — | **STEPPED 41** | 3: PACKAGER* PBRUSH* SOUNDREC* |
-| `0x092` | seg1→imported thunk | 8 | GETCLIPBOARDFORMATNAME | `(word ptr s_word)` | pointer | — |  | 3: CARDFILE* PACKAGER* WRITE* |
-| `0x063` | seg1→imported thunk | 8 | DLGDIRSELECT | `(word ptr word)` | pointer | — |  | 2: SYSEDIT TERMINAL |
 | `0x1d0` | seg1→imported thunk | 12 | DRAGOBJECT | `(word word word word word word)` | values | — |  | 2: PROGMAN WINFILE |
-| `0x07b` | seg1→imported thunk | 6 | CALLMSGFILTER | `(ptr s_word)` | pointer | — |  | 1: DDEML |
-| `0x0bf` | seg1→imported thunk | 6 | CHILDWINDOWFROMPOINT | `(word long)` | values | — |  | 1: WINFILE* |
-| `0x0e9` | seg1→imported thunk | 4 | SETPARENT | `(word word)` | values | — |  | 1: DDEML |
-| `0x174` | seg1→imported thunk | 8 | GETINTERNALICONHEADER | `()` | values | — |  | 1: PROGMAN |
-| `0x194` | seg1→imported thunk | 10 | GETCLASSINFO | `(word segstr ptr)` | pointer | — |  | 1: WINFILE* |
 | `0x000` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
 | `0x003` | seg1→imported thunk | 0 | ENABLEOEMLAYER | `()` | values | — |  | 0 |
 | `0x004` | seg1→imported thunk | 0 | DISABLEOEMLAYER | `()` | values | — |  | 0 |
@@ -362,7 +330,7 @@ Unhandled first, then most-used.
 | `0x074` | seg1→imported thunk | 10 | POSTAPPMESSAGE | `(word word word long)` | values | — |  | 0 |
 | `0x075` | seg1→imported thunk | 2 | WINDOWFROMDC | `(word)` | values | — |  | 0 |
 | `0x078` | seg1→imported thunk | 0 | GETMESSAGETIME | `()` | values | — |  | 0 |
-| `0x079` | seg1→imported thunk | 8 | (internal) |  | ? | — | **STEPPED 25** | 0 |
+| `0x079` | seg1→imported thunk | 8 | (internal) |  | ? | — | **STEPPED 30** | 0 |
 | `0x080` | seg1→imported thunk | 4 | VALIDATERGN | `(word word)` | values | — |  | 0 |
 | `0x084` | seg1→imported thunk | 8 | SETCLASSLONG | `(word s_word long)` | callback | — |  | 0 |
 | `0x08f` | seg1→imported thunk | 0 | COUNTCLIPBOARDFORMATS | `()` | values | — |  | 0 |
@@ -421,13 +389,13 @@ Unhandled first, then most-used.
 | `0x137` | seg1→imported thunk | 10 | (internal) |  | ? | — |  | 0 |
 | `0x138` | seg1→imported thunk | 10 | (internal) |  | ? | — |  | 0 |
 | `0x139` | seg1→imported thunk | 10 | (internal) |  | ? | — |  | 0 |
-| `0x13a` | seg1→imported thunk | 10 | SIGNALPROC | `(word word word word word)` | callback | — | **STEPPED 796** | 0 |
+| `0x13a` | seg1→imported thunk | 10 | SIGNALPROC | `(word word word word word)` | callback | — | **STEPPED 969** | 0 |
 | `0x13b` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
 | `0x13c` | seg1→imported thunk | 10 | (internal) |  | ? | — |  | 0 |
 | `0x13d` | seg1→imported thunk | 8 | (internal) |  | ? | — |  | 0 |
 | `0x13e` | seg1→imported thunk | 4 | (internal) |  | ? | — |  | 0 |
 | `0x13f` | seg1→imported thunk | 0 | SCROLLWINDOWEX | `(word s_word s_word ptr ptr word ptr word)` | pointer | — |  | 0 |
-| `0x140` | seg1→imported thunk | 14 | (internal) |  | ? | — | **STEPPED 4** | 0 |
+| `0x140` | seg1→imported thunk | 14 | (internal) |  | ? | — | **STEPPED 6** | 0 |
 | `0x141` | seg1→imported thunk | 4 | SETEVENTHOOK | `(segptr)` | callback | — |  | 0 |
 | `0x142` | seg1→imported thunk | 4 | WINOLDAPPHACKOMATIC | `()` | values | — |  | 0 |
 | `0x143` | seg1→imported thunk | 14 | GETMESSAGE2 | `()` | values | — |  | 0 |
@@ -471,7 +439,7 @@ Unhandled first, then most-used.
 | `0x18d` | seg1→imported thunk | 4 | REGISTERCLASSEX | `(ptr)` | pointer | — |  | 0 |
 | `0x18e` | seg1→imported thunk | 10 | GETCLASSINFOEX | `(word segstr ptr)` | pointer | — |  | 0 |
 | `0x18f` | seg1→imported thunk | 8 | CHILDWINDOWFROMPOINTEX | `(word long word)` | values | — |  | 0 |
-| `0x190` | seg1→imported thunk | 0 | FINALUSERINIT | `()` | values | — | **STEPPED 151** | 0 |
+| `0x190` | seg1→imported thunk | 0 | FINALUSERINIT | `()` | values | — | **STEPPED 165** | 0 |
 | `0x192` | seg1→imported thunk | 6 | GETPRIORITYCLIPBOARDFORMAT | `(ptr s_word)` | pointer | — |  | 0 |
 | `0x193` | seg1→imported thunk | 6 | UNREGISTERCLASS | `(str word)` | pointer | — |  | 0 |
 | `0x196` | seg1→imported thunk | 18 | CREATECURSOR | `(word word word word word ptr ptr)` | pointer | — |  | 0 |
@@ -576,109 +544,109 @@ Unhandled first, then most-used.
 | `0x253` | seg1→imported thunk | 12 | UNINSTALLIMT | `()` | values | — |  | 0 |
 | `0x254` | seg1→imported thunk | 12 | (internal) |  | ? | — |  | 0 |
 | `0x2080` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
-| `0x02a` | seg1→imported thunk | 4 | SHOWWINDOW | `(word word)` | values | ✅ | ok 510 | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
-| `0x039` | seg1→imported thunk | 4 | REGISTERCLASS | `(ptr)` | pointer | ✅ | ok 954 | 18: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x06e` | seg1→imported thunk | 10 | POSTMESSAGE | `(word word word long)` | values | ✅ | ok 87 | 18: CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
-| `0x072` | seg1→imported thunk | 4 | DISPATCHMESSAGE | `(ptr)` | callback | ✅ | ok 2726 part 28 | 18: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x029` | seg1→imported thunk | 30 | CREATEWINDOW | `(str str long s_word s_word s_word s_word word word word segptr)` | pointer | ✅ | ok 752 | 17: CALC CARDFILE CHARMAP CLOCK DDEML NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE WRITE SOUNDREC* |
-| `0x06b` | seg1→imported thunk | 10 | DEFWINDOWPROC | `(word word word long)` | callback | ✅ | ok 510 | 17: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x06c` | seg1→imported thunk | 10 | GETMESSAGE | `(ptr word word word)` | pointer | ✅ | ok 2832 | 17: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT WINFILE WINMINE WRITE |
-| `0x06f` | seg1→imported thunk | 10 | SENDMESSAGE | `(word word word long)` | callback | ✅ | ok 518 part 61 | 17: CALC CARDFILE CHARMAP DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x02a` | seg1→imported thunk | 4 | SHOWWINDOW | `(word word)` | values | ✅ | ok 573 | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x039` | seg1→imported thunk | 4 | REGISTERCLASS | `(ptr)` | pointer | ✅ | ok 1141 | 18: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x06e` | seg1→imported thunk | 10 | POSTMESSAGE | `(word word word long)` | values | ✅ | ok 101 | 18: CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x072` | seg1→imported thunk | 4 | DISPATCHMESSAGE | `(ptr)` | callback | ✅ | ok 3638 part 33 | 18: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x029` | seg1→imported thunk | 30 | CREATEWINDOW | `(str str long s_word s_word s_word s_word word word word segptr)` | pointer | ✅ | ok 893 | 17: CALC CARDFILE CHARMAP CLOCK DDEML NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE WRITE SOUNDREC* |
+| `0x06b` | seg1→imported thunk | 10 | DEFWINDOWPROC | `(word word word long)` | callback | ✅ | ok 754 | 17: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x06c` | seg1→imported thunk | 10 | GETMESSAGE | `(ptr word word word)` | pointer | ✅ | ok 4007 | 17: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT WINFILE WINMINE WRITE |
+| `0x06f` | seg1→imported thunk | 10 | SENDMESSAGE | `(word word word long)` | callback | ✅ | ok 597 part 75 | 17: CALC CARDFILE CHARMAP DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | `0x071` | seg1→imported thunk | 4 | TRANSLATEMESSAGE | `(ptr)` | pointer | ✅ | ok 3 | 17: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x07c` | seg1→imported thunk | 2 | UPDATEWINDOW | `(word)` | values | ✅ | ok 189 | 17: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x0b3` | seg1→imported thunk | 2 | GETSYSTEMMETRICS | `(s_word)` | values | ✅ | ok 1096 | 17: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
-| `0x001` | seg1→imported thunk | 12 | MESSAGEBOX | `(word str str word)` | pointer | ✅ | ok 2 | 16: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x006` | seg1→imported thunk | 2 | POSTQUITMESSAGE | `(word)` | values | ✅ | ok 78 | 16: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT WINFILE WINMINE WRITE |
-| `0x035` | seg1→imported thunk | 2 | DESTROYWINDOW | `(word)` | values | ✅ | ok 109 | 16: CALC CARDFILE CHARMAP DDEML MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x05b` | seg1→imported thunk | 4 | GETDLGITEM | `(word word)` | values | ✅ | ok 649 | 16: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WRITE |
-| `0x07d` | seg1→imported thunk | 8 | INVALIDATERECT | `(word ptr word)` | pointer | ✅ | ok 309 | 16: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x016` | seg1→imported thunk | 2 | SETFOCUS | `(word)` | values | ✅ | ok 106 | 15: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x022` | seg1→imported thunk | 4 | ENABLEWINDOW | `(word word)` | values | ✅ | ok 125 | 15: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x042` | seg1→imported thunk | 2 | GETDC | `(word)` | values | ✅ | ok 615 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x044` | seg1→imported thunk | 4 | RELEASEDC | `(word word)` | values | ✅ | ok 605 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x09b` | seg1→imported thunk | 6 | ENABLEMENUITEM | `(word word word)` | values | ✅ | ok 196 | 15: CALC CARDFILE CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x021` | seg1→imported thunk | 6 | GETCLIENTRECT | `(word ptr)` | pointer | ✅ | ok 502 | 14: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x025` | seg1→imported thunk | 6 | SETWINDOWTEXT | `(word segstr)` | pointer | ✅ | ok 179 | 14: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x027` | seg1→imported thunk | 6 | BEGINPAINT | `(word ptr)` | pointer | ✅ | ok 709 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x028` | seg1→imported thunk | 6 | ENDPAINT | `(word ptr)` | pointer | ✅ | ok 709 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x038` | seg1→imported thunk | 12 | MOVEWINDOW | `(word word word word word word)` | values | ✅ | ok 480 | 14: CARDFILE CHARMAP MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SOL SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x07c` | seg1→imported thunk | 2 | UPDATEWINDOW | `(word)` | values | ✅ | ok 228 | 17: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x0b3` | seg1→imported thunk | 2 | GETSYSTEMMETRICS | `(s_word)` | values | ✅ | ok 1315 | 17: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
+| `0x001` | seg1→imported thunk | 12 | MESSAGEBOX | `(word str str word)` | pointer | ✅ | ok 4 | 16: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x006` | seg1→imported thunk | 2 | POSTQUITMESSAGE | `(word)` | values | ✅ | ok 81 | 16: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT WINFILE WINMINE WRITE |
+| `0x035` | seg1→imported thunk | 2 | DESTROYWINDOW | `(word)` | values | ✅ | ok 116 | 16: CALC CARDFILE CHARMAP DDEML MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x05b` | seg1→imported thunk | 4 | GETDLGITEM | `(word word)` | values | ✅ | ok 704 | 16: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WRITE |
+| `0x07d` | seg1→imported thunk | 8 | INVALIDATERECT | `(word ptr word)` | pointer | ✅ | ok 591 | 16: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x016` | seg1→imported thunk | 2 | SETFOCUS | `(word)` | values | ✅ | ok 120 | 15: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x022` | seg1→imported thunk | 4 | ENABLEWINDOW | `(word word)` | values | ✅ | ok 126 | 15: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x042` | seg1→imported thunk | 2 | GETDC | `(word)` | values | ✅ | ok 691 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x044` | seg1→imported thunk | 4 | RELEASEDC | `(word word)` | values | ✅ | ok 679 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x09b` | seg1→imported thunk | 6 | ENABLEMENUITEM | `(word word word)` | values | ✅ | ok 230 | 15: CALC CARDFILE CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x021` | seg1→imported thunk | 6 | GETCLIENTRECT | `(word ptr)` | pointer | ✅ | ok 842 | 14: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x025` | seg1→imported thunk | 6 | SETWINDOWTEXT | `(word segstr)` | pointer | ✅ | ok 194 | 14: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x027` | seg1→imported thunk | 6 | BEGINPAINT | `(word ptr)` | pointer | ✅ | ok 1300 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x028` | seg1→imported thunk | 6 | ENDPAINT | `(word ptr)` | pointer | ✅ | ok 1299 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x038` | seg1→imported thunk | 12 | MOVEWINDOW | `(word word word word word word)` | values | ✅ | ok 537 | 14: CARDFILE CHARMAP MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SOL SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | `0x058` | seg1→imported thunk | 4 | ENDDIALOG | `(word s_word)` | values | ✅ | ok 5 | 14: CARDFILE DDEML NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
-| `0x05c` | seg1→imported thunk | 8 | SETDLGITEMTEXT | `(word word segstr)` | pointer | ✅ | ok 470 | 14: CALC CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x06d` | seg1→imported thunk | 12 | PEEKMESSAGE | `(ptr word word word word)` | pointer | ✅ | ok 569 | 14: CARDFILE DDEML MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE WRITE PACKAGER* |
-| `0x09d` | seg1→imported thunk | 2 | GETMENU | `(word)` | values | ✅ | ok 165 | 14: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x00a` | seg1→imported thunk | 10 | SETTIMER | `(word word word segptr)` | callback | ✅ | ok 36 | 13: CLOCK DDEML MPLAYER RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE CARDFILE* PACKAGER* PBRUSH* |
-| `0x00c` | seg1→imported thunk | 4 | KILLTIMER | `(word word)` | callback | ✅ | **STEPPED 28** | 13: CLOCK DDEML MPLAYER RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE CARDFILE* PACKAGER* PBRUSH* |
-| `0x045` | seg1→imported thunk | 2 | SETCURSOR | `(word)` | values | ✅ | ok 170 | 13: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC TERMINAL WINFILE WRITE |
-| `0x09a` | seg1→imported thunk | 6 | CHECKMENUITEM | `(word word word)` | values | ✅ | ok 152 | 13: CALC CARDFILE CLOCK MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x05c` | seg1→imported thunk | 8 | SETDLGITEMTEXT | `(word word segstr)` | pointer | ✅ | ok 738 | 14: CALC CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x06d` | seg1→imported thunk | 12 | PEEKMESSAGE | `(ptr word word word word)` | pointer | ✅ | ok 614 | 14: CARDFILE DDEML MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE WRITE PACKAGER* |
+| `0x09d` | seg1→imported thunk | 2 | GETMENU | `(word)` | values | ✅ | ok 185 | 14: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x00a` | seg1→imported thunk | 10 | SETTIMER | `(word word word segptr)` | callback | ✅ | ok 41 | 13: CLOCK DDEML MPLAYER RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE CARDFILE* PACKAGER* PBRUSH* |
+| `0x00c` | seg1→imported thunk | 4 | KILLTIMER | `(word word)` | callback | ✅ | **STEPPED 30** | 13: CLOCK DDEML MPLAYER RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE CARDFILE* PACKAGER* PBRUSH* |
+| `0x045` | seg1→imported thunk | 2 | SETCURSOR | `(word)` | values | ✅ | ok 234 | 13: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC TERMINAL WINFILE WRITE |
+| `0x09a` | seg1→imported thunk | 6 | CHECKMENUITEM | `(word word word)` | values | ✅ | ok 175 | 13: CALC CARDFILE CLOCK MPLAYER NOTEPAD PBRUSH PROGMAN RECORDER SYSEDIT TERMINAL WINFILE WINMINE WRITE |
 | `0x0b2` | seg1→imported thunk | 8 | TRANSLATEACCELERATOR | `(word word ptr)` | pointer | ✅ | ok 1 | 13: CALC CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC SYSEDIT WINFILE WINMINE WRITE |
 | `0x012` | seg1→imported thunk | 2 | SETCAPTURE | `(word)` | values | ✅ | ok 6 | 12: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
 | `0x013` | seg1→imported thunk | 0 | RELEASECAPTURE | `()` | values | ✅ | ok 1 | 12: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x01f` | seg1→imported thunk | 2 | ISICONIC | `(word)` | values | ✅ | ok 83 | 12: CALC CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE |
-| `0x020` | seg1→imported thunk | 6 | GETWINDOWRECT | `(word ptr)` | pointer | ✅ | ok 147 | 12: CALC CARDFILE CHARMAP CLOCK PACKAGER PBRUSH PROGMAN RECORDER TASKMAN TERMINAL WINFILE WRITE |
-| `0x051` | seg1→imported thunk | 8 | FILLRECT | `(word ptr word)` | pointer | ✅ | ok 800 | 12: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WRITE |
-| `0x065` | seg1→imported thunk | 12 | SENDDLGITEMMESSAGE | `(word word word word long)` | callback | ✅ | ok 2471 part 221 | 12: CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SYSEDIT TERMINAL WINFILE WRITE |
+| `0x01f` | seg1→imported thunk | 2 | ISICONIC | `(word)` | values | ✅ | ok 95 | 12: CALC CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WINMINE |
+| `0x020` | seg1→imported thunk | 6 | GETWINDOWRECT | `(word ptr)` | pointer | ✅ | ok 163 | 12: CALC CARDFILE CHARMAP CLOCK PACKAGER PBRUSH PROGMAN RECORDER TASKMAN TERMINAL WINFILE WRITE |
+| `0x051` | seg1→imported thunk | 8 | FILLRECT | `(word ptr word)` | pointer | ✅ | ok 1371 | 12: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WRITE |
+| `0x065` | seg1→imported thunk | 12 | SENDDLGITEMMESSAGE | `(word word word word long)` | callback | ✅ | ok 2471 part 227 | 12: CARDFILE CHARMAP MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SYSEDIT TERMINAL WINFILE WRITE |
 | `0x068` | seg1→imported thunk | 2 | MESSAGEBEEP | `(word)` | values | ✅ |  | 12: CALC CARDFILE MPLAYER NOTEPAD PBRUSH PROGMAN SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WRITE |
-| `0x087` | seg1→imported thunk | 4 | GETWINDOWLONG | `(word s_word)` | values | ✅ | ok 381 | 12: CARDFILE CLOCK DDEML MPLAYER PBRUSH PROGMAN RECORDER SOUNDREC TASKMAN WINFILE WRITE PACKAGER* |
-| `0x0b4` | seg1→imported thunk | 2 | GETSYSCOLOR | `(word)` | values | ✅ | ok 2014 | 12: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC WINFILE WRITE |
-| `0x02f` | seg1→imported thunk | 2 | ISWINDOW | `(word)` | values | ✅ | ok 335 | 11: CARDFILE DDEML MPLAYER PACKAGER PBRUSH PROGMAN RECORDER TASKMAN WINFILE WRITE SOUNDREC* |
-| `0x05a` | seg1→imported thunk | 6 | ISDIALOGMESSAGE | `(word ptr)` | pointer | ✅ | ok 519 | 11: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x087` | seg1→imported thunk | 4 | GETWINDOWLONG | `(word s_word)` | values | ✅ | ok 413 | 12: CARDFILE CLOCK DDEML MPLAYER PBRUSH PROGMAN RECORDER SOUNDREC TASKMAN WINFILE WRITE PACKAGER* |
+| `0x0b4` | seg1→imported thunk | 2 | GETSYSCOLOR | `(word)` | values | ✅ | ok 2657 | 12: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC WINFILE WRITE |
+| `0x02f` | seg1→imported thunk | 2 | ISWINDOW | `(word)` | values | ✅ | ok 384 | 11: CARDFILE DDEML MPLAYER PACKAGER PBRUSH PROGMAN RECORDER TASKMAN WINFILE WRITE SOUNDREC* |
+| `0x05a` | seg1→imported thunk | 6 | ISDIALOGMESSAGE | `(word ptr)` | pointer | ✅ | ok 778 | 11: CALC CARDFILE CHARMAP MPLAYER NOTEPAD PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
 | `0x05d` | seg1→imported thunk | 10 | GETDLGITEMTEXT | `(word word segptr word)` | pointer | ✅ |  | 11: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SYSEDIT TERMINAL WINFILE WINMINE WRITE |
 | `0x061` | seg1→imported thunk | 6 | CHECKDLGBUTTON | `(word word word)` | values | ✅ |  | 11: CALC CARDFILE PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WRITE |
-| `0x06a` | seg1→imported thunk | 2 | GETKEYSTATE | `(word)` | values | ✅ | ok 6 | 11: CARDFILE CHARMAP PACKAGER PBRUSH PROGMAN RECORDER SOL TASKMAN TERMINAL WINFILE WRITE |
-| `0x085` | seg1→imported thunk | 4 | GETWINDOWWORD | `(word s_word)` | values | ✅ | ok 459 | 11: DDEML MPLAYER PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WRITE PACKAGER* PBRUSH* |
-| `0x088` | seg1→imported thunk | 8 | SETWINDOWLONG | `(word s_word long)` | callback | ✅ | ok 139 | 11: CARDFILE CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOUNDREC WINFILE PACKAGER* WRITE* |
-| `0x089` | seg1→imported thunk | 2 | OPENCLIPBOARD | `(word)` | values | ✅ | ok 9 | 11: CALC CARDFILE CHARMAP NOTEPAD PACKAGER PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x08a` | seg1→imported thunk | 0 | CLOSECLIPBOARD | `()` | values | ✅ | ok 9 | 11: CALC CARDFILE CHARMAP NOTEPAD PACKAGER PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x0e8` | seg1→imported thunk | 14 | SETWINDOWPOS | `(word word word word word word word)` | values | ✅ | ok 145 | 11: CALC CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SYSEDIT TASKMAN TERMINAL WINFILE |
-| `0x031` | seg1→imported thunk | 2 | ISWINDOWVISIBLE | `(word)` | values | ✅ | ok 97 | 10: CHARMAP MPLAYER PACKAGER PBRUSH SOUNDREC TASKMAN TERMINAL WRITE CARDFILE* RECORDER* |
-| `0x060` | seg1→imported thunk | 8 | CHECKRADIOBUTTON | `(word word word word)` | values | ✅ | ok 97 | 10: CALC CARDFILE PACKAGER PBRUSH PROGMAN RECORDER SOL TERMINAL WINFILE WRITE |
+| `0x06a` | seg1→imported thunk | 2 | GETKEYSTATE | `(word)` | values | ✅ | ok 7 | 11: CARDFILE CHARMAP PACKAGER PBRUSH PROGMAN RECORDER SOL TASKMAN TERMINAL WINFILE WRITE |
+| `0x085` | seg1→imported thunk | 4 | GETWINDOWWORD | `(word s_word)` | values | ✅ | ok 498 | 11: DDEML MPLAYER PROGMAN RECORDER SOUNDREC SYSEDIT TERMINAL WINFILE WRITE PACKAGER* PBRUSH* |
+| `0x088` | seg1→imported thunk | 8 | SETWINDOWLONG | `(word s_word long)` | callback | ✅ | ok 151 | 11: CARDFILE CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOUNDREC WINFILE PACKAGER* WRITE* |
+| `0x089` | seg1→imported thunk | 2 | OPENCLIPBOARD | `(word)` | values | ✅ | ok 11 | 11: CALC CARDFILE CHARMAP NOTEPAD PACKAGER PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x08a` | seg1→imported thunk | 0 | CLOSECLIPBOARD | `()` | values | ✅ | ok 11 | 11: CALC CARDFILE CHARMAP NOTEPAD PACKAGER PBRUSH SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x0e8` | seg1→imported thunk | 14 | SETWINDOWPOS | `(word word word word word word word)` | values | ✅ | ok 166 | 11: CALC CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SYSEDIT TASKMAN TERMINAL WINFILE |
+| `0x031` | seg1→imported thunk | 2 | ISWINDOWVISIBLE | `(word)` | values | ✅ | ok 112 | 10: CHARMAP MPLAYER PACKAGER PBRUSH SOUNDREC TASKMAN TERMINAL WRITE CARDFILE* RECORDER* |
+| `0x060` | seg1→imported thunk | 8 | CHECKRADIOBUTTON | `(word word word word)` | values | ✅ | ok 108 | 10: CALC CARDFILE PACKAGER PBRUSH PROGMAN RECORDER SOL TERMINAL WINFILE WRITE |
 | `0x062` | seg1→imported thunk | 4 | ISDLGBUTTONCHECKED | `(word word)` | values | ✅ |  | 10: CARDFILE PACKAGER PBRUSH PROGMAN RECORDER SOL SYSEDIT TERMINAL WINFILE WRITE |
-| `0x09f` | seg1→imported thunk | 4 | GETSUBMENU | `(word word)` | values | ✅ | ok 84 | 10: CALC CARDFILE MPLAYER NOTEPAD PACKAGER PROGMAN SYSEDIT TERMINAL WINFILE WRITE |
-| `0x02d` | seg1→imported thunk | 2 | BRINGWINDOWTOTOP | `(word)` | values | ✅ | ok 7 | 9: CARDFILE PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x09f` | seg1→imported thunk | 4 | GETSUBMENU | `(word word)` | values | ✅ | ok 100 | 10: CALC CARDFILE MPLAYER NOTEPAD PACKAGER PROGMAN SYSEDIT TERMINAL WINFILE WRITE |
+| `0x02d` | seg1→imported thunk | 2 | BRINGWINDOWTOTOP | `(word)` | values | ✅ | ok 8 | 9: CARDFILE PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WINMINE WRITE |
 | `0x03b` | seg1→imported thunk | 2 | SETACTIVEWINDOW | `(word)` | values | ✅ |  | 9: CLOCK MPLAYER NOTEPAD PBRUSH RECORDER SOL SOUNDREC SYSEDIT WINFILE |
-| `0x086` | seg1→imported thunk | 6 | SETWINDOWWORD | `(word s_word word)` | values | ✅ | ok 372 | 9: CLOCK DDEML MPLAYER PROGMAN SOUNDREC SYSEDIT WINFILE PACKAGER* PBRUSH* |
-| `0x01d` | seg1→imported thunk | 6 | SCREENTOCLIENT | `(word ptr)` | pointer | ✅ | ok 106 | 8: CHARMAP MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC WINFILE WRITE |
-| `0x02e` | seg1→imported thunk | 2 | GETPARENT | `(word)` | values | ✅ | ok 178 | 8: DDEML MPLAYER RECORDER SOUNDREC WINFILE WRITE PACKAGER* PBRUSH* |
-| `0x03c` | seg1→imported thunk | 0 | GETACTIVEWINDOW | `()` | values | ✅ | ok 30 | 8: MPLAYER PBRUSH PROGMAN RECORDER SOUNDREC TERMINAL WINFILE WRITE |
-| `0x03e` | seg1→imported thunk | 8 | SETSCROLLPOS | `(word word s_word word)` | values | ✅ | ok 66 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WRITE |
-| `0x040` | seg1→imported thunk | 10 | SETSCROLLRANGE | `(word word s_word s_word word)` | values | ✅ | ok 89 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WRITE |
-| `0x047` | seg1→imported thunk | 2 | SHOWCURSOR | `(word)` | values | ✅ | ok 327 | 8: CALC CHARMAP PACKAGER PBRUSH PROGMAN SOL WINFILE WRITE |
+| `0x086` | seg1→imported thunk | 6 | SETWINDOWWORD | `(word s_word word)` | values | ✅ | ok 406 | 9: CLOCK DDEML MPLAYER PROGMAN SOUNDREC SYSEDIT WINFILE PACKAGER* PBRUSH* |
+| `0x01d` | seg1→imported thunk | 6 | SCREENTOCLIENT | `(word ptr)` | pointer | ✅ | ok 111 | 8: CHARMAP MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC WINFILE WRITE |
+| `0x02e` | seg1→imported thunk | 2 | GETPARENT | `(word)` | values | ✅ | ok 193 | 8: DDEML MPLAYER RECORDER SOUNDREC WINFILE WRITE PACKAGER* PBRUSH* |
+| `0x03c` | seg1→imported thunk | 0 | GETACTIVEWINDOW | `()` | values | ✅ | ok 49 | 8: MPLAYER PBRUSH PROGMAN RECORDER SOUNDREC TERMINAL WINFILE WRITE |
+| `0x03e` | seg1→imported thunk | 8 | SETSCROLLPOS | `(word word s_word word)` | values | ✅ | ok 80 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WRITE |
+| `0x040` | seg1→imported thunk | 10 | SETSCROLLRANGE | `(word word s_word s_word word)` | values | ✅ | ok 103 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WRITE |
+| `0x047` | seg1→imported thunk | 2 | SHOWCURSOR | `(word)` | values | ✅ | ok 604 | 8: CALC CHARMAP PACKAGER PBRUSH PROGMAN SOL WINFILE WRITE |
 | `0x08b` | seg1→imported thunk | 0 | EMPTYCLIPBOARD | `()` | values | ✅ |  | 8: CARDFILE CHARMAP PACKAGER PBRUSH SOUNDREC TERMINAL WINFILE WRITE |
-| `0x106` | seg1→imported thunk | 4 | GETWINDOW | `(word word)` | values | ✅ | ok 119 | 8: DDEML PROGMAN SYSEDIT TASKMAN WINFILE PACKAGER* PBRUSH* SOUNDREC* |
-| `0x017` | seg1→imported thunk | 0 | GETFOCUS | `()` | values | ✅ | ok 25 | 7: MPLAYER NOTEPAD PROGMAN RECORDER SOUNDREC TERMINAL WINFILE |
-| `0x018` | seg1→imported thunk | 6 | REMOVEPROP | `(word ptr)` | pointer | ✅ |  | 7: SYSEDIT CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WINFILE* WRITE* |
+| `0x106` | seg1→imported thunk | 4 | GETWINDOW | `(word word)` | values | ✅ | ok 121 | 8: DDEML PROGMAN SYSEDIT TASKMAN WINFILE PACKAGER* PBRUSH* SOUNDREC* |
+| `0x017` | seg1→imported thunk | 0 | GETFOCUS | `()` | values | ✅ | ok 35 | 7: MPLAYER NOTEPAD PROGMAN RECORDER SOUNDREC TERMINAL WINFILE |
+| `0x018` | seg1→imported thunk | 6 | REMOVEPROP | `(word ptr)` | pointer | ✅ | ok 3 | 7: SYSEDIT CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WINFILE* WRITE* |
 | `0x019` | seg1→imported thunk | 6 | GETPROP | `(word str)` | pointer | ✅ |  | 7: SYSEDIT CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WINFILE* WRITE* |
-| `0x01a` | seg1→imported thunk | 8 | SETPROP | `(word str word)` | pointer | ✅ |  | 7: SYSEDIT CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WINFILE* WRITE* |
-| `0x01c` | seg1→imported thunk | 6 | CLIENTTOSCREEN | `(word ptr)` | pointer | ✅ | ok 106 | 7: CHARMAP PBRUSH SOL SOUNDREC WINFILE WINMINE WRITE |
-| `0x023` | seg1→imported thunk | 2 | ISWINDOWENABLED | `(word)` | values | ✅ | ok 97 | 7: MPLAYER PACKAGER PROGMAN RECORDER SOUNDREC WRITE WINFILE* |
+| `0x01a` | seg1→imported thunk | 8 | SETPROP | `(word str word)` | pointer | ✅ | ok 3 | 7: SYSEDIT CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WINFILE* WRITE* |
+| `0x01c` | seg1→imported thunk | 6 | CLIENTTOSCREEN | `(word ptr)` | pointer | ✅ | ok 111 | 7: CHARMAP PBRUSH SOL SOUNDREC WINFILE WINMINE WRITE |
+| `0x023` | seg1→imported thunk | 2 | ISWINDOWENABLED | `(word)` | values | ✅ | ok 107 | 7: MPLAYER PACKAGER PROGMAN RECORDER SOUNDREC WRITE WINFILE* |
 | `0x08e` | seg1→imported thunk | 2 | GETCLIPBOARDDATA | `(word)` | values | ✅ |  | 7: CALC CARDFILE PACKAGER PBRUSH SOUNDREC TERMINAL WRITE |
-| `0x091` | seg1→imported thunk | 4 | REGISTERCLIPBOARDFORMAT | `(ptr)` | pointer | ✅ | ok 479 | 7: CARDFILE CHARMAP PACKAGER PBRUSH SOUNDREC WINFILE WRITE |
-| `0x09c` | seg1→imported thunk | 4 | GETSYSTEMMENU | `(word word)` | values | ✅ | ok 13 | 7: CARDFILE CLOCK NOTEPAD PBRUSH PROGMAN RECORDER WINFILE* |
+| `0x091` | seg1→imported thunk | 4 | REGISTERCLIPBOARDFORMAT | `(ptr)` | pointer | ✅ | ok 543 | 7: CARDFILE CHARMAP PACKAGER PBRUSH SOUNDREC WINFILE WRITE |
+| `0x09c` | seg1→imported thunk | 4 | GETSYSTEMMENU | `(word word)` | values | ✅ | ok 14 | 7: CARDFILE CLOCK NOTEPAD PBRUSH PROGMAN RECORDER WINFILE* |
 | `0x0c1` | seg1→imported thunk | 2 | ISCLIPBOARDFORMATAVAILABLE | `(word)` | values | ✅ | ok 7 | 7: CALC CARDFILE PACKAGER PBRUSH SOUNDREC TERMINAL WRITE |
 | `0x0e0` | seg1→imported thunk | 2 | GETWINDOWTASK | `(word)` | values | ✅ |  | 7: DDEML TASKMAN CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WRITE* |
-| `0x10c` | seg1→imported thunk | 4 | GLOBALADDATOM | `(str)` | pointer | ✅ | ok 1181 | 7: DDEML PACKAGER PBRUSH PROGMAN SOUNDREC CARDFILE* WRITE* |
-| `0x10d` | seg1→imported thunk | 2 | GLOBALDELETEATOM | `(word)` | values | ✅ | ok 111 | 7: DDEML PACKAGER PBRUSH PROGMAN SOUNDREC CARDFILE* WRITE* |
+| `0x10c` | seg1→imported thunk | 4 | GLOBALADDATOM | `(str)` | pointer | ✅ | ok 1347 | 7: DDEML PACKAGER PBRUSH PROGMAN SOUNDREC CARDFILE* WRITE* |
+| `0x10d` | seg1→imported thunk | 2 | GLOBALDELETEATOM | `(word)` | values | ✅ | ok 113 | 7: DDEML PACKAGER PBRUSH PROGMAN SOUNDREC CARDFILE* WRITE* |
 | `0x10e` | seg1→imported thunk | 4 | GLOBALFINDATOM | `(str)` | pointer | ✅ |  | 7: DDEML PROGMAN CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WRITE* |
-| `0x11e` | seg1→imported thunk | 0 | GETDESKTOPWINDOW | `()` | values | ✅ | ok 161 | 7: PBRUSH TASKMAN WINFILE WINMINE PACKAGER* RECORDER* SOUNDREC* |
+| `0x11e` | seg1→imported thunk | 0 | GETDESKTOPWINDOW | `()` | values | ✅ | ok 180 **STEPPED 22** | 7: PBRUSH TASKMAN WINFILE WINMINE PACKAGER* RECORDER* SOUNDREC* |
 | `0x11f` | seg1→imported thunk | 2 | GETLASTACTIVEPOPUP | `(word)` | values | ✅ |  | 7: CLOCK PROGMAN SOL SYSEDIT TASKMAN WINFILE WINMINE |
 | `0x19d` | seg1→imported thunk | 6 | DELETEMENU | `(word word word)` | values | ✅ | ok 40 | 7: CARDFILE MPLAYER PACKAGER PROGMAN SOUNDREC WINFILE WRITE |
-| `0x00f` | seg1→imported thunk | 0 | GETCURRENTTIME | `()` | values | ✅ | ok 5 | 6: CARDFILE DDEML MPLAYER TERMINAL WINMINE WRITE |
+| `0x00f` | seg1→imported thunk | 0 | GETCURRENTTIME | `()` | values | ✅ | ok 7 | 6: CARDFILE DDEML MPLAYER TERMINAL WINMINE WRITE |
 | `0x03a` | seg1→imported thunk | 8 | GETCLASSNAME | `(word ptr word)` | pointer | ✅ | ok 14 | 6: RECORDER WINFILE WRITE PACKAGER* PBRUSH* SOUNDREC* |
-| `0x03f` | seg1→imported thunk | 4 | GETSCROLLPOS | `(word word)` | values | ✅ | ok 31 | 6: MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL |
-| `0x053` | seg1→imported thunk | 8 | FRAMERECT | `(word ptr word)` | pointer | ✅ | ok 60 | 6: CARDFILE MPLAYER SOL SOUNDREC TERMINAL WINFILE |
-| `0x055` | seg1→imported thunk | 14 | DRAWTEXT | `(word str s_word ptr word)` | pointer | ✅ | ok 59 | 6: MPLAYER PACKAGER PROGMAN SOL SOUNDREC TERMINAL |
-| `0x076` | seg1→imported thunk | 4 | REGISTERWINDOWMESSAGE | `(str)` | pointer | ✅ | ok 223 | 6: CARDFILE NOTEPAD PROGMAN SOL WINFILE WRITE |
-| `0x090` | seg1→imported thunk | 2 | ENUMCLIPBOARDFORMATS | `(word)` | callback | ✅ | ok 29 | 6: CARDFILE NOTEPAD SOUNDREC SYSEDIT WRITE PACKAGER* |
+| `0x03f` | seg1→imported thunk | 4 | GETSCROLLPOS | `(word word)` | values | ✅ | ok 33 | 6: MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL |
+| `0x053` | seg1→imported thunk | 8 | FRAMERECT | `(word ptr word)` | pointer | ✅ | ok 70 | 6: CARDFILE MPLAYER SOL SOUNDREC TERMINAL WINFILE |
+| `0x055` | seg1→imported thunk | 14 | DRAWTEXT | `(word str s_word ptr word)` | pointer | ✅ | ok 91 | 6: MPLAYER PACKAGER PROGMAN SOL SOUNDREC TERMINAL |
+| `0x076` | seg1→imported thunk | 4 | REGISTERWINDOWMESSAGE | `(str)` | pointer | ✅ | ok 250 | 6: CARDFILE NOTEPAD PROGMAN SOL WINFILE WRITE |
+| `0x090` | seg1→imported thunk | 2 | ENUMCLIPBOARDFORMATS | `(word)` | callback | ✅ | ok 35 | 6: CARDFILE NOTEPAD SOUNDREC SYSEDIT WRITE PACKAGER* |
 | `0x0eb` | seg1→imported thunk | 12 | DEFHOOKPROC | `(s_word word long ptr)` | callback | ✅ |  | 6: DDEML MPLAYER PROGMAN SOUNDREC WINFILE RECORDER* |
 | `0x10f` | seg1→imported thunk | 8 | GLOBALGETATOMNAME | `(word ptr s_word)` | pointer | ✅ |  | 6: DDEML CARDFILE* PACKAGER* PBRUSH* SOUNDREC* WRITE* |
 | `0x026` | seg1→imported thunk | 2 | GETWINDOWTEXTLENGTH | `(word)` | values | ✅ |  | 5: CARDFILE CHARMAP PROGMAN RECORDER SYSEDIT |
 | `0x03d` | seg1→imported thunk | 14 | SCROLLWINDOW | `(word s_word s_word ptr ptr)` | pointer | ✅ | ok 8 | 5: CARDFILE PACKAGER PBRUSH PROGMAN TERMINAL |
 | `0x046` | seg1→imported thunk | 4 | SETCURSORPOS | `(word word)` | values | ✅ |  | 5: PBRUSH SOL WINFILE WRITE RECORDER* |
-| `0x052` | seg1→imported thunk | 6 | INVERTRECT | `(word ptr)` | pointer | ✅ | ok 7 | 5: MPLAYER PBRUSH SOL TERMINAL WRITE |
+| `0x052` | seg1→imported thunk | 6 | INVERTRECT | `(word ptr)` | pointer | ✅ | ok 9 | 5: MPLAYER PBRUSH SOL TERMINAL WRITE |
 | `0x054` | seg1→imported thunk | 8 | DRAWICON | `(word s_word s_word word)` | values | ✅ |  | 5: PACKAGER PROGMAN SOUNDREC TERMINAL WINFILE |
 | `0x011` | seg1→imported thunk | 4 | GETCURSORPOS | `(ptr)` | pointer | ✅ |  | 4: PBRUSH WINFILE WRITE RECORDER* |
 | `0x037` | seg1→imported thunk | 10 | ENUMCHILDWINDOWS | `(word segptr long)` | callback | ✅ | ok 23 | 4: WRITE PACKAGER* PBRUSH* SOUNDREC* |
-| `0x043` | seg1→imported thunk | 2 | GETWINDOWDC | `(word)` | values | ✅ | ok 25 | 4: CHARMAP PACKAGER PBRUSH TERMINAL |
+| `0x043` | seg1→imported thunk | 2 | GETWINDOWDC | `(word)` | values | ✅ | ok 26 | 4: CHARMAP PACKAGER PBRUSH TERMINAL |
 | `0x05e` | seg1→imported thunk | 8 | SETDLGITEMINT | `(word word word word)` | values | ✅ |  | 4: NOTEPAD PBRUSH TERMINAL WINMINE |
 | `0x077` | seg1→imported thunk | 0 | GETMESSAGEPOS | `()` | values | ✅ |  | 4: CHARMAP MPLAYER PBRUSH WINFILE* |
 | `0x0a3` | seg1→imported thunk | 8 | CREATECARET | `(word word word word)` | values | ✅ |  | 4: MPLAYER PBRUSH PROGMAN WINFILE* |
@@ -688,45 +656,48 @@ Unhandled first, then most-used.
 | `0x0a7` | seg1→imported thunk | 2 | SHOWCARET | `(word)` | values | ✅ |  | 4: MPLAYER PBRUSH PROGMAN WINFILE* |
 | `0x0b9` | seg1→imported thunk | 22 | GRAYSTRING | `(word word segptr segptr s_word s_word s_word s_word s_word)` | callback | ✅ | ok 59 | 4: MPLAYER PROGMAN SOUNDREC TERMINAL |
 | `0x0ea` | seg1→imported thunk | 6 | UNHOOKWINDOWSHOOK | `(s_word segptr)` | callback | ✅ |  | 4: DDEML MPLAYER SOUNDREC RECORDER* |
-| `0x0ec` | seg1→imported thunk | 0 | GETCAPTURE | `()` | values | ✅ |  | 4: MPLAYER RECORDER SOUNDREC WINFILE |
+| `0x0ec` | seg1→imported thunk | 0 | GETCAPTURE | `()` | values | ✅ | ok 1 | 4: MPLAYER RECORDER SOUNDREC WINFILE |
 | `0x11a` | seg1→imported thunk | 6 | SELECTPALETTE | `(word word word)` | values | ✅ |  | 4: PBRUSH CARDFILE* PACKAGER* WRITE* |
 | `0x11b` | seg1→imported thunk | 2 | REALIZEPALETTE | `(word)` | values | ✅ |  | 4: PBRUSH CARDFILE* PACKAGER* WRITE* |
 | `0x19a` | seg1→imported thunk | 12 | INSERTMENU | `(word word word word segptr)` | pointer | ✅ | ok 1 | 4: CARDFILE PACKAGER WINFILE WRITE |
 | `0x1d2` | seg1→imported thunk | 6 | DRAWFOCUSRECT | `(word ptr)` | pointer | ✅ | ok 22 | 4: CHARMAP PACKAGER PROGMAN WINFILE |
-| `0x00d` | seg1→imported thunk | 0 | GETTICKCOUNT | `()` | values | ✅ | **STEPPED 18** | 3: CALC RECORDER WINFILE |
+| `0x00d` | seg1→imported thunk | 0 | GETTICKCOUNT | `()` | values | ✅ | **STEPPED 20** | 3: CALC RECORDER WINFILE |
+| `0x01b` | seg1→imported thunk | 6 | ENUMPROPS | `(word segptr)` | callback | ✅ | ok 4 **STEPPED 41** | 3: PACKAGER* PBRUSH* SOUNDREC* |
 | `0x036` | seg1→imported thunk | 8 | ENUMWINDOWS | `(segptr long)` | callback | ✅ | ok 7 | 3: DDEML RECORDER WRITE |
 | `0x041` | seg1→imported thunk | 12 | GETSCROLLRANGE | `(word word ptr ptr)` | pointer | ✅ |  | 3: CARDFILE PACKAGER PROGMAN |
 | `0x05f` | seg1→imported thunk | 10 | GETDLGITEMINT | `(word s_word ptr word)` | pointer | ✅ |  | 3: PBRUSH TERMINAL WINMINE |
-| `0x064` | seg1→imported thunk | 12 | DLGDIRLIST | `(word str word word word)` | pointer | ✅ |  | 3: RECORDER SYSEDIT TERMINAL |
+| `0x064` | seg1→imported thunk | 12 | DLGDIRLIST | `(word str word word word)` | pointer | ✅ | ok 1 | 3: RECORDER SYSEDIT TERMINAL |
 | `0x069` | seg1→imported thunk | 4 | FLASHWINDOW | `(word word)` | values | ✅ |  | 3: RECORDER TERMINAL WRITE |
 | `0x07f` | seg1→imported thunk | 6 | VALIDATERECT | `(word ptr)` | pointer | ✅ |  | 3: PROGMAN TERMINAL WRITE |
-| `0x082` | seg1→imported thunk | 6 | SETCLASSWORD | `(word s_word word)` | values | ✅ | ok 51 | 3: CARDFILE PBRUSH PROGMAN |
+| `0x082` | seg1→imported thunk | 6 | SETCLASSWORD | `(word s_word word)` | values | ✅ | ok 59 | 3: CARDFILE PBRUSH PROGMAN |
+| `0x092` | seg1→imported thunk | 8 | GETCLIPBOARDFORMATNAME | `(word ptr s_word)` | pointer | ✅ | ok 3 | 3: CARDFILE* PACKAGER* WRITE* |
 | `0x099` | seg1→imported thunk | 12 | CHANGEMENU | `(word word segstr word word)` | pointer | ✅ | ok 1 | 3: RECORDER TERMINAL WRITE |
-| `0x0a0` | seg1→imported thunk | 2 | DRAWMENUBAR | `(word)` | values | ✅ | ok 15 | 3: PBRUSH SOUNDREC WINFILE |
+| `0x0a0` | seg1→imported thunk | 2 | DRAWMENUBAR | `(word)` | values | ✅ | ok 17 | 3: PBRUSH SOUNDREC WINFILE |
 | `0x0e1` | seg1→imported thunk | 10 | ENUMTASKWINDOWS | `(word segptr long)` | callback | ✅ |  | 3: PACKAGER CARDFILE* WRITE* |
 | `0x0fa` | seg1→imported thunk | 6 | GETMENUSTATE | `(word word word)` | values | ✅ |  | 3: PBRUSH WINFILE WRITE |
 | `0x110` | seg1→imported thunk | 2 | ISZOOMED | `(word)` | values | ✅ | ok 5 | 3: CLOCK PROGMAN TERMINAL |
-| `0x115` | seg1→imported thunk | 2 | GETDLGCTRLID | `(word)` | values | ✅ | ok 75 | 3: CHARMAP SOUNDREC WINFILE* |
-| `0x134` | seg1→imported thunk | 10 | DEFDLGPROC | `(word word word long)` | callback | ✅ | ok 530 | 3: CHARMAP MPLAYER SOUNDREC |
+| `0x115` | seg1→imported thunk | 2 | GETDLGCTRLID | `(word)` | values | ✅ | ok 85 | 3: CHARMAP SOUNDREC WINFILE* |
+| `0x134` | seg1→imported thunk | 10 | DEFDLGPROC | `(word word word long)` | callback | ✅ | ok 550 | 3: CHARMAP MPLAYER SOUNDREC |
 | `0x172` | seg1→imported thunk | 6 | GETWINDOWPLACEMENT | `(word ptr)` | pointer | ✅ | ok 3 | 3: MPLAYER PROGMAN WINFILE |
-| `0x19b` | seg1→imported thunk | 10 | APPENDMENU | `(word word word segptr)` | pointer | ✅ | ok 34 | 3: CARDFILE CLOCK MPLAYER |
-| `0x19e` | seg1→imported thunk | 12 | MODIFYMENU | `(word word word word segptr)` | pointer | ✅ | ok 7 | 3: PBRUSH PROGMAN SOUNDREC |
+| `0x19b` | seg1→imported thunk | 10 | APPENDMENU | `(word word word segptr)` | pointer | ✅ | ok 36 | 3: CARDFILE CLOCK MPLAYER |
+| `0x19e` | seg1→imported thunk | 12 | MODIFYMENU | `(word word word word segptr)` | pointer | ✅ | ok 8 | 3: PBRUSH PROGMAN SOUNDREC |
 | `0x19f` | seg1→imported thunk | 0 | CREATEPOPUPMENU | `()` | values | ✅ |  | 3: CARDFILE PACKAGER WRITE |
-| `0x1bd` | seg1→imported thunk | 12 | DEFFRAMEPROC | `(word word word word long)` | callback | ✅ | ok 20 | 3: PROGMAN SYSEDIT WINFILE |
-| `0x1bf` | seg1→imported thunk | 10 | DEFMDICHILDPROC | `(word word word long)` | callback | ✅ | ok 1123 | 3: PROGMAN SYSEDIT WINFILE |
+| `0x1bd` | seg1→imported thunk | 12 | DEFFRAMEPROC | `(word word word word long)` | callback | ✅ | ok 30 | 3: PROGMAN SYSEDIT WINFILE |
+| `0x1bf` | seg1→imported thunk | 10 | DEFMDICHILDPROC | `(word word word long)` | callback | ✅ | ok 1143 | 3: PROGMAN SYSEDIT WINFILE |
 | `0x1c3` | seg1→imported thunk | 6 | TRANSLATEMDISYSACCEL | `(word ptr)` | pointer | ✅ |  | 3: PROGMAN SYSEDIT WINFILE |
 | `0x007` | seg1→imported thunk | 6 | EXITWINDOWS | `(long word)` | values | ✅ |  | 2: PROGMAN WINFILE |
 | `0x010` | seg1→imported thunk | 4 | CLIPCURSOR | `(ptr)` | pointer | ✅ |  | 2: PBRUSH WINFILE |
-| `0x015` | seg1→imported thunk | 0 | GETDOUBLECLICKTIME | `()` | values | ✅ | ok 5 | 2: WINFILE RECORDER* |
-| `0x01e` | seg1→imported thunk | 4 | WINDOWFROMPOINT | `(long)` | values | ✅ |  | 2: CHARMAP RECORDER* |
+| `0x015` | seg1→imported thunk | 0 | GETDOUBLECLICKTIME | `()` | values | ✅ | ok 7 | 2: WINFILE RECORDER* |
+| `0x01e` | seg1→imported thunk | 4 | WINDOWFROMPOINT | `(long)` | values | ✅ | ok 1 | 2: CHARMAP RECORDER* |
 | `0x030` | seg1→imported thunk | 4 | ISCHILD | `(word word)` | values | ✅ |  | 2: TERMINAL RECORDER* |
-| `0x032` | seg1→imported thunk | 8 | FINDWINDOW | `(str str)` | pointer | ✅ | ok 151 | 2: RECORDER WINMINE |
+| `0x032` | seg1→imported thunk | 8 | FINDWINDOW | `(str str)` | pointer | ✅ | ok 187 | 2: RECORDER WINMINE |
+| `0x063` | seg1→imported thunk | 8 | DLGDIRSELECT | `(word ptr word)` | pointer | ✅ | ok 1 | 2: SYSEDIT TERMINAL |
 | `0x07a` | seg1→imported thunk | 14 | CALLWINDOWPROC | `(segptr word word word long)` | callback | ✅ |  | 2: CARDFILE WINFILE* |
 | `0x08c` | seg1→imported thunk | 0 | GETCLIPBOARDOWNER | `()` | values | ✅ |  | 2: SOUNDREC WRITE |
 | `0x098` | seg1→imported thunk | 2 | DESTROYMENU | `(word)` | values | ✅ |  | 2: PACKAGER WRITE |
-| `0x09e` | seg1→imported thunk | 4 | SETMENU | `(word word)` | values | ✅ | ok 5 | 2: WINMINE WINFILE* |
+| `0x09e` | seg1→imported thunk | 4 | SETMENU | `(word word)` | values | ✅ | ok 7 | 2: WINMINE WINFILE* |
 | `0x0a9` | seg1→imported thunk | 0 | GETCARETBLINKTIME | `()` | values | ✅ |  | 2: TERMINAL WRITE |
-| `0x0be` | seg1→imported thunk | 8 | GETUPDATERECT | `(word ptr word)` | pointer | ✅ | ok 78 | 2: CHARMAP WRITE |
+| `0x0be` | seg1→imported thunk | 8 | GETUPDATERECT | `(word ptr word)` | pointer | ✅ | ok 84 | 2: CHARMAP WRITE |
 | `0x0c4` | seg1→imported thunk | 20 | TABBEDTEXTOUT | `(word s_word s_word ptr s_word s_word ptr s_word)` | pointer | ✅ |  | 2: CARDFILE NOTEPAD |
 | `0x0c9` | seg1→imported thunk | 4 | SETCOMMSTATE | `(ptr)` | pointer | ✅ |  | 2: CARDFILE TERMINAL |
 | `0x0ca` | seg1→imported thunk | 6 | GETCOMMSTATE | `(word ptr)` | pointer | ✅ |  | 2: CARDFILE TERMINAL |
@@ -735,21 +706,23 @@ Unhandled first, then most-used.
 | `0x0d7` | seg1→imported thunk | 4 | FLUSHCOMM | `(word word)` | values | ✅ |  | 2: CARDFILE TERMINAL |
 | `0x0de` | seg1→imported thunk | 4 | GETKEYBOARDSTATE | `(ptr)` | pointer | ✅ |  | 2: RECORDER TERMINAL |
 | `0x0df` | seg1→imported thunk | 4 | SETKEYBOARDSTATE | `(ptr)` | pointer | ✅ |  | 2: RECORDER TERMINAL |
-| `0x0e5` | seg1→imported thunk | 2 | GETTOPWINDOW | `(word)` | values | ✅ | ok 43 | 2: PACKAGER TERMINAL |
+| `0x0e5` | seg1→imported thunk | 2 | GETTOPWINDOW | `(word)` | values | ✅ | ok 65 | 2: PACKAGER TERMINAL |
 | `0x0f9` | seg1→imported thunk | 2 | GETASYNCKEYSTATE | `(word)` | values | ✅ |  | 2: CLOCK RECORDER |
 | `0x107` | seg1→imported thunk | 2 | GETMENUITEMCOUNT | `(word)` | values | ✅ |  | 2: TERMINAL WINFILE |
 | `0x120` | seg1→imported thunk | 0 | GETMESSAGEEXTRAINFO | `()` | values | ✅ |  | 2: PBRUSH WINFILE |
 | `0x173` | seg1→imported thunk | 6 | SETWINDOWPLACEMENT | `(word ptr)` | pointer | ✅ |  | 2: PROGMAN WINFILE |
 | `0x1c9` | seg1→imported thunk | 2 | DESTROYICON | `(word)` | values | ✅ |  | 2: PACKAGER PROGMAN |
-| `0x1e3` | seg1→imported thunk | 10 | SYSTEMPARAMETERSINFO | `(word word ptr word)` | pointer | ✅ | ok 12 part 14 | 2: MPLAYER PROGMAN |
-| `0x066` | seg1→imported thunk | 10 | ADJUSTWINDOWRECT | `(ptr long word)` | pointer | ✅ | ok 5 | 1: SOL |
-| `0x067` | seg1→imported thunk | 6 | MAPDIALOGRECT | `(word ptr)` | pointer | ✅ | ok 294 | 1: CALC |
+| `0x1e3` | seg1→imported thunk | 10 | SYSTEMPARAMETERSINFO | `(word word ptr word)` | pointer | ✅ | ok 15 part 19 | 2: MPLAYER PROGMAN |
+| `0x066` | seg1→imported thunk | 10 | ADJUSTWINDOWRECT | `(ptr long word)` | pointer | ✅ | ok 6 | 1: SOL |
+| `0x067` | seg1→imported thunk | 6 | MAPDIALOGRECT | `(word ptr)` | pointer | ✅ | ok 566 | 1: CALC |
+| `0x07b` | seg1→imported thunk | 6 | CALLMSGFILTER | `(ptr s_word)` | pointer | ✅ | ok 1 | 1: DDEML |
 | `0x07e` | seg1→imported thunk | 6 | INVALIDATERGN | `(word word word)` | values | ✅ |  | 1: PROGMAN |
 | `0x081` | seg1→imported thunk | 4 | GETCLASSWORD | `(word s_word)` | values | ✅ |  | 1: PROGMAN |
 | `0x0a1` | seg1→imported thunk | 12 | GETMENUSTRING | `(word word ptr s_word word)` | pointer | ✅ |  | 1: WINFILE |
 | `0x0a2` | seg1→imported thunk | 8 | HILITEMENUITEM | `(word word word word)` | values | ✅ |  | 1: WRITE |
 | `0x0aa` | seg1→imported thunk | 2 | ARRANGEICONICWINDOWS | `(word)` | values | ✅ |  | 1: TASKMAN |
 | `0x0ac` | seg1→imported thunk | 4 | SWITCHTOTHISWINDOW | `(word word)` | values | ✅ |  | 1: TASKMAN |
+| `0x0bf` | seg1→imported thunk | 6 | CHILDWINDOWFROMPOINT | `(word long)` | values | ✅ | ok 4 | 1: WINFILE* |
 | `0x0c0` | seg1→imported thunk | 0 | INSENDMESSAGE | `()` | callback | ✅ |  | 1: WRITE |
 | `0x0cc` | seg1→imported thunk | 8 | READCOMM | `(word ptr word)` | pointer | ✅ |  | 1: TERMINAL |
 | `0x0d0` | seg1→imported thunk | 4 | SETCOMMEVENTMASK | `(word word)` | values | ✅ |  | 1: TERMINAL |
@@ -759,42 +732,38 @@ Unhandled first, then most-used.
 | `0x0dd` | seg1→imported thunk | 20 | SCROLLDC | `(word s_word s_word ptr ptr word ptr)` | pointer | ✅ |  | 1: WRITE |
 | `0x0e4` | seg1→imported thunk | 6 | GETNEXTDLGTABITEM | `(word word word)` | values | ✅ |  | 1: CHARMAP |
 | `0x0e6` | seg1→imported thunk | 4 | GETNEXTWINDOW | `(word word)` | values | ✅ |  | 1: TERMINAL |
+| `0x0e9` | seg1→imported thunk | 4 | SETPARENT | `(word word)` | values | ✅ | ok 1 | 1: DDEML |
 | `0x0f3` | seg1→imported thunk | 0 | GETDIALOGBASEUNITS | `()` | values | ✅ |  | 1: CLOCK |
 | `0x108` | seg1→imported thunk | 4 | GETMENUITEMID | `(word word)` | values | ✅ |  | 1: WINFILE |
-| `0x10b` | seg1→imported thunk | 6 | SHOWSCROLLBAR | `(word word word)` | values | ✅ | ok 90 | 1: CARDFILE |
+| `0x10b` | seg1→imported thunk | 6 | SHOWSCROLLBAR | `(word word word)` | values | ✅ | ok 96 | 1: CARDFILE |
+| `0x174` | seg1→imported thunk | 8 | GETINTERNALICONHEADER | `()` | values | ✅ | **STEPPED 1** | 1: PROGMAN |
+| `0x194` | seg1→imported thunk | 10 | GETCLASSINFO | `(word segstr ptr)` | pointer | ✅ | ok 2 | 1: WINFILE* |
 | `0x1c4` | seg1→imported thunk | 34 | CREATEWINDOWEX | `(long str str long s_word s_word s_word s_word word word word segptr)` | pointer | ✅ |  | 1: WINFILE |
 | `0x1ce` | seg1→imported thunk | 4 | CALCCHILDSCROLL | `(word word)` | values | ✅ |  | 1: PROGMAN |
 | `0x00b` | seg1→imported thunk | 10 | BEAR11 | `(word word word segptr)` | pointer | ✅ |  | 0 |
 | `0x00e` | seg1→imported thunk | 0 | GETTIMERRESOLUTION | `()` | values | ✅ |  | 0 |
-| `0x024` | seg1→imported thunk | 8 | (WOWUSER_GETWINDOWTEXT) |  | ? | ✅ | ok 134 | 0 |
+| `0x024` | seg1→imported thunk | 8 | (WOWUSER_GETWINDOWTEXT) |  | ? | ✅ | ok 144 **STEPPED 10** | 0 |
 | `0x083` | seg1→imported thunk | 4 | GETCLASSLONG | `(word s_word)` | values | ✅ |  | 0 |
 | `0x08d` | seg1→imported thunk | 4 | (WOWUSER_SETCLIPBOARDDATA) |  | ? | ✅ |  | 0 |
-| `0x096` | seg1→imported thunk | 16 | (WOWUSER_LOADMENU) |  | ? | ✅ | ok 10 | 0 |
-| `0x0ad` | seg1→imported thunk | 20 | (WOWUSER_LOADSYSOBJ) |  | ? | ✅ | ok 1210 | 0 |
-| `0x0af` | seg1→imported thunk | 14 | (WOWUSER_LOADBITMAPRES) |  | ? | ✅ | ok 106 | 0 |
+| `0x096` | seg1→imported thunk | 16 | (WOWUSER_LOADMENU) |  | ? | ✅ | ok 13 | 0 |
+| `0x0ad` | seg1→imported thunk | 20 | (WOWUSER_LOADSYSOBJ) |  | ? | ✅ | ok 1635 | 0 |
+| `0x0af` | seg1→imported thunk | 14 | (WOWUSER_LOADBITMAPRES) |  | ? | ✅ | ok 123 | 0 |
 | `0x0c8` | seg1→imported thunk | 12 | (WOWUSER_OPENCOMM) |  | ? | ✅ |  | 0 |
 | `0x0ce` | seg1→imported thunk | 4 | TRANSMITCOMMCHAR | `(word word)` | values | ✅ |  | 0 |
 | `0x0cf` | seg1→imported thunk | 6 | (WOWUSER_CLOSECOMM) |  | ? | ✅ |  | 0 |
-| `0x0ef` | seg1→imported thunk | 22 | (WOWUSER_CREATEDIALOG) |  | ? | ✅ | ok 87 | 0 |
-| `0x16c` | seg1→imported thunk | 12 | LOOKUPICONIDFROMDIRECTORYEX | `(ptr word word word word)` | pointer | ✅ | ok 332 | 0 |
-| `0x1e2` | seg1→imported thunk | 6 | ENABLESCROLLBAR | `(word word word)` | values | ✅ | ok 12 **STEPPED 16** | 0 |
-| `0x217` | seg1→imported thunk | 6 | NOTIFYWOW | `()` | values | ✅ | ok 100 **STEPPED 556** | 0 |
+| `0x0ef` | seg1→imported thunk | 22 | (WOWUSER_CREATEDIALOG) |  | ? | ✅ | ok 98 | 0 |
+| `0x16c` | seg1→imported thunk | 12 | LOOKUPICONIDFROMDIRECTORYEX | `(ptr word word word word)` | pointer | ✅ | ok 344 **STEPPED 58** | 0 |
+| `0x1e2` | seg1→imported thunk | 6 | ENABLESCROLLBAR | `(word word word)` | values | ✅ | ok 12 **STEPPED 20** | 0 |
+| `0x217` | seg1→imported thunk | 6 | NOTIFYWOW | `()` | values | ✅ | ok 117 **STEPPED 687** | 0 |
 
-## GDI — 365 ids, 98 handled, 9 gaps
+## GDI — 365 ids, 105 handled, 2 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x07b` | seg1→imported thunk | 4 | PLAYMETAFILE | `(word word)` | values | — |  | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x05e` | seg1→imported thunk | 2 | GETVIEWPORTEXT | `(word)` | values | — |  | 3: CARDFILE* PACKAGER* WRITE* |
-| `0x060` | seg1→imported thunk | 2 | GETWINDOWEXT | `(word)` | values | — |  | 3: CARDFILE* PACKAGER* WRITE* |
-| `0x0a2` | seg1→imported thunk | 2 | GETBITMAPDIMENSION | `(word)` | values | — |  | 3: CARDFILE* PACKAGER* WRITE* |
 | `0x0af` | seg1→imported thunk | 12 | ENUMMETAFILE | `(word word segptr long)` | callback | — |  | 3: CARDFILE* PACKAGER* WRITE* |
 | `0x0b0` | seg1→imported thunk | 12 | PLAYMETAFILERECORD | `(word ptr ptr word)` | pointer | — |  | 3: CARDFILE* PACKAGER* WRITE* |
-| `0x046` | seg1→imported thunk | 14 | ENUMFONTS | `(word str segptr long)` | callback | — | **STEPPED 42** | 2: TERMINAL WRITE |
-| `0x047` | seg1→imported thunk | 12 | ENUMOBJECTS | `(word word segptr long)` | callback | — |  | 1: PBRUSH |
-| `0x16c` | seg1→imported thunk | 10 | SETPALETTEENTRIES | `(word word word ptr)` | pointer | — |  | 1: DDEML |
 | `0x005` | seg1→imported thunk | 4 | SETRELABS | `(word word)` | values | — |  | 0 |
 | `0x008` | seg1→imported thunk | 4 | SETTEXTCHARACTEREXTRA | `(word s_word)` | values | — |  | 0 |
 | `0x00f` | seg1→imported thunk | 6 | OFFSETWINDOWORG | `(word s_word s_word)` | values | — |  | 0 |
@@ -1053,88 +1022,94 @@ Unhandled first, then most-used.
 | `0x26d` | seg1→imported thunk | 32 | ICMTRANSLATERGBS | `()` | values | — |  | 0 |
 | `0x26e` | seg1→imported thunk | 16 | ICMCHECKCOLORSINGAMUT | `()` | values | — |  | 0 |
 | `0x2080` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
-| `0x044` | seg1→imported thunk | 2 | DELETEDC | `(word)` | values | ✅ | ok 402 | 16: CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE PACKAGER* |
-| `0x045` | seg1→imported thunk | 2 | DELETEOBJECT | `(word)` | values | ✅ | ok 1248 | 16: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x02d` | seg1→imported thunk | 4 | SELECTOBJECT | `(word word)` | values | ✅ | ok 5395 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x050` | seg1→imported thunk | 4 | GETDEVICECAPS | `(word s_word)` | values | ✅ | ok 377 | 15: CALC CARDFILE CHARMAP CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
-| `0x057` | seg1→imported thunk | 2 | GETSTOCKOBJECT | `(word)` | values | ✅ | ok 2416 | 15: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x05b` | seg1→imported thunk | 8 | GETTEXTEXTENT | `(word ptr s_word)` | pointer | ✅ | ok 1171 | 15: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
-| `0x034` | seg1→imported thunk | 2 | CREATECOMPATIBLEDC | `(word)` | values | ✅ | ok 396 | 14: CARDFILE CHARMAP CLOCK DDEML MPLAYER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE PACKAGER* |
-| `0x042` | seg1→imported thunk | 4 | CREATESOLIDBRUSH | `(long)` | values | ✅ | ok 888 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x009` | seg1→imported thunk | 6 | SETTEXTCOLOR | `(word long)` | values | ✅ | ok 1477 | 13: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WRITE |
-| `0x021` | seg1→imported thunk | 12 | TEXTOUT | `(word s_word s_word str word)` | pointer | ✅ | ok 818 | 12: CALC CARDFILE CHARMAP MPLAYER PACKAGER PBRUSH PROGMAN SOL SYSEDIT TERMINAL WINFILE WRITE |
-| `0x022` | seg1→imported thunk | 20 | BITBLT | `(word s_word s_word s_word s_word word s_word s_word long)` | values | ✅ | ok 627 | 12: CARDFILE CHARMAP CLOCK DDEML MPLAYER PBRUSH PROGMAN SOL SOUNDREC WINFILE WINMINE WRITE |
-| `0x001` | seg1→imported thunk | 6 | SETBKCOLOR | `(word long)` | values | ✅ | ok 1025 | 11: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WRITE |
-| `0x002` | seg1→imported thunk | 4 | SETBKMODE | `(word word)` | values | ✅ | ok 72 | 11: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC WINFILE WRITE |
-| `0x01d` | seg1→imported thunk | 14 | PATBLT | `(word s_word s_word s_word s_word long)` | values | ✅ | ok 1442 | 10: CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC WINFILE WRITE |
-| `0x052` | seg1→imported thunk | 8 | GETOBJECT | `(word s_word ptr)` | pointer | ✅ | ok 74 | 10: CARDFILE DDEML MPLAYER PBRUSH SOL SOUNDREC TERMINAL WINFILE WRITE PACKAGER* |
-| `0x05d` | seg1→imported thunk | 6 | GETTEXTMETRICS | `(word ptr)` | pointer | ✅ | ok 78 | 10: CALC CARDFILE CHARMAP NOTEPAD PBRUSH PROGMAN SOL TERMINAL WINFILE WRITE |
-| `0x033` | seg1→imported thunk | 6 | CREATECOMPATIBLEBITMAP | `(word word word)` | values | ✅ | ok 117 | 9: CHARMAP DDEML MPLAYER PBRUSH SOL SOUNDREC TERMINAL WRITE WINFILE* |
-| `0x039` | seg1→imported thunk | 4 | CREATEFONTINDIRECT | `(ptr)` | pointer | ✅ | ok 109 | 9: CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN TERMINAL WINFILE WRITE |
-| `0x15f` | seg1→imported thunk | 22 | EXTTEXTOUT | `(word s_word s_word word ptr str word ptr)` | pointer | ✅ | ok 4882 | 9: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PROGMAN SOUNDREC TERMINAL WINFILE |
-| `0x013` | seg1→imported thunk | 6 | LINETO | `(word s_word s_word)` | values | ✅ | ok 1140 | 8: CARDFILE CHARMAP CLOCK PBRUSH SOL TERMINAL WINMINE WRITE |
-| `0x014` | seg1→imported thunk | 6 | MOVETO | `(word s_word s_word)` | values | ✅ | ok 1030 | 8: CARDFILE CHARMAP CLOCK PBRUSH SOL TERMINAL WINMINE WRITE |
-| `0x023` | seg1→imported thunk | 24 | STRETCHBLT | `(word s_word s_word s_word s_word word s_word s_word s_word s_word long)` | values | ✅ | ok 38 | 8: CARDFILE MPLAYER PBRUSH SOL SOUNDREC TERMINAL WRITE PACKAGER* |
-| `0x01e` | seg1→imported thunk | 2 | SAVEDC | `(word)` | values | ✅ | ok 86 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
-| `0x027` | seg1→imported thunk | 4 | RESTOREDC | `(word s_word)` | values | ✅ | ok 86 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
-| `0x030` | seg1→imported thunk | 12 | CREATEBITMAP | `(word word word word ptr)` | pointer | ✅ | ok 53 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
-| `0x03d` | seg1→imported thunk | 8 | CREATEPEN | `(s_word s_word long)` | values | ✅ | ok 441 | 7: CALC CHARMAP CLOCK PBRUSH TERMINAL WINMINE WRITE |
-| `0x004` | seg1→imported thunk | 4 | SETROP2 | `(word word)` | values | ✅ | ok 73 | 6: CALC CARDFILE CLOCK PBRUSH SOL WINMINE |
-| `0x00b` | seg1→imported thunk | 6 | SETWINDOWORG | `(word s_word s_word)` | values | ✅ | ok 72 | 6: CARDFILE PACKAGER PBRUSH SOUNDREC WINFILE* WRITE* |
-| `0x016` | seg1→imported thunk | 10 | INTERSECTCLIPRECT | `(word s_word s_word s_word s_word)` | values | ✅ | ok 82 | 6: CARDFILE MPLAYER SOUNDREC WRITE PACKAGER* WINFILE* |
-| `0x01b` | seg1→imported thunk | 10 | RECTANGLE | `(word s_word s_word s_word s_word)` | values | ✅ | ok 522 | 6: CALC CARDFILE CLOCK PBRUSH WRITE PACKAGER* |
+| `0x044` | seg1→imported thunk | 2 | DELETEDC | `(word)` | values | ✅ | ok 497 | 16: CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE PACKAGER* |
+| `0x045` | seg1→imported thunk | 2 | DELETEOBJECT | `(word)` | values | ✅ | ok 1601 | 16: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x02d` | seg1→imported thunk | 4 | SELECTOBJECT | `(word word)` | values | ✅ | ok 6805 | 15: CALC CARDFILE CHARMAP CLOCK DDEML MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x050` | seg1→imported thunk | 4 | GETDEVICECAPS | `(word s_word)` | values | ✅ | ok 442 | 15: CALC CARDFILE CHARMAP CLOCK NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WINMINE WRITE |
+| `0x057` | seg1→imported thunk | 2 | GETSTOCKOBJECT | `(word)` | values | ✅ | ok 2992 | 15: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x05b` | seg1→imported thunk | 8 | GETTEXTEXTENT | `(word ptr s_word)` | pointer | ✅ | ok 1682 | 15: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOL SOUNDREC SYSEDIT TERMINAL WINFILE WRITE |
+| `0x034` | seg1→imported thunk | 2 | CREATECOMPATIBLEDC | `(word)` | values | ✅ | ok 497 | 14: CARDFILE CHARMAP CLOCK DDEML MPLAYER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE PACKAGER* |
+| `0x042` | seg1→imported thunk | 4 | CREATESOLIDBRUSH | `(long)` | values | ✅ | ok 1213 | 14: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
+| `0x009` | seg1→imported thunk | 6 | SETTEXTCOLOR | `(word long)` | values | ✅ | ok 2264 | 13: CALC CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC TERMINAL WINFILE WRITE |
+| `0x021` | seg1→imported thunk | 12 | TEXTOUT | `(word s_word s_word str word)` | pointer | ✅ | ok 1298 | 12: CALC CARDFILE CHARMAP MPLAYER PACKAGER PBRUSH PROGMAN SOL SYSEDIT TERMINAL WINFILE WRITE |
+| `0x022` | seg1→imported thunk | 20 | BITBLT | `(word s_word s_word s_word s_word word s_word s_word long)` | values | ✅ | ok 843 | 12: CARDFILE CHARMAP CLOCK DDEML MPLAYER PBRUSH PROGMAN SOL SOUNDREC WINFILE WINMINE WRITE |
+| `0x001` | seg1→imported thunk | 6 | SETBKCOLOR | `(word long)` | values | ✅ | ok 1381 | 11: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOUNDREC TERMINAL WINFILE WRITE |
+| `0x002` | seg1→imported thunk | 4 | SETBKMODE | `(word word)` | values | ✅ | ok 75 | 11: CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC WINFILE WRITE |
+| `0x01d` | seg1→imported thunk | 14 | PATBLT | `(word s_word s_word s_word s_word long)` | values | ✅ | ok 1653 | 10: CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN SOL SOUNDREC WINFILE WRITE |
+| `0x052` | seg1→imported thunk | 8 | GETOBJECT | `(word s_word ptr)` | pointer | ✅ | ok 85 | 10: CARDFILE DDEML MPLAYER PBRUSH SOL SOUNDREC TERMINAL WINFILE WRITE PACKAGER* |
+| `0x05d` | seg1→imported thunk | 6 | GETTEXTMETRICS | `(word ptr)` | pointer | ✅ | ok 85 | 10: CALC CARDFILE CHARMAP NOTEPAD PBRUSH PROGMAN SOL TERMINAL WINFILE WRITE |
+| `0x033` | seg1→imported thunk | 6 | CREATECOMPATIBLEBITMAP | `(word word word)` | values | ✅ | ok 132 | 9: CHARMAP DDEML MPLAYER PBRUSH SOL SOUNDREC TERMINAL WRITE WINFILE* |
+| `0x039` | seg1→imported thunk | 4 | CREATEFONTINDIRECT | `(ptr)` | pointer | ✅ | ok 118 | 9: CHARMAP CLOCK MPLAYER PACKAGER PBRUSH PROGMAN TERMINAL WINFILE WRITE |
+| `0x15f` | seg1→imported thunk | 22 | EXTTEXTOUT | `(word s_word s_word word ptr str word ptr)` | pointer | ✅ | ok 5188 | 9: CARDFILE CHARMAP CLOCK MPLAYER PACKAGER PROGMAN SOUNDREC TERMINAL WINFILE |
+| `0x013` | seg1→imported thunk | 6 | LINETO | `(word s_word s_word)` | values | ✅ | ok 1255 | 8: CARDFILE CHARMAP CLOCK PBRUSH SOL TERMINAL WINMINE WRITE |
+| `0x014` | seg1→imported thunk | 6 | MOVETO | `(word s_word s_word)` | values | ✅ | ok 1101 | 8: CARDFILE CHARMAP CLOCK PBRUSH SOL TERMINAL WINMINE WRITE |
+| `0x023` | seg1→imported thunk | 24 | STRETCHBLT | `(word s_word s_word s_word s_word word s_word s_word s_word s_word long)` | values | ✅ | ok 41 | 8: CARDFILE MPLAYER PBRUSH SOL SOUNDREC TERMINAL WRITE PACKAGER* |
+| `0x01e` | seg1→imported thunk | 2 | SAVEDC | `(word)` | values | ✅ | ok 96 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
+| `0x027` | seg1→imported thunk | 4 | RESTOREDC | `(word s_word)` | values | ✅ | ok 96 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
+| `0x030` | seg1→imported thunk | 12 | CREATEBITMAP | `(word word word word ptr)` | pointer | ✅ | ok 64 | 7: CARDFILE MPLAYER PBRUSH SOUNDREC WRITE PACKAGER* WINFILE* |
+| `0x03d` | seg1→imported thunk | 8 | CREATEPEN | `(s_word s_word long)` | values | ✅ | ok 744 | 7: CALC CHARMAP CLOCK PBRUSH TERMINAL WINMINE WRITE |
+| `0x004` | seg1→imported thunk | 4 | SETROP2 | `(word word)` | values | ✅ | ok 98 | 6: CALC CARDFILE CLOCK PBRUSH SOL WINMINE |
+| `0x00b` | seg1→imported thunk | 6 | SETWINDOWORG | `(word s_word s_word)` | values | ✅ | ok 84 | 6: CARDFILE PACKAGER PBRUSH SOUNDREC WINFILE* WRITE* |
+| `0x016` | seg1→imported thunk | 10 | INTERSECTCLIPRECT | `(word s_word s_word s_word s_word)` | values | ✅ | ok 92 | 6: CARDFILE MPLAYER SOUNDREC WRITE PACKAGER* WINFILE* |
+| `0x01b` | seg1→imported thunk | 10 | RECTANGLE | `(word s_word s_word s_word s_word)` | values | ✅ | ok 828 | 6: CALC CARDFILE CLOCK PBRUSH WRITE PACKAGER* |
 | `0x026` | seg1→imported thunk | 14 | ESCAPE | `(word word word segptr ptr)` | pointer | ✅ |  | 6: CARDFILE NOTEPAD PBRUSH SYSEDIT TERMINAL WRITE |
 | `0x035` | seg1→imported thunk | 16 | CREATEDC | `(str str str ptr)` | pointer | ✅ |  | 6: CARDFILE NOTEPAD PBRUSH SYSEDIT TERMINAL WRITE |
 | `0x097` | seg1→imported thunk | 6 | COPYMETAFILE | `(word str)` | pointer | ✅ |  | 6: DDEML PACKAGER CARDFILE* PBRUSH* SOUNDREC* WRITE* |
-| `0x00c` | seg1→imported thunk | 6 | SETWINDOWEXT | `(word s_word s_word)` | values | ✅ | ok 7 | 5: CARDFILE PACKAGER PBRUSH SOUNDREC WRITE |
+| `0x00c` | seg1→imported thunk | 6 | SETWINDOWEXT | `(word s_word s_word)` | values | ✅ | ok 8 | 5: CARDFILE PACKAGER PBRUSH SOUNDREC WRITE |
 | `0x04a` | seg1→imported thunk | 10 | GETBITMAPBITS | `(word long ptr)` | pointer | ✅ |  | 5: CARDFILE PBRUSH PACKAGER* SOUNDREC* WRITE* |
 | `0x06a` | seg1→imported thunk | 10 | SETBITMAPBITS | `(word long ptr)` | pointer | ✅ |  | 5: PBRUSH CARDFILE* PACKAGER* SOUNDREC* WRITE* |
-| `0x07d` | seg1→imported thunk | 4 | CREATEMETAFILE | `(str)` | pointer | ✅ |  | 5: PACKAGER PBRUSH SOUNDREC CARDFILE* WRITE* |
-| `0x07e` | seg1→imported thunk | 2 | CLOSEMETAFILE | `(word)` | values | ✅ |  | 5: PACKAGER PBRUSH SOUNDREC CARDFILE* WRITE* |
-| `0x07f` | seg1→imported thunk | 2 | DELETEMETAFILE | `(word)` | values | ✅ |  | 5: SOUNDREC CARDFILE* PACKAGER* PBRUSH* WRITE* |
-| `0x09c` | seg1→imported thunk | 6 | CREATEDISCARDABLEBITMAP | `(word word word)` | values | ✅ | ok 13 | 5: CLOCK PBRUSH PROGMAN WRITE WINFILE* |
-| `0x168` | seg1→imported thunk | 4 | CREATEPALETTE | `(ptr)` | pointer | ✅ |  | 5: DDEML PBRUSH CARDFILE* PACKAGER* WRITE* |
-| `0x003` | seg1→imported thunk | 4 | SETMAPMODE | `(word word)` | values | ✅ | ok 7 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x007` | seg1→imported thunk | 4 | SETSTRETCHBLTMODE | `(word word)` | values | ✅ | ok 52 | 4: MPLAYER PBRUSH SOUNDREC WRITE |
-| `0x00d` | seg1→imported thunk | 6 | SETVIEWPORTORG | `(word s_word s_word)` | values | ✅ | ok 7 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x00e` | seg1→imported thunk | 6 | SETVIEWPORTEXT | `(word s_word s_word)` | values | ✅ | ok 7 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x03c` | seg1→imported thunk | 2 | CREATEPATTERNBRUSH | `(word)` | values | ✅ | ok 21 | 4: MPLAYER PBRUSH SOUNDREC WINFILE* |
+| `0x07d` | seg1→imported thunk | 4 | CREATEMETAFILE | `(str)` | pointer | ✅ | ok 1 | 5: PACKAGER PBRUSH SOUNDREC CARDFILE* WRITE* |
+| `0x07e` | seg1→imported thunk | 2 | CLOSEMETAFILE | `(word)` | values | ✅ | ok 1 | 5: PACKAGER PBRUSH SOUNDREC CARDFILE* WRITE* |
+| `0x07f` | seg1→imported thunk | 2 | DELETEMETAFILE | `(word)` | values | ✅ | ok 1 | 5: SOUNDREC CARDFILE* PACKAGER* PBRUSH* WRITE* |
+| `0x09c` | seg1→imported thunk | 6 | CREATEDISCARDABLEBITMAP | `(word word word)` | values | ✅ | ok 14 | 5: CLOCK PBRUSH PROGMAN WRITE WINFILE* |
+| `0x168` | seg1→imported thunk | 4 | CREATEPALETTE | `(ptr)` | pointer | ✅ | ok 1 | 5: DDEML PBRUSH CARDFILE* PACKAGER* WRITE* |
+| `0x003` | seg1→imported thunk | 4 | SETMAPMODE | `(word word)` | values | ✅ | ok 9 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| `0x007` | seg1→imported thunk | 4 | SETSTRETCHBLTMODE | `(word word)` | values | ✅ | ok 58 | 4: MPLAYER PBRUSH SOUNDREC WRITE |
+| `0x00d` | seg1→imported thunk | 6 | SETVIEWPORTORG | `(word s_word s_word)` | values | ✅ | ok 8 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| `0x00e` | seg1→imported thunk | 6 | SETVIEWPORTEXT | `(word s_word s_word)` | values | ✅ | ok 8 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| `0x03c` | seg1→imported thunk | 2 | CREATEPATTERNBRUSH | `(word)` | values | ✅ | ok 24 | 4: MPLAYER PBRUSH SOUNDREC WINFILE* |
 | `0x063` | seg1→imported thunk | 8 | LPTODP | `(word ptr s_word)` | pointer | ✅ | ok 2 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x068` | seg1→imported thunk | 6 | RECTVISIBLE | `(word ptr)` | pointer | ✅ | ok 87 | 4: MPLAYER PROGMAN SOUNDREC WINFILE* |
-| `0x094` | seg1→imported thunk | 6 | SETBRUSHORG | `(word s_word s_word)` | values | ✅ | ok 181 | 4: MPLAYER PBRUSH SOL SOUNDREC |
-| `0x09a` | seg1→imported thunk | 6 | GETNEARESTCOLOR | `(word long)` | values | ✅ | ok 27 | 4: CLOCK PBRUSH WRITE WINFILE* |
-| `0x0a3` | seg1→imported thunk | 6 | SETBITMAPDIMENSION | `(word s_word s_word)` | values | ✅ |  | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
-| `0x15a` | seg1→imported thunk | 4 | SETTEXTALIGN | `(word word)` | values | ✅ | ok 210 | 4: CLOCK PACKAGER PBRUSH WINFILE* |
+| `0x068` | seg1→imported thunk | 6 | RECTVISIBLE | `(word ptr)` | pointer | ✅ | ok 97 | 4: MPLAYER PROGMAN SOUNDREC WINFILE* |
+| `0x07b` | seg1→imported thunk | 4 | PLAYMETAFILE | `(word word)` | values | ✅ | ok 2 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| `0x094` | seg1→imported thunk | 6 | SETBRUSHORG | `(word s_word s_word)` | values | ✅ | ok 229 | 4: MPLAYER PBRUSH SOL SOUNDREC |
+| `0x09a` | seg1→imported thunk | 6 | GETNEARESTCOLOR | `(word long)` | values | ✅ | ok 29 | 4: CLOCK PBRUSH WRITE WINFILE* |
+| `0x0a3` | seg1→imported thunk | 6 | SETBITMAPDIMENSION | `(word s_word s_word)` | values | ✅ | ok 1 | 4: PBRUSH WRITE CARDFILE* PACKAGER* |
+| `0x15a` | seg1→imported thunk | 4 | SETTEXTALIGN | `(word word)` | values | ✅ | ok 466 | 4: CLOCK PACKAGER PBRUSH WINFILE* |
 | `0x1b7` | seg1→imported thunk | 32 | STRETCHDIBITS | `()` | values | ✅ |  | 4: PBRUSH CARDFILE* PACKAGER* WRITE* |
 | `0x1b9` | seg1→imported thunk | 18 | GETDIBITS | `(word word word word ptr ptr word)` | pointer | ✅ |  | 4: PBRUSH CARDFILE* PACKAGER* WRITE* |
-| `0x01c` | seg1→imported thunk | 14 | ROUNDRECT | `(word s_word s_word s_word s_word s_word s_word)` | values | ✅ | ok 769 | 3: CALC PBRUSH TERMINAL |
+| `0x01c` | seg1→imported thunk | 14 | ROUNDRECT | `(word s_word s_word s_word s_word s_word s_word)` | values | ✅ | ok 1241 | 3: CALC PBRUSH TERMINAL |
 | `0x02c` | seg1→imported thunk | 4 | SELECTCLIPRGN | `(word word)` | values | ✅ |  | 3: PBRUSH TERMINAL WRITE |
-| `0x038` | seg1→imported thunk | 30 | CREATEFONT | `(s_word s_word s_word s_word s_word word word word word word word word word str)` | pointer | ✅ | ok 20 | 3: CHARMAP PACKAGER WINFILE |
-| `0x096` | seg1→imported thunk | 2 | UNREALIZEOBJECT | `(word)` | values | ✅ | ok 190 | 3: PBRUSH SOL SOUNDREC |
-| `0x099` | seg1→imported thunk | 16 | CREATEIC | `(str str str ptr)` | pointer | ✅ | ok 22 | 3: CARDFILE PBRUSH WRITE |
-| `0x1ba` | seg1→imported thunk | 20 | CREATEDIBITMAP | `(word ptr long ptr ptr word)` | pointer | ✅ | ok 23 | 3: CHARMAP WINFILE WINMINE |
+| `0x038` | seg1→imported thunk | 30 | CREATEFONT | `(s_word s_word s_word s_word s_word word word word word word word word word str)` | pointer | ✅ | ok 21 | 3: CHARMAP PACKAGER WINFILE |
+| `0x05e` | seg1→imported thunk | 2 | GETVIEWPORTEXT | `(word)` | values | ✅ | ok 1 | 3: CARDFILE* PACKAGER* WRITE* |
+| `0x060` | seg1→imported thunk | 2 | GETWINDOWEXT | `(word)` | values | ✅ | ok 1 | 3: CARDFILE* PACKAGER* WRITE* |
+| `0x096` | seg1→imported thunk | 2 | UNREALIZEOBJECT | `(word)` | values | ✅ | ok 239 | 3: PBRUSH SOL SOUNDREC |
+| `0x099` | seg1→imported thunk | 16 | CREATEIC | `(str str str ptr)` | pointer | ✅ | ok 25 | 3: CARDFILE PBRUSH WRITE |
+| `0x0a2` | seg1→imported thunk | 2 | GETBITMAPDIMENSION | `(word)` | values | ✅ | ok 2 | 3: CARDFILE* PACKAGER* WRITE* |
+| `0x1ba` | seg1→imported thunk | 20 | CREATEDIBITMAP | `(word ptr long ptr ptr word)` | pointer | ✅ | ok 25 | 3: CHARMAP WINFILE WINMINE |
 | `0x015` | seg1→imported thunk | 10 | EXCLUDECLIPRECT | `(word s_word s_word s_word s_word)` | values | ✅ | ok 1 | 2: PBRUSH WINFILE* |
 | `0x018` | seg1→imported thunk | 10 | ELLIPSE | `(word s_word s_word s_word s_word)` | values | ✅ |  | 2: PBRUSH WRITE |
-| `0x01f` | seg1→imported thunk | 10 | SETPIXEL | `(word s_word s_word long)` | values | ✅ | ok 1275 | 2: SOL WINMINE |
+| `0x01f` | seg1→imported thunk | 10 | SETPIXEL | `(word s_word s_word long)` | values | ✅ | ok 1531 | 2: SOL WINMINE |
 | `0x040` | seg1→imported thunk | 8 | CREATERECTRGN | `(s_word s_word s_word s_word)` | values | ✅ |  | 2: PBRUSH PROGMAN |
 | `0x041` | seg1→imported thunk | 4 | CREATERECTRGNINDIRECT | `(ptr)` | pointer | ✅ |  | 2: CARDFILE TERMINAL |
 | `0x043` | seg1→imported thunk | 8 | DPTOLP | `(word ptr s_word)` | pointer | ✅ |  | 2: PBRUSH WRITE |
-| `0x04f` | seg1→imported thunk | 2 | GETDCORG | `(word)` | values | ✅ | ok 20 | 2: PBRUSH SOL |
-| `0x053` | seg1→imported thunk | 6 | GETPIXEL | `(word s_word s_word)` | values | ✅ | ok 1280 | 2: PBRUSH SOL |
+| `0x046` | seg1→imported thunk | 14 | ENUMFONTS | `(word str segptr long)` | callback | ✅ | ok 3 **STEPPED 48** | 2: TERMINAL WRITE |
+| `0x04f` | seg1→imported thunk | 2 | GETDCORG | `(word)` | values | ✅ | ok 28 | 2: PBRUSH SOL |
+| `0x053` | seg1→imported thunk | 6 | GETPIXEL | `(word s_word s_word)` | values | ✅ | ok 1541 | 2: PBRUSH SOL |
 | `0x05c` | seg1→imported thunk | 8 | GETTEXTFACE | `(word s_word ptr)` | pointer | ✅ |  | 2: TERMINAL WRITE |
 | `0x064` | seg1→imported thunk | 16 | LINEDDA | `(s_word s_word s_word s_word segptr long)` | callback | ✅ |  | 2: PBRUSH SOL |
-| `0x067` | seg1→imported thunk | 6 | PTVISIBLE | `(word s_word s_word)` | values | ✅ | ok 14 | 2: PBRUSH SOL |
+| `0x067` | seg1→imported thunk | 6 | PTVISIBLE | `(word s_word s_word)` | values | ✅ | ok 23 | 2: PBRUSH SOL |
 | `0x15e` | seg1→imported thunk | 10 | GETCHARWIDTH | `(word word word ptr)` | pointer | ✅ | ok 18 | 2: CHARMAP WRITE |
-| `0x16b` | seg1→imported thunk | 10 | GETPALETTEENTRIES | `(word word word ptr)` | pointer | ✅ |  | 2: DDEML PBRUSH |
+| `0x16b` | seg1→imported thunk | 10 | GETPALETTEENTRIES | `(word word word ptr)` | pointer | ✅ | ok 1 | 2: DDEML PBRUSH |
 | `0x1b8` | seg1→imported thunk | 18 | SETDIBITS | `(word word word word ptr ptr word)` | pointer | ✅ |  | 2: PBRUSH WINFILE* |
 | `0x006` | seg1→imported thunk | 4 | SETPOLYFILLMODE | `(word word)` | values | ✅ |  | 1: PBRUSH |
-| `0x00a` | seg1→imported thunk | 6 | SETTEXTJUSTIFICATION | `(word s_word s_word)` | values | ✅ | ok 7 | 1: WRITE |
+| `0x00a` | seg1→imported thunk | 6 | SETTEXTJUSTIFICATION | `(word s_word s_word)` | values | ✅ | ok 8 | 1: WRITE |
 | `0x024` | seg1→imported thunk | 8 | POLYGON | `()` | values | ✅ |  | 1: PBRUSH |
 | `0x025` | seg1→imported thunk | 8 | POLYLINE | `()` | values | ✅ |  | 1: PBRUSH |
 | `0x02f` | seg1→imported thunk | 8 | COMBINERGN | `(word word word s_word)` | values | ✅ |  | 1: PROGMAN |
 | `0x031` | seg1→imported thunk | 4 | CREATEBITMAPINDIRECT | `(ptr)` | pointer | ✅ |  | 1: WRITE |
 | `0x03a` | seg1→imported thunk | 6 | CREATEHATCHBRUSH | `(word long)` | values | ✅ |  | 1: PBRUSH |
 | `0x03f` | seg1→imported thunk | 8 | CREATEPOLYGONRGN | `(ptr word word)` | pointer | ✅ |  | 1: PBRUSH |
+| `0x047` | seg1→imported thunk | 12 | ENUMOBJECTS | `(word word segptr long)` | callback | ✅ | ok 4 | 1: PBRUSH |
 | `0x04b` | seg1→imported thunk | 2 | GETBKCOLOR | `(word)` | values | ✅ |  | 1: PBRUSH |
 | `0x04d` | seg1→imported thunk | 6 | GETCLIPBOX | `(word ptr)` | pointer | ✅ |  | 1: TERMINAL |
 | `0x055` | seg1→imported thunk | 2 | GETROP2 | `(word)` | values | ✅ |  | 1: PBRUSH |
@@ -1142,42 +1117,41 @@ Unhandled first, then most-used.
 | `0x0ac` | seg1→imported thunk | 10 | SETRECTRGN | `(word s_word s_word s_word s_word)` | values | ✅ |  | 1: PROGMAN |
 | `0x133` | seg1→imported thunk | 10 | GETCHARABCWIDTHS | `(word word word ptr)` | pointer | ✅ |  | 1: PBRUSH |
 | `0x14a` | seg1→imported thunk | 14 | ENUMFONTFAMILIES | `(word str segptr long)` | callback | ✅ | ok 15 **STEPPED 3** | 1: CHARMAP |
+| `0x16c` | seg1→imported thunk | 10 | SETPALETTEENTRIES | `(word word word ptr)` | pointer | ✅ | ok 2 | 1: DDEML |
 | `0x16e` | seg1→imported thunk | 2 | UPDATECOLORS | `(word)` | values | ✅ |  | 1: PBRUSH |
 | `0x172` | seg1→imported thunk | 6 | GETNEARESTPALETTEINDEX | `(word long)` | values | ✅ |  | 1: PBRUSH |
 | `0x174` | seg1→imported thunk | 12 | EXTFLOODFILL | `(word s_word s_word long word)` | values | ✅ |  | 1: PBRUSH |
-| `0x1bb` | seg1→imported thunk | 28 | SETDIBITSTODEVICE | `(word s_word s_word s_word s_word s_word s_word word word ptr ptr word)` | pointer | ✅ | ok 50 | 1: WINMINE |
-| `0x04c` | seg1→imported thunk | 2 | GETBKMODE | `(word)` | values | ✅ |  | 0 |
+| `0x1bb` | seg1→imported thunk | 28 | SETDIBITSTODEVICE | `(word s_word s_word s_word s_word s_word s_word word word ptr ptr word)` | pointer | ✅ | ok 70 | 1: WINMINE |
+| `0x04c` | seg1→imported thunk | 2 | GETBKMODE | `(word)` | values | ✅ | ok 1 | 0 |
 | `0x051` | seg1→imported thunk | 2 | GETMAPMODE | `(word)` | values | ✅ |  | 0 |
 | `0x054` | seg1→imported thunk | 2 | GETPOLYFILLMODE | `(word)` | values | ✅ |  | 0 |
 | `0x058` | seg1→imported thunk | 2 | GETSTRETCHBLTMODE | `(word)` | values | ✅ |  | 0 |
 | `0x05a` | seg1→imported thunk | 2 | GETTEXTCOLOR | `(word)` | values | ✅ |  | 0 |
 
-## KEYBOARD — 11 ids, 5 handled, 1 gaps
+## KEYBOARD — 11 ids, 6 handled, 0 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x084` | seg1→imported thunk | 0 | GETKBCODEPAGE | `()` | values | — |  | 1: DDEML |
 | `0x004` | seg1→imported thunk | 14 | TOASCII | `(word word ptr ptr word)` | pointer | — |  | 0 |
 | `0x080` | seg1→imported thunk | 2 | OEMKEYSCAN | `(word)` | values | — |  | 0 |
 | `0x082` | seg1→imported thunk | 2 | GETKEYBOARDTYPE | `(word)` | values | — |  | 0 |
 | `0x086` | seg1→imported thunk | 10 | ANSITOOEMBUFF | `(ptr ptr word)` | pointer | — |  | 0 |
 | `0x087` | seg1→imported thunk | 10 | OEMTOANSIBUFF | `(ptr ptr word)` | pointer | — |  | 0 |
-| `0x006` | seg1→imported thunk | 8 | OEMTOANSI | `(str ptr)` | pointer | ✅ | ok 1557 | 9: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC WINFILE WRITE |
-| `0x005` | seg1→imported thunk | 8 | ANSITOOEM | `(str ptr)` | pointer | ✅ | ok 2528 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN TERMINAL WINFILE WRITE |
-| `0x081` | seg1→imported thunk | 2 | VKKEYSCAN | `(word)` | values | ✅ | ok 9 | 2: CHARMAP WRITE |
-| `0x083` | seg1→imported thunk | 4 | MAPVIRTUALKEY | `(word word)` | values | ✅ | ok 2 | 2: CHARMAP PROGMAN |
+| `0x006` | seg1→imported thunk | 8 | OEMTOANSI | `(str ptr)` | pointer | ✅ | ok 1922 | 9: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOUNDREC WINFILE WRITE |
+| `0x005` | seg1→imported thunk | 8 | ANSITOOEM | `(str ptr)` | pointer | ✅ | ok 3112 | 8: CARDFILE NOTEPAD PACKAGER PBRUSH PROGMAN TERMINAL WINFILE WRITE |
+| `0x081` | seg1→imported thunk | 2 | VKKEYSCAN | `(word)` | values | ✅ | ok 11 | 2: CHARMAP WRITE |
+| `0x083` | seg1→imported thunk | 4 | MAPVIRTUALKEY | `(word word)` | values | ✅ | ok 3 | 2: CHARMAP PROGMAN |
+| `0x084` | seg1→imported thunk | 0 | GETKBCODEPAGE | `()` | values | ✅ | ok 1 | 1: DDEML |
 | `0x085` | seg1→imported thunk | 10 | GETKEYNAMETEXT | `(long ptr word)` | pointer | ✅ |  | 1: PROGMAN |
 
-## SHELL — 34 ids, 16 handled, 2 gaps
+## SHELL — 34 ids, 18 handled, 0 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x026` | seg1→imported thunk | 0 | FINDENVIRONMENTSTRING | `(ptr)` | pointer | — |  | 1: WINFILE |
-| `0x027` | seg1→imported thunk | 0 | INTERNALEXTRACTICON | `(word ptr s_word word)` | pointer | — |  | 1: PROGMAN |
 | `0x00c` | seg1→imported thunk | 2 | (internal) |  | ? | — |  | 0 |
 | `0x020` | seg1→imported thunk | 0 | WCI |  | ? | — |  | 0 |
 | `0x021` | seg1→imported thunk | 0 | ABOUTDLGPROC | `(word word word long)` | callback | — |  | 0 |
@@ -1195,9 +1169,9 @@ Unhandled first, then most-used.
 | `0x034` | seg1→imported thunk | 14 | SHCHECKDRIVE | `()` | values | — |  | 0 |
 | `0x035` | seg1→imported thunk | 10 | _RUNDLLCHECKDRIVE |  | ? | — |  | 0 |
 | `0x016` | seg1→imported thunk | 12 | SHELLABOUT | `(word ptr ptr word)` | pointer | ✅ |  | 15: CALC CARDFILE CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC TERMINAL WINFILE WINMINE WRITE |
-| `0x009` | seg1→imported thunk | 4 | DRAGACCEPTFILES | `(word word)` | values | ✅ | ok 56 | 8: CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC WRITE |
+| `0x009` | seg1→imported thunk | 4 | DRAGACCEPTFILES | `(word word)` | values | ✅ | ok 61 | 8: CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC WRITE |
 | `0x00b` | seg1→imported thunk | 10 | DRAGQUERYFILE | `(word s_word ptr s_word)` | pointer | ✅ |  | 8: CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN SOUNDREC WRITE |
-| `0x006` | seg1→imported thunk | 16 | REGQUERYVALUE | `(long str ptr ptr)` | pointer | ✅ | ok 38 | 7: CARDFILE MPLAYER PACKAGER PBRUSH SOUNDREC WINFILE WRITE |
+| `0x006` | seg1→imported thunk | 16 | REGQUERYVALUE | `(long str ptr ptr)` | pointer | ✅ | ok 39 | 7: CARDFILE MPLAYER PACKAGER PBRUSH SOUNDREC WINFILE WRITE |
 | `0x001` | seg1→imported thunk | 12 | REGOPENKEY | `(long str ptr)` | pointer | ✅ |  | 6: CARDFILE PACKAGER WINFILE WRITE PBRUSH* SOUNDREC* |
 | `0x003` | seg1→imported thunk | 4 | REGCLOSEKEY | `(long)` | values | ✅ |  | 6: CARDFILE PACKAGER PBRUSH WINFILE WRITE SOUNDREC* |
 | `0x005` | seg1→imported thunk | 20 | REGSETVALUE | `(long str long str long)` | pointer | ✅ | ok 8 | 5: MPLAYER PACKAGER PBRUSH SOUNDREC WINFILE |
@@ -1209,6 +1183,8 @@ Unhandled first, then most-used.
 | `0x004` | seg1→imported thunk | 8 | REGDELETEKEY | `(long str)` | pointer | ✅ |  | 1: WINFILE |
 | `0x015` | seg1→imported thunk | 12 | FINDEXECUTABLE | `(str str ptr)` | pointer | ✅ |  | 1: PROGMAN |
 | `0x025` | seg1→imported thunk | 6 | DOENVIRONMENTSUBST | `(ptr word)` | pointer | ✅ |  | 1: PROGMAN |
+| `0x026` | seg1→imported thunk | 0 | FINDENVIRONMENTSTRING | `(ptr)` | pointer | ✅ |  | 1: WINFILE |
+| `0x027` | seg1→imported thunk | 0 | INTERNALEXTRACTICON | `(word ptr s_word word)` | pointer | ✅ | **STEPPED 1** | 1: PROGMAN |
 | `0x02b` | seg1→imported thunk | 0 | REGISTERSHELLHOOK | `(word word)` | callback | ✅ |  | 1: PROGMAN |
 
 ## COMMDLG — 8 ids, 7 handled, 1 gaps
@@ -1217,7 +1193,7 @@ Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x014` | seg1→imported thunk | 4 | PRINTDLG | `(ptr)` | callback | — | **STEPPED 10** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
+| `0x014` | seg1→imported thunk | 4 | PRINTDLG | `(ptr)` | callback | — | **STEPPED 14** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
 | `0x001` | seg1→imported thunk | 4 | GETOPENFILENAME | `(segptr)` | callback | ✅ |  | 10: CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOUNDREC TERMINAL WINFILE WRITE |
 | `0x002` | seg1→imported thunk | 4 | GETSAVEFILENAME | `(segptr)` | callback | ✅ |  | 8: CARDFILE NOTEPAD PACKAGER PBRUSH RECORDER SOUNDREC TERMINAL WRITE |
 | `0x00f` | seg1→imported thunk | 4 | CHOOSEFONT | `(ptr)` | callback | ✅ | ok 1 | 4: CLOCK PBRUSH WINFILE WRITE |
@@ -1226,29 +1202,29 @@ Unhandled first, then most-used.
 | `0x00c` | seg1→imported thunk | 4 | REPLACETEXT | `(segptr)` | callback | ✅ |  | 0 |
 | `0x01a` | seg1→imported thunk | 0 | (WOWCDLG_EXTENDEDERROR) |  | ? | ✅ |  | 0 |
 
-## SOUND — 17 ids, 0 handled, 6 gaps
+## SOUND — 17 ids, 17 handled, 0 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x001` | seg1→imported thunk | 0 | OPENSOUND | `()` | values | — |  | 1: WINMINE |
-| `0x002` | seg1→imported thunk | 0 | CLOSESOUND | `()` | values | — |  | 1: WINMINE |
-| `0x004` | seg1→imported thunk | 8 | SETVOICENOTE | `(word word word word)` | values | — |  | 1: WINMINE |
-| `0x005` | seg1→imported thunk | 10 | SETVOICEACCENT | `(word word word word word)` | values | — |  | 1: WINMINE |
-| `0x009` | seg1→imported thunk | 0 | STARTSOUND | `()` | values | — |  | 1: WINMINE |
-| `0x00a` | seg1→imported thunk | 0 | STOPSOUND | `()` | values | — |  | 1: WINMINE |
-| `0x003` | seg1→imported thunk | 4 | SETVOICEQUEUESIZE | `(word word)` | values | — |  | 0 |
-| `0x006` | seg1→imported thunk | 6 | SETVOICEENVELOPE | `(word word word)` | values | — |  | 0 |
-| `0x007` | seg1→imported thunk | 4 | SETSOUNDNOISE | `(word word)` | values | — |  | 0 |
-| `0x008` | seg1→imported thunk | 8 | SETVOICESOUND | `(word long word)` | values | — |  | 0 |
-| `0x00b` | seg1→imported thunk | 2 | WAITSOUNDSTATE | `(word)` | values | — |  | 0 |
-| `0x00c` | seg1→imported thunk | 0 | SYNCALLVOICES | `()` | values | — |  | 0 |
-| `0x00d` | seg1→imported thunk | 2 | COUNTVOICENOTES | `(word)` | values | — |  | 0 |
-| `0x00e` | seg1→imported thunk | 0 | GETTHRESHOLDEVENT | `()` | values | — |  | 0 |
-| `0x00f` | seg1→imported thunk | 0 | GETTHRESHOLDSTATUS | `()` | values | — |  | 0 |
-| `0x010` | seg1→imported thunk | 4 | SETVOICETHRESHOLD | `(word word)` | values | — |  | 0 |
-| `0x011` | seg1→imported thunk | 0 | DOBEEP | `()` | values | — |  | 0 |
+| `0x001` | seg1→imported thunk | 0 | OPENSOUND | `()` | values | ✅ | ok 2 | 1: WINMINE |
+| `0x002` | seg1→imported thunk | 0 | CLOSESOUND | `()` | values | ✅ | ok 2 | 1: WINMINE |
+| `0x004` | seg1→imported thunk | 8 | SETVOICENOTE | `(word word word word)` | values | ✅ | ok 5 | 1: WINMINE |
+| `0x005` | seg1→imported thunk | 10 | SETVOICEACCENT | `(word word word word word)` | values | ✅ | ok 1 | 1: WINMINE |
+| `0x009` | seg1→imported thunk | 0 | STARTSOUND | `()` | values | ✅ | ok 1 | 1: WINMINE |
+| `0x00a` | seg1→imported thunk | 0 | STOPSOUND | `()` | values | ✅ | ok 1 | 1: WINMINE |
+| `0x003` | seg1→imported thunk | 4 | SETVOICEQUEUESIZE | `(word word)` | values | ✅ | ok 1 | 0 |
+| `0x006` | seg1→imported thunk | 6 | SETVOICEENVELOPE | `(word word word)` | values | ✅ | ok 1 | 0 |
+| `0x007` | seg1→imported thunk | 4 | SETSOUNDNOISE | `(word word)` | values | ✅ | ok 1 | 0 |
+| `0x008` | seg1→imported thunk | 8 | SETVOICESOUND | `(word long word)` | values | ✅ | ok 1 | 0 |
+| `0x00b` | seg1→imported thunk | 2 | WAITSOUNDSTATE | `(word)` | values | ✅ | ok 1 | 0 |
+| `0x00c` | seg1→imported thunk | 0 | SYNCALLVOICES | `()` | values | ✅ | ok 1 | 0 |
+| `0x00d` | seg1→imported thunk | 2 | COUNTVOICENOTES | `(word)` | values | ✅ | ok 3 | 0 |
+| `0x00e` | seg1→imported thunk | 0 | GETTHRESHOLDEVENT | `()` | values | ✅ |  | 0 |
+| `0x00f` | seg1→imported thunk | 0 | GETTHRESHOLDSTATUS | `()` | values | ✅ | ok 1 | 0 |
+| `0x010` | seg1→imported thunk | 4 | SETVOICETHRESHOLD | `(word word)` | values | ✅ | ok 1 | 0 |
+| `0x011` | seg1→imported thunk | 0 | DOBEEP | `()` | values | ✅ |  | 0 |
 
 ## SYSTEM — 1 ids, 0 handled, 0 gaps
 
