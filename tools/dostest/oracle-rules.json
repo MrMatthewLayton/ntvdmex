@@ -2984,5 +2984,61 @@
   ],
   "recorded": "2026-10-02",
   "why": "INT 15h AH=85h is the SysReq hook the BIOS INT 09h calls. PCem's genuine AMI 486 BIOS -- the AT-class BIOS whose own INT 09h makes the call -- answers AH=00h CF=0, i.e. 'nothing to do'. SeaBIOS and DOSBox-X answer AH=86h CF=1 'unsupported'. The genuine ROM is the reference (GH #254)."
+ },
+ {
+  "probe": "rtcw",
+  "subject_expect": "rtcw",
+  "case": "rtcw.statusb.held",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-03",
+  "why": "Same split as rtc.statusb: DOSBox-X's Status B carries DSE (bit 0, daylight saving), 0x83 against 0x82 on 6.22-under-QEMU and PCem's AMI BIOS. The bit under test here is SET (bit 7), which all three hold; DSE is a BIOS setup choice, not part of the SET protocol (GH #261)."
+ },
+ {
+  "probe": "rtcw",
+  "subject_expect": "rtcw",
+  "case": "rtcw.date",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-03",
+  "why": "INT 1Ah AH=04h after the probe wrote century 19h to CMOS 32h. The CHIP reads back 19h on every host (BX=1999 everywhere); PCem's AMI BIOS and DOSBox-X then report CX=1999 from it, and only SeaBIOS under QEMU answers 20h -- its century does not come from register 32h as written. A property of SeaBIOS/QEMU, not of the AT BIOS contract (GH #261)."
+ },
+ {
+  "probe": "rtcw",
+  "subject_expect": "rtcw",
+  "case": "rtcw.binary",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-10-03",
+  "why": "Binary mode (Status B DM=1), 23:45 written as 17h:2Dh and read back in binary. PCem (a cycle-level MC146818) and DOSBox-X both return 172Dh, as the datasheet says the registers hold what was written; QEMU's RTC model answered 000Bh, i.e. it does not keep a binary write (a QEMU property). GH #261."
+ },
+ {
+  "probe": "rtcw",
+  "subject_expect": "rtcw",
+  "case": "rtcw.binary",
+  "field": "CX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-03",
+  "why": "KNOWN DIVERGENCE, LEFT VISIBLE. The same registers re-read after switching DM back to BCD WITHOUT rewriting them. The MC146818 does not convert its contents when DM changes (software must re-initialise), so PCem returns the raw 172Dh. QEMU (0011h) and DOSBox-X (2345h) each convert differently; PCem is the period-correct chip and is kept as truth. Ours derives every clock register from the VDM clock at read time, so it shows 2345h -- it cannot hold a stale-format byte. Undefined-for-software territory; recorded rather than modelled (GH #261)."
+ },
+ {
+  "probe": "fdate",
+  "subject_expect": "fdate",
+  "case": "fdate.57.open",
+  "field": "DX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-03",
+  "why": "AX=5700h on the still-open handle, after a write, with the DOS date set to 1999-06-15. 6.22 and PCem's DOS return 26CFh -- the date DOS stamped the write with; DOSBox-X returns the HOST's date (5D43h = 2026-10-03) until close, and agrees on reopen and FindFirst. Two DOS kernels against one emulator's host-file shortcut (GH #263)."
  }
 ]
