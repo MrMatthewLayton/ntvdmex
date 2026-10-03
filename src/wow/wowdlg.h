@@ -133,6 +133,11 @@ typedef struct {
          per move. TERMINAL's 158 MB log is what that looks like. */
     int   trace;
     DWORD t0;          /* when it went up -- so the log can say how long it ran */
+    /* GH #279: the top-level window DialogBox disabled, re-enabled at unwind.
+       NULL when there was no owner or it was ALREADY disabled -- a nested dialog
+       whose owner is the outer dialog must not enable a window it did not
+       disable. */
+    HWND  owner32;
 } wowdlg_modal_t;
 
 static wowdlg_modal_t g_wd[WOWDLG_MAX_MODAL];
@@ -214,7 +219,7 @@ static int wowdlg_active(void)
  * call the old way rather than pretend.
  */
 static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
-                       WORD ds, int defer_show)
+                       WORD ds, int defer_show, HWND owner32)
 {
     wowdlg_modal_t *d;
     if (g_wd_depth >= WOWDLG_MAX_MODAL) return 0;
@@ -232,6 +237,19 @@ static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
     d->msgs    = 0;
     d->trace   = WOWDLG_TRACE;
     d->t0      = GetTickCount();
+    /* ── GH #279: A MODAL DIALOG DISABLES ITS OWNER, as USER's DialogBox does.
+         Without it the main window's X stayed live under Terminal's first-run
+         "Default Serial Port" dialog and took WM_CLOSE. Disabling the REAL
+         window is the whole fix: Windows itself then ignores clicks on it,
+         its X included, so nothing reaches wowwin_proc to be posted. The
+         owner is the top-level window: a dialog owned by a child control
+         disables the frame around it, as USER's does. */
+    d->owner32 = NULL;
+    if (owner32) {
+        HWND top = GetAncestor(owner32, GA_ROOT);
+        if (!top) top = owner32;
+        if (IsWindowEnabled(top)) { EnableWindow(top, FALSE); d->owner32 = top; }
+    }
     return 1;
 }
 
@@ -265,6 +283,10 @@ static void wowdlg_unwind(wowdlg_modal_t *d, DWORD value)
     volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)d->retlin;
     h[0] = (BYTE)(value & 0xFF);         h[1] = (BYTE)((value >> 8)  & 0xFF);
     h[2] = (BYTE)((value >> 16) & 0xFF); h[3] = (BYTE)((value >> 24) & 0xFF);
+    /* GH #279: give the owner back BEFORE the dialog goes, so activation returns
+       to it rather than to whatever window Windows picks next. */
+    if (d->owner32 && IsWindow(d->owner32)) EnableWindow(d->owner32, TRUE);
+    d->owner32 = NULL;
     if (g_wd_depth > 0) --g_wd_depth;
 }
 

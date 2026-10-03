@@ -2120,7 +2120,7 @@ static DWORD wowuser_winproc_of(const wowuser_win_t *w)
      because it reads the window table above. These three are what USER's own
      DialogBox and EndDialog arms call into it. */
 static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
-                       WORD ds, int defer_show);
+                       WORD ds, int defer_show, HWND owner32);
 static int wowdlg_end(WORD hwnd, WORD result);
 static int wowdlg_active(void);
 
@@ -3820,7 +3820,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                            " and a program whose WinMain ends at"
                                            " DialogBox EXITS.");
             } else if (!wowdlg_push(w->hwnd, hole, dlgproc, w->wndproc, dds,
-                                    defer_show)) {
+                                    defer_show, parent32)) {
                 if (defer_show && w->hwnd32) ShowWindow(w->hwnd32, SW_SHOW);
                 wu_puts(note, notecap, &k, " -- ★ MODAL, BUT THE MODAL STACK IS"
                                            " FULL; returning immediately.");
