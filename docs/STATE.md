@@ -6,12 +6,14 @@
 > then [open issues by priority](https://github.com/MrMatthewLayton/ntvdmex/issues?q=is%3Aopen+sort%3Acreated-asc)
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
-- **Updated:** 2026-10-03 (session 89)
-- **Branch:** `m9/completeness`, pushed through `b6c1238` (the user asked for the push in s89).
-  Rig `bin\` churns with test builds (`runs/s89/B_*.exe`).
-- **Resume:** [`log/sessions/session-89.md`](log/sessions/session-89.md), especially the
-  afternoon section: the Win16 surface inventory (epic **#292**, batches #293–#305) and
-  [`inventory/win16-surface.md`](inventory/win16-surface.md) / [`win16-messages.md`](inventory/win16-messages.md).
+- **Updated:** 2026-10-04 (session 90)
+- **Branch:** `m9/completeness`, pushed (s90, unattended run: twelve issues closed, score 87% → 90%).
+  Rig `bin\` = `d0699606` **plus `bin\wowshim\WOW32.DLL` + `NTVDM.EXE`** (new; needed for
+  Win16 multimedia; `scripts/package.sh` ships them).
+- **Resume:** [`log/sessions/session-90.md`](log/sessions/session-90.md). Owed by hand: Sound
+  Recorder playing TONE.WAV **by ear**. The user should decide #311 (LPT layout vs stock).
+  Before that: [`session-89.md`](log/sessions/session-89.md), which has the Win16 surface
+  inventory (epic **#292**).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,
   Settings' MS-DOS version group). The sweep's remaining findings are issues, deferred to the
