@@ -474,4 +474,35 @@ static const wow_anchor_t g_gdi_anchors[] = {
     { 0x2080,   0, 0x00b5 },
 };
 
+
+/* ── COMMDLG: the whole seg1 table (s89, #294). ─────────────────────────────
+     ⚠ It was TWO rows -- GetOpenFileName and GetSaveFileName -- the exact trap
+       this file's header describes for SHELL, met again: Notepad's Search > Find
+       is FindText, and a Notepad that had not opened a file first never had
+       COMMDLG identified, so FindText was logged "?'s table" and stepped over.
+     Hand-filtered from `tools/ne/wowthunks.py --anchor guest/ne/commdlg.dll`:
+       that output also lists seg3 "stubs" (ids 0x0/0x7f00, 255 argument bytes)
+       which are data matching the byte pattern; only the eight real seg1 stubs
+       are here -- each one an export (ids = ordinals), stub + 13 = retstub:
+         0x01 GetOpenFileName seg1:0x0005   0x02 GetSaveFileName seg1:0x0017
+         0x0b FindText        seg1:0x0029   0x0c ReplaceText     seg1:0x003b
+         0x05 ChooseColor     seg1:0x004d   0x0f ChooseFont      seg1:0x005f
+         0x14 PrintDlg        seg1:0x0071   0x1a CommDlgExtendedError 0x0083 */
+static const wow_anchor_t g_commdlg_anchors[] = {
+    { 0x001,   4, 0x0012 }, { 0x002,   4, 0x0024 },
+    { 0x00b,   4, 0x0036 }, { 0x00c,   4, 0x0048 },
+    { 0x005,   4, 0x005a }, { 0x00f,   4, 0x006c },
+    { 0x014,   4, 0x007e }, { 0x01a,   0, 0x0090 },
+};
+
+/* ── KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
+     two rows (AnsiToOem / OemToAnsi). Regenerate with
+     `tools/ne/wowthunks.py --anchor guest/ne/keyboard.drv`. */
+static const wow_anchor_t g_keyboard_anchors[] = {
+    { 0x004,  14, 0x006c }, { 0x005,   8, 0x0079 }, { 0x006,   8, 0x0086 },
+    { 0x080,   2, 0x0093 }, { 0x081,   2, 0x00a0 }, { 0x082,   2, 0x00ad },
+    { 0x083,   4, 0x00ba }, { 0x084,   0, 0x00c7 }, { 0x085,  10, 0x00d4 },
+    { 0x086,  10, 0x00e1 }, { 0x087,  10, 0x00ee },
+};
+
 #endif /* WOWANCHORS_H */

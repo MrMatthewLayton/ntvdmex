@@ -9506,8 +9506,10 @@ static WORD g_wow_cdlg_seg = 0;
 
 static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return (id == 0x001 && argb == 4 && retstub == 0x0012)
-        || (id == 0x002 && argb == 4 && retstub == 0x0024);
+    /* s89: the whole table (wowanchors.h) -- two rows left FindText unidentified. */
+    return wow_anchor_hit(g_commdlg_anchors,
+                          (int)(sizeof g_commdlg_anchors / sizeof g_commdlg_anchors[0]),
+                          id, argb, retstub);
 }
 
 /* ── ★★ KEYBOARD.DRV's TABLE -- A SIXTH ID SPACE. See src/wow/wowkbd.h. ──────
@@ -9521,8 +9523,10 @@ static WORD g_wow_kbd_seg = 0;
 
 static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return (id == 0x005 && argb == 8 && retstub == 0x0079)
-        || (id == 0x006 && argb == 8 && retstub == 0x0086);
+    /* s89: the whole table (wowanchors.h), for the same reason as COMMDLG's. */
+    return wow_anchor_hit(g_keyboard_anchors,
+                          (int)(sizeof g_keyboard_anchors / sizeof g_keyboard_anchors[0]),
+                          id, argb, retstub);
 }
 
 /* ── ★★ GDI.EXE's TABLE -- A SEVENTH ID SPACE. See src/wow/wowgdi.h. ─────────

@@ -17,12 +17,19 @@ set R=%OUT%\w16find.txt
 del /q "%OUT%\w16find_done.txt" >nul 2>&1
 > "%R%" echo == w16find  %DATE% %TIME%
 taskkill /f /im ntvdmhost.exe >nul 2>&1
+"%RIG%\rigshot.exe" close "ntvdmex" >nul 2>&1
 del /q "%OUT%\startfail.txt" "%OUT%\ntvdmhost.log" >nul 2>&1
 reg add "%IFEO%" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 cd /d "%W16%\notepad"
 start "" "%W16%\notepad\NOTEPAD.EXE"
 ping -n 16 127.0.0.1 >nul
 "%RIG%\rigshot.exe" fg "Notepad - (Untitled)" >> "%R%" 2>&1
+rem ⚠ fg ALONE IS NOT ENOUGH: XP refuses SetForegroundWindow to a background
+rem   process, and the first run's keys went to an open cmd.exe window (the host
+rem   saw no keystroke at all). A click on the title bar takes focus the way a user does.
+"%RIG%\rigshot.exe" tclick "Notepad - (Untitled)"
+ping -n 2 127.0.0.1 >nul
+type "%SH%\debug\ctl\rigshot.txt" >> "%R%" 2>&1
 ping -n 3 127.0.0.1 >nul
 for %%K in (0x12 0x53 0x46) do (
   "%RIG%\rigshot.exe" key %%K >> "%R%" 2>&1
@@ -56,7 +63,7 @@ del /q "%SH%\debug\ctl\rigshot.txt" >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 type "%SH%\debug\ctl\rigshot.txt" >> "%R%" 2>&1
 "%RIG%\rigshot.exe" close "Notepad - (Untitled)" >> "%R%" 2>&1
-ping -n 8 127.0.0.1 >nul
+ping -n 14 127.0.0.1 >nul
 >> "%R%" echo -- host alive after close?
 tasklist /fi "imagename eq ntvdmhost.exe" >> "%R%" 2>&1
 findstr /c:"FindText" /c:"commdlg" /c:"0xc0" "%OUT%\ntvdmhost.log" >> "%R%" 2>&1

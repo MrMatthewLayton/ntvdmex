@@ -394,6 +394,22 @@ def main():
                 if e["serviced"] or e["declined"]:
                     r["handled"] = True        # main.c answers it, whatever the switch says
 
+    # ⚠ A PHANTOM TABLE. wowthunks.py matches a byte pattern, and COMMDLG's seg3
+    #   holds data that happens to fit it: ids 0x0 / 0x1 / 0x7f00, "255 argument
+    #   bytes", reached by no export and never seen on the rig. A table is
+    #   dropped only when ALL of that is true and it is small; krnl386's seg2
+    #   table (121 stubs, no exports, but 165 calls in the logs) survives.
+    bytable = {}
+    for key, r in allrows.items():
+        bytable.setdefault((key[0], key[1]), []).append(key)
+    for tk, keys in bytable.items():
+        rs = [allrows[k] for k in keys]
+        junk = any(r["id"] >= 0x1000 or r["args"] == 255 for r in rs)
+        if (junk and len(rs) < 8 and not any(r["ords"] for r in rs)
+                and not any(r["seen"] for r in rs)):
+            for k in keys:
+                del allrows[k]
+
     sh = shelf()
     dllmods = {mn: fn for fn, (k, mn, _a, _b) in sh.items() if k == "dll"}
 

@@ -632,6 +632,31 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* ── `tclick <caption>` -- click the MIDDLE OF THE TITLE BAR. (s89) ──────────
+         Gives a window keyboard focus the way a user does. `fg` alone does not:
+         XP refuses SetForegroundWindow to a background process, and a key test's
+         keystrokes went to an open cmd.exe instead. A fixed-coordinate `click`
+         missed too -- the same program opens at a different place each launch. */
+    if (seq(verb, "tclick")) {
+        char m[400], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        RECT r;
+        int bx, by;
+        if (!w || !GetWindowRect(w, &r)) { p = sput(p, "tclick: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        bx = (r.left + r.right) / 2;
+        by = r.top + GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYCAPTION) / 2;
+        SetCursorPos(bx, by);
+        Sleep(80);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(60);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        p = sput(p, "tclick: ");
+        p = sput(p, GetForegroundWindow() == w ? "now FOREGROUND " : "★ NOT foreground ");
+        sput(p, arg1);
+        logline(m);
+        return 0;
+    }
+
     /* A real click, at a real screen coordinate, through the real hit-test. Used to
        switch tab pages: TCM_SETCURSEL would move the selection without raising
        TCN_SELCHANGE, so the page would not follow -- which would silently "verify"
