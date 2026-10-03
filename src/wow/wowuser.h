@@ -7562,6 +7562,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN
                      | ((GetWindowLongA(w->hwnd32, GWL_STYLE) & WS_CLIPSIBLINGS)
                         ? DCX_CLIPSIBLINGS : 0));
+        /* ── #287: CLIPPED TO THE PAINT, AS WIN16's BeginPaint DC IS. Unclipped, the
+             erase this BeginPaint now sends (DefWindowProc, Calc's WHITE class brush)
+             covered the whole client while Calc repaints its grey over rcPaint only
+             -- so an uncovered corner turned the whole calculator white. What this
+             reports as rcPaint is exactly what the guest may draw on. */
+        if (dc) IntersectClipRect(dc, r.left, r.top, r.right, r.bottom);
         tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
         if (!tok) {
             if (dc) ReleaseDC(w->hwnd32, dc);
