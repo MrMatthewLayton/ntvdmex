@@ -964,6 +964,10 @@ static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
 #define GSR_ARG_HWND    10
 
 #define WOWUSER_SHOWSCROLLBAR        0x010b
+/* #300: EnableScrollBar(hWnd, wSBflags, wArrows) -- 6 arg bytes, Pascal: wArrows@0,
+   wSBflags@2, hWnd@4. Stepped over 8 times in s89's logs (USER reaches it from its
+   own code). Same constants in Win16 and Win32 (SB_*, ESB_*). */
+#define WOWUSER_ENABLESCROLLBAR      0x01e2
 #define SSB_ARG_SHOW     0
 #define SSB_ARG_BAR      2
 #define SSB_ARG_HWND     4
@@ -7140,6 +7144,23 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, (DWORD)lo, 4);
         wu_puts(note, notecap, &k, ".."); wu_puthex(note, notecap, &k, (DWORD)hi, 4);
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWUSER_ENABLESCROLLBAR: {
+        WORD arrows = wow32_argw(f, 0);
+        WORD bar    = wow32_argw(f, 2);
+        WORD hwnd   = wow32_argw(f, 4);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0; BOOL r;
+        wu_puts(note, notecap, &k, "EnableScrollBar 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        r = EnableScrollBar(w->hwnd32, (UINT)bar, (UINT)arrows);
+        wu_puts(note, notecap, &k, " bar=0x"); wu_puthex(note, notecap, &k, bar, 2);
+        wu_puts(note, notecap, &k, " arrows=0x"); wu_puthex(note, notecap, &k, arrows, 2);
+        wow32_setret(f, r ? 1 : 0);
         return 1;
     }
 

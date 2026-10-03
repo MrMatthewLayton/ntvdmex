@@ -29821,6 +29821,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.rtc_set = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
     g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
+    g_ww_send16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────

@@ -203,6 +203,9 @@ static UINT g_ww_isdlg_msg;
      wires this hook; NULL (or a refusal) leaves Windows' own default. */
 static LRESULT (*g_ww_ctlcolor)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp,
                                 int *handled);
+/* s89 (#300): any message SENT to a guest window now, through the same nested run
+   (main.c: wow_send16_now). 0 = it could not run; the caller then posts. */
+static int (*g_ww_send16)(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res);
 
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -537,6 +540,30 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 ++g_ww_menudefer;
                 return 0;                       /* opened later, by the replay */
             }
+        }
+        break;
+    /* ── #300 (M1): SCROLL BARS. Never relayed before, so a program's own scroll
+         bars -- Write's page, Cardfile's list, Charmap's grid -- did nothing when
+         clicked or dragged. The packing differs:
+             Win32  wParam = MAKELONG(code, pos)   lParam = scroll-bar HWND (0 =
+                                                            the window's own bar)
+             Win16  wParam = code                  lParam = MAKELONG(pos, hwndCtl16)
+       ★ SENT, through the nested run, because Windows sends them from INSIDE its
+         own tracking loop: while an arrow is held or the thumb is dragged the
+         program must answer each one (SetScrollPos, redraw) before the next, or
+         the bar snaps back and the content moves only on release. Posted only if
+         a nested call cannot run here. DefWindowProc does nothing with them. */
+    case WM_HSCROLL: case WM_VSCROLL:
+        if (h16) {
+            WORD code  = (WORD)LOWORD(wp);
+            WORD pos   = (WORD)HIWORD(wp);
+            WORD ctl16 = lp ? wowwin_hwnd16((HWND)(ULONG_PTR)lp) : 0;
+            DWORD lp16 = (DWORD)pos | ((DWORD)ctl16 << 16);
+            WORD  r16;
+            ++g_ww_msgs;
+            if (g_ww_send16 && g_ww_send16(h16, (WORD)msg, code, lp16, &r16)) return 0;
+            wowmsg_post(h16, (WORD)msg, code, lp16, GetTickCount(), ptx, pty);
+            return 0;
         }
         break;
     case WM_COMMAND:
