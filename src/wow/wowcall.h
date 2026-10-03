@@ -212,6 +212,25 @@
 #define WOWENUM_CHILDREN  2     /* every child of `parent`                     */
 #define WOWENUM_TASK      3     /* every window of a task                      */
 #define WOWENUM_LINE      4     /* every point on a line (LineDDA)             */
+#define WOWENUM_FONTS     5     /* every font (family) -- EnumFontFamilies (s89) */
+
+/* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
+   takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
+   this names the argument (HIGH word index) that points `off` bytes into it. Set
+   just before wowcall_enter, which consumes and clears it. -1 = none. */
+static int  g_wc_blob2_arg = -1;
+static int  g_wc_blob2_off = 0;
+/* ── s89: THE FONTS, COLLECTED UP FRONT AS WIN16 STRUCTURES. EnumFontFamilies
+     asks Win32 for the list in one synchronous call (wowgdi.h) and the walk hands
+     one entry per 16-bit callback. Each entry is the callback's blob verbatim:
+     ENUMLOGFONT16 (146 bytes) then NEWTEXTMETRIC16 (41), byte-packed as Win16's
+     GDI declares them, plus the FontType word. */
+#define WOWENUM_ELF16   146
+#define WOWENUM_NTM16   41
+#define WOWENUM_MAXFONT 256
+typedef struct { BYTE b[WOWENUM_ELF16 + WOWENUM_NTM16]; WORD type; } wowenum_font_t;
+static wowenum_font_t g_we_font[WOWENUM_MAXFONT];
+static int g_we_nfont;
 
 static int  wowenum_busy(void);
 static int  wowenum_begin(int kind, DWORD proc, WORD ds, DWORD lparam,
@@ -221,7 +240,7 @@ static void wowenum_line(int x0, int y0, int x1, int y1);
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
    and LocalAlloc's 2. Anything wider gets caught here rather than overrunning. */
-#define WOWCALL_MAX_ARGW  6
+#define WOWCALL_MAX_ARGW  8   /* s89: EnumFontFamilies' callback takes 7 words */
 
 typedef struct {
     wowsched_slot_t saved;   /* the interrupted context, verbatim               */
@@ -328,7 +347,13 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
             *(volatile BYTE *)(ULONG_PTR)(ssbase + (DWORD)(WORD)(sp + i)) = blob[i];
         arg[blobarg]     = ss;                       /* the far pointer's HIGH */
         arg[blobarg + 1] = sp;                       /* ... and its offset     */
+        if (g_wc_blob2_arg >= 0 && g_wc_blob2_arg + 1 < nargw
+            && g_wc_blob2_off > 0 && g_wc_blob2_off < blobn) {
+            arg[g_wc_blob2_arg]     = ss;
+            arg[g_wc_blob2_arg + 1] = (WORD)(sp + g_wc_blob2_off);
+        }
     }
+    g_wc_blob2_arg = -1; g_wc_blob2_off = 0;
 
     for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, arg[i]);
     wowcall_push(ssbase, &sp, retsel);       /* the far return address: CS ... */

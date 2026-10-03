@@ -58,6 +58,7 @@ typedef struct {
     DWORD calls;       /* how many callbacks were made, for the log            */
 } wowenum_t;
 
+
 static wowenum_t g_we;
 
 static int wowenum_busy(void) { return g_we.kind != WOWENUM_NONE; }
@@ -128,7 +129,7 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
          LineDDA's takes (x, y, lpData) = FOUR -- and the lParam words are written
          at [nargw] and [nargw+1] below, which for the line case is [2] and [3].
          Three would have written the last word off the end of this array. */
-    WORD arg[4];
+    WORD arg[8];        /* s89: 7 for EnumFontFamilies; the window and line forms use 3-4 */
     int  nargw = 0;
     WORD hwnd16 = 0;
 
@@ -143,6 +144,47 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         wowenum_stopped();
         wowenum_end();
         return 0;
+    }
+
+    if (g_we.kind == WOWENUM_FONTS) {
+        /* EnumFontFamProc(LPENUMLOGFONT, LPNEWTEXTMETRIC, int FontType, LPARAM) */
+        const wowenum_font_t *e;
+        if (g_we.idx >= g_we_nfont) {
+            wu_puts(note, cap, &k, "ENUM fonts complete: 0x");
+            wu_puthex(note, cap, &k, g_we.calls, 4);
+            wu_puts(note, cap, &k, " font(s)");
+            wowenum_end();
+            return 0;
+        }
+        e = &g_we_font[g_we.idx++];
+        arg[0] = 0; arg[1] = 0;             /* lpelf: filled by wowcall_enter */
+        arg[2] = 0; arg[3] = 0;             /* lpntm: ditto, +146 into the blob */
+        arg[4] = e->type;
+        arg[5] = (WORD)(g_we.lparam >> 16);
+        arg[6] = (WORD)(g_we.lparam & 0xFFFF);
+        g_wc_blob2_arg = 2; g_wc_blob2_off = WOWENUM_ELF16;
+        if (!rsel || !ssbase
+            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 7,
+                              0, WOWCALL_RET_KEEP, NULL, 0, 0,
+                              e->b, (int)sizeof e->b, 0,
+                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+            g_wc_blob2_arg = -1;
+            wu_puts(note, cap, &k, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
+                                   " enumeration ends here");
+            wowenum_end();
+            return 0;
+        }
+        if (g_wc_depth > 0) {
+            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
+            g_wc[g_wc_depth - 1].actarg = 0;
+        }
+        ++g_we.calls;
+        wu_puts(note, cap, &k, "ENUM font -> \"");
+        {   int i; for (i = 18; i < 50 && e->b[i]; ++i) {
+                char c[2]; c[0] = (char)e->b[i]; c[1] = 0; wu_puts(note, cap, &k, c); } }
+        wu_puts(note, cap, &k, "\" type=0x");
+        wu_puthex(note, cap, &k, e->type, 2);
+        return 1;
     }
 
     if (g_we.kind == WOWENUM_LINE) {

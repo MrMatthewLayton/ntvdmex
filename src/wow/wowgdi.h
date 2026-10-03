@@ -789,6 +789,14 @@
      anyway, because a Win16 program that returns 0 from a DDA callback expects
      to stop being called, whatever the function's own return says. */
 #define WOWGDI_LINEDDA          0x0064   /* ord 100, 16 args */
+/* s89 (#162, Charmap's font list): EnumFontFamilies(hdc, lpszFamily, proc, lParam),
+   GDI.330, a WRAPPER stub of 14 argument bytes (wowmap.py). Frame, reversed:
+   +0 lParam, +4 proc, +8 lpszFamily (far, NULL = one per family), +12 hdc. */
+#define WOWGDI_ENUMFONTFAMILIES 0x014a
+#define EFF_ARG_LPARAM  0
+#define EFF_ARG_PROC    4
+#define EFF_ARG_FAMILY  8
+#define EFF_ARG_HDC     12
 #define LDDA_ARG_DATA    0               /* DWORD */
 #define LDDA_ARG_PROC    4               /* far   */
 #define LDDA_ARG_Y2      8
@@ -923,6 +931,54 @@ static void wowgdi_forget(WORD h)
  *   other table -- `0x45` is `SetWindowPos`-adjacent in USER's numbering and
  *   `DeleteObject` here.
  */
+/* s89: one Win32 font -> the Win16 ENUMLOGFONT16 + NEWTEXTMETRIC16 pair, byte-packed.
+   LOGFONT16 is LOGFONT with 16-bit ints (18 bytes + a 32-byte face); TEXTMETRIC16 is
+   eight ints, nine bytes, three ints (31); NEWTEXTMETRIC16 adds ntmFlags (DWORD),
+   ntmSizeEM, ntmCellHeight, ntmAvgWidth (41). */
+static void wowgdi_put16(BYTE *b, int off, LONG v) { b[off] = (BYTE)v; b[off + 1] = (BYTE)(v >> 8); }
+static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *tm,
+                                        DWORD type, LPARAM unused)
+{
+    const ENUMLOGFONTA *elf = (const ENUMLOGFONTA *)lf;
+    const NEWTEXTMETRICA *ntm = (const NEWTEXTMETRICA *)tm;
+    wowenum_font_t *e;
+    BYTE *b, *n;
+    int i;
+    (void)unused;
+    if (g_we_nfont >= WOWENUM_MAXFONT) return 0;
+    e = &g_we_font[g_we_nfont++];
+    for (i = 0; i < (int)sizeof e->b; ++i) e->b[i] = 0;
+    b = e->b;
+    wowgdi_put16(b, 0, lf->lfHeight);  wowgdi_put16(b, 2, lf->lfWidth);
+    wowgdi_put16(b, 4, lf->lfEscapement); wowgdi_put16(b, 6, lf->lfOrientation);
+    wowgdi_put16(b, 8, lf->lfWeight);
+    b[10] = lf->lfItalic; b[11] = lf->lfUnderline; b[12] = lf->lfStrikeOut;
+    b[13] = lf->lfCharSet; b[14] = lf->lfOutPrecision; b[15] = lf->lfClipPrecision;
+    b[16] = lf->lfQuality; b[17] = lf->lfPitchAndFamily;
+    for (i = 0; i < 31 && lf->lfFaceName[i]; ++i) b[18 + i] = (BYTE)lf->lfFaceName[i];
+    for (i = 0; i < 63 && elf->elfFullName[i]; ++i) b[50 + i] = elf->elfFullName[i];
+    for (i = 0; i < 31 && elf->elfStyle[i]; ++i) b[114 + i] = elf->elfStyle[i];
+    n = b + WOWENUM_ELF16;
+    wowgdi_put16(n, 0, tm->tmHeight);  wowgdi_put16(n, 2, tm->tmAscent);
+    wowgdi_put16(n, 4, tm->tmDescent); wowgdi_put16(n, 6, tm->tmInternalLeading);
+    wowgdi_put16(n, 8, tm->tmExternalLeading); wowgdi_put16(n, 10, tm->tmAveCharWidth);
+    wowgdi_put16(n, 12, tm->tmMaxCharWidth); wowgdi_put16(n, 14, tm->tmWeight);
+    n[16] = tm->tmItalic; n[17] = tm->tmUnderlined; n[18] = tm->tmStruckOut;
+    n[19] = (BYTE)tm->tmFirstChar; n[20] = (BYTE)tm->tmLastChar;
+    n[21] = (BYTE)tm->tmDefaultChar; n[22] = (BYTE)tm->tmBreakChar;
+    n[23] = tm->tmPitchAndFamily; n[24] = tm->tmCharSet;
+    wowgdi_put16(n, 25, tm->tmOverhang); wowgdi_put16(n, 27, tm->tmDigitizedAspectX);
+    wowgdi_put16(n, 29, tm->tmDigitizedAspectY);
+    if (type & TRUETYPE_FONTTYPE) {          /* the NEW part is only TrueType's */
+        n[31] = (BYTE)ntm->ntmFlags; n[32] = (BYTE)(ntm->ntmFlags >> 8);
+        n[33] = (BYTE)(ntm->ntmFlags >> 16); n[34] = (BYTE)(ntm->ntmFlags >> 24);
+        wowgdi_put16(n, 35, (LONG)ntm->ntmSizeEM); wowgdi_put16(n, 37, (LONG)ntm->ntmCellHeight);
+        wowgdi_put16(n, 39, (LONG)ntm->ntmAvgWidth);
+    }
+    e->type = (WORD)type;
+    return 1;
+}
+
 static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
 {
     if (notecap) note[0] = 0;
@@ -1937,6 +1993,49 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, got, 4);
         wu_puts(note, notecap, &k, " entries");
         wow32_setret(f, got);
+        return 1;
+    }
+
+    case WOWGDI_ENUMFONTFAMILIES: {
+        WORD  hdc  = wow32_argw(f, EFF_ARG_HDC);
+        DWORD proc = wow32_argd(f, EFF_ARG_PROC);
+        DWORD lp   = wow32_argd(f, EFF_ARG_LPARAM);
+        char  fam[64];
+        int   havefam = wow32_argstr(f, EFF_ARG_FAMILY, fam, sizeof fam) && fam[0];
+        int   kind = -1, k = 0;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HDC   dc;
+        int   own = 0;
+        wu_puts(note, notecap, &k, "EnumFontFamilies(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, havefam ? ", \"" : ", NULL");
+        if (havefam) { wu_puts(note, notecap, &k, fam); wu_puts(note, notecap, &k, "\""); }
+        wu_puts(note, notecap, &k, ")");
+        wow32_setret(f, 1);                 /* the walk revises it to 0 on a stop */
+        if (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC)) dc = (HDC)o;
+        else { dc = GetDC(NULL); own = 1; }
+        g_we_nfont = 0;
+        if (dc) {
+            EnumFontFamiliesA(dc, havefam ? fam : NULL, wowgdi_font_collect, 0);
+            if (own) ReleaseDC(NULL, dc);
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)g_we_nfont, 4);
+        wu_puts(note, notecap, &k, " font(s)");
+        if (!g_we_nfont || !f->cbok) {
+            if (!f->cbok) wu_puts(note, notecap, &k, " -- callbacks are not armed");
+            return 1;
+        }
+        if (wowenum_busy()) {
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
+            return 1;
+        }
+        if (!wowenum_begin(WOWENUM_FONTS, proc, f->gds, lp,
+                           (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), 0)) {
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
+            return 1;
+        }
+        f->enumreq = 1;
         return 1;
     }
 
