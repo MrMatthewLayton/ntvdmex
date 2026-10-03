@@ -1,0 +1,9 @@
+wait 4
+list
+wcmd "Calculator" 65535
+wait 6
+list
+shot s90_help_0
+close "Calculator"
+wait 12
+list
