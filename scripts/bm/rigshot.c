@@ -190,6 +190,8 @@ static BOOL CALLBACK enum_cb(HWND h, LPARAM lp)
     if (!cap[0]) return TRUE;
     p = sput(p, "  win: ");
     p = sput(p, cap);
+    /* #279: a modal dialog disables its owner -- say so, it is a state to check. */
+    if (!IsWindowEnabled(h)) p = sput(p, "  DISABLED");
     /* ★ AND ITS GEOMETRY, because "the toolbox is the wrong size" is a claim
          about NUMBERS and this tool was only ever printing names. Comparing our
          Paintbrush with stock ntvdm's meant estimating rectangles off a scaled
@@ -600,6 +602,33 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         logline(m);
         if (!w) return 1;
         PostMessageA(w, WM_CLOSE, 0, 0);
+        return 0;
+    }
+
+    /* `xclick "<caption>"` -- a REAL click on the window's close button (#279).
+       `close` POSTS WM_CLOSE, and a posted message reaches a disabled window just
+       the same, so it cannot tell whether the X is live. This goes through the
+       hit-test: the button is the top-right square of the caption bar. */
+    if (seq(verb, "xclick")) {
+        char m[400], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        RECT r;
+        int bx, by;
+        if (!w || !GetWindowRect(w, &r)) { p = sput(p, "xclick: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        bx = r.right - GetSystemMetrics(SM_CXFRAME) - GetSystemMetrics(SM_CXSIZE) / 2 - 2;
+        by = r.top + GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYSIZE) / 2;
+        SetCursorPos(bx, by);
+        Sleep(80);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(60);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        p = sput(p, "xclick: hit-test=");
+        {   char num[16]; DWORD_PTR ht = 0;   /* 20 = HTCLOSE; timed, a busy host must not hang the rig */
+            SendMessageTimeoutA(w, WM_NCHITTEST, 0, MAKELPARAM(bx, by), SMTO_ABORTIFHUNG, 2000, &ht);
+            wsprintfA(num, "%d", (int)ht); p = sput(p, num); }
+        p = sput(p, IsWindowEnabled(w) ? " enabled " : " DISABLED ");
+        sput(p, arg1);
+        logline(m);
         return 0;
     }
 
