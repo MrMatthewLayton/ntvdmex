@@ -437,6 +437,32 @@ static int istep(icpu *c)
             c->seg[op2 == 0xA1 ? 4 : 5] = (uint16_t)ipop(c, W);
             c->ip = (uint16_t)(c->ip + idx); return 1;
         }
+        /* #269: Jcc rel16 (0F 80-8F) -- the near form 386-targeted 16-bit code uses for
+           any branch past 127 bytes. 16-bit operand size: IP = next + rel16, wrapping
+           in the segment as IP does. With 0x66 it is rel32 and EIP = next + rel32, bailed
+           if it leaves the 64 KB segment (the CPU's #GP, not ours) -- the E9 rule. */
+        if (op2 >= 0x80 && op2 <= 0x8F) {
+            int take = icond(c, op2 & 0xF);
+            if (osz) {
+                uint32_t nip = (uint32_t)(uint16_t)(c->ip + idx + 4);
+                uint32_t tgt = nip + rd_mem(cb + idx, 4);
+                if (take && tgt > 0xFFFFu) return 0;
+                c->ip = (uint16_t)(take ? tgt : nip); return 1;
+            } else {
+                int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+                c->ip = (uint16_t)(c->ip + idx + (take ? rel : 0)); return 1;
+            }
+        }
+        /* #269: SETcc r/m8 (0F 90-9F) -- 1 if the condition holds, else 0. The reg
+           field of the ModR/M is not used; no flags change. */
+        if (op2 >= 0x90 && op2 <= 0x9F) {
+            modrm_t m; uint8_t v = (uint8_t)(icond(c, op2 & 0xF) ? 1 : 0);
+            idx += decode_modrm(c, cb, cp, idx, segov, &m);
+            if (m.is_mem && m.lin >= GUEST_HI) return 0;
+            if (m.is_mem) wr_mem(m.lin, 1, v);
+            else          s8(c, m.rm_reg, v);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         return 0;                                     /* other 0F ops: bail */
     }
 
@@ -1027,6 +1053,21 @@ static int istep(icpu *c)
      * every callee return (run 57's far RET reaches main(), whose epilogue is   *
      * this). SP first snaps to BP (discarding locals), then the caller's BP is  *
      * popped. run 58. */
+    /* #269: ENTER imm16, 0 (C8) -- the prologue LEAVE below undoes: push BP, BP <- SP,
+       SP -= imm16, all 16-bit (this interpreter's stack is SS:SP). A NESTING LEVEL
+       (copying the caller's frame pointers) and the 0x66 form, whose final BP/EBP
+       write the manual ties to the stack size, still bail. */
+    if (op == 0xC8 && !osz) {
+        uint16_t sz = (uint16_t)(CB(idx) | (CB(idx + 1) << 8));
+        uint16_t sp;
+        if (CB(idx + 2) & 0x1F) return 0;
+        idx += 3;
+        sp = (uint16_t)(c->r[4] - 2);
+        wr_mem(seg_base(c->seg[2]) + sp, 2, (uint16_t)c->r[5]);
+        c->r[5] = (c->r[5] & 0xFFFF0000u) | sp;        /* BP <- SP */
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp - sz);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
     if (op == 0xC9) {
         uint16_t sp, bp;
         if (osz) {                                     /* #194: SP <- BP (16-bit stack), EBP <- pop32 */

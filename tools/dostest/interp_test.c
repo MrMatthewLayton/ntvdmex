@@ -554,6 +554,38 @@ int main(void)
       load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x05;
       CHECK(step1(&c) == 1 && (c.r[0] & 0xFF) == 0x06, "66 before byte-op: width stays 1"); }
 
+    /* ---- #269: Jcc rel16/rel32 (0F 8x), SETcc (0F 9x), ENTER n,0 (C8) ------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0x84, 0x00, 0x01 };            /* jz +0x100 */
+      c.flags |= F_ZF; load(&c, 0x1000, 0x10, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 0x0114, "0F 84 jz rel16 taken: ip = next + 0x100"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0x84, 0x00, 0x01 };
+      load(&c, 0x1000, 0x10, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 0x0014, "0F 84 jz rel16 not taken: ip = next"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0x85, 0xF0, 0xFF };            /* jnz -0x10 */
+      load(&c, 0x1000, 0x0004, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 0xFFF8, "0F 85 jnz rel16 backwards wraps in IP"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x82, 0x10, 0x00, 0x00, 0x00 }; /* jc rel32 */
+      c.flags |= F_CF; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 0x0017, "66 0F 82 jc rel32 taken: ip = next + 0x10"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x82, 0x00, 0x00, 0x01, 0x00 }; /* out of segment */
+      c.flags |= F_CF; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 0, "66 0F 82 jc rel32 past 64 KB: bail (the CPU's #GP)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0x9C, 0xC1 };                  /* setl cl */
+      c.r[1] = 0xFFFF; c.flags |= F_SF; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.r[1] == 0xFF01 && c.ip == 3, "0F 9C setl cl: SF!=OF -> CL=1, CH kept"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0x0F, 0x94, 0x06, 0x00, 0x05 };      /* sete [0500h] */
+      c.seg[3] = 0x2000; MEM[0x20500] = 0x77; load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && MEM[0x20500] == 0x00 && c.ip == 5, "0F 94 sete [m]: ZF=0 -> 0"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xC8, 0x10, 0x00, 0x00 };            /* enter 0x10,0 */
+      c.seg[2] = 0x2000; c.r[4] = 0xABCD0100u; c.r[5] = 0x1234BEEFu;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && rd_mem(0x200FE, 2) == 0xBEEF && c.r[5] == 0x123400FEu
+            && c.r[4] == 0xABCD00EEu && c.ip == 4,
+            "C8 enter 0x10,0: push BP, BP = SP, SP -= 0x10 (high halves kept)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xC8, 0x10, 0x00, 0x01 };            /* enter 0x10,1 */
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 0, "C8 enter with a nesting level: bail"); }
+
     /* ---- T20: LAR/LSL descriptor introspection -- run 55 --------------- *
      * A DPMI C runtime reads a descriptor's access byte with LAR;CX / SHR.  *
      * In V86 (g_sel_desc==NULL) these bail; with the hook they consult it.  */
