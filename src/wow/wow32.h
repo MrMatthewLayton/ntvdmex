@@ -733,6 +733,68 @@ static int wow32_may_decline(WORD id, WORD from)
  *   -- otherwise the guest gets whatever was on the stack. GlobalMemoryStatus is
  *   the void case and it still writes 0.
  */
+/* ── ★★ GENERIC THUNKS (#5, s90): 16-bit code calling 32-bit DLLs directly. ──────
+     LoadLibraryEx32W / GetProcAddress32W / FreeLibrary32W / GetVDMPointer32W, and
+     CallProc32W / _CallProcEx32W -- the documented Win16 route to Win32 (the WOW
+     generic-thunk API), and the one XP's own 16-bit MMSYSTEM uses to reach WINMM.
+   ★ THE 32-BIT SIDE IS THIS PROCESS. Under NT the DLL is loaded into the NTVDM
+     process and called there; this host IS that process, so LoadLibraryExA and a
+     direct call are the faithful answer, not a shortcut.
+
+   ── THE CallProc FRAME, READ OUT OF krnl386 (ords 517/518 -> thunk id 0x1c) ──
+   Both entries `push bp`, then call the id-0x1c stub, whose argument bytes are 0 --
+   so the arguments lie past the declared block and are read RAW:
+       +0 saved bp   +2/+4 the caller's far return   +6 cParams (DWORD)
+       +10 fAddressConvert (DWORD)   +14 lpProcAddress (DWORD)   +18 the params
+   CallProc32W is PASCAL: p1 was pushed first, so +18 holds pN and p1 is highest.
+   _CallProcEx32W is CDECL: +18 holds p1. krnl386 tells them apart for us -- 518
+   ORs 0x4000 into cParams' high word, 517 clears it -- and pops the arguments
+   itself (517 jumps into a `retf 12+4n` table; 518 is cdecl, the caller pops).
+   ⚠ The mask's bit order is taken from the probe run against stock
+     (tools/wintest/w_gthunk, 16/16), not from the documentation. */
+#define WOW_GT_MAXP 32
+static WORD wow32_rawargw(const wow32_frame_t *f, int off)
+{
+    if (off < 0 || off > 0x200) return 0;
+    return wow32_peekw(f->bp + WOW32_OFF_ARGS + off);
+}
+static DWORD wow32_rawargd(const wow32_frame_t *f, int off)
+{
+    return (DWORD)wow32_rawargw(f, off) | ((DWORD)wow32_rawargw(f, off + 2) << 16);
+}
+/* A protected-mode 16:16 far pointer -> the host address it names (0 for NULL). */
+static DWORD wow32_flat(const wow32_frame_t *f, DWORD fp)
+{
+    WORD sel = (WORD)(fp >> 16);
+    DWORD base;
+    if (!sel || !f->sel2lin) return 0;
+    base = f->sel2lin(sel, f->ctx);
+    return base ? base + (fp & 0xFFFF) : 0;
+}
+/* Call a 32-bit function with n DWORDs, a[0] first. ESP is restored by hand, so a
+   STDCALL target (which pops) and a CDECL one (which does not) both come back
+   with the stack where it was. */
+static DWORD wow_gt_invoke(DWORD fn, const DWORD *a, int n)
+{
+    DWORD r;
+    __asm__ __volatile__ (
+        "movl %%esp, %%edi\n\t"
+        "movl %3, %%ecx\n\t"
+        "1:\n\t"
+        "testl %%ecx, %%ecx\n\t"
+        "jz 2f\n\t"
+        "pushl -4(%2,%%ecx,4)\n\t"
+        "decl %%ecx\n\t"
+        "jmp 1b\n\t"
+        "2:\n\t"
+        "call *%1\n\t"
+        "movl %%edi, %%esp\n\t"
+        : "=&a"(r)
+        : "b"(fn), "S"(a), "d"(n)
+        : "ecx", "edi", "memory", "cc");
+    return r;
+}
+
 static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 {
     /* ★ NOT OUR ID SPACE, NOT OUR ANSWER. See `krnl` in wow32_frame_t. */
@@ -749,6 +811,75 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          reach once it puts a descriptor over it -- which is the next thing it
          does. Handing back a plausible-looking number would fail later, further
          from the cause. */
+    /* ── 0x9a LoadLibraryEx32W(lpszLibFile, hFile, dwFlags) = 12, reversed. */
+    case WOW32_LOADLIBRARYEX32W: {
+        char  path[MAX_PATH];
+        DWORD fl = wow32_argd(f, 0);
+        HMODULE h = NULL;
+        if (wow32_argstr(f, 8, path, (int)sizeof path) && path[0])
+            h = LoadLibraryExA(path, NULL, fl);
+        wow32_setret(f, (DWORD)(ULONG_PTR)h);
+        return 1;
+    }
+    /* ── 0x8c FreeLibrary32W(hInst32) = 4. */
+    case WOW32_FREELIBRARY32W: {
+        DWORD h = wow32_argd(f, 0);
+        wow32_setret(f, h ? (FreeLibrary((HMODULE)(ULONG_PTR)h) ? 1 : 0) : 0);
+        return 1;
+    }
+    /* ── 0x8d GetProcAddress32W(hInst32, lpszProc) = 8: +0 the name (a null
+         selector = an ordinal in the offset), +4 the module. */
+    case WOW32_GETPROCADDRESS32W: {
+        DWORD h  = wow32_argd(f, 4);
+        DWORD np = wow32_argd(f, 0);
+        char  nm[256];
+        FARPROC p = NULL;
+        if (h) {
+            if (!(np >> 16)) p = GetProcAddress((HMODULE)(ULONG_PTR)h,
+                                                (LPCSTR)(ULONG_PTR)(np & 0xFFFF));
+            else if (wow32_argstr(f, 0, nm, (int)sizeof nm))
+                p = GetProcAddress((HMODULE)(ULONG_PTR)h, nm);
+        }
+        wow32_setret(f, (DWORD)(ULONG_PTR)p);
+        return 1;
+    }
+    /* ── 0x1a GetVDMPointer32W(lpAddress, fMode) = 6: +0 fMode (1 = protected
+         mode, 0 = real mode), +2 the 16:16 address. Real-mode memory sits at
+         linear 0 of this process, as in NTVDM. */
+    case WOW32_GETVDMPOINTER32W: {
+        WORD  mode = wow32_argw(f, 0);
+        DWORD fp   = wow32_argd(f, 2);
+        DWORD r;
+        if (mode) r = wow32_flat(f, fp);
+        else      r = ((fp >> 16) << 4) + (fp & 0xFFFF);
+        wow32_setret(f, r);
+        return 1;
+    }
+    /* ── 0x1c CallProc32W / _CallProcEx32W. See the frame note above wow32_call. */
+    case WOW32_CALLPROCEX32W: {
+        DWORD cp   = wow32_rawargd(f, 6);
+        DWORD mask = wow32_rawargd(f, 10);
+        DWORD fn   = wow32_rawargd(f, 14);
+        int   ex   = (cp & 0x40000000u) != 0;      /* krnl386's own mark: 518 */
+        int   n    = (int)(cp & 0xFFFF);
+        DWORD a[WOW_GT_MAXP];
+        int   i;
+        if (!fn || n < 0 || n > WOW_GT_MAXP) { wow32_setret(f, 0); return 1; }
+        for (i = 0; i < n; ++i) {
+            /* a[i] = parameter i+1. Pascal: p(i+1) sits (n-1-i) DWORDs above +18. */
+            int   slot = ex ? i : (n - 1 - i);
+            DWORD v    = wow32_rawargd(f, 18 + 4 * slot);
+            /* MASK, MEASURED (w_gthunk vs stock): bit 0 = the LAST parameter for
+               CallProc32W and the FIRST for _CallProcEx32W -- i.e. bit 0 is always
+               the parameter nearest the top of the 16-bit stack. */
+            int   bit  = ex ? i : n - 1 - i;
+            if (mask & (1u << bit)) v = wow32_flat(f, v);
+            a[i] = v;
+        }
+        wow32_setret(f, wow_gt_invoke(fn, a, n));
+        return 1;
+    }
+
     case WOW32_VIRTUALALLOC: {
         DWORD addr  = wow32_argd(f, 12);
         DWORD size  = wow32_argd(f, 8);
