@@ -30,6 +30,17 @@ static void fake_rtc(void *ctx, struct vdd_rtc *out)
     out->hour = 14; out->min = 7;   out->sec = 42; out->dow = 4;   /* 2026-09-23 was a Wednesday */
 }
 
+/* GH #261: the host's side of a clock write, recorded rather than applied. */
+static struct vdd_rtc g_set[4];
+static int g_set_what[4], g_nset;
+static int fake_set(void *ctx, const struct vdd_rtc *in, int what)
+{
+    (void)ctx;
+    if (g_nset < 4) { g_set[g_nset] = *in; g_set_what[g_nset] = what; }
+    g_nset++;
+    return 1;
+}
+
 static uint8_t g_flat[0x1000];
 static int g_irq8;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 8) g_irq8++; }
@@ -291,6 +302,56 @@ int main(void)
         for (i = 0x10; i <= 0x2D; ++i) sum += rd(&bus, (uint8_t)i);
         CHECK(rd(&bus, 0x2E) == ((sum >> 8) & 0xFF) && rd(&bus, 0x2F) == (sum & 0xFF),
               "cmos: the checksum at 2Eh/2Fh covers 10h-2Dh");
+    }
+
+    /* ── GH #261: WRITING THE CLOCK, with the host hook present. ──────────────
+         Without it (every check above) a clock write is refused. With it: a write
+         outside SET goes to the host at once; with SET held, reads are frozen,
+         writes collect, and releasing SET commits date then time in one step. */
+    {
+        vdd_cmos_reset(&cm); cm.rtc_now = fake_rtc; cm.rtc_set = fake_set; g_nset = 0;
+        wr(&bus, CMOS_HOUR, 0x09);
+        CHECK(g_nset == 1 && g_set_what[0] == 0 && g_set[0].hour == 9
+              && g_set[0].min == 7 && g_set[0].sec == 42,
+              "clock write: hours 0x09 BCD -> host time 09:07:42, outside SET");
+        wr(&bus, CMOS_DOW, 0x02);
+        CHECK(g_nset == 1, "clock write: the day of week stays refused");
+
+        g_nset = 0;
+        wr(&bus, CMOS_STATUS_B, 0x92);          /* SET + UIE + 24h */
+        CHECK(rd(&bus, CMOS_STATUS_B) == 0x82, "SET: going high clears UIE (datasheet)");
+        wr(&bus, CMOS_HOUR, 0x12); wr(&bus, CMOS_MIN, 0x34); wr(&bus, CMOS_SEC, 0x56);
+        CHECK(g_nset == 0, "SET held: writes are not committed yet");
+        CHECK(rd(&bus, CMOS_HOUR) == 0x12 && rd(&bus, CMOS_MIN) == 0x34
+              && rd(&bus, CMOS_SEC) == 0x56, "SET held: reads show the frozen, written copy");
+        wr(&bus, CMOS_DOM, 0x15); wr(&bus, CMOS_MONTH, 0x06);
+        wr(&bus, CMOS_YEAR, 0x99); wr(&bus, CMOS_CENTURY, 0x19);
+        wr(&bus, CMOS_STATUS_B, 0x02);
+        CHECK(g_nset == 2 && g_set_what[0] == 1 && g_set_what[1] == 0,
+              "SET released: one date commit, then one time commit");
+        CHECK(g_set[0].cent == 19 && g_set[0].year == 99 && g_set[0].month == 6
+              && g_set[0].day == 15 && g_set[1].hour == 12 && g_set[1].min == 34
+              && g_set[1].sec == 56, "SET released: 1999-06-15 12:34:56 committed");
+        CHECK(rd(&bus, CMOS_HOUR) == 0x14, "SET released: reads follow the host clock again");
+
+        g_nset = 0;
+        wr(&bus, CMOS_STATUS_B, 0x06);          /* binary, 24h */
+        wr(&bus, CMOS_MIN, 45);
+        CHECK(g_nset == 1 && g_set[0].min == 45, "DM binary: 45 is forty-five, not 0x45");
+        g_nset = 0;
+        wr(&bus, CMOS_STATUS_B, 0x00);          /* BCD, 12-hour */
+        wr(&bus, CMOS_HOUR, 0x83);
+        CHECK(g_nset == 1 && g_set[0].hour == 15, "12-hour: 0x83 is 3 PM = 15:00");
+        g_nset = 0;
+        wr(&bus, CMOS_HOUR, 0x92);
+        CHECK(g_nset == 1 && g_set[0].hour == 12, "12-hour: 0x92 is 12 PM = noon");
+        g_nset = 0;
+        wr(&bus, CMOS_HOUR, 0x12);
+        CHECK(g_nset == 1 && g_set[0].hour == 0, "12-hour: 0x12 is 12 AM = midnight");
+        vdd_cmos_reset(&cm);
+        CHECK(cm.rtc_set == fake_set && cm.rtc_now == fake_rtc,
+              "reset keeps both host hooks");
+        cm.rtc_set = 0;
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

@@ -29626,6 +29626,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          oracles before this device existed. */
     g_cmos.rtc_now = host_rtc_now;
     g_cmos.rtc_ctx = NULL;
+    g_cmos.rtc_set = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────

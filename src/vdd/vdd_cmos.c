@@ -12,6 +12,21 @@ static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) % 10) * 16 + (v % 10
 static uint8_t clkval(const cmos_state *st, unsigned v)
 { return (st->status_b & 0x04) ? (uint8_t)v : bcd(v); }
 
+/* The other direction: a byte the guest wrote, in the base DM says it is in. */
+static unsigned clkdec(const cmos_state *st, uint8_t v)
+{ return (st->status_b & 0x04) ? v : (unsigned)(v >> 4) * 10u + (v & 0x0Fu); }
+
+/* The clock as the chip shows it now: the frozen copy while SET is held. */
+static int cmos_reading(cmos_state *st, struct vdd_rtc *n)
+{
+    if (st->set_held) { *n = st->shadow; return 1; }
+    if (!st->rtc_now) return 0;
+    n->cent = 20; n->year = 0; n->month = 1; n->day = 1;
+    n->hour = 0;  n->min = 0;  n->sec = 0;  n->dow = 0;
+    st->rtc_now(st->rtc_ctx, n);
+    return 1;
+}
+
 /* ── THE PERIODIC RATE, FROM STATUS A BITS 3:0. (docs/ref/rtc.md 2) ──────────
      0 selects none. 1 and 2 are special cases at 256 Hz and 128 Hz; from 3 up
      the rate is 32768 >> (RS - 1), so RS=3 is 8192 Hz, RS=6 is 1024 Hz (what a
@@ -40,6 +55,7 @@ static int alarm_field_matches(uint8_t alarm, uint8_t now)
 static int cmos_second_edge(cmos_state *st)
 {
     int fired = 0;
+    if (st->set_held) return 0;                 /* SET: updates are inhibited  */
     if (st->status_b & 0x10) {                  /* UIE: update ended           */
         st->status_c |= 0x10; st->uf_raised++; fired = 1;
     }
@@ -105,10 +121,7 @@ void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
 static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out)
 {
     struct vdd_rtc n;
-    if (!st->rtc_now) return 0;
-    n.cent = 20; n.year = 0; n.month = 1; n.day = 1;
-    n.hour = 0;  n.min = 0;  n.sec = 0;  n.dow = 0;
-    st->rtc_now(st->rtc_ctx, &n);
+    if (!cmos_reading(st, &n)) return 0;
     switch (reg) {
     case CMOS_SEC:     *out = clkval(st, n.sec);   return 1;
     case CMOS_MIN:     *out = clkval(st, n.min);   return 1;
@@ -194,20 +207,10 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         st->index = (uint8_t)(b & 0x7F);
         return;
     }
-    /* Port 0x71 write. The clock registers and the status registers are derived
-       or read-only here; everything else is battery-backed RAM and takes it.
-       ⚠ WE DO NOT YET LET A GUEST SET THE CLOCK THROUGH THESE PORTS. The reason
-         given here was "it would have to move the HOST's clock" -- and that is no
-         longer the only way: since GH #250 the VDM has its own clock, an offset
-         from the host's (src/dos/dos_clock.h), which INT 21h 2Bh/2Dh and INT 1Ah
-         03h/05h now set. The register path is not wired to it yet (#261: Status
-         B's SET bit and the DM bit want a probe first), so a write here is still
-         dropped rather than accepted and ignored. */
-    /* ⚠ THE CLOCK STAYS REFUSED HERE (#261) -- accepting the write while changing
-         nothing would be the "runs but lies" shape. THE CONTROL
-         REGISTERS ARE A DIFFERENT MATTER: PIE, the rate select and the data-mode
-         bits are the guest's to set, and refusing them is what made the periodic
-         interrupt unreachable. */
+    /* Port 0x71 write. The clock registers move the VDM's own RTC (GH #261, below
+       -- an offset from the host's, src/dos/dos_clock.h; the machine's clock never
+       moves); the status registers are the guest's control bits or read-only;
+       everything else is battery-backed RAM and takes it. */
     if (st->index == CMOS_STATUS_A) {
         /* Bit 7 is UIP and is READ-ONLY -- it is the chip telling software when
            it may read, not software telling the chip anything. */
@@ -215,6 +218,21 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         return;
     }
     if (st->index == CMOS_STATUS_B) {
+        /* ── GH #261: SET (bit 7). Going high freezes a copy of the clock and,
+             per the MC146818 datasheet, CLEARS UIE -- no update-ended interrupt
+             for a clock that is not updating. Going low commits the copy: the
+             date, then the time, through the same hook INT 1Ah AH=05h/03h use. */
+        if ((b & 0x80) && !st->set_held) {
+            struct vdd_rtc n;
+            if (cmos_reading(st, &n)) { st->shadow = n; st->set_held = 1; }
+            b = (uint8_t)(b & ~0x10);
+        } else if (!(b & 0x80) && st->set_held) {
+            st->set_held = 0;
+            if (st->rtc_set) {
+                st->rtc_set(st->rtc_ctx, &st->shadow, 1);
+                st->rtc_set(st->rtc_ctx, &st->shadow, 0);
+            }
+        }
         st->status_b = b;
         /* Disabling the periodic interrupt drops any part-accumulated tick, so
            re-enabling it starts from now rather than firing immediately. */
@@ -233,7 +251,37 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         st->ram[st->index] = b;
         return;
     }
-    if (st->index <= CMOS_STATUS_D) return;     /* clock + Status C/D: read-only */
+    /* ── ★ GH #261: THE CLOCK ITSELF. With a host hook (rtc_set) a write moves
+         the VDM's RTC -- frozen copy while SET is held, committed at once when
+         it is not. The byte is decoded in the base DM selects, and the hours
+         register in the mode bit 1 selects (12-hour: bit 7 is PM).
+       ⚠ THE DAY OF WEEK (06h) STAYS REFUSED: the VDM's weekday is derived from
+         its date, and a free-running counter the guest can set to anything has
+         no place in an offset. Without the hook every clock write is refused. */
+    if (st->index == CMOS_SEC || st->index == CMOS_MIN || st->index == CMOS_HOUR ||
+        st->index == CMOS_DOM || st->index == CMOS_MONTH || st->index == CMOS_YEAR ||
+        st->index == CMOS_CENTURY) {
+        struct vdd_rtc n;
+        int date = st->index >= CMOS_DOM;
+        if (!st->rtc_set || !cmos_reading(st, &n)) return;
+        switch (st->index) {
+        case CMOS_SEC:   n.sec = clkdec(st, b); break;
+        case CMOS_MIN:   n.min = clkdec(st, b); break;
+        case CMOS_HOUR:
+            if (st->status_b & 0x02) n.hour = clkdec(st, b);
+            else { unsigned h = clkdec(st, (uint8_t)(b & 0x7F)) % 12u;
+                   n.hour = h + ((b & 0x80) ? 12u : 0u); }
+            break;
+        case CMOS_DOM:   n.day   = clkdec(st, b); break;
+        case CMOS_MONTH: n.month = clkdec(st, b); break;
+        case CMOS_YEAR:  n.year  = clkdec(st, b); break;
+        default:         n.cent  = clkdec(st, b); break;
+        }
+        if (st->set_held) st->shadow = n;
+        else st->rtc_set(st->rtc_ctx, &n, date);
+        return;
+    }
+    if (st->index <= CMOS_STATUS_D) return;     /* DOW + Status C/D: read-only */
     st->ram[st->index & 0x7F] = b;
 }
 
@@ -253,10 +301,11 @@ void vdd_cmos_reset(void *self)
     cmos_state *st = (cmos_state *)self;
     vdd_bus *bus = st->bus;
     void (*now)(void *, struct vdd_rtc *) = st->rtc_now;
+    int  (*set)(void *, const struct vdd_rtc *, int) = st->rtc_set;
     void *ctx = st->rtc_ctx;
     unsigned i;
     for (i = 0; i < sizeof(*st); ++i) ((uint8_t *)st)[i] = 0;
-    st->bus = bus; st->rtc_now = now; st->rtc_ctx = ctx;
+    st->bus = bus; st->rtc_now = now; st->rtc_set = set; st->rtc_ctx = ctx;
     /* ── WHAT POST LEAVES IN THE CMOS. (docs/ref/rtc.md 3) ───────────────────
          These are BIOS conventions, not chip behaviour, and they are here
          because a machine DOS is running on has been through POST -- the same

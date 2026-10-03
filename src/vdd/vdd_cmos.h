@@ -90,6 +90,18 @@ typedef struct cmos_state {
        what the off-VM battery uses to pin exact values. */
     void   (*rtc_now)(void *ctx, struct vdd_rtc *out);
     void    *rtc_ctx;
+    /* ── GH #261: AND THE OTHER DIRECTION -- a guest writing the clock registers.
+         The same hook INT 1Ah AH=03h/05h uses (vdd_pit.h): what=0 hour/min/sec,
+         what=1 cent/year/month/day, binary; it moves the VDM's RTC offset, never
+         the machine's clock. NULL = refused, as before -- which is what the off-VM
+         battery's refusal checks still pin. Shares rtc_ctx. */
+    int    (*rtc_set)(void *ctx, const struct vdd_rtc *in, int what);
+    /* Status B's SET bit (7): while it is held the chip does not update, and a
+       program writes the time a field at a time without the clock carrying in
+       between. Modelled as a FROZEN COPY taken when SET goes high: reads come from
+       it, writes go into it, and SET going low commits it in one step. */
+    uint8_t  set_held;
+    struct vdd_rtc shadow;
 } cmos_state;
 
 /* Advance the periodic divider by `clocks` PIT-input-rate clocks and raise IRQ8
