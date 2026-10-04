@@ -672,7 +672,47 @@ typedef struct video_state {
        first retrace start after vint_arm_t; cleared by writing CR11 bit 4 = 0. */
     uint8_t  vint_armed, vint_pend;
     uint64_t vint_arm_t;
+    /* ── #266: THE GRAPHICS FONT VECTORS AND THE CGA COLOUR SELECT. ──────────────────
+         i43_* is what INT 43h holds (the graphics-mode character table) and i1f_* what
+         INT 1Fh holds (the 8x8 table's upper half, characters 80h-FFh): the mode set and
+         INT 10h AH=11h AL=20h-24h set them, AH=11h AL=30h BH=0/1 answers with them, and
+         the IVT is written to agree whenever they change (vid_set_vec). `gfont_user` /
+         `g1f_user` are set when the CALLER supplied the table (AL=21h / 20h): the glyph
+         services then draw from guest memory at that pointer instead of our ROM copy --
+         exactly the table the vector names, which for the ROM case is the same bytes.
+         `cga_sel` shadows 0040:0066 (the CGA colour-select byte AH=0Bh maintains) for a
+         run with no BDA wired (the off-VM battery); with a BDA the byte itself is read. */
+    uint16_t i43_seg, i43_off, i1f_seg, i1f_off;
+    uint8_t  gfont_user, g1f_user;
+    uint8_t  cga_sel;
+    /* SR1 bit 5 "screen off" was in force for the frame last composed (#266): the
+       frame went out black, and frame_touch must not re-arm a raster split over it. */
+    uint8_t  blanked;
 } video_state;
+
+/* ── #266: THE PURE HALVES OF INT 10h AH=0Bh AND AH=11h AL=21h-24h, for video_test.c. ──
+     vdd_cga_colour_select   the new 0040:0066 byte: BH=0 replaces bits 0-4 with BL's
+                             (background/border colour + bit 4 = intensity), BH=1 bit 5
+                             with BL bit 0 (palette 0 green/red/brown, 1 cyan/magenta/white).
+     vdd_cga_bg_ar           an IRGB colour from BL as an attribute-controller value in the
+                             CGA-compatible DAC layout the BIOS loads for modes 04h-06h:
+                             BL bit 3 (intensity) becomes bit 4, i.e. 08h-0Fh -> 10h-17h.
+     vdd_cga_pal_ar          AR01-AR03 for modes 04h/05h from the 0066 byte: 2/4/6 or 3/5/7,
+                             plus 10h when bit 4 (intensity) is set. With the mode set's
+                             0066 = 30h that is 13h/15h/17h -- the MEASURED mode 04h table.
+     vdd_gfx_font_rows       AH=11h AL=21h-24h BL: 0 = DL rows, 1 = 14, 2 = 25, 3 = 43, and
+                             anything else 25 (SeaVGABIOS's default arm; IBM unmeasured). */
+uint8_t vdd_cga_colour_select(uint8_t cur66, uint8_t bh, uint8_t bl);
+uint8_t vdd_cga_bg_ar(uint8_t bl);
+void    vdd_cga_pal_ar(uint8_t sel66, uint8_t ar123[3]);
+uint8_t vdd_gfx_font_rows(uint8_t bl, uint8_t dl);
+/* ── #266: ONE 64-BYTE VIDEO PARAMETER TABLE ENTRY, IN THE IBM VGA BIOS's LAYOUT. ──
+     00 columns, 01 rows-1, 02 character height, 03 page (regen) size word, 05 SR1-SR4,
+     09 Misc Output, 0A CR00-CR18, 23 AR00-AR13, 37 GR0-GR8. `idx` is the TABLE index
+     (0-1Ch: 04h-07h, 0Dh/0Eh, 11h = 0Fh, 12h = 10h, 17h = 0+/1+, 18h = 2+/3+, 19h = 7+,
+     1Ah-1Ch = 11h-13h), not a mode number. Returns 1 when filled from the measured mode
+     table, 0 when the entry is left zero (a mode nobody measured, or a reserved slot). */
+int     vdd_video_param_entry(uint8_t idx, uint8_t out[64]);
 
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
 #define VID_UNIMPL_GET(bm, n)  (((bm)[((n) & 0xFF) >> 3] >> ((n) & 7)) & 1u)
@@ -773,6 +813,17 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
 /* #273: the real-mode WinFuncPtr stub (vbe_rm.asm, 34 bytes) in the same 256 bytes, after
    the 186-byte block: B260:00C0. vbe_pm_install writes both. */
 #define VDD_VBERM_OFF    0x00C0
+/* #266: the VGA BIOS's pointer tables, after the VBE block and for the same reason --
+   B270:0000 the Video Save Pointer table (0040:00A8 points here; 7 far pointers),
+   B270:0020 the secondary save pointer table (VGA, 1Ah bytes), B270:0040 the display
+   combination code table (36 bytes), B270:0080 the 29 x 64-byte video parameter table.
+   Ends at B2EC0. vdd_video_install_fonts writes them and the 0040:00A8 pointer. */
+#define VDD_VIDTAB_SEG   0xB270
+#define VDD_SAVEPTR_OFF  0x0000
+#define VDD_SAVEPTR2_OFF 0x0020
+#define VDD_DCC_OFF      0x0040
+#define VDD_VPARAM_OFF   0x0080
+#define VDD_VPARAM_N     29
 
 /* `int10_11_calls` is counted so the next round is not another guess: the font-pointer fix
    assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.

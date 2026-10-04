@@ -1905,6 +1905,170 @@ int main(void)
         I10(0x1200, 0x0034, 0, 0);
         I10(0x1203, 0x0036, 0, 0);
         CHECK((rr.eax & 0xFF) == 0x00, "#252 12h BL=36h AL=3: out of range, refused");
+
+        /* ── T#266: INT 10h AFTER #252's REMAINDERS. ─────────────────────────────────
+             The pure arithmetic first: the CGA colour-select byte and what it becomes in
+             the attribute controller. The anchor is the MEASURED mode 04h table: from
+             the mode set's own 0066 = 30h the arithmetic must give AR01-03 = 13h/15h/17h
+             (vga_modedefs.h, PCem's IBM ROM) -- or the formula is wrong, not the card. */
+        { uint8_t a[3];
+          vdd_cga_pal_ar(0x30, a);
+          CHECK(a[0] == 0x13 && a[1] == 0x15 && a[2] == 0x17,
+                "#266 0Bh: 0066=30h (palette 1, intensity) -> AR01-03 13/15/17 = the measured mode 04h table");
+          vdd_cga_pal_ar(0x10, a);
+          CHECK(a[0] == 0x12 && a[1] == 0x14 && a[2] == 0x16, "#266 0Bh: palette 0 + intensity -> 12/14/16 (light green/red/yellow)");
+          vdd_cga_pal_ar(0x20, a);
+          CHECK(a[0] == 0x03 && a[1] == 0x05 && a[2] == 0x07, "#266 0Bh: palette 1, no intensity -> 03/05/07 (cyan/magenta/white)");
+          vdd_cga_pal_ar(0x00, a);
+          CHECK(a[0] == 0x02 && a[1] == 0x04 && a[2] == 0x06, "#266 0Bh: palette 0, no intensity -> 02/04/06 (green/red/brown)"); }
+        CHECK(vdd_cga_bg_ar(0x04) == 0x04 && vdd_cga_bg_ar(0x0C) == 0x14 && vdd_cga_bg_ar(0x1F) == 0x17,
+              "#266 0Bh: BL IRGB -> AC value, intensity (bit 3) to bit 4: 04->04, 0C->14, 1F->17");
+        CHECK(vdd_cga_colour_select(0x30, 0, 0x1C) == 0x3C && vdd_cga_colour_select(0x3C, 1, 0x00) == 0x1C
+              && vdd_cga_colour_select(0x1C, 1, 0xFF) == 0x3C,
+              "#266 0Bh: 0066 -- BH=0 replaces bits 0-4, BH=1 only bit 5 (from BL bit 0)");
+        CHECK(vdd_gfx_font_rows(0, 30) == 30 && vdd_gfx_font_rows(1, 0) == 14 && vdd_gfx_font_rows(2, 0) == 25
+              && vdd_gfx_font_rows(3, 0) == 43 && vdd_gfx_font_rows(7, 9) == 25,
+              "#266 11h/2xh: BL rows -- 0 = DL, 1 = 14, 2 = 25, 3 = 43, other = 25");
+
+        /* ...and through INT 10h, in mode 04h, read back the way a guest does (3C0/3C1). */
+        I10(0x0004, 0, 0, 0);
+        CHECK(tb[0x66] == 0x30 && vid.vpal[1] == 0x13 && vid.vpal[3] == 0x17, "#266 04h: mode set leaves 0066=30h, AR01/03 13h/17h");
+        I10(0x0B00, 0x0100, 0, 0);
+        CHECK(vid.vpal[1] == 0x12 && vid.vpal[2] == 0x14 && vid.vpal[3] == 0x16 && tb[0x66] == 0x10,
+              "#266 04h: 0Bh BH=1 BL=0 -> palette 0 (12/14/16), intensity kept, 0066=10h");
+        I10(0x0B00, 0x0004, 0, 0);
+        { uint32_t rv; v = 0x00; vdd_bus_io(&bus, 0x3DA, 1, 1, &rv); vdd_bus_io(&bus, 0x3C0, 1, 0, &v);
+          rv = 0; vdd_bus_io(&bus, 0x3C1, 1, 1, &rv);
+          CHECK(rv == 0x04 && vid.vpal[16] == 0x04 && tb[0x66] == 0x04
+                && vid.vpal[1] == 0x02 && vid.vpal[2] == 0x04 && vid.vpal[3] == 0x06,
+                "#266 04h: 0Bh BH=0 BL=04h -> AR00 = AR11 = 04h (read back at 3C1), BL bit 4 clear drops the intensity");
+          v = 0x11; vdd_bus_io(&bus, 0x3DA, 1, 1, &rv); vdd_bus_io(&bus, 0x3C0, 1, 0, &v);
+          rv = 0; vdd_bus_io(&bus, 0x3C1, 1, 1, &rv);
+          CHECK(rv == 0x04, "#266 04h: ...AR11 (border) reads 04h too -- 0Bh used to write a shadow nothing read"); }
+        /* The renderer: a pixel's value is the AC index -- pixel 0 shows the background. */
+        memset(g_vmem + VID_TEXT_OFF, 0, 0x4000);
+        g_vmem[VID_TEXT_OFF] = 0x1B;                       /* pixels 0,1,2,3 */
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.fb[0] == 0 && vid.fb[1] == 1 && vid.fb[2] == 2 && vid.fb[3] == 3
+              && vid.frame.palette[0] == vid.dac[0x04] && vid.frame.palette[1] == vid.dac[0x02],
+              "#266 04h: render_cga emits the 2-bit value; colour 0 = DAC[AR00] = the background just set");
+        I10(0x0B00, 0x0101, 0, 0);
+        CHECK(vid.vpal[1] == 0x03 && vid.vpal[3] == 0x07 && tb[0x66] == 0x24 && vid.frame.palette[0] == vid.dac[0x04],
+              "#266 04h: 0Bh BH=1 BL=1 -> palette 1 without intensity (03/05/07), background kept");
+        I10(0x0B00, 0x0200, 0, 0);
+        CHECK(vid.vpal[1] == 0x03 && tb[0x66] == 0x24, "#266 0Bh: BH=2 is not a function -- nothing moves");
+        /* mode 06h: BH=0 is the foreground (AR01), the background stays black */
+        I10(0x0006, 0, 0, 0);
+        I10(0x0B00, 0x0004, 0, 0);
+        CHECK(vid.vpal[1] == 0x04 && vid.vpal[0] == 0x00 && vid.vpal[16] == 0x04 && tb[0x66] == 0x24,
+              "#266 06h: 0Bh BH=0 BL=04h -> AR01 (foreground) = 04h, AR00 stays 00h, border 04h");
+        /* text: the border only */
+        I10(0x0003, 0, 0, 0);
+        I10(0x0B00, 0x0001, 0, 0);
+        CHECK(vid.vpal[16] == 0x01 && vid.vpal[0] == 0x00 && tb[0x66] == 0x21,
+              "#266 03h: 0Bh BH=0 -> the border (AR11) only; AR00 is text colour 0 and is left alone");
+
+        /* AH=04h: no light pen on a VGA -- AH=00h, the rest untouched */
+        I10(0x0400, 0xB1B1, 0xC1C1, 0xD1D1);
+        CHECK((rr.eax & 0xFF00) == 0 && (rr.ebx & 0xFFFF) == 0xB1B1 && (rr.edx & 0xFFFF) == 0xD1D1,
+              "#266 04h: light pen -> AH=00h (not triggered); BX/DX untouched");
+
+        /* AH=11h AL=03h: SR3 gets BL, and a loaded user font is NOT dropped */
+        { static uint8_t uf[16]; int i; for (i = 0; i < 16; ++i) uf[i] = 0xAA;
+          memcpy(g_flat + 0x40000, uf, 16);
+          memset(&rr, 0, sizeof rr); rr.eax = 0x1100; rr.ebx = 0x1000; rr.ecx = 1; rr.edx = 'Z';
+          rr.es = 0x4000; rr.ebp = 0; vdd_bus_deliver_int(&bus, 0x10, &rr); }
+        CHECK(vid.user_font_on == 1, "#266 11h/00h: a user font is loaded (setup)");
+        I10(0x1103, 0x0005, 0, 0);
+        { uint32_t rv; v = 0x03; vdd_bus_io(&bus, 0x3C4, 1, 0, &v); rv = 0; vdd_bus_io(&bus, 0x3C5, 1, 1, &rv);
+          CHECK(rv == 0x05 && vid.user_font_on == 1,
+                "#266 11h/03h: SR3 = BL (05h) and the user font survives (it used to reload the ROM 8x16)"); }
+        I10(0x1103, 0x0000, 0, 0);
+
+        /* AH=11h AL=22h-24h in mode 12h: INT 43h, rows, height -- and the BDA follows */
+        { const uint8_t *ivt = g_flat;
+#define VEC(n) ((uint32_t)(ivt[(n)*4] | (ivt[(n)*4+1] << 8)) | ((uint32_t)(ivt[(n)*4+2] | (ivt[(n)*4+3] << 8)) << 16))
+          I10(0x0012, 0, 0, 0);
+          CHECK(VEC(0x43) == ((uint32_t)VDD_FONT8X16_SEG << 16), "#266 12h: the mode set points INT 43h at the 8x16 table");
+          I10(0x1122, 0x0001, 0, 0);
+          CHECK(VEC(0x43) == ((uint32_t)VDD_FONT8X14_SEG << 16) && tb[0x84] == 13 && tb[0x85] == 14,
+                "#266 11h/22h BL=1: INT 43h = 8x14, 0040:0084 = 13 (14 rows), 0085 = 14");
+          I10(0x1123, 0x0002, 0, 0xD1D1);
+          CHECK(VEC(0x43) == ((uint32_t)VDD_FONT8X8_SEG << 16) && tb[0x84] == 24 && tb[0x85] == 8
+                && (rr.edx & 0xFFFF) == 0xD1D1,
+                "#266 11h/23h BL=2: 8x8, 25 rows; DX left as it came (no longer overwritten)");
+          I10(0x1124, 0x0003, 0, 0);
+          CHECK(tb[0x84] == 42 && tb[0x85] == 16, "#266 11h/24h BL=3: 8x16, 43 rows");
+          I10(0x1123, 0x0000, 0, 0x001E);
+          CHECK(tb[0x84] == 29 && tb[0x85] == 8, "#266 11h/23h BL=0 DL=30: 30 rows from DL");
+          /* 21h: the caller's font, drawn from where INT 43h points */
+          { int i; for (i = 0; i < 256 * 10; ++i) g_flat[0x50000 + i] = 0; for (i = 0; i < 10; ++i) g_flat[0x50000 + 'Q' * 10 + i] = 0x81; }
+          memset(&rr, 0, sizeof rr); rr.eax = 0x1121; rr.ebx = 0x0000; rr.ecx = 10; rr.edx = 48;
+          rr.es = 0x5000; rr.ebp = 0; vdd_bus_deliver_int(&bus, 0x10, &rr);
+          CHECK(VEC(0x43) == 0x50000000u && tb[0x84] == 47 && tb[0x85] == 10 && vid.gfont_user,
+                "#266 11h/21h: INT 43h = ES:BP, 48 rows (DL), height CX = 10");
+          memset(&rr, 0, sizeof rr); rr.eax = 0x1130; rr.ebx = 0x0100; vdd_bus_deliver_int(&bus, 0x10, &rr);
+          CHECK(rr.es == 0x5000 && (rr.ebp & 0xFFFF) == 0 && (rr.ecx & 0xFFFF) == 10,
+                "#266 11h/30h BH=1 answers with the caller's font (= INT 43h), CX = 10");
+          I10(0x0200, 0, 0, 0x0001);
+          I10(0x0951, 0x000F, 1, 0);
+          { int ok2 = 1; for (y = 0; y < 10; ++y) if (vid.plane[0][y * 80 + 1] != 0x81) ok2 = 0;
+            CHECK(ok2 && vid.plane[0][10 * 80 + 1] == 0, "#266 12h: AH=09h draws 'Q' from the caller's 10-line table at INT 43h"); }
+          /* 20h: INT 1Fh */
+          memset(&rr, 0, sizeof rr); rr.eax = 0x1120; rr.es = 0x5100; rr.ebp = 0x0010; vdd_bus_deliver_int(&bus, 0x10, &rr);
+          CHECK(VEC(0x1F) == 0x51000010u, "#266 11h/20h: INT 1Fh = ES:BP");
+          memset(&rr, 0, sizeof rr); rr.eax = 0x1130; rr.ebx = 0x0000; vdd_bus_deliver_int(&bus, 0x10, &rr);
+          CHECK(rr.es == 0x5100 && (rr.ebp & 0xFFFF) == 0x0010, "#266 11h/30h BH=0 answers with INT 1Fh");
+          I10(0x0003, 0, 0, 0);
+          CHECK(!vid.gfont_user && VEC(0x43) == ((uint32_t)VDD_FONT8X16_SEG << 16) && VEC(0x1F) == 0x51000010u,
+                "#266: a mode set takes INT 43h back to the ROM; INT 1Fh (a POST vector) is left as set");
+          vdd_video_reset(&vid);   /* INT 1Fh back to ours for the tests after */
+#undef VEC
+        }
+
+        /* 0040:00A8 -> the save pointer table -> the parameter table */
+        vdd_video_install_fonts(&vid);
+        { uint16_t so = (uint16_t)(tb[0xA8] | (tb[0xA9] << 8)), ss = (uint16_t)(tb[0xAA] | (tb[0xAB] << 8));
+          const uint8_t *sp = g_flat + ((uint32_t)ss << 4) + so, *pt, *e3, *e13;
+          uint16_t po = (uint16_t)(sp[0] | (sp[1] << 8)), ps = (uint16_t)(sp[2] | (sp[3] << 8));
+          uint8_t ref[64]; int ok3;
+          pt = g_flat + ((uint32_t)ps << 4) + po;
+          e3 = pt + 0x18 * 64; e13 = pt + 0x1C * 64;
+          CHECK(ss == VDD_VIDTAB_SEG && so == 0 && ps == VDD_VIDTAB_SEG && po == VDD_VPARAM_OFF,
+                "#266 0040:00A8 -> B270:0000, whose first pointer -> the parameter table");
+          CHECK(e3[0] == 80 && e3[1] == 24 && e3[2] == 16 && e3[3] == 0x00 && e3[4] == 0x10
+                && e3[9] == 0x67 && e3[0x0A] == 0x5F && e3[0x0A + 0x13] == 0x28 && e3[0x0A + 0x0A] == 0x0D
+                && e3[0x23 + 6] == 0x14 && e3[0x23 + 0x10] == 0x0C && e3[0x37 + 5] == 0x10 && e3[0x37 + 6] == 0x0E,
+                "#266 param slot 18h (mode 3+): 80 cols, 25 rows, 16 high, 1000h; misc 67h, CR00 5Fh, CR13 28h, AR06 14h, GR6 0Eh");
+          CHECK(e13[0] == 40 && e13[2] == 8 && e13[9] == 0x63 && e13[0x05 + 3] == 0x0E && e13[0x37 + 5] == 0x40,
+                "#266 param slot 1Ch (13h): 40 cols, 8 high, misc 63h, SR4 0Eh (chain-4), GR5 40h");
+          for (ok3 = 1, y = 0; y < 29; ++y) {
+              (void)vdd_video_param_entry((uint8_t)y, ref);
+              if (memcmp(ref, pt + y * 64, 64)) ok3 = 0;
+          }
+          CHECK(ok3 && pt[3 * 64] == 0 && pt[0x11 * 64] == 0,
+                "#266 the table in memory is vdd_video_param_entry's; slot 03h (200-line) and 11h (0Fh) are zero -- unmeasured");
+          CHECK(sp[0x10] == VDD_SAVEPTR2_OFF && sp[0x04] == 0 && g_flat[((uint32_t)VDD_VIDTAB_SEG << 4) + VDD_DCC_OFF] == 16,
+                "#266 save table +10h -> secondary table; dynamic save area 0; DCC table has 16 entries"); }
+
+        /* SR1 bit 5: the picture goes black, and comes back */
+        I10(0x0013, 0, 0, 0);
+        memset(g_vmem, 0x0F, 320 * 200);
+        I10(0x1201, 0x0036, 0, 0);                         /* refresh OFF -> SR1.5 */
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.blanked && vid.frame.stride == 0 && vid.frame.palette[vid.frame.pixels[0]] == 0xFF000000u
+              && vid.frame.w == 320 && vid.frame.h == 200,
+              "#266 SR1.5 (12h BL=36h AL=1): the frame goes out black, geometry kept");
+        I10(0x1200, 0x0036, 0, 0);
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(!vid.blanked && vid.frame.pixels == g_vmem && vid.frame.palette[0x0F] == vid.dac[0x0F],
+              "#266 SR1.5 cleared: the same picture is back, nothing in VRAM was touched");
+        sc_w(&bus, 0x01, 0x21);                             /* a guest's own write */
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.blanked, "#266 SR1.5 written at 3C5h by the guest blanks too");
+        I10(0x0003, 0, 0, 0);
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(!vid.blanked, "#266 a mode set clears SR1.5 (every measured mode's SR1 has bit 5 = 0)");
 #undef I10
         vid.bda = 0;
     }

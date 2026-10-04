@@ -56,9 +56,9 @@ guest setting Mode X writes `0xE3` here. We never see it.
 | Reg | Name | Status | Evidence |
 |---|---|---|---|
 | SR0 | Reset | **MISS** | falls through `seq_set_data` |
-| SR1 | **Clocking Mode** | **MISS** | — |
+| SR1 | **Clocking Mode** | **PART** | bit 5 *Screen Off* blanks the presented frame (#266, `vid_frame`); bits 0/3 (8/9 dot, dot clock ÷2) still not modelled |
 | SR2 | Map Mask | **IMPL** | `seq_set_data`, index 2 |
-| SR3 | **Character Map Select** | **MISS** | — |
+| SR3 | **Character Map Select** | **PART** | stored and read back; INT 10h `1103h` writes it (#266); the renderer draws one font whatever it selects |
 | SR4 | Memory Mode | **PART** | bit 3 (Chain-4) only; bits 1–2 dropped |
 
 **SR1** carries bit 3 *Dot Clock ÷2* (the 320-wide modes), bit 0 *8/9 dot characters*
@@ -164,7 +164,7 @@ discarded and the fade does nothing.
 | **Doom** unchained 13h page flip | SR4.3 ✅, CR17, CR14.6, CR09 | works via the mode-Y snapshot **heuristic** (`vdd_video.h:234`) |
 | **Mode X** 320×240 (open: Mario artefacts) | Misc Out `0xE3`, CR09.7, CR06/07/10/11/12/15/16 | we cannot even tell 320×240 from 320×200 |
 | Smooth horizontal scroll | **AR13**, CR08, AR10.5 | 8-pixel steps only |
-| Fades / redraw hiding | **3C6 Pixel Mask**, SR1.5 Screen Off | writes discarded |
+| Fades / redraw hiding | **3C6 Pixel Mask**, SR1.5 Screen Off | SR1.5 blanks since #266; pixel mask see §1 |
 | Second font / 512-char text | **SR3** | first font always |
 | A guest that relocates its aperture | **GR6.2-3** | writes land outside our window |
 | 360×480, 720-pixel text, tweaked widths | **Misc Out.2-3, SR1.0, CR00–CR05** | invisible |

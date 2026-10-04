@@ -271,7 +271,7 @@ void vdd_video_frame_touch(video_state *st)
     uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line;
     st->frame.palette_base  = st->pal_base;
     st->frame.palette_split = st->pal_split;
-    st->frame.split_row     = st->pal_split_row;
+    st->frame.split_row     = st->blanked ? 0 : st->pal_split_row;   /* SR1.5 (#266) */
     st->frame.split_frame   = st->pal_split_frame;
     st->frame.frame_no = vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
                        ? frame_no : st->pal_frame_no;
@@ -473,11 +473,11 @@ static uint8_t text_rows_for(uint8_t cell_h)
 /* The BIOS page size, 0040:004C -- and (#252) the stride AH=05h moves the CRTC start
    by and the character services address a page at. One function, so the BDA, the
    display and the writes cannot disagree about where page N is. */
-static unsigned vid_page_size(const video_state *st)
+static unsigned mode_page_size(uint8_t mode, uint8_t kind, unsigned cols, unsigned rows)
 {
     unsigned psize;
-    if (st->mkind == VID_KIND_TEXT) {
-        psize = ((unsigned)st->cols * st->rows * 2u + 0xFFu) & ~0xFFu;
+    if (kind == VID_KIND_TEXT) {
+        psize = (cols * rows * 2u + 0xFFu) & ~0xFFu;
         if (psize < 0x800u) psize = 0x800u;
     } else {
         /* ── THE GRAPHICS PAGE SIZE IS PER MODE, and this was a flat 0x2000 for all
@@ -486,7 +486,7 @@ static unsigned vid_page_size(const video_state *st)
              its offset lands inside the previous page. 06h/12h/13h are the
              oracle-verified rows (p_video.asm); the rest are the standard VGA BIOS
              table and are marked unverified in docs/inventory/video-bios.md. */
-        switch (st->mode) {
+        switch (mode) {
         case 0x04: case 0x05: case 0x06: psize = 0x4000u; break;  /* 06h verified   */
         case 0x0D:                       psize = 0x2000u; break;
         case 0x0E:                       psize = 0x4000u; break;
@@ -497,6 +497,88 @@ static unsigned vid_page_size(const video_state *st)
         }
     }
     return psize;
+}
+static unsigned vid_page_size(const video_state *st)
+{ return mode_page_size(st->mode, st->mkind, st->cols, st->rows); }
+
+/* The cell height a BIOS mode set gives each standard mode: 8x16 in the VGA text modes
+   and the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. AH=00h and the
+   parameter table (#266) both read it here, so they cannot disagree. */
+static uint8_t mode_cell_h(uint8_t mode)
+{
+    return (uint8_t)((mode <= 0x03 || mode == 0x07 || mode == 0x11 || mode == 0x12) ? 16
+                   : (mode == 0x0F || mode == 0x10) ? 14 : 8);
+}
+
+/* ── #266: THE VECTORS THE VIDEO BIOS OWNS, KEPT IN THE IVT. INT 43h (the graphics
+     character table) and INT 1Fh (8x8 characters 80h-FFh) are pointers a program
+     READS -- to draw text itself, or to find the font the BIOS will draw with -- and
+     nothing in src/ wrote either: the IVT held whatever the VDM started with, which
+     on the rig is the real machine's BIOS, not the tables our INT 10h draws from.
+     Written through the bus so the off-VM battery's flat memory gets them too. */
+static void vid_set_vec(video_state *st, uint8_t vec, uint16_t seg, uint16_t off)
+{
+    uint8_t *v;
+    if (!st->bus) return;
+    v = (uint8_t *)vdd_map_flat(st->bus, 0, (uint16_t)(vec * 4u));
+    if (!v) return;
+    v[0] = (uint8_t)off; v[1] = (uint8_t)(off >> 8);
+    v[2] = (uint8_t)seg; v[3] = (uint8_t)(seg >> 8);
+}
+/* INT 43h -> our ROM copy of the font a cell of `h` lines draws with. */
+static void vid_i43_rom(video_state *st, uint8_t h)
+{
+    st->i43_seg = h == 8 ? VDD_FONT8X8_SEG : h == 14 ? VDD_FONT8X14_SEG : VDD_FONT8X16_SEG;
+    st->i43_off = 0;
+    st->gfont_user = 0;
+    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
+}
+/* INT 1Fh -> the upper half of our 8x8 table (power-on; AH=11h AL=20h replaces it). */
+static void vid_i1f_rom(video_state *st)
+{
+    st->i1f_seg = VDD_FONT8X8_SEG; st->i1f_off = 128 * 8; st->g1f_user = 0;
+    vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
+}
+
+/* ── #266: AH=0Bh's arithmetic, from the CGA it emulates. 0040:0066 is the CGA's colour
+     select register (3D9h): bits 0-3 the background (border in text, the 320x200
+     background, the 640x200 foreground), bit 4 the intensity of palette colours 1-3,
+     bit 5 the palette. A VGA does not decode 3D9h; the BIOS keeps the byte in the BDA
+     and turns it into attribute-controller values (vdd_video.h). The arithmetic is the
+     one DOSBox's INT10_SetBackgroundBorder/SetColorSelect carry; what pins it is that
+     it reproduces the MEASURED mode 04h table from the mode set's own 0066 = 30h:
+     AR01-03 = 13h/15h/17h (vga_modedefs.h, PCem's IBM ROM). */
+uint8_t vdd_cga_colour_select(uint8_t cur66, uint8_t bh, uint8_t bl)
+{
+    if (bh == 0) return (uint8_t)((cur66 & 0xE0u) | (bl & 0x1Fu));
+    return (uint8_t)((cur66 & 0xDFu) | ((bl & 1u) << 5));
+}
+uint8_t vdd_cga_bg_ar(uint8_t bl)
+{ return (uint8_t)(((bl << 1) & 0x10u) | (bl & 0x07u)); }
+void vdd_cga_pal_ar(uint8_t sel66, uint8_t ar123[3])
+{
+    uint8_t v = (uint8_t)((sel66 & 0x10u) | 0x02u | ((sel66 >> 5) & 1u));
+    ar123[0] = v; ar123[1] = (uint8_t)(v + 2u); ar123[2] = (uint8_t)(v + 4u);
+}
+uint8_t vdd_gfx_font_rows(uint8_t bl, uint8_t dl)
+{
+    switch (bl) {
+    case 0x00: return dl;
+    case 0x01: return 14;
+    case 0x03: return 43;
+    default:   return 25;               /* 02h, and SeaVGABIOS's answer to the rest */
+    }
+}
+
+/* One AC palette register as the BIOS writes it: the register file AND the shadow the
+   renderer reads (vpal; 11h = vpal[16]/overscan). Not a guest write: attr_w untouched. */
+static void ac_bios_set(video_state *st, uint8_t idx, uint8_t v)
+{
+    v = (uint8_t)(v & 0x3F);
+    st->attr_reg[idx & 0x1F] = v;
+    if (idx < 16) st->vpal[idx] = v;
+    else if (idx == 0x11) st->vpal[16] = st->overscan = v;
+    st->ac_bios_writes++;
 }
 
 void vdd_video_bda_sync(video_state *st)
@@ -556,6 +638,21 @@ void vdd_video_bda_sync(video_state *st)
      Measured against PCem's IBM VGA ROM, DOSBox-X and SeaVGABIOS by p_vidtxt.asm. */
 static const uint8_t *gfx_font(const video_state *st, uint8_t ch, int *h)
 {
+    /* #266: a CALLER-SUPPLIED table (AH=11h AL=21h -> INT 43h, AL=20h -> INT 1Fh) is
+       drawn from where the vector points, as the BIOS draws: SeaVGABIOS's get_font_data
+       takes INT 1Fh for characters 80h-FFh of an 8-line cell, INT 43h for the rest. The
+       ROM case is unchanged -- our vectors point at copies of these same tables. */
+    if (st->bus && (st->gfont_user || st->g1f_user) && st->cell_h >= 1 && st->cell_h <= 16) {
+        const uint8_t *p = 0;
+        *h = st->cell_h;
+        if (*h == 8 && ch >= 0x80 && st->g1f_user)
+            p = (const uint8_t *)vdd_map_flat(st->bus, st->i1f_seg,
+                                              (uint16_t)(st->i1f_off + (ch - 0x80u) * 8u));
+        else if (st->gfont_user)
+            p = (const uint8_t *)vdd_map_flat(st->bus, st->i43_seg,
+                                              (uint16_t)(st->i43_off + (unsigned)ch * (unsigned)*h));
+        if (p) return p;
+    }
     *h = st->cell_h == 14 ? 14 : st->cell_h == 16 ? 16 : 8;
     return *h == 8 ? vga_font_8x8[ch] : *h == 14 ? vga_font_8x14[ch] : vga_font_8x16[ch];
 }
@@ -1774,20 +1871,18 @@ static void int10(void *self, ntvdd_regs *r)
            modes -- measured (p_video2) on PCem's genuine IBM VGA ROM and DOSBox-X:
            0Dh-11h read back 05h's 2E after it, 12h/13h read 06h's 1E/3F. 0066 is 30h,
            3Fh in mode 6. We wrote 29h/30h once at start-up and never again. */
-        if (st->bda && st->mode <= 0x07) {
+        if (st->mode <= 0x07) {
             static const uint8_t cga_msr[8] = { 0x2C, 0x28, 0x2D, 0x29, 0x2A, 0x2E, 0x1E, 0x29 };
-            st->bda[0x65] = cga_msr[st->mode];
-            st->bda[0x66] = (uint8_t)(st->mode == 0x06 ? 0x3F : 0x30);
+            st->cga_sel = (uint8_t)(st->mode == 0x06 ? 0x3F : 0x30);   /* AH=0Bh's shadow (#266) */
+            if (st->bda) { st->bda[0x65] = cga_msr[st->mode]; st->bda[0x66] = st->cga_sel; }
         }
         st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
         st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);   /* the register agrees    */
         st->user_font_on = 0;                         /* the ROM font comes back with the mode */
         /* The cell height the mode's BIOS font gives: 8x16 in the VGA text modes and
            the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. */
-        st->cell_h = (uint8_t)((st->mode <= 0x03 || st->mode == 0x07 ||
-                                st->mode == 0x11 || st->mode == 0x12) ? 16
-                             : (st->mode == 0x0F || st->mode == 0x10) ? 14 : 8);
-        load_default_palette(st);                     /* HW reloads the DAC on mode set */
+        st->cell_h = mode_cell_h(st->mode);
+        load_default_palette(st);                    /* HW reloads the DAC on mode set */
         vga_load_modedef(st, st->mode);               /* ...and programs the register file */
         load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
@@ -1867,6 +1962,14 @@ static void int10(void *self, ntvdd_regs *r)
                 st->cell_h = (uint8_t)(st->scan_sel == 0 ? 8 : 14);
                 st->gh = (uint16_t)(st->rows * st->cell_h);
             }
+            /* ── #266: INT 43h FOLLOWS THE MODE. A VGA BIOS points the graphics-font
+                 vector at the table of the new mode's cell (SeaVGABIOS's vga_set_mode:
+                 8 / 14 / 16 from the mode's character height), so a program that reads
+                 INT 43h after a mode set finds the font the BIOS will draw with. Nothing
+                 wrote it before. ⚠ Whether IBM's ROM also does this in the TEXT modes is
+                 unmeasured (p_vid266 `i43.mode03` asks). INT 1Fh is a power-on vector and
+                 is left alone (vid_i1f_rom, at install). A caller font (AL=21h) ends here. */
+            vid_i43_rom(st, st->cell_h);
             st->dac_mask = 0xFF;
             pal_refresh(st);
             /* ── AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
@@ -2111,9 +2214,52 @@ static void int10(void *self, ntvdd_regs *r)
             }
         }
         break; }
-    case 0x0B:                                         /* set background / palette */
-        if ((r_bx(r) >> 8) == 0x00) st->overscan = (uint8_t)(r_bx(r) & 0xFF);
-        else                        st->cga_pal  = (uint8_t)(r_bx(r) & 0x01);
+    /* ── 0Bh: SET BACKGROUND / BORDER / CGA PALETTE, THROUGH THE ATTRIBUTE CONTROLLER (#266).
+         It wrote BL into `overscan` (not AR11, which read back unchanged) whatever the
+         mode, and BH=1 flipped a private `cga_pal` that render_cga indexed a hard-coded
+         table with -- so the AC registers a guest reads back, and AH=10h's view of them,
+         never moved, and a background colour never appeared in any graphics mode.
+         Now the CGA colour-select byte 0040:0066 is maintained (vdd_cga_colour_select)
+         and turned into AC values the way the VGA BIOS does (DOSBox's arithmetic; see
+         vdd_cga_bg_ar / vdd_cga_pal_ar):
+           BH=0  AR11 (border) = BL as an AC colour, in every mode. In a graphics mode
+                 AR00 (the background) too -- except 06h, where CGA's colour select is the
+                 FOREGROUND and AR01 takes it. In 04h/05h AR01-03 follow 0066 bit 4
+                 (intensity, BL bit 4).
+           BH=1  0066 bit 5 = BL bit 0; in 04h/05h AR01-03 = palette 0 (2/4/6) or 1
+                 (3/5/7), keeping the intensity. Other modes: the byte only.
+         ⚠ UNMEASURED, and p_vid266 asks each one on PCem's IBM ROM: (a) AR00 in the
+           EGA/VGA graphics modes (DOSBox sets it AND AR01-03 for every mode above 3;
+           the LGPL/SeaVGABIOS line sets AR00 in text modes too and never AR11); (b) the
+           06h foreground (taken from the CGA, the issue's reading); (c) 0066 in text. */
+    case 0x0B: {
+        uint8_t bh = (uint8_t)(r_bx(r) >> 8), bl = (uint8_t)(r_bx(r) & 0xFF);
+        uint8_t sel = st->bda ? st->bda[0x66] : st->cga_sel;
+        int gfx = (st->mkind != VID_KIND_TEXT) && !st->in_vesa;
+        int cga4 = gfx && (st->mode == 0x04 || st->mode == 0x05);
+        uint8_t ar[3];
+        if (bh > 1) break;                             /* not a defined BH: nothing    */
+        sel = vdd_cga_colour_select(sel, bh, bl);
+        st->cga_sel = sel;
+        if (st->bda) st->bda[0x66] = sel;
+        if (bh == 0) {
+            uint8_t v = vdd_cga_bg_ar(bl);
+            ac_bios_set(st, 0x11, v);
+            if (gfx) ac_bios_set(st, (uint8_t)(st->mode == 0x06 ? 0x01 : 0x00), v);
+        } else {
+            st->cga_pal = (uint8_t)(bl & 1);
+        }
+        if (cga4) {
+            vdd_cga_pal_ar(sel, ar);
+            ac_bios_set(st, 1, ar[0]); ac_bios_set(st, 2, ar[1]); ac_bios_set(st, 3, ar[2]);
+        }
+        pal_refresh(st);
+        break; }
+    /* ── 04h: READ LIGHT PEN. A VGA has no light-pen input; its BIOS answers AH=00h,
+         "not triggered" (#266). We left AH=04h -- which a caller reads as "triggered",
+         with BX/CX/DX as a position. The other registers are untouched. */
+    case 0x04:
+        s_ah(r, 0x00);
         break;
     case 0x0D: {                                       /* READ a pixel            */
         uint16_t x = r_cx(r), y = r_dx(r);
@@ -2200,6 +2346,10 @@ static void int10(void *self, ntvdd_regs *r)
             switch (bh) {
             case 0x03: seg = VDD_FONT8X8_SEG;  off = 0;       bpc = 8;  break;
             case 0x00:                                        /* INT 1Fh: 8x8 upper half */
+                /* #266: what INT 1Fh holds -- ours (8x8 upper half) unless AL=20h
+                   installed the caller's. */
+                if (st->g1f_user) { seg = st->i1f_seg; off = st->i1f_off; bpc = 8; break; }
+                /* fall through */
             case 0x04: seg = VDD_FONT8X8_SEG;  off = 128 * 8; bpc = 8;  break;
             case 0x02:                                        /* ROM 8x14 / 9x14 alt     */
             case 0x05: seg = VDD_FONT8X14_SEG; off = 0;       bpc = 14; break;
@@ -2209,7 +2359,10 @@ static void int10(void *self, ntvdd_regs *r)
                    8x16 table while reporting CX=14, so a caller striding by 14 through
                    16-byte glyphs drifted 2 bytes per character and drew shredded text.
                    cell_h is that answer, and it follows a 1112h/1111h font change too. */
-                if      (st->cell_h == 8)  { seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;  }
+                /* #266: and a caller's graphics font (AL=21h) IS the current font --
+                   INT 43h points at it, so this answers with it. */
+                if (st->gfont_user) { seg = st->i43_seg; off = st->i43_off; bpc = st->cell_h; }
+                else if (st->cell_h == 8)  { seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;  }
                 else if (st->cell_h == 14) { seg = VDD_FONT8X14_SEG; off = 0; bpc = 14; }
                 else                       { seg = VDD_FONT8X16_SEG; off = 0; bpc = 16; }
                 break;
@@ -2233,7 +2386,17 @@ static void int10(void *self, ntvdd_regs *r)
                 st->font_q[st->font_qn].cx  = bpc;
                 st->font_qn++;
             }
-        } else if ((al & 0x0F) <= 0x04 && (al <= 0x04 || (al >= 0x10 && al <= 0x14))) {
+        } else if (al == 0x03) {
+            /* ── 03h: SET BLOCK SPECIFIER = the Sequencer's Character Map Select (#266).
+                 BL goes to SR3 as-is (SeaVGABIOS: stdvga_set_text_block_specifier) --
+                 which font block attribute bit 3 = 0 / = 1 cells are drawn from. It was
+                 caught by the ROM-font arm below as "AL & 0Fh <= 4" and reloaded the
+                 8x16 ROM font, DROPPING a font the program had just loaded to select it.
+               ⚠ The renderer still draws one font (the loaded one, whatever block it
+                 was loaded to), so SR3 reads back right and selects nothing yet: the
+                 512-character case is a docs/inventory/vga.md gap. */
+            st->seq_reg[3] = (uint8_t)(r_bx(r) & 0xFF);
+        } else if ((al & 0x0F) <= 0x04 && al != 0x13 && (al <= 0x04 || (al >= 0x10 && al <= 0x14))) {
             /* ── AL=x0 LOADS THE CALLER'S OWN GLYPHS, AND NOW THEY GET DRAWN. ──
                  This used to accept the call, mark it unimplemented and keep
                  drawing from the ROM table -- so a program that loaded a custom
@@ -2278,6 +2441,7 @@ static void int10(void *self, ntvdd_regs *r)
                     if (al == 0x10 && st->mkind == VID_KIND_TEXT) {
                         st->cell_h = bpc;
                         st->rows = text_rows_for(bpc);
+                        vid_i43_rom(st, bpc);  /* 1130h BH=1 and INT 43h agree (#266) */
                     }
                 }
             } else {
@@ -2293,13 +2457,47 @@ static void int10(void *self, ntvdd_regs *r)
                     st->cell_h = h;
                     st->rows = text_rows_for(h);
                     if (st->cur_row >= st->rows) st->cur_row = (uint8_t)(st->rows - 1);
+                    /* #266: INT 43h follows the cell, so 1130h BH=1 (which answers with
+                       the cell's table, a measured fix) and the vector stay one fact.
+                       ⚠ SeaVGABIOS leaves INT 43h alone on a text-mode font load; IBM's
+                       ROM is unmeasured. Kept consistent with our own 1130h instead. */
+                    vid_i43_rom(st, h);
                 }
                 st->dirty = 1;
             }
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
         } else if (al >= 0x20 && al <= 0x24) {
-            /* Set the graphics-mode font pointer used by INT 43h / INT 1Fh. */
-            s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
+            /* ── 20h-24h: THE GRAPHICS-MODE FONT CALLS (#266). They answered DL and
+                 stored nothing -- no vector, no row count -- so a program that loaded
+                 its own graphics font (or asked for 43 rows of 8x8 in mode 10h) kept
+                 drawing with the ROM table at the mode's own height.
+                   20h  INT 1Fh = ES:BP (the 8x8 characters 80h-FFh)
+                   21h  INT 43h = ES:BP, CX bytes a character
+                   22h  INT 43h = the ROM 8x14     23h  the ROM 8x8     24h  the ROM 8x16
+                 21h-24h also set the screen's rows from BL (vdd_gfx_font_rows: 0 = DL,
+                 1 = 14, 2 = 25, 3 = 43) and the character height -- 0040:0084/0085 --
+                 which here are `rows` and `cell_h`, so the glyph services draw at that
+                 height from that table (gfx_font) and the BDA follows.
+               ⚠ Registers are left as they came (SeaVGABIOS returns nothing; this used
+                 to write DX). In a TEXT mode only the vector moves: rows/cell_h are the
+                 text screen's geometry, and the calls are documented for graphics modes
+                 (IBM's text-mode behaviour unmeasured). A height outside 1..16 sets the
+                 vector and is reported, since our glyph paths draw at most 16 lines. */
+            if (al == 0x20) {
+                st->i1f_seg = r->es; st->i1f_off = (uint16_t)(r->ebp & 0xFFFF); st->g1f_user = 1;
+                vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
+            } else {
+                uint8_t h = al == 0x21 ? (uint8_t)(r_cx(r) & 0xFF) : al == 0x22 ? 14 : al == 0x23 ? 8 : 16;
+                uint8_t rows = vdd_gfx_font_rows((uint8_t)(r_bx(r) & 0xFF), (uint8_t)(r_dx(r) & 0xFF));
+                if (al == 0x21) {
+                    st->i43_seg = r->es; st->i43_off = (uint16_t)(r->ebp & 0xFFFF); st->gfont_user = 1;
+                    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
+                } else vid_i43_rom(st, h);
+                if (st->mkind != VID_KIND_TEXT && !st->in_vesa) {
+                    if (h >= 1 && h <= 16 && rows) { st->cell_h = h; st->rows = rows; }
+                    else VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+                }
+            }
         } else {
             VID_UNIMPL_SET(st->unimpl_fn, 0x11);
         }
@@ -2833,6 +3031,55 @@ static void vga_load_modedef(video_state *st, uint8_t mode)
     }
 }
 
+/* ── #266: THE VIDEO PARAMETER TABLE, FROM THE SAME MEASURED REGISTER SETS THE MODE SET
+     LOADS. A VGA BIOS programs a mode FROM this table, and publishes it through
+     0040:00A8 -> Save Pointer table -> first far pointer; text utilities and mode
+     switchers read the register values out of it rather than out of the card. So
+     each entry here is built from VGA_MODEDEFS -- the bytes vga_load_modedef puts in
+     the register file -- and can never disagree with what the mode set leaves.
+     The 29 slots are IBM's (RBIL "Video Parameter Table"): 00h-03h modes 0-3 at 200
+     lines, 04h-07h, 08h-0Ch PCjr/reserved, 0Dh/0Eh, 0Fh/10h modes 0Fh/10h on a 64 KB
+     card, 11h/12h the same on 256 KB, 13h-16h modes 0-3 at 350 lines, 17h modes 0+/1+,
+     18h 2+/3+, 19h 7+ (the 400-line 9-dot text modes), 1Ah-1Ch modes 11h-13h.
+   ⚠ WHICH SLOTS ARE FILLED is SeaVGABIOS's choice (stdvga_build_video_param: 04h-07h,
+     0Dh, 0Eh, 11h, 12h, 17h-1Ch), less 11h (mode 0Fh: we hold no measured set for it).
+     The 200- and 350-line text slots and the 64 KB slots are ZERO, as there: we have no
+     measurement of those register sets, and inventing them is the thing not to do.
+     IBM's ROM fills them -- p_vid266 dumps slots 03h and 18h so the lead can see what
+     a naive `mode * 64` lookup finds there on the real ROM. */
+static const uint8_t vparam_mode[VDD_VPARAM_N] = {
+    0, 0, 0, 0, 0x04, 0x05, 0x06, 0x07,  0, 0, 0, 0, 0, 0x0D, 0x0E, 0,
+    0, 0, 0x10, 0, 0, 0, 0, 0x01,  0x03, 0x07, 0x11, 0x12, 0x13
+};
+int vdd_video_param_entry(uint8_t idx, uint8_t out[64])
+{
+    int i, k;
+    unsigned mi;
+    uint8_t mode;
+    for (i = 0; i < 64; ++i) out[i] = 0;
+    if (idx >= VDD_VPARAM_N || !(mode = vparam_mode[idx])) return 0;
+    for (k = 0; k < VGA_MODEDEFS_N; ++k) {
+        const vga_modedef *d = &VGA_MODEDEFS[k];
+        if (d->mode != mode) continue;
+        for (mi = 0; mi < sizeof(vid_modes)/sizeof(vid_modes[0]); ++mi)
+            if (vid_modes[mi].mode == mode) break;
+        if (mi == sizeof(vid_modes)/sizeof(vid_modes[0])) return 0;
+        {   unsigned ps = mode_page_size(mode, vid_modes[mi].kind,
+                                         vid_modes[mi].cols, vid_modes[mi].rows);
+            out[0x00] = vid_modes[mi].cols;
+            out[0x01] = (uint8_t)(vid_modes[mi].rows - 1);
+            out[0x02] = mode_cell_h(mode);
+            out[0x03] = (uint8_t)ps; out[0x04] = (uint8_t)(ps >> 8); }
+        for (i = 0; i < 4;  ++i) out[0x05 + i] = d->seq[1 + i];     /* SR1-SR4 */
+        out[0x09] = d->misc;
+        for (i = 0; i < 25; ++i) out[0x0A + i] = d->crtc[i];
+        for (i = 0; i < 20; ++i) out[0x23 + i] = d->attr[i];        /* AR00-AR13 */
+        for (i = 0; i < 9;  ++i) out[0x37 + i] = d->gc[i];
+        return 1;
+    }
+    return 0;
+}
+
 static void crtc_set_data(void *self, uint32_t v);
 
 /* The cursor's CRTC address (0x0E/0x0F) as the BIOS path implies it: cells from the
@@ -3111,6 +3358,8 @@ static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void seq_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
+    if ((st->seq_index & 7) == 1 && ((st->seq_reg[1] ^ (uint8_t)v) & 0x20u))
+        st->dirty = 1;                             /* SR1.5 screen off/on: re-present (#266) */
     st->seq_reg[st->seq_index & 7] = (uint8_t)v;
     st->seq_w  [st->seq_index & 7]++;
     if (st->seq_index == 2) {
@@ -3706,6 +3955,41 @@ void vdd_video_install_fonts(video_state *st)
         for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
     }
     vbe_pm_install(st);                    /* #53: the 4F0Ah block, beside them */
+    /* ── #266: THE SAVE POINTER TABLE, AND 0040:00A8 POINTING AT IT. ──────────────────
+         0040:00A8 was never written: it held whatever the VDM started with -- on the
+         rig the real machine's BIOS tables, which describe a different card than the
+         one our INT 10h programs. Layout per IBM / RBIL "Video Save Pointer Table":
+           +00 video parameter table         +04 dynamic save area (0: none)
+           +08 alpha font override (0)       +0C graphics font override (0)
+           +10 secondary save pointer table  +14/+18 reserved (0)
+         and the secondary one: +00 its length (1Ah), +02 the display combination code
+         table, +06 secondary alpha font (0), +0A user palette profile (0), 12 reserved.
+         The DCC table is the IBM/SeaVGABIOS one (16 entries, version 1, max code 8).
+         Written once here (a POST job): a program may legitimately re-point 0040:00A8
+         at its own table, and later syncs must not undo that. */
+    {
+        uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, VDD_VIDTAB_SEG, 0);
+        static const uint16_t dcc[16] = {
+            0x0000, 0x0100, 0x0200, 0x0102, 0x0400, 0x0104, 0x0500, 0x0502,
+            0x0600, 0x0601, 0x0605, 0x0800, 0x0801, 0x0700, 0x0702, 0x0706 };
+        unsigned i;
+        if (t) {
+            for (i = 0; i < VDD_VPARAM_OFF + VDD_VPARAM_N * 64u; ++i) t[i] = 0;
+            wr16(t + VDD_SAVEPTR_OFF + 0x00, VDD_VPARAM_OFF);   wr16(t + VDD_SAVEPTR_OFF + 0x02, VDD_VIDTAB_SEG);
+            wr16(t + VDD_SAVEPTR_OFF + 0x10, VDD_SAVEPTR2_OFF); wr16(t + VDD_SAVEPTR_OFF + 0x12, VDD_VIDTAB_SEG);
+            wr16(t + VDD_SAVEPTR2_OFF + 0x00, 0x001A);
+            wr16(t + VDD_SAVEPTR2_OFF + 0x02, VDD_DCC_OFF);     wr16(t + VDD_SAVEPTR2_OFF + 0x04, VDD_VIDTAB_SEG);
+            t[VDD_DCC_OFF + 0] = 16; t[VDD_DCC_OFF + 1] = 1; t[VDD_DCC_OFF + 2] = 8; t[VDD_DCC_OFF + 3] = 0;
+            for (i = 0; i < 16; ++i) wr16(t + VDD_DCC_OFF + 4 + i * 2, dcc[i]);
+            for (i = 0; i < VDD_VPARAM_N; ++i)
+                (void)vdd_video_param_entry((uint8_t)i, t + VDD_VPARAM_OFF + i * 64u);
+            if (st->bda) { wr16(st->bda + 0xA8, VDD_SAVEPTR_OFF); wr16(st->bda + 0xAA, VDD_VIDTAB_SEG); }
+        }
+    }
+    /* ...and the font vectors, which vdd_video_reset set before the host's IVT was
+       final: written again now that it is (the host plants its own vectors first). */
+    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
+    vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
 }
 
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
@@ -3908,17 +4192,22 @@ static void render_cga(video_state *st)
     const uint8_t *src = st->vmem + VID_TEXT_OFF;
     int gw = st->gw, gh = st->gh, y, x;
     int per = st->cga_bpp == 1 ? 8 : 4;             /* pixels per byte          */
-    /* Mode 5's palette is the grey/brown variant; 4's default is cyan/magenta. */
-    static const uint8_t pal4[2][4] = { { 0, 11, 13, 15 }, { 0, 10, 12, 14 } };
+    /* ── #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
+         04h/05h (AR12 = 03h), 0-1 in 06h (AR12 = 01h), and pal[] carries it through
+         AR0n -> DAC. This drew from a private table -- pixel 1/2/3 as index 11/13/15
+         (or 10/12/14 after AH=0Bh BH=1) -- which came out right only while AR0B/0D/0F
+         happened to equal what AR01-03 hold after a mode set (13h/15h/17h; they do,
+         by the measured table), so a guest's own AR01-03, or the BIOS's background,
+         never showed. Unchanged picture for an unmodified mode 04h/05h/06h. */
     for (y = 0; y < gh; ++y) {
         const uint8_t *row = src + ((y & 1) ? 0x2000 : 0) + (y >> 1) * (gw / per);
         uint8_t *out = &st->fb[y * gw];
         for (x = 0; x < gw; ++x) {
             uint8_t b = row[x / per];
             if (st->cga_bpp == 1)
-                out[x] = (uint8_t)((b >> (7 - (x & 7))) & 1 ? 15 : 0);
+                out[x] = (uint8_t)((b >> (7 - (x & 7))) & 1);
             else
-                out[x] = pal4[st->cga_pal & 1][(b >> (6 - 2 * (x & 3))) & 3];
+                out[x] = (uint8_t)((b >> (6 - 2 * (x & 3))) & 3);
         }
     }
 }
@@ -4149,6 +4438,26 @@ static void vid_frame(void *self)
         st->frame.stride = st->frame.w;
         st->frame.pixels = st->fb; st->frame.palette = st->pal;
     }
+    /* ── #266: SR1 BIT 5, "SCREEN OFF", BLANKS THE PICTURE. The sequencer stops feeding
+         the attribute controller, so the monitor sees black for as long as the bit is
+         set -- and the picture comes back untouched when it clears, because nothing
+         in video memory moved. Programs set it to hide a redraw or a mode change, and
+         AH=12h BL=36h (video refresh off) is the BIOS's door to the same bit. We stored
+         it (seq_set_data; 12h BL=36h since #252) and drew the frame anyway.
+       ► The frame keeps its geometry (the presenter's aspect does not jump) and goes out
+         as 8bpp with a zero stride -- every row is fb's first row -- through an all-black
+         palette, so the result is black whatever fb holds and nothing is rendered into
+         or cleared. The render above still ran: state the frame derives (the BDA sync,
+         VESA's window sync) must not stall while the screen is dark. frame_touch drops
+         the raster-split arrays for a blanked frame. A mode set clears the bit (the
+         measured SR1 of every mode has bit 5 = 0). */
+    st->blanked = (uint8_t)((st->seq_reg[1] & 0x20u) != 0);
+    if (st->blanked) {
+        static uint32_t black[256];
+        if (!black[0]) { int i; for (i = 0; i < 256; ++i) black[i] = 0xFF000000u; }
+        st->frame.bpp = 8; st->frame.stride = 0;
+        st->frame.pixels = st->fb; st->frame.palette = black;
+    }
     st->dirty = 0;
 }
 
@@ -4268,6 +4577,10 @@ void vdd_video_reset(void *self)
     st->vesa_dacwidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);
+    /* #266: the power-on font vectors and CGA colour select (mode 3's 30h). */
+    st->cga_sel = 0x30; st->blanked = 0;
+    vid_i43_rom(st, st->cell_h);
+    vid_i1f_rom(st);
     vdd_video_bda_sync(st);
     st->dirty = 1;
 }
