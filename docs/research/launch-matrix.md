@@ -12,6 +12,8 @@ regression for every program on the box, not just the one under test.
 | 1 | DOS .COM, plain launch | `p_ver.com` | CASE=int21.30 SIG=AX,BX,CX AX=1606 BX=FF00 CX=0000 DX=D1D1 SI=02C9 DI=0000 DS=0100 ES=0100 FL=3246 CF=0 CASE=i | #PROBE dosver CASE=int21.30 SIG=AX,BX,CX AX=0005 BX=FF00 CX=0000 DX=D1D1 SI=02C9 DI=FFFE DS=06E0 ES=06E0 FL=32 |
 | 2 | DOS .EXE, plain launch | `MEM.EXE` | Memory Type Total = Used + Free ---------------- ------- ------- ------- Conventional 639K 639K 0K | Incorrect DOS version |
 | 3 | DOS program that EXECs a child | `p_exec.com` | [child ran] CASE=int21.4B.exec SIG=CF AX=0000 BX=03C0 CX=C1C1 DX=03A7 SI=02C9 DI=0000 DS=0100 ES=0100 FL=3246  | #PROBE exec [child ran] CASE=int21.4B.exec SIG=CF AX=3E00 BX=88D1 CX=C1C1 DX=0000 SI=02C9 DI=FFFE DS=06E0 ES=0 |
+| 4 | DPMI client (16-bit, INT 31h function by function) | `p_dpmi31.com` | every row graded against the DPMI spec: 35 rows, all as the spec asks | **runs** (s91: no display wedge); 0400h AX=005A CL=03 (386); laxer on error paths -- a double free, a freed selector, 0303h's 17th callback and 0503h with size 0 all SUCCEED; the run stops at 0503h with a bad handle (the VDM hangs) |
+| 5 | Redirection done INSIDE the guest | `LM5.BAT`: `command.com /c P_VER.COM > OUT5.TXT` | OUT5.TXT holds P_VER's dump (AX=1606, our version knob) | OUT5.TXT holds P_VER's dump (AX=0005) |
 | 6 | **Win16 GUI app, plain launch** | `CHARMAP.EXE` | Real 611x220 `HWND` on the XP desktop: font list on Symbol, full character grid rendered in that font, Select and Copy working (user-confirmed) | Real 611x220 `HWND`, same layout |
 
 ## Reading the rows
@@ -62,3 +64,18 @@ it wedged the rig, because stock ntvdm raises a modal dialog for a missing image
 and `rt_stock.bat` then never restores the IFEO Debugger key it removed on entry.
 
 ### What was wrong with this table before, kept because it is the interesting part
+
+## s91: rows 4 and 5 (`scripts/dospair.sh`, stock and ours on the rig)
+
+**Row 4** settles the old worry that stock "produced no output for the DPMI client": with a
+plain 16-bit client (`tools/dostest/p_dpmi31.com`) stock runs and answers. Where it differs
+from us it is laxer than the DPMI specification (frees that succeed twice, a freed selector
+still answering, a 17th real-mode callback granted), and the project's rule is that the spec
+outranks the oracle. Stock's VDM hangs at INT 31h 0503h with a bad handle.
+
+**Row 5** found two defects before it agreed with stock, both fixed in s91: XP's own
+COMMAND.COM launched as the program (`command.com /c ...` from cmd) was told our default DOS
+6.22 and refused with "Incorrect DOS version"; and it performs `>` by editing the PSP's job
+file table directly, which our handle table never read (`dos_jft_exec`).
+⚠ The cmd-level redirection row (`HELLO.COM > file`) is NOT byte-equal any more: since
+programs run under XP's COMMAND.COM /P (#208) its prompt lands in the file too (#316).

@@ -1,10 +1,10 @@
 # Session 91 — 2026-10-04: the score towards 95% (unattended)
 
 The user confirmed Sound Recorder by ear and asked for an unattended run toward **95%**,
-easy issues first. Score: **90% → 94.3%** committed mid-run (see the end for the final
-figure). Every change below was verified on the rig, almost all **against stock NTVDM**
-with a deterministic probe; two regression gates (A/B against the morning build
-`d0699606`) showed Skyroads, Doom, ZAR and the 16-program shelf unchanged.
+easy issues first. Score: **90% → SEE_FINAL** (`tools/score/score.py`). Every change below
+was verified on the rig, almost all **against stock NTVDM** with a deterministic probe;
+A/B regression gates against the morning build `d0699606` (Skyroads, Doom, ZAR, the
+16-program shelf) were run after each batch (`runs/s91_gate/`).
 
 ## Closed
 
@@ -16,41 +16,60 @@ with a deterministic probe; two regression gates (A/B against the morning build
 | #309 | WOWCallback16(Ex), WOWGlobal*16 from 32-bit thunk DLLs | `w_wcb` 8/8 = stock, real thunk DLL `tools/wintest/thunk32/` |
 | #8 | NetBIOS VDD (INT 5Ch / INT 2Ah), POST routines included | `p_netb` 14/14 = stock; `net_test` 21 off-VM |
 
-Also done and verified, issues still open for their remainders: #305 M8 WM_SETFONT/GETFONT
-(`w_font` 7/7) and M13 MDI messages (`w_mdi` 13/13); stdio input from a redirected handle 0
-(`p_stdin` 7/7 = stock = MS-DOS 6.22 under PCem); TASKMAN's Task List (foreign windows get
-Win16 aliases, as WOW gives them); every modal dialog shown after WM_INITDIALOG (#283).
+## Done and verified, issues still open for their remainders
+
+- **#305** M8 WM_SETFONT/GETFONT (`w_font` 7/7), M9 activation/move/show/menu-select/
+  min-max (`w_msgs` 13/13 with M10), M10 WM_SIZE sent, M13 MDI (`w_mdi` 13/13) — all = stock.
+- **stdio**: console input from a file on handle 0 (`p_stdin` 7/7 = stock = MS-DOS 6.22
+  under PCem); AH=0Ah drops a redirected line's leading LF.
+- **#11 SDK**: Microsoft-ABI VDDs load unmodified — the third-party BOP (RegisterModule /
+  UnRegisterModule / DispatchCall) plus NTVDM.EXE's VDD service API in the shim
+  (`p_isv` + `tools/dostest/isvtest/` 10/10 identical under stock and ours). Our own
+  `claim_int` now reaches any user vector through generic stubs (#315;
+  `sdk/sample/intecho.c` + `p_sdkint`).
+- **Launch matrix** rows 4 (DPMI client) and 5 (in-guest redirection) have stock halves;
+  row 5 needed two fixes: XP's COMMAND.COM run as the program gets DOS 5.00, and its
+  direct JFT edits (`>`) are honoured at EXEC.
+- **TASKMAN**: GetWindow gives foreign top-level windows Win16 aliases — the Task List
+  lists the desktop like stock. **RECORDER**: CreateWindow's own hMenu applied — its menu
+  bar is back. **#283**: every modal dialog shown after WM_INITDIALOG.
+- **DOS**: RMDIR closes the guest's unfinished searches and retries; 6.22's COMMAND.COM
+  runs a script from redirected input (`tools/dostest/cmd622/`).
+- **GDI GetTextMetrics** wrote its 31 bytes in a Win32-like order since s45 (Overhang at
+  +16); the Windows 3.1 order puts the nine BYTE fields at +16..+24 — found by
+  `tools/wintest/w_tm` vs stock (every size field agreed; pitch, charset, overhang did not).
+- **#239 (ZAR's intermittent silence)**: diagnosed, not fixed — see below.
 
 ## Findings worth keeping
 
-- **XP's USER.EXE answers subclassing with `SCLS` thunks.** EDITWNDPROC (301), BUTTONWNDPROC
-  (303), STATICWNDPROC (302), SBWNDPROC (304), LBOXCTLWNDPROC (307), the combo's (344),
-  MDICLIENTWNDPROC (444): each is `push <itself>; call CallWindowProc`, tagged `SCLS` +
-  class index at +34h. That address is GetWindowLong(GWL_WNDPROC) for a system control.
-- **`WOWGlobalFree16` / `WOWGlobalUnlockFree16` return TRUE (1)**, not GlobalFree's 0.
-- **WOWCallback16Ex's pArgs is the 16-bit stack image** (lowest word = the last PASCAL arg).
-- **Real MS-DOS BLOCKS in AH=08h at the end of a redirected file** (PCem and stock agree;
-  DOSBox-X answers 0Ah). That is why `cat.com` "hung" under both hosts in s57 — correct.
-- **`claim_int` only reaches a device whose vector has a BIOS stub.** 2Ah/5Ch were added;
-  the stub area (DOS_CTAB_SEG:0300h) has 2 slots left (#315).
-- **GetProcAddress takes a name pointer below 0x10000 as an ORDINAL** — every V86 string
-  is below that. Copy guest strings out before passing them to a Win32 API.
-- **Stock refuses 6.22's COMMAND.COM** ("Incorrect DOS version"); ours runs it, now also
-  from a script on redirected input (`tools/dostest/cmd622/`).
-- **Stock's no-wait NetBIOS name registration takes seconds** (still pending after 2 s);
-  a probe must wait ~8 s before comparing.
+- **#239: in a silent ZAR run IRQ5 is raised but never DELIVERED.** The self-test reads
+  "pending" in both kinds of run; in the silent one ZAR retries, resets the DSP and gives
+  up. Its wait loop polls DOS time through DOS/4GW's 16-bit code, and our PM injector only
+  interrupts 32-bit application code — delivery depends on hitting the brief 32-bit
+  window. (A DOSBox-style "complete short DMA blocks at once" change was tried on a wrong
+  first theory, gated clean, and REVERTED because it did not touch this path.)
+- **XP's USER.EXE answers subclassing with `SCLS` thunks** (EDITWNDPROC 301 etc.:
+  `push <itself>; call CallWindowProc`, `SCLS`+class index at +34h).
+- **NTVDM calls VDD I/O handlers as STDCALL** (nt_vdd.h names no convention; NT and the
+  DDK compile /Gz). A cdecl handler made stock die at the first IN.
+- **GetProcAddress takes a name pointer below 0x10000 as an ORDINAL** — every V86 string.
+- **`WOWGlobalFree16`/`UnlockFree16` return TRUE (1)**; **WOWCallback16Ex's pArgs is the
+  16-bit stack image**.
+- **Real MS-DOS blocks in AH=08h at the end of a redirected file** (PCem = stock).
+- **XP's COMMAND.COM does `>` by editing the PSP's JFT**, not with AH=46h.
+- **Stock's DPMI host is laxer than the spec** on error paths, and hangs at 0503h with a
+  bad handle. **Stock refuses 6.22's COMMAND.COM.**
+- **A hung stock run holds its redirect file open**: per-probe output files now.
 
 ## Tooling added
 
-- `scripts/dospair.sh <probe>` — one DOS probe under stock and ours, rows side by side.
-- `scripts/w16stockshot.sh <folder> <EXE> <name>` — photograph a Win16 program under stock
-  and under ours (`runs/stockshot/`).
-- `tools/wintest/thunk32/` — a real 32-bit thunk DLL for WOW32 callback tests.
-- `scripts/bm/dosstock.bat` / `dosours.bat` windows lengthened to 30 s.
+- `scripts/dospair.sh` (a DOS probe under stock and ours), `scripts/w16stockshot.sh`
+  (photograph a Win16 program under both), `tools/wintest/thunk32/`, the MS-ABI test VDD
+  `tools/dostest/isvtest/`.
 
 ## Open, investigated
 
-- #314 Media Player: client not erased, SScrollbar drawn vertical, Open dialog at C:\.
-- #283 Terminal: the dialog now lands where stock's does but paints only its list; the
-  main client is not erased; function-key bars show.
-- Cardfile: the card is laid out taller than stock's, with an extra header rule.
+- #314 Media Player visuals + Open at C:\, #283 Terminal's dialog/client paint,
+  #316 the /P shell's prompt inside `prog > file` (predates s91), #207 MEM /D.
+- Cardfile: NOT a defect after all -- its card is the same size and offset as stock's;
+  only the (intended) Luna frame is taller.

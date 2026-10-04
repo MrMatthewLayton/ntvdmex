@@ -3741,14 +3741,19 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wow32_pokew(b + 10, (WORD)(short)tm.tmAveCharWidth);
         wow32_pokew(b + 12, (WORD)(short)tm.tmMaxCharWidth);
         wow32_pokew(b + 14, (WORD)(short)tm.tmWeight);
-        wow32_pokew(b + 16, (WORD)(short)tm.tmOverhang);
-        wow32_pokew(b + 18, (WORD)(short)tm.tmDigitizedAspectX);
-        wow32_pokew(b + 20, (WORD)(short)tm.tmDigitizedAspectY);
-        b[22] = tm.tmFirstChar;       b[23] = tm.tmLastChar;
-        b[24] = tm.tmDefaultChar;     b[25] = tm.tmBreakChar;
-        b[26] = tm.tmItalic;          b[27] = tm.tmUnderlined;
-        b[28] = tm.tmStruckOut;       b[29] = tm.tmPitchAndFamily;
-        b[30] = tm.tmCharSet;
+        /* s91: THE WINDOWS 3.1 ORDER from +16 on -- the BYTE fields come before the
+             last three shorts, exactly as EnumFonts' NEWTEXTMETRIC16 (wowgdi_font_blob,
+             = stock in w_genum) lays them out. This wrote a Win32-like order (Overhang
+             at +16, the chars at +22) since s45: tools/wintest/w_tm vs stock showed
+             PitchAndFamily, CharSet and Overhang wrong for every font. */
+        b[16] = tm.tmItalic;          b[17] = tm.tmUnderlined;
+        b[18] = tm.tmStruckOut;       b[19] = (BYTE)tm.tmFirstChar;
+        b[20] = (BYTE)tm.tmLastChar;  b[21] = (BYTE)tm.tmDefaultChar;
+        b[22] = (BYTE)tm.tmBreakChar; b[23] = tm.tmPitchAndFamily;
+        b[24] = tm.tmCharSet;
+        wow32_pokew(b + 25, (WORD)(short)tm.tmOverhang);
+        wow32_pokew(b + 27, (WORD)(short)tm.tmDigitizedAspectX);
+        wow32_pokew(b + 29, (WORD)(short)tm.tmDigitizedAspectY);
         for (i = 0; i < (int)sizeof b; ++i) dst[i] = b[i];
         wu_puts(note, notecap, &k, " h=");
         wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmHeight, 4);
