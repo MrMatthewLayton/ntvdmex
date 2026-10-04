@@ -2257,9 +2257,11 @@ static void int10(void *self, ntvdd_regs *r)
         break; }
     /* ── 04h: READ LIGHT PEN. A VGA has no light-pen input; its BIOS answers AH=00h,
          "not triggered" (#266). We left AH=04h -- which a caller reads as "triggered",
-         with BX/CX/DX as a position. The other registers are untouched. */
+         with BX/CX/DX as a position. The other registers are untouched.
+       ★ s92, MEASURED (dosdiff p_vid266 t03.04.pen): AX=0000 on MS-DOS 6.22, DOSBox-X and
+         PCem's IBM VGA BIOS alike -- AL is cleared too, not only AH. */
     case 0x04:
-        s_ah(r, 0x00);
+        s_ax(r, 0x0000);
         break;
     case 0x0D: {                                       /* READ a pixel            */
         uint16_t x = r_cx(r), y = r_dx(r);
