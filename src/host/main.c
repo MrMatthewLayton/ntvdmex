@@ -26788,6 +26788,40 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
     if (eip >= DPMI_FAULT_SITE(0) && eip < DPMI_FAULT_SITE(DOS_FLTSITE_N)
         && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0) {
         int exc = (int)((eip - DPMI_FAULT_SITE(0)) / 4);
+        /* ── s92: A RAW `INT nn` INSIDE A NESTED RUN. A #GP through an IDT gate (error
+             code bit 1, vector in bits 3..15) is an interrupt nobody intercepted -- the
+             main loop's long arm services those (search "A #GP THROUGH AN IDT GATE").
+             Here it fell to the service routine, which ran the INT and then resumed the
+             guest ON THE FAULT SITE, whose `C4 C4 57` the WOW dispatcher stepped over
+             (0x57 is also a WOW id) -- and the #GP at the next byte went to krnl386's
+             handler: "Application Error", the task killed. MEASURED, Media Player's
+             WM_INITDIALOG (sent through the nested run): `INT 21h AX=5700h` at
+             0B77:0D07, err 0x010A (runs/s92/drv/w16drive_s92mpo_host.log).
+           ⇒ The main loop's arm, reduced to the case measured: a 16-bit, BASED code and
+             stack selector, the bytes really `CD vec`, not the FP-emulator range. The
+             guest goes back ON the INT, the site is patched to our BOP with its vector in
+             the map -- as the main loop does -- and the loop's ordinary BOP path services
+             it on the next turn. Everything else is declined, as before. */
+        if (exc == 13 && (fr[2] & 0x2)) {
+            DWORD gvec = ((DWORD)fr[2] >> 3) & 0xFF;
+            DWORD gcb  = dpmi_sel_base(fr[4]);
+            volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
+            if (!gcb || dpmi_sel_is32(fr[4]) || dpmi_sel_is32(fr[7])
+                || (gvec >= 0x34 && gvec <= 0x3F)
+                || !host_readable((const void *)gi, 2) || gi[0] != 0xCD || gi[1] != (BYTE)gvec
+                || !host_writable((void *)gi, 2))
+                return 0;
+            VDM_SET16(tib, VTIB_SS, fr[7]); VDM_REG(tib, VTIB_ESP) = fr[6];
+            VDM_SET16(tib, VTIB_CS, fr[4]); VDM_REG(tib, VTIB_EIP) = fr[3];
+            VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
+            gi[0] = VDM_BOP0; gi[1] = VDM_BOP1;
+            pmap_set(gcb + fr[3], (BYTE)gvec);
+            lp = zput(lp, "NESTED #GP(IDT): a raw INT 0x"); lp = zhex(lp, gvec);
+            lp = zput(lp, " at 0x"); lp = zhex(lp, fr[4]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[3]);
+            lp = zput(lp, " -- patched; serviced on the next turn\r\n");
+            log_append(LOG_PATH, lb, lp);
+            return 1;
+        }
         if (exc < 0 || exc >= 32 || !g_pm_exc[exc].set || (fr[2] & 0x2)) return 0;
         fr[0] = (WORD)DPMI_FLTRET_COFF;
         fr[1] = g_dpmi_flt_code_sel;
