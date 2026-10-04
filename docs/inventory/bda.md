@@ -45,6 +45,15 @@ ones; 6.22's machine (SeaBIOS) does have a 1 KB EBDA at `9FC0h`; PCem's AMI has 
 its INT 12h was never measured, and going to 640 KB would have moved `int12.memk`,
 `mcb.chain.ends.at` and every PSP+02h away from the oracle. Reasoning in `bios_bda.h`.
 
+✅ **#136 (s92): the 640 is a setting.** Settings > Machine > Conventional Memory (KB,
+64–640, default 640) is the memory FITTED; the EBDA is carved from its top as above, so
+512 KB gives INT 12h / `0040:0013` = 511, EBDA and MCB top `7FC0h`, `0040:000E` and INT 15h
+`C1h` ES = `7FC0h`, CMOS `15h/16h` = `0200h`, PSP+02h = `7FC0h`. 640 maps to exactly the old
+constants (`bios_conv_top_para`, `bda_test.c` checks the whole 1 MB is byte-identical).
+Decided once at start-up (`g_dos_mem_top`); refused — logged, 640 kept — for a program whose
+image would not fit under it. ⚠ The RAM above the new top is still there (a real 512 KB board
+has none); nothing of ours hands it out.
+
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
 | §1 Ports, equipment, memory (`00h`–`16h`) | 7 | 5 | — | — | — | 2 |

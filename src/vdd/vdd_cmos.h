@@ -105,6 +105,11 @@ typedef struct cmos_state {
        it, writes go into it, and SET going low commits it in one step. */
     uint8_t  set_held;
     struct vdd_rtc shadow;
+    /* #136: base memory FITTED, in KB, for 15h/16h -- Settings > Conventional Memory.
+         0 = 640, the machine every build so far has described. Set by the host BEFORE
+         init and preserved across reset like the hooks above: it is how the board is
+         populated, not something POST decides. */
+    uint16_t base_kb;
 } cmos_state;
 
 /* Advance the periodic divider by `clocks` PIT-input-rate clocks and raise IRQ8

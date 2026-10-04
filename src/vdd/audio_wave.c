@@ -1,6 +1,8 @@
 /* audio_wave.c -- see audio_wave.h.  waveOut/midiOut bound at runtime. */
 #include "audio_wave.h"
 #include "audio_rec.h"    /* the ONE includer -- see its header */
+#include "midi_route.h"   /* #136: which midiOut device the MIDI setting means */
+#include "vdd_mpu.h"      /* #136: MPU_SYSEX_MAX, the longest SysEx we pass on */
 #define COBJMACROS
 #include <dsound.h>       /* #234: interfaces only -- dsound.dll is bound at runtime */
 
@@ -29,6 +31,17 @@ typedef UINT (WINAPI *PFN_waveOutVol)(void *, DWORD *);
 typedef UINT (WINAPI *PFN_midiOutOpen)(void **, UINT, DWORD_PTR, DWORD_PTR, DWORD);
 typedef UINT (WINAPI *PFN_midiOutShort)(void *, DWORD);
 typedef UINT (WINAPI *PFN_midiOutClose)(void *);
+/* #136: device names (MIDIOUTCAPSA) and SysEx (MIDIHDR + the long-message calls). */
+typedef struct { WORD wMid, wPid; UINT vDriverVersion; CHAR szPname[32];
+                 WORD wTechnology, wVoices, wNotes, wChannelMask; DWORD dwSupport; } AW_MIDIOUTCAPSA;
+typedef struct { LPSTR lpData; DWORD dwBufferLength, dwBytesRecorded; DWORD_PTR dwUser;
+                 DWORD dwFlags; void *lpNext; DWORD_PTR reserved; DWORD dwOffset;
+                 DWORD_PTR dwReserved[8]; } AW_MIDIHDR;
+#define AW_MHDR_DONE      0x00000001
+#define AW_MHDR_PREPARED  0x00000002
+typedef UINT (WINAPI *PFN_midiOutGetNumDevs)(void);
+typedef UINT (WINAPI *PFN_midiOutGetDevCapsA)(UINT_PTR, AW_MIDIOUTCAPSA *, UINT);
+typedef UINT (WINAPI *PFN_midiOutHdr)(void *, AW_MIDIHDR *, UINT);
 
 static PFN_waveOutOpen   p_waveOutOpen;
 static PFN_waveOutHdr    p_waveOutPrepare, p_waveOutUnprepare, p_waveOutWrite;
@@ -38,6 +51,16 @@ static PFN_midiOutOpen   p_midiOutOpen;
 static PFN_midiOutShort  p_midiOutShortMsg;
 static PFN_midiOutClose  p_midiOutClose;
 static PFN_midiOutClose  p_midiOutReset;     /* same shape: UINT (HMIDIOUT) */
+static PFN_midiOutGetNumDevs  p_midiOutGetNumDevs;     /* #136 */
+static PFN_midiOutGetDevCapsA p_midiOutGetDevCapsA;
+static PFN_midiOutHdr    p_midiOutPrepare, p_midiOutUnprepare, p_midiOutLongMsg;
+
+/* #136: SysEx slots. midiOutLongMsg is ASYNCHRONOUS -- the driver owns the buffer until
+   it sets MHDR_DONE -- so each message is copied into a slot that stays put until then. */
+#define AW_SYSEX_SLOTS 8
+static AW_MIDIHDR s_sxhdr[AW_SYSEX_SLOTS];
+static char       s_sxbuf[AW_SYSEX_SLOTS][MPU_SYSEX_MAX];
+static unsigned   s_sxnext;
 
 static AW_WAVEHDR *hdr_of(audio_wave *aw, int i)
 { return (AW_WAVEHDR *)aw->hdr[i]; }
@@ -204,8 +227,49 @@ static int aw_bind(audio_wave *aw)
     p_midiOutShortMsg   = (PFN_midiOutShort)GetProcAddress(aw->mod, "midiOutShortMsg");
     p_midiOutClose      = (PFN_midiOutClose)GetProcAddress(aw->mod, "midiOutClose");
     p_midiOutReset      = (PFN_midiOutClose)GetProcAddress(aw->mod, "midiOutReset");
+    p_midiOutGetNumDevs = (PFN_midiOutGetNumDevs) GetProcAddress(aw->mod, "midiOutGetNumDevs");
+    p_midiOutGetDevCapsA= (PFN_midiOutGetDevCapsA)GetProcAddress(aw->mod, "midiOutGetDevCapsA");
+    p_midiOutPrepare    = (PFN_midiOutHdr)  GetProcAddress(aw->mod, "midiOutPrepareHeader");
+    p_midiOutUnprepare  = (PFN_midiOutHdr)  GetProcAddress(aw->mod, "midiOutUnprepareHeader");
+    p_midiOutLongMsg    = (PFN_midiOutHdr)  GetProcAddress(aw->mod, "midiOutLongMsg");
     return p_waveOutOpen && p_waveOutPrepare && p_waveOutWrite &&
            p_waveOutReset && p_waveOutClose;
+}
+
+/* ── #136: OPEN THE MIDI DEVICE THE SETTING NAMES. ─────────────────────────────────
+     Host GM (the default) is the old call, unchanged: device 0, no enumeration. Any
+     other choice enumerates the devices and opens the one midi_route_pick finds by name;
+     none found -> device 0 anyway, with midi_ext = 0 so it is treated as the GM synth
+     it is (no SysEx), and the host's log line says the choice was not met. */
+static void aw_midi_open(audio_wave *aw)
+{
+    UINT dev = 0;
+    if (!p_midiOutOpen) return;
+    if (aw->midi_choice != MIDI_ROUTE_GM && p_midiOutGetNumDevs && p_midiOutGetDevCapsA) {
+        static char names[16][32];
+        const char *np[16];
+        UINT n = p_midiOutGetNumDevs(), i;
+        int pick, k;
+        aw->midi_ndevs = n;
+        if (n > 16) n = 16;
+        for (i = 0; i < n; ++i) {
+            AW_MIDIOUTCAPSA caps;
+            names[i][0] = 0;
+            if (p_midiOutGetDevCapsA(i, &caps, sizeof caps) == 0) {
+                for (k = 0; k < 31 && caps.szPname[k]; ++k) names[i][k] = caps.szPname[k];
+                names[i][k] = 0;
+            }
+            np[i] = names[i];
+        }
+        pick = midi_route_pick(aw->midi_choice, np, (int)n);
+        if (pick >= 0) { dev = (UINT)pick; aw->midi_ext = 1; }
+        if (dev < n) {
+            for (k = 0; k < 31 && names[dev][k]; ++k) aw->midi_name[k] = names[dev][k];
+            aw->midi_name[k] = 0;
+        }
+    }
+    if (p_midiOutOpen(&aw->hmidi, dev, 0, 0, 0) == 0) aw->midi_dev = (int)dev;
+    else { aw->hmidi = 0; aw->midi_ext = 0; }
 }
 
 int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
@@ -220,6 +284,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     uint32_t want_bufs = aw->nbufs, want_frames = aw->nframes;
     int want_ds = aw->want_ds;                  /* #234: preserved like the lead */
     int force_silent = aw->force_silent;        /* #132: ditto -- the rig caught it wiped */
+    int midi_choice = aw->midi_choice;          /* #136: ditto */
     for (i = 0; i < sizeof(*aw); ++i) p[i] = 0;
     if (!want_bufs)   want_bufs   = AW_DEF_BUFFERS;     /* 0 = "leave it alone"  */
     if (want_bufs < 2) want_bufs = 2;
@@ -231,6 +296,8 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     aw->nframes = want_frames;
     aw->want_ds = want_ds;
     aw->force_silent = force_silent;
+    aw->midi_choice = midi_choice;
+    aw->midi_dev = -1;
 
     aw->hz = hz ? hz : 44100;
     aw->fill = fill; aw->ctx = ctx;
@@ -260,7 +327,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
             }
         }
         /* MIDI is optional and independent: XP's GS Wavetable synth is device 0. */
-        if (p_midiOutOpen) p_midiOutOpen(&aw->hmidi, 0, 0, 0, 0);
+        aw_midi_open(aw);                   /* #136: or the device the setting names */
     }
 
     aw->running = 1;
@@ -279,6 +346,13 @@ void audio_wave_stop(audio_wave *aw)
     if (aw->dsb) { IDirectSoundBuffer_Release((LPDIRECTSOUNDBUFFER)aw->dsb); aw->dsb = NULL; }
     if (aw->ds)  { IDirectSound_Release((LPDIRECTSOUND)aw->ds); aw->ds = NULL; }
     audio_wave_midi_silence(aw);          /* #214: a held note must not outlive us */
+    /* #136: midiOutReset (in the silence above) hands every queued SysEx buffer back,
+       and a prepared header must be unprepared before its device closes. */
+    {   unsigned i;
+        for (i = 0; i < AW_SYSEX_SLOTS; ++i)
+            if ((s_sxhdr[i].dwFlags & AW_MHDR_PREPARED) && aw->hmidi && p_midiOutUnprepare)
+                p_midiOutUnprepare(aw->hmidi, &s_sxhdr[i], sizeof s_sxhdr[i]);
+    }
     if (aw->hmidi && p_midiOutClose) p_midiOutClose(aw->hmidi);
     if (aw->event) CloseHandle(aw->event);
     if (aw->mod) FreeLibrary(aw->mod);
@@ -288,6 +362,35 @@ void audio_wave_stop(audio_wave *aw)
 void audio_wave_midi(audio_wave *aw, uint32_t msg)
 {
     if (aw->hmidi && p_midiOutShortMsg) p_midiOutShortMsg(aw->hmidi, msg);
+}
+
+void audio_wave_midi_long(audio_wave *aw, const uint8_t *msg, uint32_t len)
+{
+    unsigned t, i;
+    AW_MIDIHDR *h;
+    if (!aw->hmidi || !p_midiOutLongMsg || !p_midiOutPrepare || !p_midiOutUnprepare) return;
+    if (!len || len > MPU_SYSEX_MAX) { aw->sysex_dropped++; return; }
+    for (t = 0; t < AW_SYSEX_SLOTS; ++t) {
+        i = (s_sxnext + t) % AW_SYSEX_SLOTS;
+        h = &s_sxhdr[i];
+        if (h->dwFlags & AW_MHDR_PREPARED) {
+            if (!(h->dwFlags & AW_MHDR_DONE)) continue;           /* the driver still has it */
+            p_midiOutUnprepare(aw->hmidi, h, sizeof *h);
+        }
+        {   uint32_t k;
+            for (k = 0; k < len; ++k) s_sxbuf[i][k] = (char)msg[k]; }
+        ZeroMemory(h, sizeof *h);
+        h->lpData = s_sxbuf[i]; h->dwBufferLength = len; h->dwBytesRecorded = len;
+        if (p_midiOutPrepare(aw->hmidi, h, sizeof *h) != 0) { aw->sysex_dropped++; return; }
+        if (p_midiOutLongMsg(aw->hmidi, h, sizeof *h) != 0) {
+            p_midiOutUnprepare(aw->hmidi, h, sizeof *h);
+            aw->sysex_dropped++; return;
+        }
+        s_sxnext = (i + 1) % AW_SYSEX_SLOTS;
+        aw->sysex_sent++;
+        return;
+    }
+    aw->sysex_dropped++;                                         /* every slot in flight */
 }
 
 /* #214: EVERY NOTE OFF, ON EVERY CHANNEL. The emulated MPU-401 can be reset, but the

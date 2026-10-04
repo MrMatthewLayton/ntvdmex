@@ -148,6 +148,7 @@ typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
 #include "../../sdk/include/ntvdmex-vdd.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
+#include "midi_route.h"       /* #136: Settings > Audio > MIDI -> a host device, by name */
 #include "present_ddraw.h"
 
 /* ── ★ THE FOUR IMPORTS WINDOWS 2000 DOES NOT HAVE. (2026-09-22, user on the 2000 box) ──
@@ -6934,6 +6935,14 @@ static void host_midi_sink(void *ctx, uint32_t msg)
     (void)ctx;
     audio_wave_midi(&g_wave, msg);
 }
+/* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
+   synth by name (g_wave.midi_ext) -- see midi_route.h. Otherwise SysEx is swallowed in
+   vdd_mpu exactly as it always was. */
+static void host_midi_sysex(void *ctx, const uint8_t *msg, uint32_t len)
+{
+    (void)ctx;
+    audio_wave_midi_long(&g_wave, msg, len);
+}
 
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_mpu's: two
@@ -8599,7 +8608,23 @@ static DWORD         g_ms_autocap_fired = 0;
    used the mouse". Defined here rather than beside the rules it serves because the
    status strip, which is built long before input_capture_set, has to answer it too.
    The full policy is written out above input_capture_set; do not add a second latch. */
-static int capture_allowed(void) { return g_ms_want_capture != 0; }
+/* ── #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
+     follows Windows' own pointer, and no capture is needed." So it is the capture policy
+     with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
+     one that never did -- the pointer stays the desktop's, WM_MOUSEMOVE positions and
+     buttons reach the guest (rule 6's "ordinary window" arm), and nothing ever
+     ClipCursors it. capture_allowed() is the one place the policy reads it.
+   ⚠ THE RAW DELTAS ARE GATED ON THE POINTER BEING OVER OUR VIDEO (WM_INPUT). Raw input
+     follows focus, so without that a seamless guest that reads mickeys (0Bh) would keep
+     moving while the pointer was dragged across someone else's window.
+   ⚠ NEITHER POINTER IS HIDDEN FOR IT: Show Host Mouse Cursor governs the arrow exactly
+     as for a guest that never used the mouse (Smart hides it after 5 s still), and the
+     guest draws its own as it always did -- so with Always, two pointers show. Hiding
+     the arrow over the video would leave NO pointer in a graphics mode where our INT 33h
+     draws none (09h shapes are accepted and discarded); unmeasured which guests that is. Default OFF = capture, the behaviour every build so far has had.
+     Live: OK in the dialog releases a held capture at once (settings_apply). */
+static volatile LONG g_ms_seamless = 0;
+static int capture_allowed(void) { return g_ms_want_capture != 0 && !g_ms_seamless; }
 /* RULE 6 (see the capture rules above input_capture_set): does host mouse input reach
    the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
    Uses the mouse but released: no. Read on the UI thread only. */
@@ -11862,14 +11887,20 @@ static void host_fullscreen_toggle(HWND h)
                        approximate-speed dropdown, and because a real CPU cannot be
                        clocked down it is a DUTY CYCLE -- see src/host/cpuspeed.h,
                        which also carries the one calibration constant.
-       ConventionalKB, Umb -- DOS_MEM_TOP is a compile-time constant and there are no
-                       upper memory blocks to link. See GH #47.
-       Renderer, Filtering -- the windowed path is GDI StretchDIBits; a DirectDraw
-                       windowed blit does not exist yet (the clipper field is unused).
-                       Filtering IS pushed, and GDI honours it in the stretch.
-       Opl (OPL2/OPL3)     -- vdd_opl is a 9-channel OPL2. There is no OPL3 to select.
-       SbModel, Midi, KeyboardLayout, Typematic, SeamlessMouse,
-       A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
+       ★ #136 (s92): ConventionalKB (g_dos_mem_top, start-up only), Midi (aw_midi_open,
+                       start-up only), SeamlessMouse (capture_allowed) are live; so are
+                       HostCursorMode and FloppyUsePhysical, which were read here since s84.
+       STILL STORED ONLY, each for a reason the startup report prints (settings_dead_why):
+         Umb          -- there are no upper memory blocks to link (XMS 10h = B1h, AH=5803h
+                         refused). Providing them is an arena in C000-EFFF, not a switch.
+         A20          -- "A20 Line Always Enabled": the 1 MB wrap is not modelled, so the
+                         line IS always enabled and the unchecked state cannot be honoured
+                         without remapping views on every gate toggle (dos_xms.h). The
+                         gate FLAG already follows the guest; locking it would change the
+                         default, which today honours a guest's disable.
+         CdRomUsePhysical, CdRomImage -- no CD-ROM is mounted into DOS (#240/#241).
+         SoundFontPath -- there is no SF2 synth in this host; Midi=SoundFont routes to a
+                         host SoundFont DRIVER, which keeps its own list (midi_route.h).
        (FloppyAImage IS live: it is what INT 13h opens. JoystickType and
        JoystickGamepad ARE live as of session 62: the gameport VDD and the winmm
        poll thread consume them.) */
@@ -12004,12 +12035,41 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
+    /* #136 (s92). HostCursorMode and FloppyUsePhysical were READ by settings_apply since
+       s84 and simply never listed here, so the report called two working rows dead.
+       ConventionalKB, Midi and SeamlessMouse are new consumers: g_dos_mem_top,
+       aw_midi_open, capture_allowed. */
+    SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
 };
 static int settings_is_live(int id)
 {
     unsigned i;
     for (i = 0; i < sizeof SET_LIVE_IDS; ++i) if (SET_LIVE_IDS[i] == id) return 1;
     return 0;
+}
+/* ── #136: A ROW THAT STAYS DEAD SAYS WHY, IN THE REPORT. ────────────────────────────
+     "stored only" alone reads like an oversight waiting for a line in settings_apply;
+     each of these is a decision, and the reason is what a reader needs to not re-open it.
+     Only rows NOT in SET_LIVE_IDS ever reach this. */
+static const char *settings_dead_why(int id)
+{
+    switch (id) {
+    case SET_UMB:   return "there are no upper memory blocks to provide: XMS 10h answers "
+                           "B1h and AH=5803h is refused, as with no EMM386 / DOS=UMB";
+    case SET_A20:   return "the 1 MB address wrap is not modelled, so the line is always "
+                           "enabled -- the gate FLAG follows the guest through 8042 / 92h / XMS";
+    case SET_CDPHYS: return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
+    default:        return "not used";
+    }
+}
+static const char *settings_dead_why_s(int i)
+{
+    switch (i) {
+    case SET_STR_CDROM:     return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
+    case SET_STR_SOUNDFONT: return "no SoundFont synth in NTVDMEX; MIDI=SoundFont uses a "
+                                   "host SF2 driver, which keeps its own list";
+    default:                return "not used";
+    }
 }
 
 static void settings_log_sources(void)
@@ -12032,7 +12092,9 @@ static void settings_log_sources(void)
             q = zput(q, " OVERRIDDEN by "); q = zput(q, g_set_ovr[i]);
             q = zput(q, " -> "); q = zdec(q, g_set_ovr_v[i]);
         }
-        q = zput(q, settings_is_live(i) ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+        if (settings_is_live(i)) q = zput(q, "\r\n");
+        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why(i));
+               q = zput(q, ", GH #136)\r\n"); }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
         q = zput(q, "  "); q = zput(q, SET_STR_DEFS[i].reg); q = zput(q, " = \"");
@@ -12041,8 +12103,9 @@ static void settings_log_sources(void)
         if (i == SET_STR_SHELL && g_shell_ovr) {
             q = zput(q, " OVERRIDDEN by "); q = zput(q, g_shell_ovr);
         }
-        q = zput(q, (i == SET_STR_FLOPPYA || i == SET_STR_SHELL)
-                    ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+        if (i == SET_STR_FLOPPYA || i == SET_STR_SHELL) q = zput(q, "\r\n");
+        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why_s(i));
+               q = zput(q, ", GH #136)\r\n"); }
     }
     log_append(LOG_PATH, b, q);
 }
@@ -12083,6 +12146,18 @@ static int g_dspver_forced;                /* cfg\dspver.txt beat the model's ve
    the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
    which some games specifically want. */
 static int g_xms_on = 1, g_ems_on = 1;
+
+/* ── #136: CONVENTIONAL MEMORY, AND WHERE IT ENDS. ────────────────────────────────
+     g_conv_kb_want is the setting (memory FITTED, 64..640 KB); g_dos_mem_top is the
+     paragraph DOS's arena ends at and the EBDA starts at, decided ONCE at start-up from
+     it (bios_conv_top_para -- 640 KB gives exactly DOS_MEM_TOP, 9FC0h, so the default
+     machine is the one every build so far has run). Every consumer reads the variable:
+     INT 12h, 0040:0013, 0040:000E, INT 15h C1h, CMOS 15h/16h, the first PSP's +02h and
+     the MCB chain. ⚠ START-UP ONLY: settings_apply runs again on a dialog OK, but moving
+     the top of an arena a program is already running in is not something any machine
+     does; the new value is the next program's. */
+static unsigned g_conv_kb_want = BIOS_CONV_KB_MAX;
+static uint16_t g_dos_mem_top  = (uint16_t)DOS_MEM_TOP;
 
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
@@ -12139,6 +12214,13 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_floppy_img     = ((!s->v[SET_FLOPPYPHYS] || !host_has_floppy()) && s->s[SET_STR_FLOPPYA][0])
                      ? s->s[SET_STR_FLOPPYA] : NULL;
     g_hostcur_mode   = (int)s->v[SET_HOSTCURSOR];                   /* s84 */
+    /* #136: read at start-up only -- see g_dos_mem_top. */
+    g_conv_kb_want   = bios_conv_kb_clamp((unsigned)s->v[SET_CONVKB]);
+    /* #136: seamless mouse. Turning it on while a guest holds the pointer gives the
+       pointer back now (we are on the UI thread when `live`), rather than leaving a
+       capture that the policy can no longer release by clicking. */
+    InterlockedExchange(&g_ms_seamless, s->v[SET_SEAMLESS] ? 1 : 0);
+    if (live && h && g_ms_seamless && g_captured) input_capture_set(h, 0);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -13316,7 +13398,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              feel like something being done TO you. */
         if (InterlockedExchange(&g_ms_want_release, 0) && g_captured)
             input_capture_set(h, 0);      /* the program that owned it has exited */
-        if (g_ms_want_capture && !g_ms_autocap_done && !g_captured
+        if (capture_allowed() && !g_ms_autocap_done && !g_captured   /* #136: not seamless */
             && GetForegroundWindow() == h) {
             InterlockedExchange(&g_ms_autocap_done, 1);
             ++g_ms_autocap_fired;
@@ -13941,6 +14023,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             /* RULE 6: raw input follows FOCUS, not capture -- a released guest would
                otherwise keep mouse-looking while the user drags on the desktop. */
             if (!mouse_goes_to_guest()) break;
+            /* #136: seamless -- only while Windows' pointer is over our picture. */
+            if (g_ms_seamless && !g_captured) {
+                POINT sp;
+                if (!GetCursorPos(&sp) || WindowFromPoint(sp) != h) break;
+                ScreenToClient(h, &sp);
+                if (!pt_over_video(h, sp.x, sp.y)) break;
+            }
             InterlockedExchangeAdd(&g_ms_dx, (LONG)ri.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_ms_dy, (LONG)ri.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
@@ -28684,7 +28773,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                this still claimed 640. Real DOS reports 639 for exactly that
                reason -- the top 1KB is the Extended BIOS Data Area. Derived
                from the map rather than typed, so the two cannot drift. */
-            BSETAX((WORD)BIOS_BASE_MEM_KB);   /* #253: the EBDA is real now -- bios_bda.h */
+            BSETAX(bios_base_kb_of_top(g_dos_mem_top));   /* #253 EBDA; #136 the setting */
             BCF_CLR();
         } else if (bn == 0x15) {
             unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
@@ -28815,7 +28904,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it
                    (p_int15 int15.c1.status). Used to fall to the UNIMPL arm
                    below: CF=1, "no EBDA", while INT 12h withheld its kilobyte. */
-                VDM_SET16(tib, VTIB_ES, BIOS_EBDA_SEG);
+                VDM_SET16(tib, VTIB_ES, g_dos_mem_top);   /* #136: = BIOS_EBDA_SEG at 640 KB */
                 BCF_CLR();
             } else if (ah15 == 0xC0) {         /* get system config table (#54) */
                 VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
@@ -30558,6 +30647,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        its objects are code before it starts asking us for memory to load them into. */
     dpmi_le_learn(filebuf, nread);
 
+    /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
+         the image is laid down: the loader writes the program above the PSP with no
+         bound of its own, and the EBDA (bios_bda_init_top, later) is zeroed at the new
+         top -- so a program that does not fit under a small setting would be loaded and
+         then have its own code wiped. A real DOS says "Program too big to fit in memory"
+         at that point; the host cannot say that to a program it was launched to RUN, so
+         it refuses the SETTING instead, loudly, and the machine stays at 640 KB.
+         640 (the default) never enters this block and logs nothing new. */
+    if (g_conv_kb_want != BIOS_CONV_KB_MAX) {
+        uint16_t top = bios_conv_top_para(g_conv_kb_want), alloc = 0;
+        uint16_t avail = (uint16_t)(top - DOS_PSP_SEG);
+        int high = 0, fits;
+        if (nread >= 2 && filebuf[0] == 'M' && filebuf[1] == 'Z')
+            fits = dos_exec_size(filebuf, nread, avail, &alloc, &high) == 0;
+        else                                /* .COM: PSP + the image + a 256-byte stack */
+            fits = (uint32_t)0x10u + ((nread + 0x100u + 15u) >> 4) <= (uint32_t)avail;
+        p = zput(p, "STAGE2: ConventionalKB=");  p = zdec(p, g_conv_kb_want);
+        if (fits) {
+            g_dos_mem_top = top;
+            p = zput(p, " -> INT 12h ");       p = zdec(p, bios_base_kb_of_top(top));
+            p = zput(p, " KB, EBDA + MCB top 0x"); p = zhex(p, top);
+            p = zput(p, " (#136)\r\n");
+        } else {
+            p = zput(p, " REFUSED: this program does not fit under it -- the machine stays at "
+                        "640 KB (#136)\r\n");
+            settings_note_override(SET_CONVKB, "a program too big for it", BIOS_CONV_KB_MAX);
+        }
+    }
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
 
@@ -30761,7 +30878,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
 
-    dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
+    dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_dos_mem_top);   /* #136 */
     /* AFTER the vectors above are planted, never before: saving a vector that is
        still 0000:0000 stores a null the program restores on the way out. Parent
        PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
@@ -30906,7 +31023,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " [");
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
-    {   uint16_t first_mcb = dos_mcb_init(NULL);
+    {   uint16_t first_mcb = dos_mcb_init_top(NULL, g_dos_mem_top);   /* #136 */
         dos_int21_init(&m, first_mcb);
         /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
            dos_mcb_init, which lays the chain and clears the name byte. */
@@ -31458,6 +31575,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_global16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
+    g_cmos.base_kb = (uint16_t)(bios_base_kb_of_top(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
@@ -31615,7 +31733,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
          settings_apply() has set the joystick type (bit 12). g_bda_ready lets a later
          settings change re-write 0010 -- see bios_bda_refresh_equipment. */
-    bios_bda_init(NULL, bios_equipment_word());
+    bios_bda_init_top(NULL, bios_equipment_word(), g_dos_mem_top);   /* #136 */
     g_bda_ready = 1;
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
@@ -31949,7 +32067,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          on -- audible as a pitch error, not as an error message. */
     g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
     g_wave.force_silent = g_safe.audio_out;                 /* s90 #132: SAFE MODE */
+    g_wave.midi_choice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
+         Host GM (the default) opens device 0 as it always did and logs nothing new. */
+    if (g_wave.midi_choice != MIDI_ROUTE_GM) {
+        char mb[200], *mq = zput(mb, "STAGE2: MIDI = ");
+        mq = zput(mq, g_wave.midi_choice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
+        if (g_wave.midi_ext) {
+            mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.midi_dev);
+            mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\", SysEx passed through");
+            g_mpu.sysex_sink = host_midi_sysex;     /* the MPU is on the bus already; no */
+            g_gusmidi.sysex_sink = host_midi_sysex; /* guest code has run yet            */
+        } else {
+            mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.midi_ndevs);
+            mq = zput(mq, " -> Host GM (device 0");
+            if (g_wave.midi_name[0]) { mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\""); }
+            mq = zput(mq, g_wave.midi_dev < 0 ? ", would not open)" : ")");
+        }
+        if (g_wave.midi_choice == MIDI_ROUTE_SF2)
+            mq = zput(mq, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        mq = zput(mq, " (#136)\r\n"); log_append(LOG_PATH, mb, mq);
+    }
     {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
         aq = zput(aq, g_wave.using_ds ? "DirectSound" : g_wave.silent ? "none (silent pump)" : "WinMM");
         if (g_wave.want_ds && !g_wave.using_ds) aq = zput(aq, " (DirectSound asked for, would not open)");
