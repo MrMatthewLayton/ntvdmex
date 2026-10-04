@@ -276,7 +276,22 @@ typedef struct {
     DWORD written;           /* what actually went into the hole, for the log   */
     int   action;            /* WOWCALL_ACT_* -- see above                      */
     WORD  actarg;            /* what the action is about                        */
+    WORD  etask;             /* s92: krnl386's current task when it was entered  */
+    WORD  prevtask;          /* s92: non-zero = an INTER-TASK call; put back on leave */
 } wowcall_frame_t;
+
+/* ── s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
+     SendMessage across tasks is a directed yield: the receiver's procedure runs on
+     the receiver's stack with the receiver current, and the sender waits. Run on
+     the sender's stack instead, WinHelp's WM_WINHELP handler asked GetCurrentTask,
+     got Notepad, enumerated Notepad's windows and sent Notepad a WM_COMMAND; and a
+     near pointer to a local reads garbage when SS is not the procedure's DS. The
+     host knows where the receiver's stack is free -- below where it is parked --
+     so main.c (ws_retarget) answers "which SS:SP, and switch the task word";
+     `untarget` switches it back when the procedure returns. */
+static WORD (*g_wc_curtask)(void) = 0;
+static int  (*g_wc_retarget)(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev) = 0;
+static void (*g_wc_untarget)(WORD prev) = 0;
 
 static wowcall_frame_t g_wc[WOWCALL_MAX_DEPTH];
 static int             g_wc_depth  = 0;
@@ -333,6 +348,16 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     fr->sink    = sink;
     fr->action  = WOWCALL_ACT_NONE;   /* the caller sets it after we succeed */
     fr->actarg  = 0;
+    fr->etask   = g_wc_curtask ? g_wc_curtask() : 0;
+    fr->prevtask = 0;
+    if (hwnd && g_wc_retarget) {          /* s92 #306: see g_wc_retarget */
+        WORD nss = 0, nsp = 0; DWORD nb = 0;
+        if (g_wc_retarget(hwnd, &nss, &nsp, &nb, &fr->prevtask) && nb) {
+            VDM_SET16(tib, VTIB_SS,  nss);
+            VDM_SET16(tib, VTIB_ESP, nsp);
+            ssbase = nb;
+        } else fr->prevtask = 0;
+    }
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
@@ -420,6 +445,7 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
     if (g_wc_depth <= 0) return NULL;
     fr = &g_wc[--g_wc_depth];
     wowsched_restore(&fr->saved, tib);
+    if (fr->prevtask && g_wc_untarget) g_wc_untarget(fr->prevtask);
     if (fr->sink) *fr->sink = (WORD)result;
     g_wc_lastres = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
     fr->written = 0;

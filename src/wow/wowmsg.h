@@ -208,6 +208,30 @@ static DWORD    g_wm_taken  = 0;    /* ...and how many came out                *
 static DWORD    g_wm_dropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX       */
 static int      g_wm_quit = 0;      /* PostQuitMessage was called              */
 static WORD     g_wm_quitcode = 0;
+/* ── s92 (#306): ONE RING, BUT EVERY TASK SEES ONLY ITS OWN MESSAGES. ─────────
+     The note at the top came true: with the run queue, Calc's GetMessage took a
+     message WinHelp had posted to ITS OWN window, and DispatchMessage ran WinHelp's
+     window procedure on Calc's stack -- SS != DS, a near pointer to a local read
+     garbage, #GP. Win16 queues are per task, so a take is too: `g_wm_taker` is
+     the task asking (0 = no filter: the modal loops and BeginPaint keep their
+     old behaviour), `g_wm_owner` names a window's task (0 = unknown, anyone's).
+     A thread message (hwnd 0) is anyone's too. And PostQuitMessage ends the loop
+     of the task that called it, not every task's. */
+static WORD     g_wm_quittask = 0;
+static WORD     g_wm_taker = 0;
+static WORD   (*g_wm_owner)(WORD hwnd) = 0;
+
+static int wowmsg_is_for(WORD hwnd, WORD task)
+{
+    WORD o;
+    if (!task || !hwnd || !g_wm_owner) return 1;
+    o = g_wm_owner(hwnd);
+    return !o || o == task;
+}
+static int wowmsg_quit_for(WORD task)
+{
+    return g_wm_quit && (!g_wm_quittask || !task || g_wm_quittask == task);
+}
 /* ★ WHO A KEYSTROKE IS FOR. Win16 sends keyboard input to the focus window, and
      SYSEDIT sets one (USER 0x16 SETFOCUS, four times in a launch). With no
      focus the target is 0, and USER's own DispatchMessage `jcxz`es a null hwnd
@@ -321,6 +345,7 @@ static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *ou
         }
         if (hwnd && e->hwnd != hwnd) continue;
         if ((minf || maxf) && (e->msg < minf || e->msg > maxf)) continue;
+        if (!wowmsg_is_for(e->hwnd, g_wm_taker)) continue;          /* s92 #306 */
         *out = *e;
         if (remove) {
             for (i = n; i > 0; --i)
@@ -332,6 +357,15 @@ static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *ou
         return 1;
     }
     return 0;
+}
+
+/* s92 (#306): how many queued messages are `task`'s (all of them for task 0). */
+static int wowmsg_count_for(WORD task)
+{
+    int n, c = 0;
+    for (n = 0; n < g_wm_count; ++n)
+        if (wowmsg_is_for(g_wm_ring[(g_wm_head + n) % WOWMSG_MAX].hwnd, task)) ++c;
+    return c;
 }
 
 /* Read an 18-byte MSG back out of guest memory -- the guest owns this one; it is

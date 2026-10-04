@@ -404,6 +404,10 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                      ONE Win16 task -- so every window we have IS that task's.
                      Said here rather than left as a coincidence. */
                 if (w->parent) continue;
+                /* s92 (#306): ...no longer ONE task -- EnumTaskWindows keeps to
+                     the hTask it was given (a window of unknown task still shows). */
+                if (g_we.kind == WOWENUM_TASK && g_wu_enumtask && w->task
+                    && w->task != g_wu_enumtask) continue;
             }
             hwnd16 = w->hwnd;
             break;

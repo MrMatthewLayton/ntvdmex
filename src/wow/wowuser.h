@@ -1313,6 +1313,40 @@ static int            g_wu_nprop = 0;
    last value where `GetWindowTask` can see it. 0 until the first BOP. */
 static WORD g_wu_curtask = 0;
 
+/* ── s92 (#306): WHOSE FILE A RESOURCE IS IN. Every menu, icon, cursor and
+     accelerator table used to be read from g_wow_cmd_prog, the program on the
+     command line -- right while there was one Win16 program, wrong for the next:
+     WinHelp, started by Calc, came up with NO MENU because WINHELP.EXE's menu
+     #0fa0 was looked for in CALC.EXE. The running task's module says which file:
+     TDB+0x1E is hModule (TDB+0x1C, hInstance, is already read at (A)); the module
+     database starts "NE", and its word at +0x0A points at the OFSTRUCT krnl386
+     opened the file with, path at +8. Anything that does not check out falls back
+     to the command-line program, which is what every single-task run had. */
+static DWORD dpmi_sel_base(WORD sel);
+static char g_wu_resprog[260];
+static const char *wowuser_res_prog(void)
+{
+    WORD  task = g_wu_curtask, hmod, ofs;
+    DWORD tb, mb;
+    const volatile BYTE *t, *m;
+    int   i;
+    if (!task || task == 0xFFFF || !(tb = dpmi_sel_base(task))) return g_wow_cmd_prog;
+    t = (const volatile BYTE *)(ULONG_PTR)tb;
+    hmod = (WORD)(t[0x1e] | (t[0x1f] << 8));
+    if (!hmod || !(mb = dpmi_sel_base(hmod))) return g_wow_cmd_prog;
+    m = (const volatile BYTE *)(ULONG_PTR)mb;
+    if (m[0] != 'N' || m[1] != 'E') return g_wow_cmd_prog;
+    ofs = (WORD)(m[0x0a] | (m[0x0b] << 8));
+    if (ofs < 0x40 || ofs > 0x8000) return g_wow_cmd_prog;
+    for (i = 0; i < (int)sizeof g_wu_resprog - 1 && m[ofs + 8 + i]; ++i)
+        g_wu_resprog[i] = (char)m[ofs + 8 + i];
+    g_wu_resprog[i] = 0;
+    if (i < 4 || g_wu_resprog[1] != ':'
+        || GetFileAttributesA(g_wu_resprog) == INVALID_FILE_ATTRIBUTES)
+        return g_wow_cmd_prog;
+    return g_wu_resprog;
+}
+
 #define WOWUSER_FILLRECT         0x0051
 #define FR_ARG_BRUSH     0
 #define FR_ARG_RECT      2
@@ -1550,11 +1584,11 @@ static HICON wowuser_sysres_hicon(WORD token, int *picked, int cx, int cy)
     /* ★ Already an object: hand it back. Nothing to load, nothing to guess. */
     if (kind == AD_KIND_REALICON) return wowuser_sysres_realicon(token);
     if (nm)
-        return wowres_open(g_wow_cmd_prog) ? wowres_icon_named(nm, picked, cx, cy)
+        return wowres_open(wowuser_res_prog()) ? wowres_icon_named(nm, picked, cx, cy)
                                            : NULL;
     if (!ord) return NULL;
     if (kind == AD_KIND_MODULERES)
-        return wowres_open(g_wow_cmd_prog) ? wowres_icon(ord, picked, cx, cy) : NULL;
+        return wowres_open(wowuser_res_prog()) ? wowres_icon(ord, picked, cx, cy) : NULL;
     /* ⚠ A PREDEFINED icon at an explicit size needs LoadImage, not LoadIcon --
          LoadIcon always gives SM_CXICON and the small one would be derived
          again, which is the defect this parameter exists to remove. */
@@ -1606,7 +1640,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     if (r->cur) return r->cur;                   /* built once (#216) */
     if (r->kind == AD_KIND_REALICON) return (HCURSOR)r->real;
     if (nm) {
-        c = wowres_open(g_wow_cmd_prog) ? wowres_cursor_named(nm) : NULL;
+        c = wowres_open(wowuser_res_prog()) ? wowres_cursor_named(nm) : NULL;
         r->cur = c;
         return c;
     }
@@ -1614,7 +1648,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     /* s89 (#216): a module's own cursor asked for BY ORDINAL is in its file,
        not in the system's set -- LoadCursorA(NULL, 2) would be a stranger's. */
     if (r->kind == AD_KIND_MODULERES) {
-        c = wowres_open(g_wow_cmd_prog) ? wowres_cursor(ord) : NULL;
+        c = wowres_open(wowuser_res_prog()) ? wowres_cursor(ord) : NULL;
         r->cur = c;
         if (!c && fell) *fell = 1;
         return c;
@@ -2211,10 +2245,24 @@ typedef struct wowuser_win_s {
        program's top-level window), minted by wowuser_alias16 for GetWindow. No
        procedure, never destroyed by us, skipped by everything that means "ours". */
     BYTE    foreign;
+    /* s92 (#306): the task that created it -- whose queue its posted messages are
+       in. 0 = not known; such a window's messages go to whichever task asks. */
+    WORD    task;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
 static int           g_wu_nwin = 0;
+/* s92 (#306): the hTask an EnumTaskWindows walk is for (wowenum.h); 0 = any. */
+static WORD          g_wu_enumtask = 0;
+
+/* s92 (#306): whose queue a window's messages are in -- wowmsg.h's g_wm_owner. */
+static WORD wowuser_owner16(WORD hwnd)
+{
+    int i;
+    for (i = 0; i < g_wu_nwin; ++i)
+        if (g_wu_win[i].hwnd == hwnd) return g_wu_win[i].task;
+    return 0;
+}
 
 /* ── krnl386's SEGMENT 1, AS A LIVE SELECTOR. ─────────────────────────────────
      Needed to call KERNEL exports (see EM_GETHANDLE16), and it costs nothing to
@@ -2290,6 +2338,8 @@ static wowuser_win_t *wowuser_newwin(void)
     w->dlg3d = 0;
     w->subproc = 0; w->orig32 = NULL;  /* #308: only SetWindowLong sets them */
     w->foreign = 0;                    /* s91: only wowuser_alias16 sets it */
+    w->task = (g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask;
+    g_wm_owner = wowuser_owner16;
     return w;
 }
 
@@ -4015,6 +4065,24 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
 }
 
 
+/* s92: FindWindow BY A WIN16 CLASS NAME. A guest's class is registered in Win32 under
+   WOWWIN_CLASS_PREFIX + its name ("NTVDMEX16.MS_WINHELP"), so the bare name never
+   matched a guest window -- FindWindow by class found only system classes (#32770 and
+   friends, which keep their names). The prefixed name first, then the bare one. */
+static HWND wowuser_find_class(const char *cls, const char *nam)
+{
+    HWND h = NULL;
+    if (cls && cls[0]) {
+        char full[160];
+        int  i = 0, k;
+        for (k = 0; WOWWIN_CLASS_PREFIX[k] && i < (int)sizeof full - 1; ++k) full[i++] = WOWWIN_CLASS_PREFIX[k];
+        for (k = 0; cls[k] && i < (int)sizeof full - 1; ++k) full[i++] = cls[k];
+        full[i] = 0;
+        h = FindWindowA(full, nam);
+    }
+    return h ? h : FindWindowA(cls, nam);
+}
+
 static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 {
     g_wu_cur_f = f;                     /* s91: for wowuser_def32's 16:16 reads */
@@ -4304,7 +4372,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             else if (!(w->style & WS_CHILD16)
                      && (cc->menuord || cc->menuname[0])) {
                 int nitems = 0;
-                if (wowres_open(g_wow_cmd_prog))
+                if (wowres_open(wowuser_res_prog()))
                     hm = cc->menuord ? wowres_menu(cc->menuord, &nitems)
                                      : wowres_menu_byname(cc->menuname, &nitems);
                 w->menuitems = nitems;
@@ -4535,11 +4603,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                have been a gap in this host before. */
             if (!(style & WS_CHILD16)) {
                 if (menuname[0] || menuord) {
-                    if (wowres_open(g_wow_cmd_prog))
+                    if (wowres_open(wowuser_res_prog()))
                         hm = menuord ? wowres_menu(menuord, &nitems)
                                      : wowres_menu_byname(menuname, &nitems);
                 } else if (c->menuord || c->menuname[0]) {
-                    if (wowres_open(g_wow_cmd_prog))
+                    if (wowres_open(wowuser_res_prog()))
                         hm = c->menuord ? wowres_menu(c->menuord, &nitems)
                                         : wowres_menu_byname(c->menuname, &nitems);
                 }
@@ -5153,6 +5221,25 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
+        /* ── s92 (#306): kind 6 -- "where is the window of this CLASS?", from USER's
+             WinHelp() (seg1:0x6d97: `push 6 / push cs / push 0x6c59` = "MS_WINHELP").
+             The caller reads DX:AX: DX non-zero = found, and AX is the window it then
+             SENDS the registered WM_WINHELP to (seg1:0x6db7). Stepped over it answered 0,
+             so Help said "Not enough memory available" with WinHelp's window open. */
+        if (kind == 6 && b) {
+            char cls[64];
+            DWORD fp = wow32_argd(f, NOTIFY_ARG_BLOCK);
+            HWND  h = NULL;
+            WORD  h16 = 0;
+            if (wowuser_farstr(f, fp, cls, sizeof cls)) h = wowuser_find_class(cls, NULL);
+            h16 = h ? wowwin_hwnd16(h) : 0;
+            wu_puts(note, notecap, &k, "NotifyWow(6, find class \"");
+            wu_puts(note, notecap, &k, cls);
+            wu_puts(note, notecap, &k, h16 ? "\") -> 0x" : "\") -> not found");
+            if (h16) wu_puthex(note, notecap, &k, h16, 4);
+            wow32_setret(f, h16 ? (0x00010000u | h16) : 0);
+            return 1;
+        }
         if (kind != WOWNOTIFY_ACCEL || !b) return 0;
         wu_puts(note, notecap, &k, "NotifyWow(RT_ACCELERATOR) hInst=0x");
         wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_HINSTANCE), 4);
@@ -5209,7 +5296,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         }
         {   /* #160: a menu held back for this application's inits is opened HERE,
                  once the take has passed its marker -- see WOWMSG_MENUREPLAY. */
-            int got = wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m);
+            int got;
+            g_wm_taker = (g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask;   /* s92 #306 */
+            got = wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m);
             if (g_wm_replay_due) {
                 wowmsg_t r = g_wm_replay;
                 g_wm_replay_due = 0;
@@ -5230,6 +5319,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 }
                 wu_puts(note, notecap, &k, "[menu opened after its inits] ");
             }
+            g_wm_taker = 0;
             if (got) {
             wowmsg_write(lp, &m);
             wu_puts(note, notecap, &k, peek ? "PeekMessage -> hwnd=0x"
@@ -5251,7 +5341,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
             }
         }
-        if (!peek && g_wm_quit) {
+        if (!peek && wowmsg_quit_for((g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask)) {
             m.hwnd = 0; m.msg = WM_QUIT16; m.wparam = g_wm_quitcode;
             m.lparam = 0; m.time = 0; m.ptx = m.pty = 0;
             wowmsg_write(lp, &m);
@@ -5317,6 +5407,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     case WOWUSER_POSTQUITMESSAGE: {
         int k = 0;
         g_wm_quit = 1;
+        g_wm_quittask = (g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask;   /* s92 #306 */
         g_wm_quitcode = wow32_argw(f, PQM_ARG_EXITCODE);
         wu_puts(note, notecap, &k, "PostQuitMessage 0x");
         wu_puthex(note, notecap, &k, g_wm_quitcode, 4);
@@ -5557,6 +5648,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         f->enumreq = 1;
+        /* s92 (#306): EnumTaskWindows walks THE TASK IT IS GIVEN. WinHelp, running
+             its WM_WINHELP handler inside Calc's SendMessage, enumerated "its own"
+             windows, was handed Calc's/Notepad's main window and sent it a
+             WM_COMMAND meant for itself -- Notepad said "You have not entered any
+             text to be saved". */
+        g_wu_enumtask = (which == WOWENUM_TASK) ? wow32_argw(f, ETW_ARG_TASK) : 0;
+        if (g_wu_enumtask) {
+            wu_puts(note, notecap, &k, " task=0x");
+            wu_puthex(note, notecap, &k, g_wu_enumtask, 4);
+        }
         wu_puts(note, notecap, &k, " -- walking this task's own top-level windows"
                                    " (a Win32 window has no 16-bit handle to"
                                    " report it by)");
@@ -5625,7 +5726,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             volatile BYTE *lp = wow32_argptr(f, TA_ARG_LPMSG);
             wowmsg_t m;
             if (nacc < 0) {
-                nacc = wowres_open(g_wow_cmd_prog)
+                nacc = wowres_open(wowuser_res_prog())
                      ? wowres_accel_first(acc, WOWRES_MAX_ACCEL, &accres) : 0;
             }
             if (nacc > 0 && lp) {
@@ -10007,9 +10108,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        wu_puts(note, notecap, &k, " -> the current task 0x");
-        wu_puthex(note, notecap, &k, g_wu_curtask, 4);
-        wow32_setret(f, g_wu_curtask);
+        /* s92 (#306): the task that CREATED it, now that there is more than one. */
+        wu_puts(note, notecap, &k, w->task ? " -> its creator, task 0x"
+                                           : " -> the current task 0x");
+        wu_puthex(note, notecap, &k, w->task ? w->task : g_wu_curtask, 4);
+        wow32_setret(f, w->task ? w->task : g_wu_curtask);
         return 1;
     }
 
@@ -10327,7 +10430,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              the host's other windows. Minesweeper uses this to find a previous
              instance of itself; a stale 32-bit window of ours cannot match its
              class name, so the extra scope costs nothing measurable. */
-        h = FindWindowA(hascls ? cls : NULL, hasnam ? nam : NULL);
+        h = wowuser_find_class(hascls ? cls : NULL, hasnam ? nam : NULL);
         out = h ? wowwin_hwnd16(h) : 0;
         if (h && !out) {
             /* Found something that is not a guest window: the guest cannot be
@@ -10360,7 +10463,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "LoadMenu(hInst 0x");
         wu_puthex(note, notecap, &k, hinst, 4);
         wu_puts(note, notecap, &k, ", ");
-        if (!wowres_open(g_wow_cmd_prog)) {
+        if (!wowres_open(wowuser_res_prog())) {
             wu_puts(note, notecap, &k, "?) -- ★ CANNOT OPEN THE PROGRAM'S OWN"
                                        " FILE; answered 0");
             wow32_setret(f, 0);

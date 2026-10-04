@@ -49,7 +49,6 @@
 static BYTE  *g_wr_img  = NULL;      /* the application's file, verbatim */
 static DWORD  g_wr_len  = 0;
 static char   g_wr_path[512];
-static int    g_wr_tried = 0;
 
 static WORD wr_w(DWORD off)
 {
@@ -57,30 +56,45 @@ static WORD wr_w(DWORD off)
     return (WORD)(g_wr_img[off] | (g_wr_img[off + 1] << 8));
 }
 
-/* Read the application's file once. Returns 1 if there is an image to search. */
+/* Read the application's file once. Returns 1 if there is an image to search.
+   s92 (#306): ONCE PER FILE, not once per process. With a run queue there is more
+   than one Win16 program, and WinHelp's menu is in WINHELP.EXE, not in the program
+   on the command line; a few images are kept and the current one is selected. */
+#define WOWRES_CACHE 6
+static struct { char path[512]; BYTE *img; DWORD len; } g_wr_cache[WOWRES_CACHE];
+static int g_wr_ncache = 0;
+
 static int wowres_open(const char *path)
 {
     HANDLE h;
     DWORD sz = 0, rd = 0;
-    int i;
-    if (g_wr_tried) return g_wr_img != NULL;
-    g_wr_tried = 1;
+    BYTE *img;
+    int i, c;
     if (!path || !path[0]) return 0;
+    for (c = 0; c < g_wr_ncache; ++c)
+        if (lstrcmpiA(g_wr_cache[c].path, path) == 0) {
+            g_wr_img = g_wr_cache[c].img; g_wr_len = g_wr_cache[c].len;
+            lstrcpynA(g_wr_path, path, sizeof g_wr_path);
+            return g_wr_img != NULL;
+        }
+    g_wr_img = NULL; g_wr_len = 0;
     for (i = 0; i < (int)sizeof g_wr_path - 1 && path[i]; ++i) g_wr_path[i] = path[i];
     g_wr_path[i] = 0;
+    c = (g_wr_ncache < WOWRES_CACHE) ? g_wr_ncache++ : WOWRES_CACHE - 1;
+    lstrcpynA(g_wr_cache[c].path, path, sizeof g_wr_cache[c].path);
+    g_wr_cache[c].img = NULL; g_wr_cache[c].len = 0;     /* a failure is cached too */
     h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
     sz = GetFileSize(h, NULL);
     if (sz == INVALID_FILE_SIZE || sz > WOWRES_MAX_FILE) { CloseHandle(h); return 0; }
-    g_wr_img = (BYTE *)HeapAlloc(GetProcessHeap(), 0, sz);
-    if (!g_wr_img) { CloseHandle(h); return 0; }
-    ReadFile(h, g_wr_img, sz, &rd, NULL);
+    img = (BYTE *)HeapAlloc(GetProcessHeap(), 0, sz);
+    if (!img) { CloseHandle(h); return 0; }
+    ReadFile(h, img, sz, &rd, NULL);
     CloseHandle(h);
-    g_wr_len = rd;
-    if (rd < 0x40 || g_wr_img[0] != 'M' || g_wr_img[1] != 'Z') {
-        g_wr_img = NULL; g_wr_len = 0; return 0;
-    }
+    if (rd < 0x40 || img[0] != 'M' || img[1] != 'Z') return 0;
+    g_wr_cache[c].img = img; g_wr_cache[c].len = rd;
+    g_wr_img = img; g_wr_len = rd;
     return 1;
 }
 

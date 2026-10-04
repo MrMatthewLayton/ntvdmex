@@ -77,7 +77,17 @@ typedef struct {
     int   fresh;                     /* s92: parked at its LAUNCH, never run yet */
     int   runnable;                  /* s92: parked MID-WORK (it yielded to a task it
                                         launched), not waiting for input            */
+    int   wcdepth;                   /* s92: the callback depth it yielded at -- it is
+                                        resumed only at that same depth (LIFO frames) */
+    int   waitmsg;                   /* s92: parked in an EMPTY GetMessage (E): runnable
+                                        again once its own queue is not               */
+    int   base;                      /* s92: the callback depth its top level ran at;
+                                        wcdepth == base = parked holding no host frame,
+                                        so it may resume at ANY depth (re-based there)  */
 } wowsched_slot_t;
+
+/* The running task's base depth -- see `base`. */
+static int g_ws_curbase = 0;
 
 /* s92 (#306): THE RUN QUEUE. One slot was "the task that is not running" -- complete
    for two tasks and wrong for a third: Calc's WinHelp (WOWEXEC + Calc + WINHELP) was
@@ -100,6 +110,9 @@ static void wowsched_save(wowsched_slot_t *s, volatile BYTE *tib,
     s->used    = 1;
     s->fresh   = 0;                  /* the caller marks a launch-parked task fresh */
     s->runnable = 0;                 /* ...and a mid-work one runnable              */
+    s->wcdepth  = 0;
+    s->waitmsg  = 0;
+    s->base     = g_ws_curbase;
 }
 
 static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
@@ -108,6 +121,7 @@ static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
     volatile BYTE *dst = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
     for (k = 0; k < WOWSCHED_CTX_LEN; ++k) dst[k] = s->ctx[k];
     s->used = 0;
+    g_ws_curbase = s->base;          /* a top-level resume is re-based by the caller */
 }
 
 /* ── ★★★ SWAP: PARK THE RUNNING TASK WHERE THE OTHER ONE WAS. (session 39) ────

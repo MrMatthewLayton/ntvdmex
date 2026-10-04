@@ -19916,16 +19916,30 @@ static int ws_fresh(WORD cur)
         if (g_ws_slots[i].used && g_ws_slots[i].fresh && g_ws_slots[i].task != cur) return i;
     return -1;
 }
-static int ws_runnable(WORD cur)
+/* A task that may take the CPU from one idling at callback depth `depth`: a fresh one
+   only from the top (depth 0); a parent parked mid-work (F) only at the depth it left,
+   so the host's callback frames stay last-in first-out across the swap. */
+static int ws_runnable(WORD cur, int depth)
 {
     int i;
     for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].used && (g_ws_slots[i].fresh || g_ws_slots[i].runnable)
-            && g_ws_slots[i].task != cur) return i;
+        if (g_ws_slots[i].used && g_ws_slots[i].task != cur
+            && ((g_ws_slots[i].runnable && g_ws_slots[i].wcdepth == depth)
+                || (g_ws_slots[i].fresh && depth == 0)
+                || (g_ws_slots[i].waitmsg && wowmsg_count_for(g_ws_slots[i].task)
+                    && (g_ws_slots[i].wcdepth == g_ws_slots[i].base
+                        || g_ws_slots[i].wcdepth == depth)))) return i;
     return -1;
 }
-/* s92: WOWEXEC -- the first task resumed at (C). */
-static WORD g_ws_shell;
+/* Parked holding no host callback frame: launched and never run, or idle in its own
+   top-level GetMessage. Such a task is re-based at whatever depth resumes it. */
+static int ws_toplevel(const wowsched_slot_t *s)
+{
+    return s->fresh || (s->waitmsg && s->wcdepth == s->base);
+}
+/* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
+   WOWEXEC (the first task resumed at (C)), whose launches keep the measured order. */
+static WORD g_ws_launch_child, g_ws_shell;
 
 /* krnl386's current-task word. 0xFFFF means "we do not know yet", which is NOT
    the same as 0 -- 0 is krnl386 saying "no task is current", and acting on the
@@ -20016,6 +20030,56 @@ static void wowsched_setcur(WORD task)
     d = (volatile BYTE *)(ULONG_PTR)b;
     d[0x228] = (BYTE)(task & 0xFF);
     d[0x229] = (BYTE)(task >> 8);
+}
+
+/* ── s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
+     g_wc_retarget in wowcall.h. The window's owner (wowuser.h records its
+     creator) must not be the running task, and must be somewhere the host knows
+     its free stack: parked in a run-queue slot, or blocked in a host callback
+     frame it entered (the newest such frame's saved SP; everything below is
+     free). Anything else runs where it always did. 0x40 bytes are left below the
+     parked SP for the frame the guest itself may still think is live. */
+static WORD ws_owner_of(WORD hwnd) { return wowuser_owner16(hwnd); }
+static DWORD g_ws_intertask;
+static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
+{
+    WORD owner = ws_owner_of(hwnd), cur = wowsched_curtask();
+    const BYTE *c[WOWSCHED_MAX + WOWCALL_MAX_DEPTH];
+    WORD bss = 0, bsp = 0xFFFF;
+    int i, n = 0;
+    if (!owner || !cur || cur == 0xFFFF || owner == cur) return 0;
+    for (i = 0; i < WOWSCHED_MAX; ++i)
+        if (g_ws_slots[i].used && g_ws_slots[i].task == owner) c[n++] = g_ws_slots[i].ctx;
+    for (i = g_wc_depth - 2; i >= 0; --i)         /* the newest frame is the one being built */
+        if (g_wc[i].etask == owner) c[n++] = g_wc[i].saved.ctx;
+    /* ⚠ THE DEEPEST ONE. Calls that bounce between two tasks leave the owner's
+         stack in use below its parked SP; the lowest SP known is the free edge. */
+    for (i = 0; i < n; ++i) {
+        WORD css = (WORD)(c[i][VTIB_SS - WOWSCHED_CTX_LO] | (c[i][VTIB_SS - WOWSCHED_CTX_LO + 1] << 8));
+        WORD csp = (WORD)(c[i][VTIB_ESP - WOWSCHED_CTX_LO] | (c[i][VTIB_ESP - WOWSCHED_CTX_LO + 1] << 8));
+        if (bss && (css & ~3u) != (bss & ~3u)) return 0;   /* two stacks: do not guess */
+        bss = css;
+        if (csp < bsp) bsp = csp;
+    }
+    if (!n) return 0;
+    *ss = bss;
+    *sp = (WORD)((bsp - 0x40) & ~1u);
+    if (*sp < 0x200) return 0;                    /* no room: run where it always did */
+    *ssbase = dpmi_sel_base(*ss);
+    if (!*ssbase) return 0;
+    *prev = cur;
+    wowsched_setcur(owner);
+    ++g_ws_intertask;
+    return 1;
+}
+static void ws_untarget(WORD prev) { wowsched_setcur(prev); }
+/* An inter-task call is in flight: the owner's parked context is BORROWED, so no
+   yield may park or resume anything until it returns. */
+static int ws_intertask_live(void)
+{
+    int i;
+    for (i = 0; i < g_wc_depth; ++i) if (g_wc[i].prevtask) return 1;
+    return 0;
 }
 
 /* ── ★★★ wowquiet.txt -- SILENCE THE TRACE, TO MEASURE WHAT IT COSTS. ────────
@@ -22094,6 +22158,55 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      unconditionally -- it costs nothing and the fault hook, which
                      runs where DS is anybody's, depends on having it. */
                 g_wow_dgsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                if (g_wowsched_on && !g_wc_retarget) {     /* s92 #306: inter-task calls */
+                    g_wc_curtask = wowsched_curtask;
+                    g_wc_retarget = ws_retarget;
+                    g_wc_untarget = ws_untarget;
+                }
+                /* ── (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
+                     before the new task has run to its first yield (on real WOW the task has
+                     its own thread and the creator waits for it). USER's WinHelp() depends on
+                     it: it starts WINHELP.EXE and at once looks for the "MS_WINHELP" window;
+                     with the new task merely parked the window did not exist and Calc and
+                     Notepad said "Not enough memory available" (runs/s92/gate3). So the
+                     PARENT's next call is where it yields: parked AT this BOP (re-issued on
+                     resume), marked runnable at the current callback depth; the child runs,
+                     and its first empty GetMessage at that same depth (E) hands back.
+                   ⚠ Not for the BOOT launch of WOWEXEC (g_ws_shell still 0) -- that creator
+                     retires, moment (C), and yielding there killed every launch (gate4) --
+                     nor for WOWEXEC's own launches, which every shelf program was measured
+                     with. Never inside a C-stack nested run or a modal loop. */
+                if (g_wowsched_on && g_ws_launch_child) {
+                    WORD fcur = wowsched_curtask();
+                    if (fcur && fcur != 0xFFFF && fcur != g_ws_launch_child) {
+                        WORD child = g_ws_launch_child;
+                        int  fi, fsi = -1;
+                        g_ws_launch_child = 0;
+                        for (fi = 0; fi < WOWSCHED_MAX; ++fi)
+                            if (g_ws_slots[fi].used && g_ws_slots[fi].fresh
+                                && g_ws_slots[fi].task == child) fsi = fi;
+                        if (fsi >= 0 && g_ws_shell && fcur != g_ws_shell
+                            && g_ww_nested == 0 && !wowdlg_active() && !ws_intertask_live()) {
+                            DWORD fmode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                            wowsched_poke(g_ws_slots[fsi].modelin, WOW32_MODE_ORDINARY);
+                            wowsched_swap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
+                            g_ws_slots[fsi].runnable = 1;          /* the parent, mid-work */
+                            g_ws_slots[fsi].wcdepth  = g_wc_depth;
+                            g_ws_curbase = g_wc_depth;             /* the child's top level */
+                            wowsched_setcur(child);
+                            wow_task_chdir(child, &p);
+                            ++g_ws_switches;
+                            p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, fcur);
+                            p = zput(p, " launched task 0x"); p = zhex(p, child);
+                            p = zput(p, " -- LAUNCH-FIRST at depth 0x"); p = zhex(p, (DWORD)g_wc_depth);
+                            p = zput(p, ": the child runs to its first yield before the"
+                                        " parent's call (id 0x");
+                            p = zhex(p, f.id); p = zput(p, ") is serviced (#306)\r\n");
+                            wowlog_flush(base, &p);
+                            return 1;
+                        }
+                    }
+                }
                 if (g_wowsched_on && f.krnl) {
                     DWORD modelin = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
                     WORD  cur     = wowsched_curtask();
@@ -22132,6 +22245,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
                         wowsched_save(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
                         g_ws_slots[wsi].fresh = 1;          /* s92: not run yet (#306) */
+                        g_ws_launch_child = cur;            /* the parent is the next caller */
                         wow_task_dir_here(cur);             /* #164: its launch directory */
                         wow32_setret(&f, hinst);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
@@ -22180,15 +22294,17 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          has nothing to do. The other new yield is at GetMessage -- see
                          "(E)" at the USER dispatch -- for a task launched and never run. */
                     else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
-                             && cur != 0 && cur != 0xFFFF
+                             && cur != 0 && cur != 0xFFFF && !ws_intertask_live()
                              && (wsi = ws_pick(cur)) >= 0) {
                         WORD to = g_ws_slots[wsi].task;
                         /* Written into the WAITING task's frame now; its epilogue
                            reads them whenever it is resumed, off its own stack. */
                         wow32_setret(&f, 0);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
+                        int drb = ws_toplevel(&g_ws_slots[wsi]);
                         wowsched_poke(g_ws_slots[wsi].modelin, WOW32_MODE_ORDINARY);
                         wowsched_swap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        if (drb) g_ws_curbase = g_wc_depth;
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
@@ -22615,15 +22731,29 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        ⚠ Not from inside anything: no callback in flight, no nested run, no
                          modal loop -- a context swapped there would be resumed under a frame
                          the other task cannot unwind. */
-                    if (g_wowsched_on && f.id == WOWUSER_GETMESSAGE && !g_wm_count
-                        && g_wc_depth == 0 && g_ww_nested == 0 && !wowdlg_active()) {
-                        WORD ycur = wowsched_curtask();
-                        int  ysi  = (ycur && ycur != 0xFFFF) ? ws_runnable(ycur) : -1;
+                    /* ── s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
+                         g_wm_taker), and the task that yields here is parked WAITING FOR
+                         MESSAGES: it is runnable again once one arrives for it -- which is
+                         how WinHelp gets the message it posted itself while Calc ran, and
+                         how a click on one task's window wakes it while another is idle
+                         in the wait below (which then comes back here). */
+                    WORD ecur = wowsched_curtask();
+                    int  ecan = g_wowsched_on && f.id == WOWUSER_GETMESSAGE
+                                && g_ww_nested == 0 && !wowdlg_active()
+                                && ecur && ecur != 0xFFFF && !ws_intertask_live();
+                ws_again_e:
+                    if (ecan && !wowmsg_count_for(ecur)) {
+                        WORD ycur = ecur;
+                        int  ysi  = ws_runnable(ycur, g_wc_depth);
                         if (ysi >= 0) {
                             WORD  yto = g_ws_slots[ysi].task;
                             DWORD ymode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                            int   yrb = ws_toplevel(&g_ws_slots[ysi]);
                             wowsched_poke(g_ws_slots[ysi].modelin, WOW32_MODE_ORDINARY);
                             wowsched_swap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
+                            g_ws_slots[ysi].waitmsg = 1;          /* the one that yielded */
+                            g_ws_slots[ysi].wcdepth = g_wc_depth;
+                            if (yrb) g_ws_curbase = g_wc_depth;
                             wowsched_setcur(yto);
                             wow_task_chdir(yto, &p);
                             ++g_ws_switches;
@@ -22651,7 +22781,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
                          takes it to push a keystroke, so holding it here would
                          make the thing we are waiting for impossible. */
-                    if (f.id == WOWUSER_GETMESSAGE && !g_wm_count && !g_wm_quit) {
+                    if (f.id == WOWUSER_GETMESSAGE && !wowmsg_count_for(ecur == 0xFFFF ? 0 : ecur)
+                        && !wowmsg_quit_for(ecur == 0xFFFF ? 0 : ecur)) {
+                        int ewoke = 0;
                         DWORD t0 = GetTickCount(), waited;
                         /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
                              knob-read logs where the answer is decided, which is
@@ -22701,9 +22833,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  alternative is a flag that stays set once and
                                  disables the watchdog for the rest of the run. */
                             g_wm_inwait = 1;
-                            while (g_running && !g_wm_count && !g_wm_quit
+                            while (g_running && !wowmsg_count_for(ecur == 0xFFFF ? 0 : ecur)
+                                   && !wowmsg_quit_for(ecur == 0xFFFF ? 0 : ecur)
                                    && (!g_wowmsg_wait_ms
                                        || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
+                                /* s92 (#306): another parked task's message arrived */
+                                if (ecan && ws_runnable(ecur, g_wc_depth) >= 0) { ewoke = 1; break; }
                                 /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
                                      LATENCY FLOOR. A WM_PAINT arriving while the
                                      guest is parked here should wake the wait
@@ -22760,6 +22895,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " ms; ");
                         p = zhex(p, (DWORD)g_wm_count);
                         p = zput(p, " message(s) arrived\r\n");
+                        if (ewoke) {
+                            p = zput(p, "     WOWSCHED: a parked task's message arrived"
+                                        " -- yielding to it\r\n");
+                            wowlog_flush(base, &p);
+                            goto ws_again_e;
+                        }
                         wowlog_flush(base, &p);
                     }
                     /* ⚠ Same rule as ShellAbout and the file dialog: a modal
@@ -22867,6 +23008,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 }
                                 p = zput(p, " -- ENTERED, depth ");
                                 p = zhex(p, (DWORD)g_wc_depth);
+                                if (g_wc_depth > 0 && g_wc[g_wc_depth - 1].prevtask) {
+                                    p = zput(p, " [INTER-TASK: runs as task 0x");
+                                    p = zhex(p, wowsched_curtask());
+                                    p = zput(p, " on its own stack, from task 0x");
+                                    p = zhex(p, g_wc[g_wc_depth - 1].prevtask);
+                                    p = zput(p, "]");
+                                }
                             }
                             p = zput(p, "\r\n");
                         }
@@ -33894,8 +34042,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 wowsched_poke(g_ws_slots[wsc].modelin, WOW32_MODE_ORDINARY);
                                 {   WORD to = g_ws_slots[wsc].task;
+                                    int crb = ws_toplevel(&g_ws_slots[wsc]);
                                     if (!g_ws_shell) g_ws_shell = to;   /* s92: WOWEXEC */
                                     wowsched_restore(&g_ws_slots[wsc], tib);
+                                    if (crb) g_ws_curbase = g_wc_depth;
                                     /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
                                          The creator zeroed it on its way out; the
                                          frame we are resuming was parked when it
