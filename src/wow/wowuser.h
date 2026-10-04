@@ -3872,6 +3872,32 @@ static WPARAM wowuser_wp32(WORD msg, WORD wp16)
     return (WPARAM)wp16;
 }
 
+/* s92 (#314): WM_CTLCOLOR's DEFAULT, AS A BRUSH TOKEN. The default procedures
+   answered 0, which the host's own path (main.c wow_ctlcolor) turns into the
+   stock-measured 3.x default -- but a GUEST that sends WM_CTLCOLOR itself gets the
+   0. Media Player's SScrollBar does: it selected "brush 0" and painted its trough
+   with whatever the DC held (solid blue). Same rules as wow_ctlcolor: edit and list
+   box, and static/button outside a 3-D dialog, are the window colour; the rest is
+   Win32's DefWindowProc (what stock's WOW forwards to). The text and background
+   colours are set on the DC, as Windows' default does. 0 if the DC is not ours. */
+static WORD wowuser_ctlcolor_default(wowuser_win_t *w, HWND h, WORD dc16, DWORD lp16)
+{
+    int  kind = -1;
+    HDC  dc = (HDC)wowgdi_h32(dc16, &kind);
+    WORD type = HIWORD(lp16);
+    HBRUSH br;
+    if (!dc || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || type > 6) return 0;
+    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !(w && w->dlg3d))) {
+        SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+        SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+        br = GetSysColorBrush(COLOR_WINDOW);
+    } else {
+        br = (HBRUSH)DefWindowProcA(h, WM_CTLCOLORMSGBOX + type, (WPARAM)dc,
+                                    (LPARAM)wowuser_hwnd32(LOWORD(lp16)));
+    }
+    return br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+}
+
 /* s89: DefWindowProc's / DefDlgProc's WM_PAINT. Win16's does BeginPaint/EndPaint,
    which erases what is still owed: the class brush for a window, the dialog colour
    for a dialog. Since the relay stopped erasing on the guest's behalf (Clock), a
@@ -3953,10 +3979,15 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
         *kp = k;
         return 0;
     }
-    /* WM_CTLCOLOR: "the default" -- 0, which the host turns into the 3.x default
-       (main.c, wow_ctlcolor). Win32's DefWindowProc would answer a 32-bit HBRUSH,
-       truncated to garbage in the 16-bit answer (Charmap: 0x0060). */
-    if (msg == 0x0019) { *kp = k; return 0; }
+    /* WM_CTLCOLOR: the default brush as a TOKEN -- never Win32's raw HBRUSH, which
+       truncated to garbage in the 16-bit answer (Charmap: 0x0060). It was 0 until s92;
+       see wowuser_ctlcolor_default for why a guest's own sender needs a real one. */
+    if (msg == 0x0019) {
+        WORD tb = wowuser_ctlcolor_default(w, w->hwnd32, wp16, lp32);
+        wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: the default brush, token 0x");
+        wu_puthex(note, notecap, &k, tb, 4);
+        *kp = k; return tb;
+    }
     if (msg == 0x000F) {
         wowuser_default_paint(w, 1);
         wu_puts(note, notecap, &k, " -> WM_PAINT: erased what was owed, as DefDlgProc");
@@ -5786,6 +5817,26 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_putq(note, notecap, &k, name);
         wu_puts(note, notecap, &k, " size=0x");
         wu_puthex(note, notecap, &k, size, 4);
+
+        /* ── s92 (#314): LoadBitmap(NULL, OBM_*) -- A PREDEFINED BITMAP. No resource
+             bytes, and the name is an ORDINAL (selector 0). Media Player's SScrollBar
+             loads its arrows this way in WM_CREATE; answered 0, it sized itself from an
+             uninitialised BITMAP and came out 9250 pixels tall. The OBM_* ids are the
+             same numbers in Win32, which keeps them for exactly this; the OS's own. */
+        {   DWORD nm = wow32_argd(f, LBM_ARG_NAME);
+            if (!size && !(nm >> 16) && (nm & 0xFFFF)) {
+                HBITMAP ob = LoadBitmapA(NULL, MAKEINTRESOURCEA(nm & 0xFFFF));
+                tok = ob ? wowgdi_h16((HGDIOBJ)ob, WOWGDI_KIND_OBJ) : 0;
+                wu_puts(note, notecap, &k, " predefined #");
+                wu_puthex(note, notecap, &k, nm & 0xFFFF, 4);
+                if (!tok && ob) DeleteObject((HGDIOBJ)ob);
+                wu_puts(note, notecap, &k, tok ? " -> the OS's bitmap, token 0x"
+                                               : " -- ★ the OS has no such bitmap; 0");
+                if (tok) wu_puthex(note, notecap, &k, tok, 4);
+                wow32_setret(f, tok);
+                return 1;
+            }
+        }
 
         if (!p || size < 12 || size > 0x10000) {
             wu_puts(note, notecap, &k, " -- ★ NO BYTES, or a length that cannot be"
@@ -8341,8 +8392,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         if (msg == 0x0019) {
-            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: 0, the host applies the 3.x default");
-            wow32_setret(f, 0);
+            WORD tb = wowuser_ctlcolor_default(w, w->hwnd32, wp16, lp32);
+            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: the default brush, token 0x");
+            wu_puthex(note, notecap, &k, tb, 4);
+            wow32_setret(f, tb);
             return 1;
         }
         /* The OS's own MDI defaults, on the real windows -- the same argument as
@@ -9245,9 +9298,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        if (msg == 0x0019) {                     /* see wowuser_dlg_default */
-            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: 0, the host applies the 3.x default");
-            wow32_setret(f, 0);
+        if (msg == 0x0019) {                     /* see wowuser_ctlcolor_default */
+            WORD tb = wowuser_ctlcolor_default(wowuser_findwin(hwnd), h, wp, lp);
+            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: the default brush, token 0x");
+            wu_puthex(note, notecap, &k, tb, 4);
+            wow32_setret(f, tb);
             return 1;
         }
         if (msg == 0x000F) {

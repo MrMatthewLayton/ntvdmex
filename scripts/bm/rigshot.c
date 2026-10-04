@@ -625,7 +625,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
        hit-test: the button is the top-right square of the caption bar. */
     if (seq(verb, "xclick")) {
         char m[400], *p = m;
-        HWND w = FindWindowA(NULL, arg1);
+        /* s92: optional CLASS as the second word -- XP's own desktop is also titled
+           "Program Manager", and an X on it is Windows' shutdown dialog. */
+        HWND w = FindWindowA(arg2[0] ? arg2 : NULL, arg1);
         RECT r;
         int bx, by;
         if (!w || !GetWindowRect(w, &r)) { p = sput(p, "xclick: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
@@ -804,6 +806,32 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (seq(verb, "release")) {
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
         logline("release: button up");
+        return 0;
+    }
+    /* s92 (#287) `cover "Cap"` -- drag a console window by its caption over the
+         middle of window Cap, pause, drag it back where it was. Cap is left with an
+         area the console covered and then uncovered, which is what the user did to
+         Calc ("dragging a window over it turns the uncovered area white"). */
+    if (seq(verb, "cover")) {
+        char m[300], *p = m;
+        HWND w = FindWindowA(NULL, arg1), c = FindWindowA("ConsoleWindowClass", NULL);
+        RECT r, cr;
+        int sx, sy, tx, ty, steps = 20, i2;
+        if (!w || !c || !GetWindowRect(w, &r) || !GetWindowRect(c, &cr)) {
+            p = sput(p, "cover: NOT FOUND (target or a console) "); sput(p, arg1); logline(m); return 1; }
+        SetForegroundWindow(c);
+        Sleep(300);
+        sx = cr.left + 60; sy = cr.top + GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYCAPTION) / 2;
+        tx = (r.left + r.right) / 2; ty = (r.top + r.bottom) / 2;
+        SetCursorPos(sx, sy); Sleep(150);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); Sleep(150);
+        for (i2 = 1; i2 <= steps; ++i2) { SetCursorPos(sx + (tx - sx) * i2 / steps, sy + (ty - sy) * i2 / steps); Sleep(50); }
+        Sleep(600);
+        for (i2 = 1; i2 <= steps; ++i2) { SetCursorPos(tx + (sx - tx) * i2 / steps, ty + (sy - ty) * i2 / steps); Sleep(50); }
+        Sleep(150);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        p = sput(p, "cover: console dragged over and off "); sput(p, arg1);
+        logline(m);
         return 0;
     }
 
