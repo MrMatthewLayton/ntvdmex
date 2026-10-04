@@ -102,7 +102,13 @@ static void wowenum_line(int x0, int y0, int x1, int y1)
     if (g_we.steps > 4096) g_we.steps = 4096;
 }
 
-static void wowenum_end(void) { g_we.kind = WOWENUM_NONE; g_we.proc = 0; }
+/* #295: an EnumMetaFile walk owns objects (the handle table) and a snapshot; both
+   go here, so a stop, a refusal and a completion all release them. */
+static void wowenum_end(void)
+{
+    if (g_we.kind == WOWENUM_METAFILE) wowgdi_mf_end();
+    g_we.kind = WOWENUM_NONE; g_we.proc = 0;
+}
 
 /* ── ★ THE CALLER'S ANSWER, WHEN THE CALLBACK STOPPED IT. ────────────────────
      EnumWindows and friends return TRUE when the whole list was walked and FALSE
@@ -139,6 +145,15 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
     WORD hwnd16 = 0;
 
     if (g_we.kind == WOWENUM_NONE) return 0;
+
+    /* #295: the previous record's callback may have changed its handle table
+         (through PlayMetaFileRecord, or by hand); take it back FIRST, before a stop
+         below releases the table's objects -- a pen created by the record that
+         said stop is still the enumeration's to delete. */
+    if (!first && g_we.kind == WOWENUM_METAFILE && wowgdi_mf_readback()) {
+        wu_puts(note, cap, &k, "ENUM metafile: ★ the guest wrote a non-object value into"
+                               " its handle table; those entries were NOT believed. ");
+    }
 
     /* ★ THE CALLBACK'S VETO. Win16 says a callback returning 0 ends the
          enumeration, and the function then answers FALSE. */
@@ -226,6 +241,82 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         ++g_we.calls;
         wu_puts(note, cap, &k, "ENUM object -> style=0x");
         wu_puthex(note, cap, &k, (DWORD)(e->b[0] | (e->b[1] << 8)), 4);
+        return 1;
+    }
+
+    if (g_we.kind == WOWENUM_METAFILE) {
+        /* EnumMetaFileProc(HDC, HANDLETABLE FAR*, METARECORD FAR*, int nObj, LPARAM)
+           -- #295. One blob, two pointers: the record at +0, the table after it. */
+        int bn = 0, toff = 0, room = WOWCALL_MAX_BLOB;
+        unsigned fn = 0;
+        WORD sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+        /* ⚠ THE BLOB IS ON THE GUEST'S STACK, so it must fit there. A Win16 task's
+             DGROUP starts with INSTANCEDATA, whose word at +0x0A is pStackTop -- the
+             lowest offset the stack may reach (what the C runtime's chkstk compares
+             SP with; SDK convention, not measured on this host). Leave the callback
+             512 bytes of its own below the blob. If +0x0A is not a plausible limit
+             (above SP) it is not used; and SP itself bounds the blob so the 16-bit
+             subtraction cannot wrap. A record that does not fit is TRUNCATED in the
+             callback's copy (rdSize still says the real size; the callback reads
+             what lies above the cut, i.e. the parked frame -- harmless to read, and
+             a callback that WRITES a record's tail is not one we have seen), and
+             PlayMetaFileRecord recognises it by address and plays the snapshot. */
+        if (ssbase) {
+            WORD top = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)ssbase, 0x0A);
+            int  lim = (top && top < sp) ? (int)(sp - top) : (int)sp;
+            lim -= 512;
+            if (lim < room) room = lim;
+        }
+        if (!wowgdi_mf_next(room, &bn, &toff, &fn)) {
+            if (fn == 0xFFFF)
+                wu_puts(note, cap, &k, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
+                                       " past the end) ENDS THE WALK; ");
+            else if (fn == 0xFFFE) {
+                wu_puts(note, cap, &k, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
+                                       " REFUSED -- the caller returns FALSE; ");
+                wowenum_stopped();
+            }
+            wu_puts(note, cap, &k, "ENUM metafile complete: 0x");
+            wu_puthex(note, cap, &k, g_we.calls, 4);
+            wu_puts(note, cap, &k, " record(s)");
+            wowenum_end();
+            return 0;
+        }
+        arg[0] = g_we.parent;                   /* the guest's own hdc, verbatim */
+        arg[1] = 0; arg[2] = 0;                 /* lpht: blob2, +toff            */
+        arg[3] = 0; arg[4] = 0;                 /* lpmr: the blob itself         */
+        arg[5] = (WORD)g_wmf.nobj;
+        arg[6] = (WORD)(g_we.lparam >> 16);
+        arg[7] = (WORD)(g_we.lparam & 0xFFFF);
+        g_wc_blob2_arg = 1; g_wc_blob2_off = toff;
+        if (!rsel || !ssbase
+            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 8,
+                              0, WOWCALL_RET_KEEP, NULL, 0, 0,
+                              g_wmf_blob, bn, 3,
+                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+            g_wc_blob2_arg = -1;
+            /* ⚠ FALSE, unlike the window forms: the guest has not seen the whole
+                 picture, and TRUE would tell it that it had. */
+            wu_puts(note, cap, &k, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
+                                   " enumeration ends here and the caller returns FALSE");
+            wowenum_stopped();
+            wowenum_end();
+            return 0;
+        }
+        g_wmf.rec_lin = g_wc_blob_lin;
+        g_wmf.tbl_lin = g_wc_blob_lin ? g_wc_blob_lin + (DWORD)toff : 0;
+        if (g_wc_depth > 0) {
+            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
+            g_wc[g_wc_depth - 1].actarg = 0;
+        }
+        ++g_we.calls;
+        wu_puts(note, cap, &k, "ENUM metarecord fn=0x");
+        wu_puthex(note, cap, &k, fn, 4);
+        wu_puts(note, cap, &k, " bytes=0x");
+        wu_puthex(note, cap, &k, g_wmf.rec_bytes, 6);
+        if (g_wmf.truncated)
+            wu_puts(note, cap, &k, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
+                                   " stack blob); PlayMetaFileRecord plays the full record");
         return 1;
     }
 

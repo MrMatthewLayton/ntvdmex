@@ -593,6 +593,21 @@
 #define WOWGDI_PLAYMETAFILE     0x007b
 #define PMF_ARG_HMF      0
 #define PMF_ARG_HDC      2
+/* #295: EnumMetaFile(hdc, hmf, lpfn, lParam), GDI.175, 12 bytes (the inventory's
+   thunk width), reversed: +0 lParam, +4 lpfn, +8 hmf, +10 hdc. A CALLBACK:
+   int FAR PASCAL proc(HDC, HANDLETABLE FAR*, METARECORD FAR*, int nObj, LPARAM). */
+#define WOWGDI_ENUMMETAFILE     0x00af
+#define EMF_ARG_LPARAM   0
+#define EMF_ARG_PROC     4
+#define EMF_ARG_HMF      8
+#define EMF_ARG_HDC      10
+/* #295: PlayMetaFileRecord(hdc, lpht, lpmr, nHandles), GDI.176, 12 bytes,
+   reversed: +0 nHandles, +2 lpmr, +6 lpht, +10 hdc. */
+#define WOWGDI_PLAYMETAFILEREC  0x00b0
+#define PMFR_ARG_NHANDLES 0
+#define PMFR_ARG_MR       2
+#define PMFR_ARG_HT       6
+#define PMFR_ARG_HDC      10
 #define MF1_ARG_H        0
 #define CPMF_ARG_FILE    0
 #define CPMF_ARG_HMF     4
@@ -1033,6 +1048,139 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
     }
     g_we_font[g_we_nfont].type = (WORD)type;
     ++g_we_nfont;
+    return 1;
+}
+
+/* ── ★ EnumMetaFile / PlayMetaFileRecord: ONE ENUMERATION'S STATE. (#295) ─────
+     EnumMetaFile is the per-item chain of wowenum.h with two things no other
+     enumeration has: the items are VARIABLE-SIZED (a METARECORD), and the guest
+     gets a HANDLETABLE that must PERSIST across the calls -- record 1 creates a
+     pen into slot 0, record 2 selects slot 0. Real GDI keeps that table in one
+     block and passes the same pointer every time. Here every callback gets a
+     fresh stack blob (the only guest memory this host can hand out for one call,
+     wowcall.h), so persistence is done by hand:
+       blob   = [ the record, maybe truncated ][ WORD token[nObj] ]
+       lpmr   -> the record,   lpht -> the table (a second pointer into the blob)
+       after the callback returns, the table is READ BACK out of the guest stack
+       into g_wmf.tok[] -- before anything else runs on that stack -- and the next
+       record's blob starts from it.
+     So whatever wrote the table -- our PlayMetaFileRecord, or the guest itself --
+     is what the next record sees, which is what one persistent block gives.
+     ⚠ ONE SOURCE OF TRUTH: the table is 16-bit TOKENS only. A Win32 HGDIOBJ table
+       is built from them for each PlayMetaFileRecord and its changes written back
+       as tokens, so there is no second table to drift out of step with the first.
+     ⚠ UNMEASURED, and said rather than assumed: whether stock hands the SAME lpht
+       pointer every time (ours usually does -- the parked caller's SP does not
+       move -- but a guest must not depend on it), and whether stock deletes the
+       objects left in the table at the end. We do, as Wine's EnumMetaFile16 does
+       (it first re-selects the DC's original pen/brush/font so nothing deleted is
+       still selected); a guest that keeps a table handle past EnumMetaFile is
+       using a deleted object on Wine too. */
+#define WOWMF_MAXOBJ 256        /* mtNoObjects above this: refused, loudly. A WORD
+                                   field, but real metafiles hold a handful, and
+                                   the token map itself has only WOWGDI_MAX slots. */
+/* ⚠⚠ IS THE FINAL META_EOF RECORD (rdSize 3, rdFunction 0) HANDED TO THE CALLBACK?
+     UNKNOWN for Win16 and NOT GUESSED: this must be set from the stock run of
+     tools/wintest/w_mfenum (case mfe.count, and the last mfe.rec.N). 1 = passed,
+     which is what Win32's EnumMetaFile is documented to do ("each record ... until
+     the last record"); Wine's EnumMetaFile16 BREAKS at META_EOF without calling,
+     i.e. 0. Either way the walk ends at EOF -- nothing after it is a record. */
+#define WOWMF_PASS_EOF 1
+typedef struct {
+    int     active;
+    BYTE   *bits;               /* GetMetaFileBitsEx snapshot, HeapAlloc'd       */
+    DWORD   len, end, off;      /* bytes; the walk's bound; the next record       */
+    unsigned nobj;              /* mtNoObjects = the callback's nObj              */
+    WORD    tok[WOWMF_MAXOBJ];  /* the persistent HANDLETABLE, as tokens          */
+    WORD    hdc16;
+    HDC     dc;                 /* NULL when the guest's hdc is not one of ours   */
+    HGDIOBJ pen0, brush0, font0;/* re-selected before the table is deleted        */
+    DWORD   tbl_lin, rec_lin;   /* where the last callback's copies are (host lin)*/
+    DWORD   rec_off, rec_bytes; /* the record in flight, in `bits`               */
+    int     truncated;          /* ...and whether its stack copy is cut short     */
+    DWORD   records;
+} wowgdi_mf_t;
+static wowgdi_mf_t g_wmf;
+static BYTE        g_wmf_blob[WOWCALL_MAX_BLOB];
+/* One record as the guest handed it to PlayMetaFileRecord. A 16:16 pointer reaches
+   at most 64 KB past its offset, so this is the largest a record can be without a
+   huge pointer -- and a larger one is refused, not wrapped. */
+static BYTE        g_wmf_rec[0x10000];
+static HGDIOBJ     g_wmf_ht[WOWMF_MAXOBJ];
+
+/* After a callback: what the guest's table says now. Only 0 and tokens that name
+   an object (not a DC) are believed; anything else keeps the previous entry and is
+   counted, so the caller can say so. */
+static int wowgdi_mf_readback(void)
+{
+    unsigned i;
+    int bad = 0;
+    if (!g_wmf.active || !g_wmf.tbl_lin) return 0;
+    for (i = 0; i < g_wmf.nobj; ++i) {
+        WORD t = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)g_wmf.tbl_lin, (int)(i * 2));
+        int  kd = -1;
+        if (t == g_wmf.tok[i]) continue;
+        if (!t || (wowgdi_h32(t, &kd) && kd != WOWGDI_KIND_DC && kd != WOWGDI_KIND_WINDC))
+            g_wmf.tok[i] = t;
+        else ++bad;
+    }
+    g_wmf.tbl_lin = 0;
+    return bad;
+}
+
+/* The end of an enumeration, however it ended (complete, stopped, refused). */
+static void wowgdi_mf_end(void)
+{
+    unsigned i;
+    if (!g_wmf.active) return;
+    if (g_wmf.dc) {
+        if (g_wmf.pen0)   SelectObject(g_wmf.dc, g_wmf.pen0);
+        if (g_wmf.brush0) SelectObject(g_wmf.dc, g_wmf.brush0);
+        if (g_wmf.font0)  SelectObject(g_wmf.dc, g_wmf.font0);
+    }
+    for (i = 0; i < g_wmf.nobj; ++i) {
+        int kd = -1;
+        HGDIOBJ o = g_wmf.tok[i] ? wowgdi_h32(g_wmf.tok[i], &kd) : NULL;
+        if (o && kd == WOWGDI_KIND_OBJ) { DeleteObject(o); wowgdi_forget(g_wmf.tok[i]); }
+        g_wmf.tok[i] = 0;
+    }
+    if (g_wmf.bits) HeapFree(GetProcessHeap(), 0, g_wmf.bits);
+    g_wmf.bits = NULL;
+    g_wmf.active = 0;
+    g_wmf.tbl_lin = g_wmf.rec_lin = 0;
+}
+
+/* The next record's blob, at most `room` bytes. Returns 0 at the end of the walk
+   (or at a malformed record, which ends it the same way -- logged by the caller
+   from *func == 0xFFFF). *tbloff = where the table starts in the blob. */
+static int wowgdi_mf_next(int room, int *blobn, int *tbloff, unsigned *func)
+{
+    unsigned long rb = 0;
+    unsigned fn = 0;
+    int tb = (int)(g_wmf.nobj ? g_wmf.nobj : 1) * 2;    /* lpht always points at
+                                                           something, even nObj 0 */
+    int copy, i;
+    *func = 0;
+    if (!g_wmf.active || g_wmf.off >= g_wmf.end) return 0;
+    if (!wowconv_mf_record(g_wmf.bits, g_wmf.end, g_wmf.off, &rb, &fn)) {
+        *func = 0xFFFF;
+        return 0;
+    }
+    if (fn == 0 && !WOWMF_PASS_EOF) return 0;
+    if (room < tb + WOWCONV_MF_RECHDR) { *func = 0xFFFE; return 0; }
+    copy = (int)rb;
+    g_wmf.truncated = 0;
+    if (copy > room - tb) { copy = (room - tb) & ~1; g_wmf.truncated = 1; }
+    for (i = 0; i < copy; ++i) g_wmf_blob[i] = g_wmf.bits[g_wmf.off + (DWORD)i];
+    for (i = 0; i < (int)g_wmf.nobj; ++i) wowgdi_put16(g_wmf_blob, copy + i * 2, g_wmf.tok[i]);
+    if (!g_wmf.nobj) wowgdi_put16(g_wmf_blob, copy, 0);
+    g_wmf.rec_off = g_wmf.off;
+    g_wmf.rec_bytes = (DWORD)rb;
+    g_wmf.off = (fn == 0) ? g_wmf.end : g_wmf.off + (DWORD)rb;    /* EOF is last */
+    ++g_wmf.records;
+    *blobn = copy + tb;
+    *tbloff = copy;
+    *func = fn;
     return 1;
 }
 
@@ -3570,6 +3718,169 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             r = PlayMetaFile((HDC)dc, (HMETAFILE)mf) ? 1 : 0;
             wu_puts(note, notecap, &k, r ? " -> played" : " -> FAILED");
         }
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★ 0xaf EnumMetaFile(hdc, hmf, lpfn, lParam) ── #295. CARDFILE, PACKAGER
+         and WRITE import it (through OLECLI). The metafile is snapshot ONCE, as
+         bytes (GetMetaFileBitsEx), and walked by wowconv.h's pure parser; each
+         record is one callback on the wowenum.h chain -- see g_wmf above for the
+         handle table. The answer is 1 up front and revised to 0 by a stop. */
+    case WOWGDI_ENUMMETAFILE: {
+        WORD  hdc  = wow32_argw(f, EMF_ARG_HDC);
+        WORD  tok  = wow32_argw(f, EMF_ARG_HMF);
+        DWORD proc = wow32_argd(f, EMF_ARG_PROC);
+        DWORD lp   = wow32_argd(f, EMF_ARG_LPARAM);
+        int   kd = -1, km = -1, k = 0;
+        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
+        HGDIOBJ mf = wowgdi_h32(tok, &km);
+        UINT  n;
+        BYTE *bits;
+        unsigned nobj = 0;
+        unsigned long first, end = 0;
+        wu_puts(note, notecap, &k, "EnumMetaFile(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wu_puts(note, notecap, &k, ")");
+        /* ⚠ EVERY REFUSAL BELOW ANSWERS 0, callbacks-off included. EnumObjects keeps
+             its TRUE when callbacks are off; a metafile enumerator that says "done"
+             having shown the guest no record would let it conclude the picture is
+             empty, which is the wrong answer rather than a missing one. */
+        wow32_setret(f, 0);
+        if (!mf || km != WOWGDI_KIND_OBJ || GetObjectType(mf) != OBJ_METAFILE) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR METAFILE TOKENS; 0");
+            return 1;
+        }
+        if (!f->cbok) { wu_puts(note, notecap, &k, " -- callbacks are not armed; 0"); return 1; }
+        if (wowenum_busy() || g_wmf.active) {
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
+            return 1;
+        }
+        n = GetMetaFileBitsEx((HMETAFILE)mf, 0, NULL);
+        bits = n ? (BYTE *)HeapAlloc(GetProcessHeap(), 0, n) : NULL;
+        if (!bits || GetMetaFileBitsEx((HMETAFILE)mf, n, bits) != n) {
+            if (bits) HeapFree(GetProcessHeap(), 0, bits);
+            wu_puts(note, notecap, &k, " -- ★ GetMetaFileBitsEx FAILED; 0");
+            return 1;
+        }
+        first = wowconv_mf_header(bits, n, &nobj, &end);
+        wu_puts(note, notecap, &k, " bytes=0x"); wu_puthex(note, notecap, &k, n, 6);
+        wu_puts(note, notecap, &k, " nObj=0x"); wu_puthex(note, notecap, &k, nobj, 4);
+        if (!first || nobj > WOWMF_MAXOBJ) {
+            HeapFree(GetProcessHeap(), 0, bits);
+            wu_puts(note, notecap, &k, !first ? " -- ★ NOT A WMF HEADER; 0"
+                                              : " -- ★ MORE OBJECTS THAN WOWMF_MAXOBJ; REFUSED, 0");
+            return 1;
+        }
+        if (!wowenum_begin(WOWENUM_METAFILE, proc, f->gds, lp,
+                           (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), hdc)) {
+            HeapFree(GetProcessHeap(), 0, bits);
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer; 0");
+            return 1;
+        }
+        memset(&g_wmf, 0, sizeof g_wmf);
+        g_wmf.active = 1;
+        g_wmf.bits = bits; g_wmf.len = n; g_wmf.end = end; g_wmf.off = first;
+        g_wmf.nobj = nobj;
+        g_wmf.hdc16 = hdc;
+        /* The guest's hdc is passed to every callback verbatim; it only has to be
+           one of ours for the objects to be put back at the end. */
+        if (dc && (kd == WOWGDI_KIND_DC || kd == WOWGDI_KIND_WINDC)) {
+            g_wmf.dc = (HDC)dc;
+            g_wmf.pen0   = GetCurrentObject((HDC)dc, OBJ_PEN);
+            g_wmf.brush0 = GetCurrentObject((HDC)dc, OBJ_BRUSH);
+            g_wmf.font0  = GetCurrentObject((HDC)dc, OBJ_FONT);
+        }
+        wow32_setret(f, 1);
+        f->enumreq = 1;
+        return 1;
+    }
+
+    /* ── ★ 0xb0 PlayMetaFileRecord(hdc, lpht, lpmr, nHandles) ── #295. Win32's own
+         PlayMetaFileRecord on an HGDIOBJ table built from the guest's TOKENS; any
+         entry the record changed goes back as a token -- a new object gets one, a
+         META_DELETEOBJECT'd one (Win32 deletes it and zeroes the slot) has its token
+         forgotten. ⚠ Win16 declares this VOID (3.1 SDK, Wine's gdi.exe.spec); the
+         BOOL written to the return hole is Win32's and is unmeasured against stock. */
+    case WOWGDI_PLAYMETAFILEREC: {
+        WORD  hdc = wow32_argw(f, PMFR_ARG_HDC);
+        WORD  nh  = wow32_argw(f, PMFR_ARG_NHANDLES);
+        DWORD mfp = wow32_argd(f, PMFR_ARG_MR);
+        volatile BYTE *mr = wow32_argptr(f, PMFR_ARG_MR);
+        volatile BYTE *ht = wow32_argptr(f, PMFR_ARG_HT);
+        int   kd = -1, k = 0, r = 0, i, made = 0, gone = 0, full = 0;
+        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
+        DWORD w = 0, bytes;
+        const BYTE *rec;
+        WORD  tk[WOWMF_MAXOBJ];
+        HGDIOBJ before[WOWMF_MAXOBJ];
+        wu_puts(note, notecap, &k, "PlayMetaFileRecord(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", n=0x"); wu_puthex(note, notecap, &k, nh, 4);
+        wow32_setret(f, 0);
+        if (!dc || !(kd == WOWGDI_KIND_DC || kd == WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
+            return 1;
+        }
+        if (!mr || (nh && !ht) || nh > WOWMF_MAXOBJ) {
+            wu_puts(note, notecap, &k, nh > WOWMF_MAXOBJ
+                ? ") -- ★ MORE HANDLES THAN WOWMF_MAXOBJ; REFUSED, FALSE"
+                : ") -- ★ A NULL RECORD OR TABLE POINTER; FALSE");
+            return 1;
+        }
+        w = (DWORD)wowgdi_peek(mr, 0) | ((DWORD)wowgdi_peek(mr, 2) << 16);
+        wu_puts(note, notecap, &k, ", fn=0x"); wu_puthex(note, notecap, &k, wowgdi_peek(mr, 4), 4);
+        wu_puts(note, notecap, &k, " size=0x"); wu_puthex(note, notecap, &k, w, 6);
+        wu_puts(note, notecap, &k, ")");
+        if (w < 3) { wu_puts(note, notecap, &k, " -- ★ rdSize < 3; FALSE"); return 1; }
+        /* ★ A RECORD WHOSE CALLBACK COPY WAS CUT SHORT is played from the snapshot,
+             recognised by ADDRESS: it is the record the enumeration is in. */
+        if (g_wmf.active && g_wmf.truncated && g_wmf.rec_lin
+            && (DWORD)(ULONG_PTR)mr == g_wmf.rec_lin && w * 2 == g_wmf.rec_bytes) {
+            rec = g_wmf.bits + g_wmf.rec_off;
+            wu_puts(note, notecap, &k, " [the truncated record, played from the snapshot]");
+        } else {
+            if (w > 0x8000 || (mfp & 0xFFFF) + w * 2 > 0x10000) {
+                wu_puts(note, notecap, &k, " -- ★ THE RECORD RUNS PAST ITS SEGMENT"
+                                           " (a huge record); REFUSED, FALSE");
+                return 1;
+            }
+            bytes = w * 2;
+            for (i = 0; i < (int)bytes; ++i) g_wmf_rec[i] = mr[i];
+            rec = g_wmf_rec;
+        }
+        for (i = 0; i < (int)nh; ++i) {
+            int kk = -1;
+            HGDIOBJ o;
+            tk[i] = wowgdi_peek(ht, i * 2);
+            o = tk[i] ? wowgdi_h32(tk[i], &kk) : NULL;
+            if (o && (kk == WOWGDI_KIND_DC || kk == WOWGDI_KIND_WINDC)) o = NULL;
+            g_wmf_ht[i] = before[i] = o;
+        }
+        r = PlayMetaFileRecord((HDC)dc, (HANDLETABLE *)g_wmf_ht,
+                               (METARECORD *)(void *)rec, nh) ? 1 : 0;
+        for (i = 0; i < (int)nh; ++i) {
+            if (g_wmf_ht[i] == before[i]) continue;
+            if (g_wmf_ht[i]) {
+                WORD t = wowgdi_h16(g_wmf_ht[i], WOWGDI_KIND_OBJ);
+                if (!t) ++full;
+                wow32_pokew(ht + i * 2, t);
+                ++made;
+            } else {
+                if (tk[i]) wowgdi_forget(tk[i]);
+                wow32_pokew(ht + i * 2, 0);
+                ++gone;
+            }
+        }
+        wu_puts(note, notecap, &k, r ? " -> played" : " -> FAILED");
+        if (made) { wu_puts(note, notecap, &k, ", +0x"); wu_puthex(note, notecap, &k, (DWORD)made, 2);
+                    wu_puts(note, notecap, &k, " object(s)"); }
+        if (gone) { wu_puts(note, notecap, &k, ", -0x"); wu_puthex(note, notecap, &k, (DWORD)gone, 2);
+                    wu_puts(note, notecap, &k, " deleted"); }
+        if (full) wu_puts(note, notecap, &k, " -- ★★ THE TOKEN MAP IS FULL: a new object got"
+                                             " token 0 and is unreachable (leaked)");
         wow32_setret(f, (DWORD)r);
         return 1;
     }

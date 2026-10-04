@@ -232,6 +232,15 @@ static const svc_t SVC[] = {
       {"SDI_ARG_DSTW",2}, {"SDI_ARG_DSTY",2}, {"SDI_ARG_DSTX",2},
       {"SDI_ARG_HDC",2} } },
 
+  /* --- #295: the metafile enumerator and its record player (12 bytes each, the
+         thunk width in docs/inventory/win16-surface.md) ---------------------- */
+  { "GDI EnumMetaFile(hdc, hmf, lpfn, lParam)", 12,
+    { {"EMF_ARG_LPARAM",4}, {"EMF_ARG_PROC",4}, {"EMF_ARG_HMF",2},
+      {"EMF_ARG_HDC",2}, {0,0} } },
+  { "GDI PlayMetaFileRecord(hdc, lpht, lpmr, nHandles)", 12,
+    { {"PMFR_ARG_NHANDLES",2}, {"PMFR_ARG_MR",4}, {"PMFR_ARG_HT",4},
+      {"PMFR_ARG_HDC",2}, {0,0} } },
+
   /* --- krnl386 ------------------------------------------------------------ */
   { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,
     { {"GPPI_ARG_FILE",4}, {"GPPI_ARG_DEFAULT",2}, {"GPPI_ARG_KEY",4},
@@ -454,6 +463,76 @@ static void part4_modal(void)
        "modal: ended is half of them, whatever else is true");
 }
 
+/*
+ * ── PART 5: WALKING A WINDOWS METAFILE. (#295) ─────────────────────────────
+ * EnumMetaFile hands the guest one record per callback, and the walk is the part
+ * that can go wrong without failing: sizes are in WORDS, a record whose rdSize is
+ * below its own header never advances, and one that overruns the buffer reads
+ * past it. The bytes below are the shape Win32 records for SelectObject(pen) +
+ * Rectangle -- built by hand from the documented layout, not captured.
+ */
+static void put16(unsigned char *b, int o, unsigned v) { b[o] = (unsigned char)v; b[o + 1] = (unsigned char)(v >> 8); }
+static void put32(unsigned char *b, int o, unsigned long v)
+{ put16(b, o, (unsigned)(v & 0xffff)); put16(b, o + 2, (unsigned)(v >> 16)); }
+static void part5_metafile(void)
+{
+    unsigned char m[128];
+    unsigned long first, end = 0, off, bytes = 0;
+    unsigned nobj = 0, fn = 0, seq[8];
+    int n = 0;
+    printf("\n-- part 5: the Windows metafile walk (wowconv.h, #295) --\n");
+    memset(m, 0, sizeof m);
+    /* header: type 1, 9 words, version 0x300, mtSize, 1 object */
+    put16(m, 0, 1); put16(m, 2, 9); put16(m, 4, 0x300);
+    put16(m, 10, 1); put32(m, 12, 8); put16(m, 16, 0);
+    off = 18;
+    put32(m, off, 8); put16(m, off + 4, 0x02FA); off += 16;   /* CreatePenIndirect */
+    put32(m, off, 4); put16(m, off + 4, 0x012D); off += 8;    /* SelectObject(0)   */
+    put32(m, off, 7); put16(m, off + 4, 0x041B); off += 14;   /* Rectangle         */
+    put32(m, off, 3); put16(m, off + 4, 0x0000); off += 6;    /* META_EOF          */
+    put32(m, 6, (unsigned long)(off / 2));                      /* mtSize, in WORDS  */
+
+    first = wowconv_mf_header(m, sizeof m, &nobj, &end);
+    ok(first == 18, "WMF: the first record follows the 18-byte (9-WORD) header");
+    ok(nobj == 1, "WMF: nObj is mtNoObjects -- the HANDLETABLE's length");
+    ok(end == off, "WMF: the walk is bounded by mtSize*2, not by the buffer's slack");
+
+    for (off = first; n < 8 && wowconv_mf_record(m, end, off, &bytes, &fn); off += bytes) {
+        seq[n++] = fn;
+        if (fn == 0) break;
+    }
+    ok(n == 4 && seq[0] == 0x02FA && seq[1] == 0x012D && seq[2] == 0x041B && seq[3] == 0,
+       "WMF: four records in order -- rdSize is WORDS, so each step lands on a header");
+    ok(bytes == 6, "WMF: META_EOF is a 3-WORD record");
+    ok(!wowconv_mf_record(m, end, end, &bytes, &fn),
+       "WMF: nothing is a record at the end of the metafile");
+
+    /* Refusals: each would otherwise loop or read past the buffer. */
+    put32(m, 18, 2);
+    ok(!wowconv_mf_record(m, end, 18, &bytes, &fn),
+       "WMF: rdSize < 3 is REFUSED -- it would never advance");
+    put32(m, 18, 0x40000000UL);
+    ok(!wowconv_mf_record(m, end, 18, &bytes, &fn),
+       "WMF: a record claiming more than the metafile holds is REFUSED");
+    put32(m, 18, 8);
+    ok(!wowconv_mf_record(m, end, end - 4, &bytes, &fn),
+       "WMF: fewer than 6 bytes left is not a record");
+    put16(m, 2, 10);
+    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+       "WMF: a header size other than 9 WORDS is not a WMF");
+    put16(m, 2, 9); put16(m, 0, 3);
+    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+       "WMF: mtType must be 1 (memory) or 2 (disk)");
+    put16(m, 0, 2); put32(m, 6, 4);
+    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+       "WMF: an mtSize smaller than the header itself is REFUSED");
+    put32(m, 6, 0x1000);
+    ok(wowconv_mf_header(m, 40, &nobj, &end) == 18 && end == 40,
+       "WMF: an mtSize past the buffer is bounded by the buffer, never trusted");
+    ok(wowconv_mf_header(m, 17, &nobj, &end) == 0,
+       "WMF: fewer than 18 bytes has no header");
+}
+
 int main(int argc, char **argv)
 {
     const char *root = (argc > 1) ? argv[1] : "../..";
@@ -469,6 +548,7 @@ int main(int argc, char **argv)
     part2_offset_tiling();
     part3_conversions();
     part4_modal();
+    part5_metafile();
     printf("\n%d checks, %d failed, %d skipped\n", pass + fail, fail, skip);
     return fail ? 1 : 0;
 }

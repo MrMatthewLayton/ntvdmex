@@ -218,6 +218,9 @@
 #define WOWENUM_PROPS     7     /* every property of a window -- EnumProps (s90):
                                    b[] = the name (b[0]==0: an atom in b[1..2]),
                                    .type = the data handle                       */
+#define WOWENUM_METAFILE  8     /* every record of a metafile -- EnumMetaFile
+                                   (#295): the snapshot and the handle table live
+                                   in wowgdi.h (g_wmf), not in g_we_font[]        */
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
@@ -225,6 +228,14 @@
    just before wowcall_enter, which consumes and clears it. -1 = none. */
 static int  g_wc_blob2_arg = -1;
 static int  g_wc_blob2_off = 0;
+/* #295: where the LAST blob went, as a host linear address (ssbase + SP), 0 if the
+   last call placed none. EnumMetaFile reads the guest's handle table back out of
+   it after the callback returns -- see wowgdi.h's g_wmf note. */
+static DWORD g_wc_blob_lin = 0;
+/* The largest blob wowcall_enter will place on the guest stack. 256 covered every
+   structure before #295 (the font pair is 187 bytes); a METARECORD plus its handle
+   table is the first variable-sized one, and wowgdi.h bounds it by this. */
+#define WOWCALL_MAX_BLOB 1024
 /* ── s89: THE FONTS, COLLECTED UP FRONT AS WIN16 STRUCTURES. EnumFontFamilies
      asks Win32 for the list in one synchronous call (wowgdi.h) and the walk hands
      one entry per 16-bit callback. Each entry is the callback's blob verbatim:
@@ -309,7 +320,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     if (g_wc_depth >= WOWCALL_MAX_DEPTH) return 0;
     if (!ssbase || !retsel || !(proc >> 16)) return 0;
     if (nargw < 0 || nargw > WOWCALL_MAX_ARGW) return 0;
-    if (blobn < 0 || blobn > 256) return 0;
+    if (blobn < 0 || blobn > WOWCALL_MAX_BLOB) return 0;
     for (i = 0; i < nargw; ++i) arg[i] = argw[i];
 
     fr = &g_wc[g_wc_depth++];
@@ -345,6 +356,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
          every push for the rest of the call and is a trap for the next reader.
        ⚠ AND IT IS THE SELECTOR, NOT THE BASE, THAT THE GUEST NEEDS: `ssbase` is
          a host linear address and means nothing to 16-bit code. */
+    g_wc_blob_lin = 0;
     if (blob && blobn > 0 && blobarg >= 0 && blobarg + 1 < nargw) {
         WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
         int  n  = (blobn + 1) & ~1;
@@ -353,6 +365,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
             *(volatile BYTE *)(ULONG_PTR)(ssbase + (DWORD)(WORD)(sp + i)) = blob[i];
         arg[blobarg]     = ss;                       /* the far pointer's HIGH */
         arg[blobarg + 1] = sp;                       /* ... and its offset     */
+        g_wc_blob_lin    = ssbase + (DWORD)sp;
         if (g_wc_blob2_arg >= 0 && g_wc_blob2_arg + 1 < nargw
             && g_wc_blob2_off > 0 && g_wc_blob2_off < blobn) {
             arg[g_wc_blob2_arg]     = ss;
