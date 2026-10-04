@@ -22,7 +22,15 @@
 ;   DX = 0 (LPT1 / COM1) on every BIOS call. BX, CX, DX, SI come back unchanged.
 ; ⚠ NOT MODELLED: what DOS does with a BIOS error status (busy / time-out ->
 ;   retry, then INT 24h). Our BIOS answers ready; a hook that answers otherwise
-;   is ignored here.
+;   is ignored here. (#275, still open.) What is known: MS-DOS 4.0's MSLPT.ASM
+;   (Microsoft's published source) triages INT 17h's AH as I/O error (08h) ->
+;   9 out of paper (if 20h) else 0Ah write fault; else time-out (01h) -> 2 not
+;   ready; it retries only a time-out, twice, and lets every other error pass.
+;   The kernel then calls INT 24h with AH = 87h|38h = BFh (character device,
+;   write, F+R+I allowed) and BP:SI -> the PRN header (DISK.ASM, CHARHARD).
+;   ⛔ 6.22 is NOT 4.0 here -- its call sequence (17h/02h before 17h/00h, above)
+;   already differs -- so measure first: tools/dostest/p_crit2.asm crit2.prn.*
+;   (INT 17h hooked to answer time-out; reports n17, AH:AL, DI, BP:SI's header).
         bits 16
         org 0
 

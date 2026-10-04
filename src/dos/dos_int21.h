@@ -182,6 +182,12 @@ typedef struct {
     uint8_t  crit_code;        /* INT 24h DI: 0 write-protect .. 0Ch general failure */
     int      crit_active;      /* the guest's handler is running: never re-raised    */
     uint8_t  term_type;        /* AH of the next AH=4Dh: 0 normal, 2 critical abort  */
+    /* #275 (in): the caller can raise INT 24h -- only the MAIN V86 exec loop can (it
+       is the one that handles crit_pending). The nested real-mode loops (a 0301h/
+       0302h procedure, a reflected IRQ's handler) and every protected-mode caller
+       leave it 0, and a 3Fh/40h hardware error there is answered as if the handler
+       had said FAIL -- see the tail of dos_int21. */
+    int      crit_raise_ok;
 } dos_machine_t;
 
 /* GH #250: the host's local time as fields, and the VDM's reading of a clock that is

@@ -378,6 +378,48 @@ static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
         if (!FindNextFileA(h, fd)) { FindClose(h); return INVALID_HANDLE_VALUE; }
     return h;
 }
+/* ── #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure. ──
+     We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
+     NtQueryObject(ObjectNameInformation) gives the file object's NT name
+     ("\Device\Floppy0\X.TXT") and QueryDosDeviceA("A:") the drive's NT device, which
+     works with no media in the drive -- the very case this is for. The match is the
+     pure dos_crit_drive_from_ntname (dos_err.h, off-VM tested).
+   ⚠ Only ever called on a DISK file whose ReadFile/WriteFile just failed with a
+     hardware error -- never on a pipe, where a name query can block.
+   -1 = could not tell (the caller keeps the current drive, as #34 did). */
+typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } dos_ustr_t;
+typedef LONG (WINAPI *dos_ntqo_t)(HANDLE, int, PVOID, ULONG, PULONG);
+static int dos_handle_drive(HANDLE fh)
+{
+    static dos_ntqo_t ntqo;
+    union { dos_ustr_t u; BYTE raw[1024]; } oni;
+    char name[600], devbuf[26][80];
+    const char *dev[26];
+    ULONG got = 0;
+    DWORD drives = GetLogicalDrives();
+    int k, n;
+    if (!ntqo) {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        if (nt) ntqo = (dos_ntqo_t)GetProcAddress(nt, "NtQueryObject");
+        if (!ntqo) return -1;
+    }
+    if (ntqo(fh, 1 /* ObjectNameInformation */, &oni, sizeof(oni) - 2, &got) < 0
+        || !oni.u.Buffer || !oni.u.Length) return -1;
+    n = WideCharToMultiByte(CP_ACP, 0, oni.u.Buffer, oni.u.Length / 2, name, sizeof(name) - 1, NULL, NULL);
+    if (n <= 0) return -1;
+    name[n] = 0;
+    for (k = 0; k < 26; ++k) {
+        char root[3] = { (char)('A' + k), ':', 0 };
+        dev[k] = NULL;
+        if (!(drives & (1u << k))) continue;
+        if (QueryDosDeviceA(root, devbuf[k], sizeof(devbuf[k]))) dev[k] = devbuf[k];
+    }
+    return dos_crit_drive_from_ntname(name, dev);
+}
+/* The drive dos_handle_drive found for THIS call's failed 3Fh/40h; -1 = none. Read by
+   the INT 24h tail of dos_int21, reset at its entry (the s_find_w32 pattern). */
+static int s_rw_drive = -1;
+
 static int dos_find_next(HANDLE h, const BYTE t[11], uint16_t mask, WIN32_FIND_DATAA *fd)
 {
     do { if (!FindNextFileA(h, fd)) return 0; } while (!dos_find_match(fd, t, mask));
@@ -463,6 +505,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->hdepth = 0;          /* no EXEC in progress: nothing saved */
     m->set_ticks = 0; m->ticks_ctx = 0;   /* the host wires these after init (#250) */
     m->crit_pending = 0; m->crit_active = 0; m->term_type = 0;   /* #34 */
+    m->crit_raise_ok = 0;                                         /* #275 */
     { int k; for (k = 0; k < DOS_V5_PSPS; ++k) m->v5_psp[k] = 0; }
     m->shell_ver_major = 5; m->shell_ver_minor = 0;   /* what XP's COMMAND.COM demands */
     m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
@@ -743,6 +786,7 @@ int dos_int21(dos_machine_t *m)
     #define AUXPRN_TRAMP(e) (m->v86_tramp = (uint16_t)(DOS_AUXPRN_OFF + (e)))
     #define AUXPRN_V86      (m->v86_tramp_ok && !g_dos_int21_pm)
     m->crit_pending = 0;      /* #34: only ever about THIS call; see the tail */
+    s_rw_drive = -1;          /* #275: likewise */
 
     /* ── ★★ WHO CALLED, OFF THE GUEST STACK. ───────────────────────────────────
          VTIB_CS:EIP is where the HANDLER is, not where the guest is. Last session
@@ -1000,8 +1044,31 @@ int dos_int21(dos_machine_t *m)
              hi.txt on disk, which is the worst of both.
              So: a BOUND handle is a file, whatever its number; only an unbound low
              handle is the console. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF();
-                                                       dos_stamp_vdm_now(m->fh[h]); /* #263 */ }
+        /* ── #275: A WRITE THAT FAILS FOR A HARDWARE REASON IS A CRITICAL ERROR. The
+             result of WriteFile was never looked at: a write to a file whose floppy
+             was pulled, or that went write-protected, answered CF=0 with however many
+             bytes Win32 managed (usually 0) -- a success that never happened. A
+             hardware error (19-31, same numbers on both sides) now goes back as that
+             code with CF=1, which the tail turns into the program's INT 24h (or, where
+             INT 24h cannot be raised, into the answer FAIL gives).
+           ⚠ ANY OTHER FAILURE KEEPS THE OLD ANSWER, deliberately: disk full is CF=0
+             with a short count on DOS too, and the rest (access denied on a read-only
+             handle = DOS 5) is a separate, unmeasured question. */
+        if (dos_fh_is_file((void *const *)m->fh, h)) {
+            DWORD w = 0, we = 0; unsigned short de = 0;
+            if (!WriteFile(m->fh[h], b, cnt, &w, NULL)) we = GetLastError();
+            if (we && dos_err_from_win32((unsigned long)we, &de) && dos_crit_is_hw(de)) {
+                s_rw_drive = dos_handle_drive(m->fh[h]);
+                SETAX(de); ERRCF();
+                tp = zput(tp, "  INT21 AH=40 h="); tp = zhex(tp, h);
+                tp = zput(tp, " cnt=0x"); tp = zhex(tp, cnt);
+                tp = zput(tp, " FAILED win32=0x"); tp = zhex(tp, we);
+                tp = zput(tp, " (hardware) drive=");
+                if (s_rw_drive >= 0) { char dl[3] = { (char)('A' + s_rw_drive), ':', 0 }; tp = zput(tp, dl); }
+                else tp = zput(tp, "?");
+                tp = zput(tp, "\r\n");
+            } else { SETAX(w); OKCF(); dos_stamp_vdm_now(m->fh[h]); /* #263 */ }
+        }
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
@@ -1091,7 +1158,20 @@ int dos_int21(dos_machine_t *m)
                  against the file. Without the position a short or misplaced read is
                  indistinguishable from a correct one. */
             DWORD pos = SetFilePointer(m->fh[h], 0, NULL, FILE_CURRENT);
-            ReadFile(m->fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF();
+            /* #275: and a read that FAILS for a hardware reason is a critical error --
+               see AH=40h; same rule, same reasons for leaving every other failure
+               alone (it used to answer them all as CF=0 with what Win32 read). */
+            DWORD we = 0; unsigned short de = 0;
+            if (!ReadFile(m->fh[h], b, cnt, &rd, NULL)) we = GetLastError();
+            if (we && dos_err_from_win32((unsigned long)we, &de) && dos_crit_is_hw(de)) {
+                s_rw_drive = dos_handle_drive(m->fh[h]);
+                SETAX(de); ERRCF();
+                tp = zput(tp, "  INT21 AH=3F FAILED win32=0x"); tp = zhex(tp, we);
+                tp = zput(tp, " (hardware) drive=");
+                if (s_rw_drive >= 0) { char dl[3] = { (char)('A' + s_rw_drive), ':', 0 }; tp = zput(tp, dl); }
+                else tp = zput(tp, "?");
+                tp = zput(tp, "\r\n");
+            } else { SETAX(rd); OKCF(); }
             tp = zput(tp, "  INT21 AH=3F h="); tp = zhex(tp, h);
             tp = zput(tp, " pos=0x"); tp = zhex(tp, pos);
             tp = zput(tp, " cnt=0x"); tp = zhex(tp, cnt);
@@ -2797,17 +2877,55 @@ int dos_int21(dos_machine_t *m)
          say so, and what the handler is to be told. Real mode only (a DPMI client's
          reflection is separate work), and never while a handler is already running:
          DOS does not nest INT 24h -- inside one, the call just fails. */
-    if ((*pfl & 1) && !g_dos_int21_pm && !m->crit_active
+    /* ── #275: ...AND ONLY WHERE IT CAN BE. crit_raise_ok is set by the main V86 exec
+         loop alone (it is the one that acts on crit_pending); #34 keyed this on "not
+         protected mode", so the nested real-mode loops -- a DPMI 0301h/0302h
+         procedure, a reflected IRQ's handler -- set crit_pending and nobody raised it.
+         A handle call (3Fh/40h, the file's own drive in AL) is now raised too. */
+    if ((*pfl & 1) && m->crit_raise_ok && !g_dos_int21_pm && !m->crit_active
         && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
         const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
         int pathcall = (ah == 0x3C || ah == 0x3D || ah == 0x4E || ah == 0x39 || ah == 0x3A
                         || ah == 0x3B || ah == 0x41 || ah == 0x43 || ah == 0x5A || ah == 0x5B);
         uint8_t drv = dos_cur_drive(m);
         if (pathcall && pn[1] == ':') drv = (uint8_t)((pn[0] | 0x20) - 'a');
+        if ((ah == 0x3F || ah == 0x40) && s_rw_drive >= 0) drv = (uint8_t)s_rw_drive;
         m->crit_pending = 1;
         m->crit_al = drv;
         m->crit_ah = dos_crit_ah((unsigned char)ah);
         m->crit_code = (uint8_t)((R_AX & 0xFF) - 19);
+    }
+    /* ── #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
+         FAIL. Three such places: (1) inside the program's own INT 24h handler -- DOS
+         never nests one, and MS-DOS 4.0's HardErr (CTRLC.ASM, GOT_RIGHT_CODE) answers
+         `AL=3` itself when ERRORMODE is set, i.e. FAIL; (2) a DPMI client's INT 21h,
+         served here in protected mode; (3) the nested real-mode loops (crit_raise_ok
+         clear). FAIL is the answer our default INT 24h handler (`mov al,3 / iret`)
+         gives, and the only one that neither loops (RETRY) nor ends the program
+         (ABORT) nor invents data (IGNORE) behind the caller's back.
+       ⚠ DPMI, BY THE SPEC, IS NOT THIS. DPMI 0.9 has DOS raise INT 24h in REAL mode
+         and the host reflect it to the client's protected-mode INT 24h handler if it
+         installed one (0205h), else run the real-mode vector -- usually COMMAND.COM's
+         "Abort, Retry, Fail?". We serve a PM client's INT 21h host-side, so there is no
+         real-mode DOS call to raise it from; doing it properly needs the 0301h nested-
+         V86 run factored out of the INT 31h switch (main.c) so the host can run the
+         real-mode INT 24h vector, or a PM handler, from inside a PM INT 21h. Open.
+       ⚠ PATH CALLS ARE LEFT AS #34 LEFT THEM (the raw 19-31 code) in these places:
+         changing what a DPMI client -- krnl386 and every Win16 program included --
+         sees for a drive probe on an empty A: is a behaviour change nobody has asked
+         for or measured. 3Fh/40h had no previous answer worth keeping (it was a false
+         success). */
+    else if ((*pfl & 1) && (ah == 0x3F || ah == 0x40)
+             && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
+        uint16_t code = (uint16_t)(R_AX & 0xFFFF);
+        SETAX(dos_crit_fail_ax((unsigned char)ah, (unsigned char)(code - 19)));
+        m->last_err = DOS_ERR_FAIL_I24;
+        tp = zput(tp, "  INT24 not raised (");
+        tp = zput(tp, m->crit_active ? "inside the handler" : g_dos_int21_pm ? "DPMI client"
+                                     : "nested real-mode call");
+        tp = zput(tp, "): error 0x"); tp = zhexb(tp, (unsigned)code);
+        tp = zput(tp, " answered as FAIL -> AX=0x"); tp = zhex(tp, R_AX & 0xFFFF);
+        tp = zput(tp, ", 59h=53h\r\n");
     }
 
     /* ── s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode

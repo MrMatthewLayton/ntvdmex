@@ -184,7 +184,11 @@ static int dos_err_from_win32(unsigned long e, unsigned short *dos)
 
 static inline int dos_crit_is_hw(unsigned short code) { return code >= 19 && code <= 31; }
 
-/* AH for INT 24h, from the INT 21h function that failed. */
+/* The INT 24h answer bits (AH bits 3-5), named as DOS's own source names them. */
+#define DOS_CRIT_ALLOW_FAIL    0x08
+#define DOS_CRIT_ALLOW_RETRY   0x10
+#define DOS_CRIT_ALLOW_IGNORE  0x20
+
 /* AH for INT 24h, from the INT 21h function that failed.
    ★ MEASURED: a path call (4Eh, 3Dh, 3Ch) on a drive that is not ready gives AH=1Ah
      on both genuine kernels -- a READ (bit 0 clear, even for a create: DOS fails
@@ -192,12 +196,25 @@ static inline int dos_crit_is_hw(unsigned short code) { return code >= 19 && cod
      thing DOS reads from a changed disk), FAIL and RETRY allowed and IGNORE NOT.
      (6.22 under QEMU said 1Ch -- the directory -- once its FAT was cached; PCem said
      1Ah every time. We hold no FAT, so the uncached answer is the consistent one.)
-   ⚠ 3Fh/40h on an already-open file (area 3, data; write bit for 40h) are NOT
-     measured -- p_crit fails the drive before any handle is open. Spec-derived. */
+   ── #275: 3Fh/40h ON AN ALREADY-OPEN FILE = A DATA-AREA TRANSFER, AND IGNORE IS
+     ALLOWED THERE. From Microsoft's published MS-DOS 4.0 kernel source (github.com/
+     microsoft/MS-DOS, v4.0/src/DOS), not from memory:
+       * DISK2.ASM DISKREAD and DISK3.ASM DISKWRITE set `[ALLOWED] = allowed_RETRY +
+         allowed_FAIL + allowed_IGNORE` before the transfer (DirRead / FATSecRd, the
+         FAT and directory reads, set RETRY+FAIL only -- which is the 1Ah above);
+       * CTRLC.ASM HardErr builds AH as area<<1 | READOP | ALLOWED, the area counted
+         from the failing sector: 0 reserved, 1 FAT, 2 directory, 3 data.
+     So read = 3Eh (data, read, F+R+I) and write = 3Fh (the same with bit 0 set).
+   ⚠ 6.22 IS NOT 4.0, AND NOTHING HERE IS MEASURED YET: p_crit2.asm (crit2.h3f.* /
+     crit2.h40.*) asks exactly this of 6.22 and PCem, and the area can legitimately
+     come back 1 if the kernel has to walk an uncached FAT before the data sector --
+     the probe reads and writes the file's FIRST cluster precisely so it does not. */
 static inline unsigned char dos_crit_ah(unsigned char fn)
 {
-    if (fn == 0x3F) return 0x18 | (3 << 1);
-    if (fn == 0x40) return 0x18 | (3 << 1) | 1;
+    if (fn == 0x3F) return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
+                           | (3 << 1);                         /* 3Eh */
+    if (fn == 0x40) return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
+                           | (3 << 1) | 1;                     /* 3Fh */
     return 0x1A;                                 /* p_crit crit.*.int24 BX=1A00 */
 }
 
@@ -205,12 +222,61 @@ static inline unsigned char dos_crit_ah(unsigned char fn)
    ★ MEASURED: find-first returns 0003 "path not found" on both genuine kernels
      (crit.4e.fail.call); open and create return 0003 on PCem (QEMU, with its FAT
      cached, 0002/0005 -- recorded as state, not contract). The path calls all get 3.
-   ⚠ Anything else is unmeasured and gets 53h itself, RBIL's "fail on INT 24h". */
+   ── #275: 3Fh/40h return 0005 "access denied". MS-DOS 4.0 source: a FAILed DREAD /
+     DWRITE comes back with carry and both DISKREAD and DISKWRITE leave through
+     SET_ACC_ERR (DISK2.ASM: `MOV AX,error_access_denied`); the dispatcher's errorMap
+     (MS_CODE.ASM) then sees FAILERR and sets the EXTENDED error to error_FAIL_I24
+     (53h) -- the same 59h answer the path calls measured. ⚠ Unmeasured on 6.22:
+     p_crit2 crit2.h3f.fail.call / crit2.h40.fail.call. */
 static inline unsigned short dos_crit_fail_ax(unsigned char fn, unsigned char code)
 {
     (void)code;
-    if (fn == 0x3F || fn == 0x40) return DOS_ERR_FAIL_I24;
+    if (fn == 0x3F || fn == 0x40) return 0x0005;
     return 0x0003;
+}
+
+/* #275: what a 3Fh/40h answers when its INT 24h said IGNORE. MS-DOS 4.0 DREAD: an
+   IGNORE returns with carry CLEAR, so DISKREAD/DISKWRITE carry on as if the sectors
+   had moved -- the call reports the bytes it was asked for (a read still stops at
+   end of file, as every read does) and the file position advances by them. Whatever
+   is in the caller's buffer for an ignored read is whatever was there.
+   `size_known` = 0 when the host could not learn the file size (then the request).
+   ⚠ Unmeasured on 6.22: p_crit2 crit2.h3f.ignore.call / crit2.h40.ignore.call. */
+static inline unsigned short dos_crit_ignore_count(unsigned char fn, unsigned short cnt,
+                                                   unsigned long pos, unsigned long size,
+                                                   int size_known)
+{
+    if (fn == 0x3F && size_known) {
+        unsigned long left = (size > pos) ? size - pos : 0;
+        return (unsigned short)(left < cnt ? left : cnt);
+    }
+    return cnt;
+}
+
+/* #275: AL for a handle call -- the drive the OPEN FILE lives on, not the current
+   drive (DOS takes it from the DPB the SFT names; we have no SFT). The host asks
+   Windows for the file object's NT name ("\Device\Floppy0\DIR\FILE.TXT") and for
+   each drive letter's NT device ("A:" -> "\Device\Floppy0"); the drive is the
+   letter whose device is a whole-component prefix of the name. dev[k] = NULL or ""
+   for a letter that does not exist. -1 = no match (a mapped network drive, a SUBST):
+   the caller keeps the current drive, which is what this answered before. */
+static inline int dos_crit_drive_from_ntname(const char *name, const char *const dev[26])
+{
+    int k;
+    if (!name) return -1;
+    for (k = 0; k < 26; ++k) {
+        const char *d = dev[k], *n = name;
+        if (!d || !*d) continue;
+        while (*d && *n) {
+            char a = *d, b = *n;
+            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            if (a != b) break;
+            ++d; ++n;
+        }
+        if (!*d && (*n == '\\' || *n == 0)) return k;
+    }
+    return -1;
 }
 
 #endif /* DOS_ERR_H */
