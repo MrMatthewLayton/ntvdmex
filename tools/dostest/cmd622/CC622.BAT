@@ -1,0 +1,2 @@
+@echo off
+COMMAND.COM < SCRIPT.TXT

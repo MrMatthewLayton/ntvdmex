@@ -1,0 +1,16 @@
+; The NTVDM.EXE exports ISVTEST.DLL uses -- an import library, exactly as a VDD built
+; with the NT DDK links against ntvdm.lib. Names are undecorated in the real module.
+LIBRARY NTVDM.EXE
+EXPORTS
+getAX@0
+setAX@4
+getBX@0
+getCX@0
+setCX@4
+getDX@0
+getSI@0
+getDS@0
+setCF@4
+VDDInstallIOHook@16
+VDDDeInstallIOHook@12
+VdmMapFlat@12

@@ -26386,6 +26386,12 @@ typedef struct {
     void   (*log)(const char *what);
     /* version 2 (s91, #309): krnl386's global heap -- see shim_global16 */
     DWORD  (*global16)(int op, DWORD a, DWORD b);
+    /* version 3 (s91, #11): the VDD service API -- see "THIRD-PARTY VDDs" below */
+    DWORD  (*getreg)(int r);
+    void   (*setreg)(int r, DWORD v);
+    void  *(*mapflat)(WORD seg, DWORD off, int pm);
+    BOOL   (*io_hook)(HANDLE hvdd, WORD n, const void *ranges, const void *handlers);
+    void   (*io_unhook)(HANDLE hvdd, WORD n, const void *ranges);
 } ntvdmex_shim_api_t;
 
 
@@ -26501,6 +26507,115 @@ static DWORD shim_global16(int op, DWORD a, DWORD b)
     return (op == 2 || op == 4 || op == 5) ? g_wc_lastres : (DWORD)(WORD)g_wc_lastres;
 }
 
+/* ══ THIRD-PARTY VDDs, MICROSOFT ABI (s91, #11). ════════════════════════════════════
+     A DOS program with a VDD of its own registers it with the third-party BOP,
+     `C4 C4 58 nn` (the DDK's isvbop.inc): nn=0 RegisterModule (DS:SI the DLL, DS:DI
+     its init routine's name, DS:BX its dispatch routine's name; CF clear + AX = a
+     handle, or CF set + AX = 1 no DLL / 2 no dispatch routine / 3 no init routine),
+     nn=1 UnRegisterModule (AX = handle), nn=2 DispatchCall (AX = handle; the VDD
+     reads and writes the caller's registers). The VDD calls back through what
+     NTVDM.EXE exports -- getAX/setAX..., VdmMapFlat, VDDInstallIOHook -- which in
+     this process is bin\wowshim\NTVDM.EXE (src/shim/wowshim.c), loaded before the VDD
+     so its import of "NTVDM.EXE" resolves to it by name. These are the host halves. */
+enum { SHIM_R_EAX, SHIM_R_EBX, SHIM_R_ECX, SHIM_R_EDX, SHIM_R_ESI, SHIM_R_EDI, SHIM_R_EBP,
+       SHIM_R_ESP, SHIM_R_EIP, SHIM_R_CS, SHIM_R_DS, SHIM_R_ES, SHIM_R_SS, SHIM_R_FS,
+       SHIM_R_GS, SHIM_R_EFL, SHIM_R_MSW };
+static const int g_shim_vtib[16] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
+    VTIB_EDI, VTIB_EBP, VTIB_ESP, VTIB_EIP, VTIB_CS, VTIB_DS, VTIB_ES, VTIB_SS, VTIB_FS,
+    VTIB_GS, VTIB_EFLAGS };
+static DWORD shim_getreg(int r)
+{
+    volatile BYTE *tib = g_tib_dbg;
+    if (!tib) return 0;
+    if (r == SHIM_R_MSW) return g_dpmi_pm ? 1u : 0u;
+    if (r < 0 || r > SHIM_R_EFL) return 0;
+    if (r >= SHIM_R_CS && r <= SHIM_R_GS) return VDM_REG(tib, g_shim_vtib[r]) & 0xFFFF;
+    return VDM_REG(tib, g_shim_vtib[r]);
+}
+static void shim_setreg(int r, DWORD v)
+{
+    volatile BYTE *tib = g_tib_dbg;
+    if (!tib || r < 0 || r > SHIM_R_EFL) return;
+    if (r >= SHIM_R_CS && r <= SHIM_R_GS) VDM_SET16(tib, g_shim_vtib[r], (WORD)v);
+    else VDM_REG(tib, g_shim_vtib[r]) = v;
+}
+static void *shim_mapflat(WORD seg, DWORD off, int pm)
+{
+    if (pm) { DWORD b = dpmi_sel_base(seg); return b ? (void *)(ULONG_PTR)(b + off) : NULL; }
+    return (void *)(ULONG_PTR)(((DWORD)seg << 4) + (off & 0xFFFF));
+}
+/* An I/O hook: the VDD's VDD_IO_HANDLERS, claimed on our bus range by range. STDCALL:
+   nt_vdd.h names no convention, and NT and the DDK compile with __stdcall as the
+   default -- measured: stock NTVDM died at the first IN when the test VDD's handlers
+   were cdecl (tools/dostest/isvtest). A hook taken down by VDDDeInstallIOHook stays claimed
+   (the bus has no release) and answers as an empty slot: FFh in, writes dropped. */
+typedef void (WINAPI *isv_inb_t)(WORD, BYTE *);   typedef void (WINAPI *isv_inw_t)(WORD, WORD *);
+typedef void (WINAPI *isv_outb_t)(WORD, BYTE);    typedef void (WINAPI *isv_outw_t)(WORD, WORD);
+typedef struct { void *inb, *inw, *insb, *insw, *outb, *outw, *outsb, *outsw; } isv_iohandlers_t;
+#define ISV_MAX_HOOKS 16
+static struct { HANDLE hvdd; WORD first, last; isv_iohandlers_t h; int live; } g_isv_hook[ISV_MAX_HOOKS];
+static void isv_io_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
+{
+    int i = (int)(ULONG_PTR)self;
+    BYTE b0 = 0xFF, b1 = 0xFF; WORD w = 0xFFFF;
+    if (!g_isv_hook[i].live) { *val = width == 1 ? 0xFF : width == 2 ? 0xFFFF : 0xFFFFFFFFu; return; }
+    if (width == 1) {
+        if (g_isv_hook[i].h.inb) ((isv_inb_t)g_isv_hook[i].h.inb)(port, &b0);
+        *val = b0;
+    } else if (width == 2 && g_isv_hook[i].h.inw) {
+        ((isv_inw_t)g_isv_hook[i].h.inw)(port, &w); *val = w;
+    } else {                                        /* no word handler: two byte reads */
+        if (g_isv_hook[i].h.inb) { ((isv_inb_t)g_isv_hook[i].h.inb)(port, &b0);
+                                   ((isv_inb_t)g_isv_hook[i].h.inb)((WORD)(port + 1), &b1); }
+        *val = (uint32_t)b0 | ((uint32_t)b1 << 8);
+    }
+}
+static void isv_io_out(void *self, uint16_t port, uint8_t width, uint32_t val)
+{
+    int i = (int)(ULONG_PTR)self;
+    if (!g_isv_hook[i].live) return;
+    if (width == 1) { if (g_isv_hook[i].h.outb) ((isv_outb_t)g_isv_hook[i].h.outb)(port, (BYTE)val); }
+    else if (width == 2 && g_isv_hook[i].h.outw) ((isv_outw_t)g_isv_hook[i].h.outw)(port, (WORD)val);
+    else if (g_isv_hook[i].h.outb) {
+        ((isv_outb_t)g_isv_hook[i].h.outb)(port, (BYTE)val);
+        ((isv_outb_t)g_isv_hook[i].h.outb)((WORD)(port + 1), (BYTE)(val >> 8));
+    }
+}
+static BOOL shim_io_hook(HANDLE hvdd, WORD n, const void *ranges, const void *handlers)
+{
+    const WORD *rg = (const WORD *)ranges;
+    WORD k;
+    char b[160], *q;
+    if (!ranges || !handlers) return FALSE;
+    for (k = 0; k < n; ++k) {
+        int i, slot = -1;
+        for (i = 0; i < ISV_MAX_HOOKS; ++i)
+            if (!g_isv_hook[i].hvdd || (g_isv_hook[i].hvdd == hvdd && !g_isv_hook[i].live
+                                        && g_isv_hook[i].first == rg[k * 2])) { slot = i; break; }
+        if (slot < 0) return FALSE;
+        if (!g_isv_hook[slot].hvdd
+            && vdd_claim_ports(&g_bus, rg[k * 2], rg[k * 2 + 1], isv_io_in, isv_io_out,
+                               (void *)(ULONG_PTR)slot) != 0) return FALSE;
+        g_isv_hook[slot].hvdd = hvdd;
+        g_isv_hook[slot].first = rg[k * 2]; g_isv_hook[slot].last = rg[k * 2 + 1];
+        g_isv_hook[slot].h = *(const isv_iohandlers_t *)handlers;
+        g_isv_hook[slot].live = 1;
+        q = b; q = zput(q, "ISVVDD: I/O hook 0x"); q = zhex(q, rg[k * 2]);
+        q = zput(q, "-0x"); q = zhex(q, rg[k * 2 + 1]); q = zput(q, " installed\r\n");
+        log_append(LOG_PATH, b, q);
+    }
+    return TRUE;
+}
+static void shim_io_unhook(HANDLE hvdd, WORD n, const void *ranges)
+{
+    const WORD *rg = (const WORD *)ranges;
+    WORD k; int i;
+    if (!ranges) return;
+    for (k = 0; k < n; ++k)
+        for (i = 0; i < ISV_MAX_HOOKS; ++i)
+            if (g_isv_hook[i].hvdd == hvdd && g_isv_hook[i].first == rg[k * 2]) g_isv_hook[i].live = 0;
+}
+
 static void wow_shims_load(void)
 {
     static int done;
@@ -26513,9 +26628,11 @@ static void wow_shims_load(void)
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
        decision is taken further down WinMain, and must not wait for it. */
     if (dos_recovery_skips(dos_recovery_decide(recovery_read())).wow_shims) return;
-    api.version = 2; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
+    api.version = 3; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
     api.handle16 = shim_handle16; api.callback16ex = shim_callback16ex; api.ica_interrupt = shim_ica;
     api.yield16 = shim_yield; api.log = shim_log; api.global16 = shim_global16;
+    api.getreg = shim_getreg; api.setreg = shim_setreg; api.mapflat = shim_mapflat;
+    api.io_hook = shim_io_hook; api.io_unhook = shim_io_unhook;
     for (i = 0; i < 2; ++i) {
         HMODULE h;
         BOOL (WINAPI *init)(const ntvdmex_shim_api_t *);
@@ -26538,6 +26655,82 @@ static void wow_shims_load(void)
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q);
     }
+}
+
+/* The third-party BOP's three calls (see "THIRD-PARTY VDDs" above). CF goes in the
+   LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based. */
+#define ISV_MAX_MODS 8
+static struct { HMODULE dll; FARPROC dispatch; } g_isv_mod[ISV_MAX_MODS];
+static void isv_bop(volatile BYTE *tib, DWORD sub, char **pp)
+{
+    char *p = *pp;
+    DWORD ds = VDM_REG(tib, VTIB_DS) & 0xFFFF;
+    int pm = g_dpmi_pm;
+    WORD err = 0, h = 0;
+    int i;
+    #define ISV_STR(reg) ((const char *)shim_mapflat((WORD)ds, VDM_REG(tib, reg) & 0xFFFF, pm))
+    if (sub == 0) {                                     /* RegisterModule */
+        /* ⚠ COPIED OUT FIRST. A V86 string lives below linear 64 KB, and GetProcAddress
+             takes any "name" pointer under 0x10000 for an ORDINAL -- the first rig run
+             answered ERROR_INVALID_ORDINAL for a routine stock found at once. */
+        char dllb[MAX_PATH], inib[128], dspb[128];
+        const char *dll = dllb, *ini = inib, *dsp = dspb;
+        HMODULE m = NULL; FARPROC fi = NULL, fd = NULL;
+        {   const char *src[3]; char *dst[3]; int cap[3], k, n;
+            src[0] = ISV_STR(VTIB_ESI); src[1] = ISV_STR(VTIB_EDI); src[2] = ISV_STR(VTIB_EBX);
+            dst[0] = dllb; dst[1] = inib; dst[2] = dspb;
+            cap[0] = (int)sizeof dllb; cap[1] = (int)sizeof inib; cap[2] = (int)sizeof dspb;
+            for (k = 0; k < 3; ++k) {
+                for (n = 0; src[k] && n < cap[k] - 1 && src[k][n]; ++n) dst[k][n] = src[k][n];
+                dst[k][n] = 0;
+            }
+        }
+        wow_shims_load();          /* NTVDM.EXE must be in the process before the VDD */
+        for (i = 0; i < ISV_MAX_MODS && g_isv_mod[i].dll; ++i) ;
+        if (i == ISV_MAX_MODS) err = 4;
+        else if (!dll || !dll[0] || !(m = LoadLibraryA(dll))) err = 1;
+        else if (!dsp || !dsp[0] || !(fd = GetProcAddress(m, dsp))) err = 2;
+        else if (ini && ini[0] && !(fi = GetProcAddress(m, ini))) err = 3;
+        p = zput(p, "  ISVVDD: RegisterModule ["); p = zput(p, dll ? dll : "?");
+        p = zput(p, "] init ["); p = zput(p, ini ? ini : ""); p = zput(p, "] dispatch [");
+        p = zput(p, dsp ? dsp : ""); p = zput(p, "]");
+        if (err) {
+            if (m) FreeLibrary(m);
+            p = zput(p, " -> ERROR "); p = zhex(p, err);
+            p = zput(p, " gle=0x"); p = zhex(p, GetLastError()); p = zput(p, "\r\n");
+        } else {
+            g_isv_mod[i].dll = m; g_isv_mod[i].dispatch = fd;
+            h = (WORD)(i + 1);
+            p = zput(p, " -> handle "); p = zhex(p, h); p = zput(p, "\r\n");
+            *pp = p;
+            if (fi) ((void (*)(void))fi)();          /* the init routine, in context */
+            p = *pp;
+        }
+    } else if (sub == 1 || sub == 2) {                  /* UnRegisterModule / DispatchCall */
+        WORD ax = (WORD)(VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+        if (!ax || ax > ISV_MAX_MODS || !g_isv_mod[ax - 1].dll) {
+            err = 1;
+            p = zput(p, "  ISVVDD: bad handle 0x"); p = zhex(p, ax); p = zput(p, "\r\n");
+        } else if (sub == 2) {
+            ((void (*)(void))g_isv_mod[ax - 1].dispatch)();
+            *pp = p;
+            return;                       /* the VDD owns the registers and CF now */
+        } else {
+            for (i = 0; i < ISV_MAX_HOOKS; ++i)
+                if (g_isv_hook[i].hvdd == (HANDLE)g_isv_mod[ax - 1].dll) g_isv_hook[i].live = 0;
+            FreeLibrary(g_isv_mod[ax - 1].dll);
+            g_isv_mod[ax - 1].dll = NULL;
+        }
+    } else {
+        err = 1;
+    }
+    #undef ISV_STR
+    if (err) { VDM_SET16(tib, VTIB_EAX, err); VDM_REG(tib, VTIB_EFLAGS) |= 1u; }
+    else {
+        if (sub == 0) VDM_SET16(tib, VTIB_EAX, h);
+        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+    }
+    *pp = p;
 }
 
 /* ── ★★ A FAULT INSIDE A NESTED RUN IS STILL A FAULT. (s90, found tracing #278) ────
@@ -30447,6 +30640,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_wu_call16    = wow_call16_sync;           /* s91 #308: a subclassed control's messages */
     g_ww_ownerdraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
+    g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
@@ -33815,6 +34009,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              paths and the difference is the measurement. Every call is logged with full
              registers so the two runs can be diffed.
            ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
+        /* s91 (#11): a guest's own `C4 C4 58 nn` is the third-party BOP -- see isv_bop.
+             Four bytes (the sub-function follows), like 50h/54h below. */
+        if (g_bop_from_guest && (VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x58) {
+            DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
+            isv_bop(tib, bq[3], &p);
+            VDM_REG(tib, VTIB_EIP) += 4;
+            continue;
+        }
         if (g_bop_from_guest
             && ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == NTVDM_BOP_CMD
                 || (VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == NTVDM_BOP_DOS)) {

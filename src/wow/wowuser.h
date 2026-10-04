@@ -4203,6 +4203,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
             if ((w->style & WS_CHILD16) && w->menu)
                 hm = (HMENU)(ULONG_PTR)w->menu;
+            /* s91: A TOP-LEVEL WINDOW'S OWN hMenu ARGUMENT -- a LoadMenu token -- and
+                 it beats the class's menu, as in Windows. RECORDER passes LoadMenu(#2)
+                 here and registers its class with no menu: its window came up with no
+                 menu bar at all (stock: File/Macro/Options/Help). */
+            else if (!(w->style & WS_CHILD16) && w->menu && wowuser_menu32(w->menu))
+                hm = wowuser_menu32(w->menu);
             /* ── ★★★ THE CLASS'S OWN MENU, BUILT FROM THE GUEST'S RESOURCE.
                  A Win16 program does not have to call LoadMenu: it can name the
                  resource in its WNDCLASS and let CreateWindow attach it, which is

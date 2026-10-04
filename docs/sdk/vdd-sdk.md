@@ -88,15 +88,42 @@ one place ADR-0008 diverges from Microsoft's ABI on purpose: it is what keeps a 
 testable with no VM. On an interrupt service, remember `cf` — DOS reports failure in the
 carry flag, and a service that forgets it reports success.
 
+## Microsoft-ABI VDDs (s91)
+
+An existing VDD written for NT's own NTVDM loads and runs **unmodified** — the
+binary-compatibility veneer ADR-0008 deferred. Measured: `tools/dostest/p_isv.com` with
+`tools/dostest/isvtest/ISVTEST.DLL` (built to the DDK's declarations, linked against
+`NTVDM.EXE` through an import library) gives **identical answers under stock NTVDM and
+NTVDMEX, 10/10**.
+
+How it works:
+
+- **The import problem is solved by name.** A DDK VDD imports `getAX`, `VDDInstallIOHook`
+  … from the literal module `NTVDM.EXE`. NTVDMEX loads its own `bin\wowshim\NTVDM.EXE`
+  (`src/shim/wowshim.c`, also the WOW stand-in) before the VDD, so the loader resolves
+  those imports to it; every export forwards to the host.
+- **Loading is the DDK's third-party BOP** (`isvbop.inc`): `C4 C4 58 00` RegisterModule
+  (DS:SI DLL, DS:DI init routine, DS:BX dispatch routine; CF + AX = 1/2/3 on failure),
+  `C4 C4 58 01` UnRegisterModule, `C4 C4 58 02` DispatchCall (AX = handle).
+- **Provided:** every register accessor (`get/setAX`…`GS`, the 8-bit halves, `EAX`…,
+  the flags `CF ZF SF OF PF AF IF DF`, `getMSW`), `VdmMapFlat` / `VdmUnmapFlat` /
+  `VdmFlushCache`, `VDDInstallIOHook` / `VDDDeInstallIOHook`, `VDDSimulateInterrupt`,
+  `VDDTerminateVDM`.
+- ⚠ **I/O handlers are STDCALL.** `nt_vdd.h` declares `PFNVDD_INB` etc. with no
+  convention, but NT and the DDK compile with `__stdcall` as the default, and stock
+  NTVDM calls them that way (a cdecl handler made stock die at the first `IN`).
+
+Build one: `tools/dostest/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` with
+`dlltool -k`, then one compiler line).
+
 ## What is not here yet
 
-The **`vddsvc.h` binary-compatibility veneer** of ADR-0008 — the layer that would let an
-existing Microsoft-ABI VDD (VDMSound and its lineage) load unmodified. The ADR defers it
-explicitly to "when the audience is reached". Beyond writing the veneer itself, note the
-problem named above: those drivers import from the literal name `NTVDM.EXE`, so hosting
-them needs an import-resolution answer as well as an ABI one.
-
-There is also no packaging story yet: no versioned SDK drop, no import library, one sample.
+- From the Microsoft API: memory hooks (`VDDInstallMemoryHook`), DMA (`VDDRequestDMA`…),
+  `VDDReserveIrqLine`, `VDDAllocMem`, user hooks (`VDDInstallUserHook`), and the
+  registry-listed VDDs NTVDM loads at start-up (`VirtualDeviceDrivers`).
+- In our own ABI: `claim_mem` is accepted but never dispatched, and `claim_int` only reaches
+  a device for a vector the host has a BIOS stub for (#315).
+- No versioned SDK drop.
 
 ## Files
 
@@ -107,3 +134,5 @@ There is also no packaging story yet: no versioned SDK drop, no import library, 
 | `sdk/sample/abi_check.c` | fails the build if the SDK header drifts from `src/vdd/ntvdd.h` |
 | `sdk/build-sample.sh` | one compiler line |
 | `tools/dostest/vddtest.asm` | a DOS driver that detects and drives the sample |
+| `tools/dostest/isvtest/` | a Microsoft-ABI VDD (`isvtest.c`, `ntvdm.def`, `build.sh`) |
+| `tools/dostest/p_isv.asm` | its DOS half: RegisterModule / DispatchCall / port I/O / UnRegisterModule |

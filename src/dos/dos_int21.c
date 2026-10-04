@@ -862,6 +862,11 @@ int dos_int21(dos_machine_t *m)
             if (m->line_n >= maxn - 1) break;           /* buffer full -> take it as a line */
             c = m->coninnb ? m->coninnb(m->cinctx) : 0x0D;
             if (c < 0) { m->retry = 1; break; }         /* nothing yet -> let the guest run */
+            /* s91: a LF at the START of a line is the tail of the previous line's
+               CR LF in a redirected file (`command < script`, cmd's `<` lands on the
+               host stdin this reads). Every line after the first began with it and
+               6.22's COMMAND.COM answered "Bad command or file name" to each. */
+            if (c == 0x0A && m->line_n == 0) continue;
             if (c == 0x0D) { m->line_active = 0; break; }
             if (c == 0x08) {                            /* backspace: rub it out on screen */
                 if (m->line_n > 0) { --m->line_n; OUTC(0x08); OUTC(' '); OUTC(0x08); }
@@ -1776,6 +1781,20 @@ int dos_int21(dos_machine_t *m)
         v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         ok2 = (ah == 0x39) ? (int)CreateDirectoryA(fn, NULL)
                            : (int)RemoveDirectoryA(fn);
+        /* s91: A SEARCH THE GUEST NEVER FINISHED KEEPS THE DIRECTORY OPEN. DOS has no
+             FindClose, so an AH=4Eh/11h search that stopped before "no more files"
+             leaves our FindFirstFile handle alive -- and Windows will not remove a
+             directory with a search open in it. 6.22's COMMAND.COM searches inside
+             a directory on `cd`, and `rmdir` of that (empty) directory then failed
+             with "Invalid path, not directory, or directory not empty" (runs/s91,
+             chain11b). Close the guest's unfinished searches and try once more. */
+        if (!ok2 && ah == 0x3A) {
+            int fk;
+            for (fk = 0; fk < 8; ++fk)
+                if (m->find_h[fk]) { FindClose(m->find_h[fk]); m->find_h[fk] = 0; }
+            if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
+            ok2 = (int)RemoveDirectoryA(fn);
+        }
         if (ok2) OKCF();
         else {
             /* Oracle: mkdir over an existing name is 5 (access denied); rmdir of

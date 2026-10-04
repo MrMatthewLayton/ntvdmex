@@ -27,7 +27,7 @@
 #include <windows.h>
 
 typedef struct {
-    DWORD  version;                                         /* 2 */
+    DWORD  version;                                         /* 3 */
     void  *(*getvdmptr)(DWORD vp, DWORD cb, BOOL pm);
     HANDLE (*handle32)(WORD h16, DWORD type);
     WORD   (*handle16)(HANDLE h32, DWORD type);
@@ -36,6 +36,13 @@ typedef struct {
     void   (*yield16)(void);
     void   (*log)(const char *what);
     DWORD  (*global16)(int op, DWORD a, DWORD b);           /* 2: krnl386's global heap */
+    /* 3 (s91): the VDD service API of nt_vdd.h / vddsvc.h, for a Microsoft-ABI VDD
+       that imports it from NTVDM.EXE by name. Registers by index (SHIM_R_*). */
+    DWORD  (*getreg)(int r);
+    void   (*setreg)(int r, DWORD v);
+    void  *(*mapflat)(WORD seg, DWORD off, int pm);
+    BOOL   (*io_hook)(HANDLE hvdd, WORD n, const void *ranges, const void *handlers);
+    void   (*io_unhook)(HANDLE hvdd, WORD n, const void *ranges);
 } ntvdmex_shim_api_t;
 
 static ntvdmex_shim_api_t g_api;
@@ -43,7 +50,7 @@ static int g_have;
 
 __declspec(dllexport) BOOL WINAPI NtvdmexShimInit(const ntvdmex_shim_api_t *api)
 {
-    if (!api || api->version != 2) return FALSE;
+    if (!api || api->version != 3) return FALSE;
     g_api = *api;
     g_have = 1;
     return TRUE;
@@ -122,6 +129,66 @@ __declspec(dllexport) DWORD WINAPI WOWGlobalLockSize16(WORD h, PDWORD pcb)
    popped them. A cdecl export here would hand winmm a stack 12 bytes off. */
 __declspec(dllexport) void WINAPI call_ica_hw_interrupt(int ms, BYTE line, int count)
 { if (g_have && g_api.ica_interrupt) g_api.ica_interrupt(ms, line, count); }
+
+/* ── THE VDD SERVICE API (s91, the SDK's binary-compatibility veneer, #11). ─────────
+     What nt_vdd.h / vddsvc.h declare and NTVDM.EXE exports: a Microsoft-ABI VDD
+     imports these BY NAME from NTVDM.EXE, and this module IS the NTVDM.EXE in our
+     process, so its imports resolve here. Register accessors read and write the
+     guest's context at the moment the VDD runs (a RegisterModule init, a
+     DispatchCall, an I/O hook) -- WINAPI, as declared. Index order = SHIM_R_* in
+     main.c. */
+enum { R_EAX, R_EBX, R_ECX, R_EDX, R_ESI, R_EDI, R_EBP, R_ESP, R_EIP,
+       R_CS, R_DS, R_ES, R_SS, R_FS, R_GS, R_EFL, R_MSW };
+static DWORD gr(int r) { return (g_have && g_api.getreg) ? g_api.getreg(r) : 0; }
+static void  sr(int r, DWORD v) { if (g_have && g_api.setreg) g_api.setreg(r, v); }
+#define W16(n, r) \
+    __declspec(dllexport) USHORT WINAPI get##n(VOID) { return (USHORT)gr(r); } \
+    __declspec(dllexport) VOID WINAPI set##n(USHORT v) { sr(r, (gr(r) & 0xFFFF0000u) | v); }
+#define W32(n, r) \
+    __declspec(dllexport) ULONG WINAPI get##n(VOID) { return gr(r); } \
+    __declspec(dllexport) VOID WINAPI set##n(ULONG v) { sr(r, v); }
+#define LO8(n, r) \
+    __declspec(dllexport) UCHAR WINAPI get##n(VOID) { return (UCHAR)gr(r); } \
+    __declspec(dllexport) VOID WINAPI set##n(UCHAR v) { sr(r, (gr(r) & 0xFFFFFF00u) | v); }
+#define HI8(n, r) \
+    __declspec(dllexport) UCHAR WINAPI get##n(VOID) { return (UCHAR)(gr(r) >> 8); } \
+    __declspec(dllexport) VOID WINAPI set##n(UCHAR v) { sr(r, (gr(r) & 0xFFFF00FFu) | ((DWORD)v << 8)); }
+#define FLG(n, bit) \
+    __declspec(dllexport) ULONG WINAPI get##n(VOID) { return (gr(R_EFL) >> bit) & 1; } \
+    __declspec(dllexport) VOID WINAPI set##n(ULONG v) { sr(R_EFL, (gr(R_EFL) & ~(1u << bit)) | ((v & 1) << bit)); }
+W16(AX, R_EAX) W16(BX, R_EBX) W16(CX, R_ECX) W16(DX, R_EDX)
+W16(SI, R_ESI) W16(DI, R_EDI) W16(BP, R_EBP) W16(SP, R_ESP) W16(IP, R_EIP)
+W16(CS, R_CS) W16(DS, R_DS) W16(ES, R_ES) W16(SS, R_SS) W16(FS, R_FS) W16(GS, R_GS)
+W32(EAX, R_EAX) W32(EBX, R_EBX) W32(ECX, R_ECX) W32(EDX, R_EDX)
+W32(ESI, R_ESI) W32(EDI, R_EDI) W32(EBP, R_EBP) W32(ESP, R_ESP) W32(EIP, R_EIP)
+LO8(AL, R_EAX) LO8(BL, R_EBX) LO8(CL, R_ECX) LO8(DL, R_EDX)
+HI8(AH, R_EAX) HI8(BH, R_EBX) HI8(CH, R_ECX) HI8(DH, R_EDX)
+FLG(CF, 0) FLG(PF, 2) FLG(AF, 4) FLG(ZF, 6) FLG(SF, 7) FLG(IF, 9) FLG(DF, 10) FLG(OF, 11)
+__declspec(dllexport) USHORT WINAPI getMSW(VOID) { return (USHORT)gr(R_MSW); }
+__declspec(dllexport) VOID WINAPI setMSW(USHORT v) { (void)v; }   /* not settable here */
+
+/* PVOID VdmMapFlat(USHORT seg, ULONG off, VDM_MODE mode): VDM_V86 = 0, VDM_PM = 1 */
+__declspec(dllexport) PVOID WINAPI VdmMapFlat(USHORT seg, ULONG off, ULONG mode)
+{ return (g_have && g_api.mapflat) ? g_api.mapflat(seg, off, mode == 1) : NULL; }
+__declspec(dllexport) BOOL WINAPI VdmUnmapFlat(USHORT seg, ULONG off, PVOID p, ULONG mode)
+{ (void)seg; (void)off; (void)p; (void)mode; return TRUE; }   /* nothing was copied */
+__declspec(dllexport) BOOL WINAPI VdmFlushCache(USHORT seg, ULONG off, ULONG n, ULONG mode)
+{ (void)seg; (void)off; (void)n; (void)mode; return TRUE; }  /* real CPU: no cache */
+
+/* BOOL VDDInstallIOHook(HANDLE hVdd, WORD cPortRange, PVDD_IO_PORTRANGE,
+                         PVDD_IO_HANDLERS) and its undo */
+__declspec(dllexport) BOOL WINAPI VDDInstallIOHook(HANDLE h, WORD n, PVOID ranges, PVOID handlers)
+{
+    if (g_have && g_api.io_hook) return g_api.io_hook(h, n, ranges, handlers);
+    miss("VDDInstallIOHook: no host entry"); return FALSE;
+}
+__declspec(dllexport) VOID WINAPI VDDDeInstallIOHook(HANDLE h, WORD n, PVOID ranges)
+{ if (g_have && g_api.io_unhook) g_api.io_unhook(h, n, ranges); }
+/* VDDSimulateInterrupt(ms, line, count) is call_ica_hw_interrupt by another name */
+__declspec(dllexport) VOID WINAPI VDDSimulateInterrupt(int ms, BYTE line, int count)
+{ if (g_have && g_api.ica_interrupt) g_api.ica_interrupt(ms, line, count); }
+__declspec(dllexport) VOID WINAPI VDDTerminateVDM(VOID)
+{ miss("VDDTerminateVDM: the VDD asked to end the VDM"); ExitProcess(0); }
 
 BOOL WINAPI DllMainCRTStartup(HINSTANCE h, DWORD why, LPVOID r)
 { (void)h; (void)why; (void)r; return TRUE; }

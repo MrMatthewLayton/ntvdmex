@@ -212,6 +212,17 @@ static LRESULT (*g_ww_ownerdraw)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM l
                                  int *handled);
 
 static unsigned g_ww_mmlog;   /* s90: first MM notifications logged */
+/* s91 (#305 M9): a message with a STRUCTURE, sent now (main.c: wow_send16_blob) --
+   WM_GETMINMAXINFO's 16-bit MINMAXINFO, copied back. 0 = it could not run. */
+static int (*g_ww_send16b)(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
+                           const int *fix, int nfix, WORD *res);
+/* Send if the nested run can, else post -- the M9 messages' delivery. */
+static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx, WORD pty)
+{
+    WORD r;
+    if (g_ww_send16 && g_ww_send16(h16, msg, wp, lp, &r)) return;
+    wowmsg_post(h16, msg, wp, lp, GetTickCount(), ptx, pty);
+}
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
@@ -478,6 +489,60 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          some unrelated Win16 window or none. Mapped through the table; a window
          that is not a guest window is 0, as Win16 reports one from another task.
          WM_SIZE's wParam is a SIZE_* code and passes as it is. */
+    /* ── #305 M9 (s91): ACTIVATION, MOVEMENT, VISIBILITY, MENU SELECTION AND THE
+         SIZE LIMITS reach the guest's procedure, each in the Win16 packing:
+           WM_MOVE (0003) / WM_SHOWWINDOW (0018)  same parameters in both
+           WM_ACTIVATE (0006)   Win32 wParam=MAKELONG(state, fMinimized), lParam=hwnd
+                                Win16 wParam=state, lParam=MAKELONG(hwnd, fMinimized)
+           WM_ACTIVATEAPP (001C) Win32 lParam = a thread id; Win16 = an hTask --
+                                0 here, "another task", which is what it always is
+           WM_MENUSELECT (011F) Win32 wParam=MAKELONG(item, flags), lParam=hMenu
+                                Win16 wParam=item, lParam=MAKELONG(flags, hMenu) --
+                                hMenu 0: the guest's menus are real Win32 ones here
+           WM_GETMINMAXINFO (0024) the 16-bit MINMAXINFO, 5 POINTs of INT16s,
+                                sent with the structure and COPIED BACK, so a
+                                program's minimum size holds
+         SENT through the nested run where it can run (the order Windows gives),
+         posted otherwise; DefWindowProc runs afterwards as before. */
+    case WM_MOVE: case WM_SHOWWINDOW:
+        if (h16) wowwin_send_or_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, ptx, pty);
+        break;
+    case WM_ACTIVATE:
+        if (h16) wowwin_send_or_post(h16, (WORD)msg, LOWORD(wp),
+                                     ((DWORD)(HIWORD(wp) ? 1 : 0) << 16)
+                                     | wowwin_hwnd16((HWND)lp), ptx, pty);
+        break;
+    case WM_ACTIVATEAPP:
+        if (h16) wowwin_send_or_post(h16, (WORD)msg, (WORD)(wp ? 1 : 0), 0, ptx, pty);
+        break;
+    case WM_MENUSELECT:
+        if (h16) wowwin_send_or_post(h16, (WORD)msg, LOWORD(wp),
+                                     (DWORD)HIWORD(wp), ptx, pty);
+        break;
+    case WM_GETMINMAXINFO:
+        if (h16 && g_ww_send16b && lp) {
+            MINMAXINFO *mm = (MINMAXINFO *)lp;
+            POINT *pt = &mm->ptReserved;
+            BYTE b[20];
+            WORD r;
+            int i;
+            for (i = 0; i < 5; ++i) {
+                b[i * 4 + 0] = (BYTE)pt[i].x; b[i * 4 + 1] = (BYTE)(pt[i].x >> 8);
+                b[i * 4 + 2] = (BYTE)pt[i].y; b[i * 4 + 3] = (BYTE)(pt[i].y >> 8);
+            }
+            if (g_ww_send16b(h16, (WORD)msg, 0, b, 20, NULL, 0, &r)) {
+                for (i = 1; i < 5; ++i) {   /* ptReserved is not the guest's to set */
+                    pt[i].x = (LONG)(short)(b[i * 4 + 0] | (b[i * 4 + 1] << 8));
+                    pt[i].y = (LONG)(short)(b[i * 4 + 2] | (b[i * 4 + 3] << 8));
+                }
+                return 0;
+            }
+        }
+        break;
+    case WM_SYSCHAR:
+        if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+                   ++g_ww_msgs; }
+        break;
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
         if (h16) {
             WORD wp16 = (msg == WM_SIZE) ? (WORD)wp

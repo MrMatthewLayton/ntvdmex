@@ -1,0 +1,17 @@
+#PROBE w16msgs
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=reg.class SIG=AX AX=0001
+CASE=cw.both SIG=AX AX=0001
+CASE=show.arrived SIG=AX AX=0001
+CASE=show.wparam SIG=AX AX=0001
+CASE=move.arrived SIG=AX AX=0001
+CASE=move.x.ge.60 SIG=AX AX=0001
+CASE=act.arrived SIG=AX AX=0001
+CASE=act.wparam.last SIG=AX AX=0001
+CASE=act.lparam.hi.last SIG=AX AX=0000
+CASE=act.lparam.lo.is.ours SIG=AX AX=0001
+CASE=mmi.arrived SIG=AX AX=0001
+CASE=mmi.width.ge.400 SIG=AX AX=0001
+#END
