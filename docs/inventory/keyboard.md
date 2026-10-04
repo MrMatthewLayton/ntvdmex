@@ -9,7 +9,7 @@ set, keyboard-side ACKs) are **[kbc.md](kbc.md)**. This file is the firmware on 
 **Our implementation:** `src/vdd/vdd_input.c` (788 lines), `src/vdd/vdd_input.h`; the
 INT 09h/16h stubs and their BOP arms in `src/host/main.c`; host keys enter at
 `host_key_scancode` (`main.c:6598`).
-**Off-VM:** `tools/dostest/input_test.c`. **DOS probe:** `tools/dostest/p_kbd.asm`.
+**Off-VM:** `tools/dostest/input_test.c`, `kbdact_test.c`, `prtsc_test.c`. **DOS probes:** `tools/dostest/p_kbd.asm`, `p_kbd2.asm`, `p_kbd3.asm` (#244/#274).
 **Oracles:** MS-DOS 6.22 under QEMU (SeaBIOS — a reimplementation, so **provisional** for a
 BIOS row), PCem with a genuine AMI 486 BIOS (**oracle**), DOSBox-X.
 **Marked:** 2026-10-01, **from the code**, with citations. Carried over from
@@ -36,9 +36,14 @@ calls that exist to tell a grey arrow from a keypad arrow, cannot.
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
 | §1 INT 16h functions | 14 | 10 | — | — | 1 | 3 |
-| §2 BDA keyboard fields | 10 | 6 | — | — | 3 | 1 |
-| §3 INT 09h BIOS handler | 15 | 11 | 2 | — | 1 | 1 |
-| **Total** | **39** | **27** | **2** | **—** | **5** | **5** |
+| §2 BDA keyboard fields | 10 | 8 | — | — | 1 | 1 |
+| §3 INT 09h BIOS handler | 15 | 12 | 2 | — | — | 1 |
+| **Total** | **39** | **30** | **2** | **—** | **2** | **5** |
+
+★ **#244 / #274 (2026-10-04)** closed the INT 15h `AH=4Fh` intercept, Pause from the
+host, Alt+keypad (`0019h`), the ring bounds (`0080h`/`0082h`) and put a BIOS print-screen
+routine behind INT 05h. **All from the documentation, none measured yet** — `p_kbd3` is
+the probe that asks the oracles (see each row).
 
 ---
 
@@ -74,12 +79,12 @@ The BDA is guest memory at `0040:0000`; the VDD writes it through `g_in.bda`
 |---|---|---|---|---|
 | `0017h` | shift flags | **IMPL** | bits 0–6 by `bios_translate`; Ctrl/Alt (bits 2/3) follow BOTH sides' held bits (#254: releasing left Ctrl while right is held no longer clears Ctrl); lock keys toggle once per press, not per typematic repeat; bit 7 Insert toggles on an Insert press (#254) | provisional (`16.02.shift`); input_test T12 |
 | `0018h` | extended shift flags (left Ctrl/Alt held, SysReq, Pause, keys held) | **IMPL** | #254: all eight bits maintained by `bios_translate` | input_test T12; `p_kbd2` (via `AH=12h`) |
-| `0019h` | Alt+keypad accumulator | **MISS** | the keypad rows' Alt column stores nothing (`:150-152`, `:227-237`), so Alt+0+6+5 does not type `A` | — |
+| `0019h` | Alt+keypad accumulator | **IMPL** | #274: `bios_translate` — Alt + a non-E0 keypad digit does `0019h = 0019h*10 + d` (a byte, wraps), stores nothing; the last Alt up stores `00xxh` if non-zero and clears it; any other key under Alt clears it. IBM AT TR KB_INT, RBIL — unmeasured (no oracle can hold Alt) | input_test T13(b) |
 | `001Ah`/`001Ch` | ring head / tail | **IMPL** | `:9-67`; a pointer pair the guest has scribbled on is reset rather than trusted (`:27-31`) | provisional (`bda.buffer`) |
 | `001Eh`–`003Dh` | the 16-slot ring | **IMPL** | `BDA_KB_START`/`END` (`vdd_input.h:30-31`); 15 usable slots, wrap at the end (`:16-17`) | provisional (`ring.wrap.*`); input_test `:84-86` |
 | `0071h` | Ctrl-Break flag (bit 7) | **IMPL** | #254: set by Ctrl-Break | input_test T12 |
 | `0072h` | reset flag (`1234h` = warm boot) | **N/A** | a VDM is never rebooted; nothing reads it | — |
-| `0080h`/`0082h` | ring start / end pointers | **MISS** | **nothing in `src/` writes or reads them**: the ring wraps at the constants. A TSR that enlarges the keyboard buffer by moving these is ignored. The probe's `001E`/`003E` agreed because the values were already there, not because we model them | provisional (`bda.buffer`) — the value, not the mechanism |
+| `0080h`/`0082h` | ring start / end pointers | **IMPL** | #274: `vdd_input_reset` writes POST's `001Eh`/`003Eh`; push/pop/peek (so INT 09h and every INT 16h call) read them each time (`kb_bounds`). A pair that cannot be a ring (odd, inverted, < 2 slots) falls back to `001E`/`003E`. Was: nothing read or wrote them | input_test T13(a); `p_kbd3 kbuf.small.*` (a 4-slot ring at `001E`–`0026`: full at 3, wraps at `0026h`) — **owed** an oracle run |
 | `0096h` | keyboard mode / type | **IMPL** | bit 4 (enhanced) at reset; #254: bits 0/1 (last code E1/E0) and 2/3 (right Ctrl/Alt held) maintained | provisional (`bda.enhanced`); input_test T12 |
 | `0097h` | LED / keyboard status | **MISS** | no writer; LED commands to the keyboard are not sent either ([kbc.md](kbc.md) §5) | — |
 
@@ -100,10 +105,10 @@ handler reflected to it: `main.c:22303-22319`.
 | Grey keys: Alt forms (`9B00h` …) | **IMPL** | `sc_ext_alt` (`:250-260`) | untested |
 | Grey keys: plain / Shift / Ctrl **`E0` forms** (`4BE0h`, keypad Enter `E00Dh`, keypad `/` `E02Fh`, Ctrl+grey Left `73E0h`) | **IMPL** | #254: `sc_ext_plain`/`sc_ext_ctrl`; `kb_compat` folds them back for `AH=00h/01h`, and DOS's CON reads through `vdd_input_dos_key` (same fold), so INT 21h input is unchanged | input_test T7/T10/T12 — ⚠ not oracle-measured: a headless oracle cannot press a key |
 | Keyboard layouts (UK / German / French) | **IMPL** | #136, `:266-343`, `:430-442`; dead keys not composed. An extension, not a BIOS unit | untested |
-| INT 15h `AH=4Fh` keyboard intercept | **MISS** | never called. The `C0h` system table says so honestly (feature bit 4 clear, `main.c:27524`) | — |
+| INT 15h `AH=4Fh` keyboard intercept | **PART** | #244: `bios_kbdact.asm` `k4f` — `stc / int 15h` with `AL` = the byte; CF=1 → the (possibly changed) `AL` is translated; CF=0 → swallowed, the BIOS's own EOI. Made **only while IVT[15h] is hooked**: our default answers CF=1 with AL untouched, so the call would change nothing and cost two VM exits per byte on the latency-fragile path. `C0h` feature 1 bit 4 now set (`74h`). ⚠ PART: the **PM-reflected** default INT 09h (a DPMI client with no PM keyboard hook, `main.c` "reflected to the BIOS (IVT is ours)") consumes host-side and does not call it | kbdact_test, input_test T13(c); `p_kbd3 int09.4f.*` (injects with 8042 `D2h`) — **owed** |
 | Ctrl-Break → INT 1Bh, `0000h` in the ring, `0071h` bit 7 | **IMPL** | #254: Ctrl + `46h` (E0 or not): ring emptied, `0000h` stored, `0071h` bit 7, then INT 1Bh run as guest code (`bios_kbdact.asm`) — skipped if IVT[1Bh] lands on a ROM BOP | input_test T12, kbdact_test |
-| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **PART** | #254: the BIOS side is done (E1 sequence, Ctrl+NumLock, the spin loop with IF=1, the next keystroke ends it and is discarded). ⛔ **Our host never sends `E1 1D 45`**: Win32 delivers Pause as a plain `45` (and NumLock as `E0 45`), so the real Pause key still reaches the BIOS as NumLock — a host scancode-mapping change (port 60h bytes), left for a deliberate decision | input_test T12, kbdact_test |
-| Print Screen → INT 05h | **PART** | #254: `E0 37` calls INT 05h (guest code) and stores nothing (was `3700h`); Ctrl+PrtSc stores `7200h`. ⚠ No BIOS print-screen routine of our own behind INT 05h, and Windows usually delivers only the key-UP for PrtSc | input_test T12, kbdact_test |
+| Pause (`E1 1D 45`) → BIOS pause loop, `0018h` bit 3 | **IMPL** | #254: the BIOS side (E1 sequence, Ctrl+NumLock, the spin loop with IF=1, the next keystroke ends it and is discarded). #274: **the host now sends it** — `host_key_special` / `vdd_input_host_key_bytes`: Win32 scan `45h` *without* the extended bit is Pause → `E1 1D 45 E1 9D C5` on the press, nothing on the release, no typematic. Ctrl+Break (`46h` extended) → `E0 46 E0 C6` on the press likewise (it used to repeat INT 1Bh at the typematic rate while held). ⚠ The Win32 half (Pause = `45h` not extended) is from documentation, unmeasured on the rig | input_test T12/T13(e), kbdact_test; by hand: Pause in `edit.com` |
+| Print Screen → INT 05h | **PART** | #254: `E0 37` calls INT 05h (guest code) and stores nothing (was `3700h`); Ctrl+PrtSc stores `7200h`. #274: **IVT[05h] is ours now** — `bios_kbdact.asm` `p5` + `bios_prtsc.h`: LF CR, then every cell (NUL → space) and LF CR per row, through the **guest's** INT 17h; a printer error (`AH & 29h`) after a cell stops it. ⛔ PART because the **status byte is not at `0050:0000`**: that byte is the first byte of our own INT 21h stub (`DOS_HDLR_SEG:0000`), so it is kept host-side (`g_prtsc_status`). ⚠ Windows delivers only the key-UP for PrtSc, and we deliberately do NOT synthesise a press from it (every Windows screenshot would also print the DOS screen) | prtsc_test, kbdact_test; `p_kbd3 int05.*` — **owed** (SeaBIOS has no print-screen routine; PCem's AMI is the reference) |
 | SysReq → INT 15h `AH=85h` | **IMPL** | #254: `54h` press → `AX=8500h`, release → `8501h`, held bit `0018h` bit 2; our INT 15h `85h` default answers `AH=0` CF=0 | input_test T12, kbdact_test; `p_kbd2` (`int15.85.*`) |
 | Ctrl+Alt+Del → reboot | **N/A** | a VDD cannot reboot its host — the same reasoning as 8042 `FEh` ([kbc.md](kbc.md)) | — |
 
@@ -132,8 +137,9 @@ SeaBIOS said `30h`) and `AH=0Ah` answers `41ABh`, which bit 4 promises.
 ## What to fix, in order
 
 1. ~~Grey-key `E0` forms; `0040:0018`/`0096`/Insert; `AH=12h`; Ctrl-Break, Print Screen,
-   SysReq, Pause~~ — #254 (BIOS side). Left: the INT 15h `AH=4Fh` intercept (#244); the
-   host sending Pause as `E1 1D 45` (a port-60h change, needs a decision); a BIOS
-   print-screen routine behind INT 05h.
-4. Honour `0040:0080/0082` as the ring bounds.
+   SysReq, Pause~~ — #254 (BIOS side). ~~The INT 15h `AH=4Fh` intercept; the host sending
+   Pause as `E1 1D 45`; a print-screen routine behind INT 05h~~ — #244/#274.
+   Left: `0050:0000` (needs our INT 21h stub moved off it); the 4Fh call from the
+   PM-reflected INT 09h; a `p_kbd3` run on all four oracles.
+4. ~~Honour `0040:0080/0082` as the ring bounds~~ — #274.
 5. A PCem row-by-row read of `p_kbd`, to move the provisional rows.

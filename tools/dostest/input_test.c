@@ -14,7 +14,8 @@ static int total = 0, fails = 0;
 
 /* Stand-in for guest segment 0x40. The ring lives in the GUEST's BIOS data area now, so a
    test that leaves this NULL is testing nothing at all -- every push would be discarded. */
-static uint8_t bda[0x100];
+/* #274: the whole of segment 0x40, because 0040:0080/0082 may move the ring anywhere in it. */
+static uint8_t bda[0x10000];
 /* A fake clock for the keyboard transfer-time tests (T11), and an IRQ counter. */
 static uint64_t g_fake_us = 0;
 static uint64_t fake_clock(void) { return g_fake_us; }
@@ -570,6 +571,160 @@ int main(void)
 #undef EXPECT
 #undef NOKEY
 #undef AH12
+    }
+
+    /* T13: #244 / #274 -- the keyboard BIOS remainders.
+         (a) the ring's bounds come from 0040:0080/0082, not from two constants;
+         (b) Alt + keypad digits = the character with that decimal code (0040:0019);
+         (c) the INT 09h handler split around INT 15h AH=4Fh: fetch() + translate();
+         (d) 8042 command D2h puts a byte in the output buffer as if typed, IRQ1 included;
+         (e) the bytes the host sends for Pause and Ctrl+Break. */
+    {   uint16_t v16;
+        uint32_t v;
+        uint8_t  b[6];
+        int      n, norep, sc, act, i, ok;
+#define KEY(sc) (vdd_input_push_scancode(&in, (uint8_t)(sc)), vdd_input_bios_consume(&in))
+#define EXPECT(code, msg) CHECK(vdd_input_pop(&in, &k) == 1 && k == (code), msg)
+#define NOKEY(msg) CHECK(vdd_input_pop(&in, &k) == 0, msg)
+#define W16(o) ((uint16_t)(bda[(o)] | (bda[(o) + 1] << 8)))
+#define SET16(o, x) (bda[(o)] = (uint8_t)(x), bda[(o) + 1] = (uint8_t)((x) >> 8))
+        /* (a) */
+        fresh(&in, &bus);
+        CHECK(W16(0x80) == 0x001E && W16(0x82) == 0x003E,
+              "bounds: reset writes POST's 0040:0080 = 001Eh, 0040:0082 = 003Eh (nothing wrote them)");
+        SET16(0x82, 0x0026);                                    /* a 4-slot ring          */
+        CHECK(vdd_input_push(&in, 0x1E61) && vdd_input_push(&in, 0x3062) && vdd_input_push(&in, 0x2E63),
+              "bounds: a 4-slot ring (1E..26) takes three keys");
+        CHECK(vdd_input_push(&in, 0x2064) == 0, "bounds: ...and refuses the fourth (full = 3, not 15)");
+        CHECK(W16(BDA_KB_TAIL) == 0x0024, "bounds: tail at 0024h");
+        CHECK(vdd_input_pop(&in, &k) && k == 0x1E61 && vdd_input_pop(&in, &k) && k == 0x3062,
+              "bounds: FIFO order holds");
+        CHECK(vdd_input_push(&in, 0x2064) && W16(BDA_KB_TAIL) == 0x001E,
+              "bounds: the tail WRAPS at the relocated end 0026h, back to 001Eh (was: ran on to 003Eh)");
+        CHECK(vdd_input_pop(&in, &k) && k == 0x2E63 && vdd_input_pop(&in, &k) && k == 0x2064
+              && W16(BDA_KB_HEAD) == 0x001E, "bounds: the head wraps the same way");
+        CHECK(vdd_input_pop(&in, &k) == 0, "bounds: empty again");
+        /* moved OUT of the BDA: a 64-slot ring at 0040:0200 */
+        SET16(0x80, 0x0200); SET16(0x82, 0x0280);
+        SET16(BDA_KB_HEAD, 0x0200); SET16(BDA_KB_TAIL, 0x0200);
+        ok = 1;
+        for (i = 0; i < 63; ++i) ok &= vdd_input_push(&in, (uint16_t)(0x1E00 + i));
+        CHECK(ok && vdd_input_push(&in, 0x1E61) == 0,
+              "bounds: an enlarged ring at 0200h..0280h holds 63 keys, then is full");
+        CHECK(W16(0x0200) == 0x1E00 && W16(0x027C) == 0x1E3E,
+              "bounds: the keys are stored IN the relocated buffer");
+        ok = 1;
+        for (i = 0; i < 63; ++i) ok &= (vdd_input_pop(&in, &k) && k == (uint16_t)(0x1E00 + i));
+        CHECK(ok && vdd_input_pop(&in, &k) == 0, "bounds: ...and come back out in order");
+        /* a pair that cannot describe a ring falls back to POST's */
+        SET16(0x80, 0x0021); SET16(0x82, 0x0010);               /* odd and inverted       */
+        CHECK(vdd_input_push(&in, 0x1E61) && W16(BDA_KB_HEAD) == 0x001E && W16(BDA_KB_TAIL) == 0x0020,
+              "bounds: an odd / inverted pair is ignored -> the 001E..003E ring (head/tail reset into it)");
+        CHECK(vdd_input_pop(&in, &k) && k == 0x1E61, "bounds: ...and the key is readable there");
+        SET16(0x80, 0x001E); SET16(0x82, 0x0022);               /* 2 slots: one key        */
+        memset(&r, 0, sizeof r); s_ah(&r, 0x05); r.ecx = 0x1E61; vdd_bus_deliver_int(&bus, 0x16, &r);
+        v16 = (uint16_t)r_al(&r);
+        memset(&r, 0, sizeof r); s_ah(&r, 0x05); r.ecx = 0x3062; vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(v16 == 0 && r_al(&r) == 1, "bounds: INT 16h AH=05h into a 2-slot ring: stored, then AL=1 full");
+        memset(&r, 0, sizeof r); s_ah(&r, 0x00); vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.zf == 0 && r_ax(&r) == 0x1E61, "bounds: INT 16h AH=00h reads it back");
+        SET16(0x82, 0x003E);
+
+        /* (b) */
+        fresh(&in, &bus);
+        KEY(0x38); KEY(0x52); KEY(0xD2); KEY(0x4D); KEY(0xCD); KEY(0x4C); KEY(0xCC);   /* Alt 0 6 5 */
+        CHECK(bda[BDA_KB_ALTNUM] == 65, "altnum: Alt + keypad 0,6,5 accumulates 65 in 0040:0019");
+        NOKEY("altnum: ...and stores nothing while Alt is held");
+        KEY(0xB8);
+        EXPECT(0x0041, "altnum: Alt released -> 0041h ('A', AH=0) stored");
+        CHECK(bda[BDA_KB_ALTNUM] == 0, "altnum: ...and the accumulator is cleared");
+        KEY(0x38); KEY(0x50); KEY(0xD0); KEY(0x4C); KEY(0xCC); KEY(0x52); KEY(0xD2); KEY(0xB8);   /* 2 5 0 */
+        EXPECT(0x00FA, "altnum: Alt+2+5+0 -> 00FAh");
+        KEY(0x38); KEY(0x51); KEY(0xD1); KEY(0x52); KEY(0xD2); KEY(0x52); KEY(0xD2); KEY(0xB8);   /* 3 0 0 */
+        EXPECT(0x002C, "altnum: Alt+3+0+0 wraps as a byte: 300 mod 256 = 44 -> 002Ch");
+        KEY(0x38); KEY(0xB8);
+        NOKEY("altnum: Alt alone stores nothing (accumulator 0)");
+        KEY(0x38); KEY(0x4F); KEY(0xCF); KEY(0x21); KEY(0xA1); KEY(0xB8);   /* Alt 1, then F */
+        EXPECT(0x2100, "altnum: another key under Alt is its Alt code (2100h)...");
+        NOKEY("altnum: ...and throws the accumulated digit away");
+        KEY(0x38); KEY(0xE0); KEY(0x4F); KEY(0xE0); KEY(0xCF); KEY(0xB8);  /* Alt + grey End */
+        EXPECT(0x9F00, "altnum: a GREY key is not a keypad digit (Alt+grey End = 9F00h)");
+        NOKEY("altnum: ...and accumulates nothing");
+        KEY(0x45); KEY(0xC5);                                   /* NumLock on: no effect  */
+        KEY(0xE0); KEY(0x38); KEY(0x48); KEY(0xC8); KEY(0xE0); KEY(0xB8);  /* right Alt 8 */
+        EXPECT(0x0008, "altnum: right Alt works too, whatever NumLock says (Alt+8 -> 0008h)");
+        KEY(0x38); KEY(0xE0); KEY(0x38); KEY(0x49); KEY(0xC9); KEY(0xB8);  /* both Alts, 9 */
+        NOKEY("altnum: with both Alts down, releasing ONE stores nothing yet");
+        KEY(0xE0); KEY(0xB8);
+        EXPECT(0x0009, "altnum: ...the last Alt up stores it (0009h)");
+
+        /* (c) */
+        fresh(&in, &bus);
+        CHECK(vdd_input_bios_fetch(&in) == -1, "split: fetch with nothing presented -> -1");
+        vdd_input_push_scancode(&in, 0x1E);
+        sc = vdd_input_bios_fetch(&in);
+        CHECK(sc == 0x1E && vdd_input_sc_queued(&in) == 0, "split: fetch takes the byte out of the controller");
+        NOKEY("split: ...and translates nothing on its own");
+        act = vdd_input_bios_translate(&in, 0x30);              /* the hook changed AL */
+        CHECK(act == KB_ACT_NONE, "split: translate returns its action");
+        EXPECT(0x3062, "split: a hook that changed AL 1Eh -> 30h stores 'b', not 'a'");
+        vdd_input_push_scancode(&in, 0x1E);
+        v = 0; vdd_bus_io(&bus, 0x60, 1, 1, &v);                 /* a guest hook read 60h */
+        CHECK(vdd_input_bios_fetch(&in) == 0x1E, "split: fetch after a hook's port read gets the SAME byte (sc_bios_owed)");
+        CHECK(vdd_input_bios_fetch(&in) == -1, "split: ...once");
+
+        /* (d) */
+        fresh(&in, &bus);
+        vdd_bus_set_sinks(&bus, count_irq, &g_irq1_n, 0, 0); g_irq1_n = 0;
+        v = 0xD2; vdd_bus_io(&bus, 0x64, 1, 0, &v);
+        CHECK(g_irq1_n == 0 && vdd_input_sc_queued(&in) == 0, "kbc D2h: the command alone presents nothing");
+        v = 0x1E; vdd_bus_io(&bus, 0x60, 1, 0, &v);
+        CHECK(g_irq1_n == 1 && vdd_input_sc_queued(&in) == 1, "kbc D2h: the next 60h write is presented, with IRQ1");
+        v = 0; vdd_bus_io(&bus, 0x64, 1, 1, &v);
+        CHECK(v & 1, "kbc D2h: OBF set");
+        CHECK(vdd_input_bios_consume(&in) == KB_ACT_NONE, "kbc D2h: the BIOS takes it as a keystroke...");
+        EXPECT(0x1E61, "kbc D2h: ...'a' in the ring");
+        v = 0x3A; vdd_bus_io(&bus, 0x60, 1, 0, &v);              /* no D2h: a KEYBOARD cmd */
+        CHECK(vdd_input_sc_queued(&in) == 0, "kbc D2h: one byte per command (the next 60h write is not a keystroke)");
+        vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
+
+        /* (e) */
+        n = vdd_input_host_key_bytes(0x45, 0, 0, b, &norep);
+        CHECK(n == 6 && norep && b[0] == 0xE1 && b[1] == 0x1D && b[2] == 0x45 && b[3] == 0xE1
+              && b[4] == 0x9D && b[5] == 0xC5, "host: Pause (45h, not extended) -> E1 1D 45 E1 9D C5 on the press");
+        n = vdd_input_host_key_bytes(0x45, 0, 1, b, &norep);
+        CHECK(n == 0 && norep, "host: ...nothing on the release, never repeated");
+        n = vdd_input_host_key_bytes(0x45, 1, 0, b, &norep);
+        CHECK(n == 2 && !norep && b[0] == 0xE0 && b[1] == 0x45, "host: NumLock (45h extended) is unchanged: E0 45");
+        n = vdd_input_host_key_bytes(0x46, 1, 0, b, &norep);
+        CHECK(n == 4 && norep && b[0] == 0xE0 && b[1] == 0x46 && b[2] == 0xE0 && b[3] == 0xC6,
+              "host: Ctrl+Break (46h extended) -> E0 46 E0 C6 on the press");
+        n = vdd_input_host_key_bytes(0x46, 1, 1, b, &norep);
+        CHECK(n == 0 && norep, "host: ...nothing on the release");
+        n = vdd_input_host_key_bytes(0x46, 0, 0, b, &norep);
+        CHECK(n == 1 && !norep && b[0] == 0x46, "host: Scroll Lock (46h) is unchanged");
+        n = vdd_input_host_key_bytes(0x48, 1, 1, b, &norep);
+        CHECK(n == 2 && b[0] == 0xE0 && b[1] == 0xC8, "host: an ordinary grey key: E0 C8 on the release");
+        /* ...and what our BIOS makes of them */
+        fresh(&in, &bus);
+        n = vdd_input_host_key_bytes(0x45, 0, 0, b, &norep);
+        act = KB_ACT_NONE;
+        for (i = 0; i < n; ++i) { int a = KEY(b[i]); if (a != KB_ACT_NONE) act = a; }
+        CHECK(act == KB_ACT_PAUSE && (bda[BDA_KB_FLAGS2] & 0x08) && !(bda[BDA_KB_FLAGS] & 0x20),
+              "host+bios: the Pause key now PAUSES (0018 bit 3) instead of toggling NumLock");
+        vdd_input_pause_cancel(&in);
+        KEY(0x1D);                                              /* Ctrl down           */
+        n = vdd_input_host_key_bytes(0x46, 1, 0, b, &norep);
+        act = KB_ACT_NONE;
+        for (i = 0; i < n; ++i) { int a = KEY(b[i]); if (a != KB_ACT_NONE) act = a; }
+        KEY(0x9D);
+        CHECK(act == KB_ACT_BREAK && (bda[0x71] & 0x80), "host+bios: Ctrl+Break -> INT 1Bh action, 0071h bit 7");
+        EXPECT(0x0000, "host+bios: ...0000h in the ring");
+#undef KEY
+#undef EXPECT
+#undef NOKEY
+#undef W16
+#undef SET16
     }
 
     printf("\n%d checks, %d failed\n", total, fails);
