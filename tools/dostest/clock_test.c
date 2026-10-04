@@ -142,6 +142,74 @@ int main(void)
       dclk_from_ticks(0x1800B0u, &h, &mi, &sx, &cs);
       eq("from_ticks at a full day clamps to 23h", h, 23); }
     eq("ticks 23:59:59.99 < a day (0x1800B0)", dclk_ticks(23, 59, 59, 99) < 0x1800B0u, 1);
+    eq("ticks_cs(1) = 5 (a tick is 5.49 cs, floored)", dclk_ticks_cs(1), 5);
+    /* 0x1800B0 is the BIOS's day, but at 1193182 Hz it is 86399.85 s, not 86400 */
+    eq("ticks_cs(a day's count) = 8639985 (24h - 0.15 s)", dclk_ticks_cs(0x1800B0u), 8639985);
+
+    /* ── #262 case B: DOS's clock follows a count the BIOS did not write ── */
+    {
+        dclk_t host = mk(2026, 10, 2, 9, 15, 30, 25), g;
+        int64_t off = 0;
+        /* p_tick2c B: 11:30:30 stored (000B:8277), read at once */
+        dclk_follow_ticks(&host, &off, 0x000B8277u, 0, 0);
+        dclk_read(&host, off, &g);
+        eq("follow 000B:8277 -> 11:30", g.hour * 100 + g.min, 1130);
+        eq("follow 000B:8277 -> :29.95 (4142995 cs)", g.sec * 100 + g.cs, 2995);
+        eq("follow keeps the date", g.year * 10000 + g.month * 100 + g.day, 20261002);
+        /* the host moves on 2 s: the guest's clock runs on from the store */
+        host.sec = 32;
+        dclk_read(&host, off, &g);
+        eq("then runs on host time (:29.95 -> :31.95)", g.sec * 100 + g.cs, 3195);
+
+        /* a store at 23:59:59 on the guest's 1999-12-31; the count wraps once, read
+           5 s of ticks after the store: 2000-01-01 00:00:04 -- and the date is the
+           STORE's day + 1, though host-now + offset had not crossed midnight. */
+        host = mk(2026, 10, 2, 9, 0, 0, 0); off = 0;
+        dclk_set_date(&host, &off, 1999, 12, 31);
+        dclk_set_time(&host, &off, 12, 0, 0, 0);
+        host.sec = 5;                                     /* +5 s of host time */
+        dclk_follow_ticks(&host, &off, dclk_ticks(0, 0, 4, 0), 1, 91 /* ~5 s of ticks */);
+        dclk_read(&host, off, &g);
+        eq("wrap: 2000-01-01", g.year * 10000 + g.month * 100 + g.day, 20000101);
+        eq("wrap: 00:00:03.9x (a tick short of :04)", g.hour * 10000 + g.min * 100 + g.sec, 3);
+        eq("wrap: Saturday", g.dow, 6);
+
+        /* ★ the trap the `since` argument exists for: the guest's own clock crossed
+           midnight AFTER the store (it read 23:59:58 then; now 00:00:08 next day), and
+           the count wrapped once. Taking "today" from host-now + offset would add the
+           wrap to a day that already contains it -- 2000-01-02. DOS's day number is the
+           store's day plus the wraps: 2000-01-01. */
+        host = mk(2026, 10, 2, 9, 0, 0, 0); off = 0;
+        dclk_set_date(&host, &off, 1999, 12, 31);
+        dclk_set_time(&host, &off, 23, 59, 58, 0);
+        host.sec = 10;                                    /* guest now 2000-01-01 00:00:08 */
+        dclk_follow_ticks(&host, &off, dclk_ticks(0, 0, 5, 0), 1, 182 /* ~10 s of ticks */);
+        dclk_read(&host, off, &g);
+        eq("store before the guest's midnight: 2000-01-01, not 01-02",
+           g.year * 10000 + g.month * 100 + g.day, 20000101);
+        eq("... at 00:00", g.hour * 100 + g.min, 0);
+
+        /* no wrap, a store read the same instant: only the time of day moves */
+        host = mk(2026, 10, 2, 23, 59, 59, 0); off = 0;
+        dclk_follow_ticks(&host, &off, dclk_ticks(1, 2, 3, 0), 0, 0);
+        dclk_read(&host, off, &g);
+        eq("store 01:02:03 at the host's 23:59:59 keeps the host's day",
+           g.year * 10000 + g.month * 100 + g.day, 20261002);
+        eq("... and reads 01:02", g.hour * 100 + g.min, 102);
+
+        /* the day's length itself (a count the BIOS never holds) reads 23:59:59.85;
+           a nonsense count past it is clamped to the last hundredth, never a next day */
+        host = mk(2026, 10, 2, 9, 0, 0, 0); off = 0;
+        dclk_follow_ticks(&host, &off, 0x1800B0u, 0, 0);
+        dclk_read(&host, off, &g);
+        eq("count 0x1800B0 -> 23:59:59.85", g.hour * 1000000 + g.min * 10000 + g.sec * 100 + g.cs,
+           23595985);
+        off = 0;
+        dclk_follow_ticks(&host, &off, 0xFFFFFFFFu, 0, 0);
+        dclk_read(&host, off, &g);
+        eq("count FFFFFFFF -> 23:59:59.99, same day", g.day * 100000000LL + g.hour * 1000000
+           + g.min * 10000 + g.sec * 100 + g.cs, 223595999LL);
+    }
 
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;

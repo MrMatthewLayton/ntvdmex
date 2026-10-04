@@ -195,6 +195,16 @@ typedef struct {
    arithmetic in dos_clock.h. */
 void dos_clock_host_now(dclk_t *t);
 void dos_clock_read(int64_t off, dclk_t *out);
+/* GH #262: the PIT's "was 0040:006C set by anything but the BIOS?" (vdd_pit_tick_take,
+   wired by the host; NULL off-VM), DOS's clock re-derived from a count (dclk_follow_ticks
+   on g_dos_clock.dos_off), and the two together -- called before any read or set of
+   DOS's clock. */
+extern int (*g_dos_tick_take)(uint32_t *ticks, uint32_t *wraps, uint32_t *since);
+void dos_clock_follow(uint32_t ticks, uint32_t wraps, uint32_t since);
+void dos_clock_sync(void);
+/* GH #263: stamp a just-created or just-written file with DOS's clock (a no-op while no
+   guest has moved it). Exported for main.c's protected-mode INT 21h twins. */
+void dos_stamp_vdm_now(HANDLE f);
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);
