@@ -212,6 +212,65 @@ static LRESULT (*g_ww_ownerdraw)(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM l
                                  int *handled);
 
 static unsigned g_ww_mmlog;   /* s90: first MM notifications logged */
+/* s92 (#305 M12): krnl386's OWN global heap, through the nested run (main.c:
+   shim_global16 -- 0 GlobalAlloc(flags, cb) 1 GlobalFree 2 GlobalLock -> 16:16
+   3 GlobalUnlock). NULL until main.c wires it. */
+static DWORD (*g_ww_global16)(int op, DWORD a, DWORD b);
+static DWORD dpmi_sel_base(WORD sel);            /* main.c: a selector's linear base */
+
+/* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
+     SHELL.DLL's own 16-bit code reads it: DragQueryPoint (ord 13, seg1:0x01d8)
+     GlobalLocks the handle and takes x at +2, y at +4 and fNC at +6, returning
+     fNC == 0; DragFinish (ord 12, seg1:0x0232) is GlobalFree. Only DragQueryFile
+     (ord 11) thunks to us. So the drop is copied, whole, into a block krnl386
+     allocates, laid out as Windows 3.1's DROPFILESTRUCT:
+         +0 WORD pFiles (= 8)   +2 POINT pt (client)   +6 WORD fNC   +8 the names,
+         each NUL-terminated, the list ended by an empty one.
+     The names are the SHORT (8.3) forms -- a Win16 program opens what it is given
+     through DOS. The Win32 HDROP is finished here; the guest's DragFinish frees ours.
+     Returns the 16-bit handle, or 0 (nothing posted). */
+static WORD wowwin_drop16(HDROP hd, char *why, int whycap)
+{
+    BYTE buf[2048];
+    UINT n, i, at = 8;
+    POINT pt;
+    BOOL inside;
+    WORD h;
+    DWORD fp;
+    volatile BYTE *d;
+    if (!g_ww_global16) { lstrcpynA(why, "no 16-bit heap entry", whycap); return 0; }
+    n = DragQueryFileA(hd, 0xFFFFFFFFu, NULL, 0);
+    inside = DragQueryPoint(hd, &pt);
+    for (i = 0; i < n; ++i) {
+        char lng[MAX_PATH], sht[MAX_PATH];
+        int  len;
+        if (!DragQueryFileA(hd, i, lng, sizeof lng)) continue;
+        if (!GetShortPathNameA(lng, sht, sizeof sht)) lstrcpynA(sht, lng, sizeof sht);
+        len = lstrlenA(sht);
+        if (at + (UINT)len + 2 > sizeof buf) break;       /* a 2 KB list; the rest dropped */
+        CopyMemory(buf + at, sht, (SIZE_T)len + 1);
+        at += (UINT)len + 1;
+    }
+    buf[at++] = 0;
+    buf[0] = 8; buf[1] = 0;
+    buf[2] = (BYTE)pt.x; buf[3] = (BYTE)((WORD)pt.x >> 8);
+    buf[4] = (BYTE)pt.y; buf[5] = (BYTE)((WORD)pt.y >> 8);
+    buf[6] = (BYTE)(inside ? 0 : 1); buf[7] = 0;
+    h = (WORD)g_ww_global16(0, 0x2042 /* GMEM_SHARE|GMEM_MOVEABLE|GMEM_ZEROINIT */, at);
+    if (!h) { lstrcpynA(why, "GlobalAlloc refused", whycap); return 0; }
+    fp = g_ww_global16(2, h, 0);
+    d = (fp >> 16) ? (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)(fp >> 16)) + (fp & 0xFFFF)) : NULL;
+    if (!d || !(fp >> 16) || !dpmi_sel_base((WORD)(fp >> 16))) {
+        g_ww_global16(1, h, 0);
+        lstrcpynA(why, "GlobalLock refused", whycap);
+        return 0;
+    }
+    for (i = 0; i < at; ++i) d[i] = buf[i];
+    g_ww_global16(3, h, 0);
+    wsprintfA(why, "%u file(s), %u bytes, pt=(%d,%d)%s", n, at, (int)pt.x, (int)pt.y,
+              inside ? "" : " non-client");
+    return h;
+}
 /* s91 (#305 M9): a message with a STRUCTURE, sent now (main.c: wow_send16_blob) --
    WM_GETMINMAXINFO's 16-bit MINMAXINFO, copied back. 0 = it could not run. */
 static int (*g_ww_send16b)(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
@@ -496,6 +555,22 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             log_append(LOG_PATH, cb, cq); }
         if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), ptx, pty);
                    ++g_ww_msgs; return 0; }
+        break;
+    /* s92 (#305 M12): a drop on a window that called DragAcceptFiles. POSTED, as the
+       shell posts it, with a Win16 HDROP built by wowwin_drop16 (see there). */
+    case WM_DROPFILES:
+        if (h16) {
+            char why[96], db[200], *dq = db;
+            WORD hd = wowwin_drop16((HDROP)wp, why, sizeof why);
+            DragFinish((HDROP)wp);
+            dq = zput(dq, "WOWWIN: WM_DROPFILES on h16=0x"); dq = zhex(dq, h16);
+            dq = zput(dq, hd ? " -> HDROP16 0x" : " -- ★ NOT DELIVERED: ");
+            if (hd) { dq = zhex(dq, hd); dq = zput(dq, " "); }
+            dq = zput(dq, why); dq = zput(dq, "\r\n");
+            log_append(LOG_PATH, db, dq);
+            if (hd) { wowmsg_post(h16, 0x0233, hd, 0, GetTickCount(), ptx, pty); ++g_ww_msgs; }
+            return 0;
+        }
         break;
     /* ── ★★ WM_TIMER. THE OS IS THE TIMER ENGINE; THIS IS THE WHOLE RELAY. ───
          The real HWND belongs to this thread, so the OS's own timer already

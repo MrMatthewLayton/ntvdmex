@@ -682,10 +682,9 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
          The real one, on the real window: accepting drops is a property the
          window manager enforces, and ours is the OS's. A guest that asks for it
          and then gets no WM_DROPFILES would be a lie one level down.
-       ⚠ WM_DROPFILES IS NOT FORWARDED YET, and this says so rather than leaving
-         it to be discovered: the message carries an HDROP, which needs a token
-         of its own, and no run has produced one. What this call does today is
-         make the window accept a drop that nothing yet delivers. */
+       ★ s92: AND THE DROP NOW ARRIVES -- WM_DROPFILES is relayed with a Win16 HDROP
+         (a real global block; wowwin.h wowwin_drop16), read by DragQueryFile below
+         and by SHELL.DLL's own 16-bit DragQueryPoint and DragFinish. */
     case WOWSHELL_DRAGACCEPTFILES: {
         WORD hwnd = wow32_argw(f, DAF_ARG_HWND);
         WORD acc  = wow32_argw(f, DAF_ARG_ACCEPT);
@@ -700,31 +699,67 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         DragAcceptFiles(w->hwnd32, acc ? TRUE : FALSE);
-        wu_puts(note, notecap, &k, " -> the OS's -- ⚠ but WM_DROPFILES is not"
-                                   " forwarded yet, so nothing will arrive");
+        wu_puts(note, notecap, &k, " -> the OS's (drops arrive as WM_DROPFILES, s92)");
         wow32_setret(f, 0);
         return 1;
     }
 
     /* ── ★ 0x0b DragQueryFile(hDrop, iFile, lpszFile, cch) ──────────────────
-       ⚠ REFUSED, NOT GUESSED. An HDROP can only have come from a WM_DROPFILES
-         this host has never delivered, so any handle arriving here is one we did
-         not issue. Answering 0 is the honest "no files", and the alternative --
-         handing an arbitrary 16-bit number to Win32 as an HDROP -- would read
-         somebody else's memory. */
+       s92 (#305 M12): the HDROP is the global block wowwin_drop16 built (wowwin.h),
+       read here the way SHELL.DLL's own DragQueryPoint reads it: locked through
+       krnl386, pFiles at +0, the names from there. iFile 0xFFFF answers the count;
+       a NULL buffer answers the length a name needs (without its NUL); otherwise at
+       most cch-1 characters and a NUL are copied and the count copied is answered.
+     ⚠ A handle that does not lock, or a block that does not parse, answers 0 --
+       the honest "no files" this call always gave before drops were delivered. */
     case WOWSHELL_DRAGQUERYFILE: {
         WORD hdrop = wow32_argw(f, DQF_ARG_HDROP);
         WORD idx   = wow32_argw(f, DQF_ARG_INDEX);
+        WORD cch   = wow32_argw(f, DQF_ARG_CCH);
+        volatile BYTE *out = wow32_argptr(f, DQF_ARG_BUF);
+        DWORD fp = g_ww_global16 ? g_ww_global16(2, hdrop, 0) : 0;
+        DWORD base = (fp >> 16) ? dpmi_sel_base((WORD)(fp >> 16)) : 0;
+        volatile BYTE *d = base ? (volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF)) : NULL;
+        DWORD r = 0;
         int k = 0;
         wu_puts(note, notecap, &k, "DragQueryFile drop 0x");
         wu_puthex(note, notecap, &k, hdrop, 4);
         wu_puts(note, notecap, &k, " index 0x");
         wu_puthex(note, notecap, &k, idx, 4);
-        wu_puts(note, notecap, &k, " -- ★ no HDROP has ever been issued by this"
-                                   " host (WM_DROPFILES is not forwarded);"
-                                   " answered 0 rather than handing Win32 a"
-                                   " handle we did not make");
-        wow32_setret(f, 0);
+        if (!d) {
+            wu_puts(note, notecap, &k, " -- ★ the handle does not lock; 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   WORD at = (WORD)(d[0] | (d[1] << 8)), n = 0;
+            int  guard = 0;
+            while (at < 0x0800 && d[at] && guard++ < 512) {       /* walk to entry idx */
+                WORD len = 0;
+                while (len < 260 && d[at + len]) ++len;
+                if (idx != 0xFFFF && n == idx) {
+                    if (!out) r = len;
+                    else if (cch) {
+                        WORD c = (WORD)(len < cch ? len : cch - 1), j;
+                        for (j = 0; j < c; ++j) out[j] = d[at + j];
+                        out[c] = 0;
+                        r = c;
+                        wu_puts(note, notecap, &k, " -> \"");
+                        {   char nm[64]; WORD q;
+                            for (q = 0; q < c && q < 63; ++q) nm[q] = (char)out[q];
+                            nm[q] = 0; wu_puts(note, notecap, &k, nm); }
+                        wu_puts(note, notecap, &k, "\"");
+                    }
+                    break;
+                }
+                ++n;
+                at = (WORD)(at + len + 1);
+            }
+            if (idx == 0xFFFF) r = n;
+        }
+        g_ww_global16(3, hdrop, 0);
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, r);
         return 1;
     }
 

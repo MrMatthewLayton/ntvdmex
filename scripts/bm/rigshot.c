@@ -38,6 +38,7 @@
  * KERNEL32/USER32/GDI32. See scripts/build-rigshot.sh.
  */
 #include <windows.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
@@ -800,6 +801,32 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         Sleep(400);
         p = sput(p, "cornerhold: "); p = sput(p, arg1); p = sput(p, " held at ");
         p = sputu(p, (unsigned)(x1 + dx)); p = sput(p, ","); sputu(p, (unsigned)(y1 + dy));
+        logline(m);
+        return 0;
+    }
+    /* s92 (#305 M12) `dropfile "Cap" <path>` -- what Explorer does when a file is
+         dropped on a window that called DragAcceptFiles: a WM_DROPFILES carrying a
+         DROPFILES block, posted. XP marshals the block across processes for this one
+         message. The point is the window's client centre. */
+    if (seq(verb, "dropfile")) {
+        char m[400], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        HGLOBAL g;
+        int len = lstrlenA(arg2);
+        if (!w || !len) { p = sput(p, "dropfile: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        g = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT | GMEM_SHARE, sizeof(DROPFILES) + len + 2);
+        if (g) {
+            DROPFILES *df = (DROPFILES *)GlobalLock(g);
+            RECT rc; GetClientRect(w, &rc);
+            df->pFiles = sizeof(DROPFILES);
+            df->pt.x = rc.right / 2; df->pt.y = rc.bottom / 2;
+            df->fNC = FALSE; df->fWide = FALSE;
+            lstrcpyA((char *)df + sizeof(DROPFILES), arg2);
+            GlobalUnlock(g);
+            PostMessageA(w, WM_DROPFILES, (WPARAM)g, 0);
+        }
+        p = sput(p, g ? "dropfile: posted " : "dropfile: ★ GlobalAlloc failed ");
+        p = sput(p, arg2); p = sput(p, " to "); sput(p, arg1);
         logline(m);
         return 0;
     }
