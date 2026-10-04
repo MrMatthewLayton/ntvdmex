@@ -7,6 +7,7 @@
 ;   MoveWindow(A, ...)     -> WM_MOVE arrived
 ;   SetActiveWindow(B), (A) -> WM_ACTIVATE: wParam = state (1), lParam high = 0
 ;                             (not minimised), lParam low = the OTHER window
+;   MoveWindow(A, 480x330) -> WM_SIZE has ARRIVED before MoveWindow returns (sent)
 ;   MoveWindow(A, 100x100) -> GetWindowRect: the minimum held (width >= 400)
 ; Coordinates are frame-dependent (classic vs Luna) and are compared as relations.
 
@@ -32,6 +33,7 @@ R_SHOW  equ     D_BUF+0x40
 R_MOVE  equ     D_BUF+0x50
 R_ACT   equ     D_BUF+0x60
 R_MMI   equ     D_BUF+0x70
+R_SIZE  equ     D_BUF+0x80
 
         jmp     cases
 
@@ -59,6 +61,7 @@ wndproc:
         REC     0018h, R_SHOW
         REC     0003h, R_MOVE
         REC     0006h, R_ACT
+        REC     0005h, R_SIZE
         cmp     word [bp+0Ch], 0024h    ; WM_GETMINMAXINFO
         jne     .def
         inc     word [R_MMI]
@@ -177,6 +180,19 @@ cases:
         jmp     .a2
 .a1:    mov     ax, 1
 .a2:    OUT     "act.lparam.lo.is.ours"
+
+        ; ── WM_SIZE is SENT: it has arrived by the time MoveWindow returns
+        mov     word [R_SIZE], 0
+        push    word [HA]
+        push    word 60
+        push    word 70
+        push    word 480
+        push    word 330
+        push    word 1
+        API     MOVEWINDOW
+        mov     ax, [R_SIZE]
+        BOOLN
+        OUT     "size.before.return"
 
         ; ── WM_GETMINMAXINFO: shrink A to 100x100; the minimum must hold
         mov     word [R_MMI], 0

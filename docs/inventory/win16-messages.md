@@ -40,7 +40,7 @@ translation lives (`wowuser.h:~2816–3233`).
 | `0x000E` | WM_GETTEXTLENGTH | ✅ | also refreshes the EM handle block |
 | `0x0300–0x0304` | WM_CUT/COPY/PASTE/CLEAR/UNDO | ✅ | raw to the real control |
 | `0x0220` | WM_MDICREATE | ✅ | MDICREATESTRUCT rebuilt; WM_CREATE sent to the guest |
-| `0x0221–0x0230` | other WM_MDI* | ❌ | MDIDESTROY, MDIACTIVATE, MDITILE, MDICASCADE, MDIGETACTIVE… |
+| `0x0221–0x0230` | other WM_MDI* | ✅ (s91, #305 M13; **= stock**, `w_mdi` 13/13) | MDIGETACTIVE answers DX:AX = (fMaximized, hwnd); MDISETMENU refreshes the frame's real menu; MDIDESTROY through our DestroyWindow; a new child is made active |
 | (USER 0x88) | Subclassing: SetWindowLong(GWL_WNDPROC) | ✅ (s91, #308; **= stock**, `w_subcl` 17/17) | a 16-bit window's procedure is re-pointed; a SYSTEM control is subclassed with a relay that SENDS it keys, characters, mouse, focus, WM_GETDLGCODE/SETCURSOR/NCHITTEST/TIMER/ENABLE/CANCELMODE through the nested run; the old procedure is USER.EXE's own `SCLS` thunk (EDITWNDPROC etc.), which CallWindowProc maps back to the control |
 | `0x0030/0x0031` | WM_SETFONT / WM_GETFONT | ✅ (s91, #305 M8; **= stock**, `w_font` 7/7) | to a system control: token -> real HFONT in, the guest's existing token (or a STOCK-kind one) out; 0 = the system font both ways |
 | `0x0400+n` EDIT | EM_* | ⚠ | Accepted: 0 GETSEL, 1 SETSEL (packing fixed), 8–11, 17, 21–23, 25, 29. **Missing:** 2–7 GETRECT/SETRECT/SETRECTNP/SCROLL/LINESCROLL, 14–16, **18 REPLACESEL**, 19 SETFONT, **20 GETLINE**, 24 FMTLINES, 26 SETWORDBREAK, **27 SETTABSTOPS**, 28 SETPASSWORDCHAR, ≥ 0x41E |
@@ -78,15 +78,15 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 | `0x0112` | WM_SYSCOMMAND | — | ⚠ | only SC_KEYMENU/SC_MOUSEMENU (menu replay); the others go straight to the OS |
 | `0x0113` | WM_TIMER | posted | ✅ | lParam = TIMERPROC; DispatchMessage calls it |
 | `0x0116/0x0117` | WM_INITMENU / WM_INITMENUPOPUP | posted | ✅ | menu token |
-| `0x011F` | WM_MENUSELECT | — | ❌ | status-bar help text (Write, Paintbrush) |
+| `0x011F` | WM_MENUSELECT | — | ✅ (s91, #305 M9) | Win32 wParam=MAKELONG(item, flags) → Win16 wParam=item, lParam=MAKELONG(flags, 0); sent |
 | `0x0114/0x0115` | WM_HSCROLL / WM_VSCROLL | **sent** (nested) | ✅ (s89, #300, rig-verified on Paintbrush) | repacked: Win16 `wParam=code, lParam=MAKELONG(pos, hwndCtl16)` |
 | `0x002B` | WM_DRAWITEM | **sent** (nested) | ✅ (s89, #302; Charmap's font list = stock) | DRAWITEMSTRUCT converted (26 bytes Win16, DC token) on the guest stack |
 | `0x002C` | WM_MEASUREITEM | **sent** (nested) | ✅ (s89, #302) | width/height copied back |
 | `0x0039/0x002D` | WM_COMPAREITEM / WM_DELETEITEM | **sent** (nested) | ✅ (s89, #302; not yet exercised) | structures converted; COMPAREITEM's answer = return value |
-| `0x0006/0x001C` | WM_ACTIVATE / WM_ACTIVATEAPP | — | ❌ | Win16 packs `lParam=MAKELONG(hwnd, fMinimized)` |
-| `0x0003` | WM_MOVE | — | ❌ | |
-| `0x0018` | WM_SHOWWINDOW | — | ❌ | |
-| `0x0024` | WM_GETMINMAXINFO | — | ❌ | MINMAXINFO is 10 POINTs of 16-bit values |
+| `0x0006/0x001C` | WM_ACTIVATE / WM_ACTIVATEAPP | — | ✅ (s91, M9; **= stock**, `w_msgs`) | WM_ACTIVATE repacked to `wParam=state, lParam=MAKELONG(hwnd16, fMinimized)`; WM_ACTIVATEAPP lParam = 0 (another task); sent |
+| `0x0003` | WM_MOVE | — | ✅ (s91, M9; **= stock**) | same packing; sent |
+| `0x0018` | WM_SHOWWINDOW | — | ✅ (s91, M9; **= stock**) | same packing; sent |
+| `0x0024` | WM_GETMINMAXINFO | — | ✅ (s91, M9; **= stock**) | the 16-bit MINMAXINFO (5 POINTs of INT16s, 20 bytes) sent and copied back -- a program's minimum track size holds |
 | `0x0083/0x0084/0x0085/0x0086` | WM_NCCALCSIZE/NCHITTEST/NCPAINT/NCACTIVATE | — | ❌ (by design for now) | Luna frames are kept (user decision); only a program that hooks its own non-client area would notice |
 | `0x0210` | WM_PARENTNOTIFY | — | ❌ | |
 | `0x0011/0x0016` | WM_QUERYENDSESSION / WM_ENDSESSION | — | ❌ | |
@@ -137,11 +137,11 @@ a batch is measured against stock.
 | ~~M6~~ ✅ (s90) | LB_GETSELITEMS / LB_SETTABSTOPS / LB_GETITEMRECT / CB_GETDROPPEDCONTROLRECT (array/struct) | translation | multi-select lists, tabbed lists (Winfile, Program Manager) |
 | ~~M7~~ ✅ | LB/CB GETTEXT on owner-draw without HASSTRINGS: the 16:16 pointer is passed as flat | **bug** (memory write to a wrong address) | owner-draw lists |
 | ~~M8~~ ✅ (s91) | WM_SETFONT / WM_GETFONT to system controls | translation | programs that set a control's font (Charmap, Terminal) |
-| M9 | WM_MENUSELECT, WM_ACTIVATE(APP), WM_SHOWWINDOW, WM_MOVE, WM_GETMINMAXINFO, WM_SYSCHAR | translation | status-bar help, activation-aware programs, minimum sizes (Clock) |
+| ~~M9~~ ✅ (s91) | WM_MENUSELECT, WM_ACTIVATE(APP), WM_SHOWWINDOW, WM_MOVE, WM_GETMINMAXINFO, WM_SYSCHAR | translation | status-bar help, activation-aware programs, minimum sizes (Clock) |
 | M10 (½ ✅: WM_DESTROY) | WM_SIZE / WM_DESTROY **sent**, not posted | ordering | layout that must happen before the next call returns |
 | M11 | Dialog keyboard defaults on the DefDlgProc path (Enter / Esc / Tab) | structural | every dialog without IsDialogMessage in its loop |
 | M12 | WM_DROPFILES forwarded | translation | File Manager → Notepad drag-and-drop |
-| M13 | Remaining WM_MDI* | translation | Program Manager, File Manager, Sysedit |
+| ~~M13~~ ✅ (s91) | Remaining WM_MDI* | translation | Program Manager, File Manager, Sysedit |
 
 Also: the stale comment in `wowwin.h` that says the paint DC is not clipped was corrected
 in this commit (#287 clips it).

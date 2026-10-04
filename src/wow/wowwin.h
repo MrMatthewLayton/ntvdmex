@@ -547,8 +547,13 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (h16) {
             WORD wp16 = (msg == WM_SIZE) ? (WORD)wp
                                          : wowwin_hwnd16((HWND)wp);
-            wowmsg_post(h16, (WORD)msg, wp16, (DWORD)lp,
-                        GetTickCount(), ptx, pty); ++g_ww_msgs;
+            /* #305 M10 (s91): WM_SIZE is SENT, as Windows sends it -- a program that
+               lays its children out there has done so before the MoveWindow /
+               ShowWindow that caused it returns (w_msgs size.before.return = stock).
+               Focus stays posted (the note above). */
+            if (msg == WM_SIZE) wowwin_send_or_post(h16, (WORD)msg, wp16, (DWORD)lp, ptx, pty);
+            else wowmsg_post(h16, (WORD)msg, wp16, (DWORD)lp, GetTickCount(), ptx, pty);
+            ++g_ww_msgs;
         }
         break;
     /* ── ★★★ WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) ──────

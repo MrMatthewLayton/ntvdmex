@@ -971,6 +971,7 @@ static int strstr_nocase(const char *blk, const char *name)
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
 static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
 static net_state    g_net;       static ntvdd g_net_dev;    /* GH #8 (s91) */
+static uint8_t      g_genstub_vec[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
 
 /* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
      that is the DOS one with a flat buffer pointer -- the same commands, the same
@@ -27845,6 +27846,25 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
          never delivered: INT 14h works because its BOP is wired here by number, and
          a NetBIOS program's INT 5Ch went to an IRET. ⚠ Only from OUR stub -- 2Ah/5Ch
          are numbers a guest's own BOP may also use (the s78 rule). */
+    /* s91 (#315): a GENERIC stub (vdd_plant_generic_ints) -- the slot it sits in names
+         the vector; the bus delivers it to whoever claimed it. Only from our stub. */
+    if (bn == DOS_GENSTUB_BOP && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+        DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ip >= DOS_GENSTUB_OFF && ip < DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4) {
+            ntvdd_regs r; regs_load(&r, tib);
+            HOST_LOCK();
+            vdd_bus_deliver_int(&g_bus, g_genstub_vec[(ip - DOS_GENSTUB_OFF) / 4], &r);
+            HOST_UNLOCK();
+            regs_store(&r, tib);
+            {   /* CF into the FLAGS the stub's IRET restores (an INT pushed them) */
+                WORD *pf = (WORD *)(ULONG_PTR)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                                    + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+                if (r.cf) *pf |= 1; else *pf &= (WORD)~1;
+            }
+            VDM_REG(tib, VTIB_EIP) += 3;
+            V86BOP_RET(V86BOP_DONE);
+        }
+    }
     if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         ntvdd_regs r; regs_load(&r, tib);
         HOST_LOCK();
@@ -31344,6 +31364,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          The guest's image is loaded but not yet running, so claims made here are
          in place before its first instruction. */
     vdd_load_third_party();
+    /* ── s91 (#315): EVERY CLAIMED VECTOR GETS A WAY IN. A claim only reached its device
+         where the host had wired a stub by number (10h 14h 16h 1Ah 08h 2Ah 5Ch), so a
+         third-party driver's claim_int on any other vector -- the SDK promises it --
+         was never delivered. Each such claim now gets a generic stub, and the IVT
+         points at it. ⚠ Only the vectors nobody else owns: the user vectors 60h-66h,
+         68h-6Fh and 78h-FEh. A claim on a DOS, BIOS or IRQ vector is logged and
+         refused rather than silently stealing it from the system. */
+    {   unsigned v, n = 0;
+        volatile BYTE *bs = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << 4);
+        for (v = 0; v < 256; ++v) {
+            int wired = (v == 0x08 || v == 0x10 || v == 0x14 || v == 0x16 || v == 0x1A
+                         || v == 0x2A || v == 0x5C);
+            int user  = (v >= 0x60 && v <= 0x66) || (v >= 0x68 && v <= 0x6F)
+                        || (v >= 0x78 && v <= 0xFE);
+            char gb[120], *gq = gb;
+            if (!g_bus.ints[v].svc || wired) continue;
+            gq = zput(gq, "  VDD: claim_int 0x"); gq = zhex(gq, v);
+            if (!user || n >= DOS_GENSTUB_N) {
+                gq = zput(gq, user ? " -- no generic stub left; NOT delivered\r\n"
+                                   : " -- a system vector; NOT delivered (user vectors only)\r\n");
+            } else {
+                unsigned off = DOS_GENSTUB_OFF + n * 4;
+                bs[off + 0] = VDM_BOP0; bs[off + 1] = VDM_BOP1;
+                bs[off + 2] = DOS_GENSTUB_BOP; bs[off + 3] = 0xCF;            /* IRET */
+                g_genstub_vec[n] = (uint8_t)v;
+                *(volatile WORD *)(ULONG_PTR)(v * 4)     = (WORD)off;
+                *(volatile WORD *)(ULONG_PTR)(v * 4 + 2) = DOS_CTAB_SEG;
+                ++n;
+                gq = zput(gq, " -> generic stub 0090:0x"); gq = zhex(gq, off); gq = zput(gq, "\r\n");
+            }
+            log_append(LOG_PATH, gb, gq);
+        }
+    }
     /* ⚠⚠ AFTER THE **LAST** log_write. There are THREE of them in WinMain and every one
          TRUNCATES. This probe was placed after the first, then after the second, and
          both times its output was silently erased by the next one -- which reads

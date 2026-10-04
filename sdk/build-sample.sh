@@ -15,3 +15,9 @@ mkdir -p "$ROOT/build"
   -o "$OUT" "$ROOT/sdk/sample/portecho.c" \
   -nostdlib -Wl,--entry,0 -lkernel32
 echo "Built: $OUT"
+# The second sample (s91): claim_int + map_flat.
+"$CC" -std=c99 -Wall -Wextra -O2 -shared \
+  -I "$ROOT/sdk/include" \
+  -o "$ROOT/build/intecho.dll" "$ROOT/sdk/sample/intecho.c" \
+  -nostdlib -Wl,--entry,0 -lkernel32
+echo "Built: $ROOT/build/intecho.dll"

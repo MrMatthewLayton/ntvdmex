@@ -308,6 +308,12 @@
 /* GH #254: the BIOS INT 09h side-calls (bios_kbdact.h, 41 bytes). */
 #define DOS_KBDACT_OFF    0x0660
 #define DOS_KBDACT_LEN    0x0040
+/* s91 (#315): GENERIC VDD INTERRUPT STUBS -- one `BOP 5Bh ; IRET` per vector a device
+   claimed that has no stub of its own (a third-party driver's INT 61h, say). 16 slots
+   x 4 bytes, 0x6A0..0x6DF, below the block's end at 0x6F0. See vdd_plant_generic_ints. */
+#define DOS_GENSTUB_OFF   0x06A0
+#define DOS_GENSTUB_N     16
+#define DOS_GENSTUB_BOP   0x5B
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

@@ -19,8 +19,8 @@ period interface a DOS program under NT gets is NetBIOS, and that is what this i
 | DOS lana N → NT lana | ✅ | the Nth entry of `NCBENUM`; past the end → 23h (invalid adapter) |
 | implicit RESET | ✅ | a Win32 lana must be reset before use and a DOS program often never does; the first command on a lana resets it with defaults |
 | RESET's sessions/names | ✅ | DOS lsn/num → Win32 callname[0]/[1] |
-| no-wait commands (bit 7) | ⚠ | completed before INT 5Ch returns: AL = immediate 00h, the final code already in retcode/cmd_cplt (never FFh). A polling program sees a command that finished at once |
-| POST routines | ❌ | not called — the VDD interface cannot redirect the guest's return to a real-mode procedure. Counted (`posts_owed`). A program that waits for its POST hangs |
+| no-wait commands (bit 7) | ✅ | completed before INT 5Ch returns: AL = immediate 00h, the final code already in retcode/cmd_cplt (never FFh). A polling program sees a command that finished at once |
+| POST routines | ✅ | run as INT 5Ch returns: the host pushes one more interrupt frame so the stub's IRET enters POST with ES:BX = the NCB and POST's IRET returns to the caller (`p_netb`: called, ES:BX = NCB, = stock — stock calls it seconds later, when the name registration completes) |
 | INT 2Ah AH=00h | ✅ | AH=01h, as stock |
 | INT 2Ah AH=01h/04h | ✅ | execute the NCB at ES:BX; AL = retcode, AH = 0/1 |
 | INT 2Ah AH=80h-82h | ✅ | critical sections: nothing to serialise |
@@ -28,7 +28,7 @@ period interface a DOS program under NT gets is NetBIOS, and that is what this i
 
 ## Measured against stock (rig, s91, `scripts/dospair.sh tools/dostest/p_netb.com`)
 
-10/10 agree: invalid command → 03h in AL and retcode; RESET 00h; ADAPTER STATUS of `*`
+14/14 agree (the 10 below plus a no-wait ADD NAME with a POST routine): invalid command → 03h in AL and retcode; RESET 00h; ADAPTER STATUS of `*`
 00h with 60 (3Ch) bytes and a non-zero adapter address; ADD NAME 00h with a name number;
 DELETE NAME 00h; INT 2Ah AH=00h → AH=01h.
 
@@ -37,5 +37,6 @@ DELETE NAME 00h; INT 2Ah AH=00h → AH=01h.
 `vdd_claim_int` only reached a device for vectors the host had wired a BOP stub for by
 number (10h, 14h, 16h, 1Ah …). INT 2Ah and 5Ch now have BIOS stubs beside INT 11h-29h
 (`bios_ints[]`) and `v86_bios_bop` hands them to the bus — from our own stub only (the
-s78 origin rule). ⚠ A third-party driver's `claim_int` on any OTHER vector still has no
-stub behind it.
+s78 origin rule). Any OTHER claimed user vector (60h-66h, 68h-6Fh, 78h-FEh) gets a
+generic stub (`DOS_GENSTUB_OFF`, 16 slots; #315), which is what a third-party driver's
+`claim_int` uses (`sdk/sample/intecho.c`, INT 61h).
