@@ -6,7 +6,7 @@ and asked for an unattended run toward **~98%**, closing as many of the 83 open 
 possible. Every change below was verified on the rig, against stock NTVDM wherever stock
 can answer (`scripts/w16stockdrive.sh` and `tools/wintest/gate.sh` are new for that).
 
-*(Draft — completed at the end of the session.)*
+**Result: score 95.1 → 95.2% (re-run, `tools/score/score.py`).** Branch `m9/completeness`, last commit pushed. The rest of the way to ~98% is mostly the WOW `guests` row (w15, 71%: 9 done + 9 partial of 19), which only by-hand confirmations move -- see "For the user" below.
 
 ## Closed
 
@@ -19,6 +19,12 @@ can answer (`scripts/w16stockdrive.sh` and `tools/wintest/gate.sh` are new for t
 | #314 | Media Player: LoadBitmap(NULL, OBM_*); WM_CTLCOLOR default brush; a raw INT in a nested run (task killed) | = stock; TONE.WAV loads |
 | #295 | EnumMetaFile / PlayMetaFileRecord | `w_mfenum` 33/33 = stock |
 | #279 #286 #277 | already fixed earlier, verified again | see each issue |
+| #306 | Calc → Help opens WinHelp = stock; closing both ends the host | w16stockdrive window lists; gate13 "No tasks running" |
+| #210 | LFN API, p_lfn 36/37 = stock (71A7h BH an intended divergence) | dospair, gate12 |
+| #244 #274 | keyboard BIOS (INT 15h 4Fh, Pause, Alt+keypad, ring bounds) | p_kbd3 = oracles (INT 05h → #317) |
+| #265 #266 | INT 33h extras; INT 10h after #252 | p_mouse3, p_vid266 = oracles |
+| (comment) #264 #136 #285 | graphics cursor / settings wired / Notepad Help works | need by-eye or Search re-test |
+| new #318 | WinHelp paints no background while its box is up; Calc stays above it | stock screenshot |
 
 ## Found and fixed along the way
 
@@ -66,3 +72,22 @@ Calc → Help now = stock (`w16stockdrive`): WinHelp's window plus its own
   caught it before commit.
 - A probe can be wrong in a way only stock notices: `w_mfenum`'s callback popped 14 bytes
   instead of 16; our host restores its own frame and never noticed, stock crashed.
+
+## Gates on the final tree
+
+- Combined (Q_77f67673 = batch 1 + WinHelp + batch 2): Skyroads n8 0x14/0x15 max_ms 0xb/0xa
+  (within A..I's spread on this headless harness), Doom 50/60 s sounding ×2, **ZAR 66/70 s
+  sounding ×2** (no silent start), Win16 probes all = stock (w_cwd handle row pre-existing),
+  off-VM battery 3271/3271.
+- S_1984a094 (head): Win16 shelf 15/16 (Terminal's close, as every build), Calc/Notepad Help
+  = stock, closing WinHelp + Calc ends the host.
+- The DPMI branch (#267/#268, `worktree-agent-a6c5e4ef575f343b7`) stays OUT: with it ZAR was
+  silent 1 run in 2 and `cb.es_di_is_rmcs` is unexplained.
+
+## For the user
+
+- By-hand confirmations that move the score: TASKMAN (background now drawn), PACKAGER (live
+  resize clean), CARDFILE, MPLAYER, WRITE, SYSEDIT, RECORDER, PROGMAN, TERMINAL; and Calc/
+  Notepad → Help (WinHelp's "Cannot open Help file." is stock's own answer -- no .HLP files).
+- #311 still needs your decision. The `linear` MCP server needs authorising (not possible
+  from an unattended session).
