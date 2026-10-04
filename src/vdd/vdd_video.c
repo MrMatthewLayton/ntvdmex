@@ -3903,13 +3903,21 @@ void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
    from 0x2000 -- and pixels are 2 bits (modes 4/5) or 1 bit (mode 6), packed
    high-bit-first.  Nothing about that is shared with the planar path, which is
    why approximating it with a text screen was never going to work. */
+/* Mode 5's palette is the grey/brown variant; 4's default is cyan/magenta. Exported
+   (vdd_video.h) because the INT 33h graphics cursor has to undo it: its masks act on the
+   2-bit value in video memory, and the frame holds the colour this table made of it. */
+const uint8_t *vdd_video_cga4_map(const video_state *st)
+{
+    static const uint8_t pal4[2][4] = { { 0, 11, 13, 15 }, { 0, 10, 12, 14 } };
+    return pal4[st->cga_pal & 1];
+}
+
 static void render_cga(video_state *st)
 {
     const uint8_t *src = st->vmem + VID_TEXT_OFF;
     int gw = st->gw, gh = st->gh, y, x;
     int per = st->cga_bpp == 1 ? 8 : 4;             /* pixels per byte          */
-    /* Mode 5's palette is the grey/brown variant; 4's default is cyan/magenta. */
-    static const uint8_t pal4[2][4] = { { 0, 11, 13, 15 }, { 0, 10, 12, 14 } };
+    const uint8_t *pal4 = vdd_video_cga4_map(st);
     for (y = 0; y < gh; ++y) {
         const uint8_t *row = src + ((y & 1) ? 0x2000 : 0) + (y >> 1) * (gw / per);
         uint8_t *out = &st->fb[y * gw];
@@ -3918,7 +3926,7 @@ static void render_cga(video_state *st)
             if (st->cga_bpp == 1)
                 out[x] = (uint8_t)((b >> (7 - (x & 7))) & 1 ? 15 : 0);
             else
-                out[x] = pal4[st->cga_pal & 1][(b >> (6 - 2 * (x & 3))) & 3];
+                out[x] = pal4[(b >> (6 - 2 * (x & 3))) & 3];
         }
     }
 }

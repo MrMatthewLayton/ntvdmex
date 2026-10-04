@@ -3040,5 +3040,48 @@
   ],
   "recorded": "2026-10-03",
   "why": "AX=5700h on the still-open handle, after a write, with the DOS date set to 1999-06-15. 6.22 and PCem's DOS return 26CFh -- the date DOS stamped the write with; DOSBox-X returns the HOST's date (5D43h = 2026-10-03) until close, and agrees on reopen and FindFirst. Two DOS kernels against one emulator's host-file shortcut (GH #263)."
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.vector",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-10-04",
+  "why": "The SEGMENT of the INT 33h handler: wherever each host's driver lives. Only zero (no driver) means anything. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.00.reset",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-04",
+  "why": "PCem's DOS loads no mouse driver; INT 33h is a BIOS dummy that answers the reset with AX=0. The probe stops there. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.00.reset",
+  "field": "BX",
+  "abstain": [
+   "pcem",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-04",
+  "why": "PCem: no driver (see AX). DOSBox-X: the button count -- it emulates a three-button mouse; the Microsoft driver on a two-button mouse (and we) say 2. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.13h.reset",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-04",
+  "why": "The button count again, after the mode-13h reset: DOSBox-X's three-button mouse (as i33.00.reset)."
  }
 ]
