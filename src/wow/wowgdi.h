@@ -1084,8 +1084,11 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
      tools/wintest/w_mfenum (case mfe.count, and the last mfe.rec.N). 1 = passed,
      which is what Win32's EnumMetaFile is documented to do ("each record ... until
      the last record"); Wine's EnumMetaFile16 BREAKS at META_EOF without calling,
-     i.e. 0. Either way the walk ends at EOF -- nothing after it is a record. */
-#define WOWMF_PASS_EOF 1
+     i.e. 0. Either way the walk ends at EOF -- nothing after it is a record.
+   ★ s92, MEASURED: stock does NOT pass it -- w_mfenum under stock ntvdm on the rig
+     makes 5 calls for a 5-record metafile, the last one 041B (Rectangle); ours made 6
+     with 0000 last. Wine had it right. */
+#define WOWMF_PASS_EOF 0
 typedef struct {
     int     active;
     BYTE   *bits;               /* GetMetaFileBitsEx snapshot, HeapAlloc'd       */

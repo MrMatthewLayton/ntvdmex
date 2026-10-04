@@ -145,7 +145,7 @@ cb_mf:
         pop     es
         pop     ds
         pop     bp
-        retf    14
+        retf    16                      ; hdc 2 + lpht 4 + lpmr 4 + nObj 2 + lParam 4
 
 ; RESET stopat, play -- every output poisoned to BEEF before the call.
 %macro RESET 2

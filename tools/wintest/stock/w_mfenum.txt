@@ -1,0 +1,38 @@
+#PROBE w16mfenum
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=mfe.create SIG=AX AX=0001
+CASE=mfe.close SIG=AX AX=0001
+CASE=mfe.ret SIG=AX AX=0001
+CASE=mfe.count SIG=AX AX=0005
+CASE=mfe.rec.0 SIG=AX AX=02FA
+CASE=mfe.rec.1 SIG=AX AX=012D
+CASE=mfe.rec.2 SIG=AX AX=02FC
+CASE=mfe.rec.3 SIG=AX AX=012D
+CASE=mfe.rec.4 SIG=AX AX=041B
+CASE=mfe.rec.5 SIG=AX AX=BEEF
+CASE=mfe.rec.6 SIG=AX AX=BEEF
+CASE=mfe.rec.7 SIG=AX AX=BEEF
+CASE=mfe.nobj SIG=AX AX=0002
+CASE=mfe.size0 SIG=AX AX=0008
+CASE=mfe.lparam SIG=AX AX=0001
+CASE=mfe.hdc SIG=AX AX=0001
+CASE=mfe.play.ret1 SIG=AX AX=0001
+CASE=mfe.ht0.after1 SIG=AX AX=0001
+CASE=mfe.ht0.at2 SIG=AX AX=0001
+CASE=mfe.px.inside.lo SIG=AX AX=FF00
+CASE=mfe.px.inside.hi SIG=AX AX=0000
+CASE=mfe.px.edge.lo SIG=AX AX=00FF
+CASE=mfe.px.edge.hi SIG=AX AX=0000
+CASE=mfe.px.outside.lo SIG=AX AX=0000
+CASE=mfe.px.outside.hi SIG=AX AX=0000
+CASE=mfe.stop.ret SIG=AX AX=0000
+CASE=mfe.stop.count SIG=AX AX=0002
+CASE=mfe.bad.ret SIG=AX AX=0000
+CASE=mfe.bad.count SIG=AX AX=0000
+CASE=mfe.solo.ret SIG=AX AX=0001
+CASE=mfe.solo.ht0.made SIG=AX AX=0001
+CASE=mfe.solo.ht0.deleted SIG=AX AX=0000
+CASE=mfe.delete SIG=AX AX=0001
+#END
