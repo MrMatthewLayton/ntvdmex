@@ -533,10 +533,8 @@ static void pit_int08(void *self, ntvdd_regs *r)
 {
     pit_state *st = (pit_state *)self;
     uint8_t *bda = pit_bda(st);
-    uint32_t *tick = (uint32_t *)(bda + 0x6C);
     (void)r;
-    *tick += 1;
-    if (*tick >= PIT_TICKS_PER_DAY) { *tick = 0; bda[0x70] = 1; }
+    pit_bios_tick(st, (volatile uint32_t *)(bda + 0x6C), bda + 0x70);   /* + #262 witness */
 }
 
 /* INT 1Ah -- BIOS time-of-day. AH=00 get tick count (+ clear midnight flag),
@@ -572,6 +570,7 @@ int vdd_pit_seed_time_of_day(pit_state *st)
     bda = pit_bda(st);
     *(uint32_t *)(bda + 0x6C) = pit_ticks_since_midnight(n.hour, n.min, n.sec);
     bda[0x70] = 0;
+    vdd_pit_tick_owned(st, *(uint32_t *)(bda + 0x6C));   /* the BIOS's own count (#262) */
     return 1;
 }
 
@@ -592,7 +591,10 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         *tick = ((uint32_t)r_cx(r) << 16) | r_dx(r);
         bda[0x70] = 0;
         r->cf = 0;
-        if (st->ticks_set) st->ticks_set(st->rtc_ctx, *tick);   /* #262 */
+        /* #262: the host moves DOS's clock to the new count (and takes it as the
+           BIOS's own through vdd_pit_tick_take); with no host, it is simply owned. */
+        if (st->ticks_set) st->ticks_set(st->rtc_ctx, *tick);
+        else vdd_pit_tick_owned(st, *tick);
         break;
     case 0x02: {                             /* get RTC time, BCD               */
         struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
@@ -651,6 +653,7 @@ void vdd_pit_reset(void *self)
     void (*rnow)(void *, struct vdd_rtc *) = st->rtc_now; void *rctx = st->rtc_ctx;
     int  (*rset)(void *, const struct vdd_rtc *, int) = st->rtc_set;
     void (*tset)(void *, uint32_t) = st->ticks_set;
+    uint32_t witness = st->tick_witness;    /* 0040:006C is memory, not the chip: kept */
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
     st->bus = bus;
@@ -678,6 +681,7 @@ void vdd_pit_reset(void *self)
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
     st->rtc_now = rnow; st->rtc_ctx = rctx; st->rtc_set = rset;   /* and so does the clock */
     st->ticks_set = tset;
+    st->tick_witness = witness;
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
          On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
          leaves it alone forever; its gate is tied high. A guest that simply READS

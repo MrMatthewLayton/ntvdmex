@@ -15,6 +15,10 @@
  *
  * ── TWO OFFSETS, BECAUSE AN AT HAS TWO CLOCKS. ─────────────────────────────────
  *   DOS's time comes from the BIOS tick count; the MC146818 RTC runs on its own.
+ *   (Ours comes from host-now + dos_off, re-derived FROM the count whenever the count
+ *   was set by anything but the BIOS -- INT 1Ah AH=01h or a raw store, GH #262 --
+ *   see dclk_follow_ticks. Both offsets read the one host clock: there is no second
+ *   time source to drift, only two views a guest can set separately, as on an AT.)
  *   DOS's CLOCK$ driver WRITES BOTH when a program sets the time (so after 2Bh/2Dh
  *   the RTC agrees), but INT 1Ah AH=03h/05h set only the RTC, and DOS goes on
  *   answering from its own clock (measured, p_clock.asm clk.2c.after.1a03 /
@@ -153,15 +157,56 @@ static inline uint32_t dclk_ticks(unsigned h, unsigned mi, unsigned s, unsigned 
 /* The other direction (GH #262): the time of day a BIOS tick count stands for, as
    DOS's CLOCK$ reads it -- centiseconds = ticks * 65536 * 100 / 1193182. A count at
    or past a day's length is clamped to the last centisecond of it. */
+static inline uint64_t dclk_ticks_cs(uint32_t ticks)
+{ return ((uint64_t)ticks * 6553600u) / 1193182u; }
+
 static inline void dclk_from_ticks(uint32_t ticks, unsigned *h, unsigned *mi,
                                    unsigned *s, unsigned *cs)
 {
-    uint64_t c = ((uint64_t)ticks * 6553600u) / 1193182u;
+    uint64_t c = dclk_ticks_cs(ticks);
     if (c >= (uint64_t)DCLK_CS_PER_DAY) c = (uint64_t)DCLK_CS_PER_DAY - 1;
     *cs = (unsigned)(c % 100); c /= 100;
     *s  = (unsigned)(c % 60);  c /= 60;
     *mi = (unsigned)(c % 60);  c /= 60;
     *h  = (unsigned)c;
+}
+
+/* ── GH #262 CASE B: DOS'S CLOCK FOLLOWS A TICK COUNT THE BIOS DID NOT WRITE. ─────────
+     On MS-DOS, AH=2Ah/2Ch go through CLOCK$, which reads INT 1Ah AH=00h: the time of
+     day IS the count at 0040:006C, and the date is DOS's own day number, advanced by
+     one each time the call hands back the midnight flag. So a program that stores to
+     006C directly moves DOS's time (p_tick2c tick2c.after.store, 6.22 / PCem /
+     DOSBox-X). Ours keeps DOS's clock as host-now + dos_off, which no lost tick can
+     slow; the PIT tells us when the count stopped being one the BIOS produced (a
+     WITNESS of the last value it wrote -- vdd_pit.h) and only then is the offset
+     re-derived from the count. A VDM nobody stores into never comes here.
+
+     ticks   the count now (what CLOCK$ would read)
+     wraps   BIOS midnight rollovers since the foreign store was first seen
+     since   BIOS ticks counted since then -- how long ago the store was, measured in
+             the guest's own ticks, so the DATE is the day the store was made on (DOS's
+             day number), not whatever day host-now has reached since.
+
+     target = midnight of (guest-now - since) + wraps days + the count's time of day.
+
+   ⚠ APPROXIMATIONS, ALL BELOW WHAT ANY PROBE CAN SEE:
+       - the count -> time conversion floors to the hundredth (dclk_ticks_cs), so a
+         reading is exact only to a tick (~5.49 cs) -- the same granularity real DOS
+         has, but 6.22's own CLOCK$ arithmetic is NOT disassembled here; whether it
+         rounds or floors the hundredths is UNMEASURED (p_tick2c compares CX only);
+       - `since` can be one tick short (a store between two ticks is seen at the
+         second), which matters only if the store was made within ~55 ms of midnight;
+       - every wrap counts a day. An AT BIOS sets the flag to 1, not a count, so a real
+         DOS that went two days without reading the clock loses one; we do not. */
+static inline void dclk_follow_ticks(const dclk_t *host, int64_t *off, uint32_t ticks,
+                                     unsigned wraps, uint32_t since)
+{
+    int64_t hp = dclk_pack(host);
+    int64_t at_store = hp + *off - (int64_t)dclk_ticks_cs(since);
+    int64_t day0 = at_store - (at_store % DCLK_CS_PER_DAY);   /* pack is never negative */
+    uint64_t tod = dclk_ticks_cs(ticks);
+    if (tod >= (uint64_t)DCLK_CS_PER_DAY) tod = (uint64_t)DCLK_CS_PER_DAY - 1;
+    *off = day0 + (int64_t)wraps * DCLK_CS_PER_DAY + (int64_t)tod - hp;
 }
 
 /* The one clock the whole VDM shares (defined in dos_int21.c). */

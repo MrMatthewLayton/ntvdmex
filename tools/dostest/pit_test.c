@@ -166,6 +166,57 @@ int main(void)
     vdd_bus_deliver_int(&bus, 0x1A, &r);
     CHECK(*bda_tick() == 0x00123456 && *bda_flag() == 0, "int1a/01: tick set, flag cleared");
 
+    /* T8b: GH #262 case B -- the WITNESS: was 0040:006C last written by the BIOS? */
+    {
+        uint32_t t = 0xEEEE, w = 0xEEEE, s = 0xEEEE;
+        CHECK(pit.tick_witness == 0x00123456 && !pit.tick_foreign,
+              "witness: AH=01h with no host hook owns its count");
+        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 0 && t == 0xEEEE,
+              "witness: nothing stored -> take says so, outputs untouched");
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        CHECK(!pit.tick_foreign && pit.tick_witness == 0x00123458,
+              "witness: the BIOS's own ticks are never foreign");
+        /* a guest stores straight into 006C (p_tick2c case B), then two ticks */
+        *bda_tick() = 0x000B8277u;
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        CHECK(pit.tick_foreign == 1 && *bda_tick() == 0x000B8278u,
+              "witness: the next tick sees the store, and still counts from it");
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1
+              && t == 0x000B8279u && w == 0 && s == 2,
+              "witness: take -> count, 0 wraps, 2 ticks since");
+        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 0,
+              "witness: ...once; the count is the BIOS's own from there");
+        /* a store read before any tick: seen by the take itself, since = 0 */
+        *bda_tick() = 0x1234;
+        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1
+              && t == 0x1234 && w == 0 && s == 0, "witness: a store with no tick since");
+        /* a store just before midnight; the BIOS wraps it -- one day for DOS */
+        *bda_tick() = PIT_TICKS_PER_DAY - 2; *bda_flag() = 0;
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        CHECK(*bda_tick() == 1 && *bda_flag() == 1, "witness: the stored count wraps as ever");
+        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1 && t == 1 && w == 1 && s == 3,
+              "witness: take -> 1 wrap, 3 ticks since");
+        /* a NATURAL midnight is not counted: the host-time clock already turns the day */
+        *bda_tick() = PIT_TICKS_PER_DAY - 1; vdd_pit_tick_owned(&pit, *bda_tick());
+        vdd_bus_deliver_int(&bus, 0x08, &r);
+        CHECK(*bda_tick() == 0 && !pit.tick_foreign && pit.tick_wraps == 0,
+              "witness: the BIOS's own midnight is not a store");
+        /* the seed (POST) owns its count */
+        pit.rtc_now = fake_rtc;
+        CHECK(vdd_pit_seed_time_of_day(&pit) == 1 && pit.tick_witness == *bda_tick()
+              && !pit.tick_foreign, "witness: the seed owns its count");
+        pit.rtc_now = 0;
+        /* and reset does not forget it: 006C is memory, not the chip */
+        { uint32_t keep = pit.tick_witness;
+          vdd_pit_reset(&pit);
+          CHECK(pit.tick_witness == keep, "witness: survives vdd_pit_reset"); }
+        *bda_flag() = 0;
+    }
+
     /* T9: a latched count reads back lo then hi via port 0x40 ------------- */
     pit.reload = 0x1234; pit.access = 3; pit.total_clocks = 0; pit.load_clocks = 0;
     pit.latched = 0;

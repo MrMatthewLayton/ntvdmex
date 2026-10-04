@@ -36,6 +36,27 @@ void dos_clock_read(int64_t off, dclk_t *out)
     dclk_read(&host, off, out);
 }
 
+/* ── GH #262: DOS'S CLOCK FOLLOWS THE TICK COUNT WHEN SOMEONE ELSE SET IT. ─────────
+     The host wires g_dos_tick_take to the PIT's witness (vdd_pit_tick_take, under the
+     PIT's lock); NULL off-VM. dos_clock_sync is called before DOS's clock is read or
+     set -- AH=2Ah/2Bh/2Ch/2Dh and every file stamp -- so a raw store to 0040:006C is
+     seen by the next thing that asks DOS the time, as CLOCK$ would see it. With no
+     store pending it is one compare under the lock and nothing else. */
+int (*g_dos_tick_take)(uint32_t *ticks, uint32_t *wraps, uint32_t *since) = 0;
+
+void dos_clock_follow(uint32_t ticks, uint32_t wraps, uint32_t since)
+{
+    dclk_t host;
+    dos_clock_host_now(&host);
+    dclk_follow_ticks(&host, &g_dos_clock.dos_off, ticks, wraps, since);
+}
+
+void dos_clock_sync(void)
+{
+    uint32_t t, w, s;
+    if (g_dos_tick_take && g_dos_tick_take(&t, &w, &s)) dos_clock_follow(t, w, s);
+}
+
 /* ── GH #263: A FILE CARRIES DOS'S DATE, NOT THE HOST'S. ─────────────────────────
      File I/O is Win32's and Win32 stamps a write with the machine's clock, so after
      INT 21h AH=2Bh set 1999-06-15 a program's new file still said today. DOS stamps
@@ -43,11 +64,21 @@ void dos_clock_read(int64_t off, dclk_t *out)
      at create and after every write, only while a guest has moved the clock
      (dos_off != 0) -- an untouched VDM never calls this, exactly as before. Local
      time, the inverse of what AH=57h AL=00h reads back. A refusal (a handle without
-     FILE_WRITE_ATTRIBUTES) leaves Win32's stamp, which is what there was. */
-static void dos_stamp_vdm_now(HANDLE f)
+     FILE_WRITE_ATTRIBUTES) leaves Win32's stamp, which is what there was.
+   ► EVERY CREATE AND EVERY WRITE PATH (s92): 3Ch and 40h had it; 5Ah/5Bh, 6Ch's
+     create/truncate, the FCB create (16h) and FCB writes (15h/22h/28h), and the
+     protected-mode twins in main.c (3Ch/5Bh/40h for a DPMI or Win16 client) did not.
+   ⚠ STAMPED AT THE WRITE, NOT AT THE CLOSE. DOS keeps the time in the SFT and writes
+     the directory entry at close; the two differ by however long the file stays open
+     after its last write -- 2-second resolution in the entry, UNMEASURED against 6.22
+     for a file held open across a second boundary. NTFS keeps an explicitly-set write
+     time for the rest of the handle's life, so the close does not overwrite it. */
+void dos_stamp_vdm_now(HANDLE f)
 {
     dclk_t g; SYSTEMTIME st; FILETIME lf, ft;
-    if (!g_dos_clock.dos_off || !f || f == INVALID_HANDLE_VALUE) return;
+    if (!f || f == INVALID_HANDLE_VALUE) return;
+    dos_clock_sync();                           /* #262: a raw 006C store moves it too */
+    if (!g_dos_clock.dos_off) return;
     dos_clock_read(g_dos_clock.dos_off, &g);
     st.wYear = (WORD)g.year; st.wMonth = (WORD)g.month; st.wDayOfWeek = (WORD)g.dow;
     st.wDay = (WORD)g.day;   st.wHour = (WORD)g.hour;   st.wMinute = (WORD)g.min;
@@ -1268,6 +1299,7 @@ int dos_int21(dos_machine_t *m)
                 if (slot >= DOS_MAX_FILES) { CloseHandle(fh2); FCB_FAIL(); }
                 else {
                     m->fh[slot] = fh2;
+                    if (ah == 0x16) dos_stamp_vdm_now(fh2);   /* #263, before the FCB reads it */
                     if (GetFileTime(fh2, NULL, NULL, &ft)
                         && FileTimeToLocalFileTime(&ft, &lf))
                         FileTimeToDosDateTime(&lf, &fdt, &ftm);
@@ -1466,6 +1498,8 @@ int dos_int21(dos_machine_t *m)
                     }
                 }
                 if (ah == 0x27 || ah == 0x28) SET16(R_CX, (uint16_t)done);
+                if (done && !(ah == 0x14 || ah == 0x21 || ah == 0x27))
+                    dos_stamp_vdm_now(hh);              /* #263: an FCB write */
                 /* AL: 0 = all done, 1 = end of file / nothing transferred,
                    3 = a partial final record. */
                 if (done == count) SETAX((R_AX & 0xFF00) | 0);
@@ -2009,7 +2043,8 @@ int dos_int21(dos_machine_t *m)
             ERRCF();
         } else {
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
+                                        dos_stamp_vdm_now(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x5C) {                    /* lock / unlock a byte range */
@@ -2073,7 +2108,8 @@ int dos_int21(dos_machine_t *m)
                          : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
             if (disp == OPEN_ALWAYS && GetLastError() != ERROR_ALREADY_EXISTS) res = 2;
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF(); }
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
+                                        if (res != 1) dos_stamp_vdm_now(f); /* #263: created/truncated */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x59) {                    /* get extended error */
@@ -2695,14 +2731,18 @@ int dos_int21(dos_machine_t *m)
         }
     } else if (ah == 0x2A) {                    /* get date: CX=yr DH=mon DL=day AL=dow */
         /* The VDM's clock, not the host's: host-now + whatever 2Bh/2Dh set. See
-           dos_clock.h. With nothing set the offset is 0 and this is GetLocalTime. */
-        dclk_t g; dos_clock_read(g_dos_clock.dos_off, &g);
+           dos_clock.h. With nothing set the offset is 0 and this is GetLocalTime.
+           #262: a tick count the BIOS did not write is followed first, date included
+           (its midnight rollovers are DOS's day number moving). */
+        dclk_t g; dos_clock_sync(); dos_clock_read(g_dos_clock.dos_off, &g);
         SET16(R_CX, g.year);
         SET16(R_DX, ((g.month & 0xFF) << 8) | (g.day & 0xFF));
         SETAX((R_AX & 0xFF00) | (g.dow & 0xFF));
         OKCF();
     } else if (ah == 0x2C) {                    /* get time: CH=hr CL=min DH=sec DL=cs */
-        dclk_t g; dos_clock_read(g_dos_clock.dos_off, &g);
+        /* #262: CLOCK$ reads 0040:006C, so a raw store there moves this (p_tick2c
+           tick2c.after.store) -- followed here, once, then host-now + offset again. */
+        dclk_t g; dos_clock_sync(); dos_clock_read(g_dos_clock.dos_off, &g);
         SET16(R_CX, ((g.hour & 0xFF) << 8) | (g.min & 0xFF));
         SET16(R_DX, ((g.sec & 0xFF) << 8) | (g.cs & 0xFF));
         OKCF();
@@ -2719,6 +2759,7 @@ int dos_int21(dos_machine_t *m)
              reloaded with the ticks since midnight (p_clock clk.1a02.after.2d,
              clk.1a00.after.2d, clk.1a04.after.2b). */
         dclk_t host; int ok;
+        dos_clock_sync();               /* #262: 2Bh keeps the time of day the COUNT says */
         dos_clock_host_now(&host);
         if (ah == 0x2B) {
             unsigned y = R_CX & 0xFFFF, mo = (R_DX >> 8) & 0xFF, d = R_DX & 0xFF;

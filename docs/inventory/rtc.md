@@ -92,8 +92,8 @@ quietly wrong. What is owed is a probe case that enables PIE and counts — not 
 | Status B — BCD, 24-hour | ✅ **IMPL** | `0x02`, measured on QEMU **and** PCem |
 | Status C — **cleared by reading** | ✅ **IMPL** | PF and IRQF are set by the periodic tick (§4) |
 | Status D — VRT set | ✅ **IMPL** | |
-| **Day of week (`06h`)** | ⛔ **STORE** | fixed at 1 (Sunday) — the host's clock reading carries no weekday, and deriving one means a calendar rule in a device model. **Wrong six days in seven**; recorded rather than quietly computed |
-| Writing the clock (`00h`–`0Dh`) | ⚠ **REFUSED** | we cannot move the host's clock, and accepting the write while changing nothing is the *"runs but lies"* shape. Same reasoning as INT 1Ah `AH=03h`/`05h` |
+| **Day of week (`06h`)** | ✅ **IMPL** | s81 #182: from the VDM clock's weekday (`host_rtc_now`, 1 = Sunday); `ram[]` only when a reader supplies none. A guest WRITE of `06h` stays refused — the weekday is derived from the date |
+| Writing the clock (`00h`–`09h`, `32h`) | ✅ **IMPL** | #261 (`8f43870`): moves the VDM's RTC offset (`rtc_set` → `host_rtc_set`, the hook INT 1Ah `03h`/`05h` use); the host's clock never moves. SET (Status B bit 7) freezes a copy and commits it on release; DM (BCD/binary) and 12/24-hour (bit 1, `04h` bit 7 = PM) decoded. DOS's own clock does not follow a chip write, as on an AT | `p_rtcw` (3 hosts, disputes in `oracle-rules.json`); cmos_test; `p_vclock` F owed |
 
 ⚠ **UIP reads clear because that is TRUE of this model, not because it is convenient.**
 The real chip sets it for ~2 ms once a second while it updates its own registers; ours are

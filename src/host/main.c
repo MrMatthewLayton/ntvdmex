@@ -3825,10 +3825,9 @@ static int async_inject_irq(unsigned irq)
              no_app_timer case: billed against the owed-tick count, pending consumed. */
         if (irq == 0 && g_nested_rm) {
             if (pm_tick_take()) {
-                volatile DWORD *t = (volatile DWORD *)(ULONG_PTR)0x46C;
-                DWORD v = *t + 1;
-                if (v >= 0x1800B0u) { v = 0; *(volatile BYTE *)(ULONG_PTR)0x470 = 1; }
-                *t = v;
+                /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
+                pit_bios_tick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
+                              (volatile uint8_t *)(ULONG_PTR)0x470);
                 if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
             }
             async_early_bail(irq, 31); return 0;
@@ -14001,16 +14000,36 @@ static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
     return 1;
 }
 
+/* GH #262 case B: has 0040:006C been set by anything but the BIOS since DOS last
+   looked? The PIT keeps the witness (vdd_pit.h); this is DOS's door onto it, under the
+   crystal's lock like every other host touch of the count. */
+static int host_tick_take(uint32_t *ticks, uint32_t *wraps, uint32_t *since)
+{
+    int r;
+    /* ⚠ THE COMMON ANSWER IS "NOTHING", AND IT MUST NOT QUEUE BEHIND THE PACER. Some
+         programs time themselves with AH=2Ch in a tight loop; taking the crystal's lock
+         on every call would put each of them behind vdd_pit_add_clocks. An unlocked look
+         first: equal and not foreign = nothing to do (a tick racing this read leaves
+         them equal again, or sends us to the locked re-check below, which decides). */
+    if (!g_pit.tick_foreign && *(volatile DWORD *)(ULONG_PTR)0x46C == g_pit.tick_witness)
+        return 0;
+    EnterCriticalSection(&g_pit_cs);
+    r = vdd_pit_tick_take(&g_pit, *(volatile DWORD *)(ULONG_PTR)0x46C, ticks, wraps, since);
+    LeaveCriticalSection(&g_pit_cs);
+    return r;
+}
+
 /* GH #262: INT 1Ah AH=01h moved the tick count; DOS's clock follows it, as CLOCK$
-   would read it. DOS's DATE is kept (dclk_set_time keeps the guest's date); the RTC is
-   not touched -- on an AT the two clocks are separate (p_clock / p_tick2c). */
+   would read it. DOS's DATE is kept -- plus any midnights a raw store before this one
+   had already carried it through; the RTC is not touched -- on an AT the two clocks
+   are separate (p_clock / p_tick2c). The take also makes the new count the BIOS's own,
+   so the next tick does not mistake it for a guest's store. */
 static void host_ticks_set(void *ctx, uint32_t ticks)
 {
-    dclk_t host; unsigned h, mi, s, cs;
+    uint32_t t = ticks, w = 0, s = 0;
     (void)ctx;
-    dclk_from_ticks(ticks, &h, &mi, &s, &cs);
-    dos_clock_host_now(&host);
-    dclk_set_time(&host, &g_dos_clock.dos_off, h, mi, s, cs);
+    if (!host_tick_take(&t, &w, &s)) { t = ticks; w = 0; s = 0; }
+    dos_clock_follow(t, w, s);
 }
 
 /* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
@@ -14022,6 +14041,7 @@ static void host_set_ticks(void *ctx, uint32_t ticks)
     EnterCriticalSection(&g_pit_cs);
     *(volatile DWORD *)(ULONG_PTR)0x46C = ticks;
     *(volatile BYTE *)(ULONG_PTR)0x470 = 0;
+    vdd_pit_tick_owned(&g_pit, ticks);          /* DOS's own reload, not a store (#262) */
     LeaveCriticalSection(&g_pit_cs);
 }
 
@@ -25367,6 +25387,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             } else if (bound) {                     /* file handle */
                                 DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
                                 VDM_SET16(tib, VTIB_EAX, w);
+                                dos_stamp_vdm_now(m.fh[bh]);       /* #263, as the V86 AH=40h */
                                 p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
@@ -25438,7 +25459,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                         gle == ERROR_ALREADY_EXISTS)     ? 0x50 :
                                        (gle == ERROR_TOO_MANY_OPEN_FILES)? 4 : 2); }
                             else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.fh[slot]; ++slot) {}
-                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
+                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot);
+                                                    if (ah == 0x3C || ah == 0x5B) dos_stamp_vdm_now(f); /* #263 */ }
                                    else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
                             /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
                                  This printed AX and nothing else, so a failed open reading
@@ -26275,10 +26297,9 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
              Billed against the owed-tick count so time is never manufactured, and the
              pending flag is consumed so the polled path does not count it again. */
         if (pm_tick_take()) {
-            volatile DWORD *t = (volatile DWORD *)(ULONG_PTR)0x46C;
-            DWORD v = *t + 1;
-            if (v >= 0x1800B0u) { v = 0; *(volatile BYTE *)(ULONG_PTR)0x470 = 1; }
-            *t = v;
+            /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
+            pit_bios_tick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
+                          (volatile uint8_t *)(ULONG_PTR)0x470);
             if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
         }
         g_async_why = 6; return 0;
@@ -30646,6 +30667,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit.rtc_ctx = NULL;
     g_pit.rtc_set = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
     g_pit.ticks_set = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
+    g_dos_tick_take = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);

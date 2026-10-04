@@ -113,7 +113,7 @@ Marked in full in [video-bios.md](video-bios.md) §6.
 
 | Offset | Field | Status | Who writes it / what is missing | Verification |
 |---|---|---|---|---|
-| `6Ch`–`6Fh` | tick count | **IMPL** | `pit_int08` (`vdd_pit.c:526-534`), and two host paths that do the BIOS's bookkeeping while a guest cannot take IRQ0 (`main.c:3492-3495`, `:24821-24824`) | provisional (`int1a.00.advances`) |
+| `6Ch`–`6Fh` | tick count | **IMPL** | `pit_int08`, and two host paths that do the BIOS's bookkeeping while a guest cannot take IRQ0 (`async_inject` nested-RM arm, the flat-PM no-hook arm in `main.c`) — since s92 all three through ONE body, `pit_bios_tick` (`vdd_pit.h`), which also keeps the #262 witness: a count the BIOS did not write is a guest's store, and DOS's clock follows it | provisional (`int1a.00.advances`); `p_tick2c`; pit_test T8b |
 | — | the tick count **is time of day** (seeded at start from the clock) | **IMPL** | #253: `vdd_pit_seed_time_of_day` (`vdd_pit.c:560-570`, called `main.c:27812` right after the PIT joins the bus) — `secs * 1193182 / 65536` from `rtc_now`, the clock INT 1Ah `AH=02h` and the CMOS read, and `0070` cleared. Seconds resolution, as POST has from the RTC | `pit_test` T17; no probe compares `AH=00h` with `AH=02h` yet |
 | `70h` | midnight rollover flag | **IMPL** | `vdd_pit.c:533`, cleared by INT 1Ah (`:578-588`) and by the start-up seed | provisional (`int1a.00.midnight`) |
 | `67h`–`6Ah` | shutdown / reset re-entry pointer | **N/A** | the VDM is never reset into real mode | — |

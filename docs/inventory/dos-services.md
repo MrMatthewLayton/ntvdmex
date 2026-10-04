@@ -90,10 +90,10 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `25h`/`35h` | set / get interrupt vector | **IMPL** | `:2242-2251` | untested |
 | `26h` | create a new PSP | **PART** | `:1432-1445`: copies the **top-level** PSP (`DOS_PSP_SEG`), not the current one, and always names it the parent | untested |
 | `29h` | parse a filename into an FCB | **IMPL** | `:1259-1309`; `*` expands to `?`s; AL bits 1–3 keep drive/name/extension (s81) | **oracle** (`p_fcb`, all four hosts) |
-| `2Ah` | get date | **IMPL** | `:2369-2374`, host local time | untested |
-| `2Bh` | set date | **MISS** | ⛔ `:2380-2382`: answers `AL=00h` (success) and changes nothing; an invalid date is never refused (`AL=FFh`). INT 1Ah `05h` declines the same request *because* this is the "runs but lies" shape | — |
-| `2Ch` | get time | **IMPL** | `:2375-2379`, centiseconds from milliseconds | untested |
-| `2Dh` | set time | **MISS** | ⛔ as `2Bh` | — |
+| `2Ah` | get date | **IMPL** | the VDM's clock: host local time + `g_dos_clock.dos_off` (`src/dos/dos_clock.h`, #250). #262 B: `dos_clock_sync` first — a tick count the BIOS did not write is followed, its midnight rollovers moving DOS's day number (`dclk_follow_ticks`) | **oracle** (`p_clock`); `p_vclock` `vclock.*.dos` owed; clock_test |
+| `2Bh` | set date | **IMPL** | #250: moves `dos_off` (the host clock never moves); 1980–2099, Gregorian, `AL=FFh` and no change on a refusal; the RTC follows (`rtc_off = dos_off`, as CLOCK$ writes the chip) | **oracle** (`p_clock`, 3 hosts) |
+| `2Ch` | get time | **IMPL** | as `2Ah`, centiseconds from milliseconds. #262: follows INT 1Ah `01h` (case A) and a raw store to `0040:006C` (case B, s92 — the PIT's tick witness, `vdd_pit_tick_take`) | **oracle** (`p_clock`, `p_tick2c`); case B + `p_vclock` owed; clock_test, pit_test T8b |
+| `2Dh` | set time | **IMPL** | as `2Bh`; also reloads `0040:006C` (`set_ticks`, owned by the witness) | **oracle** (`p_clock`) |
 | `2Eh` | set verify flag | **IMPL** | `:1576-1577`; stored, read by `54h` (writes are never verified, which is permitted) | **oracle** (`p_file`, via `54h`) |
 
 ## 2. INT 21h `30h`–`4Fh`
@@ -147,7 +147,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `54h` | get verify flag | **IMPL** | `:1578-1579` | **oracle** (`p_file`) |
 | `55h` | create child PSP | **PART** | `:1432-1445`: as `26h`, copies the top-level PSP | untested |
 | `56h` | rename / move | **PART** | `:1685-1691`: errors collapse to `5` or `2`; a missing path should be `3`, a cross-drive move `11h` (not same device) | **oracle** for success (`p_file`) |
-| `57h` `00h`/`01h` | get / set file date and time | **IMPL** | `:1692-1709`; set works through a read-only open (#168) | **oracle** (`p_file int21.5700.stamp`) |
+| `57h` `00h`/`01h` | get / set file date and time | **IMPL** | `:1692-1709`; set works through a read-only open (#168). #263: once a guest has moved DOS's clock, every create (`3Ch`, `5Ah`/`5Bh`, `6Ch` create/truncate, FCB `16h`, the PM twins) and every write (`40h`, FCB `15h`/`22h`/`28h`) is stamped from it (`dos_stamp_vdm_now`) — at the write, not the close (2 s resolution; the gap is unmeasured) | **oracle** (`p_file int21.5700.stamp`, `p_fdate`); `p_vclock vclock.e.57.open` owed |
 | `58h` | allocation strategy, UMB link | **IMPL** | `:2129-2162`; `5803h` refused, as 6.22 without UMBs | **oracle** (`p_alloc`, `p_umb`, `p_subfn`) |
 | `59h` | extended error | **IMPL** | `:1804-1828`, `dos_err.h`; unmeasured codes logged, not invented | **oracle** (`p_err`, `p_misc`) |
 | `5Ah` | create temporary file | **IMPL** | `:1710-1739` | untested |

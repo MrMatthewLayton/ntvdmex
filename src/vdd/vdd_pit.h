@@ -164,7 +164,53 @@ typedef struct pit_state {
        time of day FROM that count, so the host moves DOS's clock to match (measured:
        p_tick2c on 6.22, DOSBox-X and PCem all follow). NULL = the count alone. */
     void   (*ticks_set)(void *ctx, uint32_t ticks);
+    /* ── GH #262 CASE B: WAS 0040:006C LAST WRITTEN BY THE BIOS? ─────────────────────
+         tick_witness is the count the BIOS itself last left there (every increment, the
+         seed, AH=01h's and AH=2Dh's reloads). A count that differs at the next increment
+         or at the next DOS clock read was STORED by the guest -- and DOS's clock must
+         then follow it (dos_clock.h, dclk_follow_ticks). From the first such sighting
+         until the host takes it: tick_wraps = midnight rollovers, tick_since = BIOS
+         ticks counted. One compare and a store per tick -- see pit_bios_tick. */
+    uint32_t tick_witness;
+    uint8_t  tick_foreign;
+    uint32_t tick_wraps;
+    uint32_t tick_since;
 } pit_state;
+
+/* ── THE BIOS TICK (INT 08h's bookkeeping), the ONE body for every place that does it:
+     pit_int08, and the host's two inline bumps for a guest that cannot take IRQ0 right
+     now (main.c: nested real-mode calls, a flat PM client with no INT 08h hook). Each of
+     those used to carry its own copy; a copy that did not keep the witness would make
+     every tick it counted look like a guest's store. ⚠ IRQ0 path: keep it trivial. */
+static inline void pit_bios_tick(pit_state *st, volatile uint32_t *tick, volatile uint8_t *flag)
+{
+    uint32_t v = *tick;
+    if (v != st->tick_witness && !st->tick_foreign) {
+        st->tick_foreign = 1; st->tick_wraps = 0; st->tick_since = 0;
+    }
+    if (++v >= PIT_TICKS_PER_DAY) { v = 0; *flag = 1; if (st->tick_foreign) st->tick_wraps++; }
+    if (st->tick_foreign) st->tick_since++;
+    *tick = v;
+    st->tick_witness = v;
+}
+
+/* A count the BIOS/DOS itself just wrote (seed, AH=2Dh's reload): nothing foreign. */
+static inline void vdd_pit_tick_owned(pit_state *st, uint32_t v)
+{ st->tick_witness = v; st->tick_foreign = 0; st->tick_wraps = 0; st->tick_since = 0; }
+
+/* Has the count been set by anything but the BIOS since the last call? If so, hand
+   back what DOS's clock must follow (see dclk_follow_ticks), forget it, and take the
+   count as the BIOS's own from here. 0 = nothing happened, outputs untouched. The
+   caller holds whatever serializes it against the tick (the host: g_pit_cs). */
+static inline int vdd_pit_tick_take(pit_state *st, uint32_t count,
+                                    uint32_t *ticks, uint32_t *wraps, uint32_t *since)
+{
+    if (!st->tick_foreign && count == st->tick_witness) return 0;
+    if (!st->tick_foreign) { st->tick_wraps = 0; st->tick_since = 0; }   /* stored just now */
+    *ticks = count; *wraps = st->tick_wraps; *since = st->tick_since;
+    vdd_pit_tick_owned(st, count);
+    return 1;
+}
 
 /* Effective reload. `reload` is always BINARY (decoded at the write); 0 means the
    maximum, which is 65536 in binary counting and 10000 in BCD. */
