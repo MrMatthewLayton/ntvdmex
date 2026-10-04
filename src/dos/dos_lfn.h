@@ -287,7 +287,9 @@ static inline unsigned dos_ext_open_taken(unsigned disp, int existed)
     switch (disp) {
     case DOS_DISP_CREATE_NEW:        return 2;
     case DOS_DISP_TRUNCATE_EXISTING: return 3;
-    case DOS_DISP_CREATE_ALWAYS:     return existed ? 3 : 2;
+    /* s92, MEASURED (dospair p_lfn lfn.6C.12.new/.exists): stock says 3 ("replaced")
+       for action 12h whether the file existed or not. */
+    case DOS_DISP_CREATE_ALWAYS:     (void)existed; return 3;
     case DOS_DISP_OPEN_ALWAYS:       return existed ? 1 : 2;
     default:                         return 1;
     }

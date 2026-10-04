@@ -2984,11 +2984,7 @@ int dos_int21(dos_machine_t *m)
              as 4300h does on 6.22?) is what tools/dostest/p_lfn.asm prints; the arms
              below write only the outputs RBIL names and leave AX alone on success. */
         uint8_t al71 = (uint8_t)(R_AX & 0xFF);
-        if (al71 == 0x0D) {                     /* reset drive: CX flags, DX drive */
-            /* Flush and (CX bit 0) invalidate a drive's buffers. Writes are Win32's and
-               already on their way to the disk; there is no cache of ours to drop. */
-            OKCF();
-        } else if (al71 == 0x41) {              /* delete: DS:DX, SI=wildcards, CL/CH */
+        if (al71 == 0x41) {              /* delete: DS:DX, SI=wildcards, CL/CH */
             char fn[300];
             uint16_t si41 = (uint16_t)(R_SI & 0xFFFF);
             v86_path(m, R_DS, R_DX, fn, sizeof(fn));
@@ -3030,7 +3026,9 @@ int dos_int21(dos_machine_t *m)
                 } else if (bl43 == 0x00) {
                     /* CX = the attributes. ⚠ Masked to DOS's six bits as 4300h is (a file
                        with none set reads 0, not Win32's 80h NORMAL); unmeasured on stock. */
-                    SET16(R_CX, (uint16_t)(ad.dwFileAttributes & 0x3F)); OKCF();
+                    SET16(R_CX, (uint16_t)(ad.dwFileAttributes & 0x3F));
+                    SETAX((uint16_t)(ad.dwFileAttributes & 0x3F));   /* stock: AX = CX too (p_lfn) */
+                    OKCF();
                 } else if (bl43 == 0x02) {
                     /* DX:AX = the size the file occupies (compressed). */
                     DWORD hi = 0, lo;
@@ -3184,6 +3182,7 @@ int dos_int21(dos_machine_t *m)
                     int k = 0;
                     while (out[k] && k < 260) { dd[k] = (BYTE)out[k]; ++k; }
                     dd[k] = 0;
+                    SETAX(0);                           /* stock: AX=0000 (p_lfn) */
                     OKCF();
                 }
             }
@@ -3244,7 +3243,7 @@ int dos_int21(dos_machine_t *m)
                 if (!dos_lfn_ft_to_dos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
                 else {
                     SET16(R_CX, dt); SET16(R_DX, dd);
-                    R_BX = (R_BX & 0xFFFF00FFu) | ((DWORD)cs << 8);
+                    SET16(R_BX, (uint16_t)((R_BX & 0xFF) | ((uint16_t)cs << 8)));  /* stock: BH=C7h */
                     OKCF();
                 }
             } else if (bla7 == 0x01) {          /* CX time, DX date, BH -> ES:DI QWORD */
@@ -3301,7 +3300,7 @@ int dos_int21(dos_machine_t *m)
             } else {
                 DWORD n = QueryDosDeviceA(spec, tgt, sizeof(tgt));
                 int is_subst = n > 4 && tgt[0] == '\\' && tgt[1] == '?' && tgt[2] == '?' && tgt[3] == '\\';
-                if (!is_subst) { SETAX(0x0F); ERRCF(); }
+                if (!is_subst) { SETAX(bh == 2 ? 0x89 : 0x0F); ERRCF(); }   /* stock query: 89h (p_lfn) */
                 else if (bh == 1) {
                     if (DefineDosDeviceA(DDD_REMOVE_DEFINITION, spec, NULL)) OKCF();
                     else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
@@ -3315,8 +3314,11 @@ int dos_int21(dos_machine_t *m)
             }
         } else {
             tp = zput(tp, "  INT21 AX=71"); tp = zhexb(tp, al71);
-            tp = zput(tp, " not an LFN function we provide -> AX=7100 CF=1 (LFN clients fall back)\r\n");
-            SETAX(0x7100);
+            tp = zput(tp, " not an LFN function stock provides -> AX=0001 CF=1\r\n");
+            /* s92, MEASURED (dospair p_lfn): stock answers an unknown 71xxh -- and 710Dh,
+               which it does not provide -- with AX=0001 CF=1, "invalid function", NOT the
+               7100h this arm assumed. */
+            SETAX(0x0001);
             ERRCF();
         }
         if (m->trace_all) {
@@ -3374,6 +3376,11 @@ int dos_int21(dos_machine_t *m)
          protected mode", so the nested real-mode loops -- a DPMI 0301h/0302h
          procedure, a reflected IRQ's handler -- set crit_pending and nobody raised it.
          A handle call (3Fh/40h, the file's own drive in AL) is now raised too. */
+    /* s92, MEASURED (dospair p_lfn lfn.713B.missing / 713A.again): stock's LFN chdir and
+       rmdir say 2 (file not found) for a directory that is not there, where 6.22's short
+       3Bh/3Ah -- whose code serves them -- say 3. */
+    if (lfn_alias && (lfn_alias == 0x3A || lfn_alias == 0x3B) && (*pfl & 1)
+        && (R_AX & 0xFFFF) == 3) SETAX(2);
     if ((*pfl & 1) && m->crit_raise_ok && !g_dos_int21_pm && !m->crit_active
         && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
         const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));

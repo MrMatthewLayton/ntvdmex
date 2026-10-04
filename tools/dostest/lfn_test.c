@@ -173,7 +173,7 @@ int main(void)
     eq("taken: open-always, there -> 1", dos_ext_open_taken(DOS_DISP_OPEN_ALWAYS, 1), 1);
     eq("taken: open-always, new   -> 2", dos_ext_open_taken(DOS_DISP_OPEN_ALWAYS, 0), 2);
     eq("taken: create-always, there -> 3 (replaced)", dos_ext_open_taken(DOS_DISP_CREATE_ALWAYS, 1), 3);
-    eq("taken: create-always, new   -> 2 (#210 fix)", dos_ext_open_taken(DOS_DISP_CREATE_ALWAYS, 0), 2);
+    eq("taken: create-always, new   -> 3 (stock, p_lfn)", dos_ext_open_taken(DOS_DISP_CREATE_ALWAYS, 0), 3);
     eq("BX mode 0 -> GENERIC_READ",       dos_ext_open_access(0), 0x80000000ul);
     eq("BX mode 1 -> GENERIC_WRITE",      dos_ext_open_access(1), 0x40000000ul);
     eq("BX mode 2 -> read|write",         dos_ext_open_access(2), 0xC0000000ul);
