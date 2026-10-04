@@ -30,6 +30,7 @@
 #define DPMI_E_INVALID_SEL    0x8022   /* invalid selector                              */
 #define DPMI_E_INVALID_HANDLE 0x8023   /* invalid handle                                */
 #define DPMI_E_INVALID_CB     0x8024   /* invalid callback                              */
+#define DPMI_E_INVALID_LINEAR 0x8025   /* invalid linear address (#268)                 */
 
 /* ── ONE MACHINE, DESCRIBED ONCE: 1687h AND 0400h. ──────────────────────────────────────
      Both report the processor class in CL, and they disagreed: 1687h said 4 (s79, the
@@ -131,6 +132,138 @@ static int dpmi_resize_plan(uint32_t new_size, uint32_t committed, uint32_t *cop
     if (new_size <= committed) return DPMI_RESIZE_INPLACE;
     if (copy) *copy = committed;                     /* new > committed: all of the old */
     return DPMI_RESIZE_MOVE;
+}
+
+/* ══ #268: THE #248 REMAINDERS -- VALUES, NOT JUST SELECTORS. ══════════════════════════
+     #248 made a bad SELECTOR an error. These are the calls whose selector is fine but
+     whose VALUE is not -- the spec's 8021h (invalid value) and 8025h (invalid linear
+     address) -- plus the two services whose answer was a shape rather than a check:
+     0100h above 64 KB, and 0500h's 48-byte block.
+   ⚠ UNDER WOW NONE OF THE VALUE CHECKS APPLY (`guest_owns_table`), for the same reason
+     dpmi_sel_valid() checks only the range there: krnl386 owns the table, it was never
+     measured against these refusals, and a refused descriptor call is a dead Win16
+     session rather than a visible error. The DOS shelf is where the spec is enforced. */
+
+/* ── 0008h: A LIMIT ABOVE 1 MB MUST BE PAGE-GRANULAR. ──────────────────────────────────
+     The spec, 0008h: "Limits greater than 1 MB must have the low 12 bits set" -- above
+     1 MB the descriptor holds the limit in 4 KB units (G = 1), so 0x123456 is a number no
+     descriptor can carry, and the host must not silently round it. We used to: the
+     install path shifted it right by 12, and the client got a segment 0x1000-ish bytes
+     different from the one it asked for without being told. 8021h is the answer.
+   ► 0xFFFFFFFF (DOS/4GW's flat 4 GB) has its low 12 bits set and PASSES; it is then
+     clamped to XP's LDT cap by dpmi_install() -- a separate, logged deviation (an NT LDT
+     cannot hold a 4 GB descriptor at all; stock ntvdm is under the same cap).
+   ► 16-bit hosts must also refuse CX != 0; we are a 32-bit host (0400h BX bit 0). */
+static int dpmi_limit_ok(uint32_t limit)
+{
+    if (limit <= 0xFFFFFu) return 1;
+    return (limit & 0xFFFu) == 0xFFFu;
+}
+
+/* ── 0009h: THE ACCESS-RIGHTS WORD, CHECKED AS THE SPEC DESCRIBES IT. ──────────────────
+     CL is the descriptor's access byte, CH (32-bit hosts) its byte 6:
+       CL bit 7   P     present                    -- either value is legal
+       CL 6-5     DPL   "must equal caller's CPL"  -- ⚠ NOT ENFORCED, see below
+       CL bit 4   S     must be 1 (code or data; a system descriptor is not the client's)
+       CL bit 3         1 = code, 0 = data
+       CL bit 2         data: expand-down;  code: must be 0 (no conforming code)
+       CL bit 1         data: writable;     code: readable
+       CL bit 0         accessed
+       CH bit 7   G     CH bit 6  B/D        CH bit 5  must be 0       CH bit 4  available
+       CH 3-0           ignored (the limit's top nibble; 0008h sets the limit)
+   ⚠ THE DPL RULE IS DELIBERATELY NOT ENFORCED. ZAR (DOS/16M) builds its VESA LFB
+     selector with 0009h CX=8092h -- DPL 0 -- and ZAR running is the project's acceptance
+     test. dpmi_install() forces every present descriptor to DPL 3 instead (s74c, the
+     ZAR VESA fix); enforcing the spec here would refuse the call that fix exists for.
+     A spec-strict host (HDPMI, CWSDPMI) is expected to answer 8021h there; that is a
+     measured-on-the-oracles question p_dpmi2 asks (`int31.0009.dpl0`). */
+static int dpmi_access_ok(uint16_t cx)
+{
+    uint8_t cl = (uint8_t)cx, ch = (uint8_t)(cx >> 8);
+    if (!(cl & 0x10)) return 0;                      /* S = 0: a system descriptor     */
+    if ((cl & 0x08) && (cl & 0x04)) return 0;        /* conforming code                */
+    if (ch & 0x20) return 0;                         /* CH bit 5 must be 0             */
+    return 1;
+}
+
+/* ── 0007h: A BASE NO DESCRIPTOR CAN CARRY IS 8025h. ───────────────────────────────────
+     The spec (1.0) has 0007h answer 8025h, invalid linear address, when the new base
+     would put the segment outside the client's linear space. Here that space is the
+     process's user half: XP's LDT validator refuses any descriptor whose base lies past
+     MmHighestUserAddress (`cap`, XP_LDT_MAX_LINEAR in main.c), whatever its limit -- and
+     what used to happen was a "DPMI-LDT: install REJECTED ... clamp ALSO refused" line
+     in our log, CF=0 to the client, and the OLD descriptor still live in the real LDT
+     while our table said otherwise.
+   ► Only the BASE is judged. base + limit past the cap is the flat-selector case
+     (DOS/4GW: base 0, then 0008h 4 GB) that dpmi_install() clamps and installs; refusing
+     it would break every DOS/4GW game. */
+static int dpmi_base_ok(uint32_t base, uint32_t cap)
+{
+    return base <= cap;
+}
+
+/* ── 0100h ABOVE 64 KB: A CHAIN OF DESCRIPTORS, ONE PER 64 KB. ─────────────────────────
+     The spec, 0100h: "If the size of the block requested is greater than 64K bytes
+     (BX > 1000h) then contiguous descriptors will be allocated", the base selector is
+     returned, and each next descriptor (reached through 0003h's increment) is based
+     64 KB above the previous one with a 64 KB limit -- the last one holding what is
+     left. "If more than one descriptor is allocated under 32-bit DPMI hosts, the limit
+     of the first descriptor will be set to the size of the entire block" (16-bit hosts
+     give it 64 KB). We are a 32-bit host, so descriptor 0 spans the whole block.
+     We used to allocate ONE descriptor whose limit was the whole block: right for a
+     32-bit client that only uses the first selector, and a #GP for the 16-bit client
+     the chain exists for -- it adds 8 to reach the second 64 KB and finds whatever
+     descriptor happened to be next. ⚠ No shelf guest has been seen to ask for more than
+     64 KB of DOS memory; the evidence is the spec text and `p_dpmi2`'s chain rows.
+   ► `paras` 0 keeps today's single descriptor with limit 0. */
+static int dpmi_dosmem_count(uint16_t paras)
+{
+    return paras ? (int)(((uint32_t)paras + 0xFFFu) >> 12) : 1;
+}
+/* Descriptor `i` of a block of `paras` paragraphs: offset of its base from the block's
+   start, and its byte limit. */
+static void dpmi_dosmem_desc(uint16_t paras, int i, uint32_t *base_off, uint32_t *limit)
+{
+    uint32_t bytes = (uint32_t)paras << 4, off = (uint32_t)i << 16, left;
+    *base_off = off;
+    if (!paras) { *limit = 0; return; }
+    if (i == 0) { *limit = bytes - 1; return; }      /* 32-bit host: the whole block   */
+    left = bytes - off;
+    *limit = (left > 0x10000u ? 0x10000u : left) - 1;
+}
+
+/* ── 0500h: THE WHOLE 30h-BYTE BLOCK, AND THE FREE COUNTS MOVE WITH ALLOCATION. ────────
+     The 0.9 layout:
+       00 largest available free block, BYTES      04 maximum unlocked page allocation
+       08 maximum locked page allocation           0C linear address space size, pages
+       10 total number of unlocked pages           14 total number of free pages
+       18 total number of physical pages           1C free linear address space, pages
+       20 size of paging file/partition, pages     24..2F reserved, all FFh
+     "fields the host cannot supply are -1". Ours are all knowable: 0501h is a
+     VirtualAlloc in our own process against a nominal pool of `pool_pages`, and
+     `used_pages` is what the client holds right now (the live 0501h blocks, page-
+     rounded). Before #268 every field said the full pool for ever -- a client that
+     allocates and then sizes the next request from free pages was told nothing had
+     changed. No pages are ever locked away from the client (0600h is a no-op: nothing
+     here pages out), so the unlocked/locked maxima are both the free count; there is no
+     paging file (0400h BX bit 2 = 0, no virtual memory), so +20 is 0, not -1.
+   ⚠ THE POOL IS A PROMISE, NOT A LIMIT. 0501h does not refuse past it; the number exists
+     so a client that sizes its heap from +00 gets a sane answer. */
+#define DPMI_MEMINFO_DWORDS 12
+static void dpmi_meminfo(uint32_t out[DPMI_MEMINFO_DWORDS], uint32_t pool_pages, uint32_t used_pages)
+{
+    uint32_t freep = used_pages < pool_pages ? pool_pages - used_pages : 0;
+    int i;
+    for (i = 0; i < DPMI_MEMINFO_DWORDS; ++i) out[i] = 0xFFFFFFFFu;
+    out[0] = freep << 12;                            /* largest free block, bytes      */
+    out[1] = freep;                                  /* max unlocked page allocation   */
+    out[2] = freep;                                  /* max locked page allocation     */
+    out[3] = pool_pages;                             /* linear address space, pages    */
+    out[4] = pool_pages;                             /* total unlocked pages           */
+    out[5] = freep;                                  /* free pages                     */
+    out[6] = pool_pages;                             /* total physical pages           */
+    out[7] = freep;                                  /* free linear address space      */
+    out[8] = 0;                                      /* no paging file                 */
 }
 
 #endif /* NTVDMEX_DPMI_SVC_H */

@@ -2065,6 +2065,7 @@ static DWORD g_dpmi_owned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc ba
 static int   g_dpmi_nowned = 0;
 #define DPMI_DOSBLK_MAX 64
 static WORD  g_dpmi_dosblk[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
+static BYTE  g_dpmi_dosblk_n[DPMI_DOSBLK_MAX]; /* #268: descriptors in each one's chain */
 static int   g_dpmi_ndosblk = 0;
 static int   g_ldt_client_mark = 0;          /* g_ldt_next when the client switched in */
 static int   g_pm_exit_code = 0;             /* AL of the client's PM AH=4Ch           */
@@ -20057,41 +20058,114 @@ static void wowcall_load(void)
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
+/* ── #267: THE CALLBACK'S HOST-OWNED SELECTORS. ──────────────────────────────────────
+     The spec's entry contract (dpmi_rmcs.h, rmcs_cb_enter) needs two things the client
+     does not own:
+   ► A LOCKED PROTECTED-MODE STACK. We used to run the procedure on 0017h:F400h -- the
+     client's own INITIAL DATA SELECTOR, 3 KB under a .COM's stack top, i.e. on top of
+     whatever the client kept there; and for a flat 32-bit client 0017h is a 16-bit
+     selector over its real-mode-era data. Now: host memory (g_cb_pmstk, like the fault
+     trampoline's g_flt_stack, #205), one data selector over it, 4 KB per nesting level
+     so a callback re-entered from inside its own procedure (a 0301h issued by the
+     procedure that far-calls a callback again) does not stand on its caller's frame.
+     B follows the client's width, as the PM-return catcher's D does.
+   ► A SELECTOR FOR THE REAL-MODE STACK, base SS*16, limit FFFFh, one per nesting level
+     (an outer procedure may still be reading its own DS:SI when an inner one is entered).
+     Re-installed only when SS changed -- an install is a syscall.
+   Both come from the host-private pool (dpmi_host_idx), lazily, on the first callback a
+   client actually makes; a run that never makes one allocates nothing.
+   ⚠ If the pool has spilled into the client arena (logged as HOST LDT POOL EXHAUSTED), a
+     client teardown can zero one of these; the access-byte test below re-allocates. */
+#define DPMI_CB_NEST_MAX  4
+#define DPMI_CB_STK_LEVEL 0x1000
+static DWORD g_cb_pmstk[DPMI_CB_NEST_MAX * DPMI_CB_STK_LEVEL / 4] __attribute__((aligned(16)));
+static WORD  g_cb_stk_sel = 0;
+static WORD  g_cb_rm_sel[DPMI_CB_NEST_MAX];
+static int   g_cb_depth = 0;
+
+static WORD dpmi_cb_host_sel(WORD *cache, DWORD base, DWORD limit, BYTE flags)
+{
+    int idx = *cache ? (*cache >> 3) : -1;
+    if (idx < 0 || g_ldt[idx].access == 0) {           /* first use, or a teardown took it */
+        idx = dpmi_host_idx();
+        if (idx < 0) return 0;
+        *cache = (WORD)((idx << 3) | 7);
+        g_ldt[idx].access = 0;                         /* force the install below */
+    }
+    if (g_ldt[idx].access != 0xF2 || g_ldt[idx].base != base
+        || g_ldt[idx].limit != limit || g_ldt[idx].flags != flags) {
+        g_ldt[idx].base = base; g_ldt[idx].limit = limit;
+        g_ldt[idx].access = 0xF2;                      /* present, DPL3, data R/W */
+        g_ldt[idx].flags = flags;
+        dpmi_install(idx);
+    }
+    return *cache;
+}
+
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
-   excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
-   PM handler with the real-mode register state marshalled into its RMCS, then resume
-   V86 at the far-call's return address. The inverse of 0301's PM->V86 direction.
-   On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
+   excursion, or in a reflected real-mode ISR) far-called a planted callback BOP --
+   switch V86->PM, run the client's PM procedure under the spec's entry contract, then
+   resume V86 with whatever the procedure left in the RMCS. The inverse of 0301's
+   PM->V86 direction. On entry the CONTEXT holds the V86 state at the far-call.
+   #267: the contract is the SPEC'S now -- see dpmi_rmcs.h (rmcs_cb_enter) for what it
+   was before and what a spec-conforming procedure does with it. */
 static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
 {
-    char lb[256]; char *lp = lb;
+    char lb[384]; char *lp = lb;
     WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
-    DWORD rstk = ((DWORD)rss << 4) + rsp;
-    WORD retIP = peekw(rstk), retCS = peekw(rstk + 2);     /* the far-call return frame */
-    WORD newSP = (WORD)(rsp + 4);                          /* pop it */
+    WORD cbip = dpmi_cb_entry(DPMI_CB_BASE_OFF, slot);
     DWORD rmcs = dpmi_sel_base(g_cb[slot].rm_es) + g_cb[slot].rm_di;
     volatile BYTE *rc = (volatile BYTE *)(ULONG_PTR)rmcs;
     WORD vMsw = *(volatile WORD *)(tib + VTIB_MSW);
+    int lvl = g_cb_depth < DPMI_CB_NEST_MAX ? g_cb_depth : DPMI_CB_NEST_MAX - 1;
+    int vi_saved = g_dpmi_vi;
+    WORD stksel, rmsel;
+    rmcs_regs rr;
     unsigned ph; int cbdone = 0;
-    /* fill the callback's RMCS with the real-mode register file + the return CS:IP:SS:SP */
-    *(volatile WORD*)(rc+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(rc+0x04)=VDM_REG(tib,VTIB_ESI);
-    *(volatile WORD*)(rc+0x08)=VDM_REG(tib,VTIB_EBP); *(volatile WORD*)(rc+0x10)=VDM_REG(tib,VTIB_EBX);
-    *(volatile WORD*)(rc+0x14)=VDM_REG(tib,VTIB_EDX); *(volatile WORD*)(rc+0x18)=VDM_REG(tib,VTIB_ECX);
-    *(volatile WORD*)(rc+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(rc+0x22)=VDM_REG(tib,VTIB_ES);
-    *(volatile WORD*)(rc+0x24)=VDM_REG(tib,VTIB_DS);  *(volatile WORD*)(rc+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
-    *(volatile WORD*)(rc+0x2A)=retIP; *(volatile WORD*)(rc+0x2C)=retCS;   /* CS:IP = far-call return */
-    *(volatile WORD*)(rc+0x2E)=newSP; *(volatile WORD*)(rc+0x30)=rss;     /* SS:SP after popping it */
-    lp = zput(lp, "  0303-cb slot "); lp = zhex(lp, slot); lp = zput(lp, " ret=0x"); lp = zhex(lp, retCS);
-    lp = zput(lp, ":0x"); lp = zhex(lp, retIP); lp = zput(lp, " -> PM handler 0x"); lp = zhex(lp, g_cb[slot].pm_sel);
+    /* the RMCS: the real-mode register file at the call, CS:IP = the callback address,
+       SS:SP = the stack AS IT WAS -- the far return still on it (rmcs_cb_enter) */
+    rr.edi = VDM_REG(tib, VTIB_EDI); rr.esi = VDM_REG(tib, VTIB_ESI);
+    rr.ebp = VDM_REG(tib, VTIB_EBP); rr.ebx = VDM_REG(tib, VTIB_EBX);
+    rr.edx = VDM_REG(tib, VTIB_EDX); rr.ecx = VDM_REG(tib, VTIB_ECX);
+    rr.eax = VDM_REG(tib, VTIB_EAX);
+    rr.flags = (WORD)VDM_REG(tib, VTIB_EFLAGS);
+    rr.es = (WORD)VDM_REG(tib, VTIB_ES); rr.ds = (WORD)VDM_REG(tib, VTIB_DS);
+    rr.fs = (WORD)VDM_REG(tib, VTIB_FS); rr.gs = (WORD)VDM_REG(tib, VTIB_GS);
+    rmcs_cb_enter(rc, &rr, DOS_HDLR_SEG, cbip, rss, rsp);
+    stksel = dpmi_cb_host_sel(&g_cb_stk_sel, (DWORD)(ULONG_PTR)g_cb_pmstk,
+                              (DWORD)sizeof g_cb_pmstk - 1, (BYTE)(g_dpmi_client32 ? 0x4 : 0));
+    rmsel  = dpmi_cb_host_sel(&g_cb_rm_sel[lvl], (DWORD)rss << 4, 0xFFFF, 0);
+    lp = zput(lp, "  0303-cb slot "); lp = zhex(lp, slot); lp = zput(lp, " rm SS:SP=0x"); lp = zhex(lp, rss);
+    lp = zput(lp, ":0x"); lp = zhex(lp, rsp); lp = zput(lp, " (DS:SI=0x"); lp = zhex(lp, rmsel);
+    lp = zput(lp, ":0x"); lp = zhex(lp, rsp); lp = zput(lp, ") lvl "); lp = zhex(lp, (DWORD)g_cb_depth);
+    lp = zput(lp, " -> PM handler 0x"); lp = zhex(lp, g_cb[slot].pm_sel);
     lp = zput(lp, ":0x"); lp = zhex(lp, g_cb[slot].pm_off); lp = zput(lp, "\r\n");
     log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    if (!stksel || !rmsel) {
+        /* No LDT slot for the host's two selectors: the procedure cannot be entered under
+           the contract. Do what the caller's far call needs -- return to it -- and say so;
+           running the procedure on a borrowed stack is how the old code got here. */
+        DWORD stk = (DWORD)rss << 4;
+        WORD rip = peekw(stk + rsp), rcs = peekw(stk + (WORD)(rsp + 2));
+        VDM_SET16(tib, VTIB_CS, rcs); VDM_REG(tib, VTIB_EIP) = rip;
+        VDM_REG(tib, VTIB_ESP) = (WORD)(rsp + 4);
+        lp = zput(lp, "  0303-cb: NO LDT SLOT for the callback's host selectors -- procedure NOT run\r\n");
+        log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+        return;
+    }
+    if (g_cb_depth >= DPMI_CB_NEST_MAX) {
+        lp = zput(lp, "  0303-cb: nested deeper than 4 -- sharing the innermost stack level\r\n");
+        log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    }
+    ++g_cb_depth;
     /* re-arm the BOP patch (the PM handler is protected-mode code), enter PM */
     dpmi_repatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(vMsw | MSW_PE_BIT);
-    /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
-       The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
-       FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
-    { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
+    /* The host's locked stack, with an IRET frame -> PM-return catcher. The IRET operand
+       size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword FLAGS/CS/EIP
+       frame, a 16-bit one pops a word frame (GH #18 run 83). */
+    { DWORD b = (DWORD)(ULONG_PTR)g_cb_pmstk;
+      DWORD psp = (DWORD)sizeof g_cb_pmstk - (DWORD)lvl * DPMI_CB_STK_LEVEL;
       if (dpmi_sel_is32(g_cb[slot].pm_sel)) {
           psp -= 4; poked(b + psp, 0x00000202);        /* EFLAGS */
           psp -= 4; poked(b + psp, g_pmret_sel);       /* CS (dword; hi16=0) */
@@ -20101,11 +20175,16 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
           psp -= 2; pokew(b + psp, g_pmret_sel);       /* CS */
           psp -= 2; pokew(b + psp, DPMI_PMRET_OFF);    /* IP */
       }
-      VDM_SET16(tib, VTIB_SS, pss); VDM_REG(tib, VTIB_ESP) = psp; }
-    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
+      VDM_SET16(tib, VTIB_SS, stksel); VDM_REG(tib, VTIB_ESP) = psp; }
+    /* "Interrupts disabled": IF clear, exactly as the IRQ and mouse injectors enter a
+       handler (VIF/VIP clear too -- see dpmi_async_inject_pm), and our virtual IF down for
+       the duration. Was VTIB_EFLAGS_PM, i.e. IF SET. */
+    g_dpmi_vi = 0;
+    VDM_REG(tib, VTIB_EFLAGS) = 0x2u;
     VDM_SET16(tib, VTIB_CS, g_cb[slot].pm_sel); VDM_REG(tib, VTIB_EIP) = g_cb[slot].pm_off;
-    VDM_SET16(tib, VTIB_ES, g_cb[slot].rm_es);  VDM_REG(tib, VTIB_EDI) = g_cb[slot].rm_di;  /* ES:DI = RMCS */
-    VDM_SET16(tib, VTIB_DS, 0x17); VDM_REG(tib, VTIB_ESI) = 0;
+    VDM_SET16(tib, VTIB_ES, g_cb[slot].rm_es);  VDM_REG(tib, VTIB_EDI) = g_cb[slot].rm_di;  /* ES:(E)DI = RMCS     */
+    VDM_SET16(tib, VTIB_DS, rmsel);             VDM_REG(tib, VTIB_ESI) = rsp;               /* DS:(E)SI = RM SS:SP */
+    VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);   /* V86 values are not selectors */
     /* run the PM handler until it IRETs onto the PM-return catcher (g_pmret_sel:PMRET_OFF).
        A handler that itself issues INT 31h/21h now routes through the shared dispatcher
        dpmi_service_pm_int() -- the same full surface the main PM loop gets (GH #2), so a
@@ -20129,19 +20208,36 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
         log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
         break;
     }
-    /* handler done: un-patch again and resume the RM proc in V86 at the RMCS CS:IP */
+    --g_cb_depth;
+    g_dpmi_vi = vi_saved;
+    /* handler done: un-patch again and resume V86 with EVERYTHING the RMCS now holds --
+       registers (all 32 bits), flags (rmcs_cb_v86_flags), ES DS FS GS, CS:IP and SS:SP.
+       The procedure owns CS:IP and SP: the spec has it pop the return address itself.
+       (FS and GS used to be set to the RMCS's SS, and the registers' high words and the
+       flags were not taken at all.) */
     dpmi_unpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = vMsw;
-    VDM_REG(tib, VTIB_EFLAGS) = 0x20202;
-    VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(rc+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(rc+0x04);
-    VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(rc+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(rc+0x10);
-    VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(rc+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(rc+0x18);
-    VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(rc+0x1C);
-    VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(rc+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(rc+0x24));
-    VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(rc+0x2C)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(rc+0x2A);
-    VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(rc+0x30)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(rc+0x2E);
-    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(rc+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(rc+0x30));
-    lp = zput(lp, cbdone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
+    rmcs_read(rc, &rr);
+    VDM_REG(tib, VTIB_EFLAGS) = rmcs_cb_v86_flags(rr.flags);
+    VDM_REG(tib, VTIB_EDI) = rr.edi; VDM_REG(tib, VTIB_ESI) = rr.esi;
+    VDM_REG(tib, VTIB_EBP) = rr.ebp; VDM_REG(tib, VTIB_EBX) = rr.ebx;
+    VDM_REG(tib, VTIB_EDX) = rr.edx; VDM_REG(tib, VTIB_ECX) = rr.ecx;
+    VDM_REG(tib, VTIB_EAX) = rr.eax;
+    VDM_SET16(tib, VTIB_ES, rr.es); VDM_SET16(tib, VTIB_DS, rr.ds);
+    VDM_SET16(tib, VTIB_FS, rr.fs); VDM_SET16(tib, VTIB_GS, rr.gs);
+    VDM_SET16(tib, VTIB_CS, rmcs_rd16(rc, RMCS_CS)); VDM_REG(tib, VTIB_EIP) = rmcs_rd16(rc, RMCS_IP);
+    VDM_SET16(tib, VTIB_SS, rmcs_rd16(rc, RMCS_SS)); VDM_REG(tib, VTIB_ESP) = rmcs_rd16(rc, RMCS_SP);
+    lp = zput(lp, cbdone ? "  0303-cb: PM handler returned (OK) -> RM 0x" : "  0303-cb: PM handler NO-RET -> RM 0x");
+    lp = zhex(lp, rmcs_rd16(rc, RMCS_CS)); lp = zput(lp, ":0x"); lp = zhex(lp, rmcs_rd16(rc, RMCS_IP));
+    lp = zput(lp, " SS:SP=0x"); lp = zhex(lp, rmcs_rd16(rc, RMCS_SS)); lp = zput(lp, ":0x");
+    lp = zhex(lp, rmcs_rd16(rc, RMCS_SP));
+    /* ⚠ A procedure that did not touch CS:IP returns INTO THE CALLBACK and runs again;
+         that is the spec's consequence, and it is said here rather than discovered as a
+         loop (the nested loops' 128-pass budget ends it as NO-RET). */
+    if (rmcs_rd16(rc, RMCS_CS) == DOS_HDLR_SEG && rmcs_rd16(rc, RMCS_IP) == cbip)
+        lp = zput(lp, " ** RMCS CS:IP still names the callback: the procedure did not set its"
+                      " return (spec: pop the far return through DS:SI) **");
+    lp = zput(lp, "\r\n");
     log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 }
 
@@ -20681,6 +20777,27 @@ static int dpmi_owned_find(DWORD h)
     return -1;
 }
 
+/* #268: pages the client holds right now through 0501h/0503h -- every live handle's
+   allocation, walked region by region with VirtualQuery (a block the patcher has
+   re-protected in part is several regions with one AllocationBase). Asked only by
+   0500h, so the walk's cost is paid by a call clients make a handful of times. */
+static DWORD dpmi_owned_pages(void)
+{
+    DWORD pages = 0;
+    int i;
+    for (i = 0; i < g_dpmi_nowned; ++i) {
+        BYTE *a = (BYTE *)(ULONG_PTR)g_dpmi_owned[i];
+        MEMORY_BASIC_INFORMATION mb;
+        while (a && VirtualQuery(a, &mb, sizeof mb) == sizeof mb
+               && mb.AllocationBase == (void *)(ULONG_PTR)g_dpmi_owned[i]
+               && mb.State == MEM_COMMIT) {
+            pages += (DWORD)(mb.RegionSize >> 12);
+            a = (BYTE *)mb.BaseAddress + mb.RegionSize;
+        }
+    }
+    return pages;
+}
+
 /* #248: give LDT index `idx` back -- null descriptor installed, index on the free list.
    One body for 0001h and 0101h (0101h used to zero the base and keep the index for ever). */
 static void dpmi_ldt_release(int idx)
@@ -20700,6 +20817,53 @@ static int dpmi_ldt_take(void)
     if (g_ldt_nfree > 0) return g_ldt_free[--g_ldt_nfree];
     if (g_ldt_next >= DPMI_LDT_MAX) return -1;
     return g_ldt_next++;
+}
+
+/* #268: `n` CONTIGUOUS indices (0100h above 64 KB: the chain 0003h's increment walks).
+   One is dpmi_ldt_take(); more come off the high-water mark, as 0000h's do -- a free
+   list cannot promise adjacency. -1 = no room. */
+static int dpmi_ldt_take_run(int n)
+{
+    int first;
+    if (n <= 1) return dpmi_ldt_take();
+    if (g_ldt_next + n > DPMI_LDT_MAX) return -1;
+    first = g_ldt_next; g_ldt_next += n;
+    return first;
+}
+
+/* #268: may index `idx` be claimed to EXTEND a chain (0102h growing a 0100h block)? It
+   must be unused: above the high-water mark, or on the free list. Claiming removes it
+   from the list / raises the mark. */
+static int dpmi_ldt_free_at(int idx)
+{
+    int k;
+    if (idx < DPMI_LDT_FIRSTFREE || idx >= DPMI_LDT_MAX) return 0;
+    if (idx >= g_ldt_next) return 1;
+    for (k = 0; k < g_ldt_nfree; ++k) if (g_ldt_free[k] == (WORD)idx) return 1;
+    return 0;
+}
+static void dpmi_ldt_claim(int idx)
+{
+    int k;
+    for (k = 0; k < g_ldt_nfree; ++k)
+        if (g_ldt_free[k] == (WORD)idx) { g_ldt_free[k] = g_ldt_free[--g_ldt_nfree]; return; }
+    if (idx >= g_ldt_next) g_ldt_next = idx + 1;
+}
+
+/* #268: point descriptors idx..idx+n-1 at a DOS block of `paras` at `seg`, the spec's
+   chain shape (dpmi_dosmem_desc): the first spans the whole block, each next one 64 KB
+   further on, the last holding the remainder. */
+static void dpmi_dosmem_install(int idx, int n, uint16_t seg, uint16_t paras)
+{
+    int i;
+    for (i = 0; i < n; ++i) {
+        uint32_t off, lim;
+        dpmi_dosmem_desc(paras, i, &off, &lim);
+        g_ldt[idx + i].base = ((DWORD)seg << 4) + off;
+        g_ldt[idx + i].limit = lim;
+        g_ldt[idx + i].access = 0xF2; g_ldt[idx + i].flags = 0;  /* data, RPL3 */
+        dpmi_install(idx + i);
+    }
 }
 
 /* #248: may the client name `sel` in 0001h/0007h-000Ah/0101h? The rule and the krnl386
@@ -24124,7 +24288,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
                             int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
-                            int idx = err ? -1 : dpmi_ldt_take();   /* #248: free list first */
+                            /* #268: above 64 KB, one descriptor per 64 KB, contiguous
+                               (dpmi_svc.h, dpmi_dosmem_count). One is still the free list
+                               first (#248). */
+                            int ndesc = dpmi_dosmem_count(want);
+                            int idx = err ? -1 : dpmi_ldt_take_run(ndesc);
                             if (!err && idx < 0) {                 /* no descriptor: give the block back */
                                 dos_free(NULL, seg);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
@@ -24179,15 +24347,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     }
                                     p = zput(p, "\r\n"); }
                             } else {
-                                g_ldt[idx].base = (DWORD)seg << 4;
-                                g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
-                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
-                                dpmi_install(idx);
-                                if (g_dpmi_ndosblk < DPMI_DOSBLK_MAX) g_dpmi_dosblk[g_dpmi_ndosblk++] = seg;
+                                dpmi_dosmem_install(idx, ndesc, seg, want);
+                                if (g_dpmi_ndosblk < DPMI_DOSBLK_MAX) {
+                                    g_dpmi_dosblk_n[g_dpmi_ndosblk] = (BYTE)ndesc;
+                                    g_dpmi_dosblk[g_dpmi_ndosblk++] = seg;
+                                }
                                 VDM_SET16(tib, VTIB_EAX, seg);
                                 VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
                                 p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
                                 p = zput(p, " sel=0x"); p = zhex(p, (idx << 3) | 7);
+                                if (ndesc > 1) { p = zput(p, " x"); p = zhex(p, (DWORD)ndesc); p = zput(p, " descriptors"); }
                             }
                             break; }
                         case 0x0101: {                             /* free DOS memory: DX = selector */
@@ -24224,27 +24393,73 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " -> DOSfree FAILED, DOS error "); p = zhex(p, (DWORD)derr);
                                 break;
                             }
-                            if (known >= 0) g_dpmi_dosblk[known] = g_dpmi_dosblk[--g_dpmi_ndosblk];
-                            dpmi_ldt_release(idx);
-                            p = zput(p, " -> DOSfree seg=0x"); p = zhex(p, seg);
-                            p = zput(p, " sel 0x"); p = zhex(p, dsel); p = zput(p, " released");
+                            /* #268: the whole chain goes back -- each descriptor only if it
+                               still is what 0100h made it (the client may have freed or
+                               re-based one with 0001h/0007h; releasing it again would put
+                               it on the free list twice). */
+                            {   int nch = known >= 0 ? g_dpmi_dosblk_n[known] : 1, c;
+                                if (nch < 1) nch = 1;
+                                if (known >= 0) {
+                                    --g_dpmi_ndosblk;
+                                    g_dpmi_dosblk[known] = g_dpmi_dosblk[g_dpmi_ndosblk];
+                                    g_dpmi_dosblk_n[known] = g_dpmi_dosblk_n[g_dpmi_ndosblk];
+                                }
+                                dpmi_ldt_release(idx);
+                                for (c = 1; c < nch && idx + c < DPMI_LDT_MAX; ++c)
+                                    if (g_ldt[idx + c].access != 0
+                                        && g_ldt[idx + c].base == ((DWORD)seg << 4) + ((DWORD)c << 16))
+                                        dpmi_ldt_release(idx + c);
+                                p = zput(p, " -> DOSfree seg=0x"); p = zhex(p, seg);
+                                p = zput(p, " sel 0x"); p = zhex(p, dsel); p = zput(p, " released");
+                                if (nch > 1) { p = zput(p, " (chain of "); p = zhex(p, (DWORD)nch); p = zput(p, ")"); } }
                             break; }
                         case 0x0102: {                             /* resize DOS memory block: BX=new paras, DX=sel */
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), max = 0;
                             if (idx >= 1 && idx < DPMI_LDT_MAX && g_ldt[idx].base) {
                                 uint16_t seg = (uint16_t)(g_ldt[idx].base >> 4);
-                                int err = dos_resize(NULL, seg, want, &max);
+                                /* #268: a 0100h block owns a CHAIN (one descriptor per 64 KB).
+                                   Growing past it needs the indices right after the chain to be
+                                   free -- the spec's 8011h when they are not, and then the DOS
+                                   block is not touched. Shrinking gives the surplus back. */
+                                int kb = -1, bi, nold = 1, nnew = dpmi_dosmem_count(want), c, err;
+                                for (bi = 0; bi < g_dpmi_ndosblk; ++bi)
+                                    if (g_dpmi_dosblk[bi] == seg && (g_ldt[idx].base & 0xF) == 0) { kb = bi; break; }
+                                if (kb >= 0 && g_dpmi_dosblk_n[kb] > 1) nold = g_dpmi_dosblk_n[kb];
+                                if (kb < 0) nnew = 1;              /* not a 0100h block: one descriptor, as before */
+                                for (c = nold; c < nnew; ++c)
+                                    if (!dpmi_ldt_free_at(idx + c)) break;
+                                if (c < nnew) {
+                                    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                    VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
+                                    p = zput(p, " -> resize REFUSED: descriptor 0x"); p = zhex(p, (DWORD)((idx + c) << 3) | 7);
+                                    p = zput(p, " after the chain is in use (8011h)");
+                                    break;
+                                }
+                                err = dos_resize(NULL, seg, want, &max);
+                                if (!err && kb >= 0) {
+                                    for (c = nold; c < nnew; ++c) dpmi_ldt_claim(idx + c);
+                                    for (c = nnew; c < nold; ++c)
+                                        if (g_ldt[idx + c].access != 0
+                                            && g_ldt[idx + c].base == ((DWORD)seg << 4) + ((DWORD)c << 16))
+                                            dpmi_ldt_release(idx + c);
+                                    if (kb >= 0) g_dpmi_dosblk_n[kb] = (BYTE)nnew;
+                                    dpmi_dosmem_install(idx, nnew, seg, want);
+                                }
                                 if (err) {
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                     VDM_SET16(tib, VTIB_EAX, err);       /* DOS error (7/8/9) */
                                     VDM_SET16(tib, VTIB_EBX, max);       /* largest available (paras) */
                                     p = zput(p, " -> resize FAIL max=0x"); p = zhex(p, max);
                                 } else {
-                                    g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
-                                    dpmi_install(idx);
+                                    if (kb < 0) {                  /* not ours: the one descriptor, as before */
+                                        g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
+                                        dpmi_install(idx);
+                                    }
                                     p = zput(p, " -> resize seg=0x"); p = zhex(p, seg);
                                     p = zput(p, " to 0x"); p = zhex(p, want); p = zput(p, " paras");
+                                    if (nnew != nold) { p = zput(p, " chain 0x"); p = zhex(p, (DWORD)nold);
+                                                        p = zput(p, "->0x"); p = zhex(p, (DWORD)nnew); }
                                 }
                             } else {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8022);  /* invalid sel */
@@ -24444,7 +24659,22 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
                             break;
                         case 0x0006: {                             /* get base of sel BX -> CX:DX */
-                            DWORD b = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
+                            DWORD b;
+                            /* ── #268: A SELECTOR THAT IS NOT THE CLIENT'S IS 8022h HERE TOO.
+                                 dpmi_sel_base() answers g_dpmi_code_base for anything it does
+                                 not know, so a null, GDT, freed or never-allocated selector got
+                                 CF=0 and the CODE SEGMENT'S base -- a plausible number for a
+                                 selector that names nothing. Same rule as 0001h/0007h-000Ah
+                                 (dpmi_client_sel_ok), with the same WOW exception. CX:DX are
+                                 left as the client passed them. */
+                            if (!dpmi_client_sel_ok((WORD)VDM_REG(tib, VTIB_EBX))) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
+                                p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                                p = zput(p, " -> REFUSED: invalid selector (8022h)");
+                                break;
+                            }
+                            b = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
                             VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> base 0x"); p = zhex(p, b);
@@ -24465,6 +24695,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                                 p = zput(p, " -> REFUSED: invalid selector (8022h)");
                                 break;
+                            }
+                            /* ── #268: THE VALUE, ONCE THE SELECTOR IS GOOD (dpmi_svc.h).
+                                 0007h base past XP's LDT cap -> 8025h; 0008h limit above 1 MB
+                                 without its low 12 bits set -> 8021h; 0009h access word that
+                                 is no code/data descriptor -> 8021h. Each used to answer CF=0
+                                 and either round silently (0008h) or leave the old descriptor
+                                 live behind an install the kernel refused (0007h). The table
+                                 is NOT touched on a refusal. ⚠ Not under WOW: krnl386 owns
+                                 its table and was never measured against these refusals. */
+                            if (!g_wow_shadow) {
+                                DWORD cxdx = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                                WORD  rerr = 0;
+                                if (ax == 0x0007 && !dpmi_base_ok(cxdx, XP_LDT_MAX_LINEAR)) rerr = DPMI_E_INVALID_LINEAR;
+                                if (ax == 0x0008 && !dpmi_limit_ok(cxdx)) rerr = DPMI_E_INVALID_VALUE;
+                                if (ax == 0x0009 && !dpmi_access_ok((WORD)VDM_REG(tib, VTIB_ECX))) rerr = DPMI_E_INVALID_VALUE;
+                                if (rerr) {
+                                    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                    VDM_SET16(tib, VTIB_EAX, rerr);
+                                    p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                                    p = zput(p, ax == 0x0009 ? " CX=0x" : " CX:DX=0x");
+                                    p = zhex(p, ax == 0x0009 ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : cxdx);
+                                    p = zput(p, rerr == DPMI_E_INVALID_LINEAR ? " -> REFUSED: base past the LDT cap (8025h)"
+                                              : ax == 0x0008 ? " -> REFUSED: limit > 1 MB not page-granular (8021h)"
+                                                             : " -> REFUSED: not a code/data access word (8021h)");
+                                    break;
+                                }
                             }
                             if (ax == 0x0007) {                    /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
@@ -24689,23 +24945,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)ia;
                             const DWORD pool_bytes = 0x04000000u;          /* 64 MB            */
                             const DWORD pool_pages = pool_bytes >> 12;     /* 0x4000 pages     */
+                            uint32_t mi[DPMI_MEMINFO_DWORDS];
+                            DWORD used;
                             int i;
                             if (!mem_readable((ULONG_PTR)ia, 0x30)) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
                                 p = zput(p, " -> meminfo REFUSED: ES:EDI 0x"); p = zhex(p, ia);
                                 p = zput(p, " unreadable"); break;
                             }
-                            for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
-                            info[0] = pool_bytes;                  /* largest free block, bytes */
-                            info[1] = pool_pages;                  /* max unlocked page alloc   */
-                            info[2] = pool_pages;                  /* max locked page alloc     */
-                            info[3] = pool_pages;                  /* total linear address space*/
-                            info[4] = pool_pages;                  /* total unlocked pages      */
-                            info[5] = pool_pages;                  /* free pages                */
-                            info[6] = pool_pages;                  /* total physical pages      */
-                            info[7] = pool_pages;                  /* free linear address space */
-                            info[8] = 0;                           /* no paging file            */
-                            p = zput(p, " -> meminfo 64MB/0x4000 pages");
+                            /* ── #268: THE FREE COUNTS NOW MOVE WITH WHAT THE CLIENT HOLDS.
+                                 They said the whole pool for ever; dpmi_meminfo() (dpmi_svc.h)
+                                 is the block, field by field, against the live 0501h pages.
+                                 ⚠ Duke3D sizes itself from this call (the dpmi_caller_off note
+                                   above): it is the guest to re-gate. */
+                            used = dpmi_owned_pages();
+                            dpmi_meminfo(mi, pool_pages, used);
+                            for (i = 0; i < DPMI_MEMINFO_DWORDS; ++i) info[i] = mi[i];
+                            p = zput(p, " -> meminfo pool 0x"); p = zhex(p, pool_pages);
+                            p = zput(p, " pages, client holds 0x"); p = zhex(p, used);
+                            p = zput(p, ", largest free 0x"); p = zhex(p, mi[0]);
                             break; }
                         /* ── ★★★ 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
                              The other half of the VESA linear framebuffer. 4F01 reports
@@ -25227,7 +25485,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     int cbslot = dpmi_cb_slot_at(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS),
                                                                  DOS_HDLR_SEG, (WORD)VDM_REG(tib,VTIB_EIP));
                                     if (cbslot >= 0 && g_cb[cbslot].used) {
-                                        dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
+                                        dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; resumes at the RMCS CS:IP the procedure set (#267) */
                                         continue;
                                     }
                                     p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
