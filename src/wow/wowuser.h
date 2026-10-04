@@ -5342,11 +5342,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
         }
         if (!peek && wowmsg_quit_for((g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask)) {
-            m.hwnd = 0; m.msg = WM_QUIT16; m.wparam = g_wm_quitcode;
+            WORD qcode = wowmsg_take_quit(
+                wowmsg_quit_for((g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask));
+            m.hwnd = 0; m.msg = WM_QUIT16; m.wparam = qcode;
             m.lparam = 0; m.time = 0; m.ptx = m.pty = 0;
             wowmsg_write(lp, &m);
             wu_puts(note, notecap, &k, "GetMessage -> WM_QUIT (PostQuitMessage 0x");
-            wu_puthex(note, notecap, &k, g_wm_quitcode, 4);
+            wu_puthex(note, notecap, &k, qcode, 4);
             wu_puts(note, notecap, &k, ") -- the loop ends");
             wow32_setret(f, 0);
             return 1;
@@ -5406,9 +5408,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          would let it overtake messages already posted. */
     case WOWUSER_POSTQUITMESSAGE: {
         int k = 0;
-        g_wm_quit = 1;
-        g_wm_quittask = (g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask;   /* s92 #306 */
-        g_wm_quitcode = wow32_argw(f, PQM_ARG_EXITCODE);
+        wowmsg_post_quit((g_wu_curtask == 0xFFFF) ? 0 : g_wu_curtask,  /* s92 #306 */
+                         wow32_argw(f, PQM_ARG_EXITCODE));
         wu_puts(note, notecap, &k, "PostQuitMessage 0x");
         wu_puthex(note, notecap, &k, g_wm_quitcode, 4);
         wu_puts(note, notecap, &k, " -- the next drained queue ends the loop");

@@ -217,9 +217,16 @@ static WORD     g_wm_quitcode = 0;
      old behaviour), `g_wm_owner` names a window's task (0 = unknown, anyone's).
      A thread message (hwnd 0) is anyone's too. And PostQuitMessage ends the loop
      of the task that called it, not every task's. */
-static WORD     g_wm_quittask = 0;
 static WORD     g_wm_taker = 0;
 static WORD   (*g_wm_owner)(WORD hwnd) = 0;
+/* ⚠ ONE PENDING QUIT PER TASK, CLEARED WHEN IT IS TAKEN -- Win16's queue flag. A
+     single slot lost Calc's: Calc posted its quit, WinHelp (closing because Calc
+     told it to) posted its own before Calc collected, WinHelp got WM_QUIT and Calc
+     waited forever with the host alive (#306's own symptom). Cleared on delivery
+     so a later task on the same TDB selector does not inherit it. */
+#define WOWMSG_MAXQUIT 8
+static struct { WORD task, code; } g_wm_quits[WOWMSG_MAXQUIT];
+static int      g_wm_nquit = 0;
 
 static int wowmsg_is_for(WORD hwnd, WORD task)
 {
@@ -228,9 +235,39 @@ static int wowmsg_is_for(WORD hwnd, WORD task)
     o = g_wm_owner(hwnd);
     return !o || o == task;
 }
+static void wowmsg_post_quit(WORD task, WORD code)
+{
+    int i;
+    for (i = 0; i < g_wm_nquit; ++i) if (g_wm_quits[i].task == task) break;
+    if (i == g_wm_nquit) {
+        if (g_wm_nquit == WOWMSG_MAXQUIT) {          /* full: the oldest goes */
+            for (i = 1; i < g_wm_nquit; ++i) g_wm_quits[i - 1] = g_wm_quits[i];
+            --g_wm_nquit;
+        }
+        i = g_wm_nquit++;
+    }
+    g_wm_quits[i].task = task; g_wm_quits[i].code = code;
+    g_wm_quit = 1; g_wm_quitcode = code;
+}
+/* 1 + the index of `task`'s pending quit (a task-0 quit is anyone's), or 0. */
 static int wowmsg_quit_for(WORD task)
 {
-    return g_wm_quit && (!g_wm_quittask || !task || g_wm_quittask == task);
+    int i;
+    for (i = 0; i < g_wm_nquit; ++i)
+        if (!task || !g_wm_quits[i].task || g_wm_quits[i].task == task) return i + 1;
+    return 0;
+}
+/* Deliver it: the exit code, and the flag is cleared. */
+static WORD wowmsg_take_quit(int q)
+{
+    WORD code;
+    int i;
+    if (q < 1 || q > g_wm_nquit) return 0;
+    code = g_wm_quits[q - 1].code;
+    for (i = q; i < g_wm_nquit; ++i) g_wm_quits[i - 1] = g_wm_quits[i];
+    --g_wm_nquit;
+    g_wm_quit = g_wm_nquit > 0;
+    return code;
 }
 /* ★ WHO A KEYSTROKE IS FOR. Win16 sends keyboard input to the focus window, and
      SYSEDIT sets one (USER 0x16 SETFOCUS, four times in a launch). With no
