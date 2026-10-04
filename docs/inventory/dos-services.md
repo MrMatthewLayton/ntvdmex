@@ -84,7 +84,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `19h` | get current drive | **IMPL** | `:2290-2296` | **oracle** (`p_drv`, `p_curdir`) |
 | `1Ah`/`2Fh` | set / get DTA | **IMPL** | `:2286-2289` | via `p_find` |
 | `1Bh`/`1Ch` | allocation information | **IMPL** | `:1366-1385`; geometry from the host volume, media byte `F8h` | **oracle**, CF only (`p_rest`) |
-| `1Fh` | default drive's DPB | **PART** | `:1386-1415`: a **synthesised** DPB — sector size, cluster size and count are real; FAT count, reserved sectors, root entries, media byte are constants; no FAT, no next-DPB chain | **oracle**, AL only |
+| `1Fh` | default drive's DPB | **PART** | `:1386-1415`: a **synthesised** DPB — sector size, cluster size and count are real; FAT count, reserved sectors, root entries, media byte are constants; no FAT, no next-DPB chain. **#48 (2026-10-04):** built by the chain's `dos_dpb_build` now — FAT sectors / root start / data start are **derived** by FAT's rules (`dos_dpb_fat_layout`; reproduces 6.22's floppy DPB byte for byte, `sysvars_test.c`), device pointer = the block driver; still a separate copy, not a pointer into the chain | **oracle**, AL only; `p_devchn dpb.c.layout` **owed an oracle run** |
 | `23h` | FCB file size in records | **IMPL** | `:1237-1253` | untested |
 | `24h` | set random record field | **IMPL** | `:1254-1258` | untested |
 | `25h`/`35h` | set / get interrupt vector | **IMPL** | `:2242-2251` | untested |
@@ -102,7 +102,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 |---|---|---|---|---|
 | `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208) | **oracle** while the rig is set to 6.22 — see [sweep.md](sweep.md) |
 | `31h` | terminate and stay resident | **IMPL** | `:1446-1463`; the host resizes and keeps vectors | **oracle** except `tsr.paras.still.held` (`0x26` vs `0x21`, open) |
-| `32h` | DPB for drive DL | **PART** | as `1Fh` (`:1386-1415`) | **oracle**, AL only (`p_rest`) |
+| `32h` | DPB for drive DL | **PART** | as `1Fh` (`:1386-1415`), including #48's derived FAT layout | **oracle**, AL only (`p_rest`); `p_devchn dpb.c.layout` owed |
 | `33h` | Ctrl-Break flag, boot drive, true version | **IMPL** | `:2335-2368`; `00h`–`02h` state, `05h` = C:, `06h` true version | **oracle** (`p_subfn`, `p_ver`) |
 | `34h` | InDOS flag address | **PART** | `:1580-1581` returns `ES:BX` into the SDA, but **the byte is never set** — it reads 0 even while `01h`/`0Ah` wait, where real DOS shows 1 | **oracle**, CF only (`int21.34.indos`) |
 | `36h` | free disk space | **IMPL** | `:2074-2093`; bad drive = `AX=FFFFh` with CF clear; counts clamped to 16 bits | **oracle** (`p_dir`) |
@@ -142,7 +142,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
 | `50h`/`51h`/`62h` | set / get current PSP | **IMPL** | `:2282-2285` | **oracle** (`p_psp psp.50.dispatch`) |
-| `52h` | List of Lists | **PART** | `:2163-2179`: the first MCB (`BX-2`), LASTDRIVE and the UMB head are real; **the SFT, CDS and DPB chains are stubs** — `p_sysvar`'s six BUF rows read back the probe's poison | **oracle** for the MCB head (`p_alloc`); 6 rows open (`p_sysvar`) |
+| `52h` | List of Lists | **PART** | `:2163-2179`: the first MCB (`BX-2`), LASTDRIVE and the UMB head are real; **the SFT, CDS and DPB chains are stubs** — `p_sysvar`'s six BUF rows read back the probe's poison. ⚠ Superseded in part (s52/s72): DPB chain, CDS array and a terminated SFT block exist. **#207/#48 (2026-10-04):** the first MCB is `7Eh`, **above** SysVars' `72h` (was `5Fh`, which made MEM /D's MSDOS row negative); NUL links to IO.SYS's twelve headers (CON AUX PRN CLOCK$ block COM1 LPT1-3 COM2-4) at `0060:0000`, terminated, with `+08h`/`+0Ch` naming CLOCK$/CON — order/stride measured, **attribute words RBIL's, unmeasured**; DPB FAT layout derived; `+45h` = `CMOS_EXT_KB` (15360) = INT 15h `88h`, XMS pool = that − 64 K HMA. **Still open:** SFT entries do not mirror open handles (all zero, a free table) | **oracle** for the MCB head (`p_alloc`); 6 rows abstained (`p_sysvar`); `p_devchn` (layout, every device's attribute/order, DPB layout) and MEM /D **owed an oracle run** |
 | `53h` | BPB → DPB, and XP COMMAND.COM's private `AL` queries | **PART** | `:1464-1548`: `AL=00h`–`07h` from a table measured on **stock XP NTVDM** (`g_dos_int53`, `:22-31`); ⚠ `AL=05h` is context-dependent (the shell's interactive gate). The documented BPB→DPB translation is **not** implemented | stock NTVDM (`p_int53`) — `p_int53f` owed a supervised run |
 | `54h` | get verify flag | **IMPL** | `:1578-1579` | **oracle** (`p_file`) |
 | `55h` | create child PSP | **PART** | `:1432-1445`: as `26h`, copies the top-level PSP | untested |
@@ -307,4 +307,6 @@ stay on the rig.
    FCB records over 512 bytes, `26h`/`55h` from the current PSP.
 5. Ctrl-C → INT 23h, critical errors → INT 24h, INT 28h during waits, and the InDOS byte
    — the four pieces of DOS's own machinery that are absent.
-6. The List of Lists' SFT/CDS/DPB chains (`p_sysvar`), which krnl386 walks.
+6. The List of Lists' SFT/CDS/DPB chains (`p_sysvar`), which krnl386 walks. (#48,
+   2026-10-04: DPB layout, device chain and the first-MCB position done, owed `p_devchn`
+   + MEM /D on the oracle; SFT entries mirroring open handles is what remains.)

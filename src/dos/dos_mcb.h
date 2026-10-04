@@ -79,17 +79,42 @@ static inline void mcb_set_name(volatile uint8_t *base, uint16_t psp_seg, const 
 
 /* Lay down the initial MCB chain over conventional memory and return the chain
  * root (first MCB paragraph). Three physically-contiguous blocks up to 640KB:
- *   0x005F env block    -> data at ENV_SEG (0x60), owned by our PSP
- *   0x0070 DOS resident -> filler standing in for resident DOS (owner 8)
+ *   0x007E env block    -> data at ENV_SEG (0x7F), owned by our PSP
+ *   0x008F DOS resident -> owner 8: the AH=65h tables, DPBs, stubs (DOS_CTAB_SEG 0x90)
  *   0x00FF program block-> 'Z' (last), owns ALL remaining memory; .EXEs shrink
  *                          this via AH=4Ah at startup to free the tail.
- * (0x5F+1+0x10=0x70; 0x70+1+0x8E=0xFF; 0xFF+1+0x9EC0=0x9FC0 -- the EBDA
- * boundary, not 640K; see DOS_MEM_TOP.) */
+ * (0x7E+1+0x10=0x8F; 0x8F+1+0x6F=0xFF; 0xFF+1+0x9EC0=0x9FC0 -- the EBDA
+ * boundary, not 640K; see DOS_MEM_TOP.)
+ *
+ * ── ★ #207: THE CHAIN STARTS ABOVE SysVars, AS IT DOES ON EVERY REAL DOS. ─────────
+ *   It used to start at 0x5F (env 0x60, DOS filler 0x70), BELOW SysVars' segment 0x72.
+ *   MEM /D does not walk the kernel's data: it prints fixed rows and derives two of them
+ *   from AH=52h (measured, runs/s81_mem/oracle_memd.txt vs ntvdmex_memd3.log):
+ *       00070 .. SysVars seg      "IO     System Data"   (6.22: 0070..0116 = 2,656)
+ *       SysVars seg .. ES:BX-2    "MSDOS  System Data"   (6.22: 0116..0253 = 5,072)
+ *   With the first MCB at 0x5F the MSDOS row was 0x5F-0x72 paragraphs -- NEGATIVE,
+ *   printed "4,294,96" -- and the env and filler blocks were then listed AGAIN by the
+ *   chain walk. Now everything below 0x7E is kernel data outside the chain (the IVT,
+ *   BDA, our handler segment 0x50, the device headers at 0x60, [0x714] and SysVars/SDA
+ *   at 0x72), which is the shape of IO.SYS + MSDOS.SYS on 6.22.
+ * ⚠ WHAT DID NOT MOVE, ON PURPOSE: the program block (0xFF, PSP 0x100, same size, so
+ *   the free block, PSP+2 and "Largest executable" are byte-identical -- s73 moved the
+ *   environment to the TOP of memory, which moved PSP+2, and every DOS extender #GP'd;
+ *   this move is BELOW the program and leaves PSP+2 alone); the same three blocks with
+ *   the same owners in the same order; and DOS_CTAB_SEG (0x90), the first data paragraph
+ *   of the DOS block exactly as before. Bytes below the first MCB grow by 0x1F
+ *   paragraphs and the DOS block shrinks by exactly 0x1F, so MEM /C's MSDOS total
+ *   (kernel area + owner-8 blocks) is unchanged by construction. */
+#define DOS_FIRST_MCB    0x007Eu   /* the env block's MCB; ES:BX-2 of AH=52h          */
+#define DOS_ENV_PARAS    0x0010u   /* 256 bytes -- dos_env.h's DOS_ENV_CAP            */
+#define DOS_RESBLK_MCB   0x008Fu   /* DOS's own block; data at 0x90 = DOS_CTAB_SEG    */
+#define DOS_RESBLK_PARAS ((uint16_t)(DOS_PSP_SEG - 1 - DOS_RESBLK_MCB - 1)) /* 0x6F    */
 static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
-    mcb_lay(base, 0x005F, 'M', DOS_PSP_SEG, 0x0010);
-    mcb_lay(base, 0x0070, 'M', 0x0008,      0x008E);
-    mcb_lay(base, 0x00FF, 'Z', DOS_PSP_SEG, (uint16_t)(DOS_MEM_TOP - 0x0100));
-    return 0x005F;
+    mcb_lay(base, DOS_FIRST_MCB,  'M', DOS_PSP_SEG, DOS_ENV_PARAS);
+    mcb_lay(base, DOS_RESBLK_MCB, 'M', 0x0008,      DOS_RESBLK_PARAS);
+    mcb_lay(base, (uint16_t)(DOS_PSP_SEG - 1), 'Z', DOS_PSP_SEG,
+            (uint16_t)(DOS_MEM_TOP - DOS_PSP_SEG));
+    return DOS_FIRST_MCB;
 }
 
 /* --- reserve `paras` at the TOP of the chain for resident DOS data ---------- *

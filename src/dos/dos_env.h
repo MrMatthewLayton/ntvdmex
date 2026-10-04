@@ -40,7 +40,10 @@ static inline volatile uint8_t *dos_env_puts(volatile uint8_t *p, const char *s)
      kernel's VDM interrupt-state dword, which dos_layout.h records as breaking
      EVERY guest when written from user mode. Nothing here was bounded before,
      which was survivable while every string was a literal and stopped being so the
-     moment PATH and the program path became host-supplied. Both are truncated. */
+     moment PATH and the program path became host-supplied. Both are truncated.
+   ⚠ #207: the block is now at 0x7F (DOS_ENV_SEG), still 0x10 paragraphs, and what
+     follows it is the DOS block's MCB header at linear 0x8F0 (DOS_RESBLK_MCB) -- an
+     overrun now breaks the MCB chain instead of [0x714]. Different landmine, same cap. */
 #define DOS_ENV_CAP   0x100
 
 static inline volatile uint8_t *dos_env_putv(volatile uint8_t *p,

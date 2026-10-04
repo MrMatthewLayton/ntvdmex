@@ -145,14 +145,120 @@ int main(void)
     eq("built DPB: free count is FFFF, never a number we did not count",
        buf[DPB_FREECOUNT] | (buf[DPB_FREECOUNT + 1] << 8), 0xFFFF);
 
+    /* ── ★ #48: THE DERIVED FAT LAYOUT REPRODUCES 6.22's OWN FLOPPY DPB, ALL 33 BYTES.
+         Fed only what a 1.44M floppy's GetDiskFreeSpace + FORMAT's fixed choices give
+         (512 B/sector, 1 sector/cluster, 224 root entries, highest cluster 2848, media
+         F0) plus the oracle's own pointers (device 0070:006B, next 0116:138B), the
+         builder must produce the oracle's bytes exactly -- FAT=9, root start=19, data
+         start=33 included. That is what makes the derivation DOS's arithmetic and not a
+         plausible guess; the fixed-disk values follow the same rules. */
     memset(buf, 0xAA, sizeof(buf));
-    dos_nul_build(buf, 0xFFFF, 0xFFFF);
+    dos_dpb_build(buf, 0, 512, 1, 224, 0x0B20, 0xF0, 0x0070, 0x006B, 0x0116, 0x138B);
+    {   int k, bad = -1;
+        for (k = 0; k < DPB_LEN; ++k) if (buf[k] != ORACLE_DPB[k]) { bad = k; break; }
+        ++checks;
+        if (bad >= 0) {
+            ++fails;
+            printf("  FAIL %-54s at +0x%02X: got 0x%02X, want 0x%02X\n",
+                   "built floppy DPB == 6.22's sysvars.dpb0, byte for byte", bad,
+                   buf[bad], ORACLE_DPB[bad]);
+        }
+    }
+    eq("oracle DPB +0B data start = 33", ORACLE_DPB[DPB_DATASTART] | (ORACLE_DPB[DPB_DATASTART + 1] << 8), 33);
+    eq("oracle DPB +11 root start = 19", ORACLE_DPB[DPB_ROOTSTART] | (ORACLE_DPB[DPB_ROOTSTART + 1] << 8), 19);
+    {   unsigned fs, rs, ds;
+        /* A fixed disk clamped to 0xFFFE clusters: FAT16, 65535 entries x 2 bytes. */
+        dos_dpb_fat_layout(512, 512, 0xFFFE, &fs, &rs, &ds);
+        eq("FAT16 (highest 0xFFFE): 256 sectors per FAT", fs, 256);
+        eq("FAT16: root starts after 1 reserved + 2 FATs = 513", rs, 513);
+        eq("FAT16: data starts after 512 root entries (32 sectors) = 545", ds, 545);
+        /* The FAT12/FAT16 line is 4085 clusters: highest 0xFF5 is FAT12, 0xFF6 FAT16. */
+        dos_dpb_fat_layout(512, 512, 0xFF5, &fs, &rs, &ds);
+        eq("highest 0xFF5 is FAT12: ceil(4086*1.5/512) = 12 sectors", fs, 12);
+        dos_dpb_fat_layout(512, 512, 0xFF6, &fs, &rs, &ds);
+        eq("highest 0xFF6 is FAT16: ceil(4087*2/512) = 16 sectors", fs, 16);
+        /* A 4 KB-sector volume: the root (512 x 32 = 16 KB) is 4 sectors. */
+        dos_dpb_fat_layout(4096, 512, 0x8000, &fs, &rs, &ds);
+        eq("4096 B/sector: data start = root start + 4", ds - rs, 4);
+        /* A zero sector size must not divide by zero; it is read as 512. */
+        dos_dpb_fat_layout(0, 224, 0x0B20, &fs, &rs, &ds);
+        eq("bytes/sector 0 is taken as 512 (the floppy again: data start 33)", ds, 33);
+    }
+
+    /* ── #48: THE DEVICE CHAIN. Order and stride are MEASURED (6.22: CON 0070:0023,
+         AUX :0035, PRN :0047, CLOCK$ :0059, the block driver :006B -- 18 bytes apart);
+         the attribute words are RBIL's and are not (p_devchn.asm is the check). */
+    eq("6.22: AUX - CON = one header (0x35-0x23)", 0x35 - 0x23, DEV_OFF(DEV_AUX) - DEV_OFF(DEV_CON));
+    eq("6.22: PRN - CON = two headers (0x47-0x23)", 0x47 - 0x23, DEV_OFF(DEV_PRN) - DEV_OFF(DEV_CON));
+    eq("6.22: CLOCK$ - CON = three headers (+08 0x59 - +0C 0x23)",
+       svw(SV_CLOCK) - svw(SV_CON), DEV_OFF(DEV_CLOCK) - DEV_OFF(DEV_CON));
+    eq("6.22: the floppy DPB's block driver - CON = four headers (0x6B-0x23)",
+       (ORACLE_DPB[DPB_DEVHDR] | (ORACLE_DPB[DPB_DEVHDR + 1] << 8)) - svw(SV_CON),
+       DEV_OFF(DEV_BLOCK) - DEV_OFF(DEV_CON));
+    eq("a device header is 18 bytes, as NUL's", DEVHDR_LEN, SV_NUL_LEN);
+    memset(buf, 0xAA, sizeof(buf));
+    dos_devchain_build(buf, 0x0060, 3);
+    {   static const char *want[DEV_COUNT] = { "CON     ", "AUX     ", "PRN     ",
+            "CLOCK$  ", 0, "COM1    ", "LPT1    ", "LPT2    ", "LPT3    ",
+            "COM2    ", "COM3    ", "COM4    " };
+        unsigned off = 0, seg = 0x0060, n = 0;
+        /* walk it as a guest would: from CON, by the `next` pointers, until FFFF */
+        for (;;) {
+            const unsigned char *h = buf + off;
+            unsigned nx = h[0] | (h[1] << 8), ns = h[2] | (h[3] << 8);
+            unsigned at = h[4] | (h[5] << 8);
+            ++checks;
+            if (n >= DEV_COUNT) { ++fails; printf("  FAIL %-54s\n", "device chain runs past 12"); break; }
+            if (want[n]) {
+                if (memcmp(h + DEVHDR_NAME, want[n], 8) != 0 || !(at & 0x8000)) {
+                    ++fails; printf("  FAIL device %u: name/char-attr wrong\n", n);
+                }
+            } else if ((at & 0x8000) || h[DEVHDR_NAME] != 3) {
+                ++fails; printf("  FAIL %-54s\n", "block driver: attr bit 15 clear, name[0] = units");
+            }
+            eq("strategy entry = the 'unknown command' stub", h[6] | (h[7] << 8), DEV_STUB_UNKNOWN);
+            eq("interrupt entry = the RETF stub", h[8] | (h[9] << 8), DEV_STUB_RETF);
+            ++n;
+            if (nx == 0xFFFF) break;
+            eq("next segment is the area's own", ns, seg);
+            off = nx;
+            if (off + DEVHDR_LEN > DEV_STUB_UNKNOWN) { ++fails; printf("  FAIL next off 0x%X\n", off); break; }
+        }
+        eq("the walk visits exactly 12 headers, then FFFF", n, DEV_COUNT);
+        eq("CON  attr 8013h", buf[DEV_OFF(DEV_CON) + 4] | (buf[DEV_OFF(DEV_CON) + 5] << 8), 0x8013);
+        eq("PRN  attr A0C0h", buf[DEV_OFF(DEV_PRN) + 4] | (buf[DEV_OFF(DEV_PRN) + 5] << 8), 0xA0C0);
+        eq("CLOCK$ attr 8008h (bit 3: the clock device)",
+           buf[DEV_OFF(DEV_CLOCK) + 4] | (buf[DEV_OFF(DEV_CLOCK) + 5] << 8), 0x8008);
+        /* the stubs: mov word [es:bx+3],8103h / retf, then retf */
+        {   static const unsigned char st[] = { 0x26,0xC7,0x47,0x03,0x03,0x81,0xCB, 0xCB };
+            ++checks;
+            if (memcmp(buf + DEV_STUB_UNKNOWN, st, sizeof st) != 0) {
+                ++fails; printf("  FAIL %-54s\n", "device stubs encode 8103h-and-RETF / RETF");
+            }
+            eq("RETF stub is the byte after the unknown-command stub", DEV_STUB_RETF, DEV_STUB_UNKNOWN + 7);
+            eq("the area ends just past the RETF stub", DEV_AREA_LEN, DEV_STUB_RETF + 1);
+            eq("headers end before the stubs", DEV_OFF(DEV_COUNT) <= DEV_STUB_UNKNOWN, 1);
+        }
+    }
+
+    memset(buf, 0xAA, sizeof(buf));
+    dos_nul_build(buf, 0x0060, DEV_OFF(DEV_CON), 0x10, 0x17);
     ++checks;
     if (memcmp(buf + 0x0A, "NUL     ", 8) != 0) {
         ++fails; printf("  FAIL %-54s\n", "built NUL header carries the name");
     }
     eq("built NUL attribute = 0x8004", buf[4] | (buf[5] << 8), 0x8004);
-    eq("built NUL chain terminates", buf[2] | (buf[3] << 8), 0xFFFF);
+    eq("built NUL links on to CON (was FFFF:FFFF)", buf[2] | (buf[3] << 8), 0x0060);
+    eq("built NUL strategy entry", buf[6] | (buf[7] << 8), 0x10);
+    {   unsigned char ns[DOS_NULSTUB_LEN];
+        static const unsigned char want[] = { 0x26,0xC7,0x47,0x03,0x00,0x01,0xCB,0xCB };
+        dos_nulstub_build(ns);
+        ++checks;
+        if (memcmp(ns, want, sizeof want) != 0) {
+            ++fails; printf("  FAIL %-54s\n", "NUL stubs encode done-0100h-and-RETF / RETF");
+        }
+        eq("NUL's interrupt entry is its RETF", ns[DOS_NULSTUB_INTR], 0xCB);
+    }
 
     /* ── ⚠⚠ THE TWO ABSOLUTE OFFSETS MEM.EXE READS IN THE SYSVARS SEGMENT. ──────
          Neither is a List-of-Lists field: MEM keeps the SEGMENT AH=52h returns,
@@ -187,9 +293,26 @@ int main(void)
         unsigned sv0 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF - 2u;
         unsigned sv1 = DOS_SYSVARS_SEG * 16u + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN;
         unsigned sda0 = DOS_SDA_SEG * 16u + DOS_SDA_OFF, sda1 = sda0 + DOS_SDA_LEN;
-        ++checks;
-        if (sv0 < 0x600u) {       /* the first MCB header is 0x5F0..0x5FF */
-            ++fails; printf("  FAIL %-54s\n", "SysVars must not reach the first MCB (0x5F0)");
+        /* ── ★ #207: SysVars' SEGMENT LIES BELOW THE FIRST MCB, AS ON 6.22 (0116 < 0253).
+             MEM /D prints "MSDOS System Data" = SysVars seg .. first MCB; with the chain
+             at 0x5F that was 0x5F - 0x72 paragraphs, printed as 4,294,96x. Every byte of
+             SysVars (from its -2 word) and of the SDA must sit below the first MCB header. */
+        eq("first MCB (ES:BX-2) above the SysVars segment",
+           DOS_FIRST_MCB > DOS_SYSVARS_SEG, 1);
+        eq("SysVars ends at or below the first MCB header", sv1 <= DOS_FIRST_MCB * 16u, 1);
+        eq("the SDA ends at or below the first MCB header", sda1 <= DOS_FIRST_MCB * 16u, 1);
+        eq("MEM /D's IO row (0070..SysVars seg) is not negative", DOS_SYSVARS_SEG >= 0x70, 1);
+        {   /* #48: the device headers at DOS_DEV_SEG, and NUL's stub in SysVars' segment */
+            unsigned d0 = DOS_DEV_SEG * 16u, d1 = d0 + DEV_AREA_LEN;
+            unsigned n0 = DOS_SYSVARS_SEG * 16u + DOS_NULSTUB_OFF, n1 = n0 + DOS_NULSTUB_LEN;
+            eq("device area clear of DOS_HDLR_SEG's 0x00..0xFF", d0 >= DOS_HDLR_SEG * 16u + 0x100u, 1);
+            eq("device area ends below 0x700 (and [0x714])", d1 <= 0x700u, 1);
+            eq("device area below the first MCB", d1 <= DOS_FIRST_MCB * 16u, 1);
+            eq("device area clear of the env block", d1 <= DOS_ENV_SEG * 16u, 1);
+            eq("NUL stub clear of the kernel's [0x714]", n0 >= 0x718u || n1 <= 0x714u, 1);
+            eq("NUL stub below SysVars' -2 word", n1 <= sv0, 1);
+            eq("NUL stub is an offset NUL's own segment can name", DOS_NULSTUB_OFF < 0x26u, 1);
+            eq("env block above the SDA", DOS_ENV_SEG * 16u >= sda1, 1);
         }
         ++checks;
         if (sv0 < 0x718u && sv1 > 0x714u) {
