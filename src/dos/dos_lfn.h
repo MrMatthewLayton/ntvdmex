@@ -282,14 +282,16 @@ static inline unsigned dos_ext_open_disp(unsigned action)
    ► #210: CREATE_ALWAYS ON A FILE THAT WAS NOT THERE IS "CREATED" (2), not "replaced".
      This answered 3 for every CREATE_ALWAYS -- RBIL's own table says otherwise, and
      716Ch "create or truncate" of a new long name is the probe's very first create. */
-static inline unsigned dos_ext_open_taken(unsigned disp, int existed)
+static inline unsigned dos_ext_open_taken(unsigned disp, int existed, int lfn)
 {
     switch (disp) {
     case DOS_DISP_CREATE_NEW:        return 2;
     case DOS_DISP_TRUNCATE_EXISTING: return 3;
-    /* s92, MEASURED (dospair p_lfn lfn.6C.12.new/.exists): stock says 3 ("replaced")
-       for action 12h whether the file existed or not. */
-    case DOS_DISP_CREATE_ALWAYS:     (void)existed; return 3;
+    /* s92, MEASURED (dospair p_lfn): stock's AH=6Ch says 3 ("replaced") for action 12h
+       whether the file existed or not (lfn.6C.12.new/.exists) -- but its 716Ch says 2
+       ("created") for a name that was not there (lfn.716C.create). Two arms, two
+       answers; the LFN one is RBIL's. */
+    case DOS_DISP_CREATE_ALWAYS:     return (lfn && !existed) ? 2 : 3;
     case DOS_DISP_OPEN_ALWAYS:       return existed ? 1 : 2;
     default:                         return 1;
     }

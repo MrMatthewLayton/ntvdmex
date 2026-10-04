@@ -2290,7 +2290,8 @@ int dos_int21(dos_machine_t *m)
         }
         else {
             uint16_t res = (uint16_t)dos_ext_open_taken((unsigned)disp,
-                                                        GetLastError() == ERROR_ALREADY_EXISTS);
+                                                        GetLastError() == ERROR_ALREADY_EXISTS,
+                                                        lfn_alias != 0);
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
                                         if (res != 1) dos_stamp_vdm_now(f); /* #263: created/truncated */ }
@@ -3243,7 +3244,10 @@ int dos_int21(dos_machine_t *m)
                 if (!dos_lfn_ft_to_dos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
                 else {
                     SET16(R_CX, dt); SET16(R_DX, dd);
-                    SET16(R_BX, (uint16_t)((R_BX & 0xFF) | ((uint16_t)cs << 8)));  /* stock: BH=C7h */
+                    /* ⚠ INTENDED DIVERGENCE (s92): for an exact even second stock answers
+                         BH=C7h (199) -- p_lfn lfn.71A7.ft2dos, one measurement -- where the
+                         spec's 10-ms remainder is 0. The spec outranks one oracle reading. */
+                    SET16(R_BX, (uint16_t)((R_BX & 0xFF) | ((uint16_t)cs << 8)));
                     OKCF();
                 }
             } else if (bla7 == 0x01) {          /* CX time, DX date, BH -> ES:DI QWORD */
