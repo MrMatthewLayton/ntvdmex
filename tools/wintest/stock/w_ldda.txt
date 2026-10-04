@@ -1,0 +1,29 @@
+#PROBE w16ldda
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=shallow.count SIG=AX AX=000A
+CASE=shallow.first.x SIG=AX AX=0000
+CASE=shallow.first.y SIG=AX AX=0000
+CASE=shallow.last.x SIG=AX AX=0009
+CASE=shallow.last.y SIG=AX AX=0004
+CASE=shallow.lparam.ok SIG=AX AX=0001
+CASE=steep.count SIG=AX AX=000A
+CASE=steep.first.x SIG=AX AX=0005
+CASE=steep.first.y SIG=AX AX=0002
+CASE=steep.last.x SIG=AX AX=0007
+CASE=steep.last.y SIG=AX AX=000B
+CASE=steep.lparam.ok SIG=AX AX=0001
+CASE=backwards.count SIG=AX AX=0011
+CASE=backwards.first.x SIG=AX AX=0014
+CASE=backwards.first.y SIG=AX AX=000A
+CASE=backwards.last.x SIG=AX AX=0004
+CASE=backwards.last.y SIG=AX AX=0002
+CASE=backwards.lparam.ok SIG=AX AX=0001
+CASE=point.count SIG=AX AX=0000
+CASE=point.first.x SIG=AX AX=0014
+CASE=point.first.y SIG=AX AX=000A
+CASE=point.last.x SIG=AX AX=0004
+CASE=point.last.y SIG=AX AX=0002
+CASE=point.lparam.ok SIG=AX AX=0001
+#END

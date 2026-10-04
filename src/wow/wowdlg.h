@@ -194,6 +194,22 @@ static int wowdlg_pump(int budget, int *trace)
             tq = zput(tq, "\r\n");
             log_append(LOG_PATH, tb, tq);
         }
+        /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
+             dialog Tab / Shift+Tab between its controls, Enter = the default button and
+             Esc = IDCANCEL -- without the program asking. This loop dispatched keys raw,
+             so Esc did nothing in TASKMAN's Task List (runs/s91/chain25). The controls are
+             real windows, so the OS's IsDialogMessage does the work; what it generates
+             (WM_COMMAND IDCANCEL/IDOK) reaches the dialog procedure through wowwin_proc
+             like a click does. Keyboard messages only, and only for the topmost modal
+             dialog or one of its children. */
+        if (m.message >= WM_KEYFIRST && m.message <= WM_KEYLAST && g_wd_depth > 0) {
+            HWND dlg = wowuser_hwnd32(g_wd[g_wd_depth - 1].hwnd);
+            if (dlg && IsWindow(dlg) && (m.hwnd == dlg || IsChild(dlg, m.hwnd))
+                && IsDialogMessageA(dlg, &m)) {
+                ++n; ++g_ww_pumped;
+                continue;
+            }
+        }
         TranslateMessage(&m);
         DispatchMessageA(&m);
         ++n; ++g_ww_pumped;

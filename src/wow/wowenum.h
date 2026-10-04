@@ -91,7 +91,9 @@ static void wowenum_line(int x0, int y0, int x1, int y1)
     if (dx < 0) dx = -dx;
     if (dy < 0) dy = -dy;
     g_we.x0 = x0; g_we.y0 = y0; g_we.x1 = x1; g_we.y1 = y1;
-    g_we.steps = (dx > dy ? dx : dy) + 1;
+    /* s91: THE END POINT IS EXCLUDED, as GDI's LineDDA excludes it (w_ldda vs stock:
+         (0,0)-(10,4) is 10 calls ending at (9,4); a zero-length line is none). */
+    g_we.steps = (dx > dy ? dx : dy);
     /* ⚠ AND IT IS BOUNDED. Every point is a 16-bit CALL, so a line across a large
          desktop is thousands of context switches -- correct, and slow enough to
          look like a hang. A diagonal of this display is ~2,000 points; 4,096 is
@@ -140,7 +142,10 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
 
     /* ★ THE CALLBACK'S VETO. Win16 says a callback returning 0 ends the
          enumeration, and the function then answers FALSE. */
-    if (!first && !(result & 0xFFFF)) {
+    /* s91: NOT FOR LineDDA -- its callback is VOID, so AX is whatever the procedure
+         left there; reading it as "stop" cut a line short at the first point whose y
+         happened to be 0 (tools/wintest/w_ldda: 1 call where stock makes 10). */
+    if (!first && g_we.kind != WOWENUM_LINE && !(result & 0xFFFF)) {
         wu_puts(note, cap, &k, "ENUM stopped by the callback after 0x");
         wu_puthex(note, cap, &k, g_we.calls, 4);
         wu_puts(note, cap, &k, " call(s) -- the caller returns FALSE");
@@ -279,8 +284,8 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
             wowenum_end();
             return 0;
         }
-        x = g_we.x0 + (g_we.steps > 1 ? MulDiv(dx, i, g_we.steps - 1) : 0);
-        y = g_we.y0 + (g_we.steps > 1 ? MulDiv(dy, i, g_we.steps - 1) : 0);
+        x = g_we.x0 + MulDiv(dx, i, g_we.steps);
+        y = g_we.y0 + MulDiv(dy, i, g_we.steps);
         g_we.idx = i + 1;
         arg[0] = (WORD)(short)x;
         arg[1] = (WORD)(short)y;
