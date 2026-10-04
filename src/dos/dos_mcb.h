@@ -109,12 +109,19 @@ static inline void mcb_set_name(volatile uint8_t *base, uint16_t psp_seg, const 
 #define DOS_ENV_PARAS    0x0010u   /* 256 bytes -- dos_env.h's DOS_ENV_CAP            */
 #define DOS_RESBLK_MCB   0x008Fu   /* DOS's own block; data at 0x90 = DOS_CTAB_SEG    */
 #define DOS_RESBLK_PARAS ((uint16_t)(DOS_PSP_SEG - 1 - DOS_RESBLK_MCB - 1)) /* 0x6F    */
-static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
+/* #136: the same chain over a SMALLER machine. `top` is the paragraph the 'Z' block ends
+   at -- DOS_MEM_TOP for the 640 KB machine, less when Settings > Conventional Memory asks
+   for one (bios_conv_top_para in bios_bda.h). Everything below the program block is
+   untouched by it; only the program block's size, and so PSP+2, follow the top. */
+static inline uint16_t dos_mcb_init_top(volatile uint8_t *base, uint16_t top) {
     mcb_lay(base, DOS_FIRST_MCB,  'M', DOS_PSP_SEG, DOS_ENV_PARAS);
     mcb_lay(base, DOS_RESBLK_MCB, 'M', 0x0008,      DOS_RESBLK_PARAS);
     mcb_lay(base, (uint16_t)(DOS_PSP_SEG - 1), 'Z', DOS_PSP_SEG,
-            (uint16_t)(DOS_MEM_TOP - DOS_PSP_SEG));
+            (uint16_t)(top - DOS_PSP_SEG));
     return DOS_FIRST_MCB;
+}
+static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
+    return dos_mcb_init_top(base, DOS_MEM_TOP);
 }
 
 /* --- reserve `paras` at the TOP of the chain for resident DOS data ---------- *

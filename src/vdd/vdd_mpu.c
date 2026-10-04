@@ -43,6 +43,27 @@ static void mpu_emit(mpu_state *st)
     if (st->sink) st->sink(st->sink_ctx, msg);
 }
 
+/* #136: SysEx assembly for an attached sysex_sink. No-ops without one. */
+static void mpu_sysex_put(mpu_state *st, uint8_t b)
+{
+    if (!st->sysex_sink || st->sysex_over) return;
+    if (st->sysex_len >= MPU_SYSEX_MAX) { st->sysex_over = 1; return; }
+    st->sysex[st->sysex_len++] = b;
+}
+static void mpu_sysex_begin(mpu_state *st)
+{
+    st->sysex_len = 0; st->sysex_over = 0;
+    mpu_sysex_put(st, 0xF0);
+}
+static void mpu_sysex_end(mpu_state *st)
+{
+    if (!st->sysex_sink) return;
+    mpu_sysex_put(st, 0xF7);
+    if (st->sysex_over) { st->sysex_dropped++; return; }
+    st->sysex_sent++;
+    st->sysex_sink(st->sysex_ctx, st->sysex, st->sysex_len);
+}
+
 /* Assemble a MIDI byte stream into whole messages. Two details matter for real
    game output: RUNNING STATUS (a stream may send several note-ons under one
    status byte, which is how sequencers save bandwidth) and realtime bytes, which
@@ -58,9 +79,19 @@ static void mpu_midi_byte(mpu_state *st, uint8_t b)
         st->status = save_status; st->data[0] = s0; st->data[1] = s1; st->ndata = n;
         return;
     }
-    if (b == 0xF0) { st->in_sysex = 1; return; }        /* sysex: swallowed         */
-    if (b == 0xF7) { st->in_sysex = 0; return; }
-    if (st->in_sysex) return;
+    /* SysEx: swallowed, unless a synth that wants it is attached (#136, see the header).
+       ⚠ The swallow path is byte-for-byte the old one, including that a status byte
+         inside an unterminated message is swallowed too. With a sink attached that byte
+         ENDS the message (MIDI 1.0: any status but a realtime one terminates SysEx); the
+         unfinished message is dropped and counted, and the status byte is handled as
+         what it is. */
+    if (b == 0xF0) { st->in_sysex = 1; mpu_sysex_begin(st); return; }
+    if (b == 0xF7) { if (st->in_sysex) mpu_sysex_end(st); st->in_sysex = 0; return; }
+    if (st->in_sysex) {
+        if (!st->sysex_sink) return;
+        if (!(b & 0x80)) { mpu_sysex_put(st, b); return; }
+        st->in_sysex = 0; st->sysex_dropped++;
+    }
 
     if (b & 0x80) {                             /* new status byte                 */
         st->status = b;
@@ -122,9 +153,11 @@ void vdd_mpu_reset(void *self)
     mpu_state *st = (mpu_state *)self;
     vdd_bus *bus = st->bus; uint16_t base = st->base;
     mpu_midi_sink sink = st->sink; void *ctx = st->sink_ctx;
+    mpu_sysex_sink xsink = st->sysex_sink; void *xctx = st->sysex_ctx;   /* #136 */
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
     st->bus = bus; st->base = base; st->sink = sink; st->sink_ctx = ctx;
+    st->sysex_sink = xsink; st->sysex_ctx = xctx;
 }
 
 int vdd_mpu_init(vdd_bus *b, void *self)
