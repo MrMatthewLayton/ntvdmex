@@ -34,10 +34,10 @@ INT 15h is where the surface thins: `AH=88h` reports the extended memory that XM
 | §1 INT 11h / 12h | 2 | 2 | — | — | — | — |
 | §2 INT 1Ah | 7 | 4 | — | — | 2 | 1 |
 | §3 INT 08h / INT 1Ch | 4 | 3 | — | — | 1 | — |
-| §4 INT 15h | 17 | 2 | 6 | — | 7 | 2 |
+| §4 INT 15h | 17 | 4 | 4 | — | 7 | 2 |
 | §5 INT 14h | 5 | 4 | — | — | 1 | — |
 | §6 INT 17h | 4 | 4 | — | — | — | — |
-| **Total** | **39** | **17** | **7** | **—** | **12** | **3** |
+| **Total** | **39** | **19** | **5** | **—** | **12** | **3** |
 
 ---
 
@@ -81,17 +81,17 @@ logged as `INT15 UNIMPL` (`:29193-29208`).
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
 | `24h` | A20 gate: disable / enable / status / support (`2400h`–`2403h`) | **MISS** | refused. The A20 flag already exists and is shared by the 8042, port `92h` and XMS (`vdd_input_a20_*`, `vdd_input.c:491-494`) | — |
-| `4Fh` | keyboard intercept (a hook the BIOS calls) | **IMPL** | #206: an explicit default handler, CF=1 with AL untouched — "process this key" (`main.c:29139-29143`). That our INT 09h never *calls* it is [keyboard.md](keyboard.md) §3 | **oracle** (`p_int15w`, 6.22 + DOSBox-X; PCem's AMI answers `AH=86h` and is recorded as such in `oracle-rules.json`) |
+| `4Fh` | keyboard intercept (a hook the BIOS calls) | **IMPL** | #206: an explicit default handler, CF=1 with AL untouched — "process this key" (`main.c:29139-29143`). #244: our INT 09h now CALLS it whenever IVT[15h] is hooked (`bios_kbdact.asm` `k4f`) — [keyboard.md](keyboard.md) §3 | **oracle** (`p_int15w`, 6.22 + DOSBox-X; PCem's AMI answers `AH=86h` and is recorded as such in `oracle-rules.json`) |
 | `80h`–`82h` | device open / close / program terminate (hooks) | **MISS** | refused with CF=1 | — |
 | `83h` | event wait (set bit 7 of `ES:BX` after CX:DX µs; `AL=01h` cancels) | **PART** | #206, V86: `main.c:29118-29138`; the BDA mirrors it (`0040:0098`–`00A0`); the flag is posted from the 1 kHz pacer (`i15_event_poll`, `main.c:5639-5650`); a second request while one runs is refused `AH=83h` CF=1. **PM refuses it** (`:22387-22391`) | **oracle** (`p_int15w`: 6.22, DOSBox-X, PCem and ours agree, #206) |
 | `84h` | joystick | **IMPL** | `:29144-29181`, from the gameport VDD's sample; no stick → `AH=86h` CF=1 | untested ([gameport.md](gameport.md)) |
 | `85h` | SysReq (a hook the BIOS calls) | **MISS** | never called (keyboard.md §3) | — |
 | `86h` | wait CX:DX microseconds | **IMPL** | #206, V86: re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. #256, PM: from the top-level PM loop the BOP is re-executed the same way (the loop keeps ticking the BIOS clock and delivering IRQ0); from a nested dispatch (an injected ISR, a callback) it waits in place with interrupts held | **oracle** for V86 (`p_int15w`, four hosts); PM on the rig only (`p_pm256` — no oracle runs a DPMI host) |
-| `87h` | move extended memory block | **PART** | V86 **IMPL** (`int15_move_block` `:8205`, arm `:29187-29192`; success = AH=0, CF=0, ZF=1); **PM refuses** it (`:22380`) | **oracle** for the V86 round trip (`p_int15` on PCem) |
+| `87h` | move extended memory block | **IMPL** | V86 (`int15_move_block`; success = AH=0, CF=0, ZF=1). #244: **PM too** — `ES:(E)SI` read as a PM pointer (selector base + offset, ESI for a 32-bit client) and the same copy (`int15_move_block_at`). ⚠ DPMI 0.9 reflects INT 15h untranslated, so a strict host would run it with a meaningless real-mode ES; translating is the only reading under which a PM caller's request means anything — a decision, recorded in the PM arm, unmeasured | **oracle** for the V86 round trip (`p_int15` on PCem); PM untested |
 | `88h` | extended memory size | **PART** | `:29071-29095`: always `3C00h` (15 MB). ⚠ **The same memory is also handed out by XMS**; a real machine with HIMEM reports 0 here. Recorded in the code and deliberately not changed. **#48 (2026-10-04):** the value is `CMOS_EXT_KB` in both modes, the same constant as CMOS and SysVars+`45h`; the XMS pool is that less the 64 K HMA (was 16384, more than the machine) | untested |
 | `89h` | switch to protected mode | **N/A** | a V86 guest cannot be handed the CPU; DPMI is the route | — |
 | `90h`/`91h` | device busy / interrupt complete (hooks) | **MISS** | never called by our INT 13h/16h waits | — |
-| `C0h` | system configuration table | **PART** | V86 **IMPL**: `ES:BX` → `DOS_CTAB_SEG:DOS_SYSCONF_OFF`, model bytes `FC 01 00` from PCem's AMI, feature bits set only where true (`:27543-27560`, arm `:29239-29243`) — feature 1 is `64h` since #253 (bit 2, EBDA, set; was `60h`). **PM refuses it**, knowingly (`:22390-22407`) | **oracle** (`p_int15` C0h on PCem) |
+| `C0h` | system configuration table | **IMPL** | V86 **IMPL**: `ES:BX` → `DOS_CTAB_SEG:DOS_SYSCONF_OFF`, model bytes `FC 01 00` from PCem's AMI, feature bits set only where true (`:27543-27560`, arm `:29239-29243`) — feature 1 is `74h`: bit 2 (EBDA, #253) and bit 4 (INT 09h calls `4Fh`, #244). #244: **PM answers it too** — `ES` = a selector over `DOS_CTAB_SEG` (`dpmi_seg_to_desc`, as INT 21h `34h`/`52h`), `BX` = `DOS_SYSCONF_OFF`. ⚠ The session-36 Win16 driver now takes its model-`FCh` (AT) path instead of its no-table path — **owed a Win16 shelf re-run** | **oracle** (`p_int15` C0h on PCem) |
 | `C1h` | EBDA segment | **PART** | #253: V86 **IMPL** — `ES=9FC0h`, CF=0, AX untouched (`main.c:29233-29238`), agreeing with INT 12h's 639 KB and `0040:000E`. **PM refuses it** (`:22404-22407`), like `C0h`: a segment in a PM `ES` would be a raw paragraph, not a selector. Now SeaBIOS-shaped; PCem's AMI and dosbox-x have no EBDA and abstain (`oracle-rules.json`) | **oracle** vs 6.22/SeaBIOS (`p_int15`) — owed a re-run |
 | `C2h` | PS/2 pointing device | **MISS** | [mouse.md](mouse.md) §3 | — |
 | `C3h`/`C4h` | watchdog / POS (MCA) | **N/A** | Micro Channel only | — |

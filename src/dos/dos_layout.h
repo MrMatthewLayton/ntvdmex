@@ -335,13 +335,16 @@
    block's end at 0x6F0. */
 #define DOS_AUXPRN_OFF    0x05B0
 #define DOS_AUXPRN_LEN    0x00B0
-/* GH #254: the BIOS INT 09h side-calls (bios_kbdact.h, 41 bytes). */
+/* GH #254: the BIOS INT 09h side-calls (bios_kbdact.h). #244/#274 added the INT 15h
+   AH=4Fh call and the default INT 05h: 69 bytes, so the slot grew 40h -> 50h and the
+   generic stubs below moved up by 10h into the block's last free 16 bytes. */
 #define DOS_KBDACT_OFF    0x0660
-#define DOS_KBDACT_LEN    0x0040
+#define DOS_KBDACT_LEN    0x0050
 /* s91 (#315): GENERIC VDD INTERRUPT STUBS -- one `BOP 5Bh ; IRET` per vector a device
    claimed that has no stub of its own (a third-party driver's INT 61h, say). 16 slots
-   x 4 bytes, 0x6A0..0x6DF, below the block's end at 0x6F0. See vdd_plant_generic_ints. */
-#define DOS_GENSTUB_OFF   0x06A0
+   x 4 bytes, 0x6B0..0x6EF -- the block's last byte is 0x6EF. See vdd_plant_generic_ints.
+   (Were 0x6A0..0x6DF until #244/#274 needed the room; nothing hard-codes the offset.) */
+#define DOS_GENSTUB_OFF   0x06B0
 #define DOS_GENSTUB_N     16
 #define DOS_GENSTUB_BOP   0x5B
 /* Which entries of the table krnl386 actually reads, and what each becomes.

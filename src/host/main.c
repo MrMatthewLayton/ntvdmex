@@ -110,8 +110,11 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
 typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
+#include "bios_prtsc.h"   /* #274: the default INT 05h's byte sequencer */
 typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
-                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF) ? 1 : -1];
+                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
+                               && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
+                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4 <= 0x6F0) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -3099,6 +3102,99 @@ static int kbdact_entry(int act)
         if (t[0] == 0xC4 && t[1] == 0xC4 && seg != DOS_HDLR_SEG && seg != DOS_CTAB_SEG) return -1;
     }
     return act == KB_ACT_BREAK ? KBDACT_BRK : KBDACT_PRT;
+}
+
+/* ── #244: IS INT 15h STILL OURS? ─────────────────────────────────────────────────────
+     The BIOS INT 09h calls INT 15h AH=4Fh for every byte (bios_kbdact.asm k4f). Our own
+     INT 15h answers 4Fh with CF=1 and AL untouched -- "process it as it is" -- so while
+     IVT[15h] still points at our stub the call cannot change anything, and making it
+     would cost two VM exits per scancode on the path Doom and Skyroads are fragile on.
+     So the call is made only once something has hooked the vector: exactly the case
+     the intercept exists for (KEYB-style remappers, hot-key TSRs, p_kbd3).
+     g_int15_stub_off is recorded where the stub is planted (bios_ints[]). */
+static WORD  g_int15_stub_off;
+static DWORD g_kb4f_calls, g_kb4f_xlat;         /* k4f entries / bytes it handed back */
+static int int15_hooked(void)
+{
+    return *(volatile WORD *)(ULONG_PTR)(0x15 * 4 + 2) != DOS_CTAB_SEG
+        || *(volatile WORD *)(ULONG_PTR)(0x15 * 4) != g_int15_stub_off;
+}
+
+/* ── #274: THE HOST HALF OF THE DEFAULT INT 05h (bios_kbdact.asm p5; bios_prtsc.h). ───
+     begin: if a print is already running -> CF=1, nothing touched (the nested INT 05h
+     the BIOS's busy byte exists to refuse). Otherwise save the registers the loop and
+     the guest's INT 17h may disturb, read the mode and cursor through OUR INT 10h, and
+     hand back the first byte. next: judge INT 17h's AH, hand back the next byte. At the
+     end the cursor goes back, every saved register is restored, CF=1.
+   ⛔⛔ THE STATUS BYTE IS NOT AT 0050:0000 HERE, AND CANNOT BE WITHOUT A LAYOUT CHANGE.
+     0050:0000 is DOS_HDLR_SEG:0000 -- the first byte of OUR INT 21h stub (`C4 C4 20 CF`,
+     IVT[21h] = 0050:0000). Writing the IBM status values there (01h busy, 00h done) would
+     turn every INT 21h into garbage the moment someone pressed Print Screen. So the
+     status lives in g_prtsc_status (same values, same meaning) and the guest reads C4h
+     at 0050:0000. ⚠ The converse hazard predates this: a program that DISABLES print
+     screen the classic way, `mov byte [0050:0000],1`, overwrites our INT 21h stub. Moving
+     the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
+     filed in the #274 report, not done in passing. */
+static bios_prtsc g_prtsc;
+static DWORD      g_prtsc_sav[9];
+static DWORD      g_prtsc_jobs, g_prtsc_errs;
+static BYTE       g_prtsc_status = PRTSC_OK;   /* what 0050:0000 would hold */
+static void prtsc_int10(ntvdd_regs *r)
+{
+    HOST_LOCK();
+    vdd_bus_deliver_int(&g_bus, 0x10, r);
+    HOST_UNLOCK();
+}
+static uint8_t prtsc_readc(void *ctx, uint8_t row, uint8_t col)
+{
+    ntvdd_regs r;
+    (void)ctx;
+    ZeroMemory(&r, sizeof r);
+    r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = ((DWORD)row << 8) | col;
+    prtsc_int10(&r);                                   /* set cursor  */
+    r.eax = 0x0800; r.ebx = (DWORD)g_prtsc.page << 8;
+    prtsc_int10(&r);                                   /* read cell   */
+    return (uint8_t)r.eax;
+}
+static void prtsc_bop(volatile BYTE *tib, int begin)
+{
+    static const int vr[9] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
+                               VTIB_EDI, VTIB_EBP, VTIB_DS, VTIB_ES };
+    uint8_t ch = 0;
+    int rc, i;
+    if (begin) {
+        ntvdd_regs r;
+        if (g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        for (i = 0; i < 9; ++i) g_prtsc_sav[i] = VDM_REG(tib, vr[i]);
+        g_prtsc_status = PRTSC_BUSY;
+        ZeroMemory(&r, sizeof r);
+        r.eax = 0x0F00; prtsc_int10(&r);               /* AH = columns, BH = page */
+        {   uint8_t cols = (uint8_t)(r.eax >> 8), page = (uint8_t)(r.ebx >> 8);
+            ZeroMemory(&r, sizeof r);
+            r.eax = 0x0300; r.ebx = (DWORD)page << 8; prtsc_int10(&r);
+            bios_prtsc_begin(&g_prtsc, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
+                             (uint16_t)r.edx); }
+        ++g_prtsc_jobs;
+        rc = bios_prtsc_step(&g_prtsc, 0, prtsc_readc, 0, &ch);
+    } else {
+        if (!g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        rc = bios_prtsc_step(&g_prtsc, (uint8_t)(VDM_REG(tib, VTIB_EAX) >> 8),
+                             prtsc_readc, 0, &ch);
+    }
+    if (rc == PRTSC_EMIT) {
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ch;  /* AH=00h */
+        VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;                               /* LPT1   */
+        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+        return;
+    }
+    {   ntvdd_regs r;
+        ZeroMemory(&r, sizeof r);
+        r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = g_prtsc.cursor;
+        prtsc_int10(&r); }
+    g_prtsc_status = (rc == PRTSC_ERROR) ? PRTSC_ERR : PRTSC_OK;
+    if (rc == PRTSC_ERROR) ++g_prtsc_errs;
+    for (i = 0; i < 9; ++i) VDM_REG(tib, vr[i]) = g_prtsc_sav[i];
+    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
 }
 static void dos_auxout(void *ctx, uint8_t c)
 {
@@ -8664,16 +8760,18 @@ static void i33_reset_state(void)
      a descriptor pair that does not care. */
 static uint8_t *g_extmem_raw;                  /* AH=88h's 15 MB, allocated on first use */
 static DWORD    g_i15_87_n, g_i15_87_refused;
-static unsigned int15_move_block(volatile BYTE *tib)
+/* `gdt_lin` = where the caller's 48-byte GDT is: ES:SI in V86; in PM the base of the
+   selector in ES plus (E)SI (#244, the PM arm). */
+static unsigned int15_move_block_at(volatile BYTE *tib, DWORD gdt_lin)
 {
-    DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
     DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, n = cx * 2u;
-    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)((es << 4) + si);
+    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)gdt_lin;
     uint32_t src, dst;
     uint8_t *ps, *pd;
     unsigned rc = 0;
     if (cx == 0) return 0;                      /* nothing to move: done */
     if (cx > 0x8000u) { rc = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
+    if (!gdt) { rc = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
     src = extmem_desc_base(gdt + 0x10);
     dst = extmem_desc_base(gdt + 0x18);
     if (!g_extmem_raw && (extmem_classify(&g_xms, src, n) == EXTMEM_RAW
@@ -8699,6 +8797,11 @@ out:
         }
     }
     return rc;
+}
+static unsigned int15_move_block(volatile BYTE *tib)
+{
+    DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+    return int15_move_block_at(tib, (es << 4) + si);
 }
 
 static void video_trap_sync(void);             /* fwd */
@@ -12590,6 +12693,30 @@ static void key_msg_note(void)
     if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd;
 }
 static void mod_track(uint8_t rawsc, int ext, int down);
+/* ── #274: THE TWO KEYS WHOSE BYTES ARE NOT `[E0] code` / `[E0] code|80h`. ────────────
+     Pause and Ctrl+Break (vdd_input_host_key_bytes has the sequences and the sources).
+     Both send everything on the PRESS, nothing on the release, and never auto-repeat --
+     so pressing one also ends the previous key's typematic, as on the real keyboard,
+     where the repeat belongs to the last key pressed. Pause used to go out as a plain
+     45/C5, which our BIOS (correctly) read as NumLock: the Pause key toggled NumLock.
+     Ctrl+Break went out as E0 46 ... E0 C6 at key-up and repeated while held, so
+     holding it fired INT 1Bh at the typematic rate. Returns 1 if it handled the key. */
+static int host_key_special(uint8_t rawsc, int ext, int is_break)
+{
+    uint8_t b[6];
+    int n, no_rep, i;
+    n = vdd_input_host_key_bytes(rawsc, ext, is_break, b, &no_rep);
+    if (!no_rep) return 0;
+    if (n) {
+        g_ty_on = 0;
+        HOST_LOCK();
+        for (i = 0; i < n; ++i) vdd_input_push_scancode(&g_in, b[i]);
+        HOST_UNLOCK();
+        keylat_push();
+        if (g_key_event) SetEvent(g_key_event);
+    }
+    return 1;
+}
 static void key_push_make(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
@@ -12599,6 +12726,7 @@ static void key_push_make(LPARAM lp)
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
     if (lp & 0x40000000) { g_ty_os_repeats++; return; }
+    if (rawsc && host_key_special(rawsc, ext, 0)) return;   /* #274: Pause, Ctrl+Break */
     if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext);
                  mod_track(rawsc, ext, 1); }
 }
@@ -12606,6 +12734,7 @@ static void key_push_break(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
     int ext = (lp & 0x01000000) != 0;
+    if (rawsc && host_key_special(rawsc, ext, 1)) return;   /* #274: they send no break */
     if (rawsc) { host_key_typematic_release(rawsc, ext);   /* stop repeating first */
                  host_key_scancode(rawsc, ext, 1);
                  mod_track(rawsc, ext, 0); }
@@ -23548,11 +23677,55 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            ⚠ #253: AND C1h. The V86 arm now hands back the EBDA segment
                              (9FC0h) in ES; in PM that would be a raw paragraph loaded into
                              a selector register, and no PM caller of C1h has been seen.
-                             Refused here until one is, and then answered with a selector. */
+                             Refused here until one is, and then answered with a selector.
+                           ★ #244: C0h AND 87h NOW ANSWER AS IN V86 -- the "two modes
+                             disagree knowingly" above is retired for these two:
+                               C0h -> ES:BX = a selector over DOS_CTAB_SEG (built as INT 31h
+                                      0002h builds one, dpmi_seg_to_desc -- the INT 21h
+                                      AH=34h/52h treatment) : DOS_SYSCONF_OFF, AH=0, CF=0.
+                                      ⚠ So the session-36 Win16 driver now reads model FCh
+                                      and takes its AT path instead of its "no C0h" path.
+                                      Unmeasured on the Win16 shelf -- owed a re-run.
+                               87h -> ES:(E)SI is read as a PM pointer to the GDT (selector
+                                      base + offset; ESI for a 32-bit client). The 24-bit
+                                      addresses INSIDE the descriptors are linear in both
+                                      modes, so the copy itself is the V86 one.
+                             ⚠ THE DPMI SPEC DOES NOT ASK FOR EITHER. DPMI 0.9 §"Interrupts"
+                               reflects INT 15h to real mode WITHOUT translating segment
+                               registers -- only INT 21h-style APIs get translation, and that
+                               from the extender, not the host -- so a strict host hands back
+                               ES:BX as a real-mode segment the client cannot load, and runs
+                               87h with whatever real-mode ES it had. Neither is usable, so a
+                               PM caller of either can only have meant the translated form;
+                               Windows' DPMI host is said to translate C0h (that is what the
+                               Win16 driver's `es:[bx+2]` read assumes) -- not measured here. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
                               VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXT_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                          } else if (ah15 == 0xC0) {
+                              WORD selc0 = dpmi_seg_to_desc(DOS_CTAB_SEG);
+                              if (selc0) {
+                                  VDM_SET16(tib, VTIB_ES, selc0);
+                                  VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
+                                  VDM_SET16(tib, VTIB_EAX, (WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));
+                                  VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                              } else {                   /* no descriptor: say "unsupported" */
+                                  VDM_SET16(tib, VTIB_EAX,
+                                            (WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                                  VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                              }
+                          } else if (ah15 == 0x87) {
+                              WORD  es87 = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                              DWORD off  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
+                                           ? VDM_REG(tib, VTIB_ESI) : (VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+                              DWORD gl   = dpmi_sel_base(es87) + off;
+                              unsigned rc87 = int15_move_block_at(tib,
+                                  (es87 && host_readable((const void *)(ULONG_PTR)gl, 0x30)) ? gl : 0);
+                              VDM_SET16(tib, VTIB_EAX, (WORD)((rc87 << 8) | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                              /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 (as the V86 arm) */
+                              if (rc87) VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) | 1u) & ~0x40u;
+                              else      VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~1u) | 0x40u;
                           } else if (ah15 == 0x86) {
                               /* ── #256: WAIT CX:DX MICROSECONDS, AS THE V86 ARM DOES (#206). ──
                                    This answered CF=0 at once ("the PIT already paces us"), so a
@@ -27995,6 +28168,18 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             V86BOP_RET(V86BOP_DONE);
         }
     }
+    /* #274: the default INT 05h's two BOP sites (bios_kbdact.asm p5). Here rather than in
+         the exec loop's INT 09h arm because INT 05h is a SOFTWARE interrupt a program may
+         issue from anywhere, including a DPMI 0300h -- so the nested loop must serve it
+         too. Same number as the INT 09h stub's BOP, told apart by address. */
+    if (bn == 0x09 && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+        DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN || ip == DOS_KBDACT_OFF + KBDACT_P5_NEXT) {
+            prtsc_bop(tib, ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            V86BOP_RET(V86BOP_DONE);
+        }
+    }
     if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         ntvdd_regs r; regs_load(&r, tib);
         HOST_LOCK();
@@ -28164,8 +28349,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 BCF_CLR();
             } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
                 /* The default handler: CF=1 and AL untouched, "process this key".
-                   A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
-                   CALL this yet -- see the C0h table's feature byte.) */
+                   A TSR that hooks INT 15h answers for itself. #244: our INT 09h CALLS
+                   it once IVT[15h] is hooked (int15_hooked, bios_kbdact.asm k4f); while
+                   it is not, this answer is the one the call would get, so it is skipped. */
                 BCF_SET();
             } else if (ah15 == 0x84) {
                 /* ── BIOS joystick support (session 62). DX picks the half:
@@ -30078,6 +30264,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         : 0xCF;  /* IRET */
           *(volatile WORD *)(bios_ints[bi][0] * 4)     = (WORD)off;
           *(volatile WORD *)(bios_ints[bi][0] * 4 + 2) = DOS_CTAB_SEG;
+          if (bios_ints[bi][0] == 0x15) g_int15_stub_off = (WORD)off;   /* #244 */
       } }
 
     /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
@@ -30117,6 +30304,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
         /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
         for (k = 0; k < sizeof(bios_kbdact_code); ++k) bs[DOS_KBDACT_OFF + k] = bios_kbdact_code[k];
+        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
+             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
+             that kbdact_entry refuses to enter (p_ivtkbd), so Print Screen called nothing
+             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
+             since the PC has a routine here; ours prints the screen through INT 17h and
+             keeps its status HOST-side -- see prtsc_bop for why not at 0050:0000. */
+        *(volatile WORD *)(ULONG_PTR)(0x05 * 4)     = (WORD)(DOS_KBDACT_OFF + KBDACT_P5);
+        *(volatile WORD *)(ULONG_PTR)(0x05 * 4 + 2) = DOS_CTAB_SEG;
     }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -30526,15 +30721,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            act on, so only the true ones are set.
              f1 bit 6  second 8259 present ............ yes (vdd_pic)
              f1 bit 5  real-time clock present ........ yes (vdd_cmos)
-             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... NO -- our keyboard path does
-                       not call the intercept; the AMI sets it because its BIOS does
+             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... YES (#244) -- bios_kbdact.asm
+                       k4f, made whenever IVT[15h] is not our own stub (our default
+                       would answer "process it" unchanged, so skipping it then is
+                       indistinguishable). Was NO (64h); AMI, SeaBIOS and dosbox-x set it
              f1 bit 2  EBDA allocated ................. YES (#253) -- 1 KB at 9FC0h,
                        which is what INT 12h's 639 KB always implied; AH=C1h and
                        0040:000E now say so too. Was NO (60h) while C1h refused --
                        see bios_bda.h for why the EBDA, not 640 KB, is the answer
              f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
       {   static const BYTE sysconf[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
-                                            0x64, 0x40, 0x00, 0x00, 0x00 };
+                                            0x74, 0x40, 0x00, 0x00, 0x00 };
           for (k = 0; k < sizeof sysconf; ++k) ct[DOS_SYSCONF_OFF + k] = sysconf[k]; } }
     /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
        left zero -- see the handler for why a null stub beats a plausible-looking
@@ -32111,8 +32308,60 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
+            int kact;
+            /* ── #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
+                 We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
+                 it (possibly changed), the interrupted code's AX is on the stack above
+                 the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
+                 where the byte's action says -- a side-call, or brk's bare IRET. */
+            if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG
+                && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_KBDACT_OFF + KBDACT_K4F_BOP) {
+                DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                int ko;
+                HOST_LOCK();
+                kact = vdd_input_bios_translate(&g_in, (uint8_t)VDM_REG(tib, VTIB_EAX));
+                vdd_pic_eoi(&g_pic, 1);
+                if (kact == KB_ACT_PAUSE && kbdact_entry(kact) < 0) vdd_input_pause_cancel(&g_in);
+                HOST_UNLOCK();
+                ++g_kb4f_xlat;
+                VDM_SET16(tib, VTIB_EAX, peekw((ss << 4) + sp));          /* pop ax */
+                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | ((sp + 2) & 0xFFFF);
+                ko = kbdact_entry(kact);
+                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (ko >= 0 ? ko : KBDACT_IRET));
+                continue;
+            }
+            /* ── #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
+                 out of the controller now (it is the BIOS's `in al,60h`), push the
+                 interrupted code's AX, load AX = 4F00h | byte, and run k4f: `stc / int
+                 15h` in the guest, then back to the arm above -- or, on CF=0, k4f's own
+                 EOI and IRET (swallowed). The EOI waits until then, as the BIOS's does.
+                 Not hooked (the normal case, every game included): straight on below,
+                 exactly as before -- not one extra instruction on the default path. */
+            if (int15_hooked()) {
+                int sc;
+                HOST_LOCK();
+                sc = vdd_input_bios_fetch(&g_in);
+                HOST_UNLOCK();
+                if (sc >= 0) {
+                    DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF;
+                    WORD  sp = (WORD)((VDM_REG(tib, VTIB_ESP) - 2) & 0xFFFF);
+                    pokew((ss << 4) + sp, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
+                    VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | sp;
+                    VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (unsigned)sc));
+                    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + KBDACT_K4F);
+                    ++g_kb4f_calls;
+                    continue;
+                }
+                /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
+                HOST_LOCK();
+                vdd_pic_eoi(&g_pic, 1);
+                HOST_UNLOCK();
+                VDM_REG(tib, VTIB_EIP) += 3;
+                continue;
+            }
             HOST_LOCK();
-            int kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
+            kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
             /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
                  A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
                  acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
@@ -35111,6 +35360,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " sc_held=0x");    p = zhex(p, g_in.sc_held_reads);   /* re-reads inside the transfer hold */
       p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
       p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
+      /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
+         a hook swallowed); default INT 05h jobs / printer errors / last status. */
+      p = zput(p, " kb4f=0x");       p = zhex(p, g_kb4f_calls);
+      p = zput(p, "/0x");            p = zhex(p, g_kb4f_xlat);
+      p = zput(p, " prtsc=0x");      p = zhex(p, g_prtsc_jobs);
+      p = zput(p, "/0x");            p = zhex(p, g_prtsc_errs);
+      p = zput(p, "/0x");            p = zhex(p, g_prtsc_status);
       /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
          bursts the PIT refused to replay. Together these say whether a held key was
          starved of exec-loop turns and whether the guest's clock ever lurched. */
