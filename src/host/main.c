@@ -20981,6 +20981,129 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
 #undef m
 }
 
+/* ── #210: THE LONG-FILENAME API (INT 21h AH=71h) FROM PROTECTED MODE. ──────────────────
+     Same bridge as pm_int21_xfer, but an LFN call can carry THREE pointers at once (7156h:
+     DS:DX and ES:DI; 714Eh: DS:DX in, ES:DI out) and uses SI/DI/DX as plain numbers in
+     others (714Eh SI = time format, 7143h DI = a date, 716Ch DX = the action word). So
+     each pointer register the call actually uses gets its own window in the transfer
+     buffer, the V86 arm in dos_int21.c runs against those, and the outputs are copied
+     back:
+         +0000h  DS:DX   (in: a path; out: 71A6h's 52-byte record, 71AAh BH=2's path)
+         +0400h  DS:SI   (in: a path, 71A7h BL=0's FILETIME; out: 7147h's directory)
+         +0800h  ES:DI   (in: 7156h's new name; out: a find record, a path, a name, a
+                          FILETIME, 71A0h's file-system name)
+     Offsets follow the caller's D/B bit (dpmi_caller_off), so a flat 32-bit client's
+     EDX/ESI/EDI work as its 16-bit cousins' DX/SI/DI do.
+   ⚠ WOW-ONLY, like every pointer-taking PM INT 21h here: the transfer buffer exists only
+     on the WOW path (see wow_place_v86). A DPMI client without one is told AX=7100h CF=1
+     by the caller -- "no LFN API", which is what this host told everyone before #210 and
+     the answer every LFN client is written to fall back from. DOS/4GW-style extenders
+     that pass 71xxh down in REAL mode reach the V86 arm directly and are not affected.
+   ⚠ krnl386 is the PM client this serves, and nothing measured shows it issuing 71xxh;
+     this is the API made reachable, not a fix for an observed call. */
+static int pm_lfn_copy(WORD sel, DWORD off, DWORD xoff, DWORD len, int in)
+{
+    DWORD b = dpmi_sel_base(sel), k;
+    volatile BYTE *g = (volatile BYTE *)(ULONG_PTR)(b + off);
+    volatile BYTE *x = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
+    if (!b || xoff + len > (DWORD)g_pm_xfer_para * 16u || len > 0x400) return -1;
+    if (!len) return 0;
+    if (!host_readable((const void *)g, len)) return -1;
+    if (in) for (k = 0; k < len; ++k) x[k] = g[k];
+    else    for (k = 0; k < len; ++k) g[k] = x[k];
+    return 0;
+}
+
+/* How many bytes of an output window go back: all `len` of a block (kind 2), or a
+   string's length + its NUL, never more than `len` (kind 4). */
+static DWORD pm_lfn_outlen(DWORD xoff, int kind, DWORD len)
+{
+    const volatile BYTE *x = (const volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
+    DWORD n = 0;
+    if (kind != 4) return len;
+    while (n < len && x[n]) ++n;
+    return (n < len) ? n + 1 : len;
+}
+
+static char *pm_int21_lfn(dos_machine_t *mp, volatile BYTE *tib, char *p)
+{
+#define m (*mp)
+    DWORD al = VDM_REG(tib, VTIB_EAX) & 0xFF;
+    DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF, bh = (VDM_REG(tib, VTIB_EBX) >> 8) & 0xFF;
+    WORD  dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF), esv = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+    DWORD dxo = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDX));
+    DWORD sio = dpmi_caller_off(tib, VDM_REG(tib, VTIB_ESI));
+    DWORD dio = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
+    DWORD sav_ds = VDM_REG(tib, VTIB_DS), sav_es = VDM_REG(tib, VTIB_ES);
+    DWORD sav_dx = VDM_REG(tib, VTIB_EDX), sav_si = VDM_REG(tib, VTIB_ESI), sav_di = VDM_REG(tib, VTIB_EDI);
+    /* Which registers are pointers for this call, and which way their bytes go:
+       0 = not a pointer, 1 = a string in, 2 = a block out of `len`, 3 = a block in,
+       4 = a string out of at most `len` -- copied back only up to its NUL, so a caller's
+           buffer shorter than RBIL's 261 bytes is not overwritten past the answer. */
+    int dx_k = 0, si_k = 0, di_k = 0, rc = 0;
+    DWORD dx_len = 0, si_len = 0, di_len = 0;
+    switch (al) {
+    case 0x39: case 0x3A: case 0x3B: case 0x41: case 0x43: case 0x4E: case 0xA0:
+        dx_k = 1; break;
+    case 0x56:            dx_k = 1; di_k = 1; break;
+    case 0x6C: case 0xA9: case 0x60: case 0xA8: si_k = 1; break;
+    case 0x47:            si_k = 4; si_len = 261; break;
+    case 0xA6:            dx_k = 2; dx_len = 52; break;
+    case 0xA7:            if (bl == 0) { si_k = 3; si_len = 8; } else { di_k = 2; di_len = 8; } break;
+    case 0xAA:            if (bh == 0) dx_k = 1; else if (bh == 2) { dx_k = 4; dx_len = 261; } break;
+    default: break;
+    }
+    if (al == 0x4E || al == 0x4F) { di_k = 2; di_len = 0x13E; }   /* DOS_LFN_FIND_LEN */
+    if (al == 0x60) { di_k = 4; di_len = 261; }
+    if (al == 0xA8) { if (((VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF) == 0) { di_k = 2; di_len = 11; }
+                      else { di_k = 4; di_len = 13; } }
+    if (al == 0xA0) { di_k = 4; di_len = VDM_REG(tib, VTIB_ECX) & 0xFFFF; if (di_len > 0x400) di_len = 0x400; }
+
+    p = zput(p, "INT21h AX=71"); p = zhexb(p, (BYTE)al);
+    p = zput(p, " (PM LFN -> V86 via xfer buf 0x"); p = zhex(p, g_pm_xfer_seg); p = zput(p, ")");
+
+    /* In. A string's length is found first (bounded, never past what is readable). */
+    if (dx_k == 1) { dx_len = pm_xfer_strlen(dsv, dxo, 0x3FF); rc |= pm_lfn_copy(dsv, dxo, 0x000, dx_len, 1); }
+    if (si_k == 1) { si_len = pm_xfer_strlen(dsv, sio, 0x3FF); rc |= pm_lfn_copy(dsv, sio, 0x400, si_len, 1); }
+    if (di_k == 1) { di_len = pm_xfer_strlen(esv, dio, 0x3FF); rc |= pm_lfn_copy(esv, dio, 0x800, di_len, 1); }
+    if (si_k == 3) rc |= pm_lfn_copy(dsv, sio, 0x400, si_len, 1);
+    if (rc) {
+        VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+        VDM_SET16(tib, VTIB_EAX, 0x0005);
+        p = zput(p, " -> XFER FAILED (unreadable pointer) CF=1\r\n");
+        return p;
+    }
+    if (dx_k == 1 || si_k == 1 || di_k == 1) {
+        const char *nm = (const char *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4)
+                                                   + (dx_k == 1 ? 0x000 : si_k == 1 ? 0x400 : 0x800));
+        p = zput(p, " name=\""); p = zput(p, nm); p = zput(p, "\"");
+    }
+
+    VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
+    VDM_SET16(tib, VTIB_ES, g_pm_xfer_seg);
+    if (dx_k) VDM_SET16(tib, VTIB_EDX, 0x000);
+    if (si_k) VDM_SET16(tib, VTIB_ESI, 0x400);
+    if (di_k) VDM_SET16(tib, VTIB_EDI, 0x800);
+    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+    /* Restore what we re-pointed -- except a register the call ANSWERS in: 71A0h returns
+       the maximum path in DX, 7143h BL=2 the size's high word. */
+    VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_ES) = sav_es;
+    if (dx_k && !(al == 0xA0) && !(al == 0x43 && bl == 0x02)) VDM_REG(tib, VTIB_EDX) = sav_dx;
+    if (si_k) VDM_REG(tib, VTIB_ESI) = sav_si;
+    if (di_k) VDM_REG(tib, VTIB_EDI) = sav_di;
+
+    if (!(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
+        if (dx_k == 2 || dx_k == 4) pm_lfn_copy(dsv, dxo, 0x000, pm_lfn_outlen(0x000, dx_k, dx_len), 0);
+        if (si_k == 2 || si_k == 4) pm_lfn_copy(dsv, sio, 0x400, pm_lfn_outlen(0x400, si_k, si_len), 0);
+        if (di_k == 2 || di_k == 4) pm_lfn_copy(esv, dio, 0x800, pm_lfn_outlen(0x800, di_k, di_len), 0);
+    }
+    p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    p = zput(p, " CF=");      p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    p = zput(p, "\r\n");
+    return p;
+#undef m
+}
+
 /* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
    real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
 #define V86BOP_NONE  0      /* not one of v86_bios_bop's numbers                         */
@@ -25895,6 +26018,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              meaningless for a selector. pm_int21_xfer() bridges that by
                              copying through a conventional-memory buffer. */
                         p = wow_psp_env_check(p, "a PM INT 21h");
+                        /* #210: the long-filename API -- pm_int21_lfn says how and why. */
+                        if (ah == 0x71) {
+                            if (g_pm_xfer_seg) { m.tp = p; p = pm_int21_lfn(&m, tib, p); }
+                            else {
+                                VDM_SET16(tib, VTIB_EAX, 0x7100);
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                p = zput(p, "INT21h AX=71xx (PM, no xfer buffer) -> AX=7100 CF=1"
+                                            " (no LFN API for this client)\r\n");
+                            }
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                         if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
