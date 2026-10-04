@@ -151,47 +151,4 @@ static int rmcs_stack_plan(uint16_t sp, unsigned words, unsigned frame, uint16_t
     return 1;
 }
 
-/* ══ #267: THE 0303h CALLBACK'S ENTRY AND EXIT CONTRACT. ═══════════════════════════════
-     DPMI 0.9, 0303h: when real-mode code calls the callback address the host switches to
-     protected mode and calls the client's procedure with
-         DS:(E)SI = selector:offset of the REAL-MODE SS:SP  (the stack as it was AT the call)
-         ES:(E)DI = the client's real-mode call structure, filled with the real-mode registers
-         SS:(E)SP = a locked protected-mode stack the host provides
-         interrupts disabled
-     and "the callback procedure is responsible for modifying the real-mode CS:IP before
-     returning" -- for a far call that means popping the return address off the real-mode
-     stack through DS:SI and adding 4 to the structure's SP. On the procedure's IRET the
-     host returns to real mode with EVERYTHING in the structure: registers, flags, segment
-     registers, CS:IP and SS:SP.
-   ⛔ WHAT WE DID BEFORE #267: popped the far return OURSELVES -- RMCS CS:IP was the return
-     address and RMCS SP was already 4 higher -- and handed the procedure DS:SI = 0017h:0
-     (the client's initial data selector, offset 0) instead of the stack. A procedure
-     written to the spec therefore popped a SECOND time (it read the caller's own stack
-     words as CS:IP and returned into garbage), and one that read its arguments through
-     DS:SI read the client's data segment. The only client that worked was one written
-     for us: tools/dostest/dpmitest.asm's handler, which never pops and writes its
-     sentinels through DS. It is fixed in the same change (it now pops, as the spec's
-     own example does).
-   ► rmcs_cb_enter() fills the structure for the entry. CS:IP is set to the CALLBACK
-     ADDRESS itself -- the spec leaves it undefined; a procedure that forgets to set it
-     re-enters the callback rather than jumping somewhere random, which is the failure
-     that shows up in a log. (⚠ What other hosts leave there is unmeasured; p_dpmi2
-     prints it, `cb.rmcs_csip`.)
-   ► rmcs_cb_v86_flags() is the V86 EFLAGS the exit resumes with: the structure's
-     arithmetic flags and DF, the host's VM and IF. TF is not taken (a procedure that
-     leaves TF set would single-step the host's own V86 return path); IF stays set as it
-     was before #267 -- interrupt delivery in V86 is the VIF machinery's, not this flag's. */
-static void rmcs_cb_enter(volatile uint8_t *r, const rmcs_regs *rm,
-                          uint16_t cb_cs, uint16_t cb_ip, uint16_t ss, uint16_t sp)
-{
-    rmcs_write(r, rm);
-    rmcs_wr16(r, RMCS_IP, cb_ip); rmcs_wr16(r, RMCS_CS, cb_cs);
-    rmcs_wr16(r, RMCS_SP, sp);    rmcs_wr16(r, RMCS_SS, ss);   /* NOT popped */
-}
-#define RMCS_CB_FLAGS_TAKEN 0x0CD5u     /* CF PF AF ZF SF DF OF */
-static uint32_t rmcs_cb_v86_flags(uint16_t rmcs_flags)
-{
-    return 0x20202u | (rmcs_flags & RMCS_CB_FLAGS_TAKEN);   /* VM | IF | reserved bit 1 */
-}
-
 #endif /* NTVDMEX_DPMI_RMCS_H */

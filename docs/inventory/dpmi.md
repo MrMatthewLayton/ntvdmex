@@ -20,19 +20,12 @@ client; they are listed because the README names DPMI 1.0 as the target.
 **Probes:** `tools/dostest/p_dpmi31.com` (#248) asks INT 31h function by function from a
 real 16-bit client — 0400h vs 1687h, every bad-selector path, 0100h/0101h × 2100, 0303h × 17,
 0304h, 0501h–0503h — each row graded against the spec (expected value beside each `EMIT`).
-`tools/dostest/p_dpmi2.com` (#267/#268) is its sequel: `0006h` bad selectors, `0008h`/`0009h`
-values, `0007h` past the LDT cap, a 128 KB `0100h` chain (0003h, 0006h, LSL, an aliased byte),
-`0500h`'s whole block and its free-page delta, and a `0303h` callback round trip through a
-`0301h` procedure whose PM side pops the far return as the spec's procedure does. Rows marked
-`info` have no spec answer and are for host-to-host comparison. ⚠ **UNRUN** at the time of
-writing — no host, ours included, has answered it yet.
 ⚠ **No oracle can answer it:** MS-DOS 6.22, DOSBox-X and PCem have no DPMI host
 (`p_dpmins.com`), so they print one `nodpmi` row; stock ntvdm needs the IFEO bracket.
 Off-VM: `tools/dostest/dpmisvc_test.c` holds the spec-decided rules (`src/host/dpmi_svc.h`).
 `dpmitest.asm`, `dpmiexe.asm`, `pm32*.asm` exercise paths; the guest shelf (Doom, Heretic,
 Hexen, Duke3D, ZAR, heaven7, Win16's krnl386) remains the integration test.
-**Marked:** 2026-10-01, **from the code**; #248 rows re-marked 2026-10-02 (`runs/s87_dpmi/`);
-#267/#268 rows re-marked 2026-10-04 **from the code and the off-VM battery only** (`p_dpmi2` unrun).
+**Marked:** 2026-10-01, **from the code**; #248 rows re-marked 2026-10-02 (`runs/s87_dpmi/`).
 
 ---
 
@@ -57,16 +50,16 @@ not 1.0 (the first is closed by #247):
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
 | §1 Detection, entry, initial state | 4 | 4 | — | — | — | — |
-| §2 Descriptors `0000h`–`000Fh` | 15 | 12 | 1 | — | 1 | 1 |
+| §2 Descriptors `0000h`–`000Fh` | 15 | 10 | 3 | — | 1 | 1 |
 | §3 DOS memory `0100h`–`0102h` | 3 | 3 | — | — | — | — |
 | §4 Interrupts, exceptions, virtual IF | 9 | 8 | 1 | — | — | — |
-| §5 Translation `0300h`–`0306h` | 7 | 5 | 2 | — | — | — |
+| §5 Translation `0300h`–`0306h` | 7 | 4 | 3 | — | — | — |
 | §6 Version and capabilities `0400h`/`0401h` | 2 | 1 | — | — | 1 | — |
-| §7 Memory `0500h`–`050Bh` | 6 | 4 | — | — | 2 | — |
+| §7 Memory `0500h`–`050Bh` | 6 | 3 | 1 | — | 2 | — |
 | §8 Paging, physical mapping, vendor, debug | 7 | 4 | 1 | — | 2 | — |
 | §9 DPMI 1.0 extras, and NTVDM's private pair | 5 | 2 | — | — | 3 | — |
 | §10 INT 21h from protected mode | 6 | 2 | 3 | — | — | 1 |
-| **Total** | **64** | **45** | **8** | **—** | **9** | **2** |
+| **Total** | **64** | **41** | **12** | **—** | **9** | **2** |
 
 ---
 
@@ -88,10 +81,10 @@ not 1.0 (the first is closed by #247):
 | `0002h` | segment to descriptor | **IMPL** | `:23237-23257`; from a host-private pool, and says so when it spills |
 | `0003h` | selector increment | **IMPL** | `:23258-23264`, 8 |
 | `0004h`/`0005h` | lock / unlock selector | **N/A** | reserved in 0.9; `default:` CF=1 |
-| `0006h` | get segment base | **IMPL** (#268) | invalid selector → `8022h` (was: CF=0 and the CODE segment's base, `dpmi_sel_base`'s fallback); same rule and WOW exception as `0001h` |
-| `0007h` | set segment base | **IMPL** (#248, #268) | invalid selector → `8022h` (same rule and WOW exception as `0001h`). #268: a base past XP's LDT cap (`XP_LDT_MAX_LINEAR`, 7FFEFFFFh) → `8025h`, table untouched (was: CF=0, the kernel refused the install, the OLD descriptor stayed live). Only the base is judged — base + limit past the cap is DOS/4GW's flat selector, clamped by `dpmi_install` as before. Not under WOW |
-| `0008h` | set segment limit | **IMPL** (#268) | host chooses G (the ZAR fix); invalid selector → `8022h` (#248); a limit > 1 MB whose low 12 bits are not all set → `8021h` (`dpmi_limit_ok`; was: silently rounded by the install). FFFFFFFFh passes and is clamped to the LDT cap, as before. Not under WOW |
-| `0009h` | set access rights | **IMPL** (#268) | marking a region CODE patches its INT sites; invalid selector → `8022h` (#248); S = 0, conforming code, or CH bit 5 → `8021h` (`dpmi_access_ok`). ⚠ **Deviation kept on purpose:** the spec's "DPL must equal CPL" is NOT enforced — ZAR's VESA selector is `0009h CX=8092h` (DPL 0) and the install forces DPL 3 instead (s74c). `p_dpmi2` row `int31.0009.dpl0` asks what other hosts say. Not under WOW |
+| `0006h` | get segment base | **IMPL** | `:23155-23160` |
+| `0007h` | set segment base | **IMPL** (#248) | invalid selector → `8022h` (same rule and WOW exception as `0001h`). `8025h` (base outside the client's space) not checked |
+| `0008h` | set segment limit | **PART** | host chooses G (the ZAR fix); invalid selector → `8022h` (#248). ⚠ the spec's `8021h` for a limit > 1 MB whose low 12 bits are not all set is not checked |
+| `0009h` | set access rights | **PART** | marking a region CODE patches its INT sites; invalid selector → `8022h` (#248). ⚠ the access byte itself is not validated (`8021h`) — DPL is forced to 3 at install instead (ZAR) |
 | `000Ah` | create alias | **IMPL** (#248) | invalid source → `8022h` (was: an alias of the code base); no descriptor → `8011h` |
 | `000Bh` | get descriptor | **IMPL** | `:23272-23289` |
 | `000Ch` | set descriptor | **PART** | `:23290-23318`; rejects indices ≥ **512** while the table holds `DPMI_LDT_MAX` = 2048 (`:2377`) — a selector above `0FFFh` cannot be set this way |
@@ -103,9 +96,9 @@ not 1.0 (the first is closed by #247):
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0100h` | allocate DOS memory → segment + selector | **IMPL** (#268) | on failure names every MCB's owner in the log. #268: above 64 KB a CHAIN of contiguous descriptors, one per started 64 KB (`dpmi_dosmem_count`/`_desc`): the first spans the whole block (the spec's 32-bit-host rule), each next is +64 KB with a 64 KB limit, the last holds the remainder (was: ONE descriptor, so `sel + 0003h` named whatever came next). `0101h` frees the chain; `0102h` grows it into free indices after it (`8011h` when they are taken, the DOS block untouched) and gives surplus back on a shrink. ⚠ No shelf guest is known to ask for > 64 KB |
+| `0100h` | allocate DOS memory → segment + selector | **IMPL** | `:22875-22928`; on failure names every MCB's owner in the log |
 | `0101h` | free DOS memory | **IMPL** (#248) | the selector must name a live `0100h` block (`8022h` otherwise — the PSP selector used to free the program's own block); a DOS refusal returns DOS's code; the descriptor goes back on the free list and `0100h` takes from it (the leak ran the LDT dry after ~2000 calls, then the failure path's MCB dump overran a 2 KB stack buffer and killed the host — `runs/s87_dpmi/p31_base_host.log`) |
-| `0102h` | resize DOS memory | **IMPL** | chain-aware since #268 (see `0100h`) |
+| `0102h` | resize DOS memory | **IMPL** | `:22941-22962` |
 
 ## 4. Interrupts, exceptions, virtual interrupt flag
 
@@ -128,7 +121,7 @@ not 1.0 (the first is closed by #247):
 | `0300h` | simulate real-mode interrupt | **IMPL** (#247) | Routing `simint_route()` (`src/host/dpmi_rmcs.h`), decided above the INT 31h switch: **every vector runs from the real-mode IVT** through the `0302h` arm — the guest's handler or our own stub, whose BOP the nested loop now services through `v86_bios_bop()`, the exec loop's own code. Fast path in `case 0x0300`: INT 21h always, 33h/10h while the IVT holds our stub, host-side with no stack and CF/ZF returned through FLAGS (was: written into a frame at `0100:FF04` inside the guest, RMCS got CF=0). All 32-bit registers, FLAGS, `ES DS FS GS` read and written; CS:IP/SS:SP never written; RMCS SS:SP honoured (zero → host default `code_base:FF00`); `CX` words copied. ⚠ Deviations kept on purpose: a guest-hooked real-mode INT 21h is still answered host-side; the handler is entered with IF **set** (ZAR's s81 proof). A null vector is not run. Rollback lever `cfg\simintrefl_off.flag` = pre-#247 routing. Off-VM: `tools/dostest/rmcs_test.c` |
 | `0301h` | call real-mode far procedure | **PART** | runs it in V86 for real; `CX` words copied (#247; a CX that does not fit is logged and NOT copied rather than refused); full 32-bit + FS/GS marshalling (#247); a BIOS call from the procedure is serviced (#247). ⛔ after 128 nested events without a return it gives up and still returns **CF=0** |
 | `0302h` | call real-mode procedure with IRET frame | **PART** | same arm, FLAGS pushed; same remaining gap |
-| `0303h` | allocate real-mode callback | **IMPL** (#267) | 16 slots (#248; was 4), `8015h` when full. #267, the spec's entry contract (`dpmi_invoke_callback`, `rmcs_cb_enter` in `dpmi_rmcs.h`): `DS:(E)SI` = a host selector over the real-mode stack (base SS×16, limit FFFFh) : SP **at the call** (far return still on it); `ES:(E)DI` = the RMCS with every register (32-bit), FLAGS, ES DS FS GS, SS:SP unpopped and CS:IP = the callback address (spec: undefined); a host-owned locked PM stack (4 KB per nesting level); virtual IF off, IF clear. On IRET, V86 resumes with the WHOLE RMCS — CS:IP and SS:SP as the procedure left them, its CF/ZF/…/DF (`rmcs_cb_v86_flags`). Was: the host popped the return itself, `DS:SI = 0017h:0`, the procedure ran on the client's own data at `0017h:F400h` with IF set, FS/GS came back as SS and the flags not at all. `dpmitest.asm`'s handler (written for the old contract) now pops as the spec's does. ⚠ No shelf guest has invoked a callback in any recorded run — unmeasured on a guest; `p_dpmi2` `cb.*` is the measurement |
+| `0303h` | allocate real-mode callback | **PART** | 16 slots (#248; was 4), `8015h` when full. ⚠ The callback's ENTRY contract is not the spec's: the host pre-pops the far return into the RMCS and hands the handler `DS:SI = 0017h:0` instead of the real-mode SS:SP — a spec-conforming handler pops twice. Never exercised: no shelf guest has invoked a callback in any recorded run |
 | `0304h` | free real-mode callback | **IMPL** (#248) | `CX:DX` must be exactly a live callback address, else `8024h` |
 | `0305h` | state save/restore addresses | **IMPL** | `:23319-23337`; both routines are register-preserving no-ops, buffer size 40h — nothing of ours needs saving across a raw switch |
 | `0306h` | raw mode-switch addresses | **IMPL** | `:23338-23353` |
@@ -144,7 +137,7 @@ not 1.0 (the first is closed by #247):
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0500h` | free memory information | **IMPL** (#268) | the full 30h-byte block from `dpmi_meminfo` (`dpmi_svc.h`): a nominal 64 MB / 4000h-page pool; largest free (bytes), both page maxima, free pages and free linear space now **drop by what the live 0501h blocks hold** (`dpmi_owned_pages`, VirtualQuery); totals fixed; paging file 0; +24h–2Fh FFFFFFFFh. ⚠ The pool is a promise, not a limit (0501h does not refuse past it). Duke3D sizes itself from this call — re-gate it |
+| `0500h` | free memory information | **PART** | `:23354-23396`: a fixed 64 MB / 4000h pages in every field, **never reduced by allocations** — a client that sizes itself from free pages after allocating is told nothing changed |
 | `0501h` | allocate memory block (linear = host address; handle = address) | **IMPL** | the handle record (`g_dpmi_owned`, 4096) refuses with `8016h` when full rather than overflow silently (#248) |
 | `0502h` | free memory block | **IMPL** | forgets the block's patch sites too; a handle not in the record is `8023h` (#248 — it used to `VirtualFree` whatever address it was given, host memory included) |
 | `0503h` | resize memory block | **IMPL** (#248) | in place while the size fits the committed pages; otherwise a new block, the contents copied, patch-map entries re-keyed, the old freed; new address and handle returned. `8021h` size 0, `8023h` unknown handle |
@@ -195,11 +188,9 @@ calls the shelf makes, translating pointers through the client's selectors.
 2. ~~`0503h`, then `0304h` with at least 16 callback slots.~~ — done, #248.
 3. ~~Make `0400h`'s CL agree with `1687h`.~~ — done, #248.
 4. ~~`0001h`/`0007h`–`000Ah`/`0101h`: report `8022h` for a bad selector; return freed
-   selectors to the free list.~~ — done, #248. ~~Remaining: `0006h` still answers an
-   unallocated selector; `0008h`/`0009h` value validation (`8021h`).~~ — done, #268 (+ `0007h`
-   `8025h`, the `0100h` chain).
-4a. ~~The `0303h` callback entry contract (DS:SI = real-mode SS:SP, the handler pops).~~ — done,
-   #267. Then: run `p_dpmi2` on ours, stock and a DOS host (HDPMI/CWSDPMI) and re-mark from it.
+   selectors to the free list.~~ — done, #248. Remaining: `0006h` still answers an
+   unallocated selector; `0008h`/`0009h` value validation (`8021h`).
+4a. The `0303h` callback entry contract (DS:SI = real-mode SS:SP, the handler pops).
 5. `0301h`/`0302h`: return CF=1 when the procedure never returns (the `CX` copy landed with #247).
-6. ~~`0500h` from the real pool~~ (done, #268); the default exception action.
+6. `0500h` from the real pool; the default exception action.
 7. PM INT 21h `40h`: honour redirection, as the V86 path does.

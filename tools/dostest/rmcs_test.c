@@ -116,35 +116,6 @@ int main(void)
       CHECK(rmcs_stack_plan(0x0000, 4, 6, &sp) && sp == 0xFFF8, "SP=0 is a full 64 KB, not an empty stack");
       CHECK(!rmcs_stack_plan(0xFF00, 0xFFFF, 6, &sp), "CX=FFFFh (128 KB) is never copied"); }
 
-    /* ---- #267: the 0303h callback entry and exit ---- */
-    { volatile uint8_t r[RMCS_SIZE + 2];
-      rmcs_regs in, back;
-      unsigned k;
-      for (k = 0; k < sizeof r; ++k) r[k] = 0xEE;
-      in.edi = 0x11223344; in.esi = 0x55667788; in.ebp = 0x99AABBCC; in.ebx = 0x01020304;
-      in.edx = 0x05060708; in.ecx = 0x090A0B0C; in.eax = 0x0D0E0F10;
-      in.flags = 0x0247; in.es = 0x1111; in.ds = 0x2222; in.fs = 0x3333; in.gs = 0x4444;
-      rmcs_cb_enter(r, &in, 0x0050, 0x0094, 0x9000, 0xFFF0);
-      rmcs_read(r, &back);
-      CHECK(back.edi == in.edi && back.esi == in.esi && back.ebp == in.ebp && back.ebx == in.ebx
-            && back.edx == in.edx && back.ecx == in.ecx && back.eax == in.eax,
-            "cb entry: every general register, all 32 bits (the old fill wrote low words only)");
-      CHECK(back.flags == 0x0247 && back.es == 0x1111 && back.ds == 0x2222
-            && back.fs == 0x3333 && back.gs == 0x4444,
-            "cb entry: FLAGS and ES DS FS GS (FS/GS were not filled at all)");
-      CHECK(rmcs_rd16(r, RMCS_SS) == 0x9000 && rmcs_rd16(r, RMCS_SP) == 0xFFF0,
-            "cb entry: SS:SP is the stack AT the call -- NOT popped (#267: the old code added 4)");
-      CHECK(rmcs_rd16(r, RMCS_CS) == 0x0050 && rmcs_rd16(r, RMCS_IP) == 0x0094,
-            "cb entry: CS:IP names the callback itself (the old code stored the far return)");
-      CHECK(r[0x0C] == 0xEE && r[0x0D] == 0xEE && r[0x0E] == 0xEE && r[0x0F] == 0xEE
-            && r[RMCS_SIZE] == 0xEE,
-            "cb entry: the reserved dword and the byte past the structure are untouched");
-      CHECK(rmcs_cb_v86_flags(0x0000) == 0x20202u, "cb exit: VM and IF always set");
-      CHECK(rmcs_cb_v86_flags(0x0CD5) == (0x20202u | 0x0CD5u),
-            "cb exit: CF PF AF ZF SF DF OF are the procedure's (CF was dropped before #267)");
-      CHECK((rmcs_cb_v86_flags(0xFFFF) & 0x100) == 0, "cb exit: TF is never taken from the structure");
-      CHECK((rmcs_cb_v86_flags(0xFFFF) & 0x3000) == 0, "cb exit: IOPL is never taken from the structure"); }
-
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

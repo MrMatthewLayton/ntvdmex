@@ -188,19 +188,6 @@ start:
     call far [0x630]
     retf
 .pmcb:                         ; PM 0303 callback handler (entered by the host on the RM far-call)
-    ; #267: THE SPEC'S CONTRACT. DS:SI = the real-mode SS:SP at the call (the far return
-    ; still on it), ES:DI = .cbrmcs. A procedure must set the RMCS CS:IP itself: pop the
-    ; far return through DS:SI and add 4 to RMCS.SP. This handler used to do neither and
-    ; wrote its sentinels through DS -- it only worked because the host pre-popped the
-    ; return and handed it DS = 0x17, which no other DPMI host does.
-    cld
-    lodsw                      ; return IP
-    mov [es:di + 0x2A], ax
-    lodsw                      ; return CS
-    mov [es:di + 0x2C], ax
-    add word [es:di + 0x2E], 4 ; RMCS.SP past the popped far return
-    mov ax, 0x0017             ; our own data selector back in DS (it was the RM stack)
-    mov ds, ax
     ; run 47: the handler now issues its OWN INT 31h + INT 21h -- proving the callback
     ; PM loop routes through the shared dispatcher (dpmi_service_pm_int), not a subset.
     mov ax, 0x0400             ; nested INT 31h (get DPMI version) from inside the handler
