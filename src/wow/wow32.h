@@ -387,6 +387,8 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
      the two call sites' own tests, not from taste:
        0xc6  seg1:0x4795  `or ax,ax / jne <failure>`  -> litter 0x01b7 took the
              FAILURE path. Zero does not. That failure was ours.
+             ⚠ s92: the `jne` is the FREE (seg1:0x837a), not a failure -- but zero is
+             still right: answering 1 broke every launch (see 0xc6's own case).
        0x2d  seg2:0x0f16  `cmp ax,0x21 / jb`          -> litter 0x2714 passed as a
              MODULE HANDLE and ran on into the terminal #GP with a NULL parameter
              block. Zero is below 0x21, so LoadModule takes its error path and
@@ -1433,6 +1435,68 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         wow32_setret(f, (DWORD)GetDriveTypeA(root));
         return 1;
     }
+
+    /* ── s92 (#298): THE INTERNAL IDS, NAMED FROM THEIR CALL SITES. No export maps to
+         these; krnl386 calls them from its own code and they were stepped over with
+         the sentinel. Each is answered on purpose now -- the call sites are read in
+         the #298 issue thread; the two that CHANGE behaviour are marked ★. */
+
+    /* ★ 0x87: INT 21h AX=4408h -- "is drive BL removable?" -- from krnl386's PM INT 21h
+         hook (seg1:0x5407, AL=08 arm). Pushes (AX, BX); the site does `inc dx`: DX =
+         FFFFh is the ERROR exit (stc, AX = the code), anything else clears CF with AX =
+         the answer. Stepped over it answered DX:AX = 0 -- "C: is REMOVABLE" -- to every
+         caller. Same rule as our DOS layer's 44/08 (dos_int21.c): 0 removable (a CD
+         too), 1 fixed, 0Fh invalid drive; BL 0 = the default drive. */
+    case 0x87: {
+        BYTE drv = (BYTE)(wow32_argw(f, 0) & 0xFF);
+        UINT ty = 0;
+        char root[4];
+        if (!drv) {
+            char cw[MAX_PATH];
+            drv = (GetCurrentDirectoryA(sizeof cw, cw) && cw[0] >= 'A' && cw[1] == ':')
+                ? (BYTE)((cw[0] | 0x20) - 'a' + 1) : 3;
+        }
+        if (drv >= 1 && drv <= 26 && (GetLogicalDrives() & (1u << (drv - 1)))) {
+            root[0] = (char)('A' + drv - 1); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+            ty = GetDriveTypeA(root);
+        }
+        if (!ty || ty == DRIVE_NO_ROOT_DIR) wow32_setret(f, 0xFFFF000Fu);
+        else wow32_setret(f, (ty == DRIVE_REMOVABLE || ty == DRIVE_CDROM) ? 0u : 1u);
+        return 1;
+    }
+    /* 0xc6: inside IGlobalFree (seg1:0x4792), for a block whose descriptor flag
+         (pdref bit 0) marks it as the 32-bit side's: `or ax,ax / pop x5 / jne 0x47a7`
+         -> `call 0x837a`, THE FREE; zero takes `xor ax,ax`, "freed" -- and keeps it.
+       ⛔ MEASURED s92: answering 1 (free it) killed EVERY Win16 launch -- krnl386 freed
+         block 0x336 while loading KEYBOARD.DRV and then reported "Missing 16-bit
+         system module: KEYBOARD.DRV" and shut the VDM down (runs/s92/gate1). So these
+         blocks are the 32-bit side's to keep, and 0 -- "handled, do not free" -- is
+         the answer, as the sentinel always (accidentally) gave. */
+    case 0xc6:
+        wow32_setret(f, 0);
+        return 1;
+    /* 0x8a: a new task's compatibility flags (pushes the new TDB; DX:AX -> TDB+0x4E,
+         what GetAppCompatFlags returns). No application is on a list here: 0. */
+    case 0x8a:
+    /* 0x2f: GetModuleHandle's last resort after both of its own list searches fail
+         (pushes the name). This host has no module krnl386 does not know: 0. */
+    case 0x2f:
+    /* 0xbe: WOWGetTableOffsets -- fills krnl386's 15 `__MOD_*` id bases. ⚠ MUST STAY
+         ZERO-FILLED: USER's and GDI's id spaces here are decoded with the bases at 0
+         ("a DIFFERENT id space"); real offsets would shift every id. */
+    case 0xbe:
+    /* 0xc0: krnl386 registers seven of its globals at boot (curTDB, its PM INT 21h
+         entry, ...); the result is discarded (`pop ds / retf`). */
+    case 0xc0:
+    /* 0x9d WowFailedExec: WOWEXEC after every exec attempt; the result is ignored. */
+    case WOW32_WOWFAILEDEXEC:
+    /* 0x8b WowRegisterShellWindowHandle(hwnd, &wCmdShow, hmod): WOWEXEC reads > 0 as
+         "a SHARED WOW" and 0 as "a separate one" -- and a separate WOW exits with its
+         last application (it then calls WowSetExitOnLastApp(1)). One host per launch
+         IS a separate WOW, so 0 is the faithful answer (#280 would change it). */
+    case WOW32_WOWREGISTERSHELLWINDOW:
+        wow32_setret(f, 0);
+        return 1;
 
     /* ── ★ 0x7d: approve the selector about to become a TASK DATABASE ──────
          Not named by the export table, so it comes from its call sites -- both

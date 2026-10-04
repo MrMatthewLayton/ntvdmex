@@ -74,7 +74,16 @@ typedef struct {
     BYTE  ctx[WOWSCHED_CTX_LEN];     /* the guest register file, verbatim     */
     DWORD modelin;                   /* linear address of that frame's mode   */
     WORD  task;                      /* the TDB selector it belongs to        */
+    int   fresh;                     /* s92: parked at its LAUNCH, never run yet */
+    int   runnable;                  /* s92: parked MID-WORK (it yielded to a task it
+                                        launched), not waiting for input            */
 } wowsched_slot_t;
+
+/* s92 (#306): THE RUN QUEUE. One slot was "the task that is not running" -- complete
+   for two tasks and wrong for a third: Calc's WinHelp (WOWEXEC + Calc + WINHELP) was
+   created and never scheduled, and the process could not end. Every task that is not
+   running is parked in one of these; the running one is never in the table. */
+#define WOWSCHED_MAX 8
 
 /* Save the live guest context. `eipadj` is added to the saved EIP, which is how
    a context saved AT a BOP resumes AFTER it -- the guest must not re-execute the
@@ -89,6 +98,8 @@ static void wowsched_save(wowsched_slot_t *s, volatile BYTE *tib,
     s->modelin = modelin;
     s->task    = task;
     s->used    = 1;
+    s->fresh   = 0;                  /* the caller marks a launch-parked task fresh */
+    s->runnable = 0;                 /* ...and a mid-work one runnable              */
 }
 
 static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
