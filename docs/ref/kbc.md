@@ -68,6 +68,7 @@ know whether this is a cold boot.
 | `C0h` | Read input port | |
 | `D0h` | **Read output port** | the output port appears at `60h` |
 | `D1h` | **Write output port** | the next byte written to `60h` becomes it |
+| `D2h` | Write keyboard output buffer | the next byte written to `60h` appears in the output buffer as if the keyboard sent it (IRQ1 if enabled). PS/2-class / AMI KBC; not on the original AT 8042 (RBIL PORTS.LST) |
 | `FEh` | **Pulse the reset line** | **resets the CPU** — this is how DOS reboots the machine |
 
 ### The command byte (`20h` / `60h`)

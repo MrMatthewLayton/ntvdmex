@@ -9,6 +9,7 @@
 #include "log.h"          /* zput / zhex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
 #include "dos_auxprn.h"   /* #251: the AUX/PRN driver entries (guest code) */
+#include "dos_lfn.h"      /* #210: the long-filename API's pure half */
 
 /* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
    mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
@@ -727,6 +728,77 @@ void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
     m->ver_major = major; m->ver_minor = minor;
 }
 
+/* ── #210: THE LONG-FILENAME API'S WIN32 HALF -- helpers for the AH=71h arm. ─────────
+     The pure half (time conversion, the find record, short names, the action word) is
+     dos_lfn.h; these only fetch what Win32 knows and hand it over.
+
+   ► LONG NAMES GO THROUGH THE SAME ...A FILE APIs AS EVERY OTHER DOS CALL HERE, i.e. the
+     ANSI code page: this host never calls SetFileApisToOEM, so 3Dh, 4Eh and 71xxh all
+     agree with each other about what a byte above 7Fh names. Stock NTVDM converts DOS
+     names with the OEM code page (its file APIs are set to OEM -- from the NT design, NOT
+     measured here). For ASCII the two are identical, and on the rig (CP437 OEM / 1252
+     ANSI) they differ only above 7Fh -- a non-ASCII long name is the place to look if a
+     program and stock disagree about one.
+
+   ► THE SEARCH TABLE. 714Eh hands the caller a HANDLE (AX) that it passes back to 714Fh
+     and closes with 71A1h -- unlike 4Eh, whose state rides in the DTA. Kept here, one
+     per VDM like g_dos_serial_info; AX = slot + 1 so a handle is never 0.
+   ⚠ A program that never calls 71A1h leaks its slot until the table wraps: the 17th
+     live search recycles the oldest (round robin), as 4Eh recycles its eighth. Windows
+     95 closes them when the PSP terminates; we have no per-PSP owner record yet.
+   ⚠ The handle VALUE is ours. Stock's numbering is not measured and p_lfn does not
+     compare AX on 714Eh -- a program that treats the handle as opaque cannot tell. */
+#define DOS_LFN_FINDS 16
+static HANDLE  s_lfn_find[DOS_LFN_FINDS];
+static uint8_t s_lfn_allow[DOS_LFN_FINDS], s_lfn_need[DOS_LFN_FINDS];
+static unsigned s_lfn_next;
+
+static uint64_t dos_ft64(const FILETIME *f)
+{
+    return ((uint64_t)f->dwHighDateTime << 32) | f->dwLowDateTime;
+}
+
+/* Local time for a DOS-format answer (SI=1), as every DOS time this host reports is
+   local (dta_fill, 5700h). A FILETIME answer (SI=0) is Win32's own, i.e. UTC. */
+static uint64_t dos_ft_zone(const FILETIME *f, int local)
+{
+    FILETIME lf;
+    if (local && (f->dwLowDateTime || f->dwHighDateTime) && FileTimeToLocalFileTime(f, &lf))
+        return dos_ft64(&lf);
+    return dos_ft64(f);
+}
+
+static void dos_lfn_find_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd, int dos_fmt)
+{
+    uint8_t rec[DOS_LFN_FIND_LEN];
+    dos_lfn_find_t f;
+    int k;
+    f.attr = fd->dwFileAttributes;
+    f.ctime = dos_ft_zone(&fd->ftCreationTime, dos_fmt);
+    f.atime = dos_ft_zone(&fd->ftLastAccessTime, dos_fmt);
+    f.wtime = dos_ft_zone(&fd->ftLastWriteTime, dos_fmt);
+    f.size_hi = fd->nFileSizeHigh; f.size_lo = fd->nFileSizeLow;
+    f.long_name = fd->cFileName; f.short_name = fd->cAlternateFileName;
+    dos_lfn_find_pack(rec, &f, dos_fmt);
+    for (k = 0; k < DOS_LFN_FIND_LEN; ++k) d[k] = rec[k];
+}
+
+/* The DOS error for a failed LFN call, from the Win32 one (dos_lfn.h). */
+static uint16_t dos_lfn_err(DWORD we)
+{
+    unsigned short de = 2;
+    (void)dos_lfn_err_from_win32((unsigned long)we, &de);
+    return de;
+}
+
+/* Open a file OR a directory just to set its times (7143h BL=3/5/7). Directories need
+   FILE_FLAG_BACKUP_SEMANTICS; sharing is everything, as 3Dh's is. */
+static HANDLE dos_lfn_open_attr(const char *fn)
+{
+    return CreateFileA(fn, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+}
+
 /* ── THE CALL SITE, AND THE CODE AROUND IT. ──────────────────────────────────────
      Used on the terminate paths, where "an address says WHERE a guest gave up, never
      WHY" -- the standing SILENT VDM DEATH -> GET THE BYTES rule -- and the bytes only
@@ -763,6 +835,7 @@ int dos_int21(dos_machine_t *m)
     int cont = 1;
     DWORD cl_seg = 0, cl_off = 0;               /* the guest's own call site -- below */
     int   cl_ok  = 0;
+    uint8_t lfn_alias = 0;                      /* #210: the AL of a 71xxh served by xxh */
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -879,6 +952,28 @@ int dos_int21(dos_machine_t *m)
         if (cl_ok) { tp = zput(tp, " @"); tp = zhex(tp, cl_seg);
                      tp = zput(tp, ":"); tp = zhex(tp, cl_off); }
         tp = zput(tp, "\r\n");
+        }
+    }
+
+    /* ── #210: FIVE LONG-FILENAME CALLS ARE THEIR SHORT-NAME TWINS, REGISTER FOR REGISTER.
+         7139h mkdir, 713Ah rmdir, 713Bh chdir (DS:DX), 7156h rename (DS:DX -> ES:DI) and
+         716Ch / 71A9h extended open (BX, CX, DX, DS:SI) take exactly what 39h/3Ah/3Bh/56h/
+         6Ch take, and none of those arms reads AL. Our short-name arms were never
+         short-name-only -- they hand the string to Win32, which resolves a long name as
+         readily as an 8.3 one -- so the LFN call is served by the same code, error
+         mapping, handle allocation and JFT bookkeeping (the s91 tail below keys on
+         `ah`, which is the point: a 716Ch handle lands in the PSP's JFT like a 6Ch one).
+       ⚠ So these five answer with the short arms' measured 6.22 error codes (39h over an
+         existing name = 5, 3Bh to nowhere = 3, ...). Whether STOCK's LFN arms use the same
+         numbers is p_lfn's lfn.7139.again / lfn.713B.missing rows. 71A9h ("server"
+         open, a global handle on Windows 95) is an ordinary 716Ch here: there is one
+         process and one handle table. Everything else in AH=71h is the arm further down. */
+    if (ah == 0x71) {
+        uint8_t al71 = (uint8_t)(R_AX & 0xFF);
+        if (al71 == 0x39 || al71 == 0x3A || al71 == 0x3B || al71 == 0x56 || al71 == 0x6C
+            || al71 == 0xA9) {
+            lfn_alias = al71;
+            ah = (al71 == 0xA9) ? 0x6C : al71;
         }
     }
 
@@ -2161,21 +2256,23 @@ int dos_int21(dos_machine_t *m)
            action: bits 0-3 if it exists (0 fail, 1 open, 2 truncate),
                    bits 4-7 if it does not (0 fail, 1 create).
            CX on return says what happened: 1 opened, 2 created, 3 truncated. */
+        /* ── #210: AND 716Ch / 71A9h, THE LONG-FILENAME OPEN, ARRIVE HERE TOO -- same
+             registers (BX mode, CX attributes, DX action, DS:SI name; 716Ch's DI alias
+             hint is not used), and Win32 takes a long name as readily as a short one.
+             The action word, the access and the "action taken" in CX are dos_lfn.h's,
+             pinned by tools/dostest/lfn_test.c. ONE CHANGE OF ANSWER rode in with the
+             move: CREATE_ALWAYS on a file that was NOT there now reports CX=2 (created),
+             where it said 3 (replaced) for every CREATE_ALWAYS -- RBIL's table, and the
+             probe's first 716Ch is exactly that call. ⚠ Unmeasured on 6.22 for 6Ch:
+             p_file's three 6Ch rows (open / exists / missing) do not reach it. */
         char fn[300]; HANDLE f; DWORD slot, disp;
-        uint16_t act = (uint16_t)(R_DX & 0xFFFF);
-        uint16_t exists = act & 0x0F, missing = (act >> 4) & 0x0F;
-        DWORD mode = R_BX & 3;
-        DWORD acc = (mode == 1) ? GENERIC_WRITE
-                  : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+        DWORD acc = (DWORD)dos_ext_open_access((unsigned)(R_BX & 0xFFFF));
+        disp = dos_ext_open_disp((unsigned)(R_DX & 0xFFFF));   /* Win32's own numbers */
         v86_path(m, R_DS, R_SI, fn, sizeof(fn));
-        if      (exists == 2 && missing == 1) disp = CREATE_ALWAYS;
-        else if (exists == 1 && missing == 1) disp = OPEN_ALWAYS;
-        else if (exists == 0 && missing == 1) disp = CREATE_NEW;
-        else if (exists == 2 && missing == 0) disp = TRUNCATE_EXISTING;
-        else                                  disp = OPEN_EXISTING;
         /* FILE_SHARE_WRITE too: we do not emulate SHARE.EXE, so a second open of a
            file this VDM holds must not fail -- the rule AH=3Dh learned in session 37
            and this twin had not (#168). */
+        SetLastError(0);
         f = dos_open_stampable(fn, acc, FILE_SHARE_READ | FILE_SHARE_WRITE, disp,
                                (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
                                                     : FILE_ATTRIBUTE_NORMAL);
@@ -2184,15 +2281,16 @@ int dos_int21(dos_machine_t *m)
             DWORD we = GetLastError(); unsigned short de;
             int mapped = dos_err_from_win32((unsigned long)we, &de);
             SETAX(de); ERRCF();
-            tp = zput(tp, "  INT21 AH=6C ["); tp = zput(tp, fn);
+            tp = zput(tp, lfn_alias ? "  INT21 AX=71" : "  INT21 AH=6C");
+            if (lfn_alias) tp = zhexb(tp, lfn_alias);
+            tp = zput(tp, " ["); tp = zput(tp, fn);
             tp = zput(tp, "] FAILED win32=0x"); tp = zhex(tp, we);
             tp = zput(tp, mapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
             tp = zhex(tp, de); tp = zput(tp, "\r\n");
         }
         else {
-            uint16_t res = (disp == CREATE_NEW) ? 2
-                         : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
-            if (disp == OPEN_ALWAYS && GetLastError() != ERROR_ALREADY_EXISTS) res = 2;
+            uint16_t res = (uint16_t)dos_ext_open_taken((unsigned)disp,
+                                                        GetLastError() == ERROR_ALREADY_EXISTS);
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
                                         if (res != 1) dos_stamp_vdm_now(f); /* #263: created/truncated */ }
@@ -2866,19 +2964,368 @@ int dos_int21(dos_machine_t *m)
                          : " refused: invalid -> AL=FF, clock unchanged\r\n");
         SETAX((R_AX & 0xFF00) | (ok ? 0x00 : 0xFF));
         OKCF();
-    } else if (ah == 0x71) {                    /* the long-filename API: not here */
-        /* ── AH=71h IS A DIFFERENT QUESTION FROM "AN UNDEFINED FUNCTION". (s81) ─────
-             6.22 answers AX=7100h CF=0 (p_subfn int21.716C) -- right for a DOS that
-             predates long filenames, and it reads as SUCCESS to a client written for one
-             that has them. XP's EDIT.COM is such a client (stock NTVDM implements the LFN
-             API): it trusted CF, took 7100h for a handle, and failed "Error 6" on
-             EDIT.INI. AX=7100h WITH CF SET is the documented "no LFN API here" answer
-             every LFN-aware program is written to fall back from. Until the API itself
-             is implemented (as stock has it), that is the honest answer. */
-        tp = zput(tp, "  INT21 AH=71 AL=0x"); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
-        tp = zput(tp, " long-filename API not provided -> AX=7100 CF=1 (LFN clients fall back)\r\n");
-        SETAX(0x7100);
-        ERRCF();
+    } else if (ah == 0x71) {                    /* the long-filename API (#210) */
+        /* ── ★ AH=71h, THE WINDOWS 95 LONG-FILENAME API, AS STOCK NTVDM PROVIDES IT. (#210)
+             Until now this arm answered every 71xxh with AX=7100h CF=1, the documented
+             "no LFN API here" (s81: 6.22's own answer, AX=7100h with CF CLEAR, had XP's
+             EDIT.COM take 7100h for a file handle -- p_subfn int21.716C). Stock NTVDM
+             implements the API, and XP's DOS tools are written against it.
+           ► SERVED HERE: 710Dh reset drive, 7141h delete (SI=1: wildcards + CL/CH), 7143h
+             attributes and times (BL 0-8), 7147h current directory (long form), 714Eh/
+             714Fh/71A1h find, 7160h truename (CL 0 full / 1 short / 2 long), 71A0h volume
+             information, 71A6h file info by handle, 71A7h time conversion, 71A8h short
+             name, 71AAh SUBST. 7139h/713Ah/713Bh/7156h/716Ch/71A9h never reach this arm:
+             they are their short-name twins (see `lfn_alias` at the top).
+           ► ANYTHING ELSE -- 71A2h-71A5h, 71FFh, ... -- IS AX=7100h CF=1, the answer the
+             whole API used to give and the one LFN clients test for. ⚠ That stock answers
+             an unknown 71xxh this way is p_lfn's lfn.71FF row, not yet measured.
+           ⚠ EVERY REGISTER CONTRACT HERE IS RBIL's, NOT A MEASUREMENT. Which registers
+             stock writes on success (does 71A0h touch AX? does 7143h BL=0 copy CX into AX
+             as 4300h does on 6.22?) is what tools/dostest/p_lfn.asm prints; the arms
+             below write only the outputs RBIL names and leave AX alone on success. */
+        uint8_t al71 = (uint8_t)(R_AX & 0xFF);
+        if (al71 == 0x41) {              /* delete: DS:DX, SI=wildcards, CL/CH */
+            char fn[300];
+            uint16_t si41 = (uint16_t)(R_SI & 0xFFFF);
+            v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+            if (si41 == 0) {
+                /* SI=0: one file, no wildcards -- 41h with an LFN-shaped error code. */
+                if (DeleteFileA(fn)) OKCF();
+                else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+            } else {
+                /* SI=1: every match of the pattern whose attributes pass CL (allowed) and
+                   CH (required); directories are never deleted. Success if any went. */
+                WIN32_FIND_DATAA fd; HANDLE hf; int any = 0, cut = 0, i;
+                DWORD we = ERROR_FILE_NOT_FOUND;
+                char full[300];
+                for (i = 0; fn[i]; ++i) if (fn[i] == '\\' || fn[i] == '/' || fn[i] == ':') cut = i + 1;
+                hf = FindFirstFileA(fn, &fd);
+                if (hf == INVALID_HANDLE_VALUE) we = GetLastError();
+                else {
+                    do {
+                        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                        if (!dos_lfn_attr_ok(fd.dwFileAttributes, (uint8_t)(R_CX & 0xFF),
+                                             (uint8_t)((R_CX >> 8) & 0xFF))) continue;
+                        if (cut + lstrlenA(fd.cFileName) >= (int)sizeof(full)) continue;
+                        for (i = 0; i < cut; ++i) full[i] = fn[i];
+                        lstrcpynA(full + cut, fd.cFileName, sizeof(full) - cut);
+                        if (DeleteFileA(full)) any = 1; else we = GetLastError();
+                    } while (FindNextFileA(hf, &fd));
+                    FindClose(hf);
+                }
+                if (any) OKCF(); else { SETAX(dos_lfn_err(we)); ERRCF(); }
+            }
+        } else if (al71 == 0x43) {              /* attributes and times: DS:DX, BL */
+            char fn[300];
+            uint8_t bl43 = (uint8_t)(R_BX & 0xFF);
+            WIN32_FILE_ATTRIBUTE_DATA ad;
+            v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+            if (bl43 == 0x00 || bl43 == 0x02 || bl43 == 0x04 || bl43 == 0x06 || bl43 == 0x08) {
+                if (!GetFileAttributesExA(fn, GetFileExInfoStandard, &ad)) {
+                    SETAX(dos_lfn_err(GetLastError())); ERRCF();
+                } else if (bl43 == 0x00) {
+                    /* CX = the attributes. ⚠ Masked to DOS's six bits as 4300h is (a file
+                       with none set reads 0, not Win32's 80h NORMAL); unmeasured on stock. */
+                    SET16(R_CX, (uint16_t)(ad.dwFileAttributes & 0x3F));
+                    SETAX((uint16_t)(ad.dwFileAttributes & 0x3F));   /* stock: AX = CX too (p_lfn) */
+                    OKCF();
+                } else if (bl43 == 0x02) {
+                    /* DX:AX = the size the file occupies (compressed). */
+                    DWORD hi = 0, lo;
+                    SetLastError(NO_ERROR);
+                    lo = GetCompressedFileSizeA(fn, &hi);
+                    if (lo == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) {
+                        SETAX(dos_lfn_err(GetLastError())); ERRCF();
+                    } else { SETAX(lo & 0xFFFF); SET16(R_DX, (lo >> 16) & 0xFFFF); OKCF(); }
+                } else {
+                    /* 4: last write -> CX time, DI date. 6: last access -> DI date.
+                       8: creation -> CX time, DI date, SI 10 ms units. All LOCAL, as
+                       5700h's are. A time before 1980 reads as 0. */
+                    const FILETIME *ft = (bl43 == 0x04) ? &ad.ftLastWriteTime
+                                       : (bl43 == 0x06) ? &ad.ftLastAccessTime
+                                                        : &ad.ftCreationTime;
+                    uint16_t dd = 0, dt = 0; uint8_t cs = 0;
+                    if (!dos_lfn_ft_to_dos(dos_ft_zone(ft, 1), &dd, &dt, &cs)) { dd = 0; dt = 0; cs = 0; }
+                    SET16(R_DI, dd);
+                    if (bl43 != 0x06) SET16(R_CX, dt);
+                    if (bl43 == 0x08) SET16(R_SI, cs);
+                    OKCF();
+                }
+            } else if (bl43 == 0x01) {          /* set attributes = CX, as 4301h */
+                DWORD a = (DWORD)(R_CX & 0x3F);
+                if (!a) a = FILE_ATTRIBUTE_NORMAL;
+                if (SetFileAttributesA(fn, a)) OKCF();
+                else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+            } else if (bl43 == 0x03 || bl43 == 0x05 || bl43 == 0x07) {
+                /* 3: last write = DI date, CX time. 5: last access = DI date (midnight).
+                   7: creation = DI date, CX time, SI 10 ms units. Local in, UTC to Win32. */
+                uint16_t dd = (uint16_t)(R_DI & 0xFFFF);
+                uint16_t dt = (bl43 == 0x05) ? 0 : (uint16_t)(R_CX & 0xFFFF);
+                uint8_t  cs = (bl43 == 0x07) ? (uint8_t)(R_SI & 0xFF) : 0;
+                uint64_t v; FILETIME lf, ft; HANDLE hf;
+                if (!dos_lfn_dos_to_ft(dd, dt, cs, &v)) { SETAX(0x0D); ERRCF(); }   /* invalid data */
+                else {
+                    lf.dwLowDateTime = (DWORD)v; lf.dwHighDateTime = (DWORD)(v >> 32);
+                    hf = dos_lfn_open_attr(fn);
+                    if (hf == INVALID_HANDLE_VALUE) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                    else {
+                        BOOL ok43 = LocalFileTimeToFileTime(&lf, &ft)
+                                 && SetFileTime(hf, bl43 == 0x07 ? &ft : NULL,
+                                                    bl43 == 0x05 ? &ft : NULL,
+                                                    bl43 == 0x03 ? &ft : NULL);
+                        DWORD we = ok43 ? 0 : GetLastError();
+                        CloseHandle(hf);
+                        if (ok43) OKCF(); else { SETAX(dos_lfn_err(we)); ERRCF(); }
+                    }
+                }
+            } else { SETAX(1); ERRCF(); }       /* BL beyond 8: invalid function */
+        } else if (al71 == 0x47) {              /* current directory, long: DL, DS:SI */
+            /* AH=47h's drive rules (0 = default, a drive Win32 cannot stand on answers
+               through its =X:), then the LONG form of the path -- 47h hands back the
+               short upper-case CDS form (#164), this hands back what GetLongPathNameA
+               makes of it, case as the directories were created. No drive letter, no
+               leading backslash, ASCIIZ (RBIL: buffer of 261 bytes). */
+            char cwd[300], lp[300];
+            DWORD n = 0;
+            uint8_t dl = (uint8_t)(R_DX & 0xFF), cur = (uint8_t)(dos_cur_drive(m) + 1);
+            if (dl == 0 || dl == cur) {
+                if (m->vdrive >= 0) {
+                    char spec[3]; spec[0] = (char)('A' + m->vdrive); spec[1] = ':'; spec[2] = 0;
+                    n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
+                } else n = GetCurrentDirectoryA(sizeof(cwd), cwd);
+            } else if (dl <= 26 && (GetLogicalDrives() & (1u << (dl - 1)))) {
+                char spec[3]; spec[0] = (char)('A' + dl - 1); spec[1] = ':'; spec[2] = 0;
+                n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
+            }
+            if (n == 0 || n >= sizeof(cwd)) { SETAX(0x0F); ERRCF(); }
+            else {
+                volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
+                const char *q = cwd;
+                int k = 0;
+                DWORD ln = GetLongPathNameA(cwd, lp, sizeof(lp));
+                if (ln && ln < sizeof(lp)) q = lp;
+                if (q[0] && q[1] == ':') q += 2;
+                if (*q == '\\' || *q == '/') ++q;
+                while (q[k] && k < 260) { dst[k] = (BYTE)q[k]; ++k; }
+                dst[k] = 0;
+                OKCF();
+            }
+        } else if (al71 == 0x4E || al71 == 0x4F) {   /* find first / next -> ES:DI */
+            volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            int dosfmt = (R_SI & 0xFFFF) == 1;
+            WIN32_FIND_DATAA fd;
+            if (al71 == 0x4E) {
+                /* DS:DX pattern, matched against long AND short names (Win32's rule, and
+                   the LFN API's); CL allowed / CH required attributes; SI time format. */
+                char pat[300]; HANDLE hf; unsigned slot;
+                uint8_t allow = (uint8_t)(R_CX & 0xFF), need = (uint8_t)((R_CX >> 8) & 0xFF);
+                v86_path(m, R_DS, R_DX, pat, sizeof(pat));
+                hf = FindFirstFileA(pat, &fd);
+                if (hf == INVALID_HANDLE_VALUE) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                else {
+                    int ok = 1;
+                    while (!dos_lfn_attr_ok(fd.dwFileAttributes, allow, need))
+                        if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
+                    if (!ok) { FindClose(hf); SETAX(18); ERRCF(); }   /* nothing passed CL/CH */
+                    else {
+                        for (slot = 0; slot < DOS_LFN_FINDS && s_lfn_find[slot]; ++slot) {}
+                        if (slot >= DOS_LFN_FINDS) {                 /* full: recycle, round robin */
+                            slot = s_lfn_next++ % DOS_LFN_FINDS;
+                            FindClose(s_lfn_find[slot]);
+                            tp = zput(tp, "  INT21 AX=714E search table full -- recycled handle 0x");
+                            tp = zhex(tp, slot + 1); tp = zput(tp, "\r\n");
+                        }
+                        s_lfn_find[slot] = hf; s_lfn_allow[slot] = allow; s_lfn_need[slot] = need;
+                        dos_lfn_find_fill(d, &fd, dosfmt);
+                        SETAX(slot + 1); SET16(R_CX, 0);              /* CX: no lossy names */
+                        OKCF();
+                    }
+                }
+                if (m->trace_all) { tp = zput(tp, "  INT21 AX=714E ["); tp = zput(tp, pat);
+                                    tp = zput(tp, (*pfl & 1) ? "] -> none\r\n" : "] -> found\r\n"); }
+            } else {
+                unsigned slot = (unsigned)(R_BX & 0xFFFF) - 1u;
+                if (slot >= DOS_LFN_FINDS || !s_lfn_find[slot]) { SETAX(6); ERRCF(); }
+                else {
+                    int ok = 0;
+                    while (FindNextFileA(s_lfn_find[slot], &fd))
+                        if (dos_lfn_attr_ok(fd.dwFileAttributes, s_lfn_allow[slot], s_lfn_need[slot])) { ok = 1; break; }
+                    /* "No more files" leaves the handle OPEN: the program closes it, 71A1h. */
+                    if (!ok) { SETAX(18); ERRCF(); }
+                    else { dos_lfn_find_fill(d, &fd, dosfmt); SET16(R_CX, 0); OKCF(); }
+                }
+            }
+        } else if (al71 == 0xA1) {              /* find close: BX */
+            unsigned slot = (unsigned)(R_BX & 0xFFFF) - 1u;
+            if (slot >= DOS_LFN_FINDS || !s_lfn_find[slot]) { SETAX(6); ERRCF(); }
+            else { FindClose(s_lfn_find[slot]); s_lfn_find[slot] = 0; OKCF(); }
+        } else if (al71 == 0x60) {              /* truename: DS:SI -> ES:DI, CL form */
+            /* CL=0 the full path (case kept -- 60h upper-cases, this does not: unmeasured),
+               1 its SHORT form, 2 its LONG form. 1 and 2 ask the file system, so the
+               path must exist; 0 does not (as 60h: "SUB\FILE.TXT" resolves anyway).
+               CH (SUBST expansion) is not looked at: we create no SUBST of our own
+               that a path would need unwrapping from. */
+            char in[300], full[300], out[300];
+            uint8_t cl = (uint8_t)(R_CX & 0xFF);
+            DWORD n;
+            v86_path(m, R_DS, R_SI, in, sizeof(in));
+            n = GetFullPathNameA(in, sizeof(full), full, NULL);
+            if (n == 0 || n >= sizeof(full)) { SETAX(3); ERRCF(); }
+            else if (cl > 2) { SETAX(1); ERRCF(); }
+            else {
+                if (cl == 0) { lstrcpynA(out, full, sizeof(out)); n = 1; }
+                else if (cl == 1) n = GetShortPathNameA(full, out, sizeof(out));
+                else              n = GetLongPathNameA(full, out, sizeof(out));
+                if (n == 0 || n >= sizeof(out)) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                else {
+                    volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+                    int k = 0;
+                    while (out[k] && k < 260) { dd[k] = (BYTE)out[k]; ++k; }
+                    dd[k] = 0;
+                    SETAX(0);                           /* stock: AX=0000 (p_lfn) */
+                    OKCF();
+                }
+            }
+        } else if (al71 == 0xA0) {              /* volume information: DS:DX root, ES:DI/CX */
+            /* BX = flags as Win32 reports them, cut to the four RBIL names -- bit 0 case-
+               sensitive searches, 1 case preserved, 2 Unicode on disk, 15 compressed --
+               plus 4000h "supports the LFN functions", which is the bit that matters.
+               CX = the longest component (255), DX = the longest path, MAX_PATH = 260.
+               ES:DI gets the file-system name ("NTFS", "FAT") within CX bytes.
+             ⚠ DX = 260 is RBIL's "usually"; stock may compute it. AX is left alone. */
+            char root[300], fs[64];
+            DWORD maxc = 0, fl = 0;
+            v86_str(R_DS, R_DX, root, sizeof(root));
+            if (root[0] && root[1] == ':' && !root[2]) { root[2] = '\\'; root[3] = 0; }  /* Win32 wants "C:\" */
+            fs[0] = 0;
+            if (!GetVolumeInformationA(root[0] ? root : NULL, NULL, 0, NULL, &maxc, &fl, fs, sizeof(fs))) {
+                SETAX(dos_lfn_err(GetLastError())); ERRCF();
+            } else {
+                volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+                unsigned cap = (unsigned)(R_CX & 0xFFFF), k;
+                for (k = 0; cap && k < cap - 1 && fs[k]; ++k) dd[k] = (BYTE)fs[k];
+                if (cap) dd[k] = 0;
+                SET16(R_BX, (uint16_t)((fl & 0x0007) | (fl & 0x8000) | 0x4000));
+                SET16(R_CX, (uint16_t)(maxc ? maxc : 255));
+                SET16(R_DX, 260);
+                OKCF();
+            }
+            tp = zput(tp, "  INT21 AX=71A0 ["); tp = zput(tp, root);
+            tp = zput(tp, "] fs="); tp = zput(tp, fs); tp = zput(tp, " flags=0x"); tp = zhex(tp, fl);
+            tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
+        } else if (al71 == 0xA6) {              /* file info by handle: BX -> DS:DX */
+            /* BY_HANDLE_FILE_INFORMATION, 52 bytes, exactly as Win32 lays it out (times
+               UTC, as a FILETIME is). */
+            DWORD h = R_BX & 0xFFFF;
+            BY_HANDLE_FILE_INFORMATION bi;
+            if (!dos_fh_is_file((void *const *)m->fh, h)) { SETAX(6); ERRCF(); }
+            else if (!GetFileInformationByHandle(m->fh[h], &bi)) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+            else {
+                volatile BYTE *dd = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+                const BYTE *sb = (const BYTE *)&bi;
+                unsigned k;
+                for (k = 0; k < sizeof(bi) && k < 52; ++k) dd[k] = sb[k];
+                OKCF();
+            }
+        } else if (al71 == 0xA7) {              /* time conversion, BL */
+            uint8_t bla7 = (uint8_t)(R_BX & 0xFF);
+            /* ⚠ THE ZONE IS A CHOICE, NOT A MEASUREMENT: a FILETIME here is taken as UTC
+                 (what 714Eh SI=0 and 71A6h hand out) and the DOS side as LOCAL (what every
+                 DOS time this host reports is), so FILETIME -> DOS converts to local time
+                 and back. Windows 95's IFSMgr converts the same way; whether NTVDM does is
+                 p_lfn's lfn.71A7.ft2dos -- on a machine whose zone is not UTC the hour
+                 differs by the offset if this is wrong. */
+            if (bla7 == 0x00) {                 /* DS:SI -> QWORD FILETIME -> CX time, DX date, BH */
+                const volatile BYTE *q = (const volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
+                FILETIME ft; uint16_t dd, dt; uint8_t cs;
+                ft.dwLowDateTime  = (DWORD)q[0] | ((DWORD)q[1] << 8) | ((DWORD)q[2] << 16) | ((DWORD)q[3] << 24);
+                ft.dwHighDateTime = (DWORD)q[4] | ((DWORD)q[5] << 8) | ((DWORD)q[6] << 16) | ((DWORD)q[7] << 24);
+                if (!dos_lfn_ft_to_dos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
+                else {
+                    SET16(R_CX, dt); SET16(R_DX, dd);
+                    SET16(R_BX, (uint16_t)((R_BX & 0xFF) | ((uint16_t)cs << 8)));  /* stock: BH=C7h */
+                    OKCF();
+                }
+            } else if (bla7 == 0x01) {          /* CX time, DX date, BH -> ES:DI QWORD */
+                uint64_t v; FILETIME lf, ft;
+                if (!dos_lfn_dos_to_ft((uint16_t)(R_DX & 0xFFFF), (uint16_t)(R_CX & 0xFFFF),
+                                       (uint8_t)((R_BX >> 8) & 0xFF), &v)) { SETAX(0x0D); ERRCF(); }
+                else {
+                    volatile BYTE *q = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+                    int k;
+                    lf.dwLowDateTime = (DWORD)v; lf.dwHighDateTime = (DWORD)(v >> 32);
+                    if (!LocalFileTimeToFileTime(&lf, &ft)) ft = lf;
+                    for (k = 0; k < 4; ++k) {
+                        q[k]     = (BYTE)(ft.dwLowDateTime  >> (8 * k));
+                        q[4 + k] = (BYTE)(ft.dwHighDateTime >> (8 * k));
+                    }
+                    OKCF();
+                }
+            } else { SETAX(1); ERRCF(); }
+        } else if (al71 == 0xA8) {              /* generate short name: DS:SI -> ES:DI, DH */
+            /* DH=0: 11 bytes, FCB style; DH=1: "NAME.EXT" ASCIIZ. DL's character-set
+               nibbles are not looked at -- see the code-page note at the helpers. */
+            char ln[300], s83[13], f11[11];
+            volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            int k;
+            v86_str(R_DS, R_SI, ln, sizeof(ln));
+            dos_lfn_short_name(ln, s83, f11);
+            if (((R_DX >> 8) & 0xFF) == 0) for (k = 0; k < 11; ++k) dd[k] = (BYTE)f11[k];
+            else { for (k = 0; s83[k]; ++k) dd[k] = (BYTE)s83[k]; dd[k] = 0; }
+            OKCF();
+        } else if (al71 == 0xAA) {              /* SUBST: BH 0 create / 1 terminate / 2 query */
+            /* BL = drive (0 = default, 1 = A:). The host's own DOS-device table is what a
+               SUBST is on NT (XP's SUBST.EXE is DefineDosDevice), so this is real: a drive
+               created here is visible to the user's session until terminated or logoff.
+             ⚠ TERMINATE ONLY UNDOES A SUBST -- a letter whose NT target is "\??\..." --
+               never a real disk or a network mapping; anything else is 0Fh. */
+            uint8_t bh = (uint8_t)((R_BX >> 8) & 0xFF), bl = (uint8_t)(R_BX & 0xFF);
+            char spec[3], tgt[300];
+            uint8_t drv = (uint8_t)(bl ? bl - 1 : dos_cur_drive(m));
+            spec[0] = (char)('A' + (drv < 26 ? drv : 0)); spec[1] = ':'; spec[2] = 0;
+            tgt[0] = 0;
+            if (drv >= 26 || bh > 2) { SETAX(bh > 2 ? 1 : 0x0F); ERRCF(); }
+            else if (bh == 0) {
+                char in[300], full[300];
+                DWORD n;
+                v86_path(m, R_DS, R_DX, in, sizeof(in));
+                n = GetFullPathNameA(in, sizeof(full), full, NULL);
+                if (GetLogicalDrives() & (1u << drv)) { SETAX(0x0F); ERRCF(); }     /* letter in use */
+                else if (n == 0 || n >= sizeof(full)) { SETAX(3); ERRCF(); }
+                else if (DefineDosDeviceA(0, spec, full)) {
+                    OKCF();
+                    tp = zput(tp, "  INT21 AX=71AA SUBST "); tp = zput(tp, spec);
+                    tp = zput(tp, " = "); tp = zput(tp, full); tp = zput(tp, " (a host drive)\r\n");
+                } else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+            } else {
+                DWORD n = QueryDosDeviceA(spec, tgt, sizeof(tgt));
+                int is_subst = n > 4 && tgt[0] == '\\' && tgt[1] == '?' && tgt[2] == '?' && tgt[3] == '\\';
+                if (!is_subst) { SETAX(bh == 2 ? 0x89 : 0x0F); ERRCF(); }   /* stock query: 89h (p_lfn) */
+                else if (bh == 1) {
+                    if (DefineDosDeviceA(DDD_REMOVE_DEFINITION, spec, NULL)) OKCF();
+                    else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                } else {
+                    volatile BYTE *dd = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+                    int k = 0;
+                    while (tgt[4 + k] && k < 260) { dd[k] = (BYTE)tgt[4 + k]; ++k; }
+                    dd[k] = 0;
+                    OKCF();
+                }
+            }
+        } else {
+            tp = zput(tp, "  INT21 AX=71"); tp = zhexb(tp, al71);
+            tp = zput(tp, " not an LFN function stock provides -> AX=0001 CF=1\r\n");
+            /* s92, MEASURED (dospair p_lfn): stock answers an unknown 71xxh -- and 710Dh,
+               which it does not provide -- with AX=0001 CF=1, "invalid function", NOT the
+               7100h this arm assumed. */
+            SETAX(0x0001);
+            ERRCF();
+        }
+        if (m->trace_all) {
+            tp = zput(tp, "  INT21 AX=71"); tp = zhexb(tp, al71);
+            tp = zput(tp, " -> AX=0x"); tp = zhex(tp, R_AX & 0xFFFF);
+            tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
+        }
     } else if (!dos622_defines(ah)) {
         /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
            return with AL cleared and CF clear, touching nothing else.  Measured on
@@ -2929,6 +3376,11 @@ int dos_int21(dos_machine_t *m)
          protected mode", so the nested real-mode loops -- a DPMI 0301h/0302h
          procedure, a reflected IRQ's handler -- set crit_pending and nobody raised it.
          A handle call (3Fh/40h, the file's own drive in AL) is now raised too. */
+    /* s92, MEASURED (dospair p_lfn lfn.713B.missing / 713A.again): stock's LFN chdir and
+       rmdir say 2 (file not found) for a directory that is not there, where 6.22's short
+       3Bh/3Ah -- whose code serves them -- say 3. */
+    if (lfn_alias && (lfn_alias == 0x3A || lfn_alias == 0x3B) && (*pfl & 1)
+        && (R_AX & 0xFFFF) == 3) SETAX(2);
     if ((*pfl & 1) && m->crit_raise_ok && !g_dos_int21_pm && !m->crit_active
         && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
         const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));

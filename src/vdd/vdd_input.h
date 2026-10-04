@@ -27,10 +27,23 @@
    One buffer, in the place the hardware documentation says it is. */
 #define BDA_KB_HEAD   0x1A     /* offsets from 0040:0000 */
 #define BDA_KB_TAIL   0x1C
-#define BDA_KB_START  0x1E     /* 16 entries, 2 bytes each */
-#define BDA_KB_END    0x3E     /* one past the last entry  */
+#define BDA_KB_START  0x1E     /* 16 entries, 2 bytes each -- POST's bounds     */
+#define BDA_KB_END    0x3E     /* one past the last entry  -- POST's bounds     */
 #define BDA_KB_FLAGS  0x17     /* shift/ctrl/alt + lock state (INT 16h AH=02) */
 #define BDA_KB_FLAGS2 0x18     /* extended shift flags      (INT 16h AH=12) */
+#define BDA_KB_ALTNUM 0x19     /* #274: the Alt+keypad accumulator              */
+/* ── #274: THE RING'S BOUNDS ARE TWO BDA WORDS, NOT TWO CONSTANTS. ─────────────────────
+     0040:0080 / 0040:0082 hold the ring's start and one-past-end OFFSETS within segment
+     0040h (AT BIOS and later; IBM AT TR, RBIL MEMORY.LST "0040:0080"). POST sets them to
+     001Eh / 003Eh -- the constants above -- and every AT-class INT 09h / INT 16h wraps at
+     what they say. That is how a TSR enlarges or relocates the keyboard buffer: it points
+     both words (and head = tail = start) at a bigger area inside segment 0040h. Our ring
+     wrapped at the constants and nothing wrote the words at all. vdd_input_reset() now
+     writes POST's values, and push/pop/peek read the words on every call. A pair that is
+     not usable (odd, start >= end, or room for fewer than two entries) falls back to the
+     POST bounds rather than sending writes anywhere in guest memory. */
+#define BDA_KB_BUFSTART 0x80
+#define BDA_KB_BUFEND   0x82
 
 typedef struct input_state {
     vdd_bus *bus;
@@ -172,6 +185,30 @@ int  vdd_input_sc_pending(const input_state *st);     /* 1 if a scancode waits  
    It used to consume the byte and DISCARD it -- the FIFO drained, so keystrokes kept
    interrupting, but a guest that had not hooked INT 09h could never see a key at all. */
 int  vdd_input_bios_consume(input_state *st);         /* -> KB_ACT_* (#254)     */
+/* ── #244: THE SAME HANDLER IN TWO HALVES, FOR THE INT 15h AH=4Fh INTERCEPT. ─────────
+     An AT/PS/2 BIOS reads the byte, calls INT 15h AH=4Fh with it in AL and CF=1, and
+     translates whatever AL comes back -- or nothing, if the hook returned CF=0. The
+     call is guest code (bios_kbdact.asm), so the host splits consume() around it:
+     fetch() takes the byte out of the controller exactly as consume() would (-1 if
+     none is presented), translate() is the BIOS's view of a byte. consume() is
+     fetch() + translate(), unchanged for every caller that does not need the hook. */
+int  vdd_input_bios_fetch(input_state *st);           /* byte, or -1 for none   */
+int  vdd_input_bios_translate(input_state *st, uint8_t sc);   /* -> KB_ACT_*    */
+/* ── #274: WHAT THE KEYBOARD SENDS FOR ONE HOST KEY EVENT. ────────────────────────────
+     Most keys are `[E0] code` on the press and `[E0] code|80h` on the release. Two are
+     not, and Win32 hides both behind ordinary-looking key messages:
+       Pause       Win32: scan 45h, NOT extended (NumLock is 45h WITH the bit).
+                   The keyboard sends E1 1D 45 E1 9D C5 on the PRESS and nothing at all
+                   on the release, and never repeats it.
+       Ctrl+Break  Win32: VK_CANCEL, scan 46h extended. The keyboard sends E0 46 E0 C6
+                   on the PRESS and nothing on the release, and never repeats it.
+     (IBM PS/2 Keyboard TR, "Scan code set 1"; RBIL PORTS.LST 60h.) Writes the bytes
+     to out[] (room for 6) and returns how many; *no_repeat is set for the two keys
+     whose make must not be auto-repeated. ⚠ The Win32 side of the mapping (45h not
+     extended = Pause) is from the documentation and this file's own NumLock note,
+     not measured on the rig. */
+int  vdd_input_host_key_bytes(uint8_t rawsc, int ext, int is_break,
+                              uint8_t out[6], int *no_repeat);
 
 int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);

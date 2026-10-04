@@ -104,7 +104,7 @@ derived from the host clock at the instant of the read, so they are never mid-up
 | Item | Status | Evidence |
 |---|---|---|
 | `0Eh`–`7Fh` read/write storage | ✅ **IMPL** | |
-| POST defaults: diagnostic, floppy types, equipment, base memory | ✅ **IMPL** | `vdd_cmos_reset` |
+| POST defaults: diagnostic, floppy types, equipment, base memory | ✅ **IMPL** | `vdd_cmos_reset`; base memory `15h/16h` follows Settings > Conventional Memory (`cmos_state.base_kb`, #136; 0 = 640 KB, unchanged) — `cmos_test.c` |
 | The checksum at `2Eh`/`2Fh` | ✅ **IMPL** | computed at reset over `10h`–`2Dh`; a guest that writes into the range invalidates it, exactly as on a real machine |
 | Extended-memory bytes `17h`/`18h`, `30h`/`31h` | ⛔ **MISS** | left zero — should follow the host's own XMS size |
 

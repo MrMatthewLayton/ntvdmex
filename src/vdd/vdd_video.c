@@ -2257,9 +2257,11 @@ static void int10(void *self, ntvdd_regs *r)
         break; }
     /* ── 04h: READ LIGHT PEN. A VGA has no light-pen input; its BIOS answers AH=00h,
          "not triggered" (#266). We left AH=04h -- which a caller reads as "triggered",
-         with BX/CX/DX as a position. The other registers are untouched. */
+         with BX/CX/DX as a position. The other registers are untouched.
+       ★ s92, MEASURED (dosdiff p_vid266 t03.04.pen): AX=0000 on MS-DOS 6.22, DOSBox-X and
+         PCem's IBM VGA BIOS alike -- AL is cleared too, not only AH. */
     case 0x04:
-        s_ah(r, 0x00);
+        s_ax(r, 0x0000);
         break;
     case 0x0D: {                                       /* READ a pixel            */
         uint16_t x = r_cx(r), y = r_dx(r);
@@ -4187,6 +4189,19 @@ void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
    from 0x2000 -- and pixels are 2 bits (modes 4/5) or 1 bit (mode 6), packed
    high-bit-first.  Nothing about that is shared with the planar path, which is
    why approximating it with a text screen was never going to work. */
+/* Mode 5's palette is the grey/brown variant; 4's default is cyan/magenta. Exported
+   (vdd_video.h) because the INT 33h graphics cursor has to undo it: its masks act on the
+   2-bit value in video memory, and the frame holds the colour this table made of it. */
+/* s92: since #266 render_cga stores the 2-bit value ITSELF (an attribute-controller
+   index; pal[] maps it through AR0n), so the frame holds what video memory holds and
+   there is nothing to undo -- the identity. Kept as the cursor's one question to ask. */
+const uint8_t *vdd_video_cga4_map(const video_state *st)
+{
+    static const uint8_t ident[4] = { 0, 1, 2, 3 };
+    (void)st;
+    return ident;
+}
+
 static void render_cga(video_state *st)
 {
     const uint8_t *src = st->vmem + VID_TEXT_OFF;

@@ -741,6 +741,10 @@ int  vdd_video_text_snapshot(video_state *st, char *out, int cap);
      in; the masks are the driver's (low byte = character, high byte = attribute). */
 void vdd_video_text_cursor(video_state *st, int col, int row,
                            uint16_t and_mask, uint16_t xor_mask);
+/* CGA 4-colour (modes 04h/05h): the frame value render_cga gives each 2-bit pixel value
+   0..3 under the current palette select. The INT 33h graphics cursor maps back through it
+   (GH #264) -- one table, so the cursor and the renderer cannot disagree. */
+const uint8_t *vdd_video_cga4_map(const video_state *st);
 /* Write the display's BDA fields from the current state (see `bda` above). */
 void vdd_video_bda_sync(video_state *st);
 /* #183: microseconds until 3DAh bit 3 reads `want_set` (0 = now, UINT32_MAX = unknown). */
@@ -824,6 +828,15 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
 #define VDD_DCC_OFF      0x0040
 #define VDD_VPARAM_OFF   0x0080
 #define VDD_VPARAM_N     29
+/* #265: THE INT 33h DRIVER'S OWN DATA, the 512 bytes after #266's tables (B2F00..B30FF;
+   s92: both branches first claimed B270). 2Ch and 2Dh
+   answer with ES:SI INTO the driver (the acceleration-profile block, a profile's name)
+   and 34h with ES:DX at the MOUSE.INI name, so those bytes need a real-mode address a
+   guest can read -- the same reason the fonts and the VBE block are here. Not owned by
+   the video model: mouse_int33 (main.c) rewrites it on every call that hands it out. */
+#define VDD_MOUSE_SEG    0xB2F0       /* B2F00..B30FF */
+#define VDD_MOUSE_ACC    0x0000       /* the 144h-byte profile block (i33_driver.h)    */
+#define VDD_MOUSE_INI    0x0150       /* "MOUSE.INI", ASCIIZ                            */
 
 /* `int10_11_calls` is counted so the next round is not another guess: the font-pointer fix
    assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.

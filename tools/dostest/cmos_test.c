@@ -156,6 +156,20 @@ int main(void)
     CHECK(rd(&bus, CMOS_EQUIP) != 0x00, "post: the equipment byte is not zero");
     CHECK(rd(&bus, 0x15) == 0x80 && rd(&bus, 0x16) == 0x02,
           "post: base memory reads 640 KB");
+    /* #136: Settings > Conventional Memory sets what is FITTED; it survives reset (it is
+       how the board is populated) and the checksum over 10h-2Dh covers it. */
+    {   unsigned i, sum = 0;
+        cm.base_kb = 512;
+        vdd_cmos_reset(&cm);
+        CHECK(cm.base_kb == 512 && cm.ram[0x15] == 0x00 && cm.ram[0x16] == 0x02,
+              "base_kb 512: 15h/16h = 0200h, and the field survives reset");
+        for (i = 0x10; i <= 0x2D; ++i) sum += cm.ram[i];
+        CHECK(cm.ram[0x2E] == (uint8_t)(sum >> 8) && cm.ram[0x2F] == (uint8_t)sum,
+              "base_kb 512: checksum 2Eh/2Fh still matches 10h-2Dh");
+        cm.base_kb = 0;
+        vdd_cmos_reset(&cm);
+        CHECK(cm.ram[0x15] == 0x80 && cm.ram[0x16] == 0x02, "base_kb 0: 640 KB, as before");
+    }
 
     /* ── THE PERIODIC INTERRUPT. docs/ref/rtc.md 4. ───────────────────────────
        IRQ8 at the rate in Status A bits 3:0 -- a fast, steady tick INDEPENDENT

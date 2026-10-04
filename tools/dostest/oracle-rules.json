@@ -1536,7 +1536,7 @@
    "pcem"
   ],
   "recorded": "2026-09-27",
-  "why": "The AH=C0h table DESCRIBES THE MACHINE, and its feature bits are promises a guest acts on. Measured: PCem's real AMI 486 BIOS 08 00 FC 01 00 70 00; SeaBIOS (msdos622's QEMU) 08 00 FC 00 01 74 40; dosbox-x 08 00 FC 00 01 70 40. Ours is 08 00 FC 01 00 64 40: the model triple is the AMI's (the period machine), and each feature bit is set only if OUR machine does it -- second 8259 and RTC yes; INT 09h calling INT 15h AH=4Fh NO (the AMI and dosbox-x set bit 4 because their BIOSes do; ours does not, GH #54); EBDA YES since GH #253 (1 KB at 9FC0h: AH=C1h answers ES=9FC0 CF=0 and 0040:000E = 9FC0 -- it was 60h, bit 2 clear, while C1h refused, which contradicted INT 12h's 639 KB); INT 16h AH=09h yes (vdd_input). The contract rows (c0.status, c0.size_ok) are compared normally. A DEFECT would be this row changing without the code it describes changing -- e.g. adding the 4Fh intercept must set bit 4."
+  "why": "The AH=C0h table DESCRIBES THE MACHINE, and its feature bits are promises a guest acts on. Measured: PCem's real AMI 486 BIOS 08 00 FC 01 00 70 00; SeaBIOS (msdos622's QEMU) 08 00 FC 00 01 74 40; dosbox-x 08 00 FC 00 01 70 40. Ours is 08 00 FC 01 00 74 40: the model triple is the AMI's (the period machine), and each feature bit is set only if OUR machine does it -- second 8259 and RTC yes; INT 09h calling INT 15h AH=4Fh YES since GH #244 (bios_kbdact.asm k4f, called whenever IVT[15h] is hooked; it was 64h, bit 4 clear, while our INT 09h did not call it -- all three oracles set it; p_kbd3 int09.4f.* measures the call itself); EBDA YES since GH #253 (1 KB at 9FC0h: AH=C1h answers ES=9FC0 CF=0 and 0040:000E = 9FC0 -- it was 60h, bit 2 clear, while C1h refused, which contradicted INT 12h's 639 KB); INT 16h AH=09h yes (vdd_input). The contract rows (c0.status, c0.size_ok) are compared normally. A DEFECT would be this row changing without the code it describes changing -- e.g. adding the 4Fh intercept had to set bit 4, and did (#244)."
  },
  {
   "probe": "int15",
@@ -3040,5 +3040,48 @@
   ],
   "recorded": "2026-10-03",
   "why": "AX=5700h on the still-open handle, after a write, with the DOS date set to 1999-06-15. 6.22 and PCem's DOS return 26CFh -- the date DOS stamped the write with; DOSBox-X returns the HOST's date (5D43h = 2026-10-03) until close, and agrees on reopen and FindFirst. Two DOS kernels against one emulator's host-file shortcut (GH #263)."
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.vector",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-10-04",
+  "why": "The SEGMENT of the INT 33h handler: wherever each host's driver lives. Only zero (no driver) means anything. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.00.reset",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-10-04",
+  "why": "PCem's DOS loads no mouse driver; INT 33h is a BIOS dummy that answers the reset with AX=0. The probe stops there. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.00.reset",
+  "field": "BX",
+  "abstain": [
+   "pcem",
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-04",
+  "why": "PCem: no driver (see AX). DOSBox-X: the button count -- it emulates a three-button mouse; the Microsoft driver on a two-button mouse (and we) say 2. (As mouse2.)"
+ },
+ {
+  "probe": "mouse3",
+  "case": "i33.13h.reset",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-10-04",
+  "why": "The button count again, after the mode-13h reset: DOSBox-X's three-button mouse (as i33.00.reset)."
  }
 ]

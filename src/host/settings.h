@@ -24,13 +24,13 @@
  * and at forty-odd it is four places to forget the same knob. Adding a setting is now
  * one row plus one enum member plus one line of layout in ntvdmhost.rc.
  *
- * ⚠ MOST OF THESE ARE STORED BUT NOT YET HONOURED. The CPU, Display, Audio, Drives
- *   pages and parts of Input came from the menu scaffold, where they were IDM_STUB.
- *   They now round-trip through HKCU faithfully -- and nothing downstream reads them
- *   yet. settings_apply() in main.c is the ONLY place a stored value reaches the
- *   machine, so that function is the honest list of what actually works; a setting
- *   absent from it is a setting the emulator does not consult. Wiring one up means
- *   adding a line there, not adding storage.
+ * ⚠ SOME OF THESE ARE STORED BUT NOT HONOURED. The CPU, Display, Audio, Drives pages
+ *   and parts of Input came from the menu scaffold, where they were IDM_STUB. Most are
+ *   live now; as of #136 (s92) the rows still stored only are Umb, A20, CdRomUsePhysical,
+ *   CdRomImage and SoundFontPath, and the startup report (STAGE2: settings) prints WHY for
+ *   each. settings_apply() in main.c is the ONLY place a stored value reaches the
+ *   machine, so that function -- with SET_LIVE_IDS beside it -- is the honest list of
+ *   what actually works. Wiring one up means adding a line there, not adding storage.
  *
  * No CRT: kernel32/user32/advapi32 only, like the rest of the host.
  */
@@ -153,9 +153,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
      Unlimited, which is visible rather than silently wrong. */
 { "CpuSpeed",          IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
                                           CPUSPEED_COUNT - 1, CPUSPEED_ITEMS },
+/* #136: memory FITTED, in KB. 640 = the machine every build has run (INT 12h 639, EBDA and
+   MCB top 9FC0h); less moves all of those together -- see bios_bda.h. Start-up only, and
+   refused (logged, 640 kept) for a program that would not fit under it. */
 { "ConventionalKB",    IDC_S_CONVKB,      SK_UINT,     640, 64,  640, NULL },
 { "Xms",               IDC_S_XMS,         SK_CHECK,      1,  0,   1, NULL },
 { "Ems",               IDC_S_EMS,         SK_CHECK,      1,  0,   1, NULL },
+/* ⚠ Umb and A20 are STORED ONLY (#136): no UMB provider exists, and the A20 address wrap
+   is not modelled. settings_dead_why in main.c says so in the startup report. */
 { "Umb",               IDC_S_UMB,         SK_CHECK,      1,  0,   1, NULL },
 { "A20",               IDC_S_A20,         SK_CHECK,      1,  0,   1, NULL },
 
@@ -234,6 +239,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "SbIrq",             IDC_S_SBIRQ,       SK_COMBO,      0,  0,   3, "5|7|10|11" },
 { "SbDma",             IDC_S_SBDMA,       SK_COMBO,      0,  0,   2, "1|3|5" },
 { "Opl",               IDC_S_OPL,         SK_COMBO,      1,  0,   1, "OPL2|OPL3" },
+/* #136: which host midiOut device the MPU-401 (and the GUS's MIDI UART) play through --
+   MIDI_ROUTE_* in src/vdd/midi_route.h. Host GM = device 0, as always; MT-32 / SoundFont
+   = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only. */
 { "Midi",              IDC_S_MIDI,        SK_COMBO,      0,  0,   2, "Host GM|MT-32|SoundFont" },
 /* ── ⚠ THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
      DEVICE. The emulated one is a square wave in the mixer, out of the SOUND
@@ -260,6 +268,8 @@ static const set_def SET_DEFS[SET_COUNT] = {
 /* "HideHostCursor" was REMOVED by #218 (user, s83 sweep: the toggle "feels jaggy"):
    the pointer now hides by itself after 5 s still over the video. A stored value is
    simply never read again (settings persist by name). */
+/* #136: on = never capture; the guest follows Windows' pointer over the picture
+   (capture_allowed in main.c). Off = the capture policy, as always. Live. */
 { "SeamlessMouse",     IDC_S_SEAMLESS,    SK_CHECK,      0,  0,   1, NULL },
 { "MouseSensitivity",  IDC_S_MSENS,       SK_SLIDER,   100, 10, 400, NULL },
 { "KeyboardLayout",    IDC_S_KBLAYOUT,    SK_COMBO,      0,  0,   3, "US|United Kingdom|German|French" },
@@ -295,7 +305,9 @@ static const set_def SET_DEFS[SET_COUNT] = {
 /* s84 (user): each removable drive is the PHYSICAL one or a mounted image, shown as a
    pair of radios whose first one is the row's control. With no physical drive the dialog
    greys that radio and the host treats the setting as "image"; a blank image path is an
-   EMPTY drive. See settings_drive_radios / settings_apply in main.c. */
+   EMPTY drive. See settings_drive_radios / settings_apply in main.c.
+   #136: FloppyUsePhysical is live (it decides whether FloppyAImage is what INT 13h opens);
+   CdRomUsePhysical is STORED ONLY until a CD-ROM is mounted into DOS (#240/#241). */
 { "FloppyUsePhysical", IDC_S_FLOPPY_PHYS, SK_CHECK,      1,  0,   1, NULL },
 { "CdRomUsePhysical",  IDC_S_CD_PHYS,     SK_CHECK,      1,  0,   1, NULL },
 };

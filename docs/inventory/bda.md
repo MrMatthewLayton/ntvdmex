@@ -45,15 +45,24 @@ ones; 6.22's machine (SeaBIOS) does have a 1 KB EBDA at `9FC0h`; PCem's AMI has 
 its INT 12h was never measured, and going to 640 KB would have moved `int12.memk`,
 `mcb.chain.ends.at` and every PSP+02h away from the oracle. Reasoning in `bios_bda.h`.
 
+✅ **#136 (s92): the 640 is a setting.** Settings > Machine > Conventional Memory (KB,
+64–640, default 640) is the memory FITTED; the EBDA is carved from its top as above, so
+512 KB gives INT 12h / `0040:0013` = 511, EBDA and MCB top `7FC0h`, `0040:000E` and INT 15h
+`C1h` ES = `7FC0h`, CMOS `15h/16h` = `0200h`, PSP+02h = `7FC0h`. 640 maps to exactly the old
+constants (`bios_conv_top_para`, `bda_test.c` checks the whole 1 MB is byte-identical).
+Decided once at start-up (`g_dos_mem_top`); refused — logged, 640 kept — for a program whose
+image would not fit under it. ⚠ The RAM above the new top is still there (a real 512 KB board
+has none); nothing of ours hands it out.
+
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
 | §1 Ports, equipment, memory (`00h`–`16h`) | 7 | 5 | — | — | — | 2 |
-| §2 Keyboard (`17h`–`3Dh`, `71h`, `80h`–`83h`, `96h`–`97h`) | 9 | 3 | 1 | — | 5 | — |
+| §2 Keyboard (`17h`–`3Dh`, `71h`, `80h`–`83h`, `96h`–`97h`) | 9 | 5 | 1 | — | 3 | — |
 | §3 Diskette and fixed disk (`3Eh`–`48h`, `74h`–`77h`, `8Bh`–`95h`) | 6 | — | — | — | 6 | — |
 | §4 Video (`49h`–`66h`, `84h`–`8Ah`, `A8h`) | 6 | 4 | 1 | — | 1 | — |
 | §5 Timer, reset, timeouts, wait flags (`67h`–`7Fh`, `98h`–`A0h`) | 7 | 4 | — | — | 1 | 2 |
 | §6 The rest (`F0h`–`FFh`, `0050:0000`, the EBDA) | 3 | 2 | — | — | 1 | — |
-| **Total** | **38** | **18** | **2** | **—** | **14** | **4** |
+| **Total** | **38** | **20** | **2** | **—** | **12** | **4** |
 
 ---
 
@@ -77,11 +86,11 @@ Marked in full in [keyboard.md](keyboard.md) §2; summarised here so the area is
 |---|---|---|---|---|
 | `17h` | shift flags | **PART** | `vdd_input.c:404-412`; bit 7 (Insert) never toggled | provisional |
 | `18h` | extended shift flags | **MISS** | only cleared (`vdd_input.c:769`) | — |
-| `19h` | Alt+keypad accumulator | **MISS** | | — |
+| `19h` | Alt+keypad accumulator | **IMPL** | #274, see [keyboard.md](keyboard.md) §2 | input_test T13(b) |
 | `1Ah`/`1Ch` | ring head / tail | **IMPL** | `vdd_input.c:9-67` | provisional |
 | `1Eh`–`3Dh` | the ring | **IMPL** | `vdd_input.h:30-31` | provisional |
 | `71h` | Ctrl-Break flag | **MISS** | | — |
-| `80h`/`82h` | ring start / end | **MISS** | the ring ignores them | — |
+| `80h`/`82h` | ring start / end | **IMPL** | #274: POST's `001Eh`/`003Eh` written at reset; every push/pop/peek reads them ([keyboard.md](keyboard.md) §2) | input_test T13(a); `p_kbd3 kbuf.small.*` owed |
 | `96h` | keyboard mode / type | **IMPL** | bit 4 set (`vdd_input.c:774`); bits 0/1 never written | provisional |
 | `97h` | LED flags | **MISS** | | — |
 
@@ -126,8 +135,8 @@ Marked in full in [video-bios.md](video-bios.md) §6.
 | Location | Field | Status | Notes |
 |---|---|---|---|
 | `0040:00F0`–`00FF` | inter-application communication area | **IMPL** | free for programs; nothing of ours writes it, which is the contract |
-| `0050:0000` | print-screen status byte | **MISS** | INT 05h is never invoked ([keyboard.md](keyboard.md) §3). ⚠ `0050:` is also where QBasic keeps its own slots |
-| EBDA | extended BIOS data area | **IMPL** | #253: 1 KB at `9FC0:0000`, the kilobyte INT 12h and the MCB chain already withheld (`DOS_MEM_TOP`, `dos_mcb.h:35`). Byte 0 = size in KB (1), the rest zeroed (`bios_bda_init`). Advertised by `0040:000E`, INT 15h `C1h` (V86; PM refuses) and `C0h` feature-1 bit 2 (`64h`). Nothing of ours lives there: `dos_mcb_reserve_top` carves below it (`bda_test`). ⚠ CMOS `15h`/`16h` still says 640 — correct, that is memory *fitted*. ⚠ WOW: krnl386's arena was measured reaching `0xA0000` (`main.c:16996`), i.e. over this kilobyte; harmless (nothing of ours reads the EBDA back) but unconfirmed on a Win16 launch |
+| `0050:0000` | print-screen status byte | **MISS** | #274 put a print-screen routine behind INT 05h, but its status is kept HOST-side: ⛔ `0050:0000` is `DOS_HDLR_SEG:0000`, the first byte of **our INT 21h stub** (IVT[21h] = `0050:0000`), so writing `01h`/`00h`/`FFh` there would break every INT 21h — and a program that disables Print Screen the classic way (`mov byte [0050:0000],1`) already does. Needs the stub moved ([keyboard.md](keyboard.md) §3). ⚠ `0050:` is also where QBasic keeps its own slots |
+| EBDA | extended BIOS data area | **IMPL** | #253: 1 KB at `9FC0:0000`, the kilobyte INT 12h and the MCB chain already withheld (`DOS_MEM_TOP`, `dos_mcb.h:35`). Byte 0 = size in KB (1), the rest zeroed (`bios_bda_init`). Advertised by `0040:000E`, INT 15h `C1h` (V86; PM refuses) and `C0h` feature-1 bit 2 (`74h` since #244 added bit 4). Nothing of ours lives there: `dos_mcb_reserve_top` carves below it (`bda_test`). ⚠ CMOS `15h`/`16h` still says 640 — correct, that is memory *fitted*. ⚠ WOW: krnl386's arena was measured reaching `0xA0000` (`main.c:16996`), i.e. over this kilobyte; harmless (nothing of ours reads the EBDA back) but unconfirmed on a Win16 launch |
 
 ---
 

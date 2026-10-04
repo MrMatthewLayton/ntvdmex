@@ -84,6 +84,7 @@ commands are now answered.
 | `ADh`/`AEh` disable/enable keyboard | ⛔ **STORE** | sets the command byte's clock bits; **nothing consumes them** — our FIFO is host-driven |
 | `D0h` **read output port** | ✅ **IMPL** | ~~returned a stale scancode~~ |
 | `D1h` **write output port** | ✅ **IMPL** | the A20 gate, `vdd_input.c:523` |
+| `D2h` write keyboard output buffer | ✅ **IMPL** *(#244)* | the next `60h` byte goes into the scancode FIFO as if typed, IRQ1 included (`kbd_hw_out`). A PS/2 / AMI-KBC command (the AT 8042 lacked it) — from documentation; `p_kbd3` injects through it, so its `int09.4f.*` rows also say which oracles have it. input_test T13(d) |
 | `FEh` pulse reset | ⚠ **COUNTED** | a VDD cannot reboot its own host; `kbc_reset_asked` |
 
 ⛔ **`D0h` was worse than "missing", and this is why the reply lives in its own byte.**

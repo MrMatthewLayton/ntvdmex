@@ -29,6 +29,13 @@ static int      g_nmsg;
 static void sink(void *ctx, uint32_t msg)
 { (void)ctx; if (g_nmsg < CAP) g_msg[g_nmsg++] = msg; }
 
+/* #136: the SysEx sink, for an external synth. */
+static uint8_t  g_sx[MPU_SYSEX_MAX];
+static uint32_t g_sxlen;
+static int      g_nsx;
+static void sx_sink(void *ctx, const uint8_t *m, uint32_t len)
+{ (void)ctx; memcpy(g_sx, m, len); g_sxlen = len; g_nsx++; }
+
 #define BASE MPU_DEFAULT_BASE
 static void wr(uint16_t p, uint8_t v){ uint32_t x=v; vdd_bus_io(&bus,p,1,0,&x); }
 static uint8_t rd(uint16_t p){ uint32_t x=0; vdd_bus_io(&bus,p,1,1,&x); return (uint8_t)x; }
@@ -99,6 +106,54 @@ int main(void)
     g_nmsg = 0;
     wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
     CHECK(g_nmsg == 1, "sysex: normal messages resume afterwards");
+
+    /* T6b (#136): with NO sysex sink, a status byte inside an unterminated SysEx is
+       swallowed too -- the old behaviour, byte for byte. */
+    g_nmsg = 0;
+    wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
+    CHECK(g_nmsg == 0, "sysex, no sink: an embedded status byte is swallowed (unchanged)");
+    wr(BASE, 0xF7);
+    CHECK(mpu.sysex_sent == 0 && mpu.sysex_dropped == 0, "sysex, no sink: nothing counted");
+
+    /* T6c (#136): an attached sink gets each COMPLETE message, F0..F7 inclusive. */
+    mpu.sysex_sink = sx_sink;
+    g_nsx = 0; g_nmsg = 0;
+    {   static const uint8_t DT1[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x01,
+                                       0x02, 0x6D, 0xF7 };
+        unsigned k;
+        for (k = 0; k < sizeof DT1; ++k) wr(BASE, DT1[k]);
+        CHECK(g_nsx == 1 && g_sxlen == sizeof DT1 && memcmp(g_sx, DT1, sizeof DT1) == 0,
+              "sysex sink: one MT-32 DT1 delivered whole, F0..F7");
+        CHECK(g_nmsg == 0, "sysex sink: no short message leaks out of it");
+    }
+    /* realtime inside SysEx is a short message and does not break the SysEx */
+    g_nsx = 0; g_nmsg = 0;
+    wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0xF8); wr(BASE, 0x10); wr(BASE, 0xF7);
+    CHECK(g_nmsg == 1 && g_msg[0] == 0xF8, "sysex sink: realtime inside passes as a short message");
+    CHECK(g_nsx == 1 && g_sxlen == 4 && g_sx[1] == 0x41 && g_sx[2] == 0x10,
+          "sysex sink: ...and the SysEx around it stays intact");
+    /* a status byte ends an unterminated SysEx: dropped, counted, then handled */
+    g_nsx = 0; g_nmsg = 0;
+    {   uint32_t d0 = mpu.sysex_dropped;
+        wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
+        CHECK(g_nsx == 0 && mpu.sysex_dropped == d0 + 1, "sysex sink: unterminated message dropped");
+        CHECK(g_nmsg == 1 && g_msg[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
+              "sysex sink: the status byte that ended it is a note-on");
+    }
+    /* longer than MPU_SYSEX_MAX: dropped whole, never truncated */
+    g_nsx = 0;
+    {   uint32_t d0 = mpu.sysex_dropped; unsigned k;
+        wr(BASE, 0xF0);
+        for (k = 0; k < MPU_SYSEX_MAX + 10; ++k) wr(BASE, 0x11);
+        wr(BASE, 0xF7);
+        CHECK(g_nsx == 0 && mpu.sysex_dropped == d0 + 1, "sysex sink: oversize message dropped, not cut");
+        wr(BASE, 0xF0); wr(BASE, 0x7E); wr(BASE, 0xF7);
+        CHECK(g_nsx == 1 && g_sxlen == 3, "sysex sink: the next message is fine");
+    }
+    /* reset keeps the sink, like the short-message sink */
+    vdd_mpu_reset(&mpu);
+    CHECK(mpu.sysex_sink == sx_sink && mpu.sink == sink, "reset: both sinks preserved");
+    mpu.sysex_sink = NULL;
 
     /* T7: data before UART mode goes nowhere --------------------------------- */
     vdd_mpu_reset(&mpu);

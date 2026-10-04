@@ -303,9 +303,11 @@ void vdd_cmos_reset(void *self)
     void (*now)(void *, struct vdd_rtc *) = st->rtc_now;
     int  (*set)(void *, const struct vdd_rtc *, int) = st->rtc_set;
     void *ctx = st->rtc_ctx;
+    uint16_t base_kb = st->base_kb;                       /* #136: preserved, as above */
     unsigned i;
     for (i = 0; i < sizeof(*st); ++i) ((uint8_t *)st)[i] = 0;
     st->bus = bus; st->rtc_now = now; st->rtc_set = set; st->rtc_ctx = ctx;
+    st->base_kb = base_kb;
     /* ── WHAT POST LEAVES IN THE CMOS. (docs/ref/rtc.md 3) ───────────────────
          These are BIOS conventions, not chip behaviour, and they are here
          because a machine DOS is running on has been through POST -- the same
@@ -325,7 +327,10 @@ void vdd_cmos_reset(void *self)
     st->ram[0x0E]       = 0x00;              /* POST diagnostic: no errors     */
     st->ram[0x10]       = 0x40;              /* one 1.44M floppy               */
     st->ram[CMOS_EQUIP] = 0x25;              /* 1 floppy, colour 80x25, FPU    */
-    st->ram[0x15]       = 0x80; st->ram[0x16] = 0x02;   /* 640 KB base memory  */
+    /* Base memory FITTED: 640 KB (0280h) unless Settings > Conventional Memory says less
+       (#136). The EBDA and INT 12h's 639 are carved out of this by the BIOS, not here. */
+    {   uint16_t kb = st->base_kb ? st->base_kb : 640u;
+        st->ram[0x15] = (uint8_t)(kb & 0xFF); st->ram[0x16] = (uint8_t)(kb >> 8); }
     /* ── EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
          configured and 30h/31h the POST-detected KB above 1 MB; a real BIOS answers
          INT 15h AH=88h from the latter. Ours answers 88h with 0x3C00 (15 MB, main.c),

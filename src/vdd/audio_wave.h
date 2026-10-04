@@ -105,6 +105,18 @@ typedef struct audio_wave {
     int       using_ds;
     void     *ds, *dsb;                 /* IDirectSound, IDirectSoundBuffer      */
     uint32_t  ds_bytes, ds_wpos;        /* ring size, next byte we write         */
+    /* #136: Settings > Audio > MIDI (MIDI_ROUTE_*, midi_route.h). Set by the caller
+       BEFORE audio_wave_start and preserved across its zeroing, like want_ds. 0 = Host
+       GM = device 0 without enumerating, which is every build so far. The rest is what
+       happened, for the log: the device opened (-1 = none), whether it is an EXTERNAL
+       synth that was found by name (=> it gets SysEx), how many devices there were,
+       and the opened device's name. */
+    int       midi_choice;
+    int       midi_dev;
+    int       midi_ext;
+    uint32_t  midi_ndevs;
+    char      midi_name[32];
+    uint32_t  sysex_sent, sysex_dropped;
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
     unsigned char hdr[AW_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */
@@ -119,6 +131,12 @@ void audio_wave_stop(audio_wave *aw);
 /* Send one packed MIDI short message (status | d1<<8 | d2<<16) to the host synth.
    Safe to call when MIDI never opened -- it is simply dropped. */
 void audio_wave_midi(audio_wave *aw, uint32_t msg);
+/* #136: one complete SysEx message (F0 .. F7) to the host synth, through midiOutLongMsg.
+   Only ever wired for an external synth (aw->midi_ext). Never blocks: the buffer is
+   copied into one of a few slots, and a message that finds every slot still queued in
+   the driver is dropped and counted (sysex_dropped) rather than waited for, because
+   this runs on the exec thread inside a port trap. */
+void audio_wave_midi_long(audio_wave *aw, const uint8_t *msg, uint32_t len);
 /* #214: silence the host synth -- sustain up, all sound/notes off, controllers reset on
    all 16 channels, then midiOutReset. Called whenever a program is torn down. */
 void audio_wave_midi_silence(audio_wave *aw);

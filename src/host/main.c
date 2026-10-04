@@ -76,6 +76,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "dpmi_rmcs.h"  /* GH #247: the real-mode call structure, and 0300h's routing */
 #include "dpmi_svc.h"   /* GH #248: INT 31h's spec-decided answers (selectors, callbacks, 0503h) */
+#include "i33_driver.h" /* GH #264/#265: INT 33h cursor masks, profiles, alternate handlers */
 #include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
@@ -110,8 +111,11 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
 typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
+#include "bios_prtsc.h"   /* #274: the default INT 05h's byte sequencer */
 typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
-                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF) ? 1 : -1];
+                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
+                               && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
+                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4 <= 0x6F0) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -144,6 +148,7 @@ typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
 #include "../../sdk/include/ntvdmex-vdd.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
+#include "midi_route.h"       /* #136: Settings > Audio > MIDI -> a host device, by name */
 #include "present_ddraw.h"
 
 /* ── ★ THE FOUR IMPORTS WINDOWS 2000 DOES NOT HAVE. (2026-09-22, user on the 2000 box) ──
@@ -3099,6 +3104,99 @@ static int kbdact_entry(int act)
         if (t[0] == 0xC4 && t[1] == 0xC4 && seg != DOS_HDLR_SEG && seg != DOS_CTAB_SEG) return -1;
     }
     return act == KB_ACT_BREAK ? KBDACT_BRK : KBDACT_PRT;
+}
+
+/* ── #244: IS INT 15h STILL OURS? ─────────────────────────────────────────────────────
+     The BIOS INT 09h calls INT 15h AH=4Fh for every byte (bios_kbdact.asm k4f). Our own
+     INT 15h answers 4Fh with CF=1 and AL untouched -- "process it as it is" -- so while
+     IVT[15h] still points at our stub the call cannot change anything, and making it
+     would cost two VM exits per scancode on the path Doom and Skyroads are fragile on.
+     So the call is made only once something has hooked the vector: exactly the case
+     the intercept exists for (KEYB-style remappers, hot-key TSRs, p_kbd3).
+     g_int15_stub_off is recorded where the stub is planted (bios_ints[]). */
+static WORD  g_int15_stub_off;
+static DWORD g_kb4f_calls, g_kb4f_xlat;         /* k4f entries / bytes it handed back */
+static int int15_hooked(void)
+{
+    return *(volatile WORD *)(ULONG_PTR)(0x15 * 4 + 2) != DOS_CTAB_SEG
+        || *(volatile WORD *)(ULONG_PTR)(0x15 * 4) != g_int15_stub_off;
+}
+
+/* ── #274: THE HOST HALF OF THE DEFAULT INT 05h (bios_kbdact.asm p5; bios_prtsc.h). ───
+     begin: if a print is already running -> CF=1, nothing touched (the nested INT 05h
+     the BIOS's busy byte exists to refuse). Otherwise save the registers the loop and
+     the guest's INT 17h may disturb, read the mode and cursor through OUR INT 10h, and
+     hand back the first byte. next: judge INT 17h's AH, hand back the next byte. At the
+     end the cursor goes back, every saved register is restored, CF=1.
+   ⛔⛔ THE STATUS BYTE IS NOT AT 0050:0000 HERE, AND CANNOT BE WITHOUT A LAYOUT CHANGE.
+     0050:0000 is DOS_HDLR_SEG:0000 -- the first byte of OUR INT 21h stub (`C4 C4 20 CF`,
+     IVT[21h] = 0050:0000). Writing the IBM status values there (01h busy, 00h done) would
+     turn every INT 21h into garbage the moment someone pressed Print Screen. So the
+     status lives in g_prtsc_status (same values, same meaning) and the guest reads C4h
+     at 0050:0000. ⚠ The converse hazard predates this: a program that DISABLES print
+     screen the classic way, `mov byte [0050:0000],1`, overwrites our INT 21h stub. Moving
+     the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
+     filed in the #274 report, not done in passing. */
+static bios_prtsc g_prtsc;
+static DWORD      g_prtsc_sav[9];
+static DWORD      g_prtsc_jobs, g_prtsc_errs;
+static BYTE       g_prtsc_status = PRTSC_OK;   /* what 0050:0000 would hold */
+static void prtsc_int10(ntvdd_regs *r)
+{
+    HOST_LOCK();
+    vdd_bus_deliver_int(&g_bus, 0x10, r);
+    HOST_UNLOCK();
+}
+static uint8_t prtsc_readc(void *ctx, uint8_t row, uint8_t col)
+{
+    ntvdd_regs r;
+    (void)ctx;
+    ZeroMemory(&r, sizeof r);
+    r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = ((DWORD)row << 8) | col;
+    prtsc_int10(&r);                                   /* set cursor  */
+    r.eax = 0x0800; r.ebx = (DWORD)g_prtsc.page << 8;
+    prtsc_int10(&r);                                   /* read cell   */
+    return (uint8_t)r.eax;
+}
+static void prtsc_bop(volatile BYTE *tib, int begin)
+{
+    static const int vr[9] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
+                               VTIB_EDI, VTIB_EBP, VTIB_DS, VTIB_ES };
+    uint8_t ch = 0;
+    int rc, i;
+    if (begin) {
+        ntvdd_regs r;
+        if (g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        for (i = 0; i < 9; ++i) g_prtsc_sav[i] = VDM_REG(tib, vr[i]);
+        g_prtsc_status = PRTSC_BUSY;
+        ZeroMemory(&r, sizeof r);
+        r.eax = 0x0F00; prtsc_int10(&r);               /* AH = columns, BH = page */
+        {   uint8_t cols = (uint8_t)(r.eax >> 8), page = (uint8_t)(r.ebx >> 8);
+            ZeroMemory(&r, sizeof r);
+            r.eax = 0x0300; r.ebx = (DWORD)page << 8; prtsc_int10(&r);
+            bios_prtsc_begin(&g_prtsc, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
+                             (uint16_t)r.edx); }
+        ++g_prtsc_jobs;
+        rc = bios_prtsc_step(&g_prtsc, 0, prtsc_readc, 0, &ch);
+    } else {
+        if (!g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        rc = bios_prtsc_step(&g_prtsc, (uint8_t)(VDM_REG(tib, VTIB_EAX) >> 8),
+                             prtsc_readc, 0, &ch);
+    }
+    if (rc == PRTSC_EMIT) {
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ch;  /* AH=00h */
+        VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;                               /* LPT1   */
+        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+        return;
+    }
+    {   ntvdd_regs r;
+        ZeroMemory(&r, sizeof r);
+        r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = g_prtsc.cursor;
+        prtsc_int10(&r); }
+    g_prtsc_status = (rc == PRTSC_ERROR) ? PRTSC_ERR : PRTSC_OK;
+    if (rc == PRTSC_ERROR) ++g_prtsc_errs;
+    for (i = 0; i < 9; ++i) VDM_REG(tib, vr[i]) = g_prtsc_sav[i];
+    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
 }
 static void dos_auxout(void *ctx, uint8_t c)
 {
@@ -6849,6 +6947,14 @@ static void host_midi_sink(void *ctx, uint32_t msg)
     (void)ctx;
     audio_wave_midi(&g_wave, msg);
 }
+/* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
+   synth by name (g_wave.midi_ext) -- see midi_route.h. Otherwise SysEx is swallowed in
+   vdd_mpu exactly as it always was. */
+static void host_midi_sysex(void *ctx, const uint8_t *msg, uint32_t len)
+{
+    (void)ctx;
+    audio_wave_midi_long(&g_wave, msg, len);
+}
 
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_mpu's: two
@@ -8514,13 +8620,64 @@ static DWORD         g_ms_autocap_fired = 0;
    used the mouse". Defined here rather than beside the rules it serves because the
    status strip, which is built long before input_capture_set, has to answer it too.
    The full policy is written out above input_capture_set; do not add a second latch. */
-static int capture_allowed(void) { return g_ms_want_capture != 0; }
+/* ── #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
+     follows Windows' own pointer, and no capture is needed." So it is the capture policy
+     with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
+     one that never did -- the pointer stays the desktop's, WM_MOUSEMOVE positions and
+     buttons reach the guest (rule 6's "ordinary window" arm), and nothing ever
+     ClipCursors it. capture_allowed() is the one place the policy reads it.
+   ⚠ THE RAW DELTAS ARE GATED ON THE POINTER BEING OVER OUR VIDEO (WM_INPUT). Raw input
+     follows focus, so without that a seamless guest that reads mickeys (0Bh) would keep
+     moving while the pointer was dragged across someone else's window.
+   ⚠ NEITHER POINTER IS HIDDEN FOR IT: Show Host Mouse Cursor governs the arrow exactly
+     as for a guest that never used the mouse (Smart hides it after 5 s still), and the
+     guest draws its own as it always did -- so with Always, two pointers show. Hiding
+     the arrow over the video would leave NO pointer in a graphics mode where our INT 33h
+     draws none (09h shapes are accepted and discarded); unmeasured which guests that is. Default OFF = capture, the behaviour every build so far has had.
+     Live: OK in the dialog releases a held capture at once (settings_apply). */
+static volatile LONG g_ms_seamless = 0;
+static int capture_allowed(void) { return g_ms_want_capture != 0 && !g_ms_seamless; }
 /* RULE 6 (see the capture rules above input_capture_set): does host mouse input reach
    the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
    Uses the mouse but released: no. Read on the UI thread only. */
 static int mouse_goes_to_guest(void) { return g_captured || !capture_allowed(); }
 
-static DWORD g_ms_shape_sets;      /* 09h (and 0Ah BX=1): cursor shapes we accept and discard */
+static DWORD g_ms_shape_sets;      /* 09h (and 0Ah BX=1): cursor shapes defined       */
+/* ── ★ 09h's BITMAP IS DRAWN NOW (#264). ─────────────────────────────────────────────
+     It used to be "accepted and discarded" and the host arrow drawn regardless, so a
+     game's crosshair or hand was never seen. Now a defined shape replaces the arrow,
+     applied with the driver's own arithmetic (i33_driver.h: AND the screen mask, XOR the
+     cursor mask, hot spot on the pointer); a reset (00h/21h) puts the host arrow back,
+     as a reset puts the real driver's default arrow back.
+   ⚠ DOUBLE-BUFFERED, because the exec thread writes it (09h) and the UI thread reads it
+     (the present): 09h fills the buffer NOT being shown and then flips g_ms_gc_buf, so
+     a present never sees half of one shape and half of another. */
+static uint16_t      g_ms_gc_scr[2][I33_GC_ROWS], g_ms_gc_cur[2][I33_GC_ROWS];
+static volatile LONG g_ms_gc_buf;          /* which of the two the present reads      */
+static volatile LONG g_ms_gc_defined;      /* 0 = the host arrow; 1 = 09h's bitmap     */
+static DWORD         g_ms_gc_badptr;       /* 09h ES:DX we refused to read             */
+/* ── 2Bh-2Eh / 33h: THE ACCELERATION PROFILES, STORED, NOT APPLIED (#265). ─────────────
+     See i33_driver.h for the layout and for why the curves are never applied. Exec
+     thread only. */
+static uint8_t       g_ms_acc[I33_ACC_LEN];
+static LONG          g_ms_acc_cur = I33_ACC_DEFAULT;
+static int           g_ms_acc_ok;          /* g_ms_acc holds the defaults or a 2Bh load  */
+static DWORD         g_ms_acc_calls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
+/* ── 18h/19h: THE SHIFT-QUALIFIED HANDLERS, AND NOW THEY ARE CALLED (#265). ────────────
+     They were refused (AX=FFFFh) because nothing delivered them. mouse_evq_take() now
+     picks, per event, between these and 0Ch's handler by the BDA shift state -- the
+     one picker both delivery paths (V86 mouse_cb_try, PM dpmi_inject_pm_mousecb) use. */
+static i33_alt       g_ms_alt[I33_ALT_N];
+static DWORD         g_ms_alt_calls;       /* events delivered to an alternate handler   */
+
+/* Fill the hidden buffer, then show it (see g_ms_gc_buf). Does not set g_ms_gc_defined:
+   the caller decides whether the shape is the guest's (09h) or a restored one (17h). */
+static void i33_gc_define(const WORD *scr, const WORD *cur)
+{
+    int r, b = (int)((g_ms_gc_buf + 1) & 1);
+    for (r = 0; r < I33_GC_ROWS; ++r) { g_ms_gc_scr[b][r] = scr[r]; g_ms_gc_cur[b][r] = cur[r]; }
+    InterlockedExchange(&g_ms_gc_buf, b);
+}
 /* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
    (char, attr) word. The driver's defaults invert the colours and leave the character. */
 static volatile LONG g_ms_tc_and = 0x77FF, g_ms_tc_xor = 0x7700;
@@ -8554,7 +8711,8 @@ static void i33_set_range(volatile LONG *lo, volatile LONG *hi, LONG a, LONG b)
 /* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
    and only ever hands the same buffer back to 17h, so nothing outside this file
    reads it. Versioned so a restore cannot be fed a block from an older build. */
-#define I33_STATE_MAGIC 0x3933564EuL       /* 'NV39' (#249 added the speed/v8 fields) */
+#define I33_STATE_MAGIC 0x4133564EuL       /* 'NV3A' (#264/#265 added the cursor bitmap,
+                                              the alternate handlers and the profile) */
 typedef struct {
     DWORD magic;
     LONG  x, y, hidden;
@@ -8562,6 +8720,9 @@ typedef struct {
     LONG  mick_x, mick_y, dbl;
     LONG  evt_mask, evt_seg, evt_off;
     LONG  spd_x, spd_y, spd_dbl, hot_x, hot_y, page, rate;
+    LONG  gc_defined, acc_cur;
+    WORD  gc_scr[I33_GC_ROWS], gc_cur[I33_GC_ROWS];
+    i33_alt alt[I33_ALT_N];
 } i33_state;
 
 static void i33_state_save(volatile BYTE *p)
@@ -8575,6 +8736,10 @@ static void i33_state_save(volatile BYTE *p)
     s.evt_mask = g_ms_evt_mask; s.evt_seg = g_ms_evt_seg; s.evt_off = g_ms_evt_off;
     s.spd_x = g_ms_spd_x; s.spd_y = g_ms_spd_y; s.spd_dbl = g_ms_spd_dbl; s.hot_x = g_ms_hot_x; s.hot_y = g_ms_hot_y;
     s.page = g_ms_page; s.rate = g_ms_rate;
+    s.gc_defined = g_ms_gc_defined; s.acc_cur = g_ms_acc_cur;
+    { int r, b = (int)(g_ms_gc_buf & 1);
+      for (r = 0; r < I33_GC_ROWS; ++r) { s.gc_scr[r] = g_ms_gc_scr[b][r]; s.gc_cur[r] = g_ms_gc_cur[b][r]; } }
+    memcpy(s.alt, g_ms_alt, sizeof s.alt);
     { unsigned i; const BYTE *q = (const BYTE *)&s;
       for (i = 0; i < sizeof s; ++i) p[i] = q[i]; }
 }
@@ -8597,6 +8762,10 @@ static void i33_state_load(volatile BYTE *p)
     InterlockedExchange(&g_ms_spd_x, s.spd_x); InterlockedExchange(&g_ms_spd_y, s.spd_y); InterlockedExchange(&g_ms_spd_dbl, s.spd_dbl);
     InterlockedExchange(&g_ms_hot_x, s.hot_x); InterlockedExchange(&g_ms_hot_y, s.hot_y);
     InterlockedExchange(&g_ms_page, s.page);   InterlockedExchange(&g_ms_rate, s.rate);
+    i33_gc_define(s.gc_scr, s.gc_cur);
+    InterlockedExchange(&g_ms_gc_defined, s.gc_defined ? 1 : 0);
+    if (s.acc_cur >= 1 && s.acc_cur <= I33_ACC_N) g_ms_acc_cur = s.acc_cur;
+    memcpy(g_ms_alt, s.alt, sizeof g_ms_alt);
 }
 
 /* Resolve a guest ES:DX to something we may touch. The segment means different things
@@ -8605,7 +8774,7 @@ static void i33_state_load(volatile BYTE *p)
    a guest register, and 16h/17h are exactly where a wrong one would fault the host
    rather than the guest. mem_readable is the same guard the call-site capture uses. */
 static volatile BYTE *i33_guest_ptr(volatile BYTE *tib, int src,
-                                    WORD seg, WORD off, SIZE_T len, int forwrite)
+                                    WORD seg, DWORD off, SIZE_T len, int forwrite)
 {
     ULONG_PTR lin;
     (void)tib;
@@ -8645,6 +8814,12 @@ static void i33_reset_state(void)
     InterlockedExchange(&g_ms_hot_x, 0);  InterlockedExchange(&g_ms_hot_y, 0);
     InterlockedExchange(&g_ms_tc_hw, 0);
     InterlockedExchange(&g_ms_page, 0);   InterlockedExchange(&g_ms_rate, 3);
+    /* #264/#265: the default cursor (the host arrow), no alternate handlers, the default
+       profiles. ⚠ That a reset clears 18h's handlers and the loaded profiles is the
+       reading "everything the driver owns goes back to power-on" -- UNMEASURED. */
+    InterlockedExchange(&g_ms_gc_defined, 0);
+    ZeroMemory(g_ms_alt, sizeof g_ms_alt);
+    i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1;
     for (i = 0; i < MS_BTNS; ++i) {
         InterlockedExchange(&g_ms_press_n[i], 0);
         InterlockedExchange(&g_ms_rel_n[i], 0);
@@ -8676,16 +8851,18 @@ static void i33_reset_state(void)
      a descriptor pair that does not care. */
 static uint8_t *g_extmem_raw;                  /* AH=88h's 15 MB, allocated on first use */
 static DWORD    g_i15_87_n, g_i15_87_refused;
-static unsigned int15_move_block(volatile BYTE *tib)
+/* `gdt_lin` = where the caller's 48-byte GDT is: ES:SI in V86; in PM the base of the
+   selector in ES plus (E)SI (#244, the PM arm). */
+static unsigned int15_move_block_at(volatile BYTE *tib, DWORD gdt_lin)
 {
-    DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
     DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, n = cx * 2u;
-    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)((es << 4) + si);
+    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)gdt_lin;
     uint32_t src, dst;
     uint8_t *ps, *pd;
     unsigned rc = 0;
     if (cx == 0) return 0;                      /* nothing to move: done */
     if (cx > 0x8000u) { rc = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
+    if (!gdt) { rc = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
     src = extmem_desc_base(gdt + 0x10);
     dst = extmem_desc_base(gdt + 0x18);
     if (!g_extmem_raw && (extmem_classify(&g_xms, src, n) == EXTMEM_RAW
@@ -8711,6 +8888,11 @@ out:
         }
     }
     return rc;
+}
+static unsigned int15_move_block(volatile BYTE *tib)
+{
+    DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+    return int15_move_block_at(tib, (es << 4) + si);
 }
 
 static void video_trap_sync(void);             /* fwd */
@@ -8814,10 +8996,38 @@ static void i33_take_motion(LONG x, LONG y, LONG *pdx, LONG *pdy)
        25h 26h 27h 2Ah 2Fh 30h 31h 32h  -> set
        28h/29h  answered ("cannot set" / "no modes to list"), but no mode list exists,
                 so not claimed;
-       2Bh-2Eh acceleration profiles, 33h switch settings, 34h MOUSE.INI -> MISS,
-                they still reach `default:`; the clear bit is the honest signpost. */
+       2Bh-2Eh acceleration profiles, 33h switch settings, 34h MOUSE.INI -> set since
+                #265: answered with the documented shapes (the profiles are stored and
+                handed back, NOT applied -- see i33_driver.h). E43Ch -> E7FFh. */
 #define I33_ACTIVE_FNS  (0x8000u | 0x4000u | 0x2000u | 0x0400u    /* 25h 26h 27h 2Ah */ \
-                       | 0x0020u | 0x0010u | 0x0008u | 0x0004u)   /* 2Fh 30h 31h 32h */
+                       | 0x0200u | 0x0100u | 0x0080u | 0x0040u    /* 2Bh 2Ch 2Dh 2Eh */ \
+                       | 0x0020u | 0x0010u | 0x0008u | 0x0004u    /* 2Fh 30h 31h 32h */ \
+                       | 0x0002u | 0x0001u)                       /* 33h 34h         */
+
+/* ── WHERE A POINTER INTO THE DRIVER GOES (#265). 2Ch/2Dh/34h hand back ES:SI / ES:DX
+     at the driver's own bytes (VDD_MOUSE_SEG). A real-mode caller (V86, or a DPMI 0300h
+     excursion) gets the paragraph; a protected-mode caller cannot use a paragraph in ES
+     -- loading it would fault -- so it gets a data selector over the same 64 KB
+     (dpmi_seg_to_desc, cached: one LDT slot for the life of the VDM), and the offset
+     goes into the full 32-bit register so a flat client reading ES:ESI sees no junk in
+     the top half. ⚠ A real driver under DOS/4GW never sees this question -- the
+     extender translates the calls it knows and passes the rest down; ours is the shape
+     a client that issues the INT in PM would most usefully get. UNMEASURED. */
+static WORD dpmi_seg_to_desc(WORD seg);
+static volatile BYTE *i33_drvdata(void)
+{ return (volatile BYTE *)vdd_map_flat(&g_bus, VDD_MOUSE_SEG, 0); }
+static void i33_ret_ptr(volatile BYTE *tib, int src, int offreg, WORD off)
+{
+    if (src == I33_SRC_PM) {
+        VDM_SET16(tib, VTIB_ES, dpmi_seg_to_desc(VDD_MOUSE_SEG));
+        VDM_REG(tib, offreg) = off;
+    } else {
+        VDM_SET16(tib, VTIB_ES, VDD_MOUSE_SEG);
+        VDM_SET16(tib, offreg, off);
+    }
+}
+static void i33_acc_ready(void)
+{ if (!g_ms_acc_ok) { i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1; } }
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
@@ -8869,7 +9079,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
          not use, and it is the AX a mis-patched site is most likely to arrive with. */
     if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005 || ax == 0x0006
         || ax == 0x0007 || ax == 0x0008 || ax == 0x000B
-        || ax == 0x000C || ax == 0x0014)
+        || ax == 0x000C || ax == 0x0014 || ax == 0x0018)
         InterlockedExchange(&g_ms_want_capture, 1);
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
@@ -8931,17 +9141,29 @@ static void mouse_int33(volatile BYTE *tib, int src)
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         InterlockedExchange(&g_ms_y, i33_py(i33_clampy(i33_vy(y))));
         break;
-    case 0x0009:                                        /* define graphics cursor  */
-        /* Accepted and ignored ON PURPOSE: the host draws its own overlay pointer
-           (overlay_cursor), so a guest-supplied bitmap has nowhere to go. Unlike the
-           old `default:` this is a decision, and it is counted below so a guest whose
-           pointer looks wrong can be told apart from one we never heard from.
-           ► The HOT SPOT (BX, CX; -16..16) is kept (#249): 2Ah reports it back, and a
-             guest that saves and restores its cursor reads it from there. */
+    case 0x0009: {                                      /* define graphics cursor  */
+        /* ★ #264: THE BITMAP IS READ AND DRAWN. It was "accepted and ignored on
+           purpose" because the host arrow had nowhere to put it. ES:DX -> 16 screen-mask
+           words then 16 cursor-mask words (i33_driver.h). The hot spot (BX, CX; -16..16)
+           is kept as before (#249) -- 2Ah reports it back, and the overlay places the
+           bitmap by it. A pointer we may not read is refused and COUNTED, and the shape
+           before it stays: a cursor made of whatever an unreadable address held is worse
+           than the previous one. */
+        volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                         mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)),
+                                         2 * 2 * I33_GC_ROWS, 0);
         InterlockedExchange(&g_ms_hot_x, (LONG)(SHORT)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
         InterlockedExchange(&g_ms_hot_y, (LONG)(SHORT)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         ++g_ms_shape_sets;
-        break;
+        if (!p) { ++g_ms_gc_badptr; break; }
+        {   WORD scr[I33_GC_ROWS], cur[I33_GC_ROWS]; int r;
+            for (r = 0; r < I33_GC_ROWS; ++r) {
+                scr[r] = (WORD)(p[2 * r] | (p[2 * r + 1] << 8));
+                cur[r] = (WORD)(p[32 + 2 * r] | (p[32 + 2 * r + 1] << 8));
+            }
+            i33_gc_define(scr, cur);
+            InterlockedExchange(&g_ms_gc_defined, 1); }
+        break; }
     case 0x000A:                                        /* define text cursor      */
         /* BX=0: a SOFTWARE cursor -- CX is the screen mask (AND), DX the cursor mask
            (XOR), applied to the (char, attr) word of the cell under the pointer. That
@@ -9052,17 +9274,30 @@ static void mouse_int33(volatile BYTE *tib, int src)
        an unknown call. */
     case 0x000D: case 0x000E:
         break;
-    /* ── 18h/19h ALTERNATE (SHIFT-QUALIFIED) HANDLERS: REFUSED, HONESTLY. ───────────
-         18h answers AX=0018h on success, FFFFh on error -- and through `default:` the
-         caller's own 0018h came back, i.e. "installed", for a handler that would
-         never be called. FFFFh until the shift-state delivery exists; 19h says "no
-         handler for that mask" (CX=0). */
+    /* ── 18h/19h ALTERNATE (SHIFT-QUALIFIED) HANDLERS. (#265) ──────────────────────
+         18h answers AX=0018h on success, FFFFh on error. Through `default:` the
+         caller's own 0018h came back -- "installed" -- for a handler nothing called;
+         #249 made that an honest FFFFh; now mouse_evq_take() delivers them, so they
+         install. 18h refuses a mask with no Shift/Ctrl/Alt bit and a fourth
+         combination. 19h: BX:DX = the handler for CX's shift combination, CX = its whole
+         mask; CX=0 = none (BX/DX left alone). The rules, and which of them are our
+         reading rather than a measurement, are in i33_driver.h. */
     case 0x0018:
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        if (i33_alt_set(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+                        (uint16_t)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                        (uint32_t)mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)))) {
+            VDM_SET16(tib, VTIB_EAX, 0x0018);
+            ++g_ms_evt_installs;
+        } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
-    case 0x0019:
-        VDM_SET16(tib, VTIB_ECX, 0x0000);
-        break;
+    case 0x0019: {
+        int k = i33_alt_find(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        if (k < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
+        VDM_SET16(tib, VTIB_ECX, g_ms_alt[k].mask);
+        VDM_SET16(tib, VTIB_EBX, g_ms_alt[k].seg);
+        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_ms_alt[k].off;
+        else VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_alt[k].off);
+        break; }
     /* ── 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
          wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
          (p_mouse2 i33.20.*): MOUSE.COM 6.24 and DOSBox-X both return AX untouched
@@ -9151,6 +9386,111 @@ static void mouse_int33(volatile BYTE *tib, int src)
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)g_ms_hot_y);
         VDM_SET16(tib, VTIB_EDX, 0x0004);
         break;
+    /* ══ 2Bh-2Eh, 33h, 34h: THE PROFILES, THE SETTINGS BLOCK, THE .INI NAME. (#265) ══
+         All reached `default:` (and 32h said so). The register contracts are RBIL's; the
+         block layouts and every UNMEASURED choice are in i33_driver.h. The profiles are
+         STORED AND HANDED BACK, never applied. Failure is AX=FFFEh throughout -- the
+         value RBIL gives 2Dh/2Eh -- and 2Bh, whose RBIL entry says only "success flag",
+         is given the same 0000h/FFFEh pair (UNMEASURED). */
+    case 0x002B: {                                      /* load acceleration profiles */
+        /* BX = the profile to make active (1-4), or FFFFh = restore the default curves;
+           ES:SI -> a 144h-byte block (not read for FFFFh). */
+        WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+        ++g_ms_acc_calls; i33_acc_ready();
+        if (bx == 0xFFFF) { i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; }
+        else if (bx >= 1 && bx <= I33_ACC_N) {
+            volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                             mouse_i33_off(tib, src, VDM_REG(tib, VTIB_ESI)),
+                                             I33_ACC_LEN, 0);
+            unsigned i;
+            if (!p) { ++g_ms_state_badptr; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+            for (i = 0; i < I33_ACC_LEN; ++i) g_ms_acc[i] = p[i];
+            g_ms_acc_cur = bx;
+        } else { VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        break; }
+    case 0x002C: {                                      /* get acceleration profiles  */
+        /* AX=0, BX = the active profile, ES:SI -> the block -- written out fresh on every
+           call, so a guest that scribbled on the last copy reads a good one. */
+        volatile BYTE *d = i33_drvdata(); unsigned i;
+        ++g_ms_acc_calls; i33_acc_ready();
+        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_ms_acc[i];
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
+        i33_ret_ptr(tib, src, VTIB_ESI, VDD_MOUSE_ACC);
+        break; }
+    case 0x002D: {                                      /* select acceleration profile */
+        /* BX = 1-4 selects, FFFFh only asks. AX=0 with BX = the active profile and ES:SI
+           -> its 16-byte name; an invalid BX is AX=FFFEh with BX = the (unchanged)
+           active profile, and ES:SI -- "destroyed" per RBIL -- left as it was. */
+        WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+        volatile BYTE *d = i33_drvdata(); unsigned i;
+        ++g_ms_acc_calls; i33_acc_ready();
+        if (bx != 0xFFFF && (bx < 1 || bx > I33_ACC_N)) {
+            VDM_SET16(tib, VTIB_EAX, 0xFFFE);
+            VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
+            break;
+        }
+        if (bx != 0xFFFF) g_ms_acc_cur = bx;
+        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_ms_acc[i];
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
+        i33_ret_ptr(tib, src, VTIB_ESI,
+                    (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_ms_acc_cur - 1) * I33_ACC_NAMELEN));
+        break; }
+    case 0x002E: {                                      /* set acceleration profile names */
+        /* ES:SI -> 64 bytes, four 16-byte names. BL = 0: they become the names. BL != 0:
+           "fill ES:SI buffer with default names on return" -- read here as RESTORE the
+           default names and hand them back. ⚠ UNMEASURED (RBIL is the only voice; only an
+           8.10+ driver has 2Eh at all). */
+        int fill = (VDM_REG(tib, VTIB_EBX) & 0xFF) != 0;
+        volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                         mouse_i33_off(tib, src, VDM_REG(tib, VTIB_ESI)),
+                                         I33_ACC_N * I33_ACC_NAMELEN, fill);
+        unsigned i;
+        ++g_ms_acc_calls; i33_acc_ready();
+        if (!p) { ++g_ms_state_badptr; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        if (fill) {
+            i33_acc_default_names(g_ms_acc + I33_ACC_NAMES);
+            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) p[i] = g_ms_acc[I33_ACC_NAMES + i];
+        } else
+            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) g_ms_acc[I33_ACC_NAMES + i] = p[i];
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        break; }
+    case 0x0033: {                                      /* switch settings + profiles */
+        /* CX = the buffer's size, ES:DX -> it. AX=0, CX = bytes written (at most 154h);
+           a short buffer gets the head of the block (i33_settings_block). A buffer we
+           may not write gets CX=0 -- "nothing returned" -- not a fault. */
+        unsigned cap = (unsigned)(VDM_REG(tib, VTIB_ECX) & 0xFFFF), n, i;
+        uint8_t blk[I33_SET_LEN];
+        i33_settings st;
+        volatile BYTE *p = NULL;
+        ++g_ms_acc_calls; i33_acc_ready();
+        if (cap > I33_SET_LEN) cap = I33_SET_LEN;
+        if (cap) p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                   mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)), cap, 1);
+        if (!p) { if (cap) ++g_ms_state_badptr; cap = 0; }
+        st.type = 4; st.language = 0;
+        st.hsens = (uint8_t)g_ms_spd_x; st.vsens = (uint8_t)g_ms_spd_y;
+        st.dblspd = (uint8_t)g_ms_spd_dbl; st.curve = (uint8_t)g_ms_acc_cur;
+        st.rate = (uint8_t)g_ms_rate;
+        n = i33_settings_block(blk, cap, &st, g_ms_acc);
+        for (i = 0; i < n; ++i) p[i] = blk[i];
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_ECX, (WORD)n);
+        break; }
+    case 0x0034: {                                      /* initialization file name */
+        /* AX=0, ES:DX -> "MOUSE.INI". There is no such file: a real driver names the one
+           it read; with none present the name a guest gets is the one it would look for,
+           and opening it fails exactly as on a machine without one. The bare name (no
+           path) is ours -- UNMEASURED. */
+        static const char ini[] = "MOUSE.INI";
+        volatile BYTE *d = i33_drvdata(); unsigned i;
+        ++g_ms_acc_calls;
+        for (i = 0; i < sizeof ini; ++i) d[VDD_MOUSE_INI + i] = (BYTE)ini[i];
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        i33_ret_ptr(tib, src, VTIB_EDX, VDD_MOUSE_INI);
+        break; }
     case 0x002F:                                        /* mouse hardware reset    */
         /* FFFFh = done. There is no device under us to re-initialise; the driver's
            own state is untouched, as the call documents (00h/21h reset that). */
@@ -9189,11 +9529,48 @@ static void mouse_int33(volatile BYTE *tib, int src)
     }
 }
 
+/* Is there anyone to deliver an event TO -- 0Ch's handler (a mask and an address) or
+   any 18h handler with event bits? */
+static int mouse_any_handler(void)
+{
+    return (g_ms_evt_mask && (g_ms_evt_seg | g_ms_evt_off) != 0) || i33_alt_any(g_ms_alt);
+}
+
+/* ── THE ONE PICKER BOTH DELIVERY PATHS USE (#265). ───────────────────────────────────
+     Pop the oldest queued event SOMEONE asked for and say who: 0Ch's handler, or the
+     18h handler whose Shift/Ctrl/Alt combination is the one held (i33_pick). Unwanted
+     events are skipped, as they always were. The shift state is read HERE, at delivery,
+     from BDA 0040:0017 -- not at the event: the UI thread that queues events must not
+     touch guest memory, and a key held for a click is still held a loop pass later.
+     ⚠ A Shift released inside that window would route the click to 0Ch's handler. */
+static int mouse_evq_take(ms_evt_t *ev, LONG *ax, WORD *seg, DWORD *off)
+{
+    LONG t; int n = 0;
+    unsigned main_mask = (g_ms_evt_seg | g_ms_evt_off) ? (unsigned)g_ms_evt_mask : 0u;
+    uint8_t kb = *(volatile BYTE *)(ULONG_PTR)(0x400 + BDA_KB_FLAGS);
+    while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
+        unsigned a; int who;
+        t = g_ms_evq_tail;
+        *ev = g_ms_evq[t];
+        g_ms_evq_tail = (t + 1) % MS_EVQ;
+        who = i33_pick(g_ms_alt, (unsigned)ev->bits, kb, main_mask, &a);
+        if (who == -2) continue;
+        if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
+        *ax = (LONG)a;
+        if (who >= 0) { *seg = g_ms_alt[who].seg; *off = g_ms_alt[who].off; ++g_ms_alt_calls; }
+        else          { *seg = (WORD)g_ms_evt_seg; *off = (DWORD)g_ms_evt_off; }
+        return 1;
+    }
+    if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
+    return 0;
+}
+
 /* Deliver pending mouse events to the guest's INT 33h handler -- see g_ms_evt_pend.
    Called at the exec-loop boundary, right after the IRQ gates, V86 thread only. */
 static void mouse_cb_try(volatile BYTE *tib)
 {
-    LONG mask = g_ms_evt_mask, pend;
+    LONG pend;
+    WORD hseg; DWORD hoff;
     DWORD cs, ip, fl, ss, sp;
     ms_evt_t ev = { 0, 0, 0, 0 };
     if (g_ms_cb_active) {                          /* a handler that never came back */
@@ -9202,8 +9579,10 @@ static void mouse_cb_try(volatile BYTE *tib)
         }
         ++g_ms_cb_why[0]; return;
     }
-    if (!mask || g_ms_evq_head == g_ms_evq_tail) { ++g_ms_cb_why[1]; return; }
-    if ((g_ms_evt_seg | g_ms_evt_off) == 0) { ++g_ms_cb_why[2]; return; }
+    /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
+    if ((!g_ms_evt_mask && !i33_alt_any(g_ms_alt)) || g_ms_evq_head == g_ms_evq_tail)
+    { ++g_ms_cb_why[1]; return; }
+    if (!mouse_any_handler()) { ++g_ms_cb_why[2]; return; }
     if (g_dpmi_pm) {                               /* PM client: dpmi_inject_pm_mousecb()
                                                       delivers from the PM loop; leave the
                                                       queue for it (s74c -- it used to be
@@ -9246,18 +9625,8 @@ static void mouse_cb_try(volatile BYTE *tib)
             return;
         }
     }
-    /* The oldest queued event the handler asked for; unmasked ones are skipped. */
-    {   LONG t; int n = 0;
-        pend = 0;
-        while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
-            t = g_ms_evq_tail;
-            ev = g_ms_evq[t];
-            g_ms_evq_tail = (t + 1) % MS_EVQ;
-            if (ev.bits & mask) { pend = ev.bits & mask; break; }
-        }
-        if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
-        if (!pend) return;
-    }
+    /* The oldest queued event a handler asked for, and which handler (mouse_evq_take). */
+    if (!mouse_evq_take(&ev, &pend, &hseg, &hoff) || !pend) return;
     /* Save the whole interrupted context host-side. */
     g_ms_cb_saved.eax = VDM_REG(tib, VTIB_EAX); g_ms_cb_saved.ebx = VDM_REG(tib, VTIB_EBX);
     g_ms_cb_saved.ecx = VDM_REG(tib, VTIB_ECX); g_ms_cb_saved.edx = VDM_REG(tib, VTIB_EDX);
@@ -9277,8 +9646,8 @@ static void mouse_cb_try(volatile BYTE *tib)
     VDM_SET16(tib, VTIB_ESI, 0);
     VDM_SET16(tib, VTIB_EDI, 0);
     VDM_SET16(tib, VTIB_DS,  DOS_HDLR_SEG);        /* "the driver's DS"              */
-    VDM_SET16(tib, VTIB_CS,  (WORD)g_ms_evt_seg);
-    VDM_SET16(tib, VTIB_EIP, (WORD)g_ms_evt_off);
+    VDM_SET16(tib, VTIB_CS,  hseg);                /* 0Ch's handler, or 18h's (#265) */
+    VDM_SET16(tib, VTIB_EIP, (WORD)hoff);
     g_ms_cb_active = 1; g_ms_cb_since = GetTickCount() | 1;
     ++g_ms_cb_inj;
     if (g_ms_cb_inj <= 3) g_ms_cb_trace = 10;     /* see g_ms_cb_trace: the next VM events */
@@ -9291,14 +9660,14 @@ static void mouse_cb_try(volatile BYTE *tib)
         cq = zput(cq, " efl=0x");  cq = zhex(cq, g_ms_cb_saved.efl);
         cq = zput(cq, " ss:sp=0x"); cq = zhex(cq, g_ms_cb_saved.ss);
         cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.esp);
-        cq = zput(cq, " -> 0x");   cq = zhex(cq, (DWORD)g_ms_evt_seg);
-        cq = zput(cq, ":0x");      cq = zhex(cq, (DWORD)g_ms_evt_off);
+        cq = zput(cq, " -> 0x");   cq = zhex(cq, (DWORD)hseg);
+        cq = zput(cq, ":0x");      cq = zhex(cq, hoff & 0xFFFF);
         /* The three things the handler's return depends on, read back from guest memory:
            the code at the handler, the return BOP at DOS_HDLR_SEG:MS_CB_RET_OFF, and the
            far-return frame just pushed. If any is not what was intended, the trace that
            follows is explained before it is read. */
         cq = zput(cq, " code@hdl=");
-        cq = zdump(cq, (const void *)(ULONG_PTR)(((DWORD)g_ms_evt_seg << 4) + g_ms_evt_off), 8);
+        cq = zdump(cq, (const void *)(ULONG_PTR)(((DWORD)hseg << 4) + (hoff & 0xFFFF)), 8);
         cq = zput(cq, " ret@50:12=");
         cq = zdump(cq, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
         cq = zput(cq, " frame@sp=");
@@ -9346,8 +9715,9 @@ static void mouse_cb_return(volatile BYTE *tib)
 }
 
 /* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
-   ' ' = transparent; hotspot at the top-left tip. Drawn into the 8bpp frame each
-   present -- the frame is re-rendered from VRAM every tick, so it leaves no trail. */
+   ' ' = transparent; hotspot at the top-left tip. Drawn into the presenter's 8-bpp
+   SNAPSHOT each present (#264) -- ⛔ not the frame: in mode 13h the frame IS guest VRAM,
+   so "re-rendered every tick, leaves no trail" was false there; see the present path. */
 /* The INT 33h driver cursor. This was hand-drawn ASCII art until the demo sweep
    turned up its one cosmetic defect -- "the mouse cursor is not quite the right
    shape" -- so it is now DECODED FROM REAL ARTWORK and regenerated rather than
@@ -9386,6 +9756,28 @@ static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my
             px[y * stride + x] = (c == 'o') ? 0 : 15;     /* black outline / white fill */
         }
     }
+}
+
+/* ── THE GRAPHICS-MODE POINTER, onto the presenter's 8-bpp snapshot (#264). ─────────
+     Until the guest defines a shape (09h) it is the host arrow above; after, it is the
+     guest's bitmap with the driver's AND/XOR arithmetic and hot spot (i33_driver.h).
+     ⚠ The frame holds what each renderer made of video memory: the 4-bit plane value
+     in a 16-colour mode, the byte in 13h/mode Y/8-bpp VESA, 0/15 in CGA mode 06h -- all
+     of which an XOR of 0Fh treats as the driver would -- and in CGA 4-colour the
+     PALETTE-MAPPED colour, which i33_gc_row maps back through the renderer's own table
+     first. ⚠ Mode 11h (and 0Fh) render all four planes while the attribute controller
+     shows fewer; an XOR of 0Fh there sets planes the display would ignore. Cosmetic,
+     unmeasured, and the renderer's question rather than the cursor's. */
+static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
+{
+    int b;
+    const uint8_t *map4 = NULL;
+    if (!g_ms_gc_defined) { overlay_cursor(px, W, H, stride, g_ms_x, g_ms_y); return; }
+    b = (int)(g_ms_gc_buf & 1);
+    if (g_vid.mkind == VID_KIND_CGA && !g_vid.in_vesa && g_vid.cga_bpp != 1)
+        map4 = vdd_video_cga4_map(&g_vid);
+    i33_gc_draw(px, W, H, stride, (int)g_ms_x, (int)g_ms_y, (int)g_ms_hot_x, (int)g_ms_hot_y,
+                g_ms_gc_scr[b], g_ms_gc_cur[b], 0x0F, map4);
 }
 
 enum {                                       /* wired command IDs                */
@@ -11507,14 +11899,20 @@ static void host_fullscreen_toggle(HWND h)
                        approximate-speed dropdown, and because a real CPU cannot be
                        clocked down it is a DUTY CYCLE -- see src/host/cpuspeed.h,
                        which also carries the one calibration constant.
-       ConventionalKB, Umb -- DOS_MEM_TOP is a compile-time constant and there are no
-                       upper memory blocks to link. See GH #47.
-       Renderer, Filtering -- the windowed path is GDI StretchDIBits; a DirectDraw
-                       windowed blit does not exist yet (the clipper field is unused).
-                       Filtering IS pushed, and GDI honours it in the stretch.
-       Opl (OPL2/OPL3)     -- vdd_opl is a 9-channel OPL2. There is no OPL3 to select.
-       SbModel, Midi, KeyboardLayout, Typematic, SeamlessMouse,
-       A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
+       ★ #136 (s92): ConventionalKB (g_dos_mem_top, start-up only), Midi (aw_midi_open,
+                       start-up only), SeamlessMouse (capture_allowed) are live; so are
+                       HostCursorMode and FloppyUsePhysical, which were read here since s84.
+       STILL STORED ONLY, each for a reason the startup report prints (settings_dead_why):
+         Umb          -- there are no upper memory blocks to link (XMS 10h = B1h, AH=5803h
+                         refused). Providing them is an arena in C000-EFFF, not a switch.
+         A20          -- "A20 Line Always Enabled": the 1 MB wrap is not modelled, so the
+                         line IS always enabled and the unchecked state cannot be honoured
+                         without remapping views on every gate toggle (dos_xms.h). The
+                         gate FLAG already follows the guest; locking it would change the
+                         default, which today honours a guest's disable.
+         CdRomUsePhysical, CdRomImage -- no CD-ROM is mounted into DOS (#240/#241).
+         SoundFontPath -- there is no SF2 synth in this host; Midi=SoundFont routes to a
+                         host SoundFont DRIVER, which keeps its own list (midi_route.h).
        (FloppyAImage IS live: it is what INT 13h opens. JoystickType and
        JoystickGamepad ARE live as of session 62: the gameport VDD and the winmm
        poll thread consume them.) */
@@ -11649,12 +12047,41 @@ static const BYTE SET_LIVE_IDS[] = {
     SET_SBADDR, SET_SBIRQ, SET_SBDMA, SET_SPEAKER, SET_GUS,
     SET_MSENS, SET_TYPEMATIC, SET_JOYTYPE, SET_JOYPAD,
     SET_KBLAYOUT,                                /* s82 #136 */
+    /* #136 (s92). HostCursorMode and FloppyUsePhysical were READ by settings_apply since
+       s84 and simply never listed here, so the report called two working rows dead.
+       ConventionalKB, Midi and SeamlessMouse are new consumers: g_dos_mem_top,
+       aw_midi_open, capture_allowed. */
+    SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
 };
 static int settings_is_live(int id)
 {
     unsigned i;
     for (i = 0; i < sizeof SET_LIVE_IDS; ++i) if (SET_LIVE_IDS[i] == id) return 1;
     return 0;
+}
+/* ── #136: A ROW THAT STAYS DEAD SAYS WHY, IN THE REPORT. ────────────────────────────
+     "stored only" alone reads like an oversight waiting for a line in settings_apply;
+     each of these is a decision, and the reason is what a reader needs to not re-open it.
+     Only rows NOT in SET_LIVE_IDS ever reach this. */
+static const char *settings_dead_why(int id)
+{
+    switch (id) {
+    case SET_UMB:   return "there are no upper memory blocks to provide: XMS 10h answers "
+                           "B1h and AH=5803h is refused, as with no EMM386 / DOS=UMB";
+    case SET_A20:   return "the 1 MB address wrap is not modelled, so the line is always "
+                           "enabled -- the gate FLAG follows the guest through 8042 / 92h / XMS";
+    case SET_CDPHYS: return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
+    default:        return "not used";
+    }
+}
+static const char *settings_dead_why_s(int i)
+{
+    switch (i) {
+    case SET_STR_CDROM:     return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
+    case SET_STR_SOUNDFONT: return "no SoundFont synth in NTVDMEX; MIDI=SoundFont uses a "
+                                   "host SF2 driver, which keeps its own list";
+    default:                return "not used";
+    }
 }
 
 static void settings_log_sources(void)
@@ -11677,7 +12104,9 @@ static void settings_log_sources(void)
             q = zput(q, " OVERRIDDEN by "); q = zput(q, g_set_ovr[i]);
             q = zput(q, " -> "); q = zdec(q, g_set_ovr_v[i]);
         }
-        q = zput(q, settings_is_live(i) ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+        if (settings_is_live(i)) q = zput(q, "\r\n");
+        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why(i));
+               q = zput(q, ", GH #136)\r\n"); }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
         q = zput(q, "  "); q = zput(q, SET_STR_DEFS[i].reg); q = zput(q, " = \"");
@@ -11686,8 +12115,9 @@ static void settings_log_sources(void)
         if (i == SET_STR_SHELL && g_shell_ovr) {
             q = zput(q, " OVERRIDDEN by "); q = zput(q, g_shell_ovr);
         }
-        q = zput(q, (i == SET_STR_FLOPPYA || i == SET_STR_SHELL)
-                    ? "\r\n" : " (stored only -- not used, GH #136)\r\n");
+        if (i == SET_STR_FLOPPYA || i == SET_STR_SHELL) q = zput(q, "\r\n");
+        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why_s(i));
+               q = zput(q, ", GH #136)\r\n"); }
     }
     log_append(LOG_PATH, b, q);
 }
@@ -11728,6 +12158,18 @@ static int g_dspver_forced;                /* cfg\dspver.txt beat the model's ve
    the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
    which some games specifically want. */
 static int g_xms_on = 1, g_ems_on = 1;
+
+/* ── #136: CONVENTIONAL MEMORY, AND WHERE IT ENDS. ────────────────────────────────
+     g_conv_kb_want is the setting (memory FITTED, 64..640 KB); g_dos_mem_top is the
+     paragraph DOS's arena ends at and the EBDA starts at, decided ONCE at start-up from
+     it (bios_conv_top_para -- 640 KB gives exactly DOS_MEM_TOP, 9FC0h, so the default
+     machine is the one every build so far has run). Every consumer reads the variable:
+     INT 12h, 0040:0013, 0040:000E, INT 15h C1h, CMOS 15h/16h, the first PSP's +02h and
+     the MCB chain. ⚠ START-UP ONLY: settings_apply runs again on a dialog OK, but moving
+     the top of an arena a program is already running in is not something any machine
+     does; the new value is the next program's. */
+static unsigned g_conv_kb_want = BIOS_CONV_KB_MAX;
+static uint16_t g_dos_mem_top  = (uint16_t)DOS_MEM_TOP;
 
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
@@ -11784,6 +12226,13 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_floppy_img     = ((!s->v[SET_FLOPPYPHYS] || !host_has_floppy()) && s->s[SET_STR_FLOPPYA][0])
                      ? s->s[SET_STR_FLOPPYA] : NULL;
     g_hostcur_mode   = (int)s->v[SET_HOSTCURSOR];                   /* s84 */
+    /* #136: read at start-up only -- see g_dos_mem_top. */
+    g_conv_kb_want   = bios_conv_kb_clamp((unsigned)s->v[SET_CONVKB]);
+    /* #136: seamless mouse. Turning it on while a guest holds the pointer gives the
+       pointer back now (we are on the UI thread when `live`), rather than leaving a
+       capture that the policy can no longer release by clicking. */
+    InterlockedExchange(&g_ms_seamless, s->v[SET_SEAMLESS] ? 1 : 0);
+    if (live && h && g_ms_seamless && g_captured) input_capture_set(h, 0);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -12602,6 +13051,30 @@ static void key_msg_note(void)
     if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd;
 }
 static void mod_track(uint8_t rawsc, int ext, int down);
+/* ── #274: THE TWO KEYS WHOSE BYTES ARE NOT `[E0] code` / `[E0] code|80h`. ────────────
+     Pause and Ctrl+Break (vdd_input_host_key_bytes has the sequences and the sources).
+     Both send everything on the PRESS, nothing on the release, and never auto-repeat --
+     so pressing one also ends the previous key's typematic, as on the real keyboard,
+     where the repeat belongs to the last key pressed. Pause used to go out as a plain
+     45/C5, which our BIOS (correctly) read as NumLock: the Pause key toggled NumLock.
+     Ctrl+Break went out as E0 46 ... E0 C6 at key-up and repeated while held, so
+     holding it fired INT 1Bh at the typematic rate. Returns 1 if it handled the key. */
+static int host_key_special(uint8_t rawsc, int ext, int is_break)
+{
+    uint8_t b[6];
+    int n, no_rep, i;
+    n = vdd_input_host_key_bytes(rawsc, ext, is_break, b, &no_rep);
+    if (!no_rep) return 0;
+    if (n) {
+        g_ty_on = 0;
+        HOST_LOCK();
+        for (i = 0; i < n; ++i) vdd_input_push_scancode(&g_in, b[i]);
+        HOST_UNLOCK();
+        keylat_push();
+        if (g_key_event) SetEvent(g_key_event);
+    }
+    return 1;
+}
 static void key_push_make(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
@@ -12611,6 +13084,7 @@ static void key_push_make(LPARAM lp)
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
     if (lp & 0x40000000) { g_ty_os_repeats++; return; }
+    if (rawsc && host_key_special(rawsc, ext, 0)) return;   /* #274: Pause, Ctrl+Break */
     if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext);
                  mod_track(rawsc, ext, 1); }
 }
@@ -12618,6 +13092,7 @@ static void key_push_break(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
     int ext = (lp & 0x01000000) != 0;
+    if (rawsc && host_key_special(rawsc, ext, 1)) return;   /* #274: they send no break */
     if (rawsc) { host_key_typematic_release(rawsc, ext);   /* stop repeating first */
                  host_key_scancode(rawsc, ext, 1);
                  mod_track(rawsc, ext, 0); }
@@ -12889,6 +13364,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " hdl=0x");   mq = zhex(mq, (DWORD)g_ms_evt_seg);
                 mq = zput(mq, ":0x");       mq = zhex(mq, (DWORD)g_ms_evt_off);
                 mq = zput(mq, " shape="); mq = zhex(mq, g_ms_shape_sets);
+                /* #264/#265: is a guest bitmap the pointer (gc=1), how many 09h pointers
+                   were unreadable, events routed to an 18h handler, 2Bh-34h calls. */
+                mq = zput(mq, " gc=");    mq = zhex(mq, (DWORD)g_ms_gc_defined);
+                mq = zput(mq, " gcbad="); mq = zhex(mq, g_ms_gc_badptr);
+                mq = zput(mq, " alt=");   mq = zhex(mq, g_ms_alt_calls);
+                mq = zput(mq, " acc=");   mq = zhex(mq, g_ms_acc_calls);
                 mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
                 mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
                 mq = zput(mq, " xsh=");   mq = zhex(mq, (DWORD)i33_xshift());
@@ -12929,7 +13410,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              feel like something being done TO you. */
         if (InterlockedExchange(&g_ms_want_release, 0) && g_captured)
             input_capture_set(h, 0);      /* the program that owned it has exited */
-        if (g_ms_want_capture && !g_ms_autocap_done && !g_captured
+        if (capture_allowed() && !g_ms_autocap_done && !g_captured   /* #136: not seamless */
             && GetForegroundWindow() == h) {
             InterlockedExchange(&g_ms_autocap_done, 1);
             ++g_ms_autocap_fired;
@@ -12996,22 +13477,45 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (g_ui_forced || timer_ok) {
                 s_last_present = nowt;
                 if (g_ui_forced) ++g_ui_hook_presents; else ++g_ui_timer_presents;
-                if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels) {
-                    /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the
-                       real driver inverts the character cell under the pointer (0Ah
-                       masks), and stamping a 16x16 arrow into a text frame is what
-                       "a graphical mouse cursor over a text interface" was. */
-                    if (g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa) {
-                        int ch = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
-                        vdd_video_text_cursor(&g_vid, (int)(g_ms_x / VID_CELL_W), (int)(g_ms_y / ch),
-                                              (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
-                    } else
-                        overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
-                                       (int)g_vid.frame.stride, g_ms_x, g_ms_y);
+                /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the real
+                   driver inverts the character cell under the pointer (0Ah masks), and
+                   stamping a 16x16 arrow into a text frame is what "a graphical mouse
+                   cursor over a text interface" was. st->fb is re-rendered from the text
+                   buffer every present, so this one may be drawn into the frame. */
+                int ms_text = (g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa);
+                if (g_ms_hidden == 0 && ms_text && g_vid.frame.bpp == 8 && g_vid.frame.pixels) {
+                    int ch = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
+                    vdd_video_text_cursor(&g_vid, (int)(g_ms_x / VID_CELL_W), (int)(g_ms_y / ch),
+                                          (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
                 }
                 vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
                 g_pd.mode_vesa = g_vid.in_vesa;             /* #228: Auto aspect needs it */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
+                /* ── ★★ THE GRAPHICS CURSOR GOES ON THE SNAPSHOT, NEVER ON THE FRAME. (#264)
+                     It used to be stamped into g_vid.frame.pixels before the snapshot --
+                     and in mode 13h that pointer IS st->vmem, the guest's own A0000
+                     aperture (vid_frame: "vmem is the FB"); in an 8-bpp VESA mode it is
+                     the guest's banked/LFB copy. So every present with the pointer
+                     shown WROTE THE ARROW INTO GUEST VIDEO MEMORY and never restored it:
+                     droppings wherever a 13h guest did not repaint, and a guest reading
+                     its screen back (a paint program's save-under, a GET) read our arrow.
+                     The planar/CGA/mode-Y frames are host buffers (st->fb), which is why
+                     only the linear modes ever showed it -- the comment above
+                     overlay_cursor said "the frame is re-rendered from VRAM every tick",
+                     true for those and not for 13h.
+                   ► OVERLAY, NOT VRAM -- A DECISION, AND WHY. A real driver draws into
+                     video memory (saving and restoring what was under it at every move),
+                     and a guest that reads VRAM back while the pointer is shown sees it.
+                     Doing the same from the host would race a guest that runs natively
+                     and writes A0000 directly: a save-under taken between two of its
+                     writes restores stale pixels. Real programs hide the pointer (02h /
+                     10h) around their drawing precisely because of this; a host overlay
+                     needs none of it, so it is drawn here, on the presenter's private
+                     copy, which the guest can never see. p_mouse3 (`i33.09.13h.vram.*`)
+                     measures whether the oracles' drivers write VRAM, so the gap is
+                     recorded rather than assumed (docs/inventory/mouse.md, 09h). */
+                if (g_ms_hidden == 0 && !ms_text && g_pd.snap_valid && g_pd.snap_bpp == 8)
+                    ms_draw_gfx_cursor(g_pd.snap, g_pd.snap_w, g_pd.snap_h, g_pd.snap_w);
                 HOST_UNLOCK();
                 aspect_auto_follow(h);                       /* #228: reshape on a mode change */
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
@@ -13531,6 +14035,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             /* RULE 6: raw input follows FOCUS, not capture -- a released guest would
                otherwise keep mouse-looking while the user drags on the desktop. */
             if (!mouse_goes_to_guest()) break;
+            /* #136: seamless -- only while Windows' pointer is over our picture. */
+            if (g_ms_seamless && !g_captured) {
+                POINT sp;
+                if (!GetCursorPos(&sp) || WindowFromPoint(sp) != h) break;
+                ScreenToClient(h, &sp);
+                if (!pt_over_video(h, sp.x, sp.y)) break;
+            }
             InterlockedExchangeAdd(&g_ms_dx, (LONG)ri.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_ms_dy, (LONG)ri.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
@@ -21095,6 +21606,129 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
 #undef m
 }
 
+/* ── #210: THE LONG-FILENAME API (INT 21h AH=71h) FROM PROTECTED MODE. ──────────────────
+     Same bridge as pm_int21_xfer, but an LFN call can carry THREE pointers at once (7156h:
+     DS:DX and ES:DI; 714Eh: DS:DX in, ES:DI out) and uses SI/DI/DX as plain numbers in
+     others (714Eh SI = time format, 7143h DI = a date, 716Ch DX = the action word). So
+     each pointer register the call actually uses gets its own window in the transfer
+     buffer, the V86 arm in dos_int21.c runs against those, and the outputs are copied
+     back:
+         +0000h  DS:DX   (in: a path; out: 71A6h's 52-byte record, 71AAh BH=2's path)
+         +0400h  DS:SI   (in: a path, 71A7h BL=0's FILETIME; out: 7147h's directory)
+         +0800h  ES:DI   (in: 7156h's new name; out: a find record, a path, a name, a
+                          FILETIME, 71A0h's file-system name)
+     Offsets follow the caller's D/B bit (dpmi_caller_off), so a flat 32-bit client's
+     EDX/ESI/EDI work as its 16-bit cousins' DX/SI/DI do.
+   ⚠ WOW-ONLY, like every pointer-taking PM INT 21h here: the transfer buffer exists only
+     on the WOW path (see wow_place_v86). A DPMI client without one is told AX=7100h CF=1
+     by the caller -- "no LFN API", which is what this host told everyone before #210 and
+     the answer every LFN client is written to fall back from. DOS/4GW-style extenders
+     that pass 71xxh down in REAL mode reach the V86 arm directly and are not affected.
+   ⚠ krnl386 is the PM client this serves, and nothing measured shows it issuing 71xxh;
+     this is the API made reachable, not a fix for an observed call. */
+static int pm_lfn_copy(WORD sel, DWORD off, DWORD xoff, DWORD len, int in)
+{
+    DWORD b = dpmi_sel_base(sel), k;
+    volatile BYTE *g = (volatile BYTE *)(ULONG_PTR)(b + off);
+    volatile BYTE *x = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
+    if (!b || xoff + len > (DWORD)g_pm_xfer_para * 16u || len > 0x400) return -1;
+    if (!len) return 0;
+    if (!host_readable((const void *)g, len)) return -1;
+    if (in) for (k = 0; k < len; ++k) x[k] = g[k];
+    else    for (k = 0; k < len; ++k) g[k] = x[k];
+    return 0;
+}
+
+/* How many bytes of an output window go back: all `len` of a block (kind 2), or a
+   string's length + its NUL, never more than `len` (kind 4). */
+static DWORD pm_lfn_outlen(DWORD xoff, int kind, DWORD len)
+{
+    const volatile BYTE *x = (const volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
+    DWORD n = 0;
+    if (kind != 4) return len;
+    while (n < len && x[n]) ++n;
+    return (n < len) ? n + 1 : len;
+}
+
+static char *pm_int21_lfn(dos_machine_t *mp, volatile BYTE *tib, char *p)
+{
+#define m (*mp)
+    DWORD al = VDM_REG(tib, VTIB_EAX) & 0xFF;
+    DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF, bh = (VDM_REG(tib, VTIB_EBX) >> 8) & 0xFF;
+    WORD  dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF), esv = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+    DWORD dxo = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDX));
+    DWORD sio = dpmi_caller_off(tib, VDM_REG(tib, VTIB_ESI));
+    DWORD dio = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
+    DWORD sav_ds = VDM_REG(tib, VTIB_DS), sav_es = VDM_REG(tib, VTIB_ES);
+    DWORD sav_dx = VDM_REG(tib, VTIB_EDX), sav_si = VDM_REG(tib, VTIB_ESI), sav_di = VDM_REG(tib, VTIB_EDI);
+    /* Which registers are pointers for this call, and which way their bytes go:
+       0 = not a pointer, 1 = a string in, 2 = a block out of `len`, 3 = a block in,
+       4 = a string out of at most `len` -- copied back only up to its NUL, so a caller's
+           buffer shorter than RBIL's 261 bytes is not overwritten past the answer. */
+    int dx_k = 0, si_k = 0, di_k = 0, rc = 0;
+    DWORD dx_len = 0, si_len = 0, di_len = 0;
+    switch (al) {
+    case 0x39: case 0x3A: case 0x3B: case 0x41: case 0x43: case 0x4E: case 0xA0:
+        dx_k = 1; break;
+    case 0x56:            dx_k = 1; di_k = 1; break;
+    case 0x6C: case 0xA9: case 0x60: case 0xA8: si_k = 1; break;
+    case 0x47:            si_k = 4; si_len = 261; break;
+    case 0xA6:            dx_k = 2; dx_len = 52; break;
+    case 0xA7:            if (bl == 0) { si_k = 3; si_len = 8; } else { di_k = 2; di_len = 8; } break;
+    case 0xAA:            if (bh == 0) dx_k = 1; else if (bh == 2) { dx_k = 4; dx_len = 261; } break;
+    default: break;
+    }
+    if (al == 0x4E || al == 0x4F) { di_k = 2; di_len = 0x13E; }   /* DOS_LFN_FIND_LEN */
+    if (al == 0x60) { di_k = 4; di_len = 261; }
+    if (al == 0xA8) { if (((VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF) == 0) { di_k = 2; di_len = 11; }
+                      else { di_k = 4; di_len = 13; } }
+    if (al == 0xA0) { di_k = 4; di_len = VDM_REG(tib, VTIB_ECX) & 0xFFFF; if (di_len > 0x400) di_len = 0x400; }
+
+    p = zput(p, "INT21h AX=71"); p = zhexb(p, (BYTE)al);
+    p = zput(p, " (PM LFN -> V86 via xfer buf 0x"); p = zhex(p, g_pm_xfer_seg); p = zput(p, ")");
+
+    /* In. A string's length is found first (bounded, never past what is readable). */
+    if (dx_k == 1) { dx_len = pm_xfer_strlen(dsv, dxo, 0x3FF); rc |= pm_lfn_copy(dsv, dxo, 0x000, dx_len, 1); }
+    if (si_k == 1) { si_len = pm_xfer_strlen(dsv, sio, 0x3FF); rc |= pm_lfn_copy(dsv, sio, 0x400, si_len, 1); }
+    if (di_k == 1) { di_len = pm_xfer_strlen(esv, dio, 0x3FF); rc |= pm_lfn_copy(esv, dio, 0x800, di_len, 1); }
+    if (si_k == 3) rc |= pm_lfn_copy(dsv, sio, 0x400, si_len, 1);
+    if (rc) {
+        VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+        VDM_SET16(tib, VTIB_EAX, 0x0005);
+        p = zput(p, " -> XFER FAILED (unreadable pointer) CF=1\r\n");
+        return p;
+    }
+    if (dx_k == 1 || si_k == 1 || di_k == 1) {
+        const char *nm = (const char *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4)
+                                                   + (dx_k == 1 ? 0x000 : si_k == 1 ? 0x400 : 0x800));
+        p = zput(p, " name=\""); p = zput(p, nm); p = zput(p, "\"");
+    }
+
+    VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
+    VDM_SET16(tib, VTIB_ES, g_pm_xfer_seg);
+    if (dx_k) VDM_SET16(tib, VTIB_EDX, 0x000);
+    if (si_k) VDM_SET16(tib, VTIB_ESI, 0x400);
+    if (di_k) VDM_SET16(tib, VTIB_EDI, 0x800);
+    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+    /* Restore what we re-pointed -- except a register the call ANSWERS in: 71A0h returns
+       the maximum path in DX, 7143h BL=2 the size's high word. */
+    VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_ES) = sav_es;
+    if (dx_k && !(al == 0xA0) && !(al == 0x43 && bl == 0x02)) VDM_REG(tib, VTIB_EDX) = sav_dx;
+    if (si_k) VDM_REG(tib, VTIB_ESI) = sav_si;
+    if (di_k) VDM_REG(tib, VTIB_EDI) = sav_di;
+
+    if (!(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
+        if (dx_k == 2 || dx_k == 4) pm_lfn_copy(dsv, dxo, 0x000, pm_lfn_outlen(0x000, dx_k, dx_len), 0);
+        if (si_k == 2 || si_k == 4) pm_lfn_copy(dsv, sio, 0x400, pm_lfn_outlen(0x400, si_k, si_len), 0);
+        if (di_k == 2 || di_k == 4) pm_lfn_copy(esv, dio, 0x800, pm_lfn_outlen(0x800, di_k, di_len), 0);
+    }
+    p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    p = zput(p, " CF=");      p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    p = zput(p, "\r\n");
+    return p;
+#undef m
+}
+
 /* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
    real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
 #define V86BOP_NONE  0      /* not one of v86_bios_bop's numbers                         */
@@ -23780,11 +24414,55 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            ⚠ #253: AND C1h. The V86 arm now hands back the EBDA segment
                              (9FC0h) in ES; in PM that would be a raw paragraph loaded into
                              a selector register, and no PM caller of C1h has been seen.
-                             Refused here until one is, and then answered with a selector. */
+                             Refused here until one is, and then answered with a selector.
+                           ★ #244: C0h AND 87h NOW ANSWER AS IN V86 -- the "two modes
+                             disagree knowingly" above is retired for these two:
+                               C0h -> ES:BX = a selector over DOS_CTAB_SEG (built as INT 31h
+                                      0002h builds one, dpmi_seg_to_desc -- the INT 21h
+                                      AH=34h/52h treatment) : DOS_SYSCONF_OFF, AH=0, CF=0.
+                                      ⚠ So the session-36 Win16 driver now reads model FCh
+                                      and takes its AT path instead of its "no C0h" path.
+                                      Unmeasured on the Win16 shelf -- owed a re-run.
+                               87h -> ES:(E)SI is read as a PM pointer to the GDT (selector
+                                      base + offset; ESI for a 32-bit client). The 24-bit
+                                      addresses INSIDE the descriptors are linear in both
+                                      modes, so the copy itself is the V86 one.
+                             ⚠ THE DPMI SPEC DOES NOT ASK FOR EITHER. DPMI 0.9 §"Interrupts"
+                               reflects INT 15h to real mode WITHOUT translating segment
+                               registers -- only INT 21h-style APIs get translation, and that
+                               from the extender, not the host -- so a strict host hands back
+                               ES:BX as a real-mode segment the client cannot load, and runs
+                               87h with whatever real-mode ES it had. Neither is usable, so a
+                               PM caller of either can only have meant the translated form;
+                               Windows' DPMI host is said to translate C0h (that is what the
+                               Win16 driver's `es:[bx+2]` read assumes) -- not measured here. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
                               VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXT_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                          } else if (ah15 == 0xC0) {
+                              WORD selc0 = dpmi_seg_to_desc(DOS_CTAB_SEG);
+                              if (selc0) {
+                                  VDM_SET16(tib, VTIB_ES, selc0);
+                                  VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
+                                  VDM_SET16(tib, VTIB_EAX, (WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));
+                                  VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                              } else {                   /* no descriptor: say "unsupported" */
+                                  VDM_SET16(tib, VTIB_EAX,
+                                            (WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                                  VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                              }
+                          } else if (ah15 == 0x87) {
+                              WORD  es87 = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                              DWORD off  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
+                                           ? VDM_REG(tib, VTIB_ESI) : (VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+                              DWORD gl   = dpmi_sel_base(es87) + off;
+                              unsigned rc87 = int15_move_block_at(tib,
+                                  (es87 && host_readable((const void *)(ULONG_PTR)gl, 0x30)) ? gl : 0);
+                              VDM_SET16(tib, VTIB_EAX, (WORD)((rc87 << 8) | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                              /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 (as the V86 arm) */
+                              if (rc87) VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) | 1u) & ~0x40u;
+                              else      VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~1u) | 0x40u;
                           } else if (ah15 == 0x86) {
                               /* ── #256: WAIT CX:DX MICROSECONDS, AS THE V86 ARM DOES (#206). ──
                                    This answered CF=0 at once ("the PIT already paces us"), so a
@@ -26127,6 +26805,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              meaningless for a selector. pm_int21_xfer() bridges that by
                              copying through a conventional-memory buffer. */
                         p = wow_psp_env_check(p, "a PM INT 21h");
+                        /* #210: the long-filename API -- pm_int21_lfn says how and why. */
+                        if (ah == 0x71) {
+                            if (g_pm_xfer_seg) { m.tp = p; p = pm_int21_lfn(&m, tib, p); }
+                            else {
+                                VDM_SET16(tib, VTIB_EAX, 0x7100);
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                p = zput(p, "INT21h AX=71xx (PM, no xfer buffer) -> AX=7100 CF=1"
+                                            " (no LFN API for this client)\r\n");
+                            }
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                         if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
@@ -27664,27 +28355,18 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
     WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
     int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
     DWORD t0 = GetTickCount();
-    LONG mask = g_ms_evt_mask, pend = 0;
+    LONG pend = 0;
     ms_evt_t ev = { 0, 0, 0, 0 };
-    WORD hsel = (WORD)g_ms_evt_seg; DWORD hoff = (DWORD)g_ms_evt_off;
+    WORD hsel = 0; DWORD hoff = 0;
     int h32 = g_dpmi_client32;
 
-    if (!mask || (hsel | hoff) == 0) return 0;
+    if (!mouse_any_handler()) return 0;                          /* 0Ch's or 18h's (#265)   */
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
     if (g_dpmi_client32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
     if (!(sSS & 4)) return 0;                                    /* not a client stack      */
-    /* The oldest queued event the handler asked for; unmasked ones are skipped. */
-    {   LONG t; int n = 0;
-        while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
-            t = g_ms_evq_tail;
-            ev = g_ms_evq[t];
-            g_ms_evq_tail = (t + 1) % MS_EVQ;
-            if (ev.bits & mask) { pend = ev.bits & mask; break; }
-        }
-        if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
-        if (!pend) return 0;
-    }
+    /* The oldest queued event a handler asked for, and which handler (mouse_evq_take). */
+    if (!mouse_evq_take(&ev, &pend, &hsel, &hoff) || !pend) return 0;
     /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
        width is the CLIENT's; stack addressing is the SS descriptor's B bit. */
     { DWORD b = dpmi_sel_base(sSS);
@@ -28236,6 +28918,18 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             V86BOP_RET(V86BOP_DONE);
         }
     }
+    /* #274: the default INT 05h's two BOP sites (bios_kbdact.asm p5). Here rather than in
+         the exec loop's INT 09h arm because INT 05h is a SOFTWARE interrupt a program may
+         issue from anywhere, including a DPMI 0300h -- so the nested loop must serve it
+         too. Same number as the INT 09h stub's BOP, told apart by address. */
+    if (bn == 0x09 && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+        DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN || ip == DOS_KBDACT_OFF + KBDACT_P5_NEXT) {
+            prtsc_bop(tib, ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            V86BOP_RET(V86BOP_DONE);
+        }
+    }
     if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         ntvdd_regs r; regs_load(&r, tib);
         HOST_LOCK();
@@ -28320,7 +29014,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                this still claimed 640. Real DOS reports 639 for exactly that
                reason -- the top 1KB is the Extended BIOS Data Area. Derived
                from the map rather than typed, so the two cannot drift. */
-            BSETAX((WORD)BIOS_BASE_MEM_KB);   /* #253: the EBDA is real now -- bios_bda.h */
+            BSETAX(bios_base_kb_of_top(g_dos_mem_top));   /* #253 EBDA; #136 the setting */
             BCF_CLR();
         } else if (bn == 0x15) {
             unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
@@ -28405,8 +29099,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 BCF_CLR();
             } else if (ah15 == 0x4F) {         /* keyboard intercept (#206) */
                 /* The default handler: CF=1 and AL untouched, "process this key".
-                   A TSR that hooks INT 15h answers for itself. (Our INT 09h does not
-                   CALL this yet -- see the C0h table's feature byte.) */
+                   A TSR that hooks INT 15h answers for itself. #244: our INT 09h CALLS
+                   it once IVT[15h] is hooked (int15_hooked, bios_kbdact.asm k4f); while
+                   it is not, this answer is the one the call would get, so it is skipped. */
                 BCF_SET();
             } else if (ah15 == 0x84) {
                 /* ── BIOS joystick support (session 62). DX picks the half:
@@ -28450,7 +29145,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it
                    (p_int15 int15.c1.status). Used to fall to the UNIMPL arm
                    below: CF=1, "no EBDA", while INT 12h withheld its kilobyte. */
-                VDM_SET16(tib, VTIB_ES, BIOS_EBDA_SEG);
+                VDM_SET16(tib, VTIB_ES, g_dos_mem_top);   /* #136: = BIOS_EBDA_SEG at 640 KB */
                 BCF_CLR();
             } else if (ah15 == 0xC0) {         /* get system config table (#54) */
                 VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
@@ -30193,6 +30888,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        its objects are code before it starts asking us for memory to load them into. */
     dpmi_le_learn(filebuf, nread);
 
+    /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
+         the image is laid down: the loader writes the program above the PSP with no
+         bound of its own, and the EBDA (bios_bda_init_top, later) is zeroed at the new
+         top -- so a program that does not fit under a small setting would be loaded and
+         then have its own code wiped. A real DOS says "Program too big to fit in memory"
+         at that point; the host cannot say that to a program it was launched to RUN, so
+         it refuses the SETTING instead, loudly, and the machine stays at 640 KB.
+         640 (the default) never enters this block and logs nothing new. */
+    if (g_conv_kb_want != BIOS_CONV_KB_MAX) {
+        uint16_t top = bios_conv_top_para(g_conv_kb_want), alloc = 0;
+        uint16_t avail = (uint16_t)(top - DOS_PSP_SEG);
+        int high = 0, fits;
+        if (nread >= 2 && filebuf[0] == 'M' && filebuf[1] == 'Z')
+            fits = dos_exec_size(filebuf, nread, avail, &alloc, &high) == 0;
+        else                                /* .COM: PSP + the image + a 256-byte stack */
+            fits = (uint32_t)0x10u + ((nread + 0x100u + 15u) >> 4) <= (uint32_t)avail;
+        p = zput(p, "STAGE2: ConventionalKB=");  p = zdec(p, g_conv_kb_want);
+        if (fits) {
+            g_dos_mem_top = top;
+            p = zput(p, " -> INT 12h ");       p = zdec(p, bios_base_kb_of_top(top));
+            p = zput(p, " KB, EBDA + MCB top 0x"); p = zhex(p, top);
+            p = zput(p, " (#136)\r\n");
+        } else {
+            p = zput(p, " REFUSED: this program does not fit under it -- the machine stays at "
+                        "640 KB (#136)\r\n");
+            settings_note_override(SET_CONVKB, "a program too big for it", BIOS_CONV_KB_MAX);
+        }
+    }
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
 
@@ -30319,6 +31042,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         : 0xCF;  /* IRET */
           *(volatile WORD *)(bios_ints[bi][0] * 4)     = (WORD)off;
           *(volatile WORD *)(bios_ints[bi][0] * 4 + 2) = DOS_CTAB_SEG;
+          if (bios_ints[bi][0] == 0x15) g_int15_stub_off = (WORD)off;   /* #244 */
       } }
 
     /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
@@ -30358,6 +31082,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
         /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
         for (k = 0; k < sizeof(bios_kbdact_code); ++k) bs[DOS_KBDACT_OFF + k] = bios_kbdact_code[k];
+        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
+             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
+             that kbdact_entry refuses to enter (p_ivtkbd), so Print Screen called nothing
+             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
+             since the PC has a routine here; ours prints the screen through INT 17h and
+             keeps its status HOST-side -- see prtsc_bop for why not at 0050:0000. */
+        *(volatile WORD *)(ULONG_PTR)(0x05 * 4)     = (WORD)(DOS_KBDACT_OFF + KBDACT_P5);
+        *(volatile WORD *)(ULONG_PTR)(0x05 * 4 + 2) = DOS_CTAB_SEG;
     }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -30387,7 +31119,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
 
-    dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
+    dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_dos_mem_top);   /* #136 */
     /* AFTER the vectors above are planted, never before: saving a vector that is
        still 0000:0000 stores a null the program restores on the way out. Parent
        PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
@@ -30532,7 +31264,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " [");
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
-    {   uint16_t first_mcb = dos_mcb_init(NULL);
+    {   uint16_t first_mcb = dos_mcb_init_top(NULL, g_dos_mem_top);   /* #136 */
         dos_int21_init(&m, first_mcb);
         /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
            dos_mcb_init, which lays the chain and clears the name byte. */
@@ -30767,15 +31499,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            act on, so only the true ones are set.
              f1 bit 6  second 8259 present ............ yes (vdd_pic)
              f1 bit 5  real-time clock present ........ yes (vdd_cmos)
-             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... NO -- our keyboard path does
-                       not call the intercept; the AMI sets it because its BIOS does
+             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... YES (#244) -- bios_kbdact.asm
+                       k4f, made whenever IVT[15h] is not our own stub (our default
+                       would answer "process it" unchanged, so skipping it then is
+                       indistinguishable). Was NO (64h); AMI, SeaBIOS and dosbox-x set it
              f1 bit 2  EBDA allocated ................. YES (#253) -- 1 KB at 9FC0h,
                        which is what INT 12h's 639 KB always implied; AH=C1h and
                        0040:000E now say so too. Was NO (60h) while C1h refused --
                        see bios_bda.h for why the EBDA, not 640 KB, is the answer
              f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
       {   static const BYTE sysconf[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
-                                            0x64, 0x40, 0x00, 0x00, 0x00 };
+                                            0x74, 0x40, 0x00, 0x00, 0x00 };
           for (k = 0; k < sizeof sysconf; ++k) ct[DOS_SYSCONF_OFF + k] = sysconf[k]; } }
     /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
        left zero -- see the handler for why a null stub beats a plausible-looking
@@ -31082,6 +31816,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_global16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
+    g_cmos.base_kb = (uint16_t)(bios_base_kb_of_top(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
@@ -31239,7 +31974,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
          settings_apply() has set the joystick type (bit 12). g_bda_ready lets a later
          settings change re-write 0010 -- see bios_bda_refresh_equipment. */
-    bios_bda_init(NULL, bios_equipment_word());
+    bios_bda_init_top(NULL, bios_equipment_word(), g_dos_mem_top);   /* #136 */
     g_bda_ready = 1;
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
@@ -31573,7 +32308,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          on -- audible as a pitch error, not as an error message. */
     g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
     g_wave.force_silent = g_safe.audio_out;                 /* s90 #132: SAFE MODE */
+    g_wave.midi_choice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
+         Host GM (the default) opens device 0 as it always did and logs nothing new. */
+    if (g_wave.midi_choice != MIDI_ROUTE_GM) {
+        char mb[200], *mq = zput(mb, "STAGE2: MIDI = ");
+        mq = zput(mq, g_wave.midi_choice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
+        if (g_wave.midi_ext) {
+            mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.midi_dev);
+            mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\", SysEx passed through");
+            g_mpu.sysex_sink = host_midi_sysex;     /* the MPU is on the bus already; no */
+            g_gusmidi.sysex_sink = host_midi_sysex; /* guest code has run yet            */
+        } else {
+            mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.midi_ndevs);
+            mq = zput(mq, " -> Host GM (device 0");
+            if (g_wave.midi_name[0]) { mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\""); }
+            mq = zput(mq, g_wave.midi_dev < 0 ? ", would not open)" : ")");
+        }
+        if (g_wave.midi_choice == MIDI_ROUTE_SF2)
+            mq = zput(mq, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        mq = zput(mq, " (#136)\r\n"); log_append(LOG_PATH, mb, mq);
+    }
     {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
         aq = zput(aq, g_wave.using_ds ? "DirectSound" : g_wave.silent ? "none (silent pump)" : "WinMM");
         if (g_wave.want_ds && !g_wave.using_ds) aq = zput(aq, " (DirectSound asked for, would not open)");
@@ -32352,8 +33108,60 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
+            int kact;
+            /* ── #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
+                 We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
+                 it (possibly changed), the interrupted code's AX is on the stack above
+                 the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
+                 where the byte's action says -- a side-call, or brk's bare IRET. */
+            if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG
+                && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_KBDACT_OFF + KBDACT_K4F_BOP) {
+                DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                int ko;
+                HOST_LOCK();
+                kact = vdd_input_bios_translate(&g_in, (uint8_t)VDM_REG(tib, VTIB_EAX));
+                vdd_pic_eoi(&g_pic, 1);
+                if (kact == KB_ACT_PAUSE && kbdact_entry(kact) < 0) vdd_input_pause_cancel(&g_in);
+                HOST_UNLOCK();
+                ++g_kb4f_xlat;
+                VDM_SET16(tib, VTIB_EAX, peekw((ss << 4) + sp));          /* pop ax */
+                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | ((sp + 2) & 0xFFFF);
+                ko = kbdact_entry(kact);
+                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (ko >= 0 ? ko : KBDACT_IRET));
+                continue;
+            }
+            /* ── #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
+                 out of the controller now (it is the BIOS's `in al,60h`), push the
+                 interrupted code's AX, load AX = 4F00h | byte, and run k4f: `stc / int
+                 15h` in the guest, then back to the arm above -- or, on CF=0, k4f's own
+                 EOI and IRET (swallowed). The EOI waits until then, as the BIOS's does.
+                 Not hooked (the normal case, every game included): straight on below,
+                 exactly as before -- not one extra instruction on the default path. */
+            if (int15_hooked()) {
+                int sc;
+                HOST_LOCK();
+                sc = vdd_input_bios_fetch(&g_in);
+                HOST_UNLOCK();
+                if (sc >= 0) {
+                    DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF;
+                    WORD  sp = (WORD)((VDM_REG(tib, VTIB_ESP) - 2) & 0xFFFF);
+                    pokew((ss << 4) + sp, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
+                    VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | sp;
+                    VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (unsigned)sc));
+                    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + KBDACT_K4F);
+                    ++g_kb4f_calls;
+                    continue;
+                }
+                /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
+                HOST_LOCK();
+                vdd_pic_eoi(&g_pic, 1);
+                HOST_UNLOCK();
+                VDM_REG(tib, VTIB_EIP) += 3;
+                continue;
+            }
             HOST_LOCK();
-            int kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
+            kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
             /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
                  A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
                  acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
@@ -33146,7 +33954,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          added latency is microseconds and no new thread is involved. */
                     /* ── AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
                          (s74c) ZAR's buttons travel only through this. */
-                    if (g_ms_evt_pend && g_ms_evt_mask && (g_ms_evt_seg | g_ms_evt_off)
+                    if (g_ms_evt_pend && mouse_any_handler()        /* 0Ch's or 18h's (#265) */
                         && g_dpmi_vi && !g_pm_noirq && !g_in_pm_irq && !g_async_pm_active) {
                         g_in_pm_irq = 1;
                         dpmi_inject_pm_mousecb(&m, tib, steps);
@@ -35387,6 +36195,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " sc_held=0x");    p = zhex(p, g_in.sc_held_reads);   /* re-reads inside the transfer hold */
       p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
       p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
+      /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
+         a hook swallowed); default INT 05h jobs / printer errors / last status. */
+      p = zput(p, " kb4f=0x");       p = zhex(p, g_kb4f_calls);
+      p = zput(p, "/0x");            p = zhex(p, g_kb4f_xlat);
+      p = zput(p, " prtsc=0x");      p = zhex(p, g_prtsc_jobs);
+      p = zput(p, "/0x");            p = zhex(p, g_prtsc_errs);
+      p = zput(p, "/0x");            p = zhex(p, g_prtsc_status);
       /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
          bursts the PIT refused to replay. Together these say whether a held key was
          starved of exec-loop turns and whether the guest's clock ever lurched. */

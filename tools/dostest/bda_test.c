@@ -68,6 +68,36 @@ int main(void)
         CHECK(mem[0x9FC00] == 1, "reserve_top: EBDA size byte survives");
     }
 
+    /* ── #136: CONVENTIONAL MEMORY AS A SETTING. 640 must be EXACTLY today's machine;
+         anything less moves INT 12h, the EBDA and the MCB top together. */
+    CHECK(bios_conv_top_para(640) == DOS_MEM_TOP, "conv 640 KB -> top 9FC0h = DOS_MEM_TOP (default unchanged)");
+    CHECK(bios_base_kb_of_top(bios_conv_top_para(640)) == BIOS_BASE_MEM_KB, "conv 640 KB -> INT 12h 639 (unchanged)");
+    CHECK(bios_conv_top_para(512) == 0x7FC0u, "conv 512 KB -> top 7FC0h");
+    CHECK(bios_base_kb_of_top(0x7FC0u) == 511u, "conv 512 KB -> INT 12h 511");
+    CHECK(bios_conv_top_para(256) == 0x3FC0u && bios_base_kb_of_top(0x3FC0u) == 255u, "conv 256 KB -> 3FC0h / 255");
+    CHECK(bios_conv_top_para(10) == bios_conv_top_para(64), "conv below 64 clamps to 64");
+    CHECK(bios_conv_top_para(4096) == DOS_MEM_TOP, "conv above 640 clamps to 640");
+    memset(mem, 0xA5, sizeof mem);
+    first = dos_mcb_init_top(mem, 0x7FC0u);
+    bios_bda_init_top(mem, 0x4423, 0x7FC0u);
+    CHECK(dos_mcb_check(mem, first, 0x7FC0u) == 0, "512 KB: MCB chain ends at 7FC0h, consistent");
+    CHECK(rd16(0x40E) == 0x7FC0u && rd16(0x413) == 511u, "512 KB: 0040:000E = 7FC0h, 0040:0013 = 511");
+    CHECK(mem[0x7FC00] == 1 && mem[0x9FC00] == 0xA5, "512 KB: EBDA at 7FC0:0000, nothing written at 9FC0h");
+    {   uint16_t r = dos_mcb_reserve_top(mem, first, 0x40);
+        CHECK(r != 0 && (uint32_t)r + 0x40u <= 0x7FC0u, "512 KB: reserve_top carved below the EBDA");
+    }
+    memset(mem, 0xA5, sizeof mem);
+    first = dos_mcb_init(mem);
+    {   static uint8_t mem2[0x100000];
+        uint16_t f2;
+        memset(mem2, 0xA5, sizeof mem2);
+        f2 = dos_mcb_init_top(mem2, DOS_MEM_TOP);
+        bios_bda_init(mem, 0x4423);
+        bios_bda_init_top(mem2, 0x4423, DOS_MEM_TOP);
+        CHECK(f2 == first && memcmp(mem, mem2, sizeof mem2) == 0,
+              "init_top(DOS_MEM_TOP) is byte-identical to the old init (whole 1 MB)");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

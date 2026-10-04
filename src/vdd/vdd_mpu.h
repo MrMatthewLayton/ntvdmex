@@ -37,6 +37,21 @@
    status | data1<<8 | data2<<16 (the layout midiOutShortMsg wants). */
 typedef void (*mpu_midi_sink)(void *ctx, uint32_t msg);
 
+/* ── #136: SYSTEM EXCLUSIVE, FOR A SYNTH THAT NEEDS IT. ──────────────────────────────
+     SysEx has always been SWALLOWED here, and for XP's GS Wavetable synth that is the
+     right call -- it is what every build so far has sent it. An MT-32 is a different
+     instrument: a game uploads its own timbres and sets its reverb with DT1 SysEx, and
+     without them it plays the factory patches -- the wrong instruments, not silence.
+     So when Settings > Audio > MIDI picks an EXTERNAL synth (MT-32 / SoundFont, routed
+     by name in midi_route.h), the host sets `sysex_sink` and each COMPLETE message,
+     F0 .. F7 inclusive, goes to it whole. NULL = swallowed exactly as before, byte for
+     byte -- the default path does not change.
+   ⚠ A message longer than MPU_SYSEX_MAX is dropped and counted, never truncated: a cut
+     DT1 has a wrong checksum and an MT-32 rejects it anyway, and a cut bulk dump that
+     happened to checksum would write garbage into the synth's memory. */
+#define MPU_SYSEX_MAX 4096
+typedef void (*mpu_sysex_sink)(void *ctx, const uint8_t *msg, uint32_t len);
+
 typedef struct mpu_state {
     vdd_bus *bus;
     uint16_t base;
@@ -53,6 +68,13 @@ typedef struct mpu_state {
 
     mpu_midi_sink sink; void *sink_ctx;
     uint32_t sent;                  /* messages forwarded (tests + diagnostics)   */
+
+    /* #136: SysEx passthrough -- NULL sink = swallowed, as always. Preserved by reset. */
+    mpu_sysex_sink sysex_sink; void *sysex_ctx;
+    uint32_t sysex_len;
+    uint8_t  sysex_over;            /* this message outgrew the buffer: drop it   */
+    uint32_t sysex_sent, sysex_dropped;
+    uint8_t  sysex[MPU_SYSEX_MAX];
 } mpu_state;
 
 int  vdd_mpu_init(vdd_bus *b, void *self);

@@ -12,24 +12,35 @@ static uint16_t bda_r16(const input_state *st, int off)
 static void bda_w16(input_state *st, int off, uint16_t v)
 { st->bda[off] = (uint8_t)v; st->bda[off + 1] = (uint8_t)(v >> 8); }
 
-/* Advance a ring pointer, wrapping at the end of the 16-entry buffer. */
-static uint16_t bda_next(uint16_t p)
-{ p += 2; return (p >= BDA_KB_END) ? (uint16_t)BDA_KB_START : p; }
+/* #274: the ring's bounds, from 0040:0080/0082 (see vdd_input.h). A pair that cannot
+   describe a ring -- odd, empty, inverted, or too small to hold one key -- is POST's
+   001E/003E instead: a BIOS that trusted it would write keys through a wild pointer. */
+static void kb_bounds(const input_state *st, uint16_t *s, uint16_t *e)
+{
+    uint16_t a = bda_r16(st, BDA_KB_BUFSTART), b = bda_r16(st, BDA_KB_BUFEND);
+    if ((a & 1) || (b & 1) || a >= b || (uint16_t)(b - a) < 4) { a = BDA_KB_START; b = BDA_KB_END; }
+    *s = a; *e = b;
+}
+
+/* Advance a ring pointer, wrapping at the end of the buffer. */
+static uint16_t bda_next(uint16_t p, uint16_t s, uint16_t e)
+{ p += 2; return (p >= e) ? s : p; }
 
 int vdd_input_push(input_state *st, uint16_t key)
 {
-    uint16_t head, tail, n;
+    uint16_t head, tail, n, s, e;
     if (!st->bda) return 0;               /* no guest memory yet: nowhere to put it */
+    kb_bounds(st, &s, &e);
     head = bda_r16(st, BDA_KB_HEAD);
     tail = bda_r16(st, BDA_KB_TAIL);
     /* A pointer pair the guest has not initialised (or has scribbled on) would send the
        writes anywhere in the BDA, so validate before trusting them. */
-    if (head < BDA_KB_START || head >= BDA_KB_END || (head & 1) ||
-        tail < BDA_KB_START || tail >= BDA_KB_END || (tail & 1)) {
-        head = tail = BDA_KB_START;
+    if (head < s || head >= e || ((head - s) & 1) ||
+        tail < s || tail >= e || ((tail - s) & 1)) {
+        head = tail = s;
         bda_w16(st, BDA_KB_HEAD, head);
     }
-    n = bda_next(tail);
+    n = bda_next(tail, s, e);
     if (n == head) return 0;              /* full -> discard the NEW key: the real BIOS
                                              beeps and throws it away. Dropping the OLDEST
                                              instead would split a keystroke stream.
@@ -43,25 +54,27 @@ int vdd_input_push(input_state *st, uint16_t key)
 
 int vdd_input_pop(input_state *st, uint16_t *key)
 {
-    uint16_t head, tail;
+    uint16_t head, tail, s, e;
     if (!st->bda) return 0;
+    kb_bounds(st, &s, &e);
     head = bda_r16(st, BDA_KB_HEAD);
     tail = bda_r16(st, BDA_KB_TAIL);
     if (head == tail) return 0;
-    if (head < BDA_KB_START || head >= BDA_KB_END || (head & 1)) return 0;
+    if (head < s || head >= e || ((head - s) & 1)) return 0;
     *key = bda_r16(st, head);
-    bda_w16(st, BDA_KB_HEAD, bda_next(head));
+    bda_w16(st, BDA_KB_HEAD, bda_next(head, s, e));
     return 1;
 }
 
 int vdd_input_peek(input_state *st, uint16_t *key)
 {
-    uint16_t head, tail;
+    uint16_t head, tail, s, e;
     if (!st->bda) return 0;
+    kb_bounds(st, &s, &e);
     head = bda_r16(st, BDA_KB_HEAD);
     tail = bda_r16(st, BDA_KB_TAIL);
     if (head == tail) return 0;
-    if (head < BDA_KB_START || head >= BDA_KB_END || (head & 1)) return 0;
+    if (head < s || head >= e || ((head - s) & 1)) return 0;
     *key = bda_r16(st, head);
     return 1;
 }
@@ -148,8 +161,8 @@ void vdd_input_push_scancode(input_state *st, uint8_t sc)
      Alt+F1 6800h, and a program that binds them (every editor) needs those exact codes.
    The keypad rows hold the NAVIGATION codes in the plain column and the DIGITS in the
    Shift column, because that is how NumLock works: it swaps the two, and Shift undoes
-   the swap. The Alt column of the keypad digits is the BIOS's Alt+numpad ASCII-entry
-   accumulator (not modelled -- stores nothing). */
+   the swap. The Alt column of the keypad digits is 0 because those keys feed the BIOS's
+   Alt+numpad accumulator at 0040:0019 instead of storing anything (#274, kb_altnum). */
 #define SC_TABLE_MAX 0x58
 static const uint16_t sc_key[SC_TABLE_MAX + 1][4] = {
     { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 00: none              */
@@ -445,6 +458,28 @@ static void kb_lock_key(input_state *st, uint8_t lock, uint8_t held, int is_brea
     kb_flags_set(st, lock, !(kb_flags(st) & lock));
 }
 
+/* ── #274: ALT + KEYPAD DIGITS = THE CHARACTER WITH THAT DECIMAL CODE. ─────────────────
+     While Alt is held, each keypad digit (the non-E0 keypad, whatever NumLock says)
+     does `0040:0019 = 0040:0019 * 10 + digit` -- a BYTE, so it wraps mod 256 as the
+     BIOS's does -- and stores nothing. When Alt is released, a non-zero accumulator is
+     stored as AH=00h AL=value (Alt+2+4+0 -> 00F0h, the code kb_compat already lets
+     through) and the accumulator is cleared; zero stores nothing. Any OTHER key pressed
+     with Alt held throws the accumulated value away and is translated as usual.
+     (IBM PC/AT TR, KB_INT "ALT-INPUT-TABLE" / K32 "zero anything that's been
+     accumulated"; RBIL MEMORY.LST 0040:0019.) Unmeasured: no oracle can hold Alt.
+   ⚠ With BOTH Alts down the value is stored when the last one comes up -- 0017 bit 3
+     is "either Alt", and that is the bit this follows. Ctrl+Alt still accumulates: the
+     AT BIOS checks Ctrl+Alt only for Del, which a VDD cannot honour anyway. */
+static int kp_digit(uint8_t code)
+{
+    switch (code) {
+    case 0x52: return 0; case 0x4F: return 1; case 0x50: return 2; case 0x51: return 3;
+    case 0x4B: return 4; case 0x4C: return 5; case 0x4D: return 6;
+    case 0x47: return 7; case 0x48: return 8; case 0x49: return 9;
+    default:   return -1;
+    }
+}
+
 /* One scancode -> the BIOS's view of it: update the shift state, and for a make code
    that denotes a character or a named key, store AH=scancode AL=ascii in the ring.
    Returns a KB_ACT_* for the caller to run (#254). */
@@ -494,6 +529,11 @@ static int bios_translate(input_state *st, uint8_t sc)
         if (ext) kbf_set(st, BDA_KB_FLAGS3, KF3_RALT, !is_break);
         else     kbf_set(st, BDA_KB_FLAGS2, KF1_LALT, !is_break);
         kb_flags_set(st, KF_ALT, (kbf(st, BDA_KB_FLAGS2) & KF1_LALT) || (kbf(st, BDA_KB_FLAGS3) & KF3_RALT));
+        if (is_break && !(kb_flags(st) & KF_ALT) && st->bda) {   /* #274: Alt+keypad ends */
+            uint8_t v = st->bda[BDA_KB_ALTNUM];
+            st->bda[BDA_KB_ALTNUM] = 0;
+            if (v) vdd_input_push(st, v);              /* AH=00h AL=the code         */
+        }
         return KB_ACT_NONE;
     case 0x3A: kb_lock_key(st, KF_CAPS, KF1_CAPS, is_break); return KB_ACT_NONE;
     case 0x45:
@@ -555,6 +595,15 @@ static int bios_translate(input_state *st, uint8_t sc)
         kbf_set(st, BDA_KB_FLAGS2, KF1_PAUSE, 0);
         return KB_ACT_NONE;
     }
+    /* ── #274: ALT + A KEYPAD DIGIT ACCUMULATES; ANY OTHER KEY UNDER ALT CLEARS IT. */
+    if ((kb_flags(st) & KF_ALT) && st->bda) {
+        int d = ext ? -1 : kp_digit(code);
+        if (d >= 0) {
+            st->bda[BDA_KB_ALTNUM] = (uint8_t)(st->bda[BDA_KB_ALTNUM] * 10 + d);
+            return KB_ACT_NONE;
+        }
+        st->bda[BDA_KB_ALTNUM] = 0;
+    }
     /* ── PRINT SCREEN: E0 37 (the grey key). Ctrl+PrtSc is the 7200h keystroke; on
          its own it calls INT 05h and stores nothing (it used to store 3700h). */
     if (ext && code == 0x37) {
@@ -612,23 +661,55 @@ uint16_t vdd_input_dos_key(uint16_t key)
    and the real BIOS would simply read the same byte again from the 8042. So: FIFO first,
    the owed byte second, and nothing if neither -- a spurious INT 09h with no key must
    not re-translate a stale byte. */
-int vdd_input_bios_consume(input_state *st)
+int vdd_input_bios_fetch(input_state *st)
 {
     uint8_t sc;
-    int act;
     /* Chained after a hook that read the byte: the output buffer still shows that
        byte (the keyboard has not sent the next one yet), so that is what the BIOS
        reads -- NOT the next queued byte, which belongs to the next interrupt. */
     if (st->sc_bios_owed) {
         st->sc_bios_owed = 0;
         st->sc_owed_served++;
-        return bios_translate(st, st->sc_last);
+        return st->sc_last;
     }
-    if (!sc_avail(st)) return KB_ACT_NONE;  /* spurious: nothing presented           */
+    if (!sc_avail(st)) return -1;           /* spurious: nothing presented           */
     sc = sc_pop(st);
-    act = bios_translate(st, sc);           /* <- what the stub never did: make it a KEY */
     vdd_input_poll(st);                     /* next byte: now (no clock) or after the hold */
-    return act;
+    return sc;
+}
+
+int vdd_input_bios_translate(input_state *st, uint8_t sc)
+{
+    return bios_translate(st, sc);          /* <- what the stub never did: make it a KEY */
+}
+
+int vdd_input_bios_consume(input_state *st)
+{
+    int sc = vdd_input_bios_fetch(st);
+    return sc < 0 ? KB_ACT_NONE : bios_translate(st, (uint8_t)sc);
+}
+
+int vdd_input_host_key_bytes(uint8_t rawsc, int ext, int is_break,
+                             uint8_t out[6], int *no_repeat)
+{
+    int n = 0;
+    *no_repeat = 0;
+    if (rawsc == 0x45 && !ext) {            /* Pause: the whole sequence on the press */
+        static const uint8_t seq[6] = { 0xE1, 0x1D, 0x45, 0xE1, 0x9D, 0xC5 };
+        *no_repeat = 1;
+        if (is_break) return 0;
+        for (n = 0; n < 6; ++n) out[n] = seq[n];
+        return 6;
+    }
+    if (rawsc == 0x46 && ext) {             /* Ctrl+Break: make AND break on the press */
+        *no_repeat = 1;
+        if (is_break) return 0;
+        out[0] = 0xE0; out[1] = 0x46; out[2] = 0xE0; out[3] = 0xC6;
+        return 4;
+    }
+    if (ext) out[n++] = 0xE0;
+    out[n++] = is_break ? (uint8_t)(rawsc | 0x80) : rawsc;
+    return n;
 }
 
 /* "Is a byte presented?" -- OBF, as the host's delivery gates ask it. */
@@ -762,6 +843,7 @@ static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         case 0x20: kbc_reply(st, st->kbc_cmdbyte); break;
         case 0xD0: kbc_reply(st, st->kbc_outport); break;
         case 0x60: case 0xD1:                        /* a parameter byte follows   */
+        case 0xD2:                                   /* #244: write kbd output buf */
             st->kbc_cmd = b; break;
         case 0xAD: st->kbc_cmdbyte |= 0x10; break;   /* disable keyboard clock     */
         case 0xAE: st->kbc_cmdbyte &= (uint8_t)~0x10; break;
@@ -779,6 +861,19 @@ static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 
     /* port 0x60: either the parameter of an 8042 command, or a KEYBOARD command. */
     if (st->kbc_cmd == 0x60) { st->kbc_cmdbyte = b; st->kbc_cmd = 0; return; }
+    if (st->kbc_cmd == 0xD2) {
+        /* ── #244: D2h, WRITE KEYBOARD OUTPUT BUFFER. The byte comes out at port 60h
+             exactly as if the keyboard had sent it, IRQ1 included -- which is what
+             makes the BIOS's INT 09h path testable without a finger on a key (p_kbd3
+             injects through it). PS/2-class controllers and AMI's KBC have it; the
+             original AT 8042 did not (IBM PS/2 TR "Keyboard/Auxiliary Device
+             Controller"; RBIL PORTS.LST 64h D2h). ⚠ The byte bypasses set-2 -> set-1
+             translation on real parts; ours is set 1 throughout, so it goes straight
+             into the scancode FIFO. Which oracles answer it is the probe's question. */
+        st->kbc_cmd = 0;
+        vdd_input_push_scancode(st, b);
+        return;
+    }
     if (st->kbc_cmd == 0xD1) {
         /* ── ★★★ THE OUTPUT PORT, WHICH IS WHERE A20 LIVES. ───────────────────
              Bit 1 is the A20 gate and bit 0 is CPU reset, active low. A20 is
@@ -936,6 +1031,10 @@ void vdd_input_reset(void *self)
         bda_w16(st, BDA_KB_TAIL, BDA_KB_START);
         st->bda[BDA_KB_FLAGS]  = 0;
         st->bda[BDA_KB_FLAGS2] = 0;
+        st->bda[BDA_KB_ALTNUM] = 0;         /* #274 */
+        /* #274: POST's ring bounds, which push/pop/peek now read (vdd_input.h). */
+        bda_w16(st, BDA_KB_BUFSTART, BDA_KB_START);
+        bda_w16(st, BDA_KB_BUFEND,   BDA_KB_END);
         /* 0040:0096 bit 4 = "enhanced (101/102-key) keyboard present". It is what a
            program checks before it uses INT 16h AH=10h/11h and the F11/F12 and grey
            key codes -- edit.com and QBasic among them. We serve those functions, so

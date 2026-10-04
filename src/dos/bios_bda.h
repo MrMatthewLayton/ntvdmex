@@ -49,6 +49,39 @@
 /* INT 12h's answer and 0040:0013: conventional memory BELOW the EBDA, in KB.  */
 #define BIOS_BASE_MEM_KB  ((DOS_MEM_TOP * 16u) / 1024u)            /* 639             */
 
+/* ── #136: CONVENTIONAL MEMORY IS A SETTING, AND IT MEANS MEMORY FITTED. ─────────────
+     Settings > Machine > Memory > Conventional Memory (KB), 64..640, default 640. The number is
+     what the board CARRIES -- what CMOS 15h/16h says -- and everything else follows from
+     it exactly as it does at 640: the BIOS takes its 1 KB EBDA off the top, INT 12h and
+     0040:0013 report what is left, and DOS's arena ends where the EBDA starts. So a
+     512 KB machine reads 511 KB from INT 12h, EBDA at 7FC0h, MCB chain ending at 7FC0h --
+     the same shape as 640 / 639 / 9FC0h, which is what both oracles measure (p_bios
+     int12.memk 027Fh, p_mcb mcb.chain.ends.at 9FC0h).
+   ★ 640 MAPS TO EXACTLY DOS_MEM_TOP, so the default machine is byte-identical: these
+     are the same expressions BIOS_EBDA_SEG and BIOS_BASE_MEM_KB were, with the 640 a
+     parameter instead of a constant. Checked off-VM by bda_test.c.
+   ⚠ WHAT IS NOT MODELLED: the memory between the new top and A0000h is still RAM. A
+     real 512 KB board has nothing there (reads float to FFh); ours keeps the host's
+     committed pages. Nothing of ours hands it out, so DOS, INT 12h, the BDA and CMOS all
+     agree the machine is smaller -- but a program that sizes memory by WRITING to it
+     (some diagnostics do) would find more than it was told. Unmeasured: no probe here
+     does that. */
+#define BIOS_CONV_KB_MIN   64u
+#define BIOS_CONV_KB_MAX   640u
+#define BIOS_EBDA_PARAS    0x40u                                   /* 1 KB            */
+static inline unsigned bios_conv_kb_clamp(unsigned kb) {
+    return kb < BIOS_CONV_KB_MIN ? BIOS_CONV_KB_MIN
+         : kb > BIOS_CONV_KB_MAX ? BIOS_CONV_KB_MAX : kb;
+}
+/* The paragraph DOS's arena ends at, and the EBDA starts at, for `kb` fitted. */
+static inline uint16_t bios_conv_top_para(unsigned kb) {
+    return (uint16_t)(bios_conv_kb_clamp(kb) * 64u - BIOS_EBDA_PARAS);
+}
+/* INT 12h's answer for a given top -- the memory below the EBDA, in KB. */
+static inline uint16_t bios_base_kb_of_top(uint16_t top) {
+    return (uint16_t)(((uint32_t)top * 16u) / 1024u);
+}
+
 /* BDA offsets (from linear 0x400) this header owns. */
 #define BDA_EBDA_SEG      0x0E      /* WORD: EBDA segment (AT and later)          */
 #define BDA_EQUIPMENT     0x10      /* WORD: the equipment word, = INT 11h       */
@@ -75,14 +108,18 @@ static inline void bios_bda_set_equipment(volatile uint8_t *base, uint16_t equip
    "EBDA:0000"), which is what a program that walks it -- or relocates it, as some
    memory managers do -- reads first. The rest is zeroed: everything else in an EBDA is
    PS/2-mouse and vendor state for devices this machine does not model. */
-static inline void bios_bda_init(volatile uint8_t *base, uint16_t equip) {
-    volatile uint8_t *ebda = bios_lin(base, (uint32_t)BIOS_EBDA_SEG << 4);
+/* #136: `top` is the EBDA's segment = the end of DOS's arena (bios_conv_top_para). */
+static inline void bios_bda_init_top(volatile uint8_t *base, uint16_t equip, uint16_t top) {
+    volatile uint8_t *ebda = bios_lin(base, (uint32_t)top << 4);
     unsigned k;
-    bios_wr16(bios_lin(base, 0x400u + BDA_EBDA_SEG), (uint16_t)BIOS_EBDA_SEG);
+    bios_wr16(bios_lin(base, 0x400u + BDA_EBDA_SEG), top);
     bios_bda_set_equipment(base, equip);
-    bios_wr16(bios_lin(base, 0x400u + BDA_MEM_KB), (uint16_t)BIOS_BASE_MEM_KB);
+    bios_wr16(bios_lin(base, 0x400u + BDA_MEM_KB), bios_base_kb_of_top(top));
     for (k = 0; k < BIOS_EBDA_KB * 1024u; ++k) ebda[k] = 0;
     ebda[0] = (uint8_t)BIOS_EBDA_KB;
+}
+static inline void bios_bda_init(volatile uint8_t *base, uint16_t equip) {
+    bios_bda_init_top(base, equip, (uint16_t)BIOS_EBDA_SEG);
 }
 
 #endif /* BIOS_BDA_H */
