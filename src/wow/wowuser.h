@@ -2041,7 +2041,8 @@ static int             g_wu_nclass = 0;
      than one of ours. (session 55) */
 static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT", "LISTBOX",
                                              "BUTTON", "STATIC", "SCROLLBAR",
-                                             "COMBOBOX", "#32770" };
+                                             "COMBOBOX", "#32770",
+                                             "~FOREIGN" };  /* s91: see wowuser_alias16 */
 static int               g_wu_sysdone = 0;
 
 static void wowuser_ensure_sysclasses(void)
@@ -2206,6 +2207,10 @@ typedef struct wowuser_win_s {
        wowuser_subproc. 0/NULL = not subclassed. */
     DWORD   subproc;
     WNDPROC orig32;
+    /* s91: an ALIAS -- a Win16 handle for a window that is NOT the guest's (another
+       program's top-level window), minted by wowuser_alias16 for GetWindow. No
+       procedure, never destroyed by us, skipped by everything that means "ours". */
+    BYTE    foreign;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -2284,6 +2289,7 @@ static wowuser_win_t *wowuser_newwin(void)
     w->dlgbux = w->dlgbuy = 0;       /* the same trap: only a dialog sets them */
     w->dlg3d = 0;
     w->subproc = 0; w->orig32 = NULL;  /* #308: only SetWindowLong sets them */
+    w->foreign = 0;                    /* s91: only wowuser_alias16 sets it */
     return w;
 }
 
@@ -2653,6 +2659,45 @@ static wowuser_class_t *wowuser_find(const char *name)
         }
     }
     return NULL;
+}
+
+/* ── s91 (TASKMAN): A WIN16 HANDLE FOR ANY WINDOW, AS WOW GIVES ONE. ─────────────────
+     Real WOW hands a 16-bit program a handle for every window on the desktop, so a
+     Win16 Task List lists the XP desktop's windows (stock, runs/stockshot/
+     s91_taskman_stock.bmp: cmd.exe, Notepad, Program Manager). Ours issued handles
+     only for the guest's own windows, so GetWindow(GW_HWNDFIRST) named nothing and
+     TASKMAN's list was empty. An alias is a window record pointing at the real HWND
+     with no procedure: what is ASKED of it (text, visibility, rectangle, owner) is
+     answered from the real window by the same code as for ours. Recycled once the
+     window is gone; at most 48 live. Only GetWindow mints them -- the message relay
+     still maps a foreign HWND to 0, as before. */
+static WORD wowuser_alias16(HWND h)
+{
+    WORD h16;
+    wowuser_class_t *c;
+    wowuser_win_t *w;
+    int i, n = 0;
+    if (!h) return 0;
+    h16 = wowwin_hwnd16(h);
+    if (h16) return h16;
+    for (i = 0; i < g_wu_nwin; ++i) {
+        wowuser_win_t *a = &g_wu_win[i];
+        if (!a->hwnd || !a->foreign) continue;
+        if (!a->hwnd32 || !IsWindow(a->hwnd32)) { a->hwnd = 0; a->hwnd32 = NULL; a->foreign = 0; }
+        else ++n;
+    }
+    if (n >= 48) return 0;
+    wowuser_ensure_sysclasses();
+    c = wowuser_find("~FOREIGN");
+    if (!c || !(w = wowuser_newwin())) return 0;
+    w->cls = (WORD)(c - g_wu_class);
+    w->style = (DWORD)GetWindowLongA(h, GWL_STYLE);
+    w->wndproc = 0; w->parent = 0; w->menu = 0; w->hinst = 0;
+    w->text[0] = 0; w->hmem = 0; w->menuitems = 0; w->dying = 0;
+    for (i = 0; i < WOWUSER_MAX_EXTRA; ++i) w->extra[i] = 0;
+    w->hwnd32 = h;
+    w->foreign = 1;
+    return w->hwnd;
 }
 
 /* The class registered under an ATOM, or NULL. ⚠ Win16 lets lpClassName be an
@@ -3039,6 +3084,7 @@ static int wowuser_listmsg(wow32_frame_t *f, wowuser_win_t *w, WORD msg, WORD wp
     return 1;
 }
 
+static int wowuser_destroy(WORD hwnd, char *note, int notecap, int *kp);
 static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                             WORD wparam, DWORD lparam, char *note, int notecap)
 {
@@ -3160,6 +3206,11 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                     ch->x = p.x; ch->y = p.y;
                     ch->cx = r.right - r.left; ch->cy = r.bottom - r.top;
                 }
+                /* s91 (#305 M13): THE NEW CHILD IS THE ACTIVE ONE, as stock answers
+                   (w_mdi: WM_MDIGETACTIVE right after two WM_MDICREATEs names the
+                   second). The real client did not activate it here -- the frame
+                   is hidden at this point in the probe and in most programs. */
+                SendMessageA(w->hwnd32, WM_MDIACTIVATE, (WPARAM)ch->hwnd32, 0);
             }
         }
         wu_puts(note, notecap, &k, "WM_MDICREATE ");
@@ -3234,6 +3285,66 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
        ⚠ `f->cbds` is the CONTROL'S OWN hInstance, not the caller's: LocalAlloc
          allocates from the local heap of whatever DS it is entered with, and the
          heap this handle must be valid in is the application's own. */
+    /* ── #305 M13 (s91): THE REST OF THE MDI CLIENT'S MESSAGES. Same numbers in
+         Win16 and Win32 (0x221-0x228); the child handles cross through the table.
+         Two differ in their packing:
+           WM_MDIGETACTIVE (0x229): Win16 answers DX:AX = (fMaximized, hwnd); Win32
+             answers the hwnd and writes the flag through lParam.
+           WM_MDISETMENU (0x230): Win16 lParam = MAKELONG(hmenuFrame, hmenuWindow)
+             and wParam = fRefresh; Win32 wParam/lParam = the two menus. Our menus
+             are real HMENUs on the real frame, so it is answered by refreshing
+             (DrawMenuBar) and the frame's current menu, not by swapping.
+         WM_MDIDESTROY goes through this host's own DestroyWindow path, so the
+         child's record and its WM_DESTROY are handled as for any window. */
+    case 0x0221: case 0x0222: case 0x0223: case 0x0224: case 0x0225:
+    case 0x0226: case 0x0227: case 0x0228: case 0x0229: case 0x0230: {
+        LRESULT r = 0;
+        HWND ch = (msg >= 0x0221 && msg <= 0x0225) ? wowuser_hwnd32(wparam) : NULL;
+        if (!w || !w->hwnd32 || !g_wu_class[w->cls].sysclass) {
+            wu_puts(note, notecap, &k, "WM_MDI* to a window that is not an MDI client");
+            return 0;
+        }
+        if (msg == 0x0221) {
+            wu_puts(note, notecap, &k, "WM_MDIDESTROY -> ");
+            wowuser_destroy(wparam, note, notecap, &k);
+            return 0;
+        }
+        if (msg >= 0x0221 && msg <= 0x0225 && !ch && msg != 0x0224) {
+            wu_puts(note, notecap, &k, "WM_MDI* names no window of ours; 0");
+            return 0;
+        }
+        switch (msg) {
+        case 0x0229: {
+            BOOL mx = FALSE;
+            HWND a = (HWND)SendMessageA(w->hwnd32, WM_MDIGETACTIVE, 0, (LPARAM)&mx);
+            WORD a16 = wowwin_hwnd16(a);
+            wu_puts(note, notecap, &k, "WM_MDIGETACTIVE -> 0x");
+            wu_puthex(note, notecap, &k, a16, 4);
+            return (LONG)(((DWORD)(mx ? 1 : 0) << 16) | a16);
+        }
+        case 0x0230: {
+            HWND fr = GetParent(w->hwnd32);
+            if (fr) DrawMenuBar(fr);
+            wu_puts(note, notecap, &k, "WM_MDISETMENU -> refreshed the frame's menu");
+            return 0;
+        }
+        case 0x0224:
+            r = SendMessageA(w->hwnd32, msg, (WPARAM)ch, (LPARAM)(lparam ? 1 : 0));
+            break;
+        case 0x0226: case 0x0227: case 0x0228:
+            r = SendMessageA(w->hwnd32, msg, (WPARAM)wparam, 0);
+            break;
+        default:
+            r = SendMessageA(w->hwnd32, msg, (WPARAM)ch, 0);
+            break;
+        }
+        wu_puts(note, notecap, &k, "WM_MDI 0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, " -> the real MDI client -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)r, 8);
+        return (LONG)r;
+    }
+
     case EM_GETHANDLE16: {
         int  n    = w->hwnd32 ? GetWindowTextLengthA(w->hwnd32) : 0;
         WORD need = (WORD)(n + 1);
@@ -3537,6 +3648,38 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                 wu_puts(note, notecap, &k, " -> the real EDIT -> 0x");
                 wu_puthex(note, notecap, &k, (DWORD)r, 8);
                 return (LONG)r;
+            }
+        }
+        /* #305 M8 (s91): WM_SETFONT / WM_GETFONT to a SYSTEM control. The font
+           crosses as a GDI token: in, mapped to the real HFONT (0 = the system
+           font, as both sides say); out, the token this host already gave the
+           guest for that HFONT, or -- a font the guest never held (the dialog
+           manager's) -- one minted as STOCK, so a DeleteObject on it cannot free
+           the control's font from under it. Answered 0 before: a dialog that set
+           its edit's font saw nothing, and WM_GETFONT always said "system". */
+        if (w && w->hwnd32 && g_wu_class[w->cls].sysclass
+            && (msg == WM_SETFONT || msg == WM_GETFONT)) {
+            if (msg == WM_SETFONT) {
+                int kind = -1;
+                HGDIOBJ hf = wparam ? wowgdi_h32(wparam, &kind) : NULL;
+                SendMessageA(w->hwnd32, WM_SETFONT, (WPARAM)hf, (LPARAM)(lparam & 0xFFFF));
+                wu_puts(note, notecap, &k, "WM_SETFONT token 0x");
+                wu_puthex(note, notecap, &k, wparam, 4);
+                wu_puts(note, notecap, &k, hf || !wparam ? " -> the real control"
+                                                         : " (NOT a token of ours: system font)");
+                return 0;
+            } else {
+                HGDIOBJ hf = (HGDIOBJ)SendMessageA(w->hwnd32, WM_GETFONT, 0, 0);
+                WORD tok = 0;
+                int i;
+                for (i = 0; hf && i < g_wg_nobj; ++i)
+                    if (g_wg_obj[i].o == hf && g_wg_obj[i].h
+                        && (g_wg_obj[i].kind == WOWGDI_KIND_OBJ
+                            || g_wg_obj[i].kind == WOWGDI_KIND_STOCK)) { tok = g_wg_obj[i].h; break; }
+                if (hf && !tok) tok = wowgdi_h16(hf, WOWGDI_KIND_STOCK);
+                wu_puts(note, notecap, &k, "WM_GETFONT -> token 0x");
+                wu_puthex(note, notecap, &k, tok, 4);
+                return (LONG)tok;
             }
         }
         /* #308 (s91): a SYSTEM control's input/focus messages -- the same scalar set
@@ -4350,7 +4493,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  the caller to show and CALC's SciCalc dialog is measured working
                  that way; changing when a modeless dialog appears would be
                  changing something that is already right. */
-            if (modal && (style & WS_VISIBLE)) {
+            /* s91 (#283): EVERY modal dialog, not only a WS_VISIBLE one. DialogBox
+                 displays the dialog after WM_INITDIALOG "regardless of whether the
+                 template specifies WS_VISIBLE" (the 3.1 SDK's own words), and
+                 TERMINAL's Default Serial Port template (DIALOG 89, style
+                 00C800C0) does not set it -- so it was neither deferred nor hidden,
+                 appeared at its template position, centred itself with a
+                 non-repainting MoveWindow and left its image at the top-left. */
+            if (modal) {
                 cstyle    &= ~(DWORD)WS_VISIBLE;
                 defer_show = 1;
             }
@@ -9593,7 +9743,28 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        out = wowwin_hwnd16(GetWindow(h, cmd));
+        /* s91 (TASKMAN): THE WALK SKIPS WINDOWS THAT ARE NOT THE GUEST'S. The real
+             desktop's first top-level window is never one of ours, so GW_HWNDFIRST
+             answered 0 and a Win16 program walking the window list (TASKMAN's Task
+             List, an MDI Window menu) saw an empty one. FIRST/LAST/NEXT/PREV and
+             CHILD now step on, in the same direction, past windows that have no
+             Win16 handle -- the list a Win16 program can name. */
+        {   HWND h2 = GetWindow(h, cmd);
+            UINT step = (cmd == GW_HWNDFIRST || cmd == GW_HWNDNEXT || cmd == GW_CHILD)
+                        ? GW_HWNDNEXT
+                        : (cmd == GW_HWNDLAST || cmd == GW_HWNDPREV) ? GW_HWNDPREV : 0;
+            int guard = 0;
+            /* ...and a foreign TOP-LEVEL window gets an alias (wowuser_alias16), the
+               way stock answers; a foreign CHILD is stepped past as before. */
+            int toplevel = (cmd != GW_CHILD && cmd != GW_OWNER
+                            && GetAncestor(h, GA_PARENT) == GetDesktopWindow());
+            if (toplevel && h2) out = wowuser_alias16(h2);
+            else {
+                while (h2 && step && !wowwin_hwnd16(h2) && guard++ < 4096)
+                    h2 = GetWindow(h2, step);
+                out = wowwin_hwnd16(h2);
+            }
+        }
         wu_puts(note, notecap, &k, " -> 0x");
         wu_puthex(note, notecap, &k, out, 4);
         wow32_setret(f, out);

@@ -343,7 +343,9 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
            by this EXECUTABLE, and every Win16 program here is ntvdmhost.exe, so Sound
            Recorder's Open dialog came up in Doom's folder (runs/s90/srp0.png). The
            guest's DOS current directory IS this process's (INT 21h AH=47 reads it). */
-        if (!w32.lpstrInitialDir) {
+        /* s91: an EMPTY string means the same -- Media Player passes one, and
+           comdlg32 opened at C:\ for it, so its own TONE.WAV was "not found". */
+        if (!w32.lpstrInitialDir || !w32.lpstrInitialDir[0]) {
             static char cwd16[MAX_PATH];
             if (GetCurrentDirectoryA(sizeof cwd16, cwd16)) w32.lpstrInitialDir = cwd16;
         }
@@ -376,6 +378,8 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- ★ HOOK/TEMPLATE BITS STRIPPED (a 16-bit"
                                        " hook procedure is not callable from"
                                        " comdlg32)");
+        wu_puts(note, notecap, &k, " dir=");
+        wu_putq(note, notecap, &k, w32.lpstrInitialDir ? w32.lpstrInitialDir : "(null)");
         wu_puts(note, notecap, &k, " nMaxFile=0x");
         wu_puthex(note, notecap, &k, w32.nMaxFile, 4);
         if (w32.lpstrFile) {

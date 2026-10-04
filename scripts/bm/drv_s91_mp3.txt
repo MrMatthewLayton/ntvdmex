@@ -1,0 +1,26 @@
+wait 5
+wcmd "Media Player" 120
+wait 3
+key 0x54
+key 0x4F
+key 0x4E
+key 0x45
+key 0xBE
+key 0x57
+key 0x41
+key 0x56
+key 0x0D
+wait 3
+list
+shot s91_mp3_0
+wclick "Media Player - TONE.WAV" 33 65
+wclick "Media Player - TONE" 33 65
+wait 1
+shot s91_mp3_1
+wait 3
+shot s91_mp3_2
+list
+close "Media Player - TONE.WAV"
+close "Media Player - TONE"
+wait 6
+list

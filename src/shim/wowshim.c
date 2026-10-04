@@ -20,14 +20,14 @@
  * path at WOW start-up; every export forwards to a table the host hands over in
  * NtvdmexShimInit. Nothing here knows anything about the VDM itself.
  *
- * ⚠ A CALL WITH NO HOST ENTRY FAILS, LOUDLY. The table may leave slots NULL (the
- *   WOWGlobal*16 family needs krnl386's own allocator, which is not reachable from a
- *   foreign thread); those answer 0/FALSE and say so through the host's log hook.
+ * ⚠ A CALL WITH NO HOST ENTRY FAILS, LOUDLY: 0/FALSE, said through the host's log
+ *   hook. WOWCallback16(Ex) and WOWGlobal*16 (s91, #309) run 16-bit code through the
+ *   host's nested run, so they work on the guest thread only.
  */
 #include <windows.h>
 
 typedef struct {
-    DWORD  version;                                         /* 1 */
+    DWORD  version;                                         /* 2 */
     void  *(*getvdmptr)(DWORD vp, DWORD cb, BOOL pm);
     HANDLE (*handle32)(WORD h16, DWORD type);
     WORD   (*handle16)(HANDLE h32, DWORD type);
@@ -35,6 +35,7 @@ typedef struct {
     void   (*ica_interrupt)(int ms, BYTE line, int count);
     void   (*yield16)(void);
     void   (*log)(const char *what);
+    DWORD  (*global16)(int op, DWORD a, DWORD b);           /* 2: krnl386's global heap */
 } ntvdmex_shim_api_t;
 
 static ntvdmex_shim_api_t g_api;
@@ -42,7 +43,7 @@ static int g_have;
 
 __declspec(dllexport) BOOL WINAPI NtvdmexShimInit(const ntvdmex_shim_api_t *api)
 {
-    if (!api || api->version != 1) return FALSE;
+    if (!api || api->version != 2) return FALSE;
     g_api = *api;
     g_have = 1;
     return TRUE;
@@ -75,20 +76,44 @@ __declspec(dllexport) DWORD WINAPI WOWCallback16(DWORD vpfn, DWORD p)
 __declspec(dllexport) VOID WINAPI WOWYield16(VOID)
 { if (g_have && g_api.yield16) g_api.yield16(); }
 __declspec(dllexport) VOID WINAPI WOWDirectedYield16(WORD t) { (void)t; WOWYield16(); }
+/* s91 (#309): krnl386's own global heap, through the host (shim_global16). Ops:
+   0 GlobalAlloc(flags, cb) 1 GlobalFree(h) 2 GlobalLock(h) 3 GlobalUnlock(h)
+   4 GlobalSize(h) 5 GlobalHandle(sel) -- answers exactly as the 16-bit calls do. */
+static DWORD g16(int op, DWORD a, DWORD b)
+{
+    if (g_have && g_api.global16) return g_api.global16(op, a, b);
+    miss("WOWGlobal*16: no host entry");
+    return 0;
+}
 __declspec(dllexport) WORD WINAPI WOWGlobalAlloc16(WORD f, DWORD cb)
-{ (void)f; (void)cb; miss("WOWGlobalAlloc16: not provided"); return 0; }
+{ return (WORD)g16(0, f, cb); }
+/* ⚠ Free16 and UnlockFree16 answer TRUE (1) when the block is freed -- NOT Win16's
+     GlobalFree convention (0 = freed, else the handle). Measured against stock with
+     tools/wintest/w_wcb: both return 0001 where GlobalFree said 0. */
 __declspec(dllexport) WORD WINAPI WOWGlobalFree16(WORD h)
-{ (void)h; miss("WOWGlobalFree16: not provided"); return h; }
+{ return (WORD)(g16(1, h, 0) == 0); }
 __declspec(dllexport) DWORD WINAPI WOWGlobalLock16(WORD h)
-{ (void)h; miss("WOWGlobalLock16: not provided"); return 0; }
+{ return g16(2, h, 0); }
 __declspec(dllexport) BOOL WINAPI WOWGlobalUnlock16(WORD h)
-{ (void)h; miss("WOWGlobalUnlock16: not provided"); return FALSE; }
+{ return (BOOL)(WORD)g16(3, h, 0); }
 __declspec(dllexport) DWORD WINAPI WOWGlobalAllocLock16(WORD f, DWORD cb, WORD *ph)
-{ (void)f; (void)cb; if (ph) *ph = 0; miss("WOWGlobalAllocLock16: not provided"); return 0; }
+{
+    WORD h = (WORD)g16(0, f, cb);
+    if (ph) *ph = h;
+    return h ? g16(2, h, 0) : 0;
+}
 __declspec(dllexport) WORD WINAPI WOWGlobalUnlockFree16(DWORD vp)
-{ (void)vp; miss("WOWGlobalUnlockFree16: not provided"); return 0; }
+{
+    WORD h = (WORD)g16(5, (WORD)(vp >> 16), 0);   /* GlobalHandle(selector) -> AX */
+    if (!h) return 0;
+    g16(3, h, 0);
+    return (WORD)(g16(1, h, 0) == 0);
+}
 __declspec(dllexport) DWORD WINAPI WOWGlobalLockSize16(WORD h, PDWORD pcb)
-{ (void)h; if (pcb) *pcb = 0; miss("WOWGlobalLockSize16: not provided"); return 0; }
+{
+    if (pcb) *pcb = g16(4, h, 0);
+    return g16(2, h, 0);
+}
 
 /* ── NTVDM.EXE ────────────────────────────────────────────────────────────── */
 /* VOID call_ica_hw_interrupt(int ms, half_word line, int count) -- and it is STDCALL,

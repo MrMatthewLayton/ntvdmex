@@ -768,6 +768,37 @@ int dos_int21(dos_machine_t *m)
         cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
         OUTC(R_DX & 0xFF); OKCF();
+    } else if ((ah == 0x01 || ah == 0x07 || ah == 0x08 || ah == 0x0B
+                || (ah == 0x06 && (R_DX & 0xFF) == 0xFF))
+               && dos_fh_is_file((void *const *)m->fh, 0)) {
+        /* ── stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
+             shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
+             read HANDLE 0 -- these read the keyboard whatever handle 0 was, so a
+             redirected program never saw its file (and hung waiting for a key).
+             What a file gives back, measured with tools/dostest/p_stdin against REAL
+             MS-DOS on a real BIOS (PCem) and stock NTVDM, which agree byte for byte:
+               01h/07h/08h  the next byte; AT END OF FILE THEY BLOCK -- neither
+                            returns (DOSBox-X answers 0Ah; it is the odd one out).
+                            Blocking here is a retry, so the guest keeps its ISRs.
+               06h DL=FFh   the next byte, ZF clear; at EOF AL=00h and ZF SET
+               0Bh          FFh while bytes remain, 00h at EOF
+             (3Fh on handle 0 already reads the file: 0 bytes, CF clear, at EOF.) */
+        HANDLE fh0 = (HANDLE)m->fh[0];
+        BYTE ch = 0; DWORD got = 0;
+        if (ah == 0x0B) {
+            DWORD pos = SetFilePointer(fh0, 0, NULL, FILE_CURRENT);
+            DWORD sz  = GetFileSize(fh0, NULL);
+            SETAX((R_AX & 0xFF00) | ((pos != INVALID_SET_FILE_POINTER && pos < sz) ? 0xFF : 0x00));
+            OKCF();
+        } else if (!ReadFile(fh0, &ch, 1, &got, NULL) || got == 0) {
+            if (ah == 0x06) { SETAX(R_AX & 0xFF00); SETZF(); OKCF(); }
+            else m->retry = 1;                  /* EOF: block, as DOS does */
+        } else {
+            if (ah == 0x01) OUTC(ch);
+            SETAX((R_AX & 0xFF00) | ch);
+            if (ah == 0x06) CLRZF();
+            OKCF();
+        }
     } else if (ah == 0x01 || ah == 0x07 || ah == 0x08) {   /* read char (01 echoes) */
         /* Poll, do not block. If no key is waiting we ask the host to re-run this INT
            rather than parking the exec thread -- see `retry` in dos_int21.h. */
@@ -776,6 +807,27 @@ int dos_int21(dos_machine_t *m)
         else {
             if (ah == 0x01) OUTC(c);            /* AH=01: echo                     */
             SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
+        }
+    } else if (ah == 0x0A && dos_fh_is_file((void *const *)m->fh, 0)) {
+        /* stdio (s91): the line from a FILE on handle 0 -- bytes up to the CR, the
+           LF a text file puts after it skipped at the start of the next line, each
+           echoed as the keyboard form echoes them. At EOF with nothing read it
+           blocks, as 08h does (p_stdin: PCem + stock). */
+        volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+        int maxn = buf[0], n = 0;
+        BYTE ch; DWORD got;
+        HANDLE fh0 = (HANDLE)m->fh[0];
+        for (;;) {
+            if (!ReadFile(fh0, &ch, 1, &got, NULL) || got == 0) break;
+            if (ch == 0x0A && n == 0) continue;
+            if (ch == 0x0D) break;
+            if (n < maxn - 1) { buf[2 + n++] = ch; OUTC(ch); }
+        }
+        if (n == 0 && got == 0) m->retry = 1;
+        else {
+            buf[1] = (BYTE)n; buf[2 + n] = 0x0D;
+            OUTC(0x0D); OUTC(0x0A);
+            OKCF();
         }
     } else if (ah == 0x0A) {                    /* buffered input DS:DX */
         /* ── THE LAST INPUT CALL THAT PARKED THE EXEC THREAD, AND IT DEADLOCKS A SHELL.

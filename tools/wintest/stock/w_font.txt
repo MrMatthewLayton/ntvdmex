@@ -1,0 +1,12 @@
+#PROBE w16font
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=cw.edit SIG=AX AX=0001
+CASE=getfont.fresh.nonzero SIG=AX AX=0000
+CASE=getfont.stock.same SIG=AX AX=0001
+CASE=createfont SIG=AX AX=0001
+CASE=getfont.created.same SIG=AX AX=0001
+CASE=getfont.reset.nonzero SIG=AX AX=0000
+CASE=deletefont SIG=AX AX=0001
+#END

@@ -245,7 +245,8 @@ static void wowenum_line(int x0, int y0, int x1, int y1);
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
    and LocalAlloc's 2. Anything wider gets caught here rather than overrunning. */
-#define WOWCALL_MAX_ARGW  8   /* s89: EnumFontFamilies' callback takes 7 words */
+#define WOWCALL_MAX_ARGW  32  /* s89: EnumFontFamilies' callback takes 7 words; s91: WOWCallback16Ex
+                                 allows 64 argument bytes (WCB16_MAX_CBARGS) */
 
 typedef struct {
     wowsched_slot_t saved;   /* the interrupted context, verbatim               */
@@ -399,6 +400,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
  * is not a curiosity, it means something executed our return stub that we did
  * not send there, which is a fact worth printing rather than swallowing.
  */
+static DWORD g_wc_lastres;   /* the last nested call's DX:AX (sink keeps only AX) */
 static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
 {
     wowcall_frame_t *fr;
@@ -406,6 +408,7 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
     fr = &g_wc[--g_wc_depth];
     wowsched_restore(&fr->saved, tib);
     if (fr->sink) *fr->sink = (WORD)result;
+    g_wc_lastres = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
     fr->written = 0;
     if (fr->retlin) {
         volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)fr->retlin;

@@ -1,0 +1,19 @@
+wait 5
+close "Application Error"
+list
+shot s91_mp_0
+wcmd "Media Player" 120
+wait 3
+list
+key 0x54
+key 0x4F
+key 0x4E
+key 0x45
+key 0xBE
+key 0x57
+key 0x41
+key 0x56
+key 0x0D
+wait 3
+list
+shot s91_mp_1

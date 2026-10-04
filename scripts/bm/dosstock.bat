@@ -73,7 +73,7 @@ if /i "%NOREDIR%"=="1" (
 ) else (
   start "" cmd /c ""%D%\%P%" %A% > "%R%" 2>&1"
 )
-ping -n 16 127.0.0.1 >nul
+ping -n 31 127.0.0.1 >nul
 echo ---- run window over ---- >> "%S%"
 
 taskkill /f /im ntvdm.exe >nul 2>&1

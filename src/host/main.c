@@ -139,6 +139,8 @@ typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
 #include "vdd_emu8k.h"   /* #233: the AWE32's wavetable chip */
 #include "vdd_mpu.h"
 #include "vdd_comm.h"
+#include "vdd_net.h"     /* GH #8 (s91): NetBIOS via INT 5Ch */
+#include <nb30.h>
 #include "../../sdk/include/ntvdmex-vdd.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
@@ -968,6 +970,72 @@ static int strstr_nocase(const char *blk, const char *name)
 }
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
 static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
+static net_state    g_net;       static ntvdd g_net_dev;    /* GH #8 (s91) */
+
+/* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
+     that is the DOS one with a flat buffer pointer -- the same commands, the same
+     return codes -- so this is a field copy. netapi32.dll is loaded on first use (a
+     host that never sees INT 5Ch never loads it).
+   ★ LANA NUMBERS: a DOS program says lana 0 and means "the network". NT's lanas are
+     whatever NCBENUM lists (on the rig: not necessarily 0), so DOS lana N is the Nth
+     enumerated one; past the end is NRC_BRIDGE (23h, invalid adapter).
+   ★ A Win32 lana must be RESET before use and a DOS program often never does (its
+     NetBIOS was initialised at boot), so the first command on a lana resets it with
+     the defaults; the program's own RESET resets it again, its way. */
+typedef UCHAR (APIENTRY *netbios_fn)(PNCB);
+static netbios_fn g_netbios;
+static LANA_ENUM  g_net_lanas;
+static BYTE       g_net_ready[MAX_LANA + 1];
+static uint8_t net_submit(void *ctx, netb_ncb *n)
+{
+    NCB w;
+    UCHAR lana;
+    (void)ctx;
+    if (!g_netbios) {
+        static int tried;
+        HMODULE h;
+        if (tried) return NRC_BRIDGE;
+        tried = 1;
+        h = LoadLibraryA("netapi32.dll");
+        g_netbios = h ? (netbios_fn)(void *)GetProcAddress(h, "Netbios") : NULL;
+        if (!g_netbios) return NRC_BRIDGE;
+        ZeroMemory(&w, sizeof w);
+        w.ncb_command = NCBENUM;
+        w.ncb_buffer  = (PUCHAR)&g_net_lanas;
+        w.ncb_length  = sizeof g_net_lanas;
+        if (g_netbios(&w) != NRC_GOODRET) g_net_lanas.length = 0;
+    }
+    if (n->lana >= g_net_lanas.length) { n->retcode = NRC_BRIDGE; return NRC_BRIDGE; }
+    lana = g_net_lanas.lana[n->lana];
+    if (n->command != NCBRESET && !g_net_ready[lana]) {
+        ZeroMemory(&w, sizeof w);
+        w.ncb_command = NCBRESET;
+        w.ncb_lana_num = lana;
+        if (g_netbios(&w) == NRC_GOODRET) g_net_ready[lana] = 1;
+    }
+    ZeroMemory(&w, sizeof w);
+    w.ncb_command  = n->command;
+    w.ncb_lsn      = n->lsn;
+    w.ncb_num      = n->num;
+    w.ncb_buffer   = n->buffer;
+    w.ncb_length   = n->length;
+    memcpy(w.ncb_callname, n->callname, 16);
+    memcpy(w.ncb_name, n->name, 16);
+    w.ncb_rto      = n->rto;
+    w.ncb_sto      = n->sto;
+    w.ncb_lana_num = lana;
+    if (n->command == NCBRESET) {
+        /* DOS: lsn = sessions, num = names (0 = default). Win32 reads them from
+           callname[0..1] -- and [2] nonzero asks for the first name number too. */
+        w.ncb_callname[0] = n->lsn; w.ncb_callname[1] = n->num; w.ncb_callname[2] = 0;
+        w.ncb_lsn = 0; w.ncb_num = 0;
+    }
+    n->retcode = g_netbios(&w);
+    if (n->command == NCBRESET && n->retcode == NRC_GOODRET) g_net_ready[lana] = 1;
+    n->lsn = w.ncb_lsn; n->num = w.ncb_num; n->length = w.ncb_length;
+    memcpy(n->callname, w.ncb_callname, 16);
+    return n->retcode;
+}
 /* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
      0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
      loaded dynamically like waveOut, no new import) writes present/axes/
@@ -4304,7 +4372,7 @@ static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
      DOS_CTAB_SEG:DOS_BIOS_STUBS) read the live IF, i.e. always "off". Harmless while
      every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
      its BOP, because a real BIOS takes interrupts during that wait. */
-#define DOS_BIOS_STUB_N 12            /* entries in WinMain's bios_ints[] */
+#define DOS_BIOS_STUB_N 14            /* entries in WinMain's bios_ints[] (s91: +2Ah, 5Ch) */
 static int our_stub_cs_ip(DWORD cs, DWORD ip)
 {
     if (cs == DOS_HDLR_SEG) return 1;
@@ -10182,7 +10250,7 @@ static void mgr_name(char *out, HWND *show)
         for (i = 0; i < WOWUSER_MAX_WIN; ++i) {
             const wowuser_win_t *w = &g_wu_win[i];
             HWND h = w->hwnd32;
-            if (!w->hwnd || w->parent || w->dying || !h || !IsWindowVisible(h)) continue;
+            if (!w->hwnd || w->parent || w->dying || w->foreign || !h || !IsWindowVisible(h)) continue;
             *show = h;
             if (igwt) {
                 WCHAR wb[MGR_NAME_CB]; int n = igwt(h, wb, MGR_NAME_CB);
@@ -26316,6 +26384,8 @@ typedef struct {
     void   (*ica_interrupt)(int ms, BYTE line, int count);
     void   (*yield16)(void);
     void   (*log)(const char *what);
+    /* version 2 (s91, #309): krnl386's global heap -- see shim_global16 */
+    DWORD  (*global16)(int op, DWORD a, DWORD b);
 } ntvdmex_shim_api_t;
 
 
@@ -26382,6 +26452,55 @@ static void shim_ica(int ms, BYTE line, int count)
 }
 static void shim_yield(void) { Sleep(0); }
 
+/* ── s91 (#309): WOWCallback16Ex -- a 32-bit thunk DLL calling 16-bit code. pArgs is
+     the 16-bit STACK IMAGE, cbArgs bytes, copied as it is (wownt32.h; Wine's
+     K32WOWCallback16Ex does the same memcpy): its lowest word is what SP points at,
+     i.e. a PASCAL function's LAST argument. wow_call16_sync takes arguments in
+     declared order (first pushed first), so the buffer is read from its top down.
+     WCB16_CDECL needs nothing more: the nested run restores SS:SP itself. DS is the
+     calling task's, as it was when the guest called into the thunk. Only on the
+     guest thread -- from any other, FALSE (the nested run refuses). */
+static BOOL shim_callback16ex(DWORD vpfn, DWORD flags, DWORD cb, void *a, DWORD *ret)
+{
+    WORD args[WOWCALL_MAX_ARGW], r = 0;
+    const BYTE *b = (const BYTE *)a;
+    int n = (int)(cb / 2), i;
+    (void)flags;
+    if ((cb & 1) || n > WOWCALL_MAX_ARGW || (cb && !b) || !g_tib_dbg) {
+        shim_log("WOWCallback16Ex: refused (odd or > 64 argument bytes)");
+        return FALSE;
+    }
+    for (i = 0; i < n; ++i)
+        args[i] = (WORD)(b[cb - 2 - 2 * i] | (b[cb - 1 - 2 * i] << 8));
+    if (!wow_call16_sync(vpfn, (WORD)(VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF),
+                         args, n, 0, 0, &r)) {
+        shim_log("WOWCallback16Ex: the nested run could not make the call");
+        return FALSE;
+    }
+    if (ret) *ret = g_wc_lastres;
+    return TRUE;
+}
+
+/* ── s91 (#309): WOWGlobal*16 -- krnl386's OWN global heap, through its exports
+     (offsets in its segment 1, read off guest/win16/krnl386.exe's entry table:
+     15 GlobalAlloc 3ac3, 17 GlobalFree 3adf, 18 GlobalLock 3b10, 19 GlobalUnlock
+     3b63, 20 GlobalSize 3b4f, 21 GlobalHandle 3afc). The shim composes the
+     AllocLock/UnlockFree/LockSize forms from these. 0 when the call cannot be made. */
+static DWORD shim_global16(int op, DWORD a, DWORD b)
+{
+    static const WORD off[6] = { 0x3ac3, 0x3adf, 0x3b10, 0x3b63, 0x3b4f, 0x3afc };
+    WORD args[3], r = 0;
+    int n;
+    if (op < 0 || op > 5 || !g_wu_krnl_seg || !g_tib_dbg) return 0;
+    if (op == 0) { args[0] = (WORD)a; args[1] = (WORD)(b >> 16); args[2] = (WORD)b; n = 3; }
+    else         { args[0] = (WORD)a; n = 1; }
+    if (!wow_call16_sync(((DWORD)g_wu_krnl_seg << 16) | off[op],
+                         (WORD)(VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF), args, n, 0, 0, &r))
+        return 0;
+    /* GlobalLock / GlobalSize / GlobalHandle answer in DX:AX; the rest in AX */
+    return (op == 2 || op == 4 || op == 5) ? g_wc_lastres : (DWORD)(WORD)g_wc_lastres;
+}
+
 static void wow_shims_load(void)
 {
     static int done;
@@ -26394,9 +26513,9 @@ static void wow_shims_load(void)
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
        decision is taken further down WinMain, and must not wait for it. */
     if (dos_recovery_skips(dos_recovery_decide(recovery_read())).wow_shims) return;
-    api.version = 1; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
-    api.handle16 = shim_handle16; api.callback16ex = NULL; api.ica_interrupt = shim_ica;
-    api.yield16 = shim_yield; api.log = shim_log;
+    api.version = 2; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
+    api.handle16 = shim_handle16; api.callback16ex = shim_callback16ex; api.ica_interrupt = shim_ica;
+    api.yield16 = shim_yield; api.log = shim_log; api.global16 = shim_global16;
     for (i = 0; i < 2; ++i) {
         HMODULE h;
         BOOL (WINAPI *init)(const ntvdmex_shim_api_t *);
@@ -27528,6 +27647,34 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
 static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
 {
     char *p = *pp;
+    /* ── GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device
+         claimed them (vdd_net.c). A bus claim on a vector with no stub behind it was
+         never delivered: INT 14h works because its BOP is wired here by number, and
+         a NetBIOS program's INT 5Ch went to an IRET. ⚠ Only from OUR stub -- 2Ah/5Ch
+         are numbers a guest's own BOP may also use (the s78 rule). */
+    if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+        ntvdd_regs r; regs_load(&r, tib);
+        HOST_LOCK();
+        vdd_bus_deliver_int(&g_bus, (uint8_t)bn, &r);
+        HOST_UNLOCK();
+        regs_store(&r, tib);
+        VDM_REG(tib, VTIB_EIP) += 3;
+        /* A no-wait NCB's POST routine (vdd_net.h): put one more interrupt frame on
+           the guest's stack, below the caller's, so the stub's IRET enters POST with
+           ES:BX = the NCB and POST's own IRET returns to the caller. FLAGS = the
+           caller's with IF clear, as a hardware interrupt would enter it. */
+        if (g_net.post_pending) {
+            DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+            volatile WORD *fr = (volatile WORD *)(ULONG_PTR)((ss << 4) + sp);
+            WORD fl = fr[2];
+            WORD nsp = (WORD)(sp - 6);
+            volatile WORD *nf = (volatile WORD *)(ULONG_PTR)((ss << 4) + nsp);
+            g_net.post_pending = 0;
+            nf[0] = g_net.post_off; nf[1] = g_net.post_seg; nf[2] = (WORD)(fl & ~0x0200);
+            VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | nsp;
+        }
+        V86BOP_RET(V86BOP_DONE);
+    }
     if (bn == 0x10) {
         ntvdd_regs r; regs_load(&r, tib);
         HOST_LOCK();
@@ -28285,6 +28432,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { 0x15, 0x15 }, { 0x17, 0x17 }, { 0x25, 0x25 }, { 0x26, 0x26 },
         { 0x20, 0x30 },                                  /* GH #46: see above */
         { 0x27, 0x27 }, { 0x28, 0x28 }, { 0x29, 0x29 },
+        { 0x2A, 0x2A }, { 0x5C, 0x5C },                  /* GH #8 (s91): NetBIOS, see v86_bios_bop */
     };
     static const BYTE emmname[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE ui = NULL;
@@ -30424,6 +30572,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
       g_comm_dev = vdd_comm_device(&g_comm);
       vdd_bus_add(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
+    vdd_net_set_backend(&g_net, net_submit, NULL);
+    g_net_dev = vdd_net_device(&g_net);
+    vdd_bus_add(&g_bus, &g_net_dev);             /* GH #8: NetBIOS, INT 5Ch       */
     { volatile WORD *bda = (volatile WORD *)(ULONG_PTR)0x400;
       /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
          refused for want of a bus table slot is not fitted, and writing its base

@@ -1,0 +1,18 @@
+#PROBE w16mdi
+STEP=I AX=1707
+STEP=W
+STEP=A
+CASE=reg.classes SIG=AX AX=0001
+CASE=cw.mdiclient SIG=AX AX=0001
+CASE=mdicreate.1 SIG=AX AX=0001
+CASE=mdicreate.2 SIG=AX AX=0001
+CASE=getactive.is.2 SIG=AX AX=0001
+CASE=activate1.getactive.is.1 SIG=AX AX=0001
+CASE=next.getactive.is.2 SIG=AX AX=0001
+CASE=maximize.getactive.dx SIG=AX AX=0001
+CASE=restore.getactive.dx SIG=AX AX=0000
+CASE=cascade SIG=AX AX=0001
+CASE=tile SIG=AX AX=0001
+CASE=destroy1.iswindow SIG=AX AX=0000
+CASE=destroy1.getactive.is.2 SIG=AX AX=0001
+#END

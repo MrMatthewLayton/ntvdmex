@@ -41,7 +41,8 @@ translation lives (`wowuser.h:~2816–3233`).
 | `0x0300–0x0304` | WM_CUT/COPY/PASTE/CLEAR/UNDO | ✅ | raw to the real control |
 | `0x0220` | WM_MDICREATE | ✅ | MDICREATESTRUCT rebuilt; WM_CREATE sent to the guest |
 | `0x0221–0x0230` | other WM_MDI* | ❌ | MDIDESTROY, MDIACTIVATE, MDITILE, MDICASCADE, MDIGETACTIVE… |
-| `0x0030/0x0031` | WM_SETFONT / WM_GETFONT | ❌ | font token ↔ real HFONT |
+| (USER 0x88) | Subclassing: SetWindowLong(GWL_WNDPROC) | ✅ (s91, #308; **= stock**, `w_subcl` 17/17) | a 16-bit window's procedure is re-pointed; a SYSTEM control is subclassed with a relay that SENDS it keys, characters, mouse, focus, WM_GETDLGCODE/SETCURSOR/NCHITTEST/TIMER/ENABLE/CANCELMODE through the nested run; the old procedure is USER.EXE's own `SCLS` thunk (EDITWNDPROC etc.), which CallWindowProc maps back to the control |
+| `0x0030/0x0031` | WM_SETFONT / WM_GETFONT | ✅ (s91, #305 M8; **= stock**, `w_font` 7/7) | to a system control: token -> real HFONT in, the guest's existing token (or a STOCK-kind one) out; 0 = the system font both ways |
 | `0x0400+n` EDIT | EM_* | ⚠ | Accepted: 0 GETSEL, 1 SETSEL (packing fixed), 8–11, 17, 21–23, 25, 29. **Missing:** 2–7 GETRECT/SETRECT/SETRECTNP/SCROLL/LINESCROLL, 14–16, **18 REPLACESEL**, 19 SETFONT, **20 GETLINE**, 24 FMTLINES, 26 SETWORDBREAK, **27 SETTABSTOPS**, 28 SETPASSWORDCHAR, ≥ 0x41E |
 | `0x040C/0x040D` | EM_SETHANDLE / EM_GETHANDLE | ✅ | answered against the guest's local heap |
 | `0x0400+n` COMBOBOX | CB_* → `0x140+n` | ⚠ | n=0..24 all mapped; strings copied (max 255). **18 GETDROPPEDCONTROLRECT (struct) answered 0** |
@@ -135,7 +136,7 @@ a batch is measured against stock.
 | ~~M5~~ ✅ (s90) | EM_REPLACESEL / EM_GETLINE / EM_SETTABSTOPS / EM_SETFONT / EM_LINESCROLL / EM_GETRECT | translation | Notepad Find/Replace (#285), Write, Terminal, Sysedit |
 | ~~M6~~ ✅ (s90) | LB_GETSELITEMS / LB_SETTABSTOPS / LB_GETITEMRECT / CB_GETDROPPEDCONTROLRECT (array/struct) | translation | multi-select lists, tabbed lists (Winfile, Program Manager) |
 | ~~M7~~ ✅ | LB/CB GETTEXT on owner-draw without HASSTRINGS: the 16:16 pointer is passed as flat | **bug** (memory write to a wrong address) | owner-draw lists |
-| M8 | WM_SETFONT / WM_GETFONT to system controls | translation | programs that set a control's font (Charmap, Terminal) |
+| ~~M8~~ ✅ (s91) | WM_SETFONT / WM_GETFONT to system controls | translation | programs that set a control's font (Charmap, Terminal) |
 | M9 | WM_MENUSELECT, WM_ACTIVATE(APP), WM_SHOWWINDOW, WM_MOVE, WM_GETMINMAXINFO, WM_SYSCHAR | translation | status-bar help, activation-aware programs, minimum sizes (Clock) |
 | M10 (½ ✅: WM_DESTROY) | WM_SIZE / WM_DESTROY **sent**, not posted | ordering | layout that must happen before the next call returns |
 | M11 | Dialog keyboard defaults on the DefDlgProc path (Enter / Esc / Tab) | structural | every dialog without IsDialogMessage in its loop |

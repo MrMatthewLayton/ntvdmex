@@ -298,7 +298,7 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                 return 0;
             }
             w = &g_wu_win[g_we.idx++];
-            if (!w->hwnd || !w->hwnd32) continue;
+            if (!w->hwnd || !w->hwnd32 || w->foreign) continue;
             if (g_we.kind == WOWENUM_CHILDREN) {
                 if (w->parent != g_we.parent) continue;
             } else {

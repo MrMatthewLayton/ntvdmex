@@ -13,7 +13,7 @@ reg add "%IFEO%" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 > "%SH%\cfg\autoexit" echo 1
 cd /d "%D%"
 start "" cmd /c ""%D%\%1" %2 %3 > "%R%" 2>&1"
-ping -n 16 127.0.0.1 >nul
+ping -n 31 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 del /q "%SH%\cfg\autoexit" >nul 2>&1
 echo done > "%OUT%\dosours_done.txt"

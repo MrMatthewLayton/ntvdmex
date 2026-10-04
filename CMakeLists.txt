@@ -112,6 +112,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_emu8k.c
     src/vdd/vdd_mpu.c
     src/vdd/vdd_comm.c
+    src/vdd/vdd_net.c
     src/vdd/vdd_audio.c
     src/vdd/audio_wave.c
     src/vdd/vdd_video.c
