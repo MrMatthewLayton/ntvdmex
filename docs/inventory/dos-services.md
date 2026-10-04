@@ -36,7 +36,7 @@ implemented and agree with real DOS.** The gaps fall into four kinds:
 2. **Device handles that are not wired to the device.** Reading handle 0 with `3Fh`
    returns **EOF**, never the keyboard; AUX is not COM1 and PRN is not LPT1.
 3. **The machinery around a call**: Ctrl-C checking (INT 23h is never raised), critical
-   errors (INT 24h is never raised), INT 28h is never called while DOS waits, and the
+   errors (INT 24h: path calls since #34, 3Fh/40h since #275; not PRN/AUX, not DPMI), INT 28h is never called while DOS waits, and the
    InDOS byte is always 0.
 4. **Internals served as stubs**: the List of Lists (SFT/CDS/DPB chains), the DPB from
    `1Fh`/`32h`, the SDA.
@@ -113,8 +113,8 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `3Ch` | create | **PART** | `:842-844`: **`CX` (attributes) is ignored** — read-only, hidden and system are dropped. Lowest free handle ✓ | **oracle** for the handle number (`p_redir`) |
 | `3Dh` | open | **IMPL** | `:845-850`; access mode from AL; sharing bits deliberately not enforced (no SHARE); errors through `dos_err_from_win32` | **oracle** (`p_err` 3D rows, `p_file`) |
 | `3Eh` | close | **IMPL** | `:870-876` | **oracle** (`p_redir`) |
-| `3Fh` | read | **PART** | `:877-899`: files ✓; ⛔ **an unredirected device handle returns 0 bytes (EOF)** (`:897-898`) — reading stdin by handle never reaches the keyboard | **oracle** for files (`p_redir`) |
-| `40h` | write | **PART** | `:799-820`: files and the console ✓; **`CX=0` does not truncate or extend** the file to the current position (DOS's documented way to set a file's size). Handles 3/4 = AUX/PRN through INT 14h/17h (#251, `p_auxprn`) | **oracle** (`p_redir`, `p_tsr`) |
+| `3Fh` | read | **PART** | `:877-899`: files ✓; a hardware failure (19-31) → INT 24h (#275, `p_crit2`); ⛔ **an unredirected device handle returns 0 bytes (EOF)** (`:897-898`) — reading stdin by handle never reaches the keyboard | **oracle** for files (`p_redir`) |
+| `40h` | write | **PART** | `:799-820`: files and the console ✓; a hardware failure (19-31) → INT 24h (#275, `p_crit2`); other WriteFile failures still answer CF=0 with the short count; **`CX=0` does not truncate or extend** the file to the current position (DOS's documented way to set a file's size). Handles 3/4 = AUX/PRN through INT 14h/17h (#251, `p_auxprn`) | **oracle** (`p_redir`, `p_tsr`) |
 | `41h` | delete | **PART** | `:1609-1613`: every failure is `2` — a read-only file should be `5`, a missing path `3` | **oracle** for the absent case (`p_file`) |
 | `42h` | seek | **IMPL** | `:900-917`; any bound handle, including a redirected low one (#133) | **oracle** (`p_redir`) |
 | `43h` | get / set attributes | **IMPL** | `:1614-1632` | **oracle** (`p_file`, `p_subfn`) |
@@ -182,7 +182,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | INT 23h default handler | **IMPL** | a bare `IRET` (`:27120-27122`) | **oracle** (`psp.0E.int23`) |
 | INT 24h default handler | **IMPL** | `MOV AL,3; IRET` — Fail (`:27123-27125`) | **oracle** (`psp.12.int24`, `psp.int24.live` abstained) |
 | **Ctrl-C / Ctrl-Break checking → INT 23h** | **MISS** | no input or output call checks for Ctrl-C, and `BREAK=ON` (`33h`) changes nothing; INT 23h is never raised (keyboard.md §3: no Ctrl-Break either) | — |
-| **Critical errors → INT 24h** | **MISS** | errors are returned directly (`SEM_FAILCRITICALERRORS`); a program's own INT 24h handler is never called — "drive not ready" on A: never prompts | — |
+| **Critical errors → INT 24h** | **PART** | #34: a hardware error (DOS 19-31) on a PATH call raises the program's INT 24h from the main V86 loop (`crit_raise`/`crit_return`, `main.c`; detection at the tail of `dos_int21`); FAIL/RETRY/ABORT, 59h=53h. #275: **3Fh/40h on an open file** now raise it too — AH=3Eh/3Fh (data area, IGNORE allowed), AL = the file's own drive (NT name → drive letter), FAIL → AX=0005, IGNORE → the call reports the bytes asked for; before #275 a failed ReadFile/WriteFile answered CF=0 (a false success). Where INT 24h cannot be raised — a DPMI client's INT 21h, the nested real-mode loops (0301h/0302h, reflected IRQs), inside the handler — 3Fh/40h answer as FAIL; path calls there keep the raw 19-31 code. ⚠ **Not raised:** DPMI reflection (spec: real-mode INT 24h → the client's PM handler via 0205h, else the RM vector; needs the 0301h nested-V86 run factored out); PRN/AUX device errors (the driver ignores the INT 17h status, AH bit 7 path never built); FCB record I/O (`21h`/`22h`/`27h`/`28h`). ⚠ 3Fh/40h values are from the MS-DOS 4.0 source, **unmeasured on 6.22** | **oracle** for path calls (`p_crit`); `p_crit2` (3Fh/40h + PRN) **awaiting its oracle run**; off-VM `err_test.c` |
 | **INT 28h called while DOS waits** | **MISS** | the `01h`/`07h`/`08h`/`0Ah` retry waits never issue INT 28h, so a TSR that works in the background on INT 28h never runs at a prompt | — |
 | INT 27h terminate and stay resident | **IMPL** | `main.c:29336-29351`; DX in bytes, rounded up | untested |
 | INT 28h, when a guest calls it | **IMPL** | `main.c:29352-29353`, returns at once | — |

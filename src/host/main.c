@@ -2562,13 +2562,15 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
        RETRY  -> CS:IP back ON the INT 21h BOP, so the whole call is made again;
        FAIL   -> the call returns CF=1 with the measured AX, 59h then says 53h;
        IGNORE -> not allowed for a path call (AH bit 5 clear, measured), so FAIL;
+                 allowed for 3Fh/40h on an open file (#275): the call "succeeds";
        ABORT  -> the program ends (AH=4Dh AH=02h), through dos_terminate.
      An answer the handler was not allowed to give is converted as DOS converts it:
      ignore/retry -> fail, fail -> abort.
-   ⚠ REAL MODE ONLY. A DPMI client's INT 21h is serviced with the client in protected
-     mode; reflecting INT 24h to it is a separate piece of work (the error goes
-     straight back to it, as before). And never while a handler is already running:
-     DOS does not nest INT 24h. */
+   ⚠ MAIN V86 LOOP ONLY (m.crit_raise_ok, #275). A DPMI client's INT 21h is serviced
+     with the client in protected mode, and the nested real-mode loops cannot redirect
+     the guest the way this does; there a 3Fh/40h hardware error is answered as FAIL
+     and a path call keeps the raw code (see the tail of dos_int21). And never while
+     a handler is already running: DOS does not nest INT 24h. */
 static struct {
     DWORD eax, ebx, ecx, edx, esi, edi, ebp, eip;
     WORD  cs, ds, es;
@@ -2637,16 +2639,57 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
         m->term_type = 2;
         return 1;
     }
-    /* FAIL, and IGNORE where it was allowed (only 3Fh/40h -- unmeasured, so it fails
-       too rather than inventing success): the call returns an error.
-       CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
+    /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+    /* ── #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, dos_crit_ah). DOS
+         carries on as if the sectors had moved (MS-DOS 4.0 DREAD: IGNORE returns carry
+         clear): the call reports the bytes asked for -- a read still stops at end of
+         file -- and the position advances by them. Nothing is copied: what an ignored
+         read leaves in the buffer is what was there. See dos_crit_ignore_count.
+       ⚠ Spec-derived, unmeasured on 6.22: p_crit2 crit2.h3f.ignore / crit2.h40.ignore. */
+    if (act == 0 && (g_crit.fn == 0x3F || g_crit.fn == 0x40)
+        && (g_crit.ebx & 0xFFFF) < DOS_MAX_FILES && m->fh[g_crit.ebx & 0xFFFF]) {
+        HANDLE fh = m->fh[g_crit.ebx & 0xFFFF];
+        DWORD pos = SetFilePointer(fh, 0, NULL, FILE_CURRENT);
+        DWORD size = GetFileSize(fh, NULL);
+        WORD n = dos_crit_ignore_count(g_crit.fn, (WORD)(g_crit.ecx & 0xFFFF), pos, size,
+                                       pos != INVALID_SET_FILE_POINTER && size != INVALID_FILE_SIZE);
+        if (pos != INVALID_SET_FILE_POINTER) SetFilePointer(fh, (LONG)n, NULL, FILE_CURRENT);
+        VDM_SET16(tib, VTIB_EAX, n);
+        *pfl &= (WORD)~1u;
+        *pp = zput(*pp, "  INT24 IGNORE: the call reports 0x"); *pp = zhex(*pp, n);
+        *pp = zput(*pp, " bytes, CF=0\r\n");
+        VDM_REG(tib, VTIB_EIP) += 3;                     /* past the BOP -> the IRET */
+        return 0;
+    }
+    /* FAIL (and an IGNORE with no handle left to ignore on): the call returns an error. */
     VDM_SET16(tib, VTIB_EAX, dos_crit_fail_ax(g_crit.fn, m->crit_code));
     *pfl |= 1;
     m->last_err = DOS_ERR_FAIL_I24;
     VDM_REG(tib, VTIB_EIP) += 3;                         /* past the BOP -> the IRET */
     return 0;
+}
+
+/* ── #275: THE DPMI TRANSLATOR's OWN 3Fh/40h (dpmi INT 21h, direct-translated through
+     the client's selectors) never looked at ReadFile/WriteFile either. A hardware
+     failure (19-31) there is answered the way dos_int21 answers it for a protected-
+     mode caller -- as if INT 24h had said FAIL: CF=1, AX=0005, 59h=53h -- because
+     INT 24h is not reflected to DPMI clients (see the tail of dos_int21 for why, and
+     what doing it properly needs). Returns 1 if it answered; 0 = not a hardware
+     error, the caller keeps its old answer. `we` = GetLastError(), 0 = it did not fail. */
+static int pm_rw_hw_fail(dos_machine_t *m, volatile BYTE *tib, BYTE fn, DWORD we, char **pp)
+{
+    unsigned short de = 0;
+    if (!we || !dos_err_from_win32((unsigned long)we, &de) || !dos_crit_is_hw(de)) return 0;
+    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+    VDM_SET16(tib, VTIB_EAX, dos_crit_fail_ax(fn, (BYTE)(de - 19)));
+    m->last_err = DOS_ERR_FAIL_I24;
+    *pp = zput(*pp, "  INT24 not raised (DPMI client): AH=0x"); *pp = zhexb(*pp, fn);
+    *pp = zput(*pp, " error 0x"); *pp = zhexb(*pp, de);
+    *pp = zput(*pp, " answered as FAIL -> AX=0x"); *pp = zhex(*pp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    *pp = zput(*pp, ", 59h=53h\r\n");
+    return 1;
 }
 
 static WORD  g_pmret_sel = 0;
@@ -25365,8 +25408,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
                             } else if (bound) {                     /* file handle */
-                                DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
-                                VDM_SET16(tib, VTIB_EAX, w);
+                                DWORD w = 0, we = 0;
+                                if (!WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL)) we = GetLastError();
+                                if (!pm_rw_hw_fail(&m, tib, 0x40, we, &p))   /* #275 */
+                                    VDM_SET16(tib, VTIB_EAX, w);
                                 p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
@@ -25475,7 +25520,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h < DOS_MAX_FILES && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
+                            if (h < DOS_MAX_FILES && m.fh[h]) {
+                                DWORD we = 0;
+                                if (!ReadFile(m.fh[h], b, cnt, &rd, NULL)) we = GetLastError();
+                                if (!pm_rw_hw_fail(&m, tib, 0x3F, we, &p))   /* #275 */
+                                    VDM_SET16(tib, VTIB_EAX, rd);
+                            }
                             else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
                             /* ── WHERE IT LANDED, NOT JUST HOW MUCH. ─────────────────────
                                  "read 0x40b" cannot distinguish a read that filled the
@@ -34721,13 +34771,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         m.tp = p;
         m.retry = 0;
         m.v86_tramp_ok = 1;                         /* #251: we can resume elsewhere */
+        m.crit_raise_ok = 1;                        /* #275: ...and raise INT 24h (below) */
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
             m.v86_tramp_ok = 0;
+            m.crit_raise_ok = 0;
             p = m.tp;
             if (dos_terminate(&m, tib, &p, base)) continue;
             break;
         }
         m.v86_tramp_ok = 0;
+        m.crit_raise_ok = 0;
         p = m.tp;
         if (m.v86_tramp) {                          /* #251: into DOS's AUX/PRN driver code */
             VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);

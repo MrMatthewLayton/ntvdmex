@@ -185,6 +185,52 @@ int main(void)
             eq("...value", d, 21); }
     }
 
+    /* #275: 3Fh/40h on an open handle. ⚠ SPEC-DERIVED (MS-DOS 4.0 kernel source, see
+       dos_err.h), NOT YET MEASURED: p_crit2.asm asks 6.22 and PCem. When it has, the
+       expectations below are replaced by its rows, not the other way round. */
+    {
+        unsigned char r = dos_crit_ah(0x3F), w = dos_crit_ah(0x40);
+        eq("3Fh AH=3E (data area, read, F+R+I)", r, 0x3E);
+        eq("40h AH=3F (data area, WRITE, F+R+I)", w, 0x3F);
+        eq("3Fh read bit (0) clear", r & 1, 0);
+        eq("40h write bit (0) set", w & 1, 1);
+        eq("3Fh area (bits 1-2) = 3, data", (r >> 1) & 3, 3);
+        eq("40h area (bits 1-2) = 3, data", (w >> 1) & 3, 3);
+        eq("3Fh IGNORE allowed (bit 5)", r & DOS_CRIT_ALLOW_IGNORE, 0x20);
+        eq("40h RETRY allowed (bit 4)", w & DOS_CRIT_ALLOW_RETRY, 0x10);
+        eq("40h FAIL allowed (bit 3)", w & DOS_CRIT_ALLOW_FAIL, 0x08);
+        eq("a disk, not a character device (bit 7)", (r | w) & 0x80, 0);
+        eq("path calls unchanged by #275 (4Eh AH=1A)", dos_crit_ah(0x4E), 0x1A);
+        eq("3Fh FAIL -> AX=0005 (SET_ACC_ERR)", dos_crit_fail_ax(0x3F, 2), 0x0005);
+        eq("40h FAIL -> AX=0005", dos_crit_fail_ax(0x40, 0), 0x0005);
+        eq("path FAIL still AX=0003", dos_crit_fail_ax(0x3C, 2), 0x0003);
+        eq("31 (general failure) is a hardware error", dos_crit_is_hw(31), 1);
+        eq("32 (sharing violation) is NOT", dos_crit_is_hw(32), 0);
+        eq("5 (access denied) is NOT", dos_crit_is_hw(5), 0);
+        /* IGNORE: the call reports what was asked; a read stops at end of file */
+        eq("ignore write: the request", dos_crit_ignore_count(0x40, 0x200, 0, 0, 1), 0x200);
+        eq("ignore read mid-file: the request", dos_crit_ignore_count(0x3F, 0x200, 0, 0x1000, 1), 0x200);
+        eq("ignore read near EOF: what is left", dos_crit_ignore_count(0x3F, 0x200, 0xF80, 0x1000, 1), 0x80);
+        eq("ignore read at/after EOF: 0", dos_crit_ignore_count(0x3F, 0x200, 0x1200, 0x1000, 1), 0);
+        eq("ignore read, size unknown: the request", dos_crit_ignore_count(0x3F, 0x200, 0, 0, 0), 0x200);
+        /* AL: the open file's drive, from NT names */
+        {
+            const char *dev[26] = { 0 };
+            dev[0] = "\\Device\\Floppy0";
+            dev[2] = "\\Device\\HarddiskVolume1";
+            dev[3] = "\\Device\\HarddiskVolume10";
+            dev[4] = "\\Device\\CdRom0";
+            eq("floppy file -> A:", dos_crit_drive_from_ntname("\\Device\\Floppy0\\X.TXT", dev), 0);
+            eq("case-insensitive", dos_crit_drive_from_ntname("\\DEVICE\\floppy0\\X.TXT", dev), 0);
+            eq("HarddiskVolume1 is not a prefix of ...Volume10 (whole component)",
+               dos_crit_drive_from_ntname("\\Device\\HarddiskVolume10\\A\\B", dev), 3);
+            eq("HarddiskVolume1 file -> C:", dos_crit_drive_from_ntname("\\Device\\HarddiskVolume1\\A", dev), 2);
+            eq("CD root -> E:", dos_crit_drive_from_ntname("\\Device\\CdRom0", dev), 4);
+            eq("network name: no match (-1)", dos_crit_drive_from_ntname("\\Device\\LanmanRedirector\\srv\\x", dev), -1);
+            eq("NULL name: -1", dos_crit_drive_from_ntname(NULL, dev), -1);
+        }
+    }
+
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }
