@@ -3895,6 +3895,47 @@ static void wowuser_default_paint(wowuser_win_t *w, int isdlg)
     ReleaseDC(w->hwnd32, dc);
 }
 
+/* ── s91: A Win16 DEFAULT PROCEDURE'S CALL INTO WIN32, WITH THE s91 MESSAGES TRANSLATED.
+     The default-procedure forwards handed lParam to Win32 as it came. Harmless while
+     nothing sent these messages; since #305 M9 sends WM_GETMINMAXINFO with a 16:16
+     pointer, an MDI child passing it to DefMDIChildProc made USER32 write through
+     0B87:15B4 as a flat address (w_mdi, the final s91 regression run). kind: 0
+     DefWindowProc, 1 DefFrameProc, 2 DefMDIChildProc. */
+static const wow32_frame_t *g_wu_cur_f;      /* the frame being serviced (sel2lin) */
+static LRESULT wowuser_def32(int kind, HWND h, HWND hcli, WORD msg, WORD wp16, DWORD lp16)
+{
+    WPARAM wp = wowuser_wp32(msg, wp16);
+    LPARAM lp = (LPARAM)lp16;
+    MINMAXINFO mm;
+    volatile BYTE *m16 = NULL;
+    LRESULT r;
+    int i;
+    if (msg == 0x0024) {                                  /* WM_GETMINMAXINFO */
+        m16 = g_wu_cur_f ? wowuser_farp(g_wu_cur_f, lp16) : NULL;
+        if (!m16) return 0;
+        for (i = 0; i < 5; ++i) {
+            (&mm.ptReserved)[i].x = (LONG)(short)wow32_peekw(m16 + i * 4);
+            (&mm.ptReserved)[i].y = (LONG)(short)wow32_peekw(m16 + i * 4 + 2);
+        }
+        lp = (LPARAM)&mm;
+    } else if (msg == 0x0006) {                           /* WM_ACTIVATE */
+        wp = (WPARAM)MAKELONG(wp16, HIWORD(lp16));
+        lp = (LPARAM)wowuser_hwnd32(LOWORD(lp16));
+    } else if (msg == 0x011F) {                           /* WM_MENUSELECT */
+        wp = (WPARAM)MAKELONG(wp16, LOWORD(lp16));
+        lp = 0;
+    }
+    r = kind == 1 ? DefFrameProcA(h, hcli, msg, wp, lp)
+      : kind == 2 ? DefMDIChildProcA(h, msg, wp, lp)
+      :             DefWindowProcA(h, msg, wp, lp);
+    if (m16)
+        for (i = 1; i < 5; ++i) {
+            wow32_pokew(m16 + i * 4,     (WORD)(short)(&mm.ptReserved)[i].x);
+            wow32_pokew(m16 + i * 4 + 2, (WORD)(short)(&mm.ptReserved)[i].y);
+        }
+    return r;
+}
+
 static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD wp16,
                                    DWORD lp32, char *note, int notecap, int *kp)
 {
@@ -3935,7 +3976,7 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
         *kp = k;
         return 1;
     }
-    r = DefWindowProcA(w->hwnd32, msg, wowuser_wp32(msg, wp16), (LPARAM)lp32);
+    r = wowuser_def32(0, w->hwnd32, NULL, msg, wp16, lp32);
     wu_puts(note, notecap, &k, " -> DefWindowProc (no dialog keyboard defaults) = 0x");
     wu_puthex(note, notecap, &k, (DWORD)r, 8);
     *kp = k;
@@ -3945,6 +3986,7 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
 
 static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 {
+    g_wu_cur_f = f;                     /* s91: for wowuser_def32's 16:16 reads */
     if (notecap) note[0] = 0;
     wowuser_ensure_sysclasses();
     switch (f->id) {
@@ -8280,8 +8322,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                 wow32_setret(f, 0); return 1; }
         /* The OS's own MDI defaults, on the real windows -- the same argument as
            using the real MDICLIENT rather than drawing one. */
-        r = frame ? DefFrameProcA(w->hwnd32, c ? c->hwnd32 : NULL, msg, wp16, (LPARAM)lp32)
-                  : DefMDIChildProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
+        r = wowuser_def32(frame ? 1 : 2, w->hwnd32, c ? c->hwnd32 : NULL, msg, wp16, lp32);
         wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, (DWORD)r, 8);
         wow32_setret(f, (DWORD)r);
         return 1;

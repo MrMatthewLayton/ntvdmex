@@ -585,7 +585,10 @@ void dos_jft_exec(dos_machine_t *m, uint16_t child)
     unsigned n, cn, h;
     volatile uint8_t *j = dos_jft_of(m->psp_seg, &n), *cj = dos_jft_of(child, &cn);
     if (!j) return;
-    for (h = 0; h < n; ++h) {
+    /* Only the five STANDARD handles: shell redirection is all this is for, and the
+       final s91 regression run showed a Win16 task's file create coming back as handle
+       18h instead of 6 once higher slots were re-bound from a JFT we do not own. */
+    for (h = 0; h < n && h < 5; ++h) {
         uint8_t v = j[h];
         if (v == m->jft_known[h]) continue;          /* ours: fh[] already says so */
         if (v == 0xFF) {

@@ -217,10 +217,27 @@ static unsigned g_ww_mmlog;   /* s90: first MM notifications logged */
 static int (*g_ww_send16b)(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
                            const int *fix, int nfix, WORD *res);
 /* Send if the nested run can, else post -- the M9 messages' delivery. */
+/* ⚠ NOT RE-ENTRANTLY (s91, the final regression run): maximizing an MDI child SENT
+     WM_SIZE / WM_GETMINMAXINFO into its procedure, which chains through DefMDIChildProc
+     to the real MDI client, which re-sizes the child, which came back here for the
+     same window and message -- w_mdi stopped dead at WM_MDIMAXIMIZE. A message already
+     being sent to a window is POSTED instead, as before s91. */
+static struct { WORD h16, msg; } g_ww_sending[8];
+static int g_ww_nsending;
 static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx, WORD pty)
 {
     WORD r;
-    if (g_ww_send16 && g_ww_send16(h16, msg, wp, lp, &r)) return;
+    int i, busy = 0;
+    for (i = 0; i < g_ww_nsending; ++i)
+        if (g_ww_sending[i].h16 == h16 && g_ww_sending[i].msg == msg) busy = 1;
+    if (!busy && g_ww_send16 && g_ww_nsending < 8) {
+        int ok;
+        g_ww_sending[g_ww_nsending].h16 = h16; g_ww_sending[g_ww_nsending].msg = msg;
+        ++g_ww_nsending;
+        ok = g_ww_send16(h16, msg, wp, lp, &r);
+        --g_ww_nsending;
+        if (ok) return;
+    }
     wowmsg_post(h16, msg, wp, lp, GetTickCount(), ptx, pty);
 }
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
@@ -520,7 +537,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                      (DWORD)HIWORD(wp), ptx, pty);
         break;
     case WM_GETMINMAXINFO:
-        if (h16 && g_ww_send16b && lp) {
+        if (h16 && g_ww_send16b && lp && g_ww_nsending < 8) {
             MINMAXINFO *mm = (MINMAXINFO *)lp;
             POINT *pt = &mm->ptReserved;
             BYTE b[20];
@@ -530,7 +547,15 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 b[i * 4 + 0] = (BYTE)pt[i].x; b[i * 4 + 1] = (BYTE)(pt[i].x >> 8);
                 b[i * 4 + 2] = (BYTE)pt[i].y; b[i * 4 + 3] = (BYTE)(pt[i].y >> 8);
             }
-            if (g_ww_send16b(h16, (WORD)msg, 0, b, 20, NULL, 0, &r)) {
+            int ok, j, busy = 0;
+            for (j = 0; j < g_ww_nsending; ++j)
+                if (g_ww_sending[j].h16 == h16 && g_ww_sending[j].msg == (WORD)msg) busy = 1;
+            if (busy) break;
+            g_ww_sending[g_ww_nsending].h16 = h16; g_ww_sending[g_ww_nsending].msg = (WORD)msg;
+            ++g_ww_nsending;
+            ok = g_ww_send16b(h16, (WORD)msg, 0, b, 20, NULL, 0, &r);
+            --g_ww_nsending;
+            if (ok) {
                 for (i = 1; i < 5; ++i) {   /* ptReserved is not the guest's to set */
                     pt[i].x = (LONG)(short)(b[i * 4 + 0] | (b[i * 4 + 1] << 8));
                     pt[i].y = (LONG)(short)(b[i * 4 + 2] | (b[i * 4 + 3] << 8));

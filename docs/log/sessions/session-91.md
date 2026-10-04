@@ -1,7 +1,7 @@
 # Session 91 — 2026-10-04: the score towards 95% (unattended)
 
 The user confirmed Sound Recorder by ear and asked for an unattended run toward **95%**,
-easy issues first. Score: **90% → SEE_FINAL** (`tools/score/score.py`). Every change below
+easy issues first. Score: **90% → 95.0%** (`tools/score/score.py`; MS-DOS 98, Win16 93, Product 90). Every change below
 was verified on the rig, almost all **against stock NTVDM** with a deterministic probe;
 A/B regression gates against the morning build `d0699606` (Skyroads, Doom, ZAR, the
 16-program shelf) were run after each batch (`runs/s91_gate/`).
@@ -19,7 +19,10 @@ A/B regression gates against the morning build `d0699606` (Skyroads, Doom, ZAR, 
 ## Done and verified, issues still open for their remainders
 
 - **#305** M8 WM_SETFONT/GETFONT (`w_font` 7/7), M9 activation/move/show/menu-select/
-  min-max (`w_msgs` 13/13 with M10), M10 WM_SIZE sent, M13 MDI (`w_mdi` 13/13) — all = stock.
+  min-max (`w_msgs` 13/13 with M10), M10 WM_SIZE sent, M11 dialog keys (Esc closes the
+  modal Task List), M13 MDI (`w_mdi` 13/13) — = stock. Left: M12 (WM_DROPFILES).
+- **LineDDA** (`w_ldda` 24/24 = stock): the void callback no longer stops the walk; the
+  end point is excluded; a zero-length line makes no call.
 - **stdio**: console input from a file on handle 0 (`p_stdin` 7/7 = stock = MS-DOS 6.22
   under PCem); AH=0Ah drops a redirected line's leading LF.
 - **#11 SDK**: Microsoft-ABI VDDs load unmodified — the third-party BOP (RegisterModule /
@@ -60,6 +63,18 @@ A/B regression gates against the morning build `d0699606` (Skyroads, Doom, ZAR, 
 - **Stock's DPMI host is laxer than the spec** on error paths, and hangs at 0503h with a
   bad handle. **Stock refuses 6.22's COMMAND.COM.**
 - **A hung stock run holds its redirect file open**: per-probe output files now.
+
+## Final build and its checks
+
+Rig `bin\` = **`e1317a5d`** + `bin\wowshim\` (shim API v3). On that exact binary: every
+Win16 probe with a stock baseline agrees (w_cdlg 11, w_ctl 30, w_font 7, w_gdi 20, w_genum
+28, w_gthunk 16, w_kernel 2, w_kfile 22, w_kmem 16, w_kprof 12, w_kstr 18, w_ldda 24, w_mdi
+13, w_misc 44, w_msgs 13, w_props 19, w_sound 23, w_subcl 17, w_tm 70, w_user 23, w_wcb 8)
+except w_cwd 2/3, which the morning build also fails (a file handle number, pre-existing);
+shelf 15/16 as always; Notepad Find; launch-matrix row 5 and redirected stdin = stock.
+The final regression run caught two of tonight's own defects before they shipped: an MDI
+child's WM_GETMINMAXINFO reaching Win32 as a 16:16 pointer (crash) and the EXEC-time JFT
+mapping touching handles above 4. Both fixed and re-verified.
 
 ## Tooling added
 
