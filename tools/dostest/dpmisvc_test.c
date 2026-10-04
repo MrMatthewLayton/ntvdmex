@@ -90,6 +90,71 @@ int main(void)
       CHECK(dpmi_resize_plan(0x40000, 0x3000, &cp) == DPMI_RESIZE_MOVE && cp == 0x3000,
             "0503h: a large grow copies exactly the old committed size"); }
 
+    /* ---- #268: 0008h limit ---- */
+    CHECK(dpmi_limit_ok(0) && dpmi_limit_ok(0xFFFF) && dpmi_limit_ok(0xFFFFF),
+          "0008h: any limit up to 1 MB is byte-granular and legal");
+    CHECK(!dpmi_limit_ok(0x100000), "0008h: 1 MB exactly (low 12 bits clear) is 8021h");
+    CHECK(!dpmi_limit_ok(0x123456), "0008h: > 1 MB with low 12 bits 456h is 8021h");
+    CHECK(!dpmi_limit_ok(0x1FFFFE), "0008h: > 1 MB with low 12 bits FFEh is 8021h (all twelve, not 'some')");
+    CHECK(dpmi_limit_ok(0x1FFFFF) && dpmi_limit_ok(0x4AFFF0 | 0xF),
+          "0008h: > 1 MB with low 12 bits all set is legal");
+    CHECK(dpmi_limit_ok(0xFFFFFFFFu), "0008h: DOS/4GW's flat 4 GB passes (the LDT cap clamp is separate)");
+
+    /* ---- #268: 0009h access word ---- */
+    CHECK(dpmi_access_ok(0x00F2) && dpmi_access_ok(0x00FA) && dpmi_access_ok(0x00FB),
+          "0009h: DPL-3 data RW, code ER, code ER accessed: legal");
+    CHECK(dpmi_access_ok(0x40FA) && dpmi_access_ok(0xC0F2) && dpmi_access_ok(0xCFF2),
+          "0009h: CH with G / B/D and a limit nibble: legal");
+    CHECK(dpmi_access_ok(0x8092), "0009h: ZAR's 8092h (DPL 0) PASSES -- the deliberate DPL deviation");
+    CHECK(dpmi_access_ok(0x0072), "0009h: not present (P=0) is legal");
+    CHECK(dpmi_access_ok(0x00F6), "0009h: expand-down data is legal");
+    CHECK(dpmi_access_ok(0x10F2), "0009h: CH bit 4 (AVL) is legal");
+    CHECK(!dpmi_access_ok(0x00E2), "0009h: S = 0 (a system descriptor) is 8021h");
+    CHECK(!dpmi_access_ok(0x00FE), "0009h: conforming code is 8021h");
+    CHECK(!dpmi_access_ok(0x20F2), "0009h: CH bit 5 set is 8021h");
+
+    /* ---- #268: 0007h base ---- */
+    CHECK(dpmi_base_ok(0, 0x7FFEFFFFu) && dpmi_base_ok(0x7FFEFFFFu, 0x7FFEFFFFu),
+          "0007h: base 0 and base = the cap are legal");
+    CHECK(!dpmi_base_ok(0x7FFF0000u, 0x7FFEFFFFu) && !dpmi_base_ok(0xFFFFF000u, 0x7FFEFFFFu),
+          "0007h: a base past the cap is 8025h");
+
+    /* ---- #268: 0100h chains ---- */
+    { uint32_t off, lim;
+      CHECK(dpmi_dosmem_count(0) == 1 && dpmi_dosmem_count(1) == 1 && dpmi_dosmem_count(0x1000) == 1,
+            "0100h: up to 64 KB (BX <= 1000h) is one descriptor");
+      CHECK(dpmi_dosmem_count(0x1001) == 2 && dpmi_dosmem_count(0x2000) == 2 && dpmi_dosmem_count(0x2001) == 3,
+            "0100h: one descriptor per started 64 KB");
+      CHECK(dpmi_dosmem_count(0xA000) == 10, "0100h: 640 KB is ten descriptors");
+      dpmi_dosmem_desc(0x10, 0, &off, &lim);
+      CHECK(off == 0 && lim == 0xFF, "0100h: 16 paragraphs -> base +0, limit FFh");
+      dpmi_dosmem_desc(0x2000, 0, &off, &lim);
+      CHECK(off == 0 && lim == 0x1FFFF, "0100h 128 KB: the first descriptor spans the whole block (32-bit host)");
+      dpmi_dosmem_desc(0x2000, 1, &off, &lim);
+      CHECK(off == 0x10000 && lim == 0xFFFF, "0100h 128 KB: the second is +64 KB, limit FFFFh");
+      dpmi_dosmem_desc(0x2800, 2, &off, &lim);
+      CHECK(off == 0x20000 && lim == 0x7FFF, "0100h 160 KB: the last holds the remainder (32 KB)");
+      dpmi_dosmem_desc(0x1001, 1, &off, &lim);
+      CHECK(off == 0x10000 && lim == 0xF, "0100h 64 KB + 1 paragraph: the last is 16 bytes");
+      dpmi_dosmem_desc(0, 0, &off, &lim);
+      CHECK(off == 0 && lim == 0, "0100h: zero paragraphs keeps limit 0"); }
+
+    /* ---- #268: 0500h ---- */
+    { uint32_t mi[DPMI_MEMINFO_DWORDS]; int i, res = 1;
+      dpmi_meminfo(mi, 0x4000, 0);
+      CHECK(mi[0] == 0x04000000u && mi[1] == 0x4000 && mi[2] == 0x4000 && mi[5] == 0x4000 && mi[7] == 0x4000,
+            "0500h idle: largest free = 64 MB in bytes, the page maxima and free counts = the pool");
+      CHECK(mi[3] == 0x4000 && mi[4] == 0x4000 && mi[6] == 0x4000, "0500h: totals = the pool");
+      CHECK(mi[8] == 0, "0500h: paging file size 0 (no virtual memory), not -1");
+      for (i = 9; i < DPMI_MEMINFO_DWORDS; ++i) if (mi[i] != 0xFFFFFFFFu) res = 0;
+      CHECK(res && DPMI_MEMINFO_DWORDS * 4 == 0x30, "0500h: +24..+2F reserved = FFFFFFFFh, 30h bytes in all");
+      dpmi_meminfo(mi, 0x4000, 0x100);
+      CHECK(mi[0] == (0x4000u - 0x100) << 12 && mi[5] == 0x3F00 && mi[1] == 0x3F00 && mi[7] == 0x3F00,
+            "0500h: 1 MB held -> every FREE field drops by 100h pages (the defect: they never moved)");
+      CHECK(mi[3] == 0x4000 && mi[4] == 0x4000 && mi[6] == 0x4000, "0500h: ...and the TOTALS do not");
+      dpmi_meminfo(mi, 0x4000, 0x5000);
+      CHECK(mi[0] == 0 && mi[5] == 0, "0500h: more held than the nominal pool -> free 0, not a wrapped number"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
