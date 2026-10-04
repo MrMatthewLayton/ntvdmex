@@ -13,7 +13,7 @@ INT 2Fh `1687h` (DPMI) is the DPMI surface (no inventory yet).
 PCem (real AMI BIOS + 6.22), DOSBox-X. For the BIOS-side INT 13h rows the QEMU answer is
 SeaBIOS (**provisional**). Stock XP NTVDM is the only oracle for NTVDM-private calls.
 **Probes:** 30-odd `tools/dostest/p_*.asm` — the AH → probe map is in the Verification
-column. **Off-VM:** `err_test.c`, `fh_test.c`, `mcb_test.c`, `disk_test.c`, `sysvars_test.c`.
+column. **Off-VM:** `err_test.c`, `fh_test.c`, `mcb_test.c`, `disk_test.c`, `sysvars_test.c`, `lfn_test.c`.
 **Marked:** 2026-10-01, **from the code**. Carried over from `docs/PARITY.md` (retired
 2026-09-23) and re-marked; this file now enumerates **every INT 21h function**, where the
 PARITY version only recorded the probes.
@@ -45,11 +45,11 @@ implemented and agree with real DOS.** The gaps fall into four kinds:
 |---|---|---|---|---|---|---|
 | §1 INT 21h `00h`–`2Fh` | 34 | 27 | 5 | — | 2 | — |
 | §2 INT 21h `30h`–`4Fh` | 36 | 24 | 8 | — | 4 | — |
-| §3 INT 21h `50h`–`6Ch` and above | 31 | 23 | 5 | — | 3 | — |
+| §3 INT 21h `50h`–`6Ch` and above | 31 | 24 | 5 | — | 2 | — |
 | §4 Other DOS interrupts, and DOS's own machinery | 11 | 6 | 1 | — | 3 | 1 |
 | §5 INT 2Fh | 7 | 5 | — | — | 1 | 1 |
 | §6 INT 13h / 25h / 26h | 13 | 7 | 1 | — | 4 | 1 |
-| **Total** | **132** | **92** | **20** | **—** | **17** | **3** |
+| **Total** | **132** | **93** | **20** | **—** | **16** | **3** |
 
 ---
 
@@ -168,8 +168,8 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `68h`/`6Ah` | commit file | **IMPL** | `:1759-1762` | **oracle** (`p_file`) |
 | `69h` | get / set volume serial | **IMPL** | `:1918-1964`; `6901h` session-only by decision | **oracle** (`p_misc`, `p_4b05`) |
 | `6Bh` | null function | **IMPL** | `:63` | **oracle** (`p_defs`) |
-| `6Ch` | extended open / create | **IMPL** | `:1763-1803` | **oracle** (`p_file`) |
-| `71h` | long-filename API | **MISS** | `:2383-2395`: the documented "no LFN API" answer (`AX=7100h`, CF=1). Stock XP NTVDM implements it, so XP's own tools expect it | **oracle** for the refusal shape (`p_subfn`) |
+| `6Ch` | extended open / create | **IMPL** | `:1763-1803`; action word / access / CX "action taken" are `dos_lfn.h`'s (shared with `716Ch`). #210: action `12h` on a file that did **not** exist now answers CX=2 (created), was 3 | **oracle** (`p_file`); the CX=2 row is `p_lfn lfn.6C.12.new`, owed |
+| `71h` | long-filename API (Windows 95 LFN, as stock XP NTVDM provides it; #210) | **IMPL** | the `ah == 0x71` arm + `lfn_alias` at the top of `dos_int21`; pure half `src/dos/dos_lfn.h`. **`7139h`/`713Ah`/`713Bh`/`7156h`/`716Ch`/`71A9h`** are served by their short-name twins (same registers; Win32 takes the long name), so they share 39h/3Ah/3Bh/56h/6Ch's error codes, handle allocation and JFT tail. **`710Dh`** reset (no-op), **`7141h`** delete (SI=1 wildcards + CL/CH), **`7143h`** BL 0-8 (attributes, compressed size, write/access/creation times, local), **`7147h`** cwd long form, **`714Eh`/`714Fh`/`71A1h`** find (318-byte record, SI=0 FILETIME / 1 DOS, 16 search handles), **`7160h`** CL 0/1/2, **`71A0h`** volume info (BX = Win32 flags & 8007h \| 4000h, CX 255, DX 260), **`71A6h`**, **`71A7h`** (FILETIME taken as UTC, DOS side local), **`71A8h`** (NT-style `~1` alias), **`71AAh`** SUBST via DefineDosDevice (terminate only undoes a real SUBST). Any other `71xxh`: `AX=7100h` CF=1. Names go through the ANSI `...A` APIs like every other DOS call here (stock: OEM). PM (WOW/krnl386): `pm_int21_lfn` in `main.c` bridges up to three pointers through the transfer buffer; a DPMI client without one gets `AX=7100h` CF=1 | **owed**: `p_lfn` under stock vs ours (`scripts/dospair.sh tools/dostest/p_lfn.com`); off-VM `lfn_test.c` (arithmetic/layout only). ⚠ `p_subfn int21.716C`/`int21.7147` now **differ from 6.22 by design** (6.22 has no LFN API; stock is the oracle for this AH) |
 | `6Dh`+ | undefined on 6.22 | **IMPL** | `:2396-2414`: AL=0, CF clear | **oracle** (`p_defs`, `p_unimp`) |
 | any defined AH not above | — | **MISS** | `:2415-2427`: CF=1 and listed in `unimpl21[]` | — |
 
