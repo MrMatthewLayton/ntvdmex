@@ -51,7 +51,10 @@
 #define CMOS_STATUS_C   0x0C
 #define CMOS_STATUS_D   0x0D
 #define CMOS_EQUIP      0x14
-#define CMOS_EXT_KB     0x3C00u   /* KB above 1 MB: the same 15 MB INT 15h AH=88h reports */
+/* KB above 1 MB: the same 15 MB INT 15h AH=88h reports. #48: THE one number for this
+   machine's extended memory -- AH=88h (both modes), SysVars+0x45 and the XMS pool
+   (this less the HMA) are all derived from it in main.c. */
+#define CMOS_EXT_KB     0x3C00u
 #define CMOS_CENTURY    0x32
 
 typedef struct cmos_state {

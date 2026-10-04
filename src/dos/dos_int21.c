@@ -3,7 +3,8 @@
 #include "dos_int21.h"
 #include "dos_mcb.h"
 #include "dos_layout.h"
-#include "dos_fh.h"       /* the handle table's two rules -- allocation + classification */
+#include "dos_sysvars.h"  /* #48: AH=1Fh/32h build their DPB with the chain's builder */
+#include "dos_fh.h"      /* the handle table's two rules -- allocation + classification */
 #include "dos_err.h"      /* AH=59h class/action/locus, measured on the oracle */
 #include "log.h"          /* zput / zhex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
@@ -1641,21 +1642,26 @@ int dos_int21(dos_machine_t *m)
         if (dl32 > 26 || !GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
             SETAX((R_AX & 0xFF00) | 0xFF);
         } else {
+            /* ── #48: THE SAME BUILDER AS THE AH=52h CHAIN, so the two DPBs a program
+                 can reach for one drive describe one volume. This copy had its own
+                 inline fields: FAT sectors, root start and data start ZERO (a volume
+                 whose files overlap its FAT), a highest-cluster word that wrapped past
+                 0xFFFF where the chain's clamps at 0xFFFE, and unit 0 where the chain
+                 says unit = drive (6.22: one IO.SYS driver, A: unit 0 .. C: unit 2). dos_dpb_fat_layout's
+                 note in dos_sysvars.h says what the derived fields are and are not.
+               ⚠ Still a separate copy at DOS_DPB_OFF rather than a pointer INTO the
+                 chain (6.22 returns the chain's own DPB); that is a pointer change for a
+                 later pass, and the probe compares only AL here. */
             volatile BYTE *d = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_DPB_OFF);
-            int k; uint8_t shift = 0;
-            while ((1u << shift) < spc && shift < 15) ++shift;
-            for (k = 0; k < 33; ++k) d[k] = 0;
-            d[0] = (BYTE)(dl32 ? dl32 - 1 : 2);   /* 0-based drive */
-            d[1] = 0;
-            d[2] = (BYTE)(bps & 0xFF); d[3] = (BYTE)(bps >> 8);
-            d[4] = (BYTE)(spc - 1);
-            d[5] = shift;
-            d[6] = 1; d[7] = 0;                   /* reserved sectors  */
-            d[8] = 2;                             /* number of FATs    */
-            d[9] = 0x00; d[10] = 0x02;            /* root entries 512  */
-            d[13] = (BYTE)((totc + 1) & 0xFF); d[14] = (BYTE)(((totc + 1) >> 8) & 0xFF);
-            d[23] = 0xF8;                         /* media descriptor  */
-            d[25] = 0xFF; d[26] = 0xFF; d[27] = 0xFF; d[28] = 0xFF;  /* no next DPB */
+            unsigned char dp[DPB_LEN];
+            unsigned drv = dl32 ? (unsigned)(dl32 - 1) : 2u;     /* 0-based drive */
+            char rt[4]; int k, rem;
+            rt[0] = (char)('A' + drv); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
+            rem = (GetDriveTypeA(rt) == DRIVE_REMOVABLE);      /* 6.22's floppy: 224, F0h */
+            dos_dpb_build(dp, drv, bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
+                          (totc > 0xFFFE) ? 0xFFFE : totc + 1, rem ? 0xF0 : 0xF8,
+                          DOS_DEV_SEG, DEV_OFF(DEV_BLOCK), 0xFFFF, 0xFFFF);
+            for (k = 0; k < DPB_LEN; ++k) d[k] = dp[k];
             SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_DPB_OFF);
             SETAX(R_AX & 0xFF00);
         }

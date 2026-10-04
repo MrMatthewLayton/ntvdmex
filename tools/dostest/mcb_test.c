@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dos_mcb.h"
+#include "dos_layout.h"     /* #207: DOS_ENV_SEG / SysVars / DOS_CTAB_SEG vs the chain */
 #include "dos_loader.h"
 #include "dos_psp.h"
 #include "dos_env.h"
@@ -66,14 +67,29 @@ int main(void) {
     const unsigned GROWN = PROG - 0x2000 - 1;           /* after growing to 0x2000 */
 
     /* T0: initial chain ---------------------------------------------------- */
-    CHECK(first == 0x5F, "init: chain root at 0x5F");
+    /* #207: the chain starts at 0x7E, ABOVE SysVars' segment (0x72), as 6.22's does
+       (SysVars 0116, first MCB 0253). It was 0x5F, which made MEM /D's "MSDOS System
+       Data" row (SysVars seg .. first MCB) negative. */
+    CHECK(first == 0x7E, "init: chain root at 0x7E (#207)");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "init: chain consistent");
     CHECK(sig_of(0xFF) == 'Z' && own_of(0xFF) == DOS_PSP_SEG && sz_of(0xFF) == PROG,
-          "init: program block = Z / PSP / DOS_MEM_TOP-PSP");
-    CHECK(sig_of(0x5F) == 'M' && own_of(0x5F) == DOS_PSP_SEG && sz_of(0x5F) == 0x10,
-          "init: env block = M / PSP / 0x10");
-    CHECK(sig_of(0x70) == 'M' && own_of(0x70) == 0x0008 && sz_of(0x70) == 0x8E,
-          "init: DOS block = M / 8 / 0x8E");
+          "init: program block = Z / PSP / DOS_MEM_TOP-PSP (unchanged by #207)");
+    CHECK(sig_of(0x7E) == 'M' && own_of(0x7E) == DOS_PSP_SEG && sz_of(0x7E) == 0x10,
+          "init: env block = M / PSP / 0x10, data at DOS_ENV_SEG 0x7F");
+    CHECK(DOS_ENV_SEG == first + 1, "init: DOS_ENV_SEG is the first block's data");
+    CHECK(sig_of(0x8F) == 'M' && own_of(0x8F) == 0x0008 && sz_of(0x8F) == 0x6F,
+          "init: DOS block = M / 8 / 0x6F");
+    CHECK(DOS_CTAB_SEG == 0x8F + 1, "init: the DOS block's data starts at DOS_CTAB_SEG");
+    /* MEM /C's MSDOS total = the kernel area below the first MCB + the owner-8 block.
+       #207 moved 0x1F paragraphs from the block to the area; the sum must not move:
+       old 0x5F + (0x8E+1) == new 0x7E + (0x6F+1). */
+    CHECK(0x5F + 0x8E + 1 == first + sz_of(0x8F) + 1,
+          "init: kernel area + DOS block = the pre-#207 total (MEM /C's MSDOS)");
+    /* SysVars, its -2 word and the SDA are kernel data below the chain now. */
+    CHECK((uint32_t)DOS_SYSVARS_SEG < first
+          && (uint32_t)DOS_SYSVARS_SEG * 16 + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN <= (uint32_t)first * 16
+          && (uint32_t)DOS_SDA_SEG * 16 + DOS_SDA_OFF + DOS_SDA_LEN <= (uint32_t)first * 16,
+          "init: SysVars + SDA end below the first MCB header (#207)");
 
     /* T0b: a block reserved at the TOP for resident DOS data (the CDS array) --
        the program block shrinks by paras+1, the chain still ends at DOS_MEM_TOP,

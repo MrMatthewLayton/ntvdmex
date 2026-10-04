@@ -523,7 +523,19 @@ static void dsprobe_load(void)
 #define XMS_ENTRY_OFF 0x0044
 /* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME
    number to MEM.EXE (GH #47) -- two literals would drift. */
-#define XMS_POOL_KB   16384
+/* ── #48: THE POOL IS THE MACHINE'S EXTENDED MEMORY LESS THE HMA, AS HIMEM'S IS. ──────
+     This was 16384 on a machine whose INT 15h AH=88h, CMOS 17h/18h and 30h/31h and
+     AH=87h address space (dos_extmem.h, 1..16 MB) all say 15360 KB of extended memory:
+     XMS handed out more memory than the machine has, and SysVars+0x45 reported the
+     pool, so MEM and AH=88h disagreed (#48). HIMEM on 6.22 reports the extended memory
+     minus the 64 KB HMA it keeps for itself -- the oracle's MEM: total 15,232K, XMS free
+     15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXT_KB so the four views
+     (88h, CMOS, SysVars+0x45, XMS) are one number and cannot drift again.
+   ⚠ AN OBSERVABLE CHANGE: XMS AH=08h now says 15296 KB, 1088 KB less than before. No
+     oracle pins the old figure (xms-ems.md: 08h's size is per machine, abstained), and
+     DPMI memory does not come from this pool -- but every XMS client sees it. */
+#define XMS_HMA_KB    64
+#define XMS_POOL_KB   (CMOS_EXT_KB - XMS_HMA_KB)       /* 15296 */
 
 /* ── ★ THE CPU CLASS `INT 2Fh AX=1687h` REPORTS IN CL, AND IT IS NOT COSMETIC. ────────
      `krnl386.exe` builds the ENTIRE Win16 `GetWinFlags` word out of this one byte
@@ -613,7 +625,7 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
    callback slot) that a client's real-mode code far-calls; the host switches V86->PM
    and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
    handler IRETs to (reached via g_pmret_sel, a code selector based at DOS_HDLR_SEG).
-   All within the 0x500..0x5FF handler segment (env seg starts at 0x600).
+   All within the 0x500..0x5FF handler segment (0x600 up is the device headers, #207).
    #248: DPMI_CB_SLOTS (16, the spec's minimum -- was 4) lives in dpmi_svc.h, and the
    slots moved to 0x90..0xCF to make room; see the segment map below. */
 #define DPMI_CB_BOP      0x55
@@ -2599,8 +2611,12 @@ static void crit_raise(dos_machine_t *m, volatile BYTE *tib, char **pp)
     *pp = zput(*pp, ":0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4)); *pp = zput(*pp, "\r\n");
     VDM_SET16(tib, VTIB_EAX, ((WORD)m->crit_ah << 8) | m->crit_al);
     VDM_SET16(tib, VTIB_EDI, m->crit_code);
-    VDM_SET16(tib, VTIB_EBP, DOS_SYSVARS_SEG);           /* BP:SI = the device header -- */
-    VDM_SET16(tib, VTIB_ESI, DOS_SYSVARS_OFF + SV_NUL);  /* the one our DPBs name        */
+    /* BP:SI = the device header -- the one our DPBs name, which since #48 is the BLOCK
+       driver (DOS_DEV_SEG, attribute bit 15 clear), as 6.22's floppy DPB names its own at
+       0070:006B. It was NUL, a CHARACTER device, which tells a handler that tests bit 15
+       of [BP:SI+4] the opposite of AH bit 7's "disk error". */
+    VDM_SET16(tib, VTIB_EBP, DOS_DEV_SEG);
+    VDM_SET16(tib, VTIB_ESI, DEV_OFF(DEV_BLOCK));
     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
     VDM_SET16(tib, VTIB_EIP, DOS_CRIT_RAISE);
     sda[0] = 1;                                          /* SDA+0: in a critical error   */
@@ -8240,7 +8256,8 @@ static DWORD         g_ms_evt_installs;
      and every click after it was refused -- "the mouse opens nothing".
    ⚠⚠⚠ 0x100 WAS THE THIRD CHOICE AND IT IS THE ENVIRONMENT BLOCK. DOS_ENV_SEG is
      0x0060, i.e. linear 0x600 = 0050:0100 -- the segment overlaps its own env one
-     paragraph on. The re-check (added the same session) caught it at once: the bytes
+     paragraph on. (#207: the env has since moved to 0x7F and 0x600 holds DOS_DEV_SEG's
+     device headers -- the same rule, a different tenant.) The re-check (added the same session) caught it at once: the bytes
      read `43 4f 4d 53` = "COMS" (COMSPEC). So segment 0x50 is usable ONLY for offsets
      0x00..0xFF, and inside that BASIC scribbles the low slots and DOS owns the stubs.
      0xE0 is the gap: past the sysvars block (0x8E..~0xD0) and below the env at 0x100,
@@ -20746,7 +20763,7 @@ static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
     shadow = wow_shadow_selector();
     if (!shadow) return -1;
     /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
-       linear 0x500 and DOS_ENV_SEG starts at 0x600, so it has 0x100 bytes total and
+       linear 0x500 and DOS_DEV_SEG (was DOS_ENV_SEG) starts at 0x600, so it has 0x100 bytes total and
        the map in the header shows them nearly all spoken for. */
     /* Prefer the paragraph wow_place_v86 set aside. On a WOW launch krnl386 owns
        every other free paragraph by the time this runs, so the fallback below can
@@ -23447,7 +23464,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              about OUR virtual machine's configuration, and a guest that
                              gets a different machine depending on which mode it asked from
                              is a guest we cannot reason about.
-                               AH=88h -> 0x3C00 KB extended, matching the XMS pool.
+                               AH=88h -> CMOS_EXT_KB (0x3C00) KB extended, the CMOS figure
+                                         (#48: the XMS pool is now that less the HMA).
                                AH=86h -> wait: the PIT already paces us, so CF=0 and return.
                                anything else, C0h INCLUDED -> AH=86h, CF=1, "unsupported".
                            ⚠ AH=C0h IS DELIBERATELY REFUSED, not stubbed with a table. The
@@ -23470,7 +23488,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              Refused here until one is, and then answered with a selector. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
-                              VDM_SET16(tib, VTIB_EAX, 0x3C00);
+                              VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXT_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                           } else if (ah15 == 0x86) {
                               /* ── #256: WAIT CX:DX MICROSECONDS, AS THE V86 ARM DOES (#206). ──
@@ -27978,8 +27996,13 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      tried and REVERTED: it is inert for ZAR (never called) and is an
                      unvalidated behaviour change for every other guest. It is worth
                      doing deliberately, with Doom and the DOS batteries re-gated on
-                     it -- on its own merits, not as a ZAR fix. */
-                BSETAX(0x3C00);                /* 15 MB, matching the XMS pool */
+                     it -- on its own merits, not as a ZAR fix.
+                   ★ #48: the number itself is now ONE number. It is CMOS_EXT_KB, the same
+                     figure CMOS 17h/30h and SysVars+0x45 report; the XMS pool is that
+                     less the 64K HMA (XMS_POOL_KB). The double hand-out above is
+                     unchanged -- this arm still does not answer 0 as HIMEM's hook would
+                     (6.22's MEM: "Memory accessible using Int 15h 0"). */
+                BSETAX((WORD)CMOS_EXT_KB);     /* 15 MB -- the machine, not the XMS pool */
                 BCF_CLR();
                 { char x8[128], *x8q = x8;
                   x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
@@ -30488,13 +30511,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             char root[4]; unsigned k; BYTE dp[DPB_LEN];
             int last = (n + 1 == nd);
             root[0] = (char)('A' + slot[n]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
-            if (dtype[slot[n]] == DRIVE_REMOVABLE)             /* 1.44M defaults, no probe */
+            /* #48: a removable drive gets 6.22's OWN 1.44M floppy DPB -- 224 root entries,
+                 media F0h -- which dos_dpb_build now reproduces byte for byte (sysvars_test).
+                 It had 512 entries and F8h (the fixed-disk values) on a floppy. */
+            int rem = (dtype[slot[n]] == DRIVE_REMOVABLE);
+            if (rem)                                           /* 1.44M defaults, no probe */
                 { spc = 1; bps = 512; totc = 2847; }
             else if (!GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totc))
                 { spc = 8; bps = 512; totc = 0xFFF0; }
-            dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, 512,
-                          (totc > 0xFFFE) ? 0xFFFE : totc + 1, 0xF8,
-                          DOS_SYSVARS_SEG, DOS_SYSVARS_OFF + SV_NUL,
+            dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
+                          (totc > 0xFFFE) ? 0xFFFE : totc + 1, rem ? 0xF0 : 0xF8,
+                          DOS_DEV_SEG, DEV_OFF(DEV_BLOCK),       /* #48: the block driver */
                           last ? 0xFFFF : DOS_CTAB_SEG,
                           last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (n + 1) * DPB_LEN));
             for (k = 0; k < DPB_LEN; ++k)
@@ -30519,7 +30546,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              area used to be planted at SysVars+0x44, so the InDOS byte WAS
              this field. The SDA has moved; see DOS_SDA_OFF.
            The value is the XMS pool, so the two cannot disagree. */
-        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x45) = (WORD)XMS_POOL_KB;
+        /* ── ★ #48: IT IS THE MACHINE'S EXTENDED MEMORY, NOT THE XMS POOL. ─────────
+             The field is what SYSINIT read from INT 15h AH=88h at boot, before
+             HIMEM loaded (RBIL: "extended memory size in K"). 6.22 says so itself:
+             MEM /D there prints Extended 15,597,568 = 65,536 used + 15,532,032 free
+             (runs/s81_mem/oracle_memd.txt) -- the total is this field (15232K), the
+             free is HIMEM's AH=08h, and the 64K "used" is the HMA, which XMS never
+             counts. Ours said 16384 (the pool) while AH=88h and CMOS 17h/30h said
+             15360 -- one machine with two sizes. Now all three are CMOS_EXT_KB and the
+             pool is that LESS the HMA (XMS_POOL_KB), so MEM's Total - Free = Used
+             comes out 64K, 6.22's shape, and can never go negative. */
+        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x45) = (WORD)CMOS_EXT_KB;
         /* ⚠ GH #47: SysVars +0x43 = 0x0103, +0x49 = 0xFFFF and +0x4B = 0x0001
            (6.22's values, where ours are zero) were planted together as a
            diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
@@ -30527,12 +30564,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            chain starts at segment 0". It does not. Seventh refutation. */
         svs[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
         /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
-               to one (measured on 6.22), and it TERMINATES: we install no block or
-               character drivers, so FFFF:FFFF is the truthful end of the chain. */
-        {   BYTE nul[SV_NUL_LEN]; unsigned k;
-            dos_nul_build(nul, 0xFFFF, 0xFFFF);
+               to one (measured on 6.22). #48: it no longer terminates -- it links to
+               IO.SYS's twelve (CON .. COM4) at DOS_DEV_SEG, in 6.22's order, and the
+               last of those terminates. See dos_devchain_build for what is measured
+               (the order, the stride, which pointers name which) and what is not (the
+               attribute words). SysVars+0x08/+0x0C name CLOCK$ and CON, as on 6.22.
+             ⚠ Linear 0x600..0x6E7 had been the environment block's until #207 moved
+               it to DOS_ENV_SEG 0x7F; nothing else writes there (dos_layout.h). */
+        {   BYTE nul[SV_NUL_LEN], dev[DEV_AREA_LEN], ns[DOS_NULSTUB_LEN]; unsigned k;
+            volatile BYTE *dv = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_DEV_SEG << 4);
+            dos_devchain_build(dev, DOS_DEV_SEG, nd);
+            for (k = 0; k < DEV_AREA_LEN; ++k) dv[k] = dev[k];
+            dos_nulstub_build(ns);
+            for (k = 0; k < DOS_NULSTUB_LEN; ++k) svs[DOS_NULSTUB_OFF + k] = ns[k];
+            dos_nul_build(nul, DOS_DEV_SEG, DEV_OFF(DEV_CON),
+                          DOS_NULSTUB_OFF + DOS_NULSTUB_STRAT, DOS_NULSTUB_OFF + DOS_NULSTUB_INTR);
             for (k = 0; k < SV_NUL_LEN; ++k)
-                svs[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k]; }
+                svs[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k];
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CLOCK)     = DEV_OFF(DEV_CLOCK);
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CLOCK + 2) = DOS_DEV_SEG;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CON)       = DEV_OFF(DEV_CON);
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CON + 2)   = DOS_DEV_SEG; }
         /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
                because it is INDEXED by drive and a walker reads all of them
                whatever we populate. Entries for drives that exist carry flags
@@ -30588,7 +30640,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
         q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
-        q = zput(q, " (terminated), NUL header inline, "); q = zhex(q, DOS_LASTDRIVE);
+        q = zput(q, " (terminated), NUL inline -> CON..COM4 at 0x"); q = zhex(q, DOS_DEV_SEG);
+        q = zput(q, ":0 (terminated), first MCB 0x"); q = zhex(q, m.first_mcb);
+        q = zput(q, " above SysVars 0x"); q = zhex(q, DOS_SYSVARS_SEG);
+        q = zput(q, " (#207), "); q = zhex(q, DOS_LASTDRIVE);
         q = zput(q, " CDS entries at 0x"); q = zhex(q, g_cds_seg);
         q = zput(q, ":0, SFT ");
         if (g_sft_seg) { q = zput(q, "at 0x"); q = zhex(q, g_sft_seg);

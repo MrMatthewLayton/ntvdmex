@@ -20,7 +20,23 @@
      per-process current drive exists, this becomes a variable and all three
      routes read it. */
 #define DOS_CURRENT_DRIVE 0x02      /* C: -- 0 = A: */
-#define DOS_ENV_SEG   0x0060  /* environment segment (linear 0x0600)         */
+/* ── #207: THE ENVIRONMENT MOVED FROM 0x60 TO 0x7F, ABOVE SysVars. ─────────────────
+     The first MCB has to lie above the SysVars segment (MEM /D's "MSDOS System Data"
+     row is SysVars seg .. first MCB, and was negative) -- see dos_mcb_init. The env is
+     the first block of the chain, so it is the thing that had to move; it lands in
+     linear 0x7F0..0x8EF, the gap between the SDA (ends 0x7E0) and the DOS block's MCB
+     at 0x8F0, which nothing used (checked: no define, literal or plant in 0x7E0..0x8FF).
+     Same 256 bytes (DOS_ENV_CAP), same owner, same PSP:2C mechanism, BELOW the program
+     -- not the s73 top-of-memory move that broke DOS/4GW (that one moved PSP+2).
+   ⚠ What follows the block is now the DOS block's MCB at 0x8F0, not [0x714]: an env
+     write past DOS_ENV_CAP would break the chain instead of the kernel. Still capped. */
+#define DOS_ENV_SEG   0x007F  /* environment segment (linear 0x07F0) = DOS_FIRST_MCB+1 */
+/* ── #48: THE CHARACTER/BLOCK DEVICE HEADERS, at linear 0x600 (the env's old home). ──
+     Kernel data below the first MCB, as IO.SYS's headers are on 6.22 (0070:0023 CON ..
+     0070:006B the block driver -- measured, sysvars_test.c). Built by dos_devchain_build;
+     0x60:0x00..0xEF. Segment 0x50 is NOT used for this: its offsets 0x100+ alias this
+     same memory, and the handler segment's own slots stop at 0xFF (main.c MS_CB_RET_OFF). */
+#define DOS_DEV_SEG   0x0060
 #define DOS_LOAD_OFF  0x0010  /* .EXE load module = DOS_PSP_SEG + this       */
 #define DOS_DBCS_OFF  0x0018  /* empty DBCS table parked at DOS_HDLR_SEG:this */
 #define DOS_EMM_NAME_OFF 0x000A /* "EMMXXXX0" device-header name (M4 EMS detect, *
@@ -98,16 +114,30 @@
    ⇒ SysVars now lives at DOS_SYSVARS_SEG:0x0026, exactly 6.22's offset, in the DOS-
      resident filler block (linear 0x720-0x8FF is otherwise unused; it is past the
      kernel's [0x714] dword and below DOS_CTAB_SEG). Both MEM reads now hit one field
-     for the same reason they do on real DOS. */
-#define DOS_SYSVARS_SEG 0x0072      /* SysVars' segment: AH=52h returns ES=this    */
+     for the same reason they do on real DOS.
+   ★ #207: and that space is no longer inside ANY MCB block. The filler block that held
+     it began at 0x70, below SysVars, which made the chain start below SysVars and MEM
+     /D's MSDOS row negative. The chain now starts at DOS_FIRST_MCB (0x7E), so
+     0x720..0x7DF (SysVars, its -2 word, the SDA) is kernel data BELOW the first MCB --
+     6.22's shape: its SysVars is at 0116:0026 and its first MCB at 0253. */
+#define DOS_SYSVARS_SEG 0x0072     /* SysVars' segment: AH=52h returns ES=this    */
 #define DOS_SYSVARS_OFF 0x0026      /* 6.22's offset; MCB head word at -2 (GH #35) */
 #define DOS_UMBHEAD_OFF 0x008C      /* = SysVars+0x66: first UMB MCB; FFFF = none  */
 #define DOS_UMBHEAD_NONE 0xFFFF
 #define DOS_SYSVARS_LEN 0x0070      /* bytes from SysVars+0 that we own and zero   */
 #define DOS_SDA_SEG     DOS_SYSVARS_SEG   /* the SDA shares DOS's data segment, as on 6.22 */
+/* #48: NUL's strategy/interrupt entries (dos_nulstub_build, 8 bytes). A header's entries
+   are offsets in ITS OWN segment, and NUL's header is inline in SysVars, so they must be
+   in this segment: 0072:0010 = linear 0x730..0x737 -- past [0x714] (0x714..0x717), below
+   SysVars' -2 word at 0x744, and written by nothing else (sysvars_test pins all three). */
+#define DOS_NULSTUB_OFF 0x0010
 
 /* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
    MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").
+   ⚠ #207: that block's MCB is now at 0x8F (DOS_RESBLK_MCB, 0x6F paragraphs), so its
+   data STARTS at 0x90 = this segment. Nothing in it moved; only the part below 0x900
+   (which held SysVars, the SDA and [0x714]) left the block for the kernel area below
+   the first MCB. Read "the block" below as 0x900..0xFEF.
    That block exists to stand in for resident DOS, so no guest allocates over it,
    and these tables ARE resident DOS data.  The handler segment cannot host them:
    DOS_HDLR_SEG (0x50) runs into DOS_ENV_SEG (0x60) after only 256 bytes and the
