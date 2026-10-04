@@ -224,13 +224,26 @@ static int (*g_ww_send16b)(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
      being sent to a window is POSTED instead, as before s91. */
 static struct { WORD h16, msg; } g_ww_sending[8];
 static int g_ww_nsending;
+/* s92 (#289): inside USER32's move/size loop (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE).
+   The guest cannot run there, so a POSTED WM_PAINT waits for the mouse to come up
+   and the vacated areas are never erased -- Packager's panes left a trail of
+   scrollbars across the window. Win16's size loop dispatches WM_PAINT as it goes,
+   so inside it the relay SENDS the paint (see WM_PAINT below). */
+static int g_ww_sizemove;
+static unsigned g_ww_paintlog;
 static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx, WORD pty)
 {
     WORD r;
     int i, busy = 0;
+    /* s92 (#284): ONE nested WM_SIZE is Windows' own order. Cardfile's card hides its
+       scrollbars inside its WM_SIZE; the client grows by the scrollbar's width and
+       Windows sends WM_SIZE again, nested. Posted, it arrived after the first paint and
+       the card was laid out twice -- the first card's header stayed on screen. A
+       second level is allowed; deeper is the MDI loop above, and is still posted. */
+    int limit = (msg == WM_SIZE) ? 2 : 1;
     for (i = 0; i < g_ww_nsending; ++i)
-        if (g_ww_sending[i].h16 == h16 && g_ww_sending[i].msg == msg) busy = 1;
-    if (!busy && g_ww_send16 && g_ww_nsending < 8) {
+        if (g_ww_sending[i].h16 == h16 && g_ww_sending[i].msg == msg) ++busy;
+    if (busy < limit && g_ww_send16 && g_ww_nsending < 8) {
         int ok;
         g_ww_sending[g_ww_nsending].h16 = h16; g_ww_sending[g_ww_nsending].msg = msg;
         ++g_ww_nsending;
@@ -371,10 +384,34 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 g_ww_paint_ms = GetTickCount();
                 EndPaint(h, &ps);
             }
-            wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
+            if (g_ww_paintlog < 600) {     /* s92: what the OS reported, and how it went */
+                char pb[160], *pq = pb;
+                ++g_ww_paintlog;
+                pq = zput(pq, "WOWWIN: WM_PAINT h16=0x"); pq = zhex(pq, h16);
+                pq = zput(pq, " rc="); pq = zhex(pq, (DWORD)ps.rcPaint.left);
+                pq = zput(pq, ","); pq = zhex(pq, (DWORD)ps.rcPaint.top);
+                pq = zput(pq, ","); pq = zhex(pq, (DWORD)ps.rcPaint.right);
+                pq = zput(pq, ","); pq = zhex(pq, (DWORD)ps.rcPaint.bottom);
+                pq = zput(pq, ps.fErase ? " erase" : " noerase");
+                pq = zput(pq, g_ww_sizemove ? " SENT\r\n" : " posted\r\n");
+                log_append(LOG_PATH, pb, pq);
+            }
+            if (g_ww_sizemove) wowwin_send_or_post(h16, WM_PAINT16, 0, 0, ptx, pty);
+            else               wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
+        break;
+    case WM_ENTERSIZEMOVE: ++g_ww_sizemove; break;
+    /* ...and when the loop ends, the whole window is repainted once. A child the guest
+       moved from inside its WM_SIZE (Packager's "View:" label) left the strip it
+       vacated on screen: its erase ran (measured: the strip visible in the DC, the
+       class brush applied) and USER32's own move/size machinery still put the old
+       pixels back afterwards (runs/s92/drv). One full repaint at the end is what
+       makes the final picture right whatever happened mid-drag. */
+    case WM_EXITSIZEMOVE:
+        if (g_ww_sizemove > 0) --g_ww_sizemove;
+        if (h16) RedrawWindow(h, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         break;
     /* ── ★★★★★ THE MOUSE. WITHOUT THIS A PAINT PROGRAM CANNOT PAINT. ────────
          This procedure relayed keys, system keys, close, size, focus and paint,

@@ -776,6 +776,37 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* s92 (#289) `cornerhold "Cap" dx dy` -- press on the window's bottom-right sizing
+         corner, move it by dx,dy in steps, and KEEP THE BUTTON DOWN, so a `shot` taken
+         next sees the window mid-resize (Packager left trails only until the release).
+         `release` lets go. */
+    if (seq(verb, "cornerhold")) {
+        char m[300], *p = m;
+        HWND w = FindWindowA(NULL, arg1);
+        RECT r;
+        int x1, y1, dx = satoi(arg2), dy = satoi(arg3), steps = 24, i2;
+        if (!w || !GetWindowRect(w, &r)) { p = sput(p, "cornerhold: NOT FOUND "); sput(p, arg1); logline(m); return 1; }
+        x1 = r.right - 3; y1 = r.bottom - 3;
+        SetCursorPos(x1, y1);
+        Sleep(150);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(150);
+        for (i2 = 1; i2 <= steps; ++i2) {
+            SetCursorPos(x1 + dx * i2 / steps, y1 + dy * i2 / steps);
+            Sleep(60);
+        }
+        Sleep(400);
+        p = sput(p, "cornerhold: "); p = sput(p, arg1); p = sput(p, " held at ");
+        p = sputu(p, (unsigned)(x1 + dx)); p = sput(p, ","); sputu(p, (unsigned)(y1 + dy));
+        logline(m);
+        return 0;
+    }
+    if (seq(verb, "release")) {
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        logline("release: button up");
+        return 0;
+    }
+
     if (seq(verb, "key")) {
         int vk = satoi(arg1);
         char m[200], *p = m;

@@ -21414,17 +21414,22 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 /* s88: the modal loop calls a #32770 dialog's DLGPROC directly, so a
                    FALSE answer to WM_CLOSE got no DefDlgProc default -- Task List's X
                    did nothing. Same default as DefDlgProc's (IDCANCEL posted, which
-                   the loop delivers next). WM_CLOSE ONLY: every other default here
-                   would be new behaviour for every modal dialog, unmeasured. */
+                   the loop delivers next). WM_CLOSE, and (s92) WM_PAINT / WM_ERASEBKGND:
+                   TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
+                   the dialog, so the Task List showed the desktop behind it
+                   (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
                 if (g_wd_dlgcall[g_wc_depth] && (WORD)res == 0
-                    && g_wd_dlgmsg[g_wc_depth] == 0x0010) {
+                    && (g_wd_dlgmsg[g_wc_depth] == 0x0010
+                        || g_wd_dlgmsg[g_wc_depth] == 0x000F
+                        || g_wd_dlgmsg[g_wc_depth] == 0x0014)) {
                     char dn[200]; int dk = 0;
-                    wowuser_dlg_default(wowuser_findwin(actarg), actarg, 0x0010,
+                    wowuser_dlg_default(wowuser_findwin(actarg), actarg,
+                                        g_wd_dlgmsg[g_wc_depth],
                                         g_wu_dlgdef[g_wc_depth].wp,
                                         g_wu_dlgdef[g_wc_depth].lp,
                                         dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
-                    p = zput(p, " -- DLGPROC said FALSE to WM_CLOSE; DefDlgProc default:");
+                    p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
                     p = zput(p, dn);
                 }
                 g_wd_dlgcall[g_wc_depth] = 0;

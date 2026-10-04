@@ -4143,6 +4143,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                     else wu_puts(note, notecap, &k, ")");
                 }
             }
+            /* s92 (#289): the brush as the guest named it -- 0, COLOR_*+1, or a token. */
+            wu_puts(note, notecap, &k, " hbr=0x");
+            wu_puthex(note, notecap, &k, c->hbrback, 4);
             if (c->curfell)
                 wu_puts(note, notecap, &k, " -- ★ NO CURSOR WAS BUILT (an ordinal"
                                            " the OS does not know, or a named"
@@ -8320,6 +8323,28 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, msg, 4);
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
                                 wow32_setret(f, 0); return 1; }
+        /* s92: the defaults DefWindowProc already takes over (see 0x6b), which both MDI
+           defaults fall back to in Win16. WM_CLOSE on a FRAME is DestroyWindow -- OURS:
+           Program Manager's X reached Win32's DefFrameProc, which destroyed the real
+           window only, and the task sat in GetMessage with no window, host and all
+           (runs/s92/inst1_now.log). WM_PAINT erases what is owed; WM_CTLCOLOR is 0. */
+        if (msg == 0x0010 && frame) {
+            wu_puts(note, notecap, &k, " -> WM_CLOSE: ");
+            wowuser_destroy(hwnd, note, notecap, &k);
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (msg == 0x000F) {
+            wowuser_default_paint(w, 0);
+            wu_puts(note, notecap, &k, " -> WM_PAINT: erased what was owed (class brush)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (msg == 0x0019) {
+            wu_puts(note, notecap, &k, " -> WM_CTLCOLOR: 0, the host applies the 3.x default");
+            wow32_setret(f, 0);
+            return 1;
+        }
         /* The OS's own MDI defaults, on the real windows -- the same argument as
            using the real MDICLIENT rather than drawing one. */
         r = wowuser_def32(frame ? 1 : 2, w->hwnd32, c ? c->hwnd32 : NULL, msg, wp16, lp32);
@@ -9235,6 +9260,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- ★ WM_ERASEBKGND with no DC we issued; 0");
             wow32_setret(f, 0);
             return 1;
+        }
+        if (msg == 0x0014) {                         /* s92 #289: what the erase hits */
+            HDC edc = (HDC)wowuser_wp32(msg, wp);
+            RECT cb; HWND dw = WindowFromDC(edc);
+            int rg = GetClipBox(edc, &cb);
+            wu_puts(note, notecap, &k, dw == h ? " [dc=this window" : " [★ dc=ANOTHER window");
+            wu_puts(note, notecap, &k, " clip="); wu_puthex(note, notecap, &k, (DWORD)rg, 1);
+            wu_puts(note, notecap, &k, ":");      wu_puthex(note, notecap, &k, (DWORD)cb.left, 4);
+            wu_puts(note, notecap, &k, ",");      wu_puthex(note, notecap, &k, (DWORD)cb.top, 4);
+            wu_puts(note, notecap, &k, ",");      wu_puthex(note, notecap, &k, (DWORD)cb.right, 4);
+            wu_puts(note, notecap, &k, ",");      wu_puthex(note, notecap, &k, (DWORD)cb.bottom, 4);
+            wu_puts(note, notecap, &k, " brush="); wu_puthex(note, notecap, &k,
+                        (DWORD)GetClassLongPtrA(h, GCLP_HBRBACKGROUND), 8);
+            wu_puts(note, notecap, &k, "]");
         }
         r = DefWindowProcA(h, msg, wowuser_wp32(msg, wp), (LPARAM)lp);
         wu_puts(note, notecap, &k, " -> 0x");
