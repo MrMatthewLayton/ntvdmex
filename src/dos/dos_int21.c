@@ -469,6 +469,10 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
                                function sets fields one by one -- nothing zeroes it */
     m->vdrive = -1;         /* the current drive is the process current directory's */
     m->psp_seg = DOS_PSP_SEG;
+    {   int k;               /* s91: the JFT a fresh PSP carries (dos_psp_build) */
+        static const uint8_t jft0[5] = { 1, 1, 1, 0, 2 };
+        for (k = 0; k < 20; ++k) m->jft_known[k] = k < 5 ? jft0[k] : 0xFF;
+        for (k = 0; k < 256; ++k) m->sft_host[k] = 0; }
     m->exec_pending = 0;
     m->tsr_pending = 0; m->tsr_keep = 0;
     m->first_mcb = first_mcb;
@@ -527,7 +531,75 @@ void dos_handles_push(dos_machine_t *m)
     if (m->hdepth >= DOS_HSTACK) { ++m->hdepth; return; }   /* too deep: counted, not saved */
     for (i = 0; i < DOS_MAX_FILES; ++i) m->hsave[m->hdepth].fh[i] = m->fh[i];
     m->hsave[m->hdepth].std_open = m->std_open;
+    for (i = 0; i < 20; ++i) m->hsave[m->hdepth].jft_known[i] = m->jft_known[i];
     ++m->hdepth;
+}
+
+/* ── s91: THE JFT (see jft_known in dos_int21.h). ─────────────────────────────────── */
+static volatile uint8_t *dos_jft_of(uint16_t psp, unsigned *n)
+{
+    volatile uint8_t *p = (volatile uint8_t *)(ULONG_PTR)((DWORD)psp << 4);
+    unsigned cnt, off, seg;
+    *n = 0;
+    if (!psp) return NULL;
+    cnt = (unsigned)(p[0x32] | (p[0x33] << 8));
+    off = (unsigned)(p[0x34] | (p[0x35] << 8));
+    seg = (unsigned)(p[0x36] | (p[0x37] << 8));
+    if (!seg || !cnt) return NULL;
+    *n = cnt > 20 ? 20 : cnt;
+    return (volatile uint8_t *)(ULONG_PTR)(((DWORD)seg << 4) + off);
+}
+/* The pseudo SFT index for what handle h is bound to now. */
+static uint8_t dos_sft_val(dos_machine_t *m, unsigned h)
+{
+    unsigned v, freev = 0;
+    if (h < DOS_MAX_FILES && m->fh[h]) {
+        for (v = 3; v < 255; ++v) {
+            if (m->sft_host[v] == m->fh[h]) return (uint8_t)v;
+            if (!m->sft_host[v] && !freev) freev = v;
+        }
+        if (!freev) {                       /* table full: forget the stale entries */
+            for (v = 3; v < 255; ++v) m->sft_host[v] = 0;
+            freev = 3;
+        }
+        m->sft_host[freev] = m->fh[h];
+        return (uint8_t)freev;
+    }
+    if (h < 32 && (m->std_open & (1u << h))) return (uint8_t)(h == 3 ? 0 : h == 4 ? 2 : 1);
+    return 0xFF;
+}
+static void dos_jft_put(dos_machine_t *m, unsigned h, uint8_t v)
+{
+    unsigned n;
+    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n);
+    if (j && h < n) { j[h] = v; m->jft_known[h] = v; }
+}
+void dos_jft_reset(dos_machine_t *m)
+{
+    unsigned n, h;
+    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n);
+    for (h = 0; h < 20; ++h) m->jft_known[h] = (j && h < n) ? j[h] : 0xFF;
+}
+void dos_jft_exec(dos_machine_t *m, uint16_t child)
+{
+    unsigned n, cn, h;
+    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n), *cj = dos_jft_of(child, &cn);
+    if (!j) return;
+    for (h = 0; h < n; ++h) {
+        uint8_t v = j[h];
+        if (v == m->jft_known[h]) continue;          /* ours: fh[] already says so */
+        if (v == 0xFF) {
+            m->fh[h] = 0;
+            if (h < 32) m->std_open &= ~(1u << h);
+        } else if (v <= 2) {
+            m->fh[h] = 0;
+            if (h < 32) m->std_open |= (1u << h);
+        } else if (m->sft_host[v]) {
+            m->fh[h] = m->sft_host[v];
+        }
+    }
+    for (h = 0; h < n && cj && h < cn; ++h) cj[h] = j[h];       /* DOS copies the JFT */
+    for (h = 0; h < 20; ++h) m->jft_known[h] = (cj && h < cn) ? cj[h] : 0xFF;
 }
 
 void dos_handles_pop(dos_machine_t *m, int tsr)
@@ -551,6 +623,7 @@ void dos_handles_pop(dos_machine_t *m, int tsr)
         }
     for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = m->hsave[d].fh[i];
     m->std_open = m->hsave[d].std_open;
+    for (i = 0; i < 20; ++i) m->jft_known[i] = m->hsave[d].jft_known[i];
 }
 
 void dos_int21_shell_psp(dos_machine_t *m, uint16_t psp, int on)
@@ -2732,6 +2805,19 @@ int dos_int21(dos_machine_t *m)
         m->crit_al = drv;
         m->crit_ah = dos_crit_ah((unsigned char)ah);
         m->crit_code = (uint8_t)((R_AX & 0xFF) - 19);
+    }
+
+    /* ── s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode
+         the flags are not on a V86 stack and a DPMI client's JFT is not ours to show. */
+    if (!g_dos_int21_pm && !(*pfl & 1)) {
+        if (ah == 0x3C || ah == 0x3D || ah == 0x5A || ah == 0x5B || ah == 0x6C)
+            dos_jft_put(m, (unsigned)(R_AX & 0xFFFF), dos_sft_val(m, (unsigned)(R_AX & 0xFFFF)));
+        else if (ah == 0x45 || ah == 0x46) {
+            unsigned src = (unsigned)(R_BX & 0xFFFF);
+            unsigned dst = (ah == 0x45) ? (unsigned)(R_AX & 0xFFFF) : (unsigned)(R_CX & 0xFFFF);
+            dos_jft_put(m, dst, dos_sft_val(m, src));
+        } else if (ah == 0x3E)
+            dos_jft_put(m, (unsigned)(R_BX & 0xFFFF), 0xFF);
     }
 
     /* ── AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING. ──────────────

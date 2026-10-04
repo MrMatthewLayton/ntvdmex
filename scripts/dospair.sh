@@ -14,7 +14,9 @@ run() {   # run <bat> -> copies <bat>_out.txt
     rm -f "$SH/debug/out/$1_done.txt"
     printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\debug\\rig\\%s.bat" %s\r\n' "$1" "$B" > "$SH/debug/ctl/control.txt"
     for i in $(seq 1 90); do [ -f "$SH/debug/out/$1_done.txt" ] && break; sleep 2; done
-    cp "$SH/debug/out/$1_out.txt" "$OUT/${B%.COM}.$1.txt" 2>/dev/null || : > "$OUT/${B%.COM}.$1.txt"
+    # one output file per probe (s91): a stuck stock run held dosstock_out.txt open and
+    # every later stock "result" was the stale file
+    cp "$SH/debug/out/$1_${B%.*}.txt" "$OUT/${B%.COM}.$1.txt" 2>/dev/null || : > "$OUT/${B%.COM}.$1.txt"
 }
 run dosstock
 grep -q "restored target EXISTS" "$SH/debug/out/dosstock_state.txt" || { echo "⛔ IFEO NOT PROVEN RESTORED -- see dosstock_state.txt" >&2; cat "$SH/debug/out/dosstock_state.txt"; exit 3; }

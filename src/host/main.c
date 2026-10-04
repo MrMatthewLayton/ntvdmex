@@ -2522,6 +2522,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         for (q = m->exec_path; *q; ++q) if (*q == '\\' || *q == '/' || *q == ':') bn = q + 1;
         if (*bn) { for (k = 0; bn[k] && k < 63; ++k) g_progname[k] = bn[k]; g_progname[k] = 0; } }
     dos_handles_push(m);                            /* s81: the child works on a copy */
+    dos_jft_exec(m, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
     ++g_exec_depth;
     m->psp_seg = child;
     m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
@@ -30230,6 +30231,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_guest_ntaware) {
         dos_int21_shell_psp(&m, DOS_PSP_SEG, 1);
         dosver_src = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
+        g_dosver_shell = 1;
+    } else if (g_guest_ntvdm_bops >= 8 && g_top_is_shell) {
+        /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
+             from cmd.exe, or a user typing `command` there. It is not "the shell we
+             chose", so the rule above did not apply, and on the default 6.22 it said
+             "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
+             runs/s91/chain18b). Same image test and same per-process 5.00 as the
+             EXEC path gives a second XP shell; the name check is the second factor
+             that keeps an innocent guest from being told DOS 5. */
+        dos_int21_shell_psp(&m, DOS_PSP_SEG, 1);
+        dosver_src = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
         g_dosver_shell = 1;
     }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,

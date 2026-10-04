@@ -151,7 +151,16 @@ typedef struct {
          whatever the child still has open (as DOS does) and pops the parent's table
          back. See dos_handles_push/pop. */
 #define DOS_HSTACK 8
-    struct { HANDLE fh[DOS_MAX_FILES]; uint32_t std_open; } hsave[DOS_HSTACK];
+    struct { HANDLE fh[DOS_MAX_FILES]; uint32_t std_open; uint8_t jft_known[20]; } hsave[DOS_HSTACK];
+    /* ── s91: THE PSP's JOB FILE TABLE, KEPT TRUTHFUL. fh[] above is what we use; the
+         JFT (PSP:34h -> 20 bytes) is what a DOS program can SEE -- and XP's COMMAND.COM
+         does `>` by editing it directly (JFT[1] = JFT[5], JFT[5] = FFh) rather than
+         with AH=46h. So every handle we hand out is written into the JFT as a pseudo
+         SFT index (0 AUX, 1 CON, 2 PRN, 3..FEh a host handle in sft_host[]), jft_known
+         remembers what we wrote, and at EXEC an entry that differs was edited by the
+         program and is applied to the child's table (dos_jft_exec). */
+    uint8_t  jft_known[20];
+    HANDLE   sft_host[256];
     int      hdepth;
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
        see dos_find_match in dos_int21.c. */
@@ -188,6 +197,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);
    pop at the child's terminate; `tsr` = the child stays resident, so the files it
    still holds stay open (DOS does not close a TSR's handles). */
 void dos_handles_push(dos_machine_t *m);
+void dos_jft_exec(dos_machine_t *m, uint16_t child_psp);   /* s91, see jft_known */
+void dos_jft_reset(dos_machine_t *m);                       /* the first process's JFT */
 void dos_handles_pop(dos_machine_t *m, int tsr);
 /* Close DOS handle `slot` in the current table -- for real only if no parent still
    holds the same Win32 handle. Use instead of CloseHandle(m->fh[slot]). */

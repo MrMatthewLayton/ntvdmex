@@ -30,7 +30,7 @@ set IFEO=HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution 
 set P=%1
 set A=%2 %3 %4
 set S=%OUT%\dosstock_state.txt
-set R=%OUT%\dosstock_out.txt
+set R=%OUT%\dosstock_%~n1.txt
 
 del /q "%R%" >nul 2>&1
 del /q "%OUT%\dosstock_done.txt" >nul 2>&1
