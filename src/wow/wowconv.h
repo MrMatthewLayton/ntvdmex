@@ -240,4 +240,66 @@ static void wowconv_abc32_to_16(const long *abc32, unsigned char *out16)
     out16[5] = (unsigned char)((c >> 8) & 0xff);
 }
 
+/* ── WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295) ───────────────
+     EnumMetaFile hands the guest one METARECORD at a time, and a Win32 WMF is the
+     SAME BYTES a Win16 metafile is -- the format was frozen in 3.0 and Win32 only
+     wraps it -- so no field is converted here. What is checked is the walk, which
+     is the part that can go wrong silently:
+       METAHEADER (18 bytes)              METARECORD
+         +0  WORD  mtType  (1 mem, 2 disk)  +0 DWORD rdSize  -- in WORDS, header incl.
+         +2  WORD  mtHeaderSize (= 9 words) +4 WORD  rdFunction (0 = META_EOF)
+         +4  WORD  mtVersion                +6 WORD  rdParm[rdSize - 3]
+         +6  DWORD mtSize  (WORDS, header incl.)
+         +10 WORD  mtNoObjects  -- the HANDLETABLE's length, the callback's nObj
+         +12 DWORD mtMaxRecord
+         +16 WORD  mtNoParameters
+   ⚠ SIZES ARE IN WORDS. A walk that treats rdSize as bytes steps into the middle
+     of the second record and reads parameters as a function number -- a wrong
+     sequence that still looks like a sequence.
+   ⚠ A RECORD SHORTER THAN ITS OWN HEADER (rdSize < 3) WOULD NEVER ADVANCE, and a
+     record that claims more than the buffer holds would read past it; both are
+     REFUSED (0), never clamped. The version word is not checked: 0x0100 and 0x0300
+     both exist and nothing here depends on it.
+   The bound is the smaller of the buffer and mtSize, so trailing bytes after the
+   metafile proper are not walked as records. */
+#define WOWCONV_MF_HDR    18
+#define WOWCONV_MF_RECHDR 6
+static unsigned long wowconv_le32(const unsigned char *p)
+{
+    return (unsigned long)p[0] | ((unsigned long)p[1] << 8)
+         | ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+}
+/* Returns the byte offset of the first record (18), or 0 if this is not a WMF.
+   *nobj = mtNoObjects; *end = the byte length the records may occupy. */
+static unsigned long wowconv_mf_header(const unsigned char *p, unsigned long len,
+                                       unsigned *nobj, unsigned long *end)
+{
+    unsigned type, hsz;
+    unsigned long msz;
+    if (!p || len < WOWCONV_MF_HDR) return 0;
+    type = (unsigned)(p[0] | (p[1] << 8));
+    hsz  = (unsigned)(p[2] | (p[3] << 8));
+    if ((type != 1 && type != 2) || hsz != 9) return 0;
+    msz = wowconv_le32(p + 6);
+    if (msz > 0x7fffffffUL / 2) return 0;
+    msz *= 2;
+    if (msz < WOWCONV_MF_HDR) return 0;           /* says it has no room for itself */
+    if (nobj) *nobj = (unsigned)(p[10] | (p[11] << 8));
+    if (end)  *end  = (msz < len) ? msz : len;
+    return WOWCONV_MF_HDR;
+}
+/* The record at `off`: 1 and its byte length + function, or 0 if there is no
+   whole record there (off at or past `end`, rdSize < 3, or running past `end`). */
+static int wowconv_mf_record(const unsigned char *p, unsigned long end,
+                             unsigned long off, unsigned long *bytes, unsigned *func)
+{
+    unsigned long w;
+    if (!p || off >= end || end - off < WOWCONV_MF_RECHDR) return 0;
+    w = wowconv_le32(p + off);
+    if (w < 3 || w > (end - off) / 2) return 0;
+    if (bytes) *bytes = w * 2;
+    if (func)  *func  = (unsigned)(p[off + 4] | (p[off + 5] << 8));
+    return 1;
+}
+
 #endif /* WOWCONV_H */

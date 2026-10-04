@@ -17,7 +17,7 @@ One row is one numbered WOW call a system module's 16-bit code makes to the 32-b
 |---|---:|---:|---:|---:|---:|---:|
 | KERNEL | 202 | 33 | 9 | 6 | **12** | 0 |
 | USER | 441 | 211 | 197 | 196 | **5** | 4 |
-| GDI | 365 | 105 | 102 | 100 | **2** | 0 |
+| GDI | 365 | 107 | 102 | 102 | **0** | 0 |
 | KEYBOARD | 11 | 6 | 6 | 6 | **0** | 0 |
 | SHELL | 34 | 18 | 18 | 18 | **0** | 0 |
 | COMMDLG | 8 | 7 | 5 | 4 | **1** | 0 |
@@ -28,7 +28,7 @@ One row is one numbered WOW call a system module's 16-bit code makes to the 32-b
 | TOOLHELP | 3 | 0 | 0 | 0 | **0** | 0 |
 | WINNLS | 8 | 0 | 0 | 0 | **0** | 0 |
 | MMSYSTEM | 166 | 0 | 31 | 0 | **31** | 0 |
-| **all** | 1256 | 397 | 374 | 336 | **51** | 4 |
+| **all** | 1256 | 399 | 374 | 338 | **49** | 4 |
 
 Shelf (21): CALC.EXE, CARDFILE.EXE, CHARMAP.EXE, CLOCK.EXE, DDEML.DLL, LZEXPAND.DLL, MPLAYER.EXE, NOTEPAD.EXE, PACKAGER.EXE, PBRUSH.DLL, PBRUSH.EXE, PROGMAN.EXE, RECORDER.EXE, SOL.EXE, SOUNDREC.EXE, SYSEDIT.EXE, TASKMAN.EXE, TERMINAL.EXE, WINFILE.EXE, WINMINE.EXE, WRITE.EXE
 
@@ -42,8 +42,6 @@ Used by the shelf and unanswered, or stepped over on the rig.
 | KERNEL | `0x001` | FATALEXIT | `()` | values |  | 16: CALC CARDFILE CHARMAP LZEXPAND MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINMINE WRITE WINFILE* |
 | COMMDLG | `0x014` | PRINTDLG | `(ptr)` | callback | **STEPPED 14** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
 | KERNEL | `0x01d` | YIELD | `()` | values |  | 4: DDEML CARDFILE* PACKAGER* WRITE* |
-| GDI | `0x0af` | ENUMMETAFILE | `(word word segptr long)` | callback |  | 3: CARDFILE* PACKAGER* WRITE* |
-| GDI | `0x0b0` | PLAYMETAFILERECORD | `(word ptr ptr word)` | pointer |  | 3: CARDFILE* PACKAGER* WRITE* |
 | MMSYSTEM | `0x191` | WAVEOUTGETNUMDEVS | `()` | values |  | 2: MPLAYER SOUNDREC |
 | MMSYSTEM | `0x1f5` | WAVEINGETNUMDEVS | `()` | values |  | 2: MPLAYER SOUNDREC |
 | USER | `0x1d0` | DRAGOBJECT | `(word word word word word word)` | values |  | 2: PROGMAN WINFILE |
@@ -756,14 +754,12 @@ Unhandled first, then most-used.
 | `0x1e2` | seg1→imported thunk | 6 | ENABLESCROLLBAR | `(word word word)` | values | ✅ | ok 12 **STEPPED 20** | 0 |
 | `0x217` | seg1→imported thunk | 6 | NOTIFYWOW | `()` | values | ✅ | ok 117 **STEPPED 687** | 0 |
 
-## GDI — 365 ids, 105 handled, 2 gaps
+## GDI — 365 ids, 107 handled, 0 gaps
 
 Unhandled first, then most-used.
 
 | id | table | args | name | Wine signature | kind | handled | rig | shelf |
 |---|---|---:|---|---|---|---|---|---|
-| `0x0af` | seg1→imported thunk | 12 | ENUMMETAFILE | `(word word segptr long)` | callback | — |  | 3: CARDFILE* PACKAGER* WRITE* |
-| `0x0b0` | seg1→imported thunk | 12 | PLAYMETAFILERECORD | `(word ptr ptr word)` | pointer | — |  | 3: CARDFILE* PACKAGER* WRITE* |
 | `0x005` | seg1→imported thunk | 4 | SETRELABS | `(word word)` | values | — |  | 0 |
 | `0x008` | seg1→imported thunk | 4 | SETTEXTCHARACTEREXTRA | `(word s_word)` | values | — |  | 0 |
 | `0x00f` | seg1→imported thunk | 6 | OFFSETWINDOWORG | `(word s_word s_word)` | values | — |  | 0 |
@@ -1085,6 +1081,8 @@ Unhandled first, then most-used.
 | `0x096` | seg1→imported thunk | 2 | UNREALIZEOBJECT | `(word)` | values | ✅ | ok 239 | 3: PBRUSH SOL SOUNDREC |
 | `0x099` | seg1→imported thunk | 16 | CREATEIC | `(str str str ptr)` | pointer | ✅ | ok 25 | 3: CARDFILE PBRUSH WRITE |
 | `0x0a2` | seg1→imported thunk | 2 | GETBITMAPDIMENSION | `(word)` | values | ✅ | ok 2 | 3: CARDFILE* PACKAGER* WRITE* |
+| `0x0af` | seg1→imported thunk | 12 | ENUMMETAFILE | `(word word segptr long)` | callback | ✅ |  | 3: CARDFILE* PACKAGER* WRITE* |
+| `0x0b0` | seg1→imported thunk | 12 | PLAYMETAFILERECORD | `(word ptr ptr word)` | pointer | ✅ |  | 3: CARDFILE* PACKAGER* WRITE* |
 | `0x1ba` | seg1→imported thunk | 20 | CREATEDIBITMAP | `(word ptr long ptr ptr word)` | pointer | ✅ | ok 25 | 3: CHARMAP WINFILE WINMINE |
 | `0x015` | seg1→imported thunk | 10 | EXCLUDECLIPRECT | `(word s_word s_word s_word s_word)` | values | ✅ | ok 1 | 2: PBRUSH WINFILE* |
 | `0x018` | seg1→imported thunk | 10 | ELLIPSE | `(word s_word s_word s_word s_word)` | values | ✅ |  | 2: PBRUSH WRITE |
