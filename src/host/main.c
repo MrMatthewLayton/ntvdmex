@@ -4085,6 +4085,18 @@ static int async_inject_irq(unsigned irq)
         async_early_bail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
         return 0;
     }
+    /* s92 (#239): a line only a PROTECTED-MODE handler wants is not delivered into V86
+         through the IVT -- whose entry is our IRET stub, where it would be acknowledged
+         and lost. Left pending (return 0) for the PM path; see v86_deliver_dev_irq. */
+    if (irq >= 2 && g_dpmi_pm && g_pm_int[irq_pm_vec(irq)].client) {
+        unsigned v1 = vdd_pic_vector(&g_pic, (uint8_t)irq);
+        if (peekw(v1 * 4 + 2) == DOS_HDLR_SEG && peekw(v1 * 4) == DOS_IRET_STUB_OFF) {
+            ResumeThread(g_hcpu);
+            ASYNC_CTX_RELEASE();
+            async_early_bail(irq, 32);
+            return 0;
+        }
+    }
     ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
 
     fl = (WORD)efl;
@@ -19874,8 +19886,46 @@ static void wow32_ret_load(void)
 #define WOWSCHED_PATH CFG_("wowsched.txt")
 static int   g_wowsched_on = 0;
 static WORD  g_wow_dgsel   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
-static wowsched_slot_t g_ws_task;    /* the task parked at its own launch BOP       */
+/* s92 (#306): every task that is not running, parked (wowsched.h WOWSCHED_MAX). */
+static wowsched_slot_t g_ws_slots[WOWSCHED_MAX];
+static int   g_ws_rr = 0;            /* round-robin cursor for the yields            */
+static int   g_ww_nested;            /* defined with the nested run (wow_call16_sync_ex) */
 static DWORD g_ws_switches = 0;
+static int ws_free(void)
+{
+    int i;
+    for (i = 0; i < WOWSCHED_MAX; ++i) if (!g_ws_slots[i].used) return i;
+    return -1;
+}
+/* The next parked task other than `cur`, round robin; -1 if none. */
+static int ws_pick(WORD cur)
+{
+    int i, k;
+    for (k = 1; k <= WOWSCHED_MAX; ++k) {
+        i = (g_ws_rr + k) % WOWSCHED_MAX;
+        if (g_ws_slots[i].used && g_ws_slots[i].task != cur) { g_ws_rr = i; return i; }
+    }
+    return -1;
+}
+/* A task parked at its launch that has never run -- or, with `mid`, one parked
+   mid-work by the launch-first yield below; -1 if none. */
+static int ws_fresh(WORD cur)
+{
+    int i;
+    for (i = 0; i < WOWSCHED_MAX; ++i)
+        if (g_ws_slots[i].used && g_ws_slots[i].fresh && g_ws_slots[i].task != cur) return i;
+    return -1;
+}
+static int ws_runnable(WORD cur)
+{
+    int i;
+    for (i = 0; i < WOWSCHED_MAX; ++i)
+        if (g_ws_slots[i].used && (g_ws_slots[i].fresh || g_ws_slots[i].runnable)
+            && g_ws_slots[i].task != cur) return i;
+    return -1;
+}
+/* s92: WOWEXEC -- the first task resumed at (C). */
+static WORD g_ws_shell;
 
 /* krnl386's current-task word. 0xFFFF means "we do not know yet", which is NOT
    the same as 0 -- 0 is krnl386 saying "no task is current", and acting on the
@@ -22060,7 +22110,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            is exactly what makes resuming it later sound.
                          So: park the new task at this instruction, and send the
                            creator home through epilogue mode 25. */
-                    if (f.id == 0x74 && !g_ws_task.used) {
+                    int wsi = (f.id == 0x74) ? ws_free() : -1;
+                    if (f.id == 0x74 && wsi >= 0) {
                         DWORD tb = dpmi_sel_base(cur);
                         WORD  hinst = 0;
                         int   fromtdb = 0;
@@ -22079,7 +22130,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              own task a third time. It is VERIFIED at (C) below against
                              the value krnl386 itself writes, and a mismatch is loud. */
                         if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
-                        wowsched_save(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
+                        wowsched_save(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        g_ws_slots[wsi].fresh = 1;          /* s92: not run yet (#306) */
                         wow_task_dir_here(cur);             /* #164: its launch directory */
                         wow32_setret(&f, hinst);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
@@ -22120,24 +22172,23 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          is what a task that has just been given its turn back
                          should do.
 
-                       ⚠ TWO TASKS ONLY, and the code says so rather than
-                         pretending otherwise: `g_ws_task` holds "the task that is
-                         not running", which is a complete description of a
-                         two-task system and a wrong one the moment there is a
-                         third. A third task would need a real run queue, and
-                         krnl386 already maintains one (it links every task at
-                         `seg1:0x99ed` by the signed priority at TDB+0x08) -- walk
-                         that rather than inventing an order. */
+                       ★ s92 (#306): NO LONGER TWO TASKS ONLY. Every task that is not
+                         running sits in g_ws_slots; this yield goes ROUND ROBIN to the
+                         next one (ws_pick). Round robin and not krnl386's own priority
+                         list (seg1:0x99ed, TDB+0x08): every Win16 task here runs at the
+                         same priority, and the yield only happens when the running one
+                         has nothing to do. The other new yield is at GetMessage -- see
+                         "(E)" at the USER dispatch -- for a task launched and never run. */
                     else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
-                             && g_ws_task.used && g_ws_task.task != cur
-                             && cur != 0 && cur != 0xFFFF) {
-                        WORD to = g_ws_task.task;
+                             && cur != 0 && cur != 0xFFFF
+                             && (wsi = ws_pick(cur)) >= 0) {
+                        WORD to = g_ws_slots[wsi].task;
                         /* Written into the WAITING task's frame now; its epilogue
                            reads them whenever it is resumed, off its own stack. */
                         wow32_setret(&f, 0);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
-                        wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
-                        wowsched_swap(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
+                        wowsched_poke(g_ws_slots[wsi].modelin, WOW32_MODE_ORDINARY);
+                        wowsched_swap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
@@ -22552,6 +22603,39 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          flood of mouse moves cannot starve the thing we are here
                          to run. */
                     wowwin_pump(32);
+                    /* ── (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
+                         NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
+                         which only WOWEXEC's loop calls. An APPLICATION idles here, in our
+                         GetMessage, which blocks in the host; so a task it launched (Calc's
+                         WinHelp, a program started from Program Manager) stayed parked at
+                         its launch forever. Real USER yields inside an empty GetMessage, so
+                         this does too -- to a FRESH task only (one already running gets its
+                         turn at (D) or when this one retires), parked AT THIS BOP: EIP is
+                         not advanced, so on resume the GetMessage is simply issued again.
+                       ⚠ Not from inside anything: no callback in flight, no nested run, no
+                         modal loop -- a context swapped there would be resumed under a frame
+                         the other task cannot unwind. */
+                    if (g_wowsched_on && f.id == WOWUSER_GETMESSAGE && !g_wm_count
+                        && g_wc_depth == 0 && g_ww_nested == 0 && !wowdlg_active()) {
+                        WORD ycur = wowsched_curtask();
+                        int  ysi  = (ycur && ycur != 0xFFFF) ? ws_runnable(ycur) : -1;
+                        if (ysi >= 0) {
+                            WORD  yto = g_ws_slots[ysi].task;
+                            DWORD ymode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                            wowsched_poke(g_ws_slots[ysi].modelin, WOW32_MODE_ORDINARY);
+                            wowsched_swap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
+                            wowsched_setcur(yto);
+                            wow_task_chdir(yto, &p);
+                            ++g_ws_switches;
+                            p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, ycur);
+                            p = zput(p, " has an empty GetMessage -- YIELDING to task 0x");
+                            p = zhex(p, yto);
+                            p = zput(p, ", launched and never run or parked mid-work (#306); its GetMessage"
+                                        " is re-issued when it resumes\r\n");
+                            wowlog_flush(base, &p);
+                            return 1;
+                        }
+                    }
                     /* ── ★★★ GetMessage BLOCKS, AND THIS IS THE BLOCK. ─────────
                          There is no "no message" answer to GetMessage: a task with
                          an empty queue waits. The waiting is done HERE rather than
@@ -27898,6 +27982,15 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
           if (!g_irqn_pending[q]) continue;
           if (peekw(vec * 4 + 2) == DOS_HDLR_SEG
               && peekw(vec * 4) == DOS_IRET_STUB_OFF) {
+              /* ── s92 (#239): UNHOOKED IN REAL MODE IS NOT UNHOOKED. A DPMI client that
+                   installed a PROTECTED-MODE handler for the line owns it whatever mode
+                   the CPU is in (DPMI 0.9: a hardware interrupt is passed to the PM
+                   handler if there is one). ZAR hooks IRQ5 only in PM; while its start-up
+                   check polls DOS time, IRQ5 often became deliverable inside a real-mode
+                   excursion (0300h), here -- and was DROPPED. That is the intermittent
+                   silent ZAR: delivered only if it happened to wait for a 32-bit window.
+                   Kept pending for the PM path instead; dropped only if nobody wants it. */
+              if (g_dpmi_pm && g_pm_int[irq_pm_vec((unsigned)q)].client) continue;
               InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
               continue;
           }
@@ -33773,11 +33866,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 }
                                 p = zput(p, "\r\n");
                             }
-                            if (g_wowsched_on && g_ws_task.used
-                                && wowsched_curtask() == 0) {
+                            int wsc = g_wowsched_on ? ws_pick(0) : -1;
+                            if (wsc >= 0 && wowsched_curtask() == 0) {
                                 p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
                                             "(seg1:0xcd41) and task 0x");
-                                p = zhex(p, g_ws_task.task);
+                                p = zhex(p, g_ws_slots[wsc].task);
                                 p = zput(p, " is parked. Resuming it INSTEAD of reflecting this "
                                             "fault; the creator's remaining teardown is "
                                             "ABANDONED (selectors leak).\r\n");
@@ -33788,7 +33881,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      invariant, and a wrong hInstance is exactly the kind
                                      of thing that would otherwise fail three walls later
                                      with no trace back to here. */
-                                {   DWORD tb = dpmi_sel_base(g_ws_task.task);
+                                {   DWORD tb = dpmi_sel_base(g_ws_slots[wsc].task);
                                     if (tb) {
                                         const volatile BYTE *t =
                                             (const volatile BYTE *)(ULONG_PTR)tb;
@@ -33799,9 +33892,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     }
                                 }
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
-                                {   WORD to = g_ws_task.task;
-                                    wowsched_restore(&g_ws_task, tib);
+                                wowsched_poke(g_ws_slots[wsc].modelin, WOW32_MODE_ORDINARY);
+                                {   WORD to = g_ws_slots[wsc].task;
+                                    if (!g_ws_shell) g_ws_shell = to;   /* s92: WOWEXEC */
+                                    wowsched_restore(&g_ws_slots[wsc], tib);
                                     /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
                                          The creator zeroed it on its way out; the
                                          frame we are resuming was parked when it
@@ -34765,8 +34859,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     while (an && (ab[an-1] == '\r' || ab[an-1] == '\n'
                                   || ab[an-1] == ' ' || ab[an-1] == '\t')) --an;
                 }
-                if (!an) { const char *dflt = "C:\\AUTOEXEC.BAT";
-                           for (an = 0; dflt[an]; ++an) ab[an] = dflt[an]; }
+                /* ── s92 (#316): AND IT RUNS WITH ECHO OFF, AS STOCK's DOES. XP leaves an
+                     EMPTY C:\AUTOEXEC.BAT on every machine; the shell runs it with echo ON,
+                     and the end of a batch with echo on is a blank line and the PROMPT --
+                     which `prog > file` from cmd captured ahead of the program's own output
+                     (dospair LM6: ours "\r\nC:\...\DOS>\n\r\n" first; stock nothing). Stock's
+                     AUTOEXEC.NT begins `@echo off`. So the default is now a two-line batch
+                     the host writes -- `@echo off` and a CALL of C:\AUTOEXEC.BAT if there
+                     is one -- so the user's batch still runs, silently. Its short path must
+                     fit XP's 0x3F cap; if it cannot be made, the old answer stands. */
+                if (!an) {
+                    static char wrap[MAX_PATH];
+                    if (!wrap[0]) {
+                        char td[MAX_PATH], full[MAX_PATH], sp[MAX_PATH];
+                        DWORD tn = GetTempPathA(sizeof td, td), sn;
+                        HANDLE hw;
+                        if (tn && tn < sizeof td - 16) {
+                            wsprintfA(full, "%sNTVDMEXS.BAT", td);
+                            hw = CreateFileA(full, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                            if (hw != INVALID_HANDLE_VALUE) {
+                                static const char body[] = "@echo off\r\n"
+                                    "if exist C:\\AUTOEXEC.BAT call C:\\AUTOEXEC.BAT\r\n";
+                                DWORD wr = 0;
+                                WriteFile(hw, body, sizeof body - 1, &wr, NULL);
+                                CloseHandle(hw);
+                                sn = GetShortPathNameA(full, sp, sizeof sp);
+                                if (sn && sn <= 0x3F && wr == sizeof body - 1)
+                                    lstrcpynA(wrap, sp, sizeof wrap);
+                            }
+                        }
+                        if (!wrap[0]) lstrcpynA(wrap, "C:\\AUTOEXEC.BAT", sizeof wrap);
+                    }
+                    for (an = 0; wrap[an] && an < sizeof ab - 1; ++an) ab[an] = wrap[an];
+                }
                 if (an > 0x3F) an = 0x3F;          /* XP's own cap */
                 for (k = 0; k < an; ++k) nm[k] = (BYTE)ab[k];
                 nm[an] = 0;

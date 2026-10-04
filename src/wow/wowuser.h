@@ -9266,6 +9266,52 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          which is where non-client painting, sizing, activation and the system
          menu all come from. A window whose defaults are answered `0` is a window
          that looks right until someone uses it. */
+    /* ── s92 (#298): USER ids krnl386 calls from its own code (USER ids are USER's
+         ordinals). Named and answered on purpose; the call sites are in the #298 thread.
+       0x13a SignalProc(hTask/hModule, code, uExitFn, hInstance, hQueue) -- 0x40 a DLL
+         loaded, 0x80 one unloaded, 0x20 a task exit, 0x666 a task's #GP. Every krnl386
+         caller ignores the result. ⚠ USER's per-task cleanup on 0x20/0x666 (its windows,
+         hooks, timers) is NOT done here yet; the task's real windows go with the process.
+       0x190 FinalUserInit -- once, at the first task; the result is discarded. */
+    case 0x013a:
+    case 0x0190: {
+        int k = 0;
+        wu_puts(note, notecap, &k, f->id == 0x013a ? "SignalProc code 0x" : "FinalUserInit");
+        if (f->id == 0x013a) wu_puthex(note, notecap, &k, wow32_argw(f, 6), 4);
+        wu_puts(note, notecap, &k, " -> 0 (acknowledged)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+    /* ── 0x140 SysErrorBox(lpszText, lpszCaption, btn1, btn2, btn3) -- USER.320. krnl386's
+         GP-fault handler (seg1:0x326c) puts up "Application Error" with btn2 = SEB_CLOSE |
+         SEB_DEFBUTTON, then `cmp ax,1 / je` resumes (button 1) and anything else ends the
+         task. The answer is the 1-based index of the button pressed. Stepped over it
+         answered 0: the task ended with no box at all. Win32 has no SysErrorBox, so the
+         OS's MessageBox stands in: one button -> OK, two -> OK/Cancel, three ->
+         Abort/Retry/Ignore, each mapped back to the index of the button it replaces. */
+    case 0x0140: {
+        char text[256], cap[96];
+        WORD b[3];
+        int  idx[3], n = 0, i, k = 0, r;
+        UINT ty;
+        b[0] = wow32_argw(f, 4); b[1] = wow32_argw(f, 2); b[2] = wow32_argw(f, 0);
+        if (!wow32_argstr(f, 10, text, sizeof text)) text[0] = 0;
+        if (!wow32_argstr(f, 6, cap, sizeof cap)) lstrcpynA(cap, "Error", sizeof cap);
+        for (i = 0; i < 3; ++i) if (b[i] & 0x7FFF) idx[n++] = i + 1;
+        ty = n >= 3 ? MB_ABORTRETRYIGNORE : n == 2 ? MB_OKCANCEL : MB_OK;
+        wu_puts(note, notecap, &k, "SysErrorBox ");
+        wu_putq(note, notecap, &k, cap);
+        wu_puts(note, notecap, &k, ": ");
+        wu_putq(note, notecap, &k, text);
+        r = MessageBoxA(NULL, text, cap, ty | MB_ICONSTOP | MB_SETFOREGROUND | MB_TASKMODAL);
+        r = (r == IDCANCEL || r == IDRETRY) ? 1 : (r == IDIGNORE) ? 2 : 0;
+        r = n ? idx[r < n ? r : n - 1] : 0;
+        wu_puts(note, notecap, &k, " -> button 0x");
+        wu_puthex(note, notecap, &k, (DWORD)r, 2);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
     case WOWUSER_DEFWINDOWPROC: {
         WORD  hwnd = wow32_argw(f, DWP_ARG_HWND);
         WORD  msg  = wow32_argw(f, DWP_ARG_MSG);
