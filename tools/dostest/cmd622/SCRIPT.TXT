@@ -1,8 +1,0 @@
-prompt [$p]
-mkdir T91
-cd T91
-..\P_VER.COM
-cd
-cd ..
-rmdir T91
-exit
