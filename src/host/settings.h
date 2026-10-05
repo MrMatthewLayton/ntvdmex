@@ -78,6 +78,7 @@ typedef enum {
 typedef enum {
     SET_STR_FLOPPYA = 0, SET_STR_CDROM, SET_STR_SOUNDFONT,
     SET_STR_SHELL,
+    SET_STR_TEXTFONT,              /* #321 */
     SET_STR_COUNT
 } set_str_id;
 
@@ -319,6 +320,10 @@ static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
 /* #203: the COMMAND.COM the DOS prompt runs. Empty = Windows XP's own. The file is the
    user's to supply (a 6.22 copy is Microsoft's); cfg\shell.txt still outranks it. */
 { "DosPrompt",    IDC_S_SHELL,     "" },
+/* #321: the text-mode font. Empty = the default (Fixedsys + code page 437 Terminal, see
+   src/host/sysfont.h); otherwise the name of any font installed on this machine, laid
+   over the default character by character. NTVDMEX ships no font. Live. */
+{ "TextFont",     IDC_S_TEXTFONT,  "" },
 };
 
 /* ── WHERE A VALUE CAME FROM. (GH #144) ─────────────────────────────────────────

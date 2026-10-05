@@ -134,6 +134,9 @@ typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
 #include "vdd_pic.h"
 #include "vdd_video.h"
 #include "sysfont.h"        /* #322: the VGA tables from the system fonts */
+/* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
+static sysfont_report_t g_sysfont_rep;
+static char             g_textfont_live[NTVDMEX_PATH_MAX];
 #include "vdd_input.h"
 #include "vdd_speaker.h"
 #include "vdd_joy.h"
@@ -12101,7 +12104,8 @@ static void settings_log_sources(void)
         if (i == SET_STR_SHELL && g_shell_ovr) {
             q = zput(q, " OVERRIDDEN by "); q = zput(q, g_shell_ovr);
         }
-        if (i == SET_STR_FLOPPYA || i == SET_STR_SHELL) q = zput(q, "\r\n");
+        if (i == SET_STR_FLOPPYA || i == SET_STR_SHELL || i == SET_STR_TEXTFONT)
+            q = zput(q, "\r\n");
         else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why_s(i));
                q = zput(q, ", GH #136)\r\n"); }
     }
@@ -12507,9 +12511,25 @@ static void aspect_auto_follow(HWND h)
                                                          ? g_winsize_live : g_set.v[SET_WINSIZE]); }
 }
 
+/* #321: the text-mode font, live. Rebuilt only when the NAME changed -- a build draws
+   ~1,500 glyphs -- then copied into guest memory and redrawn. Logged, so a run says
+   which font it was drawing with from that point on. */
+static void settings_apply_textfont(void)
+{
+    char lb[480], *lq = lb;
+    if (!lstrcmpA(g_textfont_live, g_set.s[SET_STR_TEXTFONT])) return;
+    lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
+    lq = zput(lq, "settings: text font changed -- ");
+    lq = zput(lq, sysfont_build(g_textfont_live, &g_sysfont_rep));
+    lq = zput(lq, "\r\n");
+    log_append(LOG_PATH, lb, lq);
+    vdd_video_refresh_fonts(&g_vid);
+}
+
 static void settings_apply_live(HWND h)
 {
     settings_apply(h, &g_set, 1);
+    settings_apply_textfont();
     settings_apply_present(&g_pd, &g_set);
     /* ⚠ THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
          while the window is 4:3-shaped and leaving it alone would show the lock as
@@ -12645,6 +12665,117 @@ static void settings_cd_radios(int phys)
                           IDC_S_CD_BROWSE, host_has_cdrom(), phys);
 }
 
+/* ── #321: THE TEXT-MODE FONT ROW. ───────────────────────────────────────────────────
+     The list is every fixed-pitch font installed on this PC plus "(Default)", which
+     stores as the empty string. Choosing one builds the tables it WOULD produce into a
+     private copy -- the machine is untouched until OK/Apply -- and the page shows that
+     copy: a line of text and a line of the DOS graphics characters, plus how many
+     characters the font supplied and whether the default itself is degraded. */
+#define TEXTFONT_DEFAULT_ITEM "(Default: Fixedsys and Terminal)"
+static sysfont_tables_t g_tf_prev;
+static sysfont_report_t g_tf_prev_rep;
+
+static int CALLBACK settings_font_enum(const LOGFONTA *lf, const TEXTMETRICA *tm,
+                                       DWORD type, LPARAM lp)
+{
+    HWND c = (HWND)lp;
+    (void)tm; (void)type;
+    if ((lf->lfPitchAndFamily & 3) != FIXED_PITCH || lf->lfFaceName[0] == '@') return 1;
+    if (SendMessageA(c, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)lf->lfFaceName) == CB_ERR)
+        SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)lf->lfFaceName);
+    return 1;
+}
+
+static void settings_textfont_fill(void)
+{
+    HWND c = settings_ctl(IDC_S_TEXTFONT);
+    HDC dc;
+    LOGFONTA lf;
+    if (!c) return;
+    SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)TEXTFONT_DEFAULT_ITEM);
+    ZeroMemory(&lf, sizeof lf);
+    lf.lfCharSet = DEFAULT_CHARSET;
+    dc = GetDC(NULL);
+    if (dc) { EnumFontFamiliesExA(dc, &lf, (FONTENUMPROCA)settings_font_enum, (LPARAM)c, 0);
+              ReleaseDC(NULL, dc); }
+    SendMessageA(c, CB_SETDROPPEDWIDTH, 240, 0);
+}
+
+/* The selected item as the stored string: "" for the default. */
+static void settings_textfont_get(char *out, int cap)
+{
+    HWND c = settings_ctl(IDC_S_TEXTFONT);
+    LRESULT sel = c ? SendMessageA(c, CB_GETCURSEL, 0, 0) : CB_ERR;
+    char t[NTVDMEX_PATH_MAX];
+    out[0] = 0;
+    if (sel == CB_ERR) return;
+    t[0] = 0;
+    SendMessageA(c, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)t);
+    if (lstrcmpA(t, TEXTFONT_DEFAULT_ITEM)) lstrcpynA(out, t, cap);
+}
+
+static void settings_textfont_preview(void)
+{
+    char face[NTVDMEX_PATH_MAX], t[200];
+    HWND info = settings_ctl(IDC_S_TEXTFONT_INFO), view = settings_ctl(IDC_S_TEXTFONT_VIEW);
+    settings_textfont_get(face, sizeof face);
+    sysfont_build_into(face, &g_tf_prev, &g_tf_prev_rep);
+    if (!face[0])
+        lstrcpyA(t, "Fixedsys for text and Terminal (code page 437) for line drawing.");
+    else if (g_tf_prev_rep.user == SYSFONT_USER_OK && g_tf_prev_rep.user_cp)
+        wsprintfA(t, "This font draws code page %d, not 437: some line-drawing characters "
+                  "will show as letters.", g_tf_prev_rep.user_cp);
+    else if (g_tf_prev_rep.user == SYSFONT_USER_OK)
+        wsprintfA(t, "%d of 253 characters come from this font; the rest from the default.",
+                  g_tf_prev_rep.user_n[2]);
+    else if (g_tf_prev_rep.user == SYSFONT_USER_NOSIZE)
+        lstrcpyA(t, "This font has no 8-pixel-wide size, so the default is used.");
+    else
+        lstrcpyA(t, "This font is not installed on this computer, so the default is used.");
+    if (sysfont_default_degraded(&g_tf_prev_rep))
+        lstrcatA(t, " Warning: a code page 437 font file is missing; line drawing may be wrong.");
+    if (info) SetWindowTextA(info, t);
+    if (view) InvalidateRect(view, NULL, TRUE);
+}
+
+static void settings_textfont_select(const char *face)
+{
+    HWND c = settings_ctl(IDC_S_TEXTFONT);
+    LRESULT i;
+    if (!c) return;
+    i = SendMessageA(c, CB_FINDSTRINGEXACT, (WPARAM)-1,
+                     (LPARAM)(face[0] ? face : TEXTFONT_DEFAULT_ITEM));
+    if (i == CB_ERR && face[0])              /* stored, but no longer installed: keep it */
+        i = SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)face);
+    SendMessageA(c, CB_SETCURSEL, (WPARAM)(i == CB_ERR ? 0 : i), 0);
+    settings_textfont_preview();
+}
+
+/* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
+static void settings_textfont_draw(const DRAWITEMSTRUCT *di)
+{
+    static const char TXT[] = "Hello, DOS!  0123456789  ";
+    unsigned char row[2][64];
+    static unsigned char px[32][64];
+    struct { BITMAPINFOHEADER h; RGBQUAD pal[2]; } bi;
+    int i, y, x0, y0;
+    RECT r = di->rcItem;
+    for (i = 0; i < 64; ++i) {
+        row[0][i] = (unsigned char)(i < (int)sizeof TXT - 1 ? TXT[i] : 0x80 + (i - (int)sizeof TXT + 1));
+        row[1][i] = (unsigned char)(i < 48 ? 0xB0 + i : 0xE0 + (i - 48));
+    }
+    for (y = 0; y < 32; ++y)
+        for (i = 0; i < 64; ++i) px[y][i] = g_tf_prev.t16[row[y / 16][i]][y % 16];
+    ZeroMemory(&bi, sizeof bi);
+    bi.h.biSize = sizeof bi.h; bi.h.biWidth = 512; bi.h.biHeight = -32;
+    bi.h.biPlanes = 1; bi.h.biBitCount = 1; bi.h.biCompression = BI_RGB;
+    bi.pal[1].rgbRed = bi.pal[1].rgbGreen = bi.pal[1].rgbBlue = 0xAA;
+    FillRect(di->hDC, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    x0 = r.left + ((r.right - r.left) - 512) / 2; if (x0 < r.left) x0 = r.left;
+    y0 = r.top + ((r.bottom - r.top) - 32) / 2;   if (y0 < r.top)  y0 = r.top;
+    SetDIBitsToDevice(di->hDC, x0, y0, 512, 32, 0, 0, 0, 32, px, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+}
+
 static void settings_to_dialog(const ntvdmex_settings *s)
 {
     char t[NTVDMEX_PATH_MAX]; int i;
@@ -12683,6 +12814,7 @@ static void settings_to_dialog(const ntvdmex_settings *s)
         if (c) SetWindowTextA(c, s->s[i]);
     }
     settings_shell_radios(s->s[SET_STR_SHELL][0] != 0);
+    settings_textfont_select(s->s[SET_STR_TEXTFONT]);                 /* #321 */
     settings_floppy_radios(s->v[SET_FLOPPYPHYS] != 0);                /* s84 */
     settings_cd_radios(s->v[SET_CDPHYS] != 0);
     /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -12745,6 +12877,8 @@ static void settings_from_dialog(ntvdmex_settings *n)
         GetWindowTextA(c, t, NTVDMEX_PATH_MAX);
         settings_strcpy(n->s[i], t, NTVDMEX_PATH_MAX);
     }
+    /* #321: a drop-list's text is its item; the default item stores as "". */
+    settings_textfont_get(n->s[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
     /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
     {   HWND xp = settings_ctl(IDC_S_SHELL_XP);
         if (xp && SendMessageA(xp, BM_GETCHECK, 0, 0) == BST_CHECKED) n->s[SET_STR_SHELL][0] = 0;
@@ -12838,6 +12972,14 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
             di->rcItem.left += 3;
             DrawTextA(di->hDC, t, -1, &di->rcItem, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         }
+        return TRUE;
+    }
+    if (msg == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlID == IDC_S_TEXTFONT_VIEW) {
+        settings_textfont_draw((DRAWITEMSTRUCT *)lp);                 /* #321 */
+        return TRUE;
+    }
+    if (msg == WM_COMMAND && LOWORD(wp) == IDC_S_TEXTFONT && HIWORD(wp) == CBN_SELCHANGE) {
+        settings_textfont_preview();
         return TRUE;
     }
     if (msg == WM_COMMAND && LOWORD(wp) == IDC_S_SPEEDMODE && HIWORD(wp) == CBN_SELCHANGE) {
@@ -12944,6 +13086,7 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
                          rc.right - rc.left, rc.bottom - rc.top, SWP_HIDEWINDOW);
         }
         settings_fill_combos();
+        settings_textfont_fill();                 /* #321: the installed fonts */
         /* ⚠ THE SAVED COPY, NOT THE LIVE ONE. This dialog edits the configuration
              that persists; showing session overrides here would mean pressing OK
              after changing an unrelated setting silently made every display
@@ -31800,7 +31943,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
     /* #322: no font data ships -- the tables come from the system's fonts. Into the
        report buffer: a log_append here would be erased when the report is rewritten. */
-    p = zput(p, "STAGE1: "); p = zput(p, sysfont_build()); p = zput(p, "\r\n");
+    /* #321: the TextFont setting is laid over the default; g_set is loaded by now. */
+    p = zput(p, "STAGE1: ");
+    p = zput(p, sysfont_build(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
+    p = zput(p, "\r\n");
+    if (sysfont_default_degraded(&g_sysfont_rep))
+        p = zput(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
+                    "is missing, so box drawing may show accented letters (#321)\r\n");
+    lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
     vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS

@@ -88,6 +88,9 @@
 #define IDC_S_GUSDMA          274   /* combo:    #235 GUS DMA                          */
 #define IDC_S_MPUADDR         275   /* combo:    #235 MPU-401 base                     */
 #define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
+#define IDC_S_TEXTFONT        276   /* combo:    #321 text-mode font (the stored string) */
+#define IDC_S_TEXTFONT_INFO   277   /* static:   #321 what the chosen font supplies      */
+#define IDC_S_TEXTFONT_VIEW   278   /* static:   #321 owner-drawn preview                */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_VOLUME          280

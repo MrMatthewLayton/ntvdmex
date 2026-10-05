@@ -74,6 +74,8 @@ IDI_MAINICON ICON "MAINICON.ico"
 #define CBS_HASSTRINGS     0x0200L
 #define CBS_OWNERDRAWFIXED 0x0010L
 #define SS_LEFT            0x00000000L
+#define SS_OWNERDRAW       0x0000000DL
+#define CBS_SORT           0x0100L
 #define IDOK               1
 #define IDCANCEL           2
 #endif
@@ -242,6 +244,16 @@ BEGIN
                     BS_AUTOCHECKBOX | WS_TABSTOP, 14, 148, 180, 10
     CONTROL         "Show On-Screen &Messages", IDC_S_OSD, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 202, 148, 188, 10
+
+    /* #321: any font installed on this PC, over the default character by character.
+       The list is filled at run time from the installed fixed-pitch fonts; the preview
+       is drawn from the tables a build for the selected font would produce. */
+    GROUPBOX        "Text Mode Font", -1, 6, 168, 392, 56
+    LTEXT           "&Font:", -1, 14, 180, 40, 8
+    COMBOBOX        IDC_S_TEXTFONT, 56, 178, 160, 140,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    LTEXT           "", IDC_S_TEXTFONT_INFO, 222, 177, 168, 17
+    CONTROL         "", IDC_S_TEXTFONT_VIEW, "Static", SS_OWNERDRAW, 14, 196, 376, 24
 END
 
 /* ── PAGE: AUDIO ────────────────────────────────────────────────────────────────

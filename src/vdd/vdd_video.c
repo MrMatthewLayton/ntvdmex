@@ -3937,15 +3937,32 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 /* Copy the three character generators into guest-visible memory so the pointer handed
    out by INT 10h AH=11h AL=30h resolves to real glyph data. The tables are filled at
    start-up from the system's fonts (#322, src/host/sysfont.h) before this runs. */
-void vdd_video_install_fonts(video_state *st)
+/* #321: copy the three tables into guest memory again after the font has changed, and
+   redraw. Only the glyphs: the save-pointer table and the vectors install_fonts writes
+   are a POST job a program may since have re-pointed. A font a program loaded itself
+   (AH=11h, user_font_on) is its own and stays. */
+int vdd_video_refresh_fonts(video_state *st)
 {
     uint8_t *f16, *f8, *f14;
     unsigned c, y;
-    if (!st || !st->bus) return;           /* called before the VDD joined the bus */
+    if (!st || !st->bus) return 0;
     f16 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X16_SEG, 0);
     f8  = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X8_SEG, 0);
     f14 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X14_SEG, 0);
-    if (!f16 || !f8 || !f14) return;
+    if (!f16 || !f8 || !f14) return 0;
+    for (c = 0; c < 256; ++c) {
+        for (y = 0; y < 16; ++y) f16[c * 16 + y] = vga_font_8x16[c][y];
+        for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];
+        for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
+    }
+    st->dirty = 1;
+    return 1;
+}
+
+void vdd_video_install_fonts(video_state *st)
+{
+    if (!st || !st->bus) return;           /* called before the VDD joined the bus */
+    if (!vdd_video_refresh_fonts(st)) return;
     /* All three are REAL designs at their own size (#322: from the system's fonts, see
        src/host/sysfont.h -- the 8x8 is Terminal's own 8x8). The 8x8 used to be
        manufactured here by OR-ing adjacent row pairs of the 8x16 -- which squashes a
@@ -3953,11 +3970,6 @@ void vdd_video_install_fonts(video_state *st)
        out as noise. Skyroads asks for this exact table (BH=3 and BH=4, measured) and
        draws its own text from the pointer we return, so that hack WAS the game's
        garbled text. Never derive a font. */
-    for (c = 0; c < 256; ++c) {
-        for (y = 0; y < 16; ++y) f16[c * 16 + y] = vga_font_8x16[c][y];
-        for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];
-        for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
-    }
     vbe_pm_install(st);                    /* #53: the 4F0Ah block, beside them */
     /* ── #266: THE SAVE POINTER TABLE, AND 0040:00A8 POINTING AT IT. ──────────────────
          0040:00A8 was never written: it held whatever the VDM started with -- on the

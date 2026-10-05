@@ -846,6 +846,8 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
 
 /* Publish both fonts into guest memory. Call once at start-up. */
 void vdd_video_install_fonts(video_state *st);
+/* #321: re-copy the glyph tables after a font change and redraw; 0 = not mapped yet. */
+int  vdd_video_refresh_fonts(video_state *st);
 
 /* ── THE REGISTER FILE, AS TEXT. (docs/inventory/vga.md) ─────────────────────────
      Writes `STAGE2: VGAREG ...` lines into `out` and returns the bytes written.

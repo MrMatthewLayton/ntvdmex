@@ -18,8 +18,12 @@
  * from one character cell to the next. A glyph taller than its cell loses rows that
  * are blank in every glyph of that font first.
  *
- * The choice of font is temporary by decision (#322): the font is to become a user
- * setting (#321). */
+ * ── #321: THE USER MAY CHOOSE ANOTHER INSTALLED FONT. ─────────────────────────────
+ * NTVDMEX still ships none: the Settings page lists the fixed-pitch fonts installed on
+ * this machine, and whatever the user picks (or installs themselves) is laid OVER the
+ * default above, one character at a time. Each of the 256 codes is mapped through
+ * Unicode, so a modern font supplies its own box drawing, Greek and symbols; a code the
+ * font has no glyph for keeps the default glyph. An empty name is the default. */
 #ifndef SYSFONT_H
 #define SYSFONT_H
 
@@ -34,6 +38,24 @@ typedef struct {
     unsigned char g[256][SYSFONT_MAXH];        /* glyphs, h rows each           */
     int   ok;
 } sysfont_face_t;
+
+/* One complete set of character generators, so a build can go somewhere other than the
+   live tables -- the Settings page previews a font without touching the machine. */
+typedef struct {
+    unsigned char t8[256][8], t14[256][14], t16[256][16];
+} sysfont_tables_t;
+
+/* What one build did. `line` is the STAGE1 log line; the rest is about the chosen font,
+   for the log and the Settings page. */
+enum { SYSFONT_USER_NONE = 0, SYSFONT_USER_OK, SYSFONT_USER_MISSING, SYSFONT_USER_NOSIZE };
+typedef struct {
+    char line[400];
+    int  user;                     /* SYSFONT_USER_*                                  */
+    int  user_n[3];                /* glyphs taken from it for the 8x8, 8x14, 8x16    */
+    int  user_tt;                  /* it is TrueType                                  */
+    int  user_cp;                  /* an OEM raster font's code page when not 437, else 0 */
+    int  degraded;                 /* the DEFAULT is not the code page 437 one        */
+} sysfont_report_t;
 
 /* Draw one byte in `f` into a 1bpp DIB and read back its rows. */
 static void sysfont_render(HDC dc, unsigned char *bits, sysfont_face_t *f, unsigned char ch,
@@ -203,28 +225,121 @@ static void sysfont_fit(const sysfont_face_t *f, unsigned char ch, int boxblock,
     }
 }
 
-/* Fill vga_font_8x8/8x14/8x16. Returns a one-line summary for the log. */
-static const char *sysfont_build(void)
+/* ── #321: lay the user's font over one table (`tab`: 256 glyphs of `H` rows). ────────
+     Returns the number of glyphs it supplied, or -SYSFONT_USER_* when it supplied none.
+     ⚠ GDI SUBSTITUTES SILENTLY: ask for a face that is not installed and CreateFont hands
+       back the nearest match. The face actually selected is compared with the one asked
+       for, so an uninstalled font is reported, never drawn as something else.
+     A TrueType face is asked for at exactly the cell height and 8 pixels wide, drawn
+     without antialiasing, and asked per character whether it HAS a glyph. A raster face
+     can only offer the sizes it was made in, so it must have an 8-pixel-wide size no
+     taller than the cell; its own code page decides which characters it can supply. */
+static int sysfont_user(HDC dc, unsigned char *bits, sysfont_face_t *f, const char *face,
+                        int H, unsigned char *tab, sysfont_report_t *r)
 {
-    static char sum[200];
-    static sysfont_face_t fx, t8, t14, t16;            /* static: ~8 KB each */
-    BITMAPINFO bi;
+    TEXTMETRICA tm;
+    char got[LF_FACESIZE];
+    HFONT old;
+    unsigned c;
+    int tt, oem, crop, n = 0, want;
+    static unsigned char has[256];
+    f->ok = 0;
+    /* A raster face that has no 8-wide size at the cell height may have a shorter one
+       (Terminal: 8x8 and 8x12, but 12x16) -- try each height down to 8 and centre it,
+       the way the default uses Terminal's 8x12 in the 8x16 table. */
+    for (want = H; ; --want) {
+        f->font = CreateFontA(want, 8, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                              FIXED_PITCH | FF_MODERN, face);
+        if (!f->font) return -SYSFONT_USER_MISSING;
+        old = (HFONT)SelectObject(dc, f->font);
+        got[0] = 0;
+        GetTextFaceA(dc, sizeof got, got);
+        GetTextMetricsA(dc, &tm);
+        SelectObject(dc, old);
+        if (lstrcmpiA(got, face)) { DeleteObject(f->font); f->font = NULL; return -SYSFONT_USER_MISSING; }
+        tt  = (tm.tmPitchAndFamily & TMPF_TRUETYPE) != 0;
+        f->w = tm.tmAveCharWidth;
+        f->h = tm.tmHeight;
+        if (f->h >= 1 && f->h <= SYSFONT_MAXH && (tt || (f->w == 8 && f->h <= H))) break;
+        DeleteObject(f->font); f->font = NULL;
+        if (tt || want <= 8) return -SYSFONT_USER_NOSIZE;
+    }
+    oem = tm.tmCharSet == OEM_CHARSET;
+    r->user_tt = tt;
+    /* An OEM raster font draws the machine's OEM code page: on a UK XP that is 850, whose
+       letters sit where 437 has box pieces. Drawn as chosen, but said. */
+    if (!tt && oem && GetOEMCP() != 437) r->user_cp = (int)GetOEMCP();
+    old = (HFONT)SelectObject(dc, f->font);
+    for (c = 0; c < 256; ++c) {
+        RECT r = { 0, 0, 16, SYSFONT_MAXH };
+        char in = (char)c;
+        WCHAR wc = 0;
+        WORD gi = 0xFFFF;
+        unsigned char ansi = 0;
+        int y;
+        has[c] = 0;
+        for (y = 0; y < SYSFONT_MAXH; ++y) f->g[c][y] = 0;
+        if (c == 0 || c == 0x20 || c == 0xFF) continue;         /* blank in every font */
+        FillRect(dc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        SetTextColor(dc, RGB(255, 255, 255));
+        SetBkColor(dc, RGB(0, 0, 0));
+        SetBkMode(dc, OPAQUE);
+        if (tt) {
+            if (MultiByteToWideChar(437, MB_USEGLYPHCHARS, &in, 1, &wc, 1) != 1) continue;
+            if (GetGlyphIndicesW(dc, &wc, 1, &gi, GGI_MARK_NONEXISTING_GLYPHS) == GDI_ERROR
+                || gi == 0xFFFF) continue;
+            TextOutW(dc, 0, 0, &wc, 1);
+        } else if (oem) {
+            TextOutA(dc, 0, 0, &in, 1);                         /* its own OEM code page */
+        } else {
+            if (!sysfont_is_text(c, &ansi)) continue;
+            TextOutA(dc, 0, 0, (LPCSTR)&ansi, 1);
+        }
+        GdiFlush();
+        for (y = 0; y < f->h; ++y) f->g[c][y] = bits[y * 4];
+        has[c] = 1;
+    }
+    SelectObject(dc, old);
+    DeleteObject(f->font); f->font = NULL;
+    crop = f->h > H ? sysfont_blank_top(f) : 0;
+    for (c = 0; c < 256; ++c) {
+        if (!has[c]) continue;
+        sysfont_fit(f, (unsigned char)c, sysfont_is_boxblock(c), tab + c * (unsigned)H, H, crop);
+        ++n;
+    }
+    f->ok = 1;
+    return n;
+}
+
+/* Build all three tables into `t`: the default (above), then the chosen `face` over it
+   when one is given. Fills `r` and returns r->line, the STAGE1 log line. */
+static const char *sysfont_build_into(const char *face, sysfont_tables_t *t, sysfont_report_t *r)
+{
+    char *sum = r->line;
+    static sysfont_face_t fx, t8, t14, t16, uf;        /* static: ~8 KB each */
+    struct { BITMAPINFOHEADER h; RGBQUAD pal[2]; } bi;  /* 1bpp needs BOTH entries */
     void *bits = NULL;
     HDC dc = CreateCompatibleDC(NULL);
     HBITMAP bmp, oldbmp;
     unsigned c;
     int crop_fx = 0;
     const char *src8 = "GDI by name", *src12 = "GDI by name";
-    if (!dc) return "sysfont: no DC -- tables left empty";
+    ZeroMemory(r, sizeof *r);
+    ZeroMemory(t, sizeof *t);
+    if (!dc) { lstrcpyA(sum, "sysfont: no DC -- tables left empty"); return sum; }
     ZeroMemory(&bi, sizeof bi);
-    bi.bmiHeader.biSize = sizeof bi.bmiHeader;
-    bi.bmiHeader.biWidth = 16;
-    bi.bmiHeader.biHeight = -SYSFONT_MAXH;              /* top-down */
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 1;
-    bi.bmiHeader.biCompression = BI_RGB;
-    bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    if (!bmp || !bits) { DeleteDC(dc); return "sysfont: no DIB -- tables left empty"; }
+    bi.h.biSize = sizeof bi.h;
+    bi.h.biWidth = 16;
+    bi.h.biHeight = -SYSFONT_MAXH;                      /* top-down */
+    bi.h.biPlanes = 1;
+    bi.h.biBitCount = 1;
+    bi.h.biCompression = BI_RGB;
+    bi.pal[1].rgbRed = bi.pal[1].rgbGreen = bi.pal[1].rgbBlue = 255;
+    bmp = CreateDIBSection(dc, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!bmp || !bits) {
+        DeleteDC(dc); lstrcpyA(sum, "sysfont: no DIB -- tables left empty"); return sum;
+    }
     oldbmp = (HBITMAP)SelectObject(dc, bmp);
 
     sysfont_open(dc, (unsigned char *)bits, &fx,  "Fixedsys", ANSI_CHARSET, 0);
@@ -256,11 +371,25 @@ static const char *sysfont_build(void)
             unsigned char ansi = 0;
             int text = fx.ok && sysfont_is_text(c, &ansi);
             int bb = sysfont_is_boxblock(c);
-            if (t8.ok) sysfont_fit(&t8, (unsigned char)c, bb, vga_font_8x8[c], 8, 0);
-            if (text)     sysfont_fit(&fx, ansi, 0, vga_font_8x14[c], 14, crop_fx);
-            else if (g14) sysfont_fit(g14, (unsigned char)c, bb, vga_font_8x14[c], 14, 0);
-            if (text)     sysfont_fit(&fx, ansi, 0, vga_font_8x16[c], 16, crop_fx);
-            else if (g16) sysfont_fit(g16, (unsigned char)c, bb, vga_font_8x16[c], 16, 0);
+            if (t8.ok) sysfont_fit(&t8, (unsigned char)c, bb, t->t8[c], 8, 0);
+            if (text)     sysfont_fit(&fx, ansi, 0, t->t14[c], 14, crop_fx);
+            else if (g14) sysfont_fit(g14, (unsigned char)c, bb, t->t14[c], 14, 0);
+            if (text)     sysfont_fit(&fx, ansi, 0, t->t16[c], 16, crop_fx);
+            else if (g16) sysfont_fit(g16, (unsigned char)c, bb, t->t16[c], 16, 0);
+        }
+    }
+
+    if (face && face[0]) {                              /* #321: the user's choice over it */
+        int i, v[3];
+        v[0] = sysfont_user(dc, (unsigned char *)bits, &uf, face, 8,  &t->t8[0][0],  r);
+        v[1] = sysfont_user(dc, (unsigned char *)bits, &uf, face, 14, &t->t14[0][0], r);
+        v[2] = sysfont_user(dc, (unsigned char *)bits, &uf, face, 16, &t->t16[0][0], r);
+        r->user = SYSFONT_USER_MISSING;
+        for (i = 0; i < 3; ++i) {
+            r->user_n[i] = v[i] > 0 ? v[i] : 0;
+            if (v[i] >= 0) r->user = SYSFONT_USER_OK;
+            else if (r->user != SYSFONT_USER_OK && v[i] == -SYSFONT_USER_NOSIZE)
+                r->user = SYSFONT_USER_NOSIZE;
         }
     }
 
@@ -270,12 +399,47 @@ static const char *sysfont_build(void)
     if (t8.font) DeleteObject(t8.font);
     if (t14.font) DeleteObject(t14.font);
     DeleteDC(dc);
+    r->degraded = !fx.ok || !t8.ok || !t14.ok
+                  || src8[0] == 'G' || src12[0] == 'G';     /* "GDI by name" */
     wsprintfA(sum, "sysfont: Fixedsys %s %dx%d (blank top %d); Terminal-437 8x8 %s %dx%d from %s, "
                    "8x12 (for 8x14 and 8x16) %s %dx%d from %s",
               fx.ok ? "ok" : "MISSING", fx.w, fx.h, crop_fx,
               t8.ok ? "ok" : "MISSING", t8.w, t8.h, src8,
               t14.ok ? "ok" : "MISSING", t14.w, t14.h, src12);
+    if (face && face[0]) {
+        static const char *const WHY[] = { "", "", "NOT INSTALLED -- default used",
+                                           "has no 8-pixel-wide size -- default used" };
+        int k = lstrlenA(sum);
+        if (r->user == SYSFONT_USER_OK)
+            wsprintfA(sum + k, "; TextFont \"%.60s\" (%s): glyphs 8x8 %d, 8x14 %d, 8x16 %d of 253, "
+                      "the rest default%s", face, r->user_tt ? "TrueType" : "raster",
+                      r->user_n[0], r->user_n[1], r->user_n[2],
+                      r->user_cp ? " -- an OEM font NOT in code page 437" : "");
+        else
+            wsprintfA(sum + k, "; TextFont \"%.60s\" %s", face, WHY[r->user]);
+    }
     return sum;
+}
+
+/* The DEFAULT is degraded when a face is missing or a Terminal face had to come from
+   GDI by name: on a machine whose OEM code page is not 437 that draws accented letters
+   where box pieces belong. Said in the log and on the Settings page rather than drawn
+   wrong in silence. */
+static int sysfont_default_degraded(const sysfont_report_t *r) { return r->degraded; }
+
+/* Build into the LIVE tables (vga_font_8x8/8x14/8x16). Staged first and copied in one
+   pass, so a frame drawn mid-build never mixes two fonts for long. */
+static const char *sysfont_build(const char *face, sysfont_report_t *r)
+{
+    static sysfont_tables_t stage;
+    unsigned c, y;
+    sysfont_build_into(face, &stage, r);
+    for (c = 0; c < 256; ++c) {
+        for (y = 0; y < 8;  ++y) vga_font_8x8[c][y]  = stage.t8[c][y];
+        for (y = 0; y < 14; ++y) vga_font_8x14[c][y] = stage.t14[c][y];
+        for (y = 0; y < 16; ++y) vga_font_8x16[c][y] = stage.t16[c][y];
+    }
+    return r->line;
 }
 
 #endif /* SYSFONT_H */
