@@ -17,7 +17,7 @@
 # DOS oracle scratch: install control floppies, source-disk copies, run temporaries
 /scripts/dosoracle/_build/
 
-# Native off-VM test binaries: rebuilt by tests/probes/dos/run.sh on every run, so
+# Native off-VM test binaries: rebuilt by scripts/offvm.sh on every run, so
 # tracking them means binary churn in every commit. Repo convention is that the
 # guest .COM binaries ARE tracked (they cannot be assembled on the target) and
 # these are NOT.
@@ -151,13 +151,11 @@ tools/score/probe-cache.json
 /scripts/wowtriage.sh
 /scripts/xp-vm.sh
 /scripts/xp.py
-# committed probe builds are rebuilt (phase 2); selftest.com ships in the zip, p_o32.com is interp_test data
+# probe builds are never committed: CMake builds them into build/probes/ (#322 phase 2)
 /tools/**/*.com
-!/tests/probes/dos/selftest.com
-!/tests/probes/dos/p_o32.com
 # -- s93 #322 phase 2: rig harness left behind in the old test folders (local-only) --
-/tests/probes/dos/
-/tests/probes/win16/
+/tools/dostest/
+/tools/wintest/
 # test build artefacts
 /tests/unit/p_o32.com
 /tests/unit/*_test

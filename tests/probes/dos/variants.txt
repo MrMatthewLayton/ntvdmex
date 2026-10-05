@@ -1,0 +1,8 @@
+# Probe variants: one source assembled with different defines.
+# <output.com> <source.asm> [nasm flags...]   -- built by CMake into build/probes/.
+# (The commands are the ones recorded in each source's own header.)
+xmema.com p_exmemc.asm -DMINA=0100h -DMAXA=0200h
+xmemb.com p_exmemc.asm -DMINA=0F000h -DMAXA=0FFFFh
+xmemc.com p_exmemc.asm -DMINA=0 -DMAXA=0
+xmemd.com p_exmemc.asm -DMINA=0 -DMAXA=0FFFFh
+xmeme.com p_exmemc.asm -DMINA=0 -DMAXA=0010h
