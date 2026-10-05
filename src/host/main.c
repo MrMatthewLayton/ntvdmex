@@ -10873,7 +10873,10 @@ static HWND g_status;                        /* the native comctl32 status bar  
 static char g_status_l[128], g_status_m[96], g_status_s[32], g_status_r[64];  /* ON it now */
 /* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
    whether 1x did not fit the screen and was scaled down. See host_apply_scale. */
-static int g_scale_k = 0;
+static int g_scale_k = 0;            /* the scale the window is AT (after fitting)          */
+static int g_scale_want = 0;         /* the scale ASKED for (setting or drag) -- every mode
+                                        change starts from this, so one mode too big for 2x
+                                        does not leave the next one stuck at 1x            */
 static int g_win_frame_w, g_win_frame_h;
 static int g_fit_down;
 
@@ -12511,6 +12514,7 @@ static void host_apply_scale(HWND h, int k)
     if (!h || g_pd.fullscreen) return;   /* fullscreen owns the size */
     if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
     if (k < 1) k = 1;
+    g_scale_want = k;
     while (k > 1 && !win_scale_fits(k)) --k;
     g_scale_k = k;
     host_picture(k, &pw, &ph);
@@ -12576,7 +12580,7 @@ static void host_follow_frame(HWND h)
     if (sw == g_win_frame_w && sh == g_win_frame_h) { pend_w = pend_h = 0; return; }
     if (sw != pend_w || sh != pend_h) { pend_w = sw; pend_h = sh; pend_t = GetTickCount(); return; }
     if (GetTickCount() - pend_t < 150u) return;
-    host_apply_scale(h, g_scale_k ? g_scale_k : (int)g_set.v[SET_WINSIZE] + 1);
+    host_apply_scale(h, g_scale_want ? g_scale_want : (int)g_set.v[SET_WINSIZE] + 1);
 }
 
 /* #321: the text-mode font, live. Rebuilt only when the NAME changed -- a build draws
@@ -13870,7 +13874,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                                               : (vw + sw / 2) / sw;
                 if (k < 1) k = 1;
                 present_window_picture((int)g_set.v[SET_ASPECT], sw, sh, k, &vw, &vh);
-                g_scale_k = k; g_fit_down = 0;
+                g_scale_k = g_scale_want = k; g_fit_down = 0;
             } else {
                 present_target_ratio((int)g_set.v[SET_ASPECT], sw, sh, &n, &d);
                 switch (wp) {
@@ -14491,7 +14495,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         g_winsize_live = g_set.v[SET_WINSIZE];   /* the window is now AT this size */
         g_aspect_live  = g_set.v[SET_ASPECT];    /* ...and in this shape            */
         while (scale > 1 && !win_scale_fits(scale)) --scale;
-        g_scale_k = scale;
+        g_scale_k = scale; g_scale_want = (int)g_set.v[SET_WINSIZE] + 1;
         host_picture(scale, &pw, &ph);           /* #325: 720x400 text until a frame */
         rc.left = 0; rc.top = 0;
         rc.right = pw; rc.bottom = ph + PRESENT_STATUS_H; }
