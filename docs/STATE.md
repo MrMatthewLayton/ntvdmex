@@ -7,13 +7,14 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-10-04 (session 91)
-- **Branch:** `m9/completeness`, pushed (s92, unattended: score 95.1 → 95.2%; see the notes).
-  Rig `bin\` = **`1984a094`** (S, s92 head) **plus `bin\wowshim\WOW32.DLL` + `NTVDM.EXE`**
+- **Branch:** `m9/completeness`, pushed (s93, overnight: score 95.2 → 96.1%; see the notes).
+  Rig `bin\` = **`b14633be`** (AB, s93 head) **plus `bin\wowshim\WOW32.DLL` + `NTVDM.EXE`**
   — ⚠ the shim API is **version 3**: an older host with these shims (or this host with
   older shims) loads no shim at all. `scripts/package.sh` ships them.
-- **Resume:** [`log/sessions/session-92.md`](log/sessions/session-92.md). `checks.txt` holds one
-  test (Calc → Help → close both; the host must end). The user should still decide #311.
-  Before that: [`session-91.md`](log/sessions/session-91.md), [`session-89.md`](log/sessions/session-89.md)
+- **Resume:** [`log/sessions/session-93.md`](log/sessions/session-93.md). `checks.txt` (CRLF) holds
+  the retest of six Win16 programs + Lemmings' sensitivity; the user's report decides which
+  partial guests become done. The user should still decide #311.
+  Before that: [`session-92.md`](log/sessions/session-92.md), [`session-89.md`](log/sessions/session-89.md)
   (the Win16 surface inventory, epic **#292**).
 - **Stable package (anchor):** `dist\ntvdmex-20260927-a286862.zip`, host **`0e6f5156`** —
   the s81 shelf sweep plus the user's re-check of every sweep fix (DIR, EXIT, the prompt,

@@ -7,7 +7,9 @@ on New Program Item), Terminal ("entirely messed up UI"), Write (draws the deskt
 types a square), Sysedit (Save disabled), Recorder (closes when clicked away), Packager
 (Import does nothing, same drawing problem). Target set for the night: 99%.
 
-*(Draft — completed at the end of the session.)*
+**Result: 96.1% (re-run).** All fixes below are pushed (df40239, f643419, 74b0154). The rest of the
+way is the user's by-hand confirmations: checks.txt (CRLF) holds a retest of Sysedit, Write,
+Terminal, Program Manager, Recorder and Packager, plus Lemmings' sensitivity (#291).
 
 ## Fixed (rig-verified, against stock where stock answers)
 
@@ -18,8 +20,9 @@ types a square), Sysedit (Save disabled), Recorder (closes when clicked away), P
 | Write: nothing typed appears | Win32's default WM_ACTIVATE gave the focus back to the frame after Write's own SetFocus(document) | "abc" appears |
 | Write: Backspace types a square | every Win32 WM_CHAR was relayed; Win16 only makes one when the program calls TranslateMessage -- Write handles Backspace in WM_KEYDOWN | "abcd"+BS = "abc" (the mark after it is Write's own end-of-document mark) |
 | Program Manager dialogs at the screen's top-left | a popup dialog's template position is relative to its OWNER's client area (no DS_ABSALIGN) | (190,257) vs stock (193,286), then frame-corrected |
-| Program Item Properties: first keys lost, Tab dead | a dialog window kept the focus itself (DefWindowProc); DefDlgProc passes it to a control | in test |
-| Recorder: SetTimer(NULL, 0, ms, proc) refused | windowless timers: Win32 thread timers relayed as Win16 WM_TIMER hwnd 0 + TIMERPROC | in test |
+| Program Item Properties: first keys lost, Tab dead | a dialog window kept the focus itself (DefWindowProc) -- and WM_NEXTDLGCTL does nothing on OUR dialog class; DefDlgProc's rules done by hand (first tab stop, saved control on activation/WM_SETFOCUS, a key for the dialog window goes to the control) | "np"/Tab/"notepad" = stock, OK enabled |
+| Recorder: SetTimer(NULL, 0, ms, proc) refused | windowless timers: Win32 thread timers relayed as Win16 WM_TIMER hwnd 0 + TIMERPROC | thread timer armed, TIMERPROC called |
+| Recorder could not record | SetWindowsHook (USER 0x79, layout from USER seg1:0x6e42) was stepped over: WH_KEYBOARD / WH_JOURNALRECORD / WH_JOURNALPLAYBACK now on the OS's hooks; journal events queued while one is recorded (the nested run re-entered six deep) | both hooks installed and called; record/stop/play needs a human |
 
 ## DOS rows re-measured
 
@@ -37,3 +40,21 @@ types a square), Sysedit (Save disabled), Recorder (closes when clicked away), P
   ours and stock share it, so a run on one host changes what the other shows.
 - ⚠ `wcmd` matches the window title exactly: "Object Packager" never reached "Object Packager
   - Package", and both hosts "agreed" because neither got the command.
+
+## Measured against stock, and stock's own failures
+
+- **Program Manager**: after OK on a new Program Item, STOCK NTVDM's Program Manager fails
+  too ("An error has occurred in your application" -- runs/s93/g8 vs g11); ours fails at the
+  same moment. The user's "unknown stack fault" was that, in our wording.
+- **Packager Import** is limited to a 64-byte path (nMaxFile=0x40) on both hosts; the demo
+  folders are deeper. With a short path stock imports WIN.INI; ours could not be driven there
+  by rig keystrokes (XP's Explorer-style dialog mangled the burst), so it is in checks.txt.
+- **Shelf 16/16** from build X on (Terminal now closes -- its first-run dialog no longer
+  appears once a port is saved).
+
+## Open (filed or noted)
+
+- Program Manager's keyboard menus (Alt, F, N) do nothing from a group window; mouse works.
+- Terminal: ours shows the function-key bar and no caret where stock shows a caret, no bar.
+- A nested-run #SS at 0b97:0138 (Terminal's first-run OK; the user's Program Manager): the
+  NESTED EXC line now names SS:SP and the call -- the next occurrence will say why.
