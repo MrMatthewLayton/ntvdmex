@@ -29,7 +29,7 @@
 ;                              reserved + FATs x sectors/FAT, data start = root
 ;                              start + ceil(root entries x 32 / bytes/sector).
 ;                              BX = number of FATs, DX = media byte.  #48: ours
-;                              derives these (dos_dpb_fat_layout); this checks the
+;                              derives these (DosDpbFatLayout); this checks the
 ;                              derivation against a real FAT16 hard disk.
 ;   ext.sysvars45              INFORMATIONAL (SIG=CF): AX = SysVars+45h (extended
 ;                              memory at boot, KB), BX = INT 15h AH=88h now.  On

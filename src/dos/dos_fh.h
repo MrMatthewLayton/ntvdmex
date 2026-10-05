@@ -28,13 +28,14 @@
  * of them wrong: the same shape as the duplicate *_ARG_* macros the WOW battery
  * now fails on (src/wow/wowconv.h).
  *
- * Kept pure -- no Windows types, no dos_machine_t -- so the off-VM battery can
- * test it directly (tests/unit/fh_test.c).  HANDLE is void*, so the table is
- * passed as void *const *.
+ * Kept pure -- no Windows calls, no dos_machine_t, only Windows types
+ * (src/ntvdmex_types.h) -- so the off-VM battery can test it directly
+ * (tests/unit/fh_test.c).  HANDLE is a PVOID, so the table is passed as PVOID const *.
  */
-#ifndef DOS_FH_H
-#define DOS_FH_H
+#ifndef NTVDMEX_DOS_FH_H
+#define NTVDMEX_DOS_FH_H
 
+#include "../ntvdmex_types.h"
 #include "dos_layout.h"     /* DOS_MAX_FILES */
 
 /* The five slots DOS pre-opens: 0 stdin, 1 stdout, 2 stderr, 3 aux, 4 prn. */
@@ -61,30 +62,34 @@
      demoted to a file handle, which is the "runs but lies" class. */
 #define DOS_DEV_SLOTS   32
 
-/* Is slot `h` bound to a real file?  A bound handle is a file WHATEVER ITS
+/* Is slot `handle` bound to a real file?  A bound handle is a file WHATEVER ITS
    NUMBER: that is rule 2, and it is what lets a redirected handle 1 read, write,
    seek and close like the file it is.  Guards the caller's bounds too, so a
    caller can hand this a raw guest BX. */
-static int dos_fh_is_file(void *const *fh, unsigned h)
+static BOOL DosHandleIsFile(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles, _In_ UINT handle)
 {
-    return h < DOS_MAX_FILES && fh[h] != 0;
+    return handle < DOS_MAX_FILES && fileHandles[handle] != 0;
 }
 
-/* Is slot `h` an unbound standard handle -- i.e. a console/AUX/PRN device?
-   This is the ONLY case that should reach the console sink. */
-static int dos_fh_is_device(void *const *fh, unsigned std_open, unsigned h)
+/* Is slot `handle` an unbound standard handle -- i.e. a console/AUX/PRN device?
+   This is the ONLY case that should reach the console sink.
+   ⚠ `deviceMask` is spelled `unsigned int`, not UINT, on purpose (#333): with the typedef,
+     GCC 14 -O3 allocates registers differently across dos_int21(), and the style pass is
+     proven by an unchanged binary. Same type, different spelling -- do not "tidy" it. */
+static BOOL DosHandleIsDevice(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles,
+                              _In_ unsigned int deviceMask, _In_ UINT handle)
 {
-    return h < DOS_DEV_SLOTS && fh[h] == 0 && (std_open & (1u << h)) != 0;
+    return handle < DOS_DEV_SLOTS && fileHandles[handle] == 0 && (deviceMask & (1u << handle)) != 0;
 }
 
-/* Mark slot `h` as a character device, or clear it. Returns 0 when the slot is
+/* Mark slot `handle` as a character device, or clear it. Returns 0 when the slot is
    past the mask -- see DOS_DEV_SLOTS for why that is refused and not rounded. */
-static int dos_fh_set_device(unsigned *std_open, unsigned h, int on)
+static BOOL DosHandleSetDevice(_Inout_ PUINT deviceMask, _In_ UINT handle, _In_ BOOL isDevice)
 {
-    if (h >= DOS_DEV_SLOTS) return 0;
-    if (on) *std_open |= (1u << h);
-    else    *std_open &= ~(1u << h);
-    return 1;
+    if (handle >= DOS_DEV_SLOTS) return FALSE;
+    if (isDevice) *deviceMask |= (1u << handle);
+    else          *deviceMask &= ~(1u << handle);
+    return TRUE;
 }
 
 /* Rule 1: the lowest free slot, skipping standard slots that are still open as
@@ -94,15 +99,15 @@ static int dos_fh_set_device(unsigned *std_open, unsigned h, int on)
      extracted to delete: the redirect target then lands in slot 5, handle 1 is
      still the console, and the text goes to the screen while the file stays 0
      bytes -- measured, three times, in GH #133. */
-static unsigned dos_fh_alloc(void *const *fh, unsigned std_open)
+static UINT DosHandleAllocate(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles, _In_ UINT deviceMask)
 {
-    unsigned slot;
+    UINT slot;
     for (slot = 0; slot < DOS_MAX_FILES; ++slot) {
-        if (fh[slot]) continue;                                   /* bound     */
-        if (dos_fh_is_device(fh, std_open, slot)) continue;       /* device    */
+        if (fileHandles[slot]) continue;                                   /* bound     */
+        if (DosHandleIsDevice(fileHandles, deviceMask, slot)) continue;    /* device    */
         break;
     }
     return slot;
 }
 
-#endif /* DOS_FH_H */
+#endif /* NTVDMEX_DOS_FH_H */

@@ -8,19 +8,19 @@
  * An empty/short env is a common cause of real tools mis-starting; a well-formed
  * block (COMSPEC etc. + the program path) is what they read.
  */
-#ifndef DOS_ENV_H
-#define DOS_ENV_H
+#ifndef NTVDMEX_DOS_ENV_H
+#define NTVDMEX_DOS_ENV_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 #include "dos_mcb.h"
 
-static inline volatile uint8_t *dos_env_puts(volatile uint8_t *p, const char *s) {
-    while (*s) *p++ = (uint8_t)*s++;
-    return p;
+static inline volatile BYTE *DosEnvPutString(_Out_ volatile BYTE *cursor, _In_ PCSTR text) {
+    while (*text) *cursor++ = (BYTE)*text++;
+    return cursor;
 }
 
-/* Build a standard environment at env_seg and append the program path. Returns the
-   number of bytes written (fits in the 0x10-paragraph env block laid by dos_mcb_init). */
+/* Build a standard environment at environmentSegment and append the program path. Returns the
+   number of bytes written (fits in the 0x10-paragraph env block laid by DosMcbInitialize). */
 /* ── ★ PATH IS NOT DECORATION -- krnl386 SEARCHES IT. (GH #128, session 37) ──────
      `PATH=C:\` was fine while every guest was a DOS program launched by full path.
      It is not fine for WOW: krnl386's file search reads the environment block's
@@ -45,10 +45,10 @@ static inline volatile uint8_t *dos_env_puts(volatile uint8_t *p, const char *s)
      overrun now breaks the MCB chain instead of [0x714]. Different landmine, same cap. */
 #define DOS_ENV_CAP   0x100
 
-static inline volatile uint8_t *dos_env_putv(volatile uint8_t *p,
-                                             volatile uint8_t *end, const char *s) {
-    while (*s && p < end) *p++ = (uint8_t)*s++;
-    return p;
+static inline volatile BYTE *DosEnvPutBounded(_Out_ volatile BYTE *cursor,
+                                              _In_ volatile BYTE *end, _In_ PCSTR text) {
+    while (*text && cursor < end) *cursor++ = (BYTE)*text++;
+    return cursor;
 }
 
 /* ── THE CARD THE BLASTER VARIABLE DESCRIBES. ───────────────────────────────────
@@ -58,19 +58,21 @@ static inline volatile uint8_t *dos_env_putv(volatile uint8_t *p,
      about, just arriving from the dialog instead of from a typo. So the string is
      built from the same numbers vdd_sb is configured with, and there is one
      struct that carries them.
-   ⚠ `dma16` is advertised as H only when it is set. The default card has a 16-bit
+   ⚠ `Dma16Channel` is advertised as H only when it is set. The default card has a 16-bit
      channel (5) that this string has never mentioned, and Doom's audio was tuned
      against the string as it stands; adding H unasked would change what DMX sees
      on the one guest whose sound is user-confirmed. */
-typedef struct dos_sbcfg {
-    uint16_t base;      /* I/O base, e.g. 0x220 -> "A220"                        */
-    uint8_t  irq;
-    uint8_t  dma8;      /* 8-bit DMA channel -> "D"                              */
-    uint8_t  dma16;     /* 16-bit channel -> "H"; 0 = do not advertise one       */
-    uint8_t  type;      /* BLASTER "T" value                                     */
-    uint16_t mpu;       /* #231: MPU-401 base -> "P330"; 0 = do not advertise one */
-    uint16_t emu;       /* #233: EMU8000 base -> "E620"; 0 = no AWE wavetable fitted */
-} dos_sbcfg;
+typedef struct _DOS_SB_CONFIG {
+    WORD IoBase;        /* I/O base, e.g. 0x220 -> "A220"                        */
+    BYTE Irq;
+    BYTE Dma8Channel;   /* 8-bit DMA channel -> "D"                              */
+    BYTE Dma16Channel;  /* 16-bit channel -> "H"; 0 = do not advertise one       */
+    BYTE Type;          /* BLASTER "T" value                                     */
+    WORD MpuBase;       /* #231: MPU-401 base -> "P330"; 0 = do not advertise one */
+    WORD Emu8kBase;     /* #233: EMU8000 base -> "E620"; 0 = no AWE wavetable fitted */
+} DOS_SB_CONFIG, *PDOS_SB_CONFIG;
+
+typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
 
 /* T3 = an SB 2.0-class card. ⚠ THAT DISAGREES WITH THE DSP VERSION WE REPORT
    (4.05, an SB16, which would be T6) and it has done since the string was
@@ -80,45 +82,69 @@ typedef struct dos_sbcfg {
    that cannot be gated there. Recorded, not silently corrected. */
 #define DOS_SB_DEFAULT_TYPE 3
 
-static inline volatile uint8_t *dos_env_put_u(volatile uint8_t *p, volatile uint8_t *end,
-                                              unsigned v) {
-    char t[12]; int n = 0;
-    if (!v) { if (p < end) *p++ = '0'; return p; }
-    while (v && n < (int)sizeof t) { t[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n-- > 0 && p < end) *p++ = (uint8_t)t[n];
-    return p;
+/* The card this host has always claimed when no configuration is supplied:
+   "BLASTER=A220 I5 D1 T3". */
+#define DOS_SB_DEFAULT_IO_BASE   0x220
+#define DOS_SB_DEFAULT_IRQ       5
+#define DOS_SB_DEFAULT_DMA8      1
+#define DOS_SB_NOT_ADVERTISED    0      /* a 0 port or channel is left out of the string */
+
+/* Writing numbers into the string. */
+#define DOS_ENV_DECIMAL_BASE        10
+#define DOS_ENV_DECIMAL_DIGITS_MAX  12
+#define DOS_ENV_HEX_FIRST_SHIFT     8   /* three hex digits: bits 11-8 first         */
+#define DOS_ENV_HEX_DIGIT_BITS      4
+#define DOS_ENV_HEX_DIGIT_MASK      0xF
+
+/* The block's fixed text. */
+#define DOS_ENV_COMSPEC             "COMSPEC=C:\\COMMAND.COM"
+#define DOS_ENV_PATH_PREFIX         "PATH="
+#define DOS_ENV_DEFAULT_PATH        "C:\\"
+#define DOS_ENV_PROMPT              "PROMPT=$p$g"
+#define DOS_ENV_DEFAULT_PROGRAM     "C:\\PROGRAM.COM"
+#define DOS_ENV_TAIL_RESERVE        8   /* room kept for the tail: see DosEnvBuildWithCard */
+#define DOS_ENV_STRING_COUNT_LOW    0x01  /* WORD: one string follows */
+#define DOS_ENV_STRING_COUNT_HIGH   0x00
+
+static inline volatile BYTE *DosEnvPutDecimal(_Out_ volatile BYTE *cursor, _In_ volatile BYTE *end,
+                                               _In_ UINT value) {
+    CHAR digits[DOS_ENV_DECIMAL_DIGITS_MAX]; INT digitCount = 0;
+    if (!value) { if (cursor < end) *cursor++ = '0'; return cursor; }
+    while (value && digitCount < (INT)sizeof digits) { digits[digitCount++] = (CHAR)('0' + value % DOS_ENV_DECIMAL_BASE); value /= DOS_ENV_DECIMAL_BASE; }
+    while (digitCount-- > 0 && cursor < end) *cursor++ = (BYTE)digits[digitCount];
+    return cursor;
 }
 
 /* Three hex digits, upper case: every base a Sound Blaster can sit at (0x220 to
    0x280) is three, and that is how every BLASTER string in the wild spells it. */
-static inline volatile uint8_t *dos_env_put_x3(volatile uint8_t *p, volatile uint8_t *end,
-                                               unsigned v) {
-    static const char HEX[] = "0123456789ABCDEF";
-    int i;
-    for (i = 8; i >= 0; i -= 4) if (p < end) *p++ = (uint8_t)HEX[(v >> i) & 0xF];
-    return p;
+static inline volatile BYTE *DosEnvPutThreeHexDigits(_Out_ volatile BYTE *cursor, _In_ volatile BYTE *end,
+                                                     _In_ UINT value) {
+    static const CHAR hexDigits[] = "0123456789ABCDEF";
+    INT shift;
+    for (shift = DOS_ENV_HEX_FIRST_SHIFT; shift >= 0; shift -= DOS_ENV_HEX_DIGIT_BITS) if (cursor < end) *cursor++ = (BYTE)hexDigits[(value >> shift) & DOS_ENV_HEX_DIGIT_MASK];
+    return cursor;
 }
 
-/* Emit "BLASTER=A220 I5 D1 T3" for `sb`, or exactly that literal when sb is NULL
+/* Emit "BLASTER=A220 I5 D1 T3" for `card`, or exactly that literal when card is NULL
    -- so a caller that has no configuration to offer gets the card this host has
    always claimed, byte for byte. */
-static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile uint8_t *end,
-                                                const dos_sbcfg *sb) {
-    dos_sbcfg dflt;
-    if (!sb) {
-        dflt.base = 0x220; dflt.irq = 5; dflt.dma8 = 1; dflt.dma16 = 0;
-        dflt.type = DOS_SB_DEFAULT_TYPE; dflt.mpu = 0; dflt.emu = 0;
-        sb = &dflt;
+static inline volatile BYTE *DosEnvPutBlaster(_Out_ volatile BYTE *cursor, _In_ volatile BYTE *end,
+                                              _In_opt_ PCDOS_SB_CONFIG card) {
+    DOS_SB_CONFIG defaultCard;
+    if (!card) {
+        defaultCard.IoBase = DOS_SB_DEFAULT_IO_BASE; defaultCard.Irq = DOS_SB_DEFAULT_IRQ; defaultCard.Dma8Channel = DOS_SB_DEFAULT_DMA8; defaultCard.Dma16Channel = DOS_SB_NOT_ADVERTISED;
+        defaultCard.Type = DOS_SB_DEFAULT_TYPE; defaultCard.MpuBase = DOS_SB_NOT_ADVERTISED; defaultCard.Emu8kBase = DOS_SB_NOT_ADVERTISED;
+        card = &defaultCard;
     }
-    p = dos_env_putv(p, end, "BLASTER=A");
-    p = dos_env_put_x3(p, end, sb->base);
-    p = dos_env_putv(p, end, " I");   p = dos_env_put_u(p, end, sb->irq);
-    p = dos_env_putv(p, end, " D");   p = dos_env_put_u(p, end, sb->dma8);
-    if (sb->dma16) { p = dos_env_putv(p, end, " H"); p = dos_env_put_u(p, end, sb->dma16); }
-    if (sb->mpu)   { p = dos_env_putv(p, end, " P"); p = dos_env_put_x3(p, end, sb->mpu); }
-    if (sb->emu)   { p = dos_env_putv(p, end, " E"); p = dos_env_put_x3(p, end, sb->emu); }
-    p = dos_env_putv(p, end, " T");   p = dos_env_put_u(p, end, sb->type);
-    return p;
+    cursor = DosEnvPutBounded(cursor, end, "BLASTER=A");
+    cursor = DosEnvPutThreeHexDigits(cursor, end, card->IoBase);
+    cursor = DosEnvPutBounded(cursor, end, " I");   cursor = DosEnvPutDecimal(cursor, end, card->Irq);
+    cursor = DosEnvPutBounded(cursor, end, " D");   cursor = DosEnvPutDecimal(cursor, end, card->Dma8Channel);
+    if (card->Dma16Channel) { cursor = DosEnvPutBounded(cursor, end, " H"); cursor = DosEnvPutDecimal(cursor, end, card->Dma16Channel); }
+    if (card->MpuBase)   { cursor = DosEnvPutBounded(cursor, end, " P"); cursor = DosEnvPutThreeHexDigits(cursor, end, card->MpuBase); }
+    if (card->Emu8kBase)   { cursor = DosEnvPutBounded(cursor, end, " E"); cursor = DosEnvPutThreeHexDigits(cursor, end, card->Emu8kBase); }
+    cursor = DosEnvPutBounded(cursor, end, " T");   cursor = DosEnvPutDecimal(cursor, end, card->Type);
+    return cursor;
 }
 
 /* ── ★ EXTRA VARIABLES THE GUEST NEEDS AND WE HAD NO WAY TO GIVE IT. ─────────────
@@ -144,21 +170,21 @@ static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile ui
      thing we are emulating does not have.
    ⚠ THE CAP IS REAL AND SILENT TRUNCATION WOULD BE THE WORST OUTCOME -- an env var
      that is half present is a value, and a wrong one. Every write is bounded by
-     `vend`, which already reserves room for the terminator, the count WORD and the
+     `variablesEnd`, which already reserves room for the terminator, the count WORD and the
      program path, so the tail krnl386 reads can never be what is lost; an entry that
      does not fit is dropped whole rather than clipped. */
-static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_seg,
-                                          const char *progpath, const char *pathvar,
-                                          const dos_sbcfg *sb, const char *extra) {
-    volatile uint8_t *e = mcb_at(base, env_seg);
-    volatile uint8_t *p = e;
+static inline DWORD DosEnvBuildWithCard(_In_opt_ volatile BYTE *base, _In_ WORD environmentSegment,
+                                        _In_opt_ PCSTR programPath, _In_opt_ PCSTR pathVariable,
+                                        _In_opt_ PCDOS_SB_CONFIG card, _In_opt_ PCSTR extra) {
+    volatile BYTE *environment = DosMcbSegmentAddress(base, environmentSegment);
+    volatile BYTE *cursor = environment;
     /* Leave room for the trailing NUL, the count WORD, the program path and its
        NUL, so the tail krnl386 actually reads can never be the part that is lost. */
-    volatile uint8_t *vend = e + DOS_ENV_CAP - 8;
-    p = dos_env_putv(p, vend, "COMSPEC=C:\\COMMAND.COM"); *p++ = 0;
-    p = dos_env_putv(p, vend, "PATH=");
-    p = dos_env_putv(p, vend, (pathvar && pathvar[0]) ? pathvar : "C:\\");  *p++ = 0;
-    p = dos_env_putv(p, vend, "PROMPT=$p$g");             *p++ = 0;
+    volatile BYTE *variablesEnd = environment + DOS_ENV_CAP - DOS_ENV_TAIL_RESERVE;
+    cursor = DosEnvPutBounded(cursor, variablesEnd, DOS_ENV_COMSPEC); *cursor++ = 0;
+    cursor = DosEnvPutBounded(cursor, variablesEnd, DOS_ENV_PATH_PREFIX);
+    cursor = DosEnvPutBounded(cursor, variablesEnd, (pathVariable && pathVariable[0]) ? pathVariable : DOS_ENV_DEFAULT_PATH);  *cursor++ = 0;
+    cursor = DosEnvPutBounded(cursor, variablesEnd, DOS_ENV_PROMPT);             *cursor++ = 0;
     /* ── BLASTER IS HOW A DOS GAME FINDS THE SOUND CARD. ─────────────────────────
          Every Sound Blaster install sets it, so every DOS sound driver reads it and
          only falls back to probing when it is absent -- and a fallback probe is a
@@ -168,41 +194,41 @@ static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_s
            is worse than saying nothing: a driver that believes the string masks the
            line it was told about and waits on an interrupt that arrives elsewhere.
            That is why the numbers now come in as an argument rather than being
-           typed here twice -- see dos_sbcfg. */
-    p = dos_env_blaster(p, vend, sb); *p++ = 0;
+           typed here twice -- see DOS_SB_CONFIG. */
+    cursor = DosEnvPutBlaster(cursor, variablesEnd, card); *cursor++ = 0;
     if (extra) {
-        const char *s = extra;
-        while (*s) {
-            const char *ln = s;
-            int n = 0, i;
-            while (ln[n] && ln[n] != '\n' && ln[n] != '\r' && ln[n] != ';') ++n;
+        PCSTR remaining = extra;
+        while (*remaining) {
+            PCSTR line = remaining;
+            INT lineLength = 0, characterIndex;
+            while (line[lineLength] && line[lineLength] != '\n' && line[lineLength] != '\r' && line[lineLength] != ';') ++lineLength;
             /* Drop the entry WHOLE if it cannot fit -- see the cap note above. */
-            if (n > 0 && ln[0] != '#' && p + n + 1 <= vend) {
-                for (i = 0; i < n; ++i) *p++ = (uint8_t)ln[i];
-                *p++ = 0;
+            if (lineLength > 0 && line[0] != '#' && cursor + lineLength + 1 <= variablesEnd) {
+                for (characterIndex = 0; characterIndex < lineLength; ++characterIndex) *cursor++ = (BYTE)line[characterIndex];
+                *cursor++ = 0;
             }
-            s = ln + n;
-            while (*s == '\n' || *s == '\r' || *s == ';') ++s;
+            remaining = line + lineLength;
+            while (*remaining == '\n' || *remaining == '\r' || *remaining == ';') ++remaining;
         }
     }
-    *p++ = 0;                                       /* trailing \0 ends the var list */
-    *p++ = 0x01; *p++ = 0x00;                       /* WORD: one string follows */
-    p = dos_env_putv(p, e + DOS_ENV_CAP - 1,
-                     (progpath && progpath[0]) ? progpath : "C:\\PROGRAM.COM");
-    *p++ = 0;
-    return (uint32_t)(p - e);
+    *cursor++ = 0;                                       /* trailing \0 ends the var list */
+    *cursor++ = DOS_ENV_STRING_COUNT_LOW; *cursor++ = DOS_ENV_STRING_COUNT_HIGH;                       /* WORD: one string follows */
+    cursor = DosEnvPutBounded(cursor, environment + DOS_ENV_CAP - 1,
+                     (programPath && programPath[0]) ? programPath : DOS_ENV_DEFAULT_PROGRAM);
+    *cursor++ = 0;
+    return (DWORD)(cursor - environment);
 }
 
 /* The historical shapes, kept so every existing caller reads the same: no card
    supplied means the card this host has always claimed. */
-static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_seg,
-                                          const char *progpath, const char *pathvar) {
-    return dos_env_build_card(base, env_seg, progpath, pathvar, NULL, NULL);
+static inline DWORD DosEnvBuildWithPath(_In_opt_ volatile BYTE *base, _In_ WORD environmentSegment,
+                                        _In_opt_ PCSTR programPath, _In_opt_ PCSTR pathVariable) {
+    return DosEnvBuildWithCard(base, environmentSegment, programPath, pathVariable, NULL, NULL);
 }
 
-static inline uint32_t dos_env_build(volatile uint8_t *base, uint16_t env_seg,
-                                     const char *progpath) {
-    return dos_env_build_card(base, env_seg, progpath, "C:\\", NULL, NULL);
+static inline DWORD DosEnvBuild(_In_opt_ volatile BYTE *base, _In_ WORD environmentSegment,
+                                _In_opt_ PCSTR programPath) {
+    return DosEnvBuildWithCard(base, environmentSegment, programPath, DOS_ENV_DEFAULT_PATH, NULL, NULL);
 }
 
-#endif /* DOS_ENV_H */
+#endif /* NTVDMEX_DOS_ENV_H */

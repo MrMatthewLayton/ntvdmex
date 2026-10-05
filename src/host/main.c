@@ -438,7 +438,7 @@ static DOS_SAFE_SKIPS g_safe;           /* s90 #132: all zero unless SAFE MODE (
    `;` or `#` starts a comment; absent rows keep the built-in measured default. */
 #define INT53_PATH       CFG_("int53.txt")
 /* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
-   See dos_env_build_card for why this exists -- a DOS program configured through its
+   See DosEnvBuildWithCard for why this exists -- a DOS program configured through its
    environment could not be configured at all before it. */
 #define DOSENV_PATH      CFG_("dosenv.txt")
 /* ── ★ dsprobe.txt: GUEST DATA WORDS TO DUMP AT EVERY #GP. ────────────────────
@@ -836,12 +836,12 @@ static int  g_fetch2_ok = 0;
      Wolf3d took a PM #GP at startup (Error [35], ~400 ms, before any mode set) --
      user-confirmed, and confirmed fixed by rolling that change out. DOS/4GW reads the
      memory map we moved. So this NEVER moves the memory map: it feeds the two compiler
-     variables into the EXISTING 256-byte block at 0x60 (dos_env_build_card, bounded to
+     variables into the EXISTING 256-byte block at 0x60 (DosEnvBuildWithCard, bounded to
      the cap that stops short of the 0x714 landmine), exactly where the four defaults
      and dosenv.txt already live. A game -- which sets no LIB -- gets a byte-identical
      block and an unchanged memory map; only a caller that SET LIB/INCLUDE sees them.
    ▸ Values are shortened to 8.3 (a 1988 linker cannot read a long path), and returned
-     in dos_env_build_card's `extra` format (NAME=VALUE, newline-separated). A value
+     in DosEnvBuildWithCard's `extra` format (NAME=VALUE, newline-separated). A value
      containing ';' is not split here -- LIB/INCLUDE for the tool chain are single
      directories; a multi-dir LIB is not the case this serves. */
 static int dosenv_name_is(const char *nm, unsigned n, const char *lit)
@@ -855,7 +855,7 @@ static int dosenv_name_is(const char *nm, unsigned n, const char *lit)
 }
 
 /* Scan a Win32 environment block for LIB= and INCLUDE=, 8.3-shorten each value, and
-   write them as newline-separated NAME=VALUE lines into out (for dos_env_build_card's
+   write them as newline-separated NAME=VALUE lines into out (for DosEnvBuildWithCard's
    `extra`). Returns the number written. Nothing is written for a var that is absent. */
 static unsigned launcher_compiler_vars(const char *env, DWORD envcap, char *out, DWORD outcap)
 {
@@ -2211,7 +2211,7 @@ static char g_progname[64];           /* fwd: the status strip's name (defined b
 static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
 
 /* ── ★ GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM. ──────
-     `kind` from dos_exe_kind. CreateProcess does what stock's EXEC does with a
+     `kind` from DosExeKind. CreateProcess does what stock's EXEC does with a
      non-DOS binary: Windows itself routes it -- a PE to Win32, an NE to WOW (which,
      with NTVDMEX installed, is another NTVDMEX). Command line = the quoted path plus
      the DOS command tail; the working directory is the process's, which is the DOS
@@ -2267,7 +2267,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     HANDLE hf;
     DWORD nread = 0;
     uint16_t child = 0, maxpara = 0, want, envseg = 0, envblk = 0;
-    dos_image_t img;
+    DOS_IMAGE img;
     volatile WORD *pfl;
     int d = g_exec_depth, load_high = 0;
 
@@ -2298,7 +2298,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
        the MZ part is the only thing DOS could give. */
     if (m->exec_mode == 0x00) {
         unsigned sub = 0;
-        int kind = dos_exe_kind(exec_filebuf, nread, &sub);
+        int kind = DosExeKind(exec_filebuf, nread, &sub);
         if (kind != DOS_EXE_DOS && exec_windows(m, kind, sub, &p)) {
             VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
             *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
@@ -2313,7 +2313,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          factor IT supplies. Running it through the code below would allocate a
          block and hand the child the CPU, which is a different function. (#50) */
     if (m->exec_mode == 0x03) {
-        uint32_t n = dos_load_overlay(NULL, exec_filebuf, nread,
+        uint32_t n = DosLoadOverlay(NULL, exec_filebuf, nread,
                                       m->exec_ovl_seg, m->exec_ovl_reloc);
         p = zput(p, "  EXEC: AL=03 overlay -> seg=0x"); p = zhex(p, m->exec_ovl_seg);
         p = zput(p, " reloc=0x"); p = zhex(p, m->exec_ovl_reloc);
@@ -2330,7 +2330,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          the parent's strings, the double NUL, the word 0001 and the program name
          exactly as the caller spelled it to EXEC (p_child measures all four as
          relations: child.env.copy=0101, count=0100, namekind=0000). We used to
-         hand the child the parent's block itself -- and then dos_psp_build wiped
+         hand the child the parent's block itself -- and then DosPspBuild wiped
          its first three bytes. DOS/4GW, launched as a separate DOS4GW.EXE by the
          stub in Heaven7's h7.EXE, reads that name slot to find what to load, and
          read "PEC=C:\COMMAND.COM". Doom, Heretic, Hexen and ZAR never showed it
@@ -2379,7 +2379,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
             }
         }
         total = slen + 2 + nlen + 1;
-        if (dos_alloc(NULL, m->first_mcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
+        if (DosMcbAllocate(NULL, m->first_mcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
             p = zput(p, "  EXEC: no memory for the environment copy\r\n");
             VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
             *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
@@ -2401,31 +2401,31 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          takes it all; an MZ gets 10h + image + e_maxalloc (capped at the block), is
          REFUSED with 8 when 10h + image + e_minalloc does not fit -- before anything
          is loaded -- and with min = max = 0 takes the whole block and is loaded at
-         its TOP. dos_exec_size has the measurements. Every child used to get the
+         its TOP. DosExecSize has the measurements. Every child used to get the
          whole block, so a program linked to leave memory for its own children found
          none, and one that could not fit was loaded anyway. */
-    if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
+    if (DosMcbAllocate(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
     want = 0;
-    if (maxpara && dos_exec_size(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
+    if (maxpara && DosExecSize(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
         p = zput(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = zhex(p, maxpara);
         p = zput(p, " paras -> error 8, not loaded\r\n");
         want = 0;
     }
-    if (!want || dos_alloc(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
+    if (!want || DosMcbAllocate(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
         p = zput(p, "  EXEC: no memory\r\n");
-        if (envblk) dos_free(NULL, envblk);
+        if (envblk) DosMcbFree(NULL, envblk);
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
     }
     /* The env block belongs to the child, as DOS records it (MCB owner = its PSP). */
-    if (envblk) mcb_wr16((volatile uint8_t *)((DWORD)(envblk - 1) << 4) + 1, child);
+    if (envblk) DosMcbWriteWord((volatile uint8_t *)((DWORD)(envblk - 1) << 4) + 1, child);
     /* ── #243: AND SO DOES THE PROGRAM'S OWN BLOCK. (s86) ───────────────────────────
-         dos_alloc stamps DOS_PSP_SEG (0100h) on what it hands out, and only the env
+         DosMcbAllocate stamps DOS_PSP_SEG (0100h) on what it hands out, and only the env
          block was put right -- so a child's own memory read as the SHELL's (measured,
          QB.EXE /L: `026C M owner=0100`). DOS makes the program block's owner the
          child's PSP, and a program that walks the chain for "my blocks" depends on it. */
-    mcb_wr16((volatile uint8_t *)((DWORD)(child - 1) << 4) + 1, child);
+    DosMcbWriteWord((volatile uint8_t *)((DWORD)(child - 1) << 4) + 1, child);
 
     /* Snapshot the parent BEFORE anything is overwritten. */
     g_exec[d].eax = VDM_REG(tib, VTIB_EAX); g_exec[d].ebx = VDM_REG(tib, VTIB_EBX);
@@ -2441,8 +2441,8 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     g_exec[d].env_seg   = envblk;
 
     /* Build the child's PSP and copy in its command tail, then load the image. */
-    dos_psp_build(NULL, child, envseg, (uint16_t)(child + want));
-    mcb_set_name(NULL, child, m->exec_path);        /* DOS 4+: MEM /C and /D read it */
+    DosPspBuild(NULL, child, envseg, (uint16_t)(child + want));
+    DosMcbSetOwnerName(NULL, child, m->exec_path);        /* DOS 4+: MEM /C and /D read it */
     /* #208: a SECOND XP shell (the user typed `command`) is told 5.00 as the first one
        is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
     {   DWORD k, nb = 0;
@@ -2470,7 +2470,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */
-    dos_psp_save_vectors(NULL, child, m->psp_seg);
+    DosPspSaveVectors(NULL, child, m->psp_seg);
     { volatile BYTE *dpsp = (volatile BYTE *)(child << 4);
       const volatile BYTE *tail = (const volatile BYTE *)
           ((m->exec_tail_seg << 4) + m->exec_tail_off);
@@ -2481,10 +2481,10 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
       dpsp[0x17] = (BYTE)(m->psp_seg >> 8); }
 
     /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
-    img = dos_load_at(NULL, exec_filebuf, nread, child,
-                      load_high ? (uint16_t)(child + want - dos_image_paras(exec_filebuf, nread)) : 0);
+    img = DosLoadImageAt(NULL, exec_filebuf, nread, child,
+                      load_high ? (uint16_t)(child + want - DosImageParagraphs(exec_filebuf, nread)) : 0);
     if (load_high) { p = zput(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
-                     p = zhex(p, img.cs); p = zput(p, "\r\n"); }
+                     p = zhex(p, img.CodeSegment); p = zput(p, "\r\n"); }
 
     if (m->exec_mode == 0x01) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
@@ -2502,14 +2502,14 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
              single-point measurement rather than dressed up as a law. */
         volatile BYTE *pbo = (volatile BYTE *)
             (((DWORD)m->exec_pb_seg << 4) + m->exec_pb_off);
-        WORD sp01 = (WORD)(img.sp - 2);
+        WORD sp01 = (WORD)(img.StackPointer - 2);
         pbo[0x0E] = (BYTE)(sp01 & 0xFF);       pbo[0x0F] = (BYTE)(sp01 >> 8);
-        pbo[0x10] = (BYTE)(img.ss & 0xFF);     pbo[0x11] = (BYTE)(img.ss >> 8);
-        pbo[0x12] = (BYTE)(img.ip & 0xFF);     pbo[0x13] = (BYTE)(img.ip >> 8);
-        pbo[0x14] = (BYTE)(img.cs & 0xFF);     pbo[0x15] = (BYTE)(img.cs >> 8);
+        pbo[0x10] = (BYTE)(img.StackSegment & 0xFF);     pbo[0x11] = (BYTE)(img.StackSegment >> 8);
+        pbo[0x12] = (BYTE)(img.InstructionPointer & 0xFF);     pbo[0x13] = (BYTE)(img.InstructionPointer >> 8);
+        pbo[0x14] = (BYTE)(img.CodeSegment & 0xFF);     pbo[0x15] = (BYTE)(img.CodeSegment >> 8);
         p = zput(p, "  EXEC: AL=01 loaded, not run -- entry=");
-        p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
-        p = zput(p, " stack="); p = zhex(p, img.ss); p = zput(p, ":");
+        p = zhex(p, img.CodeSegment); p = zput(p, ":"); p = zhex(p, img.InstructionPointer);
+        p = zput(p, " stack="); p = zhex(p, img.StackSegment); p = zput(p, ":");
         p = zhex(p, sp01); p = zput(p, " (block KEPT)\r\n");
         /* #165: AND THE CHILD IS NOW THE CURRENT PROCESS. Measured (p_4b05): after
            4B01h, AH=62h returns the child's PSP on 6.22, DOSBox-X and PCem alike --
@@ -2537,8 +2537,8 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     ++g_exec_depth;
     m->psp_seg = child;
     m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
-    VDM_REG(tib, VTIB_CS)  = img.cs; VDM_REG(tib, VTIB_EIP) = img.ip;
-    VDM_REG(tib, VTIB_SS)  = img.ss; VDM_REG(tib, VTIB_ESP) = img.sp;
+    VDM_REG(tib, VTIB_CS)  = img.CodeSegment; VDM_REG(tib, VTIB_EIP) = img.InstructionPointer;
+    VDM_REG(tib, VTIB_SS)  = img.StackSegment; VDM_REG(tib, VTIB_ESP) = img.StackPointer;
     VDM_REG(tib, VTIB_DS)  = child;  VDM_REG(tib, VTIB_ES)  = child;
     VDM_REG(tib, VTIB_EAX) = 0;
     /* #212: THE CHILD STARTS WITH INTERRUPTS ON, as DOS's EXEC enters it. These flags
@@ -2550,8 +2550,8 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
        here is what the child sees. TF off too: a trace flag must not follow into it. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x100u) | 0x200u;
     p = zput(p, "  EXEC: child at seg=0x"); p = zhex(p, child);
-    p = zput(p, " entry="); p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
-    p = zput(p, img.is_exe ? " (EXE)" : " (COM)");
+    p = zput(p, " entry="); p = zhex(p, img.CodeSegment); p = zput(p, ":"); p = zhex(p, img.InstructionPointer);
+    p = zput(p, img.IsExe ? " (EXE)" : " (COM)");
     p = zput(p, " depth="); p = zhexb(p, (unsigned)g_exec_depth);
     p = zput(p, "\r\n");
     return p;
@@ -2617,7 +2617,7 @@ static void crit_raise(dos_machine_t *m, volatile BYTE *tib, char **pp)
        0070:006B. It was NUL, a CHARACTER device, which tells a handler that tests bit 15
        of [BP:SI+4] the opposite of AH bit 7's "disk error". */
     VDM_SET16(tib, VTIB_EBP, DOS_DEV_SEG);
-    VDM_SET16(tib, VTIB_ESI, DEV_OFF(DEV_BLOCK));
+    VDM_SET16(tib, VTIB_ESI, DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK));
     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
     VDM_SET16(tib, VTIB_EIP, DOS_CRIT_RAISE);
     sda[0] = 1;                                          /* SDA+0: in a critical error   */
@@ -2849,15 +2849,15 @@ static WORD bios_equipment_word(void)
 /* ── ★ AND 0040:0010 SAYS THE SAME THING. (GH #253) ───────────────────────────────
      A real BIOS's INT 11h is a read of 0040:0010; ours computes, so the BDA copy has to
      be WRITTEN from this function or the two doors disagree (see bios_bda.h). Written
-     once at start-up by bios_bda_init(), and again here whenever a setting that feeds
+     once at start-up by BiosBdaInitialize(), and again here whenever a setting that feeds
      the word changes while the guest runs (the joystick type -> bit 12).
    ⚠ g_bda_ready gates it: settings_apply() first runs at the top of WinMain, before
      VdmRegisterWithKernel() has committed the guest's low memory, and a write to linear 0x410 then
-     would fault the host. It is set by the start-up block that calls bios_bda_init(). */
+     would fault the host. It is set by the start-up block that calls BiosBdaInitialize(). */
 static int g_bda_ready;
 static void bios_bda_refresh_equipment(void)
 {
-    if (g_bda_ready) bios_bda_set_equipment(NULL, bios_equipment_word());
+    if (g_bda_ready) BiosBdaSetEquipment(NULL, bios_equipment_word());
 }
 static void serial_init(void)
 {
@@ -4668,13 +4668,13 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
                  The block is RESIZED, not freed, and the vectors are
                  deliberately NOT unwound -- the whole point of a TSR is
                  that the handlers it installed outlive it. So this skips
-                 both dos_psp_restore_vectors and dos_free, which is
+                 both DosPspRestoreVectors and DosMcbFree, which is
                  precisely the difference between exiting and staying.
                DX counted paragraphs from the PSP; a request for less
                than a PSP is nonsense, so floor it at 16 rather than
                hand back a block that does not contain its own header. */
             WORD keep = m->tsr_keep < 0x10 ? 0x10 : m->tsr_keep, tmax = 0;
-            int rrc = dos_resize(NULL, g_exec[d].child_seg, keep, &tmax);
+            int rrc = DosMcbResize(NULL, g_exec[d].child_seg, keep, &tmax);
             *pp = zput(*pp, "  TSR: seg=0x"); *pp = zhex(*pp, g_exec[d].child_seg);
             *pp = zput(*pp, " stays resident, 0x"); *pp = zhex(*pp, keep);
             *pp = zput(*pp, " paras");
@@ -4685,17 +4685,17 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
              The other half of the PSP contract: INT 22h/23h/24h go back
              to what they were when the child started, from the copies
-             dos_psp_save_vectors put in its PSP. Without this a child
+             DosPspSaveVectors put in its PSP. Without this a child
              that installed its own critical-error handler leaves it
              servicing the PARENT's failures, pointing into memory that
              is freed on the very next line. */
         if (g_exec[d].child_seg)
-            dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
-        if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+            DosPspRestoreVectors(NULL, g_exec[d].child_seg);
+        if (g_exec[d].child_seg) DosMcbFree(NULL, g_exec[d].child_seg);
         /* ...and every OTHER block it still owns, as DOS does on terminate (s80).
            AH=48h now stamps the child's PSP as owner; a program that exits without
            freeing its allocations would otherwise shrink the parent's memory for
-           good. Rescan after each free: dos_free coalesces, so the chain moves. */
+           good. Rescan after each free: DosMcbFree coalesces, so the chain moves. */
         if (g_exec[d].child_seg) {
             int pass, nfree = 0;
             /* ⚠ Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
@@ -4703,13 +4703,13 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
             for (pass = 0; pass < 4096; ++pass) {
                 uint16_t mm = m->first_mcb, hit = 0; int guard = 0;
                 for (;;) {
-                    volatile uint8_t *mc = mcb_at(NULL, mm);
+                    volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
                     if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 1024) break;
-                    if (mcb_rd16(mc + 1) == g_exec[d].child_seg) { hit = (uint16_t)(mm + 1); break; }
+                    if (DosMcbReadWord(mc + 1) == g_exec[d].child_seg) { hit = (uint16_t)(mm + 1); break; }
                     if (mc[0] == 'Z') break;
-                    mm = (uint16_t)(mm + 1 + mcb_rd16(mc + 3));
+                    mm = (uint16_t)(mm + 1 + DosMcbReadWord(mc + 3));
                 }
-                if (!hit || dos_free(NULL, hit)) break;
+                if (!hit || DosMcbFree(NULL, hit)) break;
                 ++nfree;
             }
             if (nfree) {
@@ -4722,10 +4722,10 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         {   uint16_t mm = m->first_mcb; int guard = 0;
             *pp = zput(*pp, "  EXEC: chain after exit:");
             for (;;) {
-                volatile uint8_t *mc = mcb_at(NULL, mm);
+                volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
                 uint16_t own, sz;
                 if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 48) { *pp = zput(*pp, " <broken>"); break; }
-                own = mcb_rd16(mc + 1); sz = mcb_rd16(mc + 3);
+                own = DosMcbReadWord(mc + 1); sz = DosMcbReadWord(mc + 3);
                 *pp = zput(*pp, " "); *pp = zhex(*pp, mm);
                 *pp = zput(*pp, own ? "/own=" : "/FREE"); if (own) *pp = zhex(*pp, own);
                 *pp = zput(*pp, "/sz="); *pp = zhex(*pp, sz);
@@ -4737,7 +4737,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         }
         /* And the environment copy EXEC made for it (s74). A TSR keeps its env
            block along with its PSP, which is why this is on the exit arm only. */
-        if (g_exec[d].env_seg) { dos_free(NULL, g_exec[d].env_seg); g_exec[d].env_seg = 0; }
+        if (g_exec[d].env_seg) { DosMcbFree(NULL, g_exec[d].env_seg); g_exec[d].env_seg = 0; }
         }
         VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
         VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;
@@ -10166,7 +10166,7 @@ static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
      Both were found this way, one run apart. So: reserve a pool BEFORE the arena
      goes, and bump-allocate host structures out of it.
    ▸ THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
-     wow_host_alloc(), not dos_alloc(). A dos_alloc() after wow_place_v86 will fail,
+     wow_host_alloc(), not DosMcbAllocate(). A DosMcbAllocate() after wow_place_v86 will fail,
      and the failure will look like the guest's fault. */
 /* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
    its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
@@ -12173,7 +12173,7 @@ static int g_frameskip;
      one thing while doing another is worse than saying nothing at all -- a driver
      that believes the string waits on an interrupt that arrives elsewhere -- so the
      numbers exist once and every consumer reads them from here. */
-static dos_sbcfg g_sbcfg = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
+static DOS_SB_CONFIG g_sbcfg = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
                              0 /* H is not advertised by default -- see dos_env.h */,
                              DOS_SB_DEFAULT_TYPE, 0, 0 };
 static int g_dspver_forced;                /* cfg\dspver.txt beat the model's version */
@@ -12187,7 +12187,7 @@ static int g_xms_on = 1, g_ems_on = 1;
 /* ── #136: CONVENTIONAL MEMORY, AND WHERE IT ENDS. ────────────────────────────────
      g_conv_kb_want is the setting (memory FITTED, 64..640 KB); g_dos_mem_top is the
      paragraph DOS's arena ends at and the EBDA starts at, decided ONCE at start-up from
-     it (bios_conv_top_para -- 640 KB gives exactly DOS_MEM_TOP, 9FC0h, so the default
+     it (BiosConventionalTopParagraph -- 640 KB gives exactly DOS_MEM_TOP, 9FC0h, so the default
      machine is the one every build so far has run). Every consumer reads the variable:
      INT 12h, 0040:0013, 0040:000E, INT 15h C1h, CMOS 15h/16h, the first PSP's +02h and
      the MCB chain. ⚠ START-UP ONLY: settings_apply runs again on a dialog OK, but moving
@@ -12252,7 +12252,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
                      ? s->s[SET_STR_FLOPPYA] : NULL;
     g_hostcur_mode   = (int)s->v[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_dos_mem_top. */
-    g_conv_kb_want   = bios_conv_kb_clamp((unsigned)s->v[SET_CONVKB]);
+    g_conv_kb_want   = BiosClampConventionalKb((unsigned)s->v[SET_CONVKB]);
     /* #136: seamless mouse. Turning it on while a guest holds the pointer gives the
        pointer back now (we are on the UI thread when `live`), rather than leaving a
        capture that the policy can no longer release by clicking. */
@@ -12262,13 +12262,13 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
        whose registers live at completely different ports. */
-    g_sbcfg.base = (uint16_t)(0x220 + 0x20 * (s->v[SET_SBADDR] & 3));
+    g_sbcfg.IoBase = (uint16_t)(0x220 + 0x20 * (s->v[SET_SBADDR] & 3));
     { static const uint8_t IRQS[4] = { 5, 7, 10, 11 };
       static const uint8_t DMAS[3] = { 1, 3, 5 };
       uint8_t ch = DMAS[s->v[SET_SBDMA] < 3 ? s->v[SET_SBDMA] : 0];
-      g_sbcfg.irq = IRQS[s->v[SET_SBIRQ] & 3];
-      if (ch < 4) { g_sbcfg.dma8 = ch; g_sbcfg.dma16 = 0; }
-      else        { g_sbcfg.dma8 = SB_DEFAULT_DMA8; g_sbcfg.dma16 = ch; } }
+      g_sbcfg.Irq = IRQS[s->v[SET_SBIRQ] & 3];
+      if (ch < 4) { g_sbcfg.Dma8Channel = ch; g_sbcfg.Dma16Channel = 0; }
+      else        { g_sbcfg.Dma8Channel = SB_DEFAULT_DMA8; g_sbcfg.Dma16Channel = ch; } }
     /* ── #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
          all three answered as one SB16 that called itself an SB 2.0 (T3) in BLASTER.
          Now each is itself -- the DSP version it reports, the commands it has, and
@@ -12279,15 +12279,15 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
     {   uint8_t model = (uint8_t)(s->v[SET_SBMODEL] <= 2 ? s->v[SET_SBMODEL] : 0);
         g_sb.model = model;
-        g_sbcfg.emu = (model == SB_MODEL_AWE32) ? (uint16_t)(g_sbcfg.base + 0x400) : 0;  /* #233 */
+        g_sbcfg.Emu8kBase = (model == SB_MODEL_AWE32) ? (uint16_t)(g_sbcfg.IoBase + 0x400) : 0;  /* #233 */
         if (model == SB_MODEL_SBPRO) {
-            g_sbcfg.type = 4; g_sbcfg.dma16 = 0; g_sbcfg.mpu = 0;
+            g_sbcfg.Type = 4; g_sbcfg.Dma16Channel = 0; g_sbcfg.MpuBase = 0;
             if (!g_dspver_forced) { g_sb_ver_major = 3; g_sb_ver_minor = 2; }
         } else {
             {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
-                g_sbcfg.type = 6;                         /* P follows the MPU's port (#235) */
-                g_sbcfg.mpu = MPUB[s->v[SET_MPUADDR] <= 4 ? s->v[SET_MPUADDR] : 3]; }
-            if (!g_sbcfg.dma16) g_sbcfg.dma16 = 5;
+                g_sbcfg.Type = 6;                         /* P follows the MPU's port (#235) */
+                g_sbcfg.MpuBase = MPUB[s->v[SET_MPUADDR] <= 4 ? s->v[SET_MPUADDR] : 3]; }
+            if (!g_sbcfg.Dma16Channel) g_sbcfg.Dma16Channel = 5;
             if (!g_dspver_forced) { g_sb_ver_major = 4; g_sb_ver_minor = model == SB_MODEL_AWE32 ? 12 : 5; }
         } }
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
@@ -18361,7 +18361,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                   ? hdrimg_paras : (WORD)WOW_SELECTOR_PARAS;
 
     /* ── SHRINK THE PROGRAM BLOCK FIRST, OR THERE IS NOTHING TO ALLOCATE. ───────────
-         dos_mcb_init lays out one 'Z' block covering all 0x9F00 paragraphs of
+         DosMcbInitialize lays out one 'Z' block covering all 0x9F00 paragraphs of
          conventional memory, OWNED by the PSP -- which is faithful: real DOS gives a
          .COM the entire arena and the program shrinks it before allocating. The first
          run of this stage asked for krnl386's 0xD80 paragraphs and got
@@ -18369,10 +18369,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          which reads like exhaustion and is actually "everything is owned, nothing is
          free". Exactly what a DOS program sees before it calls AH=4Ah.
        On a WOW launch there is no DOS program -- the image loaded above is discarded
-       -- so the block can go back to just the PSP. Doing this through dos_resize()
-       rather than poking the chain keeps the MCB invariants (and dos_mcb_check) true. */
+       -- so the block can go back to just the PSP. Doing this through DosMcbResize()
+       rather than poking the chain keeps the MCB invariants (and DosMcbCheckChain) true. */
     {   WORD rmax = 0;
-        int rr = dos_resize(NULL, DOS_PSP_SEG, 0x40, &rmax);
+        int rr = DosMcbResize(NULL, DOS_PSP_SEG, 0x40, &rmax);
         q = m;
         q = zput(q, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
         q = zhex(q, (DWORD)rr); q = zput(q, " max=0x"); q = zhex(q, rmax);
@@ -18384,7 +18384,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          carry protected-mode pointers the V86 DOS layer cannot resolve. pm_int21_xfer()
          copies through this block. It is claimed HERE, between the shrink and
          krnl386's own segments, because after those allocations krnl386 owns the arena
-         -- and it is a plain DOS allocation so the MCB chain (and dos_mcb_check) stay
+         -- and it is a plain DOS allocation so the MCB chain (and DosMcbCheckChain) stay
          true. 16 KB because that is the largest read krnl386 asks for; a bigger request
          is clamped and SAID SO rather than silently short-read. */
     /* ⚠ THE HOST POOL GOES FIRST, i.e. as LOW as possible. krnl386 builds a 64 KB
@@ -18394,7 +18394,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          in the middle of krnl386's scratch and was read back as an NE header. Host
          memory belongs below the guest's, not in the middle of it. */
     {   WORD hseg = 0, hmax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
+        if (DosMcbAllocate(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
             g_wow_pool_seg = hseg;
         q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
         q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
@@ -18435,7 +18435,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         log_append(LDTLOG_PATH, m, q);
     }
     {   WORD xseg = 0, xmax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, 0x400, &xseg, &xmax) == 0 && xseg) {
+        if (DosMcbAllocate(NULL, mp->first_mcb, 0x400, &xseg, &xmax) == 0 && xseg) {
             g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
         }
         q = m;
@@ -18452,7 +18452,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          that the very next call overwrites, and the corruption would surface as
          a wrong filename somewhere far from here. One paragraph, one purpose. */
     {   WORD pseg = 0, pmax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, 0x20, &pseg, &pmax) == 0 && pseg)
+        if (DosMcbAllocate(NULL, mp->first_mcb, 0x20, &pseg, &pmax) == 0 && pseg)
             g_wow_path_seg = pseg;
         q = m;
         q = zput(q, "WOWV86: module-path scratch at para 0x"); q = zhex(q, g_wow_path_seg);
@@ -18465,7 +18465,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          wow_host_alloc. Separate again: this one is held by the child for its
          whole life, and both buffers above are reused on the very next call. */
     {   WORD eseg = 0, emax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
+        if (DosMcbAllocate(NULL, mp->first_mcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
             g_wow_env_seg = eseg;
         q = m;
         q = zput(q, "WOWV86: task-environment block at para 0x"); q = zhex(q, g_wow_env_seg);
@@ -18485,7 +18485,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          code descriptor over it is only useful once there is an LDT to put it
          in, so it is built at the first callback and cached. */
     {   WORD cseg = 0, cmax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, 1, &cseg, &cmax) == 0 && cseg) {
+        if (DosMcbAllocate(NULL, mp->first_mcb, 1, &cseg, &cmax) == 0 && cseg) {
             volatile BYTE *cb = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
             g_wow_cbk_seg = cseg;
             g_wow_cbk_lin = (DWORD)cseg << 4;
@@ -18540,7 +18540,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                 need = dg;
             }
         }
-        if (dos_alloc(NULL, mp->first_mcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
+        if (DosMcbAllocate(NULL, mp->first_mcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
             q = m; q = zput(q, "WOWV86: no conventional memory for seg ");
             q = zhex(q, (DWORD)(i + 1)); q = zput(q, ", largest free 0x"); q = zhex(q, max);
             q = zput(q, " paras\r\n"); log_append(LDTLOG_PATH, m, q);
@@ -18656,23 +18656,23 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          filler that leaves exactly this block's worth at the top, allocate, free the
          filler. The PSP block below then takes the freed region, as before. */
     {   WORD fseg = 0, fmax = 0, want;
-        (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
+        (void)DosMcbAllocate(NULL, mp->first_mcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
         want = (WORD)(WOW_STACK_PARAS + window_paras);
         if (fmax > want + 2) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
                it the filler eats the paragraph the stack+window block needs and the
                allocation fails outright ("no memory for the stack + header image"). */
             WORD fill = (WORD)(fmax - want - 1);
-            if (dos_alloc(NULL, mp->first_mcb, fill, &fseg, &fmax) == 0 && fseg) {
+            if (DosMcbAllocate(NULL, mp->first_mcb, fill, &fseg, &fmax) == 0 && fseg) {
                 q = m; q = zput(q, "WOWV86: filler 0x"); q = zhex(q, fill);
                 q = zput(q, " paras at 0x"); q = zhex(q, fseg);
                 q = zput(q, " so the stack+window lands HIGH (freed again below)\r\n");
                 log_append(LDTLOG_PATH, m, q);
             } else fseg = 0;
         } else fseg = 0;
-        if (dos_alloc(NULL, mp->first_mcb, (WORD)(WOW_STACK_PARAS + window_paras),
+        if (DosMcbAllocate(NULL, mp->first_mcb, (WORD)(WOW_STACK_PARAS + window_paras),
                       &sseg, &smax) || !sseg) sseg = 0;
-        if (fseg) dos_free(NULL, fseg);          /* give the low region back */
+        if (fseg) DosMcbFree(NULL, fseg);          /* give the low region back */
     }
     if (!sseg) {
         q = m; q = zput(q, "WOWV86: no memory for the stack + header image\r\n");
@@ -18875,7 +18875,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          believes is its own.
 
        ⚠ WE WERE PUTTING ITS OWN CODE THERE. Entered with ES = DOS_PSP_SEG (0x100),
-         krnl386 carved from paragraph 0x110 — and dos_alloc had already handed out
+         krnl386 carved from paragraph 0x110 — and DosMcbAllocate had already handed out
          0x141 (the transfer buffer) and 0x542, 0x12c3, 0x16b3, 0x17dc (krnl386's own
          four segments) out of that same region. Measured, not deduced: the descriptor
          it commits through 04F2 is base=0x1100 limit=0xaf9f, a window that spans its
@@ -18887,10 +18887,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          an allocation DOS knows about, so nothing else can be given the same memory —
          which is exactly the relationship a real DOS program has with its PSP block.
        ⚠ It must be a REAL PSP, not a bare block: krnl386 writes PSP+0x42 and reads
-         PSP+0x02 (top of memory) during bring-up. dos_psp_build fills both. */
+         PSP+0x02 (top of memory) during bring-up. DosPspBuild fills both. */
     {   WORD pseg = 0, pmax = 0;
-        (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
-        if (!pmax || dos_alloc(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
+        (void)DosMcbAllocate(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
+        if (!pmax || DosMcbAllocate(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
             q = m; q = zput(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
             log_append(LDTLOG_PATH, m, q); return -1;
         }
@@ -18919,15 +18919,15 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              paid for uninitialised memory that gets parsed (see the header-image block
              a few lines up), and a deterministic arena makes the next such bug
              reproducible instead of intermittent.
-           ▸ Skips the PSP itself: dos_psp_build lays that down immediately after. */
+           ▸ Skips the PSP itself: DosPspBuild lays that down immediately after. */
         {   volatile BYTE *ab = (volatile BYTE *)(ULONG_PTR)((DWORD)pseg << 4);
             DWORD nb = (DWORD)pmax * 16u, k2;
             for (k2 = 0x100; k2 < nb; ++k2) ab[k2] = 0;
             q = m; q = zput(q, "WOWV86: arena zeroed, 0x"); q = zhex(q, nb - 0x100);
             q = zput(q, " bytes above the PSP\r\n"); log_append(LDTLOG_PATH, m, q);
         }
-        dos_psp_build(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
-        /* ★ AND REBUILD THE ENVIRONMENT, because dos_psp_build ZEROES ITS FIRST
+        DosPspBuild(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
+        /* ★ AND REBUILD THE ENVIRONMENT, because DosPspBuild ZEROES ITS FIRST
              THREE BYTES -- correct when it is laying down a fresh PSP with a fresh
              env block, destructive here, where the env was already built and is
              shared. It matters more than it looks:
@@ -18964,7 +18964,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                  it is rebuilt after the fact, and the note above records how narrowly
                  it fits: krnl386 finds its own executable by scanning past the strings
                  to the double NUL, so anything added here moves the tail it reads. */
-            dos_env_build_card(NULL, DOS_ENV_SEG,
+            DosEnvBuildWithCard(NULL, DOS_ENV_SEG,
                           g_wow_krnl_path[0] ? g_wow_krnl_path
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
                           pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg,
@@ -19159,7 +19159,7 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
          function that installs 256 interrupt vectors is not a small omission. */
     seg = wow_host_alloc(0x40);
     g_pm_def_from_dos = !seg;
-    if (!seg && (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) {
+    if (!seg && (DosMcbAllocate(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) {
         q = zput(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
                     "read back 0000:0000\r\n");
@@ -21649,7 +21649,7 @@ static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
        only succeed on a non-WOW path -- and failing here is not cosmetic: krnl386
        treats a missing vendor API as "Inadequate DPMI Server" and exits. */
     seg = wow_host_alloc(1);
-    if (!seg && (dos_alloc(NULL, mp->first_mcb, 1, &seg, &max) || !seg)) return -1;
+    if (!seg && (DosMcbAllocate(NULL, mp->first_mcb, 1, &seg, &max) || !seg)) return -1;
     b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
     for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
     b[0x10] = (BYTE)shadow; b[0x11] = (BYTE)(shadow >> 8);   /* the returned selector */
@@ -25195,10 +25195,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
-                            int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
+                            int err = DosMcbAllocate(NULL, m.first_mcb, want, &seg, &max);
                             int idx = err ? -1 : dpmi_ldt_take();   /* #248: free list first */
                             if (!err && idx < 0) {                 /* no descriptor: give the block back */
-                                dos_free(NULL, seg);
+                                DosMcbFree(NULL, seg);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
                                 p = zput(p, " -> DOSmem: no descriptor (8011h)");
@@ -25289,7 +25289,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " -> DOSfree REFUSED: not a 0100h selector (8022h)");
                                 break;
                             }
-                            derr = dos_free(NULL, (uint16_t)seg);
+                            derr = DosMcbFree(NULL, (uint16_t)seg);
                             if (derr) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, (WORD)derr);
@@ -25306,7 +25306,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), max = 0;
                             if (idx >= 1 && idx < DPMI_LDT_MAX && g_ldt[idx].base) {
                                 uint16_t seg = (uint16_t)(g_ldt[idx].base >> 4);
-                                int err = dos_resize(NULL, seg, want, &max);
+                                int err = DosMcbResize(NULL, seg, want, &max);
                                 if (err) {
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                     VDM_SET16(tib, VTIB_EAX, err);       /* DOS error (7/8/9) */
@@ -26815,7 +26815,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 VDM_SET16(tib, VTIB_EAX, 9);       /* invalid memory block address */
                                 p = zput(p, " -> REFUSED (not a DOS paragraph)");
                             } else {
-                                err = dos_free(NULL, (uint16_t)(segbase >> 4));
+                                err = DosMcbFree(NULL, (uint16_t)(segbase >> 4));
                                 if (err) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, err);
                                            p = zput(p, " -> err 0x"); p = zhex(p, err); }
                                 else { VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -26902,7 +26902,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 VDM_SET16(tib, VTIB_EAX, 9);   /* invalid memory block address */
                                 p = zput(p, " -> REFUSED (not a DOS paragraph)");
                             } else {
-                                int err = dos_resize(NULL, (uint16_t)(segbase >> 4),
+                                int err = DosMcbResize(NULL, (uint16_t)(segbase >> 4),
                                                      (uint16_t)want, &max);
                                 if (err) {
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
@@ -27075,7 +27075,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              there and meaningless here -- it would build the PSP a
                              megabyte away from where krnl386 is about to read it.
 
-                           ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. dos_psp_build stores the
+                           ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. DosPspBuild stores the
                              environment as a PARAGRAPH, which is correct for a DOS program
                              and wrong for this one: the guest loads that word straight
                              into ES. So the copied PSP gets a descriptor over
@@ -28662,7 +28662,7 @@ static void dpmi_client_teardown(void)
     g_dpmi_nowned = 0;
     g_dpmi_nblk = 0;
     for (i = 0; i < g_dpmi_ndosblk; ++i)
-        if (dos_free(NULL, g_dpmi_dosblk[i]) == 0) ++freed_dos;
+        if (DosMcbFree(NULL, g_dpmi_dosblk[i]) == 0) ++freed_dos;
     g_dpmi_ndosblk = 0;
     g_le_ncode = 0; g_le_load_base = 0;
 
@@ -28674,7 +28674,7 @@ static void dpmi_client_teardown(void)
        above it at 0x169f instead of 0x242. Give it back; keep the selector, which the
        next client's install rebases (see dpmi_install_default_pm_handlers). */
     if (g_pm_defbase && g_pm_def_from_dos) {
-        dos_free(NULL, (uint16_t)(g_pm_defbase >> 4));
+        DosMcbFree(NULL, (uint16_t)(g_pm_defbase >> 4));
         g_pm_defbase = 0; g_pm_def_from_dos = 0;
     }
     if (g_pm_defbase)
@@ -29175,7 +29175,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                this still claimed 640. Real DOS reports 639 for exactly that
                reason -- the top 1KB is the Extended BIOS Data Area. Derived
                from the map rather than typed, so the two cannot drift. */
-            BSETAX(bios_base_kb_of_top(g_dos_mem_top));   /* #253 EBDA; #136 the setting */
+            BSETAX(BiosBaseKbOfTop(g_dos_mem_top));   /* #253 EBDA; #136 the setting */
             BCF_CLR();
         } else if (bn == 0x15) {
             unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
@@ -29683,7 +29683,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     int was_shell  = 0;                 /* s79: we actually loaded a shell, not a named program */
     volatile BYTE *tib, *hdlr;
     DWORD nread = 0, err = 0, ev; LONG st;
-    dos_image_t img;
+    DOS_IMAGE img;
     dos_machine_t m;
     char dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
     char progpath[768]; char args[256];
@@ -29979,10 +29979,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " mute=");      p = zhex(p, g_set.v[SET_MUTE]);
     p = zput(p, " spk=");       p = zhex(p, g_set.v[SET_SPEAKER]);
     p = zput(p, " outhz=");     p = zhex(p, settings_out_hz(&g_set));
-    p = zput(p, " sb=A");       p = zhex(p, g_sbcfg.base);
-    p = zput(p, " I");          p = zhex(p, g_sbcfg.irq);
-    p = zput(p, " D");          p = zhex(p, g_sbcfg.dma8);
-    p = zput(p, " H");          p = zhex(p, g_sbcfg.dma16);
+    p = zput(p, " sb=A");       p = zhex(p, g_sbcfg.IoBase);
+    p = zput(p, " I");          p = zhex(p, g_sbcfg.Irq);
+    p = zput(p, " D");          p = zhex(p, g_sbcfg.Dma8Channel);
+    p = zput(p, " H");          p = zhex(p, g_sbcfg.Dma16Channel);
     p = zput(p, " xms=");       p = zhex(p, (DWORD)g_xms_on);
     p = zput(p, " ems=");       p = zhex(p, (DWORD)g_ems_on);
     p = zput(p, " winsize=");   p = zhex(p, g_set.v[SET_WINSIZE]);
@@ -30103,10 +30103,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
        one line is a machine nobody could have built. Step aside to the next period
        choice (ref/gus.md §5 lists what the latches can select). */
-    if (g_sbcfg.base == g_gus.base) g_gus.base = 0x260;
-    if (g_sbcfg.irq == g_gus.irq)   g_gus.irq = 12;
-    if (g_sbcfg.dma8 == g_gus.dma_ch || g_sbcfg.dma16 == g_gus.dma_ch) g_gus.dma_ch = 1;
-    if (g_sbcfg.dma8 == g_gus.dma_ch || g_sbcfg.dma16 == g_gus.dma_ch) g_gus.dma_ch = 6;
+    if (g_sbcfg.IoBase == g_gus.base) g_gus.base = 0x260;
+    if (g_sbcfg.Irq == g_gus.irq)   g_gus.irq = 12;
+    if (g_sbcfg.Dma8Channel == g_gus.dma_ch || g_sbcfg.Dma16Channel == g_gus.dma_ch) g_gus.dma_ch = 1;
+    if (g_sbcfg.Dma8Channel == g_gus.dma_ch || g_sbcfg.Dma16Channel == g_gus.dma_ch) g_gus.dma_ch = 6;
     g_my_pm_off     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -31043,24 +31043,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
          the image is laid down: the loader writes the program above the PSP with no
-         bound of its own, and the EBDA (bios_bda_init_top, later) is zeroed at the new
+         bound of its own, and the EBDA (BiosBdaInitializeWithTop, later) is zeroed at the new
          top -- so a program that does not fit under a small setting would be loaded and
          then have its own code wiped. A real DOS says "Program too big to fit in memory"
          at that point; the host cannot say that to a program it was launched to RUN, so
          it refuses the SETTING instead, loudly, and the machine stays at 640 KB.
          640 (the default) never enters this block and logs nothing new. */
     if (g_conv_kb_want != BIOS_CONV_KB_MAX) {
-        uint16_t top = bios_conv_top_para(g_conv_kb_want), alloc = 0;
+        uint16_t top = BiosConventionalTopParagraph(g_conv_kb_want), alloc = 0;
         uint16_t avail = (uint16_t)(top - DOS_PSP_SEG);
         int high = 0, fits;
         if (nread >= 2 && filebuf[0] == 'M' && filebuf[1] == 'Z')
-            fits = dos_exec_size(filebuf, nread, avail, &alloc, &high) == 0;
+            fits = DosExecSize(filebuf, nread, avail, &alloc, &high) == 0;
         else                                /* .COM: PSP + the image + a 256-byte stack */
             fits = (uint32_t)0x10u + ((nread + 0x100u + 15u) >> 4) <= (uint32_t)avail;
         p = zput(p, "STAGE2: ConventionalKB=");  p = zdec(p, g_conv_kb_want);
         if (fits) {
             g_dos_mem_top = top;
-            p = zput(p, " -> INT 12h ");       p = zdec(p, bios_base_kb_of_top(top));
+            p = zput(p, " -> INT 12h ");       p = zdec(p, BiosBaseKbOfTop(top));
             p = zput(p, " KB, EBDA + MCB top 0x"); p = zhex(p, top);
             p = zput(p, " (#136)\r\n");
         } else {
@@ -31070,7 +31070,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
-    img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
+    img = DosLoadImage(NULL, filebuf, nread, DOS_PSP_SEG);
 
     hdlr = (volatile BYTE *)(DOS_HDLR_SEG << 4);            /* INT 21h BOP handler */
     for (i = 0; i < sizeof(bop); ++i) hdlr[i] = bop[i];
@@ -31271,11 +31271,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
 
-    dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_dos_mem_top);   /* #136 */
+    DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_dos_mem_top);   /* #136 */
     /* AFTER the vectors above are planted, never before: saving a vector that is
        still 0000:0000 stores a null the program restores on the way out. Parent
        PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
-    dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
+    DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
     /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
          being built, so a knob that is absent costs exactly one failed open and the
          environment is byte-identical to what it has always been. */
@@ -31366,7 +31366,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (nv) { p = zput(p, "STAGE2: launcher compiler vars -> "); p = zhex(p, nv);
                       p = zput(p, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
         }
-        dos_env_build_card(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
+        DosEnvBuildWithCard(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
                            "C:\\", &g_sbcfg, envextra[0] ? envextra : NULL);        /* M2.5: env */
       }
       /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
@@ -31405,7 +31405,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            is not worth debugging twice. */
         p = zput(p, ev); }
     }
-    dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
+    DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
          quit before printing a single character, with a DPMI/INT 21h trace identical
          to a working run for all 617 of its lines -- so the branch it takes is on
@@ -31416,16 +31416,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " [");
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
-    {   uint16_t first_mcb = dos_mcb_init_top(NULL, g_dos_mem_top);   /* #136 */
+    {   uint16_t first_mcb = DosMcbInitializeWithTop(NULL, g_dos_mem_top);   /* #136 */
         dos_int21_init(&m, first_mcb);
         /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
-           dos_mcb_init, which lays the chain and clears the name byte. */
-        mcb_set_name(NULL, DOS_PSP_SEG, progpath);
+           DosMcbInitialize, which lays the chain and clears the name byte. */
+        DosMcbSetOwnerName(NULL, DOS_PSP_SEG, progpath);
         /* The CDS array's block, at the top of the chain (see DOS_LASTDRIVE). The
            PSP was built with DOS_MEM_TOP as its memory top; the program's block now
            ends one paragraph below the reserved block's data, and PSP+2 must say so
            or a program that resizes itself to "PSP+2 - PSP" fails with error 8. */
-        /* ⚠⚠ ONE RESERVATION, CARVED -- NOT TWO CALLS. dos_mcb_reserve_top() splits
+        /* ⚠⚠ ONE RESERVATION, CARVED -- NOT TWO CALLS. DosMcbReserveTop() splits
              the LAST 'Z' block, and its first act is to make the block it split an
              'M' and put the new 'Z' on top. So a SECOND call finds the block the
              FIRST one just reserved and tries to split THAT: 143 paragraphs, which
@@ -31434,10 +31434,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              memory it needed was sitting free below. Reserve the pair in one go and
              carve it: CDS at the bottom, SFT immediately above. One MCB owned by
              DOS (8) covering both is what it is -- resident DOS data. */
-        {   WORD resv = dos_mcb_reserve_top(NULL, first_mcb,
+        {   WORD resv = DosMcbReserveTop(NULL, first_mcb,
                                             (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
             if (resv) { g_cds_seg = resv; g_sft_seg = (WORD)(resv + DOS_CDS_PARAS); }
-            else        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+            else        g_cds_seg = DosMcbReserveTop(NULL, first_mcb, DOS_CDS_PARAS);
         }
         /* ── ★ AND THE SFT, FOR A **DOS** GUEST. (s72) ────────────────────────────
              The SFT chain was planted only on the WOW path, and the note there said
@@ -31740,33 +31740,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         for (n = 0; n < nd; ++n) {
             DWORD spc = 0, bps = 0, freec = 0, totc = 0;
-            char root[4]; unsigned k; BYTE dp[DPB_LEN];
+            char root[4]; unsigned k; BYTE dp[DOS_DPB_LEN];
             int last = (n + 1 == nd);
             root[0] = (char)('A' + slot[n]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
             /* #48: a removable drive gets 6.22's OWN 1.44M floppy DPB -- 224 root entries,
-                 media F0h -- which dos_dpb_build now reproduces byte for byte (sysvars_test).
+                 media F0h -- which DosDpbBuild now reproduces byte for byte (sysvars_test).
                  It had 512 entries and F8h (the fixed-disk values) on a floppy. */
             int rem = (dtype[slot[n]] == DRIVE_REMOVABLE);
             if (rem)                                           /* 1.44M defaults, no probe */
                 { spc = 1; bps = 512; totc = 2847; }
             else if (!GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totc))
                 { spc = 8; bps = 512; totc = 0xFFF0; }
-            dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
+            DosDpbBuild(dp, slot[n], bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
                           (totc > 0xFFFE) ? 0xFFFE : totc + 1, rem ? 0xF0 : 0xF8,
-                          DOS_DEV_SEG, DEV_OFF(DEV_BLOCK),       /* #48: the block driver */
+                          DOS_DEV_SEG, DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK),       /* #48: the block driver */
                           last ? 0xFFFF : DOS_CTAB_SEG,
-                          last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (n + 1) * DPB_LEN));
-            for (k = 0; k < DPB_LEN; ++k)
-                ct[DOS_DPBCHAIN_OFF + n * DPB_LEN + k] = dp[k];
+                          last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (n + 1) * DOS_DPB_LEN));
+            for (k = 0; k < DOS_DPB_LEN; ++k)
+                ct[DOS_DPBCHAIN_OFF + n * DOS_DPB_LEN + k] = dp[k];
         }
         if (nd) {
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB)     = DOS_DPBCHAIN_OFF;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB + 2) = DOS_CTAB_SEG;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB)     = DOS_DPBCHAIN_OFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + 2) = DOS_CTAB_SEG;
         } else {                                  /* no chain is better than a bad one */
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB)     = 0xFFFF;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_DPB + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + 2) = 0xFFFF;
         }
-        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_MAXSEC) = 512;
+        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_MAX_SECTOR) = 512;
         /* ── ★ SYSVARS+0x45: EXTENDED MEMORY, IN KB. THE ANSWER TO GH #47. ────
              MEM.EXE does not get this from the XMS driver. It reads it straight
              out of SysVars and skips its entire extended-memory report when the
@@ -31794,29 +31794,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
            +0x49 was the prime suspect on the theory that zero reads as "the UMB
            chain starts at segment 0". It does not. Seventh refutation. */
-        svs[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
+        svs[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = (BYTE)nd;
         /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
                to one (measured on 6.22). #48: it no longer terminates -- it links to
                IO.SYS's twelve (CON .. COM4) at DOS_DEV_SEG, in 6.22's order, and the
-               last of those terminates. See dos_devchain_build for what is measured
+               last of those terminates. See DosDeviceChainBuild for what is measured
                (the order, the stride, which pointers name which) and what is not (the
                attribute words). SysVars+0x08/+0x0C name CLOCK$ and CON, as on 6.22.
              ⚠ Linear 0x600..0x6E7 had been the environment block's until #207 moved
                it to DOS_ENV_SEG 0x7F; nothing else writes there (dos_layout.h). */
-        {   BYTE nul[SV_NUL_LEN], dev[DEV_AREA_LEN], ns[DOS_NULSTUB_LEN]; unsigned k;
+        {   BYTE nul[DOS_SYSVARS_NUL_LEN], dev[DOS_DEVICE_AREA_LEN], ns[DOS_NULSTUB_LEN]; unsigned k;
             volatile BYTE *dv = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_DEV_SEG << 4);
-            dos_devchain_build(dev, DOS_DEV_SEG, nd);
-            for (k = 0; k < DEV_AREA_LEN; ++k) dv[k] = dev[k];
-            dos_nulstub_build(ns);
+            DosDeviceChainBuild(dev, DOS_DEV_SEG, nd);
+            for (k = 0; k < DOS_DEVICE_AREA_LEN; ++k) dv[k] = dev[k];
+            DosNulStubBuild(ns);
             for (k = 0; k < DOS_NULSTUB_LEN; ++k) svs[DOS_NULSTUB_OFF + k] = ns[k];
-            dos_nul_build(nul, DOS_DEV_SEG, DEV_OFF(DEV_CON),
+            DosNulHeaderBuild(nul, DOS_DEV_SEG, DOS_DEVICE_OFFSET(DOS_DEVICE_CON),
                           DOS_NULSTUB_OFF + DOS_NULSTUB_STRAT, DOS_NULSTUB_OFF + DOS_NULSTUB_INTR);
-            for (k = 0; k < SV_NUL_LEN; ++k)
-                svs[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k];
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CLOCK)     = DEV_OFF(DEV_CLOCK);
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CLOCK + 2) = DOS_DEV_SEG;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CON)       = DEV_OFF(DEV_CON);
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CON + 2)   = DOS_DEV_SEG; }
+            for (k = 0; k < DOS_SYSVARS_NUL_LEN; ++k)
+                svs[DOS_SYSVARS_OFF + DOS_SYSVARS_NUL + k] = nul[k];
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK)     = DOS_DEVICE_OFFSET(DOS_DEVICE_CLOCK);
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK + 2) = DOS_DEV_SEG;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CON)       = DOS_DEVICE_OFFSET(DOS_DEVICE_CON);
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CON + 2)   = DOS_DEV_SEG; }
         /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
                because it is INDEXED by drive and a walker reads all of them
                whatever we populate. Entries for drives that exist carry flags
@@ -31829,23 +31829,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             volatile BYTE *cd = (volatile BYTE *)((DWORD)g_cds_seg << 4);
             unsigned di2, seen2 = 0;
             for (di2 = 0; di2 < DOS_LASTDRIVE; ++di2) {
-                BYTE cds[CDS_LEN]; unsigned k, flags = 0;
+                BYTE cds[DOS_CDS_LEN]; unsigned k, flags = 0;
                 int have = 0, j;
                 for (j = 0; j < (int)nd; ++j) if (slot[j] == di2) have = 1;
-                if (have) flags = CDS_FLAG_PHYSICAL;
+                if (have) flags = DOS_CDS_FLAG_PHYSICAL;
                 else if (dtype[di2] == DRIVE_CDROM || dtype[di2] == DRIVE_REMOTE)
-                    flags = CDS_FLAG_PHYSICAL | CDS_FLAG_NETWORK;
-                dos_cds_build(cds, di2, flags, DOS_CTAB_SEG,
-                              (WORD)(DOS_DPBCHAIN_OFF + seen2 * DPB_LEN));
+                    flags = DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK;
+                DosCdsBuild(cds, di2, flags, DOS_CTAB_SEG,
+                              (WORD)(DOS_DPBCHAIN_OFF + seen2 * DOS_DPB_LEN));
                 if (have) ++seen2;
-                for (k = 0; k < CDS_LEN; ++k)
-                    cd[di2 * CDS_LEN + k] = cds[k];
+                for (k = 0; k < DOS_CDS_LEN; ++k)
+                    cd[di2 * DOS_CDS_LEN + k] = cds[k];
             }
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS)     = 0x0000;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS + 2) = g_cds_seg;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS)     = 0x0000;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + 2) = g_cds_seg;
         } else {                                  /* no block: no array, say so */
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS)     = 0xFFFF;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_CDS + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + 2) = 0xFFFF;
         }
         /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
                INT 21h layer can really open (dos_machine_t::fh[]). Same shape the
@@ -31863,11 +31863,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(sf + 0) = 0xFFFF;             /* next offset: last block */
             *(volatile WORD *)(sf + 2) = 0xFFFF;             /* next segment            */
             *(volatile WORD *)(sf + 4) = DOS_SFT_ENTRIES;    /* entries in this block   */
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT)     = 0x0000;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT + 2) = g_sft_seg;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = 0x0000;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + 2) = g_sft_seg;
         } else {
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT)     = 0xFFFF;
-            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + SV_SFT + 2) = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = 0xFFFF;
+            *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + 2) = 0xFFFF;
         }
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
@@ -31967,7 +31967,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_global16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
-    g_cmos.base_kb = (uint16_t)(bios_base_kb_of_top(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
+    g_cmos.base_kb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
@@ -32132,7 +32132,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
          settings_apply() has set the joystick type (bit 12). g_bda_ready lets a later
          settings change re-write 0010 -- see bios_bda_refresh_equipment. */
-    bios_bda_init_top(NULL, bios_equipment_word(), g_dos_mem_top);   /* #136 */
+    BiosBdaInitializeWithTop(NULL, bios_equipment_word(), g_dos_mem_top);   /* #136 */
     g_bda_ready = 1;
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
@@ -32152,9 +32152,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
     /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
          from different places, a driver is told one port and finds another. */
-    g_sb.base = g_sbcfg.base; g_sb.irq = g_sbcfg.irq;
-    g_sb.dma8 = g_sbcfg.dma8;
-    if (g_sbcfg.dma16) g_sb.dma16 = g_sbcfg.dma16;   /* 0 = keep vdd_sb's default */
+    g_sb.base = g_sbcfg.IoBase; g_sb.irq = g_sbcfg.Irq;
+    g_sb.dma8 = g_sbcfg.Dma8Channel;
+    if (g_sbcfg.Dma16Channel) g_sb.dma16 = g_sbcfg.Dma16Channel;   /* 0 = keep vdd_sb's default */
     /* Opt-in raw PCM capture -- see sb_state.cap_buf. 4 MB is ~3 minutes of Doom's
        11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
     if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
@@ -32181,7 +32181,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
     g_awe_on = (g_set.v[SET_SBMODEL] == SB_MODEL_AWE32);
     if (g_awe_on) {
-        g_emu8k.BasePort = (uint16_t)(g_sbcfg.base + 0x400);
+        g_emu8k.BasePort = (uint16_t)(g_sbcfg.IoBase + 0x400);
         g_emu8k.Dram = g_emu8k_dram; g_emu8k.DramWords = EMU8K_DRAM_WORDS;
         g_emu8k_dev = VddEmu8kDevice(&g_emu8k);
         vdd_bus_add(&g_bus, &g_emu8k_dev);
@@ -32566,12 +32566,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          rather than short-circuiting there keeps the DOS path's spine untouched. */
     {   WORD wcs = 0, wip = 0, wds = 0, wss = 0, wsp = 0;
         if (g_wow_nmod && wow_place_v86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
-            img.cs = wcs; img.ip = wip; img.ss = wss; img.sp = wsp;
+            img.CodeSegment = wcs; img.InstructionPointer = wip; img.StackSegment = wss; img.StackPointer = wsp;
             g_wow_entry_ds = wds;
             g_wow_entering = 1;
         }
     }
-    VdmSetEntry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
+    VdmSetEntry(tib, img.CodeSegment, img.InstructionPointer, img.StackSegment, img.StackPointer, DOS_PSP_SEG);
     if (g_wow_entering) {
         /* VdmSetEntry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
            for a DOS program and wrong for this one. krnl386 wants DS = its automatic
@@ -32583,7 +32583,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
              DPMI host's private data and carves every later allocation upward from
              there without asking DOS. VdmSetEntry points ES at DOS_PSP_SEG, whose
-             +0x10 is where the (discarded) DOS image sat and where dos_alloc had
+             +0x10 is where the (discarded) DOS image sat and where DosMcbAllocate had
              already placed krnl386's own code. Point it at the arena block instead. */
         if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
         /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
@@ -32598,7 +32598,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         VDM_SET16(tib, VTIB_ECX, (WORD)g_wow_entry_cx);
         VDM_REG(tib, VTIB_EAX) = 0x4B4F;
         p = zput(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
-        p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip);
+        p = zhex(p, img.CodeSegment); p = zput(p, ":0x"); p = zhex(p, img.InstructionPointer);
         p = zput(p, " DS=0x"); p = zhex(p, g_wow_entry_ds);
         p = zput(p, " ES=0x"); p = zhex(p, g_wow_psp_seg);
         p = zput(p, " CX=0x"); p = zhex(p, g_wow_entry_cx);
@@ -32643,8 +32643,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { int k; for (k = 0; k < 6; ++k) g_tramp_save[k] = tr[k]; g_tramp_saved = 1; }
         tr[0] = 0xFB;                                   /* sti                       */
         tr[1] = 0xEA;                                   /* jmp far cs:ip             */
-        tr[2] = (BYTE)img.ip; tr[3] = (BYTE)(img.ip >> 8);
-        tr[4] = (BYTE)img.cs; tr[5] = (BYTE)(img.cs >> 8);
+        tr[2] = (BYTE)img.InstructionPointer; tr[3] = (BYTE)(img.InstructionPointer >> 8);
+        tr[4] = (BYTE)img.CodeSegment; tr[5] = (BYTE)(img.CodeSegment >> 8);
         VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
         VDM_REG(tib, VTIB_EIP) = 0x60;
     }
@@ -32653,7 +32653,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        VIF clear makes every hardware interrupt undeliverable from the kernel's point of
        view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
     if (g_qi_vif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
-    if (!img.is_exe)                                        /* .COM near-ret guard */
+    if (!img.IsExe)                                        /* .COM near-ret guard */
         *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0xFFFE) = 0;
 
     /* Every stub the host plants in DOS_HDLR_SEG is planted by a different piece of
@@ -32669,9 +32669,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zdump(p, (const void *)(hs + MS_CB_RET_OFF), 4); p = zput(p, "\r\n");
         }
     }
-    p = zput(p, img.is_exe ? "STAGE2: running .EXE (entry 0x"
+    p = zput(p, img.IsExe ? "STAGE2: running .EXE (entry 0x"
                            : "STAGE2: running .COM (entry 0x");
-    p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
+    p = zhex(p, img.CodeSegment); p = zput(p, ":0x"); p = zhex(p, img.InstructionPointer); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
     {   /* #211. After the last truncating write, for the same reason as #144 below. */
@@ -33490,7 +33490,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (envseg && g_ldt_next < DPMI_LDT_MAX) {
                         int ei = g_ldt_next++;
                         g_ldt[ei].base   = (DWORD)envseg << 4;
-                        g_ldt[ei].limit  = 0xFF;      /* dos_env_build fills a 0x10-para block */
+                        g_ldt[ei].limit  = 0xFF;      /* DosEnvBuild fills a 0x10-para block */
                         g_ldt[ei].access = 0xF2;
                         g_ldt[ei].flags  = 0;
                         dpmi_install(ei);

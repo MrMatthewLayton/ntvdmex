@@ -12,92 +12,126 @@
 #include "bios_bda.h"
 #include "dos_mcb.h"
 
-static uint8_t mem[0x100000];          /* 1 MB flat guest memory */
+#define BDA_TEST_MEMORY_SIZE      0x100000  /* 1 MB flat guest memory                   */
+#define BDA_TEST_POISON           0xA5      /* so a field the init forgets is visible   */
+#define BDA_TEST_EQUIPMENT        0x4423
+#define BDA_TEST_NEW_EQUIPMENT    0x5423
+#define BDA_TEST_BASE_KB_640      639u
+#define BDA_TEST_EBDA_SEGMENT_640 0x9FC0u
+#define BDA_TEST_EBDA_KB          1u
+#define BDA_TEST_CMOS_KB          640u      /* the base memory the CMOS reports          */
+#define BDA_TEST_EBDA_LINEAR_640  0x9FC00
+#define BDA_TEST_EBDA_BYTES       1024
+#define BDA_TEST_640K_LINEAR      0xA0000
+#define BDA_TEST_LPT3_SLOT        0x40C     /* the neighbours: the LPT3 slot below ...   */
+#define BDA_TEST_ABOVE_MEMORY_KB  0x415     /* ... and 0040:0015 above                   */
+#define BDA_TEST_RESERVE          0x40      /* paragraphs reserved at the top            */
+#define BDA_TEST_KB_512           512
+#define BDA_TEST_TOP_512          0x7FC0u
+#define BDA_TEST_BASE_KB_512      511u
+#define BDA_TEST_EBDA_LINEAR_512  0x7FC00
+#define BDA_TEST_KB_256           256
+#define BDA_TEST_TOP_256          0x3FC0u
+#define BDA_TEST_BASE_KB_256      255u
+#define BDA_TEST_KB_640           640
+#define BDA_TEST_KB_BELOW_MIN     10
+#define BDA_TEST_KB_MIN           64
+#define BDA_TEST_KB_ABOVE_MAX     4096
 
-static int total = 0, fails = 0;
-#define CHECK(cond, msg) do {                                  \
-        total++;                                               \
-        if (cond) { printf("  PASS  %s\n", (msg)); }           \
-        else      { printf("  FAIL  %s\n", (msg)); fails++; }  \
-    } while (0)
+static BYTE g_Memory[BDA_TEST_MEMORY_SIZE];          /* 1 MB flat guest memory */
 
-static unsigned rd16(uint32_t lin) { return (unsigned)(mem[lin] | (mem[lin + 1] << 8)); }
+static INT g_Total = 0, g_Failures = 0;
+
+static VOID BdaTestCheck(BOOL passed, PCSTR description)
+{
+    g_Total++;
+    if (passed) { printf("  PASS  %s\n", description); }
+    else        { printf("  FAIL  %s\n", description); g_Failures++; }
+}
+
+static UINT BdaTestReadWord(DWORD linear)
+{
+    return (UINT)(g_Memory[linear] | (g_Memory[linear + 1] << BIOS_HIGH_BYTE_SHIFT));
+}
 
 int main(void)
 {
-    uint16_t first;
-    unsigned k, dirty;
+    WORD firstMcb;
+    UINT byteIndex, dirtyBytes;
 
     printf("== BDA / EBDA battery (#253) ==\n");
 
     /* ── THE NUMBERS, worked from the map rather than restated. 0x9FC0 paragraphs is
          639 KB exactly; 0xA000 - 0x9FC0 = 0x40 paragraphs = 1 KB. Measured on 6.22
          (int12.memk = 027Fh, mcb.chain.ends.at = 9FC0h). */
-    CHECK(BIOS_BASE_MEM_KB == 639u, "INT 12h / 0040:0013 constant = 639 KB");
-    CHECK(BIOS_EBDA_SEG == 0x9FC0u, "EBDA segment = 9FC0h = DOS_MEM_TOP");
-    CHECK(BIOS_EBDA_KB == 1u, "EBDA size = 1 KB");
-    CHECK(BIOS_BASE_MEM_KB + BIOS_EBDA_KB == 640u, "base memory + EBDA = the 640 KB the CMOS reports");
+    BdaTestCheck(BIOS_BASE_MEM_KB == BDA_TEST_BASE_KB_640, "INT 12h / 0040:0013 constant = 639 KB");
+    BdaTestCheck(BIOS_EBDA_SEG == BDA_TEST_EBDA_SEGMENT_640, "EBDA segment = 9FC0h = DOS_MEM_TOP");
+    BdaTestCheck(BIOS_EBDA_KB == BDA_TEST_EBDA_KB, "EBDA size = 1 KB");
+    BdaTestCheck(BIOS_BASE_MEM_KB + BIOS_EBDA_KB == BDA_TEST_CMOS_KB, "base memory + EBDA = the 640 KB the CMOS reports");
 
     /* ── THE WRITE. Poison everything first so a field the init forgets is visible. */
-    memset(mem, 0xA5, sizeof mem);
-    first = dos_mcb_init(mem);
-    bios_bda_init(mem, 0x4423);
-    CHECK(rd16(0x40E) == 0x9FC0u, "0040:000E = 9FC0h (the EBDA, not 'LPT4: none')");
-    CHECK(rd16(0x410) == 0x4423u, "0040:0010 = the equipment word passed in (INT 11h's)");
-    CHECK(rd16(0x413) == 639u,    "0040:0013 = 639 (INT 12h's)");
-    CHECK(mem[0x9FC00] == 1,      "EBDA:0000 = its own size in KB");
-    dirty = 0;
-    for (k = 1; k < 1024; ++k) if (mem[0x9FC00 + k]) ++dirty;
-    CHECK(dirty == 0, "EBDA:0001..03FF zeroed");
-    CHECK(mem[0x40C] == 0xA5 && mem[0x40D] == 0xA5 && mem[0x415] == 0xA5,
-          "neighbours untouched (LPT3 slot below, 0040:0015 above)");
-    CHECK(mem[0xA0000] == 0xA5 && mem[0x9FBFF] == 0xA5, "nothing written outside 9FC0:0000..03FF");
+    memset(g_Memory, BDA_TEST_POISON, sizeof g_Memory);
+    firstMcb = DosMcbInitialize(g_Memory);
+    BiosBdaInitialize(g_Memory, BDA_TEST_EQUIPMENT);
+    BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT) == BDA_TEST_EBDA_SEGMENT_640, "0040:000E = 9FC0h (the EBDA, not 'LPT4: none')");
+    BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EQUIPMENT) == BDA_TEST_EQUIPMENT, "0040:0010 = the equipment word passed in (INT 11h's)");
+    BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB) == BDA_TEST_BASE_KB_640,    "0040:0013 = 639 (INT 12h's)");
+    BdaTestCheck(g_Memory[BDA_TEST_EBDA_LINEAR_640] == BDA_TEST_EBDA_KB,      "EBDA:0000 = its own size in KB");
+    dirtyBytes = 0;
+    for (byteIndex = 1; byteIndex < BDA_TEST_EBDA_BYTES; ++byteIndex) if (g_Memory[BDA_TEST_EBDA_LINEAR_640 + byteIndex]) ++dirtyBytes;
+    BdaTestCheck(dirtyBytes == 0, "EBDA:0001..03FF zeroed");
+    BdaTestCheck(g_Memory[BDA_TEST_LPT3_SLOT] == BDA_TEST_POISON && g_Memory[BDA_TEST_LPT3_SLOT + 1] == BDA_TEST_POISON
+                 && g_Memory[BDA_TEST_ABOVE_MEMORY_KB] == BDA_TEST_POISON,
+                 "neighbours untouched (LPT3 slot below, 0040:0015 above)");
+    BdaTestCheck(g_Memory[BDA_TEST_640K_LINEAR] == BDA_TEST_POISON && g_Memory[BDA_TEST_EBDA_LINEAR_640 - 1] == BDA_TEST_POISON, "nothing written outside 9FC0:0000..03FF");
 
     /* ── THE LIVE HALF: a settings change rewrites 0010 and nothing else. */
-    bios_bda_set_equipment(mem, 0x5423);
-    CHECK(rd16(0x410) == 0x5423u && rd16(0x413) == 639u && rd16(0x40E) == 0x9FC0u,
-          "set_equipment: 0010 follows, 000E/0013 unchanged");
+    BiosBdaSetEquipment(g_Memory, BDA_TEST_NEW_EQUIPMENT);
+    BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EQUIPMENT) == BDA_TEST_NEW_EQUIPMENT
+                 && BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB) == BDA_TEST_BASE_KB_640
+                 && BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT) == BDA_TEST_EBDA_SEGMENT_640,
+                 "set_equipment: 0010 follows, 000E/0013 unchanged");
 
     /* ── ★ NOTHING DOS OWNS OVERLAPS THE EBDA. The chain's last block must end exactly
          where the EBDA begins, and a top reservation (the CDS) must come from BELOW it --
          the reason the EBDA could be given its kilobyte at all. */
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "MCB chain ends at the EBDA, consistent");
-    {   uint16_t r = dos_mcb_reserve_top(mem, first, 0x40);
-        CHECK(r != 0 && (uint32_t)r + 0x40u <= BIOS_EBDA_SEG,
-              "reserve_top: carved below 9FC0h, never into the EBDA");
-        CHECK(mem[0x9FC00] == 1, "reserve_top: EBDA size byte survives");
+    BdaTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "MCB chain ends at the EBDA, consistent");
+    {   WORD reserved = DosMcbReserveTop(g_Memory, firstMcb, BDA_TEST_RESERVE);
+        BdaTestCheck(reserved != DOS_MCB_NO_SEGMENT && (DWORD)reserved + BDA_TEST_RESERVE <= BIOS_EBDA_SEG,
+                     "reserve_top: carved below 9FC0h, never into the EBDA");
+        BdaTestCheck(g_Memory[BDA_TEST_EBDA_LINEAR_640] == BDA_TEST_EBDA_KB, "reserve_top: EBDA size byte survives");
     }
 
     /* ── #136: CONVENTIONAL MEMORY AS A SETTING. 640 must be EXACTLY today's machine;
          anything less moves INT 12h, the EBDA and the MCB top together. */
-    CHECK(bios_conv_top_para(640) == DOS_MEM_TOP, "conv 640 KB -> top 9FC0h = DOS_MEM_TOP (default unchanged)");
-    CHECK(bios_base_kb_of_top(bios_conv_top_para(640)) == BIOS_BASE_MEM_KB, "conv 640 KB -> INT 12h 639 (unchanged)");
-    CHECK(bios_conv_top_para(512) == 0x7FC0u, "conv 512 KB -> top 7FC0h");
-    CHECK(bios_base_kb_of_top(0x7FC0u) == 511u, "conv 512 KB -> INT 12h 511");
-    CHECK(bios_conv_top_para(256) == 0x3FC0u && bios_base_kb_of_top(0x3FC0u) == 255u, "conv 256 KB -> 3FC0h / 255");
-    CHECK(bios_conv_top_para(10) == bios_conv_top_para(64), "conv below 64 clamps to 64");
-    CHECK(bios_conv_top_para(4096) == DOS_MEM_TOP, "conv above 640 clamps to 640");
-    memset(mem, 0xA5, sizeof mem);
-    first = dos_mcb_init_top(mem, 0x7FC0u);
-    bios_bda_init_top(mem, 0x4423, 0x7FC0u);
-    CHECK(dos_mcb_check(mem, first, 0x7FC0u) == 0, "512 KB: MCB chain ends at 7FC0h, consistent");
-    CHECK(rd16(0x40E) == 0x7FC0u && rd16(0x413) == 511u, "512 KB: 0040:000E = 7FC0h, 0040:0013 = 511");
-    CHECK(mem[0x7FC00] == 1 && mem[0x9FC00] == 0xA5, "512 KB: EBDA at 7FC0:0000, nothing written at 9FC0h");
-    {   uint16_t r = dos_mcb_reserve_top(mem, first, 0x40);
-        CHECK(r != 0 && (uint32_t)r + 0x40u <= 0x7FC0u, "512 KB: reserve_top carved below the EBDA");
+    BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_640) == DOS_MEM_TOP, "conv 640 KB -> top 9FC0h = DOS_MEM_TOP (default unchanged)");
+    BdaTestCheck(BiosBaseKbOfTop(BiosConventionalTopParagraph(BDA_TEST_KB_640)) == BIOS_BASE_MEM_KB, "conv 640 KB -> INT 12h 639 (unchanged)");
+    BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_512) == BDA_TEST_TOP_512, "conv 512 KB -> top 7FC0h");
+    BdaTestCheck(BiosBaseKbOfTop(BDA_TEST_TOP_512) == BDA_TEST_BASE_KB_512, "conv 512 KB -> INT 12h 511");
+    BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_256) == BDA_TEST_TOP_256 && BiosBaseKbOfTop(BDA_TEST_TOP_256) == BDA_TEST_BASE_KB_256, "conv 256 KB -> 3FC0h / 255");
+    BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_BELOW_MIN) == BiosConventionalTopParagraph(BDA_TEST_KB_MIN), "conv below 64 clamps to 64");
+    BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_ABOVE_MAX) == DOS_MEM_TOP, "conv above 640 clamps to 640");
+    memset(g_Memory, BDA_TEST_POISON, sizeof g_Memory);
+    firstMcb = DosMcbInitializeWithTop(g_Memory, BDA_TEST_TOP_512);
+    BiosBdaInitializeWithTop(g_Memory, BDA_TEST_EQUIPMENT, BDA_TEST_TOP_512);
+    BdaTestCheck(DosMcbCheckChain(g_Memory, firstMcb, BDA_TEST_TOP_512) == DOS_MCB_CHAIN_OK, "512 KB: MCB chain ends at 7FC0h, consistent");
+    BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT) == BDA_TEST_TOP_512 && BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB) == BDA_TEST_BASE_KB_512, "512 KB: 0040:000E = 7FC0h, 0040:0013 = 511");
+    BdaTestCheck(g_Memory[BDA_TEST_EBDA_LINEAR_512] == BDA_TEST_EBDA_KB && g_Memory[BDA_TEST_EBDA_LINEAR_640] == BDA_TEST_POISON, "512 KB: EBDA at 7FC0:0000, nothing written at 9FC0h");
+    {   WORD reserved = DosMcbReserveTop(g_Memory, firstMcb, BDA_TEST_RESERVE);
+        BdaTestCheck(reserved != DOS_MCB_NO_SEGMENT && (DWORD)reserved + BDA_TEST_RESERVE <= BDA_TEST_TOP_512, "512 KB: reserve_top carved below the EBDA");
     }
-    memset(mem, 0xA5, sizeof mem);
-    first = dos_mcb_init(mem);
-    {   static uint8_t mem2[0x100000];
-        uint16_t f2;
-        memset(mem2, 0xA5, sizeof mem2);
-        f2 = dos_mcb_init_top(mem2, DOS_MEM_TOP);
-        bios_bda_init(mem, 0x4423);
-        bios_bda_init_top(mem2, 0x4423, DOS_MEM_TOP);
-        CHECK(f2 == first && memcmp(mem, mem2, sizeof mem2) == 0,
-              "init_top(DOS_MEM_TOP) is byte-identical to the old init (whole 1 MB)");
+    memset(g_Memory, BDA_TEST_POISON, sizeof g_Memory);
+    firstMcb = DosMcbInitialize(g_Memory);
+    {   static BYTE secondMemory[BDA_TEST_MEMORY_SIZE];
+        WORD secondFirstMcb;
+        memset(secondMemory, BDA_TEST_POISON, sizeof secondMemory);
+        secondFirstMcb = DosMcbInitializeWithTop(secondMemory, DOS_MEM_TOP);
+        BiosBdaInitialize(g_Memory, BDA_TEST_EQUIPMENT);
+        BiosBdaInitializeWithTop(secondMemory, BDA_TEST_EQUIPMENT, DOS_MEM_TOP);
+        BdaTestCheck(secondFirstMcb == firstMcb && memcmp(g_Memory, secondMemory, sizeof secondMemory) == 0,
+                     "init_top(DOS_MEM_TOP) is byte-identical to the old init (whole 1 MB)");
     }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }

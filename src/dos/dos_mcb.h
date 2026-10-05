@@ -13,16 +13,17 @@
  * MCB layout (16 bytes, immediately preceding the block it owns):
  *   [0]    signature: 'M' (member) or 'Z' (last block in the chain)
  *   [1..2] owner PSP segment   (0 = free, 8 = DOS, PSP_SEG = our process)
- *   [3..4] size of owned block in paragraphs (the block starts at mcb_seg+1)
+ *   [3..4] size of owned block in paragraphs (the block starts at mcbSegment+1)
  *
  * DOS error codes returned: 8 = insufficient memory, 9 = invalid memory block.
  */
-#ifndef DOS_MCB_H
-#define DOS_MCB_H
+#ifndef NTVDMEX_DOS_MCB_H
+#define NTVDMEX_DOS_MCB_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
 #define DOS_PSP_SEG 0x0100u     /* matches vdmhost.c enum PSP_SEG */
+#define DOS_PSP_PARAGRAPHS 0x10 /* the PSP's own 256 bytes, in paragraphs */
 /* ── WHERE CONVENTIONAL MEMORY ACTUALLY ENDS. (GH #47) ────────────────────────
    0xA000 is 640KB, and it is NOT where a real PC's MCB chain stops. MS-DOS 6.22,
    walked directly (tests/probes/dos/p_mcb.asm):
@@ -34,25 +35,62 @@
    Both numbers are measured; this is the one a real machine gives. */
 #define DOS_MEM_TOP 0x9FC0u     /* conventional top in paragraphs: 640K - 1K EBDA */
 
+/* A paragraph is 16 bytes: segment << 4 is its linear address. */
+#define DOS_PARAGRAPH_SHIFT       4
+#define DOS_PARAGRAPH_BYTES       16
+#define DOS_PARAGRAPH_LAST_BYTE   15     /* added before dividing, to round up to a paragraph */
+
+/* A little-endian WORD: the low byte first, then the high byte. */
+#define DOS_LOW_BYTE_MASK         0xFF
+#define DOS_HIGH_BYTE_SHIFT       8
+
+/* The MCB's fields (see the layout above). */
+#define DOS_MCB_SIGNATURE         0      /* 'M' or 'Z'                                    */
+#define DOS_MCB_OWNER             1      /* WORD: the owner's PSP segment                 */
+#define DOS_MCB_SIZE              3      /* WORD: the block's size in paragraphs          */
+#define DOS_MCB_NAME              8      /* the owner name DOS 4+ writes (8 bytes)        */
+#define DOS_MCB_NAME_LENGTH       8
+#define DOS_MCB_MEMBER            'M'    /* member                                         */
+#define DOS_MCB_LAST              'Z'    /* the last block in the chain                   */
+#define DOS_MCB_OWNER_FREE        0
+#define DOS_MCB_OWNER_DOS         0x0008
+#define DOS_MCB_WALK_LIMIT        0x1000 /* more blocks than this = a runaway chain       */
+#define DOS_MCB_NO_SEGMENT        0      /* DosMcbReserveTop: nothing was reserved        */
+#define DOS_MCB_LOWER_TO_UPPER    0x20   /* 'a' - 'A'                                     */
+
+/* What AH=48h/49h/4Ah return: 0, or the DOS error code. */
+#define DOS_MCB_SUCCESS                   0
+#define DOS_MCB_ERROR_INSUFFICIENT_MEMORY 8
+#define DOS_MCB_ERROR_INVALID_BLOCK       9
+
+/* DosMcbCheckChain's reason codes. */
+#define DOS_MCB_CHAIN_OK                  0
+#define DOS_MCB_CHAIN_RUNAWAY             1
+#define DOS_MCB_CHAIN_CORRUPT_SIGNATURE   2
+#define DOS_MCB_CHAIN_OVERRUNS_TOP        3
+#define DOS_MCB_CHAIN_LAST_MISPLACED      4
+
 /* --- raw MCB field access over base + paragraph addressing ----------------- */
 
-static inline volatile uint8_t *mcb_at(volatile uint8_t *base, uint16_t seg) {
-    return (volatile uint8_t *)((uintptr_t)base + ((uint32_t)seg << 4));
+static inline volatile BYTE *DosMcbSegmentAddress(_In_opt_ volatile BYTE *base,
+                                                  _In_ WORD segment) {
+    return (volatile BYTE *)((ULONG_PTR)base + ((DWORD)segment << DOS_PARAGRAPH_SHIFT));
 }
-static inline uint16_t mcb_rd16(volatile uint8_t *p) {
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+static inline WORD DosMcbReadWord(_In_ volatile BYTE *field) {
+    return (WORD)((WORD)field[0] | ((WORD)field[1] << DOS_HIGH_BYTE_SHIFT));
 }
-static inline void mcb_wr16(volatile uint8_t *p, uint16_t v) {
-    p[0] = (uint8_t)(v & 0xFF);
-    p[1] = (uint8_t)(v >> 8);
+static inline VOID DosMcbWriteWord(_Out_ volatile BYTE *field, _In_ WORD value) {
+    field[0] = (BYTE)(value & DOS_LOW_BYTE_MASK);
+    field[1] = (BYTE)(value >> DOS_HIGH_BYTE_SHIFT);
 }
-static inline void mcb_lay(volatile uint8_t *base, uint16_t seg,
-                           uint8_t sig, uint16_t owner, uint16_t paras) {
-    volatile uint8_t *mc = mcb_at(base, seg);
-    mc[0] = sig;
-    mcb_wr16(mc + 1, owner);
-    mcb_wr16(mc + 3, paras);
-    mc[8] = 0;
+static inline VOID DosMcbWriteHeader(_In_opt_ volatile BYTE *base, _In_ WORD mcbSegment,
+                                     _In_ BYTE signature, _In_ WORD owner,
+                                     _In_ WORD paragraphs) {
+    volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+    mcb[DOS_MCB_SIGNATURE] = signature;
+    DosMcbWriteWord(mcb + DOS_MCB_OWNER, owner);
+    DosMcbWriteWord(mcb + DOS_MCB_SIZE, paragraphs);
+    mcb[DOS_MCB_NAME] = 0;
 }
 
 /* --- the owner name DOS 4+ writes into a program's MCB ---------------------- *
@@ -61,18 +99,19 @@ static inline void mcb_lay(volatile uint8_t *base, uint16_t seg,
  * /C and /D read it to say which program owns a block (6.22: "MEM  Program",
  * "COMMAND  Environment"); nothing wrote it here, so every block read as nameless
  * (s81, #47). Upper-cased because DOS's own EXEC path is. */
-static inline void mcb_set_name(volatile uint8_t *base, uint16_t psp_seg, const char *path) {
-    volatile uint8_t *mc = mcb_at(base, (uint16_t)(psp_seg - 1));
-    const char *s = path, *p;
-    int k;
-    for (p = path; *p; ++p) if (*p == '\\' || *p == '/' || *p == ':') s = p + 1;
-    for (k = 0; k < 8; ++k) {
-        char c = s[k];
-        if (!c || c == '.' || c == ' ') break;
-        if (c >= 'a' && c <= 'z') c = (char)(c - 0x20);
-        mc[8 + k] = (uint8_t)c;
+static inline VOID DosMcbSetOwnerName(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment,
+                                      _In_ PCSTR path) {
+    volatile BYTE *mcb = DosMcbSegmentAddress(base, (WORD)(pspSegment - 1));
+    PCSTR baseName = path, cursor;
+    INT index;
+    for (cursor = path; *cursor; ++cursor) if (*cursor == '\\' || *cursor == '/' || *cursor == ':') baseName = cursor + 1;
+    for (index = 0; index < DOS_MCB_NAME_LENGTH; ++index) {
+        CHAR character = baseName[index];
+        if (!character || character == '.' || character == ' ') break;
+        if (character >= 'a' && character <= 'z') character = (CHAR)(character - DOS_MCB_LOWER_TO_UPPER);
+        mcb[DOS_MCB_NAME + index] = (BYTE)character;
     }
-    for (; k < 8; ++k) mc[8 + k] = 0;
+    for (; index < DOS_MCB_NAME_LENGTH; ++index) mcb[DOS_MCB_NAME + index] = 0;
 }
 
 /* --- chain bring-up -------------------------------------------------------- */
@@ -108,24 +147,24 @@ static inline void mcb_set_name(volatile uint8_t *base, uint16_t psp_seg, const 
 #define DOS_FIRST_MCB    0x007Eu   /* the env block's MCB; ES:BX-2 of AH=52h          */
 #define DOS_ENV_PARAS    0x0010u   /* 256 bytes -- dos_env.h's DOS_ENV_CAP            */
 #define DOS_RESBLK_MCB   0x008Fu   /* DOS's own block; data at 0x90 = DOS_CTAB_SEG    */
-#define DOS_RESBLK_PARAS ((uint16_t)(DOS_PSP_SEG - 1 - DOS_RESBLK_MCB - 1)) /* 0x6F    */
+#define DOS_RESBLK_PARAS ((WORD)(DOS_PSP_SEG - 1 - DOS_RESBLK_MCB - 1)) /* 0x6F    */
 /* #136: the same chain over a SMALLER machine. `top` is the paragraph the 'Z' block ends
    at -- DOS_MEM_TOP for the 640 KB machine, less when Settings > Conventional Memory asks
-   for one (bios_conv_top_para in bios_bda.h). Everything below the program block is
+   for one (BiosConventionalTopParagraph in bios_bda.h). Everything below the program block is
    untouched by it; only the program block's size, and so PSP+2, follow the top. */
-static inline uint16_t dos_mcb_init_top(volatile uint8_t *base, uint16_t top) {
-    mcb_lay(base, DOS_FIRST_MCB,  'M', DOS_PSP_SEG, DOS_ENV_PARAS);
-    mcb_lay(base, DOS_RESBLK_MCB, 'M', 0x0008,      DOS_RESBLK_PARAS);
-    mcb_lay(base, (uint16_t)(DOS_PSP_SEG - 1), 'Z', DOS_PSP_SEG,
-            (uint16_t)(top - DOS_PSP_SEG));
+static inline WORD DosMcbInitializeWithTop(_In_opt_ volatile BYTE *base, _In_ WORD top) {
+    DosMcbWriteHeader(base, DOS_FIRST_MCB,  DOS_MCB_MEMBER, DOS_PSP_SEG, DOS_ENV_PARAS);
+    DosMcbWriteHeader(base, DOS_RESBLK_MCB, DOS_MCB_MEMBER, DOS_MCB_OWNER_DOS,      DOS_RESBLK_PARAS);
+    DosMcbWriteHeader(base, (WORD)(DOS_PSP_SEG - 1), DOS_MCB_LAST, DOS_PSP_SEG,
+            (WORD)(top - DOS_PSP_SEG));
     return DOS_FIRST_MCB;
 }
-static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
-    return dos_mcb_init_top(base, DOS_MEM_TOP);
+static inline WORD DosMcbInitialize(_In_opt_ volatile BYTE *base) {
+    return DosMcbInitializeWithTop(base, DOS_MEM_TOP);
 }
 
-/* --- reserve `paras` at the TOP of the chain for resident DOS data ---------- *
- * Splits the last ('Z') block: it keeps its owner and loses paras+1 paragraphs,
+/* --- reserve `paragraphs` at the TOP of the chain for resident DOS data ---------- *
+ * Splits the last ('Z') block: it keeps its owner and loses paragraphs+1 paragraphs,
  * and a new 'Z' block owned by DOS (8) takes the top. Returns the data segment
  * of the reserved block, or 0 if the last block is too small. Used for the CDS
  * array, which is LASTDRIVE (26) entries of 88 bytes -- more than the resident
@@ -137,172 +176,173 @@ static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
      the new block out of the first one's data. Now a DOS-owned last block means "a
      reservation is already on top": the new one is carved from the TOP of the block
      before it, and slots in between, so every reservation keeps its bytes. */
-static inline uint16_t dos_mcb_reserve_top(volatile uint8_t *base, uint16_t first_mcb,
-                                           uint16_t paras) {
-    uint16_t m = first_mcb, prev = 0;
-    int guard = 0, have_prev = 0;
+static inline WORD DosMcbReserveTop(_In_opt_ volatile BYTE *base, _In_ WORD firstMcb,
+                                    _In_ WORD paragraphs) {
+    WORD mcbSegment = firstMcb, previousSegment = 0;
+    INT walkCount = 0; BOOL hasPrevious = FALSE;
     for (;;) {
-        volatile uint8_t *mc = mcb_at(base, m);
-        uint16_t sz = mcb_rd16(mc + 3);
-        if (mc[0] == 'Z' && mcb_rd16(mc + 1) == 0x0008 && have_prev) {
-            volatile uint8_t *pc = mcb_at(base, prev);
-            uint16_t psz = mcb_rd16(pc + 3), nb;
-            if (psz < (uint16_t)(paras + 2)) return 0;
-            mcb_wr16(pc + 3, (uint16_t)(psz - paras - 1));
-            nb = (uint16_t)(prev + 1 + (psz - paras - 1));          /* ends exactly at m */
-            mcb_lay(base, nb, 'M', 0x0008, paras);
-            return (uint16_t)(nb + 1);
+        volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+        WORD blockSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+        if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST && DosMcbReadWord(mcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_DOS && hasPrevious) {
+            volatile BYTE *previousMcb = DosMcbSegmentAddress(base, previousSegment);
+            WORD previousSize = DosMcbReadWord(previousMcb + DOS_MCB_SIZE), newSegment;
+            if (previousSize < (WORD)(paragraphs + 2)) return DOS_MCB_NO_SEGMENT;
+            DosMcbWriteWord(previousMcb + DOS_MCB_SIZE, (WORD)(previousSize - paragraphs - 1));
+            newSegment = (WORD)(previousSegment + 1 + (previousSize - paragraphs - 1));          /* ends exactly at mcbSegment */
+            DosMcbWriteHeader(base, newSegment, DOS_MCB_MEMBER, DOS_MCB_OWNER_DOS, paragraphs);
+            return (WORD)(newSegment + 1);
         }
-        if (mc[0] == 'Z') {
-            uint16_t newtop;
-            if (sz < (uint16_t)(paras + 2)) return 0;
-            mcb_wr16(mc + 3, (uint16_t)(sz - paras - 1));
-            mc[0] = 'M';
-            newtop = (uint16_t)(m + 1 + (sz - paras - 1));     /* the new 'Z' MCB  */
-            mcb_lay(base, newtop, 'Z', 0x0008, paras);
-            return (uint16_t)(newtop + 1);
+        if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST) {
+            WORD newTop;
+            if (blockSize < (WORD)(paragraphs + 2)) return DOS_MCB_NO_SEGMENT;
+            DosMcbWriteWord(mcb + DOS_MCB_SIZE, (WORD)(blockSize - paragraphs - 1));
+            mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
+            newTop = (WORD)(mcbSegment + 1 + (blockSize - paragraphs - 1));     /* the new 'Z' MCB  */
+            DosMcbWriteHeader(base, newTop, DOS_MCB_LAST, DOS_MCB_OWNER_DOS, paragraphs);
+            return (WORD)(newTop + 1);
         }
-        if (mc[0] != 'M' || ++guard > 0x1000) return 0;
-        prev = m; have_prev = 1;
-        m = (uint16_t)(m + 1 + sz);
+        if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER || ++walkCount > DOS_MCB_WALK_LIMIT) return DOS_MCB_NO_SEGMENT;
+        previousSegment = mcbSegment; hasPrevious = TRUE;
+        mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
 }
 
-/* --- AH=48: allocate `want` paragraphs ------------------------------------- *
- * On success returns 0 and *out_seg = segment of the allocated block (data, not
- * MCB). On failure returns 8 and *out_max = largest free block found. */
-static inline int dos_alloc(volatile uint8_t *base, uint16_t first_mcb, uint16_t want,
-                            uint16_t *out_seg, uint16_t *out_max) {
-    uint16_t m = first_mcb, biggest = 0, result = 0;
-    int done = 0;
+/* --- AH=48: allocate `requested` paragraphs ------------------------------------- *
+ * On success returns 0 and *allocatedSegment = segment of the allocated block (data, not
+ * MCB). On failure returns 8 and *largestFree = largest free block found. */
+static inline INT DosMcbAllocate(_In_opt_ volatile BYTE *base, _In_ WORD firstMcb,
+                                 _In_ WORD requested, _Out_opt_ PWORD allocatedSegment,
+                                 _Out_opt_ PWORD largestFree) {
+    WORD mcbSegment = firstMcb, biggest = 0, result = 0;
+    BOOL isDone = FALSE;
     for (;;) {
-        volatile uint8_t *mc = mcb_at(base, m);
-        uint8_t  sig = mc[0];
-        uint16_t own = mcb_rd16(mc + 1);
-        uint16_t sz  = mcb_rd16(mc + 3);
-        if (own == 0) {                                 /* free block */
+        volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+        BYTE signature = mcb[DOS_MCB_SIGNATURE];
+        WORD owner = DosMcbReadWord(mcb + DOS_MCB_OWNER);
+        WORD blockSize  = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+        if (owner == DOS_MCB_OWNER_FREE) {                                 /* free block */
             /* merge-on-alloc: coalesce following free blocks before sizing, so two
                adjacent free blocks jointly satisfy a request neither satisfies alone
                (this is what real MS-DOS does during the allocation walk). */
-            while (sig == 'M') {
-                volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + sz));
-                if (mcb_rd16(nm + 1) != 0) break;       /* next block owned    */
-                if (nm[0] != 'M' && nm[0] != 'Z') break;/* next is not an MCB  */
-                sz = (uint16_t)(sz + 1 + mcb_rd16(nm + 3));
-                mcb_wr16(mc + 3, sz);
-                sig = nm[0];                            /* may become 'Z'      */
-                mc[0] = sig;
+            while (signature == DOS_MCB_MEMBER) {
+                volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + blockSize));
+                if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) != DOS_MCB_OWNER_FREE) break;       /* next block owned    */
+                if (nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) break;/* next is not an MCB  */
+                blockSize = (WORD)(blockSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
+                DosMcbWriteWord(mcb + DOS_MCB_SIZE, blockSize);
+                signature = nextMcb[DOS_MCB_SIGNATURE];                            /* may become 'Z'      */
+                mcb[DOS_MCB_SIGNATURE] = signature;
             }
-            if (sz > biggest) biggest = sz;
-            if (sz >= want) {
-                if (sz >= (uint16_t)(want + 1)) {       /* split off a free tail */
-                    volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + want));
-                    nm[0] = sig;                        /* tail inherits last-status */
-                    mcb_wr16(nm + 1, 0);
-                    mcb_wr16(nm + 3, (uint16_t)(sz - want - 1));
-                    nm[8] = 0;
-                    mc[0] = 'M';
-                    mcb_wr16(mc + 3, want);
+            if (blockSize > biggest) biggest = blockSize;
+            if (blockSize >= requested) {
+                if (blockSize >= (WORD)(requested + 1)) {       /* split off a free tail */
+                    volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + requested));
+                    nextMcb[DOS_MCB_SIGNATURE] = signature;                        /* tail inherits last-status */
+                    DosMcbWriteWord(nextMcb + DOS_MCB_OWNER, DOS_MCB_OWNER_FREE);
+                    DosMcbWriteWord(nextMcb + DOS_MCB_SIZE, (WORD)(blockSize - requested - 1));
+                    nextMcb[DOS_MCB_NAME] = 0;
+                    mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
+                    DosMcbWriteWord(mcb + DOS_MCB_SIZE, requested);
                 }
-                mcb_wr16(mc + 1, DOS_PSP_SEG);
-                result = (uint16_t)(m + 1);
-                done = 1;
+                DosMcbWriteWord(mcb + DOS_MCB_OWNER, DOS_PSP_SEG);
+                result = (WORD)(mcbSegment + 1);
+                isDone = TRUE;
             }
         }
-        if (done || sig == 'Z') break;
-        m = (uint16_t)(m + 1 + sz);
+        if (isDone || signature == DOS_MCB_LAST) break;
+        mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
-    if (!done) { if (out_max) *out_max = biggest; return 8; }
-    if (out_seg) *out_seg = result;
-    return 0;
+    if (!isDone) { if (largestFree) *largestFree = biggest; return DOS_MCB_ERROR_INSUFFICIENT_MEMORY; }
+    if (allocatedSegment) *allocatedSegment = result;
+    return DOS_MCB_SUCCESS;
 }
 
-/* --- AH=49: free the block whose data segment is `es_seg` ------------------- *
+/* --- AH=49: free the block whose data segment is `blockSegment` ------------------- *
  * Marks the block free and coalesces forward into any following free blocks.
- * Returns 0 on success, 9 if es_seg-1 is not a valid MCB. */
-static inline int dos_free(volatile uint8_t *base, uint16_t es_seg) {
-    uint16_t m = (uint16_t)(es_seg - 1);
-    volatile uint8_t *mc = mcb_at(base, m);
-    if (mc[0] != 'M' && mc[0] != 'Z') return 9;
-    mcb_wr16(mc + 1, 0);                                /* mark free */
-    while (mc[0] == 'M') {                              /* coalesce forward */
-        uint16_t sz = mcb_rd16(mc + 3);
-        volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + sz));
-        if (mcb_rd16(nm + 1) != 0) break;              /* neighbour owned */
-        if (nm[0] != 'M' && nm[0] != 'Z') break;       /* neighbour not an MCB */
-        mcb_wr16(mc + 3, (uint16_t)(sz + 1 + mcb_rd16(nm + 3)));
-        mc[0] = nm[0];                                 /* absorb (may become 'Z') */
+ * Returns 0 on success, 9 if blockSegment-1 is not a valid MCB. */
+static inline INT DosMcbFree(_In_opt_ volatile BYTE *base, _In_ WORD blockSegment) {
+    WORD mcbSegment = (WORD)(blockSegment - 1);
+    volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+    if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) return DOS_MCB_ERROR_INVALID_BLOCK;
+    DosMcbWriteWord(mcb + DOS_MCB_OWNER, DOS_MCB_OWNER_FREE);                                /* mark free */
+    while (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_MEMBER) {                              /* coalesce forward */
+        WORD blockSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+        volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + blockSize));
+        if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) != DOS_MCB_OWNER_FREE) break;              /* neighbour owned */
+        if (nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) break;       /* neighbour not an MCB */
+        DosMcbWriteWord(mcb + DOS_MCB_SIZE, (WORD)(blockSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE)));
+        mcb[DOS_MCB_SIGNATURE] = nextMcb[DOS_MCB_SIGNATURE];                                 /* absorb (may become 'Z') */
     }
-    return 0;
+    return DOS_MCB_SUCCESS;
 }
 
-/* --- AH=4A: resize the block whose data segment is `es_seg` to `want` ------- *
+/* --- AH=4A: resize the block whose data segment is `blockSegment` to `requested` ------- *
  * Shrink frees the tail; grow absorbs a following free neighbour (if any).
  * Returns 0 on success; 9 if not a valid block; 8 if it cannot grow, with
- * *out_max = the largest size achievable. */
-static inline int dos_resize(volatile uint8_t *base, uint16_t es_seg, uint16_t want,
-                             uint16_t *out_max) {
-    uint16_t m = (uint16_t)(es_seg - 1);
-    volatile uint8_t *mc = mcb_at(base, m);
-    if (mc[0] != 'M' && mc[0] != 'Z') return 9;
-    uint16_t cur = mcb_rd16(mc + 3);
-    uint8_t  sig = mc[0];
-    int ok = 0;
-    if (want <= cur) {                                 /* shrink (free the tail) */
-        if ((uint16_t)(cur - want) >= 1) {
-            volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + want));
-            nm[0] = sig; mcb_wr16(nm + 1, 0);
-            mcb_wr16(nm + 3, (uint16_t)(cur - want - 1)); nm[8] = 0;
-            mc[0] = 'M'; mcb_wr16(mc + 3, want);
+ * *largestAvailable = the largest size achievable. */
+static inline INT DosMcbResize(_In_opt_ volatile BYTE *base, _In_ WORD blockSegment,
+                               _In_ WORD requested, _Out_opt_ PWORD largestAvailable) {
+    WORD mcbSegment = (WORD)(blockSegment - 1);
+    volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+    if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) return DOS_MCB_ERROR_INVALID_BLOCK;
+    WORD currentSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+    BYTE signature = mcb[DOS_MCB_SIGNATURE];
+    BOOL isResized = FALSE;
+    if (requested <= currentSize) {                                 /* shrink (free the tail) */
+        if ((WORD)(currentSize - requested) >= 1) {
+            volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + requested));
+            nextMcb[DOS_MCB_SIGNATURE] = signature; DosMcbWriteWord(nextMcb + DOS_MCB_OWNER, DOS_MCB_OWNER_FREE);
+            DosMcbWriteWord(nextMcb + DOS_MCB_SIZE, (WORD)(currentSize - requested - 1)); nextMcb[DOS_MCB_NAME] = 0;
+            mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER; DosMcbWriteWord(mcb + DOS_MCB_SIZE, requested);
         }
-        ok = 1;
-    } else if (sig == 'M') {                            /* grow into a free neighbour */
-        volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + cur));
-        if (mcb_rd16(nm + 1) == 0) {
-            uint16_t avail = (uint16_t)(cur + 1 + mcb_rd16(nm + 3));
-            if (avail >= want) {
-                if ((uint16_t)(avail - want) >= 1) {
-                    volatile uint8_t *n2 = mcb_at(base, (uint16_t)(m + 1 + want));
-                    n2[0] = nm[0]; mcb_wr16(n2 + 1, 0);
-                    mcb_wr16(n2 + 3, (uint16_t)(avail - want - 1)); n2[8] = 0;
-                    mcb_wr16(mc + 3, want); mc[0] = 'M';
+        isResized = TRUE;
+    } else if (signature == DOS_MCB_MEMBER) {                            /* grow into a free neighbour */
+        volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + currentSize));
+        if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_FREE) {
+            WORD available = (WORD)(currentSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
+            if (available >= requested) {
+                if ((WORD)(available - requested) >= 1) {
+                    volatile BYTE *tailMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + requested));
+                    tailMcb[DOS_MCB_SIGNATURE] = nextMcb[DOS_MCB_SIGNATURE]; DosMcbWriteWord(tailMcb + DOS_MCB_OWNER, DOS_MCB_OWNER_FREE);
+                    DosMcbWriteWord(tailMcb + DOS_MCB_SIZE, (WORD)(available - requested - 1)); tailMcb[DOS_MCB_NAME] = 0;
+                    DosMcbWriteWord(mcb + DOS_MCB_SIZE, requested); mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
                 } else {
-                    mcb_wr16(mc + 3, avail); mc[0] = nm[0];
+                    DosMcbWriteWord(mcb + DOS_MCB_SIZE, available); mcb[DOS_MCB_SIGNATURE] = nextMcb[DOS_MCB_SIGNATURE];
                 }
-                ok = 1;
+                isResized = TRUE;
             }
         }
     }
-    if (!ok) {                                          /* fail: report max available */
-        uint16_t max = cur;
-        if (sig == 'M') {
-            volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + cur));
-            if (mcb_rd16(nm + 1) == 0) max = (uint16_t)(cur + 1 + mcb_rd16(nm + 3));
+    if (!isResized) {                                          /* fail: report max available */
+        WORD largest = currentSize;
+        if (signature == DOS_MCB_MEMBER) {
+            volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + currentSize));
+            if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_FREE) largest = (WORD)(currentSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
         }
-        if (out_max) *out_max = max;
-        return 8;
+        if (largestAvailable) *largestAvailable = largest;
+        return DOS_MCB_ERROR_INSUFFICIENT_MEMORY;
     }
-    return 0;
+    return DOS_MCB_SUCCESS;
 }
 
 /* --- chain integrity validator (test oracle) ------------------------------- *
- * Walk from first_mcb; returns 0 if the chain is well-formed and ends exactly
- * at top_para with a single 'Z', else a nonzero reason code:
+ * Walk from firstMcb; returns 0 if the chain is well-formed and ends exactly
+ * at topParagraph with a single 'Z', else a nonzero reason code:
  *   1 runaway chain  2 corrupt signature  3 overruns top  4 'Z' misplaced. */
-static inline int dos_mcb_check(volatile uint8_t *base, uint16_t first_mcb, uint16_t top_para) {
-    uint16_t m = first_mcb;
-    int guard = 0;
+static inline INT DosMcbCheckChain(_In_opt_ volatile BYTE *base, _In_ WORD firstMcb, _In_ WORD topParagraph) {
+    WORD mcbSegment = firstMcb;
+    INT walkCount = 0;
     for (;;) {
-        volatile uint8_t *mc = mcb_at(base, m);
-        uint8_t  sig  = mc[0];
-        uint16_t sz   = mcb_rd16(mc + 3);
-        uint32_t next = (uint32_t)m + 1 + sz;
-        if (++guard > 0x1000) return 1;
-        if (sig != 'M' && sig != 'Z') return 2;
-        if (next > top_para) return 3;
-        if (sig == 'Z') return (next == top_para) ? 0 : 4;
-        m = (uint16_t)next;
+        volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
+        BYTE  signature  = mcb[DOS_MCB_SIGNATURE];
+        WORD  blockSize   = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+        DWORD nextSegment = (DWORD)mcbSegment + 1 + blockSize;
+        if (++walkCount > DOS_MCB_WALK_LIMIT) return DOS_MCB_CHAIN_RUNAWAY;
+        if (signature != DOS_MCB_MEMBER && signature != DOS_MCB_LAST) return DOS_MCB_CHAIN_CORRUPT_SIGNATURE;
+        if (nextSegment > topParagraph) return DOS_MCB_CHAIN_OVERRUNS_TOP;
+        if (signature == DOS_MCB_LAST) return (nextSegment == topParagraph) ? DOS_MCB_CHAIN_OK : DOS_MCB_CHAIN_LAST_MISPLACED;
+        mcbSegment = (WORD)nextSegment;
     }
 }
 
-#endif /* DOS_MCB_H */
+#endif /* NTVDMEX_DOS_MCB_H */

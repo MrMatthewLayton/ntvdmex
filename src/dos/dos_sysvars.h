@@ -43,77 +43,99 @@
  * Pure -- byte buffers and integers only -- so tests/unit/sysvars_test.c can
  * pin every offset against those same dumps.
  */
-#ifndef DOS_SYSVARS_H
-#define DOS_SYSVARS_H
+#ifndef NTVDMEX_DOS_SYSVARS_H
+#define NTVDMEX_DOS_SYSVARS_H
 
+#include "../ntvdmex_types.h"
 #include "dos_layout.h"
 
 /* ---- SysVars field offsets, relative to what AH=52h returns in ES:BX. */
-#define SV_MCB_HEAD      (-2)
-#define SV_DPB           0x00
-#define SV_SFT           0x04
-#define SV_CLOCK         0x08
-#define SV_CON           0x0C
-#define SV_MAXSEC        0x10
-#define SV_BUFFERS       0x12
-#define SV_CDS           0x16
-#define SV_FCB           0x1A
-#define SV_FCB_KEEP      0x1E
-#define SV_NBLOCKDEV     0x20
-#define SV_LASTDRIVE     0x21
-#define SV_NUL           0x22        /* the NUL device header, INLINE */
-#define SV_NUL_LEN       0x12        /* 18 bytes, measured */
-#define SV_LEN           (SV_NUL + SV_NUL_LEN)   /* 0x34 */
+#define DOS_SYSVARS_MCB_HEAD      (-2)
+#define DOS_SYSVARS_DPB           0x00
+#define DOS_SYSVARS_SFT           0x04
+#define DOS_SYSVARS_CLOCK         0x08
+#define DOS_SYSVARS_CON           0x0C
+#define DOS_SYSVARS_MAX_SECTOR    0x10
+#define DOS_SYSVARS_BUFFERS       0x12
+#define DOS_SYSVARS_CDS           0x16
+#define DOS_SYSVARS_FCB           0x1A
+#define DOS_SYSVARS_FCB_KEEP      0x1E
+#define DOS_SYSVARS_BLOCK_DEVICES 0x20
+#define DOS_SYSVARS_LASTDRIVE     0x21
+#define DOS_SYSVARS_NUL           0x22        /* the NUL device header, INLINE */
+#define DOS_SYSVARS_NUL_LEN       0x12        /* 18 bytes, measured */
+#define DOS_SYSVARS_NUL_END       (DOS_SYSVARS_NUL + DOS_SYSVARS_NUL_LEN)   /* 0x34 */
 
 /* ---- DPB (DOS 4.0+), 33 bytes. Offsets measured from sysvars.dpb0. */
-#define DPB_DRIVE        0x00
-#define DPB_UNIT         0x01
-#define DPB_SECSIZE      0x02
-#define DPB_CLUSTMAX     0x04        /* sectors per cluster MINUS ONE */
-#define DPB_CLUSTSHIFT   0x05
-#define DPB_RESERVED     0x06
-#define DPB_NFATS        0x08
-#define DPB_ROOTENTS     0x09
-#define DPB_DATASTART    0x0B
-#define DPB_CLUSTHIGH    0x0D        /* highest cluster number                */
-#define DPB_FATSECS      0x0F        /* WORD on DOS 4+, was a byte before     */
-#define DPB_ROOTSTART    0x11
-#define DPB_DEVHDR       0x13        /* far pointer to the device header      */
-#define DPB_MEDIA        0x17
-#define DPB_ACCESSED     0x18
-#define DPB_NEXT         0x19        /* far pointer to the next DPB           */
-#define DPB_FREESEARCH   0x1D
-#define DPB_FREECOUNT    0x1F        /* FFFF = unknown, which is what 6.22 had */
-#define DPB_LEN          0x21        /* 33 -- confirmed by 0x136A + 0x21 = 0x138B */
+#define DOS_DPB_DRIVE           0x00
+#define DOS_DPB_UNIT            0x01
+#define DOS_DPB_SECTOR_SIZE     0x02
+#define DOS_DPB_CLUSTER_MAX     0x04        /* sectors per cluster MINUS ONE */
+#define DOS_DPB_CLUSTER_SHIFT   0x05
+#define DOS_DPB_RESERVED        0x06
+#define DOS_DPB_FAT_COUNT       0x08
+#define DOS_DPB_ROOT_ENTRIES    0x09
+#define DOS_DPB_DATA_START      0x0B
+#define DOS_DPB_HIGHEST_CLUSTER 0x0D        /* highest cluster number                */
+#define DOS_DPB_FAT_SECTORS     0x0F        /* WORD on DOS 4+, was a byte before     */
+#define DOS_DPB_ROOT_START      0x11
+#define DOS_DPB_DEVICE_HEADER   0x13        /* far pointer to the device header      */
+#define DOS_DPB_MEDIA           0x17
+#define DOS_DPB_ACCESSED        0x18
+#define DOS_DPB_NEXT            0x19        /* far pointer to the next DPB           */
+#define DOS_DPB_FREE_SEARCH     0x1D
+#define DOS_DPB_FREE_COUNT      0x1F        /* FFFF = unknown, which is what 6.22 had */
+#define DOS_DPB_LEN             0x21        /* 33 -- confirmed by 0x136A + 0x21 = 0x138B */
 
 /* ---- CDS (DOS 4.0+), 88 bytes. Offsets measured from sysvars.cds0. */
-#define CDS_PATH         0x00        /* 67 bytes ASCIZ, e.g. "A:\"            */
-#define CDS_FLAGS        0x43
-#define CDS_DPB          0x45        /* far pointer to this drive's DPB       */
-#define CDS_CLUSTER      0x49
-#define CDS_UNKNOWN      0x4B        /* 6.22 leaves FFFFFFFF here             */
-#define CDS_SLASH        0x4F        /* offset of the root backslash: 2       */
-#define CDS_LEN          0x58        /* 88 -- 'B:\' begins exactly here       */
+#define DOS_CDS_PATH         0x00        /* 67 bytes ASCIZ, e.g. "A:\"            */
+#define DOS_CDS_FLAGS        0x43
+#define DOS_CDS_DPB          0x45        /* far pointer to this drive's DPB       */
+#define DOS_CDS_CLUSTER      0x49
+#define DOS_CDS_UNKNOWN      0x4B        /* 6.22 leaves FFFFFFFF here             */
+#define DOS_CDS_SLASH        0x4F        /* offset of the root backslash: 2       */
+#define DOS_CDS_LEN          0x58        /* 88 -- 'B:\' begins exactly here       */
 
 /* Measured flag: bit 14 set = the drive is PHYSICAL/local. 6.22 had 0x4000 on
    A:, and a drive letter with nothing behind it gets 0. */
-#define CDS_FLAG_PHYSICAL 0x4000
+#define DOS_CDS_FLAG_PHYSICAL 0x4000
 /* Bit 15 = the drive is served by a redirector (network, and MSCDEX's CD-ROMs
    look the same to DOS). Such entries carry no DPB: there is no FAT to walk. */
-#define CDS_FLAG_NETWORK  0x8000
+#define DOS_CDS_FLAG_NETWORK  0x8000
+
+/* The values the builders below write. */
+#define DOS_SYSVARS_LOW_BYTE_MASK   0xFF
+#define DOS_SYSVARS_HIGH_BYTE_SHIFT 8
+#define DOS_SYSVARS_FAR_SEGMENT     2       /* a far pointer: offset WORD, then segment WORD */
+#define DOS_CHAIN_END               0xFFFF  /* FFFF:FFFF ends a DPB or device chain           */
+#define DOS_DPB_DEFAULT_SECTOR_SIZE 512     /* what a sector size of 0 is taken as            */
+#define DOS_FAT12_HIGHEST_CLUSTER   0xFF5   /* FAT12 if the highest cluster is at most this    */
+#define DOS_FAT12_PAIR_BYTES        3       /* FAT12: two entries in three bytes               */
+#define DOS_FAT12_PAIR_ENTRIES      2
+#define DOS_FAT16_ENTRY_BYTES       2
+#define DOS_FORMAT_RESERVED_SECTORS 1       /* FORMAT's fixed choices: 1 reserved sector ...   */
+#define DOS_FORMAT_FAT_COUNT        2       /* ... and 2 FATs                                  */
+#define DOS_DIRECTORY_ENTRY_BYTES   32
+#define DOS_DPB_FREE_COUNT_UNKNOWN  0xFFFF
+#define DOS_CDS_NO_DPB              0xFFFF  /* an unused drive letter: FFFF:FFFF               */
+#define DOS_CDS_REDIRECTED_DPB      0x0000  /* a redirected drive: 0000:0000                   */
+#define DOS_CDS_UNKNOWN_FILL        0xFFFF
+#define DOS_CDS_ROOT_SLASH_INDEX    2       /* "A:\" -- the backslash is at index 2            */
+#define DOS_DEVICE_NAME_LEN         8
 
 /* static INLINE: dos_int21.c includes this for AH=1Fh/32h's DPB (#48) and uses one
    builder of the five, and a plain `static` would warn for every unused one. */
-static inline void sv_w(unsigned char *p, unsigned o, unsigned v)
+static inline VOID DosSysVarsWriteWord(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT value)
 {
-    p[o] = (unsigned char)(v & 0xFF);
-    p[o + 1] = (unsigned char)((v >> 8) & 0xFF);
+    buffer[offset] = (BYTE)(value & DOS_SYSVARS_LOW_BYTE_MASK);
+    buffer[offset + 1] = (BYTE)((value >> DOS_SYSVARS_HIGH_BYTE_SHIFT) & DOS_SYSVARS_LOW_BYTE_MASK);
 }
 
-static inline void sv_far(unsigned char *p, unsigned o, unsigned seg, unsigned off)
+static inline VOID DosSysVarsWriteFarPointer(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT segment,
+                                             _In_ UINT pointerOffset)
 {
-    sv_w(p, o, off);
-    sv_w(p, o + 2, seg);
+    DosSysVarsWriteWord(buffer, offset, pointerOffset);
+    DosSysVarsWriteWord(buffer, offset + DOS_SYSVARS_FAR_SEGMENT, segment);
 }
 
 /* ── #48: THE FAT LAYOUT A DPB DESCRIBES, DERIVED -- AND CHECKED AGAINST 6.22. ──────
@@ -143,83 +165,84 @@ static inline void sv_far(unsigned char *p, unsigned o, unsigned seg, unsigned o
      follows them to the FAT gets the same INT 25h refusal it got before -- what it no
      longer gets is a structurally impossible DPB. Unmeasured against a 6.22 HARD disk
      DPB; tests/probes/dos/p_devchn.asm's `dpb.c.layout` row is the check. */
-static inline void dos_dpb_fat_layout(unsigned bytes_per_sec, unsigned root_ents,
-                                      unsigned highest_clust, unsigned *fatsecs,
-                                      unsigned *rootstart, unsigned *datastart)
+static inline VOID DosDpbFatLayout(_In_ UINT bytesPerSector, _In_ UINT rootEntries,
+                                   _In_ UINT highestCluster, _Out_ PUINT fatSectors,
+                                   _Out_ PUINT rootStart, _Out_ PUINT dataStart)
 {
-    unsigned long bps = bytes_per_sec ? bytes_per_sec : 512;
-    unsigned long ents = (unsigned long)highest_clust + 1;          /* clusters 0..highest */
-    unsigned long fatbytes = (highest_clust <= 0xFF5) ? (ents * 3 + 1) / 2 : ents * 2;
-    unsigned long fs = (fatbytes + bps - 1) / bps;
-    unsigned long rs = 1 + 2 * fs;                                  /* reserved + 2 FATs   */
-    unsigned long ds = rs + ((unsigned long)root_ents * 32 + bps - 1) / bps;
-    *fatsecs = (unsigned)fs; *rootstart = (unsigned)rs; *datastart = (unsigned)ds;
+    DWORD sectorSize = bytesPerSector ? bytesPerSector : DOS_DPB_DEFAULT_SECTOR_SIZE;
+    DWORD entries = (DWORD)highestCluster + 1;          /* clusters 0..highest */
+    DWORD fatBytes = (highestCluster <= DOS_FAT12_HIGHEST_CLUSTER) ? (entries * DOS_FAT12_PAIR_BYTES + 1) / DOS_FAT12_PAIR_ENTRIES : entries * DOS_FAT16_ENTRY_BYTES;
+    DWORD sectorsPerFat = (fatBytes + sectorSize - 1) / sectorSize;
+    DWORD rootSector = DOS_FORMAT_RESERVED_SECTORS + DOS_FORMAT_FAT_COUNT * sectorsPerFat;                                  /* reserved + 2 FATs   */
+    DWORD dataSector = rootSector + ((DWORD)rootEntries * DOS_DIRECTORY_ENTRY_BYTES + sectorSize - 1) / sectorSize;
+    *fatSectors = (UINT)sectorsPerFat; *rootStart = (UINT)rootSector; *dataStart = (UINT)dataSector;
 }
 
-/* Build one DPB. `next_seg/next_off` link it on; pass 0xFFFF/0xFFFF to end the
+/* Build one DPB. `nextSegment/nextOffset` link it on; pass 0xFFFF/0xFFFF to end the
    chain -- a chain that does not terminate is how krnl386 once walked the IVT
    forever (see DOS_SFT_* in dos_layout.h), and a DPB chain can do the same.
  ⚠ WHICH FIELDS ARE REAL, AND WHICH ARE NOT. Say it here rather than let a
    caller discover it. GetDiskFreeSpace gives us bytes/sector, sectors/cluster
-   and the cluster count, so DPB_SECSIZE, DPB_CLUSTMAX, DPB_CLUSTSHIFT and
-   DPB_CLUSTHIGH are MEASURED off the real volume. The rest of the FAT geometry
-   -- DPB_RESERVED, DPB_NFATS, DPB_ROOTENTS, DPB_DATASTART, DPB_FATSECS,
-   DPB_ROOTSTART -- is only in the boot sector, which we cannot read, so it is
-   DERIVED by dos_dpb_fat_layout above (#48; was zero -- see there for why zero
+   and the cluster count, so DOS_DPB_SECTOR_SIZE, DOS_DPB_CLUSTER_MAX, DOS_DPB_CLUSTER_SHIFT and
+   DOS_DPB_HIGHEST_CLUSTER are MEASURED off the real volume. The rest of the FAT geometry
+   -- DOS_DPB_RESERVED, DOS_DPB_FAT_COUNT, DOS_DPB_ROOT_ENTRIES, DOS_DPB_DATA_START, DOS_DPB_FAT_SECTORS,
+   DOS_DPB_ROOT_START -- is only in the boot sector, which we cannot read, so it is
+   DERIVED by DosDpbFatLayout above (#48; was zero -- see there for why zero
    was not the honest answer it looked like). */
-static inline void dos_dpb_build(unsigned char *p, unsigned drive,
-                          unsigned bytes_per_sec, unsigned secs_per_clust,
-                          unsigned root_ents, unsigned highest_clust,
-                          unsigned media, unsigned devhdr_seg, unsigned devhdr_off,
-                          unsigned next_seg, unsigned next_off)
+static inline VOID DosDpbBuild(_Out_writes_bytes_(DOS_DPB_LEN) PBYTE dpb, _In_ UINT drive,
+                               _In_ UINT bytesPerSector, _In_ UINT sectorsPerCluster,
+                               _In_ UINT rootEntries, _In_ UINT highestCluster,
+                               _In_ UINT media, _In_ UINT deviceHeaderSegment,
+                               _In_ UINT deviceHeaderOffset,
+                               _In_ UINT nextSegment, _In_ UINT nextOffset)
 {
-    unsigned i, shift = 0, n = secs_per_clust, fs, rs, ds;
-    for (i = 0; i < DPB_LEN; ++i) p[i] = 0;
-    while (n > 1) { n >>= 1; ++shift; }
-    p[DPB_DRIVE] = (unsigned char)drive;
-    p[DPB_UNIT]  = (unsigned char)drive;
-    sv_w(p, DPB_SECSIZE, bytes_per_sec);
+    UINT byteIndex, shift = 0, remaining = sectorsPerCluster, fatSectors, rootStart, dataStart;
+    for (byteIndex = 0; byteIndex < DOS_DPB_LEN; ++byteIndex) dpb[byteIndex] = 0;
+    while (remaining > 1) { remaining >>= 1; ++shift; }
+    dpb[DOS_DPB_DRIVE] = (BYTE)drive;
+    dpb[DOS_DPB_UNIT]  = (BYTE)drive;
+    DosSysVarsWriteWord(dpb, DOS_DPB_SECTOR_SIZE, bytesPerSector);
     /* ⚠ MINUS ONE. 6.22's floppy DPB has 0 here with one sector per cluster --
        the field is the highest sector INDEX in a cluster, not the count. */
-    p[DPB_CLUSTMAX]    = (unsigned char)(secs_per_clust ? secs_per_clust - 1 : 0);
-    p[DPB_CLUSTSHIFT]  = (unsigned char)shift;
-    sv_w(p, DPB_RESERVED, 1);
-    p[DPB_NFATS] = 2;
-    sv_w(p, DPB_ROOTENTS, root_ents);
-    dos_dpb_fat_layout(bytes_per_sec, root_ents, highest_clust, &fs, &rs, &ds);
-    sv_w(p, DPB_DATASTART, ds);
-    sv_w(p, DPB_FATSECS, fs);
-    sv_w(p, DPB_ROOTSTART, rs);
-    sv_w(p, DPB_CLUSTHIGH, highest_clust);
-    sv_far(p, DPB_DEVHDR, devhdr_seg, devhdr_off);
-    p[DPB_MEDIA] = (unsigned char)media;
-    p[DPB_ACCESSED] = 0;
-    sv_far(p, DPB_NEXT, next_seg, next_off);
+    dpb[DOS_DPB_CLUSTER_MAX]    = (BYTE)(sectorsPerCluster ? sectorsPerCluster - 1 : 0);
+    dpb[DOS_DPB_CLUSTER_SHIFT]  = (BYTE)shift;
+    DosSysVarsWriteWord(dpb, DOS_DPB_RESERVED, DOS_FORMAT_RESERVED_SECTORS);
+    dpb[DOS_DPB_FAT_COUNT] = DOS_FORMAT_FAT_COUNT;
+    DosSysVarsWriteWord(dpb, DOS_DPB_ROOT_ENTRIES, rootEntries);
+    DosDpbFatLayout(bytesPerSector, rootEntries, highestCluster, &fatSectors, &rootStart, &dataStart);
+    DosSysVarsWriteWord(dpb, DOS_DPB_DATA_START, dataStart);
+    DosSysVarsWriteWord(dpb, DOS_DPB_FAT_SECTORS, fatSectors);
+    DosSysVarsWriteWord(dpb, DOS_DPB_ROOT_START, rootStart);
+    DosSysVarsWriteWord(dpb, DOS_DPB_HIGHEST_CLUSTER, highestCluster);
+    DosSysVarsWriteFarPointer(dpb, DOS_DPB_DEVICE_HEADER, deviceHeaderSegment, deviceHeaderOffset);
+    dpb[DOS_DPB_MEDIA] = (BYTE)media;
+    dpb[DOS_DPB_ACCESSED] = 0;
+    DosSysVarsWriteFarPointer(dpb, DOS_DPB_NEXT, nextSegment, nextOffset);
     /* FFFF = "free cluster count unknown", which is exactly what 6.22 reported
        (sysvars.dpb0 has FF FF at +0x1F). Claiming a number we have not counted
        would be the MEM.EXE failure mode in a different structure. */
-    sv_w(p, DPB_FREECOUNT, 0xFFFF);
+    DosSysVarsWriteWord(dpb, DOS_DPB_FREE_COUNT, DOS_DPB_FREE_COUNT_UNKNOWN);
 }
 
 /* Build one CDS entry for drive 0..25. `flags` is the flags word: 0 for a drive
    letter with nothing behind it (how DOS marks an unused slot in an array that is
-   always LASTDRIVE entries long), CDS_FLAG_PHYSICAL for a local drive with a DPB,
-   CDS_FLAG_PHYSICAL|CDS_FLAG_NETWORK for a redirected one (no DPB). */
-static inline void dos_cds_build(unsigned char *p, unsigned drive, unsigned flags,
-                          unsigned dpb_seg, unsigned dpb_off)
+   always LASTDRIVE entries long), DOS_CDS_FLAG_PHYSICAL for a local drive with a DPB,
+   DOS_CDS_FLAG_PHYSICAL|DOS_CDS_FLAG_NETWORK for a redirected one (no DPB). */
+static inline VOID DosCdsBuild(_Out_writes_bytes_(DOS_CDS_LEN) PBYTE cds, _In_ UINT drive,
+                               _In_ UINT flags, _In_ UINT dpbSegment, _In_ UINT dpbOffset)
 {
-    unsigned i;
-    for (i = 0; i < CDS_LEN; ++i) p[i] = 0;
-    p[CDS_PATH + 0] = (unsigned char)('A' + drive);
-    p[CDS_PATH + 1] = ':';
-    p[CDS_PATH + 2] = '\\';
-    sv_w(p, CDS_FLAGS, flags);
-    if (!flags)                          sv_far(p, CDS_DPB, 0xFFFF, 0xFFFF);
-    else if (flags & CDS_FLAG_NETWORK)   sv_far(p, CDS_DPB, 0x0000, 0x0000);
-    else                                 sv_far(p, CDS_DPB, dpb_seg, dpb_off);
-    sv_w(p, CDS_UNKNOWN, 0xFFFF);
-    sv_w(p, CDS_UNKNOWN + 2, 0xFFFF);
-    sv_w(p, CDS_SLASH, 2);              /* "A:\" -- the backslash is at index 2 */
+    UINT byteIndex;
+    for (byteIndex = 0; byteIndex < DOS_CDS_LEN; ++byteIndex) cds[byteIndex] = 0;
+    cds[DOS_CDS_PATH + 0] = (BYTE)('A' + drive);
+    cds[DOS_CDS_PATH + 1] = ':';
+    cds[DOS_CDS_PATH + 2] = '\\';
+    DosSysVarsWriteWord(cds, DOS_CDS_FLAGS, flags);
+    if (!flags)                          DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, DOS_CDS_NO_DPB, DOS_CDS_NO_DPB);
+    else if (flags & DOS_CDS_FLAG_NETWORK)   DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, DOS_CDS_REDIRECTED_DPB, DOS_CDS_REDIRECTED_DPB);
+    else                                 DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, dpbSegment, dpbOffset);
+    DosSysVarsWriteWord(cds, DOS_CDS_UNKNOWN, DOS_CDS_UNKNOWN_FILL);
+    DosSysVarsWriteWord(cds, DOS_CDS_UNKNOWN + 2, DOS_CDS_UNKNOWN_FILL);
+    DosSysVarsWriteWord(cds, DOS_CDS_SLASH, DOS_CDS_ROOT_SLASH_INDEX);              /* "A:\" -- the backslash is at index 2 */
 }
 
 /* ── #48: THE DEVICE DRIVER CHAIN. ─────────────────────────────────────────────────
@@ -245,68 +268,71 @@ static inline void dos_cds_build(unsigned char *p, unsigned drive, unsigned flag
      done, "unknown command" -- written by the strategy entry, and a bare RETF from the
      interrupt entry. That is a truthful refusal; an entry of 0000 (what NUL had) is a
      far call into whatever the segment holds at offset 0. */
-#define DEVHDR_NEXT      0x00
-#define DEVHDR_ATTR      0x04
-#define DEVHDR_STRAT     0x06
-#define DEVHDR_INTR      0x08
-#define DEVHDR_NAME      0x0A
-#define DEVHDR_LEN       0x12        /* 18, as SV_NUL_LEN -- the stride 6.22's are at */
-enum { DEV_CON, DEV_AUX, DEV_PRN, DEV_CLOCK, DEV_BLOCK, DEV_COM1, DEV_LPT1, DEV_LPT2,
-       DEV_LPT3, DEV_COM2, DEV_COM3, DEV_COM4, DEV_COUNT };
-#define DEV_OFF(i)       ((unsigned)(i) * DEVHDR_LEN)         /* 0x00 .. 0xC6        */
+#define DOS_DEVICE_HEADER_NEXT      0x00
+#define DOS_DEVICE_HEADER_ATTRIBUTE 0x04
+#define DOS_DEVICE_HEADER_STRATEGY  0x06
+#define DOS_DEVICE_HEADER_INTERRUPT 0x08
+#define DOS_DEVICE_HEADER_NAME      0x0A
+#define DOS_DEVICE_HEADER_LEN       0x12        /* 18, as DOS_SYSVARS_NUL_LEN -- the stride 6.22's are at */
+enum { DOS_DEVICE_CON, DOS_DEVICE_AUX, DOS_DEVICE_PRN, DOS_DEVICE_CLOCK, DOS_DEVICE_BLOCK,
+       DOS_DEVICE_COM1, DOS_DEVICE_LPT1, DOS_DEVICE_LPT2, DOS_DEVICE_LPT3, DOS_DEVICE_COM2,
+       DOS_DEVICE_COM3, DOS_DEVICE_COM4, DOS_DEVICE_COUNT };
+#define DOS_DEVICE_OFFSET(index)    ((UINT)(index) * DOS_DEVICE_HEADER_LEN)         /* 0x00 .. 0xC6        */
 /* The entry stubs, after the headers (12 x 18 = 0xD8 bytes). Strategy routines are
    FAR-called with ES:BX = the request header, whose status word is at +3. */
-#define DEV_STUB_UNKNOWN 0xE0        /* mov word [es:bx+3],8103h ; retf -- 7 bytes   */
-#define DEV_STUB_RETF    0xE7        /* retf -- every interrupt entry                */
-#define DEV_AREA_LEN     0xE8
-#define DEV_ATTR_CON     0x8013
-#define DEV_ATTR_AUX     0x8000
-#define DEV_ATTR_PRN     0xA0C0
-#define DEV_ATTR_CLOCK   0x8008
-#define DEV_ATTR_BLOCK   0x08C2
-#define DEV_ATTR_NUL     0x8004      /* measured: 6.22's NUL header, sysvars_test.c  */
+#define DOS_DEVICE_STUB_UNKNOWN 0xE0        /* mov word [es:bx+3],8103h ; retf -- 7 bytes   */
+#define DOS_DEVICE_STUB_RETF    0xE7        /* retf -- every interrupt entry                */
+#define DOS_DEVICE_AREA_LEN     0xE8
+#define DOS_DEVICE_ATTRIBUTE_CON     0x8013
+#define DOS_DEVICE_ATTRIBUTE_AUX     0x8000
+#define DOS_DEVICE_ATTRIBUTE_PRN     0xA0C0
+#define DOS_DEVICE_ATTRIBUTE_CLOCK   0x8008
+#define DOS_DEVICE_ATTRIBUTE_BLOCK   0x08C2
+#define DOS_DEVICE_ATTRIBUTE_NUL     0x8004      /* measured: 6.22's NUL header, sysvars_test.c  */
 
-static inline void dos_devhdr_build(unsigned char *p, unsigned next_seg, unsigned next_off,
-                                    unsigned attr, unsigned strat, unsigned intr,
-                                    const char *name8)
+static inline VOID DosDeviceHeaderBuild(_Out_writes_bytes_(DOS_DEVICE_HEADER_LEN) PBYTE header,
+                                        _In_ UINT nextSegment, _In_ UINT nextOffset,
+                                        _In_ UINT attribute, _In_ UINT strategyEntry, _In_ UINT interruptEntry,
+                                        _In_reads_(DOS_DEVICE_NAME_LEN) PCSTR name)
 {
-    unsigned i;
-    sv_far(p, DEVHDR_NEXT, next_seg, next_off);
-    sv_w(p, DEVHDR_ATTR, attr);
-    sv_w(p, DEVHDR_STRAT, strat);
-    sv_w(p, DEVHDR_INTR, intr);
-    for (i = 0; i < 8; ++i) p[DEVHDR_NAME + i] = (unsigned char)name8[i];
+    UINT characterIndex;
+    DosSysVarsWriteFarPointer(header, DOS_DEVICE_HEADER_NEXT, nextSegment, nextOffset);
+    DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_ATTRIBUTE, attribute);
+    DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_STRATEGY, strategyEntry);
+    DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_INTERRUPT, interruptEntry);
+    for (characterIndex = 0; characterIndex < DOS_DEVICE_NAME_LEN; ++characterIndex) header[DOS_DEVICE_HEADER_NAME + characterIndex] = (BYTE)name[characterIndex];
 }
 
-/* The DOS_DEV_SEG area, DEV_AREA_LEN bytes: twelve headers linked in 6.22's order and
-   terminated, then the stubs. `seg` is the segment the area will live at (each `next`
+/* The DOS_DEV_SEG area, DOS_DEVICE_AREA_LEN bytes: twelve headers linked in 6.22's order and
+   terminated, then the stubs. `segment` is the segment the area will live at (each `next`
    names it); `units` goes in the block driver's name byte 0 (= SysVars+0x20). */
-static inline void dos_devchain_build(unsigned char *p, unsigned seg, unsigned units)
+static inline VOID DosDeviceChainBuild(_Out_writes_bytes_(DOS_DEVICE_AREA_LEN) PBYTE area,
+                                       _In_ UINT segment, _In_ UINT units)
 {
-    static const struct { unsigned attr; char name[9]; } dev[DEV_COUNT] = {
-        { DEV_ATTR_CON,   "CON     " }, { DEV_ATTR_AUX,   "AUX     " },
-        { DEV_ATTR_PRN,   "PRN     " }, { DEV_ATTR_CLOCK, "CLOCK$  " },
-        { DEV_ATTR_BLOCK, "" },
-        { DEV_ATTR_AUX,   "COM1    " }, { DEV_ATTR_PRN,   "LPT1    " },
-        { DEV_ATTR_PRN,   "LPT2    " }, { DEV_ATTR_PRN,   "LPT3    " },
-        { DEV_ATTR_AUX,   "COM2    " }, { DEV_ATTR_AUX,   "COM3    " },
-        { DEV_ATTR_AUX,   "COM4    " },
+    static const struct { UINT Attribute; CHAR Name[DOS_DEVICE_NAME_LEN + 1]; } devices[DOS_DEVICE_COUNT] = {
+        { DOS_DEVICE_ATTRIBUTE_CON,   "CON     " }, { DOS_DEVICE_ATTRIBUTE_AUX,   "AUX     " },
+        { DOS_DEVICE_ATTRIBUTE_PRN,   "PRN     " }, { DOS_DEVICE_ATTRIBUTE_CLOCK, "CLOCK$  " },
+        { DOS_DEVICE_ATTRIBUTE_BLOCK, "" },
+        { DOS_DEVICE_ATTRIBUTE_AUX,   "COM1    " }, { DOS_DEVICE_ATTRIBUTE_PRN,   "LPT1    " },
+        { DOS_DEVICE_ATTRIBUTE_PRN,   "LPT2    " }, { DOS_DEVICE_ATTRIBUTE_PRN,   "LPT3    " },
+        { DOS_DEVICE_ATTRIBUTE_AUX,   "COM2    " }, { DOS_DEVICE_ATTRIBUTE_AUX,   "COM3    " },
+        { DOS_DEVICE_ATTRIBUTE_AUX,   "COM4    " },
     };
-    static const unsigned char stubs[] = {
-        0x26, 0xC7, 0x47, 0x03, 0x03, 0x81, 0xCB,        /* DEV_STUB_UNKNOWN */
-        0xCB,                                            /* DEV_STUB_RETF    */
+    static const BYTE stubs[] = {
+        0x26, 0xC7, 0x47, 0x03, 0x03, 0x81, 0xCB,        /* DOS_DEVICE_STUB_UNKNOWN */
+        0xCB,                                            /* DOS_DEVICE_STUB_RETF    */
     };
-    unsigned i;
-    for (i = 0; i < DEV_AREA_LEN; ++i) p[i] = 0;
-    for (i = 0; i < DEV_COUNT; ++i) {
-        int last = (i + 1 == DEV_COUNT);
-        /* the block driver's name is 8 zero bytes; char[9] "" zero-fills the rest */
-        dos_devhdr_build(p + DEV_OFF(i), last ? 0xFFFF : seg,
-                         last ? 0xFFFF : DEV_OFF(i + 1), dev[i].attr,
-                         DEV_STUB_UNKNOWN, DEV_STUB_RETF, dev[i].name);
+    UINT index;
+    for (index = 0; index < DOS_DEVICE_AREA_LEN; ++index) area[index] = 0;
+    for (index = 0; index < DOS_DEVICE_COUNT; ++index) {
+        BOOL isLast = (index + 1 == DOS_DEVICE_COUNT);
+        /* the block driver's name is 8 zero bytes; Name[9] "" zero-fills the rest */
+        DosDeviceHeaderBuild(area + DOS_DEVICE_OFFSET(index), isLast ? DOS_CHAIN_END : segment,
+                             isLast ? DOS_CHAIN_END : DOS_DEVICE_OFFSET(index + 1), devices[index].Attribute,
+                             DOS_DEVICE_STUB_UNKNOWN, DOS_DEVICE_STUB_RETF, devices[index].Name);
     }
-    p[DEV_OFF(DEV_BLOCK) + DEVHDR_NAME] = (unsigned char)units;
-    for (i = 0; i < sizeof stubs; ++i) p[DEV_STUB_UNKNOWN + i] = stubs[i];
+    area[DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK) + DOS_DEVICE_HEADER_NAME] = (BYTE)units;
+    for (index = 0; index < sizeof stubs; ++index) area[DOS_DEVICE_STUB_UNKNOWN + index] = stubs[index];
 }
 
 /* NUL's own two entries live in ITS segment (a header's strategy/interrupt are
@@ -316,21 +342,23 @@ static inline void dos_devchain_build(unsigned char *p, unsigned seg, unsigned u
 #define DOS_NULSTUB_LEN   8
 #define DOS_NULSTUB_STRAT 0          /* offsets within the 8 bytes */
 #define DOS_NULSTUB_INTR  7
-static inline void dos_nulstub_build(unsigned char *p)
+static inline VOID DosNulStubBuild(_Out_writes_bytes_(DOS_NULSTUB_LEN) PBYTE stub)
 {
-    static const unsigned char s[DOS_NULSTUB_LEN] =
+    static const BYTE stubBytes[DOS_NULSTUB_LEN] =
         { 0x26, 0xC7, 0x47, 0x03, 0x00, 0x01, 0xCB, 0xCB };
-    unsigned i;
-    for (i = 0; i < DOS_NULSTUB_LEN; ++i) p[i] = s[i];
+    UINT index;
+    for (index = 0; index < DOS_NULSTUB_LEN; ++index) stub[index] = stubBytes[index];
 }
 
 /* Build the NUL device header, inline at SysVars+0x22. Attribute 0x8004 is 6.22's
    (bit 15 = character device, bit 2 = NUL). `next` links on to CON (#48; it
    TERMINATED here, FFFF:FFFF, while no other header existed -- see above). */
-static inline void dos_nul_build(unsigned char *p, unsigned next_seg, unsigned next_off,
-                                 unsigned strat, unsigned intr)
+#define DOS_NUL_NAME "NUL     "
+static inline VOID DosNulHeaderBuild(_Out_writes_bytes_(DOS_DEVICE_HEADER_LEN) PBYTE header,
+                                     _In_ UINT nextSegment, _In_ UINT nextOffset,
+                                     _In_ UINT strategyEntry, _In_ UINT interruptEntry)
 {
-    dos_devhdr_build(p, next_seg, next_off, DEV_ATTR_NUL, strat, intr, "NUL     ");
+    DosDeviceHeaderBuild(header, nextSegment, nextOffset, DOS_DEVICE_ATTRIBUTE_NUL, strategyEntry, interruptEntry, DOS_NUL_NAME);
 }
 
-#endif /* DOS_SYSVARS_H */
+#endif /* NTVDMEX_DOS_SYSVARS_H */

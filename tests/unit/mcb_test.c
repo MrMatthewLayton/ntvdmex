@@ -18,36 +18,113 @@
 #include "dos_psp.h"
 #include "dos_env.h"
 
-static uint8_t mem[0x100000];          /* 1MB flat "conventional memory" buffer */
+/* The chain DosMcbInitialize lays down (#207), by MCB paragraph. */
+#define MCB_TEST_MEMORY_SIZE      0x100000  /* 1MB flat "conventional memory" buffer      */
+#define MCB_TEST_FIRST_MCB        0x7E      /* the env block                              */
+#define MCB_TEST_DOS_BLOCK        0x8F      /* DOS's own block                            */
+#define MCB_TEST_DOS_PARAS        0x6F
+#define MCB_TEST_PROGRAM_MCB      0xFF      /* the program block, in front of the PSP     */
+#define MCB_TEST_PSP              0x0100
+#define MCB_TEST_OLD_FIRST_MCB    0x5F      /* where the chain started before #207        */
+#define MCB_TEST_OLD_DOS_PARAS    0x8E
+#define MCB_TEST_WALK_LIMIT       32        /* dump at most this many blocks              */
+#define MCB_TEST_PRINTABLE_FIRST  32
+#define MCB_TEST_PRINTABLE_END    127
+#define MCB_TEST_POISON           0xDEAD    /* so a value the allocator forgets is visible */
 
-static int total = 0, fails = 0;
-#define CHECK(cond, msg) do {                                  \
-        total++;                                               \
-        if (cond) { printf("  PASS  %s\n", (msg)); }           \
-        else      { printf("  FAIL  %s\n", (msg)); fails++; }  \
-    } while (0)
+/* The sizes each step asks for, in paragraphs. */
+#define MCB_TEST_CDS_PARAS        0x8F
+#define MCB_TEST_SECOND_RESERVE   0x20
+#define MCB_TEST_SHRUNK           0x1000
+#define MCB_TEST_ALLOC            0x80
+#define MCB_TEST_GROWN            0x2000
+#define MCB_TEST_TOO_BIG          0x3000    /* past the owned neighbour                  */
+#define MCB_TEST_SMALL_ALLOC      0x10
+#define MCB_TEST_NEIGHBOUR_ALLOC  0x100
+#define MCB_TEST_HUGE             0xFFFF
+#define MCB_TEST_BAD_SEGMENT      0x0001
+#define MCB_TEST_TAIL_MCB         0x1100    /* the freed tail after the 0x1000 shrink     */
+#define MCB_TEST_TAIL_DATA        0x1101
+#define MCB_TEST_SPLIT_MCB        0x1181
+#define MCB_TEST_GROWN_TAIL_MCB   0x2100
+#define MCB_TEST_NEIGHBOUR_DATA   0x2101
+#define MCB_TEST_MARK_FIRST       0xA5      /* marks in the first reservation's data      */
+#define MCB_TEST_MARK_LAST        0x5A
 
-static uint8_t  sig_of(uint16_t seg) { return mem[(uint32_t)seg << 4]; }
-static uint16_t own_of(uint16_t seg) { return mcb_rd16(mem + (((uint32_t)seg << 4) + 1)); }
-static uint16_t sz_of (uint16_t seg) { return mcb_rd16(mem + (((uint32_t)seg << 4) + 3)); }
+/* T9's mini-chain. */
+#define MCB_TEST_MINI_SIZE        0x10000
+#define MCB_TEST_MINI_FIRST       0x0300
+#define MCB_TEST_MINI_SECOND      0x0321
+#define MCB_TEST_MINI_LAST        0x0342
+#define MCB_TEST_MINI_FREE_PARAS  0x20
+#define MCB_TEST_MINI_LAST_PARAS  0x10
+#define MCB_TEST_MINI_ALLOC       0x21
+#define MCB_TEST_MINI_DATA        0x0301
+#define MCB_TEST_MINI_TAIL        0x0322
+#define MCB_TEST_MINI_TAIL_PARAS  0x1F
+#define MCB_TEST_MINI_TOP         0x0353
 
-static void dump_chain(uint16_t first) {
-    uint16_t m = first; int g = 0;
+/* The PSP, loader and environment checks. */
+#define MCB_TEST_IMAGE_SIZE       0x20000
+#define MCB_TEST_ENV_SEGMENT      0x0060
+#define MCB_TEST_TOP_640K         0xA000
+#define MCB_TEST_COM_LAST_INDEX   4
+#define MCB_TEST_EXE_IP           0x0005
+#define MCB_TEST_EXE_SP           0x0100
+#define MCB_TEST_EXE_IMAGE_BYTES  2
+#define MCB_TEST_ENV_SIZE         0x1000
+#define MCB_TEST_SMALL_ENV_SIZE   0x400
+#define MCB_TEST_ENV_SEGMENT_ZERO 0x0000
+#define MCB_TEST_PROGRAM_PATH     "C:\\T.COM"
+#define MCB_TEST_PATH_LENGTH      8         /* strlen("C:\T.COM")                         */
+#define MCB_TEST_BLASTER          "BLASTER="
+#define MCB_TEST_NAME_LENGTH      8         /* strlen("BLASTER=") and strlen("DOS4GVM=")  */
+#define MCB_TEST_DOS4GVM_LENGTH   16        /* strlen("DOS4GVM=@ZAR.VMC")                 */
+#define MCB_TEST_SHORT_PREFIX     4         /* strlen("A=1") + its NUL; strlen("PAD=")    */
+#define MCB_TEST_TAIL_MEMORY_SIZE 0x2000
+#define MCB_TEST_HELLO_LENGTH     6         /* " HELLO"                                   */
+#define MCB_TEST_HELLO_LAST       (DOS_PSP_COMMAND_TAIL + 5)
+
+static BYTE g_Memory[MCB_TEST_MEMORY_SIZE];          /* 1MB flat "conventional memory" buffer */
+
+static INT g_Total = 0, g_Failures = 0;
+
+static VOID McbTestCheck(BOOL passed, PCSTR description)
+{
+    g_Total++;
+    if (passed) { printf("  PASS  %s\n", description); }
+    else        { printf("  FAIL  %s\n", description); g_Failures++; }
+}
+
+static BYTE McbTestSignature(WORD mcbSegment) { return g_Memory[(DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT]; }
+static WORD McbTestOwner(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)); }
+static WORD McbTestSize(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)); }
+
+static VOID McbTestDumpChain(WORD firstMcb) {
+    WORD mcbSegment = firstMcb; INT walkCount = 0;
     printf("  chain:");
     for (;;) {
-        uint8_t sig = sig_of(m); uint16_t own = own_of(m), sz = sz_of(m);
-        printf(" [%04X %c o=%04X sz=%04X]", m,
-               (sig >= 32 && sig < 127) ? sig : '?', own, sz);
-        if (sig == 'Z' || ++g > 32) break;
-        m = (uint16_t)(m + 1 + sz);
+        BYTE signature = McbTestSignature(mcbSegment); WORD owner = McbTestOwner(mcbSegment), blockSize = McbTestSize(mcbSegment);
+        printf(" [%04X %c o=%04X sz=%04X]", mcbSegment,
+               (signature >= MCB_TEST_PRINTABLE_FIRST && signature < MCB_TEST_PRINTABLE_END) ? signature : '?', owner, blockSize);
+        if (signature == DOS_MCB_LAST || ++walkCount > MCB_TEST_WALK_LIMIT) break;
+        mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
     printf("\n");
 }
 
+/* Find `name` in a built environment block; 0 if absent. */
+static INT McbTestFind(PCBYTE block, INT blockSize, PCSTR name, INT nameLength) {
+    INT index;
+    for (index = 0; index < blockSize - nameLength; ++index)
+        if (memcmp(block + index, name, nameLength) == 0) return index;
+    return 0;
+}
+
 int main(void) {
-    uint16_t first = dos_mcb_init(mem);
-    uint16_t seg = 0, max = 0;
-    int rc;
+    WORD firstMcb = DosMcbInitialize(g_Memory);
+    WORD segment = 0, largest = 0;
+    INT status;
 
     printf("== M2.4 MCB allocator battery ==\n");
 
@@ -61,211 +138,212 @@ int main(void) {
        PSP+0x02 reads 0x9FC0 (tests/probes/dos/p_mcb.asm, p_psp.asm) -- 640K less the
        1KB Extended BIOS Data Area, which is why real MEM reports 639K. */
     {
-    const unsigned PROG  = DOS_MEM_TOP - DOS_PSP_SEG;   /* the program block      */
-    const unsigned TAIL  = PROG - 0x1000 - 1;           /* after a 0x1000 shrink  */
-    const unsigned SPLIT = TAIL - 0x80 - 1;             /* after a 0x80 alloc     */
-    const unsigned GROWN = PROG - 0x2000 - 1;           /* after growing to 0x2000 */
+    const UINT programParas  = DOS_MEM_TOP - DOS_PSP_SEG;                       /* the program block      */
+    const UINT tailParas     = programParas - MCB_TEST_SHRUNK - 1;              /* after a 0x1000 shrink  */
+    const UINT splitParas    = tailParas - MCB_TEST_ALLOC - 1;                  /* after a 0x80 alloc     */
+    const UINT grownParas    = programParas - MCB_TEST_GROWN - 1;               /* after growing to 0x2000 */
 
     /* T0: initial chain ---------------------------------------------------- */
     /* #207: the chain starts at 0x7E, ABOVE SysVars' segment (0x72), as 6.22's does
        (SysVars 0116, first MCB 0253). It was 0x5F, which made MEM /D's "MSDOS System
        Data" row (SysVars seg .. first MCB) negative. */
-    CHECK(first == 0x7E, "init: chain root at 0x7E (#207)");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "init: chain consistent");
-    CHECK(sig_of(0xFF) == 'Z' && own_of(0xFF) == DOS_PSP_SEG && sz_of(0xFF) == PROG,
-          "init: program block = Z / PSP / DOS_MEM_TOP-PSP (unchanged by #207)");
-    CHECK(sig_of(0x7E) == 'M' && own_of(0x7E) == DOS_PSP_SEG && sz_of(0x7E) == 0x10,
-          "init: env block = M / PSP / 0x10, data at DOS_ENV_SEG 0x7F");
-    CHECK(DOS_ENV_SEG == first + 1, "init: DOS_ENV_SEG is the first block's data");
-    CHECK(sig_of(0x8F) == 'M' && own_of(0x8F) == 0x0008 && sz_of(0x8F) == 0x6F,
-          "init: DOS block = M / 8 / 0x6F");
-    CHECK(DOS_CTAB_SEG == 0x8F + 1, "init: the DOS block's data starts at DOS_CTAB_SEG");
+    McbTestCheck(firstMcb == MCB_TEST_FIRST_MCB, "init: chain root at 0x7E (#207)");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "init: chain consistent");
+    McbTestCheck(McbTestSignature(MCB_TEST_PROGRAM_MCB) == DOS_MCB_LAST && McbTestOwner(MCB_TEST_PROGRAM_MCB) == DOS_PSP_SEG && McbTestSize(MCB_TEST_PROGRAM_MCB) == programParas,
+                 "init: program block = Z / PSP / DOS_MEM_TOP-PSP (unchanged by #207)");
+    McbTestCheck(McbTestSignature(MCB_TEST_FIRST_MCB) == DOS_MCB_MEMBER && McbTestOwner(MCB_TEST_FIRST_MCB) == DOS_PSP_SEG && McbTestSize(MCB_TEST_FIRST_MCB) == DOS_ENV_PARAS,
+                 "init: env block = M / PSP / 0x10, data at DOS_ENV_SEG 0x7F");
+    McbTestCheck(DOS_ENV_SEG == firstMcb + 1, "init: DOS_ENV_SEG is the first block's data");
+    McbTestCheck(McbTestSignature(MCB_TEST_DOS_BLOCK) == DOS_MCB_MEMBER && McbTestOwner(MCB_TEST_DOS_BLOCK) == DOS_MCB_OWNER_DOS && McbTestSize(MCB_TEST_DOS_BLOCK) == MCB_TEST_DOS_PARAS,
+                 "init: DOS block = M / 8 / 0x6F");
+    McbTestCheck(DOS_CTAB_SEG == MCB_TEST_DOS_BLOCK + 1, "init: the DOS block's data starts at DOS_CTAB_SEG");
     /* MEM /C's MSDOS total = the kernel area below the first MCB + the owner-8 block.
        #207 moved 0x1F paragraphs from the block to the area; the sum must not move:
        old 0x5F + (0x8E+1) == new 0x7E + (0x6F+1). */
-    CHECK(0x5F + 0x8E + 1 == first + sz_of(0x8F) + 1,
-          "init: kernel area + DOS block = the pre-#207 total (MEM /C's MSDOS)");
+    McbTestCheck(MCB_TEST_OLD_FIRST_MCB + MCB_TEST_OLD_DOS_PARAS + 1 == firstMcb + McbTestSize(MCB_TEST_DOS_BLOCK) + 1,
+                 "init: kernel area + DOS block = the pre-#207 total (MEM /C's MSDOS)");
     /* SysVars, its -2 word and the SDA are kernel data below the chain now. */
-    CHECK((uint32_t)DOS_SYSVARS_SEG < first
-          && (uint32_t)DOS_SYSVARS_SEG * 16 + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN <= (uint32_t)first * 16
-          && (uint32_t)DOS_SDA_SEG * 16 + DOS_SDA_OFF + DOS_SDA_LEN <= (uint32_t)first * 16,
-          "init: SysVars + SDA end below the first MCB header (#207)");
+    McbTestCheck((DWORD)DOS_SYSVARS_SEG < firstMcb
+                 && (DWORD)DOS_SYSVARS_SEG * DOS_PARAGRAPH_BYTES + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN <= (DWORD)firstMcb * DOS_PARAGRAPH_BYTES
+                 && (DWORD)DOS_SDA_SEG * DOS_PARAGRAPH_BYTES + DOS_SDA_OFF + DOS_SDA_LEN <= (DWORD)firstMcb * DOS_PARAGRAPH_BYTES,
+                 "init: SysVars + SDA end below the first MCB header (#207)");
 
     /* T0b: a block reserved at the TOP for resident DOS data (the CDS array) --
-       the program block shrinks by paras+1, the chain still ends at DOS_MEM_TOP,
+       the program block shrinks by paragraphs+1, the chain still ends at DOS_MEM_TOP,
        and the new last block is DOS's. Then put the chain back for the rest. */
-    {   uint16_t cs = dos_mcb_reserve_top(mem, first, 0x8F);
-        CHECK(cs == DOS_MEM_TOP - 0x8F, "reserve_top: data segment = TOP - paras");
-        CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "reserve_top: chain still consistent");
-        CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == PROG - 0x8F - 1,
-              "reserve_top: program block is M and paras+1 smaller");
-        CHECK(sig_of(cs - 1) == 'Z' && own_of(cs - 1) == 0x0008 && sz_of(cs - 1) == 0x8F,
-              "reserve_top: the reserved block is Z / DOS / paras");
+    {   WORD cdsSegment = DosMcbReserveTop(g_Memory, firstMcb, MCB_TEST_CDS_PARAS);
+        McbTestCheck(cdsSegment == DOS_MEM_TOP - MCB_TEST_CDS_PARAS, "reserve_top: data segment = TOP - paras");
+        McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "reserve_top: chain still consistent");
+        McbTestCheck(McbTestSignature(MCB_TEST_PROGRAM_MCB) == DOS_MCB_MEMBER && McbTestSize(MCB_TEST_PROGRAM_MCB) == programParas - MCB_TEST_CDS_PARAS - 1,
+                     "reserve_top: program block is M and paras+1 smaller");
+        McbTestCheck(McbTestSignature(cdsSegment - 1) == DOS_MCB_LAST && McbTestOwner(cdsSegment - 1) == DOS_MCB_OWNER_DOS && McbTestSize(cdsSegment - 1) == MCB_TEST_CDS_PARAS,
+                     "reserve_top: the reserved block is Z / DOS / paras");
         /* #169: a SECOND reservation must not eat the first. Mark the first block's
            data, reserve again, and the mark must survive with both blocks intact. */
-        {   volatile uint8_t *d1 = mcb_at(mem, cs);
-            uint16_t cs2;
-            d1[0] = 0xA5; d1[0x8F * 16 - 1] = 0x5A;
-            cs2 = dos_mcb_reserve_top(mem, first, 0x20);
-            CHECK(cs2 == cs - 1 - 0x20, "reserve_top x2: second block sits just below the first");
-            CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "reserve_top x2: chain consistent");
-            CHECK(sig_of(cs2 - 1) == 'M' && own_of(cs2 - 1) == 0x0008 && sz_of(cs2 - 1) == 0x20,
-                  "reserve_top x2: new block is M / DOS / paras");
-            CHECK(sig_of(cs - 1) == 'Z' && sz_of(cs - 1) == 0x8F && d1[0] == 0xA5
-                  && d1[0x8F * 16 - 1] == 0x5A, "reserve_top x2: the first block is untouched");
-            CHECK(sz_of(0xFF) == PROG - 0x8F - 1 - 0x20 - 1,
-                  "reserve_top x2: program block shrank by the second reservation");
+        {   volatile BYTE *firstData = DosMcbSegmentAddress(g_Memory, cdsSegment);
+            WORD secondSegment;
+            firstData[0] = MCB_TEST_MARK_FIRST; firstData[MCB_TEST_CDS_PARAS * DOS_PARAGRAPH_BYTES - 1] = MCB_TEST_MARK_LAST;
+            secondSegment = DosMcbReserveTop(g_Memory, firstMcb, MCB_TEST_SECOND_RESERVE);
+            McbTestCheck(secondSegment == cdsSegment - 1 - MCB_TEST_SECOND_RESERVE, "reserve_top x2: second block sits just below the first");
+            McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "reserve_top x2: chain consistent");
+            McbTestCheck(McbTestSignature(secondSegment - 1) == DOS_MCB_MEMBER && McbTestOwner(secondSegment - 1) == DOS_MCB_OWNER_DOS && McbTestSize(secondSegment - 1) == MCB_TEST_SECOND_RESERVE,
+                         "reserve_top x2: new block is M / DOS / paras");
+            McbTestCheck(McbTestSignature(cdsSegment - 1) == DOS_MCB_LAST && McbTestSize(cdsSegment - 1) == MCB_TEST_CDS_PARAS && firstData[0] == MCB_TEST_MARK_FIRST
+                         && firstData[MCB_TEST_CDS_PARAS * DOS_PARAGRAPH_BYTES - 1] == MCB_TEST_MARK_LAST, "reserve_top x2: the first block is untouched");
+            McbTestCheck(McbTestSize(MCB_TEST_PROGRAM_MCB) == programParas - MCB_TEST_CDS_PARAS - 1 - MCB_TEST_SECOND_RESERVE - 1,
+                         "reserve_top x2: program block shrank by the second reservation");
         }
-        first = dos_mcb_init(mem);
+        firstMcb = DosMcbInitialize(g_Memory);
     }
 
     /* T1: alloc on a fresh chain must fail (everything is owned) ------------ */
-    max = 0xDEAD;
-    rc = dos_alloc(mem, first, 0x10, &seg, &max);
-    CHECK(rc == 8 && max == 0, "alloc on fresh chain fails, max=0 (all owned)");
+    largest = MCB_TEST_POISON;
+    status = DosMcbAllocate(g_Memory, firstMcb, MCB_TEST_SMALL_ALLOC, &segment, &largest);
+    McbTestCheck(status == DOS_MCB_ERROR_INSUFFICIENT_MEMORY && largest == 0, "alloc on fresh chain fails, max=0 (all owned)");
 
     /* T2: program shrinks its own block -- the .EXE-startup pattern --------- */
-    rc = dos_resize(mem, 0x100, 0x1000, &max);
-    CHECK(rc == 0, "resize: program shrinks to 0x1000");
-    CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == 0x1000, "shrink: block now M / 0x1000");
-    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == TAIL,
-          "shrink: freed tail = Z / free / derived");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after shrink: chain consistent");
+    status = DosMcbResize(g_Memory, MCB_TEST_PSP, MCB_TEST_SHRUNK, &largest);
+    McbTestCheck(status == DOS_MCB_SUCCESS, "resize: program shrinks to 0x1000");
+    McbTestCheck(McbTestSignature(MCB_TEST_PROGRAM_MCB) == DOS_MCB_MEMBER && McbTestSize(MCB_TEST_PROGRAM_MCB) == MCB_TEST_SHRUNK, "shrink: block now M / 0x1000");
+    McbTestCheck(McbTestSignature(MCB_TEST_TAIL_MCB) == DOS_MCB_LAST && McbTestOwner(MCB_TEST_TAIL_MCB) == DOS_MCB_OWNER_FREE && McbTestSize(MCB_TEST_TAIL_MCB) == tailParas,
+                 "shrink: freed tail = Z / free / derived");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "after shrink: chain consistent");
 
     /* T3: allocate from the freed tail (split) ----------------------------- */
-    rc = dos_alloc(mem, first, 0x80, &seg, &max);
-    CHECK(rc == 0 && seg == 0x1101, "alloc 0x80 -> seg 0x1101");
-    CHECK(sig_of(0x1100) == 'M' && own_of(0x1100) == DOS_PSP_SEG && sz_of(0x1100) == 0x80,
-          "alloc: block = M / PSP / 0x80");
-    CHECK(sig_of(0x1181) == 'Z' && own_of(0x1181) == 0 && sz_of(0x1181) == SPLIT,
-          "alloc: split tail = Z / free / derived");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after alloc: chain consistent");
+    status = DosMcbAllocate(g_Memory, firstMcb, MCB_TEST_ALLOC, &segment, &largest);
+    McbTestCheck(status == DOS_MCB_SUCCESS && segment == MCB_TEST_TAIL_DATA, "alloc 0x80 -> seg 0x1101");
+    McbTestCheck(McbTestSignature(MCB_TEST_TAIL_MCB) == DOS_MCB_MEMBER && McbTestOwner(MCB_TEST_TAIL_MCB) == DOS_PSP_SEG && McbTestSize(MCB_TEST_TAIL_MCB) == MCB_TEST_ALLOC,
+                 "alloc: block = M / PSP / 0x80");
+    McbTestCheck(McbTestSignature(MCB_TEST_SPLIT_MCB) == DOS_MCB_LAST && McbTestOwner(MCB_TEST_SPLIT_MCB) == DOS_MCB_OWNER_FREE && McbTestSize(MCB_TEST_SPLIT_MCB) == splitParas,
+                 "alloc: split tail = Z / free / derived");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "after alloc: chain consistent");
 
     /* T3b: a too-large alloc fails and reports the largest free block ------ */
-    max = 0;
-    rc = dos_alloc(mem, first, 0xFFFF, &seg, &max);
-    CHECK(rc == 8 && max == SPLIT, "alloc 0xFFFF fails, max = largest free block");
+    largest = 0;
+    status = DosMcbAllocate(g_Memory, firstMcb, MCB_TEST_HUGE, &segment, &largest);
+    McbTestCheck(status == DOS_MCB_ERROR_INSUFFICIENT_MEMORY && largest == splitParas, "alloc 0xFFFF fails, max = largest free block");
 
     /* T4: free + forward coalesce back to one free block ------------------- */
-    rc = dos_free(mem, 0x1101);
-    CHECK(rc == 0, "free seg 0x1101 ok");
-    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == TAIL,
-          "free: forward-coalesced to Z / free / derived");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after free: chain consistent");
+    status = DosMcbFree(g_Memory, MCB_TEST_TAIL_DATA);
+    McbTestCheck(status == DOS_MCB_SUCCESS, "free seg 0x1101 ok");
+    McbTestCheck(McbTestSignature(MCB_TEST_TAIL_MCB) == DOS_MCB_LAST && McbTestOwner(MCB_TEST_TAIL_MCB) == DOS_MCB_OWNER_FREE && McbTestSize(MCB_TEST_TAIL_MCB) == tailParas,
+                 "free: forward-coalesced to Z / free / derived");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "after free: chain consistent");
 
     /* T5: resize grow into the free neighbour ------------------------------ */
-    rc = dos_resize(mem, 0x100, 0x2000, &max);
-    CHECK(rc == 0, "resize grow 0x1000 -> 0x2000 into free neighbour");
-    CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == 0x2000, "grow: block now 0x2000");
-    CHECK(sig_of(0x2100) == 'Z' && own_of(0x2100) == 0 && sz_of(0x2100) == GROWN,
-          "grow: remaining free = Z / derived");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after grow: chain consistent");
+    status = DosMcbResize(g_Memory, MCB_TEST_PSP, MCB_TEST_GROWN, &largest);
+    McbTestCheck(status == DOS_MCB_SUCCESS, "resize grow 0x1000 -> 0x2000 into free neighbour");
+    McbTestCheck(McbTestSignature(MCB_TEST_PROGRAM_MCB) == DOS_MCB_MEMBER && McbTestSize(MCB_TEST_PROGRAM_MCB) == MCB_TEST_GROWN, "grow: block now 0x2000");
+    McbTestCheck(McbTestSignature(MCB_TEST_GROWN_TAIL_MCB) == DOS_MCB_LAST && McbTestOwner(MCB_TEST_GROWN_TAIL_MCB) == DOS_MCB_OWNER_FREE && McbTestSize(MCB_TEST_GROWN_TAIL_MCB) == grownParas,
+                 "grow: remaining free = Z / derived");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "after grow: chain consistent");
 
     /* T6: grow blocked by an owned neighbour ------------------------------- */
-    rc = dos_alloc(mem, first, 0x100, &seg, &max);
-    CHECK(rc == 0 && seg == 0x2101, "alloc 0x100 -> seg 0x2101 (neighbour now owned)");
-    max = 0;
-    rc = dos_resize(mem, 0x100, 0x3000, &max);
-    CHECK(rc == 8 && max == 0x2000, "grow blocked by owned neighbour, max = cur 0x2000");
-    CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == 0x2000, "blocked grow leaves block unchanged");
+    status = DosMcbAllocate(g_Memory, firstMcb, MCB_TEST_NEIGHBOUR_ALLOC, &segment, &largest);
+    McbTestCheck(status == DOS_MCB_SUCCESS && segment == MCB_TEST_NEIGHBOUR_DATA, "alloc 0x100 -> seg 0x2101 (neighbour now owned)");
+    largest = 0;
+    status = DosMcbResize(g_Memory, MCB_TEST_PSP, MCB_TEST_TOO_BIG, &largest);
+    McbTestCheck(status == DOS_MCB_ERROR_INSUFFICIENT_MEMORY && largest == MCB_TEST_GROWN, "grow blocked by owned neighbour, max = cur 0x2000");
+    McbTestCheck(McbTestSignature(MCB_TEST_PROGRAM_MCB) == DOS_MCB_MEMBER && McbTestSize(MCB_TEST_PROGRAM_MCB) == MCB_TEST_GROWN, "blocked grow leaves block unchanged");
 
     /* T7: invalid block segments ------------------------------------------- */
-    CHECK(dos_free(mem, 0x0001) == 9, "free bad block -> err 9");
-    CHECK(dos_resize(mem, 0x0001, 0x10, &max) == 9, "resize bad block -> err 9");
+    McbTestCheck(DosMcbFree(g_Memory, MCB_TEST_BAD_SEGMENT) == DOS_MCB_ERROR_INVALID_BLOCK, "free bad block -> err 9");
+    McbTestCheck(DosMcbResize(g_Memory, MCB_TEST_BAD_SEGMENT, MCB_TEST_SMALL_ALLOC, &largest) == DOS_MCB_ERROR_INVALID_BLOCK, "resize bad block -> err 9");
 
     /* T8: resize to the current size is a no-op success -------------------- */
-    rc = dos_resize(mem, 0x100, 0x2000, &max);
-    CHECK(rc == 0 && sz_of(0xFF) == 0x2000, "resize to same size is a no-op success");
-    CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "final: chain consistent");
+    status = DosMcbResize(g_Memory, MCB_TEST_PSP, MCB_TEST_GROWN, &largest);
+    McbTestCheck(status == DOS_MCB_SUCCESS && McbTestSize(MCB_TEST_PROGRAM_MCB) == MCB_TEST_GROWN, "resize to same size is a no-op success");
+    McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "final: chain consistent");
 
-    /* T9: merge-on-alloc. alloc() coalesces adjacent free blocks during the walk
+    /* T9: merge-on-alloc. DosMcbAllocate() coalesces adjacent free blocks during the walk
      * (as real MS-DOS does), so two adjacent free blocks jointly satisfy a request
      * that neither satisfies alone. (Previously a pinned gap; now closed.) */
     {
-        static uint8_t g[0x10000];
-        mcb_lay(g, 0x0300, 'M', 0,           0x20);   /* free block #1            */
-        mcb_lay(g, 0x0321, 'M', 0,           0x20);   /* free block #2 (adjacent) */
-        mcb_lay(g, 0x0342, 'Z', DOS_PSP_SEG, 0x10);   /* owned terminator         */
-        seg = max = 0;
-        rc = dos_alloc(g, 0x0300, 0x21, &seg, &max);
+        static BYTE miniMemory[MCB_TEST_MINI_SIZE];
+        DosMcbWriteHeader(miniMemory, MCB_TEST_MINI_FIRST, DOS_MCB_MEMBER, DOS_MCB_OWNER_FREE, MCB_TEST_MINI_FREE_PARAS);   /* free block #1            */
+        DosMcbWriteHeader(miniMemory, MCB_TEST_MINI_SECOND, DOS_MCB_MEMBER, DOS_MCB_OWNER_FREE, MCB_TEST_MINI_FREE_PARAS);  /* free block #2 (adjacent) */
+        DosMcbWriteHeader(miniMemory, MCB_TEST_MINI_LAST, DOS_MCB_LAST, DOS_PSP_SEG, MCB_TEST_MINI_LAST_PARAS);            /* owned terminator         */
+        segment = largest = 0;
+        status = DosMcbAllocate(miniMemory, MCB_TEST_MINI_FIRST, MCB_TEST_MINI_ALLOC, &segment, &largest);
         /* merged = 0x20 + 1 + 0x20 = 0x41 paras; alloc 0x21 splits it, leaving a
          * 0x41 - 0x21 - 1 = 0x1F free tail at paragraph 0x322. */
-        CHECK(rc == 0 && seg == 0x0301,
-              "merge-on-alloc: adjacent free blocks merged to satisfy 0x21");
-        CHECK(g[(uint32_t)0x0300 << 4] == 'M'
-              && mcb_rd16(g + (((uint32_t)0x0300 << 4) + 1)) == DOS_PSP_SEG
-              && mcb_rd16(g + (((uint32_t)0x0300 << 4) + 3)) == 0x21,
-              "merge-on-alloc: allocated block = M / PSP / 0x21");
-        CHECK(g[(uint32_t)0x0322 << 4] == 'M'
-              && mcb_rd16(g + (((uint32_t)0x0322 << 4) + 1)) == 0
-              && mcb_rd16(g + (((uint32_t)0x0322 << 4) + 3)) == 0x1F,
-              "merge-on-alloc: free tail = M / free / 0x1F");
-        CHECK(dos_mcb_check(g, 0x0300, 0x0353) == 0,
-              "merge-on-alloc: mini-chain consistent");
+        McbTestCheck(status == DOS_MCB_SUCCESS && segment == MCB_TEST_MINI_DATA,
+                     "merge-on-alloc: adjacent free blocks merged to satisfy 0x21");
+        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_PSP_SEG
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_ALLOC,
+                     "merge-on-alloc: allocated block = M / PSP / 0x21");
+        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_MCB_OWNER_FREE
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_TAIL_PARAS,
+                     "merge-on-alloc: free tail = M / free / 0x1F");
+        McbTestCheck(DosMcbCheckChain(miniMemory, MCB_TEST_MINI_FIRST, MCB_TEST_MINI_TOP) == DOS_MCB_CHAIN_OK,
+                     "merge-on-alloc: mini-chain consistent");
     }
 
     /* T10: PSP builder (src/dos/dos_psp.h) --------------------------------- */
     {
-        static uint8_t pm[0x20000];
-        volatile uint8_t *psp = pm + ((uint32_t)0x0100 << 4);
-        dos_psp_build(pm, 0x0100, 0x0060, 0xA000);
-        CHECK(psp[0] == 0xCD && psp[1] == 0x20, "psp: INT 20h at offset 0");
-        CHECK(mcb_rd16(psp + 0x02) == 0xA000, "psp: top-of-mem segment = 0xA000");
-        CHECK(mcb_rd16(psp + 0x2C) == 0x0060, "psp: environment segment = 0x60");
-        CHECK(psp[0x50] == 0xCD && psp[0x51] == 0x21 && psp[0x52] == 0xCB,
-              "psp: INT 21h;RETF dispatch stub at 0x50");
-        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "psp: empty command tail + 0x0D");
+        static BYTE pspMemory[MCB_TEST_IMAGE_SIZE];
+        volatile BYTE *psp = pspMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT);
+        DosPspBuild(pspMemory, MCB_TEST_PSP, MCB_TEST_ENV_SEGMENT, MCB_TEST_TOP_640K);
+        McbTestCheck(psp[DOS_PSP_INT20] == DOS_PSP_OPCODE_INT && psp[DOS_PSP_INT20 + 1] == DOS_PSP_INT20_VECTOR, "psp: INT 20h at offset 0");
+        McbTestCheck(DosMcbReadWord(psp + DOS_PSP_MEMORY_TOP) == MCB_TEST_TOP_640K, "psp: top-of-mem segment = 0xA000");
+        McbTestCheck(DosMcbReadWord(psp + DOS_PSP_ENVIRONMENT) == MCB_TEST_ENV_SEGMENT, "psp: environment segment = 0x60");
+        McbTestCheck(psp[DOS_PSP_DISPATCH] == DOS_PSP_OPCODE_INT && psp[DOS_PSP_DISPATCH + 1] == DOS_PSP_INT21_VECTOR && psp[DOS_PSP_DISPATCH + 2] == DOS_PSP_OPCODE_RETF,
+                     "psp: INT 21h;RETF dispatch stub at 0x50");
+        McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "psp: empty command tail + 0x0D");
     }
 
     /* T11: flat .COM loader (src/dos/dos_loader.h) ------------------------- */
     {
-        static uint8_t cm[0x20000];
-        static const uint8_t com[] = { 0xB4, 0x09, 0xCD, 0x21, 0xC3 };
-        volatile uint8_t *code = cm + ((uint32_t)0x0100 << 4) + 0x100;
-        dos_image_t e = dos_load(cm, com, (uint32_t)sizeof(com), 0x0100);
-        CHECK(!e.is_exe && e.cs == 0x0100 && e.ip == 0x0100
-              && e.ss == 0x0100 && e.sp == 0xFFFE,
-              ".COM: entry CS=SS=0x100, IP=0x100, SP=0xFFFE");
-        CHECK(code[0] == 0xB4 && code[1] == 0x09 && code[4] == 0xC3
-              && e.img_size == sizeof(com),
-              ".COM: image placed at PSP:0x100");
+        static BYTE comMemory[MCB_TEST_IMAGE_SIZE];
+        static const BYTE comFile[] = { 0xB4, 0x09, 0xCD, 0x21, 0xC3 };   /* mov ah,09 ; int 21h ; ret */
+        volatile BYTE *code = comMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT) + DOS_COM_ENTRY;
+        DOS_IMAGE image = DosLoadImage(comMemory, comFile, (DWORD)sizeof(comFile), MCB_TEST_PSP);
+        McbTestCheck(!image.IsExe && image.CodeSegment == MCB_TEST_PSP && image.InstructionPointer == DOS_COM_ENTRY
+                     && image.StackSegment == MCB_TEST_PSP && image.StackPointer == DOS_COM_INITIAL_SP,
+                     ".COM: entry CS=SS=0x100, IP=0x100, SP=0xFFFE");
+        McbTestCheck(code[0] == comFile[0] && code[1] == comFile[1] && code[MCB_TEST_COM_LAST_INDEX] == comFile[MCB_TEST_COM_LAST_INDEX]
+                     && image.ImageSize == sizeof(comFile),
+                     ".COM: image placed at PSP:0x100");
     }
 
     /* T12: MZ .EXE loader + one relocation --------------------------------- */
     {
-        static uint8_t xm[0x20000];
+        static BYTE exeMemory[MCB_TEST_IMAGE_SIZE];
         /* 34-byte MZ: 32-byte header (e_cparhdr=2, e_crlc=1, reloc tbl @0x1C,
          * e_ip=5, e_sp=0x100), one reloc -> image word at offset 0, 2-byte image
          * = 0x0000 (to be fixed up to the load segment). */
-        static const uint8_t mz[] = {
+        static const BYTE exeFile[] = {
             'M','Z',   0x22,0x00, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x00,0x00, 0xFF,0xFF,
             0x00,0x00, 0x00,0x01, 0x00,0x00, 0x05,0x00, 0x00,0x00, 0x1C,0x00, 0x00,0x00,
             0x00,0x00, 0x00,0x00,          /* reloc[0] = offset 0, segment 0 */
             0x00,0x00                      /* image[0..1] = 0x0000           */
         };
-        uint16_t load_seg = (uint16_t)(0x0100 + 0x10);          /* 0x110 */
-        volatile uint8_t *img = xm + ((uint32_t)load_seg << 4);
-        dos_image_t e = dos_load(xm, mz, (uint32_t)sizeof(mz), 0x0100);
-        CHECK(e.is_exe && e.cs == load_seg && e.ip == 0x0005
-              && e.ss == load_seg && e.sp == 0x0100,
-              ".EXE: CS:IP/SS:SP from header, biased by the load segment");
-        CHECK(e.img_size == 2 && mcb_rd16(img) == load_seg,
-              ".EXE: relocation fixed the image word to the load segment");
+        WORD loadSegment = (WORD)(MCB_TEST_PSP + DOS_PSP_PARAGRAPHS);          /* 0x110 */
+        volatile BYTE *imageBytes = exeMemory + ((DWORD)loadSegment << DOS_PARAGRAPH_SHIFT);
+        DOS_IMAGE image = DosLoadImage(exeMemory, exeFile, (DWORD)sizeof(exeFile), MCB_TEST_PSP);
+        McbTestCheck(image.IsExe && image.CodeSegment == loadSegment && image.InstructionPointer == MCB_TEST_EXE_IP
+                     && image.StackSegment == loadSegment && image.StackPointer == MCB_TEST_EXE_SP,
+                     ".EXE: CS:IP/SS:SP from header, biased by the load segment");
+        McbTestCheck(image.ImageSize == MCB_TEST_EXE_IMAGE_BYTES && DosMcbReadWord(imageBytes) == loadSegment,
+                     ".EXE: relocation fixed the image word to the load segment");
     }
 
     /* T13: environment block builder (src/dos/dos_env.h) -------------------- */
     {
-        static uint8_t g[0x1000];
-        const char *path = "C:\\T.COM";
-        int plen = 8, k, okp = 1;                       /* strlen("C:\T.COM") = 8 */
-        uint32_t L = dos_env_build(g, 0x0000, path);
-        CHECK(L > 0 && g[0] == 'C' && g[1] == 'O' && g[2] == 'M' && g[3] == 'S',
-              "env: starts with COMSPEC=");
-        for (k = 0; k < plen; ++k) if (g[L - 1 - plen + k] != (uint8_t)path[k]) okp = 0;
-        CHECK(okp && g[L - 1] == 0, "env: program path is the final ASCIIZ string");
-        CHECK(g[L - 1 - plen - 2] == 0x01 && g[L - 1 - plen - 1] == 0x00,
-              "env: WORD count 0x0001 precedes the program path");
-        CHECK(g[L - 1 - plen - 3] == 0x00, "env: trailing NUL ends the variable list");
+        static BYTE envMemory[MCB_TEST_ENV_SIZE];
+        PCSTR path = MCB_TEST_PROGRAM_PATH;
+        INT pathLength = MCB_TEST_PATH_LENGTH, characterIndex;    /* strlen("C:\T.COM") = 8 */
+        BOOL isPathIntact = TRUE;
+        DWORD blockLength = DosEnvBuild(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, path);
+        McbTestCheck(blockLength > 0 && envMemory[0] == 'C' && envMemory[1] == 'O' && envMemory[2] == 'M' && envMemory[3] == 'S',
+                     "env: starts with COMSPEC=");
+        for (characterIndex = 0; characterIndex < pathLength; ++characterIndex) if (envMemory[blockLength - 1 - pathLength + characterIndex] != (BYTE)path[characterIndex]) isPathIntact = FALSE;
+        McbTestCheck(isPathIntact && envMemory[blockLength - 1] == 0, "env: program path is the final ASCIIZ string");
+        McbTestCheck(envMemory[blockLength - 1 - pathLength - 2] == DOS_ENV_STRING_COUNT_LOW && envMemory[blockLength - 1 - pathLength - 1] == DOS_ENV_STRING_COUNT_HIGH,
+                     "env: WORD count 0x0001 precedes the program path");
+        McbTestCheck(envMemory[blockLength - 1 - pathLength - 3] == 0x00, "env: trailing NUL ends the variable list");
     }
 
     /* T13b: BLASTER tracks the card, because the Audio page can move it -------
@@ -275,125 +353,118 @@ int main(void) {
          built from the same numbers vdd_sb is configured with, and the DEFAULT
          must still come out byte-for-byte as the literal it replaced. */
     {
-        static uint8_t g[0x1000];
-        dos_sbcfg sb;
-        int i, found;
-        memset(&sb, 0, sizeof sb);                 /* #231: .mpu is new */
+        static BYTE envMemory[MCB_TEST_ENV_SIZE];
+        DOS_SB_CONFIG card;
+        INT found;
+        memset(&card, 0, sizeof card);                 /* #231: .MpuBase is new */
         /* Find "BLASTER=" in the built block and compare the rest of that string. */
-        found = 0;
-        dos_env_build(g, 0x0000, "C:\\T.COM");
-        for (i = 0; i < (int)sizeof g - 8; ++i)
-            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
-        CHECK(found > 0, "BLASTER: the variable is in the block");
-        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A220 I5 D1 T3") == 0,
-              "BLASTER: no card supplied -> the literal this host always claimed");
+        DosEnvBuild(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH);
+        found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
+        McbTestCheck(found > 0, "BLASTER: the variable is in the block");
+        McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A220 I5 D1 T3") == 0,
+                     "BLASTER: no card supplied -> the literal this host always claimed");
 
-        sb.base = 0x240; sb.irq = 7; sb.dma8 = 3; sb.dma16 = 0; sb.type = 3;
-        memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
-        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
-            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
-        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A240 I7 D3 T3") == 0,
-              "BLASTER: a moved card is reported at its real port, IRQ and channel");
+        card.IoBase = 0x240; card.Irq = 7; card.Dma8Channel = 3; card.Dma16Channel = 0; card.Type = 3;
+        memset(envMemory, 0, sizeof envMemory);
+        DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
+        found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
+        McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A240 I7 D3 T3") == 0,
+                     "BLASTER: a moved card is reported at its real port, IRQ and channel");
 
         /* A 16-bit channel is advertised as H, and ONLY when one is set -- the
            default card has one and has never mentioned it, and Doom's audio is
            user-confirmed against the string without it. */
-        sb.base = 0x220; sb.irq = 5; sb.dma8 = 1; sb.dma16 = 5; sb.type = 3;
-        memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
-        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
-            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
-        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A220 I5 D1 H5 T3") == 0,
-              "BLASTER: a 16-bit channel appears as H, and only when it is set");
+        card.IoBase = 0x220; card.Irq = 5; card.Dma8Channel = 1; card.Dma16Channel = 5; card.Type = 3;
+        memset(envMemory, 0, sizeof envMemory);
+        DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
+        found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
+        McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A220 I5 D1 H5 T3") == 0,
+                     "BLASTER: a 16-bit channel appears as H, and only when it is set");
 
         /* Two digits must not be truncated to one, and a base is three hex
            digits with no 0x -- both are how a driver parses it. */
-        sb.base = 0x280; sb.irq = 10; sb.dma8 = 1; sb.dma16 = 0; sb.type = 6;
-        memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
-        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
-            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
-        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A280 I10 D1 T6") == 0,
-              "BLASTER: a two-digit IRQ survives, and the base is three hex digits");
+        card.IoBase = 0x280; card.Irq = 10; card.Dma8Channel = 1; card.Dma16Channel = 0; card.Type = 6;
+        memset(envMemory, 0, sizeof envMemory);
+        DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
+        found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
+        McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A280 I10 D1 T6") == 0,
+                     "BLASTER: a two-digit IRQ survives, and the base is three hex digits");
 
         /* ── EXTRA VARIABLES (dosenv.txt). The guest that needed this is ZAR, whose
              own RUNZAR.BAT sets DOS4GVM before launching -- i.e. the game's supported
              way to start it configures the extender through the environment, and we
              had no way to pass one. */
         {
-            static uint8_t h[0x400];
-            int base_len, with_len;
+            static BYTE emptyExtraMemory[MCB_TEST_SMALL_ENV_SIZE];
+            INT baseLength, withLength, byteIndex;
 
-            sb.base = 0x220; sb.irq = 5; sb.dma8 = 1; sb.dma16 = 0; sb.type = 3;
+            card.IoBase = DOS_SB_DEFAULT_IO_BASE; card.Irq = DOS_SB_DEFAULT_IRQ; card.Dma8Channel = DOS_SB_DEFAULT_DMA8;
+            card.Dma16Channel = DOS_SB_NOT_ADVERTISED; card.Type = DOS_SB_DEFAULT_TYPE;
 
             /* ⚠ THE DEFAULT MUST BE BYTE-IDENTICAL. A knob nobody sets must not
                  change the environment every existing guest already runs against. */
-            memset(g, 0, sizeof g);
-            base_len = (int)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
-            memset(h, 0, sizeof h);
-            (void)dos_env_build_card(h, 0x0000, "C:\\T.COM", "C:\\", &sb, "");
-            CHECK(memcmp(g, h, sizeof h) == 0,
-                  "dosenv: absent and empty both leave the block byte-identical");
+            memset(envMemory, 0, sizeof envMemory);
+            baseLength = (INT)DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
+            memset(emptyExtraMemory, 0, sizeof emptyExtraMemory);
+            (VOID)DosEnvBuildWithCard(emptyExtraMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, "");
+            McbTestCheck(memcmp(envMemory, emptyExtraMemory, sizeof emptyExtraMemory) == 0,
+                         "dosenv: absent and empty both leave the block byte-identical");
 
-            memset(g, 0, sizeof g);
-            with_len = (int)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
-                                               "DOS4GVM=@ZAR.VMC");
-            for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
-                if (memcmp(g + i, "DOS4GVM=", 8) == 0) { found = i; break; }
-            CHECK(found > 0 && strcmp((char *)g + found, "DOS4GVM=@ZAR.VMC") == 0,
-                  "dosenv: a variable is emitted as its own NUL-terminated string");
-            CHECK(with_len == base_len + 17,
-                  "dosenv: it costs exactly its own length plus the NUL");
+            memset(envMemory, 0, sizeof envMemory);
+            withLength = (INT)DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card,
+                                                  "DOS4GVM=@ZAR.VMC");
+            found = McbTestFind(envMemory, (INT)sizeof envMemory, "DOS4GVM=", MCB_TEST_NAME_LENGTH);
+            McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "DOS4GVM=@ZAR.VMC") == 0,
+                         "dosenv: a variable is emitted as its own NUL-terminated string");
+            McbTestCheck(withLength == baseLength + MCB_TEST_DOS4GVM_LENGTH + 1,
+                         "dosenv: it costs exactly its own length plus the NUL");
             /* The list terminator must still be there, or a guest walking to the
                double NUL runs off into whatever follows -- how krnl386 finds its
                own path, and a defect this project has already paid for once. */
-            CHECK(g[found + 16] == 0 && g[found + 17] == 0,
-                  "dosenv: the double NUL still ends the list after the last extra");
+            McbTestCheck(envMemory[found + MCB_TEST_DOS4GVM_LENGTH] == 0 && envMemory[found + MCB_TEST_DOS4GVM_LENGTH + 1] == 0,
+                         "dosenv: the double NUL still ends the list after the last extra");
 
-            memset(g, 0, sizeof g);
-            (void)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
-                                     "# a comment\r\nA=1\r\n\r\nB=2\r\n");
-            for (i = 0, found = 0; i < (int)sizeof g - 4; ++i)
-                if (memcmp(g + i, "A=1", 4) == 0) { found = i; break; }
-            CHECK(found > 0, "dosenv: CRLF lines are split, blank lines skipped");
-            CHECK(found > 0 && strcmp((char *)g + found + 4, "B=2") == 0,
-                  "dosenv: the next variable follows immediately after the NUL");
-            for (i = 0, found = 0; i < (int)sizeof g - 2; ++i)
-                if (g[i] == '#') { found = 1; break; }
-            CHECK(!found, "dosenv: a '#' line is a comment and never reaches the guest");
+            memset(envMemory, 0, sizeof envMemory);
+            (VOID)DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card,
+                                      "# a comment\r\nA=1\r\n\r\nB=2\r\n");
+            found = McbTestFind(envMemory, (INT)sizeof envMemory, "A=1", MCB_TEST_SHORT_PREFIX);
+            McbTestCheck(found > 0, "dosenv: CRLF lines are split, blank lines skipped");
+            McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found + MCB_TEST_SHORT_PREFIX, "B=2") == 0,
+                         "dosenv: the next variable follows immediately after the NUL");
+            for (byteIndex = 0, found = 0; byteIndex < (INT)sizeof envMemory - 2; ++byteIndex)
+                if (envMemory[byteIndex] == '#') { found = 1; break; }
+            McbTestCheck(!found, "dosenv: a '#' line is a comment and never reaches the guest");
 
             /* An entry that does not fit is dropped WHOLE. Half an environment
                variable is a value, and a wrong one -- worse than an absent one. */
-            memset(g, 0, sizeof g);
-            (void)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
-                                     "PAD=012345678901234567890123456789012345678901234567890"
-                                     "12345678901234567890123456789012345678901234567890"
-                                     "12345678901234567890123456789012345678901234567890"
-                                     "12345678901234567890123456789012345678901234567890;Z=1");
-            for (i = 0, found = 0; i < (int)sizeof g - 4; ++i)
-                if (memcmp(g + i, "PAD=", 4) == 0) { found = 1; break; }
-            CHECK(!found, "dosenv: an entry that cannot fit is dropped whole, not clipped");
+            memset(envMemory, 0, sizeof envMemory);
+            (VOID)DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card,
+                                      "PAD=012345678901234567890123456789012345678901234567890"
+                                      "12345678901234567890123456789012345678901234567890"
+                                      "12345678901234567890123456789012345678901234567890"
+                                      "12345678901234567890123456789012345678901234567890;Z=1");
+            found = McbTestFind(envMemory, (INT)sizeof envMemory, "PAD=", MCB_TEST_SHORT_PREFIX);
+            McbTestCheck(!found, "dosenv: an entry that cannot fit is dropped whole, not clipped");
         }
     }
 
     /* T14: PSP command-tail builder (src/dos/dos_psp.h) --------------------- */
     {
-        static uint8_t g[0x2000];
-        volatile uint8_t *psp = g + ((uint32_t)0x0100 << 4);
-        dos_cmdtail_build(g, 0x0100, "HELLO");
-        CHECK(psp[0x80] == 6 && psp[0x81] == ' ' && psp[0x82] == 'H'
-              && psp[0x86] == 'O' && psp[0x87] == 0x0D,
-              "cmdtail: \"HELLO\" -> len 6, \" HELLO\", 0x0D");
-        dos_cmdtail_build(g, 0x0100, "");
-        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: empty -> len 0, 0x0D");
-        dos_cmdtail_build(g, 0x0100, (const char *)0);
-        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: NULL -> len 0, 0x0D");
+        static BYTE tailMemory[MCB_TEST_TAIL_MEMORY_SIZE];
+        volatile BYTE *psp = tailMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT);
+        DosPspBuildCommandTail(tailMemory, MCB_TEST_PSP, "HELLO");
+        McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == MCB_TEST_HELLO_LENGTH && psp[DOS_PSP_COMMAND_TAIL] == ' ' && psp[DOS_PSP_COMMAND_TAIL + 1] == 'H'
+                     && psp[MCB_TEST_HELLO_LAST] == 'O' && psp[MCB_TEST_HELLO_LAST + 1] == DOS_PSP_COMMAND_TAIL_END,
+                     "cmdtail: \"HELLO\" -> len 6, \" HELLO\", 0x0D");
+        DosPspBuildCommandTail(tailMemory, MCB_TEST_PSP, "");
+        McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "cmdtail: empty -> len 0, 0x0D");
+        DosPspBuildCommandTail(tailMemory, MCB_TEST_PSP, (PCSTR)0);
+        McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "cmdtail: NULL -> len 0, 0x0D");
     }
 
     }
 
-    dump_chain(first);
-    printf("== %d/%d passed, %d failed ==\n", total - fails, total, fails);
-    return fails ? 1 : 0;
+    McbTestDumpChain(firstMcb);
+    printf("== %d/%d passed, %d failed ==\n", g_Total - g_Failures, g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }

@@ -2,7 +2,7 @@
 ;
 ; Unlike dpmitest.com (single .COM segment, CS=DS=SS=PSP), this is a genuine
 ; multi-segment MZ .EXE: distinct CODE / DATA / STACK segments, loaded with a
-; relocation applied by dos_load's MZ path. It proves two things at once:
+; relocation applied by DosLoadImage's MZ path. It proves two things at once:
 ;   1. the .EXE LOAD path (MZ header parse + relocation fixup + CS!=PSP entry), and
 ;   2. the .EXE SWITCH path -- DpmiSwitchToProtectedMode builds three DISTINCT selectors
 ;      (CS=0x0F based at CODE, DS=0x17 based at DATA, SS=0x1F based at STACK), so a
@@ -49,7 +49,7 @@ IMAGE:
 start:
     ; DOS entry: SS:SP from header, CS from header, DS/ES = PSP. Load DS = DATA segment.
     ; The immediate is relocated by the loader (reloc_table entry above): it assembles as
-    ; DATA_SEG (data paragraph rel to image) and dos_load adds the load segment -> the
+    ; DATA_SEG (data paragraph rel to image) and DosLoadImage adds the load segment -> the
     ; absolute DATA paragraph.
     mov ax, DATA_SEG
 ds_imm equ $ - 2                    ; the imm16 just emitted (the relocation target)

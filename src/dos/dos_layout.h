@@ -2,8 +2,8 @@
  * Shared by the host (which places the PSP/IVT/handler/env) and the INT 21h
  * surface (which reports these segments back to the guest). Matches the spike.
  */
-#ifndef DOS_LAYOUT_H
-#define DOS_LAYOUT_H
+#ifndef NTVDMEX_DOS_LAYOUT_H
+#define NTVDMEX_DOS_LAYOUT_H
 
 #include "dos_mcb.h"          /* DOS_PSP_SEG (0x0100), DOS_MEM_TOP (0xA000) */
 
@@ -22,7 +22,7 @@
 #define DOS_CURRENT_DRIVE 0x02      /* C: -- 0 = A: */
 /* ── #207: THE ENVIRONMENT MOVED FROM 0x60 TO 0x7F, ABOVE SysVars. ─────────────────
      The first MCB has to lie above the SysVars segment (MEM /D's "MSDOS System Data"
-     row is SysVars seg .. first MCB, and was negative) -- see dos_mcb_init. The env is
+     row is SysVars seg .. first MCB, and was negative) -- see DosMcbInitialize. The env is
      the first block of the chain, so it is the thing that had to move; it lands in
      linear 0x7F0..0x8EF, the gap between the SDA (ends 0x7E0) and the DOS block's MCB
      at 0x8F0, which nothing used (checked: no define, literal or plant in 0x7E0..0x8FF).
@@ -33,7 +33,7 @@
 #define DOS_ENV_SEG   0x007F  /* environment segment (linear 0x07F0) = DOS_FIRST_MCB+1 */
 /* ── #48: THE CHARACTER/BLOCK DEVICE HEADERS, at linear 0x600 (the env's old home). ──
      Kernel data below the first MCB, as IO.SYS's headers are on 6.22 (0070:0023 CON ..
-     0070:006B the block driver -- measured, sysvars_test.c). Built by dos_devchain_build;
+     0070:006B the block driver -- measured, sysvars_test.c). Built by DosDeviceChainBuild;
      0x60:0x00..0xEF. Segment 0x50 is NOT used for this: its offsets 0x100+ alias this
      same memory, and the handler segment's own slots stop at 0xFF (main.c MS_CB_RET_OFF). */
 #define DOS_DEV_SEG   0x0060
@@ -118,7 +118,7 @@
 #define DOS_UMBHEAD_NONE 0xFFFF
 #define DOS_SYSVARS_LEN 0x0070      /* bytes from SysVars+0 that we own and zero   */
 #define DOS_SDA_SEG     DOS_SYSVARS_SEG   /* the SDA shares DOS's data segment, as on 6.22 */
-/* #48: NUL's strategy/interrupt entries (dos_nulstub_build, 8 bytes). A header's entries
+/* #48: NUL's strategy/interrupt entries (DosNulStubBuild, 8 bytes). A header's entries
    are offsets in ITS OWN segment, and NUL's header is inline in SysVars, so they must be
    in this segment: 0072:0010 = linear 0x730..0x737 -- past [0x714] (0x714..0x717), below
    SysVars' -2 word at 0x744, and written by nothing else (sysvars_test pins all three). */
@@ -236,7 +236,7 @@
    machine, so it is 26, as a CONFIG.SYS with LASTDRIVE=Z makes 6.22 report.
    The 26 x 88 = 2288-byte CDS array does not fit the resident filler, so it
    takes a block of its own reserved at the top of conventional memory
-   (dos_mcb_reserve_top), owned by DOS like the rest of the resident data. The
+   (DosMcbReserveTop), owned by DOS like the rest of the resident data. The
    program block loses 0x90 paragraphs, which is what LASTDRIVE=Z costs on a
    real PC too. */
 #define DOS_LASTDRIVE     26
@@ -283,7 +283,7 @@
    It read: "the CDS array, 88 bytes each, LASTDRIVE of them ... 5 x 88 = 440
    bytes, ending at 0x697, inside the block."  That stopped being true in s71,
    when LASTDRIVE went back to 26 and THE CDS ARRAY MOVED INTO ITS OWN RESERVED
-   BLOCK (`g_cds_seg`, main.c: dos_mcb_reserve_top).  The define was left behind
+   BLOCK (`g_cds_seg`, main.c: DosMcbReserveTop).  The define was left behind
    and is referenced by nothing -- checked, zero call sites -- while its comment
    went on claiming 0x4E0..0x697 for a table that is no longer there.
  ⚠ A STALE RESERVATION IS WORSE THAN NO RESERVATION: it reads as "occupied" to
@@ -377,7 +377,8 @@
 
 #define DOS_SFT_ENTRIES   DOS_MAX_FILES   /* == the size of dos_machine_t::fh[]  */
 #define DOS_SFT_ENTSZ     0x3B      /* DOS 4.0+ SFT entry: 59 bytes              */
-#define DOS_SFT_BYTES     (6 + DOS_SFT_ENTRIES * DOS_SFT_ENTSZ)
-#define DOS_SFT_PARAS     ((DOS_SFT_BYTES + 15) / 16)
+#define DOS_SFT_HEADER    6         /* the block's far "next" pointer and word entry count */
+#define DOS_SFT_BYTES     (DOS_SFT_HEADER + DOS_SFT_ENTRIES * DOS_SFT_ENTSZ)
+#define DOS_SFT_PARAS     ((DOS_SFT_BYTES + DOS_PARAGRAPH_LAST_BYTE) / DOS_PARAGRAPH_BYTES)
 
-#endif /* DOS_LAYOUT_H */
+#endif /* NTVDMEX_DOS_LAYOUT_H */

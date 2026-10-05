@@ -4,77 +4,114 @@
  * for off-VM tests. Ported from the M2.3 loader in tools/vdmhost/vdmhost.c.
  * Verified off-VM by tests/unit/mcb_test.c.
  */
-#ifndef DOS_LOADER_H
-#define DOS_LOADER_H
+#ifndef NTVDMEX_DOS_LOADER_H
+#define NTVDMEX_DOS_LOADER_H
 
-#include <stdint.h>
-#include "dos_mcb.h"        /* mcb_at / mcb_rd16 / mcb_wr16 paragraph addressing */
+#include "../ntvdmex_types.h"
+#include "dos_mcb.h"        /* DosMcbSegmentAddress / DosMcbReadWord / DosMcbWriteWord paragraph addressing */
 
-typedef struct {
-    uint16_t cs, ip;        /* entry CS:IP                                   */
-    uint16_t ss, sp;        /* entry SS:SP                                   */
-    int      is_exe;        /* 1 = MZ .EXE, 0 = flat .COM                    */
-    uint32_t img_size;      /* bytes placed in conventional memory           */
-} dos_image_t;
+typedef struct _DOS_IMAGE {
+    WORD     CodeSegment, InstructionPointer;   /* entry CS:IP                         */
+    WORD     StackSegment, StackPointer;        /* entry SS:SP                         */
+    BOOL     IsExe;         /* 1 = MZ .EXE, 0 = flat .COM                    */
+    DWORD    ImageSize;     /* bytes placed in conventional memory           */
+} DOS_IMAGE, *PDOS_IMAGE;
 
-static inline uint16_t dos_ld_rd16(const uint8_t *p) {
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+typedef const DOS_IMAGE *PCDOS_IMAGE;
+
+/* The MZ header's fields, as offsets into the file. */
+#define DOS_MZ_LAST_PAGE_BYTES     2      /* e_cblp: bytes used in the last page        */
+#define DOS_MZ_PAGE_COUNT          4      /* e_cp                                       */
+#define DOS_MZ_RELOCATION_COUNT    6      /* e_crlc                                     */
+#define DOS_MZ_HEADER_PARAGRAPHS   8      /* e_cparhdr                                  */
+#define DOS_MZ_MIN_ALLOC           10     /* e_minalloc                                 */
+#define DOS_MZ_MAX_ALLOC           12     /* e_maxalloc                                 */
+#define DOS_MZ_INITIAL_SS          14     /* e_ss                                       */
+#define DOS_MZ_INITIAL_SP          16     /* e_sp                                       */
+#define DOS_MZ_INITIAL_IP          20     /* e_ip                                       */
+#define DOS_MZ_INITIAL_CS          22     /* e_cs                                       */
+#define DOS_MZ_RELOCATION_TABLE    24     /* e_lfarlc                                   */
+#define DOS_MZ_NEW_HEADER          0x3C   /* e_lfanew: a DWORD                          */
+#define DOS_MZ_HEADER_MIN          0x1C   /* shorter than this is not an MZ header      */
+#define DOS_MZ_NEW_HEADER_MIN      0x40   /* an e_lfanew below 40h is an old DOS .EXE   */
+#define DOS_MZ_PAGE_BYTES          512
+#define DOS_MZ_PAGE_PARAGRAPHS     32u    /* 512 / 16                                   */
+#define DOS_MZ_RELOCATION_ENTRY    4      /* each: WORD offset, then WORD segment       */
+#define DOS_MZ_RELOCATION_SEGMENT  2
+#define DOS_LOADER_HIGH_WORD_SHIFT 16
+
+/* A flat .COM: loaded at PSP:100h, with the stack at the top of its segment. */
+#define DOS_COM_MAX_BYTES          0xFE00
+#define DOS_COM_ENTRY              0x100
+#define DOS_COM_INITIAL_SP         0xFFFE
+
+/* The new-header fields DosExeKind reads, as offsets from e_lfanew. */
+#define DOS_PE_SIGNATURE_BYTES     4      /* "PE\0\0"                                   */
+#define DOS_PE_SUBSYSTEM           0x5C   /* the optional header's Subsystem WORD       */
+#define DOS_PE_SUBSYSTEM_END       0x5E
+#define DOS_NE_TARGET_OS           0x36   /* ne_exetyp                                  */
+#define DOS_NE_TARGET_OS_END       0x37
+#define DOS_NE_OS_UNSPECIFIED      0      /* Windows 1.x/2.x programs                   */
+#define DOS_NE_OS_WINDOWS          2
+
+static inline WORD DosLoaderReadWord(_In_reads_bytes_(2) PCBYTE field) {
+    return (WORD)((WORD)field[0] | ((WORD)field[1] << DOS_HIGH_BYTE_SHIFT));
 }
 
-/* Place `file` (nread bytes) into conventional memory at `base`:
- *  - MZ .EXE: load module copied to (psp_seg+0x10):0, relocations applied,
+/* Place `file` (bytesRead bytes) into conventional memory at `base`:
+ *  - MZ .EXE: load module copied to (pspSegment+0x10):0, relocations applied,
  *    CS:IP/SS:SP from the header (segment fields biased by the load segment).
- *  - flat .COM: copied to psp_seg:0x100; CS=SS=psp_seg, IP=0x100, SP=0xFFFE.
+ *  - flat .COM: copied to pspSegment:0x100; CS=SS=pspSegment, IP=0x100, SP=0xFFFE.
  * Returns the entry context. Mirrors vdmhost.c's M2.3 loader exactly. */
-/* ── load_seg: WHERE THE IMAGE GOES, which is not always just past the PSP. ──
+/* ── loadSegment: WHERE THE IMAGE GOES, which is not always just past the PSP. ──
      An MZ image with e_minalloc = e_maxalloc = 0 is LOADED HIGH -- at the top of
      the block EXEC gave it, with the PSP still at the bottom (GH #255; see
-     dos_exec_size). 0 = the ordinary place, psp_seg + 10h. Ignored for a .COM. */
-static inline dos_image_t dos_load_at(volatile uint8_t *base, const uint8_t *file,
-                                      uint32_t nread, uint16_t psp_seg, uint16_t at) {
-    dos_image_t e;
-    uint32_t i;
-    if (nread >= 0x1C && file[0] == 'M' && file[1] == 'Z') {
-        uint32_t hdrsize  = (uint32_t)dos_ld_rd16(file + 8) * 16;  /* e_cparhdr */
-        uint32_t e_crlc   = dos_ld_rd16(file + 6);                 /* reloc count   */
-        uint32_t e_lfarlc = dos_ld_rd16(file + 24);               /* reloc tbl off */
-        uint16_t load_seg = at ? at : (uint16_t)(psp_seg + 0x10);
-        volatile uint8_t *img = mcb_at(base, load_seg);
-        uint16_t e_cblp = dos_ld_rd16(file + 2);                  /* bytes, last pg */
-        uint16_t e_cp   = dos_ld_rd16(file + 4);                  /* page count    */
-        uint32_t totalused = e_cp ? ((uint32_t)(e_cp - 1) * 512 + (e_cblp ? e_cblp : 512))
-                                  : nread;
-        uint32_t imgsize;
-        if (totalused > nread) totalused = nread;
-        imgsize = totalused > hdrsize ? totalused - hdrsize : 0;
-        for (i = 0; i < imgsize; ++i) img[i] = file[hdrsize + i];
-        for (i = 0; i < e_crlc; ++i) {                            /* apply relocations */
-            uint32_t ro = dos_ld_rd16(file + e_lfarlc + i * 4);
-            uint32_t rs = dos_ld_rd16(file + e_lfarlc + i * 4 + 2);
-            volatile uint8_t *loc = (volatile uint8_t *)((uintptr_t)base
-                                    + (((uint32_t)(load_seg + rs)) << 4) + ro);
-            mcb_wr16(loc, (uint16_t)(mcb_rd16(loc) + load_seg));
+     DosExecSize). 0 = the ordinary place, pspSegment + 10h. Ignored for a .COM. */
+static inline DOS_IMAGE DosLoadImageAt(_In_opt_ volatile BYTE *base, _In_reads_bytes_(bytesRead) PCBYTE file,
+                                       _In_ DWORD bytesRead, _In_ WORD pspSegment, _In_ WORD requestedSegment) {
+    DOS_IMAGE image;
+    DWORD index;
+    if (bytesRead >= DOS_MZ_HEADER_MIN && file[0] == 'M' && file[1] == 'Z') {
+        DWORD headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * DOS_PARAGRAPH_BYTES;  /* e_cparhdr */
+        DWORD relocationCount   = DosLoaderReadWord(file + DOS_MZ_RELOCATION_COUNT);                 /* reloc count   */
+        DWORD relocationTable = DosLoaderReadWord(file + DOS_MZ_RELOCATION_TABLE);               /* reloc tbl off */
+        WORD loadSegment = requestedSegment ? requestedSegment : (WORD)(pspSegment + DOS_PSP_PARAGRAPHS);
+        volatile BYTE *imageBytes = DosMcbSegmentAddress(base, loadSegment);
+        WORD lastPageBytes = DosLoaderReadWord(file + DOS_MZ_LAST_PAGE_BYTES);                  /* bytes, last pg */
+        WORD pageCount   = DosLoaderReadWord(file + DOS_MZ_PAGE_COUNT);                  /* page count    */
+        DWORD totalUsed = pageCount ? ((DWORD)(pageCount - 1) * DOS_MZ_PAGE_BYTES + (lastPageBytes ? lastPageBytes : DOS_MZ_PAGE_BYTES))
+                                  : bytesRead;
+        DWORD imageSize;
+        if (totalUsed > bytesRead) totalUsed = bytesRead;
+        imageSize = totalUsed > headerSize ? totalUsed - headerSize : 0;
+        for (index = 0; index < imageSize; ++index) imageBytes[index] = file[headerSize + index];
+        for (index = 0; index < relocationCount; ++index) {                            /* apply relocations */
+            DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
+            DWORD fixupSegment = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY + DOS_MZ_RELOCATION_SEGMENT);
+            volatile BYTE *fixup = (volatile BYTE *)((ULONG_PTR)base
+                                    + (((DWORD)(loadSegment + fixupSegment)) << DOS_PARAGRAPH_SHIFT) + fixupOffset);
+            DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + loadSegment));
         }
-        e.cs = (uint16_t)(load_seg + dos_ld_rd16(file + 22));     /* e_cs */
-        e.ip = dos_ld_rd16(file + 20);                            /* e_ip */
-        e.ss = (uint16_t)(load_seg + dos_ld_rd16(file + 14));     /* e_ss */
-        e.sp = dos_ld_rd16(file + 16);                            /* e_sp */
-        e.is_exe = 1;
-        e.img_size = imgsize;
+        image.CodeSegment = (WORD)(loadSegment + DosLoaderReadWord(file + DOS_MZ_INITIAL_CS));     /* e_cs */
+        image.InstructionPointer = DosLoaderReadWord(file + DOS_MZ_INITIAL_IP);                            /* e_ip */
+        image.StackSegment = (WORD)(loadSegment + DosLoaderReadWord(file + DOS_MZ_INITIAL_SS));     /* e_ss */
+        image.StackPointer = DosLoaderReadWord(file + DOS_MZ_INITIAL_SP);                            /* e_sp */
+        image.IsExe = TRUE;
+        image.ImageSize = imageSize;
     } else {                                                      /* flat .COM */
-        uint32_t n = nread > 0xFE00 ? 0xFE00 : nread;
-        volatile uint8_t *code = mcb_at(base, psp_seg) + 0x100;   /* psp_seg:0x100 */
-        for (i = 0; i < n; ++i) code[i] = file[i];
-        e.cs = psp_seg; e.ip = 0x100; e.ss = psp_seg; e.sp = 0xFFFE;
-        e.is_exe = 0;
-        e.img_size = n;
+        DWORD comSize = bytesRead > DOS_COM_MAX_BYTES ? DOS_COM_MAX_BYTES : bytesRead;
+        volatile BYTE *code = DosMcbSegmentAddress(base, pspSegment) + DOS_COM_ENTRY;   /* pspSegment:0x100 */
+        for (index = 0; index < comSize; ++index) code[index] = file[index];
+        image.CodeSegment = pspSegment; image.InstructionPointer = DOS_COM_ENTRY; image.StackSegment = pspSegment; image.StackPointer = DOS_COM_INITIAL_SP;
+        image.IsExe = FALSE;
+        image.ImageSize = comSize;
     }
-    return e;
+    return image;
 }
 
-static inline dos_image_t dos_load(volatile uint8_t *base, const uint8_t *file,
-                                   uint32_t nread, uint16_t psp_seg) {
-    return dos_load_at(base, file, nread, psp_seg, 0);
+static inline DOS_IMAGE DosLoadImage(_In_opt_ volatile BYTE *base, _In_reads_bytes_(bytesRead) PCBYTE file,
+                                     _In_ DWORD bytesRead, _In_ WORD pspSegment) {
+    return DosLoadImageAt(base, file, bytesRead, pspSegment, 0);
 }
 
 /* ── THE IMAGE'S SIZE IN PARAGRAPHS, AS DOS COUNTS IT FOR MEMORY: WHOLE PAGES. ──
@@ -83,15 +120,15 @@ static inline dos_image_t dos_load(volatile uint8_t *base, const uint8_t *file,
      DOSBox-X agree): the child's file is 150h bytes, a 20h-byte header and 130h of
      image -- 13h paragraphs of actual bytes -- and DOS sizes its block as if the
      image were 1Eh (one page, 20h paragraphs, less the 2-paragraph header). The
-     loader still COPIES only the e_cblp-trimmed bytes (dos_load_at); this is the
+     loader still COPIES only the e_cblp-trimmed bytes (DosLoadImageAt); this is the
      size DOS RESERVES for it, and the distance below the block's end a load-high
      image is put at. */
-static inline uint16_t dos_image_paras(const uint8_t *file, uint32_t nread) {
-    uint32_t pages, hdr;
-    if (nread < 0x1C || file[0] != 'M' || file[1] != 'Z') return 0;
-    pages = (uint32_t)dos_ld_rd16(file + 4) * 32u;
-    hdr   = dos_ld_rd16(file + 8);
-    return (uint16_t)(pages > hdr ? pages - hdr : 0);
+static inline WORD DosImageParagraphs(_In_reads_bytes_(bytesRead) PCBYTE file, _In_ DWORD bytesRead) {
+    DWORD pageParagraphs, headerParagraphs;
+    if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z') return 0;
+    pageParagraphs = (DWORD)DosLoaderReadWord(file + DOS_MZ_PAGE_COUNT) * DOS_MZ_PAGE_PARAGRAPHS;
+    headerParagraphs   = DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS);
+    return (WORD)(pageParagraphs > headerParagraphs ? pageParagraphs - headerParagraphs : 0);
 }
 
 /* ── ★ HOW MUCH MEMORY EXEC GIVES AN MZ PROGRAM. (GH #255) ──────────────────────
@@ -105,31 +142,31 @@ static inline uint16_t dos_image_paras(const uint8_t *file, uint32_t nread) {
      whole block, with the image at its TOP.
      ★ MEASURED, NOT DERIVED (tests/probes/dos/p_exmem.asm; 6.22 under QEMU and
        DOSBox-X agree): a child whose image DOS counts as 1Eh paragraphs (see
-       dos_image_paras -- whole pages) with min/max = 100h/200h gets a block of
+       DosImageParagraphs -- whole pages) with min/max = 100h/200h gets a block of
        10h (PSP) + 1Eh + 200h = 22Eh; max 10h gives 3Eh; min F000h is refused with
        AX=0008 and never runs; min/max 0/0 puts CS 1Eh paragraphs below the block's
        end; max FFFFh takes the whole largest block. Every child used to get 8AE2h
        paragraphs -- all of it -- on the rig.
      Inputs: the file, and `largest` = the largest free block in paragraphs. Out:
-     *alloc (paragraphs to allocate, PSP included) and *high (1 = load high).
+     *allocation (paragraphs to allocate, PSP included) and *loadHigh (1 = load high).
      Returns 0, or 8 (DOS's "insufficient memory") when even minalloc will not fit.
      A .COM (or anything not MZ) is not sized here: it takes the largest block. */
-static inline int dos_exec_size(const uint8_t *file, uint32_t nread, uint16_t largest,
-                                uint16_t *alloc, int *high) {
-    uint32_t imgpara, need, want;
-    uint16_t mina, maxa;
-    *high = 0;
-    if (nread < 0x1C || file[0] != 'M' || file[1] != 'Z') { *alloc = largest; return 0; }
-    imgpara = dos_image_paras(file, nread);
-    mina = dos_ld_rd16(file + 10);
-    maxa = dos_ld_rd16(file + 12);
-    need = 0x10 + imgpara + mina;
-    if (need > largest) return 8;
-    if (mina == 0 && maxa == 0) { *high = 1; *alloc = largest; return 0; }
-    want = 0x10 + imgpara + maxa;
-    if (want < need) want = need;              /* a maxalloc below minalloc */
-    *alloc = (uint16_t)(want < largest ? want : largest);
-    return 0;
+static inline INT DosExecSize(_In_reads_bytes_(bytesRead) PCBYTE file, _In_ DWORD bytesRead, _In_ WORD largest,
+                              _Out_ PWORD allocation, _Out_ PBOOL loadHigh) {
+    DWORD imageParagraphs, needed, wanted;
+    WORD minimumAlloc, maximumAlloc;
+    *loadHigh = FALSE;
+    if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z') { *allocation = largest; return DOS_MCB_SUCCESS; }
+    imageParagraphs = DosImageParagraphs(file, bytesRead);
+    minimumAlloc = DosLoaderReadWord(file + DOS_MZ_MIN_ALLOC);
+    maximumAlloc = DosLoaderReadWord(file + DOS_MZ_MAX_ALLOC);
+    needed = DOS_PSP_PARAGRAPHS + imageParagraphs + minimumAlloc;
+    if (needed > largest) return DOS_MCB_ERROR_INSUFFICIENT_MEMORY;
+    if (minimumAlloc == 0 && maximumAlloc == 0) { *loadHigh = TRUE; *allocation = largest; return DOS_MCB_SUCCESS; }
+    wanted = DOS_PSP_PARAGRAPHS + imageParagraphs + maximumAlloc;
+    if (wanted < needed) wanted = needed;              /* a maxalloc below minalloc */
+    *allocation = (WORD)(wanted < largest ? wanted : largest);
+    return DOS_MCB_SUCCESS;
 }
 
 /* ── ★ IS THIS A DOS PROGRAM AT ALL? (GH #255) ──────────────────────────────────
@@ -148,32 +185,32 @@ static inline int dos_exec_size(const uint8_t *file, uint32_t nread, uint16_t la
                   with whatever happens to sit at 3Ch.
      NE target OS (ne_exetyp, NE+36h): 2 = Windows; 0 = unspecified, which is what
      Windows 1.x/2.x programs carry (the field came later) -- both are WOW's.
-     Out (PE only): *subsys = the PE optional header's Subsystem (2 GUI, 3 console),
+     Out (PE only): *subsystem = the PE optional header's Subsystem (2 GUI, 3 console),
      which decides whether EXEC waits for it. */
 #define DOS_EXE_DOS 0       /* load it ourselves: .COM, plain MZ, LE/LX, OS/2 NE   */
 #define DOS_EXE_NE  1       /* a Windows NE: WOW's                                 */
 #define DOS_EXE_PE  2       /* a PE: Win32's                                       */
-static inline int dos_exe_kind(const uint8_t *file, uint32_t nread, unsigned *subsys) {
-    uint32_t lf;
-    *subsys = 0;
-    if (nread < 0x40 || file[0] != 'M' || file[1] != 'Z') return DOS_EXE_DOS;
-    lf = (uint32_t)dos_ld_rd16(file + 0x3C) | ((uint32_t)dos_ld_rd16(file + 0x3E) << 16);
-    if (lf < 0x40 || lf > nread - 4) return DOS_EXE_DOS;
-    if (file[lf] == 'P' && file[lf + 1] == 'E' && file[lf + 2] == 0 && file[lf + 3] == 0) {
-        if (lf + 0x5E <= nread) *subsys = dos_ld_rd16(file + lf + 0x5C);
+static inline INT DosExeKind(_In_reads_bytes_(bytesRead) PCBYTE file, _In_ DWORD bytesRead, _Out_ PUINT subsystem) {
+    DWORD newHeader;
+    *subsystem = 0;
+    if (bytesRead < DOS_MZ_NEW_HEADER_MIN || file[0] != 'M' || file[1] != 'Z') return DOS_EXE_DOS;
+    newHeader = (DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER) | ((DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER + 2) << DOS_LOADER_HIGH_WORD_SHIFT);
+    if (newHeader < DOS_MZ_NEW_HEADER_MIN || newHeader > bytesRead - DOS_PE_SIGNATURE_BYTES) return DOS_EXE_DOS;
+    if (file[newHeader] == 'P' && file[newHeader + 1] == 'E' && file[newHeader + 2] == 0 && file[newHeader + 3] == 0) {
+        if (newHeader + DOS_PE_SUBSYSTEM_END <= bytesRead) *subsystem = DosLoaderReadWord(file + newHeader + DOS_PE_SUBSYSTEM);
         return DOS_EXE_PE;
     }
-    if (file[lf] == 'N' && file[lf + 1] == 'E' && lf + 0x37 <= nread) {
-        uint8_t os = file[lf + 0x36];
-        if (os == 2 || os == 0) return DOS_EXE_NE;
+    if (file[newHeader] == 'N' && file[newHeader + 1] == 'E' && newHeader + DOS_NE_TARGET_OS_END <= bytesRead) {
+        BYTE targetOs = file[newHeader + DOS_NE_TARGET_OS];
+        if (targetOs == DOS_NE_OS_WINDOWS || targetOs == DOS_NE_OS_UNSPECIFIED) return DOS_EXE_NE;
     }
     return DOS_EXE_DOS;
 }
 
 /* ── AH=4Bh AL=03: LOAD AN OVERLAY. (GH #50) ──────────────────────────────────
    Not a process: no PSP, no memory allocated, no transfer of control. The caller
-   says WHERE to put it (load_seg) and, separately, WHAT TO RELOCATE BY
-   (reloc_factor) -- and those two are not the same number. A large program swaps
+   says WHERE to put it (loadSegment) and, separately, WHAT TO RELOCATE BY
+   (relocationFactor) -- and those two are not the same number. A large program swaps
    overlays into one buffer it already owns, so the relocation factor is the
    buffer's segment while the load segment may differ.
  ★ THE FACTOR, NOT THE LOAD SEGMENT. tests/probes/dos/p_ovl.asm passes a factor of
@@ -182,36 +219,36 @@ static inline int dos_exe_kind(const uint8_t *file, uint32_t nread, unsigned *su
        CASE=ovl.relocated.word SIG=AX AX=1234
    which separates the three ways to be wrong -- 0 (never relocated), the load
    segment (relocated by the wrong value), or their sum (relocated twice). */
-static inline uint32_t dos_load_overlay(volatile uint8_t *base, const uint8_t *file,
-                                        uint32_t nread, uint16_t load_seg,
-                                        uint16_t reloc_factor) {
-    uint32_t i, hdrsize, e_crlc, e_lfarlc, totalused, imgsize;
-    uint16_t e_cblp, e_cp;
-    volatile uint8_t *img;
-    if (nread < 0x1C || file[0] != 'M' || file[1] != 'Z') {
+static inline DWORD DosLoadOverlay(_In_opt_ volatile BYTE *base, _In_reads_bytes_(bytesRead) PCBYTE file,
+                                   _In_ DWORD bytesRead, _In_ WORD loadSegment,
+                                   _In_ WORD relocationFactor) {
+    DWORD index, headerSize, relocationCount, relocationTable, totalUsed, imageSize;
+    WORD lastPageBytes, pageCount;
+    volatile BYTE *imageBytes;
+    if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z') {
         /* A .COM overlay is the file, verbatim, with nothing to relocate. */
-        img = mcb_at(base, load_seg);
-        for (i = 0; i < nread; ++i) img[i] = file[i];
-        return nread;
+        imageBytes = DosMcbSegmentAddress(base, loadSegment);
+        for (index = 0; index < bytesRead; ++index) imageBytes[index] = file[index];
+        return bytesRead;
     }
-    hdrsize  = (uint32_t)dos_ld_rd16(file + 8) * 16;
-    e_crlc   = dos_ld_rd16(file + 6);
-    e_lfarlc = dos_ld_rd16(file + 24);
-    e_cblp   = dos_ld_rd16(file + 2);
-    e_cp     = dos_ld_rd16(file + 4);
-    totalused = e_cp ? ((uint32_t)(e_cp - 1) * 512 + (e_cblp ? e_cblp : 512)) : nread;
-    if (totalused > nread) totalused = nread;
-    imgsize = totalused > hdrsize ? totalused - hdrsize : 0;
-    img = mcb_at(base, load_seg);
-    for (i = 0; i < imgsize; ++i) img[i] = file[hdrsize + i];
-    for (i = 0; i < e_crlc; ++i) {
-        uint32_t ro = dos_ld_rd16(file + e_lfarlc + i * 4);
-        uint32_t rs = dos_ld_rd16(file + e_lfarlc + i * 4 + 2);
-        volatile uint8_t *loc = (volatile uint8_t *)((uintptr_t)base
-                                + (((uint32_t)(load_seg + rs)) << 4) + ro);
-        mcb_wr16(loc, (uint16_t)(mcb_rd16(loc) + reloc_factor));
+    headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * DOS_PARAGRAPH_BYTES;
+    relocationCount   = DosLoaderReadWord(file + DOS_MZ_RELOCATION_COUNT);
+    relocationTable = DosLoaderReadWord(file + DOS_MZ_RELOCATION_TABLE);
+    lastPageBytes   = DosLoaderReadWord(file + DOS_MZ_LAST_PAGE_BYTES);
+    pageCount     = DosLoaderReadWord(file + DOS_MZ_PAGE_COUNT);
+    totalUsed = pageCount ? ((DWORD)(pageCount - 1) * DOS_MZ_PAGE_BYTES + (lastPageBytes ? lastPageBytes : DOS_MZ_PAGE_BYTES)) : bytesRead;
+    if (totalUsed > bytesRead) totalUsed = bytesRead;
+    imageSize = totalUsed > headerSize ? totalUsed - headerSize : 0;
+    imageBytes = DosMcbSegmentAddress(base, loadSegment);
+    for (index = 0; index < imageSize; ++index) imageBytes[index] = file[headerSize + index];
+    for (index = 0; index < relocationCount; ++index) {
+        DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
+        DWORD fixupSegment = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY + DOS_MZ_RELOCATION_SEGMENT);
+        volatile BYTE *fixup = (volatile BYTE *)((ULONG_PTR)base
+                                + (((DWORD)(loadSegment + fixupSegment)) << DOS_PARAGRAPH_SHIFT) + fixupOffset);
+        DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + relocationFactor));
     }
-    return imgsize;
+    return imageSize;
 }
 
-#endif /* DOS_LOADER_H */
+#endif /* NTVDMEX_DOS_LOADER_H */

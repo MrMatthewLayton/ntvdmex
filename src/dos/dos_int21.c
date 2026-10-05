@@ -545,7 +545,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
                                function sets fields one by one -- nothing zeroes it */
     m->vdrive = -1;         /* the current drive is the process current directory's */
     m->psp_seg = DOS_PSP_SEG;
-    {   int k;               /* s91: the JFT a fresh PSP carries (dos_psp_build) */
+    {   int k;               /* s91: the JFT a fresh PSP carries (DosPspBuild) */
         static const uint8_t jft0[5] = { 1, 1, 1, 0, 2 };
         for (k = 0; k < 20; ++k) m->jft_known[k] = k < 5 ? jft0[k] : 0xFF;
         for (k = 0; k < 256; ++k) m->sft_host[k] = 0; }
@@ -1017,7 +1017,7 @@ int dos_int21(dos_machine_t *m)
         OUTC(R_DX & 0xFF); OKCF();
     } else if ((ah == 0x01 || ah == 0x07 || ah == 0x08 || ah == 0x0B
                 || (ah == 0x06 && (R_DX & 0xFF) == 0xFF))
-               && dos_fh_is_file((void *const *)m->fh, 0)) {
+               && DosHandleIsFile((void *const *)m->fh, 0)) {
         /* ── stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
              shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
              read HANDLE 0 -- these read the keyboard whatever handle 0 was, so a
@@ -1055,7 +1055,7 @@ int dos_int21(dos_machine_t *m)
             if (ah == 0x01) OUTC(c);            /* AH=01: echo                     */
             SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
         }
-    } else if (ah == 0x0A && dos_fh_is_file((void *const *)m->fh, 0)) {
+    } else if (ah == 0x0A && DosHandleIsFile((void *const *)m->fh, 0)) {
         /* stdio (s91): the line from a FILE on handle 0 -- bytes up to the CR, the
            LF a text file puts after it skipped at the start of the next line, each
            echoed as the keyboard form echoes them. At EOF with nothing read it
@@ -1181,7 +1181,7 @@ int dos_int21(dos_machine_t *m)
            ⚠ ANY OTHER FAILURE KEEPS THE OLD ANSWER, deliberately: disk full is CF=0
              with a short count on DOS too, and the rest (access denied on a read-only
              handle = DOS 5) is a separate, unmeasured question. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) {
+        if (DosHandleIsFile((void *const *)m->fh, h)) {
             DWORD w = 0, we = 0; unsigned short de = 0;
             if (!WriteFile(m->fh[h], b, cnt, &w, NULL)) we = GetLastError();
             if (we && DosErrFromWin32((unsigned long)we, &de) && DosCritIsHardwareError(de)) {
@@ -1199,7 +1199,7 @@ int dos_int21(dos_machine_t *m)
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
-        else if ((h == 3 || h == 4) && dos_fh_is_device((void *const *)m->fh, m->std_open, h)) {
+        else if ((h == 3 || h == 4) && DosHandleIsDevice((void *const *)m->fh, m->std_open, h)) {
             if (AUXPRN_V86) AUXPRN_TRAMP(h == 4 ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else {
                 DWORD k;
@@ -1214,7 +1214,7 @@ int dos_int21(dos_machine_t *m)
              sitting in slot 5. A duplicate loses which device it was, so a dup of
              AUX would print here; nothing does that, and the alternative is a
              per-slot identity byte we have no caller for. */
-        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
+        else if (DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
              { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
@@ -1248,7 +1248,7 @@ int dos_int21(dos_machine_t *m)
             f = dos_open_stampable(fn, acc, shr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
+            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
                                         if (ah == 0x3C) dos_stamp_vdm_now(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
@@ -1271,13 +1271,13 @@ int dos_int21(dos_machine_t *m)
         DWORD h = R_BX & 0xFFFF;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) dos_handle_release(m, h);
-        else dos_fh_set_device(&m->std_open, h, 0);         /* free the device slot */
+        if (DosHandleIsFile((void *const *)m->fh, h)) dos_handle_release(m, h);
+        else DosHandleSetDevice(&m->std_open, h, 0);         /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (dos_fh_is_file((void *const *)m->fh, h)) {      /* bound -> a file, even if low */
+        if (DosHandleIsFile((void *const *)m->fh, h)) {      /* bound -> a file, even if low */
             /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
                  loading an executable is doing nothing but seek+read, so if the image it
                  ends up with is wrong, the first question is whether WE handed it the
@@ -1307,7 +1307,7 @@ int dos_int21(dos_machine_t *m)
             tp = zput(tp, " first="); tp = zdump(tp, (const BYTE *)b, (rd >= 8) ? 8 : 0);
             tp = zput(tp, "\r\n");
         }
-        else if (h == 0 && dos_fh_is_device((void *const *)m->fh, m->std_open, h)) {
+        else if (h == 0 && DosHandleIsDevice((void *const *)m->fh, m->std_open, h)) {
             /* ── #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT. ──────────
                  This answered 0 bytes -- end of file -- so any program reading its
                  input through handle 0 (C's gets/scanf/fgets do) saw an empty stream
@@ -1342,9 +1342,9 @@ int dos_int21(dos_machine_t *m)
             SETAX(n); OKCF();
         read_done: ;
         }
-        else if (h == 3 && AUXPRN_V86 && dos_fh_is_device((void *const *)m->fh, m->std_open, h))
+        else if (h == 3 && AUXPRN_V86 && DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
              AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
-        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
+        else if (DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
              { SETAX(0); OKCF(); }              /* PRN, a dup, or AUX in PM: EOF */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
@@ -1360,7 +1360,7 @@ int dos_int21(dos_machine_t *m)
              Oracle, tests/probes/dos/p_redir.asm on MS-DOS 6.22:
                CASE=int21.42.end.on.h1 SIG=AX,DX,CF AX=0004 DX=0000 CF=0
              i.e. real DOS seeks handle 1 to the end and reports 4 bytes. */
-        if (dos_fh_is_file((void *const *)m->fh, h)) {
+        if (DosHandleIsFile((void *const *)m->fh, h)) {
             DWORD np = SetFilePointer(m->fh[h], dist, NULL, meth);
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
@@ -1471,7 +1471,7 @@ int dos_int21(dos_machine_t *m)
             else {
                 FILETIME ft, lf; WORD fdt = 0, ftm = 0;
                 DWORD sz = GetFileSize(fh2, NULL);
-                slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
+                slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
                 if (slot >= DOS_MAX_FILES) { CloseHandle(fh2); FCB_FAIL(); }
                 else {
                     m->fh[slot] = fh2;
@@ -1856,21 +1856,21 @@ int dos_int21(dos_machine_t *m)
                  inline fields: FAT sectors, root start and data start ZERO (a volume
                  whose files overlap its FAT), a highest-cluster word that wrapped past
                  0xFFFF where the chain's clamps at 0xFFFE, and unit 0 where the chain
-                 says unit = drive (6.22: one IO.SYS driver, A: unit 0 .. C: unit 2). dos_dpb_fat_layout's
+                 says unit = drive (6.22: one IO.SYS driver, A: unit 0 .. C: unit 2). DosDpbFatLayout's
                  note in dos_sysvars.h says what the derived fields are and are not.
                ⚠ Still a separate copy at DOS_DPB_OFF rather than a pointer INTO the
                  chain (6.22 returns the chain's own DPB); that is a pointer change for a
                  later pass, and the probe compares only AL here. */
             volatile BYTE *d = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_DPB_OFF);
-            unsigned char dp[DPB_LEN];
+            unsigned char dp[DOS_DPB_LEN];
             unsigned drv = dl32 ? (unsigned)(dl32 - 1) : 2u;     /* 0-based drive */
             char rt[4]; int k, rem;
             rt[0] = (char)('A' + drv); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
             rem = (GetDriveTypeA(rt) == DRIVE_REMOVABLE);      /* 6.22's floppy: 224, F0h */
-            dos_dpb_build(dp, drv, bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
+            DosDpbBuild(dp, drv, bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
                           (totc > 0xFFFE) ? 0xFFFE : totc + 1, rem ? 0xF0 : 0xF8,
-                          DOS_DEV_SEG, DEV_OFF(DEV_BLOCK), 0xFFFF, 0xFFFF);
-            for (k = 0; k < DPB_LEN; ++k) d[k] = dp[k];
+                          DOS_DEV_SEG, DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK), 0xFFFF, 0xFFFF);
+            for (k = 0; k < DOS_DPB_LEN; ++k) d[k] = dp[k];
             SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_DPB_OFF);
             SETAX(R_AX & 0xFF00);
         }
@@ -2125,8 +2125,8 @@ int dos_int21(dos_machine_t *m)
            Duplicating a device produces another handle ON THAT DEVICE -- no
            Win32 handle exists to duplicate, so the copy is a device slot too. */
         DWORD src = R_BX & 0xFFFF, dst;
-        int src_dev = dos_fh_is_device((void *const *)m->fh, m->std_open, src);
-        if (!src_dev && !dos_fh_is_file((void *const *)m->fh, src)) { SETAX(6); ERRCF(); }
+        int src_dev = DosHandleIsDevice((void *const *)m->fh, m->std_open, src);
+        if (!src_dev && !DosHandleIsFile((void *const *)m->fh, src)) { SETAX(6); ERRCF(); }
         else {
             HANDLE nh = 0;
             if (!src_dev
@@ -2134,10 +2134,10 @@ int dos_int21(dos_machine_t *m)
                                     GetCurrentProcess(), &nh, 0, FALSE,
                                     DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
             else if (ah == 0x45) {
-                dst = dos_fh_alloc((void *const *)m->fh, m->std_open);
+                dst = DosHandleAllocate((void *const *)m->fh, m->std_open);
                 if (dst >= DOS_MAX_FILES) {
                     if (nh) CloseHandle(nh); SETAX(4); ERRCF();
-                } else if (src_dev && !dos_fh_set_device(&m->std_open, dst, 1)) {
+                } else if (src_dev && !DosHandleSetDevice(&m->std_open, dst, 1)) {
                     /* Past the device mask. Refuse LOUDLY rather than hand back a
                        slot that would read as a file -- see DOS_DEV_SLOTS. */
                     tp = zput(tp, "  INT21 AH=45 device dup past slot 0x");
@@ -2147,14 +2147,14 @@ int dos_int21(dos_machine_t *m)
             } else {
                 dst = R_CX & 0xFFFF;
                 if (dst >= DOS_MAX_FILES) { if (nh) CloseHandle(nh); SETAX(6); ERRCF(); }
-                else if (src_dev && !dos_fh_set_device(&m->std_open, dst, 1)) {
+                else if (src_dev && !DosHandleSetDevice(&m->std_open, dst, 1)) {
                     tp = zput(tp, "  INT21 AH=46 device dup2 past slot 0x");
                     tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
                     SETAX(4); ERRCF();
                 }
                 else { dos_handle_release(m, dst);
                        m->fh[dst] = nh;                 /* 0 when src is a device */
-                       if (!src_dev) dos_fh_set_device(&m->std_open, dst, 0);
+                       if (!src_dev) DosHandleSetDevice(&m->std_open, dst, 0);
                        OKCF(); }
             }
         }
@@ -2171,7 +2171,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x57) {                    /* get/set file date and time */
         DWORD h57 = R_BX & 0xFFFF;
         uint8_t al57 = (uint8_t)(R_AX & 0xFF);
-        if (!dos_fh_is_file((void *const *)m->fh, h57)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((void *const *)m->fh, h57)) { SETAX(6); ERRCF(); }
         else if (al57 == 0x00) {
             FILETIME ft, lf; WORD fdate = 0, ftime = 0;
             if (GetFileTime(m->fh[h57], NULL, NULL, &ft)
@@ -2212,7 +2212,7 @@ int dos_int21(dos_machine_t *m)
             SETAX((uint16_t)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
             ERRCF();
         } else {
-            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
+            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
                                         dos_stamp_vdm_now(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
@@ -2221,7 +2221,7 @@ int dos_int21(dos_machine_t *m)
         DWORD h5c = R_BX & 0xFFFF;
         DWORD off = ((DWORD)(R_CX & 0xFFFF) << 16) | (DWORD)(R_DX & 0xFFFF);
         DWORD len = ((DWORD)(R_SI & 0xFFFF) << 16) | (DWORD)(R_DI & 0xFFFF);
-        if (!dos_fh_is_file((void *const *)m->fh, h5c)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((void *const *)m->fh, h5c)) { SETAX(6); ERRCF(); }
         else {
             BOOL ok5 = ((R_AX & 0xFF) == 0)
                      ? LockFile(m->fh[h5c], off, 0, len, 0)
@@ -2238,7 +2238,7 @@ int dos_int21(dos_machine_t *m)
         else { SETAX(8); ERRCF(); }
     } else if (ah == 0x68 || ah == 0x6A) {      /* commit file (flush) */
         DWORD h68 = R_BX & 0xFFFF;
-        if (!dos_fh_is_file((void *const *)m->fh, h68)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((void *const *)m->fh, h68)) { SETAX(6); ERRCF(); }
         else { FlushFileBuffers(m->fh[h68]); OKCF(); }
     } else if (ah == 0x6C) {                    /* extended open/create */
         /* BX=mode, CX=attributes, DX=action, DS:SI=name.
@@ -2281,7 +2281,7 @@ int dos_int21(dos_machine_t *m)
             uint16_t res = (uint16_t)DosExtOpenActionTaken((unsigned)disp,
                                                         GetLastError() == ERROR_ALREADY_EXISTS,
                                                         lfn_alias != 0);
-            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
+            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
                                         if (res != 1) dos_stamp_vdm_now(f); /* #263: created/truncated */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
@@ -2668,7 +2668,7 @@ int dos_int21(dos_machine_t *m)
              PRN A0C0h (bit 13, output-until-busy) -- measured, p_auxprn. */
         if (al == 0x00) {
             WORD w = (bx < 5) ? 0x80D3 : 0x0002;
-            if ((bx == 3 || bx == 4) && dos_fh_is_device((void *const *)m->fh, m->std_open, bx))
+            if ((bx == 3 || bx == 4) && DosHandleIsDevice((void *const *)m->fh, m->std_open, bx))
                 w = (bx == 3) ? 0x80C0 : 0xA0C0;
             SET16(R_DX, w); SETAX(w); OKCF();
         }
@@ -2752,23 +2752,23 @@ int dos_int21(dos_machine_t *m)
         OKCF();
     } else if (ah == 0x48) {                    /* allocate BX paras -> AX=seg (err: BX=max) */
         uint16_t want = (uint16_t)(R_BX & 0xFFFF), seg = 0, max = 0;
-        int err = dos_alloc(NULL, m->first_mcb, want, &seg, &max);
+        int err = DosMcbAllocate(NULL, m->first_mcb, want, &seg, &max);
         if (err) { SET16(R_AX, err); SET16(R_BX, max); ERRCF(); }
         else     { SET16(R_AX, seg); OKCF(); }
         /* ── THE BLOCK BELONGS TO THE PROGRAM THAT ASKED. (s80) ───────────────────
              DOS stamps an allocation with the CURRENT PSP, and that is how it frees a
-             terminated child's memory: every block its PSP owns. dos_alloc() writes
+             terminated child's memory: every block its PSP owns. DosMcbAllocate() writes
              DOS_PSP_SEG unconditionally, which is right for the top-level program (its
              PSP is DOS_PSP_SEG) and wrong for every child -- so nothing a child
              allocated was ever given back. Measured: DOS/4GW's five real-mode blocks
              outlived Doom, and the next `doom` loaded 85 KB higher. */
         if (!err && seg && m->psp_seg)
-            mcb_wr16(mcb_at(NULL, (uint16_t)(seg - 1)) + 1, m->psp_seg);
+            DosMcbWriteWord(DosMcbSegmentAddress(NULL, (uint16_t)(seg - 1)) + 1, m->psp_seg);
         tp = zput(tp, "  INT21 AH=48 alloc 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " -> err max=0x" : " -> seg=0x");
         tp = zhex(tp, (*pfl & 1) ? max : (R_AX & 0xFFFF)); tp = zput(tp, "\r\n");
     } else if (ah == 0x49) {                    /* free block: ES=segment */
-        int err = dos_free(NULL, (uint16_t)(R_ES & 0xFFFF));
+        int err = DosMcbFree(NULL, (uint16_t)(R_ES & 0xFFFF));
         /* ── #258: AND A SUCCESSFUL FREE LEAVES AX = THE BLOCK'S MCB. ────────────────
              Undocumented, measured (tests/probes/dos/p_memax): MS-DOS 6.22 and PCem's
              MS-DOS both return AX = ES-1; dosbox-x leaves AX alone. The Microsoft
@@ -2799,7 +2799,7 @@ int dos_int21(dos_machine_t *m)
         }
     } else if (ah == 0x4A) {                    /* resize: ES=block BX=new paras */
         uint16_t want = (uint16_t)(R_BX & 0xFFFF), max = 0;
-        int err = dos_resize(NULL, (uint16_t)(R_ES & 0xFFFF), want, &max);
+        int err = DosMcbResize(NULL, (uint16_t)(R_ES & 0xFFFF), want, &max);
         /* ── #258: A SUCCESSFUL RESIZE LEAVES AX = THE BLOCK'S SEGMENT. ──────────────
              Undocumented, and QuickBASIC 4.5 depends on it: its Quick Library loader
              takes AX after shrinking a top-of-memory block as the block's segment.
@@ -3205,7 +3205,7 @@ int dos_int21(dos_machine_t *m)
                UTC, as a FILETIME is). */
             DWORD h = R_BX & 0xFFFF;
             BY_HANDLE_FILE_INFORMATION bi;
-            if (!dos_fh_is_file((void *const *)m->fh, h)) { SETAX(6); ERRCF(); }
+            if (!DosHandleIsFile((void *const *)m->fh, h)) { SETAX(6); ERRCF(); }
             else if (!GetFileInformationByHandle(m->fh[h], &bi)) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
             else {
                 volatile BYTE *dd = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));

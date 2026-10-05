@@ -47,6 +47,7 @@ typedef unsigned char       BOOLEAN;
 typedef float               FLOAT;
 typedef size_t              SIZE_T;
 typedef __UINTPTR_TYPE__    UINT_PTR;     /* an integer as wide as a pointer: 64 bits here */
+typedef unsigned long       ULONG_PTR;    /* pointer-sized, as on Windows: 64 bits here */
 typedef void               *PVOID;
 typedef void               *HANDLE;
 
