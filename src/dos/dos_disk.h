@@ -19,23 +19,25 @@
  * i.e. CH=79 (80 cylinders), CL=18 sectors/track, DH=1 (2 heads), DL=1 drive,
  * BL=4 (1.44MB), and AH=01 from 15h means "floppy, no change-line support".
  *
- * Pure -- no Windows types -- so tests/unit/disk_test.c can pin the
- * arithmetic, which is where the off-by-one lives.
+ * No Windows calls, only Windows types (src/ntvdmex_types.h), so
+ * tests/unit/disk_test.c can pin the arithmetic, which is where the off-by-one lives.
  */
-#ifndef DOS_DISK_H
-#define DOS_DISK_H
+#ifndef NTVDMEX_DOS_DISK_H
+#define NTVDMEX_DOS_DISK_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
-typedef struct {
-    uint16_t bytes_per_sec;
-    uint16_t sectors;          /* per track                                    */
-    uint16_t heads;
-    uint32_t total_sectors;
-    uint16_t cylinders;        /* derived: total / (sectors * heads)           */
-    uint8_t  drive_type;       /* AH=08h's BL                                  */
-    int      valid;
-} dos_disk_geom;
+typedef struct _DOS_DISK_GEOMETRY {
+    WORD     BytesPerSector;
+    WORD     SectorsPerTrack;
+    WORD     Heads;
+    DWORD    TotalSectors;
+    WORD     Cylinders;        /* derived: total / (sectors per track * heads)  */
+    BYTE     DriveType;        /* AH=08h's BL                                   */
+    BOOL     IsValid;
+} DOS_DISK_GEOMETRY, *PDOS_DISK_GEOMETRY;
+
+typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
 
 /* BIOS drive types, as AH=08h reports them in BL. 4 is the one that matters
    here and it is measured: 6.22 answered BX=0004 for a 1.44MB floppy. */
@@ -44,68 +46,124 @@ typedef struct {
 #define DOS_DRIVE_720K   0x03
 #define DOS_DRIVE_1440K  0x04
 
-/* Read the geometry out of a boot sector's BPB. Returns 0 and leaves
-   geom->valid = 0 if the sector is not a plausible BPB -- an image whose
+/* The one sector size this layer addresses -- and what a BPB must declare. */
+#define DOS_SECTOR_SIZE  512
+
+/* Where the BIOS Parameter Block's fields sit in a boot sector. Each is little-endian:
+   the low byte at the offset, the next at +1, and so on. */
+#define DOS_BPB_BYTES_PER_SECTOR      11
+#define DOS_BPB_TOTAL_SECTORS_16      19    /* 0 here = the 32-bit field is used    */
+#define DOS_BPB_SECTORS_PER_TRACK     24
+#define DOS_BPB_HEADS                 26
+#define DOS_BPB_TOTAL_SECTORS_32      32    /* the >64K-sector form                 */
+#define DOS_BPB_BYTE1                 1     /* the field's second byte, and so on   */
+#define DOS_BPB_BYTE2                 2
+#define DOS_BPB_BYTE3                 3
+#define DOS_BPB_BYTE1_SHIFT           8     /* ...and where each byte goes          */
+#define DOS_BPB_BYTE2_SHIFT           16
+#define DOS_BPB_BYTE3_SHIFT           24
+
+/* The limits a CHS address can express: 6 bits of sector, 8 bits of head. */
+#define DOS_DISK_MAX_SECTORS_PER_TRACK  63
+#define DOS_DISK_MAX_HEADS              255
+
+/* The standard floppy geometries the drive type is told apart by. */
+#define DOS_FLOPPY_HEADS              2
+#define DOS_FLOPPY_1440K_SECTORS      18
+#define DOS_FLOPPY_1200K_SECTORS      15
+#define DOS_FLOPPY_720K_SECTORS       9
+
+/* ★ SECTOR NUMBERS ARE 1-BASED; cylinder and head count from 0, so the last cylinder is
+   the count less one. */
+#define DOS_DISK_NO_SECTOR            0     /* sector 0 does not exist              */
+#define DOS_DISK_FIRST_SECTOR         1u
+#define DOS_DISK_LAST_CYLINDER_OFFSET 1
+
+/* AH=08h's CX packing: CH = the low 8 bits of the last cylinder, CL bits 7-6 = its
+   bits 9-8, CL bits 5-0 = the sectors per track. */
+#define DOS_DISK_CX_CYLINDER_LOW_MASK   0xFF
+#define DOS_DISK_CX_CYLINDER_LOW_SHIFT  8
+#define DOS_DISK_CX_CYLINDER_HIGH_MASK  0x300
+#define DOS_DISK_CX_CYLINDER_HIGH_SHIFT 2
+#define DOS_DISK_CX_SECTOR_MASK         0x3F
+
+/* Read the geometry out of a boot sector's BPB. Returns FALSE and leaves
+   geometry->IsValid FALSE if the sector is not a plausible BPB -- an image whose
    geometry we cannot read is treated as ABSENT rather than guessed at, because
    a guessed cylinder count silently returns the wrong sector. */
-static int dos_disk_geom_from_bpb(const uint8_t *boot, uint32_t file_bytes,
-                                  dos_disk_geom *g)
+static BOOL DosDiskGeometryFromBpb(_In_reads_bytes_opt_(DOS_SECTOR_SIZE) PCBYTE bootSector,
+                                   _In_ DWORD imageSize,
+                                   _Out_ PDOS_DISK_GEOMETRY geometry)
 {
-    uint32_t total;
-    g->valid = 0;
-    if (!boot) return 0;
-    g->bytes_per_sec = (uint16_t)(boot[11] | (boot[12] << 8));
-    g->sectors       = (uint16_t)(boot[24] | (boot[25] << 8));
-    g->heads         = (uint16_t)(boot[26] | (boot[27] << 8));
-    total            = (uint32_t)(boot[19] | (boot[20] << 8));
-    if (total == 0)                                   /* the >64K-sector form */
-        total = (uint32_t)boot[32] | ((uint32_t)boot[33] << 8)
-              | ((uint32_t)boot[34] << 16) | ((uint32_t)boot[35] << 24);
+    DWORD totalSectors;
+    geometry->IsValid = FALSE;
+    if (!bootSector) return FALSE;
+    geometry->BytesPerSector  = (WORD)(bootSector[DOS_BPB_BYTES_PER_SECTOR]
+        | (bootSector[DOS_BPB_BYTES_PER_SECTOR + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+    geometry->SectorsPerTrack = (WORD)(bootSector[DOS_BPB_SECTORS_PER_TRACK]
+        | (bootSector[DOS_BPB_SECTORS_PER_TRACK + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+    geometry->Heads           = (WORD)(bootSector[DOS_BPB_HEADS]
+        | (bootSector[DOS_BPB_HEADS + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+    totalSectors              = (DWORD)(bootSector[DOS_BPB_TOTAL_SECTORS_16]
+        | (bootSector[DOS_BPB_TOTAL_SECTORS_16 + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+    if (totalSectors == 0)                            /* the >64K-sector form */
+        totalSectors = (DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32]
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT)
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE2] << DOS_BPB_BYTE2_SHIFT)
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE3] << DOS_BPB_BYTE3_SHIFT);
     /* Every one of these must be sane before the arithmetic below means
        anything. 512 is not assumed -- it is required to be what the BPB says
        AND a power of two the rest of this layer can address. */
-    if (g->bytes_per_sec != 512) return 0;
-    if (g->sectors == 0 || g->sectors > 63) return 0;
-    if (g->heads == 0 || g->heads > 255) return 0;
-    if (total == 0) return 0;
+    if (geometry->BytesPerSector != DOS_SECTOR_SIZE) return FALSE;
+    if (geometry->SectorsPerTrack == 0
+        || geometry->SectorsPerTrack > DOS_DISK_MAX_SECTORS_PER_TRACK) return FALSE;
+    if (geometry->Heads == 0 || geometry->Heads > DOS_DISK_MAX_HEADS) return FALSE;
+    if (totalSectors == 0) return FALSE;
     /* The image must actually CONTAIN the sectors its BPB claims. A truncated
        image that says 2880 is worse than no image: reads past the end would
        return whatever the read call left in the buffer. */
-    if (file_bytes / 512u < total) return 0;
-    g->total_sectors = total;
-    g->cylinders = (uint16_t)(total / ((uint32_t)g->sectors * g->heads));
-    if (g->cylinders == 0) return 0;
-    g->drive_type = (g->sectors == 18 && g->heads == 2) ? DOS_DRIVE_1440K
-                  : (g->sectors == 9  && g->heads == 2) ? DOS_DRIVE_720K
-                  : (g->sectors == 15 && g->heads == 2) ? DOS_DRIVE_1200K
-                                                        : DOS_DRIVE_360K;
-    g->valid = 1;
-    return 1;
+    if (imageSize / (DWORD)DOS_SECTOR_SIZE < totalSectors) return FALSE;
+    geometry->TotalSectors = totalSectors;
+    geometry->Cylinders = (WORD)(totalSectors
+                                 / ((DWORD)geometry->SectorsPerTrack * geometry->Heads));
+    if (geometry->Cylinders == 0) return FALSE;
+    geometry->DriveType =
+          (geometry->SectorsPerTrack == DOS_FLOPPY_1440K_SECTORS
+           && geometry->Heads == DOS_FLOPPY_HEADS) ? DOS_DRIVE_1440K
+        : (geometry->SectorsPerTrack == DOS_FLOPPY_720K_SECTORS
+           && geometry->Heads == DOS_FLOPPY_HEADS) ? DOS_DRIVE_720K
+        : (geometry->SectorsPerTrack == DOS_FLOPPY_1200K_SECTORS
+           && geometry->Heads == DOS_FLOPPY_HEADS) ? DOS_DRIVE_1200K
+                                                   : DOS_DRIVE_360K;
+    geometry->IsValid = TRUE;
+    return TRUE;
 }
 
 /* CHS -> LBA.  ★ SECTOR NUMBERS ARE 1-BASED and that is the classic off-by-one
    in this interface: cylinder and head count from 0, the sector does not.
-   Returns 0 if the address is outside the geometry, which the caller reports as
+   Returns FALSE if the address is outside the geometry, which the caller reports as
    AH=04 "sector not found" rather than reading somewhere else. */
-static int dos_disk_chs_to_lba(const dos_disk_geom *g, uint16_t cyl,
-                               uint16_t head, uint16_t sector, uint32_t *lba)
+static BOOL DosDiskChsToLba(_In_ PCDOS_DISK_GEOMETRY geometry, _In_ WORD cylinder,
+                            _In_ WORD head, _In_ WORD sector, _Out_ PDWORD logicalBlock)
 {
-    if (!g->valid || sector == 0) return 0;
-    if (cyl >= g->cylinders || head >= g->heads || sector > g->sectors) return 0;
-    *lba = ((uint32_t)cyl * g->heads + head) * g->sectors + (sector - 1u);
-    return 1;
+    if (!geometry->IsValid || sector == DOS_DISK_NO_SECTOR) return FALSE;
+    if (cylinder >= geometry->Cylinders || head >= geometry->Heads
+        || sector > geometry->SectorsPerTrack) return FALSE;
+    *logicalBlock = ((DWORD)cylinder * geometry->Heads + head) * geometry->SectorsPerTrack
+                  + (sector - DOS_DISK_FIRST_SECTOR);
+    return TRUE;
 }
 
 /* AH=08h packs the cylinder count into CH plus the top two bits of CL, with the
    sector count in CL's low six. Both are "max", i.e. one less than the count,
    for cylinder and head -- but NOT for the sector, which is 1-based already.
    6.22 on a 1.44MB floppy: CX=4F12, so CH=0x4F=79 and CL=0x12=18. */
-static uint16_t dos_disk_pack_cx(const dos_disk_geom *g)
+static WORD DosDiskPackCx(_In_ PCDOS_DISK_GEOMETRY geometry)
 {
-    uint16_t maxcyl = (uint16_t)(g->cylinders - 1);
-    return (uint16_t)(((maxcyl & 0xFF) << 8)
-                    | ((maxcyl & 0x300) >> 2)
-                    | (g->sectors & 0x3F));
+    WORD lastCylinder = (WORD)(geometry->Cylinders - DOS_DISK_LAST_CYLINDER_OFFSET);
+    return (WORD)(((lastCylinder & DOS_DISK_CX_CYLINDER_LOW_MASK) << DOS_DISK_CX_CYLINDER_LOW_SHIFT)
+                | ((lastCylinder & DOS_DISK_CX_CYLINDER_HIGH_MASK) >> DOS_DISK_CX_CYLINDER_HIGH_SHIFT)
+                | (geometry->SectorsPerTrack & DOS_DISK_CX_SECTOR_MASK));
 }
 
-#endif /* DOS_DISK_H */
+#endif /* NTVDMEX_DOS_DISK_H */

@@ -60,7 +60,7 @@ typedef struct audio_state {
     opl_state *opl;
     sb_state  *sb;
     gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
-    emu8k_state *emu8k;       /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
+    PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
     const speaker_state *spk; /* PC speaker; NULL = not fitted                   */
     uint32_t   out_hz;
     audio_resampler r_opl, r_sb, r_gus, r_emu8k;
@@ -101,7 +101,7 @@ void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable
 /* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
 void vdd_audio_set_gus(audio_state *st, gus_state *gus);
 /* Fit (or remove, NULL) the AWE32's EMU8000 as a mixer source (#233). */
-void vdd_audio_set_emu8k(audio_state *st, emu8k_state *emu);
+void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu);
 
 /* Master volume, 0..100, clamped; `muted` outputs silence without losing it. */
 void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted);

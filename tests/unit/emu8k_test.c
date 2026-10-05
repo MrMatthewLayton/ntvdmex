@@ -19,338 +19,696 @@
 #include "vdd_emu8k.h"
 #include "vdd_audio.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+/* ---- the chip's ports and register map (§2, p.6-7) ---------------------------------- */
 
-static uint8_t  g_flat[0x10000];
-static uint16_t g_dram[EMU8K_DRAM_WORDS];
-static vdd_bus bus;
-static emu8k_state emu;
+#define EMU8K_TEST_BASE              0x620   /* E: SB 220h + 400h                          */
+#define EMU8K_TEST_DATA0             (EMU8K_TEST_BASE + 0x000)
+#define EMU8K_TEST_DATA0_HIGH        (EMU8K_TEST_BASE + 0x002)
+#define EMU8K_TEST_DATA1             (EMU8K_TEST_BASE + 0x400)
+#define EMU8K_TEST_DATA1_HIGH_DATA2  (EMU8K_TEST_BASE + 0x402)
+#define EMU8K_TEST_DATA3             (EMU8K_TEST_BASE + 0x800)
+#define EMU8K_TEST_POINTER           (EMU8K_TEST_BASE + 0x802)
+#define EMU8K_TEST_POINTER_REGISTER_SHIFT 5
+#define EMU8K_TEST_POINTER_LOW_BYTE  0xFF
 
-#define E 0x620
-static void outw(uint16_t p, uint16_t v) { uint32_t x = v; vdd_bus_io(&bus, p, 2, 0, &x); }
-static uint16_t inw(uint16_t p) { uint32_t x = 0; vdd_bus_io(&bus, p, 2, 1, &x); return (uint16_t)x; }
-static void outd(uint16_t p, uint32_t v) { uint32_t x = v; vdd_bus_io(&bus, p, 4, 0, &x); }
-static uint32_t ind(uint16_t p) { uint32_t x = 0; vdd_bus_io(&bus, p, 4, 1, &x); return x; }
-static void ptr(int reg, int ch) { outw(E + 0x802, (uint16_t)((reg << 5) | ch)); }
+/* The bus's access widths and directions (vdd_bus_io). */
+#define EMU8K_TEST_WORD              2
+#define EMU8K_TEST_DOUBLEWORD        4
+#define EMU8K_TEST_OUT               0
+#define EMU8K_TEST_IN                1
+
+/* Register numbers behind each data port. */
+#define EMU8K_TEST_CPF       0       /* Data0 */
+#define EMU8K_TEST_PTRX      1
+#define EMU8K_TEST_CVCF      2
+#define EMU8K_TEST_VTFT      3
+#define EMU8K_TEST_PSST      6
+#define EMU8K_TEST_CSL       7
+#define EMU8K_TEST_CCCA      0       /* Data1 */
+#define EMU8K_TEST_GLOBALS   1       /* Data1/Data2 r1: the registers named by channel   */
+#define EMU8K_TEST_INIT_LOW  2       /* Data1 r2 = INIT1, Data2 r2 = INIT2               */
+#define EMU8K_TEST_INIT_HIGH 3       /* Data1 r3 = INIT3, Data2 r3 = INIT4               */
+#define EMU8K_TEST_ENVVOL    4
+#define EMU8K_TEST_DCYSUSV   5
+#define EMU8K_TEST_ENVVAL    6
+#define EMU8K_TEST_DCYSUS    7
+#define EMU8K_TEST_ATKHLDV   4       /* Data2 */
+#define EMU8K_TEST_LFO1VAL   5
+#define EMU8K_TEST_ATKHLD    6
+#define EMU8K_TEST_LFO2VAL   7
+#define EMU8K_TEST_IP        0       /* Data3 */
+#define EMU8K_TEST_IFATN     1
+#define EMU8K_TEST_PEFE      2
+#define EMU8K_TEST_FMMOD     3
+#define EMU8K_TEST_TREMFRQ   4
+#define EMU8K_TEST_FM2FRQ2   5
+
+/* The global registers at r1, by channel (p.10-13). */
+#define EMU8K_TEST_HWCF4     9
+#define EMU8K_TEST_HWCF5     10
+#define EMU8K_TEST_HWCF6     13
+#define EMU8K_TEST_SMALR     20
+#define EMU8K_TEST_SMARR     21
+#define EMU8K_TEST_SMALW     22
+#define EMU8K_TEST_SMARW     23
+#define EMU8K_TEST_SMLD      26      /* Data1: SMLD; Data2: SMRD                          */
+#define EMU8K_TEST_WC        27
+#define EMU8K_TEST_HWCF1     29
+#define EMU8K_TEST_HWCF2     30
+#define EMU8K_TEST_HWCF3     31
+
+/* Register values from the guide. */
+#define EMU8K_TEST_HWCF1_INIT        0x0059  /* §4                                         */
+#define EMU8K_TEST_HWCF1_PROBE_MASK  0x007E  /* what the period drivers mask the read with */
+#define EMU8K_TEST_HWCF1_PROBE_VALUE 0x0058
+#define EMU8K_TEST_HWCF2_INIT        0x0020
+#define EMU8K_TEST_HWCF2_PROBE_BITS  0x0003
+#define EMU8K_TEST_HWCF3_AUDIO_OFF   0x0000
+#define EMU8K_TEST_HWCF3_AUDIO_ON    0x0004
+#define EMU8K_TEST_HWCF4_INIT        0
+#define EMU8K_TEST_HWCF5_INIT        0x00000083u
+#define EMU8K_TEST_HWCF6_INIT        0x00008000u
+#define EMU8K_TEST_ENGINE_OFF        0x0080  /* DCYSUSV bit 7                              */
+#define EMU8K_TEST_RELEASE           0x8000  /* DCYSUSV bit 15                             */
+#define EMU8K_TEST_NO_DELAY          0x8000  /* ENVVOL/ENVVAL/LFOnVAL: 8000h = no delay    */
+#define EMU8K_TEST_FLAT_ENVELOPE     0x7F7F  /* fastest rate, no hold / full sustain       */
+#define EMU8K_TEST_LFO_FREQUENCY     0x0010
+#define EMU8K_TEST_UNITY_CP          0x40000000u  /* CP 4000h: one word per sample (p.7)   */
+#define EMU8K_TEST_FULL_TARGET       0x0000FFFFu  /* VTFT/CVCF: volume 0, cutoff FFFFh      */
+#define EMU8K_TEST_PITCH_UNITY       0xE000  /* IP E000h = unity                           */
+#define EMU8K_TEST_PITCH_OCTAVE_UP   0xF000
+#define EMU8K_TEST_PITCH_OCTAVE_DOWN 0xD000
+#define EMU8K_TEST_CP_UNITY          0x4000
+#define EMU8K_TEST_OPEN_FILTER       0xFF00  /* IFATN: cutoff FFh, no attenuation          */
+#define EMU8K_TEST_RELEASE_5C        0x805C  /* §7's release example                       */
+#define EMU8K_TEST_ATTACK_40         0x7F40
+#define EMU8K_TEST_ATTENUATION_12DB  0xFF20  /* IFATN 20h: 32 x 0.375 dB                   */
+#define EMU8K_TEST_CUTOFF_LOW        0x0000
+#define EMU8K_TEST_CUTOFF_ON_TONE    0x6800
+#define EMU8K_TEST_Q_MAX             0xF
+#define EMU8K_TEST_Q_SHIFT_IN_HIGH   12      /* CCCA bits 31-28, in its MS word            */
+#define EMU8K_TEST_CCCA_HIGH_KEEP    0x0FFF
+#define EMU8K_TEST_Q_SHIFT           28
+#define EMU8K_TEST_PAN_SHIFT         24
+#define EMU8K_TEST_PAN_LEFT          0xFF
+#define EMU8K_TEST_PAN_RIGHT         0x00
+#define EMU8K_TEST_PAN_CENTRE        0x80
+#define EMU8K_TEST_INTERPOLATOR_OFFSET 1     /* the registers hold the address minus one   */
+#define EMU8K_TEST_SMA_FLAG          0x80000000u  /* EMPTY / FULL                          */
+#define EMU8K_TEST_ADDRESS_MASK      0xFFFFFF
+#define EMU8K_TEST_HIGH_WORD_SHIFT   16
+#define EMU8K_TEST_LOW_WORD_MASK     0xFFFF
+
+/* The DMA stream modes for CCCA (bits 26-24: DMA, write, right). */
+#define EMU8K_TEST_STREAM_LEFT_READ   0x04000000u
+#define EMU8K_TEST_STREAM_RIGHT_READ  0x05000000u
+#define EMU8K_TEST_STREAM_LEFT_WRITE  0x06000000u
+#define EMU8K_TEST_STREAM_RIGHT_WRITE 0x07000000u
+#define EMU8K_TEST_CCCA_DMA           0x04000000u
+
+/* The channels each part uses. */
+#define EMU8K_TEST_TONE_CHANNEL       0
+#define EMU8K_TEST_SECOND_CHANNEL     1
+#define EMU8K_TEST_LAST_CHANNEL       31
+#define EMU8K_TEST_LEFT_WRITE_CHANNEL 30
+#define EMU8K_TEST_RIGHT_WRITE_CHANNEL 29
+#define EMU8K_TEST_LEFT_READ_CHANNEL  28
+#define EMU8K_TEST_RIGHT_READ_CHANNEL 27
+
+/* Sound memory. */
+#define EMU8K_TEST_DRAM_START         0x200000u
+#define EMU8K_TEST_TONE_ADDRESS       0x201000u   /* where the test tone lives in DRAM     */
+#define EMU8K_TEST_LOOP_WORDS         64
+#define EMU8K_TEST_TONE_WORDS         192         /* three periods of the loop             */
+#define EMU8K_TEST_TONE_QUARTER       16
+#define EMU8K_TEST_TONE_THREE_QUARTERS 48
+#define EMU8K_TEST_TONE_STEP          1024
+#define EMU8K_TEST_TONE_HALF_CYCLE    32768
+#define EMU8K_TEST_TONE_FULL_CYCLE    65536
+#define EMU8K_TEST_TONE_PEAK          16383
+
+/* Timing. */
+#define EMU8K_TEST_RATE               44100       /* one second of samples                 */
+#define EMU8K_TEST_TENTH_SECOND       4410
+#define EMU8K_TEST_ENGINE_TICK        64          /* a render that crosses an engine tick  */
+#define EMU8K_TEST_INIT_WAIT_SAMPLES  1024        /* §4 step: "wait 1024 sample periods"   */
+#define EMU8K_TEST_INIT_WAIT_RENDERS  16          /* ...in renders of 64                   */
+#define EMU8K_TEST_SPIN_LIMIT         1000
+#define EMU8K_TEST_MICROSECONDS_TO_SAMPLES_NUMERATOR   441u
+#define EMU8K_TEST_MICROSECONDS_TO_SAMPLES_DENOMINATOR 10000u
+#define EMU8K_TEST_TWENTY_MS          882         /* samples                               */
+#define EMU8K_TEST_FULL_VOLUME        0xFFFF
+
+static INT    g_Checks, g_Failures;
+static BYTE   g_GuestMemory[0x10000];
+static WORD   g_Dram[EMU8K_DRAM_WORDS];
+static vdd_bus g_Bus;
+static EMU8K_STATE g_Emu8k;
+static INT16  g_Samples[EMU8K_STEREO_SIDES * EMU8K_TEST_RATE];
+static UINT64 g_FakeMicroseconds;
+
+static VOID Emu8kTestCheck(BOOL passed, PCSTR description)
+{
+    ++g_Checks;
+    if (passed) { printf("  PASS  %s\n", description); return; }
+    printf("  FAIL  %s\n", description);
+    ++g_Failures;
+}
+
+/* ---- port access, exactly as a DOS program makes it ----------------------------------- */
+
+static VOID Emu8kTestOutWord(WORD port, WORD value)
+{ UINT32 busValue = value; vdd_bus_io(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_OUT, &busValue); }
+static WORD Emu8kTestInWord(WORD port)
+{ UINT32 busValue = 0; vdd_bus_io(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_IN, &busValue); return (WORD)busValue; }
+static VOID Emu8kTestOutDword(WORD port, DWORD value)
+{ UINT32 busValue = value; vdd_bus_io(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_OUT, &busValue); }
+static DWORD Emu8kTestInDword(WORD port)
+{ UINT32 busValue = 0; vdd_bus_io(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_IN, &busValue); return busValue; }
+static VOID Emu8kTestSelect(INT registerNumber, INT channel)
+{ Emu8kTestOutWord(EMU8K_TEST_POINTER, (WORD)((registerNumber << EMU8K_TEST_POINTER_REGISTER_SHIFT) | channel)); }
+
 /* a doubleword is the LS word to the port, then the MS word two higher (§2) */
-static void d0w(int r, int c, uint32_t v) { ptr(r, c); outw(E, (uint16_t)v); outw(E + 2, (uint16_t)(v >> 16)); }
-static uint32_t d0r(int r, int c) { uint32_t lo; ptr(r, c); lo = inw(E); return lo | ((uint32_t)inw(E + 2) << 16); }
-static void d1dw(int r, int c, uint32_t v) { ptr(r, c); outw(E + 0x400, (uint16_t)v); outw(E + 0x402, (uint16_t)(v >> 16)); }
-static uint32_t d1dr(int r, int c) { uint32_t lo; ptr(r, c); lo = inw(E + 0x400); return lo | ((uint32_t)inw(E + 0x402) << 16); }
-static void d1w(int r, int c, uint16_t v) { ptr(r, c); outw(E + 0x400, v); }
-static uint16_t d1r(int r, int c) { ptr(r, c); return inw(E + 0x400); }
-static void d2w(int r, int c, uint16_t v) { ptr(r, c); outw(E + 0x402, v); }
-static uint16_t d2r(int r, int c) { ptr(r, c); return inw(E + 0x402); }
-static void d3w(int r, int c, uint16_t v) { ptr(r, c); outw(E + 0x800, v); }
-static uint16_t d3r(int r, int c) { ptr(r, c); return inw(E + 0x800); }
-
-/* the register map (p.6-7) */
-#define CPF(c,v)     d0w(0,c,v)
-#define PTRX(c,v)    d0w(1,c,v)
-#define CVCF(c,v)    d0w(2,c,v)
-#define VTFT(c,v)    d0w(3,c,v)
-#define PSST(c,v)    d0w(6,c,v)
-#define CSL(c,v)     d0w(7,c,v)
-#define CCCA(c,v)    d1dw(0,c,v)
-#define ENVVOL(c,v)  d1w(4,c,v)
-#define DCYSUSV(c,v) d1w(5,c,v)
-#define ENVVAL(c,v)  d1w(6,c,v)
-#define DCYSUS(c,v)  d1w(7,c,v)
-#define ATKHLDV(c,v) d2w(4,c,v)
-#define LFO1VAL(c,v) d2w(5,c,v)
-#define ATKHLD(c,v)  d2w(6,c,v)
-#define LFO2VAL(c,v) d2w(7,c,v)
-#define IP(c,v)      d3w(0,c,v)
-#define IFATN(c,v)   d3w(1,c,v)
-#define PEFE(c,v)    d3w(2,c,v)
-#define FMMOD(c,v)   d3w(3,c,v)
-#define TREMFRQ(c,v) d3w(4,c,v)
-#define FM2FRQ2(c,v) d3w(5,c,v)
-#define SMALR(v) d1dw(1,20,v)
-#define SMARR(v) d1dw(1,21,v)
-#define SMALW(v) d1dw(1,22,v)
-#define SMARW(v) d1dw(1,23,v)
-#define WC()     d2r(1,27)
-
-static int16_t buf[2 * 44100];
-static void render(uint32_t n) { while (n) { uint32_t k = n > 44100 ? 44100 : n; vdd_emu8k_render_st(&emu, buf, k); n -= k; } }
-
-/* §5: allocate channel `c` to a DMA stream -- the guide's seven steps in its order. */
-static void dma_alloc(int c, uint32_t mode)
+static VOID Emu8kTestData0Write(INT registerNumber, INT channel, DWORD value)
 {
-    DCYSUSV(c, 0x0080); VTFT(c, 0); CVCF(c, 0);
-    PTRX(c, 0x40000000u); CPF(c, 0x40000000u);
-    PSST(c, 0); CSL(c, 0);
-    CCCA(c, mode);
+    Emu8kTestSelect(registerNumber, channel);
+    Emu8kTestOutWord(EMU8K_TEST_DATA0, (WORD)value);
+    Emu8kTestOutWord(EMU8K_TEST_DATA0_HIGH, (WORD)(value >> EMU8K_TEST_HIGH_WORD_SHIFT));
 }
-
-/* §6: start a sound on channel `c`. Addresses are the ACTUAL audio locations; the
-   registers get them minus one (the interpolator offset). */
-static void note_on(int c, uint32_t start, uint32_t ls, uint32_t le, uint8_t pan,
-                    uint16_t ip, uint16_t ifatn, uint16_t atkhldv, uint16_t dcysusv, uint8_t q)
+static DWORD Emu8kTestData0Read(INT registerNumber, INT channel)
 {
-    DCYSUSV(c, 0x0080); VTFT(c, 0); CVCF(c, 0); PTRX(c, 0); CPF(c, 0);   /* silent and idle */
-    ENVVOL(c, 0x8000); ENVVAL(c, 0x8000); DCYSUS(c, 0x7F7F); ATKHLDV(c, atkhldv);
-    LFO1VAL(c, 0x8000); ATKHLD(c, 0x7F7F); LFO2VAL(c, 0x8000); IP(c, ip); IFATN(c, ifatn);
-    PEFE(c, 0); FMMOD(c, 0); TREMFRQ(c, 0x0010); FM2FRQ2(c, 0x0010);
-    PSST(c, ((uint32_t)pan << 24) | (ls - 1));
-    CSL(c, le - 1);
-    CCCA(c, ((uint32_t)q << 28) | (start - 1));
-    VTFT(c, 0x0000FFFFu); CVCF(c, 0x0000FFFFu);
-    DCYSUSV(c, dcysusv);
-    PTRX(c, 0x40000000u); CPF(c, 0x40000000u);
+    DWORD lowWord;
+    Emu8kTestSelect(registerNumber, channel);
+    lowWord = Emu8kTestInWord(EMU8K_TEST_DATA0);
+    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA0_HIGH) << EMU8K_TEST_HIGH_WORD_SHIFT);
 }
-static void note_kill(int c) { DCYSUSV(c, 0x0080); VTFT(c, 0x0000FFFFu); CVCF(c, 0x0000FFFFu); }  /* §7 */
-
-/* rising zero crossings of (L+R) over `n` frames = the frequency in Hz when n = 44100 */
-static int crossings(uint32_t n)
+static VOID Emu8kTestData1WriteDword(INT registerNumber, INT channel, DWORD value)
 {
-    uint32_t i; int c = 0, prev = 0;
-    vdd_emu8k_render_st(&emu, buf, n);
-    for (i = 0; i < n; ++i) { int s = buf[2*i] + buf[2*i+1]; if (prev < 0 && s >= 0) c++; prev = s; }
-    return c;
+    Emu8kTestSelect(registerNumber, channel);
+    Emu8kTestOutWord(EMU8K_TEST_DATA1, (WORD)value);
+    Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, (WORD)(value >> EMU8K_TEST_HIGH_WORD_SHIFT));
 }
-static void peaks(uint32_t n, int *pl, int *pr)
+static DWORD Emu8kTestData1ReadDword(INT registerNumber, INT channel)
 {
-    uint32_t i; int l = 0, r = 0;
-    vdd_emu8k_render_st(&emu, buf, n);
-    for (i = 0; i < n; ++i) {
-        int a = buf[2*i] < 0 ? -buf[2*i] : buf[2*i], b = buf[2*i+1] < 0 ? -buf[2*i+1] : buf[2*i+1];
-        if (a > l) l = a; if (b > r) r = b;
+    DWORD lowWord;
+    Emu8kTestSelect(registerNumber, channel);
+    lowWord = Emu8kTestInWord(EMU8K_TEST_DATA1);
+    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2) << EMU8K_TEST_HIGH_WORD_SHIFT);
+}
+static VOID Emu8kTestData1Write(INT registerNumber, INT channel, WORD value)
+{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA1, value); }
+static WORD Emu8kTestData1Read(INT registerNumber, INT channel)
+{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA1); }
+static VOID Emu8kTestData2Write(INT registerNumber, INT channel, WORD value)
+{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, value); }
+static WORD Emu8kTestData2Read(INT registerNumber, INT channel)
+{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2); }
+static VOID Emu8kTestData3Write(INT registerNumber, INT channel, WORD value)
+{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA3, value); }
+static WORD Emu8kTestData3Read(INT registerNumber, INT channel)
+{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA3); }
+
+static WORD Emu8kTestWallClock(VOID) { return Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_WC); }
+static VOID Emu8kTestSetStreamAddress(INT stream, DWORD address)
+{ Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, stream, address); }
+static WORD Emu8kTestCurrentVolume(INT channel)
+{ return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> EMU8K_TEST_HIGH_WORD_SHIFT); }
+
+/* ---- rendering --------------------------------------------------------------------- */
+
+static VOID Emu8kTestRender(DWORD frameCount)
+{
+    while (frameCount) {
+        DWORD chunk = frameCount > EMU8K_TEST_RATE ? EMU8K_TEST_RATE : frameCount;
+        VddEmu8kRenderStereo(&g_Emu8k, g_Samples, chunk);
+        frameCount -= chunk;
     }
-    *pl = l; *pr = r;
 }
-static uint16_t cv(int c) { return (uint16_t)(d0r(2, c) >> 16); }
 
-static uint64_t g_fake_us;
-static uint64_t fake_clock(void *ctx) { (void)ctx; return g_fake_us; }
+/* rising zero crossings of (L+R) over `frameCount` frames = the frequency in Hz when
+   frameCount = 44100 */
+static INT Emu8kTestCrossings(DWORD frameCount)
+{
+    DWORD frame; INT crossingCount = 0, previous = 0;
+    VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
+    for (frame = 0; frame < frameCount; ++frame) {
+        INT sum = g_Samples[EMU8K_STEREO_SIDES * frame] + g_Samples[EMU8K_STEREO_SIDES * frame + 1];
+        if (previous < 0 && sum >= 0) crossingCount++;
+        previous = sum;
+    }
+    return crossingCount;
+}
 
-#define A 0x201000u   /* where the test tone lives in DRAM */
+static INT Emu8kTestMagnitude(INT16 sample) { return sample < 0 ? -sample : sample; }
+
+static VOID Emu8kTestPeaks(DWORD frameCount, PINT peakLeft, PINT peakRight)
+{
+    DWORD frame; INT left = 0, right = 0;
+    VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
+    for (frame = 0; frame < frameCount; ++frame) {
+        INT magnitudeLeft = Emu8kTestMagnitude(g_Samples[EMU8K_STEREO_SIDES * frame]);
+        INT magnitudeRight = Emu8kTestMagnitude(g_Samples[EMU8K_STEREO_SIDES * frame + 1]);
+        if (magnitudeLeft > left) left = magnitudeLeft;
+        if (magnitudeRight > right) right = magnitudeRight;
+    }
+    *peakLeft = left; *peakRight = right;
+}
+
+static UINT64 Emu8kTestFakeClock(PVOID context) { (VOID)context; return g_FakeMicroseconds; }
+
+/* ---- the guide's recipes ----------------------------------------------------------- */
+
+/* §5: allocate `channel` to a DMA stream -- the guide's seven steps in its order. */
+static VOID Emu8kTestAllocateStream(INT channel, DWORD mode)
+{
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
+    Emu8kTestData0Write(EMU8K_TEST_VTFT, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_PTRX, channel, EMU8K_TEST_UNITY_CP);
+    Emu8kTestData0Write(EMU8K_TEST_CPF, channel, EMU8K_TEST_UNITY_CP);
+    Emu8kTestData0Write(EMU8K_TEST_PSST, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_CSL, channel, 0);
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel, mode);
+}
+
+/* §6: start a sound on `channel`. Addresses are the ACTUAL audio locations; the registers
+   get them minus one (the interpolator offset). */
+static VOID Emu8kTestNoteOn(INT channel, DWORD start, DWORD loopStart, DWORD loopEnd, BYTE pan,
+                            WORD pitch, WORD filterAttenuation, WORD attackHold,
+                            WORD decaySustain, BYTE resonance)
+{
+    /* silent and idle */
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
+    Emu8kTestData0Write(EMU8K_TEST_VTFT, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_PTRX, channel, 0);
+    Emu8kTestData0Write(EMU8K_TEST_CPF, channel, 0);
+    Emu8kTestData1Write(EMU8K_TEST_ENVVOL, channel, EMU8K_TEST_NO_DELAY);
+    Emu8kTestData1Write(EMU8K_TEST_ENVVAL, channel, EMU8K_TEST_NO_DELAY);
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUS, channel, EMU8K_TEST_FLAT_ENVELOPE);
+    Emu8kTestData2Write(EMU8K_TEST_ATKHLDV, channel, attackHold);
+    Emu8kTestData2Write(EMU8K_TEST_LFO1VAL, channel, EMU8K_TEST_NO_DELAY);
+    Emu8kTestData2Write(EMU8K_TEST_ATKHLD, channel, EMU8K_TEST_FLAT_ENVELOPE);
+    Emu8kTestData2Write(EMU8K_TEST_LFO2VAL, channel, EMU8K_TEST_NO_DELAY);
+    Emu8kTestData3Write(EMU8K_TEST_IP, channel, pitch);
+    Emu8kTestData3Write(EMU8K_TEST_IFATN, channel, filterAttenuation);
+    Emu8kTestData3Write(EMU8K_TEST_PEFE, channel, 0);
+    Emu8kTestData3Write(EMU8K_TEST_FMMOD, channel, 0);
+    Emu8kTestData3Write(EMU8K_TEST_TREMFRQ, channel, EMU8K_TEST_LFO_FREQUENCY);
+    Emu8kTestData3Write(EMU8K_TEST_FM2FRQ2, channel, EMU8K_TEST_LFO_FREQUENCY);
+    Emu8kTestData0Write(EMU8K_TEST_PSST, channel,
+                        ((DWORD)pan << EMU8K_TEST_PAN_SHIFT) | (loopStart - EMU8K_TEST_INTERPOLATOR_OFFSET));
+    Emu8kTestData0Write(EMU8K_TEST_CSL, channel, loopEnd - EMU8K_TEST_INTERPOLATOR_OFFSET);
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel,
+                             ((DWORD)resonance << EMU8K_TEST_Q_SHIFT) | (start - EMU8K_TEST_INTERPOLATOR_OFFSET));
+    Emu8kTestData0Write(EMU8K_TEST_VTFT, channel, EMU8K_TEST_FULL_TARGET);
+    Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, EMU8K_TEST_FULL_TARGET);
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, decaySustain);
+    Emu8kTestData0Write(EMU8K_TEST_PTRX, channel, EMU8K_TEST_UNITY_CP);
+    Emu8kTestData0Write(EMU8K_TEST_CPF, channel, EMU8K_TEST_UNITY_CP);
+}
+
+/* The test tone's loop: a 64-word triangle at TONE_ADDRESS + 64. */
+static VOID Emu8kTestPlayTone(INT channel, BYTE pan, WORD filterAttenuation, WORD attackHold)
+{
+    Emu8kTestNoteOn(channel, EMU8K_TEST_TONE_ADDRESS,
+                    EMU8K_TEST_TONE_ADDRESS + EMU8K_TEST_LOOP_WORDS,
+                    EMU8K_TEST_TONE_ADDRESS + 2 * EMU8K_TEST_LOOP_WORDS, pan,
+                    EMU8K_TEST_PITCH_UNITY, filterAttenuation, attackHold,
+                    EMU8K_TEST_FLAT_ENVELOPE, 0);
+}
+
+/* §7: an abrupt end. */
+static VOID Emu8kTestNoteKill(INT channel)
+{
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
+    Emu8kTestData0Write(EMU8K_TEST_VTFT, channel, EMU8K_TEST_FULL_TARGET);
+    Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, EMU8K_TEST_FULL_TARGET);
+}
 
 int main(void)
 {
-    uint32_t i;
-    int c;
+    DWORD wordIndex;
+    INT channel;
 
     printf("== AWE32 EMU8000 battery ==\n");
-    memset(&emu, 0, sizeof emu);
-    vdd_bus_init(&bus, g_flat);
-    emu.dram = g_dram; emu.dram_words = EMU8K_DRAM_WORDS; emu.base = E;
-    { ntvdd d = vdd_emu8k_device(&emu); CHECK(vdd_bus_add(&bus, &d) == 0, "add: emu8k at 620h/A20h/E20h (three port groups)"); }
+    memset(&g_Emu8k, 0, sizeof g_Emu8k);
+    vdd_bus_init(&g_Bus, g_GuestMemory);
+    g_Emu8k.Dram = g_Dram; g_Emu8k.DramWords = EMU8K_DRAM_WORDS; g_Emu8k.BasePort = EMU8K_TEST_BASE;
+    { ntvdd device = VddEmu8kDevice(&g_Emu8k);
+      Emu8kTestCheck(vdd_bus_add(&g_Bus, &device) == 0, "add: emu8k at 620h/A20h/E20h (three port groups)"); }
 
     /* ---- T1: detection -- as the period drivers do it: write HWCF1/2/3, read 1 and 2 back ---- */
-    d1w(1, 29, 0x0059); d1w(1, 30, 0x0020); d1w(1, 31, 0x0000);
-    CHECK((d1r(1, 29) & 0x007E) == 0x0058, "detect: HWCF1 & 7Eh reads 58h after 59h  <-- THE TEST");
-    CHECK((d1r(1, 30) & 0x0003) == 0x0003, "detect: HWCF2 & 03h reads 03h after 20h");
-    ptr(5, 17);
-    CHECK((inw(E + 0x802) & 0xFF) == ((5 << 5) | 17), "pointer: reg/channel read back in the low byte");
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF1, EMU8K_TEST_HWCF1_INIT);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF2, EMU8K_TEST_HWCF2_INIT);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF3, EMU8K_TEST_HWCF3_AUDIO_OFF);
+    Emu8kTestCheck((Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF1) & EMU8K_TEST_HWCF1_PROBE_MASK)
+                   == EMU8K_TEST_HWCF1_PROBE_VALUE, "detect: HWCF1 & 7Eh reads 58h after 59h  <-- THE TEST");
+    Emu8kTestCheck((Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF2) & EMU8K_TEST_HWCF2_PROBE_BITS)
+                   == EMU8K_TEST_HWCF2_PROBE_BITS, "detect: HWCF2 & 03h reads 03h after 20h");
+    Emu8kTestSelect(EMU8K_TEST_DCYSUSV, 17);
+    Emu8kTestCheck((Emu8kTestInWord(EMU8K_TEST_POINTER) & EMU8K_TEST_POINTER_LOW_BYTE)
+                   == ((EMU8K_TEST_DCYSUSV << EMU8K_TEST_POINTER_REGISTER_SHIFT) | 17),
+                   "pointer: reg/channel read back in the low byte");
     /* §4, the whole initialisation procedure, as AWEUTIL /S would run it */
-    for (c = 0; c < 32; ++c) DCYSUSV(c, 0x0080);
-    for (c = 0; c < 32; ++c) {
-        ENVVOL(c, 0); ENVVAL(c, 0); DCYSUS(c, 0); ATKHLDV(c, 0); LFO1VAL(c, 0); ATKHLD(c, 0);
-        LFO2VAL(c, 0); IP(c, 0); IFATN(c, 0); PEFE(c, 0); FMMOD(c, 0); TREMFRQ(c, 0); FM2FRQ2(c, 0);
-        PTRX(c, 0); VTFT(c, 0); PSST(c, 0); CSL(c, 0); CCCA(c, 0);
+    for (channel = 0; channel < EMU8K_VOICES; ++channel)
+        Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
+    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+        Emu8kTestData1Write(EMU8K_TEST_ENVVOL, channel, 0);
+        Emu8kTestData1Write(EMU8K_TEST_ENVVAL, channel, 0);
+        Emu8kTestData1Write(EMU8K_TEST_DCYSUS, channel, 0);
+        Emu8kTestData2Write(EMU8K_TEST_ATKHLDV, channel, 0);
+        Emu8kTestData2Write(EMU8K_TEST_LFO1VAL, channel, 0);
+        Emu8kTestData2Write(EMU8K_TEST_ATKHLD, channel, 0);
+        Emu8kTestData2Write(EMU8K_TEST_LFO2VAL, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_IP, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_IFATN, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_PEFE, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_FMMOD, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_TREMFRQ, channel, 0);
+        Emu8kTestData3Write(EMU8K_TEST_FM2FRQ2, channel, 0);
+        Emu8kTestData0Write(EMU8K_TEST_PTRX, channel, 0);
+        Emu8kTestData0Write(EMU8K_TEST_VTFT, channel, 0);
+        Emu8kTestData0Write(EMU8K_TEST_PSST, channel, 0);
+        Emu8kTestData0Write(EMU8K_TEST_CSL, channel, 0);
+        Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel, 0);
     }
-    for (c = 0; c < 32; ++c) { CPF(c, 0); CVCF(c, 0); }
-    SMALR(0); SMARR(0); SMALW(0); SMARW(0);
-    for (c = 0; c < 32; ++c) { d1w(2, c, (uint16_t)(0x1000 + c)); d2w(2, c, (uint16_t)(0x2000 + c));
-                               d1w(3, c, (uint16_t)(0x3000 + c)); d2w(3, c, (uint16_t)(0x4000 + c)); }
-    { uint16_t w0 = WC(); int spins = 0;                    /* "wait 1024 sample periods" */
-      while ((uint16_t)(WC() - w0) < 1024 && spins < 1000) { render(64); spins++; }
-      CHECK(spins == 16, "§4: a guest waiting 1024 samples on WC gets out, in 1024 samples"); }
-    d1dw(1, 9, 0); d1dw(1, 10, 0x00000083u); d1dw(1, 13, 0x00008000u);
-    d1w(1, 31, 0x0004);
-    CHECK(d1r(2, 7) == 0x1007 && d2r(2, 7) == 0x2007 && d1r(3, 31) == 0x301F && d2r(3, 0) == 0x4000,
-          "INIT1-4: each of the four arrays holds its own 32 words");
-    CHECK(d1dr(1, 10) == 0x83 && d1dr(1, 13) == 0x8000, "HWCF5/HWCF6: doublewords read back");
+    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+        Emu8kTestData0Write(EMU8K_TEST_CPF, channel, 0);
+        Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, 0);
+    }
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0); Emu8kTestSetStreamAddress(EMU8K_TEST_SMARR, 0);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0); Emu8kTestSetStreamAddress(EMU8K_TEST_SMARW, 0);
+    /* a distinct marker per INIT array and channel, so each array is seen to be its own */
+    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+        Emu8kTestData1Write(EMU8K_TEST_INIT_LOW, channel, (WORD)(0x1000 + channel));
+        Emu8kTestData2Write(EMU8K_TEST_INIT_LOW, channel, (WORD)(0x2000 + channel));
+        Emu8kTestData1Write(EMU8K_TEST_INIT_HIGH, channel, (WORD)(0x3000 + channel));
+        Emu8kTestData2Write(EMU8K_TEST_INIT_HIGH, channel, (WORD)(0x4000 + channel));
+    }
+    { WORD startClock = Emu8kTestWallClock(); INT spins = 0;
+      while ((WORD)(Emu8kTestWallClock() - startClock) < EMU8K_TEST_INIT_WAIT_SAMPLES
+             && spins < EMU8K_TEST_SPIN_LIMIT) { Emu8kTestRender(EMU8K_TEST_ENGINE_TICK); spins++; }
+      Emu8kTestCheck(spins == EMU8K_TEST_INIT_WAIT_RENDERS,
+                     "§4: a guest waiting 1024 samples on WC gets out, in 1024 samples"); }
+    Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF4, EMU8K_TEST_HWCF4_INIT);
+    Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF5, EMU8K_TEST_HWCF5_INIT);
+    Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF6, EMU8K_TEST_HWCF6_INIT);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF3, EMU8K_TEST_HWCF3_AUDIO_ON);
+    Emu8kTestCheck(Emu8kTestData1Read(EMU8K_TEST_INIT_LOW, 7) == 0x1007
+                   && Emu8kTestData2Read(EMU8K_TEST_INIT_LOW, 7) == 0x2007
+                   && Emu8kTestData1Read(EMU8K_TEST_INIT_HIGH, 31) == 0x301F
+                   && Emu8kTestData2Read(EMU8K_TEST_INIT_HIGH, 0) == 0x4000,
+                   "INIT1-4: each of the four arrays holds its own 32 words");
+    Emu8kTestCheck(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF5) == EMU8K_TEST_HWCF5_INIT
+                   && Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF6) == EMU8K_TEST_HWCF6_INIT,
+                   "HWCF5/HWCF6: doublewords read back");
 
     /* ---- T2: the wall clock ---- */
-    { uint16_t w0 = WC(), w1;
-      render(1000); w1 = WC();
-      CHECK((uint16_t)(w1 - w0) == 1000, "WC: 1000 rendered samples advance it by exactly 1000");
-      emu.clock = fake_clock; g_fake_us = 0; w0 = WC();
-      g_fake_us = 1000000u; w1 = WC();
-      CHECK((uint16_t)(w1 - w0) == 44100, "WC on a host clock: one second = 44100 counts");
-      g_fake_us = 1486000u; w1 = WC();
-      CHECK((uint16_t)(w1 - w0) < 100 || (uint16_t)(w1 - w0) > 65436, "WC: wraps every 1.486 s (p.13)");
-      emu.clock = 0; }
+    { WORD startClock = Emu8kTestWallClock(), endClock;
+      Emu8kTestRender(1000); endClock = Emu8kTestWallClock();
+      Emu8kTestCheck((WORD)(endClock - startClock) == 1000, "WC: 1000 rendered samples advance it by exactly 1000");
+      g_Emu8k.Clock = Emu8kTestFakeClock; g_FakeMicroseconds = 0; startClock = Emu8kTestWallClock();
+      g_FakeMicroseconds = 1000000u; endClock = Emu8kTestWallClock();
+      Emu8kTestCheck((WORD)(endClock - startClock) == EMU8K_TEST_RATE, "WC on a host clock: one second = 44100 counts");
+      g_FakeMicroseconds = 1486000u; endClock = Emu8kTestWallClock();
+      Emu8kTestCheck((WORD)(endClock - startClock) < 100 || (WORD)(endClock - startClock) > 65436,
+                     "WC: wraps every 1.486 s (p.13)");
+      g_Emu8k.Clock = NULL; }
 
     /* ---- T3: register read-back ---- */
-    IP(0, 0xE123); IP(31, 0xD456); IFATN(0, 0xAB12); PEFE(0, 0x1234); FMMOD(0, 0x5678);
-    TREMFRQ(0, 0x9ABC); FM2FRQ2(0, 0xDEF0); ENVVOL(0, 0x7123); ENVVAL(0, 0x7456);
-    LFO1VAL(0, 0x7789); LFO2VAL(0, 0x7ABC);
-    CHECK(d3r(0, 0) == 0xE123 && d3r(0, 31) == 0xD456, "IP: channel 0 and channel 31 are separate registers");
-    CHECK(d3r(1, 0) == 0xAB12 && d3r(2, 0) == 0x1234 && d3r(3, 0) == 0x5678 && d3r(4, 0) == 0x9ABC && d3r(5, 0) == 0xDEF0,
-          "Data3: IFATN PEFE FMMOD TREMFRQ FM2FRQ2 read back");
-    CHECK(d1r(4, 0) == 0x7123 && d1r(6, 0) == 0x7456 && d2r(5, 0) == 0x7789 && d2r(7, 0) == 0x7ABC,
-          "ENVVOL ENVVAL LFO1VAL LFO2VAL read back");
-    ATKHLDV(0, 0x12FF); ATKHLD(0, 0x34FF); DCYSUS(0, 0x56FF);
-    CHECK(d2r(4, 0) == 0x127F && d2r(6, 0) == 0x347F && d1r(7, 0) == 0x567F,
-          "ATKHLDV/ATKHLD/DCYSUS: bit 7 reads as zero (p.15-16)");
-    PSST(5, 0x80123456u); CSL(5, 0x40234567u);
-    CHECK(d0r(6, 5) == 0x80123456u && d0r(7, 5) == 0x40234567u, "PSST/CSL: doublewords through two word transfers");
-    ptr(6, 6); outd(E, 0xC0345678u);
-    CHECK(d0r(6, 6) == 0xC0345678u && (ptr(6, 6), ind(E)) == 0xC0345678u, "PSST: one 32-bit OUT/IN = the two word transfers");
-    CCCA(7, 0xF0ABCDEFu);
-    CHECK(d1dr(0, 7) == 0xF0ABCDEFu, "CCCA: Q, control bits and address read back");
-    CCCA(7, 0);
+    Emu8kTestData3Write(EMU8K_TEST_IP, 0, 0xE123); Emu8kTestData3Write(EMU8K_TEST_IP, EMU8K_TEST_LAST_CHANNEL, 0xD456);
+    Emu8kTestData3Write(EMU8K_TEST_IFATN, 0, 0xAB12); Emu8kTestData3Write(EMU8K_TEST_PEFE, 0, 0x1234);
+    Emu8kTestData3Write(EMU8K_TEST_FMMOD, 0, 0x5678); Emu8kTestData3Write(EMU8K_TEST_TREMFRQ, 0, 0x9ABC);
+    Emu8kTestData3Write(EMU8K_TEST_FM2FRQ2, 0, 0xDEF0); Emu8kTestData1Write(EMU8K_TEST_ENVVOL, 0, 0x7123);
+    Emu8kTestData1Write(EMU8K_TEST_ENVVAL, 0, 0x7456); Emu8kTestData2Write(EMU8K_TEST_LFO1VAL, 0, 0x7789);
+    Emu8kTestData2Write(EMU8K_TEST_LFO2VAL, 0, 0x7ABC);
+    Emu8kTestCheck(Emu8kTestData3Read(EMU8K_TEST_IP, 0) == 0xE123
+                   && Emu8kTestData3Read(EMU8K_TEST_IP, EMU8K_TEST_LAST_CHANNEL) == 0xD456,
+                   "IP: channel 0 and channel 31 are separate registers");
+    Emu8kTestCheck(Emu8kTestData3Read(EMU8K_TEST_IFATN, 0) == 0xAB12 && Emu8kTestData3Read(EMU8K_TEST_PEFE, 0) == 0x1234
+                   && Emu8kTestData3Read(EMU8K_TEST_FMMOD, 0) == 0x5678 && Emu8kTestData3Read(EMU8K_TEST_TREMFRQ, 0) == 0x9ABC
+                   && Emu8kTestData3Read(EMU8K_TEST_FM2FRQ2, 0) == 0xDEF0,
+                   "Data3: IFATN PEFE FMMOD TREMFRQ FM2FRQ2 read back");
+    Emu8kTestCheck(Emu8kTestData1Read(EMU8K_TEST_ENVVOL, 0) == 0x7123 && Emu8kTestData1Read(EMU8K_TEST_ENVVAL, 0) == 0x7456
+                   && Emu8kTestData2Read(EMU8K_TEST_LFO1VAL, 0) == 0x7789 && Emu8kTestData2Read(EMU8K_TEST_LFO2VAL, 0) == 0x7ABC,
+                   "ENVVOL ENVVAL LFO1VAL LFO2VAL read back");
+    Emu8kTestData2Write(EMU8K_TEST_ATKHLDV, 0, 0x12FF); Emu8kTestData2Write(EMU8K_TEST_ATKHLD, 0, 0x34FF);
+    Emu8kTestData1Write(EMU8K_TEST_DCYSUS, 0, 0x56FF);
+    Emu8kTestCheck(Emu8kTestData2Read(EMU8K_TEST_ATKHLDV, 0) == 0x127F && Emu8kTestData2Read(EMU8K_TEST_ATKHLD, 0) == 0x347F
+                   && Emu8kTestData1Read(EMU8K_TEST_DCYSUS, 0) == 0x567F,
+                   "ATKHLDV/ATKHLD/DCYSUS: bit 7 reads as zero (p.15-16)");
+    Emu8kTestData0Write(EMU8K_TEST_PSST, 5, 0x80123456u); Emu8kTestData0Write(EMU8K_TEST_CSL, 5, 0x40234567u);
+    Emu8kTestCheck(Emu8kTestData0Read(EMU8K_TEST_PSST, 5) == 0x80123456u && Emu8kTestData0Read(EMU8K_TEST_CSL, 5) == 0x40234567u,
+                   "PSST/CSL: doublewords through two word transfers");
+    Emu8kTestSelect(EMU8K_TEST_PSST, 6); Emu8kTestOutDword(EMU8K_TEST_DATA0, 0xC0345678u);
+    Emu8kTestCheck(Emu8kTestData0Read(EMU8K_TEST_PSST, 6) == 0xC0345678u
+                   && (Emu8kTestSelect(EMU8K_TEST_PSST, 6), Emu8kTestInDword(EMU8K_TEST_DATA0)) == 0xC0345678u,
+                   "PSST: one 32-bit OUT/IN = the two word transfers");
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 7, 0xF0ABCDEFu);
+    Emu8kTestCheck(Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, 7) == 0xF0ABCDEFu, "CCCA: Q, control bits and address read back");
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 7, 0);
     /* E+402h: CCCA's MS word when r0 is selected, the Data2 word register otherwise */
-    ptr(0, 8); outw(E + 0x402, 0x1234);
-    CHECK((d1dr(0, 8) >> 16) == 0x1234 && d2r(4, 8) == 0, "E+402h with r0 selected is CCCA's MS word, not ATKHLDV");
-    CCCA(8, 0);
+    Emu8kTestSelect(EMU8K_TEST_CCCA, 8); Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, 0x1234);
+    Emu8kTestCheck((Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, 8) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0x1234
+                   && Emu8kTestData2Read(EMU8K_TEST_ATKHLDV, 8) == 0,
+                   "E+402h with r0 selected is CCCA's MS word, not ATKHLDV");
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 8, 0);
 
     /* ---- T4: sound memory (§5) ---- */
-    vdd_emu8k_reset(&emu);
-    dma_alloc(30, 0x06000000u);                             /* left write */
-    CHECK(!(d1dr(1, 22) & 0x80000000u), "SMALW: FULL clear before the address is set");
-    SMALW(0x200000u);
-    for (i = 0; i < 256; ++i) d1w(1, 26, (uint16_t)(0xA500 + i));
-    CHECK(d1dr(1, 22) == 0x200100u, "SMALW: advanced one word per SMLD write, FULL clear");
-    CHECK(g_dram[0] == 0xA500 && g_dram[255] == 0xA5FF, "DRAM: 256 words landed at 200000h");
-    dma_alloc(29, 0x07000000u);                             /* right write */
-    SMARW(0x200200u);
-    for (i = 0; i < 16; ++i) d2w(1, 26, (uint16_t)(0x5A00 + i));
-    CHECK(g_dram[0x200] == 0x5A00 && g_dram[0x20F] == 0x5A0F && d1dr(1, 23) == 0x200210u, "SMRD/SMARW: the right stream writes too");
-    dma_alloc(28, 0x04000000u);                             /* left read */
-    SMALR(0x200000u);
-    (void)d1r(1, 26);                                        /* the stale word (§5) */
-    { int ok = 1; for (i = 0; i < 256; ++i) if (d1r(1, 26) != (uint16_t)(0xA500 + i)) ok = 0;
-      CHECK(ok, "SMALR/SMLD: after one stale read, 256 words read back in order  <-- UPLOAD/READBACK"); }
-    CHECK(!(d1dr(1, 20) & 0x80000000u), "SMALR: EMPTY clear while a channel serves the stream");
-    { uint16_t stale;
-      SMALR(0x200010u); (void)d1r(1, 26);
-      CHECK(d1r(1, 26) == 0xA510, "SMLD: reading from 200010h");      /* prefetched 200011h */
-      SMALR(0x200005u);
-      stale = d1r(1, 26);
-      CHECK(stale == 0xA511 && d1r(1, 26) == 0xA505,
-            "SMLD read is a PREFETCH: the first word after a new SMALR is the OLD stream's next word"); }
-    dma_alloc(27, 0x05000000u);                             /* right read */
-    SMARR(0x200200u); (void)d2r(1, 26);
-    CHECK(d2r(1, 26) == 0x5A00 && d2r(1, 26) == 0x5A01, "SMARR/SMRD: the right stream reads too");
-    SMALR(0x000100u); (void)d1r(1, 26);
-    CHECK(d1r(1, 26) == 0, "ROM region (below 200000h): reads zero -- no GM ROM image fitted");
-    SMALW(0x000100u); d1w(1, 26, 0x7777);
-    CHECK(emu.sm_rom_writes == 1, "ROM region: a write goes nowhere");
-    SMALW(0x23FFFFu); d1w(1, 26, 0x4242);
-    SMALW(0x240000u); d1w(1, 26, 0x4343);
-    SMALR(0x23FFFFu); (void)d1r(1, 26);
-    CHECK(d1r(1, 26) == 0x4242 && d1r(1, 26) == 0, "DRAM: the last of 512 KB is there, the word past it reads zero");
-    for (c = 27; c <= 30; ++c) CCCA(c, 0);                   /* deallocate every stream */
-    SMALW(0x200400u); d1w(1, 26, 0x1234);
-    CHECK((d1dr(1, 22) & 0x80000000u) && g_dram[0x400] != 0x1234, "no channel on the stream: the word waits, FULL set");
-    dma_alloc(30, 0x06000000u);
-    CHECK(g_dram[0x400] == 0x1234 && !(d1dr(1, 22) & 0x80000000u), "allocating a channel completes it, FULL clears");
-    CCCA(30, 0);
+    VddEmu8kReset(&g_Emu8k);
+    Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
+    Emu8kTestCheck(!(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) & EMU8K_TEST_SMA_FLAG),
+                   "SMALW: FULL clear before the address is set");
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, EMU8K_TEST_DRAM_START);
+    for (wordIndex = 0; wordIndex < 256; ++wordIndex)
+        Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, (WORD)(0xA500 + wordIndex));
+    Emu8kTestCheck(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) == 0x200100u,
+                   "SMALW: advanced one word per SMLD write, FULL clear");
+    Emu8kTestCheck(g_Dram[0] == 0xA500 && g_Dram[255] == 0xA5FF, "DRAM: 256 words landed at 200000h");
+    Emu8kTestAllocateStream(EMU8K_TEST_RIGHT_WRITE_CHANNEL, EMU8K_TEST_STREAM_RIGHT_WRITE);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMARW, 0x200200u);
+    for (wordIndex = 0; wordIndex < 16; ++wordIndex)
+        Emu8kTestData2Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, (WORD)(0x5A00 + wordIndex));
+    Emu8kTestCheck(g_Dram[0x200] == 0x5A00 && g_Dram[0x20F] == 0x5A0F
+                   && Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMARW) == 0x200210u,
+                   "SMRD/SMARW: the right stream writes too");
+    Emu8kTestAllocateStream(EMU8K_TEST_LEFT_READ_CHANNEL, EMU8K_TEST_STREAM_LEFT_READ);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, EMU8K_TEST_DRAM_START);
+    (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);       /* the stale word (§5) */
+    { BOOL allMatch = TRUE;
+      for (wordIndex = 0; wordIndex < 256; ++wordIndex)
+          if (Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) != (WORD)(0xA500 + wordIndex)) allMatch = FALSE;
+      Emu8kTestCheck(allMatch, "SMALR/SMLD: after one stale read, 256 words read back in order  <-- UPLOAD/READBACK"); }
+    Emu8kTestCheck(!(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALR) & EMU8K_TEST_SMA_FLAG),
+                   "SMALR: EMPTY clear while a channel serves the stream");
+    { WORD staleWord;
+      Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0x200010u);
+      (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);
+      Emu8kTestCheck(Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0xA510,
+                     "SMLD: reading from 200010h");                          /* prefetched 200011h */
+      Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0x200005u);
+      staleWord = Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);
+      Emu8kTestCheck(staleWord == 0xA511 && Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0xA505,
+                     "SMLD read is a PREFETCH: the first word after a new SMALR is the OLD stream's next word"); }
+    Emu8kTestAllocateStream(EMU8K_TEST_RIGHT_READ_CHANNEL, EMU8K_TEST_STREAM_RIGHT_READ);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMARR, 0x200200u);
+    (VOID)Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);
+    Emu8kTestCheck(Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0x5A00
+                   && Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0x5A01,
+                   "SMARR/SMRD: the right stream reads too");
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0x000100u);
+    (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);
+    Emu8kTestCheck(Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0,
+                   "ROM region (below 200000h): reads zero -- no GM ROM image fitted");
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0x000100u);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, 0x7777);
+    Emu8kTestCheck(g_Emu8k.SoundMemoryRomWrites == 1, "ROM region: a write goes nowhere");
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0x23FFFFu);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, 0x4242);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0x240000u);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, 0x4343);
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0x23FFFFu);
+    (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);
+    Emu8kTestCheck(Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0x4242
+                   && Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) == 0,
+                   "DRAM: the last of 512 KB is there, the word past it reads zero");
+    for (channel = EMU8K_TEST_RIGHT_READ_CHANNEL; channel <= EMU8K_TEST_LEFT_WRITE_CHANNEL; ++channel)
+        Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel, 0);      /* deallocate every stream */
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0x200400u);
+    Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD, 0x1234);
+    Emu8kTestCheck((Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) & EMU8K_TEST_SMA_FLAG)
+                   && g_Dram[0x400] != 0x1234, "no channel on the stream: the word waits, FULL set");
+    Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
+    Emu8kTestCheck(g_Dram[0x400] == 0x1234
+                   && !(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) & EMU8K_TEST_SMA_FLAG),
+                   "allocating a channel completes it, FULL clears");
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_LEFT_WRITE_CHANNEL, 0);
 
     /* ---- T5: a looping channel: pitch and pan ---- */
     /* Three periods of a 64-word triangle, ±16384, so the loop seam is continuous. */
-    SMALW(A); dma_alloc(30, 0x06000000u);
-    for (i = 0; i < 192; ++i) {
-        uint32_t p = i & 63; int32_t t = p < 16 ? (int32_t)p * 1024 : p < 48 ? 32768 - (int32_t)p * 1024 : (int32_t)p * 1024 - 65536;
-        d1w(1, 26, (uint16_t)(int16_t)(t > 16383 ? 16383 : t < -16383 ? -16383 : t));
+    Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, EMU8K_TEST_TONE_ADDRESS);
+    Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
+    for (wordIndex = 0; wordIndex < EMU8K_TEST_TONE_WORDS; ++wordIndex) {
+        DWORD phase = wordIndex & (EMU8K_TEST_LOOP_WORDS - 1);
+        INT32 level = phase < EMU8K_TEST_TONE_QUARTER ? (INT32)phase * EMU8K_TEST_TONE_STEP
+                    : phase < EMU8K_TEST_TONE_THREE_QUARTERS ? EMU8K_TEST_TONE_HALF_CYCLE - (INT32)phase * EMU8K_TEST_TONE_STEP
+                    : (INT32)phase * EMU8K_TEST_TONE_STEP - EMU8K_TEST_TONE_FULL_CYCLE;
+        Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD,
+                            (WORD)(INT16)(level > EMU8K_TEST_TONE_PEAK ? EMU8K_TEST_TONE_PEAK
+                                          : level < -EMU8K_TEST_TONE_PEAK ? -EMU8K_TEST_TONE_PEAK : level));
     }
-    CCCA(30, 0);
-    CHECK(g_dram[A - EMU8K_DRAM_BASE + 16] == 16383 && g_dram[A - EMU8K_DRAM_BASE + 64] == 0, "tone uploaded");
-    note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0);
-    render(4410);
-    CHECK((d0r(0, 0) >> 16) == 0x4000 && (d0r(1, 0) >> 16) == 0x4000, "IP E000h: pitch target and current pitch = 4000h (unity)");
-    { uint32_t ca = d1dr(0, 0) & 0xFFFFFF;
-      CHECK(ca >= A + 63 && ca < A + 127, "CCCA: the current address stays inside the loop"); }
-    { int f = crossings(44100); char m[96];
-      sprintf(m, "unity pitch: a 64-word loop plays at 44100/64 = 689 Hz (got %d)", f);
-      CHECK(f >= 687 && f <= 691, m); }
-    IP(0, 0xF000);
-    { int f; char m[96]; render(64); f = crossings(44100);
-      sprintf(m, "IP F000h (+1 octave): 1378 Hz (got %d)", f);
-      CHECK(f >= 1375 && f <= 1381, m); }
-    IP(0, 0xD000);
-    { int f; char m[96]; render(64); f = crossings(44100);
-      sprintf(m, "IP D000h (-1 octave): 345 Hz (got %d)", f);
-      CHECK(f >= 343 && f <= 346, m); }
-    IP(0, 0xE000);
-    { int l, r, l2, r2, lc, rc;
-      note_on(0, A, A + 64, A + 128, 0xFF, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410); peaks(4410, &l, &r);
-      note_on(0, A, A + 64, A + 128, 0x00, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410); peaks(4410, &l2, &r2);
-      note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410); peaks(4410, &lc, &rc);
-      printf("        pan FFh: L=%d R=%d   pan 00h: L=%d R=%d   pan 80h: L=%d R=%d\n", l, r, l2, r2, lc, rc);
-      CHECK(l > 15000 && r == 0, "pan FFh: extreme LEFT (p.9) -- the right channel is silent");
-      CHECK(r2 > 15000 && l2 == 0, "pan 00h: extreme RIGHT -- the left channel is silent");
-      CHECK(lc > l * 45 / 100 && lc < l * 55 / 100 && rc > l * 45 / 100 && rc < l * 55 / 100,
-            "pan 80h: the middle of a linear crossfade -- half on each side"); }
+    Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_LEFT_WRITE_CHANNEL, 0);
+    Emu8kTestCheck(g_Dram[EMU8K_TEST_TONE_ADDRESS - EMU8K_DRAM_BASE + EMU8K_TEST_TONE_QUARTER] == EMU8K_TEST_TONE_PEAK
+                   && g_Dram[EMU8K_TEST_TONE_ADDRESS - EMU8K_DRAM_BASE + EMU8K_TEST_LOOP_WORDS] == 0, "tone uploaded");
+    Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+    Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
+    Emu8kTestCheck((Emu8kTestData0Read(EMU8K_TEST_CPF, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == EMU8K_TEST_CP_UNITY
+                   && (Emu8kTestData0Read(EMU8K_TEST_PTRX, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == EMU8K_TEST_CP_UNITY,
+                   "IP E000h: pitch target and current pitch = 4000h (unity)");
+    { DWORD currentAddress = Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, EMU8K_TEST_TONE_CHANNEL) & EMU8K_TEST_ADDRESS_MASK;
+      Emu8kTestCheck(currentAddress >= EMU8K_TEST_TONE_ADDRESS + EMU8K_TEST_LOOP_WORDS - EMU8K_TEST_INTERPOLATOR_OFFSET
+                     && currentAddress < EMU8K_TEST_TONE_ADDRESS + 2 * EMU8K_TEST_LOOP_WORDS - EMU8K_TEST_INTERPOLATOR_OFFSET,
+                     "CCCA: the current address stays inside the loop"); }
+    { INT frequency = Emu8kTestCrossings(EMU8K_TEST_RATE); CHAR message[96];
+      sprintf(message, "unity pitch: a 64-word loop plays at 44100/64 = 689 Hz (got %d)", frequency);
+      Emu8kTestCheck(frequency >= 687 && frequency <= 691, message); }
+    Emu8kTestData3Write(EMU8K_TEST_IP, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PITCH_OCTAVE_UP);
+    { INT frequency; CHAR message[96];
+      Emu8kTestRender(EMU8K_TEST_ENGINE_TICK); frequency = Emu8kTestCrossings(EMU8K_TEST_RATE);
+      sprintf(message, "IP F000h (+1 octave): 1378 Hz (got %d)", frequency);
+      Emu8kTestCheck(frequency >= 1375 && frequency <= 1381, message); }
+    Emu8kTestData3Write(EMU8K_TEST_IP, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PITCH_OCTAVE_DOWN);
+    { INT frequency; CHAR message[96];
+      Emu8kTestRender(EMU8K_TEST_ENGINE_TICK); frequency = Emu8kTestCrossings(EMU8K_TEST_RATE);
+      sprintf(message, "IP D000h (-1 octave): 345 Hz (got %d)", frequency);
+      Emu8kTestCheck(frequency >= 343 && frequency <= 346, message); }
+    Emu8kTestData3Write(EMU8K_TEST_IP, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PITCH_UNITY);
+    { INT leftOfLeft, rightOfLeft, leftOfRight, rightOfRight, leftOfCentre, rightOfCentre;
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_LEFT, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &leftOfLeft, &rightOfLeft);
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_RIGHT, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &leftOfRight, &rightOfRight);
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &leftOfCentre, &rightOfCentre);
+      printf("        pan FFh: L=%d R=%d   pan 00h: L=%d R=%d   pan 80h: L=%d R=%d\n",
+             leftOfLeft, rightOfLeft, leftOfRight, rightOfRight, leftOfCentre, rightOfCentre);
+      Emu8kTestCheck(leftOfLeft > 15000 && rightOfLeft == 0, "pan FFh: extreme LEFT (p.9) -- the right channel is silent");
+      Emu8kTestCheck(rightOfRight > 15000 && leftOfRight == 0, "pan 00h: extreme RIGHT -- the left channel is silent");
+      Emu8kTestCheck(leftOfCentre > leftOfLeft * 45 / 100 && leftOfCentre < leftOfLeft * 55 / 100
+                     && rightOfCentre > leftOfLeft * 45 / 100 && rightOfCentre < leftOfLeft * 55 / 100,
+                     "pan 80h: the middle of a linear crossfade -- half on each side"); }
 
     /* ---- T6: the volume envelope ---- */
-    { uint32_t a1 = vdd_emu8k_attack_us(1), a7f = vdd_emu8k_attack_us(0x7F);
-      uint32_t d1 = vdd_emu8k_decay_us_per_db(1), d7f = vdd_emu8k_decay_us_per_db(0x7F);
-      printf("        attack 01h=%u us 7Fh=%u us   decay 01h=%u us/dB 7Fh=%u us/dB\n", a1, a7f, d1, d7f);
-      CHECK(a1 > 11760000 && a1 < 12000000 && a7f > 5900 && a7f < 6100, "attack: 01h = 11.88 s, 7Fh = 6 ms (p.16)");
-      CHECK(d1 > 465000 && d1 < 475000 && d7f > 235 && d7f < 245, "decay: 01h = 470 ms/dB, 7Fh = 240 us/dB (p.15)"); }
-    { uint32_t T = (uint32_t)(((uint64_t)vdd_emu8k_attack_us(0x40) * 441u) / 10000u);   /* in samples */
-      uint16_t q1, q2, q4;
-      note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F40, 0x7F7F, 0);
-      render(T / 4); q1 = cv(0); render(T / 4); q2 = cv(0); render(T / 2 + 64); q4 = cv(0);
-      printf("        attack 40h (%u samples): CV at T/4=%u T/2=%u T=%u\n", T, q1, q2, q4);
-      CHECK(q1 > 0xFFFF * 20 / 100 && q1 < 0xFFFF * 30 / 100 && q2 > 0xFFFF * 45 / 100 && q2 < 0xFFFF * 55 / 100,
-            "attack: LINEAR in amplitude -- a quarter at T/4, a half at T/2");
-      CHECK(q4 >= 0xFFF0, "attack: full volume at T"); }
-    { uint16_t c0, c1, c2; char m[128];
-      DCYSUSV(0, 0x805C);                                     /* §7's release example */
-      render(32); c0 = cv(0); render(882); c1 = cv(0); render(882); c2 = cv(0);
-      sprintf(m, "release 5Ch: dB-linear -- the 2nd 20 ms falls by the same ratio as the 1st (%u %u %u)", c0, c1, c2);
-      CHECK(c1 < c0 && c2 < c1 && c0 > 60000
-            && (double)c2 / c1 > 0.85 * (double)c1 / c0 && (double)c2 / c1 < 1.15 * (double)c1 / c0, m);
-      CHECK((double)c1 / c0 > 0.25 && (double)c1 / c0 < 0.37, "release 5Ch: ~10 dB per 20 ms (1.97 ms/dB)");
-      render(44100 / 4);
-      CHECK(cv(0) == 0 && (d0r(3, 0) >> 16) == 0, "release: silent (CV = VT = 0) within 250 ms"); }
-    note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF20, 0x7F7F, 0x7F7F, 0);
-    render(4410);
-    { uint16_t v = cv(0); char m[96];
-      sprintf(m, "IFATN 20h: 32 x 0.375 = 12 dB -> CV = FFFFh x 0.251 (got %u)", v);
-      CHECK(v > 16100 && v < 16800, m); }
-    note_kill(0);
-    CHECK(cv(0) == 0 && (d0r(3, 0) >> 16) == 0, "§7 abrupt end: engine off, VT and CV zero at once");
+    { DWORD attackSlowest = VddEmu8kAttackMicroseconds(1), attackFastest = VddEmu8kAttackMicroseconds(0x7F);
+      DWORD decaySlowest = VddEmu8kDecayMicrosecondsPerDb(1), decayFastest = VddEmu8kDecayMicrosecondsPerDb(0x7F);
+      printf("        attack 01h=%u us 7Fh=%u us   decay 01h=%u us/dB 7Fh=%u us/dB\n",
+             attackSlowest, attackFastest, decaySlowest, decayFastest);
+      Emu8kTestCheck(attackSlowest > 11760000 && attackSlowest < 12000000 && attackFastest > 5900 && attackFastest < 6100,
+                     "attack: 01h = 11.88 s, 7Fh = 6 ms (p.16)");
+      Emu8kTestCheck(decaySlowest > 465000 && decaySlowest < 475000 && decayFastest > 235 && decayFastest < 245,
+                     "decay: 01h = 470 ms/dB, 7Fh = 240 us/dB (p.15)"); }
+    { DWORD attackSamples = (DWORD)(((UINT64)VddEmu8kAttackMicroseconds(0x40) * EMU8K_TEST_MICROSECONDS_TO_SAMPLES_NUMERATOR)
+                                    / EMU8K_TEST_MICROSECONDS_TO_SAMPLES_DENOMINATOR);
+      WORD atQuarter, atHalf, atEnd;
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_ATTACK_40);
+      Emu8kTestRender(attackSamples / 4); atQuarter = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      Emu8kTestRender(attackSamples / 4); atHalf = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      Emu8kTestRender(attackSamples / 2 + EMU8K_TEST_ENGINE_TICK); atEnd = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      printf("        attack 40h (%u samples): CV at T/4=%u T/2=%u T=%u\n", attackSamples, atQuarter, atHalf, atEnd);
+      Emu8kTestCheck(atQuarter > EMU8K_TEST_FULL_VOLUME * 20 / 100 && atQuarter < EMU8K_TEST_FULL_VOLUME * 30 / 100
+                     && atHalf > EMU8K_TEST_FULL_VOLUME * 45 / 100 && atHalf < EMU8K_TEST_FULL_VOLUME * 55 / 100,
+                     "attack: LINEAR in amplitude -- a quarter at T/4, a half at T/2");
+      Emu8kTestCheck(atEnd >= 0xFFF0, "attack: full volume at T"); }
+    { WORD atStart, after20Ms, after40Ms; CHAR message[128];
+      Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_RELEASE_5C);
+      Emu8kTestRender(EMU8K_TEST_ENGINE_TICK / 2); atStart = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      Emu8kTestRender(EMU8K_TEST_TWENTY_MS); after20Ms = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      Emu8kTestRender(EMU8K_TEST_TWENTY_MS); after40Ms = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
+      sprintf(message, "release 5Ch: dB-linear -- the 2nd 20 ms falls by the same ratio as the 1st (%u %u %u)",
+              atStart, after20Ms, after40Ms);
+      Emu8kTestCheck(after20Ms < atStart && after40Ms < after20Ms && atStart > 60000
+                     && (double)after40Ms / after20Ms > 0.85 * (double)after20Ms / atStart
+                     && (double)after40Ms / after20Ms < 1.15 * (double)after20Ms / atStart, message);
+      Emu8kTestCheck((double)after20Ms / atStart > 0.25 && (double)after20Ms / atStart < 0.37,
+                     "release 5Ch: ~10 dB per 20 ms (1.97 ms/dB)");
+      Emu8kTestRender(EMU8K_TEST_RATE / 4);
+      Emu8kTestCheck(Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL) == 0
+                     && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0,
+                     "release: silent (CV = VT = 0) within 250 ms"); }
+    Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_ATTENUATION_12DB, EMU8K_TEST_FLAT_ENVELOPE);
+    Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
+    { WORD currentVolume = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL); CHAR message[96];
+      sprintf(message, "IFATN 20h: 32 x 0.375 = 12 dB -> CV = FFFFh x 0.251 (got %u)", currentVolume);
+      Emu8kTestCheck(currentVolume > 16100 && currentVolume < 16800, message); }
+    Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);
+    Emu8kTestCheck(Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL) == 0
+                   && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0,
+                   "§7 abrupt end: engine off, VT and CV zero at once");
 
     /* ---- T7: the filter ---- */
-    { int p0, p1, p2, p3, x;
-      note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410); peaks(4410, &p0, &x);
-      IFATN(0, 0x0000); render(4410); peaks(4410, &p1, &x);
-      IFATN(0, 0x6800); render(4410); peaks(4410, &p2, &x);
-      { uint32_t cc = d1dr(0, 0); ptr(0, 0); outw(E + 0x402, (uint16_t)((0xF << 12) | ((cc >> 16) & 0x0FFF))); }
-      render(8820); peaks(4410, &p3, &x);
-      printf("        peak: open %d   cutoff 00h %d   cutoff 68h Q0 %d   Q15 %d\n", p0, p1, p2, p3);
+    { INT peakOpen, peakLowCutoff, peakOnTone, peakResonant, unusedRight;
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &peakOpen, &unusedRight);
+      Emu8kTestData3Write(EMU8K_TEST_IFATN, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_CUTOFF_LOW);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &peakLowCutoff, &unusedRight);
+      Emu8kTestData3Write(EMU8K_TEST_IFATN, EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_CUTOFF_ON_TONE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &peakOnTone, &unusedRight);
+      { DWORD ccca = Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, EMU8K_TEST_TONE_CHANNEL);
+        Emu8kTestSelect(EMU8K_TEST_CCCA, EMU8K_TEST_TONE_CHANNEL);
+        Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2,
+                         (WORD)((EMU8K_TEST_Q_MAX << EMU8K_TEST_Q_SHIFT_IN_HIGH)
+                                | ((ccca >> EMU8K_TEST_HIGH_WORD_SHIFT) & EMU8K_TEST_CCCA_HIGH_KEEP))); }
+      Emu8kTestRender(2 * EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &peakResonant, &unusedRight);
+      printf("        peak: open %d   cutoff 00h %d   cutoff 68h Q0 %d   Q15 %d\n",
+             peakOpen, peakLowCutoff, peakOnTone, peakResonant);
       /* the negative peak: -16383 x FFFFh >> 16 = -16383 (the shift floors), x pan 80h's
          128/256 = -8192. Bit-exact, or something filtered it. */
-      CHECK(p0 == 8192, "Q 0 + cutoff FFh: the filter does not alter the signal (p.17) -- bit-exact peak");
-      CHECK(p1 < p0 * 15 / 100, "cutoff 00h (125 Hz): a 689 Hz tone is cut to under 15%");
-      CHECK(p3 > p2 * 3, "Q 15 at a cutoff on the tone: resonance lifts it more than 3x");
-      CHECK(d0r(2, 0) != 0 && (d0r(2, 0) & 0xFFFF) == 0x6800, "CVCF: the current cutoff follows IFATN's byte (6800h)"); }
-    note_kill(0);
+      Emu8kTestCheck(peakOpen == 8192, "Q 0 + cutoff FFh: the filter does not alter the signal (p.17) -- bit-exact peak");
+      Emu8kTestCheck(peakLowCutoff < peakOpen * 15 / 100, "cutoff 00h (125 Hz): a 689 Hz tone is cut to under 15%");
+      Emu8kTestCheck(peakResonant > peakOnTone * 3, "Q 15 at a cutoff on the tone: resonance lifts it more than 3x");
+      Emu8kTestCheck(Emu8kTestData0Read(EMU8K_TEST_CVCF, EMU8K_TEST_TONE_CHANNEL) != 0
+                     && (Emu8kTestData0Read(EMU8K_TEST_CVCF, EMU8K_TEST_TONE_CHANNEL) & EMU8K_TEST_LOW_WORD_MASK)
+                        == EMU8K_TEST_CUTOFF_ON_TONE,
+                     "CVCF: the current cutoff follows IFATN's byte (6800h)"); }
+    Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);
 
     /* ---- T8: output gating ---- */
-    { int l, r;
-      note_on(0, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410);
-      d1w(1, 31, 0x0000); peaks(2000, &l, &r);
-      CHECK(l == 0 && r == 0, "HWCF3 = 0: audio output disabled (§4)");
-      d1w(1, 31, 0x0004); peaks(2000, &l, &r);
-      CHECK(l > 0, "HWCF3 = 4: audio back");
-      note_kill(0);
-      note_on(1, A, A + 64, A + 128, 0x80, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0); render(4410);
-      { uint32_t cc = d1dr(0, 1); CCCA(1, cc | 0x04000000u); }
-      peaks(2000, &l, &r);
-      CHECK(l == 0 && r == 0, "a channel in DMA mode makes no sound");
-      CCCA(1, 0); note_kill(1); }
+    { INT peakLeft, peakRight;
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
+      Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF3, EMU8K_TEST_HWCF3_AUDIO_OFF);
+      Emu8kTestPeaks(2000, &peakLeft, &peakRight);
+      Emu8kTestCheck(peakLeft == 0 && peakRight == 0, "HWCF3 = 0: audio output disabled (§4)");
+      Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF3, EMU8K_TEST_HWCF3_AUDIO_ON);
+      Emu8kTestPeaks(2000, &peakLeft, &peakRight);
+      Emu8kTestCheck(peakLeft > 0, "HWCF3 = 4: audio back");
+      Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);
+      Emu8kTestPlayTone(EMU8K_TEST_SECOND_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
+      { DWORD ccca = Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, EMU8K_TEST_SECOND_CHANNEL);
+        Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_SECOND_CHANNEL, ccca | EMU8K_TEST_CCCA_DMA); }
+      Emu8kTestPeaks(2000, &peakLeft, &peakRight);
+      Emu8kTestCheck(peakLeft == 0 && peakRight == 0, "a channel in DMA mode makes no sound");
+      Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_SECOND_CHANNEL, 0);
+      Emu8kTestNoteKill(EMU8K_TEST_SECOND_CHANNEL); }
 
     /* ---- T9: the mixer hook ---- */
-    { static audio_state au; static int16_t mo[2 * 1024]; int l = 0, r = 0;
-      vdd_audio_init(&au, NULL, NULL, 44100);
-      vdd_audio_set_emu8k(&au, &emu);
-      note_on(0, A, A + 64, A + 128, 0xFF, 0xE000, 0xFF00, 0x7F7F, 0x7F7F, 0);
-      vdd_audio_mix_st(&au, mo, 1024);
-      for (i = 0; i < 1024; ++i) { if (mo[2*i]) l = 1; if (mo[2*i+1]) r = 1; }
-      CHECK(l && !r, "mixer: vdd_audio_set_emu8k -- a hard-left voice reaches the host's LEFT channel only");
-      vdd_audio_set_emu8k(&au, NULL); note_kill(0); }
+    { static audio_state audio; static INT16 mixed[EMU8K_STEREO_SIDES * 1024];
+      BOOL hasLeft = FALSE, hasRight = FALSE;
+      DWORD frame;
+      vdd_audio_init(&audio, NULL, NULL, EMU8K_TEST_RATE);
+      vdd_audio_set_emu8k(&audio, &g_Emu8k);
+      Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_LEFT, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
+      vdd_audio_mix_st(&audio, mixed, 1024);
+      for (frame = 0; frame < 1024; ++frame) {
+          if (mixed[EMU8K_STEREO_SIDES * frame]) hasLeft = TRUE;
+          if (mixed[EMU8K_STEREO_SIDES * frame + 1]) hasRight = TRUE;
+      }
+      Emu8kTestCheck(hasLeft && !hasRight,
+                     "mixer: vdd_audio_set_emu8k -- a hard-left voice reaches the host's LEFT channel only");
+      vdd_audio_set_emu8k(&audio, NULL); Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL); }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Checks, g_Failures);
+    return g_Failures ? 1 : 0;
 }

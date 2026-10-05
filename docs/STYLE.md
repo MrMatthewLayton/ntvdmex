@@ -205,6 +205,21 @@ behaviour**:
 | 3. Local names | `i` → `voiceIndex` | byte-identical |
 | 4. Magic values → named constants | `0x802` → `EMU8K_POINTER_PORT_OFFSET` | byte-identical |
 
+- **"Byte-identical" means the STRIPPED image.** The unstripped host carries a COFF symbol
+  table, and a renamed file-static function changes its entry there (the pilot's
+  `vdd_emu8k.c` moved 26,000 bytes of it). Strip both (`i686-w64-mingw32-strip -o`) and
+  `cmp`: the loaded image — code, data, imports, resources, relocations — must not differ in
+  one byte.
+- **A converted test proves itself by its OUTPUT.** Run the old test against the old code
+  and the new against the new; the two transcripts, measured values included, must `diff`
+  clean.
+
+- **A pass substitutes tokens; it never reshapes an expression.** A name replaces a name, and a
+  named constant replaces a literal of the same value and type, in the same place. Rewriting
+  `b[11] | (b[12] << 8)` as `MAKEWORD(...)`, or `x == 0` as `!x`, is equivalent C but the
+  compiler may allocate registers differently, and then the byte-identical proof is lost
+  (seen in the pilot: the rewrite moved 441 bytes; the pure rename moved none). Improvements
+  to the code itself are separate commits, proven by tests rather than by identity.
 - **Line counts stay put where `__LINE__` is used** (`src/host/main.c`, `src/wow/ne.h`): it is an
   identity there, so a moved line would change the binary and lose the proof. Elsewhere a pass
   may add lines -- a named constant's `#define`, say -- and the binary still matches.

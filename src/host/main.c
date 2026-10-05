@@ -925,7 +925,7 @@ static gus_state    g_gus;       static ntvdd g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
 static int          g_gus_on = 0;
 /* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
-static emu8k_state  g_emu8k;     static ntvdd g_emu8k_dev;
+static EMU8K_STATE  g_emu8k;     static ntvdd g_emu8k_dev;
 static uint16_t     g_emu8k_dram[EMU8K_DRAM_WORDS];
 static int          g_awe_on = 0;
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
@@ -5327,18 +5327,18 @@ static int host_has_cdrom(void)
     return 0;
 }
 static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
-static dos_disk_geom g_disk_g[1];
+static DOS_DISK_GEOMETRY g_disk_g[1];
 static int           g_disk_tried[1];
 static unsigned      g_disk_count = 1;   /* AH=08h's DL: how many floppy drives */
 static unsigned      g_disk_status;      /* AH=01h's last-status byte           */
 
-static dos_disk_geom *disk_for(unsigned drive)
+static PDOS_DISK_GEOMETRY disk_for(unsigned drive)
 {
     BYTE boot[512];
     DWORD got = 0, sz;
     UINT om;
     if (drive != 0) return NULL;                 /* only A: is backed today     */
-    if (g_disk_g[0].valid) return &g_disk_g[0];
+    if (g_disk_g[0].IsValid) return &g_disk_g[0];
     if (g_disk_tried[0]) return NULL;
     g_disk_tried[0] = 1;
     om = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
@@ -5349,7 +5349,7 @@ static dos_disk_geom *disk_for(unsigned drive)
     if (g_disk_h[0] == INVALID_HANDLE_VALUE) return NULL;
     sz = GetFileSize(g_disk_h[0], NULL);
     if (!ReadFile(g_disk_h[0], boot, 512, &got, NULL) || got != 512
-        || !dos_disk_geom_from_bpb(boot, sz, &g_disk_g[0])) {
+        || !DosDiskGeometryFromBpb(boot, sz, &g_disk_g[0])) {
         /* An image we cannot read the geometry of is treated as ABSENT. A
            guessed cylinder count returns the WRONG SECTOR and reports success,
            which is strictly worse than no drive. */
@@ -5362,10 +5362,10 @@ static dos_disk_geom *disk_for(unsigned drive)
     }
     { char db[200], *dq = db;
       dq = zput(dq, "  INT13 drive 0 = "); dq = zput(dq, floppy_img_path()); dq = zput(dq, ", ");
-      dq = zhex(dq, g_disk_g[0].cylinders); dq = zput(dq, " cyl x ");
-      dq = zhex(dq, g_disk_g[0].heads);     dq = zput(dq, " head x ");
-      dq = zhex(dq, g_disk_g[0].sectors);   dq = zput(dq, " sec, type 0x");
-      dq = zhexb(dq, g_disk_g[0].drive_type); dq = zput(dq, "\r\n");
+      dq = zhex(dq, g_disk_g[0].Cylinders); dq = zput(dq, " cyl x ");
+      dq = zhex(dq, g_disk_g[0].Heads);     dq = zput(dq, " head x ");
+      dq = zhex(dq, g_disk_g[0].SectorsPerTrack);   dq = zput(dq, " sec, type 0x");
+      dq = zhexb(dq, g_disk_g[0].DriveType); dq = zput(dq, "\r\n");
       log_append(LOG_PATH, db, dq); serial_out(db, dq); }
     return &g_disk_g[0];
 }
@@ -8919,7 +8919,7 @@ static void exec_mach_restore(int d, char **pp)
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
     vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
-    if (g_awe_on) vdd_emu8k_reset(&g_emu8k);    /* #233 */
+    if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
     vdd_mpu_reset(&g_mpu); vdd_speaker_reset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
               || g_vid.mkind != VID_KIND_TEXT);
@@ -29413,7 +29413,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         } else if (bn == 0x13) {               /* disk services  GH #44   */
             unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
             unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
-            dos_disk_geom *g13 = disk_for(dl13);
+            PDOS_DISK_GEOMETRY g13 = disk_for(dl13);
             if (ah13 == 0x00) { BSETAX(0); g_disk_status = 0; BCF_CLR(); }
             else if (ah13 == 0x01) { BSETAX((WORD)(g_disk_status << 8)); BCF_CLR(); }
             else if (!g13) {
@@ -29428,10 +29428,10 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
                    call made with BX poisoned to B1B1. Keeping the caller's
                    BH would hand back its own junk in half the register. */
-                VDM_SET16(tib, VTIB_EBX, (WORD)g13->drive_type);
-                VDM_SET16(tib, VTIB_ECX, dos_disk_pack_cx(g13));
+                VDM_SET16(tib, VTIB_EBX, (WORD)g13->DriveType);
+                VDM_SET16(tib, VTIB_ECX, DosDiskPackCx(g13));
                 VDM_SET16(tib, VTIB_EDX,
-                          (WORD)(((g13->heads - 1) << 8) | g_disk_count));
+                          (WORD)(((g13->Heads - 1) << 8) | g_disk_count));
                 BSETAX(0); g_disk_status = 0; BCF_CLR();
             } else if (ah13 == 0x15) {          /* get disk type           */
                 /* AH=01: floppy WITHOUT change-line support, which is what
@@ -29444,9 +29444,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 unsigned sec  = cx13 & 0x3F;
                 unsigned cyl  = ((cx13 >> 8) & 0xFF) | ((cx13 & 0xC0) << 2);
                 unsigned head = (VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF;
-                uint32_t lba = 0;
-                if (!dos_disk_chs_to_lba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
-                    || lba + nsec > g13->total_sectors) {
+                DWORD    lba = 0;
+                if (!DosDiskChsToLba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
+                    || lba + nsec > g13->TotalSectors) {
                     BSETAX(0x0400); g_disk_status = 0x04;  /* sector not found */
                     BCF_SET();
                 } else if (ah13 == 0x04) {      /* verify: bounds only     */
@@ -29478,11 +29478,11 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
             unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
             uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-            dos_disk_geom *g25 = disk_for(drv);
+            PDOS_DISK_GEOMETRY g25 = disk_for(drv);
             DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
                       + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
             if (!g25) { BSETAX(0x0201); BCF_SET(); g_bios_unimpl[bn] = 1; }
-            else if (sec + cnt > g25->total_sectors) { BSETAX(0x0208); BCF_SET(); }
+            else if (sec + cnt > g25->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
             else if (disk_io(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
                  { BSETAX(0); BCF_CLR(); }
             else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
@@ -32181,9 +32181,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
     g_awe_on = (g_set.v[SET_SBMODEL] == SB_MODEL_AWE32);
     if (g_awe_on) {
-        g_emu8k.base = (uint16_t)(g_sbcfg.base + 0x400);
-        g_emu8k.dram = g_emu8k_dram; g_emu8k.dram_words = EMU8K_DRAM_WORDS;
-        g_emu8k_dev = vdd_emu8k_device(&g_emu8k);
+        g_emu8k.BasePort = (uint16_t)(g_sbcfg.base + 0x400);
+        g_emu8k.Dram = g_emu8k_dram; g_emu8k.DramWords = EMU8K_DRAM_WORDS;
+        g_emu8k_dev = VddEmu8kDevice(&g_emu8k);
         vdd_bus_add(&g_bus, &g_emu8k_dev);
     }
     /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORTS was 16 and
