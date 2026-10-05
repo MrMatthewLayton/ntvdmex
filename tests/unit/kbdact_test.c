@@ -7,153 +7,343 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <stdint.h>
+#include <stdint.h>                 /* v86interp.h is written with the fixed-width types */
+#include "ntvdmex_types.h"
 
-typedef unsigned char BYTE;
-static BYTE MEM[0x110000];
-static uint8_t imem_r8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0; }
-static void    imem_w8(uint32_t lin, uint8_t v) { if (lin < sizeof MEM) MEM[lin] = v; }
-static uint32_t iio_in(uint16_t port, int width) { (void)port; (void)width; return 0xFF; }
-static int out_port = -1, out_val = -1;
-static void iio_out(uint16_t port, int width, uint32_t val) { (void)width; out_port = port; out_val = (int)val; }
+/* The guest's memory and the interpreter's callbacks (names fixed by v86interp.h). */
+#define KBDACT_TEST_MEMORY_SIZE      0x110000
+#define KBDACT_TEST_FLOATING_BUS     0xFF
+#define KBDACT_TEST_NONE             (-1)
+
+static BYTE g_GuestMemory[KBDACT_TEST_MEMORY_SIZE];
+static BYTE imem_r8(DWORD linear)
+{ return (linear < sizeof g_GuestMemory) ? g_GuestMemory[linear] : 0; }
+static VOID imem_w8(DWORD linear, BYTE value)
+{ if (linear < sizeof g_GuestMemory) g_GuestMemory[linear] = value; }
+static DWORD iio_in(WORD port, INT width)
+{ (VOID)port; (VOID)width; return KBDACT_TEST_FLOATING_BUS; }
+static INT g_LastOutPort = KBDACT_TEST_NONE, g_LastOutValue = KBDACT_TEST_NONE;
+static VOID iio_out(WORD port, INT width, DWORD value)
+{ (VOID)width; g_LastOutPort = port; g_LastOutValue = (INT)value; }
 
 #include "../../src/host/v86interp.h"
 #include "dos_layout.h"
 #include "bios_kbdact.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Checks = 0, g_Failures = 0;
 
-#define HND_SEG 0x2000          /* handler for vector v at HND_SEG:v*2 = HLT, IRET */
-#define RET_SEG 0x3000
-#define STK_SEG 0x5000
-static int lastvec; static uint16_t lastax; static int ncalls; static int if_at_call;
-static int clear_cf_vec = -1;     /* #244: this vector's handler returns CF=0 (a swallow) */
-static int stop_ip = -1;          /* #244/#274: stop at this DOS_CTAB_SEG offset (a BOP site) */
-
-static icpu setup(unsigned entry)
+static VOID KeyboardActionTestCheck(BOOL passed, PCSTR message)
 {
-    icpu c; int v;
-    memset(&c, 0, sizeof c); memset(MEM, 0, sizeof MEM);
-    memcpy(MEM + ((uint32_t)DOS_CTAB_SEG << 4) + DOS_KBDACT_OFF, bios_kbdact_code, sizeof bios_kbdact_code);
-    for (v = 0; v < 256; ++v) {
-        MEM[v * 4] = (BYTE)(v * 2); MEM[v * 4 + 1] = (BYTE)((v * 2) >> 8);
-        MEM[v * 4 + 2] = HND_SEG & 0xFF; MEM[v * 4 + 3] = HND_SEG >> 8;
-        MEM[((uint32_t)HND_SEG << 4) + v * 2] = 0xF4;
-        MEM[((uint32_t)HND_SEG << 4) + v * 2 + 1] = 0xCF;
+    g_Checks++;
+    if (passed) { printf("  PASS  %s\n", (message)); }
+    else { printf("  FAIL  %s\n", (message)); g_Failures++; }
+}
+
+/* The handler for a vector sits at KBDACT_TEST_HANDLER_SEGMENT:vector*2 = HLT, IRET. */
+#define KBDACT_TEST_HANDLER_SEGMENT  0x2000
+#define KBDACT_TEST_RETURN_SEGMENT   0x3000
+#define KBDACT_TEST_STACK_SEGMENT    0x5000
+#define KBDACT_TEST_HANDLER_STRIDE   2
+#define KBDACT_TEST_VECTOR_COUNT     256
+#define KBDACT_TEST_IVT_ENTRY_SIZE   4
+#define KBDACT_TEST_IVT_SEGMENT      2      /* the segment word in an IVT entry */
+#define KBDACT_TEST_IVT_SEGMENT_HIGH 3
+#define KBDACT_TEST_PARAGRAPH_SHIFT  4
+#define KBDACT_TEST_LOW_BYTE_MASK    0xFF
+#define KBDACT_TEST_HIGH_BYTE_SHIFT  8
+#define KBDACT_TEST_HLT              0xF4
+#define KBDACT_TEST_IRET             0xCF
+#define KBDACT_TEST_BOP_BYTE         0xC4   /* C4 C4 09: BOP 09h */
+#define KBDACT_TEST_BOP_09H          0x09
+#define KBDACT_TEST_BOP_NUMBER_BYTE  2
+#define KBDACT_TEST_BOP_SIZE         3
+
+/* The stack: an INT 09h frame (IP, CS, FLAGS) below the top, returning to
+   KBDACT_TEST_RETURN_SEGMENT:0000. */
+#define KBDACT_TEST_STACK_TOP        0xFFF0
+#define KBDACT_TEST_FRAME_SIZE       6
+#define KBDACT_TEST_FRAME_CS         0xFFEC
+#define KBDACT_TEST_FRAME_CS_HIGH    0xFFED
+#define KBDACT_TEST_FRAME_FLAGS      0xFFEE
+#define KBDACT_TEST_CALLER_FLAGS     0x02   /* caller FLAGS: IF=0 */
+#define KBDACT_TEST_FLAGS_POP_OFFSET 4      /* the IRET pops FLAGS at SS:SP+4 */
+#define KBDACT_TEST_WORD_SIZE        2
+
+/* icpu's register and segment slots. */
+#define KBDACT_TEST_AX               0
+#define KBDACT_TEST_DX               2
+#define KBDACT_TEST_SP               4
+#define KBDACT_TEST_CS               1
+#define KBDACT_TEST_SS               2
+#define KBDACT_TEST_DS               3
+
+#define KBDACT_TEST_FLAG_CF          0x0001u
+#define KBDACT_TEST_FLAG_IF          0x200
+#define KBDACT_TEST_INITIAL_FLAGS    0x0002
+#define KBDACT_TEST_SAVED_AX         0x1234
+#define KBDACT_TEST_SAVED_AX_LOW     0x34
+#define KBDACT_TEST_SAVED_AX_HIGH    0x12
+#define KBDACT_TEST_SAVED_DS         0x7777
+#define KBDACT_TEST_AL_MASK          0xFF
+
+/* The pause loop's flag: 0040:0018 bit 3. */
+#define KBDACT_TEST_PAUSE_FLAGS_LINEAR 0x418
+#define KBDACT_TEST_PAUSE_BIT        0x08
+
+/* The vectors and AX values the routines call with. */
+#define KBDACT_TEST_INT_05H          0x05
+#define KBDACT_TEST_INT_15H          0x15
+#define KBDACT_TEST_INT_17H          0x17
+#define KBDACT_TEST_INT_1BH          0x1B
+#define KBDACT_TEST_SYSREQ_DOWN_AX   0x8500
+#define KBDACT_TEST_SYSREQ_UP_AX     0x8501
+#define KBDACT_TEST_INTERCEPT_AX     0x4F1E  /* AH=4Fh, AL = scancode 1Eh */
+#define KBDACT_TEST_SCANCODE         0x1E
+#define KBDACT_TEST_PRINTED_AX       0x0058  /* AH=00h, AL='X' */
+#define KBDACT_TEST_EOI_PORT         0x20
+#define KBDACT_TEST_EOI              0x20
+
+/* The end of the block the code shares with the AUX/PRN code. */
+#define KBDACT_TEST_BLOCK_END        0x6F0
+
+/* Step budgets, and the step at which a pause test clears the bit. */
+#define KBDACT_TEST_BUDGET           1000
+#define KBDACT_TEST_PAUSE_BUDGET     5000
+#define KBDACT_TEST_CLEAR_PAUSE_AT   300
+#define KBDACT_TEST_NEVER_CLEAR      0
+
+/* What KeyboardActionTestRun returns. */
+#define KBDACT_TEST_RETURNED         0      /* back at KBDACT_TEST_RETURN_SEGMENT:0000 */
+#define KBDACT_TEST_STOPPED          1      /* at g_StopOffset                        */
+#define KBDACT_TEST_OUT_OF_BUDGET    (-1)
+#define KBDACT_TEST_LOST             (-2)
+
+static INT g_LastVector; static WORD g_LastAx; static INT g_CallCount;
+static INT g_InterruptFlagAtCall;
+/* #244: this vector's handler returns CF=0 (a swallow) */
+static INT g_ClearCarryVector = KBDACT_TEST_NONE;
+/* #244/#274: stop at this DOS_CTAB_SEG offset (a BOP site) */
+static INT g_StopOffset = KBDACT_TEST_NONE;
+
+static icpu KeyboardActionTestSetup(UINT entry)
+{
+    icpu cpu; INT vector;
+    memset(&cpu, 0, sizeof cpu); memset(g_GuestMemory, 0, sizeof g_GuestMemory);
+    memcpy(g_GuestMemory + ((DWORD)DOS_CTAB_SEG << KBDACT_TEST_PARAGRAPH_SHIFT) + DOS_KBDACT_OFF,
+           g_BiosKeyboardActionCode, sizeof g_BiosKeyboardActionCode);
+    for (vector = 0; vector < KBDACT_TEST_VECTOR_COUNT; ++vector) {
+        g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE] =
+            (BYTE)(vector * KBDACT_TEST_HANDLER_STRIDE);
+        g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + 1] =
+            (BYTE)((vector * KBDACT_TEST_HANDLER_STRIDE) >> KBDACT_TEST_HIGH_BYTE_SHIFT);
+        g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + KBDACT_TEST_IVT_SEGMENT] =
+            KBDACT_TEST_HANDLER_SEGMENT & KBDACT_TEST_LOW_BYTE_MASK;
+        g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + KBDACT_TEST_IVT_SEGMENT_HIGH] =
+            KBDACT_TEST_HANDLER_SEGMENT >> KBDACT_TEST_HIGH_BYTE_SHIFT;
+        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                      + vector * KBDACT_TEST_HANDLER_STRIDE] = KBDACT_TEST_HLT;
+        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                      + vector * KBDACT_TEST_HANDLER_STRIDE + 1] = KBDACT_TEST_IRET;
     }
-    MEM[(uint32_t)RET_SEG << 4] = 0xF4;
-    c.seg[2] = STK_SEG; c.r[4] = 0xFFF0 - 6;
-    MEM[((uint32_t)STK_SEG << 4) + 0xFFEC] = RET_SEG & 0xFF;
-    MEM[((uint32_t)STK_SEG << 4) + 0xFFED] = RET_SEG >> 8;
-    MEM[((uint32_t)STK_SEG << 4) + 0xFFEE] = 0x02;              /* caller FLAGS: IF=0 */
-    c.seg[1] = DOS_CTAB_SEG; c.ip = (uint16_t)(DOS_KBDACT_OFF + entry);
-    c.flags = 0x0002; c.r[0] = 0x1234; c.seg[3] = 0x7777;
-    ncalls = 0; lastvec = -1;
-    return c;
+    g_GuestMemory[(DWORD)KBDACT_TEST_RETURN_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT] =
+        KBDACT_TEST_HLT;
+    cpu.seg[KBDACT_TEST_SS] = KBDACT_TEST_STACK_SEGMENT;
+    cpu.r[KBDACT_TEST_SP] = KBDACT_TEST_STACK_TOP - KBDACT_TEST_FRAME_SIZE;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                  + KBDACT_TEST_FRAME_CS] = KBDACT_TEST_RETURN_SEGMENT & KBDACT_TEST_LOW_BYTE_MASK;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                  + KBDACT_TEST_FRAME_CS_HIGH] =
+        KBDACT_TEST_RETURN_SEGMENT >> KBDACT_TEST_HIGH_BYTE_SHIFT;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                  + KBDACT_TEST_FRAME_FLAGS] = KBDACT_TEST_CALLER_FLAGS;
+    cpu.seg[KBDACT_TEST_CS] = DOS_CTAB_SEG; cpu.ip = (WORD)(DOS_KBDACT_OFF + entry);
+    cpu.flags = KBDACT_TEST_INITIAL_FLAGS; cpu.r[KBDACT_TEST_AX] = KBDACT_TEST_SAVED_AX;
+    cpu.seg[KBDACT_TEST_DS] = KBDACT_TEST_SAVED_DS;
+    g_CallCount = 0; g_LastVector = KBDACT_TEST_NONE;
+    return cpu;
 }
 
 /* Run until home; `budget` steps max. A HLT in the handler block is a call. */
-static int run(icpu *c, int budget, int clear_pause_after)
+static INT KeyboardActionTestRun(icpu *cpu, INT budget, INT clearPauseAfter)
 {
-    int n = 0;
+    INT stepCount = 0;
     for (;;) {
-        if (++n > budget) return -1;
-        if (clear_pause_after && n == clear_pause_after) MEM[0x418] &= (BYTE)~0x08;
-        if (stop_ip >= 0 && c->seg[1] == DOS_CTAB_SEG && c->ip == (uint16_t)stop_ip) return 1;
-        if (istep(c)) continue;
-        if (c->seg[1] == RET_SEG && c->ip == 0) return 0;
-        if (c->seg[1] == HND_SEG) {
-            lastvec = c->ip / 2; lastax = (uint16_t)c->r[0]; ++ncalls;
-            if_at_call = 0;
-            if (lastvec == clear_cf_vec)          /* the IRET pops FLAGS at SS:SP+4 */
-                MEM[((uint32_t)c->seg[2] << 4) + (uint16_t)(c->r[4] + 4)] &= (BYTE)~0x01;
-            c->ip = (uint16_t)(c->ip + 1);
+        if (++stepCount > budget) return KBDACT_TEST_OUT_OF_BUDGET;
+        if (clearPauseAfter && stepCount == clearPauseAfter)
+            g_GuestMemory[KBDACT_TEST_PAUSE_FLAGS_LINEAR] &= (BYTE)~KBDACT_TEST_PAUSE_BIT;
+        if (g_StopOffset >= 0 && cpu->seg[KBDACT_TEST_CS] == DOS_CTAB_SEG
+            && cpu->ip == (WORD)g_StopOffset) return KBDACT_TEST_STOPPED;
+        if (istep(cpu)) continue;
+        if (cpu->seg[KBDACT_TEST_CS] == KBDACT_TEST_RETURN_SEGMENT && cpu->ip == 0)
+            return KBDACT_TEST_RETURNED;
+        if (cpu->seg[KBDACT_TEST_CS] == KBDACT_TEST_HANDLER_SEGMENT) {
+            g_LastVector = cpu->ip / KBDACT_TEST_HANDLER_STRIDE;
+            g_LastAx = (WORD)cpu->r[KBDACT_TEST_AX]; ++g_CallCount;
+            g_InterruptFlagAtCall = 0;
+            if (g_LastVector == g_ClearCarryVector)   /* the IRET pops FLAGS at SS:SP+4 */
+                g_GuestMemory[((DWORD)cpu->seg[KBDACT_TEST_SS] << KBDACT_TEST_PARAGRAPH_SHIFT)
+                              + (WORD)(cpu->r[KBDACT_TEST_SP] + KBDACT_TEST_FLAGS_POP_OFFSET)]
+                    &= (BYTE)~KBDACT_TEST_FLAG_CF;
+            cpu->ip = (WORD)(cpu->ip + 1);
             continue;
         }
-        return -2;
+        return KBDACT_TEST_LOST;
     }
+}
+
+/* #244: push the interrupted code's AX (1234h) above the INT 09h frame. */
+static VOID KeyboardActionTestPushSavedAx(icpu *cpu)
+{
+    cpu->r[KBDACT_TEST_SP] -= KBDACT_TEST_WORD_SIZE;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                  + cpu->r[KBDACT_TEST_SP]] = KBDACT_TEST_SAVED_AX_LOW;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+                  + cpu->r[KBDACT_TEST_SP] + 1] = KBDACT_TEST_SAVED_AX_HIGH;
 }
 
 int main(void)
 {
-    icpu c;
+    icpu cpu;
     printf("== kbdact_test: BIOS INT 09h side-calls (#254)\n");
-    CHECK(sizeof bios_kbdact_code <= DOS_KBDACT_LEN
+    KeyboardActionTestCheck(sizeof g_BiosKeyboardActionCode <= DOS_KBDACT_LEN
           && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
-          && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= 0x6F0, "fits between the AUX/PRN code and the block's end");
+          && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= KBDACT_TEST_BLOCK_END,
+          "fits between the AUX/PRN code and the block's end");
 
-    c = setup(KBDACT_BRK);
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1 && lastvec == 0x1B, "brk: calls INT 1Bh once, returns");
-    CHECK((uint16_t)c.r[0] == 0x1234 && c.r[4] == 0xFFF0 && !(c.flags & 0x200),
-          "brk: AX kept, stack balanced, caller's IF restored");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_BREAK);
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_1BH,
+                            "brk: calls INT 1Bh once, returns");
+    KeyboardActionTestCheck((WORD)cpu.r[KBDACT_TEST_AX] == KBDACT_TEST_SAVED_AX
+                            && cpu.r[KBDACT_TEST_SP] == KBDACT_TEST_STACK_TOP
+                            && !(cpu.flags & KBDACT_TEST_FLAG_IF),
+                            "brk: AX kept, stack balanced, caller's IF restored");
 
-    c = setup(KBDACT_PRT);
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1 && lastvec == 0x05, "prt: calls INT 05h once");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_PRINT_SCREEN);
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_05H,
+                            "prt: calls INT 05h once");
 
-    c = setup(KBDACT_SYSD);
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1 && lastvec == 0x15 && lastax == 0x8500
-          && (uint16_t)c.r[0] == 0x1234, "sysd: INT 15h AX=8500h, AX restored");
-    c = setup(KBDACT_SYSU);
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1 && lastvec == 0x15 && lastax == 0x8501,
-          "sysu: INT 15h AX=8501h");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_SYSREQ_DOWN);
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_15H
+                            && g_LastAx == KBDACT_TEST_SYSREQ_DOWN_AX
+                            && (WORD)cpu.r[KBDACT_TEST_AX] == KBDACT_TEST_SAVED_AX,
+                            "sysd: INT 15h AX=8500h, AX restored");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_SYSREQ_UP);
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_15H
+                            && g_LastAx == KBDACT_TEST_SYSREQ_UP_AX,
+                            "sysu: INT 15h AX=8501h");
 
-    c = setup(KBDACT_PAUSE);
-    MEM[0x418] = 0x08;
-    CHECK(run(&c, 5000, 0) == -1, "pause: spins while 0040:0018 bit 3 is set");
-    CHECK(c.flags & 0x200, "pause: ...with interrupts ON");
-    c = setup(KBDACT_PAUSE);
-    MEM[0x418] = 0x08;
-    CHECK(run(&c, 5000, 300) == 0 && ncalls == 0, "pause: returns once the bit clears");
-    CHECK((uint16_t)c.r[0] == 0x1234 && c.seg[3] == 0x7777 && c.r[4] == 0xFFF0,
-          "pause: AX and DS restored, stack balanced");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_PAUSE);
+    g_GuestMemory[KBDACT_TEST_PAUSE_FLAGS_LINEAR] = KBDACT_TEST_PAUSE_BIT;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_PAUSE_BUDGET,
+                                                  KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_OUT_OF_BUDGET,
+                            "pause: spins while 0040:0018 bit 3 is set");
+    KeyboardActionTestCheck(cpu.flags & KBDACT_TEST_FLAG_IF, "pause: ...with interrupts ON");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_PAUSE);
+    g_GuestMemory[KBDACT_TEST_PAUSE_FLAGS_LINEAR] = KBDACT_TEST_PAUSE_BIT;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_PAUSE_BUDGET,
+                                                  KBDACT_TEST_CLEAR_PAUSE_AT)
+                                == KBDACT_TEST_RETURNED && g_CallCount == 0,
+                            "pause: returns once the bit clears");
+    KeyboardActionTestCheck((WORD)cpu.r[KBDACT_TEST_AX] == KBDACT_TEST_SAVED_AX
+                            && cpu.seg[KBDACT_TEST_DS] == KBDACT_TEST_SAVED_DS
+                            && cpu.r[KBDACT_TEST_SP] == KBDACT_TEST_STACK_TOP,
+                            "pause: AX and DS restored, stack balanced");
 
     /* ── #244: k4f, the INT 15h AH=4Fh call. The host has pushed the interrupted AX
          (1234h) above the INT 09h frame and loaded AX = 4F00h | scancode. */
-    CHECK(bios_kbdact_code[KBDACT_IRET] == 0xCF, "k4f: KBDACT_IRET names a bare IRET");
-    CHECK(bios_kbdact_code[KBDACT_K4F_BOP] == 0xC4 && bios_kbdact_code[KBDACT_K4F_BOP + 1] == 0xC4
-          && bios_kbdact_code[KBDACT_K4F_BOP + 2] == 0x09, "k4f: KBDACT_K4F_BOP names a BOP 09h");
-    c = setup(KBDACT_K4F);
-    c.r[4] -= 2;
-    MEM[((uint32_t)STK_SEG << 4) + c.r[4]] = 0x34; MEM[((uint32_t)STK_SEG << 4) + c.r[4] + 1] = 0x12;
-    c.r[0] = 0x4F1E;
-    stop_ip = DOS_KBDACT_OFF + KBDACT_K4F_BOP;
-    CHECK(run(&c, 1000, 0) == 1 && ncalls == 1 && lastvec == 0x15 && lastax == 0x4F1E,
-          "k4f: calls INT 15h with AH=4Fh AL=scancode (CF=1 on entry) ...");
-    CHECK((c.r[0] & 0xFF) == 0x1E && (c.flags & 1) && c.r[4] == 0xFFF0 - 8,
-          "k4f: ...a CF=1 answer reaches the translate BOP with AL as left, the saved AX still pushed");
-    c = setup(KBDACT_K4F);
-    c.r[4] -= 2;
-    MEM[((uint32_t)STK_SEG << 4) + c.r[4]] = 0x34; MEM[((uint32_t)STK_SEG << 4) + c.r[4] + 1] = 0x12;
-    c.r[0] = 0x4F1E; clear_cf_vec = 0x15; out_port = out_val = -1;
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1, "k4f: a CF=0 answer (swallow) never reaches the BOP...");
-    CHECK(out_port == 0x20 && out_val == 0x20, "k4f: ...sends the BIOS's own EOI (20h to port 20h)...");
-    CHECK((uint16_t)c.r[0] == 0x1234 && c.r[4] == 0xFFF0, "k4f: ...restores AX and IRETs, stack balanced");
-    clear_cf_vec = -1;
+    KeyboardActionTestCheck(g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_IRET] == KBDACT_TEST_IRET,
+                            "k4f: KBDACT_IRET names a bare IRET");
+    KeyboardActionTestCheck(g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_INTERCEPT_BOP]
+                                == KBDACT_TEST_BOP_BYTE
+                            && g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_INTERCEPT_BOP + 1]
+                                == KBDACT_TEST_BOP_BYTE
+                            && g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_INTERCEPT_BOP
+                                                        + KBDACT_TEST_BOP_NUMBER_BYTE]
+                                == KBDACT_TEST_BOP_09H,
+                            "k4f: KBDACT_K4F_BOP names a BOP 09h");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_INTERCEPT);
+    KeyboardActionTestPushSavedAx(&cpu);
+    cpu.r[KBDACT_TEST_AX] = KBDACT_TEST_INTERCEPT_AX;
+    g_StopOffset = DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT_BOP;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_STOPPED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_15H
+                            && g_LastAx == KBDACT_TEST_INTERCEPT_AX,
+                            "k4f: calls INT 15h with AH=4Fh AL=scancode (CF=1 on entry) ...");
+    KeyboardActionTestCheck((cpu.r[KBDACT_TEST_AX] & KBDACT_TEST_AL_MASK) == KBDACT_TEST_SCANCODE
+                            && (cpu.flags & KBDACT_TEST_FLAG_CF)
+                            && cpu.r[KBDACT_TEST_SP]
+                                == KBDACT_TEST_STACK_TOP - KBDACT_TEST_FRAME_SIZE
+                                   - KBDACT_TEST_WORD_SIZE,
+        "k4f: ...a CF=1 answer reaches the translate BOP with AL as left, the saved AX still pushed");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_INTERCEPT);
+    KeyboardActionTestPushSavedAx(&cpu);
+    cpu.r[KBDACT_TEST_AX] = KBDACT_TEST_INTERCEPT_AX; g_ClearCarryVector = KBDACT_TEST_INT_15H;
+    g_LastOutPort = g_LastOutValue = KBDACT_TEST_NONE;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED && g_CallCount == 1,
+                            "k4f: a CF=0 answer (swallow) never reaches the BOP...");
+    KeyboardActionTestCheck(g_LastOutPort == KBDACT_TEST_EOI_PORT
+                            && g_LastOutValue == KBDACT_TEST_EOI,
+                            "k4f: ...sends the BIOS's own EOI (20h to port 20h)...");
+    KeyboardActionTestCheck((WORD)cpu.r[KBDACT_TEST_AX] == KBDACT_TEST_SAVED_AX
+                            && cpu.r[KBDACT_TEST_SP] == KBDACT_TEST_STACK_TOP,
+                            "k4f: ...restores AX and IRETs, stack balanced");
+    g_ClearCarryVector = KBDACT_TEST_NONE;
 
     /* ── #274: p5, the default INT 05h. The host's two BOPs are simulated here: begin
          hands back one byte ('X'), next says "done" (CF=1). */
-    CHECK(bios_kbdact_code[KBDACT_P5_BEGIN] == 0xC4 && bios_kbdact_code[KBDACT_P5_NEXT] == 0xC4
-          && bios_kbdact_code[KBDACT_P5_BEGIN + 2] == 0x09 && bios_kbdact_code[KBDACT_P5_NEXT + 2] == 0x09,
-          "p5: both sites are BOP 09h");
-    c = setup(KBDACT_P5);
-    stop_ip = DOS_KBDACT_OFF + KBDACT_P5_BEGIN;
-    CHECK(run(&c, 1000, 0) == 1 && (c.flags & 0x200), "p5: STI, then the begin BOP");
-    c.r[0] = 0x0058; c.r[2] = 0; c.flags &= ~1u; c.ip += 3;          /* host: emit 'X' */
-    stop_ip = DOS_KBDACT_OFF + KBDACT_P5_NEXT;
-    CHECK(run(&c, 1000, 0) == 1 && ncalls == 1 && lastvec == 0x17 && lastax == 0x0058,
-          "p5: the byte goes out through INT 17h AH=00h, then the next BOP");
-    c.r[0] = 0x1234; c.flags |= 1u; c.ip += 3;                        /* host: done      */
-    stop_ip = -1;
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 1 && c.r[4] == 0xFFF0 && !(c.flags & 0x200),
-          "p5: CF=1 from the host ends it: IRET, stack balanced, caller's IF back");
-    c = setup(KBDACT_P5);
-    stop_ip = DOS_KBDACT_OFF + KBDACT_P5_BEGIN;
-    (void)run(&c, 1000, 0);
-    c.flags |= 1u; c.ip += 3; stop_ip = -1;                           /* host: busy      */
-    CHECK(run(&c, 1000, 0) == 0 && ncalls == 0, "p5: CF=1 at begin (already printing) -> straight back, no INT 17h");
+    KeyboardActionTestCheck(g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN]
+                                == KBDACT_TEST_BOP_BYTE
+                            && g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT]
+                                == KBDACT_TEST_BOP_BYTE
+                            && g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN
+                                                        + KBDACT_TEST_BOP_NUMBER_BYTE]
+                                == KBDACT_TEST_BOP_09H
+                            && g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT
+                                                        + KBDACT_TEST_BOP_NUMBER_BYTE]
+                                == KBDACT_TEST_BOP_09H,
+                            "p5: both sites are BOP 09h");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+    g_StopOffset = DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_STOPPED
+                            && (cpu.flags & KBDACT_TEST_FLAG_IF),
+                            "p5: STI, then the begin BOP");
+    cpu.r[KBDACT_TEST_AX] = KBDACT_TEST_PRINTED_AX; cpu.r[KBDACT_TEST_DX] = 0;
+    cpu.flags &= ~KBDACT_TEST_FLAG_CF; cpu.ip += KBDACT_TEST_BOP_SIZE;   /* host: emit 'X' */
+    g_StopOffset = DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_STOPPED
+                            && g_CallCount == 1 && g_LastVector == KBDACT_TEST_INT_17H
+                            && g_LastAx == KBDACT_TEST_PRINTED_AX,
+                            "p5: the byte goes out through INT 17h AH=00h, then the next BOP");
+    cpu.r[KBDACT_TEST_AX] = KBDACT_TEST_SAVED_AX;
+    cpu.flags |= KBDACT_TEST_FLAG_CF; cpu.ip += KBDACT_TEST_BOP_SIZE;    /* host: done      */
+    g_StopOffset = KBDACT_TEST_NONE;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED
+                            && g_CallCount == 1 && cpu.r[KBDACT_TEST_SP] == KBDACT_TEST_STACK_TOP
+                            && !(cpu.flags & KBDACT_TEST_FLAG_IF),
+        "p5: CF=1 from the host ends it: IRET, stack balanced, caller's IF back");
+    cpu = KeyboardActionTestSetup(BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+    g_StopOffset = DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN;
+    (VOID)KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR);
+    cpu.flags |= KBDACT_TEST_FLAG_CF; cpu.ip += KBDACT_TEST_BOP_SIZE;    /* host: busy      */
+    g_StopOffset = KBDACT_TEST_NONE;
+    KeyboardActionTestCheck(KeyboardActionTestRun(&cpu, KBDACT_TEST_BUDGET, KBDACT_TEST_NEVER_CLEAR)
+                                == KBDACT_TEST_RETURNED && g_CallCount == 0,
+                            "p5: CF=1 at begin (already printing) -> straight back, no INT 17h");
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Checks, g_Failures);
+    return g_Failures ? 1 : 0;
 }

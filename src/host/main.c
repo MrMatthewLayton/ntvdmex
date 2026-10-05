@@ -112,7 +112,7 @@ static int  g_instance = 1, g_instance_abandoned;
 typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
 #include "bios_prtsc.h"   /* #274: the default INT 05h's byte sequencer */
-typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
+typedef char bios_kbdact_fits[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
                                && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
                                && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
                                && DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4 <= 0x6F0) ? 1 : -1];
@@ -3080,9 +3080,9 @@ static int kbdact_entry(int act)
     switch (act) {
     case KB_ACT_BREAK:  vec = 0x1B; break;
     case KB_ACT_PRTSC:  vec = 0x05; break;
-    case KB_ACT_SYSRQ_D: return KBDACT_SYSD;
-    case KB_ACT_SYSRQ_U: return KBDACT_SYSU;
-    case KB_ACT_PAUSE:  return KBDACT_PAUSE;
+    case KB_ACT_SYSRQ_D: return BIOS_KEYBOARD_ACTION_SYSREQ_DOWN;
+    case KB_ACT_SYSRQ_U: return BIOS_KEYBOARD_ACTION_SYSREQ_UP;
+    case KB_ACT_PAUSE:  return BIOS_KEYBOARD_ACTION_PAUSE;
     default:            return -1;
     }
     {   WORD off = *(volatile WORD *)(ULONG_PTR)(vec * 4);
@@ -3097,7 +3097,7 @@ static int kbdact_entry(int act)
         if (seg >= 0xF000) return -1;
         if (t[0] == 0xC4 && t[1] == 0xC4 && seg != DOS_HDLR_SEG && seg != DOS_CTAB_SEG) return -1;
     }
-    return act == KB_ACT_BREAK ? KBDACT_BRK : KBDACT_PRT;
+    return act == KB_ACT_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
 }
 
 /* ── #244: IS INT 15h STILL OURS? ─────────────────────────────────────────────────────
@@ -3131,10 +3131,10 @@ static int int15_hooked(void)
      screen the classic way, `mov byte [0050:0000],1`, overwrites our INT 21h stub. Moving
      the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
      filed in the #274 report, not done in passing. */
-static bios_prtsc g_prtsc;
+static BIOS_PRINT_SCREEN_JOB g_prtsc;
 static DWORD      g_prtsc_sav[9];
 static DWORD      g_prtsc_jobs, g_prtsc_errs;
-static BYTE       g_prtsc_status = PRTSC_OK;   /* what 0050:0000 would hold */
+static BYTE       g_prtsc_status = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
 static void prtsc_int10(ntvdd_regs *r)
 {
     HOST_LOCK();
@@ -3146,9 +3146,9 @@ static uint8_t prtsc_readc(void *ctx, uint8_t row, uint8_t col)
     ntvdd_regs r;
     (void)ctx;
     ZeroMemory(&r, sizeof r);
-    r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = ((DWORD)row << 8) | col;
+    r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.Page << 8; r.edx = ((DWORD)row << 8) | col;
     prtsc_int10(&r);                                   /* set cursor  */
-    r.eax = 0x0800; r.ebx = (DWORD)g_prtsc.page << 8;
+    r.eax = 0x0800; r.ebx = (DWORD)g_prtsc.Page << 8;
     prtsc_int10(&r);                                   /* read cell   */
     return (uint8_t)r.eax;
 }
@@ -3160,24 +3160,24 @@ static void prtsc_bop(volatile BYTE *tib, int begin)
     int rc, i;
     if (begin) {
         ntvdd_regs r;
-        if (g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        if (g_prtsc.IsActive) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
         for (i = 0; i < 9; ++i) g_prtsc_sav[i] = VDM_REG(tib, vr[i]);
-        g_prtsc_status = PRTSC_BUSY;
+        g_prtsc_status = BIOS_PRINT_SCREEN_STATUS_BUSY;
         ZeroMemory(&r, sizeof r);
         r.eax = 0x0F00; prtsc_int10(&r);               /* AH = columns, BH = page */
         {   uint8_t cols = (uint8_t)(r.eax >> 8), page = (uint8_t)(r.ebx >> 8);
             ZeroMemory(&r, sizeof r);
             r.eax = 0x0300; r.ebx = (DWORD)page << 8; prtsc_int10(&r);
-            bios_prtsc_begin(&g_prtsc, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
+            BiosPrintScreenBegin(&g_prtsc, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
                              (uint16_t)r.edx); }
         ++g_prtsc_jobs;
-        rc = bios_prtsc_step(&g_prtsc, 0, prtsc_readc, 0, &ch);
+        rc = BiosPrintScreenStep(&g_prtsc, 0, prtsc_readc, 0, &ch);
     } else {
-        if (!g_prtsc.active) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
-        rc = bios_prtsc_step(&g_prtsc, (uint8_t)(VDM_REG(tib, VTIB_EAX) >> 8),
+        if (!g_prtsc.IsActive) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
+        rc = BiosPrintScreenStep(&g_prtsc, (uint8_t)(VDM_REG(tib, VTIB_EAX) >> 8),
                              prtsc_readc, 0, &ch);
     }
-    if (rc == PRTSC_EMIT) {
+    if (rc == BIOS_PRINT_SCREEN_STEP_EMIT) {
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ch;  /* AH=00h */
         VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;                               /* LPT1   */
         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -3185,10 +3185,10 @@ static void prtsc_bop(volatile BYTE *tib, int begin)
     }
     {   ntvdd_regs r;
         ZeroMemory(&r, sizeof r);
-        r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.page << 8; r.edx = g_prtsc.cursor;
+        r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.Page << 8; r.edx = g_prtsc.Cursor;
         prtsc_int10(&r); }
-    g_prtsc_status = (rc == PRTSC_ERROR) ? PRTSC_ERR : PRTSC_OK;
-    if (rc == PRTSC_ERROR) ++g_prtsc_errs;
+    g_prtsc_status = (rc == BIOS_PRINT_SCREEN_STEP_ERROR) ? BIOS_PRINT_SCREEN_STATUS_ERROR : BIOS_PRINT_SCREEN_STATUS_OK;
+    if (rc == BIOS_PRINT_SCREEN_STEP_ERROR) ++g_prtsc_errs;
     for (i = 0; i < 9; ++i) VDM_REG(tib, vr[i]) = g_prtsc_sav[i];
     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
 }
@@ -29085,8 +29085,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
          too. Same number as the INT 09h stub's BOP, told apart by address. */
     if (bn == 0x09 && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-        if (ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN || ip == DOS_KBDACT_OFF + KBDACT_P5_NEXT) {
-            prtsc_bop(tib, ip == DOS_KBDACT_OFF + KBDACT_P5_BEGIN);
+        if (ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN || ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT) {
+            prtsc_bop(tib, ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN);
             VDM_REG(tib, VTIB_EIP) += 3;
             V86BOP_RET(V86BOP_DONE);
         }
@@ -31233,14 +31233,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         unsigned k;
         for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
         /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
-        for (k = 0; k < sizeof(bios_kbdact_code); ++k) bs[DOS_KBDACT_OFF + k] = bios_kbdact_code[k];
+        for (k = 0; k < sizeof(g_BiosKeyboardActionCode); ++k) bs[DOS_KBDACT_OFF + k] = g_BiosKeyboardActionCode[k];
         /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
              A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
              that kbdact_entry refuses to enter (p_ivtkbd), so Print Screen called nothing
              and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
              since the PC has a routine here; ours prints the screen through INT 17h and
              keeps its status HOST-side -- see prtsc_bop for why not at 0050:0000. */
-        *(volatile WORD *)(ULONG_PTR)(0x05 * 4)     = (WORD)(DOS_KBDACT_OFF + KBDACT_P5);
+        *(volatile WORD *)(ULONG_PTR)(0x05 * 4)     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
         *(volatile WORD *)(ULONG_PTR)(0x05 * 4 + 2) = DOS_CTAB_SEG;
     }
 
@@ -33272,7 +33272,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
                  where the byte's action says -- a side-call, or brk's bare IRET. */
             if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG
-                && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_KBDACT_OFF + KBDACT_K4F_BOP) {
+                && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT_BOP) {
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 int ko;
                 HOST_LOCK();
@@ -33284,7 +33284,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_SET16(tib, VTIB_EAX, peekw((ss << 4) + sp));          /* pop ax */
                 VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | ((sp + 2) & 0xFFFF);
                 ko = kbdact_entry(kact);
-                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (ko >= 0 ? ko : KBDACT_IRET));
+                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (ko >= 0 ? ko : BIOS_KEYBOARD_ACTION_IRET));
                 continue;
             }
             /* ── #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
@@ -33306,7 +33306,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | sp;
                     VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (unsigned)sc));
                     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
-                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + KBDACT_K4F);
+                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT);
                     ++g_kb4f_calls;
                     continue;
                 }

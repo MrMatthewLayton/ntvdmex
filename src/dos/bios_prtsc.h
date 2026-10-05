@@ -29,71 +29,114 @@
  *     AH=02h/08h calls and does not see ours. INT 17h -- the half a program actually
  *     hooks to capture a print-out -- is the guest's.
  */
-#ifndef BIOS_PRTSC_H
-#define BIOS_PRTSC_H
+#ifndef NTVDMEX_DOS_BIOS_PRTSC_H
+#define NTVDMEX_DOS_BIOS_PRTSC_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
-#define PRTSC_STATUS_LIN  0x500u    /* 0050:0000 */
-#define PRTSC_BUSY        0x01
-#define PRTSC_OK          0x00
-#define PRTSC_ERR         0xFF
-#define PRTSC_AH_ERRMASK  0x29      /* INT 17h AH: time-out | I/O error | out of paper */
+/* The status byte at 0050:0000 and its values (kept host-side here: see above). */
+#define BIOS_PRINT_SCREEN_STATUS_LINEAR  0x500u    /* 0050:0000 */
+#define BIOS_PRINT_SCREEN_STATUS_BUSY    0x01
+#define BIOS_PRINT_SCREEN_STATUS_OK      0x00
+#define BIOS_PRINT_SCREEN_STATUS_ERROR   0xFF
+/* INT 17h AH: time-out | I/O error | out of paper. */
+#define BIOS_PRINT_SCREEN_PRINTER_ERROR_MASK 0x29
 
-enum { PRTSC_EMIT = 0, PRTSC_DONE = 1, PRTSC_ERROR = 2 };
-enum { PRTSC_P_LF0, PRTSC_P_CR0, PRTSC_P_CELL, PRTSC_P_LF, PRTSC_P_CR, PRTSC_P_END };
+/* Rows when 0040:0084 is 0 (never set). */
+#define BIOS_PRINT_SCREEN_DEFAULT_ROWS   25
 
-typedef struct {
-    uint8_t  active;
-    uint8_t  cols, rows, page;
-    uint8_t  row, col, phase;
-    uint8_t  judge;                 /* the last byte out was a screen cell: test its AH */
-    uint16_t cursor;                /* AH=03h's DX, put back at the end                 */
-} bios_prtsc;
+/* The bytes the job sends besides the screen cells. */
+#define BIOS_PRINT_SCREEN_LINE_FEED       0x0A
+#define BIOS_PRINT_SCREEN_CARRIAGE_RETURN 0x0D
+#define BIOS_PRINT_SCREEN_BLANK_CELL      ' '      /* what a NUL cell prints as */
 
-/* `rows84` is 0040:0084 (rows - 1; 0 on a BIOS that never set it). */
-static inline void bios_prtsc_begin(bios_prtsc *s, uint8_t cols, uint8_t rows84,
-                                    uint8_t page, uint16_t cursor)
+/* What BiosPrintScreenStep returns. */
+enum {
+    BIOS_PRINT_SCREEN_STEP_EMIT = 0,
+    BIOS_PRINT_SCREEN_STEP_DONE = 1,
+    BIOS_PRINT_SCREEN_STEP_ERROR = 2
+};
+
+/* Where the job is: the initial line end, the cells, each row's line end, the end. */
+enum {
+    BIOS_PRINT_SCREEN_PHASE_INITIAL_LF,
+    BIOS_PRINT_SCREEN_PHASE_INITIAL_CR,
+    BIOS_PRINT_SCREEN_PHASE_CELL,
+    BIOS_PRINT_SCREEN_PHASE_LF,
+    BIOS_PRINT_SCREEN_PHASE_CR,
+    BIOS_PRINT_SCREEN_PHASE_END
+};
+
+typedef struct _BIOS_PRINT_SCREEN_JOB {
+    BYTE  IsActive;
+    BYTE  Columns, Rows, Page;
+    BYTE  Row, Column, Phase;
+    BYTE  ShouldTestStatus;       /* the last byte out was a screen cell: test its AH */
+    WORD  Cursor;                 /* AH=03h's DX, put back at the end                 */
+} BIOS_PRINT_SCREEN_JOB, *PBIOS_PRINT_SCREEN_JOB;
+
+typedef const BIOS_PRINT_SCREEN_JOB *PCBIOS_PRINT_SCREEN_JOB;
+
+/* Returns the character at (row, column) of the active page. */
+typedef BYTE (*PBIOS_PRINT_SCREEN_READ_CELL)(PVOID context, BYTE row, BYTE column);
+
+/* `bdaRowsMinusOne` is 0040:0084 (rows - 1; 0 on a BIOS that never set it). */
+static inline VOID BiosPrintScreenBegin(_Out_ PBIOS_PRINT_SCREEN_JOB job, _In_ BYTE columns,
+                                        _In_ BYTE bdaRowsMinusOne, _In_ BYTE page,
+                                        _In_ WORD cursor)
 {
-    s->active = 1;
-    s->cols = cols; s->rows = (uint8_t)(rows84 ? rows84 + 1 : 25); s->page = page;
-    s->row = s->col = 0; s->phase = PRTSC_P_LF0; s->judge = 0; s->cursor = cursor;
+    job->IsActive = TRUE;
+    job->Columns = columns;
+    job->Rows = (BYTE)(bdaRowsMinusOne ? bdaRowsMinusOne + 1 : BIOS_PRINT_SCREEN_DEFAULT_ROWS);
+    job->Page = page;
+    job->Row = job->Column = 0; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_LF;
+    job->ShouldTestStatus = FALSE; job->Cursor = cursor;
 }
 
-/* The next byte for INT 17h. `ah` is what INT 17h answered for the PREVIOUS byte
-   (ignored for the first one and after a line-end byte). PRTSC_EMIT -> *out is the
-   byte; PRTSC_DONE / PRTSC_ERROR -> the job is over and `active` is clear. `readc`
-   returns the character at (row, col) of the active page. */
-static inline int bios_prtsc_step(bios_prtsc *s, uint8_t ah,
-                                  uint8_t (*readc)(void *ctx, uint8_t row, uint8_t col),
-                                  void *ctx, uint8_t *out)
+/* The next byte for INT 17h. `printerStatus` is the AH INT 17h answered for the PREVIOUS
+   byte (ignored for the first one and after a line-end byte). BIOS_PRINT_SCREEN_STEP_EMIT
+   -> *nextByte is the byte; BIOS_PRINT_SCREEN_STEP_DONE / BIOS_PRINT_SCREEN_STEP_ERROR ->
+   the job is over and `IsActive` is clear. `readCell` returns the character at
+   (row, column) of the active page. */
+static inline INT BiosPrintScreenStep(_Inout_ PBIOS_PRINT_SCREEN_JOB job,
+                                      _In_ BYTE printerStatus,
+                                      _In_ PBIOS_PRINT_SCREEN_READ_CELL readCell,
+                                      _In_opt_ PVOID context, _Out_ PBYTE nextByte)
 {
-    uint8_t c;
-    if (!s->active) return PRTSC_DONE;
-    if (s->judge && (ah & PRTSC_AH_ERRMASK)) { s->active = 0; return PRTSC_ERROR; }
-    s->judge = 0;
-    switch (s->phase) {
-    case PRTSC_P_LF0: *out = 0x0A; s->phase = PRTSC_P_CR0; return PRTSC_EMIT;
-    case PRTSC_P_CR0:
-        *out = 0x0D;
-        s->phase = (s->rows && s->cols) ? PRTSC_P_CELL : PRTSC_P_END;
-        return PRTSC_EMIT;
-    case PRTSC_P_CELL:
-        c = readc(ctx, s->row, s->col);
-        *out = c ? c : (uint8_t)' ';
-        s->judge = 1;
-        if (++s->col >= s->cols) s->phase = PRTSC_P_LF;
-        return PRTSC_EMIT;
-    case PRTSC_P_LF: *out = 0x0A; s->phase = PRTSC_P_CR; return PRTSC_EMIT;
-    case PRTSC_P_CR:
-        *out = 0x0D;
-        s->col = 0;
-        s->phase = (++s->row >= s->rows) ? PRTSC_P_END : PRTSC_P_CELL;
-        return PRTSC_EMIT;
+    BYTE character;
+    if (!job->IsActive) return BIOS_PRINT_SCREEN_STEP_DONE;
+    if (job->ShouldTestStatus && (printerStatus & BIOS_PRINT_SCREEN_PRINTER_ERROR_MASK)) {
+        job->IsActive = FALSE; return BIOS_PRINT_SCREEN_STEP_ERROR;
+    }
+    job->ShouldTestStatus = FALSE;
+    switch (job->Phase) {
+    case BIOS_PRINT_SCREEN_PHASE_INITIAL_LF:
+        *nextByte = BIOS_PRINT_SCREEN_LINE_FEED; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_CR;
+        return BIOS_PRINT_SCREEN_STEP_EMIT;
+    case BIOS_PRINT_SCREEN_PHASE_INITIAL_CR:
+        *nextByte = BIOS_PRINT_SCREEN_CARRIAGE_RETURN;
+        job->Phase = (job->Rows && job->Columns) ? BIOS_PRINT_SCREEN_PHASE_CELL
+                                                 : BIOS_PRINT_SCREEN_PHASE_END;
+        return BIOS_PRINT_SCREEN_STEP_EMIT;
+    case BIOS_PRINT_SCREEN_PHASE_CELL:
+        character = readCell(context, job->Row, job->Column);
+        *nextByte = character ? character : (BYTE)BIOS_PRINT_SCREEN_BLANK_CELL;
+        job->ShouldTestStatus = TRUE;
+        if (++job->Column >= job->Columns) job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
+        return BIOS_PRINT_SCREEN_STEP_EMIT;
+    case BIOS_PRINT_SCREEN_PHASE_LF:
+        *nextByte = BIOS_PRINT_SCREEN_LINE_FEED; job->Phase = BIOS_PRINT_SCREEN_PHASE_CR;
+        return BIOS_PRINT_SCREEN_STEP_EMIT;
+    case BIOS_PRINT_SCREEN_PHASE_CR:
+        *nextByte = BIOS_PRINT_SCREEN_CARRIAGE_RETURN;
+        job->Column = 0;
+        job->Phase = (++job->Row >= job->Rows) ? BIOS_PRINT_SCREEN_PHASE_END
+                                               : BIOS_PRINT_SCREEN_PHASE_CELL;
+        return BIOS_PRINT_SCREEN_STEP_EMIT;
     default:
-        s->active = 0;
-        return PRTSC_DONE;
+        job->IsActive = FALSE;
+        return BIOS_PRINT_SCREEN_STEP_DONE;
     }
 }
 
-#endif /* BIOS_PRTSC_H */
+#endif /* NTVDMEX_DOS_BIOS_PRTSC_H */
