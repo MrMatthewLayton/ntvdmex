@@ -27,12 +27,12 @@ reference is useful for a *different* layer. Be precise about which.
 | **Linux dosemu / dosemu2** | **V86** via `vm86()` (then KVM) | The architectural *shape* we want: usermode host + kernel V86 + trap-and-reflect loop; real-mode memory image setup; fault/signal discipline | NT-specific structures (`VDM_TIB`, `NtVdmControl`) — wrong OS |
 | **DOSBox / DOSBox-X** | Software emulation | DOS API behaviour, device (VGA/SB/timer) semantics, DPMI/XMS/EMS reference, compatibility quirks | Anything about executing on the real CPU |
 | **PCem / 86Box** | Full machine emulation | Accurate hardware device behaviour (VGA/VESA, sound, timers) to mirror in our VDDs | Execution model; far heavier than we need |
-| **Shipping XP `ntvdm.exe` / `ntoskrnl` (disassembly)** | **V86** (the real thing) | The *only* ground truth for the `NtVdmControl` contract, `VDM_TIB` layout, low-memory setup | — (this IS the spec we must recover) |
+| **Shipping XP `ntvdm.exe` / `ntoskrnl` (studied for interoperability; run as an oracle)** | **V86** (the real thing) | The *only* ground truth for the `NtVdmControl` contract, `VDM_TIB` layout, low-memory setup | — (this IS the spec we must recover) |
 
 **Practical posture:** lean on **ReactOS** and **Wine** for DOS/VDD/WOW *logic and
 semantics*, but never assume either validates our V86 path; treat **dosemu** as the
 conceptual blueprint for the V86 host loop; recover the `NtVdmControl` / `VDM_TIB`
-contract from XP disassembly; use **DOSBox / PCem / 86Box** as oracles for device
+contract by studying XP's binaries for interoperability and measuring stock; use **DOSBox / PCem / 86Box** as oracles for device
 behaviour when building VDDs.
 
 ---
@@ -43,7 +43,7 @@ behaviour when building VDDs.
 |---|---|
 | ✅ **Behaviour** | What a program *does*, measured. Register values, byte dumps, timings, error strings. Facts about an interface are not copyrightable. |
 | ✅ **Published specifications** | DPMI 0.9/1.0, RBIL, Microsoft KB articles, OS ABI layouts. |
-| ✅ **Our own disassembly for interoperability** | Reading `krnl386.exe` to learn what it demands of a host. This is what most of session 30 was. |
+| ✅ **Studying Microsoft binaries for interoperability** | Reading `krnl386.exe` to learn what it demands of a host. This is what most of session 30 was. Only the resulting interface facts are recorded in this repo — never listings, instruction sequences or addresses inside the binary. |
 | ⚠️ **Clean-room reimplementations under a copyleft licence** | Readable as *documentation of semantics*. Do not copy expression. Same discipline as Nuked-OPL. |
 | ❌ **Leaked Microsoft source, or anything derived from it** | Including patch files against it — a patch quotes its context. |
 
@@ -127,7 +127,7 @@ Checked during session 30, against our two open unknowns:
 |---|---|---|
 | `INT 31h 04F3` | **None.** Not in the DPMI 0.9 spec, not in RBIL. It falls in the undocumented "true DPMI" space Windows implements beyond the published 0.9 surface. | rig: stock `ntvdm` |
 | SysVars `+0x6A` WOW block | **None.** Not documented anywhere; past the documented end of the DOS list of lists. | rig: stock `ntvdm` (measured — see session 30 part 7) |
-| krnl386's error strings | Microsoft KB Q220155 *"Troubleshooting NTVDM and WOW Startup Errors"* documents **no message text at all** — it is a troubleshooting flowchart. | the binary itself, `seg1:0xb9a9` |
+| krnl386's error strings | Microsoft KB Q220155 *"Troubleshooting NTVDM and WOW Startup Errors"* documents **no message text at all** — it is a troubleshooting flowchart. | the binary's own message strings |
 
 ★ **This is the finding, and it is a positive one.** The things blocking us are precisely
 the things nobody has written down, which is why the rig-as-oracle method is not a

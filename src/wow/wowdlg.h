@@ -9,17 +9,13 @@
  * ENDED THE PROGRAM THAT PUT IT UP.
  *
  * ── HOW THAT WAS SETTLED, AND BY WHOM ───────────────────────────────────────
- * Session 55 left the question written down; session 56 answered it by
- * disassembling USER.EXE at its own two call sites:
- *
- *     CreateDialog  seg1:0x4bd5  push 0   / lcall 0x047b:0x4c48
- *     DialogBox     seg1:0x4d0c  push 1   / lcall 0x047b:0x4d97
- *
- * ONE thunk (id 0xEF), and the last word pushed -- argument offset 0 -- is the
- * MODAL FLAG. Both USER exports return immediately after it. So there is no
- * 16-bit modal loop inside USER to fall back on: the 32-bit side is expected to
- * park the caller, run the dialog, and complete the original call with
- * EndDialog's result. That is exactly what this file does.
+ * Session 55 left the question written down; session 56 answered it at run time:
+ * CreateDialog and DialogBox both arrive here as ONE thunk (id 0xEF), and the
+ * word at argument offset 0 is the MODAL FLAG -- 0 from CreateDialog, 1 from
+ * DialogBox. Whatever the BOP answers, the 16-bit caller has its return value at
+ * once: no 16-bit modal loop runs on the far side to fall back on. The 32-bit
+ * side is expected to park the caller, run the dialog, and complete the
+ * original call with EndDialog's result. That is exactly what this file does.
  *
  * ⇒ MEASURED CONSEQUENCE OF NOT DOING IT (s56, TASKMAN on the rig): the dialog
  *   and all eight of its controls are built, `STAGE2: complete` follows, and
@@ -97,11 +93,9 @@
  *   window procedure. The log names both, so a run can correct either.
  */
 
-/* WM_INITDIALOG. ⚠ NOT read out of a guest yet -- it is the number every Win16
-   header and every dialog procedure's message chain agrees on, and COMMDLG's own
-   chain was read at `seg3:0x0966 cmp ax,0x110 / cmp ax,0x111` (see wowmsg.h),
-   which pins it as the message immediately before WM_COMMAND in a dialog
-   procedure's own switch. That is two independent sightings of the pair. */
+/* WM_INITDIALOG. The documented Win16 value, the message immediately before
+   WM_COMMAND (0x111); COMMDLG's dialog procedures handle the pair together
+   (see wowmsg.h). */
 #define WM_INITDIALOG16   0x0110
 
 /* Four is not a guess: a modal dialog may put up another one (a File > Open

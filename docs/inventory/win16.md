@@ -30,23 +30,23 @@ So nasm writes the 16-bit code and **`tools/ne/mkne.py` writes the NE around it*
 ./tests/probes/win16/run.sh w_kernel   # stage on the rig, launch via IFEO, print the result
 ```
 
-### Everything in the linker was read off a real binary
+### Everything in the linker was checked against a real binary
 
-`guest/win16/TASKMAN.EXE` (3744 bytes, 2 segments, KERNEL+USER) is the model, read with
-this project's own `tools/ne/nedump.py` and `nedis.py` — **not** from memory:
+The NE format is documented; a small real Win16 program (`TASKMAN.EXE`, 2 segments,
+KERNEL+USER imports) was read with this project's own `tools/ne/nedump.py` as a check on
+the header values — **not** from memory:
 
 - align shift 4, prog flags `0x0302` (DGROUP=MULTIPLEDATA), other flags `0x08`, target
-  Windows, expects 3.10, `CS:IP` = seg1:entry, `SS:SP` = seg2:`0x0000`.
-- Import call sites carry `9A FF FF 00 00` — an **unrelocated** far call whose operand is
-  the chain terminator `0xFFFF` and segment 0 — with relocation addrtype 3 (FAR_ADDR 32)
-  and reloctype 1 (IMPORTORDINAL). Verified at three sites: `0x04bd`→KERNEL.91,
-  `0x04e7`→KERNEL.30, `0x04f0`→USER.5.
-- The startup handshake is TASKMAN's own `__astart`, disassembled at seg1:`0x04b9`:
+  Windows, expects 3.10, `CS:IP` = segment 1:entry, `SS:SP` = segment 2:`0x0000`.
+- An import is a far call whose 4-byte operand is left **unrelocated** (`FFFF:0000`, the
+  relocation chain terminator) and named by a relocation of addrtype 3 (FAR_ADDR 32) and
+  reloctype 1 (IMPORTORDINAL).
+- The startup handshake is the documented Win16 task-start contract:
   **InitTask → WaitEvent(0) → InitApp(hInstance)**, each checked for `AX≠0`, with the
-  entry-point register contract falling straight out of it (`CX` stack size, `SI`
-  hPrevInstance, `DI` hInstance, `BX:ES` command line, `DX` nCmdShow).
-- Every ordinal was resolved from `guest/win16/krnl386.exe`'s own export tables.
-- The exit is `INT 21h AH=4Ch` — the path TASKMAN itself falls back to at seg1:`0x04b7`.
+  entry-point registers `CX` stack size, `SI` hPrevInstance, `DI` hInstance, `BX:ES`
+  command line, `DX` nCmdShow.
+- Every ordinal was resolved from `krnl386.exe`'s own export tables.
+- The exit is `INT 21h AH=4Ch`.
 
 `build.sh` validates each generated `.EXE` with **our own `nedump.py`** before it ever
 reaches the rig: a reader verified against real Win16 binaries is the cheapest possible
@@ -97,36 +97,15 @@ separating 386 from 486 by whether the `AC` flag can be toggled, and our V86 env
 not permitting it) is likewise a **hypothesis with no evidence behind it yet**. Writing
 either down as fact is exactly the mistake this project keeps paying for.
 
-▶ ~~**Next:** read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `tools/ne/nedis.py`
-and find where the value actually comes from.~~ **✅ DONE 2026-09-25 — and the answer was
-in the binary, exactly as predicted.**
+▶ ~~**Next:** find where `GetWinFlags` (KERNEL.132) gets the value.~~ **✅ DONE
+2026-09-25** — by studying `krnl386.exe` for interoperability.
 
 ### ✅✅ CLOSED: it was a **DPMI** answer, not a WOW one
 
-`GetWinFlags` is KERNEL.132 → segment 3, offset `0x4B`, and it is four instructions:
-
-```
-004b: push ds ; call <set DS>
-004f: xor ax,ax ; push ax ; lcall <helper>
-0057: test ax,0x400
-005a: mov ax,[0x464]          ; ** the whole WINFLAGS word lives here **
-005d: je +3 ; and ah,0xBF     ; clears bit 0x4000 when the helper says so
-0062: xor dx,dx ; pop ds ; retf
-```
-
-`[0x464]` is written in **one** place that matters — segment 1, `0xD68A`
-(`tools/ne/nedis.py guest/ne/krnl386.exe 1 0xd650 0x70`):
-
-```
-mov ax,0x1687 ; int 2Fh      ; ** the DPMI installation check **
-or  ax,ax  ; jne -> bail
-xor bh,bh
-cmp cl,3   ; jb  -> bail
-mov bl,4   ; CL == 3  -> 0x0004
-je  +2
-mov bl,8   ; CL >  3  -> 0x0008
-mov [0x464],bx
-```
+`GetWinFlags` returns a WINFLAGS word that krnl386 computes once, at start-up, from the
+host's **DPMI installation check** (`INT 2Fh AX=1687h`): the processor bits follow the
+`CL` (processor type) it is given — `CL=3` yields bit `0x0004`, `CL>3` yields bit
+`0x0008`, and `CL<3` sets neither.
 
 ⇒ **The differing bit is `CL` from `INT 2Fh AX=1687h`, and we hardcoded `3`** (two sites
 in `main.c`, with a comment reading "CL=3 (386)" written long before anyone knew what

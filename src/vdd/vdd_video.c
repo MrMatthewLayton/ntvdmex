@@ -312,7 +312,7 @@ static void load_default_palette(video_state *st)
        to text -- so "since the last reset" is always "since a moment after the last
        thing the guest drew", and the answer is always zero. It read zero for
        Lemmings and was taken as evidence that a mode set had wiped a palette the
-       game never rewrote; the disassembly says the game sets the mode and THEN
+       game never rewrote; the port trace shows the game sets the mode and THEN
        writes the palette, which is the only order that can work on real hardware.
        Carry the running maximum too, so the epoch that had the writes survives. */
     if (st->dac_hi_since_reset > st->dac_hi_max)

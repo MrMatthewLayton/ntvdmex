@@ -83,11 +83,11 @@ NTVDM's, so it relocates the collision instead of removing it. The origin test i
 
 ### ✅ The encoding, confirmed across THREE binaries
 
-`C4 C4 <bop> <sub>` — **four bytes**, for `0x50` and `0x54`. First inferred from
-COMMAND.COM alone (at `0x283E`, `jnc` decodes at +4 and is junk at +3), then corroborated
-by scanning XP's own 16-bit VDM components, pulled off the rig:
+`C4 C4 <bop> <sub>` — **four bytes**, for `0x50` and `0x54`. Observed in XP's
+`COMMAND.COM` first, then confirmed by byte-scanning XP's own 16-bit VDM components, pulled
+off the rig:
 
-| binary | size | `BOP 0x50` | `BOP 0x54` | other |
+| binary (XP SP3) | size | `BOP 0x50` | `BOP 0x54` | other |
 |---|---|---|---|---|
 | `ntdos.sys` | 27,866 | **73 sites**, subs `00–4A` (74 distinct) | 4 sites, subs `04 05 07` | `0x5A` ×1 |
 | `ntio.sys` | 33,840 | 7 sites, subs `0D 11 3B 3D 3E 45` | 2 sites, subs `09 0C` | `0xFE` ×17, and ~20 more |
@@ -104,23 +104,22 @@ COMMAND.COM's `0x54` calls arrive at us directly. They are an oracle, not a depe
 
 ### What answering it does — measured, both ways
 
-`cfg\bop54.txt` = `cf0` (default) / `cf1`. The sub-01 site branches on carry immediately.
+`cfg\bop54.txt` = `cf0` (default) / `cf1`. The shell tests carry straight after sub 01.
 
 | answer | what COMMAND.COM does |
 |---|---|
 | `CF=1` | **polls the call forever** — one log line per spin, 268,435,180 bytes before it was rate-limited |
-| `CF=0` | proceeds to a **second, different** call: `sub 0x0E` at `0x5E6`, then spins in V86 with no traps |
+| `CF=0` | proceeds to a **second, different** call (`sub 0x0E`), then spins in V86 with no traps |
 
 Neither is known to be right; `CF=1` is known to be a dead end. ⛔ **The instrument is now
 rate-limited** — 16 in full, then only when the register signature changes. *An
 instrument that scales with a guest's spin rate is a denial-of-service on the thing you
 are trying to read.*
 
-### ✅✅ THE DISPATCH TABLE ITSELF, OUT OF XP's `ntvdm.exe`
+### ✅✅ Which BOP numbers stock NTVDM implements
 
-`ntvdm.exe` (420,864 bytes, XP SP3, image base `0x0F000000`) carries a **256-entry BOP
-dispatch table at RVA `0x064980`**. 195 of the entries share one stub (`0x0F05E04F`) —
-that is "unimplemented", and having it named makes the rest exact: **61 BOPs are real.**
+Of the 256 possible BOP numbers, XP SP3's `ntvdm.exe` routes 195 to a single
+"unimplemented" handler. **61 BOPs are real:**
 
 ```
 00 02 06 09 0E 10 11 12 13 14 15 16 17 18 19 1A 1D 21 40 42
@@ -133,117 +132,71 @@ that is "unimplemented", and having it named makes the rest exact: **61 BOPs are
 use every one of them. The origin test covers this — but it is the reason the origin test
 had to be the fix rather than renumbering.
 
-### ✅ `BOP 0x54` — the handler, and its sub-function table
+### ✅ `BOP 0x54` — the sub-function byte and its range
 
-`0x0F0085AE`, disassembled:
+★ NTVDM steps over a **one-byte sub-function** after `C4 C4 54` — the BOP is three bytes
+and the sub-function is the fourth, so a host that answers it must resume at `IP+4`.
+**17 sub-functions, `00`–`10`, are live**; nothing above `10` is. That is precisely the
+range used across COMMAND.COM (`00 01 02 06 08 09 0A 0B 0D 0E 0F 10`), `ntdos.sys`
+(`04 05 07`) and `ntio.sys` (`09 0C`).
 
-```
-push 0 ; call getIP        ; fetch the byte AFTER the BOP ...
-... ; movzx esi,byte [eax]  ; ESI = the SUB-FUNCTION
-call getIP ; inc eax ; call setIP    ; ... and STEP OVER IT
-push esi ; call 0x0F008606
-                 └─> mov eax,[ebp+8] ; call dword [eax*4 + 0x0F065040]
-```
-
-★ **The 4-byte encoding is now read off NTVDM's own dispatcher**, not inferred: it takes
-`IP`, adds **1**, and stores it back — `C4 C4 54` is three bytes and the sub-function is
-the fourth. That retires the inference from `jnc` decoding in §3.
-
-**The sub-function table at VA `0x0F065040` has exactly 17 live entries** — `0x00`–`0x10`,
-after which every slot repeats one address. That is precisely the range used across
-COMMAND.COM (`00 01 02 06 08 09 0A 0B 0D 0E 0F 10`), `ntdos.sys` (`04 05 07`) and
-`ntio.sys` (`09 0C`). Three binaries and the table agree.
-
-| sub | handler VA | notes |
+| sub | issued by | notes |
 |---|---|---|
-| `00` | `0F04EDE7` | **= exported `VDDTerminateVDM`** |
-| `01` | `0F00A966` | **see below — the one that blocks us** |
-| `02` | `0F015D63` | |
-| `03` | `0F05E04F` | **= the unimplemented stub. XP does not implement it either.** |
-| `04` | `0F008621` | used by `ntdos.sys` |
-| `05` | `0F00B848` | used by `ntdos.sys` |
-| `06` | `0F04DB4A` | `cmd`-module range (cf. `cmdCheckTemp` at `0F04CB2F`) |
-| `07` | `0F0198AE` | used by `ntdos.sys` |
-| `08` | `0F04EBBB` | `cmd`-module range |
-| `09` | `0F00D187` | used by `ntio.sys` |
-| `0A` | `0F04EB43` | `cmd`-module range |
-| `0B` | `0F04ECF2` | `cmd`-module range |
-| `0C` | `0F00C342` | used by `ntio.sys` |
-| `0D` | `0F012C94` | |
-| `0E` | `0F0156EC` | **the second one COMMAND.COM reaches** |
-| `0F` | `0F00BEF6` | |
-| `10` | `0F04C829` | `cmd`-module range |
+| `00` | COMMAND.COM | **same effect as the exported `VDDTerminateVDM`** — ends the VDM |
+| `01` | COMMAND.COM | **get the next command** — below |
+| `02` | COMMAND.COM | |
+| `03` | — | **unimplemented in XP as well** |
+| `04`, `05`, `07` | `ntdos.sys` | |
+| `06`, `08`, `0A`, `0B` | COMMAND.COM | |
+| `09` | `ntio.sys`, COMMAND.COM | |
+| `0C` | `ntio.sys` | |
+| `0D` | COMMAND.COM | the startup batch path — below |
+| `0E` | COMMAND.COM | **the second one COMMAND.COM reaches** — keyboard / code page |
+| `0F` | COMMAND.COM | the host's `PROMPT` — below |
+| `10` | COMMAND.COM | a one-bit query — below |
 
 ### ▶ `sub 0x01` = get the next command
 
-`0x0F00A966` allocates a `0x338` stack frame and fills a structure at `0x0F09BE48…BEDC`
-with: a `0x104`-byte (MAX_PATH) buffer at `[ebp-0x248]`, a second at `[ebp-0x28C]`, and a
-word `0x0105`. That is a **`VDM_COMMAND_INFO`**, and `GetNextVDMCommand` is in the
-import strings. ⇒ **sub 01 asks CSRSS what to run next** — exactly what a shell does at
-startup, and exactly the call our own STAGE1 already makes (`STAGE1: command fetch …`).
+**sub 01 asks CSRSS what to run next** (`GetNextVDMCommand`, with a `VDM_COMMAND_INFO`
+— an OS ABI, layout from ReactOS) — exactly what a shell does at startup, and exactly the
+call our own STAGE1 already makes (`STAGE1: command fetch …`). Input: `DS:DX` → a request
+block owned by the shell.
 
-It reads its request block from `DS:DX` — `(getDS()<<4) + getDX()`, then fields at
-`+0x0E`, `+0x1C`, `+0x1E`, `+0x20`. COMMAND.COM sets `DX=0x95D7` before the call, which
-is that block.
+#### The request block at `DS:DX`
 
-#### The request block at `DS:DX`, read off BOTH sides
+Field directions are the interface as established by studying both sides for
+interoperability, confirmed by running the shell against our answers:
 
-Field accesses in `0x0F00A966` (`ebx = (DS<<4)+DX`), cross-checked against what
-COMMAND.COM stores and reloads around its call site at guest `0x3CE`:
-
-| off | size | dir | evidence |
+| off | size | dir | meaning |
 |---|---|---|---|
-| `+0x00` | word | in | `movzx eax,word [ebx]` |
-| `+0x02` | word | in/out | read, then `mov [ebx+2],ax` |
-| `+0x04` | byte in, word out | in/out | `mov al,[ebx+4]` / `mov [ebx+4],ax` |
+| `+0x00` | word | in | |
+| `+0x02` | word | in/out | |
+| `+0x04` | byte in, word out | in/out | **the default drive** — the shell selects it with `AH=0Eh` straight after; the guest supplies it (`02` = C:) |
 | `+0x06` | word | out | |
-| `+0x08`, `+0x0A` | word | in | |
+| `+0x08:+0x0A` | seg:off | in | **the command-tail buffer** — layout below |
+| `+0x0C` | word | in | the tail buffer's capacity (`0x0080`) |
 | `+0x0E` | word | in | copied into the `VDM_COMMAND_INFO` |
-| `+0x10` | word | **out** | flags. COMMAND.COM: `test [blk+0x10],7` then `,1` |
-| `+0x12` | dword | **in+out** | a **cookie**: COMMAND.COM loads it from its own `[es:0x32B]/[es:0x32D]` *before* the call and stores it straight back *after* — it must round-trip |
-| `+0x16` | word | out | |
-| `+0x18` | word | in | compared against 0 |
-| `+0x1A` | word | out | COMMAND.COM keeps the low byte at `[es:0x32F]` |
-| `+0x1C`:`+0x1E` | seg:off | in | combined as `(seg<<4)+off` |
-| `+0x20` | word | in/out | |
-| `+0x22` | word | out | status — XP writes `4`, `8` or `9` |
+| `+0x10` | word | **out** | **redirection flags**: bit 0 stdin, bit 1 stdout, bit 2 stderr. Zero for an interactive shell |
+| `+0x12` | dword | **in+out** | **the interactive switch** — NULL when nothing is redirected; see below |
+| `+0x16` | word | out | **the code page** — the shell compares it with `AH=66h/01`'s `BX` and issues `AH=66h/02` if they differ (behind the `INT 2Fh AX=1400h` NLSFUNC check) |
+| `+0x18` | word | in | |
+| `+0x1A` | word | out | low byte gates the keyboard path — must be **0** |
+| `+0x1C:+0x1E` | seg:off | in | **the program-name buffer** |
+| `+0x20` | word | in/out | the name buffer's capacity |
+| `+0x22` | word | out | **the TYPE of the program to run** — below |
 
-**Implemented as a defined "no command"**: zeros into the OUT fields, `AX=0`, `CF=0`,
-and `+0x12` **deliberately preserved**. ⚠ That the zeros *mean* "nothing to run" is a
-claim, not a decode — but the alternative is not neutral: leaving the block alone hands
-COMMAND.COM whatever was already in its memory. **A defined answer is falsifiable; an
-uninitialised one is not.** Measured: it now proceeds past sub 01 every time.
+★ **A defined answer is falsifiable; an uninitialised one is not.** Leaving the block
+alone hands COMMAND.COM whatever was already in its memory. But equally: *a named wrong
+value is worse than an unchanged right one* — sub 01 writes only the fields it can name.
 
-### ✅ `sub 0x0E` = the keyboard / code-page configuration
+#### ⛔ `+0x04` IS THE DEFAULT DRIVE, and zeroing it sent the shell to A:
 
-`0x0F0156EC`, and the imports name it outright:
-
-```
-call [GetSystemDefaultLangID] ; cmp si,0x411        <- LANG_JAPANESE
-  ├─ yes: call [GetKeyboardType] (USER32) ; lengths 0x1B5 / 0x3A4 ; writes "JP"
-  └─ no : lea eax,[ebp-0x18] ; call [GetConsoleKeyboardLayoutNameA]
-```
-
-`0x1B5` = **437**, the US OEM code page. `0x3A4` = **932**, Japanese Shift-JIS. And the
-call site fits: immediately before it COMMAND.COM issues `INT 2Fh AX=AD80h`, the KEYB
-installed-check, then passes `DS:SI` = a buffer with `CX = 0x539` (1337 bytes).
-
-⇒ **sub 0E asks the host for the console's keyboard layout and code page.**
-
-### ⛔ `+0x04` IS THE DEFAULT DRIVE, and zeroing it sent the shell to A:
-
-Found by running it. COMMAND.COM, two instructions after `sub 01` returns:
-
-```
-guest 0x6B8   mov dx,[0x95DB]      ; = blk+0x04
-guest 0x6BC   mov [0x9612],dl
-guest 0x6C0   mov ah,0x0E ; int 21h ; SELECT DEFAULT DRIVE
-```
-
-A zero there is drive 0 = **A:**, and our own handler said so in the same log —
-*"drive A: exists but is not ready … selected as the DOS current drive anyway"* — while
-the shell went quiet. Now filled from `dos_int21_cur_drive()`, and the trace reads
-`21:0e/80 … dx=0002` = **C:**.
+Found by running it. Straight after sub 01 returns, the shell selects `+0x04` as the
+default drive (`INT 21h AH=0Eh`). A zero there is drive 0 = **A:**, and our own handler
+said so in the same log — *"drive A: exists but is not ready … selected as the DOS current
+drive anyway"* — while the shell went quiet. The trace now reads `21:0e/80 … dx=0002` =
+**C:** — and it turned out the guest already supplies `02`: **it was never ours to fill
+in**, so sub 01 now leaves it alone.
 
 ★ **This is what "a defined answer is falsifiable" buys.** The wrong value showed up in
 one run and named its own field. An uninitialised block would have produced a different
@@ -253,64 +206,108 @@ wrong drive each run and read as flakiness.
 rather than re-derived in the host, because a second copy of the rule would have
 silently dropped the `vdrive` case.
 
-### ▶ Where it stands
+#### The command-tail buffer (`+0x08:+0x0A`)
 
-With both sub-functions answered, XP's COMMAND.COM makes **32 INT 21h calls** (was 9 at
-the version gate), gets through code-page setup — `AH=66h/01`, `INT 2Fh AX=1400h`
-(NLSFUNC check) — and selects **C:** as its default drive. It then copies a counted
-string from `0x9327` to `0x93AA`, calls guest `0x5664`, and idles without further DOS
-calls: `frozen at CS:IP=0x0050:0x0037`, our own INT 08h stub's `CD 1C` chain, with
-`irq0_inj=4` and `raised_any=0x25B`. **It is taking interrupts, not wedged.**
+`[0]` = maximum, `[1]` = length, `[2..]` = text, then **CR** — the `INT 21h AH=0Ah`
+layout, because **the shell hands the same buffer to `AH=0Ah`** for its keyboard reads. It
+sets `[0]` to `0x80` once, at start-up, and never again.
 
-⚠ `AH=66h` looked like the gap — it returned `AX` unchanged — and **it is fully
-implemented** (`dos_int21.c:1204`, `BX=DX=437`). AX simply is not one of its outputs.
-That is the **fourth** time the "AX unchanged ⇒ unserviced" heuristic would have
-invented a gap; the file's own `dos622_defines` comment warns about exactly this.
+⇒ **Write the length at `[1]`, the text from `[2]`, a CR after it, and never touch `[0]`.**
+The CR is the only load-bearing byte for the parser: with no CR in the buffer the shell's
+parser scans the whole 64K segment and never leaves — the "spinning in V86 with no traps"
+the headless deadline kept killing.
 
-### ✅ Guest `0x5664` was the command-line PARSER, and it had nothing to parse
+#### ✅ `+0x22` = the program TYPE, by extension
+
+Stock sets it from the last four characters of the program name:
+
+| name | `+0x22` |
+|---|---|
+| ends `.BAT` | `2` |
+| ends `.EXE` | `4` |
+| ends `.COM` | `8` |
+| anything else, or a name of 6 characters or fewer | `9` |
+
+So `sub 01` returns *three* things, not one: a command **tail** (`+0x08:+0x0A`), a program
+**name** (`+0x1C:+0x1E`, capacity `+0x20`), and that program's **type** (`+0x22`). On the
+no-program path the shell empties the name buffer itself.
+
+All three are now answered: the tail as before, the name from `progpath` on the first
+call only (⚠ **not** `g_app2` — on the rig CSRSS names `dosstub.com`, the harness stub),
+the type by XP's own extension rule, and empty/`9` on every call after.
+
+⛔ An earlier note here read `+0x22`'s three observed values as *"a status enumeration,
+one of them very likely 'no more commands'"*. It was not; it is the type.
+
+#### ★★ `+0x12` is not a cookie — it is the interactive switch
+
+The shell loads the dword from its own state before the call and stores it straight back
+after, which is exactly what carrying an opaque handle looks like — so it was first
+*preserved*. **A zero dword there means "nothing is driving me: read the keyboard"**, and
+stock returns zero in precisely the case where nothing is redirected (the same condition
+that makes `+0x10` zero). ⛔ *Preserving* it was the bug: the guest reloads its own
+non-zero state, we hand it back, and it concludes it is being driven. Now zeroed, tied to
+the same condition as the flags.
+
+### ✅ `sub 0x0E` = the keyboard / code-page configuration
+
+Issued straight after `INT 2Fh AX=AD80h` (the KEYB installed-check), with `DS:SI` → a
+buffer and `CX = 0x539` (1337 bytes); output in `DX`. ⇒ **sub 0E asks the host for the
+console's keyboard layout and code page** (stock: the console's layout; code page 932 on
+a Japanese-language system). Ours answers `DX=0` — no KEYB to load.
+
+### ✅ `sub 0x10` = a one-bit query
+
+Output in `AL`, tested zero/non-zero; stock answers 0 or 1 from a single host flag. We
+were not setting `AL` at all — an unimplemented call that still ANSWERS, at random. Now
+**`AL = 0`**, the value the keyboard path needs (below).
+
+### ✅ `sub 0x0F` = the host's `PROMPT`
+
+`BX` in (0, or a block size after an `AH=48h`/`49h` allocation), `BX` out — the shell
+compares it with the size it holds. Stock answers from the host's `PROMPT` environment
+variable when it is in that mode, and otherwise returns **`BX = 0`**. Our first answer was `BX = 0`,
+XP's own default; §2b has the current one. (Previously answered with no register set at
+all, i.e. the
+guest read whatever it happened to be holding — as was `sub 0D`.)
+
+### ✅ `sub 0x0D` = "give me a path to open" — the startup batch file
+
+With `/p` the shell allocates a 7-paragraph block (`AH=48h`), issues the BOP with `DS:DX`
+into it, and **immediately** opens it (`AX=3D00h`). Stock writes an **OEM-code-page
+path, at most `0x40` bytes**, there. Which path is an inference from context (stock uses
+`autoexec.nt`, and this is the `/p` startup path) — **but it is verified by behaviour**:
+whatever we write is what the guest opens next:
 
 ```
-guest 0x31F4  mov si,0x93AC
-       loop:  lodsb / cmp al,0x22 (quote) / cmp al,0x0D / jnz loop
+sub 0D answered: startup batch [C:\AUTOEXEC.BAT] at 0x0000D6F0
+INT21 AH=3Dh [C:\AUTOEXEC.BAT] -> AX=0x05
 ```
 
-**With no CR in the buffer, SI walks the whole 64K segment and never leaves** — exactly
-the "spinning in V86 with no traps" the headless deadline kept killing.
+⛔ **We do not default to XP's `AUTOEXEC.NT`, deliberately.** The real one loads
+`mscdexnt.exe`, `redir` and **`dosx`** — NT's DPMI host, which we provide ourselves and
+which has no business in our VDM. `C:\AUTOEXEC.BAT` is the honest default for a DOS that
+is ours; `cfg\autoexec.txt` points it anywhere, including at NT's. ⚠ A path that does not
+exist is the normal case — a DOS with no AUTOEXEC.BAT simply has none. The bug was the
+empty string, not the missing file.
 
-Dumping the request block *before* writing it named the buffer:
+### ▶ `/p` — the permanent-shell switch
 
-```
-blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
-           +00     +02     +04     +06     +08     +0A     +0C
-```
+**Stock starts its shell with `/p`** on the PSP command tail; we were launching it with no
+arguments at all. Without `/p` COMMAND.COM is a one-shot command runner; with it, it is
+the resident shell. ⚠ This was visible from the start and was read straight past for two
+sessions, because the answer was being sought inside the BOP interface.
 
-⇒ **`+0x08:+0x0A` = `0x9342:0x9327`**, and `0x9327` is exactly the address COMMAND.COM's
-own copy loop reads (`cl=[0x9327]; cx+=3; movsb` to `0x93AA`, parse from `0x93AC`). Two
-independent sources, the same address. Layout: `[0]` length, `[1]` unused, `[2..]` text,
-then **CR**. We now write the empty tail `00 00 0D` there.
+### ⛔ `AH=66h` was not the gap
 
-★ And the dump settled the design as well as the address: the guest already supplies
-`+0x04 = 02` (C:). **It was never ours to fill in.** So sub 01 now writes only the flags
-word and the command tail, and leaves every field it cannot name alone — *a named wrong
-value is worse than an unchanged right one.*
-
-### ⛔ Where it is now: a LOOP, not a hang
-
-With a CR to find, COMMAND.COM stops scanning and runs its init — and then runs it
-again, forever:
-
-```
-21:19/0d  21:5d/09  21:5d/08  21:53/02  21:19/00  21:66/01  21:0e/80   ×N
-```
-
-It asks `sub 01` again each time, is told "no command", and restarts. That is progress —
-it is executing rather than scanning memory — but `flags = 0` evidently does not mean
-"go interactive". COMMAND.COM branches on `test [blk+0x10],7` then `test …,1`; **the
-flag bits are the next thing to earn.**
+`AH=66h` looked like the gap — it returned `AX` unchanged — and **it is fully implemented**
+(`dos_int21.c:1204`, `BX=DX=437`). AX simply is not one of its outputs. That is the
+**fourth** time the "AX unchanged ⇒ unserviced" heuristic would have invented a gap; the
+file's own `dos622_defines` comment warns about exactly this.
 
 ### ⛔⛔⛔ FOUR INSTRUMENTS IN ONE SESSION NEEDED A CAP
 
-The loop turned every per-call log line into a file. In order:
+The shell's loop turned every per-call log line into a file. In order:
 
 | instrument | what it wrote | fix |
 |---|---|---|
@@ -352,177 +349,22 @@ cfg\bopcmd.txt = "ver"        cfg\bopcmd.txt = "dir"
 COMMAND.COM's parser → execution → console output. Two different commands, one a builtin
 and one that walks the filesystem.
 
-### ✅ `+0x10` decoded: three bits, one per redirected handle
+### ⛔⛔ THE PRIVATE NT CONTRACT IS NOT ONLY BOPs — IT REACHES INTO INT 21h
 
-`0x0F00A966` does not write `+0x10` directly; it passes `&blk[0x10]` to `0x0F04D568`,
-which builds it from the `VDM_COMMAND_INFO`:
+XP's COMMAND.COM issues **`INT 21h AH=53h` with `AL` = 2, 5 and 7**, uses `AL` as a
+selector and reads the answer back out of `AL` (and, for `AL=2`, `CF`). Documented
+`AH=53h` is **BPB→DPB**, takes `DS:SI`/`ES:BP`, and has **no `AL` sub-function**: this is
+a private query, and only stock can answer what it means.
 
-```
-flags = 0
-if [info+0x10] != 0: flags  = 1        ; StdIn
-if [info+0x14] != 0: flags |= 2        ; StdOut
-if [info+0x18] != 0: flags |= 4        ; StdError
-if flags == 0: early out
-```
+★ Our handler returned `AX=1`, `CF=1` — "unimplemented" — and **that was an answer, not
+an absence**: the shell acts on it.
 
-⇒ COMMAND.COM's `test [blk+0x10],7` is *"was anything redirected?"* and `test …,1` is
-*"was stdin?"*. **Zero is correct for an interactive shell**, so our answer was right
-here — worth stating, because it was a guess until this read.
-
-Also pinned from the same tail: `+0x16` is the **code page** (COMMAND.COM compares it
-against `AH=66h/01`'s `BX` and issues `AH=66h/02` if they differ, guarded by the
-`INT 2Fh AX=1400h` NLSFUNC check), `+0x04` ← `[0x0F09BEDA]`, `+0x06` ← `[0x0F077338]`,
-`+0x1A` ← the byte at `[0x0F09BEDC]`.
-
-### ⛔ What is still missing: "you are interactive"
-
-With an empty answer COMMAND.COM asks again immediately — **1,255,260 `sub 01` calls in a
-30-second run**. That is its *command loop*: get a command, run it, repeat. It never
-prints a prompt or reads the keyboard, so nothing yet tells it that no more commands are
-coming and it should go interactive.
-
-#### ⛔ `+0x22` is NOT a status word — it is a file-extension dispatch
-
-I wrote that three values for one call *"is a status enumeration, and one of them is very
-likely 'no more commands'"*. It is not. `0x0F00AEA8..AF1E`:
-
-```
-ax = [0x0F09BED2]                       ; length of the program name
-if ax <= 6            -> +0x22 = 9      ; too short to carry an extension
-edi = nameptr + ax-5                    ; the last four characters
-strncmp(edi, ".EXE") == 0 -> +0x22 = 4
-strncmp(edi, ".COM") == 0 -> +0x22 = 8
-strncmp(edi, ".BAT") == 0 -> +0x22 = 2   else 9
-```
-
-The three constants are at VA `0x0F0037B0`/`B8`/`C0` and read **`.BAT`**, **`.COM`**,
-**`.EXE`**. ⇒ **`+0x22` is the TYPE of the program to run.**
-
-So `sub 01` returns *three* things, not one: a command **tail** (`+0x08:+0x0A`), a program
-**name** (`+0x1C:+0x1E`, capacity `+0x20`), and that program's **type** (`+0x22`). The
-guest agrees — at guest `0x3167` it loads `+0x22` and, on the no-program path, writes a
-zero to the first byte of the name buffer at `0x9473`, which is exactly the
-`+0x1C:+0x1E` we are handed.
-
-All three are now answered: the tail as before, the name from `progpath` on the first
-call only (⚠ **not** `g_app2` — on the rig CSRSS names `dosstub.com`, the harness stub),
-the type by XP's own extension rule, and empty/`9` on every call after.
-
-### ⛔ The loop is NOT an error path — it is the shell's main loop
-
-Every field is now well-formed and every one matches XP's own rule, and COMMAND.COM
-**still** asks ~1,250,000 times per 30-second run. Three answers tried — nothing,
-its own path with type 8, and `dosstub.com` with type 8 — all identical.
-
-★ That is the point: we already know it **executes** a command when given one and prints
-the result (`ver`, `dir`). So the loop is `for(;;) { get next command; run it; }` working
-exactly as designed — running flat out because our answer returns *immediately*.
-
-### ✅ THE INTERACTIVE PATH IS FULLY MAPPED (2026-09-25)
-
-COMMAND.COM has exactly **one** `AH=0Ah` site — guest `0x0A23`, inside a routine at guest
-`0x0A0D` that is called with `AL` as its parameter: **`AL=0` reads a line from the
-keyboard, `AL≠0` does not**. Four callers; the one that matters is guest `0x0C2F`.
-
-The gate chain in front of it, guest `0x0BF5`…`0x0C2F`:
-
-```
-cmp byte [0x327],1   ; jz  -> away          (not from sub 01)
-cmp byte [0x32F],0   ; jnz -> away          <- blk +0x1A, low byte
-C4 C4 54 10          ; or al,al ; jnz -> away   <- BOP 0x54 SUB 0x10
-cmp byte [0x32A],1   ; jnz -> away
-cmp word [0x32B],0   ; jz  -> PROMPT        <- blk +0x12, low half
-cmp word [0x32D],0   ; jnz -> away          <- blk +0x14, high half
-                       AL=0 ; call 0x0A0D   ; ** the prompt **
-```
-
-★★ **`+0x12` is not a cookie — it is the interactive switch.** I called it one because
-COMMAND.COM loads it from its own `[0x32B]/[0x32D]` before the call and stores it
-straight back after, which is exactly what carrying an opaque handle looks like. A
-**zero** dword there means *"nothing is driving me: read the keyboard"*. And XP writes
-zero in precisely this case: sub 01's tail calls `0x0F04D568`, which ORs one bit per
-non-null redirection handle and, when the result is 0, takes the early out at
-`0x0F04D5E4` — `xor ebx,ebx … mov eax,ebx ; ret 8` — returning **NULL**. ⛔ *Preserving*
-it was the bug: the guest reloads its own non-zero state, we hand it back, and it
-concludes it is being driven. Now zeroed, tied to the same condition as the flags.
-
-★ **`BOP 0x54 sub 0x10` is a one-bit query** and it sits on this path.
-`0x0F04C829` is five instructions: `cmp dword [0x0F06BB30],0 ; setnz al ; setAL ; ret`.
-We were not setting `AL` at all — an unimplemented call that still ANSWERS, at random.
-Now `AL = 0`.
-
-`+0x1A` is likewise not ours to leave alone: its low byte becomes `[0x32F]`, tested two
-gates earlier. Zeroed.
-
-### ✅✅✅ XP's COMMAND.COM PRINTS A PROMPT (2026-09-25)
-
-```
-C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\cmdcom>
-```
-
-Two things got it there, and **neither was a BOP field I had been staring at**.
-
-**1. `/p` — the permanent-shell switch, on the PSP command tail.** `ntvdm.exe` carries the
-format string `%s=%s%s /p %s\system32`; stock NTVDM launches its shell with `/p`, and we
-were launching it with no arguments at all. Without `/p` COMMAND.COM is a one-shot command
-runner; with it, it is the resident shell. ⚠ This was in the string dump from the start
-and I read straight past it for two sessions, because I was looking for the answer inside
-the BOP interface.
-
-**2. `sub 0x0D` = "give me a path to open" — the startup batch file.** The guest named
-this gap itself: with `/p` it allocates a 7-paragraph block (`AH=48h → 0x0D6D`), issues
-the BOP with `DS:DX` into it, and the **very next instruction** is `mov ax,0x3D00 ;
-int 21h`. We wrote nothing, so it opened `""` and our DOS said "path not found".
-
-XP's handler (`0x0F012C94`) takes a host ANSI string from `[0x0F09BFC4]` through
-`RtlInitAnsiString` → `RtlAnsiStringToUnicodeString` → `RtlUnicodeStringToOemString`,
-writing the OEM result to `(getDS()<<4)+getDX()` with a **`0x40`-byte cap**. Which path is
-an inference from context (`ntvdm.exe` carries `autoexec.nt`, and this is the `/p` startup
-path) — **but it is verified by behaviour**: whatever we write is what the guest opens
-next, and the log now reads
-
-```
-sub 0D answered: startup batch [C:\AUTOEXEC.BAT] at 0x0000D6F0
-INT21 AH=3Dh [C:\AUTOEXEC.BAT] -> AX=0x05
-```
-
-⛔ **We do not default to XP's `AUTOEXEC.NT`, deliberately.** The real one loads
-`mscdexnt.exe`, `redir` and **`dosx`** — NT's DPMI host, which we provide ourselves and
-which has no business in our VDM. `C:\AUTOEXEC.BAT` is the honest default for a DOS that
-is ours; `cfg\autoexec.txt` points it anywhere, including at NT's. ⚠ A path that does not
-exist is the normal case — a DOS with no AUTOEXEC.BAT simply has none. The bug was the
-empty string, not the missing file.
-
-### ⛔⛔ THE PRIVATE NT CONTRACT IS NOT ONLY BOPs -- IT REACHES INTO INT 21h
-
-Tracing the last gate backwards found the blocker **outside this surface entirely**.
-COMMAND.COM's *resident* part, guest `0x1692`:
-
-```
-mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
-mov al,7 ; mov ah,53h ; int 21h ; mov [0x328],al
-```
-
-Documented `AH=53h` is **BPB->DPB**, takes `DS:SI`/`ES:BP`, and has **no `AL`
-sub-function**. XP's COMMAND.COM uses it as a private query with `AL` as a selector and
-reads the answer out of `AL` (it also uses `AL=2`). Our handler returned `AX=1` and
-`CF=1` -- "unimplemented" -- which put a **1** in `[0x327]`, and three separate gates read
-`cmp byte [0x327],1 / jz` as *"do not be the interactive shell"*.
-
-★ So our "unimplemented" was not inert. **It was an answer, and the wrong one.**
-
-⚠ `AX=0` is **provisional and not measured**. It is "not 1", chosen to test whether
-`[0x327]` was the gate -- and it was not enough on its own. The right values can only come
-from `NTDOS.SYS`: a stock ntvdm run is the only oracle for a private call. **Do not
-promote it to a fact without that run.** (6.22's `COMMAND.COM` re-tested after the change:
-unaffected -- prompt, `ver`, `dir` all still correct.)
-
-### ✅✅ `AH=53h` MEASURED AGAINST STOCK NTVDM -- 8/8 AGREE
+#### ✅✅ `AH=53h` MEASURED AGAINST STOCK NTVDM — 8/8 AGREE
 
 `debug\rig\dosstock.bat P_INT53.COM` drops the IFEO key, runs the probe under stock,
 restores the key **unconditionally** and proves it back (before/after both read the same
 path, and the target is checked to exist). The bracket is modelled on `w16stock.bat`;
-`stockdump.bat` could not be reused -- it restores a hardcoded `C:\ntvdmex\` path that is
+`stockdump.bat` could not be reused — it restores a hardcoded `C:\ntvdmex\` path that is
 not where this rig's host lives.
 
 | `AX` in | stock | ours | | `AX` in | stock | ours |
@@ -533,27 +375,37 @@ not where this rig's host lives.
 | `5303` | `AX=0001 CF=1` | ✅ | | `5307` | `AX=5301 CF=0` | ✅ |
 
 ⇒ `AH` is preserved and `AL` carries a 0/1 answer for `02 04 05 06 07`; `01` and `03`
-are genuinely unsupported (`AX=1`, `CF=1` -- DOS's "invalid function").
+are genuinely unsupported (`AX=1`, `CF=1` — DOS's "invalid function").
 
-### ⛔⛔ AND THE MEASUREMENT OVERTURNED BOTH OF MY READINGS
-
-**1. The original "unimplemented" was accidentally RIGHT.** It returned `AX=1`, i.e.
-`AL=1` -- exactly what stock returns for `AL=5` and `AL=7`, the two COMMAND.COM stores.
-I "fixed" it to `AX=0` on a theory and made it **wrong**.
-
-**2. The theory was wrong too.** I read `cmp byte [0x327],1 / jz` as *"do not be the
-interactive shell"*. **Stock sets `[0x327]=1` and IS interactive**, so the jump target is
-the normal path and my polarity reading was backwards. Every conclusion that leaned on it
-is withdrawn.
-
-★ The value was marked **provisional** when it was guessed, and that is the only reason
-this is a correction rather than a fact quietly embedded in the code. **Guessing a value
-for a private call is not cheaper than measuring it -- it is the same work done twice, and
-the guess has to be found and removed.**
+⛔⛔ **And the measurement overturned a guess.** The original "unimplemented" `AX=1` was
+accidentally **right** for `AL=5`/`AL=7`; it had been "fixed" to `AX=0` on a theory and
+made **wrong**. The value was marked **provisional** when it was guessed, and that is the
+only reason this is a correction rather than a fact quietly embedded in the code.
+**Guessing a value for a private call is not cheaper than measuring it — it is the same
+work done twice, and the guess has to be found and removed.**
 
 ⚠ `AL=00`'s row was measured with `SI=0`/`BP=0`, as COMMAND.COM issues it. It is **not**
-a claim about the documented BPB->DPB call given a real BPB, which we still do not
+a claim about the documented BPB→DPB call given a real BPB, which we still do not
 implement.
+
+#### ⇒ `AH=53h AL=5` IS CONTEXT-DEPENDENT
+
+Stock's own shell **is** interactive, and (below) the shell only reads the keyboard if
+`AL=5` answers **0**. A standalone probe under stock measures **1**. Both cannot be true
+of the same question, so they are not the same question.
+
+✅ **Measured (s84, #142): redirection is NOT the difference.** `probe.inc` reports
+through stdout, so every earlier stock reading was taken with `> FILE` in place;
+`tests/probes/dos/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh`
+and needs no redirection. Stock, both ways, answers all eight identically
+(`5305 → AX=5301`, `5302 → 5300 CF=0`); only DS differs (`runs/s84/stock/`). So the
+remaining difference is the **caller**: a probe is always a child of stock's shell, and
+the `AL=0` answer can only come when the shell itself asks. The NTVDM-aware-shell branch
+in `main.c` stays the model, still marked provisional; `cfg\int53.txt` overrides it.
+
+⚠ **So `8/8 AGREE` means "agrees in the context we measured", not "is the right answer
+for the shell".** A private call measured outside the caller's own situation is a
+one-machine, one-moment reading.
 
 ### ✅ THE CONTROL I SHOULD HAVE RUN FIRST: what does STOCK do with the SAME launch?
 
@@ -567,9 +419,9 @@ The Vdm Redirector is already loaded
 C:\DOCUME~1\ALLUSE~1\DOCUME~1\NTVDMEX\DEBUG\TESTS\DOS>
 ```
 
-**Stock prints a banner and a prompt and then sits there too.** Launched this way -- as a
-*program*, with stdout redirected -- stock is no more interactive than we are. So the
-remaining difference is much smaller than "it works there and not here":
+**Stock prints a banner and a prompt and then sits there too.** Launched this way — as a
+*program*, with stdout redirected — stock is no more interactive than we were. So the
+remaining difference was much smaller than "it works there and not here":
 
 | | stock | ours |
 |---|---|---|
@@ -578,99 +430,41 @@ remaining difference is much smaller than "it works there and not here":
 | prompt | ✅ | ✅ |
 | interactive under redirected stdout | ❌ | ❌ |
 
-★ **One host is not a pass, and one host is not a FAILURE either.** I had been treating
-"not interactive" as our defect for two sessions without ever asking what the reference
-does in the same position. It does the same thing. The real difference is the banner --
-i.e. something earlier in start-up that we skip -- and the *launch path*: stock's own
-COMMAND.COM is started by `ntio.sys` during DOS boot, not run as a program.
+★ **One host is not a pass, and one host is not a FAILURE either.** "Not interactive" was
+treated as our defect for two sessions without ever asking what the reference does in the
+same position. It does the same thing. Stock's own COMMAND.COM is started by `ntio.sys`
+during DOS boot, not run as a program.
 
 ### ⛔⛔⛔ AND THE CONTROL LEFT THE RIG ROUTING TO STOCK
 
 `dosstock.bat`'s first cut ran the guest **inline and waited for it**. Fine for a probe,
-which exits. `COMMAND.COM /p` does not exit -- it sits at its prompt -- so the batch
+which exits. `COMMAND.COM /p` does not exit — it sits at its prompt — so the batch
 never reached its restore, and the box was left with **no IFEO key**: every DOS and Win16
 launch silently going to stock, with logs that would look entirely plausible.
 
 Caught within a minute because the state file had no `---- IFEO after ----` section, and
 repaired by hand (`reg add`, then a probe run confirming our host answered again).
 
-⚠ `w16stock.bat` had this right -- `start` plus a timed kill -- and I did not copy it.
+⚠ `w16stock.bat` had this right — `start` plus a timed kill — and it was not copied.
 **A bracket whose restore can be skipped by the thing it brackets is not a bracket.**
 Fixed, and re-run to prove the restore now happens.
 
-### ⛔ The banner is COMMAND.COM's own, behind THREE gates
+### ⛔ The banner is COMMAND.COM's own
 
 Stock's extra output is not a mystery of ours: **`Microsoft(R) Windows DOS` /
-`(C)Copyright Microsoft Corp 1990-2001` lives inside `COMMAND.COM`**, in the same
-counted-message table as `Incorrect DOS version` (guest `0x21D7`), at guest `0x220A`.
-`ntdos.sys`, `ntio.sys` and `ntvdm.exe` do not contain it. (*"The Vdm Redirector is
-already loaded"* comes from `redir`, an `autoexec.nt` TSR we deliberately do not load --
-that line is **expected** to be absent.)
+`(C)Copyright Microsoft Corp 1990-2001` is COMMAND.COM's own message** (in the same
+message set as `Incorrect DOS version`); `ntdos.sys`, `ntio.sys` and `ntvdm.exe` do not
+contain it. (*"The Vdm Redirector is already loaded"* comes from `redir`, an
+`autoexec.nt` TSR we deliberately do not load — that line is **expected** to be absent.)
 
-Its print site, resident guest `0x1C22`:
+The shell prints it only when **all** of these hold: `INT 2Fh AX=5501h` was answered with
+`AX=0`, `AH=53h AL=5` did not answer 1, and a third start-up condition. Forcing
+`AL=5 → 0` alone did *not* produce it — and that experiment was **reverted**: it
+disagreed with the only measurement we have, and a guess that contradicts an oracle is
+worse than no change. (It was also graded on the **wrong symptom**: the banner is blocked
+independently, so it could not have shown the keyboard path opening even when it did.)
 
-```
-cmp byte [0x326],1 ; jz  -> skip
-cmp byte [0x327],1 ; jz  -> skip          <- from AH=53h AL=5
-cmp word [0x2B1],0 ; jnz -> skip
-mov dx,0x220A ; call print                <- the banner
-```
-
-### ⛔⛔ AND THIS QUALIFIES THE 8/8 RESULT
-
-Stock **prints** the banner. Our probe says stock's `AH=53h AL=5` returns `AL=1`. A `1`
-in `[0x327]` **skips** the banner. Both cannot be true of the same run, so one of these
-holds:
-
-- more gates decide it (**confirmed**: forcing `AL=5 -> 0` did *not* produce the banner,
-  so `[0x326]` and/or `[0x2B1]` also block), or
-- **the private query is context-dependent** -- our probe asked it as a standalone `.COM`,
-  and COMMAND.COM asks it as the shell during start-up.
-
-⚠ **So `8/8 AGREE` means "agrees in the context we measured", not "is the right answer
-for the shell".** A private call measured outside the caller's own situation is a
-one-machine, one-moment reading. The values are kept -- they are still the only measured
-ones -- but the row is marked *provisional-in-context* rather than verified.
-
-⚠ The experiment that established this (`AL=5 -> 0`) was **reverted**: it disagreed with
-the only measurement we have, and a guess that contradicts an oracle is worse than no
-change.
-
-### ✅✅ THE STATE BLOCK, DUMPED WHOLE -- the instrument that should have come first
-
-Every decision COMMAND.COM makes about being a shell is a `cmp byte [0x32x],n` against a
-handful of bytes in its **resident** data segment (`0x0100` for a `.COM`; the transient
-reaches them by loading `DS` from `[cs:0x95FE]`). The host now dumps them at each BOP:
-
-```
-cc[0x320..0x32F] = 00 00 00 00 01 00 01 01 01 00 01 00 00 00 00 00
-                               ^324 ^325 ^326 ^327 ^328 ^329 ^32A
-```
-
-| byte | value | meaning |
-|---|---|---|
-| `[0x326]` | **01** | banner gate A — **1 skips the banner** |
-| `[0x327]` | **01** | banner gate B, and the `jz` at guest `0x0BF5` — from `AH=53h AL=5` |
-| `[0x328]` | 01 | from `AH=53h AL=7` |
-| `[0x32A]` | **01** | ⛔ **"1 IS THE LOOP" WAS BACKWARDS — see the correction below** |
-| `[0x32B]/[0x32D]` | 00 00 | our `blk+0x12` ✅ |
-| `[0x32F]` | 00 | our `blk+0x1A` ✅ |
-
-★ Five turns of *find a gate, answer it, re-run* produced one caveat. **One dump of the
-whole block produced the entire decision state at once**, and it should have been the
-first instrument, not the sixth. The pattern is the same one the caller-off-the-stack
-instrument taught at the start of this work: *stop deducing state you can print.*
-
-### ✅ `[0x326]` traced: `INT 2Fh AX=5501h`, and stock ANSWERS it
-
-Resident guest `0x16E5`:
-
-```
-mov ax,5501h ; int 2Fh
-or  ax,ax
-jnz -> [0x326] = 1          ; banner SUPPRESSED
-    -> store DS:SI away     ; banner allowed
-```
+#### `INT 2Fh AX=5501h` — stock ANSWERS it
 
 `tests/probes/dos/p_2f55.asm`, measured both ways:
 
@@ -681,12 +475,12 @@ jnz -> [0x326] = 1          ; banner SUPPRESSED
 | stock | `5500` | `5500` (**not** answered) | unchanged |
 
 ⇒ Stock answers `5501h` with `AX=0` **and a pointer**, so its banner prints; we answer
-nothing, so `[0x326]=1` and ours does not. `5500h` is a useful negative: stock does not
-answer it either, so a handler must not claim the whole `55xx` range.
+nothing, so ours does not. `5500h` is a useful negative: stock does not answer it either,
+so a handler must not claim the whole `55xx` range.
 
-⚠ **NOT IMPLEMENTED, deliberately.** COMMAND.COM *stores* that `DS:SI` and uses it later.
+⚠ **NOT IMPLEMENTED, deliberately.** COMMAND.COM *keeps* that `DS:SI` and uses it later.
 Returning `AX=0` with a pointer to something we invented would be an unimplemented call
-answering at random -- the exact failure this file already records twice. The banner is
+answering at random — the exact failure this file already records twice. The banner is
 cosmetic.
 
 ---
@@ -747,22 +541,41 @@ API no game exercises, and it is the reason a shell was chosen as the M9 test.
 on by default for an NTVDM-aware shell — see *Status* at the top. `cfg\int53.txt` remains
 an explicit override, and the host prints the table and its source every run.
 
+### ✅ THE KEYBOARD PATH: what the host must answer
+
+XP's COMMAND.COM reads a line from the keyboard (`INT 21h AH=0Ah`, into the sub 01 tail
+buffer) only when every one of these host answers says so:
+
+| # | host answer | value for "read the keyboard" |
+|---|---|---|
+| 1 | `INT 21h AX=5302h` — issued at the top of each pass of the shell's main loop | **`CF=1`** (`CF=0` sends it straight to sub 01 for another command) |
+| 2 | `INT 21h AX=5305h`, asked once at start-up | **`AL=0`** |
+| 3 | sub 01's `+0x1A` low byte | **0** |
+| 4 | `BOP 0x54 sub 0x10` | **`AL=0`** |
+| 5 | sub 01's `+0x12` dword | **0** (nothing redirected) |
+
+With `CF=0` on (1) — true of every run before this was found — the rest are **never
+consulted at all**, which is why `sub 0x10` had never once fired. (1) and (2) have to
+change together, and that was measured one at a time on the rig:
+
+| `AL=2` | `AL=5` | result |
+|---|---|---|
+| `CF=0` (default) | `AL=1` (default) | 32× `sub 01`, 32× `sub 0E`, `sub 0x10` never reached |
+| **`CF=1`** | `AL=1` | **identical** — the path bails at its first condition |
+| **`CF=1`** | **`AL=0`** | `sub 0x10` fires for the first time; the spin stops dead |
+
+★ **Dumping the shell's whole decision state at once** — rather than finding one condition,
+answering it and re-running — produced this table in one step after five turns of the
+other method. *Stop deducing state you can print.*
+
 ### ⛔⛔⛔ The last bug was a buffer WE corrupted, one field wide
 
-Our `sub 01` "no command" answer wrote `c[0] = 0`. That read of `[0]` came from the
-guest's own copy loop at transient `0x06C7` (`mov cl,[0x9327] / add cx,3 / rep movsb`),
-which does treat `[0]` as a count -- and it is completely wrong about the buffer,
-because **the same buffer is handed to `INT 21h AH=0Ah`**:
-
-```
-transient 0x018D   mov byte [ss:0x9327],0x80    <- ONCE, during start-up
-transient 0x0A21   mov dx,0x9327 / mov ah,0Ah / int 21h
-```
-
-`0x80` is DOS's buffered-input **maximum**, set a single time and never re-set. We
-zeroed it on the first BOP, our `AH=0Ah` computed `maxn - 1 = -1`, returned an empty
-line without waiting, and COMMAND.COM saw a `CR` at `[2]` and printed its prompt again.
-For ever. **The log said so the whole time:**
+Our `sub 01` "no command" answer wrote `[0] = 0` in the tail buffer, on the reading that
+`[0]` is a count. But **the same buffer is handed to `INT 21h AH=0Ah`**, and `[0]` is
+DOS's buffered-input **maximum**, set by the shell a single time and never re-set. We
+zeroed it on the first BOP, our `AH=0Ah` computed `maxn - 1 = -1`, returned an empty line
+without waiting, and COMMAND.COM saw a `CR` at `[2]` and printed its prompt again. For
+ever. **The log said so the whole time:**
 
 ```
 INT21 AH=0A line max=00 n=00 [0d ]            x991
@@ -770,143 +583,13 @@ INT21 AH=0A line max=80 n=03 [76 65 72 0d ]   <- after the fix: "ver"
 INT21 AH=0A line max=80 n=03 [64 69 72 0d ]   <- "dir"
 ```
 
-⇒ **Write the length at `[1]`, where DOS puts it, and never touch `[0]`.** Nothing
-downstream needs the length — the copy at `0x06C7` takes `[0]+3` bytes (a superset) and
-the parser scans from `+2` for the `CR`, so the `CR` is the only load-bearing byte. The
-request block's `+0x0C` already told us the capacity was `0x0080`: two independent
-sources, and the one we overwrote was the same number.
+⇒ **Write the length at `[1]`, where DOS puts it, and never touch `[0]`.** The request
+block's `+0x0C` already told us the capacity was `0x0080`: two independent sources, and
+the one we overwrote was the same number.
 
 ⚠ **The shell was AT the keyboard read and we were answering it with EOF.** Several
 turns read the symptom — *"it prints a prompt and goes straight back to asking"* — as a
-gate we had not satisfied. Every gate was satisfied.
-
-### ⛔ `[0x32A] = 1` IS NOT THE LOOP. It is a linked-in image default.
-
-`tools/ntvdm/cmdcom.py` settles it mechanically: `[0x32A]` has **exactly one writer in
-the entire binary**, at transient `0x0C2A`, and it writes **0** — two instructions
-before the keyboard read. The `01` in the dump is the image's own static initialiser
-(`[0x320..0x32F] = 00 00 00 00 01 00 00 00 00 00 01 00 00 00 00 00` as linked). So `1`
-is the value that **passes** the gate at `0x0C03`/`0x0C15`, not the one that traps it.
-
-### ★ The loop's top is `INT 21h AX=5302h`, and the gate is its CARRY FLAG
-
-Transient `0x0341`:
-
-```
-0341: push ax/si/bp ; xor si,si ; xor bp,bp
-0348: mov al,2 ; mov ah,53h ; int 21h      ; ** THE TOP OF THE SHELL'S MAIN LOOP **
-0351: jnc 0x0358
-0353: jmp 0x0BF5                           ; CF=1 -> THE GATE CHAIN (prompt/keyboard)
-0356: jmp 0x0361                           ; <- where the gate chain's "away" lands
-0358: cmp byte [0x32A],1
-035D: jz  0x0361                           ; =1 -> ask the HOST for a command
-035F: jmp 0x0353                           ; !=1 -> the gate chain
-0361: ...build the request block... 03CE: BOP 0x54 sub 01
-```
-
-With `CF=0` and `[0x32A]=1` — both true of every run before this session — the gate
-chain is **never entered at all**, which is why `sub 0x10` had never once fired. Both
-answers have to change together, and that was measured one at a time on the rig:
-
-| `AL=2` | `AL=5` | result |
-|---|---|---|
-| `CF=0` (default) | `AL=1` (default) | 32× `sub 01`, 32× `sub 0E`, `sub 0x10` never reached |
-| **`CF=1`** | `AL=1` | **identical** — the chain bails at its first gate, `[0x327]` |
-| **`CF=1`** | **`AL=0`** | `sub 0x10` fires for the first time; the spin stops dead |
-
-### ⇒ `AH=53h AL=5` IS CONTEXT-DEPENDENT, and this is a proof rather than a theory
-
-The read-a-line routine is transient `0x0A0D`; `AL=0` reads the keyboard and `AL≠0`
-only prints the prompt. It has four callers, and **both** of the `AL=0` ones (`0x0924`
-and `0x0C33`) sit directly behind `cmp byte [0x327],1 / jz away`. `[0x327]` has exactly
-one writer, `resident 0x169B`:
-
-```
-mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
-```
-
-Stock's COMMAND.COM **is** interactive. Therefore stock answers `AL=0` when the shell
-asks. Our probe measured `AL=1`. Both cannot be true of the same question, so they are
-not the same question.
-
-⛔ **The likely difference is the harness.** `probe.inc` reports through `INT 21h AH=02`
-and every stock measurement is captured with `> FILE` — so the oracle was asked *"is
-this console interactive?"* with its own output redirected. **A probe that reports
-through stdout cannot measure anything that depends on stdout.**
-`tests/probes/dos/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh` and
-needs no redirection; run it **both ways** against stock and diff, because one run
-cannot tell *"the value is X"* from *"the value is X when redirected"*.
-
-✅ **Measured (s84, #142): redirection is NOT the difference.** Stock, both ways, answers
-all eight identically (`5305 → AX=5301`, `5302 → 5300 CF=0`); only DS differs
-(`runs/s84/stock/`). So the remaining difference is the **caller**: a probe is always a
-child of stock's shell, and the AL=0 answer can only come when the shell itself asks. The
-NTVDM-aware-shell branch in `main.c` stays the model, still marked provisional.
-
-⇒ Until that is measured, the two values live in **`cfg\int53.txt`** and the built-in
-defaults stay exactly as measured. A run with no file behaves as it did before. **This
-is deliberately not a fix** — the whole reason the earlier `AL=5 -> 0` experiment had to
-be retracted was that it was a guess against the only measurement there was.
-
-⚠ And the claim that retraction rested on — *"stock sets `[0x327]=1` and IS interactive,
-so that gate does not mean what I read it to mean"* — was an inference from the
-standalone probe, not an observation. The gate means exactly what it looked like.
-
-⚠ The earlier experiment was also graded on the **wrong symptom**: it checked for the
-banner, which `[0x326]` blocks independently, so it could not have shown the keyboard
-path opening even when it did.
-
----
-
-### ⚠ The bracket needed fixing TWICE
-
-1. It ran the guest **inline and waited** -- fine for a probe, fatal for `COMMAND.COM /p`,
-   which never exits. Left the rig with no IFEO key (recorded above).
-2. The fix used `start ... > file`, which redirects **START**, not the process it
-   launches -- so the next run captured **nothing**, an empty file that looks exactly
-   like a guest which printed nothing. Now `start "" cmd /c "... > file"`: redirected by
-   the inner shell, detached, and killable.
-
-### ⛔ Real MS-DOS cannot be asked at all
-
-`tests/probes/dos/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
-probe and once with a correct one -- so the hang is the **call**: `--host msdos622` never
-reaches `QUIT.COM`. The documented form does not *report*, it **builds** a DPB from a
-caller-supplied BPB; a fabricated pointer is a mutation, not a question. PCem and
-dosbox-x are assumed the same and have not been tried. The probe says so at the top.
-
-⚠ The probe's first cut built its eight case names with a `%1` NASM did not expand, so
-all eight emitted under ONE name -- eight questions collapsed into one answer. Longhand
-now. *It only announced itself by producing two rows for eight cases.*
-
-`tests/probes/dos/p_int53.asm` sweeps `AX=5300h`–5307h -- the documented form, the three
-XP's COMMAND.COM issues (`02 05 07`), and the gaps, so that a handler answering only the
-three we know about could not pass.
-
-⛔⛔ **It hangs MS-DOS 6.22.** Measured twice -- once with a broken probe and once with a
-correct one -- so the hang is the **call**, not the probe: `--host msdos622` never reaches
-`QUIT.COM`. Documented `AH=53h` does not *report* anything; it **builds** a DPB from a BPB
-the caller supplies. Handing it a fabricated pointer is not a question, it is a mutation,
-and a real DOS does not survive being asked. PCem and dosbox-x must be assumed the same
-and have not been tried.
-
-⇒ There is **no safe oracle for the documented form**, and the private `AL`
-sub-functions exist only in `NTDOS.SYS`. **Stock ntvdm is the only oracle**, which needs
-the IFEO bracket -- the documented rig-bricking hazard. Not run unattended.
-
-⚠ The probe's first cut built its eight case names with a `%1` substitution NASM did not
-expand, so all eight emitted under ONE name: eight questions collapsed into one answer.
-Written out longhand now. *A probe that looks fine and measures nothing is the worst kind.*
-
-### ✅ Two more sub-functions answered
-
-| sub | what it is | our answer |
-|---|---|---|
-| `0D` | the startup batch path (above) | `cfg\autoexec.txt`, default `C:\AUTOEXEC.BAT` |
-| `0F` | **the host's `PROMPT`**. `0x0F00BEF6`: if `[0x0F0650BC]` is zero it calls `setBX(0)` and returns; otherwise `GetEnvironmentVariableA` with the name at VA `0x0F00393C` = **`"PROMPT"`** | `BX = 0` -- XP's own zero-path |
-
-Both were previously answered with **no register set at all**, i.e. the guest read
-whatever it happened to be holding.
+condition we had not satisfied. Every condition was satisfied.
 
 ### ⛔ ~~It is not interactive yet~~ — ✅ CLOSED 2026-09-25, and read this as a lesson
 
@@ -921,45 +604,52 @@ host's own key ring through `m->coninnb`; it never issues `INT 16h`, so that cou
 zero on a shell that is working perfectly. It reads zero in the ✅ run above too. The
 counter that actually moved was `INT21 AH=0A line max=`, and it was in the log all along.
 
-⇒ See **XP's COMMAND.COM IS AN INTERACTIVE SHELL** above: the gate chain was the right
-map, `[0x327]` was the right gate, and the last step was a buffer we corrupted ourselves.
+### ⛔ The earlier walls, for the record
 
-### ⛔ The earlier wall, for the record: an empty command line makes it RESTART
+- **The main loop.** With an empty answer COMMAND.COM asked again immediately —
+  **~1,250,000 `sub 01` calls in a 30-second run**, with every field well-formed and
+  three different answers giving identical runs. That is its *command loop* — get a
+  command, run it, repeat — running flat out because our answer returned *immediately*.
+- **An empty command line made the transient part restart** rather than reach the
+  prompt; the cause was the zeroed buffer maximum above.
+- **The hypothesis that `GetNextVDMCommand` BLOCKS** (on NT, CSRSS does not return until
+  there is a command for this VDM) was never needed: the keyboard path above is what
+  distinguishes *"wait for work"* from *"be the interactive shell"*. ⚠ Parking the exec
+  thread is the exact defect the `retry` pattern exists to avoid
+  ([[dos-shell-and-settings]]: `AH=0Ah` blocking the exec thread deadlocked a shell).
 
-Only **two** sub-functions ever fire — `01` and `0E`, 32 of each in a 30-second run. Guest
-`0x0BED` (sub `0x10`) is **never reached**, so none of the gate work above is exercised
-yet. The loop turns back before it.
+---
 
-Guest `0x06C4`…`0x06EF`, straight after the `AH=0Eh` drive select:
+### ⚠ The bracket needed fixing TWICE
 
-```
-copy the counted line at 0x9327 -> 0x93AA
-call 0x31F4          ; the parser
-jz   +8              ; else  jmp <elsewhere>
-call 0x393E          ; "run the command line"
-jnc  +13             ; ** CF SET -> ** jmp 0x0104  = RESTART THE TRANSIENT
-test byte [0x998E],2 ; jnz -> the same restart
-cmp  word [0x9C4C],0 ; jz -> onward, eventually to the prompt
-```
+1. It ran the guest **inline and waited** — fine for a probe, fatal for `COMMAND.COM /p`,
+   which never exits. Left the rig with no IFEO key (recorded above).
+2. The fix used `start ... > file`, which redirects **START**, not the process it
+   launches — so the next run captured **nothing**, an empty file that looks exactly
+   like a guest which printed nothing. Now `start "" cmd /c "... > file"`: redirected by
+   the inner shell, detached, and killable.
 
-⇒ **`call 0x393E` returns carry on an empty command line, and COMMAND.COM restarts.**
-That is the 1.25M-iteration loop, and it is not the shell's command loop after all — it
-is the transient re-entering itself.
+### ⛔ Real MS-DOS cannot be asked at all
 
-▶ Next: what makes `0x393E` set carry. Either an empty line is simply not a legal
-answer — in which case the real behaviour is that `GetNextVDMCommand` **blocks** — or one
-of `[0x998E]`, `[0x9C4C]` or the line format is wrong.
+`tests/probes/dos/p_int53.asm` sweeps `AX=5300h`–`5307h` — the documented form, the three
+XP's COMMAND.COM issues (`02 05 07`), and the gaps, so that a handler answering only the
+three we know about could not pass.
 
-▶ **The older hypothesis, kept because it is still live: `GetNextVDMCommand` BLOCKS.** On NT, CSRSS does
-not return until there is a command for this VDM. Our instant "nothing" turns a blocking
-wait into a spin. ⚠ But blocking cannot be the whole story either, because a shell that
-waits for ever never prints a prompt — so something must still distinguish *"wait for
-work"* from *"be the interactive shell"*, and that distinction has not been found.
+⛔⛔ **It hangs MS-DOS 6.22.** Measured twice — once with a broken probe and once with a
+correct one — so the hang is the **call**, not the probe: `--host msdos622` never reaches
+`QUIT.COM`. Documented `AH=53h` does not *report* anything; it **builds** a DPB from a BPB
+the caller supplies. Handing it a fabricated pointer is not a question, it is a mutation,
+and a real DOS does not survive being asked. PCem and dosbox-x must be assumed the same
+and have not been tried.
 
-⚠ **Do not implement the block until that second half is understood.** Parking the exec
-thread is the exact defect the `retry` pattern exists to avoid ([[dos-shell-and-settings]]:
-`AH=0Ah` blocking the exec thread deadlocked a shell), and it would turn a visible spin
-into an invisible hang.
+⇒ There is **no safe oracle for the documented form**, and the private `AL`
+sub-functions exist only in `NTDOS.SYS`. **Stock ntvdm is the only oracle**, which needs
+the IFEO bracket — the documented rig-bricking hazard. Not run unattended.
+
+⚠ The probe's first cut built its eight case names with a `%1` substitution NASM did not
+expand, so all eight emitted under ONE name: eight questions collapsed into one answer.
+Written out longhand now. *A probe that looks fine and measures nothing is the worst kind.*
+
 
 ---
 
@@ -987,7 +677,7 @@ An unmatched BOP is now **refused and logged**, not handed to `dos_int21()`:
 
 ```
 STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x54 next=0x01
-        at 0x9342:0x03ce ax=0x0002 bx=0x0001 dx=0x95d7
+        at <cs:ip> ax=0x0002 bx=0x0001 dx=<blk>
 STAGE2: task done -> reporting exit code 0x000000bd to CSRSS
 ```
 
@@ -1030,7 +720,7 @@ XP's `COMMAND.COM` issues `BOP 0x54 / sub 0x01` with `AX=0x0002`. `AH=0` is DOS
 Diagnostic in place since `92e2136`:
 
 ```
-STAGE2: BOP FALL-THROUGH -> INT21: bop=0x54 next=0x01 at 0x9342:0x03ce ax=0x0002
+STAGE2: BOP FALL-THROUGH -> INT21: bop=0x54 next=0x01 at <cs:ip> ax=0x0002
 ```
 
 ---
@@ -1078,9 +768,9 @@ unhandled sub-function is answered with `CF` from `cfg\bop54.txt` (default **`CF
 | `54/00` | end the VDM (`EXIT`) — `VDDTerminateVDM` in stock | **IMPL** | `:32187-32192` |
 | `54/01` | get the next command (line, cookie, the routed program) | **IMPL** | `:31738-32019` |
 | `54/02` | shell state query (`AL` output) | **MISS** | default arm; meaning not established |
-| `54/03` | — | **N/A** | the unimplemented stub in stock's own table |
+| `54/03` | — | **N/A** | unimplemented in stock too |
 | `54/04`, `05`, `07` | used by `ntdos.sys` only | **N/A** | our DOS replaces `ntdos.sys`; never issued here |
-| `54/06` | (`CF` output, `BX/AX` = `[0x32B]/[0x32D]`) | **MISS** | default arm |
+| `54/06` | (`CF` output; `BX/AX` = the two words of sub 01's `+0x12` dword) | **MISS** | default arm |
 | `54/08`, `0A` | stack-frame calls (`CF` output) | **MISS** | default arm |
 | `54/09`, `0C` | used by `ntio.sys` (and `09` once by the shell) | **MISS** | default arm |
 | `54/0B` | (`CF` output) | **MISS** | default arm |
@@ -1092,64 +782,49 @@ unhandled sub-function is answered with `CF` from `cfg\bop54.txt` (default **`CF
 
 ## 3. What XP's `COMMAND.COM` actually issues
 
-**Measured, not remembered:** every `C4 C4` in `C:\WINDOWS\SYSTEM32\COMMAND.COM`
-(50,620 bytes, md5 `be67d29ca914de072d9971e3fffc4050`), located by byte scan and
-disassembled with `ndisasm -b 16`. **16 sites: 15 × `0x54`, 1 × `0x50`.**
+**Measured, not remembered:** every `C4 C4` in XP SP3's `C:\WINDOWS\SYSTEM32\COMMAND.COM`
+(50,620 bytes), located by byte scan; the register usage of each was studied for
+interoperability. **16 sites: 15 × `0x54`, 1 × `0x50`.**
 
-| file off | BOP | sub | registers set immediately before | what the code does with the result |
-|---|---|---|---|---|
-| `0x02AB` | 54 | `0F` | `BX=0` (after `AH=48h` alloc, `ES`=block) | `AX=BX` → compared against 0 |
-| `0x02D0` | 54 | `0F` | `BX`=block size (after 49h/48h realloc) | `cmp bx,ax` — **BX is an output** |
-| `0x1581` | 50 | — | `ES`=PSP, after `AH=30h` version check | followed immediately by `INT 20h` |
-| `0x1A84` | 54 | `02` | `DX=0x0258` | `mov [0x2d2],al` — **AL is an output** |
-| `0x1B74` | 54 | `0D` | `DS:DX` → a buffer just built by `stosw` | then `AX=0x3D00`, `INT 21h` (open) |
-| `0x1DF3` | 54 | `08` | 6-word `0xFFFF` frame, `BP=SP`, `ES`=CDS, `AH=0` | `lahf` / `add sp,0xC` — **CF is an output** |
-| `0x283E` | 54 | `01` | `DX=0x95D7` (a struct filled from `[es:0x32B/0x32D]`) | `jnc`, then `cmp ax,0x8000` |
-| `0x2A56` | 54 | `0E` | `SI=0x04B9`, `CX=0x0539` | `or dx,dx` — **DX is an output** |
-| `0x2B24` | 54 | `09` | — (after a size calc stored at `[0x961F]`) | falls straight through |
-| `0x2DEB` | 54 | `0A` | `0xFFFF` frame, `BP=SP`, `ES=[0x458]`, `AH=19h` first | `BP=AX`, `lahf`, `add sp,0xC` |
-| `0x2E25` | 54 | `0B` | `CX=[0x32B]`, `BX=[0x32D]`, `AH=19h` first | `jnc` — **CF is an output** |
-| `0x2EE5` | 54 | `08` | 6-word `0xFFFF` frame, `BP=SP`, `AH=1` | `lahf` / `add sp,0xC` |
-| `0x2F1B` | 54 | `0B` | `CX=[es:0x32B]`, `BX=[es:0x32D]` | — |
-| `0x303D` | 54 | `06` | `BX=[0x32B]`, `AX=[0x32D]` | `jc` — **CF is an output** |
-| `0x307D` | 54 | `10` | — | `or al,al` — **AL is an output** |
-| `0x4E24` | 54 | `00` | — | — |
+| BOP / sub | sites | inputs | outputs |
+|---|---|---|---|
+| `54/00` | 1 | — | — (ends the VDM) |
+| `54/01` | 1 | `DS:DX` → the request block (§0) | `AX`, `CF`, the block's OUT fields |
+| `54/02` | 1 | `DX=0x0258` | **`AL`** |
+| `54/06` | 1 | `BX`/`AX` = the two words of sub 01's `+0x12` dword | **`CF`** |
+| `54/08` | 2 | a six-word `0xFFFF` frame on the stack, `BP=SP`, `AH`; `ES` → a current-directory structure | **`CF`**; the frame |
+| `54/09` | 1 | — | — |
+| `54/0A` | 1 | a six-word `0xFFFF` frame, `BP=SP`, `ES`; preceded by `AH=19h` | `AX`, **`CF`**; the frame |
+| `54/0B` | 2 | `CX`/`BX` = the two words of sub 01's `+0x12` dword | **`CF`** |
+| `54/0D` | 1 | `DS:DX` → a buffer | the path written there (then opened with `AX=3D00h`) |
+| `54/0E` | 1 | `DS:SI` → a buffer, `CX=0x0539` | **`DX`** |
+| `54/0F` | 2 | `BX` (0, or a block size after `AH=48h`/`49h`) | **`BX`** |
+| `54/10` | 1 | — | **`AL`** |
+| `50/3D` | 1 | `ES`=PSP, after a failed version check | — (followed immediately by `INT 20h`) |
 
 ### What can already be said from this
 
-1. **`BOP 0x54` takes a one-byte sub-function immediately after the code.** Eleven
+1. **`BOP 0x54` takes a one-byte sub-function immediately after the code.** Twelve
    distinct sub-functions: `00 01 02 06 08 09 0A 0B 0D 0E 0F 10`.
-2. **Some sub-functions are stack-based.** `08` and `0A` push six `0xFFFF` words, set
-   `BP=SP`, call, then `lahf` / `add sp,0xC` / `sahf` — a frame the host writes into,
-   and a carry flag the host sets.
-3. **`AH=19h` (get current drive) is issued immediately before several of them**, which
-   looks like a deliberate state sync rather than a coincidence — it appears at `0x1DF3`,
-   `0x2DEB`, `0x2E25`, `0x2F1B`.
-4. **The pair `[0x32B]` / `[0x32D]` is passed repeatedly** in `CX`/`BX` or `BX`/`AX`.
-5. ★ **`BOP 0x54 / sub 01` is the one that kills us**, and the live trace corroborates
-   the static read exactly: `DX=0x95D7` in the log, `mov dx,0x95d7` at file `0x283E`.
+2. **Some sub-functions are stack-based.** `08` and `0A` take a six-word `0xFFFF` frame
+   with `BP=SP` — a frame the host writes into — and return a carry flag the host sets.
+3. **`AH=19h` (get current drive) is issued immediately before several of them** (`08`,
+   `0A`, `0B`), which looks like a deliberate state sync rather than a coincidence.
+4. **The `+0x12` dword is passed back repeatedly** in `CX`/`BX` or `BX`/`AX`.
+5. ★ **`BOP 0x54 / sub 01` is the one that killed us** (§1): the live trace's `DX` is the
+   request block.
 
-⚠ **NOT established: what any of these sub-functions MEAN.** `sub 01` sits on the path
-that a shell would use to obtain its next command line, and `0x8000` is a suggestive
-thing to compare a return against — **that is a hypothesis with no measurement behind
-it.** Do not write it into this table until stock ntvdm has been asked.
+⚠ What each sub-function **means** is recorded in §0 only where it has been established
+by behaviour or by stock's answer; the rest stay blank on purpose.
 
-### And one thing that IS established, from the same disassembly
+### And one thing that IS established: the DOS version check
 
-At file `0x1563`:
-
-```
-mov ah,0x50 ; mov bx,es ; int 21h     ; set PSP
-mov ah,0x30 ; int 21h                 ; get DOS version
-cmp ax,0x0005                         ; <-- AX, not AL
-jz  ok
-mov dx,0x21d7 ; call print            ; "Incorrect DOS version"
-```
-
-The check is `cmp ax,5` on the **whole word** — `AL`=major, `AH`=minor — so it demands
-**exactly 5.00**, not "5 or later". `cfg\dosver.txt` = `5.0` satisfies it; anything else
-does not. That matches the measured 0-calls-vs-9-calls result in
-[xp-command-com.md](../research/xp-command-com.md) and pins *why*.
+**XP's COMMAND.COM refuses to run unless `INT 21h AH=30h` returns exactly `AX=0x0005`
+(5.00), testing the whole word** — `AL`=major, `AH`=minor — so it demands **exactly
+5.00**, not "5 or later"; anything else prints *"Incorrect DOS version"*.
+`cfg\dosver.txt` = `5.0` satisfies it; anything else does not. That matches the measured
+0-calls-vs-9-calls result in [xp-command-com.md](../research/xp-command-com.md) and pins
+*why*.
 
 ---
 

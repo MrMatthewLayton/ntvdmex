@@ -100,9 +100,9 @@ dos_int53_ans_t g_dos_int53[DOS_INT53_N] = {
     /* AL=02 */ { 0x5300, 0 },   /* top of COMMAND.COM's main loop -- CF is the gate */
     /* AL=03 */ { 0x0001, 1 },   /* genuinely unsupported                            */
     /* AL=04 */ { 0x5300, 0 },
-    /* AL=05 */ { 0x5301, 0 },   /* -> [0x327]; ⚠ context-dependent, see the handler */
+    /* AL=05 */ { 0x5301, 0 },   /* ⚠ context-dependent, see the handler            */
     /* AL=06 */ { 0x5300, 0 },
-    /* AL=07 */ { 0x5301, 0 },   /* -> [0x328]                                       */
+    /* AL=07 */ { 0x5301, 0 },
 };
 
 /* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
@@ -1948,11 +1948,10 @@ int dos_int21(dos_machine_t *m)
         /* ── ★★★ MEASURED AGAINST STOCK NTVDM, 2026-09-25. ───────────────────
              Documented AH=53h is BPB->DPB and takes DS:SI / ES:BP with NO AL
              sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
-             selector and reads the answer out of AL -- its resident part, guest 0x1692:
-                 mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
-                 mov al,7 ; mov ah,53h ; int 21h ; mov [0x328],al
-             (AL=2 elsewhere). NTDOS.SYS is the only implementation, so stock ntvdm on
-             the rig is the only oracle -- `debug\rig\dosstock.bat P_INT53.COM`, which
+             selector and reads the answer out of AL -- AL=5 and AL=7 at start-up,
+             AL=2 elsewhere (the INT 21h trace). NTDOS.SYS is the only implementation,
+             so stock ntvdm on the rig is the only oracle --
+             `debug\rig\dosstock.bat P_INT53.COM`, which
              drops the IFEO key and PROVES it back. Real MS-DOS cannot be asked: the
              documented form BUILDS a DPB from a caller-supplied BPB, and a fabricated
              pointer HANGS 6.22 (measured twice).
@@ -1967,28 +1966,18 @@ int dos_int21(dos_machine_t *m)
 
            ⛔⛔ AND THE ORIGINAL "UNIMPLEMENTED" WAS ACCIDENTALLY RIGHT. It returned
              AX=1, i.e. AL=1 -- exactly what stock returns for AL=5 and AL=7, the two
-             COMMAND.COM stores. I then "fixed" it to AX=0 on the theory that [0x327]=1
-             was blocking the interactive path, and made it WRONG -- against the only
-             measurement there is. Reverted, and marked provisional, which is the only
+             COMMAND.COM keeps. I then "fixed" it to AX=0 on the theory that AL=5
+             answering 1 was blocking the interactive path, and made it WRONG --
+             against the only measurement there is. Reverted, and marked provisional, which is the only
              reason that was a correction rather than a fact. **Guessing a value for a
              private call is not cheaper than measuring it; it is the same work twice.**
 
-           ★★★ AND THE THEORY IT WAS REVERTED WITH IS NOW DISPROVED FROM THE GUEST'S
-             OWN CODE (s79). The revert carried a second claim -- "stock sets [0x327]=1
-             and IS interactive, so that gate does not mean what I read it to mean" --
-             which was an INFERENCE from the standalone probe, not an observation. XP's
-             COMMAND.COM disassembles as follows (transient origin = file offset
-             0x2470; `tools/ntvdm/cmdcom.py` re-derives all of this):
-
-               * the read-a-line routine is transient 0x0A0D, `AL=0` reads the keyboard
-                 and `AL!=0` does not. It has exactly FOUR callers, and the only two
-                 that pass AL=0 are 0x0924 and 0x0C33.
-               * BOTH of them sit directly behind `cmp byte [0x327],1 / jz away`.
-
-             There is therefore NO path in the image by which COMMAND.COM reads the
-             keyboard while [0x327] == 1, and [0x327] has exactly ONE writer:
-             `mov al,5 / mov ah,53h / int 21h / mov [0x327],al` at resident 0x169B.
-             Stock IS interactive. Therefore, IN THE SHELL'S CONTEXT, stock's
+           ★★★ AND THE THEORY IT WAS REVERTED WITH IS NOW DISPROVED (s79). The revert
+             carried a second claim -- "stock answers AL=5 with 1 and IS interactive,
+             so that answer does not gate the prompt" -- which was an INFERENCE from
+             the standalone probe, not an observation. In fact XP's COMMAND.COM reads
+             its command line from the keyboard only while its AL=5 answer is 0, and
+             nothing else it does changes that. Stock IS interactive. Therefore, IN THE SHELL'S CONTEXT, stock's
              AX=5305h returns AL=0 -- and our probe measured AL=1.
 
            ⇒ **AL=5 IS CONTEXT-DEPENDENT, and the 8/8 "agreement" is an agreement about
@@ -2474,15 +2463,13 @@ int dos_int21(dos_machine_t *m)
             n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
         } else n = GetCurrentDirectoryA(sizeof(cwd), cwd);
         /* ── ★ 0xF0 IS krnl386 TALKING TO ntvdm, AND WE ARE ntvdm. (#128, s37) ──
-             krnl386 keeps a per-drive byte table at its DGROUP 0x2a2 and, for any
-             drive flagged there, re-issues this call through seg1:0x0834, which is
-             literally `mov dl,0xF0 / call <dispatcher>`. 0xF0 is not a drive under
-             any DOS convention -- it is a sentinel between the two halves of one
-             product, and the 16-bit half is readable, so answering it is
-             implementing a protocol rather than guessing at one. It is what stops
-             WOWEXEC.EXE resolving: the path build at seg1:0x1f55 needs a current
-             directory, this call fails, and `jae` at seg1:0x1fd5 takes the error
-             exit before the PATH search is ever reached.
+             For some drives krnl386 issues this call with DL = 0xF0 (seen in the
+             INT 21h trace, s37). 0xF0 is not a drive under any DOS convention --
+             it is a sentinel between the two halves of one product, asking for
+             the current directory, so answering it is implementing a protocol
+             rather than guessing at one. It is what stopped WOWEXEC.EXE
+             resolving: while this call failed, krnl386 gave up on building the
+             path before the PATH search was ever reached.
            ⚠ Only the EXACT sentinel, never "any invalid drive". A DOS program that
              passes garbage in DL still gets the error DOS gives it -- turning that
              into a plausible answer would be the "runs but lies" class. */
@@ -2695,11 +2682,10 @@ int dos_int21(dos_machine_t *m)
              caller happened to be holding. That is the "runs but lies" class, and it
              is what krnl386 uses to decide whether a drive is local. It probes every
              drive with 44/08, 44/09 and 44/0E in a loop (measured: once per drive,
-             descending), and with all three lying it marked drive C: in its own
-             per-drive flag table at DGROUP 0x2a2 -- which routes every later
-             INT 21h AH=47h for C: through a pre-handler that forces CF, which makes
-             its path canonicaliser fail, which makes LoadModule("WOWEXEC.EXE")
-             report "file not found" without ever opening a file.
+             descending), and with all three lying it treated drive C: as
+             non-local -- after which every INT 21h AH=47h for C: failed on its
+             side, its path canonicalisation failed, and LoadModule("WOWEXEC.EXE")
+             reported "file not found" without ever opening a file.
            ▸ Answered from the host, which is where the guest's drives really are.
            ▸ NOT yet checked against the MS-DOS 6.22 oracle -- the register contract
              here is from the documented interface, not from a run. Worth a panel

@@ -23,9 +23,8 @@ static inline volatile uint8_t *dos_env_puts(volatile uint8_t *p, const char *s)
    number of bytes written (fits in the 0x10-paragraph env block laid by dos_mcb_init). */
 /* ── ★ PATH IS NOT DECORATION -- krnl386 SEARCHES IT. (GH #128, session 37) ──────
      `PATH=C:\` was fine while every guest was a DOS program launched by full path.
-     It is not fine for WOW: krnl386's file search (`seg1:0x1dad`) walks the
-     environment block for `PATH=`, splits it on `;`, and tries each directory in
-     turn -- and the module it looks for that way is **WOWEXEC.EXE**, the Win16
+     It is not fine for WOW: krnl386's file search reads the environment block's
+     `PATH=`, splits it on `;`, and tries each directory in turn -- and the module it looks for that way is **WOWEXEC.EXE**, the Win16
      program itself, whose name comes from `[boot] WOWSHELL` in SYSTEM.INI as a bare
      filename with no directory. With `C:\` the only entry, the search could never
      succeed, and krnl386 reported it the way it reports any module it cannot find:

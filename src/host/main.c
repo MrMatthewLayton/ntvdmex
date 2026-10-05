@@ -340,21 +340,18 @@ static void hostprof_dump(void);
    shipped behaviour by accident. */
 #define WOWTRY_FLAG   CFG_("wowtry.flag")
 /* ── ⚠ `/B` BOOT LOGGING WAS TRIED AND DOES NOT WORK HERE. (GH #128, session 36) ──
-     krnl386 has a stock `WIN /B` switch: its command-line parser at seg1:0xc941 reads
-     the PSP command tail, and on `/b` calls seg1:0xb148, which builds a path from the
-     Windows directory cached at [0x504]:[0x50c], creates BOOTLOG.TXT and sets
-     [0x12b0]=1; the printer at seg1:0xb0d9 then appends every `LoadStart = ` /
+     krnl386 accepts the stock `WIN /B` switch in its PSP command tail; documented
+     behaviour is a BOOTLOG.TXT in the Windows directory listing every `LoadStart = ` /
      `LoadSuccess = ` / `LoadFail = ` line, failure CODE included.
    ▶ MEASURED AND REMOVED. `/B` was placed in the tail (confirmed in the LDT log) and
      NO BOOTLOG.TXT appeared at any of four candidate paths. The likely reason is that
-     [0x504]:[0x50c] is not filled this early, so 0xb148's open fails -- and its failure
-     path runs `mov word [0x12b0],0` at seg1:0xb12d, switching krnl386's own logging off
-     for the rest of the run, SILENTLY. One failed open, then nothing.
-   ★ Do not re-try the obvious `[0x12b0]` poke either: the printer opens the filename at
-     ds:0x12be, which only 0xb148 ever fills, so a hand-set flag opens an EMPTY name and
-     takes that same self-disabling path.
-   ⇒ The breakpoint at seg1:0xcca4 answers the same question and DOES work -- it reads
-     the loader's return code per module directly. See the session-36 log. */
+     the Windows directory is not yet known this early, so the one open fails -- and
+     after a failed open krnl386 logs nothing more for the rest of the run, SILENTLY.
+   ★ Forcing the logging on by hand was not pursued for the same reason: without a
+     filename it has nothing to open.
+   ⇒ A breakpoint on the loader's per-module return answers the same question and DOES
+     work -- it reads the loader's return code per module directly. See the session-36
+     log. */
 /* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
    diagnostics that need to survive the whole run belong here instead. */
 #define LDTLOG_PATH   OUT_("ldtprobe.log")
@@ -544,27 +541,20 @@ static void dsprobe_load(void)
 #define XMS_POOL_KB   (CMOS_EXT_KB - XMS_HMA_KB)       /* 15296 */
 
 /* ── ★ THE CPU CLASS `INT 2Fh AX=1687h` REPORTS IN CL, AND IT IS NOT COSMETIC. ────────
-     `krnl386.exe` builds the ENTIRE Win16 `GetWinFlags` word out of this one byte
-     (segment 1, 0xD68A -- `tools/ne/nedis.py guest/ne/krnl386.exe 1 0xd650 0x70`):
+     `krnl386.exe` asks `INT 2Fh AX=1687h` at start-up, and the CPU bits of the Win16
+     `GetWinFlags` word (KERNEL.132) follow the CL it gets back (observed): CL == 3
+     gives WF_CPU386 (0x0004), a larger CL gives WF_CPU486 (0x0008), and no DPMI host
+     at all stops Windows from starting.
 
-         mov ax,0x1687 ; int 2Fh
-         or  ax,ax  ; jne -> no DPMI host, bail
-         xor bh,bh
-         cmp cl,3   ; jb  -> bail
-         mov bl,4   ; CL == 3  -> WF_CPU386
-         je  +2
-         mov bl,8   ; CL >  3  -> WF_CPU486
-         mov [0x464],bx        ; and GetWinFlags (KERNEL.132) is `mov ax,[0x464]`
-
-   ⇒ CL is an ORDINAL CPU class whose lowest accepted value is 3. That reading is off
-     the binary, not off a spec sheet -- there is no DPMI document in this repo, and
+   ⇒ CL is an ORDINAL CPU class whose lowest accepted value is 3. That reading is
+     behavioural, not off a spec sheet -- there is no DPMI document in this repo, and
      `tests/probes/dos/p_dpmins.com` confirms neither software oracle can be asked:
      **MS-DOS 6.22 and DOSBox-X both leave every register untouched** (no DPMI host),
      so only stock ntvdm can answer and that needs the IFEO bracket.
 
    ⛔ WE HARDCODED 3 AND IT PRODUCED A MEASURED MISMATCH. `tests/probes/win16` measured
      `GetWinFlags` = **4C25 from us**, **4C29 from stock**, reproduced twice. The single
-     differing bit is 0x0004 vs 0x0008 -- exactly `bl=4` vs `bl=8` -- so stock's DPMI
+     differing bit is 0x0004 vs 0x0008 -- WF_CPU386 vs WF_CPU486 -- so stock's DPMI
      host returns CL>3 and ours returned 3. **4 is the smallest value consistent with
      the measurement**, so it is what we report: matching the oracle without claiming
      anything the measurement does not support.
@@ -699,14 +689,14 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
    the program (PSP 0x10000). The reflect therefore surfaces to the host as VTIB_EVENT=4
    with CS==H and EIP==0x1000, and the saved faulting CS:EIP/SS:ESP sit in VTIB_FLT_SAV*.
    This routes a raw PM #GP (SS-retype, HLT, privileged op) into the same host loop that
-   services the INT->BOP path -- ntvdm's mechanism (Kernel RE session 6), no ntvdm globals. */
-/* Run 67 corrected mechanism (static disasm of 0x4f6e6f/0x4f6f67/0x4f6efd):
+   services the INT->BOP path -- ntvdm's mechanism (session 6), no ntvdm globals. */
+/* Run 67's corrected mechanism -- the layout the kernel accepts, after runs 65/66 failed:
    - [TIB+0x638] is the fault handler's STACK selector (writable-DATA); the reflect sets
-     new SS:ESP = [TIB+0x638]:0x1000 and builds an IRET frame there (0x4f6dc0 validates it
-     as writable-data -- a CODE selector is REJECTED, which is why run 65/66 failed).
+     new SS:ESP = [TIB+0x638]:0x1000 and builds an IRET frame there. A CODE selector there
+     is REJECTED -- which is why runs 65/66 failed.
    - The handler CS:EIP comes from a table pointed to by [VDM_TIB+8], indexed by fault
-     CLASS (KiTrap0D pushes 6 for a #GP), stride 0x10: entry = {CS@+0 word, EIP@+4 dword}.
-     0x4f6efd reads it; 0x4f6d3c validates CS as code + EIP<=limit.
+     CLASS (6 for a #GP, observed), stride 0x10: entry = {CS@+0 word, EIP@+4 dword}. The
+     CS must be a code selector and the EIP within its limit, or the reflect is refused.
    So we need TWO selectors + a table: a data stack selector and a code selector with a BOP,
    and the table[6] = {code_sel, bop_off}, with [VDM_TIB+8] pointing at the table. */
 /* ── #205: THE FAULT STACK WAS IN THE PROGRAM. (s85) ──────────────────────────────────
@@ -725,7 +715,7 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
 #define DPMI_FAULT_STK_SIZE 0x10000
 #define DPMI_FAULT_COFF    0x0080    /* BOP offset within the handler code selector (linear 0x580) */
 #define DPMI_FAULT_BOP     0x57      /* BOP number planted at the handler code:COFF        */
-#define DPMI_FLT_CLASS_GP  6         /* KiTrap0D's fault class for a #GP (push 6)           */
+#define DPMI_FLT_CLASS_GP  6         /* the kernel's fault class for a #GP (observed: 6)    */
 #define DPMI_TIB_FLTTBL    0x08      /* VDM_TIB offset holding the handler-table pointer    */
 /* Offset, WITHIN g_dpmi_flt_code_sel (base DOS_HDLR_SEG<<4), of fault class i's own BOP
    site. The sites themselves live at DOS_CTAB_SEG:DOS_FLTSITE_OFF -- see dos_layout.h for
@@ -735,7 +725,7 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
                             + DOS_FLTSITE_OFF + (i) * 4)
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
    at the bottom of the exception frame and the handler exits through it with a `retf`
-   -- krnl386's handler at seg1:0xc5f2 ends in exactly that, having first rewritten the
+   -- krnl386's handler exits exactly that way (observed), having first rewritten the
    frame's CS:IP slots to say where it wants execution to resume. The kernel leaves those
    two words ZERO for the host to fill (measured, session 34), so this is the address we
    fill them with, and the arm that catches it completes the resume. */
@@ -1691,7 +1681,7 @@ static DWORD g_bp_arms[DPMI_BP_MAX];
      armed. The "never re-plant a site the guest is standing on" guard keys off
      g_bp_pending, and g_bp_pending is set ONLY for repeating and skip breakpoints --
      so the ONE kind with no protection was the plain one-shot, which is the kind you
-     reach for first. Measured (session 36): a one-shot at seg1:0xcca4 fired 512 times
+     reach for first. Measured (session 36): a one-shot in krnl386's loader fired 512 times
      with byte-identical registers and one millisecond on the clock, hit the arm
      ceiling, and was then never re-planted -- so the SECOND time the guest reached
      that site, which was the pass the breakpoint existed to observe, there was no
@@ -2820,8 +2810,8 @@ static void com_tx_sink(void *ctx, int port, uint8_t b)
      So derive the serial count from the VDD that actually claimed the ports.
      bit0 floppy present, bits4-5 video (10b = 80x25 colour), bits6-7 floppy
      count-1, bits9-11 serial ports, bits14-15 parallel ports, bit1 coprocessor
-     (CLEAR -- krnl386 tests `test al,2` at seg1:0xc136 and sets a kernel flag
-     from it, so the two modes must not disagree; sharing one function is now
+     (CLEAR -- krnl386 reads bit 1 at start-up and its coprocessor answer
+     follows it, so the two modes must not disagree; sharing one function is now
      the mechanism rather than the intention). */
 /* ★ Whether the guest is told a math coprocessor is installed -- the `Fpu` row
      of the settings dialog, kept as a plain flag because the equipment word is
@@ -9977,13 +9967,13 @@ static int wow_module_of_sel(WORD sel)
      selectors through `INT 31h 0x0501`. USER's segment 1 is 0x0327 in the run and
      appears nowhere in g_wow_mod[]. Measured: the first cut used the module lookup
      and the dispatcher never fired once.
-   ⇒ Identify the TABLE by a stub in it. Each entry is `push argb / push 0 / push
-     id / lcall`, 13 bytes, at a fixed offset in USER's segment 1, so the triple
-     (id, argument bytes, return-into-stub offset) pins one specific stub. Two
+   ⇒ Identify the TABLE by a stub in it. Every thunk call arrives carrying an id, an
+     argument byte count and the offset it returns to inside its 13-byte stub, at a
+     fixed place in USER's segment 1, so that triple pins one specific stub. Two
      anchors, either of which is enough, both named by USER's own export table and
      both seen in real runs:
-        id 0x190  0 args  retstub 0x0659   FINALUSERINIT  (krnl386 calls it at
-                                           task startup via `lcall [0x414]`)
+        id 0x190  0 args  retstub 0x0659   FINALUSERINIT  (called once per task at
+                                           task startup -- observed)
         id 0x039  4 args  retstub 0x0c25   REGISTERCLASS
    ⚠ The offsets are this USER.EXE's. Regenerate with
      `tools/ne/wowmap.py guest/ne/user.exe` if the box's USER.EXE ever differs --
@@ -9993,7 +9983,7 @@ static int wow_module_of_sel(WORD sel)
 static WORD g_wow_user_seg = 0;
 
 /* ⛔ s88: NotifyWow (0x217, 6 args, retstub 0x12ea) too -- USER's OWN INIT calls it
-     (seg1:0x3cf9, wKind 4: the DefWindowProc forward table) BEFORE any RegisterClass,
+     (observed: wKind 4, the DefWindowProc forward table) BEFORE any RegisterClass,
      so with only the two anchors above that call was "?'s table" and stepped over,
      the table stayed empty, and DefWindowProc forwarded nothing for the whole run.
      The triple is USER's: later calls carrying it were already dispatched as USER. */
@@ -10010,11 +10000,10 @@ static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
      is no file image on this side to check bytes against -- but the triple
      (id, argument bytes, return-into-stub offset) still pins one specific stub,
      because a stub is 13 fixed-shape bytes at a fixed offset in the module's own
-     segment 1. The one anchor is `ShellAbout` itself, read out of SHELL.DLL:
+     segment 1. The one anchor was `ShellAbout` itself:
         id 0x016  12 args  retstub 0x00c7   SHELLABOUT
-     -- ordinal 22 in the non-resident name table, entry table offset 0x00ba, and
-     the bytes there are `6a 0c / 68 00 00 / 68 16 00 / 9a ...`, i.e. the stub
-     declares those 12 bytes and that id itself.
+     -- ordinal 22 (NE entry table offset 0x00ba), and the call as it arrives at
+     run time carries exactly those 12 argument bytes and that id.
    ★★★ AND ANCHORING ON THE ONE CALL WE SERVICE WAS WRONG. It was written down as
      deliberate -- "the table is identified by the first call that needs it" --
      and it holds only while every guest that needs SHELL calls `ShellAbout`.
@@ -10037,10 +10026,9 @@ static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
 
 /* ── ★★★ COMMDLG.DLL's TABLE -- A FIFTH ID SPACE. See src/wow/wowcommdlg.h. ───
      Identified the same way, and both anchors are the calls we service:
-        id 0x001   4 args  retstub 0x0012   GETOPENFILENAME (stub seg1:0x0005)
-        id 0x002   4 args  retstub 0x0024   GETSAVEFILENAME (stub seg1:0x0017)
-     A stub is 13 bytes, so 0x0005+13 = 0x0012 and 0x0017+13 = 0x0024 -- and the
-     run that drove Alt-F-O on a live Notepad reported `id 0x01 ... retstub=0x0012`
+        id 0x001   4 args  retstub 0x0012   GETOPENFILENAME
+        id 0x002   4 args  retstub 0x0024   GETSAVEFILENAME
+     The run that drove Alt-F-O on a live Notepad reported `id 0x01 ... retstub=0x0012`
      from a table this host had never seen. The anchor was written to match a
      measurement, not the other way round.
    ⚠ `0x01` is MessageBox in USER's numbering (12 args) and GetOpenFileName here
@@ -10059,9 +10047,9 @@ static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
 }
 
 /* ── ★★ KEYBOARD.DRV's TABLE -- A SIXTH ID SPACE. See src/wow/wowkbd.h. ──────
-     Two anchors, both the calls we service, both read out of keyboard.drv:
-        id 0x005  8 args  retstub 0x0079   ANSITOOEM  (stub seg1:0x006c)
-        id 0x006  8 args  retstub 0x0086   OEMTOANSI  (stub seg1:0x0079)
+     Two anchors, both the calls we service:
+        id 0x005  8 args  retstub 0x0079   ANSITOOEM
+        id 0x006  8 args  retstub 0x0086   OEMTOANSI
    ⚠ `0x05` is CHOOSECOLOR in COMMDLG's numbering and something else again in
      USER's, which is why all three fields are matched and why the guard below
      excludes every table already identified. */
@@ -10092,9 +10080,9 @@ static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
 /* ── ★★ GDI.EXE's TABLE -- A SEVENTH ID SPACE. See src/wow/wowgdi.h. ─────────
      GDI's exports are TAIL-JUMPS like USER's, so these are the stubs one hop
      past the entry points, resolved by the same walk neneeds.py does:
-        id 0x044  2 args  retstub 0x033a   DELETEDC       (stub seg1:0x032d)
-        id 0x045  2 args  retstub 0x0354   DELETEOBJECT   (stub seg1:0x0347)
-        id 0x050  4 args  retstub 0x05de   GETDEVICECAPS  (stub seg1:0x05d1)
+        id 0x044  2 args  retstub 0x033a   DELETEDC
+        id 0x045  2 args  retstub 0x0354   DELETEOBJECT
+        id 0x050  4 args  retstub 0x05de   GETDEVICECAPS
    ⚠ Regenerate with `tools/ne/neneeds.py` if the box's GDI.EXE ever differs. */
 static WORD g_wow_gdi_seg = 0;
 
@@ -10122,14 +10110,11 @@ static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
    ⇒ Identify the table the way USER's was identified -- by a stub in it -- but
      with a stronger check, because for krnl386 we HAVE the file. The stub that
      made the call sits at a known offset in seg2's file image, and its own bytes
-     must agree with the id and the return address the call carries:
-         retstub-8:  68 <id lo> <id hi>     push <id>
-         retstub-5:  9a <thunk offset><seg> lcall the common thunk
-     Read off `seg2:0x3ec7`, the stub for `0xd1`:
-         3ec7 6a08 push 8 / 3ec9 680000 push 0 / 3ecc 68d100 push 0xd1
-         3ecf 9ab62b.... lcall seg1:0x2bb6 / 3ed4 <- the retstub the call carries
+     must agree with the id and the return address the call carries: the id as a
+     16-bit immediate push at retstub-8, followed by a far call at retstub-5 (the
+     generic x86 encodings, opcodes 0x68 and 0x9A -- the check below).
      Nothing is inferred; a wrong segment cannot pass, because the file would have
-     to hold a `push <this id>` at exactly the offset this call returns to. And if
+     to hold a push of THIS id at exactly the offset this call returns to. And if
      it never matches, the dispatcher simply never engages and every seg2 call
      stays honestly unimplemented -- the same failure mode as USER's anchor. */
 static WORD g_wow_krnl2_seg = 0;
@@ -15325,9 +15310,9 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
     /* ── WHERE IN THE GUEST IS THE DMA POLL? A LOCATOR, NOT A HYPOTHESIS. ────────────
          DMX refills from its timer ISR and steers by the 8237's channel-1 count, and
          ~23 of the 135 ticks a second we deliver enter its handler and return without
-         ever reading that count. The dispatcher is not what drops them -- it ALWAYS
-         calls the registered handler (DOOM.EXE file 0x554f4, disassembled) -- so the
-         decision is inside DMX's own routine, whose address is runtime data and cannot
+         ever reading that count. The dispatcher is not what drops them -- it is
+         believed to call the registered handler every tick -- so the decision is
+         inside DMX's own routine, whose address is runtime data and cannot
          be read out of the image.
          The host, however, sees the instruction. Record the guest EIP of the reads of
          port 3, and the map `guest = file + 0x03AEDFEC` (verified on DMX's IRQ0 stub
@@ -16095,18 +16080,10 @@ static uint8_t *modey_remap_plane(void *ctx, int p)
      Measure first: do NOT move the window here yet. Remapping on GR4 would change what
      the guest sees mid-run and there would be no clean before/after.
 
-   ▶▶ **AND THE MEASUREMENT IS IN, AND SO IS DOOM'S OWN CODE.** `DOOM.EXE` disassembles
-     (file offset 0x5c154, obj1 = the LE code object) to:
-
-         I_ReadScreen(scr):
-           mov edx,3CEh / mov al,4 / out dx,al      GC index := 4 (READ MAP SELECT)
-         plane_loop:
-           mov edx,3CFh / mov al,cl / out dx,al     GR4 := plane   <- THE ONLY PORT WRITE
-         byte_loop:
-           mov bl,[ebx+eax]                         read video memory
-           mov [edx-4],bl                           scr[plane + 4*i] := byte
-           cmp eax,3E80h / jl byte_loop             16000 = 64000/4
-           inc ecx / cmp ecx,4 / jl plane_loop
+   ▶▶ **AND THE MEASUREMENT IS IN.** Doom's screen read-back (I_ReadScreen) selects READ
+     MAP SELECT (GC index 4), then for each of the four planes writes GR4 := plane -- its
+     ONLY port write -- and reads 16000 bytes (64000/4) of video memory into
+     `scr[plane + 4*i]` (observed: the port trace and the buffer it produces).
 
      It cycles the READ plane four times and **never writes the map mask**. Under this
      host every one of those four passes is served by whatever section the WRITE mask
@@ -17592,7 +17569,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                  prints the same thing, so when a WOW run's log stops, all it licenses
                  is "it went in there and did not come back" -- NOT "it stopped there".
                  Those are different claims and only the first is measured. Session 31
-                 ended on exactly that ambiguity at seg1:0x662f.
+                 ended on exactly that ambiguity, inside krnl386.
                A spinning PM guest never leaves PM, so the only way to see it is to
                  freeze the thread running it and read the context -- the same
                  SuspendThread / GetThreadContext round trip the async IRQ injector
@@ -17704,10 +17681,9 @@ static void wow_shadow_put(int idx);         /* GH #128: keep the descriptor sha
 
 /* ── ★★★★★ A HOST-PRIVATE LDT POOL, BECAUSE krnl386 IS A SECOND ALLOCATOR. ────
      (session 48) MS Paint and Notepad both died on `File > Save As` with a #GP in
-     `KRNL386.EXE at 0001:5349` -- `les di,[0x275] / mov al,es:[di]`, reading the
-     current-drive byte out of the DOS structures krnl386 cached at boot. It
-     caches them as OFFSETS and fills in the segment halves at `seg1:0xc0fd` with
-     `mov ax,2 / int 31h` -- DPMI Segment-to-Descriptor. That call succeeded:
+     KRNL386.EXE, reading the current-drive byte out of the DOS structures krnl386
+     located at boot. For those it asks DPMI Segment-to-Descriptor (`INT 31h
+     AX=0002`) at start-up, and that call succeeded (our log):
 
        INT31h AX=0002 BX=0x50    -> sel 0x018f          ; idx 0x31, limit 0xFFFF
        INT31h AX=000C BX=0x018f  <- base=0x0002a800 limit=0x031f
@@ -17767,9 +17743,9 @@ static WORD dpmi_hdlr_code_sel(void)
 
 /* ── DPMI 0002: SEGMENT TO DESCRIPTOR. ──────────────────────────────────────────────
      Hand back a selector whose base is a real-mode paragraph address and whose limit
-     is 64K-1. Trivially small, and it was missing -- which mattered less than it
-     sounds until krnl386 was disassembled: it is the DPMI function krnl386 calls MOST
-     (12 sites, against 2 for 0006 and 2 for 000A), because that is how the 16-bit
+     is 64K-1. Trivially small, and it was missing -- which mattered more than it
+     sounds: it is the DPMI function krnl386 calls MOST at start-up (per our INT 31h
+     log), because that is how the 16-bit
      Windows kernel reaches the BIOS data area, the DOS list-of-lists, and everything
      else it knows only as a paragraph.
 
@@ -18096,8 +18072,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                     3 and 4 recoverable there byte-for-byte at 0x895f0 + file_offset.
              ours:  the first 0x4000 bytes, and nothing else.
 
-         krnl386's own LoadSegment reads a segment's image out of memory (its file-open
-         path at seg1:0x9191 is confirmed never taken -- session 32). Segment 1 lives at
+         krnl386's own LoadSegment reads a segment's image out of memory (it issues no
+         file open while loading them -- confirmed, session 32). Segment 1 lives at
          file 0x2040, inside what we kept; segments 2, 3 and 4 live at 0xf880, 0x137a0
          and 0x14a60 -- ALL PAST THE CUT. So LoadSegment(1) worked and LoadSegment(2)
          read whatever followed and decoded it as relocation records, which is exactly
@@ -18106,8 +18082,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     WORD  hdrimg_paras;                          /* whole image, in paragraphs */
     WORD  window_paras;                          /* what the block must really cover */
     /* ── ★★★ AND THE WHOLE 64 KB OF IT MUST BE OURS TO GIVE. ───────────────────────
-         krnl386 builds a SIXTY-FOUR KILOBYTE selector over `base(SS) + SP` (seg1:0xc17e)
-         and treats everything above the header image as its scratch arena -- we even
+         krnl386 builds a SIXTY-FOUR KILOBYTE selector over `base(SS) + SP` (observed in
+         the LDT) and treats everything above the header image as its scratch arena -- we even
          hand it the size in CX (0xFFF0 - 0x4000 = 0xBFF0 bytes). But the block was
          allocated as stack + header image only, 0x500 paragraphs, so the selector ran
          0xBFFF bytes PAST the end of what DOS had given us:
@@ -18122,11 +18098,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          one region, which is the exact failure the memory-model note above was written
          about, reappearing one allocation later.
 
-       ⚠ HOW IT SURFACED. seg1:0xcfe4 is a `rep movsd` that COMPACTS that arena -- it
-         copies `dx` paragraphs from offset `bx*16` down to offset 0 inside the very
-         same selector. Walking the guest with breakpoints put the last hit at
-         seg1:0xc4d8 and the next armed site (0xc4e5) was never reached; between them
-         sits exactly one call, `call 0xcf9e` at seg1:0xc4dd, and that is the routine.
+       ⚠ HOW IT SURFACED. krnl386 COMPACTS that arena with a block copy -- paragraphs
+         from higher in the selector are copied down to offset 0 inside the very same
+         selector. Walking the guest with breakpoints bracketed the death to a single
+         call between two armed sites, and that call is the copy.
          A block copy striding through memory a second owner is using explains a host
          that dies with no VDM fault, no reflect and no crash record.
 
@@ -18176,7 +18151,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          true. 16 KB because that is the largest read krnl386 asks for; a bigger request
          is clamped and SAID SO rather than silently short-read. */
     /* ⚠ THE HOST POOL GOES FIRST, i.e. as LOW as possible. krnl386 builds a 64 KB
-         scratch selector over `base(SS) + SP` (seg1:0xc17e) -- a window over everything
+         scratch selector over `base(SS) + SP` (observed) -- a window over everything
          above its own stack -- and uses it as a working block. Allocated late, the pool
          landed at 0x1ab9, INSIDE that window, so the host's own PM stub table appeared
          in the middle of krnl386's scratch and was read back as an NE header. Host
@@ -18191,8 +18166,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         log_append(LDTLOG_PATH, m, q);
     }
     /* ── ★ THE SFT CHAIN, OR krnl386 WALKS THE IVT FOREVER. (GH #128) ─────────────
-         See the DOS_SFT_* block in dos_layout.h for the disassembly this is built
-         from. One block, `next` = FFFF:FFFF so the walk terminates, and an entry
+         See the DOS_SFT_* block in dos_layout.h for what this is built against.
+         One block, `next` = FFFF:FFFF so the walk terminates, and an entry
          count equal to what our INT 21h layer can really open. The entries
          themselves are zeroed -- which is not a stub, it is what a free SFT entry
          looks like; nothing has been opened yet at this point in the bootstrap.
@@ -18341,14 +18316,13 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              An NE segment with NE_SEG_RELOCS is followed in the FILE by a WORD count
              and that many 8-byte records. A conventional loader applies them and
              throws them away -- ours does too (ne_apply_relocs reads them straight
-             out of the image). But krnl386 relocates its own copy AGAIN: at
-             seg1:0x921b it does `mov es,dx / mov si,cx / lodsw` to read the count
-             from the LOADED SEGMENT, and at seg1:0x8d54 walks the records from
-             there. With only `length` bytes copied it was reading whatever followed,
-             decoding it as relocation records, and taking them for IMPORTED fixups --
-             which sent it into the module-reference table (`es:[0x28]`) of a module
-             that imports from nothing, so `call 0x8cb6` returned 0 and LoadSegment
-             failed. Measured to the instruction; see session 31 part 20.
+             out of the image). But krnl386 relocates its own copy AGAIN, reading the
+             count and the records from the LOADED SEGMENT in memory, just past its
+             `length` bytes (observed). With only `length` bytes copied it was reading
+             whatever followed, decoding it as relocation records, and taking them for
+             IMPORTED fixups -- which sent it into the module-reference table of a
+             module that imports from nothing, so the import lookup failed and
+             LoadSegment failed. Bracketed with breakpoints; see session 31 part 20.
            So copy them too, and size the block to hold them. */
         if (s->sector && (s->flags & NE_SEG_RELOCS)) {
             uint32_t ro = s->file_off + s->length;
@@ -18389,10 +18363,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          the chain is gone and a second pass is not "wasteful", it is impossible.
 
        ★★ AND krnl386 RUNS THAT SECOND PASS ON PURPOSE, BECAUSE IT IS THE PASS THAT
-         MATTERS. Its bring-up calls LoadSegment on its OWN segments (seg1:0xc2f4 for
-         segment 1, seg1:0xc30e for segment 4), and the fixup at seg1:0x8e0e takes the
-         target's value from `es:[bx+8]` -- the in-memory segment table's HANDLE, i.e.
-         a PROTECTED-MODE SELECTOR. We enter krnl386 in V86 where a segment is a
+         MATTERS. Its bring-up calls LoadSegment on its OWN segments (segments 1 and 4
+         observed), and each fixup resolves to the target segment's HANDLE in the
+         in-memory segment table, i.e. a PROTECTED-MODE SELECTOR. We enter krnl386 in V86 where
+         a segment is a
          paragraph; it switches itself to PM, moves segment 1 to linear 0x20760 and
          builds a code selector (0x0207) over it. Every far reference inside that copy
          has to become a selector, and LoadSegment is what does it.
@@ -18475,16 +18449,15 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         DWORD k; for (k = 0; k < (DWORD)WOW_STACK_PARAS * 16u; ++k) sb[k] = 0; }
 
     /* ── ★ THE NE HEADER GOES IMMEDIATELY ABOVE THE STACK. ─────────────────────────
-         krnl386 builds a selector at seg1:0xc17e over `base(SS) + SP` and hands it to
-         its own "load the KERNEL EXE header" routine (seg1:0xd45a) as the segment to
-         parse -- `mov ds,[bp+8]` then `ne_enttab` at DS:[4] and `ne_cseg` at DS:[0x1c].
-         NOTHING in its bring-up reads that header from disk: seg1:0x1812 is
-         OpenFile(..., OF_EXIST), the 0xd02b chain is structure-building, and the
-         handle->selector path at seg1:0xcf9f that could replace the selector never
-         runs (all three measured). So the LOADER has to put the header there.
+         krnl386 builds a selector over `base(SS) + SP` (observed in the LDT) and parses
+         the KERNEL EXE's NE header through it -- the documented NE fields (`ne_enttab`,
+         `ne_cseg`, ...) are read at their NE offsets from that selector's base.
+         NOTHING in its bring-up reads that header from disk: its only file call there
+         is an OpenFile(..., OF_EXIST), and the selector is never replaced (both
+         measured). So the LOADER has to put the header there.
 
        ★ AND THE ADDRESS IS FIXED, WHICH IS WHAT MAKES THIS POSSIBLE. Measured on the
-         rig: SS:SP is 0x1f:0x0FFE at seg1:0xc0d6, 0xc123 AND 0xc164 -- the entry SP,
+         rig: SS:SP is 0x1f:0x0FFE at three breakpoints across its bring-up -- the entry SP,
          unchanged, because krnl386's calls up to that point are balanced. (An earlier
          reading of a different layout suggested the base was call-depth dependent and
          therefore unplaceable; it was not, and the three-point measurement is what
@@ -18508,10 +18481,9 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
 
         /* ── ⚠ DO NOT WIDEN THE SEGMENT TABLE HERE. TRIED, MEASURED, REFUTED. ──────
-             krnl386's LoadSegment indexes the in-memory segment table with a stride of
-             TEN (seg1:0x910b, `shl si,1 / mov bx,si / shl si,1 / shl si,1 / add si,bx`)
-             and reads the handle at `es:[si+8]` -- the two bytes the file's 8-byte entry
-             does not have. Stock's KERNEL module database confirms it: at linear
+             krnl386's in-memory segment table has TEN-byte entries, the handle at +8 --
+             the two bytes the file's 8-byte entry does not have. Stock's KERNEL module
+             database shows it (stock-VDM dump): at linear
              0x196c0, read with stride 10, it reproduces krnl386's file segment table
              sector-for-sector and carries 0x01ff / 0x0206 / 0x020e / 0x0217 at +8 --
              its four segment selectors.
@@ -18532,8 +18504,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              Same shape as the relocation lesson above: the loader's job is to stage the
              file's header, not to pre-chew it. */
         /* ⚠ NE_SEG_RELOCS IS LEFT SET HERE, AND THAT IS A CORRECTION. Clearing it in
-             this copy makes seg1:0x9206 (`test bx,0x100`) fall through to 0x92bb and
-             LoadSegment return success without relocating -- which DID clear the
+             this copy makes LoadSegment return success without relocating (measured)
+             -- which DID clear the
              ExitKernelThunk(1) wall and is NOT the right answer; see the refutation
              above ne_apply_relocs's call site. Recorded so it is not re-tried. */
 
@@ -18570,20 +18542,19 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = m;
         /* ── ★★★ CX IS THE WHOLE WINDOW, NOT "THE PART ABOVE THE HEADER". ────────────
              This used to subtract the header image, on the reading that the header is
-             not krnl386's to allocate from. That reading is what kills the run, and the
-             guest's own bookkeeping says so:
+             not krnl386's to allocate from. That reading is what kills the run:
 
-                 [0x5a6] = 0x0bff   the arena size we declare, in paragraphs (CX >> 4)
-                 [0x148e] = 0x0f88  the size of the selector it actually built
-                 [0x5a4] = 0x0389   the difference -- i.e. OUR HEADER IMAGE
+                 0x0bff   the arena size we declare, in paragraphs (CX >> 4)
+                 0x0f88   the size of the selector krnl386 actually built (LDT)
+                 0x0389   the difference -- i.e. OUR HEADER IMAGE
 
              krnl386 treats that difference as dead space at the BOTTOM of its arena and
-             reclaims it, at seg1:0xc4dd -> seg1:0xcfe4, by `rep movsd`-ing everything
-             above it DOWN by 0x389 paragraphs. Measured: ECX=0x202e0 dwords (514 KB)
+             reclaims it by block-copying everything above it DOWN by 0x389 paragraphs.
+             Measured at a breakpoint on the copy: ECX=0x202e0 dwords (514 KB)
              through selector 0x01b7 (base 0x1bbe0, limit 0x8441f, i.e. up to the 640 KB
              line). The copy is entirely in bounds -- and its destination range
              0x1bbe0..0x9c760 CONTAINS krnl386's own segment-1 PM copy at 0x2c760, the
-             code executing the `rep movsd`. It overwrites itself mid-instruction: no
+             code executing the copy. It overwrites itself mid-instruction: no
              fault to reflect, no crash record, no surviving thread.
 
            ⇒ Declaring the FULL window makes total == free, so the gap is zero and the
@@ -18594,28 +18565,24 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              allocated over it. If that turns out to be the next wall it will show up as
              a header-parse failure, which is a different and much louder failure than
              this one. */
-        /* ⚠ 0xFFF0 (the full window) was tried and OVERSHOOTS: krnl386's own
-             [0x148e] came back 0x0f88 paragraphs in BOTH runs -- it is computed from
-             its arena, not from CX -- so declaring 0x0fff made the gap NEGATIVE
-             ([0x5a4] = 0xff89 = -0x77) and `movzx esi,bx / shl esi,4` then addressed
-             0xFF890, far outside the selector. A negative gap is not a smaller bug
-             than a positive one, it is a wilder one.
-           So declare exactly what it believes it has: gap = [0x148e] - [0x5a6] = 0,
+        /* ⚠ 0xFFF0 (the full window) was tried and OVERSHOOTS: krnl386's own size came
+             back 0x0f88 paragraphs in BOTH runs -- it is computed from its arena, not
+             from CX -- so declaring 0x0fff made the gap NEGATIVE (-0x77 paragraphs)
+             and the copy's source addressed 0xFF890, far outside the selector. A
+             negative gap is not a smaller bug than a positive one, it is a wilder one.
+           So declare exactly what it believes it has: gap = its size - ours = 0,
              which makes the reclaim copy src==dst and therefore harmless. */
         /* ── ★★★ THE GAP IS NOT WASTE. IT IS HOW THE SEGMENT IMAGES ADVANCE. ────────
              Session 33 part 11. The note above declares the FULL window so the gap is
              zero and krnl386's reclaim copies nothing -- which fixed a crash and broke
-             the load, because that reclaim is the mechanism that walks the staged image:
-
-               seg1:0xc4a3  sub ax,[0x5a6]     ; ax = the size krnl386 computes (0xf88)
-               seg1:0xc4a7  mov [0x5a4],ax     ; the GAP, in paragraphs
-               seg1:0xc4dd  call 0xcf9e        ; rep movsd everything above the gap DOWN
-               seg1:0xc4e5  push [0x59e] ...   ; then LoadSegment from that block
-               seg1:0x947f  mov ds,bx / rep movsd   ; copies the segment from DS:0000
+             the load, because that reclaim is the mechanism that walks the staged image
+             (observed per segment: compute the gap, copy everything above it DOWN, then
+             LoadSegment copies the segment from the bottom of the block).
 
              With the gap zero the block never advances, so every segment is copied from
-             OFFSET ZERO of the staged image -- which is the NE header. Measured directly:
-             at seg1:0x947f, `dsbase=0x00089bc0` and our staged header is at para 0x89bc.
+             OFFSET ZERO of the staged image -- which is the NE header. Measured directly
+             at a breakpoint on LoadSegment's copy: the source base was 0x00089bc0, and
+             our staged header is at para 0x89bc.
              LoadSegment(2) was copying 0x3ee2 bytes of header and calling it segment 2.
 
            ⇒ Declare the window MINUS the header and tables, so the first reclaim
@@ -18626,11 +18593,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              (base 0x1bbe0, limit 0x8441f). It no longer does: the block is the staged
              image (0x89bc0 + 0xf880), and the PM copy is at 0x1ad00 -- outside it. */
         /* ⚠ AND THE GAP IS MEASURED TO THE FIRST SEGMENT THE **LOOP** LOADS, WHICH IS
-             SEGMENT 2. Segment 1 is loaded by seg1:0xc2f4, before the loop at 0xc4a3 and
-             without its compaction step, so it never consumes from the staged block: with
-             the gap set to the header alone, the loop's first iteration copied segment
-             1's image and called it segment 2 (measured -- `@ds:si` was seg1+0x4a). The
-             loop's own per-iteration arithmetic (0xc4b8..0xc4d8) advances it after that. */
+             SEGMENT 2. Segment 1 is loaded earlier, separately and without the
+             compaction step, so it never consumes from the staged block: with the gap
+             set to the header alone, the loop's first iteration copied segment 1's image
+             and called it segment 2 (measured -- `@ds:si` was seg1+0x4a). krnl386's own
+             per-segment bookkeeping advances it after that. */
         {   DWORD first = ne->n_seg > 1 ? ne->seg[1].file_off
                                         : ne->seg[0].file_off;
             DWORD gap   = (first > ne->hdr) ? ((first - ne->hdr) + 15u) & ~15u : 0;
@@ -18663,16 +18630,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     }
 
     /* ── ★ krnl386 CARVES FROM `ES + 0x10` AND NEVER ASKS DOS. ────────────────────
-         Its DPMI bring-up at seg1:0xd688 does, literally:
-
-             push es                     ; ES as we entered it
-             mov ax,0x1687 / int 2Fh     ; find the DPMI host
-             pop ax / add ax,0x10        ; ★ ES + 0x10
-             mov es,ax / add si,ax       ; the host's private data block goes there,
-             lcall [0x1726]              ;   and SI becomes the next free paragraph
-
-         and everything it allocates afterwards grows upward from there, WITHOUT a
-         single INT 21h AH=48h. So whatever sits above `ES + 0x10` is memory krnl386
+         Observed at its DPMI bring-up: after `INT 2Fh AX=1687h` it places the DPMI
+         host's private data block at the paragraph ES + 0x10 (ES as we entered it),
+         then calls the mode-switch entry -- and everything it allocates afterwards
+         grows upward from there, WITHOUT a single INT 21h AH=48h. So whatever sits above `ES +
+         0x10` is memory krnl386
          believes is its own.
 
        ⚠ WE WERE PUTTING ITS OWN CODE THERE. Entered with ES = DOS_PSP_SEG (0x100),
@@ -18687,8 +18649,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          memory here and hand krnl386 that block. Its own carving then happens inside
          an allocation DOS knows about, so nothing else can be given the same memory —
          which is exactly the relationship a real DOS program has with its PSP block.
-       ⚠ It must be a REAL PSP, not a bare block: krnl386 stores through `es:[0x42]`
-         and reads `es:[2]` (top of memory) at seg1:0xc227. dos_psp_build fills both. */
+       ⚠ It must be a REAL PSP, not a bare block: krnl386 writes PSP+0x42 and reads
+         PSP+0x02 (top of memory) during bring-up. dos_psp_build fills both. */
     {   WORD pseg = 0, pmax = 0;
         (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
         if (!pmax || dos_alloc(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
@@ -18704,12 +18666,12 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              arena, and `pmchg` says the instance-handle field at `TDB+0x1c` is NEVER
              written for a whole run while `TDB+0x1e` holds `0xFF` from the earliest
              PM events. krnl386 fills only the fields it thinks it needs and leaves
-             the rest as whatever the block already held. `GetExePtr` (seg1:0x2200)
+             the rest as whatever the block already held. `GetExePtr` (observed)
              matches `+0x1c` and returns `+0x1e`, so a NULL instance -- which is the
              DOCUMENTED way to ask for a system cursor, and exactly what WOWEXEC's
              `LoadCursor(NULL, IDC_ARROW)` passes -- matched that task and got
              `0xFFFF` back, which USER loaded into ES. Zeroed, the same lookup yields
-             `0`, which is the failure the caller already handles at seg1:0x22ab.
+             `0`, which is a failure the caller already handles.
            ⚠ AND IT DID NOT MOVE THAT WALL, which is worth more than the change is.
              The `pmchg` line said `CHANGED 0x00 -> 0xff`, and a CHANGE is a WRITE --
              read as "the block simply contains it", which was wrong. With the arena
@@ -18732,12 +18694,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              THREE BYTES -- correct when it is laying down a fresh PSP with a fresh
              env block, destructive here, where the env was already built and is
              shared. It matters more than it looks:
-           ★★ krnl386 FINDS ITS OWN EXECUTABLE THROUGH THE ENVIRONMENT. At
-             seg1:0xc257 it does `mov ds,[0x220] / mov ds,[0x2c]` -- PSP+0x2Ch, the
-             environment segment -- then scans past the strings to the double NUL,
-             reads the count WORD, and takes what follows as the full pathname of the
-             program. That is the MS-DOS 3.0+ convention and it is the ONLY thing it
-             uses; it never receives the path any other way. With the env wiped, the
+           ★★ krnl386 FINDS ITS OWN EXECUTABLE THROUGH THE ENVIRONMENT -- the
+             documented MS-DOS 3.0+ convention: the environment segment at PSP+0x2Ch,
+             past the strings to the double NUL, the count WORD, then the full
+             pathname of the program. Observed: it is the ONLY way it learns the path. With the
+             env wiped, the
              scan walked off into whatever followed and OpenFile got nothing, which is
              reported as "Unable to open KERNEL executable" -- error #3 of its table.
            ⚠ And the path must be KRNL386's, not the Win16 app's: this is krnl386
@@ -18745,15 +18706,15 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              launch already carries. */
         /* ★★ AND THE PATH, because krnl386 SEARCHES IT for the Win16 program.
              `[boot] WOWSHELL` in SYSTEM.INI yields a bare "WOWEXEC.EXE" with no
-             directory, and krnl386's search (seg1:0x1dad) walks `PATH=` out of this
-             very block. With the DOS default of `C:\` it can never find it, and says
+             directory, and krnl386's search walks `PATH=` out of this very block
+             (observed). With the DOS default of `C:\` it can never find it, and says
              so: "Missing 16-bit system module ... WOWEXEC.EXE". Ask the host where
              Windows actually is rather than hardcoding it -- a real WOW launch
              inherits the NT environment, which is exactly these two directories. */
         {   char pv[MAX_PATH * 2 + 2]; UINT n;
             /* s89 (#270): ★ AND SYSTEMROOT, which a real WOW VDM inherits from
-                 NT's environment. krnl386 (`seg1:0xce9f`) builds its SYSTEM
-                 directory from it (see WOW32 0x7b): without it, 16-bit
+                 NT's environment. krnl386 builds its SYSTEM directory from it
+                 (observed; see WOW32 0x7b): without it, 16-bit
                  GetSystemDirectory answered "\SYSTEM" with no drive. One entry,
                  through `extra`, whose cap note keeps the tail krnl386 reads. */
             char wowroot[MAX_PATH + 16] = "SYSTEMROOT=";
@@ -19257,11 +19218,11 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      first byte -- measured twice in one run, both of them krnl386 installing its INT 10h
      handler:
 
-         WOWBOP 0xb8 at seg1:0xc59b   file: cd 21   (AX=0x3510, get vector 10h)
-         WOWBOP 0x1f at seg1:0xc5ae   file: cd 21   (AX=0x2510, set vector 10h)
+         WOWBOP 0xb8   file: cd 21   (AX=0x3510, get vector 10h)
+         WOWBOP 0x1f   file: cd 21   (AX=0x2510, set vector 10h)
 
      -- i.e. two INT 21h calls silently swallowed, and the "BOP codes" 0xb8 and 0x1f were
-     `mov ax,` and `pop ds`.
+     just the opcode bytes that happened to follow each patched INT.
 
    ⇒ Recover the vector from the MODULE'S OWN FILE IMAGE, which is the one copy of those
      bytes nothing has rewritten. Self-verifying, and it fires only when all three hold:
@@ -19456,9 +19417,9 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                        uses. It is an ALLOW-LIST, and an allow-list of "interrupts we think
                        the guest will use" is exactly the assumption a new guest breaks.
 
-                     ⚠ MEASURED, session 32. krnl386 executes `INT 2` at seg1:0x67cc, on the
-                       path `dec [0x1e] / jne / test [0x44],1 / je / and [0x44],0xfffe / cd 02`.
-                       A breakpoint armed on that site reported `displaced cd 02` -- proof it
+                     ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
+                       protected mode during bring-up. A breakpoint armed on that site reported
+                       `displaced cd 02` -- proof it
                        was RAW, because dpmi_bp_arm() refuses a site that is already an INT
                        site (pmap_get), so it could not have armed at all otherwise. And a raw
                        `CD nn` in protected mode is the one fault XP will not reflect: it tears
@@ -19585,22 +19546,16 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            INT instruction, and rewriting one that is really an operand
                            destroys the instruction it belongs to.
                          ★ MEASURED, ZAR (GH #23), and it is the whole reason that guest
-                           did not run. At this segment's +0x5683 the stream is
-                               e8 cd e4     call 0x3b52     (rel16 = 0xe4cd)
-                           and `cd e4` is the CALL'S DISPLACEMENT. The vote passed it --
-                           correctly, on its own terms: everything in front of it is DATA
-                           (a run of zero bytes), and an odd-aligned stream through zeros
-                           decodes `00 e8` as `add al,ch` and lands exactly here. The vote
-                           can only ever be a heuristic about where instructions START; it
-                           cannot know this region is not code at all.
-                           Patched, the call became `e8 c4 c4` -- target 0x1b49 instead of
-                           0x3b52 -- which lands MID-INSTRUCTION, decodes as
-                           `mov ah,al / les ax,[di]`, resynchronises at 0x1b4f, and thereby
-                           skips both the `[0x34]` test and the `int 15h` that the real
-                           routine begins with. It then compares an AX loaded from [di]
-                           against a zero memory count, matches, and falls into a block
-                           that addresses memory through identity-mapped selectors -- the
-                           `#GP` at 01A7:1B7D that DOS/4GW reports on the desktop.
+                           did not run. The pair `cd e4` in memory was the DISPLACEMENT of
+                           a near call (`e8 cd e4`). The vote passed it -- correctly, on its
+                           own terms: everything in front of it is DATA (a run of zero
+                           bytes), and an odd-aligned stream through zeros lands exactly
+                           here. The vote can only ever be a heuristic about where
+                           instructions START; it cannot know this region is not code.
+                           Patched, the call's target moved and landed MID-INSTRUCTION, so
+                           the start of the real routine was skipped and the guest went on
+                           down a path that ends in the `#GP` at 01A7:1B7D that DOS/4GW
+                           reports on the desktop.
                          ⇒ THE 64K SCANNER ALREADY HAS THE ANSWER and this scanner never
                            got it: "evidence only -- add a vector only with a guest that
                            provably needs it, and only with a service arm to receive it".
@@ -19639,14 +19594,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                       /* ── ONLY IF IT IS AN INSTRUCTION. ───────────────────────────────
                            This scan used to take the byte pair as proof, and in Doom's
                            code object that is wrong in three places -- one of them
-                           fatally. At obj1+0x3593f the stream is
-                               39 fa  7e cd  31 c9    cmp edx,edi / jle -51 / xor ecx,ecx
-                           and the `cd 31` is the jle's DISPLACEMENT followed by the xor's
-                           opcode. Patching it made R_InitTextureMapping's loop-2 back edge
-                           jump to obj1+0x35905 -- the middle of a `jl` -- where the guest
-                           executed `cmp ecx,[ebx+0x034fe02d]` with an ANGLE in ebx, read
-                           an unmapped address, and XP tore the VDM down with no VEH, no
-                           watchdog line and no last log entry. Sessions 16-20 hunted that
+                           fatally. At obj1+0x3593f the pair `cd 31` straddles two
+                           instructions -- a short jump's DISPLACEMENT followed by the next
+                           instruction's opcode. Patching it bent that jump into the middle
+                           of another instruction, the guest read an unmapped address, and
+                           XP tore the VDM down with no VEH, no watchdog line and no last
+                           log entry. Sessions 16-20 hunted that
                            as a fault in Doom. It was this line.
                            x86_is_insn_start() decodes forward from each of the preceding
                            48 bytes and asks how many streams land here; see x86len.h for
@@ -19805,8 +19758,9 @@ static void dpmi_scan_code_blocks(void)
    one-byte 0xCC rather than the two-byte BOP; bit 2 (4) = the DUMP column is an offset
    from DS's base rather than a linear address; bit 1 (2) = <addr> is an OFFSET INTO
    krnl386's protected-mode copy of a segment, resolved when that selector is committed
-   (see dpmi_bp_resolve_seg -- the copies move between runs, so `seg1:0x93dc` is the only
-   form of that address worth writing down), with mode bits 4..7 naming WHICH segment:
+   (see dpmi_bp_resolve_seg -- the copies move between runs, so a segment-relative
+   offset is the only form of that address worth writing down), with mode bits 4..7 naming WHICH
+   segment:
    `2` = seg 1 (0 reads as 1, so old lists still work), `0x22` = seg 2, `0x32` = seg 3.
        <hex linear addr to break on>  [hex linear addr to DUMP on hit]   # comment
    The optional second column is what makes this a debugger rather than a tracer:
@@ -19884,8 +19838,8 @@ static void dpmi_bp_load(void)
 /* ── ★ AND THE SAME FOR krnl386's OTHER SEGMENTS. (session 36) ────────────────────
      Bit 1 alone meant "segment 1", which was enough while everything interesting was
      in seg1. It is not any more: the module-load path runs in **segment 2** --
-     `seg2:0x04b2 lcall [bp-8]` is krnl386 calling a module's entry point, and the
-     COMM.DRV investigation needs the register file either side of it. `g_wow_pmbase[]`
+     krnl386 calls a module's entry point from there (observed), and the COMM.DRV
+     investigation needs the register file either side of that call. `g_wow_pmbase[]`
      has recorded every segment's base all along; only the resolver was seg1-only.
    ⇒ Mode bits 4..7 now carry the SEGMENT NUMBER when bit 1 is set. `2` still means
      segment 1 (0 is read as 1, so every existing pmbp.txt keeps working); `0x22` is
@@ -19991,7 +19945,7 @@ static void dpmi_bp_arm(void)
              under a guest that has not executed the instruction yet.
            ⚠ MEASURED, IMMEDIATELY: arming before every PM entry (needed because krnl386
              loads its own segments late, so a breakpoint inside them is skipped at setup
-             while the memory still reads 00 00) hit seg1:0x5a42 **340,808 times** with
+             while the memory still reads 00 00) hit one krnl386 site **340,808 times** with
              byte-identical registers and one millisecond on the clock, and wrote a
              **268 MB** log. The guest was not looping; the debugger was holding it in
              place. Honouring `pending` here makes dpmi_bp_arm() safe to call from
@@ -20071,9 +20025,8 @@ static void dpmi_bp_arm(void)
              which had the same disease) and it decodes instruction LENGTH. So measure
              the instruction at the site and REFUSE a two-byte BOP over a one-byte one.
              This is not hypothetical: three of four breakpoints placed on krnl386 this
-             session sat on `c3` (ret), `1f` (pop ds) and `c9` (leave). The `c3` at
-             seg1:0x662f ate the first byte of `2e 83 3e 32 00 00`
-             (cmp word cs:[0x32],0) at 0x6630 -- which is on the path that sets AX for
+             session sat on one-byte instructions, and one of them ate the first byte of
+             the following instruction -- which was on the path that sets AX for
              krnl386's FIRST INT 31h. The guest asked for 0x0000 instead of 0x000A and
              died at PM step 1 instead of step 0x31, and it took a cross-run comparison
              of the step counter to notice that the debugger was the bug.
@@ -20170,7 +20123,7 @@ static int dpmi_bp_disarm(DWORD lin)
    read (which fills that buffer with image bytes), then repatches -- stamping C4 C4 over
    two bytes of freshly-read program image. The client copied that up to extended memory
    and its relocation pass then read 0xC4C4 where an object index belonged:
-       file    9a a4 59 80 | 00 83 | c4 08     lcall 0x0080:0x59a4 / add sp,8
+       file    9a a4 59 80 | 00 83 | c4 08
        memory  9a a4 59 80 | c4 c4 | c4 08
    Verifying first makes the map SELF-CORRECTING: if the bytes are no longer what we put
    there, the guest has reused that memory, so the site is stale -- drop it and never
@@ -20229,9 +20182,9 @@ static void dpmi_sync_defsel_width(void)
      WHAT IT MEANS. (GH #128, session 37) ──────────────────────────────────────────
      53 of the 82 IDs are not named by krnl386's export table, and the sentinel we
      answer them with is load-bearing: `0` is right for "declined / not present" and
-     WRONG for a caller that loops until the answer is non-zero. seg2:0x2a08 is
-     exactly that -- allocate, ask WOW32 0x7d whether the result is acceptable, and
-     on 0 allocate another and ask again. It ran 1884 times and took the stack out.
+     WRONG for a caller that loops until the answer is non-zero. krnl386 has one
+     (observed): it allocates, asks WOW32 0x7d whether the result is acceptable, and
+     on 0 allocates another and asks again. It ran 1884 times and took the stack out.
      Guessing the semantics and writing a `case` for it is what this project keeps
      paying for. So: a FILE, like pmbp.txt -- one `<hex id> <hex dword>` per line --
      that changes the answer for one run. The log marks every overridden call as an
@@ -20519,16 +20472,17 @@ static void wow_task_chdir(WORD task, char **pp)
 
 /* ── ★★ [0x228] IS PART OF THE CONTEXT, NOT A LEVER. (session 39) ─────────────
      The register file is not the whole of a task switch: krnl386 keeps "who is
-     current" in one word of its DGROUP, and the launch sequence sets it
-     (`seg1:0x97ee mov [0x228],es`) BEFORE the 0x74 BOP we park at. Mode 25's
-     epilogue then pops it back to the creator. So a frame parked at that BOP is
+     current" in one word of its DGROUP (offset 0x228 -- observed to hold the
+     current TDB), and the launch sequence has already set it to the new task when
+     the 0x74 BOP we park at arrives. Mode 25's epilogue then puts it back to the
+     creator (observed). So a frame parked at that BOP is
      only self-consistent if the word is put back with it -- restoring registers
      alone resumes the new task's code with krnl386 still believing the creator
      is current.
    ⚠ THIS IS NOT "WRITE [0x228] TO YIELD", WHICH IS RULED OUT AND STAYS RULED
      OUT. That was using the word as a lever to make krnl386 switch, and it does
-     not work -- `seg1:0x2c05`'s branch is a re-entrancy guard whose incoming task
-     is the caller's own. This is the opposite direction: the host has already
+     not work -- measured: krnl386 simply carries on as the caller's own task.
+     This is the opposite direction: the host has already
      switched, and this makes the guest's own bookkeeping agree with the context
      it is about to run. The value is not invented; it is the one the word held
      when that frame was parked (`slot->task`). */
@@ -21201,35 +21155,31 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
 }
 
 /* ── THE "MS-DOS" VENDOR-SPECIFIC DPMI API (INT 2Fh 168A). GH #128. ─────────────────
-     krnl386 will not run without this. It asks with DS:SI -> "MS-DOS" and tests
-     `cmp al,0x8a / jz 0xd71b`; 0xd71b is the ABORT path, and it prints
-     "NTVDM KERNEL: Inadequate DPMI Server". Leaving AL alone -- the correct answer for
+     krnl386 will not run without this. It asks with DS:SI -> "MS-DOS", and if AL
+     comes back 0x8A (unchanged: "not supported") it aborts with
+     "NTVDM KERNEL: Inadequate DPMI Server" (observed). Leaving AL alone -- the correct answer for
      a host with no vendor API -- is therefore fatal to this one guest.
 
    ★ WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tests/probes/dos/vendprobe.com under
      `stock`): in REAL mode AL=8A (not supported); in PROTECTED mode AL=00 and
-     ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00) holding 22 bytes:
+     ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00). Called (same probe):
 
-         cmp ax,0      / jnz +5 / mov ax,0x0100 / jmp +8
-         cmp ax,0x0100 / jnz +5 / mov ax,0x0137
-         clc / retf                                  <- known function
-         stc / retf                                  <- anything else
+         AX=0x0000  ->  AX=0x0100, CF=0
+         AX=0x0100  ->  AX=0x0137, CF=0
+         anything else  ->  CF=1
 
-     A two-function dispatcher returning constants. So the API is PM-ONLY, which is
+     A two-function entry returning constants. So the API is PM-ONLY, which is
      consistent: krnl386 only ever asks after it has switched.
 
-   ★ AND krnl386 ONLY NEEDS IT TO EXIST. Having stored the entry it calls it once:
-         mov ax,0x0100 / call far [0x1726]
-         jc  skip                  <- CF set: skip
-         verw ax / jnz skip        <- not a WRITABLE selector: skip
-         mov es,[0x598] / mov [es:0x32],ax
-     Both failure arms rejoin the normal path. So an honest "that function is not
-     provided" (CF=1) is explicitly tolerated by the guest's own code.
+   ★ AND krnl386 ONLY NEEDS IT TO EXIST. It calls the entry once, with AX=0x0100,
+     and keeps the AX it gets back only when CF is clear AND it is a WRITABLE
+     selector; otherwise it carries on normally (observed: CF=1 here costs nothing).
+     So an honest "that function is not provided" (CF=1) is tolerated by the guest.
 
    ⚠ WHICH IS WHY FUNCTION 0x0100 RETURNS CF=1 HERE AND NOT A SELECTOR. Stock hands
-     back 0x0137, and `verw` proves that is a writable data selector onto something
+     back 0x0137, a writable data selector (VERW, measured) onto something
      ntvdm owns -- we do not know what, and a selector onto an empty block of ours
-     would pass verw, get stored, and be read later as if it were that something.
+     would pass that check, get stored, and be read later as if it were that something.
      That is the "runs but lies" failure this project treats as the most expensive
      kind. Declining is truthful and costs nothing today. Function 0 mirrors the
      oracle exactly, because there we are copying a measured answer rather than
@@ -21238,8 +21188,9 @@ static WORD g_wow_vendor_sel = 0;
 
 /* ── THE DESCRIPTOR-TABLE SHADOW. ───────────────────────────────────────────────────
      krnl386 wants a writable window onto the descriptor table and uses it as its own
-     allocator: `0x5888` reads a free-list head through it, walks links stored IN the
-     descriptor bytes, and writes `[di+5] = 0x0F` (access byte, P=0) to claim a slot.
+     allocator (observed through the shadow): it reads a free-list head through it,
+     walks links stored IN the descriptor bytes, and claims a slot by writing access
+     byte 0x0F (P=0).
      Stock ntvdm hands it the real table. We measured (session 30 part 12) that OUR
      LDT is not mapped into our address space, so we cannot.
 
@@ -21427,21 +21378,23 @@ static WORD wow_shadow_selector(void)
 
 static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
 {
-    /* Byte-for-byte the shape stock ntvdm uses (measured, 22 bytes at 00C7:2037):
-       function 0 -> 0x0100, function 0x0100 -> a selector, anything else -> CF=1.
-       The immediate at +0x10 is patched with our shadow selector below. */
+    /* The DPMI vendor-specific API entry krnl386 asks for (INT 2Fh AX=168Ah). Its
+       contract, as stock answers it: AX=0 -> AX=0x0100; AX=0x0100 -> AX=a selector;
+       anything else -> CF=1, AX unchanged. Our own encoding of that contract; the
+       immediate at +0x10 is patched with our shadow selector below. */
     static const BYTE stub[] = {
-        0x3D, 0x00, 0x00,        /* +00  cmp ax,0x0000            */
-        0x75, 0x05,              /* +03  jnz  +0x0A               */
-        0xB8, 0x00, 0x01,        /* +05  mov ax,0x0100            */
-        0xEB, 0x08,              /* +08  jmp  +0x12               */
-        0x3D, 0x00, 0x01,        /* +0A  cmp ax,0x0100            */
-        0x75, 0x05,              /* +0D  jnz  +0x14               */
+        0x3D, 0x00, 0x01,        /* +00  cmp ax,0x0100            */
+        0x74, 0x0A,              /* +03  je   +0x0F               */
+        0x85, 0xC0,              /* +05  test ax,ax  (CF=0)       */
+        0xF9,                    /* +07  stc                      */
+        0x75, 0x04,              /* +08  jnz  +0x0E  -- not ours  */
+        0xB4, 0x01,              /* +0A  mov ah,1    (AX=0x0100)  */
+        0xF8,                    /* +0C  clc                      */
+        0xCB,                    /* +0D  retf                     */
+        0xCB,                    /* +0E  retf        (CF=1)       */
         0xB8, 0x00, 0x00,        /* +0F  mov ax,<shadow selector> */
         0xF8,                    /* +12  clc                      */
-        0xCB,                    /* +13  retf                     */
-        0xF9,                    /* +14  stc  -- not provided     */
-        0xCB                     /* +15  retf                     */
+        0xCB                     /* +13  retf                     */
     };
     WORD seg = 0, max = 0, shadow;
     volatile BYTE *b;
@@ -21890,23 +21843,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
 
          This is the WOW32 half of WOW -- what real Windows implements in wow32.dll --
          reached exactly the way our own DOS layer uses BOPs in the other direction.
-         seg1 holds 13 sites: 0x51 x1, 0x53 x1, 0x56 x10, 0xFE x1.
+         The BOP numbers seen from segment 1: 0x51, 0x53, 0x56 and 0xFE.
 
-       ★ 0x53 SUB 0x03 IS THE ONE THAT MATTERS FIRST, AND ITS OWN CODE SAYS SO:
-             3021  push ds/ds/es/bx/dx
-             3026  C4 C4 53 03
-             302a  mov [0x6ac],bx / mov [0x6ae],dx / mov [0x6b0],es
-             3036  or bx,dx / jz 0x3074
-         It asks for a far pointer to the 32-bit dispatch routine and stores it. Every
-         BOP 0x56 site is then guarded by `call dword far [0x6ac]` -- use the pointer
-         if there is one, otherwise BOP. So answering NULL is not a stub: it selects
-         the per-call BOP path that krnl386 already implements, and is the honest
-         answer while no 32-bit companion exists.
+       ★ 0x53 SUB 0x03 IS THE ONE THAT MATTERS FIRST. It arrives early, asking for a
+         far pointer to a 32-bit dispatch routine, and the answer decides the path
+         (observed): with a pointer, later calls go through
+         it; with NULL, every later call arrives as its own BOP 0x56. So answering
+         NULL is not a stub: it selects the per-call BOP path that krnl386 already
+         implements, and is the honest answer while no 32-bit companion exists.
        ⚠ Note the LENGTHS DIFFER. 0x53 carries a sub-function byte (4 bytes total);
-         0x51/0x56/0xFE do not (3). Read off the following instructions: after 0x56
-         comes `83 C4 nn` (add sp,nn -- a cdecl cleanup, so 0x56 is a call with stack
-         arguments), and after 0x51 comes `2E 8E 1E 30 00` (mov ds,cs:[0x30]). Getting
-         a length wrong here resumes the guest mid-instruction. */
+         0x51/0x56/0xFE do not (3) -- established by where the guest's next
+         instruction begins, and 0x56 is followed by the caller's own stack cleanup,
+         so it is a call with stack arguments. Getting a length wrong here resumes the
+         guest mid-instruction. */
     if (vec == 0 && ev == VDM_EVENT_BOP) {
         DWORD blin = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip;
         const volatile BYTE *bb = (const volatile BYTE *)(ULONG_PTR)blin;
@@ -21917,8 +21866,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
              the code byte would be a guess about a namespace our own INT-site
              patcher also writes into. See src/wow/wowcall.h.
            ★ THE RESULT IS DX:AX, and that is the Win16 convention for a LONG,
-             not a reading of this one procedure: `sysedit seg1:0x0216
-             sub ax,ax / cdq` sets both halves before its `retf 0x0a`.
+             not a reading of any one procedure.
            ⚠ AN UNEXPECTED ARRIVAL IS NOT INERT. If nothing is in flight, some
              guest reached our stub on its own, and the honest thing is to say so
              and stop -- resuming would run whatever context happened to be live. */
@@ -22410,8 +22358,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  the vector in a side map keyed by LINEAR ADDRESS. A BOP whose code byte we
                  do not recognise is therefore ambiguous: it may be a real native BOP, or it
                  may be a patched INT site read one byte too far -- bb[2] is then the NEXT
-                 instruction's first byte. seg1:0xc5ae reported "BOP 0x1f" and the file has
-                 `cd 21 1f 07` there: an INT 21h, and the 0x1f is `pop ds`.
+                 instruction's first byte. One site reported "BOP 0x1f" where the file has
+                 `cd 21`: an INT 21h, and the 0x1f merely the next opcode byte.
                So ask the module's own file image what those bytes are. It is the one
                  source that cannot have been rewritten, and it turns "unimplemented BOP
                  0x1f" into "a swallowed INT 21h", which is a different bug entirely. */
@@ -22440,11 +22388,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
             }
             /* ── WHICH 32-BIT CALL IS THIS? ────────────────────────────────────────
-                 0x51 is not a service, it is the generic 16->32 GATEWAY: the prologue
-                 at seg1:0x2bb6 saves everything, publishes the frame as SS:BP in
-                 [0x6a4]/[0x6a6], and then either far-calls a registered dispatcher or
-                 issues this BOP. 0x56 is the same idea inline -- every site is
-                 followed by `add sp,nn`, so its arguments are on the stack too.
+                 0x51 is not a service, it is the generic 16->32 GATEWAY: every thunked
+                 call arrives through it with the caller's registers saved below the
+                 frame at SS:BP (observed). 0x56 is the same idea inline -- its
+                 arguments are on the stack too.
                So the useful question is never "implement 0x51", it is "WHICH function
                  is being asked for", and that is on the guest stack. Dump it. This
                  turns "implement wow32.dll" into a short, specific list. */
@@ -22460,8 +22407,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 p = zput(p, " di=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
                 p = zput(p, " bp=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBP) & 0xFFFF);
                 p = zput(p, " ds=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                /* SP-relative lands in the prologue's saved-register block (every
-                   word of it accounts for a push at seg1:0x2bb6). The CALLER's
+                /* SP-relative lands in the thunk's saved-register block. The CALLER's
                    arguments are above the frame, so dump from BP too -- and for the
                    inline 0x56 sites, which have no such prologue, SP is the right
                    end. Both, rather than choosing wrong. */
@@ -22474,13 +22420,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     const volatile BYTE *fb =
                         (const volatile BYTE *)(ULONG_PTR)(ssb + bp16);
                     /* ★ THE FUNCTION ID. Every 32-bit call goes through one common
-                         thunk at seg1:0x2bb6, reached from a per-function stub that
-                         looks like
-                             push <args...> / push <ID> / push cs / call 0x2bb6
-                         (e.g. seg1:0xb35b pushes 0x78, 0xb42b pushes 0x9b, 0xb438
-                         pushes 0x9e). So the frame is a FAR call frame -- bp+2/bp+4
-                         are the return address back into the stub -- and bp+6 is the
-                         ID the stub pushed last.
+                         thunk, reached by a FAR call from a per-function stub that has
+                         pushed its arguments and then its ID (observed in every frame).
+                         So bp+2/bp+4 are the return address back into the stub, and
+                         bp+6 is the ID the stub pushed last.
                        That is the whole WOW32 interface: a small integer namespace.
                        Naming it here is what turns a wall of identical BOP lines into
                        a list of functions to implement. */
@@ -22491,13 +22434,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              words. That is why session 30 filed VirtualAlloc's argument
                              ORDER as "not pinned down, two readings possible" -- there
                              was only ever one reading, and the instrument was lying.
-                           The arguments are at bp+16. Proof is krnl386's own return
-                             path (seg1:0x2c1d): `mov bx,[bp+10] / shl bx,2 /
-                             add bx,0x2ab6 / jmp bx` lands in a table of
-                             `pop bx / pop bp / add sp,0xA / retf N` stubs. The
-                             `add sp,0xA` skips bp+2..bp+10, the `retf` consumes the
-                             far return at bp+12/+14, and `retf N` discards N bytes
-                             above it. So the arguments begin at bp+16. See wow32.h. */
+                           The arguments are at bp+16: above bp+2..bp+10 (the stub's
+                             return, its id, its argument byte count) and the CALLER's far
+                             return at bp+12/+14 -- which is where the guest resumes, and
+                             the N argument bytes above it are what it discards. See
+                             wow32.h for the pinned layout. */
                         DWORD fid  = (DWORD)(fb[WOW32_OFF_ID]
                                              | (fb[WOW32_OFF_ID + 1] << 8));
                         DWORD nby  = (DWORD)(fb[WOW32_OFF_ARGB]
@@ -22542,27 +22483,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                         p = zput(p, " stub=0x"); p = zhex(p, sseg);
                         /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
-                             krnl386 keeps the current task's TDB selector in DGROUP
-                             `[0x228]`, and the common thunk sets DS to DGROUP two
-                             instructions before the BOP (`seg1:0x2bc9 mov ds,cs:[0x30]`)
-                             -- so at EVERY WOW32 call the guest's own DS already selects
-                             the segment this lives in. No base to resolve, nothing that
+                             krnl386 keeps the current task's TDB selector in its DGROUP
+                             at offset 0x228 (observed), and at EVERY WOW32 call the
+                             guest's own DS already selects DGROUP (observed) -- so it
+                             selects the segment this lives in. No base to resolve, nothing that
                              moves between runs, and it costs one read.
                            ★ IT TURNS THE LOG INTO A TASK TIMELINE, which is the thing
                              the frontier needs. WOWEXEC executes, calls WaitEvent(0) --
                              the handshake between InitTask and InitApp in every Win16
                              startup -- and never gives control back, so krnl386's boot
                              task never returns from LoadModule and never unlinks its own
-                             bring-up record at seg1:0xcd36. That record is what
-                             GetExePtr(NULL) then matches, and the #GP at seg1:0x229c is
-                             the consequence. Every one of those claims is about WHO WAS
+                             bring-up record. That record is what GetExePtr(NULL) then
+                             matches, and the #GP that follows is the consequence. Every one of
+                             those claims is about WHO WAS
                              RUNNING, and until now the log could not say.
-                           ⚠ It is a READING, not a lever. `seg1:0x2c05` compares this
-                             word across the BOP and switches on a difference, which
-                             reads like an invitation to schedule by writing it -- but
-                             `seg1:0x98ab`'s INCOMING task is the caller's own, so that
-                             path restores the caller after someone else ran. Writing it
-                             here would park the wrong stack in the wrong TDB. */
+                           ⚠ It is a READING, not a lever. krnl386 reacts when this word
+                             differs across a BOP, which reads like an invitation to
+                             schedule by writing it -- but measured, what that does is
+                             restore the caller after someone else ran. Writing it here
+                             would park the wrong stack in the wrong TDB. */
                         {   DWORD dgb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
                                                              & 0xFFFF));
                             if (dgb) {
@@ -22576,9 +22515,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                         }
                         /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
-                             The mode word at bp-24 picks one of 38 return paths
-                             (see WOW32_OFF_MODE in wow32.h). krnl386 always pushes
-                             0 and never sets it, so this MUST read `mode=0` on
+                             The mode word at bp-24 picks how the call returns
+                             (see WOW32_OFF_MODE in wow32.h). krnl386 always passes
+                             0 (observed), so this MUST read `mode=0` on
                              every line -- and the day something writes it, the log
                              says so instead of the guest quietly returning
                              somewhere else. Predict the number before the run. */
@@ -22592,10 +22531,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              offset alone, and every reader (including this session)
                              assumed segment 1 -- krnl386's main segment, where most of
                              them are. Session 34 chased `from=0x09bf` into seg1, found
-                             it landing in the MIDDLE of a 6-byte `test`, and only then
-                             looked at the frame word above it: the caller was 0x01d7,
-                             a DIFFERENT krnl386 segment. An instrument that names half
-                             an address invites disassembling the wrong module. */
+                             it landing mid-instruction, and only then looked at the
+                             frame word above it: the caller was 0x01d7, a DIFFERENT
+                             segment of krnl386. An instrument that names half an address
+                             invites looking in the wrong module. */
                         p = zput(p, " from=0x");
                         p = zhex(p, (DWORD)(fb[14] | (fb[15] << 8)));
                         p = zput(p, ":0x");
@@ -22612,10 +22551,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  Its last act before ExitKernelThunk is WOW32 0xc4 -- the fatal
                                  error box -- and two of the words in this frame are a far
                                  pointer to the message. Session 34 got "NTVDM KERNEL: Missing
-                                 16-bit system module" only by taking the offset out of the log
-                                 by hand and reading it out of the file. There are seven such
-                                 strings in seg1 at 0xb937..0xba54 and they name FIVE DIFFERENT
-                                 failures; guessing which one from surrounding behaviour is
+                                 16-bit system module" only by taking the pointer out of the log
+                                 by hand and reading the string it named. Several different
+                                 failures end in this same call; guessing which one from
+                                 surrounding behaviour is
                                  exactly the reasoning-instead-of-measuring this project keeps
                                  paying for. Print it.
                                ⚠ NO ASSUMED FRAME. Which words hold the pointer is not fixed by
@@ -22710,9 +22649,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  arrives here. wow32.h holds the frame layout, the argument
                  convention and the services themselves; this is only the wiring.
                ⚠ The return value goes in a HOLE ON THE GUEST STACK, not in AX/DX
-                 -- the thunk does `sub sp,4` before the BOP and `pop ax / pop dx`
-                 after it, so anything we put in registers is overwritten before
-                 the caller sees it. wow32_setret() is the only correct way. */
+                 -- the thunk loads AX/DX from that hole after the BOP (observed:
+                 anything we put in registers is overwritten before the caller
+                 sees it). wow32_setret() is the only correct way. */
             if (bcode == 0x51) {
                 DWORD ssb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 wow32_frame_t f;
@@ -22733,7 +22672,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      gate keyed on it rejected EVERYTHING and the run collapsed from 258
                      calls to 3. Measured, not reasoned about.
                    ⇒ The BOP itself is the reference. It lives in krnl386's own common
-                     thunk (`seg1:0x2bf1`), so the executing CS at a BOP IS krnl386's
+                     thunk (observed), so the executing CS at a BOP IS krnl386's
                      code segment -- and a stub in that same segment is krnl386's stub.
                      Exact, self-contained, and true from the first call onward. */
                 f.krnl = (f.stubseg == (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
@@ -22787,8 +22726,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     }
                 }
                 /* ── ★★★ THE SCHEDULER'S TWO BOP HOOKS. See src/wow/wowsched.h. ──
-                     DS is krnl386's DGROUP at every WOW32 BOP by construction
-                     (`seg1:0x2bc9 mov ds,cs:[0x30]`), which is the only reason the
+                     DS is krnl386's DGROUP at every WOW32 BOP (observed on every
+                     call), which is the only reason the
                      current-task word is reachable from outside a call. Learn it
                      unconditionally -- it costs nothing and the fault hook, which
                      runs where DS is anybody's, depends on having it. */
@@ -22901,8 +22840,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          Moment (C) resumes the parked task when the creator
                          RETIRES. WOWEXEC never retires -- it registers its
                          classes, opens its windows and settles into its message
-                         loop (`wowexec seg1:0x0798`), so `[0x228]` never reaches
-                         0 and a task parked at its launch waits forever. That is
+                         loop, so the current-task word never reaches 0 and a
+                         task parked at its launch waits forever. That is
                          exactly what SYSEDIT.EXE does today: it gets a task
                          database, a launch frame and a task id, and never runs.
 
@@ -22914,18 +22853,17 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          needs no new lever: the frame is already a WOW32 frame
                          with a mode word and a return hole.
 
-                       ★ THE WAIT RETURNS 0, AND THAT IS READ FROM THE CALL SITE,
-                         not chosen: `seg1:0x07a1 or ax,ax / jne 0x0798` loops back
-                         to wait again on non-zero, and falls through to
-                         PeekMessage on zero. So 0 is "carry on and look", which
+                       ★ THE WAIT RETURNS 0, AND THAT IS OBSERVED, not chosen: on
+                         a non-zero answer WOWEXEC waits again; on zero it goes on
+                         to PeekMessage. So 0 is "carry on and look", which
                          is what a task that has just been given its turn back
                          should do.
 
                        ★ s92 (#306): NO LONGER TWO TASKS ONLY. Every task that is not
                          running sits in g_ws_slots; this yield goes ROUND ROBIN to the
                          next one (ws_pick). Round robin and not krnl386's own priority
-                         list (seg1:0x99ed, TDB+0x08): every Win16 task here runs at the
-                         same priority, and the yield only happens when the running one
+                         order (TDB+0x08): every Win16 task here runs at the same priority, and
+                         the yield only happens when the running one
                          has nothing to do. The other new yield is at GetMessage -- see
                          "(E)" at the USER dispatch -- for a task launched and never run. */
                     else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
@@ -22957,11 +22895,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 /* ── ★ #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
                      WAIT. The arm above handles it when another task is parked; with
                      none it fell through to "unimplemented", answered 0 instantly, and
-                     krnl386's idle loop (`seg1:0x07a1 or ax,ax / jne` -> PeekMessage ->
-                     back) ran at 100% CPU -- measured after Calc closed with its Help
-                     task alive: 0x3e46a stepped-over calls, all of them this one.
-                     0 is still the answer (read from the call site: "carry on and
-                     look"); what was missing is the block before it. Real windows
+                     the guest's idle loop (wait -> PeekMessage -> wait) ran at 100% CPU
+                     -- measured after Calc closed with its Help task alive: 0x3e46a
+                     stepped-over calls, all of them this one.
+                     0 is still the answer (see above: "carry on and look"); what was
+                     missing is the block before it. Real windows
                      are pumped (that is where a Win16 message comes from), then up to
                      50 ms of waiting for input -- the same bound and reasoning as the
                      GetMessage wait -- and any IRQ a 32-bit component raised. */
@@ -22991,11 +22929,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      produced "Unable to open KERNEL executable": krnl386 could not
                      learn the current directory, so it never built a path to open. */
                 /* ── ★ THE READ THAT CANNOT BE DECLINED. (GH #128, session 34) ────
-                     krnl386 calls 0x97 (read) from two places. At seg1:0x5570 the
-                     sentinel means "ask real DOS" and declining is the whole answer.
-                     At seg1:0x8a4e it does NOT chain -- `xor dx,dx / or ax,0xffff /
-                     dec dx / retf` returns the failure to its own caller -- so here
-                     the read has to actually happen.
+                     krnl386 calls 0x97 (read) from two call sites (told apart by the
+                     frame's `from` word). At one the sentinel means "ask real DOS" and
+                     declining is the whole answer. At the other it does NOT chain --
+                     the failure goes straight back to its own caller (observed) -- so
+                     here the read has to actually happen.
                      That is the read of SYSTEM.DRV's segment data, and stepping it
                      over is what left krnl386 saying "Missing 16-bit system module"
                      after it had opened the file successfully.
@@ -23004,7 +22942,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      first was followed by the chained `AH=3Fh` reading exactly 0x40
                      bytes into that same buffer. So words 4-5 are a DWORD count, 6-7 a
                      16:16 buffer pointer, 8 the handle.
-                   ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. The failure path builds
+                   ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. Failure is
                      0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
                      and only a real failure may return the sentinel. */
                 if (f.krnl && f.id == WOW32_FILE_READ && !wow32_may_decline(f.id, f.from)) {
@@ -23161,9 +23099,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     return 1;
                 }
                 /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
-                     `seg1:0x0da0` calls this and the very next instruction is
-                     `0f ff` -- UD0, on purpose -- so krnl386 does not expect to be
-                     returned to. Stepped over, that UD0 is reflected to its own
+                     krnl386 does not expect to be returned to from this call:
+                     stepped over, the guest's next instruction is a deliberate UD0
+                     (`0f ff`, in the fault bytes). That UD0 is reflected to its own
                      handler, which sets the vector again and faults again: a run
                      that has ENDED then fills the log to its 268 MB cap, and every
                      one of those bytes is after the last thing that happened.
@@ -23176,7 +23114,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     wowlog_flush(base, &p);
                     return -1;
                 }
-                /* ── ★★★ krnl386 seg2's TABLE. Learn its segment from a stub. ──
+                /* ── ★★★ krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
                      Same shape as USER's anchor below, and for the same reason:
                      the id space is per TABLE, so nothing here may be answered
                      until the table has identified itself. See wow_krnl2_stub. */
@@ -23189,35 +23127,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     p = zput(p, " (learned from the stub's own bytes in the file)");
                 }
                 /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
-                     ★ WHAT IT IS, AND HOW THAT IS KNOWN. The stub is `seg2:0x3ec7`
-                       and its one caller is `seg2:0x2c60`, whose result travels a
-                       short, entirely visible road:
-                         2c81  call 0x3ec7          -- this call
-                         2c84  or ax,ax / je        -- 0 becomes 0xffff, the FAILURE
-                         2c88  push ax / push [bp+8] / lcall <seg1:0x6468>
-                         ...
-                         29a5  call 0x2c60          -- from the task creator
-                         29a8  inc ax / jne / dec ax
-                         29af  mov [bp-2],ax        -- kept across the whole launch
-                         2b18  call seg2:0x016e     -- BuildPDB: `mov ah,55h / int 21h`
-                         2b4e  mov ax,[bp-2] / or ax,ax / je
-                         2b55  mov es:[0x2c],ax     -- ★ INTO THE NEW TASK'S PSP
-                       So the value this call returns IS the environment field of the
-                       PSP of the task about to run, and `seg1:0x6468` (which the
-                       success tail hands it to, with [eax+0x12] as the destination)
-                       is a global-arena owner write -- i.e. the value is a real
-                       global object of krnl386's, not a token.
+                     ★ WHAT IT IS, AND HOW THAT IS KNOWN. It is called once per task
+                       launch, before the new task's PSP is built (`AH=55h` follows
+                       it), and what it returns is what then appears in that new PSP's
+                       environment field, +0x2c -- the `PSPENV CHANGED` watch shows the
+                       answer land there. A 0 answer fails the launch. So the value
+                       this call returns IS the environment of the task about to run,
+                       and krnl386 goes on to give it an owner as a global object of
+                       its own -- a real object, not a token.
 
                      ★★ AND THAT CLOSES A FAULT WE CAUSED OURSELVES. Session 39 ran
                        `0xd1` as an EXPERIMENT (`wow32ret.txt`, `d1 00000001`) on the
                        reading that "it only has to be non-zero", and SYSEDIT then
-                       died at `0x0abf:0x09f0` -- `mov es,cx` with `cx = 1`, the null
-                       descriptor -- reading its own `PSP+0x2c`. The 1 in that field
-                       was OUR OWN EXPERIMENT VALUE, stored by `seg2:0x2b55`, and the
-                       run log says so without any new measurement: the `0xd1` answer
-                       (`ANSWERED 0x00000001`, from `seg2:0x2c84`), then AH=55h, then
+                       died at `0x0abf:0x09f0` loading ES with 1 -- the null
+                       descriptor -- read from its own `PSP+0x2c`. The 1 in that field
+                       was OUR OWN EXPERIMENT VALUE, and the run log says so without
+                       any new measurement: the `0xd1` answer (`ANSWERED
+                       0x00000001`), then AH=55h, then
                        `PSPENV CHANGED: sel 0x0adf +0x2c 0x03c7 -> 0x00000001`, then
-                       the next call in from `seg2:0x2b93` -- past the store.
+                       the next call in.
                        "Non-zero" was a measurement of the abort, not of the meaning.
 
                      ⚠ SO THE ANSWER MUST BE A SELECTOR THE GUEST CAN LOAD, and one
@@ -23239,8 +23167,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        DO NOT ANSWER. Inventing a value here is how the 1 got in.
 
                      ⚠⚠ AND IT MUST BE A **COPY**. The first cut handed the source
-                       selector straight back, and the run said no: `mov es,cx` with
-                       `cx = 0x0aff` now faulted at the LOAD (`err=0x0afc`, the
+                       selector straight back, and the run said no: loading ES with
+                       0x0aff now faulted at the LOAD (`err=0x0afc`, the
                        selector's own index) instead of at the first use, because
                        WOWEXEC's launcher FREES the block as soon as LoadModule
                        returns -- `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
@@ -23253,8 +23181,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        INTO 16-bit code), so the copy lives in a host paragraph with
                        a host selector, which over-lives rather than under-lives.
                      ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
-                       global arena, so the `FarSetOwner` at `seg2:0x2c88` will not
-                       find an arena entry for it. Recorded, not hidden. */
+                       global arena, so krnl386's owner write for it (FarSetOwner)
+                       will not find an arena entry. Recorded, not hidden. */
                 if (!f.krnl && g_wow_krnl2_seg && f.stubseg == g_wow_krnl2_seg
                     && f.id == WOW32K2_TASKENV) {
                     WORD  pbsel = wow32_argw(&f, 4), pboff = wow32_argw(&f, 2);
@@ -24180,10 +24108,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                             /* ★ AND THE OTHER TWO PAIRINGS. ds:si/es:di is the string-move
                                  convention, and it is the wrong pair for the code this is
-                                 pointed at: a routine that walks a structure does
-                                 `les si,[bp+x]` and then reads es:[si+n] -- krnl386's
-                                 segment-table walker (seg1:0x9393, 0x9415) does exactly
-                                 that. Dumping only ds:si and es:di answered a question
+                                 pointed at: a routine that walks a structure commonly
+                                 addresses it through es:si, and the krnl386 walk this
+                                 was aimed at did (its ES:SI pointed into the segment
+                                 table at the hit). Dumping only ds:si and es:di answered a question
                                  nobody had while hiding the one on the screen. */
                             if (esb && mem_readable((ULONG_PTR)(esb + siv), 32)) {
                                 p = zput(p, "\r\n  @es:si=");
@@ -24399,9 +24327,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                AH=86h -> wait: the PIT already paces us, so CF=0 and return.
                                anything else, C0h INCLUDED -> AH=86h, CF=1, "unsupported".
                            ⚠ AH=C0h IS DELIBERATELY REFUSED, not stubbed with a table. The
-                             caller's very next instructions are `jc +0x1d` and, on the
-                             no-carry path, `cmp byte es:[bx+2],0xf8` -- it reads a MODEL
-                             BYTE out of the table we would have to invent. CF=1 sends it
+                             caller checks CF and, without carry, reads the MODEL BYTE at
+                             ES:BX+2 (the documented table layout) out of the table we
+                             would have to invent. CF=1 sends it
                              down the path a real PC/AT without the call takes; a fabricated
                              table sends it down a path chosen by a number we made up.
                              If a later run shows a driver needs the table, build it from the
@@ -24551,11 +24479,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              host exists depending on which mode asked.
                            Measured against krnl386, which is the only guest that has
                            ever reached here (see the patch list): it queries 168A for
-                           the "MS-DOS" vendor API and tests `cmp al,0x8a / jz` -- i.e.
-                           for AL UNCHANGED, meaning "not supported" -- then carries on.
-                           So the correct answer to 168A is to touch nothing. 1689 (the
-                           kernel idle call) likewise: krnl386 jumps away from it
-                           without reading a register. 1684 must return ES:DI = 0:0
+                           the "MS-DOS" vendor API, where AL UNCHANGED means "not
+                           supported" (documented). 1689 (the kernel idle call) has no
+                           return registers at all. 1684 must return ES:DI = 0:0
                            because it returns a POINTER the caller far-calls. */
                         p = zput(p, "INT2Fh(PM) AX=0x"); p = zhex(p, ax);
                         p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
@@ -24797,11 +24723,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, " -> free (kept: reserved or not allocated)");
                             break; }
                         case 0x04F1: {                             /* NTVDM-private: allocate */
-                            /* Private twin of 0000. krnl386 reaches it through a
-                               dispatcher at seg1:0x6638 keyed on the DPMI function
-                               number in AL -- AL=0 routes here, AL=0x0B is served
-                               locally by copying the descriptor straight out of the
-                               window (two `movsd`). So the private family is a fast
+                            /* Private twin of 0000. Observed: krnl386's descriptor
+                               allocations arrive here, while its Get Descriptor (0x0B)
+                               requests never reach us at all -- it reads those straight
+                               out of the window. So the private family is a fast
                                path for descriptor management: reads come from the
                                window, and only the operations that must reach the host
                                become calls. Same contract as 0000: CX descriptors,
@@ -24828,10 +24753,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x04F2: {                             /* NTVDM-private: COMMIT */
                             /* ★ THE SYNC POINT, AND IT IS THE GUEST TELLING US.
-                                 Every call site has the same shape: write a descriptor
-                                 through the vendor window, `or bl,7`, CX = how many,
-                                 then this. e.g. seg1:0x6089
-                                     mov byte [bx+5],0xf3 / or bl,7 / mov cx,1 / 04F2
+                                 Every call arrives the same way (observed): descriptors
+                                 already written through the vendor window, BX = the
+                                 first selector (RPL 3, TI set), CX = how many,
                                  i.e. "I have modified CX descriptors starting at BX --
                                  make them real". Stock ntvdm needs this for the same
                                  reason we do: writing the table's memory is not enough,
@@ -24865,7 +24789,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                          records through a selector it bases at the segment's
                                          real home. With the re-base dropped, the read landed
                                          at the STALE base and the walk read whatever was at
-                                         the new one -- `mov bx,es:[bx]` with bx=0x38a from a
+                                         the new one -- a read through ES with bx=0x38a from a
                                          garbage module index, #GP, and krnl386's own handler
                                          turning that into ExitKernelThunk(1). The module
                                          database was provably fine (`NE`, cseg=2, cmod=1,
@@ -25880,11 +25804,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  shape is identical to the mouse case above.
                                ★ A Watcom/DOS4GW program does not write `int 10h`; it calls
                                  int86(), and int86 under an extender is 0300 with BL=10h.
-                                 Traced through ZAR's own image: its video driver's SetMode
-                                 (obj1+0x8bfa0) calls obj1+0x8bf84, which puts **0x13** in
-                                 the register block and calls the int86 wrapper -- which
-                                 ends `mov word [ebp],0x300 / mov byte [ebp+4],0x10`.
-                               ★ MEASURED, with a breakpoint on that worker: it IS reached
+                                 ZAR's video driver sets its mode that way: **0x13** in the
+                                 register block, then INT 31h 0300 for vector 10h.
+                               ★ MEASURED, with a breakpoint on ZAR's mode-set worker: reached
                                  (`DPMI-BP HIT linear 0x03ffbf85`), and the very next line
                                  of the log is `-> simInt 0x00000010`. Seven of them in a
                                  45 s run -- one VESA probe (AX=4F00) and the mode set --
@@ -26565,13 +26487,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         if (ah == 0x48) {
                             /* ── DOS ALLOCATE, FROM PROTECTED MODE, RETURNS A SELECTOR ──────
                                A raw real-mode segment is useless to a PM client, and Doom
-                               proves the convention in its own code: immediately after this
-                               call it does
-                                   jnc +3 / mov [0x0c4a],ax / mov [0x0980],dl / MOV ES,AX
-                               Loading ES from AX only makes sense if AX is a SELECTOR -- with
-                               the raw segment 0x151c it is GDT index 0x2A3, which #GPs and
-                               silently kills the VDM. That `mov es,ax` IS the specification
-                               here, the same way DOS/4GW clearing D/B itself settled the
+                               proves the convention by what it does: on success it loads the
+                               AX it got back straight into ES (observed at the fault). That
+                               only makes sense if AX is a SELECTOR -- with the raw segment
+                               0x151c it is GDT index 0x2A3, which #GPs and silently kills the
+                               VDM. That segment load IS the specification here, the same way
+                               DOS/4GW clearing D/B itself settled the
                                initial-selector width.
                                So: do the real DOS allocation (dos_int21 owns the MCB chain),
                                then hand back a descriptor covering it, IN AX ONLY.
@@ -26833,9 +26754,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            and answer with it rather than handing back a paragraph the guest
                            would shift by four and miss by a megabyte. */
                         /* ── AH=52h IS THE SAME SHAPE, AND IT #GP'd THE RUN. (GH #128) ──
-                             krnl386 calls it from PROTECTED MODE at seg1:0xbf97, having just
-                             allocated one descriptor for the answer, and then immediately
-                             does `mov cx, es:[bx+2]`. In the TODO arm ES was left at 0 -- the
+                             krnl386 calls it from PROTECTED MODE, having just allocated one
+                             descriptor for the answer, and then immediately reads through
+                             the ES:BX it gets back. In the TODO arm ES was left at 0 -- the
                              null selector -- so that read was a #GP, which is the fault
                              session 34 first delivered to krnl386's own handler and watched
                              it turn into ExitKernelThunk(2). It is not a mysterious fault:
@@ -26903,17 +26824,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              got a PSP at all.
 
                            ★ AND THAT IS THE NULL-ES FAULT, TRACED END TO END. SYSEDIT
-                             seg1:0x09e1 does
-                                 mov es,[0x1ae]        ; its PSP
-                                 mov cx,es:[0x2c]      ; the ENVIRONMENT segment
-                                 jcxz done             ; 0 is handled...
-                                 mov es,cx             ; ...1 is not
-                                 cmp byte es:[di],0    ; #GP -- selector index 0
-                             With no PSP built, +0x2c held whatever was in that memory:
-                             0 for WOWEXEC (whose launcher then read lstrlen(0000:0000) and
-                             took a reflected #GP inside krnl386) and 1 for SYSEDIT, which
-                             is past the `jcxz` guard and loads the null descriptor. Same
-                             field, same cause, two different symptoms.
+                             reads the ENVIRONMENT segment from its own PSP+0x2c; it treats
+                             0 as "none", and loads anything else into ES and reads through
+                             it (observed at the fault: ES loaded with 1, #GP on the null
+                             descriptor). With no PSP built, +0x2c held whatever was in that
+                             memory: 0 for WOWEXEC (whose launcher then read
+                             lstrlen(0000:0000) and took a reflected #GP inside krnl386) and
+                             1 for SYSEDIT, which gets past the "none" check and loads the
+                             null descriptor. Same field, same cause, two different symptoms.
 
                            ⚠ DX IS A SELECTOR HERE, NOT A PARAGRAPH. The V86 arm in
                              dos_int21.c writes to `(DX & 0xFFFF) << 4`, which is right
@@ -26922,8 +26840,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
 
                            ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. dos_psp_build stores the
                              environment as a PARAGRAPH, which is correct for a DOS program
-                             and wrong for this one: the guest's very next instruction is
-                             `mov es,` that word. So the copied PSP gets a descriptor over
+                             and wrong for this one: the guest loads that word straight
+                             into ES. So the copied PSP gets a descriptor over
                              the same environment instead -- the same treatment AH=34h and
                              AH=52h already get, for the same reason. */
                         if (ah == 0x55 || ah == 0x26) {
@@ -26976,11 +26894,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         /* ── ★★★★ INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
                              HERE IS YES. ─────────────────────────────────────────────────
                              Rational's DOS/16M asks its host to lock a region through this
-                             call before it will run, and reads CF=1 as a hard failure:
-                                 mov ax,0xFF80 / mov dx,0x1301 / mov es,[bp+4] / int 21h
-                                 jae ok / push 0x22 / call <fatal>
-                             where 0x22 is message 34 of its table -- and 34 is exactly what
-                             ZAR printed on the desktop:
+                             call before it will run (AX=FF80h, DX=1301h, ES = the region,
+                             as the call arrives) and treats CF=1 as a hard failure --
+                             message 34 of its table, exactly what ZAR printed on the desktop:
                                  DOS/16M error: [34]  DPMI host error (cannot lock stack)
                            ► THE ANSWER IS THE ONE THIS HOST ALREADY GIVES FOR THE DPMI TWIN.
                              INT 31h AX=0600h (lock linear region) is answered CF=0 with the
@@ -27124,33 +27040,27 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
      protected-mode handler for all 256 vectors is THREE BYTES -- `C4 C4 CF`: the BOP,
      and then an **IRET**. krnl386 hooks INT 21h in protected mode, asks its 32-bit
      companion first, and when the companion declines it chains to the vector it saved,
-     which is that stub:
+     which is that stub -- arriving with an interrupt-style frame on the stack (the
+     standard way to chain to a saved handler: flags pushed, then a far call).
 
-         seg1:0x5238  pushf                    ; ★ the flags image the IRET will restore
-               0x5239  push ds
-               ...
-         seg1:0x56d2  pop ds
-               0x56d3  lcall cs:[0x3c]         ; ★ -> our stub: BOP, then IRET
-               0x56e5  pushf                   ; krnl386 then PRESERVES what came back
-               0x5706  popf                    ;   across its own bookkeeping
-
-     So the very next instruction the guest executes after we advance past the BOP
-     throws our CF away and restores the caller's. A real INT 21h handler does not have
+     So the very next instruction the guest executes after we advance past the BOP --
+     the stub's IRET -- throws our CF away and restores the flags image in the frame. A real INT
+     21h handler does not have
      that problem, because on real hardware it answers by writing the flags image the
      caller pushed -- which is exactly what the V86 arm of this host already does
      (`*pfl |= 1`, at SS:SP+4) and what the protected-mode arm never did.
 
-   ★ MEASURED, and the measurement is an A/B inside one run. A breakpoint at
-     `krnl386 seg1:0x4549` -- the `jae` in `_lread`'s tail that turns a set CF into
-     `AX = -1` -- across SYSEDIT loading its four files:
+   ★ MEASURED, and the measurement is an A/B inside one run. A breakpoint on the
+     point in krnl386's `_lread` where a set CF becomes `AX = -1` (HFILE_ERROR),
+     across SYSEDIT loading its four files:
          SYSTEM.INI   0x0e7 bytes   efl=0x00010206   CF=0
          WIN.INI      0x1dd bytes   efl=0x00010206   CF=0
          CONFIG.SYS   0x000 bytes   efl=0x00010207   CF=1   -> AX=0xffff
          AUTOEXEC.BAT 0x000 bytes   efl=0x00010207   CF=1   -> AX=0xffff
      Our AH=3Fh answered `AX=0 CF=0` for all four. The two zeroes are the ones whose CF
-     never reached the guest: `_lread` skips its buffer probe on a zero-length read
-     (`seg1:0x3d96 jcxz`), and that probe's `or byte es:[bx],0` is the only thing that
-     had been clearing the CF left by its own `cmp ax,0xffff` two instructions earlier.
+     never reached the guest and a STALE one was tested instead: on a non-zero read,
+     other work inside `_lread` happened to clear that stale CF first (observed: only
+     the zero-length reads came back -1).
      ⇒ a defect that was ALWAYS here needed an empty file to expose it, and the stock
      oracle -- SYSEDIT under stock ntvdm opening all four with no message box -- is what
      ruled out "the application is right".
@@ -28697,8 +28607,8 @@ static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
 
    ⚠ Two of the six are seeded with real values and four are private scratch.
      That distinction is the honest state of the evidence, not a shortcut:
-     LASTDRIVE and the current-drive byte are pinned (krnl386 returns the latter
-     as INT 21h AH=19h's answer at seg1:0x5343), and the other four are only
+     LASTDRIVE and the current-drive byte are pinned (krnl386 answers a PM
+     INT 21h AH=19h with the latter -- observed), and the other four are only
      known to be read and written by krnl386 itself. Scratch keeps it
      self-consistent; when one of them turns out to matter, it gets pointed at
      the real variable and this comment shrinks by a line. */
@@ -29463,33 +29373,27 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             /* ES:DI = 0:0 means "no API for that device ID", and we have none.
                ⚠ Leaving the registers alone would be a POINTER-RETURNING call
                  that returns whatever was in ES:DI -- the caller then far-calls
-                 into it. krnl386 happens to be safe (it does `xor di,di / mov
-                 es,di` at seg1:0x2814 immediately before asking for device 9,
-                 then `or ax,di / jz` after), but that is the CALLER being
-                 careful, and it is not something to rely on from callers we
-                 have not read. */
+                 into it. krnl386 happens to be safe (it asks for device 9 with
+                 ES:DI already zero, so an untouched answer still reads as "none"
+                 -- observed), but that is the CALLER being careful, and it is
+                 not something to rely on from other callers. */
             VDM_SET16(tib, VTIB_ES, 0);
             VDM_SET16(tib, VTIB_EDI, 0);
             p = zput(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
-        /* ── The rest of what krnl386 asks INT 2Fh, and why leaving it alone is
-             the RIGHT answer rather than merely the easy one. Read off the
-             binary (tools/ne/neints.py, then the call sites):
+        /* ── The rest of what krnl386 asks INT 2Fh (as logged), and why leaving
+             it alone is the RIGHT answer rather than merely the easy one:
 
              1600h  "is enhanced-mode Windows running?" AL unchanged = 0x00 =
-                    no. Which is true. krnl386 then does `cmp al,3` at
-                    seg1:0xc14b and DISCARDS the flags -- there is no branch on
-                    it -- so this steers nothing anyway.
-             1689h  kernel idle call. Fire-and-forget: seg1:0x2f5f jumps away
-                    immediately afterwards without reading a single register.
-             168Ah  get vendor-specific API entry. AL unchanged = 0x8A, and
-                    krnl386 tests exactly that (`cmp al,0x8a / jz`) at
-                    seg1:0xd6e9 to mean "not supported", then carries on.
-                    Its vendor string at autodata:0x172a is "MS-DOS" -- so the
-                    thing it is looking for is NTVDM's private WOW API. It
-                    TOLERATES being refused, which is why WOW work can start
-                    without it. */
+                    no. Which is true, and krnl386 does not act on the answer.
+             1689h  kernel idle call (documented). Fire-and-forget: there are
+                    no return registers to set.
+             168Ah  get vendor-specific API entry. AL unchanged = 0x8A means
+                    "not supported" (documented). The vendor string it passes
+                    in DS:SI is "MS-DOS" -- so the thing it is looking for is
+                    NTVDM's private WOW API. See the vendor-API note at
+                    g_wow_vendor_sel for what happens when that is refused. */
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
         V86BOP_RET(V86BOP_DONE);
     }
@@ -29502,10 +29406,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
              first, then segment.
            ★ IT ALSO CRACKS THE SEGMENT MAP. MEM.EXE is relocation-free
              (e_crlc=0) and computes its own segment bases at run time, so
-             static analysis cannot place the code -- a scan for callers of
-             its AH=08h wrappers found only coincidences. One logged CS:IP
-             pins the base, because we know which wrapper that return
-             address follows. */
+             a file offset cannot place the code. One logged CS:IP per call
+             pins the base. */
         {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                        + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
             const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
@@ -30986,11 +30888,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x2F * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (i = 0; i < sizeof(bopxms); ++i) hdlr[XMS_ENTRY_OFF + i] = bopxms[i];  /* XMS far-call entry */
     /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
-       MEM.EXE at 07B5 does `cmp word [es:bx+0x45],0` and skips the whole
-       extended-memory report when it is zero, and ES:BX looked like the XMS
-       entry -- [0x2ab0]:[0x2532] is the same pair it far-calls. But the lookup
-       at 07:9F overwrites that pair first, so ES:BX is something else. Planting
-       HIMEM's own bytes (EB 50) there changed nothing. Sixth refutation. */
+       MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
+       some structure, and that structure looked like the XMS entry. It is not:
+       planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
+       refutation. */
     for (i = 0; i < sizeof(bop67); ++i) hdlr[0x48 + i] = bop67[i];  /* INT 67h (EMM) stub */
     /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
          a program detects EMM by either following the vector to the "EMMXXXX0"
@@ -31339,8 +31240,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          always reported 5.00 and its shell is built to match.
          `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
     /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
-         XP's COMMAND.COM does `cmp ax,5` on the WHOLE WORD and prints "Incorrect DOS
-         version" otherwise, so on the default 6.22 a double-click would die before it
+         XP's COMMAND.COM accepts only AX = 5 exactly (5.00 -- observed: 6.22 is
+         refused) and prints "Incorrect DOS version" otherwise, so on the default 6.22 a
+         double-click would die before it
          printed anything. This is not a global policy change: it applies only to a
          guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
          `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
@@ -31408,10 +31310,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zdec(p, m.ver_minor);
     p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
     /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
-         XP's COMMAND.COM asks AH=53h with AL as a selector and stores AL=5's answer in
-         [0x327]. Its own code makes [0x327]==1 unreachable-from-the-keyboard: the only
-         two call sites that pass AL=0 to the read-a-line routine (transient 0x0924 and
-         0x0C33) both sit behind `cmp byte [0x327],1 / jz away`. Stock IS interactive,
+         XP's COMMAND.COM asks AH=53h with AL as a selector, and AL=5's answer decides
+         whether it ever reads the keyboard: answered 1, it never does (observed: no
+         AH=0Ah, the shell goes past its prompt). Stock IS interactive,
          so stock must answer AL=0 there -- while our probe measured AL=1 with its
          output redirected to a file. Until that is re-measured un-redirected, the
          answers are a table a run can change, not a constant a rebuild can.
@@ -31424,9 +31325,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       HANDLE h;
       /* ── ★★ THE CONTEXT-DEPENDENCE, MODELLED RATHER THAN OVERRIDDEN. (s79) ─────────
            The measured stock answers (AL=2 -> CF=0, AL=5 -> AL=1) do not let XP's
-           COMMAND.COM read a key. Its own image proves why: the read-a-line routine's
-           only two keyboard-reading callers both sit behind `cmp byte [0x327],1 / jz`,
-           and [0x327] is exactly AL=5's answer. Stock IS interactive, so stock answers
+           COMMAND.COM read a key: with AL=5 answered 1 it never reaches its keyboard
+           read (see above). Stock IS interactive, so stock answers
            differently WHEN THE SHELL ASKS -- the call is context-dependent, and the
            context we measured in was a standalone probe with its stdout redirected.
          ⇒ So model the context instead of claiming a new universal value: an
@@ -31917,14 +31817,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          was contradicting itself: a port declared present in the equipment word whose
          base address is 0.
        ★ THAT INCONSISTENCY IS WHY COMM.DRV FAILS TO LOAD, measured end to end this
-         session. Its LibMain (comm.drv seg1:0x002a) ends with
-             00f1  mov cx,<__0040H> / mov es,cx    ; the BDA selector
-             00f9  mov si,0x2a0 / mov bx,[si+0x26] ; = 8, i.e. 0040:0008 -- LPT1
-             0103  mov ax,es:[bx]                  ; AX = that base address
-             ...   retf                            ; and AX IS the return value
-         -- so it returns whatever is at 0040:0008. Zero means "DLL initialisation
-         failed", krnl386's `or ax,ax / je` at seg2:0x2da6 keeps the 0, LoadModule
-         returns 0, and the boot dies with "NTVDM KERNEL: Missing 16-bit system module
+         session. Its LibMain returns the word at 0040:0008 -- the LPT1 base address,
+         read through the BDA selector (`__0040H`) -- as its result. Zero means "DLL
+         initialisation failed"
+         (documented LibMain contract), LoadModule returns 0, and the boot dies with "NTVDM
+         KERNEL: Missing 16-bit system module
          ... COMM.DRV". Five drivers whose LibMain returns 1 load; this one does not.
        ⚠ SO WRITE ONLY WHAT THE EQUIPMENT WORD ALREADY CLAIMS -- one parallel port at
          the standard LPT1 base, and NO serial ports. Filling in COM1..COM4 as well
@@ -32418,8 +32315,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ── GH #128: on a WOW launch, the guest is krnl386, not a DOS program. ─────────
          Placed HERE because this is the one point where the DOS machine is fully
          built (conventional memory, INT 21h, the IVT, INT 2Fh) and the guest entry
-         has not yet been committed. krnl386 needs all of it: AH=52h ten instructions
-         in, then 2F/1687 to find our DPMI host and switch itself.
+         has not yet been committed. krnl386 needs all of it: AH=52h almost at
+         once, then 2F/1687 to find our DPMI host and switch itself.
          The DOS program load above still ran and is simply discarded -- it is
          tolerant of a missing target and costs one wasted image. Overriding here
          rather than short-circuiting there keeps the DOS path's spine untouched. */
@@ -32434,10 +32331,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_wow_entering) {
         /* v86_set_entry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
            for a DOS program and wrong for this one. krnl386 wants DS = its automatic
-           data segment, and its very first instruction is `cmp ax,0x4b4f` -- 'OK' --
-           with `xor ax,ax / retf` as the else. Get AX wrong and it returns instantly,
+           data segment, and it expects AX = 0x4b4f -- 'OK' -- at entry; with anything
+           else it returns at once with AX=0. Get AX wrong and it returns instantly,
            which would read as "the entry did nothing" rather than "we failed a
-           handshake". Measured at seg1:0xc02b; see session 30 part 5. */
+           handshake". Measured at the entry breakpoint; see session 30 part 5. */
         VDM_SET16(tib, VTIB_DS, g_wow_entry_ds);
         /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
              DPMI host's private data and carves every later allocation upward from
@@ -32446,13 +32343,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              already placed krnl386's own code. Point it at the arena block instead. */
         if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
         /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
-             seg1:0xc164 does `mov ax,cx / shr ax,4 / mov [0x5a6],ax` -- CX turned into
-             a PARAGRAPH count and stored as the size of the block that [0x5a0] (the
-             selector built over base(SS)+SP) describes. Measured at three breakpoints,
-             CX was 0 all the way from entry to that instruction, so krnl386 believed
-             it had ZERO paragraphs and every allocation out of that arena failed --
-             including `call 0x22b2` inside LoadSegment, which is why it could not load
-             its own segment 1 and exited.
+             krnl386 takes CX at entry, as a byte count, for the size of the block its
+             selector over base(SS)+SP describes (observed: the arena it then uses is
+             CX >> 4 paragraphs). Measured at three breakpoints, CX was 0 all the way
+             from entry, so krnl386 believed it had ZERO paragraphs and every
+             allocation out of that arena failed -- including one inside LoadSegment,
+             which is why it could not load its own segment 1 and exited.
            The selector has a 64 KB limit, so this is the whole of it minus the header
            image we place at its base. Nothing else names this quantity to the guest. */
         VDM_SET16(tib, VTIB_ECX, (WORD)g_wow_entry_cx);
@@ -32508,8 +32404,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
         VDM_REG(tib, VTIB_EIP) = 0x60;
     }
-    /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU reads
-       EFLAGS.VIF, not IF (VdmpCanDeliver, ntoskrnl 0x56dce0). Starting the guest with
+    /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU follows
+       EFLAGS.VIF, not IF (observed: VIP set and delivery deferred). Starting the guest with
        VIF clear makes every hardware interrupt undeliverable from the kernel's point of
        view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
     if (g_qi_vif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
@@ -33314,12 +33210,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    will automatically be converted to a descriptor."
 
                    THIS IS NOT A SPEC DETAIL WE ARE HONOURING FOR TIDINESS -- it is what
-                   killed Doom for four sessions. DOS/4GW's PM module does:
-                       mov es,[saved DS] / mov bx,es:[0x2c] / mov es,bx
-                   i.e. it reads the PSP's environment field and loads it as a SELECTOR.
-                   With ES pointing at the data segment instead of the PSP, +0x2c is an
-                   arbitrary code byte pair -- measured as 0x8b17, LDT index 4450 -- and
-                   `mov es,bx` #GPs, which XP answers by terminating the whole VDM with no
+                   killed Doom for four sessions. DOS/4GW's PM module reads the
+                   environment field at +0x2c of whatever the initial ES selects and
+                   loads it as a SELECTOR (observed). With ES pointing at the data segment
+                   instead of the PSP, +0x2c is an arbitrary code byte pair -- measured as
+                   0x8b17, LDT index 4450 -- and that segment load #GPs, which XP answers by
+                   terminating the whole VDM with no
                    exception we can catch. The client is thus its own second witness for
                    BOTH halves of the rule, independently of the spec text.
 
@@ -33422,8 +33318,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            it SILENTLY TERMINATES THE VDM. That is the #18 signature:
                            no exception, no log line, the process simply gone.
                            krnl386 issues INT 2Fh from PM (168A, the "MS-DOS" vendor
-                           query, at seg1:0xd6e7 -- literally its next interrupt after
-                           the 000A alias) and it died there. No DOS/4GW-class client
+                           query -- its very next interrupt after the 000A alias, per
+                           the log) and it died there. No DOS/4GW-class client
                            ever did that, which is why the list never needed 0x2F.
                          ⚠ Every number added here widens the false-positive surface of
                            what is a NAIVE byte-pair scan -- the same shape that once
@@ -33438,9 +33334,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            session 21 and is already trusted to gate every site in
                            dpmi_patch_code_region(). It was simply never wired in here.
 
-                         ⚠ MEASURED, session 32. krnl386 executes `INT 2` at seg1:0x67cc:
-                             dec [0x1e] / jne / test [0x44],1 / je / and [0x44],0xfffe / cd 02
-                           A breakpoint armed on that site reported `displaced cd 02`, which
+                         ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
+                           protected mode. A breakpoint armed on that site reported `displaced
+                           cd 02`, which
                            is proof it was RAW -- dpmi_bp_arm() refuses a site that is already
                            an INT site, so it could not have armed otherwise. 0x02 is not on
                            the list, so it was never even a candidate.
@@ -33510,7 +33406,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
                            A histogram says a vector is a suspect; it does not say WHERE,
                            so acting on it still means reading the binary by hand. Session
-                           32 needed exactly that: `INT 2` at seg1:0x67cc turned out to be
+                           32 needed exactly that: a `cd 02` in krnl386 turned out to be
                            REAL CODE the guest executes, left RAW by the boundary vote --
                            proved by arming a breakpoint on it and reading back
                            `displaced cd 02` (a patched site is an INT site, and
@@ -33778,9 +33674,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 p = zput(p, ":0x");
                                 p = zhex(p, (DWORD)(s[0] | (s[1] << 8)));   /* IP  */
                                 /* ...and the frames ABOVE it. The IRET target turned out
-                                   to be a bare `ret` (krnl386 chains INT 31h to us with
-                                   `pushf / lcall cs:[0x7c]`, so the interesting address
-                                   is one frame further up). Print the whole top of the
+                                   to be a bare `ret` (krnl386 chains INT 31h to us through
+                                   an interrupt-style far call from a small helper, so the
+                                   interesting address is one frame further up). Print the whole
+                                   top of the
                                    stack rather than coming back for it a third time. */
                                 p = zput(p, " stk");
                                 for (w = 0; w < 12; ++w) {
@@ -33799,7 +33696,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_dpmi_iter      = (LONG)(steps + 1);
                     /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
                        bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
-                       a #GP KiTrap0D pushes class 6, which reaches the generic reflect body. */
+                       a #GP the kernel uses class 6, which reaches the generic reflect body. */
                     if (steps == 0) {
                         DWORD st714 = *(volatile DWORD *)(ULONG_PTR)0x714;
                         p = zput(p, "GH#18: [0x714]=0x"); p = zhex(p, st714);
@@ -34110,20 +34007,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           if (!host_readable(sk, 32)) p = zput(p, "<unreadable from host>");
                           else                        p = zdump(p, sk, 32);
                           /* ── AND THE FRAME AT SS:BP ──────────────────────────────────
-                             Static disassembly of DOOM.EXE (the DOS/4GW 16-bit half is
-                             bound in at file offset 0x1DD0, so guest 0x0F:off = file
-                             0x1DD0+off) says the client dies in its HANDOFF to the
-                             application, twelve instructions after the last checkpoint:
-                               72d8 mov es,[bp+2]   72db mov di,[bp+0xe]
-                               72de/e2/e6 build an IRET frame from [bp+0x1e/0x22/0x26]
-                               72ea mov bx,[bp+4]   72ef mov ss,ax   72f8 mov ds/es,bx
-                               72fc iret            <- enters the app
-                             EVERY operand is a word in the frame at SS:BP, and all of
-                             them are selectors or a far entry point. Dumping the frame is
+                             The client dies in DOS/4GW's HANDOFF to the application,
+                             just past the last checkpoint: it loads its segment registers
+                             and an IRET frame from the frame at SS:BP and enters the app
+                             (observed: every value it loads is a word of that frame, all
+                             of them selectors or a far entry point). Dumping the frame is
                              therefore the whole question: which descriptors it is about to
                              load, and where it is about to jump. Without it we would be
-                             guessing which of the twelve faults; with it the answer is a
-                             lookup against the descriptor calls already in this log. */
+                             guessing which load faults; with it the answer is a lookup
+                             against the descriptor calls already in this log. */
                           { const BYTE *fr = (const BYTE *)(ULONG_PTR)
                                 (sb + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
                             p = zput(p, " frame@ss:bp=");
@@ -34132,15 +34024,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 p = zdump(p, fr, 0x30);
                                 /* ► AND THE CODE IT IS ABOUT TO JUMP TO. This half IS
                                      DOS/4GW-frame-specific and says so: [bp+0x22]:[bp+0x1e]
-                                     is the far entry the IRET at 0x72fc consumes. The first
+                                     is the far entry the handoff's IRET takes (as observed
+                                     in the frame dump). The first
                                      frame dump proved every descriptor it loads is in range
                                      and correctly typed (SS=0xAF lim 0x7cff, SP=0x6F3E;
                                      DS/ES=0x17; CS=0x8F lim 0x5e3f, IP=0x2C63) -- so the
                                      fault is not the handoff, it is the FIRST INSTRUCTIONS
                                      OF THE MODULE, and those live in a block DOS/4GW read
-                                     out of DOOM.EXE at runtime. They are not in any file we
-                                     can disassemble offline; the only place they exist is
-                                     guest memory, here, now. Hence the dump.
+                                     out of DOOM.EXE at runtime. They are not at any fixed
+                                     file offset we can read offline; the only place they
+                                     exist is guest memory, here, now. Hence the dump.
                                      Costs nothing when the frame is not a DOS/4GW one: the
                                      selector simply will not resolve to readable memory. */
                                 { WORD fcs = *(const WORD *)(fr + 0x22);
@@ -34271,7 +34164,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              segment 1 to linear 0x20760 and installs the descriptor through
                              04F2, and the copy may land after the last patch pass -- so a
                              breakpoint inside it is skipped at setup (still zeroes) and never
-                             looked at again. Two breakpoints armed on `seg1:0x5a42`/`0x5a50`
+                             looked at again. Two breakpoints armed inside krnl386's segment 1
                              produced no "armed" line and no hit at all, which reads exactly
                              like "the guest never got there" and means nothing of the sort.
                            Cheap: a handful of entries, and only when a list was loaded. The
@@ -34472,7 +34365,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            ⚠ THIS IS A DUMP, NOT A DECODE. Nothing here claims to know the
                              layout. It is printed against a fault whose every field is
                              already known independently -- krnl386's deliberate `0f ff`
-                             (UD0) at seg1:0xc5f0, CS=0x01cf, SS:SP=0x001f:0x0fea, #UD =
+                             (UD0) at CS:IP 0x01cf:0xc5f0, SS:SP=0x001f:0x0fea, #UD =
                              DPMI exception 6 -- so each slot can be identified by the value
                              in it rather than by a guess about the shape. Offsets are
                              printed with the dwords for exactly that reason: a dump whose
@@ -34515,7 +34408,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              choosing to exit. It was not quitting; we were stopping it.
 
                            ★ THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the rig
-                             (session 34, against krnl386's deliberate `0f ff` at seg1:0xc5f0
+                             (session 34, against krnl386's deliberate `0f ff` at 0x01cf:0xc5f0
                              whose every field was known in advance): the kernel switches to
                              [TIB+0x638]:0x1000, pushes 0x10 bytes, and what it pushes IS the
                              DPMI 0.9 16-bit exception frame --
@@ -34531,10 +34424,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
                              -- which is not a coincidence: this machinery exists in NT FOR
                              ntvdm's DPMI, so it emits the shape DPMI specifies. krnl386's own
-                             handler confirms the layout independently: at seg1:0xc5f2 it does
-                             `push bp / mov bp,sp`, writes a resume address into `[bp+8]` and
-                             its CS into `[bp+0xa]`, and leaves by `retf`. Those are the
-                             faulting IP and CS slots exactly.
+                             handler confirms the layout independently (observed): it rewrites
+                             exactly the faulting IP and CS slots with a resume address and
+                             leaves by `retf`, as DPMI 0.9 prescribes.
                              ⇒ So delivery is: fill the two return words with a BOP of ours,
                                point CS:EIP at the registered handler, and leave the kernel's
                                SS:ESP alone. The handler runs on the host stack the kernel
@@ -34806,13 +34698,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 }
                             }
                             /* ── ★★★ (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
-                                 krnl386's creating task ends itself at seg1:0xcd36 --
-                                 unlink, unsign the record, `[0x228] = 0`, move to a
-                                 private kernel stack -- and from that instruction the
-                                 machine belongs to the scheduler. The first code to
-                                 touch the current task (seg1:0x321f `mov es,[0x228]` /
-                                 `test es:[0x18],2`) then dereferences a NULL SELECTOR,
-                                 which is a #GP with err=0. That fault is not a defect,
+                                 krnl386's creating task ends itself (observed: its
+                                 record goes, the current-task word at DGROUP 0x228
+                                 becomes 0, and it moves to a private kernel stack) --
+                                 and from then on the machine belongs to the scheduler.
+                                 The first code to touch the current task then loads
+                                 that 0 as a selector and reads through it -- a #GP
+                                 with err=0. That fault is not a defect,
                                  it is the cue: nobody is running and somebody is
                                  waiting. Resume them instead of reflecting.
                                ⚠ THIS TRUNCATES THE CREATOR. It had already retired, but
@@ -34842,7 +34734,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             int wsc = g_wowsched_on ? ws_pick(0) : -1;
                             if (wsc >= 0 && wowsched_curtask() == 0) {
                                 p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
-                                            "(seg1:0xcd41) and task 0x");
+                                            "and task 0x");
                                 p = zhex(p, g_ws_slots[wsc].task);
                                 p = zput(p, " is parked. Resuming it INSTEAD of reflecting this "
                                             "fault; the creator's remaining teardown is "
@@ -34902,24 +34794,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      INTERRUPT frames, and it was never applied here -- so a
                                      32-bit client got a 16-bit exception frame and read its
                                      fields off the end of it.
-                                   ► MEASURED, ZAR (GH #23), and confirmed against the binary
-                                     rather than reasoned. NT builds a SIXTEEN-BIT frame on the
-                                     fault stack (8 words; the bytes are only coherent read that
-                                     way). DOS/4GW declares itself 32-bit at the mode switch, so
-                                     its #GP handler -- DOS4GW.EXE+0x8896, entered at 0x0f:0x6abb
-                                     -- is:
-                                         push ds / push si / push bp / mov bp,sp
-                                         mov si,[bp+0x12]   ; frame[+0x0C] = faulting EIP
-                                         mov ds,[bp+0x16]   ; frame[+0x10] = faulting CS
-                                         cmp byte [si],0x07 ; `pop es`?
-                                         cmp byte [si],0x1f ; `pop ds`?
-                                     +0x0C and +0x10 are the DPMI 32-BIT frame's EIP and CS. In
+                                   ► MEASURED, ZAR (GH #23). NT builds a SIXTEEN-BIT frame on
+                                     the fault stack (8 words; the bytes are only coherent read
+                                     that way). DOS/4GW declares itself 32-bit at the mode
+                                     switch, so its #GP handler (entered at 0x0f:0x6abb) reads
+                                     the faulting EIP and CS at frame +0x0C and +0x10 -- the DPMI
+                                     32-BIT frame's slots (observed in its fault registers). In
                                      our 16-byte frame there is nothing at +0x10, so DS loaded
                                      ZERO and the handler faulted on its own first memory read --
                                      which re-entered it, for ever, until the log capped.
                                    ► AND THE RETURN CONFIRMS IT INDEPENDENTLY: the handler leaves
-                                     by `66 cb` -- RETFD, popping EIGHT bytes -- exactly the `66
-                                     cf` IRETD tell that identified the interrupt-frame case.
+                                     with a 32-bit far return, popping EIGHT bytes -- the same
+                                     tell (as with IRETD) that identified the interrupt-frame
+                                     case.
                                    ► WHY THIS IS A REBUILD AND NOT A WIDER READ: the frame is the
                                      KERNEL'S, and it is 16-bit whatever the client is. So the
                                      32-bit frame is built BELOW NT's (which is left intact, so
@@ -34976,7 +34863,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      The frame says WHERE it faulted; on a #GP that is half
                                      the question, because the other half is always "which
                                      selector, and did the offset fit inside it". Session 34
-                                     spent a run on `mov bx, es:[bx]` at seg1:0x8d80 unable to
+                                     spent a run on a krnl386 #GP through ES unable to
                                      say whether ES was the wrong selector or the right one
                                      with too small a limit -- from a log that had already
                                      printed the address. The reflect leaves the guest's GPRs
@@ -35116,8 +35003,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          DPMI 0.9: the handler returns through the CS:IP at the bottom of the
                          frame, having optionally rewritten the CS:IP / FLAGS / SS:SP above it
                          to say where execution should resume. krnl386's handler does exactly
-                         that -- it points the resume at seg1:0xc61d rather than back at its own
-                         invalid opcode, which is the whole reason it raised one. After the
+                         that (observed) -- it points the resume elsewhere rather than back at its
+                         own invalid opcode, which is the whole reason it raised one. After the
                          `retf` popped two words, SS:SP is at the error code, so what is left is
                              +0x00 error code   +0x02 IP   +0x04 CS
                              +0x06 FLAGS        +0x08 SP   +0x0a SS
@@ -35299,16 +35186,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ── ★★★ AN NTVDM BOP FROM THE GUEST'S OWN CODE. (s78) ──────────────────────
              XP's COMMAND.COM is NTVDM-aware and this is how it talks to the 32-bit side.
              Both of its numbers carry a SUB-FUNCTION BYTE after the BOP, so the
-             instruction is FOUR bytes, not three -- read off the guest, not assumed:
-               0x283E  C4 C4 54 01 / 73 62        `jnc` decodes at +4; at +3 it is junk
-               0x1583  C4 C4 50 3D / CD 20        `int 20h` decodes at +4; at +3 it is not
-             ⚠ That is a claim about THESE TWO numbers, from sixteen sites in one binary.
-               It is not a general rule about BOP encoding, and must be re-derived for
-               any other number that turns up here.
+             instruction is FOUR bytes, not three -- read off the guest's bytes at the
+             BOP site (logged), not assumed: what follows decodes as a sensible
+             instruction at +4 and as junk at +3, for both 0x54 and 0x50.
+             ⚠ That is a claim about THESE TWO numbers, from this one guest. It is not a
+               general rule about BOP encoding, and must be re-derived for any other
+               number that turns up here.
            ▶ WHAT TO ANSWER IS NOT KNOWN YET, so it is a knob rather than a guess:
-             cfg\bop54.txt = "cf1" (default) or "cf0". The sub-01 site branches on carry
-             (`jnc` straight after), so the two settings take COMMAND.COM down different
-             paths and the difference is the measurement. Every call is logged with full
+             cfg\bop54.txt = "cf1" (default) or "cf0". What sub 01 does next depends on
+             carry, so the two settings take COMMAND.COM down different paths and the
+             difference is the measurement. Every call is logged with full
              registers so the two runs can be diffed.
            ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
         /* s91 (#11): a guest's own `C4 C4 58 nn` is the third-party BOP -- see isv_bop.
@@ -35397,13 +35284,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                and which way it goes is the whole question. */
             p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
             /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
-                 Every decision it makes about being a shell is a `cmp byte [0x32x],n`
-                 against a handful of bytes in its RESIDENT data segment -- `[0x326]`
-                 and `[0x327]` gate the banner, `[0x32A]` picks "ask for a command" vs
-                 "prompt", `[0x32B]/[0x32D]` and `[0x32F]` gate the keyboard read. The
-                 transient reaches them by loading DS from `[cs:0x95FE]`; the resident
-                 uses them directly, so they live at the resident segment -- 0x0100 for
-                 a .COM -- and `0x2B1` is in the same block.
+                 Its decisions about being a shell follow a handful of bytes in its
+                 RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
+                 resident segment, 0x0100 for a .COM: the banner, "ask for a command"
+                 vs "prompt", and the keyboard read are all gated in that block.
                ⇒ Printing all of them at once turns "find the next gate, answer it,
                  re-run" into one reading. Five turns of that pattern produced one
                  caveat; this is the instrument that should have come first.
@@ -35427,19 +35311,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         ntvdm_bop_dispatch:
             /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
-                 XP's handler (ntvdm.exe 0x0F00A966) builds a VDM_COMMAND_INFO with two
-                 MAX_PATH buffers and asks CSRSS via GetNextVDMCommand. It reads the
-                 guest's request block from DS:DX -- (DS<<4)+DX, exactly as we compute
-                 it here -- and writes its answer back into the same block.
-               ▸ The fields are read off BOTH sides (see docs/inventory/bop.md):
-                   +0x10 w   OUT  flags. COMMAND.COM does `test [blk+0x10],7` then
-                                  `test ...,1`; zero takes the "nothing to do" branch.
-                   +0x12 dw  IN+OUT a cookie. COMMAND.COM loads it from its own
-                                  [es:0x32B]/[es:0x32D] before the call and stores it
-                                  straight back afterwards -- so it must ROUND-TRIP.
-                   +0x1A w   OUT  COMMAND.COM keeps the low byte at [es:0x32F].
+                 On XP this is answered from CSRSS's GetNextVDMCommand (VDM_COMMAND_INFO).
+                 The guest's request block is at DS:DX -- (DS<<4)+DX, exactly as we
+                 compute it here -- and the answer comes back in the same block.
+               ▸ The fields (see docs/inventory/bop.md):
+                   +0x10 w   OUT  flags; zero is "nothing to do" (observed: the shell
+                                  then goes to its prompt).
+                   +0x12 dw  IN+OUT a cookie. COMMAND.COM fills it before the call and
+                                  takes back whatever is there afterwards -- so it must
+                                  ROUND-TRIP.
+                   +0x1A w   OUT  COMMAND.COM keeps the low byte.
                    +0x02 +0x04 +0x06 +0x16 +0x20   OUT
-                   +0x22 w   OUT  status; XP writes 4, 8 or 9 here.
+                   +0x22 w   OUT  status; stock writes 4, 8 or 9 here.
                ⚠ WHAT WE WRITE IS A DEFINED "NO COMMAND", NOT A DECODED ONE. That is a
                  real claim and it may be wrong -- but the alternative is not neutral:
                  leaving the block ALONE hands COMMAND.COM whatever was in its own
@@ -35494,9 +35377,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 blk_written: ;
                 /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
                      The first cut zeroed every field that XP's handler writes. One of
-                     them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM reads it into DL
-                     two instructions after the call and issues `AH=0Eh` with it (guest
-                     0x6B8..0x6C2) -- so a zero meant drive 0 = A:, and our own handler
+                     them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM selects it with
+                     `AH=0Eh` immediately after the call (our INT 21h log shows the DL it
+                     passes) -- so a zero meant drive 0 = A:, and our own handler
                      said so in the same log ("drive A: exists but is not ready ...
                      selected as the DOS current drive anyway") while the shell went
                      quiet.
@@ -35505,9 +35388,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      Measured, one run:
                        blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
                      ⇒ `+0x08:+0x0A = 0x9342:0x9327` -- and `0x9327` is EXACTLY the
-                       address COMMAND.COM's command-line parser reads (guest 0x2B36
-                       loads it, copies len+3 bytes to 0x93AA, and scans from 0x93AC).
-                       Two independent sources, same address.
+                       buffer COMMAND.COM reads its command line from (it is also the
+                       DS:DX it later hands to INT 21h AH=0Ah, in our log). Two
+                       independent sources, same address.
                    ⇒ So we now write only what a "no command" answer really is: the
                      empty command tail, and the flags word. Everything else is left as
                      the guest set it, because a field we cannot name is not ours. */
@@ -35515,22 +35398,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              + *(volatile WORD *)(b + 0x0A);
                     volatile BYTE *c = (volatile BYTE *)(ULONG_PTR)cb;
                     /* ── AN EMPTY DOS COMMAND TAIL, AND THE CR IS THE POINT. ────────
-                         The parser at guest 0x31F4 is `lodsb / cmp al,0x22 / cmp al,0x0D
-                         / jnz back`. With no CR in the buffer SI walks the WHOLE 64K
-                         segment and never leaves -- which is precisely the "spinning in
+                         COMMAND.COM scans this buffer for the terminating CR (observed).
+                         With no CR in the buffer the scan walks the WHOLE 64K segment and
+                         never leaves -- which is precisely the "spinning in
                          V86 with no traps" the headless deadline was killing.
 
                        ⛔⛔⛔ AND `[0]` IS NOT OURS. IT IS DOS'S AH=0Ah MAXIMUM, AND
                          WRITING IT COST THE INTERACTIVE PROMPT. (s79)
-                         This used to write `c[0] = length`, read off the guest's own
-                         copy loop at 0x06C7 (`mov cl,[0x9327] / add cx,3 / rep movsb`),
-                         which does treat [0] as a count. That reading was not wrong
-                         about THAT loop and was completely wrong about the buffer,
-                         because **the same buffer is handed to INT 21h AH=0Ah**:
-                           transient 0x018D  mov byte [ss:0x9327],0x80   <- ONCE, at start
-                           transient 0x0A21  mov dx,0x9327 / mov ah,0Ah / int 21h
-                         0x80 is the buffered-input MAXIMUM, set a single time and never
-                         re-set. Our "empty tail" answer zeroed it on the first BOP, so
+                         This used to write `c[0] = length`, on the reading that the
+                         shell copies [0]+3 bytes of it. That was not wrong about the copy
+                         and was completely wrong about the buffer, because **the same
+                         buffer is handed to INT 21h AH=0Ah** (DX=0x9327 in our log), and
+                         the shell sets its [0] to 0x80 ONCE, at start-up (observed in the
+                         block before our first answer). 0x80 is the buffered-input
+                         MAXIMUM, set a single time and never re-set. Our "empty tail" answer
+                         zeroed it on the first BOP, so
                          every later AH=0Ah saw a zero-capacity buffer, returned an empty
                          line immediately, and COMMAND.COM printed its prompt again --
                          991 prompts in one 30-second run, with `INT21 AH=0A line max=00`
@@ -35540,9 +35422,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            tells us the capacity there. Two independent sources, and the
                            one we overwrote was the same number.
                        ⇒ WRITE THE LENGTH AT [1], WHERE DOS PUTS IT, AND NEVER TOUCH [0].
-                         Nothing downstream needs the length: the copy at 0x06C7 takes
-                         [0]+3 = 0x83 bytes (a superset) and the parser scans from +2
-                         for the CR, so the CR is the only load-bearing byte.
+                         Nothing downstream needs the length: the shell copies [0]+3 =
+                         0x83 bytes (a superset) and finds the end of the text by its CR
+                         (observed), so the CR is the only load-bearing byte.
                          Layout: [0] = max (the GUEST's, leave alone), [1] = length,
                                  [2..] = text, then CR. */
                     /* ── ONE COMMAND, ONCE, FROM cfg\bopcmd.txt. ──────────────────
@@ -35605,16 +35487,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
                      sub 01 returns THREE things, not one: a command TAIL (+0x08:+0x0A,
                      written above), a program NAME (+0x1C:+0x1E, capacity +0x20), and
-                     that program's TYPE at +0x22. XP's handler picks the type by
-                     comparing the last four characters of the name (0x0F00AEA8..AF1E):
+                     that program's TYPE at +0x22. Stock picks the type from the name's
+                     extension (observed per program type):
                        `.EXE` -> 4   `.COM` -> 8   `.BAT` -> 2   shorter than 7 -> 9
-                     -- the three strings are at VA 0x0F0037B0/B8/C0 and read `.BAT`,
-                     `.COM`, `.EXE`, so this is a file-extension dispatch and not a
-                     status word. ⛔ I had guessed "status enumeration"; it is not.
+                     -- a file-extension dispatch and not a status word. ⛔ I had guessed
+                     "status enumeration"; it is not.
                    ▸ A zero-length name therefore means type 9, and the guest agrees:
-                     at guest 0x3167 it loads +0x22 and, on the no-program path, writes
-                     a 0 to the FIRST BYTE of the name buffer at 0x9473 -- which is
-                     exactly the +0x1C:+0x1E we are handed (`+1C:1E=0x9342:0x9473`).
+                     on the no-program path it writes a 0 to the FIRST BYTE of the name
+                     buffer at 0x9473 (observed) -- which is exactly the +0x1C:+0x1E we
+                     are handed (`+1C:1E=0x9342:0x9473`).
                    ⚠ We had been leaving both alone, i.e. handing the shell whatever was
                      in its own memory. `ver` and `dir` worked anyway -- a builtin needs
                      only the tail -- but that was luck, not an answer. */
@@ -35623,7 +35504,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     DWORD ncap = *(volatile WORD *)(b + 0x20);
                     volatile BYTE *nm = (volatile BYTE *)(ULONG_PTR)nb;
                     /* ── ★ HAND BACK WHAT CSRSS NAMED -- THE SAME SOURCE XP USES. ────
-                         XP's handler fills this buffer from the VDM_COMMAND_INFO that
+                         On XP this buffer is filled from the VDM_COMMAND_INFO that
                          GetNextVDMCommand returned, and our STAGE1 already made that
                          exact call: `STAGE1: command fetch ... app=[...]` lands in
                          g_app2. Returning it is not a guess about what the shell wants;
@@ -35632,8 +35513,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          that there is nothing more to run and the name is empty. A
                          shell that is handed the same program every time it asks would
                          exec it for ever.
-                       ⚠ The type is XP's own rule (0x0F00AEA8..AF1E): compare the last
-                         four characters, `.EXE`->4 `.COM`->8 `.BAT`->2, and anything
+                       ⚠ The type is stock's own rule (see above): the last four
+                         characters, `.EXE`->4 `.COM`->8 `.BAT`->2, and anything
                          shorter than 7 characters -> 9. Mirrored, not invented. */
                     static int named_once = 0;
                     /* ⚠ progpath FIRST, not g_app2. On the rig CSRSS names
@@ -35661,9 +35542,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     { DWORD k; for (k = 0; k < al; ++k) nm[k] = (BYTE)ap[k]; nm[al] = 0; }
                     BW(0x22, ty);
                 /* ── +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
-                     leave alone. COMMAND.COM keeps its low byte at `[0x32F]` and at
-                     guest 0x0BFC tests `cmp byte [0x32F],0 / jz` -- a non-zero value
-                     jumps AWAY from the prompt. Zero. */
+                     leave alone. COMMAND.COM keeps its low byte, and a non-zero value
+                     takes it AWAY from the prompt. Zero. */
                 BW(0x1A, 0);
                     if (!quiet) {
                         p = zput(p, "         prog name <- ["); 
@@ -35673,24 +35553,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 }
                 #undef BW
                 /* ── ★★★ +0x12 IS NOT A COOKIE. IT IS THE INTERACTIVE SWITCH. ───────
-                     I called it a cookie because COMMAND.COM loads it from its own
-                     `[es:0x32B]/[es:0x32D]` before the call and stores it straight back
-                     after -- which looks exactly like carrying an opaque handle. It is
-                     not. At guest 0x0C1C:
-                       cmp word [0x32B],0 / jz  -> AL=0 -> CALL THE PROMPT (AH=0Ah)
-                       cmp word [0x32D],0 / jnz -> AL=1 -> do not
+                     I called it a cookie because COMMAND.COM fills it from its own
+                     state before the call and takes it straight back after -- which
+                     looks exactly like carrying an opaque handle. It is not: with it
+                     zero the shell goes to its keyboard prompt (AH=0Ah), and with it
+                     non-zero it does not (observed).
                      ⇒ a ZERO dword means "nothing is driving me: read from the keyboard".
-                   ★ And XP writes zero there in exactly this case. sub 01's tail calls
-                     0x0F04D568 with `&blk[0x10]`; that routine ORs together one bit per
-                     non-null redirection handle, and when the result is 0 it takes the
-                     early out at 0x0F04D5E4 -- `xor ebx,ebx ... mov eax,ebx ; ret 8` --
-                     returning NULL, which sub 01 stores at +0x12.
+                   ★ And stock answers zero there in exactly this case -- when nothing is
+                     redirected (flags at +0x10 zero).
                    ⛔ PRESERVING IT WAS THE BUG. "Round-trip the value you were only
                      asked to carry" is a good instinct and it was wrong here: the guest
                      re-loads its own non-zero state, we hand it straight back, and it
                      concludes it is being driven -- for ever. 1.25M calls a run.
-                   ⇒ Zero, and only because the flags are zero: the two are the SAME
-                     decision in XP's code and must stay tied together here. */
+                   ⇒ Zero, and only because the flags are zero: the two move together
+                     in stock's answers and must stay tied together here. */
                 *(volatile DWORD *)(b + 0x12) = 0;
                 /* +0x14 is the high half of that dword and is covered by the store above.
                    +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
@@ -35708,20 +35584,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 continue;
             }
             /* ── ★ sub 0F = THE HOST'S `PROMPT`, AND IT ANSWERS IN BX. ──────────────
-                 0x0F00BEF6: if the global at [0x0F0650BC] is zero it calls **setBX(0)**
-                 and returns; otherwise it reads an environment variable via
-                 GetEnvironmentVariableA with the name at VA 0x0F00393C -- which is the
-                 string **"PROMPT"** -- into a 0x104 buffer.
-               ⇒ It passes the HOST's PROMPT through to the DOS shell, and reports in BX.
-               ▸ BX = 0, which is exactly the branch XP itself takes when it has nothing
-                 to pass. We were setting no register at all, so the guest read whatever
+                 Stock passes the HOST's `PROMPT` environment variable through to the DOS
+                 shell here, and reports in BX; with nothing to pass it answers BX = 0.
+               ▸ BX = 0, which is exactly stock's answer when it has nothing to pass. We were
+               setting no register at all, so the guest read whatever
                  BX happened to hold -- an unimplemented call answering at random again. */
             /* ── ★ sub 0F = "GIVE ME THE INITIAL ENVIRONMENT". (s81: the `C>` prompt) ──
                  Under /P, XP's COMMAND.COM builds a FRESH environment, as DOS's primary
                  shell does -- `PATH=` and a COMSPEC, nothing else -- and asks NTVDM for the
                  rest here (stock hands it the Win32 environment, PROMPT included). We said
                  "none", so the user's shell came up `C>`: DOS's default, with no PROMPT.
-                 The protocol, read off the caller (COMMAND.COM 0x3A8 / 0x3CB):
+                 The protocol, as the shell drives it (observed, two calls):
                    call 1: BX=0 in  -> BX out = EXTRA paragraphs needed (0 = keep the old
                            environment); the shell grows its block by that much
                    call 2: ES:0 = the new block, BX = its size in paragraphs
@@ -35803,18 +35676,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
                  The guest named this gap itself. With `/p` on its command line COMMAND.COM
                  allocates a 7-paragraph block (`AH=48h -> 0x0D6D`), issues this BOP with
-                 `DS:DX` pointing into it, and the VERY NEXT instruction is
-                 `mov ax,0x3D00 ; int 21h` -- open. We wrote nothing, so it opened "" and
+                 `DS:DX` pointing into it, and its very next DOS call is `AH=3Dh` (open)
+                 on that buffer (our INT 21h log). We wrote nothing, so it opened "" and
                  our DOS answered "path not found".
-               ▸ XP's handler (0x0F012C94) takes a host-side ANSI string from
-                 `[0x0F09BFC4]` and runs it through RtlInitAnsiString ->
-                 RtlAnsiStringToUnicodeString -> RtlUnicodeStringToOemString, writing the
-                 OEM result to `(getDS()<<4)+getDX()` with a **0x40-byte** cap. So: a
-                 path, OEM, at most 64 bytes.
-               ▸ Which path: `ntvdm.exe` carries `autoexec.nt`, and this is the `/p`
-                 (permanent shell) startup path. ⚠ That last step is an INFERENCE from
-                 context, not a decode of the global -- but it is verifiable by behaviour,
-                 because whatever we write here is the path the guest opens next.
+               ▸ Stock answers with a path, as an OEM string at DS:DX, of at most
+                 **0x40** bytes.
+               ▸ Which path: stock's permanent shell runs AUTOEXEC.NT at start-up, and
+                 this is the `/p` (permanent shell) startup path. ⚠ That last step is an
+                 INFERENCE from context -- but it is verifiable by behaviour, because
+                 whatever we write here is the path the guest opens next.
                ⛔ WE DO NOT DEFAULT TO XP's AUTOEXEC.NT, deliberately. The real one loads
                  `mscdexnt.exe`, `redir` and **`dosx`** -- NT's DPMI host, which we provide
                  ourselves and which has no business being loaded into our VDM. The
@@ -35882,17 +35752,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 continue;
             }
             /* ── ★ sub 10 = A ONE-BIT QUERY, AND IT GATES THE PROMPT. ───────────────
-                 XP's handler is five instructions (0x0F04C829):
-                     cmp dword [0x0F06BB30],0 ; setnz al ; call setAL ; ret
-                 -- AL is one global being non-zero, nothing more.
-               ★ It sits ON the interactive path. At guest 0x0BED COMMAND.COM issues it
-                 and immediately does `or al,al / jnz` AWAY from the prompt, so a
-                 non-zero AL is "do not read the keyboard". We were not setting AL at
-                 all, leaving whatever the guest happened to have there -- which is how
-                 an unimplemented call still ANSWERS, at random.
-               ▸ AL = 0. Whatever that global tracks, it is not set in a plain VDM that
+                 The answer is AL, a yes/no flag and nothing more.
+               ★ It sits ON the interactive path. COMMAND.COM issues it just before its
+                 prompt, and a non-zero AL takes it AWAY from the prompt: it
+                 means "do not read the keyboard". We were not setting AL at all, leaving
+                 whatever the guest happened to have there -- which is how an
+                 unimplemented call still ANSWERS, at random.
+               ▸ AL = 0. Whatever the flag tracks, it is not set in a plain VDM that
                  has been asked to run a shell, and 0 is the value that lets the shell
-                 be a shell. ⚠ Recorded as a reading of ONE global we have not named,
+                 be a shell. ⚠ Recorded as a reading of ONE flag we have not named,
                  not as a decode of what it means. */
             if (bn == NTVDM_BOP_CMD && sub == 0x10) {
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFFFF00u;   /* AL = 0 */
@@ -35905,28 +35773,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 continue;
             }
             /* ── ★ sub 0E = THE KEYBOARD / CODE-PAGE CONFIGURATION. ─────────────────
-                 XP's handler (0x0F0156EC) is, in order: GetSystemDefaultLangID (vs
-                 0x411 = LANG_JAPANESE), GetKeyboardType or GetConsoleKeyboardLayoutNameA,
-                 two RegQueryValueExA under the keyboard-layout key, GetConsoleCP, then
-                 GetSystemDirectoryA + GetFileAttributesA to find KEYBOARD.SYS -- and
-                 finally getDS/getSI/getCX for the guest's buffer and **setDX on BOTH
-                 exit paths**. Its data strings include
-                 `%s=%3.3u,%3.3u,%s\system32\%s.sys%s` and ` /id:`: it builds a KEYB
-                 command line.
-               ⇒ DS:SI is a buffer of CX bytes; DX is the ANSWER, and COMMAND.COM's very
-                 next instruction is `or dx,dx / jnz` -- non-zero = "there is a keyboard
-                 driver to set up", zero = skip it.
+                 On stock this describes the keyboard / code-page setup for a KEYB
+                 command line, written into the guest's buffer.
+               ⇒ DS:SI is a buffer of CX bytes; DX is the ANSWER -- non-zero = "there is
+                 a keyboard driver to set up" (the shell goes on to set one up), zero =
+                 skip it (observed).
                ⛔ I HAD THIS WRONG ONCE. Reading only the guest side, DX looked like a
-                 leftover from the `INT 2Fh AX=AD80h` KEYB check two instructions earlier,
-                 and I wrote that the BOP "probably does not touch DX". The handler calls
-                 setDX explicitly on both paths. **A register set by the callee is not
-                 distinguishable from a leftover by looking at the caller alone.**
+                 leftover from the `INT 2Fh AX=AD80h` KEYB check just before it, and I
+                 wrote that the BOP "probably does not touch DX". Stock sets DX on every
+                 answer. **A register set by the callee is not distinguishable from a
+                 leftover by looking at the caller alone.**
                ▸ We answer 0 = no keyboard driver, which is TRUE of us: we do not load
                  KB16.COM or KEYBOARD.SYS. Explicitly, rather than by leaving DX alone
                  and getting 0 because that is what happened to be in it. */
             /* ── sub 00 = VDDTerminateVDM: THE PERMANENT SHELL'S EXIT. (s81 sweep) ──────
-                 XP's EXIT (COMMAND.COM 0x4F11) ends the VDM through here when PERMCOM
-                 ([0x2B0], set by /P) is non-zero and SINGLECOM ([0x2B1]) is not -1.
+                 XP's COMMAND.COM ends the VDM through here on EXIT when it is the
+                 permanent shell (started with /P) -- observed.
                  It had no arm, so it fell to the generic "skip the BOP" below and EXIT
                  did nothing. End the run exactly as a top-level AH=4Ch does. */
             if (bn == NTVDM_BOP_CMD && sub == 0x00) {
@@ -36884,8 +36746,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           if (!found) p = zput(p, " IRQTAB-NOT-FOUND");
           /* ── THE CALLBACK BETWEEN THE SB ISR AND THE MIXER. ─────────────────────
-               DMX's SB handler ends with `call dword [0x584]` (DOOM.EXE 0x53298) and
-               that callback is where the 28% goes: the ISR runs 86/s (mix82 reads ==
+               DMX's SB handler ends by calling through a pointer stored at data 0x584
+               (the value read back there is a code address), and that callback is
+               where the 28% goes: the ISR runs 86/s (mix82 reads ==
                blocks) but the mixer is entered 58/s. Its address is runtime data, and
                the code virtual->file map is the one map still unknown.
                But the IRQ table settles the addressing: the pointers IN it are LINEAR

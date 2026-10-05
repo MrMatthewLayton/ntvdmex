@@ -26,22 +26,19 @@
  * only the anchor tells them apart.
  *
  * ── WHY MATCHING ANY ROW IS STILL SAFE ──────────────────────────────────────
- * A WOW32 stub is 13 bytes and pushes both of the things it is matched on:
- *      6a AA           push <argument bytes>
- *      68 00 00        push 0
- *      68 II II        push <the id>
- *      9a xx xx ss ss  lcall <the module's common thunk>
- *      <- the return address the call carries is the stub + 13
- * so (id, argbytes, retstub) is three independent fields read off the file. A
- * wrong segment would have to hold a `push <this id>` with `push <these argument
- * bytes>` at exactly the offset the call returns to. And the dispatcher only
+ * A WOW32 stub is 13 bytes and pushes both of the things it is matched on --
+ * the argument byte count, a zero word and the id -- then far-calls the
+ * module's common thunk, so the return address the call carries is the stub
+ * + 13. (id, argbytes, retstub) is three independent fields read off the file:
+ * a wrong segment would have to push this id and these argument bytes at
+ * exactly the offset the call returns to. And the dispatcher only
  * consults a table after excluding every segment already identified as another
  * module's, so an ambiguity between two tables cannot silently pick one.
  *
  * ⚠ THREE ROWS ARE PROBABLY NOT STUBS AT ALL -- `{ 0x2080, 0, ... }`, one in
  *   GDI and two in USER. An id of 0x2080 taking no arguments is out of family
  *   with every other row, and the likeliest reading is ordinary 16-bit code
- *   (`push 0 / push 0 / push 0x2080 / lcall`) that happens to match the shape.
+ *   that happens to match the stub's byte shape.
  *   They are LEFT IN rather than filtered, because the filter would be a guess
  *   too and these are harmless: a row only ever fires if a real call carries
  *   that exact triple, and nothing does.
@@ -483,11 +480,9 @@ static const wow_anchor_t g_gdi_anchors[] = {
      Hand-filtered from `tools/ne/wowthunks.py --anchor guest/ne/commdlg.dll`:
        that output also lists seg3 "stubs" (ids 0x0/0x7f00, 255 argument bytes)
        which are data matching the byte pattern; only the eight real seg1 stubs
-       are here -- each one an export (ids = ordinals), stub + 13 = retstub:
-         0x01 GetOpenFileName seg1:0x0005   0x02 GetSaveFileName seg1:0x0017
-         0x0b FindText        seg1:0x0029   0x0c ReplaceText     seg1:0x003b
-         0x05 ChooseColor     seg1:0x004d   0x0f ChooseFont      seg1:0x005f
-         0x14 PrintDlg        seg1:0x0071   0x1a CommDlgExtendedError 0x0083 */
+       are here, each one an export (ids = ordinals): GetOpenFileName (0x01),
+       GetSaveFileName (0x02), FindText (0x0b), ReplaceText (0x0c), ChooseColor
+       (0x05), ChooseFont (0x0f), PrintDlg (0x14), CommDlgExtendedError (0x1a). */
 static const wow_anchor_t g_commdlg_anchors[] = {
     { 0x001,   4, 0x0012 }, { 0x002,   4, 0x0024 },
     { 0x00b,   4, 0x0036 }, { 0x00c,   4, 0x0048 },
@@ -516,8 +511,8 @@ static const wow_anchor_t g_sound_anchors[] = {
     { 0x010,   4, 0x00e0 }, { 0x011,   0, 0x00ed },
 };
 
-/* ── MMSYSTEM (s90, #278): its whole WOW table is two stubs, mmsystem.dll seg1:0x611
-     (id 2, 28 bytes) and 0x61e (id 1, 0 bytes). See src/wow/wowmmedia.h. */
+/* ── MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
+     bytes) and id 1 (none). See src/wow/wowmmedia.h. */
 static const wow_anchor_t g_mmedia_anchors[] = {
     { 0x002,  28, 0x061e }, { 0x001,   0, 0x062b },
 };

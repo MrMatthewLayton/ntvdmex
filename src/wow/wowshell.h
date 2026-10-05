@@ -13,36 +13,21 @@
  * came to answer `RegisterClass` with `GetProfileInt`.
  *
  * ── ★★ WHY NOTEPAD NEEDS IT: Help > About IS NOT A DIALOG ───────────────────
- * Notepad has seven DIALOG resources and none of them is the About box.
- * `tools/ne/neimports.py` walks its relocation chains and names the call outright:
- *
- *     seg1:call 0x0389      USER.174 LOADICON
- *     seg1:call 0x038f      SHELL.22 SHELLABOUT
- *
- * and the site reads straight off the disassembly, every push accounted for:
- *
- *     0374  push [0x10]        ; hWnd          -- Notepad's own main window
- *     0378  push ds / [0x4c]   ; szApp         -- far
- *     037d  push ds / 0xbe     ; szOtherStuff  -- far
- *     0381  push [0xaa0] / push 0 / push 1
- *     0389  lcall  <LoadIcon>  ;   ★ LoadIcon(hInstance, MAKEINTRESOURCE(1)),
- *                              ;     and ICON 1 is Notepad's own
- *     038e  push ax            ; hIcon
- *     038f  lcall  <ShellAbout>
+ * Notepad has seven DIALOG resources and none of them is the About box. Its NE
+ * import table (`tools/ne/neimports.py`) names `USER.174 LOADICON` and
+ * `SHELL.22 SHELLABOUT`, and the call arrives at run time as
+ * ShellAbout(hWnd, szApp, szOtherStuff, hIcon) -- hWnd Notepad's own main
+ * window, hIcon what LoadIcon(hInstance, MAKEINTRESOURCE(1)) returned (ICON 1 is
+ * Notepad's own).
  *
  * ⇒ the whole of Help > About is one API call, and answering it is the box.
  *
- * ── ★★ WHICH ID IT IS, FROM THE FILE AND NOT FROM THE ORDINAL ───────────────
+ * ── ★★ WHICH ID IT IS, MEASURED RATHER THAN ASSUMED FROM THE ORDINAL ────────
  * The ids in a thunk module are not required to be its export ordinals, so this
- * was resolved rather than assumed. SHELL.DLL's non-resident name table gives
- * `22 SHELLABOUT`; its ENTRY table maps ordinal 22 to `MOVEABLE segment 1, offset
- * 186 = 0x00ba`; and the bytes at `seg1:0x00ba` are the stub:
- *
- *     00ba  6a 0c           push 12          ; ★ argument bytes
- *     00bc  68 00 00        push 0
- *     00bf  68 16 00        push 0x16        ; ★ THE ID
- *     00c2  9a b6 00 ....   lcall <the common thunk>
- *     00c7                  <- the return address a call carries at OFF_FROM
+ * was measured: Help > About arrives as a SHELL-module BOP carrying id **0x16**,
+ * 12 argument bytes, and return-stub offset `0x00c7` at OFF_FROM (all three as
+ * logged at run time), and 0x16 == 22 is SHELLABOUT's ordinal in SHELL.DLL's
+ * non-resident name table.
  *
  * ⇒ `ShellAbout` is SHELL id **0x16**, 12 argument bytes, return stub `0x00c7`,
  *   and those three fields are what `wow_shell_anchor()` in main.c identifies the
@@ -55,8 +40,8 @@
  *   signatures that match four documented parameter lists.
  *
  * ── THE ARGUMENT BLOCK ──────────────────────────────────────────────────────
- * Reversed as always -- the base is the LAST word pushed -- so the call site
- * above lays out as, and it comes to exactly the 12 bytes the stub declares:
+ * Reversed as always -- the base is the LAST word pushed -- so the documented
+ * parameter list lays out as, and it comes to exactly the 12 bytes the call carries:
  *
  *     +0x00 WORD  hIcon                  (pushed last)
  *     +0x02 DWORD szOtherStuff  16:16
@@ -111,8 +96,8 @@
      anything: the answer is a number, not a handle. */
 #define WOWSHELL_EXTRACTICON  0x0022
 /* s90 (#297): XP's shell.dll thunks for FindEnvironmentString (ord 38) and
-   InternalExtractIcon (ord 39) carry NO argument bytes (stub `6a 00 68 00 00 68 26 00`)
-   -- XP's WOW never implemented them. Stock answers 0 (and DX 0) to both, measured
+   InternalExtractIcon (ord 39) arrive with NO argument bytes (ids 0x26/0x27, as
+   logged) -- XP's WOW never implemented them. Stock answers 0 (and DX 0) to both, measured
    in w_misc; so does this, on purpose rather than through the step-over. */
 #define WOWSHELL_FINDENVSTRING      0x0026
 #define WOWSHELL_INTERNALEXTRACTICON 0x0027
@@ -182,11 +167,10 @@
      only for the programs that happen to make that call; see main.c, where it
      now matches the whole stub table computed from the file.
 
-   ── THE IDS AND THE BLOCKS, FROM SHELL.DLL'S OWN ENTRY TABLE ────────────────
-     `neneeds.py --stubs` resolves each ordinal to its stub and prints the return
-     address that stub pushes; every retstub below matched the running guest to
-     the digit, which is what makes this a reading rather than a parameter list
-     copied out of a book:
+   ── THE IDS AND THE BLOCKS, AS THE CALLS ARRIVE ────────────────────────────
+     id, argument bytes and the return-stub offset each call carries at
+     OFF_FROM, as logged from the running guest -- a measurement, not a
+     parameter list copied out of a book:
 
        ord 1 REGOPENKEY    id 0x01  12 args  retstub 0x002b
        ord 2 REGCREATEKEY  id 0x02  12 args  retstub 0x0038
@@ -200,7 +184,7 @@
      against the observed call. PBRUSH's RegCreateKey carried
      `(6e9a 09c7 0ae6 09c7 0001 0000)`: +0x00 is the far `phkResult` pushed last,
      +0x04 the far "PBrush", and +0x08 the DWORD `1` -- HKEY_CLASSES_ROOT. The
-     parameter list and the 12 bytes the stub declares agree. */
+     parameter list and the 12 bytes the call carries agree. */
 #define WOWSHELL_REGOPENKEY    0x0001
 #define WOWSHELL_REGCREATEKEY  0x0002
 #define RGK_ARG_RESULT    0        /* HKEY FAR*  -- pushed last               */

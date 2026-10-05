@@ -47,8 +47,8 @@
 
 /* ── NUMCOLORS ───────────────────────────────────────────────────────────────
      Win16's meaning is "how many entries in this device's colour table", and a
-     Win16 caller tests it against 2 -- for equality (Solitaire, seg1:0x016a) or
-     with a SIGNED `jle` (Minesweeper, seg1:0x182a). Win32's -1 for direct-colour
+     Win16 caller compares it with 2 -- Solitaire for equality, Minesweeper as a
+     SIGNED number, so -1 reads as "fewer than 2". Win32's -1 for direct-colour
      devices is a sentinel that predates neither program.
    ★ <= 8bpp gives the exact count. Deeper has no colour table at all, so it
      gives 256: the largest a Windows 3.1 driver ever reported, and the largest a

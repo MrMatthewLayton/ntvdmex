@@ -18,9 +18,9 @@ subject under test, and letting it into the consensus is circular. Disagreement 
 oracles is reported as DISPUTED, never resolved by majority.
 
 **2. Read the guest binary.**
-After ~20 Doom runs of host instruments with nothing improving, disassembling `DOOM.EXE`
-fixed the status bar within the hour: `I_ReadScreen` cycles GR4 and never writes the map
-mask, so every read was served from the *write* plane. Every exclusion made beforehand was
+After ~20 Doom runs of host instruments with nothing improving, reading what `DOOM.EXE`
+actually does to the VGA fixed the status bar within the hour: its screen read cycles GR4
+(Read Map Select) and never writes the map mask, so every read was served from the *write* plane. Every exclusion made beforehand was
 about writes. They were all correct and the **category** was wrong.
 
 **3. When a guest dies at an address, diff the bytes there against the file on disk.**

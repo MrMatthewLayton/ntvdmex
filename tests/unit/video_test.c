@@ -915,11 +915,10 @@ int main(void)
     }
 
     /* ── ★★★ LEMMINGS' OWN BLITTERS, REPLAYED REGISTER FOR REGISTER. ──────────────────
-     *   Not invented, and not read off a datasheet: DISASSEMBLED from the running game.
-     *   VGALEMMI.EXE is PKLITE-packed, so the code was read back out of a 1MB memory
-     *   dump of the game running under genuine MS-DOS 6.22 (scripts/lemref.py
-     *   --memdump), anchored on the retrace-wait bytes the rig's IO-SITE instrument had
-     *   already measured, which fixes the code segment without assuming a load address.
+     *   Not invented, and not read off a datasheet: the register sequences the game
+     *   was OBSERVED to program -- the rig's IO-SITE and read/write-site instruments,
+     *   cross-checked against the game running under genuine MS-DOS 6.22
+     *   (scripts/lemref.py).
      *
      *   Why these two and not some other pair: they are the ONLY two sites in the game
      *   that read video memory -- the read-site histogram attributes every one of
@@ -932,13 +931,12 @@ int main(void)
      */
     {   uint8_t got;
 
-        /* ── (1) THE MASKED SPRITE BLITTER at CS:IP +0x95E0, the colour-compare path.
-         *   Set-up, verbatim from the disassembly at +0x9540:
-         *       mov ax,0x0805 out dx,ax   GR5 = 0x08  read mode 1
-         *       mov ax,0x0807 out dx,ax   GR7 = 0x08  don't care: plane 3 only
-         *       mov ax,0x0802 out dx,ax   GR2 = 0x08  compare: plane 3 SET
-         *   and then, per byte:
-         *       mov ah,[es:di] / not ah / mov al,8 / out dx,ax / movsb
+        /* ── (1) THE MASKED SPRITE BLITTER, the colour-compare path. Set-up:
+         *       GR5 = 0x08  read mode 1
+         *       GR7 = 0x08  don't care: plane 3 only
+         *       GR2 = 0x08  compare: plane 3 SET
+         *   and then, per byte: a colour-compare read, its complement into the Bit
+         *   Mask (GR8), and one byte of sprite written --
          *   i.e. "which pixels here are colour 8..15? -- write my sprite into the
          *   OTHERS." Transparency done by the card, one byte at a time. This is what
          *   read mode 1 is actually for in this game; it is not collision detection.  */
@@ -954,7 +952,7 @@ int main(void)
         CHECK(got == 0xF0, "lemmings blit: colour-compare read names the colour-8..15 pixels");
         CHECK(vid.latch[3] == 0xF0, "lemmings blit: ...and a mode-1 read still loads the latches");
 
-        /* `not ah` -> 0x0F, straight into the Bit Mask, then one byte of sprite. */
+        /* The complement -> 0x0F, straight into the Bit Mask, then one byte of sprite. */
         gc_w(&bus, 0x08, (uint8_t)~got);   /* GR8 bit mask = 0x0F                     */
         gc_w(&bus, 0x03, 0x00);            /* GR3 replace (the OR case is below)      */
         gc_w(&bus, 0x05, 0x00);            /* back to write mode 0 to do the movsb    */
@@ -965,8 +963,8 @@ int main(void)
         CHECK(vid.plane[3][0x40] == 0xF0,
               "lemmings blit: ...and the terrain plane is untouched by it");
 
-        /* ⚠ IT REALLY DOES USE THE ALU. +0x956B is `mov ax,0x1003` -- GR3 = 0x10, which
-         *   is function select = OR, not replace. A card that ignored GR3 would pass
+        /* ⚠ IT REALLY DOES USE THE ALU. The game also writes GR3 = 0x10, which is
+         *   function select = OR, not replace. A card that ignored GR3 would pass
          *   every check above and still draw this game wrong, so pin the OR itself:
          *   masked-in bits become (cpu OR latch), masked-out bits stay latch.        */
         vid.plane[0][0x41] = 0x55;                 /* latch source                     */
@@ -979,9 +977,8 @@ int main(void)
         gc_w(&bus, 0x03, 0x00);
         gc_w(&bus, 0x08, 0xFF);
 
-        /* ── (2) THE PLAIN BLITTER at CS:IP +0x98D1, which is the busier of the two
-         *   (858,644 reads of the 970,000). Its inner loop is only:
-         *       mov al,[es:di] / movsb / loop
+        /* ── (2) THE PLAIN BLITTER, which is the busier of the two (858,644 reads of
+         *   the 970,000). Per byte it reads VRAM and then copies one byte in.
          *   The read's VALUE IS DISCARDED -- it is there to load the latches, so that
          *   the planes the Map Mask disables keep what they had. If a card lets a
          *   disabled plane change, every sprite in the game smears across the others.
@@ -991,7 +988,7 @@ int main(void)
         gc_w(&bus, 0x05, 0x00);            /* read mode 0, write mode 0               */
         gc_w(&bus, 0x04, 0x00);            /* read map 0 -- the value it throws away  */
         sc_w(&bus, 0x02, 0x04);            /* map mask = plane 2 only                 */
-        (void)vga_planar_read(&vid, 0x50); /* `mov al,[es:di]`: latches, not data      */
+        (void)vga_planar_read(&vid, 0x50); /* the discarded read: latches, not data    */
         CHECK(vid.latch[1] == 0x22 && vid.latch[3] == 0x44,
               "lemmings blit: the discarded read is what loads all four latches");
         vga_planar_write(&vid, 0x50, 0x99);
@@ -1000,12 +997,10 @@ int main(void)
               vid.plane[3][0x50] == 0x44,
               "lemmings blit: the other three planes are preserved exactly");
 
-        /* ── (3) THE VRAM->VRAM COPY at +0x7161. This is how the toolbar gets on
-         *   screen, and it is the mechanism behind the open "panel has no icons" bug:
-         *       mov dx,0x3c4 / mov ax,0x0f02 / out    Map Mask = all four planes
-         *       mov dx,0x3ce / mov ax,0x0105 / out    GR5 = WRITE MODE 1
-         *       mov dx,0xa000 / mov es,dx / mov ds,dx   BOTH segments = VRAM
-         *       movsb movsb ...                        A000 -> A000
+        /* ── (3) THE VRAM->VRAM COPY. This is how the toolbar gets on screen, and it
+         *   is the mechanism behind the open "panel has no icons" bug:
+         *       Map Mask = 0x0F (all four planes), GR5 = WRITE MODE 1,
+         *       then byte copies with source AND destination in A000.
          *   Write mode 1 ignores the CPU byte entirely and writes THE FOUR LATCHES to
          *   the four planes, so one `movsb` moves a four-plane pixel group. It is the
          *   only way to move 16-colour artwork without four passes, and it is how the
@@ -1039,30 +1034,17 @@ int main(void)
         CHECK(vga_planar_read(&vid, 0xF91F)==0x5A && vga_planar_read(&vid, 0xFFFA)==0xA5,
               "lemmings panel: the off-screen cache 0xF91F..0xFFFA reads back");
 
-        /* ── (4) THE WHOLE-PANEL BLIT at CS:IP 0x7626 -- THE ROUTINE THAT ACTUALLY
-         *   PUTS THE TOOLBAR ON SCREEN, and the one the "missing icons" bug is about.
-         *   Disassembled from the same dump (segment base linear 0x04CE0, seg 0x04CE,
-         *   which is the PARAGRAPH-ALIGNED anchor -- see the warning below):
+        /* ── (4) THE WHOLE-PANEL BLIT -- THE ROUTINE THAT ACTUALLY PUTS THE TOOLBAR ON
+         *   SCREEN, and the one the "missing icons" bug is about. Same set-up as (3),
+         *   then ONE `rep movsb` of 0x6E0 bytes (1760 = 40 rows x 44) from the panel
+         *   cache at 0xF91F, to BOTH pages (destination +0x1E42 on each). It runs on
+         *   every level start, unconditionally.
          *
-         *       7602:  mov dx,0x3c4 / mov ax,0x0f02 / out   Map Mask = all four planes
-         *              mov dx,0x3ce / mov ax,0x0105 / out   GR5 = WRITE MODE 1
-         *              mov si,0xf91f                        source: the panel cache
-         *              mov dx,0xa000 / mov es,dx / mov ds,dx
-         *              mov cx,0x6e0                         1760 bytes = 40 rows x 44
-         *       7626:  rep movsb                            <- THE WHOLE TOOLBAR, ONE OP
-         *
-         *   Its two callers (0x75EF) blit it to BOTH pages -- [0x1f76] and [0x1f78],
-         *   each +0x1E42 -- and 0x75EF has exactly one caller, 0x39CE, whose FIRST
-         *   instruction it is, which in turn is called straight-line from level init at
-         *   0x048F. ▶ NOTHING GATES IT. It is unconditional on every level start.
-         *
-         * ⚠ THIS CORRECTS THE PINNED STORY. The per-button routine at 0x789E (whose
-         *   first movsb at 0x78F4 is the site the rig named) is NOT the panel painter:
-         *   its only caller, 0x3B3C, is behind `mov ah,[0x82] / cmp [0x83],ah / jz`,
-         *   i.e. it repaints ONE button when the SELECTED skill changes. Running ~1.5
-         *   times in a run where the player changed selection once is correct, not a
-         *   defect -- so "the blitter runs 1.5 times instead of 12" was a question about
-         *   the wrong routine.
+         * ⚠ THIS CORRECTS THE PINNED STORY. The per-button routine whose write site the
+         *   rig named is NOT the panel painter: it repaints ONE button when the
+         *   SELECTED skill changes. Running ~1.5 times in a run where the player
+         *   changed selection once is correct, not a defect -- so "the blitter runs
+         *   1.5 times instead of 12" was a question about the wrong routine.
          *
          * ⚠⚠ WHY A REP AND NOT A LOOP OF ONE. In `rep movsb` every single byte must do
          *   its OWN read-then-write: the read loads the latches, the write emits them.
@@ -1105,8 +1087,8 @@ int main(void)
          *   THE ACTUAL TOOLBAR BUG. We took `al & 0x7F` for the mode number and threw
          *   the bit away, so every mode set wiped all four 64KB planes. Lemmings
          *   composes its skill-button panel into OFF-SCREEN VRAM and only then sets
-         *   its mode -- `mov ax,0x008D` at guest 0x0FB3 for gameplay, `mov ax,0x0090`
-         *   at 0x4BEF for the menu -- with bit 7 set precisely so that cache survives.
+         *   its mode -- INT 10h AX=008Dh for gameplay, AX=0090h for the menu (the
+         *   INT 10h trace) -- with bit 7 set precisely so that cache survives.
          *   We erased it, and the panel blit copied 1760 bytes of zeroes.
          * ⚠ The off-screen half is the half that matters and the half a screen-shaped
          *   test would miss: the visible page gets redrawn immediately either way, so

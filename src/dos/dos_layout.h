@@ -10,8 +10,8 @@
 #define DOS_HDLR_SEG  0x0050  /* INT 21h BOP handler segment (linear 0x0500) */
 /* ── THE CURRENT DRIVE, IN ONE PLACE. (session 56) ───────────────────────────
      Three routes ask this machine what drive it is on -- INT 21h AH=19h, the
-     WOW32 select-drive thunk (id 0xc8), and krnl386's own cached copy at DGROUP
-     [0x2a0] which is filled from whichever answered last. They must not
+     WOW32 select-drive thunk (id 0xc8), and krnl386's own cached copy, which
+     is filled from whichever answered last. They must not
      disagree; two of them disagreeing is exactly the shape of the equipment
      word vs the 0040:0000 port table, and of the BIOS vs the UART registers.
    ⚠ IT IS A CONSTANT BECAUSE CHANGING DRIVES IS NOT SUPPORTED. INT 21h AH=0Eh
@@ -52,10 +52,10 @@
    to the swappable data area whose first bytes are the critical-error flag and
    that same InDOS byte. Both point here. */
 /* ⚠⚠ 0x00D4 WAS DOS_SYSVARS_OFF + 0x44, SO THE SDA SAT ON TOP OF SYSVARS.
-     That made DOS_INDOS_OFF (0xD5) literally SysVars+0x45 -- and MEM.EXE reads
-     the word at SysVars+0x45 to decide whether to report extended memory at all
-     (disassembled: 07B5 cmp word [es:bx+0x45],0 / jz 0x907). InDOS is zero while
-     a program runs, so MEM read zero and skipped the whole report. That is GH
+     That made DOS_INDOS_OFF (0xD5) literally SysVars+0x45 -- and MEM.EXE
+     decides from the word at SysVars+0x45 whether to report extended memory at
+     all. InDOS is zero while a program runs, so MEM read zero and skipped the
+     whole report. That is GH
      #47's "Extended (XMS) 0K", and it was a LAYOUT COLLISION, not a driver bug.
    0x6C..0x8B is clear: past the IRET stub (0x58), the case-map (0x59) and the
    opt-in VIF trampoline (0x60..0x65), and below the MCB-head word at 0x8E. */
@@ -72,18 +72,10 @@
 /* ── ⚠⚠ THE SECOND ABSOLUTE-OFFSET READ MEM.EXE MAKES, AND IT IS NOT A SYSVARS
      FIELD EITHER. (GH #47) ───────────────────────────────────────────────────
      MEM asks AH=52h for SysVars, keeps the SEGMENT, THROWS THE OFFSET AWAY, and
-     reads the word at <SysVars segment>:0x008C:
-
-        0F72  call 0x55cc              ; AH=52h -> ES:BX
-        0F88  mov word [bp-0x126],0x8c ; offset 0x008C, ABSOLUTE
-        0F8E  les bx,[bp-0x126]        ; ES = the SysVars SEGMENT
-        0F92  mov ax,[es:bx]
-        0F95  mov [0x2b46],ax          ; ...and that is the conventional/upper LINE
-
-     Every block in the MCB walk is then bucketed by `segment >= [0x2b46]`
-     (mem.exe image 0x1304 and 0x31DB). We left 0x008C at ZERO, so EVERY block
-     compared >= 0 and the ENTIRE chain was filed as UPPER MEMORY -- which is the
-     phantom `Upper 1,663K` with our real free block sitting in it as `Largest
+     uses the word at <SysVars segment>:0x008C as the conventional/upper LINE:
+     every block in the MCB walk at or above it is reported as upper memory.
+     We left 0x008C at ZERO, so EVERY block compared >= 0 and the ENTIRE chain
+     was filed as UPPER MEMORY -- which is the phantom `Upper 1,663K` with our real free block sitting in it as `Largest
      free upper memory block 548K`, and `Conventional Free 0K` underneath.
 
      MS-DOS 6.22 has **0xFFFF** here (`docs/research/evidence/lolprobe-msdos622.txt`,
@@ -194,19 +186,14 @@
 #define DOS_MEDIA_OFF     0x0364   /* AH=1Bh/1Ch media descriptor byte           */
 
 /* ── WOW: THE TABLE krnl386 READS AT SysVars+0x6A.  GH #128 ─────────────────
-   Before it does anything else, krnl386's init entry (seg1:0xc041) issues
-   INT 21h AH=52h, and then:
-
-       mov di, es:[bx+0x6a]        ; a WORD offset, in the SysVars segment
-       mov [0x26d], di / mov [0x26f], es
-       mov ax, es:[di+0x00] ...    ; and +0x0c, +0x10, +0x18, +0x24, +0x28
-
-   caching six pointers into DOS's data area, then converting the SysVars
-   segment to a selector with DPMI 0002 and pairing it with each offset.
+   Before it does anything else, krnl386 issues INT 21h AH=52h, takes the WORD
+   at SysVars+0x6A as an offset in the SysVars segment, and keeps six pointers
+   from the table there (entries +0x00, +0x0c, +0x10, +0x18, +0x24, +0x28),
+   pairing each with a selector for the SysVars segment (DPMI 0002).
 
  ★ THE +0x6A WORD IS AN OFFSET, NOT A FAR POINTER, and the table it names holds
-   FAR pointers -- but krnl386 reads only the OFFSET half of each and supplies
-   the selector itself.  So every target must live in the SysVars segment.
+   FAR pointers -- but only the OFFSET half of each is used; the selector is
+   krnl386's own.  So every target must live in the SysVars segment.
    Measured off stock ntvdm, not guessed: `lolprobe` recorded [ES:BX+6A]=0x1482
    with a table of 4-byte entries whose segment half is the SysVars segment
    every time (docs/research/evidence/lolprobe-stock-ntvdm.txt).
@@ -215,9 +202,8 @@
    SysVars block used to be zeroed except the MCB head, so [BX+0x6A] read 0 and
    the six "pointers" became offsets 0x00, 0x0c, 0x10... into DOS_HDLR_SEG --
    which is the INT 21h BOP stub and the DPMI entry points.  krnl386 does not
-   only read through them, it WRITES (seg1:0x52b5 stores a word through the
-   +0x24 one), so the previous state had the guest scribbling on our own
-   handler code.  It is scored as part of "Unable to initialize heap" because it
+   only read through them, it WRITES (a word, through the +0x24 one), so the
+   previous state had the guest scribbling on our own handler code.  It is scored as part of "Unable to initialize heap" because it
    happens before the heap is built, but it would have corrupted the host
    whatever came next.
 
@@ -351,31 +337,22 @@
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */
 #define DOS_WOW_E_LASTDRV 0x00     /* -> SysVars+0x21, the LASTDRIVE byte        */
-#define DOS_WOW_E_CURDRV  0x0C     /* -> current-drive byte (seg1:0x5343 returns *
-                                    *    it as INT 21h AH=19h's answer)          */
+#define DOS_WOW_E_CURDRV  0x0C     /* -> current-drive byte (a Win16 task's     *
+                                    *    INT 21h AH=19h is answered from it)     */
 #define DOS_WOW_E_C       0x10
 #define DOS_WOW_E_E       0x18
 #define DOS_WOW_E_D       0x24     /* krnl386 WRITES a word through this one     */
 #define DOS_WOW_E_F       0x28
 
 /* ── THE SYSTEM FILE TABLE.  krnl386 COUNTS FILE HANDLES BEFORE IT WILL START. ──
-     At seg1:0xbf97 krnl386 calls INT 21h AH=52h, steps to SysVars+4, and walks the
-     SFT chain adding up each block's entry count:
+     At start-up krnl386 calls INT 21h AH=52h and walks the SFT chain from
+     SysVars+4 -- each block a far "next" pointer (offset FFFFh ends the chain)
+     and a word entry count -- adding up the counts, and refuses to start if the
+     total is too small (see DOS_MAX_FILES).
 
-         bfaf  xor bx,bx
-         bfb1  mov cx, es:[bx+4]        ; entries in this block
-         bfb5  add ah, cl               ; running total
-         bfb7  cmp word ptr es:[bx], -1 ; offset FFFFh == end of chain
-         bfbb  je  0xbfcb
-         bfbd  mov cx, es:[bx+2]        ; next segment
-         bfc1  mov dx, es:[bx]          ; next offset
-         bfc6  call 0xbfde              ; re-base its scratch selector on it
-         bfc9  jmp  0xbfaf
-         bfcb  cmp ah, [bp-5] / jb -> the error exit at 0x987a
-
-   ⚠ SysVars+4 WAS ZERO, AND A ZERO CHAIN HEAD IS NOT AN EMPTY CHAIN.  It re-based
-     the scratch selector on 0000:0000 and read the IVT as an SFT header: word 0
-     there is not FFFFh, so it followed the "next" pointer into the ROM and round a
+   ⚠ SysVars+4 WAS ZERO, AND A ZERO CHAIN HEAD IS NOT AN EMPTY CHAIN.  It mapped
+     a selector on 0000:0000 and read the IVT as an SFT header: word 0 there is
+     not FFFFh, so it followed the "next" pointer into the ROM and round a
      three-address cycle -- 0x00000000 -> 0x000fa357 -> 0x000bc370 -> 0x00000000 --
      forever.  Measured: 117 MB of INT 31h 0007/0008 in one run.  The terminator is
      the point of this structure at least as much as the count is.
@@ -387,15 +364,15 @@
 /* ── HOW MANY FILES DOS CAN HAVE OPEN AT ONCE. ─────────────────────────────────
      Was 64, and 64 is a number krnl386 measurably refuses to start on: it walks
      the SFT chain (see DOS_SFT_* in dos_layout.h), totals the entries and demands
-     at least `[bp-5]` of them -- 0x7f (127), or 0x64 (100) on one branch, both
-     read straight out of seg1 at 0xbf7a/0xbf8b. With 64 advertised it exited via
-     ExitKernelThunk carrying 0x40, i.e. quoting our own count back at us.
+     at least 0x7f (127) of them -- 0x64 (100) in one configuration. With 64
+     advertised it exited via ExitKernelThunk carrying 0x40, i.e. quoting our own
+     count back at us.
    ⚠ THIS IS THE REAL TABLE, NOT A NUMBER TO SATISFY A CHECK. The SFT block
      advertises exactly DOS_SFT_ENTRIES == this, so raising what we claim also
      raises what we can actually open -- claiming 128 while keeping 64 slots is
      the "runs but lies" failure this project has paid for before. 128 clears both
-     thresholds and stays inside the byte accumulator krnl386 sums into
-     (`add ah,cl`, so a single block may not exceed 255). */
+     thresholds and stays inside the byte krnl386 sums the counts into (so a
+     single block may not exceed 255). */
 #define DOS_MAX_FILES 128
 
 #define DOS_SFT_ENTRIES   DOS_MAX_FILES   /* == the size of dos_machine_t::fh[]  */

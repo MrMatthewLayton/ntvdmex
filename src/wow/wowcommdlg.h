@@ -6,25 +6,19 @@
  * ── WHY THIS IS SMALL, AND WHY THAT WAS A SURPRISE ──────────────────────────
  * The plan was to implement `DialogBox`: turn a Win16 DIALOG template into a real
  * window and run the guest's dialog procedure. That turned out to be the wrong
- * plan, and the binaries said so before a line of it was written:
+ * plan, and the run said so before a line of it was written:
  *
- *   * `USER.87 DIALOGBOX` resolves to entry-table segment 1, offset 0x208e, and
- *     the bytes there are `55 8b ec 68 b1 20 8b 46 10 ...` -- ordinary 16-bit
- *     code, not a `6a XX 68 00 00 68` WOW32 stub. Same for `CREATEDIALOG` (0x1ff0),
- *     `ENDDIALOG` (0x2120) and `DIALOGBOXPARAM` (0x20fd). ⇒ **USER owns the dialog
- *     engine and its modal loop.** We are not asked for one.
- *   * And Notepad does not reach it anyway. `tools/ne/neimports.py` names its call
- *     site outright: `notepad seg1:0x0192  COMMDLG.1 GETOPENFILENAME`.
+ *   * Notepad's File > Open does not go through USER's DialogBox at all. Its
+ *     import table (`tools/ne/neimports.py`) names the call outright:
+ *     `COMMDLG.1 GETOPENFILENAME`.
  *
  * ⇒ File > Open is ONE call, and the run confirms it: driving Alt-F-O on the live
- *   guest produced exactly two unimplemented BOPs, both from a table this host had
+ *   guest produced exactly two unimplemented BOPs, both from a module this host had
  *   never seen -- `id 0x01, 4 args, retstub 0x0012` and `id 0x1a, 0 args, retstub
- *   0x0090`. COMMDLG's own stub table has `id 0x01` at `seg1:0x0005` and `id 0x1a`
- *   at `seg1:0x0083`, and a stub is 13 bytes: 0x0005+13 = 0x0012, 0x0083+13 =
- *   0x0090. Both match to the byte.
+ *   0x0090` -- with the stub segment COMMDLG's.
  *
  * ── ★★ THE IDS ARE THE EXPORT ORDINALS, CONFIRMED SEVEN TIMES ───────────────
- * COMMDLG's non-resident name table against its stub ids:
+ * COMMDLG's non-resident name table against the ids its calls arrive with:
  *      1 GETOPENFILENAME -> 0x01     15 CHOOSEFONT   -> 0x0f
  *      2 GETSAVEFILENAME -> 0x02     20 PRINTDLG     -> 0x14
  *      5 CHOOSECOLOR     -> 0x05     26 COMMDLGEXTENDEDERROR -> 0x1a
@@ -33,20 +27,16 @@
  * same shape SHELL.DLL turned out to have. ⚠ It is NOT a rule: krnl386's ids are
  * nothing like its ordinals. Each module is checked on its own.
  *
- * ── ★★★ THE Win16 OPENFILENAME, 0x48 BYTES, READ OUT OF NOTEPAD ────────────
+ * ── ★★★ THE Win16 OPENFILENAME, 0x48 BYTES, AS NOTEPAD PASSES IT ────────────
  * Not from a header -- the guest declares its own size and fills its own fields,
- * and every store lands on a field boundary of the layout below:
+ * and the structure that arrives (dumped through the far-pointer argument) has
+ * every filled field on a field boundary of the layout below:
  *
- *   notepad seg2:0x055d  mov word [0x0b16], 0x0048   ★ lStructSize, from the guest
- *   notepad seg1:0x015a  mov word [0x0b1e], 0x0ad4 / mov [0x0b20], ds   -> +0x08
- *   notepad seg1:0x0164  mov word [0x0b22], 0x0872 / mov [0x0b24], ds   -> +0x0c
- *   notepad seg1:0x0146  mov word [0x0b3e], 0x09f4 / mov [0x0b40], ds   -> +0x28
- *   notepad seg1:0x0150  mov ax,[0x74] / [0x0b42] / mov [0x0b44], ds    -> +0x2c
- *   notepad seg1:0x017b  mov word [0x0b46], 0x1004 / [0x0b48], 0        -> +0x30
- *   notepad seg1:0x016e  mov ax,[0x68]+3 / [0x0b4e] / [0x0b50], ds      -> +0x38
+ *   +0x00 0x0048                     ★ lStructSize, from the guest
+ *   +0x08 / +0x0c / +0x28 / +0x2c / +0x38   far pointers into Notepad's DS
+ *   +0x30 0x00001004
  *
- * The structure base is `ds:0x0b16` -- the very pointer pushed at `seg1:0x018f`.
- * Four far pointers at +0x08/+0x0c/+0x28/+0x2c/+0x38 and a DWORD 0x00001004 at
+ * Five far pointers at +0x08/+0x0c/+0x28/+0x2c/+0x38 and a DWORD 0x00001004 at
  * +0x30 (OFN_FILEMUSTEXIST | OFN_HIDEREADONLY, exactly what File > Open wants).
  * A wrong layout does not put five far pointers on five pointer fields and a
  * plausible flag word on the flag field.
@@ -274,9 +264,9 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★★★★★ 0x01 GetOpenFileName / 0x02 GetSaveFileName(lpOFN) ────────────
          ★ THE REAL Win32 DIALOG IS THE RIGHT ANSWER, and again it is not a
-           shortcut -- it is what WOW does. COMMDLG's exported entry points are
-           thunks (10 stubs in a 33 KB module), so on a real XP box this call
-           lands in comdlg32 and the user gets the OS's file dialog. Building a
+           shortcut -- it is what WOW does. COMMDLG's exported entry points come
+           straight out to the 32-bit side (each arrives here as an id), so on a
+           real XP box this call lands in comdlg32 and the user gets the OS's file dialog. Building a
            Windows 3.1 file dialog here would be inventing chrome, which is the
            answer session 42 threw away.
        ⚠ MODAL, ON THE EXEC THREAD -- the whole VDM stops until the dialog is
@@ -288,8 +278,8 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
          chosen path straight into the application's own buffer, at the size the
          application declared. Nothing is copied back by hand except the three
          scalars Win32 keeps in ITS structure rather than the guest's.
-       ⚠ lStructSize IS CHECKED, NOT ASSUMED. The guest declares 0x48 at
-         `notepad seg2:0x055d`; anything else means this layout is wrong for this
+       ⚠ lStructSize IS CHECKED, NOT ASSUMED. Notepad's structure arrives
+         declaring 0x48; anything else means this layout is wrong for this
          caller, and the honest answer is to refuse rather than read 72 bytes of
          something else. A refusal reads as "user cancelled", which is a state
          every caller already handles. */
@@ -507,8 +497,8 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
     }
 
     /* ── ★ 0x1a CommDlgExtendedError() ───────────────────────────────────────
-         Notepad calls it the instant GetOpenFileName returns 0 (`seg1:0x0197
-         or ax,ax`), to tell "the user pressed Cancel" from "the dialog failed".
+         Notepad calls it the instant GetOpenFileName returns 0 (it is the next
+         BOP in the run), to tell "the user pressed Cancel" from "the dialog failed".
        ★ THE REAL ONE IS THE RIGHT ANSWER, and it is genuinely informative here
          rather than a pass-through for its own sake: comdlg32 keeps this per
          THREAD, and the thread that just ran the dialog is this one. So it

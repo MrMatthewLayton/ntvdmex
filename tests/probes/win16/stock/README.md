@@ -1,11 +1,10 @@
 # Stock baselines for the Win16 probes (13)
 
-Each file is what XP's own NTVDM/WOW answered (`tests/probes/win16/stock.sh <probe>`), on the
-rig (192.168.1.29, XP SP3), with only the `#PROBE`/`CASE=`/`#END` lines kept. Compare a
-fresh run of ours against one without a stock pass:
+Each file is what XP's own NTVDM/WOW answered when the probe ran under it, on the
+project's test machine (XP SP3), with only the `#PROBE`/`CASE=`/`#END` lines kept. Compare
+a run of the same probe under NTVDMEX against it:
 
-    tests/probes/win16/run.sh w_misc > /tmp/ours.txt
-    diff <(grep CASE= /tmp/ours.txt) <(grep CASE= tests/probes/win16/stock/w_misc.txt)
+    diff <(grep CASE= ours/w_misc.txt) <(grep CASE= tests/probes/win16/stock/w_misc.txt)
 
 ⚠ ONE MACHINE'S ANSWER. Counts that depend on the box (fonts installed, drives, the
 OEM code page -- `kbcp` is 0x352 = 850 here) are this rig's. Re-measure after changing

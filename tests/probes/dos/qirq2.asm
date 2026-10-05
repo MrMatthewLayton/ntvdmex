@@ -1,9 +1,8 @@
 ; qirq2.asm -- CAN the kernel's APC reach a RUNNING guest, or only a trapping one?
 ;
-; This settles the last live hypothesis behind the sound epic's blocker. Disassembly of
-; the VdmQueueInterrupt APC's kernel routine (ntoskrnl 0x46fdfb) says its FIRST pass always
-; takes the requeue branch -- it is entered with NormalContext = 0 and only a non-zero
-; NormalContext reaches the dispatch -- re-queuing itself as a USER-mode APC. A user APC is
+; This settles the last live hypothesis behind the sound epic's blocker: that the
+; VdmQueueInterrupt APC never dispatches on its FIRST pass, but re-queues itself as a
+; USER-mode APC. A user APC is
 ; only delivered to a thread in an alertable wait, and a thread spinning inside
 ; VdmStartExecution never is. If that reading is right, the service cannot preempt a
 ; running V86 guest at all: it can only take effect at the VDM's next kernel transition,

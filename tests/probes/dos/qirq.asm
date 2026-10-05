@@ -8,7 +8,7 @@
 ;
 ; The kernel-side lever recovered by RE this session is
 ; NtVdmControl(VdmQueueInterrupt=1, <thread handle>), which queues an APC to the VDM
-; thread. Its kernel routine (ntoskrnl 0x46fdfb) reads the FIXED_NTVDMSTATE pending
+; thread. Its kernel routine reads the FIXED_NTVDMSTATE pending
 ; bits at [0x714] and the interrupted thread's trap frame, then either
 ;   - dispatches the interrupt itself through the kernel's virtual ICA (8259 model),
 ;     vectoring at the ICA's programmed base -- our ICA is zeroed, so base 0 => the

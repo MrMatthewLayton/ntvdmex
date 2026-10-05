@@ -122,13 +122,9 @@ start:
         EMIT    "xms.07.query.a20", "AX,BX"
 
         ; ---- ★ THE BYTES INSIDE THE DRIVER, AT THE ENTRY POINT. (GH #47)
-        ; MEM.EXE does not only CALL the XMS driver, it READS IT. Disassembled:
-        ;     07B1  les bx,[0x2cdc]          ; ES:BX = the XMS entry point
-        ;     07B5  cmp word [es:bx+0x45],0
-        ;     07BA  jnz  0x7bf
-        ;     07BC  jmp  0x907               ; skip the whole extended report
-        ; So a zero word at entry+0x45 makes MEM print "Extended (XMS) 0K" no
-        ; matter how correctly the driver answers AH=08h -- which is exactly what
+        ; MEM.EXE does not only CALL the XMS driver, it READS IT: a zero word
+        ; at entry+0x45 makes MEM skip its extended report and print
+        ; "Extended (XMS) 0K" no matter how correctly the driver answers AH=08h -- which is exactly what
         ; we do, because our entry is a four-byte BOP/RETF stub with zeros after.
         ; This dumps what a real HIMEM.SYS has there so the value is measured
         ; rather than invented.

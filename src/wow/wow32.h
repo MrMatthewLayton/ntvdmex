@@ -2,25 +2,19 @@
  *
  * krnl386.exe is a 16-bit DLL that cannot call Win32, so it reaches a 32-bit
  * companion (real Windows: wow32.dll inside ntvdm.exe) through a native BOP.
- * Every call goes through ONE thunk at seg1:0x2bb6, reached from a per-function
- * stub, so the whole interface is a small integer namespace -- 82 function IDs,
- * enumerated in docs/research/wow32-call-surface.md.
+ * Every call arrives at the same BOP with a function ID on the stack, so the whole
+ * interface is a small integer namespace -- 82 function IDs, enumerated in
+ * docs/research/wow32-call-surface.md.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE FRAME, READ OFF krnl386's OWN CODE AND CONFIRMED AGAINST THE LIVE RIG.
+ * THE FRAME, AS MEASURED AT THE BOP ON THE LIVE RIG (`@ss:sp` dumps).
  *
- * A per-function stub (e.g. VirtualAlloc's, at seg1:0xb48e) is:
- *
- *     push <arg byte count> / push 0 / push <ID> / nop / push cs / call 0x2bb6
- *
- * and its CALLER reached it the same way -- `push cs` then a NEAR call, so the
- * stub can be returned from with `retf`. The thunk then does `push bp; mov bp,sp`
- * and a fixed run of pushes. That fixes every offset:
+ * Relative to the BP the 16-bit side has set up when the BOP executes:
  *
  *     [bp+0]      saved BP
- *     [bp+2/+4]   near-return into the stub, and the stub's pushed CS
+ *     [bp+2/+4]   a near return and a CS -- the per-function stub's
  *     [bp+6]      ★ THE FUNCTION ID
- *     [bp+8]      the pushed 0
+ *     [bp+8]      a zero word
  *     [bp+10]     ★ the ARGUMENT BYTE COUNT
  *     [bp+12/+14] the CALLER's return address -- offset then CS
  *     [bp+16...]  ★ THE ARGUMENTS
@@ -29,35 +23,30 @@
  *   them at bp+12 and so printed the caller's far return address as the first two
  *   argument words -- which is exactly why session 30 recorded VirtualAlloc's
  *   argument ORDER as "not pinned down, two readings possible". It was an
- *   instrument that lied, in this project's usual shape. The proof it is +16 is
- *   the thunk's own return path (seg1:0x2c1d):
- *       mov bx,[bp+10] / shl bx,2 / add bx,0x2ab6 / jmp bx
- *   which lands in a table of `pop bx / pop bp / add sp,0xA / retf N` stubs, one
- *   per argument size. `add sp,0xA` skips exactly the five words bp+2..bp+10, the
- *   `retf` consumes bp+12/+14, and `retf N` then discards N bytes of arguments.
- *   So the arguments are the N bytes above the far return address: bp+16.
+ *   instrument that lied, in this project's usual shape. The check that it is +16:
+ *   the call returns to the address at bp+12/+14 with exactly the declared
+ *   argument byte count removed from the stack, so the arguments are the N bytes
+ *   above the far return address -- and with +16 every known API's arguments
+ *   decode to sensible values (see ARGUMENT ORDER below).
  *
- * ★ AND THE RETURN VALUE IS NOT A REGISTER. The thunk reserves four bytes with
- *   `sub sp,4` BEFORE the BOP and unconditionally does `pop ax / pop dx` after it.
- *   Whatever we leave in AX/DX is therefore overwritten. The 32-bit side must
- *   write the DWORD into that hole, at [bp-16] (low word) and [bp-14] (high).
- *   Confirmed on hardware: in the rig's `@ss:sp` dump those two words held stale
- *   stack (0x0047, 0x0000) at the BOP -- an uninitialised return slot.
+ * ★ AND THE RETURN VALUE IS NOT A REGISTER. Whatever we leave in AX/DX is
+ *   overwritten when the guest resumes; the DWORD the caller receives is the one
+ *   in a four-byte stack slot at [bp-16] (low word) and [bp-14] (high). Confirmed
+ *   on hardware: in the rig's `@ss:sp` dump those two words held stale stack
+ *   (0x0047, 0x0000) at the BOP -- an uninitialised return slot.
  *   Getting this wrong is silent: the guest reads garbage and blames itself.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ARGUMENT ORDER IS PASCAL: pushed LEFT TO RIGHT, so the FIRST declared argument
- * is at the HIGHEST address and the LAST is at bp+16. Three independent call
- * sites agree, which is what makes it a fact rather than a reading:
- *   VirtualAlloc   pushes 0, size, 0x3000, 0x40   -> (lpAddress, dwSize,
+ * is at the HIGHEST address and the LAST is at bp+16. Three independent calls,
+ * as they arrive at run time, agree, which is what makes it a fact:
+ *   VirtualAlloc   arrives with 0, size, 0x3000, 0x40 -> (lpAddress, dwSize,
  *                  flAllocationType, flProtect), and 0x3000/0x40 are exactly
  *                  MEM_COMMIT|MEM_RESERVE and PAGE_EXECUTE_READWRITE.
- *   VirtualFree    pushes addr, size, 0x8000      -> (lpAddress, dwSize,
+ *   VirtualFree    arrives with addr, size, 0x8000    -> (lpAddress, dwSize,
  *                  dwFreeType) with MEM_RELEASE.
- *   GlobalMemoryStatus pushes ss, bp of a 32-byte buffer whose first DWORD it
- *                  set to 0x20 -- a MEMORYSTATUS with dwLength filled in -- and
- *                  afterwards reads [+0x0c]+[+0x14] and compares [+0x1c], i.e.
- *                  dwAvailPhys + dwAvailPageFile vs dwAvailVirtual.
+ *   GlobalMemoryStatus arrives with a far pointer to a 32-byte stack buffer whose
+ *                  first DWORD is 0x20 -- a MEMORYSTATUS with dwLength filled in.
  *
  * A far pointer argument is a normal 16:16: offset in the low word, SELECTOR in
  * the high word (the caller pushes the segment first, the offset second).
@@ -66,10 +55,10 @@
  * NAMING. 28 of the 82 IDs are named by krnl386's OWN export table -- an entry
  * whose target IS a stub, so the export's name in the (non-)resident name table
  * is the function's name, with no inference at all. `tools/ne/wowmap.py` prints
- * the mapping. It was cross-checked before being trusted: id 0xcf was worked out
- * from its call site alone (the caller compares the result against 0x411, 0x412,
- * 0x404, 0x804, 0x0c04 -- LANGIDs) and the export table then said
- * GETSYSTEMDEFAULTLANGID. Two methods, one answer.
+ * the mapping. It was cross-checked before being trusted: id 0xcf (no arguments,
+ * and the guest's behaviour changes with the LANGID returned) was guessed
+ * independently, and the export table then said GETSYSTEMDEFAULTLANGID. Two
+ * methods, one answer.
  */
 #ifndef WOW32_H
 #define WOW32_H
@@ -84,45 +73,24 @@
 #define WOW32_OFF_ARGB  10
 #define WOW32_OFF_FROM  12           /* return address into krnl386 -- WHICH call site */
 #define WOW32_OFF_ARGS  16
-#define WOW32_OFF_RET   (-16)        /* the `sub sp,4` hole: low word, then high */
+#define WOW32_OFF_RET   (-16)        /* the return slot: low word, then high */
 
 /* ── ★★★ THE SECOND RETURN CHANNEL: THE EPILOGUE MODE. (GH #128, session 38) ──
-     The thunk does not have one return path, it has THIRTY-EIGHT, and which one
-     it takes is a word on the guest stack that the 32-bit side is expected to
-     write. Reading up from SP, the prologue at seg1:0x2bb6 lays down
+     The return path the 16-bit side takes after the BOP is selected by a word on
+     the guest stack, at [bp-24], which the 32-bit side is expected to write. The
+     guest always arrives with it ZERO, and zero is the ordinary return. The
+     frame below BP at the BOP, as dumped on the rig:
 
-       bp-2 bx | -4 es | -6 cx | -8 fs | -10 gs | -12 ds | -16 the RETURN HOLE
-       | -18 si | -20 di | -22 bp | -24 ★ THE MODE (`push 0`) | -26 [0x228]
+       bp-2 bx | -4 es | -6 cx | -8 fs | -10 gs | -12 ds | -16 the RETURN SLOT
+       | -18 si | -20 di | -22 bp | -24 ★ THE MODE (0 on arrival)
 
-     and afterwards:
-
-       2c04  pop ax / cmp ax,[0x228] / jne   ; the re-entrancy guard (NOT a lever)
-       2c0b  pop bx                          ; ★ THE MODE
-       2c0d  cmp bx,0 / jne 0x2c32           ; 0 = the ordinary epilogue
-       2c3f  add bx,bx
-       2c41  jmp word ptr cs:[bx+0x2a36]     ; ★ a 38-entry table of epilogues
-
-   ★ krnl386 ITSELF NEVER SETS IT. `seg1:0x2bc7 push 0` is the only writer of the
-     slot other than `seg1:0x2c5c`, which CLEARS it -- checked by scanning every
-     segment for a store to `[bp-0x18]`. Thirty-seven epilogues that the guest
-     can never select are not dead code; they are a menu for the other side.
    ★★ MODE 25 IS THE TASK SWITCH-BACK, and it is a matched pair with the task
-     launcher. `seg1:0x97be` starts a task with
-
-       97be  push [0x228] / push bp      ; on the CREATOR's stack
-       97c3  mov di,ss / mov cx,sp       ; its stack, kept in registers
-       97e9  mov ss,[bp+8] / mov sp,si   ; switch to the new task
-       9822  jmp 0xb1d0                  ; WOW32 0x74, through the thunk
-                                         ;   -- which pushes DI and CX into its
-                                         ;      frame, on the NEW task's stack
-
-     and mode 25 lands at `seg1:0x2c4e`, which pops that frame (so DI and CX come
-     back) and jumps to `seg1:0x9827`:
-
-       9827  mov ss,di / mov sp,cx / pop bp / pop [0x228]
-
-     -- the creator back on its own stack, with its BP and its current-task word
-     restored. So "this task's turn is over, put its creator back" is one word.
+     launch call `0x74`. That call is made on the NEW task's stack, with the
+     creating task's SS:SP carried in DI and CX (both saved in the frame above).
+     Returned through mode 25, the creator comes back on its own stack, with its
+     BP and its current-task word restored -- observed on the rig as krnl386's
+     creating task carrying on. So "this task's turn is over, put its creator
+     back" is one word.
    ⚠ IT IS ONLY VALID AT THE FRAME THAT STARTED THE TASK. DI and CX are a stack
      only in the `0x74` call; at any other call site they are just the caller's
      registers, and mode 25 would load SS:SP from whatever they happened to hold.
@@ -144,25 +112,26 @@ typedef struct {
     volatile BYTE   *bp;             /* linear address of SS:BP inside the thunk */
     WORD             id;
     WORD             argb;
-    WORD             from;           /* return address in krnl386 seg 1 -- the CALL SITE */
+    WORD             from;           /* caller's return offset [bp+12] -- the CALL SITE */
     WORD             stubseg;        /* [bp+4]: the SEGMENT of the per-function stub    */
     wow32_sel2lin_fn sel2lin;        /* selector -> linear base (host's LDT view) */
     void            *ctx;
     /* ── ★★★ THE ID SPACE IS PER MODULE, AND THIS SAYS WHOSE. (session 38) ──────
-         Every id in this file was read out of krnl386's thunk table. USER, GDI and
-         the drivers have their OWN tables, with their own numbering, reaching the
-         same BOP -- so an id is only meaningful together with the table it came
-         through, and the table is named by `stubseg`.
+         Every id in this file is one krnl386 sends. USER, GDI and the drivers send
+         their OWN ids, with their own numbering, to the same BOP -- so an id is
+         only meaningful together with the module it came from, and the module is
+         named by `stubseg`.
        ⚠ MEASURED, AFTER GETTING IT WRONG. WOWEXEC's `RegisterClass(&WNDCLASS)`
          arrives as id `0x39` with `retstub=0x0c25` and **4** argument bytes, from
          USER's segment. krnl386's `0x39` is `GetProfileInt`, `retstub=0xb537`, **10**
          argument bytes. We serviced the first with `GetProfileIntA` and handed
          WOWEXEC the answer -- a function answered by an unrelated function, which is
          the "runs but lies" class this project treats as the most expensive kind.
-       ⇒ 1 only when the stub lives in the segment the BOP is executing in, which is
-         krnl386's seg1 -- the table this file describes. krnl386 has a SECOND table
-         of its own in seg2 (121 stubs, far-calling the same thunk) whose numbering is
-         also not this one, so "not ours" is about the TABLE, not about the module.
+       ⇒ 1 only when the stub's segment ([bp+4]) is the segment the BOP is executing
+         in -- krnl386's first code segment, the id space this file describes.
+         krnl386 also reaches the BOP from a SECOND code segment of its own, with a
+         numbering that is also not this one, so "not ours" is about the SEGMENT,
+         not about the module.
          Everything here is gated on it; anything else gets the honest
          "unimplemented", which is a missing answer instead of a wrong one. */
     int              krnl;
@@ -358,14 +327,14 @@ static void wow32_setret(wow32_frame_t *f, DWORD v)
 }
 
 /* ★ What the guest WILL READ out of the return hole if nobody writes it.
-   A stepped-over call leaves the `sub sp,4` hole holding whatever the stack last
-   had there, and krnl386 pops it into AX:DX and branches on it -- so an
+   A stepped-over call leaves the return slot holding whatever the stack last had
+   there, and krnl386 receives it as the call's answer and acts on it -- so an
    unimplemented call is not inert, it answers at random. Two walls in this project
    were that value and not the guest: the null-`ES` fault after `WowLoadModule`
-   (a stale slot passing a `cmp ax,0x21` it should have failed) and, upstream of
-   it, a stale non-zero failing `or ax,ax / jne` inside LoadModule. Reading the
-   hole back and PRINTING it is what lets a later reader tell "krnl386 decided
-   this" from "our litter decided this". */
+   (a stale value accepted as a module handle) and, upstream of it, a stale
+   non-zero taken as failure inside LoadModule. Reading the slot back and PRINTING
+   it is what lets a later reader tell "krnl386 decided this" from "our litter
+   decided this". */
 static DWORD wow32_peekret(const wow32_frame_t *f)
 {
     return (DWORD)wow32_peekw(f->bp + WOW32_OFF_RET)
@@ -373,8 +342,8 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 }
 
 /* ── ★★ WHAT AN UNIMPLEMENTED CALL ANSWERS. (GH #128, session 36) ─────────────
-     Session 35 measured that a stepped-over call is not inert: krnl386 pops the
-     `sub sp,4` hole into AX:DX and branches on it. Leaving the hole unwritten
+     Session 35 measured that a stepped-over call is not inert: krnl386 takes the
+     return slot as the answer and acts on it. Leaving the slot unwritten
      therefore does not mean "no answer", it means "an answer drawn from whatever
      the stack last held" -- which made two separate runs stop for reasons that
      were OURS, and which no amount of re-running can reproduce or rule out.
@@ -383,16 +352,17 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
      makes the run REPRODUCIBLE, which is the property every other conclusion in
      this investigation rests on. A deterministic wrong answer can be traced from
      the wall back to its cause; a random one cannot.
-   ★ AND ZERO IS THE BETTER CONSTANT, at both sites measured so far -- chosen from
-     the two call sites' own tests, not from taste:
-       0xc6  seg1:0x4795  `or ax,ax / jne <failure>`  -> litter 0x01b7 took the
-             FAILURE path. Zero does not. That failure was ours.
-             ⚠ s92: the `jne` is the FREE (seg1:0x837a), not a failure -- but zero is
-             still right: answering 1 broke every launch (see 0xc6's own case).
-       0x2d  seg2:0x0f16  `cmp ax,0x21 / jb`          -> litter 0x2714 passed as a
-             MODULE HANDLE and ran on into the terminal #GP with a NULL parameter
-             block. Zero is below 0x21, so LoadModule takes its error path and
-             REPORTS, instead of faulting somewhere else.
+   ★ AND ZERO IS THE BETTER CONSTANT, at both calls measured so far -- chosen from
+     what the guest visibly did with each answer, not from taste:
+       0xc6  litter 0x01b7 sent the guest down a path we read as FAILURE. Zero
+             does not.
+             ⚠ s92: non-zero actually makes the guest FREE the block, not fail --
+             but zero is still right: answering 1 broke every launch (see 0xc6's
+             own case).
+       0x2d  litter 0x2714 was accepted as a MODULE HANDLE (Win16 treats < 0x21
+             as an error code) and ran on into the terminal #GP with a NULL
+             parameter block. Zero is below 0x21, so LoadModule takes its error
+             path and REPORTS, instead of faulting somewhere else.
      In both cases zero fails nearer the cause, which is the whole point.
    ⚠ NOT 0xFFFFFFFF: that is WOW32_DECLINE, and a decline is a different statement
      ("ask real DOS instead") that only holds at the sites in wow32_decline_sites.
@@ -402,8 +372,8 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 /* ---- the function IDs we can name -------------------------------------- */
 /* Names for the 28 that krnl386's export table names outright, plus the ones
    worked out from their call sites. An ID with no name here is not a gap in the
-   evidence -- it is a function reached only from internal code, whose call site
-   has not been read yet. `tools/ne/nedis.py --wowfunc <id>` is how. */
+   evidence -- it is a function reached only from internal code, not yet pinned
+   down by what it is called with and what the guest does with the answer. */
 #define WOW32_FATALEXIT                 0x01
 #define WOW32_EXITKERNELTHUNK           0x02
 #define WOW32_WRITEOUTPROFILES          0x03
@@ -415,18 +385,18 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_SETPRIORITY               0x20
 #define WOW32_LOCKCURRENTTASK           0x21
 #define WOW32_WOWLOADMODULE             0x2d
-#define WOW32_SETCURRENTDRIVE           0xc8   /* read off its call site, see below */
-#define WOW32_GETPROFILEINT             0x39   /* pinned from DGROUP, see below    */
+#define WOW32_SETCURRENTDRIVE           0xc8   /* named from its use, see below     */
+#define WOW32_GETPROFILEINT             0x39   /* pinned from its strings, below    */
 #define WOW32_GETPROFILESTRING          0x3a   /* ★ IT DECIDES PAINT'S COLOUR MODE */
 #define WOW32_WRITEPROFILESTRING        0x3b   /* #293, the inventory's top gap    */
 #define WOW32_WRITEPRIVATEPROFILESTRING 0x81
 #define WOW32_WOWGETNEXTVDMCOMMAND      0x70
 #define WOW32_OLDYIELD                  0x75
-#define WOW32_REGISTERDOSDATA           0x78   /* named from its call site, below */
+#define WOW32_REGISTERDOSDATA           0x78   /* named from its use, below       */
 #define WOW32_GETSHORTPATHNAME          0x7b
 #define WOW32_SETCURRENTDIR             0x82   /* ★ WHERE File > Save As PUT THE FILE */
-#define WOW32_ACCEPTTASKSELECTOR        0x7d   /* pinned from its call sites, below */
-#define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from DGROUP, see below    */
+#define WOW32_ACCEPTTASKSELECTOR        0x7d   /* pinned from its use, below        */
+#define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from its strings, below    */
 /* ── ★★★ 0x7f GetPrivateProfileInt -- NAMED BY MINESWEEPER'S FIRST RUN. ──────
      14 arg bytes = 4 + 4 + 2 + 4, and the fourth is a FILENAME, so it is the
      private twin of 0x39 exactly as 0x80 is of the string form. WINMINE.EXE
@@ -445,7 +415,7 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define GPPI_ARG_APP     10                    /* far */
 #define WOW32_WOWWAITFORMSGANDEVENT     0x83
 #define WOW32_WOWMSGBOX                 0x84
-#define WOW32_GETDATETIME               0x86   /* call site unpacks a packed date  */
+#define WOW32_GETDATETIME               0x86   /* answer is used as a packed date  */
 #define WOW32_GETDRIVETYPE              0x88
 #define WOW32_WOWREGISTERSHELLWINDOW    0x8b
 #define WOW32_FREELIBRARY32W            0x8c
@@ -464,39 +434,34 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 /* ── ★★★ 0xc5: RESOLVE A MODULE NAME TO A FULL PATH. (session 39) ─────────────
      Serviced in main.c, not here: the answer is a 16:16 far pointer, so it needs
      guest-visible memory and a selector, and both live over there.
-   ★ NAMED BY ITS TWO CALL SITES, and the second is what makes it unambiguous:
-       seg2:0x0856   0xc5(dst, src)    -- resolve; `cmp ax,0 / je` picks the tail
-       seg2:0x08ba   0xc5(dst, NULL)   -- release, gated on the first having
-                                          succeeded, and its result ignored
+   ★ NAMED BY HOW IT ARRIVES, in pairs, and the second call is what makes it
+     unambiguous:
+       0xc5(dst, src)    -- resolve; a zero answer makes the guest fall back to
+                            the name it started with
+       0xc5(dst, NULL)   -- release, made only after a successful resolve, and
+                            its result ignored
      so the pair is resolve/release and the host owns the storage between them.
-   ★★ AND `dst` RECEIVES A FAR POINTER, NOT A COPIED STRING -- proved by symmetry
-     rather than by reading the pushes. The success tail (seg2:0x0864) and the
-     fallback tail (0x0875) are THE SAME five-word call, with `[bp-0x1c]:[bp-0x1e]`
-     substituted for the caller's own `[bp+0x0c]:[bp+0x0a]`. One is the resolved
-     path, the other is the name we were given; they must be the same kind of
-     thing.
+   ★★ AND `dst` RECEIVES A FAR POINTER, NOT A COPIED STRING: on success the guest
+     goes on to use the far pointer stored at `dst` exactly where, on failure, it
+     uses the far pointer to the name it was given. One is the resolved path, the
+     other is the original name; they must be the same kind of thing.
    ⇒ Answering 0 is what made krnl386 compose module names against the CURRENT
      DIRECTORY and fail to open `C:\Documents and Settings\<user>\SHELL.DLL`. */
 #define WOW32_RESOLVEMODULEPATH         0xc5
 /* ── ★★ 0xd0: GetWindowsDirectory(lpBuffer, uSize). (session 40) ──────────────
-     Not named by krnl386's export table, so it comes from its two call sites and
+     Not named by krnl386's export table, so it comes from how it is called and
      from what the answer is USED for -- and the two agree.
 
-   ★ krnl386's own (seg1:0xc917) says what SHAPE it is, to the byte:
-       c90d  mov di,0x624
-       c910  push ds / push di / push 0x80     ; (lpBuffer = ds:0x624, uSize=128)
-       c917  call 0xb3e5                       ; this id, 6 argument bytes
-       c91a  or ax,ax / je                     ; 0 is failure
-       c920  repne scasb ...                   ; measure the string it wrote
-       c92a  mov [0x506],ds / [0x504],0x624 / [0x50c],cx   ; cache ptr + LENGTH
-     So it fills the caller's buffer with a NUL-terminated path and returns
-     non-zero on success. That is a Get<something>Directory and nothing else.
+   ★ krnl386's own call says what SHAPE it is: 6 argument bytes, a far buffer
+     and 0x80 (lpBuffer, uSize=128); on a non-zero answer it takes the length of
+     the NUL-terminated string now in the buffer and keeps both. So it fills the
+     caller's buffer with a path and returns non-zero on success. That is a
+     Get<something>Directory and nothing else.
 
    ★ SYSEDIT says WHICH directory, and it is a count rather than a guess:
      `sysedit` imports `KERNEL.134 GETWINDOWSDIRECTORY` and NOT
-     `KERNEL.135 GETSYSTEMDIRECTORY` (`neimports.py`: seg2:0x017c and
-     seg2:0x01c6 -- exactly two sites), and in a run SYSEDIT's task makes
-     exactly TWO calls to this id. It then `lstrcat`s `\SYSTEM.INI` and
+     `KERNEL.135 GETSYSTEMDIRECTORY` (`neimports.py`: exactly two fixups), and in
+     a run SYSEDIT's task makes exactly TWO calls to this id. It then `lstrcat`s `\SYSTEM.INI` and
      `\WIN.INI` onto the answer, which is where those files live.
    ⚠ WHAT LEAVING IT UNIMPLEMENTED LOOKED LIKE: not an error, but a WRONG NAME.
      The buffer kept whatever was in it, so SYSEDIT opened -- and titled a
@@ -506,8 +471,8 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_GETWINDOWSDIRECTORY       0xd0
 #define WOW32_WOWSHUTDOWNTIMER          0xcd
 /* Serviced in main.c, not here: it needs the DOS machine. Listed so the name table
-   below can print it, and so nobody adds a decline for it -- its call site
-   (seg1:0x53a2) treats DX=0xFFFF as a hard error, not as "ask DOS instead". */
+   below can print it, and so nobody adds a decline for it -- krnl386 reports a
+   DX=0xFFFF answer to the app as a hard error, not as "ask DOS instead". */
 #define WOW32_GETCURDIR                 0xc9
 #define WOW32_GETSYSTEMDEFAULTLANGID    0xcf
 
@@ -618,23 +583,20 @@ static void wow_shorten(char *path, unsigned cap)
 
 /* ── ★ DECLINING IS A REAL ANSWER, AND krnl386 ALREADY HANDLES IT ───────────
      krnl386 hooks INT 21h in protected mode and offers some functions to its
-     32-bit companion first. When the companion says no, it chains to the vector
-     it saved before hooking:
+     32-bit companion first. When the companion answers 0xFFFF(FFFF), the
+     original INT 21h request then arrives at the PREVIOUS INT 21h handler --
+     observed in the run log as the matching `INT21h AH=..` line right after the
+     call. In this host that handler is our own DOS layer, the one COMMAND.COM and
+     Doom already use. So a sentinel return hands file I/O to working code instead
+     of to a parallel Win32 handle table that would then disagree with every call
+     that chains anyway.
 
-         5507  cmp ax, 0xffff
-         550a  je  0x55a1     -> pop ax/bx/dx -> jmp 0x56c8 -> lcall cs:[0x3c]
-
-     `cs:[0x3c]` is the PREVIOUS INT 21h handler -- which in this host is our own
-     DOS layer, the one COMMAND.COM and Doom already use. So a sentinel return
-     hands file I/O to working code instead of to a parallel Win32 handle table
-     that would then disagree with every call that chains anyway.
-
-   ⚠ ONLY WHERE THE CALL SITE SAYS SO. `tools/ne/wowdecline.py` checks each site
-     and finds three (0x82, 0xc9, 0x71) where 0xFFFF is a plain ERROR and krnl386
-     reports failure to the app rather than chaining. Declining there would turn
+   ⚠ ONLY WHERE THE CALL SITE SAYS SO. There are sites (0x82, 0xc9, 0x71) where
+     0xFFFF is a plain ERROR and krnl386 reports failure to the app rather than
+     chaining. Declining there would turn
      "not implemented" into "the file does not exist" -- a wrong answer instead
      of a missing one, which is the more expensive kind. They are NOT in the list
-     below, and the list is the tool's output, not a guess about the family.
+     below, and the list is per call site, not a guess about the family.
 
    ⚠ Some sites test AX and some test DX, so the sentinel has to be 0xFFFFFFFF
      rather than either half.
@@ -646,26 +608,18 @@ static void wow_shorten(char *path, unsigned cap)
      written down rather than discovered. */
 #define WOW32_DECLINE 0xFFFFFFFFu
 
-/* Verified declinable, with the call site that proves it. All seven are the
-   INT 21h file family; declining 0x97 and 0x6f makes krnl386 re-issue a plain
-   AH=3Fh / AH=40h to DOS, which is visible in its own code at 0x55a7 / 0x56c6. */
-#define WOW32_FILE_OPEN        0xc1   /* seg1:0x5504  AH=3Dh                    */
-#define WOW32_FILE_READ        0x97   /* seg1:0x5570  -> AH=3Fh on decline      */
-#define WOW32_FILE_CLOSE       0xc2   /* seg1:0x558f  AH=3Eh                    */
-#define WOW32_FILE_GETATTR     0xc7   /* seg1:0x55c4  AH=43h AL=0               */
-#define WOW32_FILE_7E          0x7e   /* seg1:0x55df                            */
-#define WOW32_FILE_GETDATE     0x89   /* seg1:0x5609  AH=57h AL=0               */
-#define WOW32_FILE_WRITE       0x6f   /* seg1:0x56bc  -> AH=40h on decline      */
+/* Verified declinable. All seven are the INT 21h file family; declining 0x97 and
+   0x6f makes krnl386 re-issue a plain AH=3Fh / AH=40h to DOS, visible in the run
+   log as the INT 21h line that follows the call. */
+#define WOW32_FILE_OPEN        0xc1   /* AH=3Dh                    */
+#define WOW32_FILE_READ        0x97   /* -> AH=3Fh on decline      */
+#define WOW32_FILE_CLOSE       0xc2   /* AH=3Eh                    */
+#define WOW32_FILE_GETATTR     0xc7   /* AH=43h AL=0               */
+#define WOW32_FILE_7E          0x7e   /*                           */
+#define WOW32_FILE_GETDATE     0x89   /* AH=57h AL=0               */
+#define WOW32_FILE_WRITE       0x6f   /* -> AH=40h on decline      */
 /* ── ★ THE SEEK, AND WHY IT WAS MISSED. (GH #128, session 34) ─────────────────
-     `tools/ne/wowdecline.py` finds decline sites by the shape of the test after
-     the call -- `test dx` or `cmp ax,0xffff`. THIS site tests neither:
-
-         549b  call 0xb211        ; WOW32 0x98
-         549e  inc  dx            ; 0xffff + 1 == 0 -> ZF
-         549f  jne  0x54a4        ; serviced
-         54a1  jmp  0x55a1        ; -> pop ax/bx/dx -> 0x56c8 -> lcall cs:[0x3c]
-
-     so the tool reported ten declinable sites and never mentioned 0x98, and 0x98
+     The first list of declinable sites was incomplete: 0x98 was not on it, and
      sat in the "unimplemented, stepped over" list looking like work rather than
      like a one-line answer.
    ★ IT IS THE FILE SEEK, and leaving it unanswered is what produced "NTVDM
@@ -677,28 +631,26 @@ static void wow_shorten(char *path, unsigned cap)
      parsed was whatever followed the MZ stub.
      Declining restores the original AX (AH=42h) and chains to real DOS, which our
      PM thunk already serves. */
-#define WOW32_FILE_SEEK        0x98   /* seg1:0x549b  -> AH=42h on decline      */
+#define WOW32_FILE_SEEK        0x98   /* -> AH=42h on decline      */
 
 /* ── ★★ DECLINING IS A PROPERTY OF THE CALL SITE, NOT OF THE ID. ───────────────
      This was keyed by ID, and that is measurably wrong: krnl386 calls 0x97 (read)
      from TWO places with OPPOSITE meanings --
+       one where 0xFFFF means "ask real DOS": an `INT21h AH=3F` follows the
+         decline in the log. A decline is a true statement.
+       one where 0xFFFF is RETURNED TO THE CALLER as a failure: nothing follows.
+         A decline here turns "we did not implement this" into "the read failed",
+         which is a WRONG ANSWER rather than a missing one.
 
-       seg1:0x5570  inc dx / je 0x55a7  -> mov ah,0x3f / jmp 0x56c8 -> lcall cs:[0x3c]
-                    ⇒ 0xFFFF means "ask real DOS". A decline is a true statement.
-       seg1:0x8a4e  inc dx / jne 0x8a59 -> xor dx,dx / or ax,0xffff / dec dx / ret
-                    ⇒ 0xFFFF is RETURNED TO THE CALLER as a failure. A decline here
-                      turns "we did not implement this" into "the read failed",
-                      which is a WRONG ANSWER rather than a missing one.
-
-     Session 34's failing run declined at `from=0x8a51` -- the second site -- and the
+     Session 34's failing run declined at `from=0x8a51` -- the second kind -- and the
      log shows what that looks like: no `INT21h AH=3F` follows it, unlike every other
-     read in the run. 0x6f (write) has the same split, at 0x56bc and 0x8aa1.
+     read in the run. 0x6f (write) has the same split.
 
-   The list is the output of `tools/ne/wowdecline.py`, which reads each site's test
-     and asks whether its sentinel path reaches `lcall cs:[0x3c]`. Values are the
-     RETURN address (call site + 3), because that is what the thunk frame carries at
-     WOW32_OFF_FROM. Anything not listed is not declined -- an unknown site gets the
-     honest "unimplemented" rather than a guess. */
+   ⚠ THE VALUES BELOW ARE krnl386 CALL-SITE RETURN OFFSETS -- what the frame carries
+     at WOW32_OFF_FROM, as seen in the run log's `from=` -- each one checked to be
+     followed by the chained INT 21h request when declined. They are specific to the
+     XP krnl386.exe build. Anything not listed is not declined -- an unknown site
+     gets the honest "unimplemented" rather than a guess. */
 typedef struct { WORD id; WORD from; } wow32_decline_site_t;
 
 static const wow32_decline_site_t wow32_decline_sites[] = {
@@ -730,8 +682,8 @@ static int wow32_may_decline(WORD id, WORD from)
  * Returns 1 if this ID was serviced (the caller then advances EIP past the BOP),
  * 0 if it is still unimplemented (the caller logs and steps over).
  *
- * ⚠ EVERY SERVICE MUST CALL wow32_setret(), even a void one. The thunk pops the
- *   return slot unconditionally, so "no return value" still means "write zero"
+ * ⚠ EVERY SERVICE MUST CALL wow32_setret(), even a void one. The guest receives
+ *   the return slot unconditionally, so "no return value" still means "write zero"
  *   -- otherwise the guest gets whatever was on the stack. GlobalMemoryStatus is
  *   the void case and it still writes 0.
  */
@@ -743,15 +695,16 @@ static int wow32_may_decline(WORD id, WORD from)
      process and called there; this host IS that process, so LoadLibraryExA and a
      direct call are the faithful answer, not a shortcut.
 
-   ── THE CallProc FRAME, READ OUT OF krnl386 (ords 517/518 -> thunk id 0x1c) ──
-   Both entries `push bp`, then call the id-0x1c stub, whose argument bytes are 0 --
-   so the arguments lie past the declared block and are read RAW:
-       +0 saved bp   +2/+4 the caller's far return   +6 cParams (DWORD)
+   ── THE CallProc FRAME, AS IT ARRIVES (KERNEL ords 517/518 -> thunk id 0x1c) ──
+   Both arrive as id 0x1c with an argument byte count of 0 -- so the arguments lie
+   past the declared block and are read RAW (offsets from the argument block, as
+   measured with w_gthunk):
+       +0 a saved bp   +2/+4 the app's far return   +6 cParams (DWORD)
        +10 fAddressConvert (DWORD)   +14 lpProcAddress (DWORD)   +18 the params
    CallProc32W is PASCAL: p1 was pushed first, so +18 holds pN and p1 is highest.
-   _CallProcEx32W is CDECL: +18 holds p1. krnl386 tells them apart for us -- 518
-   ORs 0x4000 into cParams' high word, 517 clears it -- and pops the arguments
-   itself (517 jumps into a `retf 12+4n` table; 518 is cdecl, the caller pops).
+   _CallProcEx32W is CDECL: +18 holds p1. They arrive told apart for us -- 518
+   with 0x4000 in cParams' high word, 517 without -- and krnl386 removes the
+   arguments itself (517 per the PASCAL convention; 518 is cdecl, the caller pops).
    ⚠ The mask's bit order is taken from the probe run against stock
      (tests/probes/win16/w_gthunk, 16/16), not from the documentation. */
 #define WOW_GT_MAXP 32
@@ -805,9 +758,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 
     /* ── 0xb8 VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) ──
          krnl386 services DPMI 0501 ("allocate memory block") with this rather
-         than passing it to the DPMI host: its call site is guarded by
-         `cmp ax,0x501`, and afterwards it loads BX:CX and SI:DI from the result
-         -- exactly 0501's address-and-handle return convention.
+         than passing it to the DPMI host: it arrives when a guest issues 0501,
+         and its result comes back to that guest as 0501's address-and-handle
+         pair (BX:CX, SI:DI).
        ★ A REAL VirtualAlloc IS THE RIGHT ANSWER, not a fake. The guest runs in
          our own address space, so an address we allocate is one the guest can
          reach once it puts a descriptor over it -- which is the next thing it
@@ -906,7 +859,7 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          The one argument is a 16:16 pointer to a 32-byte buffer whose dwLength
          the guest has already set to 0x20. Fill it through the guest's own
          selector -- we must not hand back a host pointer, because the guest
-         reads the fields with `mov edx,[bp+0x0c]` off its own stack copy. */
+         reads the fields out of its own stack buffer. */
     case WOW32_GLOBALMEMORYSTATUS: {
         volatile BYTE *dst = wow32_argptr(f, 0);
         if (dst) {
@@ -922,9 +875,8 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     }
 
     /* ── 0xcf GetSystemDefaultLangID() ────────────────────────────────────
-         Named by krnl386's export table AND confirmed by its call site, which
-         compares the answer against 0x411/0x412/0x404/0x804/0x0c04 -- the
-         Far-East LANGIDs, i.e. it is asking "am I on a DBCS system". Answering
+         Named by krnl386's export table. What it is for is "am I on a DBCS
+         system" -- the Far-East LANGIDs 0x411/0x412/0x404/0x804/0x0c04. Answering
          with the host's real LANGID is both correct and the whole point: a
          Japanese XP should make krnl386 take the DBCS path. */
     case WOW32_GETSYSTEMDEFAULTLANGID:
@@ -932,11 +884,10 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         return 1;
 
     /* ── ★★ 0x7b GetShortPathName(lpszLong, lpszShort, cch). (s89, #270) ─────
-         Named, never answered. krnl386's start-up (`seg1:0xceaf`) finds
-         `SYSTEMROOT=` in its environment and calls this with the value, a
-         buffer at ds:0xc3b and cch 0x79; the length it returns goes to [0xbc0]
-         and that many bytes become the PREFIX of the system directory, which
-         `seg1:0xc89f` builds as prefix + "\SYSTEM". Stepped over, the length was
+         Named, never answered. At start-up krnl386 calls this with the value of
+         `SYSTEMROOT=` from its environment and a 0x79-byte buffer (seen in the
+         run log), and the system directory it later reports is the returned
+         length's worth of that answer + "\SYSTEM". Stepped over, the length was
          0 and KERNEL.135 GetSystemDirectory answered "\SYSTEM" -- 7 characters,
          no drive (the Win16 test `kfile.sysdir.*`). Frame, reversed: +0 cch,
          +2 lpszShort far, +6 lpszLong far. Written only if it fits, as Win32
@@ -961,7 +912,7 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          GetDriveType is a pass-through: our DOS layer opens real paths on the
          real filesystem, so the host's Windows directory IS the guest's.
        ⚠ uSize is the GUEST'S claim about its own buffer and the only bound
-         there is -- krnl386's is 0x80 bytes inside its DGROUP. Never write more
+         there is -- krnl386 declares 0x80 bytes. Never write more
          than it declared. */
     case WOW32_GETWINDOWSDIRECTORY: {
         volatile BYTE *dst = wow32_argptr(f, 2);
@@ -978,28 +929,23 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 
     /* ── ★★★ 0x80 GetPrivateProfileString, AND IT IS THE PROGRAM LAUNCH ───
          Neither this ID nor 0x39 is self-named by krnl386's export table, so both
-         were pinned from the call sites and from the DGROUP the arguments point
-         into -- which turns out to name them outright. `seg1:0xcc08`:
+         were pinned from the strings their arguments point at, as they arrive --
+         which turns out to name them outright. The first call at start-up:
 
-           push ds / push 0x158e     ; ds:0x158e = "BOOT"          lpAppName
-           push ds / push 0x16b2     ; ds:0x16b2 = "WOWSHELL"      lpKeyName
-           push ds / push [0x1492]   ; measured ds:0x16a6 =
-                                     ;   "WOWEXEC.EXE"             lpDefault
-           push ds / push 0x15f1     ; an empty 0x50-byte buffer   lpReturnedString
-           push 0x50                 ;                             nSize
-           push ds / push 0x1593     ; ds:0x1593 = "SYSTEM.INI"    lpFileName
-           call 0xb544               ; 22 arg bytes = 4+4+4+4+2+4  ✓
+           lpAppName        "BOOT"
+           lpKeyName        "WOWSHELL"
+           lpDefault        "WOWEXEC.EXE"
+           lpReturnedString an empty 0x50-byte buffer
+           nSize            0x50
+           lpFileName       "SYSTEM.INI"      ; 22 arg bytes = 4+4+4+4+2+4  ✓
 
-         and thirty bytes later krnl386 does `mov di,0x15f1` and lcalls the
-         LoadModule thunk at `seg2:0x190a`, then `cmp ax,0x20 / jbe` -- Win16's
-         "failed to launch". So this call is krnl386 asking **what Win16 program
-         to run**, and answering it is the launch itself.
-       ★ The second site, `seg1:0xca6d`, is the same signature over
-         `[DEBUG] OUTPUTTO` with an empty default, and it DOES test the result:
-         `or ax,ax / je`, then `cmp ax,0x4e` -- and `0x4e` is `nSize - 2`, which is
-         GetPrivateProfileString's own "the answer did not fit" convention. Two
-         independent sites agreeing on six arguments and a return convention is
-         what makes this a reading rather than a guess.
+         and the very next thing krnl386 does is LoadModule the string we put in
+         that buffer. So this call is krnl386 asking **what Win16 program to
+         run**, and answering it is the launch itself.
+       ★ A second call has the same signature over `[DEBUG] OUTPUTTO` with an
+         empty default. Two independent calls agreeing on six arguments, with the
+         documented Win16 GetPrivateProfileString shape, is what makes this a
+         reading rather than a guess.
        ⚠ Arguments are Pascal order: FIRST pushed is the HIGHEST offset, so
          lpFileName (pushed last) is at 0, lpAppName at 18.
        ★ Answer it with the REAL Win32 call against the REAL file. On this rig
@@ -1053,11 +999,12 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 
     /* ── 0x39 GetProfileInt(lpAppName, lpKeyName, nDefault) ───────────────
          10 arg bytes = 4 + 4 + 2, no filename -- so it is the SYSTEM profile
-         twin of 0x80 rather than a private one. Both its call sites read as
-         that, and both name themselves out of DGROUP:
-           seg1:0xca4f  ("KERNEL", "GPCONTINUE", [0x53c])
-           seg2:0x09bc  ("ModuleCompatibility", <the module's own name>, 0)
-         -- one per module just loaded, which is exactly what that section is for.
+         twin of 0x80 rather than a private one. The calls seen at run time read
+         as that, by their strings:
+           ("KERNEL", "GPCONTINUE", <a default>)
+           ("ModuleCompatibility", <the module's own name>, 0)
+         -- the second one per module just loaded, which is exactly what that
+         section is for.
        ⚠ WHICH FILE IS UNPROVEN. Win16 `GetProfileInt` means WIN.INI, and
          `[ModuleCompatibility]` is conventionally a SYSTEM.INI section; the two
          readings are not distinguishable from krnl386's side because the call
@@ -1069,32 +1016,19 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
            `GetProfileIntA(ha ? app : "", hk ? key : "", def)`, and the `""` is in
            .rdata -- a READ-ONLY page. XP's profile code writes to the name buffers
            it is given, so the moment krnl386 asked with an empty section or key the
-           host died: `0xc0000005` in ntdll at `mov [ecx+eax],bl`, with EAX holding
-           the literal's own address. It survived ten calls in every earlier run
+           host died: `0xc0000005` in ntdll, a one-byte write to the literal's own
+           address. It survived ten calls in every earlier run
            because every one of them had both names non-empty; the task scheduler
            simply let the guest get as far as asking with one missing.
          ⇒ The locals are writable and already the right size, so pass them always
            and make "absent" an empty *buffer* rather than an empty literal. */
     /* ── ★★★★ 0xc8 -- AND IT IS WHY krnl386 THINKS IT IS ON DRIVE A:. ────────
-         Named from its call site, not from an export table, with
-         `tools/ne/nedis.py guest/wow/KRNL386.EXE --wowfunc 0xc8`:
-
-           seg1:0x537b  push dx / push ax
-                        call 0x5343        ; AL = current drive, via [0x275]
-                        cmp  dl, al        ; asked for the one we are already on?
-                        je   0x538d        ; yes -- nothing to do
-                        push dx
-                        call 0xb2d4        ; ★ WOW32 id 0xc8 (drive in DL)
-                        mov  byte ptr [0x2a0], al     ; ← THE RETURN IS CACHED
-                        pop  ax / mov al, 0x1a        ; 26 drives
-                        jmp  0x5577
-
-         So this is krnl386's INT 21h AH=0Eh (SELECT DEFAULT DRIVE) arm, and
-         WHATEVER WE RETURN BECOMES krnl386's ANSWER TO "what drive am I on".
-         [0x2a0] is not a table -- it is the cached current drive, written from
-         exactly two places (here, and the AH=19h arm at seg1:0x533a which reads
-         the real one through [0x275]) and invalidated with 0xFF at seg1:0x5717.
-         The per-drive TABLE is the separate [0x2a2 + bx] read at seg1:0x51ae.
+         Named from when it arrives, not from an export table: a Win16 guest's
+         INT 21h AH=0Eh (SELECT DEFAULT DRIVE) for a drive other than the current
+         one produces this call with the requested drive, and the guest then sees
+         AL=26 drives, as DOS returns. And WHATEVER WE RETURN BECOMES krnl386's
+         ANSWER TO "what drive am I on": krnl386 keeps it as its cached current
+         drive.
 
        ⚠ UNIMPLEMENTED, THIS RETURNED THE HARNESS SENTINEL 0 -- and 0 is a
          perfectly good drive index, so krnl386 cached "the current drive is A:"
@@ -1212,34 +1146,23 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          WHITE. ────────────────────────────────────────────────────────────────
          The string twin of 0x39, 18 argument bytes = 4 + 4 + 4 + 4 + 2 and no
          filename, so it is WIN.INI. Both the layout and the identity come from
-         one call site rather than from arithmetic on the id:
+         one logged call (PBRUSH.EXE's import of KERNEL.58) rather than from
+         arithmetic on the id:
 
-           PBRUSH.EXE seg2:0x089f   (relocation chain says KERNEL.58)
-             args as logged   (0009 | 6f0a 09c7 | 012a 09c7 | 090e 09c7 |
-                                                              08f4 09c7)
-             ds:0x08f4 = "Paintbrush"   ds:0x090e = "clear"
-             ds:0x012a = "COLOR"        nSize = 9
+           args as logged   (0009 | 6f0a 09c7 | 012a 09c7 | 090e 09c7 |
+                                                            08f4 09c7)
+           the strings: "Paintbrush", "clear", default "COLOR", nSize = 9
 
          ⇒ nSize@0, lpReturnedString@2, lpDefault@6, lpKeyName@10, lpAppName@14.
 
-       ★★★ WHY IT MATTERS. Four instructions later Paint decides what kind of
-         image it is editing, and this call is the whole input:
-
-           08a4  cmp word ptr [bp-8], 2      ; the returned LENGTH
-           08a8  jbe  0x08c1                 ; too short -> AX = 0
-           08aa  lstrcmpi(ds:0x130 "COLOR", the buffer)
-           08b8  cmp ax,1 / sbb ax,ax / neg ax   ; AX = (equal) ? 1 : 0
-           08c6  or ax,ax / je  0x08d2
-           08ca  mov word ptr [0x499a], 0x4cf2   ; -> the COLOUR palette
-           08de  mov word ptr [0x499a], 0x2c60   ; -> the 28 GREYS
-
-         DGROUP 0x0932 is a table of 28 COLORREFs (ffffff, 000000, c0c0c0,
-         808080, 0000ff, ...) and DGROUP 0x09a2 is the same 28 as luminances
-         (ffffff, 000000, fafafa, 090909, f2f2f2, ...); seg2:0x071f copies both
-         into 0x4cf2 and 0x2c60 and this branch picks which one is live. Every
-         grey brush a run has ever logged -- 0x00090909, 0x00121212, 0x00212121
-         -- is an entry of that second table, so Paint was never losing colour in
-         a blit. **It was told to be monochrome, by us, by answering 0.**
+       ★★★ WHY IT MATTERS. Paint's `[Paintbrush] clear=` setting chooses between a
+         colour and a monochrome palette: "COLOR" (the default) means colour,
+         anything else -- including an empty answer -- means 28 greys. Every grey
+         brush a run has ever logged -- 0x00090909, 0x00121212, 0x00212121 -- is
+         one of those greys (the colour palette's entries as luminances), so Paint
+         was never losing colour in a blit. **It was told to be monochrome, by us,
+         by answering 0.** Answering with the default turned the palette to
+         colour on the next run.
        ⚠ THE DEFAULT IS "COLOR", so a rig with no `[Paintbrush] clear` key gets
          colour -- which is why searching WIN.INI for a colour key found nothing
          and the key still turned out to be the answer. The bug was never in the
@@ -1248,8 +1171,7 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          writes into the name buffers it is given, so the locals are passed
          always and "absent" is an empty *buffer*.
        ⚠ Win32 truncates to nSize-1 and returns the character count without the
-         NUL, which is Win16's own convention -- the guest's `cmp ax,2` reads it
-         that way, and "COLOR" is 5. */
+         NUL, which is Win16's own convention -- and "COLOR" is 5. */
     case WOW32_GETPROFILESTRING: {
         char app[128], key[128], def[260], buf[512];
         volatile BYTE *dst = wow32_argptr(f, 2);
@@ -1329,20 +1251,19 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 
          Three calls of this id explain it, and the third names itself:
 
-           FUNC=0x82 from=seg1:0x53c0  arg = "C:\WINDOWS"
-           FUNC=0x82 from=seg1:0x53c0  arg = "C:\DOCUME~1\Matthew\Desktop"
+           FUNC=0x82  arg = "C:\WINDOWS"
+           FUNC=0x82  arg = "C:\DOCUME~1\Matthew\Desktop"
              -> UNIMPLEMENTED, STEPPED OVER ... ANSWERED 0
 
-       ⚠⚠ AND THE SENTINEL IS "SUCCESS" HERE, WHICH IS WHY IT WAS SILENT. The
-         call site is `inc dx / je <error>`; our 0 makes DX 1, so krnl386 takes
-         the *success* arm (`pop ax / mov al,0`) and tells the application the
-         directory changed. It never did, so the subsequent create resolved
-         against the old current directory. **A stepped-over call that answers
-         "yes" is worse than one that answers "no".** Same family as
+       ⚠⚠ AND THE SENTINEL IS "SUCCESS" HERE, WHICH IS WHY IT WAS SILENT. Only
+         DX=0xFFFF is an error to krnl386; our 0 is success, so it tells the
+         application the directory changed. It never did, so the subsequent
+         create resolved against the old current directory. **A stepped-over call
+         that answers "yes" is worse than one that answers "no".** Same family as
          [[stepped-over-call-answers-at-random]].
        ⚠ IT IS NOT DECLINABLE, and this file already said so before the bug:
-         `tools/ne/wowdecline.py` lists 0x82 among the three sites where 0xFFFF
-         is a plain ERROR krnl386 reports to the app rather than chaining to DOS.
+         0x82 is among the three sites where 0xFFFF is a plain ERROR krnl386
+         reports to the app rather than chaining to DOS.
          Declining was tried anyway in session 47 and moved the fault rather than
          fixing it. So it is PERFORMED here.
        ★ And the host's own current directory is the right place to perform it:
@@ -1364,9 +1285,8 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     }
 
     /* ── 0x88 GetDriveType(nDrive) ────────────────────────────────────────
-         Named by krnl386's export table, and its ONE caller pins the semantics
-         to the byte: `push di / call 0xb4b5 / pop dx / cmp al,2` at seg1:0x1ea7
-         -- i.e. "is drive nDrive REMOVABLE", and 2 is Win32's DRIVE_REMOVABLE.
+         Named by krnl386's export table, and the Win16 GetDriveType it backs
+         uses the same codes as Win32 (documented: 2 = DRIVE_REMOVABLE).
          So this is a straight pass-through of the Win32 call, not a WOW-private
          encoding, and the host's answer is the guest's answer: our DOS layer
          opens real paths on the real filesystem, so its drives ARE these drives.
@@ -1396,10 +1316,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
        ★ THE SIGNATURE BUG SHAPE, AGAIN: a stepped-over call whose sentinel answer
          is read as data. Fifth instance in this project. When something is blank,
          wrong or grey and the log shows no error, grep the run for the stepped-over
-         lines and read each CALL SITE.
+         lines and ask what each answer is used for.
 
-       ⚠ THE PACKING IS THE FAT/MS-DOS ONE, and it is a JUDGEMENT from the call
-         site's own note ("unpacks a packed date") rather than from disassembly:
+       ⚠ THE PACKING IS THE FAT/MS-DOS ONE, and it is a JUDGEMENT, not a measurement:
          date in the HIGH word, time in the LOW -- the order a DOS directory entry
          stores them in, so a little-endian DWORD read gives exactly this.
              date: bits 15-9 year-1980, 8-5 month, 4-0 day
@@ -1408,12 +1327,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          a different and much louder symptom than the one being fixed -- so the next
          run distinguishes them without any further instrumentation. */
     /* ── ⛔ s88: THAT JUDGEMENT WAS WRONG, AND THE CLOCK SAID SO: "?5/00/2074". ──
-         The packing is pinned now by the code that READS it -- krnl386's INT 21h
-         AH=2Ah arm, right after the call (KRNL386.EXE seg1:0x5327):
-             push dx ... pop cx          CX = DX            the YEAR, in full
-             mov dl,ah                   DL = AH            the DAY
-             mov ah,al / shr ah,4        DH = AL >> 4       the MONTH
-             and al,0Fh                  AL = AL & 0Fh      the DAY OF THE WEEK
+         The packing is pinned by how krnl386 hands it on in INT 21h AH=2Ah's own
+         registers: CX = the high word (the YEAR, in full), DL = bits 15-8
+         (the DAY), DH = bits 7-4 (the MONTH), AL = bits 3-0 (the DAY OF THE WEEK).
          So DX:AX = year : (day << 8 | month << 4 | weekday) -- AH=2Ah's own
          registers, folded into one DWORD. Not a time at all: Clock's TIME comes from
          INT 21h AH=2Ch, which krnl386 passes down to DOS. */
@@ -1436,17 +1352,17 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         return 1;
     }
 
-    /* ── s92 (#298): THE INTERNAL IDS, NAMED FROM THEIR CALL SITES. No export maps to
+    /* ── s92 (#298): THE INTERNAL IDS, NAMED FROM WHEN THEY ARRIVE. No export maps to
          these; krnl386 calls them from its own code and they were stepped over with
-         the sentinel. Each is answered on purpose now -- the call sites are read in
-         the #298 issue thread; the two that CHANGE behaviour are marked ★. */
+         the sentinel. Each is answered on purpose now -- the evidence is in the
+         #298 issue thread; the two that CHANGE behaviour are marked ★. */
 
-    /* ★ 0x87: INT 21h AX=4408h -- "is drive BL removable?" -- from krnl386's PM INT 21h
-         hook (seg1:0x5407, AL=08 arm). Pushes (AX, BX); the site does `inc dx`: DX =
-         FFFFh is the ERROR exit (stc, AX = the code), anything else clears CF with AX =
-         the answer. Stepped over it answered DX:AX = 0 -- "C: is REMOVABLE" -- to every
-         caller. Same rule as our DOS layer's 44/08 (dos_int21.c): 0 removable (a CD
-         too), 1 fixed, 0Fh invalid drive; BL 0 = the default drive. */
+    /* ★ 0x87: INT 21h AX=4408h -- "is drive BL removable?" -- arrives when a Win16
+         guest issues that call in protected mode, with (AX, BX). As the guest sees it:
+         DX = FFFFh is an ERROR (CF set, AX = the code), anything else clears CF with
+         AX = the answer. Stepped over it answered DX:AX = 0 -- "C: is REMOVABLE" -- to
+         every caller. Same rule as our DOS layer's 44/08 (dos_int21.c): 0 removable (a
+         CD too), 1 fixed, 0Fh invalid drive; BL 0 = the default drive. */
     case 0x87: {
         BYTE drv = (BYTE)(wow32_argw(f, 0) & 0xFF);
         UINT ty = 0;
@@ -1464,9 +1380,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         else wow32_setret(f, (ty == DRIVE_REMOVABLE || ty == DRIVE_CDROM) ? 0u : 1u);
         return 1;
     }
-    /* 0xc6: inside IGlobalFree (seg1:0x4792), for a block whose descriptor flag
-         (pdref bit 0) marks it as the 32-bit side's: `or ax,ax / pop x5 / jne 0x47a7`
-         -> `call 0x837a`, THE FREE; zero takes `xor ax,ax`, "freed" -- and keeps it.
+    /* 0xc6: arrives during GlobalFree of certain blocks (ones the 32-bit side is
+         taken to own). Non-zero makes krnl386 go on and free the block; zero makes
+         GlobalFree report success -- and the block is kept.
        ⛔ MEASURED s92: answering 1 (free it) killed EVERY Win16 launch -- krnl386 freed
          block 0x336 while loading KEYBOARD.DRV and then reported "Missing 16-bit
          system module: KEYBOARD.DRV" and shut the VDM down (runs/s92/gate1). So these
@@ -1475,18 +1391,18 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     case 0xc6:
         wow32_setret(f, 0);
         return 1;
-    /* 0x8a: a new task's compatibility flags (pushes the new TDB; DX:AX -> TDB+0x4E,
-         what GetAppCompatFlags returns). No application is on a list here: 0. */
+    /* 0x8a: a new task's compatibility flags (argument: the new TDB; the answer is
+         what GetAppCompatFlags then returns). No application is on a list here: 0. */
     case 0x8a:
-    /* 0x2f: GetModuleHandle's last resort after both of its own list searches fail
-         (pushes the name). This host has no module krnl386 does not know: 0. */
+    /* 0x2f: arrives from GetModuleHandle when krnl386 does not know the name
+         (argument: the name). This host has no module krnl386 does not know: 0. */
     case 0x2f:
-    /* 0xbe: WOWGetTableOffsets -- fills krnl386's 15 `__MOD_*` id bases. ⚠ MUST STAY
+    /* 0xbe: WOWGetTableOffsets -- a table of 15 per-module id bases. ⚠ MUST STAY
          ZERO-FILLED: USER's and GDI's id spaces here are decoded with the bases at 0
          ("a DIFFERENT id space"); real offsets would shift every id. */
     case 0xbe:
-    /* 0xc0: krnl386 registers seven of its globals at boot (curTDB, its PM INT 21h
-         entry, ...); the result is discarded (`pop ds / retf`). */
+    /* 0xc0: arrives once at boot, carrying pointers into krnl386's data; no use of
+         the result has been observed. */
     case 0xc0:
     /* 0x9d WowFailedExec: WOWEXEC after every exec attempt; the result is ignored. */
     case WOW32_WOWFAILEDEXEC:
@@ -1499,38 +1415,25 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         return 1;
 
     /* ── ★ 0x7d: approve the selector about to become a TASK DATABASE ──────
-         Not named by the export table, so it comes from its call sites -- both
-         of which are inside ONE function, `seg2:0x2984`, and that function is
-         the TDB creator:
+         Not named by the export table, so it comes from when it arrives: during
+         task creation, with one argument -- the selector of a freshly allocated
+         0x320-byte block, which then becomes the new task's database (it is
+         stamped "TD", the TDB signature). `0x320` is exactly limit+1 of every task
+         database in the stock panel (session-37), including the two of a live
+         stock WOW session.
 
-           2984  enter 4,0                      ; the whole of it
-           29b5  mov si,0x100                   ; room for a PSP
-           29d5  add si,0x223 / and si,0xfff0   ; -> 0x320
-           29e6  lcall seg1:0x4e81              ; GlobalAlloc(that many bytes)
-           29f6  push ax / lcall 0xb397         ; 0x7d: "is THIS one acceptable?"
-           29fc  or ax,ax / je 0x2a04           ; no -> the retry loop
-           2c02  mov word ptr [0xfa],0x4454     ; "TD", the TDB signature
-
-         and `0x320` is exactly limit+1 of every task database in the stock
-         panel (session-37), including the two of a live stock WOW session.
-
-       ★ THE RETRY LOOP IS WHAT PINS THE SEMANTICS. On a `0` the caller does not
-         go and allocate different memory -- it calls `seg1:0x574d`, which is
-         AllocSelector: `lsl ecx,<sel>` for the limit, take LDT entries, copy the
-         source DESCRIPTOR onto them, `or si,7`. Every retry therefore offers an
-         ALIAS OF THE SAME BYTES, and the only thing that differs between one
+       ★ THE RETRY IS WHAT PINS THE SEMANTICS. Answered `0`, the guest asks again
+         with a DIFFERENT selector for the SAME bytes (same base and limit -- an
+         alias), so the only thing that differs between one
          attempt and the next is the NUMERIC VALUE OF THE SELECTOR. The question
-         can only be "may this selector value be a task handle?", and the rejects
-         are freed again (`seg1:0x5a53`) as soon as one is accepted.
+         can only be "may this selector value be a task handle?".
 
-       ★ AND THE ANSWER IS THE SELECTOR, NOT A BOOLEAN. `seg2:0x29fe` merely
-         tests it, but `seg2:0x2a22` does `mov si,ax` and si goes on to BE the
-         TDB selector (`mov es,ax`, then the block is zeroed through it). A
+       ★ AND THE ANSWER IS THE SELECTOR, NOT A BOOLEAN: the value returned is the
+         selector the new TDB is then written through. A
          32-bit companion cannot conjure an LDT selector, so the only value it
          can return is one it was offered: ECHO THE ARGUMENT. A bare `1` -- what
          the `wow32ret.txt` experiment answered to get WOWEXEC.EXE running -- is
-         right only because the first call is accepted and the second path is
-         never taken; it would install `0x0001` as a task's selector if it were.
+         right only by luck; it would install `0x0001` as a task's selector.
 
        ★ ACCEPTING IS THE RIGHT ANSWER FOR THIS HOST, and that is a reading, not
          a shrug: whatever the real 32-bit side checks against, we keep no
@@ -1538,9 +1441,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          it, and each TDB gets a distinct selector by construction. Nothing here
          could make one selector unacceptable and the next one acceptable.
        ⚠ If a task ever does need rejecting, this is where it goes -- and the
-         guest's loop is a trap. `seg2:0x2a14` pushes and does not pop on the
-         loop-back edge, so every rejection leaks two bytes of krnl386's stack;
-         1884 of them is the #SS that led here in the first place. */
+         guest's retry is a trap: every rejection costs two bytes of krnl386's
+         stack that are never given back; 1884 of them is the #SS that led here
+         in the first place. */
     case WOW32_ACCEPTTASKSELECTOR:
         wow32_setret(f, (DWORD)wow32_argw(f, 0));
         return 1;
@@ -1555,49 +1458,46 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          memory to run this application...")`. The program it wanted is the one
          the host was launched for -- on the rig, `SYSEDIT.EXE`.
 
-       ★ AND `0` IS A HARD ERROR, NOT "NOTHING TO DO". The caller distinguishes:
-             ret == 0                  -> error box, `wowexec seg1:0x0bf8`
-             ret != 0, cbCmdLine == 0  -> quiet cleanup, `seg1:0x0c1a / je 0x0c05`
+       ★ AND `0` IS A HARD ERROR, NOT "NOTHING TO DO". WOWEXEC distinguishes:
+             ret == 0                  -> an error box
+             ret != 0, cbCmdLine == 0  -> nothing visible; it carries on
          So the sentinel was making WOWEXEC report a failure that had not
          happened. "No command" is `1` with a zero length, and it is silent.
 
-       ── THE STRUCTURE, READ OFF WOWEXEC'S OWN FRAME (seg1:0x0b20 onward) ──────
-         The one argument is a 16:16 pointer to 0x20 bytes at `ss:bp-0x34a`, and
-         every field below is either written by the caller before the call or read
-         by it after -- there is no field here that was not observed being used.
+       ── THE STRUCTURE, AS WOWEXEC PASSES IT AND USES OUR ANSWER ────────────────
+         The one argument is a 16:16 pointer to 0x20 bytes on WOWEXEC's stack.
+         Every field below was seen either filled in on arrival (a capacity, a
+         buffer pointer) or carried by our answer into what WOWEXEC does next
+         (LoadModule's arguments, SetCurrentDirectory's argument) -- there is no
+         field here that was not observed being used.
 
-           +0x00 DWORD lpCmdLine   -> a 0x10d-byte buffer at bp-0x10e
-           +0x04 DWORD lpAppName   -> a 0x10d-byte buffer at bp-0x21c
-           +0x08 DWORD lpEnv       -> GlobalAlloc(2, cbEnv*2), then GlobalLock
-           +0x0c WORD  (caller zeroes; never read back)
-           +0x0e WORD  (caller zeroes; never read back)
+           +0x00 DWORD lpCmdLine   -> a 0x10d-byte buffer
+           +0x04 DWORD lpAppName   -> a 0x10d-byte buffer
+           +0x08 DWORD lpEnv       -> a GlobalAlloc'd, locked block
+           +0x0c WORD  (zero on arrival; no use seen)
+           +0x0e WORD  (zero on arrival; no use seen)
            +0x10 WORD  cbCmdLine   in 0x10d -- ★ OUT MUST BE NON-ZERO OR NO LAUNCH
            +0x12 WORD  cbAppName   in 0x10d
            +0x14 WORD  cbEnv       in 0x1000 -- in/out, see the retry note below
-           +0x16 WORD  CurDrive    0-based: the caller does `add al,0x41`
-           +0x18 DWORD lpBufC      -> a third 0x10d-byte buffer at bp-0x32a
+           +0x16 WORD  CurDrive    0-based (0 = A:)
+           +0x18 DWORD lpBufC      -> a third 0x10d-byte buffer
            +0x1c WORD  cbBufC      in 0x10d
            +0x1e WORD  nCmdShow    -> becomes lpCmdShow[1] of the LOADPARMS
 
-       ★ +0x04 IS THE MODULE NAME, AND THAT IS MEASURED, NOT ASSUMED. The success
-         path reaches `seg1:0x01c0`:
-             push [bx+6] / push [bx+4]      ; the far pointer at +0x04
-             lea ax,[bp-0x10] / push ss / push ax
-             lcall  KERNEL.LoadModule       ; named from the relocation chain
-         -- Win16 `LoadModule(lpModuleName, lpParameterBlock)`, 8 argument bytes.
-         The parameter block it builds beside it is the standard LOADPARMS, and it
-         is what identifies the other fields: `wEnvSeg` comes from +0x0a (the
-         SEGMENT half of lpEnv), and `nCmdShow` from +0x1e.
+       ★ +0x04 IS THE MODULE NAME, AND THAT IS MEASURED, NOT ASSUMED: it is the
+         lpModuleName WOWEXEC passes to Win16 `LoadModule(lpModuleName,
+         lpParameterBlock)` next. The parameter block is the standard LOADPARMS,
+         and it is what identifies the other fields: `wEnvSeg` is the SEGMENT half
+         of lpEnv (+0x0a), and `nCmdShow` comes from +0x1e.
 
        ⚠⚠ THE COMMAND LINE IS A PASCAL TAIL, AND THE `-2` IS THE WHOLE PUZZLE.
-         `seg1:0x0173` does `lstrlen(lpCmdLine)`, then `sub al,2`, and stores THAT
-         as the count byte of the DOS command tail it hands to LoadModule -- then
-         `lstrcpy`s our buffer to the byte AFTER it. So the delivered string must
-         be exactly two bytes longer than the tail text it represents, and the
-         only shape that makes every case come out right is
+         The DOS command tail the launched program receives has a count byte of
+         (length of our lpCmdLine string - 2), followed by our string. So the
+         delivered string must be exactly two bytes longer than the tail text it
+         represents, and the only shape that makes every case come out right is
                             <tail text> CR LF
          Check it: with no arguments the text is empty, we deliver "\r\n",
-         `lstrlen` is 2, the count byte is 0, and the tail reads <0><CR><LF> --
+         its length is 2, the count byte is 0, and the tail reads <0><CR><LF> --
          a correct empty tail. With text " FOO" we deliver " FOO\r\n", the count
          is 4, and the tail is <4>' ''F''O''O'<CR><LF>. Both the count and the
          terminator land where DOS expects them.
@@ -1606,17 +1506,17 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          trailing bytes are load-bearing.
 
        ⚠ cbEnv (+0x14) IS DELIBERATELY NOT WRITTEN. It is an in/out "the buffer
-         was too small" field -- the caller saves it, and if the callee returns a
-         LARGER value it frees the block, reallocates and asks again
-         (`seg1:0x0be4`, `jae`). Leaving it alone is the only value that cannot
-         start that loop. The environment itself is built by the caller from its
-         own PSP (`seg1:0x02da`, GetCurrentTask -> TDB -> PSP+0x2c); we write a
-         valid empty block so the buffer is never uninitialised, and no more.
+         was too small" field -- if the callee returns a LARGER value, the caller
+         reallocates and asks again (the documented shape of such fields). Leaving
+         it alone is the only value that cannot start that loop. WOWEXEC supplies
+         the environment itself (its own); we write a valid empty block so the
+         buffer is never uninitialised, and no more.
 
-       ★ DELIVER ONCE. The caller loops on this while `[0x18]` is set
-         (`seg1:0x0791`), so a host that answered every time would relaunch the
-         program forever. `[0x18]` is only set when WowRegisterShellWindowHandle
-         succeeds, which it does not yet -- so this guard is not load-bearing
+       ★ DELIVER ONCE. In a shared WOW, WOWEXEC keeps asking for the next command
+         (that is what the call is FOR), so a host that answered every time would
+         relaunch the program forever. WOWEXEC only runs as a shared WOW when
+         WowRegisterShellWindowHandle succeeds, which it does not yet (see 0x8b) --
+         so this guard is not load-bearing
          today, and it is here because the day it becomes load-bearing the symptom
          is a fork bomb inside the VDM rather than a wrong answer in a log. */
     case WOW32_WOWGETNEXTVDMCOMMAND: {
@@ -1672,8 +1572,7 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
             wow32_pokew(ci + WOWCMD_CBBUFC, 0);
         }
 
-        /* Drive letter of the program's own path, 0-based -- the caller turns it
-           back into a letter with `add al,0x41`. Default to C: when the path is
+        /* Drive letter of the program's own path, 0-based (0 = A:). Default to C: when the path is
            not drive-qualified, because there is no "unknown" in a byte. */
         { char d = (prog[0] && prog[1] == ':') ? prog[0] : 'C';
           if (d >= 'a' && d <= 'z') d = (char)(d - 32);
@@ -1686,10 +1585,9 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     }
 
     /* ── 0x78: krnl386 hands us its view of the DOS data area ─────────────
-         The argument is a 16:16 pointer to the structure whose address it read
-         from SysVars+0x6A moments earlier (seg1:0xc05b), which is also where it
-         got the six far pointers into DOS's data that it caches at [0x271]
-         through [0x285].
+         The argument is a 16:16 pointer to the structure whose address the host
+         publishes at SysVars+0x6A (DOS_WOW_* in dos_layout.h) -- the same table
+         krnl386 takes its far pointers into DOS's data from.
        ★ RECORD IT AND SUCCEED -- and that is not a stub dressed up. On real
          Windows the 32-bit side wants this because ntvdm owns that memory from
          another module; here the HOST already owns it, because the host is what

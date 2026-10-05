@@ -10,12 +10,12 @@
  * where the north star's other half begins, and the three below are its first
  * three lines rather than the whole of it.
  *
- * ── THE IDS, FROM THE FILE ──────────────────────────────────────────────────
- * GDI's exports are tail-jumps, like USER's, so the stub is one hop past the
- * entry point (`neneeds.py` follows it; see the note there):
- *      68 DELETEDC       -> stub seg1:0x032d  id 0x44   2 args  retstub 0x033a
- *      69 DELETEOBJECT   -> stub seg1:0x0347  id 0x45   2 args  retstub 0x0354
- *      80 GETDEVICECAPS  -> stub seg1:0x05d1  id 0x50   4 args  retstub 0x05de
+ * ── THE IDS ─────────────────────────────────────────────────────────────────
+ * Export ordinal against the id, argument bytes and return-stub offset the call
+ * arrives with:
+ *      68 DELETEDC       id 0x44   2 args  retstub 0x033a
+ *      69 DELETEOBJECT   id 0x45   2 args  retstub 0x0354
+ *      80 GETDEVICECAPS  id 0x50   4 args  retstub 0x05de
  * The ids are the export ordinals again -- checked here, as it is checked per
  * module, and never assumed: krnl386's are nothing like its ordinals.
  *
@@ -60,13 +60,12 @@
      not get one: "Not enough memory to edit image."
 
    ★★ 0x57 IS `GetStockObject`, AND ONLY A RUN COULD HAVE SAID SO. Its export
-     (GDI ordinal 87) is `native16` -- 16-bit code that reaches a WOW32 stub from
-     inside its own body -- so `neneeds.py` cannot see the stub and correctly
-     classifies the import as free. Session 44 wrote down that its id would have
-     to come from a run; this is that run, 24 calls of it, and the file agrees
-     afterwards: the stub at seg1:0x06a4 is `6a 02 / 68 00 00 / 68 57 00 / 9a`,
-     the neighbouring stub at 0x06b1 is id 0x58 = GDI.88 GETSTRETCHBLTMODE, and
-     the ids run with the ordinals either side of 87.
+     (GDI ordinal 87) is `native16` -- 16-bit code that only reaches the BOP from
+     inside its own body -- so `neneeds.py` classifies the import as free. Session
+     44 wrote down that its id would have to come from a run; this is that run, 24
+     calls of it, arriving as id 0x57 with 2 argument bytes -- and 0x57 = 87, the
+     ids running with the ordinals as they do either side of it (0x58 =
+     GDI.88 GETSTRETCHBLTMODE).
 
      The rest are ordinary exports, from `neneeds.py --stubs`:
        ord 45 SELECTOBJECT           id 0x2d   4 args  retstub 0x0a0b
@@ -349,28 +348,19 @@
 #define CDC_ARG_DEVICE   8
 #define CDC_ARG_DRIVER  12
 
-/* ── ★★★★★ THE TOOLS THAT DID NOT WORK -- READ OUT OF GDI.EXE, NOT GUESSED. ──
+/* ── ★★★★★ THE TOOLS THAT DID NOT WORK -- ENUMERATED, NOT GUESSED. ───────────
      "Some drawing functions work, others (like fill) do not" is not a mystery
-     once you enumerate what PBRUSH.EXE imports and resolve each ordinal through
-     GDI.EXE's own entry table to the WOW32 stub it lands on. The pattern for a
-     tail-jumped export is fixed --
+     once you enumerate what PBRUSH.EXE imports and which of those ordinals reach
+     the BOP. Each id and argument byte count below was taken from the call as it
+     arrives (e.g. ELLIPSE, ord 24: id 0x18, 10 argument bytes, retstub 0x0417).
 
-       ELLIPSE (ord 24) = seg1:0x1b15   push 0x1b20 / pop dx / pop bp / jmp 0x040a
-       0x040a                           push 0xa / push 0 / push 0x18   <- THE ID
-
-     -- so the id and the argument byte count come out of the binary together,
-     and `neneeds.py`'s independent `retstub 0x0417` for the same ordinal lands
-     on the instruction after that stub's own `lcall`, i.e. on the SAME stub by
-     a different route. Every id below was read that way.
-
-   ★★★ THE FILL IS `ExtFloodFill`, GDI ordinal 372, and its export is NOT a bare
-     tail-jump: `seg1:0x1b77` validates `[bp+6] <= 1` (the fill TYPE) and only
-     then jumps to `0x048c`, which pushes 12 bytes and **id 0x174**. That extra
-     hop is why a scan for tail-jumps calls it `native16` and reports it "free":
-     it is not free, it is one instruction further away. Paint's fill tool is
-     `seg4:0x1560..0x16e0` and it calls ExtFloodFill TWICE -- once for a solid
-     colour and once after `CreatePatternBrush` -- which is why the pattern
-     brush is in this batch and not a later one.
+   ★★★ THE FILL IS `ExtFloodFill`, GDI ordinal 372, arriving as **id 0x174** with
+     12 argument bytes -- and only for a valid fill TYPE (0 or 1); GDI.EXE checks
+     that before it comes out to us. That extra step is why a scan for plain
+     tail-jump exports calls it `native16` and reports it "free": it is not
+     free. Paint's fill tool calls ExtFloodFill TWICE -- once for a solid colour
+     and once after `CreatePatternBrush` -- which is why the
+     pattern brush is in this batch and not a later one.
 
    ⚠ A Win16 fill type is Win32's fill type (0 = FLOODFILLBORDER, 1 = SURFACE),
      the same claim the ROPs and COLORREFs already travel on. */
@@ -487,14 +477,13 @@
      draw with.**
    ★ TWO INDEPENDENT READINGS AGREE ON 0x3d. The run logged
      `FUNC=0x3d ... (0000ff00 00000000 00000002 00000006)` -- a green pen for the
-     ellipse and a red one for the box -- and GDI.EXE's own ordinal 61 wrapper at
-     `seg1:0x177f` tail-jumps to `0x0284`, which pushes 8 argument bytes and the
-     id `0x3d`. ⚠ Here the id happens to EQUAL the ordinal; elsewhere it does not
-     (CreateDC is ordinal 53 and id 0x99), so each of these was resolved through
-     the entry table rather than assumed.
+     ellipse and a red one for the box -- and GDI's export table says ordinal 61
+     is CREATEPEN, whose three arguments are 8 bytes. ⚠ Here the id happens to
+     EQUAL the ordinal; elsewhere it does not (CreateDC is ordinal 53 and id
+     0x99), so each of these was taken from a run rather than assumed.
    ⚠ `neneeds.py` calls all of these "free (16-bit)", because GDI's export is a
-     validating wrapper rather than a bare tail-jump and the scan cannot see one
-     instruction further. That is the `native16` trap again: **the run finds
+     validating wrapper rather than a bare tail-jump, which the scan does not
+     follow. That is the `native16` trap again: **the run finds
      them, the static list does not.** */
 #define WOWGDI_CREATEPEN        0x003d   /* ord 61,  8 args (style, width, colour) */
 #define CP_ARG_COLOR    0                /* DWORD                                  */
@@ -519,11 +508,10 @@
 
 /* ── ★★★★★ THE SECOND SWEEP: EVERYTHING ELSE THESE TWO PROGRAMS IMPORT. ─────
      Session 47 taught `tools/ne/neneeds.py` to see through GDI's validating
-     export wrappers (it now bounds the scan by the export's OWN `retf`, which
-     the wrapper pushes at +3), and the list of what MS Paint and Notepad reach
-     went from "41 need us" to **76**. Everything below is on that list, and every
-     id and argument count is read out of `gdi.exe`'s entry table -- no id here
-     was inferred from an ordinal, and several of them differ from it.
+     export wrappers, and the list of what MS Paint and Notepad reach went from
+     "41 need us" to **76**. Everything below is on that list, and every id and
+     argument count is checked against the call as it arrives -- no id here was
+     inferred from an ordinal, and several of them differ from it.
    ★★ THE CORRECTION IT FORCED: **`0x99` IS `CreateIC` (ordinal 153), NOT
      `CreateDC`.** `CreateDC` is ordinal 53 and its id is `0x35`. Session 45 named
      `0x99` from a run, and 153 = 0x99 -- the id tracked the ordinal after all,
@@ -645,16 +633,13 @@
 #define TE_ARG_STR      2                /* far */
 #define TE_ARG_HDC      6
 
-/* ── ★ 0x5d GetTextMetrics, and the Win16 TEXTMETRIC READ OFF NOTEPAD. ───────
-     Its fields are `short` where Win32's are `LONG`, in the same order, and the
-     order is not taken from a header -- `NOTEPAD.EXE seg1:0x1192` calls it with
-     the structure at `ss:[bp-0xb4]` and then does, in the next nine
-     instructions:
-       mov ax,[bp-0xac] / add ax,[bp-0xb4]   -> tm+8 + tm+0   = the LINE HEIGHT
-       mov ax,[bp-0xaa] / shl ax,3           -> tm+10 x 8     = the TAB STOP
-     i.e. tm+0 is tmHeight, tm+8 is tmExternalLeading and tm+10 is
-     tmAveCharWidth, which pins the first six fields and therefore the whole
-     `short` prefix. Two independent uses, one layout. */
+/* ── ★ 0x5d GetTextMetrics, and the Win16 TEXTMETRIC, CHECKED ON NOTEPAD. ─────
+     Its fields are `short` where Win32's are `LONG`, in the same order (the
+     documented Win16 layout), and the order is checked by behaviour, not taken
+     on trust: Notepad's LINE HEIGHT comes out as tmHeight + tmExternalLeading
+     (tm+0 + tm+8) and its TAB STOP as 8 x tmAveCharWidth (tm+10) -- visibly
+     wrong on screen if either offset were. That pins the first six fields and
+     therefore the whole `short` prefix. Two independent uses, one layout. */
 #define WOWGDI_GETTEXTMETRICS   0x005d   /* ord 93,   6 args */
 #define TM_ARG_BUF      0                /* far */
 #define TM_ARG_HDC      4
@@ -1224,20 +1209,12 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
              EVER SEEN ONE. (session 51 -- MINESWEEPER RENDERED IN BLACK AND
              WHITE, and stock ntvdm runs the same binary in colour.)
              Win32 answers NUMCOLORS with -1 for any device deeper than 8bpp.
-             That reaches the guest as 0xffff, and WINMINE.EXE's own code -- read
-             out of the binary at seg1:0x1820, not guessed -- does this with it:
-
-                 1820  push  0x18          ; NUMCOLORS
-                 1822  lcall 0, 0xffff     ; GetDeviceCaps
-                 1827  cmp   ax, 2
-                 182a  jle   0x1831        ; ★ SIGNED
-                 182c  mov   ax, 1         ;   colour
-                 1831  sub   ax, ax        ;   MONOCHROME
-                 1833  mov   [0x380], ax   ;   the global colour flag
-
-             `jle` is the SIGNED branch, so -1 <= 2 is TRUE and Minesweeper sets
-             its monochrome flag -- after which every DIB it builds and hands to
-             SetDIBitsToDevice really is 1bpp, and this host draws it faithfully.
+             That reaches the guest as 0xffff, and WINMINE.EXE asks NUMCOLORS once
+             at start-up and decides colour vs MONOCHROME on "more than 2",
+             compared SIGNED -- so 0xffff, i.e. -1, reads as monochrome. Answered
+             -1, every DIB it builds and hands to
+             SetDIBitsToDevice really is 1bpp, and this host draws it faithfully;
+             answered a colour-table size, the same run is in colour.
              Nothing downstream was wrong. The wrong answer was here.
 
            ★ SO IT IS ANSWERED IN Win16's OWN TERMS: the size of a colour table,
@@ -2273,9 +2250,9 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, typ == OBJ_PEN ? ", OBJ_PEN" :
                                    typ == OBJ_BRUSH ? ", OBJ_BRUSH" : ", ?");
         wu_puts(note, notecap, &k, ")");
-        /* GDI's own 16-bit wrapper already refuses a type outside 1..2 before
-           the thunk (gdi.exe seg1:0x1bc4 `cmp ax,1 / jl / cmp ax,2 / jle`); this
-           is belt and braces, answering what that path answers. */
+        /* GDI's own 16-bit side already refuses a type outside 1..2 before the
+           call reaches us (such calls never arrive); this is belt and braces,
+           answering what that refusal answers. */
         if (typ != OBJ_PEN && typ != OBJ_BRUSH) {
             wu_puts(note, notecap, &k, " -- not a pen or brush; 0");
             wow32_setret(f, 0);
@@ -2895,7 +2872,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          host that cannot fill from a fill that had nothing to do. The tool
          appeared to be selected, appeared to take the click, and did nothing.
        ★ Paint calls it twice per fill: once with a solid brush selected and once
-         with a pattern brush from `CreatePatternBrush` (seg4:0x164f), which is
+         with a pattern brush from `CreatePatternBrush`, which is
          how a Win16 program fills with one of the palette's patterns. */
     case WOWGDI_EXTFLOODFILL: {
         WORD  hdc  = wow32_argw(f, FF_ARG_HDC);
@@ -4019,8 +3996,8 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
-    /* ── ★★ 0x5d GetTextMetrics -- 31 bytes of `short`, layout read off
-         NOTEPAD.EXE itself (see the note by the defines). ─────────────────────
+    /* ── ★★ 0x5d GetTextMetrics -- 31 bytes of `short`, layout checked on
+         Notepad (see the note by the defines). ────────────────────────────────
        ⚠ THE WHOLE STRUCTURE IS WRITTEN, INCLUDING THE FIELDS NOTEPAD DOES NOT
          READ. A guest that finds a stale byte at tmPitchAndFamily picks a font
          for reasons nothing in the log explains. */

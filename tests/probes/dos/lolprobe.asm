@@ -1,11 +1,10 @@
 ; lolprobe.asm -- what does INT 21h AH=52h actually hand back, and what is at the
 ; offsets krnl386's init reads?  GH #128 / #35.
 ;
-; krnl386.exe seg1:0xc041 does:
-;       mov ah,52h / int 21h          ; ES:BX = SysVars ("list of lists")
-;       mov ax,es / shl ax,4 / add ax,86h / sub ax,400h   ; -> a 0040:xxxx pointer
-;       mov di,[es:bx+6Ah]                                 ; a SUB-STRUCTURE pointer
-;       mov ax,[es:di+10h] / +0Ch / +00h / +24h / +18h / +28h
+; At start-up krnl386 calls INT 21h AH=52h (ES:BX = SysVars, the "list of
+; lists"), uses offset 86h of the SysVars segment, and takes the word at
+; ES:BX+6Ah as a SUB-STRUCTURE pointer whose entries +00h, +0Ch, +10h, +18h,
+; +24h and +28h it reads.
 ; NTVDMEX plants a SysVars stub whose only real field is the first-MCB word at BX-2
 ; (GH #35), so every one of those reads lands on zero.  This dumps the same region
 ; from genuine MS-DOS 6.22 so the stub can be filled from measurement, not memory.
@@ -39,8 +38,8 @@ start:      mov ah,0x52
             call crlf
             call crlf
 
-            mov dx,m_seg                ; the whole segment from 0 -- krnl386 hard
-            mov ah,9                    ; codes ES:0086, so BX-relative is not enough
+            mov dx,m_seg                ; the whole segment from 0 -- krnl386 uses
+            mov ah,9                    ; ES:0086 too, so BX-relative is not enough
             int 0x21
             call crlf
             xor si,si

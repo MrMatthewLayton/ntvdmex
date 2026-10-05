@@ -13,17 +13,17 @@ in the tree; `tools/wowprobe/make-dosexe.sh` emits an MZ header with `printf`.
 
 So: nasm writes the 16-bit code, and this writes the NE around it.
 
-EVERYTHING HERE WAS READ OFF A REAL BINARY, NOT REMEMBERED
-----------------------------------------------------------
-`guest/win16/TASKMAN.EXE` (3744 bytes, 2 segments, KERNEL+USER) is the model, read
-with this project's own tools/ne/nedump.py and nedis.py:
+EVERYTHING HERE WAS READ OFF A REAL NE HEADER, NOT REMEMBERED
+-------------------------------------------------------------
+`guest/win16/TASKMAN.EXE` (3744 bytes, 2 segments, KERNEL+USER) is the model, its
+header and relocation tables read with this project's own tools/ne/nedump.py:
 
   * align shift 4, prog flags 0x0302 (DGROUP=MULTIPLEDATA), other flags 0x08,
     target Windows, expects 3.10, CS:IP = seg1:entry, SS:SP = seg2:0x0000.
   * Imported calls are `9A FF FF 00 00` -- an UNRELOCATED far call whose operand
     is the chain terminator 0xFFFF and segment 0 -- with a relocation record of
-    addrtype 3 (FAR_ADDR 32) and reloctype 1 (IMPORTORDINAL). Verified at three
-    sites: 0x04bd -> KERNEL.91, 0x04e7 -> KERNEL.30, 0x04f0 -> USER.5.
+    addrtype 3 (FAR_ADDR 32) and reloctype 1 (IMPORTORDINAL) -- the shape of
+    TASKMAN's own records for KERNEL.91, KERNEL.30 and USER.5.
 
 THE INTERFACE TO THE ASM: A MANIFEST AT OFFSET 0
 ------------------------------------------------

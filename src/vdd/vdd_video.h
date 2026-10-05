@@ -585,8 +585,8 @@ typedef struct video_state {
     uint32_t rsite1_lost;
     /* ▶ WHAT THE COMPARE ACTUALLY ANSWERED, per site. A colour-compare read is the only
          VRAM read whose RESULT is a decision rather than a pixel, and Lemmings has one
-         site (guest 0x7A3A) that reads two bytes, counts the set bits and branches on
-         whether at least 8 of 16 pixels are terrain. A count of reads says that site
+         such site, which decides from two bytes whether at least 8 of 16 pixels are
+         terrain. A count of reads says that site
          ran; it cannot say the game could SEE anything. If `zero` is essentially equal
          to `n` at that site, every pixel it asked about came back "not terrain" -- which
          is a lemming walking into thin air, and is indistinguishable, in every counter

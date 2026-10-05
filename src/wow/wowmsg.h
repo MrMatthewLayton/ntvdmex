@@ -4,15 +4,15 @@
  * wowmsg.h -- ★ THE WIN16 MESSAGE QUEUE. GH #128, session 41.
  *
  * ── WHY THIS IS THE FRONTIER ────────────────────────────────────────────────
- * SYSEDIT builds its whole interface, loads its four files, and then does this,
- * every call in it named from its own relocation chain (`tools/ne/neimports.py`):
+ * SYSEDIT builds its whole interface, loads its four files, and then sits in the
+ * documented Win16 message loop -- its NE import table (`tools/ne/neimports.py`)
+ * names every call in it:
  *
- *     seg1:0x0102  GetMessage(&msg, 0, 0, 0)          ; USER.108
- *          0x0112  or ax,ax / jne 0x00c6              ; ★ 0 IS WM_QUIT
- *          0x00c6  TranslateMDISysAccel([0x22], &msg) ; USER.451
- *          0x00d8  TranslateAccelerator([0x20], [0x4ac], &msg)
- *          0x00ee  TranslateMessage(&msg)             ; USER.113
- *          0x00f8  DispatchMessage(&msg)              ; USER.114
+ *     GetMessage(&msg, 0, 0, 0)                 ; USER.108  -- ★ 0 IS WM_QUIT
+ *     TranslateMDISysAccel(hwndClient, &msg)    ; USER.451
+ *     TranslateAccelerator(hwnd, hAccel, &msg)
+ *     TranslateMessage(&msg)                    ; USER.113
+ *     DispatchMessage(&msg)                     ; USER.114
  *
  * Answered with the harness sentinel, the application is told to quit and does,
  * cleanly -- not failing, dismissed. Everything a Win16 program does after its
@@ -23,40 +23,31 @@
  * `docs/research/wow-user-surface.md` names 385 of USER's 441 ids and neither
  * `TranslateMessage` nor `DispatchMessage` is among them, which reads like "they
  * are 16-bit code inside USER.EXE". ⚠ THE RUN REFUTES THAT. With GetMessage
- * answered, the loop turns and the two calls arrive here as ordinary WOW32 BOPs,
- * naming themselves by their call sites -- which are named in turn from SYSEDIT's
- * own relocation chain, so nothing in this chain is inferred:
+ * answered, the loop turns and the two calls arrive here as ordinary WOW32 BOPs.
+ * Each id was named by matching the return address the BOP carried against the
+ * import relocations in SYSEDIT's NE header, so nothing here is inferred:
  *
- *     id 0x071  4 arg bytes  from sysedit seg1:0x00f8  = TRANSLATEMESSAGE
- *     id 0x072  4 arg bytes  from sysedit seg1:0x0102  = DISPATCHMESSAGE
- *     id 0x0b2  8 arg bytes  from sysedit seg1:0x00ea  = TRANSLATEACCELERATOR
- *     id 0x1c3  6 arg bytes  from sysedit seg1:0x00d4  = TRANSLATEMDISYSACCEL
+ *     id 0x071  4 arg bytes  = TRANSLATEMESSAGE
+ *     id 0x072  4 arg bytes  = DISPATCHMESSAGE
+ *     id 0x0b2  8 arg bytes  = TRANSLATEACCELERATOR
+ *     id 0x1c3  6 arg bytes  = TRANSLATEMDISYSACCEL
  *
- * They are four of the 56 ids the map could not name from the export table, and
- * the reason the `from` address is the APPLICATION's rather than USER's is that
- * USER's exports reach their stubs by TAIL-JUMP, not by call -- which the map
- * already says, and which is what makes a call site name a stub at all.
+ * They are four of the 56 ids the map could not name from the export table.
  * ⇒ So the host fills the MSG **and** dispatches it. `DispatchMessage` is
  *   `wowcall_enter` into the window's procedure, i.e. machinery session 40
  *   already built.
  *
- * ── THE MSG, READ OUT OF CODE RATHER THAN A HEADER ──────────────────────────
+ * ── THE MSG ─────────────────────────────────────────────────────────────────
  * `DispatchMessage` takes nothing but `lpMsg`, so everything a window procedure
- * is called with is in those 18 bytes. The size is the application's own
- * declaration -- `sysedit seg1:0x0102 lea ax,[bp-0x12]` reserves exactly 18 --
- * and the field order is USER.EXE's, in a body that walks one:
- *
- *     user seg1:0x1c43  mov bx,0x12          ; ★ sizeof(MSG) == 18, twice over
- *              0x1c4d   mov cx, es:[bx]      ; hwnd
- *              0x1c50   jcxz 0x1c78          ; ★ hwnd 0 -> dispatch nothing
- *              0x1c52   push cx / es:[bx+2] / es:[bx+4] / es:[bx+8] / es:[bx+6]
- *                                            ;   message, wParam, lParam hi, lo
+ * is called with is in those 18 bytes -- the documented Win16 MSG, whose size
+ * matches the 18-byte stack buffer whose address SYSEDIT passes (see the
+ * GetMessage arguments below). ★ A MSG with hwnd 0 dispatches to no window.
  *
  *   +0x00 WORD  hwnd        +0x06 DWORD lParam
  *   +0x02 WORD  message     +0x0a DWORD time
  *   +0x04 WORD  wParam      +0x0e POINT pt (two WORDs)
  *
- * ⚠ `time` and `pt` are NOT pinned by the code above -- nothing this host has
+ * ⚠ `time` and `pt` are NOT pinned by any guest -- nothing this host has
  *   watched reads them. They are the remaining 8 bytes of an 18-byte structure
  *   whose first 10 are known, and they are filled with the tick count and the
  *   cursor position because leaving 8 bytes of the guest's stack untouched is
@@ -73,8 +64,8 @@
  */
 
 /* Win16 message numbers this host names. Every one is either read out of a
-   guest (WM_CREATE, WM_MDICREATE, EM_*) or is the one the loop's own `or ax,ax`
-   is testing for. */
+   guest (WM_CREATE, WM_MDICREATE, EM_*) or is the one that makes GetMessage
+   return 0 and end the loop. */
 #define WM_QUIT16       0x0012
 /* ★ WM_DESTROY, WITHOUT WHICH A WIN16 TASK NEVER ENDS. (session 56) See the
      DestroyWindow arm in wowuser.h: it is the message whose handler calls
@@ -83,19 +74,14 @@
 #define WM_DESTROY16    0x0002
 #define WM_KEYDOWN16    0x0100
 #define WM_KEYUP16      0x0101
-/* ── ★★★ WM_COMMAND, READ OUT OF THE GUESTS RATHER THAN OUT OF A HEADER ───────
-     Two independent readings, neither of them Notepad's:
-       `commdlg seg3:0x0966`  cmp ax,0x110 / jne / jmp
-                     0x096e   cmp ax,0x111 / jne / jmp
-         -- a dialog procedure's message chain, and 0x110 immediately before
-            0x111 is WM_INITDIALOG immediately before WM_COMMAND. No other pair
-            of adjacent numbers is the pair every dialog procedure handles.
-       `sysedit seg1:0x0477`  push [0x24] / push 0x111 / push 0x7d8
-                              / push 0 / push 0 / lcall <SendMessage>
-         -- a program sending ITSELF one, with a menu item id in wParam.
-   ★ AND THAT SECOND SITE PINS THE PACKING TOO, which is the part that differs
-     between Win16 and Win32: for a MENU command Win16 puts the id alone in
-     wParam and ZERO in lParam. See the translation in wowwin.h. */
+/* ── ★★★ WM_COMMAND (0x111), CONFIRMED ON THE GUESTS ─────────────────────────
+     Documented, and observed at run time: SYSEDIT sends ITSELF
+     SendMessage(hwnd, 0x111, <menu id>, 0) -- the log shows the call's
+     arguments -- and COMMDLG's dialog procedures handle 0x110 (WM_INITDIALOG)
+     and 0x111 together.
+   ★ THAT SEND PINS THE PACKING TOO, which is the part that differs between
+     Win16 and Win32: for a MENU command Win16 puts the id alone in wParam and
+     ZERO in lParam. See the translation in wowwin.h. */
 #define WM_COMMAND16    0x0111
 /* ⚠ WM_TIMER's lParam is the guest's TIMERPROC when it installed one, and
    DispatchMessage calls that INSTEAD of the window procedure -- see wowuser.h. */
@@ -111,11 +97,11 @@
 #define MSG_SIZE        0x12
 
 /* ── The argument blocks. Reversed as always (the base is the LAST push), and
-     GetMessage's is confirmed against a line this host has already printed:
-     `args=0x0a b=(0x0000 0x0000 0x0000 0x248a 0x0a9f)` from `sysedit
-     seg1:0x0112`, whose pushes are `lea ax,[bp-0x12] / push ss / push ax /
-     push 0 / push 0 / push 0`. +6/+8 is that stack MSG, and +4/+2/+0 are the
-     three zeroes. A wrong assignment does not produce a readable pointer. */
+     GetMessage's is confirmed against a line this host has already printed for
+     SYSEDIT's GetMessage(&msg, 0, 0, 0): `args=0x0a b=(0x0000 0x0000 0x0000
+     0x248a 0x0a9f)`. +6/+8 is the far pointer to its stack MSG, and +4/+2/+0
+     are the three zeroes. A wrong assignment does not produce a readable
+     pointer. */
 #define GM_ARG_MAX      0
 #define GM_ARG_MIN      2
 #define GM_ARG_HWND     4

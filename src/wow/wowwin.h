@@ -219,11 +219,11 @@ static DWORD (*g_ww_global16)(int op, DWORD a, DWORD b);
 static DWORD dpmi_sel_base(WORD sel);            /* main.c: a selector's linear base */
 
 /* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
-     SHELL.DLL's own 16-bit code reads it: DragQueryPoint (ord 13, seg1:0x01d8)
-     GlobalLocks the handle and takes x at +2, y at +4 and fNC at +6, returning
-     fNC == 0; DragFinish (ord 12, seg1:0x0232) is GlobalFree. Only DragQueryFile
-     (ord 11) thunks to us. So the drop is copied, whole, into a block krnl386
-     allocates, laid out as Windows 3.1's DROPFILESTRUCT:
+     DragQueryPoint (SHELL ord 13) and DragFinish (ord 12) never reach us -- they
+     run in 16-bit SHELL.DLL against the handle as a global block (point, then
+     fNC; DragFinish frees it). Only DragQueryFile (ord 11) thunks to us. So the
+     drop is copied, whole, into a block krnl386 allocates, laid out as Windows
+     3.1's DROPFILESTRUCT:
          +0 WORD pFiles (= 8)   +2 POINT pt (client)   +6 WORD fNC   +8 the names,
          each NUL-terminated, the list ended by an empty one.
      The names are the SHORT (8.3) forms -- a Win16 program opens what it is given
@@ -884,7 +884,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        ★ And the control's handle has to become a WIN16 one: a guest comparing it
          against the handle its own CreateWindow returned must find them equal.
        ⚠ THE lParam FORM FOR A CONTROL IS NOT CONFIRMED BY A RUN. The menu form
-         is -- `sysedit seg1:0x0477` sends itself `(0x111, <id>, 0)` -- and that
+         is -- SYSEDIT sends itself `(0x111, <id>, 0)`, as logged -- and that
          is the form Help > About travels. The control form is written here
          because leaving it as the Win32 packing would be knowingly wrong, and
          the log prints both halves so the first guest that uses it can say.

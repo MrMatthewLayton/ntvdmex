@@ -1,8 +1,7 @@
 ; outprobe.asm -- GH #18 real-CPU PM I/O-virtualization probe (Kernel RE session 8).
 ;
-; Purpose: RE session 8 showed 0x4f67f8 sits inside KiTrap0D's in-kernel VDM instruction
-; EMULATOR (the bytes before it are `out dx, eax` -- the kernel emulating OUT for a VDM),
-; and that pmfault's HLT was a MISLEADING probe (the kernel has no HLT case, so HLT always
+; Purpose: RE session 8 showed that XP's kernel #GP handler (KiTrap0D) contains an
+; in-kernel VDM instruction EMULATOR that handles OUT for a VDM, and that pmfault's HLT was a MISLEADING probe (the kernel has no HLT case, so HLT always
 ; terminates). The instructions games actually use in PM are port I/O (VGA/sound) and
 ; CLI/STI -- which the kernel is meant to VIRTUALIZE, not terminate.
 ;

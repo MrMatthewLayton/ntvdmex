@@ -42,8 +42,8 @@ do not replace the signed `ntvdm.exe`.
 - (+) **Our code actually runs** in the genuine launch context (console + ntvdm's args).
 - (−) We are handed ntvdm's args (`-f` required flag; `-i<n>` instance) but **not** the DOS
   program — that still arrives via CSRSS `GetNextVDMCommand`, which returns `0x57` until we
-  replicate ntvdm's pre-fetch registration (`NtVdmControl(VdmInitialize)` at ntvdm `0xf01abb6`,
-  `RegisterConsoleVDM(1,…)` at `0xf014078`, console + low-memory setup). That is the next build.
+  replicate the registration stock ntvdm performs before its first fetch (`NtVdmControl(VdmInitialize)`,
+  `RegisterConsoleVDM(1,…)`, console + low-memory setup). That is the next build.
 - (−) IFEO redirects *all* `ntvdm.exe` launches; we must eventually do the full VDM job (or, as a
   transitional measure, proxy to the genuine ntvdm) so 16-bit apps keep working.
 

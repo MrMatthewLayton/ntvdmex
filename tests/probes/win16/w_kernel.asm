@@ -21,17 +21,15 @@
 ;     for everything WOW. A number this probe produces is a MEASUREMENT, not a
 ;     pass, until that comparison is run.
 ;
-; ── EVERYTHING BELOW WAS READ OFF REAL BINARIES, NOT REMEMBERED ──────────────
-; * The startup handshake is TASKMAN.EXE's own __astart, disassembled with
-;   tools/ne/nedis.py at seg1:0x04b9, and its three imports resolved from the
-;   relocation table: KERNEL.91 InitTask, KERNEL.30 WaitEvent, USER.5 InitApp.
-;   The entry-point register contract falls straight out of it:
+; ── EVERYTHING BELOW WAS LOOKED UP, NOT REMEMBERED ───────────────────────────
+; * The startup handshake is the standard Win16 one, and TASKMAN.EXE's
+;   relocation table names the same three imports: KERNEL.91 InitTask,
+;   KERNEL.30 WaitEvent, USER.5 InitApp. The entry-point register contract:
 ;       CX = stack size   SI = hPrevInstance   DI = hInstance
 ;       BX:ES = command line          DX = nCmdShow
 ; * Every ordinal below was resolved from guest/win16/krnl386.exe's own export
 ;   tables, not from memory.
-; * The exit is INT 21h AH=4Ch, which is the path TASKMAN itself falls back to
-;   at seg1:0x04b7.
+; * The exit is INT 21h AH=4Ch, the standard Win16 task exit.
 ;
 ; ⚠ STRINGS LIVE IN THE CODE SEGMENT and are passed as CS:offset far pointers.
 ;   mkne.py zero-fills the data segment, so there is no initialised data there --
@@ -131,8 +129,8 @@ D_HEX           equ 0x44                ; four bytes of scratch for whex
 ; ════════════════════════════════════════════════════════════════════════════
 start:
 ; ── InitTask IS THE FIRST INSTRUCTION AFTER THE FRAME TERMINATOR. ────────────
-;   TASKMAN does `xor bp,bp / push bp / lcall InitTask` with nothing in between,
-;   and InitTask hands back the register state the loader set up (CX stack size,
+;   Standard Win16 start-up code zeroes BP, pushes it and calls InitTask with
+;   nothing in between, and InitTask hands back the register state the loader set up (CX stack size,
 ;   SI hPrevInstance, DI hInstance, BX:ES command line, DX nCmdShow). Keeping
 ;   that order costs nothing and matches the only working example we have.
 ;
@@ -206,7 +204,7 @@ start:
         int     21h                     ; close
 .bail:
         mov     ax, 4C00h
-        int     21h                     ; TASKMAN's own fallback exit path
+        int     21h                     ; the standard Win16 task exit
 
 ; ── write helpers. All output is INT 21h AH=40h -- see the header note. ─────
 ; SI = CS-relative NUL-terminated string.

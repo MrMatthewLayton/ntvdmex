@@ -5,9 +5,8 @@
  * wowuser.h -- USER.EXE's half of the WOW32 interface. GH #128, session 38.
  *
  * ── WHY THIS IS A SEPARATE FILE AND NOT MORE CASES IN wow32.h ────────────────
- * THE ID SPACE IS PER MODULE. Every id in wow32.h was read out of krnl386's own
- * stub table; USER has its own table of 457 stubs with its own numbering, and the
- * numbers COLLIDE. `0x39` is `GetProfileInt` in krnl386's table and
+ * THE ID SPACE IS PER MODULE. Every id in wow32.h is one krnl386 sends; USER
+ * sends its own 457 with its own numbering, and the numbers COLLIDE. `0x39` is `GetProfileInt` in krnl386's table and
  * `RegisterClass` in USER's -- and for one run this host serviced the second with
  * the first and handed WOWEXEC the answer. Two id spaces in one switch is how that
  * happens; two files with two dispatchers, chosen by the stub's own segment, is how
@@ -17,18 +16,10 @@
  * them named by USER's own export table, regenerable with
  *     tools/ne/wowmap.py guest/ne/user.exe --md
  *
- * ── THE Win16 WNDCLASS, CONFIRMED FIELD BY FIELD AGAINST WOWEXEC's OWN CODE ──
- * Not taken from a header. WOWEXEC builds one on its stack and every store lands
- * where this layout says it should:
- *
- *     083b  lea ax,[bp-0x1a]        -> the struct is 0x1A = 26 bytes
- *     0819  lcall LoadCursor
- *     081e  mov [bp-0xc],ax          -> +0x0e  hCursor
- *     0823  lcall <stock object>
- *     0828  mov [bp-0xa],ax          -> +0x10  hbrBackground
- *     082b  mov word [bp-4],0x82     -> +0x16  lpszClassName offset
- *     0830  mov [bp-2],ds            -> +0x18  lpszClassName segment
- *     0833  sub ax,ax / mov [bp-6],ax / mov [bp-8],ax  -> +0x12/+0x14 lpszMenuName = NULL
+ * ── THE Win16 WNDCLASS (documented; checked against what WOWEXEC passes) ─────
+ * 26 bytes. The block WOWEXEC hands RegisterClass reads back sensibly at every
+ * offset -- hCursor is what LoadCursor returned, hbrBackground a stock object,
+ * lpszMenuName NULL, lpszClassName a far pointer into its own DGROUP:
  *
  *   +0x00 WORD  style          +0x0c WORD hIcon
  *   +0x02 DWORD lpfnWndProc    +0x0e WORD hCursor
@@ -36,10 +27,9 @@
  *   +0x08 WORD  cbWndExtra     +0x12 DWORD lpszMenuName
  *   +0x0a WORD  hInstance      +0x16 DWORD lpszClassName
  *
- * ⚠ `mov word [bp-4],0x82` is the CLASS NAME POINTER, not a style. An earlier note
- *   read it as "style 0x82, hInstance=ds" off the same two instructions; the offsets
- *   above are what settle it, and they come from the struct size the program itself
- *   declares with that `lea`.
+ * ⚠ The 0x82 seen at +0x16 is the CLASS NAME's OFFSET, not a style. An earlier
+ *   note read it as "style 0x82, hInstance=ds"; the 26-byte layout is what
+ *   settles it.
  */
 
 #define WOWUSER_REGISTERCLASS   0x39
@@ -57,10 +47,10 @@
 #define WOWUSER_CREATEDIALOG    0xEF
 #define WOWUSER_NOTIFYWOW       0x217
 /* ── ★★★ 0x16c LookupIconIdFromDirectoryEx(lpDir, fIcon, cx, cy, flags) = 12 ──
-     (s89, #216) USER's own LoadCursor/LoadIcon call this between loading the
-     GROUP resource and finding the entry it names (`user seg1:0x4a8e` cursor,
-     fIcon 0; `seg1:0x4904` icon, fIcon 1; both cx = cy = 0, flags 0x40 =
-     LR_DEFAULTSIZE). Stepped over, it answered 0, FindResource(hInst, 0,
+     (s89, #216) Observed arriving inside every guest LoadCursor/LoadIcon,
+     between the GROUP resource being loaded and the entry it names being
+     looked up (fIcon 0 from LoadCursor, 1 from LoadIcon; both cx = cy = 0,
+     flags 0x40 = LR_DEFAULTSIZE). Stepped over, it answered 0, FindResource(hInst, 0,
      RT_CURSOR) failed and LoadCursor returned NULL for EVERY cursor a program
      ships -- Paintbrush's zoom rectangle among them. The group directory is the
      same 6-byte header + 14-byte entries in Win16 and Win32, so the bytes go to
@@ -84,8 +74,8 @@
 #define WOWUSER_PEEKMESSAGE     0x6d
 #define WOWUSER_POSTMESSAGE     0x6e
 /* ★ These four the export table could NOT name -- they are four of its 56
-   unnamed ids, and they are named here by their call sites in SYSEDIT's own
-   message loop, which the relocation chain names in turn. See wowmsg.h. */
+   unnamed ids, and they are named here by where they arrive from in SYSEDIT's
+   message loop, matched against its NE import relocations. See wowmsg.h. */
 #define WOWUSER_TRANSLATEMESSAGE 0x71
 #define WOWUSER_DISPATCHMESSAGE  0x72
 #define WOWUSER_TRANSLATEACCEL   0xb2
@@ -100,17 +90,11 @@
 
 /* ── ★★★ 0x76 RegisterWindowMessage(lpString) ────────────────────────────────
      Another of the ids USER's export table cannot name, and NOTEPAD names it by
-     what it passes. `notepad seg2:0x05d1` and `seg2:0x05e4` call it twice with
-     strings out of its own DGROUP --
-
-         ds:0x0201 = "commdlg_FindReplace"
-         ds:0x0215 = "commdlg_help"
-
-     -- which are the two message names the common dialogs are documented to
-     register, and each call is followed by `or ax,ax / jne` falling through to
-     `jmp 0x02cb`, the `sub ax,ax / ret` that abandons the whole initialisation.
-     So Notepad shows its window and then throws it away, twice over, for want of
-     a message id.
+     what it passes: it arrives twice at start-up, with the strings
+     "commdlg_FindReplace" and "commdlg_help" -- the two message names the common
+     dialogs are documented to register. Answered 0, Notepad abandons its whole
+     initialisation (observed): it shows its window and then throws it away, for
+     want of a message id.
    ★ THE ANSWER IS THE OS's, for the same reason RegisterClipboardFormat's is: a
      registered window message is a name in a SYSTEM-WIDE atom table, and its
      whole purpose is that two programs which register the same string get the
@@ -129,36 +113,30 @@
 
 /* ── ★★★ 0xad -- "BUILD ME A CURSOR OR AN ICON". ─────────────────────────────
      One of the 56 ids USER's export table cannot name, and the reason it matters
-     is NOTEPAD: `notepad seg2:0x02d0` calls `LoadCursor(NULL, 0x7f02)` and
-     `seg2:0x02ee cmp [0xb14],0 / je` returns 0 from its whole initialisation if
-     the answer is 0 -- so `WinMain` (`seg1:0x0c38 or ax,ax / jne`) returns
-     without ever registering a class. No cursor, no Notepad.
+     is NOTEPAD: it calls `LoadCursor(NULL, 0x7f02)` at start-up, and if the
+     answer is 0 it abandons its whole initialisation and WinMain returns without
+     ever registering a class (observed). No cursor, no Notepad.
 
      USER's 16-bit LoadCursor/LoadIcon do the resource lookup themselves and then
-     ask the 32-bit side to build the object. The call site is exact
-     (`user seg1:0x49e2`, the arm taken when the module handle came back 0, i.e.
-     hInstance was NULL):
+     ask the 32-bit side, through this id, to build the object. For a NULL
+     hInstance the block is (reversed, as logged):
 
-         49e2  push ax(0)      -> +18
-         49e3  push [bp+8]     -> +16   lpName HIGH word (0 => MAKEINTRESOURCE)
-         49e6  push [bp+6]     -> +14   lpName LOW word  = the ORDINAL
-         49e9  push ax(0) x5   -> +12..+4
-         49ee  push [bp-0x14]  -> +2
-         49f1  push 1          -> +0    ★ KIND: a PREDEFINED system object
-         49f3  lcall <id 0xad>
+         +18  0                 (the hInstance -- NULL)
+         +16  lpName HIGH word  (0 => MAKEINTRESOURCE)
+         +14  lpName LOW word   = the ORDINAL
+         +12..+4  0
+         +2   a version word
+         +0   ★ KIND
 
-     and the run agrees field for field: Notepad's call arrives as
-     `(1 0 0 0 0 0 0 0x7f02 0 0)`. The sibling site (`seg1:0x4998`) pushes kind 3
-     with a real resource pointer -- a module's OWN icon -- and is NOT answered
-     here; the log names the kind so the next run can read that site instead of
-     this one being widened by guesswork.
+     Notepad's call arrives as `(1 0 0 0 0 0 0 0x7f02 0 0)`. A call with kind 3
+     and a real resource pointer -- a module's OWN icon -- was NOT answered here at
+     first; the log names the kind so a run can say what it carries instead of
+     this being widened by guesswork.
 
    ★★ WHY THE HOST DOES NOT HAVE TO KNOW WHETHER IT IS A CURSOR OR AN ICON.
      Win16's predefined cursor and icon ordinals share one numeric range, and both
-     LoadCursor and LoadIcon reach this same stub -- so the id and its arguments
-     genuinely cannot tell them apart, and the two USER exports that would are
-     reached through relocation chains rather than fixed call targets. But the
-     GUEST says which it is a moment later, when it puts the handle into
+     LoadCursor and LoadIcon reach this same id -- and the GUEST says which it is
+     a moment later, when it puts the handle into
      `WNDCLASS.hCursor` or `WNDCLASS.hIcon`. So this returns a TOKEN that remembers
      the ordinal, and the real `LoadCursorA`/`LoadIconA` happens at the point of
      use, where the answer is not a guess. Same shape as every other handle here:
@@ -169,13 +147,11 @@
 #define AD_ARG_NAMEHI            16
 #define AD_KIND_PREDEFINED       1
 #define AD_KIND_MODULERES        3
-/* ── ★★ s89 (#216): WHAT `kind` ACTUALLY IS. USER's LoadCursor pushes 1 at BOTH
-     its call sites (NULL hInstance, `seg1:0x49f1`, and the module's own,
-     `seg1:0x4b2f`); LoadIcon pushes 3 at both (`seg1:0x4867` and its module
-     arm). So `kind` is CURSOR (1) or ICON (3), and whether the object is a
-     PREDEFINED one or the MODULE's own is said by the hInstance at +18 --
-     USER pushes 0 there exactly when its module lookup (`seg1:0x4694`) came back
-     0. The token keeps the two names above for what they have always meant
+/* ── ★★ s89 (#216): WHAT `kind` ACTUALLY IS. It arrives as 1 from every
+     LoadCursor -- NULL hInstance or a module's own -- and as 3 from every
+     LoadIcon. So `kind` is CURSOR (1) or ICON (3), and whether the object is a
+     PREDEFINED one or the MODULE's own is said by the hInstance at +18, which
+     arrives as 0 exactly when no module resolved the request. The token keeps the two names above for what they have always meant
      (predefined / module), now derived from hInstance; the module arm also
      passes the RT_CURSOR bytes it has just locked:
        +2 GetExpWinVer   +4 hResData   +6 SizeofResource (DWORD)
@@ -200,23 +176,18 @@
      CREATESTRUCT in place it gets as far as building its toolbox, fails to load
      the bitmap for it, and says "Not enough memory to edit image."
 
-     Another id USER's export table cannot name, found the same way `0xad` was --
-     by reading USER's own call site. `user.exe seg1:0x4732`:
+     Another id USER's export table cannot name. It arrives with 14 argument
+     bytes, laid out (reversed, as logged) as:
 
-         4732  push [bp+0x0a]   -> +12   hInstance
-         4735  push [bp+0x08]   -> +10 } lpszName, far  (SEG at +10, OFF at +8)
-         4738  push [bp+0x06]   -> +8  }
-         473b  push [bp-0x0a]   -> +6  } the resource's BYTES, far
-         473e  push [bp-0x0c]   -> +4  }  (set from the DX:AX at 0x4728)
-         4741  push [bp-0x06]   -> +2  } its SIZE, a DWORD
-         4744  push [bp-0x08]   -> +0  }
-         4747  lcall <id 0xaf>
-     Seven pushes = the 14 argument bytes the stub declares.
+         +12  hInstance
+         +8   lpszName, far  (SEG at +10, OFF at +8)
+         +4   the resource's BYTES, far
+         +0   its SIZE, a DWORD
 
    ★★★ AND IT IS `LoadBitmap`, PROVEN THREE WAYS RATHER THAN INFERRED:
-     1. `USER.175 LOADBITMAP` (seg1:0x2e78) is `native16`, and it ENDS in
-        `2e8f jmp 0x46b8` -- a tail-jump into the function this call site is in.
-        Its return thunk is `retf 6`, i.e. exactly (HINSTANCE + LPCSTR).
+     1. It arrives exactly when the guest calls `USER.175 LOADBITMAP` (an
+        export that does not thunk by itself -- `native16`), whose documented
+        parameters are (HINSTANCE, LPCSTR) -- the hInstance and name above.
      2. The names that arrive are "pToolbox" and "pArrow".
      3. PBRUSH's own resource table has `BITMAP PTOOLBOX 9040` and
         `BITMAP PARROW 208` -- and the SIZE at +0 arrives as 0x2350 and 0x00d0.
@@ -333,36 +304,23 @@ static const char *wowuser_sysres_name(WORD h)
      Every id here was named by the RUN and confirmed against USER's own export
      table (`docs/research/wow-user-surface.md`), not chosen from a list: the host
      log records each unimplemented USER call with the return address it came
-     from, `from - 5` is the call site, and `tools/ne/neimports.py` names it out
-     of NOTEPAD.EXE's own relocation chain. Four agreed both ways:
+     from, and `tools/ne/neimports.py` matches that against NOTEPAD.EXE's own
+     NE import relocations. Four agreed both ways:
 
-        0x38  12 args  MOVEWINDOW          notepad seg1:0x0061
-        0x7d   8 args  INVALIDATERECT      notepad seg1:0x0044
-        0xb3   2 args  GETSYSTEMMETRICS    notepad seg1:0x0c04
-        0x1f   2 args  ISICONIC            notepad seg1:0x0aba
+        0x38  12 args  MOVEWINDOW
+        0x7d   8 args  INVALIDATERECT
+        0xb3   2 args  GETSYSTEMMETRICS
+        0x1f   2 args  ISICONIC
 
-   ★ AND NOTEPAD'S RESIZE HELPER READS STRAIGHT OFF THE DISASSEMBLY, which is
-     where the argument order below comes from rather than from a parameter list:
-
-        0037  push bp / mov bp,sp
-        003a  push [0x12] / push 0 / push 0 / push 1
-        0044  lcall  InvalidateRect(hEdit, NULL, TRUE)
-        0049  push [0x12]                  ; hWnd  = its EDIT control
-        004d  push 8 / push 2              ; X, Y
-        0051  mov ax,[bp+6] / sub ax,0x0f / push ax   ; nWidth
-        0058  mov ax,[bp+4] / sub ax,4    / push ax   ; nHeight
-        005f  push 1                       ; bRepaint
-        0061  lcall  MoveWindow
-        0069  ret 4
-
-     -- 12 bytes and 8 bytes exactly, which is what each stub declares. The block
-     is REVERSED as always (the base is the LAST push).
-   ⚠ `DefWindowProc` is NOT here and must not be added: `USER.107` resolves to
-     entry-table `FIXED, segment 1, offset 0x1d5e`, and the bytes there are
-     `55 8b ec 68 86 1d ...` -- ordinary 16-bit code, not a `6a XX 68 00 00 68`
-     WOW32 stub. USER implements it ITSELF, which is why a whole run of Notepad
-     never produced one as a BOP. `DefFrameProc` (0x1bd) and `DefMDIChildProc`
-     (0x1bf) ARE stubs; nothing has called them yet. */
+   ★ Notepad's resize arrives as InvalidateRect(hEdit, NULL, TRUE) followed by
+     MoveWindow(hEdit, 8, 2, cx - 15, cy - 4, TRUE) -- 8 bytes and 12 bytes
+     exactly, as each call carries, and the logged values put each field where
+     the block below says. The block is REVERSED as always (the base is the LAST
+     push).
+   ⚠ `DefWindowProc` is NOT here and must not be added: `USER.107` never arrives
+     as a BOP -- a whole run of Notepad produced none -- because USER handles it
+     in its own 16-bit code. `DefFrameProc` (0x1bd) and `DefMDIChildProc` (0x1bf)
+     DO thunk; nothing had called them when this was written. */
 #define WOWUSER_MOVEWINDOW       0x0038
 #define MW_ARG_REPAINT   0
 #define MW_ARG_CY        2
@@ -429,16 +387,13 @@ static const char *wowuser_sysres_name(WORD h)
 
 /* ── ★★★ THE ENUMERATED BATCH -- FROM `tools/ne/neneeds.py`, NOT FROM A RUN ───
      Everything above was named by a guest stopping on it. These were named by
-     reading NOTEPAD.EXE's import table and resolving each ordinal through USER's
-     own entry table to the bytes it lands on -- so they are calls the program
-     provably can make, including the ones that would have failed QUIETLY. See
-     the tool for why an import is not automatically work, and for the two export
-     prologues that have to be seen through to tell a thunk from 16-bit code.
+     reading NOTEPAD.EXE's import table -- so they are calls the program provably
+     can make, including the ones that would have failed QUIETLY. See the tool for
+     why an import is not automatically work.
 
      Every argument block below is the standard reversal (the base is the LAST
      word pushed), and every one is cross-checked against the argument-byte count
-     the stub itself declares -- which is what makes the layout a reading rather
-     than a parameter list copied from somewhere:
+     the call carries:
 
        0x17  GETFOCUS               0 bytes   ()
        0x22  ENABLEWINDOW           4 bytes   (hWnd, bEnable)          2+2
@@ -451,12 +406,11 @@ static const char *wowuser_sysres_name(WORD h)
      A parameter list that did not add up to the declared count would mean the
      reading is wrong, and all eight add up. */
 /* ── ★★★★ 0x01 MessageBox -- AND IT IS NOT IN THE IMPORT-DERIVED LIST ────────
-     `neneeds.py` classifies `USER.1 MESSAGEBOX` as native16, and it is RIGHT:
-     the export at seg1:0x29e3 is 16-bit code. It is a WRAPPER, and it reaches
-     the WOW32 stub at seg1:0x0b62 from inside its own body -- exactly the
-     `LoadIcon`/`0xad` shape the tool's own header warns about. So this is the
-     first thing the enumeration could not see, found the old way: a run stopped
-     on it.
+     `neneeds.py` classifies `USER.1 MESSAGEBOX` as native16 -- the export does
+     not thunk by itself -- yet a call to it still reaches us, as this id, from
+     inside USER's 16-bit side: exactly the `LoadIcon`/`0xad` shape the tool's own
+     header warns about. So this is the first thing the enumeration could not
+     see, found the old way: a run stopped on it.
    ★★ AND IT IS THE MOST VALUABLE ONE IN THE FILE, because it is how the program
      TALKS. Notepad reached this immediately after reading the file it was asked
      to open, with `uType = 0x30` (an exclamation) and the caption "Notepad" --
@@ -468,7 +422,7 @@ static const char *wowuser_sysres_name(WORD h)
    ★ The block, from the arguments the run itself printed (`0x0030 0x265a 0x0a9e
      ...`, where `0x0a9e:0x265a` decoded to "Notepad"): reversed as always, so
      uType is at +0 and hWnd -- pushed first -- is at +10. 2+4+4+2 = 12, which is
-     what the stub declares.
+     what the call carries.
    ⚠ MODAL, on the exec thread, like ShellAbout and the file dialog. */
 #define WOWUSER_MESSAGEBOX       0x0001
 #define MSGB_ARG_TYPE    0
@@ -507,13 +461,13 @@ static const char *wowuser_sysres_name(WORD h)
      the three GDI calls already implemented (`GetDeviceCaps`, `DeleteDC`,
      `DeleteObject`) could only ever answer "not one of our GDI tokens" until
      something produced one, and the producer was in another id space all along.
-   ★ The ids and their argument counts are from `tools/ne/neneeds.py --stubs`,
-     resolved through USER's own entry table, and the retstubs it computes from
-     the file match the ones the run printed to the digit:
+   ★ The ids, argument counts and return-stub offsets (the value each call
+     carries at OFF_FROM), from `tools/ne/neneeds.py --stubs`; the run printed
+     the same value to the digit where it reached one:
          66 GETDC        id 0x42   2 args  retstub 0x076a   (the run: 0x076a)
          67 GETWINDOWDC  id 0x43   2 args  retstub 0x090a
          68 RELEASEDC    id 0x44   4 args  retstub 0x0c5c
-     2 = (HWND); 4 = (HWND, HDC). Both add up to what the stubs declare.
+     2 = (HWND); 4 = (HWND, HDC). Both add up to what the calls carry.
    ⚠ 0x44 IS `DeleteDC` IN GDI'S NUMBERING AND `ReleaseDC` HERE -- the same
      collision this file exists to prevent, and a reason the dispatcher must
      never reach this switch with another module's stub segment. */
@@ -656,22 +610,18 @@ static const char *wowuser_sysres_name(WORD h)
      only sees a program's imports. WINMINE's USER surface reads 41/41 COMPLETE
      and it still had no menu. **native16 does not mean free.**
 
-     Read off USER.EXE seg1:0x480a (`lcall 0x486c, 0xad2`), eight pushes:
+     The block, as it arrives (eight words, reversed):
 
-         47f2  push [bp+0x0a]   ; hInstance          -> offset 14
-         47f5  push [bp+0x08]   ; lpMenuName, high   -> offset 12
-         47f8  push [bp+0x06]   ; lpMenuName, low    -> offset 10
-         47fb  push [bp-0x0a]   ; locked resource, seg  -> offset 8
-         47fe  push [bp-0x0c]   ; locked resource, off  -> offset 6
-         4801  push [bp-0x06]                        -> offset 4
-         4804  push [bp-0x08]                        -> offset 2
-         4807  push [bp-0x10]   ; last push = base   -> offset 0
+         offset 14  hInstance
+         offset 10  lpMenuName (high word at 12)
+         offset 6   the locked resource, far (segment at 8)
+         offsets 4, 2, 0  -- not identified
 
      Minesweeper's live call carries hInstance 0x0b86 and lpMenuName 0x000001f4
      -- a MAKEINTRESOURCE whose high word is 0, so an ORDINAL -- and
      `neres.py list WINMINE.EXE` says `MENU 500`. 0x1f4 IS 500. The id was in the
      arguments the whole time.
-   ⚠ Offsets 0/2/4 are pushed from locals this host does not need and are NOT
+   ⚠ Offsets 0/2/4 carry values this host does not need and are NOT
      named as anything: guessing at them would put three inventions in a header
      that is otherwise all measurement. They are covered so the block tiles. */
 #define WOWUSER_LOADMENU         0x0096
@@ -840,9 +790,10 @@ static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
 #define WOWUSER_DELETEMENU           0x019d
 #define WOWUSER_GETWINDOWPLACEMENT   0x0172
 #define WOWUSER_UNHOOKWINDOWSHOOK    0x00ea
-/* s93: USER.121 SetWindowsHook's thunk -- 8 bytes, read off USER seg1:0x6e42..0x6e57:
-   push hModule (GetExePtr of the proc), push nFilterType, push lpfn (seg, off);
-   its DX:AX is what SetWindowsHook returns ("the previous hook"). */
+/* s93: USER.121 SetWindowsHook arrives as an 8-byte block: lpfn (far) at +0,
+   nFilterType at +4, and at +6 the module handle owning the hook procedure (as
+   logged); the DX:AX answered is what SetWindowsHook returns ("the previous
+   hook"). */
 #define WOWUSER_SETWINDOWSHOOK       0x0079
 #define SWH_ARG_PROC   0
 #define SWH_ARG_ID     4
@@ -1146,23 +1097,19 @@ void wowcomm_rts(int id, int on);
 /* ── ★★★★★ THE SECOND USER SWEEP (session 47). ──────────────────────────────
      With `neneeds.py` able to see through USER's validating export wrappers, the
      surface these two programs actually reach went from 52 to 92 calls, and
-     everything below is on that list with its id and argument count read out of
-     `user.exe`'s own entry table. The constants are read out of the GUEST, not
-     out of a header:
+     everything below is on that list with its id and argument count. The
+     constants are the ones the GUEST passes at run time, not out of a header:
 
-       SetClassWord  `PBRUSH seg3:0x09b8`  push [bp+0xe] / push -0x0c / …
-                     ⇒ index -12 = GCW_HCURSOR, and the value is
-                       LoadCursor(0, 0x7f00) = IDC_ARROW. **This is how MS Paint
-                       changes its pointer per tool** -- eighteen calls a run,
-                       every one of them stepped over until now.
-       GetWindowLong `PBRUSH seg3:0x0241`  push [0x2ce8] / push -0x10
-                     ⇒ index -16 = GWL_STYLE, read and written back through
-                       SetWindowLong at seg3:0x0308.
-       GetKeyState   `PBRUSH seg3:0x1341`  … / and ax,0x8000
-                     ⇒ it tests the HIGH BIT, i.e. "is the key down now", which is
-                       Win32's convention unchanged.
+       SetClassWord  index -12 = GCW_HCURSOR, and the value is
+                     LoadCursor(0, 0x7f00) = IDC_ARROW. **This is how MS Paint
+                     changes its pointer per tool** -- eighteen calls a run,
+                     every one of them stepped over until now.
+       GetWindowLong index -16 = GWL_STYLE, read and written back through
+                     SetWindowLong.
+       GetKeyState   Paint tests the HIGH BIT, i.e. "is the key down now", which
+                     is Win32's convention unchanged.
    ⚠ Win16's negative indices are the same numbers as Win32's for the fields that
-     exist in both, which is what the two readings above independently confirm --
+     exist in both, which is what the two observations above confirm --
      but only for those two. Anything else is refused by name rather than passed
      through on the strength of a pattern. */
 #define WOWUSER_DEFWINDOWPROC    0x006b
@@ -1254,20 +1201,16 @@ void wowcomm_rts(int id, int on);
 
 /* ── ★★★★★ THE OLE CLUSTER -- WHAT `File > Save As` DIES ON NOW. (session 49) ─
      With the LDT collision fixed, MS Paint's save runs, reads its whole canvas
-     with `GetDIBits`, and then dies in **OLESVR.DLL at 0003:1548** -- because
-     Paint registers itself as an OLE server and OLESVR notifies its clients that
-     the document changed. The fault frame names the instruction and the reason:
+     with `GetDIBits`, and then faults inside **OLESVR.DLL** -- because Paint
+     registers itself as an OLE server and OLESVR notifies its clients that the
+     document changed. The host's fault frame gives the reason: ES = 0x0000 {NO
+     DESCRIPTOR}, BX = 0, i.e. a NULL far pointer dereferenced without a check.
+     Three lines of log before it say where the null came from:
 
-       bytes@fault = 26 83 7f 0e 00     cmp word ptr es:[bx+0x0e], 0
-       fault regs  = ... es=0x0000{NO DESCRIPTOR} ebx=0x0000
-
-     i.e. a NULL far pointer dereferenced without a check. Three lines of log
-     before it say where the null came from:
-
-       FUNC=0x2e from=OLESVR seg3:0x1528 (0x0200) -> UNIMPLEMENTED, answered 0
+       FUNC=0x2e from=OLESVR (0x0200) -> UNIMPLEMENTED, answered 0
        FUNC=0x35 ... DestroyWindow 0x0200 -> destroyed
-       FUNC=0x87 from=OLESVR seg3:0x153e (0,0) -> GetWindowLong(0x0000,0)
-                                                  ★ NOT ONE OF OUR WINDOWS; 0
+       FUNC=0x87 from=OLESVR (0,0) -> GetWindowLong(0x0000,0)
+                                      ★ NOT ONE OF OUR WINDOWS; 0
 
      `USER.46 GetParent` was stepped over, so OLESVR asked window 0 for its
      window long, got 0, and dereferenced it. ⇒ **`GetParent` is the whole bug.**
@@ -1315,7 +1258,8 @@ static wowuser_prop_t g_wu_prop[WOWUSER_MAX_PROP];
 static int            g_wu_nprop = 0;
 
 /* The Win16 task that is running right now. ⚠ NOT invented and not derived here:
-   it is krnl386's own current-task word at DGROUP `[0x228]` (session 38), which
+   it is krnl386's own current-task word -- the DGROUP word at offset 0x228,
+   observed at run time (session 38) to hold the running task's handle -- which
    the dispatcher already reads at every BOP for the log -- this just keeps the
    last value where `GetWindowTask` can see it. 0 until the first BOP. */
 static WORD g_wu_curtask = 0;
@@ -1520,21 +1464,9 @@ static const char *wowuser_res_prog(void)
      6 argument bytes and the same block: a far `lpPaint` at +0 and the hWnd at
      +4, and the hWnd that arrived was 0x0180, MS Paint's CANVAS window.
 
-   ★★ THE PAINTSTRUCT LAYOUT IS READ OFF PAINT'S OWN CODE, not a header.
-     `nedis.py guest/win16/PBRUSH.EXE 3 0x08f8` shows the whole bracket, and the
-     structure is at `bp-0x2a`:
-
-        0905  push [bp+0x0e]      ; hWnd, the window procedure's own parameter
-        0908  lea ax,[bp-0x2a]    ; &ps
-        090b  push ss / push ax
-        090d  lcall <BeginPaint>
-        0919  push [bp-0x2a]      ; ★ ps+0  -- and it is pushed as the HDC
-        092f  mov ax,[bp-0x24]    ;   ps+6
-        0938  mov cx,[bp-0x26]    ;   ps+4
-        0940  sub cx,[bp-0x22]    ;   ps+8   -> right-left, negated and +1
-        0947  sub ax,[bp-0x20]    ;   ps+10  -> the height, the same way
-     ⇒ hdc at +0, fErase at +2, rcPaint at +4 as four `int`s, and the guest
-       computing `right - left + 1` is what identifies which pair is which.
+   ★★ THE PAINTSTRUCT LAYOUT -- the documented Win16 one: hdc at +0, fErase at
+     +2, rcPaint at +4 as four `int`s. Checked on Paint: the HDC its GDI calls
+     carry after BeginPaint is the word we wrote at +0.
        Win16's PAINTSTRUCT is 32 bytes (16 of them a reserved tail); Win32's is
        64 with LONGs, so this is a conversion like every other structure here.
 
@@ -1853,8 +1785,8 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define ETW_ARG_TASK     8
 
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
-   run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
-   seg2:0x0149. UpdateWindow(hWnd) -- 2 bytes. */
+   run: SYSEDIT's two calls carry `(0x0005 0x0160)` (the MDI client) and
+   `(0x0001 0x0140)` (the frame). UpdateWindow(hWnd) -- 2 bytes. */
 #define SW_ARG_CMDSHOW  0
 #define SW_ARG_HWND     2
 #define UW_ARG_HWND     0
@@ -1863,7 +1795,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
      GetWindowWord(hWnd, nIndex)               -> +0 nIndex, +2 hWnd
      SetWindowWord(hWnd, nIndex, wNewWord)     -> +0 value, +2 nIndex, +4 hWnd
    Confirmed against the run: SYSEDIT's `mpchild` WM_CREATE calls
-   `push si / push 2 / push 0` and the frame carries `(0x0000 0x0002 <hwnd>)`. */
+   SetWindowWord(hwnd, 2, 0) and the frame carries `(0x0000 0x0002 <hwnd>)`. */
 #define GWW_ARG_INDEX   0
 #define GWW_ARG_HWND    2
 #define SWW_ARG_VALUE   0
@@ -1871,88 +1803,74 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define SWW_ARG_HWND    4
 
 /* ── ★★★ SendMessage(hWnd, msg, wParam, lParam) -- 10 argument bytes ──────────
-     `USER.111 SENDMESSAGE`, named from SYSEDIT's own relocation chain at
-     `seg3:0x007e`. The block is REVERSED from the parameter list as always (the
-     base is the LAST push), and the run confirms every offset in one line:
-     `args=(0x2378 0x0a9f 0x0000 0x0220 0x0160)` against the pushes
-     `push [0x22] / push 0x220 / push 0 / push ss / push ax`. */
+     `USER.111 SENDMESSAGE`, named from SYSEDIT's NE import relocations. The
+     block is REVERSED from the parameter list as always (the base is the LAST
+     push), and the run confirms every offset in one line: SYSEDIT's
+     SendMessage(hwndMDIClient, WM_MDICREATE, 0, &stackStruct) arrives as
+     `args=(0x2378 0x0a9f 0x0000 0x0220 0x0160)`. */
 #define SM_ARG_LPARAM   0
 #define SM_ARG_WPARAM   4
 #define SM_ARG_MSG      6
 #define SM_ARG_HWND     8
 
-/* The messages this host names. `0x0220` is what SYSEDIT pushes at
-   `seg3:0x0074`, and its lParam is an MDICREATESTRUCT -- see below. */
+/* The messages this host names. `0x0220` is what SYSEDIT sends its MDI client,
+   and its lParam is an MDICREATESTRUCT -- see below. */
 #define WM_MDICREATE16  0x0220
 
 /*
  * ── ★★★★ AN EDIT CONTROL'S TEXT IS A HANDLE IN THE APPLICATION'S OWN HEAP ────
  * `0x040C` and `0x040D` are `WM_USER + 12` and `WM_USER + 13`, and which is
- * which is settled by SYSEDIT's file-loading routine rather than from memory --
- * `sysedit seg3`, and every call in it is named from the relocation chain:
+ * which is settled by what SYSEDIT does with them when it loads a file
+ * (observed call sequence):
  *
- *   00cf  OPENFILE                       ; < 0 -> "Cannot open this file"
- *   00f8  _LLSEEK(h, 0, 2)  -> [bp-4]    ; ★ the file's SIZE
- *   010a  _LLSEEK(h, 0, 0)               ; back to the start
- *   011b  SendMessage(hEdit, 0x40D, 0,0) ; ★ so 0x40D takes NO parameters...
- *   0124  push ax / push [bp-4]+1 / push 0x42
- *   012c  LOCALREALLOC                   ; ★ ...and RETURNS A LOCAL HANDLE
- *   0148  LOCALLOCK -> [bp-0x96]         ; a far pointer to the bytes
- *   015a  _LREAD(h, that, size)          ; the file goes straight in
- *   017b  mov byte es:[bx+si],0          ; the guest NUL-terminates it itself
- *   0183  LOCALUNLOCK
- *   018b  SendMessage(hEdit, 0x40C, hMem, 0)  ; ★ 0x40C TAKES the handle
+ *   OpenFile, _llseek to the end (★ the file's SIZE), _llseek back to the start
+ *   SendMessage(hEdit, 0x40D, 0, 0)           ; ★ so 0x40D takes NO parameters...
+ *   LocalReAlloc(<that answer>, size + 1, 0x42) ; ★ ...and RETURNS A LOCAL HANDLE
+ *   LocalLock, _lread the file straight in, NUL-terminate it, LocalUnlock
+ *   SendMessage(hEdit, 0x40C, hMem, 0)        ; ★ 0x40C TAKES the handle
  *
- * ⇒ `0x040D` is **EM_GETHANDLE** and `0x040C` is **EM_SETHANDLE**, and the run
- *   that stopped here was stopping on the FIRST of the pair, not the second.
+ * ⇒ `0x040D` is **EM_GETHANDLE** and `0x040C` is **EM_SETHANDLE** (as documented),
+ *   and the run that stopped here was stopping on the FIRST of the pair.
  *
  * ★★ AND THE HANDLE MUST BE VALID IN THE APPLICATION'S OWN LOCAL HEAP. That is
  *   not an assumption about how Windows implements edit controls -- it is what
  *   this program demonstrably requires: it hands the answer straight to
  *   `LocalReAlloc` and `LocalLock`, which operate on the local heap of the
- *   CURRENT DS, and DS throughout this routine is SYSEDIT's own DGROUP (its
- *   window procedure's prologue put it there). A handle this host invented would
- *   be a number `LocalReAlloc` rejects, and rejecting it is exactly what produced
- *   *"Cannot open this file."*
+ *   CURRENT DS, and DS throughout is SYSEDIT's own DGROUP. A handle this host
+ *   invented would be a number `LocalReAlloc` rejects, and rejecting it is
+ *   exactly what produced *"Cannot open this file."*
  * ⇒ The host cannot make this handle. The GUEST'S KERNEL has to, and since
- *   session 40 the host can ask it: `KERNEL.5 LOCALALLOC` is entry-table
- *   `FIXED, segment 1, offset 0x3ddb`, and krnl386's segment 1 is the segment
- *   every WOW32 BOP executes in -- so its runtime address is `<the BOP's CS>:
- *   0x3ddb`, with no resolution machinery at all. The disassembly there confirms
- *   the signature to the byte: `test ax,0xf08d` against `[bp+8]` (LocalAlloc's
- *   own flag validation) and `retf 4` -- two words, far.
+ *   session 40 the host can ask it: `KERNEL.5 LOCALALLOC` is, in krnl386.exe's
+ *   NE entry table (documented format), `FIXED, segment 1, offset 0x3ddb`, and
+ *   segment 1 is the code segment every WOW32 BOP arrives from -- so its runtime
+ *   address is `<the BOP's CS>:0x3ddb`, with no resolution machinery at all.
+ *   Called with the documented LocalAlloc(flags, cb) -- two words, far.
  */
 #define EM_SETHANDLE16  0x040C
 #define EM_GETHANDLE16  0x040D
 #define KRNL_LOCALALLOC_OFF 0x3ddb
-/* ★ AND ITS NEIGHBOURS, NAMED BY krnl386's OWN NON-RESIDENT NAME TABLE -- so
-     these are its names for its own ordinals, not a list from memory:
+/* ★ AND ITS NEIGHBOURS -- the names from krnl386.exe's non-resident name table,
+     the offsets from its NE entry table (both documented NE structures):
         5 LOCALALLOC   0x3ddb      7 LOCALFREE    0x3df7
         6 LOCALREALLOC 0x3e1f      8 LOCALLOCK    0x3e0b
                                    9 LOCALUNLOCK  0x3e55
-   Both of the ones used here disassemble to `push bp / mov bp,sp / mov bx,[bp+6]
-   / call 0x406f / ... / retf 2` -- one WORD argument, far, which is what
-   `LocalLock(HLOCAL)` and `LocalUnlock(HLOCAL)` take. */
-/* ★ And LocalReAlloc, from the same non-resident name table: `6 LOCALREALLOC`
-     at 0x3e1f. `HLOCAL LocalReAlloc(HLOCAL, WORD cbNew, WORD flags)` -- three
-     words, far, and SYSEDIT's own call site pushes them in exactly that order
-     (`push ax / push [bp-4]+1 / push 0x42` at seg3:0x0124), which is what pins
-     the argument order rather than a header. */
+   Called with the documented signatures: `LocalLock(HLOCAL)` and
+   `LocalUnlock(HLOCAL)` take one WORD, far;
+   `HLOCAL LocalReAlloc(HLOCAL, WORD cbNew, WORD flags)` three words, far --
+   the order SYSEDIT's own call passes them in (above). */
 #define KRNL_LOCALREALLOC_OFF 0x3e1f
 #define KRNL_LOCALLOCK_OFF   0x3e0b
 #define KRNL_LOCALUNLOCK_OFF 0x3e55
 /* ★ #160: the GLOBAL trio, from the same entry table (all FIXED, segment 1) and
      the same non-resident names -- 15 GLOBALALLOC, 18 GLOBALLOCK, 19 GLOBALUNLOCK
      -- cross-checked by the three Local* offsets above coming out of the same parse.
-     The bytes pin the frames: GlobalAlloc reads its flags at [bp+0x0a] (the first
-     argument, a WORD) above a DWORD size and ends `retf 6`; Lock and Unlock read one
-     WORD at [bp+6] and end `retf 2`. GlobalLock answers a far pointer in DX:AX. */
+     Documented frames: GlobalAlloc(WORD flags, DWORD cb); GlobalLock/GlobalUnlock
+     take one WORD. GlobalLock answers a far pointer in DX:AX. */
 #define KRNL_GLOBALALLOC_OFF  0x3ac3
 #define KRNL_GLOBALLOCK_OFF   0x3b10
 #define KRNL_GLOBALUNLOCK_OFF 0x3b63
 /* LMEM_MOVEABLE | LMEM_ZEROINIT -- the same flags SYSEDIT itself passes to
-   LocalReAlloc at `seg3:0x012a` (`push 0x42`), so the block it grows is the kind
-   it expects to be growing. */
+   LocalReAlloc, so the block it grows is the kind it expects to be growing. */
 #define LMEM_MOVEABLE_ZEROINIT 0x0042
 /* Small on purpose: the guest reallocs it to the file's size before using it, so
    anything bigger would be memory the application immediately replaces. */
@@ -1960,33 +1878,25 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 
 /* ── ★★★ NOTIFYWOW: "HERE IS A 16-BIT RESOURCE I HAVE JUST LOADED." ───────────
      Named by USER's own export table (`wowmap.py`: id 0x217, 6 argument bytes,
-     stub `seg1:0x12dd`, NOTIFYWOW) and pinned to the byte by its one caller,
-     which is USER's whole implementation of `LoadAccelerators`:
+     NOTIFYWOW). It arrives inside every guest `LoadAccelerators`, with kind 3
+     and a far pointer to a block describing the RT_ACCELERATOR resource USER
+     has just found, loaded and locked. Answered 0, LoadAccelerators returns
+     NULL (observed); answered non-zero, it returns the resource's own handle.
 
-       3dcc  push 0 / push 9      \
-       3dce  lcall FindResource   /  ★ lpType = 9 = RT_ACCELERATOR
-       3dde  lcall LoadResource      -> [bp-4] = hResData
-       3df4  lcall LockResource      -> [bp-0xc] = the bytes, 16:16
-       3e05  lcall SizeofResource    -> [bp-8]  = how many
-       3e10  push 3 / lea ax,[bp-0x10] / push ss / push ax
-       3e17  lcall <the 0x217 stub>  ★ THIS CALL
-       3e1c  or dx,ax / je 0x3e2a    -> 0 frees the resource and returns NULL
-       3e37  mov ax,[bp-4] / retf 6  ★ AND THE HANDLE IT RETURNS IS ITS OWN
-
-   ★ SO THE RETURN IS NOT A HANDLE. `seg1:0x3e37` hands the application
-     `[bp-4]` -- krnl386's global handle for the resource -- whichever way this
-     call goes. All this answer decides is whether LoadAccelerators SUCCEEDS.
+   ★ SO THE RETURN IS NOT A HANDLE. The application receives krnl386's global
+     handle for the resource (hResData below) whichever non-zero value this
+     answers. All this answer decides is whether LoadAccelerators SUCCEEDS.
      Returning a fabricated handle here would be inventing a value nobody reads;
      the honest answer is "noted", which is what the function's name says.
 
-   ── The 12-byte block at ss:[bp-0x10], every field from a store above ────────
-       +0x00 WORD  hInstance    ( [bp+0x0a], the caller's module )
-       +0x02 WORD  hResData     ( LoadResource's handle )
-       +0x04 DWORD lpResource   ( LockResource's 16:16 -- the bytes themselves )
-       +0x08 DWORD cbResource   ( SizeofResource )
+   ── The 12-byte block, as logged ─────────────────────────────────────────────
+       +0x00 WORD  hInstance    ( the caller's module )
+       +0x02 WORD  hResData     ( the resource's handle )
+       +0x04 DWORD lpResource   ( 16:16 -- the bytes themselves )
+       +0x08 DWORD cbResource   ( the resource's size )
 
-   ⚠⚠ AND lpResource IS STALE THE MOMENT WE RETURN. `seg1:0x3e23` calls
-     GlobalUnlock on the very next instruction, so a host that recorded that
+   ⚠⚠ AND lpResource IS STALE THE MOMENT WE RETURN. USER unlocks the resource
+     as soon as this call returns, so a host that recorded that
      pointer for a later TranslateAccelerator would be keeping an address the
      guest has already released -- an instrument that lies later, which is this
      project's most expensive shape. It is LOGGED, not kept. When accelerators
@@ -1994,18 +1904,18 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
      locked, or asked for again through FindResource/LoadResource. */
 #define WOWNOTIFY_ACCEL         3
 /* ── ⛔⛔⛔ wKind 4: USER'S START-UP CALL -- AND WHY NO WIN16 X BUTTON EVER WORKED. ──
-     (s88, user: "some close buttons (X) don't work") XP's DefWindowProc (USER.107,
-     seg1:0x1d5e) forwards to WOW32 0x6b through `seg1:0x03e8`, which first calls
-     `seg1:0x013c`: msg > WORD cs:[0x137] -> return 0; else bit (msg) of the bitmap
-     at cs:0x00d0 clear -> return 0. NOTHING IS FORWARDED UNLESS ITS BIT IS SET --
-     and in the FILE the maximum is 0 and all 0x65 bitmap bytes are zero. WOW32
-     fills them when USER's init (seg1:0x3c9e) calls NotifyWow(4, &block); this
+     (s88, user: "some close buttons (X) don't work") XP's 16-bit DefWindowProc
+     (USER.107) forwards a message to WOW32 0x6b only if the message is no
+     greater than a WORD maximum AND its bit is set in a message bitmap USER
+     keeps -- NOTHING IS FORWARDED UNLESS ITS BIT IS SET, and as shipped the
+     maximum is 0 and the bitmap is all zero. USER hands WOW32 pointers to both
+     at start-up through NotifyWow(4, &block), for the 32-bit side to fill. This
      host stepped that call over, so DefWindowProc reached us ZERO times in 16
-     shelf apps, and every app that leaves WM_CLOSE to DefWindowProc (Clock: its
-     dispatch has no 0x10 arm and falls to USER.107 at seg1:0x2161) could not end.
-   ★ The block (seg1:0x3c9e, read store by store): +0x0e/+0x10 far ptr to the WORD
-     maximum (cs:0x137), +0x12/+0x14 far ptr to the bitmap (cs:0x00d0), +0x16 its
-     byte count (cs:[0x135] = 0x65 -> messages 0..0x327).
+     shelf apps, and every app that leaves WM_CLOSE to DefWindowProc (Clock among
+     them) could not end.
+   ★ The block, as it arrives: +0x0e/+0x10 far ptr to the WORD maximum,
+     +0x12/+0x14 far ptr to the bitmap, +0x16 its byte count (0x65 -> messages
+     0..0x327).
    ⚠ ONLY MESSAGES THE 0x6b HANDLER CAN TAKE RAW. It passes wParam/lParam straight
      to DefWindowProcA; a message carrying a 16:16 pointer (WM_SETTEXT) or a GDI
      token (WM_ERASEBKGND's HDC) would hand Windows a value it cannot use. Each
@@ -2027,35 +1937,29 @@ static const WORD g_dwp_forward[] = {
 #define NOTIFY_CBRESOURCE       0x08
 
 /*
- * ── ★★★ CreateWindow's ARGUMENT BLOCK, READ OFF WOWEXEC'S OWN PUSHES ─────────
- * Not from a header, and not from the parameter order in the documentation: the
- * arg block grows the opposite way from the pushes, so "lpClassName is the first
- * parameter" says nothing about where it lands. The block base (bp+16) is the
+ * ── ★★★ CreateWindow's ARGUMENT BLOCK, CHECKED AGAINST WOWEXEC'S CALL ───────
+ * The arg block grows the opposite way from the pushes, so "lpClassName is the
+ * first parameter" says nothing about where it lands. The block base is the
  * LOWEST address, which holds the LAST word pushed -- so the parameter list is
  * reversed, and a DWORD's high word is at the LOWER offset because Pascal pushes
- * it first.
+ * it first. `USER.41 CREATEWINDOW` arrives with exactly 30 argument bytes.
  *
- * WOWEXEC's call site is `wowexec seg1:0x08b2`, and the fifteen pushes ahead of
- * it are exactly 30 bytes -- the `push 0x1e` the USER stub at `seg1:0x038d`
- * declares. Import-table resolution names it outright: `USER.41 CREATEWINDOW`.
+ *   +26/+28 lpClassName (far)  |  +14 y
+ *   +22/+24 lpWindowName (far) |  +12 nWidth
+ *   +18/+20 dwStyle            |  +10 nHeight
+ *   +16 x                      |  +8  hWndParent
+ *                              |  +6  hMenu
+ *                              |  +4  hInstance
+ *                              |  +0/+2 lpParam
  *
- *   push ds      -> +28 |  push 0x8000 -> +14 (y)
- *   push 0xae    -> +26 |  push 0x8000 -> +12 (nWidth)
- *   push [0x16]  -> +24 |  push 0x8000 -> +10 (nHeight)
- *   push [0x14]  -> +22 |  push 0      -> +8  (hWndParent)
- *   push 0x2cf   -> +20 |  push 0      -> +6  (hMenu)
- *   push 0       -> +18 |  push [0x206]-> +4  (hInstance)
- *   push 0x8000  -> +16 |  push 0 / push 0 -> +2/+0 (lpParam)
- *
- * ★ AND THE DATA CROSS-VALIDATES THE LAYOUT, which is why it is trusted:
- *     +26/+28  ds:0x00ae is the string "WOWExecClass" -- the class WOWEXEC has
- *              just registered (a second copy of the literal; the WNDCLASS used
- *              ds:0x0082, and both decode to the same name).
+ * ★ AND THE DATA WOWEXEC's CALL CARRIES CROSS-VALIDATES THE LAYOUT (as logged):
+ *     +26/+28  the string "WOWExecClass" -- the class WOWEXEC has just
+ *              registered (a second copy of the literal from the one in its
+ *              WNDCLASS; both decode to the same name).
  *     +18/+20  0x02CF0000 = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN. Read the other
  *              way round it would be 0x000002CF, which is not a window style.
  *     +10..+16 four copies of 0x8000 = CW_USEDEFAULT, exactly where x/y/w/h are.
- *     +4       [0x206], the SAME word WOWEXEC stored into WNDCLASS.hInstance at
- *              `seg1:0x0803`.
+ *     +4       the SAME word WOWEXEC put into WNDCLASS.hInstance.
  *   Four independent agreements. A wrong offset assignment produces none of them.
  */
 #define CW_ARG_LPPARAM      0
@@ -2097,7 +2001,7 @@ static const WORD g_dwp_forward[] = {
 
 /* ── TWO STYLE BITS, BELIEVED BECAUSE FOUR WINDOWS AGREE ──────────────────────
      WS_VISIBLE  `mpframe` (0x02cf0000) does NOT have it, and is the one window
-                 SYSEDIT calls ShowWindow on (`seg2:0x0149`). `MDICLIENT`
+                 SYSEDIT calls ShowWindow on (as logged). `MDICLIENT`
                  (0x42300000) and `EDIT` (0x513000c4) DO have it and are never
                  shown explicitly, yet both must be visible.
      WS_CHILD    `EDIT` and `MDICLIENT` have 0x40000000; `mpframe` does not.
@@ -2175,9 +2079,9 @@ static int             g_wu_nclass = 0;
  *
  * ★ AND THIS IS THE WALL THE FIRST 16-BIT CALLBACK UNCOVERED. With WM_CREATE
  *   delivered, SYSEDIT's frame procedure runs and does the one thing it exists
- *   to do -- `CreateWindow("MDICLIENT", ...)` at `sysedit seg1:0x01ca` -- and
- *   this host answered "no such class", because nothing had ever registered it.
- *   `[0x22]` stayed zero for a NEW reason, one step further on.
+ *   to do -- `CreateWindow("MDICLIENT", ...)` -- and this host answered "no such
+ *   class", because nothing had ever registered it. SYSEDIT's MDI client handle
+ *   stayed zero for a NEW reason, one step further on.
  *
  * ⚠ THE LIST IS WHAT THE RUN ASKED FOR, NOT A LIST OF SYSTEM CLASSES. Windows
  *   provides BUTTON, EDIT, STATIC, LISTBOX, COMBOBOX, SCROLLBAR and the numbered
@@ -2190,16 +2094,11 @@ static int             g_wu_nclass = 0;
  *   nothing to send it to. That is a stated gap, and it is the next thing an MDI
  *   application will feel: WM_MDICREATE has nowhere to go yet.
  */
-/* ⚠ `EDIT` IS HERE BECAUSE THE GUEST BINARY NAMES IT, not because it is on a
-     list of system classes. `sysedit seg1:0x0281` -- inside `mpchild`'s own
-     WM_CREATE handler, four instructions after the message dispatch reaches
-     msg == 1 -- pushes `ds:0x003a` as a CreateWindow class name, and segment 6
-     (SYSEDIT's DGROUP) holds `"edit"` at that offset in the file on disk. Two
-     more offsets from the same read confirm the reading rather than resting on
-     it: `ds:0x0030` is `"mdiclient"`, which the frame procedure creates and a
-     run has already been seen to ask for, and `ds:0x004a` is `"mpchild"`, which
-     is the class named in the MDICREATESTRUCT below. Reading the guest binary
-     is stronger evidence than waiting for the run line, not weaker. */
+/* ⚠ `EDIT` IS HERE BECAUSE THE GUEST NAMES IT, not because it is on a list of
+     system classes. SYSEDIT's `mpchild` creates a window of class `"edit"` in
+     its own WM_CREATE handler -- the string sits in SYSEDIT's DGROUP next to
+     `"mdiclient"` (which the frame procedure creates, as a run has shown) and
+     `"mpchild"` (the class named in the MDICREATESTRUCT below). */
 /* ⚠ `LISTBOX` JOINED THE LIST IN SESSION 53 BECAUSE A RUN NAMED IT, which is
      the rule two paragraphs up and not an exception to it: RECORDER.EXE stopped
      dead with `CreateWindow: no such class "ListBox"` and produced no window at
@@ -2348,10 +2247,9 @@ typedef struct wowuser_win_s {
     /* ── ★★★ THE WINDOW'S EXTRA BYTES -- cbWndExtra, AND THEY ARE LOAD-BEARING.
          Not storage for its own sake: SYSEDIT keeps its EDIT control's handle
          and its file state in them. `mpchild`'s WNDCLASS declares
-         `cbWndExtra = 8` (`sysedit seg2:0x0091 mov word [bp-0x14],8`, which is
-         +0x08 from the struct base at `bp-0x1c` -- the same read that puts
-         `"mpchild"` at +0x16, so the layout confirms itself), its WM_CREATE
-         writes indices 0/2/4/6, and it reads them back to address the control.
+         `cbWndExtra = 8` (as it arrives in RegisterClass, the same block that
+         carries `"mpchild"` at +0x16), its WM_CREATE writes indices 0/2/4/6, and
+         it reads them back to address the control.
          With no store behind them every read answered 0 and the run reached
          `SendMessage: no such window 0x0000 msg 0x040d` -- EM_SETHANDLE to a
          window handle the program had just been told to forget. */
@@ -2429,20 +2327,18 @@ static WORD wowuser_owner16(WORD hwnd)
 static WORD g_wu_krnl_seg = 0;
 
 /* ══ #308 (s91): SUBCLASSING. ═══════════════════════════════════════════════════════
-   ★ HOW XP'S OWN USER.EXE ANSWERS IT, READ OFF THE BINARY (guest/win16/user.exe).
-     It exports one tiny 16-bit procedure per system control -- EDITWNDPROC (301),
-     BUTTONWNDPROC (303), STATICWNDPROC (302), SBWNDPROC (304), LBOXCTLWNDPROC (307),
-     the combo box's (344), MDICLIENTWNDPROC (444) -- each 0x40 bytes of segment 1:
-         inc bp / push bp / mov bp,sp / push ds / mov ds,<DGROUP>
-         push <its own address>  push hwnd msg wParam lParam
-         call far CallWindowProc / ... / retf 0Ah
-         'SCLS' <class index>                               ; at +34h
-     i.e. "call CallWindowProc on MYSELF". That address is what GetWindowLong(
-     GWL_WNDPROC) hands a 16-bit program for a system control, so a subclass that
-     chains -- CallWindowProc(old, ...) or a direct far call to `old` -- lands in
-     USER's CallWindowProc with one of these as the procedure, and the WOW32 side
-     knows from it to call the real control. This host does the same:
-       GetWindowLong  -> USER seg1:<offset below> (signature checked first)
+   ★ THE SHAPE OF THE ANSWER. XP's USER.EXE exports one 16-bit procedure per
+     system control -- EDITWNDPROC (301), BUTTONWNDPROC (303), STATICWNDPROC (302),
+     SBWNDPROC (304), LBOXCTLWNDPROC (307), the combo box's (344), MDICLIENTWNDPROC
+     (444) -- at the segment-1 entry-table offsets in the table below. Calling one
+     behaves as CallWindowProc on ITSELF: it reaches us as CallWindowProc with its
+     own address as the procedure, and the 32-bit side knows from that to call the
+     real control. So that address is the right answer to GetWindowLong(
+     GWL_WNDPROC) for a system control: a subclass that chains --
+     CallWindowProc(old, ...) or a direct far call to `old` -- comes back here.
+     Each carries the marker bytes 'SCLS' and its class index at +0x34, which
+     this host checks before trusting the offset. This host:
+       GetWindowLong  -> that export's own 16:16 address (marker checked first)
        SetWindowLong  -> the real control is subclassed with wowuser_subproc, which
                          SENDS its input/focus messages to the guest's procedure
                          through the nested run (g_wu_call16, main.c)
@@ -3010,14 +2906,8 @@ static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
  * ── ★★★★★ THE CREATESTRUCT, AND IT WAS READ OFF A RUN, NOT A HEADER ─────────
  * WM_CREATE's lParam is an LPCREATESTRUCT. This host passed 0 and said so, and
  * that stayed harmless until MS PAINT: its canvas procedure GP-faults on the
- * spot, reading through the null pointer to find out how big it is. From
- * `nedis.py guest/win16/PBRUSH.EXE 3 0x0720`, with `es:bx` = lParam:
- *
- *     0746  mov es, dx            ; es:bx <- lParam
- *     0748  mov bx, ax
- *     074a  mov cx, es:[bx+0xc]   ; ★ THE FAULT -- CREATESTRUCT.cx
- *     074e  mov [0x4e0a], cx
- *     0752  mov cx, es:[bx+0xa]   ;   CREATESTRUCT.cy
+ * spot in WM_CREATE, reading through the null pointer at +0x0c (the host's
+ * fault frame: ES:BX = lParam = 0) -- CREATESTRUCT.cx, i.e. how big it is.
  *
  * ── ★★★ THE LAYOUT IS THE CreateWindow ARGUMENT BLOCK, UNCHANGED ────────────
  * Which is why this needs no header and no guesswork. Paint's own call carried
@@ -3027,11 +2917,11 @@ static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
  * cross-checked against the 30 bytes the stub declares -- read that as
  * lpParam@0, hInstance@4, hMenu@6, hwndParent@8, cy@10, cx@12, y@14, x@16,
  * style@18 (0x40b00000, exactly what the log printed), lpszName@22,
- * lpszClass@26 ("pbPaint"). Those are the CREATESTRUCT's members, in order, at
- * those offsets -- and PBRUSH reading cx at +0x0c and cy at +0x0a agrees with it
+ * lpszClass@26 ("pbPaint"). Those are the documented CREATESTRUCT's members, in
+ * order, at those offsets -- and PBRUSH faulting on cx at +0x0c agrees with it
  * independently. So the structure is the argument block COPIED, plus a
  * `dwExStyle` of 0 at +30 to make up the 34 bytes.
- * ⇒ Nothing here is taken on trust: two readings of two different binaries.
+ * ⇒ Nothing here is taken on trust: two independent observations agree.
  *
  * ⚠ CW_USEDEFAULT IS SUBSTITUTED, NOT COPIED. A guest may pass 0x8000 for any of
  *   x/y/cx/cy and then read the field expecting a number it can compute with --
@@ -3083,27 +2973,21 @@ static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
 }
 
 /*
- * ── ★★★ THE MDICREATESTRUCT, READ OFF SYSEDIT'S OWN STORES ───────────────────
- * `sysedit seg3:0x0046` builds one on its stack at `ss:[bp-0x1e]` and hands it
- * to `SendMessage(hwndMDIClient, WM_MDICREATE, 0, &it)` at `seg3:0x007e` --
- * `USER.111 SENDMESSAGE`, named from the relocation chain, not inferred. Every
- * offset below is a store in that window, so nothing here is taken from a
- * header:
+ * ── ★★★ THE MDICREATESTRUCT, CHECKED AGAINST WHAT SYSEDIT SENDS ─────────────
+ * SYSEDIT builds one on its stack and hands it to
+ * `SendMessage(hwndMDIClient, WM_MDICREATE, 0, &it)` (`USER.111 SENDMESSAGE`).
+ * The documented Win16 layout, each field confirmed by the values that arrive:
  *
- *   0046  mov [bp-0x1e],0x4a  / 004b mov [bp-0x1c],ds   -> +0x00 szClass  ds:0x4a
- *   0040  mov [bp-0x1a],ax    / 0043 mov [bp-0x18],ds   -> +0x04 szTitle
- *   004e  mov ax,[0x2e0] / 0051 mov [bp-0x16],ax        -> +0x08 hOwner
- *   0054  mov ax,0x8000  ... [bp-0x14]/[bp-0x12]/       -> +0x0a x   +0x0c y
- *                            [bp-0x10]/[bp-0x0e]        -> +0x0e cx  +0x10 cy
- *   0063  mov ax,[0x28] / mov dx,[0x2a] -> [bp-0xc]/[bp-0xa] -> +0x12 style DWORD
+ *   +0x00 szClass (far)    +0x0a x    +0x0c y    (CW_USEDEFAULT, 0x8000)
+ *   +0x04 szTitle (far)    +0x0e cx   +0x10 cy
+ *   +0x08 hOwner           +0x12 style DWORD
  *
- * ★ AND THE READING IS CONFIRMED FROM OUTSIDE THE CODE. `ds:0x004a` in
- *   SYSEDIT's DGROUP (segment 6, in the file on disk) is the string `"mpchild"`
- *   -- the class SYSEDIT registered two calls earlier. A wrong offset for
- *   szClass does not decode to a class this program has registered.
- * ⚠ THE STRUCT ENDS AT +0x16. The slot at `[bp-8]` is the SendMessage result,
- *   not a field, so `+0x16` (where a `lParam` member would sit) is NOT written
- *   by this program and must not be read.
+ * ★ szClass decodes to `"mpchild"` -- the class SYSEDIT registered two calls
+ *   earlier. A wrong offset for szClass does not decode to a class this program
+ *   has registered.
+ * ⚠ THE STRUCT ENDS AT +0x16. `+0x16` (where a `lParam` member would sit) is NOT
+ *   set by this program -- the stack word there holds unrelated data -- and must
+ *   not be read.
  */
 #define MCS_SZCLASS   0x00
 #define MCS_SZTITLE   0x04
@@ -4260,10 +4144,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     switch (f->id) {
 
     /* ── ★★★ 0x39 RegisterClass(const WNDCLASS FAR*) ──────────────────────────
-         Named by USER's own export table: ordinal 57 `REGISTERCLASS` is a wrapper
-         at seg1:0x1dbd that TAIL-JUMPS to the stub at seg1:0x0c18, and that stub
-         pushes id 0x39 with 4 argument bytes -- one far pointer. The caller tests
-         `or ax,ax`, so 0 is failure and any non-zero value is the class ATOM.
+         Named by USER's own export table: ordinal 57 `REGISTERCLASS` arrives as
+         id 0x39 with 4 argument bytes -- one far pointer. As documented, 0 is
+         failure and any non-zero value is the class ATOM.
        ★ REGISTERING IS REAL WORK, NOT A STUB. The window procedure, the class
          styles and the extra-bytes counts are what CreateWindow and DefWindowProc
          will need, and they are only available here -- the guest hands them over
@@ -4425,16 +4308,15 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     }
 
     /* ── ★★★ 0x29 CreateWindow(...) -- 30 argument bytes ──────────────────────
-         `USER.41 CREATEWINDOW`, named by resolving WOWEXEC's own import chain at
-         its call site rather than inferred: the stub at USER `seg1:0x038d`
-         pushes id 0x29 and `0x1e` argument bytes, and Win16's eleven parameters
-         come to exactly 30. The block layout is derived and cross-validated in
-         the comment on CW_ARG_* above.
+         `USER.41 CREATEWINDOW`, named by WOWEXEC's NE import relocations rather
+         than inferred: it arrives as id 0x29 with `0x1e` argument bytes, and
+         Win16's eleven parameters come to exactly 30. The block layout is
+         derived and cross-validated in the comment on CW_ARG_* above.
        ★ AN UNREGISTERED CLASS MUST FAIL. Real Windows returns NULL, and a host
          that made a window for any name at all would hide a broken RegisterClass
          behind a working CreateWindow -- the "runs but lies" class.
-       ⚠ The caller tests `or ax,ax / je`, so 0 is the failure the guest expects
-         and any non-zero value is taken as the window handle. */
+       ⚠ As documented, 0 is the failure the guest expects and any non-zero value
+         is taken as the window handle. */
     case WOWUSER_CREATEWINDOW:
     case WOWUSER_CREATEWINDOWEX: {
         DWORD clsfp = wow32_argd(f, CW_ARG_CLASSNAME);
@@ -4602,10 +4484,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         /* ── ★★★★★ AND NOW SEND IT WM_CREATE. (GH #128, session 40) ───────────
              This is the whole point of the window, and until this session it was
              the one thing this host had never done in either direction. SYSEDIT's
-             frame procedure creates its MDI client while handling WM_CREATE
-             (`sysedit seg1:0x01ca`, then `mov [0x22],ax`), and `[0x22]` is what
-             `seg2:0x0114` tests before deciding whether it has a usable window.
-             So a CreateWindow that does not send WM_CREATE is not a window that
+             frame procedure creates its MDI client while handling WM_CREATE and
+             keeps the handle; without it, it decides it has no usable window
+             (observed). So a CreateWindow that does not send WM_CREATE is not a window that
              is missing a message -- it is a window the application will correctly
              refuse to use.
            ★ THE PROCEDURE IS THE WINDOW'S, NOT THE CLASS'S. Win16 copies
@@ -4613,8 +4494,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              exists; sending to the class would be wrong the moment anything
              subclasses.
            ★ AND DS IS THE WINDOW'S hInstance. sysedit.exe is MULTIPLEDATA, so its
-             exported prologue is the unpatched `push ds / pop ax`, which takes DS
-             from its caller -- see the contract in wowcall.h. `hinst` is the same
+             exported procedures take DS from their caller (the standard Win16
+             exported-function convention) -- see the contract in wowcall.h. `hinst` is the same
              word the program put in WNDCLASS.hInstance and passed to
              CreateWindow, so it is the guest's own statement about its data
              segment rather than ours.
@@ -5004,21 +4885,15 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              message loop. Nothing was stepped over afterwards, so nothing was
              waiting on us; there was simply no ShowWindow for the dialog
              ITSELF anywhere in the run, on either side.
-           ★★★★★ SETTLED, session 56, by doing exactly what the note below used
-             to prescribe -- disassembling USER.EXE at the call site. It serves
-             BOTH, and the argument at OFFSET 0 IS THE MODAL FLAG:
-
-               CreateDialog  seg1:0x4bd5  push 0   / lcall 0x047b:0x4c48
-               DialogBox     seg1:0x4d0c  push 1   / lcall 0x047b:0x4d97
-
-             Same thunk, and the LAST word pushed -- which is arg offset 0 --
-             is 0 for the modeless family and 1 for the modal one. Session 55
+           ★★★★★ SETTLED, session 56: this one thunk serves BOTH, and the
+             argument at OFFSET 0 IS THE MODAL FLAG -- 0 for the modeless family
+             (CreateDialog*) and 1 for the modal one (DialogBox*). Session 55
              recorded that field as "+0 still unexplained (0 in every run)"; it
              was 0 in every run because every guest measured then (CALC,
              SOUNDREC, TERMINAL) uses CreateDialog. USER.87 DIALOGBOX and
-             USER.89 CREATEDIALOG are thin argument shufflers onto 0x4c80 and
-             0x4b4a respectively, and BOTH return immediately after the thunk --
-             so the modal message loop is not in USER's 16-bit code. IT IS OURS.
+             USER.89 CREATEDIALOG BOTH return to their caller as soon as this
+             thunk is answered (observed: TASKMAN, below) -- so the modal message
+             loop is not in USER's 16-bit code. IT IS OURS.
            ⚠⚠ AND WE DO NOT RUN ONE, WHICH IS WHY A MODAL DIALOG ENDS ITS
              PROGRAM. DialogBox's whole contract is that it does not return
              until EndDialog; we create the dialog and return at once, so a
@@ -5104,8 +4979,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                            " FULL; returning immediately.");
             } else {
                 f->modaldlg = 1;
-                /* s89: the frame's +6 DWORD is DialogBoxParam's lParam -- USER's
-                   shared routine seg1:0x4b4a pushes it there (0 for DialogBox). */
+                /* s89: the frame's +6 DWORD is DialogBoxParam's lParam (it arrives
+                   as 0 for plain DialogBox). */
                 wowdlg_set_init(wow32_argd(f, 6), firstfocus);
                 wu_puts(note, notecap, &k, " -- ★ MODAL: the caller is PARKED here"
                                            " and does not resume until EndDialog."
@@ -5138,8 +5013,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              so USER does pass it sometimes.
            ⚠ AND THE SENTENCE THAT USED TO END THIS PARAGRAPH WAS WRONG: "we do
              not need it, because USER runs the dialog's own message loop and
-             calls the procedure itself". USER does neither -- session 56 read
-             both exports and they return immediately -- and a `#32770` dialog
+             calls the procedure itself". USER does neither -- session 56 showed
+             both exports return immediately -- and a `#32770` dialog
              has no other procedure, so dlgproc is the ONLY way to drive one. It
              is now kept on the window. */
         wu_puts(note, notecap, &k, " [tmpl_len=0x");
@@ -5163,8 +5038,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              lParam 0, as the modal loop sends it (CreateDialogParam's value is not
              pinned in this frame yet). */
         if (!modal && f->cbok && w->hwnd32 && wowuser_winproc_of(w)) {
-            /* lParam: CreateDialogParam's value, the frame's +6 DWORD -- USER's shared
-               routine (seg1:0x4b4a) pushes it there; plain CreateDialog pushes 0.
+            /* lParam: CreateDialogParam's value, the frame's +6 DWORD; it arrives as
+               0 for plain CreateDialog.
                ⛔ Passing 0 to a CreateDialogParam caller HID Sound Recorder: it reads
                its show state from it and called ShowWindow(SW_HIDE). */
             WORD r16 = 0, saveh = g_wu_initdlg_hwnd;
@@ -5409,20 +5284,19 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_pokew(mx, top);
             wu_puts(note, notecap, &k, "max=0x"); wu_puthex(note, notecap, &k, top, 4);
             wu_puts(note, notecap, &k, " cb=0x"); wu_puthex(note, notecap, &k, cb, 4);
-            /* ⚠ 0, DELIBERATELY. USER stores the answer at [0x158] (seg1:0x3cfe) and,
-                 if it is non-zero, runs seg1:0x6947 -- which PATCHES USER'S OWN CODE,
-                 writing a `jmp` at each site of a (from,to) table at ds:0xaa..0xda.
-                 Whether real WOW32 asks for that is not read yet, and the stepped-over
-                 call has always answered 0, so those patches have never run here.
-                 Only the table changes in this step. */
+            /* ⚠ 0, DELIBERATELY. USER keeps this answer, and a non-zero one switches
+                 USER onto a different internal path at start-up (it modifies its
+                 own code). Whether real WOW32 asks for that is not measured yet, and
+                 the stepped-over call has always answered 0, so that path has never
+                 run here. Only the table changes in this step. */
             wow32_setret(f, 0);
             return 1;
         }
-        /* ── s92 (#306): kind 6 -- "where is the window of this CLASS?", from USER's
-             WinHelp() (seg1:0x6d97: `push 6 / push cs / push 0x6c59` = "MS_WINHELP").
-             The caller reads DX:AX: DX non-zero = found, and AX is the window it then
-             SENDS the registered WM_WINHELP to (seg1:0x6db7). Stepped over it answered 0,
-             so Help said "Not enough memory available" with WinHelp's window open. */
+        /* ── s92 (#306): kind 6 -- "where is the window of this CLASS?", arriving
+             from a guest's WinHelp() with the class name "MS_WINHELP" (as logged).
+             The answer is DX:AX: DX non-zero = found, and AX is the window the
+             registered WM_WINHELP is then SENT to. Stepped over it answered 0, so
+             Help said "Not enough memory available" with WinHelp's window open. */
         if (kind == 6 && b) {
             char cls[64];
             DWORD fp = wow32_argd(f, NOTIFY_ARG_BLOCK);
@@ -5450,7 +5324,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, (DWORD)wowuser_peek(b, NOTIFY_CBRESOURCE)
                   | ((DWORD)wowuser_peek(b, NOTIFY_CBRESOURCE + 2) << 16), 8);
         /* Non-zero is "noted"; the handle the application gets is the guest's
-           own (seg1:0x3e37). 1 rather than a number that looks like a handle,
+           own resource handle. 1 rather than a number that looks like a handle,
            so nothing downstream can mistake it for one. */
         wow32_setret(f, 1);
         return 1;
@@ -5458,13 +5332,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★★★★★ 0x6c GetMessage / 0x6d PeekMessage -- THE LOOP TURNS ───────────
          The host's job here is exactly to FILL AN 18-BYTE STRUCTURE. It does not
-         dispatch anything, because USER.EXE's own 16-bit `DispatchMessage` walks
-         the MSG and makes the call itself -- see the note at the top of
-         src/wow/wowmsg.h, where both the layout and that fact are read out of
-         `user.exe seg1:0x1c37`.
+         dispatch anything: `DispatchMessage` is a separate call -- see the note at
+         the top of src/wow/wowmsg.h for the layout and the loop.
 
-       ★ THE RETURN VALUES ARE READ OFF THE CALL SITE, NOT FROM A HEADER.
-         `sysedit seg1:0x0112 or ax,ax / jne 0x00c6`: non-zero keeps the loop, and
+       ★ THE RETURN VALUES, AS DOCUMENTED AND AS SYSEDIT'S LOOP USES THEM:
+         non-zero keeps the loop, and
          **0 is WM_QUIT**. So 0 is not "nothing to report" -- there is no such
          answer to GetMessage, which blocks -- it is "this application is over".
          PeekMessage's 0 IS "nothing to report", and that is the whole difference
@@ -6022,10 +5894,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          Both go straight to the OS, because the window is the OS's. That is the
          whole difference between this and the version of this host that drew its
          own frames: there is nothing here to decide.
-       ★ THE ARGUMENTS ARE CONFIRMED BY THE RUN: `(0x0005 0x0160)` from
-         `sysedit seg1:0x01da` -- the MDI client, from inside the frame's
-         WM_CREATE -- and `(0x0001 0x0140)` from `seg2:0x0149`, the frame window,
-         from WinMain. So `+0` is nCmdShow and `+2` is hWnd.
+       ★ THE ARGUMENTS ARE CONFIRMED BY THE RUN: `(0x0005 0x0160)` -- the MDI
+         client, from inside the frame's WM_CREATE -- and `(0x0001 0x0140)`, the
+         frame window, from WinMain. So `+0` is nCmdShow and `+2` is hWnd.
        ★ AND THE `1` IS OUR OWN VALUE COMING BACK: WinMain's `nCmdShow` is what
          this host put in the WOW command structure (`WOWCMD_NCMDSHOW`), handed to
          the application at launch and handed straight back here.
@@ -6473,7 +6344,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     /* ── 0x16 SetFocus(hWnd) ───────────────────────────────────────────────────
          Implemented because a keystroke has to be ADDRESSED, and Win16 addresses
          it to the focus window. SYSEDIT calls this once per MDI child it builds
-         (`sysedit seg1:0x02d8`), so the target of a key is the guest's own
+         (as logged), so the target of a key is the guest's own
          decision rather than a choice this host makes.
        ⚠ An unknown handle is refused rather than recorded: focus on a window we
          never made would send every later key into nothing, silently. */
@@ -7083,7 +6954,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     /* ⛔ #161: `case WOWUSER_ISWINDOW:` USED TO SIT HERE, and s53 inserted the
          ArrangeIconicWindows case between it and its body -- so every IsWindow was
          answered by ArrangeIconicWindows (0 for a non-minimised window). Paint's
-         WM_SIZE handler re-lays out only `if (IsWindow(canvas))` (pbrush seg3:0x1138),
+         WM_SIZE handling re-lays out only when IsWindow(canvas) is TRUE,
          so its canvas kept the whole client, on top of the toolbox: clicks on the
          tools drew on the canvas and resizing moved nothing. The label now sits on
          the IsWindowVisible case below, which was always written for both ids. */
@@ -7400,10 +7271,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ⛔ 0x24 GetWindowText(hWnd, lpString, nMaxCount) -- SOUND RECORDER'S BLANK
          LABELS. (user, s88: "Sound Recorder is half working: UI shows, but no text")
-         USER.36 is a WOW32 stub in XP's USER.EXE (seg1:0x0932, 8 arg bytes) and was
-         never implemented: SOUNDREC calls it at seg1:0x241b for each of its controls
-         and draws what it gets back -- nothing, ten times a run. Arguments read off
-         that call (reversed as always): +0 nMaxCount (0x80), +2/+4 lpString,
+         USER.36 thunks to us (8 arg bytes) and was never implemented: SOUNDREC
+         calls it for each of its controls and draws what it gets back -- nothing,
+         ten times a run. Arguments as logged (reversed as always): +0 nMaxCount
+         (0x80), +2/+4 lpString,
          +6 hWnd. The copy is bounded by the guest's own nMaxCount, NUL included. */
     case WOWUSER_GETWINDOWTEXT: {
         WORD hwnd = wow32_argw(f, GWT_ARG_HWND);
@@ -9545,9 +9416,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     }
 
     /* ── ★★ EndDialog(hDlg, nResult) ────────────────────────────────────────
-       ⚠⚠ WHAT ENDS HERE IS THE WINDOW, AND POSSIBLY NOT THE LOOP. USER's
-         `DialogBox` is 16-bit code (entry seg1:0x208e) and runs its own modal
-         message loop; on real WOW this call tells the 32-bit side to end a real
+       ⚠⚠ WHAT ENDS HERE IS THE WINDOW, AND POSSIBLY NOT THE LOOP. (An early
+         note, superseded by wowdlg.h: it assumed USER's 16-bit `DialogBox` ran its
+         own modal message loop.) On real WOW this call tells the 32-bit side to end a real
          dialog and the loop notices. Our "dialog" is a plain window that USER
          built by calling CreateWindow through this host, so Win32's EndDialog
          has nothing to end -- it is called anyway, because if the window ever IS
@@ -9598,21 +9469,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★★★★★ 0x6b DefWindowProc -- AND USER.107 IS *NOT* PURELY 16-BIT. ────
        ⚠⚠ **A NOTE EARLIER IN THIS FILE SAID THE OPPOSITE AND IT IS CORRECTED
-         HERE.** It read USER.107's first bytes (`55 8b ec 68 86 1d …`), saw
-         ordinary 16-bit code rather than a stub, and concluded "USER implements
-         it ITSELF". The prologue is 16-bit; the FUNCTION is not:
-
-           user seg1:0x1d5e  push bp / mov bp,sp / push 0x1d86   ; its return stub
-                             push the five arguments
-                 0x1d73      lcall 0x1d37:0x38fe                 ; USER's own half
-                 0x1d78      or ax,ax / jne 0x1d81
-                 0x1d7c      pop bx / pop bp / cdq / jmp bx      ; handled -> return
-                 0x1d81      pop dx / pop bp / jmp 0x03e8        ; NOT handled ->
-                 0x03e8      call 0x013c
-                             push 0xa / push 0 / push 0x6b       ; ← WOW32, id 0x6b
-
-         So USER answers what it can in 16-bit code and **forwards the rest to
-         us**, and everything it forwarded has been getting the harness sentinel.
+         HERE.** It saw that USER.107 does not thunk directly and concluded "USER
+         implements it ITSELF". It does so only in part: USER answers what it can
+         in 16-bit code and **forwards the rest to us** as id 0x6b, 10 argument
+         bytes (which messages, see WOWNOTIFY_USERINIT), and everything it
+         forwarded had been getting the harness sentinel.
        ⇒ The evidence that supported the old note -- "a whole run of Notepad never
          produced one as a BOP" -- was true and did not mean what it was taken to
          mean: it showed that USER's own half had handled everything Notepad
@@ -9638,10 +9499,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wow32_setret(f, 0);
         return 1;
     }
-    /* ── 0x140 SysErrorBox(lpszText, lpszCaption, btn1, btn2, btn3) -- USER.320. krnl386's
-         GP-fault handler (seg1:0x326c) puts up "Application Error" with btn2 = SEB_CLOSE |
-         SEB_DEFBUTTON, then `cmp ax,1 / je` resumes (button 1) and anything else ends the
-         task. The answer is the 1-based index of the button pressed. Stepped over it
+    /* ── 0x140 SysErrorBox(lpszText, lpszCaption, btn1, btn2, btn3) -- USER.320. When a
+         task GP-faults, krnl386 puts up "Application Error" with btn2 = SEB_CLOSE |
+         SEB_DEFBUTTON (as logged); an answer of 1 resumes the task and anything else
+         ends it. The answer is the 1-based index of the button pressed. Stepped over it
          answered 0: the task ended with no box at all. Win32 has no SysErrorBox, so the
          OS's MessageBox stands in: one button -> OK, two -> OK/Cancel, three ->
          Abort/Retry/Ignore, each mapped back to the index of the button it replaces. */
@@ -9911,7 +9772,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          hundred lines of identical shape.
        ⚠ `GetKeyState` returns the state at the last message retrieved, NOT the
          live keyboard -- and that is the right one: MS Paint tests the high bit
-         (`and ax,0x8000` at seg3:0x1346) to decide whether SHIFT constrains the
+         to decide whether SHIFT constrains the
          shape it is drawing, and it must be the SHIFT that was down when the
          mouse message was posted, not whenever the guest got round to asking. */
     case WOWUSER_GETKEYSTATE:

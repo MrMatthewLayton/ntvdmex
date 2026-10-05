@@ -44,18 +44,17 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
 /* ===========================================================================
  * NtVdmControl(VdmInitialize) -- register this process as a VDM with the kernel
  * (sets TEB.Vdm + trap/ICA handlers) so GetNextVDMCommand stops returning 0x57,
- * and so VdmStartExecution can run the guest. Contract from ntvdm 0xf00e668.
+ * and so VdmStartExecution can run the guest. Contract as stock ntvdm uses it.
  * ======================================================================== */
 #define VDM_SVC_VdmInitialize     3
 #define VDM_SVC_VdmStartExecution 0   /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
 /* VdmQueueInterrupt -- the ASYNC preemption lever (RE'd from XP ntoskrnl this session;
    see docs/research/dpmi-under-ntvdmcontrol.md). ServiceData is NOT a pointer: it is a
-   THREAD HANDLE, passed straight to ObReferenceObjectByHandle(h, 0x40, PsThreadType).
-   The target thread must be in the calling process and the process must be a VDM
+   THREAD HANDLE. The target thread must be in the calling process and the process must be a VDM
    (EPROCESS.VdmObjects set by VdmInitialize). The kernel then queues an APC to that
    thread, which is what breaks a guest out of V86 execution without waiting for it to
    trap -- the one thing our in-process exec loop could not do (session 10's blocker).
-   The APC's kernel routine consults the FIXED_NTVDMSTATE pending bits at [0x714]:
+   What it delivers is decided by the FIXED_NTVDMSTATE pending bits at [0x714]:
    bit 0 = VDM_INT_HARDWARE (kernel dispatches via its virtual ICA), bit 1 =
    VDM_INT_TIMER. Returns STATUS_INVALID_PARAMETER_1 (0xC00000EF) if the thread is not
    ours or the process was never VdmInitialize'd. */
@@ -72,8 +71,8 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * these user-mode structures and the kernel emulates the PIC in them: it is what
  * VdmQueueInterrupt's APC consults to decide WHICH vector a pending hardware
  * interrupt becomes, and it is the only path by which the kernel will inject an
- * interrupt into a guest that is not trapping. Layout recovered this session from
- * ntoskrnl VdmpGetPendingLine (0x56d6ce) and VdmpDispatchInterrupts (0x56df13):
+ * interrupt into a guest that is not trapping. The layout, and how the kernel
+ * treats it (Kernel RE sessions; confirmed by delivery on the rig):
  *
  *   deliverable = IRR & ~(IMR | delayed);  blocked by any bit set in ISR
  *   vector      = ICA_BASE + line;  lines are scanned from ICA_HIPRI (rotation)
@@ -108,14 +107,14 @@ typedef struct {            /* VDM_INITIALIZE_DATA */
 typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
 
 /* RegisterConsoleVDM (kernel32) -- register as the console VDM with CSRSS. 11
-   args, matching ntvdm's call at 0xf014078; DOS passes flag 1 and 0 for the
+   args, as stock ntvdm calls it; DOS passes flag 1 and 0 for the
    video-state buffer/size (args 8,9). */
 typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
             DWORD, PVOID, PVOID, PVOID, DWORD, PVOID, PVOID);
 
 /* ===========================================================================
- * V86 low-memory address space (ntvdm fn 0xf00ea75, runs right before
- * VdmInitialize -- without it VdmInitialize access-violates). Create a section,
+ * V86 low-memory address space (set up right before VdmInitialize -- without it
+ * VdmInitialize access-violates). Create a section,
  * release the default low reservations, then map the section X-RW into low memory.
  * ======================================================================== */
 typedef struct {                /* OBJECT_ATTRIBUTES (24 bytes) */
@@ -173,9 +172,8 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_EFLAGS_V86    0x20202
 /* EFLAGS.VIF (bit 19) -- the VIRTUAL interrupt flag. On a VME-capable CPU (every box
    we target) the kernel's "can I deliver a hardware interrupt to this VDM right now?"
-   test reads VIF, NOT IF: VdmpCanDeliver (ntoskrnl 0x56dce0) branches on
-   KeI386VirtualIntExtensions and, for a V86 frame with VME on, returns
-   (EFlags & 0x80000) != 0. A guest started with IF=1 but VIF=0 therefore looks to the
+   test reads VIF, NOT IF: with VME on, a V86 frame counts as interruptible only
+   when EFlags & 0x80000 is set. A guest started with IF=1 but VIF=0 therefore looks to the
    kernel like interrupts are disabled forever, so its interrupt-assist never delivers
    and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed. */
 #define EFLAGS_VIF_BIT     0x80000
@@ -185,11 +183,10 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    gate are all IOPL-sensitive and raise #GP -- and a raw protected-mode #GP is the one
    fault XP will not reflect to us, so the kernel silently terminates the whole VDM. No
    VEH exception, no trampoline catch, the log just stops.
-   Session 17 measured it exactly: Doom's DOS/4GW returns from an INT 31h 000C wrapper
-   into
-       push ss / pop ss / mov edi,edx / cmc / mov ax,0 / rcl ax,1 / STI / jmp cx
-   and a breakpoint planted on that STI FIRED -- proving the client got there -- after
-   which letting the single displaced byte execute killed the run every time.
+   Session 17 measured it exactly: Doom's DOS/4GW executes an STI a few instructions
+   after returning from an INT 31h 000C wrapper, and a breakpoint planted on that STI
+   FIRED -- proving the client got there -- after which letting the single displaced
+   byte execute killed the run every time.
    ► THE OBVIOUS FIX DOES NOT WORK, AND THAT IS MEASURED, NOT ASSUMED. Setting IOPL=3
      here (0x03202) changes nothing: the kernel SANITISES IOPL out of the context it
      loads. Across a whole Doom run the live EFLAGS the guest reported were 0x...0296,
@@ -209,8 +206,8 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
                                          is 0 because the kernel strips anything else */
 #define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 /* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.
-   getMSW (ntvdm 0xf0041b5) reads word[TIB+0x668]; fcn.0f00532e gates PM-vs-V86 on
-   its PE bit. Setting PE marks the client as in protected mode. */
+   Stock keeps it at TIB+0x668 and decides PM-vs-V86 on its PE bit. Setting PE
+   marks the client as in protected mode. */
 #define VTIB_MSW           0x668
 #define MSW_PE_BIT         0x0001     /* CR0.PE                                    */
 
@@ -225,7 +222,7 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 /* V86 stop/event reporting in the VDM_TIB, read after VdmStartExecution returns. */
 #define VTIB_EVENT       0x5A8       /* event code (VDM_EVENT_BOP = serviceable BOP) */
 #define VTIB_EVENT_INFO  0x5B0       /* extra info for fault events                 */
-/* Event taxonomy (kernel -> host, ntvdm dispatch table 0xf064a60, index=VTIB_EVENT):
+/* Event taxonomy (kernel -> host, by VTIB_EVENT value):
    0 = I/O port access (IOPL-0 IN/OUT trap); 1,3 internal; 2 = GP fault; 4 = BOP/
    software dispatch; 5 = terminate; 6 = hardware IRQ; >=7 exits the loop.
    [VM-confirmed 2026-06-07] Under QEMU+HVF an IOPL-0 `OUT 0x43,al` stops with
@@ -247,15 +244,13 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VDM_EVENT_HWIRQ   6
 
 /* --- PM-fault reflect block (GH #18, real-CPU protected mode) --------------------------
-   When a raw (non-BOP) protected-mode #GP faults, the kernel's reflect path
-   (KiTrap0D -> 0x565041[BOP-only] -> 0x4f67f8 -> 0x4f6f67 -> PM branch 0x4f6fed ->
-   0x4f6e6f) reflects the fault through this VDM_TIB block, recovered by disassembling
-   ntoskrnl.exe 0x4f6e6f (Kernel RE sessions 4-7). The writer receives edi = VDM_TIB+0x634
-   and, when the nest counter is 0, saves the interrupted CS/EIP and installs the handler
-   selector as the new CS with EIP=0x1000:
+   When a raw (non-BOP) protected-mode #GP faults, the NT kernel reflects the fault
+   through this VDM_TIB block (Kernel RE sessions 4-7, confirmed by the behaviour
+   below on the rig): when the nest counter is 0 it saves the interrupted CS/EIP and
+   resumes the guest at the handler selector with EIP=0x1000:
      +0x634 word  nesting counter -- MUST be 0 for the "first level, save CS:EIP" path;
                   the kernel inc's it, so the host re-arms it to 0 before each PM entry.
-     +0x636 word  16/32-bit client flag (ntvdm arm routine 0xf050ad7 -> [0xf09c178]).
+     +0x636 word  16/32-bit client flag (stock ntvdm arms it per client).
      +0x638 word  handler selector -- the kernel loads this as the new CS.
      +0x63a word  saved faulting CS   (kernel writes).
      +0x63c dword saved faulting EIP  (kernel writes).

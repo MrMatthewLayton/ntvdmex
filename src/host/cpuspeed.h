@@ -108,7 +108,7 @@ static int cpuspeed_available(unsigned idx, unsigned host_mhz)
      ⚠ MEASURED, NOT GUESSED, and re-measurable in one run: cpubench.asm reports
        iterations of a 12-cycle-on-a-486 loop per second, and MHz = 12 x that / 1e6.
        If the number below and a fresh run of that probe disagree, the probe wins.
-     ★ 3661 is the bare-metal rig (192.168.1.29), measured 2026-09-06:
+     ★ 3661 is the project's bare-metal test machine, measured 2026-09-06:
        620,007,424 iterations in 37 BIOS ticks. It is THAT BOX'S number and nobody
        else's -- which is the entire reason cpuref.txt exists.
      ⚠ It is also a FILE KNOB (cpuref.txt on the share) so the rig can be re-

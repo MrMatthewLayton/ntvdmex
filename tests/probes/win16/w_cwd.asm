@@ -81,8 +81,8 @@ D_DIR           equ 0x60                ; 64 bytes: AH=47h's answer
 ; ════════════════════════════════════════════════════════════════════════════
 start:
 ; ── InitTask IS THE FIRST INSTRUCTION AFTER THE FRAME TERMINATOR. ────────────
-;   TASKMAN does `xor bp,bp / push bp / lcall InitTask` with nothing in between,
-;   and InitTask hands back the register state the loader set up (CX stack size,
+;   A Win16 task's documented start-up calls InitTask first, with a zero frame
+;   pointer pushed as the frame terminator and nothing in between; InitTask hands back the register state the loader set up (CX stack size,
 ;   SI hPrevInstance, DI hInstance, BX:ES command line, DX nCmdShow). Keeping
 ;   that order costs nothing and matches the only working example we have.
 ;

@@ -263,13 +263,11 @@ static int x86_is_insn_start(const unsigned char *b, unsigned off, unsigned n, i
  *       false reject -> one extra #GP, serviced, then patched correctly and for good
  *   and the rule must follow the premise: WHEN IN DOUBT, REJECT.
  *
- * ► WHAT FORCED IT (session 39, GH #128).  krnl386 seg1 has, at 0x2051:
- *       3a cd     cmp cl,ch
- *       75 50     jne +0x50
- *   The `cd 75` spanning those two instructions is not an instruction; the vote for
- *   starting at 0x2052 failed, the owner was correctly named as the `cmp` -- and the
- *   `cmp` is not a relative branch, so the old rule KEPT it.  `cd 75` became `c4 c4`,
- *   krnl386's `jne` became `les dx,[bx+si+0x0b]`, and WOWEXEC died with
+ * ► WHAT FORCED IT (session 39, GH #128).  A `cmp cl,ch` (3a cd) followed by a
+ *   `jne` (75 xx) in krnl386's code: the `cd 75` spanning the two is not an
+ *   instruction; the vote for starting at the `cd` failed, the owner was correctly
+ *   named as the `cmp` -- and the `cmp` is not a relative branch, so the old rule
+ *   KEPT it.  `cd 75` became `c4 c4`, the `jne` became an `les`, and WOWEXEC died with
  *   "General Protection Fault in module KRNL386.EXE at 0001:2053" the moment it tried
  *   to launch an application.  Found by the method that found Doom's: when a guest
  *   dies at an address, diff the bytes there against the file on disk -- one byte

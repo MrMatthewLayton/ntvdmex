@@ -82,10 +82,9 @@ start:
         mov     si, [__bx]
         sub     si, 2                   ; the first MCB word lives BEFORE the pointer
         mov     di, sbuf
-        ; ★ 0x62, NOT 0x42. MEM.EXE reads SysVars+0x45 and skips its entire
-        ; extended-memory report when that word is zero (GH #47, disassembled:
-        ; 07B5 cmp word [es:bx+0x45],0 / jz 0x907). The old 0x42 stopped at
-        ; SysVars+0x3F -- six bytes short of the field that decides it.
+        ; ★ 0x62, NOT 0x42. MEM.EXE skips its entire extended-memory report
+        ; when the word at SysVars+0x45 is zero (GH #47). The old 0x42 stopped
+        ; at SysVars+0x3F -- six bytes short of the field that decides it.
         ; ★ 0x72 (s81, #47): MEM /C walks the UPPER-memory chain from SysVars+0x66,
         ; which 0x62 stopped four bytes short of.
         mov     cx, 72h

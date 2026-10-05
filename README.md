@@ -134,7 +134,8 @@ with **[`docs/STATE.md`](docs/STATE.md)** to see where things stand, then:
 ReactOS (DOS/VDD/WOW logic), Linux `dosemu` (the closest V86-via-kernel analog), DOSBox /
 86Box (device behaviour), and disassembly of the shipping XP binaries (the only ground truth
 for the `NtVdmControl` contract). See
-[`docs/reference-projects.md`](docs/reference-projects.md).
+[`docs/reference-projects.md`](docs/reference-projects.md), and
+[`CLEAN-ROOM.md`](CLEAN-ROOM.md) for what may and may not enter the repository.
 
 ## License
 

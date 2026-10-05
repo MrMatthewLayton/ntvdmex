@@ -6,12 +6,11 @@
  * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
  * Everything this host has ever done to a Win16 guest has been in one
  * direction: the guest calls out through a BOP, we answer, it carries on.
- * Session 39 ended on the other direction, named to the instruction.
- * `sysedit seg2:0x0114` gives up because `[0x22]` -- its MDI client window --
- * is zero, and `[0x22]` has exactly one writer, at `sysedit seg1:0x01cf`,
- * INSIDE the frame's own window procedure while it handles WM_CREATE. Our
- * CreateWindow returns a handle without ever calling that procedure, so the
- * field stays zero and WinMain correctly gives up.
+ * Session 39 ended on the other direction. SYSEDIT gives up in WinMain because
+ * it has no MDI client window, and that window is created INSIDE the frame's
+ * own window procedure while it handles WM_CREATE. Our CreateWindow returned a
+ * handle without ever calling that procedure, so there was no client and
+ * WinMain correctly gave up.
  *
  * ⇒ The missing thing is not a service. It is a DIRECTION.
  *
@@ -28,24 +27,16 @@
  *      app -> USER stub -> krnl386's thunk -> BOP, all on the application's own
  *      task stack -- which is exactly the stack real Windows dispatches a window
  *      procedure on.
- *   3. AN ENTRY CONVENTION. Read off SYSEDIT's own prologue rather than a
- *      header (`guest/ne/sysedit.exe` seg1:0x0131):
- *          0131  push ds / pop ax / nop        ; ★ DS ON ENTRY MUST BE RIGHT
- *          0134  inc bp / push bp / mov bp,sp
- *          0138  push ds / mov ds,ax
- *          ...
- *          0222  retf 0x0a                    ; ★ FAR, and it cleans 10 bytes
- *      and the body pins the frame without inference:
- *          [bp+0x0e] hwnd    (`mov si,[bp+0xe]`, and si is later pushed as the
- *                             MDI client's PARENT -- it can only be the hwnd)
- *          [bp+0x0c] msg     (`dec ax / je` -> 1 == WM_CREATE)
- *          [bp+0x0a] wParam
+ *   3. AN ENTRY CONVENTION. The documented Win16 one: a WNDPROC is FAR PASCAL
+ *      (hwnd, msg, wParam, lParam), returns with a far RET that cleans its 10
+ *      argument bytes, and -- with the standard exported-function prologue --
+ *      takes its DS from AX on entry. With the usual `inc bp / push bp` frame:
+ *          [bp+0x0e] hwnd    [bp+0x0c] msg    [bp+0x0a] wParam
  *          [bp+0x06] lParam  (low word first, so the DWORD reads normally)
- *      ⚠ `push ds / pop ax` is the UNPATCHED Win16 export prologue, and
- *        sysedit.exe is MULTIPLEDATA (`nedump`), so the loader does NOT rewrite
- *        it into `mov ax,<DGROUP>`. The procedure therefore takes DS from
- *        WHOEVER CALLED IT. Enter it with the wrong DS and it runs its whole
- *        body against another module's data. So DS is not a detail here, it is
+ *      ⚠ sysedit.exe is MULTIPLEDATA (`nedump`), so the loader does NOT fix
+ *        that prologue up to load its own DGROUP. The procedure therefore takes
+ *        DS from WHOEVER CALLED IT. Enter it with the wrong DS and it runs its
+ *        whole body against another module's data. So DS is not a detail, it is
  *        the contract -- we enter with DS = AX = the class's own hInstance,
  *        which in Win16 IS the instance's DGROUP selector.
  *   4. A WAY BACK. The only genuinely new thing: three bytes of guest-visible
@@ -77,7 +68,7 @@
  *   - lParam for WM_CREATE should be a far pointer to a CREATESTRUCT. This host
  *     has never built one and does not know its Win16 layout from measurement,
  *     so it passes 0 and says so on the log line. SYSEDIT's frame procedure
- *     never reads it (seg1:0x018e onward); an MDI child would.
+ *     runs correctly without it; an MDI child would not.
  *   - There is no message QUEUE, so this is a SendMessage, never a PostMessage.
  *   - A callback that faults, or one whose procedure never returns, ends the run
  *     wherever it ends. The parked context is in host memory and is logged, so
@@ -361,8 +352,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
-       procedure and `[bp+8] == uFlags` in krnl386's own LocalAlloc both say it
-       must be. A DWORD is two words, high first, for the same reason. The caller
+       procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
        hands them in declared order and this pushes them in that order. */
     sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
 

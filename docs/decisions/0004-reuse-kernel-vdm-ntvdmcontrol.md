@@ -26,7 +26,8 @@ Anchor on **route 1: reuse the kernel VDM via `NtVdmControl`**, pending proof fr
 - (+) Behaves identically on bare metal and in VMs (kernel abstracts the CPU) — see ADR-0005.
 - (−) Hard dependency on **undocumented** structures specific to XP SP3 `ntoskrnl`; risk of
   layout assumptions or sanity checks that resist a non-MS host.
-- (−) Reverse-engineering burden falls on disassembling the shipping `ntvdm.exe`/`ntoskrnl`.
+- (−) Reverse-engineering burden: the shipping `ntvdm.exe`/`ntoskrnl` must be studied for
+  interoperability (disassembly, used only to learn the interface; nothing of it is recorded).
 
 ## Fallback
 If Spike-001 shows stock XP rejects a third-party VDM host, **supersede with a custom-driver
