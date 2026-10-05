@@ -216,6 +216,13 @@ if(NASM_EXE)
             DEPENDS "${PROBE_SRC}/${src}" ${PROBE_INC} VERBATIM)
         list(APPEND PROBE_OUTPUTS "${PROBE_OUT}/${out}")
     endforeach()
+    # dosdiff.py reads a probe's .deps/.pre sidecars from BESIDE the .com, so they
+    # travel with the binaries and build/probes/ is a self-contained probe folder.
+    file(GLOB PROBE_SIDECARS CONFIGURE_DEPENDS "${PROBE_SRC}/*.deps" "${PROBE_SRC}/*.pre")
+    foreach(sc IN LISTS PROBE_SIDECARS)
+        get_filename_component(scn "${sc}" NAME)
+        configure_file("${sc}" "${PROBE_OUT}/${scn}" COPYONLY)
+    endforeach()
     add_custom_target(probes ALL DEPENDS ${PROBE_OUTPUTS})
 else()
     message(WARNING "nasm not found: the DOS probes (and the release zip's selftest.com) are not built")
