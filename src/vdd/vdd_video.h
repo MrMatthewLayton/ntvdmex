@@ -345,6 +345,10 @@ typedef struct video_state {
          "not a plausible screen", and the caller keeps the old two-case constants. */
     uint16_t vt_total, vt_active, vt_blank;
     uint8_t  vt_valid;
+    /* #325: the register file describes the mode on screen -- a measured register set
+       was loaded at the mode set, or the guest programmed a geometry register (CR01 /
+       CR07 / CR09 / CR12 / CR17) since. Only then is the displayed size read from it. */
+    uint8_t  geom_regs_ok;
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
          When these are set, the guest's A0000 window IS whichever plane the map mask
@@ -848,6 +852,8 @@ uint32_t vdd_video_int10_wait_us(video_state *st);
 void vdd_video_install_fonts(video_state *st);
 /* #324: the text cell's width in frame pixels -- 9 (VGA text) or 8 (SR01 bit 0, VESA text). */
 int  vdd_video_text_cell_w(const video_state *st);
+/* #325: the displayed size of a graphics mode as the CRTC is programmed (table size if not trusted). */
+void vdd_video_geom(const video_state *st, int *w, int *h);
 /* #321: re-copy the glyph tables after a font change and redraw; 0 = not mapped yet. */
 int  vdd_video_refresh_fonts(video_state *st);
 

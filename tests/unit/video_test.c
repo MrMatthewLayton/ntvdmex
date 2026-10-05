@@ -2099,6 +2099,50 @@ int main(void)
         vid.bda = 0;
     }
 
+    /* ── #325: THE DISPLAYED SIZE COMES FROM THE CRTC. For every graphics mode whose
+         measured register set we load, the CRTC-derived size must equal the table --
+         that is the derivation's calibration -- and a guest that reprograms the CRTC
+         (Mode X) gets the size it programmed. */
+    {
+        static const struct { uint8_t mode; uint16_t w, h; } G[] = {
+            { 0x0D, 320, 200 }, { 0x0E, 640, 200 }, { 0x10, 640, 350 },
+            { 0x11, 640, 480 }, { 0x12, 640, 480 }, { 0x13, 320, 200 },
+        };
+        unsigned i; int bad = 0;
+        ntvdd_regs r2;
+        for (i = 0; i < sizeof G / sizeof G[0]; ++i) {
+            int gw2, gh2;
+            memset(&r2, 0, sizeof r2); s_ah(&r2, 0x00); s_al(&r2, G[i].mode); vdd_bus_deliver_int(&bus, 0x10, &r2);
+            vid.dirty = 1; vdd_bus_frame(&bus);
+            vdd_video_geom(&vid, &gw2, &gh2);
+            if (!vid.geom_regs_ok || gw2 != G[i].w || gh2 != G[i].h
+                || vid.frame.w != G[i].w || vid.frame.h != G[i].h) {
+                printf("        mode %02Xh: regs_ok=%d geom %dx%d frame %ux%u, want %ux%u\n", G[i].mode,
+                       vid.geom_regs_ok, gw2, gh2, vid.frame.w, vid.frame.h, G[i].w, G[i].h);
+                bad++;
+            }
+        }
+        CHECK(bad == 0, "#325 geometry: CRTC-derived size == the mode table for 0Dh 0Eh 10h 11h 12h 13h");
+        /* Mode X: 13h, unchained, then the classic 240-line CRTC program. */
+        memset(&r2, 0, sizeof r2); s_ah(&r2, 0x00); s_al(&r2, 0x13); vdd_bus_deliver_int(&bus, 0x10, &r2);
+        sc_w(&bus, 0x04, 0x06);                              /* chain-4 off */
+        crtc_w(&bus, 0x11, 0x0E);                            /* unprotect CR0-7 first */
+        crtc_w(&bus, 0x06, 0x0D); crtc_w(&bus, 0x07, 0x3E); crtc_w(&bus, 0x09, 0x41);
+        crtc_w(&bus, 0x10, 0xEA); crtc_w(&bus, 0x11, 0xAC); crtc_w(&bus, 0x12, 0xDF);
+        crtc_w(&bus, 0x14, 0x00); crtc_w(&bus, 0x15, 0xE7); crtc_w(&bus, 0x16, 0x06);
+        crtc_w(&bus, 0x17, 0xE3);
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.frame.w == 320 && vid.frame.h == 240,
+              "#325 geometry: Mode X (VDE 480, CR09 41h) presents 320x240, not mode 13h's 320x200");
+        crtc_w(&bus, 0x11, 0x0E); crtc_w(&bus, 0x01, 0x59);  /* 90 char clocks -> 360 */
+        crtc_w(&bus, 0x09, 0x40);                            /* no line repeat -> 480 */
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.frame.w == 360 && vid.frame.h == 480, "#325 geometry: CR01 59h + CR09 40h presents 360x480");
+        memset(&r2, 0, sizeof r2); s_ah(&r2, 0x00); s_al(&r2, 0x03); vdd_bus_deliver_int(&bus, 0x10, &r2);
+        vid.dirty = 1; vdd_bus_frame(&bus);
+        CHECK(vid.frame.w == 720 && vid.frame.h == 400, "#325 geometry: a mode set back to 3 is 720x400 again");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

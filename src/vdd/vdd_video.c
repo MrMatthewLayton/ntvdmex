@@ -1886,6 +1886,7 @@ static void int10(void *self, ntvdd_regs *r)
            the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. */
         st->cell_h = mode_cell_h(st->mode);
         load_default_palette(st);                    /* HW reloads the DAC on mode set */
+        st->geom_regs_ok = 0;                         /* #325: until a measured set loads */
         vga_load_modedef(st, st->mode);               /* ...and programs the register file */
         load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
@@ -2997,6 +2998,7 @@ static void vga_load_modedef(video_state *st, uint8_t mode)
     for (k = 0; k < VGA_MODEDEFS_N; ++k) {
         const vga_modedef *d = &VGA_MODEDEFS[k];
         if (d->mode != mode) continue;
+        st->geom_regs_ok = 1;                      /* #325: the file IS this mode */
         st->misc_out = d->misc;
         for (i = 0; i < 5;  ++i) st->seq_reg[i]  = d->seq[i];
         for (i = 0; i < 25; ++i) st->crtc_reg[i] = d->crtc[i];
@@ -3253,6 +3255,10 @@ static void crtc_set_data(void *self, uint32_t v)
        falls into `default:` is exactly the one the inventory needs to hear about. */
     st->crtc_reg[st->crtc_index & 31] = (uint8_t)v;
     st->crtc_w  [st->crtc_index & 31]++;
+    switch (st->crtc_index & 31) {                 /* #325: a geometry register */
+    case 0x01: case 0x07: case 0x09: case 0x12: case 0x17: st->geom_regs_ok = 1; break;
+    default: break;
+    }
     if ((st->crtc_index & 31) == 0x11) vint_cr11(st, (uint8_t)v);   /* #187 */
     switch (st->crtc_index) {
     /* ── THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
@@ -4278,11 +4284,39 @@ static void render_cga(video_state *st)
      actually written it, and fall back to the mode's natural stride otherwise.
    ⚠ Both values come from a guest register, so every plane index is wrapped into the
      plane rather than trusted: a mid-scroll write must not read off the end. */
+/* ── #325: THE PICTURE'S SIZE AS THE CRTC IS PROGRAMMED, NOT AS THE MODE NUMBER SAYS.
+     A game sets mode 13h and reprograms the CRTC -- Mode X is 320x240, others 360x480 --
+     and the monitor shows what the registers say. Width: Horizontal Display End (CR01)
+     + 1 character clocks of 8 dots, halved when the attribute controller pairs dots
+     into 256-colour pixels (AR10 bit 6). Height: Vertical Display End (CR12 + overflow
+     bits, + 1) scanlines, halved by double-scan (CR09 bit 7) and divided by the max
+     scan line + 1 -- except where CGA addressing (CR17 bit 0 clear) uses those scan
+     lines to interleave banks rather than to repeat lines (modes 4-6).
+     Graphics modes only; trusted only when geom_regs_ok, otherwise the mode's table
+     size. Checked against vid_modes[] for every measured mode in video_test. */
+static void vid_geom(const video_state *st, int *w, int *h)
+{
+    uint32_t hde, vde, ov, ms;
+    *w = st->gw; *h = st->gh;
+    if (st->in_vesa || !st->geom_regs_ok) return;
+    if (st->mkind != VID_KIND_PLANAR && st->mkind != VID_KIND_LINEAR8) return;
+    hde = ((uint32_t)st->crtc_reg[0x01] + 1u) * 8u;
+    if (st->attr_mode & 0x40) hde /= 2u;
+    ov  = st->crtc_reg[0x07]; ms = st->crtc_reg[0x09];
+    vde = ((uint32_t)st->crtc_reg[0x12] | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9)) + 1u;
+    if (ms & 0x80) vde /= 2u;
+    if (st->crtc_reg[0x17] & 0x01) vde /= (ms & 0x1Fu) + 1u;
+    if (hde < 64u || hde > NTVDD_FRAME_MAXW || vde < 50u || vde > NTVDD_FRAME_MAXH) return;
+    *w = (int)hde; *h = (int)vde;
+}
+void vdd_video_geom(const video_state *st, int *w, int *h) { vid_geom(st, w, h); }
+
 static void render_planar(video_state *st)
 {
-    int y, xb, b;
-    int gw = st->gw ? st->gw : VID_G12_W;
-    int gh = st->gh ? st->gh : VID_G12_H;
+    int y, xb, b, gw, gh;
+    vid_geom(st, &gw, &gh);                            /* #325: the CRTC's size */
+    if (!gw) gw = VID_G12_W;
+    if (!gh) gh = VID_G12_H;
     uint32_t bytes = (uint32_t)(gw / 8);
     uint32_t pitch = (st->crtc_off_seen && st->crtc_offset)
                      ? (uint32_t)st->crtc_offset * 2u : bytes;
@@ -4406,10 +4440,12 @@ static void render_modey(video_state *st)
       const uint8_t *pl[4];
       for (x2 = 0; x2 < 4; ++x2)
           pl[x2] = st->ymap_plane ? st->ymap_plane(st->ymap_ctx, x2) : st->yplane[x2];
-      for (y = 0; y < st->gh; ++y) {
+      int mw, mh;
+      vid_geom(st, &mw, &mh);                          /* #325: Mode X is 320x240 */
+      for (y = 0; y < mh; ++y) {
           uint32_t row = start + (uint32_t)y * pitch;
-          uint8_t *dst = st->fb + (uint32_t)y * st->gw;
-          for (x2 = 0; x2 < st->gw; ++x2)
+          uint8_t *dst = st->fb + (uint32_t)y * (uint32_t)mw;
+          for (x2 = 0; x2 < mw; ++x2)
           { uint32_t sx = (uint32_t)x2 + pan;
             dst[x2] = pl[sx & 3][(row + (sx >> 2)) & (VID_Y_PLANE - 1u)]; }
       } }
@@ -4459,9 +4495,11 @@ static void vid_frame(void *self)
              only ever inspected the richest captured frame, which hid the bad runs).
              The mask-change snapshot is well defined -- the outgoing plane is
              complete by then -- so rely on that alone. */
+        int mw, mh;
         render_modey(st);
-        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
-        st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
+        vid_geom(st, &mw, &mh);                        /* #325 */
+        st->frame.w = (uint16_t)mw; st->frame.h = (uint16_t)mh; st->frame.bpp = 8;
+        st->frame.stride = (uint32_t)mw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else if (st->mkind == VID_KIND_LINEAR8) {        /* graphics: vmem is the FB */
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
         st->frame.stride = st->gw; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
@@ -4470,9 +4508,13 @@ static void vid_frame(void *self)
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
         st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else if (st->mkind == VID_KIND_PLANAR) {         /* planar: combine -> fb    */
+        int pw, ph;
         render_planar(st);
-        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
-        st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
+        vid_geom(st, &pw, &ph);                        /* #325 */
+        if (!pw) pw = VID_G12_W;
+        if (!ph) ph = VID_G12_H;
+        st->frame.w = (uint16_t)pw; st->frame.h = (uint16_t)ph; st->frame.bpp = 8;
+        st->frame.stride = (uint32_t)pw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else {                                           /* text: render glyphs      */
         /* Geometry now follows the MODE, not a fixed 80x25 -- a 40-column mode
            renders 320 pixels wide instead of pretending to be 640. */
