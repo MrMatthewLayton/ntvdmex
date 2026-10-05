@@ -7,7 +7,11 @@
 > (`P0` > `P1` > `P2`). **History** lives in [`log/sessions/`](log/sessions/), one file per session.
 
 - **Updated:** 2026-10-04 (session 91)
-- **Branch:** `m9/completeness`, pushed (s93, overnight: score 95.2 → 96.1%; see the notes).
+- **Branch:** **`main` is the trunk again** (s93): `m9/completeness` was fast-forwarded into it
+  (tag `m9-complete-s93`) and is kept frozen until the user retires it. New work goes on a
+  **short branch per issue or batch** (e.g. `s94/318-winhelp-paint`), merged DIRECTLY into
+  `main` (no PR) only after its rig gate passes: shelf, Win16 probes vs stock, and the games
+  A/B (interleaved) when shared code is touched. Score 96.1% (see the s93 notes).
   Rig `bin\` = **`b14633be`** (AB, s93 head) **plus `bin\wowshim\WOW32.DLL` + `NTVDM.EXE`**
   — ⚠ the shim API is **version 3**: an older host with these shims (or this host with
   older shims) loads no shim at all. `scripts/package.sh` ships them.

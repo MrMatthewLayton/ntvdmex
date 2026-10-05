@@ -64,3 +64,16 @@ four, ZAR 66/70, 65/69, 66/70, 66/70 sounding. Rig `bin\` left = AB (b14633be).
 - #320 Terminal: ours shows the function-key bar and no caret where stock shows a caret, no bar.
 - A nested-run #SS at 0b97:0138 (Terminal's first-run OK; the user's Program Manager): the
   NESTED EXC line now names SS:SP and the call -- the next occurrence will say why.
+
+## Trunk moved back to `main`
+
+- 27 merged agent branches, `s92-batch2`, `s70-instrument` and `vga/db4c059-retest` deleted;
+  their worktrees removed. Unmerged commits kept as tags `archive/s70-instrument`,
+  `archive/vga-db4c059-retest`, `archive/dpmi-267-268` (pushed; #267/#268 commented).
+- `main` fast-forwarded to `m9/completeness` (5520f6c, tag `m9-complete-s93`), pushed. A fresh
+  clone of `main` builds; its binary differs from the gated one in four bytes -- the PE
+  TimeDateStamp (0x88) and CheckSum (0xD8): builds are not byte-reproducible, so compare with
+  `cmp -l`, not md5. Off-VM battery green in the clone (3105 checks: ne_test and vgarom_test
+  skip their Microsoft binaries / VGA ROM, which are not in the public repo, by design).
+- `m9/completeness` kept frozen until the user retires it. New work: short branches, direct
+  merges after the rig gate.
