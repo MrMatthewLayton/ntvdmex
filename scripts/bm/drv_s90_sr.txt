@@ -1,6 +1,0 @@
-wait 4
-list
-shot s90_sr_0
-close "Sound Recorder - (Untitled)"
-wait 6
-list

@@ -78,11 +78,14 @@ target_link_libraries(ntvdmex PRIVATE kernel32 user32 shell32 gcc)
 # --- wowprobe.exe: Spike-002 harness (WOW registry repoint) --------------------
 # A throwaway stub that proves XP launches us as the VDM support process and
 # captures the launch command line. Not part of the shipping product.
+# Local-only since #322 (not in the public repo): built when its source is present.
+if(EXISTS "${CMAKE_SOURCE_DIR}/tools/wowprobe/wowprobe.c")
 add_executable(wowprobe WIN32
     tools/wowprobe/wowprobe.c
     src/runtime.c)
 ntvdmex_configure_xp_target(wowprobe)
 target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
+endif()
 
 # --- ntvdmhost.exe: the clean DOS VDM host -------------------------------------
 # The proven DOS core, built from clean src/ modules (src/dos + src/vdm +
@@ -165,6 +168,8 @@ endforeach()
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to
 # eyeball the windowed + fullscreen blit path on real XP before it is wired into
 # the host. ddraw is bound at runtime (GetProcAddress) so there is no ddraw import.
+# Local-only since #322 (not in the public repo): built when its source is present.
+if(EXISTS "${CMAKE_SOURCE_DIR}/tools/present_demo/present_demo.c")
 add_executable(present_demo WIN32
     tools/present_demo/present_demo.c
     src/vdd/present_ddraw.c
@@ -172,3 +177,4 @@ add_executable(present_demo WIN32
 target_include_directories(present_demo PRIVATE src/vdd)
 ntvdmex_configure_xp_target(present_demo)
 target_link_libraries(present_demo PRIVATE kernel32 user32 gdi32 gcc)
+endif()

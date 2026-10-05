@@ -1,5 +1,0 @@
-; Copy me to cfg\int53.txt to make XP's own COMMAND.COM interactive.
-; See docs/inventory/bop.md -- these two rows contradict the standalone stock
-; measurement on purpose, and the host prints the whole table + its source every run.
-02 5300 1
-05 5300 0
