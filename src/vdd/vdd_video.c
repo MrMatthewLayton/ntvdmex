@@ -1521,6 +1521,13 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  40:85h = the char height (the YCharSize 4F01h reports); cursors and page
                  zeroed; 40:87h = 60h | (D15 ? 80h : 0). vdd_video_bda_sync derives all
                  of those from the fields set here. */
+            /* ── #325: AND THE 256-COLOUR DEFAULT PALETTE, as a mode 13h set loads it.
+                 A 4F02 left the DAC as the previous mode had it, so after a 16-colour
+                 mode (0Dh) colour 15 drew grey -- seen on the rig as a grey VESA
+                 checkerboard. AH=12h BL=31h (palette loading off) is still honoured
+                 inside load_default_palette. */
+            st->mode   = 0x13;
+            load_default_palette(st);
             st->mode   = 0xFF;
             vga_load_modedef(st, 0x13);               /* the chained 256-colour register file */
             st->mkind  = VID_KIND_LINEAR8;

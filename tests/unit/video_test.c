@@ -2143,6 +2143,19 @@ int main(void)
         CHECK(vid.frame.w == 720 && vid.frame.h == 400, "#325 geometry: a mode set back to 3 is 720x400 again");
     }
 
+    /* #325: a VESA 8bpp mode set loads the 256-colour default DAC, as mode 13h does --
+       after a 16-colour mode (0Dh) colour 15 drew grey, seen on the rig. */
+    {   ntvdd_regs r3; uint32_t p13, pv;
+        memset(&r3, 0, sizeof r3); s_ah(&r3, 0x00); s_al(&r3, 0x13); vdd_bus_deliver_int(&bus, 0x10, &r3);
+        vid.dirty = 1; vdd_bus_frame(&bus); p13 = vid.pal[15];
+        memset(&r3, 0, sizeof r3); s_ah(&r3, 0x00); s_al(&r3, 0x0D); vdd_bus_deliver_int(&bus, 0x10, &r3);
+        memset(&r3, 0, sizeof r3); s_ax(&r3, 0x4F02); s_bx(&r3, 0x0101); vdd_bus_deliver_int(&bus, 0x10, &r3);
+        vid.dirty = 1; vdd_bus_frame(&bus); pv = vid.pal[15];
+        CHECK(pv == p13 && (p13 & 0xFFFFFF) == 0xFFFFFF,
+              "#325 vesa/4F02: after mode 0Dh, VESA 101h colour 15 is white (the 256-colour DAC), not grey");
+        memset(&r3, 0, sizeof r3); s_ah(&r3, 0x00); s_al(&r3, 0x03); vdd_bus_deliver_int(&bus, 0x10, &r3);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
