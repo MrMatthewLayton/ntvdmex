@@ -191,13 +191,13 @@ typedef struct {
 } dos_machine_t;
 
 /* GH #250: the host's local time as fields, and the VDM's reading of a clock that is
-   `off` centiseconds from it (g_dos_clock.dos_off / .rtc_off). Win32 lives here, the
+   `off` centiseconds from it (g_DosClock.DosOffset / .RtcOffset). Win32 lives here, the
    arithmetic in dos_clock.h. */
-void dos_clock_host_now(dclk_t *t);
-void dos_clock_read(int64_t off, dclk_t *out);
+void dos_clock_host_now(DOS_CLOCK_TIME *t);
+void dos_clock_read(int64_t off, DOS_CLOCK_TIME *out);
 /* GH #262: the PIT's "was 0040:006C set by anything but the BIOS?" (vdd_pit_tick_take,
-   wired by the host; NULL off-VM), DOS's clock re-derived from a count (dclk_follow_ticks
-   on g_dos_clock.dos_off), and the two together -- called before any read or set of
+   wired by the host; NULL off-VM), DOS's clock re-derived from a count (DosClockFollowTicks
+   on g_DosClock.DosOffset), and the two together -- called before any read or set of
    DOS's clock. */
 extern int (*g_dos_tick_take)(uint32_t *ticks, uint32_t *wraps, uint32_t *since);
 void dos_clock_follow(uint32_t ticks, uint32_t wraps, uint32_t since);

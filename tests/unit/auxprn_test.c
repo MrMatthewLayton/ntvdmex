@@ -12,161 +12,343 @@
  *   40h h4:  per byte 17h/0200 17h/00cc            AX=CX CF=0
  *   40h h3:  per byte 14h/01cc                     AX=CX CF=0
  *   3Fh h3:  14h/0200 per byte, stop after CR      AX=n  CF=0
+ *
+ * The interpreter's own names (icpu, istep, F_CF) and the four callbacks it requires of
+ * its includer (imem_r8, imem_w8, iio_in, iio_out) are v86interp.h's, not this test's.
  */
 #include <stdio.h>
 #include <string.h>
-#include <stdint.h>
+#include <stdint.h>                     /* v86interp.h needs the fixed-width types ... */
+#include "../../src/ntvdmex_types.h"    /* ... and BYTE                                */
 
-typedef unsigned char BYTE;
+#define AUXPRN_TEST_MEMORY_SIZE      0x110000    /* 1MB + HMA                           */
+#define AUXPRN_TEST_FLOATING_BUS     0xFF        /* what a port nobody answers reads    */
 
-static BYTE MEM[0x110000];
-static uint8_t imem_r8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0; }
-static void    imem_w8(uint32_t lin, uint8_t v) { if (lin < sizeof MEM) MEM[lin] = v; }
-static uint32_t iio_in(uint16_t port, int width) { (void)port; (void)width; return 0xFF; }
-static void iio_out(uint16_t port, int width, uint32_t val) { (void)port; (void)width; (void)val; }
+static BYTE g_Memory[AUXPRN_TEST_MEMORY_SIZE];
+static BYTE imem_r8(DWORD linear) { return (linear < sizeof g_Memory) ? g_Memory[linear] : 0; }
+static VOID imem_w8(DWORD linear, BYTE value)
+{ if (linear < sizeof g_Memory) g_Memory[linear] = value; }
+static DWORD iio_in(WORD port, INT width)
+{ (VOID)port; (VOID)width; return AUXPRN_TEST_FLOATING_BUS; }
+static VOID iio_out(WORD port, INT width, DWORD value) { (VOID)port; (VOID)width; (VOID)value; }
 
 #include "../../src/host/v86interp.h"
 #include "dos_layout.h"
 #include "dos_auxprn.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define AUXPRN_TEST_CHECK(condition, message) do{ g_Total++; \
+    if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+/* The interpreter's register numbering (icpu.r[] and icpu.seg[]). */
+#define AUXPRN_TEST_AX               0
+#define AUXPRN_TEST_CX               1
+#define AUXPRN_TEST_DX               2
+#define AUXPRN_TEST_BX               3
+#define AUXPRN_TEST_SP               4
+#define AUXPRN_TEST_BP               5
+#define AUXPRN_TEST_SI               6
+#define AUXPRN_TEST_ES               0
+#define AUXPRN_TEST_CS               1
+#define AUXPRN_TEST_SS               2
+#define AUXPRN_TEST_DS               3
+#define AUXPRN_TEST_INITIAL_FLAGS    0x0002
+#define AUXPRN_TEST_LOW_BYTE         0xFF
+#define AUXPRN_TEST_HIGH_WORD        0xFFFF0000u
+#define AUXPRN_TEST_AH_SHIFT         8
+#define AUXPRN_TEST_PARAGRAPH_SHIFT  4
 
 /* Layout: the driver at DOS_CTAB_SEG:DOS_AUXPRN_OFF; the BIOS "handlers" are a HLT
    (unmodelled -> the interpreter stops there) followed by an IRET; the INT 21h
    caller's return address is another HLT. */
-#define H17_SEG 0x2000
-#define H14_SEG 0x2100
-#define RET_SEG 0x3000
-#define DAT_SEG 0x4000
-#define STK_SEG 0x5000
+#define AUXPRN_TEST_INT17_SEGMENT    0x2000
+#define AUXPRN_TEST_INT14_SEGMENT    0x2100
+#define AUXPRN_TEST_RETURN_SEGMENT   0x3000
+#define AUXPRN_TEST_DATA_SEGMENT     0x4000
+#define AUXPRN_TEST_STACK_SEGMENT    0x5000
+#define AUXPRN_TEST_HLT              0xF4
+#define AUXPRN_TEST_IRET             0xCF
+#define AUXPRN_TEST_HLT_IP           0        /* each handler: HLT at 0 ...            */
+#define AUXPRN_TEST_IRET_IP          1        /* ... then IRET                         */
+#define AUXPRN_TEST_INT14            0x14
+#define AUXPRN_TEST_INT17            0x17
+#define AUXPRN_TEST_VECTOR_SIZE      4        /* an IVT entry: offset, then segment    */
+#define AUXPRN_TEST_VECTOR_SEGMENT   2
+#define AUXPRN_TEST_VECTOR_SEGMENT_HIGH 3
 
-typedef struct { int vec; uint16_t ax, dx; } call_t;
-static call_t calls[64];
-static int ncalls;
-static const char *rxscript;
-static int rxi;
+/* The INT 21h frame the stub leaves on the stack: IP, CS, FLAGS, below the top. */
+#define AUXPRN_TEST_STACK_TOP        0xFFF0
+#define AUXPRN_TEST_FRAME_SIZE       6
+#define AUXPRN_TEST_FRAME_IP         6
+#define AUXPRN_TEST_FRAME_IP_HIGH    5
+#define AUXPRN_TEST_FRAME_CS         4
+#define AUXPRN_TEST_FRAME_CS_HIGH    3
+#define AUXPRN_TEST_FRAME_FLAGS      2
+#define AUXPRN_TEST_FRAME_FLAGS_HIGH 1
+
+/* What the recording BIOS answers. */
+#define AUXPRN_TEST_PRINTER_STATUS   0x9000   /* INT 17h: AH = 90h                     */
+#define AUXPRN_TEST_SERIAL_SEND      1        /* INT 14h AH=01h: send AL               */
+#define AUXPRN_TEST_SERIAL_RECEIVE   2        /* INT 14h AH=02h: receive -> AL         */
+#define AUXPRN_TEST_SERIAL_STATUS    3        /* INT 14h AH=03h: status                */
+#define AUXPRN_TEST_SEND_STATUS      0x6000
+#define AUXPRN_TEST_LINE_STATUS      0x6130
+#define AUXPRN_TEST_RECEIVE_SCRIPT   "Qr\rwxyz"
+
+/* AuxPrnTestRunEntry's answers. */
+#define AUXPRN_TEST_RETURNED         0
+#define AUXPRN_TEST_RAN_AWAY         (-1)
+#define AUXPRN_TEST_DERAILED         (-2)
+#define AUXPRN_TEST_STEP_LIMIT       100000
+#define AUXPRN_TEST_MAX_CALLS        64
+
+/* Registers the driver must give back unchanged. */
+#define AUXPRN_TEST_POISON_BX        0xB1B1
+#define AUXPRN_TEST_POISON_CX        0xC1C1
+#define AUXPRN_TEST_POISON_SI        0x5151
+#define AUXPRN_TEST_POISON_BP        0xBBBB
+#define AUXPRN_TEST_POISON_ES        0xE5E5
+#define AUXPRN_TEST_BUFFER_POISON    0xEE
+
+/* Where the C0h table and the DOS-resident block end. */
+#define AUXPRN_TEST_SYSCONF_SIZE     10
+#define AUXPRN_TEST_BLOCK_END        0x6F0
+
+typedef struct _AUXPRN_TEST_CALL {
+    INT  Vector;
+    WORD Ax, Dx;
+} AUXPRN_TEST_CALL, *PAUXPRN_TEST_CALL;
+
+static AUXPRN_TEST_CALL g_Calls[AUXPRN_TEST_MAX_CALLS];
+static INT g_CallCount;
+static PCSTR g_ReceiveScript;
+static INT g_ReceiveIndex;
 
 /* Run from the driver entry until the caller's return HLT, answering the BIOS. */
-static int run_entry(icpu *c, unsigned entry, uint16_t flags_in)
+static INT AuxPrnTestRunEntry(icpu *cpu, UINT entry, WORD callerFlags)
 {
-    uint32_t ssb = (uint32_t)STK_SEG << 4;
-    int guard = 0;
-    ncalls = 0;
+    DWORD stackTop = ((DWORD)AUXPRN_TEST_STACK_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT)
+                     + AUXPRN_TEST_STACK_TOP;
+    INT steps = 0;
+    g_CallCount = 0;
     /* the INT 21h frame the stub leaves on the stack: IP, CS, FLAGS */
-    c->seg[2] = STK_SEG; c->r[4] = 0xFFF0 - 6;
-    MEM[ssb + 0xFFF0 - 6] = 0x00; MEM[ssb + 0xFFF0 - 5] = 0x00;          /* IP  0000 */
-    MEM[ssb + 0xFFF0 - 4] = RET_SEG & 0xFF; MEM[ssb + 0xFFF0 - 3] = RET_SEG >> 8;
-    MEM[ssb + 0xFFF0 - 2] = (BYTE)flags_in; MEM[ssb + 0xFFF0 - 1] = (BYTE)(flags_in >> 8);
-    c->seg[1] = DOS_CTAB_SEG; c->ip = (uint16_t)(DOS_AUXPRN_OFF + entry);
+    cpu->seg[AUXPRN_TEST_SS] = AUXPRN_TEST_STACK_SEGMENT;
+    cpu->r[AUXPRN_TEST_SP] = AUXPRN_TEST_STACK_TOP - AUXPRN_TEST_FRAME_SIZE;
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_IP] = 0;                              /* IP  0000 */
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_IP_HIGH] = 0;
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_CS] = LOBYTE(AUXPRN_TEST_RETURN_SEGMENT);
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_CS_HIGH] = HIBYTE(AUXPRN_TEST_RETURN_SEGMENT);
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS] = LOBYTE(callerFlags);
+    g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS_HIGH] = HIBYTE(callerFlags);
+    cpu->seg[AUXPRN_TEST_CS] = DOS_CTAB_SEG; cpu->ip = (WORD)(DOS_AUXPRN_OFF + entry);
     for (;;) {
-        if (++guard > 100000) return -1;
-        if (istep(c)) continue;
-        if (c->seg[1] == RET_SEG && c->ip == 0) return 0;                /* back home */
-        if ((c->seg[1] == H17_SEG || c->seg[1] == H14_SEG) && c->ip == 0) {
-            int v = (c->seg[1] == H17_SEG) ? 0x17 : 0x14;
-            uint16_t ax = (uint16_t)c->r[0], ah = ax >> 8;
-            if (ncalls < 64) { calls[ncalls].vec = v; calls[ncalls].ax = ax;
-                               calls[ncalls].dx = (uint16_t)c->r[2]; ++ncalls; }
-            if (v == 0x17) ax = (uint16_t)(0x9000 | (ax & 0xFF));
-            else if (ah == 1) ax = (uint16_t)(0x6000 | (ax & 0xFF));
-            else if (ah == 2) ax = (uint16_t)(rxscript[rxi++] & 0xFF);
-            else if (ah == 3) ax = 0x6130;
-            c->r[0] = (c->r[0] & 0xFFFF0000u) | ax;
-            c->ip = 1;                                                    /* the IRET */
+        if (++steps > AUXPRN_TEST_STEP_LIMIT) return AUXPRN_TEST_RAN_AWAY;
+        if (istep(cpu)) continue;
+        if (cpu->seg[AUXPRN_TEST_CS] == AUXPRN_TEST_RETURN_SEGMENT && cpu->ip == AUXPRN_TEST_HLT_IP)
+            return AUXPRN_TEST_RETURNED;                                    /* back home */
+        if ((cpu->seg[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT
+             || cpu->seg[AUXPRN_TEST_CS] == AUXPRN_TEST_INT14_SEGMENT)
+            && cpu->ip == AUXPRN_TEST_HLT_IP) {
+            INT vector = (cpu->seg[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT)
+                         ? AUXPRN_TEST_INT17 : AUXPRN_TEST_INT14;
+            WORD ax = (WORD)cpu->r[AUXPRN_TEST_AX], ah = ax >> AUXPRN_TEST_AH_SHIFT;
+            if (g_CallCount < AUXPRN_TEST_MAX_CALLS) {
+                g_Calls[g_CallCount].Vector = vector; g_Calls[g_CallCount].Ax = ax;
+                g_Calls[g_CallCount].Dx = (WORD)cpu->r[AUXPRN_TEST_DX]; ++g_CallCount;
+            }
+            if (vector == AUXPRN_TEST_INT17)
+                ax = (WORD)(AUXPRN_TEST_PRINTER_STATUS | (ax & AUXPRN_TEST_LOW_BYTE));
+            else if (ah == AUXPRN_TEST_SERIAL_SEND)
+                ax = (WORD)(AUXPRN_TEST_SEND_STATUS | (ax & AUXPRN_TEST_LOW_BYTE));
+            else if (ah == AUXPRN_TEST_SERIAL_RECEIVE)
+                ax = (WORD)(g_ReceiveScript[g_ReceiveIndex++] & AUXPRN_TEST_LOW_BYTE);
+            else if (ah == AUXPRN_TEST_SERIAL_STATUS) ax = AUXPRN_TEST_LINE_STATUS;
+            cpu->r[AUXPRN_TEST_AX] = (cpu->r[AUXPRN_TEST_AX] & AUXPRN_TEST_HIGH_WORD) | ax;
+            cpu->ip = AUXPRN_TEST_IRET_IP;                                  /* the IRET */
             continue;
         }
-        return -2;                                                        /* derailed */
+        return AUXPRN_TEST_DERAILED;
     }
 }
 
-static icpu setup(void)
+static DWORD AuxPrnTestLinear(WORD segment, WORD offset)
 {
-    icpu c; memset(&c, 0, sizeof c);
-    memset(MEM, 0, sizeof MEM);
-    memcpy(MEM + ((uint32_t)DOS_CTAB_SEG << 4) + DOS_AUXPRN_OFF, dos_auxprn_code, sizeof dos_auxprn_code);
-    MEM[(uint32_t)H17_SEG << 4] = 0xF4; MEM[((uint32_t)H17_SEG << 4) + 1] = 0xCF;
-    MEM[(uint32_t)H14_SEG << 4] = 0xF4; MEM[((uint32_t)H14_SEG << 4) + 1] = 0xCF;
-    MEM[(uint32_t)RET_SEG << 4] = 0xF4;
-    MEM[0x17 * 4 + 2] = H17_SEG & 0xFF; MEM[0x17 * 4 + 3] = H17_SEG >> 8;
-    MEM[0x14 * 4 + 2] = H14_SEG & 0xFF; MEM[0x14 * 4 + 3] = H14_SEG >> 8;
-    c.flags = 0x0002;
-    c.r[3] = 0xB1B1; c.r[1] = 0xC1C1; c.r[6] = 0x5151; c.r[5] = 0xBBBB;
-    c.seg[3] = DAT_SEG; c.seg[0] = 0xE5E5;
-    rxscript = "Qr\rwxyz"; rxi = 0;
-    return c;
+    return ((DWORD)segment << AUXPRN_TEST_PARAGRAPH_SHIFT) + offset;
 }
 
-static int is(int i, int v, uint16_t ax, uint16_t dx)
-{ return i < ncalls && calls[i].vec == v && calls[i].ax == ax && calls[i].dx == dx; }
+static icpu AuxPrnTestSetup(VOID)
+{
+    icpu cpu; memset(&cpu, 0, sizeof cpu);
+    memset(g_Memory, 0, sizeof g_Memory);
+    memcpy(g_Memory + AuxPrnTestLinear(DOS_CTAB_SEG, DOS_AUXPRN_OFF), g_DosAuxPrnCode,
+           sizeof g_DosAuxPrnCode);
+    g_Memory[AuxPrnTestLinear(AUXPRN_TEST_INT17_SEGMENT, AUXPRN_TEST_HLT_IP)] = AUXPRN_TEST_HLT;
+    g_Memory[AuxPrnTestLinear(AUXPRN_TEST_INT17_SEGMENT, AUXPRN_TEST_IRET_IP)] = AUXPRN_TEST_IRET;
+    g_Memory[AuxPrnTestLinear(AUXPRN_TEST_INT14_SEGMENT, AUXPRN_TEST_HLT_IP)] = AUXPRN_TEST_HLT;
+    g_Memory[AuxPrnTestLinear(AUXPRN_TEST_INT14_SEGMENT, AUXPRN_TEST_IRET_IP)] = AUXPRN_TEST_IRET;
+    g_Memory[AuxPrnTestLinear(AUXPRN_TEST_RETURN_SEGMENT, AUXPRN_TEST_HLT_IP)] = AUXPRN_TEST_HLT;
+    g_Memory[AUXPRN_TEST_INT17 * AUXPRN_TEST_VECTOR_SIZE + AUXPRN_TEST_VECTOR_SEGMENT] =
+        LOBYTE(AUXPRN_TEST_INT17_SEGMENT);
+    g_Memory[AUXPRN_TEST_INT17 * AUXPRN_TEST_VECTOR_SIZE + AUXPRN_TEST_VECTOR_SEGMENT_HIGH] =
+        HIBYTE(AUXPRN_TEST_INT17_SEGMENT);
+    g_Memory[AUXPRN_TEST_INT14 * AUXPRN_TEST_VECTOR_SIZE + AUXPRN_TEST_VECTOR_SEGMENT] =
+        LOBYTE(AUXPRN_TEST_INT14_SEGMENT);
+    g_Memory[AUXPRN_TEST_INT14 * AUXPRN_TEST_VECTOR_SIZE + AUXPRN_TEST_VECTOR_SEGMENT_HIGH] =
+        HIBYTE(AUXPRN_TEST_INT14_SEGMENT);
+    cpu.flags = AUXPRN_TEST_INITIAL_FLAGS;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_POISON_BX; cpu.r[AUXPRN_TEST_CX] = AUXPRN_TEST_POISON_CX;
+    cpu.r[AUXPRN_TEST_SI] = AUXPRN_TEST_POISON_SI; cpu.r[AUXPRN_TEST_BP] = AUXPRN_TEST_POISON_BP;
+    cpu.seg[AUXPRN_TEST_DS] = AUXPRN_TEST_DATA_SEGMENT;
+    cpu.seg[AUXPRN_TEST_ES] = AUXPRN_TEST_POISON_ES;
+    g_ReceiveScript = AUXPRN_TEST_RECEIVE_SCRIPT; g_ReceiveIndex = 0;
+    return cpu;
+}
+
+static BOOL AuxPrnTestCallIs(INT callIndex, INT vector, WORD ax, WORD dx)
+{
+    return callIndex < g_CallCount && g_Calls[callIndex].Vector == vector
+        && g_Calls[callIndex].Ax == ax && g_Calls[callIndex].Dx == dx;
+}
+
+/* The registers each case loads, and what it expects back. */
+#define AUXPRN_TEST_AX_05H           0x05A5   /* AH=05h, AL poisoned                   */
+#define AUXPRN_TEST_AX_04H           0x04A5
+#define AUXPRN_TEST_AX_03H           0x03A5
+#define AUXPRN_TEST_AX_40H           0x4000
+#define AUXPRN_TEST_AX_3FH           0x3F00
+#define AUXPRN_TEST_DX_CHAR_P        0xD150   /* DL = 'P'                              */
+#define AUXPRN_TEST_DX_CHAR_A        0xD141   /* DL = 'A'                              */
+#define AUXPRN_TEST_DX_POISON        0xD1D1
+#define AUXPRN_TEST_HANDLE_AUX       3
+#define AUXPRN_TEST_HANDLE_PRN       4
+#define AUXPRN_TEST_BUFFER           0x0100
+#define AUXPRN_TEST_READ_BUFFER      0x0200
+#define AUXPRN_TEST_READ_BUFFER_SIZE 8
+#define AUXPRN_TEST_FLAGS_CF_SET     0x0003
+#define AUXPRN_TEST_FLAGS_CF_CLEAR   0x0002
+#define AUXPRN_TEST_CR               0x0D
 
 int main(void)
 {
-    icpu c;
+    icpu cpu;
+    DWORD dataBase = (DWORD)AUXPRN_TEST_DATA_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT;
     printf("== auxprn_test: DOS AUX/PRN driver code (#251)\n");
-    CHECK(sizeof dos_auxprn_code <= DOS_AUXPRN_LEN, "fits its reservation");
-    CHECK(DOS_AUXPRN_OFF >= DOS_SYSCONF_OFF + 10 && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= 0x6F0,
-          "between the C0h table and the block's end");
+    AUXPRN_TEST_CHECK(sizeof g_DosAuxPrnCode <= DOS_AUXPRN_LEN, "fits its reservation");
+    AUXPRN_TEST_CHECK(DOS_AUXPRN_OFF >= DOS_SYSCONF_OFF + AUXPRN_TEST_SYSCONF_SIZE
+                      && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= AUXPRN_TEST_BLOCK_END,
+                      "between the C0h table and the block's end");
 
-    c = setup(); c.r[0] = 0x05A5; c.r[2] = 0xD150;
-    CHECK(run_entry(&c, DOS_AUXPRN_T05, 0x0003) == 0, "05h: returns to the caller");
-    CHECK(ncalls == 3 && is(0, 0x17, 0x0200, 0) && is(1, 0x17, 0x0200, 0) && is(2, 0x17, 0x0050, 0),
-          "05h: INT 17h 02h, 02h, 00h AL='P' DX=0 (6.22's sequence)");
-    CHECK((uint16_t)c.r[0] == 0x0550, "05h: AX = 05:char");
-    CHECK((uint16_t)c.r[3] == 0xB1B1 && (uint16_t)c.r[1] == 0xC1C1 && (uint16_t)c.r[2] == 0xD150,
-          "05h: BX CX DX unchanged");
-    CHECK(c.r[4] == 0xFFF0, "05h: stack balanced (the INT 21h frame popped)");
-    CHECK(c.flags & 1, "05h: the caller's flags come back as they were (CF set in)");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_05H;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_CHAR_P;
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_OUTPUT, AUXPRN_TEST_FLAGS_CF_SET)
+                      == AUXPRN_TEST_RETURNED, "05h: returns to the caller");
+    AUXPRN_TEST_CHECK(g_CallCount == 3 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT17, 0x0200, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT17, 0x0200, 0)
+                      && AuxPrnTestCallIs(2, AUXPRN_TEST_INT17, 0x0050, 0),
+                      "05h: INT 17h 02h, 02h, 00h AL='P' DX=0 (6.22's sequence)");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 0x0550, "05h: AX = 05:char");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_BX] == AUXPRN_TEST_POISON_BX
+                      && (WORD)cpu.r[AUXPRN_TEST_CX] == AUXPRN_TEST_POISON_CX
+                      && (WORD)cpu.r[AUXPRN_TEST_DX] == AUXPRN_TEST_DX_CHAR_P,
+                      "05h: BX CX DX unchanged");
+    AUXPRN_TEST_CHECK(cpu.r[AUXPRN_TEST_SP] == AUXPRN_TEST_STACK_TOP,
+                      "05h: stack balanced (the INT 21h frame popped)");
+    AUXPRN_TEST_CHECK(cpu.flags & F_CF,
+                      "05h: the caller's flags come back as they were (CF set in)");
 
-    c = setup(); c.r[0] = 0x04A5; c.r[2] = 0xD141;
-    CHECK(run_entry(&c, DOS_AUXPRN_T04, 0x0002) == 0, "04h: returns");
-    CHECK(ncalls == 2 && is(0, 0x14, 0x0300, 0) && is(1, 0x14, 0x0141, 0),
-          "04h: INT 14h 03h, then 01h AL='A' DX=0");
-    CHECK((uint16_t)c.r[0] == 0x0441 && (uint16_t)c.r[2] == 0xD141, "04h: AX = 04:char, DX kept");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_04H;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_CHAR_A;
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_OUTPUT, AUXPRN_TEST_FLAGS_CF_CLEAR)
+                      == AUXPRN_TEST_RETURNED, "04h: returns");
+    AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0300, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0141, 0),
+                      "04h: INT 14h 03h, then 01h AL='A' DX=0");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 0x0441
+                      && (WORD)cpu.r[AUXPRN_TEST_DX] == AUXPRN_TEST_DX_CHAR_A,
+                      "04h: AX = 04:char, DX kept");
 
-    c = setup(); c.r[0] = 0x03A5; c.r[2] = 0xD1D1;
-    CHECK(run_entry(&c, DOS_AUXPRN_T03, 0x0002) == 0, "03h: returns");
-    CHECK(ncalls == 2 && is(0, 0x14, 0x0300, 0) && is(1, 0x14, 0x0230, 0),
-          "03h: INT 14h 03h, then 02h with AL left from the status (0230h)");
-    CHECK((uint16_t)c.r[0] == 0x0351 && (uint16_t)c.r[2] == 0xD1D1, "03h: AX = 03:'Q', DX kept");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_03H;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_POISON;
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_INPUT, AUXPRN_TEST_FLAGS_CF_CLEAR)
+                      == AUXPRN_TEST_RETURNED, "03h: returns");
+    AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0300, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0230, 0),
+                      "03h: INT 14h 03h, then 02h with AL left from the status (0230h)");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 0x0351
+                      && (WORD)cpu.r[AUXPRN_TEST_DX] == AUXPRN_TEST_DX_POISON,
+                      "03h: AX = 03:'Q', DX kept");
 
-    c = setup(); c.r[0] = 0x4000; c.r[3] = 4; c.r[1] = 2; c.r[2] = 0x0100;
-    MEM[((uint32_t)DAT_SEG << 4) + 0x100] = 'P'; MEM[((uint32_t)DAT_SEG << 4) + 0x101] = 'Q';
-    CHECK(run_entry(&c, DOS_AUXPRN_W4, 0x0003) == 0, "40h h4: returns");
-    CHECK(ncalls == 4 && is(0, 0x17, 0x0200, 0) && is(1, 0x17, 0x0050, 0)
-          && is(2, 0x17, 0x0200, 0) && is(3, 0x17, 0x0051, 0),
-          "40h h4: per byte INT 17h 02h then 00h");
-    CHECK((uint16_t)c.r[0] == 2 && !(c.flags & 1), "40h h4: AX=2, CF cleared");
-    CHECK((uint16_t)c.r[1] == 2 && (uint16_t)c.r[2] == 0x0100 && (uint16_t)c.r[6] == 0x5151,
-          "40h h4: CX DX SI unchanged");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_PRN; cpu.r[AUXPRN_TEST_CX] = 2;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
+    g_Memory[dataBase + AUXPRN_TEST_BUFFER] = 'P';
+    g_Memory[dataBase + AUXPRN_TEST_BUFFER + 1] = 'Q';
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_WRITE, AUXPRN_TEST_FLAGS_CF_SET)
+                      == AUXPRN_TEST_RETURNED, "40h h4: returns");
+    AUXPRN_TEST_CHECK(g_CallCount == 4 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT17, 0x0200, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT17, 0x0050, 0)
+                      && AuxPrnTestCallIs(2, AUXPRN_TEST_INT17, 0x0200, 0)
+                      && AuxPrnTestCallIs(3, AUXPRN_TEST_INT17, 0x0051, 0),
+                      "40h h4: per byte INT 17h 02h then 00h");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 2 && !(cpu.flags & F_CF),
+                      "40h h4: AX=2, CF cleared");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_CX] == 2
+                      && (WORD)cpu.r[AUXPRN_TEST_DX] == AUXPRN_TEST_BUFFER
+                      && (WORD)cpu.r[AUXPRN_TEST_SI] == AUXPRN_TEST_POISON_SI,
+                      "40h h4: CX DX SI unchanged");
 
-    c = setup(); c.r[0] = 0x4000; c.r[3] = 3; c.r[1] = 0; c.r[2] = 0x0100;
-    CHECK(run_entry(&c, DOS_AUXPRN_W4, 0x0003) == 0 && ncalls == 0
-          && (uint16_t)c.r[0] == 0 && !(c.flags & 1), "40h h4: CX=0 writes nothing, AX=0");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.r[AUXPRN_TEST_CX] = 0;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_WRITE, AUXPRN_TEST_FLAGS_CF_SET)
+                      == AUXPRN_TEST_RETURNED && g_CallCount == 0
+                      && (WORD)cpu.r[AUXPRN_TEST_AX] == 0 && !(cpu.flags & F_CF),
+                      "40h h4: CX=0 writes nothing, AX=0");
 
-    c = setup(); c.r[0] = 0x4000; c.r[3] = 3; c.r[1] = 2; c.r[2] = 0x0100;
-    MEM[((uint32_t)DAT_SEG << 4) + 0x100] = 'A'; MEM[((uint32_t)DAT_SEG << 4) + 0x101] = 'B';
-    CHECK(run_entry(&c, DOS_AUXPRN_W3, 0x0003) == 0, "40h h3: returns");
-    CHECK(ncalls == 2 && is(0, 0x14, 0x0141, 0) && is(1, 0x14, 0x0142, 0),
-          "40h h3: per byte INT 14h 01h, no status");
-    CHECK((uint16_t)c.r[0] == 2 && !(c.flags & 1), "40h h3: AX=2, CF cleared");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.r[AUXPRN_TEST_CX] = 2;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
+    g_Memory[dataBase + AUXPRN_TEST_BUFFER] = 'A';
+    g_Memory[dataBase + AUXPRN_TEST_BUFFER + 1] = 'B';
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_WRITE, AUXPRN_TEST_FLAGS_CF_SET)
+                      == AUXPRN_TEST_RETURNED, "40h h3: returns");
+    AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0141, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0142, 0),
+                      "40h h3: per byte INT 14h 01h, no status");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 2 && !(cpu.flags & F_CF),
+                      "40h h3: AX=2, CF cleared");
 
-    c = setup(); c.r[0] = 0x3F00; c.r[3] = 3; c.r[1] = 6; c.r[2] = 0x0200; rxi = 1;
-    memset(MEM + ((uint32_t)DAT_SEG << 4) + 0x200, 0xEE, 8);
-    CHECK(run_entry(&c, DOS_AUXPRN_R3, 0x0003) == 0, "3Fh h3: returns");
-    CHECK(ncalls == 2 && is(0, 0x14, 0x0200, 0) && is(1, 0x14, 0x0200, 0),
-          "3Fh h3: INT 14h 02h per byte, stops after the CR");
-    CHECK((uint16_t)c.r[0] == 2 && !(c.flags & 1), "3Fh h3: AX=2, CF cleared");
-    CHECK(MEM[((uint32_t)DAT_SEG << 4) + 0x200] == 'r' && MEM[((uint32_t)DAT_SEG << 4) + 0x201] == 0x0D
-          && MEM[((uint32_t)DAT_SEG << 4) + 0x202] == 0xEE, "3Fh h3: buffer 'r' CR, nothing after");
-    CHECK((uint16_t)c.r[3] == 3 && (uint16_t)c.r[1] == 6 && (uint16_t)c.r[2] == 0x0200,
-          "3Fh h3: BX CX DX unchanged");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.r[AUXPRN_TEST_CX] = 6;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER; g_ReceiveIndex = 1;
+    memset(g_Memory + dataBase + AUXPRN_TEST_READ_BUFFER, AUXPRN_TEST_BUFFER_POISON,
+           AUXPRN_TEST_READ_BUFFER_SIZE);
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_READ, AUXPRN_TEST_FLAGS_CF_SET)
+                      == AUXPRN_TEST_RETURNED, "3Fh h3: returns");
+    AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0200, 0)
+                      && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0200, 0),
+                      "3Fh h3: INT 14h 02h per byte, stops after the CR");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_AX] == 2 && !(cpu.flags & F_CF),
+                      "3Fh h3: AX=2, CF cleared");
+    AUXPRN_TEST_CHECK(g_Memory[dataBase + AUXPRN_TEST_READ_BUFFER] == 'r'
+                      && g_Memory[dataBase + AUXPRN_TEST_READ_BUFFER + 1] == AUXPRN_TEST_CR
+                      && g_Memory[dataBase + AUXPRN_TEST_READ_BUFFER + 2]
+                         == AUXPRN_TEST_BUFFER_POISON,
+                      "3Fh h3: buffer 'r' CR, nothing after");
+    AUXPRN_TEST_CHECK((WORD)cpu.r[AUXPRN_TEST_BX] == AUXPRN_TEST_HANDLE_AUX
+                      && (WORD)cpu.r[AUXPRN_TEST_CX] == 6
+                      && (WORD)cpu.r[AUXPRN_TEST_DX] == AUXPRN_TEST_READ_BUFFER,
+                      "3Fh h3: BX CX DX unchanged");
 
-    c = setup(); c.r[0] = 0x3F00; c.r[3] = 3; c.r[1] = 3; c.r[2] = 0x0200; rxi = 3;
-    CHECK(run_entry(&c, DOS_AUXPRN_R3, 0x0002) == 0 && ncalls == 3 && (uint16_t)c.r[0] == 3,
-          "3Fh h3: no CR -> stops at CX");
+    cpu = AuxPrnTestSetup(); cpu.r[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
+    cpu.r[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.r[AUXPRN_TEST_CX] = 3;
+    cpu.r[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER; g_ReceiveIndex = 3;
+    AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_READ, AUXPRN_TEST_FLAGS_CF_CLEAR)
+                      == AUXPRN_TEST_RETURNED && g_CallCount == 3
+                      && (WORD)cpu.r[AUXPRN_TEST_AX] == 3,
+                      "3Fh h3: no CR -> stops at CX");
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }

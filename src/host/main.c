@@ -109,7 +109,7 @@ static int  g_instance = 1, g_instance_abandoned;
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
-typedef char dos_auxprn_fits[(sizeof(dos_auxprn_code) <= DOS_AUXPRN_LEN) ? 1 : -1];
+typedef char dos_auxprn_fits[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
 #include "bios_prtsc.h"   /* #274: the default INT 05h's byte sequencer */
 typedef char bios_kbdact_fits[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
@@ -2650,25 +2650,25 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
     VDM_SET16(tib, VTIB_DS, g_crit.ds); VDM_SET16(tib, VTIB_ES, g_crit.es);
     if (act == 1) return 0;                              /* RETRY: the BOP runs again */
     if (act == 2) {                                      /* ABORT */
-        m->exit_code = DOS_CRIT_ABORT_RC;
+        m->exit_code = DOS_CRIT_ABORT_RETURN_CODE;
         m->term_type = 2;
         return 1;
     }
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
-    /* ── #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, dos_crit_ah). DOS
+    /* ── #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, DosCritInt24Ah). DOS
          carries on as if the sectors had moved (MS-DOS 4.0 DREAD: IGNORE returns carry
          clear): the call reports the bytes asked for -- a read still stops at end of
          file -- and the position advances by them. Nothing is copied: what an ignored
-         read leaves in the buffer is what was there. See dos_crit_ignore_count.
+         read leaves in the buffer is what was there. See DosCritIgnoreCount.
        ⚠ Spec-derived, unmeasured on 6.22: p_crit2 crit2.h3f.ignore / crit2.h40.ignore. */
     if (act == 0 && (g_crit.fn == 0x3F || g_crit.fn == 0x40)
         && (g_crit.ebx & 0xFFFF) < DOS_MAX_FILES && m->fh[g_crit.ebx & 0xFFFF]) {
         HANDLE fh = m->fh[g_crit.ebx & 0xFFFF];
         DWORD pos = SetFilePointer(fh, 0, NULL, FILE_CURRENT);
         DWORD size = GetFileSize(fh, NULL);
-        WORD n = dos_crit_ignore_count(g_crit.fn, (WORD)(g_crit.ecx & 0xFFFF), pos, size,
+        WORD n = DosCritIgnoreCount(g_crit.fn, (WORD)(g_crit.ecx & 0xFFFF), pos, size,
                                        pos != INVALID_SET_FILE_POINTER && size != INVALID_FILE_SIZE);
         if (pos != INVALID_SET_FILE_POINTER) SetFilePointer(fh, (LONG)n, NULL, FILE_CURRENT);
         VDM_SET16(tib, VTIB_EAX, n);
@@ -2679,7 +2679,7 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
         return 0;
     }
     /* FAIL (and an IGNORE with no handle left to ignore on): the call returns an error. */
-    VDM_SET16(tib, VTIB_EAX, dos_crit_fail_ax(g_crit.fn, m->crit_code));
+    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(g_crit.fn, m->crit_code));
     *pfl |= 1;
     m->last_err = DOS_ERR_FAIL_I24;
     VDM_REG(tib, VTIB_EIP) += 3;                         /* past the BOP -> the IRET */
@@ -2696,9 +2696,9 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
 static int pm_rw_hw_fail(dos_machine_t *m, volatile BYTE *tib, BYTE fn, DWORD we, char **pp)
 {
     unsigned short de = 0;
-    if (!we || !dos_err_from_win32((unsigned long)we, &de) || !dos_crit_is_hw(de)) return 0;
+    if (!we || !DosErrFromWin32((unsigned long)we, &de) || !DosCritIsHardwareError(de)) return 0;
     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-    VDM_SET16(tib, VTIB_EAX, dos_crit_fail_ax(fn, (BYTE)(de - 19)));
+    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(fn, (BYTE)(de - 19)));
     m->last_err = DOS_ERR_FAIL_I24;
     *pp = zput(*pp, "  INT24 not raised (DPMI client): AH=0x"); *pp = zhexb(*pp, fn);
     *pp = zput(*pp, " error 0x"); *pp = zhexb(*pp, de);
@@ -14768,22 +14768,22 @@ static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clo
      CRT does not link in any case), so the host hands it the reading. Local time,
      not UTC: a DOS guest's clock is the wall clock on the machine in front of you,
      and that is what `DATE` and `TIME` and every file timestamp are compared against. */
-/* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_dos_clock.rtc_off,
+/* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_DosClock.RtcOffset,
      which a guest's INT 1Ah AH=03h/05h or INT 21h AH=2Bh/2Dh sets (dos_clock.h). Zero
      until a guest sets it, so an untouched VDM reads exactly GetLocalTime as before. */
 static void host_rtc_now(void *ctx, struct vdd_rtc *out)
 {
-    dclk_t g;
+    DOS_CLOCK_TIME g;
     (void)ctx;
-    dos_clock_read(g_dos_clock.rtc_off, &g);
-    out->cent  = g.year / 100u;
-    out->year  = g.year % 100u;
-    out->month = g.month;
-    out->day   = g.day;
-    out->hour  = g.hour;
-    out->min   = g.min;
-    out->sec   = g.sec;
-    out->dow   = g.dow + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
+    dos_clock_read(g_DosClock.RtcOffset, &g);
+    out->cent  = g.Year / 100u;
+    out->year  = g.Year % 100u;
+    out->month = g.Month;
+    out->day   = g.Day;
+    out->hour  = g.Hour;
+    out->min   = g.Minute;
+    out->sec   = g.Second;
+    out->dow   = g.DayOfWeek + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
 }
 
 /* INT 1Ah AH=03h (what=0: hour/min/sec) and AH=05h (what=1: century/year/month/day),
@@ -14792,16 +14792,16 @@ static void host_rtc_now(void *ctx, struct vdd_rtc *out)
    the clock untouched -- for a reading no calendar has. */
 static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
 {
-    dclk_t host;
+    DOS_CLOCK_TIME host;
     (void)ctx;
     dos_clock_host_now(&host);
     if (what == 0) {
-        if (!dclk_time_ok(in->hour, in->min, in->sec, 0)) return 0;
-        dclk_set_time(&host, &g_dos_clock.rtc_off, in->hour, in->min, in->sec, 0);
+        if (!DosClockIsTimeValid(in->hour, in->min, in->sec, 0)) return 0;
+        DosClockSetTime(&host, &g_DosClock.RtcOffset, in->hour, in->min, in->sec, 0);
     } else {
         unsigned y = in->cent * 100u + in->year;
-        if (!dclk_date_real(y, in->month, in->day)) return 0;
-        dclk_set_date(&host, &g_dos_clock.rtc_off, y, in->month, in->day);
+        if (!DosClockIsRealDate(y, in->month, in->day)) return 0;
+        DosClockSetDate(&host, &g_DosClock.RtcOffset, y, in->month, in->day);
     }
     return 1;
 }
@@ -21869,7 +21869,7 @@ static char *pm_int21_lfn(dos_machine_t *mp, volatile BYTE *tib, char *p)
     case 0xAA:            if (bh == 0) dx_k = 1; else if (bh == 2) { dx_k = 4; dx_len = 261; } break;
     default: break;
     }
-    if (al == 0x4E || al == 0x4F) { di_k = 2; di_len = 0x13E; }   /* DOS_LFN_FIND_LEN */
+    if (al == 0x4E || al == 0x4F) { di_k = 2; di_len = 0x13E; }   /* DOS_LFN_FIND_RECORD_SIZE */
     if (al == 0x60) { di_k = 4; di_len = 261; }
     if (al == 0xA8) { if (((VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF) == 0) { di_k = 2; di_len = 11; }
                       else { di_k = 4; di_len = 13; } }
@@ -31231,7 +31231,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        dos_auxprn.asm for why it is guest code and what it was measured against. */
     {   volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
         unsigned k;
-        for (k = 0; k < sizeof(dos_auxprn_code); ++k) bs[DOS_AUXPRN_OFF + k] = dos_auxprn_code[k];
+        for (k = 0; k < sizeof(g_DosAuxPrnCode); ++k) bs[DOS_AUXPRN_OFF + k] = g_DosAuxPrnCode[k];
         /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
         for (k = 0; k < sizeof(g_BiosKeyboardActionCode); ++k) bs[DOS_KBDACT_OFF + k] = g_BiosKeyboardActionCode[k];
         /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
@@ -31630,11 +31630,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "\r\n"); }
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
-      for (k = 0; k < sizeof(dos_tab_upper);   ++k) ct[DOS_CTAB_UPPER   + k] = dos_tab_upper[k];
-      for (k = 0; k < sizeof(dos_tab_fnupper); ++k) ct[DOS_CTAB_FNUPPER + k] = dos_tab_fnupper[k];
-      for (k = 0; k < sizeof(dos_tab_fnterm);  ++k) ct[DOS_CTAB_FNTERM  + k] = dos_tab_fnterm[k];
-      for (k = 0; k < sizeof(dos_tab_collate); ++k) ct[DOS_CTAB_COLLATE + k] = dos_tab_collate[k];
-      for (k = 0; k < sizeof(dos_tab_dbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = dos_tab_dbcs[k];
+      for (k = 0; k < sizeof(g_DosCtabUpper);   ++k) ct[DOS_CTAB_UPPER   + k] = g_DosCtabUpper[k];
+      for (k = 0; k < sizeof(g_DosCtabFileNameUpper); ++k) ct[DOS_CTAB_FNUPPER + k] = g_DosCtabFileNameUpper[k];
+      for (k = 0; k < sizeof(g_DosCtabFileNameTerminators);  ++k) ct[DOS_CTAB_FNTERM  + k] = g_DosCtabFileNameTerminators[k];
+      for (k = 0; k < sizeof(g_DosCtabCollate); ++k) ct[DOS_CTAB_COLLATE + k] = g_DosCtabCollate[k];
+      for (k = 0; k < sizeof(g_DosCtabDbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = g_DosCtabDbcs[k];
       /* ── THE INT 2Fh AX=122Eh TABLES, ZEROED EXPLICITLY. ──────────────────
            The block is MCB-reserved and in practice arrives zeroed, but a guest
            that reads a table we never wrote is reading whatever the last run

@@ -3,14 +3,16 @@
  * Stock NTVDM on XP provides the LFN API to DOS programs, and XP's own DOS tools
  * (EDIT.COM first among them -- see the old AH=71h note in dos_int21.c) are written
  * against it. dos_int21.c owns the Win32 half; everything here is arithmetic and byte
- * layout, kept free of windows.h so tests/unit/lfn_test.c can pin it off-VM:
+ * layout, with no Windows calls (only Windows types, src/ntvdmex_types.h), so
+ * tests/unit/lfn_test.c can pin it off-VM:
  *
- *   dos_lfn_ft_to_dos / dos_lfn_dos_to_ft   71A7h, and every DOS-format time below
- *   dos_lfn_find_pack                       the 318-byte record 714Eh/714Fh fill
- *   dos_lfn_attr_ok                         714Eh/7141h's CL (allowed) / CH (required)
- *   dos_lfn_short_name                      71A8h "generate short name"
- *   dos_ext_open_disp / _taken / _access    6Ch AND 716Ch / 71A9h: action -> disposition
- *   dos_lfn_err_from_win32                  the LFN calls' error mapping
+ *   DosLfnFileTimeToDos / DosLfnDosToFileTime  71A7h, and every DOS-format time below
+ *   DosLfnFindPack                             the 318-byte record 714Eh/714Fh fill
+ *   DosLfnAttributesOk                         714Eh/7141h's CL (allowed) / CH (required)
+ *   DosLfnShortName                            71A8h "generate short name"
+ *   DosExtOpenDisposition / ...ActionTaken / ...Access
+ *                                              6Ch AND 716Ch / 71A9h: action -> disposition
+ *   DosLfnErrFromWin32                         the LFN calls' error mapping
  *
  * ⚠ THE SOURCES ARE RBIL (INT 21h AX=71xxh) AND THE WIN32 STRUCTURE LAYOUTS, NOT A
  *   MEASUREMENT. Every choice below that a stock run could contradict is marked
@@ -18,11 +20,11 @@
  *   (scripts/dospair.sh tests/probes/dos/p_lfn.com). Change a row here only with a
  *   CASE= line from that run beside it.
  */
-#ifndef DOS_LFN_H
-#define DOS_LFN_H
+#ifndef NTVDMEX_DOS_LFN_H
+#define NTVDMEX_DOS_LFN_H
 
-#include <stdint.h>
-#include "dos_err.h"      /* dos_err_from_win32: the measured rows come first */
+#include "../ntvdmex_types.h"
+#include "dos_err.h"      /* DosErrFromWin32: the measured rows come first */
 
 /* ── FILETIME <-> DOS DATE/TIME. ──────────────────────────────────────────────────
      A FILETIME counts 100 ns since 1601-01-01; a DOS date is (year-1980)<<9 | month<<5
@@ -33,73 +35,156 @@
      handler's business (dos_int21.c converts around this); nothing here knows a zone.
    ⚠ Out of DOS's range (before 1980, after 2107) the conversion FAILS rather than
      clamps -- Win32's FileTimeToDosDateTime does the same. */
-#define DOS_LFN_FT_SEC        10000000ull      /* 100 ns ticks per second           */
-#define DOS_LFN_FT_UNIX_DAYS  134774ll         /* days 1601-01-01 .. 1970-01-01     */
+#define DOS_LFN_FILETIME_TICKS_PER_SECOND 10000000ull  /* 100 ns ticks per second         */
+#define DOS_LFN_FILETIME_UNIX_DAYS        134774ll     /* days 1601-01-01 .. 1970-01-01   */
+#define DOS_LFN_FILETIME_TICKS_PER_10MS   100000u      /* 100 ns ticks per 10 ms          */
+
+/* The DOS date and time fields (above), and their range. */
+#define DOS_LFN_DOS_EPOCH_YEAR      1980
+#define DOS_LFN_DOS_LAST_YEAR       2107
+#define DOS_LFN_DATE_YEAR_SHIFT     9
+#define DOS_LFN_DATE_MONTH_SHIFT    5
+#define DOS_LFN_DATE_MONTH_MASK     0x0F
+#define DOS_LFN_DATE_DAY_MASK       0x1F
+#define DOS_LFN_TIME_HOUR_SHIFT     11
+#define DOS_LFN_TIME_MINUTE_SHIFT   5
+#define DOS_LFN_TIME_MINUTE_MASK    0x3F
+#define DOS_LFN_TIME_SECONDS_MASK   0x1F
+#define DOS_LFN_TIME_SECONDS_UNIT   2u      /* the DOS time counts seconds/2             */
+#define DOS_LFN_ODD_SECOND          1       /* ...so the odd second goes into BH         */
+#define DOS_LFN_TEN_MS_PER_SECOND   100
+#define DOS_LFN_LAST_HOUR           23
+#define DOS_LFN_LAST_MINUTE         59
+#define DOS_LFN_LAST_EVEN_SECOND    58
+#define DOS_LFN_LAST_TEN_MS         199
+
+/* The calendar. */
+#define DOS_LFN_JANUARY             1
+#define DOS_LFN_FEBRUARY            2
+#define DOS_LFN_DECEMBER            12
+#define DOS_LFN_MONTHS_PER_YEAR     12
+#define DOS_LFN_FIRST_DAY           1
+#define DOS_LFN_LEAP_FEBRUARY_DAYS  29
+#define DOS_LFN_LEAP_YEAR_INTERVAL  4
+#define DOS_LFN_YEARS_PER_CENTURY   100
+#define DOS_LFN_YEARS_PER_ERA       400
+#define DOS_LFN_DAYS_PER_YEAR       365
+#define DOS_LFN_SECONDS_PER_DAY     86400u
+#define DOS_LFN_SECONDS_PER_HOUR    3600u
+#define DOS_LFN_SECONDS_PER_MINUTE  60u
+#define DOS_LFN_MINUTES_PER_HOUR    60
+
+/* The constants of the days_from_civil / civil_from_days arithmetic below, which counts
+   each year from 1 March. */
+#define DOS_LFN_ERA_FLOOR_ADJUST            399     /* YEARS_PER_ERA - 1                 */
+#define DOS_LFN_DAYS_PER_ERA                146097
+#define DOS_LFN_DAYS_PER_ERA_LESS_ONE       146096
+#define DOS_LFN_DAYS_PER_CENTURY            36524
+#define DOS_LFN_DAYS_PER_FOUR_YEARS_LESS_ONE 1460
+#define DOS_LFN_MARCH_SHIFT                 3
+#define DOS_LFN_MARCH_WRAP                  9
+#define DOS_LFN_SHIFTED_JANUARY             10
+#define DOS_LFN_MONTH_DAYS_NUMERATOR        153
+#define DOS_LFN_MONTH_DAYS_ROUNDING         2
+#define DOS_LFN_MONTH_DAYS_DENOMINATOR      5
+#define DOS_LFN_CIVIL_EPOCH_DAYS            719468
 
 /* Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant's days_from_civil). */
-static inline int64_t dos_lfn_days_from_civil(int64_t y, unsigned m, unsigned d)
+static inline INT64 DosLfnDaysFromCivil(_In_ INT64 year, _In_ UINT month, _In_ UINT day)
 {
-    int64_t era, yoe, doy, doe;
-    y -= m <= 2;
-    era = (y >= 0 ? y : y - 399) / 400;
-    yoe = y - era * 400;
-    doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + doe - 719468;
+    INT64 era, yearOfEra, dayOfYear, dayOfEra;
+    year -= month <= DOS_LFN_FEBRUARY;
+    era = (year >= 0 ? year : year - DOS_LFN_ERA_FLOOR_ADJUST) / DOS_LFN_YEARS_PER_ERA;
+    yearOfEra = year - era * DOS_LFN_YEARS_PER_ERA;
+    dayOfYear = (DOS_LFN_MONTH_DAYS_NUMERATOR
+                 * (month + (month > DOS_LFN_FEBRUARY ? -DOS_LFN_MARCH_SHIFT : DOS_LFN_MARCH_WRAP))
+                 + DOS_LFN_MONTH_DAYS_ROUNDING) / DOS_LFN_MONTH_DAYS_DENOMINATOR + day - 1;
+    dayOfEra = yearOfEra * DOS_LFN_DAYS_PER_YEAR + yearOfEra / DOS_LFN_LEAP_YEAR_INTERVAL
+             - yearOfEra / DOS_LFN_YEARS_PER_CENTURY + dayOfYear;
+    return era * DOS_LFN_DAYS_PER_ERA + dayOfEra - DOS_LFN_CIVIL_EPOCH_DAYS;
 }
 
-static inline void dos_lfn_civil_from_days(int64_t z, int64_t *y, unsigned *m, unsigned *d)
+static inline VOID DosLfnCivilFromDays(_In_ INT64 days, _Out_ PINT64 year, _Out_ PUINT month,
+                                       _Out_ PUINT day)
 {
-    int64_t era, doe, yoe, doy, mp;
-    z += 719468;
-    era = (z >= 0 ? z : z - 146096) / 146097;
-    doe = z - era * 146097;
-    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    mp  = (5 * doy + 2) / 153;
-    *d  = (unsigned)(doy - (153 * mp + 2) / 5 + 1);
-    *m  = (unsigned)(mp < 10 ? mp + 3 : mp - 9);
-    *y  = yoe + era * 400 + (*m <= 2);
+    INT64 era, dayOfEra, yearOfEra, dayOfYear, shiftedMonth;
+    days += DOS_LFN_CIVIL_EPOCH_DAYS;
+    era = (days >= 0 ? days : days - DOS_LFN_DAYS_PER_ERA_LESS_ONE) / DOS_LFN_DAYS_PER_ERA;
+    dayOfEra = days - era * DOS_LFN_DAYS_PER_ERA;
+    yearOfEra = (dayOfEra - dayOfEra / DOS_LFN_DAYS_PER_FOUR_YEARS_LESS_ONE
+                 + dayOfEra / DOS_LFN_DAYS_PER_CENTURY
+                 - dayOfEra / DOS_LFN_DAYS_PER_ERA_LESS_ONE) / DOS_LFN_DAYS_PER_YEAR;
+    dayOfYear = dayOfEra - (DOS_LFN_DAYS_PER_YEAR * yearOfEra
+                            + yearOfEra / DOS_LFN_LEAP_YEAR_INTERVAL
+                            - yearOfEra / DOS_LFN_YEARS_PER_CENTURY);
+    shiftedMonth = (DOS_LFN_MONTH_DAYS_DENOMINATOR * dayOfYear + DOS_LFN_MONTH_DAYS_ROUNDING)
+                   / DOS_LFN_MONTH_DAYS_NUMERATOR;
+    *day   = (UINT)(dayOfYear - (DOS_LFN_MONTH_DAYS_NUMERATOR * shiftedMonth
+                                 + DOS_LFN_MONTH_DAYS_ROUNDING)
+                                / DOS_LFN_MONTH_DAYS_DENOMINATOR + 1);
+    *month = (UINT)(shiftedMonth < DOS_LFN_SHIFTED_JANUARY ? shiftedMonth + DOS_LFN_MARCH_SHIFT
+                                                           : shiftedMonth - DOS_LFN_MARCH_WRAP);
+    *year  = yearOfEra + era * DOS_LFN_YEARS_PER_ERA + (*month <= DOS_LFN_FEBRUARY);
 }
 
-static inline unsigned dos_lfn_days_in_month(int64_t y, unsigned m)
+static inline UINT DosLfnDaysInMonth(_In_ INT64 year, _In_ UINT month)
 {
-    static const unsigned char dim[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) return 29;
-    return (m >= 1 && m <= 12) ? dim[m - 1] : 0;
+    static const BYTE daysInMonth[DOS_LFN_MONTHS_PER_YEAR] =
+        { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    if (month == DOS_LFN_FEBRUARY
+        && ((year % DOS_LFN_LEAP_YEAR_INTERVAL == 0 && year % DOS_LFN_YEARS_PER_CENTURY != 0)
+            || year % DOS_LFN_YEARS_PER_ERA == 0)) return DOS_LFN_LEAP_FEBRUARY_DAYS;
+    return (month >= DOS_LFN_JANUARY && month <= DOS_LFN_DECEMBER) ? daysInMonth[month - 1] : 0;
 }
 
-/* FILETIME -> DOS date, time and BH (10 ms units, 0..199). 1 = ok, 0 = out of range. */
-static inline int dos_lfn_ft_to_dos(uint64_t ft, uint16_t *date, uint16_t *time, uint8_t *cs200)
+/* FILETIME -> DOS date, time and BH (10 ms units, 0..199). TRUE = ok, FALSE = out of
+   range. */
+static inline BOOL DosLfnFileTimeToDos(_In_ UINT64 fileTime, _Out_ PWORD dosDate,
+                                       _Out_ PWORD dosTime, _Out_ PBYTE tenMs)
 {
-    uint64_t secs = ft / DOS_LFN_FT_SEC, rem = ft % DOS_LFN_FT_SEC;
-    int64_t  days = (int64_t)(secs / 86400u) - DOS_LFN_FT_UNIX_DAYS, y;
-    unsigned sod  = (unsigned)(secs % 86400u), m, d, h, mi, s;
-    dos_lfn_civil_from_days(days, &y, &m, &d);
-    if (y < 1980 || y > 2107) return 0;
-    h = sod / 3600; mi = (sod / 60) % 60; s = sod % 60;
-    *date  = (uint16_t)(((unsigned)(y - 1980) << 9) | (m << 5) | d);
-    *time  = (uint16_t)((h << 11) | (mi << 5) | (s / 2));
-    *cs200 = (uint8_t)((s & 1) * 100 + (unsigned)(rem / 100000u));
-    return 1;
+    UINT64 seconds = fileTime / DOS_LFN_FILETIME_TICKS_PER_SECOND,
+           remainder = fileTime % DOS_LFN_FILETIME_TICKS_PER_SECOND;
+    INT64  days = (INT64)(seconds / DOS_LFN_SECONDS_PER_DAY) - DOS_LFN_FILETIME_UNIX_DAYS, year;
+    UINT   secondOfDay = (UINT)(seconds % DOS_LFN_SECONDS_PER_DAY), month, day, hour, minute,
+           second;
+    DosLfnCivilFromDays(days, &year, &month, &day);
+    if (year < DOS_LFN_DOS_EPOCH_YEAR || year > DOS_LFN_DOS_LAST_YEAR) return FALSE;
+    hour = secondOfDay / DOS_LFN_SECONDS_PER_HOUR;
+    minute = (secondOfDay / DOS_LFN_SECONDS_PER_MINUTE) % DOS_LFN_MINUTES_PER_HOUR;
+    second = secondOfDay % DOS_LFN_SECONDS_PER_MINUTE;
+    *dosDate = (WORD)(((UINT)(year - DOS_LFN_DOS_EPOCH_YEAR) << DOS_LFN_DATE_YEAR_SHIFT)
+                      | (month << DOS_LFN_DATE_MONTH_SHIFT) | day);
+    *dosTime = (WORD)((hour << DOS_LFN_TIME_HOUR_SHIFT) | (minute << DOS_LFN_TIME_MINUTE_SHIFT)
+                      | (second / DOS_LFN_TIME_SECONDS_UNIT));
+    *tenMs   = (BYTE)((second & DOS_LFN_ODD_SECOND) * DOS_LFN_TEN_MS_PER_SECOND
+                      + (UINT)(remainder / DOS_LFN_FILETIME_TICKS_PER_10MS));
+    return TRUE;
 }
 
-/* DOS date, time, BH -> FILETIME. 0 = a field DOS cannot hold (month 13, day 30 Feb,
+/* DOS date, time, BH -> FILETIME. FALSE = a field DOS cannot hold (month 13, day 30 Feb,
    hour 24, minute 60, a seconds/2 of 30, BH of 200 or more).
    ⚠ UNMEASURED: whether stock refuses these or normalises them as Win32's
      DosDateTimeToFileTime partly does. */
-static inline int dos_lfn_dos_to_ft(uint16_t date, uint16_t time, uint8_t cs200, uint64_t *ft)
+static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In_ BYTE tenMs,
+                                       _Out_ PUINT64 fileTime)
 {
-    int64_t  y  = 1980 + (date >> 9);
-    unsigned m  = (date >> 5) & 0x0F, d = date & 0x1F;
-    unsigned h  = time >> 11, mi = (time >> 5) & 0x3F, s = (time & 0x1F) * 2u;
-    int64_t  days;
-    if (m < 1 || m > 12 || d < 1 || d > dos_lfn_days_in_month(y, m)) return 0;
-    if (h > 23 || mi > 59 || s > 58 || cs200 > 199) return 0;
-    days = dos_lfn_days_from_civil(y, m, d) + DOS_LFN_FT_UNIX_DAYS;
-    *ft = ((uint64_t)days * 86400u + h * 3600u + mi * 60u + s) * DOS_LFN_FT_SEC
-        + (uint64_t)cs200 * 100000u;
-    return 1;
+    INT64 year   = DOS_LFN_DOS_EPOCH_YEAR + (dosDate >> DOS_LFN_DATE_YEAR_SHIFT);
+    UINT  month  = (dosDate >> DOS_LFN_DATE_MONTH_SHIFT) & DOS_LFN_DATE_MONTH_MASK,
+          day    = dosDate & DOS_LFN_DATE_DAY_MASK;
+    UINT  hour   = dosTime >> DOS_LFN_TIME_HOUR_SHIFT,
+          minute = (dosTime >> DOS_LFN_TIME_MINUTE_SHIFT) & DOS_LFN_TIME_MINUTE_MASK,
+          second = (dosTime & DOS_LFN_TIME_SECONDS_MASK) * DOS_LFN_TIME_SECONDS_UNIT;
+    INT64 days;
+    if (month < DOS_LFN_JANUARY || month > DOS_LFN_DECEMBER || day < DOS_LFN_FIRST_DAY
+        || day > DosLfnDaysInMonth(year, month)) return FALSE;
+    if (hour > DOS_LFN_LAST_HOUR || minute > DOS_LFN_LAST_MINUTE
+        || second > DOS_LFN_LAST_EVEN_SECOND || tenMs > DOS_LFN_LAST_TEN_MS) return FALSE;
+    days = DosLfnDaysFromCivil(year, month, day) + DOS_LFN_FILETIME_UNIX_DAYS;
+    *fileTime = ((UINT64)days * DOS_LFN_SECONDS_PER_DAY + hour * DOS_LFN_SECONDS_PER_HOUR
+                 + minute * DOS_LFN_SECONDS_PER_MINUTE + second)
+                * DOS_LFN_FILETIME_TICKS_PER_SECOND
+        + (UINT64)tenMs * DOS_LFN_FILETIME_TICKS_PER_10MS;
+    return TRUE;
 }
 
 /* ── THE FIND RECORD 714Eh/714Fh WRITE AT ES:DI. ─────────────────────────────────
@@ -116,50 +201,88 @@ static inline int dos_lfn_dos_to_ft(uint16_t date, uint16_t time, uint8_t cs200,
      name is Win32's cAlternateFileName, i.e. EMPTY when the long name is already a
      valid 8.3 name; (4) everything past each name's NUL is zeroed, so the record is
      deterministic (Win32 leaves garbage there). */
-#define DOS_LFN_FIND_LEN    0x13E
-#define DOS_LFN_FIND_LONG   0x2C
-#define DOS_LFN_FIND_SHORT  0x130
+#define DOS_LFN_FIND_RECORD_SIZE    0x13E
+#define DOS_LFN_FIND_ATTRIBUTES     0x00
+#define DOS_LFN_FIND_CREATION_TIME  0x04
+#define DOS_LFN_FIND_ACCESS_TIME    0x0C
+#define DOS_LFN_FIND_WRITE_TIME     0x14
+#define DOS_LFN_FIND_SIZE_HIGH      0x1C
+#define DOS_LFN_FIND_SIZE_LOW       0x20
+#define DOS_LFN_FIND_LONG_NAME      0x2C
+#define DOS_LFN_FIND_SHORT_NAME     0x130
+#define DOS_LFN_FIND_LONG_NAME_CHARS  259   /* the 260-byte field, less its NUL          */
+#define DOS_LFN_FIND_SHORT_NAME_CHARS 13    /* the 14-byte field, less its NUL           */
 
-typedef struct {
-    uint32_t    attr;
-    uint64_t    ctime, atime, wtime;   /* FILETIMEs, in whatever zone the caller wants */
-    uint32_t    size_hi, size_lo;
-    const char *long_name;
-    const char *short_name;            /* "" when the long name is already 8.3         */
-} dos_lfn_find_t;
+/* A QWORD time: its high DWORD 4 bytes in; in DOS format, the date in the high word. */
+#define DOS_LFN_FIND_TIME_HIGH      4
+#define DOS_LFN_HIGH_DWORD_SHIFT    32
+#define DOS_LFN_DOS_DATE_SHIFT      16
 
-static inline void dos_lfn_put32(uint8_t *p, uint32_t v)
+/* A little-endian DWORD: the low byte first, then the next at +1, and so on. */
+#define DOS_LFN_BYTE1               1
+#define DOS_LFN_BYTE2               2
+#define DOS_LFN_BYTE3               3
+#define DOS_LFN_BYTE1_SHIFT         8
+#define DOS_LFN_BYTE2_SHIFT         16
+#define DOS_LFN_BYTE3_SHIFT         24
+
+typedef struct _DOS_LFN_FIND_ENTRY {
+    DWORD  Attributes;
+    UINT64 CreationTime, LastAccessTime, LastWriteTime;  /* FILETIMEs, in whatever zone the
+                                                            caller wants                    */
+    DWORD  SizeHigh, SizeLow;
+    PCSTR  LongName;
+    PCSTR  ShortName;            /* "" when the long name is already 8.3         */
+} DOS_LFN_FIND_ENTRY, *PDOS_LFN_FIND_ENTRY;
+
+typedef const DOS_LFN_FIND_ENTRY *PCDOS_LFN_FIND_ENTRY;
+
+static inline VOID DosLfnPutDword(_Out_writes_bytes_(sizeof(DWORD)) PBYTE destination,
+                                  _In_ DWORD value)
 {
-    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+    destination[0] = (BYTE)value; destination[DOS_LFN_BYTE1] = (BYTE)(value >> DOS_LFN_BYTE1_SHIFT);
+    destination[DOS_LFN_BYTE2] = (BYTE)(value >> DOS_LFN_BYTE2_SHIFT);
+    destination[DOS_LFN_BYTE3] = (BYTE)(value >> DOS_LFN_BYTE3_SHIFT);
 }
 
-static inline void dos_lfn_put_time(uint8_t *p, uint64_t ft, int dos_fmt)
+static inline VOID DosLfnPutTime(_Out_writes_bytes_(sizeof(UINT64)) PBYTE destination,
+                                 _In_ UINT64 fileTime, _In_ BOOL isDosFormat)
 {
-    if (dos_fmt) {
-        uint16_t dd = 0, dt = 0; uint8_t cs = 0;
-        if (!ft || !dos_lfn_ft_to_dos(ft, &dd, &dt, &cs)) { dd = 0; dt = 0; }
-        dos_lfn_put32(p, ((uint32_t)dd << 16) | dt);
-        dos_lfn_put32(p + 4, 0);
+    if (isDosFormat) {
+        WORD dosDate = 0, dosTime = 0; BYTE tenMs = 0;
+        if (!fileTime || !DosLfnFileTimeToDos(fileTime, &dosDate, &dosTime, &tenMs)) {
+            dosDate = 0; dosTime = 0;
+        }
+        DosLfnPutDword(destination, ((DWORD)dosDate << DOS_LFN_DOS_DATE_SHIFT) | dosTime);
+        DosLfnPutDword(destination + DOS_LFN_FIND_TIME_HIGH, 0);
     } else {
-        dos_lfn_put32(p, (uint32_t)ft);
-        dos_lfn_put32(p + 4, (uint32_t)(ft >> 32));
+        DosLfnPutDword(destination, (DWORD)fileTime);
+        DosLfnPutDword(destination + DOS_LFN_FIND_TIME_HIGH,
+                       (DWORD)(fileTime >> DOS_LFN_HIGH_DWORD_SHIFT));
     }
 }
 
-static inline void dos_lfn_find_pack(uint8_t out[DOS_LFN_FIND_LEN], const dos_lfn_find_t *f, int dos_fmt)
+static inline VOID DosLfnFindPack(_Out_writes_bytes_(DOS_LFN_FIND_RECORD_SIZE)
+                                  BYTE record[DOS_LFN_FIND_RECORD_SIZE],
+                                  _In_ PCDOS_LFN_FIND_ENTRY entry, _In_ BOOL isDosFormat)
 {
-    int k;
-    for (k = 0; k < DOS_LFN_FIND_LEN; ++k) out[k] = 0;
-    dos_lfn_put32(out + 0x00, f->attr);
-    dos_lfn_put_time(out + 0x04, f->ctime, dos_fmt);
-    dos_lfn_put_time(out + 0x0C, f->atime, dos_fmt);
-    dos_lfn_put_time(out + 0x14, f->wtime, dos_fmt);
-    dos_lfn_put32(out + 0x1C, f->size_hi);
-    dos_lfn_put32(out + 0x20, f->size_lo);
-    for (k = 0; k < 259 && f->long_name && f->long_name[k]; ++k)
-        out[DOS_LFN_FIND_LONG + k] = (uint8_t)f->long_name[k];
-    for (k = 0; k < 13 && f->short_name && f->short_name[k]; ++k)
-        out[DOS_LFN_FIND_SHORT + k] = (uint8_t)f->short_name[k];
+    INT byteIndex;
+    for (byteIndex = 0; byteIndex < DOS_LFN_FIND_RECORD_SIZE; ++byteIndex) record[byteIndex] = 0;
+    DosLfnPutDword(record + DOS_LFN_FIND_ATTRIBUTES, entry->Attributes);
+    DosLfnPutTime(record + DOS_LFN_FIND_CREATION_TIME, entry->CreationTime, isDosFormat);
+    DosLfnPutTime(record + DOS_LFN_FIND_ACCESS_TIME, entry->LastAccessTime, isDosFormat);
+    DosLfnPutTime(record + DOS_LFN_FIND_WRITE_TIME, entry->LastWriteTime, isDosFormat);
+    DosLfnPutDword(record + DOS_LFN_FIND_SIZE_HIGH, entry->SizeHigh);
+    DosLfnPutDword(record + DOS_LFN_FIND_SIZE_LOW, entry->SizeLow);
+    for (byteIndex = 0;
+         byteIndex < DOS_LFN_FIND_LONG_NAME_CHARS && entry->LongName && entry->LongName[byteIndex];
+         ++byteIndex)
+        record[DOS_LFN_FIND_LONG_NAME + byteIndex] = (BYTE)entry->LongName[byteIndex];
+    for (byteIndex = 0;
+         byteIndex < DOS_LFN_FIND_SHORT_NAME_CHARS && entry->ShortName
+             && entry->ShortName[byteIndex];
+         ++byteIndex)
+        record[DOS_LFN_FIND_SHORT_NAME + byteIndex] = (BYTE)entry->ShortName[byteIndex];
 }
 
 /* ── 714Eh / 7141h ATTRIBUTE MASKS. CL = ALLOWED, CH = REQUIRED (RBIL). ──────────────
@@ -167,17 +290,26 @@ static inline void dos_lfn_find_pack(uint8_t out[DOS_LFN_FIND_LEN], const dos_lf
      appears only when CL asks for it, ordinary files always (dta_match in dos_int21.c
      is the 4Eh twin) -- and every bit in CH must be present. Read-only and archive
      never exclude (RBIL: "bits 0 and 5 ignored" in CL). */
-static inline int dos_lfn_attr_ok(uint32_t attr, uint8_t allowed, uint8_t required)
+#define DOS_LFN_ATTRIBUTE_HIDDEN     0x02
+#define DOS_LFN_ATTRIBUTE_SYSTEM     0x04
+#define DOS_LFN_ATTRIBUTE_DIRECTORY  0x10
+#define DOS_LFN_ATTRIBUTE_MASK       0x3F
+
+static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, _In_ BYTE required)
 {
-    if ((attr & 0x10) && !(allowed & 0x10)) return 0;
-    if ((attr & 0x02) && !(allowed & 0x02)) return 0;
-    if ((attr & 0x04) && !(allowed & 0x04)) return 0;
-    return (attr & (required & 0x3F)) == (uint32_t)(required & 0x3F);
+    if ((attributes & DOS_LFN_ATTRIBUTE_DIRECTORY) && !(allowed & DOS_LFN_ATTRIBUTE_DIRECTORY))
+        return FALSE;
+    if ((attributes & DOS_LFN_ATTRIBUTE_HIDDEN) && !(allowed & DOS_LFN_ATTRIBUTE_HIDDEN))
+        return FALSE;
+    if ((attributes & DOS_LFN_ATTRIBUTE_SYSTEM) && !(allowed & DOS_LFN_ATTRIBUTE_SYSTEM))
+        return FALSE;
+    return (attributes & (required & DOS_LFN_ATTRIBUTE_MASK))
+           == (DWORD)(required & DOS_LFN_ATTRIBUTE_MASK);
 }
 
 /* ── 71A8h: A SHORT NAME FOR A LONG ONE. ─────────────────────────────────────────
-     Output both forms: `s83` "NAME.EXT" ASCIIZ (DH=1) and `fcb` 11 bytes space-padded
-     with no dot (DH=0).
+     Output both forms: `shortName` "NAME.EXT" ASCIIZ (DH=1) and `fcbName` 11 bytes
+     space-padded with no dot (DH=0).
      A name that is ALREADY a legal 8.3 name comes back as itself, upper-cased. Anything
      else gets NT's generated form (RtlGenerate8dot3Name, the first alias NTFS hands
      out): blanks and every '.' but the last dropped from the base, the characters
@@ -188,67 +320,118 @@ static inline int dos_lfn_attr_ok(uint32_t attr, uint8_t allowed, uint8_t requir
      documented (RBIL) as generating the BASIS name; whether it -- or NTVDM -- adds the
      numeric tail is exactly the question. The "~1" form is what NT's own generator
      produces and what the file system would assign a lone file of that name. */
-static inline int dos_lfn_bad83(unsigned char c)
+#define DOS_LFN_FIRST_PRINTABLE     0x20    /* below this, a control character           */
+#define DOS_LFN_CASE_OFFSET         32      /* 'a' - 'A'                                 */
+#define DOS_LFN_BASE_CHARS          8       /* an 8.3 name: 8 of base ...                */
+#define DOS_LFN_EXTENSION_CHARS     3       /* ... and 3 of extension                    */
+#define DOS_LFN_BASE_BUFFER_SIZE    9
+#define DOS_LFN_EXTENSION_BUFFER_SIZE 4
+#define DOS_LFN_NO_EXTENSION        (-1)    /* no dot seen yet                           */
+#define DOS_LFN_ALIAS_BASE_CHARS    6       /* the generated form keeps the first SIX... */
+#define DOS_LFN_ALIAS_TILDE         '~'     /* ...then "~1"                              */
+#define DOS_LFN_ALIAS_TAIL          '1'
+#define DOS_LFN_REPLACEMENT_CHAR    '_'
+#define DOS_LFN_EXTENSION_DOT       '.'
+#define DOS_LFN_FCB_PAD             ' '
+#define DOS_LFN_SHORT_NAME_SIZE     13      /* "NAME.EXT" and its NUL                    */
+#define DOS_LFN_FCB_NAME_SIZE       11
+
+static inline BOOL DosLfnIsBadShortNameChar(_In_ BYTE character)
 {
-    return c < 0x20 || c == '"' || c == '*' || c == '+' || c == ',' || c == '/' || c == ':'
-        || c == ';' || c == '<' || c == '=' || c == '>' || c == '?' || c == '[' || c == '\\'
-        || c == ']' || c == '|';
+    return character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+        || character == '+' || character == ',' || character == '/' || character == ':'
+        || character == ';' || character == '<' || character == '=' || character == '>'
+        || character == '?' || character == '[' || character == '\\' || character == ']'
+        || character == '|';
 }
 
-static inline char dos_lfn_up(char c) { return (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
-
-/* Is `n` (one path component) already a legal 8.3 name? */
-static inline int dos_lfn_is_83(const char *n)
+static inline CHAR DosLfnUpperCase(_In_ CHAR character)
 {
-    int b = 0, e = -1, i;
-    if (!n[0] || n[0] == '.') return 0;
-    for (i = 0; n[i]; ++i) {
-        unsigned char c = (unsigned char)n[i];
-        if (c == '.') { if (e >= 0) return 0; e = 0; continue; }
-        if (c == ' ' || dos_lfn_bad83(c)) return 0;
-        if (e >= 0) { if (++e > 3) return 0; } else if (++b > 8) return 0;
+    return (character >= 'a' && character <= 'z') ? (CHAR)(character - DOS_LFN_CASE_OFFSET)
+                                                   : character;
+}
+
+/* Is `name` (one path component) already a legal 8.3 name? */
+static inline BOOL DosLfnIsShortName(_In_ PCSTR name)
+{
+    INT baseLength = 0, extensionLength = DOS_LFN_NO_EXTENSION, charIndex;
+    if (!name[0] || name[0] == DOS_LFN_EXTENSION_DOT) return FALSE;
+    for (charIndex = 0; name[charIndex]; ++charIndex) {
+        BYTE character = (BYTE)name[charIndex];
+        if (character == DOS_LFN_EXTENSION_DOT) {
+            if (extensionLength >= 0) return FALSE;
+            extensionLength = 0; continue;
+        }
+        if (character == ' ' || DosLfnIsBadShortNameChar(character)) return FALSE;
+        if (extensionLength >= 0) { if (++extensionLength > DOS_LFN_EXTENSION_CHARS) return FALSE; }
+        else if (++baseLength > DOS_LFN_BASE_CHARS) return FALSE;
     }
-    return b > 0 && e != 0;                 /* "NAME." (a dot and no extension) is not */
+    return baseLength > 0 && extensionLength != 0;   /* "NAME." (a dot and no extension) is not */
 }
 
-static inline char dos_lfn_clean83(unsigned char c)
+static inline CHAR DosLfnCleanShortNameChar(_In_ BYTE character)
 {
-    if (c == '+' || c == ',' || c == ';' || c == '=' || c == '[' || c == ']') return '_';
-    return dos_lfn_up((char)c);
+    if (character == '+' || character == ',' || character == ';' || character == '='
+        || character == '[' || character == ']') return DOS_LFN_REPLACEMENT_CHAR;
+    return DosLfnUpperCase((CHAR)character);
 }
 
-static inline void dos_lfn_short_name(const char *lng, char s83[13], char fcb[11])
+static inline VOID DosLfnShortName(_In_ PCSTR longName,
+                                   _Out_writes_(DOS_LFN_SHORT_NAME_SIZE)
+                                   CHAR shortName[DOS_LFN_SHORT_NAME_SIZE],
+                                   _Out_writes_(DOS_LFN_FCB_NAME_SIZE)
+                                   CHAR fcbName[DOS_LFN_FCB_NAME_SIZE])
 {
-    const char *n = lng, *p, *dot = 0;
-    char base[9], ext[4];
-    int nb = 0, ne = 0, k;
-    for (p = lng; *p; ++p) if (*p == '\\' || *p == '/' || *p == ':') n = p + 1;   /* last component */
-    if (dos_lfn_is_83(n)) {
-        for (p = n; *p && *p != '.'; ++p) if (nb < 8) base[nb++] = dos_lfn_up(*p);
-        if (*p == '.') for (++p; *p && ne < 3; ++p) ext[ne++] = dos_lfn_up(*p);
+    PCSTR component = longName, cursor, lastDot = 0;
+    CHAR base[DOS_LFN_BASE_BUFFER_SIZE], extension[DOS_LFN_EXTENSION_BUFFER_SIZE];
+    INT baseLength = 0, extensionLength = 0, charIndex;
+    for (cursor = longName; *cursor; ++cursor)                         /* last component */
+        if (*cursor == '\\' || *cursor == '/' || *cursor == ':') component = cursor + 1;
+    if (DosLfnIsShortName(component)) {
+        for (cursor = component; *cursor && *cursor != DOS_LFN_EXTENSION_DOT; ++cursor)
+            if (baseLength < DOS_LFN_BASE_CHARS) base[baseLength++] = DosLfnUpperCase(*cursor);
+        if (*cursor == DOS_LFN_EXTENSION_DOT)
+            for (++cursor; *cursor && extensionLength < DOS_LFN_EXTENSION_CHARS; ++cursor)
+                extension[extensionLength++] = DosLfnUpperCase(*cursor);
     } else {
-        for (p = n; *p; ++p) if (*p == '.' && p != n) dot = p;
-        for (p = n; *p && p != dot && nb < 6; ++p) {
-            unsigned char c = (unsigned char)*p;
-            if (c == ' ' || c == '.' || c < 0x20 || c == '"' || c == '*' || c == '/'
-                || c == ':' || c == '<' || c == '>' || c == '?' || c == '\\' || c == '|') continue;
-            base[nb++] = dos_lfn_clean83(c);
+        for (cursor = component; *cursor; ++cursor)
+            if (*cursor == DOS_LFN_EXTENSION_DOT && cursor != component) lastDot = cursor;
+        for (cursor = component;
+             *cursor && cursor != lastDot && baseLength < DOS_LFN_ALIAS_BASE_CHARS; ++cursor) {
+            BYTE character = (BYTE)*cursor;
+            if (character == ' ' || character == DOS_LFN_EXTENSION_DOT
+                || character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+                || character == '/' || character == ':' || character == '<' || character == '>'
+                || character == '?' || character == '\\' || character == '|') continue;
+            base[baseLength++] = DosLfnCleanShortNameChar(character);
         }
-        if (!nb) base[nb++] = '_';
-        base[nb++] = '~'; base[nb++] = '1';
-        if (dot) for (p = dot + 1; *p && ne < 3; ++p) {
-            unsigned char c = (unsigned char)*p;
-            if (c == ' ' || c == '.' || c < 0x20 || c == '"' || c == '*' || c == '/'
-                || c == ':' || c == '<' || c == '>' || c == '?' || c == '\\' || c == '|') continue;
-            ext[ne++] = dos_lfn_clean83(c);
-        }
+        if (!baseLength) base[baseLength++] = DOS_LFN_REPLACEMENT_CHAR;
+        base[baseLength++] = DOS_LFN_ALIAS_TILDE; base[baseLength++] = DOS_LFN_ALIAS_TAIL;
+        if (lastDot)
+            for (cursor = lastDot + 1;
+                 *cursor && extensionLength < DOS_LFN_EXTENSION_CHARS; ++cursor) {
+                BYTE character = (BYTE)*cursor;
+                if (character == ' ' || character == DOS_LFN_EXTENSION_DOT
+                    || character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+                    || character == '/' || character == ':' || character == '<'
+                    || character == '>' || character == '?' || character == '\\'
+                    || character == '|') continue;
+                extension[extensionLength++] = DosLfnCleanShortNameChar(character);
+            }
     }
-    for (k = 0; k < 11; ++k) fcb[k] = ' ';
-    for (k = 0; k < nb; ++k) fcb[k] = base[k];
-    for (k = 0; k < ne; ++k) fcb[8 + k] = ext[k];
-    for (k = 0; k < nb; ++k) s83[k] = base[k];
-    if (ne) { s83[nb] = '.'; for (k = 0; k < ne; ++k) s83[nb + 1 + k] = ext[k]; s83[nb + 1 + ne] = 0; }
-    else s83[nb] = 0;
+    for (charIndex = 0; charIndex < DOS_LFN_FCB_NAME_SIZE; ++charIndex)
+        fcbName[charIndex] = DOS_LFN_FCB_PAD;
+    for (charIndex = 0; charIndex < baseLength; ++charIndex) fcbName[charIndex] = base[charIndex];
+    for (charIndex = 0; charIndex < extensionLength; ++charIndex)
+        fcbName[DOS_LFN_BASE_CHARS + charIndex] = extension[charIndex];
+    for (charIndex = 0; charIndex < baseLength; ++charIndex) shortName[charIndex] = base[charIndex];
+    if (extensionLength) {
+        shortName[baseLength] = DOS_LFN_EXTENSION_DOT;
+        for (charIndex = 0; charIndex < extensionLength; ++charIndex)
+            shortName[baseLength + 1 + charIndex] = extension[charIndex];
+        shortName[baseLength + 1 + extensionLength] = 0;
+    }
+    else shortName[baseLength] = 0;
 }
 
 /* ── 6Ch / 716Ch / 71A9h: THE ACTION WORD. ─────────────────────────────────────────
@@ -260,50 +443,81 @@ static inline void dos_lfn_short_name(const char *lng, char s83[13], char fcb[11
    ⚠ An action DOS has no meaning for (0x00, 0x13, ...) falls to OPEN_EXISTING -- what
      AH=6Ch has always answered here; unmeasured, and kept so the refactor that moved
      this out of dos_int21.c changes no behaviour. */
-#define DOS_DISP_CREATE_NEW         1u
-#define DOS_DISP_CREATE_ALWAYS      2u
-#define DOS_DISP_OPEN_EXISTING      3u
-#define DOS_DISP_OPEN_ALWAYS        4u
-#define DOS_DISP_TRUNCATE_EXISTING  5u
+#define DOS_EXT_OPEN_CREATE_NEW         1u
+#define DOS_EXT_OPEN_CREATE_ALWAYS      2u
+#define DOS_EXT_OPEN_OPEN_EXISTING      3u
+#define DOS_EXT_OPEN_OPEN_ALWAYS        4u
+#define DOS_EXT_OPEN_TRUNCATE_EXISTING  5u
 
-static inline unsigned dos_ext_open_disp(unsigned action)
+/* The action word's two halves (above). */
+#define DOS_EXT_OPEN_ACTION_MASK        0x0F
+#define DOS_EXT_OPEN_IF_MISSING_SHIFT   4
+#define DOS_EXT_OPEN_IF_EXISTS_FAIL     0
+#define DOS_EXT_OPEN_IF_EXISTS_OPEN     1
+#define DOS_EXT_OPEN_IF_EXISTS_TRUNCATE 2
+#define DOS_EXT_OPEN_IF_MISSING_FAIL    0
+#define DOS_EXT_OPEN_IF_MISSING_CREATE  1
+
+static inline UINT DosExtOpenDisposition(_In_ UINT action)
 {
-    unsigned exists = action & 0x0F, missing = (action >> 4) & 0x0F;
-    if (exists == 2 && missing == 1) return DOS_DISP_CREATE_ALWAYS;
-    if (exists == 1 && missing == 1) return DOS_DISP_OPEN_ALWAYS;
-    if (exists == 0 && missing == 1) return DOS_DISP_CREATE_NEW;
-    if (exists == 2 && missing == 0) return DOS_DISP_TRUNCATE_EXISTING;
-    return DOS_DISP_OPEN_EXISTING;
+    UINT ifExists = action & DOS_EXT_OPEN_ACTION_MASK,
+         ifMissing = (action >> DOS_EXT_OPEN_IF_MISSING_SHIFT) & DOS_EXT_OPEN_ACTION_MASK;
+    if (ifExists == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
+        return DOS_EXT_OPEN_CREATE_ALWAYS;
+    if (ifExists == DOS_EXT_OPEN_IF_EXISTS_OPEN && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
+        return DOS_EXT_OPEN_OPEN_ALWAYS;
+    if (ifExists == DOS_EXT_OPEN_IF_EXISTS_FAIL && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
+        return DOS_EXT_OPEN_CREATE_NEW;
+    if (ifExists == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE && ifMissing == DOS_EXT_OPEN_IF_MISSING_FAIL)
+        return DOS_EXT_OPEN_TRUNCATE_EXISTING;
+    return DOS_EXT_OPEN_OPEN_EXISTING;
 }
 
-/* CX on success: 1 opened, 2 created, 3 replaced (truncated). `existed` = the file was
+/* CX on success: 1 opened, 2 created, 3 replaced (truncated). `didExist` = the file was
    there before the call (Win32: GetLastError() == ERROR_ALREADY_EXISTS after an
    OPEN_ALWAYS / CREATE_ALWAYS that succeeded).
    ► #210: CREATE_ALWAYS ON A FILE THAT WAS NOT THERE IS "CREATED" (2), not "replaced".
      This answered 3 for every CREATE_ALWAYS -- RBIL's own table says otherwise, and
      716Ch "create or truncate" of a new long name is the probe's very first create. */
-static inline unsigned dos_ext_open_taken(unsigned disp, int existed, int lfn)
+#define DOS_EXT_OPEN_TAKEN_OPENED       1
+#define DOS_EXT_OPEN_TAKEN_CREATED      2
+#define DOS_EXT_OPEN_TAKEN_REPLACED     3
+
+static inline UINT DosExtOpenActionTaken(_In_ UINT disposition, _In_ BOOL didExist,
+                                         _In_ BOOL isLongNameCall)
 {
-    switch (disp) {
-    case DOS_DISP_CREATE_NEW:        return 2;
-    case DOS_DISP_TRUNCATE_EXISTING: return 3;
+    switch (disposition) {
+    case DOS_EXT_OPEN_CREATE_NEW:        return DOS_EXT_OPEN_TAKEN_CREATED;
+    case DOS_EXT_OPEN_TRUNCATE_EXISTING: return DOS_EXT_OPEN_TAKEN_REPLACED;
     /* s92, MEASURED (dospair p_lfn): stock's AH=6Ch says 3 ("replaced") for action 12h
        whether the file existed or not (lfn.6C.12.new/.exists) -- but its 716Ch says 2
        ("created") for a name that was not there (lfn.716C.create). Two arms, two
        answers; the LFN one is RBIL's. */
-    case DOS_DISP_CREATE_ALWAYS:     return (lfn && !existed) ? 2 : 3;
-    case DOS_DISP_OPEN_ALWAYS:       return existed ? 1 : 2;
-    default:                         return 1;
+    case DOS_EXT_OPEN_CREATE_ALWAYS:
+        return (isLongNameCall && !didExist) ? DOS_EXT_OPEN_TAKEN_CREATED
+                                             : DOS_EXT_OPEN_TAKEN_REPLACED;
+    case DOS_EXT_OPEN_OPEN_ALWAYS:
+        return didExist ? DOS_EXT_OPEN_TAKEN_OPENED : DOS_EXT_OPEN_TAKEN_CREATED;
+    default:                             return DOS_EXT_OPEN_TAKEN_OPENED;
     }
 }
 
 /* BX bits 0-2: 0 read, 1 write, 2 read/write -> GENERIC_READ 80000000h / GENERIC_WRITE
    40000000h. Only bits 0-1 are looked at, as AH=6Ch always has (mode 3, "no access",
    is not a mode DOS defines and falls to read, exactly as AH=6Ch always has). */
-static inline unsigned long dos_ext_open_access(unsigned mode)
+#define DOS_EXT_OPEN_ACCESS_MASK        3
+#define DOS_EXT_OPEN_ACCESS_WRITE       1
+#define DOS_EXT_OPEN_ACCESS_READ_WRITE  2
+#define DOS_EXT_OPEN_GENERIC_READ       0x80000000ul
+#define DOS_EXT_OPEN_GENERIC_WRITE      0x40000000ul
+#define DOS_EXT_OPEN_GENERIC_READ_WRITE 0xC0000000ul
+
+static inline DWORD DosExtOpenAccess(_In_ UINT mode)
 {
-    mode &= 3;
-    return (mode == 1) ? 0x40000000ul : (mode == 2) ? 0xC0000000ul : 0x80000000ul;
+    mode &= DOS_EXT_OPEN_ACCESS_MASK;
+    return (mode == DOS_EXT_OPEN_ACCESS_WRITE) ? DOS_EXT_OPEN_GENERIC_WRITE
+         : (mode == DOS_EXT_OPEN_ACCESS_READ_WRITE) ? DOS_EXT_OPEN_GENERIC_READ_WRITE
+         : DOS_EXT_OPEN_GENERIC_READ;
 }
 
 /* ── WHAT AN LFN CALL ANSWERS FOR A WIN32 FAILURE. ─────────────────────────────────
@@ -317,14 +531,21 @@ static inline unsigned long dos_ext_open_access(unsigned mode)
        123 ERROR_INVALID_NAME -> 3 (RBIL 7160h: "03h malformed path")
        145 ERROR_DIR_NOT_EMPTY -> 5 (what 3Ah answers for a full directory)
      Anything else: 2, and the caller logs the Win32 code. */
-static inline int dos_lfn_err_from_win32(unsigned long e, unsigned short *dos)
+#define DOS_LFN_WIN32_INVALID_HANDLE    6
+#define DOS_LFN_WIN32_NOT_SAME_DEVICE   17
+#define DOS_LFN_WIN32_NO_MORE_FILES     18
+#define DOS_LFN_WIN32_INVALID_NAME      123
+#define DOS_LFN_WIN32_DIR_NOT_EMPTY     145
+
+static inline BOOL DosLfnErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
 {
-    switch (e) {
-    case 6: case 17: case 18: *dos = (unsigned short)e; return 1;
-    case 123: *dos = 3; return 1;
-    case 145: *dos = 5; return 1;
-    default:  return dos_err_from_win32(e, dos);
+    switch (win32Error) {
+    case DOS_LFN_WIN32_INVALID_HANDLE: case DOS_LFN_WIN32_NOT_SAME_DEVICE:
+    case DOS_LFN_WIN32_NO_MORE_FILES:  *dosError = (WORD)win32Error; return TRUE;
+    case DOS_LFN_WIN32_INVALID_NAME:   *dosError = DOS_ERR_PATH_NOT_FOUND; return TRUE;
+    case DOS_LFN_WIN32_DIR_NOT_EMPTY:  *dosError = DOS_ERR_ACCESS_DENIED; return TRUE;
+    default:  return DosErrFromWin32(win32Error, dosError);
     }
 }
 
-#endif /* DOS_LFN_H */
+#endif /* NTVDMEX_DOS_LFN_H */

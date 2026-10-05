@@ -60,7 +60,7 @@ INT 15h is where the surface thins: `AH=88h` reports the extended memory that XM
 | — | a raw store to `0040:006C` | **IMPL** | #262 B (s92): the PIT keeps a **witness** of the last count the BIOS wrote (`pit_bios_tick`, the one tick body for `pit_int08` and the host's two inline bumps); a differing count is a guest's store, and DOS's next `2Ah`/`2Ch`/stamp follows it. One compare per tick | `p_tick2c` B (3 hosts follow), `p_vclock` C/D owed; pit_test T8b, clock_test |
 | `02h` | read RTC time, BCD | **IMPL** | `:578-585`; host clock via `rtc_now` (`main.c:13185`, local time). DL (DST) = 0. No clock installed → not answered | provisional (`int1a.02.isbcd`); pit_test T16 |
 | `04h` | read RTC date, BCD | **IMPL** | `:586-591` | provisional (`int1a.04.isbcd`) |
-| `03h`/`05h` | set RTC time / date | **IMPL** | #250: moves the VDM's RTC offset (`g_dos_clock.rtc_off`), never the host clock; invalid BCD / impossible dates `CF=1`. DOS's clock does not follow (an AT's two clocks) | **oracle** (`p_clock` `clk.1a02.after.1a03`, `clk.2c.after.1a03`) |
+| `03h`/`05h` | set RTC time / date | **IMPL** | #250: moves the VDM's RTC offset (`g_DosClock.RtcOffset`), never the host clock; invalid BCD / impossible dates `CF=1`. DOS's clock does not follow (an AT's two clocks) | **oracle** (`p_clock` `clk.1a02.after.1a03`, `clk.2c.after.1a03`) |
 | `06h`/`07h` | set / reset RTC alarm | **MISS** | `default:` — registers and CF as passed | — |
 | other | unknown function | **MISS** | `default:` leaves **CF as the caller had it** rather than setting it, so an unsupported call can read as success | — |
 

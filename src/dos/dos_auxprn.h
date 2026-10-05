@@ -8,18 +8,23 @@
  * Lives in the DOS-resident block at DOS_CTAB_SEG:DOS_AUXPRN_OFF (dos_layout.h).
  * tests/unit/auxprn_test.c runs these bytes and holds them to the oracle's logs.
  */
-#ifndef DOS_AUXPRN_H
-#define DOS_AUXPRN_H
+#ifndef NTVDMEX_DOS_AUXPRN_H
+#define NTVDMEX_DOS_AUXPRN_H
+
+#include "../ntvdmex_types.h"
 
 /* Entry offsets within the block (nasm listing of dos_auxprn.asm). */
-#define DOS_AUXPRN_T05   0x00    /* AH=05h  PRN output, DL            */
-#define DOS_AUXPRN_T04   0x1E    /* AH=04h  AUX output, DL            */
-#define DOS_AUXPRN_T03   0x37    /* AH=03h  AUX input -> AL           */
-#define DOS_AUXPRN_W4    0x48    /* AH=40h  handle 4, DS:DX, CX bytes */
-#define DOS_AUXPRN_W3    0x69    /* AH=40h  handle 3                  */
-#define DOS_AUXPRN_R3    0x83    /* AH=3Fh  handle 3                  */
+#define DOS_AUXPRN_PRN_OUTPUT  0x00    /* AH=05h  PRN output, DL            */
+#define DOS_AUXPRN_AUX_OUTPUT  0x1E    /* AH=04h  AUX output, DL            */
+#define DOS_AUXPRN_AUX_INPUT   0x37    /* AH=03h  AUX input -> AL           */
+#define DOS_AUXPRN_PRN_WRITE   0x48    /* AH=40h  handle 4, DS:DX, CX bytes */
+#define DOS_AUXPRN_AUX_WRITE   0x69    /* AH=40h  handle 3                  */
+#define DOS_AUXPRN_AUX_READ    0x83    /* AH=3Fh  handle 3                  */
 
-static const unsigned char dos_auxprn_code[174] = {
+/* The assembled block's length. */
+#define DOS_AUXPRN_CODE_SIZE   174
+
+static const BYTE g_DosAuxPrnCode[DOS_AUXPRN_CODE_SIZE] = {
   0xfb, 0x52, 0x50, 0x31, 0xd2, 0xb8, 0x00, 0x02, 0xcd, 0x17, 0xb8, 0x00,
   0x02, 0xcd, 0x17, 0x58, 0x5a, 0x52, 0x88, 0xd0, 0x50, 0xb4, 0x00, 0x31,
   0xd2, 0xcd, 0x17, 0x58, 0x5a, 0xcf, 0xfb, 0x52, 0x50, 0x31, 0xd2, 0xb8,
@@ -37,4 +42,4 @@ static const unsigned char dos_auxprn_code[174] = {
   0x80, 0x66, 0x06, 0xfe, 0x5d, 0xcf
 };
 
-#endif /* DOS_AUXPRN_H */
+#endif /* NTVDMEX_DOS_AUXPRN_H */

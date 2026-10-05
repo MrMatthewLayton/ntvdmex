@@ -14,13 +14,20 @@
  * 6.22, but they are kept as separate tables because that is an observation
  * about this code page, not a guarantee.
  */
-#ifndef DOS_CTAB_H
-#define DOS_CTAB_H
+#ifndef NTVDMEX_DOS_CTAB_H
+#define NTVDMEX_DOS_CTAB_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
+
+/* Each table's size: its length word and its entries. */
+#define DOS_CTAB_UPPER_TABLE_SIZE                  130
+#define DOS_CTAB_FILE_NAME_UPPER_TABLE_SIZE        130
+#define DOS_CTAB_FILE_NAME_TERMINATORS_TABLE_SIZE  24
+#define DOS_CTAB_COLLATE_TABLE_SIZE                258
+#define DOS_CTAB_DBCS_TABLE_SIZE                   4
 
 /* AL=02 uppercase: length word 128, then chars 0x80-0xFF */
-static const uint8_t dos_tab_upper[130] = {
+static const BYTE g_DosCtabUpper[DOS_CTAB_UPPER_TABLE_SIZE] = {
     0x80, 0x00, 0x80, 0x9A, 0x45, 0x41, 0x8E, 0x41, 0x8F, 0x80, 0x45, 0x45, 0x45, 0x49, 0x49, 0x49,
     0x8E, 0x8F, 0x90, 0x92, 0x92, 0x4F, 0x99, 0x4F, 0x55, 0x55, 0x59, 0x99, 0x9A, 0x9B, 0x9C, 0x9D,
     0x9E, 0x9F, 0x41, 0x49, 0x4F, 0x55, 0xA5, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD,
@@ -32,18 +39,23 @@ static const uint8_t dos_tab_upper[130] = {
     0xFE, 0xFF
 };
 
+#define DOS_CTAB_CASE_OFFSET        0x20    /* 'a' - 'A'                                  */
+#define DOS_CTAB_FIRST_HIGH_CHAR    0x80    /* the table covers 80h-FFh ...               */
+#define DOS_CTAB_LENGTH_WORD_SIZE   2       /* ... after its length word                  */
+
 /* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
    Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
    agree by construction. */
-static inline uint8_t dos_upcase437(uint8_t c)
+static inline BYTE DosCtabUpcase437(_In_ BYTE character)
 {
-    if (c >= 'a' && c <= 'z') return (uint8_t)(c - 0x20);
-    if (c >= 0x80) return dos_tab_upper[2 + (c - 0x80)];
-    return c;
+    if (character >= 'a' && character <= 'z') return (BYTE)(character - DOS_CTAB_CASE_OFFSET);
+    if (character >= DOS_CTAB_FIRST_HIGH_CHAR)
+        return g_DosCtabUpper[DOS_CTAB_LENGTH_WORD_SIZE + (character - DOS_CTAB_FIRST_HIGH_CHAR)];
+    return character;
 }
 
 /* AL=04 filename uppercase (same data as AL=02 on 6.22) */
-static const uint8_t dos_tab_fnupper[130] = {
+static const BYTE g_DosCtabFileNameUpper[DOS_CTAB_FILE_NAME_UPPER_TABLE_SIZE] = {
     0x80, 0x00, 0x80, 0x9A, 0x45, 0x41, 0x8E, 0x41, 0x8F, 0x80, 0x45, 0x45, 0x45, 0x49, 0x49, 0x49,
     0x8E, 0x8F, 0x90, 0x92, 0x92, 0x4F, 0x99, 0x4F, 0x55, 0x55, 0x59, 0x99, 0x9A, 0x9B, 0x9C, 0x9D,
     0x9E, 0x9F, 0x41, 0x49, 0x4F, 0x55, 0xA5, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD,
@@ -56,13 +68,13 @@ static const uint8_t dos_tab_fnupper[130] = {
 };
 
 /* AL=05 filename terminator list */
-static const uint8_t dos_tab_fnterm[24] = {
+static const BYTE g_DosCtabFileNameTerminators[DOS_CTAB_FILE_NAME_TERMINATORS_TABLE_SIZE] = {
     0x16, 0x00, 0x01, 0x00, 0xFF, 0x00, 0x00, 0x20, 0x02, 0x0E, 0x2E, 0x22, 0x2F, 0x5C, 0x5B, 0x5D,
     0x3A, 0x7C, 0x3C, 0x3E, 0x2B, 0x3D, 0x3B, 0x2C
 };
 
 /* AL=06 collating sequence: length word 256, then 256 entries */
-static const uint8_t dos_tab_collate[258] = {
+static const BYTE g_DosCtabCollate[DOS_CTAB_COLLATE_TABLE_SIZE] = {
     0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
     0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
     0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D,
@@ -83,8 +95,8 @@ static const uint8_t dos_tab_collate[258] = {
 };
 
 /* AL=07 DBCS vector: empty on a single-byte code page */
-static const uint8_t dos_tab_dbcs[4] = {
+static const BYTE g_DosCtabDbcs[DOS_CTAB_DBCS_TABLE_SIZE] = {
     0x00, 0x00, 0x00, 0x00
 };
 
-#endif /* DOS_CTAB_H */
+#endif /* NTVDMEX_DOS_CTAB_H */

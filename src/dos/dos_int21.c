@@ -19,23 +19,23 @@ void dos_int21_set_pm(int on) { g_dos_int21_pm = on ? 1 : 0; }
 
 /* ── THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
      time, moved only by a guest's own set calls. */
-dclk_state g_dos_clock;
+DOS_CLOCK_STATE g_DosClock;
 
-void dos_clock_host_now(dclk_t *t)
+void dos_clock_host_now(DOS_CLOCK_TIME *t)
 {
     SYSTEMTIME lt;
     GetLocalTime(&lt);
-    t->year = lt.wYear; t->month = lt.wMonth; t->day = lt.wDay;
-    t->hour = lt.wHour; t->min = lt.wMinute; t->sec = lt.wSecond;
-    t->cs = (unsigned)(lt.wMilliseconds / 10); t->dow = lt.wDayOfWeek;
+    t->Year = lt.wYear; t->Month = lt.wMonth; t->Day = lt.wDay;
+    t->Hour = lt.wHour; t->Minute = lt.wMinute; t->Second = lt.wSecond;
+    t->Hundredths = (unsigned)(lt.wMilliseconds / 10); t->DayOfWeek = lt.wDayOfWeek;
 }
 
-void dos_clock_read(int64_t off, dclk_t *out)
+void dos_clock_read(int64_t off, DOS_CLOCK_TIME *out)
 {
-    dclk_t host;
+    DOS_CLOCK_TIME host;
     dos_clock_host_now(&host);
     if (off == 0) { *out = host; return; }      /* the common case, exactly as before */
-    dclk_read(&host, off, out);
+    DosClockApplyOffset(&host, off, out);
 }
 
 /* ── GH #262: DOS'S CLOCK FOLLOWS THE TICK COUNT WHEN SOMEONE ELSE SET IT. ─────────
@@ -48,9 +48,9 @@ int (*g_dos_tick_take)(uint32_t *ticks, uint32_t *wraps, uint32_t *since) = 0;
 
 void dos_clock_follow(uint32_t ticks, uint32_t wraps, uint32_t since)
 {
-    dclk_t host;
+    DOS_CLOCK_TIME host;
     dos_clock_host_now(&host);
-    dclk_follow_ticks(&host, &g_dos_clock.dos_off, ticks, wraps, since);
+    DosClockFollowTicks(&host, &g_DosClock.DosOffset, ticks, wraps, since);
 }
 
 void dos_clock_sync(void)
@@ -62,9 +62,9 @@ void dos_clock_sync(void)
 /* ── GH #263: A FILE CARRIES DOS'S DATE, NOT THE HOST'S. ─────────────────────────
      File I/O is Win32's and Win32 stamps a write with the machine's clock, so after
      INT 21h AH=2Bh set 1999-06-15 a program's new file still said today. DOS stamps
-     a created or written file with ITS clock; ours is host-now + dos_off. Applied
+     a created or written file with ITS clock; ours is host-now + DosOffset. Applied
      at create and after every write, only while a guest has moved the clock
-     (dos_off != 0) -- an untouched VDM never calls this, exactly as before. Local
+     (DosOffset != 0) -- an untouched VDM never calls this, exactly as before. Local
      time, the inverse of what AH=57h AL=00h reads back. A refusal (a handle without
      FILE_WRITE_ATTRIBUTES) leaves Win32's stamp, which is what there was.
    ► EVERY CREATE AND EVERY WRITE PATH (s92): 3Ch and 40h had it; 5Ah/5Bh, 6Ch's
@@ -77,14 +77,14 @@ void dos_clock_sync(void)
      time for the rest of the handle's life, so the close does not overwrite it. */
 void dos_stamp_vdm_now(HANDLE f)
 {
-    dclk_t g; SYSTEMTIME st; FILETIME lf, ft;
+    DOS_CLOCK_TIME g; SYSTEMTIME st; FILETIME lf, ft;
     if (!f || f == INVALID_HANDLE_VALUE) return;
     dos_clock_sync();                           /* #262: a raw 006C store moves it too */
-    if (!g_dos_clock.dos_off) return;
-    dos_clock_read(g_dos_clock.dos_off, &g);
-    st.wYear = (WORD)g.year; st.wMonth = (WORD)g.month; st.wDayOfWeek = (WORD)g.dow;
-    st.wDay = (WORD)g.day;   st.wHour = (WORD)g.hour;   st.wMinute = (WORD)g.min;
-    st.wSecond = (WORD)g.sec; st.wMilliseconds = (WORD)(g.cs * 10u);
+    if (!g_DosClock.DosOffset) return;
+    dos_clock_read(g_DosClock.DosOffset, &g);
+    st.wYear = (WORD)g.Year; st.wMonth = (WORD)g.Month; st.wDayOfWeek = (WORD)g.DayOfWeek;
+    st.wDay = (WORD)g.Day;   st.wHour = (WORD)g.Hour;   st.wMinute = (WORD)g.Minute;
+    st.wSecond = (WORD)g.Second; st.wMilliseconds = (WORD)(g.Hundredths * 10u);
     if (SystemTimeToFileTime(&st, &lf) && LocalFileTimeToFileTime(&lf, &ft))
         SetFileTime(f, NULL, NULL, &ft);
 }
@@ -416,7 +416,7 @@ static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
      NtQueryObject(ObjectNameInformation) gives the file object's NT name
      ("\Device\Floppy0\X.TXT") and QueryDosDeviceA("A:") the drive's NT device, which
      works with no media in the drive -- the very case this is for. The match is the
-     pure dos_crit_drive_from_ntname (dos_err.h, off-VM tested).
+     pure DosCritDriveFromNtName (dos_err.h, off-VM tested).
    ⚠ Only ever called on a DISK file whose ReadFile/WriteFile just failed with a
      hardware error -- never on a pipe, where a name query can block.
    -1 = could not tell (the caller keeps the current drive, as #34 did). */
@@ -447,7 +447,7 @@ static int dos_handle_drive(HANDLE fh)
         if (!(drives & (1u << k))) continue;
         if (QueryDosDeviceA(root, devbuf[k], sizeof(devbuf[k]))) dev[k] = devbuf[k];
     }
-    return dos_crit_drive_from_ntname(name, dev);
+    return DosCritDriveFromNtName(name, dev);
 }
 /* The drive dos_handle_drive found for THIS call's failed 3Fh/40h; -1 = none. Read by
    the INT 24h tail of dos_int21, reset at its entry (the s_find_w32 pattern). */
@@ -770,24 +770,24 @@ static uint64_t dos_ft_zone(const FILETIME *f, int local)
 
 static void dos_lfn_find_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd, int dos_fmt)
 {
-    uint8_t rec[DOS_LFN_FIND_LEN];
-    dos_lfn_find_t f;
+    uint8_t rec[DOS_LFN_FIND_RECORD_SIZE];
+    DOS_LFN_FIND_ENTRY f;
     int k;
-    f.attr = fd->dwFileAttributes;
-    f.ctime = dos_ft_zone(&fd->ftCreationTime, dos_fmt);
-    f.atime = dos_ft_zone(&fd->ftLastAccessTime, dos_fmt);
-    f.wtime = dos_ft_zone(&fd->ftLastWriteTime, dos_fmt);
-    f.size_hi = fd->nFileSizeHigh; f.size_lo = fd->nFileSizeLow;
-    f.long_name = fd->cFileName; f.short_name = fd->cAlternateFileName;
-    dos_lfn_find_pack(rec, &f, dos_fmt);
-    for (k = 0; k < DOS_LFN_FIND_LEN; ++k) d[k] = rec[k];
+    f.Attributes = fd->dwFileAttributes;
+    f.CreationTime = dos_ft_zone(&fd->ftCreationTime, dos_fmt);
+    f.LastAccessTime = dos_ft_zone(&fd->ftLastAccessTime, dos_fmt);
+    f.LastWriteTime = dos_ft_zone(&fd->ftLastWriteTime, dos_fmt);
+    f.SizeHigh = fd->nFileSizeHigh; f.SizeLow = fd->nFileSizeLow;
+    f.LongName = fd->cFileName; f.ShortName = fd->cAlternateFileName;
+    DosLfnFindPack(rec, &f, dos_fmt);
+    for (k = 0; k < DOS_LFN_FIND_RECORD_SIZE; ++k) d[k] = rec[k];
 }
 
 /* The DOS error for a failed LFN call, from the Win32 one (dos_lfn.h). */
 static uint16_t dos_lfn_err(DWORD we)
 {
     unsigned short de = 2;
-    (void)dos_lfn_err_from_win32((unsigned long)we, &de);
+    (void)DosLfnErrFromWin32((unsigned long)we, &de);
     return de;
 }
 
@@ -1184,7 +1184,7 @@ int dos_int21(dos_machine_t *m)
         if (dos_fh_is_file((void *const *)m->fh, h)) {
             DWORD w = 0, we = 0; unsigned short de = 0;
             if (!WriteFile(m->fh[h], b, cnt, &w, NULL)) we = GetLastError();
-            if (we && dos_err_from_win32((unsigned long)we, &de) && dos_crit_is_hw(de)) {
+            if (we && DosErrFromWin32((unsigned long)we, &de) && DosCritIsHardwareError(de)) {
                 s_rw_drive = dos_handle_drive(m->fh[h]);
                 SETAX(de); ERRCF();
                 tp = zput(tp, "  INT21 AH=40 h="); tp = zhex(tp, h);
@@ -1200,7 +1200,7 @@ int dos_int21(dos_machine_t *m)
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
         else if ((h == 3 || h == 4) && dos_fh_is_device((void *const *)m->fh, m->std_open, h)) {
-            if (AUXPRN_V86) AUXPRN_TRAMP(h == 4 ? DOS_AUXPRN_W4 : DOS_AUXPRN_W3);
+            if (AUXPRN_V86) AUXPRN_TRAMP(h == 4 ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else {
                 DWORD k;
                 for (k = 0; k < cnt; ++k) {
@@ -1254,9 +1254,9 @@ int dos_int21(dos_machine_t *m)
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else {
             /* ── ASK WHY IT FAILED. It used to answer 2 for every cause; see
-                 dos_err_from_win32() for the two oracle rows that names wrong. */
+                 DosErrFromWin32() for the two oracle rows that names wrong. */
             DWORD we = GetLastError(); unsigned short de;
-            int mapped = dos_err_from_win32((unsigned long)we, &de);
+            int mapped = DosErrFromWin32((unsigned long)we, &de);
             SETAX(de); ERRCF();
             tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
             tp = zput(tp, " ["); tp = zput(tp, fn); tp = zput(tp, "] FAILED win32=0x");
@@ -1290,7 +1290,7 @@ int dos_int21(dos_machine_t *m)
                alone (it used to answer them all as CF=0 with what Win32 read). */
             DWORD we = 0; unsigned short de = 0;
             if (!ReadFile(m->fh[h], b, cnt, &rd, NULL)) we = GetLastError();
-            if (we && dos_err_from_win32((unsigned long)we, &de) && dos_crit_is_hw(de)) {
+            if (we && DosErrFromWin32((unsigned long)we, &de) && DosCritIsHardwareError(de)) {
                 s_rw_drive = dos_handle_drive(m->fh[h]);
                 SETAX(de); ERRCF();
                 tp = zput(tp, "  INT21 AH=3F FAILED win32=0x"); tp = zhex(tp, we);
@@ -1343,7 +1343,7 @@ int dos_int21(dos_machine_t *m)
         read_done: ;
         }
         else if (h == 3 && AUXPRN_V86 && dos_fh_is_device((void *const *)m->fh, m->std_open, h))
-             AUXPRN_TRAMP(DOS_AUXPRN_R3);       /* #251: AUX, through INT 14h */
+             AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
         else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
              { SETAX(0); OKCF(); }              /* PRN, a dup, or AUX in PM: EOF */
         else { SETAX(6); ERRCF(); }
@@ -2017,7 +2017,7 @@ int dos_int21(dos_machine_t *m)
              resumed in that driver code. In PM the bytes go to the same devices
              directly, and AUX input stays ^Z (no wait loop to run it in). */
         if (AUXPRN_V86)
-            AUXPRN_TRAMP(ah == 0x05 ? DOS_AUXPRN_T05 : ah == 0x04 ? DOS_AUXPRN_T04 : DOS_AUXPRN_T03);
+            AUXPRN_TRAMP(ah == 0x05 ? DOS_AUXPRN_PRN_OUTPUT : ah == 0x04 ? DOS_AUXPRN_AUX_OUTPUT : DOS_AUXPRN_AUX_INPUT);
         else if (ah == 0x03) {
             SETAX((R_AX & 0xFF00) | 0x1A);
             OKCF();
@@ -2255,8 +2255,8 @@ int dos_int21(dos_machine_t *m)
              probe's first 716Ch is exactly that call. ⚠ Unmeasured on 6.22 for 6Ch:
              p_file's three 6Ch rows (open / exists / missing) do not reach it. */
         char fn[300]; HANDLE f; DWORD slot, disp;
-        DWORD acc = (DWORD)dos_ext_open_access((unsigned)(R_BX & 0xFFFF));
-        disp = dos_ext_open_disp((unsigned)(R_DX & 0xFFFF));   /* Win32's own numbers */
+        DWORD acc = (DWORD)DosExtOpenAccess((unsigned)(R_BX & 0xFFFF));
+        disp = DosExtOpenDisposition((unsigned)(R_DX & 0xFFFF));   /* Win32's own numbers */
         v86_path(m, R_DS, R_SI, fn, sizeof(fn));
         /* FILE_SHARE_WRITE too: we do not emulate SHARE.EXE, so a second open of a
            file this VDM holds must not fail -- the rule AH=3Dh learned in session 37
@@ -2266,9 +2266,9 @@ int dos_int21(dos_machine_t *m)
                                (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
                                                     : FILE_ATTRIBUTE_NORMAL);
         if (f == INVALID_HANDLE_VALUE) {
-            /* Same collapse as AH=3Dh had, same fix -- see dos_err_from_win32(). */
+            /* Same collapse as AH=3Dh had, same fix -- see DosErrFromWin32(). */
             DWORD we = GetLastError(); unsigned short de;
-            int mapped = dos_err_from_win32((unsigned long)we, &de);
+            int mapped = DosErrFromWin32((unsigned long)we, &de);
             SETAX(de); ERRCF();
             tp = zput(tp, lfn_alias ? "  INT21 AX=71" : "  INT21 AH=6C");
             if (lfn_alias) tp = zhexb(tp, lfn_alias);
@@ -2278,7 +2278,7 @@ int dos_int21(dos_machine_t *m)
             tp = zhex(tp, de); tp = zput(tp, "\r\n");
         }
         else {
-            uint16_t res = (uint16_t)dos_ext_open_taken((unsigned)disp,
+            uint16_t res = (uint16_t)DosExtOpenActionTaken((unsigned)disp,
                                                         GetLastError() == ERROR_ALREADY_EXISTS,
                                                         lfn_alias != 0);
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
@@ -2301,7 +2301,7 @@ int dos_int21(dos_machine_t *m)
            be added. Rows 5 (access denied) and 0x50 (file exists) were provoked
            and measured in session 52; before that both fell into the UNMEASURED
            arm below. */
-        if (!dos_err_classify(e, &bx59, &ch59)) {
+        if (!DosErrClassify(e, &bx59, &ch59)) {
             /* Rather than fabricate a class for a code we have not provoked on
                real DOS, say so. Extend p_err.asm and dos_err.h together. */
             tp = zput(tp, "  INT21 AH=59 class/action/locus UNMEASURED for code 0x");
@@ -2379,20 +2379,20 @@ int dos_int21(dos_machine_t *m)
                  from 6.22), so a program that capitalises through DOS and one that
                  reads the table agree. Measured: 'a'->'A', 81h->9Ah, digits kept. */
             if (al65 == 0x20) {
-                SET16(R_DX, (R_DX & 0xFF00) | dos_upcase437((uint8_t)(R_DX & 0xFF)));
+                SET16(R_DX, (R_DX & 0xFF00) | DosCtabUpcase437((uint8_t)(R_DX & 0xFF)));
             } else {
                 volatile BYTE *s = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
                 uint32_t k, n = (al65 == 0x21) ? (uint32_t)(R_CX & 0xFFFF) : 0x10000u;
                 for (k = 0; k < n; ++k) {
                     if (al65 == 0x22 && s[k] == 0) break;
-                    s[k] = dos_upcase437(s[k]);
+                    s[k] = DosCtabUpcase437(s[k]);
                 }
             }
             OKCF();
         } else if (al65 == 0x23) {
             /* YES/NO for the country: AX = 0 no, 1 yes, 2 neither. Country 1 only,
                like everything else here. Measured: 'y'->1, 'N'->0, 'q'->2. */
-            uint8_t c = dos_upcase437((uint8_t)(R_DX & 0xFF));
+            uint8_t c = DosCtabUpcase437((uint8_t)(R_DX & 0xFF));
             SETAX(c == 'Y' ? 1 : c == 'N' ? 0 : 2); OKCF();
         } else {
             tp = zput(tp, "  INT21 AH=65 AL=0x"); tp = zhex(tp, al65);
@@ -2905,17 +2905,17 @@ int dos_int21(dos_machine_t *m)
            dos_clock.h. With nothing set the offset is 0 and this is GetLocalTime.
            #262: a tick count the BIOS did not write is followed first, date included
            (its midnight rollovers are DOS's day number moving). */
-        dclk_t g; dos_clock_sync(); dos_clock_read(g_dos_clock.dos_off, &g);
-        SET16(R_CX, g.year);
-        SET16(R_DX, ((g.month & 0xFF) << 8) | (g.day & 0xFF));
-        SETAX((R_AX & 0xFF00) | (g.dow & 0xFF));
+        DOS_CLOCK_TIME g; dos_clock_sync(); dos_clock_read(g_DosClock.DosOffset, &g);
+        SET16(R_CX, g.Year);
+        SET16(R_DX, ((g.Month & 0xFF) << 8) | (g.Day & 0xFF));
+        SETAX((R_AX & 0xFF00) | (g.DayOfWeek & 0xFF));
         OKCF();
     } else if (ah == 0x2C) {                    /* get time: CH=hr CL=min DH=sec DL=cs */
         /* #262: CLOCK$ reads 0040:006C, so a raw store there moves this (p_tick2c
            tick2c.after.store) -- followed here, once, then host-now + offset again. */
-        dclk_t g; dos_clock_sync(); dos_clock_read(g_dos_clock.dos_off, &g);
-        SET16(R_CX, ((g.hour & 0xFF) << 8) | (g.min & 0xFF));
-        SET16(R_DX, ((g.sec & 0xFF) << 8) | (g.cs & 0xFF));
+        DOS_CLOCK_TIME g; dos_clock_sync(); dos_clock_read(g_DosClock.DosOffset, &g);
+        SET16(R_CX, ((g.Hour & 0xFF) << 8) | (g.Minute & 0xFF));
+        SET16(R_DX, ((g.Second & 0xFF) << 8) | (g.Hundredths & 0xFF));
         OKCF();
     } else if (ah == 0x2B || ah == 0x2D) {      /* set date / set time */
         /* ── ★ GH #250: THESE ANSWERED "DONE" AND CHANGED NOTHING. ──────────────────
@@ -2929,23 +2929,23 @@ int dos_int21(dos_machine_t *m)
              to the new reading, and on a time set the BIOS tick count at 0040:006C is
              reloaded with the ticks since midnight (p_clock clk.1a02.after.2d,
              clk.1a00.after.2d, clk.1a04.after.2b). */
-        dclk_t host; int ok;
+        DOS_CLOCK_TIME host; int ok;
         dos_clock_sync();               /* #262: 2Bh keeps the time of day the COUNT says */
         dos_clock_host_now(&host);
         if (ah == 0x2B) {
             unsigned y = R_CX & 0xFFFF, mo = (R_DX >> 8) & 0xFF, d = R_DX & 0xFF;
-            ok = dclk_dos_date_ok(y, mo, d);
-            if (ok) dclk_set_date(&host, &g_dos_clock.dos_off, y, mo, d);
+            ok = DosClockIsDosDateValid(y, mo, d);
+            if (ok) DosClockSetDate(&host, &g_DosClock.DosOffset, y, mo, d);
         } else {
             unsigned h = (R_CX >> 8) & 0xFF, mi = R_CX & 0xFF;
             unsigned s = (R_DX >> 8) & 0xFF, cs = R_DX & 0xFF;
-            ok = dclk_time_ok(h, mi, s, cs);
+            ok = DosClockIsTimeValid(h, mi, s, cs);
             if (ok) {
-                dclk_set_time(&host, &g_dos_clock.dos_off, h, mi, s, cs);
-                if (m->set_ticks) m->set_ticks(m->ticks_ctx, dclk_ticks(h, mi, s, cs));
+                DosClockSetTime(&host, &g_DosClock.DosOffset, h, mi, s, cs);
+                if (m->set_ticks) m->set_ticks(m->ticks_ctx, DosClockTicksFromTime(h, mi, s, cs));
             }
         }
-        if (ok) g_dos_clock.rtc_off = g_dos_clock.dos_off;
+        if (ok) g_DosClock.RtcOffset = g_DosClock.DosOffset;
         tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (unsigned)ah);
         tp = zput(tp, ok ? " VDM clock set (host clock untouched)\r\n"
                          : " refused: invalid -> AL=FF, clock unchanged\r\n");
@@ -2991,7 +2991,7 @@ int dos_int21(dos_machine_t *m)
                 else {
                     do {
                         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                        if (!dos_lfn_attr_ok(fd.dwFileAttributes, (uint8_t)(R_CX & 0xFF),
+                        if (!DosLfnAttributesOk(fd.dwFileAttributes, (uint8_t)(R_CX & 0xFF),
                                              (uint8_t)((R_CX >> 8) & 0xFF))) continue;
                         if (cut + lstrlenA(fd.cFileName) >= (int)sizeof(full)) continue;
                         for (i = 0; i < cut; ++i) full[i] = fn[i];
@@ -3032,7 +3032,7 @@ int dos_int21(dos_machine_t *m)
                                        : (bl43 == 0x06) ? &ad.ftLastAccessTime
                                                         : &ad.ftCreationTime;
                     uint16_t dd = 0, dt = 0; uint8_t cs = 0;
-                    if (!dos_lfn_ft_to_dos(dos_ft_zone(ft, 1), &dd, &dt, &cs)) { dd = 0; dt = 0; cs = 0; }
+                    if (!DosLfnFileTimeToDos(dos_ft_zone(ft, 1), &dd, &dt, &cs)) { dd = 0; dt = 0; cs = 0; }
                     SET16(R_DI, dd);
                     if (bl43 != 0x06) SET16(R_CX, dt);
                     if (bl43 == 0x08) SET16(R_SI, cs);
@@ -3050,7 +3050,7 @@ int dos_int21(dos_machine_t *m)
                 uint16_t dt = (bl43 == 0x05) ? 0 : (uint16_t)(R_CX & 0xFFFF);
                 uint8_t  cs = (bl43 == 0x07) ? (uint8_t)(R_SI & 0xFF) : 0;
                 uint64_t v; FILETIME lf, ft; HANDLE hf;
-                if (!dos_lfn_dos_to_ft(dd, dt, cs, &v)) { SETAX(0x0D); ERRCF(); }   /* invalid data */
+                if (!DosLfnDosToFileTime(dd, dt, cs, &v)) { SETAX(0x0D); ERRCF(); }   /* invalid data */
                 else {
                     lf.dwLowDateTime = (DWORD)v; lf.dwHighDateTime = (DWORD)(v >> 32);
                     hf = dos_lfn_open_attr(fn);
@@ -3111,7 +3111,7 @@ int dos_int21(dos_machine_t *m)
                 if (hf == INVALID_HANDLE_VALUE) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
                 else {
                     int ok = 1;
-                    while (!dos_lfn_attr_ok(fd.dwFileAttributes, allow, need))
+                    while (!DosLfnAttributesOk(fd.dwFileAttributes, allow, need))
                         if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
                     if (!ok) { FindClose(hf); SETAX(18); ERRCF(); }   /* nothing passed CL/CH */
                     else {
@@ -3136,7 +3136,7 @@ int dos_int21(dos_machine_t *m)
                 else {
                     int ok = 0;
                     while (FindNextFileA(s_lfn_find[slot], &fd))
-                        if (dos_lfn_attr_ok(fd.dwFileAttributes, s_lfn_allow[slot], s_lfn_need[slot])) { ok = 1; break; }
+                        if (DosLfnAttributesOk(fd.dwFileAttributes, s_lfn_allow[slot], s_lfn_need[slot])) { ok = 1; break; }
                     /* "No more files" leaves the handle OPEN: the program closes it, 71A1h. */
                     if (!ok) { SETAX(18); ERRCF(); }
                     else { dos_lfn_find_fill(d, &fd, dosfmt); SET16(R_CX, 0); OKCF(); }
@@ -3227,7 +3227,7 @@ int dos_int21(dos_machine_t *m)
                 FILETIME ft; uint16_t dd, dt; uint8_t cs;
                 ft.dwLowDateTime  = (DWORD)q[0] | ((DWORD)q[1] << 8) | ((DWORD)q[2] << 16) | ((DWORD)q[3] << 24);
                 ft.dwHighDateTime = (DWORD)q[4] | ((DWORD)q[5] << 8) | ((DWORD)q[6] << 16) | ((DWORD)q[7] << 24);
-                if (!dos_lfn_ft_to_dos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
+                if (!DosLfnFileTimeToDos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
                 else {
                     SET16(R_CX, dt); SET16(R_DX, dd);
                     /* ⚠ INTENDED DIVERGENCE (s92): for an exact even second stock answers
@@ -3238,7 +3238,7 @@ int dos_int21(dos_machine_t *m)
                 }
             } else if (bla7 == 0x01) {          /* CX time, DX date, BH -> ES:DI QWORD */
                 uint64_t v; FILETIME lf, ft;
-                if (!dos_lfn_dos_to_ft((uint16_t)(R_DX & 0xFFFF), (uint16_t)(R_CX & 0xFFFF),
+                if (!DosLfnDosToFileTime((uint16_t)(R_DX & 0xFFFF), (uint16_t)(R_CX & 0xFFFF),
                                        (uint8_t)((R_BX >> 8) & 0xFF), &v)) { SETAX(0x0D); ERRCF(); }
                 else {
                     volatile BYTE *q = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
@@ -3259,7 +3259,7 @@ int dos_int21(dos_machine_t *m)
             volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
             int k;
             v86_str(R_DS, R_SI, ln, sizeof(ln));
-            dos_lfn_short_name(ln, s83, f11);
+            DosLfnShortName(ln, s83, f11);
             if (((R_DX >> 8) & 0xFF) == 0) for (k = 0; k < 11; ++k) dd[k] = (BYTE)f11[k];
             else { for (k = 0; s83[k]; ++k) dd[k] = (BYTE)s83[k]; dd[k] = 0; }
             OKCF();
@@ -3372,7 +3372,7 @@ int dos_int21(dos_machine_t *m)
     if (lfn_alias && (lfn_alias == 0x3A || lfn_alias == 0x3B) && (*pfl & 1)
         && (R_AX & 0xFFFF) == 3) SETAX(2);
     if ((*pfl & 1) && m->crit_raise_ok && !g_dos_int21_pm && !m->crit_active
-        && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
+        && DosCritIsHardwareError((unsigned short)(R_AX & 0xFFFF))) {
         const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
         int pathcall = (ah == 0x3C || ah == 0x3D || ah == 0x4E || ah == 0x39 || ah == 0x3A
                         || ah == 0x3B || ah == 0x41 || ah == 0x43 || ah == 0x5A || ah == 0x5B);
@@ -3381,7 +3381,7 @@ int dos_int21(dos_machine_t *m)
         if ((ah == 0x3F || ah == 0x40) && s_rw_drive >= 0) drv = (uint8_t)s_rw_drive;
         m->crit_pending = 1;
         m->crit_al = drv;
-        m->crit_ah = dos_crit_ah((unsigned char)ah);
+        m->crit_ah = DosCritInt24Ah((unsigned char)ah);
         m->crit_code = (uint8_t)((R_AX & 0xFF) - 19);
     }
     /* ── #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
@@ -3405,9 +3405,9 @@ int dos_int21(dos_machine_t *m)
          for or measured. 3Fh/40h had no previous answer worth keeping (it was a false
          success). */
     else if ((*pfl & 1) && (ah == 0x3F || ah == 0x40)
-             && dos_crit_is_hw((unsigned short)(R_AX & 0xFFFF))) {
+             && DosCritIsHardwareError((unsigned short)(R_AX & 0xFFFF))) {
         uint16_t code = (uint16_t)(R_AX & 0xFFFF);
-        SETAX(dos_crit_fail_ax((unsigned char)ah, (unsigned char)(code - 19)));
+        SETAX(DosCritFailAx((unsigned char)ah, (unsigned char)(code - 19)));
         m->last_err = DOS_ERR_FAIL_I24;
         tp = zput(tp, "  INT24 not raised (");
         tp = zput(tp, m->crit_active ? "inside the handler" : g_dos_int21_pm ? "DPMI client"

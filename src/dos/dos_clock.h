@@ -15,49 +15,92 @@
  *
  * ── TWO OFFSETS, BECAUSE AN AT HAS TWO CLOCKS. ─────────────────────────────────
  *   DOS's time comes from the BIOS tick count; the MC146818 RTC runs on its own.
- *   (Ours comes from host-now + dos_off, re-derived FROM the count whenever the count
+ *   (Ours comes from host-now + DosOffset, re-derived FROM the count whenever the count
  *   was set by anything but the BIOS -- INT 1Ah AH=01h or a raw store, GH #262 --
- *   see dclk_follow_ticks. Both offsets read the one host clock: there is no second
+ *   see DosClockFollowTicks. Both offsets read the one host clock: there is no second
  *   time source to drift, only two views a guest can set separately, as on an AT.)
  *   DOS's CLOCK$ driver WRITES BOTH when a program sets the time (so after 2Bh/2Dh
  *   the RTC agrees), but INT 1Ah AH=03h/05h set only the RTC, and DOS goes on
  *   answering from its own clock (measured, p_clock.asm clk.2c.after.1a03 /
  *   clk.2a.after.1a05). One offset would make an RTC set move DOS's clock too.
  *
- *   Pure C, no Win32: the host supplies "now" as fields, which is what lets the
- *   off-VM battery (tests/unit/clock_test.c) pin every rule with exact instants.
- *   Resolution is the DOS one, hundredths of a second.
+ *   Pure C, no Win32 calls (only Windows types, src/ntvdmex_types.h): the host supplies
+ *   "now" as fields, which is what lets the off-VM battery (tests/unit/clock_test.c) pin
+ *   every rule with exact instants. Resolution is the DOS one, hundredths of a second.
  */
-#ifndef DOS_CLOCK_H
-#define DOS_CLOCK_H
+#ifndef NTVDMEX_DOS_CLOCK_H
+#define NTVDMEX_DOS_CLOCK_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
-typedef struct {
-    unsigned year, month, day;      /* full year (1999, not 99); month/day 1-based */
-    unsigned hour, min, sec, cs;    /* cs = hundredths                              */
-    unsigned dow;                   /* 0 = Sunday, as INT 21h AH=2Ah returns it     */
-} dclk_t;
+typedef struct _DOS_CLOCK_TIME {
+    UINT Year, Month, Day;              /* full year (1999, not 99); month/day 1-based */
+    UINT Hour, Minute, Second, Hundredths;
+    UINT DayOfWeek;                     /* 0 = Sunday, as INT 21h AH=2Ah returns it     */
+} DOS_CLOCK_TIME, *PDOS_CLOCK_TIME;
+
+typedef const DOS_CLOCK_TIME *PCDOS_CLOCK_TIME;
 
 /* Centiseconds the guest is AHEAD of the host (negative = behind). Zero = the host. */
-typedef struct {
-    int64_t dos_off;                /* INT 21h AH=2Ah/2Ch -- DOS's clock              */
-    int64_t rtc_off;                /* INT 1Ah AH=02h/04h and CMOS 00h-09h -- the RTC */
-} dclk_state;
+typedef struct _DOS_CLOCK_STATE {
+    INT64 DosOffset;                    /* INT 21h AH=2Ah/2Ch -- DOS's clock              */
+    INT64 RtcOffset;                    /* INT 1Ah AH=02h/04h and CMOS 00h-09h -- the RTC */
+} DOS_CLOCK_STATE, *PDOS_CLOCK_STATE;
 
-static inline int dclk_leap(unsigned y)
-{ return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+/* The calendar. */
+#define DOS_CLOCK_JANUARY              1
+#define DOS_CLOCK_FEBRUARY             2
+#define DOS_CLOCK_DECEMBER             12
+#define DOS_CLOCK_MONTHS_PER_YEAR      12
+#define DOS_CLOCK_FIRST_DAY            1
+#define DOS_CLOCK_LEAP_FEBRUARY_DAYS   29u
+#define DOS_CLOCK_FIRST_YEAR           1
+#define DOS_CLOCK_LAST_YEAR            9999
+#define DOS_CLOCK_LEAP_YEAR_INTERVAL   4
+#define DOS_CLOCK_YEARS_PER_CENTURY    100
+#define DOS_CLOCK_YEARS_PER_ERA        400
+#define DOS_CLOCK_DAYS_PER_YEAR        365
+#define DOS_CLOCK_DAYS_PER_WEEK        7
+#define DOS_CLOCK_HOURS_PER_DAY        24
+#define DOS_CLOCK_MINUTES_PER_HOUR     60
+#define DOS_CLOCK_SECONDS_PER_MINUTE   60
+#define DOS_CLOCK_HUNDREDTHS_PER_SECOND 100
 
-static inline unsigned dclk_mdays(unsigned y, unsigned m)
+/* The day-count arithmetic below (Hinnant's), which counts each year from 1 March. */
+#define DOS_CLOCK_DAYS_PER_ERA                 146097
+#define DOS_CLOCK_DAYS_PER_ERA_LESS_ONE        146096
+#define DOS_CLOCK_DAYS_PER_CENTURY             36524
+#define DOS_CLOCK_DAYS_PER_FOUR_YEARS_LESS_ONE 1460
+#define DOS_CLOCK_MARCH_SHIFT                  3
+#define DOS_CLOCK_MARCH_WRAP                   9
+#define DOS_CLOCK_SHIFTED_JANUARY              10
+#define DOS_CLOCK_MONTH_DAYS_NUMERATOR         153
+#define DOS_CLOCK_MONTH_DAYS_ROUNDING          2
+#define DOS_CLOCK_MONTH_DAYS_DENOMINATOR       5
+#define DOS_CLOCK_DAY0_WEEKDAY                 3    /* day 0 (0000-03-01) was a Wednesday */
+
+static inline BOOL DosClockIsLeapYear(_In_ UINT year)
 {
-    static const unsigned char d[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-    if (m < 1 || m > 12) return 0;
-    return (m == 2 && dclk_leap(y)) ? 29u : d[m - 1];
+    return (year % DOS_CLOCK_LEAP_YEAR_INTERVAL == 0 && year % DOS_CLOCK_YEARS_PER_CENTURY != 0)
+        || year % DOS_CLOCK_YEARS_PER_ERA == 0;
+}
+
+static inline UINT DosClockDaysInMonth(_In_ UINT year, _In_ UINT month)
+{
+    static const BYTE daysInMonth[DOS_CLOCK_MONTHS_PER_YEAR] =
+        { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    if (month < DOS_CLOCK_JANUARY || month > DOS_CLOCK_DECEMBER) return 0;
+    return (month == DOS_CLOCK_FEBRUARY && DosClockIsLeapYear(year)) ? DOS_CLOCK_LEAP_FEBRUARY_DAYS
+                                                                     : daysInMonth[month - 1];
 }
 
 /* A calendar date at all (any year 1..9999). */
-static inline int dclk_date_real(unsigned y, unsigned m, unsigned d)
-{ return y >= 1 && y <= 9999 && m >= 1 && m <= 12 && d >= 1 && d <= dclk_mdays(y, m); }
+static inline BOOL DosClockIsRealDate(_In_ UINT year, _In_ UINT month, _In_ UINT day)
+{
+    return year >= DOS_CLOCK_FIRST_YEAR && year <= DOS_CLOCK_LAST_YEAR
+        && month >= DOS_CLOCK_JANUARY && month <= DOS_CLOCK_DECEMBER
+        && day >= DOS_CLOCK_FIRST_DAY && day <= DosClockDaysInMonth(year, month);
+}
 
 /* ── WHAT INT 21h AH=2Bh ACCEPTS. ────────────────────────────────────────────────
      RBIL: CX = 1980..2099. Measured by p_clock.asm on 6.22 under QEMU and on PCem's
@@ -67,108 +110,156 @@ static inline int dclk_date_real(unsigned y, unsigned m, unsigned d)
      everything but 2100, which it takes (abstained in oracle-rules.json: two Microsoft
      kernels and the spec against one emulator). DOS's date is a day count from
      1980-01-01, which is where the lower bound comes from. */
-static inline int dclk_dos_date_ok(unsigned y, unsigned m, unsigned d)
-{ return y >= 1980 && y <= 2099 && dclk_date_real(y, m, d); }
+#define DOS_CLOCK_DOS_FIRST_YEAR       1980
+#define DOS_CLOCK_DOS_LAST_YEAR        2099
+
+static inline BOOL DosClockIsDosDateValid(_In_ UINT year, _In_ UINT month, _In_ UINT day)
+{
+    return year >= DOS_CLOCK_DOS_FIRST_YEAR && year <= DOS_CLOCK_DOS_LAST_YEAR
+        && DosClockIsRealDate(year, month, day);
+}
 
 /* INT 21h AH=2Dh: hour 0-23, minute 0-59, second 0-59, hundredths 0-99. */
-static inline int dclk_time_ok(unsigned h, unsigned mi, unsigned s, unsigned cs)
-{ return h < 24 && mi < 60 && s < 60 && cs < 100; }
+static inline BOOL DosClockIsTimeValid(_In_ UINT hour, _In_ UINT minute, _In_ UINT second,
+                                       _In_ UINT hundredths)
+{
+    return hour < DOS_CLOCK_HOURS_PER_DAY && minute < DOS_CLOCK_MINUTES_PER_HOUR
+        && second < DOS_CLOCK_SECONDS_PER_MINUTE && hundredths < DOS_CLOCK_HUNDREDTHS_PER_SECOND;
+}
 
 /* Days since 0000-03-01 in the proleptic Gregorian calendar (Hinnant's algorithm).
    Only DIFFERENCES are ever used, so the epoch is arbitrary. */
-static inline int64_t dclk_days(unsigned y, unsigned m, unsigned d)
+static inline INT64 DosClockDays(_In_ UINT year, _In_ UINT month, _In_ UINT day)
 {
-    int64_t yy = (int64_t)y - (m <= 2 ? 1 : 0);
-    int64_t era = yy / 400;                          /* y >= 1, so no negative floor */
-    int64_t yoe = yy - era * 400;
-    int64_t mp  = (m > 2) ? (int64_t)m - 3 : (int64_t)m + 9;
-    int64_t doy = (153 * mp + 2) / 5 + (int64_t)d - 1;
-    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + doe;
+    INT64 shiftedYear = (INT64)year - (month <= DOS_CLOCK_FEBRUARY ? 1 : 0);
+    INT64 era = shiftedYear / DOS_CLOCK_YEARS_PER_ERA;   /* year >= 1, so no negative floor */
+    INT64 yearOfEra = shiftedYear - era * DOS_CLOCK_YEARS_PER_ERA;
+    INT64 shiftedMonth = (month > DOS_CLOCK_FEBRUARY) ? (INT64)month - DOS_CLOCK_MARCH_SHIFT
+                                                      : (INT64)month + DOS_CLOCK_MARCH_WRAP;
+    INT64 dayOfYear = (DOS_CLOCK_MONTH_DAYS_NUMERATOR * shiftedMonth
+                       + DOS_CLOCK_MONTH_DAYS_ROUNDING)
+                      / DOS_CLOCK_MONTH_DAYS_DENOMINATOR + (INT64)day - 1;
+    INT64 dayOfEra = yearOfEra * DOS_CLOCK_DAYS_PER_YEAR + yearOfEra / DOS_CLOCK_LEAP_YEAR_INTERVAL
+                     - yearOfEra / DOS_CLOCK_YEARS_PER_CENTURY + dayOfYear;
+    return era * DOS_CLOCK_DAYS_PER_ERA + dayOfEra;
 }
 
-#define DCLK_CS_PER_DAY ((int64_t)24 * 60 * 60 * 100)
+#define DOS_CLOCK_HUNDREDTHS_PER_DAY \
+    ((INT64)DOS_CLOCK_HOURS_PER_DAY * DOS_CLOCK_MINUTES_PER_HOUR * DOS_CLOCK_SECONDS_PER_MINUTE \
+     * DOS_CLOCK_HUNDREDTHS_PER_SECOND)
 
-static inline int64_t dclk_pack(const dclk_t *t)
+static inline INT64 DosClockPack(_In_ PCDOS_CLOCK_TIME time)
 {
-    return dclk_days(t->year, t->month, t->day) * DCLK_CS_PER_DAY
-         + (((int64_t)t->hour * 60 + t->min) * 60 + t->sec) * 100 + t->cs;
+    return DosClockDays(time->Year, time->Month, time->Day) * DOS_CLOCK_HUNDREDTHS_PER_DAY
+         + (((INT64)time->Hour * DOS_CLOCK_MINUTES_PER_HOUR + time->Minute)
+            * DOS_CLOCK_SECONDS_PER_MINUTE + time->Second) * DOS_CLOCK_HUNDREDTHS_PER_SECOND
+         + time->Hundredths;
 }
 
-static inline void dclk_unpack(int64_t v, dclk_t *t)
+static inline VOID DosClockUnpack(_In_ INT64 packed, _Out_ PDOS_CLOCK_TIME time)
 {
-    int64_t days = v / DCLK_CS_PER_DAY, rem = v % DCLK_CS_PER_DAY;
-    int64_t era, doe, yoe, y, doy, mp;
-    if (rem < 0) { rem += DCLK_CS_PER_DAY; --days; }
-    t->cs   = (unsigned)(rem % 100); rem /= 100;
-    t->sec  = (unsigned)(rem % 60);  rem /= 60;
-    t->min  = (unsigned)(rem % 60);  rem /= 60;
-    t->hour = (unsigned)rem;
+    INT64 days = packed / DOS_CLOCK_HUNDREDTHS_PER_DAY,
+          remainder = packed % DOS_CLOCK_HUNDREDTHS_PER_DAY;
+    INT64 era, dayOfEra, yearOfEra, year, dayOfYear, shiftedMonth;
+    if (remainder < 0) { remainder += DOS_CLOCK_HUNDREDTHS_PER_DAY; --days; }
+    time->Hundredths = (UINT)(remainder % DOS_CLOCK_HUNDREDTHS_PER_SECOND);
+    remainder /= DOS_CLOCK_HUNDREDTHS_PER_SECOND;
+    time->Second = (UINT)(remainder % DOS_CLOCK_SECONDS_PER_MINUTE);
+    remainder /= DOS_CLOCK_SECONDS_PER_MINUTE;
+    time->Minute = (UINT)(remainder % DOS_CLOCK_MINUTES_PER_HOUR);
+    remainder /= DOS_CLOCK_MINUTES_PER_HOUR;
+    time->Hour = (UINT)remainder;
     /* day 0 (0000-03-01) was a Wednesday */
-    t->dow  = (unsigned)(((days % 7) + 7 + 3) % 7);
-    era = (days >= 0 ? days : days - 146096) / 146097;
-    doe = days - era * 146097;
-    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    y   = yoe + era * 400;
-    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    mp  = (5 * doy + 2) / 153;
-    t->day   = (unsigned)(doy - (153 * mp + 2) / 5 + 1);
-    t->month = (unsigned)(mp < 10 ? mp + 3 : mp - 9);
-    t->year  = (unsigned)(y + (t->month <= 2 ? 1 : 0));
+    time->DayOfWeek = (UINT)(((days % DOS_CLOCK_DAYS_PER_WEEK) + DOS_CLOCK_DAYS_PER_WEEK
+                              + DOS_CLOCK_DAY0_WEEKDAY) % DOS_CLOCK_DAYS_PER_WEEK);
+    era = (days >= 0 ? days : days - DOS_CLOCK_DAYS_PER_ERA_LESS_ONE) / DOS_CLOCK_DAYS_PER_ERA;
+    dayOfEra = days - era * DOS_CLOCK_DAYS_PER_ERA;
+    yearOfEra = (dayOfEra - dayOfEra / DOS_CLOCK_DAYS_PER_FOUR_YEARS_LESS_ONE
+                 + dayOfEra / DOS_CLOCK_DAYS_PER_CENTURY
+                 - dayOfEra / DOS_CLOCK_DAYS_PER_ERA_LESS_ONE) / DOS_CLOCK_DAYS_PER_YEAR;
+    year = yearOfEra + era * DOS_CLOCK_YEARS_PER_ERA;
+    dayOfYear = dayOfEra - (DOS_CLOCK_DAYS_PER_YEAR * yearOfEra
+                            + yearOfEra / DOS_CLOCK_LEAP_YEAR_INTERVAL
+                            - yearOfEra / DOS_CLOCK_YEARS_PER_CENTURY);
+    shiftedMonth = (DOS_CLOCK_MONTH_DAYS_DENOMINATOR * dayOfYear + DOS_CLOCK_MONTH_DAYS_ROUNDING)
+                   / DOS_CLOCK_MONTH_DAYS_NUMERATOR;
+    time->Day   = (UINT)(dayOfYear - (DOS_CLOCK_MONTH_DAYS_NUMERATOR * shiftedMonth
+                                      + DOS_CLOCK_MONTH_DAYS_ROUNDING)
+                                     / DOS_CLOCK_MONTH_DAYS_DENOMINATOR + 1);
+    time->Month = (UINT)(shiftedMonth < DOS_CLOCK_SHIFTED_JANUARY
+                         ? shiftedMonth + DOS_CLOCK_MARCH_SHIFT
+                         : shiftedMonth - DOS_CLOCK_MARCH_WRAP);
+    time->Year  = (UINT)(year + (time->Month <= DOS_CLOCK_FEBRUARY ? 1 : 0));
 }
 
-/* The guest's reading: the host's now, moved by `off`. */
-static inline void dclk_read(const dclk_t *host, int64_t off, dclk_t *out)
-{ dclk_unpack(dclk_pack(host) + off, out); }
+/* The guest's reading: the host's now, moved by `offset`. */
+static inline VOID DosClockApplyOffset(_In_ PCDOS_CLOCK_TIME hostNow, _In_ INT64 offset,
+                                       _Out_ PDOS_CLOCK_TIME guestNow)
+{ DosClockUnpack(DosClockPack(hostNow) + offset, guestNow); }
 
 /* Set the DATE and keep the guest's time of day: the offset becomes whatever makes
-   host-now read as (y, m, d, <current guest time>). The caller has validated. */
-static inline void dclk_set_date(const dclk_t *host, int64_t *off,
-                                 unsigned y, unsigned m, unsigned d)
+   host-now read as (year, month, day, <current guest time>). The caller has validated. */
+static inline VOID DosClockSetDate(_In_ PCDOS_CLOCK_TIME hostNow, _Inout_ PINT64 offset,
+                                   _In_ UINT year, _In_ UINT month, _In_ UINT day)
 {
-    dclk_t g;
-    dclk_read(host, *off, &g);
-    g.year = y; g.month = m; g.day = d;
-    *off = dclk_pack(&g) - dclk_pack(host);
+    DOS_CLOCK_TIME guestNow;
+    DosClockApplyOffset(hostNow, *offset, &guestNow);
+    guestNow.Year = year; guestNow.Month = month; guestNow.Day = day;
+    *offset = DosClockPack(&guestNow) - DosClockPack(hostNow);
 }
 
 /* Set the TIME and keep the guest's date. */
-static inline void dclk_set_time(const dclk_t *host, int64_t *off,
-                                 unsigned h, unsigned mi, unsigned s, unsigned cs)
+static inline VOID DosClockSetTime(_In_ PCDOS_CLOCK_TIME hostNow, _Inout_ PINT64 offset,
+                                   _In_ UINT hour, _In_ UINT minute, _In_ UINT second,
+                                   _In_ UINT hundredths)
 {
-    dclk_t g;
-    dclk_read(host, *off, &g);
-    g.hour = h; g.min = mi; g.sec = s; g.cs = cs;
-    *off = dclk_pack(&g) - dclk_pack(host);
+    DOS_CLOCK_TIME guestNow;
+    DosClockApplyOffset(hostNow, *offset, &guestNow);
+    guestNow.Hour = hour; guestNow.Minute = minute; guestNow.Second = second;
+    guestNow.Hundredths = hundredths;
+    *offset = DosClockPack(&guestNow) - DosClockPack(hostNow);
 }
+
+/* The BIOS tick rate: centiseconds * 1193182 / (65536*100) ticks. */
+#define DOS_CLOCK_PIT_HZ               1193182u
+#define DOS_CLOCK_PIT_DIVISOR_CS       6553600u     /* 65536 * 100 */
+#define DOS_CLOCK_TICKS_PER_DAY        0x1800B0u    /* the BIOS's day length (below) */
+#define DOS_CLOCK_LAST_TICK_OF_DAY     0x1800AFu
 
 /* BIOS ticks since midnight for a time of day: centiseconds * 1193182 / (65536*100),
    the same rule as pit_ticks_since_midnight but at DOS's finer resolution.
    ⚠ 23:59:59.99 lands EXACTLY on the BIOS's day length (0x1800B0), a count the BIOS
      itself never holds -- it wraps to 0 and sets the midnight flag on reaching it.
      Clamped one short, so the next tick is the one that turns the day over. */
-static inline uint32_t dclk_ticks(unsigned h, unsigned mi, unsigned s, unsigned cs)
+static inline DWORD DosClockTicksFromTime(_In_ UINT hour, _In_ UINT minute, _In_ UINT second,
+                                          _In_ UINT hundredths)
 {
-    uint64_t c = (((uint64_t)h * 60 + mi) * 60 + s) * 100 + cs;
-    uint32_t t = (uint32_t)((c * 1193182u) / 6553600u);
-    return t < 0x1800B0u ? t : 0x1800AFu;
+    UINT64 totalHundredths = (((UINT64)hour * DOS_CLOCK_MINUTES_PER_HOUR + minute)
+                              * DOS_CLOCK_SECONDS_PER_MINUTE + second)
+                             * DOS_CLOCK_HUNDREDTHS_PER_SECOND + hundredths;
+    DWORD ticks = (DWORD)((totalHundredths * DOS_CLOCK_PIT_HZ) / DOS_CLOCK_PIT_DIVISOR_CS);
+    return ticks < DOS_CLOCK_TICKS_PER_DAY ? ticks : DOS_CLOCK_LAST_TICK_OF_DAY;
 }
 
 /* The other direction (GH #262): the time of day a BIOS tick count stands for, as
    DOS's CLOCK$ reads it -- centiseconds = ticks * 65536 * 100 / 1193182. A count at
    or past a day's length is clamped to the last centisecond of it. */
-static inline uint64_t dclk_ticks_cs(uint32_t ticks)
-{ return ((uint64_t)ticks * 6553600u) / 1193182u; }
+static inline UINT64 DosClockHundredthsFromTicks(_In_ DWORD ticks)
+{ return ((UINT64)ticks * DOS_CLOCK_PIT_DIVISOR_CS) / DOS_CLOCK_PIT_HZ; }
 
-static inline void dclk_from_ticks(uint32_t ticks, unsigned *h, unsigned *mi,
-                                   unsigned *s, unsigned *cs)
+static inline VOID DosClockTimeFromTicks(_In_ DWORD ticks, _Out_ PUINT hour, _Out_ PUINT minute,
+                                         _Out_ PUINT second, _Out_ PUINT hundredths)
 {
-    uint64_t c = dclk_ticks_cs(ticks);
-    if (c >= (uint64_t)DCLK_CS_PER_DAY) c = (uint64_t)DCLK_CS_PER_DAY - 1;
-    *cs = (unsigned)(c % 100); c /= 100;
-    *s  = (unsigned)(c % 60);  c /= 60;
-    *mi = (unsigned)(c % 60);  c /= 60;
-    *h  = (unsigned)c;
+    UINT64 elapsed = DosClockHundredthsFromTicks(ticks);
+    if (elapsed >= (UINT64)DOS_CLOCK_HUNDREDTHS_PER_DAY)
+        elapsed = (UINT64)DOS_CLOCK_HUNDREDTHS_PER_DAY - 1;
+    *hundredths = (UINT)(elapsed % DOS_CLOCK_HUNDREDTHS_PER_SECOND);
+    elapsed /= DOS_CLOCK_HUNDREDTHS_PER_SECOND;
+    *second = (UINT)(elapsed % DOS_CLOCK_SECONDS_PER_MINUTE);
+    elapsed /= DOS_CLOCK_SECONDS_PER_MINUTE;
+    *minute = (UINT)(elapsed % DOS_CLOCK_MINUTES_PER_HOUR);
+    elapsed /= DOS_CLOCK_MINUTES_PER_HOUR;
+    *hour = (UINT)elapsed;
 }
 
 /* ── GH #262 CASE B: DOS'S CLOCK FOLLOWS A TICK COUNT THE BIOS DID NOT WRITE. ─────────
@@ -176,7 +267,7 @@ static inline void dclk_from_ticks(uint32_t ticks, unsigned *h, unsigned *mi,
      day IS the count at 0040:006C, and the date is DOS's own day number, advanced by
      one each time the call hands back the midnight flag. So a program that stores to
      006C directly moves DOS's time (p_tick2c tick2c.after.store, 6.22 / PCem /
-     DOSBox-X). Ours keeps DOS's clock as host-now + dos_off, which no lost tick can
+     DOSBox-X). Ours keeps DOS's clock as host-now + DosOffset, which no lost tick can
      slow; the PIT tells us when the count stopped being one the BIOS produced (a
      WITNESS of the last value it wrote -- vdd_pit.h) and only then is the offset
      re-derived from the count. A VDM nobody stores into never comes here.
@@ -190,26 +281,29 @@ static inline void dclk_from_ticks(uint32_t ticks, unsigned *h, unsigned *mi,
      target = midnight of (guest-now - since) + wraps days + the count's time of day.
 
    ⚠ APPROXIMATIONS, ALL BELOW WHAT ANY PROBE CAN SEE:
-       - the count -> time conversion floors to the hundredth (dclk_ticks_cs), so a
-         reading is exact only to a tick (~5.49 cs) -- the same granularity real DOS
+       - the count -> time conversion floors to the hundredth (DosClockHundredthsFromTicks),
+         so a reading is exact only to a tick (~5.49 cs) -- the same granularity real DOS
          has, but 6.22's own CLOCK$ arithmetic is NOT disassembled here; whether it
          rounds or floors the hundredths is UNMEASURED (p_tick2c compares CX only);
        - `since` can be one tick short (a store between two ticks is seen at the
          second), which matters only if the store was made within ~55 ms of midnight;
        - every wrap counts a day. An AT BIOS sets the flag to 1, not a count, so a real
          DOS that went two days without reading the clock loses one; we do not. */
-static inline void dclk_follow_ticks(const dclk_t *host, int64_t *off, uint32_t ticks,
-                                     unsigned wraps, uint32_t since)
+static inline VOID DosClockFollowTicks(_In_ PCDOS_CLOCK_TIME hostNow, _Inout_ PINT64 offset,
+                                       _In_ DWORD ticks, _In_ UINT wraps, _In_ DWORD since)
 {
-    int64_t hp = dclk_pack(host);
-    int64_t at_store = hp + *off - (int64_t)dclk_ticks_cs(since);
-    int64_t day0 = at_store - (at_store % DCLK_CS_PER_DAY);   /* pack is never negative */
-    uint64_t tod = dclk_ticks_cs(ticks);
-    if (tod >= (uint64_t)DCLK_CS_PER_DAY) tod = (uint64_t)DCLK_CS_PER_DAY - 1;
-    *off = day0 + (int64_t)wraps * DCLK_CS_PER_DAY + (int64_t)tod - hp;
+    INT64 hostPacked = DosClockPack(hostNow);
+    INT64 atStore = hostPacked + *offset - (INT64)DosClockHundredthsFromTicks(since);
+    /* pack is never negative */
+    INT64 storeMidnight = atStore - (atStore % DOS_CLOCK_HUNDREDTHS_PER_DAY);
+    UINT64 timeOfDay = DosClockHundredthsFromTicks(ticks);
+    if (timeOfDay >= (UINT64)DOS_CLOCK_HUNDREDTHS_PER_DAY)
+        timeOfDay = (UINT64)DOS_CLOCK_HUNDREDTHS_PER_DAY - 1;
+    *offset = storeMidnight + (INT64)wraps * DOS_CLOCK_HUNDREDTHS_PER_DAY + (INT64)timeOfDay
+              - hostPacked;
 }
 
 /* The one clock the whole VDM shares (defined in dos_int21.c). */
-extern dclk_state g_dos_clock;
+extern DOS_CLOCK_STATE g_DosClock;
 
-#endif /* DOS_CLOCK_H */
+#endif /* NTVDMEX_DOS_CLOCK_H */

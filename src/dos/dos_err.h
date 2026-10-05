@@ -20,34 +20,57 @@
  *   failure class GH #27 exists to remove. To add a row, extend p_err.asm, run it
  *   on the oracle, and paste what came back -- in that order.
  *
- * Pure -- no Windows types -- so tests/unit/err_test.c can pin it off-VM.
+ * No Windows calls, only Windows types (src/ntvdmex_types.h), so tests/unit/err_test.c
+ * can pin it off-VM.
  */
-#ifndef DOS_ERR_H
-#define DOS_ERR_H
+#ifndef NTVDMEX_DOS_ERR_H
+#define NTVDMEX_DOS_ERR_H
+
+#include "../ntvdmex_types.h"
 
 /* DOS error classes (BH) and suggested actions (BL), as returned by 6.22. The
    names are RBIL's; the VALUES here are only ever the measured ones. */
-#define DOS_ECLASS_OUTOFRES   0x01
-#define DOS_ECLASS_AUTHZ      0x03      /* access denied family                 */
-#define DOS_ECLASS_BADFMT     0x07      /* bad request / invalid parameter      */
-#define DOS_ECLASS_NOTFOUND   0x08
-#define DOS_ECLASS_ALREADY    0x0C      /* already exists                       */
+#define DOS_ERR_CLASS_OUT_OF_RESOURCE   0x01
+#define DOS_ERR_CLASS_AUTHORIZATION     0x03      /* access denied family                 */
+#define DOS_ERR_CLASS_BAD_FORMAT        0x07      /* bad request / invalid parameter      */
+#define DOS_ERR_CLASS_NOT_FOUND         0x08
+#define DOS_ERR_CLASS_ALREADY_EXISTS    0x0C      /* already exists                       */
+#define DOS_ERR_CLASS_FAIL_I24          0x0D      /* after an INT 24h answered FAIL       */
 
-#define DOS_EACTION_RETRY     0x01
-#define DOS_EACTION_ABORT     0x04
-#define DOS_EACTION_USER      0x03      /* retry after user intervention        */
+#define DOS_ERR_ACTION_RETRY            0x01
+#define DOS_ERR_ACTION_ABORT            0x04
+#define DOS_ERR_ACTION_USER_INTERVENTION 0x03     /* retry after user intervention        */
 
-#define DOS_ELOCUS_UNKNOWN    0x00
-#define DOS_ELOCUS_BLOCKDEV   0x01
-#define DOS_ELOCUS_NETWORK    0x02      /* ...and, measured, the file system    */
+#define DOS_ERR_LOCUS_UNKNOWN           0x00
+#define DOS_ERR_LOCUS_BLOCK_DEVICE      0x01
+#define DOS_ERR_LOCUS_NETWORK           0x02      /* ...and, measured, the file system    */
 
-/* One measured row. `bx` is BH:BL packed as DOS returns it, `ch` the locus. */
-typedef struct {
-    unsigned short code;
-    unsigned short bx;
-    unsigned char  ch;
-    const char    *evidence;
-} dos_err_row_t;
+/* BX as 59h returns it: the class in BH, the action in BL. */
+#define DOS_ERR_CLASS_SHIFT             8
+#define DOS_ERR_CLASS_ACTION(errorClass, action) (((errorClass) << DOS_ERR_CLASS_SHIFT) | (action))
+
+/* The DOS extended error codes (AX) this header names. */
+#define DOS_ERR_NONE                    0x00
+#define DOS_ERR_FILE_NOT_FOUND          0x02
+#define DOS_ERR_PATH_NOT_FOUND          0x03
+#define DOS_ERR_TOO_MANY_OPEN_FILES     0x04
+#define DOS_ERR_ACCESS_DENIED           0x05
+#define DOS_ERR_INVALID_HANDLE          0x06
+#define DOS_ERR_INVALID_DRIVE           0x0F
+#define DOS_ERR_NO_MORE_FILES           0x12
+#define DOS_ERR_FILE_EXISTS             0x50
+#define DOS_ERR_FAIL_I24   0x53     /* 59h after a FAILed critical error: "fail on INT 24" */
+
+/* One measured row. `ClassAndAction` is BH:BL packed as DOS returns it, `Locus` the
+   locus (CH). */
+typedef struct _DOS_ERR_ROW {
+    WORD  Code;
+    WORD  ClassAndAction;
+    BYTE  Locus;
+    PCSTR Evidence;
+} DOS_ERR_ROW, *PDOS_ERR_ROW;
+
+typedef const DOS_ERR_ROW *PCDOS_ERR_ROW;
 
 /* ── EVERY ROW IS A LINE OF ORACLE OUTPUT. ────────────────────────────────────
    tests/probes/dos/p_err.asm on MS-DOS 6.22, verbatim:
@@ -61,41 +84,57 @@ typedef struct {
 
    Note CX: CH is the locus and CL comes back holding the probe's own poison
    (0xC1) in every single row -- so DOS does not write CL, and neither do we. */
-static const dos_err_row_t dos_err_table[] = {
-    { 0x02, 0x0803, 0x02, "err.after.3D.missing"   },
-    { 0x03, 0x0803, 0x02, "err.after.4E.nopath"    },
-    { 0x12, 0x0803, 0x02, "err.after.4E.nofile"    },
-    { 0x06, 0x0704, 0x01, "err.after.3F.badhandle" },
-    { 0x05, 0x0303, 0x02, "err.after.3D.readonly"  },
-    { 0x50, 0x0C03, 0x02, "err.after.5B.exists"    },
+static const DOS_ERR_ROW g_DosErrTable[] = {
+    { DOS_ERR_FILE_NOT_FOUND,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.3D.missing"   },
+    { DOS_ERR_PATH_NOT_FOUND,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.4E.nopath"    },
+    { DOS_ERR_NO_MORE_FILES,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.4E.nofile"    },
+    { DOS_ERR_INVALID_HANDLE,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_BAD_FORMAT, DOS_ERR_ACTION_ABORT),
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.3F.badhandle" },
+    { DOS_ERR_ACCESS_DENIED,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_AUTHORIZATION, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.3D.readonly"  },
+    { DOS_ERR_FILE_EXISTS,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_ALREADY_EXISTS, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.5B.exists"    },
     /* Invalid drive. ⚠ IT NEEDED A DIFFERENT DOOR: opening "Y:\..." returns 3
        (path not found), not 15, so the code only turns up through AH=47h asking
        for the current directory of a drive with nothing behind it. Provoked, not
        reasoned about -- err.after.47.baddrive AX=000F BX=0803 CX=02C1. */
-    { 0x0F, 0x0803, 0x02, "err.after.47.baddrive"  },
+    { DOS_ERR_INVALID_DRIVE,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
+      DOS_ERR_LOCUS_NETWORK, "err.after.47.baddrive"  },
     /* #34: after an INT 24h answered FAIL -- class 0Dh, action 04h, locus 1 (unknown).
        p_crit crit.4e.fail.59 AX=0053 BX=0D04 CX=0100, 6.22/QEMU and PCem alike. */
-    { 0x53, 0x0D04, 0x01, "crit.4e.fail.59"        },
+    { DOS_ERR_FAIL_I24,
+      DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_FAIL_I24, DOS_ERR_ACTION_ABORT),
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "crit.4e.fail.59"        },
 };
-#define DOS_ERR_ROWS (sizeof(dos_err_table) / sizeof(dos_err_table[0]))
+#define DOS_ERR_ROWS (sizeof(g_DosErrTable) / sizeof(g_DosErrTable[0]))
 
-/* Look up a code. Returns 1 and fills bx/ch when the pairing was measured;
-   returns 0 and zeroes them when it was not -- see the warning at the top for
-   why zero rather than a plausible guess. Code 0 (no error) is not a row: 59h
+/* Look up a code. Returns TRUE and fills classAndAction/locus when the pairing was
+   measured; returns FALSE and zeroes them when it was not -- see the warning at the top
+   for why zero rather than a plausible guess. Code 0 (no error) is not a row: 59h
    after a successful call reports AX=0 with class and locus zero, which is what
    the not-found path already produces. */
-static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned char *ch)
+static BOOL DosErrClassify(_In_ WORD errorCode, _Out_ PWORD classAndAction, _Out_ PBYTE locus)
 {
-    unsigned i;
-    *bx = 0; *ch = 0;
-    if (!code) return 1;                        /* no error: zeroes are correct */
-    for (i = 0; i < DOS_ERR_ROWS; ++i) {
-        if (dos_err_table[i].code != code) continue;
-        *bx = dos_err_table[i].bx;
-        *ch = dos_err_table[i].ch;
-        return 1;
+    UINT rowIndex;
+    *classAndAction = 0; *locus = 0;
+    if (!errorCode) return TRUE;                /* no error: zeroes are correct */
+    for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex) {
+        if (g_DosErrTable[rowIndex].Code != errorCode) continue;
+        *classAndAction = g_DosErrTable[rowIndex].ClassAndAction;
+        *locus = g_DosErrTable[rowIndex].Locus;
+        return TRUE;
     }
-    return 0;                                   /* caller logs UNMEASURED       */
+    return FALSE;                               /* caller logs UNMEASURED       */
 }
 
 /* ── WIN32 -> DOS, FOR EVERY CALL THAT FAILS THROUGH CreateFileA. (s72) ───────
@@ -122,7 +161,7 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
        INT21 AH=3d [Y:\ZZNOSUCH.XYZ] FAILED win32=0x3 -> AX=0x3
 
      An unmapped code is logged `UNMAPPED` and keeps the old answer rather than
-     being collapsed silently, exactly as dos_err_classify() refuses to invent a
+     being collapsed silently, exactly as DosErrClassify() refuses to invent a
      class.
    ⚠ THERE IS DELIBERATELY NO ERROR_INVALID_DRIVE (15) ROW. The obvious guess is
      that "Y:\..." arrives as 15 and should map to DOS 3 -- but measured, it
@@ -130,42 +169,66 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
      dressed as evidence. If a door is ever found that does produce 15, provoke
      it and add the row then, in that order.
 
-   Numeric rather than the ERROR_* macros so this header stays free of
-   windows.h and tests/unit/err_test.c can keep pinning it off-VM. */
-#define W32_FILE_NOT_FOUND      2u
-#define W32_PATH_NOT_FOUND      3u
-#define W32_TOO_MANY_OPEN       4u
-#define W32_ACCESS_DENIED       5u
-#define W32_FILE_EXISTS        80u
-#define W32_ALREADY_EXISTS    183u
+   Numeric rather than the ERROR_* macros, which the off-VM build (no windows.h)
+   does not have, so tests/unit/err_test.c can keep pinning it off-VM. */
+#define DOS_ERR_WIN32_FILE_NOT_FOUND      2u
+#define DOS_ERR_WIN32_PATH_NOT_FOUND      3u
+#define DOS_ERR_WIN32_TOO_MANY_OPEN       4u
+#define DOS_ERR_WIN32_ACCESS_DENIED       5u
+#define DOS_ERR_WIN32_FILE_EXISTS        80u
+#define DOS_ERR_WIN32_ALREADY_EXISTS    183u
 
-static int dos_err_from_win32(unsigned long e, unsigned short *dos)
+/* ── #34: THE HARDWARE ERRORS, 19-31: the same numbers in DOS and Win32 (see below). Named
+     as winerror.h names them. */
+#define DOS_ERR_WRITE_PROTECT           19
+#define DOS_ERR_BAD_UNIT                20
+#define DOS_ERR_NOT_READY               21
+#define DOS_ERR_BAD_COMMAND             22
+#define DOS_ERR_CRC                     23
+#define DOS_ERR_BAD_LENGTH              24
+#define DOS_ERR_SEEK                    25
+#define DOS_ERR_NOT_DOS_DISK            26
+#define DOS_ERR_SECTOR_NOT_FOUND        27
+#define DOS_ERR_OUT_OF_PAPER            28
+#define DOS_ERR_WRITE_FAULT             29
+#define DOS_ERR_READ_FAULT              30
+#define DOS_ERR_GEN_FAILURE             31
+#define DOS_ERR_HARDWARE_FIRST          DOS_ERR_WRITE_PROTECT
+#define DOS_ERR_HARDWARE_LAST           DOS_ERR_GEN_FAILURE
+
+static BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
 {
-    switch (e) {
+    switch (win32Error) {
     /* ── MEASURED, both sides. See the log lines quoted above. ─────────────── */
-    case W32_FILE_NOT_FOUND: *dos = 0x02; return 1;  /* err.after.3D.missing  AX=0002 */
+    case DOS_ERR_WIN32_FILE_NOT_FOUND:                       /* err.after.3D.missing  AX=0002 */
+        *dosError = DOS_ERR_FILE_NOT_FOUND; return TRUE;
     /* Also the bad-drive door: "Y:\..." arrives here as 3, not 15. */
-    case W32_PATH_NOT_FOUND: *dos = 0x03; return 1;  /* err.after.3D.baddrive AX=0003 */
-    case W32_ACCESS_DENIED:  *dos = 0x05; return 1;  /* err.after.3D.readonly AX=0005 */
+    case DOS_ERR_WIN32_PATH_NOT_FOUND:                       /* err.after.3D.baddrive AX=0003 */
+        *dosError = DOS_ERR_PATH_NOT_FOUND; return TRUE;
+    case DOS_ERR_WIN32_ACCESS_DENIED:                        /* err.after.3D.readonly AX=0005 */
+        *dosError = DOS_ERR_ACCESS_DENIED; return TRUE;
     /* ── AN IDENTITY, NOT A MEASUREMENT, AND LABELLED AS SUCH. DOS error 4 IS
          "too many open files" and the handler already answers 4 when it runs out
          of its own slots, so the two names denote one condition. NOT provoked by
          a probe: to promote it, extend p_err.asm to exhaust the handle table. */
-    case W32_TOO_MANY_OPEN:  *dos = 0x04; return 1;
+    case DOS_ERR_WIN32_TOO_MANY_OPEN:  *dosError = DOS_ERR_TOO_MANY_OPEN_FILES; return TRUE;
     /* #168: p_file int21.6C.exists -- 6Ch "fail if it exists" on a file that does:
          6.22 answers AX=0050. CREATE_NEW reports ERROR_FILE_EXISTS; CreateDirectory
          and MoveFile say ERROR_ALREADY_EXISTS for the same condition. */
-    case W32_FILE_EXISTS:
-    case W32_ALREADY_EXISTS: *dos = 0x50; return 1;
+    case DOS_ERR_WIN32_FILE_EXISTS:
+    case DOS_ERR_WIN32_ALREADY_EXISTS: *dosError = DOS_ERR_FILE_EXISTS; return TRUE;
     /* ── #34: THE HARDWARE ERRORS, 19-31, ARE THE SAME NUMBERS ON BOTH SIDES. Win32
          kept DOS's codes for them (ERROR_WRITE_PROTECT 19 .. ERROR_GEN_FAILURE 31;
          an empty floppy drive is ERROR_NOT_READY, 21). An identity, and labelled as
          one -- and the code that matters: 19-31 is what turns a failure into a
-         CRITICAL error that goes to the program's INT 24h (dos_crit_*, below). */
-    case 19: case 20: case 21: case 22: case 23: case 24: case 25:
-    case 26: case 27: case 28: case 29: case 30: case 31:
-        *dos = (unsigned short)e; return 1;
-    default: *dos = 0x02; return 0;                  /* caller logs win32= and keeps 2 */
+         CRITICAL error that goes to the program's INT 24h (DosCrit*, below). */
+    case DOS_ERR_WRITE_PROTECT: case DOS_ERR_BAD_UNIT: case DOS_ERR_NOT_READY:
+    case DOS_ERR_BAD_COMMAND: case DOS_ERR_CRC: case DOS_ERR_BAD_LENGTH: case DOS_ERR_SEEK:
+    case DOS_ERR_NOT_DOS_DISK: case DOS_ERR_SECTOR_NOT_FOUND: case DOS_ERR_OUT_OF_PAPER:
+    case DOS_ERR_WRITE_FAULT: case DOS_ERR_READ_FAULT: case DOS_ERR_GEN_FAILURE:
+        *dosError = (WORD)win32Error; return TRUE;
+    default:                                         /* caller logs win32= and keeps 2 */
+        *dosError = DOS_ERR_FILE_NOT_FOUND; return FALSE;
     }
 }
 
@@ -179,15 +242,25 @@ static int dos_err_from_win32(unsigned long e, unsigned short *dos)
      and the handler answers 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. Every value below is
      a row p_crit.asm measured on 6.22 (QEMU) and PCem with drive A: failed "not
      ready" -- see the evidence beside each. */
-#define DOS_ERR_FAIL_I24   0x53     /* 59h after a FAILed critical error: "fail on INT 24" */
-#define DOS_CRIT_ABORT_RC  0x00     /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
+#define DOS_CRIT_ABORT_RETURN_CODE  0x00  /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
 
-static inline int dos_crit_is_hw(unsigned short code) { return code >= 19 && code <= 31; }
+static inline BOOL DosCritIsHardwareError(_In_ WORD errorCode)
+{ return errorCode >= DOS_ERR_HARDWARE_FIRST && errorCode <= DOS_ERR_HARDWARE_LAST; }
 
 /* The INT 24h answer bits (AH bits 3-5), named as DOS's own source names them. */
 #define DOS_CRIT_ALLOW_FAIL    0x08
 #define DOS_CRIT_ALLOW_RETRY   0x10
 #define DOS_CRIT_ALLOW_IGNORE  0x20
+
+/* The rest of INT 24h's AH: bit 0 = a WRITE, bits 2-1 = the area. */
+#define DOS_CRIT_WRITE         1
+#define DOS_CRIT_AREA_SHIFT    1
+#define DOS_CRIT_AREA_DATA     3
+#define DOS_CRIT_AH_PATH_CALL  0x1A     /* p_crit crit.*.int24 BX=1A00 */
+
+/* The INT 21h functions on an already-open file that DosCritInt24Ah tells apart. */
+#define DOS_CRIT_FUNCTION_READ   0x3F
+#define DOS_CRIT_FUNCTION_WRITE  0x40
 
 /* AH for INT 24h, from the INT 21h function that failed.
    ★ MEASURED: a path call (4Eh, 3Dh, 3Ch) on a drive that is not ready gives AH=1Ah
@@ -209,13 +282,15 @@ static inline int dos_crit_is_hw(unsigned short code) { return code >= 19 && cod
      crit2.h40.*) asks exactly this of 6.22 and PCem, and the area can legitimately
      come back 1 if the kernel has to walk an uncached FAT before the data sector --
      the probe reads and writes the file's FIRST cluster precisely so it does not. */
-static inline unsigned char dos_crit_ah(unsigned char fn)
+static inline BYTE DosCritInt24Ah(_In_ BYTE function)
 {
-    if (fn == 0x3F) return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
-                           | (3 << 1);                         /* 3Eh */
-    if (fn == 0x40) return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
-                           | (3 << 1) | 1;                     /* 3Fh */
-    return 0x1A;                                 /* p_crit crit.*.int24 BX=1A00 */
+    if (function == DOS_CRIT_FUNCTION_READ)
+        return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
+               | (DOS_CRIT_AREA_DATA << DOS_CRIT_AREA_SHIFT);                       /* 3Eh */
+    if (function == DOS_CRIT_FUNCTION_WRITE)
+        return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
+               | (DOS_CRIT_AREA_DATA << DOS_CRIT_AREA_SHIFT) | DOS_CRIT_WRITE;      /* 3Fh */
+    return DOS_CRIT_AH_PATH_CALL;                /* p_crit crit.*.int24 BX=1A00 */
 }
 
 /* AX the failed call returns when the handler answers FAIL (59h then says 53h).
@@ -228,11 +303,12 @@ static inline unsigned char dos_crit_ah(unsigned char fn)
      (MS_CODE.ASM) then sees FAILERR and sets the EXTENDED error to error_FAIL_I24
      (53h) -- the same 59h answer the path calls measured. ⚠ Unmeasured on 6.22:
      p_crit2 crit2.h3f.fail.call / crit2.h40.fail.call. */
-static inline unsigned short dos_crit_fail_ax(unsigned char fn, unsigned char code)
+static inline WORD DosCritFailAx(_In_ BYTE function, _In_ BYTE errorCode)
 {
-    (void)code;
-    if (fn == 0x3F || fn == 0x40) return 0x0005;
-    return 0x0003;
+    (VOID)errorCode;
+    if (function == DOS_CRIT_FUNCTION_READ || function == DOS_CRIT_FUNCTION_WRITE)
+        return DOS_ERR_ACCESS_DENIED;
+    return DOS_ERR_PATH_NOT_FOUND;
 }
 
 /* #275: what a 3Fh/40h answers when its INT 24h said IGNORE. MS-DOS 4.0 DREAD: an
@@ -240,43 +316,54 @@ static inline unsigned short dos_crit_fail_ax(unsigned char fn, unsigned char co
    had moved -- the call reports the bytes it was asked for (a read still stops at
    end of file, as every read does) and the file position advances by them. Whatever
    is in the caller's buffer for an ignored read is whatever was there.
-   `size_known` = 0 when the host could not learn the file size (then the request).
+   `isSizeKnown` = 0 when the host could not learn the file size (then the request).
    ⚠ Unmeasured on 6.22: p_crit2 crit2.h3f.ignore.call / crit2.h40.ignore.call. */
-static inline unsigned short dos_crit_ignore_count(unsigned char fn, unsigned short cnt,
-                                                   unsigned long pos, unsigned long size,
-                                                   int size_known)
+static inline WORD DosCritIgnoreCount(_In_ BYTE function, _In_ WORD requestedCount,
+                                      _In_ DWORD filePosition, _In_ DWORD fileSize,
+                                      _In_ BOOL isSizeKnown)
 {
-    if (fn == 0x3F && size_known) {
-        unsigned long left = (size > pos) ? size - pos : 0;
-        return (unsigned short)(left < cnt ? left : cnt);
+    if (function == DOS_CRIT_FUNCTION_READ && isSizeKnown) {
+        DWORD bytesLeft = (fileSize > filePosition) ? fileSize - filePosition : 0;
+        return (WORD)(bytesLeft < requestedCount ? bytesLeft : requestedCount);
     }
-    return cnt;
+    return requestedCount;
 }
+
+/* The drive letters A: to Z:, and what DosCritDriveFromNtName answers for no match. */
+#define DOS_CRIT_DRIVE_COUNT   26
+#define DOS_CRIT_NO_DRIVE      (-1)
+#define DOS_CRIT_CASE_OFFSET   32       /* 'a' - 'A' */
+#define DOS_CRIT_PATH_SEPARATOR '\\'
 
 /* #275: AL for a handle call -- the drive the OPEN FILE lives on, not the current
    drive (DOS takes it from the DPB the SFT names; we have no SFT). The host asks
    Windows for the file object's NT name ("\Device\Floppy0\DIR\FILE.TXT") and for
    each drive letter's NT device ("A:" -> "\Device\Floppy0"); the drive is the
-   letter whose device is a whole-component prefix of the name. dev[k] = NULL or ""
+   letter whose device is a whole-component prefix of the name. devices[k] = NULL or ""
    for a letter that does not exist. -1 = no match (a mapped network drive, a SUBST):
    the caller keeps the current drive, which is what this answered before. */
-static inline int dos_crit_drive_from_ntname(const char *name, const char *const dev[26])
+static inline INT DosCritDriveFromNtName(
+    _In_opt_ PCSTR ntName,
+    _In_reads_(DOS_CRIT_DRIVE_COUNT) PCSTR const devices[DOS_CRIT_DRIVE_COUNT])
 {
-    int k;
-    if (!name) return -1;
-    for (k = 0; k < 26; ++k) {
-        const char *d = dev[k], *n = name;
-        if (!d || !*d) continue;
-        while (*d && *n) {
-            char a = *d, b = *n;
-            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-            if (a != b) break;
-            ++d; ++n;
+    INT driveIndex;
+    if (!ntName) return DOS_CRIT_NO_DRIVE;
+    for (driveIndex = 0; driveIndex < DOS_CRIT_DRIVE_COUNT; ++driveIndex) {
+        PCSTR devicePosition = devices[driveIndex], namePosition = ntName;
+        if (!devicePosition || !*devicePosition) continue;
+        while (*devicePosition && *namePosition) {
+            CHAR deviceChar = *devicePosition, nameChar = *namePosition;
+            if (deviceChar >= 'A' && deviceChar <= 'Z')
+                deviceChar = (CHAR)(deviceChar + DOS_CRIT_CASE_OFFSET);
+            if (nameChar >= 'A' && nameChar <= 'Z')
+                nameChar = (CHAR)(nameChar + DOS_CRIT_CASE_OFFSET);
+            if (deviceChar != nameChar) break;
+            ++devicePosition; ++namePosition;
         }
-        if (!*d && (*n == '\\' || *n == 0)) return k;
+        if (!*devicePosition
+            && (*namePosition == DOS_CRIT_PATH_SEPARATOR || *namePosition == 0)) return driveIndex;
     }
-    return -1;
+    return DOS_CRIT_NO_DRIVE;
 }
 
-#endif /* DOS_ERR_H */
+#endif /* NTVDMEX_DOS_ERR_H */

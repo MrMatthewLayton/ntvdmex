@@ -168,7 +168,7 @@ typedef struct pit_state {
          tick_witness is the count the BIOS itself last left there (every increment, the
          seed, AH=01h's and AH=2Dh's reloads). A count that differs at the next increment
          or at the next DOS clock read was STORED by the guest -- and DOS's clock must
-         then follow it (dos_clock.h, dclk_follow_ticks). From the first such sighting
+         then follow it (dos_clock.h, DosClockFollowTicks). From the first such sighting
          until the host takes it: tick_wraps = midnight rollovers, tick_since = BIOS
          ticks counted. One compare and a store per tick -- see pit_bios_tick. */
     uint32_t tick_witness;
@@ -199,7 +199,7 @@ static inline void vdd_pit_tick_owned(pit_state *st, uint32_t v)
 { st->tick_witness = v; st->tick_foreign = 0; st->tick_wraps = 0; st->tick_since = 0; }
 
 /* Has the count been set by anything but the BIOS since the last call? If so, hand
-   back what DOS's clock must follow (see dclk_follow_ticks), forget it, and take the
+   back what DOS's clock must follow (see DosClockFollowTicks), forget it, and take the
    count as the BIOS's own from here. 0 = nothing happened, outputs untouched. The
    caller holds whatever serializes it against the tick (the host: g_pit_cs). */
 static inline int vdd_pit_tick_take(pit_state *st, uint32_t count,

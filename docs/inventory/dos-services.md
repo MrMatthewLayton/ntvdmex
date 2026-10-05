@@ -90,8 +90,8 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `25h`/`35h` | set / get interrupt vector | **IMPL** | `:2242-2251` | untested |
 | `26h` | create a new PSP | **PART** | `:1432-1445`: copies the **top-level** PSP (`DOS_PSP_SEG`), not the current one, and always names it the parent | untested |
 | `29h` | parse a filename into an FCB | **IMPL** | `:1259-1309`; `*` expands to `?`s; AL bits 1–3 keep drive/name/extension (s81) | **oracle** (`p_fcb`, all four hosts) |
-| `2Ah` | get date | **IMPL** | the VDM's clock: host local time + `g_dos_clock.dos_off` (`src/dos/dos_clock.h`, #250). #262 B: `dos_clock_sync` first — a tick count the BIOS did not write is followed, its midnight rollovers moving DOS's day number (`dclk_follow_ticks`) | **oracle** (`p_clock`); `p_vclock` `vclock.*.dos` owed; clock_test |
-| `2Bh` | set date | **IMPL** | #250: moves `dos_off` (the host clock never moves); 1980–2099, Gregorian, `AL=FFh` and no change on a refusal; the RTC follows (`rtc_off = dos_off`, as CLOCK$ writes the chip) | **oracle** (`p_clock`, 3 hosts) |
+| `2Ah` | get date | **IMPL** | the VDM's clock: host local time + `g_DosClock.DosOffset` (`src/dos/dos_clock.h`, #250). #262 B: `dos_clock_sync` first — a tick count the BIOS did not write is followed, its midnight rollovers moving DOS's day number (`DosClockFollowTicks`) | **oracle** (`p_clock`); `p_vclock` `vclock.*.dos` owed; clock_test |
+| `2Bh` | set date | **IMPL** | #250: moves `DosOffset` (the host clock never moves); 1980–2099, Gregorian, `AL=FFh` and no change on a refusal; the RTC follows (`RtcOffset = DosOffset`, as CLOCK$ writes the chip) | **oracle** (`p_clock`, 3 hosts) |
 | `2Ch` | get time | **IMPL** | as `2Ah`, centiseconds from milliseconds. #262: follows INT 1Ah `01h` (case A) and a raw store to `0040:006C` (case B, s92 — the PIT's tick witness, `vdd_pit_tick_take`) | **oracle** (`p_clock`, `p_tick2c`); case B + `p_vclock` owed; clock_test, pit_test T8b |
 | `2Dh` | set time | **IMPL** | as `2Bh`; also reloads `0040:006C` (`set_ticks`, owned by the witness) | **oracle** (`p_clock`) |
 | `2Eh` | set verify flag | **IMPL** | `:1576-1577`; stored, read by `54h` (writes are never verified, which is permitted) | **oracle** (`p_file`, via `54h`) |
@@ -111,7 +111,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `39h`/`3Ah` | mkdir / rmdir | **IMPL** | `:1593-1608` | **oracle** (`p_file`, `p_drv`) |
 | `3Bh` | chdir (never moves the current drive) | **IMPL** | `:2039-2073` | **oracle** (`p_drv`, `p_curdir`) |
 | `3Ch` | create | **PART** | `:842-844`: **`CX` (attributes) is ignored** — read-only, hidden and system are dropped. Lowest free handle ✓ | **oracle** for the handle number (`p_redir`) |
-| `3Dh` | open | **IMPL** | `:845-850`; access mode from AL; sharing bits deliberately not enforced (no SHARE); errors through `dos_err_from_win32` | **oracle** (`p_err` 3D rows, `p_file`) |
+| `3Dh` | open | **IMPL** | `:845-850`; access mode from AL; sharing bits deliberately not enforced (no SHARE); errors through `DosErrFromWin32` | **oracle** (`p_err` 3D rows, `p_file`) |
 | `3Eh` | close | **IMPL** | `:870-876` | **oracle** (`p_redir`) |
 | `3Fh` | read | **PART** | `:877-899`: files ✓; a hardware failure (19-31) → INT 24h (#275, `p_crit2`); ⛔ **an unredirected device handle returns 0 bytes (EOF)** (`:897-898`) — reading stdin by handle never reaches the keyboard | **oracle** for files (`p_redir`) |
 | `40h` | write | **PART** | `:799-820`: files and the console ✓; a hardware failure (19-31) → INT 24h (#275, `p_crit2`); other WriteFile failures still answer CF=0 with the short count; **`CX=0` does not truncate or extend** the file to the current position (DOS's documented way to set a file's size). Handles 3/4 = AUX/PRN through INT 14h/17h (#251, `p_auxprn`) | **oracle** (`p_redir`, `p_tsr`) |
@@ -255,7 +255,7 @@ closed**; `p_curdir`, `p_psp`, `p_mcb` AGREE with abstentions (not contracts).
 | `err.after.3D.readonly` — read-only file opened for WRITE | `AX=0005` access denied | `AX=0002` |
 | `err.after.3D.baddrive` — open on unclaimed `Y:` | `AX=0003` path not found | `AX=0002` |
 
-Fixed by `dos_err_from_win32()` in `dos_err.h`, with **both sides of every row measured**
+Fixed by `DosErrFromWin32()` in `dos_err.h`, with **both sides of every row measured**
 (the DOS side from the oracle, the Win32 side from the handler's log). Unmapped codes log
 `UNMAPPED` and keep 2. Pinned off-VM by `err_test.c`. ⚠ **There is deliberately no
 `ERROR_INVALID_DRIVE` (15) row**: measured, `Y:\...` arrives as 3. ▶ The same collapse is
