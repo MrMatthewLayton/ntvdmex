@@ -1,6 +1,6 @@
 /* dpmi_enter.S -- monitor PM-entry, a faithful port of ntvdm's 0xf04483c.
  *
- * void dpmi_enter_pm(volatile BYTE *tib);
+ * VOID DpmiEnterProtectedMode(volatile BYTE *tib);
  *
  * Runs the guest in protected mode the way ntvdm does, so a PM fault / INT is
  * reflected by the KERNEL's VDM trap handler (not Win32 SEH). The trick: save the
@@ -9,7 +9,7 @@
  * flag, load the guest register file, and FAR-JMP into the guest. When the guest
  * faults the kernel saves the guest state to TIB+0x2D8, restores the host-save
  * CONTEXT, sets VTIB_EVENT, and resumes at our saved return address -- so from C
- * this function simply "returns" once the guest stops, like v86_run().
+ * this function simply "returns" once the guest stops, like VdmRunGuest().
  *
  * Recovered from XP ntvdm (see docs/research/dpmi-under-ntvdmcontrol.md, VM run 10).
  * VTIB register fields: EDI=0x374 ESI=0x378 EBX=0x37C EDX=0x380 ECX=0x384 EAX=0x388
@@ -27,10 +27,10 @@ g_gcs:  .word 0                 /* guest CS  (for far jmp) */
         .word 0
 
     .text
-    .global _dpmi_enter_pm
-    .global dpmi_enter_pm
-_dpmi_enter_pm:
-dpmi_enter_pm:
+    .global _DpmiEnterProtectedMode
+    .global DpmiEnterProtectedMode
+_DpmiEnterProtectedMode:
+DpmiEnterProtectedMode:
     push ebp
     mov  ebp, esp
     push ebx
@@ -129,14 +129,14 @@ dpmi_enter_pm:
     pop  ebp
     ret
 
-/* dpmi_trapc -- the VDM "trap continue" handler (VDM_INITIALIZE_DATA.TrapcHandler).
+/* DpmiTrapContinue -- the VDM "trap continue" handler (VDM_INITIALIZE_DATA.TrapcHandler).
    A faithful port of ntvdm 0xf044820: the kernel calls this (with ebx = VDM_TIB) to
    (re)enter the guest -- it far-returns to the guest CS:EIP from the VDM_TIB. Our
    previous empty stub left the kernel's PM trap path unable to complete. */
-    .global _dpmi_trapc
-    .global dpmi_trapc
-_dpmi_trapc:
-dpmi_trapc:
+    .global _DpmiTrapContinue
+    .global DpmiTrapContinue
+_DpmiTrapContinue:
+DpmiTrapContinue:
     and  esp, 0xFFFF
     push dword ptr [ebx + 0x394]    /* guest CS  */
     push dword ptr [ebx + 0x390]    /* guest EIP */

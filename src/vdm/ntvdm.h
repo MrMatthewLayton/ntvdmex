@@ -10,8 +10,8 @@
  * field offsets) -- no logic -- so it stays a stable contract the src/vdm modules
  * build on.
  */
-#ifndef NTVDM_H
-#define NTVDM_H
+#ifndef NTVDMEX_VDM_NTVDM_H
+#define NTVDMEX_VDM_NTVDM_H
 
 #include <windows.h>
 
@@ -271,4 +271,4 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VDM_SET16(tib, off, v) (VDM_REG((tib), (off)) = \
         (VDM_REG((tib), (off)) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFFu))
 
-#endif /* NTVDM_H */
+#endif /* NTVDMEX_VDM_NTVDM_H */

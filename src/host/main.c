@@ -220,7 +220,7 @@ static BOOL oscompat_attach_console(DWORD pid)
      become a VDM. Measured on the rig, 2026-09-25:
 
          STAGE0: cmdline=["...\bin\ntvdmhost.exe" ]
-         STAGE1: v86_init NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
+         STAGE1: VdmRegisterWithKernel NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
          STAGE1: GetNextVDMCommand FALSE err=0x57
 
      ...and then it exits, silently, with no window. VDM privilege is not something a
@@ -384,7 +384,7 @@ static dos_safe_skips g_safe;           /* s90 #132: all zero unless SAFE MODE (
 #define QIMODE_PATH CFG_("qimode.txt")
 /* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
    Exists so the rig can try a different starting word without a rebuild -- see the
-   note at the v86_init call for why the word must be INITIALISED at all. */
+   note at the VdmRegisterWithKernel call for why the word must be INITIALISED at all. */
 #define VDMSTATE_PATH CFG_("vdmstate.txt")
 /* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
    default is right for an unattended test that must not wedge the watcher, but an
@@ -735,12 +735,12 @@ static int   g_back_to_prompt;          /* Close Program ended it: next sub 01 =
 #define DPMI_FLTRET_BOP    0x5A
 #define DPMI_FLTRET_COFF   (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) + DOS_FLTRET_OFF)
 
-/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
+/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
    hole and maps it there; g_ems_frame_lin holds the linear base actually chosen
    (0 => none found, EMS unavailable). The guest learns the segment via AH=41. */
 #define EMS_POOL_PAGES 512                           /* 512 * 16KB = 8MB of EMS */
-static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame */
+static DWORD g_ems_frame_lin;                        /* set by VdmMapEmsFrame */
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
@@ -889,7 +889,7 @@ static volatile LONG g_report_got_next = 0;   /* the report call returned TRUE: 
 static DWORD WINAPI csrss_report_thread(LPVOID pv)
 {
     DWORD e = 0;
-    BOOL ok = csrss_task_done(g_ci.TaskId, (ULONG)(ULONG_PTR)pv, &e, NULL);
+    BOOL ok = CsrssTaskDone(g_ci.TaskId, (ULONG)(ULONG_PTR)pv, &e, NULL);
     if (ok) InterlockedExchange(&g_report_got_next, 1);
     return e;
 }
@@ -1602,7 +1602,7 @@ static int g_pm_veh_pass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall T
    AL=0 at the first fault, and unchanged at the second), this is where it really is. */
 static volatile LONG g_pm_entry_eip = -1;
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
-   -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
+   -- was built for the era when the client died inside the FIRST DpmiEnterProtectedMode and the
    only question was "did we get there at all". Now that a client runs for thousands of
    events it is the thing stopping it: a Doom run hit the 4 MB log cap at event 0xdb1
    with the game still loading. So: a handful of checkpoints always (they still catch a
@@ -1697,13 +1697,13 @@ static int   g_bp_n = 0;
 
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
    The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
-   main thread wedges INSIDE one dpmi_enter_pm() because the kernel silently swallowed a
+   main thread wedges INSIDE one DpmiEnterProtectedMode() because the kernel silently swallowed a
    plain-instruction PM #GP and skip-resumes it forever (the deep wall, runs 20-34);
    (b) the client busy-polls something we don't provide, so the host `for steps` loop
    spins servicing the SAME patched INT over and over; (c) genuine slow progress. The
    watchdog thread samples these to tell them apart: a live host-loop heartbeat (advances
    only when the loop iterates -> distinguishes (b)/(c) from (a)), the guest CS:EIP handed
-   to the LAST dpmi_enter_pm (where a frozen guest is wedged), and VEH fire-counters
+   to the LAST DpmiEnterProtectedMode (where a frozen guest is wedged), and VEH fire-counters
    (whether a real exception was ever delivered to us at all). */
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
 static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
@@ -1917,16 +1917,16 @@ static DWORD g_ev_hist[EV_HIST_MAX];
 /* ── #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85) ─────────────────
      3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
      traps a second -- so the thread was somewhere in the host between v86_runs most of
-     the time. Split the wall clock: microseconds inside v86_run, and the host time
-     between one v86_run's return and the next's entry, charged to the event that
+     the time. Split the wall clock: microseconds inside VdmRunGuest, and the host time
+     between one VdmRunGuest's return and the next's entry, charged to the event that
      returned (whatever the loop did to service it, interpreter slices included). */
 static DWORD g_v86_us_total, g_host_us_ev[EV_HIST_MAX];
-static LONGLONG g_host_t_last;           /* QPC of the last v86_run return; 0 = none */
+static LONGLONG g_host_t_last;           /* QPC of the last VdmRunGuest return; 0 = none */
 static int  g_host_ev_last;
 static DWORD g_bop_hist[256];            /* V86 BOP events by number (the busiest are printed) */
 /* ...and the same, second by second, so a run with two phases (3DBench: a title wait
    spinning on INT 16h, then the benchmark) is not read as one average. Cumulative
-   snapshots at the first v86_run return of each second; the report prints deltas. */
+   snapshots at the first VdmRunGuest return of each second; the report prints deltas. */
 #define XS_SECS 40
 enum { XS_RAISE, XS_ASYNC, XS_COOP, XS_NIE, XS_BOP, XS_IO, XS_HOSTMS, XS_PACE, XS_N };
 static DWORD g_pitpace_calls;              /* pit_pacer_thread wakes (declared here for g_xs_snap) */
@@ -1995,7 +1995,7 @@ static int            g_my_pm_detect  = 0;  /* MYPM_DETECT_FLAG                 
 static DWORD          g_mypm_runs = 0, g_mypm_instrs = 0, g_mypm_bails = 0, g_mypm_bail_mp = 0;
 static DWORD          g_mypm_stop[6];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
-     In a planar mode a bail is not one instruction: v86_run keeps the guest until the
+     In a planar mode a bail is not one instruction: VdmRunGuest keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
      st->plane[]. The list of bail sites IS the to-do list for the interpreter, and a
      12-line budget spent on one site hid the `repne scasb` that cost Lemmings its
@@ -2008,8 +2008,8 @@ static unsigned g_p12_site_n = 0, g_p12_site_lost = 0;
 static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 #define PM_HEADLESS_MS g_headless_ms
 #define PM_HEADLESS_GRACE_MS 3000                /* grace for a clean wind-down before the hard backstop forces exit */
-static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
-static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
+static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode    */
+static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode   */
 static volatile DWORD g_dpmi_last_ev  = 0;  /* VTIB_EVENT reported by the last return        */
 static volatile DWORD g_dpmi_last_cs  = 0;  /* guest CS after the last return                */
 static volatile DWORD g_dpmi_last_eip = 0;  /* guest EIP after the last return               */
@@ -2852,7 +2852,7 @@ static WORD bios_equipment_word(void)
      once at start-up by bios_bda_init(), and again here whenever a setting that feeds
      the word changes while the guest runs (the joystick type -> bit 12).
    ⚠ g_bda_ready gates it: settings_apply() first runs at the top of WinMain, before
-     v86_init() has committed the guest's low memory, and a write to linear 0x410 then
+     VdmRegisterWithKernel() has committed the guest's low memory, and a write to linear 0x410 then
      would fault the host. It is set by the start-up block that calls bios_bda_init(). */
 static int g_bda_ready;
 static void bios_bda_refresh_equipment(void)
@@ -3601,7 +3601,7 @@ static int  v86_deliver_dev_irq(volatile BYTE *tib);  /* fwd: shared by the main
        153dc:  cmp  [0x28820],eax
        153e2:  je   153dc
    waiting for a counter its own INT 08h handler increments. No I/O, no INT, no HLT, so
-   dpmi_enter_pm() never returns and the watchdog eventually calls it a wedge. The only
+   DpmiEnterProtectedMode() never returns and the watchdog eventually calls it a wedge. The only
    way in is the same one this file already uses for real mode: suspend the CPU thread,
    rewrite its context, resume. Defined next to dpmi_inject_pm_irq() because it shares
    that function's frame rules; declared here because async_inject_irq() needs it. */
@@ -3842,7 +3842,7 @@ static DWORD g_async_early_bail_logged = 0;
      races the very death we are trying to catch. So a new site costs one DROPPED tick:
      resume, log, return 0. The next tick injects. At 16 kHz that is unmeasurable, and
      it means the site line is on disk BEFORE anything is rewritten. */
-/* The longest single dpmi_enter_pm() -- i.e. the longest run of guest protected-mode
+/* The longest single DpmiEnterProtectedMode() -- i.e. the longest run of guest protected-mode
    code that gave the host no turn at all -- and the record-breakers past the threshold.
    Only NEW maxima log, so a run reports a growth curve of a few dozen lines instead of
    one line per entry. */
@@ -3927,15 +3927,15 @@ static void async_early_bail(unsigned irq, unsigned why)
      only -- the next tick injects", so the interrupt is simply delivered a moment
      later, once the guest is back in a mode that exists. */
 static volatile LONG g_simint_busy = 0;
-/* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE v86_run IS RUNNING. (s81, ZAR) ──
-     The nested 0301/0302 loop rewrites the TIB to V86, then calls v86_run() exactly as the
+/* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE VdmRunGuest IS RUNNING. (s81, ZAR) ──
+     The nested 0301/0302 loop rewrites the TIB to V86, then calls VdmRunGuest() exactly as the
      main loop does -- and for the length of that call the frame is an ordinary V86 one.
      The guard above covered the whole window, and the loop never set g_in_exec either, so
      no interrupt could EVER reach a real-mode procedure while it ran. ZAR's Miles driver is
      one: it starts a single-cycle SB transfer and spins on a memory flag its IRQ 5 ISR sets.
      IRQ 5 was raised once and refused 1631 times with why=0x14 -- which s59 read as HOST_CS
      (14) but is 20 decimal, `not_in_exec`: the bracket was missing, not the thread elsewhere.
-   ► So the nested loop sets g_nested_rm (and g_in_exec) around v86_run ONLY, clearing
+   ► So the nested loop sets g_nested_rm (and g_in_exec) around VdmRunGuest ONLY, clearing
      g_in_exec first on return -- the re-check after the suspend then catches a thread that
      has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
      through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
@@ -4030,7 +4030,7 @@ static int async_inject_irq(unsigned irq)
          GetThreadContext above is what makes "the suspend has landed" true: on a
          multiprocessor SuspendThread only REQUESTS it, and reading the context is the
          documented way to wait. The exec loop clears g_in_exec immediately on return
-         from v86_run, BEFORE any HOST_LOCK, so a 1 observed on an already-stopped
+         from VdmRunGuest, BEFORE any HOST_LOCK, so a 1 observed on an already-stopped
          thread means it is still inside the kernel call, holding nothing.
        ► Resuming instantly on a 0 is the correct trade: a microsecond probe of a
          thread that MIGHT hold a lock is harmless, holding one is the catastrophe. */
@@ -4488,11 +4488,11 @@ static void host_irq_sink(void *ctx, uint8_t irq)
                first -- otherwise the APC wakes up, finds nothing requested, and the
                pending bit just sits there (which is the whole of session 10's
                "already tried and failed"). */
-            if (g_qi_bits & 1) v86_ica_raise(irq);
+            if (g_qi_bits & 1) VdmIcaRaise(irq);
             *(volatile DWORD *)(ULONG_PTR)0x714 |= g_qi_bits;
         }
         if (g_qi_bits && g_hcpu) {
-            LONG st = v86_vdmcontrol(VDM_SVC_VdmQueueInterrupt, (PVOID)g_hcpu);
+            LONG st = VdmControl(VDM_SVC_VdmQueueInterrupt, (PVOID)g_hcpu);
             InterlockedExchange(&g_qi_status, st);
             g_qi_calls++;
         }
@@ -5425,7 +5425,7 @@ static int disk_io(unsigned drive, uint32_t lba, unsigned count,
      does not depend on it: the program comes from target.txt or from our own
      command line.
      ⇒ And the command line says why: `ntvdmhost.exe "…\ntvdm.exe" -f`. There is
-       NO `-i<taskid>`, so csrss_parse_taskid() yields 0, so CSRSS cannot tell
+       NO `-i<taskid>`, so CsrssParseTaskId() yields 0, so CSRSS cannot tell
        which queued task we are asking about, so it answers with nothing. The
        shape that DOES carry `-i` (anything launched through `start`, which is
        every run rt.bat has ever done) reports TaskId 0x18 -- and that is exactly
@@ -6247,7 +6247,7 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
      handshake" that note names as the prerequisite -- the same one the CPU throttle
      already uses and has shipped with for a session: confirm g_in_exec AFTER the
      suspend has landed (GetThreadContext is what makes "landed" true), and resume
-     instantly if it reads 0. g_in_exec is set only around v86_run, where the thread
+     instantly if it reads 0. g_in_exec is set only around VdmRunGuest, where the thread
      holds nothing, and is cleared before any HOST_LOCK. See async_inject_irq's
      re-check, which is where that handshake actually lives.
      Taking g_lock would also defeat the purpose: the measured worst lock WAIT is
@@ -6374,7 +6374,7 @@ static DWORD WINAPI tick_courier_thread(LPVOID pv)
      suspending is a race: the guest can trap in between and the thread be inside
      host code by the time the suspend lands.
      So READ IT AGAIN AFTER THE SUSPEND HAS TAKEN EFFECT. That is sound because of
-     the ORDER in the exec loop: v86_run() returns, and the very next statement
+     the ORDER in the exec loop: VdmRunGuest() returns, and the very next statement
      clears g_in_exec, before any HOST_LOCK. A 1 observed on a thread that is
      already stopped therefore means the thread is still inside the kernel call.
    ⚠ GetThreadContext is what makes "has taken effect" true. SuspendThread only
@@ -6484,7 +6484,7 @@ static void cpuspd_note_rt(unsigned long us)
  *   costs it fifty-four more. Hardware-touching code is therefore penalised in
  *   proportion to how slow WE are at servicing it, which is precisely backwards.
  *
- * ⇒ So count only the time the guest was inside v86_run/dpmi_enter_pm, which is
+ * ⇒ So count only the time the guest was inside VdmRunGuest/DpmiEnterProtectedMode, which is
  *   exactly what g_in_exec already brackets, and price the hold off THAT. Our
  *   servicing time is simply not the guest's to pay for.
  *
@@ -6495,7 +6495,7 @@ static void cpuspd_note_rt(unsigned long us)
  *   and unsigned subtraction gives the correct delta across the wrap, which is all
  *   this is ever used for -- differences of milliseconds.
  * ⚠ AND IT IS READABLE MID-INTERVAL. The whole point is to sample it at the instant
- *   the guest is suspended, which is INSIDE a v86_run that has not returned yet, so
+ *   the guest is suspended, which is INSIDE a VdmRunGuest that has not returned yet, so
  *   the accumulated total alone would be stale by exactly the interval that matters.
  *   exec_us_now() adds the open interval. Safe when the target is suspended (nothing
  *   can change under us) and harmlessly approximate when it is not.
@@ -6544,7 +6544,7 @@ static void exec_leave_mark(void)
     InterlockedExchange(&g_exec_enter_us, 0);
 }
 /* The accumulator PLUS the interval currently open, so a sample taken while the
-   guest is stopped inside v86_run is not short by that whole interval. */
+   guest is stopped inside VdmRunGuest is not short by that whole interval. */
 static LONG exec_us_now(void)
 {
     LONG acc = g_exec_us_acc;
@@ -6555,12 +6555,12 @@ static LONG exec_us_now(void)
 
 /* ── ★★ #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
      crossfade, keyboard input") The throttle catches the guest by suspending it
-     INSIDE v86_run; a guest that is in OUR servicing (a port trap, a BOP) cannot be
+     INSIDE VdmRunGuest; a guest that is in OUR servicing (a port trap, a BOP) cannot be
      suspended, so it ran free -- 56,820 missed catches in one Skyroads run at
      486DX2-66 -- and the debt came back as one hold of up to a second. A 178 ms hold
      overflows the four-tick IRQ0 latch (22 ms at 180 Hz), so game time was thrown
      away: IRQ0 fell from 180/s to 91..170/s exactly when the game was busiest.
-   ► So when the throttle wants the guest and finds it outside v86_run, it RAISES
+   ► So when the throttle wants the guest and finds it outside VdmRunGuest, it RAISES
      g_cpuspd_catch_req, and the exec thread parks here at its next re-entry -- the
      spot the #219 pause already parks at, where it holds no lock -- until the
      throttle has taken its hold and lowers the request. The guest never runs free for
@@ -6709,8 +6709,8 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
          off-hardware rather than argued from a rig number that reads the guest's own
          throttled clock.
        ► E EXCLUDES BOTH HOLDS AND HOST SERVICING, for free. exec_us_now() counts only
-         wall time spent INSIDE v86_run, and it is sampled at RESUME and at SUSPEND:
-         the hold (before the resume) and every trap-servicing gap (outside v86_run)
+         wall time spent INSIDE VdmRunGuest, and it is sampled at RESUME and at SUSPEND:
+         the hold (before the resume) and every trap-servicing gap (outside VdmRunGuest)
          are simply not in the difference. So E is true guest execution and E/T is the
          honest delivered speed -- the port-trap ceiling is not a special case, it is
          E naturally landing below T.
@@ -6751,7 +6751,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
              "pretty much locked up" while Unlimited always recovered. TWO DEBTS THE
              WINDOW NEVER FORGAVE, both of which only the Unlimited branch above cleared:
            ► A #219 PAUSE WAS BILLED AS EXECUTION. The pause suspends the guest INSIDE
-             v86_run, so g_in_exec stays 1 and exec_us_now()'s open interval runs on for
+             VdmRunGuest, so g_in_exec stays 1 and exec_us_now()'s open interval runs on for
              the whole pause: E grew by the pause's full length, and the hold priced off
              it (E/duty - T) was minutes of 1 s holds at a slow rung -- until the 60 s
              window cap finally rebaselined. So do not catch or bill while paused, and
@@ -6826,7 +6826,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
             }
             /* else: immediate catch -- correct for the slow half. */
         }
-        /* ── CATCH THE GUEST INSIDE v86_run, measure, hold. The retry YIELDS rather
+        /* ── CATCH THE GUEST INSIDE VdmRunGuest, measure, hold. The retry YIELDS rather
              than sleeping so it catches within microseconds of a re-entry; bounded,
              then it gives up (a guest blocked in a host call is not executing, so
              there is nothing to throttle -- and NOT resetting the window here is
@@ -6840,7 +6840,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
             while (!done && g_running && !g_pause_want && GetTickCount() - started < 400u) {
                 CONTEXT cx; LARGE_INTEGER rt0, rt1, now; int gotctx, caught = 0;
                 if (!g_hcpu || g_in_exec == 0) {
-                    /* #225: outside v86_run -- ask it to park at its next re-entry. */
+                    /* #225: outside VdmRunGuest -- ask it to park at its next re-entry. */
                     if (g_hcpu) {
                         InterlockedExchange(&g_cpuspd_catch_req, 1);
                         if (g_cpuspd_parked && g_in_exec == 0) caught = 2;
@@ -6866,7 +6866,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                         continue;
                     }
                 }
-                /* Caught: suspended inside v86_run (1) or parked at the re-entry (2).
+                /* Caught: suspended inside VdmRunGuest (1) or parked at the re-entry (2).
                    Parked, the exec clock has no open interval, so the same
                    accounting holds -- the servicing time was never guest execution. */
                 {   unsigned long long T, hold_us; int reset;
@@ -7379,7 +7379,7 @@ static DWORD WINAPI qirq_probe_thread(LPVOID pv)
             q = zput(q, "->0x");             q = zhex(q, after);
             q = zput(q, " after 0x");        q = zhex(q, (DWORD)k);
             q = zput(q, "ms pend5=0x");      q = zhex(q, (DWORD)g_irqn_pending[5]);
-            q = zput(q, " ica=0x");          q = zhex(q, v86_ica_state(5));
+            q = zput(q, " ica=0x");          q = zhex(q, VdmIcaGetState(5));
             q = zput(q, "\r\n");
             log_append(LOG_PATH, b, q); serial_out(b, q);
         }
@@ -7744,7 +7744,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     /* HARD BACKSTOP. Clearing g_running only stops a loop that gets a turn, and the
        exec loops only get one when the guest faults, BOPs or takes an interrupt. A
        guest spinning in pure V86 code -- Skyroads after its sound init, or any
-       `jmp $`-shaped wait -- never returns from v86_run at all, so neither loop
+       `jmp $`-shaped wait -- never returns from VdmRunGuest at all, so neither loop
        reaches its check and the process hangs forever. That wedges the SMB harness's
        `start /wait`, and the box needs a manual `controld kill` to recover, which is
        precisely the loop we cannot afford once every sound test is a real-mode DOS
@@ -10939,7 +10939,7 @@ static void status_speed_text(char *out)
 
 /* Compose the parts, and push them only when something CHANGES.
    ⚠ This is POLLED from the UI tick rather than driven by a dirty flag, deliberately.
-     The mode facts -- g_dpmi_pm and g_dpmi_client32 -- are set on the V86 thread deep
+     The mode facts -- g_dpmi_pm and g_DpmiIsClient32 -- are set on the V86 thread deep
      inside the DPMI mode switch, and a flag there would be one more thing every future
      site that changes mode has to remember. Comparing short strings once per frame
      costs nothing and cannot be forgotten. */
@@ -10957,7 +10957,7 @@ static void status_update(void)
              from what gdi_present actually drew, so it is true in a window, maximised
              and fullscreen alike. */
         static char mode_txt[96];
-        const char *m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected Mode"
+        const char *m = (g_dpmi_pm && g_DpmiIsClient32) ? "32-bit Protected Mode"
                       : g_dpmi_pm                      ? "16-bit Protected Mode"
                                                        : "16-bit Real Mode";
         char *q = zput(mode_txt, m);
@@ -14624,7 +14624,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
            the window runs WM_DESTROY *on this UI thread* -- it sets g_running=0 and
            PostQuitMessage, so this message loop returns and all the machine-release
            cleanup (host_panic_release, audio, OPL, tray) has already run. But the
-           main thread only notices g_running=0 when it RETURNS from v86_run; a guest
+           main thread only notices g_running=0 when it RETURNS from VdmRunGuest; a guest
            spinning in a tight loop that traps nothing sits inside VdmStartExecution
            forever, so WinMain never returns, ExitProcess is never reached, and the
            process lingers -- STILL OWNING THE MUTEX. The next launch reads
@@ -17678,11 +17678,11 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
          file log or it does not exist on the machine we actually test on. */
     log_append(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
     /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
-       inside dpmi_enter_pm(). Each line answers the run-51 wall question:
+       inside DpmiEnterProtectedMode(). Each line answers the run-51 wall question:
          iter ADVANCING  -> the `for steps` loop is cycling; last ev/cs/eip/vec show WHICH
                             patched INT it keeps hitting (a busy-poll = a cheap missing
                             service, not the deep #GP wall).
-         iter FROZEN     -> the main thread is wedged inside ONE dpmi_enter_pm at the guest
+         iter FROZEN     -> the main thread is wedged inside ONE DpmiEnterProtectedMode at the guest
                             CS:EIP we last handed off; the guest bytes there tell a plain-
                             instruction #GP (the deep wall) from a jmp-self spin.
          veh any/fatal   -> whether a real Win32 exception was EVER delivered to us. fatal>0
@@ -17802,7 +17802,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                 }
               }
             /* ── ★ AND WHERE IT ACTUALLY IS, NOT WHERE IT WENT IN. ─────────────────
-                 `enter=` is the CS:EIP we HANDED to dpmi_enter_pm. The PM heartbeat
+                 `enter=` is the CS:EIP we HANDED to DpmiEnterProtectedMode. The PM heartbeat
                  prints the same thing, so when a WOW run's log stops, all it licenses
                  is "it went in there and did not come back" -- NOT "it stopped there".
                  Those are different claims and only the first is measured. Session 31
@@ -18089,8 +18089,8 @@ static void wow_probe_ldt_matrix(const char *tag)
     for (t = 0; t < sizeof T / sizeof T[0]; ++t) {
         DWORD lo, hi; LONG st;
         WORD sel = (WORD)((T[t].idx << 3) | 7);
-        dpmi_build_desc(T[t].base, T[t].limit, T[t].acc, T[t].fl, &lo, &hi);
-        st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi);
+        DpmiBuildDescriptor(T[t].base, T[t].limit, T[t].acc, T[t].fl, &lo, &hi);
+        st = VdmInstallLdtEntries(sel, lo, hi, sel, lo, hi);
         q = m;
         q = zput(q, "LDTPROBE["); q = zput(q, tag);
         q = zput(q, "] ");       q = zput(q, T[t].what);
@@ -18132,7 +18132,7 @@ static void wow_probe_ldt_matrix(const char *tag)
      base + limit at MmHighestUserAddress (~2GB) -- a true 4GB flat selector is refused
      outright (Kernel RE session 7, and it is why Doom's DOS/4GW selector has to be
      clamped). Our segments come from VirtualAlloc, which normally lands well under 2GB,
-     so these SHOULD install. "Should" is not "does", and v86_set_ldt_entries returns an
+     so these SHOULD install. "Should" is not "does", and VdmInstallLdtEntries returns an
      NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
      leaves a selector that faults on first use -- a silent death, far from the cause. */
 /* ── WHERE IS OUR DESCRIPTOR TABLE? ─────────────────────────────────────────────────
@@ -18202,8 +18202,8 @@ static DWORD wow_find_ldt_base(void)
     g_ldt[i2].base = 0x3C3C2000; g_ldt[i2].limit = 0x0456;
     g_ldt[i2].access = 0xF2;     g_ldt[i2].flags = 0;
     dpmi_install(i2);
-    dpmi_build_desc(g_ldt[i1].base, g_ldt[i1].limit, 0xF2, 0, &lo1, &hi1);
-    dpmi_build_desc(g_ldt[i2].base, g_ldt[i2].limit, 0xF2, 0, &lo2, &hi2);
+    DpmiBuildDescriptor(g_ldt[i1].base, g_ldt[i1].limit, 0xF2, 0, &lo1, &hi1);
+    DpmiBuildDescriptor(g_ldt[i2].base, g_ldt[i2].limit, 0xF2, 0, &lo2, &hi2);
 
     {   WORD s1 = (WORD)((i1 << 3) | 7), s2 = (WORD)((i2 << 3) | 7);
         DWORD a1 = 0, a2 = 0;
@@ -19224,7 +19224,7 @@ static void dpmi_install(int idx)
          PRESENT descriptor is touched: a freed selector is installed as the all-zero
          null descriptor, which is the one non-DPL-3 entry NT accepts. */
     if (acc & 0x80) acc = (BYTE)(acc | 0x60);
-    dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, acc, fl, &lo, &hi);
+    DpmiBuildDescriptor(g_ldt[idx].base, lim & 0xFFFFF, acc, fl, &lo, &hi);
     {
         /* #3 (DOS/4GW flat model): XP's LDT validator caps base+limit <= MmHighestUserAddress
            (~2GB); a base-0 ~2GB G=1 selector installs, a true 4GB one is REJECTED (Kernel RE
@@ -19241,7 +19241,7 @@ static void dpmi_install(int idx)
              guest had never touched. Keeping both sides in step here is what makes the
              difference test mean what it says. */
         wow_shadow_put(idx);
-        st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
+        st = VdmInstallLdtEntries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
         if (st != 0) {
             /* ── CLAMP AND RETRY, don't just report ────────────────────────────────
                DOS/4GW (Doom) allocates a base-0 4GB G=1 FLAT selector and XP rejects it
@@ -19264,8 +19264,8 @@ static void dpmi_install(int idx)
                 if (fl & 0x8) cl = (room > 0xFFF) ? ((room - 0xFFF) >> 12) : 0;  /* G=1 */
                 else          cl = room;                                        /* G=0 */
                 if (cl > 0xFFFFF) cl = 0xFFFFF;
-                dpmi_build_desc(g_ldt[idx].base, cl, acc, fl, &clo, &chi);
-                st2 = v86_set_ldt_entries(sel, clo, chi, sel, clo, chi);
+                DpmiBuildDescriptor(g_ldt[idx].base, cl, acc, fl, &clo, &chi);
+                st2 = VdmInstallLdtEntries(sel, clo, chi, sel, clo, chi);
             }
             {
                 char lb[256], *p = lb;
@@ -19363,7 +19363,7 @@ static void dpmi_install_fault_trampoline(void)
 
 /* GH #18 (run 67): arm the VDM_TIB PM-fault reflect state before each PM entry. The kernel
    takes the "first level, save" path only when the nest counter is 0 (then inc's it), so
-   this runs before EVERY dpmi_enter_pm. Sets: nest=0, the 16/32 flag, the handler STACK
+   this runs before EVERY DpmiEnterProtectedMode. Sets: nest=0, the 16/32 flag, the handler STACK
    selector at [TIB+0x638], and the handler-table pointer at [VDM_TIB+8]. */
 static void dpmi_arm_fault_trampoline(volatile BYTE *tib, WORD flag)
 {
@@ -19379,7 +19379,7 @@ static DWORD dpmi_sel_base(WORD sel)
 {
     int idx = (sel & 0xFFFF) >> 3;
     /* Indices 1..3 are the switch's code/data/stack selectors (recorded in g_ldt[]
-       from g_dpmi_seg_base); 3+ are client allocations. For a .COM all three bases
+       from g_DpmiSegmentBase); 3+ are client allocations. For a .COM all three bases
        equal g_dpmi_code_base; for a real .EXE (CS!=DS!=SS) they differ, so a per-
        selector lookup is required to translate DS:/ES: buffers correctly. */
     if (idx >= 1 && idx < DPMI_LDT_MAX) return g_ldt[idx].base;
@@ -19982,7 +19982,7 @@ static void dpmi_scan_code_blocks(void)
     for (i = 0; i < g_dpmi_nblk; ++i)
         if (g_dpmi_blk[i].code)
             dpmi_patch_code_region(g_dpmi_blk[i].base, g_dpmi_blk[i].size - 1,
-                                   g_dpmi_client32);
+                                   g_DpmiIsClient32);
 }
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
@@ -20285,7 +20285,7 @@ static void dpmi_bp_arm(void)
           } }
         if (g_bp_mode[k] != 1 && host_readable((const void *)(ULONG_PTR)lin, 16)) {
             unsigned ilen = x86_insn_len((const unsigned char *)(ULONG_PTR)lin, 0, 16,
-                                         g_dpmi_client32);
+                                         g_DpmiIsClient32);
             if (ilen == 1) {
                 if (!g_bp_refused[k]) {
                     g_bp_refused[k] = 1;
@@ -20409,7 +20409,7 @@ static void dpmi_sync_defsel_width(void)
 {
     BYTE want;
     if (g_pm_defidx < 0) return;
-    want = (BYTE)(g_dpmi_client32 ? 0x4 : 0x0);      /* 0x4 = D/B, same idiom as the handler code sel */
+    want = (BYTE)(g_DpmiIsClient32 ? 0x4 : 0x0);      /* 0x4 = D/B, same idiom as the handler code sel */
     if (g_ldt[g_pm_defidx].flags == want) return;
     g_ldt[g_pm_defidx].flags = want;
     dpmi_install(g_pm_defidx);
@@ -20930,11 +20930,11 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
     for (ph = 0; ph < 64 && !cbdone; ++ph) {
         DWORD ev, eip, vec;
         dpmi_arm_fault_trampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
-        dpmi_enter_pm(tib);
+        DpmiEnterProtectedMode(tib);
         ev = VDM_REG(tib, VTIB_EVENT); eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { cbdone = 1; break; }
-        if (ev == 3) continue;   /* dpmi_enter_pm reports "interrupt pending, not entered" -- retry */
+        if (ev == 3) continue;   /* DpmiEnterProtectedMode reports "interrupt pending, not entered" -- retry */
         vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;   /* a patched INT the handler issued */
         if (vec == 0x31 || vec == 0x21) {
             if (dpmi_service_pm_int(m, tib, vec, ph) > 0) continue;   /* serviced -> resume handler */
@@ -21080,12 +21080,12 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
          with `66 cf`, an operand-size-prefixed IRETD, which pops TWELVE bytes. It
          therefore returned to a wild address and the VDM died, with the last breakpoint
          sitting on the instruction before it.
-         The client declared itself 32-bit at the mode switch (g_dpmi_client32), and an
+         The client declared itself 32-bit at the mode switch (g_DpmiIsClient32), and an
          interrupt frame is a DPMI API width -- exactly the distinction the switch code
          already draws: the declared width is "the right input for DPMI API register
          widths, not for D/B". A 16-bit client's handler ends in a plain IRET and gets a
          6-byte frame, which is the same rule. */
-    int h32 = g_dpmi_client32;
+    int h32 = g_DpmiIsClient32;
     unsigned ph; int done = 0;
 
     dpmi_ensure_pmret_sel();
@@ -21199,7 +21199,7 @@ quiet_entry:
             log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
         }
         dpmi_arm_fault_trampoline(tib, 0);
-        dpmi_enter_pm(tib);
+        DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
@@ -21370,7 +21370,7 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
     q = zput(q, " es=0x");    q = zhex(q, es);
     q = zput(q, " edi=0x");   q = zhex(q, edi);
     q = zput(q, " esb=0x");   q = zhex(q, esb);
-    q = zput(q, " cl32=");    q = zhex(q, (DWORD)g_dpmi_client32);
+    q = zput(q, " cl32=");    q = zhex(q, (DWORD)g_DpmiIsClient32);
     /* The RMCS fields that name the CALL: EAX (+0x1C) is the function number, and
        EBX/ECX/EDX (+0x10/+0x18/+0x14) are where an INT 33h answer goes back. */
     q = zput(q, " masked@0x"); q = zhex(q, ma);
@@ -21531,7 +21531,7 @@ static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
 {
     DWORD lo, hi, *e;
     if (!g_wow_shadow || idx < 0 || idx >= WOW_SHADOW_ENTRIES) return;
-    dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
+    DpmiBuildDescriptor(g_ldt[idx].base, g_ldt[idx].limit,
                     g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
     e = (DWORD *)(g_wow_shadow + idx * 8);
     e[0] = lo; e[1] = hi;
@@ -21557,7 +21557,7 @@ static int wow_shadow_sync(char **pp)
             /* Install EXACTLY the bytes the guest wrote -- decoding and re-encoding
                would quietly normalise anything we got wrong. Then decode purely for
                our own bookkeeping so later host-side reads of g_ldt[] agree. */
-            LONG st = v86_set_ldt_entries(sel, nlo, nhi, sel, nlo, nhi);
+            LONG st = VdmInstallLdtEntries(sel, nlo, nhi, sel, nlo, nhi);
             DWORD dbase = (nhi & 0xFF000000u) | ((nhi & 0xFFu) << 16) | (nlo >> 16);
             DWORD dlim  = (nlo & 0xFFFFu) | (nhi & 0x000F0000u);
             /* ★ ONLY RECORD IT IF THE CPU ACTUALLY TOOK IT. g_ldt[] is the host's
@@ -21972,7 +21972,7 @@ static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigne
         LONG rst; DWORD rev, info;
         InterlockedExchange(&g_nested_rm, 1);
         InterlockedExchange(&g_in_exec, 1);                     /* see g_nested_rm */
-        rev = v86_run(tib, &rst);
+        rev = VdmRunGuest(tib, &rst);
         InterlockedExchange(&g_in_exec, 0);
         InterlockedExchange(&g_nested_rm, 0);
         info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
@@ -24208,7 +24208,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        delivers -- answer 25h/35h ourselves against g_pm_int[], the table
                        injection reads. 21h and the rest still go to the client's handler,
                        untouched. Scoped to a 32-bit client so nothing 16-bit changes. */
-                    if (vec == 0x21 && g_dpmi_client32) {
+                    if (vec == 0x21 && g_DpmiIsClient32) {
                         DWORD ah25 = (ax >> 8) & 0xFF, al25 = ax & 0xFF;
                         if ((ah25 == 0x25 || ah25 == 0x35) && al25 >= 0x08 && al25 <= 0x0F) {
                             if (ah25 == 0x25) {
@@ -24829,7 +24829,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              blocks=1`, `irq0=1 intpend=1`), until the watchdog kills it.
                              The driver is waiting on a completion that never arrives: the
                              nested V86 loop 0301/0302 runs the real-mode procedure in does
-                             not appear to deliver the SB's IRQ, so `v86_run` never returns
+                             not appear to deliver the SB's IRQ, so `VdmRunGuest` never returns
                              and the poll never ends. That is the NEXT gap, not this one.
                            ► A wedge is strictly worse than "renders, silent", so the
                              correct default is OFF and the correct shape is a one-file
@@ -25056,7 +25056,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                         ++done;
                                         continue;
                                     }
-                                    v86_set_ldt_entries((WORD)((a << 3) | 7), e[0], e[1],
+                                    VdmInstallLdtEntries((WORD)((a << 3) | 7), e[0], e[1],
                                                         (WORD)((a << 3) | 7), e[0], e[1]);
                                     g_ldt[a].base   = (e[1] & 0xFF000000u)
                                                     | ((e[1] & 0xFFu) << 16) | (e[0] >> 16);
@@ -25387,7 +25387,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      DOS/4GW Professional fatal error (1001):
                                      error in interrupt chain
                                  Zero-extend for a 32-bit client and the offset is just 0x20. */
-                            if (dpmi_sel_is32(g_pm_int[bl].sel) || g_dpmi_client32)
+                            if (dpmi_sel_is32(g_pm_int[bl].sel) || g_DpmiIsClient32)
                                 VDM_REG(tib, VTIB_EDX) = g_pm_int[bl].off;
                             else
                                 VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
@@ -25565,7 +25565,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                 /* CL = access byte (P|DPL|S|type). CH = descriptor byte 6
                                    (G|D/B|L|AVL|limit19:16); its HIGH nibble carries G/D/B/L/AVL,
-                                   which maps 1:1 onto our flags nibble (see dpmi_build_desc).
+                                   which maps 1:1 onto our flags nibble (see DpmiBuildDescriptor).
                                    #3 (DOS/4GW): a 32-bit code selector arrives here with CH bit6
                                    (D/B) set -> flags bit2 -> dpmi_sel_is32() true. */
                                 g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
@@ -25618,7 +25618,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              mov ax,000Ch / int 31h              ; write it back
                              add sp,8
                            i.e. the extender manages segment widths itself -- which is the same
-                           conclusion dpmi_switch_to_pm() reaches from the other direction. */
+                           conclusion DpmiSwitchToProtectedMode() reaches from the other direction. */
                         case 0x0002: {                             /* segment (BX) -> descriptor */
                             WORD rseg = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             WORD s2d  = dpmi_seg_to_desc(rseg);
@@ -25664,7 +25664,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD lo = 0, hi = 0;
                             dpmi_rmcs_probe(tib, esb, 3, 0);       /* observation only */
                             if (idx >= 1 && idx < DPMI_LDT_MAX)
-                                dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
+                                DpmiBuildDescriptor(g_ldt[idx].base, g_ldt[idx].limit,
                                                 g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
                             else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> bad sel"); break; }
                             d[0] = lo; d[1] = hi;
@@ -25681,7 +25681,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (idx < 1 || idx >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                                          p = zput(p, " -> bad sel"); break; }
                             lo = d[0]; hi = d[1];
-                            /* Exact inverse of dpmi_build_desc(). */
+                            /* Exact inverse of DpmiBuildDescriptor(). */
                             g_ldt[idx].limit  = (lo & 0xFFFF) | (((hi >> 16) & 0xF) << 16);
                             g_ldt[idx].base   = ((lo >> 16) & 0xFFFF) | ((hi & 0xFF) << 16)
                                               | (((hi >> 24) & 0xFF) << 24);
@@ -26126,7 +26126,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                through here), 0301 must actually RUN
                                the client's real-mode procedure in V86: we rewrite the CONTEXT to
                                V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
-                               run v86_run() until that BOP (servicing any INT 21h the proc makes),
+                               run VdmRunGuest() until that BOP (servicing any INT 21h the proc makes),
                                copy the real-mode regs back into the RMCS, then restore PM.
                                ── 0302 IS THE SAME CALL WITH AN IRET FRAME. ─────────────────────
                                The ONLY difference is the frame pushed on the real-mode stack:
@@ -26275,7 +26275,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 v86_deliver_dev_irq(tib);
                                 InterlockedExchange(&g_nested_rm, 1);
                                 InterlockedExchange(&g_in_exec, 1);   /* see g_nested_rm */
-                                rev = v86_run(tib, &rst);
+                                rev = VdmRunGuest(tib, &rst);
                                 InterlockedExchange(&g_in_exec, 0);
                                 InterlockedExchange(&g_nested_rm, 0);
                                 DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
@@ -27386,10 +27386,10 @@ static void dpmi_ensure_pmret_sel(void)
              and its 16-bit stack frame was ALREADY correct (SS D/B=1), which is what
              made this hard to see: the frame width and the caller's advertised width are
              two different questions, and only one of them was being answered.
-             Follow g_dpmi_client32, exactly as the frame width does (h32). A 16-bit
+             Follow g_DpmiIsClient32, exactly as the frame width does (h32). A 16-bit
              client is unaffected: flags stay 0 and every existing test keeps its
              6-byte frame and 16-bit catcher. */
-        g_ldt[idx].flags = g_dpmi_client32 ? 0x4 : 0x0;   /* 0x4 = D/B */
+        g_ldt[idx].flags = g_DpmiIsClient32 ? 0x4 : 0x0;   /* 0x4 = D/B */
         dpmi_install(idx);
         g_pmret_sel = (WORD)((idx << 3) | 7);
     }
@@ -27426,7 +27426,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     if (g_pmret_sel == 0) { g_async_why = 4; return 0; }              /* no catcher yet -> no way back */
     if (!g_pm_int[iv].client) { g_async_why = 5; return 0; }          /* the client has not hooked this line */
     /* Not before the application has an ISR; see dpmi_inject_pm_irq(). */
-    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) {
+    if (g_DpmiIsClient32 && iv == 0x08 && !g_pm_app_hooked_timer) {
         /* ── BUT THE BIOS TICK STILL HAS TO ADVANCE. (s74c, Duke3D's SETUP) ────────
              A flat application that never hooks INT 08h still reads 0040:006C: Watcom's
              delay()/clock() spin on it. The PM loop bumps it "polled", i.e. only when
@@ -27455,7 +27455,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     if (!(ss & 4)) { g_async_pm_active = 0; g_async_why = 11; return 0; }    /* not a client stack -> not safe */
     /* Same rule as the cooperative path: interrupt the APPLICATION, never the extender
        mid-service. See dpmi_inject_pm_irq() for what that cost to learn. */
-    if (g_dpmi_client32 && !dpmi_sel_is32((WORD)(cx->SegCs & 0xFFFF))) {
+    if (g_DpmiIsClient32 && !dpmi_sel_is32((WORD)(cx->SegCs & 0xFFFF))) {
         g_async_pm_active = 0; g_async_why = 12; return 0;
     }
 
@@ -27468,7 +27468,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
        Two different questions -- see dpmi_dispatch_to_pm_handler() for what conflating
        them costs. */
     { DWORD b = dpmi_sel_base(ss);
-      int   ss32 = dpmi_sel_is32(ss), h32 = g_dpmi_client32;
+      int   ss32 = dpmi_sel_is32(ss), h32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? cx->Esp : (cx->Esp & 0xFFFF);
       if (h32) {
           sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, efl);
@@ -27482,7 +27482,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
       cx->Esp = ss32 ? sp : ((cx->Esp & 0xFFFF0000u) | sp); }
 
     cx->SegCs  = DPMI_IRQ_TARGET_SEL(iv);
-    cx->Eip    = g_dpmi_client32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
+    cx->Eip    = g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
     /* ── CLEAR **VIP**, NOT JUST VIF — OR THE GUEST'S NEXT `STI` FAULTS. ─────────────
          The guest runs at CPL 3 with PVI, which is why CLI/STI are survivable there at
          all (measured: both SURVIVE, while INT3 and HLT kill the VDM). Under PVI, `STI`
@@ -27930,7 +27930,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
          DOS/4GW) go through the IRQ injector too and keep their old behaviour until
          a DOS case is measured. */
     if (!g_wow_launch) return 0;
-    if (ev != VDM_EVENT_BOP || csv != (g_dpmi_flt_code_sel & 0xFFFF) || g_dpmi_client32)
+    if (ev != VDM_EVENT_BOP || csv != (g_dpmi_flt_code_sel & 0xFFFF) || g_DpmiIsClient32)
         return 0;
     sb  = dpmi_sel_base(g_dpmi_fault_sel);
     esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
@@ -28050,7 +28050,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     for (ph = 0; ph < 500000 && g_wc_depth > depth0 && g_running; ++ph) {
         DWORD ev, eip, vec; int rc;
         dpmi_arm_fault_trampoline(tib, 0);
-        dpmi_enter_pm(tib);
+        DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
         if (ev == 3) continue;
@@ -28270,7 +28270,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
     /* #172 census: which of the two refusals below, when, and where the guest was. */
-    if (iv == 0x08 && g_dpmi_client32 && (!dpmi_sel_is32(sCS) || !g_pm_app_hooked_timer))
+    if (iv == 0x08 && g_DpmiIsClient32 && (!dpmi_sel_is32(sCS) || !g_pm_app_hooked_timer))
         pminj_decl_note(!dpmi_sel_is32(sCS) ? 0 : 1, sCS, sEIP);
     /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
          Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
@@ -28286,11 +28286,11 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
          the client is -- the extender's modules are all 16-bit selectors, so this
          separates "the game is running" from "the extender is mid-service" exactly.
          A 16-bit client keeps the previous behaviour unchanged. */
-    if (g_dpmi_client32 && !dpmi_sel_is32(sCS)) return 0;
+    if (g_DpmiIsClient32 && !dpmi_sel_is32(sCS)) return 0;
     /* ...and not before the application actually has an ISR. Delivery still goes through
        the extender's stub, because the extender owns the IDT and must do the dispatching
        (bypassing it produced "fatal error (1001): error in interrupt chain"). */
-    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) return 0;
+    if (g_DpmiIsClient32 && iv == 0x08 && !g_pm_app_hooked_timer) return 0;
 
     /* push an INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's IRET
        lands on the catcher; keep the client's own SS so the handler has a valid stack. Frame
@@ -28300,7 +28300,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
        the handler selector's. For every case confirmed so far the two agree (a 16-bit
        client with a 16-bit handler), so this is a consistency fix rather than a
        behaviour change -- but they diverge exactly where DOS/4GW lives. */
-    int h32 = g_dpmi_client32;
+    int h32 = g_DpmiIsClient32;
     { WORD ss = sSS; DWORD b = dpmi_sel_base(ss);
       int ss32 = dpmi_sel_is32(ss);                /* see the note in the dispatch path */
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
@@ -28332,7 +28332,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     /* What we are about to RUN, and the stack we are about to run it on. This path dies
        with no further output, so anything not printed here is unrecoverable afterwards. */
     { WORD hs = DPMI_IRQ_TARGET_SEL(iv);
-      DWORD hl = dpmi_sel_base(hs) + (g_dpmi_client32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
+      DWORD hl = dpmi_sel_base(hs) + (g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
       const BYTE *hb = (const BYTE *)(ULONG_PTR)hl;
       lp = zput(lp, " lin=0x"); lp = zhex(lp, hl);
       lp = zput(lp, dpmi_sel_is32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
@@ -28371,7 +28371,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         dpmi_arm_fault_trampoline(tib, 0);
         /* ► THE LAST THING BEFORE THE CLIFF. Doom takes five of these injections and
              dies inside the SIXTH: its "IRQ0->PM INT" entry line is the final line in
-             the log, dpmi_enter_pm() never returns, and the VDM is gone. The entry line
+             the log, DpmiEnterProtectedMode() never returns, and the VDM is gone. The entry line
              above is printed once per injection, so it cannot show what changed BETWEEN
              the fifth and the sixth -- and the five that work are byte-identical in
              every field it prints. Log the state at each PM entry instead, bounded, so
@@ -28390,7 +28390,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
             eq = zput(eq, " apa="); eq = zhex(eq, (DWORD)g_async_pm_active);
             eq = zput(eq, "\r\n"); log_append(LOG_PATH, eb, eq); serial_out(eb, eq);
         }
-        dpmi_enter_pm(tib);
+        DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
@@ -28519,12 +28519,12 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
     LONG pend = 0;
     ms_evt_t ev = { 0, 0, 0, 0 };
     WORD hsel = 0; DWORD hoff = 0;
-    int h32 = g_dpmi_client32;
+    int h32 = g_DpmiIsClient32;
 
     if (!mouse_any_handler()) return 0;                          /* 0Ch's or 18h's (#265)   */
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
-    if (g_dpmi_client32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
+    if (g_DpmiIsClient32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
     if (!(sSS & 4)) return 0;                                    /* not a client stack      */
     /* The oldest queued event a handler asked for, and which handler (mouse_evq_take). */
     if (!mouse_evq_take(&ev, &pend, &hsel, &hoff) || !pend) return 0;
@@ -28569,7 +28569,7 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
         DWORD e, eip, vec; int rc;
         if ((ph & 0x3F) == 0x3F && (GetTickCount() - t0) > DPMI_IRQ0_MS_MAX) break;
         dpmi_arm_fault_trampoline(tib, 0);
-        dpmi_enter_pm(tib);
+        DpmiEnterProtectedMode(tib);
         e   = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
         if (e == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
@@ -28609,7 +28609,7 @@ static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigne
 
 /* ── ★★★ THE CLIENT EXITED: GIVE BACK WHAT IT HAD AND LEAVE PROTECTED MODE. (s80) ───
      A DPMI client's `AH=4Ch` in protected mode ended the WHOLE VDM, because the switch
-     into PM was one-way: dpmi_switch_to_pm() builds global state and nothing ever took
+     into PM was one-way: DpmiSwitchToProtectedMode() builds global state and nothing ever took
      it down. That is fine for a program launched on its own and wrong for every other
      shape -- the user's "save settings and run Doom" from SETUP, `doom` typed at
      COMMAND.COM -- where a parent is waiting in real mode for its child to return.
@@ -28941,7 +28941,7 @@ static HANDLE csrss_open_split(char *path, char **pargs)
      16-byte transfer as an init-time DMA/IRQ self-test, the block drains, IRQ 5 is
      raised, and the async injector refuses it -- `ASYNC-EARLY bail irq=05 why=0x14`,
      "the CPU thread was in HOST code", because the thread is down inside the nested
-     v86_run. Single-cycle means one IRQ and no second chance, so the driver spins at
+     VdmRunGuest. Single-cycle means one IRQ and no second chance, so the driver spins at
      0x34d3:0x06b1 until the watchdog kills it.
    ► The latch (g_irqn_pending) already persists, and the guest inside 0301/0302 is in
      V86, so the delivery this loop was already doing is exactly the right delivery --
@@ -30221,7 +30221,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
            two are the same vector and the qirq2 probe cannot attribute a delivery. */
-        v86_ica_set_base(0x60);
+        VdmIcaSetBase(0x60);
     }
     p = zput(p, "STAGE0: qi_bits=0x"); p = zhex(p, g_qi_bits);
     p = zput(p, " qi_raise=0x");       p = zhex(p, (DWORD)g_qi_raise);
@@ -30249,7 +30249,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ci.Reserved = g_rsv; g_ci.ReservedLen = sizeof(g_rsv);
     g_ci.StartupInfo.cb = sizeof(STARTUPINFOA);
     g_ci.VDMState = VDM_GET_FIRST_COMMAND;
-    g_ci.TaskId   = csrss_parse_taskid(GetCommandLineA());
+    g_ci.TaskId   = CsrssParseTaskId(GetCommandLineA());
 
     /* ── WHAT SHAPE OF LAUNCH IS THIS? (GH #129) ────────────────────────────────
          Windows launches ntvdm.exe for BOTH a DOS program and a 16-bit WINDOWS
@@ -30272,8 +30272,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
 
     /* V86 address space, then register as a VDM with the kernel (order matters). */
-    v86_setup_memory();
-    st = v86_init();
+    VdmSetupMemory();
+    st = VdmRegisterWithKernel();
     p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
     /* ── ⛔⛔⛔ FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
          (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
@@ -30333,10 +30333,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            There is nothing to flush anyway -- the probes below log through LDTLOG_PATH,
              and report[] has ~5 KB of headroom at this point; the preamble goes to disk
              as one piece at the log_write after the command fetch. */
-        /* The DOS bisection puts the flip between csrss_get_command() and
-           v86_get_tib(). The latter is one call and costs nothing to try here, so
+        /* The DOS bisection puts the flip between CsrssGetCommand() and
+           VdmGetTib(). The latter is one call and costs nothing to try here, so
            try it BEFORE concluding the blocker is the command fetch. */
-        {   void *t = v86_get_tib();
+        {   void *t = VdmGetTib();
             char m3[120], *q3 = m3;
             q3 = zput(q3, "WOWTRY: v86_get_tib -> 0x"); q3 = zhex(q3, (DWORD)(ULONG_PTR)t);
             q3 = zput(q3, "\r\n"); log_append(LDTLOG_PATH, m3, q3); }
@@ -30352,16 +30352,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            on a DOS launch -- so the DOS path, which is the half that WORKS, sees no
            change at all. That gating is deliberate and worth preserving. */
     }
-    /* EMS page frame must be mapped AFTER VdmInitialize (see v86_map_ems_frame). */
-    g_ems_frame_lin = v86_map_ems_frame();
+    /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
+    g_ems_frame_lin = VdmMapEmsFrame();
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("B-after-emsframe");
     p = zput(p, "STAGE1: ems_frame lin=0x"); p = zhex(p, g_ems_frame_lin);
     p = zput(p, " seg=0x"); p = zhex(p, g_ems_frame_lin >> 4); p = zput(p, "\r\n");
 
     /* CSRSS: register as the console VDM, then fetch the program to run. */
-    csrss_register_console();
+    CsrssRegisterConsole();
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("C-after-csrss-register");
-    if (csrss_get_command(&g_ci, &err)) {
+    if (CsrssGetCommand(&g_ci, &err)) {
         /* ⚠ PRINT THE PATH WE WILL ACTUALLY USE. This joined the directory and
              the title unconditionally and so reported `C:\test\C:\test\hello.com`
              for a title that was already absolute -- a path that cannot exist,
@@ -30457,7 +30457,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         ci2.StartupInfo.cb = sizeof(STARTUPINFOA);
         ci2.VDMState = 0x04 | 0x01 | 0x20;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
         ci2.TaskId = g_ci.TaskId;
-        ok2 = csrss_get_command(&ci2, &err2);
+        ok2 = CsrssGetCommand(&ci2, &err2);
         g_app2[sizeof g_app2 - 1] = 0; g_cmd2[sizeof g_cmd2 - 1] = 0; g_cur2[sizeof g_cur2 - 1] = 0;
         /* the tail ends in CR LF; the PSP wants neither */
         for (k = 0; g_cmd2[k]; ++k) if (g_cmd2[k] == '\r' || g_cmd2[k] == '\n') { g_cmd2[k] = 0; break; }
@@ -30517,7 +30517,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 ci2.TitleLen = sizeof tt2; ci2.ReservedLen = sizeof rv2;
                 ci2.VDMState = SH[si].state;
                 ci2.TaskId = SH[si].own_task ? g_ci.TaskId : 0;
-                ok2 = csrss_get_command(&ci2, &err2);
+                ok2 = CsrssGetCommand(&ci2, &err2);
                 g_app2[sizeof g_app2 - 1] = 0; g_cmd2[sizeof g_cmd2 - 1] = 0; g_cur2[sizeof g_cur2 - 1] = 0;
                 named = ok2 && !SH[si].handshake
                         && ((g_app2[0] >= 'A' && (g_app2[0] | 0x20) <= 'z' && g_app2[1] == ':' && g_app2[2] == '\\')
@@ -30568,8 +30568,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          which looked exactly like "the probe never ran". Same stale/truncated-artefact
          trap this project keeps paying for, in a new costume. */
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_ldt_matrix("D-after-getcommand");   /* before v86_get_tib */
-    tib = v86_get_tib();
+        wow_probe_ldt_matrix("D-after-getcommand");   /* before VdmGetTib */
+    tib = VdmGetTib();
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("E-after-get-tib");
     g_tib_dbg = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
@@ -32571,9 +32571,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             g_wow_entering = 1;
         }
     }
-    v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
+    VdmSetEntry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
     if (g_wow_entering) {
-        /* v86_set_entry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
+        /* VdmSetEntry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
            for a DOS program and wrong for this one. krnl386 wants DS = its automatic
            data segment, and it expects AX = 0x4b4f -- 'OK' -- at entry; with anything
            else it returns at once with AX=0. Get AX wrong and it returns instantly,
@@ -32582,7 +32582,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         VDM_SET16(tib, VTIB_DS, g_wow_entry_ds);
         /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
              DPMI host's private data and carves every later allocation upward from
-             there without asking DOS. v86_set_entry points ES at DOS_PSP_SEG, whose
+             there without asking DOS. VdmSetEntry points ES at DOS_PSP_SEG, whose
              +0x10 is where the (discarded) DOS image sat and where dos_alloc had
              already placed krnl386's own code. Point it at the arena block instead. */
         if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
@@ -32996,7 +32996,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             QueryPerformanceCounter(&vt0);
             if (g_host_t_last)                                   /* #238: see g_host_us_ev */
                 g_host_us_ev[g_host_ev_last] += qpc_us(vt0.QuadPart - g_host_t_last);
-            ev = v86_run(tib, &st);
+            ev = VdmRunGuest(tib, &st);
             QueryPerformanceCounter(&vt1);
             g_v86_us_total += qpc_us(vt1.QuadPart - vt0.QuadPart);
             g_host_t_last = vt1.QuadPart;
@@ -33031,7 +33031,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
                  wobble, s61.) The big timer gaps are low-I/O, so the guest is not
-                 hammering ports -- it is inside ONE long v86_run stretch (a spin, a
+                 hammering ports -- it is inside ONE long VdmRunGuest stretch (a spin, a
                  cli section, or slow interpreted VGA). This is the PM stretch
                  instrument for the V86 path: bucket the durations and keep the worst,
                  with the ENTRY cs:ip (where the stretch began) and the exit event. A
@@ -33407,31 +33407,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             LONG reg_st = 0, set_st = 0; int sw;
             /* AX bit0 = the client's declared width (0=16-bit, 1=32-bit e.g. DOS/4GW).
                Logged and recorded, but it does NOT set the initial selectors' D/B --
-               see dpmi_switch_to_pm(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
+               see DpmiSwitchToProtectedMode(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
             int is32 = (int)(VDM_REG(tib, VTIB_EAX) & 1);
             p = zput(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = zhex(p, csv);
             p = zput(p, ":0x"); p = zhex(p, ipv);
             p = zput(p, is32 ? " -- switching to PM (32-bit client)\r\n"
                              : " -- switching to PM (16-bit client)\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            sw = dpmi_switch_to_pm(tib, is32, &reg_st, &set_st);
+            sw = DpmiSwitchToProtectedMode(tib, is32, &reg_st, &set_st);
             p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
             p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
-            p = zput(p, " retcs=0x"); p = zhex(p, g_dpmi_dbg[0]);
-            p = zput(p, " clo=0x"); p = zhex(p, g_dpmi_dbg[2]);
-            p = zput(p, " chi=0x"); p = zhex(p, g_dpmi_dbg[3]);
+            p = zput(p, " retcs=0x"); p = zhex(p, g_DpmiDebug[0]);
+            p = zput(p, " clo=0x"); p = zhex(p, g_DpmiDebug[2]);
+            p = zput(p, " chi=0x"); p = zhex(p, g_DpmiDebug[3]);
             if (sw == 0) {
                 unsigned steps;
                 g_dpmi_pm = 1;
-                g_dpmi_code_base = g_dpmi_seg_base[0];   /* CS base = the patch-scan target */
+                g_dpmi_code_base = g_DpmiSegmentBase[0];   /* CS base = the patch-scan target */
                 /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
                    dpmi_sel_base() translates DS:/ES:/SS: through the right base -- essential
                    once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
                 { int si; for (si = 0; si < 3; ++si) {
-                    g_ldt[1 + si].base   = g_dpmi_seg_base[si];
+                    g_ldt[1 + si].base   = g_DpmiSegmentBase[si];
                     g_ldt[1 + si].limit  = 0xFFFF;
                     g_ldt[1 + si].access = (si == 0) ? 0xFA : 0xF2;
-                    /* Mirror the D/B width dpmi_switch_to_pm ACTUALLY installed, so
+                    /* Mirror the D/B width DpmiSwitchToProtectedMode ACTUALLY installed, so
                        dpmi_sel_is32() (I/O decode + EIP-mask gating) agrees with the live
                        descriptor. That is now always 16-bit for these three: the client's
                        post-switch code must also be valid real-mode code on the failure
@@ -33443,7 +33443,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_ldt_client_mark = g_ldt_next;          /* teardown gives back everything above */
                 /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
                       ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
-                   dpmi_switch_to_pm() sets ES = DS (a second copy of the data selector),
+                   DpmiSwitchToProtectedMode() sets ES = DS (a second copy of the data selector),
                    and that is simply wrong. DPMI 0.9, "entering protected mode", on the
                    register state at a successful return:
                        CS = 16-bit selector with base of real mode CS and a 64K limit
@@ -33503,9 +33503,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, " -> ES=0x"); p = zhex(p, psp_sel);
                   p = zput(p, " env -> sel 0x"); p = zhex(p, env_sel);
                 }
-                p = zput(p, " segbase C=0x"); p = zhex(p, g_dpmi_seg_base[0]);
-                p = zput(p, " D=0x"); p = zhex(p, g_dpmi_seg_base[1]);
-                p = zput(p, " S=0x"); p = zhex(p, g_dpmi_seg_base[2]);
+                p = zput(p, " segbase C=0x"); p = zhex(p, g_DpmiSegmentBase[0]);
+                p = zput(p, " D=0x"); p = zhex(p, g_DpmiSegmentBase[1]);
+                p = zput(p, " S=0x"); p = zhex(p, g_DpmiSegmentBase[2]);
                 p = zput(p, " -> PM ok (CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
                 p = zput(p, ") -> DPMI PM loop\r\n");
@@ -33794,7 +33794,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
 
                 /* --- DPMI protected-mode execution loop -----------------------------------
-                   dpmi_enter_pm runs the client in PM until it stops. Two stop kinds:
+                   DpmiEnterProtectedMode runs the client in PM until it stops. Two stop kinds:
                    (1) a patched INT nn BOP -- the kernel reflects C4 C4 as VTIB_EVENT=4
                        (run 32); we look up the original vector by fault EIP and dispatch.
                    (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
@@ -33845,7 +33845,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        hundred PM entries, so a sparse heartbeat prints nothing at all --
                        which is what the first attempt did. The LAST line before the log
                        ends is the answer this exists for: the CS:EIP we handed to
-                       dpmi_enter_pm and never came back from. */
+                       DpmiEnterProtectedMode and never came back from. */
                     /* EVERY step for the first 256, then sparsely. A WOW run wedges
                        after a few dozen PM entries, so anything sparser prints the
                        position before the interesting one and not the interesting one
@@ -33934,7 +33934,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while
-                       we're blocked inside dpmi_enter_pm sees a FROZEN iter at this CS:EIP. */
+                       we're blocked inside DpmiEnterProtectedMode sees a FROZEN iter at this CS:EIP. */
                     g_dpmi_enter_cs  = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
                     g_dpmi_enter_eip = dpmi_pm_eip(tib);
                     g_dpmi_iter      = (LONG)(steps + 1);
@@ -34189,7 +34189,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        (millions of iterations) pays nothing. */
                     if (steps < g_dpmi_cp_max) {
                         /* Dump the descriptor and the actual BYTES we are about to run. Doom
-                           dies inside the FIRST dpmi_enter_pm and never returns, so the only
+                           dies inside the FIRST DpmiEnterProtectedMode and never returns, so the only
                            thing that can tell a bad mode switch from a specific offending
                            instruction is knowing which instruction it was. Cheap: 4 iterations. */
                         DWORD cbase = dpmi_sel_base((WORD)g_dpmi_enter_cs);
@@ -34308,7 +34308,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          g_in_exec means "the CPU thread is executing GUEST code, so its
                          context is the guest's and may be rewritten"; async_inject_irq()
                          refuses to touch the thread without it, precisely so it cannot race
-                         the host manipulating the TIB. It was set only around v86_run(), so
+                         the host manipulating the TIB. It was set only around VdmRunGuest(), so
                          for the whole of a protected-mode session the answer was "no" and
                          every asynchronous delivery bailed at the first line -- which is why
                          a PM guest could never be interrupted at all. Protected-mode
@@ -34369,7 +34369,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                         g_pm_entry_eip = (LONG)VDM_REG(tib, VTIB_EIP);
-                        kev = v86_run(tib, &kst);
+                        kev = VdmRunGuest(tib, &kst);
                         g_pm_entry_eip = -1;
                         if (steps < 400) {
                             p = zput(p, "PMKERNEL[");     p = zhex(p, (unsigned)steps);
@@ -34419,7 +34419,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            there, there is nothing left to enter. See g_pm_client_exited. */
                         if (g_pm_client_exited) break;
                         QueryPerformanceCounter(&t0);
-                        dpmi_enter_pm(tib);
+                        DpmiEnterProtectedMode(tib);
                         QueryPerformanceCounter(&t1);
                         {
                             DWORD us = qpc_us(t1.QuadPart - t0.QuadPart);
@@ -34496,7 +34496,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              and nothing here says which. Two numbers settle it: was the
                              gate taken, and what was k at exit. */
                         { int k = -1, gate;
-                          gate = (g_dpmi_client32 && g_pm_app_hooked_timer && !g_pm_noirq
+                          gate = (g_DpmiIsClient32 && g_pm_app_hooked_timer && !g_pm_noirq
                                   && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
                           uint32_t preb = g_dma.rd_count[1];
                           if (gate) {
@@ -34534,7 +34534,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           { char bb[160], *bq = bb;
                             bq = zput(bq, "  BATCH gate="); bq = zhex(bq, (DWORD)gate);
                             bq = zput(bq, " k="); bq = zhex(bq, (DWORD)k);
-                            bq = zput(bq, " c32="); bq = zhex(bq, (DWORD)g_dpmi_client32);
+                            bq = zput(bq, " c32="); bq = zhex(bq, (DWORD)g_DpmiIsClient32);
                             bq = zput(bq, " hooked="); bq = zhex(bq, (DWORD)g_pm_app_hooked_timer);
                             bq = zput(bq, " cs=0x"); bq = zhex(bq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                             bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb, bq); serial_out(bb, bq); } }
@@ -35063,7 +35063,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      DOS/4GW selectors (0x1a7 and 0x0f, both D/B=0) where the
                                      question does not arise; a 32-bit-CS fault that resumes
                                      wrongly should suspect this line first. */
-                                if (g_dpmi_client32) {
+                                if (g_DpmiIsClient32) {
                                     DWORD nsp = (esp - 0x20) & 0xFFFF;
                                     volatile DWORD *d32 =
                                         (volatile DWORD *)(ULONG_PTR)(sb + nsp);
@@ -35279,7 +35279,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              the faulting stack (it takes that stack from +0x18/+0x1c, which
                              only exist in the 32-bit frame), so the `pop es` re-executes and
                              succeeds. Resuming from anywhere we cached would defeat it. */
-                        if (g_dpmi_client32) {
+                        if (g_DpmiIsClient32) {
                             volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(sb + esp);
                             if (!host_readable((const void *)d32, 0x18)) {
                                 p = zput(p, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
@@ -36171,10 +36171,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, w == WAIT_OBJECT_0 ? "returned" : w == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
         p = zput(p, "; ExitVDM...\r\n");
         log_append(LOG_PATH, base, p); p = base;
-        {   BOOL ev = csrss_exit_vdm(); DWORD ee = GetLastError();
+        {   BOOL ev = CsrssExitVdm(); DWORD ee = GetLastError();
             p = zput(p, "STAGE2: task done -> ExitVDM = "); p = zput(p, ev ? "TRUE" : "FALSE");
             p = zput(p, " err=0x"); p = zhex(p, ee); p = zput(p, " got_next="); p = zhex(p, (DWORD)g_report_got_next);
-            p = zput(p, " next_app=["); p = zput(p, csrss_next_app); p = zput(p, "]\r\n");
+            p = zput(p, " next_app=["); p = zput(p, g_CsrssNextApp); p = zput(p, "]\r\n");
             log_append(LOG_PATH, base, p); p = base; }
         /* ── A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
              to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
@@ -36182,10 +36182,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              CSRSS has already forgotten it: relaunch it here, in the same console, so it
              runs in a fresh host. (Measured before this: the program silently did not
              run and the launcher saw exit code 0.) */
-        if (g_report_got_next && csrss_next_app[0]) {
+        if (g_report_got_next && g_CsrssNextApp[0]) {
             char cl[2300]; char *q = cl; STARTUPINFOA si; PROCESS_INFORMATION pi;
-            q = zput(q, "\""); q = zput(q, csrss_next_app); q = zput(q, "\"");
-            if (csrss_next_cmd[0]) { q = zput(q, " "); q = zput(q, csrss_next_cmd); }
+            q = zput(q, "\""); q = zput(q, g_CsrssNextApp); q = zput(q, "\"");
+            if (g_CsrssNextCommand[0]) { q = zput(q, " "); q = zput(q, g_CsrssNextCommand); }
             *q = 0;
             ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&pi, sizeof pi);
             /* ⛔ HAND OVER THE SINGLE-INSTANCE MUTEX FIRST. (s73) The relaunched host is a
@@ -36207,7 +36207,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  Measured before this: the relaunched LINK's log said "stdout -> none". */
             {   int k, any = 0; HANDLE hs[3] = { NULL, NULL, NULL };
                 for (k = 0; k < 3; ++k) {
-                    HANDLE h = csrss_next_std[k]; DWORD ty;
+                    HANDLE h = g_CsrssNextStandardHandles[k]; DWORD ty;
                     if (!h || h == INVALID_HANDLE_VALUE) continue;
                     ty = GetFileType(h);
                     if (ty != FILE_TYPE_DISK && ty != FILE_TYPE_PIPE) continue;
@@ -36229,14 +36229,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     si.hStdOutput = hs[1] ? hs[1] : GetStdHandle(STD_OUTPUT_HANDLE);
                     si.hStdError  = hs[2] ? hs[2] : (hs[1] ? hs[1] : GetStdHandle(STD_ERROR_HANDLE));
                 }
-                p = zput(p, "STAGE2: task done -> next command's std handles in=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[0]);
-                p = zput(p, " out=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[1]);
-                p = zput(p, " err=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[2]);
+                p = zput(p, "STAGE2: task done -> next command's std handles in=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
+                p = zput(p, " out=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);
+                p = zput(p, " err=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[2]);
                 p = zput(p, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
             p = zput(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
-            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, csrss_next_cur); p = zput(p, "] (single-instance mutex released)");
+            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, g_CsrssNextDirectory); p = zput(p, "] (single-instance mutex released)");
             if (CreateProcessA(NULL, cl, NULL, NULL, TRUE, 0, NULL,
-                               csrss_next_cur[0] ? csrss_next_cur : NULL, &si, &pi)) {
+                               g_CsrssNextDirectory[0] ? g_CsrssNextDirectory : NULL, &si, &pi)) {
                 p = zput(p, " -> pid 0x"); p = zhex(p, pi.dwProcessId); p = zput(p, ", waiting\r\n");
                 log_append(LOG_PATH, base, p); p = base;
                 WaitForSingleObject(pi.hProcess, INFINITE);
@@ -36411,7 +36411,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
            through the guest's own throttled clock.
          ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
-           holds (before the resume) and host-servicing (outside v86_run) are already
+           holds (before the resume) and host-servicing (outside VdmRunGuest) are already
            out of it. That is why the old execnet/held-subtraction dance is gone --
            the number is clean at the source instead of patched at the report. */
       p = zput(p, " duty_bp="); p = zhex(p, (DWORD)g_cpuspd_duty);
@@ -36624,7 +36624,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " tries="); p = zhex(p, g_courier_tries);
         p = zput(p, " giveup="); p = zhex(p, g_courier_giveup);
     }
-    /* ── ★ V86 STRETCHES: the duration of single v86_run calls, ms buckets. A big
+    /* ── ★ V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
          timer gap IS a big stretch here; str_max names where it started (cs:ip) and
          how it ended (ev). ev 2=I/O, others per the event taxonomy. */
     p = zput(p, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");

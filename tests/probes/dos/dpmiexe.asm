@@ -4,7 +4,7 @@
 ; multi-segment MZ .EXE: distinct CODE / DATA / STACK segments, loaded with a
 ; relocation applied by dos_load's MZ path. It proves two things at once:
 ;   1. the .EXE LOAD path (MZ header parse + relocation fixup + CS!=PSP entry), and
-;   2. the .EXE SWITCH path -- dpmi_switch_to_pm builds three DISTINCT selectors
+;   2. the .EXE SWITCH path -- DpmiSwitchToProtectedMode builds three DISTINCT selectors
 ;      (CS=0x0F based at CODE, DS=0x17 based at DATA, SS=0x1F based at STACK), so a
 ;      DS-relative INT 21h in PM resolves through the DATA base, not the code base.
 ;

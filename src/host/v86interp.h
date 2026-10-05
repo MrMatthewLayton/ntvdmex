@@ -934,7 +934,7 @@ static int istep(icpu *c)
          UNPROTECTED in V86 (the page trap freezes the rig -- see video_trap_sync).
          Lemmings erases its sprites by `repne scasb` over an 800-byte dirty map and
          a `rep movsb` latch copy master->page for every cell it finds. The scasb
-         bailed here, v86_run then kept the guest on the real CPU until the NEXT
+         bailed here, VdmRunGuest then kept the guest on the real CPU until the NEXT
          EVENT, and every one of those latch copies landed in the live mapping,
          invisible to st->plane[]. Measured: the erase engine's whole-run total was
          exactly 2 x 7040 = the two full-window redraws (no scasb on that path) and

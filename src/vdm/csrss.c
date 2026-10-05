@@ -1,104 +1,142 @@
 /* csrss.c -- see csrss.h. Faithful port from tools/vdmhost/vdmhost.c. */
 #include "csrss.h"
 
-ULONG csrss_parse_taskid(const char *cmdline)
+#define CSRSS_KERNEL32_NAME          "kernel32.dll"
+#define CSRSS_REGISTER_CONSOLE_VDM   "RegisterConsoleVDM"
+#define CSRSS_GET_NEXT_VDM_COMMAND   "GetNextVDMCommand"
+#define CSRSS_EXIT_VDM               "ExitVDM"
+
+/* The task-id switch the launcher passes: "-i<hex>" (either case). */
+#define CSRSS_SWITCH_CHAR            '-'
+#define CSRSS_TASK_ID_LOWER          'i'
+#define CSRSS_TASK_ID_UPPER          'I'
+#define CSRSS_TASK_ID_FIRST_DIGIT    2       /* the digits follow "-i"                     */
+#define CSRSS_SPACE                  ' '
+#define CSRSS_HEX_RADIX              16
+#define CSRSS_LOWER_CASE_BIT         0x20    /* ASCII: OR folds A-F onto a-f               */
+#define CSRSS_HEX_LETTER_VALUE       10      /* 'a' = 10                                   */
+#define CSRSS_NO_TASK_ID             0
+
+ULONG CsrssParseTaskId(PCSTR commandLine)
 {
-    const char *q = cmdline;
-    ULONG tid = 0;
-    while (*q) {
-        if (q[0] == '-' && (q[1] == 'i' || q[1] == 'I')) {
-            const char *r = q + 2;
-            tid = 0;
-            while (*r == ' ') ++r;
+    PCSTR cursor = commandLine;
+    ULONG taskId = CSRSS_NO_TASK_ID;
+    while (*cursor) {
+        if (cursor[0] == CSRSS_SWITCH_CHAR && (cursor[1] == CSRSS_TASK_ID_LOWER || cursor[1] == CSRSS_TASK_ID_UPPER)) {
+            PCSTR digit = cursor + CSRSS_TASK_ID_FIRST_DIGIT;
+            taskId = CSRSS_NO_TASK_ID;
+            while (*digit == CSRSS_SPACE) ++digit;
             for (;;) {
-                char c = *r;
-                if (c >= '0' && c <= '9')
-                    tid = tid * 16 + (ULONG)(c - '0');
-                else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f')
-                    tid = tid * 16 + (ULONG)((c | 0x20) - 'a' + 10);
+                CHAR character = *digit;
+                if (character >= '0' && character <= '9')
+                    taskId = taskId * CSRSS_HEX_RADIX + (ULONG)(character - '0');
+                else if ((character | CSRSS_LOWER_CASE_BIT) >= 'a' && (character | CSRSS_LOWER_CASE_BIT) <= 'f')
+                    taskId = taskId * CSRSS_HEX_RADIX + (ULONG)((character | CSRSS_LOWER_CASE_BIT) - 'a' + CSRSS_HEX_LETTER_VALUE);
                 else break;
-                ++r;
+                ++digit;
             }
         }
-        ++q;
+        ++cursor;
     }
-    return tid;          /* last -i<n> on the line */
+    return taskId;          /* last -i<n> on the line */
 }
 
-BOOL csrss_register_console(void)
+/* RegisterConsoleVDM's arguments on the DOS path: flag 1, no video-state buffer/size. */
+#define CSRSS_CONSOLE_VDM_DOS        1
+#define CSRSS_NO_VIDEO_STATE         0
+
+BOOL CsrssRegisterConsole(VOID)
 {
     PFN_RegisterConsoleVDM RegisterConsoleVDM =
         (PFN_RegisterConsoleVDM)GetProcAddress(
-            GetModuleHandleA("kernel32.dll"), "RegisterConsoleVDM");
-    HANDLE hStart, hEnd, hErr;
-    DWORD out6 = 0, out10 = 0; PVOID out7 = NULL, out11 = NULL;
+            GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_REGISTER_CONSOLE_VDM);
+    HANDLE startEvent, endEvent, errorEvent;
+    DWORD sixthOut = 0, tenthOut = 0; PVOID seventhOut = NULL, eleventhOut = NULL;
     if (!RegisterConsoleVDM) return FALSE;
-    hStart = CreateEventA(NULL, TRUE, FALSE, NULL);
-    hEnd   = CreateEventA(NULL, TRUE, FALSE, NULL);
-    hErr   = CreateEventA(NULL, TRUE, FALSE, NULL);
+    startEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    endEvent   = CreateEventA(NULL, TRUE, FALSE, NULL);
+    errorEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     /* DOS path: flag 1, no video-state buffer/size (args 8,9 = 0). */
-    return RegisterConsoleVDM(1, hStart, hEnd, hErr, 0,
-                              &out6, &out7, 0, 0, &out10, &out11);
+    return RegisterConsoleVDM(CSRSS_CONSOLE_VDM_DOS, startEvent, endEvent, errorEvent, CSRSS_NO_VIDEO_STATE,
+                              &sixthOut, &seventhOut, CSRSS_NO_VIDEO_STATE, CSRSS_NO_VIDEO_STATE, &tenthOut, &eleventhOut);
 }
 
-BOOL csrss_get_command(VDM_COMMAND_INFO *ci, DWORD *out_err)
+BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
 {
-    PFN_GetNextVDMCommand pfn =
+    PFN_GetNextVDMCommand GetNextVDMCommand =
         (PFN_GetNextVDMCommand)GetProcAddress(
-            GetModuleHandleA("kernel32.dll"), "GetNextVDMCommand");
-    BOOL ok;
-    if (!pfn) { if (out_err) *out_err = ERROR_PROC_NOT_FOUND; return FALSE; }
-    ok = pfn(ci);
-    if (out_err) *out_err = GetLastError();
-    return ok;
+            GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_GET_NEXT_VDM_COMMAND);
+    BOOL succeeded;
+    if (!GetNextVDMCommand) { if (lastError) *lastError = ERROR_PROC_NOT_FOUND; return FALSE; }
+    succeeded = GetNextVDMCommand(commandInfo);
+    if (lastError) *lastError = GetLastError();
+    return succeeded;
 }
 
-char csrss_next_app[1024], csrss_next_cmd[1024], csrss_next_cur[512];
-HANDLE csrss_next_std[3];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
+CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE], g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE],
+     g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
                                in THIS process (s73: handed to the relaunched host) */
 
-BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_exitvdm)
+/* The other buffers GetNextVDMCommand fills in for the next command. */
+#define CSRSS_PIF_SIZE               512
+#define CSRSS_ENVIRONMENT_SIZE       8192
+#define CSRSS_DESKTOP_SIZE           512
+#define CSRSS_TITLE_SIZE             512
+#define CSRSS_RESERVED_SIZE          512
+#define CSRSS_STD_IN                 0
+#define CSRSS_STD_OUT                1
+#define CSRSS_STD_ERR                2
+#define CSRSS_VDM_FLAG_DOS           0x04    /* VDMState: a DOS VDM reporting its exit    */
+#define CSRSS_EXIT_VDM_FLAGS         0       /* ExitVDM's second argument                 */
+#define CSRSS_END_OF_STRING          0
+#define CSRSS_CARRIAGE_RETURN        '\r'
+#define CSRSS_LINE_FEED              '\n'
+#define CSRSS_LAST_CHAR_OFFSET       1
+
+BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExitVdm)
 {
     typedef BOOL (WINAPI *PFN_ExitVDM)(BOOL, ULONG);
-    HMODULE k32 = GetModuleHandleA("kernel32.dll");
-    PFN_GetNextVDMCommand pfn = (PFN_GetNextVDMCommand)GetProcAddress(k32, "GetNextVDMCommand");
-    PFN_ExitVDM pexit = (PFN_ExitVDM)GetProcAddress(k32, "ExitVDM");
-    static char pif[512], env[8192], desk[512], title[512], rsv[512];
-    VDM_COMMAND_INFO ci;
-    BOOL ok = FALSE;
-    int k;
-    if (out_exitvdm) *out_exitvdm = FALSE;
-    if (!pfn) { if (out_err) *out_err = ERROR_PROC_NOT_FOUND; return FALSE; }
-    ZeroMemory(&ci, sizeof ci);
-    csrss_next_app[0] = csrss_next_cmd[0] = csrss_next_cur[0] = 0;
-    csrss_next_std[0] = csrss_next_std[1] = csrss_next_std[2] = NULL;
-    ci.CmdLine = csrss_next_cmd; ci.CmdLen = sizeof csrss_next_cmd;
-    ci.AppName = csrss_next_app; ci.AppLen = sizeof csrss_next_app;
-    ci.PifFile = pif; ci.PifLen = sizeof pif;
-    ci.CurDirectory = csrss_next_cur; ci.CurDirectoryLen = sizeof csrss_next_cur;
-    ci.Env = env; ci.EnvLen = sizeof env;       ci.Desktop = desk; ci.DesktopLen = sizeof desk;
-    ci.Title = title; ci.TitleLen = sizeof title; ci.Reserved = rsv; ci.ReservedLen = sizeof rsv;
-    ci.StartupInfo.cb = sizeof(STARTUPINFOA);
-    ci.TaskId = task_id;
-    ci.ExitCode = exit_code;
+    HMODULE kernel32 = GetModuleHandleA(CSRSS_KERNEL32_NAME);
+    PFN_GetNextVDMCommand GetNextVDMCommand = (PFN_GetNextVDMCommand)GetProcAddress(kernel32, CSRSS_GET_NEXT_VDM_COMMAND);
+    PFN_ExitVDM ExitVDM = (PFN_ExitVDM)GetProcAddress(kernel32, CSRSS_EXIT_VDM);
+    static CHAR pifFile[CSRSS_PIF_SIZE], environment[CSRSS_ENVIRONMENT_SIZE], desktop[CSRSS_DESKTOP_SIZE],
+                title[CSRSS_TITLE_SIZE], reserved[CSRSS_RESERVED_SIZE];
+    VDM_COMMAND_INFO commandInfo;
+    BOOL succeeded = FALSE;
+    INT charIndex;
+    if (didExitVdm) *didExitVdm = FALSE;
+    if (!GetNextVDMCommand) { if (lastError) *lastError = ERROR_PROC_NOT_FOUND; return FALSE; }
+    ZeroMemory(&commandInfo, sizeof commandInfo);
+    g_CsrssNextApp[0] = g_CsrssNextCommand[0] = g_CsrssNextDirectory[0] = CSRSS_END_OF_STRING;
+    g_CsrssNextStandardHandles[CSRSS_STD_IN] = g_CsrssNextStandardHandles[CSRSS_STD_OUT] = g_CsrssNextStandardHandles[CSRSS_STD_ERR] = NULL;
+    commandInfo.CmdLine = g_CsrssNextCommand; commandInfo.CmdLen = sizeof g_CsrssNextCommand;
+    commandInfo.AppName = g_CsrssNextApp; commandInfo.AppLen = sizeof g_CsrssNextApp;
+    commandInfo.PifFile = pifFile; commandInfo.PifLen = sizeof pifFile;
+    commandInfo.CurDirectory = g_CsrssNextDirectory; commandInfo.CurDirectoryLen = sizeof g_CsrssNextDirectory;
+    commandInfo.Env = environment; commandInfo.EnvLen = sizeof environment;       commandInfo.Desktop = desktop; commandInfo.DesktopLen = sizeof desktop;
+    commandInfo.Title = title; commandInfo.TitleLen = sizeof title; commandInfo.Reserved = reserved; commandInfo.ReservedLen = sizeof reserved;
+    commandInfo.StartupInfo.cb = sizeof(STARTUPINFOA);
+    commandInfo.TaskId = taskId;
+    commandInfo.ExitCode = exitCode;
     /* VDM_FLAG_DOS, exactly as stock ntvdm's cmdGetNextCmd reports (reverse/ntvdm.exe
        0xf00ac1e: `or byte [VDMState], 4`, ExitCode from the DOS block). This call
        releases the launcher and then WAITS for the console's next command -- there
        is no non-blocking form of the report (DONT_WAIT was tried: it blocked too). */
-    ci.VDMState = 0x04;
-    ok = pfn(&ci);
-    if (out_err) *out_err = GetLastError();
-    csrss_next_app[sizeof csrss_next_app - 1] = 0; csrss_next_cmd[sizeof csrss_next_cmd - 1] = 0;
-    if (ok) { csrss_next_std[0] = ci.StdIn; csrss_next_std[1] = ci.StdOut; csrss_next_std[2] = ci.StdErr; }
-    for (k = 0; csrss_next_cmd[k]; ++k) if (csrss_next_cmd[k] == '\r' || csrss_next_cmd[k] == '\n') { csrss_next_cmd[k] = 0; break; }
-    if (pexit && out_exitvdm) *out_exitvdm = pexit(FALSE, 0);
-    return ok;
+    commandInfo.VDMState = CSRSS_VDM_FLAG_DOS;
+    succeeded = GetNextVDMCommand(&commandInfo);
+    if (lastError) *lastError = GetLastError();
+    g_CsrssNextApp[sizeof g_CsrssNextApp - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING; g_CsrssNextCommand[sizeof g_CsrssNextCommand - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
+    if (succeeded) { g_CsrssNextStandardHandles[CSRSS_STD_IN] = commandInfo.StdIn; g_CsrssNextStandardHandles[CSRSS_STD_OUT] = commandInfo.StdOut; g_CsrssNextStandardHandles[CSRSS_STD_ERR] = commandInfo.StdErr; }
+    for (charIndex = 0; g_CsrssNextCommand[charIndex]; ++charIndex) if (g_CsrssNextCommand[charIndex] == CSRSS_CARRIAGE_RETURN || g_CsrssNextCommand[charIndex] == CSRSS_LINE_FEED) { g_CsrssNextCommand[charIndex] = CSRSS_END_OF_STRING; break; }
+    if (ExitVDM && didExitVdm) *didExitVdm = ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
+    return succeeded;
 }
 
-BOOL csrss_exit_vdm(void)
+BOOL CsrssExitVdm(VOID)
 {
     typedef BOOL (WINAPI *PFN_ExitVDM)(BOOL, ULONG);
-    PFN_ExitVDM pexit = (PFN_ExitVDM)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitVDM");
-    if (!pexit) { SetLastError(ERROR_PROC_NOT_FOUND); return FALSE; }
-    return pexit(FALSE, 0);
+    PFN_ExitVDM ExitVDM = (PFN_ExitVDM)GetProcAddress(GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_EXIT_VDM);
+    if (!ExitVDM) { SetLastError(ERROR_PROC_NOT_FOUND); return FALSE; }
+    return ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
 }

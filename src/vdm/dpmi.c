@@ -6,15 +6,15 @@
 /* Diagnostic snapshot of the last switch (read by the host log): ret_cs, ret_ip,
    code descriptor lo, code descriptor hi. Localises base-0 faults (my descriptor
    vs the monitor not loading the LDT). */
-DWORD g_dpmi_dbg[4] = {0,0,0,0};
+DWORD g_DpmiDebug[DPMI_DEBUG_ENTRIES] = {0,0,0,0};
 
 /* Bases of the three initial selectors (code/data/stack); see dpmi.h. */
-DWORD g_dpmi_seg_base[3] = {0,0,0};
+DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS] = {0,0,0};
 
 /* The client's declared width from the mode-switch AX bit0 (1 = 32-bit, e.g. DOS/4GW).
    Recorded rather than acted on for the INITIAL selectors -- see the long note in
-   dpmi_switch_to_pm. It is the right input for DPMI API register widths, not for D/B. */
-int g_dpmi_client32 = 0;
+   DpmiSwitchToProtectedMode. It is the right input for DPMI API register widths, not for D/B. */
+INT g_DpmiIsClient32 = FALSE;
 
 /* LDT selector indices we hand the client. A ring-3 Win32 process has no LDT
    entries of its own, so starting at 1 is safe (index 0 would be selector 0x07). */
@@ -22,42 +22,71 @@ int g_dpmi_client32 = 0;
 #define DPMI_IDX_DATA  2
 #define DPMI_IDX_STACK 3
 
-void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, BYTE flags,
-                     DWORD *lo, DWORD *hi)
+/* The x86 segment descriptor's fields (Intel SDM vol. 3, "Segment Descriptors"). */
+#define DPMI_DESCRIPTOR_WORD_MASK        0xFFFF
+#define DPMI_DESCRIPTOR_BYTE_MASK        0xFF
+#define DPMI_DESCRIPTOR_NIBBLE_MASK      0xF
+#define DPMI_DESCRIPTOR_BASE_LOW_SHIFT   16    /* low dword: base 15-0 in bits 31-16     */
+#define DPMI_DESCRIPTOR_BASE_MID_SHIFT   16    /* base 23-16 -> high dword bits 7-0      */
+#define DPMI_DESCRIPTOR_ACCESS_SHIFT     8     /* access byte -> high dword bits 15-8    */
+#define DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT 16    /* limit 19-16, in and out                */
+#define DPMI_DESCRIPTOR_FLAGS_SHIFT      20    /* G|D/B|0|AVL -> high dword bits 23-20   */
+#define DPMI_DESCRIPTOR_BASE_HIGH_SHIFT  24    /* base 31-24, in and out                 */
+
+VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
+                         DWORD *descriptorLow, DWORD *descriptorHigh)
 {
     /* Standard x86 descriptor: limit in 20 bits, base in 32. access = P|DPL|S|type;
        flags nibble = G|D/B|0|AVL in bits 23..20 of the high dword. */
-    *lo = (limit & 0xFFFF) | ((base & 0xFFFF) << 16);
-    *hi = ((base >> 16) & 0xFF)
-        | ((DWORD)access << 8)
-        | (((limit >> 16) & 0xF) << 16)
-        | (((DWORD)flags & 0xF) << 20)
-        | (((base >> 24) & 0xFF) << 24);
+    *descriptorLow = (limit & DPMI_DESCRIPTOR_WORD_MASK) | ((base & DPMI_DESCRIPTOR_WORD_MASK) << DPMI_DESCRIPTOR_BASE_LOW_SHIFT);
+    *descriptorHigh = ((base >> DPMI_DESCRIPTOR_BASE_MID_SHIFT) & DPMI_DESCRIPTOR_BYTE_MASK)
+        | ((DWORD)access << DPMI_DESCRIPTOR_ACCESS_SHIFT)
+        | (((limit >> DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT) & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT)
+        | (((DWORD)flags & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_FLAGS_SHIFT)
+        | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & DPMI_DESCRIPTOR_BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
 }
 
-int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
-                      LONG *reg_st, LONG *set_st)
-{
-    WORD ss = (WORD)(VDM_REG(tib, VTIB_SS)  & 0xFFFF);
-    WORD sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-    WORD ds = (WORD)(VDM_REG(tib, VTIB_DS)  & 0xFFFF);
-    DWORD stk = ((DWORD)ss << 4) + sp;      /* linear addr of the far-call frame  */
-    /* 16-bit FAR CALL pushed IP then CS: [SP]=retIP, [SP+2]=retCS. */
-    WORD ret_ip = *(volatile WORD *)stk;
-    WORD ret_cs = *(volatile WORD *)(stk + 2);
-    WORD new_sp = (WORD)(sp + 4);           /* pop the far-call return frame       */
+#define DPMI_WORD_MASK               0xFFFF
+#define DPMI_SEGMENT_SHIFT           4         /* real mode: linear = segment << 4         */
+#define DPMI_FAR_RETURN_CS_OFFSET    2         /* 16-bit FAR CALL frame: [SP]=IP, [SP+2]=CS */
+#define DPMI_FAR_RETURN_FRAME_SIZE   4
+#define DPMI_CODE_ACCESS             0xFA      /* present, DPL 3, code exec/read            */
+#define DPMI_DATA_ACCESS             0xF2      /* present, DPL 3, data read/write           */
+#define DPMI_FLAGS_16BIT_BYTE        0x0       /* G=0, D/B=0: 16-bit, byte-granular         */
+#define DPMI_SEGMENT_LIMIT           0xFFFF    /* 64KB                                      */
+#define DPMI_LDT_TABLE_ENTRIES       4         /* null, code, data, stack                    */
+#define DPMI_DWORDS_PER_DESCRIPTOR   2
+#define DPMI_DESCRIPTOR_HIGH         1         /* a descriptor's second dword               */
+#define DPMI_IDX_NULL                0
+#define DPMI_LDT_TABLE_DWORDS        (DPMI_DWORDS_PER_DESCRIPTOR * DPMI_LDT_TABLE_ENTRIES)
+#define DPMI_LDT_FIRST_SELECTOR      0
+#define DPMI_NULL_DESCRIPTOR         0
+#define DPMI_SWITCH_OK               0
+#define DPMI_SWITCH_FAILED           (-1)
 
-    WORD code_sel  = DPMI_SEL(DPMI_IDX_CODE);
-    WORD data_sel  = DPMI_SEL(DPMI_IDX_DATA);
-    WORD stack_sel = DPMI_SEL(DPMI_IDX_STACK);
-    DWORD clo, chi, dlo, dhi, slo, shi;
-    DWORD code_base  = (DWORD)ret_cs << 4;           /* linear base of the guest CS  */
-    DWORD data_base  = (DWORD)ds     << 4;           /* linear base of the guest DS  */
-    DWORD stack_base = (DWORD)ss     << 4;           /* linear base of the guest SS  */
-    DWORD lin_eip = code_base  + ret_ip;             /* linear code addr             */
-    DWORD lin_esp = stack_base + new_sp;             /* linear stack addr            */
-    LONG st;
-    BYTE code_access = 0xFA, data_access = 0xF2;
+INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
+                              LONG *registerStatus, LONG *setStatus)
+{
+    WORD stackSegment = (WORD)(VDM_REG(tib, VTIB_SS)  & DPMI_WORD_MASK);
+    WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & DPMI_WORD_MASK);
+    WORD dataSegment = (WORD)(VDM_REG(tib, VTIB_DS)  & DPMI_WORD_MASK);
+    DWORD frameLinear = ((DWORD)stackSegment << DPMI_SEGMENT_SHIFT) + stackPointer;      /* linear addr of the far-call frame  */
+    /* 16-bit FAR CALL pushed IP then CS: [SP]=retIP, [SP+2]=retCS. */
+    WORD returnOffset = *(volatile WORD *)frameLinear;
+    WORD returnSegment = *(volatile WORD *)(frameLinear + DPMI_FAR_RETURN_CS_OFFSET);
+    WORD newStackPointer = (WORD)(stackPointer + DPMI_FAR_RETURN_FRAME_SIZE);           /* pop the far-call return frame       */
+
+    WORD codeSelector  = DPMI_SELECTOR(DPMI_IDX_CODE);
+    WORD dataSelector  = DPMI_SELECTOR(DPMI_IDX_DATA);
+    WORD stackSelector = DPMI_SELECTOR(DPMI_IDX_STACK);
+    DWORD codeLow, codeHigh, dataLow, dataHigh, stackLow, stackHigh;
+    DWORD codeBase  = (DWORD)returnSegment << DPMI_SEGMENT_SHIFT;           /* linear base of the guest CS  */
+    DWORD dataBase  = (DWORD)dataSegment     << DPMI_SEGMENT_SHIFT;           /* linear base of the guest DS  */
+    DWORD stackBase = (DWORD)stackSegment     << DPMI_SEGMENT_SHIFT;           /* linear base of the guest SS  */
+    DWORD linearEip = codeBase  + returnOffset;             /* linear code addr             */
+    DWORD linearEsp = stackBase + newStackPointer;             /* linear stack addr            */
+    LONG status;
+    BYTE codeAccess = DPMI_CODE_ACCESS, dataAccess = DPMI_DATA_ACCESS;
     /* ── THE INITIAL SELECTORS ARE 16-BIT, EVEN FOR A 32-BIT CLIENT ──────────────
        Run 81 set D/B=1 here when the client passed AX bit0=1, reasoning that "its
        initial CS/DS/SS must be 32-bit so the code AFTER the far-call runs as 32-bit".
@@ -79,7 +108,7 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        The 16-bit decode is a textbook post-switch stub: test CF, clear direction, save
        DS. The 32-bit decode is three wild writes through an uninitialised ESI within
        four instructions -- which is precisely the observed failure: the host dies
-       inside the FIRST dpmi_enter_pm, with no output and no reflected exception.
+       inside the FIRST DpmiEnterProtectedMode, with no output and no reflected exception.
 
        WHY OUR OWN TESTS DID NOT CATCH IT: pm32flat/pm32io/... put `bits 32` directly
        after `call far [entry]`, so they were written to match this implementation
@@ -90,10 +119,10 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        A 32-bit client reaches 32-bit code the way DOS/4GW does -- it allocates its own
        descriptors via INT 31h (0000/0008/0009) and far-jmps to them; dpmi_sel_is32()
        then reports 32-bit for THOSE selectors, which is correct. The client's declared
-       width is still recorded (g_dpmi_client32) for DPMI API widths; it just must not
+       width is still recorded (g_DpmiIsClient32) for DPMI API widths; it just must not
        decide the D/B of these based, 64K, real-mode-derived selectors. */
-    BYTE dbflag = 0x0;
-    g_dpmi_client32 = client_is_32bit ? 1 : 0;
+    BYTE descriptorFlags = DPMI_FLAGS_16BIT_BYTE;
+    g_DpmiIsClient32 = isClient32 ? TRUE : FALSE;
 
     /* BASED, 64K selectors (G=0) -- the config that PROVED PM execution (run 28). XP's
        NtSetLdtEntries REJECTS a flat 4GB LDT descriptor (PspIsDescriptorValid: base +
@@ -103,13 +132,13 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        (0000/0007/0008/0009), NOT the initial mode-switch selectors, which stay based/64K.
        A based selector maps the guest's real-mode segment (linear seg<<4, <1MB); resume
        EIP/ESP are the real-mode OFFSETS. */
-    (void)lin_eip; (void)lin_esp;
-    dpmi_build_desc(code_base,  0xFFFF, code_access, dbflag, &clo, &chi);
-    dpmi_build_desc(data_base,  0xFFFF, data_access, dbflag, &dlo, &dhi);
-    dpmi_build_desc(stack_base, 0xFFFF, data_access, dbflag, &slo, &shi);
-    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = code_base + ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
+    (VOID)linearEip; (VOID)linearEsp;
+    DpmiBuildDescriptor(codeBase,  DPMI_SEGMENT_LIMIT, codeAccess, descriptorFlags, &codeLow, &codeHigh);
+    DpmiBuildDescriptor(dataBase,  DPMI_SEGMENT_LIMIT, dataAccess, descriptorFlags, &dataLow, &dataHigh);
+    DpmiBuildDescriptor(stackBase, DPMI_SEGMENT_LIMIT, dataAccess, descriptorFlags, &stackLow, &stackHigh);
+    g_DpmiDebug[DPMI_DEBUG_RETURN_CS] = returnSegment; g_DpmiDebug[DPMI_DEBUG_RETURN_LINEAR] = codeBase + returnOffset; g_DpmiDebug[DPMI_DEBUG_CODE_LOW] = codeLow; g_DpmiDebug[DPMI_DEBUG_CODE_HIGH] = codeHigh;
     /* Publish the per-selector bases so the host can drive dpmi_sel_base() uniformly. */
-    g_dpmi_seg_base[0] = code_base; g_dpmi_seg_base[1] = data_base; g_dpmi_seg_base[2] = stack_base;
+    g_DpmiSegmentBase[DPMI_INITIAL_CODE] = codeBase; g_DpmiSegmentBase[DPMI_INITIAL_DATA] = dataBase; g_DpmiSegmentBase[DPMI_INITIAL_STACK] = stackBase;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
        this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers
@@ -117,21 +146,21 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        .EXE client has CS!=DS!=SS, so the stack gets its OWN selector rather than reusing
        the data one (which for a .COM is identical -- CS=DS=SS=PSP). */
     {
-        DWORD entries[8];
-        entries[0] = 0;   entries[1] = 0;       /* index 0: null descriptor          */
-        entries[2] = clo; entries[3] = chi;     /* index 1: code  (selector 0x0F)     */
-        entries[4] = dlo; entries[5] = dhi;     /* index 2: data  (selector 0x17)     */
-        entries[6] = slo; entries[7] = shi;     /* index 3: stack (selector 0x1F)     */
-        st = v86_set_process_ldt_info(0, entries, 4);
-        if (reg_st) *reg_st = st;
+        DWORD entries[DPMI_LDT_TABLE_DWORDS];
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL] = DPMI_NULL_DESCRIPTOR;   entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL + DPMI_DESCRIPTOR_HIGH] = DPMI_NULL_DESCRIPTOR;       /* index 0: null descriptor          */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE] = codeLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE + DPMI_DESCRIPTOR_HIGH] = codeHigh;     /* index 1: code  (selector 0x0F)     */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA] = dataLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA + DPMI_DESCRIPTOR_HIGH] = dataHigh;     /* index 2: data  (selector 0x17)     */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK] = stackLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK + DPMI_DESCRIPTOR_HIGH] = stackHigh;     /* index 3: stack (selector 0x1F)     */
+        status = VdmRegisterLdtTable(DPMI_LDT_FIRST_SELECTOR, entries, DPMI_LDT_TABLE_ENTRIES);
+        if (registerStatus) *registerStatus = status;
     }
 
     /* Then set the individual entries too (service 10; two selectors per call). */
-    st = v86_set_ldt_entries(code_sel, clo, chi, data_sel, dlo, dhi);
-    if (set_st) *set_st = st;
-    if (st < 0) return -1;
-    st = v86_set_ldt_entries(stack_sel, slo, shi, stack_sel, slo, shi);
-    if (st < 0) return -1;
+    status = VdmInstallLdtEntries(codeSelector, codeLow, codeHigh, dataSelector, dataLow, dataHigh);
+    if (setStatus) *setStatus = status;
+    if (status < 0) return DPMI_SWITCH_FAILED;
+    status = VdmInstallLdtEntries(stackSelector, stackLow, stackHigh, stackSelector, stackLow, stackHigh);
+    if (status < 0) return DPMI_SWITCH_FAILED;
 
     /* Mark the client as in protected mode: set the virtual-MSW PE bit the monitor
        reads via getMSW (word[TIB+0x668]). Without this the monitor still treats the
@@ -153,15 +182,15 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
          same client to Doom's title screen. If the kernel is willing to deliver to a PM
          VDM at all, VIF is the flag it asks about. */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM | EFLAGS_VIF_BIT;  /* VM clear -> PM */
-    VDM_SET16(tib, VTIB_CS,  code_sel);
-    VDM_REG (tib, VTIB_EIP) = ret_ip;                /* offset within the based CS  */
-    VDM_SET16(tib, VTIB_SS,  stack_sel);
-    VDM_REG (tib, VTIB_ESP) = new_sp;                /* offset within the based SS  */
-    VDM_SET16(tib, VTIB_DS,  data_sel);
-    VDM_SET16(tib, VTIB_ES,  data_sel);
-    VDM_SET16(tib, VTIB_FS,  data_sel);
-    VDM_SET16(tib, VTIB_GS,  data_sel);
-    return 0;
+    VDM_SET16(tib, VTIB_CS,  codeSelector);
+    VDM_REG (tib, VTIB_EIP) = returnOffset;                /* offset within the based CS  */
+    VDM_SET16(tib, VTIB_SS,  stackSelector);
+    VDM_REG (tib, VTIB_ESP) = newStackPointer;                /* offset within the based SS  */
+    VDM_SET16(tib, VTIB_DS,  dataSelector);
+    VDM_SET16(tib, VTIB_ES,  dataSelector);
+    VDM_SET16(tib, VTIB_FS,  dataSelector);
+    VDM_SET16(tib, VTIB_GS,  dataSelector);
+    return DPMI_SWITCH_OK;
 }
 
 /* Run the guest in protected mode DIRECTLY in this host process, the way ntvdm does
@@ -172,21 +201,24 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
    surface as Win32 exceptions the VEH catches. NtContinue does not return on success. */
 typedef LONG (WINAPI *PFN_NtContinue)(CONTEXT *, BOOLEAN);
 
-void dpmi_run_pm(volatile BYTE *tib)
+#define DPMI_NTDLL_NAME       "ntdll.dll"
+#define DPMI_NT_CONTINUE      "NtContinue"
+
+VOID DpmiRunProtectedMode(volatile BYTE *tib)
 {
-    static CONTEXT c;                    /* static: keep it off the (small) stack     */
-    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-    PFN_NtContinue NtContinue = (PFN_NtContinue)GetProcAddress(ntdll, "NtContinue");
-    BYTE *z = (BYTE *)&c; unsigned i;
-    for (i = 0; i < sizeof c; ++i) z[i] = 0;
-    c.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
-    c.SegGs = VDM_REG(tib, VTIB_GS) & 0xFFFF;  c.SegFs = VDM_REG(tib, VTIB_FS) & 0xFFFF;
-    c.SegEs = VDM_REG(tib, VTIB_ES) & 0xFFFF;  c.SegDs = VDM_REG(tib, VTIB_DS) & 0xFFFF;
-    c.SegCs = VDM_REG(tib, VTIB_CS) & 0xFFFF;  c.SegSs = VDM_REG(tib, VTIB_SS) & 0xFFFF;
-    c.Edi = VDM_REG(tib, VTIB_EDI); c.Esi = VDM_REG(tib, VTIB_ESI);
-    c.Ebx = VDM_REG(tib, VTIB_EBX); c.Edx = VDM_REG(tib, VTIB_EDX);
-    c.Ecx = VDM_REG(tib, VTIB_ECX); c.Eax = VDM_REG(tib, VTIB_EAX);
-    c.Ebp = VDM_REG(tib, VTIB_EBP); c.Eip = VDM_REG(tib, VTIB_EIP);
-    c.Esp = VDM_REG(tib, VTIB_ESP); c.EFlags = VDM_REG(tib, VTIB_EFLAGS);
-    if (NtContinue) NtContinue(&c, FALSE);
+    static CONTEXT context;                    /* static: keep it off the (small) stack     */
+    HMODULE ntdll = GetModuleHandleA(DPMI_NTDLL_NAME);
+    PFN_NtContinue NtContinue = (PFN_NtContinue)GetProcAddress(ntdll, DPMI_NT_CONTINUE);
+    BYTE *contextBytes = (BYTE *)&context; UINT byteIndex;
+    for (byteIndex = 0; byteIndex < sizeof context; ++byteIndex) contextBytes[byteIndex] = 0;
+    context.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
+    context.SegGs = VDM_REG(tib, VTIB_GS) & DPMI_WORD_MASK;  context.SegFs = VDM_REG(tib, VTIB_FS) & DPMI_WORD_MASK;
+    context.SegEs = VDM_REG(tib, VTIB_ES) & DPMI_WORD_MASK;  context.SegDs = VDM_REG(tib, VTIB_DS) & DPMI_WORD_MASK;
+    context.SegCs = VDM_REG(tib, VTIB_CS) & DPMI_WORD_MASK;  context.SegSs = VDM_REG(tib, VTIB_SS) & DPMI_WORD_MASK;
+    context.Edi = VDM_REG(tib, VTIB_EDI); context.Esi = VDM_REG(tib, VTIB_ESI);
+    context.Ebx = VDM_REG(tib, VTIB_EBX); context.Edx = VDM_REG(tib, VTIB_EDX);
+    context.Ecx = VDM_REG(tib, VTIB_ECX); context.Eax = VDM_REG(tib, VTIB_EAX);
+    context.Ebp = VDM_REG(tib, VTIB_EBP); context.Eip = VDM_REG(tib, VTIB_EIP);
+    context.Esp = VDM_REG(tib, VTIB_ESP); context.EFlags = VDM_REG(tib, VTIB_EFLAGS);
+    if (NtContinue) NtContinue(&context, FALSE);
 }

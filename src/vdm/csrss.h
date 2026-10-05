@@ -2,25 +2,31 @@
  * pull the program-to-run out of the VDM command queue. Ported from the spike;
  * contract + struct in ntvdm.h.
  */
-#ifndef VDM_CSRSS_H
-#define VDM_CSRSS_H
+#ifndef NTVDMEX_VDM_CSRSS_H
+#define NTVDMEX_VDM_CSRSS_H
 
 #include <windows.h>
 #include "ntvdm.h"
 
+/* The next command's buffers (see CsrssTaskDone). */
+#define CSRSS_APP_NAME_SIZE      1024
+#define CSRSS_COMMAND_LINE_SIZE  1024
+#define CSRSS_DIRECTORY_SIZE     512
+#define CSRSS_STANDARD_HANDLES   3      /* StdIn, StdOut, StdErr                         */
+
 /* Parse the task id ntvdm's launcher passed as "-i<hex>" on our command line
    (the last one wins). GetNextVDMCommand's first-command lookup keys on this
    under IFEO, where our console handle differs from the launcher's. */
-ULONG csrss_parse_taskid(const char *cmdline);
+ULONG CsrssParseTaskId(_In_ PCSTR commandLine);
 
 /* RegisterConsoleVDM(1, ...) -- register as the console VDM with CSRSS (the
    association GetNextVDMCommand needs). Returns the BOOL result (FALSE if the
    API is unavailable). */
-BOOL csrss_register_console(void);
+BOOL CsrssRegisterConsole(VOID);
 
-/* GetNextVDMCommand(ci) -- fetch the next queued program. Returns the BOOL
-   result; *out_err receives GetLastError() when non-NULL. */
-BOOL csrss_get_command(VDM_COMMAND_INFO *ci, DWORD *out_err);
+/* GetNextVDMCommand(commandInfo) -- fetch the next queued program. Returns the BOOL
+   result; *lastError receives GetLastError() when non-NULL. */
+BOOL CsrssGetCommand(_Inout_ VDM_COMMAND_INFO *commandInfo, _Out_opt_ DWORD *lastError);
 
 /* THE TASK IS OVER, AND SO IS THE VDM. (s72) Stock ntvdm reports a program's
    exit code to CSRSS with GetNextVDMCommand (VDM_FLAG_DOS, ExitCode set, no
@@ -32,13 +38,15 @@ BOOL csrss_get_command(VDM_COMMAND_INFO *ci, DWORD *out_err);
    task per host, then ExitVDM: the next launch in that console gets a fresh
    host. DONT_WAIT: if CSRSS already has a follow-up queued we are not going to
    run it, and a FALSE is fine. Returns what GetNextVDMCommand said, for the log. */
-BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_exitvdm);
-/* If csrss_task_done returned TRUE, CSRSS handed us the console's NEXT command
+BOOL CsrssTaskDone(_In_ ULONG taskId, _In_ ULONG exitCode, _Out_opt_ DWORD *lastError,
+                   _Out_opt_ BOOL *didExitVdm);
+/* If CsrssTaskDone returned TRUE, CSRSS handed us the console's NEXT command
    (a program launched into this console before ExitVDM); these hold it. */
-extern char csrss_next_app[1024], csrss_next_cmd[1024], csrss_next_cur[512];
-extern HANDLE csrss_next_std[3];
+extern CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE], g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE],
+            g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+extern HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];
 /* ExitVDM(FALSE, 0): a DOS VDM leaving its console. Separate so a hang in either
    call names itself in the log. */
-BOOL csrss_exit_vdm(void);
+BOOL CsrssExitVdm(VOID);
 
-#endif /* VDM_CSRSS_H */
+#endif /* NTVDMEX_VDM_CSRSS_H */
