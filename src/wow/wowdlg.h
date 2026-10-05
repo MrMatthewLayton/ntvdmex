@@ -343,12 +343,14 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         DWORD proc = 0;
         WORD  arg[5];
         WORD  msg, wparam;
+        WORD  tgt;                      /* s93: the window the call is FOR */
         DWORD lparam;
         int   absent = 0;
         int   verdict;
 
         if (!d) return 0;
         w = wowuser_findwin(d->hwnd);
+        tgt = d->hwnd;
 
         /* ── ★★★ THE FOUR EXITS ARE ONE DECISION, AND IT IS A TESTED FUNCTION.
              `wowconv_modal_exit` in wowconv.h is total -- every combination of
@@ -594,6 +596,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                     continue;            /* nowhere to put it; take the next one */
                 }
                 proc = tp;
+                tgt  = m.hwnd;
             }
             wu_puts(note, cap, &k, "MODAL 0x");
             wu_puthex(note, cap, &k, d->hwnd, 4);
@@ -608,11 +611,17 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
              window and dialog procedure takes -- wowuser_want_msg builds the
              same block for DispatchMessage, and this is that block built by
              hand because there is no service frame here to hang it on. */
-        arg[0] = d->hwnd;               /* ⚠ THE DIALOG'S handle, always: a
-                                             dialog procedure is called with the
-                                             dialog, and a control's own message
-                                             arrives at the dialog carrying the
-                                             control in lParam. */
+        /* ⚠ THE DIALOG'S handle for the dialog's own messages: a dialog procedure
+             is called with the dialog, and a control's own message arrives at the
+             dialog carrying the control in lParam.
+           ★ s93: BUT ANOTHER WINDOW'S MESSAGE CARRIES THAT WINDOW. This said "the
+             dialog's handle, always" -- so TERMINAL's own WM_PAINT, arriving while its
+             "Default Serial Port" dialog was up, reached Terminal's procedure with the
+             DIALOG's hwnd: Terminal's client was never painted (the desktop showed
+             through, the user's "captures the desktop") and the dialog was painted
+             with Terminal's code. The right procedure was already looked up per
+             window; the handle has to travel with it. */
+        arg[0] = tgt;
         arg[1] = msg;
         arg[2] = wparam;
         arg[3] = (WORD)(lparam >> 16);
@@ -629,7 +638,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         if (!rsel || !ssbase
             || !wowcall_enter(tib, ssbase, rsel, proc, d->ds, arg, 5,
                               /* retlin */ 0, WOWCALL_RET_KEEP, NULL,
-                              d->hwnd, msg, NULL, 0, -1, absent)) {
+                              tgt, msg, NULL, 0, -1, absent)) {
             /* The call could not be made -- depth, or no return selector. That
                is not a reason to spin: without a call there is no EndDialog. */
             ++g_wd_refused;

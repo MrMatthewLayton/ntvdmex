@@ -290,6 +290,52 @@ static int g_ww_nsending;
    so inside it the relay SENDS the paint (see WM_PAINT below). */
 static int g_ww_sizemove;
 static unsigned g_ww_paintlog;
+/* ── s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
+     comes from TranslateMessage, which the program calls -- or does not, for a key it
+     handles itself. Win32 had already translated every key on this thread, and the
+     relay posted that WM_CHAR unconditionally: WRITE handles Backspace in WM_KEYDOWN
+     and never translates it, so it ALSO received a WM_CHAR 08h and inserted it -- the
+     user's "Backspace enters a square". So a WM_CHAR is held here and released by the
+     guest's own TranslateMessage on the matching key-down (same window, same scan
+     code), into the queue where Win16's TranslateMessage would post it. 16 held,
+     oldest overwritten: a program that never translates loses nothing it would have
+     had on Win16. */
+#define WOWWIN_PCHAR 16
+static struct { WORD h16, ch; DWORD lp; DWORD seq; } g_ww_pchar[WOWWIN_PCHAR];
+static DWORD g_ww_pchar_seq;
+static void wowwin_hold_char(WORD h16, WORD ch, DWORD lp)
+{
+    int i, o = 0;
+    for (i = 0; i < WOWWIN_PCHAR; ++i) {
+        if (!g_ww_pchar[i].seq) { o = i; break; }
+        if (g_ww_pchar[i].seq < g_ww_pchar[o].seq) o = i;
+    }
+    g_ww_pchar[o].h16 = h16; g_ww_pchar[o].ch = ch; g_ww_pchar[o].lp = lp;
+    g_ww_pchar[o].seq = ++g_ww_pchar_seq;
+}
+/* Post, oldest first, every held character for this key-down; returns how many. */
+static int wowwin_release_chars(WORD h16, DWORD keylp)
+{
+    int n = 0;
+    for (;;) {
+        int i, best = -1;
+        for (i = 0; i < WOWWIN_PCHAR; ++i)
+            if (g_ww_pchar[i].seq && g_ww_pchar[i].h16 == h16
+                && ((g_ww_pchar[i].lp >> 16) & 0xFF) == ((keylp >> 16) & 0xFF)
+                && (best < 0 || g_ww_pchar[i].seq < g_ww_pchar[best].seq)) best = i;
+        if (best < 0) return n;
+        wowmsg_post(h16, 0x0102, g_ww_pchar[best].ch, g_ww_pchar[best].lp,
+                    GetTickCount(), 0, 0);
+        g_ww_pchar[best].seq = 0;
+        ++n;
+    }
+}
+
+/* s93: the guest's SetFocus calls, counted, and the real window of the last one --
+   so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h). */
+static unsigned g_ww_setfocus_n;
+static HWND     g_ww_setfocus_h32;
+
 static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx, WORD pty)
 {
     WORD r;
@@ -312,6 +358,21 @@ static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx,
     }
     wowmsg_post(h16, msg, wp, lp, GetTickCount(), ptx, pty);
 }
+/* The default procedure this window needs -- frame, MDI child, or plain; see the
+   note at the end of wowwin_proc. */
+static LRESULT wowwin_defproc(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (h16) {
+        wowuser_win_t *w = wowuser_findwin(h16);
+        if (w) {
+            HWND cli = wowuser_mdiclient_of(w);
+            if (cli) return DefFrameProcA(h, cli, msg, wp, lp);
+            if (wowuser_is_mdichild(w)) return DefMDIChildProcA(h, msg, wp, lp);
+        }
+    }
+    return DefWindowProcA(h, msg, wp, lp);
+}
+
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
@@ -325,7 +386,10 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     ptx = (WORD)(short)wwpt.x;
     pty = (WORD)(short)wwpt.y;
     switch (msg) {
-    case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR:
+    case WM_CHAR:
+        if (h16) { wowwin_hold_char(h16, (WORD)wp, (DWORD)lp); return 0; }
+        break;
+    case WM_KEYDOWN: case WM_KEYUP:
         /* ★ RELAYED VERBATIM. Win16 and Win32 agree on the message number, on
              wParam being the virtual key, and on the lParam bit field -- Win32
              inherited all three -- so the honest thing is to hand across exactly
@@ -637,12 +701,43 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (h16) wowwin_send_or_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, ptx, pty);
         break;
     case WM_ACTIVATE:
-        if (h16) wowwin_send_or_post(h16, (WORD)msg, LOWORD(wp),
-                                     ((DWORD)(HIWORD(wp) ? 1 : 0) << 16)
-                                     | wowwin_hwnd16((HWND)lp), ptx, pty);
+        if (h16) {
+            unsigned n0 = g_ww_setfocus_n;
+            wowwin_send_or_post(h16, (WORD)msg, LOWORD(wp),
+                                ((DWORD)(HIWORD(wp) ? 1 : 0) << 16)
+                                | wowwin_hwnd16((HWND)lp), ptx, pty);
+            /* ── s93: A PROGRAM THAT PLACES THE FOCUS ITSELF KEEPS IT. Win32's
+                 DefWindowProc gives an activated window the focus -- after WRITE's
+                 own WM_ACTIVATE had just put it on its document window, so every
+                 key went to the frame, which ignores them: the user typed into Write
+                 and nothing appeared. If the program called SetFocus while handling
+                 this, the default still runs (caption, z-order) and the focus goes
+                 back where the program put it. */
+            if (LOWORD(wp) != WA_INACTIVE && g_ww_setfocus_n != n0
+                && g_ww_setfocus_h32 && g_ww_setfocus_h32 != h
+                && IsChild(h, g_ww_setfocus_h32)) {
+                LRESULT r = wowwin_defproc(h, h16, msg, wp, lp);
+                SetFocus(g_ww_setfocus_h32);
+                return r;
+            }
+        }
         break;
     case WM_ACTIVATEAPP:
         if (h16) wowwin_send_or_post(h16, (WORD)msg, (WORD)(wp ? 1 : 0), 0, ptx, pty);
+        break;
+    /* ── s93: WM_MDIACTIVATE, TO THE CHILD -- AND THE TWO PACKINGS DIFFER. Win32 gives
+         the child (wParam = the one losing, lParam = the one gaining); Win16 gives it
+         (wParam = TRUE if IT is gaining, lParam = MAKELONG(gaining, losing)). It was
+         not relayed at all, so SYSEDIT -- which keeps "the active file" from this
+         message and greys File > Save, Print... without one -- had Save greyed for
+         good: the user's "Save is disabled". SENT, as Windows sends it. */
+    case WM_MDIACTIVATE:
+        if (h16) {
+            WORD gain = lp ? wowwin_hwnd16((HWND)lp) : 0;
+            WORD lose = wp ? wowwin_hwnd16((HWND)wp) : 0;
+            wowwin_send_or_post(h16, (WORD)msg, (WORD)((HWND)lp == h ? 1 : 0),
+                                ((DWORD)lose << 16) | gain, ptx, pty);
+        }
         break;
     case WM_MENUSELECT:
         if (h16) wowwin_send_or_post(h16, (WORD)msg, LOWORD(wp),
@@ -838,15 +933,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     /* #294: a Find/Replace dialog's notification ("commdlg_FindReplace") to its
          owner -- relayed with the guest's own FINDREPLACE pointer. */
     if (h16 && msg >= 0xC000 && wowcdlg_relay(msg, lp)) return 0;
-    if (h16) {
-        wowuser_win_t *w = wowuser_findwin(h16);
-        if (w) {
-            HWND cli = wowuser_mdiclient_of(w);
-            if (cli) return DefFrameProcA(h, cli, msg, wp, lp);
-            if (wowuser_is_mdichild(w)) return DefMDIChildProcA(h, msg, wp, lp);
-        }
-    }
-    return DefWindowProcA(h, msg, wp, lp);
+    return wowwin_defproc(h, h16, msg, wp, lp);
 }
 
 /*

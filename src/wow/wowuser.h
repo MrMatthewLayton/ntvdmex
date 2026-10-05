@@ -3233,6 +3233,7 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
              the guest is the WIN16 WM_CREATE requested below. */
         if (c->reg32 && w->hwnd32) {
             MDICREATESTRUCTA mcs;
+            HWND prev32 = (HWND)(ULONG_PTR)SendMessageA(w->hwnd32, WM_MDIGETACTIVE, 0, 0);
             ZeroMemory(&mcs, sizeof mcs);
             mcs.szClass = c->cls32;
             mcs.szTitle = ch->text;
@@ -3261,6 +3262,19 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                    second). The real client did not activate it here -- the frame
                    is hidden at this point in the probe and in most programs. */
                 SendMessageA(w->hwnd32, WM_MDIACTIVATE, (WPARAM)ch->hwnd32, 0);
+                /* ── s93: AND THE CHILD IS TOLD. Win32's client activated it INSIDE the
+                     WM_MDICREATE above, before ch->hwnd32 was known, so the relay had no
+                     Win16 handle for it and the WM_MDIACTIVATE was dropped -- and the
+                     SendMessage just above changes nothing (it is already active). Win16
+                     tells the old child it lost and the new one it gained, after
+                     WM_CREATE; SYSEDIT enables File > Save only for an active file, so
+                     without this it was greyed for good. Posted, so WM_CREATE (armed
+                     below) runs first. */
+                {   WORD prev16 = prev32 ? wowwin_hwnd16(prev32) : 0;
+                    DWORD lpa = ((DWORD)prev16 << 16) | ch->hwnd;
+                    if (prev16) wowmsg_post(prev16, 0x0222, 0, lpa, GetTickCount(), 0, 0);
+                    wowmsg_post(ch->hwnd, 0x0222, 1, lpa, GetTickCount(), 0, 0);
+                }
             }
         }
         wu_puts(note, notecap, &k, "WM_MDICREATE ");
@@ -5681,12 +5695,18 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         volatile BYTE *lp = wow32_argptr(f, TA_ARG_LPMSG);
         wowmsg_t m;
         int k = 0;
+        int n = 0;
         wu_puts(note, notecap, &k, "TranslateMessage msg=0x");
         if (lp) { wowmsg_read(lp, &m); wu_puthex(note, notecap, &k, m.msg, 4); }
         else      wu_puts(note, notecap, &k, "?");
-        wu_puts(note, notecap, &k, " -> 0: this host produces no WM_CHAR (no"
-                                   " keyboard state to translate with)");
-        wow32_setret(f, 0);
+        /* s93: the characters Win32 already made for this key are HELD (wowwin.h,
+           wowwin_hold_char) and released here -- the OS's own translation, with the
+           keyboard state it keeps, delivered only when the program asks. */
+        if (lp && m.msg == 0x0100) n = wowwin_release_chars(m.hwnd, m.lparam);
+        wu_puts(note, notecap, &k, n ? " -> 1: the OS's WM_CHAR for this key released"
+                                         " into the queue"
+                                       : " -> 0: no character for this key");
+        wow32_setret(f, n ? 1 : 0);
         return 1;
     }
 
@@ -6268,6 +6288,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              the real SetFocus creates one -- a window the OS has not focused is a
              window with no cursor blinking in it, however right our own table is. */
         if (w && w->hwnd32) SetFocus(w->hwnd32);
+        ++g_ww_setfocus_n;                     /* s93: see WM_ACTIVATE in wowwin.h */
+        g_ww_setfocus_h32 = w ? w->hwnd32 : NULL;
         wu_puts(note, notecap, &k, " (was 0x");
         wu_puthex(note, notecap, &k, prev, 4);
         wu_puts(note, notecap, &k, ") -- keyboard messages now go here");
