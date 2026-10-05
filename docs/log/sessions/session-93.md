@@ -52,9 +52,15 @@ Terminal, Program Manager, Recorder and Packager, plus Lemmings' sensitivity (#2
 - **Shelf 16/16** from build X on (Terminal now closes -- its first-run dialog no longer
   appears once a port is saved).
 
+## DOS unchanged (gdos gate, interleaved)
+
+Q (s92 baseline) vs AB (s93 head), runs/s93/g17: Skyroads n8 0x1d/0x18 vs 0x1b/0x12 (one
+earlier single run read 0x2b -- a first run, not evidence), Doom 50/60 s sounding on all
+four, ZAR 66/70, 65/69, 66/70, 66/70 sounding. Rig `bin\` left = AB (b14633be).
+
 ## Open (filed or noted)
 
-- Program Manager's keyboard menus (Alt, F, N) do nothing from a group window; mouse works.
-- Terminal: ours shows the function-key bar and no caret where stock shows a caret, no bar.
+- #319 Program Manager's keyboard menus (Alt, F, N) do nothing from a group window; mouse works.
+- #320 Terminal: ours shows the function-key bar and no caret where stock shows a caret, no bar.
 - A nested-run #SS at 0b97:0138 (Terminal's first-run OK; the user's Program Manager): the
   NESTED EXC line now names SS:SP and the call -- the next occurrence will say why.
