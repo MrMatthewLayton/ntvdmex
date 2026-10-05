@@ -194,6 +194,7 @@ static int wowdlg_pump(int budget, int *trace)
             tq = zput(tq, "\r\n");
             log_append(LOG_PATH, tb, tq);
         }
+        if (wowwin_tt_fire(&m)) { ++n; ++g_ww_pumped; continue; }   /* s93 */
         /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
              dialog Tab / Shift+Tab between its controls, Enter = the default button and
              Esc = IDCANCEL -- without the program asking. This loop dispatched keys raw,
@@ -204,6 +205,17 @@ static int wowdlg_pump(int budget, int *trace)
              dialog or one of its children. */
         if (m.message >= WM_KEYFIRST && m.message <= WM_KEYLAST && g_wd_depth > 0) {
             HWND dlg = wowuser_hwnd32(g_wd[g_wd_depth - 1].hwnd);
+            /* ── s93: A KEY FOR THE DIALOG WINDOW ITSELF belongs to a control -- a
+                 dialog with controls never holds the focus (DefDlgProc passes it on).
+                 Ours could end up holding it (Program Item Properties: the first
+                 letters typed vanished, measured); the key and the focus go to the
+                 control that last had it, else the first tab stop. */
+            if (dlg && m.hwnd == dlg && m.message == WM_KEYDOWN) {
+                HWND sv = (HWND)GetPropA(dlg, "NTVDMEX16.DlgFocus");
+                if (!sv || !IsWindow(sv) || !IsChild(dlg, sv))
+                    sv = GetNextDlgTabItem(dlg, NULL, FALSE);
+                if (sv && sv != dlg) { SetFocus(sv); m.hwnd = sv; }
+            }
             if (dlg && IsWindow(dlg) && (m.hwnd == dlg || IsChild(dlg, m.hwnd))
                 && IsDialogMessageA(dlg, &m)) {
                 ++n; ++g_ww_pumped;
@@ -459,6 +471,29 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                 wu_puthex(note, cap, &k, d->hwnd, 4);
                 wu_puts(note, cap, &k, " SHOWN (WM_INITDIALOG is done, so the"
                                        " dialog appears where it put itself). ");
+                /* ── s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
+                     procedure placed it itself (it then returns FALSE, and the focus
+                     is already inside the dialog). The note above assumed this was
+                     the case we were in; the rig said otherwise: Program Manager's
+                     "Program Item Properties" kept the focus on the dialog window,
+                     so the first keys typed were lost and Tab only then reached
+                     Description. WM_NEXTDLGCTL is the dialog manager's own way in,
+                     and selects an edit's text as DialogBox does. */
+                {   HWND fo = GetFocus();
+                    if (!fo || fo == w->hwnd32 || !IsChild(w->hwnd32, fo)) {
+                        HWND first = GetNextDlgTabItem(w->hwnd32, NULL, FALSE);
+                        if (first) {
+                            /* ⚠ NOT WM_NEXTDLGCTL: only the real DefDlgProc acts on
+                                 it, and this window runs OUR procedure (see #32770
+                                 in wowuser.h) -- measured, it did nothing. */
+                            char fcn[16];
+                            SetFocus(first);
+                            if (GetClassNameA(first, fcn, sizeof fcn) && !lstrcmpiA(fcn, "Edit"))
+                                SendMessageA(first, EM_SETSEL, 0, -1);
+                            wu_puts(note, cap, &k, "Focus -> its first tab stop. ");
+                        }
+                    }
+                }
             }
             /* ── ★★ WAIT FOR SOMETHING TO HAPPEN, WHICH IS WHAT MODAL MEANS.
                  The dialog's controls are real Win32 windows on this thread, so

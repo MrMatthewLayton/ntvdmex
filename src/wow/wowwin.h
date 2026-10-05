@@ -331,6 +331,47 @@ static int wowwin_release_chars(WORD h16, DWORD keylp)
     }
 }
 
+/* ── s93: TIMERS WITH NO WINDOW. Win16's SetTimer(NULL, 0, ms, proc) is legal and
+     common in a program that has no window of its own to time with -- RECORDER, while
+     recording, times itself this way, and was answered 0 ("refused"). Win32 has the
+     same thing: a THREAD timer, whose WM_TIMER arrives with hwnd NULL. The pumps turn
+     that into a Win16 WM_TIMER with hwnd 0, the timer's id in wParam and the TIMERPROC
+     in lParam -- exactly what Win16 queues -- and DispatchMessage calls the proc. */
+#define WOWWIN_TT 16
+static struct { UINT_PTR id32; DWORD proc; } g_ww_tt[WOWWIN_TT];
+static int wowwin_tt_add(UINT_PTR id32, DWORD proc)
+{
+    int i;
+    for (i = 0; i < WOWWIN_TT; ++i)
+        if (!g_ww_tt[i].id32 || g_ww_tt[i].id32 == id32) {
+            g_ww_tt[i].id32 = id32; g_ww_tt[i].proc = proc; return 1;
+        }
+    return 0;
+}
+static int wowwin_tt_kill(UINT_PTR id32)
+{
+    int i;
+    for (i = 0; i < WOWWIN_TT; ++i)
+        if (g_ww_tt[i].id32 == id32) { g_ww_tt[i].id32 = 0; g_ww_tt[i].proc = 0; return 1; }
+    return 0;
+}
+/* A Win32 thread WM_TIMER: 1 if it was one of ours (and is now queued for the guest). */
+static int wowwin_tt_fire(const MSG *m)
+{
+    int i;
+    if (m->message != WM_TIMER || m->hwnd) return 0;
+    for (i = 0; i < WOWWIN_TT; ++i)
+        if (g_ww_tt[i].id32 && g_ww_tt[i].id32 == m->wParam) {
+            /* one pending per timer, as Windows coalesces them */
+            wowmsg_post_move(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0)
+                || wowmsg_post(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0);
+            return 1;
+        }
+    return 0;
+}
+
+static int wowuser_is_dialog16(WORD h16);        /* wowuser.h: a dialog procedure? */
+
 /* s93: the guest's SetFocus calls, counted, and the real window of the last one --
    so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h). */
 static unsigned g_ww_setfocus_n;
@@ -720,7 +761,33 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 SetFocus(g_ww_setfocus_h32);
                 return r;
             }
+            /* ── s93: A DIALOG KEEPS ITS CONTROL'S FOCUS ACROSS ACTIVATION, as
+                 DefDlgProc does (it saves the focus on deactivation and restores it
+                 on activation). Our dialogs are our own class on DefWindowProc, which
+                 gives the focus to the dialog WINDOW -- so Program Manager's "Program
+                 Item Properties" had its keys going to the dialog itself: the first
+                 typed letters vanished and Tab only then reached a control. */
+            {   if (wowuser_is_dialog16(h16)) {
+                    if (LOWORD(wp) == WA_INACTIVE) {
+                        HWND fo = GetFocus();
+                        if (fo && IsChild(h, fo)) SetPropA(h, "NTVDMEX16.DlgFocus", (HANDLE)fo);
+                    } else {
+                        LRESULT r = wowwin_defproc(h, h16, msg, wp, lp);
+                        HWND fo = GetFocus();
+                        if (!fo || fo == h || !IsChild(h, fo)) {
+                            HWND sv = (HWND)GetPropA(h, "NTVDMEX16.DlgFocus");
+                            if (!sv || !IsWindow(sv) || !IsChild(h, sv))
+                                sv = GetNextDlgTabItem(h, NULL, FALSE);
+                            if (sv) SetFocus(sv);
+                        }
+                        return r;
+                    }
+                }
+            }
         }
+        break;
+    case WM_NCDESTROY:
+        RemovePropA(h, "NTVDMEX16.DlgFocus");          /* s93: see WM_ACTIVATE */
         break;
     case WM_ACTIVATEAPP:
         if (h16) wowwin_send_or_post(h16, (WORD)msg, (WORD)(wp ? 1 : 0), 0, ptx, pty);
@@ -786,6 +853,18 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (msg == WM_SIZE) wowwin_send_or_post(h16, (WORD)msg, wp16, (DWORD)lp, ptx, pty);
             else wowmsg_post(h16, (WORD)msg, wp16, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
+            /* ── s93: A DIALOG PASSES THE FOCUS ON, as DefDlgProc does on
+                 WM_SETFOCUS -- to the control that last had it, else its first tab
+                 stop. A dialog window with controls never keeps the focus itself;
+                 ours did (DefWindowProc), so Program Manager's Program Item
+                 Properties took the first typed letters into nothing and its Tab
+                 went to IsDialogMessage with no control focused. */
+            if (msg == WM_SETFOCUS && wowuser_is_dialog16(h16)) {
+                HWND sv = (HWND)GetPropA(h, "NTVDMEX16.DlgFocus");
+                if (!sv || !IsWindow(sv) || !IsChild(h, sv))
+                    sv = GetNextDlgTabItem(h, NULL, FALSE);
+                if (sv && sv != h) { SetFocus(sv); return 0; }
+            }
         }
         break;
     /* ── ★★★ WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) ──────
@@ -960,6 +1039,7 @@ static int wowwin_pump(int budget)
     ++g_ww_pumpcalls;
     while (n < budget && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
         ++n; ++g_ww_pumped;
+        if (wowwin_tt_fire(&m)) continue;          /* s93: a windowless Win16 timer */
         if (wowcdlg_isdlgmsg(&m)) continue;        /* #294: Find dialog's Tab/Enter */
         TranslateMessage(&m);
         DispatchMessageA(&m);

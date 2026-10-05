@@ -27844,7 +27844,20 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
         lp = zput(lp, " err=0x"); lp = zhex(lp, fr[2]);
         lp = zput(lp, " at 0x"); lp = zhex(lp, fr[4]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[3]);
         lp = zput(lp, " -> client handler 0x"); lp = zhex(lp, g_pm_exc[exc].sel);
-        lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_exc[exc].off); lp = zput(lp, "\r\n");
+        lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_exc[exc].off);
+        /* s93: a stack fault is about SS:SP -- say them, and the limit, and which
+           nested call was running (Terminal and Program Manager both took #SS here). */
+        lp = zput(lp, " ss:sp=0x"); lp = zhex(lp, fr[7]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[6]);
+        if ((fr[7] >> 3) < DPMI_LDT_MAX) {
+            lp = zput(lp, " ss.limit=0x"); lp = zhex(lp, g_ldt[fr[7] >> 3].limit);
+        }
+        if (g_wc_depth > 0) {
+            lp = zput(lp, " call hwnd=0x"); lp = zhex(lp, g_wc[g_wc_depth - 1].hwnd);
+            lp = zput(lp, " msg=0x"); lp = zhex(lp, g_wc[g_wc_depth - 1].msg);
+            lp = zput(lp, " depth=0x"); lp = zhex(lp, (DWORD)g_wc_depth);
+        }
+        lp = zput(lp, " nested=0x"); lp = zhex(lp, (DWORD)g_ww_nested);
+        lp = zput(lp, "\r\n");
         log_append(LOG_PATH, lb, lp);
         return 1;
     }

@@ -840,6 +840,13 @@ static WORD g_wu_clipfmt;           /* SetClipboardData's format, for the put */
 #define WOWUSER_DELETEMENU           0x019d
 #define WOWUSER_GETWINDOWPLACEMENT   0x0172
 #define WOWUSER_UNHOOKWINDOWSHOOK    0x00ea
+/* s93: USER.121 SetWindowsHook's thunk -- 8 bytes, read off USER seg1:0x6e42..0x6e57:
+   push hModule (GetExePtr of the proc), push nFilterType, push lpfn (seg, off);
+   its DX:AX is what SetWindowsHook returns ("the previous hook"). */
+#define WOWUSER_SETWINDOWSHOOK       0x0079
+#define SWH_ARG_PROC   0
+#define SWH_ARG_ID     4
+#define SWH_ARG_HMOD   6
 #define WOWUSER_DEFHOOKPROC          0x00eb
 #define WOWUSER_SYSTEMPARAMETERSINFO 0x01e3
 
@@ -1312,6 +1319,145 @@ static int            g_wu_nprop = 0;
    the dispatcher already reads at every BOP for the log -- this just keeps the
    last value where `GetWindowTask` can see it. 0 until the first BOP. */
 static WORD g_wu_curtask = 0;
+
+/* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
+     Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
+     through the nested run, with the procedure's own DS (its module's DGROUP). */
+static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
+                              WORD hwnd, WORD msg, WORD *res,
+                              BYTE *blob, int blobn, int blobarg,
+                              const int *fix, int nfix);
+#define WOWUSER_HOOKS 8
+static struct { short id; DWORD proc; WORD ds; HHOOK h32; } g_wu_hooks[WOWUSER_HOOKS];
+
+static int wowuser_hook_find(short id)
+{
+    int i;
+    for (i = 0; i < WOWUSER_HOOKS; ++i)
+        if (g_wu_hooks[i].proc && g_wu_hooks[i].id == id) return i;
+    return -1;
+}
+/* code, wParam, lParam -> the 16-bit procedure; lParam may be a 10-byte EVENTMSG
+   blob (Win16: message, paramL, paramH WORDs, then a DWORD time). */
+static int wowuser_hook_call(int i, int code, WORD wp, DWORD lp, BYTE *ev, WORD *res)
+{
+    WORD a[4];
+    a[0] = (WORD)code; a[1] = wp;
+    a[2] = (WORD)(lp >> 16); a[3] = (WORD)lp;
+    return wow_call16_sync_ex(g_wu_hooks[i].proc, g_wu_hooks[i].ds, a, 4, 0, 0, res,
+                              ev, ev ? 10 : 0, ev ? 2 : -1, NULL, 0);
+}
+static void wowuser_ev_to16(const EVENTMSG *e, BYTE *b)
+{
+    b[0] = (BYTE)e->message; b[1] = (BYTE)(e->message >> 8);
+    b[2] = (BYTE)e->paramL;  b[3] = (BYTE)(e->paramL >> 8);
+    b[4] = (BYTE)e->paramH;  b[5] = (BYTE)(e->paramH >> 8);
+    b[6] = (BYTE)e->time; b[7] = (BYTE)(e->time >> 8);
+    b[8] = (BYTE)(e->time >> 16); b[9] = (BYTE)(e->time >> 24);
+}
+static LRESULT CALLBACK wowuser_hook_kbd(int code, WPARAM wp, LPARAM lp)
+{
+    int i = wowuser_hook_find(2);
+    WORD r = 0;
+    if (code >= 0 && i >= 0 && wowuser_hook_call(i, code, (WORD)wp, (DWORD)lp, NULL, &r) && r)
+        return 1;                                      /* the program swallowed it */
+    return CallNextHookEx(NULL, code, wp, lp);
+}
+/* ⚠ ONE AT A TIME, IN ORDER. The nested run that calls the program pumps Win32
+     messages, and each input event retrieved there calls this hook again -- measured
+     six deep on the rig, which reaches the nesting limit and drops events. So an
+     event that arrives while one is being recorded is queued and handed over, in
+     order, when the outer call returns. */
+#define WOWUSER_JREC_Q 64
+static BYTE g_wu_jq[WOWUSER_JREC_Q][10];
+static int  g_wu_jq_n, g_wu_jrec_busy;
+static LRESULT CALLBACK wowuser_hook_jrec(int code, WPARAM wp, LPARAM lp)
+{
+    int i = wowuser_hook_find(0);
+    if (code == HC_ACTION && lp && i >= 0) {
+        BYTE b[10];
+        WORD r = 0;
+        int q;
+        wowuser_ev_to16((const EVENTMSG *)lp, b);
+        if (g_wu_jrec_busy) {
+            if (g_wu_jq_n < WOWUSER_JREC_Q) memcpy(g_wu_jq[g_wu_jq_n++], b, 10);
+            return CallNextHookEx(NULL, code, wp, lp);
+        }
+        g_wu_jrec_busy = 1;
+        wowuser_hook_call(i, code, (WORD)wp, 0, b, &r);
+        for (q = 0; q < g_wu_jq_n; ++q) {          /* those that came in meanwhile */
+            BYTE c[10];
+            memcpy(c, g_wu_jq[q], 10);
+            if ((i = wowuser_hook_find(0)) < 0) break;   /* unhooked meanwhile */
+            wowuser_hook_call(i, HC_ACTION, 0, 0, c, &r);
+        }
+        g_wu_jq_n = 0;
+        g_wu_jrec_busy = 0;
+    } else if (code >= 0 && i >= 0 && !g_wu_jrec_busy) {
+        WORD r = 0;
+        wowuser_hook_call(i, code, (WORD)wp, 0, NULL, &r);   /* HC_SYSMODALON/OFF */
+    }
+    return CallNextHookEx(NULL, code, wp, lp);
+}
+static LRESULT CALLBACK wowuser_hook_jplay(int code, WPARAM wp, LPARAM lp)
+{
+    int i = wowuser_hook_find(1);
+    if (code >= 0 && i >= 0) {
+        BYTE b[10] = { 0 };
+        WORD r = 0;
+        if (code == HC_GETNEXT && lp) {
+            EVENTMSG *e = (EVENTMSG *)lp;
+            if (wowuser_hook_call(i, code, (WORD)wp, 0, b, &r)) {
+                e->message = (UINT)(b[0] | (b[1] << 8));
+                e->paramL  = (UINT)(b[2] | (b[3] << 8));
+                e->paramH  = (UINT)(b[4] | (b[5] << 8));
+                e->time    = (DWORD)b[6] | ((DWORD)b[7] << 8) | ((DWORD)b[8] << 16)
+                           | ((DWORD)b[9] << 24);
+                e->hwnd    = NULL;
+                return (LRESULT)r;                     /* the delay before it */
+            }
+            return 0;
+        }
+        wowuser_hook_call(i, code, (WORD)wp, 0, NULL, &r);
+        return 0;
+    }
+    return CallNextHookEx(NULL, code, wp, lp);
+}
+static int wowuser_hook_unset(short id, DWORD proc);
+/* 1 = installed, 2 = a kind not run here (recorded), 0 = refused. */
+static int wowuser_hook_set(short id, DWORD proc, WORD ds)
+{
+    int i, slot = -1;
+    HOOKPROC hp = NULL;
+    int kind32 = 0;
+    for (i = 0; i < WOWUSER_HOOKS; ++i) if (!g_wu_hooks[i].proc) { slot = i; break; }
+    if (slot < 0 || !proc) return 0;
+    if (wowuser_hook_find(id) >= 0) wowuser_hook_unset(id, g_wu_hooks[wowuser_hook_find(id)].proc);
+    switch (id) {
+    case 0: hp = wowuser_hook_jrec;  kind32 = WH_JOURNALRECORD;   break;
+    case 1: hp = wowuser_hook_jplay; kind32 = WH_JOURNALPLAYBACK; break;
+    case 2: hp = wowuser_hook_kbd;   kind32 = WH_KEYBOARD;        break;
+    default: break;
+    }
+    g_wu_hooks[slot].id = id; g_wu_hooks[slot].proc = proc; g_wu_hooks[slot].ds = ds;
+    g_wu_hooks[slot].h32 = NULL;
+    if (!hp) return 2;
+    g_wu_hooks[slot].h32 = SetWindowsHookExA(kind32, hp, GetModuleHandleA(NULL),
+                                             kind32 == WH_KEYBOARD ? GetCurrentThreadId() : 0);
+    if (!g_wu_hooks[slot].h32) { g_wu_hooks[slot].proc = 0; return 0; }
+    return 1;
+}
+static int wowuser_hook_unset(short id, DWORD proc)
+{
+    int i;
+    for (i = 0; i < WOWUSER_HOOKS; ++i)
+        if (g_wu_hooks[i].proc && g_wu_hooks[i].id == id && (!proc || g_wu_hooks[i].proc == proc)) {
+            if (g_wu_hooks[i].h32) UnhookWindowsHookEx(g_wu_hooks[i].h32);
+            g_wu_hooks[i].proc = 0; g_wu_hooks[i].h32 = NULL;
+            return 1;
+        }
+    return 0;
+}
 
 /* ── s92 (#306): WHOSE FILE A RESOURCE IS IN. Every menu, icon, cursor and
      accelerator table used to be read from g_wow_cmd_prog, the program on the
@@ -2254,6 +2400,15 @@ static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
 static int           g_wu_nwin = 0;
 /* s92 (#306): the hTask an EnumTaskWindows walk is for (wowenum.h); 0 = any. */
 static WORD          g_wu_enumtask = 0;
+
+/* s93: is this one of our windows driven by a DIALOG procedure? (wowwin.h) */
+static int wowuser_is_dialog16(WORD h16)
+{
+    int i;
+    for (i = 0; i < g_wu_nwin; ++i)
+        if (g_wu_win[i].hwnd == h16) return g_wu_win[i].dlgproc != 0;
+    return 0;
+}
 
 /* s92 (#306): whose queue a window's messages are in -- wowmsg.h's g_wm_owner. */
 static WORD wowuser_owner16(WORD hwnd)
@@ -4629,7 +4784,35 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             w->menuitems = nitems;
             rc.left = w->x; rc.top = w->y;
             rc.right = w->x + w->cx; rc.bottom = w->y + w->cy;
+            /* ── s93: A POPUP DIALOG'S POSITION IS RELATIVE TO ITS OWNER'S CLIENT
+                 AREA unless the template says DS_ABSALIGN (01h) -- Windows' rule,
+                 Win16's and Win32's alike. Taken as screen coordinates, Program
+                 Manager's "New Program Object" opened at (32,4) where stock puts it
+                 at (193,286), over Program Manager. (TERMINAL looked right only
+                 because it re-centres itself in WM_INITDIALOG.) Kept on the screen
+                 afterwards, as DialogBox does. */
+            int   ownrel = 0;               /* s93: placed relative to the owner */
+            POINT ownpt = { 0, 0 };
+            if (!(style & WS_CHILD16) && !(style & 0x01) && parent32 && !usedef) {
+                POINT o = { 0, 0 };
+                RECT  wa;
+                ownrel = 1;
+                ClientToScreen(parent32, &o);
+                OffsetRect(&rc, o.x, o.y);
+                if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+                    int ww = w->cx, wh = w->cy;
+                    if (rc.left + ww > wa.right)  OffsetRect(&rc, wa.right - (rc.left + ww), 0);
+                    if (rc.top + wh > wa.bottom)  OffsetRect(&rc, 0, wa.bottom - (rc.top + wh));
+                    if (rc.left < wa.left) OffsetRect(&rc, wa.left - rc.left, 0);
+                    if (rc.top < wa.top)   OffsetRect(&rc, 0, wa.top - rc.top);
+                }
+                ownpt.x = rc.left; ownpt.y = rc.top;
+            }
             AdjustWindowRect(&rc, style, hm != NULL);
+            /* ...and the template's point is the WINDOW's corner, frame included:
+               measured, stock puts Program Manager's dialogs exactly the border and
+               caption further down-right than the client-rect placement did. */
+            if (ownrel) OffsetRect(&rc, ownpt.x - rc.left, ownpt.y - rc.top);
             /* ── ★★★★★ A MODAL DIALOG IS CREATED HIDDEN AND SHOWN AFTERWARDS.
                  (session 57) Real USER creates the dialog window, sends
                  WM_INITDIALOG, and only THEN shows it -- and the order is not a
@@ -5456,6 +5639,30 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, m.hwnd, 4);
         wu_puts(note, notecap, &k, " msg=0x");
         wu_puthex(note, notecap, &k, m.msg, 4);
+        if (!m.hwnd && m.msg == WM_TIMER16 && m.lparam && f->cbok) {
+            /* s93: a windowless timer's TIMERPROC, called (NULL, WM_TIMER, id, time);
+               its DS comes from its MakeProcInstance thunk (AX), the task's own
+               instance is passed for a procedure that reads DS instead. */
+            WORD ds = 0;
+            DWORD tb = (g_wu_curtask && g_wu_curtask != 0xFFFF) ? dpmi_sel_base(g_wu_curtask) : 0;
+            if (tb) { const volatile BYTE *t = (const volatile BYTE *)(ULONG_PTR)tb;
+                      ds = (WORD)(t[0x1c] | (t[0x1d] << 8)); }
+            wu_puts(note, notecap, &k, " -> a windowless timer's TIMERPROC 0x");
+            wu_puthex(note, notecap, &k, m.lparam, 8);
+            wow32_setret(f, 0);
+            f->cbproc   = m.lparam;
+            f->cbds     = ds;
+            f->cbarg[0] = 0;
+            f->cbarg[1] = m.msg;
+            f->cbarg[2] = m.wparam;
+            f->cbarg[3] = (WORD)(m.time >> 16);
+            f->cbarg[4] = (WORD)(m.time & 0xFFFF);
+            f->cbnarg   = 5;
+            f->cbret    = WOWCALL_RET_RESULT;
+            f->cbhwnd   = 0;
+            f->cbmsg    = m.msg;
+            return 1;
+        }
         if (!m.hwnd) {
             wu_puts(note, notecap, &k, " -- a thread message, nowhere to dispatch");
             wow32_setret(f, 0);
@@ -7700,6 +7907,27 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    /* ── s93: SetWindowsHook -- keyboard and journal hooks, on the OS's own. ──
+         RECORDER installs WH_KEYBOARD (2) at start-up for its shortcut keys and
+         Ctrl+Break, and WH_JOURNALRECORD (0) when a recording starts; playing a
+         macro back is WH_JOURNALPLAYBACK (1). Each becomes the Win32 hook of the
+         same kind, whose callback calls the 16-bit procedure (wowuser_hook_*).
+         Other kinds are recorded and answered 0, as before, and say so. */
+    case WOWUSER_SETWINDOWSHOOK: {
+        DWORD proc = wow32_argd(f, SWH_ARG_PROC);
+        short id   = (short)wow32_argw(f, SWH_ARG_ID);
+        WORD  hmod = wow32_argw(f, SWH_ARG_HMOD);
+        int   k = 0, ok = wowuser_hook_set(id, proc, hmod);
+        wu_puts(note, notecap, &k, "SetWindowsHook id=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)id, 4);
+        wu_puts(note, notecap, &k, " proc=0x"); wu_puthex(note, notecap, &k, proc, 8);
+        wu_puts(note, notecap, &k, ok == 1 ? " -> the OS's hook of the same kind installed"
+                                 : ok == 2 ? " -> ★ a kind this host does not run; recorded only"
+                                           : " -> ★ the OS refused the hook");
+        wow32_setret(f, 0);                 /* no previous hook in the chain */
+        return 1;
+    }
+
     /* ── ⚠⚠ HOOKS: WE INSTALL NONE, AND SAYING SO IS THE HONEST ANSWER. ───────
          SetWindowsHook is not serviced, so no guest hook is ever in a chain
          here. UnhookWindowsHook therefore has nothing to remove (FALSE is what
@@ -7709,10 +7937,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          rather than stubs, and if hooks are ever implemented these are where the
          chain gets walked. */
     case WOWUSER_UNHOOKWINDOWSHOOK: {
-        int k = 0;
-        wu_puts(note, notecap, &k, "UnhookWindowsHook -- no hook chain exists in "
-                                   "this VDM (SetWindowsHook is not serviced); FALSE");
-        wow32_setret(f, 0);
+        /* UnhookWindowsHook(int nCode, FARPROC lpfn): lpfn at 0, nCode at 4. */
+        DWORD proc = wow32_argd(f, 0);
+        short id   = (short)wow32_argw(f, 4);
+        int k = 0, r = wowuser_hook_unset(id, proc);
+        wu_puts(note, notecap, &k, "UnhookWindowsHook id=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)id, 4);
+        wu_puts(note, notecap, &k, r ? " -> removed" : " -> not one we hold; FALSE");
+        wow32_setret(f, (DWORD)r);
         return 1;
     }
     case WOWUSER_DEFHOOKPROC: {
@@ -10321,6 +10553,15 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puthex(note, notecap, &k, proc, 8);
         }
         wu_puts(note, notecap, &k, ")");
+        if (!hwnd && proc) {
+            /* s93: a windowless timer -- see wowwin_tt_fire. Win16 picks the id. */
+            r = SetTimer(NULL, 0, (UINT)ms, NULL);
+            if (r && !wowwin_tt_add(r, proc)) { KillTimer(NULL, r); r = 0; }
+            wu_puts(note, notecap, &k, r ? " -> a THREAD timer, id 0x" : " -> ★ OS REFUSED");
+            if (r) wu_puthex(note, notecap, &k, (DWORD)r, 4);
+            wow32_setret(f, r ? (DWORD)(WORD)r : 0);
+            return 1;
+        }
         if (!hwnd || !h) {
             /* ⚠ A NULL hWnd TIMER HAS NOWHERE TO BE DELIVERED HERE. Win16 sends
                  those to the task's queue, which only a TIMERPROC or a message
@@ -10350,6 +10591,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ", id ");
         wu_puthex(note, notecap, &k, id, 4);
         wu_puts(note, notecap, &k, ")");
+        if (!hwnd && wowwin_tt_kill((UINT_PTR)id)) {      /* s93: a thread timer */
+            r = KillTimer(NULL, (UINT_PTR)id) ? 1 : 0;
+            wu_puts(note, notecap, &k, " -- a thread timer, killed");
+            wow32_setret(f, (DWORD)r);
+            return 1;
+        }
         if (!h) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS;"
                                              " answered 0");
                   wow32_setret(f, 0); return 1; }
