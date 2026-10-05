@@ -9,12 +9,9 @@
  * exercised by tests/unit/present_test.c on the build machine, which is the
  * difference between "the knob is wired" and "the knob is wired and right".
  *
- * ⚠ ASPECT RATIO IS NOT THE FRAMEBUFFER'S SHAPE. Mode 13h is 320x200 -- 8:5 --
- *   and it was NEVER meant to look like that: the CRT displayed it at 4:3 with
- *   non-square pixels. So "correct aspect" letterboxes to 4:3, which STRETCHES
- *   200 lines taller than a square-pixel scale would, and the circles in a game's
- *   title screen come out round. Switching it off fills the client area, which is
- *   what this host has always done.
+ * ★ #325: PIXEL-PERFECT BY DEFAULT. A frame's pixels are square unless the user
+ *   forces a ratio, and a window is a whole multiple of the frame. present_layout and
+ *   present_window_picture below are the whole policy, for every output path.
  *
  * Pure C, no <windows.h>, no CRT.
  */
@@ -42,71 +39,39 @@ static int present_scaler_doubles(int scaler)
 static int present_scaler_scanlines(int scaler)
 { return scaler == PRESENT_SCALER_SCANLINES || scaler == PRESENT_SCALER_CRT; }
 
-/* ── WHERE THE FRAME GOES. ───────────────────────────────────────────────────────
-     Fills (x,y,w,h) within a dst_w x dst_h area. With `aspect` off that is the
-     whole area, unchanged. With it on the frame is scaled to the largest 4:3 box
-     that fits and CENTRED; the caller paints what is left over.
-   ⚠ The source size is deliberately NOT consulted: every mode this host presents
-     was displayed on a 4:3 screen, and using the framebuffer's own ratio would
-     reproduce the very distortion the setting exists to remove. */
-/* ── THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE. ───────────────────
-     Indices of the AspectRatio combo in settings.h.
-   ★ 0 and 1 KEEP THE MEANINGS THEY HAD when this was a checkbox: 0 was off and 1
-     was "correct aspect", which was 4:3 -- so an existing registry value migrates
-     for free and nobody's window changes shape on upgrade. The new ratios are
-     appended, which is exactly the discipline the CPU speed list did NOT manage. */
-/* ── #228 (docs/EMULATION.md): index 0 is AUTO -- the window/output takes the shape
-     the CURRENT MODE is displayed at -- where it used to be None (free, fill). Auto is
-     a setting, not a ratio: present_aspect_auto() RESOLVES it against the mode into an
-     encoded fixed ratio (PRESENT_ASPECT_FIXED | n<<8 | d), which every fit below reads
-     like the named ones. Callers resolve once and pass the result through unchanged.
-     Stored 0 (None) becomes Auto on upgrade, which is the replacement the spec asks for. */
+/* ── #325: THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE. ──────────────
+     NATIVE is the default: square pixels, the frame's own width:height -- 320x200 is
+     8:5, 720x400 is 9:5, 640x480 is 4:3. Nothing is assumed about the monitor a mode
+     was once shown on; a user who wants a period shape picks it. The forced ratios
+     shape the picture to that ratio whatever the mode. STRETCH is Native in a window
+     and fills an area the user did not size (maximised, fullscreen).
+   ⚠ THE REGISTRY NAME CHANGED WITH THE MEANING ("DisplayAspect", settings.h): index 0
+     was Auto (= 4:3 for every VGA mode), and a stored 0 must not silently become
+     something else. */
 enum {
-    PRESENT_ASPECT_NONE = 0,          /* = AUTO as a setting; 0/0 ("fill") only if unresolved */
+    PRESENT_ASPECT_NATIVE = 0,
     PRESENT_ASPECT_4_3,
     PRESENT_ASPECT_16_9,
     PRESENT_ASPECT_16_10,
-    PRESENT_ASPECT_STRETCH,           /* #228: Auto in a window; FILL fullscreen / maximised */
+    PRESENT_ASPECT_STRETCH,
     PRESENT_ASPECT_COUNT
 };
-#define PRESENT_ASPECT_AUTO   PRESENT_ASPECT_NONE
-#define PRESENT_ASPECT_FIXED  0x10000
-#define PRESENT_ASPECT_ITEMS "Auto|4:3|16:9|16:10|Stretch"
+#define PRESENT_ASPECT_ITEMS "Native (square pixels)|4:3|16:9|16:10|Stretch"
 
-/* Resolve the SETTING against the mode on screen. Auto: the VGA and text modes (up to
-   720x480) are shown 4:3, as a CRT showed them -- 320x200 had tall pixels; a VESA mode
-   has square pixels, so its own w:h (1280x1024 -> 5:4, 640x400 -> 16:10). Named ratios
-   pass through. No frame yet -> 4:3. */
-static int present_aspect_auto(int setting, int mode_w, int mode_h, int vesa)
-{
-    int a, b, t;
-    if (setting == PRESENT_ASPECT_STRETCH) setting = PRESENT_ASPECT_AUTO;   /* the window's shape */
-    if (setting != PRESENT_ASPECT_AUTO) return setting;
-    if (mode_w < 1 || mode_h < 1 || !vesa || (mode_w <= 720 && mode_h <= 480))
-        return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
-    a = mode_w; b = mode_h;                        /* reduce w:h */
-    while (b) { t = a % b; a = b; b = t; }
-    if ((mode_w / a) > 255 || (mode_h / a) > 255) return PRESENT_ASPECT_FIXED | (4 << 8) | 3;
-    return PRESENT_ASPECT_FIXED | ((mode_w / a) << 8) | (mode_h / a);
-}
+/* How a picture fills an area the user did not size (maximised or fullscreen). */
+enum { PRESENT_FIT_WHOLE = 0, PRESENT_FIT_FILL };
+#define PRESENT_FIT_ITEMS "Whole pixels|Fill"
 
-/* ── #228 (user, s84): STRETCH. "In a window, this is actually the same as Auto. On a
-     physical screen, in fullscreen, or when the window is maximized, we stretch the
-     image to fit the available space." So the WINDOW's shape resolves as Auto (above),
-     and only the fit into an area the user did not size -- fullscreen, or maximised --
-     fills it: 0 = unresolved = 0/0 = fill, which present_fit reads as the whole area. */
-static int present_stretch_fills(int setting, int area_is_screen)
-{ return setting == PRESENT_ASPECT_STRETCH && area_is_screen; }
-static int present_aspect_for_area(int setting, int mode_w, int mode_h, int vesa, int area_is_screen)
-{
-    if (present_stretch_fills(setting, area_is_screen)) return 0;
-    return present_aspect_auto(setting, mode_w, mode_h, vesa);
-}
+/* Filtering -- only consulted when the picture is NOT a whole multiple of the frame
+   (every filter agrees on a whole multiple: point-sampled). Sharp enlarges by the
+   largest whole multiple point-sampled, then smooths only the remainder. */
+enum { PRESENT_FILTER_NEAREST = 0, PRESENT_FILTER_BILINEAR, PRESENT_FILTER_SHARP };
+#define PRESENT_FILTER_ITEMS "Nearest|Bilinear|Sharp"
 
-/* The ratio as a fraction. An unresolved Auto gives 0/0, which callers read as "fill". */
+/* The ratio a FORCED setting stands for; 0/0 for Native and Stretch (no ratio of its
+   own). Used by present_fit, where 0/0 means "fill". */
 static void present_aspect_ratio(int aspect, int *n, int *d)
 {
-    if (aspect & PRESENT_ASPECT_FIXED) { *n = (aspect >> 8) & 0xFF; *d = aspect & 0xFF; return; }
     switch (aspect) {
     case PRESENT_ASPECT_4_3:   *n = 4;  *d = 3;  break;
     case PRESENT_ASPECT_16_9:  *n = 16; *d = 9;  break;
@@ -115,28 +80,92 @@ static void present_aspect_ratio(int aspect, int *n, int *d)
     }
 }
 
-/* ── THE SMALLEST WINDOW THIS ASPECT ALLOWS. ─────────────────────────────────────
-     At least PRESENT_MIN_W wide AND at least PRESENT_MIN_H tall, and on-aspect --
-     so for a WIDE ratio the height binds first and forces extra width. 4:3 lands
-     exactly on 640x480; 16:10 needs 768x480; 16:9 needs 853x480.
-   With no lock there is nothing to satisfy but the floor itself. */
-#define PRESENT_MIN_W 640
-#define PRESENT_MIN_H 480
-static void present_min_client(int aspect, int *w, int *h)
+/* The ratio the picture is shaped to for a frame sw x sh: a forced one, or the
+   frame's own (Native, and Stretch in a window). */
+static void present_target_ratio(int aspect, int sw, int sh, int *n, int *d)
+{
+    present_aspect_ratio(aspect, n, d);
+    if (!*n || !*d) { *n = sw > 0 ? sw : 9; *d = sh > 0 ? sh : 5; }
+}
+static int present_is_native(int aspect)
+{ return aspect == PRESENT_ASPECT_NATIVE || aspect == PRESENT_ASPECT_STRETCH; }
+
+/* The largest n:d rectangle in dst, centred. */
+static void present_fit_nd(int dst_w, int dst_h, int n, int d, int *x, int *y, int *w, int *h)
+{
+    long fw, fh;
+    if (dst_w < 1) dst_w = 1;
+    if (dst_h < 1) dst_h = 1;
+    if (n < 1 || d < 1) { *x = 0; *y = 0; *w = dst_w; *h = dst_h; return; }
+    fw = dst_w; fh = (long)dst_w * d / n;
+    if (fh > dst_h) { fh = dst_h; fw = (long)dst_h * n / d; }
+    if (fw < 1) fw = 1;
+    if (fh < 1) fh = 1;
+    *w = (int)fw; *h = (int)fh;
+    *x = (dst_w - *w) / 2;
+    *y = (dst_h - *h) / 2;
+}
+
+/* ── #325: WHERE THE PICTURE GOES, for every path (window, maximised, fullscreen, both
+     renderers). `screen` = an area the user did not size (maximised / fullscreen).
+       Stretch on a screen      -> the whole area.
+       Native, Whole pixels     -> the largest whole multiple k that fits (one k, so the
+                                   pixels stay square); if even 1x does not fit, scaled
+                                   down on-ratio.
+       Forced, Whole pixels     -> the largest pair of whole multiples that gives the
+                                   ratio EXACTLY (320x200 at 4:3 is 5x6 = 1600x1200), if
+                                   one fits; otherwise the largest on-ratio rectangle.
+       Fill (or a window)       -> the largest on-ratio rectangle.
+     A window is sized to the picture (present_window_picture), so in a window this
+     returns the whole client. Centred; the caller paints the borders. */
+static void present_layout(int aspect, int fit, int screen, int dst_w, int dst_h,
+                           int sw, int sh, int *x, int *y, int *w, int *h)
 {
     int n, d;
-    present_aspect_ratio(aspect, &n, &d);
-    if (!n || !d) { *w = PRESENT_MIN_W; *h = PRESENT_MIN_H; return; }
-    /* ⚠ ONE constraint binds and the other is then satisfied for free -- work out
-         WHICH, and derive the other side from it. Ceiling-rounding both independently
-         (the first cut) overshoots: 16:9 came out 854x481 instead of 853x480, i.e.
-         a pixel proud of the floor on both axes for no reason. */
-    *w = PRESENT_MIN_W;
-    *h = (PRESENT_MIN_W * d + n / 2) / n;
-    if (*h < PRESENT_MIN_H) {                    /* too short -> the HEIGHT binds */
-        *h = PRESENT_MIN_H;
-        *w = (PRESENT_MIN_H * n + d / 2) / d;
+    if (dst_w < 1) dst_w = 1;
+    if (dst_h < 1) dst_h = 1;
+    if (aspect == PRESENT_ASPECT_STRETCH && screen) { *x = 0; *y = 0; *w = dst_w; *h = dst_h; return; }
+    present_target_ratio(aspect, sw, sh, &n, &d);
+    if (sw > 0 && sh > 0 && fit == PRESENT_FIT_WHOLE) {
+        if (present_is_native(aspect)) {
+            int kx = dst_w / sw, ky = dst_h / sh, k = kx < ky ? kx : ky;
+            if (k >= 1) {
+                *w = sw * k; *h = sh * k;
+                *x = (dst_w - *w) / 2; *y = (dst_h - *h) / 2;
+                return;
+            }
+        } else {
+            long best = 0; int bx = 0, by = 0, nx;
+            for (nx = 1; (long)sw * nx <= dst_w; ++nx) {
+                long num = (long)sw * nx * d, den = (long)sh * n;   /* ny = num/den */
+                if (num % den) continue;
+                if ((long)sh * (num / den) > dst_h || num / den < 1) continue;
+                if ((long)sw * nx * sh * (num / den) > best) {
+                    best = (long)sw * nx * sh * (num / den); bx = nx; by = (int)(num / den);
+                }
+            }
+            if (best) {
+                *w = sw * bx; *h = sh * by;
+                *x = (dst_w - *w) / 2; *y = (dst_h - *h) / 2;
+                return;
+            }
+        }
     }
+    present_fit_nd(dst_w, dst_h, n, d, x, y, w, h);
+}
+
+/* ── #325: THE PICTURE A WINDOW IS SIZED TO, at whole scale k (1x = one desktop pixel
+     per frame pixel). Native: the frame times k. Forced: k times the frame's WIDTH, and
+     the height that gives the ratio -- mode 13h at 2x and 4:3 is 640x480. */
+static void present_window_picture(int aspect, int sw, int sh, int k, int *w, int *h)
+{
+    int n, d;
+    if (k < 1) k = 1;
+    if (sw < 1 || sh < 1) { sw = 720; sh = 400; }
+    *w = sw * k;
+    if (present_is_native(aspect)) { *h = sh * k; return; }
+    present_target_ratio(aspect, sw, sh, &n, &d);
+    *h = (int)(((long)*w * d + n / 2) / n);
 }
 
 /* Where the frame goes inside the client area.
@@ -162,72 +191,8 @@ static void present_fit(int dst_w, int dst_h, int aspect,
     *y = (dst_h - fh) / 2;
 }
 
-/* ── ★★ SHARP PIXELS: WHOLE MULTIPLES, ONE FACTOR PER AXIS. ──────────────────────────
-     present_fit above gives the biggest on-aspect rectangle that fits, and at a typical
-     desktop size that is a FRACTIONAL multiple of the guest's frame: 1680/320 = 5.25.
-     A stretch to 5.25x cannot put the same number of physical pixels under each guest
-     pixel, so columns come out alternately 5 and 6 wide. DirectDraw's stretch blt is
-     point-sampled on the drivers of this era, so this is not a soft interpolation --
-     it is a visibly UNEVEN grid, which is what "the pixels look blurry" actually is.
-     (User, 2026-09-10, on a 2560x1600 panel driven at 1680x1050.)
-
-   ► SO SNAP EACH AXIS TO A WHOLE MULTIPLE -- AND ALLOW THE TWO TO DIFFER. Independent
-     factors are what lets this serve the aspect setting at the same time as sharpness,
-     because a DOS frame does not have square pixels: 320x200 shown at 4:3 needs a pixel
-     that is 1.2 times taller than it is wide, and 5x6 delivers exactly that (1600x1200
-     is precisely 4:3). One shared factor could only ever produce 8:5.
-
-   ⚠ THE TWO GOALS GENUINELY CONFLICT AND THE CALLER SHOULD KNOW IT. At most sizes there
-     is no integer pair that hits the aspect exactly, so we take the closest and then the
-     largest -- sharp always, aspect as near as whole numbers allow. With PRESENT_ASPECT_
-     NONE there is nothing to approximate and the rule collapses to the obvious one:
-     square pixels, so nx == ny.
-
-   Search cost is (dst_w/src_w) * (dst_h/src_h) iterations -- at most a few hundred on any
-   real display, and only on the present path, which already touches every pixel. */
-static void present_fit_int(int dst_w, int dst_h, int src_w, int src_h, int aspect,
-                            int *x, int *y, int *w, int *h)
-{
-    int n, d, nx, ny, mx, my, bx = 1, by = 1;
-    long best_err = -1, best_area = -1;
-    if (dst_w < 1) dst_w = 1;
-    if (dst_h < 1) dst_h = 1;
-    /* No frame yet, or one too big to multiply at all: fall back to the smooth fit
-       rather than inventing a factor of zero. */
-    if (src_w < 1 || src_h < 1 || src_w > dst_w || src_h > dst_h) {
-        present_fit(dst_w, dst_h, aspect, x, y, w, h);
-        return;
-    }
-    mx = dst_w / src_w; my = dst_h / src_h;
-    if (mx < 1) mx = 1;
-    if (my < 1) my = 1;
-    present_aspect_ratio(aspect, &n, &d);
-    if (!n || !d) {                          /* square pixels: one factor, both axes */
-        bx = by = (mx < my) ? mx : my;
-    } else {
-        for (nx = 1; nx <= mx; ++nx) {
-            for (ny = 1; ny <= my; ++ny) {
-                /* Aspect error, cross-multiplied so it stays integer: we want
-                   (src_w*nx) / (src_h*ny) == n/d, i.e. src_w*nx*d == src_h*ny*n. */
-                long ww = (long)src_w * nx, hh = (long)src_h * ny;
-                long err = ww * d - hh * n;
-                long area = ww * hh;
-                if (err < 0) err = -err;
-                /* Scale the error against the rectangle so a big near-miss is not
-                   ranked worse than a tiny one; then prefer the LARGER picture among
-                   equally-accurate pairs, or every aspect would pick 1x1. */
-                err = (err * 1000) / (hh * n);
-                if (best_err < 0 || err < best_err
-                    || (err == best_err && area > best_area)) {
-                    best_err = err; best_area = area; bx = nx; by = ny;
-                }
-            }
-        }
-    }
-    *w = src_w * bx; *h = src_h * by;
-    *x = (dst_w - *w) / 2;
-    *y = (dst_h - *h) / 2;
-}
+/* (#325: present_fit_int -- whole multiples behind the fsinteger.flag file knob -- is
+   gone. Whole pixels are the default for every path now; see present_layout.) */
 
 /* ── SCALE2X (EPX). ──────────────────────────────────────────────────────────────
      Each source pixel becomes four. A corner is interpolated only where the two

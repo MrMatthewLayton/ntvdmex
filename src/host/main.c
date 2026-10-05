@@ -9831,7 +9831,8 @@ enum {                                       /* wired command IDs               
     IDM_FILTER_0    = IDM_COMBO_BASE + 4 * IDM_COMBO_SPAN,
     IDM_FSKIP_0     = IDM_COMBO_BASE + 5 * IDM_COMBO_SPAN,
     IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN,
-    IDM_TINT_0      = IDM_COMBO_BASE + 7 * IDM_COMBO_SPAN    /* #229 (user, s84) */
+    IDM_TINT_0      = IDM_COMBO_BASE + 7 * IDM_COMBO_SPAN,   /* #229 (user, s84) */
+    IDM_FIT_0       = IDM_COMBO_BASE + 8 * IDM_COMBO_SPAN    /* #325 */
 };
 
 /* Which setting each range drives. The ONLY place the two are tied together. */
@@ -9840,6 +9841,7 @@ static const struct { UINT base; int set; } MENU_COMBOS[] = {
     { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
     { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
     { IDM_ASPECT_0,  SET_ASPECT    }, { IDM_TINT_0,    SET_TINT      },
+    { IDM_FIT_0,     SET_FIT       },
 };
 #define MENU_COMBO_N ((int)(sizeof MENU_COMBOS / sizeof MENU_COMBOS[0]))
 
@@ -10516,6 +10518,7 @@ static HMENU build_menu(void)
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
     menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    menu_combo(m, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
     /* #229 (user, s84): "Nice, working! Can you add these to the View menu as well." */
     menu_combo(m, "Colour Filter", SET_TINT,     IDM_TINT_0);
     /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
@@ -10867,7 +10870,12 @@ static HWND g_status;                        /* the native comctl32 status bar  
      which cut it off; it now follows the speed. A program that never used the mouse
      gets no fourth part at all -- there is nothing to say about capture. The speed is
      the clock alone ("66 MHz", "Unlimited"), never the CPU's name. */
-static char g_status_l[128], g_status_m[64], g_status_s[32], g_status_r[64];  /* ON it now */
+static char g_status_l[128], g_status_m[96], g_status_s[32], g_status_r[64];  /* ON it now */
+/* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
+   whether 1x did not fit the screen and was scaled down. See host_apply_scale. */
+static int g_scale_k = 0;
+static int g_win_frame_w, g_win_frame_h;
+static int g_fit_down;
 
 static int zsame(const char *a, const char *b)
 {
@@ -10941,9 +10949,24 @@ static void status_update(void)
     txt[0] = g_progname;
     /* One field, because they are one fact: 32-bit only ever means a DPMI client in
        protected mode. Title case (user, s84). */
-    txt[1] = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected Mode"
-           : g_dpmi_pm                      ? "16-bit Protected Mode"
-                                            : "16-bit Real Mode";
+    {   /* #325: the picture's own resolution and how it is shown -- "at 2x" when the
+             drawn rectangle is an exact whole multiple, "scaled" otherwise -- read
+             from what gdi_present actually drew, so it is true in a window, maximised
+             and fullscreen alike. */
+        static char mode_txt[96];
+        const char *m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected Mode"
+                      : g_dpmi_pm                      ? "16-bit Protected Mode"
+                                                       : "16-bit Real Mode";
+        char *q = zput(mode_txt, m);
+        if (g_pd.snap_valid && g_pd.snap_w > 0 && g_pd.snap_h > 0 && g_pd.last_dw > 0) {
+            int sw = g_pd.snap_w, sh = g_pd.snap_h, dw = g_pd.last_dw, dh = g_pd.last_dh;
+            q = zput(q, ", ");  q = zdec(q, (unsigned)sw); q = zput(q, "x"); q = zdec(q, (unsigned)sh);
+            if (dw % sw == 0 && dh % sh == 0 && dw / sw == dh / sh) {
+                q = zput(q, " at "); q = zdec(q, (unsigned)(dw / sw)); q = zput(q, "x");
+            } else q = zput(q, g_fit_down ? " (scaled to fit)" : " (scaled)");
+        }
+        txt[1] = mode_txt;
+    }
     status_speed_text(spd);
     txt[2] = spd;
     /* Only a program that asked for the mouse has anything to say about capture
@@ -11834,10 +11857,9 @@ static void host_fullscreen_toggle(HWND h)
            req != got      -> the display refused the mode; the fallback is what you
                               are looking at, and no scaling choice can fix softness
                               introduced by the monitor rescaling a non-native signal.
-           scale=NxM       -> WHOLE NUMBERS MEAN SHARP. Anything else means the frame
-                              did not divide into the destination and present_fit_int
-                              could not find a factor -- which should not happen, so
-                              it is a bug rather than a setting.
+           scale=NxM       -> WHOLE NUMBERS MEAN SHARP. Anything else is a forced ratio
+                              with no exact whole pair, Fill, or a frame larger than
+                              the screen -- drawn with the Filtering setting (#325).
            got == native   -> the panel is getting its own resolution, which is the
                               other half of sharpness and the half we do not control. */
     if (g_pd.fullscreen) {
@@ -11853,8 +11875,8 @@ static void host_fullscreen_toggle(HWND h)
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.h);
         if (g_vid.frame.w && g_vid.frame.h) {
             int fx, fy, fw, fh;
-            present_fit_int(cw, chh, (int)g_vid.frame.w, (int)g_vid.frame.h,
-                            g_pd.aspect, &fx, &fy, &fw, &fh);
+            present_layout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.w,
+                           (int)g_vid.frame.h, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
             fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
             fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
             fq = zput(fq, " at ");    fq = zdec(fq, (unsigned)fx);
@@ -12050,6 +12072,7 @@ static const BYTE SET_LIVE_IDS[] = {
        ConventionalKB, Midi and SeamlessMouse are new consumers: g_dos_mem_top,
        aw_midi_open, capture_allowed. */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
+    SET_FIT,                                     /* #325 */
 };
 static int settings_is_live(int id)
 {
@@ -12315,7 +12338,8 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
 {
     pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
-    pd->filter = (int)(s->v[SET_FILTER] ? 1 : 0);
+    pd->filter = (int)(s->v[SET_FILTER] <= 2 ? s->v[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
+    pd->fit    = (int)(s->v[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
     pd->osd_off    = s->v[SET_OSD]      ? 0 : 1;      /* #217 */
     pd->tint       = (int)s->v[SET_TINT];             /* #229 */
     pd->unbuffered = s->v[SET_BUFFERED] ? 0 : 1;
@@ -12358,23 +12382,25 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
     return RATES[s->v[SET_RATE] < 3 ? s->v[SET_RATE] : 1];
 }
 
-/* ── ★ ONE BASE SIZE, AND EVERYTHING ELSE IS DERIVED FROM IT. ────────────────────
-     The window used to be sized from VID_FB_W/VID_FB_H -- the TEXT framebuffer,
-     640x400 -- which is only one of the shapes a guest runs in and is not even 4:3.
-     Now the base is `the smallest client this aspect allows` (present_min_client),
-     so 1x IS the minimum size, 2x is twice it, and the shape follows the setting:
-         None  / 4:3  -> 640x480      16:10 -> 768x480      16:9 -> 853x480
-     ⚠ VIDEO area, not client area: the status bar lives inside the client and must
-       not be counted into the picture's aspect, or the lock is wrong by 23 pixels
-       and gets wronger the smaller the window is. */
-/* #228: the aspect in force NOW -- the setting, with Auto resolved against the mode. */
-static int host_aspect(void)
+/* ── #325: THE WINDOW IS THE PICTURE, AT A WHOLE SCALE. ──────────────────────────────
+     1x is one desktop pixel per frame pixel and Nx an N x N block, and the picture is
+     the FRAME's own size -- 720x400 text, 320x200, Mode X 320x240, a 1280x1024 VESA
+     mode -- with the window's frame (borders, caption, menu, status strip) added
+     outside it. There is no minimum any more: it was 640x480 on-aspect, so 320x200 at
+     "1x" was really 2x by 2.4x and nothing was pixel-exact. A forced ratio keeps the
+     width and shapes the height (present_window_picture). */
+
+static void host_frame_size(int *sw, int *sh)
 {
-    return present_aspect_auto((int)g_set.v[SET_ASPECT], g_pd.snap_w, g_pd.snap_h, g_pd.mode_vesa);
+    if (g_pd.snap_valid && g_pd.snap_w > 0 && g_pd.snap_h > 0) { *sw = g_pd.snap_w; *sh = g_pd.snap_h; return; }
+    if (g_vid.frame.w && g_vid.frame.h) { *sw = (int)g_vid.frame.w; *sh = (int)g_vid.frame.h; return; }
+    *sw = 720; *sh = 400;                          /* before the first frame: VGA text */
 }
-static void host_video_base(int *w, int *h)
+static void host_picture(int k, int *pw, int *ph)
 {
-    present_min_client(host_aspect(), w, h);
+    int sw, sh;
+    host_frame_size(&sw, &sh);
+    present_window_picture((int)g_set.v[SET_ASPECT], sw, sh, k, pw, ph);
 }
 
 /* What the frame adds around the video: borders, caption, menu bar, status strip.
@@ -12388,18 +12414,35 @@ static void host_frame_extra(HWND h, int *ex, int *ey)
     *ey = (z.bottom - z.top) + (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
 }
 
-/* Would a client area at this scale fit inside the desktop's WORK AREA -- i.e. the
-   screen minus the taskbar? 1x is treated as always fitting: there is nothing
-   smaller to fall back to, and refusing to open at all is worse than overflowing. */
+/* The client room the desktop's WORK AREA (the screen less the taskbar) leaves for a
+   picture once the window's frame is added. */
+static void host_work_area(RECT *wa)
+{
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, wa, 0)) {
+        wa->left = 0; wa->top = 0;
+        wa->right = GetSystemMetrics(SM_CXSCREEN); wa->bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+}
+static void host_work_room(int *rw, int *rh)
+{
+    RECT wa; int ex, ey;
+    host_work_area(&wa);
+    if (g_pd.hwnd) host_frame_extra(g_pd.hwnd, &ex, &ey);
+    else {
+        RECT z; z.left = z.top = z.right = z.bottom = 0;
+        AdjustWindowRect(&z, WS_OVERLAPPEDWINDOW, TRUE);
+        ex = z.right - z.left; ey = (z.bottom - z.top) + PRESENT_STATUS_H;
+    }
+    *rw = (wa.right - wa.left) - ex; *rh = (wa.bottom - wa.top) - ey;
+}
+
+/* Does the picture at this scale fit on the work area? */
 static int win_scale_fits(int scale)
 {
-    RECT wa;
-    int bw, bh;
-    if (scale <= 1) return 1;
-    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) return 1;
-    host_video_base(&bw, &bh);
-    return bw * scale <= wa.right - wa.left
-        && bh * scale + PRESENT_STATUS_H <= wa.bottom - wa.top;
+    int pw, ph, rw, rh;
+    host_picture(scale, &pw, &ph);
+    host_work_room(&rw, &rh);
+    return pw <= rw && ph <= rh;
 }
 
 /* ── EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES. ─
@@ -12427,7 +12470,7 @@ static void menu_view_sync(HWND h)
         CheckMenuItem(m, MENU_CHECKS[i].id, MF_BYCOMMAND
                       | (g_set.v[MENU_CHECKS[i].set] ? MF_CHECKED : MF_UNCHECKED));
     /* ── ★ A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
-         win_scale_clamped() steps down until the window fits, which is the right
+         host_apply_scale() steps down until the window fits, which is the right
          thing to DO and the wrong thing to say nothing about: picking 3x on a
          1680x1050 desktop quietly gave 2x, so the menu reported a size the window
          did not have and the setting looked broken rather than impossible.
@@ -12437,7 +12480,7 @@ static void menu_view_sync(HWND h)
        ⚠ Re-evaluated on every sync rather than once, because the work area moves --
          a taskbar that auto-hides, a second monitor, a resolution change. */
     {   int sc;
-        for (sc = 1; sc <= 3; ++sc)
+        for (sc = 2; sc <= 4; ++sc)          /* #325: 1x is always offered (scaled to fit if need be) */
             EnableMenuItem(m, IDM_WINSIZE_0 + (UINT)(sc - 1), MF_BYCOMMAND
                            | (win_scale_fits(sc) ? MF_ENABLED : MF_GRAYED)); }
     /* ── RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
@@ -12450,44 +12493,56 @@ static void menu_view_sync(HWND h)
                   | (g_captured ? MF_CHECKED : MF_UNCHECKED));
 }
 
-/* ── ★ WINDOW SIZE, AS A NUMBER THAT FITS ON THE SCREEN. ─────────────────────────
-     1x/2x/3x scale the CLIENT AREA -- the framebuffer -- not the whole window, so
-     the chrome, the menu and the status bar keep their real sizes at every scale
-     and "2x" means the picture is twice as big, not the window. "Custom" (index 3)
-     means whatever the user last dragged it to, and until there is somewhere to
-     remember that it is the same as 1x.
-   ⚠ AND IT MUST FIT. 3x is 1920x1200 of client area and the rig's desktop is
-     1024x768: a window larger than the desktop opens with its status bar and half
-     its picture off the bottom edge, which reads as "the scaler broke the display"
-     rather than as a setting. Step down until it fits; 1x always does. */
-static int win_scale_clamped(DWORD idx)
+/* ── #325: SIZE THE WINDOW TO THE PICTURE AT WHOLE SCALE k. ──────────────────────────
+     The largest scale up to k that fits the work area; if even 1x does not (1280x1024
+     on a 1050-line screen), the picture is scaled DOWN on-ratio to fit and the status
+     strip says so -- a window running off the screen is worse than a smaller picture.
+   ⚠ THE TOP-LEFT STAYS PUT, so a program that changes mode does not throw the window
+     around -- but a window that would now run off the work area is pulled back on.
+   ⚠ THE MENU BAR WRAPS when the window is narrow (320 wide at 1x), and AdjustWindowRect
+     does not know: the client is MEASURED after the move and the height corrected, or
+     the bottom of the picture would sit under the status strip.
+   ⚠ A MAXIMISED WINDOW IS RESTORED FIRST, or Windows still believes it is maximised and
+     the next restore snaps it back. */
+static void host_apply_scale(HWND h, int k)
 {
-    int scale = (int)idx + 1;
-    if (scale < 1 || scale > 3) scale = 1;              /* Custom -> the default */
-    while (scale > 1 && !win_scale_fits(scale)) --scale;
-    return scale;
+    int pw, ph, rw, rh, ex, ey, W, H, x, y, i;
+    RECT wr, wa, cr;
+    if (!h || g_pd.fullscreen) return;   /* fullscreen owns the size */
+    if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
+    if (k < 1) k = 1;
+    while (k > 1 && !win_scale_fits(k)) --k;
+    g_scale_k = k;
+    host_picture(k, &pw, &ph);
+    host_work_room(&rw, &rh);
+    g_fit_down = 0;
+    if (pw > rw || ph > rh) {
+        int fx, fy;
+        present_fit_nd(rw, rh, pw, ph, &fx, &fy, &pw, &ph);
+        g_fit_down = 1;
+    }
+    host_frame_extra(h, &ex, &ey);
+    W = pw + ex; H = ph + ey;
+    GetWindowRect(h, &wr);
+    host_work_area(&wa);
+    x = wr.left; y = wr.top;
+    if (x + W > wa.right)  x = wa.right - W;
+    if (y + H > wa.bottom) y = wa.bottom - H;
+    if (x < wa.left) x = wa.left;
+    if (y < wa.top)  y = wa.top;
+    SetWindowPos(h, NULL, x, y, W, H, SWP_NOZORDER | SWP_NOACTIVATE);
+    for (i = 0; i < 2 && GetClientRect(h, &cr); ++i) {
+        int dw = pw - cr.right;
+        int dh = (ph + (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H)) - cr.bottom;
+        if (!dw && !dh) break;
+        W += dw; H += dh;
+        SetWindowPos(h, NULL, 0, 0, W, H, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    host_frame_size(&g_win_frame_w, &g_win_frame_h);
 }
-
-/* Resize the live window to a scale. Until now the scale was read ONCE, just before
-   CreateWindow, so changing it in the dialog stored a number and did nothing you
-   could see until the next launch -- reported as "I tried display size and it
-   didn't resize", which is exactly what it did.
- ⚠ THE MENU MAY BE DETACHED. Fullscreen moves it into g_fs_menu, and
-   AdjustWindowRect's last argument decides whether a menu bar's height is added --
-   so it has to ask the window what it has RIGHT NOW, not assume.
- ⚠ AND A MAXIMIZED WINDOW MUST BE RESTORED FIRST, or SetWindowPos resizes it while
-   Windows still believes it is maximized: the next restore snaps it back and the
-   setting looks like it was ignored. */
 static void host_apply_winsize(HWND h, DWORD idx)
 {
-    int scale, bw, bh, ex, ey;
-    if (!h || g_pd.fullscreen) return;   /* exclusive fullscreen owns the size */
-    if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
-    scale = win_scale_clamped(idx);
-    host_video_base(&bw, &bh);
-    host_frame_extra(h, &ex, &ey);
-    SetWindowPos(h, NULL, 0, 0, bw * scale + ex, bh * scale + ey,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    host_apply_scale(h, (int)idx + 1 <= 4 ? (int)idx + 1 : 1);
 }
 
 /* ── PUT g_set INTO EFFECT, WITHOUT TOUCHING THE REGISTRY. ───────────────────────
@@ -12505,19 +12560,23 @@ static void host_apply_winsize(HWND h, DWORD idx)
 static DWORD g_winsize_live = 0xFFFFFFFFu;   /* what the window is currently AT */
 static DWORD g_aspect_live  = 0xFFFFFFFFu;   /* ...and the shape it is that size IN */
 
-/* ── #228: AUTO FOLLOWS THE MODE. When the resolved shape changes -- a game switching
-     from 320x200 to a 1280x1024 VESA mode -- the window takes the new shape at the same
-     size setting. Fullscreen is left alone: its output is fitted per frame anyway. */
-static void aspect_auto_follow(HWND h)
+/* ── #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
+     320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
+     window is re-sized to the new picture at the scale it is at. Debounced: the new
+     size must hold for 150 ms, so a program that passes through a mode on its way to
+     another does not make the window jump twice. Maximised and fullscreen are fitted
+     per frame by present_layout and are left alone. */
+static void host_follow_frame(HWND h)
 {
-    static int last = -1;
-    int now;
-    if ((g_set.v[SET_ASPECT] != PRESENT_ASPECT_AUTO && g_set.v[SET_ASPECT] != PRESENT_ASPECT_STRETCH)
-        || !g_pd.snap_valid || g_pd.fullscreen) return;
-    now = host_aspect();
-    if (last == -1) { last = now; return; }
-    if (now != last) { last = now; host_apply_winsize(h, g_winsize_live != 0xFFFFFFFFu
-                                                         ? g_winsize_live : g_set.v[SET_WINSIZE]); }
+    static int pend_w, pend_h;
+    static DWORD pend_t;
+    int sw, sh;
+    if (!h || g_pd.fullscreen || IsZoomed(h) || IsIconic(h) || !g_pd.snap_valid) return;
+    host_frame_size(&sw, &sh);
+    if (sw == g_win_frame_w && sh == g_win_frame_h) { pend_w = pend_h = 0; return; }
+    if (sw != pend_w || sh != pend_h) { pend_w = sw; pend_h = sh; pend_t = GetTickCount(); return; }
+    if (GetTickCount() - pend_t < 150u) return;
+    host_apply_scale(h, g_scale_k ? g_scale_k : (int)g_set.v[SET_WINSIZE] + 1);
 }
 
 /* #321: the text-mode font, live. Rebuilt only when the NAME changed -- a build draws
@@ -12606,7 +12665,7 @@ static void settings_fill_combos(void)
        enough for the longest item ("Monochrome orange", "Graphics only"). */
     {   static const int NARROW[] = { IDC_S_RENDERER, IDC_S_WINSIZE, IDC_S_AUTOFS,
                                       IDC_S_SCALER, IDC_S_FILTER, IDC_S_ASPECT,
-                                      IDC_S_TINT, IDC_S_FRAMESKIP };
+                                      IDC_S_TINT, IDC_S_FRAMESKIP, IDC_S_FIT };
         for (i = 0; i < (int)(sizeof NARROW / sizeof NARROW[0]); ++i)
             if ((c = settings_ctl(NARROW[i])) != NULL) SendMessageA(c, CB_SETDROPPEDWIDTH, 130, 0);
     }
@@ -13655,7 +13714,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (g_ms_hidden == 0 && !ms_text && g_pd.snap_valid && g_pd.snap_bpp == 8)
                     ms_draw_gfx_cursor(g_pd.snap, g_pd.snap_w, g_pd.snap_h, g_pd.snap_w);
                 HOST_UNLOCK();
-                aspect_auto_follow(h);                       /* #228: reshape on a mode change */
+                host_follow_frame(h);                        /* #325: the window follows the mode */
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
                      The snapshot is what keeps our copy of the frame current, and
                      WM_PAINT blits that copy on every expose -- so skipping the
@@ -13796,46 +13855,58 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZING:
         if (!g_pd.fullscreen) {
             RECT *r = (RECT *)lp;
-            int n, d, ex, ey, vw, vh;
-            present_aspect_ratio(host_aspect(), &n, &d);          /* #228: Auto resolved */
-            if (n && d) {
-                host_frame_extra(h, &ex, &ey);
-                vw = (r->right - r->left) - ex;
-                vh = (r->bottom - r->top) - ey;
-                if (vw < 1) vw = 1;
-                if (vh < 1) vh = 1;
+            int n, d, ex, ey, vw, vh, sw, sh;
+            host_frame_extra(h, &ex, &ey);
+            host_frame_size(&sw, &sh);
+            vw = (r->right - r->left) - ex;
+            vh = (r->bottom - r->top) - ey;
+            if (vw < 1) vw = 1;
+            if (vh < 1) vh = 1;
+            if (present_is_native((int)g_set.v[SET_ASPECT])) {
+                /* ── #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged --
+                     the nearest k to where the held edge is, never below 1x -- and that
+                     k becomes the window's scale, so the next mode change keeps it. */
+                int k = (wp == WMSZ_TOP || wp == WMSZ_BOTTOM) ? (vh + sh / 2) / sh
+                                                              : (vw + sw / 2) / sw;
+                if (k < 1) k = 1;
+                present_window_picture((int)g_set.v[SET_ASPECT], sw, sh, k, &vw, &vh);
+                g_scale_k = k; g_fit_down = 0;
+            } else {
+                present_target_ratio((int)g_set.v[SET_ASPECT], sw, sh, &n, &d);
                 switch (wp) {
                 case WMSZ_LEFT: case WMSZ_RIGHT:
-                    vh = vw * d / n; break;            /* width drives height     */
+                    vh = (int)((long)vw * d / n); break;   /* width drives height     */
                 case WMSZ_TOP: case WMSZ_BOTTOM:
-                    vw = vh * n / d; break;            /* height drives width     */
+                    vw = (int)((long)vh * n / d); break;   /* height drives width     */
                 default:
-                    vh = vw * d / n; break;            /* a corner: width wins    */
+                    vh = (int)((long)vw * d / n); break;   /* a corner: width wins    */
                 }
-                if (wp == WMSZ_LEFT || wp == WMSZ_TOPLEFT || wp == WMSZ_BOTTOMLEFT)
-                    r->left  = r->right - (vw + ex);
-                else
-                    r->right = r->left  + (vw + ex);
-                if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT)
-                    r->top    = r->bottom - (vh + ey);
-                else
-                    r->bottom = r->top    + (vh + ey);
             }
+            if (wp == WMSZ_LEFT || wp == WMSZ_TOPLEFT || wp == WMSZ_BOTTOMLEFT)
+                r->left  = r->right - (vw + ex);
+            else
+                r->right = r->left  + (vw + ex);
+            if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT)
+                r->top    = r->bottom - (vh + ey);
+            else
+                r->bottom = r->top    + (vh + ey);
             return TRUE;
         }
         break;
 
-    /* The floor: 640x480 of PICTURE, or the smallest on-aspect box that clears it.
-       Enforced here rather than only in the presets, so dragging cannot go under it
-       either -- a 200x150 DOS window is not a size anybody wants by accident. */
+    /* #325: the floor is the picture at 1x (it was 640x480 on-aspect, which made 1x of a
+       320x200 mode impossible) -- or, when 1x does not fit the screen, small enough that
+       the scaled-down window is reachable. */
     case WM_GETMINMAXINFO:
         if (g_hwnd && !g_pd.fullscreen) {
             MINMAXINFO *mm = (MINMAXINFO *)lp;
-            int bw, bh, ex, ey;
-            host_video_base(&bw, &bh);
+            int pw, ph, ex, ey, rw, rh;
+            host_picture(1, &pw, &ph);
+            host_work_room(&rw, &rh);
+            if (pw > rw || ph > rh) { pw = 160; ph = 100; }
             host_frame_extra(h, &ex, &ey);
-            mm->ptMinTrackSize.x = bw + ex;
-            mm->ptMinTrackSize.y = bh + ey;
+            mm->ptMinTrackSize.x = pw + ex;
+            mm->ptMinTrackSize.y = ph + ey;
             return 0;
         }
         break;
@@ -14416,12 +14487,14 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     if (!RegisterClassA(&wc)) return 1;
     /* The initial size. Same helper the View menu and the dialog resize through, so
        "what 2x means" has one definition rather than one per call site. */
-    {   int scale = win_scale_clamped(g_set.v[SET_WINSIZE]), bw, bh;
+    {   int scale = (int)g_set.v[SET_WINSIZE] + 1, pw, ph;
         g_winsize_live = g_set.v[SET_WINSIZE];   /* the window is now AT this size */
         g_aspect_live  = g_set.v[SET_ASPECT];    /* ...and in this shape            */
-        host_video_base(&bw, &bh);
+        while (scale > 1 && !win_scale_fits(scale)) --scale;
+        g_scale_k = scale;
+        host_picture(scale, &pw, &ph);           /* #325: 720x400 text until a frame */
         rc.left = 0; rc.top = 0;
-        rc.right = bw * scale; rc.bottom = bh * scale + PRESENT_STATUS_H; }
+        rc.right = pw; rc.bottom = ph + PRESENT_STATUS_H; }
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
     g_hwnd = CreateWindowA(wc.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,

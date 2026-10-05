@@ -91,6 +91,7 @@
 #define IDC_S_TEXTFONT        276   /* combo:    #321 text-mode font (the stored string) */
 #define IDC_S_TEXTFONT_INFO   277   /* static:   #321 what the chosen font supplies      */
 #define IDC_S_TEXTFONT_VIEW   278   /* static:   #321 owner-drawn preview                */
+#define IDC_S_FIT             279   /* combo:    #325 maximised/fullscreen fit           */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_VOLUME          280

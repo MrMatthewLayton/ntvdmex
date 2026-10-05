@@ -71,6 +71,7 @@ typedef enum {
     SET_GUSADDR, SET_GUSIRQ, SET_GUSDMA, SET_MPUADDR,   /* #235: device resources */
     SET_HOSTCURSOR,             /* s84: Always / Never / Smart (#218's idle rule)  */
     SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image      */
+    SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
     SET_COUNT
 } set_id;
 
@@ -171,7 +172,10 @@ static const set_def SET_DEFS[SET_COUNT] = {
      rule at the top of this file is that THE DEFAULTS ARE THE SHIPPED BEHAVIOUR,
      and the shipped behaviour is one pixel per pixel. */
 /* s81 (#156): "Custom" removed -- it behaved as 1x. A stored 3 clamps back to the default. */
-{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   2, "1x|2x|3x" },
+/* #325: EXACT. 1x = one desktop pixel per frame pixel, Nx = an N x N block; the window
+   is sized to the picture, whatever the mode. 4x added (320x200 at 4x is 1280x800).
+   Meanings unchanged, so the stored index is kept. */
+{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   3, "1x|2x|3x|4x" },
 /* s81 (#147), user decision: GDI + DirectDraw only, and the choice is REAL. The window is
    always GDI; "DirectDraw" makes fullscreen the exclusive DirectDraw mode (no tearing)
    instead of the borderless GDI window. There was never Direct3D or OpenGL code.
@@ -188,7 +192,11 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "FullscreenRenderer", IDC_S_RENDERER,   SK_COMBO,      0,  0,   1,
                                           "GDI|DirectDraw" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
-{ "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
+/* #325: only consulted when the picture is not a whole multiple of the frame (a forced
+   ratio, Fill, a window too big for the screen). Sharp -- whole-multiple point-sampling,
+   then the remainder smoothed -- is APPENDED, so a stored 0/1 keeps its meaning; it is
+   the default for a machine that never chose. */
+{ "Filtering",         IDC_S_FILTER,      SK_COMBO,      2,  0,   2, PRESENT_FILTER_ITEMS },
 /* ── ★ WAS A CHECKBOX, IS NOW THE ASPECT LOCK. (session 54) ─────────────────────
      None / 4:3 / 16:9 / 16:10, and it does two things at once: it constrains the
      WINDOW to that shape while you drag it, and it letterboxes the frame inside the
@@ -197,7 +205,10 @@ static const set_def SET_DEFS[SET_COUNT] = {
    ★ AND 0/1 KEEP THEIR OLD MEANINGS -- 0 was off, 1 was "correct aspect" = 4:3 --
      so an existing registry value migrates for free. The list and the enum behind
      it live in present_scale.h, checked by present_test.c. */
-{ "AspectRatio",       IDC_S_ASPECT,      SK_COMBO,      0,  0,
+/* ⇒ #325 (user, s93): NATIVE -- square pixels, the frame's own shape -- is index 0 and
+     the default; "Auto = every VGA mode at 4:3" is gone. ⛔ A NEW REGISTRY NAME: a stored
+     "AspectRatio" 0 meant Auto, and must not silently become Native. */
+{ "DisplayAspect",     IDC_S_ASPECT,      SK_COMBO,      0,  0,
                                           PRESENT_ASPECT_COUNT - 1, PRESENT_ASPECT_ITEMS },
 { "FrameSkip",         IDC_S_FRAMESKIP,   SK_COMBO,      0,  0,   2, "0|1|2" },
 /* s73: OFF by default. With the Auto screen update every guest frame is blitted at
@@ -311,6 +322,10 @@ static const set_def SET_DEFS[SET_COUNT] = {
    CdRomUsePhysical is STORED ONLY until a CD-ROM is mounted into DOS (#240/#241). */
 { "FloppyUsePhysical", IDC_S_FLOPPY_PHYS, SK_CHECK,      1,  0,   1, NULL },
 { "CdRomUsePhysical",  IDC_S_CD_PHYS,     SK_CHECK,      1,  0,   1, NULL },
+/* #325: how the picture fills an area the user did not size -- maximised or fullscreen.
+   Whole pixels = the largest whole multiple that fits, black borders round it; Fill =
+   the largest on-ratio picture, sharp-filtered. */
+{ "DisplayFit",        IDC_S_FIT,         SK_COMBO,      0,  0,   1, PRESENT_FIT_ITEMS },
 };
 
 static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {

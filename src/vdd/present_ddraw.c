@@ -206,6 +206,48 @@ static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int 
     return pix;
 }
 
+/* ── #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
+     always point-sampled (every filter agrees there, and it is the default case: a
+     Native window, or a Whole-pixels fit). Otherwise Nearest point-samples -- uneven
+     rows -- Bilinear smooths everything (HALFTONE), and Sharp enlarges by the largest
+     whole multiple point-sampled into a scratch bitmap and smooths only the remainder,
+     so edges stay crisp and rows stay even. Shared by the GDI window and the
+     DirectDraw back buffer's DC. Returns non-zero when something was drawn. */
+static int blit_picture(HDC hdc, int dx, int dy, int dw, int dh,
+                        const uint8_t *pix, snap_dib_t *bi, int sw, int sh, int filter)
+{
+    static HDC s_dc; static HBITMAP s_bmp, s_old; static int s_w, s_h;
+    int kx, ky, iw, ih;
+    if (sw < 1 || sh < 1) return 0;
+    if ((dw % sw == 0 && dh % sh == 0) || filter == PRESENT_FILTER_NEAREST) {
+        SetStretchBltMode(hdc, COLORONCOLOR);
+        return StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh, pix, (BITMAPINFO *)bi,
+                             DIB_RGB_COLORS, SRCCOPY) > 0;
+    }
+    if (filter == PRESENT_FILTER_BILINEAR) {
+        SetStretchBltMode(hdc, HALFTONE); SetBrushOrgEx(hdc, 0, 0, NULL);
+        return StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh, pix, (BITMAPINFO *)bi,
+                             DIB_RGB_COLORS, SRCCOPY) > 0;
+    }
+    kx = dw / sw; ky = dh / sh;
+    if (kx < 1) kx = 1;
+    if (ky < 1) ky = 1;
+    iw = sw * kx; ih = sh * ky;
+    if (!s_dc) s_dc = CreateCompatibleDC(hdc);
+    if (!s_dc) return 0;
+    if (!s_bmp || s_w != iw || s_h != ih) {
+        if (s_bmp) { SelectObject(s_dc, s_old); DeleteObject(s_bmp); s_bmp = NULL; }
+        s_bmp = CreateCompatibleBitmap(hdc, iw, ih);
+        if (!s_bmp) { s_w = s_h = 0; return 0; }
+        s_old = (HBITMAP)SelectObject(s_dc, s_bmp);
+        s_w = iw; s_h = ih;
+    }
+    SetStretchBltMode(s_dc, COLORONCOLOR);
+    StretchDIBits(s_dc, 0, 0, iw, ih, 0, 0, sw, sh, pix, (BITMAPINFO *)bi, DIB_RGB_COLORS, SRCCOPY);
+    SetStretchBltMode(hdc, HALFTONE); SetBrushOrgEx(hdc, 0, 0, NULL);
+    return StretchBlt(hdc, dx, dy, dw, dh, s_dc, 0, 0, iw, ih, SRCCOPY);
+}
+
 static void gdi_present(present_ddraw *pd)
 {
     HDC hdc, win, mem; RECT rc; int cw, ch, dx, dy, dw, dh;
@@ -230,14 +272,12 @@ static void gdi_present(present_ddraw *pd)
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
          and put the uneven pixels straight back. */
-    {   /* #228: Stretch fills a fullscreen or maximised area -- and a fill is not a
-             whole multiple, so it takes the plain fit even with sharp pixels on. */
+    {   /* #325: one layout for every path, from the FRAME's size (not the post-Scale2x
+             source): a window is sized to the picture, maximised/fullscreen fit by the
+             Fit setting. */
         int screen = pd->fullscreen || IsZoomed(pd->hwnd);
-        int asp = present_aspect_for_area(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa, screen);
-        if (pd->fullscreen && pd->fs_integer && !present_stretch_fills(pd->aspect, screen))
-            present_fit_int(cw, ch, sw, sh, asp, &dx, &dy, &dw, &dh);
-        else
-            present_fit(cw, ch, asp, &dx, &dy, &dw, &dh); }
+        present_layout(pd->aspect, screen ? pd->fit : PRESENT_FIT_WHOLE, screen, cw, ch,
+                       pd->snap_w, pd->snap_h, &dx, &dy, &dw, &dh); }
     if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
@@ -246,10 +286,7 @@ static void gdi_present(present_ddraw *pd)
         RECT full; full.left = 0; full.top = 0; full.right = cw; full.bottom = ch;
         FillRect(hdc, &full, (HBRUSH)GetStockObject(BLACK_BRUSH));
     }
-    SetStretchBltMode(hdc, pd->filter ? HALFTONE : COLORONCOLOR);
-    if (pd->filter) SetBrushOrgEx(hdc, 0, 0, NULL);   /* HALFTONE requires this */
-    StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh,
-                  pix, (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY);
+    blit_picture(hdc, dx, dy, dw, dh, pix, &bi, sw, sh, pd->filter);   /* #325 */
     if (present_scaler_scanlines(pd->scaler)) {
         HBRUSH br = scanline_brush();
         if (br) {
@@ -500,19 +537,15 @@ static void fs_present(present_ddraw *pd)
     LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb;
     int fx, fy, fw, fh, done = 0;
     if (!bk) return;
-    /* ★ THE SAME FIT THE WINDOW USES. present_fit centres an on-aspect rectangle in
-         the destination and returns the whole destination for "None" (fill). One
-         function for both modes is the point: a setting that meant one thing windowed
-         and another fullscreen is exactly the bug being fixed.
-       ★ ...unless sharp pixels were asked for, in which case each axis snaps to a
-         whole multiple of the FRAME -- which is why this needs snap_w/snap_h and the
-         windowed caller does not. See present_fit_int. */
-    {   /* #228: exclusive fullscreen is always "the screen" for Stretch. */
-        int asp = present_aspect_for_area(pd->aspect, pd->snap_w, pd->snap_h, pd->mode_vesa, 1);
-        if (pd->fs_integer && !present_stretch_fills(pd->aspect, 1))
-            present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h, asp, &fx, &fy, &fw, &fh);
-        else
-            present_fit(pd->fs_w, pd->fs_h, asp, &fx, &fy, &fw, &fh); }
+    /* ★ THE SAME LAYOUT THE WINDOW USES (present_layout). One function for both
+         renderers is the point: a setting that meant one thing windowed and another
+         fullscreen is exactly the bug it exists to prevent. */
+    /* #325: exclusive fullscreen is "the screen": the same layout as the window. */
+    present_layout(pd->aspect, pd->fit, 1, pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
+                   &fx, &fy, &fw, &fh);
+    /* ...and remember it: the mouse maps through the rectangle actually drawn. */
+    pd->last_dx = fx; pd->last_dy = fy; pd->last_dw = fw; pd->last_dh = fh;
+    pd->last_sw = pd->snap_w; pd->last_sh = pd->snap_h;
 
     /* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
          from scaler/filter. With them off it should be stretched, sharp pixels,
@@ -523,7 +556,7 @@ static void fs_present(present_ddraw *pd)
          as the GDI renderer. ⚠ Not a hand-written per-pixel stretch into video memory:
          that was tried first and was unplayably slow on the rig (it read VRAM back to
          copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear. */
-    if (!pd->filter && pd->snap_w > 0 && pd->snap_h > 0) {
+    if (pd->filter != PRESENT_FILTER_BILINEAR && pd->snap_w > 0 && pd->snap_h > 0) {
         HDC hd;
         if (fx || fy) {                          /* letterboxed -> clear the bars */
             DDBLTFX bfx;
@@ -533,9 +566,7 @@ static void fs_present(present_ddraw *pd)
         if (SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
             snap_dib_t bi; int sw, sh;
             const uint8_t *pix = snap_dib(pd, &bi, &sw, &sh, 1);
-            SetStretchBltMode(hd, COLORONCOLOR);
-            done = StretchDIBits(hd, fx, fy, fw, fh, 0, 0, sw, sh, pix,
-                                 (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY) > 0;
+            done = blit_picture(hd, fx, fy, fw, fh, pix, &bi, sw, sh, pd->filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(bk, hd);
         }
     }

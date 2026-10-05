@@ -44,8 +44,9 @@ typedef struct present_ddraw {
          stored settings behaves exactly as it always has. */
     int   vsync;        /* 1 = time the blit near vblank (the historical default)*/
     int   mon_h, mon_hz;/* monitor lines + refresh, read once by wait_vblank (0 = not yet, -1 = unknown) */
-    int   filter;       /* 0 = nearest, 1 = bilinear (GDI HALFTONE)             */
-    int   aspect;       /* 1 = letterbox to 4:3 rather than fill the client     */
+    int   filter;       /* PRESENT_FILTER_* -- nearest / bilinear / sharp (#325)  */
+    int   fit;          /* PRESENT_FIT_* -- maximised/fullscreen: whole pixels or fill */
+    int   aspect;       /* PRESENT_ASPECT_* -- Native (square pixels) or forced  */
     int   scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */
     /* ── FULLSCREEN (s64). ───────────────────────────────────────────────────
          By DEFAULT fullscreen is a borderless window drawn by gdi_present, because

@@ -233,6 +233,10 @@ BEGIN
     LTEXT           "Frame S&kip:", -1, 140, 103, 58, 8
     COMBOBOX        IDC_S_FRAMESKIP, 200, 101, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    /* #325: maximised / fullscreen -- whole pixels or fill. */
+    LTEXT           "Full Screen Fi&t:", -1, 266, 103, 58, 8
+    COMBOBOX        IDC_S_FIT, 326, 101, 64, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
     /* #217: double-buffering and on-screen messages both default on. */
     GROUPBOX        "Drawing", -1, 6, 124, 392, 40

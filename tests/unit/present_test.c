@@ -138,73 +138,60 @@ int main(void)
 
     printf("== Display: the aspect lock and the minimum window ==\n");
 
-    /* ── THE ASPECT LIST IS NOW A FOUR-WAY, AND 0/1 MUST STILL MEAN WHAT THEY DID.
-         It used to be a checkbox: 0 = fill, 1 = "correct aspect" = 4:3. Anything
-         already in a registry has to survive that becoming a combo, or every
-         existing install's window quietly changes shape on upgrade. */
-    CHECK(PRESENT_ASPECT_NONE == 0, "aspect 0 is still None, so an old unchecked box still fills");
-    CHECK(PRESENT_ASPECT_4_3 == 1,  "aspect 1 is still 4:3, so an old checked box still means 4:3");
-
+    /* ── #325: THE ASPECT LIST. Native (square pixels) is index 0 and the default; the
+         forced ratios keep their indices; Stretch is last. (The registry NAME changed
+         with the meaning of 0, in settings.h, so no stored value is reinterpreted.) */
+    CHECK(PRESENT_ASPECT_NATIVE == 0 && PRESENT_ASPECT_4_3 == 1 && PRESENT_ASPECT_STRETCH == 4,
+          "aspect indices: Native 0, 4:3 1, Stretch 4");
     {   int n = 0, d = 0;
         present_aspect_ratio(PRESENT_ASPECT_16_9, &n, &d);
         CHECK(n == 16 && d == 9, "16:9 is 16/9");
-        present_aspect_ratio(PRESENT_ASPECT_NONE, &n, &d);
-        CHECK(n == 0 && d == 0, "None has no ratio at all -- callers read that as 'fill'"); }
+        present_aspect_ratio(PRESENT_ASPECT_NATIVE, &n, &d);
+        CHECK(n == 0 && d == 0, "Native has no ratio of its own (present_fit reads 0/0 as fill)");
+        present_target_ratio(PRESENT_ASPECT_NATIVE, 320, 200, &n, &d);
+        CHECK(n == 320 && d == 200, "Native's target ratio is the frame's own: 320x200 is 8:5"); }
 
-    /* A wide window under 16:9 pillarboxes to 16:9, not to the old hard-coded 4:3. */
+    /* A wide window under 16:9 pillarboxes to 16:9. */
     present_fit(1000, 400, PRESENT_ASPECT_16_9, &x, &y, &w, &h);
     CHECK(w == 711 && h == 400, "16:9 in a 1000x400 client is 711x400, height-bound");
 
-    /* ── ★ THE MINIMUM WINDOW, WHERE THE ASPECT LOCK AND THE 640x480 FLOOR MEET.
-         On-aspect, at least 640 wide AND at least 480 tall -- so for a ratio WIDER
-         than 4:3 the height binds first and drags the width up past 640. Getting it
-         backwards gives a 16:9 minimum of 640x360, which is under the very floor
-         the rule exists to enforce. */
-    {   int mw = 0, mh = 0;
-        present_min_client(PRESENT_ASPECT_NONE, &mw, &mh);
-        CHECK(mw == 640 && mh == 480, "no lock: the minimum is just the 640x480 floor");
-        present_min_client(PRESENT_ASPECT_4_3, &mw, &mh);
-        CHECK(mw == 640 && mh == 480, "4:3: both constraints bind at once -- exactly 640x480");
-        present_min_client(PRESENT_ASPECT_16_10, &mw, &mh);
-        CHECK(mw == 768 && mh == 480, "16:10: the 480 height binds first, so 768x480");
-        present_min_client(PRESENT_ASPECT_16_9, &mw, &mh);
-        CHECK(mw == 853 && mh == 480, "16:9: wider still, so 853x480"); }
+    /* ── #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
+    {   int pw, ph;
+        present_window_picture(PRESENT_ASPECT_NATIVE, 320, 200, 1, &pw, &ph);
+        CHECK(pw == 320 && ph == 200, "window: 320x200 at 1x is 320x200 -- no 640x480 floor");
+        present_window_picture(PRESENT_ASPECT_NATIVE, 320, 200, 3, &pw, &ph);
+        CHECK(pw == 960 && ph == 600, "window: 320x200 at 3x is 960x600");
+        present_window_picture(PRESENT_ASPECT_NATIVE, 720, 400, 2, &pw, &ph);
+        CHECK(pw == 1440 && ph == 800, "window: 720x400 text at 2x is 1440x800");
+        present_window_picture(PRESENT_ASPECT_STRETCH, 640, 200, 1, &pw, &ph);
+        CHECK(pw == 640 && ph == 200, "window: Stretch in a window is Native (640x200 stays 16:5)");
+        present_window_picture(PRESENT_ASPECT_4_3, 320, 200, 2, &pw, &ph);
+        CHECK(pw == 640 && ph == 480, "window: forced 4:3 keeps the width -- 320x200 at 2x is 640x480");
+        present_window_picture(PRESENT_ASPECT_16_9, 640, 200, 1, &pw, &ph);
+        CHECK(pw == 640 && ph == 360, "window: forced 16:9 -- 640x200 at 1x is 640x360"); }
 
-    {   int i, mw = 0, mh = 0, ok2 = 1;
-        for (i = 0; i < PRESENT_ASPECT_COUNT; ++i) {
-            present_min_client(i, &mw, &mh);
-            if (mw < 640 || mh < 480) ok2 = 0;
-        }
-        CHECK(ok2, "no aspect can produce a minimum below 640x480 -- that is the floor"); }
-
-    /* #228: Auto resolves against the mode: VGA/text 4:3 (a CRT's shape), VESA square. */
-    {   int n, d;
-        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 320, 200, 0), &n, &d);
-        CHECK(n == 4 && d == 3, "auto: 320x200 (mode 13h) shows 4:3, tall pixels as on a CRT");
-        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 720, 400, 0), &n, &d);
-        CHECK(n == 4 && d == 3, "auto: 720x400 text shows 4:3");
-        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 1280, 1024, 1), &n, &d);
-        CHECK(n == 5 && d == 4, "auto: VESA 1280x1024 is square-pixel 5:4");
-        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_AUTO, 1024, 768, 1), &n, &d);
-        CHECK(n == 4 && d == 3, "auto: VESA 1024x768 is 4:3");
-        CHECK(present_aspect_auto(PRESENT_ASPECT_16_9, 320, 200, 0) == PRESENT_ASPECT_16_9,
-              "auto: a named ratio passes straight through");
-        {   int x, y, w, h;
-            present_fit(1000, 1000, present_aspect_auto(PRESENT_ASPECT_AUTO, 320, 200, 0), &x, &y, &w, &h);
-            CHECK(w == 1000 && h == 750 && y == 125, "auto: the fit letterboxes a 4:3 mode in a square client"); } }
-
-    /* #228 (user, s84): Stretch is Auto for the window's shape, and fills an area the user
-       did not size -- fullscreen or maximised -- with no bars. */
-    {   int x, y, w, h, n, d;
-        CHECK(PRESENT_ASPECT_STRETCH == 4, "stretch is APPENDED, so every stored aspect keeps its meaning");
-        present_aspect_ratio(present_aspect_auto(PRESENT_ASPECT_STRETCH, 320, 200, 0), &n, &d);
-        CHECK(n == 4 && d == 3, "stretch: the window's shape is Auto's (320x200 -> 4:3)");
-        present_fit(1000, 400, present_aspect_for_area(PRESENT_ASPECT_STRETCH, 320, 200, 0, 0), &x, &y, &w, &h);
-        CHECK(w == 533 && h == 400, "stretch: in a window it letterboxes like Auto");
-        present_fit(1680, 1050, present_aspect_for_area(PRESENT_ASPECT_STRETCH, 320, 200, 0, 1), &x, &y, &w, &h);
-        CHECK(x == 0 && y == 0 && w == 1680 && h == 1050, "stretch: fullscreen/maximised fills the whole area");
-        present_fit(1680, 1050, present_aspect_for_area(PRESENT_ASPECT_AUTO, 320, 200, 0, 1), &x, &y, &w, &h);
-        CHECK(w == 1400 && h == 1050, "auto: fullscreen still keeps 4:3 -- only Stretch fills"); }
+    /* ── #325: WHERE THE PICTURE GOES. */
+    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    CHECK(w == 1600 && h == 1000 && x == 40 && y == 25,
+          "layout: 320x200 on 1680x1050, whole pixels -> 5x = 1600x1000, centred");
+    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 720, 400, &x, &y, &w, &h);
+    CHECK(w == 1440 && h == 800 && x == 120 && y == 125, "layout: 720x400 text -> 2x = 1440x800");
+    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 800, 600, &x, &y, &w, &h);
+    CHECK(w == 800 && h == 600 && x == 440 && y == 225, "layout: 800x600 -> 1x, with the borders a physical limit");
+    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1000, 1280, 1024, &x, &y, &w, &h);
+    CHECK(w == 1250 && h == 1000, "layout: 1280x1024 that does not fit at 1x is scaled down on-ratio");
+    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_FILL, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    CHECK(w == 1680 && h == 1050, "layout: Fill -> the largest 8:5 picture (the whole 1680x1050)");
+    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1600, 1200, 320, 200, &x, &y, &w, &h);
+    CHECK(w == 1600 && h == 1200 && x == 0, "layout: forced 4:3, whole pixels -> 5x6 = 1600x1200 EXACTLY 4:3");
+    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    CHECK(w == 1400 && h == 1050, "layout: forced 4:3 with no exact whole pair that fits -> 1400x1050");
+    present_layout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    CHECK(x == 0 && y == 0 && w == 1680 && h == 1050, "layout: Stretch on a screen fills it");
+    present_layout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 0, 640, 400, 320, 200, &x, &y, &w, &h);
+    CHECK(x == 0 && y == 0 && w == 640 && h == 400, "layout: in a window sized to the picture, the whole client");
+    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 0, 640, 480, 320, 200, &x, &y, &w, &h);
+    CHECK(x == 0 && y == 0 && w == 640 && h == 480, "layout: a forced-4:3 window fills its client exactly");
 
     /* #229: the colour filters recolour a COLOUR; Default must be the identity. */
     CHECK(present_tint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
