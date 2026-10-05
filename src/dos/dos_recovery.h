@@ -37,26 +37,29 @@
  *   take ourselves out of the path rather than break every 16-bit program on
  *   the box until someone edits the registry by hand.
  *
- * Pure -- no Windows types -- so tests/unit/recovery_test.c can pin it.
+ * No Windows calls, only Windows types (src/ntvdmex_types.h), so
+ * tests/unit/recovery_test.c can pin it.
  */
-#ifndef DOS_RECOVERY_H
-#define DOS_RECOVERY_H
+#ifndef NTVDMEX_DOS_RECOVERY_H
+#define NTVDMEX_DOS_RECOVERY_H
 
-#define DOS_RECOVER_SAFE  2      /* this many consecutive failures -> safe mode */
-#define DOS_RECOVER_GONE  3      /* ...and this many -> take ourselves out       */
+#include "../ntvdmex_types.h"
 
-typedef enum {
+#define DOS_RECOVERY_SAFE_MODE_FAILURES  2   /* this many consecutive failures -> safe mode */
+#define DOS_RECOVERY_UNINSTALL_FAILURES  3   /* ...and this many -> take ourselves out       */
+
+typedef enum _DOS_START_MODE {
     DOS_START_NORMAL = 0,
     DOS_START_SAFE   = 1,
     DOS_START_UNINSTALL = 2
-} dos_start_mode;
+} DOS_START_MODE, *PDOS_START_MODE;
 
-/* `fails` is the number of consecutive starts that did NOT end cleanly, read
+/* `failureCount` is the number of consecutive starts that did NOT end cleanly, read
    before this one is counted. */
-static dos_start_mode dos_recovery_decide(unsigned fails)
+static DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount)
 {
-    if (fails >= DOS_RECOVER_GONE) return DOS_START_UNINSTALL;
-    if (fails >= DOS_RECOVER_SAFE) return DOS_START_SAFE;
+    if (failureCount >= DOS_RECOVERY_UNINSTALL_FAILURES) return DOS_START_UNINSTALL;
+    if (failureCount >= DOS_RECOVERY_SAFE_MODE_FAILURES) return DOS_START_SAFE;
     return DOS_START_NORMAL;
 }
 
@@ -66,48 +69,65 @@ static dos_start_mode dos_recovery_decide(unsigned fails)
      window, keyboard and mouse -- and drops everything that reaches OUTSIDE the
      process to optional hardware or foreign code, which is where both s52 wedges
      and every "host never got a window" report has come from:
-       vdd_plugins   third-party VDD DLLs from cfg\vdd.txt (foreign code, in-process)
-       audio_out     opening waveOut/DirectSound (a broken driver blocks there); the
+       VddPlugins    third-party VDD DLLs from cfg\vdd.txt (foreign code, in-process)
+       AudioOut      opening waveOut/DirectSound (a broken driver blocks there); the
                      mixer still runs and still paces the guest, into silence
-       real_speaker  Beep.sys through \\?\GLOBALROOT -- a device open
-       joystick      the joyGetPosEx poll thread (winmm joystick drivers)
-       wow_shims     bin\wowshim\ (two more DLLs loaded into the process)
-       fullscreen    DirectDraw exclusive mode; the window stays a window
+       RealSpeaker   Beep.sys through \\?\GLOBALROOT -- a device open
+       Joystick      the joyGetPosEx poll thread (winmm joystick drivers)
+       WowShims      bin\wowshim\ (two more DLLs loaded into the process)
+       Fullscreen    DirectDraw exclusive mode; the window stays a window
      NOT a skip, deliberately: the physical floppy. The s52 empty-drive wedge was a
      MODAL ERROR BOX, which SetErrorMode now suppresses for the whole process, and
      there is no start-up probe of A: left to skip -- a flag here would gate nothing.
      All or nothing by design: the count says start-up failed, not WHICH part, and a
      third failure uninstalls us anyway. */
-typedef struct {
-    unsigned char vdd_plugins, audio_out, real_speaker, joystick,
-                  wow_shims, fullscreen;
-} dos_safe_skips;
+typedef struct _DOS_SAFE_SKIPS {
+    BYTE VddPlugins, AudioOut, RealSpeaker, Joystick,
+         WowShims, Fullscreen;
+} DOS_SAFE_SKIPS, *PDOS_SAFE_SKIPS;
 
-static dos_safe_skips dos_recovery_skips(dos_start_mode m)
+typedef const DOS_SAFE_SKIPS *PCDOS_SAFE_SKIPS;
+
+static DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode)
 {
-    dos_safe_skips k;
-    unsigned char on = (m == DOS_START_SAFE) ? 1 : 0;
-    k.vdd_plugins = on; k.audio_out = on; k.real_speaker = on; k.joystick = on;
-    k.wow_shims = on; k.fullscreen = on;
-    return k;
+    DOS_SAFE_SKIPS skips;
+    BYTE isSkipped = (startMode == DOS_START_SAFE) ? TRUE : FALSE;
+    skips.VddPlugins = isSkipped; skips.AudioOut = isSkipped; skips.RealSpeaker = isSkipped;
+    skips.Joystick = isSkipped; skips.WowShims = isSkipped; skips.Fullscreen = isSkipped;
+    return skips;
 }
+
+/* The counter file's text: decimal digits, perhaps after blanks. */
+#define DOS_RECOVERY_FIRST_DIGIT      '0'
+#define DOS_RECOVERY_LAST_DIGIT       '9'
+#define DOS_RECOVERY_DECIMAL_BASE     10
+#define DOS_RECOVERY_MAX_DIGITS       4      /* more than this is absurd -> zero    */
+#define DOS_RECOVERY_SPACE            ' '    /* the blanks skipped before the count */
+#define DOS_RECOVERY_CARRIAGE_RETURN  '\r'
+#define DOS_RECOVERY_LINE_FEED        '\n'
+#define DOS_RECOVERY_TAB              '\t'
 
 /* Parse the counter file's contents. Anything unreadable counts as ZERO, not as
    a failure: a corrupt counter must not be able to uninstall us on its own, and
    "the file is missing" is the normal state on a healthy machine. */
-static unsigned dos_recovery_parse(const char *buf, unsigned len)
+static UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT length)
 {
-    unsigned v = 0, i, digits = 0;
-    if (!buf) return 0;
-    for (i = 0; i < len; ++i) {
-        if (buf[i] >= '0' && buf[i] <= '9') {
-            v = v * 10 + (unsigned)(buf[i] - '0');
-            if (++digits > 4) return 0;          /* absurd -> treat as zero */
-        } else if (digits) break;                /* stop at the first non-digit */
-        else if (buf[i] != ' ' && buf[i] != '\r' && buf[i] != '\n' && buf[i] != '\t')
-            return 0;                            /* leading junk -> zero        */
+    UINT value = 0, characterIndex, digitCount = 0;
+    if (!text) return 0;
+    for (characterIndex = 0; characterIndex < length; ++characterIndex) {
+        if (text[characterIndex] >= DOS_RECOVERY_FIRST_DIGIT
+            && text[characterIndex] <= DOS_RECOVERY_LAST_DIGIT) {
+            value = value * DOS_RECOVERY_DECIMAL_BASE
+                  + (UINT)(text[characterIndex] - DOS_RECOVERY_FIRST_DIGIT);
+            if (++digitCount > DOS_RECOVERY_MAX_DIGITS) return 0;  /* absurd -> treat as zero */
+        } else if (digitCount) break;                /* stop at the first non-digit */
+        else if (text[characterIndex] != DOS_RECOVERY_SPACE
+                 && text[characterIndex] != DOS_RECOVERY_CARRIAGE_RETURN
+                 && text[characterIndex] != DOS_RECOVERY_LINE_FEED
+                 && text[characterIndex] != DOS_RECOVERY_TAB)
+            return 0;                                /* leading junk -> zero        */
     }
-    return v;
+    return value;
 }
 
-#endif /* DOS_RECOVERY_H */
+#endif /* NTVDMEX_DOS_RECOVERY_H */

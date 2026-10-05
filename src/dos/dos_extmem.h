@@ -19,63 +19,86 @@
  *   4. anything else -> refused.
  * A range may not straddle two of these.
  *
- * Pure <stdint.h>, like dos_xms.h; tested off-VM by tests/unit/extmem_test.c.
+ * No Windows calls, only Windows types (src/ntvdmex_types.h), like dos_xms.h; tested
+ * off-VM by tests/unit/extmem_test.c.
  */
-#ifndef DOS_EXTMEM_H
-#define DOS_EXTMEM_H
+#ifndef NTVDMEX_DOS_EXTMEM_H
+#define NTVDMEX_DOS_EXTMEM_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 #include "dos_xms.h"
 
-#define EXTMEM_DIRECT_END  0x0010FFF0u   /* FFFF:FFFF + 1: top of the HMA          */
-#define EXTMEM_RAW_BASE    0x00100000u   /* raw buffer index 0 = linear 1 MB        */
-#define EXTMEM_RAW_END     0x01000000u   /* 16 MB: 1 MB + AH=88h's 15 MB            */
-#define EXTMEM_RAW_LEN     (EXTMEM_RAW_END - EXTMEM_RAW_BASE)
+#define DOS_EXTMEM_DIRECT_END  0x0010FFF0u   /* FFFF:FFFF + 1: top of the HMA          */
+#define DOS_EXTMEM_RAW_BASE    0x00100000u   /* raw buffer index 0 = linear 1 MB        */
+#define DOS_EXTMEM_RAW_END     0x01000000u   /* 16 MB: 1 MB + AH=88h's 15 MB            */
+#define DOS_EXTMEM_RAW_LENGTH  (DOS_EXTMEM_RAW_END - DOS_EXTMEM_RAW_BASE)
 
-enum { EXTMEM_NONE = 0, EXTMEM_DIRECT, EXTMEM_EMB, EXTMEM_RAW };
+enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_EMB,
+       DOS_EXTMEM_REGION_RAW };
 
-/* Which region [lin, lin+n) lies in. n > 0. */
-static inline int extmem_classify(const xms_state *x, uint32_t lin, uint32_t n)
+/* An AH=87h GDT descriptor (8 bytes; the GDT holds six) and where its base sits:
+   bits 0-23 in bytes 2-4, bits 24-31 in byte 7. */
+#define DOS_EXTMEM_DESCRIPTOR_SIZE        8
+#define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE0  2
+#define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1  3
+#define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2  4
+#define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3  7
+#define DOS_EXTMEM_BYTE1_SHIFT            8
+#define DOS_EXTMEM_BYTE2_SHIFT            16
+#define DOS_EXTMEM_BYTE3_SHIFT            24
+
+/* Which region [linearAddress, linearAddress+length) lies in. length > 0. */
+static inline INT DosExtMemClassify(_In_opt_ PCDOS_XMS_STATE xmsState, _In_ DWORD linearAddress,
+                                    _In_ DWORD length)
 {
-    uint32_t end = lin + n;
-    int i;
-    if (n == 0 || end < lin) return EXTMEM_NONE;                 /* wraps 4 GB */
-    if (end <= EXTMEM_DIRECT_END) return EXTMEM_DIRECT;
-    if (x) {
-        for (i = 0; i < XMS_MAX_HANDLES; ++i) {
-            const xms_handle *h = &x->h[i];
-            uint32_t b, e;
-            if (!h->used || !h->mem || !h->size_kb) continue;
-            b = (uint32_t)(uintptr_t)h->mem;
-            e = b + h->size_kb * 1024u;
-            if (lin >= b && end <= e && e > b) return EXTMEM_EMB;
+    DWORD end = linearAddress + length;
+    INT handleIndex;
+    if (length == 0 || end < linearAddress) return DOS_EXTMEM_REGION_NONE;    /* wraps 4 GB */
+    if (end <= DOS_EXTMEM_DIRECT_END) return DOS_EXTMEM_REGION_DIRECT;
+    if (xmsState) {
+        for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex) {
+            PCDOS_XMS_HANDLE handleEntry = &xmsState->Handles[handleIndex];
+            DWORD blockBase, blockEnd;
+            if (!handleEntry->InUse || !handleEntry->Memory || !handleEntry->SizeKb) continue;
+            blockBase = (DWORD)(UINT_PTR)handleEntry->Memory;
+            blockEnd = blockBase + handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB;
+            if (linearAddress >= blockBase && end <= blockEnd && blockEnd > blockBase)
+                return DOS_EXTMEM_REGION_EMB;
         }
     }
-    if (lin >= EXTMEM_DIRECT_END && end <= EXTMEM_RAW_END) return EXTMEM_RAW;
-    return EXTMEM_NONE;
+    if (linearAddress >= DOS_EXTMEM_DIRECT_END && end <= DOS_EXTMEM_RAW_END)
+        return DOS_EXTMEM_REGION_RAW;
+    return DOS_EXTMEM_REGION_NONE;
 }
 
-/* Host pointer for [lin, lin+n), or 0. `conv` is the host address of guest linear 0,
-   `raw` the raw buffer (EXTMEM_RAW_LEN bytes; may be 0 until first needed -- then a
-   RAW range resolves to 0 and the caller allocates and asks again). */
-static inline uint8_t *extmem_resolve(const xms_state *x, uintptr_t conv, uint8_t *raw,
-                                      uint32_t lin, uint32_t n)
+/* Host pointer for [linearAddress, linearAddress+length), or 0. `conventionalBase` is
+   the host address of guest linear 0, `rawBuffer` the raw buffer (DOS_EXTMEM_RAW_LENGTH
+   bytes; may be 0 until first needed -- then a RAW range resolves to 0 and the caller
+   allocates and asks again). */
+static inline PBYTE DosExtMemResolve(_In_opt_ PCDOS_XMS_STATE xmsState,
+                                     _In_ UINT_PTR conventionalBase,
+                                     _In_opt_ PBYTE rawBuffer, _In_ DWORD linearAddress,
+                                     _In_ DWORD length)
 {
-    switch (extmem_classify(x, lin, n)) {
-    case EXTMEM_DIRECT: return (uint8_t *)(conv + lin);
-    case EXTMEM_EMB:    return (uint8_t *)(uintptr_t)lin;
-    case EXTMEM_RAW:    return raw ? raw + (lin - EXTMEM_RAW_BASE) : 0;
-    default:            return 0;
+    switch (DosExtMemClassify(xmsState, linearAddress, length)) {
+    case DOS_EXTMEM_REGION_DIRECT: return (PBYTE)(conventionalBase + linearAddress);
+    case DOS_EXTMEM_REGION_EMB:    return (PBYTE)(UINT_PTR)linearAddress;
+    case DOS_EXTMEM_REGION_RAW:
+        return rawBuffer ? rawBuffer + (linearAddress - DOS_EXTMEM_RAW_BASE) : 0;
+    default:                       return 0;
     }
 }
 
 /* The source and destination bases from an AH=87h GDT (48 bytes at `gdt`):
    descriptor 2 (+0x10) is the source, 3 (+0x18) the destination; base bits 0-23 at
    +2..+4 and 24-31 at +7 (386 BIOSes honour the high byte). */
-static inline uint32_t extmem_desc_base(const volatile uint8_t *d)
+static inline DWORD DosExtMemDescriptorBase(
+    _In_reads_bytes_(DOS_EXTMEM_DESCRIPTOR_SIZE) const volatile BYTE *descriptor)
 {
-    return (uint32_t)d[2] | ((uint32_t)d[3] << 8) | ((uint32_t)d[4] << 16)
-         | ((uint32_t)d[7] << 24);
+    return (DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE0]
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1] << DOS_EXTMEM_BYTE1_SHIFT)
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2] << DOS_EXTMEM_BYTE2_SHIFT)
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3] << DOS_EXTMEM_BYTE3_SHIFT);
 }
 
-#endif /* DOS_EXTMEM_H */
+#endif /* NTVDMEX_DOS_EXTMEM_H */

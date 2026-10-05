@@ -380,7 +380,7 @@ static void hostprof_dump(void);
    pre-session-11 behaviour (latch the pending bit only, never queue). */
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
 #define VDDLIST_PATH CFG_("vdd.txt")
-static dos_safe_skips g_safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
+static DOS_SAFE_SKIPS g_safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
 #define QIMODE_PATH CFG_("qimode.txt")
 /* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
    Exists so the rig can try a different starting word without a rebuild -- see the
@@ -1077,7 +1077,7 @@ static int   g_wowfold_mute;
 static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF */
 static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
-static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
+static DOS_XMS_STATE    g_xms;       /* M4: XMS extended-memory manager           */
 static void        *g_hma;       /* the HMA at linear 0x100000, 0 = unavailable */
 static DWORD        g_hma_err;   /* why not, when g_hma == 0                     */
 
@@ -1117,7 +1117,7 @@ static void hma_try(void)
     { unsigned i; volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)0x100000u;
       for (i = 0; i < 0x10000u; ++i) h[i] = 0; }
 }
-static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
+static DOS_EMS_STATE    g_ems;       /* M4: EMS expanded-memory manager           */
 /* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
    tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
    in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
@@ -2946,7 +2946,7 @@ static void vdd_load_third_party(void)
     HANDLE h;
     char buf[4096];
     DWORD got = 0, i = 0, n = 0, loaded = 0;
-    if (g_safe.vdd_plugins) return;                 /* s90 #132: SAFE MODE */
+    if (g_safe.VddPlugins) return;                 /* s90 #132: SAFE MODE */
     h = CreateFileA(VDDLIST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;          /* no list is not an error */
@@ -4784,7 +4784,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
      strikes and the user's next launch silently ran stock ntvdm for the rest of
      the day. See src/dos/dos_recovery.h. */
 #define STARTFAIL_PATH OUT_("startfail.txt")
-static dos_start_mode g_start_mode = DOS_START_NORMAL;
+static DOS_START_MODE g_start_mode = DOS_START_NORMAL;
 
 static unsigned recovery_read(void)
 {
@@ -4792,7 +4792,7 @@ static unsigned recovery_read(void)
     HANDLE h = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
-    if (ReadFile(h, b, sizeof(b) - 1, &n, NULL)) v = dos_recovery_parse(b, n);
+    if (ReadFile(h, b, sizeof(b) - 1, &n, NULL)) v = DosRecoveryParseFailureCount(b, n);
     CloseHandle(h);
     return v;
 }
@@ -7925,15 +7925,15 @@ static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
 
 /* --- XMS (M4) -------------------------------------------------------------- *
  * Extended memory lives on the host heap (above the 1MB the V86 map covers), so
- * each EMB is a VirtualAlloc block; xms_move() memcpys between it and the guest's
+ * each EMB is a VirtualAlloc block; DosXmsMove() memcpys between it and the guest's
  * conventional window. The XMS entry point is a BOP stub reached by FAR CALL (so
  * it ends in RETF, not IRET); INT 2Fh AX=4300/4310 advertise it. */
-static void *xms_host_alloc(void *ctx, uint32_t kb)
+static void *xms_host_alloc(void *ctx, DWORD kb)
 {
     (void)ctx;
     return VirtualAlloc(NULL, (SIZE_T)kb * 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
-static void xms_host_free(void *ctx, void *p, uint32_t kb)
+static void xms_host_free(void *ctx, void *p, DWORD kb)
 {
     (void)ctx; (void)kb;
     if (p) VirtualFree(p, 0, MEM_RELEASE);
@@ -7944,10 +7944,10 @@ static void xms_host_free(void *ctx, void *p, uint32_t kb)
 static void host_xms(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-    uint8_t err = XMSERR_NOTIMPL;
+    uint8_t err = DOS_XMS_ERROR_NOT_IMPLEMENTED;
     uint16_t handle, nh;
-    uint32_t largest, totfree, lin;
-    uint8_t lock, freeh; uint32_t size_kb;
+    DWORD    largest, totfree, lin;
+    uint8_t lock, freeh; DWORD size_kb;
 
     #define X_SETAX(v) VDM_SET16(tib, VTIB_EAX, (v))
     #define X_SETBX(v) VDM_SET16(tib, VTIB_EBX, (v))
@@ -7967,94 +7967,94 @@ static void host_xms(volatile BYTE *tib)
              HMA is really committed (see the VirtualAlloc at startup). The note
              above stands -- claiming an HMA we do not provide fixed nothing and
              was a lie; providing one and then saying so is a different act. */
-        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(g_hma ? 1 : 0);
+        X_SETAX(DOS_XMS_VERSION); X_SETBX(DOS_XMS_REVISION); X_SETDX(g_hma ? 1 : 0);
         break;
     case 0x01:                                  /* request HMA: DX = bytes needed */
         /* Oracle (6.22 + HIMEM, DOS=HIGH): BL=0x91 "already in use". Ours is free
            at boot, so a first caller gets it. DX=0xFFFF is the documented "I am a
            TSR/driver, give me all of it"; anything larger than the HMA is refused
            with the same code HIMEM uses for "your request does not fit". */
-        if (!g_hma)            X_FAIL(XMSERR_HMA_NONE);
-        else if (g_xms.hma_used) X_FAIL(XMSERR_HMA_INUSE);
-        else { g_xms.hma_used = 1; X_SETAX(1); X_SETBL(0); }
+        if (!g_hma)            X_FAIL(DOS_XMS_ERROR_NO_HMA);
+        else if (g_xms.IsHmaAllocated) X_FAIL(DOS_XMS_ERROR_HMA_IN_USE);
+        else { g_xms.IsHmaAllocated = 1; X_SETAX(1); X_SETBL(0); }
         break;
     case 0x02:                                  /* release HMA */
-        if (!g_hma)              X_FAIL(XMSERR_HMA_NONE);
-        else if (!g_xms.hma_used) X_FAIL(XMSERR_HMA_NOTALL);
-        else { g_xms.hma_used = 0; X_SETAX(1); X_SETBL(0); }
+        if (!g_hma)              X_FAIL(DOS_XMS_ERROR_NO_HMA);
+        else if (!g_xms.IsHmaAllocated) X_FAIL(DOS_XMS_ERROR_HMA_NOT_ALLOCATED);
+        else { g_xms.IsHmaAllocated = 0; X_SETAX(1); X_SETBL(0); }
         break;
     /* ── ★★★ A20 IS ONE WIRE AND XMS IS ONLY ONE OF ITS THREE DOORS. ──────────
-         `g_xms.a20` used to be the ONLY A20 state in the host: the 8042's output
+         `g_xms.IsA20Enabled` used to be the ONLY A20 state in the host: the 8042's output
          port was not implemented and port 92h was claimed by nothing, so a guest
          that opened the gate the hardware way -- which is what HIMEM, every DOS
          extender and most loaders actually do -- and then asked XMS AH=07h was
          told it was SHUT. The honest reading of that answer is "this machine
          cannot do XMS".
        ► The controller owns the bit now (vdd_input_a20_get/set, and the same bit
-         backs port 92h), and these three cases are a view onto it. `g_xms.a20` is
+         backs port 92h), and these three cases are a view onto it. `g_xms.IsA20Enabled` is
          kept in step so nothing else that reads it goes stale.
        ⚠ STILL NO ADDRESS WRAP. That decision is separate, recorded at the top of
          this file and in dos_xms.h, and it still stands -- what was wrong was that
          the three ways of ASKING disagreed with each other. */
     case 0x03: case 0x05:                                   /* enable A20 (global/local) */
-        vdd_input_a20_set(&g_in, 1); g_xms.a20 = 1; X_SETAX(1); break;
+        vdd_input_a20_set(&g_in, 1); g_xms.IsA20Enabled = 1; X_SETAX(1); break;
     case 0x04: case 0x06:                                   /* disable A20 */
-        vdd_input_a20_set(&g_in, 0); g_xms.a20 = 0; X_SETAX(1); break;
+        vdd_input_a20_set(&g_in, 0); g_xms.IsA20Enabled = 0; X_SETAX(1); break;
     case 0x07:                                              /* query A20 */
-        g_xms.a20 = vdd_input_a20_get(&g_in);
-        X_SETAX(g_xms.a20 ? 1 : 0); X_SETBL(0); break;
+        g_xms.IsA20Enabled = vdd_input_a20_get(&g_in);
+        X_SETAX(g_xms.IsA20Enabled ? 1 : 0); X_SETBL(0); break;
     case 0x08:                                  /* query free extended memory */
-        xms_query_free(&g_xms, &largest, &totfree);
+        DosXmsQueryFreeMemory(&g_xms, &largest, &totfree);
         X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
         X_SETDX(totfree > 0xFFFF ? 0xFFFF : totfree);
-        X_SETBL(largest ? 0 : XMSERR_NOMEM);
+        X_SETBL(largest ? 0 : DOS_XMS_ERROR_OUT_OF_MEMORY);
         /* #167: BH is undefined for 08h and the references disagree: stock NTVDM leaves
            it alone (p_xms: BX=B100 over the poison), 6.22's HIMEM writes AAh (BX=AA00).
            Settings > General > "behave like" picks which. */
         if (g_behave_dos622) X_SETBH(0xAA);
         break;
     case 0x09:                                  /* allocate EMB: DX=KB */
-        if (xms_alloc(&g_xms, VDM_REG(tib, VTIB_EDX) & 0xFFFF, &nh, &err)) { X_SETAX(1); X_SETDX(nh); }
+        if (DosXmsAllocate(&g_xms, VDM_REG(tib, VTIB_EDX) & 0xFFFF, &nh, &err)) { X_SETAX(1); X_SETDX(nh); }
         else X_FAIL(err);
         break;
     case 0x0A:                                  /* free EMB: DX=handle */
-        if (xms_free(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
+        if (DosXmsFree(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
         else X_FAIL(err);
         break;
     case 0x0B: {                                /* move EMB: DS:SI -> move struct */
         DWORD ds = VDM_REG(tib, VTIB_DS) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
         const volatile BYTE *s = (const volatile BYTE *)((ds << 4) + si);
-        xms_move_t mv;
-        mv.length     = (DWORD)s[0] | ((DWORD)s[1] << 8) | ((DWORD)s[2] << 16) | ((DWORD)s[3] << 24);
-        mv.src_handle = (uint16_t)(s[4] | (s[5] << 8));
-        mv.src_offset = (DWORD)s[6] | ((DWORD)s[7] << 8) | ((DWORD)s[8] << 16) | ((DWORD)s[9] << 24);
-        mv.dst_handle = (uint16_t)(s[10] | (s[11] << 8));
-        mv.dst_offset = (DWORD)s[12] | ((DWORD)s[13] << 8) | ((DWORD)s[14] << 16) | ((DWORD)s[15] << 24);
-        if (xms_move(&g_xms, NULL, &mv, &err)) X_SETAX(1); else X_FAIL(err);
+        DOS_XMS_MOVE mv;
+        mv.Length     = (DWORD)s[0] | ((DWORD)s[1] << 8) | ((DWORD)s[2] << 16) | ((DWORD)s[3] << 24);
+        mv.SourceHandle = (uint16_t)(s[4] | (s[5] << 8));
+        mv.SourceOffset = (DWORD)s[6] | ((DWORD)s[7] << 8) | ((DWORD)s[8] << 16) | ((DWORD)s[9] << 24);
+        mv.DestinationHandle = (uint16_t)(s[10] | (s[11] << 8));
+        mv.DestinationOffset = (DWORD)s[12] | ((DWORD)s[13] << 8) | ((DWORD)s[14] << 16) | ((DWORD)s[15] << 24);
+        if (DosXmsMove(&g_xms, NULL, &mv, &err)) X_SETAX(1); else X_FAIL(err);
         break; }
     case 0x0C:                                  /* lock EMB: DX=handle -> DX:BX linear */
         handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-        if (xms_lock(&g_xms, handle, &lin, &err)) { X_SETAX(1); X_SETDX(lin >> 16); X_SETBX(lin & 0xFFFF); }
+        if (DosXmsLock(&g_xms, handle, &lin, &err)) { X_SETAX(1); X_SETDX(lin >> 16); X_SETBX(lin & 0xFFFF); }
         else X_FAIL(err);
         break;
     case 0x0D:                                  /* unlock EMB: DX=handle */
-        if (xms_unlock(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
+        if (DosXmsUnlock(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
         else X_FAIL(err);
         break;
     case 0x0E:                                  /* get handle info: DX=handle */
         handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-        if (xms_info(&g_xms, handle, &lock, &freeh, &size_kb, &err)) {
+        if (DosXmsGetHandleInformation(&g_xms, handle, &lock, &freeh, &size_kb, &err)) {
             X_SETAX(1); X_SETBH(lock); X_SETBL(freeh); X_SETDX(size_kb > 0xFFFF ? 0xFFFF : size_kb);
         } else X_FAIL(err);
         break;
     case 0x0F:                                  /* reallocate EMB: BX=new KB, DX=handle */
         handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-        if (xms_realloc(&g_xms, handle, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &err)) X_SETAX(1);
+        if (DosXmsReallocate(&g_xms, handle, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &err)) X_SETAX(1);
         else X_FAIL(err);
         break;
     case 0x10: X_SETAX(0); X_SETBL(0xB1); X_SETDX(0); break;  /* request UMB: none */
     case 0x11: X_FAIL(0xB2); break;                          /* release UMB */
-    default:   X_FAIL(XMSERR_NOTIMPL); break;
+    default:   X_FAIL(DOS_XMS_ERROR_NOT_IMPLEMENTED); break;
     }
     #undef X_SETAX
     #undef X_SETBX
@@ -8066,15 +8066,15 @@ static void host_xms(volatile BYTE *tib)
 
 /* --- EMS (M4) -------------------------------------------------------------- *
  * Expanded memory lives on the host heap (pages * 16KB per handle); the 64KB
- * page frame at E000:0 is real V86 RAM (v86 Map 5). ems_map memcpys logical
+ * page frame at E000:0 is real V86 RAM (v86 Map 5). DosEmsMapPage memcpys logical
  * pages in/out of the frame windows (page-frame shadowing). INT 67h carries the
  * function in AH and returns status in AH (0 = ok). */
-static void *ems_host_alloc(void *ctx, uint32_t pages)
+static void *ems_host_alloc(void *ctx, DWORD pages)
 {
     (void)ctx;
-    return VirtualAlloc(NULL, (SIZE_T)pages * EMS_PAGE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    return VirtualAlloc(NULL, (SIZE_T)pages * DOS_EMS_PAGE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
-static void ems_host_free(void *ctx, void *p, uint32_t pages)
+static void ems_host_free(void *ctx, void *p, DWORD pages)
 {
     (void)ctx; (void)pages;
     if (p) VirtualFree(p, 0, MEM_RELEASE);
@@ -8084,7 +8084,7 @@ static void ems_host_free(void *ctx, void *p, uint32_t pages)
 static void host_ems(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-    uint8_t err = EMSERR_UNDEFFUNC;
+    uint8_t err = DOS_EMS_ERROR_UNDEFINED_FUNCTION;
     uint16_t handle = 0, p16 = 0, p16b = 0;
 
     #define E_SETAH(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF00FFu) | (((DWORD)(v) & 0xFF) << 8)
@@ -8093,47 +8093,47 @@ static void host_ems(volatile BYTE *tib)
     #define E_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
 
     switch (ah) {
-    case 0x40: E_SETAH(EMS_OK); break;                  /* get manager status   */
-    case 0x41: E_SETBX(g_ems.frame_seg); E_SETAH(EMS_OK); break;  /* page frame seg */
+    case 0x40: E_SETAH(DOS_EMS_STATUS_OK); break;                  /* get manager status   */
+    case 0x41: E_SETBX(g_ems.FrameSegment); E_SETAH(DOS_EMS_STATUS_OK); break;  /* page frame seg */
     case 0x42:                                          /* unallocated/total pages */
-        ems_counts(&g_ems, &p16, &p16b);
-        E_SETBX(p16); E_SETDX(p16b); E_SETAH(EMS_OK);
+        DosEmsGetPageCounts(&g_ems, &p16, &p16b);
+        E_SETBX(p16); E_SETDX(p16b); E_SETAH(DOS_EMS_STATUS_OK);
         break;
     case 0x43:                                          /* allocate BX pages -> DX handle */
-        if (ems_alloc(&g_ems, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &handle, &err)) { E_SETDX(handle); E_SETAH(EMS_OK); }
+        if (DosEmsAllocatePages(&g_ems, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &handle, &err)) { E_SETDX(handle); E_SETAH(DOS_EMS_STATUS_OK); }
         else E_SETAH(err);
         break;
     case 0x44:                                          /* map: AL=phys BX=logical DX=handle */
-        if (ems_map(&g_ems, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF),
+        if (DosEmsMapPage(&g_ems, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF),
                     (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF),
-                    (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+                    (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(err);
         break;
     case 0x45:                                          /* deallocate DX handle */
-        if (ems_free(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        if (DosEmsDeallocatePages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(err);
         break;
-    case 0x46: E_SETAL(EMS_VERSION); E_SETAH(EMS_OK); break;  /* EMM version 4.0 */
+    case 0x46: E_SETAL(DOS_EMS_VERSION); E_SETAH(DOS_EMS_STATUS_OK); break;  /* EMM version 4.0 */
     case 0x47:                                          /* save page map: DX handle */
-        if (ems_save_map(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        if (DosEmsSavePageMap(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(err);
         break;
     case 0x48:                                          /* restore page map: DX handle */
-        if (ems_restore_map(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        if (DosEmsRestorePageMap(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(err);
         break;
-    case 0x4B: E_SETBX(ems_handle_count(&g_ems)); E_SETAH(EMS_OK); break;  /* # handles */
+    case 0x4B: E_SETBX(DosEmsGetHandleCount(&g_ems)); E_SETAH(DOS_EMS_STATUS_OK); break;  /* # handles */
     case 0x4C:                                          /* pages owned by DX handle */
-        if (ems_handle_pages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err)) { E_SETBX(p16); E_SETAH(EMS_OK); }
+        if (DosEmsGetHandlePages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err)) { E_SETBX(p16); E_SETAH(DOS_EMS_STATUS_OK); }
         else E_SETAH(err);
         break;
     case 0x4D: {                                        /* all handle pages -> ES:DI, BX */
-        uint8_t pairs[EMS_MAX_HANDLES * 4];
+        uint8_t pairs[DOS_EMS_MAX_HANDLES * 4];
         volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)
             (((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
-        int n = ems_all_handle_pages(&g_ems, pairs), k;
+        int n = DosEmsGetAllHandlePages(&g_ems, pairs), k;
         for (k = 0; k < n * 4; ++k) d[k] = pairs[k];
-        E_SETBX((uint16_t)n); E_SETAH(EMS_OK);
+        E_SETBX((uint16_t)n); E_SETAH(DOS_EMS_STATUS_OK);
         break; }
     case 0x53: {                                        /* handle name: AL=0 get ES:DI, 1 set DS:SI */
         DWORD al53 = VDM_REG(tib, VTIB_EAX) & 0xFF;
@@ -8141,18 +8141,18 @@ static void host_ems(volatile BYTE *tib)
             ? (volatile BYTE *)(ULONG_PTR)(((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_EDI) & 0xFFFF))
             : (volatile BYTE *)(ULONG_PTR)(((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4) + (VDM_REG(tib, VTIB_ESI) & 0xFFFF));
         if (al53 > 1) E_SETAH(0x8F);                    /* LIM: invalid subfunction */
-        else if (ems_handle_name(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
-                                 (int)al53, nb, &err)) E_SETAH(EMS_OK);
+        else if (DosEmsGetSetHandleName(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
+                                 (int)al53, nb, &err)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(err);
         break; }
     case 0x51:                                          /* reallocate: BX pages, DX handle */
-        if (ems_realloc(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
+        if (DosEmsReallocatePages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
                         (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), &err)) {
-            ems_handle_pages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err);
-            E_SETBX(p16); E_SETAH(EMS_OK);
+            DosEmsGetHandlePages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err);
+            E_SETBX(p16); E_SETAH(DOS_EMS_STATUS_OK);
         } else E_SETAH(err);
         break;
-    default: E_SETAH(EMSERR_UNDEFFUNC); break;
+    default: E_SETAH(DOS_EMS_ERROR_UNDEFINED_FUNCTION); break;
     }
     #undef E_SETAH
     #undef E_SETAL
@@ -8838,7 +8838,7 @@ static void i33_reset_state(void)
      half-answered -- the same boundary every injected IRQ uses. */
 /* ── INT 15h AH=87h: MOVE EXTENDED MEMORY BLOCK. (GH #54) ──────────────────────────
      ES:SI -> the caller's GDT, CX = words (at most 8000h). Every address goes through
-     extmem_resolve -- see dos_extmem.h for why a guest's linear address above the HMA
+     DosExtMemResolve -- see dos_extmem.h for why a guest's linear address above the HMA
      is NOT something we may simply write to. Returns the AH status: 00 done, 02 (the
      BIOS's "exception interrupt error") for anything unresolvable. memmove, because a
      caller may overlap source and destination and a real BIOS copies forwards through
@@ -8857,14 +8857,14 @@ static unsigned int15_move_block_at(volatile BYTE *tib, DWORD gdt_lin)
     if (cx == 0) return 0;                      /* nothing to move: done */
     if (cx > 0x8000u) { rc = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
     if (!gdt) { rc = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
-    src = extmem_desc_base(gdt + 0x10);
-    dst = extmem_desc_base(gdt + 0x18);
-    if (!g_extmem_raw && (extmem_classify(&g_xms, src, n) == EXTMEM_RAW
-                          || extmem_classify(&g_xms, dst, n) == EXTMEM_RAW))
-        g_extmem_raw = (uint8_t *)VirtualAlloc(NULL, EXTMEM_RAW_LEN,
+    src = DosExtMemDescriptorBase(gdt + 0x10);
+    dst = DosExtMemDescriptorBase(gdt + 0x18);
+    if (!g_extmem_raw && (DosExtMemClassify(&g_xms, src, n) == DOS_EXTMEM_REGION_RAW
+                          || DosExtMemClassify(&g_xms, dst, n) == DOS_EXTMEM_REGION_RAW))
+        g_extmem_raw = (uint8_t *)VirtualAlloc(NULL, DOS_EXTMEM_RAW_LENGTH,
                                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    ps = extmem_resolve(&g_xms, 0, g_extmem_raw, src, n);
-    pd = extmem_resolve(&g_xms, 0, g_extmem_raw, dst, n);
+    ps = DosExtMemResolve(&g_xms, 0, g_extmem_raw, src, n);
+    pd = DosExtMemResolve(&g_xms, 0, g_extmem_raw, dst, n);
     if (!ps || !pd) { rc = 0x02; goto out; }
     MoveMemory(pd, ps, n);
 out:
@@ -8875,8 +8875,8 @@ out:
         if (!rc || ++said_refused <= 16) {
             char b[160], *q = b;
             q = zput(q, "  INT15 AH=87h move 0x"); q = zhex(q, n);
-            q = zput(q, " bytes src=0x"); q = zhex(q, gdt ? extmem_desc_base(gdt + 0x10) : 0);
-            q = zput(q, " dst=0x");       q = zhex(q, gdt ? extmem_desc_base(gdt + 0x18) : 0);
+            q = zput(q, " bytes src=0x"); q = zhex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
+            q = zput(q, " dst=0x");       q = zhex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
             q = zput(q, rc ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
             log_append(LOG_PATH, b, q);
         }
@@ -11810,7 +11810,7 @@ static void host_fullscreen_toggle_restore(HWND h)
 static void host_fullscreen_toggle(HWND h);
 static void host_fullscreen_toggle(HWND h)
 {
-    if (g_safe.fullscreen && !g_pd.fullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
+    if (g_safe.Fullscreen && !g_pd.fullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
     int want = !g_pd.fullscreen;
     if (want) {
         g_fs_place.length = sizeof g_fs_place;
@@ -12017,7 +12017,7 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
 static LONG g_joy_thread_started = 0;
 static void joy_poll_ensure(void)
 {
-    if (g_joy.type == JOY_TYPE_NONE || g_safe.joystick) return;   /* s90 #132 */
+    if (g_joy.type == JOY_TYPE_NONE || g_safe.Joystick) return;   /* s90 #132 */
     if (InterlockedExchange(&g_joy_thread_started, 1)) return;   /* once */
     { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
       if (jt) CloseHandle(jt);
@@ -12368,7 +12368,7 @@ static void settings_apply_devices(const ntvdmex_settings *s)
          and they are genuinely independent -- a machine can have speakers plugged
          in, a case speaker, neither, or both, and only the person at it knows. */
     vdd_audio_set_speaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
-    g_spk_real = g_safe.real_speaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
+    g_spk_real = g_safe.RealSpeaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
     /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
          it: the driver keeps sounding whatever it was last told to sound. */
     if (!g_spk_real) pcspk_set(&g_pcspk, 0);
@@ -27795,7 +27795,7 @@ static void wow_shims_load(void)
     done = 1;
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
        decision is taken further down WinMain, and must not wait for it. */
-    if (dos_recovery_skips(dos_recovery_decide(recovery_read())).wow_shims) return;
+    if (DosRecoveryGetSafeSkips(DosRecoveryDecideStartMode(recovery_read())).WowShims) return;
     api.version = 3; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
     api.handle16 = shim_handle16; api.callback16ex = shim_callback16ex; api.ica_interrupt = shim_ica;
     api.yield16 = shim_yield; api.log = shim_log; api.global16 = shim_global16;
@@ -29893,14 +29893,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     serial_init();                                      /* DPMI harness: COM1 log sink */
     g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
     {   unsigned fails = recovery_read();               /* GH #132 */
-        g_start_mode = dos_recovery_decide(fails);
+        g_start_mode = DosRecoveryDecideStartMode(fails);
         recovery_write(fails + 1);                      /* cleared only on a clean exit */
         p = zput(p, "STAGE0: consecutive failed starts = "); p = zhexb(p, fails);
         p = zput(p, g_start_mode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
                   : g_start_mode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
                                                         : " -> normal\r\n");
         if (g_start_mode == DOS_START_UNINSTALL) recovery_uninstall(&p);
-        g_safe = dos_recovery_skips(g_start_mode);
+        g_safe = DosRecoveryGetSafeSkips(g_start_mode);
         if (g_start_mode == DOS_START_SAFE)
             p = zput(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
                         " pump), the real PC speaker, the joystick thread, the WOW"
@@ -31896,7 +31896,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
-    xms_init(&g_xms, XMS_POOL_KB, xms_host_alloc, xms_host_free, NULL);  /* M4: XMS pool */
+    DosXmsInitialize(&g_xms, XMS_POOL_KB, xms_host_alloc, xms_host_free, NULL);  /* M4: XMS pool */
     /* ── ★ THE HMA: 64KB-16 AT LINEAR 0x100000, REACHED AS FFFF:0010. (s72) ───────
          p_xms measured us refusing it TWICE over -- AH=00h answered DX=0 ("no HMA")
          and AH=01h answered BL=0x90 ("HMA does not exist") -- against an oracle that
@@ -31916,7 +31916,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        preamble -- ONE buffered flush, which survives the log-handle race that
        swallowed this line entirely when it was appended separately here.) */
 
-    ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
+    DosEmsInitialize(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
              (volatile BYTE *)g_ems_frame_lin,
              ems_host_alloc, ems_host_free, NULL);             /* M4: 8MB EMS pool   */
 
@@ -32465,7 +32465,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
     g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
-    g_wave.force_silent = g_safe.audio_out;                 /* s90 #132: SAFE MODE */
+    g_wave.force_silent = g_safe.AudioOut;                 /* s90 #132: SAFE MODE */
     g_wave.midi_choice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
     audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.

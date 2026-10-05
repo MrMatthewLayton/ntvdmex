@@ -14,146 +14,263 @@
 #include <string.h>
 #include "dos_ems.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+/* The pool the checks build, and the handles' sizes. */
+#define EMS_TEST_FRAME_SEGMENT        0xE000
+#define EMS_TEST_POOL_PAGES           256      /* 4 MB                                  */
+#define EMS_TEST_HANDLE_PAGES         8
+#define EMS_TEST_OVERSIZED_PAGES      1000     /* more than the whole pool             */
+#define EMS_TEST_TOO_MANY_FREE_PAGES  250      /* within the pool, beyond what is free */
+#define EMS_TEST_GROWN_PAGES          16
+#define EMS_TEST_SHRUNK_PAGES         4
+#define EMS_TEST_UNKNOWN_HANDLE       99
+#define EMS_TEST_UNUSED_HANDLE        200
+#define EMS_TEST_FIRST_LISTED_PAGES   3
+#define EMS_TEST_SECOND_LISTED_PAGES  5
+#define EMS_TEST_HANDLE_NAME          "GAME"
 
-static void *t_alloc(void *ctx, uint32_t pages) { (void)ctx; return calloc((size_t)pages, EMS_PAGE_SIZE); }
-static void  t_free (void *ctx, void *p, uint32_t pages) { (void)ctx; (void)pages; free(p); }
+/* The windows and logical pages the shadowing checks use. */
+#define EMS_TEST_SECOND_WINDOW        1
+#define EMS_TEST_THIRD_WINDOW         2
+#define EMS_TEST_SECOND_WINDOW_PAGE   2
+#define EMS_TEST_THIRD_WINDOW_PAGE    3
+#define EMS_TEST_PERTURB_PAGE         4
+#define EMS_TEST_PERTURB_PAGE_TOO     5
+
+/* Where in a window the guest writes, and what. */
+#define EMS_TEST_FIRST_BYTE           0x0000
+#define EMS_TEST_LAST_BYTE            (DOS_EMS_PAGE_SIZE - 1)
+#define EMS_TEST_MARK_OFFSET          0x10
+#define EMS_TEST_DIRTY_OFFSET         0x20
+#define EMS_TEST_PAGE0_FIRST_MARK     0xA1
+#define EMS_TEST_PAGE0_LAST_MARK      0xA2
+#define EMS_TEST_PAGE1_MARK           0xB1
+#define EMS_TEST_SECOND_WINDOW_MARK   0xC3
+#define EMS_TEST_THIRD_WINDOW_MARK    0xD4
+#define EMS_TEST_DIRTY_MARK           0x5A
+
+static INT g_Checks = 0, g_Failures = 0;
+
+static VOID EmsTestCheck(BOOL passed, PCSTR description)
+{
+    g_Checks++;
+    if (passed) { printf("  PASS  %s\n", description); }
+    else { printf("  FAIL  %s\n", description); g_Failures++; }
+}
+
+static PVOID EmsTestAllocate(PVOID context, DWORD pages)
+{
+    (VOID)context;
+    return calloc((SIZE_T)pages, DOS_EMS_PAGE_SIZE);
+}
+
+static VOID EmsTestFree(PVOID context, PVOID memory, DWORD pages)
+{
+    (VOID)context; (VOID)pages;
+    free(memory);
+}
 
 /* a byte the guest would write straight into a physical window */
-static void poke_window(ems_state *e, int phys, uint32_t off, uint8_t v) {
-    e->frame[(uint32_t)phys * EMS_PAGE_SIZE + off] = v;
+static VOID EmsTestPokeWindow(PDOS_EMS_STATE state, INT windowIndex, DWORD offset, BYTE value)
+{
+    state->Frame[(DWORD)windowIndex * DOS_EMS_PAGE_SIZE + offset] = value;
 }
-static uint8_t peek_window(ems_state *e, int phys, uint32_t off) {
-    return e->frame[(uint32_t)phys * EMS_PAGE_SIZE + off];
+
+static BYTE EmsTestPeekWindow(PDOS_EMS_STATE state, INT windowIndex, DWORD offset)
+{
+    return state->Frame[(DWORD)windowIndex * DOS_EMS_PAGE_SIZE + offset];
+}
+
+/* The two words of a fn 4Dh entry. */
+static WORD EmsTestEntryHandle(PCBYTE entry)
+{
+    return MAKEWORD(entry[DOS_EMS_ENTRY_HANDLE_LOW], entry[DOS_EMS_ENTRY_HANDLE_HIGH]);
+}
+
+static WORD EmsTestEntryPages(PCBYTE entry)
+{
+    return MAKEWORD(entry[DOS_EMS_ENTRY_PAGES_LOW], entry[DOS_EMS_ENTRY_PAGES_HIGH]);
 }
 
 int main(void)
 {
-    static uint8_t frame[EMS_FRAME_SIZE];   /* the 64 KB page-frame window       */
-    ems_state e;
-    uint16_t h1, h2, freep, totp, pages;
-    uint8_t err;
-    int ok;
+    static BYTE frame[DOS_EMS_FRAME_SIZE];   /* the 64 KB page-frame window       */
+    DOS_EMS_STATE state;
+    WORD firstHandle, secondHandle, freePages, totalPages, pages;
+    BYTE errorCode;
+    BOOL succeeded;
 
     printf("== M4 EMS core battery ==\n");
 
     /* 256-page pool (4 MB) framed at E000:0. */
     memset(frame, 0, sizeof frame);
-    ems_init(&e, 0xE000, 256, frame, t_alloc, t_free, NULL);
+    DosEmsInitialize(&state, EMS_TEST_FRAME_SEGMENT, EMS_TEST_POOL_PAGES, frame,
+                     EmsTestAllocate, EmsTestFree, NULL);
 
     /* T1: bring-up + counts ---------------------------------------------- */
-    CHECK(e.frame_seg == 0xE000, "init: page frame at E000");
-    ems_counts(&e, &freep, &totp);
-    CHECK(freep == 256 && totp == 256, "fn42: 256 free / 256 total initially");
+    EmsTestCheck(state.FrameSegment == EMS_TEST_FRAME_SEGMENT, "init: page frame at E000");
+    DosEmsGetPageCounts(&state, &freePages, &totalPages);
+    EmsTestCheck(freePages == EMS_TEST_POOL_PAGES && totalPages == EMS_TEST_POOL_PAGES,
+                 "fn42: 256 free / 256 total initially");
 
     /* T2: zero-page alloc is rejected (fn 43h) --------------------------- */
-    CHECK(!ems_alloc(&e, 0, &h1, &err) && err == EMSERR_ZEROPAGES, "fn43: zero pages rejected (89h)");
+    EmsTestCheck(!DosEmsAllocatePages(&state, 0, &firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_ZERO_PAGES, "fn43: zero pages rejected (89h)");
 
     /* T3: allocate 8 pages ----------------------------------------------- */
-    ok = ems_alloc(&e, 8, &h1, &err);
-    CHECK(ok && err == EMS_OK, "fn43: allocate 8 pages -> handle");
-    ems_counts(&e, &freep, &totp);
-    CHECK(freep == 248, "fn42: 248 free after 8-page alloc");
-    ok = ems_handle_pages(&e, h1, &pages, &err);
-    CHECK(ok && pages == 8, "fn4C: handle owns 8 pages");
-    CHECK(ems_handle_count(&e) == 1, "fn4B: 1 open handle");
+    succeeded = DosEmsAllocatePages(&state, EMS_TEST_HANDLE_PAGES, &firstHandle, &errorCode);
+    EmsTestCheck(succeeded && errorCode == DOS_EMS_STATUS_OK, "fn43: allocate 8 pages -> handle");
+    DosEmsGetPageCounts(&state, &freePages, &totalPages);
+    EmsTestCheck(freePages == EMS_TEST_POOL_PAGES - EMS_TEST_HANDLE_PAGES,
+                 "fn42: 248 free after 8-page alloc");
+    succeeded = DosEmsGetHandlePages(&state, firstHandle, &pages, &errorCode);
+    EmsTestCheck(succeeded && pages == EMS_TEST_HANDLE_PAGES, "fn4C: handle owns 8 pages");
+    EmsTestCheck(DosEmsGetHandleCount(&state) == 1, "fn4B: 1 open handle");
 
     /* T4: over-pool alloc fails ------------------------------------------ */
-    CHECK(!ems_alloc(&e, 1000, &h2, &err) && err == EMSERR_TOOMANY, "fn43: > pool rejected (87h)");
-    ok = ems_alloc(&e, 250, &h2, &err);
-    CHECK(!ok && err == EMSERR_NOTENOUGH, "fn43: not-enough-free rejected (88h)");
+    EmsTestCheck(!DosEmsAllocatePages(&state, EMS_TEST_OVERSIZED_PAGES, &secondHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_TOO_MANY_PAGES, "fn43: > pool rejected (87h)");
+    succeeded = DosEmsAllocatePages(&state, EMS_TEST_TOO_MANY_FREE_PAGES, &secondHandle,
+                                    &errorCode);
+    EmsTestCheck(!succeeded && errorCode == DOS_EMS_ERROR_NOT_ENOUGH_PAGES,
+                 "fn43: not-enough-free rejected (88h)");
 
     /* T5: map errors ----------------------------------------------------- */
-    CHECK(!ems_map(&e, 4, 0, h1, &err) && err == EMSERR_BADPHYS, "fn44: physical window >3 rejected (8Bh)");
-    CHECK(!ems_map(&e, 0, 8, h1, &err) && err == EMSERR_BADLOGICAL, "fn44: logical page >= owned rejected (8Ah)");
-    CHECK(!ems_map(&e, 0, 0, 99, &err) && err == EMSERR_BADHANDLE, "fn44: bad handle rejected (83h)");
+    EmsTestCheck(!DosEmsMapPage(&state, DOS_EMS_PHYSICAL_PAGES, 0, firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_INVALID_PHYSICAL_PAGE,
+                 "fn44: physical window >3 rejected (8Bh)");
+    EmsTestCheck(!DosEmsMapPage(&state, 0, EMS_TEST_HANDLE_PAGES, firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_INVALID_LOGICAL_PAGE,
+                 "fn44: logical page >= owned rejected (8Ah)");
+    EmsTestCheck(!DosEmsMapPage(&state, 0, 0, EMS_TEST_UNKNOWN_HANDLE, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_INVALID_HANDLE, "fn44: bad handle rejected (83h)");
 
     /* T6: SHADOWING -- map page 0 into window 0, write it, remap, verify it  *
      * was written back to the logical page (the heart of EMS).            */
-    ok = ems_map(&e, 0, 0, h1, &err);
-    CHECK(ok, "fn44: map logical 0 -> window 0");
-    poke_window(&e, 0, 0x0000, 0xA1);           /* guest writes the window     */
-    poke_window(&e, 0, 0x3FFF, 0xA2);
-    ok = ems_map(&e, 0, 1, h1, &err);           /* swap in logical page 1      */
-    CHECK(ok, "fn44: map logical 1 -> window 0 (writes back page 0)");
-    poke_window(&e, 0, 0x0000, 0xB1);           /* mark page 1                 */
-    ok = ems_map(&e, 0, 0, h1, &err);           /* bring page 0 back           */
-    CHECK(ok && peek_window(&e, 0, 0x0000) == 0xA1 && peek_window(&e, 0, 0x3FFF) == 0xA2,
-          "fn44: page 0 content survived the swap (shadow write-back)");
-    ok = ems_map(&e, 0, 1, h1, &err);           /* and page 1's mark survived  */
-    CHECK(ok && peek_window(&e, 0, 0x0000) == 0xB1, "fn44: page 1 content also survived");
+    succeeded = DosEmsMapPage(&state, 0, 0, firstHandle, &errorCode);
+    EmsTestCheck(succeeded, "fn44: map logical 0 -> window 0");
+    /* guest writes the window */
+    EmsTestPokeWindow(&state, 0, EMS_TEST_FIRST_BYTE, EMS_TEST_PAGE0_FIRST_MARK);
+    EmsTestPokeWindow(&state, 0, EMS_TEST_LAST_BYTE, EMS_TEST_PAGE0_LAST_MARK);
+    succeeded = DosEmsMapPage(&state, 0, 1, firstHandle, &errorCode);  /* swap in logical page 1 */
+    EmsTestCheck(succeeded, "fn44: map logical 1 -> window 0 (writes back page 0)");
+    EmsTestPokeWindow(&state, 0, EMS_TEST_FIRST_BYTE, EMS_TEST_PAGE1_MARK);  /* mark page 1 */
+    succeeded = DosEmsMapPage(&state, 0, 0, firstHandle, &errorCode);  /* bring page 0 back */
+    EmsTestCheck(succeeded
+                 && EmsTestPeekWindow(&state, 0, EMS_TEST_FIRST_BYTE) == EMS_TEST_PAGE0_FIRST_MARK
+                 && EmsTestPeekWindow(&state, 0, EMS_TEST_LAST_BYTE) == EMS_TEST_PAGE0_LAST_MARK,
+                 "fn44: page 0 content survived the swap (shadow write-back)");
+    succeeded = DosEmsMapPage(&state, 0, 1, firstHandle, &errorCode);  /* page 1's mark survived */
+    EmsTestCheck(succeeded
+                 && EmsTestPeekWindow(&state, 0, EMS_TEST_FIRST_BYTE) == EMS_TEST_PAGE1_MARK,
+                 "fn44: page 1 content also survived");
 
     /* T7: two pages live in two windows at once -------------------------- */
-    ems_map(&e, 1, 2, h1, &err);
-    poke_window(&e, 1, 0x10, 0xC3);
-    ems_map(&e, 2, 3, h1, &err);
-    poke_window(&e, 2, 0x10, 0xD4);
-    CHECK(peek_window(&e, 1, 0x10) == 0xC3 && peek_window(&e, 2, 0x10) == 0xD4,
-          "fn44: independent windows hold independent pages");
+    DosEmsMapPage(&state, EMS_TEST_SECOND_WINDOW, EMS_TEST_SECOND_WINDOW_PAGE, firstHandle,
+                  &errorCode);
+    EmsTestPokeWindow(&state, EMS_TEST_SECOND_WINDOW, EMS_TEST_MARK_OFFSET,
+                      EMS_TEST_SECOND_WINDOW_MARK);
+    DosEmsMapPage(&state, EMS_TEST_THIRD_WINDOW, EMS_TEST_THIRD_WINDOW_PAGE, firstHandle,
+                  &errorCode);
+    EmsTestPokeWindow(&state, EMS_TEST_THIRD_WINDOW, EMS_TEST_MARK_OFFSET,
+                      EMS_TEST_THIRD_WINDOW_MARK);
+    EmsTestCheck(EmsTestPeekWindow(&state, EMS_TEST_SECOND_WINDOW, EMS_TEST_MARK_OFFSET)
+                     == EMS_TEST_SECOND_WINDOW_MARK
+                 && EmsTestPeekWindow(&state, EMS_TEST_THIRD_WINDOW, EMS_TEST_MARK_OFFSET)
+                     == EMS_TEST_THIRD_WINDOW_MARK,
+                 "fn44: independent windows hold independent pages");
 
     /* T8: unmap a window (logical 0xFFFF) writes back + clears ----------- */
-    ok = ems_map(&e, 1, 0xFFFF, h1, &err);
-    CHECK(ok && !e.phys[1].mapped, "fn44: logical 0xFFFF unmaps the window");
+    succeeded = DosEmsMapPage(&state, EMS_TEST_SECOND_WINDOW, DOS_EMS_UNMAP_LOGICAL_PAGE,
+                              firstHandle, &errorCode);
+    EmsTestCheck(succeeded && !state.PhysicalPages[EMS_TEST_SECOND_WINDOW].IsMapped,
+                 "fn44: logical 0xFFFF unmaps the window");
 
     /* T9: save / restore the page map ------------------------------------ */
-    ok = ems_save_map(&e, h1, &err);
-    CHECK(ok, "fn47: save page map");
-    CHECK(!ems_save_map(&e, h1, &err) && err == EMSERR_SAVED, "fn47: double-save rejected (8Dh)");
-    ems_map(&e, 0, 4, h1, &err);                /* perturb the mapping         */
-    ems_map(&e, 2, 5, h1, &err);
-    ok = ems_restore_map(&e, h1, &err);
-    CHECK(ok && e.phys[0].logical == 1 && e.phys[2].logical == 3,
-          "fn48: restore brings back the saved windows");
-    CHECK(!ems_restore_map(&e, h1, &err) && err == EMSERR_NOTSAVED, "fn48: restore-without-save rejected (8Eh)");
+    succeeded = DosEmsSavePageMap(&state, firstHandle, &errorCode);
+    EmsTestCheck(succeeded, "fn47: save page map");
+    EmsTestCheck(!DosEmsSavePageMap(&state, firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_MAP_ALREADY_SAVED,
+                 "fn47: double-save rejected (8Dh)");
+    /* perturb the mapping */
+    DosEmsMapPage(&state, 0, EMS_TEST_PERTURB_PAGE, firstHandle, &errorCode);
+    DosEmsMapPage(&state, EMS_TEST_THIRD_WINDOW, EMS_TEST_PERTURB_PAGE_TOO, firstHandle,
+                  &errorCode);
+    succeeded = DosEmsRestorePageMap(&state, firstHandle, &errorCode);
+    EmsTestCheck(succeeded && state.PhysicalPages[0].LogicalPage == 1
+                 && state.PhysicalPages[EMS_TEST_THIRD_WINDOW].LogicalPage
+                        == EMS_TEST_THIRD_WINDOW_PAGE,
+                 "fn48: restore brings back the saved windows");
+    EmsTestCheck(!DosEmsRestorePageMap(&state, firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_MAP_NOT_SAVED,
+                 "fn48: restore-without-save rejected (8Eh)");
 
     /* T10: realloc grow preserves content -------------------------------- */
     {
-        uint8_t *m;
-        ems_map(&e, 0, 0, h1, &err);
-        poke_window(&e, 0, 0x20, 0x5A);         /* dirty page 0 via the window */
-        ok = ems_realloc(&e, h1, 16, &err);     /* 8 -> 16 pages (flush+grow)  */
-        CHECK(ok && e.h[h1].pages == 16, "fn51: grow 8->16 pages");
-        m = (uint8_t *)e.h[h1].mem;
-        CHECK(m[0x20] == 0x5A, "fn51: grow preserved the written-back page 0");
-        ems_counts(&e, &freep, &totp);
-        CHECK(freep == 240, "fn42: 240 free after grow to 16");
-        ok = ems_realloc(&e, h1, 4, &err);      /* shrink to 4 pages           */
-        CHECK(ok && e.h[h1].pages == 4, "fn51: shrink 16->4 pages");
+        PBYTE memory;
+        DosEmsMapPage(&state, 0, 0, firstHandle, &errorCode);
+        /* dirty page 0 via the window */
+        EmsTestPokeWindow(&state, 0, EMS_TEST_DIRTY_OFFSET, EMS_TEST_DIRTY_MARK);
+        /* 8 -> 16 pages (flush+grow) */
+        succeeded = DosEmsReallocatePages(&state, firstHandle, EMS_TEST_GROWN_PAGES, &errorCode);
+        EmsTestCheck(succeeded && state.Handles[firstHandle].Pages == EMS_TEST_GROWN_PAGES,
+                     "fn51: grow 8->16 pages");
+        memory = (PBYTE)state.Handles[firstHandle].Memory;
+        EmsTestCheck(memory[EMS_TEST_DIRTY_OFFSET] == EMS_TEST_DIRTY_MARK,
+                     "fn51: grow preserved the written-back page 0");
+        DosEmsGetPageCounts(&state, &freePages, &totalPages);
+        EmsTestCheck(freePages == EMS_TEST_POOL_PAGES - EMS_TEST_GROWN_PAGES,
+                     "fn42: 240 free after grow to 16");
+        /* shrink to 4 pages */
+        succeeded = DosEmsReallocatePages(&state, firstHandle, EMS_TEST_SHRUNK_PAGES, &errorCode);
+        EmsTestCheck(succeeded && state.Handles[firstHandle].Pages == EMS_TEST_SHRUNK_PAGES,
+                     "fn51: shrink 16->4 pages");
     }
 
     /* T11: free the handle, pool restored, windows dropped --------------- */
-    ems_map(&e, 0, 0, h1, &err);                /* a live window before free   */
-    ok = ems_free(&e, h1, &err);
-    CHECK(ok && !e.phys[0].mapped, "fn45: dealloc drops the handle's live windows");
-    ems_counts(&e, &freep, &totp);
-    CHECK(freep == 256, "fn42: whole pool free again after dealloc");
-    CHECK(!ems_free(&e, h1, &err) && err == EMSERR_BADHANDLE, "fn45: double-free rejected (83h)");
-    CHECK(ems_handle_count(&e) == 0, "fn4B: 0 open handles at end");
+    DosEmsMapPage(&state, 0, 0, firstHandle, &errorCode);  /* a live window before free */
+    succeeded = DosEmsDeallocatePages(&state, firstHandle, &errorCode);
+    EmsTestCheck(succeeded && !state.PhysicalPages[0].IsMapped,
+                 "fn45: dealloc drops the handle's live windows");
+    DosEmsGetPageCounts(&state, &freePages, &totalPages);
+    EmsTestCheck(freePages == EMS_TEST_POOL_PAGES, "fn42: whole pool free again after dealloc");
+    EmsTestCheck(!DosEmsDeallocatePages(&state, firstHandle, &errorCode)
+                 && errorCode == DOS_EMS_ERROR_INVALID_HANDLE, "fn45: double-free rejected (83h)");
+    EmsTestCheck(DosEmsGetHandleCount(&state) == 0, "fn4B: 0 open handles at end");
 
     /* T12: fn 4Dh lists exactly the active handles, {handle, pages} each --- */
-    {   uint16_t ha, hb; uint8_t pr[EMS_MAX_HANDLES * 4];
-        CHECK(ems_all_handle_pages(&e, pr) == 0, "fn4D: no handles -> count 0");
-        ems_alloc(&e, 3, &ha, &err); ems_alloc(&e, 5, &hb, &err);
-        CHECK(ems_all_handle_pages(&e, pr) == 2, "fn4D: two handles -> count 2");
-        CHECK((pr[0] | pr[1] << 8) == ha && (pr[2] | pr[3] << 8) == 3,
-              "fn4D: first pair = {handle, 3 pages}");
-        CHECK((pr[4] | pr[5] << 8) == hb && (pr[6] | pr[7] << 8) == 5,
-              "fn4D: second pair = {handle, 5 pages}");
-        {   uint8_t nm[8] = { 'G','A','M','E',0,0,0,0 }, got[8];
-            CHECK(ems_handle_name(&e, ha, 1, nm, &err), "fn53 AL=1: set name");
-            CHECK(ems_handle_name(&e, ha, 0, got, &err) && memcmp(got, nm, 8) == 0,
-                  "fn53 AL=0: reads back the name");
-            CHECK(!ems_handle_name(&e, 200, 0, got, &err) && err == EMSERR_BADHANDLE,
-                  "fn53: unused handle -> 83h (what MEM /D relies on)"); }
-        ems_free(&e, ha, &err); ems_free(&e, hb, &err);
-        {   uint16_t hc; uint8_t got[8];
-            ems_alloc(&e, 1, &hc, &err);
-            CHECK(ems_handle_name(&e, hc, 0, got, &err) && got[0] == 0,
-                  "fn53: a reused handle starts unnamed");
-            ems_free(&e, hc, &err); } }
+    {   WORD listedHandle, otherListedHandle;
+        BYTE entries[DOS_EMS_MAX_HANDLES * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE];
+        PCBYTE secondEntry = entries + DOS_EMS_HANDLE_PAGES_ENTRY_SIZE;
+        EmsTestCheck(DosEmsGetAllHandlePages(&state, entries) == 0, "fn4D: no handles -> count 0");
+        DosEmsAllocatePages(&state, EMS_TEST_FIRST_LISTED_PAGES, &listedHandle, &errorCode);
+        DosEmsAllocatePages(&state, EMS_TEST_SECOND_LISTED_PAGES, &otherListedHandle, &errorCode);
+        EmsTestCheck(DosEmsGetAllHandlePages(&state, entries) == 2, "fn4D: two handles -> count 2");
+        EmsTestCheck(EmsTestEntryHandle(entries) == listedHandle
+                     && EmsTestEntryPages(entries) == EMS_TEST_FIRST_LISTED_PAGES,
+                     "fn4D: first pair = {handle, 3 pages}");
+        EmsTestCheck(EmsTestEntryHandle(secondEntry) == otherListedHandle
+                     && EmsTestEntryPages(secondEntry) == EMS_TEST_SECOND_LISTED_PAGES,
+                     "fn4D: second pair = {handle, 5 pages}");
+        {   BYTE name[DOS_EMS_HANDLE_NAME_SIZE] = EMS_TEST_HANDLE_NAME;
+            BYTE nameRead[DOS_EMS_HANDLE_NAME_SIZE];
+            EmsTestCheck(DosEmsGetSetHandleName(&state, listedHandle, TRUE, name, &errorCode),
+                         "fn53 AL=1: set name");
+            EmsTestCheck(DosEmsGetSetHandleName(&state, listedHandle, FALSE, nameRead, &errorCode)
+                         && memcmp(nameRead, name, DOS_EMS_HANDLE_NAME_SIZE) == 0,
+                         "fn53 AL=0: reads back the name");
+            EmsTestCheck(!DosEmsGetSetHandleName(&state, EMS_TEST_UNUSED_HANDLE, FALSE, nameRead,
+                                                 &errorCode)
+                         && errorCode == DOS_EMS_ERROR_INVALID_HANDLE,
+                         "fn53: unused handle -> 83h (what MEM /D relies on)"); }
+        DosEmsDeallocatePages(&state, listedHandle, &errorCode);
+        DosEmsDeallocatePages(&state, otherListedHandle, &errorCode);
+        {   WORD reusedHandle; BYTE nameRead[DOS_EMS_HANDLE_NAME_SIZE];
+            DosEmsAllocatePages(&state, 1, &reusedHandle, &errorCode);
+            EmsTestCheck(DosEmsGetSetHandleName(&state, reusedHandle, FALSE, nameRead, &errorCode)
+                         && nameRead[0] == 0,
+                         "fn53: a reused handle starts unnamed");
+            DosEmsDeallocatePages(&state, reusedHandle, &errorCode); } }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Checks, g_Failures);
+    return g_Failures ? 1 : 0;
 }

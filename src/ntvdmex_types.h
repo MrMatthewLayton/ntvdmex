@@ -46,6 +46,7 @@ typedef int                 BOOL;
 typedef unsigned char       BOOLEAN;
 typedef float               FLOAT;
 typedef size_t              SIZE_T;
+typedef __UINTPTR_TYPE__    UINT_PTR;     /* an integer as wide as a pointer: 64 bits here */
 typedef void               *PVOID;
 typedef void               *HANDLE;
 
@@ -134,5 +135,6 @@ NTVDMEX_TYPES_ASSERT_SIZE(UINT, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(LONG, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(ULONG, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(BOOL, 4);
+NTVDMEX_TYPES_ASSERT_SIZE(UINT_PTR, sizeof(PVOID));
 
 #endif /* NTVDMEX_TYPES_H */
