@@ -33,8 +33,8 @@
 #define ERR_TEST_BX_ACCESS_DENIED     0x0303
 #define ERR_TEST_BX_FILE_EXISTS       0x0C03
 #define ERR_TEST_BX_FAIL_I24          0x0D04
-#define ERR_TEST_CH_NETWORK           0x02
-#define ERR_TEST_CH_BLOCK_DEVICE      0x01
+#define ERR_TEST_CH_BLOCK_DEVICE      0x02
+#define ERR_TEST_CH_UNKNOWN           0x01
 
 /* Poison: what the out-parameters hold before a call that must overwrite them. */
 #define ERR_TEST_POISON_WORD          0xDEAD
@@ -113,18 +113,18 @@ int main(void)
        CASE=err.after.4E.nopath  AX=0003 BX=0803 CX=02C1
        CASE=err.after.4E.nofile  AX=0012 BX=0803 CX=02C1 */
     ErrTestRow("code 2  file not found  [3D on a missing file]", ERR_TEST_FILE_NOT_FOUND,
-               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_NETWORK);
+               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
     ErrTestRow("code 3  path not found  [4E into a missing dir]", ERR_TEST_PATH_NOT_FOUND,
-               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_NETWORK);
+               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
     ErrTestRow("code 18 no more files   [4E matching nothing]", ERR_TEST_NO_MORE_FILES,
-               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_NETWORK);
+               ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
 
     /* CASE=err.after.3F.badhandle AX=0006 BX=0704 CX=01C1
        The odd one out on BOTH fields, which is why it is worth a check of its
-       own: class 07 (bad request), action 04 (abort), locus 01 (block device)
+       own: class 07 (bad request), action 04 (abort), locus 01 (unknown)
        where the not-found family is 08/03 locus 02. */
     ErrTestRow("code 6  invalid handle  [3Fh on handle 20]", ERR_TEST_INVALID_HANDLE,
-               ERR_TEST_BX_INVALID_HANDLE, ERR_TEST_CH_BLOCK_DEVICE);
+               ERR_TEST_BX_INVALID_HANDLE, ERR_TEST_CH_UNKNOWN);
 
     /* ── MEASURED IN SESSION 52. Both of these returned zeroes and logged
        UNMEASURED before p_err.asm learned to provoke them.
@@ -135,15 +135,15 @@ int main(void)
        abort, and a program that aborts where DOS says "ask the user" is exactly
        the silent wrong branch this table exists to prevent. */
     ErrTestRow("code 5  access denied   [3D write on a read-only file]", ERR_TEST_ACCESS_DENIED,
-               ERR_TEST_BX_ACCESS_DENIED, ERR_TEST_CH_NETWORK);
+               ERR_TEST_BX_ACCESS_DENIED, ERR_TEST_CH_BLOCK_DEVICE);
     ErrTestRow("code 80 file exists     [5Bh over an existing file]", ERR_TEST_FILE_EXISTS,
-               ERR_TEST_BX_FILE_EXISTS, ERR_TEST_CH_NETWORK);
+               ERR_TEST_BX_FILE_EXISTS, ERR_TEST_CH_BLOCK_DEVICE);
     /* CASE=err.after.47.baddrive AX=000F BX=0803 CX=02C1
        ⚠ Provoked through AH=47h, NOT through an open: "Y:\..." to 3Dh returns 3
        (path not found). A code can need a particular door, and picking the wrong
        one is how it stays "unprovokable" and unmeasured. */
     ErrTestRow("code 15 invalid drive    [47h on a drive with nothing behind it]",
-               ERR_TEST_INVALID_DRIVE, ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_NETWORK);
+               ERR_TEST_INVALID_DRIVE, ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
 
     /* ── CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
        class and locus zero, so it must be classified (return TRUE), not reported
@@ -249,7 +249,7 @@ int main(void)
         BOOL isMeasured = DosErrClassify(ERR_TEST_FAIL_I24, &classAndAction, &locus);
         ErrTestExpect("crit.4e.fail.59 is a measured row", isMeasured, TRUE);
         ErrTestExpect("crit.4e.fail.59 BX=0D04", classAndAction, ERR_TEST_BX_FAIL_I24);
-        ErrTestExpect("crit.4e.fail.59 CH=01", locus, ERR_TEST_CH_BLOCK_DEVICE);
+        ErrTestExpect("crit.4e.fail.59 CH=01", locus, ERR_TEST_CH_UNKNOWN);
         ErrTestExpect("crit.4e.fail.int24 AH=1A (find-first)",
                       DosCritInt24Ah(ERR_TEST_FIND_FIRST), ERR_TEST_AH_PATH_CALL);
         ErrTestExpect("crit.3c.fail.int24 AH=1A (create: a READ of the FAT)",

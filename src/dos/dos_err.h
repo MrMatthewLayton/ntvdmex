@@ -41,9 +41,12 @@
 #define DOS_ERR_ACTION_ABORT            0x04
 #define DOS_ERR_ACTION_USER_INTERVENTION 0x03     /* retry after user intervention        */
 
-#define DOS_ERR_LOCUS_UNKNOWN           0x00
-#define DOS_ERR_LOCUS_BLOCK_DEVICE      0x01
-#define DOS_ERR_LOCUS_NETWORK           0x02      /* ...and, measured, the file system    */
+/* Loci (CH), named as RBIL's AH=59h table names them: 01h unknown or not appropriate,
+   02h block device. (These were once named one place off -- 01h "block device", 02h
+   "network" -- which is why file-system errors seemed to report "network".) */
+#define DOS_ERR_LOCUS_UNMEASURED        0x00      /* the unmeasured row's zero            */
+#define DOS_ERR_LOCUS_UNKNOWN           0x01
+#define DOS_ERR_LOCUS_BLOCK_DEVICE      0x02
 
 /* BX as 59h returns it: the class in BH, the action in BL. */
 #define DOS_ERR_CLASS_SHIFT             8
@@ -87,34 +90,34 @@ typedef const DOS_ERR_ROW *PCDOS_ERR_ROW;
 static const DOS_ERR_ROW g_DosErrTable[] = {
     { DOS_ERR_FILE_NOT_FOUND,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.3D.missing"   },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.3D.missing"   },
     { DOS_ERR_PATH_NOT_FOUND,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.4E.nopath"    },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.4E.nopath"    },
     { DOS_ERR_NO_MORE_FILES,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.4E.nofile"    },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.4E.nofile"    },
     { DOS_ERR_INVALID_HANDLE,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_BAD_FORMAT, DOS_ERR_ACTION_ABORT),
-      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.3F.badhandle" },
+      DOS_ERR_LOCUS_UNKNOWN, "err.after.3F.badhandle" },
     { DOS_ERR_ACCESS_DENIED,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_AUTHORIZATION, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.3D.readonly"  },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.3D.readonly"  },
     { DOS_ERR_FILE_EXISTS,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_ALREADY_EXISTS, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.5B.exists"    },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.5B.exists"    },
     /* Invalid drive. ⚠ IT NEEDED A DIFFERENT DOOR: opening "Y:\..." returns 3
        (path not found), not 15, so the code only turns up through AH=47h asking
        for the current directory of a drive with nothing behind it. Provoked, not
        reasoned about -- err.after.47.baddrive AX=000F BX=0803 CX=02C1. */
     { DOS_ERR_INVALID_DRIVE,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_NOT_FOUND, DOS_ERR_ACTION_USER_INTERVENTION),
-      DOS_ERR_LOCUS_NETWORK, "err.after.47.baddrive"  },
+      DOS_ERR_LOCUS_BLOCK_DEVICE, "err.after.47.baddrive"  },
     /* #34: after an INT 24h answered FAIL -- class 0Dh, action 04h, locus 1 (unknown).
        p_crit crit.4e.fail.59 AX=0053 BX=0D04 CX=0100, 6.22/QEMU and PCem alike. */
     { DOS_ERR_FAIL_I24,
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_FAIL_I24, DOS_ERR_ACTION_ABORT),
-      DOS_ERR_LOCUS_BLOCK_DEVICE, "crit.4e.fail.59"        },
+      DOS_ERR_LOCUS_UNKNOWN, "crit.4e.fail.59"        },
 };
 #define DOS_ERR_ROWS (sizeof(g_DosErrTable) / sizeof(g_DosErrTable[0]))
 
