@@ -17,7 +17,9 @@ org 0x100
 
 VRAM      equ 0xA000
 SCR_W     equ 320
+%ifndef HOLD_TICKS
 HOLD_TICKS equ 200              ; ~11 s on screen, long enough to be captured
+%endif                          ; (fontprobe_long.com: 1000, ~55 s -- variants.txt)
 
 start:
     cld

@@ -6,3 +6,4 @@ xmemb.com p_exmemc.asm -DMINA=0F000h -DMAXA=0FFFFh
 xmemc.com p_exmemc.asm -DMINA=0 -DMAXA=0
 xmemd.com p_exmemc.asm -DMINA=0 -DMAXA=0FFFFh
 xmeme.com p_exmemc.asm -DMINA=0 -DMAXA=0010h
+fontprobe_long.com fontprobe.asm -DHOLD_TICKS=1000

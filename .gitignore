@@ -123,6 +123,7 @@ tools/score/probe-cache.json
 /scripts/desktop_trace.py
 /scripts/doomstack.py
 /scripts/dosdiff.py
+/scripts/dosdrive.sh
 /scripts/dospair.sh
 /scripts/dostest.sh
 /scripts/gtype.sh

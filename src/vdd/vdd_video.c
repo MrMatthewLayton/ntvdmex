@@ -2,9 +2,12 @@
  * shared video aperture (vmem), with the DAC palette, on the VDD bus.  Pure C. */
 #include "vdd_video.h"
 #include "vga_modedefs.h"
-#include "vga_font_8x16.h"
-#include "vga_font_8x8.h"
-#include "vga_font_8x14.h"
+#include "vga_font.h"
+
+/* #322: the one copy of each table -- filled at start-up (src/host/sysfont.h). */
+uint8_t vga_font_8x8[256][8];
+uint8_t vga_font_8x14[256][14];
+uint8_t vga_font_8x16[256][16];
 #include "vga_defaults.h"
 #include "vbe_pm.h"
 
@@ -3931,12 +3934,9 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     st->present_gap_us = 0;
 }
 
-/* Copy both character generators into guest-visible memory so the pointer handed out by
-   INT 10h AH=11h AL=30h resolves to real glyph data. The 8x8 table is DERIVED from the 8x16
-   one -- each output row is the OR of the two rows it replaces, which keeps thin horizontal
-   strokes that plain decimation would drop. It is a faithful-enough 8x8, not the authentic
-   IBM ROM design; if a game's text ever looks subtly wrong in shape rather than garbled,
-   this is the thing to replace with real 8x8 glyph data. */
+/* Copy the three character generators into guest-visible memory so the pointer handed
+   out by INT 10h AH=11h AL=30h resolves to real glyph data. The tables are filled at
+   start-up from the system's fonts (#322, src/host/sysfont.h) before this runs. */
 void vdd_video_install_fonts(video_state *st)
 {
     uint8_t *f16, *f8, *f14;
@@ -3946,11 +3946,13 @@ void vdd_video_install_fonts(video_state *st)
     f8  = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X8_SEG, 0);
     f14 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X14_SEG, 0);
     if (!f16 || !f8 || !f14) return;
-    /* All three are the REAL ROM tables now. The 8x8 used to be manufactured here by
-       OR-ing adjacent row pairs of the 8x16 -- which squashes a 16-row glyph into 6 and
-       fills in every counter, so 'A' came out solid and 'E' came out as noise. Skyroads
-       asks for this exact table (BH=3 and BH=4, measured) and draws its own text from the
-       pointer we return, so that hack WAS the game's garbled text. Never derive a font. */
+    /* All three are REAL designs at their own size (#322: from the system's fonts, see
+       src/host/sysfont.h -- the 8x8 is Terminal's own 8x8). The 8x8 used to be
+       manufactured here by OR-ing adjacent row pairs of the 8x16 -- which squashes a
+       16-row glyph into 6 and fills in every counter, so 'A' came out solid and 'E' came
+       out as noise. Skyroads asks for this exact table (BH=3 and BH=4, measured) and
+       draws its own text from the pointer we return, so that hack WAS the game's
+       garbled text. Never derive a font. */
     for (c = 0; c < 256; ++c) {
         for (y = 0; y < 16; ++y) f16[c * 16 + y] = vga_font_8x16[c][y];
         for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];

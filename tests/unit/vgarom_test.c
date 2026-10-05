@@ -1,7 +1,7 @@
 /* vgarom_test.c -- check what we ship for the VGA against the GENUINE IBM VGA BIOS.
  *
  * ── WHY THIS EXISTS ──────────────────────────────────────────────────────────────
- *   Every table in vga_font_*.h and vga_defaults.h is a CLAIM ABOUT REAL HARDWARE.
+ *   Every table in vga_defaults.h is a CLAIM ABOUT REAL HARDWARE.
  *   Nothing in the ordinary battery can falsify such a claim: those tables are both
  *   the thing under test and the only statement of what is correct, so a test
  *   written against them can do no more than agree with itself. That is how the
@@ -22,9 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "vga_font_8x16.h"
-#include "vga_font_8x14.h"
-#include "vga_font_8x8.h"
 #include "vga_defaults.h"
 
 static int pass = 0, fail = 0, skip = 0;
@@ -62,14 +59,6 @@ static long find(const uint8_t *hay, long hn, const uint8_t *nee, long nn)
     return -1;
 }
 
-static uint8_t flat[4096];
-static long flatten(const void *tbl, int glyphs, int h)
-{
-    const uint8_t *p = (const uint8_t *)tbl;
-    memcpy(flat, p, (size_t)(glyphs * h));
-    return glyphs * h;
-}
-
 int main(void)
 {
     long n = 0;
@@ -84,18 +73,9 @@ int main(void)
     }
     ok(n == 32768, "ibm_vga.bin is the expected 32KB image");
 
-    /* ── THE THREE FONTS. All three must appear in the real BIOS byte for byte.
-         The 8x8 in particular was once MANUFACTURED here, by OR-ing pairs of rows
-         out of the 8x16 -- a plausible-looking font that no IBM machine ever drew.
-         This is the check that would have caught that. */
-    {   long off;
-        off = find(rom, n, (const uint8_t *)vga_font_8x16, flatten(vga_font_8x16, 256, 16));
-        ok(off >= 0, "8x16 font is byte-identical to the ROM's");
-        off = find(rom, n, (const uint8_t *)vga_font_8x14, flatten(vga_font_8x14, 256, 14));
-        ok(off >= 0, "8x14 font is byte-identical to the ROM's");
-        off = find(rom, n, (const uint8_t *)vga_font_8x8,  flatten(vga_font_8x8,  256, 8));
-        ok(off >= 0, "8x8 font is byte-identical to the ROM's (not derived)");
-    }
+    /* ── THE THREE FONTS are no longer IBM's (#322): NTVDMEX ships no font data and
+         builds the tables from the system's fonts at start-up, so there is nothing
+         here to compare against the ROM. (The checks that did so are retired.) */
 
     /* ── THE PER-MODE CRTC TABLES. vgadefs.asm read these back off a real card; the
          BIOS is where they come from in the first place, so the two must agree. A

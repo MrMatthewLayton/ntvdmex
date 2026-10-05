@@ -133,6 +133,7 @@ typedef char bios_kbdact_fits[(sizeof(bios_kbdact_code) <= DOS_KBDACT_LEN
 #include "vdd_ide.h"
 #include "vdd_pic.h"
 #include "vdd_video.h"
+#include "sysfont.h"        /* #322: the VGA tables from the system fonts */
 #include "vdd_input.h"
 #include "vdd_speaker.h"
 #include "vdd_joy.h"
@@ -31897,6 +31898,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
       } }
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
+    /* #322: no font data ships -- the tables come from the system's fonts. Into the
+       report buffer: a log_append here would be erased when the report is rewritten. */
+    p = zput(p, "STAGE1: "); p = zput(p, sysfont_build()); p = zput(p, "\r\n");
     vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS

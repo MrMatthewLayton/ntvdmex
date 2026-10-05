@@ -6,9 +6,31 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_video.h"
-#include "vga_font_8x16.h"
-#include "vga_font_8x8.h"
-#include "vga_font_8x14.h"
+#include "vga_font.h"
+
+/* #322: the host fills the character tables from the system's fonts at start-up; off-VM
+   there are no fonts, so the tables get a deterministic pattern with every glyph lit.
+   These checks compare what was DRAWN with what the TABLE says, so any content works. */
+/* The pattern keeps what every real font has and these checks rely on: the blank
+   characters (00h, 20h, FFh) are blank, and every other glyph has column 2 lit and
+   columns 0, 1 and 7 unlit on every row -- so it has both foreground and background
+   pixels, at known places -- and is unique (see TEST_ROW). */
+static void fill_test_fonts(void)
+{
+    int c, y;
+    for (c = 0; c < 256; ++c) {
+        int blank = (c == 0x00 || c == 0x20 || c == 0xFF);
+        /* rows 0 and 1 carry the code's two nibbles, so every glyph is UNIQUE -- AH=08h
+           reads a character back by matching pixels against the table, as a real
+           font allows */
+#define TEST_ROW(y, k) (uint8_t)(0x20 | (((y) == 0 ? (c & 0x0F) : (y) == 1 ? (c >> 4) \
+                                         : ((c * (k) + (y) * 11) >> 1)) & 0x0F) << 1)
+        for (y = 0; y < 16; ++y) vga_font_8x16[c][y] = blank ? 0 : TEST_ROW(y, 37);
+        for (y = 0; y < 14; ++y) vga_font_8x14[c][y] = blank ? 0 : TEST_ROW(y, 29);
+        for (y = 0; y < 8;  ++y) vga_font_8x8 [c][y] = blank ? 0 : TEST_ROW(y, 23);
+#undef TEST_ROW
+    }
+}
 
 /* True if some VDD claimed `port` -- used instead of asserting a range count. */
 static int claims_port(const vdd_bus *b, uint16_t port)
@@ -59,6 +81,7 @@ static uint32_t dac_pack_ref(uint8_t r,uint8_t g,uint8_t b)
 
 int main(void)
 {
+    fill_test_fonts();
     vdd_bus bus;
     ntvdd dev;
     ntvdd_regs r;
