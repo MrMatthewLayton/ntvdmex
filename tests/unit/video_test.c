@@ -76,6 +76,8 @@ static video_state vid;
 static uint8_t *txt(int r,int c){ return g_vmem + VID_TEXT_OFF + (r*vid.cols+c)*2; }
 static uint8_t cchar(int r,int c){ return txt(r,c)[0]; }
 static uint8_t cattr(int r,int c){ return txt(r,c)[1]; }
+/* #324: the text frame's stride -- cols x the live cell width (9 dots in VGA text). */
+#define TXW (vid.cols * vdd_video_text_cell_w(&vid))
 static uint32_t dac_pack_ref(uint8_t r,uint8_t g,uint8_t b)
 { return 0xFF000000u | ((uint32_t)(r<<2)<<16) | ((uint32_t)(g<<2)<<8) | (uint32_t)(b<<2); }
 
@@ -134,8 +136,12 @@ int main(void)
     vdd_video_render(&vid);
     { int gy,gx,mism=0; const uint8_t *gl=vga_font_8x16['A'];
       for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx){
-          uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if(vid.fb[gy*VID_FB_W+gx]!=e)mism++; }
-      CHECK(mism==0, "render: text cell matches font glyph 'A'"); }
+          uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if(vid.fb[gy*TXW+gx]!=e)mism++; }
+      CHECK(mism==0, "render: text cell matches font glyph 'A'");
+      /* #324: a VGA text cell is NINE dots; the ninth is background for 'A'... */
+      CHECK(vdd_video_text_cell_w(&vid) == 9, "render: mode 3 text cells are 9 dots wide (SR01 bit 0 clear)");
+      for (mism = 0, gy = 0; gy < VID_CELL_H; ++gy) if (vid.fb[gy*TXW + 8] != 0) mism++;
+      CHECK(mism==0, "render: column 9 of 'A' is background"); }
 
     /* T4b: A USER-LOADED FONT MUST CHANGE WHAT IS DRAWN.  GH #52 -----------
        INT 10h AH=11h AL=00h loads the caller's own character generator. It used
@@ -158,7 +164,7 @@ int main(void)
       CHECK(vid.user_font_on == 1, "int10/11/00: a user font load is recorded");
       vdd_video_render(&vid);
       for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx)
-          if(vid.fb[gy*VID_FB_W+gx] != 15) solid = 0;
+          if(vid.fb[gy*TXW+gx] != 15) solid = 0;
       CHECK(solid, "int10/11/00: the USER glyph is drawn, not the ROM one");
 
       /* A character the caller did NOT supply must still draw as itself --
@@ -180,7 +186,7 @@ int main(void)
       { int mism2=0; const uint8_t *gl2=vga_font_8x16['B'];
         for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx){
             uint8_t e=(gl2[gy]&(0x80>>gx))?15:0;
-            if(vid.fb[gy*VID_FB_W + VID_CELL_W + gx]!=e) mism2++; }
+            if(vid.fb[gy*TXW + 9 + gx]!=e) mism2++; }
         CHECK(mism2==0, "int10/11/00: unsupplied chars keep their ROM glyphs"); }
 
       /* AL=02h selects a ROM font, which is a request to go BACK -- it must
@@ -192,7 +198,7 @@ int main(void)
       { int mism3=0; const uint8_t *gl3=vga_font_8x16['A'];
         for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx){
             uint8_t e=(gl3[gy]&(0x80>>gx))?15:0;
-            if(vid.fb[gy*VID_FB_W+gx]!=e) mism3++; }
+            if(vid.fb[gy*TXW+gx]!=e) mism3++; }
         CHECK(mism3==0, "int10/11/02: ...and 'A' is the ROM glyph again"); }
 
       /* A cell is VID_CELL_H tall, so a font taller than that cannot be drawn.
@@ -207,8 +213,23 @@ int main(void)
 
     /* T5: text frame is 640x400x8 --------------------------------------- */
     vid.dirty=1; vdd_bus_frame(&bus);
-    CHECK(vid.frame.w==640 && vid.frame.h==400 && vid.frame.bpp==8,
-          "frame(text): 640x400x8 palettised");
+    CHECK(vid.frame.w==720 && vid.frame.h==400 && vid.frame.bpp==8,
+          "frame(text): 720x400x8 palettised (9-dot cells, #324)");
+    /* #324: LINE GRAPHICS. With AR10 bit 2 set (mode 3's default), C0h-DFh repeat the
+       eighth column into the ninth, so a row of horizontal lines is unbroken; outside
+       that range (B3h, a vertical line) the ninth column stays background. */
+    { int gy, ok9 = 1, bg9 = 1;
+      memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((24<<8)|79)); vdd_bus_deliver_int(&bus,0x10,&r);
+      txt(5,0)[0] = 0xC4; txt(5,0)[1] = 0x0F;          /* ─ */
+      txt(5,1)[0] = 0xB3; txt(5,1)[1] = 0x0F;          /* │ */
+      vdd_video_render(&vid);
+      for (gy = 0; gy < 16; ++gy) {
+          if (vid.fb[(5*16+gy)*TXW + 8] != vid.fb[(5*16+gy)*TXW + 7]) ok9 = 0;
+          if (vid.fb[(5*16+gy)*TXW + 9 + 8] != 0) bg9 = 0;
+      }
+      CHECK(ok9, "render: C4h repeats column 8 into column 9 (line graphics, AR10 bit 2)");
+      CHECK(bg9, "render: B3h (outside C0h-DFh) leaves column 9 background");
+      txt(5,0)[0] = ' '; txt(5,1)[0] = ' '; }
 
     /* T6: DAC ports set a palette entry --------------------------------- */
     { uint32_t v; v=0x10; vdd_bus_io(&bus,0x3C8,1,0,&v);     /* write index 0x10  */
@@ -1592,10 +1613,10 @@ int main(void)
         g_fake_us = 100000; vdd_video_render(&vid);
         { const uint8_t *gl = vga_font_8x16['A']; int lit = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx)
-              if ((gl[gy]&(0x80>>gx)) && vid.fb[gy*640+gx]==7) lit++;
+              if ((gl[gy]&(0x80>>gx)) && vid.fb[gy*TXW+gx]==7) lit++;
           CHECK(lit > 0, "blink: in the on phase the glyph is drawn"); }
         g_fake_us = 700000; vdd_video_render(&vid);
-        { int any = 0; for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) if (vid.fb[gy*640+gx]!=0) any++;
+        { int any = 0; for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) if (vid.fb[gy*TXW+gx]!=0) any++;
           CHECK(any == 0, "blink: in the off phase the glyph hides (fg == bg)"); }
         vid.time_us = 0; txt(0,0)[1]=0x07;
 
@@ -1605,12 +1626,12 @@ int main(void)
         CHECK((r_dx(&r) & 0xFF) == 49, "int10/1112: DL = rows-1 = 49");
         CHECK(tbda[0x84]==49 && tbda[0x85]==8, "bda: 0484=49 0485=8 after 1112h");
         vid.dirty=1; vdd_bus_frame(&bus);
-        CHECK(vid.frame.w==640 && vid.frame.h==400, "frame(50-line): still 640x400");
+        CHECK(vid.frame.w==720 && vid.frame.h==400, "frame(50-line): still 720x400");
         txt(49,0)[0]='A'; txt(49,0)[1]=0x0F;
         vdd_video_render(&vid);
         { const uint8_t *gl = vga_font_8x8['A']; int mism = 0;
           for (gy=0;gy<8;++gy) for (gx=0;gx<8;++gx) {
-              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(392+gy)*640+gx]!=e) mism++; }
+              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(392+gy)*TXW+gx]!=e) mism++; }
           CHECK(mism==0, "render(50-line): row 49 is an 8x8 ROM glyph at scan line 392"); }
         memset(&r,0,sizeof r); s_ah(&r,0x11); s_al(&r,0x30); s_bx(&r,0x0100); vdd_bus_deliver_int(&bus,0x10,&r);
         CHECK(r_cx(&r) == 8 && (r_dx(&r)&0xFF) == 49, "int10/1130 BH=1: the CURRENT font is 8x8, 50 rows");
@@ -1644,7 +1665,7 @@ int main(void)
         vdd_video_text_cursor(&vid, 3, 2, 0x77FF, 0x7700); /* the driver's defaults  */
         { const uint8_t *gl = vga_font_8x16['X']; int mism = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
-              uint8_t e=(gl[gy]&(0x80>>gx))?0:6; if (vid.fb[(2*16+gy)*640+3*8+gx]!=e) mism++; }
+              uint8_t e=(gl[gy]&(0x80>>gx))?0:6; if (vid.fb[(2*16+gy)*TXW+3*9+gx]!=e) mism++; }
           CHECK(mism==0, "int33 text cursor: cell (3,2) redrawn with (1F & 77) ^ 77 = 60h: black on brown"); }
         CHECK(txt(2,3)[1] == 0x1F, "int33 text cursor: VRAM itself is untouched (no trail)");
         vdd_video_text_cursor(&vid, 80, 2, 0x77FF, 0x7700);
@@ -1661,8 +1682,8 @@ int main(void)
         vdd_video_render(&vid);
         { const uint8_t *gl = vga_font_8x16['A']; int mism = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
-              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(16+gy)*320+gx]!=e) mism++; }
-          CHECK(mism==0, "render(40-col): row 1 is at stride 320 (was drawn at 640: every other line)"); }
+              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(16+gy)*360+gx]!=e) mism++; }
+          CHECK(mism==0, "render(40-col): row 1 is at stride 360 -- 40 nine-dot cells (#324)"); }
         CHECK(tbda[0x4A]==40 && tbda[0x49]==1, "bda: mode 1 -> 40 columns");
         memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
         vid.bda = 0;
@@ -1883,7 +1904,7 @@ int main(void)
         vdd_video_render(&vid);
         for (ok = 1, y = 0; y < 16; ++y) { int x;
             for (x = 0; x < 8; ++x)
-                if (vid.fb[(2 * 16 + y) * 640 + 3 * 8 + x] != ((vga_font_8x16['Q'][y] & (0x80 >> x)) ? 0x0F : 0x01)) ok = 0; }
+                if (vid.fb[(2 * 16 + y) * TXW + 3 * 9 + x] != ((vga_font_8x16['Q'][y] & (0x80 >> x)) ? 0x0F : 0x01)) ok = 0; }
         CHECK(ok, "#252 03h: the renderer SHOWS page 1 (from the CRTC start) -- 'Q' in 1Fh at row 2, column 3");
         I10(0x0500, 0, 0, 0);
         /* AH=12h */

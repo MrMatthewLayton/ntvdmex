@@ -63,11 +63,12 @@ static void wait_vblank(present_ddraw *pd)
 }
 
 /* ── THE SCALE2X TARGET, AS ONE STATIC BUFFER. ───────────────────────────────────
-     640x480 doubled is 1.2 MB. It lives here rather than in present_ddraw so the
+     The largest frame doubled (#325: it was 1280x960 -- 640x480 doubled -- so a
+     720x400 text frame silently skipped the scaler). It lives here rather than in present_ddraw so the
      struct stays something a caller can hold by value (present_demo does), and it
      is static rather than allocated because the present path runs on the UI thread
      at video rate and must never wait on the heap. */
-static uint8_t s_scaled[1280 * 960];
+static uint8_t s_scaled[(2 * NTVDD_FRAME_MAXW) * (2 * NTVDD_FRAME_MAXH)];
 
 /* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
    over the destination it darkens alternate PHYSICAL rows -- which is where a
@@ -172,13 +173,15 @@ static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int 
     /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
        does -- it is already ARGB, so it needs no resolving, just no palette. */
     int direct = (pd->snap_bpp == 32);
-    int split = !direct && pd->snap_split && sw <= 640 && sh <= 480;
+    /* #325: no 640x480 cap -- the split palette is per ENTRY (from a row), so any frame
+       size resolves; s_rgb32 is already the largest frame. */
+    int split = !direct && pd->snap_split;
     /* Scale2x first: it is a property of the FRAME, so it happens before the
        stretch and the stretch then works from a source with twice the detail.
        (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
        snap32 either.) */
     if (scale2x && !split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
-        && sw * 2 <= 1280 && sh * 2 <= 960) {
+        && sw <= NTVDD_FRAME_MAXW && sh <= NTVDD_FRAME_MAXH) {
         present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
         pix = s_scaled; sw *= 2; sh *= 2;
     }
@@ -774,12 +777,13 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     HANDLE hf;
     BYTE fh[14], ih[40];
     static BYTE pal[256 * 4];
-    static BYTE row[640 + 4];
+    static BYTE row[NTVDD_FRAME_MAXW + 4];
     /* 24bpp output is needed for a split palette AND for a direct-colour frame:
        neither can be described by one 256-entry BMP palette. */
     int split = pd->snap_split || pd->snap_bpp == 32;
-    static BYTE row24[640 * 3 + 4];
-    if (!pd->snap_valid || w <= 0 || h <= 0 || w > 640 || h > 480) return -1;
+    static BYTE row24[NTVDD_FRAME_MAXW * 3 + 4];
+    /* #325: any frame up to the maximum (720x400 text, VESA) -- this was 640x480. */
+    if (!pd->snap_valid || w <= 0 || h <= 0 || w > NTVDD_FRAME_MAXW || h > NTVDD_FRAME_MAXH) return -1;
     /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
        written as 24bpp with every row resolved. Ordinary frames stay 8bpp: the
        oracle tools compare palette INDICES and must keep them. */

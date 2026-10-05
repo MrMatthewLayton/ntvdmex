@@ -4033,11 +4033,26 @@ static const uint8_t *glyph_rows(const video_state *st, uint8_t ch)
      UI with a light-grey dialog on a bright panel) got the dark eight, and one that
      left blink ON and used it never blinked. `st->blink_off` is the phase for this
      render, set once per frame by vdd_video_render from the injected clock. */
+/* ── #324: A VGA TEXT CELL IS NINE DOTS WIDE. Sequencer Clocking Mode bit 0 picks 8 or 9
+     (every standard VGA text mode sets 9: 80x25 is 720x400, 40x25 is 360x400). The ninth
+     column is background, except that with Line Graphics Enable (AR10 bit 2) the box-
+     drawing range C0h-DFh repeats the eighth column into it, which is what makes
+     horizontal lines join from cell to cell. A VESA 132-column mode is 8 dots: the
+     wider character clock would not fit the line. */
+static int text_cw(const video_state *st)
+{
+    if (st->vesa_text_mode) return 8;
+    return (st->seq_reg[1] & 0x01) ? 8 : 9;
+}
+int vdd_video_text_cell_w(const video_state *st) { return text_cw(st); }
+
 static void render_cell(video_state *st, int r, int c, uint8_t ch, uint8_t attr)
 {
     int gy, gx;
     int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
-    int stride = st->cols * VID_CELL_W;                /* 320 in a 40-column mode  */
+    int cw = text_cw(st);
+    int stride = st->cols * cw;                        /* 360 in a 40-column mode  */
+    int lge = cw == 9 && (st->attr_mode & 0x04) && ch >= 0xC0 && ch <= 0xDF;
     uint8_t fg = attr & 0x0F, bg;
     const uint8_t *gl = glyph_rows(st, ch);
     if (st->blink) {
@@ -4048,8 +4063,9 @@ static void render_cell(video_state *st, int r, int c, uint8_t ch, uint8_t attr)
     }
     for (gy = 0; gy < cell_h; ++gy) {
         uint8_t bits = gl[gy];
-        uint8_t *row = &st->fb[(r*cell_h + gy) * stride + c*VID_CELL_W];
-        for (gx = 0; gx < VID_CELL_W; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
+        uint8_t *row = &st->fb[(r*cell_h + gy) * stride + c*cw];
+        for (gx = 0; gx < 8; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
+        if (cw == 9) row[8] = (lge && (bits & 0x01)) ? fg : bg;
     }
 }
 
@@ -4120,7 +4136,8 @@ static void draw_hw_cursor(video_state *st)
 {
     int gy, gx;
     int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
-    int stride = st->cols * VID_CELL_W;
+    int cw = text_cw(st);
+    int stride = st->cols * cw;
     /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, SCALED, BLINK FROM THE CLOCK. ────
          This used to be two hard-coded scan lines, always lit. Two things were wrong
          with that and only one of them is cosmetic:
@@ -4154,9 +4171,9 @@ static void draw_hw_cursor(video_state *st)
         if (!hidden && lit) {
             uint8_t fg = dcell(st, st->cur_row, st->cur_col)[1] & 0x0F;
             for (gy = (int)start; gy <= (int)end; ++gy)
-                for (gx = 0; gx < VID_CELL_W; ++gx)
+                for (gx = 0; gx < cw; ++gx)              /* all nine: the CRTC does */
                     st->fb[(st->cur_row*cell_h + gy) * stride
-                           + st->cur_col*VID_CELL_W + gx] = fg;
+                           + st->cur_col*cw + gx] = fg;
         }
     }
 }
@@ -4460,7 +4477,7 @@ static void vid_frame(void *self)
         /* Geometry now follows the MODE, not a fixed 80x25 -- a 40-column mode
            renders 320 pixels wide instead of pretending to be 640. */
         vdd_video_render(st);
-        st->frame.w = (uint16_t)(st->cols * VID_CELL_W);
+        st->frame.w = (uint16_t)(st->cols * text_cw(st));   /* #324: 9-dot cells */
         st->frame.h = (uint16_t)(st->rows * (st->cell_h ? st->cell_h : VID_CELL_H));
         vdd_video_bda_sync(st);                        /* cursor moved by teletype etc. */
         st->frame.bpp = 8;

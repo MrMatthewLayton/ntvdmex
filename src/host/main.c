@@ -9766,11 +9766,14 @@ static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
 {
     int b;
     const uint8_t *map4 = NULL;
-    if (!g_ms_gc_defined) { overlay_cursor(px, W, H, stride, g_ms_x, g_ms_y); return; }
+    /* #325: the pointer lives in the mode's extent (gw x gh); the snapshot may be the
+       CRTC's real geometry (Mode X is 320x240 in a mode 13h extent of 320x200). */
+    int mx = (int)((LONG)g_ms_x * W / (LONG)i33_w()), my = (int)((LONG)g_ms_y * H / (LONG)i33_h());
+    if (!g_ms_gc_defined) { overlay_cursor(px, W, H, stride, mx, my); return; }
     b = (int)(g_ms_gc_buf & 1);
     if (g_vid.mkind == VID_KIND_CGA && !g_vid.in_vesa && g_vid.cga_bpp != 1)
         map4 = vdd_video_cga4_map(&g_vid);
-    i33_gc_draw(px, W, H, stride, (int)g_ms_x, (int)g_ms_y, (int)g_ms_hot_x, (int)g_ms_hot_y,
+    i33_gc_draw(px, W, H, stride, mx, my, (int)g_ms_hot_x, (int)g_ms_hot_y,
                 g_ms_gc_scr[b], g_ms_gc_cur[b], 0x0F, map4);
 }
 
@@ -11036,8 +11039,13 @@ static void sel_publish(void)
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
     g_pd.sel_on = g_sel_on;
-    g_pd.sel_x0 = c0 * VID_CELL_W;        g_pd.sel_x1 = (c1 + 1) * VID_CELL_W;
-    g_pd.sel_y0 = r0 * VID_CELL_H;        g_pd.sel_y1 = (r1 + 1) * VID_CELL_H;
+    {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
+           is 8 in a 50-line screen (this used VID_CELL_H, so a 50-line selection was
+           drawn at twice its height). */
+        int cw = vdd_video_text_cell_w(&g_vid), chh = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
+        g_pd.sel_x0 = c0 * cw;            g_pd.sel_x1 = (c1 + 1) * cw;
+        g_pd.sel_y0 = r0 * chh;           g_pd.sel_y1 = (r1 + 1) * chh;
+    }
     HOST_LOCK(); g_vid.dirty = 1; HOST_UNLOCK();
     if (g_pd.hwnd) InvalidateRect(g_pd.hwnd, NULL, FALSE);
 }
@@ -11051,7 +11059,8 @@ static int client_to_cell(int x, int y, int *c, int *r)
     if (g_pd.last_dw <= 0 || g_pd.last_dh <= 0 || g_vid.cols < 1 || g_vid.rows < 1) return 0;
     sx = (x - g_pd.last_dx) * g_pd.last_sw / g_pd.last_dw;
     sy = (y - g_pd.last_dy) * g_pd.last_sh / g_pd.last_dh;
-    *c = sx / VID_CELL_W; *r = sy / VID_CELL_H;
+    *c = sx / vdd_video_text_cell_w(&g_vid);
+    *r = sy / (g_vid.cell_h ? g_vid.cell_h : VID_CELL_H);
     if (*c < 0) *c = 0;
     if (*r < 0) *r = 0;
     if (*c >= g_vid.cols) *c = g_vid.cols - 1;
@@ -14176,7 +14185,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
                truth about position -- drive the driver cursor from the deltas instead,
                so INT 33h 03h still reports somewhere sensible. */
-            if (g_captured && g_vid.frame.w && g_vid.frame.h) {
+            if (g_captured && i33_w() && i33_h()) {
                 /* ── #291 (user, s89): SENSITIVITY DRIVES THE CAPTURED POINTER. A game
                      that reads the POSITION (Lemmings: INT 33h 03h only, never 0Bh)
                      was never touched by the setting, and a mickey moved it one GAME
@@ -14189,8 +14198,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 LONG nx = g_ms_x + sx / 100;
                 LONG ny = g_ms_y + sy / 100;
                 s_fx = sx % 100; s_fy = sy % 100;
-                if (nx < 0) nx = 0; else if (nx >= (LONG)g_vid.frame.w) nx = (LONG)g_vid.frame.w - 1;
-                if (ny < 0) ny = 0; else if (ny >= (LONG)g_vid.frame.h) ny = (LONG)g_vid.frame.h - 1;
+                if (nx < 0) nx = 0; else if (nx >= (LONG)i33_w()) nx = (LONG)i33_w() - 1;
+                if (ny < 0) ny = 0; else if (ny >= (LONG)i33_h()) ny = (LONG)i33_h() - 1;
                 if (nx != g_ms_x || ny != g_ms_y) mouse_evt_raise(1);   /* motion event */
                 InterlockedExchange(&g_ms_x, nx); InterlockedExchange(&g_ms_y, ny);
             }
@@ -14247,13 +14256,21 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* RULE 6: a mouse-using guest that is released sees no position and no
            buttons. Not consumed -- DefWindowProc still gets its ordinary click. */
         if (!mouse_goes_to_guest()) break;
-        fw = g_vid.frame.w ? (int)g_vid.frame.w : 640;
-        fh = g_vid.frame.h ? (int)g_vid.frame.h : 480;
+        /* ── #325: g_ms_x/y are in the MODE's extent (gw x gh -- what the driver reports,
+             640 wide in text whatever the cell width), mapped through the rectangle the
+             picture was actually drawn into. It used the whole client, which put the
+             guest pointer in the wrong place whenever the picture was letterboxed --
+             and with whole-number scaling, maximised and fullscreen always are. */
+        fw = (int)i33_w(); fh = (int)i33_h();
         GetClientRect(h, &rc);
-        cw = rc.right; ch = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
-        if (cw < 1) cw = 1;
-        if (ch < 1) ch = 1;
-        { int fx = (short)LOWORD(lp) * fw / cw, fy = (short)HIWORD(lp) * fh / ch;
+        { int ox = 0, oy = 0, fx, fy;
+          cw = rc.right; ch = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+          if (g_pd.last_dw > 0 && g_pd.last_dh > 0) {
+              ox = g_pd.last_dx; oy = g_pd.last_dy; cw = g_pd.last_dw; ch = g_pd.last_dh;
+          }
+          if (cw < 1) cw = 1;
+          if (ch < 1) ch = 1;
+          fx = ((short)LOWORD(lp) - ox) * fw / cw; fy = ((short)HIWORD(lp) - oy) * fh / ch;
           if (fx < 0) fx = 0;
           else if (fx >= fw) fx = fw - 1;
           if (fy < 0) fy = 0;
