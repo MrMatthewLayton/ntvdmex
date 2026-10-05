@@ -149,6 +149,7 @@ tools/score/probe-cache.json
 /scripts/wowtriage.sh
 /scripts/xp-vm.sh
 /scripts/xp.py
-# committed probe builds are rebuilt (phase 2); selftest.com ships in the zip
+# committed probe builds are rebuilt (phase 2); selftest.com ships in the zip, p_o32.com is interp_test data
 /tools/**/*.com
 !/tools/dostest/selftest.com
+!/tools/dostest/p_o32.com
