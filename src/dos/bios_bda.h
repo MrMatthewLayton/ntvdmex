@@ -3,7 +3,7 @@
  *
  * Host-testable in the same shape as dos_mcb.h: every routine takes a caller-supplied
  * `base` (NULL for the host's absolute V86 addressing, a 1 MB buffer off-VM).
- * Verified off-VM by tools/dostest/bda_test.c.
+ * Verified off-VM by tests/unit/bda_test.c.
  *
  * ── ★★★ TWO DOORS ONTO ONE VALUE, AGAIN. ──────────────────────────────────────────
  *   On a real BIOS, INT 11h IS `mov ax,[0040:0010] / iret` and INT 12h IS

@@ -30,7 +30,7 @@
  * structural rather than something to keep in step by hand.
  *
  * Pure C, no <windows.h>: the clock is injected, so the whole chip is exercised
- * off-VM by tools/dostest/cmos_test.c.
+ * off-VM by tests/unit/cmos_test.c.
  */
 #ifndef NTVDMEX_VDD_CMOS_H
 #define NTVDMEX_VDD_CMOS_H

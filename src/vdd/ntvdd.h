@@ -19,7 +19,7 @@
  * -- the same discipline that made dos_mcb.h testable without a VM.
  *
  * This header is freestanding (no <windows.h>); it is shared verbatim by the
- * XP host build and the off-VM test battery (tools/dostest/vdd_test.c).
+ * XP host build and the off-VM test battery (tests/unit/vdd_test.c).
  */
 #ifndef NTVDMEX_NTVDD_H
 #define NTVDMEX_NTVDD_H

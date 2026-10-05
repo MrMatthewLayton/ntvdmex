@@ -14,7 +14,7 @@ static void vga_load_modedef(video_state *st, uint8_t mode);
    it. Both hardcoded the sixteen colours a 16-colour mode renders with, which is
    exactly the assumption this file had to stop making: those colours are
    dac[vpal[i]], and both halves belong to the guest. The defaults now come from
-   vga_defaults.h, MEASURED per mode; tools/gen-vgadefs.py refuses to generate it
+   vga_defaults.h, MEASURED per mode; tools/gen/gen-vgadefs.py refuses to generate it
    unless mode 10h's measured DAC matches what ega64_rgb() computed entry for entry,
    so retiring the formula shifted no colour anywhere. */
 
@@ -74,9 +74,9 @@ static uint32_t dac_pack_w(const video_state *st, uint8_t r, uint8_t g, uint8_t 
          13h                 AC 00..0F (identity)                DAC = the VGA 256
          04h/05h/06h/07h/0Fh/11h  each different again
 
-     All of it is measured by tools/dostest/vgadefs.asm, which sets each mode and
+     All of it is measured by tests/probes/dos/vgadefs.asm, which sets each mode and
      reads the registers BACK -- the AC through 0x3C1, the DAC through 0x3C7/0x3C9 --
-     on genuine MS-DOS 6.22. tools/gen-vgadefs.py turns that dump into
+     on genuine MS-DOS 6.22. tools/gen/gen-vgadefs.py turns that dump into
      vga_defaults.h. Bit 7 of AL ("do not clear the buffer") changes none of it; the
      probe measures 8Dh and 90h to prove that rather than assume it.
 
@@ -119,7 +119,7 @@ static void vga_defaults_for(uint8_t mode,
      the line, for a 352-pixel-wide scrolling window); the mode 10h screen AFTER it
      was then drawn 44 bytes to the line instead of 80 and came out as diagonal
      noise. The BIOS writes all 25 registers on every mode set -- these values are
-     measured per mode by tools/dostest/vgadefs.asm.
+     measured per mode by tests/probes/dos/vgadefs.asm.
    ▶ THE VERTICAL TIMING IS NOW APPLIED TOO, and it had to be: the BIOS sets these
      registers, the guest does not, so a mode set is the ONLY place a BIOS-set mode
      ever learns its own geometry. Leaving it out was what kept 0x3DA on the old

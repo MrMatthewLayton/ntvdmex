@@ -4,7 +4,7 @@
  *
  * Header-only and dependency-free (stdint only: no windows.h, no string.h -- the host
  * is built -nostdlib), so the off-VM battery
- * (tools/dostest/mouse_test.c) compiles exactly the code the host runs. The register
+ * (tests/unit/mouse_test.c) compiles exactly the code the host runs. The register
  * plumbing -- which register carries what, ES:DX vs a PM selector -- stays in
  * mouse_int33 (main.c); nothing here touches a guest.
  *
@@ -13,7 +13,7 @@
  *   for 34h, 8.10+ for 2Eh) and RBIL's tables #03168 (cursor bitmap), #03176 (the
  *   alternate call mask), #03182 (acceleration profile data), #03184 (settings).
  *   ⚠ UNMEASURED unless a row says otherwise. The 6.22 oracle runs MOUSE.COM 6.24,
- *   which predates 2Bh-34h; DOSBox-X is an emulator's opinion. tools/dostest/
+ *   which predates 2Bh-34h; DOSBox-X is an emulator's opinion. tests/probes/dos/
  *   p_mouse3.asm asks every question below that a probe can ask, so the first oracle
  *   run turns these comments into measurements.
  */

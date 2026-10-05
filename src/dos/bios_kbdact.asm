@@ -2,7 +2,7 @@
 ;
 ; The source of the bytes in bios_kbdact.h. Rebuild with:
 ;     nasm -f bin src/dos/bios_kbdact.asm -o /tmp/k.bin -l /tmp/k.lst
-; tools/dostest/kbdact_test.c runs the bytes in v86interp.
+; tests/unit/kbdact_test.c runs the bytes in v86interp.
 ;
 ; Our INT 09h is a host BOP (`BOP 09h; IRET`). It translates the key, updates the
 ; BDA and sends the EOI; when the key also needs the BIOS to CALL something, the host

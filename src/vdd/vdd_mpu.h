@@ -17,7 +17,7 @@
  * would be worse than none -- a game that detects it would then rely on it.
  *
  * Pure C, no <windows.h>: assembled MIDI messages go to an injected sink, so the
- * device is exercised off-VM by tools/dostest/mpu_test.c with no host MIDI at all.
+ * device is exercised off-VM by tests/unit/mpu_test.c with no host MIDI at all.
  */
 #ifndef NTVDMEX_VDD_MPU_H
 #define NTVDMEX_VDD_MPU_H

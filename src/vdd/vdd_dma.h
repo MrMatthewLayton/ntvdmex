@@ -22,7 +22,7 @@
  * (how every DOS game streams continuous audio) work without the caller knowing.
  *
  * Pure C, no <windows.h>: the only outside effect is vdd_map_lin(), so the whole
- * controller is exercised off-VM by tools/dostest/dma_test.c.
+ * controller is exercised off-VM by tests/unit/dma_test.c.
  */
 #ifndef NTVDMEX_VDD_DMA_H
 #define NTVDMEX_VDD_DMA_H

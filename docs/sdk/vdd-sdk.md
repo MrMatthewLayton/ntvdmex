@@ -91,8 +91,8 @@ carry flag, and a service that forgets it reports success.
 ## Microsoft-ABI VDDs (s91)
 
 An existing VDD written for NT's own NTVDM loads and runs **unmodified** — the
-binary-compatibility veneer ADR-0008 deferred. Measured: `tools/dostest/p_isv.com` with
-`tools/dostest/isvtest/ISVTEST.DLL` (built to the DDK's declarations, linked against
+binary-compatibility veneer ADR-0008 deferred. Measured: `tests/probes/dos/p_isv.com` with
+`tests/probes/dos/isvtest/ISVTEST.DLL` (built to the DDK's declarations, linked against
 `NTVDM.EXE` through an import library) gives **identical answers under stock NTVDM and
 NTVDMEX, 10/10**.
 
@@ -113,7 +113,7 @@ How it works:
   convention, but NT and the DDK compile with `__stdcall` as the default, and stock
   NTVDM calls them that way (a cdecl handler made stock die at the first `IN`).
 
-Build one: `tools/dostest/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` with
+Build one: `tests/probes/dos/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` with
 `dlltool -k`, then one compiler line).
 
 ## What is not here yet
@@ -133,6 +133,6 @@ Build one: `tools/dostest/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` with
 | `sdk/sample/portecho.c` | a complete device in one file |
 | `sdk/sample/abi_check.c` | fails the build if the SDK header drifts from `src/vdd/ntvdd.h` |
 | `sdk/build-sample.sh` | one compiler line |
-| `tools/dostest/vddtest.asm` | a DOS driver that detects and drives the sample |
-| `tools/dostest/isvtest/` | a Microsoft-ABI VDD (`isvtest.c`, `ntvdm.def`, `build.sh`) |
-| `tools/dostest/p_isv.asm` | its DOS half: RegisterModule / DispatchCall / port I/O / UnRegisterModule |
+| `tests/probes/dos/vddtest.asm` | a DOS driver that detects and drives the sample |
+| `tests/probes/dos/isvtest/` | a Microsoft-ABI VDD (`isvtest.c`, `ntvdm.def`, `build.sh`) |
+| `tests/probes/dos/p_isv.asm` | its DOS half: RegisterModule / DispatchCall / port I/O / UnRegisterModule |

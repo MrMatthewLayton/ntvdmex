@@ -75,7 +75,7 @@ batteries ran.
 A mark of IMPL is a claim about our code, not about hardware. Two things raise it to
 *spec-verified*:
 
-- **A probe** in `tools/dostest/` that exercises the unit and prints what it observes,
+- **A probe** in `tests/probes/dos/` that exercises the unit and prints what it observes,
   run under NTVDMEX **and** an oracle.
 - **The oracle**: PCem with a real Tseng ET4000/W32p ROM (`docs/…/pcem-oracle`), the
   6.22 box, stock ntvdm, a live dump. Where no public spec exists — the `NtVdmControl`

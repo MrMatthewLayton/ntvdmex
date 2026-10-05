@@ -22,7 +22,7 @@
  *     void     iio_out(uint16_t port, int width, uint32_t val);
  *     (port I/O dispatched to the device bus, for VGA-register-per-pixel loops.)
  * This keeps the interpreter host-agnostic so it can be unit-tested off-VM
- * against a flat memory array (see tools/dostest/interp_test.c).
+ * against a flat memory array (see tests/unit/interp_test.c).
  */
 #ifndef V86INTERP_H
 #define V86INTERP_H
@@ -101,10 +101,10 @@ IINL void wr_mem(uint32_t lin, int w, uint32_t v)
      one a hand-back to the real CPU -- and in a planar mode a hand-back is not one
      instruction, it is everything up to the next event with A0000 unprotected (the
      s68 scasb lesson). Address size stays 16-bit throughout: SP/SI/DI/CX, never ESP.
-   ► WHAT THE MANUAL LEAVES OPEN WAS MEASURED, NOT RECALLED -- tools/dostest/p_o32.com
+   ► WHAT THE MANUAL LEAVES OPEN WAS MEASURED, NOT RECALLED -- tests/probes/dos/p_o32.com
      on the rig's own CPU under XP's V86 monitor, the machine this interpreter stands in
      for (runs/s87_dpmi; the same bytes are replayed through this file off-VM by
-     interp_test.c against tools/dostest/p_o32.ref.txt):
+     interp_test.c against tests/unit/p_o32.ref.txt):
        - `66 PUSH sreg` writes the selector as a WORD: the slot's upper half is left as
          it was (sentinel DEAD survived). Intel allows either; this CPU keeps it.
        - but a 32-bit FAR CALL writes its CS slot as a DWORD, zero-extended (item 28:

@@ -8,8 +8,8 @@ oracle (PCem's SB16, dosbox-x) is the only spec.
 **Our implementation:** `src/vdd/vdd_sb.c` (612 lines), `src/vdd/vdd_sb.h`; gain and output in
 `src/vdd/vdd_audio.c`; transport through `src/vdd/vdd_dma.c`; card resources, knobs and
 `BLASTER` in `src/host/main.c` and `src/dos/dos_env.h`.
-**Off-VM:** `tools/dostest/sb_test.c` (T1–T12), `tools/dostest/audio_test.c` (T3–T6, the #189
-stereo blocks). **DOS probe: none** — there is no `p_sb*` in `tools/dostest/`.
+**Off-VM:** `tests/unit/sb_test.c` (T1–T12), `tests/unit/audio_test.c` (T3–T6, the #189
+stereo blocks). **DOS probe: none** — there is no `p_sb*` in `tests/probes/dos/`.
 **Marked:** 2026-09-29, **from the code**, with citations. ⚠ `src/host/main.c` was being edited
 in the working tree while this was written; its line numbers are given with the symbol and
 will drift — search for the symbol.

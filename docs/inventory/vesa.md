@@ -11,10 +11,10 @@ the window and frame plumbing `:555-652`, the state block `:654-717`, the frame 
 `src/vdd/vdd_video.h` (`VID_VESA_*` `:48-65`, state `:148-150`, `:176-192`, diagnostics
 `:447-474`); `src/vdd/present_ddraw.c` (8bpp and 32bpp snapshots, `:530-545`); `src/vdd/ntvdd.h:61-62`
 (the 1280x1024 frame cap). The LFB mapping is DPMI `0800h` in `src/host/main.c`.
-**Off-VM:** `tools/dostest/video_test.c` T9–T12f (`:215-474` before #226) and #226's T12g–T12i (`:493-677`: DAC width, retrace wait on a fake clock, 4F02/4F03 and the VGA layer) and the 4F0A check at `:485-486`.
-**DOS probes:** `tools/dostest/p_vesa.asm` (4F00 block and every ModeInfoBlock, bytes 0–49) and
-`tools/dostest/p_vesapm.asm` (4F0Ah), both `ORACLE-ALSO: pcem-vesa`; `tools/dostest/p_vbepm.asm` (#53: a DPMI
-client calls a COPY of the 4F0Ah block; no oracle can run it). Off-VM, `tools/dostest/vbepm_test.c` runs the
+**Off-VM:** `tests/unit/video_test.c` T9–T12f (`:215-474` before #226) and #226's T12g–T12i (`:493-677`: DAC width, retrace wait on a fake clock, 4F02/4F03 and the VGA layer) and the 4F0A check at `:485-486`.
+**DOS probes:** `tests/probes/dos/p_vesa.asm` (4F00 block and every ModeInfoBlock, bytes 0–49) and
+`tests/probes/dos/p_vesapm.asm` (4F0Ah), both `ORACLE-ALSO: pcem-vesa`; `tests/probes/dos/p_vbepm.asm` (#53: a DPMI
+client calls a COPY of the 4F0Ah block; no oracle can run it). Off-VM, `tests/unit/vbepm_test.c` runs the
 block's code through `pm32interp.h`. **No probe exercises
 4F02–4F09** — the runtime half has no oracle at all.
 **Marked:** 2026-09-29, **from the code**, with citations. ⚠ `src/host/main.c` was being edited
@@ -278,7 +278,7 @@ ours (`:654-668`).
 execute decline it (`AX=0100h` -- SeaVGABIOS and the Tseng ET4000/W32p ROM, `p_vesapm`), and we
 did too while there was no code to hand out; those rows now abstain with the reason. The block
 is `src/vdd/vbe_pm.asm` (32-bit, relocatable: relative jumps, the stack and port I/O only),
-assembled into `vbe_pm.h` by `tools/gen-vbepm.py`, written to `B260:0000` (after the fonts) at
+assembled into `vbe_pm.h` by `tools/gen/gen-vbepm.py`, written to `B260:0000` (after the fonts) at
 start-up and again on every 4F0Ah call. It drives the card through our index/data pair
 `01CEh`/`01CFh` (`vbe_port_in`/`_out` in `vdd_video.c`: index `05h` bank -- Bochs's number for
 it -- `10h`/`11h` display start in dwords, high word commits; `03h`/`06h` read bpp and the line

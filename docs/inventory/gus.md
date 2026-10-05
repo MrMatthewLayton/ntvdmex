@@ -3,7 +3,7 @@
 **Spec:** *UltraSound SDK v2.22* (Advanced Gravis / FORTE, 1994), Chapter 2 and the SDK's own
 driver source. **▶ The hardware reference is [`../ref/gus.md`](../ref/gus.md)** — what the card
 *does*.
-**Our implementation:** `src/vdd/vdd_gus.c` (s80), `src/vdd/vdd_gus.h`; mixer source in `src/vdd/vdd_audio.c`; off-VM battery `tools/dostest/gus_test.c` (76 checks; #190 added the latches, mix control, UART, record and card→PC rows).
+**Our implementation:** `src/vdd/vdd_gus.c` (s80), `src/vdd/vdd_gus.h`; mixer source in `src/vdd/vdd_audio.c`; off-VM battery `tests/unit/gus_test.c` (76 checks; #190 added the latches, mix control, UART, record and card→PC rows).
 **Acceptance guest:** heaven7 (its music is GUS-only; it renders already).
 **Marked:** 2026-09-25 (s80), **from the code**; #190 rows re-marked 2026-09-29.
 
@@ -77,7 +77,7 @@ writes `2X0` with bit 1 set (line out off) it is now silent, as on a real card.
 | **Audio mixer** | ✅ ready | `src/vdd/vdd_audio.h:90,103` (`vdd_audio_init`, `vdd_audio_mix`) | the GF1's mixed stereo output becomes one more source summed here, as the SB and OPL are |
 | **8237 DMA** | ✅ ready | `src/vdd/vdd_dma.c:22` — all 8 channels, 16-bit ones address words | DRAM uploads can use a free channel |
 | **8259 slave PIC** | ✅ modelled | `src/vdd/vdd_pic.c:165` (IRQ 8–15, cascade on IRQ2) | the chip can raise 11/12/15… |
-| **Host device-IRQ delivery** | ✅ **all 16 lines (s80)** | `g_irqn_pending[16]`, `g_irq_order`, `irq_pm_vec` in `src/host/main.c`; proved by `tools/dostest/p_irq8.com` vs three oracles | IRQ 11 reaches a guest. ⚠ The IF/VIF gate lets a handler that EOIs before `iret` be re-entered — see [`pic.md`](pic.md) |
+| **Host device-IRQ delivery** | ✅ **all 16 lines (s80)** | `g_irqn_pending[16]`, `g_irq_order`, `irq_pm_vec` in `src/host/main.c`; proved by `tests/probes/dos/p_irq8.com` vs three oracles | IRQ 11 reaches a guest. ⚠ The IF/VIF gate lets a handler that EOIs before `iret` be re-entered — see [`pic.md`](pic.md) |
 | **Port base** | ⚠ decision | SB at `220h` (`dos_env.h:98`, `BLASTER=A220 I5 D1 T3`) | the SDK default base `220` collides with the SB; the GUS needs another base (`240h` is the period's common choice) |
 
 ## Decisions to take before the first line of the device

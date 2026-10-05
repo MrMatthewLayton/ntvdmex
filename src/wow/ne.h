@@ -2,7 +2,7 @@
  *
  * The image format every 16-bit Windows program uses, and the first brick of the WOW
  * layer. Header-only and free of any Windows or VDM dependency, by the same convention
- * as src/dos/ -- so the whole thing is exercised off-VM by tools/dostest/ne_test.c in
+ * as src/dos/ -- so the whole thing is exercised off-VM by tests/unit/ne_test.c in
  * milliseconds instead of a round trip to the rig.
  *
  * ── WRITTEN AGAINST MEASURED BINARIES, NOT THE SPEC. ────────────────────────────────

@@ -3,7 +3,7 @@
  * Stock NTVDM on XP provides the LFN API to DOS programs, and XP's own DOS tools
  * (EDIT.COM first among them -- see the old AH=71h note in dos_int21.c) are written
  * against it. dos_int21.c owns the Win32 half; everything here is arithmetic and byte
- * layout, kept free of windows.h so tools/dostest/lfn_test.c can pin it off-VM:
+ * layout, kept free of windows.h so tests/unit/lfn_test.c can pin it off-VM:
  *
  *   dos_lfn_ft_to_dos / dos_lfn_dos_to_ft   71A7h, and every DOS-format time below
  *   dos_lfn_find_pack                       the 318-byte record 714Eh/714Fh fill
@@ -14,8 +14,8 @@
  *
  * ⚠ THE SOURCES ARE RBIL (INT 21h AX=71xxh) AND THE WIN32 STRUCTURE LAYOUTS, NOT A
  *   MEASUREMENT. Every choice below that a stock run could contradict is marked
- *   UNMEASURED, and tools/dostest/p_lfn.asm asks stock exactly those questions
- *   (scripts/dospair.sh tools/dostest/p_lfn.com). Change a row here only with a
+ *   UNMEASURED, and tests/probes/dos/p_lfn.asm asks stock exactly those questions
+ *   (scripts/dospair.sh tests/probes/dos/p_lfn.com). Change a row here only with a
  *   CASE= line from that run beside it.
  */
 #ifndef DOS_LFN_H

@@ -4,7 +4,7 @@
  * runs in V86 (absolute paragraph<<4 addressing) and off-VM against a plain byte
  * buffer: every routine takes a caller-supplied `base` pointer + paragraph offsets
  * (pass base=NULL for the host's absolute V86 addressing, a buffer for tests).
- * Verified off-VM by tools/dostest/mcb_test.c.
+ * Verified off-VM by tests/unit/mcb_test.c.
  *
  * SYNC: the tools/vdmhost spike still carries an inline copy of AH=48/49/4A (kept
  * in step by hand) until it is retired in favour of this module; the clean host
@@ -25,7 +25,7 @@
 #define DOS_PSP_SEG 0x0100u     /* matches vdmhost.c enum PSP_SEG */
 /* ── WHERE CONVENTIONAL MEMORY ACTUALLY ENDS. (GH #47) ────────────────────────
    0xA000 is 640KB, and it is NOT where a real PC's MCB chain stops. MS-DOS 6.22,
-   walked directly (tools/dostest/p_mcb.asm):
+   walked directly (tests/probes/dos/p_mcb.asm):
        CASE=mcb.chain.ends.at SIG=AX AX=9FC0
        CASE=psp.02.memtop     SIG=AX AX=9FC0
    The top 1KB (0x9FC0..0x9FFF) is the Extended BIOS Data Area, which the BIOS

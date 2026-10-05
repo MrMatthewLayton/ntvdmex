@@ -15,7 +15,7 @@
 ; destroy AX, and DX only on a get).
 ;
 ; Regenerate src/vdd/vbe_pm.h after any change:
-;     python3 tools/gen-vbepm.py
+;     python3 tools/gen/gen-vbepm.py
 
         bits    16
         org     0

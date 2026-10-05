@@ -52,14 +52,14 @@ Two consequences worth knowing:
 ## Test it without any Windows machine
 
 ```bash
-./tools/dostest/run.sh
+./tests/probes/dos/run.sh
 ```
 
 It **builds and runs** 18 batteries — 664 checks, about ten seconds — against the real
 `src/dos/` and `src/vdd/` code, and exits non-zero if anything fails, so it can gate a
 commit. This is the development loop; see [Testing and oracles](Testing-and-oracles).
 
-> The battery binaries are gitignored (`tools/dostest/*_test`) because tracking them means
+> The battery binaries are gitignored (`tests/unit/*_test`) because tracking them means
 > binary churn in every commit. `run.sh` compiles them each time — so **a fresh clone has
 > no `*_test` files and running them directly finds nothing.** Always go through `run.sh`.
 

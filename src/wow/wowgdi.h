@@ -1,6 +1,6 @@
 #ifndef WOWGDI_H
 #define WOWGDI_H
-#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tools/dostest/wow_test.c */
+#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tests/unit/wow_test.c */
 /*
  * wowgdi.h -- ★★ GDI.EXE's OWN ID SPACE.  GH #128, session 44.
  *
@@ -1081,7 +1081,7 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
                                    the token map itself has only WOWGDI_MAX slots. */
 /* ⚠⚠ IS THE FINAL META_EOF RECORD (rdSize 3, rdFunction 0) HANDED TO THE CALLBACK?
      UNKNOWN for Win16 and NOT GUESSED: this must be set from the stock run of
-     tools/wintest/w_mfenum (case mfe.count, and the last mfe.rec.N). 1 = passed,
+     tests/probes/win16/w_mfenum (case mfe.count, and the last mfe.rec.N). 1 = passed,
      which is what Win32's EnumMetaFile is documented to do ("each record ... until
      the last record"); Wine's EnumMetaFile16 BREAKS at META_EOF without calling,
      i.e. 0. Either way the walk ends at EOF -- nothing after it is a record.
@@ -4058,7 +4058,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         /* s91: THE WINDOWS 3.1 ORDER from +16 on -- the BYTE fields come before the
              last three shorts, exactly as EnumFonts' NEWTEXTMETRIC16 (wowgdi_font_blob,
              = stock in w_genum) lays them out. This wrote a Win32-like order (Overhang
-             at +16, the chars at +22) since s45: tools/wintest/w_tm vs stock showed
+             at +16, the chars at +22) since s45: tests/probes/win16/w_tm vs stock showed
              PitchAndFamily, CharSet and Overhang wrong for every font. */
         b[16] = tm.tmItalic;          b[17] = tm.tmUnderlined;
         b[18] = tm.tmStruckOut;       b[19] = (BYTE)tm.tmFirstChar;

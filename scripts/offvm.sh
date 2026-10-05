@@ -3,7 +3,7 @@
 # offvm.sh -- run the whole off-VM battery, in one command.
 #
 # ── WHY THIS EXISTS ──────────────────────────────────────────────────────────
-# There are 30 *_test.c files under tools/dostest/ and, until now, NO RUNNER.
+# There are 30 *_test.c files under tests/unit/ and, until now, NO RUNNER.
 # Each carried its own `cc -std=c99 -I src/dos -o x_test ...` line in a comment,
 # several carried none at all, and they were compiled by hand one at a time. So
 # "is the battery still green?" -- the question you must be able to answer after
@@ -29,7 +29,7 @@ trap 'rm -rf "$OUT"' EXIT
 
 CC="${CC:-cc}"
 # The union of the include roots the tests use. Harmless when unused.
-INCS=(-I "$ROOT/src/dos" -I "$ROOT/src/vdd" -I "$ROOT/src" -I "$ROOT/src/host" -I "$ROOT/tools/dostest")
+INCS=(-I "$ROOT/src/dos" -I "$ROOT/src/vdd" -I "$ROOT/src" -I "$ROOT/src/host" -I "$ROOT/tests/unit")
 
 # ⚠ HALF THE BATTERY IS NOT HEADER-ONLY. The vdd tests exercise real device
 #   models (vdd_bus_add, vdd_pic_acknowledge, ...), so the implementation has to
@@ -44,10 +44,19 @@ for v in "$ROOT"/src/vdd/*.c; do
     VDDSRC+=("$v")
 done
 
+# interp_test runs a real guest image: assemble it from its source next to the tests
+# (tests/unit/p_o32.com is gitignored). Without nasm that one check fails, and says why.
+if command -v nasm >/dev/null 2>&1; then
+    nasm -f bin -I "$ROOT/tests/probes/dos/" "$ROOT/tests/probes/dos/p_o32.asm" \
+         -o "$ROOT/tests/unit/p_o32.com" || echo "  ⚠ nasm could not assemble p_o32.asm"
+else
+    echo "  ⚠ nasm not found: interp_test's p_o32.com check will fail"
+fi
+
 checks=0; failed=0; ran=0
 declare -a BROKEN=() FAILING=()
 
-for src in "$ROOT"/tools/dostest/*_test.c; do
+for src in "$ROOT"/tests/unit/*_test.c; do
     name="$(basename "$src" .c)"
     if [ $# -gt 0 ]; then
         match=0
@@ -71,10 +80,10 @@ for src in "$ROOT"/tools/dostest/*_test.c; do
         fi
     fi
     # A test must terminate on its own; none of these are interactive.
-    # ⚠ FROM tools/dostest, NOT THE REPO ROOT. wow_test scans the tree relative to
+    # ⚠ FROM tests/unit, NOT THE REPO ROOT. wow_test scans the tree relative to
     #   `../..` and reported "wrong root?" as a FAIL when run from anywhere else --
     #   a green test failing for a reason that had nothing to do with the code.
-    if ! out="$(cd "$ROOT/tools/dostest" && "$bin" 2>&1)"; then rc=1; else rc=0; fi
+    if ! out="$(cd "$ROOT/tests/unit" && "$bin" 2>&1)"; then rc=1; else rc=0; fi
     ran=$((ran + 1))
     # ⚠ THREE SUMMARY DIALECTS, and assuming one of them under-reports the other
     #   two as "0 checks" -- which reads as a passing test that asserted nothing:
@@ -83,6 +92,11 @@ for src in "$ROOT"/tools/dostest/*_test.c; do
     #     "52 checks, 0 failed"         x86len_test, xms_test, pit_test, ...
     #     "-- 36 checks, 0 failures --" sb_test, opl_test, dma_test, ...  (failureS)
     line="$(printf '%s\n' "$out" | grep -E '([0-9]+ checks, [0-9]+ (failed|failures)|[0-9]+/[0-9]+ passed, [0-9]+ failed)' | tail -1)"
+    # A fourth dialect: "ALL PASS: 39/39" (cpuspeed_test) -- counted, not "no summary".
+    if [ -z "$line" ]; then
+        ap="$(printf '%s\n' "$out" | grep -E 'ALL PASS: [0-9]+/[0-9]+' | tail -1)"
+        [ -n "$ap" ] && line="$(printf '%s' "$ap" | sed -E 's/.*ALL PASS: ([0-9]+)\/[0-9]+.*/\1 checks, 0 failed/')"
+    fi
     if [ -n "$line" ]; then
         if printf '%s' "$line" | grep -q 'passed,'; then
             c="$(printf '%s' "$line" | sed -E 's/.*= ([0-9]+)\/[0-9]+ passed.*/\1/')"

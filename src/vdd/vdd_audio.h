@@ -17,7 +17,7 @@
  * sinc) would be inaudible improvement on material this band-limited.
  *
  * Pure C, no <windows.h>: the host sink lives in audio_wave.c, so the whole mixer
- * is exercised off-VM by tools/dostest/audio_test.c with no sound card involved.
+ * is exercised off-VM by tests/unit/audio_test.c with no sound card involved.
  */
 #ifndef NTVDMEX_VDD_AUDIO_H
 #define NTVDMEX_VDD_AUDIO_H

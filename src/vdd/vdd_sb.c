@@ -26,7 +26,7 @@ int g_sb_absent = 0;      /* nosb.flag -- see the DSP-reset case below */
 uint8_t g_sb_ver_major = SB_DSP_VER_MAJOR;   /* dspver.txt -- see vdd_sb.h */
 /* ⚠ THE ACK GATE IS A DELIBERATE DEVIATION FROM THE HARDWARE AND DEFAULTS OFF.
      A real SB16 in auto-init raises an IRQ per block whether or not the previous one
-     was acknowledged, and tools/dostest/sb_test.c asserts exactly that ('auto-init: an
+     was acknowledged, and tests/unit/sb_test.c asserts exactly that ('auto-init: an
      IRQ per block, continuously'). Arming the gate by default would have quietly
      broken that assertion -- the battery caught it on the first build, which is what
      it is for. So the gate is opt-in until it has been shown to earn the trade. */

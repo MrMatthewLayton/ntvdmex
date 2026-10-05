@@ -6,7 +6,7 @@
  * these entries instead of at the INT 21h stub's IRET; the code calls INT 14h /
  * INT 17h through the IVT and IRETs to the caller.
  * Lives in the DOS-resident block at DOS_CTAB_SEG:DOS_AUXPRN_OFF (dos_layout.h).
- * tools/dostest/auxprn_test.c runs these bytes and holds them to the oracle's logs.
+ * tests/unit/auxprn_test.c runs these bytes and holds them to the oracle's logs.
  */
 #ifndef DOS_AUXPRN_H
 #define DOS_AUXPRN_H

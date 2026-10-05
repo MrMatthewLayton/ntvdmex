@@ -3,7 +3,7 @@
  * The guest half is bios_kbdact.asm's `p5`: a loop that asks the host (BOP 09h) for the
  * next byte and prints it through INT 17h, so a hooked INT 17h sees every byte. This is
  * the host half: WHICH byte comes next, and whether the printer's answer ends the job.
- * Pure, so tools/dostest/prtsc_test.c can run it; the host supplies the screen reader.
+ * Pure, so tests/unit/prtsc_test.c can run it; the host supplies the screen reader.
  *
  * ── THE CONTRACT, AND WHERE IT COMES FROM. ─────────────────────────────────────────────
  *   IBM PC/AT Technical Reference, BIOS listing PRINT_SCREEN (and RBIL INT 05h,

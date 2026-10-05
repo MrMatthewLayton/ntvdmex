@@ -26,7 +26,7 @@
  * `c:\ntvdmex`), and a value written by hand often has trailing whitespace. Get any
  * of those wrong and `install` reports "already installed" on a machine that is not,
  * or `uninstall` refuses to remove our own value. So that decision lives here, in
- * plain C with no Windows in it, and tools/dostest/install_test.c exercises it.
+ * plain C with no Windows in it, and tests/unit/install_test.c exercises it.
  */
 #ifndef NTVDMEX_INSTALL_H
 #define NTVDMEX_INSTALL_H

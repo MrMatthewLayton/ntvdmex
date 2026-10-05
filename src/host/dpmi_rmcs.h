@@ -1,7 +1,7 @@
 /* dpmi_rmcs.h -- the DPMI real-mode call structure, and how INT 31h 0300h routes a vector.
  *
  * GH #247. Header-only and dependency-free (stdint, no windows.h), so the off-VM battery
- * (tools/dostest/rmcs_test.c) compiles exactly the code the host runs.
+ * (tests/unit/rmcs_test.c) compiles exactly the code the host runs.
  *
  * ── THE STRUCTURE (DPMI 0.9, INT 31h 0300h/0301h/0302h and the 0303h callbacks) ──────
  *     +00 EDI  +04 ESI  +08 EBP  +0C reserved  +10 EBX  +14 EDX  +18 ECX  +1C EAX

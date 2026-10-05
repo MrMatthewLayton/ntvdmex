@@ -12,7 +12,7 @@ Microsoft's *New Executable* format description (Windows 3.x SDK); the IBM/Micro
   registry, used by the WOW boot (`ne_parse`, `main.c:9311`).
 - LE: not loaded by us — the extender loads its own image. `dpmi_le_learn`
   (`main.c:18271`) reads the LE object table only to know which objects are code.
-**Off-VM:** `tools/dostest/mcb_test.c` (MZ/COM), `ne_test.c` (NE).
+**Off-VM:** `tests/unit/mcb_test.c` (MZ/COM), `ne_test.c` (NE).
 **Probes:** `p_exec`, `p_ovl` (EXEC, `4B01h`, `4B03h`), `p_4b05`.
 **Marked:** 2026-10-01, **from the code**.
 

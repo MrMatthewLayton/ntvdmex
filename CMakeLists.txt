@@ -178,3 +178,45 @@ target_include_directories(present_demo PRIVATE src/vdd)
 ntvdmex_configure_xp_target(present_demo)
 target_link_libraries(present_demo PRIVATE kernel32 user32 gdi32 gcc)
 endif()
+
+# --- DOS probes: tests/probes/dos/*.asm -> build/probes/*.com (nasm) -------------
+# The guest-side probes are built, not committed (#322). selftest.com ships in the
+# release zip; the others are run on the rig and the oracles. dpmiback.asm is MASM
+# syntax and is not assembled here.
+find_program(NASM_EXE nasm)
+if(NASM_EXE)
+    set(PROBE_SRC "${CMAKE_SOURCE_DIR}/tests/probes/dos")
+    set(PROBE_OUT "${CMAKE_BINARY_DIR}/probes")
+    file(MAKE_DIRECTORY "${PROBE_OUT}")
+    file(GLOB PROBE_ASM CONFIGURE_DEPENDS "${PROBE_SRC}/*.asm")
+    list(REMOVE_ITEM PROBE_ASM "${PROBE_SRC}/dpmiback.asm")
+    file(GLOB PROBE_INC CONFIGURE_DEPENDS "${PROBE_SRC}/*.inc")
+    set(PROBE_OUTPUTS)
+    foreach(asm IN LISTS PROBE_ASM)
+        get_filename_component(n "${asm}" NAME_WE)
+        set(deps "${asm}" ${PROBE_INC})
+        if(n STREQUAL "p_tsr")                 # incbin "p_tsrc.com"
+            list(APPEND deps "${PROBE_OUT}/p_tsrc.com")
+        endif()
+        add_custom_command(OUTPUT "${PROBE_OUT}/${n}.com"
+            COMMAND "${NASM_EXE}" -f bin -I "${PROBE_SRC}/" -I "${PROBE_OUT}/"
+                    "${asm}" -o "${PROBE_OUT}/${n}.com"
+            DEPENDS ${deps} VERBATIM)
+        list(APPEND PROBE_OUTPUTS "${PROBE_OUT}/${n}.com")
+    endforeach()
+    file(STRINGS "${PROBE_SRC}/variants.txt" PROBE_VARIANTS REGEX "^[^#]")
+    foreach(line IN LISTS PROBE_VARIANTS)
+        separate_arguments(parts UNIX_COMMAND "${line}")
+        list(GET parts 0 out)
+        list(GET parts 1 src)
+        list(SUBLIST parts 2 -1 flags)
+        add_custom_command(OUTPUT "${PROBE_OUT}/${out}"
+            COMMAND "${NASM_EXE}" -f bin ${flags} -I "${PROBE_SRC}/"
+                    "${PROBE_SRC}/${src}" -o "${PROBE_OUT}/${out}"
+            DEPENDS "${PROBE_SRC}/${src}" ${PROBE_INC} VERBATIM)
+        list(APPEND PROBE_OUTPUTS "${PROBE_OUT}/${out}")
+    endforeach()
+    add_custom_target(probes ALL DEPENDS ${PROBE_OUTPUTS})
+else()
+    message(WARNING "nasm not found: the DOS probes (and the release zip's selftest.com) are not built")
+endif()

@@ -55,7 +55,7 @@
  * change, the same property that made the RTC's IRQ8 safe to add.
  *
  * Pure C, no <windows.h>: nothing here touches a file or a clock, so the whole
- * chip is exercised off-VM by tools/dostest/fdc_test.c.
+ * chip is exercised off-VM by tests/unit/fdc_test.c.
  */
 #ifndef NTVDMEX_VDD_FDC_H
 #define NTVDMEX_VDD_FDC_H

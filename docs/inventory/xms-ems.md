@@ -19,10 +19,10 @@ Program Interface* 1.0 (Phar Lap/Quarterdeck). Ralf Brown's Interrupt List (INT 
   address, including one handed out by XMS `0Ch` (lock).
 - VCPI — **no code**.
 
-**Off-VM:** `tools/dostest/xms_test.c` (T1–T12), `tools/dostest/ems_test.c` (T1–T12),
-`tools/dostest/extmem_test.c` (18 checks). **Rig self-checks** (pass/fail on our host only):
-`tools/dostest/xmstest.asm`, `emstest.asm`, and the XMS/EMS steps of `selftest.asm`.
-**Oracle probe:** `tools/dostest/p_xms.asm` only (INT 2Fh `4300h`/`4310h`, XMS `00h`, `01h`,
+**Off-VM:** `tests/unit/xms_test.c` (T1–T12), `tests/unit/ems_test.c` (T1–T12),
+`tests/unit/extmem_test.c` (18 checks). **Rig self-checks** (pass/fail on our host only):
+`tests/probes/dos/xmstest.asm`, `emstest.asm`, and the XMS/EMS steps of `selftest.asm`.
+**Oracle probe:** `tests/probes/dos/p_xms.asm` only (INT 2Fh `4300h`/`4310h`, XMS `00h`, `01h`,
 `07h`, `08h`, the HMA read-back); `p_kbc.asm` reads XMS `07h` beside the 8042; `p_int15.asm`
 uses XMS `09h`/`0Ch`/`0Ah` to find an address for INT 15h `87h`. **There is no EMS probe and
 no VCPI probe.**

@@ -3,7 +3,7 @@
 **Spec:** National Semiconductor 8250/16450/16550A datasheets; IBM PC TechRef.
 **▶ The hardware reference is [`../ref/uart.md`](../ref/uart.md)** — what the chip *does*.
 **Our implementation:** `src/vdd/vdd_comm.c` (419 lines), `src/vdd/vdd_comm.h`.
-**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. DOS probe: `tools/dostest/p_uart.asm`.
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. DOS probe: `tests/probes/dos/p_uart.asm`.
 **Marked:** 2026-09-23, **from the code**; OUT2 and COM3/COM4 rows re-marked 2026-10-01 (#181).
 
 ---

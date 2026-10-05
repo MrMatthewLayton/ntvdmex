@@ -24,7 +24,7 @@
 ;                   ES:EDI = entries of Blue, Green, Red, alignment (the DAC's width)
 ;
 ; Regenerate src/vdd/vbe_pm.h after any change:
-;     python3 tools/gen-vbepm.py
+;     python3 tools/gen/gen-vbepm.py
 ; (assembles this with nasm and writes the bytes and the entry offsets).
 
         bits    32

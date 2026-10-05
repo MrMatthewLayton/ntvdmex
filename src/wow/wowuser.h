@@ -1,6 +1,6 @@
 #ifndef WOWUSER_H
 #define WOWUSER_H
-#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tools/dostest/wow_test.c */
+#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tests/unit/wow_test.c */
 /*
  * wowuser.h -- USER.EXE's half of the WOW32 interface. GH #128, session 38.
  *
@@ -597,7 +597,7 @@ static const char *wowuser_sysres_name(WORD h)
    this file. The two prototypes happen to be identical, so the values coincide
    and this collision was harmless -- which is exactly why it survived. If either
    ever gained an argument, the later definition would silently win and one of
-   them would read the other's layout. Caught by tools/dostest/wow_test.c on its
+   them would read the other's layout. Caught by tests/unit/wow_test.c on its
    first run, not by anybody reading the build output. */
 #define WOWUSER_FRAMERECT        0x0053
 #define FRAMER_ARG_BRUSH 0
@@ -6244,7 +6244,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         } else {
             /* ★ THE CONVERSION ITSELF LIVES IN wowconv.h AND IS TESTED THERE.
                  It is a pure function of bytes, so it is pinned off-VM by
-                 tools/dostest/wow_test.c -- the stride change (RGBTRIPLE ->
+                 tests/unit/wow_test.c -- the stride change (RGBTRIPLE ->
                  RGBQUAD) and the two UNSIGNED 16-bit dimensions are exactly the
                  details that a cast gets wrong and a screenshot cannot show.
                ⚠ THE GUEST'S BYTES ARE COPIED FIRST. wowconv takes plain memory

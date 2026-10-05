@@ -12,14 +12,14 @@
  *   against the wrong one reads the wrong sector and reports success. fat12.py
  *   already makes this point for the same reason.
  *
- * Measured on MS-DOS 6.22 with a real 1.44MB floppy (tools/dostest/p_disk.asm):
+ * Measured on MS-DOS 6.22 with a real 1.44MB floppy (tests/probes/dos/p_disk.asm):
  *     int13.08.params  AX=0000 BX=0004 CX=4F12 DX=0101 CF=0
  *     int13.15.type    AX=0100
  *     int13.02.read    AX=0001, boot signature 55AA
  * i.e. CH=79 (80 cylinders), CL=18 sectors/track, DH=1 (2 heads), DL=1 drive,
  * BL=4 (1.44MB), and AH=01 from 15h means "floppy, no change-line support".
  *
- * Pure -- no Windows types -- so tools/dostest/disk_test.c can pin the
+ * Pure -- no Windows types -- so tests/unit/disk_test.c can pin the
  * arithmetic, which is where the off-by-one lives.
  */
 #ifndef DOS_DISK_H

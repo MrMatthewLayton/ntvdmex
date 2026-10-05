@@ -18,7 +18,7 @@
  *
  * Time is injected, not read: vdd_opl_add_us() advances the timers, so the device
  * stays pure C with no clock of its own and the whole thing is exercised off-VM by
- * tools/dostest/opl_test.c. The host pumps it from real elapsed time; the mixer
+ * tests/unit/opl_test.c. The host pumps it from real elapsed time; the mixer
  * pumps it from the sample clock, which is what keeps music in tempo.
  *
  * FM synthesis lives in vdd_opl_synth.c behind vdd_opl_render(); this file owns

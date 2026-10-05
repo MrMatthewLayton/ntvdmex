@@ -9,7 +9,7 @@ set, keyboard-side ACKs) are **[kbc.md](kbc.md)**. This file is the firmware on 
 **Our implementation:** `src/vdd/vdd_input.c` (788 lines), `src/vdd/vdd_input.h`; the
 INT 09h/16h stubs and their BOP arms in `src/host/main.c`; host keys enter at
 `host_key_scancode` (`main.c:6598`).
-**Off-VM:** `tools/dostest/input_test.c`, `kbdact_test.c`, `prtsc_test.c`. **DOS probes:** `tools/dostest/p_kbd.asm`, `p_kbd2.asm`, `p_kbd3.asm` (#244/#274).
+**Off-VM:** `tests/unit/input_test.c`, `kbdact_test.c`, `prtsc_test.c`. **DOS probes:** `tests/probes/dos/p_kbd.asm`, `p_kbd2.asm`, `p_kbd3.asm` (#244/#274).
 **Oracles:** MS-DOS 6.22 under QEMU (SeaBIOS — a reimplementation, so **provisional** for a
 BIOS row), PCem with a genuine AMI 486 BIOS (**oracle**), DOSBox-X.
 **Marked:** 2026-10-01, **from the code**, with citations. Carried over from

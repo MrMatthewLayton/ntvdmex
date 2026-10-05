@@ -210,9 +210,9 @@ pair before committing a flip would never commit one for Doom. Ours commits on `
 
 ## Step 2, first results — the probe against genuine MS-DOS 6.22 (2026-09-22)
 
-`tools/dostest/p_vgareg.asm` dumps the whole file (64 bytes: Misc/Feature/InpStat0/
+`tests/probes/dos/p_vgareg.asm` dumps the whole file (64 bytes: Misc/Feature/InpStat0/
 DACMask, SR0–4, CR00–18, GR0–8, AR00–14) after each BIOS mode set, plus three
-behavioural cases. Full data: `tools/dostest/vgareg.ref.txt`.
+behavioural cases. Full data: `tools/gen/data/vgareg.ref.txt`.
 
 ⚠ **PCem was unavailable that day.** It exits early even for `p_vesa`, which has run
 128/128 there — so the fault was the oracle's, not the probe's, and the rows marked OPEN
@@ -317,7 +317,7 @@ order — each step is independently shippable and testable:
    the dump itself pending step 2's oracle — **and it was wrong: it is `0x10`, fixed
    2026-09-23.** Refusing to guess was right; what failed was accepting the first oracle
    that answered.
-2. **A probe + the oracle.** `tools/dostest/p_vgareg.com`: write and read back every
+2. **A probe + the oracle.** `tests/probes/dos/p_vgareg.com`: write and read back every
    register, dump the file after each BIOS mode set, run against PCem's ET4000. The
    expectations come from the spec **first**, as the VESA work did — see them fail, then
    fix. That closes "does our reset state match a real card?", which nothing has asked.
@@ -345,7 +345,7 @@ moment the code moves. Re-derive them, do not quote them:
 
 ## Step 3 measurement — the geometry derives from the registers (2026-09-23)
 
-`tools/dostest/p_vgareg.asm` now covers **eleven** register-file captures, not five:
+`tests/probes/dos/p_vgareg.asm` now covers **eleven** register-file captures, not five:
 modes 03, 04, 06, 0D, 0E, 10, 11, 12, 13, 07-mono, plus two that are **not BIOS modes** —
 `vga.modeY.unchained` and `vga.modeX.320x240`, made the way a program makes them.
 
@@ -385,13 +385,13 @@ all eleven modes are correct, and **dosbox-x agrees with the same `CR09= 0xC1`**
 
 ## Step 4 measurement — the CPU memory path now has a probe (2026-09-23)
 
-`tools/dostest/p_vgamem.asm` is new, and it is the deterministic test the mode-Y
+`tests/probes/dos/p_vgamem.asm` is new, and it is the deterministic test the mode-Y
 approximation has never had: thirteen cases, each a CPU write followed by a per-plane
 read-back, so the answer is four bytes that either match or do not. No picture to eyeball,
 no frame to capture.
 
 **All thirteen values were written from [`../ref/vga.md`](../ref/vga.md) §§6, 8 *before*
-the run, and all thirteen matched the hardware** — see `tools/dostest/vgamem.ref.txt`.
+the run, and all thirteen matched the hardware** — see `tools/gen/data/vgamem.ref.txt`.
 
 The four cases that bear directly on the open defect:
 
@@ -522,7 +522,7 @@ Measured, host `77b9b0bd`, E1M1, `screenblocks 10`:
 
 ## Step 5 — the two external read-only registers, and the reference that scored them (2026-09-23)
 
-`tools/dostest/p_vgaext.asm`. The story of this surface is that **`p_vgareg` asked the
+`tests/probes/dos/p_vgaext.asm`. The story of this surface is that **`p_vgareg` asked the
 wrong shape of question**: it reads each port once and prints the byte. A byte is a value;
 what was in dispute was a *mechanism*, and four hosts gave four values with no way to
 choose between them. So this probe asks about the mechanism instead, and every expectation

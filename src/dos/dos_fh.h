@@ -11,7 +11,7 @@
  *   2. CLASSIFICATION: a BOUND handle is a file, whatever its number.  Only an
  *      UNBOUND low handle is a console device.
  *
- * Both rules are MEASURED, not remembered -- tools/dostest/p_redir.asm run on the
+ * Both rules are MEASURED, not remembered -- tests/probes/dos/p_redir.asm run on the
  * MS-DOS 6.22 oracle (GH #133):
  *
  *     CASE=int21.3c.baseline     AX=0005    five standard handles open -> 5
@@ -29,7 +29,7 @@
  * now fails on (src/wow/wowconv.h).
  *
  * Kept pure -- no Windows types, no dos_machine_t -- so the off-VM battery can
- * test it directly (tools/dostest/fh_test.c).  HANDLE is void*, so the table is
+ * test it directly (tests/unit/fh_test.c).  HANDLE is void*, so the table is
  * passed as void *const *.
  */
 #ifndef DOS_FH_H
@@ -49,7 +49,7 @@
          ...run the command...
          AH=46h dup2(saved, 1)                       <- so this could not work
 
-     Measured on the 6.22 oracle (tools/dostest/p_redir.asm):
+     Measured on the 6.22 oracle (tests/probes/dos/p_redir.asm):
          CASE=int21.45.dup.stdout SIG=CF AX=0005 CF=0
      i.e. real DOS duplicates stdout into slot 5, which is then ALSO the console.
      Ours returned AX=0006 CF=1 on the rig, because a device was only ever

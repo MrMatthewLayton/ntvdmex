@@ -25,7 +25,7 @@
  *   stays stored-only, and the log says so.
  *
  * Pure C, no <windows.h>: the device NAMES are injected, so the choice is checked off-VM
- * by tools/dostest/midiroute_test.c.
+ * by tests/unit/midiroute_test.c.
  */
 #ifndef NTVDMEX_MIDI_ROUTE_H
 #define NTVDMEX_MIDI_ROUTE_H

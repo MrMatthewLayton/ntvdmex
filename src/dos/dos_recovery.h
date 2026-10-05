@@ -37,7 +37,7 @@
  *   take ourselves out of the path rather than break every 16-bit program on
  *   the box until someone edits the registry by hand.
  *
- * Pure -- no Windows types -- so tools/dostest/recovery_test.c can pin it.
+ * Pure -- no Windows types -- so tests/unit/recovery_test.c can pin it.
  */
 #ifndef DOS_RECOVERY_H
 #define DOS_RECOVERY_H

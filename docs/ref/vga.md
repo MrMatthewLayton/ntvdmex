@@ -149,7 +149,7 @@ which is not real hardware, and one oracle agreeing is not confirmation. Both of
 errors pointed the same way, and the value stood wrong for three sessions.
 
 ⚠ **Bit 7, the CRT interrupt, is a different question and it is still open.**
-`tools/dostest/p_vgaext.asm` enables the vertical-retrace interrupt in CR11 and looks:
+`tests/probes/dos/p_vgaext.asm` enables the vertical-retrace interrupt in CR11 and looks:
 **dosbox-x** sets bit 7 after a retrace and clears it through CR11 bit 4; **PCem's IBM VGA
 never sets it at all**, and QEMU does not either. The IBM VGA spec describes the bit, two of
 three hosts do not implement it, and no DOS guest this project has met uses the VGA vertical
@@ -278,7 +278,7 @@ rows      = scanlines / (CR09.7 ? 2 : (CR09[4:0] + 1))
 if (CR17.2) rows /= 2                          # Vertical Total Double
 ```
 
-**Verified against a real BIOS on 11 modes** (`tools/dostest/vgareg.ref.txt`): mode 03
+**Verified against a real BIOS on 11 modes** (`tools/gen/data/vgareg.ref.txt`): mode 03
 720×400 text (25 rows), 0E 640×200, 10 640×350, 11 and 12 640×480, 13 320×200,
 Mode Y 320×200, **Mode X 320×240**. Three corrections that measurement forced, each of
 which an implementation would otherwise get wrong:
@@ -297,7 +297,7 @@ which an implementation would otherwise get wrong:
 ⇒ **320×240 Mode X falls straight out of this** with no mode number anywhere: MiscOut
 `0xE3` → 480-line sync, `CR12` + overflow → 480 scanlines, `CR09 = 0x41` → 240 rows,
 `GR5.6` → 320 across. The canonical Mode X listing writes exactly these values, and
-`tools/dostest/p_vgareg.asm` case `vga.modeX.320x240` captures them from the hardware.
+`tests/probes/dos/p_vgareg.asm` case `vga.modeX.320x240` captures them from the hardware.
 
 ⛔ **OPEN — modes 04 and 06 need the real-BIOS oracle.** Against SeaBIOS both come back
 with `CR09 = 0xC1`: doubling bit set *and* MSL = 2, which under any consistent reading of
@@ -566,7 +566,7 @@ Derived from §1: build the pipeline, not the modes.
 
 1. **Capture every register.** ✅ Done — the full file is latched with per-index write
    counts, and dumped on both exit paths.
-2. **Measure what a real BIOS leaves.** ✅ Done for five modes via `tools/dostest/p_vgareg.asm`;
+2. **Measure what a real BIOS leaves.** ✅ Done for five modes via `tests/probes/dos/p_vgareg.asm`;
    the remaining modes need PCem.
 3. **Derive geometry** from Miscellaneous Output + CRTC + SR1, per §5.1 — replacing the
    mode-number table.

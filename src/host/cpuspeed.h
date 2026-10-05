@@ -23,7 +23,7 @@
  *
  * The calibration has exactly one constant -- CPUSPEED_REF_MHZ, the speed the host
  * presents to a guest when nothing is throttling it -- and it is MEASURED, not
- * guessed: tools/dostest/cpubench.asm runs a loop whose cost on a 486 is known to
+ * guessed: tests/probes/dos/cpubench.asm runs a loop whose cost on a 486 is known to
  * the cycle and reports how many it completes per second. Everything else here is
  * arithmetic on that one number.
  *
@@ -40,7 +40,7 @@
  * HOST code and g_in_exec is 0, which is exactly when the suspender refuses to act.
  *
  * Everything in here is integer arithmetic on plain values with no Windows in it,
- * so it is checked off-VM by tools/dostest/cpuspeed_test.c -- "the knob is wired"
+ * so it is checked off-VM by tests/unit/cpuspeed_test.c -- "the knob is wired"
  * and "the knob is wired and right" are not the same claim.
  */
 #ifndef CPUSPEED_H
@@ -379,7 +379,7 @@ static unsigned long long cpuspeed_hold_for(unsigned long long exec_us,
 }
 
 /* One period of the controller, as a PURE FUNCTION so the loop and the deterministic
-   test run the identical law (tools/dostest/cpuspeed_test.c drives this against a
+   test run the identical law (tests/unit/cpuspeed_test.c drives this against a
    simulated clock). E and T are totals since the window began; returns the hold to
    take now and sets *reset when the caller should rebaseline the window.
  ⚠ *reset FIRES ONLY WHEN THE GUEST IS AT OR AHEAD OF TARGET (hold rounds to nothing),

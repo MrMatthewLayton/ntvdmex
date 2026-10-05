@@ -9,8 +9,8 @@ fitted, both channels EMPTY.** Claims `1F0h`–`1F7h`, `3F6h`, `170h`–`177h`, 
 (`3F7h` stays the FDC's). Every read is `00h` at any width, every write is dropped, no IRQ.
 **Spec held:** ATA-3, X3T13/2008D rev 7b (working draft, fetched for #179 — Table 2 note 3,
 8.7.1, 8.7.2). Not mirrored in the repo.
-**Probes:** `tools/dostest/p_ide.asm` (12 rows, both channels); `p_fdc.asm fdc.alt.3f6`.
-Off-VM: `tools/dostest/ide_test.c` (32 checks, with the pre-#179 hang as a negative control).
+**Probes:** `tests/probes/dos/p_ide.asm` (12 rows, both channels); `p_fdc.asm fdc.alt.3f6`.
+Off-VM: `tests/unit/ide_test.c` (32 checks, with the pre-#179 hang as a negative control).
 **Marked:** 2026-10-01 from the code (absence of any claim); **re-marked 2026-10-02** for #179.
 
 ---

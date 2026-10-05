@@ -96,7 +96,7 @@ __declspec(dllexport) WORD WINAPI WOWGlobalAlloc16(WORD f, DWORD cb)
 { return (WORD)g16(0, f, cb); }
 /* ⚠ Free16 and UnlockFree16 answer TRUE (1) when the block is freed -- NOT Win16's
      GlobalFree convention (0 = freed, else the handle). Measured against stock with
-     tools/wintest/w_wcb: both return 0001 where GlobalFree said 0. */
+     tests/probes/win16/w_wcb: both return 0001 where GlobalFree said 0. */
 __declspec(dllexport) WORD WINAPI WOWGlobalFree16(WORD h)
 { return (WORD)(g16(1, h, 0) == 0); }
 __declspec(dllexport) DWORD WINAPI WOWGlobalLock16(WORD h)

@@ -11,7 +11,7 @@
 ;   the host resumes the guest HERE instead of at the stub's IRET, and this code
 ;   makes the BIOS calls for real, with the INT 21h caller's IRET frame still on
 ;   the stack. Each entry ends in IRET back to the caller.
-; ★ THE CALL SEQUENCES ARE MEASURED, not recalled: tools/dostest/p_auxprn hooks
+; ★ THE CALL SEQUENCES ARE MEASURED, not recalled: tests/probes/dos/p_auxprn hooks
 ;   INT 14h/17h and logs every call MS-DOS 6.22 makes (QEMU and PCem agree):
 ;     05h:      17h/02h, 17h/02h, 17h/00h AL=char           -> AX = 05:char
 ;     04h:      14h/03h, 14h/01h AL=char                    -> AX = 04:char
@@ -29,7 +29,7 @@
 ;   The kernel then calls INT 24h with AH = 87h|38h = BFh (character device,
 ;   write, F+R+I allowed) and BP:SI -> the PRN header (DISK.ASM, CHARHARD).
 ;   ⛔ 6.22 is NOT 4.0 here -- its call sequence (17h/02h before 17h/00h, above)
-;   already differs -- so measure first: tools/dostest/p_crit2.asm crit2.prn.*
+;   already differs -- so measure first: tests/probes/dos/p_crit2.asm crit2.prn.*
 ;   (INT 17h hooked to answer time-out; reports n17, AH:AL, DI, BP:SI's header).
         bits 16
         org 0

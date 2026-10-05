@@ -557,11 +557,11 @@ static void dsprobe_load(void)
 
    ⇒ CL is an ORDINAL CPU class whose lowest accepted value is 3. That reading is off
      the binary, not off a spec sheet -- there is no DPMI document in this repo, and
-     `tools/dostest/p_dpmins.com` confirms neither software oracle can be asked:
+     `tests/probes/dos/p_dpmins.com` confirms neither software oracle can be asked:
      **MS-DOS 6.22 and DOSBox-X both leave every register untouched** (no DPMI host),
      so only stock ntvdm can answer and that needs the IFEO bracket.
 
-   ⛔ WE HARDCODED 3 AND IT PRODUCED A MEASURED MISMATCH. `tools/wintest` measured
+   ⛔ WE HARDCODED 3 AND IT PRODUCED A MEASURED MISMATCH. `tests/probes/win16` measured
      `GetWinFlags` = **4C25 from us**, **4C29 from stock**, reproduced twice. The single
      differing bit is 0x0004 vs 0x0008 -- exactly `bl=4` vs `bl=8` -- so stock's DPMI
      host returns CL>3 and ours returned 3. **4 is the smallest value consistent with
@@ -1903,7 +1903,7 @@ static HANDLE         g_once_mutex    = NULL; /* the single-instance mutex (WinM
 #define IO_HOT_MAX 48   /* 12 filled up before the hottest port was even seen */
 static uint16_t g_io_last_port = 0;      /* port the last serviced access touched */
 /* ── ⚠ AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53). ────────────
-     Some runs of tools/dostest/spktest.com report 1.87 MILLION serviced I/O
+     Some runs of tests/probes/dos/spktest.com report 1.87 MILLION serviced I/O
      events for a program that issues EIGHTY-SIX, take 8.7 s where a clean run
      takes 4.6, and log the SAME SIX guest CS:IP sites either way -- so the same
      handful of instructions are being serviced ~21,700 times each while the
@@ -2500,7 +2500,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
              the child here (as this used to) hands back a pointer to a block that
              is on the free list. (GH #50)
            ⚠ SP IS e_sp MINUS TWO, and that is measured, not derived.
-             tools/dostest/p_ovl.asm builds an image whose header declares
+             tests/probes/dos/p_ovl.asm builds an image whose header declares
              e_sp = 0x0100 and MS-DOS 6.22 returns:
                CASE=ovl.4B01.entry  CS=14F4 IP=0000 SS=14F4 SP=00FE
              One image, one data point: a second image with a different e_sp
@@ -4404,7 +4404,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            killed the arrow keys -- see vdd_input_push_scancode.) */
         if (g_irq1_pending < 1) InterlockedIncrement(&g_irq1_pending);
         /* ── THREE FIXES FOR THE V86 KEY-DELIVERY LAG, ALL MEASURED, ALL REFUTED. ──────
-             Symptom (headless repro: tools/dostest/skyroads-play.keys, pacer on):
+             Symptom (headless repro: tests/probes/dos/skyroads-play.keys, pacer on):
                  baseline pacer ON   n=102  >=64ms = 44 (43%)  max  684 ms  inj=186
                  baseline pacer OFF  n=102  >=64ms =  0 ( 0%)  max   52 ms  inj=186
              The guest has interrupts off ~96% of the time in gameplay, so IRQ0 and IRQ1
@@ -4628,7 +4628,7 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
      The BIOS stubs for INT 20h and INT 27h called dos_int21, threw away its
      "stop" answer and took their own `break` -- so a .COM child exiting through
      INT 20h, which is THE classic .COM exit, tore down the whole VDM instead of
-     returning to whatever EXEC'd it. Measured: tools/dostest/p_curdir.asm's
+     returning to whatever EXEC'd it. Measured: tests/probes/dos/p_curdir.asm's
      two-byte child (CD 20) killed the probe mid-run, and every case after the
      EXEC simply never reported.
    Returns 1 if a child exited and the parent has been restored (the exec loop
@@ -6469,7 +6469,7 @@ static void cpuspd_note_rt(unsigned long us)
 }
 
 /* ── ★★★ THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING. ───────────
- * ⚠⚠ THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tools/dostest/mixbench:
+ * ⚠⚠ THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tests/probes/dos/mixbench:
  *    at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
  *        ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
  *    The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
@@ -6711,7 +6711,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
          (owed_us + hold_us + pay_ms + two baselines that fell out of step and leaked
          TWICE) with one invariant: guest EXECUTION time E held to `duty` of WALL time
          T. A deterministic test drives the identical cpuspeed_step against a
-         simulated clock (tools/dostest/cpuspeed_test.c), so the accuracy is proven
+         simulated clock (tests/unit/cpuspeed_test.c), so the accuracy is proven
          off-hardware rather than argued from a rig number that reads the guest's own
          throttled clock.
        ► E EXCLUDES BOTH HOLDS AND HOST SERVICING, for free. exec_us_now() counts only
@@ -7175,7 +7175,7 @@ static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
    Only the most recently pressed key repeats, which is what AT hardware does. */
 /* ► THE RATE IS NOT A CONSTANT AND MUST NOT BE ONE HERE. These started as 500 ms
      and 10.9/s, remembered AT hardware defaults. MEASURED against stock ntvdm on
-     the same box with the same keyboard (tools/dostest/tymat.asm, run under both
+     the same box with the same keyboard (tests/probes/dos/tymat.asm, run under both
      hosts via rt_stock.bat):
          stock ntvdm   delay 7 ticks ~385 ms   102 repeats -> 22.1/s
          us            delay 9 ticks ~495 ms    49 repeats -> 10.9/s
@@ -9723,8 +9723,8 @@ static void mouse_cb_return(volatile BYTE *tib)
    shape" -- so it is now DECODED FROM REAL ARTWORK and regenerated rather than
    remembered. 'o' = outline (palette index 0), 'X' = fill (index 15), ' ' =
    transparent; only the data changed, overlay_cursor() is untouched.
-   Regenerate with:  python3 tools/mkcursor.py cursors/cursor-pointer.cur       */
-/* Generated by tools/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
+   Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur       */
+/* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
    Do not hand-edit: regenerate from the artwork instead. */
 static const char *const MS_CURSOR[16] = {
     "oo",
@@ -9943,7 +9943,7 @@ static int launch_is_wow(const char *cmd)
      target-selector:offset, so every module's selectors must be final before ANY
      module is relocated. The earlier version of this code relocated at load time with
      placeholder segment values and relocated AGAIN once selectors existed. That is
-     broken and tools/dostest/ne_test.c now proves it: a chained record finds its next
+     broken and tests/unit/ne_test.c now proves it: a chained record finds its next
      site by reading the word AT the current site, and the first pass has overwritten
      exactly those words with addresses. The second pass follows garbage. So:
         wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
@@ -17924,7 +17924,7 @@ static void wow_probe_ldt_matrix(const char *tag)
 /* ── WHERE IS OUR DESCRIPTOR TABLE? ─────────────────────────────────────────────────
      krnl386 wants what NTVDM's "MS-DOS" vendor API gives it: a WRITABLE SELECTOR ONTO
      THE DESCRIPTOR TABLE, so it can edit descriptors without a DPMI call each time.
-     Measured off stock (tools/dostest/vendprobe.asm): selector 0x0137, writable,
+     Measured off stock (tests/probes/dos/vendprobe.asm): selector 0x0137, writable,
      base 0x001140B0, limit 0x5FFF -- and the descriptor at window[CS & 0xFFF8] reads
          FF FF D0 6D 00 FA 00 00   -> base 0x00006DD0, access 0xFA (code)
      while DPMI 0006 reports CS's base as 0x00006DD0. Two independent routes, same
@@ -20471,7 +20471,7 @@ static WORD wowsched_curtask(void)
      them (krnl386's TDB holds only the drive -- measured: TDB+0x66 = 0x82, +0x67
      empty, for WOWEXEC and the task alike) and puts a task's back when it runs. Here
      OUR scheduler switches tasks, so this is that table. Measured with
-     tools/wintest/w_cwd: the launched task parked at its first WaitEvent, WOWEXEC
+     tests/probes/win16/w_cwd: the launched task parked at its first WaitEvent, WOWEXEC
      changed back to C:\WINDOWS, and the task resumed there -- its relative CreateFile
      landed in C:\WINDOWS, where stock puts it in the launch folder.
    ► A task's entry is written when it parks at its launch (it inherits the directory
@@ -21205,7 +21205,7 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
      "NTVDM KERNEL: Inadequate DPMI Server". Leaving AL alone -- the correct answer for
      a host with no vendor API -- is therefore fatal to this one guest.
 
-   ★ WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tools/dostest/vendprobe.com under
+   ★ WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tests/probes/dos/vendprobe.com under
      `stock`): in REAL mode AL=8A (not supported); in PROTECTED mode AL=00 and
      ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00) holding 22 bytes:
 
@@ -27567,7 +27567,7 @@ static void *shim_mapflat(WORD seg, DWORD off, int pm)
 /* An I/O hook: the VDD's VDD_IO_HANDLERS, claimed on our bus range by range. STDCALL:
    nt_vdd.h names no convention, and NT and the DDK compile with __stdcall as the
    default -- measured: stock NTVDM died at the first IN when the test VDD's handlers
-   were cdecl (tools/dostest/isvtest). A hook taken down by VDDDeInstallIOHook stays claimed
+   were cdecl (tests/probes/dos/isvtest). A hook taken down by VDDDeInstallIOHook stays claimed
    (the bus has no release) and answers as an empty slot: FFh in, writes dropped. */
 typedef void (WINAPI *isv_inb_t)(WORD, BYTE *);   typedef void (WINAPI *isv_inw_t)(WORD, WORD *);
 typedef void (WINAPI *isv_outb_t)(WORD, BYTE);    typedef void (WINAPI *isv_outw_t)(WORD, WORD);
@@ -29427,7 +29427,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                  handed it back the 0000:0000 it supplied and left it holding
                  five null pointers.
                ★ MEASURED against two real Microsoft kernels before a line of
-                 this was written (tools/dostest/p_int2f.asm):
+                 this was written (tests/probes/dos/p_int2f.asm):
                      DL=0 0001:0D8F   DL=2 0001:0B3B   DL=4 0001:0D8F
                      DL=6 0000:0000   DL=8 03E7:0188
                  DL=0 and DL=4 return the SAME pointer on both, so they share
@@ -31505,7 +31505,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
       for (k = 0; k < 192; ++k) ct[DOS_INT2F_TBL_A + k] = 0;
       /* ── INT 15h AH=C0h: THE SYSTEM CONFIGURATION TABLE. (GH #54) ──────────────
-           Measured (tools/dostest/p_int15.asm): PCem's real AMI 486 says FC 01 00
+           Measured (tests/probes/dos/p_int15.asm): PCem's real AMI 486 says FC 01 00
            70 00; SeaBIOS FC 00 01 74 40; dosbox-x FC 00 01 70 40. The model triple
            is the AMI's -- the period machine. The FEATURE BITS ARE NOT COPIED from
            anyone: each one is a claim about THIS machine, and a claim a guest can
@@ -31555,7 +31555,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          But it caps what memory- and disk-aware software can do, and #47 names it
          as a likely reason MEM.EXE lies.
        ▸ EVERY OFFSET AND EVERY STRUCTURE SIZE HERE WAS DUMPED OFF MS-DOS 6.22 by
-         tools/dostest/p_sysvar.asm and decoded in src/dos/dos_sysvars.h -- which is
+         tests/probes/dos/p_sysvar.asm and decoded in src/dos/dos_sysvars.h -- which is
          what #48 asks for in as many words, because "the layout dumps have twice
          caught errors that a plausible reading would have missed". The DPB being 33
          bytes, for instance, is not recalled: 6.22's first DPB is at 0116:136A and
@@ -31944,7 +31944,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_comm.p[0].base = 0x03F8; g_comm.p[0].irq = 4; g_comm.p[0].fitted = 1;
       g_comm.p[1].base = 0x02F8; g_comm.p[1].irq = 3; g_comm.p[1].fitted = 1;
       /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
-         with tools/dostest/p_com34 under XP's own NTVDM on the rig: INT 11h
+         with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
          AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
          02E8. The question #181 left open is answered by the oracle that defines
          "ntvdm superset", and the device has had the slots since s85. */
@@ -36298,7 +36298,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            setting is reachable (below the port-trap ceiling and inside the hold cap),
            disagreeing in the open when it is not. The control law that ties them
            together is cpuspeed_step, proven by a DETERMINISTIC test off-hardware
-           (tools/dostest/cpuspeed_test.c) rather than argued from a rig number read
+           (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
            through the guest's own throttled clock.
          ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
            holds (before the resume) and host-servicing (outside v86_run) are already
@@ -36390,7 +36390,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " ty_os=0x");                     p = zhex(p, g_ty_os_repeats);
       /* The XP setting we derived the rate from, raw and in microseconds, so a run
          says WHY it repeats at the speed it does. Verify against stock ntvdm with
-         tools/dostest/tymat.asm: the target is delay 7 ticks / 102 repeats. */
+         tests/probes/dos/tymat.asm: the target is delay 7 ticks / 102 repeats. */
       p = zput(p, " spi_delay=0x");                 p = zhex(p, g_ty_spi_delay);
       p = zput(p, " spi_speed=0x");                 p = zhex(p, g_ty_spi_speed);
       p = zput(p, " ty_delay_us=0x");               p = zhex(p, g_ty_delay_us);

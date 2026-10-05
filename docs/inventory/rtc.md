@@ -3,8 +3,8 @@
 **Spec:** Motorola MC146818 datasheet; IBM PC/AT TechRef for the CMOS map.
 **▶ The hardware reference is [`../ref/rtc.md`](../ref/rtc.md)** — what the chip *does*.
 **Our implementation:** `src/vdd/vdd_cmos.c`, `src/vdd/vdd_cmos.h` *(new 2026-09-23)*.
-**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/cmos_test.c`.
-DOS probe: `tools/dostest/p_rtc.asm`.
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tests/unit/cmos_test.c`.
+DOS probe: `tests/probes/dos/p_rtc.asm`.
 **Marked:** 2026-09-23, **from the code**.
 
 ---

@@ -10,7 +10,7 @@
  *
  * So: include BOTH, and make the compiler compare them. This file produces no
  * code; its only job is to stop compiling when someone changes one side. It is
- * built by tools/dostest/run.sh.
+ * built by tests/probes/dos/run.sh.
  *
  * ⚠ A RUNTIME CHECK WOULD BE TOO LATE. By the time a mismatched driver is
  *   loaded, the wrong bytes are already on the stack.

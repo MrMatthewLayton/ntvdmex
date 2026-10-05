@@ -1,7 +1,7 @@
 /* dos_psp.h -- build a DOS Program Segment Prefix (+ a minimal environment) in
  * conventional memory. Pure logic over a `base` pointer (same convention as
  * dos_mcb.h). Ported from the M2.1 PSP setup in tools/vdmhost/vdmhost.c.
- * Verified off-VM by tools/dostest/mcb_test.c.
+ * Verified off-VM by tests/unit/mcb_test.c.
  */
 #ifndef DOS_PSP_H
 #define DOS_PSP_H
@@ -64,7 +64,7 @@ static inline void dos_cmdtail_build(volatile uint8_t *base, uint16_t psp_seg,
    Reads the IVT directly (segment 0), so it must run AFTER the host has planted
    its handlers -- saving a vector that is still 0000:0000 stores a null that the
    program will happily restore later.
-   Measured on MS-DOS 6.22 (tools/dostest/p_psp.asm): the PSP's copy of all three
+   Measured on MS-DOS 6.22 (tests/probes/dos/p_psp.asm): the PSP's copy of all three
    EQUALS the live vector at program entry, which is the host-independent
    invariant the probe asserts. */
 static inline void dos_psp_save_vectors(volatile uint8_t *base, uint16_t psp_seg,

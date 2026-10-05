@@ -112,7 +112,7 @@ dos_int53_ans_t g_dos_int53[DOS_INT53_N] = {
  * no-op is never mistaken for success, the second must stay silent so we do not
  * invent an error real DOS never reports.
  *
- * THE BOUNDARY IS MEASURED, NOT REMEMBERED (tools/dostest/p_defs.asm, run against
+ * THE BOUNDARY IS MEASURED, NOT REMEMBERED (tests/probes/dos/p_defs.asm, run against
  * the 6.22 oracle).  Every probed AH from 6Dh upward -- 6Dh, 6Eh, 6Fh, 70h, 71h,
  * 72h, 74h, 80h, A0h, E0h -- returns with AX unchanged, CF clear and every
  * poisoned output register still holding its poison: nothing happened at all.
@@ -161,7 +161,7 @@ static HANDLE dos_open_stampable(const char *fn, DWORD acc, DWORD shr, DWORD dis
 
 /* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
  *
- * TRANSCRIBED FROM THE ORACLE, byte for byte (tools/dostest/p_ctry.asm):
+ * TRANSCRIBED FROM THE ORACLE, byte for byte (tests/probes/dos/p_ctry.asm):
  *   [0-1]  0000     date format, 0 = USA month/day/year
  *   [2-6]  "$"      currency symbol, ASCIIZ in 5 bytes
  *   [7-8]  ","      thousands separator      [9-10]  "."  decimal separator
@@ -187,7 +187,7 @@ static const uint8_t ctry_us[24] = {
 
 /* ---- INT 21h 4Eh/4Fh find-first/find-next.  GH #29. --------------------------
  *
- * DTA BLOCK LAYOUT, read off the oracle byte for byte (tools/dostest/p_find.asm).
+ * DTA BLOCK LAYOUT, read off the oracle byte for byte (tests/probes/dos/p_find.asm).
  * The dump cross-checks itself: the size field came back 0xD575 = 54645, which is
  * COMMAND.COM's exact byte count.
  *
@@ -244,7 +244,7 @@ static void dta_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd)
  * The pre-1983 file API.  Little 6.22-era software uses it, but TREE.COM does,
  * and it is 19 of the 103 services 6.22 defines.
  *
- * MEASURED ON THE ORACLE (tools/dostest/p_fcb.asm), and the first fact matters
+ * MEASURED ON THE ORACLE (tests/probes/dos/p_fcb.asm), and the first fact matters
  * more than the rest: **FCB calls report success in AL (00 ok, FF fail), and the
  * CARRY FLAG IS UNDEFINED** -- a successful open came back with CF=1.  Anything
  * that treats carry as the result here is reading noise.
@@ -1022,7 +1022,7 @@ int dos_int21(dos_machine_t *m)
              shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
              read HANDLE 0 -- these read the keyboard whatever handle 0 was, so a
              redirected program never saw its file (and hung waiting for a key).
-             What a file gives back, measured with tools/dostest/p_stdin against REAL
+             What a file gives back, measured with tests/probes/dos/p_stdin against REAL
              MS-DOS on a real BIOS (PCem) and stock NTVDM, which agree byte for byte:
                01h/07h/08h  the next byte; AT END OF FILE THEY BLOCK -- neither
                             returns (DOSBox-X answers 0Ah; it is the odd one out).
@@ -1357,7 +1357,7 @@ int dos_int21(dos_machine_t *m)
              appending. Excluding handles below 5 refused that seek with error 6
              on a handle that IS a file -- the last survivor of #133, after the
              create and both write paths had been fixed.
-             Oracle, tools/dostest/p_redir.asm on MS-DOS 6.22:
+             Oracle, tests/probes/dos/p_redir.asm on MS-DOS 6.22:
                CASE=int21.42.end.on.h1 SIG=AX,DX,CF AX=0004 DX=0000 CF=0
              i.e. real DOS seeks handle 1 to the end and reports 4 bytes. */
         if (dos_fh_is_file((void *const *)m->fh, h)) {
@@ -1995,7 +1995,7 @@ int dos_int21(dos_machine_t *m)
              the context we measured in.** The prime suspect is the measurement rig
              itself: probe.inc reports through INT 21h AH=02 and every stock run is
              captured with `> file`, so the oracle was asked "are you interactive?"
-             with its own output redirected. `tools/dostest/p_int53f.asm` asks the same
+             with its own output redirected. `tests/probes/dos/p_int53f.asm` asks the same
              eight questions but writes its answers through AH=3Ch/40h, so it can be run
              with NOTHING redirected.
 
@@ -2125,7 +2125,7 @@ int dos_int21(dos_machine_t *m)
              This refused anything that was not a FILE, so `dup(1)` -- the first
              step of every save-redirect-restore sequence a shell performs --
              came back error 6 and the restore could never happen. Found by
-             running tools/dostest/p_redir.asm on the rig against the same probe
+             running tests/probes/dos/p_redir.asm on the rig against the same probe
              on the oracle; the two disagreed on one line:
                oracle : CASE=int21.45.dup.stdout AX=0005 CF=0
                NTVDMEX: CASE=int21.45.dup.stdout AX=0006 CF=1
@@ -2260,7 +2260,7 @@ int dos_int21(dos_machine_t *m)
              registers (BX mode, CX attributes, DX action, DS:SI name; 716Ch's DI alias
              hint is not used), and Win32 takes a long name as readily as a short one.
              The action word, the access and the "action taken" in CX are dos_lfn.h's,
-             pinned by tools/dostest/lfn_test.c. ONE CHANGE OF ANSWER rode in with the
+             pinned by tests/unit/lfn_test.c. ONE CHANGE OF ANSWER rode in with the
              move: CREATE_ALWAYS on a file that was NOT there now reports CX=2 (created),
              where it said 3 (replaced) for every CREATE_ALWAYS -- RBIL's table, and the
              probe's first 716Ch is exactly that call. ⚠ Unmeasured on 6.22 for 6Ch:
@@ -2300,7 +2300,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x59) {                    /* get extended error */
         /* Four answers, not one: extended code (AX), class (BH), suggested
            action (BL) and locus (CH).  The pairings are MEASURED, by provoking
-           each failure on the oracle and asking (tools/dostest/p_err.asm):
+           each failure on the oracle and asking (tests/probes/dos/p_err.asm):
              codes 2, 3, 18  -> BX=0803, CH=02   (not-found family)
              code  6         -> BX=0704, CH=01   (bad handle)
            CL is left ALONE -- the oracle returns it still holding the caller's
@@ -2308,7 +2308,7 @@ int dos_int21(dos_machine_t *m)
         uint16_t e = m->last_err, bx59 = 0;
         uint8_t ch59 = 0;
         /* The table moved to src/dos/dos_err.h so the off-VM battery can pin it
-           (tools/dostest/err_test.c) and so there is exactly one place a row can
+           (tests/unit/err_test.c) and so there is exactly one place a row can
            be added. Rows 5 (access denied) and 0x50 (file exists) were provoked
            and measured in session 52; before that both fell into the UNMEASURED
            arm below. */
@@ -2517,7 +2517,7 @@ int dos_int21(dos_machine_t *m)
                  The host hands back whatever case and length the directory was
                  entered with ("...\ntvdmex\demo\win16"). DOS's CDS holds an upper-case
                  8.3 path, and stock NTVDM answers exactly that -- measured beside
-                 ours by tools/wintest/w_cwd on the rig: ours `...\ntvdmex\demo\...`,
+                 ours by tests/probes/win16/w_cwd on the rig: ours `...\ntvdmex\demo\...`,
                  stock `...\NTVDMEX\DEMO\...`. */
             {   char sp47[300];
                 DWORD sn = GetShortPathNameA(cwd, sp47, sizeof sp47);
@@ -2638,7 +2638,7 @@ int dos_int21(dos_machine_t *m)
                  executable program size" at -16 bytes.
                  MEM's own trace is what named it: `21:58/03 bx=0001`, set UMB
                  link ON, immediately before it walks the chain.
-               Oracle, tools/dostest/p_umb.asm on MS-DOS 6.22 booted with no
+               Oracle, tests/probes/dos/p_umb.asm on MS-DOS 6.22 booted with no
                EMM386 and no DOS=UMB -- the same configuration we present:
                  CASE=int21.5803.link.on  AX=0001 CF=1
                  CASE=int21.5802.after.on AX=5800          (still not linked)
@@ -2736,7 +2736,7 @@ int dos_int21(dos_machine_t *m)
         }
         /* ── #251: WHAT DOS SUPPORTS SUCCEEDS; THE REST IS "INVALID FUNCTION". ───────
              Every other sub-function answered CF=0 -- success, with nothing done.
-             Measured (tools/dostest/p_ioctl2) on msdos622, dosbox-x and pcem alike:
+             Measured (tests/probes/dos/p_ioctl2) on msdos622, dosbox-x and pcem alike:
              02h/04h (read control data), 0Ch/10h on CON, and the unassigned 12h/1Fh
              answer AX=0001 CF=1; 0Ah, 0Dh and 11h on a fixed disk answer CF=0.
              0Ah reports a local handle (DX bit 15 clear). 0Dh/11h keep today's bare
@@ -2784,7 +2784,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x49) {                    /* free block: ES=segment */
         int err = dos_free(NULL, (uint16_t)(R_ES & 0xFFFF));
         /* ── #258: AND A SUCCESSFUL FREE LEAVES AX = THE BLOCK'S MCB. ────────────────
-             Undocumented, measured (tools/dostest/p_memax): MS-DOS 6.22 and PCem's
+             Undocumented, measured (tests/probes/dos/p_memax): MS-DOS 6.22 and PCem's
              MS-DOS both return AX = ES-1; dosbox-x leaves AX alone. The Microsoft
              kernel is the authority. We left AX as the caller's 49xx. */
         if (err) { SET16(R_AX, err); ERRCF(); }
@@ -2820,7 +2820,7 @@ int dos_int21(dos_machine_t *m)
              We left the caller's 4Axx there, so `QB /L` loaded the library at 4Axx,
              freed a block that never existed at Make EXE ("Error in loading file
              (QB.QLB) - Internal error") and wrote a garbage .LIB into the link.
-             Measured (tools/dostest/p_memax): MS-DOS 6.22, dosbox-x and PCem all
+             Measured (tests/probes/dos/p_memax): MS-DOS 6.22, dosbox-x and PCem all
              return AX = ES for a shrink, a grow and a same-size resize. */
         if (err) { SET16(R_AX, err); if (err == 8) SET16(R_BX, max); ERRCF(); }
         else { SET16(R_AX, (uint16_t)(R_ES & 0xFFFF)); OKCF(); }
@@ -2885,7 +2885,7 @@ int dos_int21(dos_machine_t *m)
         /* ── THE FLAG IS STATE, NOT A CONSTANT. (GH #165) ──────────────────────
              Get used to answer "off" and set accepted a value and dropped it, so a
              program that turned checking on read back off. Measured, 6.22 and PCem
-             (tools/dostest/p_subfn.asm): 3301 DL=1 then 3300 -> DL=1; 3302 swaps
+             (tests/probes/dos/p_subfn.asm): 3301 DL=1 then 3300 -> DL=1; 3302 swaps
              and returns the OLD state in DL. DH is left alone -- 6.22 does. */
         if (al33 == 0x00) { SET16(R_DX, (R_DX & 0xFF00) | m->break_on); OKCF(); }
         else if (al33 == 0x01) { m->break_on = (uint8_t)((R_DX & 0xFF) ? 1 : 0); OKCF(); }
@@ -2982,7 +2982,7 @@ int dos_int21(dos_machine_t *m)
              an unknown 71xxh this way is p_lfn's lfn.71FF row, not yet measured.
            ⚠ EVERY REGISTER CONTRACT HERE IS RBIL's, NOT A MEASUREMENT. Which registers
              stock writes on success (does 71A0h touch AX? does 7143h BL=0 copy CX into AX
-             as 4300h does on 6.22?) is what tools/dostest/p_lfn.asm prints; the arms
+             as 4300h does on 6.22?) is what tests/probes/dos/p_lfn.asm prints; the arms
              below write only the outputs RBIL names and leave AX alone on success. */
         uint8_t al71 = (uint8_t)(R_AX & 0xFF);
         if (al71 == 0x41) {              /* delete: DS:DX, SI=wildcards, CL/CH */
@@ -3333,7 +3333,7 @@ int dos_int21(dos_machine_t *m)
     } else if (!dos622_defines(ah)) {
         /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
            return with AL cleared and CF clear, touching nothing else.  Measured on
-           the oracle (tools/dostest/p_defs.asm) -- AH=6Dh..E0h, plus the
+           the oracle (tests/probes/dos/p_defs.asm) -- AH=6Dh..E0h, plus the
            documented null functions, all come back with every poisoned output
            register intact.  Failing loudly here would be US inventing an error
            that real DOS does not report, which breaks programs that probe for

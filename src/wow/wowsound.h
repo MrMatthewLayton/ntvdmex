@@ -8,7 +8,7 @@
  * ids = export ordinals, recognised by the whole-table anchor in wowanchors.h.
  *
  * ── WHAT STOCK DOES, MEASURED, NOT REMEMBERED ───────────────────────────────
- * tools/wintest/w_sound asks all fifteen data-carrying exports, open and closed,
+ * tests/probes/win16/w_sound asks all fifteen data-carrying exports, open and closed,
  * with AX poisoned to BEEF before each call. XP's own WOW answered **0 to every
  * one of the 23 cases** (build/wintest/w_sound.stock.txt, s90): OpenSound is 0,
  * a second OpenSound is 0, CountVoiceNotes after two queued notes is 0, an

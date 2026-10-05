@@ -22,7 +22,7 @@
  *
  * Pure C, no <windows.h>: the card pulls audio through the DMA VDD and raises
  * IRQs through the bus, so the whole thing is exercised off-VM by
- * tools/dostest/sb_test.c with no host audio anywhere near it.
+ * tests/unit/sb_test.c with no host audio anywhere near it.
  */
 #ifndef NTVDMEX_VDD_SB_H
 #define NTVDMEX_VDD_SB_H

@@ -5,7 +5,7 @@ Technology, 1994–96), the AWE32 Developer Information Pack. Archived at
 [dosdays.co.uk](https://www.dosdays.co.uk/media/creative/emu8kpgm.pdf); **not mirrored** (its
 licence forbids redistribution). `§n`/`p.n` below are the guide's.
 **Our implementation:** `src/vdd/vdd_emu8k.c`, `src/vdd/vdd_emu8k.h`; mixer source in
-`src/vdd/vdd_audio.c` (`vdd_audio_set_emu8k`); off-VM battery `tools/dostest/emu8k_test.c`
+`src/vdd/vdd_audio.c` (`vdd_audio_set_emu8k`); off-VM battery `tests/unit/emu8k_test.c`
 (58 checks). **Clean-room:** written from the guide's prose. No other emulator's EMU8000 was
 read.
 **Marked:** 2026-09-29, **from the code**. **Host wiring re-checked 2026-10-01:** the chip

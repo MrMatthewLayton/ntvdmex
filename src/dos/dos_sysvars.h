@@ -6,7 +6,7 @@
  * ── EVERY OFFSET BELOW CAME OFF THE ORACLE, NOT OUT OF A BOOK ────────────────
  * #48 is explicit that these structures "must not be written from documentation
  * alone -- the layout dumps have twice caught errors that a plausible reading
- * would have missed". So tools/dostest/p_sysvar.asm dumped them from genuine
+ * would have missed". So tests/probes/dos/p_sysvar.asm dumped them from genuine
  * MS-DOS 6.22 and this is that dump decoded:
  *
  *   BUF=sysvars.raw 5302 6A131601 CC001601 59007000 23007000 0002 6D001601
@@ -40,7 +40,7 @@
  *     +0x45 is 0116:136A, i.e. THE FIRST DPB. An entry points at its own drive's
  *     DPB, which is the link a memory/disk walker follows.
  *
- * Pure -- byte buffers and integers only -- so tools/dostest/sysvars_test.c can
+ * Pure -- byte buffers and integers only -- so tests/unit/sysvars_test.c can
  * pin every offset against those same dumps.
  */
 #ifndef DOS_SYSVARS_H
@@ -136,13 +136,13 @@ static inline void sv_far(unsigned char *p, unsigned o, unsigned seg, unsigned o
    ★ THE CHECK THAT THIS IS DOS'S ARITHMETIC AND NOT A GUESS: fed 6.22's own floppy
      (512 B, 1 sector/cluster, 224 root entries, highest cluster 2848 -- sysvars.dpb0)
      it reproduces that DPB's FAT=9, root start=19, data start=33 exactly, and
-     tools/dostest/sysvars_test.c holds the whole 33-byte build to the oracle's bytes.
+     tests/unit/sysvars_test.c holds the whole 33-byte build to the oracle's bytes.
    ⚠ WHAT IT IS NOT: for a FIXED disk the numbers describe a self-consistent FAT16
      volume of the measured size, NOT the real volume (NTFS, or a FAT whose boot
      sector we never read). No sector they name can be read here, so a program that
      follows them to the FAT gets the same INT 25h refusal it got before -- what it no
      longer gets is a structurally impossible DPB. Unmeasured against a 6.22 HARD disk
-     DPB; tools/dostest/p_devchn.asm's `dpb.c.layout` row is the check. */
+     DPB; tests/probes/dos/p_devchn.asm's `dpb.c.layout` row is the check. */
 static inline void dos_dpb_fat_layout(unsigned bytes_per_sec, unsigned root_ents,
                                       unsigned highest_clust, unsigned *fatsecs,
                                       unsigned *rootstart, unsigned *datastart)
@@ -238,7 +238,7 @@ static inline void dos_cds_build(unsigned char *p, unsigned drive, unsigned flag
      implies): CON 8013h (char | fast INT 29h output -- we serve INT 29h -- | stdout |
      stdin), AUX/COMn 8000h, PRN/LPTn A0C0h (char | output-until-busy | IOCTL query |
      generic IOCTL), CLOCK$ 8008h, the block driver 08C2h with byte 0 of its name = the
-     unit count. tools/dostest/p_devchn.asm reads every one of them back off the oracle.
+     unit count. tests/probes/dos/p_devchn.asm reads every one of them back off the oracle.
    ⚠ AND NONE OF THEM CAN BE CALLED AS A DRIVER. Our devices are served by the INT 21h
      layer, not by request packets. A program that calls a header's strategy/interrupt
      pair directly (rare: a few TSRs and diagnostics do) gets status 8103h -- error,

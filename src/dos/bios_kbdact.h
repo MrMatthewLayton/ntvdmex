@@ -4,7 +4,7 @@
  * INT 09h arm resumes the guest at an entry when vdd_input_bios_consume() asks.
  * #244 added k4f (the INT 15h AH=4Fh intercept call) and #274 p5 (the default INT 05h,
  * print screen). All three BOP sites are BOP 09h, told apart by ADDRESS.
- * tools/dostest/kbdact_test.c runs these bytes.
+ * tests/unit/kbdact_test.c runs these bytes.
  */
 #ifndef BIOS_KBDACT_H
 #define BIOS_KBDACT_H

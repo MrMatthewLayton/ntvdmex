@@ -17,11 +17,11 @@
 # DOS oracle scratch: install control floppies, source-disk copies, run temporaries
 /scripts/dosoracle/_build/
 
-# Native off-VM test binaries: rebuilt by tools/dostest/run.sh on every run, so
+# Native off-VM test binaries: rebuilt by tests/probes/dos/run.sh on every run, so
 # tracking them means binary churn in every commit. Repo convention is that the
 # guest .COM binaries ARE tracked (they cannot be assembled on the target) and
 # these are NOT.
-/tools/dostest/*_test
+/tests/unit/*_test
 
 # Scratch kernel-debugger scripts that predate this branch and are not part of it
 /scripts/kd_*.py
@@ -47,7 +47,7 @@ __pycache__/
 .studio/*.user.json
 
 # Guest binaries extracted from the vendored MS-DOS images (see
-# tools/dostest/extract-dos-file.py) -- Microsoft's, not ours to redistribute unpacked.
+# tests/probes/dos/extract-dos-file.py) -- Microsoft's, not ours to redistribute unpacked.
 guest/
 
 # Third-party reference screenshots (MobyGames) used to eyeball our rendering.
@@ -87,7 +87,9 @@ tools/score/probe-cache.json
 /tools/pcem/
 /tools/doomoracle/
 /tools/oplref/
-/tools/ne/
+/tools/ne/*
+!/tools/ne/mkne.py
+!/tools/ne/nedump.py
 /tools/ntvdm/
 /tools/vdmdump/
 /tools/wowprobe/
@@ -105,7 +107,7 @@ tools/score/probe-cache.json
 /tools/doomdetail.py
 /tools/vgaparity.py
 /tools/fat12.py
-/tools/dostest/isvtest/ISVTEST.DLL
+/tests/probes/dos/isvtest/ISVTEST.DLL
 /scripts/bmqueue.sh
 /scripts/bmstage.sh
 /scripts/bmstockdump.sh
@@ -151,5 +153,13 @@ tools/score/probe-cache.json
 /scripts/xp.py
 # committed probe builds are rebuilt (phase 2); selftest.com ships in the zip, p_o32.com is interp_test data
 /tools/**/*.com
-!/tools/dostest/selftest.com
-!/tools/dostest/p_o32.com
+!/tests/probes/dos/selftest.com
+!/tests/probes/dos/p_o32.com
+# -- s93 #322 phase 2: rig harness left behind in the old test folders (local-only) --
+/tests/probes/dos/
+/tests/probes/win16/
+# test build artefacts
+/tests/unit/p_o32.com
+/tests/unit/*_test
+/tests/unit/*.dSYM/
+/tests/probes/dos/*.com

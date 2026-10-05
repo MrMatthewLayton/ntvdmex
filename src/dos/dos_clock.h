@@ -25,7 +25,7 @@
  *   clk.2a.after.1a05). One offset would make an RTC set move DOS's clock too.
  *
  *   Pure C, no Win32: the host supplies "now" as fields, which is what lets the
- *   off-VM battery (tools/dostest/clock_test.c) pin every rule with exact instants.
+ *   off-VM battery (tests/unit/clock_test.c) pin every rule with exact instants.
  *   Resolution is the DOS one, hundredths of a second.
  */
 #ifndef DOS_CLOCK_H

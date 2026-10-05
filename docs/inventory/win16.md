@@ -4,7 +4,7 @@
 `gdi.exe16`); ReactOS; *Undocumented Windows*. The NE format is documented.
 **Oracle for what has no spec:** stock `ntvdm` on the same rig —
 [`research/stock-vdm-dump-oracle`](../research/).
-**Harness:** `tools/ne/mkne.py`, `tools/wintest/`.
+**Harness:** `tools/ne/mkne.py`, `tests/probes/win16/`.
 **Started:** 2026-09-24.
 
 ---
@@ -26,8 +26,8 @@ header with `printf`.
 So nasm writes the 16-bit code and **`tools/ne/mkne.py` writes the NE around it**.
 
 ```bash
-./tools/wintest/build.sh          # nasm + mkne.py -> build/wintest/*.EXE
-./tools/wintest/run.sh w_kernel   # stage on the rig, launch via IFEO, print the result
+./tests/probes/win16/build.sh          # nasm + mkne.py -> build/wintest/*.EXE
+./tests/probes/win16/run.sh w_kernel   # stage on the rig, launch via IFEO, print the result
 ```
 
 ### Everything in the linker was read off a real binary
@@ -71,7 +71,7 @@ handshake → a file written out of a running Win16 task, on real hardware.
 
 ## ✅ …and compared against stock `ntvdm` — which immediately found a defect
 
-`./tools/wintest/stock.sh w_kernel` runs the **same `.EXE`** twice on the same box: once
+`./tests/probes/win16/stock.sh w_kernel` runs the **same `.EXE`** twice on the same box: once
 through the IFEO hook (us) and once with the key dropped (stock). **Reproduced twice,
 identical both times:**
 
@@ -147,17 +147,17 @@ CASE=kernel.getwinflags SIG=AX AX=4C29
 
 ⚠ **That is "we now produce the value stock was measured to produce", not a fresh
 side-by-side.** Stock's `4C29` is the reading from two earlier bracketed runs; re-running
-`tools/wintest/stock.sh` would make it a same-day comparison, and that needs a human
+`tests/probes/win16/stock.sh` would make it a same-day comparison, and that needs a human
 because the bracket drops the IFEO key.
 
-⚠ `tools/dostest/p_dpmins.com` records why no cheap oracle exists here: **MS-DOS 6.22 and
+⚠ `tests/probes/dos/p_dpmins.com` records why no cheap oracle exists here: **MS-DOS 6.22 and
 DOSBox-X both leave every register untouched** — neither has a DPMI host at all.
 
 ---
 
 ## ★ Widened (#163, 2026-10-02): KERNEL memory / strings / files, USER, GDI — 99 rows
 
-`tools/wintest/w16.inc` is now the skeleton **once** (manifest, IAT called `call far
+`tests/probes/win16/w16.inc` is now the skeleton **once** (manifest, IAT called `call far
 [cs:slot]`, TASKMAN's startup, report through INT 21h, absolute 8.3 output path), so a test
 is its imports and its cases. Five new tests; every ordinal read off
 `guest/ne/{krnl386,user,gdi}.exe` (⚠ `lstrcmp`/`lstrcmpi` are **USER**.430/471, not KERNEL).
@@ -165,7 +165,7 @@ is its imports and its cases. Five new tests; every ordinal read off
 **Expected values come from the Windows 3.1 SDK contract**, reduced to what it promises
 (nonzero / ≥ N / sign of a comparison / bytes preserved). What the contract leaves open or
 what describes the machine is emitted as a `*.raw` row with its **stock value OWED** —
-`tools/wintest/stock.sh` needs supervision (it drops the IFEO key) and was not run.
+`tests/probes/win16/stock.sh` needs supervision (it drops the IFEO key) and was not run.
 
 Measured on the rig (host `b0e3b5b9`), runs `runs/s87_ide/w16/`:
 
@@ -194,7 +194,7 @@ Measured on the rig (host `b0e3b5b9`), runs `runs/s87_ide/w16/`:
 - (Test defect, found and fixed: `kstr.lstrcat.ret` first read `15F4` because the probe kept
   a value in BX across a call — the callee preserves DS/SI/DI/BP only. Now `0001`.)
 
-**Stock values owed** (run `tools/wintest/stock.sh <test>` under supervision): every row of
+**Stock values owed** (run `tests/probes/win16/stock.sh <test>` under supervision): every row of
 the five tests, and specifically the raw rows above plus `kfile.of.cbytes`.
 
 ✅ Scratch hygiene: `w_kfile`'s only file is absolute (`debug\out\W16F.TMP`) and its

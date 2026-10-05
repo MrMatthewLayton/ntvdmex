@@ -13,7 +13,7 @@
  *   0x2E3  R  the ABI version the host handed us
  *
  * Build it with sdk/build-sample.sh; point the host at the DLL with vdd.txt (see
- * docs/sdk/vdd-sdk.md). tools/dostest/vddtest.asm is a DOS program that drives
+ * docs/sdk/vdd-sdk.md). tests/probes/dos/vddtest.asm is a DOS program that drives
  * exactly these ports and prints what it got.
  *
  * ⚠ NOTE WHAT IS NOT HERE: no <windows.h>, no imports from the host, no global

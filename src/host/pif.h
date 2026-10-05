@@ -1,6 +1,6 @@
 /* pif.h -- read a Program Information File: which program, which arguments, which
  * directory. Header-only and free of Win32 so the off-VM battery can hold it to a
- * real PIF's bytes (tools/dostest/pif_test.c).
+ * real PIF's bytes (tests/unit/pif_test.c).
  *
  * WHY. Explorer launches a .PIF by queuing the PIF ITSELF as the VDM's program
  * (measured on the rig, s85: `command fetch ... app=[C:\QB45\QB.PIF] args=[]`). Stock

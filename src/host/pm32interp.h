@@ -25,7 +25,7 @@
  *   - int      p32_ok(uint32_t lin, int w, int wr);  may this access proceed? (0 = decline)
  *   - uint32_t p32_in(uint16_t port, int w);
  *   - void     p32_out(uint16_t port, int w, uint32_t v);
- * Kept host-agnostic so it is unit-tested off-VM (tools/dostest/pm32interp_test.c).
+ * Kept host-agnostic so it is unit-tested off-VM (tests/unit/pm32interp_test.c).
  */
 #ifndef PM32INTERP_H
 #define PM32INTERP_H

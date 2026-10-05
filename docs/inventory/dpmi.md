@@ -17,12 +17,12 @@ client; they are listed because the README names DPMI 1.0 as the target.
   `dpmi_invoke_callback` (`:19124`).
 - INT 21h from protected mode: a translating subset, `main.c:23826-24546` (§9).
 
-**Probes:** `tools/dostest/p_dpmi31.com` (#248) asks INT 31h function by function from a
+**Probes:** `tests/probes/dos/p_dpmi31.com` (#248) asks INT 31h function by function from a
 real 16-bit client — 0400h vs 1687h, every bad-selector path, 0100h/0101h × 2100, 0303h × 17,
 0304h, 0501h–0503h — each row graded against the spec (expected value beside each `EMIT`).
 ⚠ **No oracle can answer it:** MS-DOS 6.22, DOSBox-X and PCem have no DPMI host
 (`p_dpmins.com`), so they print one `nodpmi` row; stock ntvdm needs the IFEO bracket.
-Off-VM: `tools/dostest/dpmisvc_test.c` holds the spec-decided rules (`src/host/dpmi_svc.h`).
+Off-VM: `tests/unit/dpmisvc_test.c` holds the spec-decided rules (`src/host/dpmi_svc.h`).
 `dpmitest.asm`, `dpmiexe.asm`, `pm32*.asm` exercise paths; the guest shelf (Doom, Heretic,
 Hexen, Duke3D, ZAR, heaven7, Win16's krnl386) remains the integration test.
 **Marked:** 2026-10-01, **from the code**; #248 rows re-marked 2026-10-02 (`runs/s87_dpmi/`).
@@ -118,7 +118,7 @@ not 1.0 (the first is closed by #247):
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0300h` | simulate real-mode interrupt | **IMPL** (#247) | Routing `simint_route()` (`src/host/dpmi_rmcs.h`), decided above the INT 31h switch: **every vector runs from the real-mode IVT** through the `0302h` arm — the guest's handler or our own stub, whose BOP the nested loop now services through `v86_bios_bop()`, the exec loop's own code. Fast path in `case 0x0300`: INT 21h always, 33h/10h while the IVT holds our stub, host-side with no stack and CF/ZF returned through FLAGS (was: written into a frame at `0100:FF04` inside the guest, RMCS got CF=0). All 32-bit registers, FLAGS, `ES DS FS GS` read and written; CS:IP/SS:SP never written; RMCS SS:SP honoured (zero → host default `code_base:FF00`); `CX` words copied. ⚠ Deviations kept on purpose: a guest-hooked real-mode INT 21h is still answered host-side; the handler is entered with IF **set** (ZAR's s81 proof). A null vector is not run. Rollback lever `cfg\simintrefl_off.flag` = pre-#247 routing. Off-VM: `tools/dostest/rmcs_test.c` |
+| `0300h` | simulate real-mode interrupt | **IMPL** (#247) | Routing `simint_route()` (`src/host/dpmi_rmcs.h`), decided above the INT 31h switch: **every vector runs from the real-mode IVT** through the `0302h` arm — the guest's handler or our own stub, whose BOP the nested loop now services through `v86_bios_bop()`, the exec loop's own code. Fast path in `case 0x0300`: INT 21h always, 33h/10h while the IVT holds our stub, host-side with no stack and CF/ZF returned through FLAGS (was: written into a frame at `0100:FF04` inside the guest, RMCS got CF=0). All 32-bit registers, FLAGS, `ES DS FS GS` read and written; CS:IP/SS:SP never written; RMCS SS:SP honoured (zero → host default `code_base:FF00`); `CX` words copied. ⚠ Deviations kept on purpose: a guest-hooked real-mode INT 21h is still answered host-side; the handler is entered with IF **set** (ZAR's s81 proof). A null vector is not run. Rollback lever `cfg\simintrefl_off.flag` = pre-#247 routing. Off-VM: `tests/unit/rmcs_test.c` |
 | `0301h` | call real-mode far procedure | **PART** | runs it in V86 for real; `CX` words copied (#247; a CX that does not fit is logged and NOT copied rather than refused); full 32-bit + FS/GS marshalling (#247); a BIOS call from the procedure is serviced (#247). ⛔ after 128 nested events without a return it gives up and still returns **CF=0** |
 | `0302h` | call real-mode procedure with IRET frame | **PART** | same arm, FLAGS pushed; same remaining gap |
 | `0303h` | allocate real-mode callback | **PART** | 16 slots (#248; was 4), `8015h` when full. ⚠ The callback's ENTRY contract is not the spec's: the host pre-pops the far return into the RMCS and hands the handler `DS:SI = 0017h:0` instead of the real-mode SS:SP — a spec-conforming handler pops twice. Never exercised: no shelf guest has invoked a callback in any recorded run |

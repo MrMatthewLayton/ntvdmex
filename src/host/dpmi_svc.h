@@ -2,7 +2,7 @@
  * the host's plumbing. GH #248.
  *
  * Header-only and dependency-free (stdint, no windows.h), the same shape as dpmi_rmcs.h,
- * so the off-VM battery (tools/dostest/dpmisvc_test.c) compiles exactly the code the host
+ * so the off-VM battery (tests/unit/dpmisvc_test.c) compiles exactly the code the host
  * runs. What lives here is the part of each service with a RIGHT ANSWER: which selector
  * is invalid, which callback address names which slot, whether a resize can stay put.
  * The part that touches the LDT, VirtualAlloc or the guest's memory stays in main.c.
@@ -11,7 +11,7 @@
  *   says "the spec" is the DPMI 0.9/1.0 text as published by the DPMI Committee; the
  *   error numbers are 1.0's, which 0.9 hosts return too (0.9 only promises CF).
  * ⚠ NO ORACLE HERE ANSWERS INT 31h. MS-DOS 6.22, DOSBox-X and PCem all run without a
- *   DPMI host (tools/dostest/p_dpmins.com: AX comes back 1687h untouched on all three),
+ *   DPMI host (tests/probes/dos/p_dpmins.com: AX comes back 1687h untouched on all three),
  *   so the spec is the only authority for this file, and stock ntvdm -- the one machine
  *   that could answer -- needs the IFEO bracket.
  */

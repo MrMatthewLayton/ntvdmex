@@ -17,7 +17,7 @@
  * The backing store is supplied through alloc/free hooks (the host passes
  * VirtualAlloc-based ones; the off-VM battery passes malloc/free), so the
  * allocator logic is identical in V86 and under the native test cc.
- * Verified off-VM by tools/dostest/xms_test.c.
+ * Verified off-VM by tests/unit/xms_test.c.
  */
 #ifndef DOS_XMS_H
 #define DOS_XMS_H
@@ -98,7 +98,7 @@ static inline void xms_init(xms_state *x, uint32_t total_kb,
          the line is effectively always open -- and extended memory is
          unreachable with A20 masked, so a memory reporter that asks first and
          allocates second is told the pool it can see is unusable.
-       Oracle, tools/dostest/p_xms.asm on MS-DOS 6.22 with HIMEM.SYS loaded:
+       Oracle, tests/probes/dos/p_xms.asm on MS-DOS 6.22 with HIMEM.SYS loaded:
          CASE=xms.07.query.a20 SIG=AX,BX AX=0001 BX=B100
        i.e. enabled. Ours answered AX=0000. (GH #47) */
     x->a20 = 1;

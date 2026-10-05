@@ -5,7 +5,7 @@
 This file is the companion: what **we** do about it.
 **Our implementation:** `src/vdd/vdd_input.c` (`kbd_hw_in`/`kbd_hw_out`); the A20 flag
 in `src/host/main.c` (XMS).
-**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/input_test.c`.
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tests/unit/input_test.c`.
 **Marked:** 2026-09-23, **from the code**, with citations.
 
 ⚠ **This surface has never been inventoried.** `keyboard.md` covers INT 16h and the BDA

@@ -3,9 +3,9 @@
 **Spec:** Intel 8237A datasheet; IBM PC/AT TechRef.
 **▶ The hardware reference is [`../ref/dma.md`](../ref/dma.md)** — what the chip *does*.
 **Our implementation:** `src/vdd/vdd_dma.c` (289 lines), `src/vdd/vdd_dma.h`.
-**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/dma_test.c`.
-DOS probe: `tools/dostest/p_dma.asm`.
-**Marked:** 2026-09-23, **from the code**, with citations. **Re-marked** 2026-10-01 for #176 items 2 and 3 (§5), and **2026-10-02 for #246** (§6). DOS probe for the chip's own transfers: `tools/dostest/p_dma2.asm`.
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tests/unit/dma_test.c`.
+DOS probe: `tests/probes/dos/p_dma.asm`.
+**Marked:** 2026-09-23, **from the code**, with citations. **Re-marked** 2026-10-01 for #176 items 2 and 3 (§5), and **2026-10-02 for #246** (§6). DOS probe for the chip's own transfers: `tests/probes/dos/p_dma2.asm`.
 
 ⚠ **This surface had never been inventoried and had never been asked of an oracle.**
 `dma_test.c` was an off-VM battery written against our own model, so — exactly as the

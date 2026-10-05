@@ -20,7 +20,7 @@
  * lines they are not servicing.
  *
  * Pure C, no <windows.h>: state is explicit and effects go through the bus, so the
- * whole thing is exercised off-VM by tools/dostest/pic_test.c.
+ * whole thing is exercised off-VM by tests/unit/pic_test.c.
  */
 #ifndef NTVDMEX_VDD_PIC_H
 #define NTVDMEX_VDD_PIC_H

@@ -6,7 +6,7 @@ This file is the companion: what **we** do about it.
 **Our implementation:** `src/vdd/vdd_pic.c` (364 lines), `src/vdd/vdd_pic.h`;
 the host's delivery decisions in `src/host/main.c`.
 **Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem (real AMI 486 BIOS). Off-VM:
-`tools/dostest/pic_test.c`. DOS probe: `tools/dostest/p_pic.asm`.
+`tests/unit/pic_test.c`. DOS probe: `tests/probes/dos/p_pic.asm`.
 **Marked:** 2026-09-23, **from the code**, with citations. **Re-marked 2026-10-01 for #174**
 (rotation, Special Mask Mode, ICW1's resets, SFNM) — line numbers below are post-#174.
 

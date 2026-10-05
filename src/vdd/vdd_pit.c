@@ -198,7 +198,7 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
     /* ── IRQ0 IS OUT's RISING EDGE, AND A ONE-SHOT HAS ONE (#175). ───────────────────
          Mode 0: OUT low at the Control Word, high at terminal count, and it stays high.
          Mode 4: a one-clock strobe low at terminal count. Either way ONE edge per count
-         loaded -- measured on QEMU, DOSBox-X and PCem (tools/dostest/p_pit0.asm), a bare
+         loaded -- measured on QEMU, DOSBox-X and PCem (tests/probes/dos/p_pit0.asm), a bare
          re-write after terminal count included. Modes 1 and 5 start on a GATE rising
          edge, and counter 0's gate is tied high on a PC, so they never start: no edge.
          Until #175 every mode raised once per period, as if it were mode 2. */

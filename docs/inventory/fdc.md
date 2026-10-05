@@ -4,7 +4,7 @@
 **▶ The hardware reference is [`../ref/fdc.md`](../ref/fdc.md)** — what the chip *does*.
 **Our implementation:** `src/vdd/vdd_fdc.c`, `src/vdd/vdd_fdc.h`.
 **Oracles:** MS-DOS 6.22 (QEMU), PCem (real AMI 486 BIOS), dosbox-x.
-DOS probe: `tools/dostest/p_fdc.asm` · off-VM battery: `tools/dostest/fdc_test.c` (32 checks).
+DOS probe: `tests/probes/dos/p_fdc.asm` · off-VM battery: `tests/unit/fdc_test.c` (32 checks).
 **Marked:** 2026-09-23, **from the code**, then re-marked against the rig.
 
 ---

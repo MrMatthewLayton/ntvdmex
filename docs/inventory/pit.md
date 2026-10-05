@@ -7,7 +7,7 @@ This file is the companion: what **we** do about it.
 port `61h` in `src/vdd/vdd_speaker.c`. How time reaches the chip (the 1 ms pacer, IRQ0
 delivery) is host code — §7.
 **Oracle:** MS-DOS 6.22 (`scripts/oracle.sh`) for BIOS-level behaviour; PCem for chip
-timing. Off-VM: `tools/dostest/pit_test.c`.
+timing. Off-VM: `tests/unit/pit_test.c`.
 **Measured:** 2026-09-23, from the code, with citations. **Re-cited 2026-10-01** after #175
 (s82/s83) and #238 (s85): §1, §4 and §6 were stale against the code and are re-marked.
 The BIOS services on top of the chip (INT 08h, INT 1Ah) are [bios-misc.md](bios-misc.md).
@@ -115,7 +115,7 @@ of a measurement, not a measurement of absence.
 
 ⚠ **And "no oracle" is why the evidence had to move off the probe.** `pit.bcd.valid` asks a
 *property* — are all four nibbles decimal — which is exactly the question a binary counter
-answers correctly one time in six, and did. The real evidence is `tools/dostest/pit_test.c`
+answers correctly one time in six, and did. The real evidence is `tests/unit/pit_test.c`
 **T12**, which pins **exact counts** instead: `0x9989` ten clocks after `0x9999` (the units
 decade *borrows*, it does not step to `0x8F`), `0x0000` at 9999 clocks, the wrap back to
 `0x9999` at 10000, a `0000` count raising IRQ0 on the ten-thousandth clock, and the same
@@ -134,7 +134,7 @@ get one: `vdd_pit_add_clocks` raises IRQ0 from the accumulator **regardless of m
   current period (a jitter/rate defect, not a dead timer);
 - mode 7 read back a count stepping **by one** where mode 3 steps **by two**.
 
-Both are now pinned by `tools/dostest/pit_test.c` T9, which **failed on the old code and
+Both are now pinned by `tests/unit/pit_test.c` T9, which **failed on the old code and
 passes on the new** — and whose mode-2/mode-3 reference cases passed throughout, which is
 what proves the tests measure the alias rather than something incidental.
 
@@ -193,7 +193,7 @@ section H as the evidence.
 edges. Mode 2/3: one per period. Modes 0 and 4: **one per count loaded** (at terminal count),
 a bare re-write after TC included. Modes 1 and 5: **none**, because counter 0's GATE is tied
 high and never rises. Until s83 every mode raised once per period.
-Evidence: `tools/dostest/p_pit0.asm` on QEMU, DOSBox-X and PCem (modes 0, 4 and the bare
+Evidence: `tests/probes/dos/p_pit0.asm` on QEMU, DOSBox-X and PCem (modes 0, 4 and the bare
 re-write agree at 1; modes 1 and 5 split from the datasheet, with rationales in
 `oracle-rules.json`), and `pit_test.c` T_IRQ0. NTVDMEX agrees with the reference on every row.
 

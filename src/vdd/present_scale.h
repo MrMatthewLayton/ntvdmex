@@ -6,7 +6,7 @@
  * actually makes -- WHERE the frame goes in the client area (aspect ratio) and
  * WHAT the pixels are before they get there (the scaler) -- are integer
  * arithmetic on a buffer, with no Windows in them at all. Kept here, they are
- * exercised by tools/dostest/present_test.c on the build machine, which is the
+ * exercised by tests/unit/present_test.c on the build machine, which is the
  * difference between "the knob is wired" and "the knob is wired and right".
  *
  * ⚠ ASPECT RATIO IS NOT THE FRAMEBUFFER'S SHAPE. Mode 13h is 320x200 -- 8:5 --

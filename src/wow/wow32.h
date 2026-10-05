@@ -753,7 +753,7 @@ static int wow32_may_decline(WORD id, WORD from)
    ORs 0x4000 into cParams' high word, 517 clears it -- and pops the arguments
    itself (517 jumps into a `retf 12+4n` table; 518 is cdecl, the caller pops).
    ⚠ The mask's bit order is taken from the probe run against stock
-     (tools/wintest/w_gthunk, 16/16), not from the documentation. */
+     (tests/probes/win16/w_gthunk, 16/16), not from the documentation. */
 #define WOW_GT_MAXP 32
 static WORD wow32_rawargw(const wow32_frame_t *f, int off)
 {

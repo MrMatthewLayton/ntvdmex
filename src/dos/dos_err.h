@@ -10,7 +10,7 @@
  *
  * Only the code is obvious, and class/action/locus are exactly the sort of value
  * that gets written from memory and is wrong. So this table contains ONLY
- * pairings provoked on the genuine MS-DOS 6.22 oracle by tools/dostest/p_err.asm,
+ * pairings provoked on the genuine MS-DOS 6.22 oracle by tests/probes/dos/p_err.asm,
  * and each row cites the CASE= line it came from. GH #34, epic #24.
  *
  * ⚠ THE UNMEASURED ROW IS NOT A GAP TO BE FILLED IN BY GUESSWORK. A code we have
@@ -20,7 +20,7 @@
  *   failure class GH #27 exists to remove. To add a row, extend p_err.asm, run it
  *   on the oracle, and paste what came back -- in that order.
  *
- * Pure -- no Windows types -- so tools/dostest/err_test.c can pin it off-VM.
+ * Pure -- no Windows types -- so tests/unit/err_test.c can pin it off-VM.
  */
 #ifndef DOS_ERR_H
 #define DOS_ERR_H
@@ -50,7 +50,7 @@ typedef struct {
 } dos_err_row_t;
 
 /* ── EVERY ROW IS A LINE OF ORACLE OUTPUT. ────────────────────────────────────
-   tools/dostest/p_err.asm on MS-DOS 6.22, verbatim:
+   tests/probes/dos/p_err.asm on MS-DOS 6.22, verbatim:
 
      CASE=err.after.3D.missing   AX=0002 BX=0803 CX=02C1     file not found
      CASE=err.after.4E.nopath    AX=0003 BX=0803 CX=02C1     path not found
@@ -101,7 +101,7 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
 /* ── WIN32 -> DOS, FOR EVERY CALL THAT FAILS THROUGH CreateFileA. (s72) ───────
    AH=3Dh answered **2 ("file not found") for every possible failure**, because
    the handler read `f == INVALID_HANDLE_VALUE` and stopped asking. Measured by
-   tools/dostest/p_err.asm against MS-DOS 6.22, that is wrong twice over:
+   tests/probes/dos/p_err.asm against MS-DOS 6.22, that is wrong twice over:
 
      CASE=err.after.3D.readonly  oracle AX=0005  ours AX=0002   access denied
      CASE=err.after.3D.baddrive  oracle AX=0003  ours AX=0002   path not found
@@ -131,7 +131,7 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
      it and add the row then, in that order.
 
    Numeric rather than the ERROR_* macros so this header stays free of
-   windows.h and tools/dostest/err_test.c can keep pinning it off-VM. */
+   windows.h and tests/unit/err_test.c can keep pinning it off-VM. */
 #define W32_FILE_NOT_FOUND      2u
 #define W32_PATH_NOT_FOUND      3u
 #define W32_TOO_MANY_OPEN       4u

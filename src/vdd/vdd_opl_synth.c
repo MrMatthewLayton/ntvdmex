@@ -6,7 +6,7 @@
  * bit 0) and each below: waveforms 4-7 (opl_wave), 4-operator voices
  * (opl_voice4), and per-channel stereo routing (opl_route). With NEW clear the
  * output is the OPL2's, sample for sample -- held by a golden checksum in
- * tools/dostest/opl_synth_test.c. Written, like the rest, from the Yamaha
+ * tests/unit/opl_synth_test.c. Written, like the rest, from the Yamaha
  * datasheet; the reference core is an oracle for measurements only.
  *
  * Written from the documented YM3812 behaviour rather than ported from an

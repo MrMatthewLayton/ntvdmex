@@ -12,7 +12,7 @@
  * INT 61h is a USER vector (60h-66h are the ones the PC reserves for programs), which
  * is what the host's generic stubs accept; a claim on a DOS, BIOS or IRQ vector is
  * refused by the host and said so in its log.
- * Load: put this DLL's full path on a line in cfg\vdd.txt. Test: tools/dostest/p_sdkint.
+ * Load: put this DLL's full path on a line in cfg\vdd.txt. Test: tests/probes/dos/p_sdkint.
  */
 #include "ntvdmex-vdd.h"
 

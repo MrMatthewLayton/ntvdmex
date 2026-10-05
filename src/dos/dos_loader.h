@@ -2,7 +2,7 @@
  * conventional memory. Pure logic over a `base` pointer (same convention as
  * dos_mcb.h): base=NULL for the host's absolute V86 addressing, a byte buffer
  * for off-VM tests. Ported from the M2.3 loader in tools/vdmhost/vdmhost.c.
- * Verified off-VM by tools/dostest/mcb_test.c.
+ * Verified off-VM by tests/unit/mcb_test.c.
  */
 #ifndef DOS_LOADER_H
 #define DOS_LOADER_H
@@ -103,7 +103,7 @@ static inline uint16_t dos_image_paras(const uint8_t *file, uint32_t nread) {
                    how a program linked /CPARMAXALLOC leaves memory for its children.
      And one combination is special: minalloc = maxalloc = 0 means LOAD HIGH -- the
      whole block, with the image at its TOP.
-     ★ MEASURED, NOT DERIVED (tools/dostest/p_exmem.asm; 6.22 under QEMU and
+     ★ MEASURED, NOT DERIVED (tests/probes/dos/p_exmem.asm; 6.22 under QEMU and
        DOSBox-X agree): a child whose image DOS counts as 1Eh paragraphs (see
        dos_image_paras -- whole pages) with min/max = 100h/200h gets a block of
        10h (PSP) + 1Eh + 200h = 22Eh; max 10h gives 3Eh; min F000h is refused with
@@ -176,7 +176,7 @@ static inline int dos_exe_kind(const uint8_t *file, uint32_t nread, unsigned *su
    (reloc_factor) -- and those two are not the same number. A large program swaps
    overlays into one buffer it already owns, so the relocation factor is the
    buffer's segment while the load segment may differ.
- ★ THE FACTOR, NOT THE LOAD SEGMENT. tools/dostest/p_ovl.asm passes a factor of
+ ★ THE FACTOR, NOT THE LOAD SEGMENT. tests/probes/dos/p_ovl.asm passes a factor of
    0x1234 that is deliberately NOT the load segment, and MS-DOS 6.22 relocates by
    the factor:
        CASE=ovl.relocated.word SIG=AX AX=1234

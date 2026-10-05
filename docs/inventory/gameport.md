@@ -5,9 +5,9 @@ resistance-to-time relation, the port layout); Ralf Brown's Interrupt List for I
 and the INT 11h equipment word. Neither document is held in the repository (see
 [`../ref/SOURCES.md`](../ref/SOURCES.md)); there is no `docs/ref/gameport.md` yet.
 **Our implementation:** `src/vdd/vdd_joy.c` (58 lines), `src/vdd/vdd_joy.h`; the host stick, the
-BIOS service and the equipment bit in `src/host/main.c`. Off-VM battery `tools/dostest/joy_test.c`
+BIOS service and the equipment bit in `src/host/main.c`. Off-VM battery `tests/unit/joy_test.c`
 (19 checks).
-**Oracles:** none asked. No probe in `tools/dostest/` touches `201h`, and `p_int15.asm` has no
+**Oracles:** none asked. No probe in `tests/probes/dos/` touches `201h`, and `p_int15.asm` has no
 `AH=84h` case.
 **Marked:** 2026-09-29, **from the code**.
 

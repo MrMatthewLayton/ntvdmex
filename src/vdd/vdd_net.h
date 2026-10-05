@@ -6,7 +6,7 @@
  *
  * WHY NetBIOS AND NOT A PACKET DRIVER. #8 named "packet driver / NDIS-era interface
  * as appropriate". The reference decides what is appropriate: stock XP NTVDM answers
- * INT 5Ch by handing the program's NCB to the NT NetBIOS driver (tools/dostest/p_netb
+ * INT 5Ch by handing the program's NCB to the NT NetBIOS driver (tests/probes/dos/p_netb
  * measured it), and it offers no packet driver -- that needs raw Ethernet frames, which
  * a user-mode process on XP cannot send without a capture driver. NetBIOS is what DOS
  * network programs of the era (and LAN Manager / Novell NetBIOS clients) speak.

@@ -43,7 +43,9 @@ cp "$HOST" "$stage/bin/ntvdmhost.exe"
 MGR="$ROOT/build/ntvdmex.exe"
 grep -q "NTVDMEX_Manager" "$MGR" 2>/dev/null || { echo "build/ntvdmex.exe is not the manager (stale M0 preview?) -- rebuild" >&2; exit 1; }
 cp "$MGR" "$stage/bin/ntvdmex.exe"
-cp "$ROOT/tools/dostest/selftest.com" "$stage/bin/selftest.com"
+SELFTEST="$ROOT/build/probes/selftest.com"   # built by CMake from tests/probes/dos/selftest.asm
+[ -f "$SELFTEST" ] || { echo "build/probes/selftest.com missing -- nasm needed; run ./scripts/build.sh" >&2; exit 1; }
+cp "$SELFTEST" "$stage/bin/selftest.com"
 # s90 (#278): the WOW32.DLL / NTVDM.EXE stand-ins a 32-bit thunk DLL looks up by name
 # (winmm does: Sound Recorder and Media Player need them). The host loads them from
 # bin\wowshim\ by full path; without them Win16 multimedia reports no devices.

@@ -19,7 +19,7 @@
  * Same discipline as dos_mcb.h / dos_xms.h: pure <stdint.h>, no <windows.h>, no
  * globals; backing store via alloc/free hooks; the page-frame window is a caller
  * supplied pointer (host: the mapped 0xE0000 RAM; tests: a 64 KB buffer).
- * Verified off-VM by tools/dostest/ems_test.c.
+ * Verified off-VM by tests/unit/ems_test.c.
  */
 #ifndef DOS_EMS_H
 #define DOS_EMS_H

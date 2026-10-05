@@ -672,7 +672,7 @@ jnz -> [0x326] = 1          ; banner SUPPRESSED
     -> store DS:SI away     ; banner allowed
 ```
 
-`tools/dostest/p_2f55.asm`, measured both ways:
+`tests/probes/dos/p_2f55.asm`, measured both ways:
 
 | | `AX` in | `AX` out | `DS:SI` |
 |---|---|---|---|
@@ -833,7 +833,7 @@ not the same question.
 and every stock measurement is captured with `> FILE` — so the oracle was asked *"is
 this console interactive?"* with its own output redirected. **A probe that reports
 through stdout cannot measure anything that depends on stdout.**
-`tools/dostest/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh` and
+`tests/probes/dos/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh` and
 needs no redirection; run it **both ways** against stock and diff, because one run
 cannot tell *"the value is X"* from *"the value is X when redirected"*.
 
@@ -869,7 +869,7 @@ path opening even when it did.
 
 ### ⛔ Real MS-DOS cannot be asked at all
 
-`tools/dostest/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
+`tests/probes/dos/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
 probe and once with a correct one -- so the hang is the **call**: `--host msdos622` never
 reaches `QUIT.COM`. The documented form does not *report*, it **builds** a DPB from a
 caller-supplied BPB; a fabricated pointer is a mutation, not a question. PCem and
@@ -879,7 +879,7 @@ dosbox-x are assumed the same and have not been tried. The probe says so at the 
 all eight emitted under ONE name -- eight questions collapsed into one answer. Longhand
 now. *It only announced itself by producing two rows for eight cases.*
 
-`tools/dostest/p_int53.asm` sweeps `AX=5300h`–5307h -- the documented form, the three
+`tests/probes/dos/p_int53.asm` sweeps `AX=5300h`–5307h -- the documented form, the three
 XP's COMMAND.COM issues (`02 05 07`), and the gaps, so that a handler answering only the
 three we know about could not pass.
 

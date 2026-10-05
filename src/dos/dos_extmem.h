@@ -19,7 +19,7 @@
  *   4. anything else -> refused.
  * A range may not straddle two of these.
  *
- * Pure <stdint.h>, like dos_xms.h; tested off-VM by tools/dostest/extmem_test.c.
+ * Pure <stdint.h>, like dos_xms.h; tested off-VM by tests/unit/extmem_test.c.
  */
 #ifndef DOS_EXTMEM_H
 #define DOS_EXTMEM_H

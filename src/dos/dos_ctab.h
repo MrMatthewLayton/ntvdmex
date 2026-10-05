@@ -1,7 +1,7 @@
 /* dos_ctab.h -- MS-DOS 6.22 / code page 437 character tables for INT 21h AH=65h.
  *
  * NOT SYNTHESISED.  Every byte here was dumped off the 6.22 oracle by following
- * the FAR pointer each AH=65h subfunction hands back (tools/dostest/p_ctab.asm).
+ * the FAR pointer each AH=65h subfunction hands back (tests/probes/dos/p_ctab.asm).
  * Generating them from what one "knows" about CP437 is precisely the from-memory
  * guess the M9 programme forbids, and the collating table in particular is not
  * guessable -- it folds accented characters onto unaccented letters in a

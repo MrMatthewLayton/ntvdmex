@@ -35,7 +35,7 @@
  * catch and nothing in a log to grep for.
  *
  * ⇒ So they are collected HERE, as pure functions of their inputs, with no
- *   Windows types and no host state, and `tools/dostest/wow_test.c` pins every
+ *   Windows types and no host state, and `tests/unit/wow_test.c` pins every
  *   one of them off-VM. Before this file the WOW translation layer had 0 of the
  *   project's 842 checks, and every defect in it was found by the user's eye.
  *

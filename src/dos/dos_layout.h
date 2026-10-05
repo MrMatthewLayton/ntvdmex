@@ -232,7 +232,7 @@
    INT 21h surface, so this is a ceiling, not a claim that all of them exist. */
 /* ── LASTDRIVE IS 5, WHICH IS WHAT REAL DOS REPORTS. (GH #48) ──────────────────
    It was 26, chosen as a generous ceiling. MS-DOS 6.22 says 5 -- measured,
-   SysVars+0x21 in tools/dostest/p_sysvar.asm -- and 5 is not an arbitrary
+   SysVars+0x21 in tests/probes/dos/p_sysvar.asm -- and 5 is not an arbitrary
    smaller number: the CDS array is INDEXED BY DRIVE LETTER and must be exactly
    LASTDRIVE entries of 88 bytes, so the ceiling decides whether the array can
    exist at all. At 26 it needs 2288 bytes and the resident block has ~500 free;
@@ -281,7 +281,7 @@
    PSP fields were ZERO.
  ⚠ ZERO IS THE DANGEROUS VALUE HERE, because "the PSP copy matches the live
    vector" is trivially true when BOTH are 0000:0000 -- a host that never fills
-   them in passes that check by accident. tools/dostest/p_psp.asm therefore
+   them in passes that check by accident. tests/probes/dos/p_psp.asm therefore
    asserts the live INT 24h separately, and it must point at real code.
    Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
    inside COMMAND.COM. */
@@ -307,7 +307,7 @@
 
    ── INT 2Fh AX=122Eh: the tables XP's COMMAND.COM asks for at startup. ───────
    Five selectors (DL = 0,2,4,6,8); it zeroes ES:DI, calls, and stores whatever
-   comes back.  MEASURED on two real Microsoft kernels (tools/dostest/p_int2f.asm,
+   comes back.  MEASURED on two real Microsoft kernels (tests/probes/dos/p_int2f.asm,
    docs/research/xp-command-com.md):
 
        DL=0  0001:0D8F      DL=2  0001:0B3B      DL=4  0001:0D8F   (== DL=0)

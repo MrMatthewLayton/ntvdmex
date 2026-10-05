@@ -23,7 +23,7 @@
  * A transmitted byte goes to an injected sink and received bytes are pushed in
  * by the host through vdd_comm_rx(). The device therefore has no idea whether it
  * is wired to a real \\.\COMn, a file, or nothing -- which is what lets
- * tools/dostest/comm_test.c exercise the whole register model off-VM with no
+ * tests/unit/comm_test.c exercise the whole register model off-VM with no
  * host serial hardware at all. Pure C, no <windows.h>, same rule as vdd_mpu.
  *
  * ⚠ NOT MODELLED, DELIBERATELY: baud rate has no effect on timing. The divisor

@@ -762,7 +762,7 @@ uint32_t vdd_video_us_to_vr(video_state *st, int want_set);
      what gives MS-DOS's insert/overwrite cursors for free -- 6-7 becomes 14-15, a
      bottom underline, and 0-7 becomes 1-15, a full block -- because those are the
      two shapes DOS sets when you press Insert.
-   Pure arithmetic on the shape word, so tools/dostest/video_test.c can pin the exact
+   Pure arithmetic on the shape word, so tests/unit/video_test.c can pin the exact
    shapes DOS uses. `hidden` is set for the two idioms that mean "no cursor". */
 void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
                       unsigned *start, unsigned *end, int *hidden);

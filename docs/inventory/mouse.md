@@ -8,7 +8,7 @@ the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md). No `docs/ref/mouse.md` 
 coordinate helpers (≈`:7642-8182`), the callback injector `mouse_cb_try` (≈`:8573`) and
 `dpmi_inject_pm_mousecb` (≈`:25096`). The driver is **host code, not a VDD**: there is no
 mouse device on the bus.
-**DOS probes:** `tools/dostest/p_mouse.asm`, `p_mouse2.asm` (the v7/v8 calls, #249) and `p_mouse3.asm` (09h in VRAM, 2Bh-34h, 18h/19h -- #264/#265) (with `.pre`/`.deps`: the oracle loads the
+**DOS probes:** `tests/probes/dos/p_mouse.asm`, `p_mouse2.asm` (the v7/v8 calls, #249) and `p_mouse3.asm` (09h in VRAM, 2Bh-34h, 18h/19h -- #264/#265) (with `.pre`/`.deps`: the oracle loads the
 real `MOUSE.COM` first). **Oracle:** Microsoft `MOUSE.COM` 6.24 on MS-DOS 6.22 under QEMU — a
 **real driver**, so a row that agrees with it is **oracle**, not provisional.
 **Marked:** 2026-10-01, **from the code**; §1 re-marked 2026-10-02 for #249 (`p_mouse2.asm`), and 2026-10-04 for #264/#265 (`p_mouse3.asm`, **not yet run on any oracle**). Carried over from `docs/PARITY.md` (retired
@@ -153,7 +153,7 @@ cell snapping** — the real driver quantises to its 8x8 text cell (`100,50` →
 ⚠ **Not yet confirmed by hand** at the time: the change touched the coordinate path that
 QBasic's mouse and Doom's mouse-look run through.
 
-### Recorded abstentions (`tools/dostest/oracle-rules.json`)
+### Recorded abstentions (`tests/probes/dos/oracle-rules.json`)
 
 | row | why the oracle cannot be truth |
 |---|---|

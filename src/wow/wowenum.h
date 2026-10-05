@@ -159,7 +159,7 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
          enumeration, and the function then answers FALSE. */
     /* s91: NOT FOR LineDDA -- its callback is VOID, so AX is whatever the procedure
          left there; reading it as "stop" cut a line short at the first point whose y
-         happened to be 0 (tools/wintest/w_ldda: 1 call where stock makes 10). */
+         happened to be 0 (tests/probes/win16/w_ldda: 1 call where stock makes 10). */
     if (!first && g_we.kind != WOWENUM_LINE && !(result & 0xFFFF)) {
         wu_puts(note, cap, &k, "ENUM stopped by the callback after 0x");
         wu_puthex(note, cap, &k, g_we.calls, 4);

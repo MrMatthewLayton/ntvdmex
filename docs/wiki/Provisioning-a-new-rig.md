@@ -65,7 +65,7 @@ Guest programs go in the share too — MS-DOS's `COMMAND.COM` and `ATTRIB.EXE` a
 from the vendored floppy images with:
 
 ```bash
-python3 tools/dostest/extract-dos-file.py COMMAND.COM guest/
+python3 tests/probes/dos/extract-dos-file.py COMMAND.COM guest/
 ```
 
 > `guest/`, `games/`, `msdos-622/` and `vm/` are gitignored on purpose: they are Microsoft's

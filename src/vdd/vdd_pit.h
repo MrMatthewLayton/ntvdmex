@@ -9,7 +9,7 @@
  *
  * Pure C, no <windows.h>: all device state is explicit and the only outside
  * effects go through the bus (raise_irq, map_flat), so the whole VDD is
- * exercised off-VM by tools/dostest/pit_test.c.
+ * exercised off-VM by tests/unit/pit_test.c.
  */
 #ifndef NTVDMEX_VDD_PIT_H
 #define NTVDMEX_VDD_PIT_H
@@ -97,7 +97,7 @@ typedef struct pit_state {
     uint8_t  mode_raw;      /* the three bits AS PROGRAMMED. Modes 6 and 7 do not
                                exist -- 110 IS mode 2 and 111 IS mode 3 -- so `mode`
                                is normalised for BEHAVIOUR. But MEASURED on a real
-                               8254 (tools/dostest/p_pit.asm, pit.mode6.readback =
+                               8254 (tests/probes/dos/p_pit.asm, pit.mode6.readback =
                                0x0C): the Read-Back status byte reports the bits the
                                guest WROTE, un-normalised. Keeping both is what lets
                                the behaviour be right and the read-back be honest. */

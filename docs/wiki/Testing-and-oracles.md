@@ -7,19 +7,19 @@ established, but it is minutes per round and every round has a way of lying to y
 
 ## Layer 1 — off-VM batteries (seconds, no VM, no rig)
 
-18 native test binaries under `tools/dostest/`, compiled for the build machine. They link
+18 native test binaries under `tests/probes/dos/`, compiled for the build machine. They link
 the real `src/dos/` and `src/vdd/` code — the DOS and device layers are header-only by
 convention precisely so this is possible.
 
 ```bash
-./tools/dostest/run.sh          # builds + runs everything; non-zero exit if anything fails
+./tests/probes/dos/run.sh          # builds + runs everything; non-zero exit if anything fails
 ```
 
 **18 batteries, 664 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
 EMS, DMA, PIC, PIT, SB, OPL, OPL synth, MPU, speaker, video, input, the PM interpreter, the
 instruction-length decoder, the VDD bus, and the NE loader. **This is the loop to develop against.**
 
-> ⚠️ The compiled batteries are gitignored, so **a fresh clone has no `tools/dostest/*_test`
+> ⚠️ The compiled batteries are gitignored, so **a fresh clone has no `tests/unit/*_test`
 > files** and running them directly matches nothing — in `bash` that silently "passes" a
 > loop that ran zero tests. `run.sh` compiles them every time. Always go through it.
 
@@ -43,8 +43,8 @@ instruction-length decoder, the VDD bus, and the NE loader. **This is the loop t
 **The differential harness** ties them together — one probe `.COM`, several hosts, one diff:
 
 ```bash
-./scripts/dosdiff.py tools/dostest/p_ver.com
-./scripts/dosdiff.py tools/dostest/p_ver.com --json
+./scripts/dosdiff.py tests/probes/dos/p_ver.com
+./scripts/dosdiff.py tests/probes/dos/p_ver.com --json
 ```
 
 ⚠️ `tools/doomoracle/` needs `DOOM1.WAD`, which is **deliberately not in this repository** —
