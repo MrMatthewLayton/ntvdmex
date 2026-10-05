@@ -15,43 +15,47 @@
  * (see CMakeLists.txt) so GCC does not "optimise" these loops back into a call to
  * the very function being defined (infinite recursion).
  */
-#include <windows.h>
+#include "ntvdmex_types.h"
 
-void *memset(void *dst, int c, size_t n)
+/* The three mem* functions keep the C library's names and exact signatures (void *,
+   int, size_t): the compiler emits calls to them by those names and checks the
+   declarations against its built-in ones. Only their insides follow the style. */
+
+void *memset(void *buffer, int fillValue, size_t byteCount)
 {
-    unsigned char *p = (unsigned char *)dst;
-    while (n--)
-        *p++ = (unsigned char)c;
-    return dst;
+    PBYTE destination = (PBYTE)buffer;
+    while (byteCount--)
+        *destination++ = (BYTE)fillValue;
+    return buffer;
 }
 
-void *memmove(void *dst, const void *src, size_t n)
+void *memmove(void *destinationBuffer, const void *sourceBuffer, size_t byteCount)
 {
-    unsigned char       *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    if (d < s) {
-        while (n--)
-            *d++ = *s++;
+    PBYTE  destination = (PBYTE)destinationBuffer;
+    PCBYTE source = (PCBYTE)sourceBuffer;
+    if (destination < source) {
+        while (byteCount--)
+            *destination++ = *source++;
     } else {
-        d += n;
-        s += n;
-        while (n--)
-            *--d = *--s;
+        destination += byteCount;
+        source += byteCount;
+        while (byteCount--)
+            *--destination = *--source;
     }
-    return dst;
+    return destinationBuffer;
 }
 
-void *memcpy(void *dst, const void *src, size_t n)
+void *memcpy(void *destinationBuffer, const void *sourceBuffer, size_t byteCount)
 {
-    return memmove(dst, src, n);
+    return memmove(destinationBuffer, sourceBuffer, byteCount);
 }
 
 /* Real-mode-DOS host, but first a window: hand off to WinMain, then exit.
    Named WinMainCRTStartup so the linker picks it as the default GUI entry. */
 extern int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
-void WinMainCRTStartup(void)
+VOID WinMainCRTStartup(VOID)
 {
-    int rc = WinMain(GetModuleHandleA(NULL), NULL, GetCommandLineA(), SW_SHOWDEFAULT);
-    ExitProcess((UINT)rc);
+    INT exitCode = WinMain(GetModuleHandleA(NULL), NULL, GetCommandLineA(), SW_SHOWDEFAULT);
+    ExitProcess((UINT)exitCode);
 }

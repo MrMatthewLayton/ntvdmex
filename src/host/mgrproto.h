@@ -1,5 +1,5 @@
-#ifndef MGRPROTO_H
-#define MGRPROTO_H
+#ifndef NTVDMEX_HOST_MGRPROTO_H
+#define NTVDMEX_HOST_MGRPROTO_H
 /*
  * mgrproto.h -- the protocol between a host (ntvdmhost.exe) and the NTVDMEX
  * manager (ntvdmex.exe). GH #281, session 88. Both sides include this file; there
@@ -18,12 +18,12 @@
  *
  * ── THE OTHER DIRECTION ─────────────────────────────────────────────────────
  * The manager tells a host what to do with a REGISTERED window message whose
- * wParam is an MGRCMD_*. It deliberately does not post the host's own IDM_*
+ * wParam is an MGR_COMMAND_*. It deliberately does not post the host's own IDM_*
  * numbers: those are an implementation detail of main.c's menu and may move.
  *
  * ⚠ ALL ANSI, ALL FIXED-SIZE. The two sides are separate executables built from
  *   the same tree, but a stale manager and a new host can meet on a user's
- *   machine; `ver` and `cb` let either refuse what it does not understand.
+ *   machine; `Version` and `Size` let either refuse what it does not understand.
  */
 
 #define MGR_CLASS        "NTVDMEX_Manager"          /* the manager's hidden window */
@@ -32,7 +32,7 @@
 #define MGR_EXE          "ntvdmex.exe"              /* beside ntvdmhost.exe        */
 
 #define MGR_MAGIC        0x4D47524Eu                /* 'NRGM' */
-#define MGR_VER          1
+#define MGR_VERSION      1
 
 #define MGR_OP_HELLO     1        /* "I am running; this is what to show for me" */
 #define MGR_OP_BYE       2        /* "I am going" -- optional; the handle is the truth */
@@ -41,23 +41,25 @@
 #define MGR_KIND_WIN16   2
 
 /* wParam of the registered command message, manager -> host. */
-#define MGRCMD_SHOW      1        /* bring this program's window forward          */
-#define MGRCMD_SETTINGS  2        /* open the Settings dialog                      */
-#define MGRCMD_CLOSEPROG 3        /* the host's own "Close Program"                */
-#define MGRCMD_EXIT      4        /* the host's own "Exit"                         */
+#define MGR_COMMAND_SHOW          1   /* bring this program's window forward          */
+#define MGR_COMMAND_SETTINGS      2   /* open the Settings dialog                      */
+#define MGR_COMMAND_CLOSE_PROGRAM 3   /* the host's own "Close Program"                */
+#define MGR_COMMAND_EXIT          4   /* the host's own "Exit"                         */
 
-#define MGR_NAME_CB      64
+#define MGR_NAME_SIZE    64
 
-typedef struct {
-    DWORD magic;                  /* MGR_MAGIC                                     */
-    DWORD ver;                    /* MGR_VER                                       */
-    DWORD cb;                     /* sizeof(mgr_msg_t) as the SENDER built it      */
-    DWORD op;                     /* MGR_OP_*                                      */
-    DWORD pid;                    /* the host process                              */
-    DWORD kind;                   /* MGR_KIND_*                                    */
-    DWORD cmdhwnd;                /* the host window that takes MGRCMD_*           */
-    DWORD showhwnd;               /* the window "Show" brings forward (0 = ask)    */
-    char  name[MGR_NAME_CB];      /* what the menu calls this program, NUL-ended   */
-} mgr_msg_t;
+typedef struct _MGR_MESSAGE {
+    DWORD Magic;                  /* MGR_MAGIC                                     */
+    DWORD Version;                /* MGR_VERSION                                   */
+    DWORD Size;                   /* sizeof(MGR_MESSAGE) as the SENDER built it    */
+    DWORD Operation;              /* MGR_OP_*                                      */
+    DWORD ProcessId;              /* the host process                              */
+    DWORD Kind;                   /* MGR_KIND_*                                    */
+    DWORD CommandWindow;          /* the host window that takes MGR_COMMAND_*      */
+    DWORD ShowTargetWindow;       /* the window "Show" brings forward (0 = ask)    */
+    CHAR  Name[MGR_NAME_SIZE];    /* what the menu calls this program, NUL-ended   */
+} MGR_MESSAGE, *PMGR_MESSAGE;
 
-#endif
+typedef const MGR_MESSAGE *PCMGR_MESSAGE;
+
+#endif /* NTVDMEX_HOST_MGRPROTO_H */

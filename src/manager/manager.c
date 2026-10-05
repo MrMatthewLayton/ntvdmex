@@ -35,303 +35,332 @@
 #define MGR_MAX         48            /* MsgWaitForMultipleObjects allows 63 */
 #define EMPTY_GRACE_MS  4000          /* a program that is just starting gets time */
 #define FIRST_HELLO_MS  15000         /* started, but nobody ever announced: go   */
+#define MGR_POLL_MS     500           /* how often the list and the clock are checked */
 
 /* Menu ids: globals below 100; per-program ones are 1000 + slot*8 + action. */
 #define IDM_G_SETTINGS  1
 #define IDM_G_ABOUT     2
 #define IDM_G_EXITALL   3
 #define IDM_P_BASE      1000
+#define IDM_P_PER_SLOT  8
 #define IDM_P_SHOW      0
 #define IDM_P_CLOSE     2
 
-typedef struct {
-    int    used;
-    DWORD  pid;
-    DWORD  kind;
-    HWND   cmd, show;
-    HANDLE proc;
-    DWORD  seq;                       /* registration order -- the menu's order */
-    char   name[MGR_NAME_CB];
-} sess_t;
+/* What the user reads. */
+#define MGR_TIP_SIZE             64
+#define MGR_TIP_ONE_PROGRAM      "NTVDMEX - %s"
+#define MGR_TIP_PROGRAMS         "NTVDMEX - %d programs"
+#define MGR_EMPTY_STRING         ""
+#define MGR_MENU_SHOW            "Show"
+#define MGR_MENU_CLOSE_PROGRAM   "Close Program"
+#define MGR_MENU_STARTING        "(starting)"
+#define MGR_MENU_NO_PROGRAMS     "(no programs running)"
+#define MGR_MENU_SETTINGS        "Settings..."
+#define MGR_MENU_ABOUT           "About"
+#define MGR_MENU_EXIT_ALL        "Exit All"
+#define MGR_ABOUT_TITLE          "NTVDMEX#NTVDMEX -- New Technology Virtual DOS Manager, Extended"
+#define MGR_ABOUT_TEXT           "One icon for every running DOS and 16-bit Windows program."
+#define MGR_WINDOW_TITLE         "NTVDMEX"
+#define MGR_TASKBAR_CREATED      "TaskbarCreated"
 
-static sess_t g_s[MGR_MAX];
-static DWORD  g_seq;
-static HWND   g_hwnd;
-static UINT   g_cmdmsg, g_taskbar_created;
-static int    g_tray;
-static HICON  g_icon;
+#define MGR_NO_SLOT              (-1)
+#define MGR_NO_MENU_FLAGS        0
+#define MGR_NO_MENU_ID           0
+#define MGR_EXIT_OK              0
+#define MGR_EXIT_FAILED          1
+#define MGR_END_OF_STRING        0
+#define MGR_ONE_PROGRAM          1
+#define MGR_DRAIN_ALL            0       /* PeekMessage's min/max filter: everything */
 
-static int sess_count(void)
+typedef struct _MGR_SESSION {
+    BOOL   IsUsed;
+    DWORD  ProcessId;
+    DWORD  Kind;
+    HWND   CommandWindow, ShowTargetWindow;
+    HANDLE Process;
+    DWORD  Sequence;                  /* registration order -- the menu's order */
+    CHAR   Name[MGR_NAME_SIZE];
+} MGR_SESSION, *PMGR_SESSION;
+
+static MGR_SESSION g_Sessions[MGR_MAX];
+static DWORD  g_Sequence;
+static HWND   g_Window;
+static UINT   g_CommandMessage, g_TaskbarCreatedMessage;
+static BOOL   g_HasTrayIcon;
+static HICON  g_Icon;
+
+static INT MgrSessionCount(VOID)
 {
-    int i, n = 0;
-    for (i = 0; i < MGR_MAX; ++i) if (g_s[i].used) ++n;
-    return n;
+    INT slot, count = 0;
+    for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) ++count;
+    return count;
 }
 
-static void tray_tip(NOTIFYICONDATAA *nid)
+static VOID MgrTrayTip(NOTIFYICONDATAA *notifyData)
 {
-    int n = sess_count();
-    char t[64];
-    if (n == 1) {
-        int i;
-        for (i = 0; i < MGR_MAX && !g_s[i].used; ++i) ;
-        wsprintfA(t, "NTVDMEX - %s", i < MGR_MAX ? g_s[i].name : "");
+    INT count = MgrSessionCount();
+    CHAR tip[MGR_TIP_SIZE];
+    if (count == MGR_ONE_PROGRAM) {
+        INT slot;
+        for (slot = 0; slot < MGR_MAX && !g_Sessions[slot].IsUsed; ++slot) ;
+        wsprintfA(tip, MGR_TIP_ONE_PROGRAM, slot < MGR_MAX ? g_Sessions[slot].Name : MGR_EMPTY_STRING);
     } else {
-        wsprintfA(t, "NTVDMEX - %d programs", n);
+        wsprintfA(tip, MGR_TIP_PROGRAMS, count);
     }
-    lstrcpynA(nid->szTip, t, sizeof nid->szTip);
+    lstrcpynA(notifyData->szTip, tip, sizeof notifyData->szTip);
 }
 
-static void tray_set(DWORD op)
+static VOID MgrTraySet(DWORD operation)
 {
-    NOTIFYICONDATAA nid;
-    ZeroMemory(&nid, sizeof nid);
-    nid.cbSize = sizeof nid; nid.hWnd = g_hwnd; nid.uID = TRAY_ID;
-    if (op != NIM_DELETE) {
-        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        nid.uCallbackMessage = WM_MGRTRAY;
-        nid.hIcon = g_icon;
-        tray_tip(&nid);
+    NOTIFYICONDATAA notifyData;
+    ZeroMemory(&notifyData, sizeof notifyData);
+    notifyData.cbSize = sizeof notifyData; notifyData.hWnd = g_Window; notifyData.uID = TRAY_ID;
+    if (operation != NIM_DELETE) {
+        notifyData.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        notifyData.uCallbackMessage = WM_MGRTRAY;
+        notifyData.hIcon = g_Icon;
+        MgrTrayTip(&notifyData);
     }
-    if (Shell_NotifyIconA(op, &nid)) {
-        if (op == NIM_ADD) g_tray = 1;
-        if (op == NIM_DELETE) g_tray = 0;
-    } else if (op == NIM_MODIFY && g_tray) {
+    if (Shell_NotifyIconA(operation, &notifyData)) {
+        if (operation == NIM_ADD) g_HasTrayIcon = TRUE;
+        if (operation == NIM_DELETE) g_HasTrayIcon = FALSE;
+    } else if (operation == NIM_MODIFY && g_HasTrayIcon) {
         /* Explorer lost it without telling us (it was restarted): put it back. */
-        g_tray = 0; tray_set(NIM_ADD);
+        g_HasTrayIcon = FALSE; MgrTraySet(NIM_ADD);
     }
 }
 
-static void sess_drop(int i)
+static VOID MgrSessionDrop(INT slot)
 {
-    if (!g_s[i].used) return;
-    if (g_s[i].proc) CloseHandle(g_s[i].proc);
-    ZeroMemory(&g_s[i], sizeof g_s[i]);
-    if (g_tray) tray_set(NIM_MODIFY);
+    if (!g_Sessions[slot].IsUsed) return;
+    if (g_Sessions[slot].Process) CloseHandle(g_Sessions[slot].Process);
+    ZeroMemory(&g_Sessions[slot], sizeof g_Sessions[slot]);
+    if (g_HasTrayIcon) MgrTraySet(NIM_MODIFY);
 }
 
-/* Upsert by pid. Returns 1 if accepted. */
-static int sess_hello(const mgr_msg_t *m)
+/* Upsert by pid. Returns TRUE if accepted. */
+static BOOL MgrSessionHello(PCMGR_MESSAGE message)
 {
-    int i, fr = -1, changed = 0;
-    for (i = 0; i < MGR_MAX; ++i) {
-        if (g_s[i].used && g_s[i].pid == m->pid) break;
-        if (!g_s[i].used && fr < 0) fr = i;
+    INT slot, freeSlot = MGR_NO_SLOT;
+    BOOL hasChanged = FALSE;
+    for (slot = 0; slot < MGR_MAX; ++slot) {
+        if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == message->ProcessId) break;
+        if (!g_Sessions[slot].IsUsed && freeSlot < 0) freeSlot = slot;
     }
-    if (i == MGR_MAX) {
-        HANDLE ph;
-        if (fr < 0) return 0;                       /* full */
-        ph = OpenProcess(SYNCHRONIZE, FALSE, m->pid);
-        if (!ph) return 0;                          /* it is already gone */
-        i = fr;
-        g_s[i].used = 1; g_s[i].pid = m->pid; g_s[i].proc = ph; g_s[i].seq = ++g_seq;
-        changed = 1;
+    if (slot == MGR_MAX) {
+        HANDLE process;
+        if (freeSlot < 0) return FALSE;                       /* full */
+        process = OpenProcess(SYNCHRONIZE, FALSE, message->ProcessId);
+        if (!process) return FALSE;                          /* it is already gone */
+        slot = freeSlot;
+        g_Sessions[slot].IsUsed = TRUE; g_Sessions[slot].ProcessId = message->ProcessId; g_Sessions[slot].Process = process; g_Sessions[slot].Sequence = ++g_Sequence;
+        hasChanged = TRUE;
     }
-    g_s[i].kind = m->kind;
-    g_s[i].cmd  = (HWND)(ULONG_PTR)m->cmdhwnd;
-    g_s[i].show = (HWND)(ULONG_PTR)m->showhwnd;
-    if (lstrcmpA(g_s[i].name, m->name) != 0) {
-        lstrcpynA(g_s[i].name, m->name, MGR_NAME_CB);
-        changed = 1;
+    g_Sessions[slot].Kind = message->Kind;
+    g_Sessions[slot].CommandWindow  = (HWND)(ULONG_PTR)message->CommandWindow;
+    g_Sessions[slot].ShowTargetWindow = (HWND)(ULONG_PTR)message->ShowTargetWindow;
+    if (lstrcmpA(g_Sessions[slot].Name, message->Name) != 0) {
+        lstrcpynA(g_Sessions[slot].Name, message->Name, MGR_NAME_SIZE);
+        hasChanged = TRUE;
     }
-    if (!g_tray) tray_set(NIM_ADD);
-    else if (changed) tray_set(NIM_MODIFY);
-    return 1;
+    if (!g_HasTrayIcon) MgrTraySet(NIM_ADD);
+    else if (hasChanged) MgrTraySet(NIM_MODIFY);
+    return TRUE;
 }
 
-static void sess_cmd(int i, WPARAM c)
+static VOID MgrSessionCommand(INT slot, WPARAM command)
 {
-    if (i < 0 || i >= MGR_MAX || !g_s[i].used) return;
-    if (c == MGRCMD_SHOW && g_s[i].show && IsWindow(g_s[i].show)) {
-        if (IsIconic(g_s[i].show)) ShowWindow(g_s[i].show, SW_RESTORE);
-        SetForegroundWindow(g_s[i].show);
+    if (slot < 0 || slot >= MGR_MAX || !g_Sessions[slot].IsUsed) return;
+    if (command == MGR_COMMAND_SHOW && g_Sessions[slot].ShowTargetWindow && IsWindow(g_Sessions[slot].ShowTargetWindow)) {
+        if (IsIconic(g_Sessions[slot].ShowTargetWindow)) ShowWindow(g_Sessions[slot].ShowTargetWindow, SW_RESTORE);
+        SetForegroundWindow(g_Sessions[slot].ShowTargetWindow);
         return;
     }
-    if (g_s[i].cmd && IsWindow(g_s[i].cmd))
-        PostMessageA(g_s[i].cmd, g_cmdmsg, c, 0);
+    if (g_Sessions[slot].CommandWindow && IsWindow(g_Sessions[slot].CommandWindow))
+        PostMessageA(g_Sessions[slot].CommandWindow, g_CommandMessage, command, 0);
 }
 
 /* The menu, in the order programs started. */
-static void tray_menu(void)
+static VOID MgrTrayMenu(VOID)
 {
-    HMENU m = CreatePopupMenu();
-    POINT pt;
-    int order[MGR_MAX], n = 0, i, j, id;
-    if (!m) return;
-    for (i = 0; i < MGR_MAX; ++i) if (g_s[i].used) order[n++] = i;
-    for (i = 1; i < n; ++i)                         /* insertion sort by seq */
-        for (j = i; j > 0 && g_s[order[j - 1]].seq > g_s[order[j]].seq; --j) {
-            int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t;
+    HMENU menu = CreatePopupMenu();
+    POINT cursor;
+    INT order[MGR_MAX], count = 0, slot, position, menuId;
+    if (!menu) return;
+    for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) order[count++] = slot;
+    for (slot = 1; slot < count; ++slot)                         /* insertion sort by sequence */
+        for (position = slot; position > 0 && g_Sessions[order[position - 1]].Sequence > g_Sessions[order[position]].Sequence; --position) {
+            INT swapped = order[position]; order[position] = order[position - 1]; order[position - 1] = swapped;
         }
-    for (j = 0; j < n; ++j) {
-        HMENU sub = CreatePopupMenu();
-        i = order[j];
-        if (!sub) continue;
-        id = IDM_P_BASE + i * 8;
+    for (position = 0; position < count; ++position) {
+        HMENU submenu = CreatePopupMenu();
+        slot = order[position];
+        if (!submenu) continue;
+        menuId = IDM_P_BASE + slot * IDM_P_PER_SLOT;
         /* No per-program Settings (user, s88): settings are global, so they live
            once, below, and not in every submenu. */
-        AppendMenuA(sub, MF_STRING, id + IDM_P_SHOW,     "Show");
-        AppendMenuA(sub, MF_STRING, id + IDM_P_CLOSE,    "Close Program");
-        AppendMenuA(m, MF_POPUP | MF_STRING, (UINT_PTR)sub,
-                    g_s[i].name[0] ? g_s[i].name : "(starting)");
+        AppendMenuA(submenu, MF_STRING, menuId + IDM_P_SHOW,     MGR_MENU_SHOW);
+        AppendMenuA(submenu, MF_STRING, menuId + IDM_P_CLOSE,    MGR_MENU_CLOSE_PROGRAM);
+        AppendMenuA(menu, MF_POPUP | MF_STRING, (UINT_PTR)submenu,
+                    g_Sessions[slot].Name[0] ? g_Sessions[slot].Name : MGR_MENU_STARTING);
     }
-    if (!n) AppendMenuA(m, MF_STRING | MF_GRAYED, 0, "(no programs running)");
-    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(m, MF_STRING | (n ? 0 : MF_GRAYED), IDM_G_SETTINGS, "Settings...");
-    AppendMenuA(m, MF_STRING, IDM_G_ABOUT, "About");
-    AppendMenuA(m, MF_STRING | (n ? 0 : MF_GRAYED), IDM_G_EXITALL, "Exit All");
-    GetCursorPos(&pt);
+    if (!count) AppendMenuA(menu, MF_STRING | MF_GRAYED, MGR_NO_MENU_ID, MGR_MENU_NO_PROGRAMS);
+    AppendMenuA(menu, MF_SEPARATOR, MGR_NO_MENU_ID, NULL);
+    AppendMenuA(menu, MF_STRING | (count ? MGR_NO_MENU_FLAGS : MF_GRAYED), IDM_G_SETTINGS, MGR_MENU_SETTINGS);
+    AppendMenuA(menu, MF_STRING, IDM_G_ABOUT, MGR_MENU_ABOUT);
+    AppendMenuA(menu, MF_STRING | (count ? MGR_NO_MENU_FLAGS : MF_GRAYED), IDM_G_EXITALL, MGR_MENU_EXIT_ALL);
+    GetCursorPos(&cursor);
     /* ⚠ The documented tray dance: foreground first, a stray post after, or the
          menu does not dismiss when you click away from it. */
-    SetForegroundWindow(g_hwnd);
-    TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_hwnd, NULL);
-    PostMessageA(g_hwnd, WM_NULL, 0, 0);
-    DestroyMenu(m);                                 /* destroys the submenus too */
+    SetForegroundWindow(g_Window);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, g_Window, NULL);
+    PostMessageA(g_Window, WM_NULL, 0, 0);
+    DestroyMenu(menu);                                 /* destroys the submenus too */
 }
 
-static void on_command(UINT id)
+static VOID MgrOnCommand(UINT commandId)
 {
-    int i;
-    if (id >= IDM_P_BASE) {
-        i = (int)(id - IDM_P_BASE) / 8;
-        switch ((id - IDM_P_BASE) % 8) {
-        case IDM_P_SHOW:     sess_cmd(i, MGRCMD_SHOW);      break;
-        case IDM_P_CLOSE:    sess_cmd(i, MGRCMD_CLOSEPROG); break;
+    INT slot;
+    if (commandId >= IDM_P_BASE) {
+        slot = (INT)(commandId - IDM_P_BASE) / IDM_P_PER_SLOT;
+        switch ((commandId - IDM_P_BASE) % IDM_P_PER_SLOT) {
+        case IDM_P_SHOW:     MgrSessionCommand(slot, MGR_COMMAND_SHOW);      break;
+        case IDM_P_CLOSE:    MgrSessionCommand(slot, MGR_COMMAND_CLOSE_PROGRAM); break;
         }
         return;
     }
-    switch (id) {
+    switch (commandId) {
     case IDM_G_SETTINGS:
         /* Settings are machine-wide (registry + share file); any host's dialog
            edits the same values, so the oldest program's is as good as any. */
-        {   int best = -1;
-            for (i = 0; i < MGR_MAX; ++i)
-                if (g_s[i].used && (best < 0 || g_s[i].seq < g_s[best].seq)) best = i;
-            sess_cmd(best, MGRCMD_SETTINGS); }
+        {   INT oldest = MGR_NO_SLOT;
+            for (slot = 0; slot < MGR_MAX; ++slot)
+                if (g_Sessions[slot].IsUsed && (oldest < 0 || g_Sessions[slot].Sequence < g_Sessions[oldest].Sequence)) oldest = slot;
+            MgrSessionCommand(oldest, MGR_COMMAND_SETTINGS); }
         break;
     case IDM_G_ABOUT:
-        ShellAboutA(g_hwnd, "NTVDMEX#NTVDMEX -- New Technology Virtual DOS Manager, Extended",
-                    "One icon for every running DOS and 16-bit Windows program.", g_icon);
+        ShellAboutA(g_Window, MGR_ABOUT_TITLE,
+                    MGR_ABOUT_TEXT, g_Icon);
         break;
     case IDM_G_EXITALL:
-        for (i = 0; i < MGR_MAX; ++i) if (g_s[i].used) sess_cmd(i, MGRCMD_EXIT);
+        for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) MgrSessionCommand(slot, MGR_COMMAND_EXIT);
         break;
     }
 }
 
-static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+static LRESULT CALLBACK MgrWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == g_taskbar_created && g_taskbar_created) {   /* Explorer restarted */
-        g_tray = 0;
-        if (sess_count()) tray_set(NIM_ADD);
+    if (message == g_TaskbarCreatedMessage && g_TaskbarCreatedMessage) {   /* Explorer restarted */
+        g_HasTrayIcon = FALSE;
+        if (MgrSessionCount()) MgrTraySet(NIM_ADD);
         return 0;
     }
-    switch (msg) {
+    switch (message) {
     case WM_COPYDATA: {
-        const COPYDATASTRUCT *cd = (const COPYDATASTRUCT *)lp;
-        mgr_msg_t m;
-        if (!cd || cd->dwData != MGR_MAGIC || cd->cbData < sizeof m || !cd->lpData)
+        const COPYDATASTRUCT *copyData = (const COPYDATASTRUCT *)lParam;
+        MGR_MESSAGE received;
+        if (!copyData || copyData->dwData != MGR_MAGIC || copyData->cbData < sizeof received || !copyData->lpData)
             return FALSE;
-        CopyMemory(&m, cd->lpData, sizeof m);
-        if (m.magic != MGR_MAGIC || m.ver != MGR_VER) return FALSE;
-        m.name[MGR_NAME_CB - 1] = 0;
-        if (m.op == MGR_OP_HELLO) return sess_hello(&m);
-        if (m.op == MGR_OP_BYE) {
-            int i;
-            for (i = 0; i < MGR_MAX; ++i) if (g_s[i].used && g_s[i].pid == m.pid) sess_drop(i);
+        CopyMemory(&received, copyData->lpData, sizeof received);
+        if (received.Magic != MGR_MAGIC || received.Version != MGR_VERSION) return FALSE;
+        received.Name[MGR_NAME_SIZE - 1] = MGR_END_OF_STRING;
+        if (received.Operation == MGR_OP_HELLO) return MgrSessionHello(&received);
+        if (received.Operation == MGR_OP_BYE) {
+            INT slot;
+            for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == received.ProcessId) MgrSessionDrop(slot);
             return TRUE;
         }
         return FALSE;
     }
     case WM_MGRTRAY:
-        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { tray_menu(); return 0; }
-        if (lp == WM_LBUTTONDBLCLK) {
+        if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) { MgrTrayMenu(); return 0; }
+        if (lParam == WM_LBUTTONDBLCLK) {
             /* One program: bring it forward, which is what a tray icon does. More
                than one: there is no single answer, so show the menu. */
-            if (sess_count() == 1) {
-                int i;
-                for (i = 0; i < MGR_MAX && !g_s[i].used; ++i) ;
-                sess_cmd(i, MGRCMD_SHOW);
+            if (MgrSessionCount() == MGR_ONE_PROGRAM) {
+                INT slot;
+                for (slot = 0; slot < MGR_MAX && !g_Sessions[slot].IsUsed; ++slot) ;
+                MgrSessionCommand(slot, MGR_COMMAND_SHOW);
             } else {
-                tray_menu();
+                MgrTrayMenu();
             }
         }
         return 0;
     case WM_COMMAND:
-        on_command(LOWORD(wp));
+        MgrOnCommand(LOWORD(wParam));
         return 0;
     case WM_DESTROY:
-        if (g_tray) tray_set(NIM_DELETE);
-        PostQuitMessage(0);
+        if (g_HasTrayIcon) MgrTraySet(NIM_DELETE);
+        PostQuitMessage(MGR_EXIT_OK);
         return 0;
     }
-    return DefWindowProcA(h, msg, wp, lp);
+    return DefWindowProcA(window, message, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmd, int show)
+int WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLine, int showCommand)
 {
-    WNDCLASSA wc;
-    HANDLE single;
-    DWORD started = GetTickCount(), empty_since = 0;
-    int ever = 0;
-    (void)prev; (void)cmd; (void)show;
+    WNDCLASSA windowClass;
+    HANDLE singleInstance;
+    DWORD startedAt = GetTickCount(), emptySince = 0;
+    BOOL hasEverHadPrograms = FALSE;
+    (VOID)previousInstance; (VOID)commandLine; (VOID)showCommand;
 
     /* One manager per session. A second one started in a race simply leaves: the
        first answers every host, and they find it by class name. */
-    single = CreateMutexA(NULL, TRUE, MGR_MUTEX);
-    if (!single || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    singleInstance = CreateMutexA(NULL, TRUE, MGR_MUTEX);
+    if (!singleInstance || GetLastError() == ERROR_ALREADY_EXISTS) return MGR_EXIT_OK;
 
-    g_cmdmsg          = RegisterWindowMessageA(MGR_CMD_MSGNAME);
-    g_taskbar_created = RegisterWindowMessageA("TaskbarCreated");
-    g_icon = LoadIconA(hi, MAKEINTRESOURCEA(IDI_MAINICON));
-    if (!g_icon) g_icon = LoadIconA(NULL, IDI_APPLICATION);
+    g_CommandMessage          = RegisterWindowMessageA(MGR_CMD_MSGNAME);
+    g_TaskbarCreatedMessage = RegisterWindowMessageA(MGR_TASKBAR_CREATED);
+    g_Icon = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));
+    if (!g_Icon) g_Icon = LoadIconA(NULL, IDI_APPLICATION);
 
-    ZeroMemory(&wc, sizeof wc);
-    wc.lpfnWndProc   = wndproc;
-    wc.hInstance     = hi;
-    wc.lpszClassName = MGR_CLASS;
-    wc.hIcon         = g_icon;
-    if (!RegisterClassA(&wc)) return 1;
+    ZeroMemory(&windowClass, sizeof windowClass);
+    windowClass.lpfnWndProc   = MgrWindowProc;
+    windowClass.hInstance     = instance;
+    windowClass.lpszClassName = MGR_CLASS;
+    windowClass.hIcon         = g_Icon;
+    if (!RegisterClassA(&windowClass)) return MGR_EXIT_FAILED;
     /* A real (hidden) top-level window, not HWND_MESSAGE: the tray needs a window
        that can take the foreground for its menu, and hosts find it by class. */
-    g_hwnd = CreateWindowExA(WS_EX_TOOLWINDOW, MGR_CLASS, "NTVDMEX", WS_POPUP,
-                             0, 0, 0, 0, NULL, NULL, hi, NULL);
-    if (!g_hwnd) return 1;
+    g_Window = CreateWindowExA(WS_EX_TOOLWINDOW, MGR_CLASS, MGR_WINDOW_TITLE, WS_POPUP,
+                             0, 0, 0, 0, NULL, NULL, instance, NULL);
+    if (!g_Window) return MGR_EXIT_FAILED;
 
     for (;;) {
-        HANDLE hs[MGR_MAX];
-        int    idx[MGR_MAX], n = 0, i;
-        DWORD  r;
-        MSG    msg;
-        for (i = 0; i < MGR_MAX; ++i)
-            if (g_s[i].used && g_s[i].proc) { hs[n] = g_s[i].proc; idx[n] = i; ++n; }
-        r = MsgWaitForMultipleObjects((DWORD)n, hs, FALSE, 500, QS_ALLINPUT);
-        if (r < WAIT_OBJECT_0 + (DWORD)n) {
-            sess_drop(idx[r - WAIT_OBJECT_0]);       /* that host has exited */
+        HANDLE processes[MGR_MAX];
+        INT    slotOfHandle[MGR_MAX], handleCount = 0, slot;
+        DWORD  waitResult;
+        MSG    queued;
+        for (slot = 0; slot < MGR_MAX; ++slot)
+            if (g_Sessions[slot].IsUsed && g_Sessions[slot].Process) { processes[handleCount] = g_Sessions[slot].Process; slotOfHandle[handleCount] = slot; ++handleCount; }
+        waitResult = MsgWaitForMultipleObjects((DWORD)handleCount, processes, FALSE, MGR_POLL_MS, QS_ALLINPUT);
+        if (waitResult < WAIT_OBJECT_0 + (DWORD)handleCount) {
+            MgrSessionDrop(slotOfHandle[waitResult - WAIT_OBJECT_0]);       /* that host has exited */
         }
-        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) goto out;
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
+        while (PeekMessageA(&queued, NULL, MGR_DRAIN_ALL, MGR_DRAIN_ALL, PM_REMOVE)) {
+            if (queued.message == WM_QUIT) goto out;
+            TranslateMessage(&queued);
+            DispatchMessageA(&queued);
         }
         /* ★ THE LIFETIME RULE (user, step 6): when the last program has gone, so do
              we -- after a short grace, because a program that is starting right now
              announces itself a moment later. And a manager nobody ever spoke to
              (its host died before announcing) leaves too. */
-        if (sess_count()) { ever = 1; empty_since = 0; }
-        else if (ever) {
-            if (!empty_since) empty_since = GetTickCount();
-            else if (GetTickCount() - empty_since >= EMPTY_GRACE_MS) break;
-        } else if (GetTickCount() - started >= FIRST_HELLO_MS) break;
+        if (MgrSessionCount()) { hasEverHadPrograms = TRUE; emptySince = 0; }
+        else if (hasEverHadPrograms) {
+            if (!emptySince) emptySince = GetTickCount();
+            else if (GetTickCount() - emptySince >= EMPTY_GRACE_MS) break;
+        } else if (GetTickCount() - startedAt >= FIRST_HELLO_MS) break;
     }
 out:
-    if (g_tray) tray_set(NIM_DELETE);
-    DestroyWindow(g_hwnd);
+    if (g_HasTrayIcon) MgrTraySet(NIM_DELETE);
+    DestroyWindow(g_Window);
     for (;;) {                                      /* drain WM_DESTROY etc. */
-        MSG msg;
-        if (!PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) break;
-        DispatchMessageA(&msg);
+        MSG queued;
+        if (!PeekMessageA(&queued, NULL, MGR_DRAIN_ALL, MGR_DRAIN_ALL, PM_REMOVE)) break;
+        DispatchMessageA(&queued);
     }
-    CloseHandle(single);
-    return 0;
+    CloseHandle(singleInstance);
+    return MGR_EXIT_OK;
 }

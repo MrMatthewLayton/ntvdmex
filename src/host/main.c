@@ -10699,7 +10699,7 @@ typedef int (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, int);
    usually inside the guest. */
 static void mgr_name(char *out, HWND *show)
 {
-    char raw[MGR_NAME_CB]; int i, k = 0;
+    char raw[MGR_NAME_SIZE]; int i, k = 0;
     const char *src = NULL;
     raw[0] = 0; *show = g_hwnd;
     if (g_wow_launch) {
@@ -10713,7 +10713,7 @@ static void mgr_name(char *out, HWND *show)
             if (!w->hwnd || w->parent || w->dying || w->foreign || !h || !IsWindowVisible(h)) continue;
             *show = h;
             if (igwt) {
-                WCHAR wb[MGR_NAME_CB]; int n = igwt(h, wb, MGR_NAME_CB);
+                WCHAR wb[MGR_NAME_SIZE]; int n = igwt(h, wb, MGR_NAME_SIZE);
                 if (n > 0) WideCharToMultiByte(CP_ACP, 0, wb, n + 1, raw, sizeof raw, NULL, NULL);
             }
             break;
@@ -10727,11 +10727,11 @@ static void mgr_name(char *out, HWND *show)
         for (q = src; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
         if (!*bn || !lstrcmpiA(bn, "COMMAND.COM") || !lstrcmpiA(bn, "CMD.EXE")
             || !lstrcmpA(bn, "(none)")) {
-            lstrcpynA(out, g_wow_launch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_CB);
+            lstrcpynA(out, g_wow_launch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_SIZE);
             return;
         }
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
-        for (i = 0; bn[i] && bn[i] != '.' && k < MGR_NAME_CB - 1; ++i) {
+        for (i = 0; bn[i] && bn[i] != '.' && k < MGR_NAME_SIZE - 1; ++i) {
             char c = bn[i];
             if (k == 0) { if (c >= 'a' && c <= 'z') c = (char)(c - 32); }
             else        { if (c >= 'A' && c <= 'Z') c = (char)(c + 32); }
@@ -10739,10 +10739,10 @@ static void mgr_name(char *out, HWND *show)
         }
         raw[k] = 0;
     }
-    raw[MGR_NAME_CB - 1] = 0;
+    raw[MGR_NAME_SIZE - 1] = 0;
     for (i = 0; raw[i]; ++i)                         /* "Notepad - (Untitled)" -> "Notepad" */
         if (raw[i] == ' ' && raw[i + 1] == '-' && raw[i + 2] == ' ') { raw[i] = 0; break; }
-    lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_CB);
+    lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_SIZE);
 }
 
 static DWORD WINAPI mgr_thread(LPVOID unused)
@@ -10768,13 +10768,13 @@ static DWORD WINAPI mgr_thread(LPVOID unused)
             Sleep(500);                              /* give it a moment to appear */
             continue;
         }
-        {   mgr_msg_t mm; COPYDATASTRUCT cd; HWND show; DWORD_PTR r = 0;
+        {   MGR_MESSAGE mm; COPYDATASTRUCT cd; HWND show; DWORD_PTR r = 0;
             ZeroMemory(&mm, sizeof mm);
-            mm.magic = MGR_MAGIC; mm.ver = MGR_VER; mm.cb = sizeof mm;
-            mm.op = MGR_OP_HELLO; mm.pid = GetCurrentProcessId();
-            mm.kind = g_wow_launch ? MGR_KIND_WIN16 : MGR_KIND_DOS;
-            mgr_name(mm.name, &show);
-            mm.cmdhwnd = (DWORD)(ULONG_PTR)g_hwnd; mm.showhwnd = (DWORD)(ULONG_PTR)show;
+            mm.Magic = MGR_MAGIC; mm.Version = MGR_VERSION; mm.Size = sizeof mm;
+            mm.Operation = MGR_OP_HELLO; mm.ProcessId = GetCurrentProcessId();
+            mm.Kind = g_wow_launch ? MGR_KIND_WIN16 : MGR_KIND_DOS;
+            mgr_name(mm.Name, &show);
+            mm.CommandWindow = (DWORD)(ULONG_PTR)g_hwnd; mm.ShowTargetWindow = (DWORD)(ULONG_PTR)show;
             cd.dwData = MGR_MAGIC; cd.cbData = sizeof mm; cd.lpData = &mm;
             if (SendMessageTimeoutA(m, WM_COPYDATA, (WPARAM)g_hwnd, (LPARAM)&cd,
                                     SMTO_ABORTIFHUNG, 500, &r) && r)
@@ -13387,13 +13387,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        window is the hidden machine, which is not what anyone wants to see. */
     if (g_mgr_cmdmsg && msg == g_mgr_cmdmsg) {
         switch (wp) {
-        case MGRCMD_SHOW:
+        case MGR_COMMAND_SHOW:
             if (!g_wow_launch) { if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
                                  SetForegroundWindow(h); }
             return 0;
-        case MGRCMD_SETTINGS:  PostMessageA(h, WM_COMMAND, IDM_FILE_SETTINGS, 0);  return 0;
-        case MGRCMD_CLOSEPROG: PostMessageA(h, WM_COMMAND, IDM_FILE_CLOSEPROG, 0); return 0;
-        case MGRCMD_EXIT:      PostMessageA(h, WM_COMMAND, IDM_FILE_EXIT, 0);      return 0;
+        case MGR_COMMAND_SETTINGS:  PostMessageA(h, WM_COMMAND, IDM_FILE_SETTINGS, 0);  return 0;
+        case MGR_COMMAND_CLOSE_PROGRAM: PostMessageA(h, WM_COMMAND, IDM_FILE_CLOSEPROG, 0); return 0;
+        case MGR_COMMAND_EXIT:      PostMessageA(h, WM_COMMAND, IDM_FILE_EXIT, 0);      return 0;
         }
         return 0;
     }
