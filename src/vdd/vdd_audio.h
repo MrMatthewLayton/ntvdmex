@@ -29,6 +29,7 @@
 #include "vdd_speaker.h"
 
 #define AUDIO_OUTPUT_HZ    44100u /* host output rate                            */
+#define AUDIO_STEREO_CHANNELS 2         /* the mix is interleaved L/R             */
 #define AUDIO_CHUNK      512u     /* output frames the mixer works in            */
 /* Worst-case source frames for one chunk: the OPL's 49716 Hz is the fastest
    source, plus a couple of samples of interpolation headroom. */
@@ -76,7 +77,7 @@ typedef struct _AUDIO_STATE {
        underneath it. 0..100; `IsMuted` is separate so muting does not lose it. */
     UINT32   Master;
     INT        IsMuted;
-    INT16    Scratch[2 * AUDIO_SOURCE_MAX];  /* #189: room for interleaved L/R */
+    INT16    Scratch[AUDIO_STEREO_CHANNELS * AUDIO_SOURCE_MAX];  /* #189: room for interleaved L/R */
     UINT32   FramesMixed;     /* diagnostics: total output frames produced       */
     /* ── AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
          FOUR CAUSES AND NO LOG DISTINGUISHED THEM. Counted where the decision is
@@ -114,6 +115,6 @@ VOID VddAudioSetMaster(_Inout_ PAUDIO_STATE state, _In_ UINT32 percent, _In_ INT
 VOID VddAudioMix(_Inout_ PAUDIO_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
 /* #189: the same mix in stereo -- `frames` interleaved L/R pairs (2*frames samples).
    This is what the host plays; VddAudioMix is this folded to mono. */
-VOID VddAudioMixStereo(_Inout_ PAUDIO_STATE state, _Out_writes_(2 * frames) INT16 *output, _In_ UINT32 frames);
+VOID VddAudioMixStereo(_Inout_ PAUDIO_STATE state, _Out_writes_(AUDIO_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
 
 #endif /* NTVDMEX_VDD_AUDIO_H */

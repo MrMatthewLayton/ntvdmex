@@ -32,6 +32,8 @@
 
 #include "../ntvdmex_types.h"
 
+#define MIDI_ROUTE_UPPER_CASE_OFFSET 0x20   /* 'a' - 'A'                         */
+
 enum { MIDI_ROUTE_GM = 0, MIDI_ROUTE_MT32, MIDI_ROUTE_SF2, MIDI_ROUTE_COUNT };
 
 /* Case-insensitive "does haystack contain needle" (needle is upper-case ASCII). */
@@ -42,7 +44,7 @@ static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
     for (start = 0; haystack[start]; ++start) {
         for (offset = 0; needle[offset]; ++offset) {
             CHAR character = haystack[start + offset];
-            if (character >= 'a' && character <= 'z') character = (CHAR)(character - 0x20);
+            if (character >= 'a' && character <= 'z') character = (CHAR)(character - MIDI_ROUTE_UPPER_CASE_OFFSET);
             if (character != needle[offset]) break;
         }
         if (!needle[offset]) return 1;
