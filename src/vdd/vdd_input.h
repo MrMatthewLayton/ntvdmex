@@ -49,6 +49,7 @@
 #define INPUT_ACTION_KINDS     6
 #define INPUT_DEVICE_NAME      "input"
 #define INPUT_BDA_BUFFER_END_POINTER   0x82
+#define INPUT_HOST_KEY_BYTES_MAX 6         /* VddInputHostKeyBytes: the Pause sequence    */
 
 typedef struct _INPUT_STATE {
     PVDD_BUS Bus;
@@ -215,7 +216,7 @@ INT  VddInputBiosTranslate(PINPUT_STATE state, BYTE scanCode);   /* -> KB_ACT_* 
      extended = Pause) is from the documentation and this file's own NumLock note,
      not measured on the rig. */
 INT  VddInputHostKeyBytes(BYTE rawScanCode, INT isExtended, INT isBreak,
-                              BYTE bytes[6], INT *isNoRepeat);
+                              BYTE bytes[INPUT_HOST_KEY_BYTES_MAX], INT *isNoRepeat);
 
 INT  VddInputInitialize(PVDD_BUS bus, PVOID context);          /* claims INT 16h          */
 VOID VddInputReset(PVOID context);
