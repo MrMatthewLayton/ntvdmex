@@ -788,7 +788,7 @@ static WORD Emu8kWordIn(PEMU8K_STATE state, WORD portOffset)
 
 /* The bus's access widths, and how a byte access finds its port group (offsets 000h,
    400h, 800h: bits 11-10). The bus's handler types still use its own integer names
-   (vdd_bus has not migrated -- #333), so the 32-bit value here is UINT32, the same type. */
+   (VDD_BUS has not migrated -- #333), so the 32-bit value here is UINT32, the same type. */
 #define EMU8K_DOUBLEWORD_ACCESS     4
 #define EMU8K_WORD_ACCESS           2
 #define EMU8K_HIGH_WORD_PORT        2       /* a doubleword's MS word is two ports up     */
@@ -960,15 +960,15 @@ VOID VddEmu8kReset(PVOID context)
 #define EMU8K_INITIALIZE_OK         0       /* the bus's init contract: 0 = ok            */
 #define EMU8K_INITIALIZE_FAILED     (-1)
 
-INT VddEmu8kInitialize(vdd_bus *bus, PVOID context)
+INT VddEmu8kInitialize(VDD_BUS *bus, PVOID context)
 {
     PEMU8K_STATE state = (PEMU8K_STATE)context;
     state->Bus = bus;
     if (!state->BasePort) state->BasePort = EMU8K_DEFAULT_BASE;
     VddEmu8kReset(state);
     /* §2: three groups of four ports. */
-    if (vdd_claim_ports(bus, state->BasePort, (WORD)(state->BasePort + EMU8K_GROUP_LAST_PORT), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
-    if (vdd_claim_ports(bus, (WORD)(state->BasePort + EMU8K_DATA1_GROUP), (WORD)(state->BasePort + EMU8K_DATA1_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
-    if (vdd_claim_ports(bus, (WORD)(state->BasePort + EMU8K_DATA3_GROUP), (WORD)(state->BasePort + EMU8K_DATA3_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
+    if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + EMU8K_GROUP_LAST_PORT), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
+    if (VddClaimPorts(bus, (WORD)(state->BasePort + EMU8K_DATA1_GROUP), (WORD)(state->BasePort + EMU8K_DATA1_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
+    if (VddClaimPorts(bus, (WORD)(state->BasePort + EMU8K_DATA3_GROUP), (WORD)(state->BasePort + EMU8K_DATA3_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state)) return EMU8K_INITIALIZE_FAILED;
     return EMU8K_INITIALIZE_OK;
 }

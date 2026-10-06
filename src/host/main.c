@@ -903,29 +903,29 @@ static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW s
 static dos_machine_t *g_mach = NULL;
 
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
-static vdd_bus      g_bus;
-static pit_state    g_pit;       static ntvdd g_pit_dev;
-static cmos_state   g_cmos;      static ntvdd g_cmos_dev;
-static fdc_state    g_fdc;       static ntvdd g_fdc_dev;
-static ide_state    g_ide;       static ntvdd g_ide_dev;
-static pic_state    g_pic;       static ntvdd g_pic_dev;
-static video_state  g_vid;       static ntvdd g_vid_dev;
-static input_state  g_in;        static ntvdd g_in_dev;
-static speaker_state g_spk;      static ntvdd g_spk_dev;
+static VDD_BUS      g_bus;
+static pit_state    g_pit;       static NTVDD_DEVICE g_pit_dev;
+static cmos_state   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
+static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
+static ide_state    g_ide;       static NTVDD_DEVICE g_ide_dev;
+static pic_state    g_pic;       static NTVDD_DEVICE g_pic_dev;
+static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
+static input_state  g_in;        static NTVDD_DEVICE g_in_dev;
+static speaker_state g_spk;      static NTVDD_DEVICE g_spk_dev;
 /* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
    this drives Beep.sys. They are independent -- "Both" means both. */
 static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
 static int    g_spk_real;
 static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
-static dma_state    g_dma;       static ntvdd g_dma_dev;
-static opl_state    g_opl;       static ntvdd g_opl_dev;
-static sb_state     g_sb;        static ntvdd g_sb_dev;
+static dma_state    g_dma;       static NTVDD_DEVICE g_dma_dev;
+static opl_state    g_opl;       static NTVDD_DEVICE g_opl_dev;
+static sb_state     g_sb;        static NTVDD_DEVICE g_sb_dev;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
-static gus_state    g_gus;       static ntvdd g_gus_dev;
+static gus_state    g_gus;       static NTVDD_DEVICE g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
 static int          g_gus_on = 0;
 /* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
-static EMU8K_STATE  g_emu8k;     static ntvdd g_emu8k_dev;
+static EMU8K_STATE  g_emu8k;     static NTVDD_DEVICE g_emu8k_dev;
 static uint16_t     g_emu8k_dram[EMU8K_DRAM_WORDS];
 static int          g_awe_on = 0;
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
@@ -979,9 +979,9 @@ static int strstr_nocase(const char *blk, const char *name)
     }
     return 0;
 }
-static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
-static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
-static net_state    g_net;       static ntvdd g_net_dev;    /* GH #8 (s91) */
+static mpu_state    g_mpu;       static NTVDD_DEVICE g_mpu_dev;
+static comm_state   g_comm;      static NTVDD_DEVICE g_comm_dev;   /* GH #9 */
+static net_state    g_net;       static NTVDD_DEVICE g_net_dev;    /* GH #8 (s91) */
 static uint8_t      g_genstub_vec[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
 
 /* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
@@ -1053,7 +1053,7 @@ static uint8_t net_submit(void *ctx, netb_ncb *n)
      loaded dynamically like waveOut, no new import) writes present/axes/
      buttons, and settings_apply writes the adapter type. Until now the port
      was UNCLAIMED and Mario Bros died right after a CLI poll of it. */
-static joy_state    g_joy;       static ntvdd g_joy_dev;
+static joy_state    g_joy;       static NTVDD_DEVICE g_joy_dev;
 static int          g_joy_povmap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
@@ -2931,13 +2931,13 @@ static void vdd_log_line(const char *msg)
 
 static const ntvdmex_vdd_api g_vdd_api = {
     (uint32_t)sizeof(ntvdmex_vdd_api), NTVDMEX_VDD_ABI_VERSION,
-    (int  (*)(ntvdmex_vdd_bus *, uint16_t, uint16_t, ntvdmex_in_fn, ntvdmex_out_fn, void *))vdd_claim_ports,
-    (int  (*)(ntvdmex_vdd_bus *, uint32_t, uint32_t, ntvdmex_rd_fn, ntvdmex_wr_fn, void *))vdd_claim_mem,
-    (int  (*)(ntvdmex_vdd_bus *, uint8_t, ntvdmex_int_fn, void *))vdd_claim_int,
-    (int  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, void *))vdd_on_frame,
-    (void (*)(ntvdmex_vdd_bus *, uint8_t))vdd_raise_irq,
-    (void *(*)(ntvdmex_vdd_bus *, uint16_t, uint16_t))vdd_map_flat,
-    (void *(*)(ntvdmex_vdd_bus *, uint32_t))vdd_map_lin,
+    (int  (*)(ntvdmex_vdd_bus *, uint16_t, uint16_t, ntvdmex_in_fn, ntvdmex_out_fn, void *))VddClaimPorts,
+    (int  (*)(ntvdmex_vdd_bus *, uint32_t, uint32_t, ntvdmex_rd_fn, ntvdmex_wr_fn, void *))VddClaimMemory,
+    (int  (*)(ntvdmex_vdd_bus *, uint8_t, ntvdmex_int_fn, void *))VddClaimInterrupt,
+    (int  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, void *))VddOnFrame,
+    (void (*)(ntvdmex_vdd_bus *, uint8_t))VddRaiseIrq,
+    (void *(*)(ntvdmex_vdd_bus *, uint16_t, uint16_t))VddMapFlat,
+    (void *(*)(ntvdmex_vdd_bus *, uint32_t))VddMapLinear,
     vdd_log_line
 };
 
@@ -3135,22 +3135,22 @@ static BIOS_PRINT_SCREEN_JOB g_prtsc;
 static DWORD      g_prtsc_sav[9];
 static DWORD      g_prtsc_jobs, g_prtsc_errs;
 static BYTE       g_prtsc_status = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
-static void prtsc_int10(ntvdd_regs *r)
+static void prtsc_int10(NTVDD_REGISTERS *r)
 {
     HOST_LOCK();
-    vdd_bus_deliver_int(&g_bus, 0x10, r);
+    VddBusDeliverInterrupt(&g_bus, 0x10, r);
     HOST_UNLOCK();
 }
 static uint8_t prtsc_readc(void *ctx, uint8_t row, uint8_t col)
 {
-    ntvdd_regs r;
+    NTVDD_REGISTERS r;
     (void)ctx;
     ZeroMemory(&r, sizeof r);
-    r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.Page << 8; r.edx = ((DWORD)row << 8) | col;
+    r.Eax = 0x0200; r.Ebx = (DWORD)g_prtsc.Page << 8; r.Edx = ((DWORD)row << 8) | col;
     prtsc_int10(&r);                                   /* set cursor  */
-    r.eax = 0x0800; r.ebx = (DWORD)g_prtsc.Page << 8;
+    r.Eax = 0x0800; r.Ebx = (DWORD)g_prtsc.Page << 8;
     prtsc_int10(&r);                                   /* read cell   */
-    return (uint8_t)r.eax;
+    return (uint8_t)r.Eax;
 }
 static void prtsc_bop(volatile BYTE *tib, int begin)
 {
@@ -3159,17 +3159,17 @@ static void prtsc_bop(volatile BYTE *tib, int begin)
     uint8_t ch = 0;
     int rc, i;
     if (begin) {
-        ntvdd_regs r;
+        NTVDD_REGISTERS r;
         if (g_prtsc.IsActive) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; return; }
         for (i = 0; i < 9; ++i) g_prtsc_sav[i] = VDM_REG(tib, vr[i]);
         g_prtsc_status = BIOS_PRINT_SCREEN_STATUS_BUSY;
         ZeroMemory(&r, sizeof r);
-        r.eax = 0x0F00; prtsc_int10(&r);               /* AH = columns, BH = page */
-        {   uint8_t cols = (uint8_t)(r.eax >> 8), page = (uint8_t)(r.ebx >> 8);
+        r.Eax = 0x0F00; prtsc_int10(&r);               /* AH = columns, BH = page */
+        {   uint8_t cols = (uint8_t)(r.Eax >> 8), page = (uint8_t)(r.Ebx >> 8);
             ZeroMemory(&r, sizeof r);
-            r.eax = 0x0300; r.ebx = (DWORD)page << 8; prtsc_int10(&r);
+            r.Eax = 0x0300; r.Ebx = (DWORD)page << 8; prtsc_int10(&r);
             BiosPrintScreenBegin(&g_prtsc, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
-                             (uint16_t)r.edx); }
+                             (uint16_t)r.Edx); }
         ++g_prtsc_jobs;
         rc = BiosPrintScreenStep(&g_prtsc, 0, prtsc_readc, 0, &ch);
     } else {
@@ -3183,9 +3183,9 @@ static void prtsc_bop(volatile BYTE *tib, int begin)
         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
         return;
     }
-    {   ntvdd_regs r;
+    {   NTVDD_REGISTERS r;
         ZeroMemory(&r, sizeof r);
-        r.eax = 0x0200; r.ebx = (DWORD)g_prtsc.Page << 8; r.edx = g_prtsc.Cursor;
+        r.Eax = 0x0200; r.Ebx = (DWORD)g_prtsc.Page << 8; r.Edx = g_prtsc.Cursor;
         prtsc_int10(&r); }
     g_prtsc_status = (rc == BIOS_PRINT_SCREEN_STEP_ERROR) ? BIOS_PRINT_SCREEN_STATUS_ERROR : BIOS_PRINT_SCREEN_STATUS_OK;
     if (rc == BIOS_PRINT_SCREEN_STEP_ERROR) ++g_prtsc_errs;
@@ -3194,13 +3194,13 @@ static void prtsc_bop(volatile BYTE *tib, int begin)
 }
 static void dos_auxout(void *ctx, uint8_t c)
 {
-    ntvdd_regs r;
+    NTVDD_REGISTERS r;
     (void)ctx;
-    r.eax = 0x0100u | c;                         /* INT 14h AH=01h, COM1 (DX=0) */
-    r.ebx = r.ecx = r.edx = r.esi = r.edi = r.ebp = 0;
-    r.ds = r.es = 0; r.cf = r.zf = 0;
+    r.Eax = 0x0100u | c;                         /* INT 14h AH=01h, COM1 (DX=0) */
+    r.Ebx = r.Ecx = r.Edx = r.Esi = r.Edi = r.Ebp = 0;
+    r.Ds = r.Es = 0; r.CarryFlag = r.ZeroFlag = 0;
     HOST_LOCK();
-    vdd_bus_deliver_int(&g_bus, 0x14, &r);
+    VddBusDeliverInterrupt(&g_bus, 0x14, &r);
     HOST_UNLOCK();
 }
 
@@ -3247,7 +3247,7 @@ int wowcomm_read(int id, unsigned char *buf, int n)
     /* Straight off the same receive ring the guest would see through RBR. */
     while (got < n && g_comm.p[id].rx_len) {
         uint32_t v = 0;
-        vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 1, &v);
+        VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 1, &v);
         buf[got++] = (unsigned char)v;
     }
     return got;
@@ -3258,7 +3258,7 @@ int wowcomm_write(int id, const unsigned char *buf, int n)
     if (!wowcomm_valid(id)) return -2;
     for (i = 0; i < n; ++i) {
         uint32_t v = buf[i];
-        vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 0, &v);
+        VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 0, &v);
     }
     return n;
 }
@@ -3271,9 +3271,9 @@ static void wowcomm_mcr(int id, unsigned set, unsigned clear)
 {
     uint32_t v = 0;
     if (!wowcomm_valid(id)) return;
-    vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 1, &v);
+    VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 1, &v);
     v = (v | set) & ~clear;
-    vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 0, &v);
+    VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 0, &v);
 }
 /* Named rather than exposing MCR bit numbers to the WOW layer: that header must
    not need a VDD header to compile, and "DTR" is the thing the caller means. */
@@ -3330,7 +3330,7 @@ static unsigned irq_pm_vec(unsigned irq) { return irq < 8 ? 0x08u + irq : 0x70u 
    `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
    means every device IRQ was placed at its raise instant and this cost nothing. */
 static DWORD g_irqn_retry_try = 0, g_irqn_retry_ok = 0, g_irqn_retry_why = 0;
-static DWORD          g_irq_raised[16];     /* vdd_raise_irq calls, per line */
+static DWORD          g_irq_raised[16];     /* VddRaiseIrq calls, per line */
 static DWORD          g_irq_raised_any = 0;
 /* Async preemption (session 11). g_hcpu is a handle to the thread that runs the guest
    -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
@@ -6987,8 +6987,8 @@ static void host_screenshot(void)
        anything but 8-bit -- the user pressed Ctrl+F5 in Heaven7's direct-colour part and
        got nothing, with nothing said. */
     HOST_LOCK();
-    w = g_vid.frame.w; h = g_vid.frame.h; bpp = g_vid.frame.bpp;
-    src = g_vid.frame.pixels;
+    w = g_vid.frame.Width; h = g_vid.frame.Height; bpp = g_vid.frame.BitsPerPixel;
+    src = g_vid.frame.Pixels;
     if (!src || !w || !h || (bpp != 8 && bpp != 32)) { HOST_UNLOCK(); return; }
     stride = (bpp == 8) ? ((w + 3) & ~3u) : w * 4u;    /* DIB rows are 4-byte aligned */
     pal_n  = (bpp == 8) ? 256 : 0;
@@ -7006,7 +7006,7 @@ static void host_screenshot(void)
     bih->biSizeImage = img_sz; bih->biClrUsed = pal_n; bih->biClrImportant = pal_n;
     { DWORD i; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
       for (i = 0; i < pal_n; ++i) {
-          uint32_t c = g_vid.frame.palette ? g_vid.frame.palette[i] : 0;
+          uint32_t c = g_vid.frame.Palette ? g_vid.frame.Palette[i] : 0;
           pal[i*4+0] = (BYTE)(c & 0xFF);          /* B */
           pal[i*4+1] = (BYTE)((c >> 8) & 0xFF);   /* G */
           pal[i*4+2] = (BYTE)((c >> 16) & 0xFF);  /* R */
@@ -7015,7 +7015,7 @@ static void host_screenshot(void)
     bits = dib + sizeof(BITMAPINFOHEADER) + pal_n * 4;
     { DWORD y, x, rowb = (bpp == 8) ? w : w * 4u;
       for (y = 0; y < h; ++y) {                    /* flip: DIB row 0 is the bottom   */
-          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.frame.stride;
+          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.frame.Stride;
           BYTE *dr = bits + (size_t)y * stride;
           for (x = 0; x < rowb; ++x) dr[x] = sr[x];
           if (bpp == 32) for (x = 3; x < rowb; x += 4) dr[x] = 0;   /* XRGB: no alpha */
@@ -8912,9 +8912,9 @@ static void exec_mach_restore(int d, char **pp)
     g_irq0_isr_since = 0;
     if (pit_eff_reload(&g_pit) != g_exec_mach[d].pit0) {   /* a game's fast timer */
         uint32_t v = 0x36, n = g_exec_mach[d].pit0 & 0xFFFF;
-        vdd_bus_io(&g_bus, 0x43, 1, 0, &v);
-        v = n & 0xFF;        vdd_bus_io(&g_bus, 0x40, 1, 0, &v);
-        v = (n >> 8) & 0xFF; vdd_bus_io(&g_bus, 0x40, 1, 0, &v);
+        VddBusIo(&g_bus, 0x43, 1, 0, &v);
+        v = n & 0xFF;        VddBusIo(&g_bus, 0x40, 1, 0, &v);
+        v = (n >> 8) & 0xFF; VddBusIo(&g_bus, 0x40, 1, 0, &v);
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
@@ -8924,10 +8924,10 @@ static void exec_mach_restore(int d, char **pp)
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
               || g_vid.mkind != VID_KIND_TEXT);
     if (remode) {
-        ntvdd_regs r;
+        NTVDD_REGISTERS r;
         ZeroMemory(&r, sizeof r);
-        r.eax = g_exec_mach[d].vmode;           /* AH=00h set mode */
-        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+        r.Eax = g_exec_mach[d].vmode;           /* AH=00h set mode */
+        VddBusDeliverInterrupt(&g_bus, 0x10, &r);
     }
     HOST_UNLOCK();
     if (remode) video_trap_sync();
@@ -9009,7 +9009,7 @@ static void i33_take_motion(LONG x, LONG y, LONG *pdx, LONG *pdy)
      a client that issues the INT in PM would most usefully get. UNMEASURED. */
 static WORD dpmi_seg_to_desc(WORD seg);
 static volatile BYTE *i33_drvdata(void)
-{ return (volatile BYTE *)vdd_map_flat(&g_bus, VDD_MOUSE_SEG, 0); }
+{ return (volatile BYTE *)VddMapFlat(&g_bus, VDD_MOUSE_SEG, 0); }
 static void i33_ret_ptr(volatile BYTE *tib, int src, int offreg, WORD off)
 {
     if (src == I33_SRC_PM) {
@@ -11874,20 +11874,20 @@ static void host_fullscreen_toggle(HWND h)
         fq = zput(fq, (g_pd.dd && g_pd.back) ? "ddraw-exclusive" : "gdi-borderless");
         fq = zput(fq, " client=");           fq = zdec(fq, (unsigned)cw);
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)chh);
-        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.frame.w);
-        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.h);
-        if (g_vid.frame.w && g_vid.frame.h) {
+        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.frame.Width);
+        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.Height);
+        if (g_vid.frame.Width && g_vid.frame.Height) {
             int fx, fy, fw, fh;
-            present_layout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.w,
-                           (int)g_vid.frame.h, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
+            present_layout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.Width,
+                           (int)g_vid.frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
             fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
             fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
             fq = zput(fq, " at ");    fq = zdec(fq, (unsigned)fx);
             fq = zput(fq, ",");       fq = zdec(fq, (unsigned)fy);
-            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.frame.w));
-            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.frame.h));
-            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.frame.w));
-            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.frame.h));
+            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.frame.Width));
+            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.frame.Height));
+            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.frame.Width));
+            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.frame.Height));
         }
         fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.aspect);
         fq = zput(fq, "\r\n");
@@ -12396,7 +12396,7 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
 static void host_frame_size(int *sw, int *sh)
 {
     if (g_pd.snap_valid && g_pd.snap_w > 0 && g_pd.snap_h > 0) { *sw = g_pd.snap_w; *sh = g_pd.snap_h; return; }
-    if (g_vid.frame.w && g_vid.frame.h) { *sw = (int)g_vid.frame.w; *sh = (int)g_vid.frame.h; return; }
+    if (g_vid.frame.Width && g_vid.frame.Height) { *sw = (int)g_vid.frame.Width; *sh = (int)g_vid.frame.Height; return; }
     *sw = 720; *sh = 400;                          /* before the first frame: VGA text */
 }
 static void host_picture(int k, int *pw, int *ph)
@@ -13418,7 +13418,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              the pacer's 1 ms Sleep works (audio_wave.c does NOT do this -- the claim that
              it already did is about loading winmm dynamically, not about resolution).
              Raising it system-wide also makes THIS timer start firing at the 5 ms it
-             always asked for: **3x the frame work**, and vdd_bus_frame renders the whole
+             always asked for: **3x the frame work**, and VddBusFrame renders the whole
              frame under g_lock every single tick, at a site whose measured holds are
              13-22 ms. A body that cannot finish inside its own period saturates the UI
              thread, and the UI thread is the one that turns WM_KEYUP into a break code.
@@ -13582,7 +13582,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " text=");  mq = zhex(mq, (DWORD)i33_text());
                 mq = zput(mq, " mkind="); mq = zhex(mq, (DWORD)g_vid.mkind);
                 mq = zput(mq, " vesa=");  mq = zhex(mq, (DWORD)g_vid.in_vesa);
-                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.frame.h);
+                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.frame.Height);
                 mq = zput(mq, " vmaxy="); mq = zhex(mq, (DWORD)i33_vmaxy());
                 mq = zput(mq, " msy=");   mq = zhex(mq, (DWORD)g_ms_y);
                 mq = zput(mq, "\r\n");
@@ -13642,7 +13642,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         host_key_typematic();       /* pumped from BOTH threads, like the PIT */
         host_key_present();
         HOST_LOCK();
-        vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
+        VddBusFrame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         /* ── THE REAL PC SPEAKER, SAMPLED HERE AND DRIVEN BELOW. ─────────────────
              The gate and the tone are read UNDER the lock, because the exec thread
              writes both; the driver call happens OUTSIDE it, because a
@@ -13684,7 +13684,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                    cursor over a text interface" was. st->fb is re-rendered from the text
                    buffer every present, so this one may be drawn into the frame. */
                 int ms_text = (g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa);
-                if (g_ms_hidden == 0 && ms_text && g_vid.frame.bpp == 8 && g_vid.frame.pixels) {
+                if (g_ms_hidden == 0 && ms_text && g_vid.frame.BitsPerPixel == 8 && g_vid.frame.Pixels) {
                     int ch = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
                     vdd_video_text_cursor(&g_vid, (int)(g_ms_x / VID_CELL_W), (int)(g_ms_y / ch),
                                           (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
@@ -14640,14 +14640,14 @@ static DWORD WINAPI ui_thread(LPVOID arg)
 }
 
 /* --- guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch) --- */
-static void regs_load(ntvdd_regs *r, volatile BYTE *tib)
+static void regs_load(NTVDD_REGISTERS *r, volatile BYTE *tib)
 {
-    r->eax = VDM_REG(tib, VTIB_EAX); r->ebx = VDM_REG(tib, VTIB_EBX);
-    r->ecx = VDM_REG(tib, VTIB_ECX); r->edx = VDM_REG(tib, VTIB_EDX);
-    r->esi = VDM_REG(tib, VTIB_ESI); r->edi = VDM_REG(tib, VTIB_EDI);
-    r->ebp = VDM_REG(tib, VTIB_EBP);
-    r->ds = (uint16_t)VDM_REG(tib, VTIB_DS); r->es = (uint16_t)VDM_REG(tib, VTIB_ES);
-    r->cf = 0;
+    r->Eax = VDM_REG(tib, VTIB_EAX); r->Ebx = VDM_REG(tib, VTIB_EBX);
+    r->Ecx = VDM_REG(tib, VTIB_ECX); r->Edx = VDM_REG(tib, VTIB_EDX);
+    r->Esi = VDM_REG(tib, VTIB_ESI); r->Edi = VDM_REG(tib, VTIB_EDI);
+    r->Ebp = VDM_REG(tib, VTIB_EBP);
+    r->Ds = (uint16_t)VDM_REG(tib, VTIB_DS); r->Es = (uint16_t)VDM_REG(tib, VTIB_ES);
+    r->CarryFlag = 0;
 }
 /* STORE EVERYTHING LOAD READS. This wrote back only the four general registers, so any
    service whose ANSWER is a pointer silently threw that answer away: INT 10h AH=11h AL=30h
@@ -14658,13 +14658,13 @@ static void regs_load(ntvdd_regs *r, volatile BYTE *tib)
    the guest. Same silent loss applied to every ES:DI and DS:SI answer (VESA info blocks,
    INT 33h, INT 10h 1Bh). regs_load already reads all seven, so writing all seven back is
    symmetric: a handler that does not touch one stores the value it was given. */
-static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
+static void regs_store(NTVDD_REGISTERS *r, volatile BYTE *tib)
 {
-    VDM_REG(tib, VTIB_EAX) = r->eax; VDM_REG(tib, VTIB_EBX) = r->ebx;
-    VDM_REG(tib, VTIB_ECX) = r->ecx; VDM_REG(tib, VTIB_EDX) = r->edx;
-    VDM_REG(tib, VTIB_ESI) = r->esi; VDM_REG(tib, VTIB_EDI) = r->edi;
-    VDM_REG(tib, VTIB_EBP) = r->ebp;
-    VDM_REG(tib, VTIB_DS)  = r->ds;  VDM_REG(tib, VTIB_ES)  = r->es;
+    VDM_REG(tib, VTIB_EAX) = r->Eax; VDM_REG(tib, VTIB_EBX) = r->Ebx;
+    VDM_REG(tib, VTIB_ECX) = r->Ecx; VDM_REG(tib, VTIB_EDX) = r->Edx;
+    VDM_REG(tib, VTIB_ESI) = r->Esi; VDM_REG(tib, VTIB_EDI) = r->Edi;
+    VDM_REG(tib, VTIB_EBP) = r->Ebp;
+    VDM_REG(tib, VTIB_DS)  = r->Ds;  VDM_REG(tib, VTIB_ES)  = r->Es;
 }
 
 /* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
@@ -15097,7 +15097,7 @@ static void pit_latch_note(uint8_t cmd)
 }
 
 static DWORD g_sndio_logged = 0;    /* bounded SNDIO trace; see the note below */
-static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
+static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
                        int is_in, int width)
 {
     uint32_t val, eax = VDM_REG(tib, VTIB_EAX);
@@ -15139,7 +15139,7 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
            absent card can conclude it IS present and then wait forever for a
            response that will never come. */
         val = 0;
-        if (!vdd_bus_io(bus, port, (uint8_t)width, 1, &val)) {
+        if (!VddBusIo(bus, port, (uint8_t)width, 1, &val)) {
             val = 0xFFFFFFFFu;
             io_unclaimed_note(port, 1);
         }
@@ -15148,7 +15148,7 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
         else                 VDM_REG(tib, VTIB_EAX) = val;
     } else {
         val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
-        if (!vdd_bus_io(bus, port, (uint8_t)width, 0, &val)) io_unclaimed_note(port, 0);
+        if (!VddBusIo(bus, port, (uint8_t)width, 0, &val)) io_unclaimed_note(port, 0);
         if (port == 0x40) host_pit_resync_check();   /* see host_pit_resync_check */
     }
     /* ── THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS. ─────────────────
@@ -15203,7 +15203,7 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
    re-enters this monitor every IO_BURST_MAX accesses instead of once at the end.
    Returns the number of extra accesses performed (0 = idiom not present). */
 #define IO_BURST_MAX 4096
-static DWORD host_io_loop_burst(volatile BYTE *tib, vdd_bus *bus,
+static DWORD host_io_loop_burst(volatile BYTE *tib, VDD_BUS *bus,
                                 volatile const BYTE *seg, DWORD ip_next,
                                 DWORD io_start, uint16_t port,
                                 int is_in, int width, int is32)
@@ -15319,7 +15319,7 @@ static void rt_idle(void)
     Sleep(1);
 }
 
-static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
+static int host_try_io(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
@@ -15363,7 +15363,7 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
    we decode the IN/OUT that ENDS at CS:IP and service it WITHOUT advancing EIP: a DX-form
    (1 byte: EC/ED/EE/EF at IP-1, optional 66 prefix at IP-2) or an imm-form (2 bytes:
    E4-E7 at IP-2, port imm at IP-1). Returns 1 if serviced. */
-static int host_try_io_retro(volatile BYTE *tib, vdd_bus *bus)
+static int host_try_io_retro(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
@@ -15407,7 +15407,7 @@ static int host_try_io_retro(volatile BYTE *tib, vdd_bus *bus)
    most IO_BURST_MAX units per reflect and only step past the instruction once CX
    drains -- leaving EIP on the REP otherwise, exactly as a real CPU resumes an
    interrupted string op, which keeps a 64K transfer from monopolising the monitor. */
-static int host_try_io_string(volatile BYTE *tib, vdd_bus *bus)
+static int host_try_io_string(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
@@ -15449,7 +15449,7 @@ static int host_try_io_string(volatile BYTE *tib, vdd_bus *bus)
         if (is_in) {                                          /* port -> ES:DI    */
             DWORD di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
             DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + di;
-            vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
+            VddBusIo(bus, port, (uint8_t)width, 1, &val);
             pokew_n(lin, val, width);
             VDM_SET16(tib, VTIB_EDI, (WORD)(di + step));
         } else {                                              /* DS:SI -> port    */
@@ -15457,7 +15457,7 @@ static int host_try_io_string(volatile BYTE *tib, vdd_bus *bus)
             DWORD sregoff = sover ? sover : VTIB_DS;
             DWORD lin = ((VDM_REG(tib, sregoff) & 0xFFFF) << 4) + si;
             val = peekw_n(lin, width);
-            vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
+            VddBusIo(bus, port, (uint8_t)width, 0, &val);
             VDM_SET16(tib, VTIB_ESI, (WORD)(si + step));
         }
     }
@@ -15514,7 +15514,7 @@ static DWORD g_pollstk[POLLSTK_MAX], g_pollstk_hits[POLLSTK_MAX];
 static DWORD g_pollgap[10], g_pollgap_max_us = 0;
 static unsigned g_pollstk_n = 0, g_pollstk_overflow = 0;
 
-static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
+static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csv = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD eip = VDM_REG(tib, VTIB_EIP);
@@ -16707,11 +16707,11 @@ static void host_pit_generate(void);
 static uint32_t iio_in(uint16_t port, int width)
 { uint32_t v = 0;
   if (port >= 0x40 && port <= 0x43) host_pit_generate();
-  vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
+  VddBusIo(&g_bus, port, (uint8_t)width, 1, &v); return v; }
 static void iio_out(uint16_t port, int width, uint32_t val)
 { uint32_t v = val;
   if (port >= 0x40 && port <= 0x43) host_pit_generate();
-  vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v);
+  VddBusIo(&g_bus, port, (uint8_t)width, 0, &v);
   if (port == 0x43) pit_latch_note((uint8_t)val);     /* same instrument as the reflected path */
   if (port == 0x40) host_pit_resync_check(); }         /* and the same resync rule           */
 
@@ -24418,9 +24418,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         return 1;                                  /* EIP unchanged on purpose */
                     }
                     if (vec == 0x10) {                             /* video BIOS in PM -> VDD */
-                        ntvdd_regs r; regs_load(&r, tib);
+                        NTVDD_REGISTERS r; regs_load(&r, tib);
                         HOST_LOCK();
-                        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+                        VddBusDeliverInterrupt(&g_bus, 0x10, &r);
                         HOST_UNLOCK();
                         int10_wait_after();                     /* #226: 4F07h BL=80h */
                         regs_store(&r, tib);
@@ -24432,19 +24432,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         return 1;
                     }
                     if (vec == 0x16) {                             /* keyboard BIOS in PM -> VDD */
-                        ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
+                        NTVDD_REGISTERS r; uint8_t ah16; regs_load(&r, tib); ah16 = VddGetAh(&r);
                         for (;;) {                                 /* AH=00/10 block until a key */
                             HOST_LOCK();
-                            vdd_bus_deliver_int(&g_bus, 0x16, &r);
+                            VddBusDeliverInterrupt(&g_bus, 0x16, &r);
                             HOST_UNLOCK();
-                            if ((ah16 != 0x00 && ah16 != 0x10) || r.zf == 0 || !g_running) break;
+                            if ((ah16 != 0x00 && ah16 != 0x10) || r.ZeroFlag == 0 || !g_running) break;
                             InterlockedIncrement(&g_dpmi_iter);    /* keep the watchdog happy while blocked */
                             WaitForSingleObject(g_key_event, 50);
                         }
                         regs_store(&r, tib);
                         /* set CF/ZF directly in the PM eflags (no real-mode IRET frame in PM) */
-                        if (r.cf) VDM_REG(tib, VTIB_EFLAGS) |= 1u;    else VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                        if (r.zf) VDM_REG(tib, VTIB_EFLAGS) |= 0x40u; else VDM_REG(tib, VTIB_EFLAGS) &= ~0x40u;
+                        if (r.CarryFlag) VDM_REG(tib, VTIB_EFLAGS) |= 1u;    else VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                        if (r.ZeroFlag) VDM_REG(tib, VTIB_EFLAGS) |= 0x40u; else VDM_REG(tib, VTIB_EFLAGS) &= ~0x40u;
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte PM BOP */
                         (void)base;                                 /* no per-poll logging (would flood) */
                         return 1;
@@ -24455,9 +24455,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         return 1;
                     }
                     if (vec == 0x1A || vec == 0x08) {              /* BIOS time / timer tick in PM */
-                        ntvdd_regs r; regs_load(&r, tib);
+                        NTVDD_REGISTERS r; regs_load(&r, tib);
                         HOST_LOCK();
-                        vdd_bus_deliver_int(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
+                        VddBusDeliverInterrupt(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
                         /* The BIOS timer ISR ends with its EOI; a PM handler that chains
                            here is relying on it, as in V86 (#173). */
                         if (vec == 0x08) vdd_pic_eoi(&g_pic, 0);
@@ -26068,10 +26068,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                             else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
                             else if (intno == 0x10) {
-                                ntvdd_regs vr; regs_load(&vr, tib);
-                                WORD in_ax = (WORD)vr.eax, in_cx = (WORD)vr.ecx;
+                                NTVDD_REGISTERS vr; regs_load(&vr, tib);
+                                WORD in_ax = (WORD)vr.Eax, in_cx = (WORD)vr.Ecx;
                                 HOST_LOCK();
-                                vdd_bus_deliver_int(&g_bus, 0x10, &vr);
+                                VddBusDeliverInterrupt(&g_bus, 0x10, &vr);
                                 HOST_UNLOCK();
                                 int10_wait_after();                     /* #226: 4F07h BL=80h */
                                 /* s84: ZAR stopped seeing VESA. Its VBE traffic arrives HERE
@@ -26084,9 +26084,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                         char vb[160], *vq = vb;
                                         vq = zput(vq, "SIMINT10 VBE in=0x"); vq = zhex(vq, in_ax);
                                         vq = zput(vq, " cx=0x"); vq = zhex(vq, in_cx);
-                                        vq = zput(vq, " -> ax=0x"); vq = zhex(vq, (WORD)vr.eax);
+                                        vq = zput(vq, " -> ax=0x"); vq = zhex(vq, (WORD)vr.Eax);
                                         if (in_ax == 0x4F01 || in_ax == 0x4F00) {
-                                            DWORD lin = ((DWORD)(WORD)vr.es << 4) + (WORD)vr.edi;
+                                            DWORD lin = ((DWORD)(WORD)vr.Es << 4) + (WORD)vr.Edi;
                                             if (host_readable((const void *)(ULONG_PTR)lin, 8)) {
                                                 vq = zput(vq, in_ax == 0x4F01 ? " attr=0x" : " sig/ver=");
                                                 vq = zhex(vq, *(volatile DWORD *)(ULONG_PTR)lin);
@@ -27762,7 +27762,7 @@ static BOOL shim_io_hook(HANDLE hvdd, WORD n, const void *ranges, const void *ha
                                         && g_isv_hook[i].first == rg[k * 2])) { slot = i; break; }
         if (slot < 0) return FALSE;
         if (!g_isv_hook[slot].hvdd
-            && vdd_claim_ports(&g_bus, rg[k * 2], rg[k * 2 + 1], isv_io_in, isv_io_out,
+            && VddClaimPorts(&g_bus, rg[k * 2], rg[k * 2 + 1], isv_io_in, isv_io_out,
                                (void *)(ULONG_PTR)slot) != 0) return FALSE;
         g_isv_hook[slot].hvdd = hvdd;
         g_isv_hook[slot].first = rg[k * 2]; g_isv_hook[slot].last = rg[k * 2 + 1];
@@ -29065,15 +29065,15 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
     if (bn == DOS_GENSTUB_BOP && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         if (ip >= DOS_GENSTUB_OFF && ip < DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4) {
-            ntvdd_regs r; regs_load(&r, tib);
+            NTVDD_REGISTERS r; regs_load(&r, tib);
             HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, g_genstub_vec[(ip - DOS_GENSTUB_OFF) / 4], &r);
+            VddBusDeliverInterrupt(&g_bus, g_genstub_vec[(ip - DOS_GENSTUB_OFF) / 4], &r);
             HOST_UNLOCK();
             regs_store(&r, tib);
             {   /* CF into the FLAGS the stub's IRET restores (an INT pushed them) */
                 WORD *pf = (WORD *)(ULONG_PTR)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                                     + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
-                if (r.cf) *pf |= 1; else *pf &= (WORD)~1;
+                if (r.CarryFlag) *pf |= 1; else *pf &= (WORD)~1;
             }
             VDM_REG(tib, VTIB_EIP) += 3;
             V86BOP_RET(V86BOP_DONE);
@@ -29092,9 +29092,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         }
     }
     if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
-        ntvdd_regs r; regs_load(&r, tib);
+        NTVDD_REGISTERS r; regs_load(&r, tib);
         HOST_LOCK();
-        vdd_bus_deliver_int(&g_bus, (uint8_t)bn, &r);
+        VddBusDeliverInterrupt(&g_bus, (uint8_t)bn, &r);
         HOST_UNLOCK();
         regs_store(&r, tib);
         VDM_REG(tib, VTIB_EIP) += 3;
@@ -29115,9 +29115,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         V86BOP_RET(V86BOP_DONE);
     }
     if (bn == 0x10) {
-        ntvdd_regs r; regs_load(&r, tib);
+        NTVDD_REGISTERS r; regs_load(&r, tib);
         HOST_LOCK();
-        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+        VddBusDeliverInterrupt(&g_bus, 0x10, &r);
         HOST_UNLOCK();
         int10_wait_after();                     /* #226: 4F07h BL=80h */
         regs_store(&r, tib);
@@ -29126,18 +29126,18 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         V86BOP_RET(V86BOP_DONE);
     }
     if (bn == 0x16) {
-        ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
+        NTVDD_REGISTERS r; uint8_t ah16; regs_load(&r, tib); ah16 = VddGetAh(&r);
         HOST_LOCK();
-        vdd_bus_deliver_int(&g_bus, 0x16, &r);
+        VddBusDeliverInterrupt(&g_bus, 0x16, &r);
         HOST_UNLOCK();
         /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
            stops the guest dead, so its timer, its music and its screen freeze until a key
            arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
            the BOP instead: the guest re-executes INT 16h and keeps taking timer
            interrupts while it waits, which is what a real BIOS spin does. */
-        if ((ah16 == 0x00 || ah16 == 0x10) && r.zf != 0 && g_running) V86BOP_RET(V86BOP_RERUN);
+        if ((ah16 == 0x00 || ah16 == 0x10) && r.ZeroFlag != 0 && g_running) V86BOP_RET(V86BOP_RERUN);
         regs_store(&r, tib);
-        host_set_flags(tib, r.cf, r.zf);
+        host_set_flags(tib, r.CarryFlag, r.ZeroFlag);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
@@ -29359,9 +29359,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                  (epic #24). These bits are a statement about OUR machine, and
                  the thing that pins them is the loopback self-test, which is
                  the part's own documented behaviour rather than an opinion. */
-            ntvdd_regs r14; regs_load(&r14, tib);
+            NTVDD_REGISTERS r14; regs_load(&r14, tib);
             HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, 0x14, &r14);
+            VddBusDeliverInterrupt(&g_bus, 0x14, &r14);
             HOST_UNLOCK();
             regs_store(&r14, tib);
             BCF_CLR();
@@ -29494,12 +29494,12 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         if (handled) { VDM_REG(tib, VTIB_EIP) += 3; V86BOP_RET(V86BOP_DONE); }
     }
     if (bn == 0x1A) {   /* INT 1Ah BIOS time */
-        ntvdd_regs r; regs_load(&r, tib);
+        NTVDD_REGISTERS r; regs_load(&r, tib);
         HOST_LOCK();
-        vdd_bus_deliver_int(&g_bus, 0x1A, &r);
+        VddBusDeliverInterrupt(&g_bus, 0x1A, &r);
         HOST_UNLOCK();
         regs_store(&r, tib);
-        host_set_flags(tib, r.cf, r.zf);
+        host_set_flags(tib, r.CarryFlag, r.ZeroFlag);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
@@ -31936,13 +31936,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_dos_tick_take = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
-    vdd_bus_init(&g_bus, NULL);
-    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
+    VddBusInitialize(&g_bus, NULL);
+    VddBusSetSinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
     g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
 
-    vdd_bus_add(&g_bus, &g_pic_dev);
+    VddBusAdd(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
-    vdd_bus_add(&g_bus, &g_pit_dev);
+    VddBusAdd(&g_bus, &g_pit_dev);
     /* ── ★ 0040:006C IS TICKS SINCE MIDNIGHT, SO SET IT TO THAT. (GH #253) ──
          POST does this from the RTC; nothing here did, so every launch began at
          00:00:00 by the BIOS's clock while INT 1Ah AH=02h read the real time. Seeded
@@ -31969,7 +31969,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
     g_cmos.base_kb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = vdd_cmos_device(&g_cmos);
-    vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
+    VddBusAdd(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
          3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh
          -- RQM=1 with DIO=1 -- and the datasheet's own command-write loop
@@ -31980,7 +31980,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          both gates it through DOR bit 3 and unmasks it at the PIC, which starts
          at 0xFC. See src/vdd/vdd_fdc.h. */
     g_fdc_dev = vdd_fdc_device(&g_fdc);
-    vdd_bus_add(&g_bus, &g_fdc_dev);            /* 82077AA: 3F2h-3F5h, 3F7h     */
+    VddBusAdd(&g_bus, &g_fdc_dev);            /* 82077AA: 3F2h-3F5h, 3F7h     */
     /* ── THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179) ─────────────
          Same shape as the FDC above, one surface later: nothing claimed 1F0h-1F7h
          or 3F6h, FFh there is BSY=1, and the ATA's own "wait until BSY clears"
@@ -31989,7 +31989,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          so a detection routine finds the controller, finds no device, and moves
          on. See src/vdd/vdd_ide.h for why 00h and not 7Fh. */
     g_ide_dev = vdd_ide_device(&g_ide);
-    vdd_bus_add(&g_bus, &g_ide_dev);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
+    VddBusAdd(&g_bus, &g_ide_dev);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
     /* ...and the BIOS says the same thing: 0040:0075, the number of fixed disks a
        program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left
        to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
@@ -32007,8 +32007,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_vid.guest_pc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
     g_vid.bda = (uint8_t *)0x400;               /* the display's BDA fields (0449..0489) */
     g_vid_dev = vdd_video_device(&g_vid);
-    vdd_bus_add(&g_bus, &g_vid_dev);
-    /* ⚠ AFTER vdd_bus_add, NOT BEFORE. vdd_bus_add calls vdd_video_init, which
+    VddBusAdd(&g_bus, &g_vid_dev);
+    /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls vdd_video_init, which
        disarms the watchpoint -- setting it first looked right and was silently
        undone, and the run came back with no trace and no error. */
     /* cfg/vwatch.txt: a hex VRAM byte offset to record every planar write to. Off
@@ -32053,7 +32053,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_in.bda = (uint8_t *)0x400;
     g_in.time_us = host_time_us;                /* the keyboard's transfer time is real time */
     g_in_dev = vdd_input_device(&g_in);
-    vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
+    VddBusAdd(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
          0040:0000..0007 are the COM1..COM4 I/O bases and 0040:0008..000F the LPT1..LPT4
          bases. Nothing ever wrote them, so every one read as 0 -- while our INT 11h
@@ -32099,10 +32099,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_comm.sink = com_tx_sink; g_comm.sink_ctx = NULL;
       g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
       g_comm_dev = vdd_comm_device(&g_comm);
-      vdd_bus_add(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
+      VddBusAdd(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
     vdd_net_set_backend(&g_net, net_submit, NULL);
     g_net_dev = vdd_net_device(&g_net);
-    vdd_bus_add(&g_bus, &g_net_dev);             /* GH #8: NetBIOS, INT 5Ch       */
+    VddBusAdd(&g_bus, &g_net_dev);             /* GH #8: NetBIOS, INT 5Ch       */
     { volatile WORD *bda = (volatile WORD *)(ULONG_PTR)0x400;
       /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
          refused for want of a bus table slot is not fitted, and writing its base
@@ -32136,19 +32136,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_bda_ready = 1;
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
-    vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
+    VddBusAdd(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
     g_joy.now_us = joy_now_us;
     g_joy_dev = vdd_joy_device(&g_joy);
-    vdd_bus_add(&g_bus, &g_joy_dev);            /* gameport: 0x200-0x207         */
+    VddBusAdd(&g_bus, &g_joy_dev);            /* gameport: 0x200-0x207         */
     /* ⛔ THE POLL THREAD IS NOT SPAWNED HERE. See joy_poll_ensure: it is created
          ONLY when a joystick is actually configured, so the default play config --
          which is EVERY game that does not use a gamepad, Skyroads included -- runs
          with the exact s61 thread landscape and cannot regress on its account. */
     g_dma_dev = vdd_dma_device(&g_dma);
-    vdd_bus_add(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
+    VddBusAdd(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
     g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
     g_opl_dev = vdd_opl_device(&g_opl);
-    vdd_bus_add(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
+    VddBusAdd(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
     g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
     /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
          from different places, a driver is told one port and finds another. */
@@ -32162,12 +32162,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_sb.cap_buf = s_sbcap; g_sb.cap_cap = sizeof s_sbcap; g_sb.cap_len = 0;
     }
     g_sb_dev = vdd_sb_device(&g_sb);
-    vdd_bus_add(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
+    VddBusAdd(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     g_mpu.sink = host_midi_sink;
     {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
         g_mpu.base = MPUB[g_set.v[SET_MPUADDR] <= 4 ? g_set.v[SET_MPUADDR] : 3]; }
     g_mpu_dev = vdd_mpu_device(&g_mpu);
-    vdd_bus_add(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
+    VddBusAdd(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
        ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
     if (g_gus_on) {                             /* decided at startup: see NOGUS_FLAG's read */
@@ -32175,7 +32175,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_gusmidi.sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
         g_gus.midi_sink = gus_midi_to_synth;
         g_gus_dev = vdd_gus_device(&g_gus);
-        vdd_bus_add(&g_bus, &g_gus_dev);
+        VddBusAdd(&g_bus, &g_gus_dev);
     }
     /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,
        E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
@@ -32184,9 +32184,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_emu8k.BasePort = (uint16_t)(g_sbcfg.IoBase + 0x400);
         g_emu8k.Dram = g_emu8k_dram; g_emu8k.DramWords = EMU8K_DRAM_WORDS;
         g_emu8k_dev = VddEmu8kDevice(&g_emu8k);
-        vdd_bus_add(&g_bus, &g_emu8k_dev);
+        VddBusAdd(&g_bus, &g_emu8k_dev);
     }
-    /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORTS was 16 and
+    /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORT_RANGES was 16 and
          exactly full; adding one range pushed the LAST device added -- the MPU-401 --
          off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
          like an empty slot. Doom reset it four times, got nothing, and played no music.
@@ -32713,7 +32713,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             int user  = (v >= 0x60 && v <= 0x66) || (v >= 0x68 && v <= 0x6F)
                         || (v >= 0x78 && v <= 0xFE);
             char gb[120], *gq = gb;
-            if (!g_bus.ints[v].svc || wired) continue;
+            if (!g_bus.Interrupts[v].Service || wired) continue;
             gq = zput(gq, "  VDD: claim_int 0x"); gq = zhex(gq, v);
             if (!user || n >= DOS_GENSTUB_N) {
                 gq = zput(gq, user ? " -- no generic stub left; NOT delivered\r\n"
@@ -32775,14 +32775,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           log_append(LOG_PATH, base, p); p = base;
       } }
     { char bb2[160], *bq = bb2;
-      bq = zput(bq, g_bus.claim_fail ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
-      bq = zhex(bq, (DWORD)g_bus.claim_fail);
-      bq = zput(bq, " refused, ports="); bq = zhex(bq, (DWORD)g_bus.n_ports);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_PORTS);
-      bq = zput(bq, " mem="); bq = zhex(bq, (DWORD)g_bus.n_mem);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_MEM);
-      bq = zput(bq, " dev="); bq = zhex(bq, (DWORD)g_bus.n_dev);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_DEV);
+      bq = zput(bq, g_bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
+      bq = zhex(bq, (DWORD)g_bus.ClaimFailures);
+      bq = zput(bq, " refused, ports="); bq = zhex(bq, (DWORD)g_bus.PortCount);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_PORT_RANGES);
+      bq = zput(bq, " mem="); bq = zhex(bq, (DWORD)g_bus.MemoryCount);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_MEMORY_WINDOWS);
+      bq = zput(bq, " dev="); bq = zhex(bq, (DWORD)g_bus.DeviceCount);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_DEVICES);
       bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb2, bq); serial_out(bb2, bq); }
 
     SetCurrentDirectoryA(g_cur);    /* DOS relative paths resolve against CurDir */
@@ -33348,9 +33348,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x08) {   /* INT 08h timer tick */
-            ntvdd_regs r; regs_load(&r, tib);
+            NTVDD_REGISTERS r; regs_load(&r, tib);
             HOST_LOCK();
-            vdd_bus_deliver_int(&g_bus, 0x08, &r);  /* bump BIOS tick at 0040:006C */
+            VddBusDeliverInterrupt(&g_bus, 0x08, &r);  /* bump BIOS tick at 0040:006C */
             /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
                with nowhere to put one, so issue the EOI here -- without it the PIC's
                in-service bit for IRQ0 latches on the first tick and the timer stops dead
@@ -33958,9 +33958,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        the remaining timing piece.) */
                     opl_pump_time();
                     if (InterlockedExchange(&g_irq0_pending, 0)) {
-                        ntvdd_regs tr; regs_load(&tr, tib);
+                        NTVDD_REGISTERS tr; regs_load(&tr, tib);
                         HOST_LOCK();
-                        vdd_bus_deliver_int(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
+                        VddBusDeliverInterrupt(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
                         HOST_UNLOCK();
                         g_pm_irq0_latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
                     }

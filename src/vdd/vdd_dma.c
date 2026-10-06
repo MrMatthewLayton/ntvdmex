@@ -72,7 +72,7 @@ static int dma_step(dma_state *st, uint8_t ch, uint8_t *dst, const uint8_t *src,
 {
     dma_chan *c = &st->ch[ch & 7];
     uint32_t unit = ((ch & 7) < 4) ? 1u : 2u;
-    uint8_t *mem = (uint8_t *)vdd_map_lin(st->bus, vdd_dma_cur_phys(st, ch));
+    uint8_t *mem = (uint8_t *)VddMapLinear(st->bus, vdd_dma_cur_phys(st, ch));
     uint32_t i;
 
     if (dst) for (i = 0; i < unit; ++i) dst[i] = mem[i];
@@ -194,7 +194,7 @@ uint32_t vdd_dma_write(dma_state *st, uint8_t ch, const uint8_t *src, uint32_t n
 static uint8_t *dma_mem(dma_state *st, uint32_t phys)
 {
     if (phys >= DMA_PHYS_LIMIT) return 0;
-    return (uint8_t *)vdd_map_lin(st->bus, phys);
+    return (uint8_t *)VddMapLinear(st->bus, phys);
 }
 
 static void dma_soft_block(dma_state *st, uint8_t ch)
@@ -426,7 +426,7 @@ static void dma_post(dma_state *st)
 void vdd_dma_reset(void *self)
 {
     dma_state *st = (dma_state *)self;
-    vdd_bus *bus = st->bus;
+    VDD_BUS *bus = st->bus;
     dma_dreq_fn fn[DMA_DREQ_MAX]; const void *ctx[DMA_DREQ_MAX];
     uint8_t n = st->dreq_n;
     unsigned i; uint8_t *p = (uint8_t *)st;
@@ -441,15 +441,15 @@ void vdd_dma_reset(void *self)
     dma_post(st);
 }
 
-int vdd_dma_init(vdd_bus *b, void *self)
+int vdd_dma_init(VDD_BUS *b, void *self)
 {
     dma_state *st = (dma_state *)self;
     st->bus = b;
     dma_master_clear(st, 0);
     dma_master_clear(st, 1);
     dma_post(st);
-    if (vdd_claim_ports(b, 0x00, 0x0F, dma_in, dma_out, st)) return -1;  /* controller 1 */
-    if (vdd_claim_ports(b, 0x80, 0x8F, dma_in, dma_out, st)) return -1;  /* page regs    */
-    if (vdd_claim_ports(b, 0xC0, 0xDF, dma_in, dma_out, st)) return -1;  /* controller 2 */
+    if (VddClaimPorts(b, 0x00, 0x0F, dma_in, dma_out, st)) return -1;  /* controller 1 */
+    if (VddClaimPorts(b, 0x80, 0x8F, dma_in, dma_out, st)) return -1;  /* page regs    */
+    if (VddClaimPorts(b, 0xC0, 0xDF, dma_in, dma_out, st)) return -1;  /* controller 2 */
     return 0;
 }

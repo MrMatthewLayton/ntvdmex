@@ -37,7 +37,7 @@ typedef uint64_t (*joy_clock_fn)(void *ctx);
 enum { JOY_TYPE_NONE = 0, JOY_TYPE_2AXIS = 1, JOY_TYPE_4AXIS = 2 };
 
 typedef struct joy_state {
-    vdd_bus     *bus;
+    VDD_BUS     *bus;
     joy_clock_fn now_us;   void *clock_ctx;
 
     uint8_t      type;         /* JOY_TYPE_*: how many axes/buttons are wired  */
@@ -69,10 +69,10 @@ static inline int joy_buttons_wired(const joy_state *st)
 static inline int joy_live(const joy_state *st)
 { return st->type != JOY_TYPE_NONE && st->present; }
 
-int  vdd_joy_init(vdd_bus *b, void *self);
+int  vdd_joy_init(VDD_BUS *b, void *self);
 void vdd_joy_reset(void *self);
-static inline ntvdd vdd_joy_device(joy_state *st)
-{ ntvdd d; d.name = "joystick"; d.init = vdd_joy_init; d.reset = vdd_joy_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_joy_device(joy_state *st)
+{ NTVDD_DEVICE d; d.Name = "joystick"; d.Initialize = vdd_joy_init; d.Reset = vdd_joy_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_JOY_H */

@@ -3,13 +3,13 @@
  *
  * Owns the emulated VGA display. The guest's video memory aperture (A0000-BFFFF,
  * 128KB) is mapped as RAM, so both INT 10h/console writes AND direct-framebuffer
- * writes land in the same `vmem`; the VDD renders it each frame into an ntvdd_frame
+ * writes land in the same `vmem`; the VDD renders it each frame into an NTVDD_FRAME
  * for present_ddraw:
  *   - text mode 3: B8000 cell grid -> 8x16 font, 16-colour EGA palette (640x400)
  *   - mode 13h:    A0000 linear 320x200x256, palette indices straight to present
  * The DAC ports (3C7-3C9) + INT 10h AH=10h drive the 256-entry palette. Pure C,
  * no <windows.h>: set `st->vmem` (host: 0xA0000 absolute; test: a 128KB buffer)
- * before vdd_bus_add(), and the whole VDD is exercised off-VM.
+ * before VddBusAdd(), and the whole VDD is exercised off-VM.
  */
 #ifndef NTVDMEX_VDD_VIDEO_H
 #define NTVDMEX_VDD_VIDEO_H
@@ -61,9 +61,9 @@
      0xE0000000 is where a PCI video aperture normally sits, so it cannot collide
      with anything the guest has a right to expect at a lower address. */
 #define VID_VESA_LFB_PHYS 0xE0000000u
-#define VID_VESA_MAXW     NTVDD_FRAME_MAXW   /* widest mode advertised = what the presenter shows */
-#define VID_VESA_MAXH     NTVDD_FRAME_MAXH
-#define VID_FB_MAX        (NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH)   /* glyph/planar render target: 132 cols x 60 rows fits */
+#define VID_VESA_MAXW     NTVDD_FRAME_MAX_WIDTH   /* widest mode advertised = what the presenter shows */
+#define VID_VESA_MAXH     NTVDD_FRAME_MAX_HEIGHT
+#define VID_FB_MAX        (NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT)   /* glyph/planar render target: 132 cols x 60 rows fits */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
    EVERY other mode silently became 80x25 text -- so mode 0 gave 80 columns
@@ -117,7 +117,7 @@ typedef struct { uint32_t pc, n, lo, hi; } vid_wsite;
 typedef struct { uint32_t pc, n, lo, hi, first, last; uint8_t wr; } vid_csite;
 
 typedef struct video_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
     uint8_t  mode;                      /* 0x03 text, 0x13 graphics                */
     uint8_t  cols, rows;
@@ -191,7 +191,7 @@ typedef struct video_state {
          the AC is bypassed and pal[] is simply dac[]. */
     uint32_t dac[256];                  /* the DAC as the guest programmed it      */
     uint32_t pal[256];                  /* ARGB palette the framebuffer indexes    */
-    /* Raster-split bookkeeping over pal[] (see ntvdd_frame and pal_split_note):
+    /* Raster-split bookkeeping over pal[] (see NTVDD_FRAME and pal_split_note):
        what each entry was at the start of the current frame, what it was set to
        mid-frame and at which row, stamped with the frame number. */
     uint32_t pal_base[256];
@@ -523,7 +523,7 @@ typedef struct video_state {
          writes refused (no VESA mode, out of range). */
     uint16_t vbe_idx, vbe_start_lo;
     uint32_t vbe_pm_bank_n, vbe_pm_start_n, vbe_pm_rej;
-    ntvdd_frame frame;
+    NTVDD_FRAME frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
        counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,
        so it reported four zeroes for every unchained run ever made. These are the
@@ -721,15 +721,15 @@ int     vdd_video_param_entry(uint8_t idx, uint8_t out[64]);
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
 #define VID_UNIMPL_GET(bm, n)  (((bm)[((n) & 0xFF) >> 3] >> ((n) & 7)) & 1u)
 
-int  vdd_video_init(vdd_bus *b, void *self);
+int  vdd_video_init(VDD_BUS *b, void *self);
 void vdd_video_reset(void *self);
 /* Stamp the frame with the current frame number and the raster-split arrays. The
    host calls this under its lock right before it snapshots the frame; tests call it
-   before resolving colours with ntvdd_frame_pal_at. */
+   before resolving colours with VddFramePaletteAt. */
 void vdd_video_frame_touch(video_state *st);
-static inline ntvdd vdd_video_device(video_state *st)
-{ ntvdd d; d.name = "video"; d.init = vdd_video_init; d.reset = vdd_video_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_video_device(video_state *st)
+{ NTVDD_DEVICE d; d.Name = "video"; d.Initialize = vdd_video_init; d.Reset = vdd_video_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 void vdd_video_render(video_state *st);                /* text glyph render        */
 /* The text screen as the GUEST wrote it (characters, then attributes in hex) --
@@ -793,7 +793,7 @@ uint32_t vdd_video_frame_us(const video_state *st);   /* 16667 or 14286 (s73) */
      INT 10h under its lock, and holding that for up to a frame would stall the UI,
      the presenter and IRQ delivery. So the handler applies the start to the latch
      schedule, stamps st->int10_wait_until, and returns.
-   ► THE HOST'S HALF: after vdd_bus_deliver_int(..., 0x10, ...) and HOST_UNLOCK(),
+   ► THE HOST'S HALF: after VddBusDeliverInterrupt(..., 0x10, ...) and HOST_UNLOCK(),
        while (vdd_video_int10_wait_us(&g_vid)) { spin / yield, keep g_dpmi_iter alive }
      before advancing the guest past the INT. Returns the microseconds still to wait
      on st->time_us's clock (0 = done, and the stamp is cleared), so a stale stamp can

@@ -90,7 +90,7 @@ typedef struct {
 } pit_chan;
 
 typedef struct pit_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     uint16_t reload;        /* channel-0 reload latch, BINARY (0 => the maximum) */
     uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
     uint8_t  mode;          /* EFFECTIVE mode 0-5 (shapes the count read-back)   */
@@ -230,12 +230,12 @@ static inline uint32_t pit_ch2_hz(const pit_state *st)
   if (!r) r = pit_wrap(st->c2.bcd);
   return PIT_INPUT_HZ / r; }
 
-/* Build the device descriptor to hand to vdd_bus_add(). */
-int  vdd_pit_init(vdd_bus *b, void *self);
+/* Build the device descriptor to hand to VddBusAdd(). */
+int  vdd_pit_init(VDD_BUS *b, void *self);
 void vdd_pit_reset(void *self);
-static inline ntvdd vdd_pit_device(pit_state *st)
-{ ntvdd d; d.name = "pit"; d.init = vdd_pit_init; d.reset = vdd_pit_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_pit_device(pit_state *st)
+{ NTVDD_DEVICE d; d.Name = "pit"; d.Initialize = vdd_pit_init; d.Reset = vdd_pit_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* ── ★★ THE TICK COUNT IS THE TIME OF DAY. (GH #253) ─────────────────────────────
      0040:006C is not "ticks since the machine started": POST reads the RTC and sets it

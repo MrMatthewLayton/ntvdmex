@@ -45,33 +45,33 @@ static uint8_t g_flat[0x1000];
 static int g_irq8;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 8) g_irq8++; }
 
-static uint8_t rd(vdd_bus *bus, uint8_t reg)
+static uint8_t rd(VDD_BUS *bus, uint8_t reg)
 {
-    uint32_t v = reg; vdd_bus_io(bus, 0x70, 1, 0, &v);
-    v = 0;            vdd_bus_io(bus, 0x71, 1, 1, &v);
+    uint32_t v = reg; VddBusIo(bus, 0x70, 1, 0, &v);
+    v = 0;            VddBusIo(bus, 0x71, 1, 1, &v);
     return (uint8_t)v;
 }
-static void wr(vdd_bus *bus, uint8_t reg, uint8_t val)
+static void wr(VDD_BUS *bus, uint8_t reg, uint8_t val)
 {
-    uint32_t v = reg; vdd_bus_io(bus, 0x70, 1, 0, &v);
-    v = val;          vdd_bus_io(bus, 0x71, 1, 0, &v);
+    uint32_t v = reg; VddBusIo(bus, 0x70, 1, 0, &v);
+    v = val;          VddBusIo(bus, 0x71, 1, 0, &v);
 }
 
 int main(void)
 {
-    vdd_bus bus;
+    VDD_BUS bus;
     static cmos_state cm;
-    ntvdd dev;
+    NTVDD_DEVICE dev;
     uint32_t v;
 
     memset(&cm, 0, sizeof cm);
     cm.rtc_now = fake_rtc;
     dev = vdd_cmos_device(&cm);
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, irq_sink, 0, 0, 0);
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
 
     printf("-- MC146818 RTC + CMOS --\n");
-    CHECK(vdd_bus_add(&bus, &dev) == 0, "add: cmos init ok");
+    CHECK(VddBusAdd(&bus, &dev) == 0, "add: cmos init ok");
 
     /* THE CLOCK, IN BCD AND 24-HOUR -- which is what Status B says a PC leaves,
        and what every program reading this chip by hand assumes. 0x14 in the
@@ -137,15 +137,15 @@ int main(void)
        Software sets it constantly -- masking NMI across a CMOS access is
        standard BIOS practice -- so a model that takes the whole byte as an index
        looks up register 0x8A and finds nothing. */
-    v = (uint32_t)(0x80 | CMOS_HOUR); vdd_bus_io(&bus, 0x70, 1, 0, &v);
-    v = 0;                            vdd_bus_io(&bus, 0x71, 1, 1, &v);
+    v = (uint32_t)(0x80 | CMOS_HOUR); VddBusIo(&bus, 0x70, 1, 0, &v);
+    v = 0;                            VddBusIo(&bus, 0x71, 1, 1, &v);
     CHECK(v == 0x14, "index: bit 7 is the NMI mask and does not change the register");
     CHECK(cm.nmi_disabled == 1 && cm.nmi_mask_writes == 1,
           "index: ...and the NMI mask is recorded rather than acted on");
 
     /* Port 0x70 is WRITE-ONLY on the part; a read is undefined. Answer
        consistently rather than plausibly. */
-    v = 0; vdd_bus_io(&bus, 0x70, 1, 1, &v);
+    v = 0; VddBusIo(&bus, 0x70, 1, 1, &v);
     CHECK(v == 0xFF, "index: port 70h reads 0xFF -- write-only on the part");
 
     /* POST leaves a machine's CMOS populated; a guest that reads the equipment

@@ -16,7 +16,7 @@
 #include "vdd_pit.h"
 
 typedef struct speaker_state {
-    vdd_bus         *bus;
+    VDD_BUS         *bus;
     pit_state       *pit;       /* channel 2: the tone, and the GATE/OUT pair    */
     uint8_t          port61;    /* last value written to port 0x61              */
     uint8_t          refresh;   /* toggling bit 4 so refresh-poll delay loops run */
@@ -28,10 +28,10 @@ static inline int      vdd_speaker_active(const speaker_state *st) { return (st-
 static inline uint32_t vdd_speaker_hz(const speaker_state *st)
 { return st->pit ? pit_ch2_hz(st->pit) : 0; }
 
-int  vdd_speaker_init(vdd_bus *b, void *self);
+int  vdd_speaker_init(VDD_BUS *b, void *self);
 void vdd_speaker_reset(void *self);
-static inline ntvdd vdd_speaker_device(speaker_state *st)
-{ ntvdd d; d.name = "speaker"; d.init = vdd_speaker_init; d.reset = vdd_speaker_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_speaker_device(speaker_state *st)
+{ NTVDD_DEVICE d; d.Name = "speaker"; d.Initialize = vdd_speaker_init; d.Reset = vdd_speaker_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_SPEAKER_H */

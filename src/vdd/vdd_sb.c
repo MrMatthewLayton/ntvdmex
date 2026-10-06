@@ -171,7 +171,7 @@ static void sb_exec(sb_state *st)
         break;
     case 0xF2: case 0xF3:                       /* force an IRQ (drivers test wiring) */
         st->irq_pending = 1;
-        vdd_raise_irq(st->bus, st->irq);
+        VddRaiseIrq(st->bus, st->irq);
         break;
     default:
         break;                                  /* unknown commands are ignored     */
@@ -521,7 +521,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
             /* ► RECORD THE BOUNDARY BEFORE ANYTHING REACTS TO IT. The IRQ below can
                  reach the guest and the reload has already happened inside dma_step,
                  so this is the only instant at which the three candidate culprits are
-                 still distinguishable. Taken before vdd_raise_irq() deliberately. */
+                 still distinguishable. Taken before VddRaiseIrq() deliberately. */
             if (st->blocks < SB_BLKLOG_MAX && st->dma) {
                 struct sb_blkrec *b = &st->blklog[st->blocks];
                 uint8_t dch = st->xfer_16bit ? st->dma16 : st->dma8;
@@ -601,7 +601,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
             st->irq_pending = 1;
             st->blocks++;
             if (st->dma) st->gate_mark = st->dma->count_reads;  /* gate mode 2 */
-            vdd_raise_irq(st->bus, st->irq);
+            VddRaiseIrq(st->bus, st->irq);
             if (st->xfer_mode == SB_XFER_AUTO && !ended) st->block_left = st->block_len;
             else                                        st->xfer_mode  = SB_XFER_IDLE;
         }
@@ -621,7 +621,7 @@ uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames)
 void vdd_sb_reset(void *self)
 {
     sb_state *st = (sb_state *)self;
-    vdd_bus *bus = st->bus; dma_state *dma = st->dma; opl_state *opl = st->opl;
+    VDD_BUS *bus = st->bus; dma_state *dma = st->dma; opl_state *opl = st->opl;
     uint16_t base = st->base;
     uint8_t irq = st->irq, d8 = st->dma8, d16 = st->dma16;
     uint32_t dw = st->dsp_writes, bl = st->blocks;
@@ -653,7 +653,7 @@ static uint8_t sb_dreq(const void *ctx)
     return (uint8_t)(1u << (ch & 7));
 }
 
-int vdd_sb_init(vdd_bus *b, void *self)
+int vdd_sb_init(VDD_BUS *b, void *self)
 {
     sb_state *st = (sb_state *)self;
     st->bus = b;
@@ -664,7 +664,7 @@ int vdd_sb_init(vdd_bus *b, void *self)
     if (!st->dma16) st->dma16 = SB_DEFAULT_DMA16;
     if (!st->rate_hz)   st->rate_hz = 22050;
     if (!st->block_len) st->block_len = 1;
-    if (vdd_claim_ports(b, st->base, (uint16_t)(st->base + 0x0F), sb_in, sb_out, st))
+    if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 0x0F), sb_in, sb_out, st))
         return -1;
     return 0;
 }

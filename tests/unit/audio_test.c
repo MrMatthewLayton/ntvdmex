@@ -16,7 +16,7 @@ static int total = 0, fails = 0;
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
 static uint8_t g_flat[0x100000];
-static vdd_bus bus;
+static VDD_BUS bus;
 static dma_state dma;
 static opl_state opl;
 static sb_state  sb;
@@ -24,7 +24,7 @@ static audio_state mix;
 static int g_irq_count;
 
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; (void)irq; g_irq_count++; }
-static void wr(uint16_t p, uint8_t v){ uint32_t x=v; vdd_bus_io(&bus,p,1,0,&x); }
+static void wr(uint16_t p, uint8_t v){ uint32_t x=v; VddBusIo(&bus,p,1,0,&x); }
 
 #define BASE 0x220
 static int16_t buf[44100];
@@ -42,14 +42,14 @@ static long rms(const int16_t *s, int n)
 static void dma_program(uint32_t phys, uint16_t len, int autoinit)
 {
     uint32_t v;
-    v = 0;                       vdd_bus_io(&bus, 0x0C, 1, 0, &v);
-    v = phys & 0xFF;             vdd_bus_io(&bus, 0x02, 1, 0, &v);
-    v = (phys >> 8) & 0xFF;      vdd_bus_io(&bus, 0x02, 1, 0, &v);
-    v = (len - 1) & 0xFF;        vdd_bus_io(&bus, 0x03, 1, 0, &v);
-    v = ((len - 1) >> 8) & 0xFF; vdd_bus_io(&bus, 0x03, 1, 0, &v);
-    v = (phys >> 16) & 0xFF;     vdd_bus_io(&bus, 0x83, 1, 0, &v);
-    v = 0x48 | 0x01 | (autoinit ? 0x10u : 0u); vdd_bus_io(&bus, 0x0B, 1, 0, &v);
-    v = 0x01;                    vdd_bus_io(&bus, 0x0A, 1, 0, &v);
+    v = 0;                       VddBusIo(&bus, 0x0C, 1, 0, &v);
+    v = phys & 0xFF;             VddBusIo(&bus, 0x02, 1, 0, &v);
+    v = (phys >> 8) & 0xFF;      VddBusIo(&bus, 0x02, 1, 0, &v);
+    v = (len - 1) & 0xFF;        VddBusIo(&bus, 0x03, 1, 0, &v);
+    v = ((len - 1) >> 8) & 0xFF; VddBusIo(&bus, 0x03, 1, 0, &v);
+    v = (phys >> 16) & 0xFF;     VddBusIo(&bus, 0x83, 1, 0, &v);
+    v = 0x48 | 0x01 | (autoinit ? 0x10u : 0u); VddBusIo(&bus, 0x0B, 1, 0, &v);
+    v = 0x01;                    VddBusIo(&bus, 0x0A, 1, 0, &v);
 }
 
 int main(void)
@@ -60,12 +60,12 @@ int main(void)
 
     memset(&dma,0,sizeof dma); memset(&opl,0,sizeof opl); memset(&sb,0,sizeof sb);
     memset(g_flat,0,sizeof g_flat);
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, irq_sink, 0, 0, 0);
-    { ntvdd d = vdd_dma_device(&dma); vdd_bus_add(&bus, &d); }
-    { ntvdd d = vdd_opl_device(&opl); vdd_bus_add(&bus, &d); }
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
+    { NTVDD_DEVICE d = vdd_dma_device(&dma); VddBusAdd(&bus, &d); }
+    { NTVDD_DEVICE d = vdd_opl_device(&opl); VddBusAdd(&bus, &d); }
     sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
-    { ntvdd d = vdd_sb_device(&sb);  CHECK(vdd_bus_add(&bus, &d) == 0, "add: devices on the bus"); }
+    { NTVDD_DEVICE d = vdd_sb_device(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }
     vdd_audio_init(&mix, &opl, &sb, AUDIO_OUT_HZ);
 
     /* T1: silence in, silence out ------------------------------------------ */
@@ -215,8 +215,8 @@ int main(void)
          the cone rather than sounding a tone, so that distinction is measured here
          rather than assumed. */
     {
-        pit_state pit;      ntvdd pdev;
-        speaker_state spk;  ntvdd sdev;
+        pit_state pit;      NTVDD_DEVICE pdev;
+        speaker_state spk;  NTVDD_DEVICE sdev;
         int16_t sbuf[4410];
         double hz;
         long full, half;
@@ -225,20 +225,20 @@ int main(void)
         memset(&pit, 0, sizeof pit); memset(&spk, 0, sizeof spk);
         spk.pit = &pit;
         pdev = vdd_pit_device(&pit);  sdev = vdd_speaker_device(&spk);
-        CHECK(vdd_bus_add(&bus, &pdev) == 0, "speaker: PIT joined the mixer's bus");
-        CHECK(vdd_bus_add(&bus, &sdev) == 0, "speaker: and the speaker VDD did too");
+        CHECK(VddBusAdd(&bus, &pdev) == 0, "speaker: PIT joined the mixer's bus");
+        CHECK(VddBusAdd(&bus, &sdev) == 0, "speaker: and the speaker VDD did too");
 
         /* Programmed THROUGH the chip, not by poking the struct, so what this
            measures is what a guest that writes 0x43/0x42 actually hears. */
-        v = 0xB6;         vdd_bus_io(&bus, 0x43, 1, 0, &v);
-        v = 1193 & 0xFF;  vdd_bus_io(&bus, 0x42, 1, 0, &v);
-        v = 1193 >> 8;    vdd_bus_io(&bus, 0x42, 1, 0, &v);
+        v = 0xB6;         VddBusIo(&bus, 0x43, 1, 0, &v);
+        v = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &v);
+        v = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &v);
         CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1193,
               "speaker: PIT channel 2 divisor 1193 gives ~1000 Hz");
 
         mix.opl = NULL; mix.sb = NULL;              /* the speaker alone in the mix */
         vdd_audio_set_speaker(&mix, &spk, 1);
-        v = 0x03; vdd_bus_io(&bus, 0x61, 1, 0, &v); /* gate + data = sounding       */
+        v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v); /* gate + data = sounding       */
         memset(sbuf, 0, sizeof sbuf);
         vdd_audio_mix(&mix, sbuf, 4410);
         hz = measure_hz(sbuf, 4410, AUDIO_OUT_HZ);
@@ -247,12 +247,12 @@ int main(void)
         CHECK(hz > 960 && hz < 1040, "speaker: an active gate produces the PIT's tone");
         CHECK(rms(sbuf, 4410) > 1000, "speaker: and it is actually audible");
 
-        v = 0x01; vdd_bus_io(&bus, 0x61, 1, 0, &v); /* gate only, no data enable    */
+        v = 0x01; VddBusIo(&bus, 0x61, 1, 0, &v); /* gate only, no data enable    */
         memset(sbuf, 0, sizeof sbuf);
         vdd_audio_mix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "speaker: the gate bit ALONE is silent (both bits gate)");
 
-        v = 0x03; vdd_bus_io(&bus, 0x61, 1, 0, &v);
+        v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v);
         vdd_audio_set_speaker(&mix, &spk, 0);       /* fitted, switched off         */
         memset(sbuf, 0, sizeof sbuf);
         vdd_audio_mix(&mix, sbuf, 512);
@@ -261,9 +261,9 @@ int main(void)
         /* ⚠ A "tone" above the output rate's Nyquist point is not a tone, it is
              alias noise, so it is refused rather than synthesised. */
         vdd_audio_set_speaker(&mix, &spk, 1);
-        v = 0xB6; vdd_bus_io(&bus, 0x43, 1, 0, &v);
-        v = 0x01; vdd_bus_io(&bus, 0x42, 1, 0, &v);
-        v = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &v); /* divisor 1 -> 1.19 MHz        */
+        v = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &v);
+        v = 0x01; VddBusIo(&bus, 0x42, 1, 0, &v);
+        v = 0x00; VddBusIo(&bus, 0x42, 1, 0, &v); /* divisor 1 -> 1.19 MHz        */
         memset(sbuf, 0, sizeof sbuf);
         vdd_audio_mix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "speaker: a tone past 20 kHz is refused, not aliased");
@@ -273,9 +273,9 @@ int main(void)
              mixer registers still do their work underneath it. Measured on the
              SPEAKER because its level is exactly known -- a square wave at a fixed
              amplitude -- so "half" is arithmetic, not a judgement about loudness. */
-        v = 0xB6;         vdd_bus_io(&bus, 0x43, 1, 0, &v);
-        v = 1193 & 0xFF;  vdd_bus_io(&bus, 0x42, 1, 0, &v);
-        v = 1193 >> 8;    vdd_bus_io(&bus, 0x42, 1, 0, &v);
+        v = 0xB6;         VddBusIo(&bus, 0x43, 1, 0, &v);
+        v = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &v);
+        v = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &v);
 
         vdd_audio_set_master(&mix, 100, 0);
         memset(sbuf, 0, sizeof sbuf); vdd_audio_mix(&mix, sbuf, 512);

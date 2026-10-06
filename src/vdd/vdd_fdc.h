@@ -88,7 +88,7 @@
 #define FDC_PHASE_RES   1           /* the host is reading a result             */
 
 typedef struct fdc_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
 
     uint8_t  dor;                   /* 3F2h, as last written                    */
     uint8_t  tdr;                   /* 3F3h                                     */
@@ -129,12 +129,12 @@ typedef struct fdc_state {
     uint32_t cmds, invalids, irqs, resets;
 } fdc_state;
 
-int  vdd_fdc_init(vdd_bus *b, void *self);
+int  vdd_fdc_init(VDD_BUS *b, void *self);
 void vdd_fdc_reset(void *self);
 
-static inline ntvdd vdd_fdc_device(fdc_state *st)
-{ ntvdd d; d.name = "fdc"; d.init = vdd_fdc_init; d.reset = vdd_fdc_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_fdc_device(fdc_state *st)
+{ NTVDD_DEVICE d; d.Name = "fdc"; d.Initialize = vdd_fdc_init; d.Reset = vdd_fdc_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* Exposed for the off-VM battery, which drives the chip through the same two
    doors the guest does rather than reaching into the struct. */

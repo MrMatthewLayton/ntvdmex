@@ -19,7 +19,7 @@
 static uint8_t g_flat[0x200000];          /* guest memory: real-mode MB + room to copy into */
 static uint8_t g_vmem[VID_APERTURE_SIZE];
 static video_state vid;
-static vdd_bus bus;
+static VDD_BUS bus;
 static uint64_t g_fake_us = 1000000;
 static uint64_t fake_clock(void) { return g_fake_us; }
 
@@ -30,9 +30,9 @@ static uint8_t  p32_rd8(uint32_t lin) { return lin < sizeof g_flat ? g_flat[lin]
 static void     p32_wr8(uint32_t lin, uint8_t v) { if (lin < sizeof g_flat) g_flat[lin] = v; }
 static int      p32_ok(uint32_t lin, int w, int wr) { (void)wr; return lin + (uint32_t)w <= sizeof g_flat; }
 static uint32_t p32_in(uint16_t port, int w)
-{ uint32_t v = 0; g_fake_us += 50; ++g_ins; vdd_bus_io(&bus, port, (uint8_t)w, 1, &v); return v; }
+{ uint32_t v = 0; g_fake_us += 50; ++g_ins; VddBusIo(&bus, port, (uint8_t)w, 1, &v); return v; }
 static void     p32_out(uint16_t port, int w, uint32_t v)
-{ uint32_t x = v; ++g_outs; vdd_bus_io(&bus, port, (uint8_t)w, 0, &x); }
+{ uint32_t x = v; ++g_outs; VddBusIo(&bus, port, (uint8_t)w, 0, &x); }
 #include "../../src/host/pm32interp.h"
 
 static int total = 0, fails = 0;
@@ -65,17 +65,17 @@ static int call_pm(uint32_t off, uint32_t ebx, uint32_t ecx, uint32_t edx, uint3
     return c.eip == RETADR && c.r[4] == STACK;
 }
 
-static void int10(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx, ntvdd_regs *r)
+static void int10(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx, NTVDD_REGISTERS *r)
 {
     memset(r, 0, sizeof *r);
-    r->eax = eax; r->ebx = ebx; r->ecx = ecx; r->edx = edx;
-    vdd_bus_deliver_int(&bus, 0x10, r);
+    r->Eax = eax; r->Ebx = ebx; r->Ecx = ecx; r->Edx = edx;
+    VddBusDeliverInterrupt(&bus, 0x10, r);
 }
 
 int main(void)
 {
-    ntvdd dev;
-    ntvdd_regs r;
+    NTVDD_DEVICE dev;
+    NTVDD_REGISTERS r;
     p32cpu c;
     uint32_t blk, len, i;
     uint16_t win, start, pal, ports;
@@ -83,17 +83,17 @@ int main(void)
     memset(&vid, 0, sizeof vid);
     vid.vmem = g_vmem;
     dev = vdd_video_device(&vid);
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
-    CHECK(vdd_bus_add(&bus, &dev) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, 0, 0, 0, 0);
+    CHECK(VddBusAdd(&bus, &dev) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
     vid.time_us = fake_clock;
 
     /* ---- 4F0Ah BL=00h: the table ---- */
     int10(0x4F0A, 0x0000, 0xC1C1, 0, &r);
-    CHECK((r.eax & 0xFFFF) == 0x004F, "4F0Ah BL=00h: AX=004Fh (was 0100h, 'no such function')");
-    blk = ((uint32_t)r.es << 4) + (r.edi & 0xFFFF);
-    len = r.ecx & 0xFFFF;
-    CHECK(r.es == VDD_VBEPM_SEG && (r.edi & 0xFFFF) == 0 && len >= 16 && len < 0x100,
+    CHECK((r.Eax & 0xFFFF) == 0x004F, "4F0Ah BL=00h: AX=004Fh (was 0100h, 'no such function')");
+    blk = ((uint32_t)r.Es << 4) + (r.Edi & 0xFFFF);
+    len = r.Ecx & 0xFFFF;
+    CHECK(r.Es == VDD_VBEPM_SEG && (r.Edi & 0xFFFF) == 0 && len >= 16 && len < 0x100,
           "4F0Ah: ES:DI = B260:0000, CX = the block's length (code included)");
     win   = (uint16_t)(g_flat[blk + 0] | (g_flat[blk + 1] << 8));
     start = (uint16_t)(g_flat[blk + 2] | (g_flat[blk + 3] << 8));
@@ -111,7 +111,7 @@ int main(void)
               "table +6: every port the code touches, FFFFh, then an empty memory list (FFFFh)");
     }
     int10(0x4F0A, 0x0001, 0, 0, &r);
-    CHECK((r.eax & 0xFFFF) == 0x014F, "4F0Ah BL=01h: 014Fh (the subfunction does not exist)");
+    CHECK((r.Eax & 0xFFFF) == 0x014F, "4F0Ah BL=01h: 014Fh (the subfunction does not exist)");
 
     /* ---- the client copies the block somewhere else entirely ---- */
     memcpy(g_flat + COPY, g_flat + blk, len);
@@ -124,7 +124,7 @@ int main(void)
 
     /* ---- 640x480x8 banked ---- */
     int10(0x4F02, 0x0101, 0, 0, &r);
-    CHECK((r.eax & 0xFFFF) == 0x004F && vid.in_vesa && !vid.vesa_lfb, "4F02h 0101h: banked 640x480x8");
+    CHECK((r.Eax & 0xFFFF) == 0x004F && vid.in_vesa && !vid.vesa_lfb, "4F02h 0101h: banked 640x480x8");
     memset(g_vmem, 0x11, VID_VESA_WIN);       /* the client draws bank 0 ...                */
     CHECK(call_pm(win, 0x0000, 0, 2, 0, 0, &c), "SetWindow (copied, near-called) returns to the caller, ESP balanced");
     CHECK(vid.vesa_bank == 2 && vid.vbe_pm_bank_n == 1, "SetWindow DX=2: window A is bank 2");
@@ -133,7 +133,7 @@ int main(void)
     CHECK(c.r[0] == 0xA5A5A5A5u && c.r[2] == 2 && c.r[3] == 0 && c.r[5] == 0xB5B5B5B5u && c.r[6] == 0xC6C6C6C6u,
           "SetWindow: EAX/EDX/EBX/EBP/ESI preserved");
     int10(0x4F05, 0x0100, 0, 0, &r);
-    CHECK((r.edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
+    CHECK((r.Edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
     CHECK(call_pm(win, 0x0001, 0, 1, 0, 0, NULL) && vid.vesa_bank == 2,
           "SetWindow BL=01h (window B, which does not exist): no change");
     CHECK(call_pm(win, 0x0000, 0, 0x7FFF, 0, 0, NULL) && vid.vesa_bank == 2,
@@ -147,7 +147,7 @@ int main(void)
               && vid.vesa_org == org && vid.vesa_org_live == org && vid.vbe_pm_start_n == 1,
               "SetDisplayStart BL=00h: start = DX:CX * 4, shown at once");
         int10(0x4F07, 0x0001, 0, 0, &r);
-        CHECK((r.ecx & 0xFFFF) == 64 && (r.edx & 0xFFFF) == 100, "4F07h BL=01h agrees: x=64, y=100");
+        CHECK((r.Ecx & 0xFFFF) == 64 && (r.Edx & 0xFFFF) == 100, "4F07h BL=01h agrees: x=64, y=100");
     }
     {   uint32_t org = 640u * 480u, ins = g_ins;          /* page 2 */
         CHECK(call_pm(start, 0x0080, (org / 4) & 0xFFFF, (org / 4) >> 16, 0, 0, NULL)
@@ -166,9 +166,9 @@ int main(void)
         CHECK(call_pm(pal, 0x0000, 3, 0x40, 0x60000, 0x100000, &c), "SetPalette (ES:EDI, 3 entries at 40h) returns");
         CHECK(c.r[1] == 3 && c.r[2] == 0x40 && c.r[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
         memset(&r, 0, sizeof r);
-        r.eax = 0x4F09; r.ebx = 0x0001; r.ecx = 3; r.edx = 0x40; r.es = (uint16_t)(back >> 4); r.edi = 0;
-        vdd_bus_deliver_int(&bus, 0x10, &r);
-        CHECK((r.eax & 0xFFFF) == 0x004F && memcmp(g_flat + back, ent, sizeof ent) == 0,
+        r.Eax = 0x4F09; r.Ebx = 0x0001; r.Ecx = 3; r.Edx = 0x40; r.Es = (uint16_t)(back >> 4); r.Edi = 0;
+        VddBusDeliverInterrupt(&bus, 0x10, &r);
+        CHECK((r.Eax & 0xFFFF) == 0x004F && memcmp(g_flat + back, ent, sizeof ent) == 0,
               "4F09h BL=01h reads back exactly what SetPalette wrote (B,G,R, 6-bit)");
         CHECK(call_pm(pal, 0x0080, 1, 0x41, 0x60004, 0x100000, NULL), "SetPalette BL=80h (retrace wait) returns");
     }

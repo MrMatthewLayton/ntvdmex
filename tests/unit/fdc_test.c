@@ -33,10 +33,10 @@ static uint8_t g_flat[0x1000];
 static int g_irq6;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 6) g_irq6++; }
 
-static uint8_t rd(vdd_bus *bus, uint16_t port)
-{ uint32_t v = 0; vdd_bus_io(bus, port, 1, 1, &v); return (uint8_t)v; }
-static void wr(vdd_bus *bus, uint16_t port, uint8_t val)
-{ uint32_t v = val; vdd_bus_io(bus, port, 1, 0, &v); }
+static uint8_t rd(VDD_BUS *bus, uint16_t port)
+{ uint32_t v = 0; VddBusIo(bus, port, 1, 1, &v); return (uint8_t)v; }
+static void wr(VDD_BUS *bus, uint16_t port, uint8_t val)
+{ uint32_t v = val; VddBusIo(bus, port, 1, 0, &v); }
 
 /* ── THE DRIVER'S OWN SEND LOOP, BOUNDED. Returns 0 if it would have hung. ────
      ⛔⛔ AND THE RETURN VALUE IS NOT OPTIONAL. The first version of this file
@@ -49,7 +49,7 @@ static void wr(vdd_bus *bus, uint16_t port, uint8_t val)
        into nothing. (The project's own rule: a guard that returns success is a lie
        the whole stack repeats.) */
 static int g_send_fail;
-static int driver_send(vdd_bus *bus, uint8_t byte)
+static int driver_send(VDD_BUS *bus, uint8_t byte)
 {
     int spin;
     for (spin = 0; spin < 10000; ++spin)
@@ -61,7 +61,7 @@ static int driver_send(vdd_bus *bus, uint8_t byte)
 /* ── THE LENGTH-FREE DRAIN: read while RQM=1 && DIO=1, stop when CMD BSY clears.
      This is how a driver reads a result whose length it does not know, and it is
      what p_fdc.asm does on the real machines. Returns the count. */
-static int driver_drain(vdd_bus *bus, uint8_t *out, int max)
+static int driver_drain(VDD_BUS *bus, uint8_t *out, int max)
 {
     int n = 0, spin;
     for (spin = 0; spin < 10000 && n < max; ++spin) {
@@ -74,15 +74,15 @@ static int driver_drain(vdd_bus *bus, uint8_t *out, int max)
 
 int main(void)
 {
-    vdd_bus bus; fdc_state fd; ntvdd dev;
+    VDD_BUS bus; fdc_state fd; NTVDD_DEVICE dev;
     uint8_t r[16];
     int n;
 
     memset(&fd, 0, sizeof(fd));
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, irq_sink, NULL, NULL, NULL);
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, irq_sink, NULL, NULL, NULL);
     dev = vdd_fdc_device(&fd);
-    CHECK(vdd_bus_add(&bus, &dev) == 0, "fdc: gets on the bus");
+    CHECK(VddBusAdd(&bus, &dev) == 0, "fdc: gets on the bus");
 
     /* ════ 1. THE HANG. ══════════════════════════════════════════════════════
          The single load-bearing byte in the chip. 80h = RQM set, DIO clear (it

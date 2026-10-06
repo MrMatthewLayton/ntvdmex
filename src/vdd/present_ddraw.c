@@ -68,7 +68,7 @@ static void wait_vblank(present_ddraw *pd)
      struct stays something a caller can hold by value (present_demo does), and it
      is static rather than allocated because the present path runs on the UI thread
      at video rate and must never wait on the heap. */
-static uint8_t s_scaled[(2 * NTVDD_FRAME_MAXW) * (2 * NTVDD_FRAME_MAXH)];
+static uint8_t s_scaled[(2 * NTVDD_FRAME_MAX_WIDTH) * (2 * NTVDD_FRAME_MAX_HEIGHT)];
 
 /* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
    over the destination it darkens alternate PHYSICAL rows -- which is where a
@@ -166,7 +166,7 @@ typedef struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } snap_dib_t;
 static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int *psh,
                                int scale2x)
 {
-    static uint32_t s_rgb32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* a split frame resolved per row, or ARGB */
+    static uint32_t s_rgb32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* a split frame resolved per row, or ARGB */
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
     unsigned i;
@@ -181,7 +181,7 @@ static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int 
        (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
        snap32 either.) */
     if (scale2x && !split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
-        && sw <= NTVDD_FRAME_MAXW && sh <= NTVDD_FRAME_MAXH) {
+        && sw <= NTVDD_FRAME_MAX_WIDTH && sh <= NTVDD_FRAME_MAX_HEIGHT) {
         present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
         pix = s_scaled; sw *= 2; sh *= 2;
     }
@@ -415,7 +415,7 @@ static int fs_setup(present_ddraw *pd)
     return 0;
 }
 
-/* convert an ntvdd_frame into the locked back buffer, packed to its depth. */
+/* convert an NTVDD_FRAME into the locked back buffer, packed to its depth. */
 static void mask_info(DWORD m, int *shift, int *bits)
 { int s=0,b=0; if(m){while(!(m&1)){m>>=1;++s;}while(m&1){m>>=1;++b;}} *shift=s; *bits=b; }
 
@@ -704,39 +704,39 @@ int present_ddraw_set_fullscreen(present_ddraw *pd, int on)
 }
 
 /* copy the live frame into the back-buffer (call under the bus lock). */
-void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
+void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f)
 {
     int y;
-    if (!f || !f->w || !f->h || !f->pixels || (f->bpp != 8 && f->bpp != 32)
-        || f->w > NTVDD_FRAME_MAXW || f->h > NTVDD_FRAME_MAXH) {
+    if (!f || !f->Width || !f->Height || !f->Pixels || (f->BitsPerPixel != 8 && f->BitsPerPixel != 32)
+        || f->Width > NTVDD_FRAME_MAX_WIDTH || f->Height > NTVDD_FRAME_MAX_HEIGHT) {
         pd->snap_valid = 0; return;
     }
-    pd->snap_bpp = f->bpp;
-    if (f->bpp == 32) {
+    pd->snap_bpp = f->BitsPerPixel;
+    if (f->BitsPerPixel == 32) {
         /* Direct colour: no palette is involved at all, and a split palette is
            meaningless here -- the pixels already carry their own colour. */
-        for (y = 0; y < (int)f->h; ++y)
-            CopyMemory(pd->snap32 + (size_t)y * f->w,
-                       f->pixels + (size_t)y * f->stride, (size_t)f->w * 4);
+        for (y = 0; y < (int)f->Height; ++y)
+            CopyMemory(pd->snap32 + (size_t)y * f->Width,
+                       f->Pixels + (size_t)y * f->Stride, (size_t)f->Width * 4);
         pd->snap_split = 0;
         pd->rowpal_y = -1;
-        pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
+        pd->snap_w = f->Width; pd->snap_h = f->Height; pd->snap_valid = 1;
         if (pd->tint) {                                  /* #229: per pixel, only here */
-            size_t i, n = (size_t)f->w * f->h;
+            size_t i, n = (size_t)f->Width * f->Height;
             for (i = 0; i < n; ++i) pd->snap32[i] = present_tint(pd->snap32[i], pd->tint);
         }
         return;
     }
-    for (y = 0; y < (int)f->h; ++y)
-        CopyMemory(pd->snap + (size_t)y * f->w, f->pixels + (size_t)y * f->stride, f->w);
-    if (f->palette) CopyMemory(pd->snap_pal, f->palette, 256 * sizeof(uint32_t));
-    pd->snap_split = ntvdd_frame_has_split(f);
+    for (y = 0; y < (int)f->Height; ++y)
+        CopyMemory(pd->snap + (size_t)y * f->Width, f->Pixels + (size_t)y * f->Stride, f->Width);
+    if (f->Palette) CopyMemory(pd->snap_pal, f->Palette, 256 * sizeof(uint32_t));
+    pd->snap_split = VddFrameHasSplit(f);
     if (pd->snap_split) {
-        CopyMemory(pd->snap_pal_base,   f->palette_base,  256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_pal_split,  f->palette_split, 256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_split_frame,f->split_frame,   256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_split_row,  f->split_row,     256 * sizeof(uint16_t));
-        pd->snap_frame_no = f->frame_no;
+        CopyMemory(pd->snap_pal_base,   f->PaletteBase,  256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_pal_split,  f->PaletteSplit, 256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_split_frame,f->SplitFrame,   256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_split_row,  f->SplitRow,     256 * sizeof(uint16_t));
+        pd->snap_frame_no = f->FrameNumber;
     }
     if (pd->tint) {                         /* #229: recolour the COLOURS, not the pixels */
         int i;
@@ -749,21 +749,21 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
         }
     }
     pd->rowpal_y = -1;
-    pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
+    pd->snap_w = f->Width; pd->snap_h = f->Height; pd->snap_valid = 1;
 }
 
 /* The palette for source row `y` of the snapshot: the single palette on an ordinary
-   frame; on a raster-split frame the per-entry resolution of ntvdd_frame_pal_at,
+   frame; on a raster-split frame the per-entry resolution of VddFramePaletteAt,
    computed once per row. */
 static const uint32_t *row_pal(present_ddraw *pd, int y)
 {
-    ntvdd_frame f; unsigned i;
+    NTVDD_FRAME f; unsigned i;
     if (!pd->snap_split) return pd->snap_pal;
     if (pd->rowpal_y == y) return pd->rowpal;
-    f.palette = pd->snap_pal; f.palette_base = pd->snap_pal_base;
-    f.palette_split = pd->snap_pal_split; f.split_row = pd->snap_split_row;
-    f.split_frame = pd->snap_split_frame; f.frame_no = pd->snap_frame_no;
-    for (i = 0; i < 256; ++i) pd->rowpal[i] = ntvdd_frame_pal_at(&f, (unsigned)y, i);
+    f.Palette = pd->snap_pal; f.PaletteBase = pd->snap_pal_base;
+    f.PaletteSplit = pd->snap_pal_split; f.SplitRow = pd->snap_split_row;
+    f.SplitFrame = pd->snap_split_frame; f.FrameNumber = pd->snap_frame_no;
+    for (i = 0; i < 256; ++i) pd->rowpal[i] = VddFramePaletteAt(&f, (unsigned)y, i);
     pd->rowpal_y = y;
     return pd->rowpal;
 }
@@ -788,7 +788,7 @@ void present_ddraw_present(present_ddraw *pd)
     }
 }
 
-void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)
+void present_ddraw_frame(present_ddraw *pd, const NTVDD_FRAME *f)
 { present_ddraw_snapshot(pd, f); present_ddraw_present(pd); }
 
 /* Save the current 8bpp snapshot as an indexed .bmp at `path`. This is OCCLUSION-PROOF
@@ -808,13 +808,13 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     HANDLE hf;
     BYTE fh[14], ih[40];
     static BYTE pal[256 * 4];
-    static BYTE row[NTVDD_FRAME_MAXW + 4];
+    static BYTE row[NTVDD_FRAME_MAX_WIDTH + 4];
     /* 24bpp output is needed for a split palette AND for a direct-colour frame:
        neither can be described by one 256-entry BMP palette. */
     int split = pd->snap_split || pd->snap_bpp == 32;
-    static BYTE row24[NTVDD_FRAME_MAXW * 3 + 4];
+    static BYTE row24[NTVDD_FRAME_MAX_WIDTH * 3 + 4];
     /* #325: any frame up to the maximum (720x400 text, VESA) -- this was 640x480. */
-    if (!pd->snap_valid || w <= 0 || h <= 0 || w > NTVDD_FRAME_MAXW || h > NTVDD_FRAME_MAXH) return -1;
+    if (!pd->snap_valid || w <= 0 || h <= 0 || w > NTVDD_FRAME_MAX_WIDTH || h > NTVDD_FRAME_MAX_HEIGHT) return -1;
     /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
        written as 24bpp with every row resolved. Ordinary frames stay 8bpp: the
        oracle tools compare palette INDICES and must keep them. */

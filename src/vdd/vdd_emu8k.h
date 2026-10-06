@@ -97,7 +97,7 @@ typedef struct _EMU8K_VOICE {
 typedef UINT64 (*PEMU8K_CLOCK_ROUTINE)(PVOID context);
 
 typedef struct _EMU8K_STATE {
-    vdd_bus  *Bus;
+    VDD_BUS  *Bus;
     WORD      BasePort;              /* E: Data0 at E, Data1/2 at E+400h, Data3/Ptr at E+800h */
     PWORD     Dram;                  /* DramWords 16-bit words, owned by the host           */
     DWORD     DramWords;             /* 0 = none fitted                                     */
@@ -133,11 +133,11 @@ typedef struct _EMU8K_STATE {
 
 typedef const EMU8K_STATE *PCEMU8K_STATE;
 
-INT  VddEmu8kInitialize(_In_ vdd_bus *bus, _In_ PVOID context);
+INT  VddEmu8kInitialize(_In_ VDD_BUS *bus, _In_ PVOID context);
 VOID VddEmu8kReset(_In_ PVOID context);
-static inline ntvdd VddEmu8kDevice(_In_ PEMU8K_STATE state)
-{ ntvdd device; device.name = EMU8K_DEVICE_NAME; device.init = VddEmu8kInitialize; device.reset = VddEmu8kReset;
-  device.shutdown = 0; device.self = state; return device; }
+static inline NTVDD_DEVICE VddEmu8kDevice(_In_ PEMU8K_STATE state)
+{ NTVDD_DEVICE device; device.Name = EMU8K_DEVICE_NAME; device.Initialize = VddEmu8kInitialize; device.Reset = VddEmu8kReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 /* The chip's output rate: fixed, 44.1 kHz (the WC period, p.13). */
 static inline DWORD VddEmu8kRateHz(_In_ PCEMU8K_STATE state) { (VOID)state; return EMU8K_RATE_HZ; }

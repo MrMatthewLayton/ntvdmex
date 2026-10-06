@@ -28,17 +28,17 @@ static int g_irqs;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; (void)irq; g_irqs++; }
 
 /* The host's rule for an IN: a VDD's answer, or FFh(s) when nobody claims it. */
-static uint32_t host_in(vdd_bus *bus, uint16_t port, uint8_t width)
+static uint32_t host_in(VDD_BUS *bus, uint16_t port, uint8_t width)
 {
     uint32_t v = 0;
-    if (!vdd_bus_io(bus, port, width, 1, &v)) v = 0xFFFFFFFFu;
+    if (!VddBusIo(bus, port, width, 1, &v)) v = 0xFFFFFFFFu;
     return width == 1 ? (v & 0xFF) : width == 2 ? (v & 0xFFFF) : v;
 }
-static void host_out(vdd_bus *bus, uint16_t port, uint8_t val)
-{ uint32_t v = val; vdd_bus_io(bus, port, 1, 0, &v); }
+static void host_out(VDD_BUS *bus, uint16_t port, uint8_t val)
+{ uint32_t v = val; VddBusIo(bus, port, 1, 0, &v); }
 
 /* The datasheet's BSY wait, bounded. 1 = it would have exited. */
-static int bsy_wait_exits(vdd_bus *bus, uint16_t port)
+static int bsy_wait_exits(VDD_BUS *bus, uint16_t port)
 {
     int spin;
     for (spin = 0; spin < 65536; ++spin)
@@ -47,7 +47,7 @@ static int bsy_wait_exits(vdd_bus *bus, uint16_t port)
 }
 
 /* The presence test: write two patterns, read them back. 1 = "a device latched". */
-static int latches(vdd_bus *bus, uint16_t cmdbase)
+static int latches(VDD_BUS *bus, uint16_t cmdbase)
 {
     host_out(bus, cmdbase + 2, 0x55); host_out(bus, cmdbase + 3, 0xAA);
     if (host_in(bus, cmdbase + 2, 1) == 0x55 && host_in(bus, cmdbase + 3, 1) == 0xAA) return 1;
@@ -59,22 +59,22 @@ int main(void)
 {
     static const uint16_t chan[2][2] = { { IDE_PRI_CMD, IDE_PRI_CTL },
                                          { IDE_SEC_CMD, IDE_SEC_CTL } };
-    vdd_bus bus; ide_state st; ntvdd dev;
+    VDD_BUS bus; ide_state st; NTVDD_DEVICE dev;
     int c, spin, drq;
     uint16_t p;
 
     /* ── NEGATIVE CONTROL: the machine before this device. ── */
-    vdd_bus_init(&bus, NULL);
+    VddBusInitialize(&bus, NULL);
     CHECK(host_in(&bus, IDE_PRI_CTL, 1) == 0xFF, "control: unclaimed 3F6h floats to FFh");
     CHECK(!bsy_wait_exits(&bus, IDE_PRI_CTL),
           "control: on FFh the BSY wait NEVER exits (the hang this closes)");
 
     /* ── the adapter, fitted ── */
     memset(&st, 0, sizeof st);
-    vdd_bus_init(&bus, NULL);
-    vdd_bus_set_sinks(&bus, irq_sink, NULL, NULL, NULL);
+    VddBusInitialize(&bus, NULL);
+    VddBusSetSinks(&bus, irq_sink, NULL, NULL, NULL);
     dev = vdd_ide_device(&st);
-    CHECK(vdd_bus_add(&bus, &dev) == 0 && bus.claim_fail == 0, "adapter claims both channels");
+    CHECK(VddBusAdd(&bus, &dev) == 0 && bus.ClaimFailures == 0, "adapter claims both channels");
 
     for (c = 0; c < 2; ++c) {
         uint16_t cmd = chan[c][0], ctl = chan[c][1];

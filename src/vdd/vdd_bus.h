@@ -2,10 +2,10 @@
  * vdd_bus.h -- the device bus behind the ntvdd.h ABI.  (M3, ADR-0008)
  *
  * The bus is a registry: VDDs claim port ranges / memory windows / interrupt
- * vectors / frame ticks during init, and the host calls the vdd_bus_* dispatch
+ * vectors / frame ticks during init, and the host calls the VddBus* dispatch
  * entry points from its V86 service loop when the matching hardware event fires.
  *
- * The bus is host-agnostic and pure (no <windows.h>): the two effects that need
+ * The bus is host-agnostic (no Windows calls, only Windows types): the two effects that need
  * the real host -- raising an IRQ into the kernel ICA and presenting a frame to
  * the screen -- are injected as `sink` callbacks (NULL in the off-VM test). This
  * is what lets vdd_test.c exercise the whole bus + a VDD with no VM.
@@ -15,63 +15,69 @@
 
 #include "ntvdd.h"
 
-#ifndef VDD_MAX_PORTS
-#define VDD_MAX_PORTS  48       /* claimed port ranges (s80: 31 of 32 were in use, and the GUS needs two) */
+#ifndef VDD_MAX_PORT_RANGES
+#define VDD_MAX_PORT_RANGES  48       /* claimed port ranges (s80: 31 of 32 were in use, and the GUS needs two) */
 /* ⚠ THIS WAS 16, AND IT WAS EXACTLY FULL. Adding one CRTC range pushed the LAST
-     device added -- the MPU-401 -- off the bus: vdd_claim_ports() returned -1, nobody
+     device added -- the MPU-401 -- off the bus: VddClaimPorts() returned -1, nobody
      looked, and the guest's MIDI port read 0xFF like an empty ISA slot. Doom's music
      driver reset it four times, got nothing, and played no music at all. Nothing in
      any log said so; it took diffing an SNDIO trace against a working run to see
-     0x330 answering 0xffffffff. Hence `claim_fail` below and the STAGE0 line that
+     0x330 answering 0xffffffff. Hence `ClaimFailures` below and the STAGE0 line that
      prints it: a device that cannot get on the bus must be LOUD. */
 #endif
-#ifndef VDD_MAX_MEM
-#define VDD_MAX_MEM    8        /* claimed memory windows                       */
+#ifndef VDD_MAX_MEMORY_WINDOWS
+#define VDD_MAX_MEMORY_WINDOWS    8        /* claimed memory windows                       */
 #endif
-#ifndef VDD_MAX_FRAME
-#define VDD_MAX_FRAME  8        /* frame-tick subscribers                       */
+#ifndef VDD_MAX_FRAME_SUBSCRIBERS
+#define VDD_MAX_FRAME_SUBSCRIBERS  8        /* frame-tick subscribers                       */
 #endif
-#ifndef VDD_MAX_DEV
-#define VDD_MAX_DEV    24       /* devices on the bus (s87 #179: was 16, and with
+#ifndef VDD_MAX_DEVICES
+#define VDD_MAX_DEVICES    24       /* devices on the bus (s87 #179: was 16, and with
                                    GUS + EMU8K fitted the IDE adapter made 17)   */
 #endif
 
-typedef struct { uint16_t lo, hi; ntvdd_in_fn in; ntvdd_out_fn out; void *self; } vdd_port_ent;
-typedef struct { uint32_t base, end; ntvdd_rd_fn rd; ntvdd_wr_fn wr; void *self; } vdd_mem_ent;
-typedef struct { ntvdd_int_fn svc; void *self; } vdd_int_ent;
-typedef struct { ntvdd_frame_fn fn; void *self; } vdd_frame_ent;
+#define VDD_INTERRUPT_VECTORS 256    /* one slot per vector                          */
+
+typedef struct _VDD_PORT_ENTRY {
+    WORD First, Last; PVDD_PORT_IN_ROUTINE In; PVDD_PORT_OUT_ROUTINE Out; PVOID Context;
+} VDD_PORT_ENTRY, *PVDD_PORT_ENTRY;
+typedef struct _VDD_MEMORY_ENTRY {
+    UINT32 Base, End; PVDD_MEMORY_READ_ROUTINE Read; PVDD_MEMORY_WRITE_ROUTINE Write; PVOID Context;
+} VDD_MEMORY_ENTRY, *PVDD_MEMORY_ENTRY;
+typedef struct _VDD_INTERRUPT_ENTRY { PVDD_INTERRUPT_ROUTINE Service; PVOID Context; } VDD_INTERRUPT_ENTRY, *PVDD_INTERRUPT_ENTRY;
+typedef struct _VDD_FRAME_ENTRY { PVDD_FRAME_ROUTINE Routine; PVOID Context; } VDD_FRAME_ENTRY, *PVDD_FRAME_ENTRY;
 
 /* host-injected effects */
-typedef void (*vdd_irq_sink)(void *ctx, uint8_t irq);
-typedef void (*vdd_present_sink)(void *ctx, const ntvdd_frame *f);
+typedef VOID (*PVDD_IRQ_SINK)(PVOID context, BYTE irq);
+typedef VOID (*PVDD_PRESENT_SINK)(PVOID context, PCNTVDD_FRAME frame);
 
-struct vdd_bus {
-    void          *mem_base;            /* map_flat base; NULL => V86 absolute  */
-    vdd_irq_sink   irq_sink;     void *irq_ctx;
-    vdd_present_sink present_sink; void *present_ctx;
+struct _VDD_BUS {
+    PVOID          MemoryBase;          /* VddMapFlat base; NULL => V86 absolute */
+    PVDD_IRQ_SINK   IrqSink;     PVOID IrqContext;
+    PVDD_PRESENT_SINK PresentSink; PVOID PresentContext;
 
-    vdd_port_ent   ports[VDD_MAX_PORTS];   int n_ports;
-    vdd_mem_ent    mem[VDD_MAX_MEM];       int n_mem;
-    vdd_int_ent    ints[256];              /* indexed by vector; svc==NULL=unset */
-    vdd_frame_ent  frame[VDD_MAX_FRAME];   int n_frame;
+    VDD_PORT_ENTRY      Ports[VDD_MAX_PORT_RANGES];          INT PortCount;
+    VDD_MEMORY_ENTRY    Memory[VDD_MAX_MEMORY_WINDOWS];      INT MemoryCount;
+    VDD_INTERRUPT_ENTRY Interrupts[VDD_INTERRUPT_VECTORS];   /* indexed by vector; Service==NULL=unset */
+    VDD_FRAME_ENTRY     FrameSubscribers[VDD_MAX_FRAME_SUBSCRIBERS]; INT FrameCount;
 
-    ntvdd         *dev[VDD_MAX_DEV];       int n_dev;
-    int            claim_fail;             /* claims refused for want of a table slot */
+    PNTVDD_DEVICE  Devices[VDD_MAX_DEVICES];  INT DeviceCount;
+    INT            ClaimFailures;          /* claims refused for want of a table slot */
 };
 
 /* --- host-side lifecycle + dispatch (the V86 loop calls these) ------------- */
-void vdd_bus_init(vdd_bus *b, void *mem_base);
-void vdd_bus_set_sinks(vdd_bus *b, vdd_irq_sink irq, void *irq_ctx,
-                       vdd_present_sink present, void *present_ctx);
-int  vdd_bus_add(vdd_bus *b, ntvdd *dev);     /* runs dev->init; 0 = ok        */
-void vdd_bus_reset_all(vdd_bus *b);
-void vdd_bus_shutdown_all(vdd_bus *b);
+VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase);
+VOID VddBusSetSinks(PVDD_BUS bus, PVDD_IRQ_SINK irqSink, PVOID irqContext,
+                    PVDD_PRESENT_SINK presentSink, PVOID presentContext);
+INT  VddBusAdd(PVDD_BUS bus, PNTVDD_DEVICE device);     /* runs device->Initialize; 0 = ok */
+VOID VddBusResetAll(PVDD_BUS bus);
+VOID VddBusShutdownAll(PVDD_BUS bus);
 
 /* dispatch -- each returns 1 if a VDD owned the event, 0 if unclaimed */
-int  vdd_bus_io  (vdd_bus *b, uint16_t port, uint8_t width, int is_in, uint32_t *val);
-int  vdd_bus_mem_read (vdd_bus *b, uint32_t addr, uint8_t *out);
-int  vdd_bus_mem_write(vdd_bus *b, uint32_t addr, uint8_t v);
-int  vdd_bus_deliver_int(vdd_bus *b, uint8_t vec, ntvdd_regs *r);
-void vdd_bus_frame(vdd_bus *b);               /* fan out the ~60 Hz tick       */
+INT  VddBusIo(PVDD_BUS bus, WORD port, BYTE width, INT isIn, UINT32 *value);
+INT  VddBusMemoryRead(PVDD_BUS bus, UINT32 address, BYTE *value);
+INT  VddBusMemoryWrite(PVDD_BUS bus, UINT32 address, BYTE value);
+INT  VddBusDeliverInterrupt(PVDD_BUS bus, BYTE vector, PNTVDD_REGISTERS registers);
+VOID VddBusFrame(PVDD_BUS bus);               /* fan out the ~60 Hz tick       */
 
 #endif /* NTVDMEX_VDD_BUS_H */

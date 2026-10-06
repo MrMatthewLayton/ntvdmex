@@ -75,7 +75,7 @@ static void comm_update_irq(comm_state *st, comm_port *c)
     if (!st->bus || !c->fitted) return;
     if (!(c->mcr & MCR_OUT2) || (c->mcr & MCR_LOOP)) return;
     if (comm_iir(c) & 0x01) return;               /* nothing pending           */
-    vdd_raise_irq(st->bus, c->irq);
+    VddRaiseIrq(st->bus, c->irq);
 }
 
 /* ── LOOPBACK IS A REWIRING, NOT A FLAG. ─────────────────────────────────────
@@ -272,16 +272,16 @@ static uint8_t comm_line_status(comm_port *c)
     return (uint8_t)(c->lsr & 0x7F);
 }
 
-static void comm_int14(void *self, ntvdd_regs *r)
+static void comm_int14(void *self, NTVDD_REGISTERS *r)
 {
     comm_state *st = (comm_state *)self;
-    unsigned ah = r_ah(r), al = r_al(r), pi = r_dx(r) & 0xFFFF;
+    unsigned ah = VddGetAh(r), al = VddGetAl(r), pi = VddGetDx(r) & 0xFFFF;
     comm_port *c;
     if (pi >= COMM_MAX_PORTS || !st->p[pi].fitted) {
         /* No such port. TIMEOUT with everything else clear is what a BIOS
            reports for a port that is not there, and it is also the one answer
            that cannot make a polling guest wait forever. */
-        s_ax(r, 0x8000);
+        VddSetAx(r, 0x8000);
         return;
     }
     c = &st->p[pi];
@@ -296,7 +296,7 @@ static void comm_int14(void *self, ntvdd_regs *r)
         c->dll = (uint8_t)(d & 0xFF);
         c->dlm = (uint8_t)(d >> 8);
         c->lcr = (uint8_t)(al & 0x1F);
-        s_ax(r, (uint16_t)((comm_line_status(c) << 8) | c->msr));
+        VddSetAx(r, (uint16_t)((comm_line_status(c) << 8) | c->msr));
         break; }
     case 0x01:                                     /* send AL                   */
         ++c->tx_count;
@@ -306,21 +306,21 @@ static void comm_int14(void *self, ntvdd_regs *r)
            the same THRE interrupt the port write does. */
         c->thre_pending = 1;
         comm_update_irq(st, c);
-        s_ax(r, (uint16_t)((comm_line_status(c) << 8) | al));
+        VddSetAx(r, (uint16_t)((comm_line_status(c) << 8) | al));
         break;
     case 0x02:                                     /* receive -> AL             */
         if (c->rx_len) {
             uint8_t b = comm_pop_rx(c);
-            s_ax(r, (uint16_t)((comm_line_status(c) << 8) | b));
+            VddSetAx(r, (uint16_t)((comm_line_status(c) << 8) | b));
         } else {
-            s_ax(r, 0x8000);                       /* TIMEOUT: nothing waiting  */
+            VddSetAx(r, 0x8000);                       /* TIMEOUT: nothing waiting  */
         }
         break;
     case 0x03:                                     /* status                    */
-        s_ax(r, (uint16_t)((comm_line_status(c) << 8) | c->msr));
+        VddSetAx(r, (uint16_t)((comm_line_status(c) << 8) | c->msr));
         break;
     default:
-        s_ax(r, 0x8000);
+        VddSetAx(r, 0x8000);
         break;
     }
 }
@@ -440,7 +440,7 @@ void vdd_comm_reset(void *self)
     }
 }
 
-int vdd_comm_init(vdd_bus *b, void *self)
+int vdd_comm_init(VDD_BUS *b, void *self)
 {
     comm_state *st = (comm_state *)self;
     int i, any = 0;
@@ -448,7 +448,7 @@ int vdd_comm_init(vdd_bus *b, void *self)
     for (i = 0; i < COMM_MAX_PORTS; ++i) {
         comm_port *c = &st->p[i];
         if (!c->fitted) continue;
-        if (vdd_claim_ports(b, c->base, (uint16_t)(c->base + 7),
+        if (VddClaimPorts(b, c->base, (uint16_t)(c->base + 7),
                             comm_in, comm_out, st) != 0) {
             /* A refused claim must UNFIT the port, not leave it declared. The
                MPU-401 note on the bus says why: a device that thinks it is on
@@ -462,14 +462,14 @@ int vdd_comm_init(vdd_bus *b, void *self)
     for (i = 0; i < LPT_MAX_PORTS; ++i) {
         lpt_port *l = &st->l[i];
         if (!l->fitted) continue;
-        if (vdd_claim_ports(b, l->base, (uint16_t)(l->base + 2),
+        if (VddClaimPorts(b, l->base, (uint16_t)(l->base + 2),
                             lpt_in, lpt_out, st) != 0) { l->fitted = 0; continue; }
         any = 1;
     }
     /* INT 14h is claimed even with no port fitted, so that "no such port"
        is answered by the part that knows, in one place, rather than by a
        fallback in the host that could disagree with it. */
-    if (vdd_claim_int(b, 0x14, comm_int14, st) != 0) return -1;
+    if (VddClaimInterrupt(b, 0x14, comm_int14, st) != 0) return -1;
     vdd_comm_reset(st);
     return any ? 0 : 0;
 }

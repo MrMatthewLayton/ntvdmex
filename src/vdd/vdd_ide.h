@@ -74,7 +74,7 @@
 #define ATA_SR_ERR    0x01
 
 typedef struct {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     /* Diagnostics only -- what a guest tried to do to the empty channels. Nothing
        here is ever read back to the guest; there is no state to read. */
     uint32_t reads, writes;
@@ -82,13 +82,13 @@ typedef struct {
     uint8_t  last_cmd;          /* the last of them (ECh = IDENTIFY, etc.)      */
 } ide_state;
 
-int  vdd_ide_init (vdd_bus *b, void *self);
+int  vdd_ide_init (VDD_BUS *b, void *self);
 void vdd_ide_reset(void *self);
 void vdd_ide_in   (void *self, uint16_t port, uint8_t width, uint32_t *val);
 void vdd_ide_out  (void *self, uint16_t port, uint8_t width, uint32_t val);
 
-static inline ntvdd vdd_ide_device(ide_state *st)
-{ ntvdd d; d.name = "ide"; d.init = vdd_ide_init; d.reset = vdd_ide_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_ide_device(ide_state *st)
+{ NTVDD_DEVICE d; d.Name = "ide"; d.Initialize = vdd_ide_init; d.Reset = vdd_ide_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_IDE_H */

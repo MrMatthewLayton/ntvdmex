@@ -86,7 +86,7 @@ void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
             st->sec_accum -= PIT_INPUT_HZ;
             if (cmos_second_edge(st)) {
                 st->status_c |= 0x80;           /* IRQF: something is pending  */
-                if (st->bus) vdd_raise_irq(st->bus, 8);
+                if (st->bus) VddRaiseIrq(st->bus, 8);
             }
         }
     } else {
@@ -108,7 +108,7 @@ void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
            read of Status C -- which is how a handler acknowledges the chip. */
         st->status_c |= 0xC0;
         st->pf_raised++;
-        if (st->bus) vdd_raise_irq(st->bus, 8);
+        if (st->bus) VddRaiseIrq(st->bus, 8);
     }
 }
 
@@ -299,7 +299,7 @@ static void cmos_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 void vdd_cmos_reset(void *self)
 {
     cmos_state *st = (cmos_state *)self;
-    vdd_bus *bus = st->bus;
+    VDD_BUS *bus = st->bus;
     void (*now)(void *, struct vdd_rtc *) = st->rtc_now;
     int  (*set)(void *, const struct vdd_rtc *, int) = st->rtc_set;
     void *ctx = st->rtc_ctx;
@@ -350,12 +350,12 @@ void vdd_cmos_reset(void *self)
       st->ram[0x2F] = (uint8_t)(sum & 0xFF); }
 }
 
-int vdd_cmos_init(vdd_bus *b, void *self)
+int vdd_cmos_init(VDD_BUS *b, void *self)
 {
     cmos_state *st = (cmos_state *)self;
     st->bus = b;
     if (!st->ram[CMOS_EQUIP]) vdd_cmos_reset(st);   /* the host builds us zeroed */
     st->bus = b;
-    if (vdd_claim_ports(b, 0x70, 0x71, cmos_in, cmos_out, st)) return -1;
+    if (VddClaimPorts(b, 0x70, 0x71, cmos_in, cmos_out, st)) return -1;
     return 0;
 }

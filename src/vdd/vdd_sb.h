@@ -71,7 +71,7 @@ enum {
 };
 
 typedef struct sb_state {
-    vdd_bus   *bus;
+    VDD_BUS   *bus;
     dma_state *dma;            /* where playback data comes from                 */
     opl_state *opl;            /* FM mirrored at 2x0-2x3 and 2x8-2x9             */
 
@@ -238,13 +238,13 @@ typedef struct sb_state {
     uint32_t lap_off;               /* ring offset of the fetch in progress         */
 } sb_state;
 
-/* Build the device descriptor to hand to vdd_bus_add(). Set base/irq/dma and the
+/* Build the device descriptor to hand to VddBusAdd(). Set base/irq/dma and the
    dma/opl back-pointers before adding. */
-int  vdd_sb_init(vdd_bus *b, void *self);
+int  vdd_sb_init(VDD_BUS *b, void *self);
 void vdd_sb_reset(void *self);
-static inline ntvdd vdd_sb_device(sb_state *st)
-{ ntvdd d; d.name = "sb16"; d.init = vdd_sb_init; d.reset = vdd_sb_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_sb_device(sb_state *st)
+{ NTVDD_DEVICE d; d.Name = "sb16"; d.Initialize = vdd_sb_init; d.Reset = vdd_sb_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* Pull up to `frames` samples of playback into `out` (mono 16-bit at the card's
    current rate), fetching through the DMA controller and raising the completion

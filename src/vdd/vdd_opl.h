@@ -135,7 +135,7 @@ typedef struct opl_ch {
 } opl_ch;
 
 typedef struct opl_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     /* Raw register file as written, both arrays: reg[0x0B0] is array 0's 0xB0,
        reg[0x1B0] array 1's. On an OPL2 the top half is never written. */
     uint8_t  reg[OPL3_NUM_REG];
@@ -216,12 +216,12 @@ typedef struct opl_state {
     uint32_t prof_rhythm_hits[5];
 } opl_state;
 
-/* Build the device descriptor to hand to vdd_bus_add(). */
-int  vdd_opl_init(vdd_bus *b, void *self);
+/* Build the device descriptor to hand to VddBusAdd(). */
+int  vdd_opl_init(VDD_BUS *b, void *self);
 void vdd_opl_reset(void *self);
-static inline ntvdd vdd_opl_device(opl_state *st)
-{ ntvdd d; d.name = "opl2"; d.init = vdd_opl_init; d.reset = vdd_opl_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_opl_device(opl_state *st)
+{ NTVDD_DEVICE d; d.Name = "opl2"; d.Initialize = vdd_opl_init; d.Reset = vdd_opl_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* Advance the timers by `us` microseconds, raising status flags on overflow.
    Exposed rather than driven by a clock inside the device so tests can step it

@@ -33,7 +33,7 @@ static int total = 0, fails = 0;
 #define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
-static vdd_bus    bus;
+static VDD_BUS    bus;
 static comm_state com;
 
 #define CAP 64
@@ -54,21 +54,21 @@ static void lptsink(void *ctx, int port, uint8_t b)
 { (void)ctx; (void)port; if (g_nlpt < CAP) g_lpt_b[g_nlpt++] = b; }
 
 #define BASE 0x3F8
-static void wr(uint16_t p, uint8_t v){ uint32_t x=v; vdd_bus_io(&bus,p,1,0,&x); }
-static uint8_t rd(uint16_t p){ uint32_t x=0; vdd_bus_io(&bus,p,1,1,&x); return (uint8_t)x; }
+static void wr(uint16_t p, uint8_t v){ uint32_t x=v; VddBusIo(&bus,p,1,0,&x); }
+static uint8_t rd(uint16_t p){ uint32_t x=0; VddBusIo(&bus,p,1,1,&x); return (uint8_t)x; }
 #define wr8(p,v) wr((p),(v))
 
-static void int14(uint8_t ah, uint8_t al, uint16_t dx, ntvdd_regs *r)
+static void int14(uint8_t ah, uint8_t al, uint16_t dx, NTVDD_REGISTERS *r)
 {
     memset(r, 0, sizeof *r);
-    r->eax = (uint32_t)(ah << 8) | al;
-    r->edx = dx;
-    vdd_bus_deliver_int(&bus, 0x14, r);
+    r->Eax = (uint32_t)(ah << 8) | al;
+    r->Edx = dx;
+    VddBusDeliverInterrupt(&bus, 0x14, r);
 }
 
 int main(void)
 {
-    ntvdd_regs r;
+    NTVDD_REGISTERS r;
     printf("== GH #9: 8250/16550A serial port battery ==\n");
 
     memset(&com, 0, sizeof com);
@@ -79,9 +79,9 @@ int main(void)
     com.l[0].base = 0x378;  com.l[0].fitted = 1;
     com.sink = sink; com.sink_ctx = 0;
     com.lpt_sink = lptsink; com.lpt_sink_ctx = 0;
-    vdd_bus_init(&bus, 0);
-    { ntvdd d = vdd_comm_device(&com); vdd_bus_add(&bus, &d); }
-    vdd_bus_set_sinks(&bus, irqsink, 0, 0, 0);
+    VddBusInitialize(&bus, 0);
+    { NTVDD_DEVICE d = vdd_comm_device(&com); VddBusAdd(&bus, &d); }
+    VddBusSetSinks(&bus, irqsink, 0, 0, 0);
 
     /* ---- reset state ------------------------------------------------------ */
     CHECK(rd(BASE + COMM_LSR) == (LSR_THRE | LSR_TEMT),
@@ -315,10 +315,10 @@ int main(void)
 
     vdd_comm_rx(&com, 0, 'k');
     int14(0x02, 0, 0, &r);
-    CHECK((r.eax & 0xFF) == 'k', "INT 14h AH=02 returns a byte the HOST pushed");
-    CHECK(((r.eax >> 8) & 0x80) == 0, "...with the TIMEOUT bit CLEAR");
+    CHECK((r.Eax & 0xFF) == 'k', "INT 14h AH=02 returns a byte the HOST pushed");
+    CHECK(((r.Eax >> 8) & 0x80) == 0, "...with the TIMEOUT bit CLEAR");
     int14(0x02, 0, 0, &r);
-    CHECK((r.eax & 0xFFFF) == 0x8000,
+    CHECK((r.Eax & 0xFFFF) == 0x8000,
           "INT 14h AH=02 with nothing waiting reports TIMEOUT (and does not hang the guest)");
 
     int14(0x00, 0xE3, 0, &r);                      /* 9600 8N1                  */
@@ -329,9 +329,9 @@ int main(void)
     wr(BASE + COMM_LCR, 0x03);
 
     int14(0x03, 0, 1, &r);
-    CHECK((r.eax & 0xFFFF) != 0x8000, "COM2 is fitted and answers INT 14h AH=03");
+    CHECK((r.Eax & 0xFFFF) != 0x8000, "COM2 is fitted and answers INT 14h AH=03");
     int14(0x03, 0, 4, &r);
-    CHECK((r.eax & 0xFFFF) == 0x8000, "a port index past COM4 reports TIMEOUT");
+    CHECK((r.Eax & 0xFFFF) == 0x8000, "a port index past COM4 reports TIMEOUT");
 
     /* ---- COM3 and COM4: two more slots of the same device (GH #181) --------- */
     wr(0x3E8 + COMM_SCR, 0x33);
@@ -357,27 +357,27 @@ int main(void)
     CHECK(rd(0x3E8 + COMM_RBR) == 'c' && rd(0x2E8 + COMM_RBR) == 'd',
           "each byte arrives on the port it was pushed to");
     int14(0x03, 0, 2, &r);
-    CHECK((r.eax & 0xFFFF) != 0x8000, "a fitted COM3 answers INT 14h DX=2");
+    CHECK((r.Eax & 0xFFFF) != 0x8000, "a fitted COM3 answers INT 14h DX=2");
     int14(0x03, 0, 3, &r);
-    CHECK((r.eax & 0xFFFF) != 0x8000, "a fitted COM4 answers INT 14h DX=3");
+    CHECK((r.Eax & 0xFFFF) != 0x8000, "a fitted COM4 answers INT 14h DX=3");
     wr(0x3E8 + COMM_IER, 0); wr(0x3E8 + COMM_MCR, 0);
     wr(0x2E8 + COMM_IER, 0); wr(0x2E8 + COMM_MCR, 0);
 
     /* A slot that is NOT fitted -- the host's default for COM3/COM4 -- must be
        absent on every route at once: no registers, no INT 14h, not counted. */
-    { static vdd_bus b2; static comm_state c2; ntvdd_regs r2; uint32_t x = 0;
+    { static VDD_BUS b2; static comm_state c2; NTVDD_REGISTERS r2; uint32_t x = 0;
       memset(&c2, 0, sizeof c2);
       c2.p[0].base = BASE;  c2.p[0].irq = 4; c2.p[0].fitted = 1;
       c2.p[1].base = 0x2F8; c2.p[1].irq = 3; c2.p[1].fitted = 1;
-      vdd_bus_init(&b2, 0);
-      { ntvdd d = vdd_comm_device(&c2); vdd_bus_add(&b2, &d); }
-      CHECK(vdd_bus_io(&b2, 0x3E8 + COMM_SCR, 1, 1, &x) == 0,
+      VddBusInitialize(&b2, 0);
+      { NTVDD_DEVICE d = vdd_comm_device(&c2); VddBusAdd(&b2, &d); }
+      CHECK(VddBusIo(&b2, 0x3E8 + COMM_SCR, 1, 1, &x) == 0,
             "an unfitted COM3 leaves 3E8h unclaimed (the guest reads the bus float)");
       CHECK(vdd_comm_fitted(&c2, 2) == 0 && vdd_comm_fitted(&c2, 3) == 0,
             "...and vdd_comm_fitted says so, which is what INT 11h and the BDA read");
-      memset(&r2, 0, sizeof r2); r2.eax = 0x0300; r2.edx = 3;
-      vdd_bus_deliver_int(&b2, 0x14, &r2);
-      CHECK((r2.eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT"); }
+      memset(&r2, 0, sizeof r2); r2.Eax = 0x0300; r2.Edx = 3;
+      VddBusDeliverInterrupt(&b2, 0x14, &r2);
+      CHECK((r2.Eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT"); }
 
     /* ---- the parallel port: the byte leaves on the STROBE EDGE ------------- */
     g_nlpt = 0;

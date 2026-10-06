@@ -19,24 +19,24 @@ static uint8_t g_flat[0x100000];
 static uint64_t g_now;
 static uint64_t fake_clock(void *ctx) { (void)ctx; return g_now; }
 
-static uint32_t rd201(vdd_bus *b)
-{ uint32_t v = 0xEE; vdd_bus_io(b, 0x201, 1, 1, &v); return v; }
-static void wr201(vdd_bus *b)
-{ vdd_bus_io(b, 0x201, 1, 0, &(uint32_t){0}); }
+static uint32_t rd201(VDD_BUS *b)
+{ uint32_t v = 0xEE; VddBusIo(b, 0x201, 1, 1, &v); return v; }
+static void wr201(VDD_BUS *b)
+{ VddBusIo(b, 0x201, 1, 0, &(uint32_t){0}); }
 
 int main(void)
 {
-    vdd_bus bus;
+    VDD_BUS bus;
     joy_state joy; memset(&joy, 0, sizeof joy);
-    ntvdd jdev = vdd_joy_device(&joy);
+    NTVDD_DEVICE jdev = vdd_joy_device(&joy);
 
     printf("== gameport VDD battery ==\n");
 
-    vdd_bus_init(&bus, g_flat);
+    VddBusInitialize(&bus, g_flat);
     joy.now_us = fake_clock;
-    CHECK(vdd_bus_add(&bus, &jdev) == 0, "add: joystick ok");
-    CHECK(bus.ports[bus.n_ports - 1].lo == 0x200
-          && bus.ports[bus.n_ports - 1].hi == 0x207,
+    CHECK(VddBusAdd(&bus, &jdev) == 0, "add: joystick ok");
+    CHECK(bus.Ports[bus.PortCount - 1].First == 0x200
+          && bus.Ports[bus.PortCount - 1].Last == 0x207,
           "add: claimed the 0x200-0x207 block");
 
     /* T1: type None reads exactly like the unclaimed port used to ---------- */

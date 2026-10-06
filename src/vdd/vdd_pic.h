@@ -56,11 +56,11 @@ typedef struct pic_chip {
 } pic_chip;
 
 typedef struct pic_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     pic_chip m, s;          /* master, slave                                      */
 } pic_state;
 
-int vdd_pic_init(vdd_bus *b, void *self);
+int vdd_pic_init(VDD_BUS *b, void *self);
 void vdd_pic_reset(void *self);
 
 /* --- what the host asks the PIC -------------------------------------------- */
@@ -96,11 +96,11 @@ void vdd_pic_eoi(pic_state *st, uint8_t irq);
    so it is safe from a thread that does not hold the device lock. See the .c file. */
 void vdd_pic_ack_autoeoi(pic_state *st, uint8_t irq);
 
-static inline ntvdd vdd_pic_device(pic_state *st)
+static inline NTVDD_DEVICE vdd_pic_device(pic_state *st)
 {
-    ntvdd d;
-    d.name = "pic"; d.init = vdd_pic_init; d.reset = vdd_pic_reset;
-    d.shutdown = 0; d.self = st;
+    NTVDD_DEVICE d;
+    d.Name = "pic"; d.Initialize = vdd_pic_init; d.Reset = vdd_pic_reset;
+    d.Shutdown = 0; d.Context = st;
     return d;
 }
 

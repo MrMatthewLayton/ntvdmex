@@ -22,7 +22,7 @@ static int total = 0, fails = 0;
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
 static uint8_t g_flat[0x100000];
-static vdd_bus bus;
+static VDD_BUS bus;
 static dma_state dma;
 static opl_state opl;
 static sb_state  sb;
@@ -31,8 +31,8 @@ static int g_irq_count, g_irq_last;
 static void irq_sink(void *ctx, uint8_t irq)
 { (void)ctx; g_irq_count++; g_irq_last = irq; }
 
-static void wr(uint16_t port, uint8_t v) { uint32_t x = v; vdd_bus_io(&bus, port, 1, 0, &x); }
-static uint8_t rd(uint16_t port) { uint32_t x = 0; vdd_bus_io(&bus, port, 1, 1, &x); return (uint8_t)x; }
+static void wr(uint16_t port, uint8_t v) { uint32_t x = v; VddBusIo(&bus, port, 1, 0, &x); }
+static uint8_t rd(uint16_t port) { uint32_t x = 0; VddBusIo(&bus, port, 1, 1, &x); return (uint8_t)x; }
 
 #define BASE 0x220
 
@@ -51,14 +51,14 @@ static int dsp_reset(void)
 static void dma_program(uint32_t phys, uint16_t len, int autoinit)
 {
     uint32_t v;
-    v = 0;                 vdd_bus_io(&bus, 0x0C, 1, 0, &v);   /* clear flip-flop  */
-    v = phys & 0xFF;       vdd_bus_io(&bus, 0x02, 1, 0, &v);
-    v = (phys >> 8) & 0xFF;vdd_bus_io(&bus, 0x02, 1, 0, &v);
-    v = (len - 1) & 0xFF;  vdd_bus_io(&bus, 0x03, 1, 0, &v);
-    v = ((len - 1) >> 8) & 0xFF; vdd_bus_io(&bus, 0x03, 1, 0, &v);
-    v = (phys >> 16) & 0xFF; vdd_bus_io(&bus, 0x83, 1, 0, &v);
-    v = (uint32_t)(0x48 | 0x01 | (autoinit ? 0x10 : 0)); vdd_bus_io(&bus, 0x0B, 1, 0, &v);
-    v = 0x01;              vdd_bus_io(&bus, 0x0A, 1, 0, &v);   /* unmask channel 1 */
+    v = 0;                 VddBusIo(&bus, 0x0C, 1, 0, &v);   /* clear flip-flop  */
+    v = phys & 0xFF;       VddBusIo(&bus, 0x02, 1, 0, &v);
+    v = (phys >> 8) & 0xFF;VddBusIo(&bus, 0x02, 1, 0, &v);
+    v = (len - 1) & 0xFF;  VddBusIo(&bus, 0x03, 1, 0, &v);
+    v = ((len - 1) >> 8) & 0xFF; VddBusIo(&bus, 0x03, 1, 0, &v);
+    v = (phys >> 16) & 0xFF; VddBusIo(&bus, 0x83, 1, 0, &v);
+    v = (uint32_t)(0x48 | 0x01 | (autoinit ? 0x10 : 0)); VddBusIo(&bus, 0x0B, 1, 0, &v);
+    v = 0x01;              VddBusIo(&bus, 0x0A, 1, 0, &v);   /* unmask channel 1 */
 }
 
 int main(void)
@@ -72,12 +72,12 @@ int main(void)
     memset(&dma, 0, sizeof dma);
     memset(&opl, 0, sizeof opl);
     memset(&sb,  0, sizeof sb);
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, irq_sink, 0, 0, 0);
-    { ntvdd d = vdd_dma_device(&dma); CHECK(vdd_bus_add(&bus, &d) == 0, "add: dma ok"); }
-    { ntvdd d = vdd_opl_device(&opl); CHECK(vdd_bus_add(&bus, &d) == 0, "add: opl ok"); }
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
+    { NTVDD_DEVICE d = vdd_dma_device(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma ok"); }
+    { NTVDD_DEVICE d = vdd_opl_device(&opl); CHECK(VddBusAdd(&bus, &d) == 0, "add: opl ok"); }
     sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
-    { ntvdd d = vdd_sb_device(&sb); CHECK(vdd_bus_add(&bus, &d) == 0, "add: sb16 ok"); }
+    { NTVDD_DEVICE d = vdd_sb_device(&sb); CHECK(VddBusAdd(&bus, &d) == 0, "add: sb16 ok"); }
 
     /* T1: THE DETECTION HANDSHAKE ------------------------------------------ */
     CHECK(dsp_reset(), "detect: reset handshake returns 0xAA  <-- THE TEST");

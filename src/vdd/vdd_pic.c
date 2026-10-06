@@ -341,7 +341,7 @@ uint8_t vdd_pic_vector(pic_state *st, uint8_t irq)
 void vdd_pic_reset(void *self)
 {
     pic_state *st = (pic_state *)self;
-    vdd_bus *b = st->bus;
+    VDD_BUS *b = st->bus;
     pic_chip_reset(&st->m, 0x08);
     pic_chip_reset(&st->s, 0x70);
     /* A PC's BIOS leaves the timer and keyboard unmasked before handing control to
@@ -352,13 +352,13 @@ void vdd_pic_reset(void *self)
     st->bus = b;
 }
 
-int vdd_pic_init(vdd_bus *b, void *self)
+int vdd_pic_init(VDD_BUS *b, void *self)
 {
     pic_state *st = (pic_state *)self;
     st->bus = b;
     vdd_pic_reset(st);
     st->bus = b;
-    if (vdd_claim_ports(b, 0x20, 0x21, pic_in, pic_out, st)) return -1;
-    if (vdd_claim_ports(b, 0xA0, 0xA1, pic_in, pic_out, st)) return -1;
+    if (VddClaimPorts(b, 0x20, 0x21, pic_in, pic_out, st)) return -1;
+    if (VddClaimPorts(b, 0xA0, 0xA1, pic_in, pic_out, st)) return -1;
     return 0;
 }

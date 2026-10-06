@@ -151,7 +151,7 @@ static void mpu_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 void vdd_mpu_reset(void *self)
 {
     mpu_state *st = (mpu_state *)self;
-    vdd_bus *bus = st->bus; uint16_t base = st->base;
+    VDD_BUS *bus = st->bus; uint16_t base = st->base;
     mpu_midi_sink sink = st->sink; void *ctx = st->sink_ctx;
     mpu_sysex_sink xsink = st->sysex_sink; void *xctx = st->sysex_ctx;   /* #136 */
     unsigned i; uint8_t *p = (uint8_t *)st;
@@ -160,12 +160,12 @@ void vdd_mpu_reset(void *self)
     st->sysex_sink = xsink; st->sysex_ctx = xctx;
 }
 
-int vdd_mpu_init(vdd_bus *b, void *self)
+int vdd_mpu_init(VDD_BUS *b, void *self)
 {
     mpu_state *st = (mpu_state *)self;
     st->bus = b;
     if (!st->base) st->base = MPU_DEFAULT_BASE;
-    if (vdd_claim_ports(b, st->base, (uint16_t)(st->base + 1), mpu_in, mpu_out, st))
+    if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 1), mpu_in, mpu_out, st))
         return -1;
     return 0;
 }

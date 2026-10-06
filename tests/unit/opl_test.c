@@ -26,41 +26,41 @@ static int total = 0, fails = 0;
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
 static uint8_t g_flat[0x100000];
-static vdd_bus bus;
+static VDD_BUS bus;
 
 /* Write an OPL register the way hardware is driven: address to 0x388, data to
    0x389 -- so the battery exercises the port path, not just the helper. */
 static void wr(uint8_t reg, uint8_t val)
 {
-    uint32_t v = reg; vdd_bus_io(&bus, 0x388, 1, 0, &v);
-    v = val;          vdd_bus_io(&bus, 0x389, 1, 0, &v);
+    uint32_t v = reg; VddBusIo(&bus, 0x388, 1, 0, &v);
+    v = val;          VddBusIo(&bus, 0x389, 1, 0, &v);
 }
 static uint8_t status(void)
 {
-    uint32_t v = 0; vdd_bus_io(&bus, 0x388, 1, 1, &v); return (uint8_t)v;
+    uint32_t v = 0; VddBusIo(&bus, 0x388, 1, 1, &v); return (uint8_t)v;
 }
 /* The OPL3's array-1 pair: address to 0x38A, data to 0x38B. */
 static void wr3(uint8_t reg, uint8_t val)
 {
-    uint32_t v = reg; vdd_bus_io(&bus, 0x38A, 1, 0, &v);
-    v = val;          vdd_bus_io(&bus, 0x38B, 1, 0, &v);
+    uint32_t v = reg; VddBusIo(&bus, 0x38A, 1, 0, &v);
+    v = val;          VddBusIo(&bus, 0x38B, 1, 0, &v);
 }
 static uint8_t rdp(uint16_t port)
 {
-    uint32_t v = 0; vdd_bus_io(&bus, port, 1, 1, &v); return (uint8_t)v;
+    uint32_t v = 0; VddBusIo(&bus, port, 1, 1, &v); return (uint8_t)v;
 }
 
 int main(void)
 {
     opl_state opl; memset(&opl, 0, sizeof opl);
-    ntvdd dev = vdd_opl_device(&opl);
+    NTVDD_DEVICE dev = vdd_opl_device(&opl);
     int m, c;
 
     printf("== sound epic: AdLib/OPL2 + OPL3 register + timer battery ==\n");
 
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
-    CHECK(vdd_bus_add(&bus, &dev) == 0, "add: opl device ok");
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, 0, 0, 0, 0);
+    CHECK(VddBusAdd(&bus, &dev) == 0, "add: opl device ok");
     CHECK(status() == 0x06, "reset: OPL2 status = flags clear + ID bits 1-2 set (0x06)");
 
     /* T1: the operator mapping ---------------------------------------------- */
@@ -160,7 +160,7 @@ int main(void)
     CHECK((status() & 0xE0) == 0x00, "stopped timer: no flag no matter how much time passes");
 
     /* T9: the data port is write-only on an OPL2 ---------------------------- */
-    { uint32_t v = 0; vdd_bus_io(&bus, 0x389, 1, 1, &v);
+    { uint32_t v = 0; VddBusIo(&bus, 0x389, 1, 1, &v);
       CHECK(v == 0xFF, "0x389 reads 0xFF (write-only data port)"); }
 
     /* T10: the bus frame tick advances the timers --------------------------- */
@@ -168,9 +168,9 @@ int main(void)
     opl.frame_us = 16667;
     wr(0x02, 0x00);                                  /* 256 ticks = 20.48ms       */
     wr(0x04, 0x01);
-    vdd_bus_frame(&bus);
+    VddBusFrame(&bus);
     CHECK((status() & OPL_ST_T1) == 0, "frame tick: 16.7ms is short of 20.48ms");
-    vdd_bus_frame(&bus);
+    VddBusFrame(&bus);
     CHECK((status() & OPL_ST_T1) != 0, "frame tick: two frames pass 20.48ms -> flag");
 
     /* ── OPL3 (YMF262), GH #232 ─────────────────────────────────────────────── */
@@ -211,8 +211,8 @@ int main(void)
     CHECK(opl.ch[11].fnum == 0x144 && opl.ch[11].block == 3, "array 1: 0x1A2/0x1B2 -> channel 11");
     CHECK(vdd_opl_op_index(9, 0) == 18 && vdd_opl_op_index(17, 1) == 35, "ch9 -> op 18 ... ch17 -> op 35");
     /* ONE latch: address written at 0x38A, data through EITHER data port        */
-    { uint32_t v = 0x40; vdd_bus_io(&bus, 0x38A, 1, 0, &v);
-      v = 0x3F;          vdd_bus_io(&bus, 0x389, 1, 0, &v); }
+    { uint32_t v = 0x40; VddBusIo(&bus, 0x38A, 1, 0, &v);
+      v = 0x3F;          VddBusIo(&bus, 0x389, 1, 0, &v); }
     CHECK(opl.reg[0x140] == 0x3F && opl.op[18].tl == 0x3F, "one 9-bit latch: 0x38A then 0x389 writes array 1");
     /* array 1's 0x104 is the 4-op register, NOT timer control                   */
     wr(0x04, 0x00);                                  /* T1 stopped (T12 ran it)   */

@@ -1,157 +1,166 @@
 /* vdd_bus.c -- see vdd_bus.h / ntvdd.h.  The device bus implementation: the
  * claim registries (called by VDDs during init) and the dispatch entry points
- * (called by the host's V86 service loop).  Pure C, no <windows.h>. */
+ * (called by the host's V86 service loop).  No Windows calls, only Windows types. */
 #include "vdd_bus.h"
 
+#define VDD_BUS_OK             0
+#define VDD_BUS_FAILED         (-1)
+#define VDD_BUS_CLAIMED        1       /* dispatch: a VDD owned the event              */
+#define VDD_BUS_UNCLAIMED      0
+#define VDD_BUS_FLOATING_PORT  0xFFFFFFFFu  /* an IN with no handler: an empty ISA slot */
+#define VDD_BUS_FLOATING_BYTE  0xFF
+#define VDD_BUS_SEGMENT_SHIFT  4       /* real mode: linear = segment << 4             */
+#define VDD_BUS_LAST_OFFSET    1       /* an inclusive window ends at base + size - 1 */
+
 /* --- lifecycle ------------------------------------------------------------ */
-void vdd_bus_init(vdd_bus *b, void *mem_base)
+VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase)
 {
-    int i;
-    b->mem_base = mem_base;
-    b->irq_sink = 0; b->irq_ctx = 0;
-    b->present_sink = 0; b->present_ctx = 0;
-    b->n_ports = 0; b->n_mem = 0; b->n_frame = 0; b->n_dev = 0;
-    /* ⚠ claim_fail too: a bus on the stack (the off-VM tests) otherwise starts
+    INT vector;
+    bus->MemoryBase = memoryBase;
+    bus->IrqSink = 0; bus->IrqContext = 0;
+    bus->PresentSink = 0; bus->PresentContext = 0;
+    bus->PortCount = 0; bus->MemoryCount = 0; bus->FrameCount = 0; bus->DeviceCount = 0;
+    /* ⚠ ClaimFailures too: a bus on the stack (the off-VM tests) otherwise starts
        with garbage in the one counter that says a device failed to get on. */
-    b->claim_fail = 0;
-    for (i = 0; i < 256; ++i) { b->ints[i].svc = 0; b->ints[i].self = 0; }
+    bus->ClaimFailures = 0;
+    for (vector = 0; vector < VDD_INTERRUPT_VECTORS; ++vector) { bus->Interrupts[vector].Service = 0; bus->Interrupts[vector].Context = 0; }
 }
 
-void vdd_bus_set_sinks(vdd_bus *b, vdd_irq_sink irq, void *irq_ctx,
-                       vdd_present_sink present, void *present_ctx)
+VOID VddBusSetSinks(PVDD_BUS bus, PVDD_IRQ_SINK irqSink, PVOID irqContext,
+                    PVDD_PRESENT_SINK presentSink, PVOID presentContext)
 {
-    b->irq_sink = irq; b->irq_ctx = irq_ctx;
-    b->present_sink = present; b->present_ctx = present_ctx;
+    bus->IrqSink = irqSink; bus->IrqContext = irqContext;
+    bus->PresentSink = presentSink; bus->PresentContext = presentContext;
 }
 
-int vdd_bus_add(vdd_bus *b, ntvdd *dev)
+INT VddBusAdd(PVDD_BUS bus, PNTVDD_DEVICE device)
 {
-    if (b->n_dev >= VDD_MAX_DEV) { b->claim_fail++; return -1; }
-    b->dev[b->n_dev++] = dev;
-    return dev->init ? dev->init(b, dev->self) : 0;
+    if (bus->DeviceCount >= VDD_MAX_DEVICES) { bus->ClaimFailures++; return VDD_BUS_FAILED; }
+    bus->Devices[bus->DeviceCount++] = device;
+    return device->Initialize ? device->Initialize(bus, device->Context) : VDD_BUS_OK;
 }
 
-void vdd_bus_reset_all(vdd_bus *b)
+VOID VddBusResetAll(PVDD_BUS bus)
 {
-    int i;
-    for (i = 0; i < b->n_dev; ++i)
-        if (b->dev[i]->reset) b->dev[i]->reset(b->dev[i]->self);
+    INT deviceIndex;
+    for (deviceIndex = 0; deviceIndex < bus->DeviceCount; ++deviceIndex)
+        if (bus->Devices[deviceIndex]->Reset) bus->Devices[deviceIndex]->Reset(bus->Devices[deviceIndex]->Context);
 }
 
-void vdd_bus_shutdown_all(vdd_bus *b)
+VOID VddBusShutdownAll(PVDD_BUS bus)
 {
-    int i;
-    for (i = 0; i < b->n_dev; ++i)
-        if (b->dev[i]->shutdown) b->dev[i]->shutdown(b->dev[i]->self);
+    INT deviceIndex;
+    for (deviceIndex = 0; deviceIndex < bus->DeviceCount; ++deviceIndex)
+        if (bus->Devices[deviceIndex]->Shutdown) bus->Devices[deviceIndex]->Shutdown(bus->Devices[deviceIndex]->Context);
 }
 
 /* --- claim registries (the ntvdd.h ABI surface VDDs call) ----------------- */
-int vdd_claim_ports(vdd_bus *b, uint16_t lo, uint16_t hi,
-                    ntvdd_in_fn in, ntvdd_out_fn out, void *self)
+INT VddClaimPorts(PVDD_BUS bus, WORD firstPort, WORD lastPort,
+                  PVDD_PORT_IN_ROUTINE inRoutine, PVDD_PORT_OUT_ROUTINE outRoutine, PVOID context)
 {
-    vdd_port_ent *e;
-    if (lo > hi || b->n_ports >= VDD_MAX_PORTS) { b->claim_fail++; return -1; }
-    e = &b->ports[b->n_ports++];
-    e->lo = lo; e->hi = hi; e->in = in; e->out = out; e->self = self;
-    return 0;
+    PVDD_PORT_ENTRY entry;
+    if (firstPort > lastPort || bus->PortCount >= VDD_MAX_PORT_RANGES) { bus->ClaimFailures++; return VDD_BUS_FAILED; }
+    entry = &bus->Ports[bus->PortCount++];
+    entry->First = firstPort; entry->Last = lastPort; entry->In = inRoutine; entry->Out = outRoutine; entry->Context = context;
+    return VDD_BUS_OK;
 }
 
-int vdd_claim_mem(vdd_bus *b, uint32_t base, uint32_t size,
-                  ntvdd_rd_fn rd, ntvdd_wr_fn wr, void *self)
+INT VddClaimMemory(PVDD_BUS bus, UINT32 base, UINT32 size,
+                   PVDD_MEMORY_READ_ROUTINE readRoutine, PVDD_MEMORY_WRITE_ROUTINE writeRoutine, PVOID context)
 {
-    vdd_mem_ent *e;
-    if (!size || b->n_mem >= VDD_MAX_MEM) { b->claim_fail++; return -1; }
-    e = &b->mem[b->n_mem++];
-    e->base = base; e->end = base + size - 1; e->rd = rd; e->wr = wr; e->self = self;
-    return 0;
+    PVDD_MEMORY_ENTRY entry;
+    if (!size || bus->MemoryCount >= VDD_MAX_MEMORY_WINDOWS) { bus->ClaimFailures++; return VDD_BUS_FAILED; }
+    entry = &bus->Memory[bus->MemoryCount++];
+    entry->Base = base; entry->End = base + size - VDD_BUS_LAST_OFFSET; entry->Read = readRoutine; entry->Write = writeRoutine; entry->Context = context;
+    return VDD_BUS_OK;
 }
 
-int vdd_claim_int(vdd_bus *b, uint8_t vec, ntvdd_int_fn svc, void *self)
+INT VddClaimInterrupt(PVDD_BUS bus, BYTE vector, PVDD_INTERRUPT_ROUTINE serviceRoutine, PVOID context)
 {
-    if (b->ints[vec].svc) return -1;        /* already claimed */
-    b->ints[vec].svc = svc; b->ints[vec].self = self;
-    return 0;
+    if (bus->Interrupts[vector].Service) return VDD_BUS_FAILED;        /* already claimed */
+    bus->Interrupts[vector].Service = serviceRoutine; bus->Interrupts[vector].Context = context;
+    return VDD_BUS_OK;
 }
 
-int vdd_on_frame(vdd_bus *b, ntvdd_frame_fn fn, void *self)
+INT VddOnFrame(PVDD_BUS bus, PVDD_FRAME_ROUTINE frameRoutine, PVOID context)
 {
-    vdd_frame_ent *e;
-    if (b->n_frame >= VDD_MAX_FRAME) { b->claim_fail++; return -1; }
-    e = &b->frame[b->n_frame++];
-    e->fn = fn; e->self = self;
-    return 0;
+    PVDD_FRAME_ENTRY entry;
+    if (bus->FrameCount >= VDD_MAX_FRAME_SUBSCRIBERS) { bus->ClaimFailures++; return VDD_BUS_FAILED; }
+    entry = &bus->FrameSubscribers[bus->FrameCount++];
+    entry->Routine = frameRoutine; entry->Context = context;
+    return VDD_BUS_OK;
 }
 
 /* --- services VDDs call back into ----------------------------------------- */
-void vdd_raise_irq(vdd_bus *b, uint8_t irq)
+VOID VddRaiseIrq(PVDD_BUS bus, BYTE irq)
 {
-    if (b->irq_sink) b->irq_sink(b->irq_ctx, irq);
+    if (bus->IrqSink) bus->IrqSink(bus->IrqContext, irq);
 }
 
-void *vdd_map_flat(vdd_bus *b, uint16_t seg, uint16_t off)
+PVOID VddMapFlat(PVDD_BUS bus, WORD segment, WORD offset)
 {
-    uint32_t flat = ((uint32_t)seg << 4) + off;     /* real-mode linear address */
-    return (uint8_t *)b->mem_base + flat;           /* base==NULL => absolute   */
+    UINT32 flat = ((UINT32)segment << VDD_BUS_SEGMENT_SHIFT) + offset;     /* real-mode linear address */
+    return (BYTE *)bus->MemoryBase + flat;           /* base==NULL => absolute   */
 }
 
-void *vdd_map_lin(vdd_bus *b, uint32_t linear)
+PVOID VddMapLinear(PVDD_BUS bus, UINT32 linear)
 {
-    return (uint8_t *)b->mem_base + linear;         /* base==NULL => absolute   */
+    return (BYTE *)bus->MemoryBase + linear;         /* base==NULL => absolute   */
 }
 
-void vdd_present(vdd_bus *b, const ntvdd_frame *f)
+VOID VddPresent(PVDD_BUS bus, PCNTVDD_FRAME frame)
 {
-    if (b->present_sink) b->present_sink(b->present_ctx, f);
+    if (bus->PresentSink) bus->PresentSink(bus->PresentContext, frame);
 }
 
 /* --- dispatch (the host's V86 service loop calls these) ------------------- */
-int vdd_bus_io(vdd_bus *b, uint16_t port, uint8_t width, int is_in, uint32_t *val)
+INT VddBusIo(PVDD_BUS bus, WORD port, BYTE width, INT isIn, UINT32 *value)
 {
-    int i;
-    for (i = 0; i < b->n_ports; ++i) {
-        vdd_port_ent *e = &b->ports[i];
-        if (port < e->lo || port > e->hi) continue;
-        if (is_in)  { if (e->in)  { *val = 0; e->in(e->self, port, width, val); } else *val = 0xFFFFFFFFu; }
-        else        { if (e->out) e->out(e->self, port, width, *val); }
-        return 1;
+    INT entryIndex;
+    for (entryIndex = 0; entryIndex < bus->PortCount; ++entryIndex) {
+        PVDD_PORT_ENTRY entry = &bus->Ports[entryIndex];
+        if (port < entry->First || port > entry->Last) continue;
+        if (isIn)  { if (entry->In)  { *value = 0; entry->In(entry->Context, port, width, value); } else *value = VDD_BUS_FLOATING_PORT; }
+        else        { if (entry->Out) entry->Out(entry->Context, port, width, *value); }
+        return VDD_BUS_CLAIMED;
     }
-    return 0;
+    return VDD_BUS_UNCLAIMED;
 }
 
-int vdd_bus_mem_read(vdd_bus *b, uint32_t addr, uint8_t *out)
+INT VddBusMemoryRead(PVDD_BUS bus, UINT32 address, BYTE *value)
 {
-    int i;
-    for (i = 0; i < b->n_mem; ++i) {
-        vdd_mem_ent *e = &b->mem[i];
-        if (addr < e->base || addr > e->end) continue;
-        *out = e->rd ? e->rd(e->self, addr - e->base) : 0xFF;
-        return 1;
+    INT entryIndex;
+    for (entryIndex = 0; entryIndex < bus->MemoryCount; ++entryIndex) {
+        PVDD_MEMORY_ENTRY entry = &bus->Memory[entryIndex];
+        if (address < entry->Base || address > entry->End) continue;
+        *value = entry->Read ? entry->Read(entry->Context, address - entry->Base) : VDD_BUS_FLOATING_BYTE;
+        return VDD_BUS_CLAIMED;
     }
-    return 0;
+    return VDD_BUS_UNCLAIMED;
 }
 
-int vdd_bus_mem_write(vdd_bus *b, uint32_t addr, uint8_t v)
+INT VddBusMemoryWrite(PVDD_BUS bus, UINT32 address, BYTE value)
 {
-    int i;
-    for (i = 0; i < b->n_mem; ++i) {
-        vdd_mem_ent *e = &b->mem[i];
-        if (addr < e->base || addr > e->end) continue;
-        if (e->wr) e->wr(e->self, addr - e->base, v);
-        return 1;
+    INT entryIndex;
+    for (entryIndex = 0; entryIndex < bus->MemoryCount; ++entryIndex) {
+        PVDD_MEMORY_ENTRY entry = &bus->Memory[entryIndex];
+        if (address < entry->Base || address > entry->End) continue;
+        if (entry->Write) entry->Write(entry->Context, address - entry->Base, value);
+        return VDD_BUS_CLAIMED;
     }
-    return 0;
+    return VDD_BUS_UNCLAIMED;
 }
 
-int vdd_bus_deliver_int(vdd_bus *b, uint8_t vec, ntvdd_regs *r)
+INT VddBusDeliverInterrupt(PVDD_BUS bus, BYTE vector, PNTVDD_REGISTERS registers)
 {
-    if (!b->ints[vec].svc) return 0;
-    b->ints[vec].svc(b->ints[vec].self, r);
-    return 1;
+    if (!bus->Interrupts[vector].Service) return VDD_BUS_UNCLAIMED;
+    bus->Interrupts[vector].Service(bus->Interrupts[vector].Context, registers);
+    return VDD_BUS_CLAIMED;
 }
 
-void vdd_bus_frame(vdd_bus *b)
+VOID VddBusFrame(PVDD_BUS bus)
 {
-    int i;
-    for (i = 0; i < b->n_frame; ++i)
-        if (b->frame[i].fn) b->frame[i].fn(b->frame[i].self);
+    INT subscriberIndex;
+    for (subscriberIndex = 0; subscriberIndex < bus->FrameCount; ++subscriberIndex)
+        if (bus->FrameSubscribers[subscriberIndex].Routine) bus->FrameSubscribers[subscriberIndex].Routine(bus->FrameSubscribers[subscriberIndex].Context);
 }

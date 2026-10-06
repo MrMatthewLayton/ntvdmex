@@ -2,7 +2,7 @@
  * present_ddraw.h -- the DirectDraw presentation backend.  (M3 slice-3, ADR-0008)
  *
  * The mode-agnostic frame sink behind the VDD bus: the video VDD produces an
- * `ntvdd_frame` (text or graphics, palettised or ARGB) and this layer blits it
+ * `NTVDD_FRAME` (text or graphics, palettised or ARGB) and this layer blits it
  * into a host window via DirectDraw 7, in either WINDOWED or exclusive
  * FULLSCREEN mode.  One software conversion path (index -> ARGB through the
  * frame palette) feeds a 32bpp surface in both modes, so palette management and
@@ -69,12 +69,12 @@ typedef struct present_ddraw {
          release was imminent when this landed. Sized to the widest mode
          vesa_modes[] advertises: every mode we publish must be one we can DISPLAY,
          or the list is promising something the presenter drops on the floor. */
-    uint8_t  snap[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];
-    uint32_t snap32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* ARGB, when snap_bpp == 32 */
+    uint8_t  snap[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
+    uint32_t snap32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* ARGB, when snap_bpp == 32 */
     uint8_t  snap_bpp;                  /* 8 = snap[] + snap_pal, 32 = snap32[]    */
     uint32_t snap_pal[256];
     int   snap_w, snap_h, snap_valid;
-    /* Raster split (s70, see ntvdd_frame): the frame-start and mid-frame palettes,
+    /* Raster split (s70, see NTVDD_FRAME): the frame-start and mid-frame palettes,
        the row each mid-frame entry applies from, and the frame stamps. `snap_split`
        is 0 for the ordinary one-palette frame, which keeps the fast paths. */
     uint32_t snap_pal_base[256], snap_pal_split[256], snap_split_frame[256];
@@ -127,14 +127,14 @@ int  present_ddraw_set_fullscreen(present_ddraw *pd, int on);
 
 /* Snapshot a frame into the back-buffer -- call UNDER the bus lock (consistent
    copy while the V86 thread can't write the framebuffer). */
-void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f);
+void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f);
 
 /* Blit the snapshot to the screen, vsync'd -- call OUTSIDE the lock (the slow
    blit then never starves the V86 thread). */
 void present_ddraw_present(present_ddraw *pd);
 
 /* Snapshot + present in one call (for the standalone present_demo). */
-void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f);
+void present_ddraw_frame(present_ddraw *pd, const NTVDD_FRAME *f);
 
 /* Serialise the current 8bpp snapshot to an indexed .bmp at `path` (occlusion-proof:
    reads pd->snap, not the screen). For headless/remote visual validation -- the host

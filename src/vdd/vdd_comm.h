@@ -163,14 +163,14 @@ typedef struct lpt_port {
 } lpt_port;
 
 typedef struct comm_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     comm_port p[COMM_MAX_PORTS];
     lpt_port  l[LPT_MAX_PORTS];
     comm_tx_sink sink;     void *sink_ctx;      /* serial                      */
     comm_tx_sink lpt_sink; void *lpt_sink_ctx;  /* parallel                    */
 } comm_state;
 
-int  vdd_comm_init(vdd_bus *b, void *self);
+int  vdd_comm_init(VDD_BUS *b, void *self);
 void vdd_comm_reset(void *self);
 
 /* Host -> guest. Returns 0 if the byte was queued, -1 if the ring was full (and
@@ -183,8 +183,8 @@ int  vdd_comm_rx(comm_state *st, int port, uint8_t byte);
 int  vdd_comm_fitted(const comm_state *st, int port);
 int  vdd_lpt_fitted (const comm_state *st, int port);
 
-static inline ntvdd vdd_comm_device(comm_state *st)
-{ ntvdd d; d.name = "comm"; d.init = vdd_comm_init; d.reset = vdd_comm_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_comm_device(comm_state *st)
+{ NTVDD_DEVICE d; d.Name = "comm"; d.Initialize = vdd_comm_init; d.Reset = vdd_comm_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_COMM_H */

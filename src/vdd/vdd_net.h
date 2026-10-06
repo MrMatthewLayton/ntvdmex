@@ -50,7 +50,7 @@ typedef struct {
 typedef uint8_t (*netb_submit_fn)(void *ctx, netb_ncb *n);
 
 typedef struct net_state {
-    vdd_bus       *bus;
+    VDD_BUS       *bus;
     netb_submit_fn submit;   void *ctx;
     uint32_t calls, nowait, posts_owed, no_backend;
     /* s91: a no-wait command's POST routine, owed to the guest as soon as INT 5Ch
@@ -62,7 +62,7 @@ typedef struct net_state {
     uint8_t  last_cmd, last_ret;
 } net_state;
 
-int  vdd_net_init(vdd_bus *b, void *self);
+int  vdd_net_init(VDD_BUS *b, void *self);
 void vdd_net_reset(void *self);
 void vdd_net_set_backend(net_state *st, netb_submit_fn fn, void *ctx);
 
@@ -71,8 +71,8 @@ void vdd_net_set_backend(net_state *st, netb_submit_fn fn, void *ctx);
    Returns AL. */
 uint8_t vdd_net_service(net_state *st, uint8_t *ncb, uint8_t *buf);
 
-static inline ntvdd vdd_net_device(net_state *st)
-{ ntvdd d; d.name = "netbios"; d.init = vdd_net_init; d.reset = vdd_net_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_net_device(net_state *st)
+{ NTVDD_DEVICE d; d.Name = "netbios"; d.Initialize = vdd_net_init; d.Reset = vdd_net_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_NET_H */

@@ -206,14 +206,14 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
         st->accum = 0;
         if (st->irq_armed && st->total_clocks - st->load_clocks >= R) {
             st->irq_armed = 0;
-            vdd_raise_irq(st->bus, 0);
+            VddRaiseIrq(st->bus, 0);
         }
         return;
     }
     st->accum += clocks;
     while (st->accum >= R && guard++ < 100000) {
         st->accum -= R;
-        vdd_raise_irq(st->bus, 0);           /* IRQ0 -> guest takes INT 08h     */
+        VddRaiseIrq(st->bus, 0);           /* IRQ0 -> guest takes INT 08h     */
         /* A count written WITHOUT a Control Word in modes 2/3 is "loaded at the end
            of the current counting cycle" (datasheet, mode 2; mode 3 says half-cycle,
            approximated here as the full one). This is that end. */
@@ -523,13 +523,13 @@ static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 /* --- BIOS timer services -------------------------------------------------- */
 /* The BIOS data area lives at segment 0x40; tick count = DWORD at 0040:006C,
    the 24-hour-rollover flag = BYTE at 0040:0070. */
-static uint8_t *pit_bda(pit_state *st) { return (uint8_t *)vdd_map_flat(st->bus, 0x40, 0); }
+static uint8_t *pit_bda(pit_state *st) { return (uint8_t *)VddMapFlat(st->bus, 0x40, 0); }
 
 /* INT 08h -- the BIOS timer tick (runs when the guest takes IRQ0). Increments
    the tick count and handles the midnight rollover.
    TODO(v86 wiring): the authentic path also chains INT 1Ch and EOIs the PIC;
    that needs the IVT/re-entry plumbing from slice-1b, so it is deferred. */
-static void pit_int08(void *self, ntvdd_regs *r)
+static void pit_int08(void *self, NTVDD_REGISTERS *r)
 {
     pit_state *st = (pit_state *)self;
     uint8_t *bda = pit_bda(st);
@@ -574,23 +574,23 @@ int vdd_pit_seed_time_of_day(pit_state *st)
     return 1;
 }
 
-static void pit_int1a(void *self, ntvdd_regs *r)
+static void pit_int1a(void *self, NTVDD_REGISTERS *r)
 {
     pit_state *st = (pit_state *)self;
     uint8_t *bda = pit_bda(st);
     uint32_t *tick = (uint32_t *)(bda + 0x6C);
-    switch (r_ah(r)) {
+    switch (VddGetAh(r)) {
     case 0x00:
-        s_cx(r, (uint16_t)(*tick >> 16));
-        s_dx(r, (uint16_t)(*tick & 0xFFFF));
-        s_al(r, bda[0x70]);
+        VddSetCx(r, (uint16_t)(*tick >> 16));
+        VddSetDx(r, (uint16_t)(*tick & 0xFFFF));
+        VddSetAl(r, bda[0x70]);
         bda[0x70] = 0;
-        r->cf = 0;
+        r->CarryFlag = 0;
         break;
     case 0x01:
-        *tick = ((uint32_t)r_cx(r) << 16) | r_dx(r);
+        *tick = ((uint32_t)VddGetCx(r) << 16) | VddGetDx(r);
         bda[0x70] = 0;
-        r->cf = 0;
+        r->CarryFlag = 0;
         /* #262: the host moves DOS's clock to the new count (and takes it as the
            BIOS's own through vdd_pit_tick_take); with no host, it is simply owned. */
         if (st->ticks_set) st->ticks_set(st->rtc_ctx, *tick);
@@ -598,17 +598,17 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         break;
     case 0x02: {                             /* get RTC time, BCD               */
         struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
-        s_cx(r, (uint16_t)((pit_bcd(n.hour) << 8) | pit_bcd(n.min)));
+        VddSetCx(r, (uint16_t)((pit_bcd(n.hour) << 8) | pit_bcd(n.min)));
         /* DL = daylight-saving flag. 0 = standard time; we do not track a DST rule
            the guest could act on, and saying 1 would invite one. */
-        s_dx(r, (uint16_t)(pit_bcd(n.sec) << 8));
-        r->cf = 0;
+        VddSetDx(r, (uint16_t)(pit_bcd(n.sec) << 8));
+        r->CarryFlag = 0;
         break; }
     case 0x04: {                             /* get RTC date, BCD               */
         struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
-        s_cx(r, (uint16_t)((pit_bcd(n.cent) << 8) | pit_bcd(n.year)));
-        s_dx(r, (uint16_t)((pit_bcd(n.month) << 8) | pit_bcd(n.day)));
-        r->cf = 0;
+        VddSetCx(r, (uint16_t)((pit_bcd(n.cent) << 8) | pit_bcd(n.year)));
+        VddSetDx(r, (uint16_t)((pit_bcd(n.month) << 8) | pit_bcd(n.day)));
+        r->CarryFlag = 0;
         break; }
     case 0x03:                               /* set RTC time, BCD               */
     case 0x05: {                             /* set RTC date, BCD               */
@@ -624,8 +624,8 @@ static void pit_int1a(void *self, ntvdd_regs *r)
              with CF=1 and the clock is left alone. DL (the DST flag) is accepted and
              not kept -- AH=02h reports standard time, see above. */
         struct vdd_rtc in;
-        unsigned ch = r_cx(r) >> 8, cl = r_cx(r) & 0xFF, dh = r_dx(r) >> 8, dl = r_dx(r) & 0xFF;
-        int what = (r_ah(r) == 0x05);
+        unsigned ch = VddGetCx(r) >> 8, cl = VddGetCx(r) & 0xFF, dh = VddGetDx(r) >> 8, dl = VddGetDx(r) & 0xFF;
+        int what = (VddGetAh(r) == 0x05);
         unsigned v[4]; unsigned k; int bad = 0;
         v[0] = ch; v[1] = cl; v[2] = dh; v[3] = dl;
         for (k = 0; k < (what ? 4u : 3u); ++k) {
@@ -635,7 +635,7 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         in.cent = in.year = in.month = in.day = in.hour = in.min = in.sec = in.dow = 0;
         if (what) { in.cent = v[0]; in.year = v[1]; in.month = v[2]; in.day = v[3]; }
         else      { in.hour = v[0]; in.min = v[1]; in.sec = v[2]; }
-        r->cf = (uint8_t)((!bad && st->rtc_set && st->rtc_set(st->rtc_ctx, &in, what)) ? 0 : 1);
+        r->CarryFlag = (uint8_t)((!bad && st->rtc_set && st->rtc_set(st->rtc_ctx, &in, what)) ? 0 : 1);
         break; }
     default:
         /* 06h/07h (alarm) are not answered here; the alarm lives in the CMOS model
@@ -648,7 +648,7 @@ static void pit_int1a(void *self, ntvdd_regs *r)
 void vdd_pit_reset(void *self)
 {
     pit_state *st = (pit_state *)self;
-    vdd_bus *bus = st->bus; uint32_t fus = st->frame_us;
+    VDD_BUS *bus = st->bus; uint32_t fus = st->frame_us;
     void (*guard)(void *, int) = st->guard; void *gctx = st->guard_ctx;
     void (*rnow)(void *, struct vdd_rtc *) = st->rtc_now; void *rctx = st->rtc_ctx;
     int  (*rset)(void *, const struct vdd_rtc *, int) = st->rtc_set;
@@ -696,7 +696,7 @@ void vdd_pit_reset(void *self)
     st->c2.access = 3;
 }
 
-int vdd_pit_init(vdd_bus *b, void *self)
+int vdd_pit_init(VDD_BUS *b, void *self)
 {
     pit_state *st = (pit_state *)self;
     st->bus = b;
@@ -714,9 +714,9 @@ int vdd_pit_init(vdd_bus *b, void *self)
         st->c1.gate = 1;                    /* tied high on the board */
     }
     if (!st->c2.access) st->c2.access = 3;
-    if (vdd_claim_ports(b, 0x40, 0x43, pit_in, pit_out, st)) return -1;
-    if (vdd_claim_int(b, 0x08, pit_int08, st)) return -1;
-    if (vdd_claim_int(b, 0x1A, pit_int1a, st)) return -1;
-    if (vdd_on_frame(b, pit_frame, st)) return -1;
+    if (VddClaimPorts(b, 0x40, 0x43, pit_in, pit_out, st)) return -1;
+    if (VddClaimInterrupt(b, 0x08, pit_int08, st)) return -1;
+    if (VddClaimInterrupt(b, 0x1A, pit_int1a, st)) return -1;
+    if (VddOnFrame(b, pit_frame, st)) return -1;
     return 0;
 }

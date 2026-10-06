@@ -36,7 +36,7 @@ static void fdc_irq(fdc_state *st)
          model that ignores the bit serves a driver that set it and silently
          disobeys one that cleared it. */
     if (!(st->dor & FDC_DOR_DMAGATE)) return;
-    if (st->bus) vdd_raise_irq(st->bus, 6);
+    if (st->bus) VddRaiseIrq(st->bus, 6);
 }
 
 /* ── HOW MANY BYTES DOES THIS COMMAND TAKE? (docs/ref/fdc.md 5) ─────────────────
@@ -391,7 +391,7 @@ void vdd_fdc_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
 void vdd_fdc_reset(void *self)
 {
     fdc_state *st = (fdc_state *)self;
-    vdd_bus *bus = st->bus;
+    VDD_BUS *bus = st->bus;
     unsigned i;
     for (i = 0; i < sizeof(*st); ++i) ((uint8_t *)st)[i] = 0;
     st->bus = bus;
@@ -413,7 +413,7 @@ void vdd_fdc_reset(void *self)
     st->poll_drive = 4;
 }
 
-int vdd_fdc_init(vdd_bus *b, void *self)
+int vdd_fdc_init(VDD_BUS *b, void *self)
 {
     fdc_state *st = (fdc_state *)self;
     st->bus = b;
@@ -431,7 +431,7 @@ int vdd_fdc_init(vdd_bus *b, void *self)
          THAT IS A REAL GAP AND IT BELONGS TO THE ATA SURFACE, NOT THIS ONE.
          Claiming the whole eight-port block would have "fixed" the row by taking
          a register that is somebody else's. */
-    if (vdd_claim_ports(b, FDC_DOR, FDC_FIFO, vdd_fdc_in, vdd_fdc_out, st)) return -1;
-    if (vdd_claim_ports(b, FDC_DIR, FDC_DIR,  vdd_fdc_in, vdd_fdc_out, st)) return -1;
+    if (VddClaimPorts(b, FDC_DOR, FDC_FIFO, vdd_fdc_in, vdd_fdc_out, st)) return -1;
+    if (VddClaimPorts(b, FDC_DIR, FDC_DIR,  vdd_fdc_in, vdd_fdc_out, st)) return -1;
     return 0;
 }

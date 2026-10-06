@@ -21,7 +21,7 @@
  * auto-init mode bits, and raises terminal count -- so auto-init ring buffers
  * (how every DOS game streams continuous audio) work without the caller knowing.
  *
- * Pure C, no <windows.h>: the only outside effect is vdd_map_lin(), so the whole
+ * Pure C, no <windows.h>: the only outside effect is VddMapLinear(), so the whole
  * controller is exercised off-VM by tests/unit/dma_test.c.
  */
 #ifndef NTVDMEX_VDD_DMA_H
@@ -96,7 +96,7 @@ typedef struct dma_chan {
 } dma_chan;
 
 typedef struct dma_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     dma_chan ch[8];
     uint8_t  ff[2];                 /* per-controller lo/hi byte-pointer flip-flop */
     /* ── THE NINE PAGE PORTS THAT MAP TO NO CHANNEL ARE STILL REAL LATCHES. ──────
@@ -162,12 +162,12 @@ typedef struct dma_state {
     uint32_t rd_w1, rd_w2, rd_w4;      /* count-register reads by operand width    */
 } dma_state;
 
-/* Build the device descriptor to hand to vdd_bus_add(). */
-int  vdd_dma_init(vdd_bus *b, void *self);
+/* Build the device descriptor to hand to VddBusAdd(). */
+int  vdd_dma_init(VDD_BUS *b, void *self);
 void vdd_dma_reset(void *self);
-static inline ntvdd vdd_dma_device(dma_state *st)
-{ ntvdd d; d.name = "dma"; d.init = vdd_dma_init; d.reset = vdd_dma_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_dma_device(dma_state *st)
+{ NTVDD_DEVICE d; d.Name = "dma"; d.Initialize = vdd_dma_init; d.Reset = vdd_dma_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* The physical address the next transfer on `ch` will touch. */
 uint32_t vdd_dma_cur_phys(const dma_state *st, uint8_t ch);

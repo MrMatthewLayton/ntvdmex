@@ -49,10 +49,10 @@ void vdd_joy_reset(void *self)
     st->fired = 0; st->trigger_us = 0; /* keep type + the host-fed sample      */
 }
 
-int vdd_joy_init(vdd_bus *b, void *self)
+int vdd_joy_init(VDD_BUS *b, void *self)
 {
     joy_state *st = (joy_state *)self;
     st->bus = b;
     /* A real gameport card decodes the whole 0x200-0x207 block. */
-    return vdd_claim_ports(b, 0x200, 0x207, joy_in, joy_out, st);
+    return VddClaimPorts(b, 0x200, 0x207, joy_in, joy_out, st);
 }

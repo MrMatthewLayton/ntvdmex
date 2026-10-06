@@ -58,7 +58,7 @@
 #define CMOS_CENTURY    0x32
 
 typedef struct cmos_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     uint8_t  index;         /* the low 7 bits of the last write to 0x70        */
     /* ⛔ BIT 7 OF PORT 0x70 IS THE NMI MASK, not part of the register number.
          Software sets it constantly -- masking NMI across a CMOS access is
@@ -119,10 +119,10 @@ void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks);
 /* The programmed periodic rate in Hz, or 0 if none. docs/ref/rtc.md 2. */
 uint32_t vdd_cmos_periodic_hz(const cmos_state *st);
 
-int  vdd_cmos_init(vdd_bus *b, void *self);
+int  vdd_cmos_init(VDD_BUS *b, void *self);
 void vdd_cmos_reset(void *self);
-static inline ntvdd vdd_cmos_device(cmos_state *st)
-{ ntvdd d; d.name = "cmos"; d.init = vdd_cmos_init; d.reset = vdd_cmos_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_cmos_device(cmos_state *st)
+{ NTVDD_DEVICE d; d.Name = "cmos"; d.Initialize = vdd_cmos_init; d.Reset = vdd_cmos_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_CMOS_H */

@@ -52,17 +52,17 @@ uint8_t vdd_net_service(net_state *st, uint8_t *ncb, uint8_t *buf)
     return ret;
 }
 
-static void net_int5c(void *self, ntvdd_regs *r)
+static void net_int5c(void *self, NTVDD_REGISTERS *r)
 {
     net_state *st = (net_state *)self;
-    uint8_t *ncb = (uint8_t *)vdd_map_flat(st->bus, r->es, r_bx(r));
+    uint8_t *ncb = (uint8_t *)VddMapFlat(st->bus, r->Es, VddGetBx(r));
     uint8_t *buf = NULL;
     uint16_t boff, bseg;
-    if (!ncb) { s_al(r, NETB_BADBUF); return; }
+    if (!ncb) { VddSetAl(r, NETB_BADBUF); return; }
     boff = (uint16_t)(ncb[4] | (ncb[5] << 8));
     bseg = (uint16_t)(ncb[6] | (ncb[7] << 8));
-    if (boff | bseg) buf = (uint8_t *)vdd_map_flat(st->bus, bseg, boff);
-    s_al(r, vdd_net_service(st, ncb, buf));
+    if (boff | bseg) buf = (uint8_t *)VddMapFlat(st->bus, bseg, boff);
+    VddSetAl(r, vdd_net_service(st, ncb, buf));
 }
 
 /* INT 2Ah, the network/critical-section interface (Microsoft Networks):
@@ -72,30 +72,30 @@ static void net_int5c(void *self, ntvdd_regs *r)
             01h error
      AH=80h/81h/82h begin/end critical section, end all: nothing to serialise here
    Anything else returns with the registers as they came. */
-static void net_int2a(void *self, ntvdd_regs *r)
+static void net_int2a(void *self, NTVDD_REGISTERS *r)
 {
     net_state *st = (net_state *)self;
-    switch (r_ah(r)) {
+    switch (VddGetAh(r)) {
     case 0x00:
-        s_ah(r, st->submit ? 0x01 : 0x00);
+        VddSetAh(r, st->submit ? 0x01 : 0x00);
         break;
     case 0x01: case 0x04: {
         uint8_t ret;
         net_int5c(self, r);
-        ret = r_al(r);
-        s_ah(r, ret ? 0x01 : 0x00);
+        ret = VddGetAl(r);
+        VddSetAh(r, ret ? 0x01 : 0x00);
         break; }
     default:
         break;
     }
 }
 
-int vdd_net_init(vdd_bus *b, void *self)
+int vdd_net_init(VDD_BUS *b, void *self)
 {
     net_state *st = (net_state *)self;
     st->bus = b;
-    if (vdd_claim_int(b, 0x5C, net_int5c, st) != 0) return -1;
-    return vdd_claim_int(b, 0x2A, net_int2a, st) != 0 ? -1 : 0;
+    if (VddClaimInterrupt(b, 0x5C, net_int5c, st) != 0) return -1;
+    return VddClaimInterrupt(b, 0x2A, net_int2a, st) != 0 ? -1 : 0;
 }
 
 void vdd_net_reset(void *self) { (void)self; }

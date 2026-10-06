@@ -49,7 +49,7 @@ typedef struct gus_voice {
 } gus_voice;
 
 typedef struct gus_state {
-    vdd_bus   *bus;
+    VDD_BUS   *bus;
     dma_state *dma;
     uint16_t   base;
     uint8_t    irq, dma_ch;          /* ULTRASND's GF1 IRQ and DRAM DMA               */
@@ -115,11 +115,11 @@ typedef struct gus_state {
     uint32_t   out_peak;             /* largest |sample| produced                    */
 } gus_state;
 
-int  vdd_gus_init(vdd_bus *b, void *self);
+int  vdd_gus_init(VDD_BUS *b, void *self);
 void vdd_gus_reset(void *self);
-static inline ntvdd vdd_gus_device(gus_state *st)
-{ ntvdd d; d.name = "gus"; d.init = vdd_gus_init; d.reset = vdd_gus_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_gus_device(gus_state *st)
+{ NTVDD_DEVICE d; d.Name = "gus"; d.Initialize = vdd_gus_init; d.Reset = vdd_gus_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 /* The GF1's output rate for the current active-voice count (ref §4), in Hz. */
 uint32_t vdd_gus_rate_hz(const gus_state *st);

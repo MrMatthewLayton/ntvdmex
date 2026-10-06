@@ -31,7 +31,7 @@
 #define EMU8K_TEST_POINTER_REGISTER_SHIFT 5
 #define EMU8K_TEST_POINTER_LOW_BYTE  0xFF
 
-/* The bus's access widths and directions (vdd_bus_io). */
+/* The bus's access widths and directions (VddBusIo). */
 #define EMU8K_TEST_WORD              2
 #define EMU8K_TEST_DOUBLEWORD        4
 #define EMU8K_TEST_OUT               0
@@ -162,7 +162,7 @@
 static INT    g_Checks, g_Failures;
 static BYTE   g_GuestMemory[0x10000];
 static WORD   g_Dram[EMU8K_DRAM_WORDS];
-static vdd_bus g_Bus;
+static VDD_BUS g_Bus;
 static EMU8K_STATE g_Emu8k;
 static INT16  g_Samples[EMU8K_STEREO_SIDES * EMU8K_TEST_RATE];
 static UINT64 g_FakeMicroseconds;
@@ -178,13 +178,13 @@ static VOID Emu8kTestCheck(BOOL passed, PCSTR description)
 /* ---- port access, exactly as a DOS program makes it ----------------------------------- */
 
 static VOID Emu8kTestOutWord(WORD port, WORD value)
-{ UINT32 busValue = value; vdd_bus_io(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_OUT, &busValue); }
+{ UINT32 busValue = value; VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_OUT, &busValue); }
 static WORD Emu8kTestInWord(WORD port)
-{ UINT32 busValue = 0; vdd_bus_io(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_IN, &busValue); return (WORD)busValue; }
+{ UINT32 busValue = 0; VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_IN, &busValue); return (WORD)busValue; }
 static VOID Emu8kTestOutDword(WORD port, DWORD value)
-{ UINT32 busValue = value; vdd_bus_io(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_OUT, &busValue); }
+{ UINT32 busValue = value; VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_OUT, &busValue); }
 static DWORD Emu8kTestInDword(WORD port)
-{ UINT32 busValue = 0; vdd_bus_io(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_IN, &busValue); return busValue; }
+{ UINT32 busValue = 0; VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_IN, &busValue); return busValue; }
 static VOID Emu8kTestSelect(INT registerNumber, INT channel)
 { Emu8kTestOutWord(EMU8K_TEST_POINTER, (WORD)((registerNumber << EMU8K_TEST_POINTER_REGISTER_SHIFT) | channel)); }
 
@@ -353,10 +353,10 @@ int main(void)
 
     printf("== AWE32 EMU8000 battery ==\n");
     memset(&g_Emu8k, 0, sizeof g_Emu8k);
-    vdd_bus_init(&g_Bus, g_GuestMemory);
+    VddBusInitialize(&g_Bus, g_GuestMemory);
     g_Emu8k.Dram = g_Dram; g_Emu8k.DramWords = EMU8K_DRAM_WORDS; g_Emu8k.BasePort = EMU8K_TEST_BASE;
-    { ntvdd device = VddEmu8kDevice(&g_Emu8k);
-      Emu8kTestCheck(vdd_bus_add(&g_Bus, &device) == 0, "add: emu8k at 620h/A20h/E20h (three port groups)"); }
+    { NTVDD_DEVICE device = VddEmu8kDevice(&g_Emu8k);
+      Emu8kTestCheck(VddBusAdd(&g_Bus, &device) == 0, "add: emu8k at 620h/A20h/E20h (three port groups)"); }
 
     /* ---- T1: detection -- as the period drivers do it: write HWCF1/2/3, read 1 and 2 back ---- */
     Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF1, EMU8K_TEST_HWCF1_INIT);

@@ -113,7 +113,7 @@ void vdd_input_poll(input_state *st)
     if (st->sc_irq_up || !sc_avail(st)) return;
     st->sc_irq_up = 1;
     st->sc_bios_owed = 0;       /* the buffer now holds THIS byte; the old one is gone */
-    if (st->bus) vdd_raise_irq(st->bus, 1);
+    if (st->bus) VddRaiseIrq(st->bus, 1);
 }
 int vdd_input_sc_queued(const input_state *st)
 {
@@ -919,39 +919,39 @@ static int kb_compat(uint16_t *key)
 /* INT 16h -- BIOS keyboard. ZF semantics: AH=01 sets ZF=1 when no key is ready.
    AH=00 here is non-blocking (the host loops + waits on a key event, re-issuing
    until ZF=0); it sets ZF=1 + leaves AX when the buffer is empty. */
-static void int16(void *self, ntvdd_regs *r)
+static void int16(void *self, NTVDD_REGISTERS *r)
 {
     input_state *st = (input_state *)self;
     uint16_t key;
-    switch (r_ah(r)) {
+    switch (VddGetAh(r)) {
     case 0x00: case 0x10: st->int16_calls[0]++; break;
     case 0x01: case 0x11: st->int16_calls[1]++; break;
     case 0x02: case 0x12: st->int16_calls[2]++; break;
     default:              st->int16_calls[3]++; break;
     }
-    switch (r_ah(r)) {
+    switch (VddGetAh(r)) {
     case 0x00:                              /* read key (host blocks on empty)    */
-        r->zf = 1;                          /* #188: enhanced-only codes discarded */
+        r->ZeroFlag = 1;                          /* #188: enhanced-only codes discarded */
         while (vdd_input_pop(st, &key))
-            if (kb_compat(&key)) { s_ax(r, key); r->zf = 0; break; }
+            if (kb_compat(&key)) { VddSetAx(r, key); r->ZeroFlag = 0; break; }
         break;
     case 0x10:                              /* read key, enhanced (101-key)        */
-        if (vdd_input_pop(st, &key)) { s_ax(r, key); r->zf = 0; }
-        else r->zf = 1;
+        if (vdd_input_pop(st, &key)) { VddSetAx(r, key); r->ZeroFlag = 0; }
+        else r->ZeroFlag = 1;
         break;
     case 0x01:                              /* check key (non-blocking)           */
-        r->zf = 1;                          /* ZF=1 => no key (QB's INKEY$ -> "") */
+        r->ZeroFlag = 1;                          /* ZF=1 => no key (QB's INKEY$ -> "") */
         while (vdd_input_peek(st, &key)) {  /* #188: a discard CONSUMES the entry  */
-            if (kb_compat(&key)) { s_ax(r, key); r->zf = 0; break; }
+            if (kb_compat(&key)) { VddSetAx(r, key); r->ZeroFlag = 0; break; }
             (void)vdd_input_pop(st, &key);
         }
         break;
     case 0x11:                              /* check key, enhanced (101-key)       */
-        if (vdd_input_peek(st, &key)) { s_ax(r, key); r->zf = 0; }
-        else r->zf = 1;
+        if (vdd_input_peek(st, &key)) { VddSetAx(r, key); r->ZeroFlag = 0; }
+        else r->ZeroFlag = 1;
         break;
     case 0x02:                              /* shift status, from 0040:0017        */
-        s_al(r, kb_flags(st)); r->zf = 0;
+        VddSetAl(r, kb_flags(st)); r->ZeroFlag = 0;
         break;
     case 0x12: {                            /* extended shift status                  */
         /* ── #254: AH IS ITS OWN LAYOUT, NOT A COPY OF 0040:0018. ─────────────────────
@@ -959,9 +959,9 @@ static void int16(void *self, ntvdd_regs *r)
              0018 has SysReq at bit 2, Pause at 3 and Insert at 7; the right-hand keys
              live in 0096 bits 2/3. This copied 0018 whole, which nothing wrote. */
         uint8_t f1 = kbf(st, BDA_KB_FLAGS2), f3 = kbf(st, BDA_KB_FLAGS3);
-        s_al(r, kb_flags(st));
-        s_ah(r, (uint8_t)((f1 & 0x73) | (f3 & 0x0C) | ((f1 & KF1_SYSRQ) ? 0x80 : 0)));
-        r->zf = 0;
+        VddSetAl(r, kb_flags(st));
+        VddSetAh(r, (uint8_t)((f1 & 0x73) | (f3 & 0x0C) | ((f1 & KF1_SYSRQ) ? 0x80 : 0)));
+        r->ZeroFlag = 0;
         break; }
     case 0x03:                              /* set typematic rate/delay (AL=05)    */
         /* There is nothing to store: the repeat rate is the host OS's, and the BIOS
@@ -969,7 +969,7 @@ static void int16(void *self, ntvdd_regs *r)
            measured on 6.22 (p_kbd.asm 16.03.typematic): AX unchanged, CF=0. A guest
            that sets the rate and gets an error back can conclude the BIOS is not
            there at all. */
-        r->cf = 0; r->zf = 0;
+        r->CarryFlag = 0; r->ZeroFlag = 0;
         break;
     case 0x05:                              /* push a keystroke: CH=scan CL=ascii   */
         /* ★ THE WRITE SIDE OF THE RING, and it was missing entirely -- the `default`
@@ -978,24 +978,24 @@ static void int16(void *self, ntvdd_regs *r)
              probe POISONED AL; without the poison the row was a false match).
              This is how DOSKEY, installers that pre-answer their own prompts, and
              every key-stuffing TSR put keys in. Oracle: AL=0 stored, AL=1 full. */
-        s_al(r, (uint8_t)(vdd_input_push(st, r_cx(r)) ? 0x00 : 0x01));
-        r->cf = 0; r->zf = 0;
+        VddSetAl(r, (uint8_t)(vdd_input_push(st, VddGetCx(r)) ? 0x00 : 0x01));
+        r->CarryFlag = 0; r->ZeroFlag = 0;
         break;
     case 0x09:                              /* which INT 16h functions exist -> AL  */
         /* #188: 0xB1, MEASURED on PCem's genuine AMI BIOS (DOSBox-X agrees); 0x30 was
            QEMU's SeaBIOS. Bits: 0 = 0300h default rate, 4 = 0Ah keyboard ID (below),
            5 = 10h-12h enhanced, 7 = as the AMI ROM sets it. */
-        s_al(r, 0xB1);
-        r->cf = 0; r->zf = 0;
+        VddSetAl(r, 0xB1);
+        r->CarryFlag = 0; r->ZeroFlag = 0;
         break;
     case 0x0A:                              /* #188: get keyboard ID -> BX          */
         /* 41ABh = an MF2 (101/102-key) keyboard behind a translating 8042, the ID
            bit 4 of AH=09h promises. */
-        s_bx(r, 0x41AB);
-        r->cf = 0; r->zf = 0;
+        VddSetBx(r, 0x41AB);
+        r->CarryFlag = 0; r->ZeroFlag = 0;
         break;
     default:                                /* unknown fn: report "no key", never  */
-        r->zf = 1;                          /* a phantom keystroke (was a bug)     */
+        r->ZeroFlag = 1;                          /* a phantom keystroke (was a bug)     */
         break;
     }
 }
@@ -1043,14 +1043,14 @@ void vdd_input_reset(void *self)
     }
 }
 
-int vdd_input_init(vdd_bus *b, void *self)
+int vdd_input_init(VDD_BUS *b, void *self)
 {
     input_state *st = (input_state *)self;
     st->bus = b;
     vdd_input_reset(st);
-    if (vdd_claim_int(b, 0x16, int16, st)) return -1;
-    if (vdd_claim_ports(b, 0x60, 0x60, kbd_hw_in, kbd_hw_out, st)) return -1;  /* data   */
-    if (vdd_claim_ports(b, 0x64, 0x64, kbd_hw_in, kbd_hw_out, st)) return -1;  /* status */
-    if (vdd_claim_ports(b, 0x92, 0x92, syscon_in, syscon_out, st)) return -1;  /* A20    */
+    if (VddClaimInterrupt(b, 0x16, int16, st)) return -1;
+    if (VddClaimPorts(b, 0x60, 0x60, kbd_hw_in, kbd_hw_out, st)) return -1;  /* data   */
+    if (VddClaimPorts(b, 0x64, 0x64, kbd_hw_in, kbd_hw_out, st)) return -1;  /* status */
+    if (VddClaimPorts(b, 0x92, 0x92, syscon_in, syscon_out, st)) return -1;  /* A20    */
     return 0;
 }

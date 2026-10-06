@@ -34,15 +34,15 @@ void vdd_ide_reset(void *self)
     st->last_cmd = 0;
 }
 
-int vdd_ide_init(vdd_bus *b, void *self)
+int vdd_ide_init(VDD_BUS *b, void *self)
 {
     ide_state *st = (ide_state *)self;
     st->bus = b;
     vdd_ide_reset(st);
     /* ⛔ 3F7h IS NOT CLAIMED HERE -- the FDC owns it (DIR bit 7). See vdd_ide.h. */
-    if (vdd_claim_ports(b, IDE_PRI_CMD, IDE_PRI_CMD + 7, vdd_ide_in, vdd_ide_out, st)) return -1;
-    if (vdd_claim_ports(b, IDE_PRI_CTL, IDE_PRI_CTL,     vdd_ide_in, vdd_ide_out, st)) return -1;
-    if (vdd_claim_ports(b, IDE_SEC_CMD, IDE_SEC_CMD + 7, vdd_ide_in, vdd_ide_out, st)) return -1;
-    if (vdd_claim_ports(b, IDE_SEC_CTL, IDE_SEC_CTL + 1, vdd_ide_in, vdd_ide_out, st)) return -1;
+    if (VddClaimPorts(b, IDE_PRI_CMD, IDE_PRI_CMD + 7, vdd_ide_in, vdd_ide_out, st)) return -1;
+    if (VddClaimPorts(b, IDE_PRI_CTL, IDE_PRI_CTL,     vdd_ide_in, vdd_ide_out, st)) return -1;
+    if (VddClaimPorts(b, IDE_SEC_CMD, IDE_SEC_CMD + 7, vdd_ide_in, vdd_ide_out, st)) return -1;
+    if (VddClaimPorts(b, IDE_SEC_CTL, IDE_SEC_CTL + 1, vdd_ide_in, vdd_ide_out, st)) return -1;
     return 0;
 }

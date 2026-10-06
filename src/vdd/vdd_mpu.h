@@ -53,7 +53,7 @@ typedef void (*mpu_midi_sink)(void *ctx, uint32_t msg);
 typedef void (*mpu_sysex_sink)(void *ctx, const uint8_t *msg, uint32_t len);
 
 typedef struct mpu_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     uint16_t base;
     uint8_t  uart_mode;             /* 0x3F received: pass bytes straight through */
 
@@ -77,7 +77,7 @@ typedef struct mpu_state {
     uint8_t  sysex[MPU_SYSEX_MAX];
 } mpu_state;
 
-int  vdd_mpu_init(vdd_bus *b, void *self);
+int  vdd_mpu_init(VDD_BUS *b, void *self);
 void vdd_mpu_reset(void *self);
 
 /* #190: one raw MIDI byte into this instance's message assembler (running status,
@@ -88,8 +88,8 @@ void vdd_mpu_reset(void *self);
    A private one, because two byte streams sharing one assembler would corrupt each
    other's running status. */
 void vdd_mpu_feed(mpu_state *st, uint8_t byte);
-static inline ntvdd vdd_mpu_device(mpu_state *st)
-{ ntvdd d; d.name = "mpu401"; d.init = vdd_mpu_init; d.reset = vdd_mpu_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_mpu_device(mpu_state *st)
+{ NTVDD_DEVICE d; d.Name = "mpu401"; d.Initialize = vdd_mpu_init; d.Reset = vdd_mpu_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_MPU_H */

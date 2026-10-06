@@ -20,7 +20,7 @@ static int total = 0, fails = 0;
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
 static uint8_t g_flat[0x10000];
-static vdd_bus bus;
+static VDD_BUS bus;
 static mpu_state mpu;
 
 #define CAP 32
@@ -37,8 +37,8 @@ static void sx_sink(void *ctx, const uint8_t *m, uint32_t len)
 { (void)ctx; memcpy(g_sx, m, len); g_sxlen = len; g_nsx++; }
 
 #define BASE MPU_DEFAULT_BASE
-static void wr(uint16_t p, uint8_t v){ uint32_t x=v; vdd_bus_io(&bus,p,1,0,&x); }
-static uint8_t rd(uint16_t p){ uint32_t x=0; vdd_bus_io(&bus,p,1,1,&x); return (uint8_t)x; }
+static void wr(uint16_t p, uint8_t v){ uint32_t x=v; VddBusIo(&bus,p,1,0,&x); }
+static uint8_t rd(uint16_t p){ uint32_t x=0; VddBusIo(&bus,p,1,1,&x); return (uint8_t)x; }
 
 int main(void)
 {
@@ -46,8 +46,8 @@ int main(void)
 
     memset(&mpu, 0, sizeof mpu);
     mpu.sink = sink;
-    vdd_bus_init(&bus, g_flat);
-    { ntvdd d = vdd_mpu_device(&mpu); CHECK(vdd_bus_add(&bus, &d) == 0, "add: mpu401 ok"); }
+    VddBusInitialize(&bus, g_flat);
+    { NTVDD_DEVICE d = vdd_mpu_device(&mpu); CHECK(VddBusAdd(&bus, &d) == 0, "add: mpu401 ok"); }
 
     /* T1: the handshake ----------------------------------------------------- */
     CHECK((rd(BASE + 1) & MPU_ST_DSR) != 0, "status: DSR set (active low) => no data waiting");

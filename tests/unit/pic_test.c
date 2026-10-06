@@ -27,11 +27,11 @@ static void ok(int cond, const char *what)
      this stub used to throw them away. Everything the battery could ask was
      therefore about the HOST-side API, which is the half that already worked. */
 static uint8_t g_last_port_lo, g_last_port_hi;
-static ntvdd_in_fn  g_in;
-static ntvdd_out_fn g_out;
+static PVDD_PORT_IN_ROUTINE  g_in;
+static PVDD_PORT_OUT_ROUTINE g_out;
 static void        *g_self;
-int vdd_claim_ports(vdd_bus *b, uint16_t lo, uint16_t hi,
-                    ntvdd_in_fn in, ntvdd_out_fn out, void *self)
+int VddClaimPorts(VDD_BUS *b, uint16_t lo, uint16_t hi,
+                    PVDD_PORT_IN_ROUTINE in, PVDD_PORT_OUT_ROUTINE out, void *self)
 { (void)b;
   g_in = in; g_out = out; g_self = self;
   g_last_port_lo = (uint8_t)lo; g_last_port_hi = (uint8_t)hi; return 0; }
@@ -43,13 +43,13 @@ static uint8_t inp(uint16_t port)
 
 /* Reach the port handlers the way the bus would. They are static in the VDD, so
    drive them through the device descriptor's init + the public host API instead. */
-extern int vdd_pic_init(vdd_bus *b, void *self);
+extern int vdd_pic_init(VDD_BUS *b, void *self);
 
 int main(void)
 {
     pic_state p;
     memset(&p, 0, sizeof p);
-    vdd_pic_init((vdd_bus *)0, &p);
+    vdd_pic_init((VDD_BUS *)0, &p);
 
     printf("-- 8259A PIC VDD --\n");
 
@@ -73,7 +73,7 @@ int main(void)
     pic_state *sp = &p;
     { extern void vdd_pic_reset(void *self); (void)sp; }
     /* non-specific EOI via the command port */
-    { ntvdd d = vdd_pic_device(&p); (void)d; }
+    { NTVDD_DEVICE d = vdd_pic_device(&p); (void)d; }
     /* drive OCW2 through the same path the guest uses */
     {
         /* pic_out is static; emulate the guest's `out 20h,20h` by calling the

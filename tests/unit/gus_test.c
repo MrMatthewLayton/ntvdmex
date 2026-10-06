@@ -20,7 +20,7 @@ static int total = 0, fails = 0;
 
 static uint8_t g_flat[0x100000];
 static uint8_t g_dram[GUS_DRAM_SIZE];
-static vdd_bus bus;
+static VDD_BUS bus;
 static dma_state dma;
 static gus_state gus;
 static int g_irq_count, g_irq_last;
@@ -37,10 +37,10 @@ static void gus_test_capture(void *ctx, uint8_t b)
 { (void)ctx; if (gus_test_captured < 64) g_tx[gus_test_captured] = b; gus_test_captured++; vdd_mpu_feed(&g_asm, b); }
 
 #define B 0x240
-static void wr(uint16_t p, uint8_t v) { uint32_t x = v; vdd_bus_io(&bus, p, 1, 0, &x); }
-static void wrw(uint16_t p, uint16_t v) { uint32_t x = v; vdd_bus_io(&bus, p, 2, 0, &x); }
-static uint8_t rd(uint16_t p) { uint32_t x = 0; vdd_bus_io(&bus, p, 1, 1, &x); return (uint8_t)x; }
-static uint16_t rdw(uint16_t p) { uint32_t x = 0; vdd_bus_io(&bus, p, 2, 1, &x); return (uint16_t)x; }
+static void wr(uint16_t p, uint8_t v) { uint32_t x = v; VddBusIo(&bus, p, 1, 0, &x); }
+static void wrw(uint16_t p, uint16_t v) { uint32_t x = v; VddBusIo(&bus, p, 2, 0, &x); }
+static uint8_t rd(uint16_t p) { uint32_t x = 0; VddBusIo(&bus, p, 1, 1, &x); return (uint8_t)x; }
+static uint16_t rdw(uint16_t p) { uint32_t x = 0; VddBusIo(&bus, p, 2, 1, &x); return (uint16_t)x; }
 static void reg8(uint8_t r, uint8_t v)   { wr(B + 0x103, r); wr(B + 0x105, v); }
 static void reg16(uint8_t r, uint16_t v) { wr(B + 0x103, r); wrw(B + 0x104, v); }
 static uint8_t  rreg8(uint8_t r)  { wr(B + 0x103, r); return rd(B + 0x105); }
@@ -60,11 +60,11 @@ int main(void)
 
     printf("== Gravis UltraSound (GF1) battery ==\n");
     memset(&dma, 0, sizeof dma); memset(&gus, 0, sizeof gus);
-    vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, irq_sink, 0, 0, 0);
-    { ntvdd d = vdd_dma_device(&dma); CHECK(vdd_bus_add(&bus, &d) == 0, "add: dma"); }
+    VddBusInitialize(&bus, g_flat);
+    VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
+    { NTVDD_DEVICE d = vdd_dma_device(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma"); }
     gus.dma = &dma; gus.dram = g_dram; gus.base = B;
-    { ntvdd d = vdd_gus_device(&gus); CHECK(vdd_bus_add(&bus, &d) == 0, "add: gus at 240h (two port ranges)"); }
+    { NTVDD_DEVICE d = vdd_gus_device(&gus); CHECK(VddBusAdd(&bus, &d) == 0, "add: gus at 240h (two port ranges)"); }
 
     /* ---- T1: detection, exactly as the SDK's UltraProbe + UltraPing (ref §8) ---- */
     reg8(0x4C, 0x00); reg8(0x4C, 0x01);
@@ -154,12 +154,12 @@ int main(void)
     /* ---- T8: DRAM DMA upload through the 8237 channel 3 (ref §3) ---- */
     for (i = 0; i < 64; ++i) g_flat[0x20000 + i] = (uint8_t)(0x80 + i);
     { uint32_t v;
-      v = 0;    vdd_bus_io(&bus, 0x0C, 1, 0, &v);
-      v = 0x00; vdd_bus_io(&bus, 0x06, 1, 0, &v);  v = 0x00; vdd_bus_io(&bus, 0x06, 1, 0, &v);
-      v = 63;   vdd_bus_io(&bus, 0x07, 1, 0, &v);  v = 0;    vdd_bus_io(&bus, 0x07, 1, 0, &v);
-      v = 0x02; vdd_bus_io(&bus, 0x82, 1, 0, &v);          /* page 2 -> 20000h */
-      v = 0x48 | 0x03; vdd_bus_io(&bus, 0x0B, 1, 0, &v);   /* single, read, ch 3 */
-      v = 0x03; vdd_bus_io(&bus, 0x0A, 1, 0, &v); }        /* unmask ch 3 */
+      v = 0;    VddBusIo(&bus, 0x0C, 1, 0, &v);
+      v = 0x00; VddBusIo(&bus, 0x06, 1, 0, &v);  v = 0x00; VddBusIo(&bus, 0x06, 1, 0, &v);
+      v = 63;   VddBusIo(&bus, 0x07, 1, 0, &v);  v = 0;    VddBusIo(&bus, 0x07, 1, 0, &v);
+      v = 0x02; VddBusIo(&bus, 0x82, 1, 0, &v);          /* page 2 -> 20000h */
+      v = 0x48 | 0x03; VddBusIo(&bus, 0x0B, 1, 0, &v);   /* single, read, ch 3 */
+      v = 0x03; VddBusIo(&bus, 0x0A, 1, 0, &v); }        /* unmask ch 3 */
     reg16(0x42, 0x2000 >> 4);                              /* DRAM 2000h */
     g_irq_count = 0;
     reg8(0x41, 0x21 | 0x80);                               /* go, TC IRQ, invert MSB */
@@ -296,7 +296,7 @@ int main(void)
 
     /* ---- T14: the DMA latch decides the channel; 16 bytes up on DMA 1 ---- */
     {   uint32_t v;
-        #define DMAW(p,x) do { v = (x); vdd_bus_io(&bus, (p), 1, 0, &v); } while (0)
+        #define DMAW(p,x) do { v = (x); VddBusIo(&bus, (p), 1, 0, &v); } while (0)
         wr(B + 0x000, 0x09); wr(B + 0x00B, (uint8_t)(0x01 | (0x02 << 3)));  /* DRAM DMA 1, record DMA 3 */
         CHECK(gus.dram_dma_line == 1 && gus.rec_dma_line == 3, "DMA latch decodes: DRAM -> DMA 1, record -> DMA 3");
         for (i = 0; i < 16; ++i) g_flat[0x30000 + i] = (uint8_t)(0x10 + i);
@@ -377,13 +377,13 @@ int main(void)
             reg8(0x41, 0x01);                                  /* go, PC -> card */
             vdd_gus_render(&gus, out, 1);
             CHECK(gus.dma_waiting && g_dram[0x6000] == 0, "8237 disabled: the upload holds DRQ and waits");
-            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0x20) != 0, "8237 status 08h: DRQ1 pending while the controller refuses it");
             DMAW(0x08, 0x00);                                  /* re-enable */
             vdd_gus_render(&gus, out, 1);
             CHECK(!gus.dma_waiting && g_dram[0x6000] == 0x50 && g_dram[0x600F] == 0x5F,
                   "8237 re-enabled: the upload runs");
-            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0xF0) == 0 && (s & 0x02), "8237 status 08h: DRQ1 gone, TC1 latched");
             (void)rreg8(0x41);
 
@@ -395,7 +395,7 @@ int main(void)
             reg8(0x49, 0x01);                                  /* go, mono */
             vdd_gus_render(&gus, out, 200);
             CHECK(g_flat[0x32000] == 0xEE, "8237 disabled: the ADC moves no byte");
-            v = 0; vdd_bus_io(&bus, 0x08, 1, 1, &v); s = v;
+            v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0x80) != 0, "8237 status 08h: DRQ3 pending for the record channel");
             DMAW(0x08, 0x00);
             vdd_gus_render(&gus, out, 200);

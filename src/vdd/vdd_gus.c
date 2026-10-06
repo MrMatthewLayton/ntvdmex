@@ -124,7 +124,7 @@ static void gus_line(gus_state *st, uint8_t line, int level, uint8_t *up)
 {
     if (!line) level = 0;
     if (level && !*up && st->bus) {
-        vdd_raise_irq(st->bus, line);
+        VddRaiseIrq(st->bus, line);
         st->irqs_raised++;
     }
     *up = (uint8_t)(level != 0);
@@ -768,7 +768,7 @@ void vdd_gus_reset(void *self)
     gus_chip_reset(st);
 }
 
-int vdd_gus_init(vdd_bus *b, void *self)
+int vdd_gus_init(VDD_BUS *b, void *self)
 {
     gus_state *st = (gus_state *)self;
     st->bus = b;
@@ -777,7 +777,7 @@ int vdd_gus_init(vdd_bus *b, void *self)
     if (!st->dma_ch) st->dma_ch = GUS_DEFAULT_DMA;
     if (st->dma) vdd_dma_add_dreq(st->dma, gus_dreq, st);
     vdd_gus_reset(st);
-    if (vdd_claim_ports(b, st->base, (uint16_t)(st->base + 0x0F), gus_in, gus_out, st)) return -1;
-    if (vdd_claim_ports(b, (uint16_t)(st->base + 0x100), (uint16_t)(st->base + 0x107), gus_in, gus_out, st)) return -1;
+    if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 0x0F), gus_in, gus_out, st)) return -1;
+    if (VddClaimPorts(b, (uint16_t)(st->base + 0x100), (uint16_t)(st->base + 0x107), gus_in, gus_out, st)) return -1;
     return 0;
 }

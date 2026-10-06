@@ -422,7 +422,7 @@ static void opl_frame(void *self)
 void vdd_opl_reset(void *self)
 {
     opl_state *st = (opl_state *)self;
-    vdd_bus *bus = st->bus;
+    VDD_BUS *bus = st->bus;
     uint32_t fus = st->frame_us, shz = st->sample_hz;
     uint8_t  ext = st->ext_clock, opl3 = st->opl3;
     unsigned i; uint8_t *p = (uint8_t *)st;
@@ -446,7 +446,7 @@ void vdd_opl_reset(void *self)
     }
 }
 
-int vdd_opl_init(vdd_bus *b, void *self)
+int vdd_opl_init(VDD_BUS *b, void *self)
 {
     opl_state *st = (opl_state *)self;
     st->bus = b;
@@ -455,7 +455,7 @@ int vdd_opl_init(vdd_bus *b, void *self)
     /* All four ports, whichever chip: on an OPL2 the top two answer as nothing
        (see opl_out/opl_in), and the host can then change the chip without
        re-plumbing the bus. */
-    if (vdd_claim_ports(b, 0x388, 0x38B, opl_in, opl_out, st)) return -1;
-    if (vdd_on_frame(b, opl_frame, st)) return -1;
+    if (VddClaimPorts(b, 0x388, 0x38B, opl_in, opl_out, st)) return -1;
+    if (VddOnFrame(b, opl_frame, st)) return -1;
     return 0;
 }

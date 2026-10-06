@@ -46,7 +46,7 @@
 #define BDA_KB_BUFEND   0x82
 
 typedef struct input_state {
-    vdd_bus *bus;
+    VDD_BUS *bus;
     uint8_t *bda;              /* guest 0040:0000; NULL only in unit tests before setup */
     uint8_t  ext_pending;      /* an E0 prefix has been seen; next code is an extended key */
     /* Raw AT keyboard controller (ports 0x60/0x64): the byte stream an INT 09h
@@ -210,7 +210,7 @@ int  vdd_input_bios_translate(input_state *st, uint8_t sc);   /* -> KB_ACT_*    
 int  vdd_input_host_key_bytes(uint8_t rawsc, int ext, int is_break,
                               uint8_t out[6], int *no_repeat);
 
-int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
+int  vdd_input_init(VDD_BUS *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);
 
 /* ── A20, AND WHY IT IS EXPOSED. (docs/ref/kbc.md 4) ─────────────────────────
@@ -223,8 +223,8 @@ void vdd_input_reset(void *self);
      decision, recorded in dos_xms.h and main.c, and it still stands. */
 void vdd_input_a20_set(input_state *st, int on);
 int  vdd_input_a20_get(const input_state *st);
-static inline ntvdd vdd_input_device(input_state *st)
-{ ntvdd d; d.name = "input"; d.init = vdd_input_init; d.reset = vdd_input_reset;
-  d.shutdown = 0; d.self = st; return d; }
+static inline NTVDD_DEVICE vdd_input_device(input_state *st)
+{ NTVDD_DEVICE d; d.Name = "input"; d.Initialize = vdd_input_init; d.Reset = vdd_input_reset;
+  d.Shutdown = 0; d.Context = st; return d; }
 
 #endif /* NTVDMEX_VDD_INPUT_H */

@@ -55,7 +55,7 @@ static uint64_t clk(void) { return g_us; }
 
 int main(void)
 {
-    vdd_bus bus; ntvdd_regs r; uint32_t v; long i;
+    VDD_BUS bus; NTVDD_REGISTERS r; uint32_t v; long i;
     const long N = 20000000;
     struct timespec a, b; double ns;
 
@@ -67,14 +67,14 @@ int main(void)
     /* Mode 0Dh: Lemmings' gameplay mode, so the CRTC path under test is the one a
        real guest drives -- 449 total / 400 active / 406 blank start. */
     memset(&r, 0, sizeof r); r.eax = 0x000D;
-    vdd_bus_deliver_int(&bus, 0x10, &r);
+    VddBusDeliverInterrupt(&bus, 0x10, &r);
     vid.time_us = clk;
 
     /* The clock advances a microsecond per poll, which is FASTER than a real guest
        manages (it sees no advance at all on 77% of polls) -- so this exercises the
        expensive path every time rather than flattering it. */
     clock_gettime(CLOCK_MONOTONIC, &a);
-    for (i = 0; i < N; ++i) { g_us += 1; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); }
+    for (i = 0; i < N; ++i) { g_us += 1; VddBusIo(&bus, 0x3DA, 1, 1, &v); }
     clock_gettime(CLOCK_MONOTONIC, &b);
 
     ns = ((double)(b.tv_sec - a.tv_sec) * 1e9 + (double)(b.tv_nsec - a.tv_nsec)) / (double)N;
