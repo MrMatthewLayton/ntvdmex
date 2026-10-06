@@ -23,7 +23,7 @@ static int total = 0, fails = 0;
 
 static uint8_t g_flat[0x100000];
 static VDD_BUS bus;
-static dma_state dma;
+static DMA_STATE dma;
 static opl_state opl;
 static sb_state  sb;
 static int g_irq_count, g_irq_last;
@@ -74,7 +74,7 @@ int main(void)
     memset(&sb,  0, sizeof sb);
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
-    { NTVDD_DEVICE d = vdd_dma_device(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma ok"); }
+    { NTVDD_DEVICE d = VddDmaDevice(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma ok"); }
     { NTVDD_DEVICE d = vdd_opl_device(&opl); CHECK(VddBusAdd(&bus, &d) == 0, "add: opl ok"); }
     sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
     { NTVDD_DEVICE d = vdd_sb_device(&sb); CHECK(VddBusAdd(&bus, &d) == 0, "add: sb16 ok"); }
@@ -228,14 +228,14 @@ int main(void)
               "8237 disable: 8 samples play while the controller is enabled");
         (void)rd(0x08);                                  /* drop TC1 the earlier rings latched */
 
-        wr(0x08, DMA_CMD_DISABLE);                       /* command: disable ctrl 1 */
+        wr(0x08, DMA_COMMAND_DISABLE);                       /* command: disable ctrl 1 */
         nd0 = sb.out_nodack;
         vdd_sb_render(&sb, pcm, 64);
         CHECK(pcm[0] == 0 && pcm[63] == 0, "8237 disable: the DSP renders silence");
         CHECK(sb.out_nodack - nd0 == 64, "8237 disable: ...counted as no-DACK, every sample");
         CHECK(g_irq_count == 0, "8237 disable: NO IRQ -- the block did not end");
         CHECK(vdd_sb_active(&sb), "8237 disable: the transfer is still armed");
-        CHECK(vdd_dma_cur_phys(&dma, 1) == 0x33008, "8237 disable: the 8237 address stood still");
+        CHECK(VddDmaCurrentPhysical(&dma, 1) == 0x33008, "8237 disable: the 8237 address stood still");
         s = rd(0x08);
         CHECK((s & 0x20) != 0 && (s & 0x02) == 0, "8237 disable: status shows DRQ1 pending, no TC1");
 

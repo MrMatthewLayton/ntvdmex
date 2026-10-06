@@ -50,7 +50,7 @@ typedef struct gus_voice {
 
 typedef struct gus_state {
     VDD_BUS   *bus;
-    dma_state *dma;
+    DMA_STATE *dma;
     uint16_t   base;
     uint8_t    irq, dma_ch;          /* ULTRASND's GF1 IRQ and DRAM DMA               */
     uint8_t    midi_irq, rec_dma;    /* ULTRASND's MIDI IRQ and record DMA; 0 = the same

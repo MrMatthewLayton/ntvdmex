@@ -175,11 +175,11 @@ static uint32_t gus_untranslate16(uint32_t t) { return ((t & 0x1FFFFu) << 1) | (
 
 /* Is the 8237 ready to serve a DRQ on `ch`? A masked channel is not, and since #176
    neither is one whose controller is disabled (command bit 2) -- both are the 8237's
-   one question, vdd_dma_grants: the card holds DRQ and waits, exactly as it would on
-   the bus. (vdd_dma_remaining cannot say so -- it is count + 1 and never 0.) */
+   one question, VddDmaGrants: the card holds DRQ and waits, exactly as it would on
+   the bus. (VddDmaRemaining cannot say so -- it is count + 1 and never 0.) */
 static int gus_dma_ready(const gus_state *st, uint8_t ch)
 {
-    return st->dma && ch && vdd_dma_grants(st->dma, ch);
+    return st->dma && ch && VddDmaGrants(st->dma, ch);
 }
 
 /* #176: the card's DREQ lines, for the 8237's status bits 7:4. The DRAM DMA requests
@@ -199,9 +199,9 @@ static uint8_t gus_dreq(const void *ctx)
 }
 
 /* The DRAM DMA (ref §3), both directions, instantaneous once the 8237 serves it.
-     41h bit 1 = 0: PC -> card, an upload (vdd_dma_read pulls guest memory).
+     41h bit 1 = 0: PC -> card, an upload (VddDmaRead pulls guest memory).
      41h bit 1 = 1: card -> PC, #190: DRAM contents pushed into guest memory through
-                    vdd_dma_write -- the guest programs its 8237 channel for a WRITE
+                    VddDmaWrite -- the guest programs its 8237 channel for a WRITE
                     (device -> memory) transfer, as for any card that is read.
    Bit 7 inverts the MSB of the data passing through, in both directions: it is a
    sign conversion, and converting on the way out undoes converting on the way in. */
@@ -212,7 +212,7 @@ static void gus_dma_try(gus_state *st)
     int tc = 0, card_to_pc;
     uint8_t buf[512];
     if (!st->dma_waiting || !st->dram || !gus_dma_ready(st, ch)) return;
-    left = vdd_dma_remaining(st->dma, ch);
+    left = VddDmaRemaining(st->dma, ch);
     card_to_pc = (st->dma_ctrl & 0x02) != 0;
     addr = (uint32_t)st->dma_addr << 4;
     if (st->dma_ctrl & 0x04) addr = gus_untranslate16(addr);
@@ -224,10 +224,10 @@ static void gus_dma_try(gus_state *st)
                 if ((st->dma_ctrl & 0x80) && (!(st->dma_ctrl & 0x40) || ((addr + k) & 1))) b ^= 0x80;
                 buf[k] = b;
             }
-            n = vdd_dma_write(st->dma, ch, buf, chunk, &tc);
+            n = VddDmaWrite(st->dma, ch, buf, chunk, &tc);
             st->dma_down_bytes += n;
         } else {
-            n = vdd_dma_read(st->dma, ch, buf, chunk, &tc);
+            n = VddDmaRead(st->dma, ch, buf, chunk, &tc);
             for (k = 0; k < n; ++k) {
                 uint8_t b = buf[k];
                 /* bit 7 = invert the MSB: bit 7 of every byte for 8-bit data, bit 15 of
@@ -277,7 +277,7 @@ static void gus_record(gus_state *st, uint32_t ns)
         while (st->samp_pend >= unit) {
             uint32_t n;
             buf[0] = buf[1] = (st->samp_ctrl & 0x80) ? 0x00 : 0x80;
-            n = vdd_dma_write(st->dma, ch, buf, unit, &tc);
+            n = VddDmaWrite(st->dma, ch, buf, unit, &tc);
             if (!n) return;                          /* masked under us: hold the ADC */
             st->samp_pend = (uint8_t)(st->samp_pend - n);
             st->samp_bytes += n;
@@ -775,7 +775,7 @@ int vdd_gus_init(VDD_BUS *b, void *self)
     if (!st->base)   st->base   = GUS_DEFAULT_BASE;
     if (!st->irq)    st->irq    = GUS_DEFAULT_IRQ;
     if (!st->dma_ch) st->dma_ch = GUS_DEFAULT_DMA;
-    if (st->dma) vdd_dma_add_dreq(st->dma, gus_dreq, st);
+    if (st->dma) VddDmaAddDreq(st->dma, gus_dreq, st);
     vdd_gus_reset(st);
     if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 0x0F), gus_in, gus_out, st)) return -1;
     if (VddClaimPorts(b, (uint16_t)(st->base + 0x100), (uint16_t)(st->base + 0x107), gus_in, gus_out, st)) return -1;

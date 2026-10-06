@@ -348,10 +348,10 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
     /* ── REPLAY CHECK: capture the ring offset BEFORE the fetch advances it. ──────
          Ring offset is the distance of the current address from the channel's base;
          everything else about the comparison hangs off that, so it must be sampled
-         before vdd_dma_read() walks the 8237. */
-    { const dma_chan *c = &st->dma->ch[ch & 7];
-      uint32_t rlen = (uint32_t)c->base_count + 1u;
-      uint32_t roff = (uint32_t)(uint16_t)(c->cur_addr - c->base_addr);
+         before VddDmaRead() walks the 8237. */
+    { const DMA_CHANNEL *c = &st->dma->Channels[ch & 7];
+      uint32_t rlen = (uint32_t)c->BaseCount + 1u;
+      uint32_t roff = (uint32_t)(uint16_t)(c->CurrentAddress - c->BaseAddress);
       if (rlen != st->lap_len) {              /* (re)programmed: start a fresh lap */
           st->lap_len  = rlen;
           st->lap_seen = 0;
@@ -361,7 +361,7 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
       }
       st->lap_off = (rlen && rlen <= SB_LAP_MAX) ? (roff % rlen) : 0xFFFFFFFFu; }
 
-    got = vdd_dma_read(st->dma, ch, raw, want, &tc);
+    got = VddDmaRead(st->dma, ch, raw, want, &tc);
     if (got < want) { *ended = 1; return 0; }
 
     if (st->lap_off != 0xFFFFFFFFu) {
@@ -463,7 +463,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
            VDMSound uses) is kept for comparison but is measured not to help here --
            DMX acks before it refills, so it re-opens the gate too early. */
         if (st->gate_on == 2 && st->dma
-            && st->gate_mark && st->dma->count_reads == st->gate_mark
+            && st->gate_mark && st->dma->CountReads == st->gate_mark
             && !st->xfer_16bit) {
             if (st->gate_wait < st->block_len * 2u) {
                 st->gate_wait++; st->gate_stalled++;
@@ -495,7 +495,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
              dropped to IDLE so that re-enabling resumed nothing.
            ⚠ Silence while it waits, counted, and part of the same inserted-zero run
              the gap histogram measures: from the speaker's side it IS a gap. */
-        if (st->dma && !vdd_dma_grants(st->dma, st->xfer_16bit ? st->dma16 : st->dma8)) {
+        if (st->dma && !VddDmaGrants(st->dma, st->xfer_16bit ? st->dma16 : st->dma8)) {
             SB_PUT(n, 0, 0, 0);
             st->out_nodack++;
             st->idle_run++;
@@ -519,27 +519,27 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
                auto-init it reloads and keeps streaming (the ring buffer every DOS
                game uses); single-cycle stops until reprogrammed. */
             /* ► RECORD THE BOUNDARY BEFORE ANYTHING REACTS TO IT. The IRQ below can
-                 reach the guest and the reload has already happened inside dma_step,
+                 reach the guest and the reload has already happened inside DmaStep,
                  so this is the only instant at which the three candidate culprits are
                  still distinguishable. Taken before VddRaiseIrq() deliberately. */
             if (st->blocks < SB_BLKLOG_MAX && st->dma) {
                 struct sb_blkrec *b = &st->blklog[st->blocks];
                 uint8_t dch = st->xfer_16bit ? st->dma16 : st->dma8;
-                const dma_chan *c = &st->dma->ch[dch & 7];
+                const DMA_CHANNEL *c = &st->dma->Channels[dch & 7];
                 b->cap_off    = st->cap_len;
                 b->block_len  = st->block_len;
-                b->phys       = vdd_dma_cur_phys(st->dma, dch);
-                b->cur_count  = c->cur_count;
-                b->base_addr  = c->base_addr;
-                b->base_count = c->base_count;
-                b->page       = c->page;
-                b->mode       = c->mode;
+                b->phys       = VddDmaCurrentPhysical(st->dma, dch);
+                b->cur_count  = c->CurrentCount;
+                b->base_addr  = c->BaseAddress;
+                b->base_count = c->BaseCount;
+                b->page       = c->Page;
+                b->mode       = c->Mode;
                 b->ended      = (uint8_t)ended;
                 /* cur_addr back at base means the 8237 wrapped this fetch: the block
                    we just finished and the ring's end coincide. If they routinely do
                    NOT coincide, our block accounting and the guest's disagree, which
                    is exactly the two-frame skew being hunted. */
-                b->reloaded   = (uint8_t)(c->cur_addr == c->base_addr);
+                b->reloaded   = (uint8_t)(c->CurrentAddress == c->BaseAddress);
                 st->blklog_n  = st->blocks + 1;      /* entries actually filled */
             }
             /* Score the block that just finished: >=90% identical to the same ring
@@ -600,7 +600,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
             st->blk_min = 0xFFFFFFFFu; st->blk_max = 0;
             st->irq_pending = 1;
             st->blocks++;
-            if (st->dma) st->gate_mark = st->dma->count_reads;  /* gate mode 2 */
+            if (st->dma) st->gate_mark = st->dma->CountReads;  /* gate mode 2 */
             VddRaiseIrq(st->bus, st->irq);
             if (st->xfer_mode == SB_XFER_AUTO && !ended) st->block_left = st->block_len;
             else                                        st->xfer_mode  = SB_XFER_IDLE;
@@ -621,7 +621,7 @@ uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames)
 void vdd_sb_reset(void *self)
 {
     sb_state *st = (sb_state *)self;
-    VDD_BUS *bus = st->bus; dma_state *dma = st->dma; opl_state *opl = st->opl;
+    VDD_BUS *bus = st->bus; DMA_STATE *dma = st->dma; opl_state *opl = st->opl;
     uint16_t base = st->base;
     uint8_t irq = st->irq, d8 = st->dma8, d16 = st->dma16;
     uint32_t dw = st->dsp_writes, bl = st->blocks;
@@ -657,7 +657,7 @@ int vdd_sb_init(VDD_BUS *b, void *self)
 {
     sb_state *st = (sb_state *)self;
     st->bus = b;
-    if (st->dma) vdd_dma_add_dreq(st->dma, sb_dreq, st);
+    if (st->dma) VddDmaAddDreq(st->dma, sb_dreq, st);
     if (!st->base)  st->base  = SB_DEFAULT_BASE;
     if (!st->irq)   st->irq   = SB_DEFAULT_IRQ;
     if (!st->dma8)  st->dma8  = SB_DEFAULT_DMA8;

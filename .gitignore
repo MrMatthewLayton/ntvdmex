@@ -164,3 +164,4 @@ tools/score/probe-cache.json
 /tests/unit/*.dSYM/
 /tests/probes/dos/*.com
 /scripts/member_rename.py
+/scripts/style_signatures.py

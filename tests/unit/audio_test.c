@@ -17,7 +17,7 @@ static int total = 0, fails = 0;
 
 static uint8_t g_flat[0x100000];
 static VDD_BUS bus;
-static dma_state dma;
+static DMA_STATE dma;
 static opl_state opl;
 static sb_state  sb;
 static audio_state mix;
@@ -62,7 +62,7 @@ int main(void)
     memset(g_flat,0,sizeof g_flat);
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
-    { NTVDD_DEVICE d = vdd_dma_device(&dma); VddBusAdd(&bus, &d); }
+    { NTVDD_DEVICE d = VddDmaDevice(&dma); VddBusAdd(&bus, &d); }
     { NTVDD_DEVICE d = vdd_opl_device(&opl); VddBusAdd(&bus, &d); }
     sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
     { NTVDD_DEVICE d = vdd_sb_device(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }

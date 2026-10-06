@@ -21,7 +21,7 @@ static int total = 0, fails = 0;
 static uint8_t g_flat[0x100000];
 static uint8_t g_dram[GUS_DRAM_SIZE];
 static VDD_BUS bus;
-static dma_state dma;
+static DMA_STATE dma;
 static gus_state gus;
 static int g_irq_count, g_irq_last;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_count++; g_irq_last = irq; }
@@ -62,7 +62,7 @@ int main(void)
     memset(&dma, 0, sizeof dma); memset(&gus, 0, sizeof gus);
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
-    { NTVDD_DEVICE d = vdd_dma_device(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma"); }
+    { NTVDD_DEVICE d = VddDmaDevice(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma"); }
     gus.dma = &dma; gus.dram = g_dram; gus.base = B;
     { NTVDD_DEVICE d = vdd_gus_device(&gus); CHECK(VddBusAdd(&bus, &d) == 0, "add: gus at 240h (two port ranges)"); }
 

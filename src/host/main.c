@@ -917,7 +917,7 @@ static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
 static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
 static int    g_spk_real;
 static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
-static dma_state    g_dma;       static NTVDD_DEVICE g_dma_dev;
+static DMA_STATE    g_dma;       static NTVDD_DEVICE g_dma_dev;
 static opl_state    g_opl;       static NTVDD_DEVICE g_opl_dev;
 static sb_state     g_sb;        static NTVDD_DEVICE g_sb_dev;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
@@ -32144,7 +32144,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          ONLY when a joystick is actually configured, so the default play config --
          which is EVERY game that does not use a gamepad, Skyroads included -- runs
          with the exact s61 thread landscape and cannot regress on its account. */
-    g_dma_dev = vdd_dma_device(&g_dma);
+    g_dma_dev = VddDmaDevice(&g_dma);
     VddBusAdd(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
     g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
     g_opl_dev = vdd_opl_device(&g_opl);
@@ -33997,7 +33997,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
                         && !g_pm_noirq && !g_async_pm_active
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
-                        uint32_t pre8 = g_dma.rd_count[1];
+                        uint32_t pre8 = g_dma.ChannelCountReads[1];
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
                         if (g_pm_tick_owed > 0 && irq0_pm_claim()) {
@@ -34006,7 +34006,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             else { irq0_pm_unclaim(); if (owed2) g_pm_coop_gate[9]++; }
                         } else if (owed2) g_pm_coop_gate[8]++;
                         g_in_pm_irq = 0;
-                        g_coop_dma_polls += g_dma.rd_count[1] - pre8;
+                        g_coop_dma_polls += g_dma.ChannelCountReads[1] - pre8;
                     }
                     /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
                          through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
@@ -34158,7 +34158,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  properly, ZAR's IRQ5 went dead after its first SB block.
                                  Same acknowledge/EOI rule as the async path: in service, and
                                  released at once when the vector is still our own stub. */
-                            uint32_t pred = g_dma.rd_count[1];
+                            uint32_t pred = g_dma.ChannelCountReads[1];
                             InterlockedExchange(&g_irqn_pending[q], 0);
                             if (async_vec_is_our_stub((unsigned)q))
                                 VddPicAcknowledgeAutoEoi(&g_pic, (uint8_t)q);
@@ -34174,7 +34174,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 ++g_pm_devirq_fail;
                             }
                             g_in_pm_irq = 0;
-                            g_coop_dma_polls_dev[q & 7] += g_dma.rd_count[1] - pred;
+                            g_coop_dma_polls_dev[q & 7] += g_dma.ChannelCountReads[1] - pred;
                             break;                  /* one per pass: let it IRET first */
                         }
                     }
@@ -34498,7 +34498,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         { int k = -1, gate;
                           gate = (g_DpmiIsClient32 && g_pm_app_hooked_timer && !g_pm_noirq
                                   && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
-                          uint32_t preb = g_dma.rd_count[1];
+                          uint32_t preb = g_dma.ChannelCountReads[1];
                           if (gate) {
                             g_in_pm_irq = 1;
                             /* ► DRAIN WHAT IS OWED, NOT A FIXED SIXTY-FOUR. This loop used to
@@ -34530,7 +34530,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                             g_in_pm_irq = 0;
                           }
-                          g_coop_dma_polls += g_dma.rd_count[1] - preb;
+                          g_coop_dma_polls += g_dma.ChannelCountReads[1] - preb;
                           { char bb[160], *bq = bb;
                             bq = zput(bq, "  BATCH gate="); bq = zhex(bq, (DWORD)gate);
                             bq = zput(bq, " k="); bq = zhex(bq, (DWORD)k);
@@ -36833,12 +36833,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              makes is downstream of our cur_addr, which advances on the audio thread in
              whatever chunk size waveOut asked for. Zero means that whole family of
              causes is dead and the refill is driven by the IRQ count alone. */
-        p = zput(p, "STAGE2: 8237 guest reads: ch1_addr="); p = zhex(p, g_dma.rd_addr[1]);
-        p = zput(p, " ch1_count=");  p = zhex(p, g_dma.rd_count[1]);
-        p = zput(p, " ch5_addr=");   p = zhex(p, g_dma.rd_addr[5]);
-        p = zput(p, " ch5_count=");  p = zhex(p, g_dma.rd_count[5]);
-        p = zput(p, " status0=");    p = zhex(p, g_dma.rd_status[0]);
-        p = zput(p, " status1=");    p = zhex(p, g_dma.rd_status[1]);
+        p = zput(p, "STAGE2: 8237 guest reads: ch1_addr="); p = zhex(p, g_dma.AddressReads[1]);
+        p = zput(p, " ch1_count=");  p = zhex(p, g_dma.ChannelCountReads[1]);
+        p = zput(p, " ch5_addr=");   p = zhex(p, g_dma.AddressReads[5]);
+        p = zput(p, " ch5_count=");  p = zhex(p, g_dma.ChannelCountReads[5]);
+        p = zput(p, " status0=");    p = zhex(p, g_dma.StatusReads[0]);
+        p = zput(p, " status1=");    p = zhex(p, g_dma.StatusReads[1]);
         /* ► THE OUTPUT SIDE. See vdd_sb.h: everything else here measures the RING.
              `idle` is silence WE inserted because the DSP was un-armed; the run-length
              buckets say whether that is a scatter of single samples or a gap once per
@@ -37015,9 +37015,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (VirtualQuery((LPCVOID)stt, &mq, sizeof mq) == sizeof mq && mq.State == MEM_COMMIT) {
                 p = zput(p, " STATE[0x26370]="); p = zhex(p, *stt);
             } } }
-        p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
-        p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
-        p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
+        p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.CountReadsByte);
+        p = zput(p, " w2=");                   p = zhex(p, g_dma.CountReadsWord);
+        p = zput(p, " w4=");                   p = zhex(p, g_dma.CountReadsDword);
         /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
         p = zput(p, " from_coop_isr08=");      p = zhex(p, g_coop_dma_polls);
         { unsigned dq; for (dq = 2; dq < 8; ++dq)

@@ -72,7 +72,7 @@ enum {
 
 typedef struct sb_state {
     VDD_BUS   *bus;
-    dma_state *dma;            /* where playback data comes from                 */
+    DMA_STATE *dma;            /* where playback data comes from                 */
     opl_state *opl;            /* FM mirrored at 2x0-2x3 and 2x8-2x9             */
 
     uint16_t base;             /* 0x220 by default                               */
