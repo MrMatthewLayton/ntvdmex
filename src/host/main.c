@@ -980,7 +980,7 @@ static int strstr_nocase(const char *blk, const char *name)
     return 0;
 }
 static MPU_STATE    g_mpu;       static NTVDD_DEVICE g_mpu_dev;
-static comm_state   g_comm;      static NTVDD_DEVICE g_comm_dev;   /* GH #9 */
+static COMM_STATE   g_comm;      static NTVDD_DEVICE g_comm_dev;   /* GH #9 */
 static NETBIOS_STATE    g_net;       static NTVDD_DEVICE g_net_dev;    /* GH #8 (s91) */
 static uint8_t      g_genstub_vec[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
 
@@ -2826,7 +2826,7 @@ static WORD bios_equipment_word(void)
 {
     WORD w = 0x4021;                      /* floppy, 80x25 colour, 1 parallel  */
     int n = 0, i;
-    for (i = 0; i < COMM_MAX_PORTS; ++i) if (vdd_comm_fitted(&g_comm, i)) ++n;
+    for (i = 0; i < COMM_MAX_PORTS; ++i) if (VddCommIsFitted(&g_comm, i)) ++n;
     w = (WORD)((w & ~0x0E00u) | ((DWORD)(n & 7) << 9));
     /* ── ★ BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
          (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
@@ -3231,7 +3231,7 @@ int wowcomm_open(const char *dev)
         || (dev[2] != 'M' && dev[2] != 'm')) return -2;
     idx = dev[3] - '1';
     if (idx < 0 || idx >= WOWCOMM_MAX) return -2;               /* no such port */
-    if (!vdd_comm_fitted(&g_comm, idx))  return -2;
+    if (!VddCommIsFitted(&g_comm, idx))  return -2;
     if (g_wc_open[idx]) return -5;                              /* IE_OPEN      */
     g_wc_open[idx] = 1; g_wc_evt[idx] = 0;
     return idx;                                                 /* the comm id  */
@@ -3245,9 +3245,9 @@ int wowcomm_read(int id, unsigned char *buf, int n)
     int got = 0;
     if (!wowcomm_valid(id)) return -2;
     /* Straight off the same receive ring the guest would see through RBR. */
-    while (got < n && g_comm.p[id].rx_len) {
+    while (got < n && g_comm.Ports[id].ReceiveLength) {
         uint32_t v = 0;
-        VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 1, &v);
+        VddBusIo(&g_bus, (uint16_t)(g_comm.Ports[id].BasePort + COMM_RBR), 1, 1, &v);
         buf[got++] = (unsigned char)v;
     }
     return got;
@@ -3258,12 +3258,12 @@ int wowcomm_write(int id, const unsigned char *buf, int n)
     if (!wowcomm_valid(id)) return -2;
     for (i = 0; i < n; ++i) {
         uint32_t v = buf[i];
-        VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 0, &v);
+        VddBusIo(&g_bus, (uint16_t)(g_comm.Ports[id].BasePort + COMM_RBR), 1, 0, &v);
     }
     return n;
 }
 int wowcomm_inqueue(int id)
-{ return wowcomm_valid(id) ? (int)g_comm.p[id].rx_len : 0; }
+{ return wowcomm_valid(id) ? (int)g_comm.Ports[id].ReceiveLength : 0; }
 /* SETDTR/CLRDTR/SETRTS/CLRRTS and the two break calls all land on MCR, which is
    where they land on real hardware -- so a guest that asserts DTR and then reads
    MSR in loopback sees DSR come back, exactly as the port test does. */
@@ -3271,14 +3271,14 @@ static void wowcomm_mcr(int id, unsigned set, unsigned clear)
 {
     uint32_t v = 0;
     if (!wowcomm_valid(id)) return;
-    VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 1, &v);
+    VddBusIo(&g_bus, (uint16_t)(g_comm.Ports[id].BasePort + COMM_MCR), 1, 1, &v);
     v = (v | set) & ~clear;
-    VddBusIo(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 0, &v);
+    VddBusIo(&g_bus, (uint16_t)(g_comm.Ports[id].BasePort + COMM_MCR), 1, 0, &v);
 }
 /* Named rather than exposing MCR bit numbers to the WOW layer: that header must
    not need a VDD header to compile, and "DTR" is the thing the caller means. */
-void wowcomm_dtr(int id, int on) { wowcomm_mcr(id, on ? MCR_DTR : 0u, on ? 0u : MCR_DTR); }
-void wowcomm_rts(int id, int on) { wowcomm_mcr(id, on ? MCR_RTS : 0u, on ? 0u : MCR_RTS); }
+void wowcomm_dtr(int id, int on) { wowcomm_mcr(id, on ? COMM_MCR_DTR : 0u, on ? 0u : COMM_MCR_DTR); }
+void wowcomm_rts(int id, int on) { wowcomm_mcr(id, on ? COMM_MCR_RTS : 0u, on ? 0u : COMM_MCR_RTS); }
 
 /* Is [addr, addr+len) committed and readable RIGHT NOW? For probes that dereference
    an address derived from one guest's memory map: under that guest the page is there,
@@ -29384,7 +29384,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                  answers the status for it instead -- disputed, recorded in
                  oracle-rules.json; "ready" for a call that does nothing was neither. */
             WORD base17 = (dx17 < 3) ? *(volatile WORD *)(ULONG_PTR)(0x408 + 2 * dx17) : 0;
-            if (base17 != 0x0378 || !vdd_lpt_fitted(&g_comm, 0)) {
+            if (base17 != 0x0378 || !VddLptIsFitted(&g_comm, 0)) {
                 /* absent printer: nothing, registers as passed */
             } else if (ah17 == 0x00) {         /* print AL                 */
                 BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
@@ -32086,19 +32086,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { int ci;
       for (ci = 0; ci < COMM_MAX_PORTS; ++ci) {
           g_com_spool[ci] = INVALID_HANDLE_VALUE; g_com_failed[ci] = 0; }
-      g_comm.p[0].base = 0x03F8; g_comm.p[0].irq = 4; g_comm.p[0].fitted = 1;
-      g_comm.p[1].base = 0x02F8; g_comm.p[1].irq = 3; g_comm.p[1].fitted = 1;
+      g_comm.Ports[0].BasePort = 0x03F8; g_comm.Ports[0].Irq = 4; g_comm.Ports[0].IsFitted = 1;
+      g_comm.Ports[1].BasePort = 0x02F8; g_comm.Ports[1].Irq = 3; g_comm.Ports[1].IsFitted = 1;
       /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
          with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
          AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
          02E8. The question #181 left open is answered by the oracle that defines
          "ntvdm superset", and the device has had the slots since s85. */
-      g_comm.p[2].base = 0x03E8; g_comm.p[2].irq = 4; g_comm.p[2].fitted = 1;
-      g_comm.p[3].base = 0x02E8; g_comm.p[3].irq = 3; g_comm.p[3].fitted = 1;
-      g_comm.l[0].base = 0x0378; g_comm.l[0].fitted = 1;   /* LPT1 data/strobe */
-      g_comm.sink = com_tx_sink; g_comm.sink_ctx = NULL;
-      g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
-      g_comm_dev = vdd_comm_device(&g_comm);
+      g_comm.Ports[2].BasePort = 0x03E8; g_comm.Ports[2].Irq = 4; g_comm.Ports[2].IsFitted = 1;
+      g_comm.Ports[3].BasePort = 0x02E8; g_comm.Ports[3].Irq = 3; g_comm.Ports[3].IsFitted = 1;
+      g_comm.Printers[0].BasePort = 0x0378; g_comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
+      g_comm.Sink = com_tx_sink; g_comm.SinkContext = NULL;
+      g_comm.PrinterSink = lpt_tx_sink; g_comm.PrinterSinkContext = NULL;
+      g_comm_dev = VddCommDevice(&g_comm);
       VddBusAdd(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
     VddNetBiosSetBackend(&g_net, net_submit, NULL);
     g_net_dev = VddNetBiosDevice(&g_net);
@@ -32118,8 +32118,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            and this table and INT 11h follow it without being edited. */
       { int ci;
         for (ci = 0; ci < 4; ++ci)
-            bda[ci] = (WORD)(vdd_comm_fitted(&g_comm, ci) ? g_comm.p[ci].base : 0); }
-      bda[4] = (WORD)(vdd_lpt_fitted(&g_comm, 0) ? 0x0378 : 0);   /* LPT1          */
+            bda[ci] = (WORD)(VddCommIsFitted(&g_comm, ci) ? g_comm.Ports[ci].BasePort : 0); }
+      bda[4] = (WORD)(VddLptIsFitted(&g_comm, 0) ? 0x0378 : 0);   /* LPT1          */
       bda[5] = 0; bda[6] = 0; }                         /* LPT2..LPT3: none fitted   */
     /* ── ★★ 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
          0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block

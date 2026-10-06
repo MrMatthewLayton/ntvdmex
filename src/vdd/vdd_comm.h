@@ -21,7 +21,7 @@
  *
  * ── WHAT BACKS IT WHEN LOOPBACK IS OFF ──────────────────────────────────────
  * A transmitted byte goes to an injected sink and received bytes are pushed in
- * by the host through vdd_comm_rx(). The device therefore has no idea whether it
+ * by the host through VddCommReceive(). The device therefore has no idea whether it
  * is wired to a real \\.\COMn, a file, or nothing -- which is what lets
  * tests/unit/comm_test.c exercise the whole register model off-VM with no
  * host serial hardware at all. Pure C, no <windows.h>, same rule as vdd_mpu.
@@ -45,13 +45,14 @@
      how many ports the machine has. That decision is the host's, and it is
      the one that has to agree with the equipment word (INT 11h bits 9-11) and
      the BDA base table at 0040:0000 -- see main.c, which derives both from
-     vdd_comm_fitted() rather than from a second list.
+     VddCommIsFitted() rather than from a second list.
    ⚠ COM3 AND COM4 SHARE A LINE WITH COM1 AND COM2. Nothing here arbitrates:
      each port raises its own IRQ number and the PIC sees one edge per raise,
      which is what two UARTs on one wire do. Whether the guest's drivers
      cooperate over the shared line is their business, as it was in 1990. */
 #define COMM_MAX_PORTS 4
-#define COMM_RX_RING   256      /* host input waiting for the guest             */
+#define COMM_DEVICE_NAME "comm"
+#define COMM_RECEIVE_RING_SIZE   256      /* host input waiting for the guest             */
 
 /* register offsets from the port base */
 #define COMM_RBR 0   /* read: receive buffer      write: transmit holding       */
@@ -64,66 +65,68 @@
 #define COMM_SCR 7   /* scratch -- no function, but drivers PROBE with it       */
 
 /* LSR */
-#define LSR_DR   0x01   /* data ready                                           */
-#define LSR_OE   0x02   /* overrun                                              */
-#define LSR_PE   0x04
-#define LSR_FE   0x08
-#define LSR_BI   0x10
-#define LSR_THRE 0x20   /* transmit holding empty                               */
-#define LSR_TEMT 0x40   /* transmitter empty                                    */
-#define LSR_FIFOERR 0x80 /* FIFO mode: an error char is somewhere in the RCVR FIFO */
+#define COMM_LSR_DATA_READY   0x01   /* data ready                                           */
+#define COMM_LSR_OVERRUN   0x02   /* overrun                                              */
+#define COMM_LSR_PARITY_ERROR   0x04
+#define COMM_LSR_FRAMING_ERROR   0x08
+#define COMM_LSR_BREAK   0x10
+#define COMM_LSR_THR_EMPTY 0x20   /* transmit holding empty                               */
+#define COMM_LSR_TRANSMITTER_EMPTY 0x40   /* transmitter empty                                    */
+#define COMM_LSR_FIFO_ERROR 0x80 /* FIFO mode: an error char is somewhere in the RCVR FIFO */
 
 /* FCR (written at the IIR address) and LCR bits used by the #245 FIFO/break model */
-#define FCR_ENABLE   0x01
-#define FCR_RXRESET  0x02
-#define FCR_TXRESET  0x04
+#define COMM_FCR_ENABLE   0x01
+#define COMM_FCR_RX_RESET  0x02
+#define COMM_FCR_TX_RESET  0x04
 #define COMM_FIFO_DEPTH 16      /* the 16550's receive FIFO                         */
-#define LCR_BREAK    0x40       /* "set break": the TX line held spacing            */
+#define COMM_LCR_BREAK    0x40       /* "set break": the TX line held spacing            */
 
 /* MCR */
-#define MCR_DTR  0x01
-#define MCR_RTS  0x02
-#define MCR_OUT1 0x04
-#define MCR_OUT2 0x08   /* also gates the IRQ line on a PC                      */
-#define MCR_LOOP 0x10
+#define COMM_MCR_DTR  0x01
+#define COMM_MCR_RTS  0x02
+#define COMM_MCR_OUT1 0x04
+#define COMM_MCR_OUT2 0x08   /* also gates the IRQ line on a PC                      */
+#define COMM_MCR_LOOP 0x10
 
 /* MSR: the low nibble is the DELTA bits, cleared by reading the register */
-#define MSR_DCTS 0x01
-#define MSR_DDSR 0x02
-#define MSR_TERI 0x04
-#define MSR_DDCD 0x08
-#define MSR_CTS  0x10
-#define MSR_DSR  0x20
-#define MSR_RI   0x40
-#define MSR_DCD  0x80
+#define COMM_MSR_DELTA_CTS 0x01
+#define COMM_MSR_DELTA_DSR 0x02
+#define COMM_MSR_TRAILING_RI 0x04
+#define COMM_MSR_DELTA_DCD 0x08
+#define COMM_MSR_CTS  0x10
+#define COMM_MSR_DSR  0x20
+#define COMM_MSR_RI   0x40
+#define COMM_MSR_DCD  0x80
 
 /* IER */
-#define IER_RDA  0x01   /* received data available                              */
-#define IER_THRE 0x02   /* transmitter holding empty                            */
-#define IER_RLS  0x04   /* receiver line status                                 */
-#define IER_MS   0x08   /* modem status                                         */
+#define COMM_IER_RECEIVED_DATA  0x01   /* received data available                              */
+#define COMM_IER_THR_EMPTY 0x02   /* transmitter holding empty                            */
+#define COMM_IER_LINE_STATUS  0x04   /* receiver line status                                 */
+#define COMM_IER_MODEM_STATUS   0x08   /* modem status                                         */
 
 /* A byte the guest transmitted, on its way to whatever the host has attached.
    `port` is the index, not the base -- the sink does not care where it lives. */
-typedef void (*comm_tx_sink)(void *ctx, int port, uint8_t byte);
+typedef VOID (*PCOMM_TX_SINK)(PVOID context, INT port, BYTE byte);
 
-typedef struct comm_port {
-    uint16_t base;
-    uint8_t  irq;
-    uint8_t  fitted;            /* 0 = the ports are not claimed and read 0xFF  */
+typedef struct _COMM_PORT {
+    WORD BasePort;
+    BYTE  Irq;
+    BYTE  IsFitted;            /* 0 = the ports are not claimed and read 0xFF  */
 
-    uint8_t  ier, lcr, mcr, scr, fcr;
-    uint8_t  lsr, msr;
-    uint8_t  dll, dlm;          /* divisor latch, stored and read back exactly  */
-    uint8_t  rbr;               /* the byte the guest will read next            */
-    uint8_t  thre_pending;      /* a THRE interrupt is owed, until IIR is read  */
+    BYTE  Ier, Lcr, Mcr, Scr, Fcr;
+    BYTE  Lsr, Msr;
+    BYTE  DivisorLow, DivisorHigh;          /* divisor latch, stored and read back exactly  */
+    BYTE  Rbr;               /* the byte the guest will read next            */
+    BYTE  IsThrePending;      /* a THRE interrupt is owed, until IIR is read  */
 
-    uint8_t  rx[COMM_RX_RING];
-    uint16_t rx_head, rx_len;
+    BYTE  Receive[COMM_RECEIVE_RING_SIZE];
+    WORD ReceiveHead, ReceiveLength;
 
-    uint32_t tx_count, rx_count, overruns;
-    uint32_t breaks;            /* #245: break conditions the guest sent            */
-} comm_port;
+    UINT32 TransmitCount, ReceiveCount, Overruns;
+    UINT32 Breaks;            /* #245: break conditions the guest sent            */
+} COMM_PORT, *PCOMM_PORT;
+
+typedef const COMM_PORT *PCCOMM_PORT;
 
 /* ── THE PARALLEL PORT, WHICH IS THREE REGISTERS AND A STROBE. ───────────────
      INT 17h has printed to a spool file since GH #45, but the PORTS were
@@ -142,49 +145,53 @@ typedef struct comm_port {
      idle-high, which is what a polling driver reads between bytes. */
 #define LPT_MAX_PORTS 1
 
-#define LPT_ST_ERROR  0x08   /* active low: 1 = no error                       */
-#define LPT_ST_SELECT 0x10   /* 1 = printer selected/online                    */
-#define LPT_ST_PAPER  0x20   /* 1 = OUT OF PAPER                               */
-#define LPT_ST_ACK    0x40   /* active low, pulses per byte; idle high         */
-#define LPT_ST_BUSY   0x80   /* INVERTED: 1 = not busy                         */
+#define LPT_STATUS_ERROR  0x08   /* active low: 1 = no error                       */
+#define LPT_STATUS_SELECT 0x10   /* 1 = printer selected/online                    */
+#define LPT_STATUS_PAPER_OUT  0x20   /* 1 = OUT OF PAPER                               */
+#define LPT_STATUS_ACK    0x40   /* active low, pulses per byte; idle high         */
+#define LPT_STATUS_BUSY   0x80   /* INVERTED: 1 = not busy                         */
 
-#define LPT_CT_STROBE 0x01
-#define LPT_CT_AUTOLF 0x02
-#define LPT_CT_INIT   0x04   /* active low                                     */
-#define LPT_CT_SELECT 0x08
-#define LPT_CT_IRQEN  0x10
+#define LPT_CONTROL_STROBE 0x01
+#define LPT_CONTROL_AUTO_LINE_FEED 0x02
+#define LPT_CONTROL_INIT   0x04   /* active low                                     */
+#define LPT_CONTROL_SELECT 0x08
+#define LPT_CONTROL_IRQ_ENABLE  0x10
 
-typedef struct lpt_port {
-    uint16_t base;
-    uint8_t  fitted;
-    uint8_t  data;           /* the output latch                               */
-    uint8_t  ctrl;
-    uint32_t bytes;          /* strobed out (tests + diagnostics)              */
-} lpt_port;
+typedef struct _LPT_PORT {
+    WORD BasePort;
+    BYTE  IsFitted;
+    BYTE  Data;           /* the output latch                               */
+    BYTE  Control;
+    UINT32 BytesPrinted;          /* strobed out (tests + diagnostics)              */
+} LPT_PORT, *PLPT_PORT;
 
-typedef struct comm_state {
-    VDD_BUS *bus;
-    comm_port p[COMM_MAX_PORTS];
-    lpt_port  l[LPT_MAX_PORTS];
-    comm_tx_sink sink;     void *sink_ctx;      /* serial                      */
-    comm_tx_sink lpt_sink; void *lpt_sink_ctx;  /* parallel                    */
-} comm_state;
+typedef const LPT_PORT *PCLPT_PORT;
 
-int  vdd_comm_init(VDD_BUS *b, void *self);
-void vdd_comm_reset(void *self);
+typedef struct _COMM_STATE {
+    PVDD_BUS Bus;
+    COMM_PORT Ports[COMM_MAX_PORTS];
+    LPT_PORT  Printers[LPT_MAX_PORTS];
+    PCOMM_TX_SINK Sink;     PVOID SinkContext;      /* serial                      */
+    PCOMM_TX_SINK PrinterSink; PVOID PrinterSinkContext;  /* parallel                    */
+} COMM_STATE, *PCOMM_STATE;
+
+typedef const COMM_STATE *PCCOMM_STATE;
+
+INT  VddCommInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddCommReset(_In_ PVOID context);
 
 /* Host -> guest. Returns 0 if the byte was queued, -1 if the ring was full (and
    the overrun bit is set, because a UART that silently drops a byte is a UART
    that makes a driver's flow control look broken). */
-int  vdd_comm_rx(comm_state *st, int port, uint8_t byte);
+INT  VddCommReceive(_Inout_ PCOMM_STATE state, _In_ INT port, _In_ BYTE byte);
 
 /* Is this port configured at all? INT 14h and the BDA both need to know, and
    they must agree -- see the equipment-word note in main.c. */
-int  vdd_comm_fitted(const comm_state *st, int port);
-int  vdd_lpt_fitted (const comm_state *st, int port);
+INT  VddCommIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
+INT  VddLptIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
 
-static inline NTVDD_DEVICE vdd_comm_device(comm_state *st)
-{ NTVDD_DEVICE d; d.Name = "comm"; d.Initialize = vdd_comm_init; d.Reset = vdd_comm_reset;
-  d.Shutdown = 0; d.Context = st; return d; }
+static inline NTVDD_DEVICE VddCommDevice(_In_ PCOMM_STATE state)
+{ NTVDD_DEVICE device; device.Name = COMM_DEVICE_NAME; device.Initialize = VddCommInitialize; device.Reset = VddCommReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 #endif /* NTVDMEX_VDD_COMM_H */
