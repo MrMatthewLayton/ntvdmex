@@ -1494,7 +1494,7 @@ int main(void)
           do { t += 12; g_fake_us = t; VddBusIo(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
           do { t += 12; g_fake_us = t; VddBusIo(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
       }
-      /* Honest expectation (two exact repayment schemes measured wrong, see status_in):
+      /* Honest expectation (two exact repayment schemes measured wrong, see VideoStatusIn):
          the stall is repaid ONE line and never over-repaid -- the count ends between
          320 lines' time and 320 lines + the stall. */
       CHECK(t >= 10150 && t <= 10181 + 330, "3DA: a 330us stall mid-count is repaid one line, never over-repaid");
@@ -1751,7 +1751,7 @@ int main(void)
     }
 
     /* A MODE SET MUST LEAVE THE SHADOWS AND THE REGISTER FILE SAYING THE SAME THING.
-       docs/inventory/vga.md step 5. vga_load_modedef filled `*_reg[]` from the
+       docs/inventory/vga.md step 5. VideoLoadModeDefinition filled `*_reg[]` from the
        measured table, but six registers are not read back from there at all -- the
        port answers from a live shadow, because the shadow is what the engine uses.
        So the file was right and the guest still saw the old value. Measured on the

@@ -67,7 +67,7 @@ typedef struct _PRESENT_DDRAW {
          says which one holds this frame. The 8bpp path is byte-for-byte what it
          always was -- Doom, Heretic, Hexen and ZAR all run through it and the
          release was imminent when this landed. Sized to the widest mode
-         vesa_modes[] advertises: every mode we publish must be one we can DISPLAY,
+         g_VideoVesaModes[] advertises: every mode we publish must be one we can DISPLAY,
          or the list is promising something the presenter drops on the floor. */
     BYTE  Snapshot[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
     UINT32 Snapshot32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* ARGB, when SnapshotBpp == 32 */

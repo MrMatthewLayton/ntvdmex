@@ -51,7 +51,7 @@
      512KB was exactly enough for 800x600x8 and nothing else. Advertising hi-colour
      means 800x600x24 = 1,440,000 bytes, so a mode the guest is allowed to SET must
      have somewhere to live -- a mode list that promises more than VRAM can back is
-     a promise the first blit breaks. 2MB covers every mode in vesa_modes[]. */
+     a promise the first blit breaks. 2MB covers every mode in g_VideoVesaModes[]. */
 #define VIDEO_VESA_VRAM     0x400000u     /* 4MB: enough for 1024x768x24 (s74b)      */
 /* ── THE LFB'S ADVERTISED PHYSICAL ADDRESS. ───────────────────────────────────────
      4F01 reports this as PhysBasePtr and the guest asks DPMI 0800 to map it; the
@@ -156,7 +156,7 @@ typedef struct _VIDEO_STATE {
     WORD VesaStartX, VesaStartY;/* 4F07 display start (pixels, rows); the      */
                                         /* 4F06 logical pitch lives in VesaStride    */
     /* ── THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
-         as the CRTC start (CrtcStart -> StartVs -> CrtcStartLive, see vid_latch):
+         as the CRTC start (CrtcStart -> StartVs -> CrtcStartLive, see VideoLatch):
          the start as a BYTE offset into VesaVram as the "register" holds it, as loaded
          at the last retrace start, and as the displayed frame uses it. A byte offset
          because VBE 3.0's 4F07 BL=02h/82h hand one over directly; BL=00h/80h derive it
@@ -195,11 +195,11 @@ typedef struct _VIDEO_STATE {
          pal[]  is the RENDER palette: what the framebuffer's 8-bit values index.
          In a 16-colour mode they are NOT the same table -- the chain is
              pixel(4 bits) -> vpal[pixel] (Attribute Controller) -> DAC index -> dac[]
-         so pal[0..15] is a DERIVED view of dac[], rebuilt by pal_refresh(). In 13h
+         so pal[0..15] is a DERIVED view of dac[], rebuilt by VideoPaletteRefresh(). In 13h
          the AC is bypassed and pal[] is simply dac[]. */
     UINT32 Dac[256];                  /* the DAC as the guest programmed it      */
     UINT32 Palette[256];                  /* ARGB palette the framebuffer indexes    */
-    /* Raster-split bookkeeping over pal[] (see NTVDD_FRAME and pal_split_note):
+    /* Raster-split bookkeeping over pal[] (see NTVDD_FRAME and VideoPaletteSplitNote):
        what each entry was at the start of the current frame, what it was set to
        mid-frame and at which row, stamped with the frame number. */
     UINT32 PaletteBase[256];
@@ -254,7 +254,7 @@ typedef struct _VIDEO_STATE {
     UINT32 ReadModeHistogram[2];/* reads served in each mode                             */
     /* CRTC start address: what the guest has written so far, and what the display is
        actually using. They differ between the two byte writes of a page flip -- see
-       crtc_out case 0x0C for why rendering from the first is a flicker. */
+       VideoCrtcOut case 0x0C for why rendering from the first is a flicker. */
     WORD CrtcStartLive;
     BYTE  IsCrtcStartPending;   /* 0x0C written, 0x0D not yet                       */
     UINT32 CrtcStartWrites; /* completed pairs                                   */
@@ -265,10 +265,10 @@ typedef struct _VIDEO_STATE {
          scroller writes the start during display, waits for retrace, then writes the
          pan -- both land on the SAME next frame. We used to take the start whenever the
          host drew and ignored AR13, so Mario moved in 4-pixel jumps, a frame out of
-         step. See vid_latch(). */
+         step. See VideoLatch(). */
     WORD StartVs;          /* start address as loaded at the last retrace start */
     BYTE  DisplayPan;          /* AR13 as the displayed frame uses it               */
-    UINT64 LatchTime;           /* when vid_latch last ran (0 = never / reset)       */
+    UINT64 LatchTime;           /* when VideoLatch last ran (0 = never / reset)       */
     /* Guest pacing (s83, #221): retrace periods between successive completed start-
        address pairs. A smooth 70 Hz scroller is all 1s; a 2 is a frame the guest missed. */
     UINT32 StartPreviousFrame;  /* frame number of the previous completed pair       */
@@ -279,7 +279,7 @@ typedef struct _VIDEO_STATE {
          claiming 0x3C0 meant a guest's palette writes went nowhere -- right
          shapes, wrong colours, static. That is what ailed Lemmings.
        ⚠ INDEX AND DATA SHARE ONE PORT and alternate; the flip-flop is reset by
-         READING 0x3DA (see status_in), which is why that read is load-bearing
+         READING 0x3DA (see VideoStatusIn), which is why that read is load-bearing
          and not merely a vblank poll. */
     BYTE  AttributeFlipFlop;      /* 0 = next 3C0 write is the index, 1 = the data        */
     BYTE  AttributeIndex;   /* last index written, including bit5 (video enable)    */
@@ -339,14 +339,14 @@ typedef struct _VIDEO_STATE {
          reach for this fix to explain a gameplay symptom.
          These are the low bytes; the high bits live in CrtcOverflow (0x07) and
          CrtcMaxScan (0x09), which we already latch for Line Compare. Composed by
-         vga_vtiming(), which falls back to the old constants when the guest has not
+         VideoVerticalTiming(), which falls back to the old constants when the guest has not
          programmed the CRTC (off-VM tests set gh directly and never touch it). */
     BYTE  CrtcVerticalTotalLow;           /* 0x06, Vertical Total bits 0-7           */
     BYTE  CrtcVerticalDisplayEndLow;              /* 0x12, Vertical Display End bits 0-7     */
     BYTE  CrtcVerticalBlankStartLow;              /* 0x15, Vertical Blank Start bits 0-7     */
     BYTE  IsCrtcVerticalTimingSeen;             /* guest has written 0x06 AND 0x12 AND 0x15 */
     /* ▶ The geometry those five registers DESCRIBE, worked out once per CRTC write by
-         crtc_vt_recompute(). 0x3DA is the most-read port there is -- Lemmings polls it
+         VideoCrtcVerticalTimingRecompute(). 0x3DA is the most-read port there is -- Lemmings polls it
          1.6 MILLION times a second -- so reassembling three scattered 10-bit fields and
          revalidating them on every read was 4.4% of that guest's poll budget for an
          answer that only changes when the guest programs the CRTC. IsVerticalTimingValid = 0 means
@@ -364,11 +364,11 @@ typedef struct _VIDEO_STATE {
          lands in the right plane and there is nothing to de-interleave afterwards.
          `YMapSelect` is called with the NEW mask, or -1 for chained/linear; `YMapPlane`
          returns a host-side view of a plane, valid whatever is mapped at A0000.
-         Left null, the VDD falls back to modey_flush()'s heuristic. */
+         Left null, the VDD falls back to VideoModeYFlush()'s heuristic. */
     PVOID YMapContext;
     VOID   (*YMapSelect)(PVOID ctx, INT mask);
     VOID   (*YMapWriteMode)(PVOID ctx, INT wmode);   /* GC write mode changed */
-    VOID   (*YMapReadMap)(PVOID ctx, INT Planes); /* GR4 read-plane changed -- see gc_set_data */
+    VOID   (*YMapReadMap)(PVOID ctx, INT Planes); /* GR4 read-plane changed -- see VideoGcSetData */
     BYTE *(*YMapPlane)(PVOID ctx, INT p);
     BYTE  WriteMode;   /* GR5 bits0-1                                          */
     BYTE  BitMask;     /* GR8 (reset 0xFF)                                     */
@@ -413,7 +413,7 @@ typedef struct _VIDEO_STATE {
          -- predict the same VblEdges, so that counter cannot separate them and no
          amount of staring at it will.
          These can. Time3DaFirst/Time3DaLast bracket the polling in MODEL microseconds,
-         read from the SAME clock status_in derives the bits from, so the two cannot
+         read from the SAME clock VideoStatusIn derives the bits from, so the two cannot
          disagree about their units; the caller compares that span against the run's
          real length. A model span 20x shorter than the run says the retrace is slow
          because the CLOCK is slow, and the video model is innocent.
@@ -423,7 +423,7 @@ typedef struct _VIDEO_STATE {
     UINT64 Time3DaFirst, Time3DaLast;
     /* The guest's previous poll of bit 0: which scanline (absolute, frames included)
        and what it read. A poll in a LATER line whose predecessor saw the display
-       active is owed the blanking that passed between them -- see status_in. */
+       active is owed the blanking that passed between them -- see VideoStatusIn. */
     UINT64 Port3DaLastLine;
     BYTE  Port3DaLastBit0, IsPort3DaHaveLast;
     UINT32 Port3DaHblOwed;   /* blanks reported by that rule (STAGE2)               */
@@ -561,7 +561,7 @@ typedef struct _VIDEO_STATE {
        cannot answer that. */
     UINT32 DacBlock[16];
     BYTE  IsDefaultPaletteOff;               /* INT 10h AH=12h BL=31h: suppress the reload */
-    UINT32 PaletteResets;                /* load_default_palette() calls              */
+    UINT32 PaletteResets;                /* VideoLoadDefaultPalette() calls              */
     UINT32 DacHighSinceReset;        /* block-3 DAC writes since the last reset   */
     /* ⚠ ...and the running maximum over all reset epochs. The counter above is read
        after the guest has exited, and a guest exits through a mode set, so on its
@@ -632,7 +632,7 @@ typedef struct _VIDEO_STATE {
     VIDEO_WATCH_RECORD Watch[VIDEO_WATCH_MAX];
     VIDEO_WATCH_RECORD WatchLast;
     UINT32 (*GuestPc)(VOID);         /* host hook: (CS<<16)|IP, 0 if unavailable  */
-    UINT32 ModeMaskHistogram[64];               /* (write mode, map mask) pairs -- see seq_out */
+    UINT32 ModeMaskHistogram[64];               /* (write mode, map mask) pairs -- see VideoSequencerOut */
     UINT32 MaskSkipChain4;          /* map-mask writes dropped: chained            */
     UINT32 MaskSkipSame;            /* map-mask writes dropped: value unchanged    */
     UINT32 Gr4Histogram[4];               /* GR4 read-plane values written, by value      */
@@ -688,7 +688,7 @@ typedef struct _VIDEO_STATE {
          i43_* is what INT 43h holds (the graphics-mode character table) and i1f_* what
          INT 1Fh holds (the 8x8 table's upper half, characters 80h-FFh): the mode set and
          INT 10h AH=11h AL=20h-24h set them, AH=11h AL=30h BH=0/1 answers with them, and
-         the IVT is written to agree whenever they change (vid_set_vec). `IsGraphicsFontUser` /
+         the IVT is written to agree whenever they change (VideoSetVector). `IsGraphicsFontUser` /
          `IsInt1FUser` are set when the CALLER supplied the table (AL=21h / 20h): the glyph
          services then draw from guest memory at that pointer instead of our ROM copy --
          exactly the table the vector names, which for the ROM case is the same bytes.
@@ -754,7 +754,7 @@ INT  VddVideoTextSnapshot(_In_ PVIDEO_STATE state, _Out_writes_(capacity) PSTR o
      in; the masks are the driver's (low byte = character, high byte = attribute). */
 VOID VddVideoTextCursor(_Inout_ PVIDEO_STATE state, _In_ INT column, _In_ INT row,
                         _In_ WORD andMask, _In_ WORD xorMask);
-/* CGA 4-colour (modes 04h/05h): the frame value render_cga gives each 2-bit pixel value
+/* CGA 4-colour (modes 04h/05h): the frame value VideoRenderCga gives each 2-bit pixel value
    0..3 under the current palette select. The INT 33h graphics cursor maps back through it
    (GH #264) -- one table, so the cursor and the renderer cannot disagree. */
 const BYTE *VddVideoCga4Map(_In_ PCVIDEO_STATE state);
@@ -798,7 +798,7 @@ UINT32 VddVideoFrameUs(_In_ PCVIDEO_STATE state);   /* 16667 or 14286 (s73) */
      VBE 4F07h BL=80h (and 3.0's 82h) is "set display start DURING VERTICAL RETRACE":
      the call is not complete until the retrace has begun, and a guest that calls it
      once a frame is paced by it -- that is the whole VESA vsync idiom (heaven7 makes
-     ~16,000 such calls a run). The VDD cannot spin inside int10(): the host delivers
+     ~16,000 such calls a run). The VDD cannot spin inside VideoInt10(): the host delivers
      INT 10h under its lock, and holding that for up to a frame would stall the UI,
      the presenter and IRQ delivery. So the handler applies the start to the latch
      schedule, stamps st->Int10WaitUntil, and returns.
@@ -808,7 +808,7 @@ UINT32 VddVideoFrameUs(_In_ PCVIDEO_STATE state);   /* 16667 or 14286 (s73) */
      on st->TimeUs's clock (0 = done, and the stamp is cleared), so a stale stamp can
      never park a guest. Without that loop the call behaves as it always did -- it
      returns at once -- and only the pacing is lost; the start itself is still shown
-     from the retrace the call names (vid_latch). 0 always with no clock (off-VM). */
+     from the retrace the call names (VideoLatch). 0 always with no clock (off-VM). */
 UINT32 VddVideoInt10WaitUs(_Inout_ PVIDEO_STATE state);
 
 /* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
@@ -828,7 +828,7 @@ UINT32 VddVideoInt10WaitUs(_Inout_ PVIDEO_STATE state);
    again on every call so a guest that scribbled on it gets a good copy. */
 #define VDD_VBEPM_SEG    0xB260       /* B2600..B26FF */
 /* #273: the real-mode WinFuncPtr stub (vbe_rm.asm, 34 bytes) in the same 256 bytes, after
-   the 186-byte block: B260:00C0. vbe_pm_install writes both. */
+   the 186-byte block: B260:00C0. VideoVbePmInstall writes both. */
 #define VDD_VBERM_OFF    0x00C0
 /* #266: the VGA BIOS's pointer tables, after the VBE block and for the same reason --
    B270:0000 the Video Save Pointer table (0040:00A8 points here; 7 far pointers),
