@@ -278,7 +278,7 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
     unsigned i; unsigned char *p = (unsigned char *)aw;
     /* ► PRESERVE THE LEAD ACROSS THE ZEROING. The caller sets aw->nbufs from awbufs.txt
          BEFORE calling us, and this function wipes the whole struct -- so read it back
-         out first, exactly as vdd_sb_reset() preserves its bus pointers. Getting this
+         out first, exactly as VddSbReset() preserves its bus pointers. Getting this
          wrong would silently pin the experiment at one value while appearing to vary it,
          which is the failure mode this counter exists to avoid. */
     uint32_t want_bufs = aw->nbufs, want_frames = aw->nframes;

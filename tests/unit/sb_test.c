@@ -25,7 +25,7 @@ static uint8_t g_flat[0x100000];
 static VDD_BUS bus;
 static DMA_STATE dma;
 static opl_state opl;
-static sb_state  sb;
+static SB_STATE  sb;
 static int g_irq_count, g_irq_last;
 
 static void irq_sink(void *ctx, uint8_t irq)
@@ -76,8 +76,8 @@ int main(void)
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
     { NTVDD_DEVICE d = VddDmaDevice(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma ok"); }
     { NTVDD_DEVICE d = vdd_opl_device(&opl); CHECK(VddBusAdd(&bus, &d) == 0, "add: opl ok"); }
-    sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
-    { NTVDD_DEVICE d = vdd_sb_device(&sb); CHECK(VddBusAdd(&bus, &d) == 0, "add: sb16 ok"); }
+    sb.Dma = &dma; sb.Opl = &opl; sb.BasePort = BASE;
+    { NTVDD_DEVICE d = VddSbDevice(&sb); CHECK(VddBusAdd(&bus, &d) == 0, "add: sb16 ok"); }
 
     /* T1: THE DETECTION HANDSHAKE ------------------------------------------ */
     CHECK(dsp_reset(), "detect: reset handshake returns 0xAA  <-- THE TEST");
@@ -97,35 +97,35 @@ int main(void)
 
     /* T4: sample rate, both ways ------------------------------------------- */
     wr(BASE + 0xC, 0x40); wr(BASE + 0xC, 165);          /* time constant        */
-    CHECK(sb.rate_hz > 10000 && sb.rate_hz < 12000, "rate: time constant 165 -> ~11 kHz");
+    CHECK(sb.RateHz > 10000 && sb.RateHz < 12000, "rate: time constant 165 -> ~11 kHz");
     wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 0x56); wr(BASE + 0xC, 0x22);  /* 22050 = 0x5622 BE */
-    CHECK(sb.rate_hz == 22050, "rate: command 0x41 is big-endian -> 22050 Hz");
+    CHECK(sb.RateHz == 22050, "rate: command 0x41 is big-endian -> 22050 Hz");
 
     /* T5: single-cycle 8-bit DMA playback ---------------------------------- */
     for (i = 0; i < 256; ++i) g_flat[0x30000 + i] = (uint8_t)i;   /* ramp        */
     dma_program(0x30000, 256, 0);
     g_irq_count = 0;
     wr(BASE + 0xC, 0x14); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x00);  /* 256 bytes */
-    CHECK(vdd_sb_active(&sb), "single-cycle: transfer is running");
+    CHECK(VddSbIsActive(&sb), "single-cycle: transfer is running");
 
-    vdd_sb_render(&sb, pcm, 128);
+    VddSbRender(&sb, pcm, 128);
     CHECK(g_irq_count == 0, "single-cycle: no IRQ half way through the block");
     /* 8-bit SB data is UNSIGNED: 0x00 is the bottom of the range, 0x80 silence  */
     CHECK(pcm[0] == (int16_t)(-128 * 256), "single-cycle: unsigned 0x00 maps to full negative");
 
-    vdd_sb_render(&sb, pcm, 128);               /* bytes 128..255 of the ramp     */
+    VddSbRender(&sb, pcm, 128);               /* bytes 128..255 of the ramp     */
     CHECK(pcm[0] == 0, "single-cycle: unsigned 0x80 maps to silence");
     CHECK(g_irq_count == 1, "single-cycle: exactly one IRQ at end of block");
     CHECK(g_irq_last == SB_DEFAULT_IRQ, "single-cycle: raised on IRQ 5");
-    CHECK(!vdd_sb_active(&sb), "single-cycle: stops after the block");
+    CHECK(!VddSbIsActive(&sb), "single-cycle: stops after the block");
 
     /* T6: the IRQ is acknowledged by reading 2xE --------------------------- */
-    CHECK(sb.irq_pending, "irq: pending until acknowledged");
+    CHECK(sb.IsIrqPending, "irq: pending until acknowledged");
     { uint8_t s = rd(BASE + 0x5); (void)s; }
     wr(BASE + 0x4, 0x82);
     CHECK((rd(BASE + 0x5) & 0x01) != 0, "irq: mixer 0x82 reports the 8-bit IRQ");
     rd(BASE + 0xE);
-    CHECK(!sb.irq_pending, "irq: reading 2xE acknowledges it");
+    CHECK(!sb.IsIrqPending, "irq: reading 2xE acknowledges it");
 
     /* T7: auto-init keeps streaming and IRQs per block ---------------------- */
     for (i = 0; i < 64; ++i) g_flat[0x31000 + i] = 0x80;
@@ -133,20 +133,20 @@ int main(void)
     g_irq_count = 0;
     wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0x3F); wr(BASE + 0xC, 0x00);  /* block=64 */
     wr(BASE + 0xC, 0x1C);                                              /* auto-init */
-    CHECK(vdd_sb_active(&sb), "auto-init: transfer is running");
-    vdd_sb_render(&sb, pcm, 64);
+    CHECK(VddSbIsActive(&sb), "auto-init: transfer is running");
+    VddSbRender(&sb, pcm, 64);
     CHECK(g_irq_count == 1, "auto-init: IRQ after the first block");
-    CHECK(vdd_sb_active(&sb), "auto-init: still running after the IRQ");
-    vdd_sb_render(&sb, pcm, 128);
+    CHECK(VddSbIsActive(&sb), "auto-init: still running after the IRQ");
+    VddSbRender(&sb, pcm, 128);
     CHECK(g_irq_count == 3, "auto-init: an IRQ per block, continuously");
 
     /* T8: pause / continue -------------------------------------------------- */
     wr(BASE + 0xC, 0xD0);
-    CHECK(!vdd_sb_active(&sb), "pause: 0xD0 halts playback");
-    vdd_sb_render(&sb, pcm, 16);
+    CHECK(!VddSbIsActive(&sb), "pause: 0xD0 halts playback");
+    VddSbRender(&sb, pcm, 16);
     CHECK(pcm[0] == 0, "pause: renders silence");
     wr(BASE + 0xC, 0xD4);
-    CHECK(vdd_sb_active(&sb), "continue: 0xD4 resumes playback");
+    CHECK(VddSbIsActive(&sb), "continue: 0xD4 resumes playback");
 
     /* T9: SB16 16-bit signed transfer --------------------------------------- */
     for (i = 0; i < 64; i += 2) {
@@ -154,11 +154,11 @@ int main(void)
         g_flat[0x32000 + i + 1] = 0x40;                 /* 0x4000 = +16384       */
     }
     dma_program(0x32000, 64, 0);
-    sb.dma16 = 1;                                       /* point 16-bit at ch 1  */
+    sb.Dma16 = 1;                                       /* point 16-bit at ch 1  */
     g_irq_count = 0;
     wr(BASE + 0xC, 0xB0); wr(BASE + 0xC, 0x10);         /* 16-bit, signed, mono  */
     wr(BASE + 0xC, 0x1F); wr(BASE + 0xC, 0x00);         /* 32 samples            */
-    vdd_sb_render(&sb, pcm, 32);
+    VddSbRender(&sb, pcm, 32);
     CHECK(pcm[0] == 16384, "16-bit: signed little-endian sample decoded");
     CHECK(g_irq_count == 1, "16-bit: IRQ at end of block");
 
@@ -191,23 +191,23 @@ int main(void)
     /* T12: a reset mid-transfer stops everything ---------------------------- */
     dma_program(0x31000, 64, 1);
     wr(BASE + 0xC, 0x1C);
-    CHECK(vdd_sb_active(&sb), "reset: transfer running before reset");
+    CHECK(VddSbIsActive(&sb), "reset: transfer running before reset");
     CHECK(dsp_reset(), "reset: handshake still works mid-transfer");
-    CHECK(!vdd_sb_active(&sb), "reset: transfer stopped");
+    CHECK(!VddSbIsActive(&sb), "reset: transfer stopped");
 
     /* #231: as an SB Pro (DSP 3.02) the SB16-only commands are unknown opcodes -- ignored
        and taking NO argument bytes -- so the byte after C6h is a command in its own right. */
-    {   extern uint8_t g_sb_ver_major, g_sb_ver_minor;
-        uint8_t om = g_sb_ver_major, on = g_sb_ver_minor, maj, min;
-        g_sb_ver_major = 3; g_sb_ver_minor = 2;
-        sb.model = SB_MODEL_SBPRO;
+    {   extern uint8_t g_SbVersionMajor, g_SbVersionMinor;
+        uint8_t om = g_SbVersionMajor, on = g_SbVersionMinor, maj, min;
+        g_SbVersionMajor = 3; g_SbVersionMinor = 2;
+        sb.Model = SB_MODEL_SBPRO;
         dsp_reset();
         wr(BASE + 0xC, 0xC6);                   /* SB16 8-bit auto-init: not on an SB Pro */
         wr(BASE + 0xC, 0xE1);                   /* ...so this is read as a command        */
         maj = rd(BASE + 0xA); min = rd(BASE + 0xA);
         CHECK(maj == 3 && min == 2, "SB Pro: C6h is ignored with no arguments; E1h answers 3.02");
-        CHECK(sb.xfer_mode == SB_XFER_IDLE, "SB Pro: ...and no transfer started");
-        sb.model = SB_MODEL_SB16; g_sb_ver_major = om; g_sb_ver_minor = on;
+        CHECK(sb.TransferMode == SB_TRANSFER_IDLE, "SB Pro: ...and no transfer started");
+        sb.Model = SB_MODEL_SB16; g_SbVersionMajor = om; g_SbVersionMinor = on;
         dsp_reset(); }
 
     /* ── T13: #176 -- NO DACK, NO SAMPLE, AND NO END OF BLOCK. ─────────────────
@@ -223,34 +223,34 @@ int main(void)
         g_irq_count = 0;
         wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0x1F); wr(BASE + 0xC, 0x00);  /* block=32 */
         wr(BASE + 0xC, 0x1C);                                              /* auto-init */
-        vdd_sb_render(&sb, pcm, 8);
+        VddSbRender(&sb, pcm, 8);
         CHECK(pcm[0] == (int16_t)(-128 * 256) && pcm[7] == (int16_t)((7 - 128) * 256),
               "8237 disable: 8 samples play while the controller is enabled");
         (void)rd(0x08);                                  /* drop TC1 the earlier rings latched */
 
         wr(0x08, DMA_COMMAND_DISABLE);                       /* command: disable ctrl 1 */
-        nd0 = sb.out_nodack;
-        vdd_sb_render(&sb, pcm, 64);
+        nd0 = sb.OutputNoDack;
+        VddSbRender(&sb, pcm, 64);
         CHECK(pcm[0] == 0 && pcm[63] == 0, "8237 disable: the DSP renders silence");
-        CHECK(sb.out_nodack - nd0 == 64, "8237 disable: ...counted as no-DACK, every sample");
+        CHECK(sb.OutputNoDack - nd0 == 64, "8237 disable: ...counted as no-DACK, every sample");
         CHECK(g_irq_count == 0, "8237 disable: NO IRQ -- the block did not end");
-        CHECK(vdd_sb_active(&sb), "8237 disable: the transfer is still armed");
+        CHECK(VddSbIsActive(&sb), "8237 disable: the transfer is still armed");
         CHECK(VddDmaCurrentPhysical(&dma, 1) == 0x33008, "8237 disable: the 8237 address stood still");
         s = rd(0x08);
         CHECK((s & 0x20) != 0 && (s & 0x02) == 0, "8237 disable: status shows DRQ1 pending, no TC1");
 
         wr(0x08, 0x00);                                  /* re-enable               */
-        vdd_sb_render(&sb, pcm, 1);
+        VddSbRender(&sb, pcm, 1);
         CHECK(pcm[0] == (int16_t)((8 - 128) * 256), "8237 re-enable: resumes at byte 8, not the base");
-        vdd_sb_render(&sb, pcm, 23);
+        VddSbRender(&sb, pcm, 23);
         CHECK(g_irq_count == 1, "8237 re-enable: the block ends where it would have -- one IRQ");
 
         wr(0x0A, 0x05);                                  /* mask channel 1          */
-        vdd_sb_render(&sb, pcm, 16);
-        CHECK(g_irq_count == 1 && vdd_sb_active(&sb) && pcm[0] == 0,
+        VddSbRender(&sb, pcm, 16);
+        CHECK(g_irq_count == 1 && VddSbIsActive(&sb) && pcm[0] == 0,
               "8237 mask: the same hold -- silence, no IRQ, still armed");
         wr(0x0A, 0x01);                                  /* unmask                  */
-        vdd_sb_render(&sb, pcm, 1);
+        VddSbRender(&sb, pcm, 1);
         CHECK(pcm[0] == (int16_t)((32 - 128) * 256), "8237 unmask: resumes where it stopped");
 
         CHECK(dsp_reset(), "dreq: reset the DSP");

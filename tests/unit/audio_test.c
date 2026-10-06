@@ -19,7 +19,7 @@ static uint8_t g_flat[0x100000];
 static VDD_BUS bus;
 static DMA_STATE dma;
 static opl_state opl;
-static sb_state  sb;
+static SB_STATE  sb;
 static audio_state mix;
 static int g_irq_count;
 
@@ -64,8 +64,8 @@ int main(void)
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
     { NTVDD_DEVICE d = VddDmaDevice(&dma); VddBusAdd(&bus, &d); }
     { NTVDD_DEVICE d = vdd_opl_device(&opl); VddBusAdd(&bus, &d); }
-    sb.dma = &dma; sb.opl = &opl; sb.base = BASE;
-    { NTVDD_DEVICE d = vdd_sb_device(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }
+    sb.Dma = &dma; sb.Opl = &opl; sb.BasePort = BASE;
+    { NTVDD_DEVICE d = VddSbDevice(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }
     vdd_audio_init(&mix, &opl, &sb, AUDIO_OUT_HZ);
 
     /* T1: silence in, silence out ------------------------------------------ */
@@ -103,12 +103,12 @@ int main(void)
     wr(BASE + 0xC, 0x40); wr(BASE + 0xC, 165);               /* ~11 kHz          */
     g_irq_count = 0;
     wr(BASE + 0xC, 0x14); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x01);  /* 512 B  */
-    CHECK(vdd_sb_active(&sb), "SB: transfer armed");
+    CHECK(VddSbIsActive(&sb), "SB: transfer armed");
     CHECK(g_irq_count == 0, "SB: no IRQ before the mixer runs");
     /* 512 source samples at ~11 kHz is ~46ms; mix a comfortable margin of it.  */
     vdd_audio_mix(&mix, buf, 4096);
     CHECK(g_irq_count >= 1, "SB: mixing alone drives the block to completion IRQ  <-- THE TEST");
-    CHECK(!vdd_sb_active(&sb), "SB: single-cycle transfer finished");
+    CHECK(!VddSbIsActive(&sb), "SB: single-cycle transfer finished");
 
     /* T4: SB audio actually reaches the output ------------------------------ */
     {
@@ -128,7 +128,7 @@ int main(void)
     g_irq_count = 0;
     vdd_audio_mix(&mix, buf, 16384);
     CHECK(g_irq_count >= 2, "SB: auto-init keeps producing IRQs as the mixer runs");
-    CHECK(vdd_sb_active(&sb), "SB: auto-init still streaming");
+    CHECK(VddSbIsActive(&sb), "SB: auto-init still streaming");
 
     /* T6: rate changes are picked up mid-stream ----------------------------- */
     wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 0x56); wr(BASE + 0xC, 0x22);   /* 22050 */
@@ -182,7 +182,7 @@ int main(void)
     }
 
     /* ── THE TRANSPORT MUST NOT EAT SAMPLES IT DOES NOT PLAY. ───────────────────────
-         vdd_sb_render() pulls out of the guest's DMA ring, so any sample the mixer asks
+         VddSbRender() pulls out of the guest's DMA ring, so any sample the mixer asks
          for and then discards is data the game wrote and nobody hears. rs_need() used
          to ask for two extra every chunk "for the pair being interpolated between",
          which at Doom's rate is 172 dropped PCM samples a second: the read pointer
@@ -197,9 +197,9 @@ int main(void)
         wr(BASE + 0xC, 0xC6); wr(BASE + 0xC, 0x00);          /* 8-bit auto, mono */
         wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x0F);          /* 4096-byte block  */
         vdd_audio_mix(&mix, buf, 512);                       /* prime the pair   */
-        before = sb.block_left;
+        before = sb.BlockRemaining;
         for (i = 0; i < chunks; ++i) vdd_audio_mix(&mix, buf, 512);
-        after = sb.block_left;
+        after = sb.BlockRemaining;
         want = chunks * 512u * 11025u / AUDIO_OUT_HZ;        /* exactly 1:4      */
         printf("        ring consumed %u over %u chunks, arithmetic says %u\n",
                before - after, chunks, want);

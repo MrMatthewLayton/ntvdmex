@@ -919,7 +919,7 @@ static int    g_spk_real;
 static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
 static DMA_STATE    g_dma;       static NTVDD_DEVICE g_dma_dev;
 static opl_state    g_opl;       static NTVDD_DEVICE g_opl_dev;
-static sb_state     g_sb;        static NTVDD_DEVICE g_sb_dev;
+static SB_STATE     g_sb;        static NTVDD_DEVICE g_sb_dev;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
 static gus_state    g_gus;       static NTVDD_DEVICE g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
@@ -7452,11 +7452,11 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
            proves the completion IRQ was raised only AFTER the exec loop ended, so what
            matters now is WHEN the block starts and how fast it drains -- neither of which
            any counter shows after the fact. */
-        q = zput(q, " sb{mode=0x");  q = zhex(q, (DWORD)g_sb.xfer_mode);
-        q = zput(q, " left=0x");     q = zhex(q, g_sb.block_left);
-        q = zput(q, " len=0x");      q = zhex(q, g_sb.block_len);
-        q = zput(q, " blocks=0x");   q = zhex(q, g_sb.blocks);
-        q = zput(q, " rate=0x");     q = zhex(q, g_sb.rate_hz);
+        q = zput(q, " sb{mode=0x");  q = zhex(q, (DWORD)g_sb.TransferMode);
+        q = zput(q, " left=0x");     q = zhex(q, g_sb.BlockRemaining);
+        q = zput(q, " len=0x");      q = zhex(q, g_sb.BlockLength);
+        q = zput(q, " blocks=0x");   q = zhex(q, g_sb.Blocks);
+        q = zput(q, " rate=0x");     q = zhex(q, g_sb.RateHz);
         q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.frames_mixed);
         /* ► THE 3DA VIEW: did the guest's vblank polls reach the VDD, and what was
              it told last? Mario spins >1s on `in al,3DA / test al,8 / jz` before
@@ -7784,20 +7784,20 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " async_bail=0x"); q = zhex(q, g_async_bail);
         { int r; q = zput(q, " raised[0..15]=");
           for (r = 0; r < 16; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
-        q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.irq);
+        q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.Irq);
         q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
         q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
         q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
         q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.silent);
         q = zput(q, " mixed=0x");        q = zhex(q, g_audio.frames_mixed);
-        q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.dsp_writes);
-        q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.blocks);
-        q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.xfer_mode);
-        q = zput(q, " sb_rate=0x");      q = zhex(q, g_sb.rate_hz);
+        q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.DspWrites);
+        q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.Blocks);
+        q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.TransferMode);
+        q = zput(q, " sb_rate=0x");      q = zhex(q, g_sb.RateHz);
         /* Is what it streamed SOUND? A forced exit never prints the sb OUTPUT block, and
            that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
-        q = zput(q, " sb_checked=0x");   q = zhex(q, g_sb.blocks_checked);
-        q = zput(q, " sb_flat=0x");      q = zhex(q, g_sb.blocks_flat);
+        q = zput(q, " sb_checked=0x");   q = zhex(q, g_sb.BlocksChecked);
+        q = zput(q, " sb_flat=0x");      q = zhex(q, g_sb.BlocksFlat);
         q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
@@ -8918,7 +8918,7 @@ static void exec_mach_restore(int d, char **pp)
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
-    vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
+    VddSbReset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
     VddMpuReset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
@@ -12278,17 +12278,17 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
              AWE32    DSP 4.12   A220 I5 D1 H5 P330 T6       (E620 with #233's EMU8000)
          A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
     {   uint8_t model = (uint8_t)(s->v[SET_SBMODEL] <= 2 ? s->v[SET_SBMODEL] : 0);
-        g_sb.model = model;
+        g_sb.Model = model;
         g_sbcfg.Emu8kBase = (model == SB_MODEL_AWE32) ? (uint16_t)(g_sbcfg.IoBase + 0x400) : 0;  /* #233 */
         if (model == SB_MODEL_SBPRO) {
             g_sbcfg.Type = 4; g_sbcfg.Dma16Channel = 0; g_sbcfg.MpuBase = 0;
-            if (!g_dspver_forced) { g_sb_ver_major = 3; g_sb_ver_minor = 2; }
+            if (!g_dspver_forced) { g_SbVersionMajor = 3; g_SbVersionMinor = 2; }
         } else {
             {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
                 g_sbcfg.Type = 6;                         /* P follows the MPU's port (#235) */
                 g_sbcfg.MpuBase = MPUB[s->v[SET_MPUADDR] <= 4 ? s->v[SET_MPUADDR] : 3]; }
             if (!g_sbcfg.Dma16Channel) g_sbcfg.Dma16Channel = 5;
-            if (!g_dspver_forced) { g_sb_ver_major = 4; g_sb_ver_minor = model == SB_MODEL_AWE32 ? 12 : 5; }
+            if (!g_dspver_forced) { g_SbVersionMajor = 4; g_SbVersionMinor = model == SB_MODEL_AWE32 ? 12 : 5; }
         } }
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
        startup, so they win here too -- pushing 6.22 into a session whose shell requires
@@ -30190,7 +30190,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mj = mj * 10 + (c[i++] - '0');
           while (i < (int)rd && (c[i] == ' ' || c[i] == '.')) ++i;
           while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mn = mn * 10 + (c[i++] - '0');
-          if (mj > 0 && mj < 256) { g_sb_ver_major = (uint8_t)mj; g_sb_ver_minor = (uint8_t)mn;
+          if (mj > 0 && mj < 256) { g_SbVersionMajor = (uint8_t)mj; g_SbVersionMinor = (uint8_t)mn;
                                     g_dspver_forced = 1; }
       } }
     { HANDLE hg = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -30198,7 +30198,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       if (hg != INVALID_HANDLE_VALUE) {
           char c[8]; DWORD rd = 0;
           ReadFile(hg, c, sizeof c, &rd, NULL); CloseHandle(hg);
-          g_sb_gate = (rd && c[0] >= '0' && c[0] <= '9') ? (c[0] - '0') : 1;
+          g_SbGate = (rd && c[0] >= '0' && c[0] <= '9') ? (c[0] - '0') : 1;
       } }
     { DWORD prio = 1;
       HANDLE hp = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -32149,19 +32149,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
     g_opl_dev = vdd_opl_device(&g_opl);
     VddBusAdd(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
-    g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
+    g_sb.Dma = &g_dma; g_sb.Opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
     /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
          from different places, a driver is told one port and finds another. */
-    g_sb.base = g_sbcfg.IoBase; g_sb.irq = g_sbcfg.Irq;
-    g_sb.dma8 = g_sbcfg.Dma8Channel;
-    if (g_sbcfg.Dma16Channel) g_sb.dma16 = g_sbcfg.Dma16Channel;   /* 0 = keep vdd_sb's default */
-    /* Opt-in raw PCM capture -- see sb_state.cap_buf. 4 MB is ~3 minutes of Doom's
+    g_sb.BasePort = g_sbcfg.IoBase; g_sb.Irq = g_sbcfg.Irq;
+    g_sb.Dma8 = g_sbcfg.Dma8Channel;
+    if (g_sbcfg.Dma16Channel) g_sb.Dma16 = g_sbcfg.Dma16Channel;   /* 0 = keep vdd_sb's default */
+    /* Opt-in raw PCM capture -- see SB_STATE.CaptureBuffer. 4 MB is ~3 minutes of Doom's
        11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
     if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
         static BYTE s_sbcap[4u * 1024u * 1024u];
-        g_sb.cap_buf = s_sbcap; g_sb.cap_cap = sizeof s_sbcap; g_sb.cap_len = 0;
+        g_sb.CaptureBuffer = s_sbcap; g_sb.CaptureCapacity = sizeof s_sbcap; g_sb.CaptureLength = 0;
     }
-    g_sb_dev = vdd_sb_device(&g_sb);
+    g_sb_dev = VddSbDevice(&g_sb);
     VddBusAdd(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     g_mpu.Sink = host_midi_sink;
     {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
@@ -33764,9 +33764,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     p = zput(p, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
-                g_sb_absent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
-                g_opl_absent = g_sb_absent;      /* one knob, both devices unfitted */
-                if (g_sb_absent) {
+                g_SbAbsent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
+                g_opl_absent = g_SbAbsent;      /* one knob, both devices unfitted */
+                if (g_SbAbsent) {
                     p = zput(p, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
@@ -36484,8 +36484,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, ","); p = zhex(p, g_shim_state[1]); p = zput(p, "] err=[");
       p = zhex(p, g_shim_err[0]); p = zput(p, ","); p = zhex(p, g_shim_err[1]); p = zput(p, "]");
       p = zput(p, " (1 loaded, 2 not found, 3 init refused)");
-      p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_sb_ver_major);
-      p = zput(p, "."); p = zhex(p, (DWORD)g_sb_ver_minor);
+      p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_SbVersionMajor);
+      p = zput(p, "."); p = zhex(p, (DWORD)g_SbVersionMinor);
       p = zput(p, " execprio="); p = zhex(p, g_exec_prio);
       p = zput(p, "\r\nSTAGE2: lock: wait_us=0x");  p = zhex(p, g_lk_wait_us);
       p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_wait_site);
@@ -36683,20 +36683,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              mixer run, did MIDI messages leave the MPU-401, and did the HOST devices
              actually open -- because a silent run with a happy guest and a silent run
              with no wave device look identical from the guest's side. */
-        if (g_sb.cap_buf && g_sb.cap_len) {
+        if (g_sb.CaptureBuffer && g_sb.CaptureLength) {
           HANDLE hc = CreateFileA(SBDUMP_PATH, GENERIC_WRITE, 0, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
           if (hc != INVALID_HANDLE_VALUE) {
-              DWORD wr = 0; WriteFile(hc, g_sb.cap_buf, g_sb.cap_len, &wr, NULL); CloseHandle(hc);
+              DWORD wr = 0; WriteFile(hc, g_sb.CaptureBuffer, g_sb.CaptureLength, &wr, NULL); CloseHandle(hc);
           }
-          p = zput(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = zhex(p, g_sb.cap_len);
+          p = zput(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = zhex(p, g_sb.CaptureLength);
           p = zput(p, " bytes\r\n");
       }
       gus_report();
-      p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.blocks);
-        p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.rate_hz);
-        p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.xfer_mode);
-        p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.dsp_writes);
+      p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.Blocks);
+        p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.RateHz);
+        p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.TransferMode);
+        p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.DspWrites);
         p = zput(p, " midi_msgs=");               p = zhex(p, g_mpu.MessagesSent);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: async per IRQ:");
@@ -36721,33 +36721,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              about whether they executed; when they appear to, suspect the transport. */
         p = zput(p, "\r\n");
         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-        p = zput(p, "STAGE2: sb replay: blocks_checked="); p = zhex(p, g_sb.blocks_checked);
-        p = zput(p, " REPLAYED=");   p = zhex(p, g_sb.blocks_replayed);
-        if (g_sb.blocks_checked) {
+        p = zput(p, "STAGE2: sb replay: blocks_checked="); p = zhex(p, g_sb.BlocksChecked);
+        p = zput(p, " REPLAYED=");   p = zhex(p, g_sb.BlocksReplayed);
+        if (g_sb.BlocksChecked) {
             p = zput(p, " (");
-            p = zhex(p, g_sb.blocks_replayed * 100u / g_sb.blocks_checked);
+            p = zhex(p, g_sb.BlocksReplayed * 100u / g_sb.BlocksChecked);
             p = zput(p, "% of blocks, decimal-in-hex)");
         }
         /* ► ...AND HOW MANY OF THOSE BLOCKS CARRIED ANY AUDIO. A silent block is
              identical to the previous lap when the guest refills it CORRECTLY, so
              `REPLAYED` on its own cannot support "DMX never refilled it". Only
              REPLAYED_LOUD can, and its denominator is the non-flat blocks. */
-        p = zput(p, " flat=");          p = zhex(p, g_sb.blocks_flat);
-        p = zput(p, " REPLAYED_LOUD="); p = zhex(p, g_sb.blocks_replayed_loud);
-        if (g_sb.blocks_checked > g_sb.blocks_flat) {
+        p = zput(p, " flat=");          p = zhex(p, g_sb.BlocksFlat);
+        p = zput(p, " REPLAYED_LOUD="); p = zhex(p, g_sb.BlocksReplayedLoud);
+        if (g_sb.BlocksChecked > g_sb.BlocksFlat) {
             p = zput(p, " (");
-            p = zhex(p, g_sb.blocks_replayed_loud * 100u
-                        / (g_sb.blocks_checked - g_sb.blocks_flat));
+            p = zhex(p, g_sb.BlocksReplayedLoud * 100u
+                        / (g_sb.BlocksChecked - g_sb.BlocksFlat));
             p = zput(p, "% of NON-FLAT blocks, decimal-in-hex)");
         }
         p = zput(p, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
         { unsigned rb; for (rb = 0; rb < 8; ++rb)
-            { p = zput(p, rb ? "," : ""); p = zhex(p, g_sb.replay_runs[rb]); } }
-        p = zput(p, " run_max="); p = zhex(p, g_sb.replay_run_max);
-        p = zput(p, " byte_lap_same="); p = zhex(p, g_sb.lap_same);
-        p = zput(p, "/");              p = zhex(p, g_sb.lap_total);
-        p = zput(p, " ring=");         p = zhex(p, g_sb.lap_len);
-        p = zput(p, " toobig=");       p = zhex(p, g_sb.lap_toobig);
+            { p = zput(p, rb ? "," : ""); p = zhex(p, g_sb.ReplayRuns[rb]); } }
+        p = zput(p, " run_max="); p = zhex(p, g_sb.ReplayRunMax);
+        p = zput(p, " byte_lap_same="); p = zhex(p, g_sb.LapSame);
+        p = zput(p, "/");              p = zhex(p, g_sb.LapTotal);
+        p = zput(p, " ring=");         p = zhex(p, g_sb.LapLength);
+        p = zput(p, " toobig=");       p = zhex(p, g_sb.LapTooBig);
         p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.nbufs);
         /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
              reflected to a client's own PM handler is counted per (vector, AH) even once
@@ -36844,20 +36844,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              buckets say whether that is a scatter of single samples or a gap once per
              block. `cmd` names which transfer command the guest used -- 0x14 single
              (stops every block) vs 0x1C/0xBx auto-init (streams). */
-        p = zput(p, "\r\nSTAGE2: sb OUTPUT: active="); p = zhex(p, g_sb.out_active);
-        p = zput(p, " idle=");   p = zhex(p, g_sb.out_idle);
-        p = zput(p, " paused="); p = zhex(p, g_sb.out_paused);
-        { uint32_t tot = g_sb.out_active + g_sb.out_idle + g_sb.out_paused;
+        p = zput(p, "\r\nSTAGE2: sb OUTPUT: active="); p = zhex(p, g_sb.OutputActive);
+        p = zput(p, " idle=");   p = zhex(p, g_sb.OutputIdle);
+        p = zput(p, " paused="); p = zhex(p, g_sb.OutputPaused);
+        { uint32_t tot = g_sb.OutputActive + g_sb.OutputIdle + g_sb.OutputPaused;
           if (tot) { p = zput(p, " (");
-                     p = zhex(p, (g_sb.out_idle + g_sb.out_paused) * 100u / tot);
+                     p = zhex(p, (g_sb.OutputIdle + g_sb.OutputPaused) * 100u / tot);
                      p = zput(p, "% of output is inserted silence)"); } }
         p = zput(p, " gap_runs[1,2,4,8,16,32,64,128+]=");
         { int gb; for (gb = 0; gb < 8; ++gb) { p = zput(p, gb ? "," : "");
-                                               p = zhex(p, g_sb.idle_runs[gb]); } }
+                                               p = zhex(p, g_sb.IdleRuns[gb]); } }
         /* ► ISOLATED silent blocks are the dropouts; long runs are real silence. */
         p = zput(p, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
         { int fb; for (fb = 0; fb < 8; ++fb) { p = zput(p, fb ? "," : "");
-                                               p = zhex(p, g_sb.flat_runs[fb]); } }
+                                               p = zhex(p, g_sb.FlatRuns[fb]); } }
         /* ► THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
              driver ran out of data and played silence -- an audible gap that no
              ring-side counter can show. `drain` is the margin: its mass sitting at
@@ -36870,23 +36870,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, db ? "," : ""); p = zhex(p, g_wave.drain_hist[db]); } }
         p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.nbufs);
         p = zput(p, " nframes=");     p = zhex(p, g_wave.nframes);
-        p = zput(p, " GATE: on="); p = zhex(p, (DWORD)g_sb.gate_on);
-        p = zput(p, " stalled_samples="); p = zhex(p, g_sb.gate_stalled);
-        p = zput(p, " FORCED="); p = zhex(p, g_sb.gate_forced);
-        if (g_sb.out_active) { p = zput(p, "(stall=");
-            p = zhex(p, g_sb.gate_stalled * 1000u / g_sb.out_active);
+        p = zput(p, " GATE: on="); p = zhex(p, (DWORD)g_sb.GateMode);
+        p = zput(p, " stalled_samples="); p = zhex(p, g_sb.GateStalled);
+        p = zput(p, " FORCED="); p = zhex(p, g_sb.GateForced);
+        if (g_sb.OutputActive) { p = zput(p, "(stall=");
+            p = zhex(p, g_sb.GateStalled * 1000u / g_sb.OutputActive);
             p = zput(p, " per mille of output)"); }
-        p = zput(p, " mix82=");   p = zhex(p, g_sb.mix82_reads);
-        p = zput(p, " ANSWERED_NO="); p = zhex(p, g_sb.mix82_zero);
-        if (g_sb.mix82_reads) { p = zput(p, "(");
-            p = zhex(p, g_sb.mix82_zero * 100u / g_sb.mix82_reads);
+        p = zput(p, " mix82=");   p = zhex(p, g_sb.Mixer82Reads);
+        p = zput(p, " ANSWERED_NO="); p = zhex(p, g_sb.Mixer82Zero);
+        if (g_sb.Mixer82Reads) { p = zput(p, "(");
+            p = zhex(p, g_sb.Mixer82Zero * 100u / g_sb.Mixer82Reads);
             p = zput(p, "% turned away)"); }
-        p = zput(p, " rate_hz="); p = zhex(p, g_sb.rate_hz);
-        p = zput(p, " blk_len="); p = zhex(p, g_sb.block_len);
+        p = zput(p, " rate_hz="); p = zhex(p, g_sb.RateHz);
+        p = zput(p, " blk_len="); p = zhex(p, g_sb.BlockLength);
         p = zput(p, " dsp_cmds:");
         { unsigned cc; for (cc = 0; cc < 256; ++cc)
-            if (g_sb.cmd_hist[cc]) { p = zput(p, " "); p = zhexb(p, cc);
-                                     p = zput(p, "x"); p = zhex(p, g_sb.cmd_hist[cc]); } }
+            if (g_sb.CommandHistogram[cc]) { p = zput(p, " "); p = zhexb(p, cc);
+                                     p = zput(p, "x"); p = zhex(p, g_sb.CommandHistogram[cc]); } }
         p = zput(p, "\r\nSTAGE2: sb ");
         /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
              DOOM.EXE file offset and disassemble it. */
@@ -37040,30 +37040,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " host_midi=");               p = zput(p, g_wave.hmidi ? "open" : "NONE");
         p = zput(p, " underruns=");               p = zhex(p, g_wave.underruns);
         p = zput(p, "\r\n");
-        /* ► THE BLOCK-BOUNDARY LEDGER (see the sb_blkrec comment in vdd_sb.h). One line
+        /* ► THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
              per completed block for the first few: where the capture stood, what the
              8237 held, and whether it had wrapped. cap_off is the load-bearing column --
              it turns sbref.py's INFERRED 128-frame grid into measured boundaries, so
              "the jump is two frames in" can be checked against fact instead of against
              our own guess at where a block starts. */
-        if (g_sb.blklog_n) {
+        if (g_sb.BlockLogCount) {
             uint32_t bi;
-            p = zput(p, "STAGE2: sound blocks: n="); p = zhex(p, g_sb.blocks);
-            p = zput(p, " logged="); p = zhex(p, g_sb.blklog_n);
+            p = zput(p, "STAGE2: sound blocks: n="); p = zhex(p, g_sb.Blocks);
+            p = zput(p, " logged="); p = zhex(p, g_sb.BlockLogCount);
             p = zput(p, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
-            for (bi = 0; bi < g_sb.blklog_n && bi < SB_BLKLOG_MAX; ++bi) {
-                const struct sb_blkrec *b = &g_sb.blklog[bi];
+            for (bi = 0; bi < g_sb.BlockLogCount && bi < SB_BLOCK_LOG_MAX; ++bi) {
+                const SB_BLOCK_RECORD *b = &g_sb.BlockLog[bi];
                 p = zput(p, "STAGE2: sbblk "); p = zhexb(p, bi);
-                p = zput(p, " cap_off=");    p = zhex(p, b->cap_off);
-                p = zput(p, " blk_len=");    p = zhex(p, b->block_len);
-                p = zput(p, " phys=");       p = zhex(p, b->phys);
-                p = zput(p, " count=");      p = zhex(p, b->cur_count);
-                p = zput(p, " base=");       p = zhex(p, b->base_addr);
-                p = zput(p, "/");            p = zhex(p, b->base_count);
-                p = zput(p, " page=");       p = zhexb(p, b->page);
-                p = zput(p, " mode=");       p = zhexb(p, b->mode);
-                p = zput(p, b->reloaded ? " WRAPPED" : " mid-ring");
-                if (b->ended) p = zput(p, " ENDED");
+                p = zput(p, " cap_off=");    p = zhex(p, b->CaptureOffset);
+                p = zput(p, " blk_len=");    p = zhex(p, b->BlockLength);
+                p = zput(p, " phys=");       p = zhex(p, b->Physical);
+                p = zput(p, " count=");      p = zhex(p, b->CurrentCount);
+                p = zput(p, " base=");       p = zhex(p, b->BaseAddress);
+                p = zput(p, "/");            p = zhex(p, b->BaseCount);
+                p = zput(p, " page=");       p = zhexb(p, b->Page);
+                p = zput(p, " mode=");       p = zhexb(p, b->Mode);
+                p = zput(p, b->Reloaded ? " WRAPPED" : " mid-ring");
+                if (b->Ended) p = zput(p, " ENDED");
                 p = zput(p, "\r\n");
                 /* `base` points PAST the preamble, not at report[0], so bound against
                    the array itself -- p - base would let this overrun by the preamble's

@@ -7,7 +7,7 @@
  * (commonly 11025 or 22050) -- and neither matches the host's output rate. The
  * mixer resamples both onto a common clock and sums them.
  *
- * It is also the TRANSPORT, not just a nicety: vdd_sb_render() is what walks the
+ * It is also the TRANSPORT, not just a nicety: VddSbRender() is what walks the
  * DMA buffer and raises the block-completion IRQ a game waits on. Until something
  * pulls samples through here, a game programs a transfer and hangs forever. So
  * the mixer must keep being called even when nothing is audible.
@@ -58,7 +58,7 @@ typedef struct audio_resampler {
 
 typedef struct audio_state {
     opl_state *opl;
-    sb_state  *sb;
+    SB_STATE  *sb;
     gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
     PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
     const SPEAKER_STATE *spk; /* PC speaker; NULL = not fitted                   */
@@ -92,7 +92,7 @@ typedef struct audio_state {
 /* Set up the mixer for its two sources. Safe to call again after a device's rate
    changes; the resamplers re-derive their step from the device on each mix.
    Leaves the speaker unfitted, the master volume at 100 and unmuted. */
-void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_hz);
+void vdd_audio_init(audio_state *st, opl_state *opl, SB_STATE *sb, uint32_t out_hz);
 
 /* Fit (or unfit) the PC speaker. `enable` 0 leaves the VDD on the bus -- port
    0x61 must keep answering, guests time delay loops off its refresh bit -- and

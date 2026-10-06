@@ -7,14 +7,14 @@
    which is exactly what stops a busy score from sitting on the clip rail. We
    honour the same registers (master 0x22, voice 0x04, FM 0x26), so a game's own
    volume control works, and their power-up value (0xCC) gives sane headroom. */
-static int32_t mix_gain(const sb_state *sb, uint8_t reg)
+static int32_t mix_gain(const SB_STATE *sb, uint8_t reg)
 {
     uint32_t master, src;
     if (!sb) return 256;
-    master = (sb->mix[0x22] >> 4) & 0x0F;
-    src    = (sb->mix[reg]   >> 4) & 0x0F;
-    if (!sb->mix[0x22]) master = 12;            /* never programmed: power-up 0xCC */
-    if (!sb->mix[reg])  src    = 12;
+    master = (sb->Mixer[0x22] >> 4) & 0x0F;
+    src    = (sb->Mixer[reg]   >> 4) & 0x0F;
+    if (!sb->Mixer[0x22]) master = 12;            /* never programmed: power-up 0xCC */
+    if (!sb->Mixer[reg])  src    = 12;
     return (int32_t)((master * src * 256u) / 225u);   /* (m/15)*(s/15) in 0..256   */
 }
 
@@ -31,7 +31,7 @@ static void rs_setup(audio_resampler *r, uint32_t src_hz, uint32_t out_hz)
 /* ── PULL EXACTLY WHAT WILL BE CONSUMED, AND NOT ONE SAMPLE MORE. ───────────────────
      This used to ask for two extra samples every chunk, "the pair being interpolated
      between". For a synthesised source that is merely wasteful; for the SOUND BLASTER
-     it is data loss. vdd_sb_render() is the TRANSPORT -- every sample it is asked for
+     it is data loss. VddSbRender() is the TRANSPORT -- every sample it is asked for
      is pulled out of the guest's DMA ring and thrown away if the resampler does not
      use it. Two per chunk, 86 chunks a second at Doom's 11025 Hz stereo, is 172
      dropped PCM samples a second: the read pointer walks away from the guest's write
@@ -49,7 +49,7 @@ static uint32_t rs_need(const audio_resampler *r, uint32_t frames)
 /* (The mono walk, rs_step, went with #232: the OPL was its last caller, and every
    source is now stereo -- rs_step_st below, whose left channel is that walk.) */
 
-void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_hz)
+void vdd_audio_init(audio_state *st, opl_state *opl, SB_STATE *sb, uint32_t out_hz)
 {
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
@@ -143,9 +143,9 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
            the block-completion IRQ the game is waiting for. */
         if (st->sb) {
             int32_t g = mix_gain(st->sb, 0x04);
-            rs_setup(&st->r_sb, vdd_sb_frame_hz(st->sb), st->out_hz);
+            rs_setup(&st->r_sb, VddSbFrameHz(st->sb), st->out_hz);
             need = rs_need(&st->r_sb, n);
-            vdd_sb_render_st(st->sb, st->scratch, need);
+            VddSbRenderStereo(st->sb, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
                 int32_t l, r;

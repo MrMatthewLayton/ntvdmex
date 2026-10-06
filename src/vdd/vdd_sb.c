@@ -6,79 +6,79 @@
 /* Reads from 2xA come from here, and 2xE reports whether anything is waiting.
    The reset handshake, the version query and the identify command all answer
    through this queue, which is why detection is really a queue test. */
-static void sb_outq_push(sb_state *st, uint8_t v)
+static VOID SbOutputQueuePush(PSB_STATE state, BYTE value)
 {
-    if (st->outq_len >= SB_OUTQ_MAX) return;
-    st->outq[(st->outq_head + st->outq_len) % SB_OUTQ_MAX] = v;
-    st->outq_len++;
+    if (state->OutputQueueLength >= SB_OUTPUT_QUEUE_MAX) return;
+    state->OutputQueue[(state->OutputQueueHead + state->OutputQueueLength) % SB_OUTPUT_QUEUE_MAX] = value;
+    state->OutputQueueLength++;
 }
-static uint8_t sb_outq_pop(sb_state *st)
+static BYTE SbOutputQueuePop(PSB_STATE state)
 {
-    uint8_t v;
-    if (!st->outq_len) return 0xFF;             /* nothing waiting: bus floats     */
-    v = st->outq[st->outq_head];
-    st->outq_head = (uint8_t)((st->outq_head + 1) % SB_OUTQ_MAX);
-    st->outq_len--;
-    return v;
+    BYTE value;
+    if (!state->OutputQueueLength) return 0xFF; /* nothing waiting: bus floats     */
+    value = state->OutputQueue[state->OutputQueueHead];
+    state->OutputQueueHead = (BYTE)((state->OutputQueueHead + 1) % SB_OUTPUT_QUEUE_MAX);
+    state->OutputQueueLength--;
+    return value;
 }
 
-int g_sb_absent = 0;      /* nosb.flag -- see the DSP-reset case below */
-uint8_t g_sb_ver_major = SB_DSP_VER_MAJOR;   /* dspver.txt -- see vdd_sb.h */
+INT g_SbAbsent = 0;       /* nosb.flag -- see the DSP-reset case below */
+BYTE g_SbVersionMajor = SB_DSP_VERSION_MAJOR;   /* dspver.txt -- see vdd_sb.h */
 /* ⚠ THE ACK GATE IS A DELIBERATE DEVIATION FROM THE HARDWARE AND DEFAULTS OFF.
      A real SB16 in auto-init raises an IRQ per block whether or not the previous one
      was acknowledged, and tests/unit/sb_test.c asserts exactly that ('auto-init: an
      IRQ per block, continuously'). Arming the gate by default would have quietly
      broken that assertion -- the battery caught it on the first build, which is what
      it is for. So the gate is opt-in until it has been shown to earn the trade. */
-int g_sb_gate = 0;        /* sbgate.txt */
-uint8_t g_sb_ver_minor = SB_DSP_VER_MINOR;
+INT g_SbGate = 0;         /* sbgate.txt */
+BYTE g_SbVersionMinor = SB_DSP_VERSION_MINOR;
 
-static void sb_dsp_soft_reset(sb_state *st)
+static VOID SbDspSoftReset(PSB_STATE state)
 {
-    st->cmd = 0; st->nargs = 0; st->want_args = 0;
-    st->outq_head = st->outq_len = 0;
-    st->xfer_mode = SB_XFER_IDLE;
-    st->block_left = 0;
-    st->paused = 0;
-    st->irq_pending = 0;
+    state->Command = 0; state->ArgumentCount = 0; state->ArgumentsWanted = 0;
+    state->OutputQueueHead = state->OutputQueueLength = 0;
+    state->TransferMode = SB_TRANSFER_IDLE;
+    state->BlockRemaining = 0;
+    state->IsPaused = 0;
+    state->IsIrqPending = 0;
 }
 
 /* --- transfer programming ------------------------------------------------- */
-static void sb_start_block(sb_state *st, uint32_t bytes, int autoinit)
+static VOID SbStartBlock(PSB_STATE state, UINT32 bytes, INT isAutoInit)
 {
     /* SB16 only, exactly as VDMSound scopes it (getDSPVersion() >= 0x0400). */
-    st->gate_on    = (uint8_t)((g_sb_gate == 1 && g_sb_ver_major >= 4) ? 1
-                             : (g_sb_gate == 2) ? 2 : 0);
-    st->gate_wait  = 0;
-    st->block_len  = bytes ? bytes : 1;
-    st->block_left = st->block_len;
-    st->xfer_mode  = autoinit ? SB_XFER_AUTO : SB_XFER_SINGLE;
-    st->paused     = 0;
+    state->GateMode    = (BYTE)((g_SbGate == 1 && g_SbVersionMajor >= 4) ? 1
+                             : (g_SbGate == 2) ? 2 : 0);
+    state->GateWait  = 0;
+    state->BlockLength  = bytes ? bytes : 1;
+    state->BlockRemaining = state->BlockLength;
+    state->TransferMode  = isAutoInit ? SB_TRANSFER_AUTO : SB_TRANSFER_SINGLE;
+    state->IsPaused     = 0;
 }
 
 /* Time constant -> sample rate. The DSP stores 256 - 1000000/rate, so a game that
    asks for 11025 Hz writes 165; we invert it exactly the same way. */
-static uint32_t sb_rate_from_tc(uint8_t tc)
+static UINT32 SbRateFromTimeConstant(BYTE timeConstant)
 {
-    uint32_t d = 256u - tc;
-    return d ? (1000000u / d) : 4000u;
+    UINT32 divisor = 256u - timeConstant;
+    return divisor ? (1000000u / divisor) : 4000u;
 }
 
 /* #231: the commands a DSP 3.xx (SB Pro) does not have -- the SB16's rate commands,
    programmed transfers and 16-bit DMA pause/continue/exit. On an SB Pro they are
    unknown opcodes: ignored, and taking NO argument bytes, as on the real card. */
-static int sb_sb16_only(uint8_t c)
+static INT SbIsSb16Only(BYTE command)
 {
-    return (c >= 0xB0 && c <= 0xCF) || c == 0x41 || c == 0x42
-        || c == 0xD5 || c == 0xD6 || c == 0xD9;
+    return (command >= 0xB0 && command <= 0xCF) || command == 0x41 || command == 0x42
+        || command == 0xD5 || command == 0xD6 || command == 0xD9;
 }
 
 /* How many argument bytes each command consumes after its opcode. */
-static uint8_t sb_cmd_args(const sb_state *st, uint8_t c)
+static BYTE SbCommandArguments(PCSB_STATE state, BYTE command)
 {
-    if (st->model == SB_MODEL_SBPRO && sb_sb16_only(c)) return 0;   /* #231 */
-    if (c >= 0xB0 && c <= 0xCF) return 3;       /* mode byte + 16-bit length      */
-    switch (c) {
+    if (state->Model == SB_MODEL_SBPRO && SbIsSb16Only(command)) return 0;   /* #231 */
+    if (command >= 0xB0 && command <= 0xCF) return 3;       /* mode byte + 16-bit length      */
+    switch (command) {
     case 0x10: return 1;                        /* direct DAC sample              */
     case 0x14: case 0x16: case 0x17: return 2;  /* 8-bit single-cycle DMA length  */
     case 0x40: return 1;                        /* time constant                  */
@@ -91,114 +91,114 @@ static uint8_t sb_cmd_args(const sb_state *st, uint8_t c)
     }
 }
 
-static void sb_exec(sb_state *st)
+static VOID SbExecute(PSB_STATE state)
 {
-    uint8_t c = st->cmd;
-    const uint8_t *a = st->args;
+    BYTE command = state->Command;
+    const BYTE *arguments = state->Arguments;
 
     /* Which transfer command does the guest actually use? 0x14 is SINGLE-CYCLE (the
        DSP stops at every block end); 0x1C/0x2C and 0xB0-0xCF with bit 2 are AUTO-INIT
        (it streams). That one bit decides whether the output is gapped by construction,
        and it has never been recorded. */
-    st->cmd_hist[c]++;
-    if (st->model == SB_MODEL_SBPRO && sb_sb16_only(c)) return;     /* #231: not a 3.02 command */
+    state->CommandHistogram[command]++;
+    if (state->Model == SB_MODEL_SBPRO && SbIsSb16Only(command)) return;     /* #231: not a 3.02 command */
 
-    if (c >= 0xB0 && c <= 0xCF) {               /* SB16 programmed transfers      */
-        int is16   = (c & 0xF0) == 0xB0;
-        int autoin = (c & 0x04) != 0;
-        int input  = (c & 0x08) != 0;           /* A/D: we do not record           */
-        uint32_t units = (uint32_t)a[1] | ((uint32_t)a[2] << 8);
-        st->xfer_16bit  = (uint8_t)is16;
-        st->xfer_signed = (a[0] & 0x10) ? 1 : 0;
-        st->xfer_stereo = (a[0] & 0x20) ? 1 : 0;
-        st->xfer_legacy = 0;                    /* SB16: the rate IS the frame rate */
-        if (input) { st->xfer_mode = SB_XFER_IDLE; return; }
-        sb_start_block(st, (units + 1) * (is16 ? 2u : 1u), autoin);
+    if (command >= 0xB0 && command <= 0xCF) {   /* SB16 programmed transfers      */
+        INT is16Bit   = (command & 0xF0) == 0xB0;
+        INT isAutoInit = (command & 0x04) != 0;
+        INT isInput  = (command & 0x08) != 0;   /* A/D: we do not record           */
+        UINT32 units = (UINT32)arguments[1] | ((UINT32)arguments[2] << 8);
+        state->Is16Bit  = (BYTE)is16Bit;
+        state->IsSigned = (arguments[0] & 0x10) ? 1 : 0;
+        state->IsStereo = (arguments[0] & 0x20) ? 1 : 0;
+        state->IsLegacyTransfer = 0;            /* SB16: the rate IS the frame rate */
+        if (isInput) { state->TransferMode = SB_TRANSFER_IDLE; return; }
+        SbStartBlock(state, (units + 1) * (is16Bit ? 2u : 1u), isAutoInit);
         return;
     }
-    switch (c) {
+    switch (command) {
     case 0x10:                                  /* direct DAC write: no DMA       */
         break;
     /* ── #189: THE SB PRO'S STEREO IS A MIXER SWITCH. A DSP 1.x-3.x output command is
          mono or stereo according to mixer register 0Eh bit 1 at the moment it starts,
          and the time constant was programmed for BOTH channels -- so a stereo frame
-         (one byte each side) comes at half the byte rate (xfer_legacy + vdd_sb_frame_hz).
+         (one byte each side) comes at half the byte rate (IsLegacyTransfer + VddSbFrameHz).
          0x1C used to keep whatever stereo flag the last SB16 command had left behind.
          0x90/0x91 are the high-speed forms (length from 0x48), which is how an SB Pro
          program plays 22 kHz stereo; they were not modelled at all. */
     case 0x14: case 0x16: case 0x17:            /* 8-bit single-cycle DMA output  */
-        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
-        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
-        sb_start_block(st, ((uint32_t)a[0] | ((uint32_t)a[1] << 8)) + 1, 0);
+        state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
+        state->IsStereo = (state->Mixer[0x0E] & 0x02) ? 1 : 0;
+        SbStartBlock(state, ((UINT32)arguments[0] | ((UINT32)arguments[1] << 8)) + 1, 0);
         break;
     case 0x1C: case 0x2C: case 0x90:            /* 8-bit auto-init (0x90: high-speed) */
-        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
-        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
-        sb_start_block(st, st->block_len, 1);
+        state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
+        state->IsStereo = (state->Mixer[0x0E] & 0x02) ? 1 : 0;
+        SbStartBlock(state, state->BlockLength, 1);
         break;
     case 0x91:                                  /* high-speed 8-bit single-cycle   */
-        st->xfer_16bit = 0; st->xfer_signed = 0; st->xfer_legacy = 1;
-        st->xfer_stereo = (st->mix[0x0E] & 0x02) ? 1 : 0;
-        sb_start_block(st, st->block_len, 0);
+        state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
+        state->IsStereo = (state->Mixer[0x0E] & 0x02) ? 1 : 0;
+        SbStartBlock(state, state->BlockLength, 0);
         break;
     case 0x40:
-        st->rate_hz = sb_rate_from_tc(a[0]);
+        state->RateHz = SbRateFromTimeConstant(arguments[0]);
         break;
     case 0x41: case 0x42:                       /* rate is BIG-endian here         */
-        st->rate_hz = ((uint32_t)a[0] << 8) | a[1];
+        state->RateHz = ((UINT32)arguments[0] << 8) | arguments[1];
         break;
     case 0x48:                                  /* block size for auto-init        */
-        st->block_len = ((uint32_t)a[0] | ((uint32_t)a[1] << 8)) + 1;
+        state->BlockLength = ((UINT32)arguments[0] | ((UINT32)arguments[1] << 8)) + 1;
         break;
-    case 0xD0: st->paused = 1; break;           /* pause 8-bit DMA                 */
-    case 0xD1: st->speaker = 1; break;
-    case 0xD3: st->speaker = 0; break;
-    case 0xD4: st->paused = 0; break;           /* continue 8-bit DMA              */
-    case 0xD5: st->paused = 1; break;           /* pause 16-bit DMA                */
-    case 0xD6: st->paused = 0; break;           /* continue 16-bit DMA             */
+    case 0xD0: state->IsPaused = 1; break;      /* pause 8-bit DMA                 */
+    case 0xD1: state->IsSpeakerOn = 1; break;
+    case 0xD3: state->IsSpeakerOn = 0; break;
+    case 0xD4: state->IsPaused = 0; break;      /* continue 8-bit DMA              */
+    case 0xD5: state->IsPaused = 1; break;      /* pause 16-bit DMA                */
+    case 0xD6: state->IsPaused = 0; break;      /* continue 16-bit DMA             */
     case 0xDA: case 0xD9:                       /* leave auto-init after this block */
-        if (st->xfer_mode == SB_XFER_AUTO) st->xfer_mode = SB_XFER_SINGLE;
+        if (state->TransferMode == SB_TRANSFER_AUTO) state->TransferMode = SB_TRANSFER_SINGLE;
         break;
     case 0xE0:                                  /* identify: reply with ~arg       */
-        sb_outq_push(st, (uint8_t)~a[0]);
+        SbOutputQueuePush(state, (BYTE)~arguments[0]);
         break;
     case 0xE1:                                  /* DSP version                     */
-        sb_outq_push(st, g_sb_ver_major);
-        sb_outq_push(st, g_sb_ver_minor);
+        SbOutputQueuePush(state, g_SbVersionMajor);
+        SbOutputQueuePush(state, g_SbVersionMinor);
         break;
     case 0xE3:                                  /* copyright string: NUL is enough */
-        sb_outq_push(st, 0);
+        SbOutputQueuePush(state, 0);
         break;
     case 0xF2: case 0xF3:                       /* force an IRQ (drivers test wiring) */
-        st->irq_pending = 1;
-        VddRaiseIrq(st->bus, st->irq);
+        state->IsIrqPending = 1;
+        VddRaiseIrq(state->Bus, state->Irq);
         break;
     default:
         break;                                  /* unknown commands are ignored     */
     }
 }
 
-static void sb_dsp_write(sb_state *st, uint8_t v)
+static VOID SbDspWrite(PSB_STATE state, BYTE value)
 {
-    st->dsp_writes++;
-    if (st->want_args) {                        /* collecting arguments            */
-        if (st->nargs < SB_ARG_MAX) st->args[st->nargs++] = v;
-        if (st->nargs >= st->want_args) { sb_exec(st); st->cmd = 0; st->want_args = 0; st->nargs = 0; }
+    state->DspWrites++;
+    if (state->ArgumentsWanted) {               /* collecting arguments            */
+        if (state->ArgumentCount < SB_ARGUMENTS_MAX) state->Arguments[state->ArgumentCount++] = value;
+        if (state->ArgumentCount >= state->ArgumentsWanted) { SbExecute(state); state->Command = 0; state->ArgumentsWanted = 0; state->ArgumentCount = 0; }
         return;
     }
-    st->cmd = v;
-    st->nargs = 0;
-    st->want_args = sb_cmd_args(st, v);
-    if (!st->want_args) { sb_exec(st); st->cmd = 0; }
+    state->Command = value;
+    state->ArgumentCount = 0;
+    state->ArgumentsWanted = SbCommandArguments(state, value);
+    if (!state->ArgumentsWanted) { SbExecute(state); state->Command = 0; }
 }
 
 /* --- ports ---------------------------------------------------------------- */
-static void sb_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    sb_state *st = (sb_state *)self;
-    uint8_t off = (uint8_t)(port - st->base), val = (uint8_t)v;
-    (void)w;
-    switch (off) {
+    PSB_STATE state = (PSB_STATE)context;
+    BYTE offset = (BYTE)(port - state->BasePort), byteValue = (BYTE)value;
+    (VOID)width;
+    switch (offset) {
     /* ── FM. 2x8/2x9 are the AdLib-compatible pair (0x388/0x389) on every card.
          2x0-2x3 are the chip's own four ports on an SB16/AWE32's OPL3: 2x0 the
          array-0 address, 2x2 the ARRAY-1 address (A1 high, = 0x38A), 2x1/2x3 data
@@ -206,22 +206,22 @@ static void sb_out(void *self, uint16_t port, uint8_t w, uint32_t v)
          meaning of another array-0 address mirror -- the SB Pro 1's second (right)
          OPL2 is not modelled. */
     case 0x0: case 0x8:                         /* FM address, array 0             */
-        if (st->opl) vdd_opl_write_addr(st->opl, 0, val);
+        if (state->Opl) vdd_opl_write_addr(state->Opl, 0, byteValue);
         break;
     case 0x2:                                   /* FM address, array 1 on an OPL3  */
-        if (st->opl) vdd_opl_write_addr(st->opl, st->opl->opl3 ? 1 : 0, val);
+        if (state->Opl) vdd_opl_write_addr(state->Opl, state->Opl->opl3 ? 1 : 0, byteValue);
         break;
     case 0x1: case 0x3: case 0x9:               /* FM data                         */
-        if (st->opl) vdd_opl_write_data(st->opl, val);
+        if (state->Opl) vdd_opl_write_data(state->Opl, byteValue);
         break;
-    case 0x4: st->mix_index = val; break;
-    case 0x5: st->mix[st->mix_index] = val; break;
+    case 0x4: state->MixerIndex = byteValue; break;
+    case 0x5: state->Mixer[state->MixerIndex] = byteValue; break;
     case 0x6:                                   /* DSP reset                       */
         /* The handshake: 1 then 0. Only the falling edge arms 0xAA, which is what
            a detect is really looking for. */
-        if (val & 1) { st->reset_state = 1; sb_dsp_soft_reset(st); }
-        else if (st->reset_state) {
-            st->reset_state = 0;
+        if (byteValue & 1) { state->IsResetAsserted = 1; SbDspSoftReset(state); }
+        else if (state->IsResetAsserted) {
+            state->IsResetAsserted = 0;
             /* ► `nosb.flag`: ANSWER THE PROBE WITH SILENCE, i.e. behave as a machine
                  with no Sound Blaster fitted. Withholding the 0xAA is exactly how a
                  card-less PC fails a detect, so a client takes its own no-sound path
@@ -230,29 +230,29 @@ static void sb_out(void *self, uint16_t port, uint8_t w, uint32_t v)
                  init, and this is the way to find out what it does WITHOUT sound
                  without going through the command line (which is separately broken).
                  Absent file = fitted, exactly as before. */
-            if (!g_sb_absent) sb_outq_push(st, 0xAA);
+            if (!g_SbAbsent) SbOutputQueuePush(state, 0xAA);
         }
         break;
-    case 0xC: sb_dsp_write(st, val); break;     /* DSP command / data              */
+    case 0xC: SbDspWrite(state, byteValue); break;     /* DSP command / data              */
     default: break;
     }
 }
 
-static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    sb_state *st = (sb_state *)self;
-    uint8_t off = (uint8_t)(port - st->base);
-    (void)w;
-    switch (off) {
+    PSB_STATE state = (PSB_STATE)context;
+    BYTE offset = (BYTE)(port - state->BasePort);
+    (VOID)width;
+    switch (offset) {
     case 0x0: case 0x8:                         /* FM status through the mirror    */
-        *v = st->opl ? vdd_opl_read_status(st->opl) : 0xFF;
+        *value = state->Opl ? vdd_opl_read_status(state->Opl) : 0xFF;
         break;
     case 0x2:                                   /* OPL3: status at A1 high too     */
-        *v = (st->opl && st->opl->opl3) ? vdd_opl_read_status(st->opl) : 0xFF;
+        *value = (state->Opl && state->Opl->opl3) ? vdd_opl_read_status(state->Opl) : 0xFF;
         break;
     case 0x5:                                   /* mixer data                      */
         /* 0x82 is the IRQ-status register: bit 0 = 8-bit DMA, bit 1 = 16-bit. */
-        if (st->mix_index == 0x82) {
+        if (state->MixerIndex == 0x82) {
             /* ── THIS ANSWER DECIDES WHETHER THE GUEST REFILLS. ──────────────────
                  DMX's SB IRQ handler (DOOM.EXE 0x53274) does almost nothing
                  unconditionally: for a DSP reporting >= 4.00 it asks mixer register
@@ -262,13 +262,13 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
                  mixer is only entered 58/s -- so ~28% of delivered SB interrupts are
                  being turned away, and this register is the only thing that can turn
                  them away. Count what we answer.
-                 `irq_pending` is a single FLAG, and `case 0xE` clears it -- but 0xE
+                 `IsIrqPending` is a single FLAG, and `case 0xE` clears it -- but 0xE
                  is also the DSP data-ready poll, so any read of it for another
                  purpose disarms the next ISR's check. */
-            uint8_t st82 = (uint8_t)(st->irq_pending ? (st->xfer_16bit ? 0x02 : 0x01) : 0x00);
-            st->mix82_reads++;
-            if (!st82) st->mix82_zero++;
-            *v = st82;
+            BYTE status82 = (BYTE)(state->IsIrqPending ? (state->Is16Bit ? 0x02 : 0x01) : 0x00);
+            state->Mixer82Reads++;
+            if (!status82) state->Mixer82Zero++;
+            *value = status82;
         }
         /* ── ★★★★ 0x80 / 0x81 ARE "WHICH IRQ AND DMA AM I ON?", AND WE ANSWERED
              **NONE**. (session 59) ──────────────────────────────────────────────────
@@ -285,10 +285,10 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
              SINGLE-CYCLE 16-byte transfer, which is the classic init-time DMA/IRQ
              SELF-TEST -- and waits for a completion interrupt it has no idea how to
              receive. The guest spins in real mode at 0x34d3:0x06b1 until the watchdog
-             kills it. The block itself is fine: `blocks=1` and xfer_mode back to
-             SB_XFER_IDLE is exactly what a completed single-cycle transfer looks like.
+             kills it. The block itself is fine: `blocks=1` and TransferMode back to
+             SB_TRANSFER_IDLE is exactly what a completed single-cycle transfer looks like.
            ► ANSWER FROM THE CARD'S OWN CONFIGURATION, DERIVED RATHER THAN STORED, so
-             it cannot drift from st->irq / st->dma8 / st->dma16 -- which are the same
+             it cannot drift from state->Irq / state->Dma8 / state->Dma16 -- which are the same
              numbers that go into BLASTER (see dos_env.h and the note in main.c). A
              guest that reads these and a guest that parses BLASTER must not be told
              two different things about one card.
@@ -297,34 +297,34 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
              0x81 bit0=DMA0 bit1=DMA1 bit3=DMA3 bit5=DMA5 bit6=DMA6 bit7=DMA7.
              An IRQ or channel outside those sets has no encoding, so it reports 0 --
              the honest answer, and the same one the hardware would give. */
-        else if (st->mix_index == 0x80) {
-            uint8_t m = 0;
-            if (st->irq == 2)  m = 0x01;
-            else if (st->irq == 5)  m = 0x02;
-            else if (st->irq == 7)  m = 0x04;
-            else if (st->irq == 10) m = 0x08;
-            *v = m;
+        else if (state->MixerIndex == 0x80) {
+            BYTE mask = 0;
+            if (state->Irq == 2)  mask = 0x01;
+            else if (state->Irq == 5)  mask = 0x02;
+            else if (state->Irq == 7)  mask = 0x04;
+            else if (state->Irq == 10) mask = 0x08;
+            *value = mask;
         }
-        else if (st->mix_index == 0x81) {
-            uint8_t m = 0;
-            if (st->dma8 < 4)  m |= (uint8_t)(1u << st->dma8);
-            if (st->dma16 >= 5 && st->dma16 <= 7) m |= (uint8_t)(1u << st->dma16);
-            *v = m;
+        else if (state->MixerIndex == 0x81) {
+            BYTE mask = 0;
+            if (state->Dma8 < 4)  mask |= (BYTE)(1u << state->Dma8);
+            if (state->Dma16 >= 5 && state->Dma16 <= 7) mask |= (BYTE)(1u << state->Dma16);
+            *value = mask;
         }
         else
-            *v = st->mix[st->mix_index];
+            *value = state->Mixer[state->MixerIndex];
         break;
-    case 0xA: *v = sb_outq_pop(st); break;      /* DSP read data                   */
-    case 0xC: *v = 0x00; break;                 /* write status: never busy        */
+    case 0xA: *value = SbOutputQueuePop(state); break;      /* DSP read data                   */
+    case 0xC: *value = 0x00; break;             /* write status: never busy        */
     case 0xE:                                   /* read status + 8-bit IRQ ack     */
-        *v = (uint8_t)(st->outq_len ? 0xFF : 0x7F);   /* bit 7 = data available    */
-        if (!st->xfer_16bit) st->irq_pending = 0;
+        *value = (BYTE)(state->OutputQueueLength ? 0xFF : 0x7F);   /* bit 7 = data available    */
+        if (!state->Is16Bit) state->IsIrqPending = 0;
         break;
     case 0xF:                                   /* 16-bit IRQ ack                  */
-        st->irq_pending = 0;
-        *v = 0xFF;
+        state->IsIrqPending = 0;
+        *value = 0xFF;
         break;
-    default: *v = 0xFF; break;
+    default: *value = 0xFF; break;
     }
 }
 
@@ -332,88 +332,88 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 /* Pull one sample's worth of bytes through the DMA controller and turn it into a
    signed 16-bit value. 8-bit SB data is UNSIGNED (0x80 is silence) unless the
    game said otherwise; 16-bit is signed. Returns the MONO fold (the average, as it
-   always has); the L/R pair itself is left in last_l/last_r for the stereo render. */
-static int16_t sb_fetch_sample(sb_state *st, int *ended)
+   always has); the L/R pair itself is left in LastLeft/LastRight for the stereo render. */
+static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
 {
-    uint8_t ch = st->xfer_16bit ? st->dma16 : st->dma8;
-    uint8_t raw[4];
-    uint32_t want = (uint32_t)(st->xfer_16bit ? 2 : 1) * (st->xfer_stereo ? 2u : 1u);
-    uint32_t got;
-    int32_t l = 0, r = 0;
-    int tc = 0;
+    BYTE channel = state->Is16Bit ? state->Dma16 : state->Dma8;
+    BYTE rawBytes[4];
+    UINT32 bytesWanted = (UINT32)(state->Is16Bit ? 2 : 1) * (state->IsStereo ? 2u : 1u);
+    UINT32 bytesRead;
+    INT32 left = 0, right = 0;
+    INT isTerminalCount = 0;
 
-    *ended = 0;
-    if (!st->dma) return 0;
+    *isEnded = 0;
+    if (!state->Dma) return 0;
 
     /* ── REPLAY CHECK: capture the ring offset BEFORE the fetch advances it. ──────
          Ring offset is the distance of the current address from the channel's base;
          everything else about the comparison hangs off that, so it must be sampled
          before VddDmaRead() walks the 8237. */
-    { const DMA_CHANNEL *c = &st->dma->Channels[ch & 7];
-      uint32_t rlen = (uint32_t)c->BaseCount + 1u;
-      uint32_t roff = (uint32_t)(uint16_t)(c->CurrentAddress - c->BaseAddress);
-      if (rlen != st->lap_len) {              /* (re)programmed: start a fresh lap */
-          st->lap_len  = rlen;
-          st->lap_seen = 0;
-          st->blk_same = st->blk_bytes = 0;
-          st->blk_min  = 0xFFFFFFFFu; st->blk_max = 0;
-          if (rlen > SB_LAP_MAX) ++st->lap_toobig;
+    { PCDMA_CHANNEL channelState = &state->Dma->Channels[channel & 7];
+      UINT32 ringLength = (UINT32)channelState->BaseCount + 1u;
+      UINT32 ringOffset = (UINT32)(WORD)(channelState->CurrentAddress - channelState->BaseAddress);
+      if (ringLength != state->LapLength) {   /* (re)programmed: start a fresh lap */
+          state->LapLength  = ringLength;
+          state->LapSeen = 0;
+          state->BlockSame = state->BlockBytes = 0;
+          state->BlockMin  = 0xFFFFFFFFu; state->BlockMax = 0;
+          if (ringLength > SB_LAP_MAX) ++state->LapTooBig;
       }
-      st->lap_off = (rlen && rlen <= SB_LAP_MAX) ? (roff % rlen) : 0xFFFFFFFFu; }
+      state->LapOffset = (ringLength && ringLength <= SB_LAP_MAX) ? (ringOffset % ringLength) : 0xFFFFFFFFu; }
 
-    got = VddDmaRead(st->dma, ch, raw, want, &tc);
-    if (got < want) { *ended = 1; return 0; }
+    bytesRead = VddDmaRead(state->Dma, channel, rawBytes, bytesWanted, &isTerminalCount);
+    if (bytesRead < bytesWanted) { *isEnded = 1; return 0; }
 
-    if (st->lap_off != 0xFFFFFFFFu) {
-        uint32_t i2;
-        for (i2 = 0; i2 < want; ++i2) {
-            uint32_t o = (st->lap_off + i2) % st->lap_len;
+    if (state->LapOffset != 0xFFFFFFFFu) {
+        UINT32 byteIndex;
+        for (byteIndex = 0; byteIndex < bytesWanted; ++byteIndex) {
+            UINT32 lapIndex = (state->LapOffset + byteIndex) % state->LapLength;
             /* Only compare once a whole lap has been recorded, or the shadow's
                zero-fill would read as a mountain of false "replays" at startup. */
-            if (st->lap_seen >= st->lap_len) {
-                ++st->blk_bytes; ++st->lap_total;
-                if (st->lap_buf[o] == raw[i2]) { ++st->blk_same; ++st->lap_same; }
+            if (state->LapSeen >= state->LapLength) {
+                ++state->BlockBytes; ++state->LapTotal;
+                if (state->LapBuffer[lapIndex] == rawBytes[byteIndex]) { ++state->BlockSame; ++state->LapSame; }
                 /* The block's own dynamic range, from the bytes already in hand. */
-                if (raw[i2] < st->blk_min) st->blk_min = raw[i2];
-                if (raw[i2] > st->blk_max) st->blk_max = raw[i2];
+                if (rawBytes[byteIndex] < state->BlockMin) state->BlockMin = rawBytes[byteIndex];
+                if (rawBytes[byteIndex] > state->BlockMax) state->BlockMax = rawBytes[byteIndex];
             }
-            st->lap_buf[o] = raw[i2];
+            state->LapBuffer[lapIndex] = rawBytes[byteIndex];
         }
-        st->lap_seen += want;
+        state->LapSeen += bytesWanted;
     }
 
-    if (st->xfer_16bit) {
-        l = (int16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
-        r = st->xfer_stereo ? (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8)) : l;
+    if (state->Is16Bit) {
+        left = (INT16)((WORD)rawBytes[0] | ((WORD)rawBytes[1] << 8));
+        right = state->IsStereo ? (INT16)((WORD)rawBytes[2] | ((WORD)rawBytes[3] << 8)) : left;
     } else {
-        l = st->xfer_signed ? (int8_t)raw[0] * 256 : ((int32_t)raw[0] - 128) * 256;
-        r = st->xfer_stereo
-              ? (st->xfer_signed ? (int8_t)raw[1] * 256 : ((int32_t)raw[1] - 128) * 256)
-              : l;
+        left = state->IsSigned ? (INT8)rawBytes[0] * 256 : ((INT32)rawBytes[0] - 128) * 256;
+        right = state->IsStereo
+              ? (state->IsSigned ? (INT8)rawBytes[1] * 256 : ((INT32)rawBytes[1] - 128) * 256)
+              : left;
     }
-    if (st->cap_buf && st->cap_len + want <= st->cap_cap) {
-        uint32_t i2;
-        for (i2 = 0; i2 < want; ++i2) st->cap_buf[st->cap_len++] = raw[i2];
+    if (state->CaptureBuffer && state->CaptureLength + bytesWanted <= state->CaptureCapacity) {
+        UINT32 byteIndex;
+        for (byteIndex = 0; byteIndex < bytesWanted; ++byteIndex) state->CaptureBuffer[state->CaptureLength++] = rawBytes[byteIndex];
     }
-    st->block_left = (st->block_left > want) ? (st->block_left - want) : 0;
-    st->last_l = (int16_t)l; st->last_r = (int16_t)r;   /* #189: the pair, for stereo */
-    return (int16_t)((l + r) / 2);
+    state->BlockRemaining = (state->BlockRemaining > bytesWanted) ? (state->BlockRemaining - bytesWanted) : 0;
+    state->LastLeft = (INT16)left; state->LastRight = (INT16)right;   /* #189: the pair, for stereo */
+    return (INT16)((left + right) / 2);
 }
 
-/* #189: ONE render loop, two output shapes. `stereo` 0 writes out[n] as it always
-   did (the average); 1 writes the pair at out[2n], out[2n+1]. The mono entry point is
+/* #189: ONE render loop, two output shapes. `isStereo` 0 writes output[n] as it always
+   did (the average); 1 writes the pair at output[2n], output[2n+1]. The mono entry point is
    kept so sb_test still checks exactly what it checked. */
-#define SB_PUT(n, mono, l, r) do { if (stereo) { out[2*(n)] = (l); out[2*(n)+1] = (r); } \
-                                   else out[(n)] = (mono); } while (0)
-static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stereo)
+#define SB_PUT(frame, mono, left, right) do { if (isStereo) { output[2*(frame)] = (left); output[2*(frame)+1] = (right); } \
+                                   else output[(frame)] = (mono); } while (0)
+static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isStereo)
 {
-    uint32_t n;
-    for (n = 0; n < frames; ++n) {
-        int ended = 0;
-        if (st->xfer_mode == SB_XFER_IDLE || st->paused) {
-            SB_PUT(n, 0, 0, 0);
-            if (st->paused) st->out_paused++; else st->out_idle++;
-            st->idle_run++;
+    UINT32 frame;
+    for (frame = 0; frame < frames; ++frame) {
+        INT isEnded = 0;
+        if (state->TransferMode == SB_TRANSFER_IDLE || state->IsPaused) {
+            SB_PUT(frame, 0, 0, 0);
+            if (state->IsPaused) state->OutputPaused++; else state->OutputIdle++;
+            state->IdleRun++;
             continue;
         }
         /* ── ⚠ THE ACK GATE. DO NOT ENTER THE NEXT BLOCK UNTIL THE GUEST HAS
@@ -439,7 +439,7 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
              their first attempt used a 64-tick safety, it fired CONSTANTLY, and they
              read 21 blocks ahead of an 8-block ring -- lapping it 2.6x into garbage,
              which is worse than the fault being fixed. So the safety here is two whole
-             blocks, and every yield is COUNTED: if `gate_forced` is not near zero the
+             blocks, and every yield is COUNTED: if `GateForced` is not near zero the
              gate is not doing its job and this must not be believed.
            ⚠ SB16 ONLY, exactly as VDMSound scopes it -- an older DSP has no
              acknowledged-IRQ concept and games driving it do not expect the stall. */
@@ -462,28 +462,28 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
            the only signal that the refill has actually begun. Mode 1 (the ACK, as
            VDMSound uses) is kept for comparison but is measured not to help here --
            DMX acks before it refills, so it re-opens the gate too early. */
-        if (st->gate_on == 2 && st->dma
-            && st->gate_mark && st->dma->CountReads == st->gate_mark
-            && !st->xfer_16bit) {
-            if (st->gate_wait < st->block_len * 2u) {
-                st->gate_wait++; st->gate_stalled++;
-                SB_PUT(n, st->last_sample, st->last_l, st->last_r);
+        if (state->GateMode == 2 && state->Dma
+            && state->GateMark && state->Dma->CountReads == state->GateMark
+            && !state->Is16Bit) {
+            if (state->GateWait < state->BlockLength * 2u) {
+                state->GateWait++; state->GateStalled++;
+                SB_PUT(frame, state->LastSample, state->LastLeft, state->LastRight);
                 continue;
             }
-            st->gate_forced++;
+            state->GateForced++;
         }
-        if (st->gate_on == 1 && st->irq_pending && !st->xfer_16bit) {
-            if (st->gate_wait < st->block_len * 2u) {
-                st->gate_wait++;
-                st->gate_stalled++;
-                SB_PUT(n, st->last_sample, st->last_l, st->last_r);   /* hold, do not inject a zero: a DC hold
+        if (state->GateMode == 1 && state->IsIrqPending && !state->Is16Bit) {
+            if (state->GateWait < state->BlockLength * 2u) {
+                state->GateWait++;
+                state->GateStalled++;
+                SB_PUT(frame, state->LastSample, state->LastLeft, state->LastRight);   /* hold, do not inject a zero: a DC hold
                                                    is inaudible for a few samples where
                                                    a silence notch is a click */
                 continue;
             }
-            st->gate_forced++;                  /* guest stopped acking -- yield */
+            state->GateForced++;                /* guest stopped acking -- yield */
         }
-        st->gate_wait = 0;
+        state->GateWait = 0;
 
         /* ── #176: NO DACK, NO SAMPLE -- AND NO END OF BLOCK. ────────────────────────
              The DSP asks for its next byte on DREQ and waits for the 8237's DACK.
@@ -495,26 +495,26 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
              dropped to IDLE so that re-enabling resumed nothing.
            ⚠ Silence while it waits, counted, and part of the same inserted-zero run
              the gap histogram measures: from the speaker's side it IS a gap. */
-        if (st->dma && !VddDmaGrants(st->dma, st->xfer_16bit ? st->dma16 : st->dma8)) {
-            SB_PUT(n, 0, 0, 0);
-            st->out_nodack++;
-            st->idle_run++;
+        if (state->Dma && !VddDmaGrants(state->Dma, state->Is16Bit ? state->Dma16 : state->Dma8)) {
+            SB_PUT(frame, 0, 0, 0);
+            state->OutputNoDack++;
+            state->IdleRun++;
             continue;
         }
 
-        if (st->idle_run) {                     /* a gap just ended: bucket its length */
-            uint32_t r = st->idle_run, b = 0;
-            while (r > 1 && b < 7) { r >>= 1; ++b; }
-            st->idle_runs[b]++;
-            st->idle_run = 0;
+        if (state->IdleRun) {                   /* a gap just ended: bucket its length */
+            UINT32 runLength = state->IdleRun, bucket = 0;
+            while (runLength > 1 && bucket < 7) { runLength >>= 1; ++bucket; }
+            state->IdleRuns[bucket]++;
+            state->IdleRun = 0;
         }
-        st->out_active++;
+        state->OutputActive++;
 
-        st->last_sample = sb_fetch_sample(st, &ended);
-        if (ended) st->last_l = st->last_r = 0;          /* the fetch returned 0: no pair */
-        SB_PUT(n, st->last_sample, st->last_l, st->last_r);
+        state->LastSample = SbFetchSample(state, &isEnded);
+        if (isEnded) state->LastLeft = state->LastRight = 0;          /* the fetch returned 0: no pair */
+        SB_PUT(frame, state->LastSample, state->LastLeft, state->LastRight);
 
-        if (st->block_left == 0 || ended) {
+        if (state->BlockRemaining == 0 || isEnded) {
             /* Block complete: this is the interrupt the game is waiting for. In
                auto-init it reloads and keeps streaming (the ring buffer every DOS
                game uses); single-cycle stops until reprogrammed. */
@@ -522,40 +522,40 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
                  reach the guest and the reload has already happened inside DmaStep,
                  so this is the only instant at which the three candidate culprits are
                  still distinguishable. Taken before VddRaiseIrq() deliberately. */
-            if (st->blocks < SB_BLKLOG_MAX && st->dma) {
-                struct sb_blkrec *b = &st->blklog[st->blocks];
-                uint8_t dch = st->xfer_16bit ? st->dma16 : st->dma8;
-                const DMA_CHANNEL *c = &st->dma->Channels[dch & 7];
-                b->cap_off    = st->cap_len;
-                b->block_len  = st->block_len;
-                b->phys       = VddDmaCurrentPhysical(st->dma, dch);
-                b->cur_count  = c->CurrentCount;
-                b->base_addr  = c->BaseAddress;
-                b->base_count = c->BaseCount;
-                b->page       = c->Page;
-                b->mode       = c->Mode;
-                b->ended      = (uint8_t)ended;
-                /* cur_addr back at base means the 8237 wrapped this fetch: the block
+            if (state->Blocks < SB_BLOCK_LOG_MAX && state->Dma) {
+                PSB_BLOCK_RECORD record = &state->BlockLog[state->Blocks];
+                BYTE channel = state->Is16Bit ? state->Dma16 : state->Dma8;
+                PCDMA_CHANNEL channelState = &state->Dma->Channels[channel & 7];
+                record->CaptureOffset    = state->CaptureLength;
+                record->BlockLength  = state->BlockLength;
+                record->Physical       = VddDmaCurrentPhysical(state->Dma, channel);
+                record->CurrentCount  = channelState->CurrentCount;
+                record->BaseAddress  = channelState->BaseAddress;
+                record->BaseCount = channelState->BaseCount;
+                record->Page       = channelState->Page;
+                record->Mode       = channelState->Mode;
+                record->Ended      = (BYTE)isEnded;
+                /* CurrentAddress back at BaseAddress means the 8237 wrapped this fetch: the block
                    we just finished and the ring's end coincide. If they routinely do
                    NOT coincide, our block accounting and the guest's disagree, which
                    is exactly the two-frame skew being hunted. */
-                b->reloaded   = (uint8_t)(c->CurrentAddress == c->BaseAddress);
-                st->blklog_n  = st->blocks + 1;      /* entries actually filled */
+                record->Reloaded   = (BYTE)(channelState->CurrentAddress == channelState->BaseAddress);
+                state->BlockLogCount  = state->Blocks + 1;      /* entries actually filled */
             }
             /* Score the block that just finished: >=90% identical to the same ring
                offsets one lap ago means DMX never rewrote it and we played the
                previous lap's audio again -- one echo, 186 ms after the original. */
-            if (st->blk_bytes) {
+            if (state->BlockBytes) {
                 /* SB_FLAT_RANGE: 8-bit PCM silence is a run of 0x80, and DMX's own
                    fades settle to it. A span this small cannot be audible content, so
                    a "replay" verdict on such a block is uninformative either way --
                    see the note in vdd_sb.h. */
-                int replayed = (st->blk_same * 10u >= st->blk_bytes * 9u);
-                int flat     = (st->blk_max - st->blk_min) <= SB_FLAT_RANGE;
-                ++st->blocks_checked;
-                if (replayed)          ++st->blocks_replayed;
-                if (flat)              ++st->blocks_flat;
-                if (replayed && !flat) ++st->blocks_replayed_loud;
+                INT isReplayed = (state->BlockSame * 10u >= state->BlockBytes * 9u);
+                INT isFlat     = (state->BlockMax - state->BlockMin) <= SB_FLAT_RANGE;
+                ++state->BlocksChecked;
+                if (isReplayed)          ++state->BlocksReplayed;
+                if (isFlat)              ++state->BlocksFlat;
+                if (isReplayed && !isFlat) ++state->BlocksReplayedLoud;
                 /* ── A SILENT BLOCK IS NOT A DEFECT. AN ISOLATED SILENT BLOCK IS. ────
                      20% of blocks are flat, but the demo is genuinely quiet much of
                      the time, so the raw count cannot say how much of that the user
@@ -564,76 +564,76 @@ static uint32_t sb_render(sb_state *st, int16_t *out, uint32_t frames, int stere
                      reported symptom -- |- - - - - -| instead of |------|.
                      Same run-length treatment the replay counter already gets, for the
                      same reason: a rate cannot show a shape. */
-                if (flat) {
-                    ++st->flat_run;
-                } else if (st->flat_run) {
-                    uint32_t r = st->flat_run, b3;
-                    if      (r < 4)  b3 = r - 1;          /* 1, 2, 3 exactly */
-                    else if (r < 8)  b3 = 3;
-                    else if (r < 16) b3 = 4;
-                    else if (r < 32) b3 = 5;
-                    else if (r < 64) b3 = 6;
-                    else             b3 = 7;
-                    ++st->flat_runs[b3];
-                    st->flat_run = 0;
+                if (isFlat) {
+                    ++state->FlatRun;
+                } else if (state->FlatRun) {
+                    UINT32 runLength = state->FlatRun, bucket;
+                    if      (runLength < 4)  bucket = runLength - 1;          /* 1, 2, 3 exactly */
+                    else if (runLength < 8)  bucket = 3;
+                    else if (runLength < 16) bucket = 4;
+                    else if (runLength < 32) bucket = 5;
+                    else if (runLength < 64) bucket = 6;
+                    else             bucket = 7;
+                    ++state->FlatRuns[bucket];
+                    state->FlatRun = 0;
                 }
                 /* Close the run on the first block that is NOT an audible repeat --
                    flat blocks end it too, since a silent block carries no evidence
                    either way and bridging across one would invent a longer run. */
-                if (replayed && !flat) {
-                    ++st->replay_run;
-                    if (st->replay_run > st->replay_run_max)
-                        st->replay_run_max = st->replay_run;
-                } else if (st->replay_run) {
-                    uint32_t r = st->replay_run, b2;
-                    if      (r < 4)  b2 = r - 1;          /* 1, 2, 3 exactly */
-                    else if (r < 8)  b2 = 3;
-                    else if (r < 16) b2 = 4;
-                    else if (r < 32) b2 = 5;
-                    else if (r < 64) b2 = 6;
-                    else             b2 = 7;
-                    ++st->replay_runs[b2];
-                    st->replay_run = 0;
+                if (isReplayed && !isFlat) {
+                    ++state->ReplayRun;
+                    if (state->ReplayRun > state->ReplayRunMax)
+                        state->ReplayRunMax = state->ReplayRun;
+                } else if (state->ReplayRun) {
+                    UINT32 runLength = state->ReplayRun, bucket;
+                    if      (runLength < 4)  bucket = runLength - 1;          /* 1, 2, 3 exactly */
+                    else if (runLength < 8)  bucket = 3;
+                    else if (runLength < 16) bucket = 4;
+                    else if (runLength < 32) bucket = 5;
+                    else if (runLength < 64) bucket = 6;
+                    else             bucket = 7;
+                    ++state->ReplayRuns[bucket];
+                    state->ReplayRun = 0;
                 }
             }
-            st->blk_same = st->blk_bytes = 0;
-            st->blk_min = 0xFFFFFFFFu; st->blk_max = 0;
-            st->irq_pending = 1;
-            st->blocks++;
-            if (st->dma) st->gate_mark = st->dma->CountReads;  /* gate mode 2 */
-            VddRaiseIrq(st->bus, st->irq);
-            if (st->xfer_mode == SB_XFER_AUTO && !ended) st->block_left = st->block_len;
-            else                                        st->xfer_mode  = SB_XFER_IDLE;
+            state->BlockSame = state->BlockBytes = 0;
+            state->BlockMin = 0xFFFFFFFFu; state->BlockMax = 0;
+            state->IsIrqPending = 1;
+            state->Blocks++;
+            if (state->Dma) state->GateMark = state->Dma->CountReads;  /* gate mode 2 */
+            VddRaiseIrq(state->Bus, state->Irq);
+            if (state->TransferMode == SB_TRANSFER_AUTO && !isEnded) state->BlockRemaining = state->BlockLength;
+            else                                        state->TransferMode  = SB_TRANSFER_IDLE;
         }
     }
     return frames;
 }
 #undef SB_PUT
 
-uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
-{ return sb_render(st, out, frames, 0); }
-uint32_t vdd_sb_frame_hz(const sb_state *st)
-{ return (st->xfer_legacy && st->xfer_stereo) ? st->rate_hz / 2u : st->rate_hz; }
-uint32_t vdd_sb_render_st(sb_state *st, int16_t *out, uint32_t frames)
-{ return sb_render(st, out, frames, 1); }
+UINT32 VddSbRender(PSB_STATE state, INT16 *output, UINT32 frames)
+{ return SbRender(state, output, frames, 0); }
+UINT32 VddSbFrameHz(PCSB_STATE state)
+{ return (state->IsLegacyTransfer && state->IsStereo) ? state->RateHz / 2u : state->RateHz; }
+UINT32 VddSbRenderStereo(PSB_STATE state, INT16 *output, UINT32 frames)
+{ return SbRender(state, output, frames, 1); }
 
 /* --- lifecycle ------------------------------------------------------------ */
-void vdd_sb_reset(void *self)
+VOID VddSbReset(PVOID context)
 {
-    sb_state *st = (sb_state *)self;
-    VDD_BUS *bus = st->bus; DMA_STATE *dma = st->dma; opl_state *opl = st->opl;
-    uint16_t base = st->base;
-    uint8_t irq = st->irq, d8 = st->dma8, d16 = st->dma16;
-    uint32_t dw = st->dsp_writes, bl = st->blocks;
-    unsigned i; uint8_t *p = (uint8_t *)st;
-    for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
-    st->bus = bus; st->dma = dma; st->opl = opl;
-    st->base = base; st->irq = irq; st->dma8 = d8; st->dma16 = d16;
-    st->dsp_writes = dw; st->blocks = bl;
-    st->rate_hz = 22050;
-    st->block_len = 1;
-    st->mix[0x22] = 0xCC;                       /* master volume, powered-up value */
-    st->mix[0x04] = 0xCC;                       /* voice volume                     */
+    PSB_STATE state = (PSB_STATE)context;
+    PVDD_BUS bus = state->Bus; PDMA_STATE dma = state->Dma; opl_state *opl = state->Opl;
+    WORD basePort = state->BasePort;
+    BYTE irq = state->Irq, dma8 = state->Dma8, dma16 = state->Dma16;
+    UINT32 dspWrites = state->DspWrites, blocks = state->Blocks;
+    UINT byteIndex; BYTE *bytes = (BYTE *)state;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) bytes[byteIndex] = 0;
+    state->Bus = bus; state->Dma = dma; state->Opl = opl;
+    state->BasePort = basePort; state->Irq = irq; state->Dma8 = dma8; state->Dma16 = dma16;
+    state->DspWrites = dspWrites; state->Blocks = blocks;
+    state->RateHz = 22050;
+    state->BlockLength = 1;
+    state->Mixer[0x22] = 0xCC;                  /* master volume, powered-up value */
+    state->Mixer[0x04] = 0xCC;                  /* voice volume                     */
 }
 
 /* ── #176: THE DSP'S DREQ, AS THE 8237's STATUS REGISTER SEES IT. ──────────────────
@@ -644,27 +644,27 @@ void vdd_sb_reset(void *self)
      the DSP's FIFO wants the next). We have no byte clock on the CPU's side of the
      card, so "a transfer is running" is the whole request; a guest that polls the
      bit sees it steady rather than flickering. */
-static uint8_t sb_dreq(const void *ctx)
+static BYTE SbDreq(PCVOID context)
 {
-    const sb_state *st = (const sb_state *)ctx;
-    uint8_t ch;
-    if (!vdd_sb_active(st)) return 0;
-    ch = st->xfer_16bit ? st->dma16 : st->dma8;
-    return (uint8_t)(1u << (ch & 7));
+    PCSB_STATE state = (PCSB_STATE)context;
+    BYTE channel;
+    if (!VddSbIsActive(state)) return 0;
+    channel = state->Is16Bit ? state->Dma16 : state->Dma8;
+    return (BYTE)(1u << (channel & 7));
 }
 
-int vdd_sb_init(VDD_BUS *b, void *self)
+INT VddSbInitialize(PVDD_BUS bus, PVOID context)
 {
-    sb_state *st = (sb_state *)self;
-    st->bus = b;
-    if (st->dma) VddDmaAddDreq(st->dma, sb_dreq, st);
-    if (!st->base)  st->base  = SB_DEFAULT_BASE;
-    if (!st->irq)   st->irq   = SB_DEFAULT_IRQ;
-    if (!st->dma8)  st->dma8  = SB_DEFAULT_DMA8;
-    if (!st->dma16) st->dma16 = SB_DEFAULT_DMA16;
-    if (!st->rate_hz)   st->rate_hz = 22050;
-    if (!st->block_len) st->block_len = 1;
-    if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 0x0F), sb_in, sb_out, st))
+    PSB_STATE state = (PSB_STATE)context;
+    state->Bus = bus;
+    if (state->Dma) VddDmaAddDreq(state->Dma, SbDreq, state);
+    if (!state->BasePort)  state->BasePort  = SB_DEFAULT_BASE;
+    if (!state->Irq)   state->Irq   = SB_DEFAULT_IRQ;
+    if (!state->Dma8)  state->Dma8  = SB_DEFAULT_DMA8;
+    if (!state->Dma16) state->Dma16 = SB_DEFAULT_DMA16;
+    if (!state->RateHz)   state->RateHz = 22050;
+    if (!state->BlockLength) state->BlockLength = 1;
+    if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + 0x0F), SbPortIn, SbPortOut, state))
         return -1;
     return 0;
 }
