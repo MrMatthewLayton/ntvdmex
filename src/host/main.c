@@ -907,7 +907,7 @@ static VDD_BUS      g_bus;
 static pit_state    g_pit;       static NTVDD_DEVICE g_pit_dev;
 static cmos_state   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
 static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
-static ide_state    g_ide;       static NTVDD_DEVICE g_ide_dev;
+static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static pic_state    g_pic;       static NTVDD_DEVICE g_pic_dev;
 static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
 static input_state  g_in;        static NTVDD_DEVICE g_in_dev;
@@ -31988,7 +31988,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          down by the ATA document; DD6:0 a recorded choice) and latches nothing,
          so a detection routine finds the controller, finds no device, and moves
          on. See src/vdd/vdd_ide.h for why 00h and not 7Fh. */
-    g_ide_dev = vdd_ide_device(&g_ide);
+    g_ide_dev = VddIdeDevice(&g_ide);
     VddBusAdd(&g_bus, &g_ide_dev);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
     /* ...and the BIOS says the same thing: 0040:0075, the number of fixed disks a
        program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left

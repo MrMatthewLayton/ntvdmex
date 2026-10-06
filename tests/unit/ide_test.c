@@ -42,7 +42,7 @@ static int bsy_wait_exits(VDD_BUS *bus, uint16_t port)
 {
     int spin;
     for (spin = 0; spin < 65536; ++spin)
-        if (!(host_in(bus, port, 1) & ATA_SR_BSY)) return 1;
+        if (!(host_in(bus, port, 1) & IDE_STATUS_BUSY)) return 1;
     return 0;
 }
 
@@ -57,23 +57,23 @@ static int latches(VDD_BUS *bus, uint16_t cmdbase)
 
 int main(void)
 {
-    static const uint16_t chan[2][2] = { { IDE_PRI_CMD, IDE_PRI_CTL },
-                                         { IDE_SEC_CMD, IDE_SEC_CTL } };
-    VDD_BUS bus; ide_state st; NTVDD_DEVICE dev;
+    static const uint16_t chan[2][2] = { { IDE_PRIMARY_COMMAND, IDE_PRIMARY_CONTROL },
+                                         { IDE_SECONDARY_COMMAND, IDE_SECONDARY_CONTROL } };
+    VDD_BUS bus; IDE_STATE st; NTVDD_DEVICE dev;
     int c, spin, drq;
     uint16_t p;
 
     /* ── NEGATIVE CONTROL: the machine before this device. ── */
     VddBusInitialize(&bus, NULL);
-    CHECK(host_in(&bus, IDE_PRI_CTL, 1) == 0xFF, "control: unclaimed 3F6h floats to FFh");
-    CHECK(!bsy_wait_exits(&bus, IDE_PRI_CTL),
+    CHECK(host_in(&bus, IDE_PRIMARY_CONTROL, 1) == 0xFF, "control: unclaimed 3F6h floats to FFh");
+    CHECK(!bsy_wait_exits(&bus, IDE_PRIMARY_CONTROL),
           "control: on FFh the BSY wait NEVER exits (the hang this closes)");
 
     /* ── the adapter, fitted ── */
     memset(&st, 0, sizeof st);
     VddBusInitialize(&bus, NULL);
     VddBusSetSinks(&bus, irq_sink, NULL, NULL, NULL);
-    dev = vdd_ide_device(&st);
+    dev = VddIdeDevice(&st);
     CHECK(VddBusAdd(&bus, &dev) == 0 && bus.ClaimFailures == 0, "adapter claims both channels");
 
     for (c = 0; c < 2; ++c) {
@@ -105,12 +105,12 @@ int main(void)
         /* SRST through device control: still nothing busy afterwards */
         host_out(&bus, ctl, 0x04); host_out(&bus, ctl, 0x00);
         sprintf(m, "%03Xh: after SRST set+clear, BSY still clear", ctl);
-        CHECK(!(host_in(&bus, ctl, 1) & ATA_SR_BSY), m);
+        CHECK(!(host_in(&bus, ctl, 1) & IDE_STATUS_BUSY), m);
         /* IDENTIFY: nobody receives it -- no DRQ, no IRQ, no error to read. */
         g_irqs = 0;
         host_out(&bus, cmd + 7, 0xEC);
         drq = 0;
-        for (spin = 0; spin < 1000; ++spin) if (host_in(&bus, ctl, 1) & ATA_SR_DRQ) drq = 1;
+        for (spin = 0; spin < 1000; ++spin) if (host_in(&bus, ctl, 1) & IDE_STATUS_DATA_REQUEST) drq = 1;
         sprintf(m, "%03Xh: IDENTIFY to an empty channel never raises DRQ", cmd + 7);
         CHECK(!drq, m);
         sprintf(m, "%03Xh: ...and raises no interrupt", cmd + 7);
@@ -125,7 +125,7 @@ int main(void)
     CHECK(host_in(&bus, 0x1EF, 1) == 0xFF && host_in(&bus, 0x1F8, 1) == 0xFF,
           "1EFh and 1F8h are outside the primary block");
     CHECK(host_in(&bus, 0x3F5, 1) == 0xFF, "3F5h (the FDC's FIFO) is not claimed by us");
-    CHECK(st.cmds == 2 && st.last_cmd == 0xEC, "diagnostics: two commands seen, last ECh");
+    CHECK(st.Commands == 2 && st.LastCommand == 0xEC, "diagnostics: two commands seen, last ECh");
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

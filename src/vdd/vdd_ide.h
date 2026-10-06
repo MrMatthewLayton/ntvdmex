@@ -62,33 +62,36 @@
 
 #include "vdd_bus.h"
 
-#define IDE_PRI_CMD   0x1F0     /* 1F0h-1F7h: data .. status/command            */
-#define IDE_PRI_CTL   0x3F6     /* alternate status / device control            */
-#define IDE_SEC_CMD   0x170     /* 170h-177h                                    */
-#define IDE_SEC_CTL   0x376     /* 376h alt status / device control, 377h DA    */
+#define IDE_PRIMARY_COMMAND      0x1F0   /* 1F0h-1F7h: data .. status/command    */
+#define IDE_PRIMARY_CONTROL      0x3F6   /* alternate status / device control    */
+#define IDE_SECONDARY_COMMAND    0x170   /* 170h-177h                            */
+#define IDE_SECONDARY_CONTROL    0x376   /* 376h alt status / device control, 377h DA */
+#define IDE_COMMAND_REGISTER     7       /* base+7: status (read) / command (write) */
+#define IDE_DRIVE_ADDRESS        1       /* control+1: the drive address register */
+#define IDE_DEVICE_NAME          "ide"
 
 /* ATA status bits, for the tests and for anyone reading a trace. */
-#define ATA_SR_BSY    0x80
-#define ATA_SR_DRDY   0x40
-#define ATA_SR_DRQ    0x08
-#define ATA_SR_ERR    0x01
+#define IDE_STATUS_BUSY          0x80
+#define IDE_STATUS_DEVICE_READY  0x40
+#define IDE_STATUS_DATA_REQUEST  0x08
+#define IDE_STATUS_ERROR         0x01
 
-typedef struct {
-    VDD_BUS *bus;
+typedef struct _IDE_STATE {
+    PVDD_BUS Bus;
     /* Diagnostics only -- what a guest tried to do to the empty channels. Nothing
        here is ever read back to the guest; there is no state to read. */
-    uint32_t reads, writes;
-    uint32_t cmds;              /* writes to 1F7h/177h: commands nobody received */
-    uint8_t  last_cmd;          /* the last of them (ECh = IDENTIFY, etc.)      */
-} ide_state;
+    UINT32 PortReads, PortWrites;
+    UINT32 Commands;            /* writes to 1F7h/177h: commands nobody received */
+    BYTE   LastCommand;         /* the last of them (ECh = IDENTIFY, etc.)      */
+} IDE_STATE, *PIDE_STATE;
 
-int  vdd_ide_init (VDD_BUS *b, void *self);
-void vdd_ide_reset(void *self);
-void vdd_ide_in   (void *self, uint16_t port, uint8_t width, uint32_t *val);
-void vdd_ide_out  (void *self, uint16_t port, uint8_t width, uint32_t val);
+INT  VddIdeInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddIdeReset(_In_ PVOID context);
+VOID VddIdePortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UINT32 *value);
+VOID VddIdePortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
 
-static inline NTVDD_DEVICE vdd_ide_device(ide_state *st)
-{ NTVDD_DEVICE d; d.Name = "ide"; d.Initialize = vdd_ide_init; d.Reset = vdd_ide_reset;
-  d.Shutdown = 0; d.Context = st; return d; }
+static inline NTVDD_DEVICE VddIdeDevice(_In_ PIDE_STATE state)
+{ NTVDD_DEVICE device; device.Name = IDE_DEVICE_NAME; device.Initialize = VddIdeInitialize; device.Reset = VddIdeReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 #endif /* NTVDMEX_VDD_IDE_H */
