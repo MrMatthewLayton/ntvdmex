@@ -19,17 +19,17 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define AW_BUFFERS      24      /* CAP on buffers in flight (storage is sized to it) */
-#define AW_FRAMES      512      /* CAP on frames per buffer                          */
-#define AW_CHANNELS    2        /* #189: stereo; a frame is an L/R pair of samples   */
+#define AUDIO_WAVE_BUFFERS      24      /* CAP on buffers in flight (storage is sized to it) */
+#define AUDIO_WAVE_FRAMES      512      /* CAP on frames per buffer                          */
+#define AUDIO_WAVE_CHANNELS    2        /* #189: stereo; a frame is an L/R pair of samples   */
 /* ⚠ THE CAP AND THE DEFAULT MUST BE SEPARATE CONSTANTS. They used to be one: the
-     clamp read `if (want_bufs < 2) want_bufs = AW_BUFFERS;`, i.e. "0 means use them
+     clamp read `if (want_bufs < 2) want_bufs = AUDIO_WAVE_BUFFERS;`, i.e. "0 means use them
      all", which was 6 and therefore also the default. Raising the cap to 24 without
      splitting these would have silently moved the DEFAULT lead from 70 ms to 280 ms
      and every later run would have been measuring a different machine. */
-#define AW_DEF_BUFFERS   6      /* default lead   = 6 x 512 / 44100 = ~70 ms       */
-#define AW_DEF_FRAMES  512      /* default step   = 11.6 ms per mixer burst        */
-#define AW_MIN_FRAMES   64      /* below this the per-buffer callback overhead wins */
+#define AUDIO_WAVE_DEFAULT_BUFFERS   6      /* default lead   = 6 x 512 / 44100 = ~70 ms       */
+#define AUDIO_WAVE_DEFAULT_FRAMES  512      /* default step   = 11.6 ms per mixer burst        */
+#define AUDIO_WAVE_MIN_FRAMES   64      /* below this the per-buffer callback overhead wins */
 /* ── ⚠ THE BUFFER SIZE IS THE DMA POSITION'S GRANULARITY, WHICH IS A SEPARATE
      SUSPECT FROM THE LEAD. ────────────────────────────────────────────────────────
      The guest's DMA read pointer ONLY advances while the mixer runs, and the mixer
@@ -40,8 +40,8 @@
      staircase where the hardware gives a ramp. Its writes then land in the wrong
      block, which is what the ring shows -- 20% of blocks silent, 30% of the rest a
      verbatim repeat of the previous lap.
-   ► SMALLER BUFFERS, MORE OF THEM, SAME TOTAL LEAD. nframes x nbufs is what matters
-     for the lead; nframes alone is the granularity. Making both runtime lets ONE
+   ► SMALLER BUFFERS, MORE OF THEM, SAME TOTAL LEAD. FrameCount x BufferCount is what matters
+     for the lead; FrameCount alone is the granularity. Making both runtime lets ONE
      binary produce baseline and treatment with no rebuild, so the comparison cannot
      be confounded by anything else that changed -- and lets the difference be A/B'd
      by ear. 128 frames x 24 buffers is the same 70 ms lead at a quarter of the step. */
@@ -51,25 +51,25 @@
      stretch with no host turn was measured at 62.8 ms against a 70 ms lead -- close
      enough that the lead cannot be assumed innocent. So it is a RUNTIME field, set
      from awbufs.txt before the pump starts, and the SB's replay counter is scored
-     against it: change one number, read one number back. Clamped to [2, AW_BUFFERS];
+     against it: change one number, read one number back. Clamped to [2, AUDIO_WAVE_BUFFERS];
      0 means "use them all". */
 
 /* Fill `frames` mono 16-bit samples. Called on the audio thread; the host wraps
    it in the same lock the exec thread uses for the device bus. */
-typedef void (*aw_fill_fn)(void *ctx, int16_t *out, uint32_t frames);
+typedef VOID (*PAUDIO_WAVE_FILL_ROUTINE)(PVOID context, INT16 *output, UINT32 frames);
 
-typedef struct audio_wave {
-    HMODULE   mod;
-    HANDLE    thread, event;
-    volatile LONG running;
-    void     *hwo;                      /* HWAVEOUT, opaque here                 */
-    void     *hmidi;                    /* HMIDIOUT, opaque here                 */
-    uint32_t  hz;
-    aw_fill_fn fill; void *ctx;
-    int       silent;                   /* 1 = no device; pump but discard       */
-    int      force_silent;  /* s90 #132: safe mode -- never open a device; the pump still runs */
-    uint32_t  underruns;
-    /* ── ⚠ `underruns` COUNTS waveOutWrite FAILURES, WHICH IS NOT STARVATION. ────────
+typedef struct _AUDIO_WAVE {
+    HMODULE   Module;
+    HANDLE    Thread, Event;
+    volatile LONG IsRunning;
+    PVOID WaveOut;                      /* HWAVEOUT, opaque here                 */
+    PVOID MidiOut;                      /* HMIDIOUT, opaque here                 */
+    UINT32  SampleHz;
+    PAUDIO_WAVE_FILL_ROUTINE Fill; PVOID Context;
+    INT       IsSilent;                 /* 1 = no device; pump but discard       */
+    INT      IsForcedSilent;  /* s90 #132: safe mode -- never open a device; the pump still runs */
+    UINT32  Underruns;
+    /* ── ⚠ `Underruns` COUNTS waveOutWrite FAILURES, WHICH IS NOT STARVATION. ────────
          It has read 0 in every run ever made, including runs the user describes as
          audibly broken, because waveOutWrite does not fail when the QUEUE runs dry --
          it succeeds, having been called too late. When the last queued buffer finishes
@@ -79,13 +79,13 @@ typedef struct audio_wave {
          reaches the ear.
        ► COUNT THE QUEUE DEPTH INSTEAD, AND COUNT IT AT ITS WORST. On each pass, how
          many buffers has the driver already handed back? That many are NOT queued. If
-         it equals nbufs the queue was completely empty and the device definitely ran
+         it equals BufferCount the queue was completely empty and the device definitely ran
          dry. The histogram gives the MARGIN rather than a pass/fail: `drain` sitting at
-         nbufs-1 means we are one buffer from silence the whole time, which a "starved=0"
+         BufferCount-1 means we are one buffer from silence the whole time, which a "starved=0"
          would have reported as healthy. */
-    uint32_t  starved;                  /* passes with EVERY buffer handed back    */
-    uint32_t  drain_max;                /* worst simultaneous handed-back count    */
-    uint32_t  drain_hist[AW_BUFFERS + 1];
+    UINT32  Starved;                    /* passes with EVERY buffer handed back    */
+    UINT32  DrainMax;                   /* worst simultaneous handed-back count    */
+    UINT32  DrainHistogram[AUDIO_WAVE_BUFFERS + 1];
     /* ── ⚠ THE DEVICE HAS ITS OWN VOLUME, AND IT IS NOT OURS. ────────────────
          Everything this struct measures can be perfect -- buffers written,
          handed back, never starved -- while the machine is silent, because the
@@ -94,58 +94,59 @@ typedef struct audio_wave {
          THE DRIVER and print the answer. 0xFFFF is full scale per channel.
        ⚠ We only READ it. Turning a user's volume up because our test wants to be
          heard is not a fix, it is a surprise. */
-    uint32_t  dev_volume;               /* waveOutGetVolume: right<<16 | left      */
-    int       dev_volume_ok;            /* 0 = the driver would not tell us        */
-    uint32_t  nbufs;                    /* buffers actually queued: the LEAD     */
-    uint32_t  nframes;                  /* frames per buffer: the GRANULARITY    */
+    UINT32  DeviceVolume;               /* waveOutGetVolume: right<<16 | left      */
+    INT       IsDeviceVolumeKnown;      /* 0 = the driver would not tell us        */
+    UINT32  BufferCount;                /* buffers actually queued: the LEAD     */
+    UINT32  FrameCount;                 /* frames per buffer: the GRANULARITY    */
     /* #234 (docs/EMULATION.md): WinMM or DirectSound. Set by the caller BEFORE
-       audio_wave_start (preserved across its zeroing, like nbufs); `using_ds` says
+       AudioWaveStart (preserved across its zeroing, like BufferCount); `IsUsingDirectSound` says
        which one actually opened -- DirectSound falls back to WinMM if it will not. */
-    int       want_ds;
-    int       using_ds;
-    void     *ds, *dsb;                 /* IDirectSound, IDirectSoundBuffer      */
-    uint32_t  ds_bytes, ds_wpos;        /* ring size, next byte we write         */
+    INT       WantsDirectSound;
+    INT       IsUsingDirectSound;
+    PVOID DirectSound, DirectSoundBuffer;                 /* IDirectSound, IDirectSoundBuffer      */
+    UINT32  DirectSoundBytes, DirectSoundWritePosition;        /* ring size, next byte we write         */
     /* #136: Settings > Audio > MIDI (MIDI_ROUTE_*, midi_route.h). Set by the caller
-       BEFORE audio_wave_start and preserved across its zeroing, like want_ds. 0 = Host
+       BEFORE AudioWaveStart and preserved across its zeroing, like WantsDirectSound. 0 = Host
        GM = device 0 without enumerating, which is every build so far. The rest is what
        happened, for the log: the device opened (-1 = none), whether it is an EXTERNAL
        synth that was found by name (=> it gets SysEx), how many devices there were,
        and the opened device's name. */
-    int       midi_choice;
-    int       midi_dev;
-    int       midi_ext;
-    uint32_t  midi_ndevs;
-    char      midi_name[32];
-    uint32_t  sysex_sent, sysex_dropped;
+    INT       MidiChoice;
+    INT       MidiDevice;
+    INT       IsMidiExternal;
+    UINT32  MidiDeviceCount;
+    char      MidiName[32];         /* `char`, not CHAR: CHAR here moved code in AudioWaveStart (s93) */
+    UINT32  SysExSent, SysExDropped;
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
-    unsigned char hdr[AW_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */
-    int16_t   buf[AW_BUFFERS][AW_FRAMES * AW_CHANNELS];   /* interleaved L/R */
-} audio_wave;
+    BYTE Headers[AUDIO_WAVE_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */
+    INT16   Buffers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_FRAMES * AUDIO_WAVE_CHANNELS];   /* interleaved L/R */
+} AUDIO_WAVE, *PAUDIO_WAVE;
+typedef const AUDIO_WAVE *PCAUDIO_WAVE;
 
 /* Start the audio pump. Returns 0 on success, 1 if it fell back to silent pumping
    (still a success as far as the guest is concerned). */
-int  audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx);
-void audio_wave_stop(audio_wave *aw);
+INT  AudioWaveStart(_Inout_ PAUDIO_WAVE wave, _In_ UINT32 sampleHz, _In_ PAUDIO_WAVE_FILL_ROUTINE fill, _In_opt_ PVOID context);
+VOID AudioWaveStop(_Inout_ PAUDIO_WAVE wave);
 
 /* Send one packed MIDI short message (status | d1<<8 | d2<<16) to the host synth.
    Safe to call when MIDI never opened -- it is simply dropped. */
-void audio_wave_midi(audio_wave *aw, uint32_t msg);
+VOID AudioWaveMidi(_In_ PAUDIO_WAVE wave, _In_ UINT32 message);
 /* #136: one complete SysEx message (F0 .. F7) to the host synth, through midiOutLongMsg.
-   Only ever wired for an external synth (aw->midi_ext). Never blocks: the buffer is
+   Only ever wired for an external synth (wave->IsMidiExternal). Never blocks: the buffer is
    copied into one of a few slots, and a message that finds every slot still queued in
-   the driver is dropped and counted (sysex_dropped) rather than waited for, because
+   the driver is dropped and counted (SysExDropped) rather than waited for, because
    this runs on the exec thread inside a port trap. */
-void audio_wave_midi_long(audio_wave *aw, const uint8_t *msg, uint32_t len);
+VOID AudioWaveMidiLong(_Inout_ PAUDIO_WAVE wave, _In_reads_(length) const BYTE *message, _In_ UINT32 length);
 /* #214: silence the host synth -- sustain up, all sound/notes off, controllers reset on
    all 16 channels, then midiOutReset. Called whenever a program is torn down. */
-void audio_wave_midi_silence(audio_wave *aw);
+VOID AudioWaveMidiSilence(_In_ PAUDIO_WAVE wave);
 
 /* Record exactly what reaches waveOut to a mono 16-bit .WAV (s81; see audio_rec.h).
    start: 0 = recording, -1 = already recording / cannot create. stop: samples written. */
-int      aw_rec_start(const char *path, uint32_t hz);
-uint32_t aw_rec_stop(void);
-int      aw_rec_active(void);
-uint32_t aw_rec_dropped(void);
+INT      AudioWaveRecordStart(_In_ PCSTR path, _In_ UINT32 sampleHz);
+UINT32 AudioWaveRecordStop(VOID);
+INT      AudioWaveIsRecording(VOID);
+UINT32 AudioWaveRecordDropped(VOID);
 
 #endif /* NTVDMEX_AUDIO_WAVE_H */

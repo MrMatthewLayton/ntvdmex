@@ -13,11 +13,11 @@
  * underrun only while recording, the one time someone is listening closely. So the audio
  * thread only copies into a lock-free single-producer/single-consumer ring, and a writer
  * thread at normal priority drains it to disk. A full ring DROPS samples and counts them,
- * rather than blocking the audio thread; `dropped` is reported so a recording with holes
+ * rather than blocking the audio thread; `Dropped` is reported so a recording with holes
  * says so.
  *
  * One recorder per process -- so this header is included by ONE translation unit only,
- * audio_wave.c (the feeder), which exports aw_rec_* for everyone else. Including it a
+ * audio_wave.c (the feeder), which exports AudioWaveRecord* for everyone else. Including it a
  * second time would silently create a second, unfed recorder.
  */
 #ifndef NTVDMEX_AUDIO_REC_H
@@ -26,118 +26,119 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define AREC_RING (1u << 18)                 /* 262144 samples: ~3 s of stereo at 44.1 kHz */
+#define AUDIO_RECORDER_RING (1u << 18)       /* 262144 samples: ~3 s of stereo at 44.1 kHz */
 
-typedef struct audio_rec {
-    HANDLE          file, thread;
-    volatile LONG   active;                  /* 1 = the audio thread may feed      */
-    volatile LONG   stopping;                /* 1 = writer: drain, finish, exit    */
-    volatile LONG   head, tail;              /* ring indices (mod AREC_RING)       */
-    uint32_t        hz;
-    uint32_t        data_bytes;              /* written to disk so far             */
-    uint32_t        dropped;                 /* samples lost to a full ring        */
-    int16_t         ring[AREC_RING];
-} audio_rec;
+typedef struct _AUDIO_RECORDER {
+    HANDLE          File, Thread;
+    volatile LONG   IsActive;                /* 1 = the audio thread may feed      */
+    volatile LONG   IsStopping;              /* 1 = writer: drain, finish, exit    */
+    volatile LONG   Head, Tail;              /* ring indices (mod AUDIO_RECORDER_RING)       */
+    UINT32        SampleHz;
+    UINT32        DataBytes;                 /* written to disk so far             */
+    UINT32        Dropped;                   /* samples lost to a full ring        */
+    INT16         Ring[AUDIO_RECORDER_RING];
+} AUDIO_RECORDER, *PAUDIO_RECORDER;
+typedef const AUDIO_RECORDER *PCAUDIO_RECORDER;
 
-static audio_rec g_arec;
+static AUDIO_RECORDER g_AudioRecorder;
 
-static void arec_put32(BYTE *b, uint32_t v)
-{ b[0] = (BYTE)v; b[1] = (BYTE)(v >> 8); b[2] = (BYTE)(v >> 16); b[3] = (BYTE)(v >> 24); }
-static void arec_put16(BYTE *b, uint32_t v) { b[0] = (BYTE)v; b[1] = (BYTE)(v >> 8); }
+static VOID AudioRecorderPut32(BYTE *bytes, UINT32 value)
+{ bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> 8); bytes[2] = (BYTE)(value >> 16); bytes[3] = (BYTE)(value >> 24); }
+static VOID AudioRecorderPut16(BYTE *bytes, UINT32 value) { bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> 8); }
 
 /* The canonical 44-byte PCM header; sizes are patched when the recording stops. */
-static void arec_header(BYTE h[44], uint32_t hz, uint32_t data)
+static VOID AudioRecorderHeader(BYTE header[44], UINT32 sampleHz, UINT32 dataBytes)
 {
-    static const char tag[] = "RIFF....WAVEfmt ";
-    int i;
-    for (i = 0; i < 16; ++i) h[i] = (BYTE)tag[i];
-    arec_put32(h + 4, 36 + data);
-    arec_put32(h + 16, 16);                  /* fmt chunk size   */
-    arec_put16(h + 20, 1);                   /* PCM              */
-    arec_put16(h + 22, 2);                   /* stereo (#189)    */
-    arec_put32(h + 24, hz);
-    arec_put32(h + 28, hz * 4);              /* bytes per second */
-    arec_put16(h + 32, 4);                   /* block align: L+R */
-    arec_put16(h + 34, 16);                  /* bits per sample  */
-    h[36] = 'd'; h[37] = 'a'; h[38] = 't'; h[39] = 'a';
-    arec_put32(h + 40, data);
+    static const CHAR tag[] = "RIFF....WAVEfmt ";
+    INT byteIndex;
+    for (byteIndex = 0; byteIndex < 16; ++byteIndex) header[byteIndex] = (BYTE)tag[byteIndex];
+    AudioRecorderPut32(header + 4, 36 + dataBytes);
+    AudioRecorderPut32(header + 16, 16);     /* fmt chunk size   */
+    AudioRecorderPut16(header + 20, 1);      /* PCM              */
+    AudioRecorderPut16(header + 22, 2);      /* stereo (#189)    */
+    AudioRecorderPut32(header + 24, sampleHz);
+    AudioRecorderPut32(header + 28, sampleHz * 4);              /* bytes per second */
+    AudioRecorderPut16(header + 32, 4);      /* block align: L+R */
+    AudioRecorderPut16(header + 34, 16);     /* bits per sample  */
+    header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
+    AudioRecorderPut32(header + 40, dataBytes);
 }
 
 /* Drain whatever is in the ring to the file. Writer thread only. */
-static void arec_drain(audio_rec *r)
+static VOID AudioRecorderDrain(PAUDIO_RECORDER recorder)
 {
     for (;;) {
-        LONG t = r->tail, h = r->head;
-        DWORD n, wr = 0;
-        if (t == h) return;
-        n = (DWORD)((h > t) ? (h - t) : ((LONG)AREC_RING - t));   /* contiguous run */
-        WriteFile(r->file, &r->ring[t], n * sizeof(int16_t), &wr, NULL);
-        r->data_bytes += wr;
-        InterlockedExchange(&r->tail, (LONG)((t + (LONG)n) & (AREC_RING - 1)));
+        LONG tail = recorder->Tail, head = recorder->Head;
+        DWORD count, written = 0;
+        if (tail == head) return;
+        count = (DWORD)((head > tail) ? (head - tail) : ((LONG)AUDIO_RECORDER_RING - tail));   /* contiguous run */
+        WriteFile(recorder->File, &recorder->Ring[tail], count * sizeof(INT16), &written, NULL);
+        recorder->DataBytes += written;
+        InterlockedExchange(&recorder->Tail, (LONG)((tail + (LONG)count) & (AUDIO_RECORDER_RING - 1)));
     }
 }
 
-static DWORD WINAPI arec_writer(LPVOID pv)
+static DWORD WINAPI AudioRecorderWriter(LPVOID parameter)
 {
-    audio_rec *r = (audio_rec *)pv;
+    PAUDIO_RECORDER recorder = (PAUDIO_RECORDER)parameter;
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-    while (!r->stopping) { arec_drain(r); Sleep(50); }
-    arec_drain(r);
+    while (!recorder->IsStopping) { AudioRecorderDrain(recorder); Sleep(50); }
+    AudioRecorderDrain(recorder);
     return 0;
 }
 
-static int audio_rec_active(void) { return g_arec.active != 0; }
+static INT AudioRecorderIsActive(VOID) { return g_AudioRecorder.IsActive != 0; }
 
 /* Start recording to `path`. 0 = started; -1 = already recording or cannot create. */
-static int audio_rec_start(const char *path, uint32_t hz)
+static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
 {
-    audio_rec *r = &g_arec;
-    BYTE h[44]; DWORD wr = 0;
-    if (r->active || r->file) return -1;
-    r->file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+    PAUDIO_RECORDER recorder = &g_AudioRecorder;
+    BYTE header[44]; DWORD written = 0;
+    if (recorder->IsActive || recorder->File) return -1;
+    recorder->File = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                           FILE_ATTRIBUTE_NORMAL, NULL);
-    if (r->file == INVALID_HANDLE_VALUE) { r->file = 0; return -1; }
-    r->hz = hz ? hz : 44100;
-    r->head = r->tail = 0; r->data_bytes = 0; r->dropped = 0; r->stopping = 0;
-    arec_header(h, r->hz, 0);
-    WriteFile(r->file, h, sizeof h, &wr, NULL);
-    r->thread = CreateThread(NULL, 0, arec_writer, r, 0, NULL);
-    if (!r->thread) { CloseHandle(r->file); r->file = 0; return -1; }
-    InterlockedExchange(&r->active, 1);
+    if (recorder->File == INVALID_HANDLE_VALUE) { recorder->File = 0; return -1; }
+    recorder->SampleHz = sampleHz ? sampleHz : 44100;
+    recorder->Head = recorder->Tail = 0; recorder->DataBytes = 0; recorder->Dropped = 0; recorder->IsStopping = 0;
+    AudioRecorderHeader(header, recorder->SampleHz, 0);
+    WriteFile(recorder->File, header, sizeof header, &written, NULL);
+    recorder->Thread = CreateThread(NULL, 0, AudioRecorderWriter, recorder, 0, NULL);
+    if (!recorder->Thread) { CloseHandle(recorder->File); recorder->File = 0; return -1; }
+    InterlockedExchange(&recorder->IsActive, 1);
     return 0;
 }
 
 /* Stop, flush, patch the sizes, close. Safe to call when not recording. Returns the
    number of samples written (0 if nothing was recording). */
-static uint32_t audio_rec_stop(void)
+static UINT32 AudioRecorderStop(VOID)
 {
-    audio_rec *r = &g_arec;
-    BYTE h[44]; DWORD wr = 0;
-    if (!r->file) return 0;
-    InterlockedExchange(&r->active, 0);        /* the audio thread stops feeding   */
-    InterlockedExchange(&r->stopping, 1);
-    WaitForSingleObject(r->thread, 2000);
-    CloseHandle(r->thread); r->thread = 0;
-    arec_drain(r);                             /* anything fed after the last pass */
-    arec_header(h, r->hz, r->data_bytes);
-    SetFilePointer(r->file, 0, NULL, FILE_BEGIN);
-    WriteFile(r->file, h, sizeof h, &wr, NULL);
-    CloseHandle(r->file); r->file = 0;
-    return r->data_bytes / 4;                  /* frames (L/R pairs) */
+    PAUDIO_RECORDER recorder = &g_AudioRecorder;
+    BYTE header[44]; DWORD written = 0;
+    if (!recorder->File) return 0;
+    InterlockedExchange(&recorder->IsActive, 0);        /* the audio thread stops feeding   */
+    InterlockedExchange(&recorder->IsStopping, 1);
+    WaitForSingleObject(recorder->Thread, 2000);
+    CloseHandle(recorder->Thread); recorder->Thread = 0;
+    AudioRecorderDrain(recorder);              /* anything fed after the last pass */
+    AudioRecorderHeader(header, recorder->SampleHz, recorder->DataBytes);
+    SetFilePointer(recorder->File, 0, NULL, FILE_BEGIN);
+    WriteFile(recorder->File, header, sizeof header, &written, NULL);
+    CloseHandle(recorder->File); recorder->File = 0;
+    return recorder->DataBytes / 4;            /* frames (L/R pairs) */
 }
 
 /* Audio thread: copy `n` samples in, or drop them if the ring is full. Never blocks. */
-static void audio_rec_feed(const int16_t *s, uint32_t n)
+static VOID AudioRecorderFeed(const INT16 *samples, UINT32 count)
 {
-    audio_rec *r = &g_arec;
-    uint32_t i;
-    LONG h, t, room;
-    if (!r->active) return;
-    h = r->head; t = r->tail;
-    room = (LONG)(AREC_RING - 1) - ((h - t) & (LONG)(AREC_RING - 1));
-    if ((LONG)n > room) { r->dropped += n; return; }
-    for (i = 0; i < n; ++i) r->ring[(h + (LONG)i) & (AREC_RING - 1)] = s[i];
-    InterlockedExchange(&r->head, (LONG)((h + (LONG)n) & (AREC_RING - 1)));
+    PAUDIO_RECORDER recorder = &g_AudioRecorder;
+    UINT32 sampleIndex;
+    LONG head, tail, room;
+    if (!recorder->IsActive) return;
+    head = recorder->Head; tail = recorder->Tail;
+    room = (LONG)(AUDIO_RECORDER_RING - 1) - ((head - tail) & (LONG)(AUDIO_RECORDER_RING - 1));
+    if ((LONG)count > room) { recorder->Dropped += count; return; }
+    for (sampleIndex = 0; sampleIndex < count; ++sampleIndex) recorder->Ring[(head + (LONG)sampleIndex) & (AUDIO_RECORDER_RING - 1)] = samples[sampleIndex];
+    InterlockedExchange(&recorder->Head, (LONG)((head + (LONG)count) & (AUDIO_RECORDER_RING - 1)));
 }
 
 #endif

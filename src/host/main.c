@@ -269,7 +269,7 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
 #define NOGUS_FLAG   CFG_("nogus.flag")
 #define SBDUMP_PATH  OUT_("sb.raw")
-/* s81: record the audio output (audio_rec.h via aw_rec_*). The flag is the harness's
+/* s81: record the audio output (audio_rec.h via AudioWaveRecord*). The flag is the harness's
    switch; Tools > Capture > Record Audio will drive the same recorder. */
 #define WAVREC_FLAG  CFG_("wavrec.flag")
 #define WAVREC_PATH  OUT_("capture_audio.wav")
@@ -1075,7 +1075,7 @@ static int          g_joy_povmap;   /* JoystickGamepad: map the pad's D-pad
 static DWORD g_wowfold_seen[WOWFOLD_SLOTS];
 static int   g_wowfold_mute;
 static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF */
-static AUDIO_STATE  g_audio;     static audio_wave g_wave;
+static AUDIO_STATE  g_audio;     static AUDIO_WAVE g_wave;
 static present_ddraw g_pd;
 static DOS_XMS_STATE    g_xms;       /* M4: XMS extended-memory manager           */
 static void        *g_hma;       /* the HMA at linear 0x100000, 0 = unavailable */
@@ -4657,7 +4657,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
            running, so it is left alone. */
         if (!m->tsr_pending) {
             unsigned ch;
-            audio_wave_midi_silence(&g_wave);
+            AudioWaveMidiSilence(&g_wave);
             HOST_LOCK();
             (void)ch;
             VddOplAllNotesOff(&g_opl);              /* both banks, and the rhythm drums (#232) */
@@ -6939,15 +6939,15 @@ static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 static void host_midi_sink(void *ctx, uint32_t msg)
 {
     (void)ctx;
-    audio_wave_midi(&g_wave, msg);
+    AudioWaveMidi(&g_wave, msg);
 }
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
-   synth by name (g_wave.midi_ext) -- see midi_route.h. Otherwise SysEx is swallowed in
+   synth by name (g_wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
    vdd_mpu exactly as it always was. */
 static void host_midi_sysex(void *ctx, const uint8_t *msg, uint32_t len)
 {
     (void)ctx;
-    audio_wave_midi_long(&g_wave, msg, len);
+    AudioWaveMidiLong(&g_wave, msg, len);
 }
 
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
@@ -7065,12 +7065,12 @@ static void host_rec_toggle(void)
 {
     static int seq = 0;
     char path[MAX_PATH], *q;
-    if (aw_rec_active()) { host_rec_finish(); return; }
+    if (AudioWaveIsRecording()) { host_rec_finish(); return; }
     q = zput(path, NTVDMEX_OUT); q = zput(q, "capture_audio_");
     *q++ = (char)('0' + (seq / 10) % 10); *q++ = (char)('0' + seq % 10);
     q = zput(q, ".wav");
     ++seq;
-    if (aw_rec_start(path, g_wave.hz) == 0) {
+    if (AudioWaveRecordStart(path, g_wave.SampleHz) == 0) {
         char lb[MAX_PATH + 64], *lq = zput(lb, "STAGE2: audio recording started -> ");
         lq = zput(lq, path); lq = zput(lq, "\r\n"); log_append(LOG_PATH, lb, lq);
     }
@@ -7536,9 +7536,9 @@ static void host_rec_finish(void)
 {
     char rb[160], *rq = rb;
     uint32_t n, dr;
-    if (!aw_rec_active()) return;
-    dr = aw_rec_dropped();
-    n  = aw_rec_stop();
+    if (!AudioWaveIsRecording()) return;
+    dr = AudioWaveRecordDropped();
+    n  = AudioWaveRecordStop();
     rq = zput(rq, "STAGE2: audio recording closed: frames=0x"); rq = zhex(rq, n);   /* stereo L/R pairs (#189) */
     rq = zput(rq, " dropped=0x"); rq = zhex(rq, dr);
     rq = zput(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
@@ -7788,7 +7788,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
         q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
         q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-        q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.silent);
+        q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.IsSilent);
         q = zput(q, " mixed=0x");        q = zhex(q, g_audio.FramesMixed);
         q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.DspWrites);
         q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.Blocks);
@@ -11191,7 +11191,7 @@ static void menu_sync_modal(HWND h, HMENU popup)
     flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
-    CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (aw_rec_active() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED) {
         if (!g_sel_on) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
@@ -11922,7 +11922,7 @@ static void host_fullscreen_toggle(HWND h)
                        approximate-speed dropdown, and because a real CPU cannot be
                        clocked down it is a DUTY CYCLE -- see src/host/cpuspeed.h,
                        which also carries the one calibration constant.
-       ★ #136 (s92): ConventionalKB (g_dos_mem_top, start-up only), Midi (aw_midi_open,
+       ★ #136 (s92): ConventionalKB (g_dos_mem_top, start-up only), Midi (AudioWaveMidiOpen,
                        start-up only), SeamlessMouse (capture_allowed) are live; so are
                        HostCursorMode and FloppyUsePhysical, which were read here since s84.
        STILL STORED ONLY, each for a reason the startup report prints (settings_dead_why):
@@ -12073,7 +12073,7 @@ static const BYTE SET_LIVE_IDS[] = {
     /* #136 (s92). HostCursorMode and FloppyUsePhysical were READ by settings_apply since
        s84 and simply never listed here, so the report called two working rows dead.
        ConventionalKB, Midi and SeamlessMouse are new consumers: g_dos_mem_top,
-       aw_midi_open, capture_allowed. */
+       AudioWaveMidiOpen, capture_allowed. */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
 };
@@ -13355,7 +13355,7 @@ static void host_pause_set(int on)
         InterlockedExchange(&g_pause_want, 1);
         g_pause_ms = GetTickCount();
         ++g_pause_n;
-        audio_wave_midi_silence(&g_wave);
+        AudioWaveMidiSilence(&g_wave);
         if (g_spk_real) pcspk_set(&g_pcspk, 0);
         for (i = 0; i < 200 && g_pause_want; ++i) {
             CONTEXT cx;
@@ -14447,7 +14447,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (g_cpuspd_periods) cpuspd_tl_dump("CLOSE2:"); }
         /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
            Closing the window used to leave notes sounding until the host was
-           restarted (user, 2026-08-21). Nothing ever called audio_wave_stop -- it
+           restarted (user, 2026-08-21). Nothing ever called AudioWaveStop -- it
            existed and had no caller -- so waveOut kept playing, and the mixer kept
            being asked for samples from an OPL whose voices were still keyed on. A
            sustaining voice (EGT=1) holds its level forever by design, so "forever"
@@ -14458,7 +14458,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
         host_rec_finish();       /* before the device stops feeding it */
-        audio_wave_stop(&g_wave);
+        AudioWaveStop(&g_wave);
         /* ⚠ AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
              keeps sounding after the process that started it exits -- the note
              under the cursor would outlive the host and only a reboot would clear
@@ -32196,7 +32196,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        every log_write() before then TRUNCATES the file.) */
     /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
        walks the SB's DMA buffer and raises the block-completion IRQ, so it must
-       run even if no sound device opens (audio_wave falls back to silent
+       run even if no sound device opens (AUDIO_WAVE falls back to silent
        pumping) -- otherwise every SB game hangs on a machine without audio. */
     VddAudioInitialize(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
     VddAudioSetGus(&g_audio, g_gus_on ? &g_gus : NULL);
@@ -32222,7 +32222,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (c[i] < '0' || c[i] > '9') break;
               v = v * 10 + (DWORD)(c[i] - '0');
           }
-          g_wave.nbufs = v;                   /* audio_wave_start clamps to [2,AW_BUFFERS] */
+          g_wave.BufferCount = v;                   /* AudioWaveStart clamps to [2,AUDIO_WAVE_BUFFERS] */
       } }
     /* ── AND THE GRANULARITY, AS A SEPARATE CONTROLLED VARIABLE (awframes.txt). ──────
          nframes x nbufs is the LEAD; nframes alone is the STEP the guest's DMA read
@@ -32241,7 +32241,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (c[i] < '0' || c[i] > '9') break;
               v = v * 10 + (DWORD)(c[i] - '0');
           }
-          g_wave.nframes = v;                 /* clamped to [AW_MIN_FRAMES,AW_FRAMES] */
+          g_wave.FrameCount = v;                 /* clamped to [AUDIO_WAVE_MIN_FRAMES,AUDIO_WAVE_FRAMES] */
       } }
     { HANDLE hp2 = CreateFileA(PITPACE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
@@ -32464,40 +32464,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
-    g_wave.want_ds = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
-    g_wave.force_silent = g_safe.AudioOut;                 /* s90 #132: SAFE MODE */
-    g_wave.midi_choice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
-    audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    g_wave.WantsDirectSound = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
+    g_wave.IsForcedSilent = g_safe.AudioOut;                 /* s90 #132: SAFE MODE */
+    g_wave.MidiChoice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
+    AudioWaveStart(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
          Host GM (the default) opens device 0 as it always did and logs nothing new. */
-    if (g_wave.midi_choice != MIDI_ROUTE_GM) {
+    if (g_wave.MidiChoice != MIDI_ROUTE_GM) {
         char mb[200], *mq = zput(mb, "STAGE2: MIDI = ");
-        mq = zput(mq, g_wave.midi_choice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
-        if (g_wave.midi_ext) {
-            mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.midi_dev);
-            mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\", SysEx passed through");
+        mq = zput(mq, g_wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
+        if (g_wave.IsMidiExternal) {
+            mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.MidiDevice);
+            mq = zput(mq, " \""); mq = zput(mq, g_wave.MidiName); mq = zput(mq, "\", SysEx passed through");
             g_mpu.SysExSink = host_midi_sysex;     /* the MPU is on the bus already; no */
             g_gusmidi.SysExSink = host_midi_sysex; /* guest code has run yet            */
         } else {
-            mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.midi_ndevs);
+            mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.MidiDeviceCount);
             mq = zput(mq, " -> Host GM (device 0");
-            if (g_wave.midi_name[0]) { mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\""); }
-            mq = zput(mq, g_wave.midi_dev < 0 ? ", would not open)" : ")");
+            if (g_wave.MidiName[0]) { mq = zput(mq, " \""); mq = zput(mq, g_wave.MidiName); mq = zput(mq, "\""); }
+            mq = zput(mq, g_wave.MidiDevice < 0 ? ", would not open)" : ")");
         }
-        if (g_wave.midi_choice == MIDI_ROUTE_SF2)
+        if (g_wave.MidiChoice == MIDI_ROUTE_SF2)
             mq = zput(mq, "; SoundFontPath is not passed on -- the driver keeps its own list");
         mq = zput(mq, " (#136)\r\n"); log_append(LOG_PATH, mb, mq);
     }
     {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
-        aq = zput(aq, g_wave.using_ds ? "DirectSound" : g_wave.silent ? "none (silent pump)" : "WinMM");
-        if (g_wave.want_ds && !g_wave.using_ds) aq = zput(aq, " (DirectSound asked for, would not open)");
+        aq = zput(aq, g_wave.IsUsingDirectSound ? "DirectSound" : g_wave.IsSilent ? "none (silent pump)" : "WinMM");
+        if (g_wave.WantsDirectSound && !g_wave.IsUsingDirectSound) aq = zput(aq, " (DirectSound asked for, would not open)");
         aq = zput(aq, "\r\n"); log_append(LOG_PATH, ab, aq); }
     /* cfg\wavrec.flag: record the whole run's audio -- see host_rec_finish. */
     if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
-        int rr = aw_rec_start(WAVREC_PATH, g_wave.hz);
+        int rr = AudioWaveRecordStart(WAVREC_PATH, g_wave.SampleHz);
         p = zput(p, rr == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
                             : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
-        p = zdec(p, g_wave.hz); p = zput(p, " Hz\r\n");
+        p = zdec(p, g_wave.SampleHz); p = zput(p, " Hz\r\n");
     }
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
@@ -36254,7 +36254,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              : g_start_mode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
                                                        " output, real speaker, joystick, WOW"
                                                        " shims, fullscreen)" : "normal");
-    p = zput(p, g_wave.using_ds ? " [audio: DirectSound]" : g_wave.silent ? " [audio: no device, silent pump]"
+    p = zput(p, g_wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_wave.IsSilent ? " [audio: no device, silent pump]"
                                                                           : " [audio: WinMM]");
     p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
     pcspk_close(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
@@ -36748,7 +36748,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "/");              p = zhex(p, g_sb.LapTotal);
         p = zput(p, " ring=");         p = zhex(p, g_sb.LapLength);
         p = zput(p, " toobig=");       p = zhex(p, g_sb.LapTooBig);
-        p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.nbufs);
+        p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.BufferCount);
         /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
              reflected to a client's own PM handler is counted per (vector, AH) even once
              the per-pair line budget is spent, and this is where the counts come back.
@@ -36862,14 +36862,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              driver ran out of data and played silence -- an audible gap that no
              ring-side counter can show. `drain` is the margin: its mass sitting at
              nbufs-1 is one buffer from silence even when starved reads 0. */
-        p = zput(p, " QUEUE: starved="); p = zhex(p, g_wave.starved);
-        p = zput(p, " drain_max=");      p = zhex(p, g_wave.drain_max);
-        p = zput(p, " wr_fail=");        p = zhex(p, g_wave.underruns);
+        p = zput(p, " QUEUE: starved="); p = zhex(p, g_wave.Starved);
+        p = zput(p, " drain_max=");      p = zhex(p, g_wave.DrainMax);
+        p = zput(p, " wr_fail=");        p = zhex(p, g_wave.Underruns);
         p = zput(p, " drain_hist=");
-        { uint32_t db; for (db = 0; db <= g_wave.nbufs && db <= AW_BUFFERS; ++db) {
-              p = zput(p, db ? "," : ""); p = zhex(p, g_wave.drain_hist[db]); } }
-        p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.nbufs);
-        p = zput(p, " nframes=");     p = zhex(p, g_wave.nframes);
+        { uint32_t db; for (db = 0; db <= g_wave.BufferCount && db <= AUDIO_WAVE_BUFFERS; ++db) {
+              p = zput(p, db ? "," : ""); p = zhex(p, g_wave.DrainHistogram[db]); } }
+        p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.BufferCount);
+        p = zput(p, " nframes=");     p = zhex(p, g_wave.FrameCount);
         p = zput(p, " GATE: on="); p = zhex(p, (DWORD)g_sb.GateMode);
         p = zput(p, " stalled_samples="); p = zhex(p, g_sb.GateStalled);
         p = zput(p, " FORCED="); p = zhex(p, g_sb.GateForced);
@@ -37036,9 +37036,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " dropped_unhooked="); p = zhex(p, g_pm_devirq_drop);
         p = zput(p, "\r\nSTAGE2: sound2: ");
         p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.IsUartMode);
-        p = zput(p, " host_wave=");               p = zput(p, g_wave.silent ? "SILENT" : "open");
-        p = zput(p, " host_midi=");               p = zput(p, g_wave.hmidi ? "open" : "NONE");
-        p = zput(p, " underruns=");               p = zhex(p, g_wave.underruns);
+        p = zput(p, " host_wave=");               p = zput(p, g_wave.IsSilent ? "SILENT" : "open");
+        p = zput(p, " host_midi=");               p = zput(p, g_wave.MidiOut ? "open" : "NONE");
+        p = zput(p, " underruns=");               p = zhex(p, g_wave.Underruns);
         p = zput(p, "\r\n");
         /* ► THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
              per completed block for the first few: where the capture stood, what the
@@ -37100,9 +37100,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " refused=");              p = zhex(p, g_pcspk.fails);
     p = zput(p, " last_hz=");              p = zhex(p, g_pcspk.cur_hz);
     p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.dev_volume_ok);
-    p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.dev_volume);
-    p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.silent);
+    p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.IsDeviceVolumeKnown);
+    p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.DeviceVolume);
+    p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.IsSilent);
     p = zput(p, "\r\n");
     p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.Speaker ? 1 : 0));
     p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.SpeakerLevel);
