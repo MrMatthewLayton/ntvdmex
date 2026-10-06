@@ -1,7 +1,7 @@
 /* bios_kbdact.h -- the BIOS INT 09h's side-calls (INT 1Bh, INT 05h, INT 15h AH=85h,
  * the pause loop) as guest code the host plants. GH #254. Source and rationale:
  * bios_kbdact.asm. Lives at DOS_CTAB_SEG:DOS_KBDACT_OFF (dos_layout.h); the V86
- * INT 09h arm resumes the guest at an entry when vdd_input_bios_consume() asks.
+ * INT 09h arm resumes the guest at an entry when VddInputBiosConsume() asks.
  * #244 added k4f (the INT 15h AH=4Fh intercept call) and #274 p5 (the default INT 05h,
  * print screen). All three BOP sites are BOP 09h, told apart by ADDRESS.
  * tests/unit/kbdact_test.c runs these bytes.

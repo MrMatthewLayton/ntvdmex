@@ -910,7 +910,7 @@ static FDC_STATE    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static PIC_STATE    g_pic;       static NTVDD_DEVICE g_pic_dev;
 static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
-static input_state  g_in;        static NTVDD_DEVICE g_in_dev;
+static INPUT_STATE  g_in;        static NTVDD_DEVICE g_in_dev;
 static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
 /* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
    this drives Beep.sys. They are independent -- "Both" means both. */
@@ -3078,11 +3078,11 @@ static int kbdact_entry(int act)
 {
     unsigned vec;
     switch (act) {
-    case KB_ACT_BREAK:  vec = 0x1B; break;
-    case KB_ACT_PRTSC:  vec = 0x05; break;
-    case KB_ACT_SYSRQ_D: return BIOS_KEYBOARD_ACTION_SYSREQ_DOWN;
-    case KB_ACT_SYSRQ_U: return BIOS_KEYBOARD_ACTION_SYSREQ_UP;
-    case KB_ACT_PAUSE:  return BIOS_KEYBOARD_ACTION_PAUSE;
+    case INPUT_ACTION_BREAK:  vec = 0x1B; break;
+    case INPUT_ACTION_PRINT_SCREEN:  vec = 0x05; break;
+    case INPUT_ACTION_SYSREQ_DOWN: return BIOS_KEYBOARD_ACTION_SYSREQ_DOWN;
+    case INPUT_ACTION_SYSREQ_UP: return BIOS_KEYBOARD_ACTION_SYSREQ_UP;
+    case INPUT_ACTION_PAUSE:  return BIOS_KEYBOARD_ACTION_PAUSE;
     default:            return -1;
     }
     {   WORD off = *(volatile WORD *)(ULONG_PTR)(vec * 4);
@@ -3097,7 +3097,7 @@ static int kbdact_entry(int act)
         if (seg >= 0xF000) return -1;
         if (t[0] == 0xC4 && t[1] == 0xC4 && seg != DOS_HDLR_SEG && seg != DOS_CTAB_SEG) return -1;
     }
-    return act == KB_ACT_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
+    return act == INPUT_ACTION_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
 }
 
 /* ── #244: IS INT 15h STILL OURS? ─────────────────────────────────────────────────────
@@ -4395,7 +4395,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
         /* One pending interrupt at a time: the 8042 has a single output buffer, and the
            input VDD now re-raises as the guest drains it, so this can never legitimately
            run ahead. (The earlier cap-with-a-backlog is what stranded break codes and
-           killed the arrow keys -- see vdd_input_push_scancode.) */
+           killed the arrow keys -- see VddInputPushScanCode.) */
         if (g_irq1_pending < 1) InterlockedIncrement(&g_irq1_pending);
         /* ── THREE FIXES FOR THE V86 KEY-DELIVERY LAG, ALL MEASURED, ALL REFUTED. ──────
              Symptom (headless repro: tests/probes/dos/skyroads-play.keys, pacer on):
@@ -5858,10 +5858,10 @@ static int host_conin(void *ctx)
     if (g_stdin_h) return stdin_read_byte();
     for (;;) {
         HOST_LOCK();
-        got = vdd_input_pop(&g_in, &k);
+        got = VddInputPop(&g_in, &k);
         HOST_UNLOCK();
         if (got) {
-            k = vdd_input_dos_key(k);           /* #254: grey-key E0 forms -> 83-key */
+            k = VddInputDosKey(k);           /* #254: grey-key E0 forms -> 83-key */
             if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
             return k & 0xFF;
         }
@@ -7132,8 +7132,8 @@ static void planes_dump_beside(const char *bmp_path)
 static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
 {
     HOST_LOCK();
-    if (ext) vdd_input_push_scancode(&g_in, 0xE0);
-    vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
+    if (ext) VddInputPushScanCode(&g_in, 0xE0);
+    VddInputPushScanCode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
     HOST_UNLOCK();
     keylat_push();                  /* start the clock on this keystroke's delivery */
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
@@ -7222,13 +7222,13 @@ static void host_key_typematic_release(uint8_t sc, int ext)
 
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
 /* The 8042 presents the next queued scancode only after the keyboard's transfer time
-   (see KBD_XFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
+   (see INPUT_KEYBOARD_TRANSFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
    both pumps look. Lock-free when nothing is queued or an interrupt is already up. */
 static void host_key_present(void)
 {
-    if (g_in.sc_head == g_in.sc_tail || g_in.sc_irq_up) return;   /* racy, benign */
+    if (g_in.ScanCodeHead == g_in.ScanCodeTail || g_in.IsScanCodeIrqUp) return;   /* racy, benign */
     HOST_LOCK();
-    vdd_input_poll(&g_in);
+    VddInputPoll(&g_in);
     HOST_UNLOCK();
 }
 static void host_key_typematic(void)
@@ -7885,10 +7885,10 @@ static int host_coninnb(void *ctx)
     if (g_stdin_h) return stdin_read_byte();   /* a file is always ready */
     HOST_LOCK();
     { int c = typein_pop(); if (c >= 0) { HOST_UNLOCK(); return c; } }
-    got = vdd_input_pop(&g_in, &k);
+    got = VddInputPop(&g_in, &k);
     HOST_UNLOCK();
     if (!got) return -1;
-    k = vdd_input_dos_key(k);                   /* #254: grey-key E0 forms -> 83-key */
+    k = VddInputDosKey(k);                   /* #254: grey-key E0 forms -> 83-key */
     if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
     return k & 0xFF;
 }
@@ -7908,7 +7908,7 @@ static int host_conpeek(void *ctx)
     if (g_stdin_h) return 1;
     HOST_LOCK();
     if (g_typein_head != g_typein_tail) { HOST_UNLOCK(); return 1; }
-    got = vdd_input_peek(&g_in, &k);
+    got = VddInputPeek(&g_in, &k);
     HOST_UNLOCK();
     return got;
 }
@@ -7990,18 +7990,18 @@ static void host_xms(volatile BYTE *tib)
          extender and most loaders actually do -- and then asked XMS AH=07h was
          told it was SHUT. The honest reading of that answer is "this machine
          cannot do XMS".
-       ► The controller owns the bit now (vdd_input_a20_get/set, and the same bit
+       ► The controller owns the bit now (VddInputGetA20/set, and the same bit
          backs port 92h), and these three cases are a view onto it. `g_xms.IsA20Enabled` is
          kept in step so nothing else that reads it goes stale.
        ⚠ STILL NO ADDRESS WRAP. That decision is separate, recorded at the top of
          this file and in dos_xms.h, and it still stands -- what was wrong was that
          the three ways of ASKING disagreed with each other. */
     case 0x03: case 0x05:                                   /* enable A20 (global/local) */
-        vdd_input_a20_set(&g_in, 1); g_xms.IsA20Enabled = 1; X_SETAX(1); break;
+        VddInputSetA20(&g_in, 1); g_xms.IsA20Enabled = 1; X_SETAX(1); break;
     case 0x04: case 0x06:                                   /* disable A20 */
-        vdd_input_a20_set(&g_in, 0); g_xms.IsA20Enabled = 0; X_SETAX(1); break;
+        VddInputSetA20(&g_in, 0); g_xms.IsA20Enabled = 0; X_SETAX(1); break;
     case 0x07:                                              /* query A20 */
-        g_xms.IsA20Enabled = vdd_input_a20_get(&g_in);
+        g_xms.IsA20Enabled = VddInputGetA20(&g_in);
         X_SETAX(g_xms.IsA20Enabled ? 1 : 0); X_SETBL(0); break;
     case 0x08:                                  /* query free extended memory */
         DosXmsQueryFreeMemory(&g_xms, &largest, &totfree);
@@ -9541,7 +9541,7 @@ static int mouse_evq_take(ms_evt_t *ev, LONG *ax, WORD *seg, DWORD *off)
 {
     LONG t; int n = 0;
     unsigned main_mask = (g_ms_evt_seg | g_ms_evt_off) ? (unsigned)g_ms_evt_mask : 0u;
-    uint8_t kb = *(volatile BYTE *)(ULONG_PTR)(0x400 + BDA_KB_FLAGS);
+    uint8_t kb = *(volatile BYTE *)(ULONG_PTR)(0x400 + INPUT_BDA_SHIFT_FLAGS);
     while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
         unsigned a; int who;
         t = g_ms_evq_tail;
@@ -11144,7 +11144,7 @@ static DWORD WINAPI paste_thread(LPVOID pv)
         else if (ch == '\n') sc = 0x1C;
         else if (ch == '\t') sc = 0x0F;
         else { uint8_t k; int kk;                           /* #136: on the active layout */
-               if (vdd_input_char_to_key(&g_in, ch, &k, &kk)) { sc = k; sh = (BYTE)kk; } }
+               if (VddInputCharToKey(&g_in, ch, &k, &kk)) { sc = k; sh = (BYTE)kk; } }
         if (!sc) continue;                                  /* not typeable: skipped */
         if (sh) host_key_scancode(0x2A, 0, 0);
         host_key_scancode(sc, 0, 0);
@@ -12201,7 +12201,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_ms_sens        = (int)s->v[SET_MSENS];
     /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
        tables). Live: the next keystroke uses it. */
-    g_in.layout      = (uint8_t)(s->v[SET_KBLAYOUT] <= 3 ? s->v[SET_KBLAYOUT] : 0);
+    g_in.Layout      = (uint8_t)(s->v[SET_KBLAYOUT] <= 3 ? s->v[SET_KBLAYOUT] : 0);
     /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the
@@ -13253,7 +13253,7 @@ static void key_msg_note(void)
 }
 static void mod_track(uint8_t rawsc, int ext, int down);
 /* ── #274: THE TWO KEYS WHOSE BYTES ARE NOT `[E0] code` / `[E0] code|80h`. ────────────
-     Pause and Ctrl+Break (vdd_input_host_key_bytes has the sequences and the sources).
+     Pause and Ctrl+Break (VddInputHostKeyBytes has the sequences and the sources).
      Both send everything on the PRESS, nothing on the release, and never auto-repeat --
      so pressing one also ends the previous key's typematic, as on the real keyboard,
      where the repeat belongs to the last key pressed. Pause used to go out as a plain
@@ -13264,12 +13264,12 @@ static int host_key_special(uint8_t rawsc, int ext, int is_break)
 {
     uint8_t b[6];
     int n, no_rep, i;
-    n = vdd_input_host_key_bytes(rawsc, ext, is_break, b, &no_rep);
+    n = VddInputHostKeyBytes(rawsc, ext, is_break, b, &no_rep);
     if (!no_rep) return 0;
     if (n) {
         g_ty_on = 0;
         HOST_LOCK();
-        for (i = 0; i < n; ++i) vdd_input_push_scancode(&g_in, b[i]);
+        for (i = 0; i < n; ++i) VddInputPushScanCode(&g_in, b[i]);
         HOST_UNLOCK();
         keylat_push();
         if (g_key_event) SetEvent(g_key_event);
@@ -24501,8 +24501,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         /* take the byte, re-arm if more queued. #254: no guest code runs from
                            here, so a Pause cannot spin -- drop its flag rather than let it
                            swallow the next key. (Ctrl-Break's ring/0071h part is done.) */
-                        if (vec == 0x09 && vdd_input_bios_consume(&g_in) == KB_ACT_PAUSE)
-                            vdd_input_pause_cancel(&g_in);
+                        if (vec == 0x09 && VddInputBiosConsume(&g_in) == INPUT_ACTION_PAUSE)
+                            VddInputPauseCancel(&g_in);
                         VddPicEndOfInterrupt(&g_pic, line);   /* the slave's EOI also releases the cascade */
                         HOST_UNLOCK();
                         if (g_pm_irq_reflect_logged < 16) {
@@ -32050,9 +32050,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS
        program reading 0040:001A can see them. V86 low memory is mapped in our address
        space, so the BDA is addressable directly. */
-    g_in.bda = (uint8_t *)0x400;
-    g_in.time_us = host_time_us;                /* the keyboard's transfer time is real time */
-    g_in_dev = vdd_input_device(&g_in);
+    g_in.BiosData = (uint8_t *)0x400;
+    g_in.TimeMicroseconds = host_time_us;                /* the keyboard's transfer time is real time */
+    g_in_dev = VddInputDevice(&g_in);
     VddBusAdd(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
          0040:0000..0007 are the COM1..COM4 I/O bases and 0040:0008..000F the LPT1..LPT4
@@ -33276,9 +33276,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 int ko;
                 HOST_LOCK();
-                kact = vdd_input_bios_translate(&g_in, (uint8_t)VDM_REG(tib, VTIB_EAX));
+                kact = VddInputBiosTranslate(&g_in, (uint8_t)VDM_REG(tib, VTIB_EAX));
                 VddPicEndOfInterrupt(&g_pic, 1);
-                if (kact == KB_ACT_PAUSE && kbdact_entry(kact) < 0) vdd_input_pause_cancel(&g_in);
+                if (kact == INPUT_ACTION_PAUSE && kbdact_entry(kact) < 0) VddInputPauseCancel(&g_in);
                 HOST_UNLOCK();
                 ++g_kb4f_xlat;
                 VDM_SET16(tib, VTIB_EAX, peekw((ss << 4) + sp));          /* pop ax */
@@ -33297,7 +33297,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (int15_hooked()) {
                 int sc;
                 HOST_LOCK();
-                sc = vdd_input_bios_fetch(&g_in);
+                sc = VddInputBiosFetch(&g_in);
                 HOST_UNLOCK();
                 if (sc >= 0) {
                     DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF;
@@ -33318,7 +33318,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 continue;
             }
             HOST_LOCK();
-            kact = vdd_input_bios_consume(&g_in);   /* take the byte, re-arm if more queued */
+            kact = VddInputBiosConsume(&g_in);   /* take the byte, re-arm if more queued */
             /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
                  A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
                  acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
@@ -33342,7 +33342,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + ko);
                     continue;
                 }
-                if (kact == KB_ACT_PAUSE) { HOST_LOCK(); vdd_input_pause_cancel(&g_in); HOST_UNLOCK(); }
+                if (kact == INPUT_ACTION_PAUSE) { HOST_LOCK(); VddInputPauseCancel(&g_in); HOST_UNLOCK(); }
             }
             VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
             continue;
@@ -34040,7 +34040,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          condition that cannot arise. Deriving the arm from the FIFO as
                          well as the latch makes any future counter slip self-correcting
                          instead of silently swallowing a keystroke. */
-                    if ((g_irq1_pending > 0 || vdd_input_sc_pending(&g_in))
+                    if ((g_irq1_pending > 0 || VddInputScanCodePending(&g_in))
                         && g_pm_int[0x09].client && !g_pm_noirq) {
                         if (g_irq1_pending <= 0) InterlockedIncrement(&g_irq1_pending);
                         int vi   = g_dpmi_vi;
@@ -34082,7 +34082,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             kq = zput(kq, " app32=");      kq = zhex(kq, (DWORD)app);
                             kq = zput(kq, " done=");       kq = zhex(kq, (DWORD)done1);
                             kq = zput(kq, " cs=0x");       kq = zhex(kq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)vdd_input_sc_queued(&g_in));
+                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)VddInputScanCodesQueued(&g_in));
                             kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb2, kq); serial_out(kb2, kq);
                         }
                     }
@@ -36311,13 +36311,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, ",0x"); p = zhex(p, g_irq0_resync_drop);
       p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
       p = zput(p, " int16=[");
-      { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }
-      p = zput(p, "] p60=0x");       p = zhex(p, g_in.p60_reads);
-      p = zput(p, " owed=0x");       p = zhex(p, g_in.sc_owed_served);   /* keys the BIOS arm served after a hook's port read */
-      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_queued(&g_in));
-      p = zput(p, " sc_held=0x");    p = zhex(p, g_in.sc_held_reads);   /* re-reads inside the transfer hold */
-      p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
-      p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
+      { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.Int16Calls[k]); p = zput(p, " "); } }
+      p = zput(p, "] p60=0x");       p = zhex(p, g_in.Port60Reads);
+      p = zput(p, " owed=0x");       p = zhex(p, g_in.OwedScanCodesServed);   /* keys the BIOS arm served after a hook's port read */
+      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)VddInputScanCodesQueued(&g_in));
+      p = zput(p, " sc_held=0x");    p = zhex(p, g_in.ScanCodeHeldReads);   /* re-reads inside the transfer hold */
+      p = zput(p, " sc_push=0x");    p = zhex(p, g_in.ScanCodesPushed);
+      p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.ScanCodesDropped);
       /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
          a hook swallowed); default INT 05h jobs / printer errors / last status. */
       p = zput(p, " kb4f=0x");       p = zhex(p, g_kb4f_calls);
@@ -36328,7 +36328,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
          bursts the PIT refused to replay. Together these say whether a held key was
          starved of exec-loop turns and whether the guest's clock ever lurched. */
-      p = zput(p, " sc_hi=0x");      p = zhex(p, g_in.sc_hiwater);
+      p = zput(p, " sc_hi=0x");      p = zhex(p, g_in.ScanCodeHighWater);
       /* pit_gaps = syncs more than 10 ms apart; pit_gapmax = the worst, in 8254
          clocks (1193182 = 1 s). NOTHING is clamped to these -- they exist so the
          catch-up burst can be fixed from a measured gap distribution instead of an
@@ -36507,13 +36507,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " ty_period_us=0x");              p = zhex(p, g_ty_period_us);
       /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
          should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
-      p = zput(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = zhex(p, g_in.kbd_out_writes);
-      p = zput(p, " typematic_set=0x");               p = zhexb(p, g_in.kbd_typematic_set);
-      p = zput(p, " rate_byte=0x");                   p = zhexb(p, g_in.kbd_typematic_byte);
+      p = zput(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = zhex(p, g_in.KeyboardPortWrites);
+      p = zput(p, " typematic_set=0x");               p = zhexb(p, g_in.IsTypematicSet);
+      p = zput(p, " rate_byte=0x");                   p = zhexb(p, g_in.TypematicByte);
       p = zput(p, " seq=");
-      { unsigned k; for (k = 0; k < g_in.kbd_out_n; ++k) {
-            p = zput(p, k ? "," : ""); p = zhexb(p, g_in.kbd_out_log[k][0]);
-            p = zput(p, ":");          p = zhexb(p, g_in.kbd_out_log[k][1]); } }
+      { unsigned k; for (k = 0; k < g_in.KeyboardPortLogCount; ++k) {
+            p = zput(p, k ? "," : ""); p = zhexb(p, g_in.KeyboardPortLog[k][0]);
+            p = zput(p, ":");          p = zhexb(p, g_in.KeyboardPortLog[k][1]); } }
       p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible
