@@ -1075,7 +1075,7 @@ static int          g_joy_povmap;   /* JoystickGamepad: map the pad's D-pad
 static DWORD g_wowfold_seen[WOWFOLD_SLOTS];
 static int   g_wowfold_mute;
 static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF */
-static audio_state  g_audio;     static audio_wave g_wave;
+static AUDIO_STATE  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static DOS_XMS_STATE    g_xms;       /* M4: XMS extended-memory manager           */
 static void        *g_hma;       /* the HMA at linear 0x100000, 0 = unavailable */
@@ -6931,7 +6931,7 @@ static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
     }
     dmx_sample();
     HOST_LOCK();
-    vdd_audio_mix_st(&g_audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
+    VddAudioMixStereo(&g_audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
     HOST_UNLOCK();
 }
 
@@ -7457,7 +7457,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " len=0x");      q = zhex(q, g_sb.BlockLength);
         q = zput(q, " blocks=0x");   q = zhex(q, g_sb.Blocks);
         q = zput(q, " rate=0x");     q = zhex(q, g_sb.RateHz);
-        q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.frames_mixed);
+        q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.FramesMixed);
         /* ► THE 3DA VIEW: did the guest's vblank polls reach the VDD, and what was
              it told last? Mario spins >1s on `in al,3DA / test al,8 / jz` before
              the breakpoint kill; 700k reads with no edge is either "the reads
@@ -7789,7 +7789,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
         q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
         q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.silent);
-        q = zput(q, " mixed=0x");        q = zhex(q, g_audio.frames_mixed);
+        q = zput(q, " mixed=0x");        q = zhex(q, g_audio.FramesMixed);
         q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.DspWrites);
         q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.Blocks);
         q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.TransferMode);
@@ -12359,7 +12359,7 @@ static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
 
 static void settings_apply_devices(const ntvdmex_settings *s)
 {
-    vdd_audio_set_master(&g_audio, s->v[SET_VOLUME], (int)s->v[SET_MUTE]);
+    VddAudioSetMaster(&g_audio, s->v[SET_VOLUME], (int)s->v[SET_MUTE]);
     /* The speaker VDD stays on the bus either way: port 0x61 must keep answering
        because guests time delay loops off its refresh bit. The setting decides
        only whether anything is audible. */
@@ -12367,7 +12367,7 @@ static void settings_apply_devices(const ntvdmex_settings *s)
          CARD; Beep.sys drives the transducer on the MOTHERBOARD. "Both" is both,
          and they are genuinely independent -- a machine can have speakers plugged
          in, a case speaker, neither, or both, and only the person at it knows. */
-    vdd_audio_set_speaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
+    VddAudioSetSpeaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
     g_spk_real = g_safe.RealSpeaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
     /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
          it: the driver keeps sounding whatever it was last told to sound. */
@@ -14454,7 +14454,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is exactly what you get: the chord under the cursor at the moment you
            clicked the X, indefinitely.
            ORDER MATTERS. Stop the device FIRST: that resets waveOut and ends the
-           fill callbacks, so no audio thread is inside vdd_audio_mix when the OPL
+           fill callbacks, so no audio thread is inside VddAudioMix when the OPL
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
         host_rec_finish();       /* before the device stops feeding it */
@@ -32198,9 +32198,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        walks the SB's DMA buffer and raises the block-completion IRQ, so it must
        run even if no sound device opens (audio_wave falls back to silent
        pumping) -- otherwise every SB game hangs on a machine without audio. */
-    vdd_audio_init(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
-    vdd_audio_set_gus(&g_audio, g_gus_on ? &g_gus : NULL);
-    vdd_audio_set_emu8k(&g_audio, g_awe_on ? &g_emu8k : NULL);   /* #233 */
+    VddAudioInitialize(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
+    VddAudioSetGus(&g_audio, g_gus_on ? &g_gus : NULL);
+    VddAudioSetEmu8k(&g_audio, g_awe_on ? &g_emu8k : NULL);   /* #233 */
     settings_apply_devices(&g_set);   /* master volume, mute, speaker -- the mixer
                                          zeroes its own struct, so not one line earlier */
     /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
@@ -37104,16 +37104,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.dev_volume);
     p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.silent);
     p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.spk ? 1 : 0));
-    p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.spk_level);
+    p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.Speaker ? 1 : 0));
+    p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.SpeakerLevel);
     p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.Port61);
     p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.Counter2Reload);
-    p = zput(p, " gated_frames=");          p = zhex(p, g_audio.spk_gated);
-    p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.spk_frames);
-    p = zput(p, " last_hz=");               p = zhex(p, g_audio.spk_hz);
-    p = zput(p, " mixed_frames=");          p = zhex(p, g_audio.frames_mixed);
-    p = zput(p, " master=");                p = zhex(p, g_audio.master);
-    p = zput(p, " muted=");                 p = zhex(p, (DWORD)g_audio.muted);
+    p = zput(p, " gated_frames=");          p = zhex(p, g_audio.SpeakerGated);
+    p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.SpeakerFrames);
+    p = zput(p, " last_hz=");               p = zhex(p, g_audio.SpeakerHz);
+    p = zput(p, " mixed_frames=");          p = zhex(p, g_audio.FramesMixed);
+    p = zput(p, " master=");                p = zhex(p, g_audio.Master);
+    p = zput(p, " muted=");                 p = zhex(p, (DWORD)g_audio.IsMuted);
     p = zput(p, "\r\n");
     p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.ProfileWrites);
         p = zput(p, " keyons=");              p = zhex(p, g_opl.ProfileKeyOns);

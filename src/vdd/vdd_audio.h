@@ -28,21 +28,22 @@
 #include "vdd_emu8k.h"
 #include "vdd_speaker.h"
 
-#define AUDIO_OUT_HZ    44100u    /* host output rate                            */
+#define AUDIO_OUTPUT_HZ    44100u /* host output rate                            */
 #define AUDIO_CHUNK      512u     /* output frames the mixer works in            */
 /* Worst-case source frames for one chunk: the OPL's 49716 Hz is the fastest
    source, plus a couple of samples of interpolation headroom. */
-#define AUDIO_SRC_MAX  (AUDIO_CHUNK * 2u + 4u)
+#define AUDIO_SOURCE_MAX  (AUDIO_CHUNK * 2u + 4u)
 
-/* A linear-interpolating resampler from `src_hz` to the output rate. */
-typedef struct audio_resampler {
-    uint32_t src_hz;
-    uint32_t step;            /* (src_hz << 16) / out_hz                         */
-    uint32_t frac;            /* 16.16 position between prev and cur             */
-    int32_t  prev, cur;       /* the two source samples being interpolated       */
-    int32_t  prev_r, cur_r;   /* #189: ...and the right channel's, for a stereo source */
-    int      primed;
-} audio_resampler;
+/* A linear-interpolating resampler from `SourceHz` to the output rate. */
+typedef struct _AUDIO_RESAMPLER {
+    UINT32 SourceHz;
+    UINT32 Step;            /* (SourceHz << 16) / OutputHz                         */
+    UINT32 Fraction;            /* 16.16 position between Previous and Current             */
+    INT32  Previous, Current; /* the two source samples being interpolated       */
+    INT32  PreviousRight, CurrentRight;   /* #189: ...and the right channel's, for a stereo source */
+    INT      IsPrimed;
+} AUDIO_RESAMPLER, *PAUDIO_RESAMPLER;
+typedef const AUDIO_RESAMPLER *PCAUDIO_RESAMPLER;
 
 /* ── THE PC SPEAKER IS A THIRD SOURCE, AND IT USED TO BE SILENT. ─────────────────
      vdd_speaker.c models port 0x61 and reports the tone, and nothing ever turned
@@ -52,66 +53,67 @@ typedef struct audio_resampler {
      here rather than a device of its own. Amplitude is deliberately WELL below
      full scale: a real speaker is a 1-inch cone, not a line output, and a
      full-scale square would sit on the clip rail over everything else. */
-#define AUDIO_SPK_LEVEL 6000      /* peak sample for an active speaker tone      */
-#define AUDIO_SPK_HZ_MIN   20u    /* below this it is a click train, not a tone  */
-#define AUDIO_SPK_HZ_MAX 20000u   /* above it, nothing at 44.1 kHz is audible    */
+#define AUDIO_SPEAKER_LEVEL 6000  /* peak sample for an active speaker tone      */
+#define AUDIO_SPEAKER_HZ_MIN   20u    /* below this it is a click train, not a tone  */
+#define AUDIO_SPEAKER_HZ_MAX 20000u   /* above it, nothing at 44.1 kHz is audible    */
 
-typedef struct audio_state {
-    OPL_STATE *opl;
-    SB_STATE  *sb;
-    GUS_STATE *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
-    PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
-    const SPEAKER_STATE *spk; /* PC speaker; NULL = not fitted                   */
-    uint32_t   out_hz;
-    audio_resampler r_opl, r_sb, r_gus, r_emu8k;
-    /* Speaker phase as a 16-bit fraction of one cycle, clocked at out_hz. The
+typedef struct _AUDIO_STATE {
+    POPL_STATE Opl;
+    PSB_STATE  Sb;
+    PGUS_STATE Gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
+    PEMU8K_STATE Emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
+    PCSPEAKER_STATE Speaker;  /* PC speaker; NULL = not fitted                   */
+    UINT32   OutputHz;
+    AUDIO_RESAMPLER OplResampler, SbResampler, GusResampler, Emu8kResampler;
+    /* Speaker phase as a 16-bit fraction of one cycle, clocked at OutputHz. The
        top bit IS the half-cycle, so the sample is one test and no branch on the
        frequency; it persists across calls so a held tone does not restart (and
        click) at every chunk boundary. */
-    uint16_t   spk_phase;
-    int32_t    spk_level;     /* peak amplitude; 0 = speaker switched off        */
+    WORD   SpeakerPhase;
+    INT32    SpeakerLevel;    /* peak amplitude; 0 = speaker switched off        */
     /* Master attenuator, applied AFTER the sum -- the position a volume control
        occupies on a real machine, so a game's own mixer settings still work
-       underneath it. 0..100; `muted` is separate so muting does not lose it. */
-    uint32_t   master;
-    int        muted;
-    int16_t    scratch[2 * AUDIO_SRC_MAX];   /* #189: room for interleaved L/R */
-    uint32_t   frames_mixed;  /* diagnostics: total output frames produced       */
+       underneath it. 0..100; `IsMuted` is separate so muting does not lose it. */
+    UINT32   Master;
+    INT        IsMuted;
+    INT16    Scratch[2 * AUDIO_SOURCE_MAX];  /* #189: room for interleaved L/R */
+    UINT32   FramesMixed;     /* diagnostics: total output frames produced       */
     /* ── AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
          FOUR CAUSES AND NO LOG DISTINGUISHED THEM. Counted where the decision is
          made, so each one separates a different failure:
-           spk_gated  -- frames where port 0x61 said SOUNDING
-           spk_frames -- frames actually emitted (gated AND a usable frequency)
-           spk_hz     -- the last frequency asked for, in Hz
+           SpeakerGated  -- frames where port 0x61 said SOUNDING
+           SpeakerFrames -- frames actually emitted (gated AND a usable frequency)
+           SpeakerHz     -- the last frequency asked for, in Hz
          gated=0 means the guest's port writes never reached this struct;
          gated>0 with frames=0 means the frequency was refused; both non-zero
          means we produced samples and the fault is downstream of the mixer. */
-    uint32_t   spk_gated, spk_frames, spk_hz;
-} audio_state;
+    UINT32   SpeakerGated, SpeakerFrames, SpeakerHz;
+} AUDIO_STATE, *PAUDIO_STATE;
+typedef const AUDIO_STATE *PCAUDIO_STATE;
 
 /* Set up the mixer for its two sources. Safe to call again after a device's rate
    changes; the resamplers re-derive their step from the device on each mix.
    Leaves the speaker unfitted, the master volume at 100 and unmuted. */
-void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_hz);
+VOID VddAudioInitialize(_Out_ PAUDIO_STATE state, _In_opt_ POPL_STATE opl, _In_opt_ PSB_STATE soundBlaster, _In_ UINT32 outputHz);
 
-/* Fit (or unfit) the PC speaker. `enable` 0 leaves the VDD on the bus -- port
+/* Fit (or unfit) the PC speaker. `isEnabled` 0 leaves the VDD on the bus -- port
    0x61 must keep answering, guests time delay loops off its refresh bit -- and
    only stops it being audible. */
-void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable);
+VOID VddAudioSetSpeaker(_Inout_ PAUDIO_STATE state, _In_opt_ PCSPEAKER_STATE speaker, _In_ INT isEnabled);
 /* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
-void vdd_audio_set_gus(audio_state *st, GUS_STATE *gus);
+VOID VddAudioSetGus(_Inout_ PAUDIO_STATE state, _In_opt_ PGUS_STATE gus);
 /* Fit (or remove, NULL) the AWE32's EMU8000 as a mixer source (#233). */
-void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu);
+VOID VddAudioSetEmu8k(_Inout_ PAUDIO_STATE state, _In_opt_ PEMU8K_STATE emu8k);
 
-/* Master volume, 0..100, clamped; `muted` outputs silence without losing it. */
-void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted);
+/* Master volume, 0..100, clamped; `isMuted` outputs silence without losing it. */
+VOID VddAudioSetMaster(_Inout_ PAUDIO_STATE state, _In_ UINT32 percent, _In_ INT isMuted);
 
-/* Produce `frames` mono 16-bit samples at out_hz, pulling from both devices.
+/* Produce `frames` mono 16-bit samples at OutputHz, pulling from both devices.
    Always produces exactly `frames` samples (silence when nothing is playing), so
    a host audio thread can call it unconditionally. */
-void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames);
+VOID VddAudioMix(_Inout_ PAUDIO_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
 /* #189: the same mix in stereo -- `frames` interleaved L/R pairs (2*frames samples).
-   This is what the host plays; vdd_audio_mix is this folded to mono. */
-void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames);
+   This is what the host plays; VddAudioMix is this folded to mono. */
+VOID VddAudioMixStereo(_Inout_ PAUDIO_STATE state, _Out_writes_(2 * frames) INT16 *output, _In_ UINT32 frames);
 
 #endif /* NTVDMEX_VDD_AUDIO_H */

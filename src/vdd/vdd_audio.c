@@ -7,24 +7,24 @@
    which is exactly what stops a busy score from sitting on the clip rail. We
    honour the same registers (master 0x22, voice 0x04, FM 0x26), so a game's own
    volume control works, and their power-up value (0xCC) gives sane headroom. */
-static int32_t mix_gain(const SB_STATE *sb, uint8_t reg)
+static INT32 AudioMixGain(PCSB_STATE soundBlaster, BYTE mixerRegister)
 {
-    uint32_t master, src;
-    if (!sb) return 256;
-    master = (sb->Mixer[0x22] >> 4) & 0x0F;
-    src    = (sb->Mixer[reg]   >> 4) & 0x0F;
-    if (!sb->Mixer[0x22]) master = 12;            /* never programmed: power-up 0xCC */
-    if (!sb->Mixer[reg])  src    = 12;
-    return (int32_t)((master * src * 256u) / 225u);   /* (m/15)*(s/15) in 0..256   */
+    UINT32 masterLevel, sourceLevel;
+    if (!soundBlaster) return 256;
+    masterLevel = (soundBlaster->Mixer[0x22] >> 4) & 0x0F;
+    sourceLevel    = (soundBlaster->Mixer[mixerRegister]   >> 4) & 0x0F;
+    if (!soundBlaster->Mixer[0x22]) masterLevel = 12;            /* never programmed: power-up 0xCC */
+    if (!soundBlaster->Mixer[mixerRegister])  sourceLevel    = 12;
+    return (INT32)((masterLevel * sourceLevel * 256u) / 225u);   /* (m/15)*(s/15) in 0..256   */
 }
 
-static void rs_setup(audio_resampler *r, uint32_t src_hz, uint32_t out_hz)
+static VOID AudioResamplerSetup(PAUDIO_RESAMPLER resampler, UINT32 sourceHz, UINT32 outputHz)
 {
-    if (!src_hz) src_hz = out_hz;
-    if (r->src_hz != src_hz) {                  /* rate changed mid-stream        */
-        r->src_hz = src_hz;
-        r->step   = (uint32_t)(((uint64_t)src_hz << 16) / (out_hz ? out_hz : 1));
-        if (!r->step) r->step = 1;
+    if (!sourceHz) sourceHz = outputHz;
+    if (resampler->SourceHz != sourceHz) {      /* rate changed mid-stream        */
+        resampler->SourceHz = sourceHz;
+        resampler->Step   = (UINT32)(((UINT64)sourceHz << 16) / (outputHz ? outputHz : 1));
+        if (!resampler->Step) resampler->Step = 1;
     }
 }
 
@@ -36,42 +36,42 @@ static void rs_setup(audio_resampler *r, uint32_t src_hz, uint32_t out_hz)
      use it. Two per chunk, 86 chunks a second at Doom's 11025 Hz stereo, is 172
      dropped PCM samples a second: the read pointer walks away from the guest's write
      pointer at 1.6%, and what you hear is a soft click at chunk rate over everything.
-     The count is exact and provable: prev/cur persist across calls, so the only
+     The count is exact and provable: Previous/Current persist across calls, so the only
      samples consumed are the ones a phase wrap loads, and there are exactly
      floor((frac + step*frames) / 0x10000) wraps. Priming loads the first pair, once. */
-static uint32_t rs_need(const audio_resampler *r, uint32_t frames)
+static UINT32 AudioResamplerNeed(PCAUDIO_RESAMPLER resampler, UINT32 frames)
 {
-    uint64_t span = (uint64_t)r->frac + (uint64_t)r->step * frames;
-    uint32_t n = (uint32_t)(span >> 16) + (r->primed ? 0u : 2u);
-    return n > AUDIO_SRC_MAX ? AUDIO_SRC_MAX : n;
+    UINT64 span = (UINT64)resampler->Fraction + (UINT64)resampler->Step * frames;
+    UINT32 count = (UINT32)(span >> 16) + (resampler->IsPrimed ? 0u : 2u);
+    return count > AUDIO_SOURCE_MAX ? AUDIO_SOURCE_MAX : count;
 }
 
 /* (The mono walk, rs_step, went with #232: the OPL was its last caller, and every
-   source is now stereo -- rs_step_st below, whose left channel is that walk.) */
+   source is now stereo -- AudioResamplerStepStereo below, whose left channel is that walk.) */
 
-void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_hz)
+VOID VddAudioInitialize(PAUDIO_STATE state, POPL_STATE opl, PSB_STATE soundBlaster, UINT32 outputHz)
 {
-    unsigned i; uint8_t *p = (uint8_t *)st;
-    for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
-    st->opl = opl;
-    st->sb  = sb;
-    st->out_hz = out_hz ? out_hz : AUDIO_OUT_HZ;
-    st->master = 100;                 /* the struct is zeroed above: 0 would be silence */
+    UINT byteIndex; BYTE *bytes = (BYTE *)state;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) bytes[byteIndex] = 0;
+    state->Opl = opl;
+    state->Sb  = soundBlaster;
+    state->OutputHz = outputHz ? outputHz : AUDIO_OUTPUT_HZ;
+    state->Master = 100;              /* the struct is zeroed above: 0 would be silence */
 }
 
-void vdd_audio_set_gus(audio_state *st, GUS_STATE *gus) { st->gus = gus; }
-void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu) { st->emu8k = emu; }
+VOID VddAudioSetGus(PAUDIO_STATE state, PGUS_STATE gus) { state->Gus = gus; }
+VOID VddAudioSetEmu8k(PAUDIO_STATE state, PEMU8K_STATE emu8k) { state->Emu8k = emu8k; }
 
-void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable)
+VOID VddAudioSetSpeaker(PAUDIO_STATE state, PCSPEAKER_STATE speaker, INT isEnabled)
 {
-    st->spk = spk;
-    st->spk_level = enable ? AUDIO_SPK_LEVEL : 0;
+    state->Speaker = speaker;
+    state->SpeakerLevel = isEnabled ? AUDIO_SPEAKER_LEVEL : 0;
 }
 
-void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted)
+VOID VddAudioSetMaster(PAUDIO_STATE state, UINT32 percent, INT isMuted)
 {
-    st->master = percent > 100 ? 100 : percent;
-    st->muted  = muted ? 1 : 0;
+    state->Master = percent > 100 ? 100 : percent;
+    state->IsMuted  = isMuted ? 1 : 0;
 }
 
 /* ── #189: STEREO. A source that has two channels now keeps them: the SB's stereo
@@ -79,141 +79,141 @@ void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted)
      The OPL (#232: an OPL3 with NEW set routes each channel left/right; otherwise one
      output, in the middle) and the PC speaker (middle). Output
      is interleaved L/R, 2*frames samples. For a mono source L = R and both equal what
-     the mono mixer produced, which is why vdd_audio_mix below can simply fold this. */
-static int16_t mix_clip(int32_t v) { return (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v)); }
+     the mono mixer produced, which is why VddAudioMix below can simply fold this. */
+static INT16 AudioClip(INT32 value) { return (INT16)(value > 32767 ? 32767 : (value < -32768 ? -32768 : value)); }
 
 /* One output frame from an INTERLEAVED stereo source, consuming source frames as
-   needed; the right channel's pair is carried beside the left (prev/cur for L,
-   prev_r/cur_r). `*idx` walks the source buffer in frames and never runs past `n`,
-   because rs_need() sized the buffer for exactly this walk. */
-static void rs_step_st(audio_resampler *r, const int16_t *src, uint32_t n, uint32_t *idx,
-                       int32_t *ol, int32_t *or_)
+   needed; the right channel's pair is carried beside the left (Previous/Current for L,
+   PreviousRight/CurrentRight). `*index` walks the source buffer in frames and never runs past `count`,
+   because AudioResamplerNeed() sized the buffer for exactly this walk. */
+static VOID AudioResamplerStepStereo(PAUDIO_RESAMPLER resampler, const INT16 *source, UINT32 count, UINT32 *index,
+                       INT32 *outputLeft, INT32 *outputRight)
 {
-    if (!r->primed) {
-        if (*idx < n) { r->prev = src[2 * *idx]; r->prev_r = src[2 * *idx + 1]; ++*idx; }
-        else          { r->prev = r->prev_r = 0; }
-        if (*idx < n) { r->cur = src[2 * *idx]; r->cur_r = src[2 * *idx + 1]; ++*idx; }
-        else          { r->cur = r->prev; r->cur_r = r->prev_r; }
-        r->primed = 1;
-        r->frac = 0;
+    if (!resampler->IsPrimed) {
+        if (*index < count) { resampler->Previous = source[2 * *index]; resampler->PreviousRight = source[2 * *index + 1]; ++*index; }
+        else          { resampler->Previous = resampler->PreviousRight = 0; }
+        if (*index < count) { resampler->Current = source[2 * *index]; resampler->CurrentRight = source[2 * *index + 1]; ++*index; }
+        else          { resampler->Current = resampler->Previous; resampler->CurrentRight = resampler->PreviousRight; }
+        resampler->IsPrimed = 1;
+        resampler->Fraction = 0;
     }
-    *ol  = r->prev   + (((r->cur   - r->prev)   * (int32_t)(r->frac >> 8)) >> 8);
-    *or_ = r->prev_r + (((r->cur_r - r->prev_r) * (int32_t)(r->frac >> 8)) >> 8);
-    r->frac += r->step;
-    while (r->frac >= 0x10000u) {
-        r->frac -= 0x10000u;
-        r->prev = r->cur; r->prev_r = r->cur_r;
-        if (*idx < n) { r->cur = src[2 * *idx]; r->cur_r = src[2 * *idx + 1]; ++*idx; }
+    *outputLeft  = resampler->Previous   + (((resampler->Current   - resampler->Previous)   * (INT32)(resampler->Fraction >> 8)) >> 8);
+    *outputRight = resampler->PreviousRight + (((resampler->CurrentRight - resampler->PreviousRight) * (INT32)(resampler->Fraction >> 8)) >> 8);
+    resampler->Fraction += resampler->Step;
+    while (resampler->Fraction >= 0x10000u) {
+        resampler->Fraction -= 0x10000u;
+        resampler->Previous = resampler->Current; resampler->PreviousRight = resampler->CurrentRight;
+        if (*index < count) { resampler->Current = source[2 * *index]; resampler->CurrentRight = source[2 * *index + 1]; ++*index; }
     }
 }
 
-void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
+VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
 {
-    uint32_t done = 0;
+    UINT32 done = 0;
 
     while (done < frames) {
-        uint32_t n = frames - done;
-        uint32_t i, need, idx;
-        int16_t *o;
-        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
-        o = out + 2 * done;
+        UINT32 count = frames - done;
+        UINT32 frameIndex, needed, index;
+        INT16 *chunk;
+        if (count > AUDIO_CHUNK) count = AUDIO_CHUNK;
+        chunk = output + 2 * done;
 
-        for (i = 0; i < 2 * n; ++i) o[i] = 0;
+        for (frameIndex = 0; frameIndex < 2 * count; ++frameIndex) chunk[frameIndex] = 0;
 
         /* --- FM: the OPL's own L/R (#232) ---------------------------------- */
         /* An OPL2, or an OPL3 before NEW, renders the same signal to both sides,
            and on L == R this walk is the old mono one exactly -- so an OPL2 mixes
            to the same samples it did as a mono source (audio_test's golden). */
-        if (st->opl) {
-            int32_t g = mix_gain(st->sb, 0x26);
-            rs_setup(&st->r_opl, OPL_NATIVE_HZ, st->out_hz);
-            need = rs_need(&st->r_opl, n);
-            VddOplRenderStereo(st->opl, st->scratch, need);
-            idx = 0;
-            for (i = 0; i < n; ++i) {
-                int32_t l, r;
-                rs_step_st(&st->r_opl, st->scratch, need, &idx, &l, &r);
-                o[2*i]   = mix_clip(o[2*i]   + ((l * g) >> 8));
-                o[2*i+1] = mix_clip(o[2*i+1] + ((r * g) >> 8));
+        if (state->Opl) {
+            INT32 gain = AudioMixGain(state->Sb, 0x26);
+            AudioResamplerSetup(&state->OplResampler, OPL_NATIVE_HZ, state->OutputHz);
+            needed = AudioResamplerNeed(&state->OplResampler, count);
+            VddOplRenderStereo(state->Opl, state->Scratch, needed);
+            index = 0;
+            for (frameIndex = 0; frameIndex < count; ++frameIndex) {
+                INT32 left, right;
+                AudioResamplerStepStereo(&state->OplResampler, state->Scratch, needed, &index, &left, &right);
+                chunk[2*frameIndex]   = AudioClip(chunk[2*frameIndex]   + ((left * gain) >> 8));
+                chunk[2*frameIndex+1] = AudioClip(chunk[2*frameIndex+1] + ((right * gain) >> 8));
             }
         }
 
         /* --- sampled audio: the SB's own L/R ------------------------------ */
         /* Called even while idle: this is what walks the DMA buffer and raises
            the block-completion IRQ the game is waiting for. */
-        if (st->sb) {
-            int32_t g = mix_gain(st->sb, 0x04);
-            rs_setup(&st->r_sb, VddSbFrameHz(st->sb), st->out_hz);
-            need = rs_need(&st->r_sb, n);
-            VddSbRenderStereo(st->sb, st->scratch, need);
-            idx = 0;
-            for (i = 0; i < n; ++i) {
-                int32_t l, r;
-                rs_step_st(&st->r_sb, st->scratch, need, &idx, &l, &r);
-                o[2*i]   = mix_clip(o[2*i]   + ((l * g) >> 8));
-                o[2*i+1] = mix_clip(o[2*i+1] + ((r * g) >> 8));
+        if (state->Sb) {
+            INT32 gain = AudioMixGain(state->Sb, 0x04);
+            AudioResamplerSetup(&state->SbResampler, VddSbFrameHz(state->Sb), state->OutputHz);
+            needed = AudioResamplerNeed(&state->SbResampler, count);
+            VddSbRenderStereo(state->Sb, state->Scratch, needed);
+            index = 0;
+            for (frameIndex = 0; frameIndex < count; ++frameIndex) {
+                INT32 left, right;
+                AudioResamplerStepStereo(&state->SbResampler, state->Scratch, needed, &index, &left, &right);
+                chunk[2*frameIndex]   = AudioClip(chunk[2*frameIndex]   + ((left * gain) >> 8));
+                chunk[2*frameIndex+1] = AudioClip(chunk[2*frameIndex+1] + ((right * gain) >> 8));
             }
         }
 
         /* --- the GUS, panned per voice (see vdd_gus.c) -------------------- */
-        if (st->gus) {
-            rs_setup(&st->r_gus, VddGusRateHz(st->gus), st->out_hz);
-            need = rs_need(&st->r_gus, n);
-            VddGusRenderStereo(st->gus, st->scratch, need);
-            idx = 0;
-            for (i = 0; i < n; ++i) {
-                int32_t l, r;
-                rs_step_st(&st->r_gus, st->scratch, need, &idx, &l, &r);
-                o[2*i]   = mix_clip(o[2*i]   + l);
-                o[2*i+1] = mix_clip(o[2*i+1] + r);
+        if (state->Gus) {
+            AudioResamplerSetup(&state->GusResampler, VddGusRateHz(state->Gus), state->OutputHz);
+            needed = AudioResamplerNeed(&state->GusResampler, count);
+            VddGusRenderStereo(state->Gus, state->Scratch, needed);
+            index = 0;
+            for (frameIndex = 0; frameIndex < count; ++frameIndex) {
+                INT32 left, right;
+                AudioResamplerStepStereo(&state->GusResampler, state->Scratch, needed, &index, &left, &right);
+                chunk[2*frameIndex]   = AudioClip(chunk[2*frameIndex]   + left);
+                chunk[2*frameIndex+1] = AudioClip(chunk[2*frameIndex+1] + right);
             }
         }
 
         /* --- the AWE32's EMU8000, panned per channel (see vdd_emu8k.c) ----- */
         /* At its own fixed 44.1 kHz. Summed at unity, as the GUS is: the route through
            the CT1745 mixer on a real AWE32 is not modelled (docs/inventory/emu8k.md). */
-        if (st->emu8k) {
-            rs_setup(&st->r_emu8k, VddEmu8kRateHz(st->emu8k), st->out_hz);
-            need = rs_need(&st->r_emu8k, n);
-            VddEmu8kRenderStereo(st->emu8k, st->scratch, need);
-            idx = 0;
-            for (i = 0; i < n; ++i) {
-                int32_t l, r;
-                rs_step_st(&st->r_emu8k, st->scratch, need, &idx, &l, &r);
-                o[2*i]   = mix_clip(o[2*i]   + l);
-                o[2*i+1] = mix_clip(o[2*i+1] + r);
+        if (state->Emu8k) {
+            AudioResamplerSetup(&state->Emu8kResampler, VddEmu8kRateHz(state->Emu8k), state->OutputHz);
+            needed = AudioResamplerNeed(&state->Emu8kResampler, count);
+            VddEmu8kRenderStereo(state->Emu8k, state->Scratch, needed);
+            index = 0;
+            for (frameIndex = 0; frameIndex < count; ++frameIndex) {
+                INT32 left, right;
+                AudioResamplerStepStereo(&state->Emu8kResampler, state->Scratch, needed, &index, &left, &right);
+                chunk[2*frameIndex]   = AudioClip(chunk[2*frameIndex]   + left);
+                chunk[2*frameIndex+1] = AudioClip(chunk[2*frameIndex+1] + right);
             }
         }
 
         /* --- PC speaker (mono: both channels) ------------------------------ */
         /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
            sets the data bit to click the cone makes no tone here either. */
-        if (st->spk && st->spk_level && VddSpeakerIsActive(st->spk)) {
-            uint32_t hz = VddSpeakerHz(st->spk);
-            st->spk_gated += n;
-            st->spk_hz = hz;
-            if (hz >= AUDIO_SPK_HZ_MIN && hz <= AUDIO_SPK_HZ_MAX) {
-                uint32_t step = (uint32_t)(((uint64_t)hz << 16) / st->out_hz);
-                st->spk_frames += n;
-                for (i = 0; i < n; ++i) {
-                    int32_t v = (st->spk_phase & 0x8000u) ? st->spk_level : -st->spk_level;
-                    o[2*i]   = mix_clip(o[2*i]   + v);
-                    o[2*i+1] = mix_clip(o[2*i+1] + v);
-                    st->spk_phase = (uint16_t)(st->spk_phase + step);
+        if (state->Speaker && state->SpeakerLevel && VddSpeakerIsActive(state->Speaker)) {
+            UINT32 speakerHz = VddSpeakerHz(state->Speaker);
+            state->SpeakerGated += count;
+            state->SpeakerHz = speakerHz;
+            if (speakerHz >= AUDIO_SPEAKER_HZ_MIN && speakerHz <= AUDIO_SPEAKER_HZ_MAX) {
+                UINT32 step = (UINT32)(((UINT64)speakerHz << 16) / state->OutputHz);
+                state->SpeakerFrames += count;
+                for (frameIndex = 0; frameIndex < count; ++frameIndex) {
+                    INT32 value = (state->SpeakerPhase & 0x8000u) ? state->SpeakerLevel : -state->SpeakerLevel;
+                    chunk[2*frameIndex]   = AudioClip(chunk[2*frameIndex]   + value);
+                    chunk[2*frameIndex+1] = AudioClip(chunk[2*frameIndex+1] + value);
+                    state->SpeakerPhase = (WORD)(state->SpeakerPhase + step);
                 }
             }
         }
 
         /* --- master attenuator -------------------------------------------- */
-        if (st->muted) {
-            for (i = 0; i < 2 * n; ++i) o[i] = 0;
-        } else if (st->master < 100) {
-            int32_t g = (int32_t)((st->master * 256u) / 100u);   /* 0..256 */
-            for (i = 0; i < 2 * n; ++i) o[i] = (int16_t)((o[i] * g) >> 8);
+        if (state->IsMuted) {
+            for (frameIndex = 0; frameIndex < 2 * count; ++frameIndex) chunk[frameIndex] = 0;
+        } else if (state->Master < 100) {
+            INT32 gain = (INT32)((state->Master * 256u) / 100u); /* 0..256 */
+            for (frameIndex = 0; frameIndex < 2 * count; ++frameIndex) chunk[frameIndex] = (INT16)((chunk[frameIndex] * gain) >> 8);
         }
 
-        st->frames_mixed += n;
-        done += n;
+        state->FramesMixed += count;
+        done += count;
     }
 }
 
@@ -221,15 +221,15 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
    mono source L = R, so (L + R) / 2 is exactly the old sample -- audio_test's checks
    are unchanged. (The SB's stereo was always averaged here; a GUS voice panned hard
    to one side now folds to half its old level -- nothing but the tests calls this.) */
-void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
+VOID VddAudioMix(PAUDIO_STATE state, INT16 *output, UINT32 frames)
 {
-    int16_t tmp[2 * AUDIO_CHUNK];
-    uint32_t done = 0, i;
+    INT16 stereo[2 * AUDIO_CHUNK];
+    UINT32 done = 0, frameIndex;
     while (done < frames) {
-        uint32_t n = frames - done;
-        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
-        vdd_audio_mix_st(st, tmp, n);
-        for (i = 0; i < n; ++i) out[done + i] = (int16_t)(((int32_t)tmp[2*i] + tmp[2*i+1]) / 2);
-        done += n;
+        UINT32 count = frames - done;
+        if (count > AUDIO_CHUNK) count = AUDIO_CHUNK;
+        VddAudioMixStereo(state, stereo, count);
+        for (frameIndex = 0; frameIndex < count; ++frameIndex) output[done + frameIndex] = (INT16)(((INT32)stereo[2*frameIndex] + stereo[2*frameIndex+1]) / 2);
+        done += count;
     }
 }

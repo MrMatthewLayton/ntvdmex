@@ -24,24 +24,24 @@ int main(void)
 
     printf("== #136: MIDI routing battery ==\n");
 
-    CHECK(midi_route_pick(MIDI_ROUTE_GM, XP, 1) == 0,   "Host GM: device 0");
-    CHECK(midi_route_pick(MIDI_ROUTE_GM, MUNT, 2) == 0, "Host GM: device 0 even with Munt installed");
-    CHECK(midi_route_pick(MIDI_ROUTE_GM, BASS, 2) == 0, "Host GM: device 0 even if it is not the GS synth");
-    CHECK(midi_route_pick(MIDI_ROUTE_GM, 0, 0) == 0,    "Host GM: device 0 with no names at all (as before)");
-    CHECK(midi_route_pick(7, XP, 1) == 0,               "an out-of-range choice behaves as Host GM");
+    CHECK(MidiRoutePick(MIDI_ROUTE_GM, XP, 1) == 0,   "Host GM: device 0");
+    CHECK(MidiRoutePick(MIDI_ROUTE_GM, MUNT, 2) == 0, "Host GM: device 0 even with Munt installed");
+    CHECK(MidiRoutePick(MIDI_ROUTE_GM, BASS, 2) == 0, "Host GM: device 0 even if it is not the GS synth");
+    CHECK(MidiRoutePick(MIDI_ROUTE_GM, 0, 0) == 0,    "Host GM: device 0 with no names at all (as before)");
+    CHECK(MidiRoutePick(7, XP, 1) == 0,               "an out-of-range choice behaves as Host GM");
 
-    CHECK(midi_route_pick(MIDI_ROUTE_MT32, MUNT, 2) == 1, "MT-32: finds Munt's \"MT-32 Synth Emulator\"");
-    CHECK(midi_route_pick(MIDI_ROUTE_MT32, MIX, 4) == 3,  "MT-32: case-insensitive (\"munt mt32emu\")");
-    CHECK(midi_route_pick(MIDI_ROUTE_MT32, XP, 1) == -1,  "MT-32: none installed -> -1 (fall back, and say so)");
-    CHECK(midi_route_pick(MIDI_ROUTE_MT32, BASS, 2) == -1,"MT-32: a SoundFont driver is not an MT-32");
+    CHECK(MidiRoutePick(MIDI_ROUTE_MT32, MUNT, 2) == 1, "MT-32: finds Munt's \"MT-32 Synth Emulator\"");
+    CHECK(MidiRoutePick(MIDI_ROUTE_MT32, MIX, 4) == 3,  "MT-32: case-insensitive (\"munt mt32emu\")");
+    CHECK(MidiRoutePick(MIDI_ROUTE_MT32, XP, 1) == -1,  "MT-32: none installed -> -1 (fall back, and say so)");
+    CHECK(MidiRoutePick(MIDI_ROUTE_MT32, BASS, 2) == -1,"MT-32: a SoundFont driver is not an MT-32");
 
-    CHECK(midi_route_pick(MIDI_ROUTE_SF2, BASS, 2) == 0,  "SoundFont: finds BASSMIDI");
-    CHECK(midi_route_pick(MIDI_ROUTE_SF2, MIX, 4) == 2,   "SoundFont: finds VirtualMIDISynth");
-    CHECK(midi_route_pick(MIDI_ROUTE_SF2, MUNT, 2) == -1, "SoundFont: Munt is not a SoundFont synth");
-    CHECK(midi_route_pick(MIDI_ROUTE_SF2, XP, 1) == -1,   "SoundFont: XP's GS synth alone -> -1");
+    CHECK(MidiRoutePick(MIDI_ROUTE_SF2, BASS, 2) == 0,  "SoundFont: finds BASSMIDI");
+    CHECK(MidiRoutePick(MIDI_ROUTE_SF2, MIX, 4) == 2,   "SoundFont: finds VirtualMIDISynth");
+    CHECK(MidiRoutePick(MIDI_ROUTE_SF2, MUNT, 2) == -1, "SoundFont: Munt is not a SoundFont synth");
+    CHECK(MidiRoutePick(MIDI_ROUTE_SF2, XP, 1) == -1,   "SoundFont: XP's GS synth alone -> -1");
 
-    CHECK(midi_route_has("abc", "") == 0 && midi_route_has(0, "X") == 0, "has: empty / NULL never match");
-    CHECK(midi_route_has("MT-3", "MT-32") == 0, "has: a needle longer than the tail does not match");
+    CHECK(MidiRouteHas("abc", "") == 0 && MidiRouteHas(0, "X") == 0, "has: empty / NULL never match");
+    CHECK(MidiRouteHas("MT-3", "MT-32") == 0, "has: a needle longer than the tail does not match");
 
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;

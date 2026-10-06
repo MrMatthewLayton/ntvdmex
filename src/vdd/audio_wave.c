@@ -238,7 +238,7 @@ static int aw_bind(audio_wave *aw)
 
 /* ── #136: OPEN THE MIDI DEVICE THE SETTING NAMES. ─────────────────────────────────
      Host GM (the default) is the old call, unchanged: device 0, no enumeration. Any
-     other choice enumerates the devices and opens the one midi_route_pick finds by name;
+     other choice enumerates the devices and opens the one MidiRoutePick finds by name;
      none found -> device 0 anyway, with midi_ext = 0 so it is treated as the GM synth
      it is (no SysEx), and the host's log line says the choice was not met. */
 static void aw_midi_open(audio_wave *aw)
@@ -261,7 +261,7 @@ static void aw_midi_open(audio_wave *aw)
             }
             np[i] = names[i];
         }
-        pick = midi_route_pick(aw->midi_choice, np, (int)n);
+        pick = MidiRoutePick(aw->midi_choice, np, (int)n);
         if (pick >= 0) { dev = (UINT)pick; aw->midi_ext = 1; }
         if (dev < n) {
             for (k = 0; k < 31 && names[dev][k]; ++k) aw->midi_name[k] = names[dev][k];

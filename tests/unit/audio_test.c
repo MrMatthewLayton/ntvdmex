@@ -20,7 +20,7 @@ static VDD_BUS bus;
 static DMA_STATE dma;
 static OPL_STATE opl;
 static SB_STATE  sb;
-static audio_state mix;
+static AUDIO_STATE mix;
 static int g_irq_count;
 
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; (void)irq; g_irq_count++; }
@@ -66,12 +66,12 @@ int main(void)
     { NTVDD_DEVICE d = VddOplDevice(&opl); VddBusAdd(&bus, &d); }
     sb.Dma = &dma; sb.Opl = &opl; sb.BasePort = BASE;
     { NTVDD_DEVICE d = VddSbDevice(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }
-    vdd_audio_init(&mix, &opl, &sb, AUDIO_OUT_HZ);
+    VddAudioInitialize(&mix, &opl, &sb, AUDIO_OUTPUT_HZ);
 
     /* T1: silence in, silence out ------------------------------------------ */
-    vdd_audio_mix(&mix, buf, 1024);
+    VddAudioMix(&mix, buf, 1024);
     CHECK(rms(buf, 1024) == 0, "idle: mixes silence");
-    CHECK(mix.frames_mixed == 1024, "idle: still produced the requested frames");
+    CHECK(mix.FramesMixed == 1024, "idle: still produced the requested frames");
 
     /* T2: an FM note survives resampling at the right PITCH ----------------- */
     /* fnum 0x200 block 4 = 388.4 Hz; the OPL renders at 49716 and the mixer
@@ -89,8 +89,8 @@ int main(void)
         VddOplWriteRegister(&opl, 0xC0, 0x01);
         VddOplWriteRegister(&opl, 0xA0, 0x00);
         VddOplWriteRegister(&opl, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
-        vdd_audio_mix(&mix, buf, 22050);                     /* half a second    */
-        hz = measure_hz(buf, 22050, AUDIO_OUT_HZ);
+        VddAudioMix(&mix, buf, 22050);                     /* half a second    */
+        hz = measure_hz(buf, 22050, AUDIO_OUTPUT_HZ);
         printf("        resampled pitch %.1f Hz, expected 388.4 Hz\n", hz);
         CHECK(hz > 380.0 && hz < 397.0, "FM: pitch survives 49716 -> 44100 resampling");
         CHECK(rms(buf, 22050) > 10000, "FM: audible level after mixing");
@@ -106,7 +106,7 @@ int main(void)
     CHECK(VddSbIsActive(&sb), "SB: transfer armed");
     CHECK(g_irq_count == 0, "SB: no IRQ before the mixer runs");
     /* 512 source samples at ~11 kHz is ~46ms; mix a comfortable margin of it.  */
-    vdd_audio_mix(&mix, buf, 4096);
+    VddAudioMix(&mix, buf, 4096);
     CHECK(g_irq_count >= 1, "SB: mixing alone drives the block to completion IRQ  <-- THE TEST");
     CHECK(!VddSbIsActive(&sb), "SB: single-cycle transfer finished");
 
@@ -118,7 +118,7 @@ int main(void)
         wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x01);
         wr(BASE + 0xC, 0x1C);                                /* auto-init        */
         VddOplWriteRegister(&opl, 0xB0, 0x00);                 /* silence the FM   */
-        vdd_audio_mix(&mix, buf, 8192);
+        VddAudioMix(&mix, buf, 8192);
         r = rms(buf, 8192);
         printf("        SB-only rms=%ld\n", r);
         CHECK(r > 1000, "SB: sampled audio is present in the mix");
@@ -126,14 +126,14 @@ int main(void)
 
     /* T5: an auto-init ring keeps raising IRQs while mixing continues -------- */
     g_irq_count = 0;
-    vdd_audio_mix(&mix, buf, 16384);
+    VddAudioMix(&mix, buf, 16384);
     CHECK(g_irq_count >= 2, "SB: auto-init keeps producing IRQs as the mixer runs");
     CHECK(VddSbIsActive(&sb), "SB: auto-init still streaming");
 
     /* T6: rate changes are picked up mid-stream ----------------------------- */
     wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 0x56); wr(BASE + 0xC, 0x22);   /* 22050 */
-    vdd_audio_mix(&mix, buf, 2048);
-    CHECK(mix.r_sb.src_hz == 22050, "resampler: follows a mid-stream rate change");
+    VddAudioMix(&mix, buf, 2048);
+    CHECK(mix.SbResampler.SourceHz == 22050, "resampler: follows a mid-stream rate change");
 
     /* T7: a realistic mix has headroom; a pathological one clamps cleanly --- */
     /* Nine full-volume FM channels PLUS full-scale digital audio saturates a real
@@ -155,7 +155,7 @@ int main(void)
             VddOplWriteRegister(&opl, (uint8_t)(0xA0+k), 0x40);
             VddOplWriteRegister(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (4 << 2) | 1));
         }
-        vdd_audio_mix(&mix, buf, 8192);
+        VddAudioMix(&mix, buf, 8192);
         for (i = 0; i < 8192; ++i) if (buf[i] == 32767 || buf[i] == -32768) clipped++;
         printf("        realistic mix: %d of 8192 at the rail\n", clipped);
         CHECK(clipped == 0, "mix: a realistic score plus sampled audio has headroom");
@@ -171,7 +171,7 @@ int main(void)
             VddOplWriteRegister(&opl, (uint8_t)(0xA0+k), 0x40);
             VddOplWriteRegister(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (5 << 2) | 1));
         }
-        vdd_audio_mix(&mix, buf, 4096);
+        VddAudioMix(&mix, buf, 4096);
         { int wrapped = 0;
           for (i = 1; i < 4096; ++i)
               if ((buf[i-1] > 30000 && buf[i] < -30000) || (buf[i-1] < -30000 && buf[i] > 30000))
@@ -183,7 +183,7 @@ int main(void)
 
     /* ── THE TRANSPORT MUST NOT EAT SAMPLES IT DOES NOT PLAY. ───────────────────────
          VddSbRender() pulls out of the guest's DMA ring, so any sample the mixer asks
-         for and then discards is data the game wrote and nobody hears. rs_need() used
+         for and then discards is data the game wrote and nobody hears. AudioResamplerNeed() used
          to ask for two extra every chunk "for the pair being interpolated between",
          which at Doom's rate is 172 dropped PCM samples a second: the read pointer
          walks away from the guest's write pointer and you hear a click at chunk rate.
@@ -196,11 +196,11 @@ int main(void)
         wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 0x2B); wr(BASE + 0xC, 0x11);  /* 11025 Hz */
         wr(BASE + 0xC, 0xC6); wr(BASE + 0xC, 0x00);          /* 8-bit auto, mono */
         wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x0F);          /* 4096-byte block  */
-        vdd_audio_mix(&mix, buf, 512);                       /* prime the pair   */
+        VddAudioMix(&mix, buf, 512);                       /* prime the pair   */
         before = sb.BlockRemaining;
-        for (i = 0; i < chunks; ++i) vdd_audio_mix(&mix, buf, 512);
+        for (i = 0; i < chunks; ++i) VddAudioMix(&mix, buf, 512);
         after = sb.BlockRemaining;
-        want = chunks * 512u * 11025u / AUDIO_OUT_HZ;        /* exactly 1:4      */
+        want = chunks * 512u * 11025u / AUDIO_OUTPUT_HZ;        /* exactly 1:4      */
         printf("        ring consumed %u over %u chunks, arithmetic says %u\n",
                before - after, chunks, want);
         CHECK(before - after == want,
@@ -236,12 +236,12 @@ int main(void)
         CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1193,
               "speaker: PIT channel 2 divisor 1193 gives ~1000 Hz");
 
-        mix.opl = NULL; mix.sb = NULL;              /* the speaker alone in the mix */
-        vdd_audio_set_speaker(&mix, &spk, 1);
+        mix.Opl = NULL; mix.Sb = NULL;              /* the speaker alone in the mix */
+        VddAudioSetSpeaker(&mix, &spk, 1);
         v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v); /* gate + data = sounding       */
         memset(sbuf, 0, sizeof sbuf);
-        vdd_audio_mix(&mix, sbuf, 4410);
-        hz = measure_hz(sbuf, 4410, AUDIO_OUT_HZ);
+        VddAudioMix(&mix, sbuf, 4410);
+        hz = measure_hz(sbuf, 4410, AUDIO_OUTPUT_HZ);
         printf("        speaker tone measured %.0f Hz (the chip is at %u)\n",
                hz, (unsigned)VddPitCounter2Hz(&pit));
         CHECK(hz > 960 && hz < 1040, "speaker: an active gate produces the PIT's tone");
@@ -249,23 +249,23 @@ int main(void)
 
         v = 0x01; VddBusIo(&bus, 0x61, 1, 0, &v); /* gate only, no data enable    */
         memset(sbuf, 0, sizeof sbuf);
-        vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioMix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "speaker: the gate bit ALONE is silent (both bits gate)");
 
         v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v);
-        vdd_audio_set_speaker(&mix, &spk, 0);       /* fitted, switched off         */
+        VddAudioSetSpeaker(&mix, &spk, 0);       /* fitted, switched off         */
         memset(sbuf, 0, sizeof sbuf);
-        vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioMix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "speaker: the setting silences it without unfitting it");
 
         /* ⚠ A "tone" above the output rate's Nyquist point is not a tone, it is
              alias noise, so it is refused rather than synthesised. */
-        vdd_audio_set_speaker(&mix, &spk, 1);
+        VddAudioSetSpeaker(&mix, &spk, 1);
         v = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &v);
         v = 0x01; VddBusIo(&bus, 0x42, 1, 0, &v);
         v = 0x00; VddBusIo(&bus, 0x42, 1, 0, &v); /* divisor 1 -> 1.19 MHz        */
         memset(sbuf, 0, sizeof sbuf);
-        vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioMix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "speaker: a tone past 20 kHz is refused, not aliased");
 
         /* ── THE MASTER ATTENUATOR SITS AFTER THE SUM. ─────────────────────────────
@@ -277,63 +277,63 @@ int main(void)
         v = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &v);
         v = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &v);
 
-        vdd_audio_set_master(&mix, 100, 0);
-        memset(sbuf, 0, sizeof sbuf); vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioSetMaster(&mix, 100, 0);
+        memset(sbuf, 0, sizeof sbuf); VddAudioMix(&mix, sbuf, 512);
         full = rms(sbuf, 512);
-        vdd_audio_set_master(&mix, 50, 0);
-        memset(sbuf, 0, sizeof sbuf); vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioSetMaster(&mix, 50, 0);
+        memset(sbuf, 0, sizeof sbuf); VddAudioMix(&mix, sbuf, 512);
         half = rms(sbuf, 512);
         printf("        mean square at 100%% = %ld, at 50%% = %ld (power, so ~4x)\n",
                full, half);
         CHECK(half * 3 < full && half * 5 > full,
               "master volume 50 halves the amplitude (a quarter of the power)");
 
-        vdd_audio_set_master(&mix, 100, 1);
-        memset(sbuf, 0, sizeof sbuf); vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioSetMaster(&mix, 100, 1);
+        memset(sbuf, 0, sizeof sbuf); VddAudioMix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) == 0, "mute outputs silence");
-        vdd_audio_set_master(&mix, 100, 0);
-        memset(sbuf, 0, sizeof sbuf); vdd_audio_mix(&mix, sbuf, 512);
+        VddAudioSetMaster(&mix, 100, 0);
+        memset(sbuf, 0, sizeof sbuf); VddAudioMix(&mix, sbuf, 512);
         CHECK(rms(sbuf, 512) > 0, "...and unmuting restores the volume it kept");
 
-        vdd_audio_set_master(&mix, 4000, 0);
-        CHECK(mix.master == 100, "a volume past 100 is clamped, never wrapped into a gain");
-        vdd_audio_set_speaker(&mix, NULL, 0);
+        VddAudioSetMaster(&mix, 4000, 0);
+        CHECK(mix.Master == 100, "a volume past 100 is clamped, never wrapped into a gain");
+        VddAudioSetSpeaker(&mix, NULL, 0);
     }
 
-    /* ── vdd_audio_init MUST NOT LEAVE THE MASTER AT ZERO. ─────────────────────────
+    /* ── VddAudioInitialize MUST NOT LEAVE THE MASTER AT ZERO. ─────────────────────────
          It zeroes the whole struct, which is right for every other field and would
          be SILENCE for this one -- the exact shape of bug that ships as "no sound on
          a clean machine" and is invisible to any test that sets the volume first. */
     {
-        audio_state fresh;
-        vdd_audio_init(&fresh, NULL, NULL, 0);
-        CHECK(fresh.master == 100, "a freshly initialised mixer is at full volume, not zero");
-        CHECK(fresh.muted == 0,    "...and unmuted");
-        CHECK(fresh.out_hz == AUDIO_OUT_HZ, "...and out_hz 0 means the default rate");
-        CHECK(fresh.spk_level == 0, "...and the speaker is unfitted until it is fitted");
-        vdd_audio_init(&fresh, NULL, NULL, 22050);
-        CHECK(fresh.out_hz == 22050, "a requested output rate is honoured");
+        AUDIO_STATE fresh;
+        VddAudioInitialize(&fresh, NULL, NULL, 0);
+        CHECK(fresh.Master == 100, "a freshly initialised mixer is at full volume, not zero");
+        CHECK(fresh.IsMuted == 0,    "...and unmuted");
+        CHECK(fresh.OutputHz == AUDIO_OUTPUT_HZ, "...and out_hz 0 means the default rate");
+        CHECK(fresh.SpeakerLevel == 0, "...and the speaker is unfitted until it is fitted");
+        VddAudioInitialize(&fresh, NULL, NULL, 22050);
+        CHECK(fresh.OutputHz == 22050, "a requested output rate is honoured");
     }
 
     /* ---- #189: AN SB16 STEREO TRANSFER KEEPS ITS TWO CHANNELS. 8-bit unsigned pairs,
        left at FFh and right at 00h: the stereo mix must put + on the left and - on the
        right, and the mono mix -- which always averaged them -- must still average. */
     {   static int16_t st2[2 * 1024], mono[1024];
-        mix.opl = NULL; mix.sb = &sb; vdd_audio_set_speaker(&mix, NULL, 0);
-        vdd_audio_set_master(&mix, 100, 0);
+        mix.Opl = NULL; mix.Sb = &sb; VddAudioSetSpeaker(&mix, NULL, 0);
+        VddAudioSetMaster(&mix, 100, 0);
         for (i = 0; i < 4096; i += 2) { g_flat[0x60000 + i] = 0xFF; g_flat[0x60000 + i + 1] = 0x00; }
         dma_program(0x60000, 4096, 1);
         wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 22050 >> 8); wr(BASE + 0xC, 22050 & 0xFF);
         wr(BASE + 0xC, 0xC6); wr(BASE + 0xC, 0x20);           /* 8-bit auto, STEREO   */
         wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x07);           /* 2048 units           */
-        vdd_audio_mix_st(&mix, st2, 1024);
+        VddAudioMixStereo(&mix, st2, 1024);
         printf("        SB16 stereo frame 500: L=%d R=%d\n", st2[1000], st2[1001]);
         CHECK(st2[1000] > 10000 && st2[1001] < -10000,
               "SB16 stereo: left and right come out on their own channels");
-        vdd_audio_mix(&mix, mono, 1024);
+        VddAudioMix(&mix, mono, 1024);
         CHECK(mono[500] > -200 && mono[500] < 200, "SB16 stereo, mono fold: still the average");
         wr(BASE + 0xC, 0xDA);                                  /* exit auto-init 8-bit */
-        vdd_audio_mix(&mix, buf, 4096);
+        VddAudioMix(&mix, buf, 4096);
     }
 
     /* ---- #189: AN SB PRO STEREO TRANSFER. Mixer 0Eh bit 1 selects stereo for the DSP
@@ -343,7 +343,7 @@ int main(void)
        race through ~21 of them and play an octave high. */
     {   static int16_t st2[2 * 1024];
         int blocks;
-        mix.opl = NULL; mix.sb = &sb;
+        mix.Opl = NULL; mix.Sb = &sb;
         for (i = 0; i < 8192; i += 2) { g_flat[0x70000 + i] = 0xFF; g_flat[0x70000 + i + 1] = 0x00; }
         wr(BASE + 4, 0x0E); wr(BASE + 5, 0x02);              /* mixer: stereo on     */
         dma_program(0x70000, 8192, 1);
@@ -351,18 +351,18 @@ int main(void)
         wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x0F);   /* 4096 B */
         g_irq_count = 0;
         wr(BASE + 0xC, 0x90);                                /* high-speed auto-init */
-        vdd_audio_mix_st(&mix, st2, 1024);
+        VddAudioMixStereo(&mix, st2, 1024);
         printf("        SB Pro stereo frame 500: L=%d R=%d\n", st2[1000], st2[1001]);
         CHECK(st2[1000] > 10000 && st2[1001] < -10000,
               "SB Pro stereo (mixer 0Eh bit 1): left and right on their own channels");
-        for (i = 0; i < 43; ++i) vdd_audio_mix_st(&mix, st2, 1024);   /* ~1 s in all */
+        for (i = 0; i < 43; ++i) VddAudioMixStereo(&mix, st2, 1024);   /* ~1 s in all */
         blocks = g_irq_count;
         printf("        SB Pro stereo: %d block IRQs in ~1 s (frame rate, ~10.6 expected)\n", blocks);
         CHECK(blocks >= 9 && blocks <= 12,
               "SB Pro stereo: the time constant counts both channels (frames at half the byte rate)");
         wr(BASE + 0xC, 0xDA);                                /* leave auto-init      */
         wr(BASE + 4, 0x0E); wr(BASE + 5, 0x00);              /* mixer: stereo off    */
-        vdd_audio_mix(&mix, buf, 8192);
+        VddAudioMix(&mix, buf, 8192);
     }
 
     /* ── #232: THE OPL THROUGH THE STEREO MIXER. Its own chip and mixer, so nothing
@@ -370,18 +370,18 @@ int main(void)
          when the mixer took it as a mono source (a golden taken from 42a9029, the
          build before the OPL3 -- the same register sequence as opl_synth_test's), and
          an OPL3 voice routed left arrives on the left and nowhere else. */
-    {   static OPL_STATE o3; static audio_state m3;
+    {   static OPL_STATE o3; static AUDIO_STATE m3;
         static int16_t sb2[2 * 8192];
         uint32_t h = 2166136261u;
         int c, k;
         #define M3_EAT(n) do { int _n = (n) * 44100 / 49716, _i;                        \
-            vdd_audio_mix_st(&m3, sb2, (uint32_t)_n);                                 \
+            VddAudioMixStereo(&m3, sb2, (uint32_t)_n);                                 \
             for (_i = 0; _i < 2 * _n; ++_i) {                                         \
                 h ^= (uint8_t)sb2[_i]; h *= 16777619u;                                \
                 h ^= (uint8_t)((uint16_t)sb2[_i] >> 8); h *= 16777619u; } } while (0)
         #define M3_W(r, v) VddOplWriteRegister(&o3, (uint8_t)(r), (uint8_t)(v))
         memset(&o3, 0, sizeof o3); VddOplReset(&o3);
-        vdd_audio_init(&m3, &o3, NULL, 44100);
+        VddAudioInitialize(&m3, &o3, NULL, 44100);
         M3_W(0x01, 0x20); M3_W(0xBD, 0xC0);
         for (c = 0; c < 9; ++c) {
             int mo_ = VddOplOperatorIndex(c, 0), cr_ = VddOplOperatorIndex(c, 1);
@@ -421,7 +421,7 @@ int main(void)
 
         /* OPL3, NEW set, one voice on channel 0 routed LEFT only (C0 = 0x11)     */
         memset(&o3, 0, sizeof o3); o3.IsOpl3 = 1; VddOplReset(&o3);
-        vdd_audio_init(&m3, &o3, NULL, 44100);
+        VddAudioInitialize(&m3, &o3, NULL, 44100);
         VddOplWriteRegister(&o3, 0x105, 0x01);
         VddOplWriteRegister(&o3, 0x20, 0x21); VddOplWriteRegister(&o3, 0x40, 0x3F);
         VddOplWriteRegister(&o3, 0x23, 0x21); VddOplWriteRegister(&o3, 0x43, 0x00);
@@ -429,7 +429,7 @@ int main(void)
         VddOplWriteRegister(&o3, 0xC0, 0x11);
         VddOplWriteRegister(&o3, 0xA0, 0x00);
         VddOplWriteRegister(&o3, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
-        vdd_audio_mix_st(&m3, sb2, 4096);
+        VddAudioMixStereo(&m3, sb2, 4096);
         { long long l = 0, r = 0; int i2;
           for (i2 = 0; i2 < 4096; ++i2) { l += (long long)sb2[2*i2] * sb2[2*i2]; r += (long long)sb2[2*i2+1] * sb2[2*i2+1]; }
           printf("        OPL3 left-only voice through the mixer: L energy %lld, R energy %lld\n", l, r);

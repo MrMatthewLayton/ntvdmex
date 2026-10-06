@@ -30,40 +30,42 @@
 #ifndef NTVDMEX_MIDI_ROUTE_H
 #define NTVDMEX_MIDI_ROUTE_H
 
+#include "../ntvdmex_types.h"
+
 enum { MIDI_ROUTE_GM = 0, MIDI_ROUTE_MT32, MIDI_ROUTE_SF2, MIDI_ROUTE_COUNT };
 
-/* Case-insensitive "does hay contain needle" (needle is upper-case ASCII). */
-static inline int midi_route_has(const char *hay, const char *needle)
+/* Case-insensitive "does haystack contain needle" (needle is upper-case ASCII). */
+static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
 {
-    int i, k;
-    if (!hay || !needle || !needle[0]) return 0;
-    for (i = 0; hay[i]; ++i) {
-        for (k = 0; needle[k]; ++k) {
-            char c = hay[i + k];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 0x20);
-            if (c != needle[k]) break;
+    INT start, offset;
+    if (!haystack || !needle || !needle[0]) return 0;
+    for (start = 0; haystack[start]; ++start) {
+        for (offset = 0; needle[offset]; ++offset) {
+            CHAR character = haystack[start + offset];
+            if (character >= 'a' && character <= 'z') character = (CHAR)(character - 0x20);
+            if (character != needle[offset]) break;
         }
-        if (!needle[k]) return 1;
+        if (!needle[offset]) return 1;
     }
     return 0;
 }
 
-/* The device index `choice` asks for among `n` named devices, or -1 for "none of them".
-   Host GM is device 0 whatever the names say (and even with n == 0, as before: opening
+/* The device index `choice` asks for among `deviceCount` named devices, or -1 for "none of them".
+   Host GM is device 0 whatever the names say (and even with deviceCount == 0, as before: opening
    it is what tells us whether it exists). */
-static inline int midi_route_pick(int choice, const char *const *names, int n)
+static inline INT MidiRoutePick(_In_ INT choice, _In_reads_(deviceCount) const PCSTR *names, _In_ INT deviceCount)
 {
-    static const char *const MT32[] = { "MT-32", "MT32", "MUNT", 0 };
-    static const char *const SF2[]  = { "SOUNDFONT", "BASSMIDI", "VIRTUALMIDISYNTH",
+    static const PCSTR mt32Names[] = { "MT-32", "MT32", "MUNT", 0 };
+    static const PCSTR soundFontNames[]  = { "SOUNDFONT", "BASSMIDI", "VIRTUALMIDISYNTH",
                                         "FLUID", "SF2", 0 };
-    const char *const *want;
-    int i, j;
-    if (choice == MIDI_ROUTE_MT32)     want = MT32;
-    else if (choice == MIDI_ROUTE_SF2) want = SF2;
+    const PCSTR *wanted;
+    INT deviceIndex, nameIndex;
+    if (choice == MIDI_ROUTE_MT32)     wanted = mt32Names;
+    else if (choice == MIDI_ROUTE_SF2) wanted = soundFontNames;
     else return 0;
-    for (i = 0; i < n; ++i)
-        for (j = 0; want[j]; ++j)
-            if (midi_route_has(names[i], want[j])) return i;
+    for (deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex)
+        for (nameIndex = 0; wanted[nameIndex]; ++nameIndex)
+            if (MidiRouteHas(names[deviceIndex], wanted[nameIndex])) return deviceIndex;
     return -1;
 }
 

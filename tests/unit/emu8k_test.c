@@ -12,7 +12,7 @@
  *   T6  the volume envelope: attack shape, IFATN attenuation, release shape and end
  *   T7  the filter: low cutoff attenuates, Q resonates, Q0/FFh is transparent
  *   T8  output gating: HWCF3's audio enable, a DMA channel is silent
- *   T9  the mixer hook: vdd_audio_set_emu8k puts the chip into the host's stereo mix
+ *   T9  the mixer hook: VddAudioSetEmu8k puts the chip into the host's stereo mix
  */
 #include <stdio.h>
 #include <string.h>
@@ -694,20 +694,20 @@ int main(void)
       Emu8kTestNoteKill(EMU8K_TEST_SECOND_CHANNEL); }
 
     /* ---- T9: the mixer hook ---- */
-    { static audio_state audio; static INT16 mixed[EMU8K_STEREO_SIDES * 1024];
+    { static AUDIO_STATE audio; static INT16 mixed[EMU8K_STEREO_SIDES * 1024];
       BOOL hasLeft = FALSE, hasRight = FALSE;
       DWORD frame;
-      vdd_audio_init(&audio, NULL, NULL, EMU8K_TEST_RATE);
-      vdd_audio_set_emu8k(&audio, &g_Emu8k);
+      VddAudioInitialize(&audio, NULL, NULL, EMU8K_TEST_RATE);
+      VddAudioSetEmu8k(&audio, &g_Emu8k);
       Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_LEFT, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
-      vdd_audio_mix_st(&audio, mixed, 1024);
+      VddAudioMixStereo(&audio, mixed, 1024);
       for (frame = 0; frame < 1024; ++frame) {
           if (mixed[EMU8K_STEREO_SIDES * frame]) hasLeft = TRUE;
           if (mixed[EMU8K_STEREO_SIDES * frame + 1]) hasRight = TRUE;
       }
       Emu8kTestCheck(hasLeft && !hasRight,
                      "mixer: vdd_audio_set_emu8k -- a hard-left voice reaches the host's LEFT channel only");
-      vdd_audio_set_emu8k(&audio, NULL); Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL); }
+      VddAudioSetEmu8k(&audio, NULL); Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL); }
 
     printf("\n%d checks, %d failed\n", g_Checks, g_Failures);
     return g_Failures ? 1 : 0;
