@@ -20,9 +20,9 @@ int main(void)
 {
     VDD_BUS bus;
     pit_state pit; memset(&pit, 0, sizeof pit);
-    speaker_state spk; memset(&spk, 0, sizeof spk); spk.pit = &pit;
+    SPEAKER_STATE spk; memset(&spk, 0, sizeof spk); spk.Pit = &pit;
     NTVDD_DEVICE pdev = vdd_pit_device(&pit);
-    NTVDD_DEVICE sdev = vdd_speaker_device(&spk);
+    NTVDD_DEVICE sdev = VddSpeakerDevice(&spk);
     uint32_t v;
 
     printf("== M3 PC-speaker VDD battery ==\n");
@@ -33,7 +33,7 @@ int main(void)
     CHECK(bus.Ports[bus.PortCount - 1].First == 0x61, "add: speaker claimed port 0x61");
 
     /* T1: off by default ------------------------------------------------- */
-    CHECK(!vdd_speaker_active(&spk), "init: speaker inactive");
+    CHECK(!VddSpeakerIsActive(&spk), "init: speaker inactive");
 
     /* T2: program PIT channel 2 to 1000 Hz (reload = 1193182/1000 = 1193) -- *
      * 0x43 = 10 11 011 0 = 0xB6 (ch2, lo/hi, mode 3); then lo, hi of 1193.   */
@@ -45,18 +45,18 @@ int main(void)
 
     /* T3: enabling gate+data (port 0x61 bits 0+1) turns the speaker on ---- */
     v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v);
-    CHECK(vdd_speaker_active(&spk), "0x61=3: speaker active");
-    CHECK(vdd_speaker_hz(&spk) == PIT_INPUT_HZ / 1193, "active: reports the ch2 tone");
+    CHECK(VddSpeakerIsActive(&spk), "0x61=3: speaker active");
+    CHECK(VddSpeakerHz(&spk) == PIT_INPUT_HZ / 1193, "active: reports the ch2 tone");
 
     /* T4: only one of the two bits => not active ------------------------- */
     v = 0x01; VddBusIo(&bus, 0x61, 1, 0, &v);
-    CHECK(!vdd_speaker_active(&spk), "0x61=1 (gate only): inactive");
+    CHECK(!VddSpeakerIsActive(&spk), "0x61=1 (gate only): inactive");
     v = 0x02; VddBusIo(&bus, 0x61, 1, 0, &v);
-    CHECK(!vdd_speaker_active(&spk), "0x61=2 (data only): inactive");
+    CHECK(!VddSpeakerIsActive(&spk), "0x61=2 (data only): inactive");
 
     /* T5: turn off ------------------------------------------------------- */
     v = 0x00; VddBusIo(&bus, 0x61, 1, 0, &v);
-    CHECK(!vdd_speaker_active(&spk), "0x61=0: speaker off");
+    CHECK(!VddSpeakerIsActive(&spk), "0x61=0: speaker off");
 
     /* T6: reads echo the control bits and toggle the refresh bit (bit 4) -- */
     v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v);

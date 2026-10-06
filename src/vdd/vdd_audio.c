@@ -62,7 +62,7 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
 void vdd_audio_set_gus(audio_state *st, gus_state *gus) { st->gus = gus; }
 void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu) { st->emu8k = emu; }
 
-void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable)
+void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable)
 {
     st->spk = spk;
     st->spk_level = enable ? AUDIO_SPK_LEVEL : 0;
@@ -188,8 +188,8 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
         /* --- PC speaker (mono: both channels) ------------------------------ */
         /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
            sets the data bit to click the cone makes no tone here either. */
-        if (st->spk && st->spk_level && vdd_speaker_active(st->spk)) {
-            uint32_t hz = vdd_speaker_hz(st->spk);
+        if (st->spk && st->spk_level && VddSpeakerIsActive(st->spk)) {
+            uint32_t hz = VddSpeakerHz(st->spk);
             st->spk_gated += n;
             st->spk_hz = hz;
             if (hz >= AUDIO_SPK_HZ_MIN && hz <= AUDIO_SPK_HZ_MAX) {

@@ -216,15 +216,15 @@ int main(void)
          rather than assumed. */
     {
         pit_state pit;      NTVDD_DEVICE pdev;
-        speaker_state spk;  NTVDD_DEVICE sdev;
+        SPEAKER_STATE spk;  NTVDD_DEVICE sdev;
         int16_t sbuf[4410];
         double hz;
         long full, half;
         uint32_t v;
 
         memset(&pit, 0, sizeof pit); memset(&spk, 0, sizeof spk);
-        spk.pit = &pit;
-        pdev = vdd_pit_device(&pit);  sdev = vdd_speaker_device(&spk);
+        spk.Pit = &pit;
+        pdev = vdd_pit_device(&pit);  sdev = VddSpeakerDevice(&spk);
         CHECK(VddBusAdd(&bus, &pdev) == 0, "speaker: PIT joined the mixer's bus");
         CHECK(VddBusAdd(&bus, &sdev) == 0, "speaker: and the speaker VDD did too");
 

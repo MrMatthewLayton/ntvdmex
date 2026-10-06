@@ -911,7 +911,7 @@ static ide_state    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static pic_state    g_pic;       static NTVDD_DEVICE g_pic_dev;
 static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
 static input_state  g_in;        static NTVDD_DEVICE g_in_dev;
-static speaker_state g_spk;      static NTVDD_DEVICE g_spk_dev;
+static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
 /* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
    this drives Beep.sys. They are independent -- "Both" means both. */
 static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
@@ -8920,7 +8920,7 @@ static void exec_mach_restore(int d, char **pp)
        into the shell. */
     vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
-    vdd_mpu_reset(&g_mpu); vdd_speaker_reset(&g_spk);
+    vdd_mpu_reset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
               || g_vid.mkind != VID_KIND_TEXT);
     if (remode) {
@@ -13652,7 +13652,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              sends nothing unless the tone actually changed -- so a guest that is
              not beeping costs one comparison per tick. */
         if (g_spk_real)
-            g_spk_real_hz = vdd_speaker_active(&g_spk) ? vdd_speaker_hz(&g_spk) : 0;
+            g_spk_real_hz = VddSpeakerIsActive(&g_spk) ? VddSpeakerHz(&g_spk) : 0;
         /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
            This tick used to run at 30 Hz and snapshot whenever it happened to fire.
            Once the guest was correctly paced to 60/70 Hz that meant sampling once
@@ -32134,8 +32134,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          settings change re-write 0010 -- see bios_bda_refresh_equipment. */
     BiosBdaInitializeWithTop(NULL, bios_equipment_word(), g_dos_mem_top);   /* #136 */
     g_bda_ready = 1;
-    g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
-    g_spk_dev = vdd_speaker_device(&g_spk);
+    g_spk.Pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
+    g_spk_dev = VddSpeakerDevice(&g_spk);
     VddBusAdd(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
     g_joy.now_us = joy_now_us;
     g_joy_dev = vdd_joy_device(&g_joy);
@@ -37106,7 +37106,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "\r\n");
     p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.spk ? 1 : 0));
     p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.spk_level);
-    p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.port61);
+    p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.Port61);
     p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.ch2_reload);
     p = zput(p, " gated_frames=");          p = zhex(p, g_audio.spk_gated);
     p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.spk_frames);

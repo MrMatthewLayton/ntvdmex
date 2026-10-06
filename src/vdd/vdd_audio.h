@@ -61,7 +61,7 @@ typedef struct audio_state {
     sb_state  *sb;
     gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
     PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
-    const speaker_state *spk; /* PC speaker; NULL = not fitted                   */
+    const SPEAKER_STATE *spk; /* PC speaker; NULL = not fitted                   */
     uint32_t   out_hz;
     audio_resampler r_opl, r_sb, r_gus, r_emu8k;
     /* Speaker phase as a 16-bit fraction of one cycle, clocked at out_hz. The
@@ -97,7 +97,7 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
 /* Fit (or unfit) the PC speaker. `enable` 0 leaves the VDD on the bus -- port
    0x61 must keep answering, guests time delay loops off its refresh bit -- and
    only stops it being audible. */
-void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable);
+void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable);
 /* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
 void vdd_audio_set_gus(audio_state *st, gus_state *gus);
 /* Fit (or remove, NULL) the AWE32's EMU8000 as a mixer source (#233). */
