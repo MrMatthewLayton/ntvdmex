@@ -11,7 +11,7 @@ uint8_t vga_font_8x16[256][16];
 #include "vga_defaults.h"
 #include "vbe_pm.h"
 
-static void vga_load_modedef(video_state *st, uint8_t mode);
+static void vga_load_modedef(VIDEO_STATE *st, uint8_t mode);
 
 /* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE, and so is the ega64_rgb() that replaced
    it. Both hardcoded the sixteen colours a 16-colour mode renders with, which is
@@ -47,14 +47,14 @@ static void vga_load_modedef(video_state *st, uint8_t mode);
      standard VGA value of 6 bits per primary color during any mode set" (VBE 2.0
      §4.11) -- INT 10h AH=00h, 4F02h (both arms) and power-on all put it back to 6.
      A width of 0 (a state nothing initialised) reads as 6. */
-static int dac_is8(const video_state *st) { return st->vesa_dacwidth == 8; }
+static int dac_is8(const VIDEO_STATE *st) { return st->VesaDacWidth == 8; }
 /* one primary as the guest wrote it -> the 8-bit component dac[] holds */
-static uint8_t dac_to8(const video_state *st, uint8_t v)
+static uint8_t dac_to8(const VIDEO_STATE *st, uint8_t v)
 { return dac_is8(st) ? v : (uint8_t)((v & 0x3Fu) << 2); }
 /* ...and back, for a read */
-static uint8_t dac_from8(const video_state *st, uint8_t c)
+static uint8_t dac_from8(const VIDEO_STATE *st, uint8_t c)
 { return dac_is8(st) ? c : (uint8_t)(c >> 2); }
-static uint32_t dac_pack_w(const video_state *st, uint8_t r, uint8_t g, uint8_t b)
+static uint32_t dac_pack_w(const VIDEO_STATE *st, uint8_t r, uint8_t g, uint8_t b)
 {
     return 0xFF000000u | ((uint32_t)dac_to8(st, r) << 16)
                        | ((uint32_t)dac_to8(st, g) << 8) | (uint32_t)dac_to8(st, b);
@@ -131,33 +131,33 @@ static void vga_defaults_for(uint8_t mode,
      table; what these feed is the CRT timing, which is a different question.
    ⚠ Line Compare's three registers are loaded here as well, so it holds the BIOS's
      all-ones "no split" rather than a zero we merely happen to treat as inert. */
-static void crtc_lc_update(video_state *st);
-static void crtc_vt_update(video_state *st);
-static void vid_latch(video_state *st, int at_frame);   /* display start/pan schedule (s83) */
-static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl);   /* 4F07 BL=80h (#226) */
-static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+static void crtc_lc_update(VIDEO_STATE *st);
+static void crtc_vt_update(VIDEO_STATE *st);
+static void vid_latch(VIDEO_STATE *st, int at_frame);   /* display start/pan schedule (s83) */
+static uint64_t vesa_vbl_release(VIDEO_STATE *st, int *now_in_vbl);   /* 4F07 BL=80h (#226) */
+static int vid_beam(const VIDEO_STATE *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line);
-static void load_default_crtc(video_state *st)
+static void load_default_crtc(VIDEO_STATE *st)
 {
-    const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->mode)]];
-    st->crtc_index = 0;
-    st->crtc_offset = c[VGA_CRTC_OFFSET];
-    st->crtc_start = (uint32_t)(((unsigned)c[VGA_CRTC_START_HI] << 8) | c[VGA_CRTC_START_LO]);
-    st->crtc_start_live = (uint16_t)st->crtc_start;   /* the display follows at once */
-    st->start_vs        = (uint16_t)st->crtc_start;
-    st->latch_t         = 0;                           /* vid_latch: take everything as-is */
-    st->crtc_start_pend = 0;
-    st->crtc_off_seen = 0;
-    st->crtc_overflow   = c[0x07];
-    st->crtc_maxscan    = c[0x09];
-    st->crtc_lc_low     = c[0x18];
-    st->crtc_vtotal_lo  = c[0x06];
-    st->crtc_vde_lo     = c[0x12];
-    st->crtc_vbs_lo     = c[0x15];
+    const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->Mode)]];
+    st->CrtcIndex = 0;
+    st->CrtcOffset = c[VGA_CRTC_OFFSET];
+    st->CrtcStart = (uint32_t)(((unsigned)c[VGA_CRTC_START_HI] << 8) | c[VGA_CRTC_START_LO]);
+    st->CrtcStartLive = (uint16_t)st->CrtcStart;   /* the display follows at once */
+    st->StartVs        = (uint16_t)st->CrtcStart;
+    st->LatchTime         = 0;                           /* vid_latch: take everything as-is */
+    st->IsCrtcStartPending = 0;
+    st->IsCrtcOffsetSeen = 0;
+    st->CrtcOverflow   = c[0x07];
+    st->CrtcMaxScan    = c[0x09];
+    st->CrtcLineCompareLow     = c[0x18];
+    st->CrtcVerticalTotalLow  = c[0x06];
+    st->CrtcVerticalDisplayEndLow     = c[0x12];
+    st->CrtcVerticalBlankStartLow     = c[0x15];
     crtc_lc_update(st);
     crtc_vt_update(st);
-    st->dirty = 1;
+    st->IsDirty = 1;
 }
 
 /* ── ★★★ THE RENDER PALETTE IS DERIVED, NOT STORED. ─────────────────────────────
@@ -176,36 +176,36 @@ static void load_default_crtc(video_state *st)
      clobbered the guest's DAC entries, since pal[] and dac[] were the same array.
      A derived table has to derive from something; substituting a plausible value for
      the real one is the same mistake as a stepped-over call returning a sentinel. */
-static void pal_split_note(video_state *st, const uint32_t *prev);
-static int  vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+static void pal_split_note(VIDEO_STATE *st, const uint32_t *prev);
+static int  vid_beam(const VIDEO_STATE *st, uint64_t *now, uint32_t *frame_us,
                      uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                      uint32_t *frame_no, uint32_t *line);   /* fwd: defined with status_in */
-static void pal_refresh(video_state *st)
+static void pal_refresh(VIDEO_STATE *st)
 {
     int i;
     uint32_t prev[256];
-    for (i = 0; i < 256; ++i) prev[i] = st->pal[i];
+    for (i = 0; i < 256; ++i) prev[i] = st->Palette[i];
     /* A packed 8bpp VESA mode indexes the DAC directly, exactly as mode 13h does.
        (s74b) It used to fall through to the attribute-controller path below because a
        4F02 mode set never touches mkind, so pixels 0..15 went through the EGA remap
        (6 -> DAC 0x14, 8..15 -> 0x38..0x3F) and a VESA guest's first sixteen colours
        were somebody else's. */
-    if (st->mkind == VID_KIND_LINEAR8 || (st->in_vesa && st->vesa_bpp <= 8)) {
-        for (i = 0; i < 256; ++i) st->pal[i] = st->dac[i];
+    if (st->ModeKind == VIDEO_KIND_LINEAR8 || (st->IsVesa && st->VesaBpp <= 8)) {
+        for (i = 0; i < 256; ++i) st->Palette[i] = st->Dac[i];
     } else {
         for (i = 0; i < 16; ++i) {
-            uint8_t v = (uint8_t)(st->vpal[i] & 0x3F);
+            uint8_t v = (uint8_t)(st->PaletteRegisters[i] & 0x3F);
             /* AR14 Color Select supplies the high DAC bits on a real VGA; zero by
                default, which makes this the identity. */
-            if (st->attr_mode & 0x80)
-                v = (uint8_t)((v & 0x0F) | ((st->attr_cse & 0x03) << 4));
-            v = (uint8_t)(v | ((st->attr_cse & 0x0C) << 4));
-            st->pal[i] = st->dac[v];
+            if (st->AttributeMode & 0x80)
+                v = (uint8_t)((v & 0x0F) | ((st->AttributeColorSelect & 0x03) << 4));
+            v = (uint8_t)(v | ((st->AttributeColorSelect & 0x0C) << 4));
+            st->Palette[i] = st->Dac[v];
         }
-        for (i = 16; i < 256; ++i) st->pal[i] = st->dac[i];
+        for (i = 16; i < 256; ++i) st->Palette[i] = st->Dac[i];
     }
     pal_split_note(st, prev);
-    st->dirty = 1;
+    st->IsDirty = 1;
 }
 
 /* ── ★★★★ A PALETTE WRITE MID-FRAME IS A RASTER SPLIT, NOT A NEW PALETTE. ─────────
@@ -229,23 +229,23 @@ static void pal_refresh(video_state *st)
      frame start. VddFramePaletteAt resolves a row; the presenter and the capture
      apply it, video_test pins it with a fake clock. */
 #define VID_SPLIT_STICK 12u   /* rows: IRQ jitter measured at +-5 rows (s70), with margin */
-static void pal_split_note(video_state *st, const uint32_t *prev)
+static void pal_split_note(VIDEO_STATE *st, const uint32_t *prev)
 {
     uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line, row;
     int i, split;
     if (!vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
-        || !st->gh || !vdisp) {
-        for (i = 0; i < 256; ++i) if (st->pal[i] != prev[i]) st->pal_base[i] = st->pal[i];
+        || !st->GraphicsHeight || !vdisp) {
+        for (i = 0; i < 256; ++i) if (st->Palette[i] != prev[i]) st->PaletteBase[i] = st->Palette[i];
         return;
     }
-    if (frame_no != st->pal_frame_no) {           /* first write of this frame: rebase */
-        for (i = 0; i < 256; ++i) st->pal_base[i] = prev[i];
-        st->pal_frame_no = frame_no;
+    if (frame_no != st->PaletteFrameNumber) {           /* first write of this frame: rebase */
+        for (i = 0; i < 256; ++i) st->PaletteBase[i] = prev[i];
+        st->PaletteFrameNumber = frame_no;
     }
-    row   = (line < vdisp) ? (uint32_t)(((uint64_t)line * st->gh) / vdisp) : 0xFFFFu;
+    row   = (line < vdisp) ? (uint32_t)(((uint64_t)line * st->GraphicsHeight) / vdisp) : 0xFFFFu;
     split = (row != 0xFFFFu && row >= 2u);
     for (i = 0; i < 256; ++i) {
-        if (st->pal[i] == prev[i]) continue;
+        if (st->Palette[i] == prev[i]) continue;
         if (split) {
             /* ── THE BOUNDARY IS STICKY (s70, the user's HP run). The tick that writes
                  this split is an IRQ we deliver with ~100-300 us of jitter, so its row
@@ -256,41 +256,41 @@ static void pal_split_note(video_state *st, const uint32_t *prev)
                  VID_SPLIT_STICK rows of this entry's live split keeps the OLD row: the
                  boundary stays where the guest first put it, and only a genuinely
                  different row (a new effect) moves it. */
-            uint32_t old = st->pal_split_row[i];
-            int live = old && (uint32_t)(frame_no - st->pal_split_frame[i]) <= 2u;
+            uint32_t old = st->PaletteSplitRow[i];
+            int live = old && (uint32_t)(frame_no - st->PaletteSplitFrame[i]) <= 2u;
             uint32_t d = old > row ? old - row : row - old;
-            st->pal_split[i]       = st->pal[i];
-            st->pal_split_row[i]   = (live && d <= VID_SPLIT_STICK) ? (uint16_t)old : (uint16_t)row;
-            st->pal_split_frame[i] = frame_no;
-            st->pal_split_notes++;
+            st->PaletteSplit[i]       = st->Palette[i];
+            st->PaletteSplitRow[i]   = (live && d <= VID_SPLIT_STICK) ? (uint16_t)old : (uint16_t)row;
+            st->PaletteSplitFrame[i] = frame_no;
+            st->PaletteSplitNotes++;
         } else {
-            st->pal_base[i] = st->pal[i];
+            st->PaletteBase[i] = st->Palette[i];
         }
     }
 }
 
-void vdd_video_frame_touch(video_state *st)
+void VddVideoFrameTouch(VIDEO_STATE *st)
 {
     uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line;
-    st->frame.PaletteBase  = st->pal_base;
-    st->frame.PaletteSplit = st->pal_split;
-    st->frame.SplitRow     = st->blanked ? 0 : st->pal_split_row;   /* SR1.5 (#266) */
-    st->frame.SplitFrame   = st->pal_split_frame;
-    st->frame.FrameNumber = vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
-                       ? frame_no : st->pal_frame_no;
+    st->Frame.PaletteBase  = st->PaletteBase;
+    st->Frame.PaletteSplit = st->PaletteSplit;
+    st->Frame.SplitRow     = st->IsBlanked ? 0 : st->PaletteSplitRow;   /* SR1.5 (#266) */
+    st->Frame.SplitFrame   = st->PaletteSplitFrame;
+    st->Frame.FrameNumber = vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
+                       ? frame_no : st->PaletteFrameNumber;
 }
 
 /* AH=10h AL=1Bh's sum (30% red, 59% green, 11% blue), over DAC entries [first,
    first+n) -- and since #252 also what AH=12h BL=33h's summing applies to a mode
    set's palette and to AH=10h AL=10h/12h loads. */
-static void dac_grey(video_state *st, unsigned first, unsigned n)
+static void dac_grey(VIDEO_STATE *st, unsigned first, unsigned n)
 {
     unsigned i;
     for (i = 0; i < n && (first + i) < 256; ++i) {
-        uint32_t v = st->dac[first + i];
+        uint32_t v = st->Dac[first + i];
         uint32_t g = ((((v >> 16) & 0xFF) * 30) + (((v >> 8) & 0xFF) * 59)
                       + ((v & 0xFF) * 11)) / 100;
-        st->dac[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
+        st->Dac[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
     }
 }
 
@@ -298,15 +298,15 @@ static void dac_grey(video_state *st, unsigned first, unsigned n)
    without it a program that reprogrammed the palette leaves the NEXT program (or
    the text screen it returns to) drawn in its colours -- usually near-black, so
    text mode looks dead. */
-static void load_default_palette(video_state *st)
+static void load_default_palette(VIDEO_STATE *st)
 {
     int i;
     /* The guest asked us not to (AH=12h BL=31h). Leave both the DAC and the
        attribute palette exactly as it left them. */
     const unsigned char *ac; const unsigned long *dc;
-    for (i = 0; i < 256; ++i) st->pal_split_row[i] = 0;   /* a mode set ends any raster split */
-    if (st->def_pal_off) return;
-    st->pal_resets++;
+    for (i = 0; i < 256; ++i) st->PaletteSplitRow[i] = 0;   /* a mode set ends any raster split */
+    if (st->IsDefaultPaletteOff) return;
+    st->PaletteResets++;
     /* ⚠ dac_hi_since_reset ON ITS OWN CANNOT REPORT ANYTHING. The counters are
        printed after the guest has exited, and a guest exits through a mode set back
        to text -- so "since the last reset" is always "since a moment after the last
@@ -315,15 +315,15 @@ static void load_default_palette(video_state *st)
        game never rewrote; the port trace shows the game sets the mode and THEN
        writes the palette, which is the only order that can work on real hardware.
        Carry the running maximum too, so the epoch that had the writes survives. */
-    if (st->dac_hi_since_reset > st->dac_hi_max)
-        st->dac_hi_max = st->dac_hi_since_reset;
-    st->dac_hi_since_reset = 0;
-    vga_defaults_for(st->mode, &ac, &dc);
-    for (i = 0; i < 16; ++i)   st->vpal[i] = ac[i];
-    st->vpal[16] = 0;
-    st->attr_ff = st->attr_index = st->attr_mode = st->attr_cse = 0;
-    for (i = 0; i < 256; ++i)  st->dac[i] = 0xFF000000u | (uint32_t)dc[i];
-    if (st->grey_sum) dac_grey(st, 0, 256);           /* AH=12h BL=33h (#252) */
+    if (st->DacHighSinceReset > st->DacHighMax)
+        st->DacHighMax = st->DacHighSinceReset;
+    st->DacHighSinceReset = 0;
+    vga_defaults_for(st->Mode, &ac, &dc);
+    for (i = 0; i < 16; ++i)   st->PaletteRegisters[i] = ac[i];
+    st->PaletteRegisters[16] = 0;
+    st->AttributeFlipFlop = st->AttributeIndex = st->AttributeMode = st->AttributeColorSelect = 0;
+    for (i = 0; i < 256; ++i)  st->Dac[i] = 0xFF000000u | (uint32_t)dc[i];
+    if (st->IsGreySum) dac_grey(st, 0, 256);           /* AH=12h BL=33h (#252) */
     pal_refresh(st);
 }
 
@@ -338,22 +338,22 @@ static void load_default_palette(video_state *st)
      writing register 32. */
 static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     uint8_t val = (uint8_t)(v & 0xFF);
     (void)w;
     if (port == 0x3C1) return;                       /* data port is read-only       */
-    if (!st->attr_ff) { st->attr_index = val; st->attr_ff = 1; return; }
-    st->attr_ff = 0;
-    if ((st->attr_index & 0x1F) == 0x13) vid_latch(st, 0);   /* pel panning: see vid_latch */
-    st->attr_reg[st->attr_index & 0x1F] = val;
-    st->attr_w  [st->attr_index & 0x1F]++;
-    switch (st->attr_index & 0x1F) {
+    if (!st->AttributeFlipFlop) { st->AttributeIndex = val; st->AttributeFlipFlop = 1; return; }
+    st->AttributeFlipFlop = 0;
+    if ((st->AttributeIndex & 0x1F) == 0x13) vid_latch(st, 0);   /* pel panning: see vid_latch */
+    st->AttributeRegisters[st->AttributeIndex & 0x1F] = val;
+    st->AttributeWrites  [st->AttributeIndex & 0x1F]++;
+    switch (st->AttributeIndex & 0x1F) {
     case 0x00: case 0x01: case 0x02: case 0x03:
     case 0x04: case 0x05: case 0x06: case 0x07:
     case 0x08: case 0x09: case 0x0A: case 0x0B:
     case 0x0C: case 0x0D: case 0x0E: case 0x0F:
-        st->vpal[st->attr_index & 0x0F] = (uint8_t)(val & 0x3F);
-        st->ac_port_writes++;
+        st->PaletteRegisters[st->AttributeIndex & 0x0F] = (uint8_t)(val & 0x3F);
+        st->AcPortWrites++;
         pal_refresh(st);
         break;
     case 0x10:
@@ -366,27 +366,27 @@ static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
              `Files` rendered as `iles` and `Help` as `elp` every other half-second --
              the letter was there, it was blinking. Two layers with their own copy of
              one fact, disagreeing; AR10 is now the single source. */
-        st->attr_mode = val;
-        st->blink = (uint8_t)((val >> 3) & 1);
+        st->AttributeMode = val;
+        st->IsBlink = (uint8_t)((val >> 3) & 1);
         pal_refresh(st);
         break;
-    case 0x11: st->vpal[16] = st->overscan = (uint8_t)(val & 0x3F); st->dirty = 1; break;
-    case 0x14: st->attr_cse = val;   pal_refresh(st); break;
+    case 0x11: st->PaletteRegisters[16] = st->Overscan = (uint8_t)(val & 0x3F); st->IsDirty = 1; break;
+    case 0x14: st->AttributeColorSelect = val;   pal_refresh(st); break;
     default: break;                                  /* 12h plane enable, 13h pan    */
     }
 }
 
 static void attr_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self;
-    uint8_t idx = (uint8_t)(st->attr_index & 0x1F);
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    uint8_t idx = (uint8_t)(st->AttributeIndex & 0x1F);
     (void)w;
-    if (port == 0x3C0) { *v = st->attr_index; return; }   /* index reads back at 3C0 */
+    if (port == 0x3C0) { *v = st->AttributeIndex; return; }   /* index reads back at 3C0 */
     switch (idx) {
-    case 0x10: *v = st->attr_mode; break;
-    case 0x11: *v = st->vpal[16];  break;
-    case 0x14: *v = st->attr_cse;  break;
-    default:   *v = (idx < 16) ? st->vpal[idx] : st->attr_reg[idx]; break;  /* AR12/AR13 */
+    case 0x10: *v = st->AttributeMode; break;
+    case 0x11: *v = st->PaletteRegisters[16];  break;
+    case 0x14: *v = st->AttributeColorSelect;  break;
+    default:   *v = (idx < 16) ? st->PaletteRegisters[idx] : st->AttributeRegisters[idx]; break;  /* AR12/AR13 */
     }
 }
 
@@ -397,21 +397,21 @@ static void attr_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
    nothing with the planar path, and quietly showing a text screen instead is the
    silent failure GH #27 exists to remove. */
 static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes[] = {
-    { 0x00, VID_KIND_TEXT,    40, 25,   320, 400 },
-    { 0x01, VID_KIND_TEXT,    40, 25,   320, 400 },
-    { 0x02, VID_KIND_TEXT,    80, 25,   640, 400 },
-    { 0x03, VID_KIND_TEXT,    80, 25,   640, 400 },
-    { 0x04, VID_KIND_CGA,     40, 25,   320, 200 },   /* CGA 4-colour   */
-    { 0x05, VID_KIND_CGA,     40, 25,   320, 200 },   /* 4-colour, grey */
-    { 0x06, VID_KIND_CGA,     80, 25,   640, 200 },   /* CGA 2-colour   */
-    { 0x07, VID_KIND_TEXT,    80, 25,   640, 400 },   /* MDA mono text  */
-    { 0x0D, VID_KIND_PLANAR,  40, 25,   320, 200 },
-    { 0x0E, VID_KIND_PLANAR,  80, 25,   640, 200 },
-    { 0x0F, VID_KIND_PLANAR,  80, 25,   640, 350 },
-    { 0x10, VID_KIND_PLANAR,  80, 25,   640, 350 },
-    { 0x11, VID_KIND_PLANAR,  80, 30,   640, 480 },
-    { 0x12, VID_KIND_PLANAR,  80, 30,   640, 480 },
-    { 0x13, VID_KIND_LINEAR8, 40, 25,   320, 200 },
+    { 0x00, VIDEO_KIND_TEXT,    40, 25,   320, 400 },
+    { 0x01, VIDEO_KIND_TEXT,    40, 25,   320, 400 },
+    { 0x02, VIDEO_KIND_TEXT,    80, 25,   640, 400 },
+    { 0x03, VIDEO_KIND_TEXT,    80, 25,   640, 400 },
+    { 0x04, VIDEO_KIND_CGA,     40, 25,   320, 200 },   /* CGA 4-colour   */
+    { 0x05, VIDEO_KIND_CGA,     40, 25,   320, 200 },   /* 4-colour, grey */
+    { 0x06, VIDEO_KIND_CGA,     80, 25,   640, 200 },   /* CGA 2-colour   */
+    { 0x07, VIDEO_KIND_TEXT,    80, 25,   640, 400 },   /* MDA mono text  */
+    { 0x0D, VIDEO_KIND_PLANAR,  40, 25,   320, 200 },
+    { 0x0E, VIDEO_KIND_PLANAR,  80, 25,   640, 200 },
+    { 0x0F, VIDEO_KIND_PLANAR,  80, 25,   640, 350 },
+    { 0x10, VIDEO_KIND_PLANAR,  80, 25,   640, 350 },
+    { 0x11, VIDEO_KIND_PLANAR,  80, 30,   640, 480 },
+    { 0x12, VIDEO_KIND_PLANAR,  80, 30,   640, 480 },
+    { 0x13, VIDEO_KIND_LINEAR8, 40, 25,   320, 200 },
 };
 
 /* ── #252: THREE WAYS TO NAME A TEXT CELL, because a page is three things. ──────────
@@ -424,18 +424,18 @@ static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes
    All three used to be one function that always meant page 0 at B800:0 -- so 05h
    flipped the BDA and nothing else, and a write to page 1 landed on page 0. The text
    window is 32 KB (B800-BFFF); an address past it wraps, as the card's does. */
-static unsigned vid_page_size(const video_state *st);
-static uint8_t *pcell(video_state *st, int pg, int r, int c)
+static unsigned vid_page_size(const VIDEO_STATE *st);
+static uint8_t *pcell(VIDEO_STATE *st, int pg, int r, int c)
 {
-    unsigned off = (unsigned)(pg & 7) * vid_page_size(st) + (unsigned)(r * st->cols + c) * 2u;
-    return st->vmem + VID_TEXT_OFF + (off & 0x7FFFu);
+    unsigned off = (unsigned)(pg & 7) * vid_page_size(st) + (unsigned)(r * st->Columns + c) * 2u;
+    return st->VideoMemory + VIDEO_TEXT_OFFSET + (off & 0x7FFFu);
 }
-static uint8_t *cell(video_state *st, int r, int c)   /* -> char byte of (r,c)    */
-{ return pcell(st, st->page, r, c); }
-static uint8_t *dcell(video_state *st, int r, int c)
+static uint8_t *cell(VIDEO_STATE *st, int r, int c)   /* -> char byte of (r,c)    */
+{ return pcell(st, st->Page, r, c); }
+static uint8_t *dcell(VIDEO_STATE *st, int r, int c)
 {
-    unsigned off = (unsigned)st->crtc_start_live * 2u + (unsigned)(r * st->cols + c) * 2u;
-    return st->vmem + VID_TEXT_OFF + (off & 0x7FFFu);
+    unsigned off = (unsigned)st->CrtcStartLive * 2u + (unsigned)(r * st->Columns + c) * 2u;
+    return st->VideoMemory + VIDEO_TEXT_OFFSET + (off & 0x7FFFu);
 }
 
 /* ── ONE BACKING STORE FOR A BIT-PLANE, WHOEVER WRITES IT. (s74b) ─────────────────
@@ -449,14 +449,14 @@ static uint8_t *dcell(video_state *st, int r, int c)
      memory nothing rendered: `planar hi_water=0`, black screen, for two guests.
      When the host supplies plane sections, the engine, the BIOS pixel services and
      the renderer all use them; without a host (the off-VM harness) st->plane[] as
-     before. The sections are MODEY_WIN = VID_PLANE_SIZE bytes, so nothing changes size. */
-static uint8_t *PL(video_state *st, int p)
-{ return st->ymap_plane ? st->ymap_plane(st->ymap_ctx, p & 3) : st->plane[p & 3]; }
+     before. The sections are MODEY_WIN = VIDEO_PLANE_SIZE bytes, so nothing changes size. */
+static uint8_t *PL(VIDEO_STATE *st, int p)
+{ return st->YMapPlane ? st->YMapPlane(st->YMapContext, p & 3) : st->Planes[p & 3]; }
 
-static void clear_text(video_state *st, uint8_t attr)
+static void clear_text(VIDEO_STATE *st, uint8_t attr)
 {
-    int n = st->cols * st->rows, i;
-    uint8_t *t = st->vmem + VID_TEXT_OFF;
+    int n = st->Columns * st->Rows, i;
+    uint8_t *t = st->VideoMemory + VIDEO_TEXT_OFFSET;
     for (i = 0; i < n; ++i) { t[i*2] = ' '; t[i*2+1] = attr; }
 }
 
@@ -479,7 +479,7 @@ static uint8_t text_rows_for(uint8_t cell_h)
 static unsigned mode_page_size(uint8_t mode, uint8_t kind, unsigned cols, unsigned rows)
 {
     unsigned psize;
-    if (kind == VID_KIND_TEXT) {
+    if (kind == VIDEO_KIND_TEXT) {
         psize = (cols * rows * 2u + 0xFFu) & ~0xFFu;
         if (psize < 0x800u) psize = 0x800u;
     } else {
@@ -501,8 +501,8 @@ static unsigned mode_page_size(uint8_t mode, uint8_t kind, unsigned cols, unsign
     }
     return psize;
 }
-static unsigned vid_page_size(const video_state *st)
-{ return mode_page_size(st->mode, st->mkind, st->cols, st->rows); }
+static unsigned vid_page_size(const VIDEO_STATE *st)
+{ return mode_page_size(st->Mode, st->ModeKind, st->Columns, st->Rows); }
 
 /* The cell height a BIOS mode set gives each standard mode: 8x16 in the VGA text modes
    and the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. AH=00h and the
@@ -519,28 +519,28 @@ static uint8_t mode_cell_h(uint8_t mode)
      nothing in src/ wrote either: the IVT held whatever the VDM started with, which
      on the rig is the real machine's BIOS, not the tables our INT 10h draws from.
      Written through the bus so the off-VM battery's flat memory gets them too. */
-static void vid_set_vec(video_state *st, uint8_t vec, uint16_t seg, uint16_t off)
+static void vid_set_vec(VIDEO_STATE *st, uint8_t vec, uint16_t seg, uint16_t off)
 {
     uint8_t *v;
-    if (!st->bus) return;
-    v = (uint8_t *)VddMapFlat(st->bus, 0, (uint16_t)(vec * 4u));
+    if (!st->Bus) return;
+    v = (uint8_t *)VddMapFlat(st->Bus, 0, (uint16_t)(vec * 4u));
     if (!v) return;
     v[0] = (uint8_t)off; v[1] = (uint8_t)(off >> 8);
     v[2] = (uint8_t)seg; v[3] = (uint8_t)(seg >> 8);
 }
 /* INT 43h -> our ROM copy of the font a cell of `h` lines draws with. */
-static void vid_i43_rom(video_state *st, uint8_t h)
+static void vid_i43_rom(VIDEO_STATE *st, uint8_t h)
 {
-    st->i43_seg = h == 8 ? VDD_FONT8X8_SEG : h == 14 ? VDD_FONT8X14_SEG : VDD_FONT8X16_SEG;
-    st->i43_off = 0;
-    st->gfont_user = 0;
-    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
+    st->Int43Segment = h == 8 ? VDD_FONT8X8_SEG : h == 14 ? VDD_FONT8X14_SEG : VDD_FONT8X16_SEG;
+    st->Int43Offset = 0;
+    st->IsGraphicsFontUser = 0;
+    vid_set_vec(st, 0x43, st->Int43Segment, st->Int43Offset);
 }
 /* INT 1Fh -> the upper half of our 8x8 table (power-on; AH=11h AL=20h replaces it). */
-static void vid_i1f_rom(video_state *st)
+static void vid_i1f_rom(VIDEO_STATE *st)
 {
-    st->i1f_seg = VDD_FONT8X8_SEG; st->i1f_off = 128 * 8; st->g1f_user = 0;
-    vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
+    st->Int1FSegment = VDD_FONT8X8_SEG; st->Int1FOffset = 128 * 8; st->IsInt1FUser = 0;
+    vid_set_vec(st, 0x1F, st->Int1FSegment, st->Int1FOffset);
 }
 
 /* ── #266: AH=0Bh's arithmetic, from the CGA it emulates. 0040:0066 is the CGA's colour
@@ -551,19 +551,19 @@ static void vid_i1f_rom(video_state *st)
      one DOSBox's INT10_SetBackgroundBorder/SetColorSelect carry; what pins it is that
      it reproduces the MEASURED mode 04h table from the mode set's own 0066 = 30h:
      AR01-03 = 13h/15h/17h (vga_modedefs.h, PCem's IBM ROM). */
-uint8_t vdd_cga_colour_select(uint8_t cur66, uint8_t bh, uint8_t bl)
+uint8_t VddCgaColourSelect(uint8_t cur66, uint8_t bh, uint8_t bl)
 {
     if (bh == 0) return (uint8_t)((cur66 & 0xE0u) | (bl & 0x1Fu));
     return (uint8_t)((cur66 & 0xDFu) | ((bl & 1u) << 5));
 }
-uint8_t vdd_cga_bg_ar(uint8_t bl)
+uint8_t VddCgaBackgroundAr(uint8_t bl)
 { return (uint8_t)(((bl << 1) & 0x10u) | (bl & 0x07u)); }
-void vdd_cga_pal_ar(uint8_t sel66, uint8_t ar123[3])
+void VddCgaPaletteAr(uint8_t sel66, uint8_t ar123[3])
 {
     uint8_t v = (uint8_t)((sel66 & 0x10u) | 0x02u | ((sel66 >> 5) & 1u));
     ar123[0] = v; ar123[1] = (uint8_t)(v + 2u); ar123[2] = (uint8_t)(v + 4u);
 }
-uint8_t vdd_gfx_font_rows(uint8_t bl, uint8_t dl)
+uint8_t VddGraphicsFontRows(uint8_t bl, uint8_t dl)
 {
     switch (bl) {
     case 0x00: return dl;
@@ -575,50 +575,50 @@ uint8_t vdd_gfx_font_rows(uint8_t bl, uint8_t dl)
 
 /* One AC palette register as the BIOS writes it: the register file AND the shadow the
    renderer reads (vpal; 11h = vpal[16]/overscan). Not a guest write: attr_w untouched. */
-static void ac_bios_set(video_state *st, uint8_t idx, uint8_t v)
+static void ac_bios_set(VIDEO_STATE *st, uint8_t idx, uint8_t v)
 {
     v = (uint8_t)(v & 0x3F);
-    st->attr_reg[idx & 0x1F] = v;
-    if (idx < 16) st->vpal[idx] = v;
-    else if (idx == 0x11) st->vpal[16] = st->overscan = v;
-    st->ac_bios_writes++;
+    st->AttributeRegisters[idx & 0x1F] = v;
+    if (idx < 16) st->PaletteRegisters[idx] = v;
+    else if (idx == 0x11) st->PaletteRegisters[16] = st->Overscan = v;
+    st->AcBiosWrites++;
 }
 
-void vdd_video_bda_sync(video_state *st)
+void VddVideoBdaSync(VIDEO_STATE *st)
 {
-    uint8_t *b = st->bda;
+    uint8_t *b = st->BiosData;
     unsigned psize;
     if (!b) return;
-    b[0x49] = st->mode;
-    b[0x4A] = st->cols; b[0x4B] = 0;
+    b[0x49] = st->Mode;
+    b[0x4A] = st->Columns; b[0x4B] = 0;
     psize = vid_page_size(st);
     b[0x4C] = (uint8_t)psize; b[0x4D] = (uint8_t)(psize >> 8);
-    { unsigned poff = (unsigned)st->page * psize;
+    { unsigned poff = (unsigned)st->Page * psize;
       b[0x4E] = (uint8_t)poff; b[0x4F] = (uint8_t)(poff >> 8); }
     /* All eight cursors (#252) -- the active page's from cur_row/cur_col, the rest
        from the per-page store. Only the active slot used to be written, so a guest
        reading another page's cursor from the BDA read whatever was left there. */
     { unsigned pg;
       for (pg = 0; pg < 8; ++pg) {
-          int act = (pg == (unsigned)(st->page & 7));
-          b[0x50 + pg * 2] = act ? st->cur_col : st->pg_col[pg];
-          b[0x51 + pg * 2] = act ? st->cur_row : st->pg_row[pg];
+          int act = (pg == (unsigned)(st->Page & 7));
+          b[0x50 + pg * 2] = act ? st->CursorColumn : st->PageColumn[pg];
+          b[0x51 + pg * 2] = act ? st->CursorRow : st->PageRow[pg];
       } }
     {   /* 0040:0060 follows the same rule as AH=03h: no text cursor in graphics. */
-        uint16_t shp = (st->mkind == VID_KIND_TEXT) ? st->cur_shape : 0;
+        uint16_t shp = (st->ModeKind == VIDEO_KIND_TEXT) ? st->CursorShape : 0;
         b[0x60] = (uint8_t)shp; b[0x61] = (uint8_t)(shp >> 8); }
-    b[0x62] = st->page;
-    { unsigned crtc = (st->mode == 0x07) ? 0x3B4u : 0x3D4u;
+    b[0x62] = st->Page;
+    { unsigned crtc = (st->Mode == 0x07) ? 0x3B4u : 0x3D4u;
       b[0x63] = (uint8_t)crtc; b[0x64] = (uint8_t)(crtc >> 8); }
-    b[0x84] = (uint8_t)(st->rows ? st->rows - 1 : 24);
-    b[0x85] = st->cell_h; b[0x86] = 0;
+    b[0x84] = (uint8_t)(st->Rows ? st->Rows - 1 : 24);
+    b[0x85] = st->CellHeight; b[0x86] = 0;
     /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
        bit 7, or 4F02h D15) did not clear memory -- see int10 AH=00h and vesa 4F02h. */
-    b[0x87] = (uint8_t)(0x60 | (st->modeset_noclear ? 0x80 : 0x00)
-                        | (st->cur_emul_off ? 0x01 : 0x00));      /* bit 0: 12h BL=34h (#252) */
+    b[0x87] = (uint8_t)(0x60 | (st->IsModeSetNoClear ? 0x80 : 0x00)
+                        | (st->IsCursorEmulationOff ? 0x01 : 0x00));      /* bit 0: 12h BL=34h (#252) */
     b[0x88] = 0x09;                                    /* feature/switch bits: enhanced colour */
     /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
-    b[0x89] = (uint8_t)((st->gh == 200) ? 0x81 : (st->gh == 350) ? 0x01 : 0x11);
+    b[0x89] = (uint8_t)((st->GraphicsHeight == 200) ? 0x81 : (st->GraphicsHeight == 350) ? 0x01 : 0x11);
 }
 
 /* ══ #252: THE CHARACTER SERVICES IN A GRAPHICS MODE DRAW, IN THAT MODE'S LAYOUT. ══
@@ -639,31 +639,31 @@ void vdd_video_bda_sync(video_state *st)
      BL bit 7 = XOR the glyph onto what is there, in every mode but 13h (p_vidtxt:
      PCem's IBM VGA ROM is the authority). Background pixels are written 0 otherwise.
      Measured against PCem's IBM VGA ROM, DOSBox-X and SeaVGABIOS by p_vidtxt.asm. */
-static const uint8_t *gfx_font(const video_state *st, uint8_t ch, int *h)
+static const uint8_t *gfx_font(const VIDEO_STATE *st, uint8_t ch, int *h)
 {
     /* #266: a CALLER-SUPPLIED table (AH=11h AL=21h -> INT 43h, AL=20h -> INT 1Fh) is
        drawn from where the vector points, as the BIOS draws: SeaVGABIOS's get_font_data
        takes INT 1Fh for characters 80h-FFh of an 8-line cell, INT 43h for the rest. The
        ROM case is unchanged -- our vectors point at copies of these same tables. */
-    if (st->bus && (st->gfont_user || st->g1f_user) && st->cell_h >= 1 && st->cell_h <= 16) {
+    if (st->Bus && (st->IsGraphicsFontUser || st->IsInt1FUser) && st->CellHeight >= 1 && st->CellHeight <= 16) {
         const uint8_t *p = 0;
-        *h = st->cell_h;
-        if (*h == 8 && ch >= 0x80 && st->g1f_user)
-            p = (const uint8_t *)VddMapFlat(st->bus, st->i1f_seg,
-                                              (uint16_t)(st->i1f_off + (ch - 0x80u) * 8u));
-        else if (st->gfont_user)
-            p = (const uint8_t *)VddMapFlat(st->bus, st->i43_seg,
-                                              (uint16_t)(st->i43_off + (unsigned)ch * (unsigned)*h));
+        *h = st->CellHeight;
+        if (*h == 8 && ch >= 0x80 && st->IsInt1FUser)
+            p = (const uint8_t *)VddMapFlat(st->Bus, st->Int1FSegment,
+                                              (uint16_t)(st->Int1FOffset + (ch - 0x80u) * 8u));
+        else if (st->IsGraphicsFontUser)
+            p = (const uint8_t *)VddMapFlat(st->Bus, st->Int43Segment,
+                                              (uint16_t)(st->Int43Offset + (unsigned)ch * (unsigned)*h));
         if (p) return p;
     }
-    *h = st->cell_h == 14 ? 14 : st->cell_h == 16 ? 16 : 8;
+    *h = st->CellHeight == 14 ? 14 : st->CellHeight == 16 ? 16 : 8;
     return *h == 8 ? vga_font_8x8[ch] : *h == 14 ? vga_font_8x14[ch] : vga_font_8x16[ch];
 }
 
 /* One glyph row's worth of pixels at character cell (col,row) of page pg -- the
    address arithmetic for every graphics kind lives here and in gfx_row_addr, so the
    draw, the scroll and the read-back cannot disagree. */
-static void gfx_glyph(video_state *st, int pg, int col, int row, uint8_t ch, uint8_t colour)
+static void gfx_glyph(VIDEO_STATE *st, int pg, int col, int row, uint8_t ch, uint8_t colour)
 {
     int h, gy, p, x = (colour & 0x80) != 0;
     const uint8_t *gl = gfx_font(st, ch, &h);
@@ -671,35 +671,35 @@ static void gfx_glyph(video_state *st, int pg, int col, int row, uint8_t ch, uin
        and the A0000 window is one bank of a bigger picture -- draw nothing. */
     /* ...nor in an UNCHAINED 256-colour mode (mode Y: chain-4 off): A0000 is then the
        plane-mapped window and a chained byte store would land in one plane. */
-    if (st->in_vesa || (st->mkind == VID_KIND_LINEAR8 && !st->chain4)) return;
-    if (col < 0 || row < 0 || col >= st->cols || row >= st->rows) return;
-    if (st->mkind == VID_KIND_LINEAR8) {
-        uint32_t w = st->gw ? st->gw : VID_G13_W;
+    if (st->IsVesa || (st->ModeKind == VIDEO_KIND_LINEAR8 && !st->IsChain4)) return;
+    if (col < 0 || row < 0 || col >= st->Columns || row >= st->Rows) return;
+    if (st->ModeKind == VIDEO_KIND_LINEAR8) {
+        uint32_t w = st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE13_WIDTH;
         for (gy = 0; gy < h; ++gy) {
             uint32_t off = (uint32_t)(row * h + gy) * w + (uint32_t)col * 8u;
             int gx;
-            if (off + 8u > VID_APERTURE_SIZE) return;
+            if (off + 8u > VIDEO_APERTURE_SIZE) return;
             for (gx = 0; gx < 8; ++gx)
-                st->vmem[off + gx] = (gl[gy] & (0x80 >> gx)) ? colour : 0;
+                st->VideoMemory[off + gx] = (gl[gy] & (0x80 >> gx)) ? colour : 0;
         }
-    } else if (st->mkind == VID_KIND_PLANAR) {
-        uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
+    } else if (st->ModeKind == VIDEO_KIND_PLANAR) {
+        uint32_t bpr = (uint32_t)(st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE12_WIDTH) / 8u;
         uint32_t base = (uint32_t)(pg & 7) * vid_page_size(st);
         for (gy = 0; gy < h; ++gy) {
             uint32_t off = base + (uint32_t)(row * h + gy) * bpr + (uint32_t)col;
-            if (off >= VID_PLANE_SIZE) return;
+            if (off >= VIDEO_PLANE_SIZE) return;
             for (p = 0; p < 4; ++p) {
                 uint8_t fg = (uint8_t)(((colour >> p) & 1) ? gl[gy] : 0);
                 if (x) PL(st,p)[off] ^= fg; else PL(st,p)[off] = fg;
             }
         }
-    } else if (st->mkind == VID_KIND_CGA) {
-        uint8_t *m = st->vmem + VID_TEXT_OFF;
+    } else if (st->ModeKind == VIDEO_KIND_CGA) {
+        uint8_t *m = st->VideoMemory + VIDEO_TEXT_OFFSET;
         for (gy = 0; gy < h; ++gy) {
             int y = row * h + gy;
             uint32_t off = ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
             uint8_t bits = gl[gy];
-            if (st->cga_bpp == 1) {
+            if (st->CgaBpp == 1) {
                 uint8_t v = (uint8_t)((colour & 1) ? bits : 0);
                 off += (uint32_t)col;
                 if (x) m[off] ^= v; else m[off] = v;
@@ -713,34 +713,34 @@ static void gfx_glyph(video_state *st, int pg, int col, int row, uint8_t ch, uin
             }
         }
     }
-    st->dirty = 1;
+    st->IsDirty = 1;
 }
 
 /* AH=08h in a graphics mode: there is no character code in memory, so the BIOS reads
    the cell's pixels back (non-zero = foreground) and looks the pattern up in the font
    it draws with. No match = 0. */
-static uint8_t gfx_read_char(video_state *st, int pg, int col, int row)
+static uint8_t gfx_read_char(VIDEO_STATE *st, int pg, int col, int row)
 {
     uint8_t pat[16];
     int h, gy, c;
     (void)gfx_font(st, 0, &h);
-    if (st->in_vesa || col < 0 || row < 0 || col >= st->cols || row >= st->rows) return 0;
+    if (st->IsVesa || col < 0 || row < 0 || col >= st->Columns || row >= st->Rows) return 0;
     for (gy = 0; gy < h; ++gy) {
         int y = row * h + gy, gx;
         uint8_t b = 0;
-        if (st->mkind == VID_KIND_LINEAR8) {
-            uint32_t w = st->gw ? st->gw : VID_G13_W, off = (uint32_t)y * w + (uint32_t)col * 8u;
-            if (off + 8u > VID_APERTURE_SIZE) return 0;
-            for (gx = 0; gx < 8; ++gx) if (st->vmem[off + gx]) b |= (uint8_t)(0x80 >> gx);
-        } else if (st->mkind == VID_KIND_PLANAR) {
-            uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
+        if (st->ModeKind == VIDEO_KIND_LINEAR8) {
+            uint32_t w = st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE13_WIDTH, off = (uint32_t)y * w + (uint32_t)col * 8u;
+            if (off + 8u > VIDEO_APERTURE_SIZE) return 0;
+            for (gx = 0; gx < 8; ++gx) if (st->VideoMemory[off + gx]) b |= (uint8_t)(0x80 >> gx);
+        } else if (st->ModeKind == VIDEO_KIND_PLANAR) {
+            uint32_t bpr = (uint32_t)(st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE12_WIDTH) / 8u;
             uint32_t off = (uint32_t)(pg & 7) * vid_page_size(st) + (uint32_t)y * bpr + (uint32_t)col;
             int p;
-            if (off >= VID_PLANE_SIZE) return 0;
+            if (off >= VIDEO_PLANE_SIZE) return 0;
             for (p = 0; p < 4; ++p) b |= PL(st, p)[off];
-        } else if (st->mkind == VID_KIND_CGA) {
-            const uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
-            if (st->cga_bpp == 1) b = m[col];
+        } else if (st->ModeKind == VIDEO_KIND_CGA) {
+            const uint8_t *m = st->VideoMemory + VIDEO_TEXT_OFFSET + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            if (st->CgaBpp == 1) b = m[col];
             else {
                 uint16_t v = (uint16_t)((m[col * 2] << 8) | m[col * 2 + 1]);
                 for (gx = 0; gx < 8; ++gx) if ((v >> (14 - 2 * gx)) & 3u) b |= (uint8_t)(0x80 >> gx);
@@ -759,24 +759,24 @@ static uint8_t gfx_read_char(video_state *st, int pg, int col, int row)
 /* The bytes of one pixel line y (0..gh-1) for character columns [left, right], and
    how many: the unit gfx_scroll moves. Planar returns plane 0's; the caller adds
    the same offset into the other three. */
-static uint8_t *gfx_row_addr(video_state *st, int pl, int y, int left, int right, uint32_t *n)
+static uint8_t *gfx_row_addr(VIDEO_STATE *st, int pl, int y, int left, int right, uint32_t *n)
 {
-    if (st->mkind == VID_KIND_LINEAR8) {
-        uint32_t w = st->gw ? st->gw : VID_G13_W, off = (uint32_t)y * w + (uint32_t)left * 8u;
+    if (st->ModeKind == VIDEO_KIND_LINEAR8) {
+        uint32_t w = st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE13_WIDTH, off = (uint32_t)y * w + (uint32_t)left * 8u;
         *n = (uint32_t)(right - left + 1) * 8u;
-        return (off + *n <= VID_APERTURE_SIZE) ? st->vmem + off : 0;
+        return (off + *n <= VIDEO_APERTURE_SIZE) ? st->VideoMemory + off : 0;
     }
-    if (st->mkind == VID_KIND_PLANAR) {
-        uint32_t bpr = (uint32_t)(st->gw ? st->gw : VID_G12_W) / 8u;
-        uint32_t off = (uint32_t)(st->page & 7) * vid_page_size(st) + (uint32_t)y * bpr + (uint32_t)left;
+    if (st->ModeKind == VIDEO_KIND_PLANAR) {
+        uint32_t bpr = (uint32_t)(st->GraphicsWidth ? st->GraphicsWidth : VIDEO_MODE12_WIDTH) / 8u;
+        uint32_t off = (uint32_t)(st->Page & 7) * vid_page_size(st) + (uint32_t)y * bpr + (uint32_t)left;
         *n = (uint32_t)(right - left + 1);
-        return (off + *n <= VID_PLANE_SIZE) ? PL(st, pl) + off : 0;
+        return (off + *n <= VIDEO_PLANE_SIZE) ? PL(st, pl) + off : 0;
     }
-    if (st->mkind == VID_KIND_CGA) {
-        uint32_t per = st->cga_bpp == 1 ? 1u : 2u;
+    if (st->ModeKind == VIDEO_KIND_CGA) {
+        uint32_t per = st->CgaBpp == 1 ? 1u : 2u;
         uint32_t off = ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u + (uint32_t)left * per;
         *n = (uint32_t)(right - left + 1) * per;
-        return (off + *n <= 0x4000u) ? st->vmem + VID_TEXT_OFF + off : 0;
+        return (off + *n <= 0x4000u) ? st->VideoMemory + VIDEO_TEXT_OFFSET + off : 0;
     }
     *n = 0; return 0;
 }
@@ -785,21 +785,21 @@ static uint8_t *gfx_row_addr(video_state *st, int pl, int y, int left, int right
    the window move by `lines` (up or down), and the rows uncovered are filled with
    colour `fill` -- BH for 06h/07h, 0 for the teletype. lines = 0 (or more than the
    window) clears it. */
-static void gfx_scroll(video_state *st, int lines, int top, int left, int bot, int right,
+static void gfx_scroll(VIDEO_STATE *st, int lines, int top, int left, int bot, int right,
                        uint8_t fill, int up)
 {
-    int ch = st->cell_h == 14 ? 14 : st->cell_h == 16 ? 16 : 8;
-    int y, y0, y1, pl, npl = st->mkind == VID_KIND_PLANAR ? 4 : 1;
-    if (st->in_vesa || (st->mkind == VID_KIND_LINEAR8 && !st->chain4)) return;   /* as gfx_glyph */
-    if (right >= st->cols) right = st->cols - 1;
-    if (bot >= st->rows) bot = st->rows - 1;
+    int ch = st->CellHeight == 14 ? 14 : st->CellHeight == 16 ? 16 : 8;
+    int y, y0, y1, pl, npl = st->ModeKind == VIDEO_KIND_PLANAR ? 4 : 1;
+    if (st->IsVesa || (st->ModeKind == VIDEO_KIND_LINEAR8 && !st->IsChain4)) return;   /* as gfx_glyph */
+    if (right >= st->Columns) right = st->Columns - 1;
+    if (bot >= st->Rows) bot = st->Rows - 1;
     if (left > right || top > bot) return;
     if (lines <= 0 || lines > bot - top + 1) lines = bot - top + 1;
     y0 = top * ch; y1 = (bot + 1) * ch - 1;
     for (pl = 0; pl < npl; ++pl) {
         uint8_t fb;
-        if (st->mkind == VID_KIND_PLANAR)    fb = (uint8_t)(((fill >> pl) & 1) ? 0xFF : 0x00);
-        else if (st->mkind == VID_KIND_CGA)  fb = (uint8_t)(st->cga_bpp == 1 ? ((fill & 1) ? 0xFF : 0)
+        if (st->ModeKind == VIDEO_KIND_PLANAR)    fb = (uint8_t)(((fill >> pl) & 1) ? 0xFF : 0x00);
+        else if (st->ModeKind == VIDEO_KIND_CGA)  fb = (uint8_t)(st->CgaBpp == 1 ? ((fill & 1) ? 0xFF : 0)
                                                                             : (fill & 3) * 0x55);
         else                                 fb = fill;
         for (y = up ? y0 : y1; up ? (y <= y1) : (y >= y0); y += up ? 1 : -1) {
@@ -811,14 +811,14 @@ static void gfx_scroll(video_state *st, int lines, int top, int left, int bot, i
             for (k = 0; k < n; ++k) d[k] = s ? s[k] : fb;
         }
     }
-    st->dirty = 1;
+    st->IsDirty = 1;
 }
 
-static void scroll_up(video_state *st, int lines, int top, int left,
+static void scroll_up(VIDEO_STATE *st, int lines, int top, int left,
                       int bot, int right, uint8_t attr)
 {
     int r, c;
-    if (st->mkind != VID_KIND_TEXT) { gfx_scroll(st, lines, top, left, bot, right, attr, 1); return; }
+    if (st->ModeKind != VIDEO_KIND_TEXT) { gfx_scroll(st, lines, top, left, bot, right, attr, 1); return; }
     if (lines <= 0 || lines > (bot - top + 1)) {
         for (r = top; r <= bot; ++r)
             for (c = left; c <= right; ++c) { uint8_t *p = cell(st, r, c); p[0]=' '; p[1]=attr; }
@@ -835,42 +835,42 @@ static void scroll_up(video_state *st, int lines, int top, int left,
 
 /* The teletype's scroll fill: attribute 07h in text (as before), colour 0 -- the
    background -- in a graphics mode. */
-static uint8_t tty_fill(const video_state *st) { return (uint8_t)(st->mkind == VID_KIND_TEXT ? 0x07 : 0x00); }
+static uint8_t tty_fill(const VIDEO_STATE *st) { return (uint8_t)(st->ModeKind == VIDEO_KIND_TEXT ? 0x07 : 0x00); }
 
-static void advance(video_state *st)
+static void advance(VIDEO_STATE *st)
 {
-    if (++st->cur_col >= st->cols) {
-        st->cur_col = 0;
-        if (++st->cur_row >= st->rows) {
-            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
-            st->cur_row = st->rows - 1;
+    if (++st->CursorColumn >= st->Columns) {
+        st->CursorColumn = 0;
+        if (++st->CursorRow >= st->Rows) {
+            scroll_up(st, 1, 0, 0, st->Rows - 1, st->Columns - 1, tty_fill(st));
+            st->CursorRow = st->Rows - 1;
         }
     }
 }
 
-/* AH=0Eh, and DOS console output (vdd_video_putc), on the ACTIVE page. `colour` is
+/* AH=0Eh, and DOS console output (VddVideoPutChar), on the ACTIVE page. `colour` is
    BL -- the glyph's foreground in a graphics mode, unused in text (the cell keeps
    its attribute). DOS's CON driver calls 0Eh with BL=07h, so that is what
-   vdd_video_putc passes. */
-static void teletype_c(video_state *st, uint8_t ch, uint8_t colour)
+   VddVideoPutChar passes. */
+static void teletype_c(VIDEO_STATE *st, uint8_t ch, uint8_t colour)
 {
     switch (ch) {
-    case 0x0D: st->cur_col = 0; break;
+    case 0x0D: st->CursorColumn = 0; break;
     case 0x0A:
-        if (++st->cur_row >= st->rows) {
-            scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
-            st->cur_row = st->rows - 1;
+        if (++st->CursorRow >= st->Rows) {
+            scroll_up(st, 1, 0, 0, st->Rows - 1, st->Columns - 1, tty_fill(st));
+            st->CursorRow = st->Rows - 1;
         }
         break;
-    case 0x08: if (st->cur_col) st->cur_col--; break;
+    case 0x08: if (st->CursorColumn) st->CursorColumn--; break;
     case 0x07: break;
     default:
-        if (st->mkind == VID_KIND_TEXT) cell(st, st->cur_row, st->cur_col)[0] = ch;
-        else gfx_glyph(st, st->page, st->cur_col, st->cur_row, ch, colour);
+        if (st->ModeKind == VIDEO_KIND_TEXT) cell(st, st->CursorRow, st->CursorColumn)[0] = ch;
+        else gfx_glyph(st, st->Page, st->CursorColumn, st->CursorRow, ch, colour);
         advance(st);
     }
 }
-static void teletype(video_state *st, uint8_t ch) { teletype_c(st, ch, 0x07); }
+static void teletype(VIDEO_STATE *st, uint8_t ch) { teletype_c(st, ch, 0x07); }
 
 /* --- VESA VBE 2.0 (banked, packed-256) ----------------------------------- */
 /* supported modes: {VBE number, width, height} (all 8bpp packed) */
@@ -882,7 +882,7 @@ static void teletype(video_state *st, uint8_t ch) { teletype_c(st, ch, 0x07); }
      it, so the fix is the list and the ModeInfoBlock behind it, not the answer code.
      Numbers are the VBE standard assignments; 0x11x direct-colour modes are what
      anything from the late 90s actually asks for. Every entry here must fit in
-     VID_VESA_VRAM -- see the note there. */
+     VIDEO_VESA_VRAM -- see the note there. */
 static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
     /* packed-pixel 256-colour */
     { 0x100, 640, 400,  8 }, { 0x101, 640, 480,  8 },
@@ -911,7 +911,7 @@ static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
 /* ── VESA TEXT MODES (VBE 1.2 §, mode numbers 108h..10Ch). (s74b) ─────────────────
      132-column text is what editors and file managers of the period ask for. A VESA
      text mode is an ordinary text mode with a different geometry: it lives at B800,
-     goes through VID_KIND_TEXT and every INT 10h text service unchanged, and the
+     goes through VIDEO_KIND_TEXT and every INT 10h text service unchanged, and the
      renderer already sizes the frame from cols x 8 and rows x cell_h. Only the
      bookkeeping is new: 4F01 answers in characters, 4F02 lands in text kind, 4F03
      remembers the VESA number (a standard mode set forgets it). */
@@ -934,17 +934,17 @@ static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u :
 /* Byte offset into vesa_vram of the pixel shown top-left, as the start REGISTER holds
    it (4F07 at the 4F06 pitch; 0 after a mode set). What is actually on screen is
    vesa_org_live -- the same value once the retrace has loaded it (vid_latch). */
-static uint32_t vesa_origin(const video_state *st) { return st->vesa_org; }
+static uint32_t vesa_origin(const VIDEO_STATE *st) { return st->VesaOrigin; }
 /* (x, y) at the current pitch -> the byte offset the register holds. */
-static uint32_t vesa_xy_org(const video_state *st, uint32_t x, uint32_t y)
-{ return y * st->vesa_stride + x * vesa_bypp(st->vesa_bpp); }
+static uint32_t vesa_xy_org(const VIDEO_STATE *st, uint32_t x, uint32_t y)
+{ return y * st->VesaStride + x * vesa_bypp(st->VesaBpp); }
 /* §4.10: "if the requested Display Start coordinates do not allow for a full page of
    video memory ... the Function call should fail and no changes should be made". */
-static int vesa_org_fits(const video_state *st, uint32_t org)
+static int vesa_org_fits(const VIDEO_STATE *st, uint32_t org)
 {
-    uint64_t end = (uint64_t)org + (uint64_t)(st->vesa_h ? st->vesa_h - 1u : 0u) * st->vesa_stride
-                 + (uint64_t)st->vesa_w * vesa_bypp(st->vesa_bpp);
-    return end <= VID_VESA_VRAM;
+    uint64_t end = (uint64_t)org + (uint64_t)(st->VesaHeight ? st->VesaHeight - 1u : 0u) * st->VesaStride
+                 + (uint64_t)st->VesaWidth * vesa_bypp(st->VesaBpp);
+    return end <= VIDEO_VESA_VRAM;
 }
 
 /* ── ★ THE CRT A VESA MODE RUNS ON (#226). ────────────────────────────────────────────
@@ -962,12 +962,12 @@ static int vesa_org_fits(const video_state *st, uint32_t org)
      the end of the picture: the DMT modes carry no border. Anything else scales the
      480-line frame. Only the ratios and the rate matter to the model.
    Returns 0 outside a VESA graphics mode: the caller keeps the VGA path unchanged. */
-static int vesa_vgeom(const video_state *st, uint32_t *vtotal, uint32_t *vdisp,
+static int vesa_vgeom(const VIDEO_STATE *st, uint32_t *vtotal, uint32_t *vdisp,
                       uint32_t *vblank, uint32_t *hz)
 {
     uint32_t lines;
-    if (!st->in_vesa || !st->vesa_h) return 0;
-    lines = st->vesa_h <= 240u ? st->vesa_h * 2u : st->vesa_h;   /* double scan */
+    if (!st->IsVesa || !st->VesaHeight) return 0;
+    lines = st->VesaHeight <= 240u ? st->VesaHeight * 2u : st->VesaHeight;   /* double scan */
     *hz = 60u;
     switch (lines) {
     case 400:  *vtotal = 449u;  *hz = 70u; break;
@@ -981,14 +981,14 @@ static int vesa_vgeom(const video_state *st, uint32_t *vtotal, uint32_t *vdisp,
     return 1;
 }
 /* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
-static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
+static void vesa_note(VIDEO_STATE *st, uint8_t fn, uint16_t mode, int ok)
 {
     unsigned k;
-    for (k = 0; k < st->vesa_qn; ++k)                  /* collapse repeats */
-        if (st->vesa_q[k] == mode && st->vesa_q_fn[k] == fn) return;
-    if (st->vesa_qn >= sizeof(st->vesa_q)/sizeof(st->vesa_q[0])) return;
-    k = st->vesa_qn++;
-    st->vesa_q[k] = mode; st->vesa_q_ok[k] = (uint8_t)(ok ? 1 : 0); st->vesa_q_fn[k] = fn;
+    for (k = 0; k < st->VesaQueryCount; ++k)                  /* collapse repeats */
+        if (st->VesaQueries[k] == mode && st->VesaQueryFunction[k] == fn) return;
+    if (st->VesaQueryCount >= sizeof(st->VesaQueries)/sizeof(st->VesaQueries[0])) return;
+    k = st->VesaQueryCount++;
+    st->VesaQueries[k] = mode; st->VesaQueryOk[k] = (uint8_t)(ok ? 1 : 0); st->VesaQueryFunction[k] = fn;
 }
 
 static int vesa_find(uint16_t num, uint16_t *w, uint16_t *h, uint8_t *bpp)
@@ -999,10 +999,10 @@ static int vesa_find(uint16_t num, uint16_t *w, uint16_t *h, uint8_t *bpp)
             uint32_t need = (uint32_t)vesa_modes[i].w * vesa_modes[i].h
                           * vesa_bypp(vesa_modes[i].bpp);
             /* ⚠ A MODE WE CANNOT STORE IS NOT A MODE WE SUPPORT. Answering 4F01 for
-                 geometry that does not fit VID_VESA_VRAM invites a 4F02 we would have
+                 geometry that does not fit VIDEO_VESA_VRAM invites a 4F02 we would have
                  to fail, or worse, blits off the end of the buffer. Checked here so
                  the list and the answer can never disagree. */
-            if (need > VID_VESA_VRAM) return 0;
+            if (need > VIDEO_VESA_VRAM) return 0;
             *w = vesa_modes[i].w; *h = vesa_modes[i].h;
             if (bpp) *bpp = vesa_modes[i].bpp;
             return 1;
@@ -1013,29 +1013,29 @@ static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 static void wr32(uint8_t *p, uint32_t v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24); }
 
 /* sync the live A0000 window into vesa_vram[current bank]. */
-static void vesa_sync(video_state *st)
+static void vesa_sync(VIDEO_STATE *st)
 {
-    uint32_t off = (uint32_t)st->vesa_bank * VID_VESA_WIN; unsigned i;
+    uint32_t off = (uint32_t)st->VesaBank * VIDEO_VESA_WINDOW; unsigned i;
     /* ⚠ AN LFB GUEST NEVER WRITES A0000, so copying that window into vram would
          paint a stale (usually blank) 64KB hole over the frame it just drew. */
-    if (st->vesa_lfb) return;
-    if (off + VID_VESA_WIN > VID_VESA_VRAM) return;
-    for (i = 0; i < VID_VESA_WIN; ++i) st->vesa_vram[off + i] = st->vmem[i];
+    if (st->IsVesaLfb) return;
+    if (off + VIDEO_VESA_WINDOW > VIDEO_VESA_VRAM) return;
+    for (i = 0; i < VIDEO_VESA_WINDOW; ++i) st->VesaVram[off + i] = st->VideoMemory[i];
 }
 
 /* Window A to bank `n` (64 KB units): flush the live window into its bank, load the new
    one. 0 = refused (no banked VESA mode, or past the end of VRAM) and nothing changes.
    ONE implementation for INT 10h 4F05h and the 4F0Ah protected-mode code's port write
    (#53), so the two cannot disagree about what a bank switch is. */
-static int vesa_set_bank(video_state *st, uint32_t n)
+static int vesa_set_bank(VIDEO_STATE *st, uint32_t n)
 {
-    uint32_t off = n * VID_VESA_WIN; unsigned k;
-    if (!st->in_vesa || st->vesa_lfb) return 0;
-    if (off + VID_VESA_WIN > VID_VESA_VRAM) return 0;
+    uint32_t off = n * VIDEO_VESA_WINDOW; unsigned k;
+    if (!st->IsVesa || st->IsVesaLfb) return 0;
+    if (off + VIDEO_VESA_WINDOW > VIDEO_VESA_VRAM) return 0;
     vesa_sync(st);                            /* flush the current bank first */
-    st->vesa_bank = (uint16_t)n;
-    for (k = 0; k < VID_VESA_WIN; ++k) st->vmem[k] = st->vesa_vram[off + k];
-    st->dirty = 1;
+    st->VesaBank = (uint16_t)n;
+    for (k = 0; k < VIDEO_VESA_WINDOW; ++k) st->VideoMemory[k] = st->VesaVram[off + k];
+    st->IsDirty = 1;
     return 1;
 }
 
@@ -1058,12 +1058,12 @@ static int vesa_set_bank(video_state *st, uint32_t n)
             wants to compute a start for itself needs; writes ignored.
      A write when no banked VESA mode is set (or one that would not fit) is refused and
      counted (vbe_pm_rej), and changes nothing -- the INT 10h forms answer 03h/02h there. */
-static void vbe_pm_install(video_state *st)
+static void vbe_pm_install(VIDEO_STATE *st)
 {
     uint8_t *p;
     unsigned i;
-    if (!st || !st->bus) return;
-    p = (uint8_t *)VddMapFlat(st->bus, VDD_VBEPM_SEG, 0);
+    if (!st || !st->Bus) return;
+    p = (uint8_t *)VddMapFlat(st->Bus, VDD_VBEPM_SEG, 0);
     if (!p) return;
     for (i = 0; i < VBE_PM_LEN; ++i) p[i] = vbe_pm_block[i];
     for (i = 0; i < VBE_RM_LEN; ++i) p[VDD_VBERM_OFF + i] = vbe_rm_winfunc[i];   /* #273 */
@@ -1073,26 +1073,26 @@ typedef char vbe_rm_fits[(VBE_PM_LEN <= VDD_VBERM_OFF && VDD_VBERM_OFF + VBE_RM_
 
 static void vbe_port_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     uint16_t d = (uint16_t)(w >= 2 ? v : (v & 0xFF));
-    if (port == 0x1CE) { st->vbe_idx = d; return; }
-    switch (st->vbe_idx) {
+    if (port == 0x1CE) { st->VbeIndex = d; return; }
+    switch (st->VbeIndex) {
     case 0x05:
-        if (vesa_set_bank(st, d)) st->vbe_pm_bank_n++; else st->vbe_pm_rej++;
+        if (vesa_set_bank(st, d)) st->VbePmBankCount++; else st->VbePmRejected++;
         break;
     case 0x10:
-        st->vbe_start_lo = d;
+        st->VbeStartLow = d;
         break;
     case 0x11: {
-        uint32_t org = (((uint32_t)d << 16) | st->vbe_start_lo) * 4u;
-        uint32_t bypp = vesa_bypp(st->vesa_bpp);
-        if (!st->in_vesa || !st->vesa_stride || !vesa_org_fits(st, org)) { st->vbe_pm_rej++; break; }
+        uint32_t org = (((uint32_t)d << 16) | st->VbeStartLow) * 4u;
+        uint32_t bypp = vesa_bypp(st->VesaBpp);
+        if (!st->IsVesa || !st->VesaStride || !vesa_org_fits(st, org)) { st->VbePmRejected++; break; }
         vid_latch(st, 0);                     /* boundaries already passed keep the old start */
-        st->vesa_start_y = (uint16_t)(org / st->vesa_stride);
-        st->vesa_start_x = (uint16_t)((org % st->vesa_stride) / bypp);
-        st->vesa_org = st->vesa_org_vs = st->vesa_org_live = org;
-        st->vbe_pm_start_n++;
-        st->dirty = 1;
+        st->VesaStartY = (uint16_t)(org / st->VesaStride);
+        st->VesaStartX = (uint16_t)((org % st->VesaStride) / bypp);
+        st->VesaOrigin = st->VesaOriginVs = st->VesaOriginLive = org;
+        st->VbePmStartCount++;
+        st->IsDirty = 1;
         break; }
     default:
         break;                                /* not a register here */
@@ -1101,16 +1101,16 @@ static void vbe_port_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 
 static void vbe_port_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     uint32_t r = 0;
     (void)w;
-    if (port == 0x1CE) { *v = st->vbe_idx; return; }
-    switch (st->vbe_idx) {
-    case 0x03: r = st->in_vesa ? st->vesa_bpp : 0; break;
-    case 0x05: r = st->vesa_bank; break;
-    case 0x06: r = (st->in_vesa && st->vesa_bpp) ? st->vesa_stride / vesa_bypp(st->vesa_bpp) : 0; break;
-    case 0x10: r = (st->vesa_org / 4u) & 0xFFFFu; break;
-    case 0x11: r = (st->vesa_org / 4u) >> 16; break;
+    if (port == 0x1CE) { *v = st->VbeIndex; return; }
+    switch (st->VbeIndex) {
+    case 0x03: r = st->IsVesa ? st->VesaBpp : 0; break;
+    case 0x05: r = st->VesaBank; break;
+    case 0x06: r = (st->IsVesa && st->VesaBpp) ? st->VesaStride / vesa_bypp(st->VesaBpp) : 0; break;
+    case 0x10: r = (st->VesaOrigin / 4u) & 0xFFFFu; break;
+    case 0x11: r = (st->VesaOrigin / 4u) >> 16; break;
     default:   r = 0; break;                  /* 00h (ID) and the rest: 0 */
     }
     *v = r;
@@ -1125,34 +1125,34 @@ static void vbe_port_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
      visibly grey white and the classic giveaway of a lazy 5-to-8 expansion. */
 /* Bounding offsets of everything non-zero in the framebuffer. Answers, without any
    assumption about stride or origin, WHERE the guest put its pixels. */
-static void vesa_scan_written(video_state *st)
+static void vesa_scan_written(VIDEO_STATE *st)
 {
     uint32_t i, lo = 0xFFFFFFFFu, hi = 0, nz = 0;
-    uint32_t end = st->vesa_org_live + st->vesa_stride * st->vesa_h;   /* the displayed page */
-    if (!end || end > VID_VESA_VRAM) end = VID_VESA_VRAM;
+    uint32_t end = st->VesaOriginLive + st->VesaStride * st->VesaHeight;   /* the displayed page */
+    if (!end || end > VIDEO_VESA_VRAM) end = VIDEO_VESA_VRAM;
     for (i = 0; i < end; ++i)
-        if (st->vesa_vram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
-    st->vram_lo = (lo == 0xFFFFFFFFu) ? 0 : lo;
-    st->vram_hi = hi; st->vram_nz = nz;
+        if (st->VesaVram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
+    st->VramLow = (lo == 0xFFFFFFFFu) ? 0 : lo;
+    st->VramHigh = hi; st->VramNonZero = nz;
 }
 
-static void vesa_to_argb(video_state *st)
+static void vesa_to_argb(VIDEO_STATE *st)
 {
-    uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
-    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = st->vesa_org_live;  /* as displayed (vid_latch) */
+    uint32_t y, x, w = st->VesaWidth, h = st->VesaHeight, pitch = st->VesaStride;
+    uint32_t bypp = vesa_bypp(st->VesaBpp), org = st->VesaOriginLive;  /* as displayed (vid_latch) */
     if (!w || !h || !pitch) return;
-    if (w > VID_VESA_MAXW || h > VID_VESA_MAXH) return;   /* cannot happen: vesa_find caps it */
+    if (w > VIDEO_VESA_MAX_WIDTH || h > VIDEO_VESA_MAX_HEIGHT) return;   /* cannot happen: vesa_find caps it */
     for (y = 0; y < h; ++y) {
-        const uint8_t *src = st->vesa_vram + org + y * pitch;  /* from the 4F07 start */
-        uint32_t *dst = st->vesa_argb + y * w;
-        if (org + y * pitch + w * bypp > VID_VESA_VRAM) break;
+        const uint8_t *src = st->VesaVram + org + y * pitch;  /* from the 4F07 start */
+        uint32_t *dst = st->VesaArgb + y * w;
+        if (org + y * pitch + w * bypp > VIDEO_VESA_VRAM) break;
         for (x = 0; x < w; ++x) {
             uint32_t r, g, b;
-            if (st->vesa_bpp == 15) {
+            if (st->VesaBpp == 15) {
                 uint32_t v = (uint32_t)src[x*2] | ((uint32_t)src[x*2+1] << 8);
                 r = (v >> 10) & 0x1F; g = (v >> 5) & 0x1F; b = v & 0x1F;
                 r = (r << 3) | (r >> 2); g = (g << 3) | (g >> 2); b = (b << 3) | (b >> 2);
-            } else if (st->vesa_bpp == 16) {
+            } else if (st->VesaBpp == 16) {
                 uint32_t v = (uint32_t)src[x*2] | ((uint32_t)src[x*2+1] << 8);
                 r = (v >> 11) & 0x1F; g = (v >> 5) & 0x3F; b = v & 0x1F;
                 r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
@@ -1182,28 +1182,28 @@ static void vesa_to_argb(video_state *st)
 #define VID_STATE_BYTES  896u
 #define VID_STATE_BLOCKS (VID_STATE_BYTES / 64u)
 static void int10(void *self, NTVDD_REGISTERS *r);
-static void vesa(video_state *st, NTVDD_REGISTERS *r);
-static void vid_state_save(video_state *st, uint8_t *b, uint16_t mask)
+static void vesa(VIDEO_STATE *st, NTVDD_REGISTERS *r);
+static void vid_state_save(VIDEO_STATE *st, uint8_t *b, uint16_t mask)
 {
     unsigned i;
     for (i = 0; i < VID_STATE_BYTES; ++i) b[i] = 0;
     b[0] = 'N'; b[1] = 'T'; b[2] = 'V'; b[3] = 'S'; wr16(b + 4, mask); wr16(b + 6, 1);
-    b[8] = st->mode; b[9] = st->in_vesa; wr16(b + 10, st->vesa_mode);
-    b[12] = st->vesa_bpp; b[13] = st->vesa_lfb; b[14] = st->vesa_dacwidth;
-    wr16(b + 16, st->vesa_bank); wr32(b + 20, st->vesa_stride);
-    wr16(b + 24, st->vesa_start_x); wr16(b + 26, st->vesa_start_y);
+    b[8] = st->Mode; b[9] = st->IsVesa; wr16(b + 10, st->VesaMode);
+    b[12] = st->VesaBpp; b[13] = st->IsVesaLfb; b[14] = st->VesaDacWidth;
+    wr16(b + 16, st->VesaBank); wr32(b + 20, st->VesaStride);
+    wr16(b + 24, st->VesaStartX); wr16(b + 26, st->VesaStartY);
     for (i = 0; i < 256; ++i) {
-        b[32 + i*3]     = (uint8_t)(st->dac[i] >> 16);
-        b[32 + i*3 + 1] = (uint8_t)(st->dac[i] >> 8);
-        b[32 + i*3 + 2] = (uint8_t)(st->dac[i]);
+        b[32 + i*3]     = (uint8_t)(st->Dac[i] >> 16);
+        b[32 + i*3 + 1] = (uint8_t)(st->Dac[i] >> 8);
+        b[32 + i*3 + 2] = (uint8_t)(st->Dac[i]);
     }
-    for (i = 0; i < 17; ++i) b[800 + i] = st->vpal[i];
-    b[817] = st->attr_mode; b[818] = st->attr_cse; b[819] = st->overscan;
-    b[820] = st->cur_row; b[821] = st->cur_col; wr16(b + 822, st->cur_shape);
-    b[824] = st->page; wr16(b + 826, st->crtc_start); b[828] = st->crtc_offset;
+    for (i = 0; i < 17; ++i) b[800 + i] = st->PaletteRegisters[i];
+    b[817] = st->AttributeMode; b[818] = st->AttributeColorSelect; b[819] = st->Overscan;
+    b[820] = st->CursorRow; b[821] = st->CursorColumn; wr16(b + 822, st->CursorShape);
+    b[824] = st->Page; wr16(b + 826, st->CrtcStart); b[828] = st->CrtcOffset;
 }
 /* 1 = restored, 0 = not a buffer we wrote (the caller answers AH=02). */
-static int vid_state_load(video_state *st, const uint8_t *b)
+static int vid_state_load(VIDEO_STATE *st, const uint8_t *b)
 {
     unsigned i; NTVDD_REGISTERS m;
     if (b[0] != 'N' || b[1] != 'T' || b[2] != 'V' || b[3] != 'S') return 0;
@@ -1211,35 +1211,35 @@ static int vid_state_load(video_state *st, const uint8_t *b)
     if (b[9]) {                                   /* back into the VESA mode, no clear */
         uint16_t bx = (uint16_t)(0x8000u | (b[13] ? 0x4000u : 0u) | (b[10] | (b[11] << 8)));
         VddSetAh(&m, 0x4F); VddSetAl(&m, 0x02); VddSetBx(&m, bx); vesa(st, &m);
-        st->vesa_dacwidth = b[14]; st->vesa_bank = (uint16_t)(b[16] | (b[17] << 8));
-        st->vesa_stride   = (uint32_t)b[20] | ((uint32_t)b[21] << 8) | ((uint32_t)b[22] << 16) | ((uint32_t)b[23] << 24);
-        st->vesa_start_x  = (uint16_t)(b[24] | (b[25] << 8));
-        st->vesa_start_y  = (uint16_t)(b[26] | (b[27] << 8));
-        st->vesa_org = st->vesa_org_vs = st->vesa_org_live =   /* shown at once (#226) */
-            vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y))
-                ? vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y) : 0u;
+        st->VesaDacWidth = b[14]; st->VesaBank = (uint16_t)(b[16] | (b[17] << 8));
+        st->VesaStride   = (uint32_t)b[20] | ((uint32_t)b[21] << 8) | ((uint32_t)b[22] << 16) | ((uint32_t)b[23] << 24);
+        st->VesaStartX  = (uint16_t)(b[24] | (b[25] << 8));
+        st->VesaStartY  = (uint16_t)(b[26] | (b[27] << 8));
+        st->VesaOrigin = st->VesaOriginVs = st->VesaOriginLive =   /* shown at once (#226) */
+            vesa_org_fits(st, vesa_xy_org(st, st->VesaStartX, st->VesaStartY))
+                ? vesa_xy_org(st, st->VesaStartX, st->VesaStartY) : 0u;
     } else {                                      /* a standard mode, bit 7 = no clear */
         VddSetAh(&m, 0x00); VddSetAl(&m, (uint8_t)(b[8] | 0x80)); int10(st, &m);
     }
     for (i = 0; i < 256; ++i)
-        st->dac[i] = 0xFF000000u | ((uint32_t)b[32 + i*3] << 16)
+        st->Dac[i] = 0xFF000000u | ((uint32_t)b[32 + i*3] << 16)
                    | ((uint32_t)b[32 + i*3 + 1] << 8) | (uint32_t)b[32 + i*3 + 2];
-    for (i = 0; i < 17; ++i) st->vpal[i] = b[800 + i];
-    st->attr_mode = b[817]; st->attr_cse = b[818]; st->overscan = b[819];
-    st->cur_row = b[820]; st->cur_col = b[821]; st->cur_shape = (uint16_t)(b[822] | (b[823] << 8));
-    st->page = b[824]; st->crtc_start = (uint16_t)(b[826] | (b[827] << 8)); st->crtc_offset = b[828];
-    pal_refresh(st); st->dirty = 1;
+    for (i = 0; i < 17; ++i) st->PaletteRegisters[i] = b[800 + i];
+    st->AttributeMode = b[817]; st->AttributeColorSelect = b[818]; st->Overscan = b[819];
+    st->CursorRow = b[820]; st->CursorColumn = b[821]; st->CursorShape = (uint16_t)(b[822] | (b[823] << 8));
+    st->Page = b[824]; st->CrtcStart = (uint16_t)(b[826] | (b[827] << 8)); st->CrtcOffset = b[828];
+    pal_refresh(st); st->IsDirty = 1;
     return 1;
 }
 
 /* INT 10h AX=4Fxx. Always returns AX=0x004F (supported+ok) for what we handle. */
-static void vesa(video_state *st, NTVDD_REGISTERS *r)
+static void vesa(VIDEO_STATE *st, NTVDD_REGISTERS *r)
 {
     uint8_t al = VddGetAl(r); unsigned i;
     if (al < 0x16) {                              /* inventory: see vesa_calls[]   */
         uint8_t bl = (uint8_t)(VddGetBx(r) & 0xFF);
-        st->vesa_calls[al]++;
-        st->vesa_bl[al] |= (uint16_t)(bl == 0x80 ? 0x8000u : bl < 15 ? (1u << bl) : 0u);
+        st->VesaCalls[al]++;
+        st->VesaBl[al] |= (uint16_t)(bl == 0x80 ? 0x8000u : bl < 15 ? (1u << bl) : 0u);
     }
     switch (al) {
     case 0x00: {                                  /* return controller info       */
@@ -1253,7 +1253,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
              chain walk stopped there, ~480 KB above went invisible, and its next DOS
              allocation died with "I_AllocLow: DOS alloc of 1024 failed, 256 free".
              Doom never probes VESA, which is why only Heretic paid. */
-        uint8_t *b = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)(uint16_t)r->Edi);
+        uint8_t *b = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)(uint16_t)r->Edi);
         int vbe2 = (b[0]=='V' && b[1]=='B' && b[2]=='E' && b[3]=='2');
         const unsigned OEM = 0x22, MODES = 0x40;  /* both inside the reserved area */
         for (i = 0; i < (vbe2 ? 512u : 256u); ++i) b[i] = 0;
@@ -1266,7 +1266,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            asked. Found by p_vesa against QEMU's VBE (s74b), the first oracle row. */
         wr32(b + 10, 1);                          /* capabilities: D0 DAC switchable */
         wr32(b + 14, ((uint32_t)r->Es << 16) | (((uint16_t)r->Edi + MODES) & 0xFFFF));  /* mode list  */
-        wr16(b + 18, VID_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
+        wr16(b + 18, VIDEO_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
         { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[OEM + i] = (uint8_t)o[i]; b[OEM+i]=0; }
         if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
             /* ── THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). §4.3: "VBE
@@ -1301,7 +1301,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
         uint16_t w, h; uint8_t mbpp = 8;
         { uint8_t tc, tr, th;
           if (vesa_find_text(VddGetCx(r), &tc, &tr, &th)) {   /* a TEXT mode: answer in characters */
-              uint8_t *b = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Edi);
+              uint8_t *b = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Edi);
               unsigned page = (unsigned)tc * tr * 2u;
               vesa_note(st, 0x01, VddGetCx(r), 1);
               for (i = 0; i < 256; ++i) b[i] = 0;
@@ -1325,7 +1325,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
           } }
         vesa_note(st, 0x01, VddGetCx(r), vesa_find(VddGetCx(r), &w, &h, &mbpp));
         if (vesa_find(VddGetCx(r), &w, &h, &mbpp)) {
-            uint8_t *b = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)(uint16_t)r->Edi);
+            uint8_t *b = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)(uint16_t)r->Edi);
             uint32_t bypp = vesa_bypp(mbpp), pitch = (uint32_t)w * bypp;
             for (i = 0; i < 256; ++i) b[i] = 0;
             /* ⛔ D5 STAYS CLEAR (s84, a user-found regression). #226 set it (0xBB, "not
@@ -1380,7 +1380,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                page-flipping guest there was a single page. QEMU's VBE says 50 for
                640x480x8 in 16 MB; with 4 MB we say 12. Found by p_vesa (s74b). */
             { uint32_t pg = (uint32_t)pitch * h;
-              uint32_t np = pg ? VID_VESA_VRAM / pg : 1u;
+              uint32_t np = pg ? VIDEO_VESA_VRAM / pg : 1u;
               b[29] = (uint8_t)(np ? (np > 256u ? 255u : np - 1u) : 0u); }
             b[30] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
             /* ── DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
@@ -1409,7 +1409,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                  the claim was wrong. What was actually missing was PhysBasePtr, which
                  D7 is worthless without. VBE 2.0 §4.4 D7/D6 table: D7=1,D6=0 means
                  "both windowed and linear", which is exactly what we now provide. */
-            wr32(b + 40, VID_VESA_LFB_PHYS);            /* PhysBasePtr              */
+            wr32(b + 40, VIDEO_VESA_LFB_PHYSICAL);            /* PhysBasePtr              */
             /* VBE 2.0 adds the linear-mode geometry at +50; a guest that drives the
                LFB reads these rather than the banked ones. Same numbers here because
                our pitch does not change between the two. */
@@ -1436,39 +1436,39 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                  D7 = 0), so fail before anything changes (#226; we used to accept it). */
               if (VddGetBx(r) & 0x4000) {
                   vesa_note(st, 0x02, VddGetBx(r), 0);
-                  st->vesa_set_bx = VddGetBx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 0;
+                  st->VesaSetBx = VddGetBx(r); st->IsVesaSetSeen = 1; st->IsVesaSetOk = 0;
                   VddSetAx(r, 0x014F);
                   break;
               }
               vesa_note(st, 0x02, VddGetBx(r), 1);
-              st->vesa_set_bx = VddGetBx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 1;
+              st->VesaSetBx = VddGetBx(r); st->IsVesaSetSeen = 1; st->IsVesaSetOk = 1;
               VddSetAh(&m, 0x00); VddSetAl(&m, (uint8_t)(0x03 | ((VddGetBx(r) & 0x8000) ? 0x80 : 0x00)));
               int10(st, &m);
-              st->cols = tc; st->rows = tr; st->cell_h = th;
-              st->gw = (uint16_t)(tc * VID_CELL_W); st->gh = (uint16_t)(tr * th);
+              st->Columns = tc; st->Rows = tr; st->CellHeight = th;
+              st->GraphicsWidth = (uint16_t)(tc * VIDEO_CELL_WIDTH); st->GraphicsHeight = (uint16_t)(tr * th);
               if (!(VddGetBx(r) & 0x8000)) clear_text(st, 0x07);
-              st->vesa_text_mode = (uint16_t)(VddGetBx(r) & 0x3FFF);
-              st->vesa_mode_flags = (uint16_t)(VddGetBx(r) & 0x8000);   /* 4F03 D15 (#226) */
-              st->dirty = 1; VddSetAx(r, 0x004F);
+              st->VesaTextMode = (uint16_t)(VddGetBx(r) & 0x3FFF);
+              st->VesaModeFlags = (uint16_t)(VddGetBx(r) & 0x8000);   /* 4F03 D15 (#226) */
+              st->IsDirty = 1; VddSetAx(r, 0x004F);
               break;
           } }
         vesa_note(st, 0x02, VddGetBx(r), vesa_find(VddGetBx(r), &w, &h, &mbpp));
-        st->vesa_set_bx = VddGetBx(r); st->vesa_set_seen = 1;
-        st->vesa_set_ok = (uint8_t)(vesa_find(VddGetBx(r), &w, &h, &mbpp) ? 1 : 0);
+        st->VesaSetBx = VddGetBx(r); st->IsVesaSetSeen = 1;
+        st->IsVesaSetOk = (uint8_t)(vesa_find(VddGetBx(r), &w, &h, &mbpp) ? 1 : 0);
         if (vesa_find(VddGetBx(r), &w, &h, &mbpp)) {
             uint32_t n;
-            st->in_vesa = 1; st->vesa_mode = VddGetBx(r) & 0x3FFF; st->vesa_w = w; st->vesa_h = h;
+            st->IsVesa = 1; st->VesaMode = VddGetBx(r) & 0x3FFF; st->VesaWidth = w; st->VesaHeight = h;
             /* Bit 14 of the mode = "use the linear framebuffer". It matters beyond
                bookkeeping: an LFB guest never touches A0000, so vesa_sync must stop
                copying that window over the picture (see vesa_sync). */
-            st->vesa_lfb = (uint8_t)((VddGetBx(r) & 0x4000) ? 1 : 0);
-            st->vesa_bpp = mbpp;
-            st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
-            st->vesa_start_x = st->vesa_start_y = 0;   /* a mode set shows page 1 */
-            st->vesa_org = st->vesa_org_vs = st->vesa_org_live = 0;   /* ...on every stage */
-            st->vesa_07_vbl = 0; st->int10_wait_until = 0;
-            st->vesa_dacwidth = 6;                     /* §4.11: any mode set -> 6 bits */
-            st->vesa_bank = 0;
+            st->IsVesaLfb = (uint8_t)((VddGetBx(r) & 0x4000) ? 1 : 0);
+            st->VesaBpp = mbpp;
+            st->VesaStride = (uint32_t)w * vesa_bypp(mbpp);
+            st->VesaStartX = st->VesaStartY = 0;   /* a mode set shows page 1 */
+            st->VesaOrigin = st->VesaOriginVs = st->VesaOriginLive = 0;   /* ...on every stage */
+            st->Vesa07Vbl = 0; st->Int10WaitUntil = 0;
+            st->VesaDacWidth = 6;                     /* §4.11: any mode set -> 6 bits */
+            st->VesaBank = 0;
             /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
                  We cleared unconditionally. This is the SAME defect as the standard
                  BIOS one already on the books -- "AL bit 7 on a mode set = DO NOT
@@ -1477,8 +1477,8 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                  A guest that sets a mode to change geometry while keeping its picture
                  gets a black screen from us otherwise. */
             if (!(VddGetBx(r) & 0x8000)) {
-                for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
-                for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
+                for (n = 0; n < VIDEO_VESA_VRAM; ++n) st->VesaVram[n] = 0;
+                for (n = 0; n < VIDEO_VESA_WINDOW; ++n) st->VideoMemory[n] = 0;
             }
             /* ── 4F03h REPORTS D14/D15 AS THIS CALL SET THEM, AND 40:87h BIT 7 RECORDS
                  D15 (#226). §4.6: BX D14 = linear, D15 = "memory not cleared at last mode
@@ -1489,17 +1489,17 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                  `& 3FFFh`, so a guest that saves 4F03 and re-sets it with 4F02 came back
                  BANKED -- and vesa_sync then painted the stale A0000 window over the LFB
                  it was still drawing into, every frame. */
-            st->vesa_mode_flags = (uint16_t)(VddGetBx(r) & 0xC000);
-            st->modeset_noclear = (uint8_t)((VddGetBx(r) & 0x8000) ? 1 : 0);
+            st->VesaModeFlags = (uint16_t)(VddGetBx(r) & 0xC000);
+            st->IsModeSetNoClear = (uint8_t)((VddGetBx(r) & 0x8000) ? 1 : 0);
             /* ── ★★ THE VGA LAYER UNDER A VESA MODE (#226). ─────────────────────────────
                  4F02h used to set the VESA fields and nothing else: `mkind`, the
                  sequencer/GC shadows, gw/gh, the text geometry and 40:49h all kept
                  the PREVIOUS standard mode's values. The hazard that left, read from the
                  code (not yet seen on a guest): after mode 12h, mkind stayed
-                 VID_KIND_PLANAR and chain4 0, so
-                   * vdd_video_planar_active() said 1 and the host (video_trap_sync)
+                 VIDEO_KIND_PLANAR and chain4 0, so
+                   * VddVideoIsPlanarActive() said 1 and the host (video_trap_sync)
                      kept running the guest in its INTERPRETER, whose A0000 stores go
-                     through vga_planar_write() into the four planes -- not into the
+                     through VddVideoPlanarWrite() into the four planes -- not into the
                      A0000 window vesa_sync copies into vesa_vram. A banked VESA guest
                      would have drawn into planes nothing displays, at interpreter speed;
                    * the host's A0000 mapping stayed on a plane section (ymap_select was
@@ -1519,36 +1519,36 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                  and "the last standard mode" is the lie that let a TSR believe mode 12h
                  was still set); 40:4Ah = XRes / 8; 40:84h = YRes / char height - 1;
                  40:85h = the char height (the YCharSize 4F01h reports); cursors and page
-                 zeroed; 40:87h = 60h | (D15 ? 80h : 0). vdd_video_bda_sync derives all
+                 zeroed; 40:87h = 60h | (D15 ? 80h : 0). VddVideoBdaSync derives all
                  of those from the fields set here. */
             /* ── #325: AND THE 256-COLOUR DEFAULT PALETTE, as a mode 13h set loads it.
                  A 4F02 left the DAC as the previous mode had it, so after a 16-colour
                  mode (0Dh) colour 15 drew grey -- seen on the rig as a grey VESA
                  checkerboard. AH=12h BL=31h (palette loading off) is still honoured
                  inside load_default_palette. */
-            st->mode   = 0x13;
+            st->Mode   = 0x13;
             load_default_palette(st);
-            st->mode   = 0xFF;
+            st->Mode   = 0xFF;
             vga_load_modedef(st, 0x13);               /* the chained 256-colour register file */
-            st->mkind  = VID_KIND_LINEAR8;
-            st->map_mask = 0x0F; st->y_mask = 0x0F;
-            if (!st->chain4) { st->chain4 = 1; st->chain4_sel++;
-                               if (st->ymap_select) st->ymap_select(st->ymap_ctx, -1); }
-            st->gw = w; st->gh = h;
-            st->cell_h = (uint8_t)(h <= 200 ? 8 : h <= 350 ? 14 : 16);
-            st->cols   = (uint8_t)(w / 8u);
-            st->rows   = (uint8_t)(h / st->cell_h);
-            st->cur_row = st->cur_col = 0; st->page = 0;
-            st->vesa_text_mode = 0;
+            st->ModeKind  = VIDEO_KIND_LINEAR8;
+            st->MapMask = 0x0F; st->YMask = 0x0F;
+            if (!st->IsChain4) { st->IsChain4 = 1; st->Chain4Selects++;
+                               if (st->YMapSelect) st->YMapSelect(st->YMapContext, -1); }
+            st->GraphicsWidth = w; st->GraphicsHeight = h;
+            st->CellHeight = (uint8_t)(h <= 200 ? 8 : h <= 350 ? 14 : 16);
+            st->Columns   = (uint8_t)(w / 8u);
+            st->Rows   = (uint8_t)(h / st->CellHeight);
+            st->CursorRow = st->CursorColumn = 0; st->Page = 0;
+            st->VesaTextMode = 0;
             pal_refresh(st);                           /* identity DAC path, see pal_refresh */
-            st->dirty = 1; VddSetAx(r, 0x004F);
+            st->IsDirty = 1; VddSetAx(r, 0x004F);
         } else VddSetAx(r, 0x014F);
         break; }
     case 0x04: {                                  /* save/restore state (§4.7)     */
         uint8_t dl = (uint8_t)(VddGetDx(r) & 0xFF);
         if (dl == 0x00) { VddSetBx(r, VID_STATE_BLOCKS); VddSetAx(r, 0x004F); break; }
         if (dl == 0x01 || dl == 0x02) {
-            uint8_t *sb = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Ebx);
+            uint8_t *sb = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Ebx);
             if (dl == 0x01) { vid_state_save(st, sb, VddGetCx(r)); VddSetAx(r, 0x004F); }
             else VddSetAx(r, vid_state_load(st, sb) ? 0x004F : 0x024F);
             break;
@@ -1561,9 +1561,9 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            AL bit 7, which is what SeaVGABIOS's 4F03h does (it returns the word its
            vga_set_mode() stored for EVERY mode set, flags included); §4.6 itself only
            promises an accurate answer after a 4F02h. */
-        if (st->in_vesa)             VddSetBx(r, (uint16_t)(st->vesa_mode | st->vesa_mode_flags));
-        else if (st->vesa_text_mode) VddSetBx(r, (uint16_t)(st->vesa_text_mode | (st->vesa_mode_flags & 0x8000u)));
-        else                         VddSetBx(r, (uint16_t)(st->mode | (st->modeset_noclear ? 0x8000u : 0u)));
+        if (st->IsVesa)             VddSetBx(r, (uint16_t)(st->VesaMode | st->VesaModeFlags));
+        else if (st->VesaTextMode) VddSetBx(r, (uint16_t)(st->VesaTextMode | (st->VesaModeFlags & 0x8000u)));
+        else                         VddSetBx(r, (uint16_t)(st->Mode | (st->IsModeSetNoClear ? 0x8000u : 0u)));
         VddSetAx(r, 0x004F);
         break;
     /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
@@ -1579,39 +1579,39 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
          changes" -- §4.10 -- so nothing is written until the request has been checked. */
     case 0x06: {                                  /* get/set logical scan length   */
         uint8_t  bl   = (uint8_t)(VddGetBx(r) & 0xFF);
-        uint32_t bypp = vesa_bypp(st->vesa_bpp);
-        uint32_t minb = (uint32_t)st->vesa_w * bypp;                 /* the mode's own pitch */
-        uint32_t maxb = st->vesa_h ? VID_VESA_VRAM / st->vesa_h : 0; /* longest line that still holds h rows */
+        uint32_t bypp = vesa_bypp(st->VesaBpp);
+        uint32_t minb = (uint32_t)st->VesaWidth * bypp;                 /* the mode's own pitch */
+        uint32_t maxb = st->VesaHeight ? VIDEO_VESA_VRAM / st->VesaHeight : 0; /* longest line that still holds h rows */
         maxb -= maxb % bypp;                                         /* whole pixels          */
-        if (!st->in_vesa || !minb || !maxb) { VddSetAx(r, 0x034F); break; }
+        if (!st->IsVesa || !minb || !maxb) { VddSetAx(r, 0x034F); break; }
         if (bl == 0x00 || bl == 0x02) {
             uint32_t want = VddGetCx(r);
             if (bl == 0x00) want *= bypp;                            /* pixels -> bytes       */
             want = (want + bypp - 1) / bypp * bypp;                  /* "next larger value"   */
             if (want < minb || want > maxb) { VddSetAx(r, 0x024F); break; }
-            st->vesa_stride = want;
+            st->VesaStride = want;
             /* a start that no longer leaves a full page at the new pitch is reset,
                which is what a BIOS that re-latches its CRTC offset does in effect.
                The (x, y) start is kept and re-derived at the new pitch, at once (the
                behaviour this call has always had; #226 keeps it). */
-            if (!vesa_org_fits(st, vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y)))
-                st->vesa_start_x = st->vesa_start_y = 0;
-            st->vesa_org = st->vesa_org_vs = st->vesa_org_live =
-                vesa_xy_org(st, st->vesa_start_x, st->vesa_start_y);
-            st->dirty = 1;
+            if (!vesa_org_fits(st, vesa_xy_org(st, st->VesaStartX, st->VesaStartY)))
+                st->VesaStartX = st->VesaStartY = 0;
+            st->VesaOrigin = st->VesaOriginVs = st->VesaOriginLive =
+                vesa_xy_org(st, st->VesaStartX, st->VesaStartY);
+            st->IsDirty = 1;
         } else if (bl == 0x03) {                  /* get maximum                   */
             VddSetBx(r, (uint16_t)maxb); VddSetCx(r, (uint16_t)(maxb / bypp));
-            VddSetDx(r, (uint16_t)(VID_VESA_VRAM / maxb)); VddSetAx(r, 0x004F);
+            VddSetDx(r, (uint16_t)(VIDEO_VESA_VRAM / maxb)); VddSetAx(r, 0x004F);
             break;
         } else if (bl != 0x01) { VddSetAx(r, 0x014F); break; }
-        VddSetBx(r, (uint16_t)st->vesa_stride);
-        VddSetCx(r, (uint16_t)(st->vesa_stride / bypp));
-        VddSetDx(r, (uint16_t)(VID_VESA_VRAM / st->vesa_stride));
+        VddSetBx(r, (uint16_t)st->VesaStride);
+        VddSetCx(r, (uint16_t)(st->VesaStride / bypp));
+        VddSetDx(r, (uint16_t)(VIDEO_VESA_VRAM / st->VesaStride));
         VddSetAx(r, 0x004F);
         break; }
     case 0x07: {                                  /* get/set display start         */
         uint8_t bl = (uint8_t)(VddGetBx(r) & 0xFF);
-        if (!st->in_vesa) { VddSetAx(r, 0x034F); break; }
+        if (!st->IsVesa) { VddSetAx(r, 0x034F); break; }
         /* ── #226: THE START ON THE RETRACE'S SCHEDULE, AND 80h WAITS FOR IT. ────────
              BL=00h  set now: register, retrace load and display all take it at once --
                      the behaviour this call has always had, kept deliberately (a guest
@@ -1619,7 +1619,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
              BL=80h  set "during vertical retrace": the register takes it, the retrace
                      loads it (vid_latch) and the call does not complete before that
                      retrace -- int10_wait_until, which the HOST honours outside its
-                     lock (vdd_video_int10_wait_us). heaven7's 15,900 (0,0) calls a run
+                     lock (VddVideoInt10WaitUs). heaven7's 15,900 (0,0) calls a run
                      are this idiom and were paced by nothing;
              BL=02h  (3.0) schedule a start given as a BYTE address; return at once;
              BL=82h  (3.0) the same, and wait as 80h does;
@@ -1629,44 +1629,44 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
                      Capabilities D3 = 0), so 014Fh -- which 3.0's implementation note
                      prescribes for a card without it. */
         if (bl == 0x01) {                         /* get                           */
-            VddSetCx(r, st->vesa_start_x); VddSetDx(r, st->vesa_start_y); VddSetBx(r, 0);
+            VddSetCx(r, st->VesaStartX); VddSetDx(r, st->VesaStartY); VddSetBx(r, 0);
             VddSetAx(r, 0x004F);
         } else if (bl == 0x04) {                  /* 3.0: scheduled flip status    */
             vid_latch(st, 0);                     /* bring the schedule up to now  */
-            VddSetCx(r, (uint16_t)(st->vesa_org_vs == st->vesa_org ? 1 : 0));
+            VddSetCx(r, (uint16_t)(st->VesaOriginVs == st->VesaOrigin ? 1 : 0));
             VddSetAx(r, 0x004F);
         } else if (bl == 0x00 || bl == 0x80 || bl == 0x02 || bl == 0x82) {
-            uint32_t bypp = vesa_bypp(st->vesa_bpp), org, x, y;
+            uint32_t bypp = vesa_bypp(st->VesaBpp), org, x, y;
             if (bl == 0x02 || bl == 0x82) {       /* ECX = byte address (3.0)      */
                 org = r->Ecx;
-                y = st->vesa_stride ? org / st->vesa_stride : 0;
-                x = st->vesa_stride ? (org % st->vesa_stride) / bypp : 0;
+                y = st->VesaStride ? org / st->VesaStride : 0;
+                x = st->VesaStride ? (org % st->VesaStride) / bypp : 0;
             } else {
                 x = VddGetCx(r); y = VddGetDx(r);
                 org = vesa_xy_org(st, x, y);
             }
-            if (x > st->vesa_07_maxx) st->vesa_07_maxx = (uint16_t)(x > 0xFFFFu ? 0xFFFFu : x);   /* inventory */
-            if (y > st->vesa_07_maxy) st->vesa_07_maxy = (uint16_t)(y > 0xFFFFu ? 0xFFFFu : y);
+            if (x > st->Vesa07MaxX) st->Vesa07MaxX = (uint16_t)(x > 0xFFFFu ? 0xFFFFu : x);   /* inventory */
+            if (y > st->Vesa07MaxY) st->Vesa07MaxY = (uint16_t)(y > 0xFFFFu ? 0xFFFFu : y);
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
-            if (!vesa_org_fits(st, org)) { st->vesa_07_rej++; VddSetAx(r, 0x024F); break; }
+            if (!vesa_org_fits(st, org)) { st->Vesa07Rejected++; VddSetAx(r, 0x024F); break; }
             vid_latch(st, 0);                     /* boundaries already passed keep the old start */
-            st->vesa_start_x = (uint16_t)x; st->vesa_start_y = (uint16_t)y;
-            st->vesa_org = org;
+            st->VesaStartX = (uint16_t)x; st->VesaStartY = (uint16_t)y;
+            st->VesaOrigin = org;
             if (bl == 0x00) {
-                st->vesa_org_vs = st->vesa_org_live = org;          /* at once, as always */
+                st->VesaOriginVs = st->VesaOriginLive = org;          /* at once, as always */
             } else if (bl & 0x80) {
                 int in_vbl = 0;
                 uint64_t until = vesa_vbl_release(st, &in_vbl);
-                if (in_vbl) st->vesa_org_vs = org;  /* this retrace loads it: next picture */
-                st->int10_wait_until = until;
-                if (until && st->time_us) {
-                    uint64_t now = st->time_us();
-                    st->vesa_07_waits++;
-                    if (until > now) st->vesa_07_wait_us += until - now;
+                if (in_vbl) st->VesaOriginVs = org;  /* this retrace loads it: next picture */
+                st->Int10WaitUntil = until;
+                if (until && st->TimeUs) {
+                    uint64_t now = st->TimeUs();
+                    st->Vesa07Waits++;
+                    if (until > now) st->Vesa07WaitUs += until - now;
                 }
             }                                     /* 02h: the latch takes it at the retrace */
-            st->dirty = 1;
+            st->IsDirty = 1;
             VddSetAx(r, 0x004F);
         } else VddSetAx(r, 0x014F);                   /* 03h/83h/05h/06h stereo, unknown BL */
         break; }
@@ -1685,13 +1685,13 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            drives the same RAMDAC. We answered 034Fh outside a VESA mode, which a
            mode-13h game that wants 8-bit primaries reads as "not in this mode". */
         uint8_t bl8 = (uint8_t)(VddGetBx(r) & 0xFF);
-        if (st->in_vesa && st->vesa_bpp > 8) { VddSetAx(r, 0x034F); break; }
+        if (st->IsVesa && st->VesaBpp > 8) { VddSetAx(r, 0x034F); break; }
         if (bl8 == 0x00) {
             uint8_t w8 = (uint8_t)((VddGetBx(r) >> 8) & 0xFF);
-            st->vesa_dacwidth = (uint8_t)(w8 >= 8 ? 8 : 6);
+            st->VesaDacWidth = (uint8_t)(w8 >= 8 ? 8 : 6);
         } else if (bl8 != 0x01) { VddSetAx(r, 0x014F); break; }
-        if (!st->vesa_dacwidth) st->vesa_dacwidth = 6;
-        VddSetBx(r, (uint16_t)((VddGetBx(r) & 0x00FF) | ((uint16_t)st->vesa_dacwidth << 8)));
+        if (!st->VesaDacWidth) st->VesaDacWidth = 6;
+        VddSetBx(r, (uint16_t)((VddGetBx(r) & 0x00FF) | ((uint16_t)st->VesaDacWidth << 8)));
         VddSetAx(r, 0x004F);
         break; }
     case 0x09: {                                  /* get/set palette data          */
@@ -1702,7 +1702,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
              OLD palette until some other DAC path happened to refresh it. */
         uint8_t bl9 = (uint8_t)(VddGetBx(r) & 0xFF);
         uint16_t first = VddGetDx(r), n = VddGetCx(r), i;
-        uint8_t *t = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Edi);
+        uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Edi);
         if (bl9 == 0x02 || bl9 == 0x03) { VddSetAx(r, 0x024F); break; }
         if (bl9 != 0x00 && bl9 != 0x01 && bl9 != 0x80) { VddSetAx(r, 0x014F); break; }
         if ((uint32_t)first + n > 256) { VddSetAx(r, 0x024F); break; }   /* fail, change nothing */
@@ -1713,9 +1713,9 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            top two bits are not part of the value, as on the port. */
         for (i = 0; i < n && (first + i) < 256; ++i) {
             if (bl9 == 0x00 || bl9 == 0x80)
-                st->dac[first + i] = dac_pack_w(st, t[i*4+2], t[i*4+1], t[i*4+0]);
+                st->Dac[first + i] = dac_pack_w(st, t[i*4+2], t[i*4+1], t[i*4+0]);
             else {
-                uint32_t v = st->dac[first + i];
+                uint32_t v = st->Dac[first + i];
                 t[i*4+0] = dac_from8(st, (uint8_t)v);
                 t[i*4+1] = dac_from8(st, (uint8_t)(v >> 8));
                 t[i*4+2] = dac_from8(st, (uint8_t)(v >> 16));
@@ -1723,7 +1723,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
             }
         }
         if (bl9 != 0x01) pal_refresh(st);         /* the presenter reads st->pal */
-        st->dirty = 1;
+        st->IsDirty = 1;
         VddSetAx(r, 0x004F);
         break; }
     case 0x0A:                                    /* protected-mode interface      */
@@ -1751,8 +1751,8 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            which is what a monitor with no power management would show too. */
         uint8_t bl = (uint8_t)(VddGetBx(r) & 0xFF), bh = (uint8_t)((VddGetBx(r) >> 8) & 0xFF);
         if (bl == 0x00)      VddSetBx(r, (uint16_t)((0x0Fu << 8) | 0x10));
-        else if (bl == 0x01) { if (bh & ~0x0Fu) { VddSetAx(r, 0x024F); break; } st->vesa_pm_state = bh; }
-        else if (bl == 0x02) VddSetBx(r, (uint16_t)(((uint16_t)st->vesa_pm_state << 8) | bl));
+        else if (bl == 0x01) { if (bh & ~0x0Fu) { VddSetAx(r, 0x024F); break; } st->VesaPmState = bh; }
+        else if (bl == 0x02) VddSetBx(r, (uint16_t)(((uint16_t)st->VesaPmState << 8) | bl));
         else { VddSetAx(r, 0x014F); break; }
         VddSetAx(r, 0x004F);
         break; }
@@ -1769,7 +1769,7 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
         if (bl == 0x01) {
             uint8_t *e; unsigned k, sum = 0;
             if (VddGetDx(r) != 0) { VddSetAx(r, 0x014F); break; }              /* block 0 only   */
-            e = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Edi);
+            e = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Edi);
             for (k = 0; k < 128; ++k) e[k] = 0;
             e[0] = 0x00; for (k = 1; k < 7; ++k) e[k] = 0xFF; e[7] = 0x00;   /* header   */
             e[8] = 0x3A; e[9] = 0x96;                 /* manufacturer "NTV" (5-bit packed) */
@@ -1819,12 +1819,12 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
            Window B is advertised as absent (WinBAttributes=0) so BL=01 fails; in an LFB
            mode the spec requires AH=03. */
         uint8_t bh = (uint8_t)((VddGetBx(r) >> 8) & 0xFF), bl = (uint8_t)(VddGetBx(r) & 0xFF);
-        if (!st->in_vesa || st->vesa_lfb) { VddSetAx(r, 0x034F); break; }
+        if (!st->IsVesa || st->IsVesaLfb) { VddSetAx(r, 0x034F); break; }
         if (bl != 0x00) { VddSetAx(r, 0x014F); break; }
         if (bh == 0x00) {                         /* set window A                  */
             if (!vesa_set_bank(st, VddGetDx(r))) { VddSetAx(r, 0x024F); break; }   /* past VRAM */
         } else if (bh == 0x01) {                  /* get window A                  */
-            VddSetDx(r, st->vesa_bank);
+            VddSetDx(r, st->VesaBank);
         } else { VddSetAx(r, 0x014F); break; }
         VddSetAx(r, 0x004F);
         break; }
@@ -1839,10 +1839,10 @@ static void vesa(video_state *st, NTVDD_REGISTERS *r)
 /* INT 10h text + mode + palette services. */
 static void int10(void *self, NTVDD_REGISTERS *r)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     uint8_t ah = VddGetAh(r), al = VddGetAl(r);
-    st->dirty = 1;
-    st->int10_wait_until = 0;          /* every call completes at once unless it says otherwise (#226) */
+    st->IsDirty = 1;
+    st->Int10WaitUntil = 0;          /* every call completes at once unless it says otherwise (#226) */
     switch (ah) {
     case 0x00:                                        /* set video mode          */
         /* ── ▶ AL BIT 7 = "DO NOT CLEAR VIDEO MEMORY", AND IT IS NOT DECORATION. ────
@@ -1860,73 +1860,73 @@ static void int10(void *self, NTVDD_REGISTERS *r)
            ▶ Everything else a mode set does still happens; only the erase is skipped,
              which is the whole difference the bit describes. */
         {   int noclear = (al & 0x80) != 0;
-        st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
-        st->vesa_text_mode = 0;                       /* ...including a VESA text mode */
+        st->Mode = al & 0x7F; st->IsVesa = 0;        /* a standard mode leaves VESA */
+        st->VesaTextMode = 0;                       /* ...including a VESA text mode */
         /* 40:87h bit 7 is "the last mode set did not clear memory" -- IBM's EGA/VGA
            BIOS copies AL bit 7 there, and VBE 2.0 §4.5/§4.6 builds 4F02h's D15 on the
            same bit (#226). It read 60h always. */
-        st->modeset_noclear = (uint8_t)(noclear ? 1 : 0);
-        st->vesa_mode_flags = 0;
-        st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
-        st->cur_row = st->cur_col = 0; st->page = 0;
-        {   int pg; for (pg = 0; pg < 8; ++pg) st->pg_row[pg] = st->pg_col[pg] = 0; }   /* #252 */
+        st->IsModeSetNoClear = (uint8_t)(noclear ? 1 : 0);
+        st->VesaModeFlags = 0;
+        st->VesaDacWidth = 6;                        /* §4.11: any mode set -> 6 bits */
+        st->CursorRow = st->CursorColumn = 0; st->Page = 0;
+        {   int pg; for (pg = 0; pg < 8; ++pg) st->PageRow[pg] = st->PageColumn[pg] = 0; }   /* #252 */
         /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
            vga_load_modedef below overrides all of them from the measured table for
            every mode it knows, which is where 0x0D0E rather than this 8-line
            0x0607 comes from. A mode nobody measured still gets a sane cursor and
            blink enabled rather than zeros. */
-        st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
+        st->CursorShape = 0x0607;                       /* the BIOS resets the shape too */
         /* #188: 0040:0065/0066, the CGA mode-select and palette registers, are the
            standard CGA table for modes 00h-07h and are LEFT ALONE by the EGA/VGA
            modes -- measured (p_video2) on PCem's genuine IBM VGA ROM and DOSBox-X:
            0Dh-11h read back 05h's 2E after it, 12h/13h read 06h's 1E/3F. 0066 is 30h,
            3Fh in mode 6. We wrote 29h/30h once at start-up and never again. */
-        if (st->mode <= 0x07) {
+        if (st->Mode <= 0x07) {
             static const uint8_t cga_msr[8] = { 0x2C, 0x28, 0x2D, 0x29, 0x2A, 0x2E, 0x1E, 0x29 };
-            st->cga_sel = (uint8_t)(st->mode == 0x06 ? 0x3F : 0x30);   /* AH=0Bh's shadow (#266) */
-            if (st->bda) { st->bda[0x65] = cga_msr[st->mode]; st->bda[0x66] = st->cga_sel; }
+            st->CgaSelect = (uint8_t)(st->Mode == 0x06 ? 0x3F : 0x30);   /* AH=0Bh's shadow (#266) */
+            if (st->BiosData) { st->BiosData[0x65] = cga_msr[st->Mode]; st->BiosData[0x66] = st->CgaSelect; }
         }
-        st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
-        st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);   /* the register agrees    */
-        st->user_font_on = 0;                         /* the ROM font comes back with the mode */
+        st->IsBlink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
+        st->AttributeMode = (uint8_t)(st->AttributeMode | 0x08u);   /* the register agrees    */
+        st->IsUserFontOn = 0;                         /* the ROM font comes back with the mode */
         /* The cell height the mode's BIOS font gives: 8x16 in the VGA text modes and
            the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. */
-        st->cell_h = mode_cell_h(st->mode);
+        st->CellHeight = mode_cell_h(st->Mode);
         load_default_palette(st);                    /* HW reloads the DAC on mode set */
-        st->geom_regs_ok = 0;                         /* #325: until a measured set loads */
-        vga_load_modedef(st, st->mode);               /* ...and programs the register file */
+        st->IsGeometryRegistersOk = 0;                         /* #325: until a measured set loads */
+        vga_load_modedef(st, st->Mode);               /* ...and programs the register file */
         load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
             for (mi = 0; mi < sizeof(vid_modes)/sizeof(vid_modes[0]); ++mi)
-                if (vid_modes[mi].mode == st->mode) { found = &vid_modes[mi]; break; }
+                if (vid_modes[mi].mode == st->Mode) { found = &vid_modes[mi]; break; }
             if (!found) {                             /* a mode nobody defines   */
-                VID_UNIMPL_SET(st->unimpl_mode, st->mode);
-                st->mkind = VID_KIND_TEXT;
-                st->cols = VID_COLS; st->rows = VID_ROWS;
-                st->gw = VID_FB_W; st->gh = VID_FB_H;
+                VIDEO_UNIMPLEMENTED_SET(st->UnimplementedModes, st->Mode);
+                st->ModeKind = VIDEO_KIND_TEXT;
+                st->Columns = VIDEO_COLUMNS; st->Rows = VIDEO_ROWS;
+                st->GraphicsWidth = VIDEO_FRAME_WIDTH; st->GraphicsHeight = VIDEO_FRAME_HEIGHT;
                 if (!noclear) clear_text(st, 0x07);
             } else {
-                st->mkind = vid_modes[mi].kind;
-                st->cols  = vid_modes[mi].cols;
-                st->rows  = vid_modes[mi].rows;
-                st->gw    = vid_modes[mi].w;
-                st->gh    = vid_modes[mi].h;
-                if (st->mkind == VID_KIND_UNSUP) {
+                st->ModeKind = vid_modes[mi].kind;
+                st->Columns  = vid_modes[mi].cols;
+                st->Rows  = vid_modes[mi].rows;
+                st->GraphicsWidth    = vid_modes[mi].w;
+                st->GraphicsHeight    = vid_modes[mi].h;
+                if (st->ModeKind == VIDEO_KIND_UNSUPPORTED) {
                     /* Say so; do not paint a text screen and let the program
                        draw into a layout that is not there. */
-                    VID_UNIMPL_SET(st->unimpl_mode, st->mode);
-                    st->mkind = VID_KIND_TEXT;
-                    st->cols = VID_COLS; st->rows = VID_ROWS;
-                    st->gw = VID_FB_W;  st->gh = VID_FB_H;
+                    VIDEO_UNIMPLEMENTED_SET(st->UnimplementedModes, st->Mode);
+                    st->ModeKind = VIDEO_KIND_TEXT;
+                    st->Columns = VIDEO_COLUMNS; st->Rows = VIDEO_ROWS;
+                    st->GraphicsWidth = VIDEO_FRAME_WIDTH;  st->GraphicsHeight = VIDEO_FRAME_HEIGHT;
                     if (!noclear) clear_text(st, 0x07);
-                } else if (st->mkind == VID_KIND_LINEAR8) {
+                } else if (st->ModeKind == VIDEO_KIND_LINEAR8) {
                     int i;
                     /* the BIOS sets SR4 = 0Eh for mode 13h: chain-4 ON (see the planar arm) */
-                    st->map_mask = 0x0F; st->y_mask = 0x0F;
-                    if (!st->chain4) { st->chain4 = 1; st->chain4_sel++;
-                                       if (st->ymap_select) st->ymap_select(st->ymap_ctx, -1); }
-                    if (!noclear) for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
-                } else if (st->mkind == VID_KIND_PLANAR) {
+                    st->MapMask = 0x0F; st->YMask = 0x0F;
+                    if (!st->IsChain4) { st->IsChain4 = 1; st->Chain4Selects++;
+                                       if (st->YMapSelect) st->YMapSelect(st->YMapContext, -1); }
+                    if (!noclear) for (i = 0; i < VIDEO_MODE13_WIDTH * VIDEO_MODE13_HEIGHT; ++i) st->VideoMemory[i] = 0;
+                } else if (st->ModeKind == VIDEO_KIND_PLANAR) {
                     int pl; uint32_t i;
                     /* ── ★★★ THE BIOS PROGRAMS THE SEQUENCER TOO. (s74b) A mode set writes
                          SR4 = 06h for the planar modes (chain-4 OFF, odd/even off) and SR2 =
@@ -1940,17 +1940,17 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                          `planar hi_water=0`, black screen. Doom escaped because it programs
                          SR4 itself for mode Y. Real-mode guests escaped because their pixel
                          loops run in the interpreter, which reaches the engine regardless. */
-                    st->map_mask = 0x0F; st->y_mask = 0x0F;
-                    if (st->chain4) { st->chain4 = 0; st->chain4_sel++; }
-                    if (st->ymap_select) st->ymap_select(st->ymap_ctx, (int)st->map_mask);
+                    st->MapMask = 0x0F; st->YMask = 0x0F;
+                    if (st->IsChain4) { st->IsChain4 = 0; st->Chain4Selects++; }
+                    if (st->YMapSelect) st->YMapSelect(st->YMapContext, (int)st->MapMask);
                     if (!noclear)
                         for (pl = 0; pl < 4; ++pl)
-                            for (i = 0; i < VID_PLANE_SIZE; ++i) PL(st,pl)[i] = 0;
-                } else if (st->mkind == VID_KIND_CGA) {
+                            for (i = 0; i < VIDEO_PLANE_SIZE; ++i) PL(st,pl)[i] = 0;
+                } else if (st->ModeKind == VIDEO_KIND_CGA) {
                     int i;
-                    st->cga_bpp = (uint8_t)(st->mode == 0x06 ? 1 : 2);
-                    st->cga_pal = 0;
-                    if (!noclear) for (i = 0; i < 16384; ++i) st->vmem[VID_TEXT_OFF + i] = 0;
+                    st->CgaBpp = (uint8_t)(st->Mode == 0x06 ? 1 : 2);
+                    st->CgaPalette = 0;
+                    if (!noclear) for (i = 0; i < 16384; ++i) st->VideoMemory[VIDEO_TEXT_OFFSET + i] = 0;
                 } else {
                     if (!noclear) clear_text(st, 0x07);
                 }
@@ -1969,9 +1969,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                  come up in 200, 350 or 400 lines with the font that fills 25 rows of
                  them -- 8x8, 8x14, 8x16. It answered "supported" and every text mode
                  came up at 400 regardless. */
-            if (st->mkind == VID_KIND_TEXT && st->mode <= 0x03 && st->scan_sel < 2) {
-                st->cell_h = (uint8_t)(st->scan_sel == 0 ? 8 : 14);
-                st->gh = (uint16_t)(st->rows * st->cell_h);
+            if (st->ModeKind == VIDEO_KIND_TEXT && st->Mode <= 0x03 && st->ScanSelect < 2) {
+                st->CellHeight = (uint8_t)(st->ScanSelect == 0 ? 8 : 14);
+                st->GraphicsHeight = (uint16_t)(st->Rows * st->CellHeight);
             }
             /* ── #266: INT 43h FOLLOWS THE MODE. A VGA BIOS points the graphics-font
                  vector at the table of the new mode's cell (SeaVGABIOS's vga_set_mode:
@@ -1980,8 +1980,8 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                  wrote it before. ⚠ Whether IBM's ROM also does this in the TEXT modes is
                  unmeasured (p_vid266 `i43.mode03` asks). INT 1Fh is a power-on vector and
                  is left alone (vid_i1f_rom, at install). A caller font (AL=21h) ends here. */
-            vid_i43_rom(st, st->cell_h);
-            st->dac_mask = 0xFF;
+            vid_i43_rom(st, st->CellHeight);
+            st->DacMask = 0xFF;
             pal_refresh(st);
             /* ── AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
                  on the AMI 486 ROM under PCem and on SeaBIOS alike (p_plan12: AX=0020
@@ -1989,26 +1989,26 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                  30h for modes 0-5 and 7, 3Fh for mode 6. We returned AL = the mode,
                  which is what a caller that saved AX would see as "mode 12h set" --
                  harmless for most, wrong for anything that keys on the flag. */
-            VddSetAl(r, (uint8_t)(st->mode > 7 ? 0x20 : st->mode == 6 ? 0x3F : 0x30));
-            if (st->mode_qn < 8) {
-                st->mode_q[st->mode_qn].mode = st->mode;
-                st->mode_q[st->mode_qn].kind = st->mkind;
-                st->mode_q[st->mode_qn].cols = st->cols;
-                st->mode_q[st->mode_qn].rows = st->rows;
-                st->mode_q[st->mode_qn].w    = st->gw;
-                st->mode_q[st->mode_qn].h    = st->gh;
-                st->mode_qn++;
+            VddSetAl(r, (uint8_t)(st->Mode > 7 ? 0x20 : st->Mode == 6 ? 0x3F : 0x30));
+            if (st->ModeQueryCount < 8) {
+                st->ModeQueries[st->ModeQueryCount].Mode = st->Mode;
+                st->ModeQueries[st->ModeQueryCount].Kind = st->ModeKind;
+                st->ModeQueries[st->ModeQueryCount].Columns = st->Columns;
+                st->ModeQueries[st->ModeQueryCount].Rows = st->Rows;
+                st->ModeQueries[st->ModeQueryCount].Width    = st->GraphicsWidth;
+                st->ModeQueries[st->ModeQueryCount].Height    = st->GraphicsHeight;
+                st->ModeQueryCount++;
             }
         } }
         break;
-    case 0x01: st->cur_shape = VddGetCx(r); break;
+    case 0x01: st->CursorShape = VddGetCx(r); break;
     /* ── 02h/03h: THE CURSOR OF PAGE BH (#252). Eight cursors, one per page -- the
          active page's is cur_row/cur_col, the rest pg_row/pg_col (0040:0050). BH was
          ignored, so positioning page 1's cursor moved the one on screen. */
     case 0x02: {
         uint8_t pg = (uint8_t)((VddGetBx(r) >> 8) & 7);
-        if (pg == (st->page & 7)) { st->cur_row = (uint8_t)(VddGetDx(r) >> 8); st->cur_col = (uint8_t)(VddGetDx(r) & 0xFF); }
-        else { st->pg_row[pg] = (uint8_t)(VddGetDx(r) >> 8); st->pg_col[pg] = (uint8_t)(VddGetDx(r) & 0xFF); }
+        if (pg == (st->Page & 7)) { st->CursorRow = (uint8_t)(VddGetDx(r) >> 8); st->CursorColumn = (uint8_t)(VddGetDx(r) & 0xFF); }
+        else { st->PageRow[pg] = (uint8_t)(VddGetDx(r) >> 8); st->PageColumn[pg] = (uint8_t)(VddGetDx(r) & 0xFF); }
         break; }
     case 0x03: {
         /* THERE IS NO TEXT CURSOR IN A GRAPHICS MODE, and the BIOS says so: CX comes
@@ -2016,9 +2016,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
            underline shape 0607. Measured, p_video.asm int10.03.<mode>. The stored
            shape is left alone so returning to a text mode restores it. */
         uint8_t pg = (uint8_t)((VddGetBx(r) >> 8) & 7);
-        int act = (pg == (st->page & 7));
-        VddSetDx(r, (uint16_t)(((act ? st->cur_row : st->pg_row[pg]) << 8) | (act ? st->cur_col : st->pg_col[pg])));
-        VddSetCx(r, (uint16_t)(st->mkind == VID_KIND_TEXT ? st->cur_shape : 0));
+        int act = (pg == (st->Page & 7));
+        VddSetDx(r, (uint16_t)(((act ? st->CursorRow : st->PageRow[pg]) << 8) | (act ? st->CursorColumn : st->PageColumn[pg])));
+        VddSetCx(r, (uint16_t)(st->ModeKind == VIDEO_KIND_TEXT ? st->CursorShape : 0));
         break; }
     /* ── 05h: SELECT THE ACTIVE PAGE, AND SHOW IT (#252). It stored the number and the
          BDA followed (oracle-verified, #188) -- but the CRTC start address never moved,
@@ -2029,17 +2029,17 @@ static void int10(void *self, NTVDD_REGISTERS *r)
          load_default_crtc does. The cursor swaps with the page. Modes with one page
          (CGA, 11h-13h) keep the number only. */
     case 0x05: {
-        uint8_t np = (uint8_t)(al & 7), op = (uint8_t)(st->page & 7);
-        st->pg_row[op] = st->cur_row; st->pg_col[op] = st->cur_col;
-        st->page = al;
-        st->cur_row = st->pg_row[np]; st->cur_col = st->pg_col[np];
-        if (st->mkind == VID_KIND_TEXT || (st->mkind == VID_KIND_PLANAR && st->mode <= 0x10)) {
+        uint8_t np = (uint8_t)(al & 7), op = (uint8_t)(st->Page & 7);
+        st->PageRow[op] = st->CursorRow; st->PageColumn[op] = st->CursorColumn;
+        st->Page = al;
+        st->CursorRow = st->PageRow[np]; st->CursorColumn = st->PageColumn[np];
+        if (st->ModeKind == VIDEO_KIND_TEXT || (st->ModeKind == VIDEO_KIND_PLANAR && st->Mode <= 0x10)) {
             uint32_t off = (uint32_t)np * vid_page_size(st);
-            if (st->mkind == VID_KIND_TEXT) off >>= 1;
-            st->crtc_start = (uint16_t)off;
-            st->crtc_start_live = st->start_vs = (uint16_t)off;
-            st->crtc_start_pend = 0;
-            if (st->mkind == VID_KIND_PLANAR) st->crtc_seen = 1;   /* render_planar reads it */
+            if (st->ModeKind == VIDEO_KIND_TEXT) off >>= 1;
+            st->CrtcStart = (uint16_t)off;
+            st->CrtcStartLive = st->StartVs = (uint16_t)off;
+            st->IsCrtcStartPending = 0;
+            if (st->ModeKind == VIDEO_KIND_PLANAR) st->IsCrtcSeen = 1;   /* render_planar reads it */
         }
         break; }
     case 0x06:
@@ -2050,9 +2050,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
          the PIXELS in a graphics mode (gfx_read_char), AH = 0 there. */
     case 0x08: {
         uint8_t pg = (uint8_t)((VddGetBx(r) >> 8) & 7);
-        int act = (pg == (st->page & 7));
-        int rr = act ? st->cur_row : st->pg_row[pg], cc = act ? st->cur_col : st->pg_col[pg];
-        if (st->mkind == VID_KIND_TEXT) {
+        int act = (pg == (st->Page & 7));
+        int rr = act ? st->CursorRow : st->PageRow[pg], cc = act ? st->CursorColumn : st->PageColumn[pg];
+        if (st->ModeKind == VIDEO_KIND_TEXT) {
             uint8_t *p = pcell(st, pg, rr, cc);
             VddSetAx(r, (uint16_t)((p[1] << 8) | p[0]));
         } else VddSetAx(r, gfx_read_char(st, pg, cc, rr));
@@ -2064,14 +2064,14 @@ static void int10(void *self, NTVDD_REGISTERS *r)
     case 0x0A: {
         uint16_t n = VddGetCx(r); uint8_t attr = (uint8_t)(VddGetBx(r) & 0xFF);
         uint8_t pg = (uint8_t)((VddGetBx(r) >> 8) & 7);
-        int act = (pg == (st->page & 7));
-        int c = act ? st->cur_col : st->pg_col[pg], rr = act ? st->cur_row : st->pg_row[pg];
+        int act = (pg == (st->Page & 7));
+        int c = act ? st->CursorColumn : st->PageColumn[pg], rr = act ? st->CursorRow : st->PageRow[pg];
         if (!n) n = 1;
-        while (n-- && rr < st->rows) {
-            if (st->mkind == VID_KIND_TEXT) {
+        while (n-- && rr < st->Rows) {
+            if (st->ModeKind == VIDEO_KIND_TEXT) {
                 uint8_t *p = pcell(st, pg, rr, c); p[0] = al; if (ah == 0x09) p[1] = attr;
             } else gfx_glyph(st, pg, c, rr, al, attr);
-            if (++c >= st->cols) { c = 0; if (++rr >= st->rows) break; }
+            if (++c >= st->Columns) { c = 0; if (++rr >= st->Rows) break; }
         }
         break; }
     /* ── 0Ch/0Dh: ONE PIXEL, IN THE MODE'S OWN GEOMETRY (#252). The planar arm used a
@@ -2081,24 +2081,24 @@ static void int10(void *self, NTVDD_REGISTERS *r)
     case 0x0C: {
         uint32_t x = VddGetCx(r), y = VddGetDx(r);
         int xr = (al & 0x80) != 0;
-        if (st->in_vesa) break;
-        if (st->mkind == VID_KIND_LINEAR8) {
-            if (x < st->gw && y < st->gh && y * st->gw + x < VID_APERTURE_SIZE) st->vmem[y * st->gw + x] = al;
-        } else if (st->mkind == VID_KIND_PLANAR) {
-            if (x < st->gw && y < st->gh) {
-                uint32_t byte = (uint32_t)((VddGetBx(r) >> 8) & 7) * vid_page_size(st) + y * (st->gw / 8u) + (x >> 3);
+        if (st->IsVesa) break;
+        if (st->ModeKind == VIDEO_KIND_LINEAR8) {
+            if (x < st->GraphicsWidth && y < st->GraphicsHeight && y * st->GraphicsWidth + x < VIDEO_APERTURE_SIZE) st->VideoMemory[y * st->GraphicsWidth + x] = al;
+        } else if (st->ModeKind == VIDEO_KIND_PLANAR) {
+            if (x < st->GraphicsWidth && y < st->GraphicsHeight) {
+                uint32_t byte = (uint32_t)((VddGetBx(r) >> 8) & 7) * vid_page_size(st) + y * (st->GraphicsWidth / 8u) + (x >> 3);
                 uint8_t  bit = (uint8_t)(0x80 >> (x & 7)), p;
-                if (byte < VID_PLANE_SIZE)
+                if (byte < VIDEO_PLANE_SIZE)
                     for (p = 0; p < 4; ++p) {
                         if (xr) { if (al & (1 << p)) PL(st,p)[byte] ^= bit; }
                         else if (al & (1 << p)) PL(st,p)[byte] |= bit;
                         else                    PL(st,p)[byte] &= (uint8_t)~bit;
                     }
             }
-        } else if (st->mkind == VID_KIND_CGA) {
-            if (x < st->gw && y < st->gh) {
-                uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (y >> 1) * 80u;
-                if (st->cga_bpp == 1) {
+        } else if (st->ModeKind == VIDEO_KIND_CGA) {
+            if (x < st->GraphicsWidth && y < st->GraphicsHeight) {
+                uint8_t *m = st->VideoMemory + VIDEO_TEXT_OFFSET + ((y & 1) ? 0x2000u : 0u) + (y >> 1) * 80u;
+                if (st->CgaBpp == 1) {
                     uint8_t bit = (uint8_t)(0x80 >> (x & 7));
                     if (xr) { if (al & 1) m[x >> 3] ^= bit; }
                     else m[x >> 3] = (uint8_t)((m[x >> 3] & ~bit) | ((al & 1) ? bit : 0));
@@ -2121,8 +2121,8 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         /* BH is the active page; BL IS NOT DEFINED BY THIS CALL and the real BIOS
            leaves it alone -- we were zeroing the whole of BX and taking the caller's
            BL with it. Measured: the oracle returns the probe's poison in BL. */
-        VddSetAx(r, (uint16_t)((st->cols << 8) | st->mode));
-        VddSetBx(r, (uint16_t)((st->page << 8) | (VddGetBx(r) & 0xFF)));
+        VddSetAx(r, (uint16_t)((st->Columns << 8) | st->Mode));
+        VddSetBx(r, (uint16_t)((st->Page << 8) | (VddGetBx(r) & 0xFF)));
         break;
     case 0x10:                                        /* palette / DAC            */
         /* ⚠ THE DAC CALLS BELOW GO THROUGH dac_pack_w / dac_from8, i.e. AT THE DAC
@@ -2131,71 +2131,71 @@ static void int10(void *self, NTVDD_REGISTERS *r)
              BH=8 a real card takes these values as 8-bit too. Same device, same rule. */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = VddGetBx(r);
-            st->dac_block[((idx & 0xFF) >> 4) & 15]++;
-            st->dac[idx & 0xFF] = dac_pack_w(st, (uint8_t)(VddGetDx(r) >> 8),
+            st->DacBlock[((idx & 0xFF) >> 4) & 15]++;
+            st->Dac[idx & 0xFF] = dac_pack_w(st, (uint8_t)(VddGetDx(r) >> 8),
                                              (uint8_t)(VddGetCx(r) >> 8), (uint8_t)VddGetCx(r));
-            if (st->grey_sum) dac_grey(st, idx & 0xFF, 1);   /* 12h BL=33h (#252) */
+            if (st->IsGreySum) dac_grey(st, idx & 0xFF, 1);   /* 12h BL=33h (#252) */
             pal_refresh(st);
         } else if (al == 0x12) {                      /* set block of DAC regs    */
             uint16_t first = VddGetBx(r), n = VddGetCx(r), i;
-            uint8_t *t = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)VddGetDx(r));
+            uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)VddGetDx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
-                { st->dac[first + i] = dac_pack_w(st, t[i*3], t[i*3+1], t[i*3+2]);
-                  st->dac_block[((first + i) >> 4) & 15]++;
-                  if (((first + i) & 0xF0) == 0x30) st->dac_hi_since_reset++; }
-            st->dac_writes += n;
-            if (st->grey_sum) dac_grey(st, first, n);   /* 12h BL=33h (#252) */
+                { st->Dac[first + i] = dac_pack_w(st, t[i*3], t[i*3+1], t[i*3+2]);
+                  st->DacBlock[((first + i) >> 4) & 15]++;
+                  if (((first + i) & 0xF0) == 0x30) st->DacHighSinceReset++; }
+            st->DacWrites += n;
+            if (st->IsGreySum) dac_grey(st, first, n);   /* 12h BL=33h (#252) */
             pal_refresh(st);
         } else if (al == 0x00) {                      /* set one palette register */
             uint8_t reg = (uint8_t)((VddGetBx(r) >> 8) & 0xFF);
-            if (reg < 17) { st->vpal[reg] = (uint8_t)(VddGetBx(r) & 0x3F); st->ac_bios_writes++; }
+            if (reg < 17) { st->PaletteRegisters[reg] = (uint8_t)(VddGetBx(r) & 0x3F); st->AcBiosWrites++; }
             pal_refresh(st);   /* AH=10h stored vpal and rendered from ega16: inert until now */
         } else if (al == 0x01) {                      /* set the border           */
-            st->vpal[16] = st->overscan = (uint8_t)((VddGetBx(r) >> 8) & 0x3F);
+            st->PaletteRegisters[16] = st->Overscan = (uint8_t)((VddGetBx(r) >> 8) & 0x3F);
         } else if (al == 0x02) {                      /* set all 16 + border      */
-            uint8_t *t = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)VddGetDx(r));
-            int i; for (i = 0; i < 17; ++i) st->vpal[i] = (uint8_t)(t[i] & 0x3F);
-            st->overscan = st->vpal[16];
-            st->ac_bios_writes += 17;
+            uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)VddGetDx(r));
+            int i; for (i = 0; i < 17; ++i) st->PaletteRegisters[i] = (uint8_t)(t[i] & 0x3F);
+            st->Overscan = st->PaletteRegisters[16];
+            st->AcBiosWrites += 17;
             pal_refresh(st);
         } else if (al == 0x03) {                      /* blink vs bright background */
             /* The BIOS's job here is to write AR10 bit 3; keep both in step so a
                guest that sets it through the BIOS and then READS the register back
                sees what it asked for. Oracle-measured (p_video.asm ar10.blink.*):
                BL=0 leaves AR10 bit 3 clear, BL=1 sets it. */
-            st->blink = (uint8_t)(VddGetBx(r) & 1);
-            st->attr_mode = (uint8_t)((st->attr_mode & ~0x08u) | (st->blink ? 0x08u : 0u));
+            st->IsBlink = (uint8_t)(VddGetBx(r) & 1);
+            st->AttributeMode = (uint8_t)((st->AttributeMode & ~0x08u) | (st->IsBlink ? 0x08u : 0u));
         } else if (al == 0x07) {                      /* get one palette register */
             uint8_t reg = (uint8_t)((VddGetBx(r) >> 8) & 0xFF);
-            VddSetBx(r, (uint16_t)((VddGetBx(r) & 0xFF00) | (reg < 17 ? st->vpal[reg] : 0)));
+            VddSetBx(r, (uint16_t)((VddGetBx(r) & 0xFF00) | (reg < 17 ? st->PaletteRegisters[reg] : 0)));
         } else if (al == 0x08) {                      /* get the border           */
-            VddSetBx(r, (uint16_t)((VddGetBx(r) & 0x00FF) | ((uint16_t)st->vpal[16] << 8)));
+            VddSetBx(r, (uint16_t)((VddGetBx(r) & 0x00FF) | ((uint16_t)st->PaletteRegisters[16] << 8)));
         } else if (al == 0x09) {                      /* get all 16 + border      */
-            uint8_t *t = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)VddGetDx(r));
-            int i; for (i = 0; i < 17; ++i) t[i] = st->vpal[i];
+            uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)VddGetDx(r));
+            int i; for (i = 0; i < 17; ++i) t[i] = st->PaletteRegisters[i];
         } else if (al == 0x13) {                      /* select DAC page / mode   */
-            st->dac_page = (uint8_t)(VddGetBx(r) >> 8);
+            st->DacPage = (uint8_t)(VddGetBx(r) >> 8);
         } else if (al == 0x15) {                      /* get one DAC register     */
-            uint32_t v = st->dac[VddGetBx(r) & 0xFF];
+            uint32_t v = st->Dac[VddGetBx(r) & 0xFF];
             VddSetDx(r, (uint16_t)((uint16_t)dac_from8(st, (uint8_t)(v >> 16)) << 8));
             VddSetCx(r, (uint16_t)(((uint16_t)dac_from8(st, (uint8_t)(v >> 8)) << 8)
                               | dac_from8(st, (uint8_t)v)));
         } else if (al == 0x17) {                      /* get block of DAC regs    */
             uint16_t first = VddGetBx(r), n = VddGetCx(r), i;
-            uint8_t *t = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)VddGetDx(r));
+            uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)VddGetDx(r));
             for (i = 0; i < n && (first + i) < 256; ++i) {
-                uint32_t v = st->dac[first + i];
+                uint32_t v = st->Dac[first + i];
                 t[i*3]   = dac_from8(st, (uint8_t)(v >> 16));
                 t[i*3+1] = dac_from8(st, (uint8_t)(v >> 8));
                 t[i*3+2] = dac_from8(st, (uint8_t)v);
             }
         } else if (al == 0x1A) {                      /* get DAC page state       */
-            VddSetBx(r, (uint16_t)((st->dac_page << 8) | 0));
+            VddSetBx(r, (uint16_t)((st->DacPage << 8) | 0));
         } else if (al == 0x1B) {                      /* convert to grey scale    */
             dac_grey(st, VddGetBx(r), VddGetCx(r));
             pal_refresh(st);
         } else {
-            VID_UNIMPL_SET(st->unimpl_fn, 0x10);      /* name it, do not ignore it */
+            VIDEO_UNIMPLEMENTED_SET(st->UnimplementedFunctions, 0x10);      /* name it, do not ignore it */
         }
         break;
     case 0x07: {                                       /* scroll window DOWN      */
@@ -2205,7 +2205,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         uint8_t bot = (uint8_t)(VddGetDx(r) >> 8), rgt = (uint8_t)(VddGetDx(r) & 0xFF);
         uint8_t attr = (uint8_t)(VddGetBx(r) >> 8);
         int rr, cc, k;
-        if (st->mkind != VID_KIND_TEXT) {              /* graphics: pixels, BH = fill colour (#252) */
+        if (st->ModeKind != VIDEO_KIND_TEXT) {              /* graphics: pixels, BH = fill colour (#252) */
             gfx_scroll(st, n, top, lft, bot, rgt, attr, 0);
             break;
         }
@@ -2230,9 +2230,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
          mode, and BH=1 flipped a private `cga_pal` that render_cga indexed a hard-coded
          table with -- so the AC registers a guest reads back, and AH=10h's view of them,
          never moved, and a background colour never appeared in any graphics mode.
-         Now the CGA colour-select byte 0040:0066 is maintained (vdd_cga_colour_select)
+         Now the CGA colour-select byte 0040:0066 is maintained (VddCgaColourSelect)
          and turned into AC values the way the VGA BIOS does (DOSBox's arithmetic; see
-         vdd_cga_bg_ar / vdd_cga_pal_ar):
+         VddCgaBackgroundAr / VddCgaPaletteAr):
            BH=0  AR11 (border) = BL as an AC colour, in every mode. In a graphics mode
                  AR00 (the background) too -- except 06h, where CGA's colour select is the
                  FOREGROUND and AR01 takes it. In 04h/05h AR01-03 follow 0066 bit 4
@@ -2245,23 +2245,23 @@ static void int10(void *self, NTVDD_REGISTERS *r)
            06h foreground (taken from the CGA, the issue's reading); (c) 0066 in text. */
     case 0x0B: {
         uint8_t bh = (uint8_t)(VddGetBx(r) >> 8), bl = (uint8_t)(VddGetBx(r) & 0xFF);
-        uint8_t sel = st->bda ? st->bda[0x66] : st->cga_sel;
-        int gfx = (st->mkind != VID_KIND_TEXT) && !st->in_vesa;
-        int cga4 = gfx && (st->mode == 0x04 || st->mode == 0x05);
+        uint8_t sel = st->BiosData ? st->BiosData[0x66] : st->CgaSelect;
+        int gfx = (st->ModeKind != VIDEO_KIND_TEXT) && !st->IsVesa;
+        int cga4 = gfx && (st->Mode == 0x04 || st->Mode == 0x05);
         uint8_t ar[3];
         if (bh > 1) break;                             /* not a defined BH: nothing    */
-        sel = vdd_cga_colour_select(sel, bh, bl);
-        st->cga_sel = sel;
-        if (st->bda) st->bda[0x66] = sel;
+        sel = VddCgaColourSelect(sel, bh, bl);
+        st->CgaSelect = sel;
+        if (st->BiosData) st->BiosData[0x66] = sel;
         if (bh == 0) {
-            uint8_t v = vdd_cga_bg_ar(bl);
+            uint8_t v = VddCgaBackgroundAr(bl);
             ac_bios_set(st, 0x11, v);
-            if (gfx) ac_bios_set(st, (uint8_t)(st->mode == 0x06 ? 0x01 : 0x00), v);
+            if (gfx) ac_bios_set(st, (uint8_t)(st->Mode == 0x06 ? 0x01 : 0x00), v);
         } else {
-            st->cga_pal = (uint8_t)(bl & 1);
+            st->CgaPalette = (uint8_t)(bl & 1);
         }
         if (cga4) {
-            vdd_cga_pal_ar(sel, ar);
+            VddCgaPaletteAr(sel, ar);
             ac_bios_set(st, 1, ar[0]); ac_bios_set(st, 2, ar[1]); ac_bios_set(st, 3, ar[2]);
         }
         pal_refresh(st);
@@ -2277,19 +2277,19 @@ static void int10(void *self, NTVDD_REGISTERS *r)
     case 0x0D: {                                       /* READ a pixel            */
         uint16_t x = VddGetCx(r), y = VddGetDx(r);
         uint8_t v = 0;
-        if (st->mkind == VID_KIND_LINEAR8) {
-            if (x < st->gw && y < st->gh) v = st->vmem[y * st->gw + x];
-        } else if (st->mkind == VID_KIND_PLANAR) {     /* page BH (#252) */
-            uint32_t byi = (uint32_t)((VddGetBx(r) >> 8) & 7) * vid_page_size(st) + y * (st->gw / 8) + (x >> 3);
+        if (st->ModeKind == VIDEO_KIND_LINEAR8) {
+            if (x < st->GraphicsWidth && y < st->GraphicsHeight) v = st->VideoMemory[y * st->GraphicsWidth + x];
+        } else if (st->ModeKind == VIDEO_KIND_PLANAR) {     /* page BH (#252) */
+            uint32_t byi = (uint32_t)((VddGetBx(r) >> 8) & 7) * vid_page_size(st) + y * (st->GraphicsWidth / 8) + (x >> 3);
             uint8_t  msk = (uint8_t)(0x80 >> (x & 7));
-            if (byi < VID_PLANE_SIZE)
+            if (byi < VIDEO_PLANE_SIZE)
                 v = (uint8_t)(((PL(st,0)[byi] & msk) ? 1 : 0)
                             | ((PL(st,1)[byi] & msk) ? 2 : 0)
                             | ((PL(st,2)[byi] & msk) ? 4 : 0)
                             | ((PL(st,3)[byi] & msk) ? 8 : 0));
-        } else if (st->mkind == VID_KIND_CGA && x < st->gw && y < st->gh) {   /* #252: read 0 before */
-            const uint8_t *m = st->vmem + VID_TEXT_OFF + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
-            v = st->cga_bpp == 1 ? (uint8_t)((m[x >> 3] >> (7 - (x & 7))) & 1)
+        } else if (st->ModeKind == VIDEO_KIND_CGA && x < st->GraphicsWidth && y < st->GraphicsHeight) {   /* #252: read 0 before */
+            const uint8_t *m = st->VideoMemory + VIDEO_TEXT_OFFSET + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
+            v = st->CgaBpp == 1 ? (uint8_t)((m[x >> 3] >> (7 - (x & 7))) & 1)
                                  : (uint8_t)((m[x >> 2] >> (6 - 2 * (x & 3))) & 3);
         }
         VddSetAx(r, (uint16_t)((VddGetAx(r) & 0xFF00) | v));
@@ -2302,7 +2302,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         uint8_t al1c = al;
         if (al1c == 0x00)      { VddSetBx(r, VID_STATE_BLOCKS); VddSetAx(r, (uint16_t)((VddGetAx(r) & 0xFF00) | 0x1C)); }
         else if (al1c == 0x01 || al1c == 0x02) {
-            uint8_t *buf = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Ebx);
+            uint8_t *buf = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Ebx);
             if (al1c == 0x01) vid_state_save(st, buf, VddGetCx(r));
             else              (void)vid_state_load(st, buf);   /* a foreign buffer: no-op */
             VddSetAx(r, (uint16_t)((VddGetAx(r) & 0xFF00) | 0x1C));
@@ -2317,9 +2317,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
     case 0x13: {
         uint16_t n = VddGetCx(r), i; uint8_t mode = al, attr = (uint8_t)(VddGetBx(r) & 0xFF);
         uint8_t pg = (uint8_t)((VddGetBx(r) >> 8) & 7);
-        int act = (pg == (st->page & 7));
+        int act = (pg == (st->Page & 7));
         int rr = (uint8_t)(VddGetDx(r) >> 8), cc = (uint8_t)(VddGetDx(r) & 0xFF);
-        uint8_t *s = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Ebp);
+        uint8_t *s = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Ebp);
         if (!s) break;
         for (i = 0; i < n; ++i) {
             uint8_t ch = *s++; if (mode & 0x02) attr = *s++;
@@ -2327,25 +2327,25 @@ static void int10(void *self, NTVDD_REGISTERS *r)
             if (ch == 0x08) { if (cc) --cc; continue; }
             if (ch == 0x07) continue;
             if (ch != 0x0A) {
-                if (rr < st->rows && cc < st->cols) {
-                    if (st->mkind == VID_KIND_TEXT) { uint8_t *p = pcell(st, pg, rr, cc); p[0] = ch; p[1] = attr; }
+                if (rr < st->Rows && cc < st->Columns) {
+                    if (st->ModeKind == VIDEO_KIND_TEXT) { uint8_t *p = pcell(st, pg, rr, cc); p[0] = ch; p[1] = attr; }
                     else gfx_glyph(st, pg, cc, rr, ch, attr);
                 }
-                if (++cc < st->cols) continue;
+                if (++cc < st->Columns) continue;
                 cc = 0;
             }
-            if (++rr >= st->rows) {
-                if (act) scroll_up(st, 1, 0, 0, st->rows - 1, st->cols - 1, tty_fill(st));
-                rr = st->rows - 1;
+            if (++rr >= st->Rows) {
+                if (act) scroll_up(st, 1, 0, 0, st->Rows - 1, st->Columns - 1, tty_fill(st));
+                rr = st->Rows - 1;
             }
         }
         if (mode & 0x01) {
-            if (act) { st->cur_row = (uint8_t)rr; st->cur_col = (uint8_t)cc; }
-            else     { st->pg_row[pg] = (uint8_t)rr; st->pg_col[pg] = (uint8_t)cc; }
+            if (act) { st->CursorRow = (uint8_t)rr; st->CursorColumn = (uint8_t)cc; }
+            else     { st->PageRow[pg] = (uint8_t)rr; st->PageColumn[pg] = (uint8_t)cc; }
         }
         break; }
     case 0x11:                                         /* character generator     */
-        st->int10_11_calls++;                          /* did the guest ASK at all? */
+        st->Int10Ah11Calls++;                          /* did the guest ASK at all? */
         if (al == 0x30) {                              /* get font info -> ES:BP  */
             /* THE POINTER IS THE POINT. BH selects which table the caller wants, and the
                answer is returned in ES:BP with CX = bytes per character. Returning only
@@ -2361,7 +2361,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
             case 0x00:                                        /* INT 1Fh: 8x8 upper half */
                 /* #266: what INT 1Fh holds -- ours (8x8 upper half) unless AL=20h
                    installed the caller's. */
-                if (st->g1f_user) { seg = st->i1f_seg; off = st->i1f_off; bpc = 8; break; }
+                if (st->IsInt1FUser) { seg = st->Int1FSegment; off = st->Int1FOffset; bpc = 8; break; }
                 /* fall through */
             case 0x04: seg = VDD_FONT8X8_SEG;  off = 128 * 8; bpc = 8;  break;
             case 0x02:                                        /* ROM 8x14 / 9x14 alt     */
@@ -2374,9 +2374,9 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                    cell_h is that answer, and it follows a 1112h/1111h font change too. */
                 /* #266: and a caller's graphics font (AL=21h) IS the current font --
                    INT 43h points at it, so this answers with it. */
-                if (st->gfont_user) { seg = st->i43_seg; off = st->i43_off; bpc = st->cell_h; }
-                else if (st->cell_h == 8)  { seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;  }
-                else if (st->cell_h == 14) { seg = VDD_FONT8X14_SEG; off = 0; bpc = 14; }
+                if (st->IsGraphicsFontUser) { seg = st->Int43Segment; off = st->Int43Offset; bpc = st->CellHeight; }
+                else if (st->CellHeight == 8)  { seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;  }
+                else if (st->CellHeight == 14) { seg = VDD_FONT8X14_SEG; off = 0; bpc = 14; }
                 else                       { seg = VDD_FONT8X16_SEG; off = 0; bpc = 16; }
                 break;
             default:   seg = VDD_FONT8X16_SEG; off = 0;       bpc = 16; break;
@@ -2389,15 +2389,15 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                  the 8x8 upper half and CX still comes back 16 in mode 3. We answered
                  8, contradicting our OWN BDA byte at 0040:0085 two lines of probe
                  output earlier -- and a 43/50-line editor sizes the screen from CX. */
-            VddSetCx(r, st->cell_h ? st->cell_h : bpc);    /* on-screen bytes/character */
-            VddSetDx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));  /* DL = rows-1     */
-            if (st->font_qn < 4) {                     /* record the request + answer */
-                st->font_q[st->font_qn].al  = al;
-                st->font_q[st->font_qn].bh  = bh;
-                st->font_q[st->font_qn].seg = seg;
-                st->font_q[st->font_qn].off = off;
-                st->font_q[st->font_qn].cx  = bpc;
-                st->font_qn++;
+            VddSetCx(r, st->CellHeight ? st->CellHeight : bpc);    /* on-screen bytes/character */
+            VddSetDx(r, (uint16_t)(st->Rows ? st->Rows - 1 : 24));  /* DL = rows-1     */
+            if (st->FontQueryCount < 4) {                     /* record the request + answer */
+                st->FontQueries[st->FontQueryCount].Al  = al;
+                st->FontQueries[st->FontQueryCount].Bh  = bh;
+                st->FontQueries[st->FontQueryCount].Segment = seg;
+                st->FontQueries[st->FontQueryCount].Offset = off;
+                st->FontQueries[st->FontQueryCount].Cx  = bpc;
+                st->FontQueryCount++;
             }
         } else if (al == 0x03) {
             /* ── 03h: SET BLOCK SPECIFIER = the Sequencer's Character Map Select (#266).
@@ -2408,7 +2408,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                ⚠ The renderer still draws one font (the loaded one, whatever block it
                  was loaded to), so SR3 reads back right and selects nothing yet: the
                  512-character case is a docs/inventory/vga.md gap. */
-            st->seq_reg[3] = (uint8_t)(VddGetBx(r) & 0xFF);
+            st->SequencerRegisters[3] = (uint8_t)(VddGetBx(r) & 0xFF);
         } else if ((al & 0x0F) <= 0x04 && al != 0x13 && (al <= 0x04 || (al >= 0x10 && al <= 0x14))) {
             /* ── AL=x0 LOADS THE CALLER'S OWN GLYPHS, AND NOW THEY GET DRAWN. ──
                  This used to accept the call, mark it unimplemented and keep
@@ -2425,35 +2425,35 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                 uint16_t fseg = r->Es, foff = (uint16_t)(r->Ebp & 0xFFFF);
                 uint16_t cnt = (uint16_t)VddGetCx(r), first = (uint16_t)VddGetDx(r);
                 uint8_t  bpc = (uint8_t)((VddGetBx(r) >> 8) & 0xFF);
-                const uint8_t *src = (const uint8_t *)VddMapFlat(st->bus, fseg, foff);
-                if (!src || bpc == 0 || bpc > VID_CELL_H) {
-                    /* Cannot represent it -- a cell is VID_CELL_H tall. Say so
+                const uint8_t *src = (const uint8_t *)VddMapFlat(st->Bus, fseg, foff);
+                if (!src || bpc == 0 || bpc > VIDEO_CELL_HEIGHT) {
+                    /* Cannot represent it -- a cell is VIDEO_CELL_HEIGHT tall. Say so
                        rather than store something the renderer would misread. */
-                    VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+                    VIDEO_UNIMPLEMENTED_SET(st->UnimplementedFunctions, 0x11);
                 } else {
                     unsigned i, y;
-                    if (!st->user_font_on) {       /* seed from ROM so characters
+                    if (!st->IsUserFontOn) {       /* seed from ROM so characters
                                                       the caller does NOT supply
                                                       still draw as themselves */
                         unsigned c2;
                         for (c2 = 0; c2 < 256; ++c2)
-                            for (y = 0; y < VID_CELL_H; ++y)
-                                st->user_font[c2 * VID_CELL_H + y] = vga_font_8x16[c2][y];
+                            for (y = 0; y < VIDEO_CELL_HEIGHT; ++y)
+                                st->UserFont[c2 * VIDEO_CELL_HEIGHT + y] = vga_font_8x16[c2][y];
                     }
                     for (i = 0; i < cnt && (first + i) < 256; ++i) {
                         unsigned ch2 = first + i;
-                        for (y = 0; y < VID_CELL_H; ++y)
-                            st->user_font[ch2 * VID_CELL_H + y] =
+                        for (y = 0; y < VIDEO_CELL_HEIGHT; ++y)
+                            st->UserFont[ch2 * VIDEO_CELL_HEIGHT + y] =
                                 (y < bpc) ? src[i * bpc + y] : 0;
                     }
-                    st->user_font_rows = bpc;
-                    st->user_font_on = 1;
-                    st->dirty = 1;
+                    st->UserFontRows = bpc;
+                    st->IsUserFontOn = 1;
+                    st->IsDirty = 1;
                     /* AL=10h (not 00h) also reprograms the CRTC for the new height:
                        the cell becomes the font's height and the row count follows. */
-                    if (al == 0x10 && st->mkind == VID_KIND_TEXT) {
-                        st->cell_h = bpc;
-                        st->rows = text_rows_for(bpc);
+                    if (al == 0x10 && st->ModeKind == VIDEO_KIND_TEXT) {
+                        st->CellHeight = bpc;
+                        st->Rows = text_rows_for(bpc);
                         vid_i43_rom(st, bpc);  /* 1130h BH=1 and INT 43h agree (#266) */
                     }
                 }
@@ -2465,20 +2465,20 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                      change the glyphs, which is what the BIOS documents and what a
                      caller that follows 1102h with its own CRTC programming expects. */
                 uint8_t h = (uint8_t)(((al & 0x0F) == 0x02) ? 8 : ((al & 0x0F) == 0x01) ? 14 : 16);
-                st->user_font_on = 0;              /* back to the ROM tables */
-                if ((al & 0x10) && st->mkind == VID_KIND_TEXT) {
-                    st->cell_h = h;
-                    st->rows = text_rows_for(h);
-                    if (st->cur_row >= st->rows) st->cur_row = (uint8_t)(st->rows - 1);
+                st->IsUserFontOn = 0;              /* back to the ROM tables */
+                if ((al & 0x10) && st->ModeKind == VIDEO_KIND_TEXT) {
+                    st->CellHeight = h;
+                    st->Rows = text_rows_for(h);
+                    if (st->CursorRow >= st->Rows) st->CursorRow = (uint8_t)(st->Rows - 1);
                     /* #266: INT 43h follows the cell, so 1130h BH=1 (which answers with
                        the cell's table, a measured fix) and the vector stay one fact.
                        ⚠ SeaVGABIOS leaves INT 43h alone on a text-mode font load; IBM's
                        ROM is unmeasured. Kept consistent with our own 1130h instead. */
                     vid_i43_rom(st, h);
                 }
-                st->dirty = 1;
+                st->IsDirty = 1;
             }
-            VddSetDx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
+            VddSetDx(r, (uint16_t)(st->Rows ? st->Rows - 1 : 24));
         } else if (al >= 0x20 && al <= 0x24) {
             /* ── 20h-24h: THE GRAPHICS-MODE FONT CALLS (#266). They answered DL and
                  stored nothing -- no vector, no row count -- so a program that loaded
@@ -2487,7 +2487,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                    20h  INT 1Fh = ES:BP (the 8x8 characters 80h-FFh)
                    21h  INT 43h = ES:BP, CX bytes a character
                    22h  INT 43h = the ROM 8x14     23h  the ROM 8x8     24h  the ROM 8x16
-                 21h-24h also set the screen's rows from BL (vdd_gfx_font_rows: 0 = DL,
+                 21h-24h also set the screen's rows from BL (VddGraphicsFontRows: 0 = DL,
                  1 = 14, 2 = 25, 3 = 43) and the character height -- 0040:0084/0085 --
                  which here are `rows` and `cell_h`, so the glyph services draw at that
                  height from that table (gfx_font) and the BDA follows.
@@ -2497,22 +2497,22 @@ static void int10(void *self, NTVDD_REGISTERS *r)
                  (IBM's text-mode behaviour unmeasured). A height outside 1..16 sets the
                  vector and is reported, since our glyph paths draw at most 16 lines. */
             if (al == 0x20) {
-                st->i1f_seg = r->Es; st->i1f_off = (uint16_t)(r->Ebp & 0xFFFF); st->g1f_user = 1;
-                vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
+                st->Int1FSegment = r->Es; st->Int1FOffset = (uint16_t)(r->Ebp & 0xFFFF); st->IsInt1FUser = 1;
+                vid_set_vec(st, 0x1F, st->Int1FSegment, st->Int1FOffset);
             } else {
                 uint8_t h = al == 0x21 ? (uint8_t)(VddGetCx(r) & 0xFF) : al == 0x22 ? 14 : al == 0x23 ? 8 : 16;
-                uint8_t rows = vdd_gfx_font_rows((uint8_t)(VddGetBx(r) & 0xFF), (uint8_t)(VddGetDx(r) & 0xFF));
+                uint8_t rows = VddGraphicsFontRows((uint8_t)(VddGetBx(r) & 0xFF), (uint8_t)(VddGetDx(r) & 0xFF));
                 if (al == 0x21) {
-                    st->i43_seg = r->Es; st->i43_off = (uint16_t)(r->Ebp & 0xFFFF); st->gfont_user = 1;
-                    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
+                    st->Int43Segment = r->Es; st->Int43Offset = (uint16_t)(r->Ebp & 0xFFFF); st->IsGraphicsFontUser = 1;
+                    vid_set_vec(st, 0x43, st->Int43Segment, st->Int43Offset);
                 } else vid_i43_rom(st, h);
-                if (st->mkind != VID_KIND_TEXT && !st->in_vesa) {
-                    if (h >= 1 && h <= 16 && rows) { st->cell_h = h; st->rows = rows; }
-                    else VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+                if (st->ModeKind != VIDEO_KIND_TEXT && !st->IsVesa) {
+                    if (h >= 1 && h <= 16 && rows) { st->CellHeight = h; st->Rows = rows; }
+                    else VIDEO_UNIMPLEMENTED_SET(st->UnimplementedFunctions, 0x11);
                 }
             }
         } else {
-            VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+            VIDEO_UNIMPLEMENTED_SET(st->UnimplementedFunctions, 0x11);
         }
         break;
     case 0x12: {                                       /* alternate function sel  */
@@ -2533,7 +2533,7 @@ static void int10(void *self, NTVDD_REGISTERS *r)
              The same "unimplemented call still answers" shape as ever: a sentinel
              that reads as success is worse than a refusal. */
         else if (bl == 0x31) {
-            st->def_pal_off = (uint8_t)((VddGetAx(r) & 0xFF) ? 1 : 0);
+            st->IsDefaultPaletteOff = (uint8_t)((VddGetAx(r) & 0xFF) ? 1 : 0);
             VddSetAx(r, (uint16_t)((VddGetAx(r) & 0xFF00) | 0x12));
         }
         /* ── #252: THE REST OF THE VGA's BL TABLE, EACH DOING ITS JOB -- and anything
@@ -2553,11 +2553,11 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         else if (bl == 0x30 || bl == 0x32 || bl == 0x33 || bl == 0x34 || bl == 0x36) {
             uint8_t a = (uint8_t)(VddGetAx(r) & 0xFF);
             if (a > (bl == 0x30 ? 2 : 1)) { VddSetAx(r, (uint16_t)(VddGetAx(r) & 0xFF00)); break; }
-            if (bl == 0x30)      st->scan_sel = a;
-            else if (bl == 0x32) { st->vid_off = a; st->misc_out = (uint8_t)(a ? (st->misc_out & ~0x02u) : (st->misc_out | 0x02u)); }
-            else if (bl == 0x33) st->grey_sum = (uint8_t)(a == 0);
-            else if (bl == 0x34) st->cur_emul_off = a;
-            else                 st->seq_reg[1] = (uint8_t)(a ? (st->seq_reg[1] | 0x20u) : (st->seq_reg[1] & ~0x20u));
+            if (bl == 0x30)      st->ScanSelect = a;
+            else if (bl == 0x32) { st->IsVideoOff = a; st->MiscOutput = (uint8_t)(a ? (st->MiscOutput & ~0x02u) : (st->MiscOutput | 0x02u)); }
+            else if (bl == 0x33) st->IsGreySum = (uint8_t)(a == 0);
+            else if (bl == 0x34) st->IsCursorEmulationOff = a;
+            else                 st->SequencerRegisters[1] = (uint8_t)(a ? (st->SequencerRegisters[1] | 0x20u) : (st->SequencerRegisters[1] & ~0x20u));
             VddSetAx(r, (uint16_t)((VddGetAx(r) & 0xFF00) | 0x12));
         }
         else            { VddSetAx(r, (uint16_t)(VddGetAx(r) & 0xFF00)); }   /* not supported: AL=00h */
@@ -2567,16 +2567,16 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         VddSetBx(r, 0x0008);                               /* BL=08 active=VGA colour */
         break;
     case 0x1B: {                                       /* functionality/state info */
-        uint8_t *b = (uint8_t *)VddMapFlat(st->bus, r->Es, (uint16_t)r->Edi);
+        uint8_t *b = (uint8_t *)VddMapFlat(st->Bus, r->Es, (uint16_t)r->Edi);
         unsigned i;
         for (i = 0; i < 64; ++i) b[i] = 0;
         /* static functionality table kept inside the 64-byte block (reserved tail
            at 0x2E) so we never write past the caller's buffer. */
         wr32(b + 0, ((uint32_t)r->Es << 16) | (((uint16_t)r->Edi + 0x2E) & 0xFFFF));
-        b[4] = (uint8_t)st->mode;                      /* current mode            */
-        wr16(b + 5, st->cols);                         /* columns on screen       */
-        b[0x22] = (uint8_t)(st->rows ? st->rows : 25); /* character rows          */
-        wr16(b + 0x23, st->cell_h ? st->cell_h : 16);  /* bytes per character     */
+        b[4] = (uint8_t)st->Mode;                      /* current mode            */
+        wr16(b + 5, st->Columns);                         /* columns on screen       */
+        b[0x22] = (uint8_t)(st->Rows ? st->Rows : 25); /* character rows          */
+        wr16(b + 0x23, st->CellHeight ? st->CellHeight : 16);  /* bytes per character     */
         b[0x25] = 0x08;                                /* active DCC = VGA colour */
         wr16(b + 0x27, 256);                           /* number of colours       */
         b[0x29] = 8;                                   /* number of pages         */
@@ -2591,34 +2591,34 @@ static void int10(void *self, NTVDD_REGISTERS *r)
         break; }
     case 0x4F: vesa(st, r); break;                     /* VESA VBE 2.0            */
     default:                                           /* unimplemented function  */
-        VID_UNIMPL_SET(st->unimpl_fn, ah);
-        st->dirty = 0;
+        VIDEO_UNIMPLEMENTED_SET(st->UnimplementedFunctions, ah);
+        st->IsDirty = 0;
         break;
     }
-    vdd_video_bda_sync(st);                            /* the BDA follows every call */
+    VddVideoBdaSync(st);                            /* the BDA follows every call */
 }
 
 /* DAC palette ports 3C7 (read index) / 3C8 (write index) / 3C9 (data). */
 static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; uint8_t val = (uint8_t)v; (void)w;
-    if (port == 0x3C8) { st->dac_widx = val; st->dac_comp = 0; }
-    else if (port == 0x3C7) { st->dac_ridx = val; st->dac_comp = 0; }
+    VIDEO_STATE *st = (VIDEO_STATE *)self; uint8_t val = (uint8_t)v; (void)w;
+    if (port == 0x3C8) { st->DacWriteIndex = val; st->DacComponent = 0; }
+    else if (port == 0x3C7) { st->DacReadIndex = val; st->DacComponent = 0; }
     else if (port == 0x3C9) {
         /* The byte as written; the width decides at the third primary what it means
            (6 bits: the low six, bits 6-7 ignored as the hardware ignores them; 8 bits:
            all of it). See dac_to8 -- this used to mask to 6 bits whatever 4F08 said. */
-        st->dac_latch[st->dac_comp++] = val;
-        if (st->dac_comp >= 3) {
-            st->dac[st->dac_widx] = dac_pack_w(st, st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
-            st->dac_block[(st->dac_widx >> 4) & 15]++;
-            if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
-            st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
+        st->DacLatch[st->DacComponent++] = val;
+        if (st->DacComponent >= 3) {
+            st->Dac[st->DacWriteIndex] = dac_pack_w(st, st->DacLatch[0], st->DacLatch[1], st->DacLatch[2]);
+            st->DacBlock[(st->DacWriteIndex >> 4) & 15]++;
+            if ((st->DacWriteIndex & 0xF0) == 0x30) st->DacHighSinceReset++;
+            st->DacWriteIndex++; st->DacComponent = 0; st->DacWrites++;
             {   uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line; uint16_t row = 0xFFFE;
-                if (vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line) && st->gh && vdisp)
-                    row = (line >= vblank) ? 0xFFFF : (uint16_t)(((uint64_t)line * st->gh) / vdisp);
-                st->dac_last_row = row;
-                st->dac_row_hist[row == 0xFFFF ? 3 : row == 0xFFFE ? 0 : row < 2 ? 0 : row < 160 ? 1 : 2]++;
+                if (vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line) && st->GraphicsHeight && vdisp)
+                    row = (line >= vblank) ? 0xFFFF : (uint16_t)(((uint64_t)line * st->GraphicsHeight) / vdisp);
+                st->DacLastRow = row;
+                st->DacRowHistogram[row == 0xFFFF ? 3 : row == 0xFFFE ? 0 : row < 2 ? 0 : row < 160 ? 1 : 2]++;
             }
             /* pal[] is DERIVED from dac[] -- see pal_refresh. Without this a guest
                could reprogram the DAC and see nothing change, which is precisely the
@@ -2629,16 +2629,16 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 }
 static void dac_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; uint32_t p; (void)w;
-    if (port == 0x3C8) { *v = st->dac_widx; return; }
+    VIDEO_STATE *st = (VIDEO_STATE *)self; uint32_t p; (void)w;
+    if (port == 0x3C8) { *v = st->DacWriteIndex; return; }
     if (port != 0x3C9) { *v = 0xFF; return; }
-    p = st->dac[st->dac_ridx];
-    switch (st->dac_comp) {
+    p = st->Dac[st->DacReadIndex];
+    switch (st->DacComponent) {
     case 0: *v = dac_from8(st, (uint8_t)(p >> 16)); break;   /* R, at the DAC width */
     case 1: *v = dac_from8(st, (uint8_t)(p >> 8));  break;   /* G                   */
-    default:*v = dac_from8(st, (uint8_t)p); st->dac_ridx++; break;   /* B, then advance */
+    default:*v = dac_from8(st, (uint8_t)p); st->DacReadIndex++; break;   /* B, then advance */
     }
-    if (++st->dac_comp >= 3) st->dac_comp = 0;
+    if (++st->DacComponent >= 3) st->DacComponent = 0;
 }
 
 /* --- VGA planar write engine (mode 12h: Sequencer 3C4/5 + GC 3CE/F) ------- */
@@ -2648,129 +2648,129 @@ static uint8_t vga_alu(uint8_t op, uint8_t v, uint8_t lat)
 { switch (op & 3) { case 1: return (uint8_t)(v & lat); case 2: return (uint8_t)(v | lat);
                     case 3: return (uint8_t)(v ^ lat); default: return v; } }
 
-static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
+static void vga_planar_write_1(VIDEO_STATE *st, uint32_t off, uint8_t cpu)
 {
-    uint8_t alu = (uint8_t)((st->func_rotate >> 3) & 3), bm = st->bit_mask; int p;
-    if (off >= VID_PLANE_SIZE) return;
-    st->dirty = 1;
-    switch (st->write_mode & 3) {
+    uint8_t alu = (uint8_t)((st->FunctionRotate >> 3) & 3), bm = st->BitMask; int p;
+    if (off >= VIDEO_PLANE_SIZE) return;
+    st->IsDirty = 1;
+    switch (st->WriteMode & 3) {
     case 1:                                       /* copy latches -> planes        */
-        for (p = 0; p < 4; ++p) if (st->map_mask & (1<<p)) PL(st,p)[off] = st->latch[p];
+        for (p = 0; p < 4; ++p) if (st->MapMask & (1<<p)) PL(st,p)[off] = st->Latch[p];
         return;
     case 2:                                       /* CPU bit p -> plane p           */
         for (p = 0; p < 4; ++p) {
             uint8_t val = (uint8_t)((cpu & (1<<p)) ? 0xFF : 0x00);
-            uint8_t r = vga_alu(alu, val, st->latch[p]);
-            r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
-            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
+            uint8_t r = vga_alu(alu, val, st->Latch[p]);
+            r = (uint8_t)((r & bm) | (st->Latch[p] & (uint8_t)~bm));
+            if (st->MapMask & (1<<p)) PL(st,p)[off] = r;
         }
         return;
     case 3: {                                     /* set/reset masked by rot(cpu)&bm */
-        uint8_t data = vga_ror(cpu, st->func_rotate), mask = (uint8_t)(data & bm);
+        uint8_t data = vga_ror(cpu, st->FunctionRotate), mask = (uint8_t)(data & bm);
         for (p = 0; p < 4; ++p) {
-            uint8_t val = (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00);
-            uint8_t r = (uint8_t)((val & mask) | (st->latch[p] & (uint8_t)~mask));
-            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
+            uint8_t val = (uint8_t)((st->SetReset & (1<<p)) ? 0xFF : 0x00);
+            uint8_t r = (uint8_t)((val & mask) | (st->Latch[p] & (uint8_t)~mask));
+            if (st->MapMask & (1<<p)) PL(st,p)[off] = r;
         }
         return; }
     default: {                                    /* write mode 0                   */
-        uint8_t data = vga_ror(cpu, st->func_rotate);
-        st->w_ensr_hist[st->enable_sr & 0x0F]++;
-        st->w_alu_hist[alu & 3]++;
+        uint8_t data = vga_ror(cpu, st->FunctionRotate);
+        st->WriteEnableSetResetHistogram[st->EnableSetReset & 0x0F]++;
+        st->WriteAluHistogram[alu & 3]++;
         for (p = 0; p < 4; ++p) {
-            uint8_t val = (st->enable_sr & (1<<p)) ? (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00) : data;
-            uint8_t r = vga_alu(alu, val, st->latch[p]);
-            r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
-            if (p == 3 && (st->map_mask & 8)) {
-                if (st->enable_sr & 8) { st->w_p3_sr++; if (r) st->w_p3_nz++; }
-                else                     st->w_p3_data++;
+            uint8_t val = (st->EnableSetReset & (1<<p)) ? (uint8_t)((st->SetReset & (1<<p)) ? 0xFF : 0x00) : data;
+            uint8_t r = vga_alu(alu, val, st->Latch[p]);
+            r = (uint8_t)((r & bm) | (st->Latch[p] & (uint8_t)~bm));
+            if (p == 3 && (st->MapMask & 8)) {
+                if (st->EnableSetReset & 8) { st->WritePlane3SetReset++; if (r) st->WritePlane3NonZero++; }
+                else                     st->WritePlane3Data++;
             }
-            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
+            if (st->MapMask & (1<<p)) PL(st,p)[off] = r;
         }
         return; }
     }
 }
 
 /* ── THE CACHE WITNESS. A linear scan over ten slots, entered only for accesses
-     above VID_CACHE_LO, so its cost falls on nothing that draws the screen. It is
+     above VIDEO_CACHE_LOW, so its cost falls on nothing that draws the screen. It is
      deliberately NOT a hash: the whole point is that "this pc never appeared" must
      mean the pc never ran, and a hashed table cannot say that. See vdd_video.h. */
-static void csite_note(video_state *st, uint32_t off, int wr)
+static void csite_note(VIDEO_STATE *st, uint32_t off, int wr)
 {
     uint32_t pc, i;
-    if (off < VID_CACHE_LO || !st->guest_pc) return;
-    pc = st->guest_pc();
-    st->csite_seq++;
-    for (i = 0; i < VID_CSITES; ++i) {
-        vid_csite *c = &st->csite[i];
-        if (c->n) {
-            if (c->pc != pc || c->wr != (uint8_t)wr) continue;
-            if (off < c->lo) c->lo = off;
-            if (off > c->hi) c->hi = off;
+    if (off < VIDEO_CACHE_LOW || !st->GuestPc) return;
+    pc = st->GuestPc();
+    st->CacheSequence++;
+    for (i = 0; i < VIDEO_CACHE_SITES; ++i) {
+        VIDEO_CACHE_SITE *c = &st->CacheSites[i];
+        if (c->Count) {
+            if (c->Pc != pc || c->IsWrite != (uint8_t)wr) continue;
+            if (off < c->Low) c->Low = off;
+            if (off > c->High) c->High = off;
         } else {
-            c->pc = pc; c->wr = (uint8_t)wr; c->lo = c->hi = off;
-            c->first = st->csite_seq;
+            c->Pc = pc; c->IsWrite = (uint8_t)wr; c->Low = c->High = off;
+            c->First = st->CacheSequence;
         }
-        c->n++; c->last = st->csite_seq;
+        c->Count++; c->Last = st->CacheSequence;
         return;
     }
-    st->csite_lost++;
+    st->CacheSitesLost++;
 }
 
 /* The watchpoint wrapper. The engine above is left exactly as it was so that the
    instrument cannot change what it measures; this only records around it. */
-void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
+void VddVideoPlanarWrite(VIDEO_STATE *st, uint32_t off, uint8_t cpu)
 {
-    vid_watch_rec r; int p;
-    if (off > st->planar_hi_water) st->planar_hi_water = off;
-    if (st->guest_pc) {
-        uint32_t pc = st->guest_pc();
-        vid_wsite *w = &st->wsite[VID_WSITE_HASH(pc)];
-        if (!w->n)            { w->pc = pc; w->lo = w->hi = off; w->n = 1; }
-        else if (w->pc == pc) { if (off < w->lo) w->lo = off;
-                                if (off > w->hi) w->hi = off; w->n++; }
-        else                  st->wsite_lost++;
+    VIDEO_WATCH_RECORD r; int p;
+    if (off > st->PlanarHighWater) st->PlanarHighWater = off;
+    if (st->GuestPc) {
+        uint32_t pc = st->GuestPc();
+        VIDEO_SITE *w = &st->WriteSites[VIDEO_SITE_HASH(pc)];
+        if (!w->Count)            { w->Pc = pc; w->Low = w->High = off; w->Count = 1; }
+        else if (w->Pc == pc) { if (off < w->Low) w->Low = off;
+                                if (off > w->High) w->High = off; w->Count++; }
+        else                  st->WriteSitesLost++;
     }
     csite_note(st, off, 1);
-    if (off != st->watch_off) { vga_planar_write_1(st, off, cpu); return; }
-    r.pc = st->guest_pc ? st->guest_pc() : 0;
-    r.wmode = (uint8_t)(st->write_mode & 3); r.map_mask = st->map_mask;
-    r.ensr = st->enable_sr; r.set_reset = st->set_reset;
-    r.frot = st->func_rotate; r.bit_mask = st->bit_mask; r.cpu = cpu;
-    for (p = 0; p < 4; ++p) r.latch[p] = st->latch[p];
+    if (off != st->WatchOffset) { vga_planar_write_1(st, off, cpu); return; }
+    r.Pc = st->GuestPc ? st->GuestPc() : 0;
+    r.WriteMode = (uint8_t)(st->WriteMode & 3); r.MapMask = st->MapMask;
+    r.EnableSetReset = st->EnableSetReset; r.SetReset = st->SetReset;
+    r.FunctionRotate = st->FunctionRotate; r.BitMask = st->BitMask; r.Cpu = cpu;
+    for (p = 0; p < 4; ++p) r.Latch[p] = st->Latch[p];
     vga_planar_write_1(st, off, cpu);
     for (p = 0; p < 4; ++p)
-        r.after[p] = (off < VID_PLANE_SIZE) ? PL(st,p)[off] : 0;
-    if (st->watch_n < VID_WATCH_MAX) st->watch[st->watch_n] = r;
-    st->watch_last = r;
-    st->watch_n++;
+        r.After[p] = (off < VIDEO_PLANE_SIZE) ? PL(st,p)[off] : 0;
+    if (st->WatchCount < VIDEO_WATCH_MAX) st->Watch[st->WatchCount] = r;
+    st->WatchLast = r;
+    st->WatchCount++;
 }
 
-uint8_t vga_planar_read(video_state *st, uint32_t off)
+uint8_t VddVideoPlanarRead(VIDEO_STATE *st, uint32_t off)
 {
     int p;
-    if (off > st->planar_hi_water) st->planar_hi_water = off;
-    if (st->guest_pc) {
-        uint32_t pc = st->guest_pc();
-        vid_wsite *w = &st->rsite[VID_WSITE_HASH(pc)];
-        if (!w->n)            { w->pc = pc; w->lo = w->hi = off; w->n = 1; }
-        else if (w->pc == pc) { if (off < w->lo) w->lo = off;
-                                if (off > w->hi) w->hi = off; w->n++; }
-        else                  st->rsite_lost++;
-        if (st->read_mode & 1) {
-            vid_wsite *c = &st->rsite1[VID_WSITE_HASH(pc)];
-            if (!c->n)            { c->pc = pc; c->lo = c->hi = off; c->n = 1; }
-            else if (c->pc == pc) { if (off < c->lo) c->lo = off;
-                                    if (off > c->hi) c->hi = off; c->n++; }
-            else                  st->rsite1_lost++;
+    if (off > st->PlanarHighWater) st->PlanarHighWater = off;
+    if (st->GuestPc) {
+        uint32_t pc = st->GuestPc();
+        VIDEO_SITE *w = &st->ReadSites[VIDEO_SITE_HASH(pc)];
+        if (!w->Count)            { w->Pc = pc; w->Low = w->High = off; w->Count = 1; }
+        else if (w->Pc == pc) { if (off < w->Low) w->Low = off;
+                                if (off > w->High) w->High = off; w->Count++; }
+        else                  st->ReadSitesLost++;
+        if (st->ReadMode & 1) {
+            VIDEO_SITE *c = &st->CompareSites[VIDEO_SITE_HASH(pc)];
+            if (!c->Count)            { c->Pc = pc; c->Low = c->High = off; c->Count = 1; }
+            else if (c->Pc == pc) { if (off < c->Low) c->Low = off;
+                                    if (off > c->High) c->High = off; c->Count++; }
+            else                  st->CompareSitesLost++;
         }
     }
     csite_note(st, off, 0);
-    if (off >= VID_PLANE_SIZE) return 0xFF;
-    for (p = 0; p < 4; ++p) st->latch[p] = PL(st,p)[off];   /* load latches    */
-    st->rmode_hist[st->read_mode & 1]++;
-    if (!(st->read_mode & 1))
-        return PL(st,st->read_map & 3)[off];                /* read mode 0     */
+    if (off >= VIDEO_PLANE_SIZE) return 0xFF;
+    for (p = 0; p < 4; ++p) st->Latch[p] = PL(st,p)[off];   /* load latches    */
+    st->ReadModeHistogram[st->ReadMode & 1]++;
+    if (!(st->ReadMode & 1))
+        return PL(st,st->ReadMap & 3)[off];                /* read mode 0     */
     /* ── READ MODE 1: COLOUR COMPARE. One bit per pixel, set where that pixel's
          colour matches GR2 in every plane GR7 selects. GR7 is "Color DON'T Care" and
          reads backwards: a SET bit means the plane DOES take part. With GR7 = 0 no
@@ -2780,24 +2780,24 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
         for (b = 0; b < 8; ++b) {
             int match = 1;
             for (p = 0; p < 4; ++p) {
-                if (!((st->col_dontcare >> p) & 1)) continue;
-                if (((st->latch[p] >> b) & 1) != ((st->col_compare >> p) & 1)) { match = 0; break; }
+                if (!((st->ColorDontCare >> p) & 1)) continue;
+                if (((st->Latch[p] >> b) & 1) != ((st->ColorCompare >> p) & 1)) { match = 0; break; }
             }
             if (match) r = (uint8_t)(r | (1 << b));
         }
         /* Record what we ANSWERED, not just that we were asked -- see vdd_video.h. */
-        if (st->guest_pc) {
-            uint32_t pc2 = st->guest_pc();
-            unsigned h = VID_WSITE_HASH(pc2);
-            if (st->rsite1[h].pc == pc2) {
-                if (!r)            st->rsite1_zero[h]++;
-                else if (r == 0xFF) st->rsite1_ones[h]++;
+        if (st->GuestPc) {
+            uint32_t pc2 = st->GuestPc();
+            unsigned h = VIDEO_SITE_HASH(pc2);
+            if (st->CompareSites[h].Pc == pc2) {
+                if (!r)            st->CompareSitesZero[h]++;
+                else if (r == 0xFF) st->CompareSitesOnes[h]++;
             }
         }
         return r; }
 }
 
-int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIND_PLANAR; }
+int VddVideoIsPlanarActive(const VIDEO_STATE *st) { return st->ModeKind == VIDEO_KIND_PLANAR; }
 
 /* CRT timings, shared by the 0x3DA status read and the present scheduler. */
 #define VID_VBL_HZ_HI     60        /* 640x480 modes                                */
@@ -2816,37 +2816,37 @@ int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIN
 /* A poll this long after the previous one means the guest went away to draw. Its own
    draw is 1-4 ms (BOUNCEBX 2.4); a poll loop iterates in well under 50 us. */
 #define VID_PRESENT_GAP_US    400
-static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
+static int vga_vtiming(const VIDEO_STATE *st, uint32_t *total, uint32_t *active,
                        uint32_t *blank_start);
 /* The mode's frame period in microseconds -- the same 60/70 Hz choice the retrace
    model makes -- for the host's Auto fallback floor. 1/60 s when there is no clock. */
-uint32_t vdd_video_frame_us(const video_state *st)
+uint32_t VddVideoFrameUs(const VIDEO_STATE *st)
 {
-    uint32_t t, a, b, hz; int tall = (st->gh > VID_VACTIVE_LO);
+    uint32_t t, a, b, hz; int tall = (st->GraphicsHeight > VID_VACTIVE_LO);
     if (vesa_vgeom(st, &t, &a, &b, &hz)) return 1000000u / hz;   /* #226: the VESA mode's */
     if (vga_vtiming(st, &t, &a, &b)) tall = (t >= 500u);
     return 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
 }
-int vdd_video_present_ready(video_state *st)
+int VddVideoIsPresentReady(VIDEO_STATE *st)
 {
     uint32_t frame_us, pm, t, a, b, hz;
     int act, tall;
-    if (!st->time_us) return 1;                 /* no clock: present every tick   */
+    if (!st->TimeUs) return 1;                 /* no clock: present every tick   */
     if (vesa_vgeom(st, &t, &a, &b, &hz)) {      /* #226: the VESA mode's own frame */
         frame_us = 1000000u / hz; act = (int)(a * 1000u / t);
-        pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
+        pm  = (uint32_t)((st->TimeUs() % frame_us) * 1000u / frame_us);
         return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
     }
     /* Same geometry the 0x3DA read uses, and for the same reason: 914/891 permille
        are the two BIOS cases, and 640x350 is neither -- its picture ends at 350 of
        449 lines, 780 permille. Presenting at 891 there meant building the frame 1.6ms
        into the blanking interval rather than at the end of the picture. */
-    tall = (st->gh > VID_VACTIVE_LO);
+    tall = (st->GraphicsHeight > VID_VACTIVE_LO);
     act  = tall ? 914 : 891;
     if (vga_vtiming(st, &t, &a, &b)) { tall = (t >= 500u); act = (int)(a * 1000u / t); }
     frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
     if (!frame_us) return 1;
-    pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
+    pm  = (uint32_t)((st->TimeUs() % frame_us) * 1000u / frame_us);
     return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
 }
 
@@ -2932,43 +2932,43 @@ int vdd_video_present_ready(video_state *st)
      inside one before it is treated as two. */
 #define MODEY_GAP_DEFAULT 2u
 
-static void modey_copy(video_state *st, const int *sel, int nsel, uint32_t lo, uint32_t hi)
+static void modey_copy(VIDEO_STATE *st, const int *sel, int nsel, uint32_t lo, uint32_t hi)
 {
     uint32_t i;
     for (i = lo; i < hi; ++i) {
-        uint8_t b = st->vmem[i];
+        uint8_t b = st->VideoMemory[i];
         int k;
-        st->yshadow[i] = b;
-        for (k = 0; k < nsel; ++k) st->yplane[sel[k]][i] = b;
+        st->YShadow[i] = b;
+        for (k = 0; k < nsel; ++k) st->YPlanes[sel[k]][i] = b;
     }
-    st->ynz[0] += hi - lo;                              /* bytes attributed, for STAGE2 */
+    st->YNonZero[0] += hi - lo;                              /* bytes attributed, for STAGE2 */
 }
 
-static void modey_flush(video_state *st)
+static void modey_flush(VIDEO_STATE *st)
 {
     uint32_t i, run_lo = 0, run_hi = 0, gap = 0;
     const uint32_t *src32, *shd32;
     int p, sel[4], nsel = 0, in_run = 0;
-    if (st->chain4 || st->mkind != VID_KIND_LINEAR8 || !st->vmem) return;
-    for (p = 0; p < 4; ++p) if (st->y_mask & (1u << p)) sel[nsel++] = p;
+    if (st->IsChain4 || st->ModeKind != VIDEO_KIND_LINEAR8 || !st->VideoMemory) return;
+    for (p = 0; p < 4; ++p) if (st->YMask & (1u << p)) sel[nsel++] = p;
     if (!nsel) return;
-    src32 = (const uint32_t *)st->vmem;
-    shd32 = (const uint32_t *)st->yshadow;
+    src32 = (const uint32_t *)st->VideoMemory;
+    shd32 = (const uint32_t *)st->YShadow;
 
     /* Dword-at-a-time scan. Most of the aperture is untouched between two adjacent
        mask changes -- and in Doom there are ~3,800 of those a second -- so the reject
        path is the one that has to be cheap. */
-    for (i = 0; i < VID_Y_PLANE / 4; ++i) {
+    for (i = 0; i < VIDEO_Y_PLANE_SIZE / 4; ++i) {
         if (src32[i] != shd32[i]) {
             if (!in_run) { in_run = 1; run_lo = i; }
             run_hi = i + 1; gap = 0;
-        } else if (in_run && ++gap > st->modey_gap) {
+        } else if (in_run && ++gap > st->ModeYGap) {
             modey_copy(st, sel, nsel, run_lo * 4u, run_hi * 4u);
             in_run = 0;
         }
     }
     if (in_run) modey_copy(st, sel, nsel, run_lo * 4u, run_hi * 4u);
-    st->dirty = 1;
+    st->IsDirty = 1;
 }
 
 /* CRTC: only the registers unchained page-flipping needs. 0x0C/0x0D are the
@@ -2999,18 +2999,18 @@ static void vga_idx_data(uint8_t *index, uint8_t w, uint32_t v,
      and it is the evidence the inventory is built from; a BIOS load must not forge it.
      After this, `VGAREG` values are the BIOS's and the written-by-guest list is still
      only the guest's. */
-static void vga_load_modedef(video_state *st, uint8_t mode)
+static void vga_load_modedef(VIDEO_STATE *st, uint8_t mode)
 {
     int i, k;
     for (k = 0; k < VGA_MODEDEFS_N; ++k) {
         const vga_modedef *d = &VGA_MODEDEFS[k];
         if (d->mode != mode) continue;
-        st->geom_regs_ok = 1;                      /* #325: the file IS this mode */
-        st->misc_out = d->misc;
-        for (i = 0; i < 5;  ++i) st->seq_reg[i]  = d->seq[i];
-        for (i = 0; i < 25; ++i) st->crtc_reg[i] = d->crtc[i];
-        for (i = 0; i < 9;  ++i) st->gc_reg[i]   = d->gc[i];
-        for (i = 0; i < 21; ++i) st->attr_reg[i] = d->attr[i];
+        st->IsGeometryRegistersOk = 1;                      /* #325: the file IS this mode */
+        st->MiscOutput = d->misc;
+        for (i = 0; i < 5;  ++i) st->SequencerRegisters[i]  = d->seq[i];
+        for (i = 0; i < 25; ++i) st->CrtcRegisters[i] = d->crtc[i];
+        for (i = 0; i < 9;  ++i) st->GcRegisters[i]   = d->gc[i];
+        for (i = 0; i < 21; ++i) st->AttributeRegisters[i] = d->attr[i];
         /* ── ★★★★ AND THE LIVE SHADOWS, OR THE FILE AND THE AUTHORITY DISAGREE. ─────
              Loading the register FILE above is only half a mode set. Six of these
              registers are not read back from `*_reg[]` at all -- the read paths
@@ -3028,19 +3028,19 @@ static void vga_load_modedef(video_state *st, uint8_t mode)
              answer: both say 0x0F in the graphics modes, and in the text/CGA modes
              QEMU says 0x0F where PCem's real IBM VGA says 0x00. Taking the table
              rather than a constant is what keeps that distinction. */
-        st->map_mask     = (uint8_t)(d->seq[2] & 0x0F);
-        st->y_mask       = st->map_mask;
+        st->MapMask     = (uint8_t)(d->seq[2] & 0x0F);
+        st->YMask       = st->MapMask;
         /* CR0A/CR0B ARE the cursor shape; `cur_shape` is that pair, not a copy of
            it. The BIOS leaves 0x0D0E for an 8x16 cell, and the 0x0607 set above is
-           the 8-line CGA shape -- which vdd_cursor_lines then RESCALES to lines
+           the 8-line CGA shape -- which VddCursorLines then RESCALES to lines
            14-15. So this moves the drawn cursor by one scan line, and stops
            AH=03h reporting a shape the card does not hold. */
-        st->cur_shape    = (uint16_t)(((uint16_t)d->crtc[0x0A] << 8) | d->crtc[0x0B]);
-        st->write_mode   = (uint8_t)(d->gc[5] & 3);
-        st->read_mode    = (uint8_t)((d->gc[5] >> 3) & 1);
-        st->col_dontcare = (uint8_t)(d->gc[7] & 0x0F);
-        st->attr_mode    = d->attr[0x10];
-        st->blink        = (uint8_t)((d->attr[0x10] >> 3) & 1);
+        st->CursorShape    = (uint16_t)(((uint16_t)d->crtc[0x0A] << 8) | d->crtc[0x0B]);
+        st->WriteMode   = (uint8_t)(d->gc[5] & 3);
+        st->ReadMode    = (uint8_t)((d->gc[5] >> 3) & 1);
+        st->ColorDontCare = (uint8_t)(d->gc[7] & 0x0F);
+        st->AttributeMode    = d->attr[0x10];
+        st->IsBlink        = (uint8_t)((d->attr[0x10] >> 3) & 1);
         return;
     }
 }
@@ -3065,7 +3065,7 @@ static const uint8_t vparam_mode[VDD_VPARAM_N] = {
     0, 0, 0, 0, 0x04, 0x05, 0x06, 0x07,  0, 0, 0, 0, 0, 0x0D, 0x0E, 0,
     0, 0, 0x10, 0, 0, 0, 0, 0x01,  0x03, 0x07, 0x11, 0x12, 0x13
 };
-int vdd_video_param_entry(uint8_t idx, uint8_t out[64])
+int VddVideoParameterEntry(uint8_t idx, uint8_t out[64])
 {
     int i, k;
     unsigned mi;
@@ -3098,31 +3098,31 @@ static void crtc_set_data(void *self, uint32_t v);
 
 /* The cursor's CRTC address (0x0E/0x0F) as the BIOS path implies it: cells from the
    start of video memory, so the display start is added back in. */
-static uint16_t crtc_cursor_of(const video_state *st)
-{ return (uint16_t)(st->crtc_start + (unsigned)st->cur_row * st->cols + st->cur_col); }
+static uint16_t crtc_cursor_of(const VIDEO_STATE *st)
+{ return (uint16_t)(st->CrtcStart + (unsigned)st->CursorRow * st->Columns + st->CursorColumn); }
 /* ...and the reverse: a guest wrote 0x0E/0x0F, so derive row/col from it. A value
    off the visible page (some guests park the cursor at 0x7FFF to hide it) is left
    where it is -- hidden by being out of range, as it is on the card. */
-static void crtc_cursor_apply(video_state *st)
+static void crtc_cursor_apply(VIDEO_STATE *st)
 {
-    unsigned pos = st->crtc_cursor;
-    unsigned base = st->crtc_start;
-    st->dirty = 1;
-    if (!st->cols || !st->rows) return;
-    if (pos < base) { st->cur_row = st->rows; return; }          /* off-page: hidden  */
+    unsigned pos = st->CrtcCursor;
+    unsigned base = st->CrtcStart;
+    st->IsDirty = 1;
+    if (!st->Columns || !st->Rows) return;
+    if (pos < base) { st->CursorRow = st->Rows; return; }          /* off-page: hidden  */
     pos -= base;
-    if (pos >= (unsigned)st->cols * st->rows) { st->cur_row = st->rows; return; }
-    st->cur_row = (uint8_t)(pos / st->cols);
-    st->cur_col = (uint8_t)(pos % st->cols);
-    vdd_video_bda_sync(st);
+    if (pos >= (unsigned)st->Columns * st->Rows) { st->CursorRow = st->Rows; return; }
+    st->CursorRow = (uint8_t)(pos / st->Columns);
+    st->CursorColumn = (uint8_t)(pos % st->Columns);
+    VddVideoBdaSync(st);
 }
 
 /* Reassemble the ten-bit Line Compare from its three registers. */
-static void crtc_lc_update(video_state *st)
+static void crtc_lc_update(VIDEO_STATE *st)
 {
-    st->crtc_line_compare = (uint16_t)(st->crtc_lc_low
-                            | (((uint16_t)(st->crtc_overflow >> 4) & 1u) << 8)
-                            | (((uint16_t)(st->crtc_maxscan  >> 6) & 1u) << 9));
+    st->CrtcLineCompare = (uint16_t)(st->CrtcLineCompareLow
+                            | (((uint16_t)(st->CrtcOverflow >> 4) & 1u) << 8)
+                            | (((uint16_t)(st->CrtcMaxScan  >> 6) & 1u) << 9));
 }
 
 /* A mode set writes 0x06, 0x12 and 0x15 among the rest; only once all three have
@@ -3139,28 +3139,28 @@ static void crtc_lc_update(video_state *st)
      in the same wall time, paid by every guest that waits on retrace.
      The inputs change only when the guest writes the CRTC, so the answer is cached
      there and the hot path just reads it. Same numbers, none of the arithmetic. */
-static void crtc_vt_recompute(video_state *st)
+static void crtc_vt_recompute(VIDEO_STATE *st)
 {
     uint32_t ov, ms, vt, vde, vbs;
-    st->vt_valid = 0;
-    if (!st->crtc_vt_seen) return;
-    ov = st->crtc_overflow; ms = st->crtc_maxscan;
-    vt  = (uint32_t)st->crtc_vtotal_lo | ((ov >> 0 & 1u) << 8) | ((ov >> 5 & 1u) << 9);
-    vde = (uint32_t)st->crtc_vde_lo    | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9);
-    vbs = (uint32_t)st->crtc_vbs_lo    | ((ov >> 3 & 1u) << 8) | ((ms >> 5 & 1u) << 9);
+    st->IsVerticalTimingValid = 0;
+    if (!st->IsCrtcVerticalTimingSeen) return;
+    ov = st->CrtcOverflow; ms = st->CrtcMaxScan;
+    vt  = (uint32_t)st->CrtcVerticalTotalLow | ((ov >> 0 & 1u) << 8) | ((ov >> 5 & 1u) << 9);
+    vde = (uint32_t)st->CrtcVerticalDisplayEndLow    | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9);
+    vbs = (uint32_t)st->CrtcVerticalBlankStartLow    | ((ov >> 3 & 1u) << 8) | ((ms >> 5 & 1u) << 9);
     vt += 2; vde += 1;
     if (vt < 100u || vt > 1200u) return;
     if (vde == 0u || vde > vt)   return;
     if (vbs < vde || vbs >= vt)  return;
-    st->vt_total = (uint16_t)vt;
-    st->vt_active = (uint16_t)vde;
-    st->vt_blank  = (uint16_t)vbs;
-    st->vt_valid  = 1;
+    st->VerticalTotal = (uint16_t)vt;
+    st->VerticalActive = (uint16_t)vde;
+    st->VerticalBlank  = (uint16_t)vbs;
+    st->IsVerticalTimingValid  = 1;
 }
 
-static void crtc_vt_update(video_state *st)
+static void crtc_vt_update(VIDEO_STATE *st)
 {
-    if (st->crtc_vtotal_lo && st->crtc_vde_lo && st->crtc_vbs_lo) st->crtc_vt_seen = 1;
+    if (st->CrtcVerticalTotalLow && st->CrtcVerticalDisplayEndLow && st->CrtcVerticalBlankStartLow) st->IsCrtcVerticalTimingSeen = 1;
     crtc_vt_recompute(st);
 }
 
@@ -3185,21 +3185,21 @@ static void crtc_vt_update(video_state *st)
 /* Read back what crtc_vt_recompute() worked out. The validity rules -- a plausible
    screen: blanking after the picture and inside the frame -- live there, because a
    half-written mode set must be rejected ONCE, not re-rejected 73 million times. */
-static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
+static int vga_vtiming(const VIDEO_STATE *st, uint32_t *total, uint32_t *active,
                        uint32_t *blank_start)
 {
-    if (!st->vt_valid) return 0;
-    *total = st->vt_total; *active = st->vt_active; *blank_start = st->vt_blank;
+    if (!st->IsVerticalTimingValid) return 0;
+    *total = st->VerticalTotal; *active = st->VerticalActive; *blank_start = st->VerticalBlank;
     return 1;
 }
 
 static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     /* 3B4 is the SAME index port as 3D4 (Misc Output bit 0 picks which one decodes);
        both are claimed, so both must be recognised as the index half or a mono guest's
        index write would be taken as data. */
-    if (port == 0x3D4 || port == 0x3B4) { vga_idx_data(&st->crtc_index, w, v, crtc_set_data, st); return; }
+    if (port == 0x3D4 || port == 0x3B4) { vga_idx_data(&st->CrtcIndex, w, v, crtc_set_data, st); return; }
     crtc_set_data(st, v);
 }
 /* ── #187: THE VERTICAL-RETRACE INTERRUPT LATCH, Input Status 0 bit 7. ──────────────
@@ -3214,37 +3214,37 @@ static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
      unexpected IRQ 9 into every graphics program. The BIOS modes also write bit 4 = 0,
      so an ordinary program still reads 0x10, as both oracles do.
    Evaluated lazily at the read, from the same beam clock as the 3DA status bits. */
-static void vint_cr11(video_state *st, uint8_t v)
+static void vint_cr11(VIDEO_STATE *st, uint8_t v)
 {
     int en = !(v & 0x20), hold_clear = !(v & 0x10);
-    if (hold_clear) { st->vint_pend = 0; st->vint_armed = 0; return; }
-    if (!en)        { st->vint_armed = 0; return; }
-    if (!st->vint_armed) {
-        st->vint_armed = 1;
-        st->vint_arm_t = st->time_us ? st->time_us() : 0;
+    if (hold_clear) { st->IsVintPending = 0; st->IsVintArmed = 0; return; }
+    if (!en)        { st->IsVintArmed = 0; return; }
+    if (!st->IsVintArmed) {
+        st->IsVintArmed = 1;
+        st->VintArmTime = st->TimeUs ? st->TimeUs() : 0;
     }
 }
-static uint8_t vint_status(video_state *st)
+static uint8_t vint_status(VIDEO_STATE *st)
 {
     uint64_t now, next, vbo;
     uint32_t F, vt, vd, vb, fno, line;
-    if (st->vint_armed && !st->vint_pend) {
+    if (st->IsVintArmed && !st->IsVintPending) {
         if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) {
-            st->vint_pend = 1;                       /* no clock: a retrace has passed */
+            st->IsVintPending = 1;                       /* no clock: a retrace has passed */
         } else {
             (void)vd; (void)fno; (void)line;
             vbo  = (uint64_t)vb * F / vt;             /* retrace start within a frame */
-            next = (st->vint_arm_t / F) * F + vbo;    /* this frame's retrace start   */
-            if (next <= st->vint_arm_t) next += F;    /* ...already gone: the next one */
-            if (now >= next) st->vint_pend = 1;
+            next = (st->VintArmTime / F) * F + vbo;    /* this frame's retrace start   */
+            if (next <= st->VintArmTime) next += F;    /* ...already gone: the next one */
+            if (now >= next) st->IsVintPending = 1;
         }
     }
-    return st->vint_pend ? 0x80 : 0x00;
+    return st->IsVintPending ? 0x80 : 0x00;
 }
 
 static void crtc_set_data(void *self, uint32_t v)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     /* ── ⛔ CR11 BIT 7 WRITE-PROTECTS CR00..CR07, AND WE USED TO IGNORE IT. ─────────
          Measured against 6.22 by p_vgareg (`vga.cr11wp.protected.cr00`): with the bit
          set, hardware REFUSES a write to CR00 and the register still reads back 0x5F;
@@ -3254,20 +3254,20 @@ static void crtc_set_data(void *self, uint32_t v)
        ⚠ Refused means refused: not stored, not counted as a guest write, and not
          applied below. `crtc_wp_refused` counts them so the report can say it
          happened rather than leaving an absence to be interpreted. */
-    if ((st->crtc_index & 31) <= 0x07 && (st->crtc_reg[0x11] & 0x80)) {
-        st->crtc_wp_refused++;
+    if ((st->CrtcIndex & 31) <= 0x07 && (st->CrtcRegisters[0x11] & 0x80)) {
+        st->CrtcWriteProtectRefused++;
         return;
     }
     /* CAPTURE FIRST, always, whatever the switch below does with it -- an index that
        falls into `default:` is exactly the one the inventory needs to hear about. */
-    st->crtc_reg[st->crtc_index & 31] = (uint8_t)v;
-    st->crtc_w  [st->crtc_index & 31]++;
-    switch (st->crtc_index & 31) {                 /* #325: a geometry register */
-    case 0x01: case 0x07: case 0x09: case 0x12: case 0x17: st->geom_regs_ok = 1; break;
+    st->CrtcRegisters[st->CrtcIndex & 31] = (uint8_t)v;
+    st->CrtcWrites  [st->CrtcIndex & 31]++;
+    switch (st->CrtcIndex & 31) {                 /* #325: a geometry register */
+    case 0x01: case 0x07: case 0x09: case 0x12: case 0x17: st->IsGeometryRegistersOk = 1; break;
     default: break;
     }
-    if ((st->crtc_index & 31) == 0x11) vint_cr11(st, (uint8_t)v);   /* #187 */
-    switch (st->crtc_index) {
+    if ((st->CrtcIndex & 31) == 0x11) vint_cr11(st, (uint8_t)v);   /* #187 */
+    switch (st->CrtcIndex) {
     /* ── THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
          two writes it holds a value the guest never asked for -- half of the old
          address and half of the new. Real hardware survives that because the address
@@ -3278,33 +3278,33 @@ static void crtc_set_data(void *self, uint32_t v)
          or page-flips, which is every scrolling game. crtc_start_half counts how
          often a frame was built mid-pair; crtc_start_live is what the renderer uses. */
     case 0x0C: vid_latch(st, 0);          /* boundaries passed BEFORE this write see the old value */
-               st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
-               st->crtc_seen = 1; st->crtc_start_pend ^= 1; st->dirty = 1; break;
+               st->CrtcStart = (uint16_t)((st->CrtcStart & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
+               st->IsCrtcSeen = 1; st->IsCrtcStartPending ^= 1; st->IsDirty = 1; break;
     case 0x0D: vid_latch(st, 0);
-               st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
-               st->crtc_seen = 1; st->crtc_start_pend ^= 1;
-               if (!st->crtc_start_pend) {
-                   st->crtc_start_writes++;
-                   if (st->time_us) {           /* pacing: frames since the last pair */
+               st->CrtcStart = (uint16_t)((st->CrtcStart & 0xFF00) | (v & 0xFF));
+               st->IsCrtcSeen = 1; st->IsCrtcStartPending ^= 1;
+               if (!st->IsCrtcStartPending) {
+                   st->CrtcStartWrites++;
+                   if (st->TimeUs) {           /* pacing: frames since the last pair */
                        uint64_t n0; uint32_t F0, a0, b0, c0, fno, ln;
                        if (vid_beam(st, &n0, &F0, &a0, &b0, &c0, &fno, &ln)) {
-                           uint32_t g = st->start_prev_frame ? fno - st->start_prev_frame : 1u;
-                           st->start_gap_hist[g < 4u ? g : 4u]++;
-                           st->start_prev_frame = fno;
+                           uint32_t g = st->StartPreviousFrame ? fno - st->StartPreviousFrame : 1u;
+                           st->StartGapHistogram[g < 4u ? g : 4u]++;
+                           st->StartPreviousFrame = fno;
                        }
                    }
                }
-               st->dirty = 1; break;
-    case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
+               st->IsDirty = 1; break;
+    case 0x13: st->CrtcOffset = (uint8_t)v; st->IsCrtcOffsetSeen = 1;                                   st->IsDirty = 1; break;
     /* Line Compare, and the two registers that carry its top two bits. */
-    case 0x07: st->crtc_overflow = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->dirty = 1; break;
-    case 0x09: st->crtc_maxscan  = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->dirty = 1; break;
-    case 0x18: st->crtc_lc_low   = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
+    case 0x07: st->CrtcOverflow = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->IsDirty = 1; break;
+    case 0x09: st->CrtcMaxScan  = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->IsDirty = 1; break;
+    case 0x18: st->CrtcLineCompareLow   = (uint8_t)v; crtc_lc_update(st); st->IsDirty = 1; break;
     /* Vertical timing -- see vga_vtiming(). Low bytes only; 0x07/0x09 carry the
        high bits and are latched above for Line Compare already. */
-    case 0x06: st->crtc_vtotal_lo = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
-    case 0x12: st->crtc_vde_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
-    case 0x15: st->crtc_vbs_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
+    case 0x06: st->CrtcVerticalTotalLow = (uint8_t)v; crtc_vt_update(st); st->IsDirty = 1; break;
+    case 0x12: st->CrtcVerticalDisplayEndLow    = (uint8_t)v; crtc_vt_update(st); st->IsDirty = 1; break;
+    case 0x15: st->CrtcVerticalBlankStartLow    = (uint8_t)v; crtc_vt_update(st); st->IsDirty = 1; break;
     /* ── THE TEXT CURSOR, PROGRAMMED DIRECTLY. ────────────────────────────────────
          0x0A/0x0B are Cursor Start/End (the same CH/CL INT 10h AH=01h takes, bit 5
          of Start = off) and 0x0E/0x0F the cursor's address in character cells from
@@ -3312,38 +3312,38 @@ static void crtc_set_data(void *self, uint32_t v)
          Pascal's, QB's runtime) position the cursor this way instead of through the
          BIOS, and these registers fell into `default:` -- so the cursor sat wherever
          the last INT 10h left it, which in an editor is nowhere near the text. */
-    case 0x0A: st->cur_shape = (uint16_t)((st->cur_shape & 0x00FF) | ((uint16_t)(v & 0x3F) << 8));
-               st->dirty = 1; vdd_video_bda_sync(st); break;
-    case 0x0B: st->cur_shape = (uint16_t)((st->cur_shape & 0xFF00) | (v & 0x1F));
-               st->dirty = 1; vdd_video_bda_sync(st); break;
-    case 0x0E: st->crtc_cursor = (uint16_t)((st->crtc_cursor & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
+    case 0x0A: st->CursorShape = (uint16_t)((st->CursorShape & 0x00FF) | ((uint16_t)(v & 0x3F) << 8));
+               st->IsDirty = 1; VddVideoBdaSync(st); break;
+    case 0x0B: st->CursorShape = (uint16_t)((st->CursorShape & 0xFF00) | (v & 0x1F));
+               st->IsDirty = 1; VddVideoBdaSync(st); break;
+    case 0x0E: st->CrtcCursor = (uint16_t)((st->CrtcCursor & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
                crtc_cursor_apply(st); break;
-    case 0x0F: st->crtc_cursor = (uint16_t)((st->crtc_cursor & 0xFF00) | (v & 0xFF));
+    case 0x0F: st->CrtcCursor = (uint16_t)((st->CrtcCursor & 0xFF00) | (v & 0xFF));
                crtc_cursor_apply(st); break;
     default: break;
     }
 }
 static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3D4 || port == 0x3B4) { *v = st->crtc_index; return; }
-    switch (st->crtc_index) {
-    case 0x0C: *v = (uint8_t)(st->crtc_start >> 8); break;
-    case 0x0D: *v = (uint8_t)(st->crtc_start & 0xFF); break;
-    case 0x13: *v = st->crtc_offset; break;
-    case 0x0A: *v = (uint8_t)((st->cur_shape >> 8) & 0x3F); break;
-    case 0x0B: *v = (uint8_t)(st->cur_shape & 0x1F); break;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)w;
+    if (port == 0x3D4 || port == 0x3B4) { *v = st->CrtcIndex; return; }
+    switch (st->CrtcIndex) {
+    case 0x0C: *v = (uint8_t)(st->CrtcStart >> 8); break;
+    case 0x0D: *v = (uint8_t)(st->CrtcStart & 0xFF); break;
+    case 0x13: *v = st->CrtcOffset; break;
+    case 0x0A: *v = (uint8_t)((st->CursorShape >> 8) & 0x3F); break;
+    case 0x0B: *v = (uint8_t)(st->CursorShape & 0x1F); break;
     /* Read back what the BIOS path set, in the hardware's own units -- in TEXT modes.
        ► In a graphics mode the BIOS never writes CR0E/CR0F (there is no hardware
          cursor to place), so they hold what the mode set loaded, or what the guest
          wrote: plain storage. Deriving them there leaked the text cursor into Mode X
          (`modeX.320x240` CR0F: hardware 0x00, ours 0xA0 -- the last 1/690 VGA parity
          byte; s81, #186). The text-mode cursor paths are untouched. */
-    case 0x0E: *v = st->mkind == VID_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) >> 8)
-                                               : st->crtc_reg[0x0E]; break;
-    case 0x0F: *v = st->mkind == VID_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) & 0xFF)
-                                               : st->crtc_reg[0x0F]; break;
-    default:   *v = st->crtc_reg[st->crtc_index & 31]; break;  /* CR00-05/11/17 read back */
+    case 0x0E: *v = st->ModeKind == VIDEO_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) >> 8)
+                                               : st->CrtcRegisters[0x0E]; break;
+    case 0x0F: *v = st->ModeKind == VIDEO_KIND_TEXT ? (uint8_t)(crtc_cursor_of(st) & 0xFF)
+                                               : st->CrtcRegisters[0x0F]; break;
+    default:   *v = st->CrtcRegisters[st->CrtcIndex & 31]; break;  /* CR00-05/11/17 read back */
     }
 }
 
@@ -3369,30 +3369,30 @@ static void seq_set_data(void *self, uint32_t v);
 
 static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self;
-    if (port == 0x3C4) { vga_idx_data(&st->seq_index, w, v, seq_set_data, st); return; }
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    if (port == 0x3C4) { vga_idx_data(&st->SequencerIndex, w, v, seq_set_data, st); return; }
     seq_set_data(st, v);
 }
 static void seq_set_data(void *self, uint32_t v)
 {
-    video_state *st = (video_state *)self;
-    if ((st->seq_index & 7) == 1 && ((st->seq_reg[1] ^ (uint8_t)v) & 0x20u))
-        st->dirty = 1;                             /* SR1.5 screen off/on: re-present (#266) */
-    st->seq_reg[st->seq_index & 7] = (uint8_t)v;
-    st->seq_w  [st->seq_index & 7]++;
-    if (st->seq_index == 2) {
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    if ((st->SequencerIndex & 7) == 1 && ((st->SequencerRegisters[1] ^ (uint8_t)v) & 0x20u))
+        st->IsDirty = 1;                             /* SR1.5 screen off/on: re-present (#266) */
+    st->SequencerRegisters[st->SequencerIndex & 7] = (uint8_t)v;
+    st->SequencerWrites  [st->SequencerIndex & 7]++;
+    if (st->SequencerIndex == 2) {
         /* Which map-mask values does this program actually use, and how often? The
            de-interleave is built entirely on the assumption that an unchained program
            selects ONE plane at a time and changes the mask between planes; nothing has
            ever checked that against a real one. A 16-entry histogram costs nothing and
            turns "the frame comes out doubled" into "plane 1 was never selected". */
-        st->mask_hist[v & 0x0F]++;
+        st->MaskHistogram[v & 0x0F]++;
         /* ► THE PAIR, NOT THE TWO HISTOGRAMS SEPARATELY. "write mode 1 happens 120
              times" and "mask 0x0F happens 44 times" cannot be combined by the reader:
              a latch copy through a SINGLE-plane mask is served correctly by per-plane
              backing, one through an ALL-plane mask is not, and only the pairing says
              which Doom actually does. */
-        st->mw_hist[(st->write_mode & 3) * 16 + (v & 0x0F)]++;
+        st->ModeMaskHistogram[(st->WriteMode & 3) * 16 + (v & 0x0F)]++;
         /* A mask change is the moment the outgoing plane's data is complete. */
         /* Flush BEFORE the mask moves: everything written since the last flush
            belongs to the mask that is now going out. With host-supplied per-plane
@@ -3405,9 +3405,9 @@ static void seq_set_data(void *self, uint32_t v)
              store lands in the wrong plane, which is what a four-way collapse is made
              of. `chain4` in particular is a live suspect: the guest may change the mask
              while chained and expect the change to hold once it unchains. */
-        if (st->chain4)                                   st->mask_skip_chain4++;
-        else if ((uint8_t)(v & 0x0F) == st->y_mask)       st->mask_skip_same++;
-        if (!st->chain4) {
+        if (st->IsChain4)                                   st->MaskSkipChain4++;
+        else if ((uint8_t)(v & 0x0F) == st->YMask)       st->MaskSkipSame++;
+        if (!st->IsChain4) {
             /* ⚠ WITH HOST BACKING, CALL ON EVERY WRITE -- NOT ONLY ON A CHANGE. Once the
                  host follows GR4 (the read plane) the window can have MOVED since the
                  last map-mask write, so "the mask value is unchanged" no longer implies
@@ -3415,16 +3415,16 @@ static void seq_set_data(void *self, uint32_t v)
                  already is, so the extra calls cost a compare; the alternative is a
                  store landing in the plane the last READ selected.
                  The fallback de-interleave path has no such window and keeps the skip. */
-            if (st->ymap_select)                        st->ymap_select(st->ymap_ctx, (int)(v & 0x0F));
-            else if ((uint8_t)(v & 0x0F) != st->y_mask) modey_flush(st);
-            if ((uint8_t)(v & 0x0F) != st->y_mask)      st->dirty = 1;
+            if (st->YMapSelect)                        st->YMapSelect(st->YMapContext, (int)(v & 0x0F));
+            else if ((uint8_t)(v & 0x0F) != st->YMask) modey_flush(st);
+            if ((uint8_t)(v & 0x0F) != st->YMask)      st->IsDirty = 1;
         }
-        st->map_mask = (uint8_t)(v & 0x0F);
-        st->y_mask   = st->map_mask;
+        st->MapMask = (uint8_t)(v & 0x0F);
+        st->YMask   = st->MapMask;
     }
-    else if (st->seq_index == 4) {                 /* Memory Mode: bit 3 = Chain-4 */
+    else if (st->SequencerIndex == 4) {                 /* Memory Mode: bit 3 = Chain-4 */
         uint8_t c4 = (uint8_t)((v >> 3) & 1);
-        if (c4 != st->chain4) {
+        if (c4 != st->IsChain4) {
             /* ── #184: THE SAME BYTES, TWO ADDRESSINGS. A chain-4 store at CPU address A
                  lands in plane A&3 at plane offset A&~3 (docs/ref/vga.md §8) -- so a program
                  that draws chained and then unchains (Doom, and p_vgamem's chain4.abcd)
@@ -3433,61 +3433,61 @@ static void seq_set_data(void *self, uint32_t v)
                  switch has to MOVE them: scatter on the way out of chain-4, gather on the way
                  back in. Snapshot first -- the aperture changes meaning at the remap, and a
                  host may back the linear view with plane 0 itself. */
-            static uint8_t xfer[VID_Y_PLANE];
+            static uint8_t xfer[VIDEO_Y_PLANE_SIZE];
             uint32_t a;
-            int linear = (st->mkind == VID_KIND_LINEAR8 && st->vmem);
-            if (linear && !c4) for (a = 0; a < VID_Y_PLANE; ++a) xfer[a] = st->vmem[a];
+            int linear = (st->ModeKind == VIDEO_KIND_LINEAR8 && st->VideoMemory);
+            if (linear && !c4) for (a = 0; a < VIDEO_Y_PLANE_SIZE; ++a) xfer[a] = st->VideoMemory[a];
             if (linear && c4)
-                for (a = 0; a < VID_Y_PLANE; ++a) xfer[a] = PL(st, (int)(a & 3))[a & ~3u];
-            st->chain4 = c4; st->y_mask = st->map_mask;
-            st->chain4_sel++;
-            if (st->ymap_select) st->ymap_select(st->ymap_ctx, c4 ? -1 : (int)st->map_mask);
+                for (a = 0; a < VIDEO_Y_PLANE_SIZE; ++a) xfer[a] = PL(st, (int)(a & 3))[a & ~3u];
+            st->IsChain4 = c4; st->YMask = st->MapMask;
+            st->Chain4Selects++;
+            if (st->YMapSelect) st->YMapSelect(st->YMapContext, c4 ? -1 : (int)st->MapMask);
             if (linear && !c4) {
-                for (a = 0; a < VID_Y_PLANE; ++a) PL(st, (int)(a & 3))[a & ~3u] = xfer[a];
-                if (!st->ymap_plane)                      /* the no-host fallback's copy */
-                    for (a = 0; a < VID_Y_PLANE; ++a) st->yplane[a & 3][a & ~3u] = xfer[a];
-                ++st->chain4_xfers;
+                for (a = 0; a < VIDEO_Y_PLANE_SIZE; ++a) PL(st, (int)(a & 3))[a & ~3u] = xfer[a];
+                if (!st->YMapPlane)                      /* the no-host fallback's copy */
+                    for (a = 0; a < VIDEO_Y_PLANE_SIZE; ++a) st->YPlanes[a & 3][a & ~3u] = xfer[a];
+                ++st->Chain4Transfers;
             }
             if (linear && c4) {
-                for (a = 0; a < VID_Y_PLANE; ++a) st->vmem[a] = xfer[a];
-                ++st->chain4_xfers;
+                for (a = 0; a < VIDEO_Y_PLANE_SIZE; ++a) st->VideoMemory[a] = xfer[a];
+                ++st->Chain4Transfers;
             }
-            st->dirty = 1;
+            st->IsDirty = 1;
         }
     }
 }
 static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; (void)w;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)w;
     /* ⚠ USED TO RETURN 0 FOR EVERY INDEX BUT 2. A VGA reads every Sequencer register
        back, and a guest that probes the card by writing and re-reading one got a zero
        that says "no card here". The register file answers properly now; index 2 still
        comes from map_mask, which is the live authority for it. */
-    if (port == 0x3C4) { *v = st->seq_index; return; }
-    *v = (st->seq_index == 2) ? st->map_mask : st->seq_reg[st->seq_index & 7];
+    if (port == 0x3C4) { *v = st->SequencerIndex; return; }
+    *v = (st->SequencerIndex == 2) ? st->MapMask : st->SequencerRegisters[st->SequencerIndex & 7];
 }
 /* Graphics Controller ports 3CE (index) / 3CF (data). */
 static void gc_set_data(void *self, uint32_t v);
 
 static void gc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self;
-    if (port == 0x3CE) { vga_idx_data(&st->gc_index, w, v, gc_set_data, st); return; }
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    if (port == 0x3CE) { vga_idx_data(&st->GcIndex, w, v, gc_set_data, st); return; }
     gc_set_data(st, v);
 }
 static void gc_set_data(void *self, uint32_t v)
 {
-    video_state *st = (video_state *)self;
-    st->gc_reg[st->gc_index & 15] = (uint8_t)v;
-    st->gc_w  [st->gc_index & 15]++;
-    switch (st->gc_index) {
-    case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
-    case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    st->GcRegisters[st->GcIndex & 15] = (uint8_t)v;
+    st->GcWrites  [st->GcIndex & 15]++;
+    switch (st->GcIndex) {
+    case 0: st->SetReset   = (uint8_t)(v & 0x0F); break;
+    case 1: st->EnableSetReset   = (uint8_t)(v & 0x0F); break;
     /* GR2 and GR7 are the two halves of read mode 1 and used to fall into default:,
        i.e. be dropped. See read_mode in the header. */
-    case 2: st->col_compare  = (uint8_t)(v & 0x0F); break;
-    case 7: st->col_dontcare = (uint8_t)(v & 0x0F); break;
-    case 3: st->func_rotate = (uint8_t)(v & 0x1F); break;
+    case 2: st->ColorCompare  = (uint8_t)(v & 0x0F); break;
+    case 7: st->ColorDontCare = (uint8_t)(v & 0x0F); break;
+    case 3: st->FunctionRotate = (uint8_t)(v & 0x1F); break;
     /* ── GR4 IS THE READ PLANE, AND THE REMAP PATH CANNOT SEE READS AT ALL. ──────────
          In the `st->plane[]` interpreter path a guest read is served by us and honours
          this register (see the read-mode-0 return). With host-supplied per-plane backing
@@ -3500,9 +3500,9 @@ static void gc_set_data(void *self, uint32_t v)
          ever DISAGREED with the mapped plane, and disagreement is the entire defect;
          the host compares against `g_ycur` in the hook. */
     case 4:
-        st->read_map = (uint8_t)(v & 3);
-        st->gr4_hist[v & 3]++;
-        if (st->ymap_readmap) st->ymap_readmap(st->ymap_ctx, (int)(v & 3));
+        st->ReadMap = (uint8_t)(v & 3);
+        st->Gr4Histogram[v & 3]++;
+        if (st->YMapReadMap) st->YMapReadMap(st->YMapContext, (int)(v & 3));
         break;
     case 5:
         /* ► COUNT THE WRITE MODES. Per-plane backing can only serve write mode 0, where
@@ -3514,33 +3514,33 @@ static void gc_set_data(void *self, uint32_t v)
              guest can only read and write the plane that happens to be mapped.
              If a program uses it, the mapping approach cannot serve it and the fact has
              to be visible rather than inferred. */
-        st->wmode_hist[v & 3]++;
-        st->write_mode  = (uint8_t)(v & 3);
-        st->read_mode   = (uint8_t)((v >> 3) & 1);   /* ⚠ bit 3 used to be masked off */
-        if (st->ymap_wmode) st->ymap_wmode(st->ymap_ctx, (int)(v & 3));
+        st->WriteModeHistogram[v & 3]++;
+        st->WriteMode  = (uint8_t)(v & 3);
+        st->ReadMode   = (uint8_t)((v >> 3) & 1);   /* ⚠ bit 3 used to be masked off */
+        if (st->YMapWriteMode) st->YMapWriteMode(st->YMapContext, (int)(v & 3));
         break;
-    case 8: st->bit_mask    = (uint8_t)v;          break;
+    case 8: st->BitMask    = (uint8_t)v;          break;
     default: break;
     }
 }
 static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3CE) { *v = st->gc_index; return; }
-    switch (st->gc_index) {
-    case 0: *v = st->set_reset; break;  case 1: *v = st->enable_sr; break;
-    case 2: *v = st->col_compare; break; case 7: *v = st->col_dontcare; break;
-    case 3: *v = st->func_rotate; break; case 4: *v = st->read_map; break;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)w;
+    if (port == 0x3CE) { *v = st->GcIndex; return; }
+    switch (st->GcIndex) {
+    case 0: *v = st->SetReset; break;  case 1: *v = st->EnableSetReset; break;
+    case 2: *v = st->ColorCompare; break; case 7: *v = st->ColorDontCare; break;
+    case 3: *v = st->FunctionRotate; break; case 4: *v = st->ReadMap; break;
     /* ⚠ GR5 IS NOT ONLY THE TWO MODE FIELDS. Bits 0:1 are the write mode and bit 3
          the read mode, and those are shadowed because the engine uses them -- but
          bit 2 (test), bit 4 (odd/even), bit 5 (shift register) and bit 6 (256-colour
          shift) are not modelled, and returning only the shadows reported 0x00 where
          a real BIOS leaves 0x10 in mode 3 and 0x40 in 13h. Merge: the shadows for
          what we model, the stored byte for what we do not. */
-    case 5: *v = (uint8_t)((st->gc_reg[5] & 0x74)
-                           | st->write_mode | (st->read_mode << 3)); break;
-    case 8: *v = st->bit_mask; break;
-    default: *v = st->gc_reg[st->gc_index & 15]; break;   /* GR6 and the rest read back */
+    case 5: *v = (uint8_t)((st->GcRegisters[5] & 0x74)
+                           | st->WriteMode | (st->ReadMode << 3)); break;
+    case 8: *v = st->BitMask; break;
+    default: *v = st->GcRegisters[st->GcIndex & 15]; break;   /* GR6 and the rest read back */
     }
 }
 
@@ -3573,16 +3573,16 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
      (the off-VM default). `now` is the model's microseconds; `frame_us` the frame
      period; `vtotal`/`vdisp`/`vblank` the line counts (total, display end, blank
      start); `frame_no` = now / frame_us; `line` = the scanline the beam is on. */
-static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+static int vid_beam(const VIDEO_STATE *st, uint64_t *now, uint32_t *frame_us,
                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
                     uint32_t *frame_no, uint32_t *line)
 {
     int tall; uint32_t t, a, b, hz; uint64_t in_frame;
-    if (!st->time_us) return 0;
+    if (!st->TimeUs) return 0;
     /* A VESA graphics mode runs on its own timing, not the last VGA mode's (#226). */
     if (vesa_vgeom(st, vtotal, vdisp, vblank, &hz)) {
         *frame_us = 1000000u / hz;
-        *now      = st->time_us();
+        *now      = st->TimeUs();
         *frame_no = (uint32_t)(*now / *frame_us);
         in_frame  = *now % (uint64_t)*frame_us;
         *line     = (uint32_t)((in_frame * (uint64_t)*vtotal) / *frame_us);
@@ -3591,7 +3591,7 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
     /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
        320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
        the choice off the DISPLAYED height, not the mode number. */
-    tall    = (st->gh > VID_VACTIVE_LO);
+    tall    = (st->GraphicsHeight > VID_VACTIVE_LO);
     *vtotal = tall ? VID_VTOTAL_HI  : VID_VTOTAL_LO;
     *vblank = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO;
     *vdisp  = *vblank;
@@ -3606,7 +3606,7 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
         tall = (t >= 500u);
     }
     *frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
-    *now      = st->time_us();
+    *now      = st->TimeUs();
     *frame_no = (uint32_t)(*now / *frame_us);
     in_frame  = *now % (uint64_t)*frame_us;
     /* SCALE FIRST, DIVIDE ONCE -- see status_in for why line_us must not be an integer. */
@@ -3633,25 +3633,25 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
      Called BEFORE every write to 0Ch/0Dh/AR13 and when a frame is built, so the register
      values between two calls are constant and "the value at that boundary" is simply
      the value now. No clock (off-VM) or a long gap: take everything as it stands. */
-static void vid_latch(video_state *st, int at_frame)
+static void vid_latch(VIDEO_STATE *st, int at_frame)
 {
     uint64_t now, t0, ds, vbo;
     uint32_t F, vt, vd, vb, fno, line;
     if (!vid_beam(st, &now, &F, &vt, &vd, &vb, &fno, &line) || !F || !vt) {
         /* No beam clock: the frame build IS the retrace, as before s83. */
         if (!at_frame) return;
-        if (st->crtc_start_pend) st->crtc_start_half++;
-        st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
-        st->disp_pan = st->attr_reg[0x13];
-        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
+        if (st->IsCrtcStartPending) st->CrtcStartHalf++;
+        st->StartVs = st->CrtcStartLive = (uint16_t)st->CrtcStart;
+        st->DisplayPan = st->AttributeRegisters[0x13];
+        st->VesaOriginVs = st->VesaOriginLive = st->VesaOrigin;
         return;
     }
     (void)vd; (void)fno; (void)line;
-    t0 = st->latch_t; st->latch_t = now;
+    t0 = st->LatchTime; st->LatchTime = now;
     if (!t0 || now < t0 || now - t0 > 4u * (uint64_t)F) {
-        st->start_vs = st->crtc_start_live = (uint16_t)st->crtc_start;
-        st->disp_pan = st->attr_reg[0x13];
-        st->vesa_org_vs = st->vesa_org_live = st->vesa_org;
+        st->StartVs = st->CrtcStartLive = (uint16_t)st->CrtcStart;
+        st->DisplayPan = st->AttributeRegisters[0x13];
+        st->VesaOriginVs = st->VesaOriginLive = st->VesaOrigin;
         return;
     }
     /* ► THE VESA DISPLAY START RIDES THE SAME SCHEDULE (#226): a VBE BIOS implements
@@ -3661,18 +3661,18 @@ static void vid_latch(video_state *st, int at_frame)
     ds  = (now / F) * F;                            /* the last frame start <= now     */
     if (ds > t0) {                                  /* a new picture began since t0    */
         if (ds >= F && ds - F + vbo > t0) {         /* ...and its retrace was after t0 */
-            if (st->crtc_start_pend) st->crtc_start_half++;   /* loaded mid-pair: torn */
-            st->start_vs = (uint16_t)st->crtc_start;
-            st->vesa_org_vs = st->vesa_org;
+            if (st->IsCrtcStartPending) st->CrtcStartHalf++;   /* loaded mid-pair: torn */
+            st->StartVs = (uint16_t)st->CrtcStart;
+            st->VesaOriginVs = st->VesaOrigin;
         }
-        st->crtc_start_live = st->start_vs;
-        st->disp_pan        = st->attr_reg[0x13];
-        st->vesa_org_live   = st->vesa_org_vs;
+        st->CrtcStartLive = st->StartVs;
+        st->DisplayPan        = st->AttributeRegisters[0x13];
+        st->VesaOriginLive   = st->VesaOriginVs;
     }
     if (ds + vbo <= now && ds + vbo > t0) {         /* this frame's retrace began      */
-        if (st->crtc_start_pend) st->crtc_start_half++;
-        st->start_vs = (uint16_t)st->crtc_start;
-        st->vesa_org_vs = st->vesa_org;
+        if (st->IsCrtcStartPending) st->CrtcStartHalf++;
+        st->StartVs = (uint16_t)st->CrtcStart;
+        st->VesaOriginVs = st->VesaOrigin;
     }
 }
 
@@ -3687,7 +3687,7 @@ static void vid_latch(video_state *st, int at_frame)
          style `wait while in retrace; wait until in retrace` loop would pace it.
      Returns the model time the call completes at (0 = now) and says whether this call's
      start should be taken by the CURRENT retrace (1) or left to the latch (0). */
-static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl)
+static uint64_t vesa_vbl_release(VIDEO_STATE *st, int *now_in_vbl)
 {
     uint64_t now, vbo, ds, vstart;
     uint32_t F, vt, vd, vb, fno, line;
@@ -3698,23 +3698,23 @@ static uint64_t vesa_vbl_release(video_state *st, int *now_in_vbl)
     ds     = (now / F) * F;
     vstart = ds + vbo;                              /* this frame's retrace start   */
     if (now >= vstart) {                            /* in retrace now               */
-        if (st->vesa_07_vbl != fno + 1u) { st->vesa_07_vbl = fno + 1u; *now_in_vbl = 1; return 0; }
-        st->vesa_07_vbl = fno + 2u;                 /* taken: the next one          */
+        if (st->Vesa07Vbl != fno + 1u) { st->Vesa07Vbl = fno + 1u; *now_in_vbl = 1; return 0; }
+        st->Vesa07Vbl = fno + 2u;                 /* taken: the next one          */
         return vstart + F;
     }
-    st->vesa_07_vbl = fno + 1u;
+    st->Vesa07Vbl = fno + 1u;
     return vstart;
 }
 
-uint32_t vdd_video_int10_wait_us(video_state *st)
+uint32_t VddVideoInt10WaitUs(VIDEO_STATE *st)
 {
-    uint64_t now, until = st->int10_wait_until;
+    uint64_t now, until = st->Int10WaitUntil;
     if (!until) return 0;
-    if (!st->time_us) { st->int10_wait_until = 0; return 0; }
-    now = st->time_us();
+    if (!st->TimeUs) { st->Int10WaitUntil = 0; return 0; }
+    now = st->TimeUs();
     /* Done, or a stamp more than a second out (a clock that went backwards, a stale
        value): never park the guest on it. */
-    if (now >= until || until - now > 1000000u) { st->int10_wait_until = 0; return 0; }
+    if (now >= until || until - now > 1000000u) { st->Int10WaitUntil = 0; return 0; }
     return (uint32_t)(until - now);
 }
 
@@ -3733,17 +3733,17 @@ uint32_t vdd_video_int10_wait_us(video_state *st)
      which is BOTH the hardware default and what the port used to return by accident. */
 static void ext_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3C2)      { st->misc_out   = (uint8_t)v; st->misc_w++;  }
-    else if (port == 0x3C3) { st->vga_enable = (uint8_t)(v & 1); st->vgaen_w++; }
-    else if (port == 0x3C6) { st->dac_mask   = (uint8_t)v; st->dacmask_w++; }
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)w;
+    if (port == 0x3C2)      { st->MiscOutput   = (uint8_t)v; st->MiscWrites++;  }
+    else if (port == 0x3C3) { st->VgaEnable = (uint8_t)(v & 1); st->VgaEnableWrites++; }
+    else if (port == 0x3C6) { st->DacMask   = (uint8_t)v; st->DacMaskWrites++; }
     /* 3CA and 3CC are READ-ONLY aliases (Feature Control / Misc Output); a write
        there is a guest bug on real hardware too, so it is dropped, not stored. */
 }
 
 static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; (void)w;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)w;
     switch (port) {
     /* ── ★★★ INPUT STATUS 0 = 0x10. MEASURED, after three sessions of 0x00. ────
          Bit 4 is Switch Sense, the DAC comparator a real card drives; bit 7 is
@@ -3770,10 +3770,10 @@ static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          steers software away from it. Implementing it would be a guest-visible
          change with no guest to check it against. See docs/inventory/vga.md. */
     case 0x3C2: *v = 0x10u | vint_status(st); break;   /* bit 7: #187, see vint_cr11 */
-    case 0x3C3: *v = st->vga_enable; break;
-    case 0x3C6: *v = st->dac_mask;   break;
-    case 0x3CA: *v = st->feat_ctrl;  break;   /* Feature Control read  */
-    case 0x3CC: *v = st->misc_out;   break;   /* Misc Output read      */
+    case 0x3C3: *v = st->VgaEnable; break;
+    case 0x3C6: *v = st->DacMask;   break;
+    case 0x3CA: *v = st->FeatureControl;  break;   /* Feature Control read  */
+    case 0x3CC: *v = st->MiscOutput;   break;   /* Misc Output read      */
     default:    *v = 0xFF; break;             /* 3CB: nothing decodes there */
     }
 }
@@ -3782,14 +3782,14 @@ static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
    It was thrown away here; now it is captured, for the same reason as the rest. */
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; (void)port; (void)w;
-    st->feat_ctrl = (uint8_t)v; st->feat_w++;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)port; (void)w;
+    st->FeatureControl = (uint8_t)v; st->FeatureWrites++;
 }
 #define VID_HBL_DEBT_MAX 16u   /* lines: further apart than this, a poll is not counting lines */
 /* #183: how long until 3DAh bit 3 (vertical retrace: blank start to frame end) READS
    `want_set`? 0 = it already does. UINT32_MAX = no beam clock to say. The host uses this
    to sleep through a retrace-wait loop instead of trapping on every iteration. */
-uint32_t vdd_video_us_to_vr(video_state *st, int want_set)
+uint32_t VddVideoUsToRetrace(VIDEO_STATE *st, int want_set)
 {
     uint64_t now, in_frame, vbo;
     uint32_t F, vt, vd, vb, fno, line;
@@ -3803,37 +3803,37 @@ uint32_t vdd_video_us_to_vr(video_state *st, int want_set)
 
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
-    video_state *st = (video_state *)self; (void)port; (void)w;
+    VIDEO_STATE *st = (VIDEO_STATE *)self; (void)port; (void)w;
     uint64_t now, in_frame;
     /* ⚠ LOAD-BEARING, AND NOT A VBLANK CONCERN. Reading this port resets the
          Attribute Controller's index/data flip-flop, and every guest relies on it
          before touching 0x3C0. See attr_out. */
-    st->attr_ff = 0;
+    st->AttributeFlipFlop = 0;
     uint32_t frame_us, line, u_vtotal, u_vdisp, u_vblank, frame_no;
     int vtotal, vactive, in_vbl, in_hbl;
 
     if (!vid_beam(st, &now, &frame_us, &u_vtotal, &u_vdisp, &u_vblank, &frame_no, &line)) {
-        st->retrace ^= 0x09;                        /* no clock injected: old behaviour */
-        *v = st->retrace;
+        st->Retrace ^= 0x09;                        /* no clock injected: old behaviour */
+        *v = st->Retrace;
         return;
     }
     vtotal = (int)u_vtotal; vactive = (int)u_vblank; (void)u_vdisp;
     /* Bracket the polling in the model's own microseconds -- see the header. */
-    if (!st->t3da_first) st->t3da_first = now;
-    if (st->t3da_last) {
-        uint64_t d = now - st->t3da_last;
-        st->present_gap_us = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
-        if (!d) st->dt3da_zero++;
+    if (!st->Time3DaFirst) st->Time3DaFirst = now;
+    if (st->Time3DaLast) {
+        uint64_t d = now - st->Time3DaLast;
+        st->PresentGapUs = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
+        if (!d) st->Dt3DaZero++;
         else {
             unsigned b = 0;
             uint64_t t = d;
             while (b < 7 && t >= 4) { t >>= 2; b++; }
-            st->dt3da_hist[b]++;
-            if (d > (uint64_t)st->dt3da_max)
-                st->dt3da_max = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
+            st->Dt3DaHistogram[b]++;
+            if (d > (uint64_t)st->Dt3DaMax)
+                st->Dt3DaMax = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
         }
     }
-    st->t3da_last = now;
+    st->Time3DaLast = now;
     /* ── SCALE FIRST, DIVIDE ONCE. A scanline is not a whole number of microseconds:
          at 70 Hz it is 14285/449 = 31.8us, and taking `line_us = frame_us / vtotal`
          truncated that to 31. Lines then ran 2.6% fast -- a frame's worth of them
@@ -3854,11 +3854,11 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          unseen during a hold; report it ONCE, as the bit-0 rule below does for a line,
          and let the next poll read the true phase. One per poll, however many frames
          were skipped: a slow machine loses real time, it does not get extra frames. */
-    if (st->vbl_owe_on && !in_vbl && st->p3da_have_last && !st->p3da_last_vbl
-        && frame_no != st->p3da_last_frame) {
-        in_vbl = 1; st->p3da_vbl_owed++;
+    if (st->IsVblOweOn && !in_vbl && st->IsPort3DaHaveLast && !st->IsPort3DaLastVbl
+        && frame_no != st->Port3DaLastFrame) {
+        in_vbl = 1; st->Port3DaVblOwed++;
     }
-    st->p3da_last_frame = frame_no;
+    st->Port3DaLastFrame = frame_no;
     /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
        DIFFERENT signal on a real card -- it changes per scanline, not per frame -- so
        toggling the two together, as we used to, was doubly wrong.
@@ -3896,36 +3896,36 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
            ► A poll more than VID_HBL_DEBT_MAX lines after the previous one is not a
              line counter (the attribute flip-flop reset before a palette write,
              once a frame) and owes nothing. */
-        if (!bit0 && st->p3da_have_last && !st->p3da_last_bit0 && !in_vbl && !st->p3da_last_vbl
-            && abs_line > st->p3da_last_line
-            && abs_line - st->p3da_last_line <= VID_HBL_DEBT_MAX) {
-            bit0 = 1; st->p3da_hbl_owed++;
+        if (!bit0 && st->IsPort3DaHaveLast && !st->Port3DaLastBit0 && !in_vbl && !st->IsPort3DaLastVbl
+            && abs_line > st->Port3DaLastLine
+            && abs_line - st->Port3DaLastLine <= VID_HBL_DEBT_MAX) {
+            bit0 = 1; st->Port3DaHblOwed++;
         }
-        st->p3da_last_line = abs_line; st->p3da_last_bit0 = (uint8_t)bit0;
-        st->p3da_last_vbl = (uint8_t)in_vbl;
-        st->p3da_have_last = 1;
+        st->Port3DaLastLine = abs_line; st->Port3DaLastBit0 = (uint8_t)bit0;
+        st->IsPort3DaLastVbl = (uint8_t)in_vbl;
+        st->IsPort3DaHaveLast = 1;
         *v = (uint32_t)((in_vbl ? 0x08u : 0u) | (bit0 ? 0x01u : 0u));
-        if (st->p3da_ring_on) {          /* debug only -- see the note in the header */
-            st->p3da_ring_us[st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint32_t)now;
-            st->p3da_ring_v [st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint8_t)*v;
-            st->p3da_ring_n++;
+        if (st->IsPort3DaRingOn) {          /* debug only -- see the note in the header */
+            st->Port3DaRingUs[st->Port3DaRingCount & (VIDEO_PORT_3DA_RING - 1)] = (uint32_t)now;
+            st->Port3DaRingValue [st->Port3DaRingCount & (VIDEO_PORT_3DA_RING - 1)] = (uint8_t)*v;
+            st->Port3DaRingCount++;
         }
     }
-    st->retrace = (uint8_t)*v;                      /* keep it observable in dumps    */
+    st->Retrace = (uint8_t)*v;                      /* keep it observable in dumps    */
     /* Count the edge the GUEST sees, not the one the model produces: a clear->set
        transition between two of its own reads is exactly one completed
        `WAIT &H3DA,8`, so edges/second IS the guest's frame rate. */
-    st->p3da_reads++;
-    if (in_vbl && !st->vbl_prev) st->vbl_edges++;
-    st->vbl_prev = (uint8_t)in_vbl;
+    st->Port3DaReads++;
+    if (in_vbl && !st->VblPrevious) st->VblEdges++;
+    st->VblPrevious = (uint8_t)in_vbl;
     /* ── RAISE THE PRESENT FROM THE GUEST'S FRAME (see present_hook in the header).
-         Same window as vdd_video_present_ready -- the last VID_PRESENT_WINDOW_PM of
+         Same window as VddVideoIsPresentReady -- the last VID_PRESENT_WINDOW_PM of
          the frame before blanking, when a retrace-paced guest has finished drawing
          and is parked here polling -- expressed in lines so no second clock read is
          paid on a path that runs millions of times a second. A poller that skips
          the window (one read per frame, at the edge) gets the edge instead: the
          frame it drew is complete by then too. Once per frame_no either way. */
-    if (st->present_hook && st->present_frame != frame_no) {
+    if (st->PresentHook && st->PresentFrame != frame_no) {
         uint32_t win_lines = (uint32_t)vtotal * VID_PRESENT_WINDOW_PM / 1000u;
         /* ► THE FIRST POLL AFTER A GAP IS THE BEST MOMENT OF ALL. A retrace-paced
              guest leaves this port to DRAW and comes back to wait: the first read
@@ -3936,15 +3936,15 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
              was waiting for, and it missed one frame in twenty (BOUNCEBX 1798 ->
              1697 edges, dtmax 2.4 -> 13.5 ms). The window and the edge remain for
              a guest that never leaves the port. */
-        int gap = st->present_gap_us >= VID_PRESENT_GAP_US;
+        int gap = st->PresentGapUs >= VID_PRESENT_GAP_US;
         if (gap || in_vbl || (line + win_lines >= (uint32_t)vactive)) {
-            st->present_frame = frame_no;
-            st->present_hook_fires++;
-            if (gap) st->present_hook_gap++;
-            st->present_hook(st->present_ctx);
+            st->PresentFrame = frame_no;
+            st->PresentHookFires++;
+            if (gap) st->PresentHookGap++;
+            st->PresentHook(st->PresentContext);
         }
     }
-    st->present_gap_us = 0;
+    st->PresentGapUs = 0;
 }
 
 /* Copy the three character generators into guest-visible memory so the pointer handed
@@ -3954,28 +3954,28 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
    redraw. Only the glyphs: the save-pointer table and the vectors install_fonts writes
    are a POST job a program may since have re-pointed. A font a program loaded itself
    (AH=11h, user_font_on) is its own and stays. */
-int vdd_video_refresh_fonts(video_state *st)
+int VddVideoRefreshFonts(VIDEO_STATE *st)
 {
     uint8_t *f16, *f8, *f14;
     unsigned c, y;
-    if (!st || !st->bus) return 0;
-    f16 = (uint8_t *)VddMapFlat(st->bus, VDD_FONT8X16_SEG, 0);
-    f8  = (uint8_t *)VddMapFlat(st->bus, VDD_FONT8X8_SEG, 0);
-    f14 = (uint8_t *)VddMapFlat(st->bus, VDD_FONT8X14_SEG, 0);
+    if (!st || !st->Bus) return 0;
+    f16 = (uint8_t *)VddMapFlat(st->Bus, VDD_FONT8X16_SEG, 0);
+    f8  = (uint8_t *)VddMapFlat(st->Bus, VDD_FONT8X8_SEG, 0);
+    f14 = (uint8_t *)VddMapFlat(st->Bus, VDD_FONT8X14_SEG, 0);
     if (!f16 || !f8 || !f14) return 0;
     for (c = 0; c < 256; ++c) {
         for (y = 0; y < 16; ++y) f16[c * 16 + y] = vga_font_8x16[c][y];
         for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];
         for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
     }
-    st->dirty = 1;
+    st->IsDirty = 1;
     return 1;
 }
 
-void vdd_video_install_fonts(video_state *st)
+void VddVideoInstallFonts(VIDEO_STATE *st)
 {
-    if (!st || !st->bus) return;           /* called before the VDD joined the bus */
-    if (!vdd_video_refresh_fonts(st)) return;
+    if (!st || !st->Bus) return;           /* called before the VDD joined the bus */
+    if (!VddVideoRefreshFonts(st)) return;
     /* All three are REAL designs at their own size (#322: from the system's fonts, see
        src/host/sysfont.h -- the 8x8 is Terminal's own 8x8). The 8x8 used to be
        manufactured here by OR-ing adjacent row pairs of the 8x16 -- which squashes a
@@ -3997,7 +3997,7 @@ void vdd_video_install_fonts(video_state *st)
          Written once here (a POST job): a program may legitimately re-point 0040:00A8
          at its own table, and later syncs must not undo that. */
     {
-        uint8_t *t = (uint8_t *)VddMapFlat(st->bus, VDD_VIDTAB_SEG, 0);
+        uint8_t *t = (uint8_t *)VddMapFlat(st->Bus, VDD_VIDTAB_SEG, 0);
         static const uint16_t dcc[16] = {
             0x0000, 0x0100, 0x0200, 0x0102, 0x0400, 0x0104, 0x0500, 0x0502,
             0x0600, 0x0601, 0x0605, 0x0800, 0x0801, 0x0700, 0x0702, 0x0706 };
@@ -4011,31 +4011,31 @@ void vdd_video_install_fonts(video_state *st)
             t[VDD_DCC_OFF + 0] = 16; t[VDD_DCC_OFF + 1] = 1; t[VDD_DCC_OFF + 2] = 8; t[VDD_DCC_OFF + 3] = 0;
             for (i = 0; i < 16; ++i) wr16(t + VDD_DCC_OFF + 4 + i * 2, dcc[i]);
             for (i = 0; i < VDD_VPARAM_N; ++i)
-                (void)vdd_video_param_entry((uint8_t)i, t + VDD_VPARAM_OFF + i * 64u);
-            if (st->bda) { wr16(st->bda + 0xA8, VDD_SAVEPTR_OFF); wr16(st->bda + 0xAA, VDD_VIDTAB_SEG); }
+                (void)VddVideoParameterEntry((uint8_t)i, t + VDD_VPARAM_OFF + i * 64u);
+            if (st->BiosData) { wr16(st->BiosData + 0xA8, VDD_SAVEPTR_OFF); wr16(st->BiosData + 0xAA, VDD_VIDTAB_SEG); }
         }
     }
-    /* ...and the font vectors, which vdd_video_reset set before the host's IVT was
+    /* ...and the font vectors, which VddVideoReset set before the host's IVT was
        final: written again now that it is (the host plants its own vectors first). */
-    vid_set_vec(st, 0x43, st->i43_seg, st->i43_off);
-    vid_set_vec(st, 0x1F, st->i1f_seg, st->i1f_off);
+    vid_set_vec(st, 0x43, st->Int43Segment, st->Int43Offset);
+    vid_set_vec(st, 0x1F, st->Int1FSegment, st->Int1FOffset);
 }
 
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
    so direct writes never trap -- the renderer just reads vmem each frame). */
 static uint8_t vid_rd(void *self, uint32_t off)
-{ video_state *st = (video_state *)self; return st->vmem[VID_TEXT_OFF + off]; }
+{ VIDEO_STATE *st = (VIDEO_STATE *)self; return st->VideoMemory[VIDEO_TEXT_OFFSET + off]; }
 static void vid_wr(void *self, uint32_t off, uint8_t v)
-{ video_state *st = (video_state *)self; st->vmem[VID_TEXT_OFF + off] = v; st->dirty = 1; }
+{ VIDEO_STATE *st = (VIDEO_STATE *)self; st->VideoMemory[VIDEO_TEXT_OFFSET + off] = v; st->IsDirty = 1; }
 
 /* One character's glyph rows: the loaded user font wins (GH #52), otherwise the ROM
    table for the cell height in force -- 8x8 after a 1112h, 8x14 after 1111h, 8x16
    otherwise. One predictable branch in the ordinary case. */
-static const uint8_t *glyph_rows(const video_state *st, uint8_t ch)
+static const uint8_t *glyph_rows(const VIDEO_STATE *st, uint8_t ch)
 {
-    if (st->user_font_on)  return &st->user_font[ch * VID_CELL_H];
-    if (st->cell_h == 8)   return vga_font_8x8[ch];
-    if (st->cell_h == 14)  return vga_font_8x14[ch];
+    if (st->IsUserFontOn)  return &st->UserFont[ch * VIDEO_CELL_HEIGHT];
+    if (st->CellHeight == 8)   return vga_font_8x8[ch];
+    if (st->CellHeight == 14)  return vga_font_8x14[ch];
     return vga_font_8x16[ch];
 }
 
@@ -4045,44 +4045,44 @@ static const uint8_t *glyph_rows(const video_state *st, uint8_t ch)
      program that turned blink OFF to get sixteen background colours (every text-mode
      UI with a light-grey dialog on a bright panel) got the dark eight, and one that
      left blink ON and used it never blinked. `st->blink_off` is the phase for this
-     render, set once per frame by vdd_video_render from the injected clock. */
+     render, set once per frame by VddVideoRender from the injected clock. */
 /* ── #324: A VGA TEXT CELL IS NINE DOTS WIDE. Sequencer Clocking Mode bit 0 picks 8 or 9
      (every standard VGA text mode sets 9: 80x25 is 720x400, 40x25 is 360x400). The ninth
      column is background, except that with Line Graphics Enable (AR10 bit 2) the box-
      drawing range C0h-DFh repeats the eighth column into it, which is what makes
      horizontal lines join from cell to cell. A VESA 132-column mode is 8 dots: the
      wider character clock would not fit the line. */
-static int text_cw(const video_state *st)
+static int text_cw(const VIDEO_STATE *st)
 {
-    if (st->vesa_text_mode) return 8;
-    return (st->seq_reg[1] & 0x01) ? 8 : 9;
+    if (st->VesaTextMode) return 8;
+    return (st->SequencerRegisters[1] & 0x01) ? 8 : 9;
 }
-int vdd_video_text_cell_w(const video_state *st) { return text_cw(st); }
+int VddVideoTextCellWidth(const VIDEO_STATE *st) { return text_cw(st); }
 
-static void render_cell(video_state *st, int r, int c, uint8_t ch, uint8_t attr)
+static void render_cell(VIDEO_STATE *st, int r, int c, uint8_t ch, uint8_t attr)
 {
     int gy, gx;
-    int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
+    int cell_h = st->CellHeight ? st->CellHeight : VIDEO_CELL_HEIGHT;
     int cw = text_cw(st);
-    int stride = st->cols * cw;                        /* 360 in a 40-column mode  */
-    int lge = cw == 9 && (st->attr_mode & 0x04) && ch >= 0xC0 && ch <= 0xDF;
+    int stride = st->Columns * cw;                        /* 360 in a 40-column mode  */
+    int lge = cw == 9 && (st->AttributeMode & 0x04) && ch >= 0xC0 && ch <= 0xDF;
     uint8_t fg = attr & 0x0F, bg;
     const uint8_t *gl = glyph_rows(st, ch);
-    if (st->blink) {
+    if (st->IsBlink) {
         bg = (uint8_t)((attr >> 4) & 0x07);
-        if ((attr & 0x80) && st->blink_off) fg = bg;  /* off phase: the glyph hides */
+        if ((attr & 0x80) && st->IsBlinkOffPhase) fg = bg;  /* off phase: the glyph hides */
     } else {
         bg = (uint8_t)((attr >> 4) & 0x0F);           /* sixteen backgrounds      */
     }
     for (gy = 0; gy < cell_h; ++gy) {
         uint8_t bits = gl[gy];
-        uint8_t *row = &st->fb[(r*cell_h + gy) * stride + c*cw];
+        uint8_t *row = &st->FrameBuffer[(r*cell_h + gy) * stride + c*cw];
         for (gx = 0; gx < 8; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
         if (cw == 9) row[8] = (lge && (bits & 0x01)) ? fg : bg;
     }
 }
 
-static void draw_hw_cursor(video_state *st);
+static void draw_hw_cursor(VIDEO_STATE *st);
 
 /* ── THE TEXT SCREEN AS THE GUEST WROTE IT, not as we drew it. ───────────────────
      An instrument for exactly one question, and it is a question screenshots cannot
@@ -4092,21 +4092,21 @@ static void draw_hw_cursor(video_state *st);
      of which were about the picture rather than the data.
      Rows of characters, then the attribute of each cell in hex, straight out of the
      text VRAM the renderer itself reads. */
-int vdd_video_text_snapshot(video_state *st, char *out, int cap)
+int VddVideoTextSnapshot(VIDEO_STATE *st, char *out, int cap)
 {
     static const char hexd[] = "0123456789abcdef";
     int r, c, n = 0;
     if (!out || cap < 16) return 0;
-    for (r = 0; r < st->rows; ++r) {
-        for (c = 0; c < st->cols && n < cap - 2; ++c) {
+    for (r = 0; r < st->Rows; ++r) {
+        for (c = 0; c < st->Columns && n < cap - 2; ++c) {
             uint8_t ch = dcell(st, r, c)[0];
             out[n++] = (ch >= 32 && ch < 127) ? (char)ch : '.';
         }
         if (n < cap - 2) out[n++] = '\n';
     }
     if (n < cap - 8) { const char *h = "--attr--\n"; while (*h && n < cap - 2) out[n++] = *h++; }
-    for (r = 0; r < st->rows; ++r) {
-        for (c = 0; c < st->cols && n < cap - 3; ++c) {
+    for (r = 0; r < st->Rows; ++r) {
+        for (c = 0; c < st->Columns && n < cap - 3; ++c) {
             uint8_t a = dcell(st, r, c)[1];
             out[n++] = hexd[(a >> 4) & 0xF]; out[n++] = hexd[a & 0xF];
         }
@@ -4116,41 +4116,41 @@ int vdd_video_text_snapshot(video_state *st, char *out, int cap)
     return n;
 }
 
-void vdd_video_render(video_state *st)                 /* text glyph render        */
+void VddVideoRender(VIDEO_STATE *st)                 /* text glyph render        */
 {
     int r, c;
     /* Text blinks at half the cursor rate: 32 frames on, 32 off at 60 Hz. */
-    st->blink_off = (uint8_t)((st->blink && st->time_us)
-                              ? ((st->time_us() % 1066000u) >= 533000u) : 0);
-    for (r = 0; r < st->rows; ++r)
-        for (c = 0; c < st->cols; ++c) {
+    st->IsBlinkOffPhase = (uint8_t)((st->IsBlink && st->TimeUs)
+                              ? ((st->TimeUs() % 1066000u) >= 533000u) : 0);
+    for (r = 0; r < st->Rows; ++r)
+        for (c = 0; c < st->Columns; ++c) {
             uint8_t *p = dcell(st, r, c);
             render_cell(st, r, c, p[0], p[1]);
         }
     draw_hw_cursor(st);
 }
 
-void vdd_video_text_cursor(video_state *st, int col, int row,
+void VddVideoTextCursor(VIDEO_STATE *st, int col, int row,
                            uint16_t and_mask, uint16_t xor_mask)
 {
     uint8_t *p, ch, attr;
-    if (st->mkind != VID_KIND_TEXT) return;
-    if (col < 0 || row < 0 || col >= st->cols || row >= st->rows) return;
+    if (st->ModeKind != VIDEO_KIND_TEXT) return;
+    if (col < 0 || row < 0 || col >= st->Columns || row >= st->Rows) return;
     p    = dcell(st, row, col);
     ch   = (uint8_t)((p[0] & (and_mask & 0xFF)) ^ (xor_mask & 0xFF));
     attr = (uint8_t)((p[1] & (and_mask >> 8)) ^ (xor_mask >> 8));
     render_cell(st, row, col, ch, attr);
     /* The hardware cursor is drawn by the CRTC over whatever the cell holds, so it
        stays on top of the pointer when the two share a cell. */
-    if (row == st->cur_row && col == st->cur_col) draw_hw_cursor(st);
+    if (row == st->CursorRow && col == st->CursorColumn) draw_hw_cursor(st);
 }
 
-static void draw_hw_cursor(video_state *st)
+static void draw_hw_cursor(VIDEO_STATE *st)
 {
     int gy, gx;
-    int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
+    int cell_h = st->CellHeight ? st->CellHeight : VIDEO_CELL_HEIGHT;
     int cw = text_cw(st);
-    int stride = st->cols * cw;
+    int stride = st->Columns * cw;
     /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, SCALED, BLINK FROM THE CLOCK. ────
          This used to be two hard-coded scan lines, always lit. Two things were wrong
          with that and only one of them is cosmetic:
@@ -4166,27 +4166,27 @@ static void draw_hw_cursor(video_state *st)
          The phase comes from st->time_us, the injected clock the CRT timebase already
          uses, so this stays pure C and off-VM testable: with no clock injected the
          cursor is simply steady, which is what the existing battery expects. */
-    if (st->cur_row < st->rows && st->cur_col < st->cols) {
+    if (st->CursorRow < st->Rows && st->CursorColumn < st->Columns) {
         unsigned start, end;
         int hidden, lit = 1;
-        vdd_cursor_lines(st->cur_shape, (unsigned)cell_h, &start, &end, &hidden);
-        if (st->cur_emul_off) {                  /* AH=12h BL=34h: CX as written (#252) */
-            start = (st->cur_shape >> 8) & 0x1Fu; end = st->cur_shape & 0x1Fu;
-            hidden = ((st->cur_shape >> 8) & 0x20u) != 0 || start > end || start >= (unsigned)cell_h;
+        VddCursorLines(st->CursorShape, (unsigned)cell_h, &start, &end, &hidden);
+        if (st->IsCursorEmulationOff) {                  /* AH=12h BL=34h: CX as written (#252) */
+            start = (st->CursorShape >> 8) & 0x1Fu; end = st->CursorShape & 0x1Fu;
+            hidden = ((st->CursorShape >> 8) & 0x20u) != 0 || start > end || start >= (unsigned)cell_h;
             if (end >= (unsigned)cell_h) end = (unsigned)cell_h - 1u;
         }
-        if (st->cursor_blink && st->time_us) {
+        if (st->IsCursorBlink && st->TimeUs) {
             /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
                half. Integer maths only; no floating point in a VDD. */
-            uint64_t ph = st->time_us() % 533000u;
+            uint64_t ph = st->TimeUs() % 533000u;
             lit = (ph < 266500u);
         }
         if (!hidden && lit) {
-            uint8_t fg = dcell(st, st->cur_row, st->cur_col)[1] & 0x0F;
+            uint8_t fg = dcell(st, st->CursorRow, st->CursorColumn)[1] & 0x0F;
             for (gy = (int)start; gy <= (int)end; ++gy)
                 for (gx = 0; gx < cw; ++gx)              /* all nine: the CRTC does */
-                    st->fb[(st->cur_row*cell_h + gy) * stride
-                           + st->cur_col*cw + gx] = fg;
+                    st->FrameBuffer[(st->CursorRow*cell_h + gy) * stride
+                           + st->CursorColumn*cw + gx] = fg;
         }
     }
 }
@@ -4209,7 +4209,7 @@ static void draw_hw_cursor(video_state *st)
        branch keeps it two lines tall at the bottom of the cell.
      ⚠ `CL < 8` is what stops a shape that ALREADY knows about 16-line cells from
        being scaled twice; `CH < 0x20` leaves the hide bit alone. */
-void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
+void VddCursorLines(uint16_t shape, unsigned cell_h,
                       unsigned *start, unsigned *end, int *hidden)
 {
     unsigned ch = (shape >> 8) & 0x3Fu;
@@ -4239,18 +4239,18 @@ void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
 /* s92: since #266 render_cga stores the 2-bit value ITSELF (an attribute-controller
    index; pal[] maps it through AR0n), so the frame holds what video memory holds and
    there is nothing to undo -- the identity. Kept as the cursor's one question to ask. */
-const uint8_t *vdd_video_cga4_map(const video_state *st)
+const uint8_t *VddVideoCga4Map(const VIDEO_STATE *st)
 {
     static const uint8_t ident[4] = { 0, 1, 2, 3 };
     (void)st;
     return ident;
 }
 
-static void render_cga(video_state *st)
+static void render_cga(VIDEO_STATE *st)
 {
-    const uint8_t *src = st->vmem + VID_TEXT_OFF;
-    int gw = st->gw, gh = st->gh, y, x;
-    int per = st->cga_bpp == 1 ? 8 : 4;             /* pixels per byte          */
+    const uint8_t *src = st->VideoMemory + VIDEO_TEXT_OFFSET;
+    int gw = st->GraphicsWidth, gh = st->GraphicsHeight, y, x;
+    int per = st->CgaBpp == 1 ? 8 : 4;             /* pixels per byte          */
     /* ── #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
          04h/05h (AR12 = 03h), 0-1 in 06h (AR12 = 01h), and pal[] carries it through
          AR0n -> DAC. This drew from a private table -- pixel 1/2/3 as index 11/13/15
@@ -4260,10 +4260,10 @@ static void render_cga(video_state *st)
          never showed. Unchanged picture for an unmodified mode 04h/05h/06h. */
     for (y = 0; y < gh; ++y) {
         const uint8_t *row = src + ((y & 1) ? 0x2000 : 0) + (y >> 1) * (gw / per);
-        uint8_t *out = &st->fb[y * gw];
+        uint8_t *out = &st->FrameBuffer[y * gw];
         for (x = 0; x < gw; ++x) {
             uint8_t b = row[x / per];
-            if (st->cga_bpp == 1)
+            if (st->CgaBpp == 1)
                 out[x] = (uint8_t)((b >> (7 - (x & 7))) & 1);
             else
                 out[x] = (uint8_t)((b >> (6 - 2 * (x & 3))) & 3);
@@ -4301,34 +4301,34 @@ static void render_cga(video_state *st)
      lines to interleave banks rather than to repeat lines (modes 4-6).
      Graphics modes only; trusted only when geom_regs_ok, otherwise the mode's table
      size. Checked against vid_modes[] for every measured mode in video_test. */
-static void vid_geom(const video_state *st, int *w, int *h)
+static void vid_geom(const VIDEO_STATE *st, int *w, int *h)
 {
     uint32_t hde, vde, ov, ms;
-    *w = st->gw; *h = st->gh;
-    if (st->in_vesa || !st->geom_regs_ok) return;
-    if (st->mkind != VID_KIND_PLANAR && st->mkind != VID_KIND_LINEAR8) return;
-    hde = ((uint32_t)st->crtc_reg[0x01] + 1u) * 8u;
-    if (st->attr_mode & 0x40) hde /= 2u;
-    ov  = st->crtc_reg[0x07]; ms = st->crtc_reg[0x09];
-    vde = ((uint32_t)st->crtc_reg[0x12] | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9)) + 1u;
+    *w = st->GraphicsWidth; *h = st->GraphicsHeight;
+    if (st->IsVesa || !st->IsGeometryRegistersOk) return;
+    if (st->ModeKind != VIDEO_KIND_PLANAR && st->ModeKind != VIDEO_KIND_LINEAR8) return;
+    hde = ((uint32_t)st->CrtcRegisters[0x01] + 1u) * 8u;
+    if (st->AttributeMode & 0x40) hde /= 2u;
+    ov  = st->CrtcRegisters[0x07]; ms = st->CrtcRegisters[0x09];
+    vde = ((uint32_t)st->CrtcRegisters[0x12] | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9)) + 1u;
     if (ms & 0x80) vde /= 2u;
-    if (st->crtc_reg[0x17] & 0x01) vde /= (ms & 0x1Fu) + 1u;
+    if (st->CrtcRegisters[0x17] & 0x01) vde /= (ms & 0x1Fu) + 1u;
     if (hde < 64u || hde > NTVDD_FRAME_MAX_WIDTH || vde < 50u || vde > NTVDD_FRAME_MAX_HEIGHT) return;
     *w = (int)hde; *h = (int)vde;
 }
-void vdd_video_geom(const video_state *st, int *w, int *h) { vid_geom(st, w, h); }
+void VddVideoGeometry(const VIDEO_STATE *st, int *w, int *h) { vid_geom(st, w, h); }
 
-static void render_planar(video_state *st)
+static void render_planar(VIDEO_STATE *st)
 {
     int y, xb, b, gw, gh;
     vid_geom(st, &gw, &gh);                            /* #325: the CRTC's size */
-    if (!gw) gw = VID_G12_W;
-    if (!gh) gh = VID_G12_H;
+    if (!gw) gw = VIDEO_MODE12_WIDTH;
+    if (!gh) gh = VIDEO_MODE12_HEIGHT;
     uint32_t bytes = (uint32_t)(gw / 8);
-    uint32_t pitch = (st->crtc_off_seen && st->crtc_offset)
-                     ? (uint32_t)st->crtc_offset * 2u : bytes;
+    uint32_t pitch = (st->IsCrtcOffsetSeen && st->CrtcOffset)
+                     ? (uint32_t)st->CrtcOffset * 2u : bytes;
     /* The LATCHED start address, not the register pair -- see crtc_out case 0x0C. */
-    uint32_t base  = st->crtc_seen ? (uint32_t)st->crtc_start_live : 0u;
+    uint32_t base  = st->IsCrtcSeen ? (uint32_t)st->CrtcStartLive : 0u;
     /* ── SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
          is how a scrolling game pins a status panel to the bottom of the screen while
          the level pans behind it. Lemmings does exactly this, and without it the panel
@@ -4340,25 +4340,25 @@ static void render_planar(video_state *st)
          A value that is still past the end after that means "no split", which is the
          power-on state (all ones) and must stay inert. */
     uint32_t split = (uint32_t)gh;                 /* gh = no split */
-    if (st->crtc_line_compare) {
-        uint32_t lc = st->crtc_line_compare;
+    if (st->CrtcLineCompare) {
+        uint32_t lc = st->CrtcLineCompare;
         if (lc >= (uint32_t)gh && (lc / 2u) < (uint32_t)gh) lc /= 2u;
         if (lc < (uint32_t)gh) split = lc;
     }
     /* ► PEL PANNING (AR13): shift the picture left 0-7 pixels, the fine half of a smooth
          scroll (s83). Below the split line the pan is dropped when AR10 bit 5 (PPM) is
          set -- which is how a panel stays still under a panning playfield. */
-    uint32_t pan  = (st->disp_pan & 0x0Fu) < 8u ? (uint32_t)(st->disp_pan & 7u) : 0u;
-    int      ppm  = (st->attr_mode >> 5) & 1;
+    uint32_t pan  = (st->DisplayPan & 0x0Fu) < 8u ? (uint32_t)(st->DisplayPan & 7u) : 0u;
+    int      ppm  = (st->AttributeMode >> 5) & 1;
     if (!pitch) pitch = bytes;
     for (y = 0; y < gh; ++y) {
         uint32_t row = (y < (int)split) ? base + (uint32_t)y * pitch
                                         : (uint32_t)(y - (int)split) * pitch;
         uint32_t sh  = (y >= (int)split && ppm) ? 0u : pan;
-        uint8_t *out = &st->fb[y * gw];
+        uint8_t *out = &st->FrameBuffer[y * gw];
         if (!sh) {
             for (xb = 0; xb < (int)bytes; ++xb) {
-                uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;
+                uint32_t o = (row + (uint32_t)xb) % (uint32_t)VIDEO_PLANE_SIZE;
                 uint8_t p0 = PL(st,0)[o], p1 = PL(st,1)[o];
                 uint8_t p2 = PL(st,2)[o], p3 = PL(st,3)[o];
                 for (b = 0; b < 8; ++b) {
@@ -4370,7 +4370,7 @@ static void render_planar(video_state *st)
             int x;
             for (x = 0; x < gw; ++x) {
                 uint32_t sx = (uint32_t)x + sh;
-                uint32_t o  = (row + (sx >> 3)) % (uint32_t)VID_PLANE_SIZE;
+                uint32_t o  = (row + (sx >> 3)) % (uint32_t)VIDEO_PLANE_SIZE;
                 uint8_t  m  = (uint8_t)(0x80 >> (sx & 7));
                 out[x] = (uint8_t)(((PL(st,0)[o]&m)?1:0) | ((PL(st,1)[o]&m)?2:0)
                                  | ((PL(st,2)[o]&m)?4:0) | ((PL(st,3)[o]&m)?8:0));
@@ -4392,7 +4392,7 @@ static void render_planar(video_state *st)
    busiest. Exact for a title/menu screen, which is what this is for; a game
    double-buffering two equally-busy pages may pick either, and that is a known
    limit rather than a surprise. */
-static uint32_t modey_page(const video_state *st)
+static uint32_t modey_page(const VIDEO_STATE *st)
 {
     /* ► PAGES ARE 0x4000 APART, NOT 16000. A 320x200 mode-Y page OCCUPIES 16000
          bytes per plane, but programs align the pages to 0x4000 so the page
@@ -4405,16 +4405,16 @@ static uint32_t modey_page(const video_state *st)
     uint32_t page = 0, bestn = 0, pg;
     for (pg = 0; pg < 4; ++pg) {
         uint32_t base = pg * 0x4000u, i, n = 0;
-        if (base + 16000u > VID_Y_PLANE) break;
-        for (i = 0; i < 16000u; i += 8) if (st->yplane[0][base + i]) ++n;
+        if (base + 16000u > VIDEO_Y_PLANE_SIZE) break;
+        for (i = 0; i < 16000u; i += 8) if (st->YPlanes[0][base + i]) ++n;
         if (n > bestn) { bestn = n; page = pg; }
     }
     return page * 0x4000u;
 }
 
-static void render_modey(video_state *st)
+static void render_modey(VIDEO_STATE *st)
 {
-    uint32_t pitch = (uint32_t)(st->crtc_offset ? st->crtc_offset : 40) * 2u;
+    uint32_t pitch = (uint32_t)(st->CrtcOffset ? st->CrtcOffset : 40) * 2u;
     /* ► READ THE PAGE FLIP; DO NOT GUESS IT. modey_page() picks the busiest page out
          of the snapshot, and its own commentary admits the limit: "a game
          double-buffering two equally-busy pages may pick either". Doom double-buffers
@@ -4426,12 +4426,12 @@ static void render_modey(video_state *st)
          and the handler took the whole word as an index and dropped the data, so
          claiming the port broke the flip outright -- strictly worse than not claiming
          it. With index+data writes honoured, the register is the answer. */
-    uint32_t start = st->crtc_seen ? st->crtc_start_live : modey_page(st);
+    uint32_t start = st->IsCrtcSeen ? st->CrtcStartLive : modey_page(st);
     /* ► PEL PANNING (AR13), IN 256-COLOUR UNITS: the value counts half-pixels here, so
          0/2/4/6 shift the picture left by 0-3 pixels -- the part of a smooth scroll the
          whole-byte start address cannot express (4 pixels per byte in this mode). The
          shifted row simply reads on into the next bytes, as the address counter does. */
-    uint32_t pan = (uint32_t)((st->disp_pan & 7u) >> 1);
+    uint32_t pan = (uint32_t)((st->DisplayPan & 7u) >> 1);
     /* ► THE SELECTED PLANE IS READ LIVE. Its most recent bytes are in the aperture
          and nowhere else -- once a static screen stops changing the mask, no further
          flush ever comes, and that plane's columns would render as whatever was last
@@ -4442,26 +4442,26 @@ static void render_modey(video_state *st)
        written most recently, so reading it for the selected plane pulls in another
        plane's pixels -- which is the same error as the whole-aperture copy, wearing a
        different hat. modey_flush() has already moved everything that was written. */
-    if (!st->ymap_plane) modey_flush(st);
+    if (!st->YMapPlane) modey_flush(st);
     { int y, x2;
       const uint8_t *pl[4];
       for (x2 = 0; x2 < 4; ++x2)
-          pl[x2] = st->ymap_plane ? st->ymap_plane(st->ymap_ctx, x2) : st->yplane[x2];
+          pl[x2] = st->YMapPlane ? st->YMapPlane(st->YMapContext, x2) : st->YPlanes[x2];
       int mw, mh;
       vid_geom(st, &mw, &mh);                          /* #325: Mode X is 320x240 */
       for (y = 0; y < mh; ++y) {
           uint32_t row = start + (uint32_t)y * pitch;
-          uint8_t *dst = st->fb + (uint32_t)y * (uint32_t)mw;
+          uint8_t *dst = st->FrameBuffer + (uint32_t)y * (uint32_t)mw;
           for (x2 = 0; x2 < mw; ++x2)
           { uint32_t sx = (uint32_t)x2 + pan;
-            dst[x2] = pl[sx & 3][(row + (sx >> 2)) & (VID_Y_PLANE - 1u)]; }
+            dst[x2] = pl[sx & 3][(row + (sx >> 2)) & (VIDEO_Y_PLANE_SIZE - 1u)]; }
       } }
 }
 
 static void vid_frame(void *self)
 {
-    video_state *st = (video_state *)self;
-    if (!st->vmem) return;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    if (!st->VideoMemory) return;
     /* ── THE START ADDRESS IS LATCHED ONCE PER FRAME, as the hardware's address
          counter loads it at the vertical retrace. Rendering straight from the
          register pair means a frame built between the two byte writes of a page flip
@@ -4473,26 +4473,26 @@ static void vid_frame(void *self)
          NOT the cause of the flicker it was written to explain. Kept because it is
          what the hardware does and the hazard is real for other guests. */
     vid_latch(st, 1);                /* start address + pel panning as displayed (s83) */
-    if (st->in_vesa) {                                 /* VESA: sync window -> vram */
+    if (st->IsVesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
-        st->frame.Width = st->vesa_w; st->frame.Height = st->vesa_h;
-        if (st->vesa_bpp > 8) {                        /* direct colour -> ARGB */
+        st->Frame.Width = st->VesaWidth; st->Frame.Height = st->VesaHeight;
+        if (st->VesaBpp > 8) {                        /* direct colour -> ARGB */
             vesa_scan_written(st);
             vesa_to_argb(st);
-            st->frame.BitsPerPixel = 32;
-            st->frame.Stride = (uint32_t)st->vesa_w * 4;
-            st->frame.Pixels = (const uint8_t *)st->vesa_argb;
-            st->frame.Palette = 0;                     /* contract: NULL unless bpp==8 */
+            st->Frame.BitsPerPixel = 32;
+            st->Frame.Stride = (uint32_t)st->VesaWidth * 4;
+            st->Frame.Pixels = (const uint8_t *)st->VesaArgb;
+            st->Frame.Palette = 0;                     /* contract: NULL unless bpp==8 */
         } else {
-            st->frame.BitsPerPixel = 8;
+            st->Frame.BitsPerPixel = 8;
             /* ⚠ THE STRIDE IS THE MODE'S PITCH, NOT ITS WIDTH. Equal for 8bpp, and
                  that equality is why this read `= st->vesa_w` and nobody noticed.
                  And the pitch is the 4F06 LOGICAL one, the origin the 4F07 start:
                  a page flip is nothing more than this pointer moving. */
-            st->frame.Stride = st->vesa_stride ? st->vesa_stride : st->vesa_w;
-            st->frame.Pixels = st->vesa_vram + st->vesa_org_live; st->frame.Palette = st->pal;
+            st->Frame.Stride = st->VesaStride ? st->VesaStride : st->VesaWidth;
+            st->Frame.Pixels = st->VesaVram + st->VesaOriginLive; st->Frame.Palette = st->Palette;
         }
-    } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
+    } else if (st->ModeKind == VIDEO_KIND_LINEAR8 && !st->IsChain4) {  /* mode Y */
         /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,
              but present time is an ARBITRARY moment: it can land mid-write, and
              which planes get overwritten then depends purely on timing. That made
@@ -4505,33 +4505,33 @@ static void vid_frame(void *self)
         int mw, mh;
         render_modey(st);
         vid_geom(st, &mw, &mh);                        /* #325 */
-        st->frame.Width = (uint16_t)mw; st->frame.Height = (uint16_t)mh; st->frame.BitsPerPixel = 8;
-        st->frame.Stride = (uint32_t)mw; st->frame.Pixels = st->fb; st->frame.Palette = st->pal;
-    } else if (st->mkind == VID_KIND_LINEAR8) {        /* graphics: vmem is the FB */
-        st->frame.Width = st->gw; st->frame.Height = st->gh; st->frame.BitsPerPixel = 8;
-        st->frame.Stride = st->gw; st->frame.Pixels = st->vmem; st->frame.Palette = st->pal;
-    } else if (st->mkind == VID_KIND_CGA) {            /* CGA: de-interleave -> fb */
+        st->Frame.Width = (uint16_t)mw; st->Frame.Height = (uint16_t)mh; st->Frame.BitsPerPixel = 8;
+        st->Frame.Stride = (uint32_t)mw; st->Frame.Pixels = st->FrameBuffer; st->Frame.Palette = st->Palette;
+    } else if (st->ModeKind == VIDEO_KIND_LINEAR8) {        /* graphics: vmem is the FB */
+        st->Frame.Width = st->GraphicsWidth; st->Frame.Height = st->GraphicsHeight; st->Frame.BitsPerPixel = 8;
+        st->Frame.Stride = st->GraphicsWidth; st->Frame.Pixels = st->VideoMemory; st->Frame.Palette = st->Palette;
+    } else if (st->ModeKind == VIDEO_KIND_CGA) {            /* CGA: de-interleave -> fb */
         render_cga(st);
-        st->frame.Width = st->gw; st->frame.Height = st->gh; st->frame.BitsPerPixel = 8;
-        st->frame.Stride = st->gw; st->frame.Pixels = st->fb; st->frame.Palette = st->pal;
-    } else if (st->mkind == VID_KIND_PLANAR) {         /* planar: combine -> fb    */
+        st->Frame.Width = st->GraphicsWidth; st->Frame.Height = st->GraphicsHeight; st->Frame.BitsPerPixel = 8;
+        st->Frame.Stride = st->GraphicsWidth; st->Frame.Pixels = st->FrameBuffer; st->Frame.Palette = st->Palette;
+    } else if (st->ModeKind == VIDEO_KIND_PLANAR) {         /* planar: combine -> fb    */
         int pw, ph;
         render_planar(st);
         vid_geom(st, &pw, &ph);                        /* #325 */
-        if (!pw) pw = VID_G12_W;
-        if (!ph) ph = VID_G12_H;
-        st->frame.Width = (uint16_t)pw; st->frame.Height = (uint16_t)ph; st->frame.BitsPerPixel = 8;
-        st->frame.Stride = (uint32_t)pw; st->frame.Pixels = st->fb; st->frame.Palette = st->pal;
+        if (!pw) pw = VIDEO_MODE12_WIDTH;
+        if (!ph) ph = VIDEO_MODE12_HEIGHT;
+        st->Frame.Width = (uint16_t)pw; st->Frame.Height = (uint16_t)ph; st->Frame.BitsPerPixel = 8;
+        st->Frame.Stride = (uint32_t)pw; st->Frame.Pixels = st->FrameBuffer; st->Frame.Palette = st->Palette;
     } else {                                           /* text: render glyphs      */
         /* Geometry now follows the MODE, not a fixed 80x25 -- a 40-column mode
            renders 320 pixels wide instead of pretending to be 640. */
-        vdd_video_render(st);
-        st->frame.Width = (uint16_t)(st->cols * text_cw(st));   /* #324: 9-dot cells */
-        st->frame.Height = (uint16_t)(st->rows * (st->cell_h ? st->cell_h : VID_CELL_H));
-        vdd_video_bda_sync(st);                        /* cursor moved by teletype etc. */
-        st->frame.BitsPerPixel = 8;
-        st->frame.Stride = st->frame.Width;
-        st->frame.Pixels = st->fb; st->frame.Palette = st->pal;
+        VddVideoRender(st);
+        st->Frame.Width = (uint16_t)(st->Columns * text_cw(st));   /* #324: 9-dot cells */
+        st->Frame.Height = (uint16_t)(st->Rows * (st->CellHeight ? st->CellHeight : VIDEO_CELL_HEIGHT));
+        VddVideoBdaSync(st);                        /* cursor moved by teletype etc. */
+        st->Frame.BitsPerPixel = 8;
+        st->Frame.Stride = st->Frame.Width;
+        st->Frame.Pixels = st->FrameBuffer; st->Frame.Palette = st->Palette;
     }
     /* ── #266: SR1 BIT 5, "SCREEN OFF", BLANKS THE PICTURE. The sequencer stops feeding
          the attribute controller, so the monitor sees black for as long as the bit is
@@ -4546,17 +4546,17 @@ static void vid_frame(void *self)
          VESA's window sync) must not stall while the screen is dark. frame_touch drops
          the raster-split arrays for a blanked frame. A mode set clears the bit (the
          measured SR1 of every mode has bit 5 = 0). */
-    st->blanked = (uint8_t)((st->seq_reg[1] & 0x20u) != 0);
-    if (st->blanked) {
+    st->IsBlanked = (uint8_t)((st->SequencerRegisters[1] & 0x20u) != 0);
+    if (st->IsBlanked) {
         static uint32_t black[256];
         if (!black[0]) { int i; for (i = 0; i < 256; ++i) black[i] = 0xFF000000u; }
-        st->frame.BitsPerPixel = 8; st->frame.Stride = 0;
-        st->frame.Pixels = st->fb; st->frame.Palette = black;
+        st->Frame.BitsPerPixel = 8; st->Frame.Stride = 0;
+        st->Frame.Pixels = st->FrameBuffer; st->Frame.Palette = black;
     }
-    st->dirty = 0;
+    st->IsDirty = 0;
 }
 
-void vdd_video_putc(video_state *st, uint8_t ch) { teletype(st, ch); st->dirty = 1; }
+void VddVideoPutChar(VIDEO_STATE *st, uint8_t ch) { teletype(st, ch); st->IsDirty = 1; }
 
 /* ── THE REGISTER FILE AS TEXT. (docs/inventory/vga.md) ──────────────────────────────
      Two things, and the second is the one that matters: every index with its value,
@@ -4601,39 +4601,39 @@ static char *rd_group(char *p, const char *name, const uint8_t *reg,
     return p;
 }
 
-int vdd_video_regs_dump(const video_state *st, char *out, int cap)
+int VddVideoRegistersDump(const VIDEO_STATE *st, char *out, int cap)
 {
     char *p = out;
     /* Worst case is the four groups at ~7 bytes an entry plus the externals; 1600 is
        comfortably over it. Refuse rather than overrun -- this runs inside the exit
        report, where a smashed buffer would take the whole report with it. */
     if (!st || !out || cap < 1600) return 0;
-    p = rd_str(p, "STAGE2: VGAREG ext misc=0x");   p = rd_hex2(p, st->misc_out);
-    p = rd_str(p, "(w=");                          p = rd_dec(p, st->misc_w);
-    p = rd_str(p, ") feat=0x");                    p = rd_hex2(p, st->feat_ctrl);
-    p = rd_str(p, "(w=");                          p = rd_dec(p, st->feat_w);
-    p = rd_str(p, ") dacmask=0x");                 p = rd_hex2(p, st->dac_mask);
-    p = rd_str(p, "(w=");                          p = rd_dec(p, st->dacmask_w);
-    p = rd_str(p, ") vgaen=0x");                   p = rd_hex2(p, st->vga_enable);
-    p = rd_str(p, "(w=");                          p = rd_dec(p, st->vgaen_w);
+    p = rd_str(p, "STAGE2: VGAREG ext misc=0x");   p = rd_hex2(p, st->MiscOutput);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->MiscWrites);
+    p = rd_str(p, ") feat=0x");                    p = rd_hex2(p, st->FeatureControl);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->FeatureWrites);
+    p = rd_str(p, ") dacmask=0x");                 p = rd_hex2(p, st->DacMask);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->DacMaskWrites);
+    p = rd_str(p, ") vgaen=0x");                   p = rd_hex2(p, st->VgaEnable);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->VgaEnableWrites);
     /* Say so in the artefact, not only in the source: an unwritten external register
        is OUR spec-derived default and has never been checked against a real card. */
-    p = rd_str(p, ") cr11wp_refused=");            p = rd_dec(p, st->crtc_wp_refused);
+    p = rd_str(p, ") cr11wp_refused=");            p = rd_dec(p, st->CrtcWriteProtectRefused);
     p = rd_str(p, "  [unwritten externals are spec defaults;"
                   " InputStatus0 reads 0x10 -- MEASURED on PCem's IBM VGA ROM,"
                   " all 12 modes]\r\n");
-    p = rd_group(p, "SEQ ", st->seq_reg,  st->seq_w,   8);
-    p = rd_group(p, "CRTC", st->crtc_reg, st->crtc_w, 32);
-    p = rd_group(p, "GC  ", st->gc_reg,   st->gc_w,   16);
-    p = rd_group(p, "AC  ", st->attr_reg, st->attr_w, 32);
+    p = rd_group(p, "SEQ ", st->SequencerRegisters,  st->SequencerWrites,   8);
+    p = rd_group(p, "CRTC", st->CrtcRegisters, st->CrtcWrites, 32);
+    p = rd_group(p, "GC  ", st->GcRegisters,   st->GcWrites,   16);
+    p = rd_group(p, "AC  ", st->AttributeRegisters, st->AttributeWrites, 32);
     return (int)(p - out);
 }
 
-void vdd_video_reset(void *self)
+void VddVideoReset(void *self)
 {
-    video_state *st = (video_state *)self;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
     /* ── THE EXTERNAL REGISTERS' POWER-ON VALUES. (inventory step 1) ────────────────
-         Only reached once, from vdd_video_init -- a mode set does NOT come through
+         Only reached once, from VddVideoInitialize -- a mode set does NOT come through
          here -- so the write counters below accumulate for the whole run and a
          `*_w == 0` really does mean "this guest never wrote that index".
        ⚠ misc_out = 0x67 is what a VGA BIOS leaves after a mode 3 set (colour at 3Dx,
@@ -4642,7 +4642,7 @@ void vdd_video_reset(void *self)
          6.22 but covers only the AC palette and the DAC, so there is no measured
          table for the externals yet. Step 2's probe against the PCem ET4000 is what
          turns this from spec-correct into verified. Until then the dump marks it. */
-    st->feat_ctrl = 0x00; st->vga_enable = 0x01; st->dac_mask = 0xFF;
+    st->FeatureControl = 0x00; st->VgaEnable = 0x01; st->DacMask = 0xFF;
     /* ⚠ AND THE POWER-ON STATE IS MODE 3'S, NOT ZEROES. A real machine reaches DOS
          with its BIOS having set mode 3, so the register file holds mode 3's values
          before a guest runs at all -- and most guests never call AH=00h for text,
@@ -4650,45 +4650,45 @@ void vdd_video_reset(void *self)
          path is what makes `VGAREG` describe a plausible card from the first line.
          vga_load_modedef sets misc_out too, so it is not set separately. */
     vga_load_modedef(st, 0x03);
-    st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
-    st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
-    st->cell_h = VID_CELL_H; st->blink = 1; st->user_font_on = 0;
-    st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);
-    st->crtc_cursor = 0;
-    st->mode_qn = 0;
-    st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
-    {   int pg; for (pg = 0; pg < 8; ++pg) st->pg_row[pg] = st->pg_col[pg] = 0; }
-    st->scan_sel = 2; st->grey_sum = 0; st->cur_emul_off = 0; st->vid_off = 0;   /* #252 */
-    st->dac_widx = st->dac_ridx = st->dac_comp = 0;
-    st->seq_index = st->gc_index = 0;
-    st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
-    st->chain4 = 1; st->y_mask = 0x0F;
+    st->Mode = 3; st->Columns = VIDEO_COLUMNS; st->Rows = VIDEO_ROWS;
+    st->ModeKind = VIDEO_KIND_TEXT; st->GraphicsWidth = VIDEO_FRAME_WIDTH; st->GraphicsHeight = VIDEO_FRAME_HEIGHT;
+    st->CellHeight = VIDEO_CELL_HEIGHT; st->IsBlink = 1; st->IsUserFontOn = 0;
+    st->AttributeMode = (uint8_t)(st->AttributeMode | 0x08u);
+    st->CrtcCursor = 0;
+    st->ModeQueryCount = 0;
+    st->CursorRow = st->CursorColumn = 0; st->CursorShape = 0x0607; st->Page = 0;
+    {   int pg; for (pg = 0; pg < 8; ++pg) st->PageRow[pg] = st->PageColumn[pg] = 0; }
+    st->ScanSelect = 2; st->IsGreySum = 0; st->IsCursorEmulationOff = 0; st->IsVideoOff = 0;   /* #252 */
+    st->DacWriteIndex = st->DacReadIndex = st->DacComponent = 0;
+    st->SequencerIndex = st->GcIndex = 0;
+    st->MapMask = 0x0F; st->BitMask = 0xFF; st->WriteMode = 0;
+    st->IsChain4 = 1; st->YMask = 0x0F;
     load_default_crtc(st);                      /* mode 3's CRTC, measured not assumed */
-    st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
-    st->read_mode = st->col_compare = st->col_dontcare = 0;
-    st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
-    st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
-    st->vesa_mode_flags = 0; st->modeset_noclear = 0;   /* 40:87h = 60h at power-on */
-    st->vesa_dacwidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
+    st->SetReset = st->EnableSetReset = st->FunctionRotate = st->ReadMap = 0;
+    st->ReadMode = st->ColorCompare = st->ColorDontCare = 0;
+    st->Latch[0] = st->Latch[1] = st->Latch[2] = st->Latch[3] = 0;
+    st->IsVesa = 0; st->VesaMode = 0; st->VesaBank = 0;
+    st->VesaModeFlags = 0; st->IsModeSetNoClear = 0;   /* 40:87h = 60h at power-on */
+    st->VesaDacWidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     load_default_palette(st);
-    if (st->vmem) clear_text(st, 0x07);
+    if (st->VideoMemory) clear_text(st, 0x07);
     /* #266: the power-on font vectors and CGA colour select (mode 3's 30h). */
-    st->cga_sel = 0x30; st->blanked = 0;
-    vid_i43_rom(st, st->cell_h);
+    st->CgaSelect = 0x30; st->IsBlanked = 0;
+    vid_i43_rom(st, st->CellHeight);
     vid_i1f_rom(st);
-    vdd_video_bda_sync(st);
-    st->dirty = 1;
+    VddVideoBdaSync(st);
+    st->IsDirty = 1;
 }
 
-int vdd_video_init(VDD_BUS *b, void *self)
+int VddVideoInitialize(VDD_BUS *b, void *self)
 {
-    video_state *st = (video_state *)self;
-    st->bus = b;
+    VIDEO_STATE *st = (VIDEO_STATE *)self;
+    st->Bus = b;
     /* Disarmed before the reset, so no offset a guest can produce matches. */
-    st->watch_off = 0xFFFFFFFFu;
-    vdd_video_reset(st);
-    st->modey_gap = MODEY_GAP_DEFAULT;
-    if (VddClaimMemory(b, VID_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;
+    st->WatchOffset = 0xFFFFFFFFu;
+    VddVideoReset(st);
+    st->ModeYGap = MODEY_GAP_DEFAULT;
+    if (VddClaimMemory(b, VIDEO_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;
     if (VddClaimInterrupt(b, 0x10, int10, st)) return -1;
     if (VddClaimPorts(b, 0x3C4, 0x3C5, seq_in, seq_out, st)) return -1;  /* Sequencer */
     /* ⚠ THE OLD WARNING HERE ("DO NOT CLAIM CRTC 0x3D4/0x3D5", three regressions,

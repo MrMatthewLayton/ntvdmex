@@ -48,8 +48,8 @@
 #include "vdd_bus.h"
 #include "vdd_video.h"
 
-static uint8_t g_vmem[VID_APERTURE_SIZE];
-static video_state vid;
+static uint8_t g_vmem[VIDEO_APERTURE_SIZE];
+static VIDEO_STATE vid;
 static uint64_t g_us = 0;
 static uint64_t clk(void) { return g_us; }
 
@@ -61,14 +61,14 @@ int main(void)
 
     memset(&bus, 0, sizeof bus);
     memset(&vid, 0, sizeof vid);
-    vid.vmem = g_vmem;
-    vdd_video_init(&bus, &vid);
+    vid.VideoMemory = g_vmem;
+    VddVideoInitialize(&bus, &vid);
 
     /* Mode 0Dh: Lemmings' gameplay mode, so the CRTC path under test is the one a
        real guest drives -- 449 total / 400 active / 406 blank start. */
-    memset(&r, 0, sizeof r); r.eax = 0x000D;
+    memset(&r, 0, sizeof r); r.Eax = 0x000D;
     VddBusDeliverInterrupt(&bus, 0x10, &r);
-    vid.time_us = clk;
+    vid.TimeUs = clk;
 
     /* The clock advances a microsecond per poll, which is FASTER than a real guest
        manages (it sees no advance at all on 77% of polls) -- so this exercises the

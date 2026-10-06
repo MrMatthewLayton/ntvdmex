@@ -909,7 +909,7 @@ static CMOS_STATE   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
 static FDC_STATE    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static PIC_STATE    g_pic;       static NTVDD_DEVICE g_pic_dev;
-static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
+static VIDEO_STATE  g_vid;       static NTVDD_DEVICE g_vid_dev;
 static INPUT_STATE  g_in;        static NTVDD_DEVICE g_in_dev;
 static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
 /* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
@@ -5827,7 +5827,7 @@ static void host_conout(void *ctx, uint8_t ch)
 {
     (void)ctx;
     HOST_LOCK();
-    vdd_video_putc(&g_vid, ch);
+    VddVideoPutChar(&g_vid, ch);
     if (g_stdio != INVALID_HANDLE_VALUE) {
         if (g_stdio_n < sizeof(g_stdio_buf)) g_stdio_buf[g_stdio_n++] = (char)ch;
         if (ch == '\n' || g_stdio_n >= sizeof(g_stdio_buf)) stdio_flush();
@@ -6639,7 +6639,7 @@ static void cpuspd_recompute(void)
     /* Pay for the per-trap timestamping only while it is actually being used. */
     InterlockedExchange(&g_exec_timing_on, bp < 10000 ? 1 : 0);
     /* #225: a held guest must still see every vertical retrace (see vbl_owe_on). */
-    g_vid.vbl_owe_on = (uint8_t)(bp < 10000 ? 1 : 0);
+    g_vid.IsVblOweOn = (uint8_t)(bp < 10000 ? 1 : 0);
     /* The period depends on the duty, so a speed change invalidates it. Zero means
        "work it out again on the next pass" -- including re-running auto-detect's
        arithmetic, which is why the measured round trip is kept separately. */
@@ -6987,8 +6987,8 @@ static void host_screenshot(void)
        anything but 8-bit -- the user pressed Ctrl+F5 in Heaven7's direct-colour part and
        got nothing, with nothing said. */
     HOST_LOCK();
-    w = g_vid.frame.Width; h = g_vid.frame.Height; bpp = g_vid.frame.BitsPerPixel;
-    src = g_vid.frame.Pixels;
+    w = g_vid.Frame.Width; h = g_vid.Frame.Height; bpp = g_vid.Frame.BitsPerPixel;
+    src = g_vid.Frame.Pixels;
     if (!src || !w || !h || (bpp != 8 && bpp != 32)) { HOST_UNLOCK(); return; }
     stride = (bpp == 8) ? ((w + 3) & ~3u) : w * 4u;    /* DIB rows are 4-byte aligned */
     pal_n  = (bpp == 8) ? 256 : 0;
@@ -7006,7 +7006,7 @@ static void host_screenshot(void)
     bih->biSizeImage = img_sz; bih->biClrUsed = pal_n; bih->biClrImportant = pal_n;
     { DWORD i; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
       for (i = 0; i < pal_n; ++i) {
-          uint32_t c = g_vid.frame.Palette ? g_vid.frame.Palette[i] : 0;
+          uint32_t c = g_vid.Frame.Palette ? g_vid.Frame.Palette[i] : 0;
           pal[i*4+0] = (BYTE)(c & 0xFF);          /* B */
           pal[i*4+1] = (BYTE)((c >> 8) & 0xFF);   /* G */
           pal[i*4+2] = (BYTE)((c >> 16) & 0xFF);  /* R */
@@ -7015,7 +7015,7 @@ static void host_screenshot(void)
     bits = dib + sizeof(BITMAPINFOHEADER) + pal_n * 4;
     { DWORD y, x, rowb = (bpp == 8) ? w : w * 4u;
       for (y = 0; y < h; ++y) {                    /* flip: DIB row 0 is the bottom   */
-          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.frame.Stride;
+          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.Frame.Stride;
           BYTE *dr = bits + (size_t)y * stride;
           for (x = 0; x < rowb; ++x) dr[x] = sr[x];
           if (bpp == 32) for (x = 3; x < rowb; x += 4) dr[x] = 0;   /* XRGB: no alpha */
@@ -7107,11 +7107,11 @@ static void planes_dump_beside(const char *bmp_path)
     f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) return;
     HOST_LOCK();
-    hdr[0] = g_vid.crtc_start_live; hdr[1] = g_vid.crtc_offset;
-    hdr[2] = g_vid.gw;              hdr[3] = g_vid.gh;
+    hdr[0] = g_vid.CrtcStartLive; hdr[1] = g_vid.CrtcOffset;
+    hdr[2] = g_vid.GraphicsWidth;              hdr[3] = g_vid.GraphicsHeight;
     WriteFile(f, hdr, sizeof hdr, &wr, NULL);
     for (pl = 0; pl < 4; ++pl)                        /* the live backing: host sections when remapped (s74b) */
-        WriteFile(f, g_vid.ymap_plane ? g_vid.ymap_plane(g_vid.ymap_ctx, pl) : g_vid.plane[pl], VID_PLANE_SIZE, &wr, NULL);
+        WriteFile(f, g_vid.YMapPlane ? g_vid.YMapPlane(g_vid.YMapContext, pl) : g_vid.Planes[pl], VIDEO_PLANE_SIZE, &wr, NULL);
     HOST_UNLOCK();
     CloseHandle(f);
 }
@@ -7463,15 +7463,15 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              the breakpoint kill; 700k reads with no edge is either "the reads
              never reach status_in" or "the model never asserts bit 3", and only
              these two numbers can tell them apart. (session 62) */
-        q = zput(q, " p3da=0x");     q = zhex(q, g_vid.p3da_reads);
-        q = zput(q, "/edges=0x");    q = zhex(q, g_vid.vbl_edges);
-        q = zput(q, "/last=0x");     q = zhexb(q, g_vid.retrace);
+        q = zput(q, " p3da=0x");     q = zhex(q, g_vid.Port3DaReads);
+        q = zput(q, "/edges=0x");    q = zhex(q, g_vid.VblEdges);
+        q = zput(q, "/last=0x");     q = zhexb(q, g_vid.Retrace);
         /* ► THE LIVE DISPLAY START, so a VRAM watchpoint can be AIMED. The exit
              report prints it once, at exit, when the guest is back in text mode --
              useless for `offset = start + y*stride + x/8` during gameplay. (s68) */
-        q = zput(q, " crtc=0x");     q = zhex(q, g_vid.crtc_start_live);
-        q = zput(q, "/flips=0x");    q = zhex(q, g_vid.crtc_start_writes);
-        q = zput(q, "/ofs=0x");      q = zhexb(q, g_vid.crtc_offset);
+        q = zput(q, " crtc=0x");     q = zhex(q, g_vid.CrtcStartLive);
+        q = zput(q, "/flips=0x");    q = zhex(q, g_vid.CrtcStartWrites);
+        q = zput(q, "/ofs=0x");      q = zhexb(q, g_vid.CrtcOffset);
         /* ► AND THE CLOCK THOSE TWO ARE RATES AGAINST. Without it the only time axis
              on this line is irq0, and irq0 is the PIT -- which a guest REPROGRAMS.
              Reading frames-per-second off a beat count that the guest itself can
@@ -7506,11 +7506,11 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         if (g_hb_ds) {
             uint32_t dsb = (uint32_t)g_hb_ds << 4;
             q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
-            q = zput(q, " dacrow[0-1,2-159,160+,vbl]="); q = zdec(q, g_vid.dac_row_hist[0]);
-            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[1]);
-            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[2]);
-            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[3]);
-            q = zput(q, " lastrow=0x"); q = zhex(q, (DWORD)g_vid.dac_last_row);
+            q = zput(q, " dacrow[0-1,2-159,160+,vbl]="); q = zdec(q, g_vid.DacRowHistogram[0]);
+            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[1]);
+            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[2]);
+            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[3]);
+            q = zput(q, " lastrow=0x"); q = zhex(q, (DWORD)g_vid.DacLastRow);
             BYTE pb6[6], pb1; SIZE_T got = 0;
             q = zput(q, " pal2668=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x2668), pb6, 6, &got)
@@ -7817,13 +7817,13 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
            ZAR) never reaches the STAGE2 summary, and the corpus sweep read "no line"
            as "no data" for exactly the three guests it most wanted. (s74b) */
         { int i, any = 0; q = zput(q, "  VESA calls by sub-function:");
-          for (i = 0; i < 0x16; ++i) if (g_vid.vesa_calls[i]) {
-              any = 1; q = zput(q, " 4F"); q = zhexb(q, (unsigned)i); q = zput(q, "x"); q = zhex(q, g_vid.vesa_calls[i]); }
+          for (i = 0; i < 0x16; ++i) if (g_vid.VesaCalls[i]) {
+              any = 1; q = zput(q, " 4F"); q = zhexb(q, (unsigned)i); q = zput(q, "x"); q = zhex(q, g_vid.VesaCalls[i]); }
           if (!any) q = zput(q, " none");
-          if (g_vid.vbe_pm_bank_n | g_vid.vbe_pm_start_n | g_vid.vbe_pm_rej) {   /* #53 */
-              q = zput(q, " | 4F0A-block banks=0x"); q = zhex(q, g_vid.vbe_pm_bank_n);
-              q = zput(q, " starts=0x"); q = zhex(q, g_vid.vbe_pm_start_n);
-              q = zput(q, " refused=0x"); q = zhex(q, g_vid.vbe_pm_rej); }
+          if (g_vid.VbePmBankCount | g_vid.VbePmStartCount | g_vid.VbePmRejected) {   /* #53 */
+              q = zput(q, " | 4F0A-block banks=0x"); q = zhex(q, g_vid.VbePmBankCount);
+              q = zput(q, " starts=0x"); q = zhex(q, g_vid.VbePmStartCount);
+              q = zput(q, " refused=0x"); q = zhex(q, g_vid.VbePmRejected); }
           q = zput(q, "\r\n"); }
         log_append(LOG_PATH, b, q); serial_out(b, q);
         /* ── ⛔ AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH. ──────────
@@ -7835,7 +7835,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         modey_tl_report();   /* north star 1: the guests that need it leave this way */
         gus_report();        /* north star 2: and so does heaven7 */
         {   static char vr2[2048];
-            int n2 = vdd_video_regs_dump(&g_vid, vr2, (int)sizeof vr2);
+            int n2 = VddVideoRegistersDump(&g_vid, vr2, (int)sizeof vr2);
             if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
         host_rec_finish();
         ExitProcess(3);
@@ -8302,10 +8302,10 @@ static DWORD         g_ms_edges;            /* transitions seen -- STAGE2 eviden
      MOUSEI33 line said `text=0 mkind=0 fh=0 vmaxy=1df` -- mode 3, and none of it
      reaching the arithmetic.
    ⇒ g_vid.gw/gh are the MODE's extent, set by the mode set itself and always
-     populated (vdd_video_reset seeds them), which is also what the real driver keys
+     populated (VddVideoReset seeds them), which is also what the real driver keys
      off: it hooks INT 10h and rebuilds its screen when the mode changes. */
-static unsigned i33_w(void) { return g_vid.gw ? g_vid.gw : 640; }
-static unsigned i33_h(void) { return g_vid.gh ? g_vid.gh : 480; }
+static unsigned i33_w(void) { return g_vid.GraphicsWidth ? g_vid.GraphicsWidth : 640; }
+static unsigned i33_h(void) { return g_vid.GraphicsHeight ? g_vid.GraphicsHeight : 480; }
 static int i33_xshift(void)
 {
     unsigned w = i33_w();
@@ -8320,7 +8320,7 @@ static LONG i33_vmaxx(void)
      application does `row = DX / 8` -- 0..199 over 25 rows. Our text frame is 400
      lines tall and we handed that back raw, so every row came out DOUBLED: a click on
      QBasic's menu bar landed two rows below it and no menu ever opened by mouse. */
-static int  i33_text(void)  { return g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa && i33_h() > 200; }
+static int  i33_text(void)  { return g_vid.ModeKind == VIDEO_KIND_TEXT && !g_vid.IsVesa && i33_h() > 200; }
 static LONG i33_vy(LONG py) { return i33_text() ? py * 200 / (LONG)i33_h() : py; }
 static LONG i33_py(LONG vy) { return i33_text() ? vy * (LONG)i33_h() / 200 : vy; }
 static LONG i33_vmaxy(void)
@@ -8922,7 +8922,7 @@ static void exec_mach_restore(int d, char **pp)
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
     VddMpuReset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
-              || g_vid.mkind != VID_KIND_TEXT);
+              || g_vid.ModeKind != VIDEO_KIND_TEXT);
     if (remode) {
         NTVDD_REGISTERS r;
         ZeroMemory(&r, sizeof r);
@@ -9162,7 +9162,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
         /* BX=0: a SOFTWARE cursor -- CX is the screen mask (AND), DX the cursor mask
            (XOR), applied to the (char, attr) word of the cell under the pointer. That
            is the whole text-mode pointer, and the present path now draws it that way
-           (vdd_video_text_cursor). BX=1 asks for the HARDWARE cursor to be moved
+           (VddVideoTextCursor). BX=1 asks for the HARDWARE cursor to be moved
            instead; counted with the shapes and drawn as the software default, which
            is at least a pointer in the right cell. */
         if ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) == 0) {
@@ -9341,7 +9341,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
            graphics), 11-8 = 1Ch's interrupt rate, 7-0 = Mouse Display Drivers loaded
            (none). BX/CX/DX = cursor lock / in mouse code / mouse busy: all 0 -- the
            driver is host code and is never "busy" from the guest's side. */
-        WORD ctype = (WORD)(g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa ? 2
+        WORD ctype = (WORD)(g_vid.ModeKind != VIDEO_KIND_TEXT || g_vid.IsVesa ? 2
                             : g_ms_tc_hw ? 1 : 0);
         VDM_SET16(tib, VTIB_EAX, (WORD)(0x4000u | (ctype << 12) | ((g_ms_rate & 0x0F) << 8)));
         VDM_SET16(tib, VTIB_EBX, 0x0000);
@@ -9771,8 +9771,8 @@ static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
     int mx = (int)((LONG)g_ms_x * W / (LONG)i33_w()), my = (int)((LONG)g_ms_y * H / (LONG)i33_h());
     if (!g_ms_gc_defined) { overlay_cursor(px, W, H, stride, mx, my); return; }
     b = (int)(g_ms_gc_buf & 1);
-    if (g_vid.mkind == VID_KIND_CGA && !g_vid.in_vesa && g_vid.cga_bpp != 1)
-        map4 = vdd_video_cga4_map(&g_vid);
+    if (g_vid.ModeKind == VIDEO_KIND_CGA && !g_vid.IsVesa && g_vid.CgaBpp != 1)
+        map4 = VddVideoCga4Map(&g_vid);
     i33_gc_draw(px, W, H, stride, mx, my, (int)g_ms_hot_x, (int)g_ms_hot_y,
                 g_ms_gc_scr[b], g_ms_gc_cur[b], 0x0F, map4);
 }
@@ -11043,7 +11043,7 @@ static int close_prog_available(void)
 
 /* ── #154: THE EDIT MENU, ON THE CHARACTER GRID. ───────────────────────────────────
      The five items were greyed outside text mode and did nothing inside it. The grid
-     is page 0 at VID_TEXT_OFF, 8x16 cells -- exactly what the text renderer draws, so
+     is page 0 at VIDEO_TEXT_OFFSET, 8x16 cells -- exactly what the text renderer draws, so
      what is copied is what is seen.
        Mark        the next left drag selects a rectangle of cells (Esc cancels)
        Select All  the whole grid
@@ -11059,20 +11059,20 @@ static volatile LONG g_paste_busy;
 
 static void sel_publish(void)
 {
-    int cols = g_vid.cols, rows = g_vid.rows;
+    int cols = g_vid.Columns, rows = g_vid.Rows;
     int c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1, c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
     int r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1, r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
     g_pd.IsSelection = g_sel_on;
     {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
-           is 8 in a 50-line screen (this used VID_CELL_H, so a 50-line selection was
+           is 8 in a 50-line screen (this used VIDEO_CELL_HEIGHT, so a 50-line selection was
            drawn at twice its height). */
-        int cw = vdd_video_text_cell_w(&g_vid), chh = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
+        int cw = VddVideoTextCellWidth(&g_vid), chh = g_vid.CellHeight ? g_vid.CellHeight : VIDEO_CELL_HEIGHT;
         g_pd.SelectionX0 = c0 * cw;            g_pd.SelectionX1 = (c1 + 1) * cw;
         g_pd.SelectionY0 = r0 * chh;           g_pd.SelectionY1 = (r1 + 1) * chh;
     }
-    HOST_LOCK(); g_vid.dirty = 1; HOST_UNLOCK();
+    HOST_LOCK(); g_vid.IsDirty = 1; HOST_UNLOCK();
     if (g_pd.Window) InvalidateRect(g_pd.Window, NULL, FALSE);
 }
 
@@ -11082,15 +11082,15 @@ static void sel_clear(void) { g_mark_mode = g_mark_drag = 0; g_sel_on = 0; sel_p
 static int client_to_cell(int x, int y, int *c, int *r)
 {
     int sx, sy;
-    if (g_pd.LastDestinationWidth <= 0 || g_pd.LastDestinationHeight <= 0 || g_vid.cols < 1 || g_vid.rows < 1) return 0;
+    if (g_pd.LastDestinationWidth <= 0 || g_pd.LastDestinationHeight <= 0 || g_vid.Columns < 1 || g_vid.Rows < 1) return 0;
     sx = (x - g_pd.LastDestinationX) * g_pd.LastSourceWidth / g_pd.LastDestinationWidth;
     sy = (y - g_pd.LastDestinationY) * g_pd.LastSourceHeight / g_pd.LastDestinationHeight;
-    *c = sx / vdd_video_text_cell_w(&g_vid);
-    *r = sy / (g_vid.cell_h ? g_vid.cell_h : VID_CELL_H);
+    *c = sx / VddVideoTextCellWidth(&g_vid);
+    *r = sy / (g_vid.CellHeight ? g_vid.CellHeight : VIDEO_CELL_HEIGHT);
     if (*c < 0) *c = 0;
     if (*r < 0) *r = 0;
-    if (*c >= g_vid.cols) *c = g_vid.cols - 1;
-    if (*r >= g_vid.rows) *r = g_vid.rows - 1;
+    if (*c >= g_vid.Columns) *c = g_vid.Columns - 1;
+    if (*r >= g_vid.Rows) *r = g_vid.Rows - 1;
     return 1;
 }
 
@@ -11099,8 +11099,8 @@ static void text_copy(HWND h, int all)
     int c0, c1, r0, r1, r, c, n = 0;
     static char t[132 * 60 * 2 + 256];
     HGLOBAL g; char *d;
-    if (g_vid.mkind != VID_KIND_TEXT || !g_vid.vmem) return;
-    if (all || !g_sel_on) { c0 = 0; r0 = 0; c1 = g_vid.cols - 1; r1 = g_vid.rows - 1; }
+    if (g_vid.ModeKind != VIDEO_KIND_TEXT || !g_vid.VideoMemory) return;
+    if (all || !g_sel_on) { c0 = 0; r0 = 0; c1 = g_vid.Columns - 1; r1 = g_vid.Rows - 1; }
     else {
         c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1; c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
         r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1; r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
@@ -11109,7 +11109,7 @@ static void text_copy(HWND h, int all)
     for (r = r0; r <= r1 && n < (int)sizeof t - 140; ++r) {
         int start = n;
         for (c = c0; c <= c1; ++c) {
-            uint8_t ch = g_vid.vmem[VID_TEXT_OFF + ((g_vid.crtc_start_live * 2u + (unsigned)(r * g_vid.cols + c) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
+            uint8_t ch = g_vid.VideoMemory[VIDEO_TEXT_OFFSET + ((g_vid.CrtcStartLive * 2u + (unsigned)(r * g_vid.Columns + c) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
             t[n++] = (char)(ch ? ch : ' ');
         }
         while (n > start && t[n - 1] == ' ') --n;          /* right-trim the line */
@@ -11188,7 +11188,7 @@ static void menu_sync_modal(HWND h, HMENU popup)
     if (!m) return;
     EnableMenuItem(m, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
                    | (close_prog_available() ? MF_ENABLED : MF_GRAYED));
-    flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
+    flag = (g_vid.ModeKind == VIDEO_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
     CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
@@ -11874,20 +11874,20 @@ static void host_fullscreen_toggle(HWND h)
         fq = zput(fq, (g_pd.DirectDraw && g_pd.Back) ? "ddraw-exclusive" : "gdi-borderless");
         fq = zput(fq, " client=");           fq = zdec(fq, (unsigned)cw);
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)chh);
-        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.frame.Width);
-        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.Height);
-        if (g_vid.frame.Width && g_vid.frame.Height) {
+        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.Frame.Width);
+        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.Frame.Height);
+        if (g_vid.Frame.Width && g_vid.Frame.Height) {
             int fx, fy, fw, fh;
-            PresentLayout(g_pd.Aspect, g_pd.Fit, 1, cw, chh, (int)g_vid.frame.Width,
-                           (int)g_vid.frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
+            PresentLayout(g_pd.Aspect, g_pd.Fit, 1, cw, chh, (int)g_vid.Frame.Width,
+                           (int)g_vid.Frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
             fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
             fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
             fq = zput(fq, " at ");    fq = zdec(fq, (unsigned)fx);
             fq = zput(fq, ",");       fq = zdec(fq, (unsigned)fy);
-            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.frame.Width));
-            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.frame.Height));
-            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.frame.Width));
-            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.frame.Height));
+            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.Frame.Width));
+            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.Frame.Height));
+            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.Frame.Width));
+            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.Frame.Height));
         }
         fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.Aspect);
         fq = zput(fq, "\r\n");
@@ -12215,7 +12215,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
                                         into 0040:0010 as well as INT 11h */
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
-    g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
+    g_vid.IsCursorBlink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
     g_behave_dos622 = (s->v[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
     /* #232: OPL2 (an AdLib: bank-1 ports dead) or OPL3 (YMF262). Live -- the chip model
        reads it on every access, as a jumpered card would at power-up. */
@@ -12396,7 +12396,7 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
 static void host_frame_size(int *sw, int *sh)
 {
     if (g_pd.IsSnapshotValid && g_pd.SnapshotWidth > 0 && g_pd.SnapshotHeight > 0) { *sw = g_pd.SnapshotWidth; *sh = g_pd.SnapshotHeight; return; }
-    if (g_vid.frame.Width && g_vid.frame.Height) { *sw = (int)g_vid.frame.Width; *sh = (int)g_vid.frame.Height; return; }
+    if (g_vid.Frame.Width && g_vid.Frame.Height) { *sw = (int)g_vid.Frame.Width; *sh = (int)g_vid.Frame.Height; return; }
     *sw = 720; *sh = 400;                          /* before the first frame: VGA text */
 }
 static void host_picture(int k, int *pw, int *ph)
@@ -12595,7 +12595,7 @@ static void settings_apply_textfont(void)
     lq = zput(lq, sysfont_build(g_textfont_live, &g_sysfont_rep));
     lq = zput(lq, "\r\n");
     log_append(LOG_PATH, lb, lq);
-    vdd_video_refresh_fonts(&g_vid);
+    VddVideoRefreshFonts(&g_vid);
 }
 
 static void settings_apply_live(HWND h)
@@ -13436,7 +13436,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                tick; a hook-raised run resets the interval so the two never double up. */
             uint32_t floor_us = g_ui_tick_min_ms != UITICK_AUTO
                                 ? (uint32_t)g_ui_tick_min_ms * 1000u
-                                : vdd_video_frame_us(&g_vid) * 9u / 10u;
+                                : VddVideoFrameUs(&g_vid) * 9u / 10u;
             QueryPerformanceCounter(&bn);
             if (!g_ui_forced && s_body.QuadPart &&
                 qpc_us(bn.QuadPart - s_body.QuadPart) < floor_us) {
@@ -13580,9 +13580,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                    is which file the bug is in. text= is i33_text()'s verdict, not
                    mkind, because that verdict is what every coordinate call uses. */
                 mq = zput(mq, " text=");  mq = zhex(mq, (DWORD)i33_text());
-                mq = zput(mq, " mkind="); mq = zhex(mq, (DWORD)g_vid.mkind);
-                mq = zput(mq, " vesa=");  mq = zhex(mq, (DWORD)g_vid.in_vesa);
-                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.frame.Height);
+                mq = zput(mq, " mkind="); mq = zhex(mq, (DWORD)g_vid.ModeKind);
+                mq = zput(mq, " vesa=");  mq = zhex(mq, (DWORD)g_vid.IsVesa);
+                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.Frame.Height);
                 mq = zput(mq, " vmaxy="); mq = zhex(mq, (DWORD)i33_vmaxy());
                 mq = zput(mq, " msy=");   mq = zhex(mq, (DWORD)g_ms_y);
                 mq = zput(mq, "\r\n");
@@ -13673,8 +13673,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                gone quiet (a guest that never polls the retrace), never on top of it --
                the first cut presented 112 frames twice in 30 s that way. */
             int timer_ok = g_ui_tick_min_ms == UITICK_AUTO
-                           ? ((DWORD)(nowt - s_last_present) >= 2u * (vdd_video_frame_us(&g_vid) / 1000u))
-                           : (vdd_video_present_ready(&g_vid) || stale);
+                           ? ((DWORD)(nowt - s_last_present) >= 2u * (VddVideoFrameUs(&g_vid) / 1000u))
+                           : (VddVideoIsPresentReady(&g_vid) || stale);
             if (g_ui_forced || timer_ok) {
                 s_last_present = nowt;
                 if (g_ui_forced) ++g_ui_hook_presents; else ++g_ui_timer_presents;
@@ -13683,15 +13683,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                    stamping a 16x16 arrow into a text frame is what "a graphical mouse
                    cursor over a text interface" was. st->fb is re-rendered from the text
                    buffer every present, so this one may be drawn into the frame. */
-                int ms_text = (g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa);
-                if (g_ms_hidden == 0 && ms_text && g_vid.frame.BitsPerPixel == 8 && g_vid.frame.Pixels) {
-                    int ch = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
-                    vdd_video_text_cursor(&g_vid, (int)(g_ms_x / VID_CELL_W), (int)(g_ms_y / ch),
+                int ms_text = (g_vid.ModeKind == VIDEO_KIND_TEXT && !g_vid.IsVesa);
+                if (g_ms_hidden == 0 && ms_text && g_vid.Frame.BitsPerPixel == 8 && g_vid.Frame.Pixels) {
+                    int ch = g_vid.CellHeight ? g_vid.CellHeight : VIDEO_CELL_HEIGHT;
+                    VddVideoTextCursor(&g_vid, (int)(g_ms_x / VIDEO_CELL_WIDTH), (int)(g_ms_y / ch),
                                           (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
                 }
-                vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
-                g_pd.IsModeVesa = g_vid.in_vesa;             /* #228: Auto aspect needs it */
-                PresentDdrawSnapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
+                VddVideoFrameTouch(&g_vid);               /* raster-split state + frame no. */
+                g_pd.IsModeVesa = g_vid.IsVesa;             /* #228: Auto aspect needs it */
+                PresentDdrawSnapshot(&g_pd, &g_vid.Frame); /* consistent copy UNDER lock */
                 /* ── ★★ THE GRAPHICS CURSOR GOES ON THE SNAPSHOT, NEVER ON THE FRAME. (#264)
                      It used to be stamped into g_vid.frame.pixels before the snapshot --
                      and in mode 13h that pointer IS st->vmem, the guest's own A0000
@@ -13735,7 +13735,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             g_ui_forced = 0;
         }
         if (!g_autofs_done)                   /* "Graphics only": the first graphics mode */
-            host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
+            host_autofs_consider(g_hwnd, g_vid.ModeKind != VIDEO_KIND_TEXT || g_vid.IsVesa);
         if (g_spk_real && !g_pause_want) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
@@ -13781,12 +13781,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      whether a missing line was never written or merely never drawn,
                      and that distinction is where three wrong guesses went on
                      QBasic's empty file list. Gated: no run pays for it unaltered. */
-                if (g_textdump && g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa) {
+                if (g_textdump && g_vid.ModeKind == VIDEO_KIND_TEXT && !g_vid.IsVesa) {
                     static char tsnap[8192];
                     char tname[] = "shot00.txt";
                     int tn;
                     tname[4] = name[4]; tname[5] = name[5];
-                    tn = vdd_video_text_snapshot(&g_vid, tsnap, sizeof tsnap);
+                    tn = VddVideoTextSnapshot(&g_vid, tsnap, sizeof tsnap);
                     if (tn > 0) {
                         HANDLE tf = CreateFileA(OUT_(tname), GENERIC_WRITE, 0, NULL,
                                                 CREATE_ALWAYS, 0, NULL);
@@ -13976,7 +13976,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_FILE_OPEN: open_program_dialog(h); return 0;   /* #153 */
         /* #154: the text-mode Edit menu -- see g_mark_mode. */
         case IDM_EDIT_MARK:
-            if (g_vid.mkind == VID_KIND_TEXT) {
+            if (g_vid.ModeKind == VIDEO_KIND_TEXT) {
                 if (g_captured) input_capture_set(h, 0);   /* the drag needs the pointer */
                 g_mark_mode = 1; g_mark_drag = 0; g_sel_on = 0; sel_publish();
                 g_pd.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
@@ -13984,8 +13984,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         case IDM_EDIT_SELECTALL:
-            if (g_vid.mkind == VID_KIND_TEXT) {
-                g_sel_c0 = 0; g_sel_r0 = 0; g_sel_c1 = g_vid.cols - 1; g_sel_r1 = g_vid.rows - 1;
+            if (g_vid.ModeKind == VIDEO_KIND_TEXT) {
+                g_sel_c0 = 0; g_sel_r0 = 0; g_sel_c1 = g_vid.Columns - 1; g_sel_r1 = g_vid.Rows - 1;
                 g_sel_on = 1; g_mark_mode = 1; g_mark_drag = 0; sel_publish();
             }
             return 0;
@@ -14435,9 +14435,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = zput(cq, " coop_to=");     cq = zhex(cq, g_cpuspd_coop_timeouts);
             cq = zput(cq, " missed=");      cq = zhex(cq, g_cpuspd_missed);
             cq = zput(cq, " hold_max_us="); cq = zhex(cq, g_cpuspd_hold_max_us);
-            cq = zput(cq, " vbl_edges=");   cq = zhex(cq, g_vid.vbl_edges);
-            cq = zput(cq, " vbl_owed=");    cq = zhex(cq, g_vid.p3da_vbl_owed);
-            cq = zput(cq, " p3da=");        cq = zhex(cq, g_vid.p3da_reads);
+            cq = zput(cq, " vbl_edges=");   cq = zhex(cq, g_vid.VblEdges);
+            cq = zput(cq, " vbl_owed=");    cq = zhex(cq, g_vid.Port3DaVblOwed);
+            cq = zput(cq, " p3da=");        cq = zhex(cq, g_vid.Port3DaReads);
             cq = zput(cq, " clip_repairs=");cq = zhex(cq, g_clip_repairs);
             cq = zput(cq, " irq0tl=");
             for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
@@ -14585,7 +14585,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     {   char sb[96], *sq = sb;
         sq = zput(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
         log_append(LOG_PATH, sb, sq); }
-    host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
+    host_autofs_consider(g_hwnd, g_vid.ModeKind != VIDEO_KIND_TEXT || g_vid.IsVesa);
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     /* ── ⛔⛔ A POSTED PRESENT MUST NOT STARVE INPUT. (user, s86: Duke3D fullscreen) ──
          GetMessage hands out POSTED messages before keyboard and mouse input. The guest
@@ -15075,21 +15075,21 @@ static void pit_latch_note(uint8_t cmd)
          log_append calls issued from iio_out, i.e. FILE I/O UNDER g_lock from inside
          the planar interpreter. Fine for a debugging run, not for a build a person
          plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h. */
-    if (!g_vid.p3da_ring_on) return;
-    if ((cmd & 0xF0) != 0x00 || g_pitlatch_dumps >= 2 || !g_vid.p3da_ring_n) return;
-    n = g_vid.p3da_ring_n; cnt = n < VID_P3DA_RING ? n : VID_P3DA_RING;
-    i0 = n - cnt; base = g_vid.p3da_ring_us[i0 & (VID_P3DA_RING - 1)];
+    if (!g_vid.IsPort3DaRingOn) return;
+    if ((cmd & 0xF0) != 0x00 || g_pitlatch_dumps >= 2 || !g_vid.Port3DaRingCount) return;
+    n = g_vid.Port3DaRingCount; cnt = n < VIDEO_PORT_3DA_RING ? n : VIDEO_PORT_3DA_RING;
+    i0 = n - cnt; base = g_vid.Port3DaRingUs[i0 & (VIDEO_PORT_3DA_RING - 1)];
     g_pitlatch_dumps++;
     q = zput(q, "PIT-LATCH #"); q = zdec(q, g_pitlatch_dumps);
     q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
     q = zput(q, " mode="); q = zdec(q, g_pit.Mode);
     q = zput(q, " clocks_since_load="); q = zdec(q, (uint32_t)(g_pit.TotalClocks - g_pit.LoadClocks));
-    q = zput(q, " hbl_owed="); q = zdec(q, g_vid.p3da_hbl_owed);
+    q = zput(q, " hbl_owed="); q = zdec(q, g_vid.Port3DaHblOwed);
     q = zput(q, " last "); q = zdec(q, cnt); q = zput(q, " 0x3DA polls (us:val):\r\n");
     for (i = i0; i < n; ++i) {
-        uint32_t k = i & (VID_P3DA_RING - 1);
-        q = zdec(q, g_vid.p3da_ring_us[k] - base); q = zput(q, ":");
-        q = zhexb(q, g_vid.p3da_ring_v[k]); q = zput(q, " ");
+        uint32_t k = i & (VIDEO_PORT_3DA_RING - 1);
+        q = zdec(q, g_vid.Port3DaRingUs[k] - base); q = zput(q, ":");
+        q = zhexb(q, g_vid.Port3DaRingValue[k]); q = zput(q, " ");
         if (++col == 24 || i + 1 == n) {
             q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); q = b; col = 0;
         }
@@ -15254,7 +15254,7 @@ static void int10_wait_after(void)
     DWORD t0 = GetTickCount();
     uint32_t us;
     int waited = 0;
-    while ((us = vdd_video_int10_wait_us(&g_vid)) != 0) {
+    while ((us = VddVideoInt10WaitUs(&g_vid)) != 0) {
         waited = 1;
         if (GetTickCount() - t0 > 50u) break;
         if (us > 1500u) Sleep(1); else Sleep(0);
@@ -15313,7 +15313,7 @@ static void rt_idle(void)
     want = (c[2] == 0x74 || c[2] == 0xE1);
     bit3 = (g_rt_al & 0x08) != 0;
     if (bit3 == want) return;          /* the loop exits this time round */
-    us = vdd_video_us_to_vr(&g_vid, want);
+    us = VddVideoUsToRetrace(&g_vid, want);
     if (us == 0xFFFFFFFFu || us < 1500u) return;
     ++g_rt_idles;
     Sleep(1);
@@ -16098,7 +16098,7 @@ static void modey_remap_select(void *ctx, int mask)
     /* The timeline measures MODE Y. A planar 16-colour guest (mode 12h) also moves this
        window on every map-mask write, and the RDTSC/GetTickCount toll cost Lemmings'
        interpreted run ~4% of its throughput -- so it goes straight to the work. */
-    if (g_vid.mkind != VID_KIND_LINEAR8) { modey_remap_select_body(ctx, mask); return; }
+    if (g_vid.ModeKind != VIDEO_KIND_LINEAR8) { modey_remap_select_body(ctx, mask); return; }
     if (!g_ytl_t0) {
         LARGE_INTEGER q; QueryPerformanceCounter(&q);
         g_ytl_t0 = GetTickCount(); g_ytl_tsc0 = ytl_rdtsc(); g_ytl_qpc0 = q.QuadPart;
@@ -16118,7 +16118,7 @@ static void modey_remap_select(void *ctx, int mask)
         /* Cumulative, reported as deltas. CR0C (start address HIGH), not the paired
            counter: Doom flips pages by writing 0Ch alone -- its pages are 0x4000 apart,
            so the low byte never changes -- and crtc_start_writes counts only on 0Dh. */
-        g_ytl_flip[sec]  = g_vid.crtc_w[0x0C];
+        g_ytl_flip[sec]  = g_vid.CrtcWrites[0x0C];
     }
 }
 /* ★ NORTH STAR 1's measurement, printed -- see g_ytl_*. Decimal, one value per second of
@@ -16241,7 +16241,7 @@ static void modey_remap_select_body(void *ctx, int mask)
         /* fanN is mode Y's measurement; a planar guest pays nothing for it -- a
            separate pass rather than a per-byte test, because this loop is hot for a
            mode-12h guest (Lemmings: ~38k windows a run) and -O2 does not unswitch. */
-        if (g_vid.mkind == VID_KIND_LINEAR8)
+        if (g_vid.ModeKind == VIDEO_KIND_LINEAR8)
             for (k = 0; k < MODEY_WIN; ++k)
                 if (sc[k] != g_yshadow[k]) { ++g_yfan_new; g_yshadow[k] = sc[k]; }
         for (k = 0; k < MODEY_WIN; ++k) {
@@ -16279,7 +16279,7 @@ static void modey_remap_select_body(void *ctx, int mask)
                                                             bytes nobody touched */
         unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
         for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; }
-        if (g_vid.mkind == VID_KIND_LINEAR8)
+        if (g_vid.ModeKind == VIDEO_KIND_LINEAR8)
             for (k = 0; k < MODEY_WIN; ++k) g_yshadow[k] = s2[k];
     }
     if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
@@ -16562,7 +16562,7 @@ static int g_p12_interp = 0;    /* planar mode is current -> interpret the guest
 
 static void video_trap_sync(void)
 {
-    int planar = vdd_video_planar_active(&g_vid);
+    int planar = VddVideoIsPlanarActive(&g_vid);
     if (planar && !g_p12_off) { a000_protect(0); g_p12_interp = 1; }
     else                      { a000_protect(planar); g_p12_interp = 0; }
 }
@@ -16579,7 +16579,7 @@ static void video_trap_sync(void)
      see a store of the value already there -- and slowly (measured: Doom low ~93% of
      every second, Wolf3D ~38%).
    ► So for exactly those windows the host interpreter is the CPU, and every A0000 store
-     goes through vga_planar_write() into every selected plane AT THE TIME OF THE WRITE.
+     goes through VddVideoPlanarWrite() into every selected plane AT THE TIME OF THE WRITE.
      The window is known exactly -- it opens and closes on a trapped OUT to 3C5h/3CFh --
      so the rest of the program runs natively. It cannot be entered by a page fault:
      protecting A0000 freezes a V86 guest on real hardware (see above).
@@ -16590,7 +16590,7 @@ static void video_trap_sync(void)
    the remap need not build a scratch window for them (see modey_remap_select_body). */
 static int modey_interp_serves(void)
 {
-    if (g_my_interp_off || g_vid.mkind != VID_KIND_LINEAR8) return 0;
+    if (g_my_interp_off || g_vid.ModeKind != VIDEO_KIND_LINEAR8) return 0;
     /* A PM guest's drawers are interpreted (modey_pm_run); its OTHER code runs natively,
        so with the detector on keep the scratch window to catch what that code stores. */
     if (g_dpmi_pm) return !g_my_pm_off && !g_my_pm_detect;
@@ -16600,9 +16600,9 @@ static int modey_interp_serves(void)
 static int modey_needs_interp(void)
 {
     uint8_t m;
-    if (!g_yremap || !modey_interp_serves() || g_vid.chain4) return 0;
-    m = (uint8_t)(g_vid.map_mask & 0x0F);
-    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.write_mode & 3) != 0;
+    if (!g_yremap || !modey_interp_serves() || g_vid.IsChain4) return 0;
+    m = (uint8_t)(g_vid.MapMask & 0x0F);
+    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.WriteMode & 3) != 0;
 }
 
 /* ====================================================================== *
@@ -16667,11 +16667,11 @@ static int imem_page_ok(uint32_t lin)
    probed below 1 MB; anything else (the aperture, HMA, an unprobed or bad page) takes
    the slow path, which is the old function unchanged. */
 static __attribute__((noinline)) uint8_t imem_r8_slow(uint32_t lin)
-{ if (lin >= A000_LO && lin < A000_HI) return vga_planar_read(&g_vid, lin - A000_LO);
+{ if (lin >= A000_LO && lin < A000_HI) return VddVideoPlanarRead(&g_vid, lin - A000_LO);
   if (!imem_page_ok(lin)) { g_imem_bad_reads++; imem_bad_note(lin, 0); return 0xFF; }
   return *(volatile BYTE *)lin; }
 static __attribute__((noinline)) void imem_w8_slow(uint32_t lin, uint8_t v)
-{ if (lin >= A000_LO && lin < A000_HI) { vga_planar_write(&g_vid, lin - A000_LO, v); return; }
+{ if (lin >= A000_LO && lin < A000_HI) { VddVideoPlanarWrite(&g_vid, lin - A000_LO, v); return; }
   if (!imem_page_ok(lin)) { g_imem_bad_writes++; imem_bad_note(lin, 1); return; }
   *(volatile BYTE *)lin = v; }
 static inline __attribute__((always_inline)) uint8_t imem_r8(uint32_t lin)
@@ -16743,12 +16743,12 @@ static int p32_page_ok(DWORD pg, int wr)
 static DWORD g_p32_vga_n = 0;      /* aperture accesses by the interpreter (modey_pm_run) */
 static uint8_t p32_rd8(uint32_t lin)
 {
-    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; return vga_planar_read(&g_vid, lin - A000_LO); }
+    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; return VddVideoPlanarRead(&g_vid, lin - A000_LO); }
     return *(volatile BYTE *)(ULONG_PTR)lin;
 }
 static void p32_wr8(uint32_t lin, uint8_t v)
 {
-    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; vga_planar_write(&g_vid, lin - A000_LO, v); return; }
+    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; VddVideoPlanarWrite(&g_vid, lin - A000_LO, v); return; }
     *(volatile BYTE *)(ULONG_PTR)lin = v;
 }
 static int p32_ok(uint32_t lin, int w, int wr)
@@ -16771,16 +16771,16 @@ static int modey_pm_needs_interp(void)
 {
     uint8_t m;
     if (!g_dpmi_pm || g_my_pm_off || g_my_interp_off || !g_yremap) return 0;
-    if (g_vid.mkind != VID_KIND_LINEAR8 || g_vid.chain4) return 0;
-    m = (uint8_t)(g_vid.map_mask & 0x0F);
-    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.write_mode & 3) != 0;
+    if (g_vid.ModeKind != VIDEO_KIND_LINEAR8 || g_vid.IsChain4) return 0;
+    m = (uint8_t)(g_vid.MapMask & 0x0F);
+    return (m & (uint8_t)(m - 1)) != 0 || (g_vid.WriteMode & 3) != 0;
 }
 
 /* ── ★★★ DOOM'S DRAWERS THROUGH THE ADDRESS GENERATOR. (s80, north star 1) ─────────────
      Doom sets its two-plane mask with an OUT at the top of R_DrawColumnLow / the span
      drawer; that OUT has just trapped and been serviced. Run the guest here from the next
      instruction until the drawer RETURNS -- a RET that takes ESP above where we started --
-     so every store it makes goes through vga_planar_write into both planes.
+     so every store it makes goes through VddVideoPlanarWrite into both planes.
    ► ...BUT ONLY ONCE THE RUN HAS TOUCHED THE APERTURE. Doom also sets masks through a
      generic helper (`out dx,ax / pop ebx / ret`) and then does the work in the CALLER --
      the status-bar latch copies, the 0Fh clears. Stopping at the helper's own RET handed
@@ -16849,7 +16849,7 @@ static void modey_pm_run(volatile BYTE *tib)
     }
     g_mypm_runs++; g_mypm_instrs += (DWORD)n; g_mypm_stop[why]++;
     if (why == 2) {
-        uint8_t mm = (uint8_t)(g_vid.map_mask & 0x0F);
+        uint8_t mm = (uint8_t)(g_vid.MapMask & 0x0F);
         g_mypm_bails++;
         if (mm & (uint8_t)(mm - 1)) g_mypm_bail_mp++;
         modey_bail_note(cs, c.eip, (const volatile BYTE *)(ULONG_PTR)(c.base[1] + c.eip));
@@ -25781,7 +25781,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         /* ── ★★★ 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
                              The other half of the VESA linear framebuffer. 4F01 reports
-                             PhysBasePtr = VID_VESA_LFB_PHYS; a DPMI client then asks this
+                             PhysBasePtr = VIDEO_VESA_LFB_PHYSICAL; a DPMI client then asks this
                              function to map it and writes pixels straight at the answer.
                              With it unimplemented the whole LFB advertisement was a
                              promise we could not keep, and heaven7 refused all twelve
@@ -25803,8 +25803,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      |  (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
                             p = zput(p, " phys=0x"); p = zhex(p, ph);
                             p = zput(p, " size=0x"); p = zhex(p, sz);
-                            if (ph == VID_VESA_LFB_PHYS && sz <= VID_VESA_VRAM) {
-                                DWORD lin = (DWORD)(ULONG_PTR)&g_vid.vesa_vram[0];
+                            if (ph == VIDEO_VESA_LFB_PHYSICAL && sz <= VIDEO_VESA_VRAM) {
+                                DWORD lin = (DWORD)(ULONG_PTR)&g_vid.VesaVram[0];
                                 VDM_SET16(tib, VTIB_EBX, (WORD)(lin >> 16));
                                 VDM_SET16(tib, VTIB_ECX, (WORD)(lin & 0xFFFF));
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -29468,7 +29468,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         } else if (bn == 0x29) {               /* fast console output      */
             /* AL is the character. Programs that hook this expect it to
                PRINT; leaving it as an IRET swallowed the output silently. */
-            vdd_video_putc(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
+            VddVideoPutChar(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
             BCF_CLR();
         } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
             /* AL = drive (0 = A:), CX = sector count, DX = first sector,
@@ -30019,7 +30019,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           for (i4 = 0; i4 < rd4 && mb[i4] >= '0' && mb[i4] <= '9'; ++i4) { v4 = v4 * 10 + (DWORD)(mb[i4] - '0'); got = 1; }
           if (got && v4 <= 65536u) {
               char lb4[96], *lq = lb4;
-              g_vid.modey_gap = v4;
+              g_vid.ModeYGap = v4;
               lq = zput(lq, "STAGE0: modey.txt -> gap="); lq = zhex(lq, v4);
               lq = zput(lq, " dwords\r\n"); log_append(LOG_PATH, lb4, lq); serial_out(lb4, lq);
           }
@@ -31995,20 +31995,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
        the BDA, INT 13h, and the adapter's empty channels. */
     *(volatile BYTE *)(ULONG_PTR)0x475 = 0;
-    g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
+    g_vid.VideoMemory = (uint8_t *)VIDEO_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */
-    g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
-    g_vid.present_hook = host_present_hook;     /* Auto: the guest's frame raises the present (s73) */
+    g_vid.TimeUs = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
+    g_vid.PresentHook = host_present_hook;     /* Auto: the guest's frame raises the present (s73) */
     /* Opt-in only: the ring costs two stores on the hottest path in the program and
        the dump does file I/O under g_lock. See the note in vdd_video.h. */
-    g_vid.p3da_ring_on =
+    g_vid.IsPort3DaRingOn =
         (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
-    g_vid.guest_pc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
-    g_vid.bda = (uint8_t *)0x400;               /* the display's BDA fields (0449..0489) */
-    g_vid_dev = vdd_video_device(&g_vid);
+    g_vid.GuestPc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
+    g_vid.BiosData = (uint8_t *)0x400;               /* the display's BDA fields (0449..0489) */
+    g_vid_dev = VddVideoDevice(&g_vid);
     VddBusAdd(&g_bus, &g_vid_dev);
-    /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls vdd_video_init, which
+    /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls VddVideoInitialize, which
        disarms the watchpoint -- setting it first looked right and was silently
        undone, and the run came back with no trace and no error. */
     /* cfg/vwatch.txt: a hex VRAM byte offset to record every planar write to. Off
@@ -32028,7 +32028,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           if (gotw) {
               char lb5[96], *lq5 = lb5;
-              g_vid.watch_off = vw;
+              g_vid.WatchOffset = vw;
               lq5 = zput(lq5, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
               lq5 = zhex(lq5, vw); lq5 = zput(lq5, "\r\n");
               log_append(LOG_PATH, lb5, lq5); serial_out(lb5, lq5);
@@ -32045,7 +32045,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
                     "is missing, so box drawing may show accented letters (#321)\r\n");
     lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
-    vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
+    VddVideoInstallFonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS
        program reading 0040:001A can see them. V86 low memory is mapped in our address
@@ -32532,11 +32532,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          doing this with that thread already running hung the host so early that no log
          reached disk at all. Its report is buffered and flushed after the preamble. */
     if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && modey_remap_init()) {
-        g_vid.ymap_ctx    = NULL;
-        g_vid.ymap_select = modey_remap_select;
-        g_vid.ymap_plane  = modey_remap_plane;
-        g_vid.ymap_wmode  = modey_remap_wmode;
-        g_vid.ymap_readmap = modey_remap_readmap;
+        g_vid.YMapContext    = NULL;
+        g_vid.YMapSelect = modey_remap_select;
+        g_vid.YMapPlane  = modey_remap_plane;
+        g_vid.YMapWriteMode  = modey_remap_wmode;
+        g_vid.YMapReadMap = modey_remap_readmap;
     }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
@@ -32981,7 +32981,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             { DWORD c3 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i3 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
               const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
               if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
-                  uint8_t mm = (uint8_t)(g_vid.map_mask & 0x0F);
+                  uint8_t mm = (uint8_t)(g_vid.MapMask & 0x0F);
                   ++g_my_bails;
                   if (mm & (uint8_t)(mm - 1)) ++g_my_bail_mp;
                   modey_bail_note(c3, i3, ip3);
@@ -33139,7 +33139,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             uint32_t d = (cur > s_last_fault) ? (cur - s_last_fault) : (s_last_fault - cur);
             s_storm = (d <= STORM_WINDOW) ? (s_storm + 1) : 0;
             s_last_fault = cur;
-            if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
+            if ((g_a000_prot || (g_interp12 && VddVideoIsPlanarActive(&g_vid)))
                 && s_storm >= STORM_GATE) {
                 DWORD bc = VDM_REG(tib, VTIB_CS) & 0xFFFF, bi = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                 long ran = host_interp_paced(tib, TIER1_CAP);
@@ -33171,7 +33171,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 rt_idle();                          /* #183: outside the lock */
                 if (handled) { g_ev_io++; g_io_via_retro++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
-            if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
+            if ((g_a000_prot || (g_interp12 && VddVideoIsPlanarActive(&g_vid)))
                 && host_interp_paced(tib, 1) > 0) continue;   /* single A0000 access */
             /* The interpreter refused the very first opcode. With A0000 trapped that
                is a LIVELOCK, not a miss: we resume at the same EIP, the guest
@@ -36361,8 +36361,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, g_ui_tick_min_ms == UITICK_AUTO ? " (AUTO)" : " (fixed)");
       p = zput(p, " presents{hook="); p = zhex(p, g_ui_hook_presents);
       p = zput(p, " timer="); p = zhex(p, g_ui_timer_presents);
-      p = zput(p, " hook_fires="); p = zhex(p, g_vid.present_hook_fires);
-      p = zput(p, " of_which_after_draw="); p = zhex(p, g_vid.present_hook_gap); p = zput(p, "}");
+      p = zput(p, " hook_fires="); p = zhex(p, g_vid.PresentHookFires);
+      p = zput(p, " of_which_after_draw="); p = zhex(p, g_vid.PresentHookGap); p = zput(p, "}");
       p = zput(p, " uitick_skipped="); p = zhex(p, g_ui_tick_skips);
       /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
            run/held are the milliseconds the Bresenham handed out, and held/(run+
@@ -36514,20 +36514,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { unsigned k; for (k = 0; k < g_in.KeyboardPortLogCount; ++k) {
             p = zput(p, k ? "," : ""); p = zhexb(p, g_in.KeyboardPortLog[k][0]);
             p = zput(p, ":");          p = zhexb(p, g_in.KeyboardPortLog[k][1]); } }
-      p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
+      p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.Int10Ah11Calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible
          rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
          all-FF here means the caller is drawing from the wrong place. */
-      { int fi; for (fi = 0; fi < g_vid.font_qn; ++fi) {
+      { int fi; for (fi = 0; fi < g_vid.FontQueryCount; ++fi) {
           const volatile BYTE *fp;
-          p = zput(p, "\r\n  font_q: AL=0x"); p = zhex(p, g_vid.font_q[fi].al);
-          p = zput(p, " BH=0x");   p = zhex(p, g_vid.font_q[fi].bh);
-          p = zput(p, " -> ES:BP=0x"); p = zhex(p, g_vid.font_q[fi].seg);
-          p = zput(p, ":0x");      p = zhex(p, g_vid.font_q[fi].off);
-          p = zput(p, " CX=0x");   p = zhex(p, g_vid.font_q[fi].cx);
-          fp = (const volatile BYTE *)(((DWORD)g_vid.font_q[fi].seg << 4)
-                                       + g_vid.font_q[fi].off);
+          p = zput(p, "\r\n  font_q: AL=0x"); p = zhex(p, g_vid.FontQueries[fi].Al);
+          p = zput(p, " BH=0x");   p = zhex(p, g_vid.FontQueries[fi].Bh);
+          p = zput(p, " -> ES:BP=0x"); p = zhex(p, g_vid.FontQueries[fi].Segment);
+          p = zput(p, ":0x");      p = zhex(p, g_vid.FontQueries[fi].Offset);
+          p = zput(p, " CX=0x");   p = zhex(p, g_vid.FontQueries[fi].Cx);
+          fp = (const volatile BYTE *)(((DWORD)g_vid.FontQueries[fi].Segment << 4)
+                                       + g_vid.FontQueries[fi].Offset);
           { BYTE fb[16]; unsigned k; for (k = 0; k < 16; ++k) fb[k] = fp[k];
             p = zput(p, " bytes: "); p = zdump(p, fb, 16); }
       } }
@@ -36665,13 +36665,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: INT10 unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
-          if (VID_UNIMPL_GET(g_vid.unimpl_fn, i)) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedFunctions, i)) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n");
       { unsigned pl, nz[4]; 
         for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
-            { const uint8_t *pb = g_vid.ymap_plane ? g_vid.ymap_plane(g_vid.ymap_ctx, pl) : g_vid.plane[pl];
-              for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (pb[k2]) ++c2; }
+            { const uint8_t *pb = g_vid.YMapPlane ? g_vid.YMapPlane(g_vid.YMapContext, pl) : g_vid.Planes[pl];
+              for (k2 = 0; k2 < VIDEO_PLANE_SIZE; ++k2) if (pb[k2]) ++c2; }
             nz[pl] = c2; }
         /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
            A gap the game never uses cannot be why the music sounds flat. */
@@ -37138,10 +37138,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " snare=");                       p = zhex(p, g_opl.ProfileRhythmHits[3]);
         p = zput(p, " cymbal=");                      p = zhex(p, g_opl.ProfileRhythmHits[1]);
         p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
-        p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
-        p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.p3da_hbl_owed);
-        p = zput(p, " vbl_owed=");               p = zhex(p, g_vid.p3da_vbl_owed);   /* #225 */
+        p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.VblEdges);
+        p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.Port3DaReads);
+        p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.Port3DaHblOwed);
+        p = zput(p, " vbl_owed=");               p = zhex(p, g_vid.Port3DaVblOwed);   /* #225 */
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
@@ -37156,36 +37156,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              responsible instead of being guessed at. */
         {   unsigned i;
             p = zput(p, "STAGE2: planar w0: ensr@write");
-            for (i = 0; i < 16; ++i) if (g_vid.w_ensr_hist[i]) {
+            for (i = 0; i < 16; ++i) if (g_vid.WriteEnableSetResetHistogram[i]) {
                 p = zput(p, " 0x"); p = zhexb(p, i);
-                p = zput(p, "="); p = zdec(p, g_vid.w_ensr_hist[i]); }
+                p = zput(p, "="); p = zdec(p, g_vid.WriteEnableSetResetHistogram[i]); }
             p = zput(p, " | alu");
-            for (i = 0; i < 4; ++i) if (g_vid.w_alu_hist[i]) {
+            for (i = 0; i < 4; ++i) if (g_vid.WriteAluHistogram[i]) {
                 p = zput(p, " "); p = zdec(p, i);
-                p = zput(p, "="); p = zdec(p, g_vid.w_alu_hist[i]); }
-            p = zput(p, " | p3_from_sr=");  p = zdec(p, g_vid.w_p3_sr);
-            p = zput(p, " of_which_nonzero="); p = zdec(p, g_vid.w_p3_nz);
-            p = zput(p, " p3_from_cpu=");   p = zdec(p, g_vid.w_p3_data);
+                p = zput(p, "="); p = zdec(p, g_vid.WriteAluHistogram[i]); }
+            p = zput(p, " | p3_from_sr=");  p = zdec(p, g_vid.WritePlane3SetReset);
+            p = zput(p, " of_which_nonzero="); p = zdec(p, g_vid.WritePlane3NonZero);
+            p = zput(p, " p3_from_cpu=");   p = zdec(p, g_vid.WritePlane3Data);
             p = zput(p, "\r\n"); }
         {   unsigned i;
-            p = zput(p, "STAGE2: attr: acport="); p = zdec(p, g_vid.ac_port_writes);
-            p = zput(p, " acbios=");              p = zdec(p, g_vid.ac_bios_writes);
-            p = zput(p, " dacw=");                p = zdec(p, g_vid.dac_writes);
-            p = zput(p, " palresets="); p = zdec(p, g_vid.pal_resets);
-            p = zput(p, " hi_since_reset="); p = zdec(p, g_vid.dac_hi_since_reset);
+            p = zput(p, "STAGE2: attr: acport="); p = zdec(p, g_vid.AcPortWrites);
+            p = zput(p, " acbios=");              p = zdec(p, g_vid.AcBiosWrites);
+            p = zput(p, " dacw=");                p = zdec(p, g_vid.DacWrites);
+            p = zput(p, " palresets="); p = zdec(p, g_vid.PaletteResets);
+            p = zput(p, " hi_since_reset="); p = zdec(p, g_vid.DacHighSinceReset);
             /* The one that can actually be non-zero: this report is written after
                the guest has exited through a mode set back to text. */
-            p = zput(p, " hi_max="); p = zdec(p, g_vid.dac_hi_max);
+            p = zput(p, " hi_max="); p = zdec(p, g_vid.DacHighMax);
             p = zput(p, " dacblk[16s]=");
-            for (i = 0; i < 16; ++i) { p = zdec(p, g_vid.dac_block[i]); p = zput(p, ","); }
+            for (i = 0; i < 16; ++i) { p = zdec(p, g_vid.DacBlock[i]); p = zput(p, ","); }
             p = zput(p, " vpal=[");
-            for (i = 0; i < 16; ++i) { p = zhexb(p, g_vid.vpal[i]); p = zput(p, " "); }
+            for (i = 0; i < 16; ++i) { p = zhexb(p, g_vid.PaletteRegisters[i]); p = zput(p, " "); }
             p = zput(p, "] dac@vpal=[");
             /* The DAC entries the DEFAULT AC palette actually points at. If these are
                the seeded EGA64 values the guest never wrote them; if they hold its
                colours, the write landed and the fault is downstream. */
             for (i = 0; i < 16; ++i) {
-                uint32_t v = g_vid.dac[g_vid.vpal[i] & 0x3F];
+                uint32_t v = g_vid.Dac[g_vid.PaletteRegisters[i] & 0x3F];
                 p = zhexb(p, (v >> 16) & 0xFF); p = zhexb(p, (v >> 8) & 0xFF);
                 p = zhexb(p, v & 0xFF); p = zput(p, " "); }
             p = zput(p, "]\r\n"); }
@@ -37231,43 +37231,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, "]\r\n");
         }
         /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
-        if (g_vid.watch_off != 0xFFFFFFFFu) {
-            unsigned wi, wn = g_vid.watch_n < VID_WATCH_MAX ? g_vid.watch_n : VID_WATCH_MAX;
-            p = zput(p, "STAGE2: vwatch off=0x"); p = zhex(p, g_vid.watch_off);
-            p = zput(p, " writes="); p = zdec(p, g_vid.watch_n); p = zput(p, "\r\n");
+        if (g_vid.WatchOffset != 0xFFFFFFFFu) {
+            unsigned wi, wn = g_vid.WatchCount < VIDEO_WATCH_MAX ? g_vid.WatchCount : VIDEO_WATCH_MAX;
+            p = zput(p, "STAGE2: vwatch off=0x"); p = zhex(p, g_vid.WatchOffset);
+            p = zput(p, " writes="); p = zdec(p, g_vid.WatchCount); p = zput(p, "\r\n");
             for (wi = 0; wi <= wn; ++wi) {
-                const vid_watch_rec *w = (wi < wn) ? &g_vid.watch[wi] : &g_vid.watch_last;
+                const VIDEO_WATCH_RECORD *w = (wi < wn) ? &g_vid.Watch[wi] : &g_vid.WatchLast;
                 int k;
-                if (wi == wn) { if (!g_vid.watch_n) break; p = zput(p, "  LAST "); }
+                if (wi == wn) { if (!g_vid.WatchCount) break; p = zput(p, "  LAST "); }
                 else          { p = zput(p, "  #"); p = zdec(p, wi); p = zput(p, " "); }
-                p = zput(p, "pc="); p = zhex(p, w->pc);
-                p = zput(p, " wm="); p = zdec(p, w->wmode);
-                p = zput(p, " mm="); p = zhexb(p, w->map_mask);
-                p = zput(p, " ensr="); p = zhexb(p, w->ensr);
-                p = zput(p, " sr="); p = zhexb(p, w->set_reset);
-                p = zput(p, " frot="); p = zhexb(p, w->frot);
-                p = zput(p, " bm="); p = zhexb(p, w->bit_mask);
-                p = zput(p, " cpu="); p = zhexb(p, w->cpu);
+                p = zput(p, "pc="); p = zhex(p, w->Pc);
+                p = zput(p, " wm="); p = zdec(p, w->WriteMode);
+                p = zput(p, " mm="); p = zhexb(p, w->MapMask);
+                p = zput(p, " ensr="); p = zhexb(p, w->EnableSetReset);
+                p = zput(p, " sr="); p = zhexb(p, w->SetReset);
+                p = zput(p, " frot="); p = zhexb(p, w->FunctionRotate);
+                p = zput(p, " bm="); p = zhexb(p, w->BitMask);
+                p = zput(p, " cpu="); p = zhexb(p, w->Cpu);
                 p = zput(p, " lat=");
-                for (k = 0; k < 4; ++k) p = zhexb(p, w->latch[k]);
+                for (k = 0; k < 4; ++k) p = zhexb(p, w->Latch[k]);
                 p = zput(p, " after=");
-                for (k = 0; k < 4; ++k) p = zhexb(p, w->after[k]);
+                for (k = 0; k < 4; ++k) p = zhexb(p, w->After[k]);
                 p = zput(p, "\r\n");
                 if (p > report + sizeof report - 256) break;
             }
         }
         /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
              0xFF, so the answer used to be invisible. */
-        p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.planar_hi_water);
-        p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VID_PLANE_SIZE);
-        p = zput(p, " wsite_lost="); p = zdec(p, g_vid.wsite_lost);
+        p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.PlanarHighWater);
+        p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VIDEO_PLANE_SIZE);
+        p = zput(p, " wsite_lost="); p = zdec(p, g_vid.WriteSitesLost);
         /* ► DOES THIS GUEST USE COLOUR COMPARE? Read mode 1 is pixel-perfect terrain
              collision in one instruction; until it was implemented, every such read
              returned a raw plane byte and the guest acted on it. */
-        p = zput(p, " reads[mode0/mode1]="); p = zdec(p, g_vid.rmode_hist[0]);
-        p = zput(p, "/"); p = zdec(p, g_vid.rmode_hist[1]);
-        p = zput(p, " cc="); p = zhexb(p, g_vid.col_compare);
-        p = zput(p, " cdc="); p = zhexb(p, g_vid.col_dontcare);
+        p = zput(p, " reads[mode0/mode1]="); p = zdec(p, g_vid.ReadModeHistogram[0]);
+        p = zput(p, "/"); p = zdec(p, g_vid.ReadModeHistogram[1]);
+        p = zput(p, " cc="); p = zhexb(p, g_vid.ColorCompare);
+        p = zput(p, " cdc="); p = zhexb(p, g_vid.ColorDontCare);
         p = zput(p, "\r\n");
         {   unsigned k;
             /* ► And, whatever their rank, every site that touched DEEP off-screen
@@ -37276,16 +37276,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  a one-shot blit of a status panel will never be in a top-N list. */
         { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
-            for (k = 0; k < VID_WSITES; ++k) {
+            for (k = 0; k < VIDEO_SITES; ++k) {
                 int which;
                 for (which = 0; which < 2; ++which) {
-                    const vid_wsite *s2 = which ? &g_vid.rsite[k] : &g_vid.wsite[k];
-                    if (!s2->n || s2->hi < 0xC000u) continue;
+                    const VIDEO_SITE *s2 = which ? &g_vid.ReadSites[k] : &g_vid.WriteSites[k];
+                    if (!s2->Count || s2->High < 0xC000u) continue;
                     p = zput(p, which ? "  READ  pc=" : "  WRITE pc=");
-                    p = zhex(p, s2->pc);
-                    p = zput(p, " n=");     p = zdec(p, s2->n);
-                    p = zput(p, " off=0x"); p = zhex(p, s2->lo);
-                    p = zput(p, "..0x");    p = zhex(p, s2->hi);
+                    p = zhex(p, s2->Pc);
+                    p = zput(p, " n=");     p = zdec(p, s2->Count);
+                    p = zput(p, " off=0x"); p = zhex(p, s2->Low);
+                    p = zput(p, "..0x");    p = zhex(p, s2->High);
                     p = zput(p, "\r\n");
                 }
                 if (p > report + sizeof report - 256) break;
@@ -37308,98 +37308,98 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              report can fail in. A fixed buffer is a silent budget: spend it here. */
         { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
         {   unsigned k;
-            p = zput(p, "STAGE2: off-screen cache sites (>=0x"); p = zhex(p, VID_CACHE_LO);
-            p = zput(p, "), lost="); p = zdec(p, g_vid.csite_lost);
-            p = zput(p, " seq=");    p = zdec(p, g_vid.csite_seq);
+            p = zput(p, "STAGE2: off-screen cache sites (>=0x"); p = zhex(p, VIDEO_CACHE_LOW);
+            p = zput(p, "), lost="); p = zdec(p, g_vid.CacheSitesLost);
+            p = zput(p, " seq=");    p = zdec(p, g_vid.CacheSequence);
             p = zput(p, "\r\n");
             {   uint32_t acct = 0;
-                for (k = 0; k < VID_CSITES; ++k) {
-                    const vid_csite *c = &g_vid.csite[k];
-                    if (!c->n) continue;
-                    acct += c->n;
-                    p = zput(p, c->wr ? "  cache WRITE pc=" : "  cache READ  pc=");
-                    p = zhex(p, c->pc);
-                    p = zput(p, " n=");      p = zdec(p, c->n);
-                    p = zput(p, " off=0x");  p = zhex(p, c->lo);
-                    p = zput(p, "..0x");     p = zhex(p, c->hi);
-                    p = zput(p, " first=");  p = zdec(p, c->first);
-                    p = zput(p, " last=");   p = zdec(p, c->last);
+                for (k = 0; k < VIDEO_CACHE_SITES; ++k) {
+                    const VIDEO_CACHE_SITE *c = &g_vid.CacheSites[k];
+                    if (!c->Count) continue;
+                    acct += c->Count;
+                    p = zput(p, c->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
+                    p = zhex(p, c->Pc);
+                    p = zput(p, " n=");      p = zdec(p, c->Count);
+                    p = zput(p, " off=0x");  p = zhex(p, c->Low);
+                    p = zput(p, "..0x");     p = zhex(p, c->High);
+                    p = zput(p, " first=");  p = zdec(p, c->First);
+                    p = zput(p, " last=");   p = zdec(p, c->Last);
                     p = zput(p, "\r\n");
                     if (p > report + sizeof report - 512) break;
                 }
                 /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
                      to equal seq; if it does not, lines are MISSING and the absence of
                      a pc above means nothing. Said out loud so it cannot be read past. */
-                p = zput(p, "  cache accounted="); p = zdec(p, acct + g_vid.csite_lost);
-                p = zput(p, " of seq=");           p = zdec(p, g_vid.csite_seq);
-                p = zput(p, (acct + g_vid.csite_lost == g_vid.csite_seq)
+                p = zput(p, "  cache accounted="); p = zdec(p, acct + g_vid.CacheSitesLost);
+                p = zput(p, " of seq=");           p = zdec(p, g_vid.CacheSequence);
+                p = zput(p, (acct + g_vid.CacheSitesLost == g_vid.CacheSequence)
                               ? " COMPLETE\r\n" : " !! TRUNCATED -- absence proves NOTHING\r\n");
             }
         }
         /* The write sites, busiest first -- who drew the screen, and where. */
         {   unsigned k, shown;
             for (shown = 0; shown < 14; ++shown) {
-                unsigned best = VID_WSITES; uint32_t bn = 0;
-                for (k = 0; k < VID_WSITES; ++k)
-                    if (g_vid.wsite[k].n > bn) { bn = g_vid.wsite[k].n; best = k; }
-                if (best == VID_WSITES) break;
-                p = zput(p, "  wsite pc="); p = zhex(p, g_vid.wsite[best].pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.wsite[best].n);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.wsite[best].lo);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.wsite[best].hi);
+                unsigned best = VIDEO_SITES; uint32_t bn = 0;
+                for (k = 0; k < VIDEO_SITES; ++k)
+                    if (g_vid.WriteSites[k].Count > bn) { bn = g_vid.WriteSites[k].Count; best = k; }
+                if (best == VIDEO_SITES) break;
+                p = zput(p, "  wsite pc="); p = zhex(p, g_vid.WriteSites[best].Pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.WriteSites[best].Count);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.WriteSites[best].Low);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.WriteSites[best].High);
                 p = zput(p, "\r\n");
-                g_vid.wsite[best].n = 0;            /* report is the last use of it */
+                g_vid.WriteSites[best].Count = 0;            /* report is the last use of it */
                 if (p > report + sizeof report - 512) break;
             }
             /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
         { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
-            p = zdec(p, g_vid.rsite1_lost); p = zput(p, "\r\n");
+            p = zdec(p, g_vid.CompareSitesLost); p = zput(p, "\r\n");
             for (shown = 0; shown < 10; ++shown) {
-                unsigned best = VID_WSITES; uint32_t bn = 0;
-                for (k = 0; k < VID_WSITES; ++k)
-                    if (g_vid.rsite1[k].n > bn) { bn = g_vid.rsite1[k].n; best = k; }
-                if (best == VID_WSITES) break;
-                p = zput(p, "  cc-read pc="); p = zhex(p, g_vid.rsite1[best].pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.rsite1[best].n);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.rsite1[best].lo);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.rsite1[best].hi);
+                unsigned best = VIDEO_SITES; uint32_t bn = 0;
+                for (k = 0; k < VIDEO_SITES; ++k)
+                    if (g_vid.CompareSites[k].Count > bn) { bn = g_vid.CompareSites[k].Count; best = k; }
+                if (best == VIDEO_SITES) break;
+                p = zput(p, "  cc-read pc="); p = zhex(p, g_vid.CompareSites[best].Pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.CompareSites[best].Count);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.CompareSites[best].Low);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.CompareSites[best].High);
                 /* ► AND WHAT IT ANSWERED. all-zero means the guest saw no terrain. */
-                p = zput(p, " zero="); p = zdec(p, g_vid.rsite1_zero[best]);
-                p = zput(p, " ones="); p = zdec(p, g_vid.rsite1_ones[best]);
+                p = zput(p, " zero="); p = zdec(p, g_vid.CompareSitesZero[best]);
+                p = zput(p, " ones="); p = zdec(p, g_vid.CompareSitesOnes[best]);
                 p = zput(p, "\r\n");
-                g_vid.rsite1[best].n = 0;
+                g_vid.CompareSites[best].Count = 0;
                 if (p > report + sizeof report - 512) break;
             }
             /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  reads as a complete enumeration of who touches VRAM, and "pc X is not
                  here" becomes an argument it cannot support. */
             {   unsigned more = 0;
-                for (k = 0; k < VID_WSITES; ++k) if (g_vid.rsite1[k].n) ++more;
+                for (k = 0; k < VIDEO_SITES; ++k) if (g_vid.CompareSites[k].Count) ++more;
                 p = zput(p, "  (cc-read: "); p = zdec(p, more);
                 p = zput(p, " further sites not shown)\r\n");
             }
         { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar read sites, rsite_lost=");
-            p = zdec(p, g_vid.rsite_lost); p = zput(p, "\r\n");
+            p = zdec(p, g_vid.ReadSitesLost); p = zput(p, "\r\n");
             for (shown = 0; shown < 14; ++shown) {
-                unsigned best = VID_WSITES; uint32_t bn = 0;
-                for (k = 0; k < VID_WSITES; ++k)
-                    if (g_vid.rsite[k].n > bn) { bn = g_vid.rsite[k].n; best = k; }
-                if (best == VID_WSITES) break;
-                p = zput(p, "  rsite pc="); p = zhex(p, g_vid.rsite[best].pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.rsite[best].n);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.rsite[best].lo);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.rsite[best].hi);
+                unsigned best = VIDEO_SITES; uint32_t bn = 0;
+                for (k = 0; k < VIDEO_SITES; ++k)
+                    if (g_vid.ReadSites[k].Count > bn) { bn = g_vid.ReadSites[k].Count; best = k; }
+                if (best == VIDEO_SITES) break;
+                p = zput(p, "  rsite pc="); p = zhex(p, g_vid.ReadSites[best].Pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.ReadSites[best].Count);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.ReadSites[best].Low);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.ReadSites[best].High);
                 p = zput(p, "\r\n");
-                g_vid.rsite[best].n = 0;
+                g_vid.ReadSites[best].Count = 0;
                 if (p > report + sizeof report - 512) break;
             }
             /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  reads as a complete enumeration of who touches VRAM, and "pc X is not
                  here" becomes an argument it cannot support. */
             {   unsigned more = 0;
-                for (k = 0; k < VID_WSITES; ++k) if (g_vid.rsite[k].n) ++more;
+                for (k = 0; k < VIDEO_SITES; ++k) if (g_vid.ReadSites[k].Count) ++more;
                 p = zput(p, "  (rsite: "); p = zdec(p, more);
                 p = zput(p, " further sites not shown)\r\n");
             }
@@ -37413,47 +37413,47 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              slow, and the vblank geometry is not on trial. dtmax is the longest the
              guest went between polls -- it can only miss a vblank if that exceeds the
              blanking interval. */
-        p = zput(p, "STAGE2: 3da clock: span_ms="); p = zdec(p, (uint32_t)((g_vid.t3da_last - g_vid.t3da_first) / 1000u));
-        p = zput(p, " reads=");  p = zdec(p, g_vid.p3da_reads);
-        p = zput(p, " edges=");  p = zdec(p, g_vid.vbl_edges);
-        p = zput(p, " pal_splits="); p = zdec(p, g_vid.pal_split_notes);
-        p = zput(p, " dacrow[0-1,2-159,160+,vbl]="); p = zdec(p, g_vid.dac_row_hist[0]);
-        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[1]);
-        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[2]);
-        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[3]);
-        p = zput(p, " dtmax_us="); p = zdec(p, g_vid.dt3da_max);
-        p = zput(p, " dtzero=");   p = zdec(p, g_vid.dt3da_zero);
+        p = zput(p, "STAGE2: 3da clock: span_ms="); p = zdec(p, (uint32_t)((g_vid.Time3DaLast - g_vid.Time3DaFirst) / 1000u));
+        p = zput(p, " reads=");  p = zdec(p, g_vid.Port3DaReads);
+        p = zput(p, " edges=");  p = zdec(p, g_vid.VblEdges);
+        p = zput(p, " pal_splits="); p = zdec(p, g_vid.PaletteSplitNotes);
+        p = zput(p, " dacrow[0-1,2-159,160+,vbl]="); p = zdec(p, g_vid.DacRowHistogram[0]);
+        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[1]);
+        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[2]);
+        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[3]);
+        p = zput(p, " dtmax_us="); p = zdec(p, g_vid.Dt3DaMax);
+        p = zput(p, " dtzero=");   p = zdec(p, g_vid.Dt3DaZero);
         p = zput(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
-        { unsigned bi; for (bi = 0; bi < 8; ++bi) { if (bi) p = zput(p, "/"); p = zdec(p, g_vid.dt3da_hist[bi]); } }
+        { unsigned bi; for (bi = 0; bi < 8; ++bi) { if (bi) p = zput(p, "/"); p = zdec(p, g_vid.Dt3DaHistogram[bi]); } }
         p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.crtc_start_writes);
-        p = zput(p, " torn_avoided="); p = zdec(p, g_vid.crtc_start_half);
-        p = zput(p, " live="); p = zdec(p, g_vid.crtc_start_live);
+        p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.CrtcStartWrites);
+        p = zput(p, " torn_avoided="); p = zdec(p, g_vid.CrtcStartHalf);
+        p = zput(p, " live="); p = zdec(p, g_vid.CrtcStartLive);
         p = zput(p, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
-        { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = zput(p, "/"); p = zdec(p, g_vid.start_gap_hist[gi]); } }
+        { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = zput(p, "/"); p = zdec(p, g_vid.StartGapHistogram[gi]); } }
         p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
-        p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
-        p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);
-        p = zput(p, " linecmp=");              p = zdec(p, g_vid.crtc_line_compare);
-        p = zput(p, " (0x18=");                p = zdec(p, g_vid.crtc_lc_low);
-        p = zput(p, " ovf=");                  p = zdec(p, g_vid.crtc_overflow);
-        p = zput(p, " maxscan=");              p = zdec(p, g_vid.crtc_maxscan);
+        p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.CrtcStart);
+        p = zput(p, " offset=");               p = zdec(p, g_vid.CrtcOffset);
+        p = zput(p, " off_seen=");             p = zdec(p, g_vid.IsCrtcOffsetSeen);
+        p = zput(p, " linecmp=");              p = zdec(p, g_vid.CrtcLineCompare);
+        p = zput(p, " (0x18=");                p = zdec(p, g_vid.CrtcLineCompareLow);
+        p = zput(p, " ovf=");                  p = zdec(p, g_vid.CrtcOverflow);
+        p = zput(p, " maxscan=");              p = zdec(p, g_vid.CrtcMaxScan);
         p = zput(p, ")\r\n");
         /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
              Its own buffer and its own flush: the block is ~1.2 KB and `report` is
              shared with everything else in this summary. */
         {   static char vr[2048];
-            int n = vdd_video_regs_dump(&g_vid, vr, (int)sizeof vr);
+            int n = VddVideoRegistersDump(&g_vid, vr, (int)sizeof vr);
             if (n > 0) { log_append(LOG_PATH, vr, vr + n); serial_out(vr, vr + n); } }
-        p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.chain4);
-        p = zput(p, " ymask="); p = zhexb(p, g_vid.y_mask);
-        p = zput(p, " mkind="); p = zhexb(p, g_vid.mkind);
-        p = zput(p, " gw="); p = zhex(p, g_vid.gw); p = zput(p, " gh="); p = zhex(p, g_vid.gh);
-        p = zput(p, " mapmask="); p = zhexb(p, g_vid.map_mask);
-        p = zput(p, " setreset="); p = zhexb(p, g_vid.set_reset);
-        p = zput(p, " ensr="); p = zhexb(p, g_vid.enable_sr);
-        p = zput(p, " wmode="); p = zhexb(p, g_vid.write_mode);
+        p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.IsChain4);
+        p = zput(p, " ymask="); p = zhexb(p, g_vid.YMask);
+        p = zput(p, " mkind="); p = zhexb(p, g_vid.ModeKind);
+        p = zput(p, " gw="); p = zhex(p, g_vid.GraphicsWidth); p = zput(p, " gh="); p = zhex(p, g_vid.GraphicsHeight);
+        p = zput(p, " mapmask="); p = zhexb(p, g_vid.MapMask);
+        p = zput(p, " setreset="); p = zhexb(p, g_vid.SetReset);
+        p = zput(p, " ensr="); p = zhexb(p, g_vid.EnableSetReset);
+        p = zput(p, " wmode="); p = zhexb(p, g_vid.WriteMode);
         p = zput(p, " plane-nonzero=");
         for (pl = 0; pl < 4; ++pl) { p = zhex(p, nz[pl]); p = zput(p, pl<3?"/":""); }
         p = zput(p, "\r\n"); }
@@ -37499,13 +37499,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         } }
       log_append(LOG_PATH, base, p); p = base;
       p = zput(p, "STAGE2: mode sets:");
-      for (i = 0; i < g_vid.mode_qn; ++i) {
-          p = zput(p, " mode=0x"); p = zhexb(p, g_vid.mode_q[i].mode);
-          p = zput(p, "/kind="); p = zhexb(p, g_vid.mode_q[i].kind);
-          p = zput(p, "/"); p = zhex(p, g_vid.mode_q[i].w);
-          p = zput(p, "x"); p = zhex(p, g_vid.mode_q[i].h);
+      for (i = 0; i < g_vid.ModeQueryCount; ++i) {
+          p = zput(p, " mode=0x"); p = zhexb(p, g_vid.ModeQueries[i].Mode);
+          p = zput(p, "/kind="); p = zhexb(p, g_vid.ModeQueries[i].Kind);
+          p = zput(p, "/"); p = zhex(p, g_vid.ModeQueries[i].Width);
+          p = zput(p, "x"); p = zhex(p, g_vid.ModeQueries[i].Height);
       }
-      if (!g_vid.mode_qn) p = zput(p, " none");
+      if (!g_vid.ModeQueryCount) p = zput(p, " none");
       p = zput(p, "\r\n");
       /* ► THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
            g_vid.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
@@ -37607,7 +37607,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       /* ► THE MAP-MASK IDENTITY. See g_ysel_calls. Both lines must balance exactly;
            a residual is a path nobody has accounted for. */
       { DWORD mw = 0, resid;
-        for (i = 0; i < 16; ++i) mw += g_vid.mask_hist[i];
+        for (i = 0; i < 16; ++i) mw += g_vid.MaskHistogram[i];
         /* ⚠ `skip_same` LEFT THIS IDENTITY WHEN THE GR4 FIX LANDED. A map-mask write
              whose value is unchanged now still calls select -- it has to, because a read
              may have moved the window since -- so it is no longer a bucket that
@@ -37616,12 +37616,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              -skip_same, which is a counter describing the code as it used to be. */
         p = zput(p, " maskacct: writes="); p = zhex(p, mw);
         p = zput(p, " = sel_calls="); p = zhex(p, g_ysel_calls);
-        p = zput(p, " - c4sel="); p = zhex(p, g_vid.chain4_sel);
-        p = zput(p, " c4xfer="); p = zhex(p, g_vid.chain4_xfers);
-        p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.mask_skip_chain4);
-        p = zput(p, " [redundant_same="); p = zhex(p, g_vid.mask_skip_same);
+        p = zput(p, " - c4sel="); p = zhex(p, g_vid.Chain4Selects);
+        p = zput(p, " c4xfer="); p = zhex(p, g_vid.Chain4Transfers);
+        p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.MaskSkipChain4);
+        p = zput(p, " [redundant_same="); p = zhex(p, g_vid.MaskSkipSame);
         p = zput(p, ", informational]");
-        resid = mw - (g_ysel_calls - g_vid.chain4_sel) - g_vid.mask_skip_chain4;
+        resid = mw - (g_ysel_calls - g_vid.Chain4Selects) - g_vid.MaskSkipChain4;
         p = zput(p, " residual="); p = zhex(p, resid);
         p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)");
         p = zput(p, " | sel_calls = swaps="); p = zhex(p, g_yswaps);
@@ -37642,7 +37642,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " mismatch="); p = zhex(p, g_ygr4_mismatch);
       p = zput(p, " WINDOW_MOVES="); p = zhex(p, g_ygr4_moves);
       p = zput(p, " hist=");
-      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_vid.gr4_hist[i]); }
+      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_vid.Gr4Histogram[i]); }
       p = zput(p, " pair[gr4->mapped]:");
       { unsigned a2, b2;
         for (a2 = 0; a2 < 4; ++a2)
@@ -37671,90 +37671,90 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "/"); p = zhex(p, 32u * 320u); }
       p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
       p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
-      p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
-      p = zput(p, " attributed="); p = zhex(p, g_vid.ynz[0]);
-      p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.crtc_seen);
-      p = zput(p, " crtc_start=0x"); p = zhex(p, g_vid.crtc_start);
+      p = zput(p, " gap="); p = zhex(p, g_vid.ModeYGap);
+      p = zput(p, " attributed="); p = zhex(p, g_vid.YNonZero[0]);
+      p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.IsCrtcSeen);
+      p = zput(p, " crtc_start=0x"); p = zhex(p, g_vid.CrtcStart);
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: modeY snaps:");
       for (i = 0; i < 4; ++i) {
           p = zput(p, " p"); p = zhexb(p, (unsigned)i);
-          p = zput(p, "="); p = zhex(p, g_vid.ysnap[i]);
-          p = zput(p, "/nz="); p = zhex(p, g_vid.ynz[i]);
+          p = zput(p, "="); p = zhex(p, g_vid.YSnapshots[i]);
+          p = zput(p, "/nz="); p = zhex(p, g_vid.YNonZero[i]);
       }
       p = zput(p, " wmode hist:");
       for (i = 0; i < 4; ++i) { p = zput(p, " "); p = zhexb(p, (unsigned)i);
-                                p = zput(p, "x"); p = zhex(p, g_vid.wmode_hist[i]); }
+                                p = zput(p, "x"); p = zhex(p, g_vid.WriteModeHistogram[i]); }
       p = zput(p, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
       { unsigned wm, mk;
         for (wm = 0; wm < 4; ++wm)
           for (mk = 0; mk < 16; ++mk)
-            if (g_vid.mw_hist[wm * 16 + mk]) {
+            if (g_vid.ModeMaskHistogram[wm * 16 + mk]) {
                 p = zput(p, " w"); p = zhexb(p, wm);
                 p = zput(p, "/m"); p = zhexb(p, mk);
-                p = zput(p, "="); p = zhex(p, g_vid.mw_hist[wm * 16 + mk]); } }
+                p = zput(p, "="); p = zhex(p, g_vid.ModeMaskHistogram[wm * 16 + mk]); } }
       p = zput(p, "\r\nSTAGE2: modeY mapmask hist:");
       for (i = 0; i < 16; ++i)
-          if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
-                                    p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }
+          if (g_vid.MaskHistogram[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
+                                    p = zput(p, "x"); p = zhex(p, g_vid.MaskHistogram[i]); }
       p = zput(p, "\r\n");
-      if (g_vid.vram_nz) {
-          uint32_t pitch = g_vid.vesa_stride ? g_vid.vesa_stride : 1;
-          p = zput(p, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); p = zhex(p, g_vid.vram_lo);
-          p = zput(p, " hi=0x"); p = zhex(p, g_vid.vram_hi);
-          p = zput(p, " nonzero=0x"); p = zhex(p, g_vid.vram_nz);
-          p = zput(p, "  => row "); p = zhex(p, g_vid.vram_lo / pitch);
-          p = zput(p, " col "); p = zhex(p, (g_vid.vram_lo % pitch) / (pitch / (g_vid.vesa_w ? g_vid.vesa_w : 1)));
-          p = zput(p, " .. row "); p = zhex(p, g_vid.vram_hi / pitch);
+      if (g_vid.VramNonZero) {
+          uint32_t pitch = g_vid.VesaStride ? g_vid.VesaStride : 1;
+          p = zput(p, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); p = zhex(p, g_vid.VramLow);
+          p = zput(p, " hi=0x"); p = zhex(p, g_vid.VramHigh);
+          p = zput(p, " nonzero=0x"); p = zhex(p, g_vid.VramNonZero);
+          p = zput(p, "  => row "); p = zhex(p, g_vid.VramLow / pitch);
+          p = zput(p, " col "); p = zhex(p, (g_vid.VramLow % pitch) / (pitch / (g_vid.VesaWidth ? g_vid.VesaWidth : 1)));
+          p = zput(p, " .. row "); p = zhex(p, g_vid.VramHigh / pitch);
           p = zput(p, "\r\n");
       }
       p = zput(p, "STAGE2: VESA mode SET (4F02): ");
-      if (!g_vid.vesa_set_seen) p = zput(p, "never called");
-      else { p = zput(p, "BX=0x"); p = zhex(p, (DWORD)g_vid.vesa_set_bx);
-             p = zput(p, g_vid.vesa_set_ok ? " ACCEPTED" : " REFUSED");
-             p = zput(p, (g_vid.vesa_set_bx & 0x4000) ? " [LFB]" : " [banked]");
-             p = zput(p, " -> "); p = zhex(p, (DWORD)g_vid.vesa_w);
-             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.vesa_h);
-             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.vesa_bpp);
-             p = zput(p, " stride=0x"); p = zhex(p, g_vid.vesa_stride); }
+      if (!g_vid.IsVesaSetSeen) p = zput(p, "never called");
+      else { p = zput(p, "BX=0x"); p = zhex(p, (DWORD)g_vid.VesaSetBx);
+             p = zput(p, g_vid.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
+             p = zput(p, (g_vid.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
+             p = zput(p, " -> "); p = zhex(p, (DWORD)g_vid.VesaWidth);
+             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.VesaHeight);
+             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.VesaBpp);
+             p = zput(p, " stride=0x"); p = zhex(p, g_vid.VesaStride); }
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: VESA calls by sub-function:");
       { int any = 0;
-        for (i = 0; i < 0x16; ++i) if (g_vid.vesa_calls[i]) {
+        for (i = 0; i < 0x16; ++i) if (g_vid.VesaCalls[i]) {
             unsigned bb; any = 1;
-            p = zput(p, " 4F"); p = zhexb(p, (unsigned)i); p = zput(p, "x"); p = zhex(p, g_vid.vesa_calls[i]);
-            if (g_vid.vesa_bl[i]) {
+            p = zput(p, " 4F"); p = zhexb(p, (unsigned)i); p = zput(p, "x"); p = zhex(p, g_vid.VesaCalls[i]);
+            if (g_vid.VesaBl[i]) {
                 p = zput(p, "(bl:");
-                for (bb = 0; bb < 16; ++bb) if (g_vid.vesa_bl[i] & (1u << bb)) { p = zhexb(p, bb == 15 ? 0x80u : bb); p = zput(p, ","); }
+                for (bb = 0; bb < 16; ++bb) if (g_vid.VesaBl[i] & (1u << bb)) { p = zhexb(p, bb == 15 ? 0x80u : bb); p = zput(p, ","); }
                 p = zput(p, ")");
             }
         }
         if (!any) p = zput(p, " none");
-        if (g_vid.vesa_calls[7]) {
-            p = zput(p, " | 4F07 max start=("); p = zhex(p, (DWORD)g_vid.vesa_07_maxx);
-            p = zput(p, ","); p = zhex(p, (DWORD)g_vid.vesa_07_maxy);
-            p = zput(p, ") refused="); p = zhex(p, g_vid.vesa_07_rej);
+        if (g_vid.VesaCalls[7]) {
+            p = zput(p, " | 4F07 max start=("); p = zhex(p, (DWORD)g_vid.Vesa07MaxX);
+            p = zput(p, ","); p = zhex(p, (DWORD)g_vid.Vesa07MaxY);
+            p = zput(p, ") refused="); p = zhex(p, g_vid.Vesa07Rejected);
         }
         /* #53: the 4F0Ah block's port writes -- a client switching banks without INT 10h
            shows here and NOT in the 4F05 count above. */
-        if (g_vid.vbe_pm_bank_n | g_vid.vbe_pm_start_n | g_vid.vbe_pm_rej) {
-            p = zput(p, " | 4F0A-block banks=0x"); p = zhex(p, g_vid.vbe_pm_bank_n);
-            p = zput(p, " starts=0x"); p = zhex(p, g_vid.vbe_pm_start_n);
-            p = zput(p, " refused=0x"); p = zhex(p, g_vid.vbe_pm_rej);
+        if (g_vid.VbePmBankCount | g_vid.VbePmStartCount | g_vid.VbePmRejected) {
+            p = zput(p, " | 4F0A-block banks=0x"); p = zhex(p, g_vid.VbePmBankCount);
+            p = zput(p, " starts=0x"); p = zhex(p, g_vid.VbePmStartCount);
+            p = zput(p, " refused=0x"); p = zhex(p, g_vid.VbePmRejected);
         }
         p = zput(p, "\r\n");
         log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
       p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");
-      if (!g_vid.vesa_qn) p = zput(p, " none");
-      else for (i = 0; i < g_vid.vesa_qn; ++i) {
-          p = zput(p, " 4F"); p = zhexb(p, (unsigned)g_vid.vesa_q_fn[i]);
-          p = zput(p, ":0x"); p = zhex(p, (DWORD)g_vid.vesa_q[i]);
-          p = zput(p, g_vid.vesa_q_ok[i] ? "=OK" : "=UNSUPPORTED");
+      if (!g_vid.VesaQueryCount) p = zput(p, " none");
+      else for (i = 0; i < g_vid.VesaQueryCount; ++i) {
+          p = zput(p, " 4F"); p = zhexb(p, (unsigned)g_vid.VesaQueryFunction[i]);
+          p = zput(p, ":0x"); p = zhex(p, (DWORD)g_vid.VesaQueries[i]);
+          p = zput(p, g_vid.VesaQueryOk[i] ? "=OK" : "=UNSUPPORTED");
       }
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: video modes unsupported:");
       for (i = 0, n = 0; i < 256; ++i)
-          if (VID_UNIMPL_GET(g_vid.unimpl_mode, i)) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i); ++n; }
+          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedModes, i)) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
     /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
@@ -37776,7 +37776,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          trap on the strength of session 22's note. See build/barprof.py.
          All three pages, because the pages have been equal to the digit before and
          that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
-    if (g_yremap && g_vid.mkind == VID_KIND_LINEAR8 && !g_vid.chain4) {
+    if (g_yremap && g_vid.ModeKind == VIDEO_KIND_LINEAR8 && !g_vid.IsChain4) {
         uint32_t pg, pl, row;
         char lb[220], *lq;
         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;  /* keep the log in order */

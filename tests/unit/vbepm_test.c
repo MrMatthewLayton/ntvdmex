@@ -17,8 +17,8 @@
 #include "vdd_video.h"
 
 static uint8_t g_flat[0x200000];          /* guest memory: real-mode MB + room to copy into */
-static uint8_t g_vmem[VID_APERTURE_SIZE];
-static video_state vid;
+static uint8_t g_vmem[VIDEO_APERTURE_SIZE];
+static VIDEO_STATE vid;
 static VDD_BUS bus;
 static uint64_t g_fake_us = 1000000;
 static uint64_t fake_clock(void) { return g_fake_us; }
@@ -81,12 +81,12 @@ int main(void)
     uint16_t win, start, pal, ports;
     printf("== VBE 4F0Ah protected-mode interface battery (#53) ==\n");
     memset(&vid, 0, sizeof vid);
-    vid.vmem = g_vmem;
-    dev = vdd_video_device(&vid);
+    vid.VideoMemory = g_vmem;
+    dev = VddVideoDevice(&vid);
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, 0, 0, 0, 0);
     CHECK(VddBusAdd(&bus, &dev) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
-    vid.time_us = fake_clock;
+    vid.TimeUs = fake_clock;
 
     /* ---- 4F0Ah BL=00h: the table ---- */
     int10(0x4F0A, 0x0000, 0xC1C1, 0, &r);
@@ -118,44 +118,44 @@ int main(void)
     memset(g_flat + blk, 0xCC, len);          /* and the original is gone: nothing may point back */
 
     /* ---- outside a VESA mode the ports refuse and change nothing ---- */
-    {   uint32_t rej = vid.vbe_pm_rej;
-        CHECK(call_pm(win, 0x0000, 0, 3, 0, 0, NULL) && vid.vbe_pm_rej == rej + 1 && vid.vesa_bank == 0,
+    {   uint32_t rej = vid.VbePmRejected;
+        CHECK(call_pm(win, 0x0000, 0, 3, 0, 0, NULL) && vid.VbePmRejected == rej + 1 && vid.VesaBank == 0,
               "SetWindow in mode 3: returns, refused, counted (vbe_pm_rej)"); }
 
     /* ---- 640x480x8 banked ---- */
     int10(0x4F02, 0x0101, 0, 0, &r);
-    CHECK((r.Eax & 0xFFFF) == 0x004F && vid.in_vesa && !vid.vesa_lfb, "4F02h 0101h: banked 640x480x8");
-    memset(g_vmem, 0x11, VID_VESA_WIN);       /* the client draws bank 0 ...                */
+    CHECK((r.Eax & 0xFFFF) == 0x004F && vid.IsVesa && !vid.IsVesaLfb, "4F02h 0101h: banked 640x480x8");
+    memset(g_vmem, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ...                */
     CHECK(call_pm(win, 0x0000, 0, 2, 0, 0, &c), "SetWindow (copied, near-called) returns to the caller, ESP balanced");
-    CHECK(vid.vesa_bank == 2 && vid.vbe_pm_bank_n == 1, "SetWindow DX=2: window A is bank 2");
-    CHECK(vid.vesa_vram[0] == 0x11 && vid.vesa_vram[VID_VESA_WIN - 1] == 0x11,
+    CHECK(vid.VesaBank == 2 && vid.VbePmBankCount == 1, "SetWindow DX=2: window A is bank 2");
+    CHECK(vid.VesaVram[0] == 0x11 && vid.VesaVram[VIDEO_VESA_WINDOW - 1] == 0x11,
           "SetWindow: the old window was flushed into bank 0, as 4F05h does");
     CHECK(c.r[0] == 0xA5A5A5A5u && c.r[2] == 2 && c.r[3] == 0 && c.r[5] == 0xB5B5B5B5u && c.r[6] == 0xC6C6C6C6u,
           "SetWindow: EAX/EDX/EBX/EBP/ESI preserved");
     int10(0x4F05, 0x0100, 0, 0, &r);
     CHECK((r.Edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
-    CHECK(call_pm(win, 0x0001, 0, 1, 0, 0, NULL) && vid.vesa_bank == 2,
+    CHECK(call_pm(win, 0x0001, 0, 1, 0, 0, NULL) && vid.VesaBank == 2,
           "SetWindow BL=01h (window B, which does not exist): no change");
-    CHECK(call_pm(win, 0x0000, 0, 0x7FFF, 0, 0, NULL) && vid.vesa_bank == 2,
+    CHECK(call_pm(win, 0x0000, 0, 0x7FFF, 0, 0, NULL) && vid.VesaBank == 2,
           "SetWindow past the end of VRAM: refused, bank unchanged");
-    CHECK(call_pm(win, 0x0000, 0, 0, 0, 0, NULL) && vid.vesa_bank == 0 && g_vmem[0] == 0x11,
+    CHECK(call_pm(win, 0x0000, 0, 0, 0, 0, NULL) && vid.VesaBank == 0 && g_vmem[0] == 0x11,
           "SetWindow back to 0: bank 0's bytes come back into the window");
 
     /* ---- SetDisplayStart: CX/DX = start in DWORDs; 4F07h BL=01h reads it back ---- */
     {   uint32_t org = 640u * 100u + 64u;     /* (64,100) */
         CHECK(call_pm(start, 0x0000, (org / 4) & 0xFFFF, (org / 4) >> 16, 0, 0, NULL)
-              && vid.vesa_org == org && vid.vesa_org_live == org && vid.vbe_pm_start_n == 1,
+              && vid.VesaOrigin == org && vid.VesaOriginLive == org && vid.VbePmStartCount == 1,
               "SetDisplayStart BL=00h: start = DX:CX * 4, shown at once");
         int10(0x4F07, 0x0001, 0, 0, &r);
         CHECK((r.Ecx & 0xFFFF) == 64 && (r.Edx & 0xFFFF) == 100, "4F07h BL=01h agrees: x=64, y=100");
     }
     {   uint32_t org = 640u * 480u, ins = g_ins;          /* page 2 */
         CHECK(call_pm(start, 0x0080, (org / 4) & 0xFFFF, (org / 4) >> 16, 0, 0, NULL)
-              && vid.vesa_org == org && g_ins > ins + 2,
+              && vid.VesaOrigin == org && g_ins > ins + 2,
               "SetDisplayStart BL=80h: waits on 3DAh for the retrace, then sets it");
     }
-    {   uint32_t org = vid.vesa_org, big = 0x3FFFFFu;     /* far past 4 MB */
-        CHECK(call_pm(start, 0x0000, big & 0xFFFF, big >> 16, 0, 0, NULL) && vid.vesa_org == org,
+    {   uint32_t org = vid.VesaOrigin, big = 0x3FFFFFu;     /* far past 4 MB */
+        CHECK(call_pm(start, 0x0000, big & 0xFFFF, big >> 16, 0, 0, NULL) && vid.VesaOrigin == org,
               "SetDisplayStart past VRAM: refused, start unchanged");
     }
 
@@ -175,8 +175,8 @@ int main(void)
 
     /* ---- the LFB form of the mode has no window to switch ---- */
     int10(0x4F02, 0x4101, 0, 0, &r);
-    {   uint32_t rej = vid.vbe_pm_rej;
-        CHECK(call_pm(win, 0x0000, 0, 1, 0, 0, NULL) && vid.vbe_pm_rej == rej + 1,
+    {   uint32_t rej = vid.VbePmRejected;
+        CHECK(call_pm(win, 0x0000, 0, 1, 0, 0, NULL) && vid.VbePmRejected == rej + 1,
               "SetWindow in an LFB mode: refused (4F05h answers 03h there)"); }
 
     /* ---- the block in guest memory is restored by every 4F0Ah call ---- */
