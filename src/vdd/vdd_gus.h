@@ -19,6 +19,8 @@
 #define GUS_DEFAULT_DMA  3
 #define GUS_DRAM_SIZE    (1024u * 1024u)   /* 20 address bits (ref §3)               */
 #define GUS_VOICES       32
+#define GUS_STEREO_CHANNELS 2
+#define GUS_DEVICE_NAME  "gus"
 
 /* #190: the GUS's own MIDI port is a 6850 UART (ref §9): it transmits BYTES, not
    messages. The card hands every transmitted byte to this sink, exactly as the wire
@@ -120,7 +122,7 @@ typedef const GUS_STATE *PCGUS_STATE;
 INT  VddGusInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddGusReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddGusDevice(_In_ PGUS_STATE state)
-{ NTVDD_DEVICE device; device.Name = "gus"; device.Initialize = VddGusInitialize; device.Reset = VddGusReset;
+{ NTVDD_DEVICE device; device.Name = GUS_DEVICE_NAME; device.Initialize = VddGusInitialize; device.Reset = VddGusReset;
   device.Shutdown = 0; device.Context = state; return device; }
 
 /* The GF1's output rate for the current active-voice count (ref §4), in Hz. */
@@ -130,7 +132,7 @@ UINT32 VddGusRateHz(_In_ PCGUS_STATE state);
    timer by that much GF1 time, and raising the interrupts that time produces. */
 VOID VddGusRender(_Inout_ PGUS_STATE state, _Out_writes_(count) INT16 *output, _In_ UINT32 count);
 /* #189: the same, as panned interleaved L/R pairs (2*count samples). */
-VOID VddGusRenderStereo(_Inout_ PGUS_STATE state, _Out_writes_(2 * count) INT16 *output, _In_ UINT32 count);
+VOID VddGusRenderStereo(_Inout_ PGUS_STATE state, _Out_writes_(GUS_STEREO_CHANNELS * count) INT16 *output, _In_ UINT32 count);
 
 /* The linear gain (Q16) of a 12-bit GF1 volume (ref §7). Exposed for the test. */
 UINT32 VddGusVolumeGain(_In_ WORD volume12);
