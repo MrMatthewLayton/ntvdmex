@@ -165,3 +165,4 @@ tools/score/probe-cache.json
 /tests/probes/dos/*.com
 /scripts/member_rename.py
 /scripts/style_signatures.py
+/scripts/style_pointers.py
