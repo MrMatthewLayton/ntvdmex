@@ -197,7 +197,7 @@ typedef struct _OPL_OPERATOR {
     BYTE AttackRate, DecayRate;         /* 0x60-0x75: attack, decay rates          */
     BYTE SustainLevel, ReleaseRate;     /* 0x80-0x95: sustain level, release rate  */
     /* 0xE0-0xF5: waveform select, the 3 bits AS WRITTEN. How many of them count is
-       decided at render time (opl_eff_wave in vdd_opl_synth.c), because it depends
+       decided at render time (OplEffectiveWaveform in vdd_opl_synth.c), because it depends
        on registers written later -- NEW, and on an OPL2 the WSE bit in 0x01. */
     BYTE Waveform;
     /* synthesis state */
@@ -249,11 +249,11 @@ typedef struct _OPL_STATE {
     /* The chip's NOISE generator: a 23-bit LFSR, also free-running from power-on
        and never restarted by key-on. Only the hi-hat and snare read it. Held as
        the last 23 bits it produced (bit 0 oldest); VddOplReset() seeds it with
-       OPL_NOISE_SEED. See opl_noise_step() in vdd_opl_synth.c for how, and how
+       OPL_NOISE_SEED. See OplNoiseStep() in vdd_opl_synth.c for how, and how
        much of that was measured. */
     UINT32 Noise;
     /* Bit 0 op13, bit 1 op17: keyed on in rhythm mode since the last sample, so
-       the accumulator restarts one step further on (see opl_rhythm_sample). */
+       the accumulator restarts one step further on (see OplRhythmSample). */
     BYTE  RhythmRestart;
 
     UINT32 SampleHz;                    /* render rate (0 => OPL_DEFAULT_HZ)       */

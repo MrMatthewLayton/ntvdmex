@@ -157,7 +157,7 @@ static VOID OplRhythmRekey(POPL_STATE state, BYTE bdBefore, BYTE channelKeysBefo
         OplKeyOperator(state, operatorIndex, isHeldNow);
         /* Hi-hat / cymbal accumulator restarted in a running chip: each feeds the
            other's phase bit, so the restart POINT matters -- measured, see
-           opl_rhythm_sample (vdd_opl_synth.c). */
+           OplRhythmSample (vdd_opl_synth.c). */
         if (isHeldNow && (operatorIndex == OPL_OPERATOR_HIHAT || operatorIndex == OPL_OPERATOR_CYMBAL) && (bdAfter & OPL_BD_RHYTHM) && state->LfoCount)
             state->RhythmRestart |= (BYTE)(operatorIndex == OPL_OPERATOR_HIHAT ? OPL_RHYTHM_RESTART_HIHAT : OPL_RHYTHM_RESTART_CYMBAL);
     }

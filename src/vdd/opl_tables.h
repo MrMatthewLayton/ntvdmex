@@ -6,10 +6,10 @@
 #ifndef NTVDMEX_OPL_TABLES_H
 #define NTVDMEX_OPL_TABLES_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
 /* -log2(sin(x)) * 256, quarter wave (the synth mirrors it). */
-static const uint16_t opl_logsin[256] = {
+static const WORD g_OplLogSin[256] = {
      2137,  1731,  1543,  1419,  1326,  1252,  1190,  1137,
      1091,  1050,  1013,   979,   949,   920,   894,   869,
       846,   825,   804,   785,   767,   749,   732,   717,
@@ -45,7 +45,7 @@ static const uint16_t opl_logsin[256] = {
 };
 
 /* 2^(-i/256) * 4096: the fractional part of an attenuation. */
-static const uint16_t opl_exp[256] = {
+static const WORD g_OplExp[256] = {
      4096,  4085,  4074,  4063,  4052,  4041,  4030,  4019,
      4008,  3997,  3987,  3976,  3965,  3954,  3944,  3933,
      3922,  3912,  3901,  3891,  3880,  3870,  3859,  3849,
@@ -81,6 +81,6 @@ static const uint16_t opl_exp[256] = {
 };
 
 /* Largest logsin entry, so callers can size their headroom. */
-#define OPL_LOGSIN_MAX 2137
+#define OPL_LOG_SIN_MAX 2137
 
 #endif /* NTVDMEX_OPL_TABLES_H */
