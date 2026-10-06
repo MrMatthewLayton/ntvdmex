@@ -72,13 +72,13 @@ typedef struct _PRESENT_DDRAW {
     BYTE  Snapshot[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
     UINT32 Snapshot32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* ARGB, when SnapshotBpp == 32 */
     BYTE  SnapshotBpp;                  /* 8 = Snapshot[] + SnapshotPalette, 32 = Snapshot32[]    */
-    UINT32 SnapshotPalette[256];
+    UINT32 SnapshotPalette[NTVDD_PALETTE_ENTRIES];
     INT   SnapshotWidth, SnapshotHeight, IsSnapshotValid;
     /* Raster split (s70, see NTVDD_FRAME): the frame-start and mid-frame palettes,
        the row each mid-frame entry applies from, and the frame stamps. `IsSnapshotSplit`
        is 0 for the ordinary one-palette frame, which keeps the fast paths. */
-    UINT32 SnapshotPaletteBase[256], SnapshotPaletteSplit[256], SnapshotSplitFrame[256];
-    WORD SnapshotSplitRow[256];
+    UINT32 SnapshotPaletteBase[NTVDD_PALETTE_ENTRIES], SnapshotPaletteSplit[NTVDD_PALETTE_ENTRIES], SnapshotSplitFrame[NTVDD_PALETTE_ENTRIES];
+    WORD SnapshotSplitRow[NTVDD_PALETTE_ENTRIES];
     /* ── s84 (user): WHAT DOES DRAWING THE PICTURE COST? Measured before anyone builds a
          windowed DirectDraw path: per present, split by path, in microseconds (QPC).
          `win` is the GDI path (window, or borderless fullscreen), `fs` exclusive
@@ -97,7 +97,7 @@ typedef struct _PRESENT_DDRAW {
     INT           IsFlipDriverTimed, FlipBuffers, IsFlipOurWait, FlipStreak;
     UINT32 SnapshotFrameNumber;
     INT      IsSnapshotSplit;
-    UINT32 RowPalette[256]; INT RowPaletteY;   /* the palette resolved for one row       */
+    UINT32 RowPalette[NTVDD_PALETTE_ENTRIES]; INT RowPaletteY;   /* the palette resolved for one row       */
     /* s81 (#138): a transient line of text drawn over the picture until `HintUntil`
        (GetTickCount ms) -- "press the Windows key to release the mouse" in fullscreen,
        where there is no status strip to say it. GDI path only. */
