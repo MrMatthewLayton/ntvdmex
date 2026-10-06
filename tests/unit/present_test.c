@@ -10,6 +10,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include "present_scale.h"
 
 static int total = 0, fails = 0;
@@ -26,50 +27,50 @@ int main(void)
          Every present this host has ever done filled the client area. A setting
          that is off has to leave that byte-for-byte alone, or turning the
          feature on becomes the safe option and nobody trusts the default. */
-    present_fit(1024, 600, 0, &x, &y, &w, &h);
+    PresentFit(1024, 600, 0, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 1024 && h == 600,
           "aspect off: the frame fills the client area, exactly as before");
 
     /* A window WIDER than 4:3 -> bars at the sides, frame as tall as the client. */
-    present_fit(1000, 600, 1, &x, &y, &w, &h);
+    PresentFit(1000, 600, 1, &x, &y, &w, &h);
     CHECK(w == 800 && h == 600, "aspect on, wide window: 4:3 box is 800x600");
     CHECK(x == 100 && y == 0,   "...centred, so the bars are equal at left and right");
 
     /* A window TALLER than 4:3 -> bars top and bottom. */
-    present_fit(640, 600, 1, &x, &y, &w, &h);
+    PresentFit(640, 600, 1, &x, &y, &w, &h);
     CHECK(w == 640 && h == 480, "aspect on, tall window: 4:3 box is 640x480");
     CHECK(x == 0 && y == 60,    "...centred, so the bars are equal top and bottom");
 
     /* Exactly 4:3 -> no bars at all, and no off-by-one that would leave a
        one-pixel line of stale frame down one edge. */
-    present_fit(640, 480, 1, &x, &y, &w, &h);
+    PresentFit(640, 480, 1, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 640 && h == 480,
           "aspect on, a 4:3 client: no bars and no off-by-one");
-    present_fit(1280, 960, 1, &x, &y, &w, &h);
+    PresentFit(1280, 960, 1, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 1280 && h == 960, "...at any 4:3 size");
 
     /* A client area can genuinely be zero-sized -- a minimised window reports it
        -- and the result still has to be something StretchDIBits will accept. */
-    present_fit(0, 0, 1, &x, &y, &w, &h);
+    PresentFit(0, 0, 1, &x, &y, &w, &h);
     CHECK(w >= 1 && h >= 1, "a zero-sized client still yields a blittable rectangle");
-    present_fit(0, 0, 0, &x, &y, &w, &h);
+    PresentFit(0, 0, 0, &x, &y, &w, &h);
     CHECK(w >= 1 && h >= 1, "...with aspect off too");
 
     /* ── WHICH SCALER DOES WHAT. ──────────────────────────────────────────────
          The ids ARE the Scaler combo's indices (settings.h), so a wrong answer
          here is a knob that silently selects the neighbouring effect. */
-    CHECK(!present_scaler_doubles(PRESENT_SCALER_NONE)
-       && !present_scaler_scanlines(PRESENT_SCALER_NONE), "scaler None does nothing");
-    CHECK(present_scaler_doubles(PRESENT_SCALER_SCALE2X)
-       && !present_scaler_scanlines(PRESENT_SCALER_SCALE2X), "Scale2x doubles, no scanlines");
-    CHECK(!present_scaler_doubles(PRESENT_SCALER_SCANLINES)
-       && present_scaler_scanlines(PRESENT_SCALER_SCANLINES), "Scanlines masks, no doubling");
-    CHECK(present_scaler_doubles(PRESENT_SCALER_CRT)
-       && present_scaler_scanlines(PRESENT_SCALER_CRT), "CRT is both");
+    CHECK(!PresentScalerDoubles(PRESENT_SCALER_NONE)
+       && !PresentScalerHasScanlines(PRESENT_SCALER_NONE), "scaler None does nothing");
+    CHECK(PresentScalerDoubles(PRESENT_SCALER_SCALE2X)
+       && !PresentScalerHasScanlines(PRESENT_SCALER_SCALE2X), "Scale2x doubles, no scanlines");
+    CHECK(!PresentScalerDoubles(PRESENT_SCALER_SCANLINES)
+       && PresentScalerHasScanlines(PRESENT_SCALER_SCANLINES), "Scanlines masks, no doubling");
+    CHECK(PresentScalerDoubles(PRESENT_SCALER_CRT)
+       && PresentScalerHasScanlines(PRESENT_SCALER_CRT), "CRT is both");
     /* ⚠ hq2x is NOT implemented. It must behave as None -- visibly nothing --
          rather than half-selecting one of the effects it is not. */
-    CHECK(!present_scaler_doubles(PRESENT_SCALER_HQ2X)
-       && !present_scaler_scanlines(PRESENT_SCALER_HQ2X),
+    CHECK(!PresentScalerDoubles(PRESENT_SCALER_HQ2X)
+       && !PresentScalerHasScanlines(PRESENT_SCALER_HQ2X),
           "hq2x is unimplemented and presents as None, not as something else");
 
     /* ── SCALE2X. ─────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ int main(void)
         uint8_t dst[6 * 6 + 8];
         int i, ok = 1;
         memset(dst, 0xEE, sizeof dst);
-        present_scale2x_8(flat3, 3, 3, 3, dst);
+        PresentScale2x8(flat3, 3, 3, 3, dst);
         for (i = 0; i < 36; ++i) if (dst[i] != 7) ok = 0;
         CHECK(ok, "Scale2x: a flat field doubles to the same flat field");
         ok = 1;
@@ -93,7 +94,7 @@ int main(void)
            a mouse cursor or a 1-pixel font stem into mush. */
         static const uint8_t dot[9] = { 1,1,1, 1,2,1, 1,1,1 };
         uint8_t dst[36];
-        present_scale2x_8(dot, 3, 3, 3, dst);
+        PresentScale2x8(dot, 3, 3, 3, dst);
         CHECK(dst[2*6+2] == 2 && dst[2*6+3] == 2 && dst[3*6+2] == 2 && dst[3*6+3] == 2,
               "Scale2x: an isolated pixel stays a solid 2x2 block");
     }
@@ -105,7 +106,7 @@ int main(void)
                                          2,1,1,
                                          1,1,1 };
         uint8_t dst[36];
-        present_scale2x_8(diag, 3, 3, 3, dst);
+        PresentScale2x8(diag, 3, 3, 3, dst);
         CHECK(dst[2*6+2] == 2, "Scale2x: the staircase corner is filled from the diagonal");
         CHECK(dst[2*6+3] == 1 && dst[3*6+2] == 1 && dst[3*6+3] == 1,
               "...and the other three quarters keep the centre pixel");
@@ -116,7 +117,7 @@ int main(void)
            bytes with a guard after it. */
         static const uint8_t guarded[9 + 4] = { 2,2,1, 2,1,1, 1,1,1, 0,0,0,0 };
         uint8_t dst[36];
-        present_scale2x_8(guarded, 3, 3, 3, dst);
+        PresentScale2x8(guarded, 3, 3, 3, dst);
         CHECK(dst[0] == 2 && dst[1] == 2 && dst[6] == 2 && dst[7] == 2,
               "Scale2x: the top-left corner doubles plainly (neighbours clamp)");
         CHECK(dst[5*6+5] == 1, "Scale2x: ...and so does the bottom-right");
@@ -130,7 +131,7 @@ int main(void)
                                                3,3,3, 9,9 };
         uint8_t dst[36];
         int i, ok = 1;
-        present_scale2x_8(padded, 3, 3, 5, dst);
+        PresentScale2x8(padded, 3, 3, 5, dst);
         for (i = 0; i < 36; ++i) if (dst[i] != 3) ok = 0;
         CHECK(ok, "Scale2x: a stride wider than the width is respected");
     }
@@ -144,67 +145,67 @@ int main(void)
     CHECK(PRESENT_ASPECT_NATIVE == 0 && PRESENT_ASPECT_4_3 == 1 && PRESENT_ASPECT_STRETCH == 4,
           "aspect indices: Native 0, 4:3 1, Stretch 4");
     {   int n = 0, d = 0;
-        present_aspect_ratio(PRESENT_ASPECT_16_9, &n, &d);
+        PresentAspectRatio(PRESENT_ASPECT_16_9, &n, &d);
         CHECK(n == 16 && d == 9, "16:9 is 16/9");
-        present_aspect_ratio(PRESENT_ASPECT_NATIVE, &n, &d);
+        PresentAspectRatio(PRESENT_ASPECT_NATIVE, &n, &d);
         CHECK(n == 0 && d == 0, "Native has no ratio of its own (present_fit reads 0/0 as fill)");
-        present_target_ratio(PRESENT_ASPECT_NATIVE, 320, 200, &n, &d);
+        PresentTargetRatio(PRESENT_ASPECT_NATIVE, 320, 200, &n, &d);
         CHECK(n == 320 && d == 200, "Native's target ratio is the frame's own: 320x200 is 8:5"); }
 
     /* A wide window under 16:9 pillarboxes to 16:9. */
-    present_fit(1000, 400, PRESENT_ASPECT_16_9, &x, &y, &w, &h);
+    PresentFit(1000, 400, PRESENT_ASPECT_16_9, &x, &y, &w, &h);
     CHECK(w == 711 && h == 400, "16:9 in a 1000x400 client is 711x400, height-bound");
 
     /* ── #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
     {   int pw, ph;
-        present_window_picture(PRESENT_ASPECT_NATIVE, 320, 200, 1, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_NATIVE, 320, 200, 1, &pw, &ph);
         CHECK(pw == 320 && ph == 200, "window: 320x200 at 1x is 320x200 -- no 640x480 floor");
-        present_window_picture(PRESENT_ASPECT_NATIVE, 320, 200, 3, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_NATIVE, 320, 200, 3, &pw, &ph);
         CHECK(pw == 960 && ph == 600, "window: 320x200 at 3x is 960x600");
-        present_window_picture(PRESENT_ASPECT_NATIVE, 720, 400, 2, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_NATIVE, 720, 400, 2, &pw, &ph);
         CHECK(pw == 1440 && ph == 800, "window: 720x400 text at 2x is 1440x800");
-        present_window_picture(PRESENT_ASPECT_STRETCH, 640, 200, 1, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_STRETCH, 640, 200, 1, &pw, &ph);
         CHECK(pw == 640 && ph == 200, "window: Stretch in a window is Native (640x200 stays 16:5)");
-        present_window_picture(PRESENT_ASPECT_4_3, 320, 200, 2, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_4_3, 320, 200, 2, &pw, &ph);
         CHECK(pw == 640 && ph == 480, "window: forced 4:3 keeps the width -- 320x200 at 2x is 640x480");
-        present_window_picture(PRESENT_ASPECT_16_9, 640, 200, 1, &pw, &ph);
+        PresentWindowPicture(PRESENT_ASPECT_16_9, 640, 200, 1, &pw, &ph);
         CHECK(pw == 640 && ph == 360, "window: forced 16:9 -- 640x200 at 1x is 640x360"); }
 
     /* ── #325: WHERE THE PICTURE GOES. */
-    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
     CHECK(w == 1600 && h == 1000 && x == 40 && y == 25,
           "layout: 320x200 on 1680x1050, whole pixels -> 5x = 1600x1000, centred");
-    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 720, 400, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 720, 400, &x, &y, &w, &h);
     CHECK(w == 1440 && h == 800 && x == 120 && y == 125, "layout: 720x400 text -> 2x = 1440x800");
-    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 800, 600, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 800, 600, &x, &y, &w, &h);
     CHECK(w == 800 && h == 600 && x == 440 && y == 225, "layout: 800x600 -> 1x, with the borders a physical limit");
-    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1000, 1280, 1024, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1000, 1280, 1024, &x, &y, &w, &h);
     CHECK(w == 1250 && h == 1000, "layout: 1280x1024 that does not fit at 1x is scaled down on-ratio");
-    present_layout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_FILL, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_FILL, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
     CHECK(w == 1680 && h == 1050, "layout: Fill -> the largest 8:5 picture (the whole 1680x1050)");
-    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1600, 1200, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1600, 1200, 320, 200, &x, &y, &w, &h);
     CHECK(w == 1600 && h == 1200 && x == 0, "layout: forced 4:3, whole pixels -> 5x6 = 1600x1200 EXACTLY 4:3");
-    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
     CHECK(w == 1400 && h == 1050, "layout: forced 4:3 with no exact whole pair that fits -> 1400x1050");
-    present_layout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 1680 && h == 1050, "layout: Stretch on a screen fills it");
-    present_layout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 0, 640, 400, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_STRETCH, PRESENT_FIT_WHOLE, 0, 640, 400, 320, 200, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 640 && h == 400, "layout: in a window sized to the picture, the whole client");
-    present_layout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 0, 640, 480, 320, 200, &x, &y, &w, &h);
+    PresentLayout(PRESENT_ASPECT_4_3, PRESENT_FIT_WHOLE, 0, 640, 480, 320, 200, &x, &y, &w, &h);
     CHECK(x == 0 && y == 0 && w == 640 && h == 480, "layout: a forced-4:3 window fills its client exactly");
 
     /* #229: the colour filters recolour a COLOUR; Default must be the identity. */
-    CHECK(present_tint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
-    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_WHITE) == 0xFFFFFFFFu, "tint: white stays white on a paper-white screen");
-    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_GREEN) == 0xFF33FF33u, "tint: full brightness is the P1 green");
-    CHECK(present_tint(0xFFFFFFFFu, PRESENT_TINT_MONO_ORANGE) == 0xFFFFB000u, "tint: full brightness is amber");
-    CHECK(present_tint(0xFF000000u, PRESENT_TINT_MONO_ORANGE) == 0xFF000000u, "tint: black stays black");
-    CHECK(present_tint(0xFFFF0000u, PRESENT_TINT_MONO_WHITE) == 0xFF4C4C4Cu, "tint: pure red is 29.9% grey (Rec. 601)");
+    CHECK(PresentTint(0xFF123456u, PRESENT_TINT_DEFAULT) == 0xFF123456u, "tint: Default leaves a colour alone");
+    CHECK(PresentTint(0xFFFFFFFFu, PRESENT_TINT_MONO_WHITE) == 0xFFFFFFFFu, "tint: white stays white on a paper-white screen");
+    CHECK(PresentTint(0xFFFFFFFFu, PRESENT_TINT_MONO_GREEN) == 0xFF33FF33u, "tint: full brightness is the P1 green");
+    CHECK(PresentTint(0xFFFFFFFFu, PRESENT_TINT_MONO_ORANGE) == 0xFFFFB000u, "tint: full brightness is amber");
+    CHECK(PresentTint(0xFF000000u, PRESENT_TINT_MONO_ORANGE) == 0xFF000000u, "tint: black stays black");
+    CHECK(PresentTint(0xFFFF0000u, PRESENT_TINT_MONO_WHITE) == 0xFF4C4C4Cu, "tint: pure red is 29.9% grey (Rec. 601)");
     /* #229 (user, s84): sepia is washed-out COLOUR -- the hue survives, muted and warm. */
-    {   uint32_t w = present_tint(0xFFFFFFFFu, PRESENT_TINT_SEPIA);
-        uint32_t k = present_tint(0xFF000000u, PRESENT_TINT_SEPIA);
-        uint32_t rd = present_tint(0xFFFF0000u, PRESENT_TINT_SEPIA);
-        uint32_t bl = present_tint(0xFF0000FFu, PRESENT_TINT_SEPIA);
+    {   uint32_t w = PresentTint(0xFFFFFFFFu, PRESENT_TINT_SEPIA);
+        uint32_t k = PresentTint(0xFF000000u, PRESENT_TINT_SEPIA);
+        uint32_t rd = PresentTint(0xFFFF0000u, PRESENT_TINT_SEPIA);
+        uint32_t bl = PresentTint(0xFF0000FFu, PRESENT_TINT_SEPIA);
         #define CH(c, sh) (((c) >> (sh)) & 0xFFu)
         CHECK(CH(w,16) >= CH(w,8) && CH(w,8) > CH(w,0) && CH(w,0) >= 0xC0u,
               "tint: sepia white is cream -- warm, and still bright");

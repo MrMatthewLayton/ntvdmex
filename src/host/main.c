@@ -11878,7 +11878,7 @@ static void host_fullscreen_toggle(HWND h)
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.Height);
         if (g_vid.frame.Width && g_vid.frame.Height) {
             int fx, fy, fw, fh;
-            present_layout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.Width,
+            PresentLayout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.Width,
                            (int)g_vid.frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
             fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
             fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
@@ -12391,7 +12391,7 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
      mode -- with the window's frame (borders, caption, menu, status strip) added
      outside it. There is no minimum any more: it was 640x480 on-aspect, so 320x200 at
      "1x" was really 2x by 2.4x and nothing was pixel-exact. A forced ratio keeps the
-     width and shapes the height (present_window_picture). */
+     width and shapes the height (PresentWindowPicture). */
 
 static void host_frame_size(int *sw, int *sh)
 {
@@ -12403,7 +12403,7 @@ static void host_picture(int k, int *pw, int *ph)
 {
     int sw, sh;
     host_frame_size(&sw, &sh);
-    present_window_picture((int)g_set.v[SET_ASPECT], sw, sh, k, pw, ph);
+    PresentWindowPicture((int)g_set.v[SET_ASPECT], sw, sh, k, pw, ph);
 }
 
 /* What the frame adds around the video: borders, caption, menu bar, status strip.
@@ -12522,7 +12522,7 @@ static void host_apply_scale(HWND h, int k)
     g_fit_down = 0;
     if (pw > rw || ph > rh) {
         int fx, fy;
-        present_fit_nd(rw, rh, pw, ph, &fx, &fy, &pw, &ph);
+        PresentFitRatio(rw, rh, pw, ph, &fx, &fy, &pw, &ph);
         g_fit_down = 1;
     }
     host_frame_extra(h, &ex, &ey);
@@ -12569,7 +12569,7 @@ static DWORD g_aspect_live  = 0xFFFFFFFFu;   /* ...and the shape it is that size
      window is re-sized to the new picture at the scale it is at. Debounced: the new
      size must hold for 150 ms, so a program that passes through a mode on its way to
      another does not make the window jump twice. Maximised and fullscreen are fitted
-     per frame by present_layout and are left alone. */
+     per frame by PresentLayout and are left alone. */
 static void host_follow_frame(HWND h)
 {
     static int pend_w, pend_h;
@@ -13866,17 +13866,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             vh = (r->bottom - r->top) - ey;
             if (vw < 1) vw = 1;
             if (vh < 1) vh = 1;
-            if (present_is_native((int)g_set.v[SET_ASPECT])) {
+            if (PresentIsNative((int)g_set.v[SET_ASPECT])) {
                 /* ── #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged --
                      the nearest k to where the held edge is, never below 1x -- and that
                      k becomes the window's scale, so the next mode change keeps it. */
                 int k = (wp == WMSZ_TOP || wp == WMSZ_BOTTOM) ? (vh + sh / 2) / sh
                                                               : (vw + sw / 2) / sw;
                 if (k < 1) k = 1;
-                present_window_picture((int)g_set.v[SET_ASPECT], sw, sh, k, &vw, &vh);
+                PresentWindowPicture((int)g_set.v[SET_ASPECT], sw, sh, k, &vw, &vh);
                 g_scale_k = g_scale_want = k; g_fit_down = 0;
             } else {
-                present_target_ratio((int)g_set.v[SET_ASPECT], sw, sh, &n, &d);
+                PresentTargetRatio((int)g_set.v[SET_ASPECT], sw, sh, &n, &d);
                 switch (wp) {
                 case WMSZ_LEFT: case WMSZ_RIGHT:
                     vh = (int)((long)vw * d / n); break;   /* width drives height     */

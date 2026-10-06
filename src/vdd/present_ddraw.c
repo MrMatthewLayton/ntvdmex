@@ -180,9 +180,9 @@ static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int 
        stretch and the stretch then works from a source with twice the detail.
        (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
        snap32 either.) */
-    if (scale2x && !split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
+    if (scale2x && !split && !direct && PresentScalerDoubles(pd->scaler) && sw > 0 && sh > 0
         && sw <= NTVDD_FRAME_MAX_WIDTH && sh <= NTVDD_FRAME_MAX_HEIGHT) {
-        present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
+        PresentScale2x8(pd->snap, sw, sh, sw, s_scaled);
         pix = s_scaled; sw *= 2; sh *= 2;
     }
     ZeroMemory(bi, sizeof *bi);
@@ -276,7 +276,7 @@ static void gdi_present(present_ddraw *pd)
              source): a window is sized to the picture, maximised/fullscreen fit by the
              Fit setting. */
         int screen = pd->fullscreen || IsZoomed(pd->hwnd);
-        present_layout(pd->aspect, screen ? pd->fit : PRESENT_FIT_WHOLE, screen, cw, ch,
+        PresentLayout(pd->aspect, screen ? pd->fit : PRESENT_FIT_WHOLE, screen, cw, ch,
                        pd->snap_w, pd->snap_h, &dx, &dy, &dw, &dh); }
     if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
@@ -287,7 +287,7 @@ static void gdi_present(present_ddraw *pd)
         FillRect(hdc, &full, (HBRUSH)GetStockObject(BLACK_BRUSH));
     }
     blit_picture(hdc, dx, dy, dw, dh, pix, &bi, sw, sh, pd->filter);   /* #325 */
-    if (present_scaler_scanlines(pd->scaler)) {
+    if (PresentScalerHasScanlines(pd->scaler)) {
         HBRUSH br = scanline_brush();
         if (br) {
             HGDIOBJ old = SelectObject(hdc, br);
@@ -337,7 +337,7 @@ static void fs_teardown(present_ddraw *pd)
        * fs_present then ignored pd->aspect completely, so even the part we DID control
          was filling rather than fitting.
      Taking the desktop's current mode fixes both: the panel shows its native signal
-     1:1, and we letterbox/pillarbox inside it with present_fit -- the same function the
+     1:1, and we letterbox/pillarbox inside it with PresentFit -- the same function the
      windowed path uses, so the two modes finally agree about what a setting means.
    ⚠ NO SetDisplayMode AT ALL now. Exclusive mode does not require one, and not calling
      it also means Alt+Enter no longer makes the monitor resync twice per toggle.
@@ -537,11 +537,11 @@ static void fs_present(present_ddraw *pd)
     LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb;
     int fx, fy, fw, fh, done = 0;
     if (!bk) return;
-    /* ★ THE SAME LAYOUT THE WINDOW USES (present_layout). One function for both
+    /* ★ THE SAME LAYOUT THE WINDOW USES (PresentLayout). One function for both
          renderers is the point: a setting that meant one thing windowed and another
          fullscreen is exactly the bug it exists to prevent. */
     /* #325: exclusive fullscreen is "the screen": the same layout as the window. */
-    present_layout(pd->aspect, pd->fit, 1, pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
+    PresentLayout(pd->aspect, pd->fit, 1, pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
                    &fx, &fy, &fw, &fh);
     /* ...and remember it: the mouse maps through the rectangle actually drawn. */
     pd->last_dx = fx; pd->last_dy = fy; pd->last_dw = fw; pd->last_dh = fh;
@@ -587,7 +587,7 @@ static void fs_present(present_ddraw *pd)
     if (!done) fs_present_sw(pd, fx, fy, fw, fh);
     /* #227: the Scanlines/CRT scaler on the exclusive path too -- the same AND pattern
        the GDI path lays over its stretched picture, on the back buffer's DC. */
-    if (present_scaler_scanlines(pd->scaler)) {
+    if (PresentScalerHasScanlines(pd->scaler)) {
         HDC hd; HBRUSH br = scanline_brush();
         if (br && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
             HGDIOBJ old = SelectObject(hd, br);
@@ -723,7 +723,7 @@ void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f)
         pd->snap_w = f->Width; pd->snap_h = f->Height; pd->snap_valid = 1;
         if (pd->tint) {                                  /* #229: per pixel, only here */
             size_t i, n = (size_t)f->Width * f->Height;
-            for (i = 0; i < n; ++i) pd->snap32[i] = present_tint(pd->snap32[i], pd->tint);
+            for (i = 0; i < n; ++i) pd->snap32[i] = PresentTint(pd->snap32[i], pd->tint);
         }
         return;
     }
@@ -741,10 +741,10 @@ void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f)
     if (pd->tint) {                         /* #229: recolour the COLOURS, not the pixels */
         int i;
         for (i = 0; i < 256; ++i) {
-            pd->snap_pal[i] = present_tint(pd->snap_pal[i], pd->tint);
+            pd->snap_pal[i] = PresentTint(pd->snap_pal[i], pd->tint);
             if (pd->snap_split) {
-                pd->snap_pal_base[i]  = present_tint(pd->snap_pal_base[i],  pd->tint);
-                pd->snap_pal_split[i] = present_tint(pd->snap_pal_split[i], pd->tint);
+                pd->snap_pal_base[i]  = PresentTint(pd->snap_pal_base[i],  pd->tint);
+                pd->snap_pal_split[i] = PresentTint(pd->snap_pal_split[i], pd->tint);
             }
         }
     }
