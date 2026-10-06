@@ -60,6 +60,15 @@
 extern BYTE g_SbVersionMajor, g_SbVersionMinor;
 extern INT g_SbGate;    /* ACK gate, opt-in: deviates from the hardware. See vdd_sb.c */
 
+#define SB_DEVICE_NAME     "sb16"
+#define SB_STEREO_CHANNELS 2u
+#define SB_RUN_BUCKETS     8           /* run-length histograms                          */
+#define SB_DSP_OPCODES     256
+#define SB_MIXER_REGISTERS 256
+/* GateMode: the ACK/POLL gate (vdd_sb.c), opt-in through g_SbGate. */
+#define SB_GATE_OFF        0
+#define SB_GATE_ACK        1           /* VDMSound's: hold until the block IRQ is acked  */
+#define SB_GATE_POLL       2           /* hold until the guest polls the DMA position    */
 #define SB_OUTPUT_QUEUE_MAX 8  /* bytes the DSP can have waiting to be read      */
 #define SB_ARGUMENTS_MAX  4    /* longest command argument list we accept        */
 
@@ -143,12 +152,12 @@ typedef struct _SB_STATE {
     UINT32 OutputNoDack;       /* ...because the 8237 would not serve the channel
                                   (masked, or its controller disabled) -- #176     */
     UINT32 IdleRun;            /* current run of consecutive inserted zeros       */
-    UINT32 IdleRuns[8];        /* run lengths, log2 buckets: 1,2,4,8,...,128+     */
-    UINT32 CommandHistogram[256];    /* DSP commands the guest issued, by opcode        */
+    UINT32 IdleRuns[SB_RUN_BUCKETS];        /* run lengths, log2 buckets: 1,2,4,8,...,128+     */
+    UINT32 CommandHistogram[SB_DSP_OPCODES];    /* DSP commands the guest issued, by opcode        */
 
     /* mixer */
     BYTE  MixerIndex;
-    BYTE  Mixer[256];
+    BYTE  Mixer[SB_MIXER_REGISTERS];
     /* ── RAW CAPTURE OF WHAT WE ACTUALLY PLAY. ───────────────────────────────────
          The DMA ring is the only place the guest's PCM exists, and VddSbRender() is
          the only thing that reads it -- so a byte-for-byte record of what came out is
@@ -230,10 +239,10 @@ typedef struct _SB_STATE {
          Those are different bugs. The run-length distribution separates them for
          one comparison and one counter per block. */
     UINT32 ReplayRun;               /* consecutive replayed-loud blocks, in progress */
-    UINT32 ReplayRuns[8];           /* run lengths 1,2,3,4-7,8-15,16-31,32-63,64+    */
+    UINT32 ReplayRuns[SB_RUN_BUCKETS];           /* run lengths 1,2,3,4-7,8-15,16-31,32-63,64+    */
     UINT32 ReplayRunMax;
     UINT32 FlatRun;                 /* consecutive FLAT blocks, in progress          */
-    UINT32 FlatRuns[8];             /* ...run lengths, same buckets. runs of 1 = the
+    UINT32 FlatRuns[SB_RUN_BUCKETS];             /* ...run lengths, same buckets. runs of 1 = the
                                        audible DROPOUTS; long runs = real silence.   */
     UINT32 BlockMin, BlockMax;      /* range accumulators for the block in progress  */
     UINT32 LapSame, LapTotal;       /* byte-level rate, the live form of the 46%    */
@@ -247,7 +256,7 @@ typedef const SB_STATE *PCSB_STATE;
 INT  VddSbInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddSbReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddSbDevice(_In_ PSB_STATE state)
-{ NTVDD_DEVICE device; device.Name = "sb16"; device.Initialize = VddSbInitialize; device.Reset = VddSbReset;
+{ NTVDD_DEVICE device; device.Name = SB_DEVICE_NAME; device.Initialize = VddSbInitialize; device.Reset = VddSbReset;
   device.Shutdown = 0; device.Context = state; return device; }
 
 /* Pull up to `frames` samples of playback into `output` (mono 16-bit at the card's
@@ -257,7 +266,7 @@ static inline NTVDD_DEVICE VddSbDevice(_In_ PSB_STATE state)
 UINT32 VddSbRender(_Inout_ PSB_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
 /* #189: the same transport, rendering interleaved L/R pairs (2*frames samples). An
    8-bit or 16-bit MONO transfer gives L = R. */
-UINT32 VddSbRenderStereo(_Inout_ PSB_STATE state, _Out_writes_(2 * frames) INT16 *output, _In_ UINT32 frames);
+UINT32 VddSbRenderStereo(_Inout_ PSB_STATE state, _Out_writes_(SB_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
 /* #189: frames per second of the transfer in progress -- the programmed rate, halved
    for an SB Pro stereo transfer (its time constant counts both channels). */
 UINT32 VddSbFrameHz(_In_ PCSB_STATE state);
