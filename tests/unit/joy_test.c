@@ -27,13 +27,13 @@ static void wr201(VDD_BUS *b)
 int main(void)
 {
     VDD_BUS bus;
-    joy_state joy; memset(&joy, 0, sizeof joy);
-    NTVDD_DEVICE jdev = vdd_joy_device(&joy);
+    JOYSTICK_STATE joy; memset(&joy, 0, sizeof joy);
+    NTVDD_DEVICE jdev = VddJoystickDevice(&joy);
 
     printf("== gameport VDD battery ==\n");
 
     VddBusInitialize(&bus, g_flat);
-    joy.now_us = fake_clock;
+    joy.NowMicroseconds = fake_clock;
     CHECK(VddBusAdd(&bus, &jdev) == 0, "add: joystick ok");
     CHECK(bus.Ports[bus.PortCount - 1].First == 0x200
           && bus.Ports[bus.PortCount - 1].Last == 0x207,
@@ -45,16 +45,16 @@ int main(void)
     CHECK(rd201(&bus) == 0xFF, "type None: still 0xFF after a trigger");
 
     /* T2: adapter fitted, nothing plugged in ------------------------------- */
-    joy.type = JOY_TYPE_2AXIS; joy.present = 0;
+    joy.Type = JOYSTICK_TYPE_2AXIS; joy.IsPresent = 0;
     CHECK(rd201(&bus) == 0xF0, "unplugged: buttons up, one-shots idle");
     wr201(&bus);
     g_now += 2000;                       /* 2 ms: any real axis long done      */
     CHECK((rd201(&bus) & 0x0F) == 0x0F, "unplugged: axes STUCK high (timeout)");
 
     /* T3: plugged in, centred, 2-axis/2-button ----------------------------- */
-    joy.present = 1;
-    joy.axis[0] = 0x80; joy.axis[1] = 0x80; joy.axis[2] = 0x80; joy.axis[3] = 0x80;
-    joy.trigger_us = 0;                  /* fresh */
+    joy.IsPresent = 1;
+    joy.Axis[0] = 0x80; joy.Axis[1] = 0x80; joy.Axis[2] = 0x80; joy.Axis[3] = 0x80;
+    joy.TriggerMicroseconds = 0;                  /* fresh */
     g_now = 100000;
     wr201(&bus);
     CHECK((rd201(&bus) & 0x0F) == 0x0F, "t=0: all pulses high");
@@ -66,7 +66,7 @@ int main(void)
     CHECK((rd201(&bus) & 0x0C) == 0x0C, "2-axis type: B axes stuck (absent)");
 
     /* T4: the duration tracks the position --------------------------------- */
-    joy.axis[0] = 0x00; joy.axis[1] = 0xFF;
+    joy.Axis[0] = 0x00; joy.Axis[1] = 0xFF;
     g_now = 200000; wr201(&bus);
     g_now += 30;                         /* x: 25us, y: 1045us                 */
     CHECK((rd201(&bus) & 0x01) == 0x00, "x=0: 25us pulse already over at 30us");
@@ -75,20 +75,20 @@ int main(void)
     CHECK((rd201(&bus) & 0x02) == 0x00, "y=255: over by 1130us");
 
     /* T5: buttons are active low, masked to the wired count ----------------- */
-    joy.buttons = 0x05;                  /* 1 + 3 pressed                      */
+    joy.Buttons = 0x05;                  /* 1 + 3 pressed                      */
     CHECK((rd201(&bus) & 0xF0) == 0xE0, "2-button type: button 1 low, 3 masked");
-    joy.type = JOY_TYPE_4AXIS;
+    joy.Type = JOYSTICK_TYPE_4AXIS;
     CHECK((rd201(&bus) & 0xF0) == 0xA0, "4-button type: buttons 1+3 low");
 
     /* T6: 4-axis type times the B pair too ---------------------------------- */
-    joy.buttons = 0; joy.axis[2] = 0x00; joy.axis[3] = 0x00;
+    joy.Buttons = 0; joy.Axis[2] = 0x00; joy.Axis[3] = 0x00;
     g_now = 300000; wr201(&bus);
     g_now += 100;                        /* B axes: 25us, long over            */
     CHECK((rd201(&bus) & 0x0C) == 0x00, "4-axis: B axes measured, not stuck");
 
     /* T7: reset drops the pulse but keeps the configuration ----------------- */
-    vdd_joy_reset(&joy);
-    CHECK(!joy.fired && joy.type == JOY_TYPE_4AXIS,
+    VddJoystickReset(&joy);
+    CHECK(!joy.HasFired && joy.Type == JOYSTICK_TYPE_4AXIS,
           "reset: one-shots idle, type kept");
     CHECK((rd201(&bus) & 0x0F) == 0x00, "reset: axis bits low until re-fired");
 

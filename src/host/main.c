@@ -1053,7 +1053,7 @@ static uint8_t net_submit(void *ctx, netb_ncb *n)
      loaded dynamically like waveOut, no new import) writes present/axes/
      buttons, and settings_apply writes the adapter type. Until now the port
      was UNCLAIMED and Mario Bros died right after a CLI poll of it. */
-static joy_state    g_joy;       static NTVDD_DEVICE g_joy_dev;
+static JOYSTICK_STATE    g_joy;       static NTVDD_DEVICE g_joy_dev;
 static int          g_joy_povmap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
@@ -2842,7 +2842,7 @@ static WORD bios_equipment_word(void)
     /* Bit 12: game adapter installed. The CARD exists iff the JoystickType
        setting says so; whether a stick is plugged into it is the port's
        business (an empty gameport still answers), not the equipment word's. */
-    if (g_joy.type != JOY_TYPE_NONE) w |= 0x1000;
+    if (g_joy.Type != JOYSTICK_TYPE_NONE) w |= 0x1000;
     return w;
 }
 
@@ -11969,11 +11969,11 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
          pacer (g_pitpace_prio = NORMAL) and the exec thread always win. */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     for (;;) {
-        if (g_joy.type == JOY_TYPE_NONE) { g_joy.present = 0; Sleep(250); continue; }
+        if (g_joy.Type == JOYSTICK_TYPE_NONE) { g_joy.IsPresent = 0; Sleep(250); continue; }
         if (!pGetPos) {
             if (!mod) mod = LoadLibraryA("winmm.dll");
             pGetPos = mod ? (PFN_joyGetPosEx)GetProcAddress(mod, "joyGetPosEx") : NULL;
-            if (!pGetPos) { g_joy.present = 0; Sleep(1000); continue; }
+            if (!pGetPos) { g_joy.IsPresent = 0; Sleep(1000); continue; }
         }
         {   JOYINFOEX ji; unsigned ax[4]; int i;
             ji.dwSize = sizeof ji;
@@ -11994,11 +11994,11 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
                     if (sec >= 1 && sec <= 3)             ax[0] = 255;
                     if (sec >= 5 && sec <= 7)             ax[0] = 0;
                 }
-                for (i = 0; i < 4; ++i) g_joy.axis[i] = (uint8_t)ax[i];
-                g_joy.buttons = (uint8_t)(ji.dwButtons & 0x0F);
-                g_joy.present = 1;
+                for (i = 0; i < 4; ++i) g_joy.Axis[i] = (uint8_t)ax[i];
+                g_joy.Buttons = (uint8_t)(ji.dwButtons & 0x0F);
+                g_joy.IsPresent = 1;
             } else {
-                g_joy.present = 0;                 /* unplugged mid-run is fine */
+                g_joy.IsPresent = 0;                 /* unplugged mid-run is fine */
             }
         }
         Sleep(15);
@@ -12017,7 +12017,7 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
 static LONG g_joy_thread_started = 0;
 static void joy_poll_ensure(void)
 {
-    if (g_joy.type == JOY_TYPE_NONE || g_safe.Joystick) return;   /* s90 #132 */
+    if (g_joy.Type == JOYSTICK_TYPE_NONE || g_safe.Joystick) return;   /* s90 #132 */
     if (InterlockedExchange(&g_joy_thread_started, 1)) return;   /* once */
     { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
       if (jt) CloseHandle(jt);
@@ -12206,7 +12206,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the
          poll thread and the port trap both re-read these on every pass. */
-    g_joy.type       = (uint8_t)(s->v[SET_JOYTYPE] <= 2 ? s->v[SET_JOYTYPE] : 0);
+    g_joy.Type       = (uint8_t)(s->v[SET_JOYTYPE] <= 2 ? s->v[SET_JOYTYPE] : 0);
     g_joy_povmap     = (int)(s->v[SET_JOYPAD] ? 1 : 0);
     joy_poll_ensure();               /* spawns the winmm poll thread ONLY if a
                                         joystick is configured -- no thread, and no
@@ -29281,22 +29281,22 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                     char jb[64], *jq = jb;
                     jq = zput(jq, "  INT15 AH=84h joystick, dx=0x");
                     jq = zhex(jq, dx84);
-                    jq = zput(jq, joy_live(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
+                    jq = zput(jq, VddJoystickIsLive(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
                     log_append(LOG_PATH, jb, jq); serial_out(jb, jq); } }
-                if (!joy_live(&g_joy)) {
+                if (!VddJoystickIsLive(&g_joy)) {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                     BCF_SET();
                 } else if (dx84 == 0x0000) {
-                    unsigned mask = (1u << joy_buttons_wired(&g_joy)) - 1u;
-                    BSETAX((WORD)(((~g_joy.buttons & mask) & 0x0F) << 4));
+                    unsigned mask = (1u << VddJoystickButtonsWired(&g_joy)) - 1u;
+                    BSETAX((WORD)(((~g_joy.Buttons & mask) & 0x0F) << 4));
                     BCF_CLR();
                 } else if (dx84 == 0x0001) {
-                    BSETAX((WORD)g_joy.axis[0]);
-                    VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF0000u) | g_joy.axis[1];
+                    BSETAX((WORD)g_joy.Axis[0]);
+                    VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF0000u) | g_joy.Axis[1];
                     VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & 0xFFFF0000u)
-                                           | (joy_axes(&g_joy) >= 4 ? g_joy.axis[2] : 0u);
+                                           | (VddJoystickAxes(&g_joy) >= 4 ? g_joy.Axis[2] : 0u);
                     VDM_REG(tib, VTIB_EDX) = (VDM_REG(tib, VTIB_EDX) & 0xFFFF0000u)
-                                           | (joy_axes(&g_joy) >= 4 ? g_joy.axis[3] : 0u);
+                                           | (VddJoystickAxes(&g_joy) >= 4 ? g_joy.Axis[3] : 0u);
                     BCF_CLR();
                 } else {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
@@ -30004,7 +30004,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          screen. (Priority constants: NORMAL=0, ABOVE_NORMAL=1, HIGHEST=2,
          BELOW_NORMAL=-1=0xffffffff, LOWEST=-2.) */
     p = zput(p, "STAGE0: timing: pacer_prio="); p = zhex(p, (DWORD)g_pitpace_prio);
-    p = zput(p, " (want 0x0=NORMAL) joytype=");  p = zhex(p, (DWORD)g_joy.type);
+    p = zput(p, " (want 0x0=NORMAL) joytype=");  p = zhex(p, (DWORD)g_joy.Type);
     p = zput(p, " joy_thread=");  p = zhex(p, (DWORD)g_joy_thread_started);
     p = zput(p, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
 
@@ -32137,8 +32137,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_spk.Pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = VddSpeakerDevice(&g_spk);
     VddBusAdd(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
-    g_joy.now_us = joy_now_us;
-    g_joy_dev = vdd_joy_device(&g_joy);
+    g_joy.NowMicroseconds = joy_now_us;
+    g_joy_dev = VddJoystickDevice(&g_joy);
     VddBusAdd(&g_bus, &g_joy_dev);            /* gameport: 0x200-0x207         */
     /* ⛔ THE POLL THREAD IS NOT SPAWNED HERE. See joy_poll_ensure: it is created
          ONLY when a joystick is actually configured, so the default play config --

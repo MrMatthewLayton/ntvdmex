@@ -1,6 +1,6 @@
 /* vdd_joy.c -- see vdd_joy.h.  Gameport ports 0x200-0x207 on the VDD bus; the
- * 558 one-shot model, timed by the host-injected microsecond clock.  Pure C,
- * no <windows.h>. */
+ * 558 one-shot model, timed by the host-injected microsecond clock.  No Windows
+ * calls, only Windows types. */
 #include "vdd_joy.h"
 
 /* IN: buttons in bits 4-7 (0 = pressed), one-shot state in bits 0-3.
@@ -10,49 +10,56 @@
    loop times out on to decide "no joystick", and it is also what an UNCLAIMED
    port looked like (0xFF), so a machine with the type set to None is
    indistinguishable from one without the card. */
-static void joy_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+#define JOYSTICK_FIRST_PORT         0x200
+#define JOYSTICK_LAST_PORT          0x207  /* a real card decodes the whole block       */
+#define JOYSTICK_NO_BUTTONS_PRESSED 0xF0   /* bits 4-7 high: active-low buttons up      */
+#define JOYSTICK_NO_CARD            0xFF   /* what an unclaimed port reads              */
+#define JOYSTICK_BUTTON_SHIFT       4      /* buttons live in bits 4-7                  */
+#define JOYSTICK_NO_ELAPSED_TIME    0      /* no clock: pulses never end                */
+
+static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    joy_state *st = (joy_state *)self; (void)port; (void)w;
-    uint8_t v = 0xF0;                            /* no buttons pressed          */
-    int i, wired = joy_axes(st);
-    st->reads++;
-    if (st->type == JOY_TYPE_NONE) { *val = 0xFF; return; }
-    if (joy_live(st)) {
-        uint8_t mask = (uint8_t)((1u << joy_buttons_wired(st)) - 1u);
-        v = (uint8_t)((uint8_t)(~(st->buttons & mask)) << 4);
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context; (VOID)port; (VOID)width;
+    BYTE result = JOYSTICK_NO_BUTTONS_PRESSED;   /* no buttons pressed          */
+    INT axisIndex, wiredAxes = VddJoystickAxes(state);
+    state->PortReads++;
+    if (state->Type == JOYSTICK_TYPE_NONE) { *value = JOYSTICK_NO_CARD; return; }
+    if (VddJoystickIsLive(state)) {
+        BYTE buttonMask = (BYTE)((1u << VddJoystickButtonsWired(state)) - 1u);
+        result = (BYTE)((BYTE)(~(state->Buttons & buttonMask)) << JOYSTICK_BUTTON_SHIFT);
     }
-    if (st->fired) {
-        uint64_t el = st->now_us
-                    ? st->now_us(st->clock_ctx) - st->trigger_us
-                    : 0;                         /* no clock: pulses never end  */
-        for (i = 0; i < 4; ++i) {
-            int stuck = (i >= wired) || !st->present || !st->now_us;
-            if (stuck || el < joy_axis_us(st->axis[i])) v |= (uint8_t)(1u << i);
+    if (state->HasFired) {
+        UINT64 elapsed = state->NowMicroseconds
+                    ? state->NowMicroseconds(state->ClockContext) - state->TriggerMicroseconds
+                    : JOYSTICK_NO_ELAPSED_TIME;  /* no clock: pulses never end  */
+        for (axisIndex = 0; axisIndex < JOYSTICK_AXES; ++axisIndex) {
+            INT isStuck = (axisIndex >= wiredAxes) || !state->IsPresent || !state->NowMicroseconds;
+            if (isStuck || elapsed < VddJoystickAxisMicroseconds(state->Axis[axisIndex])) result |= (BYTE)(1u << axisIndex);
         }
     }
-    *val = v;
+    *value = result;
 }
 
 /* OUT (any value, any port in the range): fire the one-shots. */
-static void joy_out(void *self, uint16_t port, uint8_t w, uint32_t val)
+static VOID VddJoystickPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    joy_state *st = (joy_state *)self; (void)port; (void)w; (void)val;
-    st->outs++;
-    if (st->type == JOY_TYPE_NONE) return;       /* no card, nothing to fire   */
-    st->fired = 1;
-    st->trigger_us = st->now_us ? st->now_us(st->clock_ctx) : 0;
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context; (VOID)port; (VOID)width; (VOID)value;
+    state->PortWrites++;
+    if (state->Type == JOYSTICK_TYPE_NONE) return;   /* no card, nothing to fire   */
+    state->HasFired = TRUE;
+    state->TriggerMicroseconds = state->NowMicroseconds ? state->NowMicroseconds(state->ClockContext) : 0;
 }
 
-void vdd_joy_reset(void *self)
+VOID VddJoystickReset(PVOID context)
 {
-    joy_state *st = (joy_state *)self;
-    st->fired = 0; st->trigger_us = 0; /* keep type + the host-fed sample      */
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
+    state->HasFired = FALSE; state->TriggerMicroseconds = 0; /* keep Type + the host-fed sample */
 }
 
-int vdd_joy_init(VDD_BUS *b, void *self)
+INT VddJoystickInitialize(PVDD_BUS bus, PVOID context)
 {
-    joy_state *st = (joy_state *)self;
-    st->bus = b;
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
+    state->Bus = bus;
     /* A real gameport card decodes the whole 0x200-0x207 block. */
-    return VddClaimPorts(b, 0x200, 0x207, joy_in, joy_out, st);
+    return VddClaimPorts(bus, JOYSTICK_FIRST_PORT, JOYSTICK_LAST_PORT, VddJoystickPortIn, VddJoystickPortOut, state);
 }
