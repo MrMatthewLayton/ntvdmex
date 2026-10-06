@@ -74,14 +74,14 @@ static int driver_drain(VDD_BUS *bus, uint8_t *out, int max)
 
 int main(void)
 {
-    VDD_BUS bus; fdc_state fd; NTVDD_DEVICE dev;
+    VDD_BUS bus; FDC_STATE fd; NTVDD_DEVICE dev;
     uint8_t r[16];
     int n;
 
     memset(&fd, 0, sizeof(fd));
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, NULL, NULL, NULL);
-    dev = vdd_fdc_device(&fd);
+    dev = VddFdcDevice(&fd);
     CHECK(VddBusAdd(&bus, &dev) == 0, "fdc: gets on the bus");
 
     /* ════ 1. THE HANG. ══════════════════════════════════════════════════════
@@ -174,7 +174,7 @@ int main(void)
     wr(&bus, FDC_DOR, (uint8_t)(FDC_DOR_NRESET));      /* gate OFF, out of reset */
     driver_send(&bus, 0x07); driver_send(&bus, 0x00);  /* RECALIBRATE            */
     CHECK(g_irq6 == 0, "dmagate: clear -> IRQ6 is not delivered");
-    wr(&bus, FDC_DOR, (uint8_t)(FDC_DOR_NRESET | FDC_DOR_DMAGATE));
+    wr(&bus, FDC_DOR, (uint8_t)(FDC_DOR_NRESET | FDC_DOR_DMA_GATE));
     g_irq6 = 0;
     driver_send(&bus, 0x07); driver_send(&bus, 0x00);
     CHECK(g_irq6 == 1, "dmagate: set -> IRQ6 is delivered");
@@ -193,7 +193,7 @@ int main(void)
          answers a single sense hands a driver that issued four an 80h for three
          of them. docs/ref/fdc.md 8. */
     g_irq6 = 0;
-    wr(&bus, FDC_DOR, (uint8_t)(FDC_DOR_NRESET | FDC_DOR_DMAGATE));
+    wr(&bus, FDC_DOR, (uint8_t)(FDC_DOR_NRESET | FDC_DOR_DMA_GATE));
     CHECK(rd(&bus, FDC_MSR) == 0x80, "reset: released -> ready for a command");
     CHECK(g_irq6 == 1, "reset: raises one interrupt");
     {
@@ -214,7 +214,7 @@ int main(void)
     wr(&bus, FDC_DIR, 0x02);                  /* CCR: 250 kbps                  */
     wr(&bus, FDC_MSR, 0x81);                  /* DSR: reset, rate 01            */
     CHECK(rd(&bus, FDC_MSR) == 0x80, "dsr: software reset leaves the chip ready");
-    CHECK((fd.dsr & 0x03) == 0x01 && fd.ccr == 0x02,
+    CHECK((fd.Dsr & 0x03) == 0x01 && fd.Ccr == 0x02,
           "dsr: the data rate survives the reset it asked for");
 
     /* ════ 12. DIR BIT 7 IS DSKCHG AND WE ANSWER 0. ═════════════════════════

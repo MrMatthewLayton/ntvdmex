@@ -80,66 +80,71 @@
 
 /* DOR bits (docs/ref/fdc.md 7). */
 #define FDC_DOR_MOTORS  0xF0
-#define FDC_DOR_DMAGATE 0x08        /* 0 disconnects IRQ6 and the DMA request   */
+#define FDC_DOR_DMA_GATE 0x08        /* 0 disconnects IRQ6 and the DMA request   */
 #define FDC_DOR_NRESET  0x04        /* ACTIVE LOW: 0 holds the chip in reset    */
-#define FDC_DOR_DSEL    0x03
+#define FDC_DOR_DRIVE_SELECT    0x03
 
-#define FDC_PHASE_CMD   0           /* the host is writing a command            */
-#define FDC_PHASE_RES   1           /* the host is reading a result             */
+#define FDC_PHASE_COMMAND   0           /* the host is writing a command            */
+#define FDC_BUFFER_SIZE 16          /* command and result bytes held          */
+#define FDC_DRIVES      4
+#define FDC_DEVICE_NAME "fdc"
+#define FDC_PHASE_RESULT   1           /* the host is reading a result             */
 
-typedef struct fdc_state {
-    VDD_BUS *bus;
+typedef struct _FDC_STATE {
+    PVDD_BUS Bus;
 
-    uint8_t  dor;                   /* 3F2h, as last written                    */
-    uint8_t  tdr;                   /* 3F3h                                     */
-    uint8_t  dsr;                   /* 3F4h write: data rate, precomp, power    */
-    uint8_t  ccr;                   /* 3F7h write: data rate, the other door    */
-    uint8_t  in_reset;              /* DOR bit 2 is low: the chip is held down  */
+    BYTE  Dor;                   /* 3F2h, as last written                    */
+    BYTE  Tdr;                   /* 3F3h                                     */
+    BYTE  Dsr;                   /* 3F4h write: data rate, precomp, power    */
+    BYTE  Ccr;                   /* 3F7h write: data rate, the other door    */
+    BYTE  IsInReset;              /* DOR bit 2 is low: the chip is held down  */
 
     /* ── THE CONVERSATION. This is the part that makes the chip a chip. ────── */
-    uint8_t  phase;                 /* FDC_PHASE_CMD or FDC_PHASE_RES           */
-    uint8_t  cmd[16];               /* the command byte and its parameters      */
-    uint8_t  cmd_len;               /* how many have arrived                    */
-    uint8_t  cmd_want;              /* how many this command takes, opcode incl.*/
-    uint8_t  res[16];               /* the result bytes, oldest first           */
-    uint8_t  res_len, res_pos;
+    BYTE  Phase;                 /* FDC_PHASE_COMMAND or FDC_PHASE_RESULT           */
+    BYTE  Command[FDC_BUFFER_SIZE];               /* the command byte and its parameters      */
+    BYTE  CommandLength;               /* how many have arrived                    */
+    BYTE  CommandWanted;              /* how many this command takes, opcode incl.*/
+    BYTE  Result[FDC_BUFFER_SIZE];               /* the result bytes, oldest first           */
+    BYTE  ResultLength, ResultPosition;
 
     /* ── PER-DRIVE STATE. ───────────────────────────────────────────────────── */
-    uint8_t  pcn[4];                /* present cylinder number                  */
+    BYTE  PresentCylinder[FDC_DRIVES];                /* present cylinder number                  */
 
     /* ── THE INTERRUPT, AND THE COMMAND THAT COLLECTS IT. ───────────────────── */
-    uint8_t  irq_pending;           /* an interrupt is waiting to be sensed      */
-    uint8_t  st0_pending;           /* what SENSE INTERRUPT STATUS will report   */
+    BYTE  IsIrqPending;           /* an interrupt is waiting to be sensed      */
+    BYTE  PendingSt0;           /* what SENSE INTERRUPT STATUS will report   */
     /* Reset leaves the chip expecting FOUR sense-interrupts, one per drive, each
        answering C0h|drive ("ready changed") -- unless CONFIGURE turned drive
        polling off. Four, not one: a model that answers a single sense leaves a
        driver that issued four with 80h for three of them. (ref/fdc.md 8) */
-    uint8_t  poll_drive;            /* 0..4: how many of the four are still owed */
-    uint8_t  poll_off;              /* CONFIGURE asked for no drive polling      */
+    BYTE  PollDrive;            /* 0..4: how many of the four are still owed */
+    BYTE  IsPollDisabled;              /* CONFIGURE asked for no drive polling      */
 
     /* ── WHAT THE FIRMWARE PROGRAMMED, so DUMPREG can hand it back. ─────────── */
-    uint8_t  srt_hut;               /* SPECIFY byte 1: step rate | head unload   */
-    uint8_t  hlt_nd;                /* SPECIFY byte 2: head load | non-DMA       */
-    uint8_t  cfg_byte2, cfg_pretrk; /* CONFIGURE bytes 2 and 3                   */
-    uint8_t  perp;                  /* PERPENDICULAR MODE                        */
-    uint8_t  locked;                /* LOCK: keep CONFIGURE across a s/w reset   */
-    uint8_t  last_eot;              /* the sector count of the last data command */
+    BYTE  StepRateHeadUnload;               /* SPECIFY byte 1: step rate | head unload   */
+    BYTE  HeadLoadNonDma;                /* SPECIFY byte 2: head load | non-DMA       */
+    BYTE  ConfigureByte2, ConfigurePrecompTrack; /* CONFIGURE bytes 2 and 3                   */
+    BYTE  Perpendicular;                  /* PERPENDICULAR MODE                        */
+    BYTE  IsLocked;                /* LOCK: keep CONFIGURE across a s/w reset   */
+    BYTE  LastEot;              /* the sector count of the last data command */
 
     /* Counters a run can report -- the same habit as every other VDD here. */
-    uint32_t cmds, invalids, irqs, resets;
-} fdc_state;
+    UINT32 Commands, InvalidCommands, Irqs, Resets;
+} FDC_STATE, *PFDC_STATE;
 
-int  vdd_fdc_init(VDD_BUS *b, void *self);
-void vdd_fdc_reset(void *self);
+typedef const FDC_STATE *PCFDC_STATE;
 
-static inline NTVDD_DEVICE vdd_fdc_device(fdc_state *st)
-{ NTVDD_DEVICE d; d.Name = "fdc"; d.Initialize = vdd_fdc_init; d.Reset = vdd_fdc_reset;
-  d.Shutdown = 0; d.Context = st; return d; }
+INT  VddFdcInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddFdcReset(PVOID context);
+
+static inline NTVDD_DEVICE VddFdcDevice(_In_ PFDC_STATE state)
+{ NTVDD_DEVICE device; device.Name = FDC_DEVICE_NAME; device.Initialize = VddFdcInitialize; device.Reset = VddFdcReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 /* Exposed for the off-VM battery, which drives the chip through the same two
    doors the guest does rather than reaching into the struct. */
-void    vdd_fdc_out(void *self, uint16_t port, uint8_t width, uint32_t val);
-void    vdd_fdc_in (void *self, uint16_t port, uint8_t width, uint32_t *val);
-uint8_t vdd_fdc_msr(const fdc_state *st);
+VOID    VddFdcPortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
+VOID    VddFdcPortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UINT32 *value);
+BYTE VddFdcMainStatus(_In_ PCFDC_STATE state);
 
 #endif /* NTVDMEX_VDD_FDC_H */

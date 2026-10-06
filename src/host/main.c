@@ -906,7 +906,7 @@ static dos_machine_t *g_mach = NULL;
 static VDD_BUS      g_bus;
 static PIT_STATE    g_pit;       static NTVDD_DEVICE g_pit_dev;
 static CMOS_STATE   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
-static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
+static FDC_STATE    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static PIC_STATE    g_pic;       static NTVDD_DEVICE g_pic_dev;
 static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
@@ -31979,7 +31979,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          MC146818's UIP bit two devices above. IRQ6 stays dormant unless a guest
          both gates it through DOR bit 3 and unmasks it at the PIC, which starts
          at 0xFC. See src/vdd/vdd_fdc.h. */
-    g_fdc_dev = vdd_fdc_device(&g_fdc);
+    g_fdc_dev = VddFdcDevice(&g_fdc);
     VddBusAdd(&g_bus, &g_fdc_dev);            /* 82077AA: 3F2h-3F5h, 3F7h     */
     /* ── THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179) ─────────────
          Same shape as the FDC above, one surface later: nothing claimed 1F0h-1F7h

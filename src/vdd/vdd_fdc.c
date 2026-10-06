@@ -1,6 +1,93 @@
 /* vdd_fdc.c -- see vdd_fdc.h.  Intel 82077AA on the VDD bus.  Pure C. */
 #include "vdd_fdc.h"
 
+/* The 82077AA command set (opcode bits 4:0) and how many bytes each takes, opcode
+   included. */
+#define FDC_OPCODE_MASK             0x1F
+#define FDC_CMD_READ_TRACK          0x02
+#define FDC_CMD_SPECIFY             0x03
+#define FDC_CMD_SENSE_DRIVE_STATUS  0x04
+#define FDC_CMD_WRITE_DATA          0x05
+#define FDC_CMD_READ_DATA           0x06
+#define FDC_CMD_RECALIBRATE         0x07
+#define FDC_CMD_SENSE_INTERRUPT     0x08
+#define FDC_CMD_WRITE_DELETED_DATA  0x09
+#define FDC_CMD_READ_ID             0x0A
+#define FDC_CMD_READ_DELETED_DATA   0x0C
+#define FDC_CMD_FORMAT_TRACK        0x0D
+#define FDC_CMD_DUMPREG             0x0E
+#define FDC_CMD_SEEK                0x0F
+#define FDC_CMD_VERSION             0x10
+#define FDC_CMD_PERPENDICULAR       0x12
+#define FDC_CMD_CONFIGURE           0x13
+#define FDC_CMD_LOCK                0x14
+#define FDC_SPECIFY_BYTES           3
+#define FDC_DRIVE_COMMAND_BYTES     2       /* opcode + the drive/head byte              */
+#define FDC_SEEK_BYTES              3
+#define FDC_CONFIGURE_BYTES         4
+#define FDC_DATA_COMMAND_BYTES      9
+#define FDC_FORMAT_BYTES            6
+/* Parameter positions, and the drive/head byte (parameter 1). */
+#define FDC_PARAMETER_2             2
+#define FDC_PARAMETER_3             3
+#define FDC_PARAMETER_4             4
+#define FDC_PARAMETER_5             5
+#define FDC_PARAMETER_6             6
+#define FDC_DRIVE_MASK              3
+#define FDC_HEAD_SHIFT              2
+#define FDC_DRIVE_0                 0
+#define FDC_DRIVE_1                 1
+#define FDC_DRIVE_2                 2
+#define FDC_DRIVE_3                 3
+/* Status bytes. */
+#define FDC_MSR_IN_RESET            0x00
+#define FDC_ST0_INVALID_COMMAND     0x80    /* interrupt code 10: invalid command        */
+#define FDC_ST0_READY_CHANGED       0xC0    /* interrupt code 11: polling                */
+#define FDC_ST0_ABNORMAL            0x40    /* interrupt code 01: abnormal termination   */
+#define FDC_ST0_SEEK_END            0x20
+#define FDC_ST1_NO_DATA             0x04    /* sector not found                          */
+#define FDC_ST2_CLEAR               0x00
+#define FDC_ST3_READY_TWO_SIDE      0x28    /* READY | TWO SIDE                          */
+#define FDC_ST3_TRACK_0             0x10
+#define FDC_VERSION_82077AA         0x90
+#define FDC_CONFIGURE_POLL_DISABLE  0x10    /* CONFIGURE byte 2 bit 4                    */
+#define FDC_LOCK_BIT                0x80    /* LOCK: opcode bit 7                        */
+#define FDC_LOCK_RESULT_LOCKED      0x10
+#define FDC_LOCK_RESULT_UNLOCKED    0x00
+#define FDC_SIZE_CODE_512           2       /* N = 2: 512-byte sectors                   */
+/* Result layouts. */
+#define FDC_DATA_RESULT_BYTES       7
+#define FDC_RESULT_ST0              0
+#define FDC_RESULT_ST1              1
+#define FDC_RESULT_ST2              2
+#define FDC_RESULT_CYLINDER         3
+#define FDC_RESULT_HEAD             4
+#define FDC_RESULT_SECTOR           5
+#define FDC_RESULT_SIZE_CODE        6
+#define FDC_SENSE_INTERRUPT_BYTES   2
+#define FDC_DUMPREG_BYTES           10
+#define FDC_DUMPREG_PCN0            0
+#define FDC_DUMPREG_PCN1            1
+#define FDC_DUMPREG_PCN2            2
+#define FDC_DUMPREG_PCN3            3
+#define FDC_DUMPREG_SRT_HUT         4
+#define FDC_DUMPREG_HLT_ND          5
+#define FDC_DUMPREG_EOT             6
+#define FDC_DUMPREG_LOCK_PERPENDICULAR 7
+#define FDC_DUMPREG_CONFIGURE       8
+#define FDC_DUMPREG_PRECOMP_TRACK   9
+#define FDC_DUMPREG_LOCK_BIT        0x80
+#define FDC_DUMPREG_PERPENDICULAR_MASK 0x7F
+/* The other registers. */
+#define FDC_DSR_SOFTWARE_RESET      0x80
+#define FDC_DSR_KEPT_BITS           0x7F
+#define FDC_CCR_DATA_RATE           0x03
+#define FDC_DIR_NO_CHANGE           0x00
+#define FDC_UNDRIVEN_BUS            0xFF
+#define FDC_IRQ                     6
+#define FDC_OK                      0
+#define FDC_FAILED                  (-1)
+
 /* ── THE MAIN STATUS REGISTER IS DERIVED, NEVER STORED. ─────────────────────────
      Every bit of it is a statement about state that lives somewhere else, so a
      stored copy is a second opinion waiting to drift. This is the same lesson the
@@ -13,30 +100,30 @@
      by timing, and it is in the direction that cannot hang anyone.
    ⚠ NON-DMA (bit 5) IS NEVER SET, because there is no execution phase yet to be
      in. It becomes real with the data commands. */
-uint8_t vdd_fdc_msr(const fdc_state *st)
+BYTE VddFdcMainStatus(PCFDC_STATE state)
 {
-    uint8_t m;
+    BYTE status;
     /* Held in reset: the chip is not ready for anything, and says so. A guest
        that writes 00h to DOR and then polls has hung a real machine too. */
-    if (st->in_reset) return 0x00;
-    m = FDC_MSR_RQM;
-    if (st->phase == FDC_PHASE_RES) m |= FDC_MSR_DIO | FDC_MSR_CB;
-    else if (st->cmd_len)           m |= FDC_MSR_CB;
+    if (state->IsInReset) return FDC_MSR_IN_RESET;
+    status = FDC_MSR_RQM;
+    if (state->Phase == FDC_PHASE_RESULT) status |= FDC_MSR_DIO | FDC_MSR_CB;
+    else if (state->CommandLength)           status |= FDC_MSR_CB;
     /* Bits 3:0 are "drive n is seeking". Our seeks complete inside the OUT that
        starts them, so no drive is ever mid-seek when software can look. */
-    return m;
+    return status;
 }
 
-static void fdc_irq(fdc_state *st)
+static VOID FdcRaiseIrq(PFDC_STATE state)
 {
-    st->irqs++;
+    state->Irqs++;
     /* ⛔ DMAGATE IS NOT DECORATION. With DOR bit 3 clear the chip still works and
          the interrupt simply never reaches the PIC -- every operation then times
          out at the BIOS layer with nothing reporting a wrong value anywhere. A
          model that ignores the bit serves a driver that set it and silently
          disobeys one that cleared it. */
-    if (!(st->dor & FDC_DOR_DMAGATE)) return;
-    if (st->bus) VddRaiseIrq(st->bus, 6);
+    if (!(state->Dor & FDC_DOR_DMA_GATE)) return;
+    if (state->Bus) VddRaiseIrq(state->Bus, FDC_IRQ);
 }
 
 /* ── HOW MANY BYTES DOES THIS COMMAND TAKE? (docs/ref/fdc.md 5) ─────────────────
@@ -45,60 +132,60 @@ static void fdc_irq(fdc_state *st)
      exactly one byte and answers 80h -- which is the documented reply and is also
      what keeps an unknown opcode from eating the next real command as a
      parameter. */
-static uint8_t fdc_cmd_len(uint8_t op)
+static BYTE FdcCommandLength(BYTE opcode)
 {
-    switch (op & 0x1F) {
-    case 0x03: return 3;        /* SPECIFY                                      */
-    case 0x04: return 2;        /* SENSE DRIVE STATUS                           */
-    case 0x07: return 2;        /* RECALIBRATE                                  */
-    case 0x08: return 1;        /* SENSE INTERRUPT STATUS                       */
-    case 0x0A: return 2;        /* READ ID                                      */
-    case 0x0E: return 1;        /* DUMPREG                                      */
-    case 0x0F: return 3;        /* SEEK                                         */
-    case 0x10: return 1;        /* VERSION                                      */
-    case 0x12: return 2;        /* PERPENDICULAR MODE                           */
-    case 0x13: return 4;        /* CONFIGURE                                    */
-    case 0x14: return 1;        /* LOCK                                         */
+    switch (opcode & FDC_OPCODE_MASK) {
+    case FDC_CMD_SPECIFY: return FDC_SPECIFY_BYTES;        /* SPECIFY                                      */
+    case FDC_CMD_SENSE_DRIVE_STATUS: return FDC_DRIVE_COMMAND_BYTES;        /* SENSE DRIVE STATUS                           */
+    case FDC_CMD_RECALIBRATE: return FDC_DRIVE_COMMAND_BYTES;        /* RECALIBRATE                                  */
+    case FDC_CMD_SENSE_INTERRUPT: return 1;        /* SENSE INTERRUPT STATUS                       */
+    case FDC_CMD_READ_ID: return FDC_DRIVE_COMMAND_BYTES;        /* READ ID                                      */
+    case FDC_CMD_DUMPREG: return 1;        /* DUMPREG                                      */
+    case FDC_CMD_SEEK: return FDC_SEEK_BYTES;        /* SEEK                                         */
+    case FDC_CMD_VERSION: return 1;        /* VERSION                                      */
+    case FDC_CMD_PERPENDICULAR: return FDC_DRIVE_COMMAND_BYTES;        /* PERPENDICULAR MODE                           */
+    case FDC_CMD_CONFIGURE: return FDC_CONFIGURE_BYTES;        /* CONFIGURE                                    */
+    case FDC_CMD_LOCK: return 1;        /* LOCK                                         */
     /* ⚠ 09h IS WRITE DELETED DATA and it is easy to miss -- it sits in a gap
          between 08h and 0Ah and no detection routine ever issues it. Omitting it
          would have made it an "invalid command" that consumed ONE byte, and its
          eight parameters would then have been read as eight more commands.
        ⚠ 11h (SCAN EQUAL) is a µPD765 command that the 82077AA DOES NOT HAVE. We
          identify as a 90h part, so it must fall through to invalid. */
-    case 0x02: case 0x05: case 0x06: case 0x09: case 0x0C:
-        return 9;               /* READ TRACK / WRITE / READ / WR+RD DELETED    */
-    case 0x0D: return 6;        /* FORMAT TRACK                                 */
+    case FDC_CMD_READ_TRACK: case FDC_CMD_WRITE_DATA: case FDC_CMD_READ_DATA: case FDC_CMD_WRITE_DELETED_DATA: case FDC_CMD_READ_DELETED_DATA:
+        return FDC_DATA_COMMAND_BYTES;               /* READ TRACK / WRITE / READ / WR+RD DELETED    */
+    case FDC_CMD_FORMAT_TRACK: return FDC_FORMAT_BYTES;        /* FORMAT TRACK                                 */
     default:   return 1;        /* invalid                                      */
     }
 }
 
-static void fdc_result(fdc_state *st, const uint8_t *b, uint8_t n)
+static VOID FdcResult(PFDC_STATE state, const BYTE *bytes, BYTE count)
 {
-    uint8_t i;
-    for (i = 0; i < n && i < sizeof(st->res); ++i) st->res[i] = b[i];
-    st->res_len = i; st->res_pos = 0;
+    BYTE byteIndex;
+    for (byteIndex = 0; byteIndex < count && byteIndex < sizeof(state->Result); ++byteIndex) state->Result[byteIndex] = bytes[byteIndex];
+    state->ResultLength = byteIndex; state->ResultPosition = 0;
     /* A command with no result bytes is over the moment its last parameter
        lands: the host sees CMD BSY clear and DIO stay low. One with results is
        not over until they are read, which is what lets a driver drain a result
        of unknown length by watching CMD BSY. */
-    st->phase   = i ? FDC_PHASE_RES : FDC_PHASE_CMD;
-    st->cmd_len = 0;
+    state->Phase   = byteIndex ? FDC_PHASE_RESULT : FDC_PHASE_COMMAND;
+    state->CommandLength = 0;
 }
 
-static void fdc_invalid(fdc_state *st)
+static VOID FdcInvalid(PFDC_STATE state)
 {
-    uint8_t r = 0x80;           /* ST0 with the invalid-command interrupt code  */
-    st->invalids++;
-    fdc_result(st, &r, 1);
+    BYTE resultByte = FDC_ST0_INVALID_COMMAND;           /* ST0 with the invalid-command interrupt code  */
+    state->InvalidCommands++;
+    FdcResult(state, &resultByte, 1);
 }
 
 /* The seven result bytes every data command ends with: ST0 ST1 ST2 C H R N. */
-static void fdc_data_result(fdc_state *st, uint8_t st0, uint8_t st1, uint8_t st2,
-                            uint8_t c, uint8_t h, uint8_t r, uint8_t n)
+static VOID FdcDataResult(PFDC_STATE state, BYTE status0, BYTE status1, BYTE status2,
+                            BYTE cylinder, BYTE headAddress, BYTE sector, BYTE sizeCode)
 {
-    uint8_t b[7];
-    b[0] = st0; b[1] = st1; b[2] = st2; b[3] = c; b[4] = h; b[5] = r; b[6] = n;
-    fdc_result(st, b, 7);
+    BYTE bytes[FDC_DATA_RESULT_BYTES];
+    bytes[FDC_RESULT_ST0] = status0; bytes[FDC_RESULT_ST1] = status1; bytes[FDC_RESULT_ST2] = status2; bytes[FDC_RESULT_CYLINDER] = cylinder; bytes[FDC_RESULT_HEAD] = headAddress; bytes[FDC_RESULT_SECTOR] = sector; bytes[FDC_RESULT_SIZE_CODE] = sizeCode;
+    FdcResult(state, bytes, FDC_DATA_RESULT_BYTES);
 }
 
 /* ── THE RESET SEQUENCE. (docs/ref/fdc.md 8) ────────────────────────────────────
@@ -106,16 +193,16 @@ static void fdc_data_result(fdc_state *st, uint8_t st0, uint8_t st1, uint8_t st2
      on. The data rate SURVIVES a software reset -- a driver is entitled not to
      re-select it -- and so does the CONFIGURE state if LOCK was set, which is the
      entire point of the LOCK command. */
-static void fdc_soft_reset(fdc_state *st)
+static VOID FdcSoftReset(PFDC_STATE state)
 {
-    st->resets++;
-    st->phase = FDC_PHASE_CMD; st->cmd_len = 0; st->cmd_want = 0;
-    st->res_len = 0; st->res_pos = 0;
-    if (!st->locked) { st->cfg_byte2 = 0; st->cfg_pretrk = 0; st->perp = 0; }
+    state->Resets++;
+    state->Phase = FDC_PHASE_COMMAND; state->CommandLength = 0; state->CommandWanted = 0;
+    state->ResultLength = 0; state->ResultPosition = 0;
+    if (!state->IsLocked) { state->ConfigureByte2 = 0; state->ConfigurePrecompTrack = 0; state->Perpendicular = 0; }
     /* Drive polling: four sense-interrupts are now owed, one per drive. */
-    st->poll_drive = st->poll_off ? 4 : 0;
-    st->irq_pending = 0; st->st0_pending = 0;
-    fdc_irq(st);
+    state->PollDrive = state->IsPollDisabled ? FDC_DRIVES : 0;
+    state->IsIrqPending = 0; state->PendingSt0 = 0;
+    FdcRaiseIrq(state);
 }
 
 /* ── SENSE INTERRUPT STATUS -- the other half of every interrupt. ────────────────
@@ -124,128 +211,128 @@ static void fdc_soft_reset(fdc_state *st)
      Three cases, in priority order, and the third is as documented as the others:
      asked when nothing is pending, the answer is 80h, and that is how a driver
      discovers there is nothing pending. */
-static void fdc_sense_interrupt(fdc_state *st)
+static VOID FdcSenseInterrupt(PFDC_STATE state)
 {
-    uint8_t b[2];
-    if (st->irq_pending) {
-        b[0] = st->st0_pending;
-        b[1] = st->pcn[st->st0_pending & 3];
-        st->irq_pending = 0;
-        fdc_result(st, b, 2);
-    } else if (st->poll_drive < 4) {
-        b[0] = (uint8_t)(0xC0 | st->poll_drive);    /* ready changed, drive n   */
-        b[1] = st->pcn[st->poll_drive];
-        st->poll_drive++;
-        fdc_result(st, b, 2);
+    BYTE bytes[FDC_SENSE_INTERRUPT_BYTES];
+    if (state->IsIrqPending) {
+        bytes[0] = state->PendingSt0;
+        bytes[1] = state->PresentCylinder[state->PendingSt0 & FDC_DRIVE_MASK];
+        state->IsIrqPending = 0;
+        FdcResult(state, bytes, FDC_SENSE_INTERRUPT_BYTES);
+    } else if (state->PollDrive < FDC_DRIVES) {
+        bytes[0] = (BYTE)(FDC_ST0_READY_CHANGED | state->PollDrive);    /* ready changed, drive n   */
+        bytes[1] = state->PresentCylinder[state->PollDrive];
+        state->PollDrive++;
+        FdcResult(state, bytes, FDC_SENSE_INTERRUPT_BYTES);
     } else {
-        fdc_invalid(st);        /* nothing pending: 80h, by the datasheet       */
+        FdcInvalid(state);        /* nothing pending: 80h, by the datasheet       */
     }
 }
 
-static void fdc_seek_done(fdc_state *st, uint8_t drive, uint8_t head)
+static VOID FdcSeekDone(PFDC_STATE state, BYTE drive, BYTE head)
 {
-    st->st0_pending = (uint8_t)(0x20 | (head << 2) | (drive & 3)); /* SEEK END  */
-    st->irq_pending = 1;
-    fdc_irq(st);
+    state->PendingSt0 = (BYTE)(FDC_ST0_SEEK_END | (head << FDC_HEAD_SHIFT) | (drive & FDC_DRIVE_MASK)); /* SEEK END  */
+    state->IsIrqPending = 1;
+    FdcRaiseIrq(state);
 }
 
 /* Every parameter byte has arrived: carry the command out. */
-static void fdc_execute(fdc_state *st)
+static VOID FdcExecute(PFDC_STATE state)
 {
-    uint8_t op = (uint8_t)(st->cmd[0] & 0x1F);
-    uint8_t drive, head;
+    BYTE opcode = (BYTE)(state->Command[0] & FDC_OPCODE_MASK);
+    BYTE drive, head;
 
-    st->cmds++;
-    switch (op) {
+    state->Commands++;
+    switch (opcode) {
 
-    case 0x10: {                /* VERSION -- the detection command             */
+    case FDC_CMD_VERSION: {                /* VERSION -- the detection command             */
         /* 90h says "enhanced 82077AA": CONFIGURE, LOCK and PERPENDICULAR MODE
            exist. MEASURED at 90h on both oracles, one of them a real AMI BIOS. */
-        uint8_t r = 0x90;
-        fdc_result(st, &r, 1);
+        BYTE resultByte = FDC_VERSION_82077AA;
+        FdcResult(state, &resultByte, 1);
         break;
     }
 
-    case 0x08:                  /* SENSE INTERRUPT STATUS                       */
-        fdc_sense_interrupt(st);
+    case FDC_CMD_SENSE_INTERRUPT:                  /* SENSE INTERRUPT STATUS                       */
+        FdcSenseInterrupt(state);
         break;
 
-    case 0x03:                  /* SPECIFY -- step rate, head load, non-DMA     */
-        st->srt_hut = st->cmd[1];
-        st->hlt_nd  = st->cmd[2];
-        fdc_result(st, 0, 0);   /* no result phase, and no interrupt            */
+    case FDC_CMD_SPECIFY:                  /* SPECIFY -- step rate, head load, non-DMA     */
+        state->StepRateHeadUnload = state->Command[1];
+        state->HeadLoadNonDma  = state->Command[FDC_PARAMETER_2];
+        FdcResult(state, 0, 0);   /* no result phase, and no interrupt            */
         break;
 
-    case 0x13:                  /* CONFIGURE                                    */
-        st->cfg_byte2  = st->cmd[2];
-        st->cfg_pretrk = st->cmd[3];
+    case FDC_CMD_CONFIGURE:                  /* CONFIGURE                                    */
+        state->ConfigureByte2  = state->Command[FDC_PARAMETER_2];
+        state->ConfigurePrecompTrack = state->Command[FDC_PARAMETER_3];
         /* Bit 4 of byte 2 is POLL: SET means drive polling is DISABLED. */
-        st->poll_off   = (uint8_t)((st->cmd[2] & 0x10) ? 1 : 0);
-        fdc_result(st, 0, 0);
+        state->IsPollDisabled   = (BYTE)((state->Command[FDC_PARAMETER_2] & FDC_CONFIGURE_POLL_DISABLE) ? TRUE : FALSE);
+        FdcResult(state, 0, 0);
         break;
 
-    case 0x12:                  /* PERPENDICULAR MODE                           */
-        st->perp = st->cmd[1];
-        fdc_result(st, 0, 0);
+    case FDC_CMD_PERPENDICULAR:                  /* PERPENDICULAR MODE                           */
+        state->Perpendicular = state->Command[1];
+        FdcResult(state, 0, 0);
         break;
 
-    case 0x14: {                /* LOCK -- bit 7 of the opcode is the new value */
-        st->locked = (uint8_t)((st->cmd[0] & 0x80) ? 1 : 0);
-        { uint8_t r = (uint8_t)(st->locked ? 0x10 : 0x00);
-          fdc_result(st, &r, 1); }
+    case FDC_CMD_LOCK: {                /* LOCK -- bit 7 of the opcode is the new value */
+        state->IsLocked = (BYTE)((state->Command[0] & FDC_LOCK_BIT) ? TRUE : FALSE);
+        { BYTE resultByte = (BYTE)(state->IsLocked ? FDC_LOCK_RESULT_LOCKED : FDC_LOCK_RESULT_UNLOCKED);
+          FdcResult(state, &resultByte, 1); }
         break;
     }
 
-    case 0x04: {                /* SENSE DRIVE STATUS -> ST3                    */
-        uint8_t r;
-        drive = (uint8_t)(st->cmd[1] & 3);
-        head  = (uint8_t)((st->cmd[1] >> 2) & 1);
+    case FDC_CMD_SENSE_DRIVE_STATUS: {                /* SENSE DRIVE STATUS -> ST3                    */
+        BYTE resultByte;
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
         /* Bit 5 READY is always 1 on the 82077AA; bit 3 TWO SIDE is 1 for the
            only drive we advertise; bit 4 TRACK0 is a fact about where the head
            is; bit 6 WRITE PROTECTED is 0 because the image handle is opened for
            writing (INT 13h writes through it). */
-        r = (uint8_t)(0x28 | (head << 2) | drive);
-        if (!st->pcn[drive]) r |= 0x10;
-        fdc_result(st, &r, 1);
+        resultByte = (BYTE)(FDC_ST3_READY_TWO_SIDE | (head << FDC_HEAD_SHIFT) | drive);
+        if (!state->PresentCylinder[drive]) resultByte |= FDC_ST3_TRACK_0;
+        FdcResult(state, &resultByte, 1);
         break;
     }
 
-    case 0x0E: {                /* DUMPREG -- ten bytes, no side effects        */
-        uint8_t b[10];
-        b[0] = st->pcn[0]; b[1] = st->pcn[1];
-        b[2] = st->pcn[2]; b[3] = st->pcn[3];
-        b[4] = st->srt_hut; b[5] = st->hlt_nd;
-        b[6] = st->last_eot;
-        b[7] = (uint8_t)((st->locked ? 0x80 : 0) | (st->perp & 0x7F));
-        b[8] = st->cfg_byte2;
-        b[9] = st->cfg_pretrk;
-        fdc_result(st, b, 10);
+    case FDC_CMD_DUMPREG: {                /* DUMPREG -- ten bytes, no side effects        */
+        BYTE bytes[FDC_DUMPREG_BYTES];
+        bytes[FDC_DUMPREG_PCN0] = state->PresentCylinder[FDC_DRIVE_0]; bytes[FDC_DUMPREG_PCN1] = state->PresentCylinder[FDC_DRIVE_1];
+        bytes[FDC_DUMPREG_PCN2] = state->PresentCylinder[FDC_DRIVE_2]; bytes[FDC_DUMPREG_PCN3] = state->PresentCylinder[FDC_DRIVE_3];
+        bytes[FDC_DUMPREG_SRT_HUT] = state->StepRateHeadUnload; bytes[FDC_DUMPREG_HLT_ND] = state->HeadLoadNonDma;
+        bytes[FDC_DUMPREG_EOT] = state->LastEot;
+        bytes[FDC_DUMPREG_LOCK_PERPENDICULAR] = (BYTE)((state->IsLocked ? FDC_DUMPREG_LOCK_BIT : 0) | (state->Perpendicular & FDC_DUMPREG_PERPENDICULAR_MASK));
+        bytes[FDC_DUMPREG_CONFIGURE] = state->ConfigureByte2;
+        bytes[FDC_DUMPREG_PRECOMP_TRACK] = state->ConfigurePrecompTrack;
+        FdcResult(state, bytes, FDC_DUMPREG_BYTES);
         break;
     }
 
-    case 0x07:                  /* RECALIBRATE -- seek to cylinder 0            */
-        drive = (uint8_t)(st->cmd[1] & 3);
-        st->pcn[drive] = 0;
-        fdc_result(st, 0, 0);   /* no result phase: the interrupt is the report */
-        fdc_seek_done(st, drive, 0);
+    case FDC_CMD_RECALIBRATE:                  /* RECALIBRATE -- seek to cylinder 0            */
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        state->PresentCylinder[drive] = 0;
+        FdcResult(state, 0, 0);   /* no result phase: the interrupt is the report */
+        FdcSeekDone(state, drive, 0);
         break;
 
-    case 0x0F:                  /* SEEK                                         */
-        drive = (uint8_t)(st->cmd[1] & 3);
-        head  = (uint8_t)((st->cmd[1] >> 2) & 1);
-        st->pcn[drive] = st->cmd[2];
-        fdc_result(st, 0, 0);
-        fdc_seek_done(st, drive, head);
+    case FDC_CMD_SEEK:                  /* SEEK                                         */
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        state->PresentCylinder[drive] = state->Command[FDC_PARAMETER_2];
+        FdcResult(state, 0, 0);
+        FdcSeekDone(state, drive, head);
         break;
 
-    case 0x0A:                  /* READ ID -- what is under the head right now  */
-        drive = (uint8_t)(st->cmd[1] & 3);
-        head  = (uint8_t)((st->cmd[1] >> 2) & 1);
-        fdc_data_result(st, (uint8_t)((head << 2) | drive), 0, 0,
-                        st->pcn[drive], head, 1, 2);
-        st->st0_pending = (uint8_t)((head << 2) | drive);
-        st->irq_pending = 1;
-        fdc_irq(st);
+    case FDC_CMD_READ_ID:                  /* READ ID -- what is under the head right now  */
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        FdcDataResult(state, (BYTE)((head << FDC_HEAD_SHIFT) | drive), 0, 0,
+                        state->PresentCylinder[drive], head, 1, FDC_SIZE_CODE_512);
+        state->PendingSt0 = (BYTE)((head << FDC_HEAD_SHIFT) | drive);
+        state->IsIrqPending = 1;
+        FdcRaiseIrq(state);
         break;
 
     /* ── THE DATA COMMANDS. RECOGNISED, AND HONESTLY FAILED. ──────────────────
@@ -260,117 +347,117 @@ static void fdc_execute(fdc_state *st)
            command, on a chip that has just identified itself as a 90h part that
            by definition does. A driver can act on a media error. It cannot act on
            a controller that contradicts itself. */
-    case 0x02: case 0x05: case 0x06: case 0x09: case 0x0C: {
-        uint8_t c, h, r, n;
-        drive = (uint8_t)(st->cmd[1] & 3);
-        head  = (uint8_t)((st->cmd[1] >> 2) & 1);
-        c = st->cmd[2]; h = st->cmd[3]; r = st->cmd[4]; n = st->cmd[5];
-        st->last_eot = st->cmd[6];
-        fdc_data_result(st, (uint8_t)(0x40 | (head << 2) | drive), 0x04, 0x00,
-                        c, h, r, n);
-        st->st0_pending = (uint8_t)(0x40 | (head << 2) | drive);
-        st->irq_pending = 1;
-        fdc_irq(st);
+    case FDC_CMD_READ_TRACK: case FDC_CMD_WRITE_DATA: case FDC_CMD_READ_DATA: case FDC_CMD_WRITE_DELETED_DATA: case FDC_CMD_READ_DELETED_DATA: {
+        BYTE cylinder, headAddress, sector, sizeCode;
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        cylinder = state->Command[FDC_PARAMETER_2]; headAddress = state->Command[FDC_PARAMETER_3]; sector = state->Command[FDC_PARAMETER_4]; sizeCode = state->Command[FDC_PARAMETER_5];
+        state->LastEot = state->Command[FDC_PARAMETER_6];
+        FdcDataResult(state, (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive), FDC_ST1_NO_DATA, FDC_ST2_CLEAR,
+                        cylinder, headAddress, sector, sizeCode);
+        state->PendingSt0 = (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive);
+        state->IsIrqPending = 1;
+        FdcRaiseIrq(state);
         break;
     }
 
-    case 0x0D:                  /* FORMAT TRACK -- same, and never destructive  */
-        drive = (uint8_t)(st->cmd[1] & 3);
-        head  = (uint8_t)((st->cmd[1] >> 2) & 1);
-        st->last_eot = st->cmd[3];
-        fdc_data_result(st, (uint8_t)(0x40 | (head << 2) | drive), 0x04, 0x00,
-                        st->pcn[drive], head, 1, st->cmd[2]);
-        st->st0_pending = (uint8_t)(0x40 | (head << 2) | drive);
-        st->irq_pending = 1;
-        fdc_irq(st);
+    case FDC_CMD_FORMAT_TRACK:                  /* FORMAT TRACK -- same, and never destructive  */
+        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        state->LastEot = state->Command[FDC_PARAMETER_3];
+        FdcDataResult(state, (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive), FDC_ST1_NO_DATA, FDC_ST2_CLEAR,
+                        state->PresentCylinder[drive], head, 1, state->Command[FDC_PARAMETER_2]);
+        state->PendingSt0 = (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive);
+        state->IsIrqPending = 1;
+        FdcRaiseIrq(state);
         break;
 
     default:
-        fdc_invalid(st);
+        FdcInvalid(state);
         break;
     }
 }
 
 /* ── THE FIFO, WHICH IS THE WHOLE PROTOCOL. ─────────────────────────────────── */
-static void fdc_fifo_write(fdc_state *st, uint8_t v)
+static VOID FdcFifoWrite(PFDC_STATE state, BYTE value)
 {
     /* Writing while a result is waiting is a protocol error by the host. A real
        part ignores it; so do we, rather than letting it become the first byte of
        a command the driver never issued. */
-    if (st->phase == FDC_PHASE_RES) return;
-    if (!st->cmd_len) st->cmd_want = fdc_cmd_len(v);
-    if (st->cmd_len < sizeof(st->cmd)) st->cmd[st->cmd_len] = v;
-    st->cmd_len++;
-    if (st->cmd_len >= st->cmd_want) fdc_execute(st);
+    if (state->Phase == FDC_PHASE_RESULT) return;
+    if (!state->CommandLength) state->CommandWanted = FdcCommandLength(value);
+    if (state->CommandLength < sizeof(state->Command)) state->Command[state->CommandLength] = value;
+    state->CommandLength++;
+    if (state->CommandLength >= state->CommandWanted) FdcExecute(state);
 }
 
-static uint8_t fdc_fifo_read(fdc_state *st)
+static BYTE FdcFifoRead(PFDC_STATE state)
 {
-    uint8_t v;
+    BYTE value;
     /* Reading when there is nothing to read hands back the last byte on a real
        part. Returning 0xFF here would re-create the very ambiguity this device
        exists to remove. */
-    if (st->phase != FDC_PHASE_RES) return st->res_len ? st->res[st->res_len - 1] : 0x80;
-    v = st->res[st->res_pos++];
-    if (st->res_pos >= st->res_len) {
+    if (state->Phase != FDC_PHASE_RESULT) return state->ResultLength ? state->Result[state->ResultLength - 1] : FDC_ST0_INVALID_COMMAND;
+    value = state->Result[state->ResultPosition++];
+    if (state->ResultPosition >= state->ResultLength) {
         /* The last result byte has been read: CMD BSY clears and the chip is
            idle again. This edge is what a length-free drain watches for.
            ⚠ res_len is NOT cleared, so a stray read past the end hands back the
              last byte the way a real part does, rather than 80h -- which would
              look like an invalid-command reply to something that had simply read
              one byte too many. */
-        st->phase = FDC_PHASE_CMD; st->res_pos = 0;
+        state->Phase = FDC_PHASE_COMMAND; state->ResultPosition = 0;
     }
-    return v;
+    return value;
 }
 
-void vdd_fdc_out(void *self, uint16_t port, uint8_t width, uint32_t val)
+VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    fdc_state *st = (fdc_state *)self;
-    uint8_t v = (uint8_t)val;
-    (void)width;
+    PFDC_STATE state = (PFDC_STATE)context;
+    BYTE byteValue = (BYTE)value;
+    (VOID)width;
     switch (port) {
     case FDC_DOR: {
-        uint8_t was = st->dor;
-        st->dor = v;
+        BYTE previousDor = state->Dor;
+        state->Dor = byteValue;
         /* ⛔ BIT 2 IS ACTIVE LOW AND IT IS THE SOFTWARE RESET EVERY BIOS USES.
              A plausible-looking "turn everything off" of 00h holds the chip in
              reset, ungates the interrupt AND stops the motors, all at once. */
-        if (!(v & FDC_DOR_NRESET)) {
-            st->in_reset = 1;
-        } else if (st->in_reset || !(was & FDC_DOR_NRESET)) {
-            st->in_reset = 0;
-            fdc_soft_reset(st);
+        if (!(byteValue & FDC_DOR_NRESET)) {
+            state->IsInReset = 1;
+        } else if (state->IsInReset || !(previousDor & FDC_DOR_NRESET)) {
+            state->IsInReset = 0;
+            FdcSoftReset(state);
         }
         break;
     }
-    case FDC_TDR:  st->tdr = v; break;
+    case FDC_TDR:  state->Tdr = byteValue; break;
     case FDC_MSR:                               /* the WRITE side is DSR        */
-        st->dsr = v;
-        if (v & 0x80) {                         /* bit 7: software reset        */
+        state->Dsr = byteValue;
+        if (byteValue & FDC_DSR_SOFTWARE_RESET) {                         /* bit 7: software reset        */
             /* Self-clearing: the datasheet's reset bit resets and releases. The
                data rate in bits 1:0 SURVIVES, which is why a driver may reset
                through this door and not re-select it. */
-            st->dsr = (uint8_t)(v & 0x7F);
-            st->in_reset = 0;
-            fdc_soft_reset(st);
+            state->Dsr = (BYTE)(byteValue & FDC_DSR_KEPT_BITS);
+            state->IsInReset = 0;
+            FdcSoftReset(state);
         }
         break;
-    case FDC_FIFO: fdc_fifo_write(st, v); break;
-    case FDC_DIR:  st->ccr = (uint8_t)(v & 0x03); break;  /* the write side is CCR */
+    case FDC_FIFO: FdcFifoWrite(state, byteValue); break;
+    case FDC_DIR:  state->Ccr = (BYTE)(byteValue & FDC_CCR_DATA_RATE); break;  /* the write side is CCR */
     default: break;
     }
 }
 
-void vdd_fdc_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
+VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    fdc_state *st = (fdc_state *)self;
-    (void)width;
+    PFDC_STATE state = (PFDC_STATE)context;
+    (VOID)width;
     switch (port) {
-    case FDC_DOR:  *val = st->dor; break;       /* readable on an 82077AA       */
-    case FDC_TDR:  *val = st->tdr; break;
-    case FDC_MSR:  *val = vdd_fdc_msr(st); break;
-    case FDC_FIFO: *val = fdc_fifo_read(st); break;
+    case FDC_DOR:  *value = state->Dor; break;       /* readable on an 82077AA       */
+    case FDC_TDR:  *value = state->Tdr; break;
+    case FDC_MSR:  *value = VddFdcMainStatus(state); break;
+    case FDC_FIFO: *value = FdcFifoRead(state); break;
     case FDC_DIR:
         /* ── DIR BIT 7 IS DSKCHG, AND WE ANSWER 0. ────────────────────────────
              The medium behind us is a file that cannot be swapped while the VDM
@@ -382,19 +469,19 @@ void vdd_fdc_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
              our two oracles both DO drive them and disagree (6.22/QEMU 00h, PCem
              01h), so there is no answer to copy. Zero is recorded as a choice,
              not measured. */
-        *val = 0x00;
+        *value = FDC_DIR_NO_CHANGE;
         break;
-    default: *val = 0xFF; break;
+    default: *value = FDC_UNDRIVEN_BUS; break;
     }
 }
 
-void vdd_fdc_reset(void *self)
+VOID VddFdcReset(PVOID context)
 {
-    fdc_state *st = (fdc_state *)self;
-    VDD_BUS *bus = st->bus;
-    unsigned i;
-    for (i = 0; i < sizeof(*st); ++i) ((uint8_t *)st)[i] = 0;
-    st->bus = bus;
+    PFDC_STATE state = (PFDC_STATE)context;
+    PVDD_BUS bus = state->Bus;
+    UINT byteIndex;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) ((BYTE *)state)[byteIndex] = 0;
+    state->Bus = bus;
     /* ── WHAT POST LEAVES. ───────────────────────────────────────────────────
          Out of reset, DMA and interrupts gated through, drive 0 selected, motors
          off: DOR = 0Ch. MEASURED on 6.22/QEMU, which reads exactly 0Ch. PCem's
@@ -403,22 +490,22 @@ void vdd_fdc_reset(void *self)
        ⚠ The BIOS's own SPECIFY values are not guessed here. They arrive through
          the port when a driver programs them, and DUMPREG hands back what
          arrived rather than an invented default. */
-    st->dor      = FDC_DOR_NRESET | FDC_DOR_DMAGATE;    /* 0x0C                 */
-    st->in_reset = 0;
-    st->phase    = FDC_PHASE_CMD;
+    state->Dor      = FDC_DOR_NRESET | FDC_DOR_DMA_GATE;    /* 0x0C                 */
+    state->IsInReset = 0;
+    state->Phase    = FDC_PHASE_COMMAND;
     /* A machine that has been through POST has already had its four
        sense-interrupts collected by the BIOS. Starting at 4 means the first
        thing a guest asks is answered "nothing pending" rather than with three
        phantom drives that changed while it was not looking. */
-    st->poll_drive = 4;
+    state->PollDrive = FDC_DRIVES;
 }
 
-int vdd_fdc_init(VDD_BUS *b, void *self)
+INT VddFdcInitialize(PVDD_BUS bus, PVOID context)
 {
-    fdc_state *st = (fdc_state *)self;
-    st->bus = b;
-    if (!st->dor) vdd_fdc_reset(st);            /* the host builds us zeroed    */
-    st->bus = b;
+    PFDC_STATE state = (PFDC_STATE)context;
+    state->Bus = bus;
+    if (!state->Dor) VddFdcReset(state);            /* the host builds us zeroed    */
+    state->Bus = bus;
     /* ── TWO CLAIMS, AND THE GAPS ARE DELIBERATE. ────────────────────────────
          3F0h/3F1h (SRA/SRB) are driven ONLY by a part strapped for PS/2 mode. We
          present a PC/AT machine, so they are left unclaimed and float to FFh --
@@ -431,7 +518,7 @@ int vdd_fdc_init(VDD_BUS *b, void *self)
          THAT IS A REAL GAP AND IT BELONGS TO THE ATA SURFACE, NOT THIS ONE.
          Claiming the whole eight-port block would have "fixed" the row by taking
          a register that is somebody else's. */
-    if (VddClaimPorts(b, FDC_DOR, FDC_FIFO, vdd_fdc_in, vdd_fdc_out, st)) return -1;
-    if (VddClaimPorts(b, FDC_DIR, FDC_DIR,  vdd_fdc_in, vdd_fdc_out, st)) return -1;
-    return 0;
+    if (VddClaimPorts(bus, FDC_DOR, FDC_FIFO, VddFdcPortIn, VddFdcPortOut, state)) return FDC_FAILED;
+    if (VddClaimPorts(bus, FDC_DIR, FDC_DIR,  VddFdcPortIn, VddFdcPortOut, state)) return FDC_FAILED;
+    return FDC_OK;
 }
