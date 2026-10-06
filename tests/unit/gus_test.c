@@ -22,7 +22,7 @@ static uint8_t g_flat[0x100000];
 static uint8_t g_dram[GUS_DRAM_SIZE];
 static VDD_BUS bus;
 static DMA_STATE dma;
-static gus_state gus;
+static GUS_STATE gus;
 static int g_irq_count, g_irq_last;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_count++; g_irq_last = irq; }
 
@@ -63,8 +63,8 @@ int main(void)
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
     { NTVDD_DEVICE d = VddDmaDevice(&dma); CHECK(VddBusAdd(&bus, &d) == 0, "add: dma"); }
-    gus.dma = &dma; gus.dram = g_dram; gus.base = B;
-    { NTVDD_DEVICE d = vdd_gus_device(&gus); CHECK(VddBusAdd(&bus, &d) == 0, "add: gus at 240h (two port ranges)"); }
+    gus.Dma = &dma; gus.Dram = g_dram; gus.BasePort = B;
+    { NTVDD_DEVICE d = VddGusDevice(&gus); CHECK(VddBusAdd(&bus, &d) == 0, "add: gus at 240h (two port ranges)"); }
 
     /* ---- T1: detection, exactly as the SDK's UltraProbe + UltraPing (ref §8) ---- */
     reg8(0x4C, 0x00); reg8(0x4C, 0x01);
@@ -74,7 +74,7 @@ int main(void)
     CHECK(peek(0xFFFFF) == 0x5A, "dram: the 20th address bit reaches the top of 1 MB");
 
     /* #190: the card as ULTRINIT leaves it -- ULTRASND=240,3,3,11,11 latched, combined. */
-    CHECK(gus.irq_latch == (0x05 | 0x40) && gus.dma_latch == (0x02 | 0x40) && gus.mix == 0x09,
+    CHECK(gus.IrqLatch == (0x05 | 0x40) && gus.DmaLatch == (0x02 | 0x40) && gus.MixControl == 0x09,
           "reset: latches hold ULTRASND's IRQ 11 / DMA 3 (combined), 2X0 = 09h");
 
     /* ---- T2: the register file ---- */
@@ -89,7 +89,7 @@ int main(void)
     CHECK(rreg8(0x8E) == (0xC0 | 31), "active voices: 32");
     reg8(0x0E, 0xC0 | 3);
     CHECK(rreg8(0x8E) == (0xC0 | 13), "active voices: fewer than 14 is forced to 14");
-    CHECK(vdd_gus_rate_hz(&gus) >= 44090 && vdd_gus_rate_hz(&gus) <= 44110, "14 voices -> 44.1 kHz");
+    CHECK(VddGusRateHz(&gus) >= 44090 && VddGusRateHz(&gus) <= 44110, "14 voices -> 44.1 kHz");
 
     /* ---- T3: a voice plays to its end, stops, and interrupts through 8Fh ---- */
     for (i = 0; i < 256; ++i) g_dram[0x1000 + i] = (uint8_t)(i < 128 ? 0x40 : 0xC0);
@@ -101,10 +101,10 @@ int main(void)
     reg8(0x0D, 0x03);                                  /* no ramp */
     g_irq_count = 0;
     reg8(0x00, 0x20);                                  /* go, 8-bit, IRQ at end */
-    vdd_gus_render(&gus, out, 64);
+    VddGusRender(&gus, out, 64);
     { int nz = 0; for (i = 0; i < 64; ++i) if (out[i]) nz = 1;
       CHECK(nz && out[10] > 0, "a playing voice reaches the output with its sign"); }
-    vdd_gus_render(&gus, out, 400);
+    VddGusRender(&gus, out, 400);
     CHECK((rreg8(0x80) & 0x01) != 0, "at end with no loop: the voice STOPPED");
     CHECK(g_irq_count >= 1 && g_irq_last == 11, "wavetable IRQ raised on IRQ 11");
     CHECK((rd(B + 0x006) & 0x20) != 0, "2X6 bit 5: a wavetable IRQ is pending");
@@ -117,16 +117,16 @@ int main(void)
     vaddr(0x02, 0x1000); vaddr(0x04, 0x1000 + 50); vaddr(0x0A, 0x1000);
     reg16(0x01, 0x0400); reg16(0x09, 0xFFF0); reg8(0x0D, 0x03);
     reg8(0x00, 0x08);                                  /* go, loop */
-    vdd_gus_render(&gus, out, 500);
+    VddGusRender(&gus, out, 500);
     { uint32_t pos = ((uint32_t)rreg16(0x8A) << 7) | (rreg16(0x8B) >> 9);
       CHECK(!(rreg8(0x80) & 0x01) && pos >= 0x1000 && pos <= 0x1000 + 50, "loop: still running, position inside [start,end]"); }
 
     /* ---- T5: the volume curve against the SDK's linear table (VOL1.C) ---- */
     /* index 1 = 700h, 2 = 7FFh, 4 = 8FFh, 256 = EFFh: amplitude doubles per exponent. */
-    { uint32_t g1 = vdd_gus_vol_gain(0x700), g256 = vdd_gus_vol_gain(0xF00);
+    { uint32_t g1 = VddGusVolumeGain(0x700), g256 = VddGusVolumeGain(0xF00);
       CHECK(g1 > 0 && g256 / g1 == 256, "volume: 700h -> F00h is x256 (8 octaves, one per exponent)");
-      CHECK(vdd_gus_vol_gain(0x880) * 2 == vdd_gus_vol_gain(0x700) * 6, "volume: 880h is 3x 700h (index 3 in the SDK table)");
-      CHECK(vdd_gus_vol_gain(0) == 0, "volume: 0 is silence"); }
+      CHECK(VddGusVolumeGain(0x880) * 2 == VddGusVolumeGain(0x700) * 6, "volume: 880h is 3x 700h (index 3 in the SDK table)");
+      CHECK(VddGusVolumeGain(0) == 0, "volume: 0 is silence"); }
 
     /* ---- T6: a volume ramp runs up, stops, and raises the volume IRQ ---- */
     wr(B + 0x102, 2);
@@ -136,7 +136,7 @@ int main(void)
     reg8(0x06, 0x3F);                                  /* fastest */
     g_irq_count = 0;
     reg8(0x0D, 0x20);                                  /* go up, IRQ at end */
-    vdd_gus_render(&gus, out, 200);
+    VddGusRender(&gus, out, 200);
     CHECK((rreg8(0x8D) & 0x01) && (rreg16(0x89) >> 4) == 0xE00, "ramp: reached E00h and stopped");
     { uint8_t f = rreg8(0x8F);
       CHECK((f & 0x1F) == 2 && !(f & 0x40) && (f & 0x80), "8Fh: voice 2, volume IRQ (bit 6 active-low)"); }
@@ -145,11 +145,11 @@ int main(void)
     /* 2X0 = 09h: line in off, LINE OUT ON (bit 1 clear), latches on -- the SDK's final
        write. (This used 0Bh, which per ref §5 turns line out OFF and now mutes.) */
     wr(B + 0x000, 0x09 | 0x40); wr(B + 0x00B, 0x05);   /* IRQ latch: GF1 on IRQ 11 (5) */
-    CHECK(gus.irq_latch == 0x05, "2X0 bit 6 then 2XB: the IRQ latch");
+    CHECK(gus.IrqLatch == 0x05, "2X0 bit 6 then 2XB: the IRQ latch");
     wr(B + 0x000, 0x09 | 0x40); wr(B + 0x102, 0); wr(B + 0x00B, 0x07);
-    CHECK(gus.irq_latch == 0x05 && gus.latch_locked_out >= 1, "2XB not the NEXT write: locked out");
+    CHECK(gus.IrqLatch == 0x05 && gus.LatchLockedOut >= 1, "2XB not the NEXT write: locked out");
     wr(B + 0x000, 0x09); wr(B + 0x00B, 0x02);          /* DMA latch: DMA 3 (code 2) */
-    CHECK(gus.dma_latch == 0x02, "2X0 bit 6 clear then 2XB: the DMA latch");
+    CHECK(gus.DmaLatch == 0x02, "2X0 bit 6 clear then 2XB: the DMA latch");
 
     /* ---- T8: DRAM DMA upload through the 8237 channel 3 (ref §3) ---- */
     for (i = 0; i < 64; ++i) g_flat[0x20000 + i] = (uint8_t)(0x80 + i);
@@ -172,7 +172,7 @@ int main(void)
     reg8(0x45, 0x04);                                      /* timer 1 IRQ enable */
     wr(B + 0x008, 0x04); wr(B + 0x009, 0x01);              /* start timer 1 */
     g_irq_count = 0;
-    vdd_gus_render(&gus, out, 16);                         /* 16 x ~22.7 us > 160 us */
+    VddGusRender(&gus, out, 16);                         /* 16 x ~22.7 us > 160 us */
     CHECK((rd(B + 0x006) & 0x04) && g_irq_count >= 1, "timer 1: expired, 2X6 bit 2, IRQ");
 
     /* ---- #189: PAN. The same kind of voice, looped, at three pan positions, rendered
@@ -189,7 +189,7 @@ int main(void)
             reg16(0x01, 0x0400); reg16(0x09, 0xFFF0); reg8(0x0D, 0x03);
             reg8(0x0C, pan);
             reg8(0x00, 0x08);                          /* go, 8-bit, LOOP, no IRQ */
-            vdd_gus_render_st(&gus, st2, 64);
+            VddGusRenderStereo(&gus, st2, 64);
             if (p == 0) { l0 = st2[20]; r0 = st2[21]; }
             if (p == 1) { l7 = st2[20]; r7 = st2[21]; }
             if (p == 2) { l15 = st2[20]; r15 = st2[21]; }
@@ -216,24 +216,24 @@ int main(void)
     /* ---- T10: the IRQ latch decides the line (ref §5) ---- */
     /* GF1 on IRQ 5 (code 2), MIDI on IRQ 7 (code 4 in bits 5-3), not combined. */
     wr(B + 0x000, 0x09 | 0x40); wr(B + 0x00B, (uint8_t)(0x02 | (0x04 << 3)));
-    CHECK(gus.gf1_irq_line == 5 && gus.midi_irq_line == 7, "IRQ latch decodes: GF1 -> IRQ 5, MIDI -> IRQ 7");
+    CHECK(gus.Gf1IrqLine == 5 && gus.MidiIrqLine == 7, "IRQ latch decodes: GF1 -> IRQ 5, MIDI -> IRQ 7");
     reg8(0x46, 0xFF); reg8(0x45, 0x04);
     wr(B + 0x008, 0x04); wr(B + 0x009, 0x01);
     g_irq_count = 0; g_irq_last = 0;
-    vdd_gus_render(&gus, out, 16);
+    VddGusRender(&gus, out, 16);
     CHECK(g_irq_count == 1 && g_irq_last == 5, "timer 1 interrupts on the LATCHED line, IRQ 5 -- not the default 11");
     wr(B + 0x009, 0x00); wr(B + 0x009, 0x80); reg8(0x45, 0x00);
 
     /* ---- T11: the MIDI UART (ref §9) ---- */
     {   memset(&g_asm, 0, sizeof g_asm); g_asm.Sink = msg_sink;
-        gus.midi_sink = 0;
+        gus.MidiSink = 0;
         wr(B + 0x100, 0x03);                                   /* master reset */
-        CHECK(rd(B + 0x100) == GUS_ACIA_TDRE, "6850 after master reset: transmitter empty, nothing else");
+        CHECK(rd(B + 0x100) == GUS_ACIA_TRANSMIT_EMPTY, "6850 after master reset: transmitter empty, nothing else");
         wr(B + 0x100, 0x00);                                   /* released, no IRQs */
-        gus.midi_sink = gus_test_capture; gus.midi_sink_ctx = 0;
+        gus.MidiSink = gus_test_capture; gus.MidiSinkContext = 0;
         g_irq_count = 0;
         wr(B + 0x101, 0x90); wr(B + 0x101, 0x3C); wr(B + 0x101, 0x64);
-        CHECK(gus.midi_tx == 3 && g_irq_count == 0, "6850 transmit: three bytes out, no IRQ with CR6-5 = 00");
+        CHECK(gus.MidiTransmitted == 3 && g_irq_count == 0, "6850 transmit: three bytes out, no IRQ with CR6-5 = 00");
         CHECK(gus_test_captured == 3 && g_tx[0] == 0x90 && g_tx[1] == 0x3C && g_tx[2] == 0x64,
               "the sink sees the bytes as the wire carries them");
         CHECK(g_nmsg == 1 && g_msg == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
@@ -251,37 +251,37 @@ int main(void)
         wr(B + 0x000, 0x09 | 0x40); wr(B + 0x00B, (uint8_t)(0x02 | 0x40));
         g_irq_count = 0;
         wr(B + 0x100, 0x20);
-        CHECK(gus.midi_irq_line == 5 && g_irq_count == 1 && g_irq_last == 5, "IRQ latch bit 6: MIDI combined onto the GF1 line (IRQ 5)");
+        CHECK(gus.MidiIrqLine == 5 && g_irq_count == 1 && g_irq_last == 5, "IRQ latch bit 6: MIDI combined onto the GF1 line (IRQ 5)");
         wr(B + 0x100, 0x00);
         /* Loopback: 2X0 bit 5 -- received, not sent. */
-        {   uint32_t before = gus.midi_tx;
+        {   uint32_t before = gus.MidiTransmitted;
             int cap0 = gus_test_captured;
             wr(B + 0x000, 0x09 | 0x20);
             wr(B + 0x100, 0x80);                               /* receive IRQ on */
             g_irq_count = 0;
             wr(B + 0x101, 0x5A);
-            CHECK(gus_test_captured == cap0 && gus.midi_tx == before + 1, "2X0 bit 5 loopback: the byte does not reach MIDI OUT");
+            CHECK(gus_test_captured == cap0 && gus.MidiTransmitted == before + 1, "2X0 bit 5 loopback: the byte does not reach MIDI OUT");
             CHECK((rd(B + 0x100) & 0x81) == 0x81 && (rd(B + 0x006) & 0x02), "loopback: RDRF + IRQ, 2X6 bit 1 (MIDI receive)");
             CHECK(g_irq_count == 1 && g_irq_last == 5, "receive IRQ on the (combined) line");
             wr(B + 0x101, 0xA5);
-            CHECK(rd(B + 0x100) & GUS_ACIA_OVRN, "a second byte before the first is read: overrun");
-            CHECK(rd(B + 0x101) == 0xA5 && !(rd(B + 0x100) & (GUS_ACIA_RDRF | GUS_ACIA_OVRN)), "reading data returns the byte and clears RDRF/OVRN");
+            CHECK(rd(B + 0x100) & GUS_ACIA_OVERRUN, "a second byte before the first is read: overrun");
+            CHECK(rd(B + 0x101) == 0xA5 && !(rd(B + 0x100) & (GUS_ACIA_RECEIVE_FULL | GUS_ACIA_OVERRUN)), "reading data returns the byte and clears RDRF/OVRN");
             CHECK(!(rd(B + 0x006) & 0x02), "2X6 bit 1 clears with it");
             wr(B + 0x100, 0x00); wr(B + 0x000, 0x09);
         }
         /* The jumper register (2XF = 6): MIDI decode off -> an empty bus. */
         wr(B + 0x00F, 6); wr(B + 0x000, 0x09); wr(B + 0x00B, 0x04);
-        CHECK(gus.jumper == 0x04 && rd(B + 0x100) == 0xFF, "2XF=6 bank: MIDI decode off, 3X0 floats FFh");
+        CHECK(gus.Jumper == 0x04 && rd(B + 0x100) == 0xFF, "2XF=6 bank: MIDI decode off, 3X0 floats FFh");
         wr(B + 0x000, 0x09); wr(B + 0x00B, 0x06); wr(B + 0x00F, 0);
-        CHECK(rd(B + 0x100) == GUS_ACIA_TDRE, "MIDI decode back on");
-        CHECK(gus.irq_latch == (0x02 | 0x40), "banks 5/6 writes do not touch the IRQ latch");
+        CHECK(rd(B + 0x100) == GUS_ACIA_TRANSMIT_EMPTY, "MIDI decode back on");
+        CHECK(gus.IrqLatch == (0x02 | 0x40), "banks 5/6 writes do not touch the IRQ latch");
     }
 
     /* ---- T12: 2XF = 5, "write 0 to clear power-up IRQs" ---- */
     wr(B + 0x100, 0x20);                                       /* a held MIDI transmit IRQ */
     g_irq_count = 0;
     wr(B + 0x00F, 5); wr(B + 0x000, 0x09); wr(B + 0x00B, 0x00); wr(B + 0x00F, 0);
-    CHECK(gus.line_up == 0, "bank 5 write 0: the asserted line is let go");
+    CHECK(gus.IsLineUp == 0, "bank 5 write 0: the asserted line is let go");
     wr(B + 0x100, 0x20);                                       /* re-evaluated: a fresh edge */
     CHECK(g_irq_count == 1, "...so a source still pending interrupts afresh");
     wr(B + 0x100, 0x00);
@@ -298,7 +298,7 @@ int main(void)
     {   uint32_t v;
         #define DMAW(p,x) do { v = (x); VddBusIo(&bus, (p), 1, 0, &v); } while (0)
         wr(B + 0x000, 0x09); wr(B + 0x00B, (uint8_t)(0x01 | (0x02 << 3)));  /* DRAM DMA 1, record DMA 3 */
-        CHECK(gus.dram_dma_line == 1 && gus.rec_dma_line == 3, "DMA latch decodes: DRAM -> DMA 1, record -> DMA 3");
+        CHECK(gus.DramDmaLine == 1 && gus.RecordDmaLine == 3, "DMA latch decodes: DRAM -> DMA 1, record -> DMA 3");
         for (i = 0; i < 16; ++i) g_flat[0x30000 + i] = (uint8_t)(0x10 + i);
         memset(g_dram + 0x4000, 0, 16);
         DMAW(0x0C, 0); DMAW(0x02, 0x00); DMAW(0x02, 0x00); DMAW(0x03, 15); DMAW(0x03, 0);
@@ -307,10 +307,10 @@ int main(void)
         DMAW(0x0A, 0x05);                                      /* ch 1 MASKED first */
         reg16(0x42, 0x4000 >> 4);
         reg8(0x41, 0x21);
-        CHECK(gus.dma_waiting && g_dram[0x4000] == 0, "8237 channel masked: the card holds DRQ and waits");
+        CHECK(gus.IsDmaWaiting && g_dram[0x4000] == 0, "8237 channel masked: the card holds DRQ and waits");
         DMAW(0x0A, 0x01);                                      /* unmask */
-        vdd_gus_render(&gus, out, 1);
-        CHECK(!gus.dma_waiting && g_dram[0x4000] == 0x10 && g_dram[0x400F] == 0x1F, "unmasked: the upload runs on the LATCHED channel 1");
+        VddGusRender(&gus, out, 1);
+        CHECK(!gus.IsDmaWaiting && g_dram[0x4000] == 0x10 && g_dram[0x400F] == 0x1F, "unmasked: the upload runs on the LATCHED channel 1");
         (void)rreg8(0x41);
 
         /* ---- T15: card -> PC, a DRAM read through the 8237 (41h bit 1) ---- */
@@ -325,7 +325,7 @@ int main(void)
         reg8(0x41, 0x23);                                      /* go, card->PC, TC IRQ */
         CHECK(g_flat[0x31000] == 0xC0 && g_flat[0x3101F] == 0xDF && g_flat[0x31020] == 0xEE,
               "card -> PC: 32 DRAM bytes land in guest memory, and not one more");
-        CHECK(g_irq_count == 1 && g_irq_last == 5 && gus.dma_downloads == 1, "card -> PC: terminal-count IRQ");
+        CHECK(g_irq_count == 1 && g_irq_last == 5 && gus.DmaDownloads == 1, "card -> PC: terminal-count IRQ");
         CHECK(rreg8(0x41) & 0x40, "41h bit 6: TC pending after a read too");
         DMAW(0x0C, 0); DMAW(0x02, 0x00); DMAW(0x02, 0x10); DMAW(0x03, 0); DMAW(0x03, 0);
         DMAW(0x0A, 0x01);
@@ -342,11 +342,11 @@ int main(void)
         reg8(0x48, 46);                                        /* 9878400/(16*48) = 12 862 Hz */
         g_irq_count = 0;
         reg8(0x49, 0x21);                                      /* go, mono, TC IRQ */
-        vdd_gus_render(&gus, out, 100);                        /* ~2.3 ms: ~29 samples */
-        CHECK(gus.samp_bytes >= 20 && gus.samp_bytes <= 40 && g_irq_count == 0,
+        VddGusRender(&gus, out, 100);                        /* ~2.3 ms: ~29 samples */
+        CHECK(gus.SampleBytes >= 20 && gus.SampleBytes <= 40 && g_irq_count == 0,
               "record: paced by the 48h rate (~29 samples in 100 GF1 samples), not instantaneous");
-        vdd_gus_render(&gus, out, 400);
-        CHECK(gus.samp_bytes == 100, "record: exactly the 8237's 100 bytes");
+        VddGusRender(&gus, out, 400);
+        CHECK(gus.SampleBytes == 100, "record: exactly the 8237's 100 bytes");
         CHECK(g_flat[0x32000] == 0x80 && g_flat[0x32063] == 0x80 && g_flat[0x32064] == 0xEE,
               "record: every byte is the ADC's midscale (80h) -- silence, unsigned");
         CHECK(g_irq_count == 1 && g_irq_last == 5, "record: terminal-count IRQ on the GF1 line");
@@ -358,7 +358,7 @@ int main(void)
         DMAW(0x0C, 0); DMAW(0x06, 0x00); DMAW(0x06, 0x20); DMAW(0x07, 9); DMAW(0x07, 0);
         DMAW(0x0A, 0x03);
         reg8(0x49, 0x83);                                      /* go, stereo, invert MSB */
-        vdd_gus_render(&gus, out, 200);
+        VddGusRender(&gus, out, 200);
         CHECK(g_flat[0x32000] == 0x00 && g_flat[0x32009] == 0x00 && g_flat[0x3200A] == 0x80,
               "record with 49h bit 7: silence is 00h (signed), 10 bytes");
         (void)rreg8(0x49);
@@ -375,13 +375,13 @@ int main(void)
             DMAW(0x0A, 0x01);                                  /* UNMASKED -- only disabled */
             reg16(0x42, 0x6000 >> 4);
             reg8(0x41, 0x01);                                  /* go, PC -> card */
-            vdd_gus_render(&gus, out, 1);
-            CHECK(gus.dma_waiting && g_dram[0x6000] == 0, "8237 disabled: the upload holds DRQ and waits");
+            VddGusRender(&gus, out, 1);
+            CHECK(gus.IsDmaWaiting && g_dram[0x6000] == 0, "8237 disabled: the upload holds DRQ and waits");
             v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0x20) != 0, "8237 status 08h: DRQ1 pending while the controller refuses it");
             DMAW(0x08, 0x00);                                  /* re-enable */
-            vdd_gus_render(&gus, out, 1);
-            CHECK(!gus.dma_waiting && g_dram[0x6000] == 0x50 && g_dram[0x600F] == 0x5F,
+            VddGusRender(&gus, out, 1);
+            CHECK(!gus.IsDmaWaiting && g_dram[0x6000] == 0x50 && g_dram[0x600F] == 0x5F,
                   "8237 re-enabled: the upload runs");
             v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0xF0) == 0 && (s & 0x02), "8237 status 08h: DRQ1 gone, TC1 latched");
@@ -393,12 +393,12 @@ int main(void)
             DMAW(0x0A, 0x03);
             DMAW(0x08, 0x04);
             reg8(0x49, 0x01);                                  /* go, mono */
-            vdd_gus_render(&gus, out, 200);
+            VddGusRender(&gus, out, 200);
             CHECK(g_flat[0x32000] == 0xEE, "8237 disabled: the ADC moves no byte");
             v = 0; VddBusIo(&bus, 0x08, 1, 1, &v); s = v;
             CHECK((s & 0x80) != 0, "8237 status 08h: DRQ3 pending for the record channel");
             DMAW(0x08, 0x00);
-            vdd_gus_render(&gus, out, 200);
+            VddGusRender(&gus, out, 200);
             CHECK(g_flat[0x32000] == 0x80 && g_flat[0x32007] == 0x80 && g_flat[0x32008] == 0xEE,
                   "8237 re-enabled: the take completes, 8 bytes");
             (void)rreg8(0x49);
@@ -412,12 +412,12 @@ int main(void)
         vaddr(0x02, 0x1000); vaddr(0x04, 0x1000 + 120); vaddr(0x0A, 0x1000);
         reg16(0x01, 0x0400); reg16(0x09, 0xFFF0); reg8(0x0D, 0x03); reg8(0x0C, 7);
         reg8(0x00, 0x08);
-        vdd_gus_render(&gus, out, 64);
+        VddGusRender(&gus, out, 64);
         for (i = 0; i < 64; ++i) if (out[i]) nz_on++;
         wr(B + 0x000, 0x09 | 0x02);
-        vdd_gus_render(&gus, out, 64);
+        VddGusRender(&gus, out, 64);
         for (i = 0; i < 64; ++i) if (out[i]) nz_off++;
-        CHECK(nz_on > 0 && nz_off == 0 && gus.out_muted >= 64, "2X0 bit 1: line out disabled -> silence");
+        CHECK(nz_on > 0 && nz_off == 0 && gus.OutputMuted >= 64, "2X0 bit 1: line out disabled -> silence");
         CHECK(!(rreg8(0x80) & 0x01), "...while the voice itself keeps running");
         wr(B + 0x000, 0x09);
         reg8(0x00, 0x03);

@@ -921,7 +921,7 @@ static DMA_STATE    g_dma;       static NTVDD_DEVICE g_dma_dev;
 static OPL_STATE    g_opl;       static NTVDD_DEVICE g_opl_dev;
 static SB_STATE     g_sb;        static NTVDD_DEVICE g_sb_dev;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
-static gus_state    g_gus;       static NTVDD_DEVICE g_gus_dev;
+static GUS_STATE    g_gus;       static NTVDD_DEVICE g_gus_dev;
 static uint8_t      g_gus_dram[GUS_DRAM_SIZE];
 static int          g_gus_on = 0;
 /* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
@@ -943,25 +943,25 @@ static void gus_report(void)
     if (done) return;
     done = 1;
     if (!g_gus_on) { q = zput(q, "STAGE2: GUS off (nogus.flag)\r\n"); log_append(LOG_PATH, b, q); return; }
-    for (k = 0; k < GUS_VOICES; ++k) if (!(g_gus.v[k].ctrl & 3)) ++running;
-    q = zput(q, "STAGE2: GUS io_w=");  q = zhex(q, g_gus.io_writes);
-    q = zput(q, " io_r=");            q = zhex(q, g_gus.io_reads);
-    q = zput(q, " reset=0x");         q = zhexb(q, g_gus.reset);
-    q = zput(q, " dram_pokes=");      q = zhex(q, g_gus.dram_pokes);
-    q = zput(q, " dram_peeks=");      q = zhex(q, g_gus.dram_peeks);
-    q = zput(q, " dma_uploads=");     q = zhex(q, g_gus.dma_uploads);
-    q = zput(q, " dma_bytes=");       q = zhex(q, g_gus.dma_bytes);
-    q = zput(q, " active=");          q = zhex(q, g_gus.active);
-    q = zput(q, " voice_starts=");    q = zhex(q, g_gus.voice_starts);
+    for (k = 0; k < GUS_VOICES; ++k) if (!(g_gus.Voices[k].Control & 3)) ++running;
+    q = zput(q, "STAGE2: GUS io_w=");  q = zhex(q, g_gus.IoWrites);
+    q = zput(q, " io_r=");            q = zhex(q, g_gus.IoReads);
+    q = zput(q, " reset=0x");         q = zhexb(q, g_gus.ResetRegister);
+    q = zput(q, " dram_pokes=");      q = zhex(q, g_gus.DramPokes);
+    q = zput(q, " dram_peeks=");      q = zhex(q, g_gus.DramPeeks);
+    q = zput(q, " dma_uploads=");     q = zhex(q, g_gus.DmaUploads);
+    q = zput(q, " dma_bytes=");       q = zhex(q, g_gus.DmaBytes);
+    q = zput(q, " active=");          q = zhex(q, g_gus.ActiveVoices);
+    q = zput(q, " voice_starts=");    q = zhex(q, g_gus.VoiceStarts);
     q = zput(q, " running_now=");     q = zhex(q, running);
-    q = zput(q, " irqs=");            q = zhex(q, g_gus.irqs_raised);
-    q = zput(q, " fifo_reads=");      q = zhex(q, g_gus.fifo_reads);
-    q = zput(q, " latch_irq/dma=0x"); q = zhexb(q, g_gus.irq_latch);
-    q = zput(q, "/0x");               q = zhexb(q, g_gus.dma_latch);
-    q = zput(q, " locked_out=");      q = zhex(q, g_gus.latch_locked_out);
-    q = zput(q, " samples_out=");     q = zhex(q, g_gus.samples_out);
-    q = zput(q, " nonzero=");         q = zhex(q, g_gus.out_nonzero);
-    q = zput(q, " peak=");            q = zhex(q, g_gus.out_peak);
+    q = zput(q, " irqs=");            q = zhex(q, g_gus.IrqsRaised);
+    q = zput(q, " fifo_reads=");      q = zhex(q, g_gus.FifoReads);
+    q = zput(q, " latch_irq/dma=0x"); q = zhexb(q, g_gus.IrqLatch);
+    q = zput(q, "/0x");               q = zhexb(q, g_gus.DmaLatch);
+    q = zput(q, " locked_out=");      q = zhex(q, g_gus.LatchLockedOut);
+    q = zput(q, " samples_out=");     q = zhex(q, g_gus.SamplesOut);
+    q = zput(q, " nonzero=");         q = zhex(q, g_gus.OutputNonZero);
+    q = zput(q, " peak=");            q = zhex(q, g_gus.OutputPeak);
     q = zput(q, "\r\n"); log_append(LOG_PATH, b, q);
 }
 
@@ -8918,7 +8918,7 @@ static void exec_mach_restore(int d, char **pp)
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
-    VddSbReset(&g_sb); VddOplReset(&g_opl); vdd_gus_reset(&g_gus);
+    VddSbReset(&g_sb); VddOplReset(&g_opl); VddGusReset(&g_gus);
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
     VddMpuReset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
@@ -30096,17 +30096,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
     {   static const uint8_t GIRQ[7] = { 2, 3, 5, 7, 11, 12, 15 };
         static const uint8_t GDMA[5] = { 1, 3, 5, 6, 7 };
-        g_gus.base   = (uint16_t)(0x210 + 0x10 * (g_set.v[SET_GUSADDR] <= 5 ? g_set.v[SET_GUSADDR] : 3));
-        g_gus.irq    = GIRQ[g_set.v[SET_GUSIRQ] <= 6 ? g_set.v[SET_GUSIRQ] : 4];
-        g_gus.dma_ch = GDMA[g_set.v[SET_GUSDMA] <= 4 ? g_set.v[SET_GUSDMA] : 1]; }
+        g_gus.BasePort   = (uint16_t)(0x210 + 0x10 * (g_set.v[SET_GUSADDR] <= 5 ? g_set.v[SET_GUSADDR] : 3));
+        g_gus.Irq    = GIRQ[g_set.v[SET_GUSIRQ] <= 6 ? g_set.v[SET_GUSIRQ] : 4];
+        g_gus.DmaChannel = GDMA[g_set.v[SET_GUSDMA] <= 4 ? g_set.v[SET_GUSDMA] : 1]; }
     /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
        one line is a machine nobody could have built. Step aside to the next period
        choice (ref/gus.md §5 lists what the latches can select). */
-    if (g_sbcfg.IoBase == g_gus.base) g_gus.base = 0x260;
-    if (g_sbcfg.Irq == g_gus.irq)   g_gus.irq = 12;
-    if (g_sbcfg.Dma8Channel == g_gus.dma_ch || g_sbcfg.Dma16Channel == g_gus.dma_ch) g_gus.dma_ch = 1;
-    if (g_sbcfg.Dma8Channel == g_gus.dma_ch || g_sbcfg.Dma16Channel == g_gus.dma_ch) g_gus.dma_ch = 6;
+    if (g_sbcfg.IoBase == g_gus.BasePort) g_gus.BasePort = 0x260;
+    if (g_sbcfg.Irq == g_gus.Irq)   g_gus.Irq = 12;
+    if (g_sbcfg.Dma8Channel == g_gus.DmaChannel || g_sbcfg.Dma16Channel == g_gus.DmaChannel) g_gus.DmaChannel = 1;
+    if (g_sbcfg.Dma8Channel == g_gus.DmaChannel || g_sbcfg.Dma16Channel == g_gus.DmaChannel) g_gus.DmaChannel = 6;
     g_my_pm_off     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -31357,8 +31357,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins. */
         if (g_gus_on && !strstr_nocase(envextra, "ULTRASND=")) {
             eo += (DWORD)wsprintfA(envextra + eo, "ULTRASND=%X,%u,%u,%u,%u\n",
-                                   (unsigned)g_gus.base, (unsigned)g_gus.dma_ch, (unsigned)g_gus.dma_ch,
-                                   (unsigned)g_gus.irq, (unsigned)g_gus.irq);
+                                   (unsigned)g_gus.BasePort, (unsigned)g_gus.DmaChannel, (unsigned)g_gus.DmaChannel,
+                                   (unsigned)g_gus.Irq, (unsigned)g_gus.Irq);
         }
         if (g_fetch2_ok) {
             unsigned nv = launcher_compiler_vars(g_env2, sizeof g_env2, envextra + eo,
@@ -32171,10 +32171,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
        ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
     if (g_gus_on) {                             /* decided at startup: see NOGUS_FLAG's read */
-        g_gus.dma = &g_dma; g_gus.dram = g_gus_dram;
+        g_gus.Dma = &g_dma; g_gus.Dram = g_gus_dram;
         g_gusmidi.Sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
-        g_gus.midi_sink = gus_midi_to_synth;
-        g_gus_dev = vdd_gus_device(&g_gus);
+        g_gus.MidiSink = gus_midi_to_synth;
+        g_gus_dev = VddGusDevice(&g_gus);
         VddBusAdd(&g_bus, &g_gus_dev);
     }
     /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,

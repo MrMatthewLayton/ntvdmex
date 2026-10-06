@@ -59,7 +59,7 @@ typedef struct audio_resampler {
 typedef struct audio_state {
     OPL_STATE *opl;
     SB_STATE  *sb;
-    gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
+    GUS_STATE *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
     PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
     const SPEAKER_STATE *spk; /* PC speaker; NULL = not fitted                   */
     uint32_t   out_hz;
@@ -99,7 +99,7 @@ void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_
    only stops it being audible. */
 void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable);
 /* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
-void vdd_audio_set_gus(audio_state *st, gus_state *gus);
+void vdd_audio_set_gus(audio_state *st, GUS_STATE *gus);
 /* Fit (or remove, NULL) the AWE32's EMU8000 as a mixer source (#233). */
 void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu);
 

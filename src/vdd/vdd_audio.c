@@ -59,7 +59,7 @@ void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_
     st->master = 100;                 /* the struct is zeroed above: 0 would be silence */
 }
 
-void vdd_audio_set_gus(audio_state *st, gus_state *gus) { st->gus = gus; }
+void vdd_audio_set_gus(audio_state *st, GUS_STATE *gus) { st->gus = gus; }
 void vdd_audio_set_emu8k(audio_state *st, PEMU8K_STATE emu) { st->emu8k = emu; }
 
 void vdd_audio_set_speaker(audio_state *st, const SPEAKER_STATE *spk, int enable)
@@ -157,9 +157,9 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
 
         /* --- the GUS, panned per voice (see vdd_gus.c) -------------------- */
         if (st->gus) {
-            rs_setup(&st->r_gus, vdd_gus_rate_hz(st->gus), st->out_hz);
+            rs_setup(&st->r_gus, VddGusRateHz(st->gus), st->out_hz);
             need = rs_need(&st->r_gus, n);
-            vdd_gus_render_st(st->gus, st->scratch, need);
+            VddGusRenderStereo(st->gus, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
                 int32_t l, r;
