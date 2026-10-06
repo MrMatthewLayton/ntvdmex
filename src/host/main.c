@@ -1076,7 +1076,7 @@ static DWORD g_wowfold_seen[WOWFOLD_SLOTS];
 static int   g_wowfold_mute;
 static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF */
 static AUDIO_STATE  g_audio;     static AUDIO_WAVE g_wave;
-static present_ddraw g_pd;
+static PRESENT_DDRAW g_pd;
 static DOS_XMS_STATE    g_xms;       /* M4: XMS extended-memory manager           */
 static void        *g_hma;       /* the HMA at linear 0x100000, 0 = unavailable */
 static DWORD        g_hma_err;   /* why not, when g_hma == 0                     */
@@ -10954,15 +10954,15 @@ static void status_update(void)
        protected mode. Title case (user, s84). */
     {   /* #325: the picture's own resolution and how it is shown -- "at 2x" when the
              drawn rectangle is an exact whole multiple, "scaled" otherwise -- read
-             from what gdi_present actually drew, so it is true in a window, maximised
+             from what PresentGdi actually drew, so it is true in a window, maximised
              and fullscreen alike. */
         static char mode_txt[96];
         const char *m = (g_dpmi_pm && g_DpmiIsClient32) ? "32-bit Protected Mode"
                       : g_dpmi_pm                      ? "16-bit Protected Mode"
                                                        : "16-bit Real Mode";
         char *q = zput(mode_txt, m);
-        if (g_pd.snap_valid && g_pd.snap_w > 0 && g_pd.snap_h > 0 && g_pd.last_dw > 0) {
-            int sw = g_pd.snap_w, sh = g_pd.snap_h, dw = g_pd.last_dw, dh = g_pd.last_dh;
+        if (g_pd.IsSnapshotValid && g_pd.SnapshotWidth > 0 && g_pd.SnapshotHeight > 0 && g_pd.LastDestinationWidth > 0) {
+            int sw = g_pd.SnapshotWidth, sh = g_pd.SnapshotHeight, dw = g_pd.LastDestinationWidth, dh = g_pd.LastDestinationHeight;
             q = zput(q, ", ");  q = zdec(q, (unsigned)sw); q = zput(q, "x"); q = zdec(q, (unsigned)sh);
             if (dw % sw == 0 && dh % sh == 0 && dw / sw == dh / sh) {
                 q = zput(q, " at "); q = zdec(q, (unsigned)(dw / sw)); q = zput(q, "x");
@@ -11005,7 +11005,7 @@ static void make_status(HWND parent, HINSTANCE hi)
     g_status_l[0] = 0;                       /* force the first cut + push */
     status_update();
     GetWindowRect(g_status, &sr);
-    if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
+    if (sr.bottom > sr.top) g_pd.StatusHeight = sr.bottom - sr.top;
 }
 
 /* Tick/untick a menu item BY COMMAND, through whichever menu is live: FULLSCREEN
@@ -11064,16 +11064,16 @@ static void sel_publish(void)
     int r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1, r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
-    g_pd.sel_on = g_sel_on;
+    g_pd.IsSelection = g_sel_on;
     {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
            is 8 in a 50-line screen (this used VID_CELL_H, so a 50-line selection was
            drawn at twice its height). */
         int cw = vdd_video_text_cell_w(&g_vid), chh = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
-        g_pd.sel_x0 = c0 * cw;            g_pd.sel_x1 = (c1 + 1) * cw;
-        g_pd.sel_y0 = r0 * chh;           g_pd.sel_y1 = (r1 + 1) * chh;
+        g_pd.SelectionX0 = c0 * cw;            g_pd.SelectionX1 = (c1 + 1) * cw;
+        g_pd.SelectionY0 = r0 * chh;           g_pd.SelectionY1 = (r1 + 1) * chh;
     }
     HOST_LOCK(); g_vid.dirty = 1; HOST_UNLOCK();
-    if (g_pd.hwnd) InvalidateRect(g_pd.hwnd, NULL, FALSE);
+    if (g_pd.Window) InvalidateRect(g_pd.Window, NULL, FALSE);
 }
 
 static void sel_clear(void) { g_mark_mode = g_mark_drag = 0; g_sel_on = 0; sel_publish(); }
@@ -11082,9 +11082,9 @@ static void sel_clear(void) { g_mark_mode = g_mark_drag = 0; g_sel_on = 0; sel_p
 static int client_to_cell(int x, int y, int *c, int *r)
 {
     int sx, sy;
-    if (g_pd.last_dw <= 0 || g_pd.last_dh <= 0 || g_vid.cols < 1 || g_vid.rows < 1) return 0;
-    sx = (x - g_pd.last_dx) * g_pd.last_sw / g_pd.last_dw;
-    sy = (y - g_pd.last_dy) * g_pd.last_sh / g_pd.last_dh;
+    if (g_pd.LastDestinationWidth <= 0 || g_pd.LastDestinationHeight <= 0 || g_vid.cols < 1 || g_vid.rows < 1) return 0;
+    sx = (x - g_pd.LastDestinationX) * g_pd.LastSourceWidth / g_pd.LastDestinationWidth;
+    sy = (y - g_pd.LastDestinationY) * g_pd.LastSourceHeight / g_pd.LastDestinationHeight;
     *c = sx / vdd_video_text_cell_w(&g_vid);
     *r = sy / (g_vid.cell_h ? g_vid.cell_h : VID_CELL_H);
     if (*c < 0) *c = 0;
@@ -11317,7 +11317,7 @@ static int pt_over_video(HWND h, int cx, int cy)
 {
     RECT rc; int vh;
     if (!GetClientRect(h, &rc)) return 0;
-    vh = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+    vh = rc.bottom - (g_pd.StatusHeight ? g_pd.StatusHeight : PRESENT_STATUS_HEIGHT);
     return cx >= 0 && cx < rc.right && cy >= 0 && cy < vh;
 }
 
@@ -11406,8 +11406,8 @@ static void capture_clip_guard(HWND h)
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
 static void fs_release_hint(void)
 {
-    g_pd.hint_text  = "Mouse captured -- press the Windows key to release it";
-    g_pd.hint_until = GetTickCount() + 4000;
+    g_pd.HintText  = "Mouse captured -- press the Windows key to release it";
+    g_pd.HintUntil = GetTickCount() + 4000;
 }
 static void input_capture_set(HWND h, int on)
 {
@@ -11417,7 +11417,7 @@ static void input_capture_set(HWND h, int on)
     if (on && !capture_allowed()) return;
     if (on == g_captured) return;
     InterlockedExchange(&g_captured, on ? 1 : 0);
-    if (on && g_pd.fullscreen) fs_release_hint();
+    if (on && g_pd.IsFullscreen) fs_release_hint();
     if (on) {
         /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
              WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
@@ -11810,8 +11810,8 @@ static void host_fullscreen_toggle_restore(HWND h)
 static void host_fullscreen_toggle(HWND h);
 static void host_fullscreen_toggle(HWND h)
 {
-    if (g_safe.Fullscreen && !g_pd.fullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
-    int want = !g_pd.fullscreen;
+    if (g_safe.Fullscreen && !g_pd.IsFullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
+    int want = !g_pd.IsFullscreen;
     if (want) {
         g_fs_place.length = sizeof g_fs_place;
         g_fs_saved   = GetWindowPlacement(h, &g_fs_place) ? 1 : 0;
@@ -11828,13 +11828,13 @@ static void host_fullscreen_toggle(HWND h)
                                  | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE));
         /* The status strip is a CHILD WINDOW, so taking the menu and frame off does
            not remove it -- it would sit on top of the picture at whatever size it
-           last docked to. gdi_present already stops reserving room for it in
+           last docked to. PresentGdi already stops reserving room for it in
            fullscreen; this stops it being drawn. */
         if (g_status) ShowWindow(g_status, SW_HIDE);
         SetWindowPos(h, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
-        if (present_ddraw_set_fullscreen(&g_pd, 1) != 0) {
+        if (PresentDdrawSetFullscreen(&g_pd, 1) != 0) {
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
                window that is not fullscreen either -- put it all back. */
             host_fullscreen_toggle_restore(h);
@@ -11842,7 +11842,7 @@ static void host_fullscreen_toggle(HWND h)
         }
         if (g_captured) fs_release_hint();          /* #138 */
     } else {
-        present_ddraw_set_fullscreen(&g_pd, 0);
+        PresentDdrawSetFullscreen(&g_pd, 0);
         host_fullscreen_toggle_restore(h);
     }
     /* The window just changed shape. If the guest holds the mouse, the ClipCursor
@@ -11865,20 +11865,20 @@ static void host_fullscreen_toggle(HWND h)
                               the screen -- drawn with the Filtering setting (#325).
            got == native   -> the panel is getting its own resolution, which is the
                               other half of sharpness and the half we do not control. */
-    if (g_pd.fullscreen) {
+    if (g_pd.IsFullscreen) {
         char fb[256], *fq = fb;
         RECT cr;
         int cw = 0, chh = 0;
         if (GetClientRect(h, &cr)) { cw = cr.right; chh = cr.bottom; }
         fq = zput(fq, "FULLSCREEN: path=");
-        fq = zput(fq, (g_pd.dd && g_pd.back) ? "ddraw-exclusive" : "gdi-borderless");
+        fq = zput(fq, (g_pd.DirectDraw && g_pd.Back) ? "ddraw-exclusive" : "gdi-borderless");
         fq = zput(fq, " client=");           fq = zdec(fq, (unsigned)cw);
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)chh);
         fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.frame.Width);
         fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.Height);
         if (g_vid.frame.Width && g_vid.frame.Height) {
             int fx, fy, fw, fh;
-            PresentLayout(g_pd.aspect, g_pd.fit, 1, cw, chh, (int)g_vid.frame.Width,
+            PresentLayout(g_pd.Aspect, g_pd.Fit, 1, cw, chh, (int)g_vid.frame.Width,
                            (int)g_vid.frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
             fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
             fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
@@ -11889,7 +11889,7 @@ static void host_fullscreen_toggle(HWND h)
             fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.frame.Width));
             fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.frame.Height));
         }
-        fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.aspect);
+        fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.Aspect);
         fq = zput(fq, "\r\n");
         log_append(LOG_PATH, fb, fq); serial_out(fb, fq);
     }
@@ -12159,7 +12159,7 @@ static void host_autofs_consider(HWND h, int graphics)
     if (mode == AUTOFS_NEVER) { g_autofs_done = 1; return; }
     if (mode == AUTOFS_GRAPHICS && !graphics) return;
     g_autofs_done = 1;
-    if (!g_pd.fullscreen) host_fullscreen_toggle(h);
+    if (!g_pd.IsFullscreen) host_fullscreen_toggle(h);
 }
 static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
 
@@ -12306,7 +12306,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 }
 
 /* The display half. Separate because the UI thread builds its presenter long after
-   WinMain reads the registry, and present_ddraw_init() zeroes its own struct. */
+   WinMain reads the registry, and PresentDdrawInitialize() zeroes its own struct. */
 /* ── ★ ddrawfs.flag -- GO BACK TO EXCLUSIVE DIRECTDRAW FULLSCREEN. ───────────────────
      OFF by default, and the default is the whole point: the exclusive path's stretch
      blt is filtered by the driver and cannot be told not to be, which is what made
@@ -12338,22 +12338,22 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
      choose. */
 #define FSINT_FLAG   CFG_("fsinteger.flag")
 
-static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
+static void settings_apply_present(PRESENT_DDRAW *pd, const ntvdmex_settings *s)
 {
-    pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
-    pd->filter = (int)(s->v[SET_FILTER] <= 2 ? s->v[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
-    pd->fit    = (int)(s->v[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
-    pd->osd_off    = s->v[SET_OSD]      ? 0 : 1;      /* #217 */
-    pd->tint       = (int)s->v[SET_TINT];             /* #229 */
-    pd->unbuffered = s->v[SET_BUFFERED] ? 0 : 1;
-    pd->aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
-    pd->scaler = (int)s->v[SET_SCALER];
+    pd->IsVsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
+    pd->Filter = (int)(s->v[SET_FILTER] <= 2 ? s->v[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
+    pd->Fit    = (int)(s->v[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
+    pd->IsOsdOff    = s->v[SET_OSD]      ? 0 : 1;      /* #217 */
+    pd->Tint       = (int)s->v[SET_TINT];             /* #229 */
+    pd->IsUnbuffered = s->v[SET_BUFFERED] ? 0 : 1;
+    pd->Aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
+    pd->Scaler = (int)s->v[SET_SCALER];
     /* Neither of these is a user setting -- see the note in settings.h about why
        fullscreen ended up with none. Both are file knobs, both default OFF. */
-    pd->fs_integer   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
+    pd->IsFullscreenInteger   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
     /* Renderer = DirectDraw is the user-facing switch for the exclusive path (#147);
        the old file knob still forces it, for comparisons. */
-    pd->fs_use_ddraw = (s->v[SET_RENDERER] == 1)
+    pd->IsFullscreenDirectDraw = (s->v[SET_RENDERER] == 1)
                     || (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 
@@ -12395,7 +12395,7 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
 
 static void host_frame_size(int *sw, int *sh)
 {
-    if (g_pd.snap_valid && g_pd.snap_w > 0 && g_pd.snap_h > 0) { *sw = g_pd.snap_w; *sh = g_pd.snap_h; return; }
+    if (g_pd.IsSnapshotValid && g_pd.SnapshotWidth > 0 && g_pd.SnapshotHeight > 0) { *sw = g_pd.SnapshotWidth; *sh = g_pd.SnapshotHeight; return; }
     if (g_vid.frame.Width && g_vid.frame.Height) { *sw = (int)g_vid.frame.Width; *sh = (int)g_vid.frame.Height; return; }
     *sw = 720; *sh = 400;                          /* before the first frame: VGA text */
 }
@@ -12414,7 +12414,7 @@ static void host_frame_extra(HWND h, int *ex, int *ey)
     RECT z; z.left = 0; z.top = 0; z.right = 0; z.bottom = 0;
     AdjustWindowRect(&z, (DWORD)GetWindowLongA(h, GWL_STYLE), GetMenu(h) != NULL);
     *ex = z.right - z.left;
-    *ey = (z.bottom - z.top) + (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+    *ey = (z.bottom - z.top) + (g_pd.StatusHeight ? g_pd.StatusHeight : PRESENT_STATUS_HEIGHT);
 }
 
 /* The client room the desktop's WORK AREA (the screen less the taskbar) leaves for a
@@ -12430,11 +12430,11 @@ static void host_work_room(int *rw, int *rh)
 {
     RECT wa; int ex, ey;
     host_work_area(&wa);
-    if (g_pd.hwnd) host_frame_extra(g_pd.hwnd, &ex, &ey);
+    if (g_pd.Window) host_frame_extra(g_pd.Window, &ex, &ey);
     else {
         RECT z; z.left = z.top = z.right = z.bottom = 0;
         AdjustWindowRect(&z, WS_OVERLAPPEDWINDOW, TRUE);
-        ex = z.right - z.left; ey = (z.bottom - z.top) + PRESENT_STATUS_H;
+        ex = z.right - z.left; ey = (z.bottom - z.top) + PRESENT_STATUS_HEIGHT;
     }
     *rw = (wa.right - wa.left) - ex; *rh = (wa.bottom - wa.top) - ey;
 }
@@ -12511,7 +12511,7 @@ static void host_apply_scale(HWND h, int k)
 {
     int pw, ph, rw, rh, ex, ey, W, H, x, y, i;
     RECT wr, wa, cr;
-    if (!h || g_pd.fullscreen) return;   /* fullscreen owns the size */
+    if (!h || g_pd.IsFullscreen) return;   /* fullscreen owns the size */
     if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
     if (k < 1) k = 1;
     g_scale_want = k;
@@ -12537,7 +12537,7 @@ static void host_apply_scale(HWND h, int k)
     SetWindowPos(h, NULL, x, y, W, H, SWP_NOZORDER | SWP_NOACTIVATE);
     for (i = 0; i < 2 && GetClientRect(h, &cr); ++i) {
         int dw = pw - cr.right;
-        int dh = (ph + (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H)) - cr.bottom;
+        int dh = (ph + (g_pd.StatusHeight ? g_pd.StatusHeight : PRESENT_STATUS_HEIGHT)) - cr.bottom;
         if (!dw && !dh) break;
         W += dw; H += dh;
         SetWindowPos(h, NULL, 0, 0, W, H, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -12575,7 +12575,7 @@ static void host_follow_frame(HWND h)
     static int pend_w, pend_h;
     static DWORD pend_t;
     int sw, sh;
-    if (!h || g_pd.fullscreen || IsZoomed(h) || IsIconic(h) || !g_pd.snap_valid) return;
+    if (!h || g_pd.IsFullscreen || IsZoomed(h) || IsIconic(h) || !g_pd.IsSnapshotValid) return;
     host_frame_size(&sw, &sh);
     if (sw == g_win_frame_w && sh == g_win_frame_h) { pend_w = pend_h = 0; return; }
     if (sw != pend_w || sh != pend_h) { pend_w = sw; pend_h = sh; pend_t = GetTickCount(); return; }
@@ -13690,8 +13690,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                           (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
                 }
                 vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
-                g_pd.mode_vesa = g_vid.in_vesa;             /* #228: Auto aspect needs it */
-                present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
+                g_pd.IsModeVesa = g_vid.in_vesa;             /* #228: Auto aspect needs it */
+                PresentDdrawSnapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
                 /* ── ★★ THE GRAPHICS CURSOR GOES ON THE SNAPSHOT, NEVER ON THE FRAME. (#264)
                      It used to be stamped into g_vid.frame.pixels before the snapshot --
                      and in mode 13h that pointer IS st->vmem, the guest's own A0000
@@ -13715,8 +13715,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      copy, which the guest can never see. p_mouse3 (`i33.09.13h.vram.*`)
                      measures whether the oracles' drivers write VRAM, so the gap is
                      recorded rather than assumed (docs/inventory/mouse.md, 09h). */
-                if (g_ms_hidden == 0 && !ms_text && g_pd.snap_valid && g_pd.snap_bpp == 8)
-                    ms_draw_gfx_cursor(g_pd.snap, g_pd.snap_w, g_pd.snap_h, g_pd.snap_w);
+                if (g_ms_hidden == 0 && !ms_text && g_pd.IsSnapshotValid && g_pd.SnapshotBpp == 8)
+                    ms_draw_gfx_cursor(g_pd.Snapshot, g_pd.SnapshotWidth, g_pd.SnapshotHeight, g_pd.SnapshotWidth);
                 HOST_UNLOCK();
                 host_follow_frame(h);                        /* #325: the window follows the mode */
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
@@ -13727,7 +13727,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      blit gives back exactly what the blit costs. */
                 {   static unsigned s_fs;
                     if (g_frameskip <= 0 || (s_fs++ % (unsigned)(g_frameskip + 1)) == 0)
-                        present_ddraw_present(&g_pd);  /* vsync'd blit OUTSIDE the lock */
+                        PresentDdrawPresent(&g_pd);  /* vsync'd blit OUTSIDE the lock */
                 }
             } else {
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
@@ -13797,7 +13797,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     }
                 }
                 path = OUT_(name);
-                if (present_ddraw_save_bmp(&g_pd, path) == 0) {
+                if (PresentDdrawSaveBmp(&g_pd, path) == 0) {
                     ++cap_seq;
                     if (GetFileAttributesA(CFG_("planedump.flag")) != INVALID_FILE_ATTRIBUTES)
                         planes_dump_beside(path);
@@ -13808,9 +13808,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     eq = zput(eq, "CAPTURE: save_bmp FAILED for ");
                     eq = zput(eq, path);
                     eq = zput(eq, " -- snap_valid=");
-                    eq = zdec(eq, (unsigned)g_pd.snap_valid);
-                    eq = zput(eq, " w=");  eq = zdec(eq, (unsigned)g_pd.snap_w);
-                    eq = zput(eq, " h=");  eq = zdec(eq, (unsigned)g_pd.snap_h);
+                    eq = zdec(eq, (unsigned)g_pd.IsSnapshotValid);
+                    eq = zput(eq, " w=");  eq = zdec(eq, (unsigned)g_pd.SnapshotWidth);
+                    eq = zput(eq, " h=");  eq = zdec(eq, (unsigned)g_pd.SnapshotHeight);
                     eq = zput(eq, " (reported once)\r\n");
                     log_append(LOG_PATH, eb, eq);
                 }
@@ -13841,11 +13841,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         /* Fullscreen has no frame, so the default would be whatever class cursor is
            there; give it the plain arrow a usable pointer means. */
-        if (g_pd.fullscreen && LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorA(NULL, IDC_ARROW)); return TRUE; }
+        if (g_pd.IsFullscreen && LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursorA(NULL, IDC_ARROW)); return TRUE; }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
         PAINTSTRUCT ps; BeginPaint(h, &ps);
-        present_ddraw_present(&g_pd);
+        PresentDdrawPresent(&g_pd);
         EndPaint(h, &ps);
         return 0; }
     /* ── ★ THE ASPECT LOCK, WHILE THE MOUSE IS STILL DOWN. ──────────────────────
@@ -13857,7 +13857,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          left handle makes the window walk across the desktop -- correct in size and
          visibly wrong to use. */
     case WM_SIZING:
-        if (!g_pd.fullscreen) {
+        if (!g_pd.IsFullscreen) {
             RECT *r = (RECT *)lp;
             int n, d, ex, ey, vw, vh, sw, sh;
             host_frame_extra(h, &ex, &ey);
@@ -13902,7 +13902,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        320x200 mode impossible) -- or, when 1x does not fit the screen, small enough that
        the scaled-down window is reachable. */
     case WM_GETMINMAXINFO:
-        if (g_hwnd && !g_pd.fullscreen) {
+        if (g_hwnd && !g_pd.IsFullscreen) {
             MINMAXINFO *mm = (MINMAXINFO *)lp;
             int pw, ph, ex, ey, rw, rh;
             host_picture(1, &pw, &ph);
@@ -13979,8 +13979,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (g_vid.mkind == VID_KIND_TEXT) {
                 if (g_captured) input_capture_set(h, 0);   /* the drag needs the pointer */
                 g_mark_mode = 1; g_mark_drag = 0; g_sel_on = 0; sel_publish();
-                g_pd.hint_text  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
-                g_pd.hint_until = GetTickCount() + 5000;
+                g_pd.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
+                g_pd.HintUntil = GetTickCount() + 5000;
             }
             return 0;
         case IDM_EDIT_SELECTALL:
@@ -14339,9 +14339,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         fw = (int)i33_w(); fh = (int)i33_h();
         GetClientRect(h, &rc);
         { int ox = 0, oy = 0, fx, fy;
-          cw = rc.right; ch = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
-          if (g_pd.last_dw > 0 && g_pd.last_dh > 0) {
-              ox = g_pd.last_dx; oy = g_pd.last_dy; cw = g_pd.last_dw; ch = g_pd.last_dh;
+          cw = rc.right; ch = rc.bottom - (g_pd.StatusHeight ? g_pd.StatusHeight : PRESENT_STATUS_HEIGHT);
+          if (g_pd.LastDestinationWidth > 0 && g_pd.LastDestinationHeight > 0) {
+              ox = g_pd.LastDestinationX; oy = g_pd.LastDestinationY; cw = g_pd.LastDestinationWidth; ch = g_pd.LastDestinationHeight;
           }
           if (cw < 1) cw = 1;
           if (ch < 1) ch = 1;
@@ -14498,7 +14498,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         g_scale_k = scale; g_scale_want = (int)g_set.v[SET_WINSIZE] + 1;
         host_picture(scale, &pw, &ph);           /* #325: 720x400 text until a frame */
         rc.left = 0; rc.top = 0;
-        rc.right = pw; rc.bottom = ph + PRESENT_STATUS_H; }
+        rc.right = pw; rc.bottom = ph + PRESENT_STATUS_HEIGHT; }
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
     g_hwnd = CreateWindowA(wc.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
@@ -14551,12 +14551,12 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     }
     if (GetFileAttributesA(SETSHOT_PATH) != INVALID_FILE_ATTRIBUTES)   /* s84, test-only */
         PostMessageA(g_hwnd, WM_COMMAND, IDM_FILE_SETTINGS, 0);
-    present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
+    PresentDdrawInitialize(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
-    g_pd.fl_drv = GetFileAttributesA(DDFLIP_DRIVER_FLAG) != INVALID_FILE_ATTRIBUTES;
+    g_pd.IsFlipDriverTimed = GetFileAttributesA(DDFLIP_DRIVER_FLAG) != INVALID_FILE_ATTRIBUTES;
     make_status(g_hwnd, hi);                     /* native themed status bar          */
     /* ── ★ AND NOW RE-SIZE TO THE STATUS BAR'S REAL HEIGHT. ─────────────────────
-         The window was created against PRESENT_STATUS_H, a compile-time GUESS at
+         The window was created against PRESENT_STATUS_HEIGHT, a compile-time GUESS at
          how tall a comctl32 status bar is. The real one measures 23 on the rig, not
          22 -- so the client area was a pixel short of the framebuffer and the guest
          picture lost a row at EVERY scale. Invisible until the View menu made the
@@ -14614,7 +14614,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         TranslateMessage(&msg); DispatchMessageA(&msg);
     }
     tray_remove(g_hwnd);            /* or the icon outlives the process */
-    present_ddraw_shutdown(&g_pd);
+    PresentDdrawShutdown(&g_pd);
     /* ── ⛔⛔ THE WINDOW CLOSING MUST KILL THE PROCESS, NOT JUST THIS THREAD. (s63) ──
          Reported by the user: launch a game, close the window, launch something else
          -- and the host "flashes open and immediately exits", so nothing can be
@@ -36338,19 +36338,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       /* s84 (user): the cost of drawing the picture, per present, by path -- the number
          that decides whether a windowed DirectDraw renderer is worth building. Decimal
          microseconds: mean and worst. `win` = GDI (window or borderless fullscreen). */
-      p = zput(p, "\r\nSTAGE2: present us win n="); p = zdec(p, (DWORD)g_pd.pt_win_n);
-      p = zput(p, " mean="); p = zdec(p, g_pd.pt_win_n ? (DWORD)(g_pd.pt_win_us / g_pd.pt_win_n) : 0);
-      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.pt_win_max);
-      p = zput(p, " | fs(ddraw) n="); p = zdec(p, (DWORD)g_pd.pt_fs_n);
-      p = zput(p, " mean="); p = zdec(p, g_pd.pt_fs_n ? (DWORD)(g_pd.pt_fs_us / g_pd.pt_fs_n) : 0);
-      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.pt_fs_max);
-      p = zput(p, " flips{done="); p = zdec(p, (DWORD)g_pd.fl_done);   /* s86 */
-      p = zput(p, " pend=");       p = zdec(p, (DWORD)g_pd.fl_pend);
-      p = zput(p, " mid=");        p = zdec(p, (DWORD)g_pd.fl_mid);
-      p = zput(p, " drop=");       p = zdec(p, (DWORD)g_pd.fl_drop);
-      p = zput(p, " bufs=");       p = zdec(p, (DWORD)g_pd.fl_bufs);
-      p = zput(p, " ourwait=");    p = zdec(p, (DWORD)g_pd.fl_ourwait);
-      p = zput(p, g_pd.fl_drv ? " path=driverflag}" : " path=triple}");
+      p = zput(p, "\r\nSTAGE2: present us win n="); p = zdec(p, (DWORD)g_pd.PresentWindowCount);
+      p = zput(p, " mean="); p = zdec(p, g_pd.PresentWindowCount ? (DWORD)(g_pd.PresentWindowUs / g_pd.PresentWindowCount) : 0);
+      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.PresentWindowMax);
+      p = zput(p, " | fs(ddraw) n="); p = zdec(p, (DWORD)g_pd.PresentFullscreenCount);
+      p = zput(p, " mean="); p = zdec(p, g_pd.PresentFullscreenCount ? (DWORD)(g_pd.PresentFullscreenUs / g_pd.PresentFullscreenCount) : 0);
+      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.PresentFullscreenMax);
+      p = zput(p, " flips{done="); p = zdec(p, (DWORD)g_pd.FlipDone);   /* s86 */
+      p = zput(p, " pend=");       p = zdec(p, (DWORD)g_pd.FlipPending);
+      p = zput(p, " mid=");        p = zdec(p, (DWORD)g_pd.FlipMidScreen);
+      p = zput(p, " drop=");       p = zdec(p, (DWORD)g_pd.FlipDropped);
+      p = zput(p, " bufs=");       p = zdec(p, (DWORD)g_pd.FlipBuffers);
+      p = zput(p, " ourwait=");    p = zdec(p, (DWORD)g_pd.IsFlipOurWait);
+      p = zput(p, g_pd.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
       p = zput(p, " winsize="); p = zdec(p, g_set.v[SET_WINSIZE] + 1);
       p = zput(p, "x scaler="); p = zdec(p, g_set.v[SET_SCALER]);
       p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);
@@ -37878,7 +37878,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⇒ For a Win16 host the guest exiting IS the end of the run. Ask the UI
          thread to close, and let it leave through its OWN path -- WM_CLOSE ->
          DestroyWindow -> WM_DESTROY -> PostQuitMessage -> the message loop
-         returns -> tray_remove + present_ddraw_shutdown. That is strictly better
+         returns -> tray_remove + PresentDdrawShutdown. That is strictly better
          than ExitProcess here, because WM_DESTROY is also what stops the OPL and
          Beep.sys, and both of those have outlived a host before. */
     /* ── ★ AUTO-CLOSE ON GUEST TERMINATION, FOR EVERY GUEST. (s63, user ask) ────────

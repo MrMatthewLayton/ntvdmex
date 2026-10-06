@@ -22,124 +22,125 @@
 
 /* Windowed mode presents via GDI StretchDIBits (cursor-friendly, expose-correct);
    exclusive fullscreen uses DirectDraw. The video blits into the client area
-   above a host-drawn status bar PRESENT_STATUS_H pixels tall. */
-#define PRESENT_STATUS_H 22
+   above a host-drawn status bar PRESENT_STATUS_HEIGHT pixels tall. */
+#define PRESENT_STATUS_HEIGHT 22
 
 /* DirectDraw objects are held as void* so this header stays ddraw.h-free. */
-typedef struct present_ddraw {
-    HWND  hwnd;
-    HMODULE ddmod;
-    void *dd;           /* IDirectDraw7                                         */
-    void *primary;      /* primary surface (desktop, or fullscreen flip chain)  */
-    void *back;         /* fullscreen back buffer (NULL when windowed)          */
-    void *clipper;      /* windowed clipper on hwnd (NULL when fullscreen)      */
-    void *fbsurf;       /* logical-size 32bpp offscreen we convert frames into  */
-    int   fb_w, fb_h;   /* current fbsurf size                                  */
-    int   fullscreen;
-    int   fs_w, fs_h;   /* exclusive-fullscreen mode size (default 640x480)     */
-    int   status_h;     /* reserved bottom strip for the status bar (windowed)  */
+typedef struct _PRESENT_DDRAW {
+    HWND  Window;
+    HMODULE DirectDrawModule;
+    PVOID DirectDraw;   /* IDirectDraw7                                         */
+    PVOID Primary;      /* primary surface (desktop, or fullscreen flip chain)  */
+    PVOID Back;         /* fullscreen back buffer (NULL when windowed)          */
+    PVOID Clipper;      /* windowed clipper on Window (NULL when fullscreen)      */
+    PVOID StagingSurface;       /* logical-size 32bpp offscreen we convert frames into  */
+    INT   StagingWidth, StagingHeight;   /* current fbsurf size                                  */
+    INT   IsFullscreen;
+    INT   FullscreenWidth, FullscreenHeight;   /* exclusive-fullscreen mode size (default 640x480)     */
+    INT   StatusHeight; /* reserved bottom strip for the status bar (windowed)  */
     /* ── THE DISPLAY PAGE, AS FOUR FIELDS. ───────────────────────────────────
          Set by settings_apply() in the host; read on every present. All four
          default to what this host did before they existed, so a machine with no
          stored settings behaves exactly as it always has. */
-    int   vsync;        /* 1 = time the blit near vblank (the historical default)*/
-    int   mon_h, mon_hz;/* monitor lines + refresh, read once by wait_vblank (0 = not yet, -1 = unknown) */
-    int   filter;       /* PRESENT_FILTER_* -- nearest / bilinear / sharp (#325)  */
-    int   fit;          /* PRESENT_FIT_* -- maximised/fullscreen: whole pixels or fill */
-    int   aspect;       /* PRESENT_ASPECT_* -- Native (square pixels) or forced  */
-    int   scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */
+    INT   IsVsync;      /* 1 = time the blit near vblank (the historical default)*/
+    INT   MonitorLines, MonitorHz;/* monitor lines + refresh, read once by PresentWaitVerticalBlank (0 = not yet, -1 = unknown) */
+    INT   Filter;       /* PRESENT_FILTER_* -- nearest / bilinear / sharp (#325)  */
+    INT   Fit;          /* PRESENT_FIT_* -- maximised/fullscreen: whole pixels or fill */
+    INT   Aspect;       /* PRESENT_ASPECT_* -- Native (square pixels) or forced  */
+    INT   Scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */
     /* ── FULLSCREEN (s64). ───────────────────────────────────────────────────
-         By DEFAULT fullscreen is a borderless window drawn by gdi_present, because
+         By DEFAULT fullscreen is a borderless window drawn by PresentGdi, because
          DirectDraw's stretch blt is filtered by the driver and there is no way to
-         forbid that -- see the long note over gdi_present. So:
-           fs_use_ddraw  0 = borderless window (default, SHARP)
+         forbid that -- see the long note over PresentGdi. So:
+           IsFullscreenDirectDraw  0 = borderless window (default, SHARP)
                          1 = exclusive DirectDraw (ddrawfs.flag; kept for tearing)
-           fs_mode_w/h   only consulted by the exclusive path; 0 = no mode change
-           fs_integer    snap the fullscreen picture to whole pixel multiples    */
-    int   fs_use_ddraw;
-    int   fs_mode_w, fs_mode_h;
-    int   fs_integer;
+           FullscreenModeWidth/Height only consulted by the exclusive path; 0 = no mode change
+           IsFullscreenInteger    snap the fullscreen picture to whole pixel multiples    */
+    INT   IsFullscreenDirectDraw;
+    INT   FullscreenModeWidth, FullscreenModeHeight;
+    INT   IsFullscreenInteger;
     /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
        blitted (vsync'd) outside it by _present(). Removes the concurrent-write
        tearing of the live framebuffer. 8bpp + palette (all our frames). */
     /* ── THE SNAPSHOT NOW CARRIES DEPTH. (s74) VESA direct-colour modes hand us
-         32-bit ARGB, not palette indices, so there are two buffers and `snap_bpp`
+         32-bit ARGB, not palette indices, so there are two buffers and `SnapshotBpp`
          says which one holds this frame. The 8bpp path is byte-for-byte what it
          always was -- Doom, Heretic, Hexen and ZAR all run through it and the
          release was imminent when this landed. Sized to the widest mode
          vesa_modes[] advertises: every mode we publish must be one we can DISPLAY,
          or the list is promising something the presenter drops on the floor. */
-    uint8_t  snap[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
-    uint32_t snap32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* ARGB, when snap_bpp == 32 */
-    uint8_t  snap_bpp;                  /* 8 = snap[] + snap_pal, 32 = snap32[]    */
-    uint32_t snap_pal[256];
-    int   snap_w, snap_h, snap_valid;
+    BYTE  Snapshot[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
+    UINT32 Snapshot32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* ARGB, when SnapshotBpp == 32 */
+    BYTE  SnapshotBpp;                  /* 8 = Snapshot[] + SnapshotPalette, 32 = Snapshot32[]    */
+    UINT32 SnapshotPalette[256];
+    INT   SnapshotWidth, SnapshotHeight, IsSnapshotValid;
     /* Raster split (s70, see NTVDD_FRAME): the frame-start and mid-frame palettes,
-       the row each mid-frame entry applies from, and the frame stamps. `snap_split`
+       the row each mid-frame entry applies from, and the frame stamps. `IsSnapshotSplit`
        is 0 for the ordinary one-palette frame, which keeps the fast paths. */
-    uint32_t snap_pal_base[256], snap_pal_split[256], snap_split_frame[256];
-    uint16_t snap_split_row[256];
+    UINT32 SnapshotPaletteBase[256], SnapshotPaletteSplit[256], SnapshotSplitFrame[256];
+    WORD SnapshotSplitRow[256];
     /* ── s84 (user): WHAT DOES DRAWING THE PICTURE COST? Measured before anyone builds a
          windowed DirectDraw path: per present, split by path, in microseconds (QPC).
          `win` is the GDI path (window, or borderless fullscreen), `fs` exclusive
          DirectDraw. Includes the VSync wait when Force VSync is on (default off). */
-    unsigned long pt_win_n, pt_fs_n;
-    unsigned long long pt_win_us, pt_fs_us;
-    unsigned long pt_win_max, pt_fs_max;
+    ULONG PresentWindowCount, PresentFullscreenCount;
+    ULONGLONG PresentWindowUs, PresentFullscreenUs;
+    ULONG PresentWindowMax, PresentFullscreenMax;
     /* s86: DID THE EXCLUSIVE FLIP WAIT FOR THE BLANK? Right after Flip, GetFlipStatus:
        `done` = the flip had already happened (nobody waited for a retrace), `pend` = it
        was queued for one. `mid` = the beam was mid-screen when we flipped. `drop` = a
        frame skipped because the previous flip was still queued. `bufs` = surfaces in
-       the flip chain. `ourwait` = flips never waited, so we time them (see fs_present).
+       the flip chain. `ourwait` = flips never waited, so we time them (see PresentFullscreen).
        `drv` = 1 when cfg\ddflip_driver.flag restores the old path (one back buffer,
        blocking driver-timed flip). */
-    unsigned long fl_done, fl_pend, fl_mid, fl_drop;
-    int           fl_drv, fl_bufs, fl_ourwait, fl_streak;
-    uint32_t snap_frame_no;
-    int      snap_split;
-    uint32_t rowpal[256]; int rowpal_y;   /* the palette resolved for one row       */
-    /* s81 (#138): a transient line of text drawn over the picture until `hint_until`
+    ULONG FlipDone, FlipPending, FlipMidScreen, FlipDropped;
+    INT           IsFlipDriverTimed, FlipBuffers, IsFlipOurWait, FlipStreak;
+    UINT32 SnapshotFrameNumber;
+    INT      IsSnapshotSplit;
+    UINT32 RowPalette[256]; INT RowPaletteY;   /* the palette resolved for one row       */
+    /* s81 (#138): a transient line of text drawn over the picture until `HintUntil`
        (GetTickCount ms) -- "press the Windows key to release the mouse" in fullscreen,
        where there is no status strip to say it. GDI path only. */
-    const char *hint_text;
+    PCSTR HintText;
     /* #154: a character-cell selection, inverted after each GDI present, in SOURCE
-       frame pixels (sel_on 0 = none) -- and where the last frame went, so the host
+       frame pixels (IsSelection 0 = none) -- and where the last frame went, so the host
        can turn a click into a cell. */
-    int   sel_on, sel_x0, sel_y0, sel_x1, sel_y1;
-    int   last_dx, last_dy, last_dw, last_dh, last_sw, last_sh;
-    unsigned long hint_until;
+    INT   IsSelection, SelectionX0, SelectionY0, SelectionX1, SelectionY1;
+    INT   LastDestinationX, LastDestinationY, LastDestinationWidth, LastDestinationHeight, LastSourceWidth, LastSourceHeight;
+    ULONG HintUntil;
     /* #217: the two Display settings, stored INVERTED so a zeroed presenter is the
        shipped default (messages shown, picture composed off-screen). The off-screen
        picture is a memory DC over a DIB section, kept while the client size holds. */
-    int   osd_off, unbuffered;
-    int   tint;          /* #229: PRESENT_TINT_* (present_scale.h), 0 = Default */
-    int   mode_vesa;     /* #228: the guest is in a VESA mode (Auto aspect = square pixels) */
-    void *mem_dc, *mem_bmp, *mem_old;
-    int   mem_w, mem_h;
-} present_ddraw;
+    INT   IsOsdOff, IsUnbuffered;
+    INT   Tint;          /* #229: PRESENT_TINT_* (present_scale.h), 0 = Default */
+    INT   IsModeVesa;    /* #228: the guest is in a VESA mode (Auto aspect = square pixels) */
+    PVOID MemoryDc, MemoryBitmap, MemoryOld;
+    INT   MemoryWidth, MemoryHeight;
+} PRESENT_DDRAW, *PPRESENT_DDRAW;
+typedef const PRESENT_DDRAW *PCPRESENT_DDRAW;
 
-/* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */
-int  present_ddraw_init(present_ddraw *pd, HWND hwnd);
-void present_ddraw_shutdown(present_ddraw *pd);
+/* Bring up DirectDraw in windowed mode on `window`. 0 = ok, <0 = failed. */
+INT  PresentDdrawInitialize(_Out_ PPRESENT_DDRAW presenter, _In_ HWND window);
+VOID PresentDdrawShutdown(_Inout_ PPRESENT_DDRAW presenter);
 
 /* Toggle exclusive fullscreen (recreates the mode-specific surfaces). */
-int  present_ddraw_set_fullscreen(present_ddraw *pd, int on);
+INT  PresentDdrawSetFullscreen(_Inout_ PPRESENT_DDRAW presenter, _In_ INT isOn);
 
 /* Snapshot a frame into the back-buffer -- call UNDER the bus lock (consistent
    copy while the V86 thread can't write the framebuffer). */
-void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f);
+VOID PresentDdrawSnapshot(_Inout_ PPRESENT_DDRAW presenter, _In_opt_ PCNTVDD_FRAME frame);
 
 /* Blit the snapshot to the screen, vsync'd -- call OUTSIDE the lock (the slow
    blit then never starves the V86 thread). */
-void present_ddraw_present(present_ddraw *pd);
+VOID PresentDdrawPresent(_Inout_ PPRESENT_DDRAW presenter);
 
 /* Snapshot + present in one call (for the standalone present_demo). */
-void present_ddraw_frame(present_ddraw *pd, const NTVDD_FRAME *f);
+VOID PresentDdrawFrame(_Inout_ PPRESENT_DDRAW presenter, _In_opt_ PCNTVDD_FRAME frame);
 
 /* Serialise the current 8bpp snapshot to an indexed .bmp at `path` (occlusion-proof:
-   reads pd->snap, not the screen). For headless/remote visual validation -- the host
+   reads presenter->Snapshot, not the screen). For headless/remote visual validation -- the host
    screenshots itself so a graphical run is verifiable off the SMB share without VNC.
    0 = ok, <0 = nothing valid to save / write failed. */
-int present_ddraw_save_bmp(present_ddraw *pd, const char *path);
+INT PresentDdrawSaveBmp(_In_ PPRESENT_DDRAW presenter, _In_ PCSTR path);
 
 #endif /* NTVDMEX_PRESENT_DDRAW_H */

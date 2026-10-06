@@ -10,12 +10,12 @@
 #include "present_scale.h"
 
 /* IID_IDirectDraw7 = 15e65ec0-3b9c-11d2-b92f-00609797ea5b (inline -> no dxguid). */
-static const GUID IID_IDirectDraw7_local =
+static const GUID g_PresentIidDirectDraw7 =
     { 0x15e65ec0, 0x3b9c, 0x11d2, { 0xb9,0x2f,0x00,0x60,0x97,0x97,0xea,0x5b } };
-typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
+typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
 
-#define DD   ((LPDIRECTDRAW7)pd->dd)
-#define SURF(p) ((LPDIRECTDRAWSURFACE7)(p))
+#define PRESENT_DIRECT_DRAW   ((LPDIRECTDRAW7)presenter->DirectDraw)
+#define PRESENT_SURFACE(p) ((LPDIRECTDRAWSURFACE7)(p))
 
 /* time a blit near the monitor's vertical blank (reduces tearing).
    ⚠ NOT WaitForVerticalBlank. On XP that call is a BUSY LOOP on the scanline register,
@@ -29,63 +29,63 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
      of the blank, and spin only the last millisecond. The monitor's line count and
      refresh are read once (GetDisplayMode / GetMonitorFrequency) and fall back to
      60 Hz if the driver will not say. Bounded: at most ~2 frames however it goes. */
-static void mon_query(present_ddraw *pd)
+static VOID PresentMonitorQuery(PPRESENT_DDRAW presenter)
 {
     DWORD hz;
-    if (pd->mon_h || !pd->dd) return;
-    {   DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-        pd->mon_h = (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwHeight) ? (int)d.dwHeight : 0;
-        pd->mon_hz = (SUCCEEDED(IDirectDraw7_GetMonitorFrequency(DD, &hz)) && hz >= 40 && hz <= 240) ? (int)hz : 60;
-        if (!pd->mon_h) pd->mon_h = -1; }             /* asked once; unknown: spin-free fallback below */
+    if (presenter->MonitorLines || !presenter->DirectDraw) return;
+    {   DDSURFACEDESC2 description; ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+        presenter->MonitorLines = (SUCCEEDED(IDirectDraw7_GetDisplayMode(PRESENT_DIRECT_DRAW, &description)) && description.dwHeight) ? (INT)description.dwHeight : 0;
+        presenter->MonitorHz = (SUCCEEDED(IDirectDraw7_GetMonitorFrequency(PRESENT_DIRECT_DRAW, &hz)) && hz >= 40 && hz <= 240) ? (INT)hz : 60;
+        if (!presenter->MonitorLines) presenter->MonitorLines = -1; }             /* asked once; unknown: spin-free fallback below */
 }
-static void wait_vblank(present_ddraw *pd)
+static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
 {
-    DWORD sl = 0, height, per_us, k;
-    HRESULT hr;
-    if (!pd->vsync || !pd->dd) return;
-    mon_query(pd);
-    height = pd->mon_h > 0 ? (DWORD)pd->mon_h : 0;
-    per_us = 1000000u / (DWORD)(pd->mon_hz ? pd->mon_hz : 60);
-    hr = IDirectDraw7_GetScanLine(DD, &sl);
-    if (hr == DDERR_VERTICALBLANKINPROGRESS) return;      /* already in the blank: go   */
-    if (hr != DD_OK) return;                              /* cannot tell: do not wait   */
-    if (height && sl < height) {
+    DWORD scanLine = 0, height, periodUs, spin;
+    HRESULT result;
+    if (!presenter->IsVsync || !presenter->DirectDraw) return;
+    PresentMonitorQuery(presenter);
+    height = presenter->MonitorLines > 0 ? (DWORD)presenter->MonitorLines : 0;
+    periodUs = 1000000u / (DWORD)(presenter->MonitorHz ? presenter->MonitorHz : 60);
+    result = IDirectDraw7_GetScanLine(PRESENT_DIRECT_DRAW, &scanLine);
+    if (result == DDERR_VERTICALBLANKINPROGRESS) return;  /* already in the blank: go   */
+    if (result != DD_OK) return;                          /* cannot tell: do not wait   */
+    if (height && scanLine < height) {
         /* lines to go, as time; the blank starts at `height` (the CRTC counts on
            through it), so sleep for all of it but the last ~1.2 ms */
-        DWORD us = (DWORD)((uint64_t)(height - sl) * per_us / (height * 21u / 20u));
-        if (us > 1200) Sleep((us - 1200) / 1000);
+        DWORD sleepUs = (DWORD)((UINT64)(height - scanLine) * periodUs / (height * 21u / 20u));
+        if (sleepUs > 1200) Sleep((sleepUs - 1200) / 1000);
     }
-    for (k = 0; k < 3000; ++k) {                          /* the last stretch: ~1-2 ms */
-        hr = IDirectDraw7_GetScanLine(DD, &sl);
-        if (hr != DD_OK) return;                          /* VERTICALBLANKINPROGRESS = go */
-        if (height && sl < 4) return;                     /* wrapped: just after the blank */
+    for (spin = 0; spin < 3000; ++spin) {                 /* the last stretch: ~1-2 ms */
+        result = IDirectDraw7_GetScanLine(PRESENT_DIRECT_DRAW, &scanLine);
+        if (result != DD_OK) return;                      /* VERTICALBLANKINPROGRESS = go */
+        if (height && scanLine < 4) return;               /* wrapped: just after the blank */
     }
 }
 
 /* ── THE SCALE2X TARGET, AS ONE STATIC BUFFER. ───────────────────────────────────
      The largest frame doubled (#325: it was 1280x960 -- 640x480 doubled -- so a
-     720x400 text frame silently skipped the scaler). It lives here rather than in present_ddraw so the
+     720x400 text frame silently skipped the scaler). It lives here rather than in PRESENT_DDRAW so the
      struct stays something a caller can hold by value (present_demo does), and it
      is static rather than allocated because the present path runs on the UI thread
      at video rate and must never wait on the heap. */
-static uint8_t s_scaled[(2 * NTVDD_FRAME_MAX_WIDTH) * (2 * NTVDD_FRAME_MAX_HEIGHT)];
+static BYTE g_PresentScaled[(2 * NTVDD_FRAME_MAX_WIDTH) * (2 * NTVDD_FRAME_MAX_HEIGHT)];
 
 /* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
    over the destination it darkens alternate PHYSICAL rows -- which is where a
    scanline lives, on the screen, not in the frame. Built once and kept: a brush
    per present would be a GDI object churned sixty times a second. */
-static HBRUSH scanline_brush(void)
+static HBRUSH PresentScanlineBrush(VOID)
 {
-    static HBRUSH s_br = NULL;
+    static HBRUSH brush = NULL;
     static const WORD rows[8] = { 0xFFFF, 0x0000, 0xFFFF, 0x0000,
                                   0xFFFF, 0x0000, 0xFFFF, 0x0000 };
-    HBITMAP bm;
-    if (s_br) return s_br;
-    bm = CreateBitmap(8, 8, 1, 1, rows);
-    if (!bm) return NULL;
-    s_br = CreatePatternBrush(bm);
-    DeleteObject(bm);
-    return s_br;
+    HBITMAP bitmap;
+    if (brush) return brush;
+    bitmap = CreateBitmap(8, 8, 1, 1, rows);
+    if (!bitmap) return NULL;
+    brush = CreatePatternBrush(bitmap);
+    DeleteObject(bitmap);
+    return brush;
 }
 
 /* ---- windowed AND (by default) fullscreen: GDI StretchDIBits ---------------
@@ -107,103 +107,103 @@ static HBRUSH scanline_brush(void)
  *   because "no tearing" was its original argument and that deserves a way back.
  * ⚠ TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
  *   strip to reserve room for, and the fit is snapped to whole multiples. */
-static const uint32_t *row_pal(present_ddraw *pd, int y);   /* fwd: with _snapshot */
-static uint32_t snap_px(present_ddraw *pd, int y, int x);   /* fwd: depth-agnostic pixel */
+static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row);   /* fwd: with _snapshot */
+static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column);   /* fwd: depth-agnostic pixel */
 /* #138: the release hint, top centre of the picture, while it is due. Drawn after the
    frame on BOTH fullscreen paths (the GDI window here, the DirectDraw back buffer via
-   GetDC in fs_present), so every present repaints it until it expires. s81: the user
+   GetDC in PresentFullscreen), so every present repaints it until it expires. s81: the user
    saw it windowed and not in fullscreen -- fullscreen was on the DirectDraw path. */
-static void hint_draw(present_ddraw *pd, HDC hdc, int dx, int dy, int dw)
+static VOID PresentHintDraw(PPRESENT_DDRAW presenter, HDC dc, INT destinationX, INT destinationY, INT destinationWidth)
 {
-    SIZE ts; int n = 0, tx, ty = dy + 12;
-    if (pd->osd_off) return;                        /* #217: Show on-screen messages off */
-    if (!pd->hint_text || (long)(pd->hint_until - GetTickCount()) <= 0) return;
-    while (pd->hint_text[n]) ++n;
-    SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-    GetTextExtentPoint32A(hdc, pd->hint_text, n, &ts);
-    tx = dx + (dw - ts.cx) / 2;
-    { RECT box; box.left = tx - 10; box.top = ty - 5;
-      box.right = tx + ts.cx + 10; box.bottom = ty + ts.cy + 5;
-      FillRect(hdc, &box, (HBRUSH)GetStockObject(BLACK_BRUSH)); }
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(255, 255, 255));
-    TextOutA(hdc, tx, ty, pd->hint_text, n);
+    SIZE textSize; INT length = 0, textX, textY = destinationY + 12;
+    if (presenter->IsOsdOff) return;                /* #217: Show on-screen messages off */
+    if (!presenter->HintText || (LONG)(presenter->HintUntil - GetTickCount()) <= 0) return;
+    while (presenter->HintText[length]) ++length;
+    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    GetTextExtentPoint32A(dc, presenter->HintText, length, &textSize);
+    textX = destinationX + (destinationWidth - textSize.cx) / 2;
+    { RECT box; box.left = textX - 10; box.top = textY - 5;
+      box.right = textX + textSize.cx + 10; box.bottom = textY + textSize.cy + 5;
+      FillRect(dc, &box, (HBRUSH)GetStockObject(BLACK_BRUSH)); }
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    TextOutA(dc, textX, textY, presenter->HintText, length);
 }
 
 /* ── #217: THE OFF-SCREEN PICTURE. A memory DC over a DIB section the size of the
      picture area, recreated only when that size changes. NULL = draw to the window, as
      before (the setting is off, or GDI could not give us one). */
-static HDC mem_target(present_ddraw *pd, HDC win, int cw, int ch)
+static HDC PresentMemoryTarget(PPRESENT_DDRAW presenter, HDC windowDc, INT clientWidth, INT clientHeight)
 {
-    if (pd->unbuffered) return NULL;
-    if (pd->mem_dc && (pd->mem_w != cw || pd->mem_h != ch)) {
-        SelectObject((HDC)pd->mem_dc, (HGDIOBJ)pd->mem_old);
-        DeleteObject((HGDIOBJ)pd->mem_bmp); DeleteDC((HDC)pd->mem_dc);
-        pd->mem_dc = pd->mem_bmp = pd->mem_old = 0;
+    if (presenter->IsUnbuffered) return NULL;
+    if (presenter->MemoryDc && (presenter->MemoryWidth != clientWidth || presenter->MemoryHeight != clientHeight)) {
+        SelectObject((HDC)presenter->MemoryDc, (HGDIOBJ)presenter->MemoryOld);
+        DeleteObject((HGDIOBJ)presenter->MemoryBitmap); DeleteDC((HDC)presenter->MemoryDc);
+        presenter->MemoryDc = presenter->MemoryBitmap = presenter->MemoryOld = 0;
     }
-    if (!pd->mem_dc) {
-        HDC m = CreateCompatibleDC(win);
-        HBITMAP b = m ? CreateCompatibleBitmap(win, cw, ch) : NULL;
-        if (!b) { if (m) DeleteDC(m); return NULL; }
-        pd->mem_old = SelectObject(m, b);
-        pd->mem_dc = m; pd->mem_bmp = b; pd->mem_w = cw; pd->mem_h = ch;
+    if (!presenter->MemoryDc) {
+        HDC memoryDc = CreateCompatibleDC(windowDc);
+        HBITMAP bitmap = memoryDc ? CreateCompatibleBitmap(windowDc, clientWidth, clientHeight) : NULL;
+        if (!bitmap) { if (memoryDc) DeleteDC(memoryDc); return NULL; }
+        presenter->MemoryOld = SelectObject(memoryDc, bitmap);
+        presenter->MemoryDc = memoryDc; presenter->MemoryBitmap = bitmap; presenter->MemoryWidth = clientWidth; presenter->MemoryHeight = clientHeight;
     }
-    return (HDC)pd->mem_dc;
+    return (HDC)presenter->MemoryDc;
 }
-static void mem_release(present_ddraw *pd)
+static VOID PresentMemoryRelease(PPRESENT_DDRAW presenter)
 {
-    if (!pd->mem_dc) return;
-    SelectObject((HDC)pd->mem_dc, (HGDIOBJ)pd->mem_old);
-    DeleteObject((HGDIOBJ)pd->mem_bmp); DeleteDC((HDC)pd->mem_dc);
-    pd->mem_dc = pd->mem_bmp = pd->mem_old = 0; pd->mem_w = pd->mem_h = 0;
+    if (!presenter->MemoryDc) return;
+    SelectObject((HDC)presenter->MemoryDc, (HGDIOBJ)presenter->MemoryOld);
+    DeleteObject((HGDIOBJ)presenter->MemoryBitmap); DeleteDC((HDC)presenter->MemoryDc);
+    presenter->MemoryDc = presenter->MemoryBitmap = presenter->MemoryOld = 0; presenter->MemoryWidth = presenter->MemoryHeight = 0;
 }
 
 /* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
    the frame is direct colour or raster-split. Shared by the window/borderless path and
    (#223) the exclusive DirectDraw path, so both draw the same picture the same way.
    `scale2x` lets the caller ask for the pixel-art doubler first (GDI's Scaler). */
-typedef struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } snap_dib_t;
-static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int *psh,
-                               int scale2x)
+typedef struct _PRESENT_SNAPSHOT_DIB { BITMAPINFOHEADER Header; RGBQUAD Colors[256]; } PRESENT_SNAPSHOT_DIB, *PPRESENT_SNAPSHOT_DIB;
+static const BYTE *PresentSnapshotDib(PPRESENT_DDRAW presenter, PPRESENT_SNAPSHOT_DIB dib, INT *sourceWidthOut, INT *sourceHeightOut,
+                               INT isScale2x)
 {
-    static uint32_t s_rgb32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];   /* a split frame resolved per row, or ARGB */
-    const uint8_t *pix = pd->snap;
-    int sw = pd->snap_w, sh = pd->snap_h;
-    unsigned i;
+    static UINT32 resolved32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];  /* a split frame resolved per row, or ARGB */
+    const BYTE *pixels = presenter->Snapshot;
+    INT sourceWidth = presenter->SnapshotWidth, sourceHeight = presenter->SnapshotHeight;
+    UINT index;
     /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
        does -- it is already ARGB, so it needs no resolving, just no palette. */
-    int direct = (pd->snap_bpp == 32);
+    INT isDirect = (presenter->SnapshotBpp == 32);
     /* #325: no 640x480 cap -- the split palette is per ENTRY (from a row), so any frame
        size resolves; s_rgb32 is already the largest frame. */
-    int split = !direct && pd->snap_split;
+    INT isSplit = !isDirect && presenter->IsSnapshotSplit;
     /* Scale2x first: it is a property of the FRAME, so it happens before the
        stretch and the stretch then works from a source with twice the detail.
        (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
-       snap32 either.) */
-    if (scale2x && !split && !direct && PresentScalerDoubles(pd->scaler) && sw > 0 && sh > 0
-        && sw <= NTVDD_FRAME_MAX_WIDTH && sh <= NTVDD_FRAME_MAX_HEIGHT) {
-        PresentScale2x8(pd->snap, sw, sh, sw, s_scaled);
-        pix = s_scaled; sw *= 2; sh *= 2;
+       Snapshot32 either.) */
+    if (isScale2x && !isSplit && !isDirect && PresentScalerDoubles(presenter->Scaler) && sourceWidth > 0 && sourceHeight > 0
+        && sourceWidth <= NTVDD_FRAME_MAX_WIDTH && sourceHeight <= NTVDD_FRAME_MAX_HEIGHT) {
+        PresentScale2x8(presenter->Snapshot, sourceWidth, sourceHeight, sourceWidth, g_PresentScaled);
+        pixels = g_PresentScaled; sourceWidth *= 2; sourceHeight *= 2;
     }
-    ZeroMemory(bi, sizeof *bi);
-    bi->h.biSize = sizeof(BITMAPINFOHEADER);
-    bi->h.biWidth = (LONG)sw; bi->h.biHeight = -(LONG)sh;                /* top-down */
-    bi->h.biPlanes = 1; bi->h.biBitCount = 8; bi->h.biCompression = BI_RGB;
-    for (i = 0; i < 256; ++i) {
-        uint32_t a = pd->snap_pal[i];
-        bi->c[i].rgbRed = (BYTE)(a >> 16); bi->c[i].rgbGreen = (BYTE)(a >> 8);
-        bi->c[i].rgbBlue = (BYTE)a; bi->c[i].rgbReserved = 0;
+    ZeroMemory(dib, sizeof *dib);
+    dib->Header.biSize = sizeof(BITMAPINFOHEADER);
+    dib->Header.biWidth = (LONG)sourceWidth; dib->Header.biHeight = -(LONG)sourceHeight;                /* top-down */
+    dib->Header.biPlanes = 1; dib->Header.biBitCount = 8; dib->Header.biCompression = BI_RGB;
+    for (index = 0; index < 256; ++index) {
+        UINT32 argb = presenter->SnapshotPalette[index];
+        dib->Colors[index].rgbRed = (BYTE)(argb >> 16); dib->Colors[index].rgbGreen = (BYTE)(argb >> 8);
+        dib->Colors[index].rgbBlue = (BYTE)argb; dib->Colors[index].rgbReserved = 0;
     }
-    if (split || direct) {             /* resolve to a 32bpp DIB */
-        int y, x;
-        for (y = 0; y < sh; ++y) {
-            uint32_t *drow = s_rgb32 + (size_t)y * sw;
-            for (x = 0; x < sw; ++x) drow[x] = snap_px(pd, y, x) & 0x00FFFFFFu;
+    if (isSplit || isDirect) {         /* resolve to a 32bpp DIB */
+        INT row, column;
+        for (row = 0; row < sourceHeight; ++row) {
+            UINT32 *destinationRow = resolved32 + (size_t)row * sourceWidth;
+            for (column = 0; column < sourceWidth; ++column) destinationRow[column] = PresentSnapshotPixel(presenter, row, column) & 0x00FFFFFFu;
         }
-        bi->h.biBitCount = 32; pix = (const uint8_t *)s_rgb32;
+        dib->Header.biBitCount = 32; pixels = (const BYTE *)resolved32;
     }
-    *psw = sw; *psh = sh;
-    return pix;
+    *sourceWidthOut = sourceWidth; *sourceHeightOut = sourceHeight;
+    return pixels;
 }
 
 /* ── #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
@@ -213,61 +213,61 @@ static const uint8_t *snap_dib(present_ddraw *pd, snap_dib_t *bi, int *psw, int 
      whole multiple point-sampled into a scratch bitmap and smooths only the remainder,
      so edges stay crisp and rows stay even. Shared by the GDI window and the
      DirectDraw back buffer's DC. Returns non-zero when something was drawn. */
-static int blit_picture(HDC hdc, int dx, int dy, int dw, int dh,
-                        const uint8_t *pix, snap_dib_t *bi, int sw, int sh, int filter)
+static INT PresentBlitPicture(HDC dc, INT destinationX, INT destinationY, INT destinationWidth, INT destinationHeight,
+                        const BYTE *pixels, PPRESENT_SNAPSHOT_DIB dib, INT sourceWidth, INT sourceHeight, INT filter)
 {
-    static HDC s_dc; static HBITMAP s_bmp, s_old; static int s_w, s_h;
-    int kx, ky, iw, ih;
-    if (sw < 1 || sh < 1) return 0;
-    if ((dw % sw == 0 && dh % sh == 0) || filter == PRESENT_FILTER_NEAREST) {
-        SetStretchBltMode(hdc, COLORONCOLOR);
-        return StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh, pix, (BITMAPINFO *)bi,
+    static HDC scratchDc; static HBITMAP scratchBitmap, scratchOld; static INT scratchWidth, scratchHeight;
+    INT scaleX, scaleY, integerWidth, integerHeight;
+    if (sourceWidth < 1 || sourceHeight < 1) return 0;
+    if ((destinationWidth % sourceWidth == 0 && destinationHeight % sourceHeight == 0) || filter == PRESENT_FILTER_NEAREST) {
+        SetStretchBltMode(dc, COLORONCOLOR);
+        return StretchDIBits(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
                              DIB_RGB_COLORS, SRCCOPY) > 0;
     }
     if (filter == PRESENT_FILTER_BILINEAR) {
-        SetStretchBltMode(hdc, HALFTONE); SetBrushOrgEx(hdc, 0, 0, NULL);
-        return StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh, pix, (BITMAPINFO *)bi,
+        SetStretchBltMode(dc, HALFTONE); SetBrushOrgEx(dc, 0, 0, NULL);
+        return StretchDIBits(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
                              DIB_RGB_COLORS, SRCCOPY) > 0;
     }
-    kx = dw / sw; ky = dh / sh;
-    if (kx < 1) kx = 1;
-    if (ky < 1) ky = 1;
-    iw = sw * kx; ih = sh * ky;
-    if (!s_dc) s_dc = CreateCompatibleDC(hdc);
-    if (!s_dc) return 0;
-    if (!s_bmp || s_w != iw || s_h != ih) {
-        if (s_bmp) { SelectObject(s_dc, s_old); DeleteObject(s_bmp); s_bmp = NULL; }
-        s_bmp = CreateCompatibleBitmap(hdc, iw, ih);
-        if (!s_bmp) { s_w = s_h = 0; return 0; }
-        s_old = (HBITMAP)SelectObject(s_dc, s_bmp);
-        s_w = iw; s_h = ih;
+    scaleX = destinationWidth / sourceWidth; scaleY = destinationHeight / sourceHeight;
+    if (scaleX < 1) scaleX = 1;
+    if (scaleY < 1) scaleY = 1;
+    integerWidth = sourceWidth * scaleX; integerHeight = sourceHeight * scaleY;
+    if (!scratchDc) scratchDc = CreateCompatibleDC(dc);
+    if (!scratchDc) return 0;
+    if (!scratchBitmap || scratchWidth != integerWidth || scratchHeight != integerHeight) {
+        if (scratchBitmap) { SelectObject(scratchDc, scratchOld); DeleteObject(scratchBitmap); scratchBitmap = NULL; }
+        scratchBitmap = CreateCompatibleBitmap(dc, integerWidth, integerHeight);
+        if (!scratchBitmap) { scratchWidth = scratchHeight = 0; return 0; }
+        scratchOld = (HBITMAP)SelectObject(scratchDc, scratchBitmap);
+        scratchWidth = integerWidth; scratchHeight = integerHeight;
     }
-    SetStretchBltMode(s_dc, COLORONCOLOR);
-    StretchDIBits(s_dc, 0, 0, iw, ih, 0, 0, sw, sh, pix, (BITMAPINFO *)bi, DIB_RGB_COLORS, SRCCOPY);
-    SetStretchBltMode(hdc, HALFTONE); SetBrushOrgEx(hdc, 0, 0, NULL);
-    return StretchBlt(hdc, dx, dy, dw, dh, s_dc, 0, 0, iw, ih, SRCCOPY);
+    SetStretchBltMode(scratchDc, COLORONCOLOR);
+    StretchDIBits(scratchDc, 0, 0, integerWidth, integerHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY);
+    SetStretchBltMode(dc, HALFTONE); SetBrushOrgEx(dc, 0, 0, NULL);
+    return StretchBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, scratchDc, 0, 0, integerWidth, integerHeight, SRCCOPY);
 }
 
-static void gdi_present(present_ddraw *pd)
+static VOID PresentGdi(PPRESENT_DDRAW presenter)
 {
-    HDC hdc, win, mem; RECT rc; int cw, ch, dx, dy, dw, dh;
-    const uint8_t *pix;
-    int sw, sh;
-    snap_dib_t bi;
-    win = GetDC(pd->hwnd);
-    if (!win) return;
-    GetClientRect(pd->hwnd, &rc);
-    cw = rc.right;
-    ch = rc.bottom - (pd->fullscreen ? 0
-                                     : (pd->status_h ? pd->status_h : PRESENT_STATUS_H));
-    if (cw < 1) cw = 1;
-    if (ch < 1) ch = 1;
+    HDC dc, windowDc, memoryDc; RECT clientRect; INT clientWidth, clientHeight, destinationX, destinationY, destinationWidth, destinationHeight;
+    const BYTE *pixels;
+    INT sourceWidth, sourceHeight;
+    PRESENT_SNAPSHOT_DIB dib;
+    windowDc = GetDC(presenter->Window);
+    if (!windowDc) return;
+    GetClientRect(presenter->Window, &clientRect);
+    clientWidth = clientRect.right;
+    clientHeight = clientRect.bottom - (presenter->IsFullscreen ? 0
+                                     : (presenter->StatusHeight ? presenter->StatusHeight : PRESENT_STATUS_HEIGHT));
+    if (clientWidth < 1) clientWidth = 1;
+    if (clientHeight < 1) clientHeight = 1;
     /* #217: everything below draws into `hdc` -- the off-screen picture when buffered,
        the window otherwise -- and a buffered picture reaches the window in ONE blit. */
-    mem = mem_target(pd, win, cw, ch);
-    hdc = mem ? mem : win;
+    memoryDc = PresentMemoryTarget(presenter, windowDc, clientWidth, clientHeight);
+    dc = memoryDc ? memoryDc : windowDc;
 
-    pix = snap_dib(pd, &bi, &sw, &sh, 1);
+    pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, 1);
     /* ⚠ THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
@@ -275,55 +275,55 @@ static void gdi_present(present_ddraw *pd)
     {   /* #325: one layout for every path, from the FRAME's size (not the post-Scale2x
              source): a window is sized to the picture, maximised/fullscreen fit by the
              Fit setting. */
-        int screen = pd->fullscreen || IsZoomed(pd->hwnd);
-        PresentLayout(pd->aspect, screen ? pd->fit : PRESENT_FIT_WHOLE, screen, cw, ch,
-                       pd->snap_w, pd->snap_h, &dx, &dy, &dw, &dh); }
-    if (!mem) wait_vblank(pd);                      /* buffered: waits before its one blit */
+        INT isScreen = presenter->IsFullscreen || IsZoomed(presenter->Window);
+        PresentLayout(presenter->Aspect, isScreen ? presenter->Fit : PRESENT_FIT_WHOLE, isScreen, clientWidth, clientHeight,
+                       presenter->SnapshotWidth, presenter->SnapshotHeight, &destinationX, &destinationY, &destinationWidth, &destinationHeight); }
+    if (!memoryDc) PresentWaitVerticalBlank(presenter);                      /* buffered: waits before its one blit */
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
        frame, at the previous size -- would otherwise stay on screen forever. */
-    if (dx || dy) {
-        RECT full; full.left = 0; full.top = 0; full.right = cw; full.bottom = ch;
-        FillRect(hdc, &full, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    if (destinationX || destinationY) {
+        RECT fullRect; fullRect.left = 0; fullRect.top = 0; fullRect.right = clientWidth; fullRect.bottom = clientHeight;
+        FillRect(dc, &fullRect, (HBRUSH)GetStockObject(BLACK_BRUSH));
     }
-    blit_picture(hdc, dx, dy, dw, dh, pix, &bi, sw, sh, pd->filter);   /* #325 */
-    if (PresentScalerHasScanlines(pd->scaler)) {
-        HBRUSH br = scanline_brush();
-        if (br) {
-            HGDIOBJ old = SelectObject(hdc, br);
-            PatBlt(hdc, dx, dy, dw, dh, 0x00A000C9L);    /* PATAND */
-            SelectObject(hdc, old);
+    PresentBlitPicture(dc, destinationX, destinationY, destinationWidth, destinationHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
+    if (PresentScalerHasScanlines(presenter->Scaler)) {
+        HBRUSH brush = PresentScanlineBrush();
+        if (brush) {
+            HGDIOBJ oldObject = SelectObject(dc, brush);
+            PatBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0x00A000C9L);    /* PATAND */
+            SelectObject(dc, oldObject);
         }
     }
     /* #154: remember where the frame went, and show a text selection by inverting it. */
-    pd->last_dx = dx; pd->last_dy = dy; pd->last_dw = dw; pd->last_dh = dh;
-    pd->last_sw = pd->snap_w; pd->last_sh = pd->snap_h;
-    if (pd->sel_on && pd->snap_w > 0 && pd->snap_h > 0) {
-        RECT sr;
-        sr.left   = dx + pd->sel_x0 * dw / pd->snap_w;
-        sr.right  = dx + pd->sel_x1 * dw / pd->snap_w;
-        sr.top    = dy + pd->sel_y0 * dh / pd->snap_h;
-        sr.bottom = dy + pd->sel_y1 * dh / pd->snap_h;
-        InvertRect(hdc, &sr);
+    presenter->LastDestinationX = destinationX; presenter->LastDestinationY = destinationY; presenter->LastDestinationWidth = destinationWidth; presenter->LastDestinationHeight = destinationHeight;
+    presenter->LastSourceWidth = presenter->SnapshotWidth; presenter->LastSourceHeight = presenter->SnapshotHeight;
+    if (presenter->IsSelection && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0) {
+        RECT selectionRect;
+        selectionRect.left   = destinationX + presenter->SelectionX0 * destinationWidth / presenter->SnapshotWidth;
+        selectionRect.right  = destinationX + presenter->SelectionX1 * destinationWidth / presenter->SnapshotWidth;
+        selectionRect.top    = destinationY + presenter->SelectionY0 * destinationHeight / presenter->SnapshotHeight;
+        selectionRect.bottom = destinationY + presenter->SelectionY1 * destinationHeight / presenter->SnapshotHeight;
+        InvertRect(dc, &selectionRect);
     }
-    hint_draw(pd, hdc, dx, dy, dw);                 /* #138 */
-    if (mem) {
-        wait_vblank(pd);
-        BitBlt(win, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
+    PresentHintDraw(presenter, dc, destinationX, destinationY, destinationWidth);                 /* #138 */
+    if (memoryDc) {
+        PresentWaitVerticalBlank(presenter);
+        BitBlt(windowDc, 0, 0, clientWidth, clientHeight, memoryDc, 0, 0, SRCCOPY);
     }
-    ReleaseDC(pd->hwnd, win);
+    ReleaseDC(presenter->Window, windowDc);
 }
 
 /* ---- fullscreen: DirectDraw 7 ------------------------------------------- */
-static void rel_surf(void **s)
-{ if (*s) { IDirectDrawSurface7_Release(SURF(*s)); *s = 0; } }
+static VOID PresentReleaseSurface(PVOID *surface)
+{ if (*surface) { IDirectDrawSurface7_Release(PRESENT_SURFACE(*surface)); *surface = 0; } }
 
-static void fs_teardown(present_ddraw *pd)
+static VOID PresentFullscreenTeardown(PPRESENT_DDRAW presenter)
 {
-    pd->back = 0;
-    rel_surf(&pd->fbsurf);
-    pd->fb_w = pd->fb_h = 0;
-    rel_surf(&pd->primary);
+    presenter->Back = 0;
+    PresentReleaseSurface(&presenter->StagingSurface);
+    presenter->StagingWidth = presenter->StagingHeight = 0;
+    PresentReleaseSurface(&presenter->Primary);
 }
 
 /* ── ★★ FULLSCREEN KEEPS THE DESKTOP'S OWN MODE. (s64) ───────────────────────────────
@@ -334,7 +334,7 @@ static void fs_teardown(present_ddraw *pd)
          setting said, and nothing we did to the pixels could have corrected it. That
          is the "pixels get stretched regardless of the setting" report, and the stretch
          was happening in the DISPLAY, downstream of everything we control.
-       * fs_present then ignored pd->aspect completely, so even the part we DID control
+       * PresentFullscreen then ignored presenter->Aspect completely, so even the part we DID control
          was filling rather than fitting.
      Taking the desktop's current mode fixes both: the panel shows its native signal
      1:1, and we letterbox/pillarbox inside it with PresentFit -- the same function the
@@ -344,267 +344,267 @@ static void fs_teardown(present_ddraw *pd)
    ⚠ THE COST IS THAT THE DESTINATION IS NOW BIG. A software nearest-neighbour loop over
      1440x1080 is ~1.5M pixels a frame and this host cannot afford that, so the picture
      goes through an OFFSCREEN SURFACE and a hardware stretch Blt: we convert only
-     snap_w x snap_h (64k pixels for mode 13h) and the GPU does the scaling. fs_present
+     SnapshotWidth x SnapshotHeight (64k pixels for mode 13h) and the GPU does the scaling. PresentFullscreen
      keeps the old software loop as a fallback for a driver that refuses the blt. */
-static int fs_setup(present_ddraw *pd)
+static INT PresentFullscreenSetup(PPRESENT_DDRAW presenter)
 {
-    DDSURFACEDESC2 d; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 pr = 0, bk = 0, fb = 0;
-    int nb;
+    DDSURFACEDESC2 description; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 primary = 0, back = 0, staging = 0;
+    INT backBuffers;
 
     /* ★ AN EXPLICIT MODE IS TRIED FIRST, AND ONLY IF THE USER ASKED FOR ONE. Try 32bpp
          then 16, the same pair this always used; if the display refuses both, fall
          through to the desktop mode rather than failing the toggle outright. */
-    pd->fs_w = 0; pd->fs_h = 0;
-    if (pd->fs_mode_w > 0 && pd->fs_mode_h > 0) {
-        if (SUCCEEDED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_mode_w,
-                                                  (DWORD)pd->fs_mode_h, 32, 0, 0)) ||
-            SUCCEEDED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_mode_w,
-                                                  (DWORD)pd->fs_mode_h, 16, 0, 0))) {
-            pd->fs_w = pd->fs_mode_w; pd->fs_h = pd->fs_mode_h;
+    presenter->FullscreenWidth = 0; presenter->FullscreenHeight = 0;
+    if (presenter->FullscreenModeWidth > 0 && presenter->FullscreenModeHeight > 0) {
+        if (SUCCEEDED(IDirectDraw7_SetDisplayMode(PRESENT_DIRECT_DRAW, (DWORD)presenter->FullscreenModeWidth,
+                                                  (DWORD)presenter->FullscreenModeHeight, 32, 0, 0)) ||
+            SUCCEEDED(IDirectDraw7_SetDisplayMode(PRESENT_DIRECT_DRAW, (DWORD)presenter->FullscreenModeWidth,
+                                                  (DWORD)presenter->FullscreenModeHeight, 16, 0, 0))) {
+            presenter->FullscreenWidth = presenter->FullscreenModeWidth; presenter->FullscreenHeight = presenter->FullscreenModeHeight;
         }
     }
-    if (!pd->fs_w) {
-        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-        if (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwWidth && d.dwHeight) {
-            pd->fs_w = (int)d.dwWidth;
-            pd->fs_h = (int)d.dwHeight;
+    if (!presenter->FullscreenWidth) {
+        ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+        if (SUCCEEDED(IDirectDraw7_GetDisplayMode(PRESENT_DIRECT_DRAW, &description)) && description.dwWidth && description.dwHeight) {
+            presenter->FullscreenWidth = (INT)description.dwWidth;
+            presenter->FullscreenHeight = (INT)description.dwHeight;
         } else {
             /* Could not ask. Fall back to the old behaviour rather than guessing -- a
                forced 640x480 is worse than the desktop mode but better than no picture. */
-            pd->fs_w = 640; pd->fs_h = 480;
-            if (FAILED(IDirectDraw7_SetDisplayMode(DD, 640, 480, 32, 0, 0)) &&
-                FAILED(IDirectDraw7_SetDisplayMode(DD, 640, 480, 16, 0, 0)))
+            presenter->FullscreenWidth = 640; presenter->FullscreenHeight = 480;
+            if (FAILED(IDirectDraw7_SetDisplayMode(PRESENT_DIRECT_DRAW, 640, 480, 32, 0, 0)) &&
+                FAILED(IDirectDraw7_SetDisplayMode(PRESENT_DIRECT_DRAW, 640, 480, 16, 0, 0)))
                 return -1;
         }
     }
 
     /* s86: TRIPLE-BUFFERED, so the buffer we draw into is never the one on screen nor
-       the one queued for the next retrace -- see the flip in fs_present. Two back
+       the one queued for the next retrace -- see the flip in PresentFullscreen. Two back
        buffers first; one if the card will not give us two (or ddflip_driver.flag). */
-    pd->fl_bufs = 0;
-    for (nb = pd->fl_drv ? 1 : 2; nb >= 1 && !pr; --nb) {
-        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-        d.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; d.dwBackBufferCount = (DWORD)nb;
-        d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
-        if (SUCCEEDED(IDirectDraw7_CreateSurface(DD, &d, &pr, NULL))) pd->fl_bufs = nb + 1;
-        else pr = 0;
+    presenter->FlipBuffers = 0;
+    for (backBuffers = presenter->IsFlipDriverTimed ? 1 : 2; backBuffers >= 1 && !primary; --backBuffers) {
+        ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+        description.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; description.dwBackBufferCount = (DWORD)backBuffers;
+        description.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
+        if (SUCCEEDED(IDirectDraw7_CreateSurface(PRESENT_DIRECT_DRAW, &description, &primary, NULL))) presenter->FlipBuffers = backBuffers + 1;
+        else primary = 0;
     }
-    if (!pr) return -1;
-    pd->primary = pr;
+    if (!primary) return -1;
+    presenter->Primary = primary;
     ZeroMemory(&caps, sizeof caps); caps.dwCaps = DDSCAPS_BACKBUFFER;
-    if (FAILED(IDirectDrawSurface7_GetAttachedSurface(pr, &caps, &bk))) return -1;
-    pd->back = bk;
+    if (FAILED(IDirectDrawSurface7_GetAttachedSurface(primary, &caps, &back))) return -1;
+    presenter->Back = back;
 
     /* The staging surface the guest frame is converted into, at FRAME size. Video
        memory if the driver will give it (the stretch blt is then card-to-card),
-       system memory if not. Failing both is not fatal -- fs_present falls back to
+       system memory if not. Failing both is not fatal -- PresentFullscreen falls back to
        the software path, which needs no surface at all. */
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
-    d.dwWidth = 640; d.dwHeight = 480;
-    d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
-    if (FAILED(IDirectDraw7_CreateSurface(DD, &d, &fb, NULL))) {
-        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-        d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
-        d.dwWidth = 640; d.dwHeight = 480;
-        d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
-        if (FAILED(IDirectDraw7_CreateSurface(DD, &d, &fb, NULL))) fb = 0;
+    ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+    description.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    description.dwWidth = 640; description.dwHeight = 480;
+    description.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
+    if (FAILED(IDirectDraw7_CreateSurface(PRESENT_DIRECT_DRAW, &description, &staging, NULL))) {
+        ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+        description.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+        description.dwWidth = 640; description.dwHeight = 480;
+        description.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        if (FAILED(IDirectDraw7_CreateSurface(PRESENT_DIRECT_DRAW, &description, &staging, NULL))) staging = 0;
     }
-    pd->fbsurf = fb;
-    pd->fb_w = fb ? 640 : 0; pd->fb_h = fb ? 480 : 0;
+    presenter->StagingSurface = staging;
+    presenter->StagingWidth = staging ? 640 : 0; presenter->StagingHeight = staging ? 480 : 0;
     return 0;
 }
 
 /* convert an NTVDD_FRAME into the locked back buffer, packed to its depth. */
-static void mask_info(DWORD m, int *shift, int *bits)
-{ int s=0,b=0; if(m){while(!(m&1)){m>>=1;++s;}while(m&1){m>>=1;++b;}} *shift=s; *bits=b; }
+static VOID PresentMaskInfo(DWORD mask, INT *shift, INT *bits)
+{ INT shiftCount=0,bitCount=0; if(mask){while(!(mask&1)){mask>>=1;++shiftCount;}while(mask&1){mask>>=1;++bitCount;}} *shift=shiftCount; *bits=bitCount; }
 
 /* The snapshot's pixel at (x,y) as ARGB, whatever depth it was captured at. One
    accessor so the depth is resolved in exactly one place: the alternative is the
-   same `snap_bpp` test copied into four loops, which is how one of them ends up
+   same `SnapshotBpp` test copied into four loops, which is how one of them ends up
    not having it. */
-static uint32_t snap_px(present_ddraw *pd, int y, int x)
+static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column)
 {
-    if (pd->snap_bpp == 32) return pd->snap32[(size_t)y * pd->snap_w + x];
-    return row_pal(pd, y)[pd->snap[(size_t)y * pd->snap_w + x]];
+    if (presenter->SnapshotBpp == 32) return presenter->Snapshot32[(size_t)row * presenter->SnapshotWidth + column];
+    return PresentRowPalette(presenter, row)[presenter->Snapshot[(size_t)row * presenter->SnapshotWidth + column]];
 }
 
 /* Write one snapshot pixel, packed to whatever depth the locked surface is. */
-static void put_px(BYTE *drow, int dx, DWORD bpp, uint32_t argb,
-                   int rsh, int rb, int gsh, int gb, int bsh, int bb)
+static VOID PresentPutPixel(BYTE *destinationRow, INT column, DWORD bitsPerPixel, UINT32 argb,
+                   INT redShift, INT redBits, INT greenShift, INT greenBits, INT blueShift, INT blueBits)
 {
-    uint32_t r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
-    if (bpp == 32) ((DWORD *)drow)[dx] = argb;
-    else if (bpp == 16 || bpp == 15)
-        ((WORD *)drow)[dx] = (WORD)(((r>>(8-rb))<<rsh)|((g>>(8-gb))<<gsh)|((b>>(8-bb))<<bsh));
-    else if (bpp == 24) { BYTE *p = drow + dx*3; p[0]=(BYTE)b; p[1]=(BYTE)g; p[2]=(BYTE)r; }
-    else drow[dx] = (BYTE)((r*30 + g*59 + b*11) / 100);
+    UINT32 red = (argb >> 16) & 0xFF, green = (argb >> 8) & 0xFF, blue = argb & 0xFF;
+    if (bitsPerPixel == 32) ((DWORD *)destinationRow)[column] = argb;
+    else if (bitsPerPixel == 16 || bitsPerPixel == 15)
+        ((WORD *)destinationRow)[column] = (WORD)(((red>>(8-redBits))<<redShift)|((green>>(8-greenBits))<<greenShift)|((blue>>(8-blueBits))<<blueShift));
+    else if (bitsPerPixel == 24) { BYTE *pixel = destinationRow + column*3; pixel[0]=(BYTE)blue; pixel[1]=(BYTE)green; pixel[2]=(BYTE)red; }
+    else destinationRow[column] = (BYTE)((red*30 + green*59 + blue*11) / 100);
 }
 
 /* Convert the snapshot 1:1 into the staging surface's top-left corner. No scaling
-   here on purpose -- that is the GPU's job in fs_present. 0 = ok. */
-static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
+   here on purpose -- that is the GPU's job in PresentFullscreen. 0 = ok. */
+static INT PresentFullscreenStage(PPRESENT_DDRAW presenter, LPDIRECTDRAWSURFACE7 staging)
 {
-    DDSURFACEDESC2 d;
-    DWORD bpp; int rsh,rb,gsh,gb,bsh,bb; int y, x;
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    if (FAILED(IDirectDrawSurface7_Lock(fb, NULL, &d,
+    DDSURFACEDESC2 description;
+    DWORD bitsPerPixel; INT redShift,redBits,greenShift,greenBits,blueShift,blueBits; INT row, column;
+    ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+    if (FAILED(IDirectDrawSurface7_Lock(staging, NULL, &description,
                                         DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)))
         return -1;
     /* Belt and braces: never write more than the surface the driver handed back. */
-    if ((int)d.dwWidth < pd->snap_w || (int)d.dwHeight < pd->snap_h) {
-        IDirectDrawSurface7_Unlock(fb, NULL);
+    if ((INT)description.dwWidth < presenter->SnapshotWidth || (INT)description.dwHeight < presenter->SnapshotHeight) {
+        IDirectDrawSurface7_Unlock(staging, NULL);
         return -1;
     }
-    bpp = d.ddpfPixelFormat.dwRGBBitCount;
-    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
-    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
-    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
-    for (y = 0; y < pd->snap_h; ++y) {
-        BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
-        for (x = 0; x < pd->snap_w; ++x)
-            put_px(drow, x, bpp, snap_px(pd, y, x), rsh,rb,gsh,gb,bsh,bb);
+    bitsPerPixel = description.ddpfPixelFormat.dwRGBBitCount;
+    PresentMaskInfo(description.ddpfPixelFormat.dwRBitMask, &redShift, &redBits);
+    PresentMaskInfo(description.ddpfPixelFormat.dwGBitMask, &greenShift, &greenBits);
+    PresentMaskInfo(description.ddpfPixelFormat.dwBBitMask, &blueShift, &blueBits);
+    for (row = 0; row < presenter->SnapshotHeight; ++row) {
+        BYTE *destinationRow = (BYTE *)description.lpSurface + (size_t)row * description.lPitch;
+        for (column = 0; column < presenter->SnapshotWidth; ++column)
+            PresentPutPixel(destinationRow, column, bitsPerPixel, PresentSnapshotPixel(presenter, row, column), redShift,redBits,greenShift,greenBits,blueShift,blueBits);
     }
-    IDirectDrawSurface7_Unlock(fb, NULL);
+    IDirectDrawSurface7_Unlock(staging, NULL);
     return 0;
 }
 
 /* The fallback: nearest-neighbour straight into the back buffer, honouring the same
    fitted rectangle. Only reached if the driver refuses a stretch blt. */
-static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
+static VOID PresentFullscreenSoftware(PPRESENT_DDRAW presenter, INT fitX, INT fitY, INT fitWidth, INT fitHeight)
 {
-    DDSURFACEDESC2 d; LPDIRECTDRAWSURFACE7 bk = SURF(pd->back);
-    DWORD bpp; int rsh,rb,gsh,gb,bsh,bb; int y, x, dy, dx;
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    if (IDirectDrawSurface7_Lock(bk, NULL, &d, DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)
-            == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(SURF(pd->primary)); return; }
-    bpp = d.ddpfPixelFormat.dwRGBBitCount;
-    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
-    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
-    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
-    for (dy = 0; dy < pd->fs_h; ++dy) {
-        BYTE *drow = (BYTE *)d.lpSurface + (size_t)dy * d.lPitch;
-        int insidey = (dy >= fy && dy < fy + fh);
-        y = insidey ? (dy - fy) * pd->snap_h / fh : 0;
-        for (dx = 0; dx < pd->fs_w; ++dx) {
+    DDSURFACEDESC2 description; LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back);
+    DWORD bitsPerPixel; INT redShift,redBits,greenShift,greenBits,blueShift,blueBits; INT sourceRow, sourceColumn, destinationRow, column;
+    ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+    if (IDirectDrawSurface7_Lock(back, NULL, &description, DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)
+            == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(PRESENT_SURFACE(presenter->Primary)); return; }
+    bitsPerPixel = description.ddpfPixelFormat.dwRGBBitCount;
+    PresentMaskInfo(description.ddpfPixelFormat.dwRBitMask, &redShift, &redBits);
+    PresentMaskInfo(description.ddpfPixelFormat.dwGBitMask, &greenShift, &greenBits);
+    PresentMaskInfo(description.ddpfPixelFormat.dwBBitMask, &blueShift, &blueBits);
+    for (destinationRow = 0; destinationRow < presenter->FullscreenHeight; ++destinationRow) {
+        BYTE *rowPointer = (BYTE *)description.lpSurface + (size_t)destinationRow * description.lPitch;
+        INT isInsideY = (destinationRow >= fitY && destinationRow < fitY + fitHeight);
+        sourceRow = isInsideY ? (destinationRow - fitY) * presenter->SnapshotHeight / fitHeight : 0;
+        for (column = 0; column < presenter->FullscreenWidth; ++column) {
             /* The bars are part of the picture: this is a FLIP CHAIN, so a pixel we
                do not write keeps whatever the buffer held two frames ago. */
-            if (!insidey || dx < fx || dx >= fx + fw) {
-                put_px(drow, dx, bpp, 0, rsh,rb,gsh,gb,bsh,bb);
+            if (!isInsideY || column < fitX || column >= fitX + fitWidth) {
+                PresentPutPixel(rowPointer, column, bitsPerPixel, 0, redShift,redBits,greenShift,greenBits,blueShift,blueBits);
                 continue;
             }
-            x = (dx - fx) * pd->snap_w / fw;
-            put_px(drow, dx, bpp, snap_px(pd, y, x),
-                   rsh,rb,gsh,gb,bsh,bb);
+            sourceColumn = (column - fitX) * presenter->SnapshotWidth / fitWidth;
+            PresentPutPixel(rowPointer, column, bitsPerPixel, PresentSnapshotPixel(presenter, sourceRow, sourceColumn),
+                   redShift,redBits,greenShift,greenBits,blueShift,blueBits);
         }
     }
-    IDirectDrawSurface7_Unlock(bk, NULL);
+    IDirectDrawSurface7_Unlock(back, NULL);
 }
 
 /* ── THE STAGING SURFACE MUST HOLD THE WHOLE FRAME. (s84, user: "fullscreen VESA --
      ZAR, Duke3D, VESACUBE -- crashes NTVDMEX with DirectDraw") It was created once at
-     640x480, and fs_stage copies snap_w x snap_h into it: a 1024x768 or 800x600 VESA
-     frame wrote past the end of the surface (HOSTFAULT write AV in fs_present). Grow it
+     640x480, and PresentFullscreenStage copies SnapshotWidth x SnapshotHeight into it: a 1024x768 or 800x600 VESA
+     frame wrote past the end of the surface (HOSTFAULT write AV in PresentFullscreen). Grow it
      to the frame when the frame outgrows it -- video memory if the driver gives it,
-     system memory if not -- and if neither, drop it: fs_present then takes the
+     system memory if not -- and if neither, drop it: PresentFullscreen then takes the
      software path, which needs no staging surface. Returns the surface or NULL. */
-static LPDIRECTDRAWSURFACE7 fs_stage_surface(present_ddraw *pd, int w, int h)
+static LPDIRECTDRAWSURFACE7 PresentFullscreenStageSurface(PPRESENT_DDRAW presenter, INT width, INT height)
 {
-    DDSURFACEDESC2 d;
-    void *fb = 0;
-    if (pd->fbsurf && w <= pd->fb_w && h <= pd->fb_h) return SURF(pd->fbsurf);
-    rel_surf(&pd->fbsurf);
-    pd->fb_w = pd->fb_h = 0;
-    if (w <= 0 || h <= 0) return NULL;
-    if (w < 640) w = 640;
-    if (h < 480) h = 480;
-    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
-    d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
-    d.dwWidth = (DWORD)w; d.dwHeight = (DWORD)h;
-    d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
-    if (FAILED(IDirectDraw7_CreateSurface(DD, &d, (LPDIRECTDRAWSURFACE7 *)&fb, NULL))) {
-        d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
-        if (FAILED(IDirectDraw7_CreateSurface(DD, &d, (LPDIRECTDRAWSURFACE7 *)&fb, NULL)))
-            fb = 0;
+    DDSURFACEDESC2 description;
+    PVOID staging = 0;
+    if (presenter->StagingSurface && width <= presenter->StagingWidth && height <= presenter->StagingHeight) return PRESENT_SURFACE(presenter->StagingSurface);
+    PresentReleaseSurface(&presenter->StagingSurface);
+    presenter->StagingWidth = presenter->StagingHeight = 0;
+    if (width <= 0 || height <= 0) return NULL;
+    if (width < 640) width = 640;
+    if (height < 480) height = 480;
+    ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
+    description.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    description.dwWidth = (DWORD)width; description.dwHeight = (DWORD)height;
+    description.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
+    if (FAILED(IDirectDraw7_CreateSurface(PRESENT_DIRECT_DRAW, &description, (LPDIRECTDRAWSURFACE7 *)&staging, NULL))) {
+        description.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        if (FAILED(IDirectDraw7_CreateSurface(PRESENT_DIRECT_DRAW, &description, (LPDIRECTDRAWSURFACE7 *)&staging, NULL)))
+            staging = 0;
     }
-    pd->fbsurf = fb;
-    if (fb) { pd->fb_w = w; pd->fb_h = h; }
-    return SURF(fb);
+    presenter->StagingSurface = staging;
+    if (staging) { presenter->StagingWidth = width; presenter->StagingHeight = height; }
+    return PRESENT_SURFACE(staging);
 }
 
-static void fs_present(present_ddraw *pd)
+static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
 {
-    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb;
-    int fx, fy, fw, fh, done = 0;
-    if (!bk) return;
+    LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back), staging;
+    INT fitX, fitY, fitWidth, fitHeight, isDone = 0;
+    if (!back) return;
     /* ★ THE SAME LAYOUT THE WINDOW USES (PresentLayout). One function for both
          renderers is the point: a setting that meant one thing windowed and another
          fullscreen is exactly the bug it exists to prevent. */
     /* #325: exclusive fullscreen is "the screen": the same layout as the window. */
-    PresentLayout(pd->aspect, pd->fit, 1, pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h,
-                   &fx, &fy, &fw, &fh);
+    PresentLayout(presenter->Aspect, presenter->Fit, 1, presenter->FullscreenWidth, presenter->FullscreenHeight, presenter->SnapshotWidth, presenter->SnapshotHeight,
+                   &fitX, &fitY, &fitWidth, &fitHeight);
     /* ...and remember it: the mouse maps through the rectangle actually drawn. */
-    pd->last_dx = fx; pd->last_dy = fy; pd->last_dw = fw; pd->last_dh = fh;
-    pd->last_sw = pd->snap_w; pd->last_sh = pd->snap_h;
+    presenter->LastDestinationX = fitX; presenter->LastDestinationY = fitY; presenter->LastDestinationWidth = fitWidth; presenter->LastDestinationHeight = fitHeight;
+    presenter->LastSourceWidth = presenter->SnapshotWidth; presenter->LastSourceHeight = presenter->SnapshotHeight;
 
     /* ── SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
          from scaler/filter. With them off it should be stretched, sharp pixels,
          regardless of which renderer is used.") A stretching Blt is FILTERED BY THE
          DRIVER and DirectDraw cannot forbid it. With Filtering = Nearest the frame is
          drawn into the back buffer's DC by GDI's StretchDIBits in COLORONCOLOR mode --
-         the same exact-pixel routine, and the same picture (snap_dib, with Scale2x),
+         the same exact-pixel routine, and the same picture (PresentSnapshotDib, with Scale2x),
          as the GDI renderer. ⚠ Not a hand-written per-pixel stretch into video memory:
          that was tried first and was unplayably slow on the rig (it read VRAM back to
          copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear. */
-    if (pd->filter != PRESENT_FILTER_BILINEAR && pd->snap_w > 0 && pd->snap_h > 0) {
-        HDC hd;
-        if (fx || fy) {                          /* letterboxed -> clear the bars */
-            DDBLTFX bfx;
-            ZeroMemory(&bfx, sizeof bfx); bfx.dwSize = sizeof bfx; bfx.dwFillColor = 0;
-            IDirectDrawSurface7_Blt(bk, NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
+    if (presenter->Filter != PRESENT_FILTER_BILINEAR && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0) {
+        HDC dc;
+        if (fitX || fitY) {                      /* letterboxed -> clear the bars */
+            DDBLTFX bltFx;
+            ZeroMemory(&bltFx, sizeof bltFx); bltFx.dwSize = sizeof bltFx; bltFx.dwFillColor = 0;
+            IDirectDrawSurface7_Blt(back, NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &bltFx);
         }
-        if (SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
-            snap_dib_t bi; int sw, sh;
-            const uint8_t *pix = snap_dib(pd, &bi, &sw, &sh, 1);
-            done = blit_picture(hd, fx, fy, fw, fh, pix, &bi, sw, sh, pd->filter);   /* #325 */
-            IDirectDrawSurface7_ReleaseDC(bk, hd);
+        if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc))) {
+            PRESENT_SNAPSHOT_DIB dib; INT sourceWidth, sourceHeight;
+            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, 1);
+            isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
+            IDirectDrawSurface7_ReleaseDC(back, dc);
         }
     }
-    fb = done ? NULL : fs_stage_surface(pd, pd->snap_w, pd->snap_h);
-    if (!done && fb && pd->snap_w > 0 && pd->snap_h > 0 && fs_stage(pd, fb) == 0) {
-        RECT src, dst;
-        src.left = 0; src.top = 0;
-        src.right = pd->snap_w; src.bottom = pd->snap_h;
-        dst.left = fx; dst.top = fy; dst.right = fx + fw; dst.bottom = fy + fh;
-        if (fx || fy) {                          /* letterboxed -> clear the bars */
-            DDBLTFX bfx;
-            ZeroMemory(&bfx, sizeof bfx); bfx.dwSize = sizeof bfx; bfx.dwFillColor = 0;
-            IDirectDrawSurface7_Blt(bk, NULL, NULL, NULL,
-                                    DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
+    staging = isDone ? NULL : PresentFullscreenStageSurface(presenter, presenter->SnapshotWidth, presenter->SnapshotHeight);
+    if (!isDone && staging && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0 && PresentFullscreenStage(presenter, staging) == 0) {
+        RECT source, destination;
+        source.left = 0; source.top = 0;
+        source.right = presenter->SnapshotWidth; source.bottom = presenter->SnapshotHeight;
+        destination.left = fitX; destination.top = fitY; destination.right = fitX + fitWidth; destination.bottom = fitY + fitHeight;
+        if (fitX || fitY) {                      /* letterboxed -> clear the bars */
+            DDBLTFX bltFx;
+            ZeroMemory(&bltFx, sizeof bltFx); bltFx.dwSize = sizeof bltFx; bltFx.dwFillColor = 0;
+            IDirectDrawSurface7_Blt(back, NULL, NULL, NULL,
+                                    DDBLT_COLORFILL | DDBLT_WAIT, &bltFx);
         }
-        done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
+        isDone = SUCCEEDED(IDirectDrawSurface7_Blt(back, &destination, staging, &source, DDBLT_WAIT, NULL));
     }
-    if (!done) fs_present_sw(pd, fx, fy, fw, fh);
+    if (!isDone) PresentFullscreenSoftware(presenter, fitX, fitY, fitWidth, fitHeight);
     /* #227: the Scanlines/CRT scaler on the exclusive path too -- the same AND pattern
        the GDI path lays over its stretched picture, on the back buffer's DC. */
-    if (PresentScalerHasScanlines(pd->scaler)) {
-        HDC hd; HBRUSH br = scanline_brush();
-        if (br && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
-            HGDIOBJ old = SelectObject(hd, br);
-            PatBlt(hd, fx, fy, fw, fh, 0x00A000C9L);      /* PATAND */
-            SelectObject(hd, old);
-            IDirectDrawSurface7_ReleaseDC(bk, hd);
+    if (PresentScalerHasScanlines(presenter->Scaler)) {
+        HDC dc; HBRUSH brush = PresentScanlineBrush();
+        if (brush && SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc))) {
+            HGDIOBJ oldObject = SelectObject(dc, brush);
+            PatBlt(dc, fitX, fitY, fitWidth, fitHeight, 0x00A000C9L);      /* PATAND */
+            SelectObject(dc, oldObject);
+            IDirectDrawSurface7_ReleaseDC(back, dc);
         }
     }
-    {   HDC hd;                                   /* #138 on the exclusive path */
-        if (pd->hint_text && !pd->osd_off && SUCCEEDED(IDirectDrawSurface7_GetDC(bk, &hd))) {
-            hint_draw(pd, hd, fx, fy, fw);
-            IDirectDrawSurface7_ReleaseDC(bk, hd);
+    {   HDC dc;                                   /* #138 on the exclusive path */
+        if (presenter->HintText && !presenter->IsOsdOff && SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc))) {
+            PresentHintDraw(presenter, dc, fitX, fitY, fitWidth);
+            IDirectDrawSurface7_ReleaseDC(back, dc);
         } }
 
     /* ── ⛔ THE FLIP: TRIPLE-BUFFERED, NEVER BLOCKING, THE DRIVER TIMES IT. (user, s86) ──
          With one back buffer and DDFLIP_WAIT, DirectDraw fullscreen tore far more than
-         GDI. The first fix timed the flip ourselves (wait_vblank + NOVSYNC) -- no
+         GDI. The first fix timed the flip ourselves (PresentWaitVerticalBlank + NOVSYNC) -- no
          tearing, but the counters below then showed EVERY flip still pending a retrace:
          this driver (Quadro K4000, 321.01) already waits, so we were waiting TWICE.
          Present cost a whole frame (16 ms mean), the UI thread fell behind a 70 Hz
@@ -616,254 +616,254 @@ static void fs_present(present_ddraw *pd)
          on the guest's beat. The driver's own vsync does the timing.
        ► A driver whose flips do NOT wait (they land at once -- a mirror driver can do
          that) gets our timing back automatically: 30 such flips in a row with VSync on
-         switches to wait_vblank + NOVSYNC, which measured tear-free.
+         switches to PresentWaitVerticalBlank + NOVSYNC, which measured tear-free.
        ⚠ Only one back buffer (the card refused two, or ddflip_driver.flag): the old
          blocking DDFLIP_WAIT, since dropping would mean drawing into the queued buffer. */
-    {   LPDIRECTDRAWSURFACE7 pr = SURF(pd->primary);
-        DWORD fl, sl = 0; HRESULT hr;
-        int ours = pd->vsync && pd->fl_ourwait;
-        mon_query(pd);
-        if (ours)                 { wait_vblank(pd); fl = DDFLIP_WAIT | DDFLIP_NOVSYNC; }
-        else if (pd->fl_bufs >= 3) fl = DDFLIP_DONOTWAIT;
-        else                       fl = DDFLIP_WAIT;
-        if (IDirectDraw7_GetScanLine(DD, &sl) == DD_OK && pd->mon_h > 0 &&
-            sl >= 32 && sl + 32 < (DWORD)pd->mon_h)
-            ++pd->fl_mid;
-        hr = IDirectDrawSurface7_Flip(pr, NULL, fl);
-        if (hr == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(pr); return; }
-        if (hr == DDERR_WASSTILLDRAWING) { ++pd->fl_drop; return; }
-        if (hr == DD_OK) {
-            hr = IDirectDrawSurface7_GetFlipStatus(pr, DDGFS_ISFLIPDONE);
-            if (hr == DD_OK) {
-                ++pd->fl_done;
-                if (!ours && pd->vsync && !pd->fl_drv && ++pd->fl_streak >= 30)
-                    pd->fl_ourwait = 1;
+    {   LPDIRECTDRAWSURFACE7 primary = PRESENT_SURFACE(presenter->Primary);
+        DWORD flags, scanLine = 0; HRESULT result;
+        INT isOurWait = presenter->IsVsync && presenter->IsFlipOurWait;
+        PresentMonitorQuery(presenter);
+        if (isOurWait)                 { PresentWaitVerticalBlank(presenter); flags = DDFLIP_WAIT | DDFLIP_NOVSYNC; }
+        else if (presenter->FlipBuffers >= 3) flags = DDFLIP_DONOTWAIT;
+        else                       flags = DDFLIP_WAIT;
+        if (IDirectDraw7_GetScanLine(PRESENT_DIRECT_DRAW, &scanLine) == DD_OK && presenter->MonitorLines > 0 &&
+            scanLine >= 32 && scanLine + 32 < (DWORD)presenter->MonitorLines)
+            ++presenter->FlipMidScreen;
+        result = IDirectDrawSurface7_Flip(primary, NULL, flags);
+        if (result == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(primary); return; }
+        if (result == DDERR_WASSTILLDRAWING) { ++presenter->FlipDropped; return; }
+        if (result == DD_OK) {
+            result = IDirectDrawSurface7_GetFlipStatus(primary, DDGFS_ISFLIPDONE);
+            if (result == DD_OK) {
+                ++presenter->FlipDone;
+                if (!isOurWait && presenter->IsVsync && !presenter->IsFlipDriverTimed && ++presenter->FlipStreak >= 30)
+                    presenter->IsFlipOurWait = 1;
             } else {
-                if (hr == DDERR_WASSTILLDRAWING) ++pd->fl_pend;
-                pd->fl_streak = 0;
+                if (result == DDERR_WASSTILLDRAWING) ++presenter->FlipPending;
+                presenter->FlipStreak = 0;
             }
         }
     }
 }
 
 /* ---- public API --------------------------------------------------------- */
-int present_ddraw_init(present_ddraw *pd, HWND hwnd)
+INT PresentDdrawInitialize(PPRESENT_DDRAW presenter, HWND window)
 {
-    PFN_DDCREATEEX create; LPDIRECTDRAW7 dd = 0;
-    ZeroMemory(pd, sizeof *pd);
-    pd->hwnd = hwnd; pd->fs_w = 640; pd->fs_h = 480; pd->status_h = PRESENT_STATUS_H;
+    PFN_DIRECT_DRAW_CREATE_EX directDrawCreateEx; LPDIRECTDRAW7 directDraw = 0;
+    ZeroMemory(presenter, sizeof *presenter);
+    presenter->Window = window; presenter->FullscreenWidth = 640; presenter->FullscreenHeight = 480; presenter->StatusHeight = PRESENT_STATUS_HEIGHT;
     /* The struct was just zeroed, and zero is the WRONG default for exactly one of
        these: this host has always waited for vblank. The other three (nearest, fill
        the client, no scaler) are what it has always done, so zero is right. */
-    pd->vsync = 1;
-    pd->ddmod = LoadLibraryA("ddraw.dll");          /* for fullscreen (optional)   */
-    if (pd->ddmod) {
-        create = (PFN_DDCREATEEX)GetProcAddress(pd->ddmod, "DirectDrawCreateEx");
-        if (create && SUCCEEDED(create(NULL, (LPVOID *)&dd, &IID_IDirectDraw7_local, NULL))) {
-            pd->dd = dd;
-            IDirectDraw7_SetCooperativeLevel(DD, hwnd, DDSCL_NORMAL);
+    presenter->IsVsync = 1;
+    presenter->DirectDrawModule = LoadLibraryA("ddraw.dll");          /* for fullscreen (optional)   */
+    if (presenter->DirectDrawModule) {
+        directDrawCreateEx = (PFN_DIRECT_DRAW_CREATE_EX)GetProcAddress(presenter->DirectDrawModule, "DirectDrawCreateEx");
+        if (directDrawCreateEx && SUCCEEDED(directDrawCreateEx(NULL, (LPVOID *)&directDraw, &g_PresentIidDirectDraw7, NULL))) {
+            presenter->DirectDraw = directDraw;
+            IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, window, DDSCL_NORMAL);
         }
     }
     return 0;                                        /* windowed (GDI) always works */
 }
 
-void present_ddraw_shutdown(present_ddraw *pd)
+VOID PresentDdrawShutdown(PPRESENT_DDRAW presenter)
 {
-    mem_release(pd);                                /* #217 */
-    if (pd->fullscreen && pd->dd) { fs_teardown(pd); IDirectDraw7_RestoreDisplayMode(DD); }
-    if (pd->dd) { IDirectDraw7_Release(DD); pd->dd = 0; }
-    if (pd->ddmod) { FreeLibrary(pd->ddmod); pd->ddmod = 0; }
+    PresentMemoryRelease(presenter);                /* #217 */
+    if (presenter->IsFullscreen && presenter->DirectDraw) { PresentFullscreenTeardown(presenter); IDirectDraw7_RestoreDisplayMode(PRESENT_DIRECT_DRAW); }
+    if (presenter->DirectDraw) { IDirectDraw7_Release(PRESENT_DIRECT_DRAW); presenter->DirectDraw = 0; }
+    if (presenter->DirectDrawModule) { FreeLibrary(presenter->DirectDrawModule); presenter->DirectDrawModule = 0; }
 }
 
-int present_ddraw_set_fullscreen(present_ddraw *pd, int on)
+INT PresentDdrawSetFullscreen(PPRESENT_DDRAW presenter, INT isOn)
 {
-    if (on == pd->fullscreen) return 0;
+    if (isOn == presenter->IsFullscreen) return 0;
     /* ★ THE DEFAULT IS A BORDERLESS WINDOW, NOT AN EXCLUSIVE MODE. See the long note
-         over gdi_present: exclusive DirectDraw is where the blurring comes from. The
+         over PresentGdi: exclusive DirectDraw is where the blurring comes from. The
          caller has already made the window chromeless and screen-sized, so all that is
-         left to do is record the state and let gdi_present do what it does windowed --
+         left to do is record the state and let PresentGdi do what it does windowed --
          which the user has demonstrated is sharp. */
-    if (!pd->fs_use_ddraw) {
-        pd->fullscreen = on;
-        InvalidateRect(pd->hwnd, NULL, TRUE);
+    if (!presenter->IsFullscreenDirectDraw) {
+        presenter->IsFullscreen = isOn;
+        InvalidateRect(presenter->Window, NULL, TRUE);
         return 0;
     }
-    if (!pd->dd) return -1;                          /* no DirectDraw -> stay windowed */
-    if (on) {
-        if (FAILED(IDirectDraw7_SetCooperativeLevel(DD, pd->hwnd,
+    if (!presenter->DirectDraw) return -1;           /* no DirectDraw -> stay windowed */
+    if (isOn) {
+        if (FAILED(IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, presenter->Window,
                        DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN | DDSCL_ALLOWREBOOT))) return -1;
-        if (fs_setup(pd)) { IDirectDraw7_SetCooperativeLevel(DD, pd->hwnd, DDSCL_NORMAL); return -1; }
+        if (PresentFullscreenSetup(presenter)) { IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, presenter->Window, DDSCL_NORMAL); return -1; }
     } else {
-        fs_teardown(pd);
-        IDirectDraw7_RestoreDisplayMode(DD);
-        IDirectDraw7_SetCooperativeLevel(DD, pd->hwnd, DDSCL_NORMAL);
-        InvalidateRect(pd->hwnd, NULL, TRUE);
+        PresentFullscreenTeardown(presenter);
+        IDirectDraw7_RestoreDisplayMode(PRESENT_DIRECT_DRAW);
+        IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, presenter->Window, DDSCL_NORMAL);
+        InvalidateRect(presenter->Window, NULL, TRUE);
     }
-    pd->fullscreen = on;
+    presenter->IsFullscreen = isOn;
     return 0;
 }
 
 /* copy the live frame into the back-buffer (call under the bus lock). */
-void present_ddraw_snapshot(present_ddraw *pd, const NTVDD_FRAME *f)
+VOID PresentDdrawSnapshot(PPRESENT_DDRAW presenter, PCNTVDD_FRAME frame)
 {
-    int y;
-    if (!f || !f->Width || !f->Height || !f->Pixels || (f->BitsPerPixel != 8 && f->BitsPerPixel != 32)
-        || f->Width > NTVDD_FRAME_MAX_WIDTH || f->Height > NTVDD_FRAME_MAX_HEIGHT) {
-        pd->snap_valid = 0; return;
+    INT row;
+    if (!frame || !frame->Width || !frame->Height || !frame->Pixels || (frame->BitsPerPixel != 8 && frame->BitsPerPixel != 32)
+        || frame->Width > NTVDD_FRAME_MAX_WIDTH || frame->Height > NTVDD_FRAME_MAX_HEIGHT) {
+        presenter->IsSnapshotValid = 0; return;
     }
-    pd->snap_bpp = f->BitsPerPixel;
-    if (f->BitsPerPixel == 32) {
+    presenter->SnapshotBpp = frame->BitsPerPixel;
+    if (frame->BitsPerPixel == 32) {
         /* Direct colour: no palette is involved at all, and a split palette is
            meaningless here -- the pixels already carry their own colour. */
-        for (y = 0; y < (int)f->Height; ++y)
-            CopyMemory(pd->snap32 + (size_t)y * f->Width,
-                       f->Pixels + (size_t)y * f->Stride, (size_t)f->Width * 4);
-        pd->snap_split = 0;
-        pd->rowpal_y = -1;
-        pd->snap_w = f->Width; pd->snap_h = f->Height; pd->snap_valid = 1;
-        if (pd->tint) {                                  /* #229: per pixel, only here */
-            size_t i, n = (size_t)f->Width * f->Height;
-            for (i = 0; i < n; ++i) pd->snap32[i] = PresentTint(pd->snap32[i], pd->tint);
+        for (row = 0; row < (INT)frame->Height; ++row)
+            CopyMemory(presenter->Snapshot32 + (size_t)row * frame->Width,
+                       frame->Pixels + (size_t)row * frame->Stride, (size_t)frame->Width * 4);
+        presenter->IsSnapshotSplit = 0;
+        presenter->RowPaletteY = -1;
+        presenter->SnapshotWidth = frame->Width; presenter->SnapshotHeight = frame->Height; presenter->IsSnapshotValid = 1;
+        if (presenter->Tint) {                           /* #229: per pixel, only here */
+            size_t index, count = (size_t)frame->Width * frame->Height;
+            for (index = 0; index < count; ++index) presenter->Snapshot32[index] = PresentTint(presenter->Snapshot32[index], presenter->Tint);
         }
         return;
     }
-    for (y = 0; y < (int)f->Height; ++y)
-        CopyMemory(pd->snap + (size_t)y * f->Width, f->Pixels + (size_t)y * f->Stride, f->Width);
-    if (f->Palette) CopyMemory(pd->snap_pal, f->Palette, 256 * sizeof(uint32_t));
-    pd->snap_split = VddFrameHasSplit(f);
-    if (pd->snap_split) {
-        CopyMemory(pd->snap_pal_base,   f->PaletteBase,  256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_pal_split,  f->PaletteSplit, 256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_split_frame,f->SplitFrame,   256 * sizeof(uint32_t));
-        CopyMemory(pd->snap_split_row,  f->SplitRow,     256 * sizeof(uint16_t));
-        pd->snap_frame_no = f->FrameNumber;
+    for (row = 0; row < (INT)frame->Height; ++row)
+        CopyMemory(presenter->Snapshot + (size_t)row * frame->Width, frame->Pixels + (size_t)row * frame->Stride, frame->Width);
+    if (frame->Palette) CopyMemory(presenter->SnapshotPalette, frame->Palette, 256 * sizeof(UINT32));
+    presenter->IsSnapshotSplit = VddFrameHasSplit(frame);
+    if (presenter->IsSnapshotSplit) {
+        CopyMemory(presenter->SnapshotPaletteBase,   frame->PaletteBase,  256 * sizeof(UINT32));
+        CopyMemory(presenter->SnapshotPaletteSplit,  frame->PaletteSplit, 256 * sizeof(UINT32));
+        CopyMemory(presenter->SnapshotSplitFrame,frame->SplitFrame,   256 * sizeof(UINT32));
+        CopyMemory(presenter->SnapshotSplitRow,  frame->SplitRow,     256 * sizeof(WORD));
+        presenter->SnapshotFrameNumber = frame->FrameNumber;
     }
-    if (pd->tint) {                         /* #229: recolour the COLOURS, not the pixels */
-        int i;
-        for (i = 0; i < 256; ++i) {
-            pd->snap_pal[i] = PresentTint(pd->snap_pal[i], pd->tint);
-            if (pd->snap_split) {
-                pd->snap_pal_base[i]  = PresentTint(pd->snap_pal_base[i],  pd->tint);
-                pd->snap_pal_split[i] = PresentTint(pd->snap_pal_split[i], pd->tint);
+    if (presenter->Tint) {                  /* #229: recolour the COLOURS, not the pixels */
+        INT index;
+        for (index = 0; index < 256; ++index) {
+            presenter->SnapshotPalette[index] = PresentTint(presenter->SnapshotPalette[index], presenter->Tint);
+            if (presenter->IsSnapshotSplit) {
+                presenter->SnapshotPaletteBase[index]  = PresentTint(presenter->SnapshotPaletteBase[index],  presenter->Tint);
+                presenter->SnapshotPaletteSplit[index] = PresentTint(presenter->SnapshotPaletteSplit[index], presenter->Tint);
             }
         }
     }
-    pd->rowpal_y = -1;
-    pd->snap_w = f->Width; pd->snap_h = f->Height; pd->snap_valid = 1;
+    presenter->RowPaletteY = -1;
+    presenter->SnapshotWidth = frame->Width; presenter->SnapshotHeight = frame->Height; presenter->IsSnapshotValid = 1;
 }
 
 /* The palette for source row `y` of the snapshot: the single palette on an ordinary
    frame; on a raster-split frame the per-entry resolution of VddFramePaletteAt,
    computed once per row. */
-static const uint32_t *row_pal(present_ddraw *pd, int y)
+static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row)
 {
-    NTVDD_FRAME f; unsigned i;
-    if (!pd->snap_split) return pd->snap_pal;
-    if (pd->rowpal_y == y) return pd->rowpal;
-    f.Palette = pd->snap_pal; f.PaletteBase = pd->snap_pal_base;
-    f.PaletteSplit = pd->snap_pal_split; f.SplitRow = pd->snap_split_row;
-    f.SplitFrame = pd->snap_split_frame; f.FrameNumber = pd->snap_frame_no;
-    for (i = 0; i < 256; ++i) pd->rowpal[i] = VddFramePaletteAt(&f, (unsigned)y, i);
-    pd->rowpal_y = y;
-    return pd->rowpal;
+    NTVDD_FRAME frame; UINT index;
+    if (!presenter->IsSnapshotSplit) return presenter->SnapshotPalette;
+    if (presenter->RowPaletteY == row) return presenter->RowPalette;
+    frame.Palette = presenter->SnapshotPalette; frame.PaletteBase = presenter->SnapshotPaletteBase;
+    frame.PaletteSplit = presenter->SnapshotPaletteSplit; frame.SplitRow = presenter->SnapshotSplitRow;
+    frame.SplitFrame = presenter->SnapshotSplitFrame; frame.FrameNumber = presenter->SnapshotFrameNumber;
+    for (index = 0; index < 256; ++index) presenter->RowPalette[index] = VddFramePaletteAt(&frame, (UINT)row, index);
+    presenter->RowPaletteY = row;
+    return presenter->RowPalette;
 }
 
 /* blit the back-buffer to the screen, vsync'd (call outside the lock). */
-void present_ddraw_present(present_ddraw *pd)
+VOID PresentDdrawPresent(PPRESENT_DDRAW presenter)
 {
-    if (!pd->snap_valid) return;
+    if (!presenter->IsSnapshotValid) return;
     /* `back` is only non-NULL when the exclusive path actually set up, so this also
        covers "we asked for DirectDraw fullscreen and it refused" -- which must fall
        back to drawing something rather than to drawing nothing. */
-    LARGE_INTEGER f, t0, t1;
-    int fs = (pd->fullscreen && pd->dd && pd->back);
-    QueryPerformanceCounter(&t0);
-    if (fs) fs_present(pd);
-    else    gdi_present(pd);
-    QueryPerformanceCounter(&t1);
-    if (QueryPerformanceFrequency(&f) && f.QuadPart) {                  /* s84 */
-        unsigned long us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000) / f.QuadPart);
-        if (fs) { pd->pt_fs_n++;  pd->pt_fs_us  += us; if (us > pd->pt_fs_max)  pd->pt_fs_max  = us; }
-        else    { pd->pt_win_n++; pd->pt_win_us += us; if (us > pd->pt_win_max) pd->pt_win_max = us; }
+    LARGE_INTEGER frequency, start, end;
+    INT isFullscreen = (presenter->IsFullscreen && presenter->DirectDraw && presenter->Back);
+    QueryPerformanceCounter(&start);
+    if (isFullscreen) PresentFullscreen(presenter);
+    else    PresentGdi(presenter);
+    QueryPerformanceCounter(&end);
+    if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart) {  /* s84 */
+        ULONG elapsedUs = (ULONG)(((end.QuadPart - start.QuadPart) * 1000000) / frequency.QuadPart);
+        if (isFullscreen) { presenter->PresentFullscreenCount++;  presenter->PresentFullscreenUs  += elapsedUs; if (elapsedUs > presenter->PresentFullscreenMax)  presenter->PresentFullscreenMax  = elapsedUs; }
+        else    { presenter->PresentWindowCount++; presenter->PresentWindowUs += elapsedUs; if (elapsedUs > presenter->PresentWindowMax) presenter->PresentWindowMax = elapsedUs; }
     }
 }
 
-void present_ddraw_frame(present_ddraw *pd, const NTVDD_FRAME *f)
-{ present_ddraw_snapshot(pd, f); present_ddraw_present(pd); }
+VOID PresentDdrawFrame(PPRESENT_DDRAW presenter, PCNTVDD_FRAME frame)
+{ PresentDdrawSnapshot(presenter, frame); PresentDdrawPresent(presenter); }
 
 /* Save the current 8bpp snapshot as an indexed .bmp at `path`. This is OCCLUSION-PROOF
-   -- it serialises our own back-buffer (pd->snap + pd->snap_pal), not the on-screen
+   -- it serialises our own back-buffer (presenter->Snapshot + presenter->SnapshotPalette), not the on-screen
    pixels -- so the host can screenshot ITSELF for headless/remote visual validation:
    a graphical run (mode 13h, Skyroads, the PM demos) is verified by reading the .bmp
    off the SMB share instead of via VNC or a physical monitor (VNC capture is dead on
    the real box). Call on the UI thread (which owns snap) or under the bus lock.
    Returns 0 on success, <0 if there's nothing valid to save or the write failed. */
-static void st_le16(BYTE *p, unsigned v) { p[0]=(BYTE)v; p[1]=(BYTE)(v>>8); }
-static void st_le32(BYTE *p, DWORD v)    { p[0]=(BYTE)v; p[1]=(BYTE)(v>>8); p[2]=(BYTE)(v>>16); p[3]=(BYTE)(v>>24); }
+static VOID PresentStoreLe16(BYTE *bytes, UINT value) { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>8); }
+static VOID PresentStoreLe32(BYTE *bytes, DWORD value)    { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>8); bytes[2]=(BYTE)(value>>16); bytes[3]=(BYTE)(value>>24); }
 
-int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
+INT PresentDdrawSaveBmp(PPRESENT_DDRAW presenter, PCSTR path)
 {
-    int w = pd->snap_w, h = pd->snap_h, x, y;
-    DWORD rowb, imgsz, off, wr;
-    HANDLE hf;
-    BYTE fh[14], ih[40];
-    static BYTE pal[256 * 4];
-    static BYTE row[NTVDD_FRAME_MAX_WIDTH + 4];
+    INT width = presenter->SnapshotWidth, height = presenter->SnapshotHeight, column, row;
+    DWORD rowBytes, imageBytes, dataOffset, written;
+    HANDLE file;
+    BYTE fileHeader[14], infoHeader[40];
+    static BYTE palette[256 * 4];
+    static BYTE row8[NTVDD_FRAME_MAX_WIDTH + 4];
     /* 24bpp output is needed for a split palette AND for a direct-colour frame:
        neither can be described by one 256-entry BMP palette. */
-    int split = pd->snap_split || pd->snap_bpp == 32;
+    INT isTrueColour = presenter->IsSnapshotSplit || presenter->SnapshotBpp == 32;
     static BYTE row24[NTVDD_FRAME_MAX_WIDTH * 3 + 4];
     /* #325: any frame up to the maximum (720x400 text, VESA) -- this was 640x480. */
-    if (!pd->snap_valid || w <= 0 || h <= 0 || w > NTVDD_FRAME_MAX_WIDTH || h > NTVDD_FRAME_MAX_HEIGHT) return -1;
+    if (!presenter->IsSnapshotValid || width <= 0 || height <= 0 || width > NTVDD_FRAME_MAX_WIDTH || height > NTVDD_FRAME_MAX_HEIGHT) return -1;
     /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
        written as 24bpp with every row resolved. Ordinary frames stay 8bpp: the
        oracle tools compare palette INDICES and must keep them. */
-    rowb  = split ? (((DWORD)w * 3 + 3) & ~3u) : (((DWORD)w + 3) & ~3u);
-    imgsz = rowb * (DWORD)h;
-    off   = split ? 14 + 40 : 14 + 40 + 256 * 4;
+    rowBytes  = isTrueColour ? (((DWORD)width * 3 + 3) & ~3u) : (((DWORD)width + 3) & ~3u);
+    imageBytes = rowBytes * (DWORD)height;
+    dataOffset   = isTrueColour ? 14 + 40 : 14 + 40 + 256 * 4;
 
     /* BITMAPFILEHEADER */
-    fh[0] = 'B'; fh[1] = 'M';
-    st_le32(fh + 2, off + imgsz);               /* whole file size                   */
-    st_le16(fh + 6, 0); st_le16(fh + 8, 0);
-    st_le32(fh + 10, off);
+    fileHeader[0] = 'B'; fileHeader[1] = 'M';
+    PresentStoreLe32(fileHeader + 2, dataOffset + imageBytes);               /* whole file size                   */
+    PresentStoreLe16(fileHeader + 6, 0); PresentStoreLe16(fileHeader + 8, 0);
+    PresentStoreLe32(fileHeader + 10, dataOffset);
     /* BITMAPINFOHEADER (positive height -> bottom-up rows) */
-    st_le32(ih + 0, 40);
-    st_le32(ih + 4, (DWORD)w);  st_le32(ih + 8, (DWORD)h);
-    st_le16(ih + 12, 1);        st_le16(ih + 14, (WORD)(split ? 24 : 8)); /* 1 plane */
+    PresentStoreLe32(infoHeader + 0, 40);
+    PresentStoreLe32(infoHeader + 4, (DWORD)width);  PresentStoreLe32(infoHeader + 8, (DWORD)height);
+    PresentStoreLe16(infoHeader + 12, 1);        PresentStoreLe16(infoHeader + 14, (WORD)(isTrueColour ? 24 : 8)); /* 1 plane */
     /* `split` is computed by the caller as "needs 24bpp", which a direct-colour
        snapshot also does -- see the assignment below. */
-    st_le32(ih + 16, 0);        st_le32(ih + 20, imgsz);   /* BI_RGB                 */
-    st_le32(ih + 24, 2835);     st_le32(ih + 28, 2835);    /* ~72 dpi                */
-    st_le32(ih + 32, split ? 0 : 256); st_le32(ih + 36, 0); /* colours used          */
-    /* palette: snap_pal is 0xAARRGGBB -> RGBQUAD {B,G,R,0} */
-    for (x = 0; x < 256; ++x) {
-        uint32_t a = pd->snap_pal[x];
-        pal[x*4+0] = (BYTE)(a & 0xFF);
-        pal[x*4+1] = (BYTE)((a >> 8) & 0xFF);
-        pal[x*4+2] = (BYTE)((a >> 16) & 0xFF);
-        pal[x*4+3] = 0;
+    PresentStoreLe32(infoHeader + 16, 0);        PresentStoreLe32(infoHeader + 20, imageBytes);   /* BI_RGB                 */
+    PresentStoreLe32(infoHeader + 24, 2835);     PresentStoreLe32(infoHeader + 28, 2835);    /* ~72 dpi                */
+    PresentStoreLe32(infoHeader + 32, isTrueColour ? 0 : 256); PresentStoreLe32(infoHeader + 36, 0); /* colours used          */
+    /* palette: SnapshotPalette is 0xAARRGGBB -> RGBQUAD {B,G,R,0} */
+    for (column = 0; column < 256; ++column) {
+        UINT32 argb = presenter->SnapshotPalette[column];
+        palette[column*4+0] = (BYTE)(argb & 0xFF);
+        palette[column*4+1] = (BYTE)((argb >> 8) & 0xFF);
+        palette[column*4+2] = (BYTE)((argb >> 16) & 0xFF);
+        palette[column*4+3] = 0;
     }
-    hf = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hf == INVALID_HANDLE_VALUE) return -1;
-    WriteFile(hf, fh, 14, &wr, NULL);
-    WriteFile(hf, ih, 40, &wr, NULL);
-    if (!split) WriteFile(hf, pal, sizeof pal, &wr, NULL);
-    for (y = h - 1; y >= 0; --y) {              /* BMP is bottom-up                  */
-        if (split) {
-            for (x = 0; x < w; ++x) {
-                uint32_t a = snap_px(pd, y, x);
-                row24[x*3+0] = (BYTE)(a & 0xFF); row24[x*3+1] = (BYTE)((a >> 8) & 0xFF);
-                row24[x*3+2] = (BYTE)((a >> 16) & 0xFF);
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return -1;
+    WriteFile(file, fileHeader, 14, &written, NULL);
+    WriteFile(file, infoHeader, 40, &written, NULL);
+    if (!isTrueColour) WriteFile(file, palette, sizeof palette, &written, NULL);
+    for (row = height - 1; row >= 0; --row) {   /* BMP is bottom-up                  */
+        if (isTrueColour) {
+            for (column = 0; column < width; ++column) {
+                UINT32 argb = PresentSnapshotPixel(presenter, row, column);
+                row24[column*3+0] = (BYTE)(argb & 0xFF); row24[column*3+1] = (BYTE)((argb >> 8) & 0xFF);
+                row24[column*3+2] = (BYTE)((argb >> 16) & 0xFF);
             }
-            for (x = w * 3; x < (int)rowb; ++x) row24[x] = 0;
-            WriteFile(hf, row24, rowb, &wr, NULL);
+            for (column = width * 3; column < (INT)rowBytes; ++column) row24[column] = 0;
+            WriteFile(file, row24, rowBytes, &written, NULL);
             continue;
         }
-        for (x = 0; x < w; ++x) row[x] = pd->snap[(size_t)y * (size_t)w + (size_t)x];
-        for (x = w; x < (int)rowb; ++x) row[x] = 0;
-        WriteFile(hf, row, rowb, &wr, NULL);
+        for (column = 0; column < width; ++column) row8[column] = presenter->Snapshot[(size_t)row * (size_t)width + (size_t)column];
+        for (column = width; column < (INT)rowBytes; ++column) row8[column] = 0;
+        WriteFile(file, row8, rowBytes, &written, NULL);
     }
-    CloseHandle(hf);
+    CloseHandle(file);
     return 0;
 }
