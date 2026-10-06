@@ -12,7 +12,7 @@
  * network programs of the era (and LAN Manager / Novell NetBIOS clients) speak.
  *
  * SHAPE. The device owns the DOS side: it reads the 64-byte NCB at ES:BX, resolves its
- * buffer, hands a host-neutral netb_ncb to a BACKEND, and writes the answer back where
+ * buffer, hands a host-neutral NETBIOS_REQUEST to a BACKEND, and writes the answer back where
  * DOS keeps it (retcode, lsn, num, length, callname, cmd_cplt). The backend is the
  * host's (main.c: Win32 Netbios() in netapi32.dll); the off-VM test gives it a fake.
  *
@@ -25,54 +25,56 @@
  * (FFh while pending), with the POST routine called if one is given.
  * ⚠ THIS DEVICE COMPLETES A NO-WAIT COMMAND BEFORE RETURNING. The final answer is in
  *   the NCB by the time the program looks, which every polling program accepts. A POST
- *   routine is recorded (post_pending) and the HOST runs it as INT 5Ch returns: the
+ *   routine is recorded (IsPostPending) and the HOST runs it as INT 5Ch returns: the
  *   stub's IRET goes to the POST routine with ES:BX = the NCB, and its IRET to the
  *   caller -- as if the command had completed the instant it was issued.
  */
 #include "vdd_bus.h"
 
-#define NETB_NCB_SIZE   64
-#define NETB_ILLCMD     0x03      /* retcode: invalid command                    */
-#define NETB_ILLLANA    0x23      /* retcode: invalid adapter (lana) number      */
-#define NETB_BADBUF     0x01      /* retcode: illegal buffer length / address    */
-#define NETB_PENDING    0xFF
+#define NETB_NCB_SIZE              64
+#define NETB_RC_INVALID_COMMAND    0x03   /* retcode: invalid command                    */
+#define NETB_RC_INVALID_ADAPTER    0x23   /* retcode: invalid adapter (lana) number      */
+#define NETB_RC_INVALID_BUFFER     0x01   /* retcode: illegal buffer length / address    */
+#define NETB_RC_PENDING            0xFF
+#define NETB_NAME_SIZE             16
+#define NETB_DEVICE_NAME           "netbios"
 
-typedef struct {
-    uint8_t  command;              /* wait form: bit 7 stripped                   */
-    uint8_t  retcode, lsn, num;
-    uint8_t *buffer;               /* host address of the guest buffer, or NULL   */
-    uint16_t length;
-    uint8_t  callname[16], name[16];
-    uint8_t  rto, sto, lana;
-} netb_ncb;
+typedef struct _NETBIOS_REQUEST {
+    BYTE   Command;                /* wait form: bit 7 stripped                   */
+    BYTE   ReturnCode, LocalSession, NameNumber;
+    BYTE  *Buffer;                 /* host address of the guest buffer, or NULL   */
+    WORD   Length;
+    BYTE   CallName[NETB_NAME_SIZE], Name[NETB_NAME_SIZE];
+    BYTE   ReceiveTimeout, SendTimeout, Adapter;
+} NETBIOS_REQUEST, *PNETBIOS_REQUEST;
 
-/* The host's NetBIOS. Synchronous; returns the final retcode (also in n->retcode). */
-typedef uint8_t (*netb_submit_fn)(void *ctx, netb_ncb *n);
+/* The host's NetBIOS. Synchronous; returns the final retcode (also in request->ReturnCode). */
+typedef BYTE (*PNETBIOS_SUBMIT_ROUTINE)(PVOID context, PNETBIOS_REQUEST request);
 
-typedef struct net_state {
-    VDD_BUS       *bus;
-    netb_submit_fn submit;   void *ctx;
-    uint32_t calls, nowait, posts_owed, no_backend;
+typedef struct _NETBIOS_STATE {
+    PVDD_BUS       Bus;
+    PNETBIOS_SUBMIT_ROUTINE Submit;   PVOID SubmitContext;
+    UINT32 Calls, NoWaitCalls, PostsOwed, NoBackendCalls;
     /* s91: a no-wait command's POST routine, owed to the guest as soon as INT 5Ch
        returns. The HOST delivers it (it alone can edit the guest's return frame --
-       see v86_bios_bop) and clears post_pending; posts_owed counts the ones that
+       see v86_bios_bop) and clears IsPostPending; PostsOwed counts the ones that
        could not be delivered. */
-    int      post_pending;
-    uint16_t post_seg, post_off;
-    uint8_t  last_cmd, last_ret;
-} net_state;
+    INT    IsPostPending;
+    WORD   PostSegment, PostOffset;
+    BYTE   LastCommand, LastReturnCode;
+} NETBIOS_STATE, *PNETBIOS_STATE;
 
-int  vdd_net_init(VDD_BUS *b, void *self);
-void vdd_net_reset(void *self);
-void vdd_net_set_backend(net_state *st, netb_submit_fn fn, void *ctx);
+INT  VddNetBiosInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddNetBiosReset(_In_ PVOID context);
+VOID VddNetBiosSetBackend(_Inout_ PNETBIOS_STATE state, _In_opt_ PNETBIOS_SUBMIT_ROUTINE submitRoutine, _In_opt_ PVOID context);
 
 /* The whole INT 5Ch service on an NCB already mapped to host memory: exposed for the
-   off-VM test. `buf` = the NCB's buffer resolved by the caller (NULL if none).
+   off-VM test. `buffer` = the NCB's buffer resolved by the caller (NULL if none).
    Returns AL. */
-uint8_t vdd_net_service(net_state *st, uint8_t *ncb, uint8_t *buf);
+BYTE VddNetBiosService(_Inout_ PNETBIOS_STATE state, _Inout_updates_(NETB_NCB_SIZE) BYTE *ncb, _In_opt_ BYTE *buffer);
 
-static inline NTVDD_DEVICE vdd_net_device(net_state *st)
-{ NTVDD_DEVICE d; d.Name = "netbios"; d.Initialize = vdd_net_init; d.Reset = vdd_net_reset;
-  d.Shutdown = 0; d.Context = st; return d; }
+static inline NTVDD_DEVICE VddNetBiosDevice(_In_ PNETBIOS_STATE state)
+{ NTVDD_DEVICE device; device.Name = NETB_DEVICE_NAME; device.Initialize = VddNetBiosInitialize; device.Reset = VddNetBiosReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 #endif /* NTVDMEX_VDD_NET_H */

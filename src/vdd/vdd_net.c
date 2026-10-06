@@ -4,65 +4,100 @@
 #include "vdd_net.h"
 #include <string.h>
 
-uint8_t vdd_net_service(net_state *st, uint8_t *ncb, uint8_t *buf)
+/* The DOS NCB's layout (see vdd_net.h). */
+#define NETB_NCB_COMMAND           0x00
+#define NETB_NCB_RETCODE           0x01
+#define NETB_NCB_LSN               0x02
+#define NETB_NCB_NUM               0x03
+#define NETB_NCB_BUFFER_OFFSET     0x04
+#define NETB_NCB_BUFFER_SEGMENT    0x06
+#define NETB_NCB_LENGTH            0x08
+#define NETB_NCB_CALLNAME          0x0A
+#define NETB_NCB_NAME              0x1A
+#define NETB_NCB_RTO               0x2A
+#define NETB_NCB_STO               0x2B
+#define NETB_NCB_POST_OFFSET       0x2C
+#define NETB_NCB_POST_SEGMENT      0x2E
+#define NETB_NCB_LANA              0x30
+#define NETB_NCB_CMD_CPLT          0x31
+#define NETB_HIGH_BYTE             1      /* a little-endian word's second byte       */
+#define NETB_BYTE_SHIFT            8
+#define NETB_NO_WAIT_BIT           0x80   /* command bit 7: no-wait form              */
+#define NETB_COMMAND_MASK          0x7F
+#define NETB_IMMEDIATE_ACCEPTED    0      /* AL for a no-wait command that was taken  */
+
+/* The interrupts and INT 2Ah's functions. */
+#define NETB_INT_NETBIOS           0x5C
+#define NETB_INT_NETWORK           0x2A
+#define NETB_2A_INSTALLATION_CHECK 0x00
+#define NETB_2A_EXECUTE_RETRY      0x01
+#define NETB_2A_EXECUTE            0x04
+#define NETB_2A_INSTALLED          0x01   /* AH from the installation check           */
+#define NETB_2A_NOT_INSTALLED      0x00
+#define NETB_2A_ERROR              0x01   /* AH after an execute: 01h error, 00h ok   */
+#define NETB_2A_SUCCESS            0x00
+#define NETB_OK                    0
+#define NETB_FAILED                (-1)
+
+BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
 {
-    netb_ncb n;
-    uint8_t cmd = ncb[0], ret;
-    int nowait = (cmd & 0x80) != 0;
-    ++st->calls;
-    memset(&n, 0, sizeof n);
-    n.command = (uint8_t)(cmd & 0x7F);
-    n.lsn     = ncb[2];
-    n.num     = ncb[3];
-    n.buffer  = buf;
-    n.length  = (uint16_t)(ncb[8] | (ncb[9] << 8));
-    memcpy(n.callname, ncb + 0x0A, 16);
-    memcpy(n.name,     ncb + 0x1A, 16);
-    n.rto  = ncb[0x2A];
-    n.sto  = ncb[0x2B];
-    n.lana = ncb[0x30];
-    if (!st->submit) {
+    NETBIOS_REQUEST request;
+    BYTE command = ncb[NETB_NCB_COMMAND], returnCode;
+    INT isNoWait = (command & NETB_NO_WAIT_BIT) != 0;
+    ++state->Calls;
+    memset(&request, 0, sizeof request);
+    request.Command = (BYTE)(command & NETB_COMMAND_MASK);
+    request.LocalSession     = ncb[NETB_NCB_LSN];
+    request.NameNumber     = ncb[NETB_NCB_NUM];
+    request.Buffer  = buffer;
+    request.Length  = (WORD)(ncb[NETB_NCB_LENGTH] | (ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+    memcpy(request.CallName, ncb + NETB_NCB_CALLNAME, NETB_NAME_SIZE);
+    memcpy(request.Name,     ncb + NETB_NCB_NAME, NETB_NAME_SIZE);
+    request.ReceiveTimeout  = ncb[NETB_NCB_RTO];
+    request.SendTimeout  = ncb[NETB_NCB_STO];
+    request.Adapter = ncb[NETB_NCB_LANA];
+    if (!state->Submit) {
         /* No NetBIOS on this host at all: the answer a NetBIOS-less adapter
            number gets, so a program's presence test sees an error, not silence. */
-        ++st->no_backend;
-        ret = NETB_ILLLANA;
+        ++state->NoBackendCalls;
+        returnCode = NETB_RC_INVALID_ADAPTER;
     } else {
-        ret = st->submit(st->ctx, &n);
+        returnCode = state->Submit(state->SubmitContext, &request);
     }
-    ncb[1] = ret;
-    ncb[2] = n.lsn;
-    ncb[3] = n.num;
-    ncb[8] = (uint8_t)n.length; ncb[9] = (uint8_t)(n.length >> 8);
+    ncb[NETB_NCB_RETCODE] = returnCode;
+    ncb[NETB_NCB_LSN] = request.LocalSession;
+    ncb[NETB_NCB_NUM] = request.NameNumber;
+    ncb[NETB_NCB_LENGTH] = (BYTE)request.Length; ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] = (BYTE)(request.Length >> NETB_BYTE_SHIFT);
     /* CALL/LISTEN/RECEIVE ANY report the far end's name in callname */
-    memcpy(ncb + 0x0A, n.callname, 16);
-    ncb[0x31] = ret;                       /* cmd_cplt: complete */
-    st->last_cmd = cmd; st->last_ret = ret;
-    if (nowait) {
-        ++st->nowait;
-        if (ncb[0x2C] | ncb[0x2D] | ncb[0x2E] | ncb[0x2F]) {
-            st->post_off = (uint16_t)(ncb[0x2C] | (ncb[0x2D] << 8));
-            st->post_seg = (uint16_t)(ncb[0x2E] | (ncb[0x2F] << 8));
-            if (st->post_pending) ++st->posts_owed;   /* the previous one was never run */
-            st->post_pending = 1;
+    memcpy(ncb + NETB_NCB_CALLNAME, request.CallName, NETB_NAME_SIZE);
+    ncb[NETB_NCB_CMD_CPLT] = returnCode;                       /* cmd_cplt: complete */
+    state->LastCommand = command; state->LastReturnCode = returnCode;
+    if (isNoWait) {
+        ++state->NoWaitCalls;
+        if (ncb[NETB_NCB_POST_OFFSET] | ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] | ncb[NETB_NCB_POST_SEGMENT] | ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE]) {
+            state->PostOffset = (WORD)(ncb[NETB_NCB_POST_OFFSET] | (ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+            state->PostSegment = (WORD)(ncb[NETB_NCB_POST_SEGMENT] | (ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+            if (state->IsPostPending) ++state->PostsOwed;   /* the previous one was never run */
+            state->IsPostPending = TRUE;
         }
         /* the immediate code: accepted. A command refused outright (invalid
            command / adapter) is refused immediately as well. */
-        return (ret == NETB_ILLCMD || ret == NETB_ILLLANA) ? ret : 0;
+        return (returnCode == NETB_RC_INVALID_COMMAND || returnCode == NETB_RC_INVALID_ADAPTER) ? returnCode : NETB_IMMEDIATE_ACCEPTED;
     }
-    return ret;
+    return returnCode;
 }
 
-static void net_int5c(void *self, NTVDD_REGISTERS *r)
+static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
 {
-    net_state *st = (net_state *)self;
-    uint8_t *ncb = (uint8_t *)VddMapFlat(st->bus, r->Es, VddGetBx(r));
-    uint8_t *buf = NULL;
-    uint16_t boff, bseg;
-    if (!ncb) { VddSetAl(r, NETB_BADBUF); return; }
-    boff = (uint16_t)(ncb[4] | (ncb[5] << 8));
-    bseg = (uint16_t)(ncb[6] | (ncb[7] << 8));
-    if (boff | bseg) buf = (uint8_t *)VddMapFlat(st->bus, bseg, boff);
-    VddSetAl(r, vdd_net_service(st, ncb, buf));
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+    BYTE *ncb = (BYTE *)VddMapFlat(state->Bus, registers->Es, VddGetBx(registers));
+    BYTE *buffer = NULL;
+    WORD bufferOffset, bufferSegment;
+    if (!ncb) { VddSetAl(registers, NETB_RC_INVALID_BUFFER); return; }
+    bufferOffset = (WORD)(ncb[NETB_NCB_BUFFER_OFFSET] | (ncb[NETB_NCB_BUFFER_OFFSET + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+    bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+    if (bufferOffset | bufferSegment) buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
+    VddSetAl(registers, VddNetBiosService(state, ncb, buffer));
 }
 
 /* INT 2Ah, the network/critical-section interface (Microsoft Networks):
@@ -72,33 +107,33 @@ static void net_int5c(void *self, NTVDD_REGISTERS *r)
             01h error
      AH=80h/81h/82h begin/end critical section, end all: nothing to serialise here
    Anything else returns with the registers as they came. */
-static void net_int2a(void *self, NTVDD_REGISTERS *r)
+static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
 {
-    net_state *st = (net_state *)self;
-    switch (VddGetAh(r)) {
-    case 0x00:
-        VddSetAh(r, st->submit ? 0x01 : 0x00);
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+    switch (VddGetAh(registers)) {
+    case NETB_2A_INSTALLATION_CHECK:
+        VddSetAh(registers, state->Submit ? NETB_2A_INSTALLED : NETB_2A_NOT_INSTALLED);
         break;
-    case 0x01: case 0x04: {
-        uint8_t ret;
-        net_int5c(self, r);
-        ret = VddGetAl(r);
-        VddSetAh(r, ret ? 0x01 : 0x00);
+    case NETB_2A_EXECUTE_RETRY: case NETB_2A_EXECUTE: {
+        BYTE returnCode;
+        VddNetBiosInt5C(context, registers);
+        returnCode = VddGetAl(registers);
+        VddSetAh(registers, returnCode ? NETB_2A_ERROR : NETB_2A_SUCCESS);
         break; }
     default:
         break;
     }
 }
 
-int vdd_net_init(VDD_BUS *b, void *self)
+INT VddNetBiosInitialize(PVDD_BUS bus, PVOID context)
 {
-    net_state *st = (net_state *)self;
-    st->bus = b;
-    if (VddClaimInterrupt(b, 0x5C, net_int5c, st) != 0) return -1;
-    return VddClaimInterrupt(b, 0x2A, net_int2a, st) != 0 ? -1 : 0;
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+    state->Bus = bus;
+    if (VddClaimInterrupt(bus, NETB_INT_NETBIOS, VddNetBiosInt5C, state) != NETB_OK) return NETB_FAILED;
+    return VddClaimInterrupt(bus, NETB_INT_NETWORK, VddNetBiosInt2A, state) != NETB_OK ? NETB_FAILED : NETB_OK;
 }
 
-void vdd_net_reset(void *self) { (void)self; }
+VOID VddNetBiosReset(PVOID context) { (VOID)context; }
 
-void vdd_net_set_backend(net_state *st, netb_submit_fn fn, void *ctx)
-{ st->submit = fn; st->ctx = ctx; }
+VOID VddNetBiosSetBackend(PNETBIOS_STATE state, PNETBIOS_SUBMIT_ROUTINE submitRoutine, PVOID context)
+{ state->Submit = submitRoutine; state->SubmitContext = context; }

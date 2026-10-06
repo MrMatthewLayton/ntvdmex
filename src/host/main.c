@@ -981,7 +981,7 @@ static int strstr_nocase(const char *blk, const char *name)
 }
 static mpu_state    g_mpu;       static NTVDD_DEVICE g_mpu_dev;
 static comm_state   g_comm;      static NTVDD_DEVICE g_comm_dev;   /* GH #9 */
-static net_state    g_net;       static NTVDD_DEVICE g_net_dev;    /* GH #8 (s91) */
+static NETBIOS_STATE    g_net;       static NTVDD_DEVICE g_net_dev;    /* GH #8 (s91) */
 static uint8_t      g_genstub_vec[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
 
 /* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
@@ -998,7 +998,7 @@ typedef UCHAR (APIENTRY *netbios_fn)(PNCB);
 static netbios_fn g_netbios;
 static LANA_ENUM  g_net_lanas;
 static BYTE       g_net_ready[MAX_LANA + 1];
-static uint8_t net_submit(void *ctx, netb_ncb *n)
+static uint8_t net_submit(void *ctx, NETBIOS_REQUEST *n)
 {
     NCB w;
     UCHAR lana;
@@ -1017,36 +1017,36 @@ static uint8_t net_submit(void *ctx, netb_ncb *n)
         w.ncb_length  = sizeof g_net_lanas;
         if (g_netbios(&w) != NRC_GOODRET) g_net_lanas.length = 0;
     }
-    if (n->lana >= g_net_lanas.length) { n->retcode = NRC_BRIDGE; return NRC_BRIDGE; }
-    lana = g_net_lanas.lana[n->lana];
-    if (n->command != NCBRESET && !g_net_ready[lana]) {
+    if (n->Adapter >= g_net_lanas.length) { n->ReturnCode = NRC_BRIDGE; return NRC_BRIDGE; }
+    lana = g_net_lanas.lana[n->Adapter];
+    if (n->Command != NCBRESET && !g_net_ready[lana]) {
         ZeroMemory(&w, sizeof w);
         w.ncb_command = NCBRESET;
         w.ncb_lana_num = lana;
         if (g_netbios(&w) == NRC_GOODRET) g_net_ready[lana] = 1;
     }
     ZeroMemory(&w, sizeof w);
-    w.ncb_command  = n->command;
-    w.ncb_lsn      = n->lsn;
-    w.ncb_num      = n->num;
-    w.ncb_buffer   = n->buffer;
-    w.ncb_length   = n->length;
-    memcpy(w.ncb_callname, n->callname, 16);
-    memcpy(w.ncb_name, n->name, 16);
-    w.ncb_rto      = n->rto;
-    w.ncb_sto      = n->sto;
+    w.ncb_command  = n->Command;
+    w.ncb_lsn      = n->LocalSession;
+    w.ncb_num      = n->NameNumber;
+    w.ncb_buffer   = n->Buffer;
+    w.ncb_length   = n->Length;
+    memcpy(w.ncb_callname, n->CallName, 16);
+    memcpy(w.ncb_name, n->Name, 16);
+    w.ncb_rto      = n->ReceiveTimeout;
+    w.ncb_sto      = n->SendTimeout;
     w.ncb_lana_num = lana;
-    if (n->command == NCBRESET) {
+    if (n->Command == NCBRESET) {
         /* DOS: lsn = sessions, num = names (0 = default). Win32 reads them from
            callname[0..1] -- and [2] nonzero asks for the first name number too. */
-        w.ncb_callname[0] = n->lsn; w.ncb_callname[1] = n->num; w.ncb_callname[2] = 0;
+        w.ncb_callname[0] = n->LocalSession; w.ncb_callname[1] = n->NameNumber; w.ncb_callname[2] = 0;
         w.ncb_lsn = 0; w.ncb_num = 0;
     }
-    n->retcode = g_netbios(&w);
-    if (n->command == NCBRESET && n->retcode == NRC_GOODRET) g_net_ready[lana] = 1;
-    n->lsn = w.ncb_lsn; n->num = w.ncb_num; n->length = w.ncb_length;
-    memcpy(n->callname, w.ncb_callname, 16);
-    return n->retcode;
+    n->ReturnCode = g_netbios(&w);
+    if (n->Command == NCBRESET && n->ReturnCode == NRC_GOODRET) g_net_ready[lana] = 1;
+    n->LocalSession = w.ncb_lsn; n->NameNumber = w.ncb_num; n->Length = w.ncb_length;
+    memcpy(n->CallName, w.ncb_callname, 16);
+    return n->ReturnCode;
 }
 /* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
      0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
@@ -29102,14 +29102,14 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
            the guest's stack, below the caller's, so the stub's IRET enters POST with
            ES:BX = the NCB and POST's own IRET returns to the caller. FLAGS = the
            caller's with IF clear, as a hardware interrupt would enter it. */
-        if (g_net.post_pending) {
+        if (g_net.IsPostPending) {
             DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
             volatile WORD *fr = (volatile WORD *)(ULONG_PTR)((ss << 4) + sp);
             WORD fl = fr[2];
             WORD nsp = (WORD)(sp - 6);
             volatile WORD *nf = (volatile WORD *)(ULONG_PTR)((ss << 4) + nsp);
-            g_net.post_pending = 0;
-            nf[0] = g_net.post_off; nf[1] = g_net.post_seg; nf[2] = (WORD)(fl & ~0x0200);
+            g_net.IsPostPending = 0;
+            nf[0] = g_net.PostOffset; nf[1] = g_net.PostSegment; nf[2] = (WORD)(fl & ~0x0200);
             VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | nsp;
         }
         V86BOP_RET(V86BOP_DONE);
@@ -32100,8 +32100,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
       g_comm_dev = vdd_comm_device(&g_comm);
       VddBusAdd(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
-    vdd_net_set_backend(&g_net, net_submit, NULL);
-    g_net_dev = vdd_net_device(&g_net);
+    VddNetBiosSetBackend(&g_net, net_submit, NULL);
+    g_net_dev = VddNetBiosDevice(&g_net);
     VddBusAdd(&g_bus, &g_net_dev);             /* GH #8: NetBIOS, INT 5Ch       */
     { volatile WORD *bda = (volatile WORD *)(ULONG_PTR)0x400;
       /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
