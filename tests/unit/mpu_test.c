@@ -21,7 +21,7 @@ static int total = 0, fails = 0;
 
 static uint8_t g_flat[0x10000];
 static VDD_BUS bus;
-static mpu_state mpu;
+static MPU_STATE mpu;
 
 #define CAP 32
 static uint32_t g_msg[CAP];
@@ -45,19 +45,19 @@ int main(void)
     printf("== sound epic: MPU-401 MIDI battery ==\n");
 
     memset(&mpu, 0, sizeof mpu);
-    mpu.sink = sink;
+    mpu.Sink = sink;
     VddBusInitialize(&bus, g_flat);
-    { NTVDD_DEVICE d = vdd_mpu_device(&mpu); CHECK(VddBusAdd(&bus, &d) == 0, "add: mpu401 ok"); }
+    { NTVDD_DEVICE d = VddMpuDevice(&mpu); CHECK(VddBusAdd(&bus, &d) == 0, "add: mpu401 ok"); }
 
     /* T1: the handshake ----------------------------------------------------- */
-    CHECK((rd(BASE + 1) & MPU_ST_DSR) != 0, "status: DSR set (active low) => no data waiting");
+    CHECK((rd(BASE + 1) & MPU_STATUS_DSR) != 0, "status: DSR set (active low) => no data waiting");
     wr(BASE + 1, 0xFF);                                   /* reset               */
-    CHECK((rd(BASE + 1) & MPU_ST_DSR) == 0, "status: DSR CLEAR once the ACK is queued");
+    CHECK((rd(BASE + 1) & MPU_STATUS_DSR) == 0, "status: DSR CLEAR once the ACK is queued");
     CHECK(rd(BASE) == MPU_ACK, "reset: acknowledges with 0xFE");
     wr(BASE + 1, 0x3F);                                   /* enter UART mode     */
     CHECK(rd(BASE) == MPU_ACK, "uart: acknowledges with 0xFE");
-    CHECK(mpu.uart_mode == 1, "uart: mode entered");
-    CHECK((rd(BASE + 1) & MPU_ST_DRR) == 0, "status: DRR clear => ready to accept data");
+    CHECK(mpu.IsUartMode == 1, "uart: mode entered");
+    CHECK((rd(BASE + 1) & MPU_STATUS_DRR) == 0, "status: DRR clear => ready to accept data");
 
     /* T2: a plain note-on --------------------------------------------------- */
     g_nmsg = 0;
@@ -113,10 +113,10 @@ int main(void)
     wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
     CHECK(g_nmsg == 0, "sysex, no sink: an embedded status byte is swallowed (unchanged)");
     wr(BASE, 0xF7);
-    CHECK(mpu.sysex_sent == 0 && mpu.sysex_dropped == 0, "sysex, no sink: nothing counted");
+    CHECK(mpu.SysExSent == 0 && mpu.SysExDropped == 0, "sysex, no sink: nothing counted");
 
     /* T6c (#136): an attached sink gets each COMPLETE message, F0..F7 inclusive. */
-    mpu.sysex_sink = sx_sink;
+    mpu.SysExSink = sx_sink;
     g_nsx = 0; g_nmsg = 0;
     {   static const uint8_t DT1[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x01,
                                        0x02, 0x6D, 0xF7 };
@@ -134,29 +134,29 @@ int main(void)
           "sysex sink: ...and the SysEx around it stays intact");
     /* a status byte ends an unterminated SysEx: dropped, counted, then handled */
     g_nsx = 0; g_nmsg = 0;
-    {   uint32_t d0 = mpu.sysex_dropped;
+    {   uint32_t d0 = mpu.SysExDropped;
         wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
-        CHECK(g_nsx == 0 && mpu.sysex_dropped == d0 + 1, "sysex sink: unterminated message dropped");
+        CHECK(g_nsx == 0 && mpu.SysExDropped == d0 + 1, "sysex sink: unterminated message dropped");
         CHECK(g_nmsg == 1 && g_msg[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
               "sysex sink: the status byte that ended it is a note-on");
     }
     /* longer than MPU_SYSEX_MAX: dropped whole, never truncated */
     g_nsx = 0;
-    {   uint32_t d0 = mpu.sysex_dropped; unsigned k;
+    {   uint32_t d0 = mpu.SysExDropped; unsigned k;
         wr(BASE, 0xF0);
         for (k = 0; k < MPU_SYSEX_MAX + 10; ++k) wr(BASE, 0x11);
         wr(BASE, 0xF7);
-        CHECK(g_nsx == 0 && mpu.sysex_dropped == d0 + 1, "sysex sink: oversize message dropped, not cut");
+        CHECK(g_nsx == 0 && mpu.SysExDropped == d0 + 1, "sysex sink: oversize message dropped, not cut");
         wr(BASE, 0xF0); wr(BASE, 0x7E); wr(BASE, 0xF7);
         CHECK(g_nsx == 1 && g_sxlen == 3, "sysex sink: the next message is fine");
     }
     /* reset keeps the sink, like the short-message sink */
-    vdd_mpu_reset(&mpu);
-    CHECK(mpu.sysex_sink == sx_sink && mpu.sink == sink, "reset: both sinks preserved");
-    mpu.sysex_sink = NULL;
+    VddMpuReset(&mpu);
+    CHECK(mpu.SysExSink == sx_sink && mpu.Sink == sink, "reset: both sinks preserved");
+    mpu.SysExSink = NULL;
 
     /* T7: data before UART mode goes nowhere --------------------------------- */
-    vdd_mpu_reset(&mpu);
+    VddMpuReset(&mpu);
     g_nmsg = 0;
     wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
     CHECK(g_nmsg == 0, "not in UART mode: data bytes are ignored");

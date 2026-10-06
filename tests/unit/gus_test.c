@@ -6,7 +6,7 @@
  * FIFO, looping, the volume curve against the SDK's own linear table, a ramp, the 2XB
  * lock-out, a DMA upload through the 8237, and timer 1.
  * #190 (T10-T17): the latches DRIVE the lines and channels they select, the 6850 UART
- * (to a byte sink, and through vdd_mpu_feed to a message), 2XF banks 5/6, 2X0's driver
+ * (to a byte sink, and through VddMpuFeed to a message), 2XF banks 5/6, 2X0's driver
  * power and line-out mute, card -> PC DRAM reads, and the record path's paced silence.
  */
 #include <stdio.h>
@@ -30,11 +30,11 @@ static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_count++; g_irq_l
    whose sink is "the synth". */
 static uint8_t   g_tx[64];
 static int       gus_test_captured;
-static mpu_state g_asm;
+static MPU_STATE g_asm;
 static uint32_t  g_msg; static int g_nmsg;
 static void msg_sink(void *ctx, uint32_t m) { (void)ctx; g_msg = m; g_nmsg++; }
 static void gus_test_capture(void *ctx, uint8_t b)
-{ (void)ctx; if (gus_test_captured < 64) g_tx[gus_test_captured] = b; gus_test_captured++; vdd_mpu_feed(&g_asm, b); }
+{ (void)ctx; if (gus_test_captured < 64) g_tx[gus_test_captured] = b; gus_test_captured++; VddMpuFeed(&g_asm, b); }
 
 #define B 0x240
 static void wr(uint16_t p, uint8_t v) { uint32_t x = v; VddBusIo(&bus, p, 1, 0, &x); }
@@ -225,7 +225,7 @@ int main(void)
     wr(B + 0x009, 0x00); wr(B + 0x009, 0x80); reg8(0x45, 0x00);
 
     /* ---- T11: the MIDI UART (ref §9) ---- */
-    {   memset(&g_asm, 0, sizeof g_asm); g_asm.sink = msg_sink;
+    {   memset(&g_asm, 0, sizeof g_asm); g_asm.Sink = msg_sink;
         gus.midi_sink = 0;
         wr(B + 0x100, 0x03);                                   /* master reset */
         CHECK(rd(B + 0x100) == GUS_ACIA_TDRE, "6850 after master reset: transmitter empty, nothing else");

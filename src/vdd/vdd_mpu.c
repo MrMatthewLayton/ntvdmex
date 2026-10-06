@@ -1,67 +1,95 @@
 /* vdd_mpu.c -- see vdd_mpu.h.  MPU-401 UART-mode MIDI, on the VDD bus.
- * Pure C, no <windows.h>. */
+ * No Windows calls, only Windows types. */
 #include "vdd_mpu.h"
 
-static void mpu_inq_push(mpu_state *st, uint8_t v)
+#define MPU_EMPTY_QUEUE          0xFF   /* the data port with nothing waiting           */
+#define MPU_HIGH_NIBBLE          0xF0
+#define MPU_PROGRAM_CHANGE       0xC0   /* channel messages, by their high nibble        */
+#define MPU_CHANNEL_PRESSURE     0xD0
+#define MPU_NOTE_OFF             0x80
+#define MPU_NOTE_ON              0x90
+#define MPU_KEY_PRESSURE         0xA0
+#define MPU_CONTROL_CHANGE       0xB0
+#define MPU_PITCH_BEND           0xE0
+#define MPU_TIME_CODE            0xF1   /* system common                                 */
+#define MPU_SONG_POSITION        0xF2
+#define MPU_SONG_SELECT          0xF3
+#define MPU_ONE_DATA_BYTE        1
+#define MPU_TWO_DATA_BYTES       2
+#define MPU_NO_DATA_BYTES        0
+#define MPU_DATA1_SHIFT          8      /* midiOutShortMsg: status | data1<<8 | data2<<16 */
+#define MPU_DATA2_SHIFT          16
+#define MPU_SYSEX_START          0xF0
+#define MPU_SYSEX_END            0xF7
+#define MPU_REALTIME_FIRST       0xF8   /* F8h-FFh: realtime, standalone                 */
+#define MPU_STATUS_BIT           0x80   /* a byte with bit 7 set is a status byte       */
+#define MPU_COMMAND_RESET        0xFF
+#define MPU_COMMAND_UART_MODE    0x3F
+#define MPU_COMMAND_PORT_OFFSET  1      /* base+1: status (read) / command (write)      */
+#define MPU_STATUS_DATA_WAITING  0x00   /* DSR clear: a byte is waiting                  */
+#define MPU_OK                   0
+#define MPU_FAILED               (-1)
+
+static VOID MpuInputQueuePush(PMPU_STATE state, BYTE value)
 {
-    if (st->inq_len >= MPU_INQ_MAX) return;
-    st->inq[(st->inq_head + st->inq_len) % MPU_INQ_MAX] = v;
-    st->inq_len++;
+    if (state->InputQueueLength >= MPU_INPUT_QUEUE_SIZE) return;
+    state->InputQueue[(state->InputQueueHead + state->InputQueueLength) % MPU_INPUT_QUEUE_SIZE] = value;
+    state->InputQueueLength++;
 }
-static uint8_t mpu_inq_pop(mpu_state *st)
+static BYTE MpuInputQueuePop(PMPU_STATE state)
 {
-    uint8_t v;
-    if (!st->inq_len) return 0xFF;
-    v = st->inq[st->inq_head];
-    st->inq_head = (uint8_t)((st->inq_head + 1) % MPU_INQ_MAX);
-    st->inq_len--;
-    return v;
+    BYTE value;
+    if (!state->InputQueueLength) return MPU_EMPTY_QUEUE;
+    value = state->InputQueue[state->InputQueueHead];
+    state->InputQueueHead = (BYTE)((state->InputQueueHead + 1) % MPU_INPUT_QUEUE_SIZE);
+    state->InputQueueLength--;
+    return value;
 }
 
 /* How many data bytes follow a status byte. Program change and channel pressure
    take one; everything else in the channel range takes two. */
-static uint8_t mpu_data_len(uint8_t status)
+static BYTE MpuDataLength(BYTE status)
 {
-    switch (status & 0xF0) {
-    case 0xC0: case 0xD0: return 1;
-    case 0x80: case 0x90: case 0xA0: case 0xB0: case 0xE0: return 2;
+    switch (status & MPU_HIGH_NIBBLE) {
+    case MPU_PROGRAM_CHANGE: case MPU_CHANNEL_PRESSURE: return MPU_ONE_DATA_BYTE;
+    case MPU_NOTE_OFF: case MPU_NOTE_ON: case MPU_KEY_PRESSURE: case MPU_CONTROL_CHANGE: case MPU_PITCH_BEND: return MPU_TWO_DATA_BYTES;
     default: break;
     }
     switch (status) {                           /* system common                   */
-    case 0xF1: case 0xF3: return 1;
-    case 0xF2: return 2;
-    default: return 0;                          /* realtime / undefined            */
+    case MPU_TIME_CODE: case MPU_SONG_SELECT: return MPU_ONE_DATA_BYTE;
+    case MPU_SONG_POSITION: return MPU_TWO_DATA_BYTES;
+    default: return MPU_NO_DATA_BYTES;          /* realtime / undefined            */
     }
 }
 
-static void mpu_emit(mpu_state *st)
+static VOID MpuEmit(PMPU_STATE state)
 {
-    uint32_t msg = (uint32_t)st->status
-                 | ((uint32_t)st->data[0] << 8)
-                 | ((uint32_t)st->data[1] << 16);
-    st->sent++;
-    if (st->sink) st->sink(st->sink_ctx, msg);
+    UINT32 message = (UINT32)state->Status
+                 | ((UINT32)state->Data[0] << MPU_DATA1_SHIFT)
+                 | ((UINT32)state->Data[1] << MPU_DATA2_SHIFT);
+    state->MessagesSent++;
+    if (state->Sink) state->Sink(state->SinkContext, message);
 }
 
-/* #136: SysEx assembly for an attached sysex_sink. No-ops without one. */
-static void mpu_sysex_put(mpu_state *st, uint8_t b)
+/* #136: SysEx assembly for an attached SysExSink. No-ops without one. */
+static VOID MpuSysExPut(PMPU_STATE state, BYTE value)
 {
-    if (!st->sysex_sink || st->sysex_over) return;
-    if (st->sysex_len >= MPU_SYSEX_MAX) { st->sysex_over = 1; return; }
-    st->sysex[st->sysex_len++] = b;
+    if (!state->SysExSink || state->IsSysExOverflow) return;
+    if (state->SysExLength >= MPU_SYSEX_MAX) { state->IsSysExOverflow = TRUE; return; }
+    state->SysEx[state->SysExLength++] = value;
 }
-static void mpu_sysex_begin(mpu_state *st)
+static VOID MpuSysExBegin(PMPU_STATE state)
 {
-    st->sysex_len = 0; st->sysex_over = 0;
-    mpu_sysex_put(st, 0xF0);
+    state->SysExLength = 0; state->IsSysExOverflow = FALSE;
+    MpuSysExPut(state, MPU_SYSEX_START);
 }
-static void mpu_sysex_end(mpu_state *st)
+static VOID MpuSysExEnd(PMPU_STATE state)
 {
-    if (!st->sysex_sink) return;
-    mpu_sysex_put(st, 0xF7);
-    if (st->sysex_over) { st->sysex_dropped++; return; }
-    st->sysex_sent++;
-    st->sysex_sink(st->sysex_ctx, st->sysex, st->sysex_len);
+    if (!state->SysExSink) return;
+    MpuSysExPut(state, MPU_SYSEX_END);
+    if (state->IsSysExOverflow) { state->SysExDropped++; return; }
+    state->SysExSent++;
+    state->SysExSink(state->SysExContext, state->SysEx, state->SysExLength);
 }
 
 /* Assemble a MIDI byte stream into whole messages. Two details matter for real
@@ -69,14 +97,14 @@ static void mpu_sysex_end(mpu_state *st)
    status byte, which is how sequencers save bandwidth) and realtime bytes, which
    may appear ANYWHERE -- even between the data bytes of another message -- and
    must not disturb the message being assembled. */
-static void mpu_midi_byte(mpu_state *st, uint8_t b)
+static VOID MpuMidiByte(PMPU_STATE state, BYTE value)
 {
-    if (b >= 0xF8) {                            /* realtime: standalone, no data   */
-        uint8_t save_status = st->status;
-        uint8_t s0 = st->data[0], s1 = st->data[1], n = st->ndata;
-        st->status = b; st->data[0] = st->data[1] = 0;
-        mpu_emit(st);
-        st->status = save_status; st->data[0] = s0; st->data[1] = s1; st->ndata = n;
+    if (value >= MPU_REALTIME_FIRST) {          /* realtime: standalone, no data   */
+        BYTE savedStatus = state->Status;
+        BYTE savedData0 = state->Data[0], savedData1 = state->Data[1], savedCount = state->DataCount;
+        state->Status = value; state->Data[0] = state->Data[1] = 0;
+        MpuEmit(state);
+        state->Status = savedStatus; state->Data[0] = savedData0; state->Data[1] = savedData1; state->DataCount = savedCount;
         return;
     }
     /* SysEx: swallowed, unless a synth that wants it is attached (#136, see the header).
@@ -85,87 +113,87 @@ static void mpu_midi_byte(mpu_state *st, uint8_t b)
          ENDS the message (MIDI 1.0: any status but a realtime one terminates SysEx); the
          unfinished message is dropped and counted, and the status byte is handled as
          what it is. */
-    if (b == 0xF0) { st->in_sysex = 1; mpu_sysex_begin(st); return; }
-    if (b == 0xF7) { if (st->in_sysex) mpu_sysex_end(st); st->in_sysex = 0; return; }
-    if (st->in_sysex) {
-        if (!st->sysex_sink) return;
-        if (!(b & 0x80)) { mpu_sysex_put(st, b); return; }
-        st->in_sysex = 0; st->sysex_dropped++;
+    if (value == MPU_SYSEX_START) { state->IsInSysEx = TRUE; MpuSysExBegin(state); return; }
+    if (value == MPU_SYSEX_END) { if (state->IsInSysEx) MpuSysExEnd(state); state->IsInSysEx = FALSE; return; }
+    if (state->IsInSysEx) {
+        if (!state->SysExSink) return;
+        if (!(value & MPU_STATUS_BIT)) { MpuSysExPut(state, value); return; }
+        state->IsInSysEx = FALSE; state->SysExDropped++;
     }
 
-    if (b & 0x80) {                             /* new status byte                 */
-        st->status = b;
-        st->ndata = 0;
-        st->want_data = mpu_data_len(b);
-        if (!st->want_data) { st->data[0] = st->data[1] = 0; mpu_emit(st); }
+    if (value & MPU_STATUS_BIT) {               /* new status byte                 */
+        state->Status = value;
+        state->DataCount = 0;
+        state->DataWanted = MpuDataLength(value);
+        if (!state->DataWanted) { state->Data[0] = state->Data[1] = 0; MpuEmit(state); }
         return;
     }
-    if (!st->status) return;                    /* data with no status: ignore     */
-    if (st->ndata < 2) st->data[st->ndata] = b;
-    st->ndata++;
-    if (st->ndata >= st->want_data) {
-        if (st->want_data < 2) st->data[1] = 0;
-        mpu_emit(st);
-        st->ndata = 0;                          /* running status: keep st->status */
+    if (!state->Status) return;                 /* data with no status: ignore     */
+    if (state->DataCount < MPU_MIDI_DATA_BYTES) state->Data[state->DataCount] = value;
+    state->DataCount++;
+    if (state->DataCount >= state->DataWanted) {
+        if (state->DataWanted < MPU_MIDI_DATA_BYTES) state->Data[1] = 0;
+        MpuEmit(state);
+        state->DataCount = 0;                   /* running status: keep state->Status */
     }
 }
 
-void vdd_mpu_feed(mpu_state *st, uint8_t byte) { mpu_midi_byte(st, byte); }
+VOID VddMpuFeed(PMPU_STATE state, BYTE value) { MpuMidiByte(state, value); }
 
-static void mpu_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static VOID MpuPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    mpu_state *st = (mpu_state *)self;
-    uint8_t val = (uint8_t)v;
-    (void)w;
-    if (port == st->base) {                     /* data port                        */
-        if (st->uart_mode) mpu_midi_byte(st, val);
+    PMPU_STATE state = (PMPU_STATE)context;
+    BYTE byteValue = (BYTE)value;
+    (VOID)width;
+    if (port == state->BasePort) {              /* data port                        */
+        if (state->IsUartMode) MpuMidiByte(state, byteValue);
         return;
     }
     /* command port: only the two commands every game issues are implemented, and
        both must be acknowledged or the driver decides there is no interface. */
-    switch (val) {
-    case 0xFF:                                  /* reset                            */
-        st->uart_mode = 0; st->status = 0; st->ndata = 0; st->in_sysex = 0;
-        mpu_inq_push(st, MPU_ACK);
+    switch (byteValue) {
+    case MPU_COMMAND_RESET:                     /* reset                            */
+        state->IsUartMode = FALSE; state->Status = 0; state->DataCount = 0; state->IsInSysEx = FALSE;
+        MpuInputQueuePush(state, MPU_ACK);
         break;
-    case 0x3F:                                  /* enter UART mode                  */
-        st->uart_mode = 1;
-        mpu_inq_push(st, MPU_ACK);
+    case MPU_COMMAND_UART_MODE:                 /* enter UART mode                  */
+        state->IsUartMode = TRUE;
+        MpuInputQueuePush(state, MPU_ACK);
         break;
     default:
-        mpu_inq_push(st, MPU_ACK);              /* acknowledge and ignore           */
+        MpuInputQueuePush(state, MPU_ACK);      /* acknowledge and ignore           */
         break;
     }
 }
 
-static void mpu_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+static VOID MpuPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    mpu_state *st = (mpu_state *)self;
-    (void)w;
-    if (port == st->base) { *v = mpu_inq_pop(st); return; }
+    PMPU_STATE state = (PMPU_STATE)context;
+    (VOID)width;
+    if (port == state->BasePort) { *value = MpuInputQueuePop(state); return; }
     /* Status: BOTH flags are active low. DRR clear = we can take a byte (always);
        DSR clear = a byte is waiting to be read. */
-    *v = (uint8_t)(st->inq_len ? 0x00 : MPU_ST_DSR);
+    *value = (BYTE)(state->InputQueueLength ? MPU_STATUS_DATA_WAITING : MPU_STATUS_DSR);
 }
 
-void vdd_mpu_reset(void *self)
+VOID VddMpuReset(PVOID context)
 {
-    mpu_state *st = (mpu_state *)self;
-    VDD_BUS *bus = st->bus; uint16_t base = st->base;
-    mpu_midi_sink sink = st->sink; void *ctx = st->sink_ctx;
-    mpu_sysex_sink xsink = st->sysex_sink; void *xctx = st->sysex_ctx;   /* #136 */
-    unsigned i; uint8_t *p = (uint8_t *)st;
-    for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
-    st->bus = bus; st->base = base; st->sink = sink; st->sink_ctx = ctx;
-    st->sysex_sink = xsink; st->sysex_ctx = xctx;
+    PMPU_STATE state = (PMPU_STATE)context;
+    PVDD_BUS bus = state->Bus; WORD basePort = state->BasePort;
+    PMPU_MIDI_SINK sink = state->Sink; PVOID sinkContext = state->SinkContext;
+    PMPU_SYSEX_SINK sysExSink = state->SysExSink; PVOID sysExContext = state->SysExContext;   /* #136 */
+    UINT byteIndex; BYTE *stateBytes = (BYTE *)state;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) stateBytes[byteIndex] = 0;
+    state->Bus = bus; state->BasePort = basePort; state->Sink = sink; state->SinkContext = sinkContext;
+    state->SysExSink = sysExSink; state->SysExContext = sysExContext;
 }
 
-int vdd_mpu_init(VDD_BUS *b, void *self)
+INT VddMpuInitialize(PVDD_BUS bus, PVOID context)
 {
-    mpu_state *st = (mpu_state *)self;
-    st->bus = b;
-    if (!st->base) st->base = MPU_DEFAULT_BASE;
-    if (VddClaimPorts(b, st->base, (uint16_t)(st->base + 1), mpu_in, mpu_out, st))
-        return -1;
-    return 0;
+    PMPU_STATE state = (PMPU_STATE)context;
+    state->Bus = bus;
+    if (!state->BasePort) state->BasePort = MPU_DEFAULT_BASE;
+    if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + MPU_COMMAND_PORT_OFFSET), MpuPortIn, MpuPortOut, state))
+        return MPU_FAILED;
+    return MPU_OK;
 }

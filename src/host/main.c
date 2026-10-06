@@ -979,7 +979,7 @@ static int strstr_nocase(const char *blk, const char *name)
     }
     return 0;
 }
-static mpu_state    g_mpu;       static NTVDD_DEVICE g_mpu_dev;
+static MPU_STATE    g_mpu;       static NTVDD_DEVICE g_mpu_dev;
 static comm_state   g_comm;      static NTVDD_DEVICE g_comm_dev;   /* GH #9 */
 static NETBIOS_STATE    g_net;       static NTVDD_DEVICE g_net_dev;    /* GH #8 (s91) */
 static uint8_t      g_genstub_vec[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
@@ -6953,8 +6953,8 @@ static void host_midi_sysex(void *ctx, const uint8_t *msg, uint32_t len)
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_mpu's: two
    byte streams through one assembler would corrupt each other's running status. */
-static mpu_state g_gusmidi;
-static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; vdd_mpu_feed(&g_gusmidi, b); }
+static MPU_STATE g_gusmidi;
+static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; VddMpuFeed(&g_gusmidi, b); }
 
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
    thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
@@ -8920,7 +8920,7 @@ static void exec_mach_restore(int d, char **pp)
        into the shell. */
     vdd_sb_reset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
-    vdd_mpu_reset(&g_mpu); VddSpeakerReset(&g_spk);
+    VddMpuReset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
               || g_vid.mkind != VID_KIND_TEXT);
     if (remode) {
@@ -32163,16 +32163,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     g_sb_dev = vdd_sb_device(&g_sb);
     VddBusAdd(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
-    g_mpu.sink = host_midi_sink;
+    g_mpu.Sink = host_midi_sink;
     {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_mpu.base = MPUB[g_set.v[SET_MPUADDR] <= 4 ? g_set.v[SET_MPUADDR] : 3]; }
-    g_mpu_dev = vdd_mpu_device(&g_mpu);
+        g_mpu.BasePort = MPUB[g_set.v[SET_MPUADDR] <= 4 ? g_set.v[SET_MPUADDR] : 3]; }
+    g_mpu_dev = VddMpuDevice(&g_mpu);
     VddBusAdd(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
        ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
     if (g_gus_on) {                             /* decided at startup: see NOGUS_FLAG's read */
         g_gus.dma = &g_dma; g_gus.dram = g_gus_dram;
-        g_gusmidi.sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
+        g_gusmidi.Sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
         g_gus.midi_sink = gus_midi_to_synth;
         g_gus_dev = vdd_gus_device(&g_gus);
         VddBusAdd(&g_bus, &g_gus_dev);
@@ -32476,8 +32476,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_wave.midi_ext) {
             mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.midi_dev);
             mq = zput(mq, " \""); mq = zput(mq, g_wave.midi_name); mq = zput(mq, "\", SysEx passed through");
-            g_mpu.sysex_sink = host_midi_sysex;     /* the MPU is on the bus already; no */
-            g_gusmidi.sysex_sink = host_midi_sysex; /* guest code has run yet            */
+            g_mpu.SysExSink = host_midi_sysex;     /* the MPU is on the bus already; no */
+            g_gusmidi.SysExSink = host_midi_sysex; /* guest code has run yet            */
         } else {
             mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.midi_ndevs);
             mq = zput(mq, " -> Host GM (device 0");
@@ -36697,7 +36697,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.rate_hz);
         p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.xfer_mode);
         p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.dsp_writes);
-        p = zput(p, " midi_msgs=");               p = zhex(p, g_mpu.sent);
+        p = zput(p, " midi_msgs=");               p = zhex(p, g_mpu.MessagesSent);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: async per IRQ:");
         { unsigned li; for (li = 0; li < 8; ++li) {
@@ -37035,7 +37035,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
         p = zput(p, " dropped_unhooked="); p = zhex(p, g_pm_devirq_drop);
         p = zput(p, "\r\nSTAGE2: sound2: ");
-        p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.uart_mode);
+        p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.IsUartMode);
         p = zput(p, " host_wave=");               p = zput(p, g_wave.silent ? "SILENT" : "open");
         p = zput(p, " host_midi=");               p = zput(p, g_wave.hmidi ? "open" : "NONE");
         p = zput(p, " underruns=");               p = zhex(p, g_wave.underruns);

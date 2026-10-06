@@ -23,7 +23,7 @@
 /* #190: the GUS's own MIDI port is a 6850 UART (ref §9): it transmits BYTES, not
    messages. The card hands every transmitted byte to this sink, exactly as the wire
    would carry it. The host turns bytes into messages for the synth by feeding a
-   private MPU assembler (vdd_mpu_feed in vdd_mpu.h) whose own sink is the one the
+   private MPU assembler (VddMpuFeed in vdd_mpu.h) whose own sink is the one the
    MPU-401 uses -- so the GUS and the MPU reach the same synth, and each keeps its own
    running status. No sink = bytes go nowhere, as with nothing plugged into MIDI OUT. */
 typedef void (*gus_midi_sink)(void *ctx, uint8_t byte);
