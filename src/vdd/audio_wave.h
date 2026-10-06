@@ -29,6 +29,8 @@
      and every later run would have been measuring a different machine. */
 #define AUDIO_WAVE_DEFAULT_BUFFERS   6      /* default lead   = 6 x 512 / 44100 = ~70 ms       */
 #define AUDIO_WAVE_DEFAULT_FRAMES  512      /* default step   = 11.6 ms per mixer burst        */
+#define AUDIO_WAVE_HEADER_BYTES 32    /* WAVEHDR is 32 bytes on win32                     */
+#define AUDIO_MIDI_NAME_LENGTH  32    /* MIDIOUTCAPSA.szPname: MAXPNAMELEN                */
 #define AUDIO_WAVE_MIN_FRAMES   64      /* below this the per-buffer callback overhead wins */
 /* ── ⚠ THE BUFFER SIZE IS THE DMA POSITION'S GRANULARITY, WHICH IS A SEPARATE
      SUSPECT FROM THE LEAD. ────────────────────────────────────────────────────────
@@ -115,11 +117,11 @@ typedef struct _AUDIO_WAVE {
     INT       MidiDevice;
     INT       IsMidiExternal;
     UINT32  MidiDeviceCount;
-    char      MidiName[32];         /* `char`, not CHAR: CHAR here moved code in AudioWaveStart (s93) */
+    char      MidiName[AUDIO_MIDI_NAME_LENGTH];         /* `char`, not CHAR: CHAR here moved code in AudioWaveStart (s93) */
     UINT32  SysExSent, SysExDropped;
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
-    BYTE Headers[AUDIO_WAVE_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */
+    BYTE Headers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_HEADER_BYTES];  /* WAVEHDR is 32 bytes on win32          */
     INT16   Buffers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_FRAMES * AUDIO_WAVE_CHANNELS];   /* interleaved L/R */
 } AUDIO_WAVE, *PAUDIO_WAVE;
 typedef const AUDIO_WAVE *PCAUDIO_WAVE;
