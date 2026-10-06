@@ -908,7 +908,7 @@ static pit_state    g_pit;       static NTVDD_DEVICE g_pit_dev;
 static CMOS_STATE   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
 static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
-static pic_state    g_pic;       static NTVDD_DEVICE g_pic_dev;
+static PIC_STATE    g_pic;       static NTVDD_DEVICE g_pic_dev;
 static video_state  g_vid;       static NTVDD_DEVICE g_vid_dev;
 static input_state  g_in;        static NTVDD_DEVICE g_in_dev;
 static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
@@ -3480,10 +3480,10 @@ static void host_pit_resync_check(void)
     uint32_t r = g_pit.restarts;             /* monotonic; a stale read only defers us */
     if (r == g_pit_restarts_seen) return;
     g_pit_restarts_seen = r;
-    if ((g_pic.m.isr & 1) && !g_irq0_autoeoi) {
+    if ((g_pic.Master.Isr & 1) && !g_irq0_autoeoi) {
         LONG pend = InterlockedExchange(&g_irq0_pending, 0);
-        if (pend || (g_pic.m.irr & 1)) {
-            __sync_fetch_and_and(&g_pic.m.irr, (uint8_t)~1u);
+        if (pend || (g_pic.Master.Irr & 1)) {
+            __sync_fetch_and_and(&g_pic.Master.Irr, (uint8_t)~1u);
             g_irq0_resync_drop++;
         }
     }
@@ -3496,8 +3496,8 @@ static int irq0_can_deliver(void)
 {
     DWORD now = GetTickCount() | 1, gap = now - g_irq0_last_attempt;
     g_irq0_last_attempt = now;
-    if (vdd_pic_can_deliver(&g_pic, 0)) return 1;
-    if (g_pic.m.isr & 1) {
+    if (VddPicCanDeliver(&g_pic, 0)) return 1;
+    if (g_pic.Master.Isr & 1) {
         DWORD since = g_irq0_isr_since;
         /* ── A HOST STALL IS NOT A GUEST THAT FORGOT TO EOI. s70: a headless run with
              capture.flag hit the timeout three times and engaged the fallback -- but no
@@ -3508,7 +3508,7 @@ static int irq0_can_deliver(void)
              gap longer than the timeout's own resolution, restart the clock instead. */
         if (since && gap > 100u) { g_irq0_isr_since = now; since = now; }
         if (since && (now - since) > IRQ0_ISR_TIMEOUT_MS) {
-            vdd_pic_eoi(&g_pic, 0);
+            VddPicEndOfInterrupt(&g_pic, 0);
             g_irq0_isr_since = 0;
             if (++g_irq0_isr_timeouts >= IRQ0_ISR_TIMEOUTS_MAX && !g_irq0_autoeoi) {
                 static const char msg[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
@@ -3516,7 +3516,7 @@ static int irq0_can_deliver(void)
                 g_irq0_autoeoi = 1;
                 log_append(LOG_PATH, msg, msg + sizeof(msg) - 1);
             }
-            return vdd_pic_can_deliver(&g_pic, 0);
+            return VddPicCanDeliver(&g_pic, 0);
         }
         g_irq0_isr_blocks++;
         /* ── NAME THE LONG ONE. The s70 by-hand stall began with a single in-service
@@ -3549,10 +3549,10 @@ static int irq0_can_deliver(void)
 static void irq0_ack(void)
 {
     if (g_irq0_autoeoi || async_vec_is_our_stub(0)) {
-        vdd_pic_ack_autoeoi(&g_pic, 0);
+        VddPicAcknowledgeAutoEoi(&g_pic, 0);
         g_irq0_isr_auto++;
     } else {
-        vdd_pic_acknowledge(&g_pic, 0);
+        VddPicAcknowledge(&g_pic, 0);
         g_irq0_isr_since = GetTickCount() | 1;
         g_irq0_isr_strict++;
     }
@@ -3579,7 +3579,7 @@ static int irq0_pm_claim(void)
 static void irq0_pm_unclaim(void)
 {
     if (g_irq0_autoeoi || async_vec_is_our_stub(0)) { g_irq0_isr_auto--; return; }
-    vdd_pic_eoi(&g_pic, 0);
+    VddPicEndOfInterrupt(&g_pic, 0);
     g_irq0_isr_since = 0;
     g_irq0_isr_strict--;
 }
@@ -3625,7 +3625,7 @@ static LONG g_async_why = 0;
      OPPOSITE fixes and only a histogram tells them apart:
        10  g_async_pm_active   an injection is still in flight -> the guest's ISR is slow
                                to IRET, and MORE attempts can never help
-       21  vdd_pic_can_deliver IRQ0's in-service bit is still set -> we are not seeing the
+       21  VddPicCanDeliver IRQ0's in-service bit is still set -> we are not seeing the
                                guest's EOI, which would be OUR bug, not a rate one
        7/8 virtual-IF clear    the client has interrupts off -> only the cooperative path
                                can ever deliver
@@ -3695,7 +3695,7 @@ static DWORD g_ifv_reenter[16];
 static void ifv_trace(unsigned irq, int path, DWORD fl, DWORD cs, DWORD ip)
 {
     LONG i;
-    unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    unsigned vec = VddPicVector(&g_pic, (uint8_t)irq);
     int re = (cs == peekw(vec * 4 + 2)) && ((WORD)(ip - peekw(vec * 4)) < 0x60);
     if (re) ++g_ifv_reenter[irq & 15];
     if (!re && g_ifv_ntrace >= 8) return;
@@ -3965,7 +3965,7 @@ static int async_inject_irq(unsigned irq)
     /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
        g_simint_busy -- this is the Doom E1M1 crash. */
     if (g_simint_busy) {
-        unsigned vn = vdd_pic_vector(&g_pic, (uint8_t)irq);
+        unsigned vn = VddPicVector(&g_pic, (uint8_t)irq);
         /* ── THE BIOS TICK MUST STILL ADVANCE INSIDE A NESTED REAL-MODE CALL. (s81, ZAR) ──
              IRQ 0 is not delivered in here (its vector is our BOP stub, which the nested
              loop does not service), so 0040:006C stood still for the length of every
@@ -3989,7 +3989,7 @@ static int async_inject_irq(unsigned irq)
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
-    if (irq == 0 ? !irq0_can_deliver() : !vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) {
+    if (irq == 0 ? !irq0_can_deliver() : !VddPicCanDeliver(&g_pic, (uint8_t)irq)) {
         g_async_nest_blocked++; async_early_bail(irq, 21); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
@@ -4007,7 +4007,7 @@ static int async_inject_irq(unsigned irq)
          answered its reset with 0xAA and reported DSP version 4.05 two lines earlier.
          Ask both tables: the client has hooked the line if EITHER the real-mode vector
          has moved off our IRET stub or it has installed a protected-mode handler. */
-    { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    { unsigned v0 = VddPicVector(&g_pic, (uint8_t)irq);
       int rm_hooked = !(peekw(v0 * 4 + 2) == DOS_HDLR_SEG
                         && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
       int pm_hooked = g_dpmi_pm && g_pm_int[irq_pm_vec(irq)].client;
@@ -4081,8 +4081,8 @@ static int async_inject_irq(unsigned irq)
             /* Same acknowledge as the V86 arm below: IRQ0 in service until the guest
                EOIs (#173), a stub-vectored line released at once. */
             if (ok) { if (irq == 0)                        irq0_ack();
-                      else if (async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
-                      else                                 vdd_pic_acknowledge(&g_pic, (uint8_t)irq); }
+                      else if (async_vec_is_our_stub(irq)) VddPicAcknowledgeAutoEoi(&g_pic, (uint8_t)irq);
+                      else                                 VddPicAcknowledge(&g_pic, (uint8_t)irq); }
             else    { g_async_pm_active = 0; }     /* never leave the flag set on failure */
             async_why_note(irq, ok ? 0u : 13u);
         }
@@ -4181,7 +4181,7 @@ static int async_inject_irq(unsigned irq)
          through the IVT -- whose entry is our IRET stub, where it would be acknowledged
          and lost. Left pending (return 0) for the PM path; see v86_deliver_dev_irq. */
     if (irq >= 2 && g_dpmi_pm && g_pm_int[irq_pm_vec(irq)].client) {
-        unsigned v1 = vdd_pic_vector(&g_pic, (uint8_t)irq);
+        unsigned v1 = VddPicVector(&g_pic, (uint8_t)irq);
         if (peekw(v1 * 4 + 2) == DOS_HDLR_SEG && peekw(v1 * 4) == DOS_IRET_STUB_OFF) {
             ResumeThread(g_hcpu);
             ASYNC_CTX_RELEASE();
@@ -4197,7 +4197,7 @@ static int async_inject_irq(unsigned irq)
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)cs);
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)ip);
     cx.Esp    = sp;
-    { unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    { unsigned vec = VddPicVector(&g_pic, (uint8_t)irq);
       cx.Eip   = peekw(vec * 4);
       cx.SegCs = peekw(vec * 4 + 2); }
     cx.EFlags = efl & ~(0x300u | EFLAGS_VIF_BIT);
@@ -4220,11 +4220,11 @@ static int async_inject_irq(unsigned irq)
         /* ⚠ THE AUTO-EOI CASE IS ONE OPERATION, NOT ack-then-eoi. The pair's transient
              set/clear of the shared ISR byte is not safe from the tick courier, which
              runs without the device lock; the net effect is identical. See
-             vdd_pic_ack_autoeoi. The strict case (IRQ1) keeps plain acknowledge, so its
+             VddPicAcknowledgeAutoEoi. The strict case (IRQ1) keeps plain acknowledge, so its
              in-service bit is still held until the guest EOIs. */
         if (irq == 0)                     irq0_ack();
-        else if (async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
-        else                              vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
+        else if (async_vec_is_our_stub(irq)) VddPicAcknowledgeAutoEoi(&g_pic, (uint8_t)irq);
+        else                              VddPicAcknowledge(&g_pic, (uint8_t)irq);
         /* ⚠ A KEY DELIVERED HERE WAS INVISIBLE. g_irq1_inj and keylat_pop() both live in
            the COOPERATIVE block only, so an asynchronously-placed keystroke counted as
            neither delivered nor timed -- and the retry experiment therefore read as
@@ -4243,7 +4243,7 @@ static int async_inject_irq(unsigned irq)
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_async_inj + g_async_bail <= 4) {
         char ab[256], *aq = ab; int v;
-        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)vdd_pic_vector(&g_pic, (uint8_t)irq));
+        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)VddPicVector(&g_pic, (uint8_t)irq));
         aq = zput(aq, " ok=0x");            aq = zhex(aq, (DWORD)ok);
         aq = zput(aq, " from=0x");          aq = zhex(aq, cs);
         aq = zput(aq, ":0x");               aq = zhex(aq, ip);
@@ -4261,7 +4261,7 @@ static int async_inject_irq(unsigned irq)
 
 static int async_vec_is_our_stub(unsigned irq)
 {
-    unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    unsigned vec = VddPicVector(&g_pic, (uint8_t)irq);
     WORD seg = peekw(vec * 4 + 2), off = peekw(vec * 4);
     return seg == DOS_HDLR_SEG && (off == DOS_IRET_STUB_OFF || off == 0x004C);
 }
@@ -4278,8 +4278,8 @@ static void host_irq_sink(void *ctx, uint8_t irq)
        PIC mutation runs under g_lock, and IRR |= bit compiled as a plain byte RMW
        could undo a concurrent acknowledge on a DIFFERENT line. One atomic OR closes
        it; the slave (irq >= 8) keeps the plain path, nothing raises it cross-lock. */
-    if (irq < 8) __sync_fetch_and_or(&g_pic.m.irr, (uint8_t)(1u << irq));
-    else         vdd_pic_raise(&g_pic, irq);
+    if (irq < 8) __sync_fetch_and_or(&g_pic.Master.Irr, (uint8_t)(1u << irq));
+    else         VddPicRaise(&g_pic, irq);
     if (irq == 0) {
         irq0_latch();
         ++g_irq0_raise_ct;          /* A/B/C discriminator: generation. See irq0_delivered_note. */
@@ -4341,7 +4341,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            ▶ WHAT THIS RULES OUT, AND WHERE TO GO. Do not spend effort on the delivery
              RATE; spend it on the guest's INJECTABILITY, or bypass the async path for
              the timer entirely. `async_inject_irq` refuses on g_async_pm_active (an
-             injection still in flight), on vdd_pic_can_deliver, and on the client's
+             injection still in flight), on VddPicCanDeliver, and on the client's
              virtual-IF -- instrument WHICH of those says no at 144 Hz before changing
              anything else. Note that the injectable window may simply be scarce while
              Doom holds its own ISR, in which case the answer is the cooperative PM-loop
@@ -7436,9 +7436,9 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
            real-mode vector points -- the three things that decide it. */
         { int k; DWORD pm = 0; WORD v5o = peekw(0x0D * 4), v5s = peekw(0x0D * 4 + 2);
           for (k = 0; k < 16; ++k) if (g_irqn_pending[k]) pm |= 1u << k;
-          q = zput(q, " pic{imr=");  q = zhexb(q, g_pic.m.imr); q = zput(q, "/"); q = zhexb(q, g_pic.s.imr);
-          q = zput(q, " irr=");      q = zhexb(q, g_pic.m.irr); q = zput(q, "/"); q = zhexb(q, g_pic.s.irr);
-          q = zput(q, " isr=");      q = zhexb(q, g_pic.m.isr); q = zput(q, "/"); q = zhexb(q, g_pic.s.isr);
+          q = zput(q, " pic{imr=");  q = zhexb(q, g_pic.Master.Imr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Imr);
+          q = zput(q, " irr=");      q = zhexb(q, g_pic.Master.Irr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Irr);
+          q = zput(q, " isr=");      q = zhexb(q, g_pic.Master.Isr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Isr);
           q = zput(q, "} pend=0x");  q = zhex(q, pm);
           q = zput(q, " ivt0d=");    q = zhex(q, v5s); q = zput(q, ":"); q = zhex(q, v5o);
           q = zput(q, " nested=");   q = zhex(q, (DWORD)g_nested_rm);
@@ -8894,7 +8894,7 @@ static void exec_mach_save(int d)
 {
     unsigned i;
     for (i = 0; i < 512; ++i) g_exec_mach[d].ivt[i] = peekw(i * 2);
-    g_exec_mach[d].imr_m = g_pic.m.imr; g_exec_mach[d].imr_s = g_pic.s.imr;
+    g_exec_mach[d].imr_m = g_pic.Master.Imr; g_exec_mach[d].imr_s = g_pic.Slave.Imr;
     g_exec_mach[d].vmode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
     g_exec_mach[d].pit0  = pit_eff_reload(&g_pit);
 }
@@ -8907,8 +8907,8 @@ static void exec_mach_restore(int d, char **pp)
     int remode;
     HOST_LOCK();
     for (i = 0; i < 512; ++i) pokew(i * 2, g_exec_mach[d].ivt[i]);
-    g_pic.m.imr = g_exec_mach[d].imr_m; g_pic.s.imr = g_exec_mach[d].imr_s;
-    g_pic.m.isr = 0; g_pic.s.isr = 0;           /* a handler it never finished */
+    g_pic.Master.Imr = g_exec_mach[d].imr_m; g_pic.Slave.Imr = g_exec_mach[d].imr_s;
+    g_pic.Master.Isr = 0; g_pic.Slave.Isr = 0;           /* a handler it never finished */
     g_irq0_isr_since = 0;
     if (pit_eff_reload(&g_pit) != g_exec_mach[d].pit0) {   /* a game's fast timer */
         uint32_t v = 0x36, n = g_exec_mach[d].pit0 & 0xFFFF;
@@ -14991,7 +14991,7 @@ static void host_pit_deliver(void)
             if (g_keyirq_retry && !g_dpmi_pm && g_irq1_pending > 0
                 && (g_keyirq_retry != 2 || g_irq0_pending <= 1)
                 && g_irq0_yielded < maxy
-                && vdd_pic_can_deliver(&g_pic, 1) && async_inject_irq(1)) {
+                && VddPicCanDeliver(&g_pic, 1) && async_inject_irq(1)) {
                 InterlockedDecrement(&g_irq1_pending);
                 ++g_irq0_yielded;
                 ++g_irq1_async_retry;
@@ -15038,7 +15038,7 @@ static void host_pit_deliver(void)
       for (k = 0; k < (int)sizeof g_irq_order; ++k) {
           q = g_irq_order[k];
           if (!g_irqn_pending[q]) continue;
-          if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) break;
+          if (!VddPicCanDeliver(&g_pic, (uint8_t)q)) break;
           ++g_irqn_retry_try;
           if (g_qi_susp && async_inject_irq((unsigned)q)) {
               InterlockedExchange(&g_irqn_pending[q], 0);
@@ -16809,7 +16809,7 @@ static int modey_pm_needs_interp(void)
 static int modey_pm_irq_waiting(void)
 {
     return g_pm_tick_owed > 0 || g_irq1_pending > 0
-        || (g_pic.m.irr & (uint8_t)~g_pic.m.imr) != 0;
+        || (g_pic.Master.Irr & (uint8_t)~g_pic.Master.Imr) != 0;
 }
 static void modey_pm_run(volatile BYTE *tib)
 {
@@ -24460,7 +24460,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         VddBusDeliverInterrupt(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
                         /* The BIOS timer ISR ends with its EOI; a PM handler that chains
                            here is relying on it, as in V86 (#173). */
-                        if (vec == 0x08) vdd_pic_eoi(&g_pic, 0);
+                        if (vec == 0x08) VddPicEndOfInterrupt(&g_pic, 0);
                         HOST_UNLOCK();
                         regs_store(&r, tib);
                         VDM_REG(tib, VTIB_EIP) += 2;
@@ -24503,7 +24503,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            swallow the next key. (Ctrl-Break's ring/0071h part is done.) */
                         if (vec == 0x09 && vdd_input_bios_consume(&g_in) == KB_ACT_PAUSE)
                             vdd_input_pause_cancel(&g_in);
-                        vdd_pic_eoi(&g_pic, line);   /* the slave's EOI also releases the cascade */
+                        VddPicEndOfInterrupt(&g_pic, line);   /* the slave's EOI also releases the cascade */
                         HOST_UNLOCK();
                         if (g_pm_irq_reflect_logged < 16) {
                             ++g_pm_irq_reflect_logged;
@@ -28969,7 +28969,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
       for (k = 0; k < (int)sizeof g_irq_order; ++k) {
           unsigned vec;
           q = g_irq_order[k];
-          vec = vdd_pic_vector(&g_pic, (uint8_t)q);        /* 08h+q or 70h+(q-8), as programmed */
+          vec = VddPicVector(&g_pic, (uint8_t)q);        /* 08h+q or 70h+(q-8), as programmed */
           if (!g_irqn_pending[q]) continue;
           if (peekw(vec * 4 + 2) == DOS_HDLR_SEG
               && peekw(vec * 4) == DOS_IRET_STUB_OFF) {
@@ -28985,10 +28985,10 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
               InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
               continue;
           }
-          if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
+          if (!VddPicCanDeliver(&g_pic, (uint8_t)q)) continue;
           if (InterlockedExchange(&g_irqn_pending[q], 0)) {
-              vdd_pic_acknowledge(&g_pic, (uint8_t)q);
-              if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
+              VddPicAcknowledge(&g_pic, (uint8_t)q);
+              if (async_vec_is_our_stub((unsigned)q)) VddPicEndOfInterrupt(&g_pic, (uint8_t)q);
               g_irqn_inj++;
               ifv_trace((unsigned)q, 2, VDM_REG(tib, VTIB_EFLAGS), qcs, qip);
               inject_int(tib, vec);
@@ -31938,7 +31938,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     VddBusInitialize(&g_bus, NULL);
     VddBusSetSinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
-    g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
+    g_pic_dev = VddPicDevice(&g_pic);      /* before the PIT: it gates every IRQ */
 
     VddBusAdd(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
@@ -32901,8 +32901,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
                 InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
-                vdd_pic_acknowledge(&g_pic, 1);
-                if (async_vec_is_our_stub(1)) vdd_pic_eoi(&g_pic, 1);
+                VddPicAcknowledge(&g_pic, 1);
+                if (async_vec_is_our_stub(1)) VddPicEndOfInterrupt(&g_pic, 1);
                 g_irq1_inj++;
                 inject_int(tib, 0x09);
                 keylat_pop();               /* the guest is now IN its INT 09h */
@@ -33277,7 +33277,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 int ko;
                 HOST_LOCK();
                 kact = vdd_input_bios_translate(&g_in, (uint8_t)VDM_REG(tib, VTIB_EAX));
-                vdd_pic_eoi(&g_pic, 1);
+                VddPicEndOfInterrupt(&g_pic, 1);
                 if (kact == KB_ACT_PAUSE && kbdact_entry(kact) < 0) vdd_input_pause_cancel(&g_in);
                 HOST_UNLOCK();
                 ++g_kb4f_xlat;
@@ -33312,7 +33312,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 }
                 /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
                 HOST_LOCK();
-                vdd_pic_eoi(&g_pic, 1);
+                VddPicEndOfInterrupt(&g_pic, 1);
                 HOST_UNLOCK();
                 VDM_REG(tib, VTIB_EIP) += 3;
                 continue;
@@ -33329,7 +33329,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  keyirq=1 for a whole QBasic run of ~19 key presses. Same shape as the
                  INT 08h arm's EOI below, for the same reason. Harmless when the guest
                  EOI'd before chaining: the bit is already clear. */
-            vdd_pic_eoi(&g_pic, 1);
+            VddPicEndOfInterrupt(&g_pic, 1);
             HOST_UNLOCK();
             /* ── #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
                  Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
@@ -33355,7 +33355,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                with nowhere to put one, so issue the EOI here -- without it the PIC's
                in-service bit for IRQ0 latches on the first tick and the timer stops dead
                (measured: exactly one tick delivered in a 30 s run). */
-            vdd_pic_eoi(&g_pic, 0);
+            VddPicEndOfInterrupt(&g_pic, 0);
             HOST_UNLOCK();
             regs_store(&r, tib);
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
@@ -34045,7 +34045,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (g_irq1_pending <= 0) InterlockedIncrement(&g_irq1_pending);
                         int vi   = g_dpmi_vi;
                         int busy = g_in_pm_irq || g_async_pm_active;
-                        int pic  = vdd_pic_can_deliver(&g_pic, 1);
+                        int pic  = VddPicCanDeliver(&g_pic, 1);
                         int app  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                         int done1 = 0;
                         if (vi && !busy && pic) {
@@ -34135,7 +34135,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 ++g_pm_devirq_drop;
                                 continue;
                             }
-                            if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
+                            if (!VddPicCanDeliver(&g_pic, (uint8_t)q)) continue;
                             /* CLAIM BEFORE RUNNING, HAND BACK ON FAILURE -- the ISR runs
                                inside the call below and the device model re-raises from in
                                there, so clearing afterwards would cancel the interrupt the
@@ -34161,15 +34161,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             uint32_t pred = g_dma.rd_count[1];
                             InterlockedExchange(&g_irqn_pending[q], 0);
                             if (async_vec_is_our_stub((unsigned)q))
-                                vdd_pic_ack_autoeoi(&g_pic, (uint8_t)q);
-                            else vdd_pic_acknowledge(&g_pic, (uint8_t)q);
+                                VddPicAcknowledgeAutoEoi(&g_pic, (uint8_t)q);
+                            else VddPicAcknowledge(&g_pic, (uint8_t)q);
                             g_in_pm_irq = 1;
                             if (dpmi_inject_pm_irq(&m, tib, iv, steps)) {
                                 ++g_pm_devirq_inj;
                             } else {
                                 /* No handler ran, so nothing will EOI: hand the line back. */
-                                vdd_pic_eoi(&g_pic, (uint8_t)q);
-                                vdd_pic_raise(&g_pic, (uint8_t)q);
+                                VddPicEndOfInterrupt(&g_pic, (uint8_t)q);
+                                VddPicRaise(&g_pic, (uint8_t)q);
                                 InterlockedExchange(&g_irqn_pending[q], 1);
                                 ++g_pm_devirq_fail;
                             }

@@ -19,7 +19,7 @@
  * fact, and brings IRQ MASKING with it (the IMR at 0x21), which games use to silence
  * lines they are not servicing.
  *
- * Pure C, no <windows.h>: state is explicit and effects go through the bus, so the
+ * No Windows calls, only Windows types: state is explicit and effects go through the bus, so the
  * whole thing is exercised off-VM by tests/unit/pic_test.c.
  */
 #ifndef NTVDMEX_VDD_PIC_H
@@ -27,41 +27,45 @@
 
 #include "ntvdd.h"
 
-typedef struct pic_chip {
-    uint8_t imr;            /* OCW1: 1 = line masked                              */
-    uint8_t irr;            /* requests raised but not yet delivered              */
-    uint8_t isr;            /* delivered and not yet EOI'd                        */
-    uint8_t base;           /* ICW2: vector base (master 0x08, slave 0x70)        */
-    uint8_t icw_step;       /* 0 = running; 1..3 = expecting ICW2/3/4             */
-    uint8_t icw4_needed;    /* from ICW1 bit 0                                    */
-    uint8_t read_isr;       /* OCW3: next read of the base port returns ISR       */
-    uint8_t auto_eoi;       /* ICW4 bit 1: clear ISR at delivery time             */
-    uint8_t poll_armed;     /* OCW3 bit 2: the NEXT base-port read is a POLL, and
+typedef struct _PIC_CHIP {
+    BYTE Imr;               /* OCW1: 1 = line masked                              */
+    BYTE Irr;               /* requests raised but not yet delivered              */
+    BYTE Isr;               /* delivered and not yet EOI'd                        */
+    BYTE VectorBase;        /* ICW2: vector base (master 0x08, slave 0x70)        */
+    BYTE IcwStep;           /* 0 = running; 1..3 = expecting ICW2/3/4             */
+    BYTE IsIcw4Needed;      /* from ICW1 bit 0                                    */
+    BYTE IsIsrSelected;     /* OCW3: next read of the base port returns ISR       */
+    BYTE IsAutoEoi;         /* ICW4 bit 1: clear ISR at delivery time             */
+    BYTE IsPollArmed;       /* OCW3 bit 2: the NEXT base-port read is a POLL, and
                                a poll read is an ACKNOWLEDGE -- it sets ISR and
                                clears IRR exactly as a delivery would. One-shot:
                                the read consumes it. See docs/ref/pic.md 5.      */
     /* ── THE PROGRAMMING INTERFACE A PC BIOS NEVER TOUCHES (#174). All four reset to
          the fixed-priority, fully nested chip every DOS program assumes, so a guest
          that does not program them sees nothing new. docs/ref/pic.md 4-5. */
-    uint8_t prio_low;       /* the IR line with the LOWEST priority; 7 = fixed order
+    BYTE LowestPriority;    /* the IR line with the LOWEST priority; 7 = fixed order
                                (IR0 highest). OCW2 C0h/A0h/E0h and rotate-in-AEOI
                                move it; ICW1 puts it back to 7.                   */
-    uint8_t rotate_aeoi;    /* OCW2 80h sets / 00h clears: in AEOI mode, the line
+    BYTE IsRotateInAutoEoi; /* OCW2 80h sets / 00h clears: in AEOI mode, the line
                                just acknowledged becomes the lowest priority.     */
-    uint8_t smm;            /* OCW3 bits 6:5 = 11 sets / 10 clears Special Mask
+    BYTE IsSpecialMaskMode; /* OCW3 bits 6:5 = 11 sets / 10 clears Special Mask
                                Mode: a MASKED in-service line stops blocking.     */
-    uint8_t sfnm;           /* ICW4 bit 4, Special Fully Nested Mode. Meaningful on
+    BYTE IsSpecialFullyNested; /* ICW4 bit 4, Special Fully Nested Mode. Meaningful on
                                the master only: IR2 in service no longer blocks a
                                further slave request.                             */
-} pic_chip;
+} PIC_CHIP, *PPIC_CHIP;
 
-typedef struct pic_state {
-    VDD_BUS *bus;
-    pic_chip m, s;          /* master, slave                                      */
-} pic_state;
+typedef const PIC_CHIP *PCPIC_CHIP;
 
-int vdd_pic_init(VDD_BUS *b, void *self);
-void vdd_pic_reset(void *self);
+typedef struct _PIC_STATE {
+    PVDD_BUS Bus;
+    PIC_CHIP Master, Slave;
+} PIC_STATE, *PPIC_STATE;
+
+#define PIC_DEVICE_NAME "pic"
+
+INT  VddPicInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddPicReset(_In_ PVOID context);
 
 /* --- what the host asks the PIC -------------------------------------------- */
 
@@ -74,34 +78,34 @@ void vdd_pic_reset(void *self);
    ⚠ It answers for ONE line. Which of several pending lines goes first is the host's
      walk (g_irq_order in main.c), which is the FIXED order -- right unless a guest has
      rotated the priorities. */
-int  vdd_pic_can_deliver(pic_state *st, uint8_t irq);
+INT  VddPicCanDeliver(_In_ PPIC_STATE state, _In_ BYTE irq);
 
 /* Record that the host has just vectored `irq` into the guest: sets the in-service
    bit (unless the chip is in auto-EOI mode) and clears the pending request. */
-void vdd_pic_acknowledge(pic_state *st, uint8_t irq);
+VOID VddPicAcknowledge(_Inout_ PPIC_STATE state, _In_ BYTE irq);
 
 /* The guest's vector for a line, from the programmed base (master 8 -> INT 08h). */
-uint8_t vdd_pic_vector(pic_state *st, uint8_t irq);
+BYTE VddPicVector(_In_ PPIC_STATE state, _In_ BYTE irq);
 
 /* Note a line as requested; used for IRR bookkeeping/reporting. */
-void vdd_pic_raise(pic_state *st, uint8_t irq);
+VOID VddPicRaise(_Inout_ PPIC_STATE state, _In_ BYTE irq);
 
 /* End-of-interrupt for one line. Guests normally do this themselves by writing OCW2 to
    port 0x20, and now that we claim the port they reach the same state. The host needs it
    directly for two cases the guest cannot cover: our own BIOS stand-in INT 08h handler
    (the real BIOS timer ISR ends with an EOI, and ours is a BOP with nowhere to put one),
    and lines vectored at our default do-nothing stubs, which by definition never EOI. */
-void vdd_pic_eoi(pic_state *st, uint8_t irq);
+VOID VddPicEndOfInterrupt(_Inout_ PPIC_STATE state, _In_ BYTE irq);
 /* acknowledge()+eoi() as ONE operation, for lines the host auto-EOIs. Touches only IRR,
    so it is safe from a thread that does not hold the device lock. See the .c file. */
-void vdd_pic_ack_autoeoi(pic_state *st, uint8_t irq);
+VOID VddPicAcknowledgeAutoEoi(_Inout_ PPIC_STATE state, _In_ BYTE irq);
 
-static inline NTVDD_DEVICE vdd_pic_device(pic_state *st)
+static inline NTVDD_DEVICE VddPicDevice(_In_ PPIC_STATE state)
 {
-    NTVDD_DEVICE d;
-    d.Name = "pic"; d.Initialize = vdd_pic_init; d.Reset = vdd_pic_reset;
-    d.Shutdown = 0; d.Context = st;
-    return d;
+    NTVDD_DEVICE device;
+    device.Name = PIC_DEVICE_NAME; device.Initialize = VddPicInitialize; device.Reset = VddPicReset;
+    device.Shutdown = 0; device.Context = state;
+    return device;
 }
 
 #endif /* NTVDMEX_VDD_PIC_H */
