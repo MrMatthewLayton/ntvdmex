@@ -54,6 +54,87 @@
 #define OPL3_REGISTER_FOUR_OPERATOR  0x104    /* bits 0-5: pair ch 0+3, 1+4, 2+5, 9+12, 10+13, 11+14 */
 #define OPL3_REGISTER_NEW  0x105    /* bit 0: NEW -- the OPL3 extensions are live       */
 
+/* The register file's layout. Per-operator registers are a base plus an operator
+   OFFSET (three banks of six slots, 0x00-0x05, 0x08-0x0D, 0x10-0x15); per-channel
+   registers a base plus the channel (0-8). Array 1 is the same at +0x100. */
+#define OPL_REGISTER_TEST            0x01
+#define OPL_REGISTER_TIMER1          0x02
+#define OPL_REGISTER_TIMER2          0x03
+#define OPL_REGISTER_TIMER_CONTROL   0x04
+#define OPL_REGISTER_AM_VIB          0x20    /* AM/VIB/EGT/KSR/MULT                    */
+#define OPL_REGISTER_AM_VIB_LAST     0x35
+#define OPL_REGISTER_KSL_TL          0x40    /* key-scale level, total level           */
+#define OPL_REGISTER_KSL_TL_LAST     0x55
+#define OPL_REGISTER_AR_DR           0x60    /* attack, decay rates                    */
+#define OPL_REGISTER_AR_DR_LAST      0x75
+#define OPL_REGISTER_SL_RR           0x80    /* sustain level, release rate            */
+#define OPL_REGISTER_SL_RR_LAST      0x95
+#define OPL_REGISTER_FNUMBER_LOW     0xA0
+#define OPL_REGISTER_FNUMBER_LOW_LAST 0xA8
+#define OPL_REGISTER_KEY_BLOCK       0xB0    /* key-on, block, F-number high           */
+#define OPL_REGISTER_KEY_BLOCK_LAST  0xB8
+#define OPL_REGISTER_RHYTHM          0xBD
+#define OPL_REGISTER_FEEDBACK        0xC0    /* feedback, connection (and OPL3 routing) */
+#define OPL_REGISTER_FEEDBACK_LAST   0xC8
+#define OPL_REGISTER_WAVEFORM        0xE0
+#define OPL_REGISTER_WAVEFORM_LAST   0xF5
+#define OPL_ARRAY_SHIFT              8       /* bit 8 of a register number: the array  */
+#define OPL_ARRAY1_BASE              0x100
+#define OPL_OPERATOR_OFFSET_MASK     0x1F
+#define OPL_OPERATOR_BANK_SHIFT      3
+#define OPL_OPERATOR_SLOT_MASK       7
+#define OPL_OPERATOR_BANKS           3
+#define OPL_OPERATOR_BANK_SLOTS      6
+#define OPL_CHANNELS_PER_BANK        3
+#define OPL_CARRIER_OFFSET           3       /* a channel's carrier: three slots on    */
+#define OPL_NO_OPERATOR              (-1)
+/* Register fields. */
+#define OPL_AM_VIB_AM                0x80
+#define OPL_AM_VIB_VIB               0x40
+#define OPL_AM_VIB_AM_SHIFT                 7
+#define OPL_AM_VIB_VIB_SHIFT                6
+#define OPL_AM_VIB_EGT_SHIFT                5
+#define OPL_AM_VIB_KSR_SHIFT                4
+#define OPL_AM_VIB_MULT_MASK                0x0F
+#define OPL_KSL_SHIFT                6
+#define OPL_KSL_MASK                 3
+#define OPL_TL_MASK                  0x3F
+#define OPL_RATE_HIGH_SHIFT          4       /* AR and SL in the high nibble           */
+#define OPL_RATE_MASK                0x0F
+#define OPL_WAVEFORM_MASK            7
+#define OPL_FNUMBER_LOW_BITS         0xFF
+#define OPL_FNUMBER_HIGH_BITS        0x300
+#define OPL_FNUMBER_HIGH_MASK        3
+#define OPL_FNUMBER_HIGH_SHIFT       8
+#define OPL_KEY_ON                   0x20
+#define OPL_KEY_ON_SHIFT             5
+#define OPL_BLOCK_SHIFT              2
+#define OPL_BLOCK_MASK               7
+#define OPL_FEEDBACK_SHIFT           1
+#define OPL_FEEDBACK_MASK            7
+#define OPL_TEST_WSE                 0x20    /* register 0x01: waveform select enable  */
+/* 4-operator pairs (OPL3_REGISTER_FOUR_OPERATOR). */
+#define OPL_FOUR_OPERATOR_FIRST      1       /* OplFourOperatorRole: leads a pair      */
+#define OPL_FOUR_OPERATOR_SECOND     2       /* ...is the pair's second channel        */
+#define OPL_FOUR_OPERATOR_PARTNER    3       /* the second channel is the first + 3    */
+#define OPL_FOUR_OPERATOR_CHANNELS   6       /* channels 0-5 of an array can pair      */
+#define OPL_FOUR_OPERATOR_PAIR_CHANNELS 2
+#define OPL_FOUR_OPERATOR_ARRAY1_BITS 3      /* bits 3-5: array 1's pairs              */
+/* Rhythm mode: operators 12-17 on channels 6-8. */
+#define OPL_RHYTHM_FIRST_OPERATOR    12
+#define OPL_RHYTHM_OPERATORS         6
+#define OPL_RHYTHM_CHANNELS          3
+#define OPL_RHYTHM_CHANNEL_BASS_DRUM 6
+#define OPL_RHYTHM_CHANNEL_HIHAT_SNARE 7
+#define OPL_RHYTHM_CHANNEL_TOM_CYMBAL 8
+#define OPL_OPERATOR_HIHAT           13
+#define OPL_OPERATOR_CYMBAL          17
+#define OPL_RHYTHM_RESTART_HIHAT     1       /* RhythmRestart bits                     */
+#define OPL_RHYTHM_RESTART_CYMBAL    2
+#define OPL_RHYTHM_VOICES            5       /* hi-hat, cymbal, tom-tom, snare, bass   */
+#define OPL_BD_DRUMS                 0x1F    /* 0xBD bits 0-4: the drums' keys         */
+#define OPL_STEREO_CHANNELS          2
+
 /* C0-C8 (and 0x1C0-0x1C8) output-routing bits, OPL3 with NEW set. The chip has
    FOUR outputs, A-D. A Sound Blaster 16 / AWE32 wires A to the left DAC and B to
    the right; C and D are brought out of the chip and routed NOWHERE on those cards,
@@ -215,7 +296,7 @@ typedef struct _OPL_STATE {
        once produced a confident wrong answer about this very register. (Until
        #139 three of the five were silent and this was their loud-failure report;
        all five are synthesised now.) */
-    UINT32 ProfileRhythmHits[5];
+    UINT32 ProfileRhythmHits[OPL_RHYTHM_VOICES];
 } OPL_STATE, *POPL_STATE;
 typedef const OPL_STATE *PCOPL_STATE;
 
@@ -271,7 +352,7 @@ INT  OplFourOperatorRole(_In_ PCOPL_STATE state, _In_ INT channel);
                         carry the mono signal, identical to VddOplRender. */
 #define OPL_NATIVE_HZ 49716u
 VOID VddOplRender(_Inout_ POPL_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
-VOID VddOplRenderStereo(_Inout_ POPL_STATE state, _Out_writes_(2 * frames) INT16 *output, _In_ UINT32 frames);
+VOID VddOplRenderStereo(_Inout_ POPL_STATE state, _Out_writes_(OPL_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
 
 /* nosb.flag: when set, the status port floats (0xFF) so an AdLib detect fails. */
 extern INT g_OplAbsent;
