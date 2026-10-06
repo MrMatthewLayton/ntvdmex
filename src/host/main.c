@@ -535,13 +535,13 @@ static void dsprobe_load(void)
      XMS handed out more memory than the machine has, and SysVars+0x45 reported the
      pool, so MEM and AH=88h disagreed (#48). HIMEM on 6.22 reports the extended memory
      minus the 64 KB HMA it keeps for itself -- the oracle's MEM: total 15,232K, XMS free
-     15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXT_KB so the four views
+     15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXTENDED_KB so the four views
      (88h, CMOS, SysVars+0x45, XMS) are one number and cannot drift again.
    ⚠ AN OBSERVABLE CHANGE: XMS AH=08h now says 15296 KB, 1088 KB less than before. No
      oracle pins the old figure (xms-ems.md: 08h's size is per machine, abstained), and
      DPMI memory does not come from this pool -- but every XMS client sees it. */
 #define XMS_HMA_KB    64
-#define XMS_POOL_KB   (CMOS_EXT_KB - XMS_HMA_KB)       /* 15296 */
+#define XMS_POOL_KB   (CMOS_EXTENDED_KB - XMS_HMA_KB)       /* 15296 */
 
 /* ── ★ THE CPU CLASS `INT 2Fh AX=1687h` REPORTS IN CL, AND IT IS NOT COSMETIC. ────────
      `krnl386.exe` asks `INT 2Fh AX=1687h` at start-up, and the CPU bits of the Win16
@@ -905,7 +905,7 @@ static dos_machine_t *g_mach = NULL;
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static VDD_BUS      g_bus;
 static pit_state    g_pit;       static NTVDD_DEVICE g_pit_dev;
-static cmos_state   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
+static CMOS_STATE   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
 static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
 static pic_state    g_pic;       static NTVDD_DEVICE g_pic_dev;
@@ -14925,7 +14925,7 @@ static void host_pit_generate(void)
                even then nothing reaches the guest until IRQ8 is unmasked on the
                slave PIC and IRQ2 on the master. All of that is off at reset, so
                a guest that does not program it sees no change at all. */
-          vdd_cmos_add_clocks(&g_cmos, (uint32_t)clocks);
+          VddCmosAddClocks(&g_cmos, (uint32_t)clocks);
       } }
     LeaveCriticalSection(&g_pit_cs);
 }
@@ -24559,7 +24559,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              about OUR virtual machine's configuration, and a guest that
                              gets a different machine depending on which mode it asked from
                              is a guest we cannot reason about.
-                               AH=88h -> CMOS_EXT_KB (0x3C00) KB extended, the CMOS figure
+                               AH=88h -> CMOS_EXTENDED_KB (0x3C00) KB extended, the CMOS figure
                                          (#48: the XMS pool is now that less the HMA).
                                AH=86h -> wait: the PIT already paces us, so CF=0 and return.
                                anything else, C0h INCLUDED -> AH=86h, CF=1, "unsupported".
@@ -24604,7 +24604,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                Win16 driver's `es:[bx+2]` read assumes) -- not measured here. */
                         { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                           if (ah15 == 0x88) {
-                              VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXT_KB);
+                              VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXTENDED_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                           } else if (ah15 == 0xC0) {
                               WORD selc0 = dpmi_seg_to_desc(DOS_CTAB_SEG);
@@ -29199,12 +29199,12 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      unvalidated behaviour change for every other guest. It is worth
                      doing deliberately, with Doom and the DOS batteries re-gated on
                      it -- on its own merits, not as a ZAR fix.
-                   ★ #48: the number itself is now ONE number. It is CMOS_EXT_KB, the same
+                   ★ #48: the number itself is now ONE number. It is CMOS_EXTENDED_KB, the same
                      figure CMOS 17h/30h and SysVars+0x45 report; the XMS pool is that
                      less the 64K HMA (XMS_POOL_KB). The double hand-out above is
                      unchanged -- this arm still does not answer 0 as HIMEM's hook would
                      (6.22's MEM: "Memory accessible using Int 15h 0"). */
-                BSETAX((WORD)CMOS_EXT_KB);     /* 15 MB -- the machine, not the XMS pool */
+                BSETAX((WORD)CMOS_EXTENDED_KB);     /* 15 MB -- the machine, not the XMS pool */
                 BCF_CLR();
                 { char x8[128], *x8q = x8;
                   x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
@@ -31785,10 +31785,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              (runs/s81_mem/oracle_memd.txt) -- the total is this field (15232K), the
              free is HIMEM's AH=08h, and the 64K "used" is the HMA, which XMS never
              counts. Ours said 16384 (the pool) while AH=88h and CMOS 17h/30h said
-             15360 -- one machine with two sizes. Now all three are CMOS_EXT_KB and the
+             15360 -- one machine with two sizes. Now all three are CMOS_EXTENDED_KB and the
              pool is that LESS the HMA (XMS_POOL_KB), so MEM's Total - Free = Used
              comes out 64K, 6.22's shape, and can never go negative. */
-        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x45) = (WORD)CMOS_EXT_KB;
+        *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x45) = (WORD)CMOS_EXTENDED_KB;
         /* ⚠ GH #47: SysVars +0x43 = 0x0103, +0x49 = 0xFFFF and +0x4B = 0x0001
            (6.22's values, where ours are zero) were planted together as a
            diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
@@ -31956,9 +31956,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          The same principle as A20's three doors; p_rtc.asm's rtc.agree.hours is
          the case that checks it, and it read 0000 against 0101 on all three
          oracles before this device existed. */
-    g_cmos.rtc_now = host_rtc_now;
-    g_cmos.rtc_ctx = NULL;
-    g_cmos.rtc_set = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
+    g_cmos.RtcNow = host_rtc_now;
+    g_cmos.RtcContext = NULL;
+    g_cmos.RtcSet = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
     g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
     g_ww_send16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
@@ -31967,8 +31967,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ww_global16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
-    g_cmos.base_kb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
-    g_cmos_dev = vdd_cmos_device(&g_cmos);
+    g_cmos.BaseKb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
+    g_cmos_dev = VddCmosDevice(&g_cmos);
     VddBusAdd(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
          3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh

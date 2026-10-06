@@ -1,7 +1,84 @@
 /* vdd_cmos.c -- see vdd_cmos.h.  MC146818 RTC + CMOS RAM on the VDD bus.  Pure C. */
 #include "vdd_cmos.h"
 
-static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) % 10) * 16 + (v % 10)); }
+/* Status B's bits (MC146818; docs/ref/rtc.md 2). */
+#define CMOS_B_SET              0x80   /* hold updates: the clock is being set      */
+#define CMOS_B_PIE              0x40   /* periodic interrupt enable                 */
+#define CMOS_B_AIE              0x20   /* alarm interrupt enable                    */
+#define CMOS_B_UIE              0x10   /* update-ended interrupt enable             */
+#define CMOS_B_UIE_OR_AIE       0x30
+#define CMOS_B_BINARY           0x04   /* DM: binary, not BCD                       */
+#define CMOS_B_24_HOUR          0x02   /* 24/12: 24-hour                            */
+/* Status C's flags. */
+#define CMOS_C_IRQF             0x80   /* an interrupt is pending                   */
+#define CMOS_C_PF_AND_IRQF      0xC0   /* periodic flag, and IRQF with it           */
+#define CMOS_C_AF               0x20   /* alarm flag                                */
+#define CMOS_C_UF               0x10   /* update-ended flag                         */
+/* Status A and D. */
+#define CMOS_A_RATE_MASK        0x0F   /* RS3:0, the periodic rate select           */
+#define CMOS_A_UIP              0x80   /* update in progress (read-only)            */
+#define CMOS_A_WRITABLE_BITS    0x7F   /* everything but UIP                        */
+#define CMOS_HOUR_VALUE_BITS    0x7F   /* 12-hour mode: the hours register less PM  */
+#define CMOS_D_VRT              0x80   /* valid RAM and time                        */
+#define CMOS_REGISTER_MASK      0x7F   /* port 70h bits 6:0: the register number    */
+#define CMOS_NMI_MASK_BIT       0x80   /* port 70h bit 7: the NMI mask              */
+#define CMOS_ALARM_DONT_CARE    0xC0   /* an alarm field with both top bits set     */
+#define CMOS_HOUR_PM_BIT        0x80   /* 12-hour mode: the hours register's PM bit */
+#define CMOS_HOUR_AM            0x00
+/* The periodic rates (docs/ref/rtc.md 2): RS=1 and 2 are special, then 32768 >> (RS-1). */
+#define CMOS_RATE_NONE          0
+#define CMOS_RATE_SELECT_256HZ  1
+#define CMOS_RATE_SELECT_128HZ  2
+#define CMOS_RATE_256HZ         256
+#define CMOS_RATE_128HZ         128
+#define CMOS_TIME_BASE_HZ       32768u
+#define CMOS_RTC_IRQ            8
+#define CMOS_SECOND_EDGE_GUARD  1000   /* most second edges caught up in one call   */
+#define CMOS_PERIODIC_GUARD     100000 /* most periodic ticks caught up in one call */
+/* BCD and the clock. */
+#define CMOS_DECIMAL_BASE       10
+#define CMOS_BCD_TENS_WEIGHT    16
+#define CMOS_BCD_TENS_SHIFT     4
+#define CMOS_BCD_TENS_BASE      10u
+#define CMOS_BCD_UNITS_MASK     0x0Fu
+#define CMOS_HOURS_PER_HALF_DAY 12
+#define CMOS_HALF_DAY_HOURS     12u
+#define CMOS_NO_HOURS           0u
+#define CMOS_DEFAULT_CENTURY    20     /* the reading's defaults before the host fills it */
+#define CMOS_DEFAULT_MONTH      1
+#define CMOS_DEFAULT_DAY        1
+/* Ports. */
+#define CMOS_INDEX_PORT         0x70
+#define CMOS_DATA_PORT          0x71
+#define CMOS_UNDRIVEN_BUS       0xFF
+/* What POST leaves (docs/ref/rtc.md 3; see VddCmosReset). */
+#define CMOS_POST_STATUS_A      0x26   /* 32.768 kHz divider, 1024 Hz rate select   */
+#define CMOS_POST_STATUS_B      0x02   /* BCD, 24-hour, every interrupt disabled    */
+#define CMOS_POST_DAY_OF_WEEK   0x01
+#define CMOS_DIAGNOSTIC         0x0E
+#define CMOS_POST_DIAGNOSTIC    0x00   /* no errors                                 */
+#define CMOS_FLOPPY_TYPES       0x10
+#define CMOS_ONE_1440K_FLOPPY   0x40
+#define CMOS_POST_EQUIPMENT     0x25   /* 1 floppy, colour 80x25, FPU               */
+#define CMOS_BASE_KB_LOW        0x15
+#define CMOS_BASE_KB_HIGH       0x16
+#define CMOS_DEFAULT_BASE_KB    640u
+#define CMOS_EXTENDED_KB_LOW    0x17   /* configured                                */
+#define CMOS_EXTENDED_KB_HIGH   0x18
+#define CMOS_POST_EXTENDED_LOW  0x30   /* POST-detected                             */
+#define CMOS_POST_EXTENDED_HIGH 0x31
+#define CMOS_CHECKSUM_FIRST     0x10
+#define CMOS_CHECKSUM_LAST      0x2D
+#define CMOS_CHECKSUM_HIGH      0x2E
+#define CMOS_CHECKSUM_LOW       0x2F
+#define CMOS_LOW_BYTE           0xFF
+#define CMOS_HIGH_BYTE_SHIFT    8
+#define CMOS_OK                 0
+#define CMOS_FAILED             (-1)
+#define CMOS_NOT_A_CLOCK_REGISTER 0
+#define CMOS_CLOCK_REGISTER     1
+
+static BYTE CmosToBcd(UINT value) { return (BYTE)(((value / CMOS_DECIMAL_BASE) % CMOS_DECIMAL_BASE) * CMOS_BCD_TENS_WEIGHT + (value % CMOS_DECIMAL_BASE)); }
 
 /* A clock field, in whichever base Status B bit 2 (DM) selects.
    ⚠ HONOURING DM MATTERS MORE THAN IT LOOKS. A PC BIOS leaves DM=0 (BCD) and
@@ -9,106 +86,106 @@ static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) % 10) * 16 + (v % 10
      guest that DID set binary mode a BCD byte, and 0x59 seconds then reads as
      eighty-nine. Refusing the write would be the "runs but lies" shape; honouring
      it is two lines. */
-static uint8_t clkval(const cmos_state *st, unsigned v)
-{ return (st->status_b & 0x04) ? (uint8_t)v : bcd(v); }
+static BYTE CmosClockValue(PCCMOS_STATE state, UINT value)
+{ return (state->StatusB & CMOS_B_BINARY) ? (BYTE)value : CmosToBcd(value); }
 
 /* The other direction: a byte the guest wrote, in the base DM says it is in. */
-static unsigned clkdec(const cmos_state *st, uint8_t v)
-{ return (st->status_b & 0x04) ? v : (unsigned)(v >> 4) * 10u + (v & 0x0Fu); }
+static UINT CmosClockDecode(PCCMOS_STATE state, BYTE value)
+{ return (state->StatusB & CMOS_B_BINARY) ? value : (UINT)(value >> CMOS_BCD_TENS_SHIFT) * CMOS_BCD_TENS_BASE + (value & CMOS_BCD_UNITS_MASK); }
 
 /* The clock as the chip shows it now: the frozen copy while SET is held. */
-static int cmos_reading(cmos_state *st, struct vdd_rtc *n)
+static INT CmosReading(PCMOS_STATE state, struct vdd_rtc *reading)
 {
-    if (st->set_held) { *n = st->shadow; return 1; }
-    if (!st->rtc_now) return 0;
-    n->cent = 20; n->year = 0; n->month = 1; n->day = 1;
-    n->hour = 0;  n->min = 0;  n->sec = 0;  n->dow = 0;
-    st->rtc_now(st->rtc_ctx, n);
-    return 1;
+    if (state->IsSetHeld) { *reading = state->Shadow; return TRUE; }
+    if (!state->RtcNow) return FALSE;
+    reading->cent = CMOS_DEFAULT_CENTURY; reading->year = 0; reading->month = CMOS_DEFAULT_MONTH; reading->day = CMOS_DEFAULT_DAY;
+    reading->hour = 0;  reading->min = 0;  reading->sec = 0;  reading->dow = 0;
+    state->RtcNow(state->RtcContext, reading);
+    return TRUE;
 }
 
 /* ── THE PERIODIC RATE, FROM STATUS A BITS 3:0. (docs/ref/rtc.md 2) ──────────
      0 selects none. 1 and 2 are special cases at 256 Hz and 128 Hz; from 3 up
      the rate is 32768 >> (RS - 1), so RS=3 is 8192 Hz, RS=6 is 1024 Hz (what a
      PC BIOS leaves) and RS=15 is 2 Hz. */
-uint32_t vdd_cmos_periodic_hz(const cmos_state *st)
+UINT32 VddCmosPeriodicHz(PCCMOS_STATE state)
 {
-    unsigned rs = st->status_a & 0x0F;
-    if (!rs) return 0;
-    if (rs == 1) return 256;
-    if (rs == 2) return 128;
-    return 32768u >> (rs - 1);
+    UINT rateSelect = state->StatusA & CMOS_A_RATE_MASK;
+    if (!rateSelect) return CMOS_RATE_NONE;
+    if (rateSelect == CMOS_RATE_SELECT_256HZ) return CMOS_RATE_256HZ;
+    if (rateSelect == CMOS_RATE_SELECT_128HZ) return CMOS_RATE_128HZ;
+    return CMOS_TIME_BASE_HZ >> (rateSelect - 1);
 }
 
-static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out);
+static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value);
 
 /* ── THE ALARM MATCH RULE, WHICH IS NOT "EQUAL". ─────────────────────────────
      An alarm register whose top two bits are both set (>= 0xC0) is a DON'T CARE
      and matches anything -- that is how "every minute at 30 seconds" is
      programmed, and a model that only compares for equality can never express
      it. (MC146818 datasheet, the alarm registers.) */
-static int alarm_field_matches(uint8_t alarm, uint8_t now)
-{ return (alarm & 0xC0) == 0xC0 || alarm == now; }
+static INT CmosAlarmFieldMatches(BYTE alarm, BYTE current)
+{ return (alarm & CMOS_ALARM_DONT_CARE) == CMOS_ALARM_DONT_CARE || alarm == current; }
 
 /* One second has passed: raise the update-ended flag, and the alarm flag if the
    clock has reached the programmed time. Returns non-zero if either was set. */
-static int cmos_second_edge(cmos_state *st)
+static INT CmosSecondEdge(PCMOS_STATE state)
 {
-    int fired = 0;
-    if (st->set_held) return 0;                 /* SET: updates are inhibited  */
-    if (st->status_b & 0x10) {                  /* UIE: update ended           */
-        st->status_c |= 0x10; st->uf_raised++; fired = 1;
+    INT hasFired = FALSE;
+    if (state->IsSetHeld) return FALSE;                /* SET: updates are inhibited  */
+    if (state->StatusB & CMOS_B_UIE) {            /* UIE: update ended           */
+        state->StatusC |= CMOS_C_UF; state->UpdateEndedRaised++; hasFired = TRUE;
     }
-    if (st->status_b & 0x20) {                  /* AIE: alarm                  */
-        uint8_t h, m, sec;
-        if (cmos_clock_reg(st, CMOS_SEC, &sec) &&
-            cmos_clock_reg(st, CMOS_MIN, &m) &&
-            cmos_clock_reg(st, CMOS_HOUR, &h) &&
-            alarm_field_matches(st->ram[0x01], sec) &&
-            alarm_field_matches(st->ram[0x03], m) &&
-            alarm_field_matches(st->ram[0x05], h)) {
-            st->status_c |= 0x20; st->af_raised++; fired = 1;
+    if (state->StatusB & CMOS_B_AIE) {            /* AIE: alarm                  */
+        BYTE hours, minutes, seconds;
+        if (CmosClockRegister(state, CMOS_SECONDS, &seconds) &&
+            CmosClockRegister(state, CMOS_MINUTES, &minutes) &&
+            CmosClockRegister(state, CMOS_HOURS, &hours) &&
+            CmosAlarmFieldMatches(state->Ram[CMOS_SECONDS_ALARM], seconds) &&
+            CmosAlarmFieldMatches(state->Ram[CMOS_MINUTES_ALARM], minutes) &&
+            CmosAlarmFieldMatches(state->Ram[CMOS_HOURS_ALARM], hours)) {
+            state->StatusC |= CMOS_C_AF; state->AlarmRaised++; hasFired = TRUE;
         }
     }
-    return fired;
+    return hasFired;
 }
 
-void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
+VOID VddCmosAddClocks(PCMOS_STATE state, UINT32 clocks)
 {
-    uint32_t hz, period;
-    int guard = 0;
+    UINT32 rateHz, period;
+    INT guard = 0;
     /* ── THE ONCE-A-SECOND EDGE, for UF and AF. Accumulated from the same clocks
          the periodic divider uses rather than polled off the host clock, so
          rtc_now is called once a SECOND instead of once a pacer tick. */
-    if (st->status_b & 0x30) {                  /* UIE or AIE enabled          */
-        st->sec_accum += clocks;
-        while (st->sec_accum >= PIT_INPUT_HZ && guard++ < 1000) {
-            st->sec_accum -= PIT_INPUT_HZ;
-            if (cmos_second_edge(st)) {
-                st->status_c |= 0x80;           /* IRQF: something is pending  */
-                if (st->bus) VddRaiseIrq(st->bus, 8);
+    if (state->StatusB & CMOS_B_UIE_OR_AIE) {     /* UIE or AIE enabled          */
+        state->SecondAccumulator += clocks;
+        while (state->SecondAccumulator >= PIT_INPUT_HZ && guard++ < CMOS_SECOND_EDGE_GUARD) {
+            state->SecondAccumulator -= PIT_INPUT_HZ;
+            if (CmosSecondEdge(state)) {
+                state->StatusC |= CMOS_C_IRQF;    /* IRQF: something is pending  */
+                if (state->Bus) VddRaiseIrq(state->Bus, CMOS_RTC_IRQ);
             }
         }
     } else {
-        st->sec_accum = 0;
+        state->SecondAccumulator = 0;
     }
     guard = 0;
     /* Dormant unless the guest asked for it -- see the note in the header. Doing
        nothing at all (rather than accumulating) means enabling PIE later starts
        from now rather than replaying a backlog of ticks nobody was listening for. */
-    if (!(st->status_b & 0x40)) { st->pf_accum = 0; return; }
-    hz = vdd_cmos_periodic_hz(st);
-    if (!hz) { st->pf_accum = 0; return; }
-    period = PIT_INPUT_HZ / hz;                 /* PIT-rate clocks per periodic tick */
+    if (!(state->StatusB & CMOS_B_PIE)) { state->PeriodicAccumulator = 0; return; }
+    rateHz = VddCmosPeriodicHz(state);
+    if (!rateHz) { state->PeriodicAccumulator = 0; return; }
+    period = PIT_INPUT_HZ / rateHz;                 /* PIT-rate clocks per periodic tick */
     if (!period) return;
-    st->pf_accum += clocks;
-    while (st->pf_accum >= period && guard++ < 100000) {
-        st->pf_accum -= period;
+    state->PeriodicAccumulator += clocks;
+    while (state->PeriodicAccumulator >= period && guard++ < CMOS_PERIODIC_GUARD) {
+        state->PeriodicAccumulator -= period;
         /* PF, and IRQF because an interrupt is now pending. Both are cleared by a
            read of Status C -- which is how a handler acknowledges the chip. */
-        st->status_c |= 0xC0;
-        st->pf_raised++;
-        if (st->bus) VddRaiseIrq(st->bus, 8);
+        state->StatusC |= CMOS_C_PF_AND_IRQF;
+        state->PeriodicRaised++;
+        if (state->Bus) VddRaiseIrq(state->Bus, CMOS_RTC_IRQ);
     }
 }
 
@@ -118,50 +195,50 @@ void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
      24/12=1, i.e. **BCD, 24-hour**, and every DOS program that reads this chip
      by hand assumes exactly that -- so 0x12 in the hours register is twelve
      o'clock, not eighteen. */
-static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out)
+static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
 {
-    struct vdd_rtc n;
-    if (!cmos_reading(st, &n)) return 0;
-    switch (reg) {
-    case CMOS_SEC:     *out = clkval(st, n.sec);   return 1;
-    case CMOS_MIN:     *out = clkval(st, n.min);   return 1;
-    case CMOS_HOUR: {
+    struct vdd_rtc reading;
+    if (!CmosReading(state, &reading)) return CMOS_NOT_A_CLOCK_REGISTER;
+    switch (registerIndex) {
+    case CMOS_SECONDS:     *value = CmosClockValue(state, reading.sec);   return CMOS_CLOCK_REGISTER;
+    case CMOS_MINUTES:     *value = CmosClockValue(state, reading.min);   return CMOS_CLOCK_REGISTER;
+    case CMOS_HOURS: {
         /* ⚠ 12-HOUR MODE IS NOT "SUBTRACT TWELVE". Status B bit 1 clear selects
              it, and then BIT 7 OF THIS REGISTER IS PM -- midnight is 12 AM and
              noon is 12 PM, neither of which is hour 0. A model that ignores the
              bit tells a 12-hour guest that 14:00 is 2 AM. */
-        unsigned h = n.hour;
-        uint8_t pm = 0;
-        if (!(st->status_b & 0x02)) {
-            pm = (uint8_t)(h >= 12 ? 0x80 : 0x00);
-            h %= 12; if (!h) h = 12;
+        UINT hour = reading.hour;
+        BYTE pmBit = 0;
+        if (!(state->StatusB & CMOS_B_24_HOUR)) {
+            pmBit = (BYTE)(hour >= CMOS_HOURS_PER_HALF_DAY ? CMOS_HOUR_PM_BIT : CMOS_HOUR_AM);
+            hour %= CMOS_HOURS_PER_HALF_DAY; if (!hour) hour = CMOS_HOURS_PER_HALF_DAY;
         }
-        *out = (uint8_t)(clkval(st, h) | pm);
-        return 1; }
+        *value = (BYTE)(CmosClockValue(state, hour) | pmBit);
+        return CMOS_CLOCK_REGISTER; }
     /* ⚠ 01h, 03h and 05h -- the ALARM registers -- are deliberately NOT claimed
          here. They are storage the guest owns, not a view of the host clock, so
          they fall through to ram[] on both the read and the write paths. */
-    case CMOS_DOM:     *out = clkval(st, n.day);   return 1;
-    case CMOS_MONTH:   *out = clkval(st, n.month); return 1;
-    case CMOS_YEAR:    *out = clkval(st, n.year);  return 1;
-    case CMOS_CENTURY: *out = clkval(st, n.cent);  return 1;
+    case CMOS_DAY_OF_MONTH:     *value = CmosClockValue(state, reading.day);   return CMOS_CLOCK_REGISTER;
+    case CMOS_MONTH:   *value = CmosClockValue(state, reading.month); return CMOS_CLOCK_REGISTER;
+    case CMOS_YEAR:    *value = CmosClockValue(state, reading.year);  return CMOS_CLOCK_REGISTER;
+    case CMOS_CENTURY: *value = CmosClockValue(state, reading.cent);  return CMOS_CLOCK_REGISTER;
     /* ── THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
          was fixed at 1 (Sunday) because the clock reading carried no weekday and a
          device model should not hold calendar arithmetic. Windows' GetLocalTime
          already knows it, so the host passes it through (1 = Sunday, the chip's
          numbering); a reader with no weekday (0) still falls back to ram[]. */
-    case CMOS_DOW:
-        if (!n.dow) return 0;
-        *out = clkval(st, n.dow); return 1;
-    default: return 0;
+    case CMOS_DAY_OF_WEEK:
+        if (!reading.dow) return CMOS_NOT_A_CLOCK_REGISTER;
+        *value = CmosClockValue(state, reading.dow); return CMOS_CLOCK_REGISTER;
+    default: return CMOS_NOT_A_CLOCK_REGISTER;
     }
 }
 
-static uint8_t cmos_read(cmos_state *st, uint8_t reg)
+static BYTE CmosRead(PCMOS_STATE state, BYTE registerIndex)
 {
-    uint8_t v;
-    if (cmos_clock_reg(st, reg, &v)) return v;
-    switch (reg) {
+    BYTE value;
+    if (CmosClockRegister(state, registerIndex, &value)) return value;
+    switch (registerIndex) {
     /* ── STATUS A. BIT 7 IS **UIP** AND WE REPORT IT CLEAR, ALWAYS. ──────────
          The chip sets UIP for ~2 ms once a second while it updates its own
          registers, and software waits for it to fall before reading the time.
@@ -171,72 +248,72 @@ static uint8_t cmos_read(cmos_state *st, uint8_t reg)
          convenient lie -- and it is why bit 7 is masked off on the WRITE path
          instead of being stored: UIP is the chip telling software when it may
          read, never software telling the chip anything. */
-    case CMOS_STATUS_A: return st->status_a;
+    case CMOS_STATUS_A: return state->StatusA;
     /* ── STATUS B: BCD, 24-HOUR. ★ MEASURED 0x02 on 6.22-under-QEMU AND on
          PCem's real AMI BIOS; dosbox-x answers 0x03, which is the same plus
          DSE (daylight saving). Two of three, including the period-correct
          machine, and 0x02 is what the bit definitions say a PC leaves. */
-    case CMOS_STATUS_B: return st->status_b;
+    case CMOS_STATUS_B: return state->StatusB;
     /* ── STATUS C IS CLEARED BY BEING READ. ─────────────────────────────────
          That is how IRQ8 is acknowledged at the chip: the flags latch and the
          read clears them, so a handler that does not read 0Ch gets exactly one
-         interrupt and then silence. vdd_cmos_add_clocks sets PF and IRQF here. */
-    case CMOS_STATUS_C: { uint8_t c = st->status_c; st->status_c = 0; return c; }
+         interrupt and then silence. VddCmosAddClocks sets PF and IRQF here. */
+    case CMOS_STATUS_C: { BYTE flags = state->StatusC; state->StatusC = 0; return flags; }
     /* ── STATUS D BIT 7 IS VRT, "valid RAM and time". CLEAR means "the battery
          died and everything in here is garbage", which firmware and setup
          programs act on. With no chip at all we answered 0xFF, whose bit 7 is
          set -- so this row was RIGHT BY ACCIDENT and agreed with all three
          oracles. It is now right on purpose. */
-    case CMOS_STATUS_D: return 0x80;
+    case CMOS_STATUS_D: return CMOS_D_VRT;
     default: break;
     }
-    return st->ram[reg & 0x7F];
+    return state->Ram[registerIndex & CMOS_REGISTER_MASK];
 }
 
-static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    cmos_state *st = (cmos_state *)self;
-    uint8_t b = (uint8_t)v;
-    (void)w;
-    if (port == 0x70) {
+    PCMOS_STATE state = (PCMOS_STATE)context;
+    BYTE byteValue = (BYTE)value;
+    (VOID)width;
+    if (port == CMOS_INDEX_PORT) {
         /* Bit 7 is the NMI mask, not part of the register number -- see the note
            in the header. Counted, because a run should be able to say whether a
            guest masks NMI, and not acted on, because we have no NMI to mask. */
-        if (b & 0x80) st->nmi_mask_writes++;
-        st->nmi_disabled = (uint8_t)((b & 0x80) ? 1 : 0);
-        st->index = (uint8_t)(b & 0x7F);
+        if (byteValue & CMOS_NMI_MASK_BIT) state->NmiMaskWrites++;
+        state->IsNmiDisabled = (BYTE)((byteValue & CMOS_NMI_MASK_BIT) ? TRUE : FALSE);
+        state->Index = (BYTE)(byteValue & CMOS_REGISTER_MASK);
         return;
     }
     /* Port 0x71 write. The clock registers move the VDM's own RTC (GH #261, below
        -- an offset from the host's, src/dos/dos_clock.h; the machine's clock never
        moves); the status registers are the guest's control bits or read-only;
        everything else is battery-backed RAM and takes it. */
-    if (st->index == CMOS_STATUS_A) {
+    if (state->Index == CMOS_STATUS_A) {
         /* Bit 7 is UIP and is READ-ONLY -- it is the chip telling software when
            it may read, not software telling the chip anything. */
-        st->status_a = (uint8_t)(b & 0x7F);
+        state->StatusA = (BYTE)(byteValue & CMOS_A_WRITABLE_BITS);
         return;
     }
-    if (st->index == CMOS_STATUS_B) {
+    if (state->Index == CMOS_STATUS_B) {
         /* ── GH #261: SET (bit 7). Going high freezes a copy of the clock and,
              per the MC146818 datasheet, CLEARS UIE -- no update-ended interrupt
              for a clock that is not updating. Going low commits the copy: the
              date, then the time, through the same hook INT 1Ah AH=05h/03h use. */
-        if ((b & 0x80) && !st->set_held) {
-            struct vdd_rtc n;
-            if (cmos_reading(st, &n)) { st->shadow = n; st->set_held = 1; }
-            b = (uint8_t)(b & ~0x10);
-        } else if (!(b & 0x80) && st->set_held) {
-            st->set_held = 0;
-            if (st->rtc_set) {
-                st->rtc_set(st->rtc_ctx, &st->shadow, 1);
-                st->rtc_set(st->rtc_ctx, &st->shadow, 0);
+        if ((byteValue & CMOS_B_SET) && !state->IsSetHeld) {
+            struct vdd_rtc reading;
+            if (CmosReading(state, &reading)) { state->Shadow = reading; state->IsSetHeld = 1; }
+            byteValue = (BYTE)(byteValue & ~CMOS_B_UIE);
+        } else if (!(byteValue & CMOS_B_SET) && state->IsSetHeld) {
+            state->IsSetHeld = 0;
+            if (state->RtcSet) {
+                state->RtcSet(state->RtcContext, &state->Shadow, 1);
+                state->RtcSet(state->RtcContext, &state->Shadow, 0);
             }
         }
-        st->status_b = b;
+        state->StatusB = byteValue;
         /* Disabling the periodic interrupt drops any part-accumulated tick, so
            re-enabling it starts from now rather than firing immediately. */
-        if (!(b & 0x40)) st->pf_accum = 0;
+        if (!(byteValue & CMOS_B_PIE)) state->PeriodicAccumulator = 0;
         return;
     }
     /* ⛔ THE ALARM REGISTERS ARE NOT THE CLOCK, AND BLANKET-REFUSING THEM WAS A
@@ -247,8 +324,8 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
          unreachable. The rule is not "low registers are read-only"; it is
          "WE CANNOT MOVE THE HOST'S CLOCK", and that applies to 00/02/04 and to
          the date, not to a comparison value the guest owns. */
-    if (st->index == 0x01 || st->index == 0x03 || st->index == 0x05) {
-        st->ram[st->index] = b;
+    if (state->Index == CMOS_SECONDS_ALARM || state->Index == CMOS_MINUTES_ALARM || state->Index == CMOS_HOURS_ALARM) {
+        state->Ram[state->Index] = byteValue;
         return;
     }
     /* ── ★ GH #261: THE CLOCK ITSELF. With a host hook (rtc_set) a write moves
@@ -258,56 +335,56 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
        ⚠ THE DAY OF WEEK (06h) STAYS REFUSED: the VDM's weekday is derived from
          its date, and a free-running counter the guest can set to anything has
          no place in an offset. Without the hook every clock write is refused. */
-    if (st->index == CMOS_SEC || st->index == CMOS_MIN || st->index == CMOS_HOUR ||
-        st->index == CMOS_DOM || st->index == CMOS_MONTH || st->index == CMOS_YEAR ||
-        st->index == CMOS_CENTURY) {
-        struct vdd_rtc n;
-        int date = st->index >= CMOS_DOM;
-        if (!st->rtc_set || !cmos_reading(st, &n)) return;
-        switch (st->index) {
-        case CMOS_SEC:   n.sec = clkdec(st, b); break;
-        case CMOS_MIN:   n.min = clkdec(st, b); break;
-        case CMOS_HOUR:
-            if (st->status_b & 0x02) n.hour = clkdec(st, b);
-            else { unsigned h = clkdec(st, (uint8_t)(b & 0x7F)) % 12u;
-                   n.hour = h + ((b & 0x80) ? 12u : 0u); }
+    if (state->Index == CMOS_SECONDS || state->Index == CMOS_MINUTES || state->Index == CMOS_HOURS ||
+        state->Index == CMOS_DAY_OF_MONTH || state->Index == CMOS_MONTH || state->Index == CMOS_YEAR ||
+        state->Index == CMOS_CENTURY) {
+        struct vdd_rtc reading;
+        INT isDate = state->Index >= CMOS_DAY_OF_MONTH;
+        if (!state->RtcSet || !CmosReading(state, &reading)) return;
+        switch (state->Index) {
+        case CMOS_SECONDS:   reading.sec = CmosClockDecode(state, byteValue); break;
+        case CMOS_MINUTES:   reading.min = CmosClockDecode(state, byteValue); break;
+        case CMOS_HOURS:
+            if (state->StatusB & CMOS_B_24_HOUR) reading.hour = CmosClockDecode(state, byteValue);
+            else { UINT hour = CmosClockDecode(state, (BYTE)(byteValue & CMOS_HOUR_VALUE_BITS)) % CMOS_HALF_DAY_HOURS;
+                   reading.hour = hour + ((byteValue & CMOS_HOUR_PM_BIT) ? CMOS_HALF_DAY_HOURS : CMOS_NO_HOURS); }
             break;
-        case CMOS_DOM:   n.day   = clkdec(st, b); break;
-        case CMOS_MONTH: n.month = clkdec(st, b); break;
-        case CMOS_YEAR:  n.year  = clkdec(st, b); break;
-        default:         n.cent  = clkdec(st, b); break;
+        case CMOS_DAY_OF_MONTH:   reading.day   = CmosClockDecode(state, byteValue); break;
+        case CMOS_MONTH: reading.month = CmosClockDecode(state, byteValue); break;
+        case CMOS_YEAR:  reading.year  = CmosClockDecode(state, byteValue); break;
+        default:         reading.cent  = CmosClockDecode(state, byteValue); break;
         }
-        if (st->set_held) st->shadow = n;
-        else st->rtc_set(st->rtc_ctx, &n, date);
+        if (state->IsSetHeld) state->Shadow = reading;
+        else state->RtcSet(state->RtcContext, &reading, isDate);
         return;
     }
-    if (st->index <= CMOS_STATUS_D) return;     /* DOW + Status C/D: read-only */
-    st->ram[st->index & 0x7F] = b;
+    if (state->Index <= CMOS_STATUS_D) return;     /* DOW + Status C/D: read-only */
+    state->Ram[state->Index & CMOS_REGISTER_MASK] = byteValue;
 }
 
-static void cmos_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+static VOID CmosPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    cmos_state *st = (cmos_state *)self;
-    (void)w;
+    PCMOS_STATE state = (PCMOS_STATE)context;
+    (VOID)width;
     /* ⚠ PORT 0x70 IS WRITE-ONLY ON THE PART and a read of it is undefined.
          Answer consistently rather than plausibly -- 0xFF is what an undriven
          bus gives, and it is what this port gave before anything claimed it. */
-    if (port == 0x70) { *val = 0xFF; return; }
-    *val = cmos_read(st, st->index);
+    if (port == CMOS_INDEX_PORT) { *value = CMOS_UNDRIVEN_BUS; return; }
+    *value = CmosRead(state, state->Index);
 }
 
-void vdd_cmos_reset(void *self)
+VOID VddCmosReset(PVOID context)
 {
-    cmos_state *st = (cmos_state *)self;
-    VDD_BUS *bus = st->bus;
-    void (*now)(void *, struct vdd_rtc *) = st->rtc_now;
-    int  (*set)(void *, const struct vdd_rtc *, int) = st->rtc_set;
-    void *ctx = st->rtc_ctx;
-    uint16_t base_kb = st->base_kb;                       /* #136: preserved, as above */
-    unsigned i;
-    for (i = 0; i < sizeof(*st); ++i) ((uint8_t *)st)[i] = 0;
-    st->bus = bus; st->rtc_now = now; st->rtc_set = set; st->rtc_ctx = ctx;
-    st->base_kb = base_kb;
+    PCMOS_STATE state = (PCMOS_STATE)context;
+    VDD_BUS *bus = state->Bus;
+    VOID (*rtcNow)(PVOID , struct vdd_rtc *) = state->RtcNow;
+    INT  (*rtcSet)(PVOID , const struct vdd_rtc *, INT) = state->RtcSet;
+    PVOID rtcContext = state->RtcContext;
+    WORD baseKb = state->BaseKb;                       /* #136: preserved, as above */
+    UINT byteIndex;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) ((PBYTE)state)[byteIndex] = 0;
+    state->Bus = bus; state->RtcNow = rtcNow; state->RtcSet = rtcSet; state->RtcContext = rtcContext;
+    state->BaseKb = baseKb;
     /* ── WHAT POST LEAVES IN THE CMOS. (docs/ref/rtc.md 3) ───────────────────
          These are BIOS conventions, not chip behaviour, and they are here
          because a machine DOS is running on has been through POST -- the same
@@ -321,22 +398,22 @@ void vdd_cmos_reset(void *self)
          and every interrupt DISABLED. Status A's 0x26 is the normal 32.768 kHz
          divider with the BIOS's usual 1024 Hz rate select, which is inert while
          PIE is clear. */
-    st->status_a = 0x26;
-    st->status_b = 0x02;
-    st->ram[CMOS_DOW]   = 0x01;              /* see the note in cmos_clock_reg */
-    st->ram[0x0E]       = 0x00;              /* POST diagnostic: no errors     */
-    st->ram[0x10]       = 0x40;              /* one 1.44M floppy               */
-    st->ram[CMOS_EQUIP] = 0x25;              /* 1 floppy, colour 80x25, FPU    */
+    state->StatusA = CMOS_POST_STATUS_A;
+    state->StatusB = CMOS_POST_STATUS_B;
+    state->Ram[CMOS_DAY_OF_WEEK]   = CMOS_POST_DAY_OF_WEEK;              /* see the note in CmosClockRegister */
+    state->Ram[CMOS_DIAGNOSTIC] = CMOS_POST_DIAGNOSTIC;              /* POST diagnostic: no errors     */
+    state->Ram[CMOS_FLOPPY_TYPES] = CMOS_ONE_1440K_FLOPPY;              /* one 1.44M floppy               */
+    state->Ram[CMOS_EQUIPMENT] = CMOS_POST_EQUIPMENT;              /* 1 floppy, colour 80x25, FPU    */
     /* Base memory FITTED: 640 KB (0280h) unless Settings > Conventional Memory says less
        (#136). The EBDA and INT 12h's 639 are carved out of this by the BIOS, not here. */
-    {   uint16_t kb = st->base_kb ? st->base_kb : 640u;
-        st->ram[0x15] = (uint8_t)(kb & 0xFF); st->ram[0x16] = (uint8_t)(kb >> 8); }
+    {   WORD baseMemoryKb = state->BaseKb ? state->BaseKb : CMOS_DEFAULT_BASE_KB;
+        state->Ram[CMOS_BASE_KB_LOW] = (BYTE)(baseMemoryKb & CMOS_LOW_BYTE); state->Ram[CMOS_BASE_KB_HIGH] = (BYTE)(baseMemoryKb >> CMOS_HIGH_BYTE_SHIFT); }
     /* ── EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
          configured and 30h/31h the POST-detected KB above 1 MB; a real BIOS answers
          INT 15h AH=88h from the latter. Ours answers 88h with 0x3C00 (15 MB, main.c),
          so CMOS says the same -- two views of one machine must not disagree. */
-    st->ram[0x17] = (uint8_t)(CMOS_EXT_KB & 0xFF); st->ram[0x18] = (uint8_t)(CMOS_EXT_KB >> 8);
-    st->ram[0x30] = (uint8_t)(CMOS_EXT_KB & 0xFF); st->ram[0x31] = (uint8_t)(CMOS_EXT_KB >> 8);
+    state->Ram[CMOS_EXTENDED_KB_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_EXTENDED_KB_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> CMOS_HIGH_BYTE_SHIFT);
+    state->Ram[CMOS_POST_EXTENDED_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_POST_EXTENDED_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> CMOS_HIGH_BYTE_SHIFT);
     /* ── THE CHECKSUM OVER 10h-2Dh, WHICH A BIOS VERIFIES AT BOOT. ───────────
          A setup program that writes a configuration byte and does not fix this
          makes the BIOS declare the CMOS invalid next time. We are not that
@@ -344,18 +421,18 @@ void vdd_cmos_reset(void *self)
          our CMOS is corrupt, which is the same wrong answer Status D's VRT bit
          used to give. ⚠ Computed at reset only: a guest that writes into the
          range invalidates it, exactly as on a real machine. */
-    { unsigned i, sum = 0;
-      for (i = 0x10; i <= 0x2D; ++i) sum += st->ram[i];
-      st->ram[0x2E] = (uint8_t)(sum >> 8);
-      st->ram[0x2F] = (uint8_t)(sum & 0xFF); }
+    { UINT byteIndex, checksum = 0;
+      for (byteIndex = CMOS_CHECKSUM_FIRST; byteIndex <= CMOS_CHECKSUM_LAST; ++byteIndex) checksum += state->Ram[byteIndex];
+      state->Ram[CMOS_CHECKSUM_HIGH] = (BYTE)(checksum >> CMOS_HIGH_BYTE_SHIFT);
+      state->Ram[CMOS_CHECKSUM_LOW] = (BYTE)(checksum & CMOS_LOW_BYTE); }
 }
 
-int vdd_cmos_init(VDD_BUS *b, void *self)
+INT VddCmosInitialize(PVDD_BUS bus, PVOID context)
 {
-    cmos_state *st = (cmos_state *)self;
-    st->bus = b;
-    if (!st->ram[CMOS_EQUIP]) vdd_cmos_reset(st);   /* the host builds us zeroed */
-    st->bus = b;
-    if (VddClaimPorts(b, 0x70, 0x71, cmos_in, cmos_out, st)) return -1;
-    return 0;
+    PCMOS_STATE state = (PCMOS_STATE)context;
+    state->Bus = bus;
+    if (!state->Ram[CMOS_EQUIPMENT]) VddCmosReset(state);   /* the host builds us zeroed */
+    state->Bus = bus;
+    if (VddClaimPorts(bus, CMOS_INDEX_PORT, CMOS_DATA_PORT, CmosPortIn, CmosPortOut, state)) return CMOS_FAILED;
+    return CMOS_OK;
 }
