@@ -18,7 +18,21 @@
 
 #define PIT_INPUT_HZ     1193182u      /* 8254 input clock                      */
 #define PIT_TICKS_PER_DAY 0x1800B0u    /* 1,573,040 INT 8 ticks / 24h (BIOS)    */
+#define PIT_COUNTERS      3              /* counters 0, 1 and 2                   */
+#define PIT_BINARY_WRAP   0x10000u       /* a count of 0 means 65536 in binary... */
+#define PIT_BCD_WRAP      10000u         /* ...and 10000 in four-decade BCD       */
+#define PIT_BCD_DIGIT     0xF            /* one BCD decade                        */
+#define PIT_BCD_TENS_SHIFT      4
+#define PIT_BCD_HUNDREDS_SHIFT  8
+#define PIT_BCD_THOUSANDS_SHIFT 12
+#define PIT_BCD_TEN       10u
+#define PIT_BCD_HUNDRED   100u
+#define PIT_BCD_THOUSAND  1000u
+#define PIT_SECONDS_PER_HOUR    3600u
+#define PIT_SECONDS_PER_MINUTE  60u
+#define PIT_CLOCKS_PER_TICK     65536u   /* one BIOS tick: a full count of 65536  */
 #define PIT_DEFAULT_FRAME_US 16667u    /* ~60 Hz host frame tick                */
+#define PIT_DEVICE_NAME   "pit"
 
 /* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
 /* dow: 1 = Sunday .. 7 = Saturday, the MC146818's own numbering; 0 = unknown (s81, #182). */
@@ -46,16 +60,16 @@ typedef const PIT_RTC_READING *PCPIT_RTC_READING;
      UNVERIFIABLE against a machine. It is the one surface here where the
      datasheet outranks the emulators. */
 static inline UINT32 PitFromBcd(WORD value)
-{ return (UINT32)((value & 0xF) + ((value >> 4) & 0xF) * 10u
-                  + ((value >> 8) & 0xF) * 100u + ((value >> 12) & 0xF) * 1000u); }
+{ return (UINT32)((value & PIT_BCD_DIGIT) + ((value >> PIT_BCD_TENS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_TEN
+                  + ((value >> PIT_BCD_HUNDREDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_HUNDRED + ((value >> PIT_BCD_THOUSANDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_THOUSAND); }
 
 static inline WORD PitToBcd(UINT32 value)
-{ value %= 10000u;                      /* 10000 (the BCD maximum) reads back as 0000 */
-  return (WORD)((((value / 1000u) % 10u) << 12) | (((value / 100u) % 10u) << 8)
-                  | (((value / 10u) % 10u) << 4) | (value % 10u)); }
+{ value %= PIT_BCD_WRAP;                      /* 10000 (the BCD maximum) reads back as 0000 */
+  return (WORD)((((value / PIT_BCD_THOUSAND) % PIT_BCD_TEN) << PIT_BCD_THOUSANDS_SHIFT) | (((value / PIT_BCD_HUNDRED) % PIT_BCD_TEN) << PIT_BCD_HUNDREDS_SHIFT)
+                  | (((value / PIT_BCD_TEN) % PIT_BCD_TEN) << PIT_BCD_TENS_SHIFT) | (value % PIT_BCD_TEN)); }
 
 /* The wrap of the counting element: where a count that runs past zero comes back. */
-static inline UINT32 PitWrap(BYTE isBcd) { return isBcd ? 10000u : 0x10000u; }
+static inline UINT32 PitWrap(BYTE isBcd) { return isBcd ? PIT_BCD_WRAP : PIT_BINARY_WRAP; }
 
 /* ── COUNTERS 1 AND 2, AS COUNTERS. ──────────────────────────────────────────
    Counter 0 keeps its own flat fields below and is DELIBERATELY not folded in
@@ -138,8 +152,8 @@ typedef struct _PIT_STATE {
          COUNTER needs. Two views of one counter is not lovely, but rewiring the
          audio path is a separate change from making the port readable. */
     BYTE  IsBcd;           /* counter 0's control-word BCD bit: counts in BCD  */
-    BYTE  StatusLatched[3]; /* a Read-Back status byte is latched for this counter */
-    BYTE  StatusLatch[3];   /* ...that byte                                     */
+    BYTE  StatusLatched[PIT_COUNTERS]; /* a Read-Back status byte is latched for this counter */
+    BYTE  StatusLatch[PIT_COUNTERS];   /* ...that byte                                     */
     PIT_COUNTER Counter1;            /* counter 1 -- DRAM refresh, free-running          */
     PIT_COUNTER Counter2;            /* counter 2 -- the PC speaker, as a counter        */
     /* ── HOST SERIALIZATION HOOK (may be NULL, e.g. in the off-VM tests). ─────────
@@ -240,7 +254,7 @@ static inline UINT32 VddPitCounter2Hz(PCPIT_STATE state)
 INT  VddPitInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddPitReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
-{ NTVDD_DEVICE device; device.Name = "pit"; device.Initialize = VddPitInitialize; device.Reset = VddPitReset;
+{ NTVDD_DEVICE device; device.Name = PIT_DEVICE_NAME; device.Initialize = VddPitInitialize; device.Reset = VddPitReset;
   device.Shutdown = 0; device.Context = state; return device; }
 
 /* ── ★★ THE TICK COUNT IS THE TIME OF DAY. (GH #253) ─────────────────────────────
@@ -253,8 +267,8 @@ static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
      the BIOS's own rollover at PIT_TICKS_PER_DAY, so a seeded count can never start
      at or past midnight. Seconds resolution, as POST has: the RTC has no finer field. */
 static inline UINT32 VddPitTicksSinceMidnight(UINT hour, UINT minute, UINT second)
-{ UINT64 seconds = (UINT64)hour * 3600u + (UINT64)minute * 60u + second;
-  return (UINT32)((seconds * PIT_INPUT_HZ) / 65536u); }
+{ UINT64 seconds = (UINT64)hour * PIT_SECONDS_PER_HOUR + (UINT64)minute * PIT_SECONDS_PER_MINUTE + second;
+  return (UINT32)((seconds * PIT_INPUT_HZ) / PIT_CLOCKS_PER_TICK); }
 
 /* Seed 0040:006C from rtc_now (the same clock INT 1Ah AH=02h answers from, so the
    two halves of INT 1Ah cannot disagree about the time) and clear the midnight flag
