@@ -22,7 +22,7 @@
 
 typedef struct _SPEAKER_STATE {
     PVDD_BUS        Bus;
-    pit_state      *Pit;         /* channel 2: the tone, and the GATE/OUT pair    */
+    PIT_STATE      *Pit;         /* channel 2: the tone, and the GATE/OUT pair    */
     BYTE            Port61;      /* last value written to port 0x61              */
     BYTE            RefreshToggle; /* toggling bit 4 so refresh-poll delay loops run */
 } SPEAKER_STATE, *PSPEAKER_STATE;
@@ -35,7 +35,7 @@ typedef const SPEAKER_STATE *PCSPEAKER_STATE;
    are both set; the tone is PIT channel 2's output frequency. */
 static inline INT    VddSpeakerIsActive(_In_ PCSPEAKER_STATE state) { return (state->Port61 & SPEAKER_TONE_BITS) == SPEAKER_TONE_BITS; }
 static inline UINT32 VddSpeakerHz(_In_ PCSPEAKER_STATE state)
-{ return state->Pit ? pit_ch2_hz(state->Pit) : SPEAKER_NO_TONE; }
+{ return state->Pit ? VddPitCounter2Hz(state->Pit) : SPEAKER_NO_TONE; }
 
 INT  VddSpeakerInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddSpeakerReset(_In_ PVOID context);

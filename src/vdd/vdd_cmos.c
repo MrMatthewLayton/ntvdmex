@@ -94,12 +94,12 @@ static UINT CmosClockDecode(PCCMOS_STATE state, BYTE value)
 { return (state->StatusB & CMOS_B_BINARY) ? value : (UINT)(value >> CMOS_BCD_TENS_SHIFT) * CMOS_BCD_TENS_BASE + (value & CMOS_BCD_UNITS_MASK); }
 
 /* The clock as the chip shows it now: the frozen copy while SET is held. */
-static INT CmosReading(PCMOS_STATE state, struct vdd_rtc *reading)
+static INT CmosReading(PCMOS_STATE state, PIT_RTC_READING *reading)
 {
     if (state->IsSetHeld) { *reading = state->Shadow; return TRUE; }
     if (!state->RtcNow) return FALSE;
-    reading->cent = CMOS_DEFAULT_CENTURY; reading->year = 0; reading->month = CMOS_DEFAULT_MONTH; reading->day = CMOS_DEFAULT_DAY;
-    reading->hour = 0;  reading->min = 0;  reading->sec = 0;  reading->dow = 0;
+    reading->Century = CMOS_DEFAULT_CENTURY; reading->Year = 0; reading->Month = CMOS_DEFAULT_MONTH; reading->Day = CMOS_DEFAULT_DAY;
+    reading->Hour = 0;  reading->Minute = 0;  reading->Second = 0;  reading->DayOfWeek = 0;
     state->RtcNow(state->RtcContext, reading);
     return TRUE;
 }
@@ -197,17 +197,17 @@ VOID VddCmosAddClocks(PCMOS_STATE state, UINT32 clocks)
      o'clock, not eighteen. */
 static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
 {
-    struct vdd_rtc reading;
+    PIT_RTC_READING reading;
     if (!CmosReading(state, &reading)) return CMOS_NOT_A_CLOCK_REGISTER;
     switch (registerIndex) {
-    case CMOS_SECONDS:     *value = CmosClockValue(state, reading.sec);   return CMOS_CLOCK_REGISTER;
-    case CMOS_MINUTES:     *value = CmosClockValue(state, reading.min);   return CMOS_CLOCK_REGISTER;
+    case CMOS_SECONDS:     *value = CmosClockValue(state, reading.Second);   return CMOS_CLOCK_REGISTER;
+    case CMOS_MINUTES:     *value = CmosClockValue(state, reading.Minute);   return CMOS_CLOCK_REGISTER;
     case CMOS_HOURS: {
         /* ⚠ 12-HOUR MODE IS NOT "SUBTRACT TWELVE". Status B bit 1 clear selects
              it, and then BIT 7 OF THIS REGISTER IS PM -- midnight is 12 AM and
              noon is 12 PM, neither of which is hour 0. A model that ignores the
              bit tells a 12-hour guest that 14:00 is 2 AM. */
-        UINT hour = reading.hour;
+        UINT hour = reading.Hour;
         BYTE pmBit = 0;
         if (!(state->StatusB & CMOS_B_24_HOUR)) {
             pmBit = (BYTE)(hour >= CMOS_HOURS_PER_HALF_DAY ? CMOS_HOUR_PM_BIT : CMOS_HOUR_AM);
@@ -218,18 +218,18 @@ static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
     /* ⚠ 01h, 03h and 05h -- the ALARM registers -- are deliberately NOT claimed
          here. They are storage the guest owns, not a view of the host clock, so
          they fall through to ram[] on both the read and the write paths. */
-    case CMOS_DAY_OF_MONTH:     *value = CmosClockValue(state, reading.day);   return CMOS_CLOCK_REGISTER;
-    case CMOS_MONTH:   *value = CmosClockValue(state, reading.month); return CMOS_CLOCK_REGISTER;
-    case CMOS_YEAR:    *value = CmosClockValue(state, reading.year);  return CMOS_CLOCK_REGISTER;
-    case CMOS_CENTURY: *value = CmosClockValue(state, reading.cent);  return CMOS_CLOCK_REGISTER;
+    case CMOS_DAY_OF_MONTH:     *value = CmosClockValue(state, reading.Day);   return CMOS_CLOCK_REGISTER;
+    case CMOS_MONTH:   *value = CmosClockValue(state, reading.Month); return CMOS_CLOCK_REGISTER;
+    case CMOS_YEAR:    *value = CmosClockValue(state, reading.Year);  return CMOS_CLOCK_REGISTER;
+    case CMOS_CENTURY: *value = CmosClockValue(state, reading.Century);  return CMOS_CLOCK_REGISTER;
     /* ── THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
          was fixed at 1 (Sunday) because the clock reading carried no weekday and a
          device model should not hold calendar arithmetic. Windows' GetLocalTime
          already knows it, so the host passes it through (1 = Sunday, the chip's
          numbering); a reader with no weekday (0) still falls back to ram[]. */
     case CMOS_DAY_OF_WEEK:
-        if (!reading.dow) return CMOS_NOT_A_CLOCK_REGISTER;
-        *value = CmosClockValue(state, reading.dow); return CMOS_CLOCK_REGISTER;
+        if (!reading.DayOfWeek) return CMOS_NOT_A_CLOCK_REGISTER;
+        *value = CmosClockValue(state, reading.DayOfWeek); return CMOS_CLOCK_REGISTER;
     default: return CMOS_NOT_A_CLOCK_REGISTER;
     }
 }
@@ -300,7 +300,7 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
              for a clock that is not updating. Going low commits the copy: the
              date, then the time, through the same hook INT 1Ah AH=05h/03h use. */
         if ((byteValue & CMOS_B_SET) && !state->IsSetHeld) {
-            struct vdd_rtc reading;
+            PIT_RTC_READING reading;
             if (CmosReading(state, &reading)) { state->Shadow = reading; state->IsSetHeld = 1; }
             byteValue = (BYTE)(byteValue & ~CMOS_B_UIE);
         } else if (!(byteValue & CMOS_B_SET) && state->IsSetHeld) {
@@ -338,21 +338,21 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     if (state->Index == CMOS_SECONDS || state->Index == CMOS_MINUTES || state->Index == CMOS_HOURS ||
         state->Index == CMOS_DAY_OF_MONTH || state->Index == CMOS_MONTH || state->Index == CMOS_YEAR ||
         state->Index == CMOS_CENTURY) {
-        struct vdd_rtc reading;
+        PIT_RTC_READING reading;
         INT isDate = state->Index >= CMOS_DAY_OF_MONTH;
         if (!state->RtcSet || !CmosReading(state, &reading)) return;
         switch (state->Index) {
-        case CMOS_SECONDS:   reading.sec = CmosClockDecode(state, byteValue); break;
-        case CMOS_MINUTES:   reading.min = CmosClockDecode(state, byteValue); break;
+        case CMOS_SECONDS:   reading.Second = CmosClockDecode(state, byteValue); break;
+        case CMOS_MINUTES:   reading.Minute = CmosClockDecode(state, byteValue); break;
         case CMOS_HOURS:
-            if (state->StatusB & CMOS_B_24_HOUR) reading.hour = CmosClockDecode(state, byteValue);
+            if (state->StatusB & CMOS_B_24_HOUR) reading.Hour = CmosClockDecode(state, byteValue);
             else { UINT hour = CmosClockDecode(state, (BYTE)(byteValue & CMOS_HOUR_VALUE_BITS)) % CMOS_HALF_DAY_HOURS;
-                   reading.hour = hour + ((byteValue & CMOS_HOUR_PM_BIT) ? CMOS_HALF_DAY_HOURS : CMOS_NO_HOURS); }
+                   reading.Hour = hour + ((byteValue & CMOS_HOUR_PM_BIT) ? CMOS_HALF_DAY_HOURS : CMOS_NO_HOURS); }
             break;
-        case CMOS_DAY_OF_MONTH:   reading.day   = CmosClockDecode(state, byteValue); break;
-        case CMOS_MONTH: reading.month = CmosClockDecode(state, byteValue); break;
-        case CMOS_YEAR:  reading.year  = CmosClockDecode(state, byteValue); break;
-        default:         reading.cent  = CmosClockDecode(state, byteValue); break;
+        case CMOS_DAY_OF_MONTH:   reading.Day   = CmosClockDecode(state, byteValue); break;
+        case CMOS_MONTH: reading.Month = CmosClockDecode(state, byteValue); break;
+        case CMOS_YEAR:  reading.Year  = CmosClockDecode(state, byteValue); break;
+        default:         reading.Century  = CmosClockDecode(state, byteValue); break;
         }
         if (state->IsSetHeld) state->Shadow = reading;
         else state->RtcSet(state->RtcContext, &reading, isDate);
@@ -377,8 +377,8 @@ VOID VddCmosReset(PVOID context)
 {
     PCMOS_STATE state = (PCMOS_STATE)context;
     VDD_BUS *bus = state->Bus;
-    VOID (*rtcNow)(PVOID , struct vdd_rtc *) = state->RtcNow;
-    INT  (*rtcSet)(PVOID , const struct vdd_rtc *, INT) = state->RtcSet;
+    VOID (*rtcNow)(PVOID , PIT_RTC_READING *) = state->RtcNow;
+    INT  (*rtcSet)(PVOID , const PIT_RTC_READING *, INT) = state->RtcSet;
     PVOID rtcContext = state->RtcContext;
     WORD baseKb = state->BaseKb;                       /* #136: preserved, as above */
     UINT byteIndex;

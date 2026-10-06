@@ -24,77 +24,77 @@
      blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
      (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
      Both halves are now fixed; see docs/STATE.md session 70. */
-static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed);
+static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed);
 
-/* The count law, by mode. Split out of pit_current_count so counters 1 and 2 can
+/* The count law, by mode. Split out of PitCurrentCount so counters 1 and 2 can
    use the same arithmetic instead of a second copy that drifts from it.
    Returns the counting element in BINARY; `wrap` is where it comes back round
-   (65536, or 10000 in BCD -- see pit_wrap). */
-static uint32_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed, uint32_t wrap)
+   (65536, or 10000 in BCD -- see PitWrap). */
+static UINT32 PitCountLaw(BYTE mode, UINT32 reload, UINT64 elapsed, UINT32 wrap)
 {
     /* #175: modes 1, 4 and 5 are ONE-SHOTS too -- after terminal count the counter
        runs on through the wrap, it does not reload (docs/ref/pit.md mode table). They
-       used the periodic law below, which reloads every R clocks. */
+       used the periodic law below, which reloads every `reload` clocks. */
     if (mode == 0 || mode == 1 || mode == 4 || mode == 5) {
         /* One-shot: counting does not stop at terminal count, it runs on through
            the wrap. In binary that was `(uint16_t)(R - elapsed)`, i.e. mod 65536
            by truncation; BCD wraps at 10000 instead, so do the modulus openly. */
-        uint32_t rem = (uint32_t)(elapsed % wrap);
-        uint32_t c   = (R >= rem) ? (R - rem) : (R + wrap - rem);
-        return c % wrap;                     /* the maximum count reads as zero  */
+        UINT32 remainder = (UINT32)(elapsed % wrap);
+        UINT32 count   = (reload >= remainder) ? (reload - remainder) : (reload + wrap - remainder);
+        return count % wrap;                     /* the maximum count reads as zero  */
     }
     if (mode == 3) {
-        uint32_t half  = (R + 1) / 2;
-        uint32_t phase = (uint32_t)(elapsed % half);
-        return (R - 2 * phase) % wrap;       /* R when phase==0 (the max -> 0)   */
+        UINT32 half  = (reload + 1) / 2;
+        UINT32 phase = (UINT32)(elapsed % half);
+        return (reload - 2 * phase) % wrap;       /* R when phase==0 (the max -> 0)   */
     }
-    return (R - (uint32_t)(elapsed % R)) % wrap;
+    return (reload - (UINT32)(elapsed % reload)) % wrap;
 }
 
 /* The counting element, as a number. BINARY -- pit_read_count converts. */
-static uint32_t pit_current_count(const pit_state *st)
+static UINT32 PitCurrentCount(PCPIT_STATE state)
 {
-    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
-                     ? st->total_clocks - st->load_clocks : 0;
-    return pit_count_law(st->mode, pit_eff_reload(st), elapsed, pit_wrap(st->bcd));
+    UINT64 elapsed = (state->TotalClocks >= state->LoadClocks)
+                     ? state->TotalClocks - state->LoadClocks : 0;
+    return PitCountLaw(state->Mode, VddPitEffectiveReload(state), elapsed, PitWrap(state->IsBcd));
 }
 
 /* ── THE ONLY TWO PLACES BCD EXISTS: THE PORT BOUNDARY. ──────────────────────
      Everything inside the device counts in binary (see the note in vdd_pit.h);
      a count crosses `43h`/`40h-42h` in whatever base the Control Word selected. */
-static uint16_t pit_count_bytes(uint8_t bcd, uint32_t count)
-{ return bcd ? pit_to_bcd(count) : (uint16_t)count; }
+static WORD PitCountBytes(BYTE isBcd, UINT32 count)
+{ return isBcd ? PitToBcd(count) : (WORD)count; }
 
-static uint16_t pit_count_value(uint8_t bcd, uint16_t written)
-{ return bcd ? (uint16_t)pit_from_bcd(written) : written; }
+static WORD PitCountValue(BYTE isBcd, WORD written)
+{ return isBcd ? (WORD)PitFromBcd(written) : written; }
 
 /* Counters 1 and 2. They have no IRQ engine and no accumulator: a read is simply
    "how far has the counting element got since it was loaded". */
 /* Clocks this counter has actually counted. ⚠ NOT simply total - load: while the
    GATE is low the counting element is stopped, so the elapsed count freezes at
    whatever it had reached. */
-static uint64_t chan_elapsed(const pit_state *st, const pit_chan *c)
+static UINT64 PitCounterElapsed(PCPIT_STATE state, PCPIT_COUNTER counter)
 {
     /* #175: in modes 1 and 5 the gate is a TRIGGER, not an enable -- once started
        the count runs whatever the gate's level (docs/ref/pit.md §5, mode table). */
-    if (!c->gate && c->mode != 1 && c->mode != 5) return c->gate_elapsed;
-    return (st->total_clocks >= c->load_clocks) ? st->total_clocks - c->load_clocks : 0;
+    if (!counter->Gate && counter->Mode != 1 && counter->Mode != 5) return counter->GateElapsed;
+    return (state->TotalClocks >= counter->LoadClocks) ? state->TotalClocks - counter->LoadClocks : 0;
 }
 
-static uint32_t chan_count(const pit_state *st, const pit_chan *c)
+static UINT32 PitCounterCount(PCPIT_STATE state, PCPIT_COUNTER counter)
 {
-    return pit_count_law(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c),
-                         pit_wrap(c->bcd));
+    return PitCountLaw(counter->Mode, VddPitCounterEffectiveReload(counter), PitCounterElapsed(state, counter),
+                         PitWrap(counter->IsBcd));
 }
 
 /* Port 61h bit 0 -> counter 2's GATE. A high-to-low edge freezes the elapsed
    count; a low-to-high edge slides load_clocks forward so counting RESUMES from
    there. Idempotent: writing the same level twice must not nudge the count,
    because a guest polling port 61h rewrites the whole byte constantly. */
-void vdd_pit_ch2_gate(pit_state *st, int on)
+VOID VddPitCounter2Gate(PPIT_STATE state, INT isHigh)
 {
-    pit_chan *c = &st->c2;
-    if (!!on == !!c->gate) return;
+    PPIT_COUNTER counter = &state->Counter2;
+    if (!!isHigh == !!counter->Gate) return;
     /* ── #175: WHAT A GATE EDGE MEANS DEPENDS ON THE MODE (docs/ref/pit.md §5).
          1, 5  a rising edge TRIGGERS: (re)load the count and start; the level is
                otherwise ignored.
@@ -102,54 +102,54 @@ void vdd_pit_ch2_gate(pit_state *st, int on)
                RELOADS -- measured on all three oracles (p_pit pit.m2.retrig.reload),
                where this used to resume.
          0, 4  the gate is an enable: low pauses, high resumes where it left off. */
-    if (c->mode == 1 || c->mode == 5) {
-        if (on) { c->load_clocks = st->total_clocks; c->trig = 1; }
-        c->gate = (uint8_t)(on ? 1 : 0);
+    if (counter->Mode == 1 || counter->Mode == 5) {
+        if (isHigh) { counter->LoadClocks = state->TotalClocks; counter->IsTriggered = 1; }
+        counter->Gate = (BYTE)(isHigh ? 1 : 0);
         return;
     }
-    if (c->mode == 2 || c->mode == 3) {
-        if (on) { c->load_clocks = st->total_clocks; c->gate = 1; }
-        else    { c->gate_elapsed = chan_elapsed(st, c); c->gate = 0; }
+    if (counter->Mode == 2 || counter->Mode == 3) {
+        if (isHigh) { counter->LoadClocks = state->TotalClocks; counter->Gate = 1; }
+        else    { counter->GateElapsed = PitCounterElapsed(state, counter); counter->Gate = 0; }
         return;
     }
-    if (on) { c->load_clocks = st->total_clocks - c->gate_elapsed; c->gate = 1; }
-    else    { c->gate_elapsed = chan_elapsed(st, c);               c->gate = 0; }
+    if (isHigh) { counter->LoadClocks = state->TotalClocks - counter->GateElapsed; counter->Gate = 1; }
+    else    { counter->GateElapsed = PitCounterElapsed(state, counter);               counter->Gate = 0; }
 }
 
 /* #175: a channel's OUT pin, with the two gate rules the count law cannot see:
    modes 1/5 hold OUT high until triggered, and modes 2/3 force it high while the
-   gate is low. Everything else is pit_out_pin's function of mode and elapsed. */
-static int chan_out(const pit_state *st, const pit_chan *c)
+   gate is low. Everything else is PitOutPin's function of mode and elapsed. */
+static INT PitCounterOut(PCPIT_STATE state, PCPIT_COUNTER counter)
 {
-    if ((c->mode == 1 || c->mode == 5) && !c->trig) return 1;
-    if ((c->mode == 2 || c->mode == 3) && !c->gate) return 1;
-    return pit_out_pin(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c));
+    if ((counter->Mode == 1 || counter->Mode == 5) && !counter->IsTriggered) return 1;
+    if ((counter->Mode == 2 || counter->Mode == 3) && !counter->Gate) return 1;
+    return PitOutPin(counter->Mode, VddPitCounterEffectiveReload(counter), PitCounterElapsed(state, counter));
 }
 
 /* Counter 2's OUT pin, as port 61h bit 5 reports it. */
-int vdd_pit_ch2_out(const pit_state *st)
+INT VddPitCounter2Out(PCPIT_STATE state)
 {
-    return chan_out(st, &st->c2);
+    return PitCounterOut(state, &state->Counter2);
 }
 
 /* A count write, lo/hi buffered exactly as counter 0 does it: a HALF-WRITTEN
    COUNT IS NOT A COUNT (see the note on port 0x40 below -- the same defect would
    otherwise be reintroduced here). */
-static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
+static VOID PitCounterWriteCount(PPIT_STATE state, PPIT_COUNTER counter, BYTE byteValue)
 {
-    uint16_t v;
-    if (c->access == 1)      v = val;                        /* lo only         */
-    else if (c->access == 2) v = (uint16_t)(val << 8);       /* hi only         */
+    WORD count;
+    if (counter->Access == 1)      count = byteValue;                        /* lo only         */
+    else if (counter->Access == 2) count = (WORD)(byteValue << 8);       /* hi only         */
     else {                                                   /* lo then hi      */
-        if (!c->wr_flip) { c->wr_lo = val; c->wr_flip = 1; return; }
-        v = (uint16_t)((val << 8) | c->wr_lo);
-        c->wr_flip = 0;
+        if (!counter->IsWriteHighNext) { counter->WriteLow = byteValue; counter->IsWriteHighNext = 1; return; }
+        count = (WORD)((byteValue << 8) | counter->WriteLow);
+        counter->IsWriteHighNext = 0;
     }
-    c->reload = pit_count_value(c->bcd, v);   /* BCD in, binary stored */
-    if (c->mode == 1 || c->mode == 5) c->trig = 0;   /* #175: armed, not started */
-    c->null_cnt = 0;                 /* the count has reached the CE        */
-    c->load_clocks = st->total_clocks;
-    c->gate_elapsed = 0;             /* a NEW count: nothing counted of it yet. Keeping the
+    counter->Reload = PitCountValue(counter->IsBcd, count);   /* BCD in, binary stored */
+    if (counter->Mode == 1 || counter->Mode == 5) counter->IsTriggered = 0;   /* #175: armed, not started */
+    counter->IsNullCount = 0;                 /* the count has reached the CE        */
+    counter->LoadClocks = state->TotalClocks;
+    counter->GateElapsed = 0;             /* a NEW count: nothing counted of it yet. Keeping the
                                         old count's gate-frozen elapsed made the next gate
                                         rise resume past terminal count -- OUT high at once,
                                         so a second "time it with counter 2" wait returned
@@ -157,44 +157,44 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
 }
 
 /* A read, honouring the latch and the access mode -- the same contract as 0x40. */
-static void chan_read_count(pit_state *st, pit_chan *c, uint32_t *val)
+static VOID PitCounterReadCount(PPIT_STATE state, PPIT_COUNTER counter, UINT32 *value)
 {
-    uint16_t v = pit_count_bytes(c->bcd, c->latched ? c->latch : chan_count(st, c));
-    uint8_t acc = c->access ? c->access : 3;
-    if (acc == 1)      { *val = v & 0xFF;        c->latched = 0; }
-    else if (acc == 2) { *val = (v >> 8) & 0xFF; c->latched = 0; }
+    WORD count = PitCountBytes(counter->IsBcd, counter->IsLatched ? counter->Latch : PitCounterCount(state, counter));
+    BYTE accessMode = counter->Access ? counter->Access : 3;
+    if (accessMode == 1)      { *value = count & 0xFF;        counter->IsLatched = 0; }
+    else if (accessMode == 2) { *value = (count >> 8) & 0xFF; counter->IsLatched = 0; }
     else {
-        if (!c->rd_flip) { *val = v & 0xFF; c->rd_flip = 1; }
-        else { *val = (v >> 8) & 0xFF; c->rd_flip = 0; c->latched = 0; }
+        if (!counter->IsReadHighNext) { *value = count & 0xFF; counter->IsReadHighNext = 1; }
+        else { *value = (count >> 8) & 0xFF; counter->IsReadHighNext = 0; counter->IsLatched = 0; }
     }
 }
 
 /* One control word, applied to counter 1 or 2. */
-static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
+static VOID PitCounterControl(PPIT_STATE state, PPIT_COUNTER counter, BYTE controlWord)
 {
-    uint8_t acc = (uint8_t)((val >> 4) & 3);
-    if (acc == 0) {                              /* Counter Latch Command       */
-        c->latch = (uint16_t)chan_count(st, c);
-        c->latched = 1; c->rd_flip = 0;
+    BYTE accessMode = (BYTE)((controlWord >> 4) & 3);
+    if (accessMode == 0) {                              /* Counter Latch Command       */
+        counter->Latch = (WORD)PitCounterCount(state, counter);
+        counter->IsLatched = 1; counter->IsReadHighNext = 0;
         return;
     }
-    c->access   = acc;
-    c->trig     = 0;                 /* #175: a new mode waits for its own trigger */
-    c->mode_raw = (uint8_t)((val >> 1) & 7);
-    c->mode     = (c->mode_raw >= 6) ? (uint8_t)(c->mode_raw - 4) : c->mode_raw;
-    c->bcd      = (uint8_t)(val & 1);
-    c->wr_flip  = 0;
-    c->null_cnt = 1;                 /* CR written-to-be, CE not yet loaded */
-    c->load_clocks = st->total_clocks;
-    c->gate_elapsed = 0;             /* see chan_write_count */
+    counter->Access   = accessMode;
+    counter->IsTriggered     = 0;                 /* #175: a new mode waits for its own trigger */
+    counter->ProgrammedMode = (BYTE)((controlWord >> 1) & 7);
+    counter->Mode     = (counter->ProgrammedMode >= 6) ? (BYTE)(counter->ProgrammedMode - 4) : counter->ProgrammedMode;
+    counter->IsBcd      = (BYTE)(controlWord & 1);
+    counter->IsWriteHighNext  = 0;
+    counter->IsNullCount = 1;                 /* CR written-to-be, CE not yet loaded */
+    counter->LoadClocks = state->TotalClocks;
+    counter->GateElapsed = 0;             /* see PitCounterWriteCount */
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
-void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
+VOID VddPitAddClocks(PPIT_STATE state, UINT32 clocks)
 {
-    uint32_t R = pit_eff_reload(st);
-    int guard = 0;
-    st->total_clocks += clocks;
+    UINT32 reload = VddPitEffectiveReload(state);
+    INT iterations = 0;
+    state->TotalClocks += clocks;
     /* ── IRQ0 IS OUT's RISING EDGE, AND A ONE-SHOT HAS ONE (#175). ───────────────────
          Mode 0: OUT low at the Control Word, high at terminal count, and it stays high.
          Mode 4: a one-clock strobe low at terminal count. Either way ONE edge per count
@@ -202,26 +202,26 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
          re-write after terminal count included. Modes 1 and 5 start on a GATE rising
          edge, and counter 0's gate is tied high on a PC, so they never start: no edge.
          Until #175 every mode raised once per period, as if it were mode 2. */
-    if (st->mode != 2 && st->mode != 3) {
-        st->accum = 0;
-        if (st->irq_armed && st->total_clocks - st->load_clocks >= R) {
-            st->irq_armed = 0;
-            VddRaiseIrq(st->bus, 0);
+    if (state->Mode != 2 && state->Mode != 3) {
+        state->Accumulator = 0;
+        if (state->IsIrqArmed && state->TotalClocks - state->LoadClocks >= reload) {
+            state->IsIrqArmed = 0;
+            VddRaiseIrq(state->Bus, 0);
         }
         return;
     }
-    st->accum += clocks;
-    while (st->accum >= R && guard++ < 100000) {
-        st->accum -= R;
-        VddRaiseIrq(st->bus, 0);           /* IRQ0 -> guest takes INT 08h     */
+    state->Accumulator += clocks;
+    while (state->Accumulator >= reload && iterations++ < 100000) {
+        state->Accumulator -= reload;
+        VddRaiseIrq(state->Bus, 0);           /* IRQ0 -> guest takes INT 08h     */
         /* A count written WITHOUT a Control Word in modes 2/3 is "loaded at the end
            of the current counting cycle" (datasheet, mode 2; mode 3 says half-cycle,
            approximated here as the full one). This is that end. */
-        if (st->next_pending) {
-            st->reload       = st->next_reload;
-            st->next_pending = 0;
-            st->load_clocks  = st->total_clocks - st->accum;   /* the period boundary */
-            R = pit_eff_reload(st);
+        if (state->IsNextPending) {
+            state->Reload       = state->NextReload;
+            state->IsNextPending = 0;
+            state->LoadClocks  = state->TotalClocks - state->Accumulator;   /* the period boundary */
+            reload = VddPitEffectiveReload(state);
         }
     }
 }
@@ -248,44 +248,44 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
      wrong models had a test written to certify it. These are written from the quotes
      above; [[m9-completeness-programme]] rule: never from memory.
    ► `cw_armed` is set by a Control Word for this counter and cleared by the load it
-     arms; `next_pending` parks a bare mode-2/3 count until vdd_pit_add_clocks reaches
+     arms; `next_pending` parks a bare mode-2/3 count until VddPitAddClocks reaches
      the end of the period. `load_clocks` moves only when the counting element really
-     (re)starts, because that is what pit_current_count measures the read-back from. */
-static void pit_load(pit_state *st, uint16_t written)
+     (re)starts, because that is what PitCurrentCount measures the read-back from. */
+static VOID PitLoad(PPIT_STATE state, WORD written)
 {
-    uint16_t count = pit_count_value(st->bcd, written);  /* BCD in, binary stored */
-    int periodic = (st->mode == 2 || st->mode == 3);
-    if (periodic && !st->cw_armed) {         /* bare write: takes over at period end */
-        st->next_reload  = count;
-        st->next_pending = 1;
+    WORD count = PitCountValue(state->IsBcd, written);  /* BCD in, binary stored */
+    INT isPeriodic = (state->Mode == 2 || state->Mode == 3);
+    if (isPeriodic && !state->IsControlWordArmed) {         /* bare write: takes over at period end */
+        state->NextReload  = count;
+        state->IsNextPending = 1;
         return;
     }
-    st->reload       = count;                /* Control Word + count, or a one-shot mode */
-    st->load_clocks  = st->total_clocks;
-    st->accum        = 0;
-    st->cw_armed     = 0;
-    st->next_pending = 0;
-    st->irq_armed    = (uint8_t)(st->mode == 0 || st->mode == 4);   /* see add_clocks */
-    if (!periodic) st->oneshot_loads++;
-    st->restarts++;
+    state->Reload       = count;                /* Control Word + count, or a one-shot mode */
+    state->LoadClocks  = state->TotalClocks;
+    state->Accumulator        = 0;
+    state->IsControlWordArmed     = 0;
+    state->IsNextPending = 0;
+    state->IsIrqArmed    = (BYTE)(state->Mode == 0 || state->Mode == 4);   /* see add_clocks */
+    if (!isPeriodic) state->OneShotLoads++;
+    state->Restarts++;
 }
 
-/* See pit_state.guard in the header: every touch of counter state from a caller
+/* See PIT_STATE.guard in the header: every touch of counter state from a caller
    the HOST does not already serialize against the pacer goes through this. */
-#define PIT_GUARD(st, e) do { if ((st)->guard) (st)->guard((st)->guard_ctx, (e)); } while (0)
+#define PIT_GUARD(state, isEntering) do { if ((state)->Guard) (state)->Guard((state)->GuardContext, (isEntering)); } while (0)
 
-static void pit_frame(void *self)
+static VOID PitFrame(PVOID context)
 {
-    pit_state *st = (pit_state *)self;
-    uint32_t clocks;
+    PPIT_STATE state = (PPIT_STATE)context;
+    UINT32 clocks;
     /* The host that drives time from a pacer sets frame_us = 0; add_clocks(0) is
        a no-op ARITHMETICALLY but its u64 read-modify-writes still race the pacer
        on a 32-bit build, so do not touch the state at all. */
-    if (!st->frame_us) return;
-    clocks = (uint32_t)(((uint64_t)PIT_INPUT_HZ * st->frame_us) / 1000000u);
-    PIT_GUARD(st, 1);
-    vdd_pit_add_clocks(st, clocks);
-    PIT_GUARD(st, 0);
+    if (!state->FrameMicroseconds) return;
+    clocks = (UINT32)(((UINT64)PIT_INPUT_HZ * state->FrameMicroseconds) / 1000000u);
+    PIT_GUARD(state, 1);
+    VddPitAddClocks(state, clocks);
+    PIT_GUARD(state, 0);
 }
 
 
@@ -293,24 +293,24 @@ static void pit_frame(void *self)
    OUT is a function of the mode and how far the count has got, so there is no
    state to keep in step -- and keeping it derived means it cannot go stale the
    way a cached flag would. docs/ref/pit.md 5 is the table this implements. */
-static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed)
+static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed)
 {
-    uint32_t phase;
+    UINT32 phase;
     switch (mode) {
     case 0:                                  /* low while counting, high at TC  */
     case 1:
-        return elapsed >= R;
+        return elapsed >= reload;
     case 2:                                  /* high, low for ONE clock at 1    */
-        phase = (uint32_t)(elapsed % R);
-        return phase != (R - 1);
+        phase = (UINT32)(elapsed % reload);
+        return phase != (reload - 1);
     case 3: {                                /* square wave: high half, low half */
-        uint32_t half = (R + 1) / 2;
-        phase = (uint32_t)(elapsed % R);
+        UINT32 half = (reload + 1) / 2;
+        phase = (UINT32)(elapsed % reload);
         return phase < half;
     }
     case 4:                                  /* high, one-clock strobe at TC    */
     case 5:
-        return elapsed != R;
+        return elapsed != reload;
     default:
         return 1;
     }
@@ -320,26 +320,26 @@ static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed)
    ⚠ b3:1 IS mode_raw, NOT the normalised mode. Measured on a real 8254
      (p_pit.asm pit.mode6.readback = 0x0C): programming 110 reads back 110 even
      though the counter behaves as mode 2. */
-static uint8_t pit_status_of(const pit_state *st, int n)
+static BYTE PitStatusOf(PCPIT_STATE state, INT counterIndex)
 {
-    uint8_t acc, mode_raw, bcd, null_cnt;
-    uint32_t R; uint64_t elapsed; int out;
-    if (n == 0) {
-        acc = st->access ? st->access : 3; mode_raw = st->mode_raw; bcd = st->bcd;
-        null_cnt = (uint8_t)(st->cw_armed || st->next_pending);
-        R = pit_eff_reload(st);
-        elapsed = (st->total_clocks >= st->load_clocks)
-                ? st->total_clocks - st->load_clocks : 0;
-        out = pit_out_pin(st->mode, R, elapsed);
+    BYTE accessMode, programmedMode, isBcd, isNullCount;
+    UINT32 reload; UINT64 elapsed; INT outPin;
+    if (counterIndex == 0) {
+        accessMode = state->Access ? state->Access : 3; programmedMode = state->ProgrammedMode; isBcd = state->IsBcd;
+        isNullCount = (BYTE)(state->IsControlWordArmed || state->IsNextPending);
+        reload = VddPitEffectiveReload(state);
+        elapsed = (state->TotalClocks >= state->LoadClocks)
+                ? state->TotalClocks - state->LoadClocks : 0;
+        outPin = PitOutPin(state->Mode, reload, elapsed);
     } else {
-        const pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
-        acc = c->access ? c->access : 3; mode_raw = c->mode_raw; bcd = c->bcd;
-        null_cnt = c->null_cnt;
-        (void)R; (void)elapsed;
-        out = chan_out(st, c);
+        PCPIT_COUNTER counter = (counterIndex == 1) ? &state->Counter1 : &state->Counter2;
+        accessMode = counter->Access ? counter->Access : 3; programmedMode = counter->ProgrammedMode; isBcd = counter->IsBcd;
+        isNullCount = counter->IsNullCount;
+        (VOID)reload; (VOID)elapsed;
+        outPin = PitCounterOut(state, counter);
     }
-    return (uint8_t)((out ? 0x80 : 0) | (null_cnt ? 0x40 : 0)
-                     | ((acc & 3) << 4) | ((mode_raw & 7) << 1) | (bcd & 1));
+    return (BYTE)((outPin ? 0x80 : 0) | (isNullCount ? 0x40 : 0)
+                     | ((accessMode & 3) << 4) | ((programmedMode & 7) << 1) | (isBcd & 1));
 }
 
 /* ── THE READ-BACK COMMAND. ──────────────────────────────────────────────────
@@ -347,47 +347,47 @@ static uint8_t pit_status_of(const pit_state *st, int n)
      latches the status. Writing 1s asks for nothing, which is the natural-looking
      mistake. Bits 3/2/1 select counters 2/1/0, and one command may address
      several -- that is the whole point of having it. */
-static void pit_readback(pit_state *st, uint8_t val)
+static VOID PitReadBack(PPIT_STATE state, BYTE command)
 {
-    int n;
-    for (n = 0; n < 3; ++n) {
-        if (!(val & (1u << (n + 1)))) continue;          /* not selected        */
-        if (!(val & 0x10)) {                             /* latch STATUS        */
-            if (!st->st_latched[n]) {                    /* first latch wins    */
-                st->st_latch[n] = pit_status_of(st, n);
-                st->st_latched[n] = 1;
+    INT counterIndex;
+    for (counterIndex = 0; counterIndex < 3; ++counterIndex) {
+        if (!(command & (1u << (counterIndex + 1)))) continue;          /* not selected        */
+        if (!(command & 0x10)) {                             /* latch STATUS        */
+            if (!state->StatusLatched[counterIndex]) {                    /* first latch wins    */
+                state->StatusLatch[counterIndex] = PitStatusOf(state, counterIndex);
+                state->StatusLatched[counterIndex] = 1;
             }
         }
-        if (!(val & 0x20)) {                             /* latch COUNT         */
-            if (n == 0) {
-                if (!st->latched) { st->latch = (uint16_t)pit_current_count(st); st->latched = 1; st->rd_flip = 0; }
+        if (!(command & 0x20)) {                             /* latch COUNT         */
+            if (counterIndex == 0) {
+                if (!state->IsLatched) { state->Latch = (WORD)PitCurrentCount(state); state->IsLatched = 1; state->IsReadHighNext = 0; }
             } else {
-                pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
-                if (!c->latched) { c->latch = (uint16_t)chan_count(st, c); c->latched = 1; c->rd_flip = 0; }
+                PPIT_COUNTER counter = (counterIndex == 1) ? &state->Counter1 : &state->Counter2;
+                if (!counter->IsLatched) { counter->Latch = (WORD)PitCounterCount(state, counter); counter->IsLatched = 1; counter->IsReadHighNext = 0; }
             }
         }
     }
 }
 
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
-static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
+static VOID PitPortOutLocked(PPIT_STATE state, WORD port, BYTE byteValue)
 {
     if (port == 0x43) {                      /* mode/command register           */
-        uint8_t ch = (uint8_t)(val >> 6);
-        uint8_t acc = (uint8_t)((val >> 4) & 3);
-        if (ch == 2) {                       /* channel 2: speaker tone AND a counter */
-            if (acc != 0) { st->ch2_access = acc; st->ch2_wr_flip = 0; }
-            chan_control(st, &st->c2, val);  /* latch command included          */
+        BYTE counterIndex = (BYTE)(byteValue >> 6);
+        BYTE accessMode = (BYTE)((byteValue >> 4) & 3);
+        if (counterIndex == 2) {                       /* channel 2: speaker tone AND a counter */
+            if (accessMode != 0) { state->Counter2Access = accessMode; state->Counter2IsWriteHighNext = 0; }
+            PitCounterControl(state, &state->Counter2, byteValue);  /* latch command included          */
             return;
         }
-        if (ch == 1) { chan_control(st, &st->c1, val); return; }
-        if (ch == 3) { pit_readback(st, val); return; }
-        if (acc == 0) {                      /* latch count command             */
-            st->latch = (uint16_t)pit_current_count(st);
-            st->latched = 1; st->rd_flip = 0;
+        if (counterIndex == 1) { PitCounterControl(state, &state->Counter1, byteValue); return; }
+        if (counterIndex == 3) { PitReadBack(state, byteValue); return; }
+        if (accessMode == 0) {                      /* latch count command             */
+            state->Latch = (WORD)PitCurrentCount(state);
+            state->IsLatched = 1; state->IsReadHighNext = 0;
         } else {
             /* A Control Word arms the next count write to load and restart (see
-               pit_load) and clears the count register ("CRM and CRL are cleared when
+               PitLoad) and clears the count register ("CRM and CRL are cleared when
                the Counter is programmed"), so a parked bare write is discarded. The
                counting element is NOT stopped: the datasheet halts counting on the first
                byte of a COUNT, not on the Control Word, and a guest that programs a
@@ -406,11 +406,11 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
                  guest that programmed the alias. Normalise for BEHAVIOUR here and
                  keep the raw bits for the read-back status byte, which a real 8254
                  reports UN-normalised (measured: pit.mode6.readback = 0x0C). */
-            st->mode_raw = (uint8_t)((val >> 1) & 7);
-            st->mode = (st->mode_raw >= 6) ? (uint8_t)(st->mode_raw - 4) : st->mode_raw;
-            st->access = acc; st->bcd = (uint8_t)(val & 1); st->wr_flip = 0;
-            st->cw_armed = 1; st->next_pending = 0;
-            st->irq_armed = 0;           /* a CW restarts the mode: OUT at its initial
+            state->ProgrammedMode = (BYTE)((byteValue >> 1) & 7);
+            state->Mode = (state->ProgrammedMode >= 6) ? (BYTE)(state->ProgrammedMode - 4) : state->ProgrammedMode;
+            state->Access = accessMode; state->IsBcd = (BYTE)(byteValue & 1); state->IsWriteHighNext = 0;
+            state->IsControlWordArmed = 1; state->IsNextPending = 0;
+            state->IsIrqArmed = 0;           /* a CW restarts the mode: OUT at its initial
                                             level, no edge until a count is loaded */
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */
@@ -443,15 +443,15 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
            ⚠⚠ THE PIT IS THE MOST SHARED PATH IN THIS PROJECT -- see the note on
              host_irq_sink's throttle, where a change measured on Doom cost SKYROADS a
              fifth of its clock. Re-gate BOTH before believing this. */
-        /* The committed count goes through pit_load, which decides (per mode and per
+        /* The committed count goes through PitLoad, which decides (per mode and per
            whether a Control Word preceded it) between "load and restart now" and
-           "take over at the end of the period". See the note above pit_load. */
-        uint8_t acc = st->access ? st->access : 3;
-        if (acc == 1)      pit_load(st, val);                        /* LSB only: MSB := 0 */
-        else if (acc == 2) pit_load(st, (uint16_t)((uint16_t)val << 8));  /* MSB only: LSB := 0 */
+           "take over at the end of the period". See the note above PitLoad. */
+        BYTE accessMode = state->Access ? state->Access : 3;
+        if (accessMode == 1)      PitLoad(state, byteValue);                        /* LSB only: MSB := 0 */
+        else if (accessMode == 2) PitLoad(state, (WORD)((WORD)byteValue << 8));  /* MSB only: LSB := 0 */
         else {                               /* lo then hi -- ONE atomic load   */
-            if (!st->wr_flip) { st->wr_lo = val; st->wr_flip = 1; }
-            else { pit_load(st, (uint16_t)(((uint16_t)val << 8) | st->wr_lo)); st->wr_flip = 0; }
+            if (!state->IsWriteHighNext) { state->WriteLow = byteValue; state->IsWriteHighNext = 1; }
+            else { PitLoad(state, (WORD)(((WORD)byteValue << 8) | state->WriteLow)); state->IsWriteHighNext = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
         /* ── #256: THE SPEAKER DIVISOR FOLLOWS COUNTER 0's RULE (above). ───────────
@@ -460,81 +460,81 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
              before its MSB. The 8254 zeroes the other half on a single-byte access and
              loads a lo/hi count when the MSB arrives. Only the TONE moves here -- the
              counter view below (and IRQ0) is untouched. */
-        uint8_t acc = st->ch2_access ? st->ch2_access : 3;
-        if (acc == 1) st->ch2_reload = (uint16_t)val;                     /* MSB := 0 */
-        else if (acc == 2) st->ch2_reload = (uint16_t)((uint16_t)val << 8);   /* LSB := 0 */
+        BYTE accessMode = state->Counter2Access ? state->Counter2Access : 3;
+        if (accessMode == 1) state->Counter2Reload = (WORD)byteValue;                     /* MSB := 0 */
+        else if (accessMode == 2) state->Counter2Reload = (WORD)((WORD)byteValue << 8);   /* LSB := 0 */
         else {                               /* lo then hi -- ONE load          */
-            if (!st->ch2_wr_flip) { st->ch2_wr_lo = val; st->ch2_wr_flip = 1; }
-            else { st->ch2_reload = (uint16_t)(((uint16_t)val << 8) | st->ch2_wr_lo); st->ch2_wr_flip = 0; }
+            if (!state->Counter2IsWriteHighNext) { state->Counter2WriteLow = byteValue; state->Counter2IsWriteHighNext = 1; }
+            else { state->Counter2Reload = (WORD)(((WORD)byteValue << 8) | state->Counter2WriteLow); state->Counter2IsWriteHighNext = 0; }
         }
         /* ...and the same byte, into the COUNTER view. The speaker only ever
            wanted a divisor; a guest that programs counter 2 to MEASURE something
            needs the load moment recorded too. */
-        st->c2.access = acc;
-        chan_write_count(st, &st->c2, val);
+        state->Counter2.Access = accessMode;
+        PitCounterWriteCount(state, &state->Counter2, byteValue);
     } else if (port == 0x41) {               /* counter 1 -- DRAM refresh       */
-        chan_write_count(st, &st->c1, val);
+        PitCounterWriteCount(state, &state->Counter1, byteValue);
     }
 }
 
-static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static VOID PitPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    pit_state *st = (pit_state *)self;
-    (void)w;
-    PIT_GUARD(st, 1);
-    pit_out_locked(st, port, (uint8_t)v);
-    PIT_GUARD(st, 0);
+    PPIT_STATE state = (PPIT_STATE)context;
+    (VOID)width;
+    PIT_GUARD(state, 1);
+    PitPortOutLocked(state, port, (BYTE)value);
+    PIT_GUARD(state, 0);
 }
 
-static void pit_in_locked(pit_state *st, uint16_t port, uint32_t *val)
+static VOID PitPortInLocked(PPIT_STATE state, WORD port, UINT32 *value)
 {
-    uint16_t v; uint8_t acc;
-    int n = (port == 0x40) ? 0 : (port == 0x41) ? 1 : (port == 0x42) ? 2 : -1;
+    WORD count; BYTE accessMode;
+    INT counterIndex = (port == 0x40) ? 0 : (port == 0x41) ? 1 : (port == 0x42) ? 2 : -1;
     /* A LATCHED STATUS IS READ BEFORE ANYTHING ELSE, and consumed by that read.
        When read-back latched both, the status comes out first and the count
        after it (docs/ref/pit.md 4). */
-    if (n >= 0 && st->st_latched[n]) {
-        *val = st->st_latch[n]; st->st_latched[n] = 0; return;
+    if (counterIndex >= 0 && state->StatusLatched[counterIndex]) {
+        *value = state->StatusLatch[counterIndex]; state->StatusLatched[counterIndex] = 0; return;
     }
-    if (port == 0x41) { chan_read_count(st, &st->c1, val); return; }
-    if (port == 0x42) { chan_read_count(st, &st->c2, val); return; }
+    if (port == 0x41) { PitCounterReadCount(state, &state->Counter1, value); return; }
+    if (port == 0x42) { PitCounterReadCount(state, &state->Counter2, value); return; }
     /* 0x43 is write-only on the part; a read is undefined. Answer consistently
        rather than plausibly -- see docs/inventory/pit.md 1. */
-    if (port != 0x40) { *val = 0xFF; return; }
-    v = pit_count_bytes(st->bcd, st->latched ? st->latch : pit_current_count(st));
-    acc = st->access ? st->access : 3;
-    if (acc == 1) { *val = v & 0xFF; st->latched = 0; }
-    else if (acc == 2) { *val = (v >> 8) & 0xFF; st->latched = 0; }
+    if (port != 0x40) { *value = 0xFF; return; }
+    count = PitCountBytes(state->IsBcd, state->IsLatched ? state->Latch : PitCurrentCount(state));
+    accessMode = state->Access ? state->Access : 3;
+    if (accessMode == 1) { *value = count & 0xFF; state->IsLatched = 0; }
+    else if (accessMode == 2) { *value = (count >> 8) & 0xFF; state->IsLatched = 0; }
     else {                                   /* lo then hi                      */
-        if (!st->rd_flip) { *val = v & 0xFF; st->rd_flip = 1; }
-        else { *val = (v >> 8) & 0xFF; st->rd_flip = 0; st->latched = 0; }
+        if (!state->IsReadHighNext) { *value = count & 0xFF; state->IsReadHighNext = 1; }
+        else { *value = (count >> 8) & 0xFF; state->IsReadHighNext = 0; state->IsLatched = 0; }
     }
 }
 
-static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+static VOID PitPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    pit_state *st = (pit_state *)self;
-    (void)w;
-    PIT_GUARD(st, 1);
-    pit_in_locked(st, port, val);
-    PIT_GUARD(st, 0);
+    PPIT_STATE state = (PPIT_STATE)context;
+    (VOID)width;
+    PIT_GUARD(state, 1);
+    PitPortInLocked(state, port, value);
+    PIT_GUARD(state, 0);
 }
 
 /* --- BIOS timer services -------------------------------------------------- */
 /* The BIOS data area lives at segment 0x40; tick count = DWORD at 0040:006C,
    the 24-hour-rollover flag = BYTE at 0040:0070. */
-static uint8_t *pit_bda(pit_state *st) { return (uint8_t *)VddMapFlat(st->bus, 0x40, 0); }
+static BYTE *PitBiosDataArea(PPIT_STATE state) { return (BYTE *)VddMapFlat(state->Bus, 0x40, 0); }
 
 /* INT 08h -- the BIOS timer tick (runs when the guest takes IRQ0). Increments
    the tick count and handles the midnight rollover.
    TODO(v86 wiring): the authentic path also chains INT 1Ch and EOIs the PIC;
    that needs the IVT/re-entry plumbing from slice-1b, so it is deferred. */
-static void pit_int08(void *self, NTVDD_REGISTERS *r)
+static VOID PitInt08(PVOID context, PNTVDD_REGISTERS registers)
 {
-    pit_state *st = (pit_state *)self;
-    uint8_t *bda = pit_bda(st);
-    (void)r;
-    pit_bios_tick(st, (volatile uint32_t *)(bda + 0x6C), bda + 0x70);   /* + #262 witness */
+    PPIT_STATE state = (PPIT_STATE)context;
+    BYTE *biosData = PitBiosDataArea(state);
+    (VOID)registers;
+    VddPitBiosTick(state, (volatile UINT32 *)(biosData + 0x6C), biosData + 0x70);   /* + #262 witness */
 }
 
 /* INT 1Ah -- BIOS time-of-day. AH=00 get tick count (+ clear midnight flag),
@@ -547,68 +547,68 @@ static void pit_int08(void *self, NTVDD_REGISTERS *r)
    ⚠ BCD IS THE CONTRACT. A guest that parses these as binary (every one of them --
      that is what the BIOS returns) reads garbage from a binary answer: 0x22 seconds
      is twenty-two, not thirty-four. */
-static unsigned pit_bcd(unsigned v) { return ((v / 10) % 10) * 16 + (v % 10); }
+static UINT PitToBcdByte(UINT value) { return ((value / 10) % 10) * 16 + (value % 10); }
 
 /* The clock is the HOST's to supply -- this file stays free of <time.h>, which the
    XP-targeting CRT does not link anyway. No clock installed means the call is NOT
    answered, exactly as before: a fabricated date would be worse than no answer. */
-static int pit_rtc(pit_state *st, struct vdd_rtc *out)
+static INT PitRtc(PPIT_STATE state, PPIT_RTC_READING reading)
 {
-    if (!st->rtc_now) return 0;
-    out->cent = 20; out->year = 0; out->month = 1; out->day = 1; out->dow = 0;
-    out->hour = 0;  out->min = 0;  out->sec = 0;
-    st->rtc_now(st->rtc_ctx, out);
+    if (!state->RtcNow) return 0;
+    reading->Century = 20; reading->Year = 0; reading->Month = 1; reading->Day = 1; reading->DayOfWeek = 0;
+    reading->Hour = 0;  reading->Minute = 0;  reading->Second = 0;
+    state->RtcNow(state->RtcContext, reading);
     return 1;
 }
 
-int vdd_pit_seed_time_of_day(pit_state *st)
+INT VddPitSeedTimeOfDay(PPIT_STATE state)
 {
-    struct vdd_rtc n;
-    uint8_t *bda;
-    if (!st->bus || !pit_rtc(st, &n)) return 0;
-    if (n.hour > 23 || n.min > 59 || n.sec > 59) return 0;
-    bda = pit_bda(st);
-    *(uint32_t *)(bda + 0x6C) = pit_ticks_since_midnight(n.hour, n.min, n.sec);
-    bda[0x70] = 0;
-    vdd_pit_tick_owned(st, *(uint32_t *)(bda + 0x6C));   /* the BIOS's own count (#262) */
+    PIT_RTC_READING reading;
+    BYTE *biosData;
+    if (!state->Bus || !PitRtc(state, &reading)) return 0;
+    if (reading.Hour > 23 || reading.Minute > 59 || reading.Second > 59) return 0;
+    biosData = PitBiosDataArea(state);
+    *(UINT32 *)(biosData + 0x6C) = VddPitTicksSinceMidnight(reading.Hour, reading.Minute, reading.Second);
+    biosData[0x70] = 0;
+    VddPitTickOwned(state, *(UINT32 *)(biosData + 0x6C));   /* the BIOS's own count (#262) */
     return 1;
 }
 
-static void pit_int1a(void *self, NTVDD_REGISTERS *r)
+static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
 {
-    pit_state *st = (pit_state *)self;
-    uint8_t *bda = pit_bda(st);
-    uint32_t *tick = (uint32_t *)(bda + 0x6C);
-    switch (VddGetAh(r)) {
+    PPIT_STATE state = (PPIT_STATE)context;
+    BYTE *biosData = PitBiosDataArea(state);
+    UINT32 *tickCount = (UINT32 *)(biosData + 0x6C);
+    switch (VddGetAh(registers)) {
     case 0x00:
-        VddSetCx(r, (uint16_t)(*tick >> 16));
-        VddSetDx(r, (uint16_t)(*tick & 0xFFFF));
-        VddSetAl(r, bda[0x70]);
-        bda[0x70] = 0;
-        r->CarryFlag = 0;
+        VddSetCx(registers, (WORD)(*tickCount >> 16));
+        VddSetDx(registers, (WORD)(*tickCount & 0xFFFF));
+        VddSetAl(registers, biosData[0x70]);
+        biosData[0x70] = 0;
+        registers->CarryFlag = 0;
         break;
     case 0x01:
-        *tick = ((uint32_t)VddGetCx(r) << 16) | VddGetDx(r);
-        bda[0x70] = 0;
-        r->CarryFlag = 0;
+        *tickCount = ((UINT32)VddGetCx(registers) << 16) | VddGetDx(registers);
+        biosData[0x70] = 0;
+        registers->CarryFlag = 0;
         /* #262: the host moves DOS's clock to the new count (and takes it as the
-           BIOS's own through vdd_pit_tick_take); with no host, it is simply owned. */
-        if (st->ticks_set) st->ticks_set(st->rtc_ctx, *tick);
-        else vdd_pit_tick_owned(st, *tick);
+           BIOS's own through VddPitTickTake); with no host, it is simply owned. */
+        if (state->TicksSet) state->TicksSet(state->RtcContext, *tickCount);
+        else VddPitTickOwned(state, *tickCount);
         break;
     case 0x02: {                             /* get RTC time, BCD               */
-        struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
-        VddSetCx(r, (uint16_t)((pit_bcd(n.hour) << 8) | pit_bcd(n.min)));
+        PIT_RTC_READING reading; if (!PitRtc(state, &reading)) break;
+        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Hour) << 8) | PitToBcdByte(reading.Minute)));
         /* DL = daylight-saving flag. 0 = standard time; we do not track a DST rule
            the guest could act on, and saying 1 would invite one. */
-        VddSetDx(r, (uint16_t)(pit_bcd(n.sec) << 8));
-        r->CarryFlag = 0;
+        VddSetDx(registers, (WORD)(PitToBcdByte(reading.Second) << 8));
+        registers->CarryFlag = 0;
         break; }
     case 0x04: {                             /* get RTC date, BCD               */
-        struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
-        VddSetCx(r, (uint16_t)((pit_bcd(n.cent) << 8) | pit_bcd(n.year)));
-        VddSetDx(r, (uint16_t)((pit_bcd(n.month) << 8) | pit_bcd(n.day)));
-        r->CarryFlag = 0;
+        PIT_RTC_READING reading; if (!PitRtc(state, &reading)) break;
+        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Century) << 8) | PitToBcdByte(reading.Year)));
+        VddSetDx(registers, (WORD)((PitToBcdByte(reading.Month) << 8) | PitToBcdByte(reading.Day)));
+        registers->CarryFlag = 0;
         break; }
     case 0x03:                               /* set RTC time, BCD               */
     case 0x05: {                             /* set RTC date, BCD               */
@@ -623,19 +623,19 @@ static void pit_int1a(void *self, NTVDD_REGISTERS *r)
              calendar has (invalid BCD, hour 25, February 30), so those are refused
              with CF=1 and the clock is left alone. DL (the DST flag) is accepted and
              not kept -- AH=02h reports standard time, see above. */
-        struct vdd_rtc in;
-        unsigned ch = VddGetCx(r) >> 8, cl = VddGetCx(r) & 0xFF, dh = VddGetDx(r) >> 8, dl = VddGetDx(r) & 0xFF;
-        int what = (VddGetAh(r) == 0x05);
-        unsigned v[4]; unsigned k; int bad = 0;
-        v[0] = ch; v[1] = cl; v[2] = dh; v[3] = dl;
-        for (k = 0; k < (what ? 4u : 3u); ++k) {
-            if ((v[k] & 0x0F) > 9 || (v[k] >> 4) > 9) bad = 1;
-            v[k] = (v[k] >> 4) * 10 + (v[k] & 0x0F);
+        PIT_RTC_READING requested;
+        UINT bcdCh = VddGetCx(registers) >> 8, bcdCl = VddGetCx(registers) & 0xFF, bcdDh = VddGetDx(registers) >> 8, bcdDl = VddGetDx(registers) & 0xFF;
+        INT isDate = (VddGetAh(registers) == 0x05);
+        UINT fields[4]; UINT fieldIndex; INT isInvalid = 0;
+        fields[0] = bcdCh; fields[1] = bcdCl; fields[2] = bcdDh; fields[3] = bcdDl;
+        for (fieldIndex = 0; fieldIndex < (isDate ? 4u : 3u); ++fieldIndex) {
+            if ((fields[fieldIndex] & 0x0F) > 9 || (fields[fieldIndex] >> 4) > 9) isInvalid = 1;
+            fields[fieldIndex] = (fields[fieldIndex] >> 4) * 10 + (fields[fieldIndex] & 0x0F);
         }
-        in.cent = in.year = in.month = in.day = in.hour = in.min = in.sec = in.dow = 0;
-        if (what) { in.cent = v[0]; in.year = v[1]; in.month = v[2]; in.day = v[3]; }
-        else      { in.hour = v[0]; in.min = v[1]; in.sec = v[2]; }
-        r->CarryFlag = (uint8_t)((!bad && st->rtc_set && st->rtc_set(st->rtc_ctx, &in, what)) ? 0 : 1);
+        requested.Century = requested.Year = requested.Month = requested.Day = requested.Hour = requested.Minute = requested.Second = requested.DayOfWeek = 0;
+        if (isDate) { requested.Century = fields[0]; requested.Year = fields[1]; requested.Month = fields[2]; requested.Day = fields[3]; }
+        else      { requested.Hour = fields[0]; requested.Minute = fields[1]; requested.Second = fields[2]; }
+        registers->CarryFlag = (BYTE)((!isInvalid && state->RtcSet && state->RtcSet(state->RtcContext, &requested, isDate)) ? 0 : 1);
         break; }
     default:
         /* 06h/07h (alarm) are not answered here; the alarm lives in the CMOS model
@@ -645,19 +645,19 @@ static void pit_int1a(void *self, NTVDD_REGISTERS *r)
 }
 
 /* --- lifecycle ------------------------------------------------------------ */
-void vdd_pit_reset(void *self)
+VOID VddPitReset(PVOID context)
 {
-    pit_state *st = (pit_state *)self;
-    VDD_BUS *bus = st->bus; uint32_t fus = st->frame_us;
-    void (*guard)(void *, int) = st->guard; void *gctx = st->guard_ctx;
-    void (*rnow)(void *, struct vdd_rtc *) = st->rtc_now; void *rctx = st->rtc_ctx;
-    int  (*rset)(void *, const struct vdd_rtc *, int) = st->rtc_set;
-    void (*tset)(void *, uint32_t) = st->ticks_set;
-    uint32_t witness = st->tick_witness;    /* 0040:006C is memory, not the chip: kept */
-    unsigned i; uint8_t *p = (uint8_t *)st;
-    for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
-    st->bus = bus;
-    st->access = 3;
+    PPIT_STATE state = (PPIT_STATE)context;
+    PVDD_BUS bus = state->Bus; UINT32 frameMicroseconds = state->FrameMicroseconds;
+    VOID (*guardRoutine)(VOID *, INT) = state->Guard; VOID *guardContext = state->GuardContext;
+    VOID (*rtcNow)(VOID *, PIT_RTC_READING *) = state->RtcNow; VOID *rtcContext = state->RtcContext;
+    INT  (*rtcSet)(VOID *, const PIT_RTC_READING *, INT) = state->RtcSet;
+    VOID (*ticksSet)(VOID *, UINT32) = state->TicksSet;
+    UINT32 tickWitness = state->TickWitness;    /* 0040:006C is memory, not the chip: kept */
+    UINT byteIndex; BYTE *stateBytes = (BYTE *)state;
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) stateBytes[byteIndex] = 0;     /* zero, then restore links */
+    state->Bus = bus;
+    state->Access = 3;
     /* ── COUNTER 0 COMES OUT OF POST IN A PERIODIC MODE, NOT MODE 0. ─────────
          Reset zeroes everything, which left mode = 0 -- a one-shot. Nothing had
          noticed, because the IRQ0 engine raises from the accumulator regardless
@@ -676,12 +676,12 @@ void vdd_pit_reset(void *self)
          single-oracle measurement is not more trustworthy than a remembered fact
          just because it is a measurement -- it is one machine's answer, and this
          one happened to be the unrepresentative machine. */
-    st->mode = 3; st->mode_raw = 3;
-    st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
-    st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
-    st->rtc_now = rnow; st->rtc_ctx = rctx; st->rtc_set = rset;   /* and so does the clock */
-    st->ticks_set = tset;
-    st->tick_witness = witness;
+    state->Mode = 3; state->ProgrammedMode = 3;
+    state->FrameMicroseconds = frameMicroseconds ? frameMicroseconds : PIT_DEFAULT_FRAME_US;
+    state->Guard = guardRoutine; state->GuardContext = guardContext;        /* the lock survives a reset */
+    state->RtcNow = rtcNow; state->RtcContext = rtcContext; state->RtcSet = rtcSet;   /* and so does the clock */
+    state->TicksSet = ticksSet;
+    state->TickWitness = tickWitness;
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
          On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
          leaves it alone forever; its gate is tied high. A guest that simply READS
@@ -689,34 +689,34 @@ void vdd_pit_reset(void *self)
          touches it -- must see a counter in motion. Left at reset's zeros it
          would read a constant, which is the "no time is passing" answer this
          surface was measured to be giving. */
-    st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
-    st->c1.gate = 1;                        /* tied high on the board */
+    state->Counter1.Reload = 18; state->Counter1.Access = 3; state->Counter1.Mode = 2; state->Counter1.ProgrammedMode = 2;
+    state->Counter1.Gate = 1;                        /* tied high on the board */
     /* Counter 2 is NOT free-running: its gate is port 61h bit 0 and software
        decides. Left at reset defaults until a guest programs it. */
-    st->c2.access = 3;
+    state->Counter2.Access = 3;
 }
 
-int vdd_pit_init(VDD_BUS *b, void *self)
+INT VddPitInitialize(PVDD_BUS bus, PVOID context)
 {
-    pit_state *st = (pit_state *)self;
-    st->bus = b;
-    if (!st->frame_us) st->frame_us = PIT_DEFAULT_FRAME_US;
-    if (!st->access)   st->access = 3;
-    /* ⚠ THE POST DEFAULTS BELONG HERE TOO, NOT ONLY IN vdd_pit_reset. The host
+    PPIT_STATE state = (PPIT_STATE)context;
+    state->Bus = bus;
+    if (!state->FrameMicroseconds) state->FrameMicroseconds = PIT_DEFAULT_FRAME_US;
+    if (!state->Access)   state->Access = 3;
+    /* ⚠ THE POST DEFAULTS BELONG HERE TOO, NOT ONLY IN VddPitReset. The host
          builds g_pit as a zeroed global and calls init; it does NOT call reset on
          the startup path, so a default written only into reset is a default the
          running host never gets. Putting mode 2 in reset alone left Read-Back
          still reporting mode 0 on the rig -- the change measured as having done
          nothing, which is how a fix that is not wired up looks. */
-    if (!st->mode && !st->mode_raw) { st->mode = 3; st->mode_raw = 3; }
-    if (!st->c1.reload) {                       /* counter 1: free-running refresh */
-        st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
-        st->c1.gate = 1;                    /* tied high on the board */
+    if (!state->Mode && !state->ProgrammedMode) { state->Mode = 3; state->ProgrammedMode = 3; }
+    if (!state->Counter1.Reload) {                       /* counter 1: free-running refresh */
+        state->Counter1.Reload = 18; state->Counter1.Access = 3; state->Counter1.Mode = 2; state->Counter1.ProgrammedMode = 2;
+        state->Counter1.Gate = 1;                    /* tied high on the board */
     }
-    if (!st->c2.access) st->c2.access = 3;
-    if (VddClaimPorts(b, 0x40, 0x43, pit_in, pit_out, st)) return -1;
-    if (VddClaimInterrupt(b, 0x08, pit_int08, st)) return -1;
-    if (VddClaimInterrupt(b, 0x1A, pit_int1a, st)) return -1;
-    if (VddOnFrame(b, pit_frame, st)) return -1;
+    if (!state->Counter2.Access) state->Counter2.Access = 3;
+    if (VddClaimPorts(bus, 0x40, 0x43, PitPortIn, PitPortOut, state)) return -1;
+    if (VddClaimInterrupt(bus, 0x08, PitInt08, state)) return -1;
+    if (VddClaimInterrupt(bus, 0x1A, PitInt1A, state)) return -1;
+    if (VddOnFrame(bus, PitFrame, state)) return -1;
     return 0;
 }

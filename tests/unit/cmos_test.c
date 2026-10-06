@@ -23,17 +23,17 @@ static int total = 0, fails = 0;
     } while (0)
 
 /* A fixed instant, so every expectation is exact: 2026-09-23, 14:07:42. */
-static void fake_rtc(void *ctx, struct vdd_rtc *out)
+static void fake_rtc(void *ctx, PIT_RTC_READING *out)
 {
     (void)ctx;
-    out->cent = 20; out->year = 26; out->month = 9; out->day = 23;
-    out->hour = 14; out->min = 7;   out->sec = 42; out->dow = 4;   /* 2026-09-23 was a Wednesday */
+    out->Century = 20; out->Year = 26; out->Month = 9; out->Day = 23;
+    out->Hour = 14; out->Minute = 7;   out->Second = 42; out->DayOfWeek = 4;   /* 2026-09-23 was a Wednesday */
 }
 
 /* GH #261: the host's side of a clock write, recorded rather than applied. */
-static struct vdd_rtc g_set[4];
+static PIT_RTC_READING g_set[4];
 static int g_set_what[4], g_nset;
-static int fake_set(void *ctx, const struct vdd_rtc *in, int what)
+static int fake_set(void *ctx, const PIT_RTC_READING *in, int what)
 {
     (void)ctx;
     if (g_nset < 4) { g_set[g_nset] = *in; g_set_what[g_nset] = what; }
@@ -325,8 +325,8 @@ int main(void)
     {
         VddCmosReset(&cm); cm.RtcNow = fake_rtc; cm.RtcSet = fake_set; g_nset = 0;
         wr(&bus, CMOS_HOURS, 0x09);
-        CHECK(g_nset == 1 && g_set_what[0] == 0 && g_set[0].hour == 9
-              && g_set[0].min == 7 && g_set[0].sec == 42,
+        CHECK(g_nset == 1 && g_set_what[0] == 0 && g_set[0].Hour == 9
+              && g_set[0].Minute == 7 && g_set[0].Second == 42,
               "clock write: hours 0x09 BCD -> host time 09:07:42, outside SET");
         wr(&bus, CMOS_DAY_OF_WEEK, 0x02);
         CHECK(g_nset == 1, "clock write: the day of week stays refused");
@@ -343,25 +343,25 @@ int main(void)
         wr(&bus, CMOS_STATUS_B, 0x02);
         CHECK(g_nset == 2 && g_set_what[0] == 1 && g_set_what[1] == 0,
               "SET released: one date commit, then one time commit");
-        CHECK(g_set[0].cent == 19 && g_set[0].year == 99 && g_set[0].month == 6
-              && g_set[0].day == 15 && g_set[1].hour == 12 && g_set[1].min == 34
-              && g_set[1].sec == 56, "SET released: 1999-06-15 12:34:56 committed");
+        CHECK(g_set[0].Century == 19 && g_set[0].Year == 99 && g_set[0].Month == 6
+              && g_set[0].Day == 15 && g_set[1].Hour == 12 && g_set[1].Minute == 34
+              && g_set[1].Second == 56, "SET released: 1999-06-15 12:34:56 committed");
         CHECK(rd(&bus, CMOS_HOURS) == 0x14, "SET released: reads follow the host clock again");
 
         g_nset = 0;
         wr(&bus, CMOS_STATUS_B, 0x06);          /* binary, 24h */
         wr(&bus, CMOS_MINUTES, 45);
-        CHECK(g_nset == 1 && g_set[0].min == 45, "DM binary: 45 is forty-five, not 0x45");
+        CHECK(g_nset == 1 && g_set[0].Minute == 45, "DM binary: 45 is forty-five, not 0x45");
         g_nset = 0;
         wr(&bus, CMOS_STATUS_B, 0x00);          /* BCD, 12-hour */
         wr(&bus, CMOS_HOURS, 0x83);
-        CHECK(g_nset == 1 && g_set[0].hour == 15, "12-hour: 0x83 is 3 PM = 15:00");
+        CHECK(g_nset == 1 && g_set[0].Hour == 15, "12-hour: 0x83 is 3 PM = 15:00");
         g_nset = 0;
         wr(&bus, CMOS_HOURS, 0x92);
-        CHECK(g_nset == 1 && g_set[0].hour == 12, "12-hour: 0x92 is 12 PM = noon");
+        CHECK(g_nset == 1 && g_set[0].Hour == 12, "12-hour: 0x92 is 12 PM = noon");
         g_nset = 0;
         wr(&bus, CMOS_HOURS, 0x12);
-        CHECK(g_nset == 1 && g_set[0].hour == 0, "12-hour: 0x12 is 12 AM = midnight");
+        CHECK(g_nset == 1 && g_set[0].Hour == 0, "12-hour: 0x12 is 12 AM = midnight");
         VddCmosReset(&cm);
         CHECK(cm.RtcSet == fake_set && cm.RtcNow == fake_rtc,
               "reset keeps both host hooks");

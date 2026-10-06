@@ -22,7 +22,9 @@
 
 /* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
 /* dow: 1 = Sunday .. 7 = Saturday, the MC146818's own numbering; 0 = unknown (s81, #182). */
-struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec, dow; };
+typedef struct _PIT_RTC_READING { UINT Century, Year, Month, Day, Hour, Minute, Second, DayOfWeek; } PIT_RTC_READING, *PPIT_RTC_READING;
+
+typedef const PIT_RTC_READING *PCPIT_RTC_READING;
 
 /* ── ★★★ BCD IS A BOUNDARY FORMAT, NOT A SECOND SET OF ARITHMETIC. ───────────────
      Control Word bit 0 selects four-decade BCD counting: the counter runs
@@ -43,17 +45,17 @@ struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec, dow; };
      records that NO oracle we have models BCD, so this is spec-implemented and
      UNVERIFIABLE against a machine. It is the one surface here where the
      datasheet outranks the emulators. */
-static inline uint32_t pit_from_bcd(uint16_t v)
-{ return (uint32_t)((v & 0xF) + ((v >> 4) & 0xF) * 10u
-                  + ((v >> 8) & 0xF) * 100u + ((v >> 12) & 0xF) * 1000u); }
+static inline UINT32 PitFromBcd(WORD value)
+{ return (UINT32)((value & 0xF) + ((value >> 4) & 0xF) * 10u
+                  + ((value >> 8) & 0xF) * 100u + ((value >> 12) & 0xF) * 1000u); }
 
-static inline uint16_t pit_to_bcd(uint32_t v)
-{ v %= 10000u;                      /* 10000 (the BCD maximum) reads back as 0000 */
-  return (uint16_t)((((v / 1000u) % 10u) << 12) | (((v / 100u) % 10u) << 8)
-                  | (((v / 10u) % 10u) << 4) | (v % 10u)); }
+static inline WORD PitToBcd(UINT32 value)
+{ value %= 10000u;                      /* 10000 (the BCD maximum) reads back as 0000 */
+  return (WORD)((((value / 1000u) % 10u) << 12) | (((value / 100u) % 10u) << 8)
+                  | (((value / 10u) % 10u) << 4) | (value % 10u)); }
 
 /* The wrap of the counting element: where a count that runs past zero comes back. */
-static inline uint32_t pit_wrap(uint8_t bcd) { return bcd ? 10000u : 0x10000u; }
+static inline UINT32 PitWrap(BYTE isBcd) { return isBcd ? 10000u : 0x10000u; }
 
 /* ── COUNTERS 1 AND 2, AS COUNTERS. ──────────────────────────────────────────
    Counter 0 keeps its own flat fields below and is DELIBERATELY not folded in
@@ -65,177 +67,181 @@ static inline uint32_t pit_wrap(uint8_t bcd) { return bcd ? 10000u : 0x10000u; }
    What these two need is only what a guest can OBSERVE: a reload, an access mode
    and its read/write phases, a latch, and the moment the count was loaded --
    because a count read is computed from elapsed clocks, not stored. */
-typedef struct {
-    uint16_t reload;        /* BINARY, decoded at the write; 0 => the maximum   */
-    uint8_t  access;        /* 1=lo, 2=hi, 3=lo/hi                              */
-    uint8_t  mode;          /* EFFECTIVE mode 0-5 (6/7 normalised)              */
-    uint8_t  mode_raw;      /* as programmed -- for the Read-Back status byte    */
-    uint8_t  bcd;           /* control word bit 0: counts in four-decade BCD    */
-    uint8_t  wr_flip;       /* lo/hi write phase                                */
-    uint8_t  wr_lo;         /* LSB buffered in lo/hi mode                       */
-    uint8_t  rd_flip;       /* lo/hi read phase                                 */
-    uint8_t  latched;       /* a snapshot is frozen for reading                 */
-    uint16_t latch;         /* ...that snapshot                                 */
-    uint64_t load_clocks;   /* total_clocks when the count was last loaded      */
-    uint8_t  null_cnt;      /* a count is written but not yet in the counting element */
-    uint8_t  gate;          /* GATE input: 1 = counting. Counter 2's comes from
+typedef struct _PIT_COUNTER {
+    WORD Reload;        /* BINARY, decoded at the write; 0 => the maximum   */
+    BYTE  Access;        /* 1=lo, 2=hi, 3=lo/hi                              */
+    BYTE  Mode;          /* EFFECTIVE mode 0-5 (6/7 normalised)              */
+    BYTE  ProgrammedMode;      /* as programmed -- for the Read-Back status byte    */
+    BYTE  IsBcd;           /* control word bit 0: counts in four-decade BCD    */
+    BYTE  IsWriteHighNext;       /* lo/hi write phase                                */
+    BYTE  WriteLow;         /* LSB buffered in lo/hi mode                       */
+    BYTE  IsReadHighNext;       /* lo/hi read phase                                 */
+    BYTE  IsLatched;       /* a snapshot is frozen for reading                 */
+    WORD Latch;         /* ...that snapshot                                 */
+    UINT64 LoadClocks;   /* total_clocks when the count was last loaded      */
+    BYTE  IsNullCount;      /* a count is written but not yet in the counting element */
+    BYTE  Gate;          /* GATE input: 1 = counting. Counter 2's comes from
                                port 61h bit 0; counters 0 and 1 are tied high on a
                                PC and never use this.                            */
-    uint64_t gate_elapsed;  /* clocks counted when the gate last went LOW, so a
+    UINT64 GateElapsed;  /* clocks counted when the gate last went LOW, so a
                                gate that comes back high RESUMES rather than
                                restarts -- which is the difference between a
                                paused stopwatch and a reset one (modes 0 and 4). */
-    uint8_t  trig;          /* #175: modes 1/5 -- a GATE rising edge has started
+    BYTE  IsTriggered;          /* #175: modes 1/5 -- a GATE rising edge has started
                                the count since the Control Word / count write.   */
-} pit_chan;
+} PIT_COUNTER, *PPIT_COUNTER;
 
-typedef struct pit_state {
-    VDD_BUS *bus;
-    uint16_t reload;        /* channel-0 reload latch, BINARY (0 => the maximum) */
-    uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
-    uint8_t  mode;          /* EFFECTIVE mode 0-5 (shapes the count read-back)   */
-    uint8_t  mode_raw;      /* the three bits AS PROGRAMMED. Modes 6 and 7 do not
+typedef const PIT_COUNTER *PCPIT_COUNTER;
+
+typedef struct _PIT_STATE {
+    PVDD_BUS Bus;
+    WORD Reload;        /* channel-0 reload latch, BINARY (0 => the maximum) */
+    BYTE  Access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
+    BYTE  Mode;          /* EFFECTIVE mode 0-5 (shapes the count read-back)   */
+    BYTE  ProgrammedMode;      /* the three bits AS PROGRAMMED. Modes 6 and 7 do not
                                exist -- 110 IS mode 2 and 111 IS mode 3 -- so `mode`
                                is normalised for BEHAVIOUR. But MEASURED on a real
                                8254 (tests/probes/dos/p_pit.asm, pit.mode6.readback =
                                0x0C): the Read-Back status byte reports the bits the
                                guest WROTE, un-normalised. Keeping both is what lets
                                the behaviour be right and the read-back be honest. */
-    uint8_t  wr_flip;       /* lo/hi write phase (0 => lo next)                 */
-    uint8_t  wr_lo;         /* the LSB written so far in lo/hi mode -- see pit_out */
-    uint8_t  rd_flip;       /* lo/hi read phase                                 */
-    uint8_t  latched;       /* a count snapshot is latched for reading          */
-    uint16_t latch;         /* the latched count                                */
-    uint64_t total_clocks;  /* monotonic PIT input clocks (for count reads)     */
-    uint64_t load_clocks;   /* total_clocks when the count was last loaded: the
-                               counting element runs from HERE (see pit_current_count) */
-    uint64_t accum;         /* clocks not yet turned into IRQ0 pulses           */
-    uint8_t  cw_armed;      /* a Control Word was written since the last load: the
+    BYTE  IsWriteHighNext;       /* lo/hi write phase (0 => lo next)                 */
+    BYTE  WriteLow;         /* the LSB written so far in lo/hi mode -- see PitPortOut */
+    BYTE  IsReadHighNext;       /* lo/hi read phase                                 */
+    BYTE  IsLatched;       /* a count snapshot is latched for reading          */
+    WORD Latch;         /* the latched count                                */
+    UINT64 TotalClocks;  /* monotonic PIT input clocks (for count reads)     */
+    UINT64 LoadClocks;   /* total_clocks when the count was last loaded: the
+                               counting element runs from HERE (see PitCurrentCount) */
+    UINT64 Accumulator;         /* clocks not yet turned into IRQ0 pulses           */
+    BYTE  IsControlWordArmed;      /* a Control Word was written since the last load: the
                                next count write LOADS and RESTARTS the period, in every
-                               mode (8254: "synchronized by software"). See pit_load. */
-    uint8_t  next_pending;  /* modes 2/3, count written WITHOUT a Control Word: it is
+                               mode (8254: "synchronized by software"). See PitLoad. */
+    BYTE  IsNextPending;  /* modes 2/3, count written WITHOUT a Control Word: it is
                                held here and loaded at the end of the current period  */
-    uint16_t next_reload;   /* ...that held count                                */
-    uint8_t  irq_armed;     /* modes 0/4: a count was loaded and its terminal count
+    WORD NextReload;   /* ...that held count                                */
+    BYTE  IsIrqArmed;     /* modes 0/4: a count was loaded and its terminal count
                                has not raised IRQ0 yet. OUT rises ONCE per count in a
                                one-shot mode, and the PIC counts rising edges (#175). */
-    uint32_t oneshot_loads; /* counter-0 counts loaded in modes 0/1/4/5: whether a guest
+    UINT32 OneShotLoads; /* counter-0 counts loaded in modes 0/1/4/5: whether a guest
                                was exposed to the one-shot IRQ0 rule at all (STAGE2) */
-    uint32_t restarts;      /* loads that RESTARTED the period (CW+count / one-shot
+    UINT32 Restarts;      /* loads that RESTARTED the period (CW+count / one-shot
                                modes); the host watches it -- see host_pit_resync_check */
-    uint32_t frame_us;      /* microseconds per bus frame tick                  */
-    uint16_t ch2_reload;    /* channel-2 reload, the PC-speaker tone divisor -- the
-                               RAW bytes as written, so pit_ch2_hz decodes BCD     */
-    uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
-    uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
-    uint8_t  ch2_wr_lo;     /* channel-2 LSB held until the MSB commits (#256)  */
+    UINT32 FrameMicroseconds;      /* microseconds per bus frame tick                  */
+    WORD Counter2Reload;    /* channel-2 reload, the PC-speaker tone divisor -- the
+                               RAW bytes as written, so VddPitCounter2Hz decodes BCD     */
+    BYTE  Counter2Access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
+    BYTE  Counter2IsWriteHighNext;   /* channel-2 lo/hi write phase                      */
+    BYTE  Counter2WriteLow;     /* channel-2 LSB held until the MSB commits (#256)  */
     /* ⚠ ch2_reload/ch2_access/ch2_wr_flip above are the SPEAKER's view and stay
-         authoritative for pit_ch2_hz(); c2 below mirrors them and adds what a
+         authoritative for VddPitCounter2Hz(); c2 below mirrors them and adds what a
          COUNTER needs. Two views of one counter is not lovely, but rewiring the
          audio path is a separate change from making the port readable. */
-    uint8_t  bcd;           /* counter 0's control-word BCD bit: counts in BCD  */
-    uint8_t  st_latched[3]; /* a Read-Back status byte is latched for this counter */
-    uint8_t  st_latch[3];   /* ...that byte                                     */
-    pit_chan c1;            /* counter 1 -- DRAM refresh, free-running          */
-    pit_chan c2;            /* counter 2 -- the PC speaker, as a counter        */
+    BYTE  IsBcd;           /* counter 0's control-word BCD bit: counts in BCD  */
+    BYTE  StatusLatched[3]; /* a Read-Back status byte is latched for this counter */
+    BYTE  StatusLatch[3];   /* ...that byte                                     */
+    PIT_COUNTER Counter1;            /* counter 1 -- DRAM refresh, free-running          */
+    PIT_COUNTER Counter2;            /* counter 2 -- the PC speaker, as a counter        */
     /* ── HOST SERIALIZATION HOOK (may be NULL, e.g. in the off-VM tests). ─────────
        A real 8254 counts on its own crystal, in parallel with the CPU; this model
        only counts when a thread runs its code, and s61 measured what happens when
        that thread has to queue behind the video renderer for the DEVICE lock: the
        clock stops, then lurches (86% of a played session's timing stalls). So the
-       host drives vdd_pit_add_clocks from a pacer thread under a PIT-ONLY lock --
+       host drives VddPitAddClocks from a pacer thread under a PIT-ONLY lock --
        and these handlers, which arrive under the DEVICE lock, must take that same
        PIT lock or a guest reprogramming the reload races the pacer mid-count.
        The hook keeps this file pure C: enter=1 before counter state, enter=0 after. */
-    void   (*guard)(void *ctx, int enter);
-    void    *guard_ctx;
+    VOID   (*Guard)(PVOID context, INT enter);
+    PVOID    GuardContext;
     /* ── THE REAL-TIME CLOCK BEHIND INT 1Ah AH=02h/04h. ──────────────────────────
          Injectable so the battery can pin the exact BCD a known instant produces;
          NULL means the C library clock, which is what the host uses. The PIT owns
          these because it already owns INT 1Ah (the tick half of the same service). */
-    void   (*rtc_now)(void *ctx, struct vdd_rtc *out);
-    void    *rtc_ctx;
+    VOID   (*RtcNow)(PVOID context, PPIT_RTC_READING reading);
+    PVOID    RtcContext;
     /* ── AND THE OTHER DIRECTION: INT 1Ah AH=03h (what=0, hour/min/sec) and AH=05h
          (what=1, cent/year/month/day), decoded from BCD. Returns 1 if the clock took
          it. GH #250: the host moves the VDM's RTC offset, never the machine's clock.
          NULL = refused, as before (CF=1). Shares rtc_ctx. */
-    int    (*rtc_set)(void *ctx, const struct vdd_rtc *in, int what);
+    INT    (*RtcSet)(PVOID context, PCPIT_RTC_READING reading, INT what);
     /* GH #262: INT 1Ah AH=01h set the tick count. On DOS the CLOCK$ driver reads the
        time of day FROM that count, so the host moves DOS's clock to match (measured:
        p_tick2c on 6.22, DOSBox-X and PCem all follow). NULL = the count alone. */
-    void   (*ticks_set)(void *ctx, uint32_t ticks);
+    VOID   (*TicksSet)(PVOID context, UINT32 ticks);
     /* ── GH #262 CASE B: WAS 0040:006C LAST WRITTEN BY THE BIOS? ─────────────────────
          tick_witness is the count the BIOS itself last left there (every increment, the
          seed, AH=01h's and AH=2Dh's reloads). A count that differs at the next increment
          or at the next DOS clock read was STORED by the guest -- and DOS's clock must
          then follow it (dos_clock.h, DosClockFollowTicks). From the first such sighting
          until the host takes it: tick_wraps = midnight rollovers, tick_since = BIOS
-         ticks counted. One compare and a store per tick -- see pit_bios_tick. */
-    uint32_t tick_witness;
-    uint8_t  tick_foreign;
-    uint32_t tick_wraps;
-    uint32_t tick_since;
-} pit_state;
+         ticks counted. One compare and a store per tick -- see VddPitBiosTick. */
+    UINT32 TickWitness;
+    BYTE  IsTickForeign;
+    UINT32 TickWraps;
+    UINT32 TickSince;
+} PIT_STATE, *PPIT_STATE;
+
+typedef const PIT_STATE *PCPIT_STATE;
 
 /* ── THE BIOS TICK (INT 08h's bookkeeping), the ONE body for every place that does it:
-     pit_int08, and the host's two inline bumps for a guest that cannot take IRQ0 right
+     PitInt08, and the host's two inline bumps for a guest that cannot take IRQ0 right
      now (main.c: nested real-mode calls, a flat PM client with no INT 08h hook). Each of
      those used to carry its own copy; a copy that did not keep the witness would make
      every tick it counted look like a guest's store. ⚠ IRQ0 path: keep it trivial. */
-static inline void pit_bios_tick(pit_state *st, volatile uint32_t *tick, volatile uint8_t *flag)
+static inline VOID VddPitBiosTick(PPIT_STATE state, volatile UINT32 *tickCount, volatile BYTE *midnightFlag)
 {
-    uint32_t v = *tick;
-    if (v != st->tick_witness && !st->tick_foreign) {
-        st->tick_foreign = 1; st->tick_wraps = 0; st->tick_since = 0;
+    UINT32 count = *tickCount;
+    if (count != state->TickWitness && !state->IsTickForeign) {
+        state->IsTickForeign = 1; state->TickWraps = 0; state->TickSince = 0;
     }
-    if (++v >= PIT_TICKS_PER_DAY) { v = 0; *flag = 1; if (st->tick_foreign) st->tick_wraps++; }
-    if (st->tick_foreign) st->tick_since++;
-    *tick = v;
-    st->tick_witness = v;
+    if (++count >= PIT_TICKS_PER_DAY) { count = 0; *midnightFlag = 1; if (state->IsTickForeign) state->TickWraps++; }
+    if (state->IsTickForeign) state->TickSince++;
+    *tickCount = count;
+    state->TickWitness = count;
 }
 
 /* A count the BIOS/DOS itself just wrote (seed, AH=2Dh's reload): nothing foreign. */
-static inline void vdd_pit_tick_owned(pit_state *st, uint32_t v)
-{ st->tick_witness = v; st->tick_foreign = 0; st->tick_wraps = 0; st->tick_since = 0; }
+static inline VOID VddPitTickOwned(PPIT_STATE state, UINT32 count)
+{ state->TickWitness = count; state->IsTickForeign = 0; state->TickWraps = 0; state->TickSince = 0; }
 
 /* Has the count been set by anything but the BIOS since the last call? If so, hand
    back what DOS's clock must follow (see DosClockFollowTicks), forget it, and take the
    count as the BIOS's own from here. 0 = nothing happened, outputs untouched. The
    caller holds whatever serializes it against the tick (the host: g_pit_cs). */
-static inline int vdd_pit_tick_take(pit_state *st, uint32_t count,
-                                    uint32_t *ticks, uint32_t *wraps, uint32_t *since)
+static inline INT VddPitTickTake(PPIT_STATE state, UINT32 count,
+                                  UINT32 *takenTicks, UINT32 *takenWraps, UINT32 *takenSince)
 {
-    if (!st->tick_foreign && count == st->tick_witness) return 0;
-    if (!st->tick_foreign) { st->tick_wraps = 0; st->tick_since = 0; }   /* stored just now */
-    *ticks = count; *wraps = st->tick_wraps; *since = st->tick_since;
-    vdd_pit_tick_owned(st, count);
+    if (!state->IsTickForeign && count == state->TickWitness) return 0;
+    if (!state->IsTickForeign) { state->TickWraps = 0; state->TickSince = 0; }   /* stored just now */
+    *takenTicks = count; *takenWraps = state->TickWraps; *takenSince = state->TickSince;
+    VddPitTickOwned(state, count);
     return 1;
 }
 
 /* Effective reload. `reload` is always BINARY (decoded at the write); 0 means the
    maximum, which is 65536 in binary counting and 10000 in BCD. */
-static inline uint32_t pit_eff_reload(const pit_state *st)
-{ return st->reload ? st->reload : pit_wrap(st->bcd); }
+static inline UINT32 VddPitEffectiveReload(PCPIT_STATE state)
+{ return state->Reload ? state->Reload : PitWrap(state->IsBcd); }
 
 /* The same rule for counters 1 and 2. */
-static inline uint32_t pit_chan_eff_reload(const pit_chan *c)
-{ return c->reload ? (uint32_t)c->reload : pit_wrap(c->bcd); }
+static inline UINT32 VddPitCounterEffectiveReload(PCPIT_COUNTER counter)
+{ return counter->Reload ? (UINT32)counter->Reload : PitWrap(counter->IsBcd); }
 
 /* Channel-2 output frequency in Hz (the PC-speaker tone); 0 if not programmed.
    ⚠ ch2_reload is the SPEAKER's view and holds the RAW bytes the guest wrote
-     (see the note in pit_state), so a BCD guest's divisor has to be decoded here
+     (see the note in PIT_STATE), so a BCD guest's divisor has to be decoded here
      -- otherwise programming 0x1000 BCD sounds a tone 4096/1000 too low. */
-static inline uint32_t pit_ch2_hz(const pit_state *st)
-{ uint32_t r = st->c2.bcd ? pit_from_bcd(st->ch2_reload) : st->ch2_reload;
-  if (!r) r = pit_wrap(st->c2.bcd);
-  return PIT_INPUT_HZ / r; }
+static inline UINT32 VddPitCounter2Hz(PCPIT_STATE state)
+{ UINT32 reload = state->Counter2.IsBcd ? PitFromBcd(state->Counter2Reload) : state->Counter2Reload;
+  if (!reload) reload = PitWrap(state->Counter2.IsBcd);
+  return PIT_INPUT_HZ / reload; }
 
 /* Build the device descriptor to hand to VddBusAdd(). */
-int  vdd_pit_init(VDD_BUS *b, void *self);
-void vdd_pit_reset(void *self);
-static inline NTVDD_DEVICE vdd_pit_device(pit_state *st)
-{ NTVDD_DEVICE d; d.Name = "pit"; d.Initialize = vdd_pit_init; d.Reset = vdd_pit_reset;
-  d.Shutdown = 0; d.Context = st; return d; }
+INT  VddPitInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddPitReset(_In_ PVOID context);
+static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
+{ NTVDD_DEVICE device; device.Name = "pit"; device.Initialize = VddPitInitialize; device.Reset = VddPitReset;
+  device.Shutdown = 0; device.Context = state; return device; }
 
 /* ── ★★ THE TICK COUNT IS THE TIME OF DAY. (GH #253) ─────────────────────────────
      0040:006C is not "ticks since the machine started": POST reads the RTC and sets it
@@ -246,26 +252,26 @@ static inline NTVDD_DEVICE vdd_pit_device(pit_state *st)
      seconds * 1193182 / 65536 (~18.2065/s), floored. 23:59:59 gives 1,573,024, under
      the BIOS's own rollover at PIT_TICKS_PER_DAY, so a seeded count can never start
      at or past midnight. Seconds resolution, as POST has: the RTC has no finer field. */
-static inline uint32_t pit_ticks_since_midnight(unsigned hour, unsigned min, unsigned sec)
-{ uint64_t s = (uint64_t)hour * 3600u + (uint64_t)min * 60u + sec;
-  return (uint32_t)((s * PIT_INPUT_HZ) / 65536u); }
+static inline UINT32 VddPitTicksSinceMidnight(UINT hour, UINT minute, UINT second)
+{ UINT64 seconds = (UINT64)hour * 3600u + (UINT64)minute * 60u + second;
+  return (UINT32)((seconds * PIT_INPUT_HZ) / 65536u); }
 
 /* Seed 0040:006C from rtc_now (the same clock INT 1Ah AH=02h answers from, so the
    two halves of INT 1Ah cannot disagree about the time) and clear the midnight flag
    at 0040:0070. Returns 1 if seeded; 0 -- touching nothing -- when there is no clock
    or it read an impossible time, which leaves the old count rather than a made-up one.
    Call once the PIT is on the bus (it writes through the bus's flat map). */
-int  vdd_pit_seed_time_of_day(pit_state *st);
+INT  VddPitSeedTimeOfDay(_Inout_ PPIT_STATE state);
 
 /* Advance time by `clocks` PIT input clocks, emitting IRQ0 per elapsed reload.
    Exposed (not just driven by the frame tick) so tests can feed exact counts. */
-void vdd_pit_add_clocks(pit_state *st, uint32_t clocks);
+VOID VddPitAddClocks(_Inout_ PPIT_STATE state, _In_ UINT32 clocks);
 
 /* ── COUNTER 2'S GATE AND OUT PIN -- the PC's only software-visible pair. ─────
    The speaker VDD owns port 61h, so it pushes bit 0 in here and reads bit 5 back
    out. Keeping the PIT ignorant of the speaker (rather than having it reach for
    port 61h itself) is what lets the off-VM battery drive the gate directly. */
-void vdd_pit_ch2_gate(pit_state *st, int on);
-int  vdd_pit_ch2_out(const pit_state *st);
+VOID VddPitCounter2Gate(_Inout_ PPIT_STATE state, _In_ INT isHigh);
+INT  VddPitCounter2Out(_In_ PCPIT_STATE state);
 
 #endif /* NTVDMEX_VDD_PIT_H */

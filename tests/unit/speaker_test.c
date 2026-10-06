@@ -19,9 +19,9 @@ static uint8_t g_flat[0x100000];
 int main(void)
 {
     VDD_BUS bus;
-    pit_state pit; memset(&pit, 0, sizeof pit);
+    PIT_STATE pit; memset(&pit, 0, sizeof pit);
     SPEAKER_STATE spk; memset(&spk, 0, sizeof spk); spk.Pit = &pit;
-    NTVDD_DEVICE pdev = vdd_pit_device(&pit);
+    NTVDD_DEVICE pdev = VddPitDevice(&pit);
     NTVDD_DEVICE sdev = VddSpeakerDevice(&spk);
     uint32_t v;
 
@@ -40,8 +40,8 @@ int main(void)
     v = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &v);
     v = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &v);     /* lo */
     v = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &v);     /* hi -> reload 1193 */
-    CHECK(pit.ch2_reload == 1193, "ch2: reload latched (lo/hi) = 1193");
-    CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1193, "ch2: ~1000 Hz tone");
+    CHECK(pit.Counter2Reload == 1193, "ch2: reload latched (lo/hi) = 1193");
+    CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1193, "ch2: ~1000 Hz tone");
 
     /* T3: enabling gate+data (port 0x61 bits 0+1) turns the speaker on ---- */
     v = 0x03; VddBusIo(&bus, 0x61, 1, 0, &v);

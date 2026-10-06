@@ -17,7 +17,7 @@ static int total = 0, fails = 0;
     } while (0)
 
 /* Read counter 0 the way a guest does: Counter Latch Command, then two INs.
-   Deliberately NOT a peek at pit_current_count -- that is static, and the port
+   Deliberately NOT a peek at PitCurrentCount -- that is static, and the port
    path is the contract a guest actually depends on. */
 static unsigned pit_latched_count(VDD_BUS *bus)
 {
@@ -47,18 +47,18 @@ static uint8_t  *bda_flag(void) { return g_flat + 0x470; }                 /* 00
 
 /* A fixed instant, so the BCD conversion is pinned rather than read off the wall:
    2026-09-15 23:41:07. */
-static void fake_rtc(void *ctx, struct vdd_rtc *out)
+static void fake_rtc(void *ctx, PIT_RTC_READING *out)
 {
     (void)ctx;
-    out->cent = 20; out->year = 26; out->month = 9; out->day = 15;
-    out->hour = 23; out->min = 41; out->sec = 7;
+    out->Century = 20; out->Year = 26; out->Month = 9; out->Day = 15;
+    out->Hour = 23; out->Minute = 41; out->Second = 7;
 }
 
 int main(void)
 {
     VDD_BUS bus;
-    pit_state pit; memset(&pit, 0, sizeof pit);
-    NTVDD_DEVICE dev = vdd_pit_device(&pit);
+    PIT_STATE pit; memset(&pit, 0, sizeof pit);
+    NTVDD_DEVICE dev = VddPitDevice(&pit);
     uint32_t v; NTVDD_REGISTERS r;
 
     printf("== M3 slice-2 PIT timer battery ==\n");
@@ -70,13 +70,13 @@ int main(void)
     CHECK(VddBusAdd(&bus, &dev) == 0, "add: pit init ok");
     CHECK(bus.PortCount == 1 && bus.FrameCount == 1, "add: ports + frame claimed");
     CHECK(bus.Interrupts[0x08].Service && bus.Interrupts[0x1A].Service, "add: INT 08h + 1Ah claimed");
-    CHECK(pit_eff_reload(&pit) == 0x10000, "init: default reload = 65536 (18.2 Hz)");
+    CHECK(VddPitEffectiveReload(&pit) == 0x10000, "init: default reload = 65536 (18.2 Hz)");
 
     /* T1: program channel 0 reload via 0x43 (lo/hi) + two 0x40 writes ----- */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);          /* ch0, lo/hi, mode3 */
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);          /* lo                */
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);          /* hi -> 0x1000      */
-    CHECK(pit.reload == 0x1000, "8254: lo/hi reload programmed to 0x1000");
+    CHECK(pit.Reload == 0x1000, "8254: lo/hi reload programmed to 0x1000");
 
     /* T1b: A HALF-WRITTEN COUNT IS NOT A COUNT. -------------------------------
        The 8254 buffers the LSB and loads the count register when the MSB
@@ -89,16 +89,16 @@ int main(void)
        old 0x8000 with a new LSB of 0x02 -- is the catastrophic one. */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);          /* ch0, lo/hi, mode3 */
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);          /* LSB only so far   */
-    CHECK(pit.reload == 0x1000, "8254: LSB alone does NOT change the rate");
+    CHECK(pit.Reload == 0x1000, "8254: LSB alone does NOT change the rate");
     v = 0x80; VddBusIo(&bus, 0x40, 1, 0, &v);          /* MSB -> commit     */
-    CHECK(pit.reload == 0x8000, "8254: the MSB write commits both bytes at once");
+    CHECK(pit.Reload == 0x8000, "8254: the MSB write commits both bytes at once");
     /* ...and the pathological order, which is ZAR's: a small LSB against a large
        standing MSB must not be visible as a divisor of 2 even for one clock. */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);
     v = 0x02; VddBusIo(&bus, 0x40, 1, 0, &v);
-    CHECK(pit.reload == 0x8000, "8254: a small LSB cannot transiently mean 596 kHz");
+    CHECK(pit.Reload == 0x8000, "8254: a small LSB cannot transiently mean 596 kHz");
     v = 0x11; VddBusIo(&bus, 0x40, 1, 0, &v);
-    CHECK(pit.reload == 0x1102, "8254: ...and the pair still lands where asked");
+    CHECK(pit.Reload == 0x1102, "8254: ...and the pair still lands where asked");
 
     /* T1c: LSB-only and MSB-only ZERO the other half (Intel 8254 datasheet).
        The same read-modify-write mistake in a second dress -- a guest that re-rates
@@ -107,35 +107,35 @@ int main(void)
        merits, from the datasheet rather than from a run. */
     v = 0x16; VddBusIo(&bus, 0x43, 1, 0, &v);          /* ch0, LSB only     */
     v = 0x34; VddBusIo(&bus, 0x40, 1, 0, &v);
-    CHECK(pit.reload == 0x0034, "8254: LSB-only write zeroes the MSB");
+    CHECK(pit.Reload == 0x0034, "8254: LSB-only write zeroes the MSB");
     v = 0x26; VddBusIo(&bus, 0x43, 1, 0, &v);          /* ch0, MSB only     */
     v = 0x80; VddBusIo(&bus, 0x40, 1, 0, &v);
-    CHECK(pit.reload == 0x8000, "8254: MSB-only write zeroes the LSB");
+    CHECK(pit.Reload == 0x8000, "8254: MSB-only write zeroes the LSB");
 
     /* restore what the rest of the battery expects */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);
-    CHECK(pit.reload == 0x1000, "8254: reprogrammed back to 0x1000");
+    CHECK(pit.Reload == 0x1000, "8254: reprogrammed back to 0x1000");
 
     /* T2: the time engine emits one IRQ0 per elapsed reload --------------- */
-    g_irq = 0; pit.accum = 0; pit.total_clocks = 0;
-    vdd_pit_add_clocks(&pit, 0x1000 * 3);                /* exactly 3 periods */
+    g_irq = 0; pit.Accumulator = 0; pit.TotalClocks = 0;
+    VddPitAddClocks(&pit, 0x1000 * 3);                /* exactly 3 periods */
     CHECK(g_irq == 3, "engine: 3 reloads of clocks -> 3 IRQ0");
     g_irq = 0;
-    vdd_pit_add_clocks(&pit, 0x1000 - 1);               /* just under one    */
+    VddPitAddClocks(&pit, 0x1000 - 1);               /* just under one    */
     CHECK(g_irq == 0, "engine: sub-reload clocks -> no IRQ0");
-    vdd_pit_add_clocks(&pit, 1);                         /* crosses the edge  */
+    VddPitAddClocks(&pit, 1);                         /* crosses the edge  */
     CHECK(g_irq == 1, "engine: accumulator carries across calls");
 
     /* T3: default-rate sanity -- 65536 clocks == exactly one tick --------- */
-    pit.reload = 0; pit.access = 3; pit.accum = 0; pit.total_clocks = 0; g_irq = 0;
-    vdd_pit_add_clocks(&pit, 0x10000);
+    pit.Reload = 0; pit.Access = 3; pit.Accumulator = 0; pit.TotalClocks = 0; g_irq = 0;
+    VddPitAddClocks(&pit, 0x10000);
     CHECK(g_irq == 1, "engine: 65536 clocks at default reload -> 1 IRQ0");
 
     /* T4: the frame tick converts ~1/60 s into the right number of ticks -- */
-    pit.reload = 0; pit.accum = 0; pit.total_clocks = 0; g_irq = 0;
-    pit.frame_us = PIT_DEFAULT_FRAME_US;
+    pit.Reload = 0; pit.Accumulator = 0; pit.TotalClocks = 0; g_irq = 0;
+    pit.FrameMicroseconds = PIT_DEFAULT_FRAME_US;
     /* 60 frames ~= 1 second ~= 18 ticks (18.2065 Hz) */
     {
         int f; for (f = 0; f < 60; ++f) VddBusFrame(&bus);
@@ -169,28 +169,28 @@ int main(void)
     /* T8b: GH #262 case B -- the WITNESS: was 0040:006C last written by the BIOS? */
     {
         uint32_t t = 0xEEEE, w = 0xEEEE, s = 0xEEEE;
-        CHECK(pit.tick_witness == 0x00123456 && !pit.tick_foreign,
+        CHECK(pit.TickWitness == 0x00123456 && !pit.IsTickForeign,
               "witness: AH=01h with no host hook owns its count");
-        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 0 && t == 0xEEEE,
+        CHECK(VddPitTickTake(&pit, *bda_tick(), &t, &w, &s) == 0 && t == 0xEEEE,
               "witness: nothing stored -> take says so, outputs untouched");
         VddBusDeliverInterrupt(&bus, 0x08, &r);
         VddBusDeliverInterrupt(&bus, 0x08, &r);
-        CHECK(!pit.tick_foreign && pit.tick_witness == 0x00123458,
+        CHECK(!pit.IsTickForeign && pit.TickWitness == 0x00123458,
               "witness: the BIOS's own ticks are never foreign");
         /* a guest stores straight into 006C (p_tick2c case B), then two ticks */
         *bda_tick() = 0x000B8277u;
         VddBusDeliverInterrupt(&bus, 0x08, &r);
-        CHECK(pit.tick_foreign == 1 && *bda_tick() == 0x000B8278u,
+        CHECK(pit.IsTickForeign == 1 && *bda_tick() == 0x000B8278u,
               "witness: the next tick sees the store, and still counts from it");
         VddBusDeliverInterrupt(&bus, 0x08, &r);
-        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1
+        CHECK(VddPitTickTake(&pit, *bda_tick(), &t, &w, &s) == 1
               && t == 0x000B8279u && w == 0 && s == 2,
               "witness: take -> count, 0 wraps, 2 ticks since");
-        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 0,
+        CHECK(VddPitTickTake(&pit, *bda_tick(), &t, &w, &s) == 0,
               "witness: ...once; the count is the BIOS's own from there");
         /* a store read before any tick: seen by the take itself, since = 0 */
         *bda_tick() = 0x1234;
-        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1
+        CHECK(VddPitTickTake(&pit, *bda_tick(), &t, &w, &s) == 1
               && t == 0x1234 && w == 0 && s == 0, "witness: a store with no tick since");
         /* a store just before midnight; the BIOS wraps it -- one day for DOS */
         *bda_tick() = PIT_TICKS_PER_DAY - 2; *bda_flag() = 0;
@@ -198,28 +198,28 @@ int main(void)
         VddBusDeliverInterrupt(&bus, 0x08, &r);
         VddBusDeliverInterrupt(&bus, 0x08, &r);
         CHECK(*bda_tick() == 1 && *bda_flag() == 1, "witness: the stored count wraps as ever");
-        CHECK(vdd_pit_tick_take(&pit, *bda_tick(), &t, &w, &s) == 1 && t == 1 && w == 1 && s == 3,
+        CHECK(VddPitTickTake(&pit, *bda_tick(), &t, &w, &s) == 1 && t == 1 && w == 1 && s == 3,
               "witness: take -> 1 wrap, 3 ticks since");
         /* a NATURAL midnight is not counted: the host-time clock already turns the day */
-        *bda_tick() = PIT_TICKS_PER_DAY - 1; vdd_pit_tick_owned(&pit, *bda_tick());
+        *bda_tick() = PIT_TICKS_PER_DAY - 1; VddPitTickOwned(&pit, *bda_tick());
         VddBusDeliverInterrupt(&bus, 0x08, &r);
-        CHECK(*bda_tick() == 0 && !pit.tick_foreign && pit.tick_wraps == 0,
+        CHECK(*bda_tick() == 0 && !pit.IsTickForeign && pit.TickWraps == 0,
               "witness: the BIOS's own midnight is not a store");
         /* the seed (POST) owns its count */
-        pit.rtc_now = fake_rtc;
-        CHECK(vdd_pit_seed_time_of_day(&pit) == 1 && pit.tick_witness == *bda_tick()
-              && !pit.tick_foreign, "witness: the seed owns its count");
-        pit.rtc_now = 0;
+        pit.RtcNow = fake_rtc;
+        CHECK(VddPitSeedTimeOfDay(&pit) == 1 && pit.TickWitness == *bda_tick()
+              && !pit.IsTickForeign, "witness: the seed owns its count");
+        pit.RtcNow = 0;
         /* and reset does not forget it: 006C is memory, not the chip */
-        { uint32_t keep = pit.tick_witness;
-          vdd_pit_reset(&pit);
-          CHECK(pit.tick_witness == keep, "witness: survives vdd_pit_reset"); }
+        { uint32_t keep = pit.TickWitness;
+          VddPitReset(&pit);
+          CHECK(pit.TickWitness == keep, "witness: survives vdd_pit_reset"); }
         *bda_flag() = 0;
     }
 
     /* T9: a latched count reads back lo then hi via port 0x40 ------------- */
-    pit.reload = 0x1234; pit.access = 3; pit.total_clocks = 0; pit.load_clocks = 0;
-    pit.latched = 0;
+    pit.Reload = 0x1234; pit.Access = 3; pit.TotalClocks = 0; pit.LoadClocks = 0;
+    pit.IsLatched = 0;
     v = 0x00; VddBusIo(&bus, 0x43, 1, 0, &v);          /* latch ch0 count   */
     {
         uint32_t lo = 0, hi = 0;
@@ -229,10 +229,10 @@ int main(void)
     }
 
     /* T10: reset restores defaults but keeps the bus link ---------------- */
-    pit.reload = 0x9999; pit.accum = 777; pit.total_clocks = 999;
-    vdd_pit_reset(&pit);
-    CHECK(pit.reload == 0 && pit.accum == 0 && pit.total_clocks == 0, "reset: counters cleared");
-    CHECK(pit.bus == &bus && pit.access == 3 && pit.frame_us == PIT_DEFAULT_FRAME_US,
+    pit.Reload = 0x9999; pit.Accumulator = 777; pit.TotalClocks = 999;
+    VddPitReset(&pit);
+    CHECK(pit.Reload == 0 && pit.Accumulator == 0 && pit.TotalClocks == 0, "reset: counters cleared");
+    CHECK(pit.Bus == &bus && pit.Access == 3 && pit.FrameMicroseconds == PIT_DEFAULT_FRAME_US,
           "reset: bus link + defaults restored");
 
     /* ── T11-T15: WHEN A LOAD RESTARTS THE PERIOD, from the Intel 8254 datasheet ───────
@@ -245,12 +245,12 @@ int main(void)
        "After the Control Word and initial count are written ... the initial count will
         be loaded on the next CLK pulse" -- Lemmings loads 0xFFFF, waits 320 hblanks
        (~12,100 clocks), latches, and uses 0xFFFF - latch as its tick. */
-    vdd_pit_reset(&pit);
-    vdd_pit_add_clocks(&pit, 54321);                      /* an arbitrary prior phase */
+    VddPitReset(&pit);
+    VddPitAddClocks(&pit, 54321);                      /* an arbitrary prior phase */
     v = 0x30; VddBusIo(&bus, 0x43, 1, 0, &v);           /* ch0, lo/hi, MODE 0      */
     v = 0xFF; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0xFF; VddBusIo(&bus, 0x40, 1, 0, &v);           /* count 0xFFFF, loaded NOW */
-    vdd_pit_add_clocks(&pit, 12100);
+    VddPitAddClocks(&pit, 12100);
     v = 0x00; VddBusIo(&bus, 0x43, 1, 0, &v);           /* latch                    */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);           /* Lemmings: mode 3 CW next */
     {   uint32_t lo = 0, hi = 0;
@@ -262,51 +262,51 @@ int main(void)
     /* T12: Control Word + count RESTARTS the period in mode 3.
        "After writing a Control Word and initial count, the Counter will be loaded on
         the next CLK pulse. This allows the Counter to be synchronized by software." */
-    vdd_pit_reset(&pit); g_irq = 0;
+    VddPitReset(&pit); g_irq = 0;
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);           /* N = 0x1000              */
-    vdd_pit_add_clocks(&pit, 0x0C00);                     /* 3/4 through the period  */
+    VddPitAddClocks(&pit, 0x0C00);                     /* 3/4 through the period  */
     v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);           /* CW + the SAME count ... */
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);
-    vdd_pit_add_clocks(&pit, 0x0FFF);
+    VddPitAddClocks(&pit, 0x0FFF);
     CHECK(g_irq == 0, "8254 mode 3: CW+count restarts -- no IRQ0 at the OLD period's end");
-    vdd_pit_add_clocks(&pit, 1);
+    VddPitAddClocks(&pit, 1);
     CHECK(g_irq == 1, "8254 mode 3: CW+count restarts -- IRQ0 exactly N clocks after the load");
 
     /* T13: a BARE count write in mode 2/3 does NOT disturb the period in flight.
        "Writing a new count while counting does not affect the current counting
         sequence ... the new count will be loaded at the end of the current counting
         cycle." (mode 2; mode 3 identically, modulo its half-cycle) */
-    vdd_pit_reset(&pit); g_irq = 0;
+    VddPitReset(&pit); g_irq = 0;
     v = 0x34; VddBusIo(&bus, 0x43, 1, 0, &v);           /* ch0, lo/hi, MODE 2      */
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);           /* N = 0x1000              */
-    vdd_pit_add_clocks(&pit, 0x0C00);
+    VddPitAddClocks(&pit, 0x0C00);
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x02; VddBusIo(&bus, 0x40, 1, 0, &v);           /* bare write: M = 0x200   */
-    vdd_pit_add_clocks(&pit, 0x03FF);
+    VddPitAddClocks(&pit, 0x03FF);
     CHECK(g_irq == 0, "8254 mode 2: bare count write leaves the current period alone");
-    vdd_pit_add_clocks(&pit, 1);
+    VddPitAddClocks(&pit, 1);
     CHECK(g_irq == 1, "8254 mode 2: ...IRQ0 at the OLD period's end");
-    CHECK(pit.reload == 0x200, "8254 mode 2: the new count takes over at that boundary");
-    g_irq = 0; vdd_pit_add_clocks(&pit, 0x200 * 4);
+    CHECK(pit.Reload == 0x200, "8254 mode 2: the new count takes over at that boundary");
+    g_irq = 0; VddPitAddClocks(&pit, 0x200 * 4);
     CHECK(g_irq == 4, "8254 mode 2: ...and the new period runs from there");
 
     /* T14: THE LEMMINGS SHAPE. CW+count re-written after every IRQ, N clocks apart plus
        a spin: the tick is one per (N + spin), never faster, never free-running. */
-    vdd_pit_reset(&pit); g_irq = 0;
+    VddPitReset(&pit); g_irq = 0;
     {   int tick, spin = 3500, N = 12904;                  /* measured on the rig      */
         v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);
         v = (uint32_t)(N & 0xFF); VddBusIo(&bus, 0x40, 1, 0, &v);
         v = (uint32_t)(N >> 8);   VddBusIo(&bus, 0x40, 1, 0, &v);
         for (tick = 0; tick < 10; ++tick) {
             int before = g_irq;
-            vdd_pit_add_clocks(&pit, (uint32_t)(N - 1));
+            VddPitAddClocks(&pit, (uint32_t)(N - 1));
             if (g_irq != before) break;                   /* early: free-running      */
-            vdd_pit_add_clocks(&pit, 1);                  /* the IRQ: ISR entered     */
-            vdd_pit_add_clocks(&pit, (uint32_t)spin);     /* ISR spins for retrace    */
+            VddPitAddClocks(&pit, 1);                  /* the IRQ: ISR entered     */
+            VddPitAddClocks(&pit, (uint32_t)spin);     /* ISR spins for retrace    */
             v = 0x36; VddBusIo(&bus, 0x43, 1, 0, &v);   /* ...then reprograms       */
             v = (uint32_t)(N & 0xFF); VddBusIo(&bus, 0x40, 1, 0, &v);
             v = (uint32_t)(N >> 8);   VddBusIo(&bus, 0x40, 1, 0, &v);
@@ -317,14 +317,14 @@ int main(void)
     /* T15: one-shot modes restart on any count write.
        Mode 0: "If a new count is written to the Counter, it will be loaded on the next
         CLK pulse and counting will continue from the new count." */
-    vdd_pit_reset(&pit);
+    VddPitReset(&pit);
     v = 0x30; VddBusIo(&bus, 0x43, 1, 0, &v);
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x10; VddBusIo(&bus, 0x40, 1, 0, &v);
-    vdd_pit_add_clocks(&pit, 0x0800);
+    VddPitAddClocks(&pit, 0x0800);
     v = 0x00; VddBusIo(&bus, 0x40, 1, 0, &v);
     v = 0x20; VddBusIo(&bus, 0x40, 1, 0, &v);           /* bare write, mode 0      */
-    vdd_pit_add_clocks(&pit, 0x0100);
+    VddPitAddClocks(&pit, 0x0100);
     v = 0x00; VddBusIo(&bus, 0x43, 1, 0, &v);
     {   uint32_t lo = 0, hi = 0;
         VddBusIo(&bus, 0x40, 1, 1, &lo); VddBusIo(&bus, 0x40, 1, 1, &hi);
@@ -338,8 +338,8 @@ int main(void)
          with the time and date. BCD is the contract: a guest reads these as BCD
          because that is what a BIOS returns, so a binary 34 would be read as 22. */
     {   NTVDD_REGISTERS r;
-        pit_state *ps = &pit;
-        ps->rtc_now = fake_rtc; ps->rtc_ctx = 0;
+        PIT_STATE *ps = &pit;
+        ps->RtcNow = fake_rtc; ps->RtcContext = 0;
         memset(&r, 0, sizeof r); VddSetAh(&r, 0x02);
         r.Ecx = 0xC1C1; r.Edx = 0xD1D1;          /* the probe's poison, same idea */
         VddBusDeliverInterrupt(&bus, 0x1A, &r);
@@ -358,12 +358,12 @@ int main(void)
 
         /* ...and with NO clock installed the call is NOT answered. Fabricating a date
            would be worse than silence: a guest would stamp every file with it. */
-        ps->rtc_now = 0;
+        ps->RtcNow = 0;
         memset(&r, 0, sizeof r); VddSetAh(&r, 0x02);
         r.Ecx = 0xC1C1;
         VddBusDeliverInterrupt(&bus, 0x1A, &r);
         CHECK(VddGetCx(&r) == 0xC1C1, "int1a/02: no clock installed -> left alone, not invented");
-        ps->rtc_now = fake_rtc;
+        ps->RtcNow = fake_rtc;
     }
 
     /* T17: ★ 0040:006C IS SEEDED WITH THE TIME OF DAY. (GH #253)
@@ -375,16 +375,16 @@ int main(void)
            00:00:00 -> 0;  01:00:00 -> 3600*1193182/65536 = 65543.04 -> 65543 (the IBM
            BIOS's own hourly constant);  23:41:07 (fake_rtc) -> 85267 s -> 1552414.6
            -> 1552414;  23:59:59 -> 1573024, under the 1573040 rollover. */
-    {   pit_state *ps = &pit;
-        CHECK(pit_ticks_since_midnight(0, 0, 0) == 0, "tod: 00:00:00 -> 0 ticks");
-        CHECK(pit_ticks_since_midnight(1, 0, 0) == 65543u, "tod: one hour -> 65543 ticks (IBM's constant)");
-        CHECK(pit_ticks_since_midnight(23, 59, 59) == 1573024u
-              && pit_ticks_since_midnight(23, 59, 59) < PIT_TICKS_PER_DAY,
+    {   PIT_STATE *ps = &pit;
+        CHECK(VddPitTicksSinceMidnight(0, 0, 0) == 0, "tod: 00:00:00 -> 0 ticks");
+        CHECK(VddPitTicksSinceMidnight(1, 0, 0) == 65543u, "tod: one hour -> 65543 ticks (IBM's constant)");
+        CHECK(VddPitTicksSinceMidnight(23, 59, 59) == 1573024u
+              && VddPitTicksSinceMidnight(23, 59, 59) < PIT_TICKS_PER_DAY,
               "tod: 23:59:59 -> 1573024, below the midnight rollover");
 
         *bda_tick() = 0xDEADBEEF; *bda_flag() = 1;
-        ps->rtc_now = fake_rtc;
-        CHECK(vdd_pit_seed_time_of_day(ps) == 1, "seed: clock present -> seeded");
+        ps->RtcNow = fake_rtc;
+        CHECK(VddPitSeedTimeOfDay(ps) == 1, "seed: clock present -> seeded");
         CHECK(*bda_tick() == 1552414u, "seed: 23:41:07 -> 0040:006C = 1552414");
         CHECK(*bda_flag() == 0, "seed: midnight flag cleared");
 
@@ -397,11 +397,11 @@ int main(void)
                   "seed: AH=00h's count and AH=02h's 23:41:07 are the same second");
         }
 
-        ps->rtc_now = 0;
+        ps->RtcNow = 0;
         *bda_tick() = 0x1234; *bda_flag() = 1;
-        CHECK(vdd_pit_seed_time_of_day(ps) == 0 && *bda_tick() == 0x1234 && *bda_flag() == 1,
+        CHECK(VddPitSeedTimeOfDay(ps) == 0 && *bda_tick() == 0x1234 && *bda_flag() == 1,
               "seed: no clock -> count and flag left alone, not invented");
-        ps->rtc_now = fake_rtc;
+        ps->RtcNow = fake_rtc;
     }
 
 
@@ -412,7 +412,7 @@ int main(void)
        `mode == 3` silently excludes a guest that programmed the alias.
 
        ⚠ THE FAILURE IS NARROWER THAN THE INVENTORY FIRST CLAIMED, and the
-         difference matters. `periodic` does NOT gate IRQ0 -- vdd_pit_add_clocks
+         difference matters. `periodic` does NOT gate IRQ0 -- VddPitAddClocks
          raises it from the accumulator regardless of mode -- so an aliased guest
          still gets its interrupt. What it loses is:
            * the BARE-COUNT LOAD RULE (a count written with no Control Word must
@@ -426,23 +426,23 @@ int main(void)
         w = 0x34; VddBusIo(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 2   */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);      /* -> 0x1000          */
-        CHECK(pit.reload == 0x1000 && !pit.next_pending,
+        CHECK(pit.Reload == 0x1000 && !pit.IsNextPending,
               "mode2: control word + count loads immediately");
         /* ...and a BARE count parks until the end of the period. */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x20; VddBusIo(&bus, 0x40, 1, 0, &w);      /* -> 0x2000, bare    */
-        CHECK(pit.reload == 0x1000 && pit.next_pending,
+        CHECK(pit.Reload == 0x1000 && pit.IsNextPending,
               "mode2: a BARE count parks until the period ends");
 
         /* Mode 6 must do exactly the same. */
         w = 0x3C; VddBusIo(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 6   */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);
-        CHECK(pit.reload == 0x1000 && !pit.next_pending,
+        CHECK(pit.Reload == 0x1000 && !pit.IsNextPending,
               "mode6: control word + count loads immediately");
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x20; VddBusIo(&bus, 0x40, 1, 0, &w);
-        CHECK(pit.reload == 0x1000 && pit.next_pending,
+        CHECK(pit.Reload == 0x1000 && pit.IsNextPending,
               "mode6 == mode2: a BARE count parks until the period ends");
 
         /* Mode 3 counts DOWN BY TWO; mode 7 must read back the same way.
@@ -451,14 +451,14 @@ int main(void)
         w = 0x36; VddBusIo(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 3   */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);      /* -> 0x1000          */
-        pit.total_clocks = pit.load_clocks + 4;
+        pit.TotalClocks = pit.LoadClocks + 4;
         CHECK(pit_latched_count(&bus) == 0x1000 - 8,
               "mode3: the count decrements by two per clock");
 
         w = 0x3E; VddBusIo(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 7   */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);
-        pit.total_clocks = pit.load_clocks + 4;
+        pit.TotalClocks = pit.LoadClocks + 4;
         CHECK(pit_latched_count(&bus) == 0x1000 - 8,
               "mode7 == mode3: the count decrements by two per clock");
 
@@ -551,29 +551,29 @@ int main(void)
        on 6.22, dosbox-x AND PCem); we alone return a constant. */
     {
         uint32_t w; unsigned a, b2;
-        vdd_pit_ch2_gate(&pit, 1);                      /* gate high: counting  */
+        VddPitCounter2Gate(&pit, 1);                      /* gate high: counting  */
         w = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &w);     /* ch2 lo/hi mode 3     */
         w = 0x40; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);     /* reload 0x0040        */
 
         /* Mode 3 is a square wave: OUT high for the first half of the period,
            low for the second. R = 64, so the half is 32. */
-        pit.total_clocks = pit.c2.load_clocks;
-        CHECK(vdd_pit_ch2_out(&pit) == 1, "ch2 OUT is high at the start of the period");
-        pit.total_clocks = pit.c2.load_clocks + 0x30;   /* 48 of 64: past half  */
-        CHECK(vdd_pit_ch2_out(&pit) == 0, "ch2 OUT is low in the second half");
-        pit.total_clocks = pit.c2.load_clocks + 0x40;   /* a full period on     */
-        CHECK(vdd_pit_ch2_out(&pit) == 1, "ch2 OUT is high again a period later");
+        pit.TotalClocks = pit.Counter2.LoadClocks;
+        CHECK(VddPitCounter2Out(&pit) == 1, "ch2 OUT is high at the start of the period");
+        pit.TotalClocks = pit.Counter2.LoadClocks + 0x30;   /* 48 of 64: past half  */
+        CHECK(VddPitCounter2Out(&pit) == 0, "ch2 OUT is low in the second half");
+        pit.TotalClocks = pit.Counter2.LoadClocks + 0x40;   /* a full period on     */
+        CHECK(VddPitCounter2Out(&pit) == 1, "ch2 OUT is high again a period later");
 
         /* THE GATE STOPS THE COUNTER. Clearing 61h bit 0 must freeze it; setting
            the bit must resume from where it stopped, not restart. */
         a = pit_latched_ch2(&bus);
-        vdd_pit_ch2_gate(&pit, 0);
-        pit.total_clocks += 1000;
+        VddPitCounter2Gate(&pit, 0);
+        pit.TotalClocks += 1000;
         b2 = pit_latched_ch2(&bus);
         CHECK(a == b2, "gate LOW freezes counter 2");
-        vdd_pit_ch2_gate(&pit, 1);
-        pit.total_clocks += 8;
+        VddPitCounter2Gate(&pit, 1);
+        pit.TotalClocks += 8;
         CHECK(pit_latched_ch2(&bus) != b2, "gate HIGH resumes counter 2");
     }
 
@@ -597,22 +597,22 @@ int main(void)
         uint32_t w; unsigned v; int i, allbcd;
 
         /* -- a read is BCD, digit by digit, including the decade borrow. ----- */
-        vdd_pit_ch2_gate(&pit, 1);
+        VddPitCounter2Gate(&pit, 1);
         w = 0xB1; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 0 BCD  */
         w = 0x99; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x99; VddBusIo(&bus, 0x42, 1, 0, &w);   /* count 9999            */
-        CHECK(pit.c2.reload == 9999,
+        CHECK(pit.Counter2.Reload == 9999,
               "bcd: the written 0x9999 is DECODED to 9999, not stored as 39321");
-        pit.total_clocks = pit.c2.load_clocks;
+        pit.TotalClocks = pit.Counter2.LoadClocks;
         CHECK(pit_latched_ch2(&bus) == 0x9999, "bcd: reads back 0x9999 at load");
-        pit.total_clocks = pit.c2.load_clocks + 1;
+        pit.TotalClocks = pit.Counter2.LoadClocks + 1;
         CHECK(pit_latched_ch2(&bus) == 0x9998, "bcd: one clock -> 0x9998");
-        pit.total_clocks = pit.c2.load_clocks + 10;
+        pit.TotalClocks = pit.Counter2.LoadClocks + 10;
         CHECK(pit_latched_ch2(&bus) == 0x9989,
               "bcd: ten clocks -> 0x9989 (the units decade borrows, it does not go to 0x8F)");
-        pit.total_clocks = pit.c2.load_clocks + 9999;
+        pit.TotalClocks = pit.Counter2.LoadClocks + 9999;
         CHECK(pit_latched_ch2(&bus) == 0x0000, "bcd: 9999 clocks -> 0x0000");
-        pit.total_clocks = pit.c2.load_clocks + 10000;
+        pit.TotalClocks = pit.Counter2.LoadClocks + 10000;
         CHECK(pit_latched_ch2(&bus) == 0x9999,
               "bcd mode 0: past terminal count it wraps to 9999, NOT through 0xFFFF");
 
@@ -620,7 +620,7 @@ int main(void)
            no sample of a BCD count may contain a nibble above 9. */
         allbcd = 1;
         for (i = 0; i < 400; ++i) {
-            pit.total_clocks = pit.c2.load_clocks + (uint64_t)i * 37u;
+            pit.TotalClocks = pit.Counter2.LoadClocks + (uint64_t)i * 37u;
             v = pit_latched_ch2(&bus);
             if ((v & 0xF) > 9 || ((v >> 4) & 0xF) > 9
              || ((v >> 8) & 0xF) > 9 || ((v >> 12) & 0xF) > 9) allbcd = 0;
@@ -635,7 +635,7 @@ int main(void)
         w = 0x99; VddBusIo(&bus, 0x42, 1, 0, &w);
         allbcd = 1;
         for (i = 0; i < 400; ++i) {
-            pit.total_clocks = pit.c2.load_clocks + (uint64_t)i * 37u;
+            pit.TotalClocks = pit.Counter2.LoadClocks + (uint64_t)i * 37u;
             v = pit_latched_ch2(&bus);
             if ((v & 0xF) > 9 || ((v >> 4) & 0xF) > 9
              || ((v >> 8) & 0xF) > 9 || ((v >> 12) & 0xF) > 9) allbcd = 0;
@@ -646,12 +646,12 @@ int main(void)
         w = 0x35; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch0 lo/hi mode 2 BCD  */
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);   /* count 0000 = 10000    */
-        CHECK(pit_eff_reload(&pit) == 10000,
+        CHECK(VddPitEffectiveReload(&pit) == 10000,
               "bcd: a written count of 0000 is 10000, not 65536");
         g_irq = 0;
-        vdd_pit_add_clocks(&pit, 9999);
+        VddPitAddClocks(&pit, 9999);
         CHECK(g_irq == 0, "bcd: 9999 clocks is one short of the period");
-        vdd_pit_add_clocks(&pit, 1);
+        VddPitAddClocks(&pit, 1);
         CHECK(g_irq == 1, "bcd: the 10000th clock raises IRQ0");
 
         /* -- the status byte reports the base it was programmed with. -------- */
@@ -663,26 +663,26 @@ int main(void)
         w = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 3 BIN  */
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x42, 1, 0, &w);   /* 0x1000 binary = 4096  */
-        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 4096u, "bcd: binary tone divisor is 4096");
+        CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 4096u, "bcd: binary tone divisor is 4096");
         w = 0xB7; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 3 BCD  */
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x42, 1, 0, &w);   /* 0x1000 BCD = 1000     */
-        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1000u,
+        CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1000u,
               "bcd: the SAME bytes in BCD are a divisor of 1000, so the tone differs");
 
         /* -- #256: the speaker divisor is not read-modify-written. ----------- */
         w = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi, binary     */
         w = 0x34; VddBusIo(&bus, 0x42, 1, 0, &w);
-        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 4096u,
+        CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 4096u,
               "ch2 lo/hi: the LSB alone does not re-tune (still 0x1000)");
         w = 0x12; VddBusIo(&bus, 0x42, 1, 0, &w);
-        CHECK(pit.ch2_reload == 0x1234, "ch2 lo/hi: LSB+MSB commit 0x1234 at once");
+        CHECK(pit.Counter2Reload == 0x1234, "ch2 lo/hi: LSB+MSB commit 0x1234 at once");
         w = 0x96; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 LSB only, mode 3  */
         w = 0x80; VddBusIo(&bus, 0x42, 1, 0, &w);
-        CHECK(pit.ch2_reload == 0x0080, "ch2 LSB-only: MSB becomes 0 (was 0x12)");
+        CHECK(pit.Counter2Reload == 0x0080, "ch2 LSB-only: MSB becomes 0 (was 0x12)");
         w = 0xA6; VddBusIo(&bus, 0x43, 1, 0, &w);   /* ch2 MSB only, mode 3  */
         w = 0x05; VddBusIo(&bus, 0x42, 1, 0, &w);
-        CHECK(pit.ch2_reload == 0x0500, "ch2 MSB-only: LSB becomes 0 (was 0x80)");
+        CHECK(pit.Counter2Reload == 0x0500, "ch2 MSB-only: LSB becomes 0 (was 0x80)");
 
         /* Leave counter 0 as the BIOS would, binary, for anything after this. */
         w = 0x34; VddBusIo(&bus, 0x43, 1, 0, &w);
@@ -693,32 +693,32 @@ int main(void)
     /* ---- #175: THE GATE AS A TRIGGER (docs/ref/pit.md §5; p_pit section H). ---- */
     {   uint32_t w;
         unsigned a, b;
-        vdd_pit_ch2_gate(&pit, 0);
+        VddPitCounter2Gate(&pit, 0);
         w = 0xB2; VddBusIo(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 1  */
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x80; VddBusIo(&bus, 0x42, 1, 0, &w);          /* 0x8000            */
-        vdd_pit_add_clocks(&pit, 100);
-        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 1: OUT high until a GATE trigger");
-        vdd_pit_ch2_gate(&pit, 1);                           /* rising edge       */
-        vdd_pit_add_clocks(&pit, 10);
-        CHECK(vdd_pit_ch2_out(&pit) == 0, "mode 1: triggered -- OUT low while counting");
+        VddPitAddClocks(&pit, 100);
+        CHECK(VddPitCounter2Out(&pit) == 1, "mode 1: OUT high until a GATE trigger");
+        VddPitCounter2Gate(&pit, 1);                           /* rising edge       */
+        VddPitAddClocks(&pit, 10);
+        CHECK(VddPitCounter2Out(&pit) == 0, "mode 1: triggered -- OUT low while counting");
         a = pit_latched_ch2(&bus);
-        vdd_pit_ch2_gate(&pit, 0);                           /* level low: ignored */
-        vdd_pit_add_clocks(&pit, 50);
+        VddPitCounter2Gate(&pit, 0);                           /* level low: ignored */
+        VddPitAddClocks(&pit, 50);
         b = pit_latched_ch2(&bus);
         CHECK(a - b == 50, "mode 1: the count runs on with GATE low (a trigger, not an enable)");
-        vdd_pit_add_clocks(&pit, 0x8000);
-        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 1: OUT high again at terminal count");
+        VddPitAddClocks(&pit, 0x8000);
+        CHECK(VddPitCounter2Out(&pit) == 1, "mode 1: OUT high again at terminal count");
 
         w = 0xB4; VddBusIo(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 2  */
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0xF0; VddBusIo(&bus, 0x42, 1, 0, &w);          /* 0xF000            */
-        vdd_pit_ch2_gate(&pit, 1);
-        vdd_pit_add_clocks(&pit, 0x4000);
+        VddPitCounter2Gate(&pit, 1);
+        VddPitAddClocks(&pit, 0x4000);
         a = pit_latched_ch2(&bus);
-        vdd_pit_ch2_gate(&pit, 0);
-        CHECK(vdd_pit_ch2_out(&pit) == 1, "mode 2: GATE low forces OUT high");
-        vdd_pit_ch2_gate(&pit, 1);                           /* rising: reload    */
+        VddPitCounter2Gate(&pit, 0);
+        CHECK(VddPitCounter2Out(&pit) == 1, "mode 2: GATE low forces OUT high");
+        VddPitCounter2Gate(&pit, 1);                           /* rising: reload    */
         b = pit_latched_ch2(&bus);
         CHECK(a == 0xB000 && b == 0xF000,
               "mode 2: a GATE rising edge RELOADS the count (all three oracles agree)");
@@ -726,11 +726,11 @@ int main(void)
         w = 0xB8; VddBusIo(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 4  */
         w = 0x10; VddBusIo(&bus, 0x42, 1, 0, &w);
         w = 0x00; VddBusIo(&bus, 0x42, 1, 0, &w);          /* 0x0010            */
-        vdd_pit_add_clocks(&pit, 0x10);
-        CHECK(vdd_pit_ch2_out(&pit) == 0, "mode 4: the one-clock strobe at terminal count");
-        vdd_pit_add_clocks(&pit, 0x10);
+        VddPitAddClocks(&pit, 0x10);
+        CHECK(VddPitCounter2Out(&pit) == 0, "mode 4: the one-clock strobe at terminal count");
+        VddPitAddClocks(&pit, 0x10);
         a = pit_latched_ch2(&bus);
-        CHECK(a == 0xFFF0 && vdd_pit_ch2_out(&pit) == 1,
+        CHECK(a == 0xFFF0 && VddPitCounter2Out(&pit) == 1,
               "mode 4: a one-shot -- past TC it runs on through FFFFh, no reload, no 2nd strobe");
     }
 
@@ -742,13 +742,13 @@ int main(void)
     {
         uint32_t w; int k2; unsigned long n[2];
         for (k2 = 0; k2 < 2; ++k2) {
-            vdd_pit_ch2_gate(&pit, 0);
+            VddPitCounter2Gate(&pit, 0);
             w = 0xB0; VddBusIo(&bus, 0x43, 1, 0, &w);          /* ch2 lo/hi mode 0  */
             w = 0xFF; VddBusIo(&bus, 0x42, 1, 0, &w);
             w = 0xFF; VddBusIo(&bus, 0x42, 1, 0, &w);          /* 0xFFFF            */
-            vdd_pit_ch2_gate(&pit, 1);
+            VddPitCounter2Gate(&pit, 1);
             n[k2] = 0;
-            while (!vdd_pit_ch2_out(&pit) && n[k2] < 100000ul) { vdd_pit_add_clocks(&pit, 64); ++n[k2]; }
+            while (!VddPitCounter2Out(&pit) && n[k2] < 100000ul) { VddPitAddClocks(&pit, 64); ++n[k2]; }
         }
         CHECK(n[0] >= 1020 && n[0] <= 1025, "counter 2 mode 0: a 0xFFFF wait takes 65535 clocks");
         CHECK(n[1] == n[0], "counter 2 mode 0: the SECOND wait is as long -- a new count clears the gate-frozen elapsed");
@@ -778,15 +778,15 @@ int main(void)
             w = 0x00;    VddBusIo(&bus, 0x40, 1, 0, &w);
             w = 0x10;    VddBusIo(&bus, 0x40, 1, 0, &w);       /* 0x1000            */
             g_irq = 0;
-            vdd_pit_add_clocks(&pit, 64u * 0x1000u);
+            VddPitAddClocks(&pit, 64u * 0x1000u);
             CHECK(g_irq == k[i].want, k[i].what);
             if (k[i].cw == 0x30) {                               /* bare rewrite      */
                 w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
                 w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);
                 g_irq = 0;
-                vdd_pit_add_clocks(&pit, 0x0FFF);
+                VddPitAddClocks(&pit, 0x0FFF);
                 CHECK(g_irq == 0, "mode 0 bare rewrite: nothing before the new terminal count");
-                vdd_pit_add_clocks(&pit, 64u * 0x1000u);
+                VddPitAddClocks(&pit, 64u * 0x1000u);
                 CHECK(g_irq == 1, "mode 0 bare rewrite after TC: ONE more IRQ0 (all three oracles)");
             }
         }
@@ -795,7 +795,7 @@ int main(void)
         w = 0x00; VddBusIo(&bus, 0x40, 1, 0, &w);
         w = 0x10; VddBusIo(&bus, 0x40, 1, 0, &w);
         g_irq = 0;
-        vdd_pit_add_clocks(&pit, 4u * 0x1000u);
+        VddPitAddClocks(&pit, 4u * 0x1000u);
         CHECK(g_irq == 4, "back to mode 2 after the one-shots: periodic again");
     }
 

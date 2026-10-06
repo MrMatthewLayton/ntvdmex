@@ -36,7 +36,7 @@
 #define NTVDMEX_VDD_CMOS_H
 
 #include "vdd_bus.h"
-#include "vdd_pit.h"        /* struct vdd_rtc -- the same reading INT 1Ah uses */
+#include "vdd_pit.h"        /* PIT_RTC_READING -- the same reading INT 1Ah uses */
 
 /* CMOS register numbers worth naming (docs/ref/rtc.md 2 and 3). */
 #define CMOS_SECONDS          0x00
@@ -96,20 +96,20 @@ typedef struct _CMOS_STATE {
     UINT32   UpdateEndedRaised, AlarmRaised;
     /* The clock. NULL means the registers read as whatever `Ram` holds, which is
        what the off-VM battery uses to pin exact values. */
-    VOID   (*RtcNow)(PVOID context, struct vdd_rtc *reading);
+    VOID   (*RtcNow)(PVOID context, PIT_RTC_READING *reading);
     PVOID    RtcContext;
     /* ── GH #261: AND THE OTHER DIRECTION -- a guest writing the clock registers.
          The same hook INT 1Ah AH=03h/05h uses (vdd_pit.h): what=0 hour/min/sec,
          what=1 cent/year/month/day, binary; it moves the VDM's RTC offset, never
          the machine's clock. NULL = refused, as before -- which is what the off-VM
          battery's refusal checks still pin. Shares RtcContext. */
-    INT    (*RtcSet)(PVOID context, const struct vdd_rtc *reading, INT what);
+    INT    (*RtcSet)(PVOID context, const PIT_RTC_READING *reading, INT what);
     /* Status B's SET bit (7): while it is held the chip does not update, and a
        program writes the time a field at a time without the clock carrying in
        between. Modelled as a FROZEN COPY taken when SET goes high: reads come from
        it, writes go into it, and SET going low commits it in one step. */
     BYTE     IsSetHeld;
-    struct vdd_rtc Shadow;
+    PIT_RTC_READING Shadow;
     /* #136: base memory FITTED, in KB, for 15h/16h -- Settings > Conventional Memory.
          0 = 640, the machine every build so far has described. Set by the host BEFORE
          init and preserved across reset like the hooks above: it is how the board is

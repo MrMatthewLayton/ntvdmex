@@ -215,7 +215,7 @@ int main(void)
          the cone rather than sounding a tone, so that distinction is measured here
          rather than assumed. */
     {
-        pit_state pit;      NTVDD_DEVICE pdev;
+        PIT_STATE pit;      NTVDD_DEVICE pdev;
         SPEAKER_STATE spk;  NTVDD_DEVICE sdev;
         int16_t sbuf[4410];
         double hz;
@@ -224,7 +224,7 @@ int main(void)
 
         memset(&pit, 0, sizeof pit); memset(&spk, 0, sizeof spk);
         spk.Pit = &pit;
-        pdev = vdd_pit_device(&pit);  sdev = VddSpeakerDevice(&spk);
+        pdev = VddPitDevice(&pit);  sdev = VddSpeakerDevice(&spk);
         CHECK(VddBusAdd(&bus, &pdev) == 0, "speaker: PIT joined the mixer's bus");
         CHECK(VddBusAdd(&bus, &sdev) == 0, "speaker: and the speaker VDD did too");
 
@@ -233,7 +233,7 @@ int main(void)
         v = 0xB6;         VddBusIo(&bus, 0x43, 1, 0, &v);
         v = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &v);
         v = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &v);
-        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1193,
+        CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1193,
               "speaker: PIT channel 2 divisor 1193 gives ~1000 Hz");
 
         mix.opl = NULL; mix.sb = NULL;              /* the speaker alone in the mix */
@@ -243,7 +243,7 @@ int main(void)
         vdd_audio_mix(&mix, sbuf, 4410);
         hz = measure_hz(sbuf, 4410, AUDIO_OUT_HZ);
         printf("        speaker tone measured %.0f Hz (the chip is at %u)\n",
-               hz, (unsigned)pit_ch2_hz(&pit));
+               hz, (unsigned)VddPitCounter2Hz(&pit));
         CHECK(hz > 960 && hz < 1040, "speaker: an active gate produces the PIT's tone");
         CHECK(rms(sbuf, 4410) > 1000, "speaker: and it is actually audible");
 

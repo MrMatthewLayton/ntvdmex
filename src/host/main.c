@@ -904,7 +904,7 @@ static dos_machine_t *g_mach = NULL;
 
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static VDD_BUS      g_bus;
-static pit_state    g_pit;       static NTVDD_DEVICE g_pit_dev;
+static PIT_STATE    g_pit;       static NTVDD_DEVICE g_pit_dev;
 static CMOS_STATE   g_cmos;      static NTVDD_DEVICE g_cmos_dev;
 static fdc_state    g_fdc;       static NTVDD_DEVICE g_fdc_dev;
 static IDE_STATE    g_ide;       static NTVDD_DEVICE g_ide_dev;
@@ -1846,7 +1846,7 @@ static void irq0_delivered_note(void)
            the BIOS 18.2 Hz and its game at 180 Hz, and a fixed threshold scores the
            whole intro as faulty. Sampled per delivery: reprogramming the 8254 is
            exactly the event that must move this. */
-        DWORD per_us = (DWORD)(((unsigned long long)pit_eff_reload(&g_pit) * 1000000ull)
+        DWORD per_us = (DWORD)(((unsigned long long)VddPitEffectiveReload(&g_pit) * 1000000ull)
                                / PIT_INPUT_HZ);
         unsigned b = 0;
         if (sec < IRQ0TL_SECS) g_irq0_tl[sec]++;
@@ -3477,7 +3477,7 @@ static DWORD    g_irq0_resync_drop = 0;
 static uint32_t g_pit_restarts_seen = 0;
 static void host_pit_resync_check(void)
 {
-    uint32_t r = g_pit.restarts;             /* monotonic; a stale read only defers us */
+    uint32_t r = g_pit.Restarts;             /* monotonic; a stale read only defers us */
     if (r == g_pit_restarts_seen) return;
     g_pit_restarts_seen = r;
     if ((g_pic.Master.Isr & 1) && !g_irq0_autoeoi) {
@@ -3977,7 +3977,7 @@ static int async_inject_irq(unsigned irq)
         if (irq == 0 && g_nested_rm) {
             if (pm_tick_take()) {
                 /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
-                pit_bios_tick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
+                VddPitBiosTick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
                               (volatile uint8_t *)(ULONG_PTR)0x470);
                 if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
             }
@@ -4293,7 +4293,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            why its intro stalled after ~3 s (measured: d_irq0 fell to ~1/s while the guest sat
            at 0110:3b40 waiting, having done all its work in the first three seconds). */
         /* ── ONE ASYNCHRONOUS ATTEMPT PER SYNC, NOT ONE PER TICK RAISED. ─────────────
-             vdd_pit_add_clocks() raises IRQ0 once per reload period for the whole
+             VddPitAddClocks() raises IRQ0 once per reload period for the whole
              elapsed gap, synchronously, from inside host_pit_sync's lock. Doom's music
              driver programs the 8254 fast (reload 0x4a = 16 kHz, measured), so a 50 ms
              gap is EIGHT HUNDRED raises -- and this used to answer every one of them
@@ -4348,7 +4348,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              path (which needs no suspend at all), not the asynchronous one. */
         /* ── ⚠ ONE ATTEMPT PER SYNC IS RIGHT FOR A PM CLIENT AND WRONG FOR A V86 GUEST.
              The throttle above was introduced for DOOM, whose music driver programs the
-             8254 at 16 kHz: vdd_pit_add_clocks then raises 800 times for a single 50 ms
+             8254 at 16 kHz: VddPitAddClocks then raises 800 times for a single 50 ms
              catch-up gap, each answered with a full SuspendThread round trip inside this
              lock. That pathology is real and the throttle fixes it.
              But it was applied to every guest, and SKYROADS -- V86, an 180 Hz timer, at
@@ -6811,7 +6811,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                  ticks from this thread instead was tried and REJECTED: without g_lock it
                  raced the PIT's own delivery and injected 12,170 ticks of 5,934 raised. */
             if (run_us == 1000ul && duty < 10000u) {
-                DWORD rl = g_pit.reload ? (DWORD)g_pit.reload : 65536u;
+                DWORD rl = g_pit.Reload ? (DWORD)g_pit.Reload : 65536u;
                 unsigned long tick_us = (unsigned long)((unsigned long long)rl * 1000000ull / 1193182ull);
                 unsigned long want = (unsigned long)((unsigned long long)(tick_us / 2ul) * duty / 10000u);   /* cycle = run/duty */
                 if (want < 1000ul) run_us = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
@@ -7505,7 +7505,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              selector (oracle=4). All zero here = the fade is stuck black. */
         if (g_hb_ds) {
             uint32_t dsb = (uint32_t)g_hb_ds << 4;
-            q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
+            q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
             q = zput(q, " dacrow[0-1,2-159,160+,vbl]="); q = zdec(q, g_vid.dac_row_hist[0]);
             q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[1]);
             q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[2]);
@@ -7806,8 +7806,8 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
               q = zput(q, " 0x"); q = zhex(q, g_io_hot[i].port);
               q = zput(q, "=0x"); q = zhex(q, g_io_hot[i].n);
           }
-          q = zput(q, "\r\n  pit_reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
-          q = zput(q, " pit_mode=0x");          q = zhex(q, (DWORD)g_pit.mode);
+          q = zput(q, "\r\n  pit_reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
+          q = zput(q, " pit_mode=0x");          q = zhex(q, (DWORD)g_pit.Mode);
           q = zput(q, "\r\n");
           log_append(LOG_PATH, b, q); serial_out(b, q); q = b; }
         { int i; q = zput(q, "  unclaimed ports touched:");
@@ -8896,7 +8896,7 @@ static void exec_mach_save(int d)
     for (i = 0; i < 512; ++i) g_exec_mach[d].ivt[i] = peekw(i * 2);
     g_exec_mach[d].imr_m = g_pic.Master.Imr; g_exec_mach[d].imr_s = g_pic.Slave.Imr;
     g_exec_mach[d].vmode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
-    g_exec_mach[d].pit0  = pit_eff_reload(&g_pit);
+    g_exec_mach[d].pit0  = VddPitEffectiveReload(&g_pit);
 }
 
 /* Put back what the ended child may have left broken. Called with the child still at
@@ -8910,7 +8910,7 @@ static void exec_mach_restore(int d, char **pp)
     g_pic.Master.Imr = g_exec_mach[d].imr_m; g_pic.Slave.Imr = g_exec_mach[d].imr_s;
     g_pic.Master.Isr = 0; g_pic.Slave.Isr = 0;           /* a handler it never finished */
     g_irq0_isr_since = 0;
-    if (pit_eff_reload(&g_pit) != g_exec_mach[d].pit0) {   /* a game's fast timer */
+    if (VddPitEffectiveReload(&g_pit) != g_exec_mach[d].pit0) {   /* a game's fast timer */
         uint32_t v = 0x36, n = g_exec_mach[d].pit0 & 0xFFFF;
         VddBusIo(&g_bus, 0x43, 1, 0, &v);
         v = n & 0xFF;        VddBusIo(&g_bus, 0x40, 1, 0, &v);
@@ -13637,7 +13637,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (g > g_ui_gap_us) g_ui_gap_us = g;
             }
             s_prev = n; }
-        g_pit.frame_us = 0;
+        g_pit.FrameMicroseconds = 0;
         host_pit_sync();
         host_key_typematic();       /* pumped from BOTH threads, like the PIT */
         host_key_present();
@@ -14762,7 +14762,7 @@ static void io_unclaimed_note(uint16_t port, int is_in)
 static uint32_t g_pit_catchup_clamped;             /* gaps past it (STAGE2)          */
 static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clocks  */
 
-/* Wired onto g_pit at startup; see g_pit_cs and pit_state.guard. */
+/* Wired onto g_pit at startup; see g_pit_cs and PIT_STATE.guard. */
 /* ── THE MACHINE'S CLOCK, for INT 1Ah AH=02h/04h. ────────────────────────────────
      vdd_pit.c is a portable VDD and stays free of <time.h> (which the XP-targeting
      CRT does not link in any case), so the host hands it the reading. Local time,
@@ -14771,37 +14771,37 @@ static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clo
 /* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_DosClock.RtcOffset,
      which a guest's INT 1Ah AH=03h/05h or INT 21h AH=2Bh/2Dh sets (dos_clock.h). Zero
      until a guest sets it, so an untouched VDM reads exactly GetLocalTime as before. */
-static void host_rtc_now(void *ctx, struct vdd_rtc *out)
+static void host_rtc_now(void *ctx, PIT_RTC_READING *out)
 {
     DOS_CLOCK_TIME g;
     (void)ctx;
     dos_clock_read(g_DosClock.RtcOffset, &g);
-    out->cent  = g.Year / 100u;
-    out->year  = g.Year % 100u;
-    out->month = g.Month;
-    out->day   = g.Day;
-    out->hour  = g.Hour;
-    out->min   = g.Minute;
-    out->sec   = g.Second;
-    out->dow   = g.DayOfWeek + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
+    out->Century  = g.Year / 100u;
+    out->Year  = g.Year % 100u;
+    out->Month = g.Month;
+    out->Day   = g.Day;
+    out->Hour  = g.Hour;
+    out->Minute   = g.Minute;
+    out->Second   = g.Second;
+    out->DayOfWeek   = g.DayOfWeek + 1u;                     /* DOS 0=Sunday; the chip 1=Sunday */
 }
 
 /* INT 1Ah AH=03h (what=0: hour/min/sec) and AH=05h (what=1: century/year/month/day),
    already decoded from BCD by the PIT. Moves only the RTC's offset: DOS keeps its own
    clock, as on an AT (p_clock clk.2c.after.1a03 / clk.2a.after.1a05). Returns 0 --
    the clock untouched -- for a reading no calendar has. */
-static int host_rtc_set(void *ctx, const struct vdd_rtc *in, int what)
+static int host_rtc_set(void *ctx, const PIT_RTC_READING *in, int what)
 {
     DOS_CLOCK_TIME host;
     (void)ctx;
     dos_clock_host_now(&host);
     if (what == 0) {
-        if (!DosClockIsTimeValid(in->hour, in->min, in->sec, 0)) return 0;
-        DosClockSetTime(&host, &g_DosClock.RtcOffset, in->hour, in->min, in->sec, 0);
+        if (!DosClockIsTimeValid(in->Hour, in->Minute, in->Second, 0)) return 0;
+        DosClockSetTime(&host, &g_DosClock.RtcOffset, in->Hour, in->Minute, in->Second, 0);
     } else {
-        unsigned y = in->cent * 100u + in->year;
-        if (!DosClockIsRealDate(y, in->month, in->day)) return 0;
-        DosClockSetDate(&host, &g_DosClock.RtcOffset, y, in->month, in->day);
+        unsigned y = in->Century * 100u + in->Year;
+        if (!DosClockIsRealDate(y, in->Month, in->Day)) return 0;
+        DosClockSetDate(&host, &g_DosClock.RtcOffset, y, in->Month, in->Day);
     }
     return 1;
 }
@@ -14814,13 +14814,13 @@ static int host_tick_take(uint32_t *ticks, uint32_t *wraps, uint32_t *since)
     int r;
     /* ⚠ THE COMMON ANSWER IS "NOTHING", AND IT MUST NOT QUEUE BEHIND THE PACER. Some
          programs time themselves with AH=2Ch in a tight loop; taking the crystal's lock
-         on every call would put each of them behind vdd_pit_add_clocks. An unlocked look
+         on every call would put each of them behind VddPitAddClocks. An unlocked look
          first: equal and not foreign = nothing to do (a tick racing this read leaves
          them equal again, or sends us to the locked re-check below, which decides). */
-    if (!g_pit.tick_foreign && *(volatile DWORD *)(ULONG_PTR)0x46C == g_pit.tick_witness)
+    if (!g_pit.IsTickForeign && *(volatile DWORD *)(ULONG_PTR)0x46C == g_pit.TickWitness)
         return 0;
     EnterCriticalSection(&g_pit_cs);
-    r = vdd_pit_tick_take(&g_pit, *(volatile DWORD *)(ULONG_PTR)0x46C, ticks, wraps, since);
+    r = VddPitTickTake(&g_pit, *(volatile DWORD *)(ULONG_PTR)0x46C, ticks, wraps, since);
     LeaveCriticalSection(&g_pit_cs);
     return r;
 }
@@ -14847,7 +14847,7 @@ static void host_set_ticks(void *ctx, uint32_t ticks)
     EnterCriticalSection(&g_pit_cs);
     *(volatile DWORD *)(ULONG_PTR)0x46C = ticks;
     *(volatile BYTE *)(ULONG_PTR)0x470 = 0;
-    vdd_pit_tick_owned(&g_pit, ticks);          /* DOS's own reload, not a store (#262) */
+    VddPitTickOwned(&g_pit, ticks);          /* DOS's own reload, not a store (#262) */
     LeaveCriticalSection(&g_pit_cs);
 }
 
@@ -14912,7 +14912,7 @@ static void host_pit_generate(void)
               if (clocks > g_pit_gap_max) g_pit_gap_max = (uint32_t)clocks;
           }
           if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
-          vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
+          VddPitAddClocks(&g_pit, (uint32_t)clocks);
           /* ── THE RTC'S PERIODIC INTERRUPT RIDES THE SAME DELTA. ─────────────
                IRQ8 at the rate in CMOS Status A -- a steady tick INDEPENDENT of
                the 8254, which is why Windows and DOS extenders use it: a guest
@@ -15081,9 +15081,9 @@ static void pit_latch_note(uint8_t cmd)
     i0 = n - cnt; base = g_vid.p3da_ring_us[i0 & (VID_P3DA_RING - 1)];
     g_pitlatch_dumps++;
     q = zput(q, "PIT-LATCH #"); q = zdec(q, g_pitlatch_dumps);
-    q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
-    q = zput(q, " mode="); q = zdec(q, g_pit.mode);
-    q = zput(q, " clocks_since_load="); q = zdec(q, (uint32_t)(g_pit.total_clocks - g_pit.load_clocks));
+    q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
+    q = zput(q, " mode="); q = zdec(q, g_pit.Mode);
+    q = zput(q, " clocks_since_load="); q = zdec(q, (uint32_t)(g_pit.TotalClocks - g_pit.LoadClocks));
     q = zput(q, " hbl_owed="); q = zdec(q, g_vid.p3da_hbl_owed);
     q = zput(q, " last "); q = zdec(q, cnt); q = zput(q, " 0x3DA polls (us:val):\r\n");
     for (i = i0; i < n; ++i) {
@@ -15120,12 +15120,12 @@ static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
        writes is the tempo the music actually wants. */
     if (port == 0x40 && !is_in && g_pit_reload_log < 8) {
         static uint16_t s_prev = 0;
-        if (g_pit.reload != s_prev) {
+        if (g_pit.Reload != s_prev) {
             char b[128], *q = b;
-            s_prev = g_pit.reload; g_pit_reload_log++;
-            q = zput(q, "PIT-RELOAD 0x"); q = zhex(q, (DWORD)g_pit.reload);
+            s_prev = g_pit.Reload; g_pit_reload_log++;
+            q = zput(q, "PIT-RELOAD 0x"); q = zhex(q, (DWORD)g_pit.Reload);
             q = zput(q, " (hz=0x");
-            q = zhex(q, g_pit.reload ? (PIT_INPUT_HZ / g_pit.reload) : 18u);
+            q = zhex(q, g_pit.Reload ? (PIT_INPUT_HZ / g_pit.Reload) : 18u);
             q = zput(q, ")\r\n");
             log_append(LOG_PATH, b, q); serial_out(b, q);
         }
@@ -27438,7 +27438,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
              pending flag is consumed so the polled path does not count it again. */
         if (pm_tick_take()) {
             /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
-            pit_bios_tick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
+            VddPitBiosTick(&g_pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
                           (volatile uint8_t *)(ULONG_PTR)0x470);
             if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
         }
@@ -31927,12 +31927,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        in as a BOP routed below; DOS console output is routed via m.conout. */
     InitializeCriticalSection(&g_lock);
     InitializeCriticalSection(&g_pit_cs);       /* the crystal's own lock; see its decl */
-    g_pit.guard = host_pit_guard;               /* port handlers serialize with the pacer */
-    g_pit.guard_ctx = NULL;
-    g_pit.rtc_now = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
-    g_pit.rtc_ctx = NULL;
-    g_pit.rtc_set = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
-    g_pit.ticks_set = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
+    g_pit.Guard = host_pit_guard;               /* port handlers serialize with the pacer */
+    g_pit.GuardContext = NULL;
+    g_pit.RtcNow = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
+    g_pit.RtcContext = NULL;
+    g_pit.RtcSet = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
+    g_pit.TicksSet = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
     g_dos_tick_take = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
@@ -31941,14 +31941,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pic_dev = VddPicDevice(&g_pic);      /* before the PIT: it gates every IRQ */
 
     VddBusAdd(&g_bus, &g_pic_dev);
-    g_pit_dev = vdd_pit_device(&g_pit);
+    g_pit_dev = VddPitDevice(&g_pit);
     VddBusAdd(&g_bus, &g_pit_dev);
     /* ── ★ 0040:006C IS TICKS SINCE MIDNIGHT, SO SET IT TO THAT. (GH #253) ──
          POST does this from the RTC; nothing here did, so every launch began at
          00:00:00 by the BIOS's clock while INT 1Ah AH=02h read the real time. Seeded
          from the SAME hook AH=02h answers from (host_rtc_now), after the PIT is on
-         the bus and before anything can take IRQ0. See vdd_pit_seed_time_of_day. */
-    vdd_pit_seed_time_of_day(&g_pit);
+         the bus and before anything can take IRQ0. See VddPitSeedTimeOfDay. */
+    VddPitSeedTimeOfDay(&g_pit);
     /* ── THE RTC/CMOS TAKES THE SAME CLOCK INT 1Ah DOES. ─────────────────────
          Registers 00h-09h and INT 1Ah AH=02h/04h are two doors onto ONE clock,
          and a guest may use either -- so they are given the same hook and their
@@ -33960,7 +33960,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (InterlockedExchange(&g_irq0_pending, 0)) {
                         NTVDD_REGISTERS tr; regs_load(&tr, tib);
                         HOST_LOCK();
-                        VddBusDeliverInterrupt(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
+                        VddBusDeliverInterrupt(&g_bus, 0x08, &tr);   /* PitInt08 -> ++0040:006C */
                         HOST_UNLOCK();
                         g_pm_irq0_latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
                     }
@@ -36292,8 +36292,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           p = zput(p, " 0x"); p = zhex(p, g_io_hot[i].port);
           p = zput(p, "=0x"); p = zhex(p, g_io_hot[i].n);
       }
-      p = zput(p, "\r\nSTAGE2: pit_reload=0x"); p = zhex(p, (DWORD)g_pit.reload);
-      p = zput(p, " oneshot_loads=0x"); p = zhex(p, g_pit.oneshot_loads);   /* #175 */
+      p = zput(p, "\r\nSTAGE2: pit_reload=0x"); p = zhex(p, (DWORD)g_pit.Reload);
+      p = zput(p, " oneshot_loads=0x"); p = zhex(p, g_pit.OneShotLoads);   /* #175 */
       p = zput(p, " skip_if=0x");   p = zhex(p, g_irq0_skip_if);
       p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
       p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
@@ -37107,7 +37107,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.spk ? 1 : 0));
     p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.spk_level);
     p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.Port61);
-    p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.ch2_reload);
+    p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.Counter2Reload);
     p = zput(p, " gated_frames=");          p = zhex(p, g_audio.spk_gated);
     p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.spk_frames);
     p = zput(p, " last_hz=");               p = zhex(p, g_audio.spk_hz);
