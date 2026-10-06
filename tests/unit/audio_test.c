@@ -18,7 +18,7 @@ static int total = 0, fails = 0;
 static uint8_t g_flat[0x100000];
 static VDD_BUS bus;
 static DMA_STATE dma;
-static opl_state opl;
+static OPL_STATE opl;
 static SB_STATE  sb;
 static audio_state mix;
 static int g_irq_count;
@@ -63,7 +63,7 @@ int main(void)
     VddBusInitialize(&bus, g_flat);
     VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
     { NTVDD_DEVICE d = VddDmaDevice(&dma); VddBusAdd(&bus, &d); }
-    { NTVDD_DEVICE d = vdd_opl_device(&opl); VddBusAdd(&bus, &d); }
+    { NTVDD_DEVICE d = VddOplDevice(&opl); VddBusAdd(&bus, &d); }
     sb.Dma = &dma; sb.Opl = &opl; sb.BasePort = BASE;
     { NTVDD_DEVICE d = VddSbDevice(&sb);  CHECK(VddBusAdd(&bus, &d) == 0, "add: devices on the bus"); }
     vdd_audio_init(&mix, &opl, &sb, AUDIO_OUT_HZ);
@@ -77,18 +77,18 @@ int main(void)
     /* fnum 0x200 block 4 = 388.4 Hz; the OPL renders at 49716 and the mixer
        resamples to 44100, so a pitch error here means the resampler is wrong. */
     {
-        int m = vdd_opl_op_index(0,0), c = vdd_opl_op_index(0,1);
+        int m = VddOplOperatorIndex(0,0), c = VddOplOperatorIndex(0,1);
         uint8_t mr = (uint8_t)(m + 2*(m/6)), cr = (uint8_t)(c + 2*(c/6));
         double hz;
-        vdd_opl_write_reg(&opl, (uint8_t)(0x20+mr), 0x21);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x40+mr), 0x3F);   /* modulator silent */
-        vdd_opl_write_reg(&opl, (uint8_t)(0x20+cr), 0x21);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x40+cr), 0x00);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x60+cr), 0xF0);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x80+cr), 0x0F);
-        vdd_opl_write_reg(&opl, 0xC0, 0x01);
-        vdd_opl_write_reg(&opl, 0xA0, 0x00);
-        vdd_opl_write_reg(&opl, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
+        VddOplWriteRegister(&opl, (uint8_t)(0x20+mr), 0x21);
+        VddOplWriteRegister(&opl, (uint8_t)(0x40+mr), 0x3F);   /* modulator silent */
+        VddOplWriteRegister(&opl, (uint8_t)(0x20+cr), 0x21);
+        VddOplWriteRegister(&opl, (uint8_t)(0x40+cr), 0x00);
+        VddOplWriteRegister(&opl, (uint8_t)(0x60+cr), 0xF0);
+        VddOplWriteRegister(&opl, (uint8_t)(0x80+cr), 0x0F);
+        VddOplWriteRegister(&opl, 0xC0, 0x01);
+        VddOplWriteRegister(&opl, 0xA0, 0x00);
+        VddOplWriteRegister(&opl, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
         vdd_audio_mix(&mix, buf, 22050);                     /* half a second    */
         hz = measure_hz(buf, 22050, AUDIO_OUT_HZ);
         printf("        resampled pitch %.1f Hz, expected 388.4 Hz\n", hz);
@@ -117,7 +117,7 @@ int main(void)
         dma_program(0x41000, 512, 1);
         wr(BASE + 0xC, 0x48); wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x01);
         wr(BASE + 0xC, 0x1C);                                /* auto-init        */
-        vdd_opl_write_reg(&opl, 0xB0, 0x00);                 /* silence the FM   */
+        VddOplWriteRegister(&opl, 0xB0, 0x00);                 /* silence the FM   */
         vdd_audio_mix(&mix, buf, 8192);
         r = rms(buf, 8192);
         printf("        SB-only rms=%ld\n", r);
@@ -142,18 +142,18 @@ int main(void)
        that overload clamps rather than wrapping (which would sound like a bang). */
     {
         int clipped = 0, k;
-        vdd_opl_write_reg(&opl, 0xB0, 0x00);                 /* all notes off    */
-        for (k = 0; k < 9; ++k) vdd_opl_write_reg(&opl, (uint8_t)(0xB0+k), 0x00);
+        VddOplWriteRegister(&opl, 0xB0, 0x00);                 /* all notes off    */
+        for (k = 0; k < 9; ++k) VddOplWriteRegister(&opl, (uint8_t)(0xB0+k), 0x00);
         for (k = 0; k < 3; ++k) {                            /* three voices,    */
-            int c2 = vdd_opl_op_index(k,1); uint8_t cr2 = (uint8_t)(c2 + 2*(c2/6));
-            int m2 = vdd_opl_op_index(k,0); uint8_t mr2 = (uint8_t)(m2 + 2*(m2/6));
-            vdd_opl_write_reg(&opl, (uint8_t)(0x40+mr2), 0x3F);
-            vdd_opl_write_reg(&opl, (uint8_t)(0x20+cr2), 0x21);
-            vdd_opl_write_reg(&opl, (uint8_t)(0x40+cr2), 0x10);   /* moderate TL */
-            vdd_opl_write_reg(&opl, (uint8_t)(0x60+cr2), 0xF0);
-            vdd_opl_write_reg(&opl, (uint8_t)(0x80+cr2), 0x0F);
-            vdd_opl_write_reg(&opl, (uint8_t)(0xA0+k), 0x40);
-            vdd_opl_write_reg(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (4 << 2) | 1));
+            int c2 = VddOplOperatorIndex(k,1); uint8_t cr2 = (uint8_t)(c2 + 2*(c2/6));
+            int m2 = VddOplOperatorIndex(k,0); uint8_t mr2 = (uint8_t)(m2 + 2*(m2/6));
+            VddOplWriteRegister(&opl, (uint8_t)(0x40+mr2), 0x3F);
+            VddOplWriteRegister(&opl, (uint8_t)(0x20+cr2), 0x21);
+            VddOplWriteRegister(&opl, (uint8_t)(0x40+cr2), 0x10);   /* moderate TL */
+            VddOplWriteRegister(&opl, (uint8_t)(0x60+cr2), 0xF0);
+            VddOplWriteRegister(&opl, (uint8_t)(0x80+cr2), 0x0F);
+            VddOplWriteRegister(&opl, (uint8_t)(0xA0+k), 0x40);
+            VddOplWriteRegister(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (4 << 2) | 1));
         }
         vdd_audio_mix(&mix, buf, 8192);
         for (i = 0; i < 8192; ++i) if (buf[i] == 32767 || buf[i] == -32768) clipped++;
@@ -163,13 +163,13 @@ int main(void)
 
         /* now overload it deliberately and check it clamps, never wraps */
         for (k = 0; k < 9; ++k) {
-            int c2 = vdd_opl_op_index(k,1); uint8_t cr2 = (uint8_t)(c2 + 2*(c2/6));
-            vdd_opl_write_reg(&opl, (uint8_t)(0x20+cr2), 0x21);
-            vdd_opl_write_reg(&opl, (uint8_t)(0x40+cr2), 0x00);   /* full volume */
-            vdd_opl_write_reg(&opl, (uint8_t)(0x60+cr2), 0xF0);
-            vdd_opl_write_reg(&opl, (uint8_t)(0x80+cr2), 0x0F);
-            vdd_opl_write_reg(&opl, (uint8_t)(0xA0+k), 0x40);
-            vdd_opl_write_reg(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (5 << 2) | 1));
+            int c2 = VddOplOperatorIndex(k,1); uint8_t cr2 = (uint8_t)(c2 + 2*(c2/6));
+            VddOplWriteRegister(&opl, (uint8_t)(0x20+cr2), 0x21);
+            VddOplWriteRegister(&opl, (uint8_t)(0x40+cr2), 0x00);   /* full volume */
+            VddOplWriteRegister(&opl, (uint8_t)(0x60+cr2), 0xF0);
+            VddOplWriteRegister(&opl, (uint8_t)(0x80+cr2), 0x0F);
+            VddOplWriteRegister(&opl, (uint8_t)(0xA0+k), 0x40);
+            VddOplWriteRegister(&opl, (uint8_t)(0xB0+k), (uint8_t)(0x20 | (5 << 2) | 1));
         }
         vdd_audio_mix(&mix, buf, 4096);
         { int wrapped = 0;
@@ -370,7 +370,7 @@ int main(void)
          when the mixer took it as a mono source (a golden taken from 42a9029, the
          build before the OPL3 -- the same register sequence as opl_synth_test's), and
          an OPL3 voice routed left arrives on the left and nowhere else. */
-    {   static opl_state o3; static audio_state m3;
+    {   static OPL_STATE o3; static audio_state m3;
         static int16_t sb2[2 * 8192];
         uint32_t h = 2166136261u;
         int c, k;
@@ -379,12 +379,12 @@ int main(void)
             for (_i = 0; _i < 2 * _n; ++_i) {                                         \
                 h ^= (uint8_t)sb2[_i]; h *= 16777619u;                                \
                 h ^= (uint8_t)((uint16_t)sb2[_i] >> 8); h *= 16777619u; } } while (0)
-        #define M3_W(r, v) vdd_opl_write_reg(&o3, (uint8_t)(r), (uint8_t)(v))
-        memset(&o3, 0, sizeof o3); vdd_opl_reset(&o3);
+        #define M3_W(r, v) VddOplWriteRegister(&o3, (uint8_t)(r), (uint8_t)(v))
+        memset(&o3, 0, sizeof o3); VddOplReset(&o3);
         vdd_audio_init(&m3, &o3, NULL, 44100);
         M3_W(0x01, 0x20); M3_W(0xBD, 0xC0);
         for (c = 0; c < 9; ++c) {
-            int mo_ = vdd_opl_op_index(c, 0), cr_ = vdd_opl_op_index(c, 1);
+            int mo_ = VddOplOperatorIndex(c, 0), cr_ = VddOplOperatorIndex(c, 1);
             unsigned mo = (unsigned)(mo_ + 2 * (mo_ / 6)), co = (unsigned)(cr_ + 2 * (cr_ / 6));
             M3_W(0x20 + mo, 0x21 | ((c & 1) << 7) | ((c & 2) << 5) | (c & 4 ? 0x10 : 0) | (c % 5));
             M3_W(0x20 + co, 0x21 | ((c & 2) << 6));
@@ -402,7 +402,7 @@ int main(void)
             M3_EAT(700);
         }
         M3_EAT(6000);
-        for (c = 0; c < 9; c += 2) { M3_W(0xB0 + c, o3.reg[0xB0 + c] & ~0x20); M3_EAT(900); }
+        for (c = 0; c < 9; c += 2) { M3_W(0xB0 + c, o3.Registers[0xB0 + c] & ~0x20); M3_EAT(900); }
         /* #139 made the hi-hat, cymbal and snare sound and OR'd each drum bit with
            its channel's key bit, so from the rhythm write on the hash moved -- see
            opl_synth_test's golden for the why. Everything BEFORE it must not. */
@@ -420,15 +420,15 @@ int main(void)
         #undef M3_W
 
         /* OPL3, NEW set, one voice on channel 0 routed LEFT only (C0 = 0x11)     */
-        memset(&o3, 0, sizeof o3); o3.opl3 = 1; vdd_opl_reset(&o3);
+        memset(&o3, 0, sizeof o3); o3.IsOpl3 = 1; VddOplReset(&o3);
         vdd_audio_init(&m3, &o3, NULL, 44100);
-        vdd_opl_write_reg(&o3, 0x105, 0x01);
-        vdd_opl_write_reg(&o3, 0x20, 0x21); vdd_opl_write_reg(&o3, 0x40, 0x3F);
-        vdd_opl_write_reg(&o3, 0x23, 0x21); vdd_opl_write_reg(&o3, 0x43, 0x00);
-        vdd_opl_write_reg(&o3, 0x63, 0xF0); vdd_opl_write_reg(&o3, 0x83, 0x0F);
-        vdd_opl_write_reg(&o3, 0xC0, 0x11);
-        vdd_opl_write_reg(&o3, 0xA0, 0x00);
-        vdd_opl_write_reg(&o3, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
+        VddOplWriteRegister(&o3, 0x105, 0x01);
+        VddOplWriteRegister(&o3, 0x20, 0x21); VddOplWriteRegister(&o3, 0x40, 0x3F);
+        VddOplWriteRegister(&o3, 0x23, 0x21); VddOplWriteRegister(&o3, 0x43, 0x00);
+        VddOplWriteRegister(&o3, 0x63, 0xF0); VddOplWriteRegister(&o3, 0x83, 0x0F);
+        VddOplWriteRegister(&o3, 0xC0, 0x11);
+        VddOplWriteRegister(&o3, 0xA0, 0x00);
+        VddOplWriteRegister(&o3, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
         vdd_audio_mix_st(&m3, sb2, 4096);
         { long long l = 0, r = 0; int i2;
           for (i2 = 0; i2 < 4096; ++i2) { l += (long long)sb2[2*i2] * sb2[2*i2]; r += (long long)sb2[2*i2+1] * sb2[2*i2+1]; }

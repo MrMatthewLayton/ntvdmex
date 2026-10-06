@@ -49,7 +49,7 @@ static uint32_t rs_need(const audio_resampler *r, uint32_t frames)
 /* (The mono walk, rs_step, went with #232: the OPL was its last caller, and every
    source is now stereo -- rs_step_st below, whose left channel is that walk.) */
 
-void vdd_audio_init(audio_state *st, opl_state *opl, SB_STATE *sb, uint32_t out_hz)
+void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_hz)
 {
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
@@ -128,7 +128,7 @@ void vdd_audio_mix_st(audio_state *st, int16_t *out, uint32_t frames)
             int32_t g = mix_gain(st->sb, 0x26);
             rs_setup(&st->r_opl, OPL_NATIVE_HZ, st->out_hz);
             need = rs_need(&st->r_opl, n);
-            vdd_opl_render_st(st->opl, st->scratch, need);
+            VddOplRenderStereo(st->opl, st->scratch, need);
             idx = 0;
             for (i = 0; i < n; ++i) {
                 int32_t l, r;

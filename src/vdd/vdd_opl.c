@@ -10,18 +10,18 @@
    almost right, so both directions live here and nowhere else.
    The OPL3's array 1 is the same layout again: channel 9+n is array 1's channel
    n, and its operators are 18 + (what channel n's would be). */
-int vdd_opl_op_index(int ch, int which)
+INT VddOplOperatorIndex(INT channel, INT isCarrier)
 {
-    int arr, lc;
-    if (ch < 0 || ch >= OPL3_NUM_CH) return -1;
-    arr = ch / OPL_NUM_CH; lc = ch % OPL_NUM_CH;
-    return arr * OPL_NUM_OP + (lc / 3) * 6 + (lc % 3) + (which ? 3 : 0);
+    INT arrayIndex, localChannel;
+    if (channel < 0 || channel >= OPL3_CHANNELS) return -1;
+    arrayIndex = channel / OPL_CHANNELS; localChannel = channel % OPL_CHANNELS;
+    return arrayIndex * OPL_OPERATORS + (localChannel / 3) * 6 + (localChannel % 3) + (isCarrier ? 3 : 0);
 }
 
 /* NEW (0x105 bit 0) on a fitted OPL3. Everything the OPL3 adds is gated on it. */
-int vdd_opl_new_mode(const opl_state *st)
+INT VddOplIsNewMode(PCOPL_STATE state)
 {
-    return st->opl3 && (st->reg[OPL3_REG_NEW] & 1);
+    return state->IsOpl3 && (state->Registers[OPL3_REGISTER_NEW] & 1);
 }
 
 /* ── 4-OPERATOR PAIRS (register 0x104, OPL3 with NEW set). Six bits, six pairs,
@@ -33,23 +33,23 @@ int vdd_opl_new_mode(const opl_state *st)
      channel's CNT, picks one of four algorithms; see vdd_opl_synth.c) and nothing
      else. Returns 1 for the first channel of a live pair, 2 for the second, 0 for
      a channel that is an ordinary two-operator voice. */
-int opl_4op_role(const opl_state *st, int c)
+INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
 {
-    int lc, bit, role;
-    if (!vdd_opl_new_mode(st) || c < 0 || c >= OPL3_NUM_CH) return 0;
-    lc = c % OPL_NUM_CH;
-    if (lc < 3)      { bit = lc;     role = 1; }
-    else if (lc < 6) { bit = lc - 3; role = 2; }
+    INT localChannel, bit, role;
+    if (!VddOplIsNewMode(state) || channel < 0 || channel >= OPL3_CHANNELS) return 0;
+    localChannel = channel % OPL_CHANNELS;
+    if (localChannel < 3)      { bit = localChannel;     role = 1; }
+    else if (localChannel < 6) { bit = localChannel - 3; role = 2; }
     else return 0;
-    if (c >= OPL_NUM_CH) bit += 3;
-    return ((st->reg[OPL3_REG_4OP] >> bit) & 1) ? role : 0;
+    if (channel >= OPL_CHANNELS) bit += 3;
+    return ((state->Registers[OPL3_REGISTER_FOUR_OPERATOR] >> bit) & 1) ? role : 0;
 }
 
 /* register offset (low 5 bits of a 0x20/0x40/0x60/0x80/0xE0 register) -> operator,
    or -1 for the gaps. */
-static int opl_off_to_op(uint8_t reg)
+static INT OplOffsetToOperator(BYTE registerNumber)
 {
-    int off = reg & 0x1F, bank = off >> 3, slot = off & 7;
+    INT offset = registerNumber & 0x1F, bank = offset >> 3, slot = offset & 7;
     if (slot >= 6 || bank >= 3) return -1;
     return bank * 6 + slot;
 }
@@ -64,31 +64,31 @@ static int opl_off_to_op(uint8_t reg)
    Blaster's, because the off-VM suites link these two VDDs SEPARATELY -- referencing
    vdd_sb.c's copy from here broke `opl_synth_test` with an undefined symbol and cost
    half the gate (580 checks -> 244) until run.sh caught it. */
-int g_opl_absent = 0;
+INT g_OplAbsent = 0;
 
-static void opl_timer_step(uint16_t *count, uint8_t preset, uint8_t mask,
-                           uint8_t flag, uint8_t *status)
+static VOID OplTimerStep(WORD *count, BYTE preset, BYTE mask,
+                           BYTE flag, BYTE *status)
 {
     if (++(*count) > 0xFF) {
         *count = preset;
-        if (!mask) *status |= (uint8_t)(flag | OPL_ST_IRQ);
+        if (!mask) *status |= (BYTE)(flag | OPL_STATUS_IRQ);
     }
 }
 
-void vdd_opl_add_us(opl_state *st, uint32_t us)
+VOID VddOplAddMicroseconds(POPL_STATE state, UINT32 microseconds)
 {
-    if (st->t1_run) {
-        st->t1_frac_us += us;
-        while (st->t1_frac_us >= OPL_T1_US) {
-            st->t1_frac_us -= OPL_T1_US;
-            opl_timer_step(&st->t1_count, st->t1_preset, st->t1_mask, OPL_ST_T1, &st->status);
+    if (state->IsTimer1Running) {
+        state->Timer1FractionUs += microseconds;
+        while (state->Timer1FractionUs >= OPL_TIMER1_US) {
+            state->Timer1FractionUs -= OPL_TIMER1_US;
+            OplTimerStep(&state->Timer1Count, state->Timer1Preset, state->IsTimer1Masked, OPL_STATUS_TIMER1, &state->Status);
         }
     }
-    if (st->t2_run) {
-        st->t2_frac_us += us;
-        while (st->t2_frac_us >= OPL_T2_US) {
-            st->t2_frac_us -= OPL_T2_US;
-            opl_timer_step(&st->t2_count, st->t2_preset, st->t2_mask, OPL_ST_T2, &st->status);
+    if (state->IsTimer2Running) {
+        state->Timer2FractionUs += microseconds;
+        while (state->Timer2FractionUs >= OPL_TIMER2_US) {
+            state->Timer2FractionUs -= OPL_TIMER2_US;
+            OplTimerStep(&state->Timer2Count, state->Timer2Preset, state->IsTimer2Masked, OPL_STATUS_TIMER2, &state->Status);
         }
     }
 }
@@ -97,13 +97,13 @@ void vdd_opl_add_us(opl_state *st, uint32_t us)
 /* Key one OPERATOR, rather than a channel. Rhythm mode needs this: four of the five
    percussion voices are single operators keyed independently from 0xBD, so the
    channel-wide key-on the melodic path uses cannot express them. */
-static void opl_key_op(opl_state *st, int opi, int on)
+static VOID OplKeyOperator(POPL_STATE state, INT operatorIndex, INT isOn)
 {
-    if (on) {
-        st->op[opi].eg_state = OPL_EG_ATTACK;
-        st->op[opi].phase = 0;
-    } else if (st->op[opi].eg_state != OPL_EG_OFF) {
-        st->op[opi].eg_state = OPL_EG_RELEASE;
+    if (isOn) {
+        state->Operators[operatorIndex].EnvelopeState = OPL_ENVELOPE_ATTACK;
+        state->Operators[operatorIndex].Phase = 0;
+    } else if (state->Operators[operatorIndex].EnvelopeState != OPL_ENVELOPE_OFF) {
+        state->Operators[operatorIndex].EnvelopeState = OPL_ENVELOPE_RELEASE;
     }
 }
 
@@ -125,74 +125,74 @@ static void opl_key_op(opl_state *st, int opi, int on)
       rising edge of that OR. This once ignored channel keys in rhythm mode and
       re-keyed on every drum bit, which restarted drums that were already sounding
       -- harmless while three of them were silent, audible once they were not. */
-static const uint8_t opl_rhy_bit[6] = { 0x10, 0x01, 0x04, 0x10, 0x08, 0x02 };  /* op12-17 */
+static const BYTE g_OplRhythmBit[6] = { 0x10, 0x01, 0x04, 0x10, 0x08, 0x02 };  /* op12-17 */
 
-static int opl_rhy_held(int opi, uint8_t bd, uint8_t chkeys)
+static INT OplRhythmHeld(INT operatorIndex, BYTE bd, BYTE channelKeys)
 {
-    int c = (opi - 12) % 3;                         /* op12,15->ch6 13,16->7 14,17->8 */
-    return ((chkeys >> c) & 1) || ((bd & OPL_BD_RHY) && (bd & opl_rhy_bit[opi - 12]));
+    INT channel = (operatorIndex - 12) % 3;         /* op12,15->ch6 13,16->7 14,17->8 */
+    return ((channelKeys >> channel) & 1) || ((bd & OPL_BD_RHYTHM) && (bd & g_OplRhythmBit[operatorIndex - 12]));
 }
 
-static uint8_t opl_rhy_chkeys(const opl_state *st)
+static BYTE OplRhythmChannelKeys(PCOPL_STATE state)
 {
-    return (uint8_t)(st->ch[6].keyon | (st->ch[7].keyon << 1) | (st->ch[8].keyon << 2));
+    return (BYTE)(state->Channels[6].IsKeyOn | (state->Channels[7].IsKeyOn << 1) | (state->Channels[8].IsKeyOn << 2));
 }
 
 /* Re-key operators 12-17 for a change of 0xBD and/or of channels 6-8's key bits
    (`ck` bit n = channel 6+n). Only an edge of the OR moves an envelope. */
-static void opl_rhythm_rekey(opl_state *st, uint8_t bd0, uint8_t ck0, uint8_t bd1, uint8_t ck1)
+static VOID OplRhythmRekey(POPL_STATE state, BYTE bdBefore, BYTE channelKeysBefore, BYTE bdAfter, BYTE channelKeysAfter)
 {
-    int opi;
-    for (opi = 12; opi < 18; ++opi) {
-        int was = opl_rhy_held(opi, bd0, ck0), now = opl_rhy_held(opi, bd1, ck1);
-        if (was == now) continue;
-        opl_key_op(st, opi, now);
+    INT operatorIndex;
+    for (operatorIndex = 12; operatorIndex < 18; ++operatorIndex) {
+        INT wasHeld = OplRhythmHeld(operatorIndex, bdBefore, channelKeysBefore), isHeldNow = OplRhythmHeld(operatorIndex, bdAfter, channelKeysAfter);
+        if (wasHeld == isHeldNow) continue;
+        OplKeyOperator(state, operatorIndex, isHeldNow);
         /* Hi-hat / cymbal accumulator restarted in a running chip: each feeds the
            other's phase bit, so the restart POINT matters -- measured, see
            opl_rhythm_sample (vdd_opl_synth.c). */
-        if (now && (opi == 13 || opi == 17) && (bd1 & OPL_BD_RHY) && st->lfo_count)
-            st->rhy_restart |= (uint8_t)(opi == 13 ? 1 : 2);
+        if (isHeldNow && (operatorIndex == 13 || operatorIndex == 17) && (bdAfter & OPL_BD_RHYTHM) && state->LfoCount)
+            state->RhythmRestart |= (BYTE)(operatorIndex == 13 ? 1 : 2);
     }
 }
 
-static void opl_rhythm_write(opl_state *st, uint8_t old, uint8_t val)
+static VOID OplRhythmWrite(POPL_STATE state, BYTE oldValue, BYTE value)
 {
-    uint8_t ck = opl_rhy_chkeys(st);
-    int b;
+    BYTE channelKeys = OplRhythmChannelKeys(state);
+    INT bit;
     /* The hit counters count DRUM-BIT rising edges, as they always have: bits 0-4
-       are hi-hat, cymbal, tom-tom, snare, bass drum, prof_rhythm_hits' order. */
-    if (val & OPL_BD_RHY) {
-        uint8_t was = (old & OPL_BD_RHY) ? old : 0;     /* entering: every set bit is new */
-        for (b = 0; b < 5; ++b)
-            if (((val & ~was) >> b) & 1) st->prof_rhythm_hits[b]++;
+       are hi-hat, cymbal, tom-tom, snare, bass drum, ProfileRhythmHits' order. */
+    if (value & OPL_BD_RHYTHM) {
+        BYTE wasSet = (oldValue & OPL_BD_RHYTHM) ? oldValue : 0;     /* entering: every set bit is new */
+        for (bit = 0; bit < 5; ++bit)
+            if (((value & ~wasSet) >> bit) & 1) state->ProfileRhythmHits[bit]++;
     }
-    opl_rhythm_rekey(st, old, ck, val, ck);
+    OplRhythmRekey(state, oldValue, channelKeys, value, channelKeys);
 }
 
 /* Key-on / key-off edge for channel `c` -- both its operators, or all four when it
    leads a 4-operator pair (the pair is ONE voice, keyed from the first channel). */
-static void opl_key_channel(opl_state *st, int c, int kon)
+static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
 {
-    int n = (opl_4op_role(st, c) == 1) ? 2 : 1, k;
-    if (kon && !st->ch[c].keyon) {                      /* key-on edge: restart   */
-        int am = 0, vib = 0;
-        for (k = 0; k < n; ++k) {
-            int m = vdd_opl_op_index(c + 3 * k, 0), cr = vdd_opl_op_index(c + 3 * k, 1);
-            st->op[m].eg_state = OPL_EG_ATTACK; st->op[m].phase = 0;
-            st->op[cr].eg_state = OPL_EG_ATTACK; st->op[cr].phase = 0;
-            am  |= st->op[m].am  | st->op[cr].am;
-            vib |= st->op[m].vib | st->op[cr].vib;
+    INT channelCount = (OplFourOperatorRole(state, channel) == 1) ? 2 : 1, pairIndex;
+    if (isKeyOn && !state->Channels[channel].IsKeyOn) { /* key-on edge: restart   */
+        INT isAm = 0, isVibrato = 0;
+        for (pairIndex = 0; pairIndex < channelCount; ++pairIndex) {
+            INT modulator = VddOplOperatorIndex(channel + 3 * pairIndex, 0), carrier = VddOplOperatorIndex(channel + 3 * pairIndex, 1);
+            state->Operators[modulator].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[modulator].Phase = 0;
+            state->Operators[carrier].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[carrier].Phase = 0;
+            isAm  |= state->Operators[modulator].AmplitudeModulation  | state->Operators[carrier].AmplitudeModulation;
+            isVibrato |= state->Operators[modulator].Vibrato | state->Operators[carrier].Vibrato;
         }
-        st->prof_keyons++;                              /* profile: see opl_state  */
-        if (am)  st->prof_keyon_am++;
-        if (vib) st->prof_keyon_vib++;
-    } else if (!kon && st->ch[c].keyon) {               /* key-off edge: release  */
-        for (k = 0; k < n; ++k) {
-            st->op[vdd_opl_op_index(c + 3 * k, 0)].eg_state = OPL_EG_RELEASE;
-            st->op[vdd_opl_op_index(c + 3 * k, 1)].eg_state = OPL_EG_RELEASE;
+        state->ProfileKeyOns++;                              /* profile: see OPL_STATE  */
+        if (isAm)  state->ProfileKeyOnAm++;
+        if (isVibrato) state->ProfileKeyOnVibrato++;
+    } else if (!isKeyOn && state->Channels[channel].IsKeyOn) {               /* key-off edge: release  */
+        for (pairIndex = 0; pairIndex < channelCount; ++pairIndex) {
+            state->Operators[VddOplOperatorIndex(channel + 3 * pairIndex, 0)].EnvelopeState = OPL_ENVELOPE_RELEASE;
+            state->Operators[VddOplOperatorIndex(channel + 3 * pairIndex, 1)].EnvelopeState = OPL_ENVELOPE_RELEASE;
         }
     }
-    st->ch[c].keyon = (uint8_t)kon;
+    state->Channels[channel].IsKeyOn = (BYTE)isKeyOn;
 }
 
 /* ── THE REGISTER FILE, BOTH ARRAYS. `reg` is 9 bits: bit 8 is the array (A1 on
@@ -205,134 +205,134 @@ static void opl_key_channel(opl_state *st, int c, int kon)
      channel state exactly as array 0's is -- a driver commonly programs its voices
      first and sets NEW after -- but nothing in it is RENDERED, keyed into the
      4-op pairing, or routed until NEW is set (vdd_opl_synth.c). */
-void vdd_opl_write_reg(opl_state *st, uint16_t reg9, uint8_t val)
+VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
 {
-    int i, arr;
-    uint8_t reg, old;
-    if (reg9 >= OPL3_NUM_REG) return;
-    arr = reg9 >> 8;
-    if (arr && !st->opl3) return;                       /* an OPL2 has no array 1 */
-    reg = (uint8_t)reg9;
-    old = st->reg[reg9];                        /* before the store: edge detection */
-    st->reg[reg9] = val;
-    st->prof_writes++;                                  /* profile: see opl_state */
-    if (st->trace && !arr) st->trace(reg, val);         /* dev-only capture hook  */
+    INT operatorIndex, arrayIndex;
+    BYTE arrayRegister, oldValue;
+    if (registerNumber >= OPL3_REGISTERS) return;
+    arrayIndex = registerNumber >> 8;
+    if (arrayIndex && !state->IsOpl3) return;           /* an OPL2 has no array 1 */
+    arrayRegister = (BYTE)registerNumber;
+    oldValue = state->Registers[registerNumber];                        /* before the store: edge detection */
+    state->Registers[registerNumber] = value;
+    state->ProfileWrites++;                                  /* profile: see OPL_STATE */
+    if (state->Trace && !arrayIndex) state->Trace(arrayRegister, value);         /* dev-only capture hook  */
 
-    if (arr && reg < 0x20) return;      /* 0x104/0x105: stored, consulted where used;
+    if (arrayIndex && arrayRegister < 0x20) return;      /* 0x104/0x105: stored, consulted where used;
                                            0x101-0x103, 0x108: nothing in array 1 */
 
-    if (reg == 0x02) {                                  /* timer 1 preset         */
-        st->t1_preset = val;
-        if (!st->t1_run) st->t1_count = val;
+    if (arrayRegister == 0x02) {                        /* timer 1 preset         */
+        state->Timer1Preset = value;
+        if (!state->IsTimer1Running) state->Timer1Count = value;
         return;
     }
-    if (reg == 0x03) {                                  /* timer 2 preset         */
-        st->t2_preset = val;
-        if (!st->t2_run) st->t2_count = val;
+    if (arrayRegister == 0x03) {                        /* timer 2 preset         */
+        state->Timer2Preset = value;
+        if (!state->IsTimer2Running) state->Timer2Count = value;
         return;
     }
-    if (reg == 0x04) {                                  /* timer control          */
-        if (val & OPL_TC_IRQ_RST) {                     /* bit 7 resets flags and */
-            st->status = 0;                             /* does nothing else      */
+    if (arrayRegister == 0x04) {                        /* timer control          */
+        if (value & OPL_TIMER_CONTROL_IRQ_RESET) {      /* bit 7 resets flags and */
+            state->Status = 0;                          /* does nothing else      */
             return;
         }
-        st->t1_mask = (val & OPL_TC_T1_MASK) ? 1 : 0;
-        st->t2_mask = (val & OPL_TC_T2_MASK) ? 1 : 0;
-        { uint8_t run1 = (val & OPL_TC_T1_START) ? 1 : 0;
-          if (run1 && !st->t1_run) { st->t1_count = st->t1_preset; st->t1_frac_us = 0; }
-          st->t1_run = run1; }
-        { uint8_t run2 = (val & OPL_TC_T2_START) ? 1 : 0;
-          if (run2 && !st->t2_run) { st->t2_count = st->t2_preset; st->t2_frac_us = 0; }
-          st->t2_run = run2; }
+        state->IsTimer1Masked = (value & OPL_TIMER_CONTROL_T1_MASK) ? 1 : 0;
+        state->IsTimer2Masked = (value & OPL_TIMER_CONTROL_T2_MASK) ? 1 : 0;
+        { BYTE isTimer1Running = (value & OPL_TIMER_CONTROL_T1_START) ? 1 : 0;
+          if (isTimer1Running && !state->IsTimer1Running) { state->Timer1Count = state->Timer1Preset; state->Timer1FractionUs = 0; }
+          state->IsTimer1Running = isTimer1Running; }
+        { BYTE isTimer2Running = (value & OPL_TIMER_CONTROL_T2_START) ? 1 : 0;
+          if (isTimer2Running && !state->IsTimer2Running) { state->Timer2Count = state->Timer2Preset; state->Timer2FractionUs = 0; }
+          state->IsTimer2Running = isTimer2Running; }
         return;
     }
 
-    if (reg >= 0x20 && reg <= 0x35) {                   /* AM/VIB/EGT/KSR/MULT    */
-        i = opl_off_to_op(reg); if (i < 0) return;
-        if (val & 0x80) st->prof_am_ops  |= 1u << i;      /* profile: see opl_state */
-        if (val & 0x40) st->prof_vib_ops |= 1u << i;      /* (slot, either array)   */
-        i += arr * OPL_NUM_OP;
-        st->op[i].am   = (val >> 7) & 1;
-        st->op[i].vib  = (val >> 6) & 1;
-        st->op[i].egt  = (val >> 5) & 1;
-        st->op[i].ksr  = (val >> 4) & 1;
-        st->op[i].mult = val & 0x0F;
+    if (arrayRegister >= 0x20 && arrayRegister <= 0x35) {                   /* AM/VIB/EGT/KSR/MULT    */
+        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        if (value & 0x80) state->ProfileAmOperators  |= 1u << operatorIndex;      /* profile: see OPL_STATE */
+        if (value & 0x40) state->ProfileVibratoOperators |= 1u << operatorIndex;      /* (slot, either array)   */
+        operatorIndex += arrayIndex * OPL_OPERATORS;
+        state->Operators[operatorIndex].AmplitudeModulation   = (value >> 7) & 1;
+        state->Operators[operatorIndex].Vibrato  = (value >> 6) & 1;
+        state->Operators[operatorIndex].EnvelopeType  = (value >> 5) & 1;
+        state->Operators[operatorIndex].KeyScaleRate  = (value >> 4) & 1;
+        state->Operators[operatorIndex].Multiplier = value & 0x0F;
         return;
     }
-    if (reg >= 0x40 && reg <= 0x55) {                   /* KSL / total level      */
-        i = opl_off_to_op(reg); if (i < 0) return;
-        i += arr * OPL_NUM_OP;
-        st->op[i].ksl = (val >> 6) & 3;
-        st->op[i].tl  = val & 0x3F;
+    if (arrayRegister >= 0x40 && arrayRegister <= 0x55) {                   /* KSL / total level      */
+        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex += arrayIndex * OPL_OPERATORS;
+        state->Operators[operatorIndex].KeyScaleLevel = (value >> 6) & 3;
+        state->Operators[operatorIndex].TotalLevel  = value & 0x3F;
         return;
     }
-    if (reg >= 0x60 && reg <= 0x75) {                   /* attack / decay         */
-        i = opl_off_to_op(reg); if (i < 0) return;
-        i += arr * OPL_NUM_OP;
-        st->op[i].ar = (val >> 4) & 0x0F;
-        st->op[i].dr = val & 0x0F;
+    if (arrayRegister >= 0x60 && arrayRegister <= 0x75) {                   /* attack / decay         */
+        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex += arrayIndex * OPL_OPERATORS;
+        state->Operators[operatorIndex].AttackRate = (value >> 4) & 0x0F;
+        state->Operators[operatorIndex].DecayRate = value & 0x0F;
         return;
     }
-    if (reg >= 0x80 && reg <= 0x95) {                   /* sustain / release      */
-        i = opl_off_to_op(reg); if (i < 0) return;
-        i += arr * OPL_NUM_OP;
-        st->op[i].sl = (val >> 4) & 0x0F;
-        st->op[i].rr = val & 0x0F;
+    if (arrayRegister >= 0x80 && arrayRegister <= 0x95) {                   /* sustain / release      */
+        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex += arrayIndex * OPL_OPERATORS;
+        state->Operators[operatorIndex].SustainLevel = (value >> 4) & 0x0F;
+        state->Operators[operatorIndex].ReleaseRate = value & 0x0F;
         return;
     }
-    if (reg >= 0xE0 && reg <= 0xF5) {                   /* waveform select        */
-        i = opl_off_to_op(reg); if (i < 0) return;
-        i += arr * OPL_NUM_OP;
+    if (arrayRegister >= 0xE0 && arrayRegister <= 0xF5) {                   /* waveform select        */
+        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex += arrayIndex * OPL_OPERATORS;
         /* All three bits kept; which of them COUNT is the synth's call, because
            it depends on NEW / WSE as they stand when the note plays. */
-        st->op[i].wave = val & 7;
-        st->prof_wave_mask |= (uint8_t)(1u << (val & 7));
+        state->Operators[operatorIndex].Waveform = value & 7;
+        state->ProfileWaveMask |= (BYTE)(1u << (value & 7));
         return;
     }
 
-    if (reg >= 0xA0 && reg <= 0xA8) {                   /* F-number low           */
-        int c = reg - 0xA0 + arr * OPL_NUM_CH;
-        st->ch[c].fnum = (uint16_t)((st->ch[c].fnum & 0x300) | val);
+    if (arrayRegister >= 0xA0 && arrayRegister <= 0xA8) {                   /* F-number low           */
+        INT channel = arrayRegister - 0xA0 + arrayIndex * OPL_CHANNELS;
+        state->Channels[channel].FNumber = (WORD)((state->Channels[channel].FNumber & 0x300) | value);
         return;
     }
-    if (reg >= 0xB0 && reg <= 0xB8) {                   /* key-on / block / F hi  */
-        int c = reg - 0xB0 + arr * OPL_NUM_CH, kon = (val >> 5) & 1;
-        st->ch[c].fnum  = (uint16_t)((st->ch[c].fnum & 0xFF) | ((val & 3) << 8));
-        st->ch[c].block = (val >> 2) & 7;
+    if (arrayRegister >= 0xB0 && arrayRegister <= 0xB8) {                   /* key-on / block / F hi  */
+        INT channel = arrayRegister - 0xB0 + arrayIndex * OPL_CHANNELS, isKeyOn = (value >> 5) & 1;
+        state->Channels[channel].FNumber  = (WORD)((state->Channels[channel].FNumber & 0xFF) | ((value & 3) << 8));
+        state->Channels[channel].Block = (value >> 2) & 7;
         /* In rhythm mode channels 6-8 ARE the percussion voices, keyed from 0xBD.
            The F-number and block above still apply -- that is how a driver tunes
            the drums -- and the key bit is OR'd with the drum bits rather than
            driving a melodic voice. Array 0 only: rhythm mode has no counterpart
            in array 1. */
-        if (c >= 6 && c <= 8 && (st->reg[0xBD] & OPL_BD_RHY)) {
+        if (channel >= 6 && channel <= 8 && (state->Registers[0xBD] & OPL_BD_RHYTHM)) {
             /* ...but the key bit still counts, OR'd with the drum bits (see
-               opl_rhythm_rekey): it keys this channel's operators as drums. */
-            uint8_t ck0 = opl_rhy_chkeys(st);
-            st->ch[c].keyon = (uint8_t)kon;
-            opl_rhythm_rekey(st, st->reg[0xBD], ck0, st->reg[0xBD], opl_rhy_chkeys(st));
+               OplRhythmRekey): it keys this channel's operators as drums. */
+            BYTE channelKeysBefore = OplRhythmChannelKeys(state);
+            state->Channels[channel].IsKeyOn = (BYTE)isKeyOn;
+            OplRhythmRekey(state, state->Registers[0xBD], channelKeysBefore, state->Registers[0xBD], OplRhythmChannelKeys(state));
             return;
         }
         /* The second channel of a 4-op pair has no key of its own: its F-number
            and block are latched above (and ignored), its key-on bit is ignored. */
-        if (opl_4op_role(st, c) == 2) return;
-        opl_key_channel(st, c, kon);
+        if (OplFourOperatorRole(state, channel) == 2) return;
+        OplKeyChannel(state, channel, isKeyOn);
         return;
     }
-    if (reg >= 0xC0 && reg <= 0xC8) {                   /* feedback / connection  */
-        int c = reg - 0xC0 + arr * OPL_NUM_CH;
-        st->ch[c].fb  = (val >> 1) & 7;
-        st->ch[c].cnt = val & 1;
-        /* bits 4-7 (output routing, OPL3) are read from reg[] by the synth */
+    if (arrayRegister >= 0xC0 && arrayRegister <= 0xC8) {                   /* feedback / connection  */
+        INT channel = arrayRegister - 0xC0 + arrayIndex * OPL_CHANNELS;
+        state->Channels[channel].Feedback  = (value >> 1) & 7;
+        state->Channels[channel].Connection = value & 1;
+        /* bits 4-7 (output routing, OPL3) are read from Registers[] by the synth */
         return;
     }
-    if (arr) return;                    /* 0x1BD etc.: array 1 has no such globals */
-    /* 0x01 (test/WSE), 0x08 (CSM/NTS), 0xBD (rhythm/depth) are stored in reg[]
+    if (arrayIndex) return;             /* 0x1BD etc.: array 1 has no such globals */
+    /* 0x01 (test/WSE), 0x08 (CSM/NTS), 0xBD (rhythm/depth) are stored in Registers[]
        and consulted by the synth; nothing to decode here. */
-    if (reg == 0xBD) {
-        opl_rhythm_write(st, old, val);
-        st->prof_bd_writes++; st->prof_bd_or |= val;
+    if (arrayRegister == 0xBD) {
+        OplRhythmWrite(state, oldValue, value);
+        state->ProfileBdWrites++; state->ProfileBdOr |= value;
     }
-    if (reg == 0x01 && (val & 0x20)) st->prof_wse = 1;
+    if (arrayRegister == 0x01 && (value & 0x20)) state->ProfileWaveformSelect = 1;
 }
 
 /* --- ports 0x388-0x38B ------------------------------------------------------ */
@@ -341,15 +341,15 @@ void vdd_opl_write_reg(opl_state *st, uint16_t reg9, uint8_t val)
    why the data port does not care which of 0x389/0x38B it is: there is one 9-bit
    latch, and a data write goes wherever it points. An OPL2 has no A1 at all
    (an AdLib decodes 0x388/0x389 only), so for it 0x38A/0x38B are not there. */
-void vdd_opl_write_addr(opl_state *st, int array, uint8_t val)
+VOID VddOplWriteAddress(POPL_STATE state, INT arrayIndex, BYTE value)
 {
-    if (array && !st->opl3) return;                     /* no array 1 on an OPL2  */
-    st->index = (uint16_t)((array ? 0x100 : 0) | val);
+    if (arrayIndex && !state->IsOpl3) return;           /* no array 1 on an OPL2  */
+    state->AddressLatch = (WORD)((arrayIndex ? 0x100 : 0) | value);
 }
 
-void vdd_opl_write_data(opl_state *st, uint8_t val)
+VOID VddOplWriteData(POPL_STATE state, BYTE value)
 {
-    vdd_opl_write_reg(st, st->index, val);
+    VddOplWriteRegister(state, state->AddressLatch, value);
 }
 
 /* ── THE STATUS BYTE, AND WHAT THE OPL3 CHANGES IN IT. Bits 7-5 are IRQ, T1, T2
@@ -367,95 +367,95 @@ void vdd_opl_write_data(opl_state *st, uint8_t val)
      in the timer ISR. One knob, no sound devices at all: that is the point of
      the knob, which is to find out what Doom does with NO music rather than to
      ship a machine without an OPL. */
-uint8_t vdd_opl_read_status(const opl_state *st)
+BYTE VddOplReadStatus(PCOPL_STATE state)
 {
-    if (g_opl_absent) return 0xFF;
-    return (uint8_t)(st->status | (st->opl3 ? 0 : OPL_ST_OPL2_ID));
+    if (g_OplAbsent) return 0xFF;
+    return (BYTE)(state->Status | (state->IsOpl3 ? 0 : OPL_STATUS_OPL2_ID));
 }
 
-static void opl_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static VOID OplPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    opl_state *st = (opl_state *)self;
-    int a1 = (port & 2) ? 1 : 0;
-    (void)w;
-    if (a1 && !st->opl3) return;                        /* OPL2: not decoded      */
-    if ((port & 1) == 0) vdd_opl_write_addr(st, a1, (uint8_t)v);  /* 0x388/0x38A  */
-    else                 vdd_opl_write_data(st, (uint8_t)v);      /* 0x389/0x38B  */
+    POPL_STATE state = (POPL_STATE)context;
+    INT isArray1 = (port & 2) ? 1 : 0;
+    (VOID)width;
+    if (isArray1 && !state->IsOpl3) return;             /* OPL2: not decoded      */
+    if ((port & 1) == 0) VddOplWriteAddress(state, isArray1, (BYTE)value);  /* 0x388/0x38A  */
+    else                 VddOplWriteData(state, (BYTE)value);     /* 0x389/0x38B  */
 }
 
-static void opl_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+static VOID OplPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    opl_state *st = (opl_state *)self;
-    (void)w;
+    POPL_STATE state = (POPL_STATE)context;
+    (VOID)width;
     /* The data ports are write-only on both chips. 0x38A on an OPL3 reads status
        too: the datasheet's read cycle is specified with A0 low and says nothing
        of A1, and a chip that does not latch on a read has no reason to decode it
        -- ⚠ an INFERENCE, owed a check against a real SB16. On an OPL2 0x38A/0x38B
        float, exactly as on an AdLib, whose decode stops at 0x389. */
-    if ((port & 1) || ((port & 2) && !st->opl3)) { *v = 0xFF; return; }
-    *v = vdd_opl_read_status(st);
+    if ((port & 1) || ((port & 2) && !state->IsOpl3)) { *value = 0xFF; return; }
+    *value = VddOplReadStatus(state);
 }
 
 /* Every voice to its release, both arrays: the key-off a program that ended
    never sent. The F-number stays, so each note decays through its own envelope
    rather than clicking off. */
-void vdd_opl_all_notes_off(opl_state *st)
+VOID VddOplAllNotesOff(POPL_STATE state)
 {
-    int c;
-    for (c = 0; c < OPL3_NUM_CH; ++c) {
-        uint16_t r = (uint16_t)((c / OPL_NUM_CH) * 0x100 + 0xB0 + c % OPL_NUM_CH);
-        if (c >= OPL_NUM_CH && !st->opl3) break;
-        if (st->reg[r] & 0x20) vdd_opl_write_reg(st, r, (uint8_t)(st->reg[r] & ~0x20));
+    INT channel;
+    for (channel = 0; channel < OPL3_CHANNELS; ++channel) {
+        WORD registerNumber = (WORD)((channel / OPL_CHANNELS) * 0x100 + 0xB0 + channel % OPL_CHANNELS);
+        if (channel >= OPL_CHANNELS && !state->IsOpl3) break;
+        if (state->Registers[registerNumber] & 0x20) VddOplWriteRegister(state, registerNumber, (BYTE)(state->Registers[registerNumber] & ~0x20));
     }
-    if (st->reg[0xBD] & 0x1F)                   /* rhythm drums, keyed separately */
-        vdd_opl_write_reg(st, 0xBD, (uint8_t)(st->reg[0xBD] & ~0x1F));
+    if (state->Registers[0xBD] & 0x1F)          /* rhythm drums, keyed separately */
+        VddOplWriteRegister(state, 0xBD, (BYTE)(state->Registers[0xBD] & ~0x1F));
 }
 
-static void opl_frame(void *self)
+static VOID OplFrame(PVOID context)
 {
-    opl_state *st = (opl_state *)self;
-    if (st->ext_clock) return;          /* host pumps real elapsed time instead */
-    vdd_opl_add_us(st, st->frame_us);
+    POPL_STATE state = (POPL_STATE)context;
+    if (state->IsExternalClock) return; /* host pumps real elapsed time instead */
+    VddOplAddMicroseconds(state, state->FrameUs);
 }
 
 /* --- lifecycle ------------------------------------------------------------ */
-void vdd_opl_reset(void *self)
+VOID VddOplReset(PVOID context)
 {
-    opl_state *st = (opl_state *)self;
-    VDD_BUS *bus = st->bus;
-    uint32_t fus = st->frame_us, shz = st->sample_hz;
-    uint8_t  ext = st->ext_clock, opl3 = st->opl3;
-    unsigned i; uint8_t *p = (uint8_t *)st;
-    for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
-    st->bus = bus;
-    st->frame_us  = fus ? fus : OPL_DEFAULT_FRAME_US;
-    st->sample_hz = shz ? shz : OPL_DEFAULT_HZ;
-    st->ext_clock = ext;
-    st->opl3      = opl3;       /* the card, not the guest's state: NEW is 0 again */
-    st->noise     = OPL_NOISE_SEED;   /* an all-zero LFSR would never leave zero  */
-    /* SILENT MEANS FULLY ATTENUATED, NOT ZERO. env counts attenuation, so zeroing
+    POPL_STATE state = (POPL_STATE)context;
+    PVDD_BUS bus = state->Bus;
+    UINT32 frameUs = state->FrameUs, sampleHz = state->SampleHz;
+    BYTE  isExternalClock = state->IsExternalClock, isOpl3 = state->IsOpl3;
+    UINT index; BYTE *bytes = (BYTE *)state;
+    for (index = 0; index < sizeof(*state); ++index) bytes[index] = 0;
+    state->Bus = bus;
+    state->FrameUs  = frameUs ? frameUs : OPL_DEFAULT_FRAME_US;
+    state->SampleHz = sampleHz ? sampleHz : OPL_DEFAULT_HZ;
+    state->IsExternalClock = isExternalClock;
+    state->IsOpl3      = isOpl3;       /* the card, not the guest's state: NEW is 0 again */
+    state->Noise     = OPL_NOISE_SEED;   /* an all-zero LFSR would never leave zero  */
+    /* SILENT MEANS FULLY ATTENUATED, NOT ZERO. Envelope counts attenuation, so zeroing
        the struct leaves every operator at FULL VOLUME waiting for its first note.
-       Key-on does not reset env -- measured: the reference resumes an interrupted
+       Key-on does not reset Envelope -- measured: the reference resumes an interrupted
        attack from where it was rather than restarting from silence -- so the very
        first note of a run attacked instantly at full level no matter what its
        attack rate said. That reads as "too loud" and as "no attack", and it is
        both: it is why our first measured attack time was 0.00 ms at every rate.  */
-    for (i = 0; i < OPL3_NUM_OP; ++i) {
-        st->op[i].eg_state = OPL_EG_OFF;
-        st->op[i].env = OPL_ENV_FULL;
+    for (index = 0; index < OPL3_OPERATORS; ++index) {
+        state->Operators[index].EnvelopeState = OPL_ENVELOPE_OFF;
+        state->Operators[index].Envelope = OPL_ENVELOPE_FULL;
     }
 }
 
-int vdd_opl_init(VDD_BUS *b, void *self)
+INT VddOplInitialize(PVDD_BUS bus, PVOID context)
 {
-    opl_state *st = (opl_state *)self;
-    st->bus = b;
-    if (!st->frame_us)  st->frame_us  = OPL_DEFAULT_FRAME_US;
-    if (!st->sample_hz) st->sample_hz = OPL_DEFAULT_HZ;
+    POPL_STATE state = (POPL_STATE)context;
+    state->Bus = bus;
+    if (!state->FrameUs)  state->FrameUs  = OPL_DEFAULT_FRAME_US;
+    if (!state->SampleHz) state->SampleHz = OPL_DEFAULT_HZ;
     /* All four ports, whichever chip: on an OPL2 the top two answer as nothing
-       (see opl_out/opl_in), and the host can then change the chip without
+       (see OplPortOut/OplPortIn), and the host can then change the chip without
        re-plumbing the bus. */
-    if (VddClaimPorts(b, 0x388, 0x38B, opl_in, opl_out, st)) return -1;
-    if (VddOnFrame(b, opl_frame, st)) return -1;
+    if (VddClaimPorts(bus, 0x388, 0x38B, OplPortIn, OplPortOut, state)) return -1;
+    if (VddOnFrame(bus, OplFrame, state)) return -1;
     return 0;
 }

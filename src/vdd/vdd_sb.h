@@ -92,7 +92,7 @@ typedef struct _SB_BLOCK_RECORD {
 typedef struct _SB_STATE {
     PVDD_BUS   Bus;
     PDMA_STATE Dma;            /* where playback data comes from                 */
-    opl_state *Opl;            /* FM mirrored at 2x0-2x3 and 2x8-2x9             */
+    POPL_STATE Opl;            /* FM mirrored at 2x0-2x3 and 2x8-2x9             */
 
     WORD BasePort;             /* 0x220 by default                               */
     BYTE  Irq, Dma8, Dma16;

@@ -24,7 +24,7 @@
 #include <string.h>
 #include "vdd_opl.h"
 
-void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames);
+void VddOplRender(OPL_STATE *st, int16_t *out, uint32_t frames);
 
 static int total = 0, fails = 0;
 #define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
@@ -33,7 +33,7 @@ static int total = 0, fails = 0;
 #define OPL_NATIVE_HZ 49716
 static int16_t buf[OPL_NATIVE_HZ];              /* one second                     */
 
-static opl_state opl;
+static OPL_STATE opl;
 
 /* Operator index -> register offset. The banks skip 0x06/0x07 and 0x0E/0x0F. */
 static uint8_t opreg(int op) { return (uint8_t)(op + 2 * (op / 6)); }
@@ -42,10 +42,10 @@ static uint8_t opreg(int op) { return (uint8_t)(op + 2 * (op / 6)); }
    steady tone rather than a transient, at the requested total level. */
 static void set_op(int op, uint8_t tl)
 {
-    vdd_opl_write_reg(&opl, (uint8_t)(0x20 + opreg(op)), 0x21);   /* EGT=1 MULT=1  */
-    vdd_opl_write_reg(&opl, (uint8_t)(0x40 + opreg(op)), tl);
-    vdd_opl_write_reg(&opl, (uint8_t)(0x60 + opreg(op)), 0xF0);   /* AR=15 DR=0    */
-    vdd_opl_write_reg(&opl, (uint8_t)(0x80 + opreg(op)), 0x0F);   /* SL=0  RR=15   */
+    VddOplWriteRegister(&opl, (uint8_t)(0x20 + opreg(op)), 0x21);   /* EGT=1 MULT=1  */
+    VddOplWriteRegister(&opl, (uint8_t)(0x40 + opreg(op)), tl);
+    VddOplWriteRegister(&opl, (uint8_t)(0x60 + opreg(op)), 0xF0);   /* AR=15 DR=0    */
+    VddOplWriteRegister(&opl, (uint8_t)(0x80 + opreg(op)), 0x0F);   /* SL=0  RR=15   */
 }
 
 /* Program a sustained tone on channel `c` and key it on. The MODULATOR is muted
@@ -53,11 +53,11 @@ static void set_op(int op, uint8_t tl)
    measures a two-operator blend instead of the thing it means to measure. */
 static void note_on(int c, uint16_t fnum, uint8_t block, uint8_t tl)
 {
-    set_op(vdd_opl_op_index(c, 0), 0x3F);                          /* silent mod   */
-    set_op(vdd_opl_op_index(c, 1), tl);                            /* carrier      */
-    vdd_opl_write_reg(&opl, (uint8_t)(0xC0 + c), 0x01);            /* additive     */
-    vdd_opl_write_reg(&opl, (uint8_t)(0xA0 + c), (uint8_t)(fnum & 0xFF));
-    vdd_opl_write_reg(&opl, (uint8_t)(0xB0 + c),
+    set_op(VddOplOperatorIndex(c, 0), 0x3F);                          /* silent mod   */
+    set_op(VddOplOperatorIndex(c, 1), tl);                            /* carrier      */
+    VddOplWriteRegister(&opl, (uint8_t)(0xC0 + c), 0x01);            /* additive     */
+    VddOplWriteRegister(&opl, (uint8_t)(0xA0 + c), (uint8_t)(fnum & 0xFF));
+    VddOplWriteRegister(&opl, (uint8_t)(0xB0 + c),
                       (uint8_t)(0x20 | (block << 2) | ((fnum >> 8) & 3)));
 }
 
@@ -88,7 +88,7 @@ static uint16_t opreg9(int op)
     int a = op / 18, s = op % 18;
     return (uint16_t)(a * 0x100 + s + 2 * (s / 6));
 }
-static void w9(uint16_t reg, uint8_t val) { vdd_opl_write_reg(&opl, reg, val); }
+static void w9(uint16_t reg, uint8_t val) { VddOplWriteRegister(&opl, reg, val); }
 /* A steady full-level operator, or (live=0) one that never attacks: AR=0 holds
    it at full attenuation, so it outputs exactly 0 -- and so modulates nothing. */
 static void op9(int op, int live, uint8_t wave)
@@ -109,7 +109,7 @@ static void ch9(int c, uint8_t c0, uint16_t fnum, uint8_t block)
 }
 static void opl3_fresh(int newm)
 {
-    memset(&opl, 0, sizeof opl); opl.opl3 = 1; vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); opl.IsOpl3 = 1; VddOplReset(&opl);
     if (newm) w9(0x105, 0x01);
 }
 static long rms_side(const int16_t *s, int n, int side)
@@ -154,21 +154,21 @@ static uint32_t g_hash, g_hash_melodic;
 static void g_eat(int which, int n)
 {
     int i;
-    if (which == 0) { vdd_opl_render(&opl, buf, (uint32_t)n); g_hash = fnv16(g_hash, buf, n); return; }
-    vdd_opl_render_st(&opl, st_buf, (uint32_t)n);
+    if (which == 0) { VddOplRender(&opl, buf, (uint32_t)n); g_hash = fnv16(g_hash, buf, n); return; }
+    VddOplRenderStereo(&opl, st_buf, (uint32_t)n);
     for (i = 0; i < n; ++i) buf[i] = st_buf[2 * i + (which - 1)];
     g_hash = fnv16(g_hash, buf, n);
 }
-static void g_w(unsigned r, unsigned v) { vdd_opl_write_reg(&opl, (uint8_t)r, (uint8_t)v); }
+static void g_w(unsigned r, unsigned v) { VddOplWriteRegister(&opl, (uint8_t)r, (uint8_t)v); }
 static uint32_t golden_run(int chip_opl3, int which)
 {
     int c, k;
-    memset(&opl, 0, sizeof opl); opl.opl3 = (uint8_t)chip_opl3; vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); opl.IsOpl3 = (uint8_t)chip_opl3; VddOplReset(&opl);
     g_hash = 2166136261u;
     g_w(0x01, 0x20);                                 /* WSE                       */
     g_w(0xBD, 0xC0);                                 /* deep AM + VIB             */
     for (c = 0; c < 9; ++c) {
-        int m = vdd_opl_op_index(c, 0), cr = vdd_opl_op_index(c, 1);
+        int m = VddOplOperatorIndex(c, 0), cr = VddOplOperatorIndex(c, 1);
         unsigned mo = (unsigned)(m + 2 * (m / 6)), co = (unsigned)(cr + 2 * (cr / 6));
         g_w(0x20 + mo, 0x21 | ((c & 1) << 7) | ((c & 2) << 5) | (c & 4 ? 0x10 : 0) | (c % 5));
         g_w(0x20 + co, 0x21 | ((c & 2) << 6));
@@ -186,7 +186,7 @@ static uint32_t golden_run(int chip_opl3, int which)
         g_eat(which, 700);
     }
     g_eat(which, 6000);
-    for (c = 0; c < 9; c += 2) { g_w(0xB0 + c, opl.reg[0xB0 + c] & ~0x20); g_eat(which, 900); }
+    for (c = 0; c < 9; c += 2) { g_w(0xB0 + c, opl.Registers[0xB0 + c] & ~0x20); g_eat(which, 900); }
     g_hash_melodic = g_hash;                         /* everything before rhythm  */
     g_w(0xBD, 0xE0 | 0x10 | 0x04);                   /* rhythm: bass drum + tom   */
     g_eat(which, 4000);
@@ -229,19 +229,19 @@ static void t_noise_init(void)
 static void rhy_setup(uint16_t f7, uint8_t b7, uint16_t f8, uint8_t b8, uint8_t m13, uint8_t m17)
 {
     int i;
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
-    vdd_opl_write_reg(&opl, 0x01, 0x20);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
+    VddOplWriteRegister(&opl, 0x01, 0x20);
     for (i = 0; i < 6; ++i) {
         uint8_t o = (uint8_t)(0x10 + i), mult = (uint8_t)(i == 1 ? m13 : i == 5 ? m17 : 1);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x20 + o), (uint8_t)(0x20 | mult));   /* EGT     */
-        vdd_opl_write_reg(&opl, (uint8_t)(0x40 + o), 0x00);
-        vdd_opl_write_reg(&opl, (uint8_t)(0x60 + o), 0xF0);                     /* AR=15   */
-        vdd_opl_write_reg(&opl, (uint8_t)(0x80 + o), 0x0F);
-        vdd_opl_write_reg(&opl, (uint8_t)(0xE0 + o), 0x00);
+        VddOplWriteRegister(&opl, (uint8_t)(0x20 + o), (uint8_t)(0x20 | mult));   /* EGT     */
+        VddOplWriteRegister(&opl, (uint8_t)(0x40 + o), 0x00);
+        VddOplWriteRegister(&opl, (uint8_t)(0x60 + o), 0xF0);                     /* AR=15   */
+        VddOplWriteRegister(&opl, (uint8_t)(0x80 + o), 0x0F);
+        VddOplWriteRegister(&opl, (uint8_t)(0xE0 + o), 0x00);
     }
-    vdd_opl_write_reg(&opl, 0xA6, 0x00); vdd_opl_write_reg(&opl, 0xB6, 0x10);
-    vdd_opl_write_reg(&opl, 0xA7, (uint8_t)f7); vdd_opl_write_reg(&opl, 0xB7, (uint8_t)((b7 << 2) | (f7 >> 8)));
-    vdd_opl_write_reg(&opl, 0xA8, (uint8_t)f8); vdd_opl_write_reg(&opl, 0xB8, (uint8_t)((b8 << 2) | (f8 >> 8)));
+    VddOplWriteRegister(&opl, 0xA6, 0x00); VddOplWriteRegister(&opl, 0xB6, 0x10);
+    VddOplWriteRegister(&opl, 0xA7, (uint8_t)f7); VddOplWriteRegister(&opl, 0xB7, (uint8_t)((b7 << 2) | (f7 >> 8)));
+    VddOplWriteRegister(&opl, 0xA8, (uint8_t)f8); VddOplWriteRegister(&opl, 0xB8, (uint8_t)((b8 << 2) | (f8 >> 8)));
 }
 /* Mean-removed autocorrelation at `lag`, normalised: the fraction of a signal that
    repeats with that period. No libm needed. */
@@ -269,8 +269,8 @@ static void rhythm_tests(void)
         uint32_t i13 = t_inc(su[k].f7, su[k].b7, su[k].m13), i17 = t_inc(su[k].f8, su[k].b8, su[k].m17);
         /* CYMBAL */
         rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
-        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x02);
-        vdd_opl_render(&opl, a, T_NSAMP);
+        VddOplWriteRegister(&opl, 0xBD, 0x20 | 0x02);
+        VddOplRender(&opl, a, T_NSAMP);
         for (bad = 0, m = 1; m < T_NSAMP; ++m) {
             uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, p17 = (((uint32_t)(m + 1) * i17) >> 10) & 1023;
             int want = t_bit(p13, p17) ? -1 : 1;
@@ -280,8 +280,8 @@ static void rhythm_tests(void)
         CHECK(bad == 0, msg);
         /* SNARE */
         rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
-        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x08);
-        vdd_opl_render(&opl, a, T_NSAMP);
+        VddOplWriteRegister(&opl, 0xBD, 0x20 | 0x08);
+        VddOplRender(&opl, a, T_NSAMP);
         for (bad = 0, m = 1; m < T_NSAMP; ++m) {
             uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, s = (p13 >> 8) & 1;
             uint32_t loud = s ^ t_u[72 * (m + 1) + 6];
@@ -291,8 +291,8 @@ static void rhythm_tests(void)
         CHECK(bad == 0, msg);
         /* HI-HAT */
         rhy_setup(su[k].f7, su[k].b7, su[k].f8, su[k].b8, su[k].m13, su[k].m17);
-        vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x01);
-        vdd_opl_render(&opl, a, T_NSAMP);
+        VddOplWriteRegister(&opl, 0xBD, 0x20 | 0x01);
+        VddOplRender(&opl, a, T_NSAMP);
         for (bad = 0, m = 1; m < T_NSAMP; ++m) {
             uint32_t p13 = (((uint32_t)(m + 1) * i13) >> 10) & 1023, p17p = (((uint32_t)m * i17) >> 10) & 1023;
             uint32_t bb = t_bit(p13, p17p), loud = bb ^ t_u[72 * (m + 1)];
@@ -306,8 +306,8 @@ static void rhythm_tests(void)
     /* The noise alone: op13/op17 frozen (F-num 0) makes B = 0, so the hi-hat's
        loud/quiet stream IS the noise -- and it must be the LFSR's, from power-on. */
     rhy_setup(0, 0, 0, 0, 1, 1);
-    vdd_opl_write_reg(&opl, 0xBD, 0x20 | 0x01);
-    vdd_opl_render(&opl, a, T_NSAMP);
+    VddOplWriteRegister(&opl, 0xBD, 0x20 | 0x01);
+    VddOplRender(&opl, a, T_NSAMP);
     {   int ones = 0;
         for (bad = 0, m = 1; m < T_NSAMP; ++m) {
             int loud = a[m] > 6000;
@@ -323,10 +323,10 @@ static void rhythm_tests(void)
     {   uint32_t i13 = t_inc(0x1A3, 5, 3), i17 = t_inc(0x2F1, 4, 5);
         const int K = 1000;
         rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5);
-        vdd_opl_write_reg(&opl, 0xBD, 0x20);
-        vdd_opl_render(&opl, a, K);
-        vdd_opl_write_reg(&opl, 0xBD, 0x21);
-        vdd_opl_render(&opl, a + K, T_NSAMP - K);
+        VddOplWriteRegister(&opl, 0xBD, 0x20);
+        VddOplRender(&opl, a, K);
+        VddOplWriteRegister(&opl, 0xBD, 0x21);
+        VddOplRender(&opl, a + K, T_NSAMP - K);
         for (bad = 0, m = K + 1; m < T_NSAMP; ++m) {
             uint32_t p13 = (((uint32_t)(m - K + 2) * i13) >> 10) & 1023, p17p = (((uint32_t)m * i17) >> 10) & 1023;
             uint32_t bb = t_bit(p13, p17p);
@@ -339,12 +339,12 @@ static void rhythm_tests(void)
        128-sample period of the default test pitch. Measured on the reference as
        tonality 0.003 / 0.509 / 0.749 (hi-hat / snare / cymbal). */
     {   double ph, ps, pc;
-        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x21);
-        vdd_opl_render(&opl, a, T_NSAMP); ph = t_periodicity(a, T_NSAMP, 128);
-        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x28);
-        vdd_opl_render(&opl, a, T_NSAMP); ps = t_periodicity(a, T_NSAMP, 128);
-        rhy_setup(0x200, 4, 0x200, 4, 1, 1); vdd_opl_write_reg(&opl, 0xBD, 0x22);
-        vdd_opl_render(&opl, a, T_NSAMP); pc = t_periodicity(a, T_NSAMP, 128);
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); VddOplWriteRegister(&opl, 0xBD, 0x21);
+        VddOplRender(&opl, a, T_NSAMP); ph = t_periodicity(a, T_NSAMP, 128);
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); VddOplWriteRegister(&opl, 0xBD, 0x28);
+        VddOplRender(&opl, a, T_NSAMP); ps = t_periodicity(a, T_NSAMP, 128);
+        rhy_setup(0x200, 4, 0x200, 4, 1, 1); VddOplWriteRegister(&opl, 0xBD, 0x22);
+        VddOplRender(&opl, a, T_NSAMP); pc = t_periodicity(a, T_NSAMP, 128);
         printf("        periodic fraction at the note's period: hi-hat %.3f snare %.3f cymbal %.3f\n", ph, ps, pc);
         CHECK(ph < 0.1, "character: the hi-hat is noise -- no dominant tone");
         CHECK(ps > 0.35 && ps < 0.65, "character: the snare is half tone, half noise");
@@ -352,10 +352,10 @@ static void rhythm_tests(void)
 
     /* Determinism: the whole kit, twice from reset, bit-identical. */
     {   uint32_t h1, h2;
-        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); vdd_opl_write_reg(&opl, 0xBD, 0x3F);
-        vdd_opl_render(&opl, a, T_NSAMP); h1 = fnv16(2166136261u, a, T_NSAMP);
-        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); vdd_opl_write_reg(&opl, 0xBD, 0x3F);
-        vdd_opl_render(&opl, b, T_NSAMP); h2 = fnv16(2166136261u, b, T_NSAMP);
+        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); VddOplWriteRegister(&opl, 0xBD, 0x3F);
+        VddOplRender(&opl, a, T_NSAMP); h1 = fnv16(2166136261u, a, T_NSAMP);
+        rhy_setup(0x1A3, 5, 0x2F1, 4, 3, 5); VddOplWriteRegister(&opl, 0xBD, 0x3F);
+        VddOplRender(&opl, b, T_NSAMP); h2 = fnv16(2166136261u, b, T_NSAMP);
         CHECK(h1 == h2 && rms(a, T_NSAMP) > 1000000, "determinism: all five drums, twice from reset, bit-identical"); }
 
     /* A drum bit and its channel's key bit are OR'd (oplprobe keyor): with channel
@@ -363,29 +363,29 @@ static void rhythm_tests(void)
     {   int i;
         for (i = 0; i < 2; ++i) {
             rhy_setup(0x200, 4, 0x200, 4, 1, 1);
-            vdd_opl_write_reg(&opl, 0x72, 0xF4);                          /* op14 AR15 DR4  */
-            vdd_opl_write_reg(&opl, 0x92, 0xF4);                          /* SL15 RR4       */
-            vdd_opl_write_reg(&opl, 0xB8, 0x20 | (4 << 2) | 2);           /* ch8 key on     */
-            vdd_opl_write_reg(&opl, 0xBD, 0x20);
-            vdd_opl_render(&opl, i ? b : a, 3000);
-            if (i) vdd_opl_write_reg(&opl, 0xBD, 0x24);                   /* + tom-tom bit  */
-            vdd_opl_render(&opl, (i ? b : a) + 3000, T_NSAMP - 3000);
+            VddOplWriteRegister(&opl, 0x72, 0xF4);                          /* op14 AR15 DR4  */
+            VddOplWriteRegister(&opl, 0x92, 0xF4);                          /* SL15 RR4       */
+            VddOplWriteRegister(&opl, 0xB8, 0x20 | (4 << 2) | 2);           /* ch8 key on     */
+            VddOplWriteRegister(&opl, 0xBD, 0x20);
+            VddOplRender(&opl, i ? b : a, 3000);
+            if (i) VddOplWriteRegister(&opl, 0xBD, 0x24);                   /* + tom-tom bit  */
+            VddOplRender(&opl, (i ? b : a) + 3000, T_NSAMP - 3000);
         }
         CHECK(fnv16(2166136261u, a, T_NSAMP) == fnv16(2166136261u, b, T_NSAMP) && rms(a + 3000, 2000) > 0,
               "keying: a drum bit on an operator its channel key already holds restarts nothing");
-        CHECK(opl.prof_rhythm_hits[2] == 1, "keying: ... and the tom-tom hit is still counted"); }
+        CHECK(opl.ProfileRhythmHits[2] == 1, "keying: ... and the tom-tom hit is still counted"); }
 
     /* OPL3 routing: hi-hat and snare follow channel 7's C0, the cymbal channel 8's. */
     {   long l, r;
         rhy_setup(0x200, 4, 0x200, 4, 1, 1);         /* an OPL2 reset ...          */
-        opl.opl3 = 1; w9(0x105, 0x01);                /* ... made an OPL3, NEW set  */
+        opl.IsOpl3 = 1; w9(0x105, 0x01);                /* ... made an OPL3, NEW set  */
         w9(0xC6, 0x20); w9(0xC7, 0x10); w9(0xC8, 0x20);                  /* ch7 left only  */
         w9(0xBD, 0x20 | 0x09);                                            /* hi-hat + snare */
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         l = rms_side(st_buf, 4096, 0); r = rms_side(st_buf, 4096, 1);
         CHECK(l > 1000000 && r == 0, "OPL3 routing: hi-hat and snare go where channel 7's C0 sends them");
         w9(0xBD, 0x20); w9(0xBD, 0x20 | 0x02);                            /* cymbal         */
-        vdd_opl_render_st(&opl, st_buf, 8192);
+        VddOplRenderStereo(&opl, st_buf, 8192);
         l = rms_side(st_buf + 2 * 4096, 4096, 0); r = rms_side(st_buf + 2 * 4096, 4096, 1);
         CHECK(r > 1000000 && l < r / 1000, "OPL3 routing: the cymbal goes where channel 8's C0 sends it"); }
 }
@@ -399,65 +399,65 @@ int main(void)
 
     /* T1: pitch accuracy against the chip's published formula ---------------- */
     /* fnum=0x200, block=4 -> 512 * 49716 / 2^16 = 388.4 Hz                     */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
     note_on(0, 0x200, 4, 0);
-    vdd_opl_render(&opl, buf, OPL_NATIVE_HZ / 4);
+    VddOplRender(&opl, buf, OPL_NATIVE_HZ / 4);
     hz   = measure_hz(buf, OPL_NATIVE_HZ / 4);
     want = 512.0 * OPL_NATIVE_HZ / 65536.0;
     printf("        measured %.1f Hz, expected %.1f Hz\n", hz, want);
     CHECK(hz > want * 0.98 && hz < want * 1.02, "pitch: fnum=0x200 block=4 within 2%");
 
     /* an octave up must double the frequency                                   */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
     note_on(0, 0x200, 5, 0);
-    vdd_opl_render(&opl, buf, OPL_NATIVE_HZ / 4);
+    VddOplRender(&opl, buf, OPL_NATIVE_HZ / 4);
     hz = measure_hz(buf, OPL_NATIVE_HZ / 4);
     printf("        measured %.1f Hz, expected %.1f Hz\n", hz, want * 2.0);
     CHECK(hz > want * 2.0 * 0.98 && hz < want * 2.0 * 1.02, "pitch: block+1 is one octave up");
 
     /* a different fnum scales linearly                                         */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
     note_on(0, 0x100, 4, 0);
-    vdd_opl_render(&opl, buf, OPL_NATIVE_HZ / 4);
+    VddOplRender(&opl, buf, OPL_NATIVE_HZ / 4);
     hz = measure_hz(buf, OPL_NATIVE_HZ / 4);
     CHECK(hz > want * 0.5 * 0.97 && hz < want * 0.5 * 1.03, "pitch: half the F-number is half the pitch");
 
     /* T2: key-on makes sound, key-off eventually silences -------------------- */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
     note_on(0, 0x200, 4, 0);
-    vdd_opl_render(&opl, buf, 4096);
+    VddOplRender(&opl, buf, 4096);
     r_loud = rms(buf, 4096);
     CHECK(r_loud > 10000, "key-on: channel produces signal");
 
-    vdd_opl_write_reg(&opl, 0xB0, 0x10);                    /* key-off           */
-    vdd_opl_render(&opl, buf, OPL_NATIVE_HZ / 2);           /* let release finish */
-    vdd_opl_render(&opl, buf, 4096);
+    VddOplWriteRegister(&opl, 0xB0, 0x10);                    /* key-off           */
+    VddOplRender(&opl, buf, OPL_NATIVE_HZ / 2);           /* let release finish */
+    VddOplRender(&opl, buf, 4096);
     r_off = rms(buf, 4096);
     CHECK(r_off < r_loud / 100, "key-off: decays to silence");
 
     /* T3: total level attenuates ------------------------------------------- */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
     note_on(0, 0x200, 4, 0x20);                             /* -24 dB            */
-    vdd_opl_render(&opl, buf, 4096);
+    VddOplRender(&opl, buf, 4096);
     r_quiet = rms(buf, 4096);
     CHECK(r_quiet < r_loud / 4 && r_quiet > 0, "total level: higher TL is quieter but audible");
 
     /* T4: FM actually modulates -------------------------------------------- */
     {
         long r_plain, r_fm;
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
         note_on(0, 0x200, 4, 0);
-        vdd_opl_write_reg(&opl, 0xC0, 0x00);                /* FM, modulator muted */
-        vdd_opl_render(&opl, buf, 8192);
+        VddOplWriteRegister(&opl, 0xC0, 0x00);                /* FM, modulator muted */
+        VddOplRender(&opl, buf, 8192);
         r_plain = rms(buf, 8192);
 
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
         note_on(0, 0x200, 4, 0);
-        vdd_opl_write_reg(&opl, 0xC0, 0x00);
-        set_op(vdd_opl_op_index(0, 0), 0x00);               /* modulator at full   */
-        vdd_opl_write_reg(&opl, 0xB0, 0x00);                /* re-key so it starts */
-        vdd_opl_write_reg(&opl, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
-        vdd_opl_render(&opl, buf, 8192);
+        VddOplWriteRegister(&opl, 0xC0, 0x00);
+        set_op(VddOplOperatorIndex(0, 0), 0x00);               /* modulator at full   */
+        VddOplWriteRegister(&opl, 0xB0, 0x00);                /* re-key so it starts */
+        VddOplWriteRegister(&opl, 0xB0, (uint8_t)(0x20 | (4 << 2) | 0x02));
+        VddOplRender(&opl, buf, 8192);
         r_fm = rms(buf, 8192);
         printf("        plain rms=%ld, modulated rms=%ld\n", r_plain, r_fm);
         CHECK(r_fm != r_plain, "FM: a live modulator changes the carrier output");
@@ -466,10 +466,10 @@ int main(void)
     /* T5: output never leaves int16, even with everything blaring ----------- */
     {
         int c, i, clipped = 0;
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
-        for (c = 0; c < OPL_NUM_CH; ++c) note_on(c, (uint16_t)(0x180 + c * 16), 5, 0);
-        for (c = 0; c < OPL_NUM_CH; ++c) vdd_opl_write_reg(&opl, (uint8_t)(0xC0 + c), 0x0F);
-        vdd_opl_render(&opl, buf, OPL_NATIVE_HZ / 8);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
+        for (c = 0; c < OPL_CHANNELS; ++c) note_on(c, (uint16_t)(0x180 + c * 16), 5, 0);
+        for (c = 0; c < OPL_CHANNELS; ++c) VddOplWriteRegister(&opl, (uint8_t)(0xC0 + c), 0x0F);
+        VddOplRender(&opl, buf, OPL_NATIVE_HZ / 8);
         for (i = 0; i < OPL_NATIVE_HZ / 8; ++i)
             if (buf[i] == 32767 || buf[i] == -32768) clipped++;
         CHECK(rms(buf, OPL_NATIVE_HZ / 8) > 0, "9 channels at once: still produces signal");
@@ -478,8 +478,8 @@ int main(void)
     }
 
     /* T6: an untouched chip is silent --------------------------------------- */
-    memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
-    vdd_opl_render(&opl, buf, 4096);
+    memset(&opl, 0, sizeof opl); VddOplReset(&opl);
+    VddOplRender(&opl, buf, 4096);
     CHECK(rms(buf, 4096) == 0, "reset: silent until a note is keyed on");
 
     /* ══ OPL3 (YMF262), GH #232 ═══════════════════════════════════════════════ */
@@ -500,24 +500,24 @@ int main(void)
     /* T8: NEW gates array 1 ------------------------------------------------- */
     {   long r_off, r_on;
         opl3_fresh(0);
-        op9(vdd_opl_op_index(9, 0), 0, 0); op9(vdd_opl_op_index(9, 1), 1, 0);
+        op9(VddOplOperatorIndex(9, 0), 0, 0); op9(VddOplOperatorIndex(9, 1), 1, 0);
         ch9(9, 0x31, 0x200, 4);                     /* array 1 ch 0: L+R, additive */
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         r_off = rms_side(st_buf, 4096, 0) + rms_side(st_buf, 4096, 1);
-        CHECK(opl.ch[9].keyon == 1 && r_off == 0,
+        CHECK(opl.Channels[9].IsKeyOn == 1 && r_off == 0,
               "NEW clear: an array-1 voice latches (keyed) but is SILENT");
         w9(0x105, 0x01);
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         r_on = rms_side(st_buf, 4096, 0);
         CHECK(r_on > 10000 && rms_side(st_buf, 4096, 1) == r_on,
               "NEW set: the latched array-1 voice sounds (both sides, C0=0x31)");
         /* an OPL2 has no array 1 at all: the same writes produce nothing       */
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
-        op9(vdd_opl_op_index(9, 0), 0, 0); op9(vdd_opl_op_index(9, 1), 1, 0);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
+        op9(VddOplOperatorIndex(9, 0), 0, 0); op9(VddOplOperatorIndex(9, 1), 1, 0);
         ch9(9, 0x31, 0x200, 4);
         w9(0x105, 0x01);
-        vdd_opl_render_st(&opl, st_buf, 4096);
-        CHECK(rms_side(st_buf, 4096, 0) == 0 && !vdd_opl_new_mode(&opl),
+        VddOplRenderStereo(&opl, st_buf, 4096);
+        CHECK(rms_side(st_buf, 4096, 0) == 0 && !VddOplIsNewMode(&opl),
               "OPL2: array-1 writes (and NEW) do nothing");
     }
 
@@ -532,26 +532,26 @@ int main(void)
         for (k = 0; k < 5; ++k) {
             long l, r;
             opl3_fresh(1);
-            op9(vdd_opl_op_index(2, 0), 0, 0); op9(vdd_opl_op_index(2, 1), 1, 0);
+            op9(VddOplOperatorIndex(2, 0), 0, 0); op9(VddOplOperatorIndex(2, 1), 1, 0);
             ch9(2, rt[k].c0, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 4096);
+            VddOplRenderStereo(&opl, st_buf, 4096);
             l = rms_side(st_buf, 4096, 0); r = rms_side(st_buf, 4096, 1);
             CHECK((rt[k].l ? l > 10000 : l == 0) && (rt[k].r ? r > 10000 : r == 0) &&
                   (!(rt[k].l && rt[k].r) || l == r), rt[k].m);
         }
         /* NEW clear: routing bits are not looked at -- mono to both, as an OPL2 */
         opl3_fresh(0);
-        op9(vdd_opl_op_index(2, 0), 0, 0); op9(vdd_opl_op_index(2, 1), 1, 0);
+        op9(VddOplOperatorIndex(2, 0), 0, 0); op9(VddOplOperatorIndex(2, 1), 1, 0);
         ch9(2, 0x11, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         CHECK(rms_side(st_buf, 4096, 0) > 10000 &&
               rms_side(st_buf, 4096, 1) == rms_side(st_buf, 4096, 0),
               "stereo: NEW clear ignores C0 bits 4-5 -- mono to both sides");
         /* mono render of a left-only voice: the (L+R)/2 fold                     */
         opl3_fresh(1);
-        op9(vdd_opl_op_index(2, 0), 0, 0); op9(vdd_opl_op_index(2, 1), 1, 0);
+        op9(VddOplOperatorIndex(2, 0), 0, 0); op9(VddOplOperatorIndex(2, 1), 1, 0);
         ch9(2, 0x11, 0x200, 4);
-        vdd_opl_render(&opl, buf, 4096);
+        VddOplRender(&opl, buf, 4096);
         { long rm = rms(buf, 4096);
           CHECK(rm > 10000 / 4 && rm < 30000000, "mono render with NEW set: folds (L+R)/2"); }
     }
@@ -569,8 +569,8 @@ int main(void)
             { 1, 0, 1, 1 } };       /* 1,1  1 + (2->3) + 4                        */
         static const char *algname[4] = { "FM-FM", "FM-AM", "AM-FM", "AM-AM" };
         int alg, k, ops[4];
-        ops[0] = vdd_opl_op_index(0, 0); ops[1] = vdd_opl_op_index(0, 1);
-        ops[2] = vdd_opl_op_index(3, 0); ops[3] = vdd_opl_op_index(3, 1);
+        ops[0] = VddOplOperatorIndex(0, 0); ops[1] = VddOplOperatorIndex(0, 1);
+        ops[2] = VddOplOperatorIndex(3, 0); ops[3] = VddOplOperatorIndex(3, 1);
         for (alg = 0; alg < 4; ++alg) {
             int ok = 1;
             char msg[96];
@@ -581,7 +581,7 @@ int main(void)
                 for (j = 0; j < 4; ++j) op9(ops[j], j == k, 0);
                 w9(0xC3, (uint8_t)(0x30 | (alg & 1)));   /* ch3: CNT2 (routing ignored) */
                 ch9(0, (uint8_t)(0x30 | (alg >> 1)), 0x200, 4);
-                vdd_opl_render_st(&opl, st_buf, 4096);
+                VddOplRenderStereo(&opl, st_buf, 4096);
                 l = rms_side(st_buf, 4096, 0);
                 if (audible[alg][k] ? !(l > 10000) : (l != 0)) {
                     ok = 0;
@@ -597,12 +597,12 @@ int main(void)
             opl3_fresh(1); w9(0x104, 0x01);
             op9(ops[0], 0, 0); op9(ops[1], 0, 0); op9(ops[2], 0, 0); op9(ops[3], 1, 0);
             w9(0xC3, 0x30); ch9(0, 0x30, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 8192);
+            VddOplRenderStereo(&opl, st_buf, 8192);
             hs = fnv16(2166136261u, st_buf, 2 * 8192);
             opl3_fresh(1); w9(0x104, 0x01);
             op9(ops[0], 1, 0); op9(ops[1], 1, 0); op9(ops[2], 1, 0); op9(ops[3], 1, 0);
             w9(0xC3, 0x30); ch9(0, 0x30, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 8192);
+            VddOplRenderStereo(&opl, st_buf, 8192);
             CHECK(rms_side(st_buf, 8192, 0) > 0 && fnv16(2166136261u, st_buf, 2 * 8192) != hs,
                   "4-op FM-FM: live modulators 1-3 change operator 4's output");
         }
@@ -612,7 +612,7 @@ int main(void)
             opl3_fresh(0); w9(0x104, 0x01);
             op9(ops[0], 0, 0); op9(ops[1], 0, 0); op9(ops[2], 0, 0); op9(ops[3], 1, 0);
             w9(0xC3, 0x30); ch9(0, 0x30, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 4096);
+            VddOplRenderStereo(&opl, st_buf, 4096);
             l2 = rms_side(st_buf, 4096, 0);
             CHECK(l2 == 0, "4-op needs NEW: with NEW clear, ch3's carrier is not keyed by ch0");
         }
@@ -620,7 +620,7 @@ int main(void)
         {   opl3_fresh(1); w9(0x104, 0x01);
             op9(ops[2], 0, 0); op9(ops[3], 1, 0);
             ch9(3, 0x31, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 4096);
+            VddOplRenderStereo(&opl, st_buf, 4096);
             CHECK(rms_side(st_buf, 4096, 0) == 0, "4-op: keying the SECOND channel sounds nothing");
         }
     }
@@ -630,23 +630,23 @@ int main(void)
         int w, zeros, i, flat;
         /* reference: a plain sine carrier, NEW clear, then NEW set              */
         opl3_fresh(0);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 0);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 0);
         ch9(1, 0x31, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096); h_sine = fnv16(2166136261u, st_buf, 8192);
+        VddOplRenderStereo(&opl, st_buf, 4096); h_sine = fnv16(2166136261u, st_buf, 8192);
         opl3_fresh(1);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 0);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 0);
         ch9(1, 0x31, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096); h_sine_new = fnv16(2166136261u, st_buf, 8192);
+        VddOplRenderStereo(&opl, st_buf, 4096); h_sine_new = fnv16(2166136261u, st_buf, 8192);
         for (w = 4; w < 8; ++w) {
             char msg[96];
             opl3_fresh(0);
-            op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, (uint8_t)w);
+            op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, (uint8_t)w);
             ch9(1, 0x31, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 4096); h_w = fnv16(2166136261u, st_buf, 8192);
+            VddOplRenderStereo(&opl, st_buf, 4096); h_w = fnv16(2166136261u, st_buf, 8192);
             opl3_fresh(1);
-            op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, (uint8_t)w);
+            op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, (uint8_t)w);
             ch9(1, 0x31, 0x200, 4);
-            vdd_opl_render_st(&opl, st_buf, 4096); h_w_new = fnv16(2166136261u, st_buf, 8192);
+            VddOplRenderStereo(&opl, st_buf, 4096); h_w_new = fnv16(2166136261u, st_buf, 8192);
             snprintf(msg, sizeof msg, "waveform %d: NEW clear plays wave %d (2 bits), NEW set plays %d",
                      w, w & 3, w);
             /* w & 3 == 0 for 4, so NEW clear == sine; 5-7 fold onto 1-3 (checked below) */
@@ -654,49 +654,49 @@ int main(void)
         }
         /* waveform 5 with NEW clear is waveform 1                                */
         opl3_fresh(0);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 5);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 5);
         ch9(1, 0x31, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096); h_w = fnv16(2166136261u, st_buf, 8192);
+        VddOplRenderStereo(&opl, st_buf, 4096); h_w = fnv16(2166136261u, st_buf, 8192);
         opl3_fresh(0);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 1);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 1);
         ch9(1, 0x31, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         CHECK(h_w == fnv16(2166136261u, st_buf, 8192), "waveform 5 with NEW clear == waveform 1");
         /* shapes: 4 is silent for half of each cycle; 6 is a square, flat-topped */
         opl3_fresh(1);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 4);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 4);
         ch9(1, 0x31, 0x200, 4);                     /* 128 samples per cycle      */
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         for (zeros = 0, i = 0; i < 4096; ++i) if (st_buf[2 * i] == 0) zeros++;
         printf("        wave 4: %d of 4096 samples silent\n", zeros);
         CHECK(zeros > 1900 && zeros < 2300, "waveform 4: silent through the second half-cycle");
         opl3_fresh(1);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 6);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 6);
         ch9(1, 0x31, 0x200, 4);
-        vdd_opl_render_st(&opl, st_buf, 4096);
+        VddOplRenderStereo(&opl, st_buf, 4096);
         /* from sample 8: sample 0 precedes the AR=15 attack's first tick        */
         for (flat = 0, i = 8; i < 4096; ++i)
             if (st_buf[2 * i] == st_buf[16] || st_buf[2 * i] == -st_buf[16]) flat++;
         printf("        wave 6: level %d, %d of 4088 samples at +-level\n", st_buf[16], flat);
         CHECK(st_buf[16] > 3000 && flat == 4088, "waveform 6: a square (one magnitude, both signs)");
         /* OPL2: WSE (0x01 bit 5) gates waveform select; the OPL3 has no WSE     */
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 2);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 2);
         ch9(1, 0x01, 0x200, 4);
-        vdd_opl_render(&opl, buf, 4096);
+        VddOplRender(&opl, buf, 4096);
         { int neg = 0; for (i = 0; i < 4096; ++i) if (buf[i] < 0) neg++;
           CHECK(neg > 1500, "OPL2, WSE clear: 0xE0=2 still plays a sine (negative half present)"); }
-        memset(&opl, 0, sizeof opl); vdd_opl_reset(&opl);
+        memset(&opl, 0, sizeof opl); VddOplReset(&opl);
         w9(0x01, 0x20);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 2);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 2);
         ch9(1, 0x01, 0x200, 4);
-        vdd_opl_render(&opl, buf, 4096);
+        VddOplRender(&opl, buf, 4096);
         { int neg = 0; for (i = 0; i < 4096; ++i) if (buf[i] < 0) neg++;
           CHECK(neg == 0, "OPL2, WSE set: waveform 2 (|sine|) -- no negative samples"); }
         opl3_fresh(0);
-        op9(vdd_opl_op_index(1, 0), 0, 0); op9(vdd_opl_op_index(1, 1), 1, 2);
+        op9(VddOplOperatorIndex(1, 0), 0, 0); op9(VddOplOperatorIndex(1, 1), 1, 2);
         ch9(1, 0x01, 0x200, 4);
-        vdd_opl_render(&opl, buf, 4096);
+        VddOplRender(&opl, buf, 4096);
         { int neg = 0; for (i = 0; i < 4096; ++i) if (buf[i] < 0) neg++;
           CHECK(neg == 0, "OPL3, NEW clear, no WSE: waveform 2 plays (no WSE on a YMF262)"); }
     }
@@ -704,12 +704,12 @@ int main(void)
     /* T12: 18 voices, full blast, stereo -- nothing leaves int16 ------------- */
     {   int c, i, clipped = 0;
         opl3_fresh(1);
-        for (c = 0; c < OPL3_NUM_CH; ++c) {
-            op9(vdd_opl_op_index(c, 0), 1, (uint8_t)(c & 7));
-            op9(vdd_opl_op_index(c, 1), 1, (uint8_t)((c + 3) & 7));
+        for (c = 0; c < OPL3_CHANNELS; ++c) {
+            op9(VddOplOperatorIndex(c, 0), 1, (uint8_t)(c & 7));
+            op9(VddOplOperatorIndex(c, 1), 1, (uint8_t)((c + 3) & 7));
             ch9(c, (uint8_t)(0x3F), (uint16_t)(0x180 + c * 16), 5);
         }
-        vdd_opl_render_st(&opl, st_buf, 8192);
+        VddOplRenderStereo(&opl, st_buf, 8192);
         for (i = 0; i < 2 * 8192; ++i) if (st_buf[i] == 32767 || st_buf[i] == -32768) clipped++;
         CHECK(rms_side(st_buf, 8192, 0) > 0 && rms_side(st_buf, 8192, 1) > 0,
               "18 channels at once: both sides carry signal");

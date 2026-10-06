@@ -57,7 +57,7 @@ typedef struct audio_resampler {
 #define AUDIO_SPK_HZ_MAX 20000u   /* above it, nothing at 44.1 kHz is audible    */
 
 typedef struct audio_state {
-    opl_state *opl;
+    OPL_STATE *opl;
     SB_STATE  *sb;
     gus_state *gus;           /* Gravis UltraSound; NULL = not fitted (s80)        */
     PEMU8K_STATE emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233)  */
@@ -92,7 +92,7 @@ typedef struct audio_state {
 /* Set up the mixer for its two sources. Safe to call again after a device's rate
    changes; the resamplers re-derive their step from the device on each mix.
    Leaves the speaker unfitted, the master volume at 100 and unmuted. */
-void vdd_audio_init(audio_state *st, opl_state *opl, SB_STATE *sb, uint32_t out_hz);
+void vdd_audio_init(audio_state *st, OPL_STATE *opl, SB_STATE *sb, uint32_t out_hz);
 
 /* Fit (or unfit) the PC speaker. `enable` 0 leaves the VDD on the bus -- port
    0x61 must keep answering, guests time delay loops off its refresh bit -- and

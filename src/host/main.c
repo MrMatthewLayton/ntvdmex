@@ -918,7 +918,7 @@ static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
 static int    g_spk_real;
 static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
 static DMA_STATE    g_dma;       static NTVDD_DEVICE g_dma_dev;
-static opl_state    g_opl;       static NTVDD_DEVICE g_opl_dev;
+static OPL_STATE    g_opl;       static NTVDD_DEVICE g_opl_dev;
 static SB_STATE     g_sb;        static NTVDD_DEVICE g_sb_dev;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
 static gus_state    g_gus;       static NTVDD_DEVICE g_gus_dev;
@@ -4660,7 +4660,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
             audio_wave_midi_silence(&g_wave);
             HOST_LOCK();
             (void)ch;
-            vdd_opl_all_notes_off(&g_opl);              /* both banks, and the rhythm drums (#232) */
+            VddOplAllNotesOff(&g_opl);              /* both banks, and the rhythm drums (#232) */
             HOST_UNLOCK();
         }
         if (m->tsr_pending) {
@@ -6003,7 +6003,7 @@ static void opl_pump_time(void)
     if (us < 20) return;                                /* carry sub-quantum time   */
     s_last = now;
     HOST_LOCK();
-    vdd_opl_add_us(&g_opl, us);
+    VddOplAddMicroseconds(&g_opl, us);
     HOST_UNLOCK();
 }
 
@@ -8918,7 +8918,7 @@ static void exec_mach_restore(int d, char **pp)
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
-    VddSbReset(&g_sb); vdd_opl_reset(&g_opl); vdd_gus_reset(&g_gus);
+    VddSbReset(&g_sb); VddOplReset(&g_opl); vdd_gus_reset(&g_gus);
     if (g_awe_on) VddEmu8kReset(&g_emu8k);    /* #233 */
     VddMpuReset(&g_mpu); VddSpeakerReset(&g_spk);
     remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_exec_mach[d].vmode
@@ -12219,7 +12219,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_behave_dos622 = (s->v[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
     /* #232: OPL2 (an AdLib: bank-1 ports dead) or OPL3 (YMF262). Live -- the chip model
        reads it on every access, as a jumpered card would at power-up. */
-    g_opl.opl3 = (uint8_t)(s->v[SET_OPL] == 1 ? 1 : 0);
+    g_opl.IsOpl3 = (uint8_t)(s->v[SET_OPL] == 1 ? 1 : 0);
     g_frameskip      = (int)s->v[SET_FRAMESKIP];
     g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
     g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);
@@ -14465,7 +14465,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              it. Same failure the OPL had, on a device we do not even own. */
         pcspk_close(&g_pcspk);
         HOST_LOCK();
-        vdd_opl_reset(&g_opl);                    /* all voices off, registers clear */
+        VddOplReset(&g_opl);                    /* all voices off, registers clear */
         HOST_UNLOCK();
         if (g_key_event) SetEvent(g_key_event);   /* unblock the V86 thread        */
         PostQuitMessage(0);
@@ -30111,7 +30111,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_my_pm_detect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     g_opltrace_on = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_opltrace_on) g_opl.trace = opl_trace_write;
+    if (g_opltrace_on) g_opl.Trace = opl_trace_write;
     if (g_interp12) g_no_a000 = 1;              /* interpreting instead of trapping */
     /* Headless cap override (decimal ms on the share). Read before the deadline thread
        starts, since that thread sleeps on it. Clamped: below the default a typo would
@@ -32146,8 +32146,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          with the exact s61 thread landscape and cannot regress on its account. */
     g_dma_dev = VddDmaDevice(&g_dma);
     VddBusAdd(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
-    g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
-    g_opl_dev = vdd_opl_device(&g_opl);
+    g_opl.IsExternalClock = 1;                        /* exec loop pumps real elapsed us */
+    g_opl_dev = VddOplDevice(&g_opl);
     VddBusAdd(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
     g_sb.Dma = &g_dma; g_sb.Opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
     /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
@@ -33765,7 +33765,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_SbAbsent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
-                g_opl_absent = g_SbAbsent;      /* one knob, both devices unfitted */
+                g_OplAbsent = g_SbAbsent;      /* one knob, both devices unfitted */
                 if (g_SbAbsent) {
                     p = zput(p, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -37115,16 +37115,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " master=");                p = zhex(p, g_audio.master);
     p = zput(p, " muted=");                 p = zhex(p, (DWORD)g_audio.muted);
     p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.prof_writes);
-        p = zput(p, " keyons=");              p = zhex(p, g_opl.prof_keyons);
-        p = zput(p, " bd_writes=");           p = zhex(p, g_opl.prof_bd_writes);
-        p = zput(p, " bd_or=");               p = zhexb(p, g_opl.prof_bd_or);
-        p = zput(p, " keyon_am=");            p = zhex(p, g_opl.prof_keyon_am);
-        p = zput(p, " keyon_vib=");           p = zhex(p, g_opl.prof_keyon_vib);
-        p = zput(p, " am_ops=");              p = zhex(p, g_opl.prof_am_ops);
-        p = zput(p, " vib_ops=");             p = zhex(p, g_opl.prof_vib_ops);
-        p = zput(p, " waves=");               p = zhexb(p, g_opl.prof_wave_mask);
-        p = zput(p, " wse=");                 p = zhexb(p, g_opl.prof_wse);
+    p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.ProfileWrites);
+        p = zput(p, " keyons=");              p = zhex(p, g_opl.ProfileKeyOns);
+        p = zput(p, " bd_writes=");           p = zhex(p, g_opl.ProfileBdWrites);
+        p = zput(p, " bd_or=");               p = zhexb(p, g_opl.ProfileBdOr);
+        p = zput(p, " keyon_am=");            p = zhex(p, g_opl.ProfileKeyOnAm);
+        p = zput(p, " keyon_vib=");           p = zhex(p, g_opl.ProfileKeyOnVibrato);
+        p = zput(p, " am_ops=");              p = zhex(p, g_opl.ProfileAmOperators);
+        p = zput(p, " vib_ops=");             p = zhex(p, g_opl.ProfileVibratoOperators);
+        p = zput(p, " waves=");               p = zhexb(p, g_opl.ProfileWaveMask);
+        p = zput(p, " wse=");                 p = zhexb(p, g_opl.ProfileWaveformSelect);
         p = zput(p, "\r\n");
         /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
            cannot tell "set once at init" from "drums play throughout" -- it once
@@ -37132,11 +37132,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            key-on edges per voice. All five are synthesised since #139 (hi-hat,
            snare and cymbal were silent before it and this line said so); the counts
            stay because they say how much percussion a game actually uses. */
-        p = zput(p, "STAGE2: opl rhythm: bassdrum="); p = zhex(p, g_opl.prof_rhythm_hits[4]);
-        p = zput(p, " tomtom=");                      p = zhex(p, g_opl.prof_rhythm_hits[2]);
-        p = zput(p, " hihat=");                       p = zhex(p, g_opl.prof_rhythm_hits[0]);
-        p = zput(p, " snare=");                       p = zhex(p, g_opl.prof_rhythm_hits[3]);
-        p = zput(p, " cymbal=");                      p = zhex(p, g_opl.prof_rhythm_hits[1]);
+        p = zput(p, "STAGE2: opl rhythm: bassdrum="); p = zhex(p, g_opl.ProfileRhythmHits[4]);
+        p = zput(p, " tomtom=");                      p = zhex(p, g_opl.ProfileRhythmHits[2]);
+        p = zput(p, " hihat=");                       p = zhex(p, g_opl.ProfileRhythmHits[0]);
+        p = zput(p, " snare=");                       p = zhex(p, g_opl.ProfileRhythmHits[3]);
+        p = zput(p, " cymbal=");                      p = zhex(p, g_opl.ProfileRhythmHits[1]);
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);

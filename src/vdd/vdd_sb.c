@@ -306,13 +306,13 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          meaning of another array-0 address mirror -- the SB Pro 1's second (right)
          OPL2 is not modelled. */
     case SB_PORT_FM_ADDRESS: case SB_PORT_ADLIB_ADDRESS:                         /* FM address, array 0             */
-        if (state->Opl) vdd_opl_write_addr(state->Opl, 0, byteValue);
+        if (state->Opl) VddOplWriteAddress(state->Opl, 0, byteValue);
         break;
     case SB_PORT_FM_ADDRESS_HIGH:                                   /* FM address, array 1 on an OPL3  */
-        if (state->Opl) vdd_opl_write_addr(state->Opl, state->Opl->opl3 ? 1 : 0, byteValue);
+        if (state->Opl) VddOplWriteAddress(state->Opl, state->Opl->IsOpl3 ? 1 : 0, byteValue);
         break;
     case SB_PORT_FM_DATA: case SB_PORT_FM_DATA_HIGH: case SB_PORT_ADLIB_DATA:               /* FM data                         */
-        if (state->Opl) vdd_opl_write_data(state->Opl, byteValue);
+        if (state->Opl) VddOplWriteData(state->Opl, byteValue);
         break;
     case SB_PORT_MIXER_ADDRESS: state->MixerIndex = byteValue; break;
     case SB_PORT_MIXER_DATA: state->Mixer[state->MixerIndex] = byteValue; break;
@@ -345,10 +345,10 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     (VOID)width;
     switch (offset) {
     case SB_PORT_FM_ADDRESS: case SB_PORT_ADLIB_ADDRESS:                         /* FM status through the mirror    */
-        *value = state->Opl ? vdd_opl_read_status(state->Opl) : SB_FLOATING_BUS;
+        *value = state->Opl ? VddOplReadStatus(state->Opl) : SB_FLOATING_BUS;
         break;
     case SB_PORT_FM_ADDRESS_HIGH:                                   /* OPL3: status at A1 high too     */
-        *value = (state->Opl && state->Opl->opl3) ? vdd_opl_read_status(state->Opl) : SB_FLOATING_BUS;
+        *value = (state->Opl && state->Opl->IsOpl3) ? VddOplReadStatus(state->Opl) : SB_FLOATING_BUS;
         break;
     case SB_PORT_MIXER_DATA:                                   /* mixer data                      */
         /* 0x82 is the IRQ-status register: bit 0 = 8-bit DMA, bit 1 = 16-bit. */
@@ -721,7 +721,7 @@ UINT32 VddSbRenderStereo(PSB_STATE state, INT16 *output, UINT32 frames)
 VOID VddSbReset(PVOID context)
 {
     PSB_STATE state = (PSB_STATE)context;
-    PVDD_BUS bus = state->Bus; PDMA_STATE dma = state->Dma; opl_state *opl = state->Opl;
+    PVDD_BUS bus = state->Bus; PDMA_STATE dma = state->Dma; OPL_STATE *opl = state->Opl;
     WORD basePort = state->BasePort;
     BYTE irq = state->Irq, dma8 = state->Dma8, dma16 = state->Dma16;
     UINT32 dspWrites = state->DspWrites, blocks = state->Blocks;

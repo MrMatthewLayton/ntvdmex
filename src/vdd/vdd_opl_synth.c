@@ -157,19 +157,19 @@ static int32_t opl_wave(uint8_t wave, uint32_t phase_idx, int *neg, int *mute)
        OPL3, NEW=0  2 bits. The YMF262 has no WSE: its register 0x01 is the LSI
                     test register only, and the OPL2 waveforms are always live.
        OPL3, NEW=1  all 3 bits -- waveforms 4-7. */
-static uint8_t opl_eff_wave(const opl_state *st, const opl_op *o)
+static uint8_t opl_eff_wave(const OPL_STATE *st, const OPL_OPERATOR *o)
 {
-    if (st->opl3) return (uint8_t)(o->wave & ((st->reg[OPL3_REG_NEW] & 1) ? 7 : 3));
-    return (st->reg[0x01] & 0x20) ? (uint8_t)(o->wave & 3) : 0;
+    if (st->IsOpl3) return (uint8_t)(o->Waveform & ((st->Registers[OPL3_REGISTER_NEW] & 1) ? 7 : 3));
+    return (st->Registers[0x01] & 0x20) ? (uint8_t)(o->Waveform & 3) : 0;
 }
 
 /* --- envelope ------------------------------------------------------------- */
 /* Effective 6-bit rate: the 4-bit register value, scaled up by where the note
    sits on the keyboard. High notes decay faster on a real OPL, and KSR selects
    how strongly that applies. */
-static int opl_eff_rate(const opl_state *st, int chi, uint8_t r4, uint8_t ksr)
+static int opl_eff_rate(const OPL_STATE *st, int chi, uint8_t r4, uint8_t ksr)
 {
-    int ksr_val = (st->ch[chi].block << 1) | ((st->ch[chi].fnum >> 9) & 1);
+    int ksr_val = (st->Channels[chi].Block << 1) | ((st->Channels[chi].FNumber >> 9) & 1);
     int rof = ksr ? ksr_val : (ksr_val >> 2);
     int r;
     if (!r4) return 0;                          /* rate 0 never moves             */
@@ -181,61 +181,61 @@ static int opl_eff_rate(const opl_state *st, int chi, uint8_t r4, uint8_t ksr)
 static int32_t opl_eg_step(int rate)
 {
     if (!rate) return 0;                        /* rate 0 never moves             */
-    return (int32_t)(4 + (rate & 3)) << (OPL_ENV_SHIFT - OPL_EG_DIV_SHIFT + (rate >> 2));
+    return (int32_t)(4 + (rate & 3)) << (OPL_ENVELOPE_SHIFT - OPL_EG_DIV_SHIFT + (rate >> 2));
 }
 
-static void opl_env_tick(opl_state *st, int chi, int opi)
+static void opl_env_tick(OPL_STATE *st, int chi, int opi)
 {
-    opl_op *o = &st->op[opi];
+    OPL_OPERATOR *o = &st->Operators[opi];
     int32_t step;
-    switch (o->eg_state) {
-    case OPL_EG_ATTACK:
-        step = opl_eg_step(opl_eff_rate(st, chi, o->ar, o->ksr));
+    switch (o->EnvelopeState) {
+    case OPL_ENVELOPE_ATTACK:
+        step = opl_eg_step(opl_eff_rate(st, chi, o->AttackRate, o->KeyScaleRate));
         /* AR=0 is not "instant", it is NEVER: the operator stays fully attenuated
            and the note is silent. Confirmed against the reference, which produces
            a peak of 1 against our 4096 before this was fixed -- reading it the
            other way turns silent voices into loud ones. */
         if (!step) break;
-        if (o->ar == 15) { o->env = 0; o->eg_state = OPL_EG_DECAY; break; }
+        if (o->AttackRate == 15) { o->Envelope = 0; o->EnvelopeState = OPL_ENVELOPE_DECAY; break; }
         /* Attack is exponential: the closer to full volume, the slower it moves.
            Scaling the step by the remaining attenuation gives that curve without
            a second table. The +1 unit keeps it moving once the product would
            otherwise round to nothing, so a slow attack still finishes. */
-        { int64_t d = (((int64_t)step * (o->env + (1 << OPL_ENV_SHIFT))) >> OPL_ENV_SHIFT);
+        { int64_t d = (((int64_t)step * (o->Envelope + (1 << OPL_ENVELOPE_SHIFT))) >> OPL_ENVELOPE_SHIFT);
           d = (d * OPL_EG_ATTACK_NUM) >> OPL_EG_ATTACK_SHIFT;
           if (d < 1) d = 1;
-          o->env -= (int32_t)d; }
-        if (o->env <= 0) { o->env = 0; o->eg_state = OPL_EG_DECAY; }
+          o->Envelope -= (int32_t)d; }
+        if (o->Envelope <= 0) { o->Envelope = 0; o->EnvelopeState = OPL_ENVELOPE_DECAY; }
         break;
-    case OPL_EG_DECAY:
-        step = opl_eg_step(opl_eff_rate(st, chi, o->dr, o->ksr));
-        o->env += step;
+    case OPL_ENVELOPE_DECAY:
+        step = opl_eg_step(opl_eff_rate(st, chi, o->DecayRate, o->KeyScaleRate));
+        o->Envelope += step;
         /* SL is 4 bits of 3 dB each; 15 means "all the way down". */
-        { int32_t sl = (o->sl == 15) ? (OPL_ENV_MAX << OPL_ENV_SHIFT)
-                                     : ((int32_t)o->sl * 16) << OPL_ENV_SHIFT;
-          if (o->env >= sl) { o->env = sl; o->eg_state = OPL_EG_SUSTAIN; } }
+        { int32_t sl = (o->SustainLevel == 15) ? (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)
+                                     : ((int32_t)o->SustainLevel * 16) << OPL_ENVELOPE_SHIFT;
+          if (o->Envelope >= sl) { o->Envelope = sl; o->EnvelopeState = OPL_ENVELOPE_SUSTAIN; } }
         break;
-    case OPL_EG_SUSTAIN:
+    case OPL_ENVELOPE_SUSTAIN:
         /* EGT selects sustaining (hold) versus percussive (keep decaying). */
-        if (!o->egt) {
-            o->env += opl_eg_step(opl_eff_rate(st, chi, o->rr, o->ksr));
-            if (o->env >= (OPL_ENV_MAX << OPL_ENV_SHIFT)) {
-                o->env = OPL_ENV_MAX << OPL_ENV_SHIFT; o->eg_state = OPL_EG_OFF;
+        if (!o->EnvelopeType) {
+            o->Envelope += opl_eg_step(opl_eff_rate(st, chi, o->ReleaseRate, o->KeyScaleRate));
+            if (o->Envelope >= (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)) {
+                o->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT; o->EnvelopeState = OPL_ENVELOPE_OFF;
             }
         }
         break;
-    case OPL_EG_RELEASE:
-        o->env += opl_eg_step(opl_eff_rate(st, chi, o->rr, o->ksr));
-        if (o->env >= (OPL_ENV_MAX << OPL_ENV_SHIFT)) {
-            o->env = OPL_ENV_MAX << OPL_ENV_SHIFT; o->eg_state = OPL_EG_OFF;
+    case OPL_ENVELOPE_RELEASE:
+        o->Envelope += opl_eg_step(opl_eff_rate(st, chi, o->ReleaseRate, o->KeyScaleRate));
+        if (o->Envelope >= (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)) {
+            o->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT; o->EnvelopeState = OPL_ENVELOPE_OFF;
         }
         break;
     default:
-        o->env = OPL_ENV_MAX << OPL_ENV_SHIFT;
+        o->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
         break;
     }
-    if (o->env < 0) o->env = 0;
-    if (o->env > (OPL_ENV_MAX << OPL_ENV_SHIFT)) o->env = OPL_ENV_MAX << OPL_ENV_SHIFT;
+    if (o->Envelope < 0) o->Envelope = 0;
+    if (o->Envelope > (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)) o->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
 }
 
 /* --- the two low-frequency oscillators ------------------------------------ */
@@ -249,11 +249,11 @@ static void opl_env_tick(opl_state *st, int chi, int opi)
 #define OPL_AM_STEPS  52
 #define OPL_AM_PEAK   26
 
-static int32_t opl_trem_units(const opl_state *st)
+static int32_t opl_trem_units(const OPL_STATE *st)
 {
-    uint32_t s = (st->lfo_count >> OPL_AM_SHIFT) % OPL_AM_STEPS;
+    uint32_t s = (st->LfoCount >> OPL_AM_SHIFT) % OPL_AM_STEPS;
     int32_t  t = (s < OPL_AM_PEAK) ? (int32_t)s : (int32_t)(OPL_AM_STEPS - s);
-    return (st->reg[0xBD] & OPL_BD_DAM) ? t : (t >> 2);
+    return (st->Registers[0xBD] & OPL_BD_TREMOLO_DEPTH) ? t : (t >> 2);
 }
 
 /* VIBRATO. MEASURED: eight steps of 1024 samples -- 49716/8192 = 6.069 Hz, which
@@ -267,10 +267,10 @@ static int32_t opl_trem_units(const opl_state *st)
 #define OPL_VIB_SHIFT 10        /* 1024 samples per vibrato step                  */
 static const signed char opl_vib_pat[8] = { 0, 1, 2, 1, 0, -1, -2, -1 };
 
-static int32_t opl_vib_offset(const opl_state *st, int chi)
+static int32_t opl_vib_offset(const OPL_STATE *st, int chi)
 {
-    int32_t full = (int32_t)st->ch[chi].fnum >> ((st->reg[0xBD] & OPL_BD_DVB) ? 7 : 8);
-    int     t    = opl_vib_pat[(st->lfo_count >> OPL_VIB_SHIFT) & 7];
+    int32_t full = (int32_t)st->Channels[chi].FNumber >> ((st->Registers[0xBD] & OPL_BD_VIBRATO_DEPTH) ? 7 : 8);
+    int     t    = opl_vib_pat[(st->LfoCount >> OPL_VIB_SHIFT) & 7];
     int32_t v    = (t == 2 || t == -2) ? full : (t ? (full >> 1) : 0);
     return (t < 0) ? -v : v;
 }
@@ -281,30 +281,30 @@ static int32_t opl_vib_offset(const opl_state *st, int chi)
    Vibrato rides on the F-number itself, so it scales with block and multiplier
    exactly as the pitch does -- which is why the effect is a constant interval
    rather than a constant number of hertz. */
-static uint32_t opl_phase_inc(const opl_state *st, int chi, const opl_op *o)
+static uint32_t opl_phase_inc(const OPL_STATE *st, int chi, const OPL_OPERATOR *o)
 {
-    int32_t fnum = (int32_t)st->ch[chi].fnum;
+    int32_t fnum = (int32_t)st->Channels[chi].FNumber;
     uint32_t base;
-    if (o->vib) fnum += opl_vib_offset(st, chi);
+    if (o->Vibrato) fnum += opl_vib_offset(st, chi);
     if (fnum < 0) fnum = 0;
-    base = (uint32_t)fnum << st->ch[chi].block;
-    return (base * opl_mult2[o->mult]) >> 1;
+    base = (uint32_t)fnum << st->Channels[chi].Block;
+    return (base * opl_mult2[o->Multiplier]) >> 1;
 }
 
 /* Static attenuation from total level and key scaling, in log units. */
-static int32_t opl_static_att(const opl_state *st, int chi, const opl_op *o)
+static int32_t opl_static_att(const OPL_STATE *st, int chi, const OPL_OPERATOR *o)
 {
-    int32_t att = (int32_t)o->tl * OPL_TL_TO_LOG;
+    int32_t att = (int32_t)o->TotalLevel * OPL_TL_TO_LOG;
     /* The octave origin is 8, not 7. Measured: at KSL=3 with F-num's top nibble at
        15 the reference is still at full volume in block 0 and down 6 dB in block 1,
        which places the zero one octave lower than this had it. Being one octave out
        under-attenuates every high note -- at block 7 by 6 dB, and by 18 dB once the
        KSL=3 shift is applied -- so bass and treble sit at the wrong relative
        levels across the whole keyboard. */
-    int32_t k = (int32_t)opl_kslrom[(st->ch[chi].fnum >> 6) & 0x0F]
-              - 8 * (8 - (int32_t)st->ch[chi].block);
+    int32_t k = (int32_t)opl_kslrom[(st->Channels[chi].FNumber >> 6) & 0x0F]
+              - 8 * (8 - (int32_t)st->Channels[chi].Block);
     if (k < 0) k = 0;
-    att += (k >> opl_kslshift[o->ksl]) * OPL_KSL_TO_LOG;
+    att += (k >> opl_kslshift[o->KeyScaleLevel]) * OPL_KSL_TO_LOG;
     return att;
 }
 
@@ -324,7 +324,7 @@ static int32_t opl_static_att(const opl_state *st, int chi, const opl_op *o)
 /* An operator's output at phase index `idx` (0-1023): waveform, envelope, level,
    tremolo. Split out of opl_op_sample for the rhythm voices, whose phase is not
    their own accumulator's. */
-static int32_t opl_op_out(const opl_state *st, int chi, const opl_op *o, uint32_t idx)
+static int32_t opl_op_out(const OPL_STATE *st, int chi, const OPL_OPERATOR *o, uint32_t idx)
 {
     int32_t logv, att, amp;
     int neg = 0, mute = 0;
@@ -332,19 +332,19 @@ static int32_t opl_op_out(const opl_state *st, int chi, const opl_op *o, uint32_
     logv = opl_wave(opl_eff_wave(st, o), idx & 0x3FF, &neg, &mute);
     if (mute) return 0;
 
-    att = logv + (o->env >> OPL_ENV_SHIFT) * OPL_ENV_TO_LOG + opl_static_att(st, chi, o);
-    if (o->am) att += opl_trem_units(st) * OPL_ENV_TO_LOG;
+    att = logv + (o->Envelope >> OPL_ENVELOPE_SHIFT) * OPL_ENV_TO_LOG + opl_static_att(st, chi, o);
+    if (o->AmplitudeModulation) att += opl_trem_units(st) * OPL_ENV_TO_LOG;
     amp = opl_exp2neg(att);
     return neg ? -amp : amp;
 }
 
 /* One operator sample. `mod` is a phase offset in sine-table steps (FM input). */
-static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
+static int32_t opl_op_sample(OPL_STATE *st, int chi, int opi, int32_t mod)
 {
-    opl_op *o = &st->op[opi];
-    o->phase += opl_phase_inc(st, chi, o);
-    if (o->eg_state == OPL_EG_OFF) return 0;
-    return opl_op_out(st, chi, o, (o->phase >> 10) + (uint32_t)mod);
+    OPL_OPERATOR *o = &st->Operators[opi];
+    o->Phase += opl_phase_inc(st, chi, o);
+    if (o->EnvelopeState == OPL_ENVELOPE_OFF) return 0;
+    return opl_op_out(st, chi, o, (o->Phase >> 10) + (uint32_t)mod);
 }
 
 /* --- rhythm mode ---------------------------------------------------------- *
@@ -462,56 +462,56 @@ static uint32_t opl_rhythm_bit(uint32_t p13, uint32_t p17)
 /* Returns the drums per CHANNEL -- bass drum on channel 6, hi-hat and snare on 7,
    tom-tom and cymbal on 8 -- because on an OPL3 with NEW set each channel's C0
    bits route it left or right, and a drum goes where its channel register sends it. */
-static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v7, int32_t *v8)
+static void opl_rhythm_sample(OPL_STATE *st, int32_t *v6, int32_t *v7, int32_t *v8)
 {
     int32_t mo, co, fbmod = 0;
-    opl_op *m = &st->op[12], *cr = &st->op[15];
-    opl_op *hh = &st->op[13], *sd = &st->op[16], *cy = &st->op[17];
+    OPL_OPERATOR *m = &st->Operators[12], *cr = &st->Operators[15];
+    OPL_OPERATOR *hh = &st->Operators[13], *sd = &st->Operators[16], *cy = &st->Operators[17];
     uint32_t p13, p17, p17_prev, b;
     *v6 = *v7 = *v8 = 0;
 
     /* BASS DRUM -- channel 6, an ordinary two-operator voice. */
-    if (m->eg_state != OPL_EG_OFF || cr->eg_state != OPL_EG_OFF) {
-        if (st->ch[6].fb) fbmod = (m->out1 + m->out2) >> (9 - st->ch[6].fb);
+    if (m->EnvelopeState != OPL_ENVELOPE_OFF || cr->EnvelopeState != OPL_ENVELOPE_OFF) {
+        if (st->Channels[6].Feedback) fbmod = (m->Output1 + m->Output2) >> (9 - st->Channels[6].Feedback);
         mo = opl_op_sample(st, 6, 12, fbmod);
-        m->out2 = m->out1; m->out1 = mo;
+        m->Output2 = m->Output1; m->Output1 = mo;
         opl_env_tick(st, 6, 12);
-        if (st->ch[6].cnt) { co = opl_op_sample(st, 6, 15, 0); *v6 = (mo + co) * 2; }
+        if (st->Channels[6].Connection) { co = opl_op_sample(st, 6, 15, 0); *v6 = (mo + co) * 2; }
         else               { co = opl_op_sample(st, 6, 15, mo); *v6 = co * 2; }
         opl_env_tick(st, 6, 15);
     }
 
     /* TOM-TOM -- op14 alone, on channel 8's pitch. */
-    if (st->op[14].eg_state != OPL_EG_OFF) {
+    if (st->Operators[14].EnvelopeState != OPL_ENVELOPE_OFF) {
         *v8 = opl_op_sample(st, 8, 14, 0) * 2;
         opl_env_tick(st, 8, 14);
     }
 
     /* The two accumulators the other three read. They run every sample, keyed or
        not; the hi-hat takes op17's index from BEFORE this sample's step. */
-    p17_prev = (cy->phase >> 10) & 0x3FF;
-    hh->phase += opl_phase_inc(st, 7, hh) << (st->rhy_restart & 1);
-    cy->phase += opl_phase_inc(st, 8, cy) << ((st->rhy_restart >> 1) & 1);
-    st->rhy_restart = 0;
-    p13 = (hh->phase >> 10) & 0x3FF;
-    p17 = (cy->phase >> 10) & 0x3FF;
+    p17_prev = (cy->Phase >> 10) & 0x3FF;
+    hh->Phase += opl_phase_inc(st, 7, hh) << (st->RhythmRestart & 1);
+    cy->Phase += opl_phase_inc(st, 8, cy) << ((st->RhythmRestart >> 1) & 1);
+    st->RhythmRestart = 0;
+    p13 = (hh->Phase >> 10) & 0x3FF;
+    p17 = (cy->Phase >> 10) & 0x3FF;
 
     /* HI-HAT -- op13's envelope and level, channel 7. */
-    if (hh->eg_state != OPL_EG_OFF) {
+    if (hh->EnvelopeState != OPL_ENVELOPE_OFF) {
         b = opl_rhythm_bit(p13, p17_prev);
         *v7 += opl_op_out(st, 7, hh, (b << 9) |
-                          ((b ^ (st->noise >> OPL_NOISE_BIT_HH)) & 1 ? 0x0D0u : 0x034u)) * 2;
+                          ((b ^ (st->Noise >> OPL_NOISE_BIT_HH)) & 1 ? 0x0D0u : 0x034u)) * 2;
         opl_env_tick(st, 7, 13);
     }
     /* SNARE -- op16's envelope and level, on op13's bit 8, channel 7. */
-    if (sd->eg_state != OPL_EG_OFF) {
+    if (sd->EnvelopeState != OPL_ENVELOPE_OFF) {
         b = (p13 >> 8) & 1;
         *v7 += opl_op_out(st, 7, sd, (b << 9) |
-                          (((b ^ (st->noise >> OPL_NOISE_BIT_SD)) & 1) << 8)) * 2;
+                          (((b ^ (st->Noise >> OPL_NOISE_BIT_SD)) & 1) << 8)) * 2;
         opl_env_tick(st, 7, 16);
     }
     /* CYMBAL -- op17's envelope and level, channel 8. */
-    if (cy->eg_state != OPL_EG_OFF) {
+    if (cy->EnvelopeState != OPL_ENVELOPE_OFF) {
         *v8 += opl_op_out(st, 8, cy, (opl_rhythm_bit(p13, p17) << 9) | 0x080u) * 2;
         opl_env_tick(st, 8, 17);
     }
@@ -521,24 +521,24 @@ static void opl_rhythm_sample(opl_state *st, int32_t *v6, int32_t *v7, int32_t *
 /* An ordinary two-operator channel: its contribution to the output, or 0 when
    both operators are off -- in which case neither phase nor envelope moves. An
    idle voice costs nothing, and the OPL2 golden depends on that staying so. */
-static int32_t opl_voice2(opl_state *st, int c)
+static int32_t opl_voice2(OPL_STATE *st, int c)
 {
-    int mi = vdd_opl_op_index(c, 0), ci = vdd_opl_op_index(c, 1);
-    opl_op *m = &st->op[mi], *cr = &st->op[ci];
+    int mi = VddOplOperatorIndex(c, 0), ci = VddOplOperatorIndex(c, 1);
+    OPL_OPERATOR *m = &st->Operators[mi], *cr = &st->Operators[ci];
     int32_t mo, co, fbmod = 0, v;
 
-    if (m->eg_state == OPL_EG_OFF && cr->eg_state == OPL_EG_OFF) return 0;
+    if (m->EnvelopeState == OPL_ENVELOPE_OFF && cr->EnvelopeState == OPL_ENVELOPE_OFF) return 0;
 
     /* Feedback uses the mean of the operator's last two outputs, which is
        what keeps a self-modulating operator stable instead of screaming. */
-    if (st->ch[c].fb)
-        fbmod = (m->out1 + m->out2) >> (9 - st->ch[c].fb);
+    if (st->Channels[c].Feedback)
+        fbmod = (m->Output1 + m->Output2) >> (9 - st->Channels[c].Feedback);
 
     mo = opl_op_sample(st, c, mi, fbmod);
-    m->out2 = m->out1; m->out1 = mo;
+    m->Output2 = m->Output1; m->Output1 = mo;
     opl_env_tick(st, c, mi);
 
-    if (st->ch[c].cnt) {                        /* additive: both operators heard  */
+    if (st->Channels[c].Connection) {                        /* additive: both operators heard  */
         co = opl_op_sample(st, c, ci, 0);
         v = mo + co;
     } else {                                    /* FM: modulator bends the carrier */
@@ -562,21 +562,21 @@ static int32_t opl_voice2(opl_state *st, int c)
      the output routing, and the feedback -- which only ever applies to operator 1.
      Channel c+3's own F-number, block, key, feedback and routing are ignored
      while it is paired. */
-static int32_t opl_voice4(opl_state *st, int c)
+static int32_t opl_voice4(OPL_STATE *st, int c)
 {
-    int o1 = vdd_opl_op_index(c, 0),     o2 = vdd_opl_op_index(c, 1);
-    int o3 = vdd_opl_op_index(c + 3, 0), o4 = vdd_opl_op_index(c + 3, 1);
-    opl_op *p1 = &st->op[o1];
-    int cnt1 = st->ch[c].cnt, cnt2 = st->ch[c + 3].cnt;
+    int o1 = VddOplOperatorIndex(c, 0),     o2 = VddOplOperatorIndex(c, 1);
+    int o3 = VddOplOperatorIndex(c + 3, 0), o4 = VddOplOperatorIndex(c + 3, 1);
+    OPL_OPERATOR *p1 = &st->Operators[o1];
+    int cnt1 = st->Channels[c].Connection, cnt2 = st->Channels[c + 3].Connection;
     int32_t s1, s2, s3, s4, fbmod = 0;
 
-    if (p1->eg_state == OPL_EG_OFF && st->op[o2].eg_state == OPL_EG_OFF &&
-        st->op[o3].eg_state == OPL_EG_OFF && st->op[o4].eg_state == OPL_EG_OFF)
+    if (p1->EnvelopeState == OPL_ENVELOPE_OFF && st->Operators[o2].EnvelopeState == OPL_ENVELOPE_OFF &&
+        st->Operators[o3].EnvelopeState == OPL_ENVELOPE_OFF && st->Operators[o4].EnvelopeState == OPL_ENVELOPE_OFF)
         return 0;
 
-    if (st->ch[c].fb) fbmod = (p1->out1 + p1->out2) >> (9 - st->ch[c].fb);
+    if (st->Channels[c].Feedback) fbmod = (p1->Output1 + p1->Output2) >> (9 - st->Channels[c].Feedback);
     s1 = opl_op_sample(st, c, o1, fbmod);
-    p1->out2 = p1->out1; p1->out1 = s1;
+    p1->Output2 = p1->Output1; p1->Output1 = s1;
     opl_env_tick(st, c, o1);
 
     s2 = opl_op_sample(st, c, o2, cnt1 ? 0 : s1);           /* 1 -> 2 unless CNT1   */
@@ -597,28 +597,28 @@ static int32_t opl_voice4(opl_state *st, int c)
    the SB16's left/right; C/D (bits 6/7) reach no DAC on that card and are dropped
    -- a voice routed only there is silent, as on the real card, and so is a voice
    with no routing bits at all (a driver that sets NEW must set them). */
-static void opl_route(const opl_state *st, int newm, int c, int32_t v, int32_t *l, int32_t *r)
+static void opl_route(const OPL_STATE *st, int newm, int c, int32_t v, int32_t *l, int32_t *r)
 {
     uint8_t c0;
     if (!newm) { *l += v; *r += v; return; }
-    c0 = st->reg[(c / OPL_NUM_CH) * 0x100 + 0xC0 + c % OPL_NUM_CH];
-    if (c0 & OPL_C0_CHA) *l += v;
-    if (c0 & OPL_C0_CHB) *r += v;
+    c0 = st->Registers[(c / OPL_CHANNELS) * 0x100 + 0xC0 + c % OPL_CHANNELS];
+    if (c0 & OPL_C0_OUTPUT_A) *l += v;
+    if (c0 & OPL_C0_OUTPUT_B) *r += v;
 }
 
 /* One native sample, both sides, unclipped. The ORDER is the OPL2's exactly --
    rhythm, then the LFO tick, then channels 0-8 -- because opl_synth_test's golden
    checksum holds OPL2 output bit-identical to the build before OPL3 existed. */
-static void opl_sample_lr(opl_state *st, int32_t *pl, int32_t *pr)
+static void opl_sample_lr(OPL_STATE *st, int32_t *pl, int32_t *pr)
 {
-    int newm = vdd_opl_new_mode(st);
-    int rhythm = (st->reg[0xBD] & OPL_BD_RHY) ? 1 : 0;
-    int nch = newm ? OPL3_NUM_CH : OPL_NUM_CH, c;
+    int newm = VddOplIsNewMode(st);
+    int rhythm = (st->Registers[0xBD] & OPL_BD_RHYTHM) ? 1 : 0;
+    int nch = newm ? OPL3_CHANNELS : OPL_CHANNELS, c;
     int32_t l = 0, r = 0;
 
     /* The noise generator runs from power-on whatever the mode, like the LFOs:
        the drums read it where it has got to, never from a restart. */
-    st->noise = opl_noise_step(st->noise);
+    st->Noise = opl_noise_step(st->Noise);
     if (rhythm) {
         int32_t v6, v7, v8;
         opl_rhythm_sample(st, &v6, &v7, &v8);
@@ -629,11 +629,11 @@ static void opl_sample_lr(opl_state *st, int32_t *pl, int32_t *pr)
     /* Outside the channel loop, and before the early-outs below: the LFOs run
        whether or not anything is sounding. Advancing them only while a note
        plays would restart the sweep at every silence. */
-    st->lfo_count++;
+    st->LfoCount++;
     for (c = 0; c < nch; ++c) {
         int role;
         if (rhythm && c >= 6 && c <= 8) continue;   /* 6-8 are percussion in rhythm */
-        role = newm ? opl_4op_role(st, c) : 0;
+        role = newm ? OplFourOperatorRole(st, c) : 0;
         if (role == 2) continue;                    /* rendered with its leader     */
         opl_route(st, newm, c, role ? opl_voice4(st, c) : opl_voice2(st, c), &l, &r);
     }
@@ -646,7 +646,7 @@ static int16_t opl_clip(int32_t v)
 }
 
 /* --- public: render ------------------------------------------------------- */
-void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
+void VddOplRender(OPL_STATE *st, int16_t *out, uint32_t frames)
 {
     uint32_t n;
     for (n = 0; n < frames; ++n) {
@@ -654,12 +654,12 @@ void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
         opl_sample_lr(st, &l, &r);
         /* Without NEW, l == r IS the chip's one output: returned as it always was.
            With NEW, the fold the mixer's own mono path uses. */
-        out[n] = vdd_opl_new_mode(st) ? (int16_t)(((int32_t)opl_clip(l) + opl_clip(r)) / 2)
+        out[n] = VddOplIsNewMode(st) ? (int16_t)(((int32_t)opl_clip(l) + opl_clip(r)) / 2)
                                       : opl_clip(l);
     }
 }
 
-void vdd_opl_render_st(opl_state *st, int16_t *out, uint32_t frames)
+void VddOplRenderStereo(OPL_STATE *st, int16_t *out, uint32_t frames)
 {
     uint32_t n;
     for (n = 0; n < frames; ++n) {
