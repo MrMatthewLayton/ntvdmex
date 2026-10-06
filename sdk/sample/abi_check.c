@@ -23,13 +23,15 @@
 #define ABI_ASSERT(name, cond) typedef char abi_assert_##name[(cond) ? 1 : -1]
 
 /* ── the register struct, which crosses the ABI by pointer ────────────────── */
-ABI_ASSERT(regs_size, sizeof(ntvdmex_regs) == sizeof(ntvdd_regs));
+ABI_ASSERT(regs_size, sizeof(ntvdmex_regs) == sizeof(NTVDD_REGISTERS));
 
-#define ABI_OFF(name, m) \
-    ABI_ASSERT(off_##name, offsetof(ntvdmex_regs, m) == offsetof(ntvdd_regs, m))
-ABI_OFF(eax, eax); ABI_OFF(ebx, ebx); ABI_OFF(ecx, ecx); ABI_OFF(edx, edx);
-ABI_OFF(esi, esi); ABI_OFF(edi, edi); ABI_OFF(ebp, ebp);
-ABI_OFF(ds,  ds);  ABI_OFF(es,  es);  ABI_OFF(cf,  cf);
+/* The SDK keeps its own (frozen, public) member names; the in-tree ones follow the
+   house style since #333, so each pair is named on both sides. */
+#define ABI_OFF(sdkMember, treeMember) \
+    ABI_ASSERT(off_##sdkMember, offsetof(ntvdmex_regs, sdkMember) == offsetof(NTVDD_REGISTERS, treeMember))
+ABI_OFF(eax, Eax); ABI_OFF(ebx, Ebx); ABI_OFF(ecx, Ecx); ABI_OFF(edx, Edx);
+ABI_OFF(esi, Esi); ABI_OFF(edi, Edi); ABI_OFF(ebp, Ebp);
+ABI_OFF(ds,  Ds);  ABI_OFF(es,  Es);  ABI_OFF(cf,  CarryFlag);
 
 /* ── the callback signatures ──────────────────────────────────────────────────
      sizeof cannot see a parameter list, so the real proof is ASSIGNMENT: each
@@ -46,10 +48,10 @@ static void probe_frame(void *s) { (void)s; }
 int ntvdmex_abi_check(void);
 int ntvdmex_abi_check(void)
 {
-    ntvdd_in_fn      a1 = probe_in;    ntvdmex_in_fn    b1 = probe_in;
-    ntvdd_out_fn     a2 = probe_out;   ntvdmex_out_fn   b2 = probe_out;
-    ntvdd_rd_fn      a3 = probe_rd;    ntvdmex_rd_fn    b3 = probe_rd;
-    ntvdd_wr_fn      a4 = probe_wr;    ntvdmex_wr_fn    b4 = probe_wr;
-    ntvdd_frame_fn   a5 = probe_frame; ntvdmex_frame_fn b5 = probe_frame;
+    PVDD_PORT_IN_ROUTINE  a1 = probe_in;    ntvdmex_in_fn    b1 = probe_in;
+    PVDD_PORT_OUT_ROUTINE  a2 = probe_out;   ntvdmex_out_fn   b2 = probe_out;
+    PVDD_MEMORY_READ_ROUTINE  a3 = probe_rd;    ntvdmex_rd_fn    b3 = probe_rd;
+    PVDD_MEMORY_WRITE_ROUTINE  a4 = probe_wr;    ntvdmex_wr_fn    b4 = probe_wr;
+    PVDD_FRAME_ROUTINE  a5 = probe_frame; ntvdmex_frame_fn b5 = probe_frame;
     return (a1 && b1 && a2 && b2 && a3 && b3 && a4 && b4 && a5 && b5) ? 0 : 1;
 }
