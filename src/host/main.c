@@ -21524,7 +21524,7 @@ static int dpmi_client_sel_ok(WORD sel)
 {
     int idx = sel >> 3;
     int alloc = (idx >= 1 && idx < DPMI_LDT_MAX) && g_ldt[idx].access != 0;
-    return dpmi_sel_valid(sel, DPMI_LDT_MAX, alloc, g_wow_shadow != NULL);
+    return DpmiIsSelectorValid(sel, DPMI_LDT_MAX, alloc, g_wow_shadow != NULL);
 }
 
 static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
@@ -21983,7 +21983,7 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
             continue;
         }
         if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {      /* the ISR far-called a 0303 callback */
-            int cbslot = dpmi_cb_slot_at(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS), DOS_HDLR_SEG,
+            int cbslot = DpmiCallbackSlotAt(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS), DOS_HDLR_SEG,
                                          (WORD)VDM_REG(tib,VTIB_EIP));
             if (cbslot >= 0 && g_cb[cbslot].used) {
                 dpmi_invoke_callback(mp, tib, cbslot);
@@ -25931,7 +25931,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                    && mb.State == MEM_COMMIT)
                                 end = (DWORD)(ULONG_PTR)mb.BaseAddress + (DWORD)mb.RegionSize;
                             committed = end - h;
-                            plan = dpmi_resize_plan(nsz, committed, &copy);
+                            plan = DpmiResizePlan(nsz, committed, &copy);
                             if (plan == DPMI_RESIZE_BAD) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
                                 p = zput(p, " -> REFUSED: size 0 (8021h)"); break;
@@ -26294,7 +26294,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     continue;
                                 }
                                 if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
-                                    int cbslot = dpmi_cb_slot_at(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS),
+                                    int cbslot = DpmiCallbackSlotAt(DPMI_CB_BASE_OFF, (WORD)VDM_REG(tib,VTIB_CS),
                                                                  DOS_HDLR_SEG, (WORD)VDM_REG(tib,VTIB_EIP));
                                     if (cbslot >= 0 && g_cb[cbslot].used) {
                                         dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
@@ -26387,16 +26387,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 p = zput(p, " -> cb ENOMEM"); break;
                             }
                             g_cb[s].used = 1;
-                            /* #248: the entry address comes from dpmi_cb_entry(), the same
+                            /* #248: the entry address comes from DpmiCallbackEntry(), the same
                                function 0304h decodes it with. */
                             /* DS:(E)SI handler and ES:(E)DI RMCS follow the caller's D/B bit (dpmi_caller_off):
                                a flat 32-bit client's handler offset is its linear address. */
                             g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = dpmi_caller_off(tib, VDM_REG(tib, VTIB_ESI));
                             g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
                             VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
-                            VDM_SET16(tib, VTIB_EDX, dpmi_cb_entry(DPMI_CB_BASE_OFF, s));
+                            VDM_SET16(tib, VTIB_EDX, DpmiCallbackEntry(DPMI_CB_BASE_OFF, s));
                             p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
-                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, dpmi_cb_entry(DPMI_CB_BASE_OFF, s));
+                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DpmiCallbackEntry(DPMI_CB_BASE_OFF, s));
                             p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
                             break; }
                         case 0x0304: {                             /* free real-mode callback CX:DX */
@@ -26406,7 +26406,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  failed for good. The address must be EXACTLY one we handed out
                                  and still live; anything else is 8024h. */
                             WORD fcs = (WORD)VDM_REG(tib, VTIB_ECX), fdx = (WORD)VDM_REG(tib, VTIB_EDX);
-                            int s = dpmi_cb_slot_of(DPMI_CB_BASE_OFF, fcs, DOS_HDLR_SEG, fdx);
+                            int s = DpmiCallbackSlotOf(DPMI_CB_BASE_OFF, fcs, DOS_HDLR_SEG, fdx);
                             p = zput(p, " cb 0x"); p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, fdx);
                             if (s < 0 || !g_cb[s].used) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
@@ -31151,7 +31151,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     hdlr[DPMI_RMRET_OFF + 2] = DPMI_RMRET_BOP;
     /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
     { int s; for (s = 0; s < DPMI_CB_SLOTS; ++s) {
-        WORD e = dpmi_cb_entry(DPMI_CB_BASE_OFF, s);
+        WORD e = DpmiCallbackEntry(DPMI_CB_BASE_OFF, s);
         hdlr[e + 0] = VDM_BOP0;
         hdlr[e + 1] = VDM_BOP1;
         hdlr[e + 2] = DPMI_CB_BOP;

@@ -41,53 +41,53 @@ int main(void)
     CHECK(DPMI_VER_BX & 1, "0400h BX bit 0: a 32-bit host");
 
     /* ---- the selector rule ---- */
-    CHECK(!dpmi_sel_valid(0x0000, LDTMAX, 1, 0), "null selector: invalid");
-    CHECK(!dpmi_sel_valid(0x0007, LDTMAX, 1, 0), "index 0 with TI/RPL bits: still the null descriptor");
-    CHECK(!dpmi_sel_valid(0x0028, LDTMAX, 1, 0), "a GDT selector (TI=0): invalid even if 'allocated'");
-    CHECK(!dpmi_sel_valid((LDTMAX << 3) | 7, LDTMAX, 1, 0), "the first index past the table: invalid");
-    CHECK(dpmi_sel_valid(((LDTMAX - 1) << 3) | 7, LDTMAX, 1, 0), "the last index of the table: valid");
-    CHECK(!dpmi_sel_valid(0x0057, LDTMAX, 0, 0), "an index we never allocated: invalid (8022h)");
-    CHECK(dpmi_sel_valid(0x0057, LDTMAX, 1, 0), "an allocated index: valid");
-    CHECK(dpmi_sel_valid(0x0054, LDTMAX, 1, 0), "RPL is not checked (0x54 = index 10, TI=1, RPL 0)");
-    CHECK(dpmi_sel_valid(0x02EF, LDTMAX, 0, 1),
+    CHECK(!DpmiIsSelectorValid(0x0000, LDTMAX, 1, 0), "null selector: invalid");
+    CHECK(!DpmiIsSelectorValid(0x0007, LDTMAX, 1, 0), "index 0 with TI/RPL bits: still the null descriptor");
+    CHECK(!DpmiIsSelectorValid(0x0028, LDTMAX, 1, 0), "a GDT selector (TI=0): invalid even if 'allocated'");
+    CHECK(!DpmiIsSelectorValid((LDTMAX << 3) | 7, LDTMAX, 1, 0), "the first index past the table: invalid");
+    CHECK(DpmiIsSelectorValid(((LDTMAX - 1) << 3) | 7, LDTMAX, 1, 0), "the last index of the table: valid");
+    CHECK(!DpmiIsSelectorValid(0x0057, LDTMAX, 0, 0), "an index we never allocated: invalid (8022h)");
+    CHECK(DpmiIsSelectorValid(0x0057, LDTMAX, 1, 0), "an allocated index: valid");
+    CHECK(DpmiIsSelectorValid(0x0054, LDTMAX, 1, 0), "RPL is not checked (0x54 = index 10, TI=1, RPL 0)");
+    CHECK(DpmiIsSelectorValid(0x02EF, LDTMAX, 0, 1),
           "WOW: krnl386's own index (0x2ef, measured) is valid though we never allocated it");
-    CHECK(!dpmi_sel_valid(0x0000, LDTMAX, 0, 1) && !dpmi_sel_valid((LDTMAX << 3) | 7, LDTMAX, 0, 1)
-          && !dpmi_sel_valid(0x0028, LDTMAX, 0, 1),
+    CHECK(!DpmiIsSelectorValid(0x0000, LDTMAX, 0, 1) && !DpmiIsSelectorValid((LDTMAX << 3) | 7, LDTMAX, 0, 1)
+          && !DpmiIsSelectorValid(0x0028, LDTMAX, 0, 1),
           "WOW: the range is still checked (null, past the end, GDT)");
 
     /* ---- callbacks ---- */
     CHECK(DPMI_CB_SLOTS >= 16, "at least 16 callbacks (the spec's minimum; was 4)");
     ok = 1;
     for (s = 0; s < DPMI_CB_SLOTS; ++s) {
-        uint16_t e = dpmi_cb_entry(CBBASE, s);
-        if (dpmi_cb_slot_at(CBBASE, HDLR, HDLR, e) != s) ok = 0;          /* trap at the BOP   */
-        if (dpmi_cb_slot_at(CBBASE, HDLR, HDLR, (uint16_t)(e + 3)) != s) ok = 0; /* past the BOP */
-        if (dpmi_cb_slot_of(CBBASE, HDLR, HDLR, e) != s) ok = 0;          /* 0304h            */
+        uint16_t e = DpmiCallbackEntry(CBBASE, s);
+        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, e) != s) ok = 0;          /* trap at the BOP   */
+        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, (uint16_t)(e + 3)) != s) ok = 0; /* past the BOP */
+        if (DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, e) != s) ok = 0;          /* 0304h            */
     }
     CHECK(ok, "every slot's address decodes back to that slot (trap at BOP, past BOP, 0304h)");
-    CHECK(dpmi_cb_entry(CBBASE, DPMI_CB_SLOTS - 1) + 3 <= 0xD0,
+    CHECK(DpmiCallbackEntry(CBBASE, DPMI_CB_SLOTS - 1) + 3 <= 0xD0,
           "all 16 stubs end inside 0x90..0xCF, below MS_CB_RET_OFF (0xE0)");
-    CHECK(dpmi_cb_entry(CBBASE, 0) > 0x82, "slot 0 is past the fault BOP (0x80-0x82)");
-    CHECK(dpmi_cb_slot_of(CBBASE, HDLR, HDLR, (uint16_t)(CBBASE + 1)) < 0,
+    CHECK(DpmiCallbackEntry(CBBASE, 0) > 0x82, "slot 0 is past the fault BOP (0x80-0x82)");
+    CHECK(DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, (uint16_t)(CBBASE + 1)) < 0,
           "0304h: an address INSIDE a stub is not a callback address");
-    CHECK(dpmi_cb_slot_of(CBBASE, 0x0051, HDLR, CBBASE) < 0,
+    CHECK(DpmiCallbackSlotOf(CBBASE, 0x0051, HDLR, CBBASE) < 0,
           "0304h: the right offset in the wrong segment is refused");
-    CHECK(dpmi_cb_slot_of(CBBASE, HDLR, HDLR, dpmi_cb_entry(CBBASE, DPMI_CB_SLOTS)) < 0,
+    CHECK(DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, DpmiCallbackEntry(CBBASE, DPMI_CB_SLOTS)) < 0,
           "0304h: the address one past the last slot is refused");
-    CHECK(dpmi_cb_slot_at(CBBASE, HDLR, HDLR, (uint16_t)(CBBASE - 4)) < 0,
+    CHECK(DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, (uint16_t)(CBBASE - 4)) < 0,
           "trap: below the first slot is not a callback (the fault BOP and friends)");
-    CHECK(dpmi_cb_slot_at(CBBASE, HDLR, HDLR, 0xE0) < 0,
+    CHECK(DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, 0xE0) < 0,
           "trap: the INT 33h return stub at 0xE0 is not a callback");
 
     /* ---- 0503h plan ---- */
     { uint32_t cp = 77;
-      CHECK(dpmi_resize_plan(0, 0x1000, &cp) == DPMI_RESIZE_BAD && cp == 0, "0503h: size 0 is 8021h");
-      CHECK(dpmi_resize_plan(0x800, 0x1000, &cp) == DPMI_RESIZE_INPLACE, "0503h: shrink stays put");
-      CHECK(dpmi_resize_plan(0x1000, 0x1000, &cp) == DPMI_RESIZE_INPLACE,
+      CHECK(DpmiResizePlan(0, 0x1000, &cp) == DPMI_RESIZE_BAD && cp == 0, "0503h: size 0 is 8021h");
+      CHECK(DpmiResizePlan(0x800, 0x1000, &cp) == DPMI_RESIZE_INPLACE, "0503h: shrink stays put");
+      CHECK(DpmiResizePlan(0x1000, 0x1000, &cp) == DPMI_RESIZE_INPLACE,
             "0503h: growing into pages the block already has stays put");
-      CHECK(dpmi_resize_plan(0x1001, 0x1000, &cp) == DPMI_RESIZE_MOVE && cp == 0x1000,
+      CHECK(DpmiResizePlan(0x1001, 0x1000, &cp) == DPMI_RESIZE_MOVE && cp == 0x1000,
             "0503h: one byte past the committed pages moves, copying all of the old block");
-      CHECK(dpmi_resize_plan(0x40000, 0x3000, &cp) == DPMI_RESIZE_MOVE && cp == 0x3000,
+      CHECK(DpmiResizePlan(0x40000, 0x3000, &cp) == DPMI_RESIZE_MOVE && cp == 0x3000,
             "0503h: a large grow copies exactly the old committed size"); }
 
     printf("\n%d checks, %d failed\n", total, fails);

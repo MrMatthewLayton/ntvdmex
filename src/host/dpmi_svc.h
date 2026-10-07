@@ -18,7 +18,7 @@
 #ifndef NTVDMEX_DPMI_SVC_H
 #define NTVDMEX_DPMI_SVC_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
 /* ── ERROR CODES (DPMI 1.0 numbering; returned in AX with CF=1). ─────────────────────── */
 #define DPMI_E_DESC_UNAVAIL   0x8011   /* descriptor unavailable                        */
@@ -65,13 +65,15 @@
      before (or without) the 04F2h commit that would teach our table about them. Measured
      in s84 logs: 0007h on 0x2ef, 0xc97, 0xcaf ... none of which we handed out. There the
      allocation record is the guest's, not ours, and refusing would kill Win16 -- so in
-     that mode only the range is checked. (`guest_owns_table` = the shadow exists.) */
-static int dpmi_sel_valid(uint16_t sel, int idx_max, int allocated, int guest_owns_table)
+     that mode only the range is checked. (`isGuestOwnedTable` = the shadow exists.) */
+#define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
+#define DPMI_SELECTOR_INDEX_SHIFT 3
+static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
-    int idx = sel >> 3;
-    if (!(sel & 4)) return 0;                        /* TI = 0: GDT          */
-    if (idx < 1 || idx >= idx_max) return 0;         /* null, or off the end */
-    if (!allocated && !guest_owns_table) return 0;   /* never handed out     */
+    INT index = selector >> DPMI_SELECTOR_INDEX_SHIFT;
+    if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT          */
+    if (index < 1 || index >= indexLimit) return 0;  /* null, or off the end */
+    if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out     */
     return 1;
 }
 
@@ -92,24 +94,24 @@ static int dpmi_sel_valid(uint16_t sel, int idx_max, int allocated, int guest_ow
 #define DPMI_CB_SLOTS      16
 #define DPMI_CB_STRIDE     4
 
-static uint16_t dpmi_cb_entry(uint16_t base, int slot)
+static WORD DpmiCallbackEntry(WORD base, INT slot)
 {
-    return (uint16_t)(base + slot * DPMI_CB_STRIDE);
+    return (WORD)(base + slot * DPMI_CB_STRIDE);
 }
 /* The slot whose BOP is executing at CS:IP, or -1. For the trap path. */
-static int dpmi_cb_slot_at(uint16_t base, uint16_t cs, uint16_t want_cs, uint16_t ip)
+static INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer)
 {
-    int s;
-    if (cs != want_cs || ip < base) return -1;
-    s = (ip - base) / DPMI_CB_STRIDE;
-    return (s < DPMI_CB_SLOTS) ? s : -1;
+    INT slot;
+    if (codeSegment != wantedSegment || instructionPointer < base) return -1;
+    slot = (instructionPointer - base) / DPMI_CB_STRIDE;
+    return (slot < DPMI_CB_SLOTS) ? slot : -1;
 }
 /* 0304h: the slot whose ADDRESS is exactly CX:DX, or -1. Stricter than the trap path:
    the client must hand back the address it was given, not something inside the stub. */
-static int dpmi_cb_slot_of(uint16_t base, uint16_t cs, uint16_t want_cs, uint16_t off)
+static INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset)
 {
-    int s = dpmi_cb_slot_at(base, cs, want_cs, off);
-    return (s >= 0 && dpmi_cb_entry(base, s) == off) ? s : -1;
+    INT slot = DpmiCallbackSlotAt(base, codeSegment, wantedSegment, offset);
+    return (slot >= 0 && DpmiCallbackEntry(base, slot) == offset) ? slot : -1;
 }
 
 /* ── 0503h RESIZE MEMORY BLOCK: STAY PUT IF IT FITS, OTHERWISE MOVE AND COPY. ──────────
@@ -124,11 +126,11 @@ static int dpmi_cb_slot_of(uint16_t base, uint16_t cs, uint16_t want_cs, uint16_
 #define DPMI_RESIZE_BAD    0
 #define DPMI_RESIZE_INPLACE 1
 #define DPMI_RESIZE_MOVE   2
-static int dpmi_resize_plan(uint32_t new_size, uint32_t committed, uint32_t *copy)
+static INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy)
 {
     if (copy) *copy = 0;
-    if (new_size == 0) return DPMI_RESIZE_BAD;
-    if (new_size <= committed) return DPMI_RESIZE_INPLACE;
+    if (newSize == 0) return DPMI_RESIZE_BAD;
+    if (newSize <= committed) return DPMI_RESIZE_INPLACE;
     if (copy) *copy = committed;                     /* new > committed: all of the old */
     return DPMI_RESIZE_MOVE;
 }
