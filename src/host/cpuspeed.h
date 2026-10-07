@@ -69,6 +69,12 @@
    ⚠ The registry row is "CpuSpeed", NEW with this list, so an index saved against the
      old six-entry ladder cannot silently become a different speed. */
 #define CPUSPEED_COUNT   11
+#define CPUSPEED_BP_FULL      10000u    /* basis points: a 100% share = flat out */
+#define CPUSPEED_PERCENT      100u
+#define CPUSPEED_PER_THOUSAND 1000u     /* us per ms; MHz per GHz                  */
+#define CPUSPEED_PER_MILLION  1000000u  /* us per s; Hz per MHz                    */
+#define CPUSPEED_DEFAULT_ROUND_TRIP_US 100ul   /* unmeasured: a sane placeholder  */
+#define CPUSPEED_MAX_DEBT_US  100000ll  /* 100 ms ceiling on one debt              */
 static const UINT g_CpuSpeedMhz[CPUSPEED_COUNT] = {
     0,      /*  0: Host (Unlimited) -- the default                                */
     1000,   /*  1: Intel Pentium III 1 GHz                                        */
@@ -184,13 +190,13 @@ static UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz)
 {
     UINT64 ceiling10;                   /* fps x 10 at a 100% share, this host */
     UINT fps10;
-    if (index >= CPUSPEED_COUNT || referenceMhz == 0u) return 10000u;
+    if (index >= CPUSPEED_COUNT || referenceMhz == 0u) return CPUSPEED_BP_FULL;
     fps10 = g_CpuSpeedDoomFps10[index];
-    if (fps10 == 0u) return 10000u;
-    ceiling10 = (UINT64)CPUSPEED_FPS_PER_KMHZ10 * referenceMhz / 1000ull;
-    if (ceiling10 == 0ull || fps10 >= ceiling10) return 10000u;   /* a ceiling, never a boost */
+    if (fps10 == 0u) return CPUSPEED_BP_FULL;
+    ceiling10 = (UINT64)CPUSPEED_FPS_PER_KMHZ10 * referenceMhz / (UINT64)CPUSPEED_PER_THOUSAND;
+    if (ceiling10 == 0ull || fps10 >= ceiling10) return CPUSPEED_BP_FULL;   /* a ceiling, never a boost */
     /* Round UP, and never to zero: a duty of 0 would stop the guest dead. */
-    {   UINT64 dutyBp = ((UINT64)fps10 * 10000ull + ceiling10 - 1ull) / ceiling10;
+    {   UINT64 dutyBp = ((UINT64)fps10 * (UINT64)CPUSPEED_BP_FULL + ceiling10 - 1ull) / ceiling10;
         return dutyBp ? (UINT)dutyBp : 1u; }
 }
 
@@ -212,9 +218,9 @@ static UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz)
 static UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 {
     UINT64 dutyBp;
-    if (protectedModeBp == 0u || protectedModeBp >= 10000u) return 10000u;
-    dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / 100u;
-    return dutyBp >= 10000ull ? 10000u : (UINT)dutyBp;
+    if (protectedModeBp == 0u || protectedModeBp >= CPUSPEED_BP_FULL) return CPUSPEED_BP_FULL;
+    dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / CPUSPEED_PERCENT;
+    return dutyBp >= (UINT64)CPUSPEED_BP_FULL ? CPUSPEED_BP_FULL : (UINT)dutyBp;
 }
 
 /* ── THE V86 HALF: HOW LONG THE GUEST RUNS, AND HOW LONG IT IS HELD. ─────────────
@@ -291,10 +297,10 @@ static UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
 {
     unsigned long byRun, byHold;
-    if (!dutyBp || dutyBp >= 10000u) return CPUSPEED_GRAN_MIN_MS;
-    if (!roundTripUs) roundTripUs = 100ul;                      /* unmeasured: a sane placeholder */
-    byRun  = (roundTripUs * 10000ul + dutyBp - 1ul) / dutyBp / 1000ul;  /* ms */
-    byHold = (10000ul + (10000u - dutyBp) - 1ul) / (10000u - dutyBp);
+    if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL) return CPUSPEED_GRAN_MIN_MS;
+    if (!roundTripUs) roundTripUs = CPUSPEED_DEFAULT_ROUND_TRIP_US;                      /* unmeasured: a sane placeholder */
+    byRun  = (roundTripUs * (unsigned long)CPUSPEED_BP_FULL + dutyBp - 1ul) / dutyBp / (unsigned long)CPUSPEED_PER_THOUSAND;  /* ms */
+    byHold = ((unsigned long)CPUSPEED_BP_FULL + (CPUSPEED_BP_FULL - dutyBp) - 1ul) / (CPUSPEED_BP_FULL - dutyBp);
     if (byHold < 1ul) byHold = 1ul;
     { unsigned long floorMs = byRun > byHold ? byRun : byHold;
       if (floorMs < CPUSPEED_GRAN_MIN_MS) floorMs = CPUSPEED_GRAN_MIN_MS;
@@ -307,8 +313,8 @@ static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
    which is the fine end of the slider and the whole point of it. */
 static unsigned long CpuSpeedRunUs(UINT dutyBp, UINT periodMs)
 {
-    if (!dutyBp || dutyBp >= 10000u) return 0ul;
-    return ((unsigned long)periodMs * 1000ul * dutyBp) / 10000ul;
+    if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL) return 0ul;
+    return ((unsigned long)periodMs * (unsigned long)CPUSPEED_PER_THOUSAND * dutyBp) / (unsigned long)CPUSPEED_BP_FULL;
 }
 
 /* ── ★ THE RUN PHASE IS MEASURED, NOT ASSUMED, AND THAT IS THE WHOLE DESIGN. ─────
@@ -374,8 +380,8 @@ static UINT64 CpuSpeedHoldFor(UINT64 executedUs,
                                             UINT dutyBp)
 {
     UINT64 targetUs;
-    if (dutyBp == 0u || dutyBp >= 10000u) return 0ull;   /* unlimited: never hold */
-    targetUs = (executedUs * 10000ull) / (UINT64)dutyBp;
+    if (dutyBp == 0u || dutyBp >= CPUSPEED_BP_FULL) return 0ull;   /* unlimited: never hold */
+    targetUs = (executedUs * (UINT64)CPUSPEED_BP_FULL) / (UINT64)dutyBp;
     return targetUs > wallUs ? targetUs - wallUs : 0ull;
 }
 
@@ -408,7 +414,7 @@ static UINT CpuSpeedDeliveredBp(UINT64 executedUs,
                                       UINT64 wallUs)
 {
     if (!wallUs) return 0u;
-    return (UINT)((executedUs * 10000ull) / wallUs);
+    return (UINT)((executedUs * (UINT64)CPUSPEED_BP_FULL) / wallUs);
 }
 
 /* ── THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY. ────────────────────
@@ -429,7 +435,7 @@ typedef struct _CPUSPEED_PACE { INT64 OwedUs; } CPUSPEED_PACE, *PCPUSPEED_PACE;
 static unsigned long CpuSpeedInstructionsPerSecond(UINT index)
 {
     if (index == 0u || index >= CPUSPEED_COUNT) return 0ul;
-    return (unsigned long)g_CpuSpeedMhz[index] * 1000000ul / CPUSPEED_CPI;
+    return (unsigned long)g_CpuSpeedMhz[index] * (unsigned long)CPUSPEED_PER_MILLION / CPUSPEED_CPI;
 }
 
 /* Charge `ran` instructions that really took `elapsed_us`, and return how many
@@ -444,12 +450,12 @@ static INT CpuSpeedCharge(CPUSPEED_PACE *pace, unsigned long ran, unsigned long 
 {
     INT64 wantedUs, milliseconds;
     if (!instructionsPerSecond || !ran) { if (pace->OwedUs < 0) pace->OwedUs = 0; return 0; }
-    wantedUs = ((INT64)ran * 1000000ll) / (INT64)instructionsPerSecond;
+    wantedUs = ((INT64)ran * (INT64)CPUSPEED_PER_MILLION) / (INT64)instructionsPerSecond;
     pace->OwedUs += wantedUs - elapsedUs;
     if (pace->OwedUs < 0) pace->OwedUs = 0;              /* no credit for running fast */
-    if (pace->OwedUs > 100000ll) pace->OwedUs = 100000ll; /* 100 ms ceiling on one debt */
-    milliseconds = pace->OwedUs / 1000ll;
-    pace->OwedUs -= milliseconds * 1000ll;
+    if (pace->OwedUs > CPUSPEED_MAX_DEBT_US) pace->OwedUs = CPUSPEED_MAX_DEBT_US; /* 100 ms ceiling on one debt */
+    milliseconds = pace->OwedUs / (INT64)CPUSPEED_PER_THOUSAND;
+    pace->OwedUs -= milliseconds * (INT64)CPUSPEED_PER_THOUSAND;
     return (INT)milliseconds;
 }
 
