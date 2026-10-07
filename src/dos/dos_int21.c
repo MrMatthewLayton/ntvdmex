@@ -184,6 +184,70 @@
 #define DOS_INT21_CALLSITE_AFTER  10
 #define DOS_INT21_CALLSITE_MAX    48
 #define DOS_INT21_LFN_SERVER_OPEN 0xA9    /* AX=71A9h: an ordinary 716Ch here          */
+#define DOS_INT21_HIGH_BYTE_MASK  0xFF00  /* AH, kept when AL is the answer            */
+/* Console I/O. */
+#define DOS_INT21_NUL             0x00
+#define DOS_INT21_BACKSPACE       0x08
+#define DOS_INT21_LF              0x0A
+#define DOS_INT21_CR              0x0D
+#define DOS_INT21_CRLF_LENGTH     2
+#define DOS_INT21_DIRECT_INPUT    0xFF    /* AH=06h DL=FFh: read, don't write          */
+#define DOS_INT21_INPUT_READY     0xFF    /* AH=0Bh/06h: a character is waiting        */
+#define DOS_INT21_INPUT_NONE      0x00
+#define DOS_INT21_LINE_COUNT      1       /* AH=0Ah's buffer: max, count, then text    */
+#define DOS_INT21_LINE_TEXT       2
+#define DOS_INT21_CONSOLE_LINE_MAX 127    /* AH=3Fh from CON: a line, then CR LF       */
+#define DOS_INT21_PRINT_STRING_MAX 1024   /* AH=09h: the most a '$' string is read     */
+#define DOS_INT21_TRACE_LINE_MAX  64
+#define DOS_INT21_TRACE_FIRST_BYTES 8
+#define DOS_INT21_TRACE_DTA_BYTES 44
+/* Files. */
+#define DOS_INT21_OPEN_ACCESS_MASK 7      /* AL bits 0-2: read, write, read/write      */
+#define DOS_INT21_OPEN_WRITE      1
+#define DOS_INT21_OPEN_READ_WRITE 2
+#define DOS_INT21_HARD_ERROR_FIRST 19     /* Win32 19..31: the critical-error codes    */
+#define DOS_INT21_HARD_ERROR_LAST 31
+#define DOS_INT21_OEM_SERIAL_HIGH 0xFF00  /* AH=30h: BH = OEM FFh, BL = serial high    */
+#define DOS_INT21_SERIAL_LOW      0x0000
+#define DOS_INT21_ATTRIBUTE_VOLUME 0x08
+#define DOS_INT21_VOLUME_SIZE     128
+#define DOS_INT21_ALL_PATTERN_SIZE 8
+/* The find-first DTA's reserved area: our search, as DOS keeps its own there. */
+#define DOS_INT21_FIND_DRIVE_C    3       /* the drive byte: C:                        */
+#define DOS_INT21_FIND_MASK       12
+#define DOS_INT21_FIND_RESERVED   13
+#define DOS_INT21_FIND_TAG        19      /* DOS_FIND_MAGIC: the slot below is ours    */
+#define DOS_INT21_FIND_SLOT       20
+/* The FCB, past the drive byte and the 8.3 name. */
+#define DOS_INT21_FCB_DRIVE_AND_NAME 12
+#define DOS_INT21_FCB_BLOCK       12      /* current block                             */
+#define DOS_INT21_FCB_RECORD_SIZE 14
+#define DOS_INT21_FCB_FILE_SIZE   16
+#define DOS_INT21_FCB_NEW_NAME    16      /* AH=17h: the new name's drive byte         */
+#define DOS_INT21_FCB_DATE        20
+#define DOS_INT21_FCB_TIME        22
+#define DOS_INT21_FCB_TAG         24      /* DOS_FCB_MAGIC: the handle below is ours   */
+#define DOS_INT21_FCB_HANDLE      25
+#define DOS_INT21_FCB_CURRENT_RECORD 32
+#define DOS_INT21_FCB_RANDOM_RECORD 33
+#define DOS_INT21_FCB_SAVED_SIZE  16
+#define DOS_INT21_FCB_DEFAULT_RECORD 128
+#define DOS_INT21_FCB_RECORDS_PER_BLOCK 128
+#define DOS_INT21_FCB_RECORD_BUFFER 512
+#define DOS_INT21_FCB_END_OF_FILE 1       /* AL: nothing transferred                   */
+#define DOS_INT21_FCB_PARTIAL_RECORD 3    /* AL: a partial final record                */
+#define DOS_INT21_XFCB_ATTRIBUTE  6       /* an extended FCB's attribute byte          */
+/* A found entry, as AH=11h/12h leave it after the drive byte (a directory entry). */
+#define DOS_INT21_DIRENTRY_ATTRIBUTE 12
+#define DOS_INT21_DIRENTRY_RESERVED 13
+#define DOS_INT21_DIRENTRY_TIME   23
+#define DOS_INT21_DIRENTRY_DATE   25
+#define DOS_INT21_DIRENTRY_CLUSTER 27
+#define DOS_INT21_DIRENTRY_SIZE   29
+#define DOS_INT21_DIRENTRY_LAST   32
+/* The vectors AH=00h unwinds. */
+#define DOS_INT21_IVT_TIMER       0x20    /* INT 08h's vector                          */
+#define DOS_INT21_IVT_USER_TICK   0x70    /* INT 1Ch's vector                          */
 
 /* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
    mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
@@ -1170,10 +1234,10 @@ INT DosInt21(PDOS_MACHINE machine)
         trace = zhex(trace, VDM_REG(tib, VTIB_EIP) & DOS_INT21_WORD_MASK);
         trace = zput(trace, " ivt8=0x");
         { const volatile BYTE *ivt = (const volatile BYTE *)0;
-          DWORD timerSegment = (DWORD)ivt[0x22] | ((DWORD)ivt[0x23] << DOS_INT21_BYTE_SHIFT);
-          DWORD timerOffset = (DWORD)ivt[0x20] | ((DWORD)ivt[0x21] << DOS_INT21_BYTE_SHIFT);
-          DWORD tickSegment = (DWORD)ivt[0x72] | ((DWORD)ivt[0x73] << DOS_INT21_BYTE_SHIFT);
-          DWORD tickOffset = (DWORD)ivt[0x70] | ((DWORD)ivt[0x71] << DOS_INT21_BYTE_SHIFT);
+          DWORD timerSegment = (DWORD)ivt[DOS_INT21_IVT_TIMER + 2] | ((DWORD)ivt[DOS_INT21_IVT_TIMER + 3] << DOS_INT21_BYTE_SHIFT);
+          DWORD timerOffset = (DWORD)ivt[DOS_INT21_IVT_TIMER] | ((DWORD)ivt[DOS_INT21_IVT_TIMER + 1] << DOS_INT21_BYTE_SHIFT);
+          DWORD tickSegment = (DWORD)ivt[DOS_INT21_IVT_USER_TICK + 2] | ((DWORD)ivt[DOS_INT21_IVT_USER_TICK + 3] << DOS_INT21_BYTE_SHIFT);
+          DWORD tickOffset = (DWORD)ivt[DOS_INT21_IVT_USER_TICK] | ((DWORD)ivt[DOS_INT21_IVT_USER_TICK + 1] << DOS_INT21_BYTE_SHIFT);
           trace = zhex(trace, timerSegment); trace = zput(trace, ":0x"); trace = zhex(trace, timerOffset);
           trace = zput(trace, " ivt1C=0x"); trace = zhex(trace, tickSegment);
           trace = zput(trace, ":0x"); trace = zhex(trace, tickOffset); }
@@ -1190,7 +1254,7 @@ INT DosInt21(PDOS_MACHINE machine)
     } else if (function == DOS_FN_CHAR_OUTPUT) {              /* print char DL */
         OUTC(R_DX & DOS_INT21_BYTE_MASK); OKCF();
     } else if ((function == DOS_FN_CHAR_INPUT_ECHO || function == DOS_FN_DIRECT_INPUT || function == DOS_FN_CHAR_INPUT || function == DOS_FN_INPUT_STATUS
-                || (function == DOS_FN_DIRECT_CONSOLE_IO && (R_DX & DOS_INT21_BYTE_MASK) == 0xFF))
+                || (function == DOS_FN_DIRECT_CONSOLE_IO && (R_DX & DOS_INT21_BYTE_MASK) == DOS_INT21_DIRECT_INPUT))
                && DosHandleIsFile((PVOID const *)machine->FileHandles, 0)) {
         /* ── stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
              shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
@@ -1209,14 +1273,14 @@ INT DosInt21(PDOS_MACHINE machine)
         if (function == DOS_FN_INPUT_STATUS) {
             DWORD position = SetFilePointer(file, 0, NULL, FILE_CURRENT);
             DWORD size  = GetFileSize(file, NULL);
-            SETAX((R_AX & 0xFF00) | ((position != INVALID_SET_FILE_POINTER && position < size) ? 0xFF : 0x00));
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | ((position != INVALID_SET_FILE_POINTER && position < size) ? DOS_INT21_INPUT_READY : DOS_INT21_INPUT_NONE));
             OKCF();
         } else if (!ReadFile(file, &character, 1, &received, NULL) || received == 0) {
-            if (function == DOS_FN_DIRECT_CONSOLE_IO) { SETAX(R_AX & 0xFF00); SETZF(); OKCF(); }
+            if (function == DOS_FN_DIRECT_CONSOLE_IO) { SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); SETZF(); OKCF(); }
             else machine->IsRetry = 1;          /* EOF: block, as DOS does */
         } else {
             if (function == DOS_FN_CHAR_INPUT_ECHO) OUTC(character);
-            SETAX((R_AX & 0xFF00) | character);
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | character);
             if (function == DOS_FN_DIRECT_CONSOLE_IO) CLRZF();
             OKCF();
         }
@@ -1227,7 +1291,7 @@ INT DosInt21(PDOS_MACHINE machine)
         if (character < 0) { machine->IsRetry = 1; }
         else {
             if (function == DOS_FN_CHAR_INPUT_ECHO) OUTC(character);  /* AH=01: echo                     */
-            SETAX((R_AX & 0xFF00) | (character & DOS_INT21_BYTE_MASK)); OKCF();
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (character & DOS_INT21_BYTE_MASK)); OKCF();
         }
     } else if (function == DOS_FN_BUFFERED_INPUT && DosHandleIsFile((PVOID const *)machine->FileHandles, 0)) {
         /* stdio (s91): the line from a FILE on handle 0 -- bytes up to the CR, the
@@ -1240,14 +1304,14 @@ INT DosInt21(PDOS_MACHINE machine)
         HANDLE file = (HANDLE)machine->FileHandles[0];
         for (;;) {
             if (!ReadFile(file, &character, 1, &received, NULL) || received == 0) break;
-            if (character == 0x0A && length == 0) continue;
-            if (character == 0x0D) break;
-            if (length < maximumLength - 1) { buffer[2 + length++] = character; OUTC(character); }
+            if (character == DOS_INT21_LF && length == 0) continue;
+            if (character == DOS_INT21_CR) break;
+            if (length < maximumLength - 1) { buffer[DOS_INT21_LINE_TEXT + length++] = character; OUTC(character); }
         }
         if (length == 0 && received == 0) machine->IsRetry = 1;
         else {
-            buffer[1] = (BYTE)length; buffer[2 + length] = 0x0D;
-            OUTC(0x0D); OUTC(0x0A);
+            buffer[DOS_INT21_LINE_COUNT] = (BYTE)length; buffer[DOS_INT21_LINE_TEXT + length] = DOS_INT21_CR;
+            OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
             OKCF();
         }
     } else if (function == DOS_FN_BUFFERED_INPUT) {              /* buffered input DS:DX */
@@ -1281,24 +1345,24 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         for (;;) {
             if (machine->LineLength >= maximumLength - 1) break;  /* buffer full -> take it as a line */
-            character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : 0x0D;
+            character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : DOS_INT21_CR;
             if (character < 0) { machine->IsRetry = 1; break; }  /* nothing yet -> let the guest run */
             /* s91: a LF at the START of a line is the tail of the previous line's
                CR LF in a redirected file (`command < script`, cmd's `<` lands on the
                host stdin this reads). Every line after the first began with it and
                6.22's COMMAND.COM answered "Bad command or file name" to each. */
-            if (character == 0x0A && machine->LineLength == 0) continue;
-            if (character == 0x0D) { machine->IsLineActive = 0; break; }
-            if (character == 0x08) {                    /* backspace: rub it out on screen */
-                if (machine->LineLength > 0) { --machine->LineLength; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+            if (character == DOS_INT21_LF && machine->LineLength == 0) continue;
+            if (character == DOS_INT21_CR) { machine->IsLineActive = 0; break; }
+            if (character == DOS_INT21_BACKSPACE) {                    /* backspace: rub it out on screen */
+                if (machine->LineLength > 0) { --machine->LineLength; OUTC(DOS_INT21_BACKSPACE); OUTC(' '); OUTC(DOS_INT21_BACKSPACE); }
                 continue;
             }
-            if (character == 0x00) continue;            /* extended key: no ASCII, ignore  */
-            buffer[2 + machine->LineLength++] = (BYTE)character; OUTC(character);
+            if (character == DOS_INT21_NUL) continue;            /* extended key: no ASCII, ignore  */
+            buffer[DOS_INT21_LINE_TEXT + machine->LineLength++] = (BYTE)character; OUTC(character);
         }
         if (!machine->IsRetry) {
-            buffer[1] = (BYTE)machine->LineLength; buffer[2 + machine->LineLength] = 0x0D;
-            OUTC(0x0D); OUTC(0x0A);
+            buffer[DOS_INT21_LINE_COUNT] = (BYTE)machine->LineLength; buffer[DOS_INT21_LINE_TEXT + machine->LineLength] = DOS_INT21_CR;
+            OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
             machine->IsLineActive = 0;
             /* WHAT THE SHELL ACTUALLY RECEIVES. `echo hi` works while a bare `ver`
                comes back "Bad command or file name" -- and the difference between
@@ -1309,28 +1373,28 @@ INT DosInt21(PDOS_MACHINE machine)
               trace = zput(trace, "  INT21 AH=0A line max="); trace = zhexb(trace, (UINT)maximumLength);
               trace = zput(trace, " n="); trace = zhexb(trace, (UINT)machine->LineLength);
               trace = zput(trace, " [");
-              for (index = 0; index < machine->LineLength + 1 && index < 64; ++index) {
-                  trace = zhexb(trace, buffer[2 + index]); trace = zput(trace, " ");
+              for (index = 0; index < machine->LineLength + 1 && index < DOS_INT21_TRACE_LINE_MAX; ++index) {
+                  trace = zhexb(trace, buffer[DOS_INT21_LINE_TEXT + index]); trace = zput(trace, " ");
               }
               trace = zput(trace, "]\r\n"); }
             OKCF();
         }
     } else if (function == DOS_FN_INPUT_STATUS) {              /* check input status */
         INT isReady = machine->ConsolePeek ? machine->ConsolePeek(machine->ConsoleInContext) : 0;
-        SETAX((R_AX & 0xFF00) | (isReady ? 0xFF : 0x00));  /* FFh = char waiting */
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (isReady ? DOS_INT21_INPUT_READY : DOS_INT21_INPUT_NONE));  /* FFh = char waiting */
         OKCF();
     } else if (function == DOS_FN_DIRECT_CONSOLE_IO) {              /* direct console I/O (DL=FF -> read) */
-        if ((R_DX & DOS_INT21_BYTE_MASK) == 0xFF) {            /* input: non-blocking, ZF=1 if none */
+        if ((R_DX & DOS_INT21_BYTE_MASK) == DOS_INT21_DIRECT_INPUT) {            /* input: non-blocking, ZF=1 if none */
             INT character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : -1;
-            if (character >= 0) { SETAX((R_AX & 0xFF00) | (character & DOS_INT21_BYTE_MASK)); CLRZF(); }
-            else        { SETAX(R_AX & 0xFF00); SETZF(); }
+            if (character >= 0) { SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (character & DOS_INT21_BYTE_MASK)); CLRZF(); }
+            else        { SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); SETZF(); }
         } else {                                /* output: write DL, AL=DL */
-            OUTC(R_DX & DOS_INT21_BYTE_MASK); SETAX((R_AX & 0xFF00) | (R_DX & DOS_INT21_BYTE_MASK));
+            OUTC(R_DX & DOS_INT21_BYTE_MASK); SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (R_DX & DOS_INT21_BYTE_MASK));
         }
         OKCF();
     } else if (function == DOS_FN_PRINT_STRING) {              /* print $-string DS:DX */
         const volatile BYTE *text = (const volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK));
-        INT index; for (index = 0; index < 1024 && *text != '$'; ++index, ++text) OUTC(*text);
+        INT index; for (index = 0; index < DOS_INT21_PRINT_STRING_MAX && *text != '$'; ++index, ++text) OUTC(*text);
         OKCF();
     } else if (function == DOS_FN_WRITE) {              /* write: BX=handle CX=cnt DS:DX=buf */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK, count = R_CX & DOS_INT21_WORD_MASK;
@@ -1365,7 +1429,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 trace = zput(trace, " cnt=0x"); trace = zhex(trace, count);
                 trace = zput(trace, " FAILED win32=0x"); trace = zhex(trace, win32Error);
                 trace = zput(trace, " (hardware) drive=");
-                if (g_DosReadWriteDrive >= 0) { CHAR driveText[3] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
+                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
                 else trace = zput(trace, "?");
                 trace = zput(trace, "\r\n");
             } else { SETAX(written); OKCF(); DosStampVdmNow(machine->FileHandles[handle]); /* #263 */ }
@@ -1373,12 +1437,12 @@ INT DosInt21(PDOS_MACHINE machine)
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
-        else if ((handle == 3 || handle == 4) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)) {
-            if (AUXPRN_V86) AUXPRN_TRAMP(handle == 4 ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
+        else if ((handle == DOS_INT21_STDAUX_HANDLE || handle == DOS_INT21_STDPRN_HANDLE) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)) {
+            if (AUXPRN_V86) AUXPRN_TRAMP(handle == DOS_INT21_STDPRN_HANDLE ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else {
                 DWORD index;
                 for (index = 0; index < count; ++index) {
-                    if (handle == 4) { if (machine->PrinterOut) (VOID)machine->PrinterOut(machine->DeviceContext, (BYTE)buffer[index]); }
+                    if (handle == DOS_INT21_STDPRN_HANDLE) { if (machine->PrinterOut) (VOID)machine->PrinterOut(machine->DeviceContext, (BYTE)buffer[index]); }
                     else if (machine->AuxOut) machine->AuxOut(machine->DeviceContext, (BYTE)buffer[index]);
                 }
                 SETAX(count); OKCF();
@@ -1390,7 +1454,7 @@ INT DosInt21(PDOS_MACHINE machine)
              per-slot identity byte we have no caller for. */
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
              { DWORD index; for (index = 0; index < count; ++index) OUTC(buffer[index]); SETAX(count); OKCF(); }
-        else { SETAX(6); ERRCF(); }
+        else { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
     } else if (function == DOS_FN_CREATE || function == DOS_FN_OPEN) {  /* create / open: DS:DX=ASCIIZ name */
         /* ── DOS HANDS OUT THE LOWEST FREE HANDLE, AND THAT IS HOW `>` WORKS. ─────
              COMMAND.COM does not redirect with dup2. It CLOSES handle 1 and then
@@ -1409,23 +1473,23 @@ INT DosInt21(PDOS_MACHINE machine)
              looking for a file that is there. The protected-mode twin of this call cost
              the GDI.EXE wall exactly that way. Share everything; the access mode below
              still comes from the guest. */
-        CHAR fileName[300]; DWORD slot; HANDLE file;
+        CHAR fileName[DOS_INT21_PATH_SIZE]; DWORD slot; HANDLE file;
         DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE;
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
         if (function == DOS_FN_CREATE)
             file = CreateFileA(fileName, GENERIC_READ | GENERIC_WRITE, share,
                             NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         else {
-            DWORD mode = R_AX & 7;
-            DWORD access = (mode == 1) ? GENERIC_WRITE
-                      : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+            DWORD mode = R_AX & DOS_INT21_OPEN_ACCESS_MASK;
+            DWORD access = (mode == DOS_INT21_OPEN_WRITE) ? GENERIC_WRITE
+                      : (mode == DOS_INT21_OPEN_READ_WRITE) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
             file = DosOpenStampable(fileName, access, share, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
         }
         if (file != INVALID_HANDLE_VALUE) {
             slot = DosHandleAllocate((PVOID const *)machine->FileHandles, machine->StdOpen);
             if (slot < DOS_MAX_FILES) { machine->FileHandles[slot] = file; SETAX(slot); OKCF();
                                         if (function == DOS_FN_CREATE) DosStampVdmNow(file); /* #263 */ }
-            else { CloseHandle(file); SETAX(4); ERRCF(); }
+            else { CloseHandle(file); SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF(); }
         } else {
             /* ── ASK WHY IT FAILED. It used to answer 2 for every cause; see
                  DosErrFromWin32() for the two oracle rows that names wrong. */
@@ -1469,7 +1533,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 SETAX(dosError); ERRCF();
                 trace = zput(trace, "  INT21 AH=3F FAILED win32=0x"); trace = zhex(trace, win32Error);
                 trace = zput(trace, " (hardware) drive=");
-                if (g_DosReadWriteDrive >= 0) { CHAR driveText[3] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
+                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
                 else trace = zput(trace, "?");
                 trace = zput(trace, "\r\n");
             } else { SETAX(read); OKCF(); }
@@ -1478,7 +1542,7 @@ INT DosInt21(PDOS_MACHINE machine)
             trace = zput(trace, " cnt=0x"); trace = zhex(trace, count);
             trace = zput(trace, " got=0x"); trace = zhex(trace, read);
             trace = zput(trace, " -> 0x"); trace = zhex(trace, (DWORD)(ULONG_PTR)buffer);
-            trace = zput(trace, " first="); trace = zdump(trace, (PCBYTE)buffer, (read >= 8) ? 8 : 0);
+            trace = zput(trace, " first="); trace = zdump(trace, (PCBYTE)buffer, (read >= DOS_INT21_TRACE_FIRST_BYTES) ? DOS_INT21_TRACE_FIRST_BYTES : 0);
             trace = zput(trace, "\r\n");
         }
         else if (handle == 0 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)) {
@@ -1496,31 +1560,31 @@ INT DosInt21(PDOS_MACHINE machine)
             if (machine->ConsolePosition >= machine->ConsoleLength) {  /* nothing pending: collect a line */
                 if (!machine->IsConsoleCollecting) { machine->IsConsoleCollecting = 1; machine->ConsoleTyped = 0; }
                 for (;;) {
-                    character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : 0x0D;
+                    character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : DOS_INT21_CR;
                     if (character < 0) { machine->IsRetry = 1; break; }
-                    if (character == 0x0D) break;
-                    if (character == 0x08) {
-                        if (machine->ConsoleTyped > 0) { --machine->ConsoleTyped; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+                    if (character == DOS_INT21_CR) break;
+                    if (character == DOS_INT21_BACKSPACE) {
+                        if (machine->ConsoleTyped > 0) { --machine->ConsoleTyped; OUTC(DOS_INT21_BACKSPACE); OUTC(' '); OUTC(DOS_INT21_BACKSPACE); }
                         continue;
                     }
-                    if (character == 0x00) continue;    /* extended key: no ASCII */
-                    if (machine->ConsoleTyped >= 127) continue;  /* full: only Enter ends it */
+                    if (character == DOS_INT21_NUL) continue;    /* extended key: no ASCII */
+                    if (machine->ConsoleTyped >= DOS_INT21_CONSOLE_LINE_MAX) continue;  /* full: only Enter ends it */
                     machine->ConsoleLine[machine->ConsoleTyped++] = (BYTE)character; OUTC(character);
                 }
                 if (machine->IsRetry) goto readDone;
-                machine->ConsoleLine[machine->ConsoleTyped] = 0x0D; machine->ConsoleLine[machine->ConsoleTyped + 1] = 0x0A;
-                machine->ConsoleLength = machine->ConsoleTyped + 2; machine->ConsolePosition = 0; machine->IsConsoleCollecting = 0;
-                OUTC(0x0D); OUTC(0x0A);
+                machine->ConsoleLine[machine->ConsoleTyped] = DOS_INT21_CR; machine->ConsoleLine[machine->ConsoleTyped + 1] = DOS_INT21_LF;
+                machine->ConsoleLength = machine->ConsoleTyped + DOS_INT21_CRLF_LENGTH; machine->ConsolePosition = 0; machine->IsConsoleCollecting = 0;
+                OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
             }
             while (transferred < count && machine->ConsolePosition < machine->ConsoleLength) bytes[transferred++] = machine->ConsoleLine[machine->ConsolePosition++];
             SETAX(transferred); OKCF();
         readDone: ;
         }
-        else if (handle == 3 && AUXPRN_V86 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (handle == DOS_INT21_STDAUX_HANDLE && AUXPRN_V86 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
              AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
              { SETAX(0); OKCF(); }              /* PRN, a dup, or AUX in PM: EOF */
-        else { SETAX(6); ERRCF(); }
+        else { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
     } else if (function == DOS_FN_SEEK) {              /* lseek: AL=org BX=h CX:DX=off */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK, method = R_AX & DOS_INT21_BYTE_MASK;
         LONG distance = (LONG)(((R_CX & DOS_INT21_WORD_MASK) << DOS_INT21_WORD_SHIFT) | (R_DX & DOS_INT21_WORD_MASK));
@@ -1538,7 +1602,7 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD newPosition = SetFilePointer(machine->FileHandles[handle], distance, NULL, method);
             SETAX(newPosition & DOS_INT21_WORD_MASK);
             R_DX = (R_DX & DOS_INT21_HIGH_WORD_MASK) | ((newPosition >> DOS_INT21_WORD_SHIFT) & DOS_INT21_WORD_MASK); OKCF();
-        } else { SETAX(6); ERRCF(); }
+        } else { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
     } else if (function == DOS_FN_GET_VERSION) {              /* get DOS version */
         /* AL=major, AH=minor, BH=OEM, BL:CX=24-bit serial.  GH #28.
            BX and CX were never written before, so a caller saw whatever it had
@@ -1546,8 +1610,8 @@ INT DosInt21(PDOS_MACHINE machine)
            confirmed against the 6.22 oracle: BH=0xFF (generic MS-DOS), serial 0.
            The version itself is configurable -- see DosInt21SetVersion(). */
         SETAX(DosVersionWord(machine));         /* per process: see v5_psp (#208) */
-        SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
-        SET16(R_CX, 0x0000);                    /* serial low                  */
+        SET16(R_BX, DOS_INT21_OEM_SERIAL_HIGH);                    /* BH=OEM 0xFF, BL=serial high */
+        SET16(R_CX, DOS_INT21_SERIAL_LOW);                    /* serial low                  */
         OKCF();
     } else if (function == DOS_FN_FIND_FIRST || function == DOS_FN_FIND_NEXT) {  /* find first / find next */
         volatile BYTE *dta = (volatile BYTE *)((machine->DtaSegment << DOS_INT21_PARAGRAPH_SHIFT) + machine->DtaOffset);
@@ -1555,13 +1619,13 @@ INT DosInt21(PDOS_MACHINE machine)
         WORD mask;
         INT slot = -1, isOk = 0;
         if (function == DOS_FN_FIND_FIRST) {
-            CHAR pattern[300];
+            CHAR pattern[DOS_INT21_PATH_SIZE];
             DosGuestPath(machine, R_DS, R_DX, pattern, sizeof(pattern));
             mask = (WORD)(R_CX & DOS_INT21_WORD_MASK);
-            for (slot = 0; slot < 8 && machine->FindHandles[slot]; ++slot) {}
-            if (slot >= 8) { slot = 0;                       /* recycle the oldest */
+            for (slot = 0; slot < DOS_FIND_SLOTS && machine->FindHandles[slot]; ++slot) {}
+            if (slot >= DOS_FIND_SLOTS) { slot = 0;                       /* recycle the oldest */
                              FindClose(machine->FindHandles[0]); machine->FindHandles[0] = 0; }
-            { CHAR directoryPattern[300]; BYTE nameTemplate[11]; INT isNoDirectory;
+            { CHAR directoryPattern[DOS_INT21_PATH_SIZE]; BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE]; INT isNoDirectory;
               HANDLE find;
               DosFindSplit(pattern, directoryPattern, sizeof directoryPattern, nameTemplate);  /* DOS matching: see DosFindMatches */
               find = DosFindFirst(directoryPattern, nameTemplate, mask, &findData, &isNoDirectory);
@@ -1574,11 +1638,11 @@ INT DosInt21(PDOS_MACHINE machine)
                      that matches nothing inside an EXISTING directory is
                      AX=18 "no more files", not AX=2 "file not found". A missing
                      directory is AX=3. */
-                  SETAX(isNoDirectory ? 3 : 18);
+                  SETAX(isNoDirectory ? DOS_ERR_PATH_NOT_FOUND : DOS_ERR_NO_MORE_FILES);
                   /* #34: a HARDWARE failure (not ready, write-protected, ...) is its
                      own DOS code -- Win32 kept DOS's numbers for 19-31 -- and the
                      dispatcher's tail turns it into an INT 24h. */
-                  if (g_DosFindWin32Error >= 19 && g_DosFindWin32Error <= 31) SETAX(g_DosFindWin32Error);
+                  if (g_DosFindWin32Error >= DOS_INT21_HARD_ERROR_FIRST && g_DosFindWin32Error <= DOS_INT21_HARD_ERROR_LAST) SETAX(g_DosFindWin32Error);
                   ERRCF();
               } else {
                   machine->FindHandles[slot] = find;
@@ -1589,24 +1653,24 @@ INT DosInt21(PDOS_MACHINE machine)
                      puts the EXPANDED 11-byte search template there (a "*.*"
                      search reads back as eleven '?'), so do the same. */
                   /* The template, exactly as matched -- 4Fh reads it back from here. */
-                  { INT nameIndex; for (nameIndex = 0; nameIndex < 11; ++nameIndex) dta[1 + nameIndex] = nameTemplate[nameIndex]; }
-                  dta[0] = 3;                                /* drive C:        */
-                  dta[12] = (BYTE)(mask & DOS_INT21_BYTE_MASK);
-                  dta[13] = 0; dta[14] = 0; dta[15] = 0; dta[16] = 0;
-                  dta[17] = 0; dta[18] = 0;
-                  dta[19] = DOS_FIND_MAGIC;
-                  dta[20] = (BYTE)slot;
+                  { INT nameIndex; for (nameIndex = 0; nameIndex < DOS_LFN_FCB_NAME_SIZE; ++nameIndex) dta[DOS_INT21_FCB_NAME + nameIndex] = nameTemplate[nameIndex]; }
+                  dta[0] = DOS_INT21_FIND_DRIVE_C;                                /* drive C:        */
+                  dta[DOS_INT21_FIND_MASK] = (BYTE)(mask & DOS_INT21_BYTE_MASK);
+                  dta[DOS_INT21_FIND_RESERVED] = 0; dta[DOS_INT21_FIND_RESERVED + 1] = 0; dta[DOS_INT21_FIND_RESERVED + 2] = 0; dta[DOS_INT21_FIND_RESERVED + 3] = 0;
+                  dta[DOS_INT21_FIND_RESERVED + 4] = 0; dta[DOS_INT21_FIND_RESERVED + 5] = 0;
+                  dta[DOS_INT21_FIND_TAG] = DOS_FIND_MAGIC;
+                  dta[DOS_INT21_FIND_SLOT] = (BYTE)slot;
               }
             }
         } else {                                             /* 4Fh: continue   */
-            mask = (WORD)dta[12];
-            if (dta[19] == DOS_FIND_MAGIC && dta[20] < 8 && machine->FindHandles[dta[20]]) {
-                BYTE nameTemplate[11]; INT index;
-                slot = dta[20];
-                for (index = 0; index < 11; ++index) nameTemplate[index] = dta[1 + index];  /* the template 4Eh stored */
+            mask = (WORD)dta[DOS_INT21_FIND_MASK];
+            if (dta[DOS_INT21_FIND_TAG] == DOS_FIND_MAGIC && dta[DOS_INT21_FIND_SLOT] < DOS_FIND_SLOTS && machine->FindHandles[dta[DOS_INT21_FIND_SLOT]]) {
+                BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE]; INT index;
+                slot = dta[DOS_INT21_FIND_SLOT];
+                for (index = 0; index < DOS_LFN_FCB_NAME_SIZE; ++index) nameTemplate[index] = dta[DOS_INT21_FCB_NAME + index];  /* the template 4Eh stored */
                 isOk = DosFindNext(machine->FindHandles[slot], nameTemplate, mask, &findData);
             } else {
-                SETAX(18); ERRCF();                          /* no search live  */
+                SETAX(DOS_ERR_NO_MORE_FILES); ERRCF();                          /* no search live  */
             }
         }
         if (slot >= 0 && isOk) {
@@ -1620,20 +1684,20 @@ INT DosInt21(PDOS_MACHINE machine)
               trace = zhexb(trace, (UINT)((machine->DtaOffset >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
               trace = zhexb(trace, (UINT)(machine->DtaOffset & DOS_INT21_BYTE_MASK));
               trace = zput(trace, " [");
-              for (position = 0; position < 44; ++position) { trace = zhexb(trace, (UINT)dta[position]); trace = zput(trace, " "); }
+              for (position = 0; position < DOS_INT21_TRACE_DTA_BYTES; ++position) { trace = zhexb(trace, (UINT)dta[position]); trace = zput(trace, " "); }
               trace = zput(trace, "]\r\n"); }
             SETAX(0); OKCF();                                /* oracle: AX=0000 */
         } else if (slot >= 0 && machine->FindHandles[slot] && !isOk) {
             FindClose(machine->FindHandles[slot]); machine->FindHandles[slot] = 0;
-            dta[19] = 0;
-            SETAX(18); ERRCF();                              /* no more files   */
+            dta[DOS_INT21_FIND_TAG] = 0;
+            SETAX(DOS_ERR_NO_MORE_FILES); ERRCF();                              /* no more files   */
         }
-    } else if ((function >= 0x0F && function <= 0x17) || (function >= 0x21 && function <= 0x24)
-               || (function >= 0x27 && function <= 0x29)) {  /* ---- the FCB interface ---- */
+    } else if ((function >= DOS_FN_FCB_OPEN && function <= DOS_FN_FCB_RENAME) || (function >= DOS_FN_FCB_READ_RANDOM && function <= DOS_FN_FCB_SET_RANDOM_RECORD)
+               || (function >= DOS_FN_FCB_READ_BLOCK && function <= DOS_FN_PARSE_FILENAME)) {  /* ---- the FCB interface ---- */
         volatile BYTE *fcb = DosFcbAt(R_DS, R_DX);
-        CHAR name[300];
-        #define FCB_OK()   SETAX((R_AX & 0xFF00) | 0x00)
-        #define FCB_FAIL() SETAX((R_AX & 0xFF00) | 0xFF)
+        CHAR name[DOS_INT21_PATH_SIZE];
+        #define FCB_OK()   SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0x00)
+        #define FCB_FAIL() SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF)
         /* CF is undefined for these on real DOS; leave it as the guest set it. */
         if (function == DOS_FN_FCB_OPEN || function == DOS_FN_FCB_CREATE) {  /* open / create */
             HANDLE file; DWORD slot;
@@ -1653,24 +1717,24 @@ INT DosInt21(PDOS_MACHINE machine)
                     if (GetFileTime(file, NULL, NULL, &fileTime)
                         && FileTimeToLocalFileTime(&fileTime, &localTime))
                         FileTimeToDosDateTime(&localTime, &dosDate, &dosTime);
-                    fcb[12] = 0; fcb[13] = 0;
-                    fcb[14] = 128; fcb[15] = 0;     /* oracle: record size 128 */
-                    fcb[16] = (BYTE)(size & DOS_INT21_BYTE_MASK);        fcb[17] = (BYTE)((size >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
-                    fcb[18] = (BYTE)((size >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[19] = (BYTE)((size >> 24) & DOS_INT21_BYTE_MASK);
-                    fcb[20] = (BYTE)(dosDate & DOS_INT21_BYTE_MASK); fcb[21] = (BYTE)(dosDate >> DOS_INT21_BYTE_SHIFT);
-                    fcb[22] = (BYTE)(dosTime & DOS_INT21_BYTE_MASK); fcb[23] = (BYTE)(dosTime >> DOS_INT21_BYTE_SHIFT);
+                    fcb[DOS_INT21_FCB_BLOCK] = 0; fcb[DOS_INT21_FCB_BLOCK + 1] = 0;
+                    fcb[DOS_INT21_FCB_RECORD_SIZE] = DOS_INT21_FCB_DEFAULT_RECORD; fcb[DOS_INT21_FCB_RECORD_SIZE + 1] = 0;     /* oracle: record size 128 */
+                    fcb[DOS_INT21_FCB_FILE_SIZE] = (BYTE)(size & DOS_INT21_BYTE_MASK);        fcb[DOS_INT21_FCB_FILE_SIZE + 1] = (BYTE)((size >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
+                    fcb[DOS_INT21_FCB_FILE_SIZE + 2] = (BYTE)((size >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_FILE_SIZE + 3] = (BYTE)((size >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
+                    fcb[DOS_INT21_FCB_DATE] = (BYTE)(dosDate & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_DATE + 1] = (BYTE)(dosDate >> DOS_INT21_BYTE_SHIFT);
+                    fcb[DOS_INT21_FCB_TIME] = (BYTE)(dosTime & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_TIME + 1] = (BYTE)(dosTime >> DOS_INT21_BYTE_SHIFT);
                     /* DOS replaces a "default drive" 0 with the drive it
                        actually resolved -- measured: the oracle returns 01 when
                        run from A:, DOSBox 03 from C:. We were leaving the
                        caller's 0 in place. */
                     if (!fcb[0]) fcb[0] = (BYTE)(DosCurrentDrive(machine) + 1);
-                    fcb[24] = DOS_FCB_MAGIC; fcb[25] = (BYTE)slot;
+                    fcb[DOS_INT21_FCB_TAG] = DOS_FCB_MAGIC; fcb[DOS_INT21_FCB_HANDLE] = (BYTE)slot;
                     FCB_OK();
                 }
             }
         } else if (function == DOS_FN_FCB_CLOSE) {          /* close */
-            if (fcb[24] == DOS_FCB_MAGIC && fcb[25] < DOS_MAX_FILES && machine->FileHandles[fcb[25]]) {
-                DosHandleRelease(machine, fcb[25]); fcb[24] = 0; FCB_OK();
+            if (fcb[DOS_INT21_FCB_TAG] == DOS_FCB_MAGIC && fcb[DOS_INT21_FCB_HANDLE] < DOS_MAX_FILES && machine->FileHandles[fcb[DOS_INT21_FCB_HANDLE]]) {
+                DosHandleRelease(machine, fcb[DOS_INT21_FCB_HANDLE]); fcb[DOS_INT21_FCB_TAG] = 0; FCB_OK();
             } else FCB_FAIL();
         } else if (function == DOS_FN_FCB_FIND_FIRST || function == DOS_FN_FCB_FIND_NEXT) {  /* find first / find next */
             volatile BYTE *dta = (volatile BYTE *)((machine->DtaSegment << DOS_INT21_PARAGRAPH_SHIFT) + machine->DtaOffset);
@@ -1692,50 +1756,50 @@ INT DosInt21(PDOS_MACHINE machine)
                  directory wearing the label's clothes.
                  The label is 11 bytes in the name+ext field, NOT an 8.3 name, so it
                  is padded raw rather than through DosFcbPutName. */
-            if (mask == 0x08) {
+            if (mask == DOS_INT21_ATTRIBUTE_VOLUME) {
                 if (function == DOS_FN_FCB_FIND_FIRST) {
-                    CHAR volume[128]; INT volumeIndex;
+                    CHAR volume[DOS_INT21_VOLUME_SIZE]; INT volumeIndex;
                     volatile BYTE *extension;
-                    INT isExtended = (fcb != (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK))) ? 7 : 0;
+                    INT isExtended = (fcb != (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
                     volume[0] = 0;
                     if (!GetVolumeInformationA("C:\\", volume, sizeof volume,
                                                NULL, NULL, NULL, NULL, 0) || !volume[0]) {
                         if (machine->FcbFind) { FindClose(machine->FcbFind); machine->FcbFind = 0; }
-                        machine->LastError = 18;
+                        machine->LastError = DOS_ERR_NO_MORE_FILES;
                         FCB_FAIL();                       /* no label: DIR says so   */
                         goto fcbDone;
                     }
                     extension = dta + isExtended;
-                    if (isExtended) { INT position; dta[0] = 0xFF; for (position = 1; position <= 5; ++position) dta[position] = 0; dta[6] = 0x08; }
-                    extension[0] = 3;                     /* drive C:                */
-                    for (volumeIndex = 0; volumeIndex < 11; ++volumeIndex) {
+                    if (isExtended) { INT position; dta[0] = DOS_INT21_XFCB_FLAG; for (position = 1; position < DOS_INT21_XFCB_ATTRIBUTE; ++position) dta[position] = 0; dta[DOS_INT21_XFCB_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME; }
+                    extension[0] = DOS_INT21_FIND_DRIVE_C;                     /* drive C:                */
+                    for (volumeIndex = 0; volumeIndex < DOS_LFN_FCB_NAME_SIZE; ++volumeIndex) {
                         CHAR character = volume[volumeIndex] ? volume[volumeIndex] : ' ';
                         if (!volume[volumeIndex]) { extension[1 + volumeIndex] = ' '; continue; }
-                        extension[1 + volumeIndex] = (BYTE)(character >= 'a' && character <= 'z' ? character - 32 : character);
+                        extension[DOS_INT21_FCB_NAME + volumeIndex] = (BYTE)(character >= 'a' && character <= 'z' ? character - DOS_INT21_LOWER_TO_UPPER : character);
                     }
-                    extension[12] = 0x08;                 /* attribute: volume label */
-                    { INT position; for (position = 13; position <= 32; ++position) extension[position] = 0; }
+                    extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME;                 /* attribute: volume label */
+                    { INT position; for (position = DOS_INT21_DIRENTRY_RESERVED; position <= DOS_INT21_DIRENTRY_LAST; ++position) extension[position] = 0; }
                     if (machine->FcbFind) { FindClose(machine->FcbFind); machine->FcbFind = 0; }
                     FCB_OK();
-                } else { machine->LastError = 18; FCB_FAIL(); }  /* 12h: only ever one label */
+                } else { machine->LastError = DOS_ERR_NO_MORE_FILES; FCB_FAIL(); }  /* 12h: only ever one label */
                 goto fcbDone;
             }
             if (function == DOS_FN_FCB_FIND_FIRST) {
                 /* The FCB's own 11 bytes ARE the template (`????????.???` for DIR), matched
                    against each entry's 8.3 name -- see DosFindMatches. The drive byte
                    picks the directory: "X:*" is that drive's current directory. */
-                HANDLE find; CHAR allPattern[8]; INT index, isNoDirectory, count = 0;
+                HANDLE find; CHAR allPattern[DOS_INT21_ALL_PATTERN_SIZE]; INT index, isNoDirectory, count = 0;
                 if (machine->FcbFind) { FindClose(machine->FcbFind); machine->FcbFind = 0; }
-                for (index = 0; index < 11; ++index) machine->FcbTemplate[index] = fcb[1 + index];
+                for (index = 0; index < DOS_FCB_NAME_SIZE; ++index) machine->FcbTemplate[index] = fcb[DOS_INT21_FCB_NAME + index];
                 if (fcb[0]) { allPattern[count++] = (CHAR)('A' + fcb[0] - 1); allPattern[count++] = ':'; }
                 allPattern[count++] = '*'; allPattern[count] = 0;
                 find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
                 if (find != INVALID_HANDLE_VALUE) { machine->FcbFind = find; received = 1; }
-                if (machine->IsTraceAll) { CHAR currentDirectory[260]; INT position;
+                if (machine->IsTraceAll) { CHAR currentDirectory[MAX_PATH]; INT position;
                     GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory);
                     trace = zput(trace, "  INT21 AH=11 ["); trace = zput(trace, allPattern);
                     trace = zput(trace, "] in ["); trace = zput(trace, currentDirectory); trace = zput(trace, "] tmpl=[");
-                    for (position = 0; position < 11; ++position) { CHAR pair[2]; pair[0] = (CHAR)machine->FcbTemplate[position]; pair[1] = 0; trace = zput(trace, pair); }
+                    for (position = 0; position < DOS_FCB_NAME_SIZE; ++position) { CHAR pair[2]; pair[0] = (CHAR)machine->FcbTemplate[position]; pair[1] = 0; trace = zput(trace, pair); }
                     trace = zput(trace, "] mask=0x"); trace = zhex(trace, mask);
                     trace = zput(trace, received ? " -> found\r\n" : " -> none\r\n"); }
             } else if (machine->FcbFind) {
@@ -1752,7 +1816,7 @@ INT DosInt21(PDOS_MACHINE machine)
                  memory", and prints exactly that instead of its summary line. The
                  listing was RIGHT and the epitaph was three commands stale.
                  18 = "no more files", which is what DOS reports here. */
-            if (!received) { machine->LastError = 18; FCB_FAIL(); }
+            if (!received) { machine->LastError = DOS_ERR_NO_MORE_FILES; FCB_FAIL(); }
             else {
                 PCSTR baseName = findData.cAlternateFileName[0] ? findData.cAlternateFileName
                                                           : findData.cFileName;
@@ -1769,26 +1833,26 @@ INT DosInt21(PDOS_MACHINE machine)
                      read as an 11-byte label.
                      The prefix is FFh, five reserved bytes, then the attribute of
                      the file found; the ordinary result follows it unchanged. */
-                INT isExtended = (fcb != (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK))) ? 7 : 0;
+                INT isExtended = (fcb != (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
                 volatile BYTE *extension = dta + isExtended;
                 if (FileTimeToLocalFileTime(&findData.ftLastWriteTime, &localTime))
                     FileTimeToDosDateTime(&localTime, &dosDate, &dosTime);
                 if (isExtended) {
-                    dta[0] = 0xFF;
-                    for (index = 1; index <= 5; ++index) dta[index] = 0;
-                    dta[6] = (BYTE)(findData.dwFileAttributes & 0x3F);
+                    dta[0] = DOS_INT21_XFCB_FLAG;
+                    for (index = 1; index < DOS_INT21_XFCB_ATTRIBUTE; ++index) dta[index] = 0;
+                    dta[DOS_INT21_XFCB_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
                 }
-                extension[0] = 3;                         /* drive C:          */
+                extension[0] = DOS_INT21_FIND_DRIVE_C;                         /* drive C:          */
                 DosFcbPutName(extension + 1, baseName);
-                extension[12] = (BYTE)(findData.dwFileAttributes & 0x3F);
-                for (index = 13; index <= 22; ++index) extension[index] = 0;
-                extension[23] = (BYTE)(dosTime & DOS_INT21_BYTE_MASK); extension[24] = (BYTE)(dosTime >> DOS_INT21_BYTE_SHIFT);
-                extension[25] = (BYTE)(dosDate & DOS_INT21_BYTE_MASK); extension[26] = (BYTE)(dosDate >> DOS_INT21_BYTE_SHIFT);
-                extension[27] = 0; extension[28] = 0;     /* starting cluster  */
-                extension[29] = (BYTE)( findData.nFileSizeLow        & DOS_INT21_BYTE_MASK);
-                extension[30] = (BYTE)((findData.nFileSizeLow >> DOS_INT21_BYTE_SHIFT)  & DOS_INT21_BYTE_MASK);
-                extension[31] = (BYTE)((findData.nFileSizeLow >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK);
-                extension[32] = (BYTE)((findData.nFileSizeLow >> 24) & DOS_INT21_BYTE_MASK);
+                extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
+                for (index = DOS_INT21_DIRENTRY_RESERVED; index < DOS_INT21_DIRENTRY_TIME; ++index) extension[index] = 0;
+                extension[DOS_INT21_DIRENTRY_TIME] = (BYTE)(dosTime & DOS_INT21_BYTE_MASK); extension[DOS_INT21_DIRENTRY_TIME + 1] = (BYTE)(dosTime >> DOS_INT21_BYTE_SHIFT);
+                extension[DOS_INT21_DIRENTRY_DATE] = (BYTE)(dosDate & DOS_INT21_BYTE_MASK); extension[DOS_INT21_DIRENTRY_DATE + 1] = (BYTE)(dosDate >> DOS_INT21_BYTE_SHIFT);
+                extension[DOS_INT21_DIRENTRY_CLUSTER] = 0; extension[DOS_INT21_DIRENTRY_CLUSTER + 1] = 0;     /* starting cluster  */
+                extension[DOS_INT21_DIRENTRY_SIZE] = (BYTE)( findData.nFileSizeLow        & DOS_INT21_BYTE_MASK);
+                extension[DOS_INT21_DIRENTRY_SIZE + 1] = (BYTE)((findData.nFileSizeLow >> DOS_INT21_BYTE_SHIFT)  & DOS_INT21_BYTE_MASK);
+                extension[DOS_INT21_DIRENTRY_SIZE + 2] = (BYTE)((findData.nFileSizeLow >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK);
+                extension[DOS_INT21_DIRENTRY_SIZE + 3] = (BYTE)((findData.nFileSizeLow >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
                 FCB_OK();
             }
             fcbDone: ;
@@ -1805,31 +1869,31 @@ INT DosInt21(PDOS_MACHINE machine)
             }
             if (isFound) FCB_OK(); else FCB_FAIL();
         } else if (function == DOS_FN_FCB_RENAME) {          /* rename: new name at f[17..27] */
-            CHAR destinationPath[300];
-            CHAR saved[16]; INT index;
+            CHAR destinationPath[DOS_INT21_PATH_SIZE];
+            CHAR saved[DOS_INT21_FCB_SAVED_SIZE]; INT index;
             DosFcbName(fcb, name);
-            for (index = 0; index < 12; ++index) saved[index] = (CHAR)fcb[index];
-            { volatile BYTE temporary[12]; temporary[0] = fcb[0];
-              for (index = 1; index < 12; ++index) temporary[index] = fcb[16 + index];
+            for (index = 0; index < DOS_INT21_FCB_DRIVE_AND_NAME; ++index) saved[index] = (CHAR)fcb[index];
+            { volatile BYTE temporary[DOS_INT21_FCB_DRIVE_AND_NAME]; temporary[0] = fcb[0];
+              for (index = 1; index < DOS_INT21_FCB_DRIVE_AND_NAME; ++index) temporary[index] = fcb[DOS_INT21_FCB_NEW_NAME + index];
               DosFcbName(temporary, destinationPath); }
             if (MoveFileA(name, destinationPath)) FCB_OK(); else FCB_FAIL();
             (VOID)saved;
         } else if (function == DOS_FN_FCB_READ_SEQUENTIAL || function == DOS_FN_FCB_WRITE_SEQUENTIAL || function == DOS_FN_FCB_READ_RANDOM || function == DOS_FN_FCB_WRITE_RANDOM
                    || function == DOS_FN_FCB_READ_BLOCK || function == DOS_FN_FCB_WRITE_BLOCK) {  /* record I/O */
             volatile BYTE *dta = (volatile BYTE *)((machine->DtaSegment << DOS_INT21_PARAGRAPH_SHIFT) + machine->DtaOffset);
-            DWORD recordSize = (DWORD)fcb[14] | ((DWORD)fcb[15] << DOS_INT21_BYTE_SHIFT);
-            DWORD block   = (DWORD)fcb[12] | ((DWORD)fcb[13] << DOS_INT21_BYTE_SHIFT);
+            DWORD recordSize = (DWORD)fcb[DOS_INT21_FCB_RECORD_SIZE] | ((DWORD)fcb[DOS_INT21_FCB_RECORD_SIZE + 1] << DOS_INT21_BYTE_SHIFT);
+            DWORD block   = (DWORD)fcb[DOS_INT21_FCB_BLOCK] | ((DWORD)fcb[DOS_INT21_FCB_BLOCK + 1] << DOS_INT21_BYTE_SHIFT);
             DWORD record, count = 1, done = 0, index;
-            BYTE buffer[512];
-            if (!recordSize) recordSize = 128;
+            BYTE buffer[DOS_INT21_FCB_RECORD_BUFFER];
+            if (!recordSize) recordSize = DOS_INT21_FCB_DEFAULT_RECORD;
             if (recordSize > sizeof(buffer)) recordSize = sizeof(buffer);
-            if (function == DOS_FN_FCB_READ_SEQUENTIAL || function == DOS_FN_FCB_WRITE_SEQUENTIAL) record = block * 128 + fcb[32];
-            else record = (DWORD)fcb[33] | ((DWORD)fcb[34] << DOS_INT21_BYTE_SHIFT)
-                     | ((DWORD)fcb[35] << DOS_INT21_WORD_SHIFT) | ((DWORD)fcb[36] << 24);
+            if (function == DOS_FN_FCB_READ_SEQUENTIAL || function == DOS_FN_FCB_WRITE_SEQUENTIAL) record = block * DOS_INT21_FCB_RECORDS_PER_BLOCK + fcb[DOS_INT21_FCB_CURRENT_RECORD];
+            else record = (DWORD)fcb[DOS_INT21_FCB_RANDOM_RECORD] | ((DWORD)fcb[DOS_INT21_FCB_RANDOM_RECORD + 1] << DOS_INT21_BYTE_SHIFT)
+                     | ((DWORD)fcb[DOS_INT21_FCB_RANDOM_RECORD + 2] << DOS_INT21_WORD_SHIFT) | ((DWORD)fcb[DOS_INT21_FCB_RANDOM_RECORD + 3] << DOS_INT21_HIGH_BYTE_SHIFT);
             if (function == DOS_FN_FCB_READ_BLOCK || function == DOS_FN_FCB_WRITE_BLOCK) count = R_CX & DOS_INT21_WORD_MASK;
-            if (fcb[24] != DOS_FCB_MAGIC || fcb[25] >= DOS_MAX_FILES || !machine->FileHandles[fcb[25]]) SETAX((R_AX & 0xFF00) | 1);
+            if (fcb[DOS_INT21_FCB_TAG] != DOS_FCB_MAGIC || fcb[DOS_INT21_FCB_HANDLE] >= DOS_MAX_FILES || !machine->FileHandles[fcb[DOS_INT21_FCB_HANDLE]]) SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DOS_INT21_FCB_END_OF_FILE);
             else {
-                HANDLE file = machine->FileHandles[fcb[25]];
+                HANDLE file = machine->FileHandles[fcb[DOS_INT21_FCB_HANDLE]];
                 DWORD length = 0;
                 SetFilePointer(file, (LONG)(record * recordSize), NULL, FILE_BEGIN);
                 for (index = 0; index < count; ++index) {
@@ -1852,17 +1916,17 @@ INT DosInt21(PDOS_MACHINE machine)
                     DosStampVdmNow(file);               /* #263: an FCB write */
                 /* AL: 0 = all done, 1 = end of file / nothing transferred,
                    3 = a partial final record. */
-                if (done == count) SETAX((R_AX & 0xFF00) | 0);
-                else if (!done)    SETAX((R_AX & 0xFF00) | 1);
-                else               SETAX((R_AX & 0xFF00) | 3);
+                if (done == count) SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0);
+                else if (!done)    SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DOS_INT21_FCB_END_OF_FILE);
+                else               SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DOS_INT21_FCB_PARTIAL_RECORD);
                 if (function == DOS_FN_FCB_READ_SEQUENTIAL || function == DOS_FN_FCB_WRITE_SEQUENTIAL) {  /* advance sequentially */
                     DWORD nextRecord = record + done;
-                    fcb[12] = (BYTE)((nextRecord / 128) & DOS_INT21_BYTE_MASK); fcb[13] = (BYTE)((nextRecord / 128) >> DOS_INT21_BYTE_SHIFT);
-                    fcb[32] = (BYTE)(nextRecord % 128);
+                    fcb[DOS_INT21_FCB_BLOCK] = (BYTE)((nextRecord / DOS_INT21_FCB_RECORDS_PER_BLOCK) & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_BLOCK + 1] = (BYTE)((nextRecord / DOS_INT21_FCB_RECORDS_PER_BLOCK) >> DOS_INT21_BYTE_SHIFT);
+                    fcb[DOS_INT21_FCB_CURRENT_RECORD] = (BYTE)(nextRecord % DOS_INT21_FCB_RECORDS_PER_BLOCK);
                 } else {
                     DWORD nextRecord = record + done;
-                    fcb[33] = (BYTE)(nextRecord & DOS_INT21_BYTE_MASK);         fcb[34] = (BYTE)((nextRecord >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
-                    fcb[35] = (BYTE)((nextRecord >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[36] = (BYTE)((nextRecord >> 24) & DOS_INT21_BYTE_MASK);
+                    fcb[DOS_INT21_FCB_RANDOM_RECORD] = (BYTE)(nextRecord & DOS_INT21_BYTE_MASK);         fcb[DOS_INT21_FCB_RANDOM_RECORD + 1] = (BYTE)((nextRecord >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
+                    fcb[DOS_INT21_FCB_RANDOM_RECORD + 2] = (BYTE)((nextRecord >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_RANDOM_RECORD + 3] = (BYTE)((nextRecord >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
                 }
             }
         } else if (function == DOS_FN_FCB_FILE_SIZE) {          /* get file size, in records */
@@ -1873,19 +1937,19 @@ INT DosInt21(PDOS_MACHINE machine)
             if (file == INVALID_HANDLE_VALUE) FCB_FAIL();
             else {
                 DWORD size = GetFileSize(file, NULL);
-                DWORD recordSize = (DWORD)fcb[14] | ((DWORD)fcb[15] << DOS_INT21_BYTE_SHIFT);
+                DWORD recordSize = (DWORD)fcb[DOS_INT21_FCB_RECORD_SIZE] | ((DWORD)fcb[DOS_INT21_FCB_RECORD_SIZE + 1] << DOS_INT21_BYTE_SHIFT);
                 DWORD records;
                 CloseHandle(file);
-                if (!recordSize) recordSize = 128;
+                if (!recordSize) recordSize = DOS_INT21_FCB_DEFAULT_RECORD;
                 records = (size + recordSize - 1) / recordSize;
-                fcb[33] = (BYTE)(records & DOS_INT21_BYTE_MASK);         fcb[34] = (BYTE)((records >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
-                fcb[35] = (BYTE)((records >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[36] = (BYTE)((records >> 24) & DOS_INT21_BYTE_MASK);
+                fcb[DOS_INT21_FCB_RANDOM_RECORD] = (BYTE)(records & DOS_INT21_BYTE_MASK);         fcb[DOS_INT21_FCB_RANDOM_RECORD + 1] = (BYTE)((records >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
+                fcb[DOS_INT21_FCB_RANDOM_RECORD + 2] = (BYTE)((records >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_RANDOM_RECORD + 3] = (BYTE)((records >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
                 FCB_OK();
             }
         } else if (function == DOS_FN_FCB_SET_RANDOM_RECORD) {          /* set random record from current */
-            DWORD nextRecord = ((DWORD)fcb[12] | ((DWORD)fcb[13] << DOS_INT21_BYTE_SHIFT)) * 128 + fcb[32];
-            fcb[33] = (BYTE)(nextRecord & DOS_INT21_BYTE_MASK);         fcb[34] = (BYTE)((nextRecord >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
-            fcb[35] = (BYTE)((nextRecord >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[36] = (BYTE)((nextRecord >> 24) & DOS_INT21_BYTE_MASK);
+            DWORD nextRecord = ((DWORD)fcb[DOS_INT21_FCB_BLOCK] | ((DWORD)fcb[DOS_INT21_FCB_BLOCK + 1] << DOS_INT21_BYTE_SHIFT)) * 128 + fcb[DOS_INT21_FCB_CURRENT_RECORD];
+            fcb[DOS_INT21_FCB_RANDOM_RECORD] = (BYTE)(nextRecord & DOS_INT21_BYTE_MASK);         fcb[DOS_INT21_FCB_RANDOM_RECORD + 1] = (BYTE)((nextRecord >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
+            fcb[DOS_INT21_FCB_RANDOM_RECORD + 2] = (BYTE)((nextRecord >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK); fcb[DOS_INT21_FCB_RANDOM_RECORD + 3] = (BYTE)((nextRecord >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
             OKCF();
         } else if (function == DOS_FN_PARSE_FILENAME) {          /* parse a filename into an FCB */
             CHAR input[300];
@@ -1919,7 +1983,7 @@ INT DosInt21(PDOS_MACHINE machine)
             if (!hasExtension  && (subfunction & 0x08)) for (index = 9; index <= 11; ++index) destination[index] = kept[index];
             for (index = 1; index <= 11; ++index) if (destination[index] == '?' || destination[index] == '*') isWild = 1;
             for (index = 12; index <= 15; ++index) destination[index] = 0;
-            SETAX((R_AX & 0xFF00) | (isWild ? 1 : 0));
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (isWild ? 1 : 0));
             SET16(R_SI, (WORD)((R_SI & DOS_INT21_WORD_MASK) + inputIndex));
             OKCF();
             /* THE CALL COMMAND.COM'S DISPATCH TURNS ON. `ver ` runs and `ver` does
@@ -1992,7 +2056,7 @@ INT DosInt21(PDOS_MACHINE machine)
             trace = zput(trace, "  INT21 AH=4B AL=0x"); trace = zhexb(trace, subfunction);
             trace = zput(trace, " UNIMPLEMENTED (overlay load)\r\n");
             machine->Unimplemented[0x4B >> 3] |= (BYTE)(1u << (0x4B & 7));
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_DEFAULT_DRIVE_INFO || function == DOS_FN_GET_DRIVE_INFO) {  /* allocation info for a drive */
         /* AL=sectors/cluster, DS:BX -> media descriptor byte, CX=bytes/sector,
@@ -2008,12 +2072,12 @@ INT DosInt21(PDOS_MACHINE machine)
         if (GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
             volatile BYTE *media = (volatile BYTE *)((DOS_CTAB_SEG << DOS_INT21_PARAGRAPH_SHIFT) + DOS_MEDIA_OFF);
             *media = 0xF8;                       /* fixed disk */
-            SETAX((R_AX & 0xFF00) | (sectorsPerCluster & DOS_INT21_BYTE_MASK));
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (sectorsPerCluster & DOS_INT21_BYTE_MASK));
             SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_MEDIA_OFF);
             SET16(R_CX, (WORD)bytesPerSector);
             SET16(R_DX, totalClusters > 0xFFFF ? 0xFFFF : totalClusters);
             OKCF();
-        } else { SETAX((R_AX & 0xFF00) | 0xFF); ERRCF(); }
+        } else { SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF); ERRCF(); }
     } else if (function == DOS_FN_GET_DEFAULT_DPB || function == DOS_FN_GET_DPB) {  /* get drive parameter block */
         /* DPB contents are disk geometry and its address is host-specific; AL is
            the comparable part -- 00 for a valid drive, FF otherwise (measured). */
@@ -2023,7 +2087,7 @@ INT DosInt21(PDOS_MACHINE machine)
         if (driveNumber) { root[0] = (CHAR)('A' + driveNumber - 1); root[1] = ':';
                     root[2] = '\\'; root[3] = 0; rootPointer = root; }
         if (driveNumber > 26 || !GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
-            SETAX((R_AX & 0xFF00) | 0xFF);
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF);
         } else {
             /* ── #48: THE SAME BUILDER AS THE AH=52h CHAIN, so the two DPBs a program
                  can reach for one drive describe one volume. This copy had its own
@@ -2046,25 +2110,25 @@ INT DosInt21(PDOS_MACHINE machine)
                           DOS_DEV_SEG, DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK), 0xFFFF, 0xFFFF);
             for (index = 0; index < DOS_DPB_LEN; ++index) dpbBytes[index] = dpb[index];
             SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_DPB_OFF);
-            SETAX(R_AX & 0xFF00);
+            SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK);
         }
         OKCF();
     } else if (function == DOS_FN_SWITCH_CHAR) {              /* get/set the SWITCH character */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
         if (subfunction == 0x00) {              /* oracle: DL = '/' */
-            SET16(R_DX, (WORD)((R_DX & 0xFF00) | machine->SwitchChar));
-            SETAX(R_AX & 0xFF00); OKCF();
+            SET16(R_DX, (WORD)((R_DX & DOS_INT21_HIGH_BYTE_MASK) | machine->SwitchChar));
+            SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
         } else if (subfunction == 0x01) {
             machine->SwitchChar = (BYTE)(R_DX & DOS_INT21_BYTE_MASK);
-            SETAX(R_AX & 0xFF00); OKCF();
-        } else { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
+            SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
+        } else { SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF); OKCF(); }
     } else if (function == DOS_FN_CODE_PAGE) {              /* get/set global code page */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
         if (subfunction == 0x01) {              /* oracle: BX=DX=437 */
             SET16(R_BX, 437); SET16(R_DX, 437); OKCF();
         } else if (subfunction == 0x02) {
             OKCF();                             /* accept; we have only 437 */
-        } else { SETAX(1); ERRCF(); }
+        } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
     } else if (function == DOS_FN_CREATE_PSP || function == DOS_FN_CREATE_CHILD_PSP) {  /* create a PSP / child PSP */
         /* Copy our PSP to the segment in DX and fix up the fields that must
            differ. 55h additionally takes the child's memory top in SI. */
@@ -2169,7 +2233,7 @@ INT DosInt21(PDOS_MACHINE machine)
           if (subfunction < DOS_INT53_COUNT) {
               SETAX(g_DosInt53Answers[subfunction].Ax);
               if (g_DosInt53Answers[subfunction].IsCarry) ERRCF(); else OKCF();
-          } else { SETAX(0x0001); ERRCF(); }
+          } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
         }
     } else if (function == DOS_FN_NETWORK_MACHINE) {              /* network machine name / printer */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
@@ -2177,10 +2241,10 @@ INT DosInt21(PDOS_MACHINE machine)
             volatile BYTE *buffer = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK));
             INT index; for (index = 0; index < 16; ++index) buffer[index] = 0;
             SETAX(0); SET16(R_CX, 0); OKCF();
-        } else { SETAX(1); ERRCF(); }
+        } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
     } else if (function == DOS_FN_REDIRECTION) {              /* network redirection list */
         trace = zput(trace, "  INT21 AH=5F network redirection: no redirector present\r\n");
-        SETAX(1); ERRCF();                      /* invalid function */
+        SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();                      /* invalid function */
     } else if (function == DOS_FN_SET_LOOKAHEAD) {              /* set device driver lookahead */
         OKCF();                                 /* internal; accepted, no effect */
     } else if (function == DOS_FN_AUX_INPUT || function == DOS_FN_AUX_OUTPUT || function == DOS_FN_PRINTER_OUTPUT) {  /* AUX in / AUX out / PRN out */
@@ -2193,13 +2257,13 @@ INT DosInt21(PDOS_MACHINE machine)
         if (AUXPRN_V86)
             AUXPRN_TRAMP(function == DOS_FN_PRINTER_OUTPUT ? DOS_AUXPRN_PRN_OUTPUT : function == DOS_FN_AUX_OUTPUT ? DOS_AUXPRN_AUX_OUTPUT : DOS_AUXPRN_AUX_INPUT);
         else if (function == DOS_FN_AUX_INPUT) {
-            SETAX((R_AX & 0xFF00) | 0x1A);
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0x1A);
             OKCF();
         } else {
             BYTE character = (BYTE)(R_DX & DOS_INT21_BYTE_MASK);
             if (function == DOS_FN_PRINTER_OUTPUT) { if (machine->PrinterOut) (VOID)machine->PrinterOut(machine->DeviceContext, character); }
             else if (machine->AuxOut) machine->AuxOut(machine->DeviceContext, character);
-            SETAX((R_AX & 0xFF00) | character);  /* oracle: AL = the byte sent */
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | character);  /* oracle: AL = the byte sent */
             OKCF();
         }
     } else if (function == DOS_FN_FLUSH_AND_INPUT) {              /* flush input, then run AL     */
@@ -2215,7 +2279,7 @@ INT DosInt21(PDOS_MACHINE machine)
     } else if (function == DOS_FN_SET_VERIFY) {              /* set verify flag */
         machine->IsVerifyOn = (BYTE)(R_AX & DOS_INT21_BYTE_MASK); OKCF();
     } else if (function == DOS_FN_GET_VERIFY) {              /* get verify flag */
-        SETAX((R_AX & 0xFF00) | machine->IsVerifyOn); OKCF();
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | machine->IsVerifyOn); OKCF();
     } else if (function == DOS_FN_GET_INDOS_FLAG) {              /* get InDOS flag -> ES:BX */
         SET16(R_ES, DOS_SDA_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
     } else if (function == DOS_FN_SERVER && ((R_AX & DOS_INT21_BYTE_MASK) == 0x08 || (R_AX & DOS_INT21_BYTE_MASK) == 0x09)) {
@@ -2263,25 +2327,25 @@ INT DosInt21(PDOS_MACHINE machine)
         CHAR fileName[300];
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
         if (DeleteFileA(fileName)) OKCF();
-        else { SETAX(2); ERRCF(); }             /* oracle: absent -> AX=2 */
+        else { SETAX(DOS_ERR_FILE_NOT_FOUND); ERRCF(); }             /* oracle: absent -> AX=2 */
     } else if (function == DOS_FN_FILE_ATTRIBUTES) {              /* get/set file attributes */
         CHAR fileName[300];
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
         if (subfunction == 0x00) {
             DWORD attributes = GetFileAttributesA(fileName);
-            if (attributes == 0xFFFFFFFFu) { SETAX(2); ERRCF(); }
+            if (attributes == 0xFFFFFFFFu) { SETAX(DOS_ERR_FILE_NOT_FOUND); ERRCF(); }
             else { SET16(R_CX, (WORD)(attributes & 0x3F)); SETAX((WORD)(attributes & 0x3F)); OKCF(); }
         } else if (subfunction == 0x01) {
             DWORD attributes = (DWORD)(R_CX & 0x3F);
             if (!attributes) attributes = FILE_ATTRIBUTE_NORMAL;
             if (SetFileAttributesA(fileName, attributes)) OKCF();
-            else { SETAX(2); ERRCF(); }
+            else { SETAX(DOS_ERR_FILE_NOT_FOUND); ERRCF(); }
         } else {
             trace = zput(trace, "  INT21 AH=43 AL=0x"); trace = zhexb(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.4302). */
             trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_DUP || function == DOS_FN_DUP2) {  /* dup / dup2 */
         /* ── ★ A DEVICE IS DUPLICABLE, AND THAT IS THE WHOLE POINT OF 45h. ────
@@ -2300,31 +2364,31 @@ INT DosInt21(PDOS_MACHINE machine)
            Win32 handle exists to duplicate, so the copy is a device slot too. */
         DWORD sourceHandle = R_BX & DOS_INT21_WORD_MASK, targetHandle;
         INT isSourceDevice = DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, sourceHandle);
-        if (!isSourceDevice && !DosHandleIsFile((PVOID const *)machine->FileHandles, sourceHandle)) { SETAX(6); ERRCF(); }
+        if (!isSourceDevice && !DosHandleIsFile((PVOID const *)machine->FileHandles, sourceHandle)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
         else {
             HANDLE newHandle = 0;
             if (!isSourceDevice
                 && !DuplicateHandle(GetCurrentProcess(), machine->FileHandles[sourceHandle],
                                     GetCurrentProcess(), &newHandle, 0, FALSE,
-                                    DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
+                                    DUPLICATE_SAME_ACCESS)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
             else if (function == DOS_FN_DUP) {
                 targetHandle = DosHandleAllocate((PVOID const *)machine->FileHandles, machine->StdOpen);
                 if (targetHandle >= DOS_MAX_FILES) {
-                    if (newHandle) CloseHandle(newHandle); SETAX(4); ERRCF();
+                    if (newHandle) CloseHandle(newHandle); SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 } else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
                     /* Past the device mask. Refuse LOUDLY rather than hand back a
                        slot that would read as a file -- see DOS_DEV_SLOTS. */
                     trace = zput(trace, "  INT21 AH=45 device dup past slot 0x");
                     trace = zhex(trace, DOS_DEV_SLOTS); trace = zput(trace, " -- refused\r\n");
-                    SETAX(4); ERRCF();
+                    SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 } else { machine->FileHandles[targetHandle] = newHandle; SETAX(targetHandle); OKCF(); }
             } else {
                 targetHandle = R_CX & DOS_INT21_WORD_MASK;
-                if (targetHandle >= DOS_MAX_FILES) { if (newHandle) CloseHandle(newHandle); SETAX(6); ERRCF(); }
+                if (targetHandle >= DOS_MAX_FILES) { if (newHandle) CloseHandle(newHandle); SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
                 else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
                     trace = zput(trace, "  INT21 AH=46 device dup2 past slot 0x");
                     trace = zhex(trace, DOS_DEV_SLOTS); trace = zput(trace, " -- refused\r\n");
-                    SETAX(4); ERRCF();
+                    SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 }
                 else { DosHandleRelease(machine, targetHandle);
                        machine->FileHandles[targetHandle] = newHandle;  /* 0 when src is a device */
@@ -2345,21 +2409,21 @@ INT DosInt21(PDOS_MACHINE machine)
     } else if (function == DOS_FN_FILE_DATE_TIME) {              /* get/set file date and time */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK;
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
-        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
         else if (subfunction == 0x00) {
             FILETIME fileTime, localTime; WORD dosDate = 0, dosTime = 0;
             if (GetFileTime(machine->FileHandles[handle], NULL, NULL, &fileTime)
                 && FileTimeToLocalFileTime(&fileTime, &localTime)
                 && FileTimeToDosDateTime(&localTime, &dosDate, &dosTime)) {
                 SET16(R_CX, dosTime); SET16(R_DX, dosDate); OKCF();
-            } else { SETAX(6); ERRCF(); }
+            } else { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
         } else if (subfunction == 0x01) {
             FILETIME fileTime, localTime;
             if (DosDateTimeToFileTime((WORD)(R_DX & DOS_INT21_WORD_MASK), (WORD)(R_CX & DOS_INT21_WORD_MASK), &localTime)
                 && LocalFileTimeToFileTime(&localTime, &fileTime)
                 && SetFileTime(machine->FileHandles[handle], NULL, NULL, &fileTime)) OKCF();
-            else { SETAX(6); ERRCF(); }
-        } else { SETAX(1); ERRCF(); }
+            else { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
+        } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
     } else if (function == DOS_FN_CREATE_TEMP || function == DOS_FN_CREATE_NEW) {  /* create temp / create new */
         CHAR fileName[300]; HANDLE file; DWORD slot;
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
@@ -2389,18 +2453,18 @@ INT DosInt21(PDOS_MACHINE machine)
             slot = DosHandleAllocate((PVOID const *)machine->FileHandles, machine->StdOpen);
             if (slot < DOS_MAX_FILES) { machine->FileHandles[slot] = file; SETAX(slot); OKCF();
                                         DosStampVdmNow(file); /* #263 */ }
-            else { CloseHandle(file); SETAX(4); ERRCF(); }
+            else { CloseHandle(file); SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF(); }
         }
     } else if (function == DOS_FN_LOCK) {              /* lock / unlock a byte range */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK;
         DWORD offset = ((DWORD)(R_CX & DOS_INT21_WORD_MASK) << DOS_INT21_WORD_SHIFT) | (DWORD)(R_DX & DOS_INT21_WORD_MASK);
         DWORD length = ((DWORD)(R_SI & DOS_INT21_WORD_MASK) << DOS_INT21_WORD_SHIFT) | (DWORD)(R_DI & DOS_INT21_WORD_MASK);
-        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
         else {
             BOOL isOk = ((R_AX & DOS_INT21_BYTE_MASK) == 0)
                      ? LockFile(machine->FileHandles[handle], offset, 0, length, 0)
                      : UnlockFile(machine->FileHandles[handle], offset, 0, length, 0);
-            if (isOk) OKCF(); else { SETAX(0x21); ERRCF(); }  /* 33 = lock violation */
+            if (isOk) OKCF(); else { SETAX(DOS_ERR_LOCK_VIOLATION); ERRCF(); }  /* 33 = lock violation */
         }
     } else if (function == DOS_FN_SET_HANDLE_COUNT) {              /* set maximum handle count */
         /* We keep a fixed DOS_MAX_FILES-entry table, so anything up to that succeeds.
@@ -2409,10 +2473,10 @@ INT DosInt21(PDOS_MACHINE machine)
            rule about DOS, which is why the probe treats the result as
            informational rather than comparable. */
         if ((R_BX & DOS_INT21_WORD_MASK) <= DOS_MAX_FILES) OKCF();
-        else { SETAX(8); ERRCF(); }
+        else { SETAX(DOS_ERR_INSUFFICIENT_MEMORY); ERRCF(); }
     } else if (function == DOS_FN_COMMIT || function == DOS_FN_COMMIT_6A) {  /* commit file (flush) */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK;
-        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
         else { FlushFileBuffers(machine->FileHandles[handle]); OKCF(); }
     } else if (function == DOS_FN_EXTENDED_OPEN) {              /* extended open/create */
         /* BX=mode, CX=attributes, DX=action, DS:SI=name.
@@ -2458,7 +2522,7 @@ INT DosInt21(PDOS_MACHINE machine)
             slot = DosHandleAllocate((PVOID const *)machine->FileHandles, machine->StdOpen);
             if (slot < DOS_MAX_FILES) { machine->FileHandles[slot] = file; SETAX(slot); SET16(R_CX, action); OKCF();
                                         if (action != 1) DosStampVdmNow(file); /* #263: created/truncated */ }
-            else { CloseHandle(file); SETAX(4); ERRCF(); }
+            else { CloseHandle(file); SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF(); }
         }
     } else if (function == DOS_FN_EXTENDED_ERROR) {              /* get extended error */
         /* Four answers, not one: extended code (AX), class (BH), suggested
@@ -2490,7 +2554,7 @@ INT DosInt21(PDOS_MACHINE machine)
         DWORD count;
         DosGuestPath(machine, R_DS, R_SI, input, sizeof(input));
         count = GetFullPathNameA(input, sizeof(output), output, NULL);
-        if (count == 0 || count >= sizeof(output)) { SETAX(3); ERRCF(); }
+        if (count == 0 || count >= sizeof(output)) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); }
         else {
             volatile BYTE *buffer = (volatile BYTE *)((R_ES << DOS_INT21_PARAGRAPH_SHIFT) + (R_DI & DOS_INT21_WORD_MASK));
             INT index = 0;
@@ -2553,7 +2617,7 @@ INT DosInt21(PDOS_MACHINE machine)
                  from 6.22), so a program that capitalises through DOS and one that
                  reads the table agree. Measured: 'a'->'A', 81h->9Ah, digits kept. */
             if (subfunction == 0x20) {
-                SET16(R_DX, (R_DX & 0xFF00) | DosCtabUpcase437((BYTE)(R_DX & DOS_INT21_BYTE_MASK)));
+                SET16(R_DX, (R_DX & DOS_INT21_HIGH_BYTE_MASK) | DosCtabUpcase437((BYTE)(R_DX & DOS_INT21_BYTE_MASK)));
             } else {
                 volatile BYTE *text = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK));
                 UINT32 index, count = (subfunction == 0x21) ? (UINT32)(R_CX & DOS_INT21_WORD_MASK) : 0x10000u;
@@ -2572,7 +2636,7 @@ INT DosInt21(PDOS_MACHINE machine)
             trace = zput(trace, "  INT21 AH=65 AL=0x"); trace = zhex(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.6508). */
             trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_DISK_SERIAL) {              /* get/set volume serial number */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
@@ -2594,11 +2658,11 @@ INT DosInt21(PDOS_MACHINE machine)
                 buffer[2] = (BYTE)( serial        & DOS_INT21_BYTE_MASK);
                 buffer[3] = (BYTE)((serial >> DOS_INT21_BYTE_SHIFT)  & DOS_INT21_BYTE_MASK);
                 buffer[4] = (BYTE)((serial >> DOS_INT21_WORD_SHIFT) & DOS_INT21_BYTE_MASK);
-                buffer[5] = (BYTE)((serial >> 24) & DOS_INT21_BYTE_MASK);
+                buffer[5] = (BYTE)((serial >> DOS_INT21_HIGH_BYTE_SHIFT) & DOS_INT21_BYTE_MASK);
                 for (index = 0; index < 11; ++index) buffer[6 + index]  = (BYTE)(label[index] ? label[index] : ' ');
                 for (index = 0; index < 8;  ++index) buffer[17 + index] = (BYTE)(fileSystemType[index] ? fileSystemType[index] : ' ');
                 OKCF();
-            } else { SETAX(0x0F); ERRCF(); }
+            } else { SETAX(DOS_ERR_INVALID_DRIVE); ERRCF(); }
         } else if (subfunction == 0x01) {
             /* ── SET SERIAL (#165). Real DOS writes serial, label and file-system type
                  into the disk's boot record (p_4b05: 6.22 and PCem accept it and 6900h
@@ -2614,12 +2678,12 @@ INT DosInt21(PDOS_MACHINE machine)
                 g_DosSerialIsSet[drive] = 1;
                 trace = zput(trace, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
                 OKCF();
-            } else { SETAX(0x0F); ERRCF(); }
+            } else { SETAX(DOS_ERR_INVALID_DRIVE); ERRCF(); }
         } else {
             trace = zput(trace, "  INT21 AH=69 AL=0x"); trace = zhex(trace, subfunction);
             trace = zput(trace, " UNIMPLEMENTED\r\n");
             machine->Unimplemented[0x69 >> 3] |= (BYTE)(1u << (0x69 & 7));
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_CURRENT_DIRECTORY) {              /* get current directory -> DS:SI */
         /* DOS returns the path WITHOUT the drive letter and WITHOUT a leading
@@ -2669,7 +2733,7 @@ INT DosInt21(PDOS_MACHINE machine)
         if (count == 0 || count >= sizeof(currentDirectory)) {
             trace = zput(trace, "  INT21 AH=47 drive 0x"); trace = zhex(trace, driveNumber);
             trace = zput(trace, " -> invalid drive\r\n");
-            SETAX(0x0F); ERRCF();
+            SETAX(DOS_ERR_INVALID_DRIVE); ERRCF();
         } else {
             volatile BYTE *destination = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_SI & DOS_INT21_WORD_MASK));
             PCSTR path = currentDirectory;
@@ -2707,9 +2771,9 @@ INT DosInt21(PDOS_MACHINE machine)
         BYTE target;
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
         trace = zput(trace, "  INT21 AH=3B chdir ["); trace = zput(trace, fileName); trace = zput(trace, "]");
-        if (fileName[0] && fileName[1] == ':' && !fileName[2]) { SETAX(3); ERRCF(); trace = zput(trace, " -> 3 (drive only)\r\n"); }
+        if (fileName[0] && fileName[1] == ':' && !fileName[2]) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (drive only)\r\n"); }
         else if ((count = GetFullPathNameA(fileName, sizeof(fullPath), fullPath, NULL)) == 0 || count >= sizeof(fullPath)
-                 || fullPath[1] != ':') { SETAX(3); ERRCF(); trace = zput(trace, " -> 3\r\n"); }
+                 || fullPath[1] != ':') { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3\r\n"); }
         else {
             target = (BYTE)((fullPath[0] | 0x20) - 'a');
             if (target == DosCurrentDrive(machine)) {
@@ -2717,14 +2781,14 @@ INT DosInt21(PDOS_MACHINE machine)
                     machine->VirtualDrive = -1;  /* it can be stood on after all */
                     DosNoteDriveDirectory(fullPath);
                     OKCF(); trace = zput(trace, " -> ok\r\n");
-                } else { SETAX(3); ERRCF(); trace = zput(trace, " -> 3 (0x"); trace = zhex(trace, GetLastError());
+                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (0x"); trace = zhex(trace, GetLastError());
                          trace = zput(trace, ")\r\n"); }  /* oracle: AX=0003, CF=1 */
             } else {
                 DWORD attributes = GetFileAttributesA(fullPath);
                 if (attributes != 0xFFFFFFFFu && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
                     DosNoteDriveDirectory(fullPath);
                     OKCF(); trace = zput(trace, " -> ok (another drive's directory; current drive unchanged)\r\n");
-                } else { SETAX(3); ERRCF(); trace = zput(trace, " -> 3 (other drive, 0x"); trace = zhex(trace, GetLastError());
+                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (other drive, 0x"); trace = zhex(trace, GetLastError());
                          trace = zput(trace, ")\r\n"); }
             }
         }
@@ -2781,7 +2845,7 @@ INT DosInt21(PDOS_MACHINE machine)
                (p_subfn int21.382C.get). It was AX=2. */
             trace = zput(trace, "  INT21 AH=38 country 0x"); trace = zhex(trace, wanted);
             trace = zput(trace, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_ALLOCATION_STRATEGY) {              /* get/set memory allocation strategy */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
@@ -2789,7 +2853,7 @@ INT DosInt21(PDOS_MACHINE machine)
         else if (subfunction == 0x01) { machine->AllocationStrategy = (BYTE)(R_BX & DOS_INT21_BYTE_MASK); OKCF(); }
         /* Oracle: AL=02 returns the state in AL and LEAVES AH ALONE -- 6.22
            answered AX=5800 to a call made with AX=5802. */
-        else if (subfunction == 0x02) { SETAX((R_AX & 0xFF00) | machine->UmbLink); OKCF(); }
+        else if (subfunction == 0x02) { SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | machine->UmbLink); OKCF(); }
         else if (subfunction == 0x03) {
             /* ── ★ YOU CANNOT LINK A UMB CHAIN THAT DOES NOT EXIST. (GH #47) ───
                  This accepted the call and stored the flag, and that is why
@@ -2809,13 +2873,13 @@ INT DosInt21(PDOS_MACHINE machine)
                limitation being papered over -- it is the true answer. */
             trace = zput(trace, "  INT21 AH=5803 UMB link refused: no UMB provider "
                           "(oracle: AX=0001 CF=1)\r\n");
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
         else {
             trace = zput(trace, "  INT21 AH=58 AL=0x"); trace = zhex(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.5804). */
             trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_LIST_OF_LISTS) {              /* get list of lists -> ES:BX */
         /* The word at ES:BX-2 is the first MCB segment, and that is the field a
@@ -2832,7 +2896,7 @@ INT DosInt21(PDOS_MACHINE machine)
         } else {
             trace = zput(trace, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
             machine->Unimplemented[0x52 >> 3] |= (BYTE)(1u << (0x52 & 7));
-            SETAX(1); ERRCF();
+            SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_IOCTL) {              /* IOCTL (C-runtime isatty etc.) */
         BYTE subfunction = (BYTE)(R_AX & DOS_INT21_BYTE_MASK);
@@ -2846,7 +2910,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 deviceInfo = (handle == 3) ? 0x80C0 : 0xA0C0;
             SET16(R_DX, deviceInfo); SETAX(deviceInfo); OKCF();
         }
-        else if (subfunction == 0x06 || subfunction == 0x07) { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
+        else if (subfunction == 0x06 || subfunction == 0x07) { SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF); OKCF(); }
         /* ── ★★ THE DRIVE-CLASSIFICATION TRIO. (GH #32, #128, session 37) ─────────
              AL = 08h "is this block device removable", 09h "is it remote", 0Eh "get
              the logical drive map". BL is the drive (0 = default, 1 = A) and all
@@ -2885,7 +2949,7 @@ INT DosInt21(PDOS_MACHINE machine)
             } else {
                 /* AL = 0 when only one letter maps to the block device, which is
                    true of every drive we can see (we do not emulate a SUBST). */
-                SETAX(R_AX & 0xFF00); OKCF();
+                SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
             }
             trace = zput(trace, "  INT21 AH=44 AL=0x"); trace = zhex(trace, subfunction);
             trace = zput(trace, " drive 0x"); trace = zhex(trace, drive);
@@ -2904,15 +2968,15 @@ INT DosInt21(PDOS_MACHINE machine)
              a success into a refusal there would break callers that work now. */
         else if (subfunction == 0x01 || subfunction == 0x0B || subfunction == 0x0D || subfunction == 0x0F) { OKCF(); }
         else if (subfunction == 0x0A) { SET16(R_DX, 0x0000); OKCF(); }
-        else if (subfunction == 0x11) { SETAX(R_AX & 0xFF00); OKCF(); }  /* AL=0: supported */
-        else                 { SETAX(0x0001); ERRCF(); }
+        else if (subfunction == 0x11) { SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF(); }  /* AL=0: supported */
+        else                 { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
         if (subfunction != 0x08 && subfunction != 0x09 && subfunction != 0x0E) {
             trace = zput(trace, "  INT21 AH=44 ioctl AL=0x"); trace = zhex(trace, subfunction);
             trace = zput(trace, " BX=0x"); trace = zhex(trace, handle); trace = zput(trace, "\r\n");
         }
     } else if (function == DOS_FN_DBCS_TABLE) {              /* get DBCS lead-byte table */
         if ((R_AX & DOS_INT21_BYTE_MASK) == 0) { SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_DBCS_OFF); }
-        SETAX(R_AX & 0xFF00); OKCF();
+        SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
         trace = zput(trace, "  INT21 AH=63 DBCS lead-byte table\r\n");
     } else if (function == DOS_FN_SET_VECTOR) {              /* set interrupt vector: AL=int DS:DX */
         DWORD vectorOffset = (R_AX & DOS_INT21_BYTE_MASK) * 4;
@@ -3001,7 +3065,7 @@ INT DosInt21(PDOS_MACHINE machine)
              a program probing drives the classic way -- select X, read back, compare
              -- found only C:. QB.EXE's file dialog does exactly that (39BCCh..39BE4h)
              and listed one drive on a machine with four. */
-        SETAX((R_AX & 0xFF00) | DosCurrentDrive(machine)); OKCF();
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DosCurrentDrive(machine)); OKCF();
     } else if (function == DOS_FN_SELECT_DRIVE) {              /* select drive -> AL = LASTDRIVE  */
         /* Win32 keeps a current directory per drive (the hidden =X: variables), and
            "X:" as a path means that directory -- so selecting a drive is one call,
@@ -3037,7 +3101,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 }
             }
         }
-        SETAX((R_AX & 0xFF00) | DOS_LASTDRIVE); OKCF();
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DOS_LASTDRIVE); OKCF();
     } else if (function == DOS_FN_DISK_RESET) {              /* disk reset (flush) -> nop */
         OKCF();
     } else if (function == DOS_FN_BREAK_STATE) {              /* get/set Ctrl-Break, get true version */
@@ -3047,12 +3111,12 @@ INT DosInt21(PDOS_MACHINE machine)
              program that turned checking on read back off. Measured, 6.22 and PCem
              (tests/probes/dos/p_subfn.asm): 3301 DL=1 then 3300 -> DL=1; 3302 swaps
              and returns the OLD state in DL. DH is left alone -- 6.22 does. */
-        if (subfunction == 0x00) { SET16(R_DX, (R_DX & 0xFF00) | machine->IsBreakOn); OKCF(); }
+        if (subfunction == 0x00) { SET16(R_DX, (R_DX & DOS_INT21_HIGH_BYTE_MASK) | machine->IsBreakOn); OKCF(); }
         else if (subfunction == 0x01) { machine->IsBreakOn = (BYTE)((R_DX & DOS_INT21_BYTE_MASK) ? 1 : 0); OKCF(); }
         else if (subfunction == 0x02) {
             BYTE previous = machine->IsBreakOn;
             machine->IsBreakOn = (BYTE)((R_DX & DOS_INT21_BYTE_MASK) ? 1 : 0);
-            SET16(R_DX, (R_DX & 0xFF00) | previous); OKCF();
+            SET16(R_DX, (R_DX & DOS_INT21_HIGH_BYTE_MASK) | previous); OKCF();
         }
         else if (subfunction == 0x05) { SET16(R_DX, 3); OKCF(); }  /* boot drive = C: */
         else if (subfunction == 0x06) {                        /* get TRUE version */
@@ -3072,7 +3136,7 @@ INT DosInt21(PDOS_MACHINE machine)
                leave the carry alone, so we do exactly that. */
             trace = zput(trace, "  INT21 AH=33 AL=0x"); trace = zhex(trace, subfunction);
             trace = zput(trace, " not a 6.22 subfunction -> AL=FF (matches DOS)\r\n");
-            SETAX((R_AX & 0xFF00) | 0xFF);
+            SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | 0xFF);
         }
     } else if (function == DOS_FN_GET_DATE) {              /* get date: CX=yr DH=mon DL=day AL=dow */
         /* The VDM's clock, not the host's: host-now + whatever 2Bh/2Dh set. See
@@ -3082,7 +3146,7 @@ INT DosInt21(PDOS_MACHINE machine)
         DOS_CLOCK_TIME clock; DosClockSync(); DosClockRead(g_DosClock.DosOffset, &clock);
         SET16(R_CX, clock.Year);
         SET16(R_DX, ((clock.Month & DOS_INT21_BYTE_MASK) << DOS_INT21_BYTE_SHIFT) | (clock.Day & DOS_INT21_BYTE_MASK));
-        SETAX((R_AX & 0xFF00) | (clock.DayOfWeek & DOS_INT21_BYTE_MASK));
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (clock.DayOfWeek & DOS_INT21_BYTE_MASK));
         OKCF();
     } else if (function == DOS_FN_GET_TIME) {              /* get time: CH=hr CL=min DH=sec DL=cs */
         /* #262: CLOCK$ reads 0040:006C, so a raw store there moves this (p_tick2c
@@ -3123,7 +3187,7 @@ INT DosInt21(PDOS_MACHINE machine)
         trace = zput(trace, "  INT21 AH=0x"); trace = zhexb(trace, (UINT)function);
         trace = zput(trace, isOk ? " VDM clock set (host clock untouched)\r\n"
                          : " refused: invalid -> AL=FF, clock unchanged\r\n");
-        SETAX((R_AX & 0xFF00) | (isOk ? 0x00 : 0xFF));
+        SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (isOk ? 0x00 : 0xFF));
         OKCF();
     } else if (function == DOS_FN_LFN) {              /* the long-filename API (#210) */
         /* ── ★ AH=71h, THE WINDOWS 95 LONG-FILENAME API, AS STOCK NTVDM PROVIDES IT. (#210)
@@ -3224,7 +3288,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 WORD dosTime = (action == 0x05) ? 0 : (WORD)(R_CX & DOS_INT21_WORD_MASK);
                 BYTE  hundredths = (action == 0x07) ? (BYTE)(R_SI & DOS_INT21_BYTE_MASK) : 0;
                 UINT64 fileTime64; FILETIME localTime, fileTime; HANDLE find;
-                if (!DosLfnDosToFileTime(dosDate, dosTime, hundredths, &fileTime64)) { SETAX(0x0D); ERRCF(); }  /* invalid data */
+                if (!DosLfnDosToFileTime(dosDate, dosTime, hundredths, &fileTime64)) { SETAX(DOS_ERR_INVALID_DATA); ERRCF(); }  /* invalid data */
                 else {
                     localTime.dwLowDateTime = (DWORD)fileTime64; localTime.dwHighDateTime = (DWORD)(fileTime64 >> 32);
                     find = DosLfnOpenAttributes(fileName);
@@ -3239,7 +3303,7 @@ INT DosInt21(PDOS_MACHINE machine)
                         if (isOk) OKCF(); else { SETAX(DosLfnError(win32Error)); ERRCF(); }
                     }
                 }
-            } else { SETAX(1); ERRCF(); }       /* BL beyond 8: invalid function */
+            } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }       /* BL beyond 8: invalid function */
         } else if (subfunction == 0x47) {       /* current directory, long: DL, DS:SI */
             /* AH=47h's drive rules (0 = default, a drive Win32 cannot stand on answers
                through its =X:), then the LONG form of the path -- 47h hands back the
@@ -3258,7 +3322,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 CHAR driveSpec[3]; driveSpec[0] = (CHAR)('A' + driveNumber - 1); driveSpec[1] = ':'; driveSpec[2] = 0;
                 count = GetFullPathNameA(driveSpec, sizeof(currentDirectory), currentDirectory, NULL);
             }
-            if (count == 0 || count >= sizeof(currentDirectory)) { SETAX(0x0F); ERRCF(); }
+            if (count == 0 || count >= sizeof(currentDirectory)) { SETAX(DOS_ERR_INVALID_DRIVE); ERRCF(); }
             else {
                 volatile BYTE *destination = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_SI & DOS_INT21_WORD_MASK));
                 PCSTR path = currentDirectory;
@@ -3287,7 +3351,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     INT isOk = 1;
                     while (!DosLfnAttributesOk(findData.dwFileAttributes, allowedAttributes, requiredAttributes))
                         if (!FindNextFileA(find, &findData)) { isOk = 0; break; }
-                    if (!isOk) { FindClose(find); SETAX(18); ERRCF(); }  /* nothing passed CL/CH */
+                    if (!isOk) { FindClose(find); SETAX(DOS_ERR_NO_MORE_FILES); ERRCF(); }  /* nothing passed CL/CH */
                     else {
                         for (slot = 0; slot < DOS_LFN_FIND_SLOTS && g_DosLfnFinds[slot]; ++slot) {}
                         if (slot >= DOS_LFN_FIND_SLOTS) {            /* full: recycle, round robin */
@@ -3306,19 +3370,19 @@ INT DosInt21(PDOS_MACHINE machine)
                                     trace = zput(trace, (*guestFlags & 1) ? "] -> none\r\n" : "] -> found\r\n"); }
             } else {
                 UINT slot = (UINT)(R_BX & DOS_INT21_WORD_MASK) - 1u;
-                if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(6); ERRCF(); }
+                if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
                 else {
                     INT isOk = 0;
                     while (FindNextFileA(g_DosLfnFinds[slot], &findData))
                         if (DosLfnAttributesOk(findData.dwFileAttributes, g_DosLfnAllow[slot], g_DosLfnNeed[slot])) { isOk = 1; break; }
                     /* "No more files" leaves the handle OPEN: the program closes it, 71A1h. */
-                    if (!isOk) { SETAX(18); ERRCF(); }
+                    if (!isOk) { SETAX(DOS_ERR_NO_MORE_FILES); ERRCF(); }
                     else { DosLfnFindFill(buffer, &findData, isDosFormat); SET16(R_CX, 0); OKCF(); }
                 }
             }
         } else if (subfunction == 0xA1) {       /* find close: BX */
             UINT slot = (UINT)(R_BX & DOS_INT21_WORD_MASK) - 1u;
-            if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(6); ERRCF(); }
+            if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
             else { FindClose(g_DosLfnFinds[slot]); g_DosLfnFinds[slot] = 0; OKCF(); }
         } else if (subfunction == 0x60) {       /* truename: DS:SI -> ES:DI, CL form */
             /* CL=0 the full path (case kept -- 60h upper-cases, this does not: unmeasured),
@@ -3331,8 +3395,8 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD count;
             DosGuestPath(machine, R_DS, R_SI, input, sizeof(input));
             count = GetFullPathNameA(input, sizeof(fullPath), fullPath, NULL);
-            if (count == 0 || count >= sizeof(fullPath)) { SETAX(3); ERRCF(); }
-            else if (nameKind > 2) { SETAX(1); ERRCF(); }
+            if (count == 0 || count >= sizeof(fullPath)) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); }
+            else if (nameKind > 2) { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
             else {
                 if (nameKind == 0) { lstrcpynA(output, fullPath, sizeof(output)); count = 1; }
                 else if (nameKind == 1) count = GetShortPathNameA(fullPath, output, sizeof(output));
@@ -3379,7 +3443,7 @@ INT DosInt21(PDOS_MACHINE machine)
                UTC, as a FILETIME is). */
             DWORD handle = R_BX & DOS_INT21_WORD_MASK;
             BY_HANDLE_FILE_INFORMATION fileInfo;
-            if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(6); ERRCF(); }
+            if (!DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
             else if (!GetFileInformationByHandle(machine->FileHandles[handle], &fileInfo)) { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             else {
                 volatile BYTE *buffer = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_DX & DOS_INT21_WORD_MASK));
@@ -3399,9 +3463,9 @@ INT DosInt21(PDOS_MACHINE machine)
             if (action == 0x00) {               /* DS:SI -> QWORD FILETIME -> CX time, DX date, BH */
                 const volatile BYTE *bytes = (const volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_SI & DOS_INT21_WORD_MASK));
                 FILETIME fileTime; WORD dosDate, dosTime; BYTE hundredths;
-                fileTime.dwLowDateTime  = (DWORD)bytes[0] | ((DWORD)bytes[1] << DOS_INT21_BYTE_SHIFT) | ((DWORD)bytes[2] << DOS_INT21_WORD_SHIFT) | ((DWORD)bytes[3] << 24);
-                fileTime.dwHighDateTime = (DWORD)bytes[4] | ((DWORD)bytes[5] << DOS_INT21_BYTE_SHIFT) | ((DWORD)bytes[6] << DOS_INT21_WORD_SHIFT) | ((DWORD)bytes[7] << 24);
-                if (!DosLfnFileTimeToDos(DosFileTimeZoned(&fileTime, 1), &dosDate, &dosTime, &hundredths)) { SETAX(0x0D); ERRCF(); }
+                fileTime.dwLowDateTime  = (DWORD)bytes[0] | ((DWORD)bytes[1] << DOS_INT21_BYTE_SHIFT) | ((DWORD)bytes[2] << DOS_INT21_WORD_SHIFT) | ((DWORD)bytes[3] << DOS_INT21_HIGH_BYTE_SHIFT);
+                fileTime.dwHighDateTime = (DWORD)bytes[4] | ((DWORD)bytes[5] << DOS_INT21_BYTE_SHIFT) | ((DWORD)bytes[6] << DOS_INT21_WORD_SHIFT) | ((DWORD)bytes[7] << DOS_INT21_HIGH_BYTE_SHIFT);
+                if (!DosLfnFileTimeToDos(DosFileTimeZoned(&fileTime, 1), &dosDate, &dosTime, &hundredths)) { SETAX(DOS_ERR_INVALID_DATA); ERRCF(); }
                 else {
                     SET16(R_CX, dosTime); SET16(R_DX, dosDate);
                     /* ⚠ INTENDED DIVERGENCE (s92): for an exact even second stock answers
@@ -3413,7 +3477,7 @@ INT DosInt21(PDOS_MACHINE machine)
             } else if (action == 0x01) {        /* CX time, DX date, BH -> ES:DI QWORD */
                 UINT64 fileTime64; FILETIME localTime, fileTime;
                 if (!DosLfnDosToFileTime((WORD)(R_DX & DOS_INT21_WORD_MASK), (WORD)(R_CX & DOS_INT21_WORD_MASK),
-                                       (BYTE)((R_BX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK), &fileTime64)) { SETAX(0x0D); ERRCF(); }
+                                       (BYTE)((R_BX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK), &fileTime64)) { SETAX(DOS_ERR_INVALID_DATA); ERRCF(); }
                 else {
                     volatile BYTE *bytes = (volatile BYTE *)((R_ES << DOS_INT21_PARAGRAPH_SHIFT) + (R_DI & DOS_INT21_WORD_MASK));
                     INT index;
@@ -3425,7 +3489,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     }
                     OKCF();
                 }
-            } else { SETAX(1); ERRCF(); }
+            } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
         } else if (subfunction == 0xA8) {       /* generate short name: DS:SI -> ES:DI, DH */
             /* DH=0: 11 bytes, FCB style; DH=1: "NAME.EXT" ASCIIZ. DL's character-set
                nibbles are not looked at -- see the code-page note at the helpers. */
@@ -3454,8 +3518,8 @@ INT DosInt21(PDOS_MACHINE machine)
                 DWORD count;
                 DosGuestPath(machine, R_DS, R_DX, input, sizeof(input));
                 count = GetFullPathNameA(input, sizeof(fullPath), fullPath, NULL);
-                if (GetLogicalDrives() & (1u << drive)) { SETAX(0x0F); ERRCF(); }   /* letter in use */
-                else if (count == 0 || count >= sizeof(fullPath)) { SETAX(3); ERRCF(); }
+                if (GetLogicalDrives() & (1u << drive)) { SETAX(DOS_ERR_INVALID_DRIVE); ERRCF(); }   /* letter in use */
+                else if (count == 0 || count >= sizeof(fullPath)) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); }
                 else if (DefineDosDeviceA(0, driveSpec, fullPath)) {
                     OKCF();
                     trace = zput(trace, "  INT21 AX=71AA SUBST "); trace = zput(trace, driveSpec);
@@ -3504,7 +3568,7 @@ INT DosInt21(PDOS_MACHINE machine)
              DOS ZEROES AL. And that is load-bearing: AX=7100h is exactly how a long-
              filename client learns there is no LFN API -- XP's EDIT.COM took our
              unchanged 716Ch for a file handle and reported "Error 6" on EDIT.INI. */
-        SETAX(R_AX & 0xFF00);
+        SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK);
         trace = zput(trace, "  INT21 AH=0x"); trace = zhex(trace, function);
         trace = zput(trace, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
         machine->Undefined[(function & DOS_INT21_BYTE_MASK) >> 3] |= (BYTE)(1u << (function & 7));
