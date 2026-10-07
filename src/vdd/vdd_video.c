@@ -635,6 +635,102 @@ BYTE vga_font_8x16[VIDEO_FONT_CHARACTERS][VIDEO_FONT16_HEIGHT];
 #define VIDEO_LATCH_STALE_FRAMES      4u
 #define VIDEO_FRAMES_TO_AFTER_NEXT    2u
 
+/* More ports, and the status register 1 bits. */
+#define VIDEO_PORT_SEQUENCER_DATA     0x3C5
+#define VIDEO_PORT_GC_DATA            0x3CF
+#define VIDEO_PORT_CRTC_MONO_DATA     0x3B5
+#define VIDEO_PORT_CRTC_COLOUR_DATA   0x3D5
+#define VIDEO_PORT_STATUS1_MONO       0x3BA
+#define VIDEO_PORT_STATUS1_COLOUR     0x3DA
+#define VIDEO_PORT_VBE_DATA           0x1CF
+#define VIDEO_INT10_VECTOR            0x10
+#define VIDEO_STATUS1_DISPLAY_DISABLED 0x01u
+#define VIDEO_STATUS1_VERTICAL_RETRACE 0x08u
+#define VIDEO_UINT32_MAX              0xFFFFFFFFu
+#define VIDEO_DT3DA_LAST_BUCKET       7
+#define VIDEO_DT3DA_BUCKET_BASE       4
+#define VIDEO_DT3DA_BUCKET_SHIFT      2
+
+/* The BIOS video tables at VDD_VIDTAB_SEG (save pointer, secondary table, DCC). */
+#define VIDEO_BDA_SAVE_POINTER        0xA8
+#define VIDEO_FAR_SEGMENT             2      /* a far pointer: offset, then segment */
+#define VIDEO_SAVE_POINTER_PARAMETERS 0x00
+#define VIDEO_SAVE_POINTER_SECONDARY  0x10
+#define VIDEO_SECONDARY_LENGTH        0x00
+#define VIDEO_SECONDARY_DCC           0x02
+#define VIDEO_SECONDARY_TABLE_BYTES   0x001A
+#define VIDEO_DCC_ENTRIES             16
+#define VIDEO_DCC_VERSION             1
+#define VIDEO_DCC_MAX_CODE            8
+#define VIDEO_DCC_HEADER_BYTES        4
+#define VIDEO_DCC_ENTRY_BYTES         2
+
+/* Text rendering: character clocks, attributes, blink and the cursor. */
+#define VIDEO_CHARACTER_CLOCK_8       8
+#define VIDEO_CHARACTER_CLOCK_9       9
+#define VIDEO_SR1_8_DOT               0x01
+#define VIDEO_AR_MODE_LINE_GRAPHICS   0x04
+#define VIDEO_AR_MODE_PPM_SHIFT       5
+#define VIDEO_AR_MODE_PIXEL_DOUBLE    0x40
+#define VIDEO_LINE_GRAPHICS_FIRST     0xC0
+#define VIDEO_LINE_GRAPHICS_LAST      0xDF
+#define VIDEO_GLYPH_RIGHT_BIT         0x01
+#define VIDEO_ATTRIBUTE_COLOUR_MASK   0x0F
+#define VIDEO_ATTRIBUTE_BACKGROUND_SHIFT 4
+#define VIDEO_ATTRIBUTE_BACKGROUND_DIM 0x07
+#define VIDEO_ATTRIBUTE_BLINK         0x80
+#define VIDEO_BLINK_PERIOD_US         1066000u
+#define VIDEO_BLINK_HALF_US           533000u
+#define VIDEO_CURSOR_BLINK_PERIOD_US  533000u
+#define VIDEO_CURSOR_BLINK_HALF_US    266500u
+#define VIDEO_CURSOR_LINE_MASK        0x1Fu
+#define VIDEO_CURSOR_HIDDEN           0x20u
+#define VIDEO_CURSOR_START_FIELD      0x3Fu
+#define VIDEO_CGA_CELL_HEIGHT         8u
+#define VIDEO_CURSOR_UNDERLINE_LINES  2u
+#define VIDEO_CGA_COLOURS             4
+#define VIDEO_CGA_PIXELS_PER_BYTE     4
+
+/* The text snapshot and the register dump. */
+#define VIDEO_SNAPSHOT_MIN_CAPACITY   16
+#define VIDEO_SNAPSHOT_LINE_ROOM      2
+#define VIDEO_SNAPSHOT_HEX_ROOM       3
+#define VIDEO_SNAPSHOT_HEADER_ROOM    8
+#define VIDEO_CHAR_PRINTABLE_FIRST    32
+#define VIDEO_CHAR_PRINTABLE_END      127
+#define VIDEO_NIBBLE_SHIFT            4
+#define VIDEO_NIBBLE_MASK             0xF
+#define VIDEO_DECIMAL_DIGITS          12
+#define VIDEO_DECIMAL_BASE            10
+#define VIDEO_REGISTER_DUMP_MIN_CAPACITY 1600
+#define VIDEO_SR_DECODED              8
+#define VIDEO_CR_DECODED              32
+#define VIDEO_GR_DECODED              16
+#define VIDEO_AR_DECODED              32
+
+/* The renderers: geometry from the CRTC, panning, and mode Y. */
+#define VIDEO_CR09_DOUBLE_SCAN        0x80
+#define VIDEO_CR09_MAX_SCAN_MASK      0x1Fu
+#define VIDEO_CR17_COMPATIBILITY      0x01
+#define VIDEO_PIXEL_DOUBLE            2u
+#define VIDEO_GEOMETRY_MIN_WIDTH      64u
+#define VIDEO_GEOMETRY_MIN_HEIGHT     50u
+#define VIDEO_CRTC_OFFSET_UNIT        2u
+#define VIDEO_AR_PAN_MASK             0x0Fu
+#define VIDEO_PAN_PIXELS              8u
+#define VIDEO_PAN_SHIFT_MASK          7u
+#define VIDEO_MODE_Y_PAGES            4
+#define VIDEO_MODE_Y_PAGE_BYTES       0x4000u
+#define VIDEO_MODE_Y_PAGE_USED        16000u
+#define VIDEO_MODE_Y_SAMPLE_STRIDE    8
+#define VIDEO_MODE_Y_DEFAULT_OFFSET   40
+#define VIDEO_MODE_Y_PLANE_SHIFT      2
+#define VIDEO_BPP_32                  32
+
+/* Reset. */
+#define VIDEO_VGA_ENABLED             0x01
+#define VIDEO_BIT_MASK_ALL            0xFF
+
 static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode);
 
 /* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE, and so is the ega64_rgb() that replaced
@@ -4458,7 +4554,7 @@ UINT32 VddVideoUsToRetrace(PVIDEO_STATE state, INT wantSet)
 {
     UINT64 now, inFrame, blankOffset;
     UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
-    if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) || !frameUs || !verticalTotal) return 0xFFFFFFFFu;
+    if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) || !frameUs || !verticalTotal) return VIDEO_UINT32_MAX;
     (VOID)verticalDisplay; (VOID)frameNumber; (VOID)line;
     inFrame = now % (UINT64)frameUs;
     blankOffset = (UINT64)verticalBlank * frameUs / verticalTotal;                      /* retrace (bit 3) starts here */
@@ -4478,7 +4574,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     INT verticalTotal, verticalActive, isInVbl, isInHbl;
 
     if (!VideoBeam(state, &now, &frameUs, &vesaVerticalTotal, &vesaVerticalDisplay, &vesaVerticalBlank, &frameNumber, &line)) {
-        state->Retrace ^= 0x09;                        /* no clock injected: old behaviour */
+        state->Retrace ^= (VIDEO_STATUS1_VERTICAL_RETRACE | VIDEO_STATUS1_DISPLAY_DISABLED);                        /* no clock injected: old behaviour */
         *value = state->Retrace;
         return;
     }
@@ -4487,15 +4583,15 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     if (!state->Time3DaFirst) state->Time3DaFirst = now;
     if (state->Time3DaLast) {
         UINT64 delta = now - state->Time3DaLast;
-        state->PresentGapUs = (delta > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (UINT32)delta;
+        state->PresentGapUs = (delta > VIDEO_UINT32_MAX) ? VIDEO_UINT32_MAX : (UINT32)delta;
         if (!delta) state->Dt3DaZero++;
         else {
             UINT status = 0;
             UINT64 deltaBucket = delta;
-            while (status < 7 && deltaBucket >= 4) { deltaBucket >>= 2; status++; }
+            while (status < VIDEO_DT3DA_LAST_BUCKET && deltaBucket >= VIDEO_DT3DA_BUCKET_BASE) { deltaBucket >>= VIDEO_DT3DA_BUCKET_SHIFT; status++; }
             state->Dt3DaHistogram[status]++;
             if (delta > (UINT64)state->Dt3DaMax)
-                state->Dt3DaMax = (delta > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (UINT32)delta;
+                state->Dt3DaMax = (delta > VIDEO_UINT32_MAX) ? VIDEO_UINT32_MAX : (UINT32)delta;
         }
     }
     state->Time3DaLast = now;
@@ -4510,7 +4606,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     inFrame = now % (UINT64)frameUs;
     {   UINT64 position = inFrame * (UINT64)verticalTotal;
         line   = (UINT32)(position / frameUs);
-        isInHbl = ((UINT64)(position % frameUs) * 100u >= (UINT64)frameUs * VIDEO_HACTIVE_PERCENT);
+        isInHbl = ((UINT64)(position % frameUs) * VIDEO_PERCENT >= (UINT64)frameUs * VIDEO_HACTIVE_PERCENT);
     }
     isInVbl = (line >= (UINT32)verticalActive);
     /* ── #225: A RETRACE THAT STARTED AND ENDED BETWEEN TWO POLLS HAPPENED TOO -- but
@@ -4569,7 +4665,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         state->Port3DaLastLine = absoluteLine; state->Port3DaLastBit0 = (BYTE)bit0;
         state->IsPort3DaLastVbl = (BYTE)isInVbl;
         state->IsPort3DaHaveLast = 1;
-        *value = (UINT32)((isInVbl ? 0x08u : 0u) | (bit0 ? 0x01u : 0u));
+        *value = (UINT32)((isInVbl ? VIDEO_STATUS1_VERTICAL_RETRACE : 0u) | (bit0 ? VIDEO_STATUS1_DISPLAY_DISABLED : 0u));
         if (state->IsPort3DaRingOn) {          /* debug only -- see the note in the header */
             state->Port3DaRingUs[state->Port3DaRingCount & (VIDEO_PORT_3DA_RING - 1)] = (UINT32)now;
             state->Port3DaRingValue [state->Port3DaRingCount & (VIDEO_PORT_3DA_RING - 1)] = (BYTE)*value;
@@ -4591,7 +4687,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
          the window (one read per frame, at the edge) gets the edge instead: the
          frame it drew is complete by then too. Once per frame_no either way. */
     if (state->PresentHook && state->PresentFrame != frameNumber) {
-        UINT32 windowLines = (UINT32)verticalTotal * VIDEO_PRESENT_WINDOW_PER_MILLE / 1000u;
+        UINT32 windowLines = (UINT32)verticalTotal * VIDEO_PRESENT_WINDOW_PER_MILLE / VIDEO_PER_MILLE;
         /* ► THE FIRST POLL AFTER A GAP IS THE BEST MOMENT OF ALL. A retrace-paced
              guest leaves this port to DRAW and comes back to wait: the first read
              after it was away (>= VIDEO_PRESENT_GAP_US) means the frame is complete
@@ -4628,10 +4724,10 @@ INT VddVideoRefreshFonts(PVIDEO_STATE state)
     font8  = (BYTE *)VddMapFlat(state->Bus, VDD_FONT8X8_SEG, 0);
     font14 = (BYTE *)VddMapFlat(state->Bus, VDD_FONT8X14_SEG, 0);
     if (!font16 || !font8 || !font14) return 0;
-    for (character = 0; character < 256; ++character) {
-        for (line = 0; line < 16; ++line) font16[character * 16 + line] = vga_font_8x16[character][line];
-        for (line = 0; line < 8;  ++line) font8 [character * 8  + line] = vga_font_8x8 [character][line];
-        for (line = 0; line < 14; ++line) font14[character * 14 + line] = vga_font_8x14[character][line];
+    for (character = 0; character < VIDEO_FONT_CHARACTERS; ++character) {
+        for (line = 0; line < VIDEO_FONT16_HEIGHT; ++line) font16[character * VIDEO_FONT16_HEIGHT + line] = vga_font_8x16[character][line];
+        for (line = 0; line < VIDEO_FONT8_HEIGHT;  ++line) font8 [character * VIDEO_FONT8_HEIGHT  + line] = vga_font_8x8 [character][line];
+        for (line = 0; line < VIDEO_FONT14_HEIGHT; ++line) font14[character * VIDEO_FONT14_HEIGHT + line] = vga_font_8x14[character][line];
     }
     state->IsDirty = 1;
     return 1;
@@ -4663,27 +4759,27 @@ VOID VddVideoInstallFonts(PVIDEO_STATE state)
          at its own table, and later syncs must not undo that. */
     {
         BYTE *table = (BYTE *)VddMapFlat(state->Bus, VDD_VIDTAB_SEG, 0);
-        static const WORD displayCombination[16] = {
+        static const WORD displayCombination[VIDEO_DCC_ENTRIES] = {
             0x0000, 0x0100, 0x0200, 0x0102, 0x0400, 0x0104, 0x0500, 0x0502,
             0x0600, 0x0601, 0x0605, 0x0800, 0x0801, 0x0700, 0x0702, 0x0706 };
         UINT index;
         if (table) {
-            for (index = 0; index < VDD_VPARAM_OFF + VDD_VPARAM_N * 64u; ++index) table[index] = 0;
-            VideoWrite16(table + VDD_SAVEPTR_OFF + 0x00, VDD_VPARAM_OFF);   VideoWrite16(table + VDD_SAVEPTR_OFF + 0x02, VDD_VIDTAB_SEG);
-            VideoWrite16(table + VDD_SAVEPTR_OFF + 0x10, VDD_SAVEPTR2_OFF); VideoWrite16(table + VDD_SAVEPTR_OFF + 0x12, VDD_VIDTAB_SEG);
-            VideoWrite16(table + VDD_SAVEPTR2_OFF + 0x00, 0x001A);
-            VideoWrite16(table + VDD_SAVEPTR2_OFF + 0x02, VDD_DCC_OFF);     VideoWrite16(table + VDD_SAVEPTR2_OFF + 0x04, VDD_VIDTAB_SEG);
-            table[VDD_DCC_OFF + 0] = 16; table[VDD_DCC_OFF + 1] = 1; table[VDD_DCC_OFF + 2] = 8; table[VDD_DCC_OFF + 3] = 0;
-            for (index = 0; index < 16; ++index) VideoWrite16(table + VDD_DCC_OFF + 4 + index * 2, displayCombination[index]);
+            for (index = 0; index < VDD_VPARAM_OFF + VDD_VPARAM_N * VIDEO_PARAMETER_ENTRY_BYTES; ++index) table[index] = 0;
+            VideoWrite16(table + VDD_SAVEPTR_OFF + VIDEO_SAVE_POINTER_PARAMETERS, VDD_VPARAM_OFF);   VideoWrite16(table + VDD_SAVEPTR_OFF + VIDEO_SAVE_POINTER_PARAMETERS + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG);
+            VideoWrite16(table + VDD_SAVEPTR_OFF + VIDEO_SAVE_POINTER_SECONDARY, VDD_SAVEPTR2_OFF); VideoWrite16(table + VDD_SAVEPTR_OFF + VIDEO_SAVE_POINTER_SECONDARY + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG);
+            VideoWrite16(table + VDD_SAVEPTR2_OFF + VIDEO_SECONDARY_LENGTH, VIDEO_SECONDARY_TABLE_BYTES);
+            VideoWrite16(table + VDD_SAVEPTR2_OFF + VIDEO_SECONDARY_DCC, VDD_DCC_OFF);     VideoWrite16(table + VDD_SAVEPTR2_OFF + VIDEO_SECONDARY_DCC + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG);
+            table[VDD_DCC_OFF + 0] = VIDEO_DCC_ENTRIES; table[VDD_DCC_OFF + 1] = VIDEO_DCC_VERSION; table[VDD_DCC_OFF + 2] = VIDEO_DCC_MAX_CODE; table[VDD_DCC_OFF + 3] = 0;
+            for (index = 0; index < VIDEO_DCC_ENTRIES; ++index) VideoWrite16(table + VDD_DCC_OFF + VIDEO_DCC_HEADER_BYTES + index * VIDEO_DCC_ENTRY_BYTES, displayCombination[index]);
             for (index = 0; index < VDD_VPARAM_N; ++index)
-                (VOID)VddVideoParameterEntry((BYTE)index, table + VDD_VPARAM_OFF + index * 64u);
-            if (state->BiosData) { VideoWrite16(state->BiosData + 0xA8, VDD_SAVEPTR_OFF); VideoWrite16(state->BiosData + 0xAA, VDD_VIDTAB_SEG); }
+                (VOID)VddVideoParameterEntry((BYTE)index, table + VDD_VPARAM_OFF + index * VIDEO_PARAMETER_ENTRY_BYTES);
+            if (state->BiosData) { VideoWrite16(state->BiosData + VIDEO_BDA_SAVE_POINTER, VDD_SAVEPTR_OFF); VideoWrite16(state->BiosData + VIDEO_BDA_SAVE_POINTER + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG); }
         }
     }
     /* ...and the font vectors, which VddVideoReset set before the host's IVT was
        final: written again now that it is (the host plants its own vectors first). */
-    VideoSetVector(state, 0x43, state->Int43Segment, state->Int43Offset);
-    VideoSetVector(state, 0x1F, state->Int1FSegment, state->Int1FOffset);
+    VideoSetVector(state, VIDEO_VECTOR_GRAPHICS_FONT, state->Int43Segment, state->Int43Offset);
+    VideoSetVector(state, VIDEO_VECTOR_FONT_HIGH, state->Int1FSegment, state->Int1FOffset);
 }
 
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
@@ -4699,8 +4795,8 @@ static VOID VideoWrite(PVOID context, UINT32 offset, BYTE value)
 static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
 {
     if (state->IsUserFontOn)  return &state->UserFont[character * VIDEO_CELL_HEIGHT];
-    if (state->CellHeight == 8)   return vga_font_8x8[character];
-    if (state->CellHeight == 14)  return vga_font_8x14[character];
+    if (state->CellHeight == VIDEO_FONT8_HEIGHT)   return vga_font_8x8[character];
+    if (state->CellHeight == VIDEO_FONT14_HEIGHT)  return vga_font_8x14[character];
     return vga_font_8x16[character];
 }
 
@@ -4719,8 +4815,8 @@ static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
      wider character clock would not fit the line. */
 static INT VideoTextCellWidthOf(PCVIDEO_STATE state)
 {
-    if (state->VesaTextMode) return 8;
-    return (state->SequencerRegisters[1] & 0x01) ? 8 : 9;
+    if (state->VesaTextMode) return VIDEO_CHARACTER_CLOCK_8;
+    return (state->SequencerRegisters[VIDEO_SR_CLOCKING_MODE] & VIDEO_SR1_8_DOT) ? VIDEO_CHARACTER_CLOCK_8 : VIDEO_CHARACTER_CLOCK_9;
 }
 INT VddVideoTextCellWidth(PCVIDEO_STATE state) { return VideoTextCellWidthOf(state); }
 
@@ -4730,20 +4826,20 @@ static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE charac
     INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
     INT cellWidth = VideoTextCellWidthOf(state);
     INT stride = state->Columns * cellWidth;                        /* 360 in a 40-column mode  */
-    INT isLineGraphics = cellWidth == 9 && (state->AttributeMode & 0x04) && character >= 0xC0 && character <= 0xDF;
-    BYTE foreground = attribute & 0x0F, background;
+    INT isLineGraphics = cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS) && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST;
+    BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK, background;
     const BYTE *glyph = VideoGlyphRows(state, character);
     if (state->IsBlink) {
-        background = (BYTE)((attribute >> 4) & 0x07);
-        if ((attribute & 0x80) && state->IsBlinkOffPhase) foreground = background;  /* off phase: the glyph hides */
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_BACKGROUND_DIM);
+        if ((attribute & VIDEO_ATTRIBUTE_BLINK) && state->IsBlinkOffPhase) foreground = background;  /* off phase: the glyph hides */
     } else {
-        background = (BYTE)((attribute >> 4) & 0x0F);           /* sixteen backgrounds      */
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_COLOUR_MASK);           /* sixteen backgrounds      */
     }
     for (glyphY = 0; glyphY < cellHeight; ++glyphY) {
         BYTE bits = glyph[glyphY];
         BYTE *pixelRow = &state->FrameBuffer[(row*cellHeight + glyphY) * stride + column*cellWidth];
-        for (glyphX = 0; glyphX < 8; ++glyphX) pixelRow[glyphX] = (bits & (0x80 >> glyphX)) ? foreground : background;
-        if (cellWidth == 9) pixelRow[8] = (isLineGraphics && (bits & 0x01)) ? foreground : background;
+        for (glyphX = 0; glyphX < VIDEO_CHARACTER_CLOCK_8; ++glyphX) pixelRow[glyphX] = (bits & (VIDEO_GLYPH_LEFT_BIT >> glyphX)) ? foreground : background;
+        if (cellWidth == VIDEO_CHARACTER_CLOCK_9) pixelRow[VIDEO_CHARACTER_CLOCK_8] = (isLineGraphics && (bits & VIDEO_GLYPH_RIGHT_BIT)) ? foreground : background;
     }
 }
 
@@ -4761,21 +4857,21 @@ INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
 {
     static const char hexDigits[] = "0123456789abcdef";
     INT row, column, count = 0;
-    if (!output || capacity < 16) return 0;
+    if (!output || capacity < VIDEO_SNAPSHOT_MIN_CAPACITY) return 0;
     for (row = 0; row < state->Rows; ++row) {
-        for (column = 0; column < state->Columns && count < capacity - 2; ++column) {
+        for (column = 0; column < state->Columns && count < capacity - VIDEO_SNAPSHOT_LINE_ROOM; ++column) {
             BYTE character = VideoDisplayCell(state, row, column)[0];
-            output[count++] = (character >= 32 && character < 127) ? (char)character : '.';
+            output[count++] = (character >= VIDEO_CHAR_PRINTABLE_FIRST && character < VIDEO_CHAR_PRINTABLE_END) ? (char)character : '.';
         }
-        if (count < capacity - 2) output[count++] = '\n';
+        if (count < capacity - VIDEO_SNAPSHOT_LINE_ROOM) output[count++] = '\n';
     }
-    if (count < capacity - 8) { const char *height = "--attr--\n"; while (*height && count < capacity - 2) output[count++] = *height++; }
+    if (count < capacity - VIDEO_SNAPSHOT_HEADER_ROOM) { const char *height = "--attr--\n"; while (*height && count < capacity - VIDEO_SNAPSHOT_LINE_ROOM) output[count++] = *height++; }
     for (row = 0; row < state->Rows; ++row) {
-        for (column = 0; column < state->Columns && count < capacity - 3; ++column) {
+        for (column = 0; column < state->Columns && count < capacity - VIDEO_SNAPSHOT_HEX_ROOM; ++column) {
             BYTE attributeByte = VideoDisplayCell(state, row, column)[1];
-            output[count++] = hexDigits[(attributeByte >> 4) & 0xF]; output[count++] = hexDigits[attributeByte & 0xF];
+            output[count++] = hexDigits[(attributeByte >> VIDEO_NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; output[count++] = hexDigits[attributeByte & VIDEO_NIBBLE_MASK];
         }
-        if (count < capacity - 2) output[count++] = '\n';
+        if (count < capacity - VIDEO_SNAPSHOT_LINE_ROOM) output[count++] = '\n';
     }
     output[count] = 0;
     return count;
@@ -4786,7 +4882,7 @@ VOID VddVideoRender(PVIDEO_STATE state)                 /* text glyph render    
     INT row, column;
     /* Text blinks at half the cursor rate: 32 frames on, 32 off at 60 Hz. */
     state->IsBlinkOffPhase = (BYTE)((state->IsBlink && state->TimeUs)
-                              ? ((state->TimeUs() % 1066000u) >= 533000u) : 0);
+                              ? ((state->TimeUs() % VIDEO_BLINK_PERIOD_US) >= VIDEO_BLINK_HALF_US) : 0);
     for (row = 0; row < state->Rows; ++row)
         for (column = 0; column < state->Columns; ++column) {
             BYTE *cell = VideoDisplayCell(state, row, column);
@@ -4802,8 +4898,8 @@ VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row,
     if (state->ModeKind != VIDEO_KIND_TEXT) return;
     if (column < 0 || row < 0 || column >= state->Columns || row >= state->Rows) return;
     cell    = VideoDisplayCell(state, row, column);
-    character   = (BYTE)((cell[0] & (andMask & 0xFF)) ^ (xorMask & 0xFF));
-    attribute = (BYTE)((cell[1] & (andMask >> 8)) ^ (xorMask >> 8));
+    character   = (BYTE)((cell[0] & (andMask & VIDEO_LOW_BYTE_MASK)) ^ (xorMask & VIDEO_LOW_BYTE_MASK));
+    attribute = (BYTE)((cell[1] & (andMask >> VIDEO_BYTE_SHIFT)) ^ (xorMask >> VIDEO_BYTE_SHIFT));
     VideoRenderCell(state, row, column, character, attribute);
     /* The hardware cursor is drawn by the CRTC over whatever the cell holds, so it
        stays on top of the pointer when the two share a cell. */
@@ -4836,18 +4932,18 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
         INT hidden, lit = 1;
         VddCursorLines(state->CursorShape, (UINT)cellHeight, &start, &end, &hidden);
         if (state->IsCursorEmulationOff) {                  /* AH=12h BL=34h: CX as written (#252) */
-            start = (state->CursorShape >> 8) & 0x1Fu; end = state->CursorShape & 0x1Fu;
-            hidden = ((state->CursorShape >> 8) & 0x20u) != 0 || start > end || start >= (UINT)cellHeight;
+            start = (state->CursorShape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_LINE_MASK; end = state->CursorShape & VIDEO_CURSOR_LINE_MASK;
+            hidden = ((state->CursorShape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_HIDDEN) != 0 || start > end || start >= (UINT)cellHeight;
             if (end >= (UINT)cellHeight) end = (UINT)cellHeight - 1u;
         }
         if (state->IsCursorBlink && state->TimeUs) {
             /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
                half. Integer maths only; no floating point in a VDD. */
-            UINT64 phase = state->TimeUs() % 533000u;
-            lit = (phase < 266500u);
+            UINT64 phase = state->TimeUs() % VIDEO_CURSOR_BLINK_PERIOD_US;
+            lit = (phase < VIDEO_CURSOR_BLINK_HALF_US);
         }
         if (!hidden && lit) {
-            BYTE foreground = VideoDisplayCell(state, state->CursorRow, state->CursorColumn)[1] & 0x0F;
+            BYTE foreground = VideoDisplayCell(state, state->CursorRow, state->CursorColumn)[1] & VIDEO_ATTRIBUTE_COLOUR_MASK;
             for (glyphY = (INT)start; glyphY <= (INT)end; ++glyphY)
                 for (glyphX = 0; glyphX < cellWidth; ++glyphX)              /* all nine: the CRTC does */
                     state->FrameBuffer[(state->CursorRow*cellHeight + glyphY) * stride
@@ -4877,14 +4973,14 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
 VOID VddCursorLines(WORD shape, UINT cellHeight,
                       UINT *start, UINT *end, INT *isHidden)
 {
-    UINT character = (shape >> 8) & 0x3Fu;
-    UINT endLine =  shape       & 0x1Fu;
-    *isHidden = (character & 0x20u) != 0;                 /* CH bit 5: cursor off        */
-    character &= 0x1Fu;
-    if (cellHeight > 8u && endLine < 8u && !*isHidden) {
-        character = (endLine == character + 1u) ? ((endLine + 1u) * cellHeight / 8u) - 2u
-                             : ((character + 1u) * cellHeight / 8u) - 1u;
-        endLine = ((endLine + 1u) * cellHeight / 8u) - 1u;
+    UINT character = (shape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_START_FIELD;
+    UINT endLine =  shape       & VIDEO_CURSOR_LINE_MASK;
+    *isHidden = (character & VIDEO_CURSOR_HIDDEN) != 0;                 /* CH bit 5: cursor off        */
+    character &= VIDEO_CURSOR_LINE_MASK;
+    if (cellHeight > VIDEO_CGA_CELL_HEIGHT && endLine < VIDEO_CGA_CELL_HEIGHT && !*isHidden) {
+        character = (endLine == character + 1u) ? ((endLine + 1u) * cellHeight / VIDEO_CGA_CELL_HEIGHT) - VIDEO_CURSOR_UNDERLINE_LINES
+                             : ((character + 1u) * cellHeight / VIDEO_CGA_CELL_HEIGHT) - 1u;
+        endLine = ((endLine + 1u) * cellHeight / VIDEO_CGA_CELL_HEIGHT) - 1u;
     }
     if (character >= cellHeight) character = cellHeight - 1u;
     if (endLine >= cellHeight) endLine = cellHeight - 1u;
@@ -4906,7 +5002,7 @@ VOID VddCursorLines(WORD shape, UINT cellHeight,
    there is nothing to undo -- the identity. Kept as the cursor's one question to ask. */
 const BYTE *VddVideoCga4Map(PCVIDEO_STATE state)
 {
-    static const BYTE ident[4] = { 0, 1, 2, 3 };
+    static const BYTE ident[VIDEO_CGA_COLOURS] = { 0, 1, 2, 3 };
     (VOID)state;
     return ident;
 }
@@ -4915,7 +5011,7 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
 {
     const BYTE *source = state->VideoMemory + VIDEO_TEXT_OFFSET;
     INT graphicsWidth = state->GraphicsWidth, graphicsHeight = state->GraphicsHeight, line, column;
-    INT pixelsPerByte = state->CgaBpp == 1 ? 8 : 4;             /* pixels per byte          */
+    INT pixelsPerByte = state->CgaBpp == 1 ? VIDEO_PIXELS_PER_PLANE_BYTE : VIDEO_CGA_PIXELS_PER_BYTE;             /* pixels per byte          */
     /* ── #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
          04h/05h (AR12 = 03h), 0-1 in 06h (AR12 = 01h), and pal[] carries it through
          AR0n -> DAC. This drew from a private table -- pixel 1/2/3 as index 11/13/15
@@ -4924,14 +5020,14 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
          by the measured table), so a guest's own AR01-03, or the BIOS's background,
          never showed. Unchanged picture for an unmodified mode 04h/05h/06h. */
     for (line = 0; line < graphicsHeight; ++line) {
-        const BYTE *sourceRow = source + ((line & 1) ? 0x2000 : 0) + (line >> 1) * (graphicsWidth / pixelsPerByte);
+        const BYTE *sourceRow = source + ((line & 1) ? VIDEO_CGA_ODD_BANK : 0) + (line >> 1) * (graphicsWidth / pixelsPerByte);
         BYTE *output = &state->FrameBuffer[line * graphicsWidth];
         for (column = 0; column < graphicsWidth; ++column) {
             BYTE byteValue = sourceRow[column / pixelsPerByte];
             if (state->CgaBpp == 1)
-                output[column] = (BYTE)((byteValue >> (7 - (column & 7))) & 1);
+                output[column] = (BYTE)((byteValue >> (VIDEO_PIXEL_IN_BYTE_MASK - (column & VIDEO_PIXEL_IN_BYTE_MASK))) & 1);
             else
-                output[column] = (BYTE)((byteValue >> (6 - 2 * (column & 3))) & 3);
+                output[column] = (BYTE)((byteValue >> (VIDEO_CGA_PIXEL_TOP_SHIFT - VIDEO_CGA_BITS_PER_PIXEL * (column & VIDEO_CGA_PIXEL_MASK))) & VIDEO_CGA_PIXEL_MASK);
         }
     }
 }
@@ -4972,13 +5068,13 @@ static VOID VideoGeometryOf(PCVIDEO_STATE state, INT *width, INT *height)
     *width = state->GraphicsWidth; *height = state->GraphicsHeight;
     if (state->IsVesa || !state->IsGeometryRegistersOk) return;
     if (state->ModeKind != VIDEO_KIND_PLANAR && state->ModeKind != VIDEO_KIND_LINEAR8) return;
-    horizontalDisplayEnd = ((UINT32)state->CrtcRegisters[0x01] + 1u) * 8u;
-    if (state->AttributeMode & 0x40) horizontalDisplayEnd /= 2u;
-    overflow  = state->CrtcRegisters[0x07]; maxScan = state->CrtcRegisters[0x09];
-    verticalDisplayEnd = ((UINT32)state->CrtcRegisters[0x12] | ((overflow >> 1 & 1u) << 8) | ((overflow >> 6 & 1u) << 9)) + 1u;
-    if (maxScan & 0x80) verticalDisplayEnd /= 2u;
-    if (state->CrtcRegisters[0x17] & 0x01) verticalDisplayEnd /= (maxScan & 0x1Fu) + 1u;
-    if (horizontalDisplayEnd < 64u || horizontalDisplayEnd > NTVDD_FRAME_MAX_WIDTH || verticalDisplayEnd < 50u || verticalDisplayEnd > NTVDD_FRAME_MAX_HEIGHT) return;
+    horizontalDisplayEnd = ((UINT32)state->CrtcRegisters[VIDEO_CR_HORIZONTAL_DISPLAY_END] + 1u) * VIDEO_CHARACTER_CLOCK_8;
+    if (state->AttributeMode & VIDEO_AR_MODE_PIXEL_DOUBLE) horizontalDisplayEnd /= VIDEO_PIXEL_DOUBLE;
+    overflow  = state->CrtcRegisters[VIDEO_CR_OVERFLOW]; maxScan = state->CrtcRegisters[VIDEO_CR_MAX_SCAN];
+    verticalDisplayEnd = ((UINT32)state->CrtcRegisters[VIDEO_CR_VERTICAL_DISPLAY_END] | ((overflow >> VIDEO_CR07_DISPLAY_END_8 & 1u) << VIDEO_BIT8_SHIFT) | ((overflow >> VIDEO_CR07_DISPLAY_END_9 & 1u) << VIDEO_BIT9_SHIFT)) + 1u;
+    if (maxScan & VIDEO_CR09_DOUBLE_SCAN) verticalDisplayEnd /= VIDEO_DOUBLE_SCAN;
+    if (state->CrtcRegisters[VIDEO_CR_MODE_CONTROL] & VIDEO_CR17_COMPATIBILITY) verticalDisplayEnd /= (maxScan & VIDEO_CR09_MAX_SCAN_MASK) + 1u;
+    if (horizontalDisplayEnd < VIDEO_GEOMETRY_MIN_WIDTH || horizontalDisplayEnd > NTVDD_FRAME_MAX_WIDTH || verticalDisplayEnd < VIDEO_GEOMETRY_MIN_HEIGHT || verticalDisplayEnd > NTVDD_FRAME_MAX_HEIGHT) return;
     *width = (INT)horizontalDisplayEnd; *height = (INT)verticalDisplayEnd;
 }
 VOID VddVideoGeometry(PCVIDEO_STATE state, INT *width, INT *height) { VideoGeometryOf(state, width, height); }
@@ -4989,9 +5085,9 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
     VideoGeometryOf(state, &graphicsWidth, &graphicsHeight);                            /* #325: the CRTC's size */
     if (!graphicsWidth) graphicsWidth = VIDEO_MODE12_WIDTH;
     if (!graphicsHeight) graphicsHeight = VIDEO_MODE12_HEIGHT;
-    UINT32 bytes = (UINT32)(graphicsWidth / 8);
+    UINT32 bytes = (UINT32)(graphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE);
     UINT32 pitch = (state->IsCrtcOffsetSeen && state->CrtcOffset)
-                     ? (UINT32)state->CrtcOffset * 2u : bytes;
+                     ? (UINT32)state->CrtcOffset * VIDEO_CRTC_OFFSET_UNIT : bytes;
     /* The LATCHED start address, not the register pair -- see VideoCrtcOut case 0x0C. */
     UINT32 base  = state->IsCrtcSeen ? (UINT32)state->CrtcStartLive : 0u;
     /* ── SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
@@ -5007,14 +5103,14 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
     UINT32 split = (UINT32)graphicsHeight;                 /* gh = no split */
     if (state->CrtcLineCompare) {
         UINT32 lineCompare = state->CrtcLineCompare;
-        if (lineCompare >= (UINT32)graphicsHeight && (lineCompare / 2u) < (UINT32)graphicsHeight) lineCompare /= 2u;
+        if (lineCompare >= (UINT32)graphicsHeight && (lineCompare / VIDEO_DOUBLE_SCAN) < (UINT32)graphicsHeight) lineCompare /= VIDEO_DOUBLE_SCAN;
         if (lineCompare < (UINT32)graphicsHeight) split = lineCompare;
     }
     /* ► PEL PANNING (AR13): shift the picture left 0-7 pixels, the fine half of a smooth
          scroll (s83). Below the split line the pan is dropped when AR10 bit 5 (PPM) is
          set -- which is how a panel stays still under a panning playfield. */
-    UINT32 pan  = (state->DisplayPan & 0x0Fu) < 8u ? (UINT32)(state->DisplayPan & 7u) : 0u;
-    INT      isPelPanMode  = (state->AttributeMode >> 5) & 1;
+    UINT32 pan  = (state->DisplayPan & VIDEO_AR_PAN_MASK) < VIDEO_PAN_PIXELS ? (UINT32)(state->DisplayPan & VIDEO_PAN_SHIFT_MASK) : 0u;
+    INT      isPelPanMode  = (state->AttributeMode >> VIDEO_AR_MODE_PPM_SHIFT) & 1;
     if (!pitch) pitch = bytes;
     for (line = 0; line < graphicsHeight; ++line) {
         UINT32 rowAddress = (line < (INT)split) ? base + (UINT32)line * pitch
@@ -5026,19 +5122,19 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
                 UINT32 planeOffset = (rowAddress + (UINT32)byteColumn) % (UINT32)VIDEO_PLANE_SIZE;
                 BYTE plane0 = VideoPlaneBytes(state,0)[planeOffset], plane1 = VideoPlaneBytes(state,1)[planeOffset];
                 BYTE plane2 = VideoPlaneBytes(state,2)[planeOffset], plane3 = VideoPlaneBytes(state,3)[planeOffset];
-                for (bit = 0; bit < 8; ++bit) {
-                    BYTE mask = (BYTE)(0x80 >> bit);
-                    output[byteColumn*8 + bit] = (BYTE)(((plane0&mask)?1:0) | ((plane1&mask)?2:0) | ((plane2&mask)?4:0) | ((plane3&mask)?8:0));
+                for (bit = 0; bit < VIDEO_BITS_PER_BYTE; ++bit) {
+                    BYTE mask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> bit);
+                    output[byteColumn*VIDEO_PIXELS_PER_PLANE_BYTE + bit] = (BYTE)(((plane0&mask)?1:0) | ((plane1&mask)?VIDEO_PLANE1_BIT:0) | ((plane2&mask)?VIDEO_PLANE2_BIT:0) | ((plane3&mask)?VIDEO_PLANE3_BIT:0));
                 }
             }
         } else {
             INT column;
             for (column = 0; column < graphicsWidth; ++column) {
                 UINT32 shiftedX = (UINT32)column + shift;
-                UINT32 planeOffset  = (rowAddress + (shiftedX >> 3)) % (UINT32)VIDEO_PLANE_SIZE;
-                BYTE  mask  = (BYTE)(0x80 >> (shiftedX & 7));
-                output[column] = (BYTE)(((VideoPlaneBytes(state,0)[planeOffset]&mask)?1:0) | ((VideoPlaneBytes(state,1)[planeOffset]&mask)?2:0)
-                                 | ((VideoPlaneBytes(state,2)[planeOffset]&mask)?4:0) | ((VideoPlaneBytes(state,3)[planeOffset]&mask)?8:0));
+                UINT32 planeOffset  = (rowAddress + (shiftedX >> VIDEO_PLANE_BYTE_SHIFT)) % (UINT32)VIDEO_PLANE_SIZE;
+                BYTE  mask  = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (shiftedX & VIDEO_PIXEL_IN_BYTE_MASK));
+                output[column] = (BYTE)(((VideoPlaneBytes(state,0)[planeOffset]&mask)?1:0) | ((VideoPlaneBytes(state,1)[planeOffset]&mask)?VIDEO_PLANE1_BIT:0)
+                                 | ((VideoPlaneBytes(state,2)[planeOffset]&mask)?VIDEO_PLANE2_BIT:0) | ((VideoPlaneBytes(state,3)[planeOffset]&mask)?VIDEO_PLANE3_BIT:0));
             }
         }
     }
@@ -5068,18 +5164,18 @@ static UINT32 VideoModeYPage(PCVIDEO_STATE state)
          onto the top. Measured -- the largest row-to-row discontinuity in the
          captured frame sits at y=5. */
     UINT32 page = 0, bestCount = 0, candidatePage;
-    for (candidatePage = 0; candidatePage < 4; ++candidatePage) {
-        UINT32 base = candidatePage * 0x4000u, index, count = 0;
-        if (base + 16000u > VIDEO_Y_PLANE_SIZE) break;
-        for (index = 0; index < 16000u; index += 8) if (state->YPlanes[0][base + index]) ++count;
+    for (candidatePage = 0; candidatePage < VIDEO_MODE_Y_PAGES; ++candidatePage) {
+        UINT32 base = candidatePage * VIDEO_MODE_Y_PAGE_BYTES, index, count = 0;
+        if (base + VIDEO_MODE_Y_PAGE_USED > VIDEO_Y_PLANE_SIZE) break;
+        for (index = 0; index < VIDEO_MODE_Y_PAGE_USED; index += VIDEO_MODE_Y_SAMPLE_STRIDE) if (state->YPlanes[0][base + index]) ++count;
         if (count > bestCount) { bestCount = count; page = candidatePage; }
     }
-    return page * 0x4000u;
+    return page * VIDEO_MODE_Y_PAGE_BYTES;
 }
 
 static VOID VideoRenderModeY(PVIDEO_STATE state)
 {
-    UINT32 pitch = (UINT32)(state->CrtcOffset ? state->CrtcOffset : 40) * 2u;
+    UINT32 pitch = (UINT32)(state->CrtcOffset ? state->CrtcOffset : VIDEO_MODE_Y_DEFAULT_OFFSET) * VIDEO_CRTC_OFFSET_UNIT;
     /* ► READ THE PAGE FLIP; DO NOT GUESS IT. VideoModeYPage() picks the busiest page out
          of the snapshot, and its own commentary admits the limit: "a game
          double-buffering two equally-busy pages may pick either". Doom double-buffers
@@ -5096,7 +5192,7 @@ static VOID VideoRenderModeY(PVIDEO_STATE state)
          0/2/4/6 shift the picture left by 0-3 pixels -- the part of a smooth scroll the
          whole-byte start address cannot express (4 pixels per byte in this mode). The
          shifted row simply reads on into the next bytes, as the address counter does. */
-    UINT32 pan = (UINT32)((state->DisplayPan & 7u) >> 1);
+    UINT32 pan = (UINT32)((state->DisplayPan & VIDEO_PAN_SHIFT_MASK) >> 1);
     /* ► THE SELECTED PLANE IS READ LIVE. Its most recent bytes are in the aperture
          and nowhere else -- once a static screen stops changing the mask, no further
          flush ever comes, and that plane's columns would render as whatever was last
@@ -5109,8 +5205,8 @@ static VOID VideoRenderModeY(PVIDEO_STATE state)
        different hat. VideoModeYFlush() has already moved everything that was written. */
     if (!state->YMapPlane) VideoModeYFlush(state);
     { INT line, column;
-      const BYTE *plane[4];
-      for (column = 0; column < 4; ++column)
+      const BYTE *plane[VIDEO_PLANES];
+      for (column = 0; column < VIDEO_PLANES; ++column)
           plane[column] = state->YMapPlane ? state->YMapPlane(state->YMapContext, column) : state->YPlanes[column];
       INT modeWidth, modeHeight;
       VideoGeometryOf(state, &modeWidth, &modeHeight);                          /* #325: Mode X is 320x240 */
@@ -5119,7 +5215,7 @@ static VOID VideoRenderModeY(PVIDEO_STATE state)
           BYTE *destination = state->FrameBuffer + (UINT32)line * (UINT32)modeWidth;
           for (column = 0; column < modeWidth; ++column)
           { UINT32 shiftedX = (UINT32)column + pan;
-            destination[column] = plane[shiftedX & 3][(row + (shiftedX >> 2)) & (VIDEO_Y_PLANE_SIZE - 1u)]; }
+            destination[column] = plane[shiftedX & VIDEO_PLANE_INDEX_MASK][(row + (shiftedX >> VIDEO_MODE_Y_PLANE_SHIFT)) & (VIDEO_Y_PLANE_SIZE - 1u)]; }
       } }
 }
 
@@ -5141,15 +5237,15 @@ static VOID VideoOnFrame(PVOID context)
     if (state->IsVesa) {                                 /* VESA: sync window -> vram */
         VideoVesaSync(state);
         state->Frame.Width = state->VesaWidth; state->Frame.Height = state->VesaHeight;
-        if (state->VesaBpp > 8) {                        /* direct colour -> ARGB */
+        if (state->VesaBpp > VIDEO_BPP_INDEXED) {                        /* direct colour -> ARGB */
             VideoVesaScanWritten(state);
             VideoVesaToArgb(state);
-            state->Frame.BitsPerPixel = 32;
-            state->Frame.Stride = (UINT32)state->VesaWidth * 4;
+            state->Frame.BitsPerPixel = VIDEO_BPP_32;
+            state->Frame.Stride = (UINT32)state->VesaWidth * VIDEO_BYTES_32BPP;
             state->Frame.Pixels = (const BYTE *)state->VesaArgb;
             state->Frame.Palette = 0;                     /* contract: NULL unless bpp==8 */
         } else {
-            state->Frame.BitsPerPixel = 8;
+            state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
             /* ⚠ THE STRIDE IS THE MODE'S PITCH, NOT ITS WIDTH. Equal for 8bpp, and
                  that equality is why this read `= st->VesaWidth` and nobody noticed.
                  And the pitch is the 4F06 LOGICAL one, the origin the 4F07 start:
@@ -5170,14 +5266,14 @@ static VOID VideoOnFrame(PVOID context)
         INT modeWidth, modeHeight;
         VideoRenderModeY(state);
         VideoGeometryOf(state, &modeWidth, &modeHeight);                        /* #325 */
-        state->Frame.Width = (WORD)modeWidth; state->Frame.Height = (WORD)modeHeight; state->Frame.BitsPerPixel = 8;
+        state->Frame.Width = (WORD)modeWidth; state->Frame.Height = (WORD)modeHeight; state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
         state->Frame.Stride = (UINT32)modeWidth; state->Frame.Pixels = state->FrameBuffer; state->Frame.Palette = state->Palette;
     } else if (state->ModeKind == VIDEO_KIND_LINEAR8) {        /* graphics: vmem is the FB */
-        state->Frame.Width = state->GraphicsWidth; state->Frame.Height = state->GraphicsHeight; state->Frame.BitsPerPixel = 8;
+        state->Frame.Width = state->GraphicsWidth; state->Frame.Height = state->GraphicsHeight; state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
         state->Frame.Stride = state->GraphicsWidth; state->Frame.Pixels = state->VideoMemory; state->Frame.Palette = state->Palette;
     } else if (state->ModeKind == VIDEO_KIND_CGA) {            /* CGA: de-interleave -> fb */
         VideoRenderCga(state);
-        state->Frame.Width = state->GraphicsWidth; state->Frame.Height = state->GraphicsHeight; state->Frame.BitsPerPixel = 8;
+        state->Frame.Width = state->GraphicsWidth; state->Frame.Height = state->GraphicsHeight; state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
         state->Frame.Stride = state->GraphicsWidth; state->Frame.Pixels = state->FrameBuffer; state->Frame.Palette = state->Palette;
     } else if (state->ModeKind == VIDEO_KIND_PLANAR) {         /* planar: combine -> fb    */
         INT pictureWidth, pictureHeight;
@@ -5185,7 +5281,7 @@ static VOID VideoOnFrame(PVOID context)
         VideoGeometryOf(state, &pictureWidth, &pictureHeight);                        /* #325 */
         if (!pictureWidth) pictureWidth = VIDEO_MODE12_WIDTH;
         if (!pictureHeight) pictureHeight = VIDEO_MODE12_HEIGHT;
-        state->Frame.Width = (WORD)pictureWidth; state->Frame.Height = (WORD)pictureHeight; state->Frame.BitsPerPixel = 8;
+        state->Frame.Width = (WORD)pictureWidth; state->Frame.Height = (WORD)pictureHeight; state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
         state->Frame.Stride = (UINT32)pictureWidth; state->Frame.Pixels = state->FrameBuffer; state->Frame.Palette = state->Palette;
     } else {                                           /* text: render glyphs      */
         /* Geometry now follows the MODE, not a fixed 80x25 -- a 40-column mode
@@ -5194,7 +5290,7 @@ static VOID VideoOnFrame(PVOID context)
         state->Frame.Width = (WORD)(state->Columns * VideoTextCellWidthOf(state));   /* #324: 9-dot cells */
         state->Frame.Height = (WORD)(state->Rows * (state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT));
         VddVideoBdaSync(state);                        /* cursor moved by teletype etc. */
-        state->Frame.BitsPerPixel = 8;
+        state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED;
         state->Frame.Stride = state->Frame.Width;
         state->Frame.Pixels = state->FrameBuffer; state->Frame.Palette = state->Palette;
     }
@@ -5211,11 +5307,11 @@ static VOID VideoOnFrame(PVOID context)
          VESA's window sync) must not stall while the screen is dark. frame_touch drops
          the raster-split arrays for a blanked frame. A mode set clears the bit (the
          measured SR1 of every mode has bit 5 = 0). */
-    state->IsBlanked = (BYTE)((state->SequencerRegisters[1] & 0x20u) != 0);
+    state->IsBlanked = (BYTE)((state->SequencerRegisters[VIDEO_SR_CLOCKING_MODE] & VIDEO_SR1_SCREEN_OFF) != 0);
     if (state->IsBlanked) {
-        static UINT32 black[256];
-        if (!black[0]) { INT index; for (index = 0; index < 256; ++index) black[index] = 0xFF000000u; }
-        state->Frame.BitsPerPixel = 8; state->Frame.Stride = 0;
+        static UINT32 black[NTVDD_PALETTE_ENTRIES];
+        if (!black[0]) { INT index; for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index) black[index] = VIDEO_ARGB_OPAQUE; }
+        state->Frame.BitsPerPixel = VIDEO_BPP_INDEXED; state->Frame.Stride = 0;
         state->Frame.Pixels = state->FrameBuffer; state->Frame.Palette = black;
     }
     state->IsDirty = 0;
@@ -5232,14 +5328,14 @@ VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character) { VideoTeletype(state, 
 static char *VideoReadHex2(char *output, UINT value)
 {
     static const char H[] = "0123456789ABCDEF";
-    *output++ = H[(value >> 4) & 15]; *output++ = H[value & 15]; return output;
+    *output++ = H[(value >> VIDEO_NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; *output++ = H[value & VIDEO_NIBBLE_MASK]; return output;
 }
 static char *VideoReadString(char *output, const char *text) { while (*text) *output++ = *text++; return output; }
 static char *VideoReadDecimal(char *output, UINT value)
 {
-    char digits[12]; INT count = 0;
+    char digits[VIDEO_DECIMAL_DIGITS]; INT count = 0;
     if (!value) { *output++ = '0'; return output; }
-    while (value) { digits[count++] = (char)('0' + value % 10); value /= 10; }
+    while (value) { digits[count++] = (char)('0' + value % VIDEO_DECIMAL_BASE); value /= VIDEO_DECIMAL_BASE; }
     while (count) *output++ = digits[--count];
     return output;
 }
@@ -5272,7 +5368,7 @@ INT VddVideoRegistersDump(PCVIDEO_STATE state, char *output, INT capacity)
     /* Worst case is the four groups at ~7 bytes an entry plus the externals; 1600 is
        comfortably over it. Refuse rather than overrun -- this runs inside the exit
        report, where a smashed buffer would take the whole report with it. */
-    if (!state || !output || capacity < 1600) return 0;
+    if (!state || !output || capacity < VIDEO_REGISTER_DUMP_MIN_CAPACITY) return 0;
     cursor = VideoReadString(cursor, "STAGE2: VGAREG ext misc=0x");   cursor = VideoReadHex2(cursor, state->MiscOutput);
     cursor = VideoReadString(cursor, "(w=");                          cursor = VideoReadDecimal(cursor, state->MiscWrites);
     cursor = VideoReadString(cursor, ") feat=0x");                    cursor = VideoReadHex2(cursor, state->FeatureControl);
@@ -5287,10 +5383,10 @@ INT VddVideoRegistersDump(PCVIDEO_STATE state, char *output, INT capacity)
     cursor = VideoReadString(cursor, "  [unwritten externals are spec defaults;"
                   " InputStatus0 reads 0x10 -- MEASURED on PCem's IBM VGA ROM,"
                   " all 12 modes]\r\n");
-    cursor = VideoReadGroup(cursor, "SEQ ", state->SequencerRegisters,  state->SequencerWrites,   8);
-    cursor = VideoReadGroup(cursor, "CRTC", state->CrtcRegisters, state->CrtcWrites, 32);
-    cursor = VideoReadGroup(cursor, "GC  ", state->GcRegisters,   state->GcWrites,   16);
-    cursor = VideoReadGroup(cursor, "AC  ", state->AttributeRegisters, state->AttributeWrites, 32);
+    cursor = VideoReadGroup(cursor, "SEQ ", state->SequencerRegisters,  state->SequencerWrites,   VIDEO_SR_DECODED);
+    cursor = VideoReadGroup(cursor, "CRTC", state->CrtcRegisters, state->CrtcWrites, VIDEO_CR_DECODED);
+    cursor = VideoReadGroup(cursor, "GC  ", state->GcRegisters,   state->GcWrites,   VIDEO_GR_DECODED);
+    cursor = VideoReadGroup(cursor, "AC  ", state->AttributeRegisters, state->AttributeWrites, VIDEO_AR_DECODED);
     return (INT)(cursor - output);
 }
 
@@ -5307,38 +5403,38 @@ VOID VddVideoReset(PVOID context)
          6.22 but covers only the AC palette and the DAC, so there is no measured
          table for the externals yet. Step 2's probe against the PCem ET4000 is what
          turns this from spec-correct into verified. Until then the dump marks it. */
-    state->FeatureControl = 0x00; state->VgaEnable = 0x01; state->DacMask = 0xFF;
+    state->FeatureControl = 0x00; state->VgaEnable = VIDEO_VGA_ENABLED; state->DacMask = VIDEO_DAC_MASK_ALL;
     /* ⚠ AND THE POWER-ON STATE IS MODE 3'S, NOT ZEROES. A real machine reaches DOS
          with its BIOS having set mode 3, so the register file holds mode 3's values
          before a guest runs at all -- and most guests never call AH=00h for text,
          they just start drawing. Loading it here rather than only from the INT 10h
          path is what makes `VGAREG` describe a plausible card from the first line.
          VideoLoadModeDefinition sets MiscOutput too, so it is not set separately. */
-    VideoLoadModeDefinition(state, 0x03);
-    state->Mode = 3; state->Columns = VIDEO_COLUMNS; state->Rows = VIDEO_ROWS;
+    VideoLoadModeDefinition(state, VIDEO_MODE_TEXT_80);
+    state->Mode = VIDEO_MODE_TEXT_80; state->Columns = VIDEO_COLUMNS; state->Rows = VIDEO_ROWS;
     state->ModeKind = VIDEO_KIND_TEXT; state->GraphicsWidth = VIDEO_FRAME_WIDTH; state->GraphicsHeight = VIDEO_FRAME_HEIGHT;
     state->CellHeight = VIDEO_CELL_HEIGHT; state->IsBlink = 1; state->IsUserFontOn = 0;
-    state->AttributeMode = (BYTE)(state->AttributeMode | 0x08u);
+    state->AttributeMode = (BYTE)(state->AttributeMode | VIDEO_AR_MODE_BLINK);
     state->CrtcCursor = 0;
     state->ModeQueryCount = 0;
-    state->CursorRow = state->CursorColumn = 0; state->CursorShape = 0x0607; state->Page = 0;
-    {   INT page; for (page = 0; page < 8; ++page) state->PageRow[page] = state->PageColumn[page] = 0; }
-    state->ScanSelect = 2; state->IsGreySum = 0; state->IsCursorEmulationOff = 0; state->IsVideoOff = 0;   /* #252 */
+    state->CursorRow = state->CursorColumn = 0; state->CursorShape = VIDEO_CURSOR_SHAPE_DEFAULT; state->Page = 0;
+    {   INT page; for (page = 0; page < VIDEO_PAGES; ++page) state->PageRow[page] = state->PageColumn[page] = 0; }
+    state->ScanSelect = VIDEO_SCAN_SELECT_400; state->IsGreySum = 0; state->IsCursorEmulationOff = 0; state->IsVideoOff = 0;   /* #252 */
     state->DacWriteIndex = state->DacReadIndex = state->DacComponent = 0;
     state->SequencerIndex = state->GcIndex = 0;
-    state->MapMask = 0x0F; state->BitMask = 0xFF; state->WriteMode = 0;
-    state->IsChain4 = 1; state->YMask = 0x0F;
+    state->MapMask = VIDEO_ALL_PLANES; state->BitMask = VIDEO_BIT_MASK_ALL; state->WriteMode = 0;
+    state->IsChain4 = 1; state->YMask = VIDEO_ALL_PLANES;
     VideoLoadDefaultCrtc(state);                      /* mode 3's CRTC, measured not assumed */
     state->SetReset = state->EnableSetReset = state->FunctionRotate = state->ReadMap = 0;
     state->ReadMode = state->ColorCompare = state->ColorDontCare = 0;
     state->Latch[0] = state->Latch[1] = state->Latch[2] = state->Latch[3] = 0;
     state->IsVesa = 0; state->VesaMode = 0; state->VesaBank = 0;
     state->VesaModeFlags = 0; state->IsModeSetNoClear = 0;   /* 40:87h = 60h at power-on */
-    state->VesaDacWidth = 6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
+    state->VesaDacWidth = VIDEO_DAC_WIDTH_6;                      /* the power-on RAMDAC is a VGA's: 6 bits */
     VideoLoadDefaultPalette(state);
-    if (state->VideoMemory) VideoClearText(state, 0x07);
+    if (state->VideoMemory) VideoClearText(state, VIDEO_ATTRIBUTE_NORMAL);
     /* #266: the power-on font vectors and CGA colour select (mode 3's 30h). */
-    state->CgaSelect = 0x30; state->IsBlanked = 0;
+    state->CgaSelect = VIDEO_CGA_SELECT_DEFAULT; state->IsBlanked = 0;
     VideoInt43Rom(state, state->CellHeight);
     VideoInt1FRom(state);
     VddVideoBdaSync(state);
@@ -5350,24 +5446,24 @@ INT VddVideoInitialize(PVDD_BUS bus, PVOID context)
     PVIDEO_STATE state = (PVIDEO_STATE)context;
     state->Bus = bus;
     /* Disarmed before the reset, so no offset a guest can produce matches. */
-    state->WatchOffset = 0xFFFFFFFFu;
+    state->WatchOffset = VIDEO_OFFSET_NONE;
     VddVideoReset(state);
     state->ModeYGap = VIDEO_MODEY_GAP_DEFAULT;
-    if (VddClaimMemory(bus, VIDEO_TEXT_BASE, 0x8000, VideoRead, VideoWrite, state)) return -1;
-    if (VddClaimInterrupt(bus, 0x10, VideoInt10, state)) return -1;
-    if (VddClaimPorts(bus, 0x3C4, 0x3C5, VideoSequencerIn, VideoSequencerOut, state)) return -1;  /* Sequencer */
+    if (VddClaimMemory(bus, VIDEO_TEXT_BASE, VIDEO_TEXT_WINDOW_BYTES, VideoRead, VideoWrite, state)) return -1;
+    if (VddClaimInterrupt(bus, VIDEO_INT10_VECTOR, VideoInt10, state)) return -1;
+    if (VddClaimPorts(bus, VIDEO_PORT_SEQUENCER_INDEX, VIDEO_PORT_SEQUENCER_DATA, VideoSequencerIn, VideoSequencerOut, state)) return -1;  /* Sequencer */
     /* ⚠ THE OLD WARNING HERE ("DO NOT CLAIM CRTC 0x3D4/0x3D5", three regressions,
          mechanism UNKNOWN) IS RESOLVED, not ignored. The mechanism was that Doom
          page-flips with ONE 16-BIT WRITE and these handlers dropped the data byte, so
          claiming the port broke the flip outright -- worse than not claiming it. See
          VideoSequencerOut()/VideoIndexData(). */
-    if (VddClaimPorts(bus, 0x3C0, 0x3C1, VideoAttributeIn, VideoAttributeOut, state)) return -1; /* Attribute */
-    if (VddClaimPorts(bus, 0x3C7, 0x3C9, VideoDacIn, VideoDacOut, state)) return -1;  /* DAC       */
-    if (VddClaimPorts(bus, 0x3CE, 0x3CF, VideoGcIn, VideoGcOut, state)) return -1;    /* Graphics  */
+    if (VddClaimPorts(bus, VIDEO_PORT_AC_WRITE, VIDEO_PORT_AC_READ, VideoAttributeIn, VideoAttributeOut, state)) return -1; /* Attribute */
+    if (VddClaimPorts(bus, VIDEO_PORT_DAC_READ_INDEX, VIDEO_PORT_DAC_DATA, VideoDacIn, VideoDacOut, state)) return -1;  /* DAC       */
+    if (VddClaimPorts(bus, VIDEO_PORT_GC_INDEX, VIDEO_PORT_GC_DATA, VideoGcIn, VideoGcOut, state)) return -1;    /* Graphics  */
     /* CRTC. Claimed at last -- see VideoRenderModeY() for why three earlier attempts
        regressed Doom and why that cause is gone. */
-    if (VddClaimPorts(bus, 0x3D4, 0x3D5, VideoCrtcIn, VideoCrtcOut, state)) return -1; /* CRTC     */
-    if (VddClaimPorts(bus, 0x3DA, 0x3DA, VideoStatusIn, VideoStatusOut, state)) return -1; /* InpStatus1 */
+    if (VddClaimPorts(bus, VIDEO_PORT_CRTC_COLOUR, VIDEO_PORT_CRTC_COLOUR_DATA, VideoCrtcIn, VideoCrtcOut, state)) return -1; /* CRTC     */
+    if (VddClaimPorts(bus, VIDEO_PORT_STATUS1_COLOUR, VIDEO_PORT_STATUS1_COLOUR, VideoStatusIn, VideoStatusOut, state)) return -1; /* InpStatus1 */
     /* ── THE EXTERNAL REGISTERS AND THE MONOCHROME ALIASES. (inventory step 1) ──────
          3C2 Misc Output / Input Status 0, 3C3 VGA Enable, 3C6 DAC Pixel Mask,
          3CA Feature Control read, 3CC Misc Output read -- none of which any device
@@ -5380,12 +5476,12 @@ INT VddVideoInitialize(PVDD_BUS bus, PVOID context)
          programming its CRTC wrote into nothing. 3B4/3B5 are the same CRTC and 3BA the
          same Input Status 1 / Feature Control as their 3Dx twins -- the same handlers,
          because they are the same registers. */
-    if (VddClaimPorts(bus, 0x3C2, 0x3C3, VideoExternalIn, VideoExternalOut, state)) return -1;  /* MiscOut/Enable */
-    if (VddClaimPorts(bus, 0x3C6, 0x3C6, VideoExternalIn, VideoExternalOut, state)) return -1;  /* DAC pixel mask */
-    if (VddClaimPorts(bus, 0x3CA, 0x3CC, VideoExternalIn, VideoExternalOut, state)) return -1;  /* FeatCtl/MiscOut */
-    if (VddClaimPorts(bus, 0x3B4, 0x3B5, VideoCrtcIn, VideoCrtcOut, state)) return -1; /* mono CRTC */
-    if (VddClaimPorts(bus, 0x3BA, 0x3BA, VideoStatusIn, VideoStatusOut, state)) return -1; /* mono status */
-    if (VddClaimPorts(bus, 0x1CE, 0x1CF, VideoVbePortIn, VideoVbePortOut, state)) return -1; /* #53: 4F0Ah's ports */
+    if (VddClaimPorts(bus, VIDEO_PORT_MISC_WRITE, VIDEO_PORT_VGA_ENABLE, VideoExternalIn, VideoExternalOut, state)) return -1;  /* MiscOut/Enable */
+    if (VddClaimPorts(bus, VIDEO_PORT_DAC_MASK, VIDEO_PORT_DAC_MASK, VideoExternalIn, VideoExternalOut, state)) return -1;  /* DAC pixel mask */
+    if (VddClaimPorts(bus, VIDEO_PORT_FEATURE_READ, VIDEO_PORT_MISC_READ, VideoExternalIn, VideoExternalOut, state)) return -1;  /* FeatCtl/MiscOut */
+    if (VddClaimPorts(bus, VIDEO_PORT_CRTC_MONO, VIDEO_PORT_CRTC_MONO_DATA, VideoCrtcIn, VideoCrtcOut, state)) return -1; /* mono CRTC */
+    if (VddClaimPorts(bus, VIDEO_PORT_STATUS1_MONO, VIDEO_PORT_STATUS1_MONO, VideoStatusIn, VideoStatusOut, state)) return -1; /* mono status */
+    if (VddClaimPorts(bus, VIDEO_PORT_VBE_INDEX, VIDEO_PORT_VBE_DATA, VideoVbePortIn, VideoVbePortOut, state)) return -1; /* #53: 4F0Ah's ports */
     if (VddOnFrame(bus, VideoOnFrame, state)) return -1;
     return 0;
 }
