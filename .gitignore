@@ -125,6 +125,7 @@ tools/score/probe-cache.json
 /scripts/dosdiff.py
 /scripts/dosdrive.sh
 /scripts/style_rename.py
+/scripts/scoped_rename.py
 /scripts/dospair.sh
 /scripts/dostest.sh
 /scripts/gtype.sh
