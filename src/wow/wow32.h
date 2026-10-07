@@ -207,6 +207,10 @@ static void wu_puts(char *b, int cap, int *k, const char *s)
     b[*k] = 0;
 }
 
+/* Hex widths for wu_puthex: a byte, a word, a dword. */
+#define WOW_HEX_BYTE_DIGITS  2
+#define WOW_HEX_WORD_DIGITS  4
+#define WOW_HEX_DWORD_DIGITS 8
 static void wu_puthex(char *b, int cap, int *k, DWORD v, int digits)
 {
     static const char hx[] = "0123456789abcdef";

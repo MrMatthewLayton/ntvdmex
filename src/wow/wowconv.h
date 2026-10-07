@@ -1,6 +1,51 @@
 #ifndef NTVDMEX_WOWCONV_H
 #define NTVDMEX_WOWCONV_H
 #include "../ntvdmex_types.h"
+
+/* Little-endian bytes, signed 16-bit words, and the Win16 structure fields read here. */
+#define WOWCONV_BYTE_SHIFT        8
+#define WOWCONV_WORD_SHIFT        16
+#define WOWCONV_HIGH_BYTE_SHIFT   24
+#define WOWCONV_BYTE_MASK         0xff
+#define WOWCONV_BYTES_PER_WORD    2
+#define WOWCONV_INT16_SIGN        0x8000
+#define WOWCONV_INT16_RANGE       0x10000
+#define WOWCONV_INT16_MAX         32767
+#define WOWCONV_INT16_MIN         (-32768)
+#define WOWCONV_UINT16_MAX        65535
+#define WOWCONV_NUMCOLORS_FLOOR   2
+#define WOWCONV_NUMCOLORS_DIRECT  256
+#define WOWCONV_BPP_4             4
+#define WOWCONV_BPP_8             8
+#define WOWCONV_BPP_24            24
+#define WOWCONV_RECT16_FIELD_BYTES 2
+#define WOWCONV_CORE_HEADER_SIZE  12     /* BITMAPCOREHEADER: bcSize */
+#define WOWCONV_CORE_WIDTH        4
+#define WOWCONV_CORE_HEIGHT       6
+#define WOWCONV_CORE_BIT_COUNT    10
+#define WOWCONV_INFO_HEADER_SIZE  40     /* BITMAPINFOHEADER: biSize */
+#define WOWCONV_INFO_WIDTH        4
+#define WOWCONV_INFO_HEIGHT       8
+#define WOWCONV_INFO_PLANES       12
+#define WOWCONV_INFO_BIT_COUNT    14
+#define WOWCONV_RGBTRIPLE_SIZE    3
+#define WOWCONV_RGBQUAD_SIZE      4
+#define WOWCONV_RGB_RED           2      /* both are B, G, R */
+#define WOWCONV_RGBQUAD_RESERVED  3
+#define WOWCONV_ABC_B             1
+#define WOWCONV_ABC_C             2
+#define WOWCONV_ABC16_A           0
+#define WOWCONV_ABC16_B           2
+#define WOWCONV_ABC16_C           4
+#define WOWCONV_MF_TYPE_MEMORY    1
+#define WOWCONV_MF_TYPE_DISK      2
+#define WOWCONV_MF_HEADER_SIZE_FIELD 2
+#define WOWCONV_MF_HEADER_WORDS   9
+#define WOWCONV_MF_SIZE_FIELD     6
+#define WOWCONV_MF_SIZE_MAX       0x7fffffffUL
+#define WOWCONV_MF_OBJECTS_FIELD  10
+#define WOWCONV_MF_RECORD_MIN_WORDS 3
+#define WOWCONV_MF_FUNCTION_FIELD 4
 /*
  * wowconv.h -- ★★★★★ THE Win16/Win32 SEMANTIC DELTAS, IN ONE PLACE, TESTABLE.
  * GH #128, session 51.
@@ -56,9 +101,9 @@
      program of this era was built to read. */
 static INT WowConvNumColors(INT bitsPerPixel)
 {
-    if (bitsPerPixel <= 0)  return 2;          /* nonsense in, the safe floor out */
-    if (bitsPerPixel <= 8)  return 1 << bitsPerPixel;
-    return 256;
+    if (bitsPerPixel <= 0)  return WOWCONV_NUMCOLORS_FLOOR;          /* nonsense in, the safe floor out */
+    if (bitsPerPixel <= WOWCONV_BPP_8)  return 1 << bitsPerPixel;
+    return WOWCONV_NUMCOLORS_DIRECT;
 }
 
 /* ── WNDCLASS.hbrBackground ──────────────────────────────────────────────────
@@ -89,13 +134,13 @@ static INT WowConvBackgroundBrushKind(UINT value)
 #define WOWCONV_RECT16_SIZE 8
 static INT WowConvRect16Get(PCBYTE rect, INT index)
 {
-    INT value = (INT)((UINT)rect[index * 2] | ((UINT)rect[index * 2 + 1] << 8));
-    return (value & 0x8000) ? value - 0x10000 : value;
+    INT value = (INT)((UINT)rect[index * WOWCONV_RECT16_FIELD_BYTES] | ((UINT)rect[index * WOWCONV_RECT16_FIELD_BYTES + 1] << WOWCONV_BYTE_SHIFT));
+    return (value & WOWCONV_INT16_SIGN) ? value - WOWCONV_INT16_RANGE : value;
 }
 static VOID WowConvRect16Put(PBYTE rect, INT index, INT value)
 {
-    rect[index * 2]     = (BYTE)(value & 0xff);
-    rect[index * 2 + 1] = (BYTE)((value >> 8) & 0xff);
+    rect[index * WOWCONV_RECT16_FIELD_BYTES]     = (BYTE)(value & WOWCONV_BYTE_MASK);
+    rect[index * WOWCONV_RECT16_FIELD_BYTES + 1] = (BYTE)((value >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
 }
 
 /* ── PACKED DIB: THE 12-BYTE CORE HEADER ─────────────────────────────────────
@@ -118,8 +163,8 @@ static VOID WowConvRect16Put(PBYTE rect, INT index, INT value)
      up (which is a refusal, not a guess). */
 static UINT WowConvDibHeaderSize(PCBYTE header)
 {
-    return (UINT)header[0] | ((UINT)header[1] << 8)
-         | ((UINT)header[2] << 16) | ((UINT)header[3] << 24);
+    return (UINT)header[0] | ((UINT)header[1] << WOWCONV_BYTE_SHIFT)
+         | ((UINT)header[2] << WOWCONV_WORD_SHIFT) | ((UINT)header[3] << WOWCONV_HIGH_BYTE_SHIFT);
 }
 
 static UINT WowConvDibCoreToInfo(PCBYTE core, UINT length,
@@ -127,32 +172,32 @@ static UINT WowConvDibCoreToInfo(PCBYTE core, UINT length,
                                          PUINT paletteCount)
 {
     UINT width, height, bitCount, paletteEntries, pixelOffset, index;
-    if (!core || !output || length < 12) return 0;
-    if (WowConvDibHeaderSize(core) != 12) return 0;
-    width  = (UINT)core[4]  | ((UINT)core[5]  << 8);
-    height  = (UINT)core[6]  | ((UINT)core[7]  << 8);
-    bitCount = (UINT)core[10] | ((UINT)core[11] << 8);
-    if (bitCount != 1 && bitCount != 4 && bitCount != 8 && bitCount != 24) return 0;
-    paletteEntries    = (bitCount <= 8) ? (1u << bitCount) : 0u;
-    pixelOffset = 12 + paletteEntries * 3;
+    if (!core || !output || length < WOWCONV_CORE_HEADER_SIZE) return 0;
+    if (WowConvDibHeaderSize(core) != WOWCONV_CORE_HEADER_SIZE) return 0;
+    width  = (UINT)core[WOWCONV_CORE_WIDTH]  | ((UINT)core[WOWCONV_CORE_WIDTH + 1]  << WOWCONV_BYTE_SHIFT);
+    height  = (UINT)core[WOWCONV_CORE_HEIGHT]  | ((UINT)core[WOWCONV_CORE_HEIGHT + 1]  << WOWCONV_BYTE_SHIFT);
+    bitCount = (UINT)core[WOWCONV_CORE_BIT_COUNT] | ((UINT)core[WOWCONV_CORE_BIT_COUNT + 1] << WOWCONV_BYTE_SHIFT);
+    if (bitCount != 1 && bitCount != WOWCONV_BPP_4 && bitCount != WOWCONV_BPP_8 && bitCount != WOWCONV_BPP_24) return 0;
+    paletteEntries    = (bitCount <= WOWCONV_BPP_8) ? (1u << bitCount) : 0u;
+    pixelOffset = WOWCONV_CORE_HEADER_SIZE + paletteEntries * WOWCONV_RGBTRIPLE_SIZE;
     if (pixelOffset >= length) return 0;               /* no room for any pixels */
-    if (capacity < 40 + paletteEntries * 4) return 0;
-    for (index = 0; index < 40; ++index) output[index] = 0;
-    output[0] = 40;                                            /* biSize     */
-    output[4] = (BYTE)(width & 0xff);
-    output[5] = (BYTE)((width >> 8) & 0xff);            /* biWidth    */
-    output[8] = (BYTE)(height & 0xff);
-    output[9] = (BYTE)((height >> 8) & 0xff);            /* biHeight   */
-    output[12] = 1;                                            /* biPlanes   */
-    output[14] = (BYTE)(bitCount & 0xff);
-    output[15] = (BYTE)((bitCount >> 8) & 0xff);          /* biBitCount */
+    if (capacity < WOWCONV_INFO_HEADER_SIZE + paletteEntries * WOWCONV_RGBQUAD_SIZE) return 0;
+    for (index = 0; index < WOWCONV_INFO_HEADER_SIZE; ++index) output[index] = 0;
+    output[0] = WOWCONV_INFO_HEADER_SIZE;                                            /* biSize     */
+    output[WOWCONV_INFO_WIDTH] = (BYTE)(width & WOWCONV_BYTE_MASK);
+    output[WOWCONV_INFO_WIDTH + 1] = (BYTE)((width >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);            /* biWidth    */
+    output[WOWCONV_INFO_HEIGHT] = (BYTE)(height & WOWCONV_BYTE_MASK);
+    output[WOWCONV_INFO_HEIGHT + 1] = (BYTE)((height >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);            /* biHeight   */
+    output[WOWCONV_INFO_PLANES] = 1;                                            /* biPlanes   */
+    output[WOWCONV_INFO_BIT_COUNT] = (BYTE)(bitCount & WOWCONV_BYTE_MASK);
+    output[WOWCONV_INFO_BIT_COUNT + 1] = (BYTE)((bitCount >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);          /* biBitCount */
     /* RGBTRIPLE -> RGBQUAD. Both are B,G,R order, so only the fourth
        (reserved) byte is new -- but the STRIDE is the whole point. */
     for (index = 0; index < paletteEntries; ++index) {
-        output[40 + index * 4 + 0] = core[12 + index * 3 + 0];
-        output[40 + index * 4 + 1] = core[12 + index * 3 + 1];
-        output[40 + index * 4 + 2] = core[12 + index * 3 + 2];
-        output[40 + index * 4 + 3] = 0;
+        output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + 0] = core[WOWCONV_CORE_HEADER_SIZE + index * WOWCONV_RGBTRIPLE_SIZE + 0];
+        output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + 1] = core[WOWCONV_CORE_HEADER_SIZE + index * WOWCONV_RGBTRIPLE_SIZE + 1];
+        output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + WOWCONV_RGB_RED] = core[WOWCONV_CORE_HEADER_SIZE + index * WOWCONV_RGBTRIPLE_SIZE + WOWCONV_RGB_RED];
+        output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + WOWCONV_RGBQUAD_RESERVED] = 0;
     }
     if (paletteCount) *paletteCount = paletteEntries;
     return pixelOffset;
@@ -223,22 +268,22 @@ static INT WowConvModalExit(INT isEnded, INT isWindowAlive, INT hasProcedure,
 #define WOWCONV_ABC32_SIZE 12
 static INT WowConvClamp16(long value)
 {
-    if (value >  32767L) return  32767;
-    if (value < -32768L) return -32768;
+    if (value >  WOWCONV_INT16_MAX) return  WOWCONV_INT16_MAX;
+    if (value < WOWCONV_INT16_MIN) return WOWCONV_INT16_MIN;
     return (INT)value;
 }
 static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
 {
     INT widthA = WowConvClamp16(abc32[0]);
-    long widthB = abc32[1] < 0 ? 0 : abc32[1];      /* a width is never negative */
-    INT widthC = WowConvClamp16(abc32[2]);
-    if (widthB > 65535L) widthB = 65535L;
-    abc16[0] = (BYTE)(widthA & 0xff);
-    abc16[1] = (BYTE)((widthA >> 8) & 0xff);
-    abc16[2] = (BYTE)(widthB & 0xff);
-    abc16[3] = (BYTE)((widthB >> 8) & 0xff);
-    abc16[4] = (BYTE)(widthC & 0xff);
-    abc16[5] = (BYTE)((widthC >> 8) & 0xff);
+    long widthB = abc32[WOWCONV_ABC_B] < 0 ? 0 : abc32[WOWCONV_ABC_B];      /* a width is never negative */
+    INT widthC = WowConvClamp16(abc32[WOWCONV_ABC_C]);
+    if (widthB > WOWCONV_UINT16_MAX) widthB = WOWCONV_UINT16_MAX;
+    abc16[WOWCONV_ABC16_A] = (BYTE)(widthA & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_A + 1] = (BYTE)((widthA >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_B] = (BYTE)(widthB & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_B + 1] = (BYTE)((widthB >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_C] = (BYTE)(widthC & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_C + 1] = (BYTE)((widthC >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
 }
 
 /* ── WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295) ───────────────
@@ -267,8 +312,8 @@ static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
 #define WOWCONV_MF_RECHDR 6
 static unsigned long WowConvRead32(PCBYTE bytes)
 {
-    return (unsigned long)bytes[0] | ((unsigned long)bytes[1] << 8)
-         | ((unsigned long)bytes[2] << 16) | ((unsigned long)bytes[3] << 24);
+    return (unsigned long)bytes[0] | ((unsigned long)bytes[1] << WOWCONV_BYTE_SHIFT)
+         | ((unsigned long)bytes[2] << WOWCONV_WORD_SHIFT) | ((unsigned long)bytes[3] << WOWCONV_HIGH_BYTE_SHIFT);
 }
 /* Returns the byte offset of the first record (18), or 0 if this is not a WMF.
    *objectCount = mtNoObjects; *recordsEnd = the byte length the records may occupy. */
@@ -278,14 +323,14 @@ static unsigned long WowConvMetafileHeader(PCBYTE bytes, unsigned long length,
     UINT type, headerWords;
     unsigned long metafileBytes;
     if (!bytes || length < WOWCONV_MF_HDR) return 0;
-    type = (UINT)(bytes[0] | (bytes[1] << 8));
-    headerWords  = (UINT)(bytes[2] | (bytes[3] << 8));
-    if ((type != 1 && type != 2) || headerWords != 9) return 0;
-    metafileBytes = WowConvRead32(bytes + 6);
-    if (metafileBytes > 0x7fffffffUL / 2) return 0;
-    metafileBytes *= 2;
+    type = (UINT)(bytes[0] | (bytes[1] << WOWCONV_BYTE_SHIFT));
+    headerWords  = (UINT)(bytes[WOWCONV_MF_HEADER_SIZE_FIELD] | (bytes[WOWCONV_MF_HEADER_SIZE_FIELD + 1] << WOWCONV_BYTE_SHIFT));
+    if ((type != WOWCONV_MF_TYPE_MEMORY && type != WOWCONV_MF_TYPE_DISK) || headerWords != WOWCONV_MF_HEADER_WORDS) return 0;
+    metafileBytes = WowConvRead32(bytes + WOWCONV_MF_SIZE_FIELD);
+    if (metafileBytes > WOWCONV_MF_SIZE_MAX / WOWCONV_BYTES_PER_WORD) return 0;
+    metafileBytes *= WOWCONV_BYTES_PER_WORD;
     if (metafileBytes < WOWCONV_MF_HDR) return 0;           /* says it has no room for itself */
-    if (objectCount) *objectCount = (UINT)(bytes[10] | (bytes[11] << 8));
+    if (objectCount) *objectCount = (UINT)(bytes[WOWCONV_MF_OBJECTS_FIELD] | (bytes[WOWCONV_MF_OBJECTS_FIELD + 1] << WOWCONV_BYTE_SHIFT));
     if (recordsEnd)  *recordsEnd  = (metafileBytes < length) ? metafileBytes : length;
     return WOWCONV_MF_HDR;
 }
@@ -297,9 +342,9 @@ static INT WowConvMetafileRecord(PCBYTE metafile, unsigned long recordsEnd,
     unsigned long recordWords;
     if (!metafile || offset >= recordsEnd || recordsEnd - offset < WOWCONV_MF_RECHDR) return 0;
     recordWords = WowConvRead32(metafile + offset);
-    if (recordWords < 3 || recordWords > (recordsEnd - offset) / 2) return 0;
-    if (recordBytes) *recordBytes = recordWords * 2;
-    if (function)  *function  = (UINT)(metafile[offset + 4] | (metafile[offset + 5] << 8));
+    if (recordWords < WOWCONV_MF_RECORD_MIN_WORDS || recordWords > (recordsEnd - offset) / WOWCONV_BYTES_PER_WORD) return 0;
+    if (recordBytes) *recordBytes = recordWords * WOWCONV_BYTES_PER_WORD;
+    if (function)  *function  = (UINT)(metafile[offset + WOWCONV_MF_FUNCTION_FIELD] | (metafile[offset + WOWCONV_MF_FUNCTION_FIELD + 1] << WOWCONV_BYTE_SHIFT));
     return 1;
 }
 

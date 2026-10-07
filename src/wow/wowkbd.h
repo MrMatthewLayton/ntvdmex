@@ -72,6 +72,8 @@
 
 #define WOWKBD_CONVERT_ARG_DESTINATION   0
 #define WOWKBD_CONVERT_ARG_SOURCE   4
+#define WOWKBD_KEY_NAME_MAX         64
+#define WOWKBD_CHARACTER_MASK       0xFF
 
 static INT WowKeyboardCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
 {
@@ -108,7 +110,7 @@ static INT WowKeyboardCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         UINT codePage = GetKBCodePage();
         INT  noteLength = 0;
         wu_puts(note, noteCapacity, &noteLength, "GetKBCodePage() -> ");
-        wu_puthex(note, noteCapacity, &noteLength, codePage, 4);
+        wu_puthex(note, noteCapacity, &noteLength, codePage, WOW_HEX_WORD_DIGITS);
         wow32_setret(frame, (DWORD)(WORD)codePage);
         return 1;
     }
@@ -116,12 +118,12 @@ static INT WowKeyboardCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         DWORD keyParameter  = wow32_argd(frame, WOWKBD_GETKEYNAMETEXT_ARG_LPARAM);
         WORD  bufferSize = wow32_argw(frame, WOWKBD_GETKEYNAMETEXT_ARG_COUNT);
         volatile BYTE *destination = wow32_argptr(frame, WOWKBD_GETKEYNAMETEXT_ARG_BUFFER);
-        CHAR keyName[64];
+        CHAR keyName[WOWKBD_KEY_NAME_MAX];
         INT noteLength = 0, nameLength = 0, index;
         wu_puts(note, noteCapacity, &noteLength, "GetKeyNameText(lParam=0x");
-        wu_puthex(note, noteCapacity, &noteLength, keyParameter, 8);
+        wu_puthex(note, noteCapacity, &noteLength, keyParameter, WOW_HEX_DWORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, ", cch=");
-        wu_puthex(note, noteCapacity, &noteLength, bufferSize, 4);
+        wu_puthex(note, noteCapacity, &noteLength, bufferSize, WOW_HEX_WORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, ")");
         if (!destination || !bufferSize) {
             wu_puts(note, noteCapacity, &noteLength, " -- no buffer; answered 0");
@@ -141,7 +143,7 @@ static INT WowKeyboardCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
 
     case WOWKBD_VKKEYSCAN: {
         WORD character = wow32_argw(frame, WOWKBD_VKKEYSCAN_ARG_CHARACTER);
-        SHORT scan = VkKeyScanA((CHAR)(character & 0xFF));
+        SHORT scan = VkKeyScanA((CHAR)(character & WOWKBD_CHARACTER_MASK));
         wow32_setret(frame, (DWORD)(WORD)scan);
         return 1;
     }

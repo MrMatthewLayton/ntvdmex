@@ -58,6 +58,9 @@
 
 #define WOWSCHED_CTX_LO   0x364      /* VTIB_GS  -- the low end of the block */
 #define WOWSCHED_CTX_LEN  0x40       /* .. through VTIB_SS inclusive         */
+#define WOWSCHED_VTIB_EIP 0x390      /* the saved EIP within the block       */
+#define WOWSCHED_BYTE_MASK  0xFF
+#define WOWSCHED_BYTE_SHIFT 8
 
 typedef struct _WOWSCHED_SLOT {
     INT   IsUsed;                    /* 1 = this slot holds a resumable task  */
@@ -95,7 +98,7 @@ static VOID WowSchedSave(PWOWSCHED_SLOT slot, volatile BYTE *tib,
     UINT index;
     volatile BYTE *source = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
     for (index = 0; index < WOWSCHED_CTX_LEN; ++index) slot->Context[index] = source[index];
-    *(DWORD *)(slot->Context + (0x390 - WOWSCHED_CTX_LO)) += (DWORD)eipAdjust;   /* VTIB_EIP */
+    *(DWORD *)(slot->Context + (WOWSCHED_VTIB_EIP - WOWSCHED_CTX_LO)) += (DWORD)eipAdjust;   /* VTIB_EIP */
     slot->ModeLinear = modeLinear;
     slot->Task    = task;
     slot->IsUsed    = 1;
@@ -140,8 +143,8 @@ static VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
 static VOID WowSchedPoke(DWORD linear, WORD value)
 {
     volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
-    bytes[0] = (BYTE)(value & 0xFF);
-    bytes[1] = (BYTE)(value >> 8);
+    bytes[0] = (BYTE)(value & WOWSCHED_BYTE_MASK);
+    bytes[1] = (BYTE)(value >> WOWSCHED_BYTE_SHIFT);
 }
 
 #define WOWSCHED_RETLIN(modelin) ((modelin) + (DWORD)(WOW32_OFF_RET - WOW32_OFF_MODE))
