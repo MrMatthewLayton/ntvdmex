@@ -1156,7 +1156,7 @@ static void wow_ica_deliver(DOS_MACHINE *mp, volatile BYTE *tib, unsigned steps)
        syncs    host_pit_sync() calls that advanced the clock. This is the CEILING on
                 async delivery, because g_AsyncTriedThisSync allows ONE attempt each.
        raises   what the 8254 model actually generated: should be ~140/s.
-       attempts async_inject_irq(0) calls -- syncs that got as far as trying.
+       attempts AsyncInjectIrq(0) calls -- syncs that got as far as trying.
        owed_max the backlog high-water mark: how far behind delivery ever fell.
      ⚠ SUSPECT THE LOCK. host_pit_sync takes g_Lock, and Doom's mode-Y drawing does
        ~43,000 port writes a second (1.95M mask changes a run), every one of which also
@@ -1201,7 +1201,7 @@ static int PmTickTake(void)
     InterlockedDecrement(&g_PmTickOwed);
     return 1;
 }
-static int   g_AsyncTriedThisSync = 0;   /* see host_irq_sink: one attempt per PIT sync */
+static int   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT sync */
 /* ── HOW EVENLY DO IRQ0s ACTUALLY LAND? ──────────────────────────────────────────────
      DMX's mixer is armed by the SB block IRQ (next_due = NOW) and SERVICED on the next
      timer interrupt. A block is 11.6 ms; a tick period at the 135/s we deliver is
@@ -1230,7 +1230,7 @@ static void TickDeliveredNote(void)
     prev = now;
 }
 static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
-static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see host_irq_sink */
+static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see HostIrqSink */
 static volatile LONG g_Irq1Pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static int g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
@@ -1792,7 +1792,7 @@ static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller     
                       it across a whole buffer mix. A gap with NO RAISES inside it is
                       not a delivery fault, and a courier cannot fix it: there is
                       nothing pending to deliver. The fix would be the lock.
-       C  YIELD       host_irq_sink hands the IRQ0 async opportunity to a pending KEY
+       C  YIELD       HostIrqSink hands the IRQ0 async opportunity to a pending KEY
                       (g_KeyIrqRetry, ON by default), up to KEYIRQ_MAX_YIELD = 3
                       times in a row. Three yields at 180 Hz is 16.7 ms -- the exact
                       observed gap size -- and it can only happen WHILE A KEY IS
@@ -2191,7 +2191,7 @@ static int g_ExecDepth;
 
 /* ── FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152) ────────
      A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
-     would go on pointing into the block dos_terminate frees, and the shell would die
+     would go on pointing into the block DosTerminate frees, and the shell would die
      on the next tick or keypress -- so EXEC photographs what the child can break (the
      IVT, the PIC masks, the video mode, the PIT period) and a forced close puts it
      back before the ordinary child terminate runs. Only a FORCED close restores: a
@@ -2525,7 +2525,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
     /* ── THE STRIP NAMES THE PROGRAM RUNNING NOW, NOT THE SHELL. (user, s84: "the exe/com
          name is always COMMAND.COM") It was set once, from the program NTVDMEX loaded
          first -- which is the shell whenever a game is started from a prompt or by
-         double-click through it. Save the parent's name with this level; dos_terminate
+         double-click through it. Save the parent's name with this level; DosTerminate
          puts it back (a Close Program ends through there too). */
     {   const char *programBaseName = machine->ExecPath, *scan; int index = 0;
         for (index = 0; index < 63 && g_ProgramName[index]; ++index) g_ExecMachine[depth].ProgramName[index] = g_ProgramName[index];
@@ -2574,7 +2574,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
        FAIL   -> the call returns CF=1 with the measured AX, 59h then says 53h;
        IGNORE -> not allowed for a path call (AH bit 5 clear, measured), so FAIL;
                  allowed for 3Fh/40h on an open file (#275): the call "succeeds";
-       ABORT  -> the program ends (AH=4Dh AH=02h), through dos_terminate.
+       ABORT  -> the program ends (AH=4Dh AH=02h), through DosTerminate.
      An answer the handler was not allowed to give is converted as DOS converts it:
      ignore/retry -> fail, fail -> abort.
    ⚠ MAIN V86 LOOP ONLY (m.crit_raise_ok, #275). A DPMI client's INT 21h is serviced
@@ -3348,13 +3348,13 @@ static int            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF s
    A/B testing, but nothing should depend on a flag file being present to work. */
 static int            g_QiSuspended       = 1;   /* async-inject via SuspendThread+SetThreadContext */
 static int            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
-static int            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see host_irq_sink) */
+static int            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see HostIrqSink) */
 /* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
    CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
    async injector refuses to act unless this is set, so it can never race the exec loop. */
 static volatile LONG  g_InExec       = 0;
 /* ── ⚠⚠ ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
-     THERE WAS ONLY EVER ONE. async_inject_irq() reads the context, computes an IRET
+     THERE WAS ONLY EVER ONE. AsyncInjectIrq() reads the context, computes an IRET
      frame from it and writes it back; two threads doing that concurrently would each
      build a frame from a context the other had already superseded, and the two frames
      would collide on the guest's stack. It was safe by accident: every caller ran
@@ -3377,7 +3377,7 @@ static int            g_BehaveDos622 = 0;
 static int            g_PauseSuspended    = 0;   /* the CPU thread is suspended BY THE PAUSE */
 static DWORD          g_PauseCount, g_PauseCooperative, g_PauseMs;
 /* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
-   Declared here because host_irq_sink is above the courier itself; see
+   Declared here because HostIrqSink is above the courier itself; see
    tick_courier_thread for what waits on it. */
 static HANDLE         g_CourierEvent;
 static DWORD          g_AsyncInjected     = 0;   /* successful async injections */
@@ -3416,7 +3416,7 @@ static DWORD          g_AsyncNestBlocked = 0;   /* refused: line masked or in se
 /* True when a line's vector still points at one of our own do-nothing stubs (the shared
    device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
    EOI, so anything delivered through them must be auto-EOI'd or the line latches. */
-static int async_vec_is_our_stub(unsigned irq);
+static int AsyncVectorIsOurStub(unsigned irq);
 
 /* ── ★★★★★ IRQ0 IS HELD IN SERVICE UNTIL THE GUEST EOIs -- LIKE EVERY OTHER LINE. ──────
      Since ba927ac the timer was the ONE line the host auto-EOI'd on delivery, "gated by
@@ -3548,7 +3548,7 @@ static int Irq0CanDeliver(void)
    it EOIs, as the BIOS handler does.) */
 static void Irq0Ack(void)
 {
-    if (g_Irq0AutoEoi || async_vec_is_our_stub(0)) {
+    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(0)) {
         VddPicAcknowledgeAutoEoi(&g_Pic, 0);
         g_Irq0IsrAuto++;
     } else {
@@ -3578,15 +3578,15 @@ static int Irq0PmClaim(void)
 }
 static void Irq0PmUnclaim(void)
 {
-    if (g_Irq0AutoEoi || async_vec_is_our_stub(0)) { g_Irq0IsrAuto--; return; }
+    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(0)) { g_Irq0IsrAuto--; return; }
     VddPicEndOfInterrupt(&g_Pic, 0);
     g_Irq0IsrSince = 0;
     g_Irq0IsrStrict--;
 }
 
 
-static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
-static WORD peekw(DWORD lin);
+static void PokeWord(DWORD linear, WORD value);        /* fwd: guest-memory helpers, defined below */
+static WORD PeekWord(DWORD linear);
 static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
 static void host_pit_generate(void);         /* fwd: the crystal half (g_PitCs only)  */
 static void host_pit_deliver(void);          /* fwd: the attempt half (g_Lock, by TRY) */
@@ -3604,7 +3604,7 @@ static int  v86_deliver_dev_irq(volatile BYTE *tib);  /* fwd: shared by the main
    DpmiEnterProtectedMode() never returns and the watchdog eventually calls it a wedge. The only
    way in is the same one this file already uses for real mode: suspend the CPU thread,
    rewrite its context, resume. Defined next to dpmi_inject_pm_irq() because it shares
-   that function's frame rules; declared here because async_inject_irq() needs it. */
+   that function's frame rules; declared here because AsyncInjectIrq() needs it. */
 static int  dpmi_async_inject_pm(unsigned irq, CONTEXT *cx);
 /* WHICH gate refused the last async PM injection. Doom's log showed ok=0 on all six
    attempts with `from=0x187:...`, i.e. the thread WAS in 32-bit client PM code, so
@@ -3653,7 +3653,7 @@ static void AsyncWhyNote(unsigned irq, unsigned why)
      Both are claims about what the bits READ, so count them rather than argue:
        path 0  the async injector's live V86 frame (GetThreadContext on the CPU thread)
        path 1  the cooperative IRQ0/IRQ1 gate, reading the VTIB after an event exit
-       path 2  the cooperative device-line gate (guest_if_enabled), same VTIB
+       path 2  the cooperative device-line gate (GuestIfEnabled), same VTIB
      state = IF<<2 | VIF<<1 | S, where S is bit 9 of the kernel's FIXED_NTVDMSTATE word
      at 0x714 -- the VDM's virtual IF, which s11 found the kernel maintaining itself.
      "shadow" counts deliveries the current gate made that a VIF-only gate would have
@@ -3696,7 +3696,7 @@ static void IfvTrace(unsigned irq, int path, DWORD flags, DWORD codeSegment, DWO
 {
     LONG index;
     unsigned vector = VddPicVector(&g_Pic, (uint8_t)irq);
-    int isReentry = (codeSegment == peekw(vector * 4 + 2)) && ((WORD)(instructionPointer - peekw(vector * 4)) < 0x60);
+    int isReentry = (codeSegment == PeekWord(vector * 4 + 2)) && ((WORD)(instructionPointer - PeekWord(vector * 4)) < 0x60);
     if (isReentry) ++g_IfvReenter[irq & 15];
     if (!isReentry && g_IfvTraceCount >= 8) return;
     index = InterlockedIncrement(&g_IfvTraceCount) - 1;
@@ -3770,19 +3770,19 @@ static DWORD g_PmCooperativeGate[10];
 #define PMINJ_SITES 6
 static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
 static struct { WORD Cs; DWORD Eip, Count; } g_PmInjectSite[PMINJ_SITES];
-static void pminj_decl_note(int why, WORD cs, DWORD eip)
+static void PmInjectDeclineNote(int why, WORD cs, DWORD eip)
 {
     g_PmInjectDecl[why]++;
     if (g_Irq0Start) {
-        LARGE_INTEGER n; QueryPerformanceCounter(&n);
-        { DWORD sec = QpcMicroseconds(n.QuadPart - g_Irq0Start) / 1000000u;
-          if (sec < IRQ0TL_SECS) g_PmInjectDeclTl[sec]++; }
+        LARGE_INTEGER now; QueryPerformanceCounter(&now);
+        { DWORD seconds = QpcMicroseconds(now.QuadPart - g_Irq0Start) / 1000000u;
+          if (seconds < IRQ0TL_SECS) g_PmInjectDeclTl[seconds]++; }
     }
     if (why == 0) {
-        int k;
-        for (k = 0; k < PMINJ_SITES; ++k) {
-            if (g_PmInjectSite[k].Count && g_PmInjectSite[k].Cs == cs && g_PmInjectSite[k].Eip == eip) { g_PmInjectSite[k].Count++; return; }
-            if (!g_PmInjectSite[k].Count) { g_PmInjectSite[k].Cs = cs; g_PmInjectSite[k].Eip = eip; g_PmInjectSite[k].Count = 1; return; }
+        int index;
+        for (index = 0; index < PMINJ_SITES; ++index) {
+            if (g_PmInjectSite[index].Count && g_PmInjectSite[index].Cs == cs && g_PmInjectSite[index].Eip == eip) { g_PmInjectSite[index].Count++; return; }
+            if (!g_PmInjectSite[index].Count) { g_PmInjectSite[index].Cs = cs; g_PmInjectSite[index].Eip = eip; g_PmInjectSite[index].Count = 1; return; }
         }
     }
 }
@@ -3801,37 +3801,37 @@ static void pminj_decl_note(int why, WORD cs, DWORD eip)
      that happen INSIDE a cooperative INT 08h. The handler runs synchronously within
      dpmi_inject_pm_irq(), so a before/after snapshot of the counter brackets it exactly,
      with no new plumbing into the device model. Near zero here confirms it. */
-static uint32_t g_coop_dma_polls;
-static uint32_t g_coop_dma_polls_dev[8];   /* ...and the same, per DEVICE line */
+static uint32_t g_CooperativeDmaPolls;
+static uint32_t g_CooperativeDmaPollsDevice[8];   /* ...and the same, per DEVICE line */
 /* Count-register reads split by whether an ASYNC injection was in flight. Note the
    pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
    dispatched through host_io_do, and a gap between the two is itself informative. */
-static uint32_t g_dmapoll_in_async, g_dmapoll_mainline;
+static uint32_t g_DmaPollInAsync, g_DmaPollMainline;
 /* Cooperative delivery of DEVICE lines (2-7) to a PM client -- the retry the async
    path never had. `inj` is the interrupts that would previously have been LOST. */
-static DWORD g_pm_devirq_inj  = 0;
-static DWORD g_pm_devirq_fail = 0;
-static DWORD g_pm_devirq_drop = 0;           /* pending on a line the client never hooked */
+static DWORD g_PmDeviceIrqInjected  = 0;
+static DWORD g_PmDeviceIrqFail = 0;
+static DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client never hooked */
 /* Record and (boundedly) report an async attempt that gave up BEFORE the guest context
    was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
    PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
    cap is generous enough to span a whole 45s headless run. */
 /* Enough to show WHEN the bails start and what the first ones are; the totals live in
-   g_AsyncWhyHistogram, which costs nothing. See async_early_bail() for what 4000 cost. */
+   g_AsyncWhyHistogram, which costs nothing. See AsyncEarlyBail() for what 4000 cost. */
 #define ASYNC_EARLY_BAIL_LOG_MAX 32
-static DWORD g_async_early_bail_logged = 0;
+static DWORD g_AsyncEarlyBailLogged = 0;
 /* ── WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN? ────────────────────────────
      The asynchronous injector is the ONLY thing that can touch a protected-mode guest
      inside a BOP-free stretch, and session 20 localised Doom's death to exactly such a
      stretch (R_InitTextureMapping's ~3.5M-instruction loop 2). The commentary above
-     async_inject_irq() already names the open question: every LOGGED injection lands at
+     AsyncInjectIrq() already names the open question: every LOGGED injection lands at
      0x03ae53dc -- the millisecond-delay spin, the safe case -- and "whether a later one
      lands somewhere else" was never measured.
      It could not be measured with a per-attempt line: the guest's timer runs at 16124 Hz
      (PIT-RELOAD 0x4a, measured), so an uncapped line per attempt is ~700k lines a run and
      a capped one goes quiet long before the interesting part. Session 20 raised the cap
      and still saw nothing near the death, and concluded "zero async attempts" -- but the
-     V86 arm of async_inject_irq() returns SILENTLY, so that was an unread instrument, not
+     V86 arm of AsyncInjectIrq() returns SILENTLY, so that was an unread instrument, not
      a measurement.
      So dedupe by SITE instead of counting attempts: log each distinct protected-mode
      CS:EIP the injector finds the CPU at, ONCE. Doom's PM code has a handful of such
@@ -3847,40 +3847,40 @@ static DWORD g_async_early_bail_logged = 0;
    Only NEW maxima log, so a run reports a growth curve of a few dozen lines instead of
    one line per entry. */
 #define PM_STRETCH_LOG_US 300u
-static DWORD g_pm_stretch_max_us = 0;
-static DWORD g_pm_stretch_logged = 0;
+static DWORD g_PmStretchMaximumMicroseconds = 0;
+static DWORD g_PmStretchLogged = 0;
 #define ASYNC_SITE_MAX 96
-static DWORD g_async_site_eip[ASYNC_SITE_MAX];
-static WORD  g_async_site_cs[ASYNC_SITE_MAX];
-static int   g_async_nsite = 0;
-static int   g_async_site_full = 0;
+static DWORD g_AsyncSiteEip[ASYNC_SITE_MAX];
+static WORD  g_AsyncSiteCs[ASYNC_SITE_MAX];
+static int   g_AsyncSiteCount = 0;
+static int   g_AsyncSiteFull = 0;
 /* 1 = not seen before (and now recorded). Runs on the timer/UI thread only, so the
-   table needs no lock: async_inject_irq() bails at why=20 unless the CPU thread is
+   table needs no lock: AsyncInjectIrq() bails at why=20 unless the CPU thread is
    inside guest execution, which is precisely when it is not in here. */
-static int async_site_new(WORD cs, DWORD eip)
+static int AsyncSiteNew(WORD cs, DWORD eip)
 {
-    int i;
-    for (i = 0; i < g_async_nsite; ++i)
-        if (g_async_site_eip[i] == eip && g_async_site_cs[i] == cs) return 0;
-    if (g_async_nsite >= ASYNC_SITE_MAX) { g_async_site_full = 1; return 0; }
-    g_async_site_cs[g_async_nsite] = cs; g_async_site_eip[g_async_nsite] = eip;
-    g_async_nsite++;
+    int index;
+    for (index = 0; index < g_AsyncSiteCount; ++index)
+        if (g_AsyncSiteEip[index] == eip && g_AsyncSiteCs[index] == cs) return 0;
+    if (g_AsyncSiteCount >= ASYNC_SITE_MAX) { g_AsyncSiteFull = 1; return 0; }
+    g_AsyncSiteCs[g_AsyncSiteCount] = cs; g_AsyncSiteEip[g_AsyncSiteCount] = eip;
+    g_AsyncSiteCount++;
     return 1;
 }
 /* ► TAKES THE LINE NOW. It recorded the reason and threw away WHICH INTERRUPT was
      refused, so the SB's losses and the timer's landed in the same number -- and those
      two have different causes and different fixes (session 23 fixed the SB's by giving
      the device lines a cooperative path; that would have been invisible here). */
-static void async_early_bail(unsigned irq, unsigned why)
+static void AsyncEarlyBail(unsigned irq, unsigned why)
 {
-    char pb[96], *pq = pb;
+    char lineBuffer[96], *lineCursor = lineBuffer;
     g_AsyncBail++;
     AsyncWhyNote(irq, why);
     /* A/B/C discriminator: "the tick was raised and we could not place it". 20 is
        not_in_exec, the bail the s60 note measured at 75%. See Irq0DeliveredNote. */
     if (irq == 0 && why == 20) ++g_Irq0NieCount;
     /* ── ⚠⚠ THE CAP WAS 4000 AND IT COST SKYROADS A FIFTH OF ITS TIMER. ──────────────
-         This log is reached from host_irq_sink, which runs inside host_pit_sync --
+         This log is reached from HostIrqSink, which runs inside host_pit_sync --
          **while it holds g_Lock**. Every line is a LogAppend (open/write/close) plus a
          SerialOut, so a bail that fires at the PIT's rate is FILE I/O UNDER THE DEVICE
          LOCK at that rate. Session 23 raised the cap from 40 to 4000 and justified it on
@@ -3898,11 +3898,11 @@ static void async_early_bail(unsigned irq, unsigned why)
          lines carried. So keep a handful for SHAPE (when in the run they start, what
          the early ones are) and let the histogram carry the totals. That is what the
          histogram was for; this is the first thing it pays for. */
-    if (g_async_early_bail_logged++ >= ASYNC_EARLY_BAIL_LOG_MAX) return;
-    pq = LogPut(pq, "ASYNC-EARLY bail irq="); pq = LogHexByte(pq, irq);
-    pq = LogPut(pq, " why="); pq = LogHex(pq, (DWORD)why);
-    pq = LogPut(pq, " ms="); pq = LogHex(pq, GetTickCount());
-    pq = LogPut(pq, "\r\n"); LogAppend(LOG_PATH, pb, pq); SerialOut(pb, pq);
+    if (g_AsyncEarlyBailLogged++ >= ASYNC_EARLY_BAIL_LOG_MAX) return;
+    lineCursor = LogPut(lineCursor, "ASYNC-EARLY bail irq="); lineCursor = LogHexByte(lineCursor, irq);
+    lineCursor = LogPut(lineCursor, " why="); lineCursor = LogHex(lineCursor, (DWORD)why);
+    lineCursor = LogPut(lineCursor, " ms="); lineCursor = LogHex(lineCursor, GetTickCount());
+    lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 /* Paired with the InterlockedCompareExchange below; every path that resumed the guest
    must drop ownership. See g_AsyncContextWrite. */
@@ -3911,7 +3911,7 @@ static void async_early_bail(unsigned irq, unsigned why)
      MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
      INT 31h AX=0300h/0301h/0302h save the client's protected-mode register file,
      overwrite the TIB with a REAL-MODE one, run the handler, and put the first back.
-     async_inject_irq() decides "protected mode or V86?" from the VM bit of the context
+     AsyncInjectIrq() decides "protected mode or V86?" from the VM bit of the context
      it has just read -- which is precisely the field being rewritten. Injecting into
      that window builds an interrupt frame for the mode the guest is no longer in, NT
      sees a VDM whose state makes no sense, and it TERMINATES THE PROCESS: no user-mode
@@ -3926,7 +3926,7 @@ static void async_early_bail(unsigned irq, unsigned why)
    ⚠ NOTHING IS LOST by refusing here. The injector's contract is already "observed
      only -- the next tick injects", so the interrupt is simply delivered a moment
      later, once the guest is back in a mode that exists. */
-static volatile LONG g_simint_busy = 0;
+static volatile LONG g_SimIntBusy = 0;
 /* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE VdmRunGuest IS RUNNING. (s81, ZAR) ──
      The nested 0301/0302 loop rewrites the TIB to V86, then calls VdmRunGuest() exactly as the
      main loop does -- and for the length of that call the frame is an ordinary V86 one.
@@ -3935,19 +3935,19 @@ static volatile LONG g_simint_busy = 0;
      one: it starts a single-cycle SB transfer and spins on a memory flag its IRQ 5 ISR sets.
      IRQ 5 was raised once and refused 1631 times with why=0x14 -- which s59 read as HOST_CS
      (14) but is 20 decimal, `not_in_exec`: the bracket was missing, not the thread elsewhere.
-   ► So the nested loop sets g_nested_rm (and g_InExec) around VdmRunGuest ONLY, clearing
+   ► So the nested loop sets g_NestedRm (and g_InExec) around VdmRunGuest ONLY, clearing
      g_InExec first on return -- the re-check after the suspend then catches a thread that
      has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
      through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
-static volatile LONG g_nested_rm = 0;
+static volatile LONG g_NestedRm = 0;
 
-static int async_inject_irq(unsigned irq)
+static int AsyncInjectIrq(unsigned irq)
 {
-    if (irq >= 16) { async_early_bail(irq, 40); return 0; }
-    CONTEXT cx;
-    DWORD efl, ss, sp, cs, ip;
-    WORD fl;
-    int ok = 0;
+    if (irq >= 16) { AsyncEarlyBail(irq, 40); return 0; }
+    CONTEXT context;
+    DWORD eflags, ss, sp, cs, ip;
+    WORD flags;
+    int isOk = 0;
 
     /* ► THE EARLY BAILS LOG TOO, BECAUSE THEY ARE THE ONES THAT MATTER. Everything below
          reports itself through g_AsyncWhy, but these four returned in silence -- so when
@@ -3955,17 +3955,17 @@ static int async_inject_irq(unsigned irq)
          log showed NO async attempt at all in the window, and "the injector never tried"
          was indistinguishable from "the injector tried and bailed before it could say so".
          That is the difference between a measurement and an unread instrument, so give
-         each early exit a why code (20+) and let async_early_bail() say it out loud. */
+         each early exit a why code (20+) and let AsyncEarlyBail() say it out loud. */
     /* ⚠ NEVER SUSPEND ONCE WE ARE WINDING DOWN. A suspend that lands during teardown
          can leave the thread stopped forever, and a process with a suspended thread
          does not finish exiting -- which strands the system-wide hook and cursor clip
          (see host_panic_release). g_Running is cleared first thing in WM_DESTROY. */
-    if (!g_Running) { async_early_bail(irq, 20); return 0; }
-    if (!g_HostCpu || g_InExec == 0) { async_early_bail(irq, 20); return 0; }
+    if (!g_Running) { AsyncEarlyBail(irq, 20); return 0; }
+    if (!g_HostCpu || g_InExec == 0) { AsyncEarlyBail(irq, 20); return 0; }
     /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
-       g_simint_busy -- this is the Doom E1M1 crash. */
-    if (g_simint_busy) {
-        unsigned vn = VddPicVector(&g_Pic, (uint8_t)irq);
+       g_SimIntBusy -- this is the Doom E1M1 crash. */
+    if (g_SimIntBusy) {
+        unsigned vectorN = VddPicVector(&g_Pic, (uint8_t)irq);
         /* ── THE BIOS TICK MUST STILL ADVANCE INSIDE A NESTED REAL-MODE CALL. (s81, ZAR) ──
              IRQ 0 is not delivered in here (its vector is our BOP stub, which the nested
              loop does not service), so 0040:006C stood still for the length of every
@@ -3974,23 +3974,23 @@ static int async_inject_irq(unsigned irq)
              up to 10 times -- so with its IRQ 5 finally arriving it spun on the clock
              instead. Do the BIOS's bookkeeping here, the same rule as the PM arm's
              no_app_timer case: billed against the owed-tick count, pending consumed. */
-        if (irq == 0 && g_nested_rm) {
+        if (irq == 0 && g_NestedRm) {
             if (PmTickTake()) {
                 /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
                 VddPitBiosTick(&g_Pit, (volatile uint32_t *)(ULONG_PTR)0x46C,
                               (volatile uint8_t *)(ULONG_PTR)0x470);
                 if (g_Irq0Pending > 0) InterlockedDecrement(&g_Irq0Pending);
             }
-            async_early_bail(irq, 31); return 0;
+            AsyncEarlyBail(irq, 31); return 0;
         }
-        if (!(g_nested_rm && irq >= 2 && peekw(vn * 4 + 2) != DOS_HDLR_SEG)) {
-            async_early_bail(irq, 30); return 0; }
+        if (!(g_NestedRm && irq >= 2 && PeekWord(vectorN * 4 + 2) != DOS_HDLR_SEG)) {
+            AsyncEarlyBail(irq, 30); return 0; }
     }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
     if (irq == 0 ? !Irq0CanDeliver() : !VddPicCanDeliver(&g_Pic, (uint8_t)irq)) {
-        g_AsyncNestBlocked++; async_early_bail(irq, 21); return 0; }
+        g_AsyncNestBlocked++; AsyncEarlyBail(irq, 21); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
@@ -4007,20 +4007,20 @@ static int async_inject_irq(unsigned irq)
          answered its reset with 0xAA and reported DSP version 4.05 two lines earlier.
          Ask both tables: the client has hooked the line if EITHER the real-mode vector
          has moved off our IRET stub or it has installed a protected-mode handler. */
-    { unsigned v0 = VddPicVector(&g_Pic, (uint8_t)irq);
-      int rm_hooked = !(peekw(v0 * 4 + 2) == DOS_HDLR_SEG
-                        && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
-      int pm_hooked = g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client;
-      if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(irq, 22); return 0; } }
+    { unsigned vector0 = VddPicVector(&g_Pic, (uint8_t)irq);
+      int rmHooked = !(PeekWord(vector0 * 4 + 2) == DOS_HDLR_SEG
+                        && PeekWord(vector0 * 4) == DOS_IRET_STUB_OFF);
+      int pmHooked = g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client;
+      if (irq >= 2 && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, 22); return 0; } }
     /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
        See g_AsyncContextWrite. Declining is free -- the other owner is placing an interrupt
        right now, so this line simply takes the next opportunity. */
-    if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { async_early_bail(irq, 28); return 0; }
-    if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); async_early_bail(irq, 23); return 0; }
-    { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
-    cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-    if (!GetThreadContext(g_HostCpu, &cx)) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
-                                          async_early_bail(irq, 24); return 0; }
+    if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { AsyncEarlyBail(irq, 28); return 0; }
+    if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); AsyncEarlyBail(irq, 23); return 0; }
+    { unsigned index; char *bytes = (char *)&context; for (index = 0; index < sizeof context; ++index) bytes[index] = 0; }
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+    if (!GetThreadContext(g_HostCpu, &context)) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
+                                          AsyncEarlyBail(irq, 24); return 0; }
     /* ── ⚠⚠ RE-READ g_InExec NOW THAT THE SUSPEND HAS LANDED. ────────────────────
          The check at the top of this function is a sample: the guest can trap between
          it and the suspend taking effect, leaving the thread inside HOST code -- and
@@ -4035,28 +4035,28 @@ static int async_inject_irq(unsigned irq)
        ► Resuming instantly on a 0 is the correct trade: a microsecond probe of a
          thread that MIGHT hold a lock is harmless, holding one is the catastrophe. */
     if (g_InExec == 0) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
-                          async_early_bail(irq, 29); return 0; }
+                          AsyncEarlyBail(irq, 29); return 0; }
 
-    efl = cx.EFlags;
-    cs  = cx.SegCs & 0xFFFF;
-    /* ── THE OBSERVATION PASS. See async_site_new(). Protected mode only: in V86 the
+    eflags = context.EFlags;
+    cs  = context.SegCs & 0xFFFF;
+    /* ── THE OBSERVATION PASS. See AsyncSiteNew(). Protected mode only: in V86 the
          guest's EIP wanders over the whole real-mode image and would fill the table with
          noise, burying the one site this exists to catch. */
-    if (!(efl & EFLAGS_VM_BIT) && (cs & 4) && async_site_new((WORD)cs, cx.Eip)) {
-        char sb2[160], *sq = sb2;
-        DWORD sblin = dpmi_sel_base((WORD)cs) + cx.Eip;
+    if (!(eflags & EFLAGS_VM_BIT) && (cs & 4) && AsyncSiteNew((WORD)cs, context.Eip)) {
+        char lineBuffer[160], *lineCursor = lineBuffer;
+        DWORD sblin = dpmi_sel_base((WORD)cs) + context.Eip;
         ResumeThread(g_HostCpu);                    /* NEVER log while the guest is held */
         ASYNC_CTX_RELEASE();
-        sq = LogPut(sq, "ASYNC-SITE #"); sq = LogHex(sq, (DWORD)g_async_nsite);
-        sq = LogPut(sq, " irq="); sq = LogHex(sq, irq);
-        sq = LogPut(sq, " cs:eip=0x"); sq = LogHex(sq, cs);
-        sq = LogPut(sq, ":0x"); sq = LogHex(sq, cx.Eip);
-        sq = LogPut(sq, " lin=0x"); sq = LogHex(sq, sblin);
-        sq = LogPut(sq, " ss:esp=0x"); sq = LogHex(sq, cx.SegSs & 0xFFFF);
-        sq = LogPut(sq, ":0x"); sq = LogHex(sq, cx.Esp);
-        sq = LogPut(sq, " efl=0x"); sq = LogHex(sq, efl);
-        sq = LogPut(sq, " ms="); sq = LogHex(sq, GetTickCount());
-        sq = LogPut(sq, "\r\n"); LogAppend(LOG_PATH, sb2, sq); SerialOut(sb2, sq);
+        lineCursor = LogPut(lineCursor, "ASYNC-SITE #"); lineCursor = LogHex(lineCursor, (DWORD)g_AsyncSiteCount);
+        lineCursor = LogPut(lineCursor, " irq="); lineCursor = LogHex(lineCursor, irq);
+        lineCursor = LogPut(lineCursor, " cs:eip=0x"); lineCursor = LogHex(lineCursor, cs);
+        lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, context.Eip);
+        lineCursor = LogPut(lineCursor, " lin=0x"); lineCursor = LogHex(lineCursor, sblin);
+        lineCursor = LogPut(lineCursor, " ss:esp=0x"); lineCursor = LogHex(lineCursor, context.SegSs & 0xFFFF);
+        lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, context.Esp);
+        lineCursor = LogPut(lineCursor, " efl=0x"); lineCursor = LogHex(lineCursor, eflags);
+        lineCursor = LogPut(lineCursor, " ms="); lineCursor = LogHex(lineCursor, GetTickCount());
+        lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
         AsyncWhyNote(irq, 27);                 /* accounted for, so the histogram sums */
         return 0;                                /* observed only -- the next tick injects */
     }
@@ -4066,7 +4066,7 @@ static int async_inject_irq(unsigned irq)
          LDT (TI=1, bit 2 set), and the host's own flat CS is a GDT selector. So `cs & 4`
          separates "the thread is executing client PM code" from "the thread is in our own
          code between entries" exactly, with nothing to keep in sync. */
-    if (!(efl & EFLAGS_VM_BIT)) {
+    if (!(eflags & EFLAGS_VM_BIT)) {
         g_AsyncWhy = 0;
         /* ► TWO EXITS USED TO LEAVE why=0, WHICH IS THE CODE FOR SUCCESS. A thread found
              in PM on a GDT selector (we are inside the HOST, not the client) and a failed
@@ -4075,21 +4075,21 @@ static int async_inject_irq(unsigned irq)
              one to watch, because "the CPU thread was in host code when the clock asked"
              is exactly what g_Lock starvation looks like from this side. */
         if (!(cs & 4)) AsyncWhyNote(irq, 14);
-        else if (dpmi_async_inject_pm(irq, &cx)) {
-            cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-            ok = SetThreadContext(g_HostCpu, &cx) ? 1 : 0;
+        else if (dpmi_async_inject_pm(irq, &context)) {
+            context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+            isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
             /* Same acknowledge as the V86 arm below: IRQ0 in service until the guest
                EOIs (#173), a stub-vectored line released at once. */
-            if (ok) { if (irq == 0)                        Irq0Ack();
-                      else if (async_vec_is_our_stub(irq)) VddPicAcknowledgeAutoEoi(&g_Pic, (uint8_t)irq);
+            if (isOk) { if (irq == 0)                        Irq0Ack();
+                      else if (AsyncVectorIsOurStub(irq)) VddPicAcknowledgeAutoEoi(&g_Pic, (uint8_t)irq);
                       else                                 VddPicAcknowledge(&g_Pic, (uint8_t)irq); }
             else    { g_AsyncPmActive = 0; }     /* never leave the flag set on failure */
-            AsyncWhyNote(irq, ok ? 0u : 13u);
+            AsyncWhyNote(irq, isOk ? 0u : 13u);
         }
         else AsyncWhyNote(irq, (unsigned)g_AsyncWhy);   /* the clause that said no */
         ResumeThread(g_HostCpu);
         ASYNC_CTX_RELEASE();
-        if (ok) { g_AsyncInjected++; g_AsyncPmInjected++; g_AsyncInjectedLine[irq & 15]++;
+        if (isOk) { g_AsyncInjected++; g_AsyncPmInjected++; g_AsyncInjectedLine[irq & 15]++;
                   if (!(irq & 7)) TickDeliveredNote(); } else g_AsyncBail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
            fires at the PIT's rate. Without it an async injection that kills the run is
@@ -4114,21 +4114,21 @@ static int async_inject_irq(unsigned irq)
              the difference between evidence and an unread instrument. Bails fire at the
              PIT's rate (~100/s) against a 45s headless cap, so 4000 covers a whole run
              with ~900KB of log, well inside LOG_MAX_BYTES. */
-        if (ok || g_AsyncPmBail2 <= 4000) {
-            char pb[224], *pq = pb;
+        if (isOk || g_AsyncPmBail2 <= 4000) {
+            char lineBuffer[224], *lineCursor = lineBuffer;
             /* ► SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
                  had just delivered, so a run could not be asked "did any keyboard
                  interrupt reach the client?" -- every line claimed to be the timer. */
-            pq = LogPut(pq, "ASYNC-PM vec=0x"); pq = LogHexByte(pq, IrqPmVector(irq));
-            pq = LogPut(pq, " ok=0x"); pq = LogHex(pq, (DWORD)ok);
-            pq = LogPut(pq, " why="); pq = LogHex(pq, (DWORD)g_AsyncWhy);
-            pq = LogPut(pq, " from=0x");   pq = LogHex(pq, cs);
-            pq = LogPut(pq, ":0x");        pq = LogHex(pq, g_AsyncPmEip);
-            pq = LogPut(pq, " -> 0x");     pq = LogHex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(IrqPmVector(irq)));
-            pq = LogPut(pq, ":0x");        pq = LogHex(pq, DPMI_IRQ_TARGET_OFF(IrqPmVector(irq)));
-            pq = LogPut(pq, " SS:ESP=0x"); pq = LogHex(pq, (DWORD)g_AsyncPmSs);
-            pq = LogPut(pq, ":0x");        pq = LogHex(pq, g_AsyncPmEsp);
-            pq = LogPut(pq, " efl=0x");    pq = LogHex(pq, g_AsyncPmEflags);
+            lineCursor = LogPut(lineCursor, "ASYNC-PM vec=0x"); lineCursor = LogHexByte(lineCursor, IrqPmVector(irq));
+            lineCursor = LogPut(lineCursor, " ok=0x"); lineCursor = LogHex(lineCursor, (DWORD)isOk);
+            lineCursor = LogPut(lineCursor, " why="); lineCursor = LogHex(lineCursor, (DWORD)g_AsyncWhy);
+            lineCursor = LogPut(lineCursor, " from=0x");   lineCursor = LogHex(lineCursor, cs);
+            lineCursor = LogPut(lineCursor, ":0x");        lineCursor = LogHex(lineCursor, g_AsyncPmEip);
+            lineCursor = LogPut(lineCursor, " -> 0x");     lineCursor = LogHex(lineCursor, (DWORD)DPMI_IRQ_TARGET_SEL(IrqPmVector(irq)));
+            lineCursor = LogPut(lineCursor, ":0x");        lineCursor = LogHex(lineCursor, DPMI_IRQ_TARGET_OFF(IrqPmVector(irq)));
+            lineCursor = LogPut(lineCursor, " SS:ESP=0x"); lineCursor = LogHex(lineCursor, (DWORD)g_AsyncPmSs);
+            lineCursor = LogPut(lineCursor, ":0x");        lineCursor = LogHex(lineCursor, g_AsyncPmEsp);
+            lineCursor = LogPut(lineCursor, " efl=0x");    lineCursor = LogHex(lineCursor, g_AsyncPmEflags);
             /* ── ★ WHAT CODE WAS INTERRUPTED. A timer injection reports WHERE the guest
                  was; when the guest is STUCK, where it was is the whole question, and the
                  address alone cannot answer it -- a spin on a memory flag, a spin on a
@@ -4136,22 +4136,22 @@ static int async_inject_irq(unsigned irq)
                  Sixteen bytes at the interrupted EIP can be disassembled, so "it is
                  looping around 0x03b71317" becomes "it is polling X".
                  (ZAR, GH #23: it reaches "Game loading..." and then spins.) */
-            {   DWORD ib = dpmi_sel_base((WORD)cs) + g_AsyncPmEip;
-                const volatile BYTE *ip = (const volatile BYTE *)(ULONG_PTR)ib;
-                pq = LogPut(pq, " code@eip=");
-                if (MemoryReadable((ULONG_PTR)ib, 16)) pq = LogDump(pq, (const void *)ip, 16);
-                else                                 pq = LogPut(pq, "<unreadable>"); }
-            pq = LogPut(pq, "\r\n"); LogAppend(LOG_PATH, pb, pq); SerialOut(pb, pq);
-            if (!ok) g_AsyncPmBail2++;
+            {   DWORD instructionBase = dpmi_sel_base((WORD)cs) + g_AsyncPmEip;
+                const volatile BYTE *ip = (const volatile BYTE *)(ULONG_PTR)instructionBase;
+                lineCursor = LogPut(lineCursor, " code@eip=");
+                if (MemoryReadable((ULONG_PTR)instructionBase, 16)) lineCursor = LogDump(lineCursor, (const void *)ip, 16);
+                else                                 lineCursor = LogPut(lineCursor, "<unreadable>"); }
+            lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+            if (!isOk) g_AsyncPmBail2++;
         }
-        return ok;
+        return isOk;
     }
     /* ► THIS ARM USED TO RETURN IN SILENCE, AND THAT SILENCE WAS READ AS EVIDENCE.
          Session 20 recorded "ZERO async attempts of ANY kind across the death window"
          and struck the injector off the suspect list. But Doom is doing real-mode file
          I/O right up to the death (INT 31h 0302 -> callRM), so the CPU is in V86 for
          most of those attempts and every one of them left here without a word. Give it
-         a why code like every other exit; async_early_bail's cap keeps it bounded. */
+         a why code like every other exit; AsyncEarlyBail's cap keeps it bounded. */
     /* ── IN A LIVE V86 FRAME, IF IS NOT THE GUEST'S. VIF IS. (s81, irq8.nested) ─────────
          Measured with the census (IfvNote): every live V86 frame this function has read
          has IF=1, including those inside a handler that has not executed STI -- the
@@ -4168,44 +4168,44 @@ static int async_inject_irq(unsigned irq)
          The fear that parked this -- a guest logically on with VIF clear -- did not show:
          Skyroads' live frames had VIF set every time, and ZAR's and Doom's real-mode
          stretches never reach this gate (census live{} empty for both). */
-    IfvNote(0, efl);
-    if (efl & EFLAGS_VIF_BIT) g_VifLiveSeen = 1;
-    if (!(efl & (g_VifLiveSeen ? EFLAGS_VIF_BIT : (0x200u | EFLAGS_VIF_BIT)))
+    IfvNote(0, eflags);
+    if (eflags & EFLAGS_VIF_BIT) g_VifLiveSeen = 1;
+    if (!(eflags & (g_VifLiveSeen ? EFLAGS_VIF_BIT : (0x200u | EFLAGS_VIF_BIT)))
         || cs == DOS_HDLR_SEG) {
         ResumeThread(g_HostCpu);
         ASYNC_CTX_RELEASE();
-        async_early_bail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
+        AsyncEarlyBail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
         return 0;
     }
     /* s92 (#239): a line only a PROTECTED-MODE handler wants is not delivered into V86
          through the IVT -- whose entry is our IRET stub, where it would be acknowledged
          and lost. Left pending (return 0) for the PM path; see v86_deliver_dev_irq. */
     if (irq >= 2 && g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client) {
-        unsigned v1 = VddPicVector(&g_Pic, (uint8_t)irq);
-        if (peekw(v1 * 4 + 2) == DOS_HDLR_SEG && peekw(v1 * 4) == DOS_IRET_STUB_OFF) {
+        unsigned vector1 = VddPicVector(&g_Pic, (uint8_t)irq);
+        if (PeekWord(vector1 * 4 + 2) == DOS_HDLR_SEG && PeekWord(vector1 * 4) == DOS_IRET_STUB_OFF) {
             ResumeThread(g_HostCpu);
             ASYNC_CTX_RELEASE();
-            async_early_bail(irq, 32);
+            AsyncEarlyBail(irq, 32);
             return 0;
         }
     }
-    ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
+    ss = context.SegSs & 0xFFFF; sp = context.Esp & 0xFFFF; ip = context.Eip & 0xFFFF;
 
-    fl = (WORD)efl;
-    if (efl & EFLAGS_VIF_BIT) fl |= 0x200;      /* same VIF fold as inject_int */
-    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, fl);
-    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)cs);
-    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)ip);
-    cx.Esp    = sp;
-    { unsigned vec = VddPicVector(&g_Pic, (uint8_t)irq);
-      cx.Eip   = peekw(vec * 4);
-      cx.SegCs = peekw(vec * 4 + 2); }
-    cx.EFlags = efl & ~(0x300u | EFLAGS_VIF_BIT);
-    cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-    ok = SetThreadContext(g_HostCpu, &cx) ? 1 : 0;
-    if (ok && !(efl & EFLAGS_VIF_BIT)) ++g_IfvShadow[irq & 15];   /* see IfvNote */
-    if (ok) IfvTrace(irq, 0, efl, cs, ip);
-    if (ok) {
+    flags = (WORD)eflags;
+    if (eflags & EFLAGS_VIF_BIT) flags |= 0x200;      /* same VIF fold as InjectInt */
+    sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, flags);
+    sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, (WORD)cs);
+    sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, (WORD)ip);
+    context.Esp    = sp;
+    { unsigned vector = VddPicVector(&g_Pic, (uint8_t)irq);
+      context.Eip   = PeekWord(vector * 4);
+      context.SegCs = PeekWord(vector * 4 + 2); }
+    context.EFlags = eflags & ~(0x300u | EFLAGS_VIF_BIT);
+    context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+    isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
+    if (isOk && !(eflags & EFLAGS_VIF_BIT)) ++g_IfvShadow[irq & 15];   /* see IfvNote */
+    if (isOk) IfvTrace(irq, 0, eflags, cs, ip);
+    if (isOk) {
         /* Acknowledge: in service until the guest EOIs.
            Release it immediately for a line vectored at one of OUR default stubs, which
            do nothing and never EOI.
@@ -4223,7 +4223,7 @@ static int async_inject_irq(unsigned irq)
              VddPicAcknowledgeAutoEoi. The strict case (IRQ1) keeps plain acknowledge, so its
              in-service bit is still held until the guest EOIs. */
         if (irq == 0)                     Irq0Ack();
-        else if (async_vec_is_our_stub(irq)) VddPicAcknowledgeAutoEoi(&g_Pic, (uint8_t)irq);
+        else if (AsyncVectorIsOurStub(irq)) VddPicAcknowledgeAutoEoi(&g_Pic, (uint8_t)irq);
         else                              VddPicAcknowledge(&g_Pic, (uint8_t)irq);
         /* ⚠ A KEY DELIVERED HERE WAS INVISIBLE. g_Irq1Injected and KeyLatencyPop() both live in
            the COOPERATIVE block only, so an asynchronously-placed keystroke counted as
@@ -4235,40 +4235,40 @@ static int async_inject_irq(unsigned irq)
     }
     ResumeThread(g_HostCpu);
     ASYNC_CTX_RELEASE();
-    if (ok) g_AsyncInjected++; else g_AsyncBail++;
-    AsyncWhyNote(irq, ok ? 0u : 13u);     /* the V86 arm's only failure is SetThreadContext */
+    if (isOk) g_AsyncInjected++; else g_AsyncBail++;
+    AsyncWhyNote(irq, isOk ? 0u : 13u);     /* the V86 arm's only failure is SetThreadContext */
     /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
        is the point: vectoring an IRQ the guest never hooked lands it in unowned ROM, which
        is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_AsyncInjected + g_AsyncBail <= 4) {
-        char ab[256], *aq = ab; int v;
-        aq = LogPut(aq, "ASYNC-INJ vec=0x");  aq = LogHex(aq, (DWORD)VddPicVector(&g_Pic, (uint8_t)irq));
-        aq = LogPut(aq, " ok=0x");            aq = LogHex(aq, (DWORD)ok);
-        aq = LogPut(aq, " from=0x");          aq = LogHex(aq, cs);
-        aq = LogPut(aq, ":0x");               aq = LogHex(aq, ip);
-        aq = LogPut(aq, " ivt[0B..0F]=");
-        for (v = 0x0B; v <= 0x0F; ++v) {
-            aq = LogPut(aq, "0x");  aq = LogHex(aq, peekw(v * 4 + 2));
-            aq = LogPut(aq, ":0x"); aq = LogHex(aq, peekw(v * 4));
-            aq = LogPut(aq, " ");
+        char lineBuffer[256], *lineCursor = lineBuffer; int vector;
+        lineCursor = LogPut(lineCursor, "ASYNC-INJ vec=0x");  lineCursor = LogHex(lineCursor, (DWORD)VddPicVector(&g_Pic, (uint8_t)irq));
+        lineCursor = LogPut(lineCursor, " ok=0x");            lineCursor = LogHex(lineCursor, (DWORD)isOk);
+        lineCursor = LogPut(lineCursor, " from=0x");          lineCursor = LogHex(lineCursor, cs);
+        lineCursor = LogPut(lineCursor, ":0x");               lineCursor = LogHex(lineCursor, ip);
+        lineCursor = LogPut(lineCursor, " ivt[0B..0F]=");
+        for (vector = 0x0B; vector <= 0x0F; ++vector) {
+            lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(vector * 4 + 2));
+            lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(vector * 4));
+            lineCursor = LogPut(lineCursor, " ");
         }
-        aq = LogPut(aq, "\r\n");
-        LogAppend(LOG_PATH, ab, aq); SerialOut(ab, aq);
+        lineCursor = LogPut(lineCursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     }
-    return ok;
+    return isOk;
 }
 
-static int async_vec_is_our_stub(unsigned irq)
+static int AsyncVectorIsOurStub(unsigned irq)
 {
-    unsigned vec = VddPicVector(&g_Pic, (uint8_t)irq);
-    WORD seg = peekw(vec * 4 + 2), off = peekw(vec * 4);
-    return seg == DOS_HDLR_SEG && (off == DOS_IRET_STUB_OFF || off == 0x004C);
+    unsigned vector = VddPicVector(&g_Pic, (uint8_t)irq);
+    WORD segment = PeekWord(vector * 4 + 2), offset = PeekWord(vector * 4);
+    return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == 0x004C);
 }
 
-static void host_irq_sink(void *ctx, uint8_t irq)
+static void HostIrqSink(void *context, uint8_t irq)
 {
-    (void)ctx;
+    (void)context;
     /* Every raise, counted by line. sb_blocks reached 1 while irqn_inj AND irqn_refused
        both stayed 0 -- i.e. the SB's completion IRQ was raised but nothing was ever
        latched -- so the line number this arrives on is the missing fact. */
@@ -4340,7 +4340,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              10x worse UI gap for nothing.
            ▶ WHAT THIS RULES OUT, AND WHERE TO GO. Do not spend effort on the delivery
              RATE; spend it on the guest's INJECTABILITY, or bypass the async path for
-             the timer entirely. `async_inject_irq` refuses on g_AsyncPmActive (an
+             the timer entirely. `AsyncInjectIrq` refuses on g_AsyncPmActive (an
              injection still in flight), on VddPicCanDeliver, and on the client's
              virtual-IF -- instrument WHICH of those says no at 144 Hz before changing
              anything else. Note that the injectable window may simply be scarce while
@@ -4405,7 +4405,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              compete for a scarce supply of interrupts-enabled moments, and the timer wins.
              What does NOT work -- do not spend another round on these:
                1. ASYNC-INJECT IRQ1 at the raise site, taking the IRQ0 opportunity (which
-                  async_inject_irq has already verified as IF-set):
+                  AsyncInjectIrq has already verified as IF-set):
                       n=50  >=64ms = 12 (24%)  max 2552 ms  inj=78  retries=108
                   Faster for keys that land, but only 78 of 186 interrupts are placed --
                   it LOSES KEYS. Suspect the IRQ1 in-service bit never clearing (we do not
@@ -4437,23 +4437,23 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              has installed a protected-mode INT 09h handler, asynchronous delivery is not
              a preference, it is the mechanism. */
         { int gate = (g_QiKeysAsync || (g_DpmiPm && g_PmInt[0x09].Client));
-          int ok   = gate ? async_inject_irq(1) : 0;
-          if (ok) InterlockedDecrement(&g_Irq1Pending);
+          int isOk   = gate ? AsyncInjectIrq(1) : 0;
+          if (isOk) InterlockedDecrement(&g_Irq1Pending);
           /* ► EVERY KEYBOARD INTERRUPT, ACCOUNTED FOR, FOR THE FIRST FEW DOZEN. A key
                press is a rare, deliberate event -- there is no firehose to guard against
                -- and "the guest never saw my keystroke" has at least four different
                causes between here and the client's ISR. Naming the gate values at the
                moment of the raise turns that into one line. */
           if (g_KeyIrqLogged++ < 64) {
-              char kb[160], *kq = kb;
-              kq = LogPut(kq, "KEYIRQ raise gate="); kq = LogHex(kq, (DWORD)gate);
-              kq = LogPut(kq, " ok=");        kq = LogHex(kq, (DWORD)ok);
-              kq = LogPut(kq, " pm=");        kq = LogHex(kq, (DWORD)g_DpmiPm);
-              kq = LogPut(kq, " pmhook=");    kq = LogHex(kq, (DWORD)g_PmInt[0x09].Client);
-              kq = LogPut(kq, " in_exec=");   kq = LogHex(kq, (DWORD)g_InExec);
-              kq = LogPut(kq, " why=");       kq = LogHex(kq, (DWORD)g_AsyncWhy);
-              kq = LogPut(kq, " ms=");        kq = LogHex(kq, GetTickCount());
-              kq = LogPut(kq, "\r\n"); LogAppend(LOG_PATH, kb, kq); SerialOut(kb, kq);
+              char lineBuffer[160], *lineCursor = lineBuffer;
+              lineCursor = LogPut(lineCursor, "KEYIRQ raise gate="); lineCursor = LogHex(lineCursor, (DWORD)gate);
+              lineCursor = LogPut(lineCursor, " ok=");        lineCursor = LogHex(lineCursor, (DWORD)isOk);
+              lineCursor = LogPut(lineCursor, " pm=");        lineCursor = LogHex(lineCursor, (DWORD)g_DpmiPm);
+              lineCursor = LogPut(lineCursor, " pmhook=");    lineCursor = LogHex(lineCursor, (DWORD)g_PmInt[0x09].Client);
+              lineCursor = LogPut(lineCursor, " in_exec=");   lineCursor = LogHex(lineCursor, (DWORD)g_InExec);
+              lineCursor = LogPut(lineCursor, " why=");       lineCursor = LogHex(lineCursor, (DWORD)g_AsyncWhy);
+              lineCursor = LogPut(lineCursor, " ms=");        lineCursor = LogHex(lineCursor, GetTickCount());
+              lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
           } }
     }
     else if (irq < 16) {
@@ -4492,11 +4492,11 @@ static void host_irq_sink(void *ctx, uint8_t irq)
             *(volatile DWORD *)(ULONG_PTR)0x714 |= g_QiBits;
         }
         if (g_QiBits && g_HostCpu) {
-            LONG st = VdmControl(VDM_SVC_VdmQueueInterrupt, (PVOID)g_HostCpu);
-            InterlockedExchange(&g_QiStatus, st);
+            LONG status = VdmControl(VDM_SVC_VdmQueueInterrupt, (PVOID)g_HostCpu);
+            InterlockedExchange(&g_QiStatus, status);
             g_QiCalls++;
         }
-        if (g_QiSuspended && async_inject_irq(irq))
+        if (g_QiSuspended && AsyncInjectIrq(irq))
             InterlockedExchange(&g_IrqNPending[irq], 0);  /* delivered; don't double-inject */
     }
 }
@@ -4508,13 +4508,13 @@ static void host_irq_sink(void *ctx, uint8_t irq)
    hardware interrupt: push FLAGS/CS/IP, clear IF+TF, and vector CS:IP through the
    real-mode IVT. The guest's handler IRETs back normally. (`CD nn` software ints
    still vector natively via VME; this is only for asynchronous IRQ delivery.) */
-static void pokew(DWORD lin, WORD v)
-{ volatile BYTE *m = (volatile BYTE *)0; m[lin] = (BYTE)v; m[lin + 1] = (BYTE)(v >> 8); }
-static void poked(DWORD lin, DWORD v)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
-{ volatile BYTE *m = (volatile BYTE *)0;
-  m[lin] = (BYTE)v; m[lin+1] = (BYTE)(v >> 8); m[lin+2] = (BYTE)(v >> 16); m[lin+3] = (BYTE)(v >> 24); }
-static WORD peekw(DWORD lin)
-{ const volatile BYTE *m = (const volatile BYTE *)0; return (WORD)(m[lin] | (m[lin + 1] << 8)); }
+static void PokeWord(DWORD linear, WORD value)
+{ volatile BYTE *memory = (volatile BYTE *)0; memory[linear] = (BYTE)value; memory[linear + 1] = (BYTE)(value >> 8); }
+static void PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
+{ volatile BYTE *memory = (volatile BYTE *)0;
+  memory[linear] = (BYTE)value; memory[linear+1] = (BYTE)(value >> 8); memory[linear+2] = (BYTE)(value >> 16); memory[linear+3] = (BYTE)(value >> 24); }
+static WORD PeekWord(DWORD linear)
+{ const volatile BYTE *memory = (const volatile BYTE *)0; return (WORD)(memory[linear] | (memory[linear + 1] << 8)); }
 /* The guest's effective interrupt-enable flag. When we regain control inside one
    of our own BOP stubs the LIVE IF is the stub's (the CD nn that vectored in
    cleared it), so the guest's real IF is the FLAGS the stub will IRET to. */
@@ -4528,7 +4528,7 @@ static WORD peekw(DWORD lin)
    that only looks at IF -- forever. Skyroads does exactly that inside its INT 1Ch
    handler. A 16-bit FLAGS image pushed on the guest stack is unaffected: VME pushes the
    virtual flag into the IF bit position. */
-static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
+static int IfOrVif(DWORD flags) { return (flags & (0x200u | EFLAGS_VIF_BIT)) != 0; }
 /* ── #206: OUR BIOS STUBS ARE OUR STUBS TOO. ──────────────────────────────────────────
      Inside one of our INT stubs the live IF is the stub's -- the INT that vectored in
      cleared it -- and the guest's own is the FLAGS the stub will IRET to, at SS:SP+4.
@@ -4537,32 +4537,32 @@ static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
      every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
      its BOP, because a real BIOS takes interrupts during that wait. */
 #define DOS_BIOS_STUB_N 14            /* entries in WinMain's bios_ints[] (s91: +2Ah, 5Ch) */
-static int our_stub_cs_ip(DWORD cs, DWORD ip)
+static int IsOurStubCsIp(DWORD cs, DWORD ip)
 {
     if (cs == DOS_HDLR_SEG) return 1;
     return cs == DOS_CTAB_SEG && ip >= DOS_BIOS_STUBS && ip < DOS_BIOS_STUBS + DOS_BIOS_STUB_N * 4;
 }
-static int guest_if_enabled(volatile BYTE *tib)
+static int GuestIfEnabled(volatile BYTE *tib)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-    if (our_stub_cs_ip(cs, VDM_REG(tib, VTIB_EIP) & 0xFFFF)) {
+    if (IsOurStubCsIp(cs, VDM_REG(tib, VTIB_EIP) & 0xFFFF)) {
         DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-        return (peekw((ss << 4) + ((sp + 4) & 0xFFFF)) & 0x200) != 0;
+        return (PeekWord((ss << 4) + ((sp + 4) & 0xFFFF)) & 0x200) != 0;
     }
-    return if_or_vif(VDM_REG(tib, VTIB_EFLAGS));
+    return IfOrVif(VDM_REG(tib, VTIB_EFLAGS));
 }
 
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
-static DWORD peekw_n(DWORD lin, int width)
-{ const volatile BYTE *m = (const volatile BYTE *)0;
-  if (width == 1) return m[lin];
-  if (width == 2) return peekw(lin);
-  return (DWORD)peekw(lin) | ((DWORD)peekw(lin + 2) << 16); }
-static void pokew_n(DWORD lin, DWORD v, int width)
-{ volatile BYTE *m = (volatile BYTE *)0;
-  if (width == 1) { m[lin] = (BYTE)v; return; }
-  if (width == 2) { pokew(lin, (WORD)v); return; }
-  poked(lin, v); }
+static DWORD PeekWidth(DWORD linear, int width)
+{ const volatile BYTE *memory = (const volatile BYTE *)0;
+  if (width == 1) return memory[linear];
+  if (width == 2) return PeekWord(linear);
+  return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + 2) << 16); }
+static void PokeWidth(DWORD linear, DWORD value, int width)
+{ volatile BYTE *memory = (volatile BYTE *)0;
+  if (width == 1) { memory[linear] = (BYTE)value; return; }
+  if (width == 2) { PokeWord(linear, (WORD)value); return; }
+  PokeDword(linear, value); }
 
 /* GH #18 / sound epic: sample the kernel's FIXED_NTVDMSTATE word next to the
    reflected EFLAGS at a labelled point, for the first few occurrences of each
@@ -4572,28 +4572,28 @@ static void pokew_n(DWORD lin, DWORD v, int width)
    one the kernel virtualises in [0x714]; this sampler is how we identify which
    bit carries it -- compare a known-IF=1 moment (a BOP, where the guest's own
    FLAGS are on its stack) against an I/O reflect in the same run. */
-static void vdmstate_sample(const char *label, volatile BYTE *tib, int *budget)
+static void VdmStateSample(const char *label, volatile BYTE *tib, int *budget)
 {
-    char b[128], *q = b;
+    char buffer[128], *cursor = buffer;
     if (*budget <= 0) return;
     (*budget)--;
-    q = LogPut(q, "GH#18 vdmstate ");
-    q = LogPut(q, label);
-    q = LogPut(q, ": [0x714]=0x"); q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-    q = LogPut(q, " EFL=0x");      q = LogHex(q, VDM_REG(tib, VTIB_EFLAGS));
-    q = LogPut(q, " CS:IP=0x");    q = LogHex(q, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-    q = LogPut(q, ":0x");          q = LogHex(q, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-    q = LogPut(q, "\r\n");
-    LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+    cursor = LogPut(cursor, "GH#18 vdmstate ");
+    cursor = LogPut(cursor, label);
+    cursor = LogPut(cursor, ": [0x714]=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+    cursor = LogPut(cursor, " EFL=0x");      cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS));
+    cursor = LogPut(cursor, " CS:IP=0x");    cursor = LogHex(cursor, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+    cursor = LogPut(cursor, ":0x");          cursor = LogHex(cursor, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
 }
 
-static void inject_int(volatile BYTE *tib, unsigned vec)
+static void InjectInt(volatile BYTE *tib, unsigned vector)
 {
     WORD ss = (WORD)VDM_REG(tib, VTIB_SS),  sp = (WORD)VDM_REG(tib, VTIB_ESP);
     WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
-    DWORD efl = VDM_REG(tib, VTIB_EFLAGS);
-    WORD fl = (WORD)efl;                           /* push the live frame's FLAGS */
-    my_ring_note_irq(vec, cs, ip, ss, sp);         /* north star 1: where did it land? */
+    DWORD eflags = VDM_REG(tib, VTIB_EFLAGS);
+    WORD flags = (WORD)eflags;                           /* push the live frame's FLAGS */
+    my_ring_note_irq(vector, cs, ip, ss, sp);         /* north star 1: where did it land? */
     /* ★ Fold VIF into the pushed IF. On VME hardware the guest's REAL interrupt-enable
        lives in EFLAGS.VIF (bit 19), because that is what its own STI sets -- but an IRET
        frame is 16 bits wide, so a straight truncation drops VIF and pushes IF=0. The
@@ -4603,16 +4603,16 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
        off (Skyroads: irq0_skip=123k, and the SB completion IRQ could never be taken). The
        CPU does this fold itself for a hardware-vectored interrupt; we synthesise the frame,
        so we must do it too. */
-    if (efl & EFLAGS_VIF_BIT) fl |= 0x200;
-    sp -= 2; pokew(((DWORD)ss << 4) + sp, fl);     /* push FLAGS */
-    sp -= 2; pokew(((DWORD)ss << 4) + sp, cs);     /* push CS    */
-    sp -= 2; pokew(((DWORD)ss << 4) + sp, ip);     /* push IP    */
+    if (eflags & EFLAGS_VIF_BIT) flags |= 0x200;
+    sp -= 2; PokeWord(((DWORD)ss << 4) + sp, flags);     /* push FLAGS */
+    sp -= 2; PokeWord(((DWORD)ss << 4) + sp, cs);     /* push CS    */
+    sp -= 2; PokeWord(((DWORD)ss << 4) + sp, ip);     /* push IP    */
     VDM_SET16(tib, VTIB_ESP, sp);
     /* Clear IF + TF, and VIF with them: vectoring an interrupt disables the guest's
        interrupts, and under VME "the guest's interrupts" means VIF. */
     VDM_REG(tib, VTIB_EFLAGS) &= ~(0x300u | EFLAGS_VIF_BIT);
-    VDM_SET16(tib, VTIB_EIP, peekw(vec * 4));      /* IVT[vec].offset */
-    VDM_SET16(tib, VTIB_CS,  peekw(vec * 4 + 2));  /* IVT[vec].segment */
+    VDM_SET16(tib, VTIB_EIP, PeekWord(vector * 4));      /* IVT[vec].offset */
+    VDM_SET16(tib, VTIB_CS,  PeekWord(vector * 4 + 2));  /* IVT[vec].segment */
 }
 
 /* ── A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134) ───────────
@@ -4628,25 +4628,25 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
 static void mouse_child_exited(void);          /* fwd: see g_ms_want_release */
-static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
+static int DosTerminate(DOS_MACHINE *machine, void *tib, char **logCursor, char *base)
 {
-    char *p = *pp;
-    (void)p;
+    char *cursor = *logCursor;
+    (void)cursor;
             if (g_ExecDepth > 0) {
         /* A CHILD terminated, not the program we were asked to run.
            Put the parent's frame back and let it continue. */
-        int d = --g_ExecDepth;
+        int depth = --g_ExecDepth;
         volatile WORD *pfl2;
         /* AH = how it ended (#34): 0 normally, 2 when its INT 24h answered ABORT. */
-        m->ChildReturnCode = (WORD)(((WORD)m->TermType << 8) | (m->ExitCode & 0xFF));
-        m->TermType = 0;
-        if (g_ExecMachine[d].ProgramName[0])             /* the strip names the parent again */
-            LogPut(g_ProgramName, g_ExecMachine[d].ProgramName);
+        machine->ChildReturnCode = (WORD)(((WORD)machine->TermType << 8) | (machine->ExitCode & 0xFF));
+        machine->TermType = 0;
+        if (g_ExecMachine[depth].ProgramName[0])             /* the strip names the parent again */
+            LogPut(g_ProgramName, g_ExecMachine[depth].ProgramName);
         /* s81: the parent's handle table back, the child's leftover files closed (not
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
-        DosHandlesPop(m, m->IsTsrPending);
-        if (g_Exec[d].ChildSegment && !m->IsTsrPending)
-            DosInt21SetShellPsp(m, g_Exec[d].ChildSegment, 0);   /* #208: its PSP is gone */
+        DosHandlesPop(machine, machine->IsTsrPending);
+        if (g_Exec[depth].ChildSegment && !machine->IsTsrPending)
+            DosInt21SetShellPsp(machine, g_Exec[depth].ChildSegment, 0);   /* #208: its PSP is gone */
         mouse_child_exited();          /* s81: the shell does not own the mouse */
         /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
            left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
@@ -4655,15 +4655,15 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
            the host synth, and every OPL voice keyed off -- pitch kept, so each one
            releases through its own envelope instead of clicking off. A TSR is still
            running, so it is left alone. */
-        if (!m->IsTsrPending) {
-            unsigned ch;
+        if (!machine->IsTsrPending) {
+            unsigned character;
             AudioWaveMidiSilence(&g_Wave);
             HOST_LOCK();
-            (void)ch;
+            (void)character;
             VddOplAllNotesOff(&g_Opl);              /* both banks, and the rhythm drums (#232) */
             HOST_UNLOCK();
         }
-        if (m->IsTsrPending) {
+        if (machine->IsTsrPending) {
             /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
                  The block is RESIZED, not freed, and the vectors are
                  deliberately NOT unwound -- the whole point of a TSR is
@@ -4673,14 +4673,14 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
                DX counted paragraphs from the PSP; a request for less
                than a PSP is nonsense, so floor it at 16 rather than
                hand back a block that does not contain its own header. */
-            WORD keep = m->TsrKeep < 0x10 ? 0x10 : m->TsrKeep, tmax = 0;
-            int rrc = DosMcbResize(NULL, g_Exec[d].ChildSegment, keep, &tmax);
-            *pp = LogPut(*pp, "  TSR: seg=0x"); *pp = LogHex(*pp, g_Exec[d].ChildSegment);
-            *pp = LogPut(*pp, " stays resident, 0x"); *pp = LogHex(*pp, keep);
-            *pp = LogPut(*pp, " paras");
-            if (rrc) *pp = LogPut(*pp, " -- RESIZE FAILED, block kept whole");
-            *pp = LogPut(*pp, ", vectors left installed\r\n");
-            m->IsTsrPending = 0; m->TsrKeep = 0;
+            WORD keep = machine->TsrKeep < 0x10 ? 0x10 : machine->TsrKeep, tmax = 0;
+            int rrc = DosMcbResize(NULL, g_Exec[depth].ChildSegment, keep, &tmax);
+            *logCursor = LogPut(*logCursor, "  TSR: seg=0x"); *logCursor = LogHex(*logCursor, g_Exec[depth].ChildSegment);
+            *logCursor = LogPut(*logCursor, " stays resident, 0x"); *logCursor = LogHex(*logCursor, keep);
+            *logCursor = LogPut(*logCursor, " paras");
+            if (rrc) *logCursor = LogPut(*logCursor, " -- RESIZE FAILED, block kept whole");
+            *logCursor = LogPut(*logCursor, ", vectors left installed\r\n");
+            machine->IsTsrPending = 0; machine->TsrKeep = 0;
         } else {
         /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
              The other half of the PSP contract: INT 22h/23h/24h go back
@@ -4689,65 +4689,65 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
              that installed its own critical-error handler leaves it
              servicing the PARENT's failures, pointing into memory that
              is freed on the very next line. */
-        if (g_Exec[d].ChildSegment)
-            DosPspRestoreVectors(NULL, g_Exec[d].ChildSegment);
-        if (g_Exec[d].ChildSegment) DosMcbFree(NULL, g_Exec[d].ChildSegment);
+        if (g_Exec[depth].ChildSegment)
+            DosPspRestoreVectors(NULL, g_Exec[depth].ChildSegment);
+        if (g_Exec[depth].ChildSegment) DosMcbFree(NULL, g_Exec[depth].ChildSegment);
         /* ...and every OTHER block it still owns, as DOS does on terminate (s80).
            AH=48h now stamps the child's PSP as owner; a program that exits without
            freeing its allocations would otherwise shrink the parent's memory for
            good. Rescan after each free: DosMcbFree coalesces, so the chain moves. */
-        if (g_Exec[d].ChildSegment) {
+        if (g_Exec[depth].ChildSegment) {
             int pass, nfree = 0;
             /* ⚠ Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
                  0x40 and stopped, leaving the rest owned by a PSP that no longer exists. */
             for (pass = 0; pass < 4096; ++pass) {
-                uint16_t mm = m->FirstMcb, hit = 0; int guard = 0;
+                uint16_t mcbSegment = machine->FirstMcb, hit = 0; int guard = 0;
                 for (;;) {
-                    volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
-                    if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 1024) break;
-                    if (DosMcbReadWord(mc + 1) == g_Exec[d].ChildSegment) { hit = (uint16_t)(mm + 1); break; }
-                    if (mc[0] == 'Z') break;
-                    mm = (uint16_t)(mm + 1 + DosMcbReadWord(mc + 3));
+                    volatile uint8_t *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
+                    if ((mcb[0] != 'M' && mcb[0] != 'Z') || ++guard > 1024) break;
+                    if (DosMcbReadWord(mcb + 1) == g_Exec[depth].ChildSegment) { hit = (uint16_t)(mcbSegment + 1); break; }
+                    if (mcb[0] == 'Z') break;
+                    mcbSegment = (uint16_t)(mcbSegment + 1 + DosMcbReadWord(mcb + 3));
                 }
                 if (!hit || DosMcbFree(NULL, hit)) break;
                 ++nfree;
             }
             if (nfree) {
-                *pp = LogPut(*pp, "  EXEC: freed 0x"); *pp = LogHex(*pp, (DWORD)nfree);
-                *pp = LogPut(*pp, " more block(s) the child still owned\r\n");
+                *logCursor = LogPut(*logCursor, "  EXEC: freed 0x"); *logCursor = LogHex(*logCursor, (DWORD)nfree);
+                *logCursor = LogPut(*logCursor, " more block(s) the child still owned\r\n");
             }
         }
         /* The chain as the parent will find it: what a child LEFT is exactly what the
            next program cannot have, and a leak is invisible in any one line above. */
-        {   uint16_t mm = m->FirstMcb; int guard = 0;
-            *pp = LogPut(*pp, "  EXEC: chain after exit:");
+        {   uint16_t mcbSegment = machine->FirstMcb; int guard = 0;
+            *logCursor = LogPut(*logCursor, "  EXEC: chain after exit:");
             for (;;) {
-                volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
-                uint16_t own, sz;
-                if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 48) { *pp = LogPut(*pp, " <broken>"); break; }
-                own = DosMcbReadWord(mc + 1); sz = DosMcbReadWord(mc + 3);
-                *pp = LogPut(*pp, " "); *pp = LogHex(*pp, mm);
-                *pp = LogPut(*pp, own ? "/own=" : "/FREE"); if (own) *pp = LogHex(*pp, own);
-                *pp = LogPut(*pp, "/sz="); *pp = LogHex(*pp, sz);
-                if (mc[0] == 'Z') break;
-                mm = (uint16_t)(mm + 1 + sz);
+                volatile uint8_t *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
+                uint16_t own, size;
+                if ((mcb[0] != 'M' && mcb[0] != 'Z') || ++guard > 48) { *logCursor = LogPut(*logCursor, " <broken>"); break; }
+                own = DosMcbReadWord(mcb + 1); size = DosMcbReadWord(mcb + 3);
+                *logCursor = LogPut(*logCursor, " "); *logCursor = LogHex(*logCursor, mcbSegment);
+                *logCursor = LogPut(*logCursor, own ? "/own=" : "/FREE"); if (own) *logCursor = LogHex(*logCursor, own);
+                *logCursor = LogPut(*logCursor, "/sz="); *logCursor = LogHex(*logCursor, size);
+                if (mcb[0] == 'Z') break;
+                mcbSegment = (uint16_t)(mcbSegment + 1 + size);
             }
-            *pp = LogPut(*pp, "\r\n");
-            LogAppend(LOG_PATH, base, *pp); *pp = base;
+            *logCursor = LogPut(*logCursor, "\r\n");
+            LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
         }
         /* And the environment copy EXEC made for it (s74). A TSR keeps its env
            block along with its PSP, which is why this is on the exit arm only. */
-        if (g_Exec[d].EnvironmentSegment) { DosMcbFree(NULL, g_Exec[d].EnvironmentSegment); g_Exec[d].EnvironmentSegment = 0; }
+        if (g_Exec[depth].EnvironmentSegment) { DosMcbFree(NULL, g_Exec[depth].EnvironmentSegment); g_Exec[depth].EnvironmentSegment = 0; }
         }
-        VDM_REG(tib, VTIB_EAX) = g_Exec[d].Eax; VDM_REG(tib, VTIB_EBX) = g_Exec[d].Ebx;
-        VDM_REG(tib, VTIB_ECX) = g_Exec[d].Ecx; VDM_REG(tib, VTIB_EDX) = g_Exec[d].Edx;
-        VDM_REG(tib, VTIB_ESI) = g_Exec[d].Esi; VDM_REG(tib, VTIB_EDI) = g_Exec[d].Edi;
-        VDM_REG(tib, VTIB_EBP) = g_Exec[d].Ebp; VDM_REG(tib, VTIB_ESP) = g_Exec[d].Esp;
-        VDM_REG(tib, VTIB_EIP) = g_Exec[d].Eip; VDM_REG(tib, VTIB_EFLAGS) = g_Exec[d].Eflags;
-        VDM_REG(tib, VTIB_CS)  = g_Exec[d].Cs;  VDM_REG(tib, VTIB_SS) = g_Exec[d].Ss;
-        VDM_REG(tib, VTIB_DS)  = g_Exec[d].Ds;  VDM_REG(tib, VTIB_ES) = g_Exec[d].Es;
-        m->PspSegment = g_Exec[d].Psp;
-        m->DtaSegment = g_Exec[d].DtaSegment; m->DtaOffset = g_Exec[d].DtaOffset;
+        VDM_REG(tib, VTIB_EAX) = g_Exec[depth].Eax; VDM_REG(tib, VTIB_EBX) = g_Exec[depth].Ebx;
+        VDM_REG(tib, VTIB_ECX) = g_Exec[depth].Ecx; VDM_REG(tib, VTIB_EDX) = g_Exec[depth].Edx;
+        VDM_REG(tib, VTIB_ESI) = g_Exec[depth].Esi; VDM_REG(tib, VTIB_EDI) = g_Exec[depth].Edi;
+        VDM_REG(tib, VTIB_EBP) = g_Exec[depth].Ebp; VDM_REG(tib, VTIB_ESP) = g_Exec[depth].Esp;
+        VDM_REG(tib, VTIB_EIP) = g_Exec[depth].Eip; VDM_REG(tib, VTIB_EFLAGS) = g_Exec[depth].Eflags;
+        VDM_REG(tib, VTIB_CS)  = g_Exec[depth].Cs;  VDM_REG(tib, VTIB_SS) = g_Exec[depth].Ss;
+        VDM_REG(tib, VTIB_DS)  = g_Exec[depth].Ds;  VDM_REG(tib, VTIB_ES) = g_Exec[depth].Es;
+        machine->PspSegment = g_Exec[depth].Psp;
+        machine->DtaSegment = g_Exec[depth].DtaSegment; machine->DtaOffset = g_Exec[depth].DtaOffset;
         /* EXEC succeeded, so clear the carry the parent's IRET will
            restore, and set AX=0 as DOS does. */
         pfl2 = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
@@ -4755,15 +4755,15 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
         *pfl2 &= (WORD)~1;
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
-        m->ExitCode = 0;
-        *pp = LogPut(*pp, "  EXEC: child exited rc=0x"); *pp = LogHexByte(*pp, m->ChildReturnCode);
-        *pp = LogPut(*pp, ", parent resumed (depth="); *pp = LogHexByte(*pp, (unsigned)g_ExecDepth);
-        *pp = LogPut(*pp, ")\r\n");
-        LogAppend(LOG_PATH, base, *pp); *pp = base;
+        machine->ExitCode = 0;
+        *logCursor = LogPut(*logCursor, "  EXEC: child exited rc=0x"); *logCursor = LogHexByte(*logCursor, machine->ChildReturnCode);
+        *logCursor = LogPut(*logCursor, ", parent resumed (depth="); *logCursor = LogHexByte(*logCursor, (unsigned)g_ExecDepth);
+        *logCursor = LogPut(*logCursor, ")\r\n");
+        LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
         return 1;                    /* the parent is back: carry on */
     }
     VDM_REG(tib, VTIB_EIP) += 3;
-    LogAppend(LOG_PATH, base, *pp); *pp = base;
+    LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
     return 0;                        /* top-level program: the run is over */
 }
 
@@ -4784,37 +4784,37 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
      strikes and the user's next launch silently ran stock ntvdm for the rest of
      the day. See src/dos/dos_recovery.h. */
 #define STARTFAIL_PATH OUT_("startfail.txt")
-static DOS_START_MODE g_start_mode = DOS_START_NORMAL;
+static DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 
-static unsigned recovery_read(void)
+static unsigned RecoveryRead(void)
 {
-    char b[16]; DWORD n = 0; unsigned v = 0;
-    HANDLE h = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+    char buffer[16]; DWORD bytesRead = 0; unsigned value = 0;
+    HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    if (ReadFile(h, b, sizeof(b) - 1, &n, NULL)) v = DosRecoveryParseFailureCount(b, n);
-    CloseHandle(h);
-    return v;
+    if (handle == INVALID_HANDLE_VALUE) return 0;
+    if (ReadFile(handle, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) value = DosRecoveryParseFailureCount(buffer, bytesRead);
+    CloseHandle(handle);
+    return value;
 }
 
-static void recovery_write(unsigned v)
+static void RecoveryWrite(unsigned value)
 {
-    char b[16]; int i = 0; DWORD w = 0;
-    HANDLE h = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+    char buffer[16]; int index = 0; DWORD bytesWritten = 0;
+    HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    if (v >= 10) b[i++] = (char)('0' + (v / 10) % 10);
-    b[i++] = (char)('0' + v % 10);
-    b[i++] = '\r'; b[i++] = '\n';
-    WriteFile(h, b, (DWORD)i, &w, NULL);
-    FlushFileBuffers(h);                /* the next start may be after a crash */
-    CloseHandle(h);
+    if (handle == INVALID_HANDLE_VALUE) return;
+    if (value >= 10) buffer[index++] = (char)('0' + (value / 10) % 10);
+    buffer[index++] = (char)('0' + value % 10);
+    buffer[index++] = '\r'; buffer[index++] = '\n';
+    WriteFile(handle, buffer, (DWORD)index, &bytesWritten, NULL);
+    FlushFileBuffers(handle);                /* the next start may be after a crash */
+    CloseHandle(handle);
 }
 
 /* The start SUCCEEDED: the host has a window (or tray icon) on the desktop. Called
    from the UI thread right after ShowWindow/tray_add, and again from the clean-exit
    path so a headless run that never got that far still clears on its way out. */
-static void recovery_ok(void) { DeleteFileA(STARTFAIL_PATH); }
+static void RecoveryOk(void) { DeleteFileA(STARTFAIL_PATH); }
 
 /* ── ★ THE INSTALLER. (GH #13) ───────────────────────────────────────────────────
      Everything above install.h's line is decision-making with no Windows in it and
@@ -4825,47 +4825,47 @@ static void recovery_ok(void) { DeleteFileA(STARTFAIL_PATH); }
      exists to remove. Every function here returns the Win32 error so the caller can. */
 
 /* Read the current Debugger value. Returns 1 if a value was read (into buf). */
-static int install_read(char *buf, DWORD cap)
+static int InstallRead(char *buffer, DWORD cap)
 {
-    HKEY k; DWORD ty = 0, n = cap;
-    LONG rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &k);
-    buf[0] = 0;
-    if (rc != ERROR_SUCCESS) return 0;
-    rc = RegQueryValueExA(k, INSTALL_VAL, NULL, &ty, (LPBYTE)buf, &n);
-    RegCloseKey(k);
-    if (rc != ERROR_SUCCESS || ty != REG_SZ) { buf[0] = 0; return 0; }
-    if (n >= cap) n = cap - 1;
-    buf[n] = 0;
+    HKEY key; DWORD valueType = 0, size = cap;
+    LONG status = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &key);
+    buffer[0] = 0;
+    if (status != ERROR_SUCCESS) return 0;
+    status = RegQueryValueExA(key, INSTALL_VAL, NULL, &valueType, (LPBYTE)buffer, &size);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS || valueType != REG_SZ) { buffer[0] = 0; return 0; }
+    if (size >= cap) size = cap - 1;
+    buffer[size] = 0;
     return 1;
 }
 
 /* The displaced value, kept beside our own settings. */
-static int install_prev_read(char *buf, DWORD cap)
+static int InstallPreviousRead(char *buffer, DWORD cap)
 {
-    HKEY k; DWORD ty = 0, n = cap;
-    LONG rc = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &k);
-    buf[0] = 0;
-    if (rc != ERROR_SUCCESS) return 0;
-    rc = RegQueryValueExA(k, INSTALL_PREV_VAL, NULL, &ty, (LPBYTE)buf, &n);
-    RegCloseKey(k);
-    if (rc != ERROR_SUCCESS || ty != REG_SZ || !buf[0]) { buf[0] = 0; return 0; }
-    if (n >= cap) n = cap - 1;
-    buf[n] = 0;
+    HKEY key; DWORD valueType = 0, size = cap;
+    LONG status = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key);
+    buffer[0] = 0;
+    if (status != ERROR_SUCCESS) return 0;
+    status = RegQueryValueExA(key, INSTALL_PREV_VAL, NULL, &valueType, (LPBYTE)buffer, &size);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS || valueType != REG_SZ || !buffer[0]) { buffer[0] = 0; return 0; }
+    if (size >= cap) size = cap - 1;
+    buffer[size] = 0;
     return 1;
 }
 
-static void install_prev_write(const char *v)
+static void InstallPreviousWrite(const char *value)
 {
-    HKEY k; DWORD disp;
+    HKEY key; DWORD disp;
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, &disp) != ERROR_SUCCESS) return;
-    if (v && v[0]) {
-        DWORD n = 0; while (v[n]) ++n;
-        RegSetValueExA(k, INSTALL_PREV_VAL, 0, REG_SZ, (const BYTE *)v, n + 1);
+                        KEY_SET_VALUE, NULL, &key, &disp) != ERROR_SUCCESS) return;
+    if (value && value[0]) {
+        DWORD length = 0; while (value[length]) ++length;
+        RegSetValueExA(key, INSTALL_PREV_VAL, 0, REG_SZ, (const BYTE *)value, length + 1);
     } else {
-        RegDeleteValueA(k, INSTALL_PREV_VAL);
+        RegDeleteValueA(key, INSTALL_PREV_VAL);
     }
-    RegCloseKey(k);
+    RegCloseKey(key);
 }
 
 /* ── #153: FILE > OPEN RECENT. Every program this host was started with, and every one
@@ -4873,44 +4873,44 @@ static void install_prev_write(const char *v)
      (A Win16 program started from Windows is not recorded: its path arrives inside
      WOW, not here.) */
 #define MRU_MAX 8
-static int mru_load(char out[MRU_MAX][MAX_PATH])
+static int MruLoad(char out[MRU_MAX][MAX_PATH])
 {
-    HKEY k; int n = 0, i;
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS)
+    HKEY key; int count = 0, index;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return 0;
-    for (i = 0; i < MRU_MAX; ++i) {
-        char name[16], *q = LogPut(name, "Recent"); DWORD ty = 0, cb = MAX_PATH;
-        q = LogDecimal(q, (DWORD)(i + 1)); *q = 0;
-        if (RegQueryValueExA(k, name, NULL, &ty, (LPBYTE)out[n], &cb) != ERROR_SUCCESS
-            || ty != REG_SZ || cb < 2) continue;
-        out[n][cb < MAX_PATH ? cb : MAX_PATH - 1] = 0;
-        if (out[n][0]) ++n;
+    for (index = 0; index < MRU_MAX; ++index) {
+        char name[16], *cursor = LogPut(name, "Recent"); DWORD valueType = 0, size = MAX_PATH;
+        cursor = LogDecimal(cursor, (DWORD)(index + 1)); *cursor = 0;
+        if (RegQueryValueExA(key, name, NULL, &valueType, (LPBYTE)out[count], &size) != ERROR_SUCCESS
+            || valueType != REG_SZ || size < 2) continue;
+        out[count][size < MAX_PATH ? size : MAX_PATH - 1] = 0;
+        if (out[count][0]) ++count;
     }
-    RegCloseKey(k);
-    return n;
+    RegCloseKey(key);
+    return count;
 }
-static void mru_add(const char *path)
+static void MruAdd(const char *path)
 {
     char list[MRU_MAX][MAX_PATH], longp[MAX_PATH];
-    HKEY k; DWORD disp, ln; int n, i, w = 0;
-    const char *bn;
+    HKEY key; DWORD disp, longLength; int count, index, written = 0;
+    const char *baseName;
     if (!path || !path[0] || lstrlenA(path) >= MAX_PATH) return;
     /* CSRSS hands us 8.3 names; the menu is for a person. */
-    ln = GetLongPathNameA(path, longp, sizeof longp);
-    if (ln && ln < sizeof longp) path = longp;
-    for (bn = path, i = 0; path[i]; ++i) if (path[i] == '\\') bn = path + i + 1;
-    if (!lstrcmpiA(bn, LAUNCH_STUB_NAME) || !lstrcmpiA(bn, "dosstub.com")) return;   /* ours */
-    n = mru_load(list);
+    longLength = GetLongPathNameA(path, longp, sizeof longp);
+    if (longLength && longLength < sizeof longp) path = longp;
+    for (baseName = path, index = 0; path[index]; ++index) if (path[index] == '\\') baseName = path + index + 1;
+    if (!lstrcmpiA(baseName, LAUNCH_STUB_NAME) || !lstrcmpiA(baseName, "dosstub.com")) return;   /* ours */
+    count = MruLoad(list);
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, &disp) != ERROR_SUCCESS) return;
-    for (i = -1; i < n && w < MRU_MAX; ++i) {
-        const char *v = (i < 0) ? path : list[i];
-        char name[16], *q = LogPut(name, "Recent");
-        if (i >= 0 && !lstrcmpiA(v, path)) continue;          /* moved to the front */
-        q = LogDecimal(q, (DWORD)(++w)); *q = 0;
-        RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)v, (DWORD)lstrlenA(v) + 1);
+                        KEY_SET_VALUE, NULL, &key, &disp) != ERROR_SUCCESS) return;
+    for (index = -1; index < count && written < MRU_MAX; ++index) {
+        const char *value = (index < 0) ? path : list[index];
+        char name[16], *cursor = LogPut(name, "Recent");
+        if (index >= 0 && !lstrcmpiA(value, path)) continue;          /* moved to the front */
+        cursor = LogDecimal(cursor, (DWORD)(++written)); *cursor = 0;
+        RegSetValueExA(key, name, 0, REG_SZ, (const BYTE *)value, (DWORD)lstrlenA(value) + 1);
     }
-    RegCloseKey(k);
+    RegCloseKey(key);
 }
 
 /* Set (v non-NULL) or delete (v NULL) the IFEO Debugger value. Returns a Win32
@@ -5011,8 +5011,8 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
     (void)cap;
 
     install_self_path(self, sizeof self);
-    install_read(cur, sizeof cur);
-    have_prev = install_prev_read(prev, sizeof prev);
+    InstallRead(cur, sizeof cur);
+    have_prev = InstallPreviousRead(prev, sizeof prev);
     /* #195, measured on the rig: installing from copy B saved copy A (bin\) as "the
        value to restore", so uninstalling from A "restored" A itself and then failed its
        own read-back. A saved value that is another NTVDMEX is not somebody else's
@@ -5038,12 +5038,12 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
         /* Save what we are about to displace, so uninstall can put it back. Only
            when it is somebody else's -- overwriting our own path with our own path
            must not record US as the thing to restore. */
-        if (st == INSTALL_OTHER && !InstallNamesNtvdmex(cur)) install_prev_write(cur);
+        if (st == INSTALL_OTHER && !InstallNamesNtvdmex(cur)) InstallPreviousWrite(cur);
         rc = install_write(self);
         break;
     case INSTALL_ACT_RESTORE:
         rc = install_write(prev);
-        if (rc == ERROR_SUCCESS) install_prev_write(NULL);
+        if (rc == ERROR_SUCCESS) InstallPreviousWrite(NULL);
         break;
     case INSTALL_ACT_DELETE:
         rc = install_write(NULL);
@@ -5062,7 +5062,7 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
     if (act == INSTALL_ACT_NOTHING) return 1;
 
     /* ── THE READ-BACK. */
-    install_read(cur, sizeof cur);
+    InstallRead(cur, sizeof cur);
     st = InstallClassify(cur[0] ? cur : NULL, self);
     if (want && st != INSTALL_OURS) {
         p = LogPut(p, "FAILED: the value was written but does not read back as ours.\r\n");
@@ -5106,7 +5106,7 @@ static INSTALL_STATE install_status_text(char *msg, DWORD cap)
     INSTALL_STATE st;
     (void)cap;
     install_self_path(self, sizeof self);
-    install_read(cur, sizeof cur);
+    InstallRead(cur, sizeof cur);
     st = InstallClassify(cur[0] ? cur : NULL, self);
     p = LogPut(p, "This executable:\r\n    "); p = LogPut(p, self); p = LogPut(p, "\r\n\r\n");
     switch (st) {
@@ -6096,9 +6096,9 @@ static int    g_pitpace_on = 1, g_pitpace_ms = 1;
      It is NOT the clock (three port-profile-matched runs: 183.6 pre-pacer, 185.0, 184.1
      raises/s, within 0.8%) and it is NOT the pacer's CALL RATE either: 4 ms felt exactly
      like 1 ms. What does not change with the period is the number of RAISES, and a raise
-     is where host_irq_sink does a SuspendThread/SetThreadContext round trip on the guest
+     is where HostIrqSink does a SuspendThread/SetThreadContext round trip on the guest
      **while holding g_Lock** -- deliberately, because the lock is the interlock that
-     stops us suspending a lock holder (see the note in host_irq_sink).
+     stops us suspending a lock holder (see the note in HostIrqSink).
      Before the pacer, the UI thread called host_pit_sync itself and therefore DID that
      suspend inline and carried on. Now the pacer does it and the UI thread BLOCKS on the
      lock instead -- and the UI thread is the one that turns WM_KEYUP into a break code,
@@ -6219,7 +6219,7 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
          attempts that bailed not_in_exec          1
 
      Every tick that lost its injection attempt lost it to the KEYBOARD YIELD in
-     host_irq_sink: when a key is pending, the timer's one async opportunity per raise
+     HostIrqSink: when a key is pending, the timer's one async opportunity per raise
      is handed to IRQ1 instead. That is not a bug in the yield -- turning it off
      (keyirq.txt = 0) is measured to put HALF of all keystrokes past 64 ms, worst
      1864 ms, which is the "loses keys" result this file already records twice. The
@@ -6227,7 +6227,7 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
 
    ► SO THE FAULT IS NOT WHO WINS, IT IS THAT WINNING COSTS THE LOSER A WHOLE PERIOD.
      IRQ0 and IRQ1 compete for one scarce thing: a moment when the guest is in exec
-     with interrupts on. host_irq_sink offers exactly ONE such moment per raise, so a
+     with interrupts on. HostIrqSink offers exactly ONE such moment per raise, so a
      tick that loses waits 5.56 ms for the next one -- and KEYIRQ_MAX_YIELD allows
      three losses in a row, which is 16.7 ms. The worst gap measured is 20 ms and its
      account reads raise=3, yld=2, att=1: three ticks generated, two given to keys,
@@ -6241,14 +6241,14 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
      precisely: the sink is called from the PIT and only from the PIT.
 
    ⚠⚠ WHY IT MUST NOT TAKE g_Lock, and why that is safe HERE and was not before.
-     host_irq_sink's long note is right: holding g_Lock across a suspend is what
+     HostIrqSink's long note is right: holding g_Lock across a suspend is what
      guarantees the thread being suspended is not a lock holder, and simply moving the
      call outside was tried and made things worse. This is the "separate suspend-safe
      handshake" that note names as the prerequisite -- the same one the CPU throttle
      already uses and has shipped with for a session: confirm g_InExec AFTER the
      suspend has landed (GetThreadContext is what makes "landed" true), and resume
      instantly if it reads 0. g_InExec is set only around VdmRunGuest, where the thread
-     holds nothing, and is cleared before any HOST_LOCK. See async_inject_irq's
+     holds nothing, and is cleared before any HOST_LOCK. See AsyncInjectIrq's
      re-check, which is where that handshake actually lives.
      Taking g_Lock would also defeat the purpose: the measured worst lock WAIT is
      17 ms, which is longer than the gap being repaired.
@@ -6333,7 +6333,7 @@ static DWORD WINAPI tick_courier_thread(LPVOID pv)
                 SwitchToThread();
             } else {
                 ++g_courier_tries;
-                if (async_inject_irq(0)) {
+                if (AsyncInjectIrq(0)) {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
                     g_Irq0NoteCs = 0xFFFF; g_Irq0NoteIp = 0;   /* delivered async */
@@ -6364,7 +6364,7 @@ static DWORD WINAPI tick_courier_thread(LPVOID pv)
      with no I/O never faults, never BOPs and never returns from VdmStartExecution
      at all (the headless watchdog has a whole essay about that shape), so the exec
      loop never gets a turn to throttle at. Suspension is the only lever that
-     reaches it, and the machinery is proven: async_inject_irq() has suspended this
+     reaches it, and the machinery is proven: AsyncInjectIrq() has suspended this
      same thread on every timer tick for twenty sessions.
 
    ⚠ THE ONE RULE: NEVER SUSPEND A LOCK HOLDER. Hold the exec thread while it owns
@@ -7117,7 +7117,7 @@ static void planes_dump_beside(const char *bmp_path)
 }
 
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
-   g_Irq1Pending itself and never call host_irq_sink, which meant real keys bypassed BOTH
+   g_Irq1Pending itself and never call HostIrqSink, which meant real keys bypassed BOTH
    the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
    aimed at the keyboard was dead code for actual keys, and the synthetic probe tested a path
    real keys do not take. Everything goes through here now, so the probe and a human press
@@ -7364,7 +7364,7 @@ static DWORD WINAPI qirq_probe_thread(LPVOID pv)
     for (n = 0; n < 40 && g_Running; ++n) {
         DWORD before = *(volatile DWORD *)(ULONG_PTR)0x714, after = before;
         int k;
-        host_irq_sink(NULL, 5);
+        HostIrqSink(NULL, 5);
         for (k = 0; k < 50; ++k) {
             Sleep(1);
             after = *(volatile DWORD *)(ULONG_PTR)0x714;
@@ -7434,14 +7434,14 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
-        { int k; DWORD pm = 0; WORD v5o = peekw(0x0D * 4), v5s = peekw(0x0D * 4 + 2);
+        { int k; DWORD pm = 0; WORD v5o = PeekWord(0x0D * 4), v5s = PeekWord(0x0D * 4 + 2);
           for (k = 0; k < 16; ++k) if (g_IrqNPending[k]) pm |= 1u << k;
           q = LogPut(q, " pic{imr=");  q = LogHexByte(q, g_Pic.Master.Imr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Imr);
           q = LogPut(q, " irr=");      q = LogHexByte(q, g_Pic.Master.Irr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Irr);
           q = LogPut(q, " isr=");      q = LogHexByte(q, g_Pic.Master.Isr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Isr);
           q = LogPut(q, "} pend=0x");  q = LogHex(q, pm);
           q = LogPut(q, " ivt0d=");    q = LogHex(q, v5s); q = LogPut(q, ":"); q = LogHex(q, v5o);
-          q = LogPut(q, " nested=");   q = LogHex(q, (DWORD)g_nested_rm);
+          q = LogPut(q, " nested=");   q = LogHex(q, (DWORD)g_NestedRm);
           q = LogPut(q, " aw5{");
           { int shown = 0;
             for (k = 0; k < ASYNC_WHY_MAX && shown < 6; ++k) if (g_AsyncWhyHistogram[5][k]) {
@@ -7566,9 +7566,9 @@ static void async_why_report(void)
        suppressed, so the log's thinness is never read as "it stopped happening". The
        histogram below is the complete account either way. */
     p = LogPut(p, "STAGE2: async early-bail lines logged=");
-    p = LogHex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
-                  ? g_async_early_bail_logged : ASYNC_EARLY_BAIL_LOG_MAX);
-    p = LogPut(p, " of ");   p = LogHex(p, g_async_early_bail_logged);
+    p = LogHex(p, g_AsyncEarlyBailLogged < ASYNC_EARLY_BAIL_LOG_MAX
+                  ? g_AsyncEarlyBailLogged : ASYNC_EARLY_BAIL_LOG_MAX);
+    p = LogPut(p, " of ");   p = LogHex(p, g_AsyncEarlyBailLogged);
     p = LogPut(p, " (cap "); p = LogHex(p, ASYNC_EARLY_BAIL_LOG_MAX);
     p = LogPut(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
     LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
@@ -7716,7 +7716,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         f_efl = VDM_REG(g_TibDebug, VTIB_EFLAGS);
         { const volatile BYTE *cp = (const volatile BYTE *)((f_cs << 4) + f_ip);
           unsigned k; for (k = 0; k < 12; ++k) f_bytes[k] = cp[k]; }
-        f_tick = ((DWORD)peekw(0x46E) << 16) | peekw(0x46C);
+        f_tick = ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C);
         f_ok = 1;
     }
     InterlockedExchange(&g_Running, 0);         /* stop exec loops + unblock key reads */
@@ -7798,7 +7798,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
            that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
         q = LogPut(q, " sb_checked=0x");   q = LogHex(q, g_Sb.BlocksChecked);
         q = LogPut(q, " sb_flat=0x");      q = LogHex(q, g_Sb.BlocksFlat);
-        q = LogPut(q, " bda_tick=0x");    q = LogHex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+        q = LogPut(q, " bda_tick=0x");    q = LogHex(q, ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C));
         q = LogPut(q, "\r\n");
         LogAppend(LOG_PATH, b, q); SerialOut(b, q); q = b;
         { int i; q = LogPut(q, "  hot ports:");
@@ -8255,7 +8255,7 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
 static int g_simint_reflect = 0;
 static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
 static int g_textdump = 0;              /* textdump.flag: dump the text screen too    */
-/* g_simint_busy (declared above async_inject_irq) is set across 0300h. */
+/* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
@@ -8365,7 +8365,7 @@ static volatile LONG g_ms_rate = 3;     /* 1Ch code: 3 = 100 reports/s, the PS/2
 /* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
      A guest installs a far pointer and a call mask and expects the driver to CALL IT
      on the masked events. We do not do that yet -- invoking guest code out of band
-     needs the same care async_inject_irq takes and is its own piece of work.
+     needs the same care AsyncInjectIrq takes and is its own piece of work.
    ► BUT STORING IT IS NOT COSMETIC, IT IS THE DIFFERENCE BETWEEN A KNOWN GAP AND A
      SILENT ONE. Before this, 0Ch fell into `default:` and returned with the guest's
      registers untouched -- "did nothing, reported success", the shape this codebase
@@ -8893,20 +8893,20 @@ static void video_trap_sync(void);             /* fwd */
 static void exec_mach_save(int d)
 {
     unsigned i;
-    for (i = 0; i < 512; ++i) g_ExecMachine[d].Ivt[i] = peekw(i * 2);
+    for (i = 0; i < 512; ++i) g_ExecMachine[d].Ivt[i] = PeekWord(i * 2);
     g_ExecMachine[d].ImrMaster = g_Pic.Master.Imr; g_ExecMachine[d].ImrSlave = g_Pic.Slave.Imr;
     g_ExecMachine[d].VideoMode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
     g_ExecMachine[d].Pit0  = VddPitEffectiveReload(&g_Pit);
 }
 
 /* Put back what the ended child may have left broken. Called with the child still at
-   depth d+1, before dos_terminate frees its memory. */
+   depth d+1, before DosTerminate frees its memory. */
 static void exec_mach_restore(int d, char **pp)
 {
     unsigned i;
     int remode;
     HOST_LOCK();
-    for (i = 0; i < 512; ++i) pokew(i * 2, g_ExecMachine[d].Ivt[i]);
+    for (i = 0; i < 512; ++i) PokeWord(i * 2, g_ExecMachine[d].Ivt[i]);
     g_Pic.Master.Imr = g_ExecMachine[d].ImrMaster; g_Pic.Slave.Imr = g_ExecMachine[d].ImrSlave;
     g_Pic.Master.Isr = 0; g_Pic.Slave.Isr = 0;           /* a handler it never finished */
     g_Irq0IsrSince = 0;
@@ -8951,7 +8951,7 @@ static int close_prog_now(DOS_MACHINE *m, void *tib, char **pp, char *base)
         if (g_Routed && g_ExecDepth == 1) g_BackToPrompt = 1;   /* #208 */
         m->IsTsrPending = 0;
         m->ExitCode = 0;
-        return dos_terminate(m, tib, pp, base);
+        return DosTerminate(m, tib, pp, base);
     }
     *pp = LogPut(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
     LogAppend(LOG_PATH, base, *pp); *pp = base;
@@ -9599,9 +9599,9 @@ static void mouse_cb_try(volatile BYTE *tib)
              out, so the byte it consumes is not disturbed. */
         if (ip >= 0x4C && ip < 0x4F) { ++g_ms_cb_why[3]; return; }
         if ((ip >= 0x34 && ip < 0x3A) || ip == 0x4F) fl = 0x200; /* stub about to IRET: deliver */
-        else fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
+        else fl = PeekWord((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
     } else fl = VDM_REG(tib, VTIB_EFLAGS);
-    if (!if_or_vif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
+    if (!IfOrVif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
     /* ── THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
          written over it would be sent into data by its own RETF; refusing is the
          lesser harm, and the refusal is counted and named. */
@@ -9630,8 +9630,8 @@ static void mouse_cb_try(volatile BYTE *tib)
     g_ms_cb_saved.Cs  = VDM_REG(tib, VTIB_CS);  g_ms_cb_saved.Ds  = VDM_REG(tib, VTIB_DS);
     g_ms_cb_saved.Es  = VDM_REG(tib, VTIB_ES);  g_ms_cb_saved.Ss  = VDM_REG(tib, VTIB_SS);
     /* The far return the handler's RETF will take, then the call itself. */
-    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, DOS_HDLR_SEG);
-    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, MS_CB_RET_OFF);
+    sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, DOS_HDLR_SEG);
+    sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, MS_CB_RET_OFF);
     VDM_SET16(tib, VTIB_ESP, (WORD)sp);
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
     VDM_SET16(tib, VTIB_EBX, (WORD)ev.btn);          /* the state AT the event     */
@@ -11589,7 +11589,7 @@ static void open_program(HWND h, const char *path)
         MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
         return;
     }
-    mru_add(path);
+    MruAdd(path);
     if (g_captured) input_capture_set(h, 0);
     sl = GetShortPathNameA(path, sp, sizeof sp);
     if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
@@ -11643,7 +11643,7 @@ static void menu_recent_fill(void)
     int n, i;
     if (!g_recent_menu) return;
     while (GetMenuItemCount(g_recent_menu) > 0) DeleteMenu(g_recent_menu, 0, MF_BYPOSITION);
-    n = mru_load(list);
+    n = MruLoad(list);
     if (!n) { AppendMenuA(g_recent_menu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
     for (i = 0; i < n; ++i) {
         char t[2 * MAX_PATH + 8], *q = t; const char *s;
@@ -11659,7 +11659,7 @@ static void menu_recent_fill(void)
      can stop the process dying at all:
        1. WH_KEYBOARD_LL routes every keystroke on the box through our UI thread.
        2. ClipCursor confines the mouse system-wide to our client rect.
-       3. WE SUSPEND OUR OWN GUEST THREAD -- async_inject_irq and the CPU throttle
+       3. WE SUSPEND OUR OWN GUEST THREAD -- AsyncInjectIrq and the CPU throttle
           both do, dozens of times a second. A process cannot finish exiting while
           one of its threads is suspended, so a teardown that races a suspend leaves
           a ZOMBIE holding (1) and (2). The machine then runs, pings, and cannot be
@@ -13967,7 +13967,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* #153: Open Recent's items are a range, like the combos above. */
         if (LOWORD(wp) >= IDM_RECENT_0 && LOWORD(wp) < IDM_RECENT_0 + MRU_MAX) {
             char list[MRU_MAX][MAX_PATH];
-            int n = mru_load(list), k = LOWORD(wp) - IDM_RECENT_0;
+            int n = MruLoad(list), k = LOWORD(wp) - IDM_RECENT_0;
             if (k < n) open_program(h, list[k]);
             return 0;
         }
@@ -14581,7 +14581,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          the three-strikes counter defends against can no longer happen. Clearing it
          at exit instead counted every X-button quit and every guest crash as a
          failed start, and three play-tests uninstalled the host. */
-    recovery_ok();
+    RecoveryOk();
     {   char sb[96], *sq = sb;
         sq = LogPut(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
         LogAppend(LOG_PATH, sb, sq); }
@@ -14949,7 +14949,7 @@ static void host_pit_deliver(void)
             /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
                raise; if the guest had interrupts off (96% of gameplay) it falls to the
                exec loop, which can only place it on a pass where they are back on. This is
-               the retry, and it is free: async_inject_irq VERIFIES IF/VIF before it
+               the retry, and it is free: AsyncInjectIrq VERIFIES IF/VIF before it
                injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
                takes it and the tick waits -- g_Irq0Pending is not decremented, so the
                tick is not lost, just delivered on the next raise. Bounded so a key that
@@ -14991,7 +14991,7 @@ static void host_pit_deliver(void)
             if (g_KeyIrqRetry && !g_DpmiPm && g_Irq1Pending > 0
                 && (g_KeyIrqRetry != 2 || g_Irq0Pending <= 1)
                 && g_Irq0Yielded < maxy
-                && VddPicCanDeliver(&g_Pic, 1) && async_inject_irq(1)) {
+                && VddPicCanDeliver(&g_Pic, 1) && AsyncInjectIrq(1)) {
                 InterlockedDecrement(&g_Irq1Pending);
                 ++g_Irq0Yielded;
                 ++g_Irq1AsyncRetry;
@@ -15000,7 +15000,7 @@ static void host_pit_deliver(void)
                 g_Irq0Yielded = 0;
                 ++g_PitAsyncAttempts;
                 ++g_Irq0AttemptsCount;     /* A/B/C discriminator: an attempt was actually made */
-                if (async_inject_irq(0)) {
+                if (AsyncInjectIrq(0)) {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
                     /* ⚠ BOTH DELIVERY PATHS, OR THE TIMELINE IS A LIE. A PM guest
@@ -15014,7 +15014,7 @@ static void host_pit_deliver(void)
         }
     /* ── ★★★★ A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
          RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. ────────────────────
-         host_irq_sink tries once when the device raises, and if the CPU thread happens
+         HostIrqSink tries once when the device raises, and if the CPU thread happens
          to be in HOST code at that microsecond the attempt bails (why=0x14) and nothing
          ever offers it again. For a line that re-raises (Doom's auto-init SB fires 86
          times a second) that is invisible. For a ONE-SHOT it is fatal.
@@ -15027,7 +15027,7 @@ static void host_pit_deliver(void)
          missing piece is merely to OFFER IT AGAIN. Here, because this already runs on
          the pacer thread and already holds g_Lock -- and holding the lock is precisely
          what guarantees the thread we are about to suspend is not holding it (see the
-         long note in host_irq_sink; do not move this outside).
+         long note in HostIrqSink; do not move this outside).
        ⚠⚠ ONE ATTEMPT PER SYNC, AND ONLY WHILE SOMETHING IS ACTUALLY PENDING. Session
          22's disaster was ~800 unbounded SuspendThread round trips per sync under this
          lock, and the throttle written to stop it later cost SKYROADS a fifth of its
@@ -15040,12 +15040,12 @@ static void host_pit_deliver(void)
           if (!g_IrqNPending[q]) continue;
           if (!VddPicCanDeliver(&g_Pic, (uint8_t)q)) break;
           ++g_IrqNRetryTry;
-          if (g_QiSuspended && async_inject_irq((unsigned)q)) {
+          if (g_QiSuspended && AsyncInjectIrq((unsigned)q)) {
               InterlockedExchange(&g_IrqNPending[q], 0);
               ++g_IrqNRetryOk;
           }
           /* WHICH CLAUSE SAID NO. 1597 refusals with no reason is not a measurement;
-             async_inject_irq already records one, so keep the last of them. */
+             AsyncInjectIrq already records one, so keep the last of them. */
           else g_IrqNRetryWhy = g_AsyncWhy;
           break;                  /* one per sync, pending or not: see the note above */
       } }
@@ -15111,8 +15111,8 @@ static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
          the way the cooperative one was -- the guest runs it on its own thread -- but
          g_AsyncPmActive is set for exactly its duration, from the injection to the
          catcher. Read it here, where the port access is dispatched. */
-    if (port == 0x03) { if (g_AsyncPmActive) ++g_dmapoll_in_async;
-                        else                   ++g_dmapoll_mainline; }
+    if (port == 0x03) { if (g_AsyncPmActive) ++g_DmaPollInAsync;
+                        else                   ++g_DmaPollMainline; }
     /* Sync the counter before the guest looks at it, so a poll always reads real time. */
     if (port >= 0x40 && port <= 0x43) host_pit_sync();
     /* Report the rate the guest programs. Skyroads divides its own fast timer down to the
@@ -15450,13 +15450,13 @@ static int host_try_io_string(volatile BYTE *tib, VDD_BUS *bus)
             DWORD di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
             DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + di;
             VddBusIo(bus, port, (uint8_t)width, 1, &val);
-            pokew_n(lin, val, width);
+            PokeWidth(lin, val, width);
             VDM_SET16(tib, VTIB_EDI, (WORD)(di + step));
         } else {                                              /* DS:SI -> port    */
             DWORD si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
             DWORD sregoff = sover ? sover : VTIB_DS;
             DWORD lin = ((VDM_REG(tib, sregoff) & 0xFFFF) << 4) + si;
-            val = peekw_n(lin, width);
+            val = PeekWidth(lin, width);
             VddBusIo(bus, port, (uint8_t)width, 0, &val);
             VDM_SET16(tib, VTIB_ESI, (WORD)(si + step));
         }
@@ -17150,7 +17150,7 @@ static long host_interp(volatile BYTE *tib, long cap)
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.Flags & 0xFFFFu);
     /* ── ★ AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
-         VIF is set (guest_if_enabled), because under VME a native STI sets VIF. An
+         VIF is set (GuestIfEnabled), because under VME a native STI sets VIF. An
          interpreted CLI clears only IF here -- VIF stayed set, the gate saw "enabled",
          and an IRQ was injected into a region the guest had closed: Wolf3D's ISR tail
          (`pop ax / pop ds / iret`) ran on a frame that was not its own and IRET'd to
@@ -20790,7 +20790,7 @@ static int ws_intertask_live(void)
      early 486" and that GDI redraw is visibly slow when windows overlap.
    ★ THE SUSPECT IS THE INSTRUMENT, AND THIS PROJECT HAS ALREADY BEEN HERE ONCE:
      per-line LogAppend under the device lock cost SKYROADS 24% of its delivered
-     timer ticks, and only a player's ear caught it (see host_irq_sink). On the
+     timer ticks, and only a player's ear caught it (see HostIrqSink). On the
      WOW path every BOP writes a multi-line block -- a Solitaire startup is 2.7 MB
      -- so the same shape is back, on a path nobody has costed.
    ⚠ The dev machine CANNOT settle this: the headless rig cannot see input lag.
@@ -20884,7 +20884,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     char lb[256]; char *lp = lb;
     WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
     DWORD rstk = ((DWORD)rss << 4) + rsp;
-    WORD retIP = peekw(rstk), retCS = peekw(rstk + 2);     /* the far-call return frame */
+    WORD retIP = PeekWord(rstk), retCS = PeekWord(rstk + 2);     /* the far-call return frame */
     WORD newSP = (WORD)(rsp + 4);                          /* pop it */
     DWORD rmcs = dpmi_sel_base(g_Callbacks[slot].RmEs) + g_Callbacks[slot].RmDi;
     volatile BYTE *rc = (volatile BYTE *)(ULONG_PTR)rmcs;
@@ -20910,13 +20910,13 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
     { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
       if (dpmi_sel_is32(g_Callbacks[slot].PmSelector)) {
-          psp -= 4; poked(b + psp, 0x00000202);        /* EFLAGS */
-          psp -= 4; poked(b + psp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
-          psp -= 4; poked(b + psp, DPMI_PMRET_OFF);    /* EIP */
+          psp -= 4; PokeDword(b + psp, 0x00000202);        /* EFLAGS */
+          psp -= 4; PokeDword(b + psp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
+          psp -= 4; PokeDword(b + psp, DPMI_PMRET_OFF);    /* EIP */
       } else {
-          psp -= 2; pokew(b + psp, 0x0202);            /* FLAGS */
-          psp -= 2; pokew(b + psp, g_PmReturnSelector);       /* CS */
-          psp -= 2; pokew(b + psp, DPMI_PMRET_OFF);    /* IP */
+          psp -= 2; PokeWord(b + psp, 0x0202);            /* FLAGS */
+          psp -= 2; PokeWord(b + psp, g_PmReturnSelector);       /* CS */
+          psp -= 2; PokeWord(b + psp, DPMI_PMRET_OFF);    /* IP */
       }
       VDM_SET16(tib, VTIB_SS, pss); VDM_REG(tib, VTIB_ESP) = psp; }
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
@@ -21017,7 +21017,7 @@ static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handl
      one AX value, repeated. The reads it is there to explain are 501 lines of it.
    ★ THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line LogAppend under the
      device lock cost SKYROADS 24% of its delivered timer ticks and only a player's ear
-     caught it (see host_irq_sink); the same argument is written out again over
+     caught it (see HostIrqSink); the same argument is written out again over
      wowquiet.txt. Both times the lesson was "stop writing a kilobyte per event". This
      is the third site, and the first one on a path a guest can drive at will.
    ► SO BOUND IT PER (VECTOR, AH) -- NOT GLOBALLY. A global cap goes quiet on a RARE
@@ -21104,13 +21104,13 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
       int ss32 = dpmi_sel_is32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, sEFL);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, sEFL);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)sEFL);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, (WORD)sEFL);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, DPMI_PMRET_OFF);
       }
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
 
@@ -21955,12 +21955,12 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
           pFl=VDM_REG(tib,VTIB_EFLAGS);
     WORD pMsw = *(volatile WORD *)(tib + VTIB_MSW);
     WORD rss = (WORD)(g_DpmiCodeBase >> 4), rsp = 0xFB00;
-    WORD rcs = peekw(vec * 4 + 2), rip = peekw(vec * 4);
+    WORD rcs = PeekWord(vec * 4 + 2), rip = PeekWord(vec * 4);
     unsigned rt; int done = 0;
-    InterlockedExchange(&g_simint_busy, 1);
-    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, 0x0202);          /* FLAGS: IF set, restored by IRET */
-    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);
-    rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);
+    InterlockedExchange(&g_SimIntBusy, 1);
+    rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, 0x0202);          /* FLAGS: IF set, restored by IRET */
+    rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);
+    rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);
     dpmi_unpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);
     VDM_REG(tib, VTIB_EFLAGS) = 0x20002;                        /* VM, interrupts OFF */
@@ -21970,11 +21970,11 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     VDM_SET16(tib, VTIB_SS, rss); VDM_REG(tib, VTIB_ESP) = rsp;
     for (rt = 0; rt < 128 && !done; ++rt) {
         LONG rst; DWORD rev, info;
-        InterlockedExchange(&g_nested_rm, 1);
-        InterlockedExchange(&g_InExec, 1);                     /* see g_nested_rm */
+        InterlockedExchange(&g_NestedRm, 1);
+        InterlockedExchange(&g_InExec, 1);                     /* see g_NestedRm */
         rev = VdmRunGuest(tib, &rst);
         InterlockedExchange(&g_InExec, 0);
-        InterlockedExchange(&g_nested_rm, 0);
+        InterlockedExchange(&g_NestedRm, 0);
         info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
         if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
         if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
@@ -22011,7 +22011,7 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     VDM_SET16(tib,VTIB_DS,pDs);VDM_SET16(tib,VTIB_ES,pEs);VDM_SET16(tib,VTIB_FS,pFs);VDM_SET16(tib,VTIB_GS,pGs);
     VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
     VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
-    InterlockedExchange(&g_simint_busy, 0);
+    InterlockedExchange(&g_SimIntBusy, 0);
     if (done) ++g_pm_irq_rm_reflects; else ++g_pm_irq_rm_fail;
     return done;
 }
@@ -24493,9 +24493,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          true nested-V86 reflection, which does not exist yet; it keeps
                          falling through to the loud stop below rather than being faked.
                          IRQ2-7 get the same treatment with no device work: their real-mode
-                         default is a bare IRET that the host EOIs for (async_vec_is_our_stub). */
-                    if (((vec >= 0x09 && vec <= 0x0F && async_vec_is_our_stub(vec - 0x08))
-                         || (vec >= 0x70 && vec <= 0x77 && async_vec_is_our_stub(vec - 0x70 + 8)))) {
+                         default is a bare IRET that the host EOIs for (AsyncVectorIsOurStub). */
+                    if (((vec >= 0x09 && vec <= 0x0F && AsyncVectorIsOurStub(vec - 0x08))
+                         || (vec >= 0x70 && vec <= 0x77 && AsyncVectorIsOurStub(vec - 0x70 + 8)))) {
                         uint8_t line = (uint8_t)(vec >= 0x70 ? vec - 0x70 + 8 : vec - 0x08);
                         HOST_LOCK();
                         /* take the byte, re-arm if more queued. #254: no guest code runs from
@@ -24522,7 +24522,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (g_pm_irq_rm_reflects <= 8) {
                                 p = LogPut(p, "PM INT 0x"); p = LogHexByte(p, (BYTE)vec);
                                 p = LogPut(p, " default handler -> reflected to the guest's real-mode ISR 0x");
-                                p = LogHex(p, peekw(vec * 4 + 2)); p = LogPut(p, ":0x"); p = LogHex(p, peekw(vec * 4));
+                                p = LogHex(p, PeekWord(vec * 4 + 2)); p = LogPut(p, ":0x"); p = LogHex(p, PeekWord(vec * 4));
                                 p = LogPut(p, "\r\n");
                                 LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
                             }
@@ -24859,7 +24859,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         int simint_vec = -1; WORD simint_cs = 0, simint_ip = 0;
                         if (ax == 0x0300) {
                             DWORD iv = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
+                            WORD hs = PeekWord(iv * 4 + 2), ho = PeekWord(iv * 4);
                             if (RmcsSimIntRoute(iv, hs, ho, g_simint_reflect, DOS_HDLR_SEG) == SIMINT_RUN) {
                                 simint_vec = (int)iv; simint_cs = hs; simint_ip = ho;
                                 p = LogPut(p, " [simInt 0x"); p = LogHexByte(p, (BYTE)iv);
@@ -25979,7 +25979,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  and SIMINT_NONE (a null vector, or simintrefl_off.flag), which
                                  runs nothing and is counted below, as every vector but three
                                  used to be. */
-                            { WORD hs = peekw(intno * 4 + 2), ho = peekw(intno * 4);
+                            { WORD hs = PeekWord(intno * 4 + 2), ho = PeekWord(intno * 4);
                               if (RmcsSimIntRoute(intno, hs, ho, g_simint_reflect, DOS_HDLR_SEG) != SIMINT_FAST) {
                                   g_simint_unhandled++;
                                   if (intno < 256) g_simint_vec[intno]++;
@@ -25987,7 +25987,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                   p = LogPut(p, (hs | ho) ? " NOT RUN (simintrefl_off.flag)" : " NOT RUN (null vector)");
                                   break;
                               } }
-                            InterlockedExchange(&g_simint_busy, 1);  /* no async injection in here */
+                            InterlockedExchange(&g_SimIntBusy, 1);  /* no async injection in here */
                             /* save the client's PM register file */
                             DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
                                   sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
@@ -26116,7 +26116,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_FS)=sFs;VDM_REG(tib,VTIB_GS)=sGs;
                             VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
-                            InterlockedExchange(&g_simint_busy, 0);
+                            InterlockedExchange(&g_SimIntBusy, 0);
                             p = LogPut(p, " -> simInt 0x"); p = LogHex(p, intno);
                             break; }
                         case 0x0302:                               /* ...with an IRET frame */
@@ -26164,8 +26164,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                site: RMCS.CS:IP is ignored on the way in and not written on the way out. */
                             if (simint_vec >= 0) { rcs = simint_cs; rip = simint_ip; }
                             /* 0301h/0302h rewrite the VDM into V86 and back for real, so they are
-                               the SAME window as 0300h and share its guard -- see g_simint_busy. */
-                            InterlockedExchange(&g_simint_busy, 1);
+                               the SAME window as 0300h and share its guard -- see g_SimIntBusy. */
+                            InterlockedExchange(&g_SimIntBusy, 1);
                             if (rss == 0) { rss = (WORD)(g_DpmiCodeBase >> 4); rsp = 0xFF00; }
                             p = LogPut(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
                             p = LogHex(p, rcs); p = LogPut(p, ":0x"); p = LogHex(p, rip);
@@ -26225,11 +26225,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             /* push the return frame on the RM stack: [FLAGS] CS IP, with FLAGS
                                present only for 0302 (the procedure will IRET, not RETF). */
                             if (ax == 0x0302) {
-                                rsp -= 2; pokew(((DWORD)rss << 4) + rsp,
+                                rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp,
                                                 *(volatile WORD*)(r+0x20));   /* RMCS.Flags */
                             }
-                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
-                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
+                            rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
+                            rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
                             dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
@@ -26273,11 +26273,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                      was written for. The latch persists, so nothing is
                                      delivered twice and nothing is invented. */
                                 v86_deliver_dev_irq(tib);
-                                InterlockedExchange(&g_nested_rm, 1);
-                                InterlockedExchange(&g_InExec, 1);   /* see g_nested_rm */
+                                InterlockedExchange(&g_NestedRm, 1);
+                                InterlockedExchange(&g_InExec, 1);   /* see g_NestedRm */
                                 rev = VdmRunGuest(tib, &rst);
                                 InterlockedExchange(&g_InExec, 0);
-                                InterlockedExchange(&g_nested_rm, 0);
+                                InterlockedExchange(&g_NestedRm, 0);
                                 DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
                                 if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
                                     done = 1; break;                /* proc RETF'd -> finished */
@@ -26367,7 +26367,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
                             VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
-                            InterlockedExchange(&g_simint_busy, 0);
+                            InterlockedExchange(&g_SimIntBusy, 0);
                             if (simint_vec >= 0) {
                                 /* A 0300h that did not come back is a vector we did not service:
                                    it belongs in the same STAGE2 count the unrun ones go to. */
@@ -27471,13 +27471,13 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
       int   ss32 = dpmi_sel_is32(ss), h32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? cx->Esp : (cx->Esp & 0xFFFF);
       if (h32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, efl);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, efl);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)efl);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, (WORD)efl);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, DPMI_PMRET_OFF);
       }
       cx->Esp = ss32 ? sp : ((cx->Esp & 0xFFFF0000u) | sp); }
 
@@ -27795,7 +27795,7 @@ static void wow_shims_load(void)
     done = 1;
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
        decision is taken further down WinMain, and must not wait for it. */
-    if (DosRecoveryGetSafeSkips(DosRecoveryDecideStartMode(recovery_read())).WowShims) return;
+    if (DosRecoveryGetSafeSkips(DosRecoveryDecideStartMode(RecoveryRead())).WowShims) return;
     api.version = 3; api.getvdmptr = shim_getvdmptr; api.handle32 = shim_handle32;
     api.handle16 = shim_handle16; api.callback16ex = shim_callback16ex; api.ica_interrupt = shim_ica;
     api.yield16 = shim_yield; api.log = shim_log; api.global16 = shim_global16;
@@ -28271,7 +28271,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     if (g_PmReturnSelector == 0) return 0;
     /* #172 census: which of the two refusals below, when, and where the guest was. */
     if (iv == 0x08 && g_DpmiIsClient32 && (!dpmi_sel_is32(sCS) || !g_PmAppHookedTimer))
-        pminj_decl_note(!dpmi_sel_is32(sCS) ? 0 : 1, sCS, sEIP);
+        PmInjectDeclineNote(!dpmi_sel_is32(sCS) ? 0 : 1, sCS, sEIP);
     /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
          Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
          21h thunk epilogue, on ITS internal 16-bit stack (SS=0xcf, SP=0x1a74) -- and the
@@ -28305,13 +28305,13 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
       int ss32 = dpmi_sel_is32(ss);                /* see the note in the dispatch path */
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, sEFL);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, sEFL);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)sEFL);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, (WORD)sEFL);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, DPMI_PMRET_OFF);
       }
       VDM_SET16(tib, VTIB_SS, ss);
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
@@ -28534,11 +28534,11 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
       int ss32 = dpmi_sel_is32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); PokeWord(b + sp, DPMI_PMRET_OFF);
       }
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
@@ -28615,7 +28615,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
      COMMAND.COM -- where a parent is waiting in real mode for its child to return.
      DPMI 0.9 has the host release the client's resources on its exit and let DOS
      terminate the real-mode half; this is that release. The caller then clears PE and
-     runs the real-mode terminate (dos_terminate), which restores the parent's frame.
+     runs the real-mode terminate (DosTerminate), which restores the parent's frame.
    ► WHAT IT KEEPS is as important as what it drops: the HOST's own selectors and the
      default-handler table are used again by the next client. Everything else the
      client made -- its LDT slots, its 0501/0100 memory, its vector hooks, callbacks,
@@ -28724,7 +28724,7 @@ static void dpmi_client_teardown(void)
     g_PmIrq0Latch = 0;
     InterlockedExchange(&g_PmTickOwed, 0);
     InterlockedExchange(&g_AsyncPmActive, 0);
-    InterlockedExchange(&g_simint_busy, 0);
+    InterlockedExchange(&g_SimIntBusy, 0);
     g_InPmIrq = 0;
     InterlockedExchange(&g_PmEntryEip, -1);
     g_DpmiPm = 0;
@@ -28947,7 +28947,7 @@ static HANDLE csrss_open_split(char *path, char **pargs)
      V86, so the delivery this loop was already doing is exactly the right delivery --
      it simply was not reachable from there. Extracted verbatim rather than copied: two
      copies of an interrupt-delivery gate is how they drift, and every clause here was
-     paid for (the in_bop window, the VME-aware guest_if_enabled, the unhooked-drop, the
+     paid for (the in_bop window, the VME-aware GuestIfEnabled, the unhooked-drop, the
      acknowledge/EOI rule, one-per-turn).
    ⚠ Returns 1 if an interrupt was injected, so a caller that must let the handler IRET
      before doing anything else can tell. */
@@ -28964,15 +28964,15 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
   int in_bop = (qcs == DOS_HDLR_SEG &&
                 ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
   if (!in_bop && qcs != DOS_HDLR_SEG) IfvNote(2, VDM_REG(tib, VTIB_EFLAGS));
-  if (!in_bop && guest_if_enabled(tib)) {
+  if (!in_bop && GuestIfEnabled(tib)) {
       int k;
       for (k = 0; k < (int)sizeof g_IrqOrder; ++k) {
           unsigned vec;
           q = g_IrqOrder[k];
           vec = VddPicVector(&g_Pic, (uint8_t)q);        /* 08h+q or 70h+(q-8), as programmed */
           if (!g_IrqNPending[q]) continue;
-          if (peekw(vec * 4 + 2) == DOS_HDLR_SEG
-              && peekw(vec * 4) == DOS_IRET_STUB_OFF) {
+          if (PeekWord(vec * 4 + 2) == DOS_HDLR_SEG
+              && PeekWord(vec * 4) == DOS_IRET_STUB_OFF) {
               /* ── s92 (#239): UNHOOKED IN REAL MODE IS NOT UNHOOKED. A DPMI client that
                    installed a PROTECTED-MODE handler for the line owns it whatever mode
                    the CPU is in (DPMI 0.9: a hardware interrupt is passed to the PM
@@ -28988,10 +28988,10 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
           if (!VddPicCanDeliver(&g_Pic, (uint8_t)q)) continue;
           if (InterlockedExchange(&g_IrqNPending[q], 0)) {
               VddPicAcknowledge(&g_Pic, (uint8_t)q);
-              if (async_vec_is_our_stub((unsigned)q)) VddPicEndOfInterrupt(&g_Pic, (uint8_t)q);
+              if (AsyncVectorIsOurStub((unsigned)q)) VddPicEndOfInterrupt(&g_Pic, (uint8_t)q);
               g_IrqNInjected++;
               IfvTrace((unsigned)q, 2, VDM_REG(tib, VTIB_EFLAGS), qcs, qip);
-              inject_int(tib, vec);
+              InjectInt(tib, vec);
               break;                    /* one per turn: let it IRET first */
           }
       }
@@ -29022,7 +29022,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
           rq = LogPut(rq, " ss:sp=0x");           rq = LogHex(rq, ss);
           rq = LogPut(rq, ":0x");                 rq = LogHex(rq, sp);
           rq = LogPut(rq, " stkflags=0x");
-          rq = LogHex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
+          rq = LogHex(rq, PeekWord((ss << 4) + ((sp + 4) & 0xFFFF)));
           rq = LogPut(rq, in_bop ? " why=in_bop" : " why=if_gate");
           rq = LogPut(rq, "\r\n");
           LogAppend(LOG_PATH, rb, rq); SerialOut(rb, rq);
@@ -29045,7 +29045,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
      INT 15h AH=88h returns depending on who asked.
    ⚠ NOT HERE, ON PURPOSE: INT 08h/09h and the INT 33h callback return (their EOI and
      their re-entry rules belong to IRQ delivery, which the nested loop does not do for
-     our stubs -- see g_nested_rm), and INT 20h/27h (they END the program, which only the
+     our stubs -- see g_NestedRm), and INT 20h/27h (they END the program, which only the
      exec loop can do). A nested loop that meets one of those still stops and says so.
    Returns V86BOP_NONE (not one of these -- the caller carries on down its own chain),
    V86BOP_DONE (serviced, EIP past the BOP, onto the stub's IRET/RETF) or V86BOP_RERUN
@@ -29892,16 +29892,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     LogWrite(LOG_PATH, report, p);
     SerialInitialize();                                      /* DPMI harness: COM1 log sink */
     g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
-    {   unsigned fails = recovery_read();               /* GH #132 */
-        g_start_mode = DosRecoveryDecideStartMode(fails);
-        recovery_write(fails + 1);                      /* cleared only on a clean exit */
+    {   unsigned fails = RecoveryRead();               /* GH #132 */
+        g_StartMode = DosRecoveryDecideStartMode(fails);
+        RecoveryWrite(fails + 1);                      /* cleared only on a clean exit */
         p = LogPut(p, "STAGE0: consecutive failed starts = "); p = LogHexByte(p, fails);
-        p = LogPut(p, g_start_mode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
-                  : g_start_mode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
+        p = LogPut(p, g_StartMode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
+                  : g_StartMode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
                                                         : " -> normal\r\n");
-        if (g_start_mode == DOS_START_UNINSTALL) recovery_uninstall(&p);
-        g_Safe = DosRecoveryGetSafeSkips(g_start_mode);
-        if (g_start_mode == DOS_START_SAFE)
+        if (g_StartMode == DOS_START_UNINSTALL) recovery_uninstall(&p);
+        g_Safe = DosRecoveryGetSafeSkips(g_StartMode);
+        if (g_StartMode == DOS_START_SAFE)
             p = LogPut(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
                         " pump), the real PC speaker, the joystick thread, the WOW"
                         " shims, fullscreen -- the next clean exit clears it\r\n");
@@ -30886,7 +30886,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     /* #153: File > Open Recent lists every program this host was started with. */
-    if (nread && !g_wow_launch && progpath[0]) mru_add(progpath);
+    if (nread && !g_wow_launch && progpath[0]) MruAdd(progpath);
     if (nread && !g_wow_launch && !shell_cfg[0]
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         int pl = lstrlenA(progpath), is_cmd = 0, is_newexe = 0;
@@ -31937,7 +31937,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     QueryPerformanceFrequency(&g_QpcFrequency);      /* seeds QpcMicroseconds for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     VddBusInitialize(&g_Bus, NULL);
-    VddBusSetSinks(&g_Bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
+    VddBusSetSinks(&g_Bus, HostIrqSink, NULL, NULL, NULL);  /* host presents directly */
     g_PicDevice = VddPicDevice(&g_Pic);      /* before the PIT: it gates every IRQ */
 
     VddBusAdd(&g_Bus, &g_PicDevice);
@@ -32331,7 +32331,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           char c[8]; DWORD rd = 0;
           ReadFile(hp6, c, sizeof c, &rd, NULL); CloseHandle(hp6);
           /* 0 = never yield, 1 = always (old default), 2 = only while the clock is on
-             schedule. See the yield branch in host_irq_sink. */
+             schedule. See the yield branch in HostIrqSink. */
           if (rd && c[0] >= '0' && c[0] <= '3') g_KeyIrqRetry = c[0] - '0';
       } }
     /* Mouse feel is per-guest and per-hand, and every test of it costs a play session,
@@ -32505,8 +32505,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        default. See the trace at the top of DosInt21(). */
     m.IsTraceAll = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     /* DPMI 0300 reflects to the guest's own real-mode handler -- ON by default since s81,
-       when the wedge that kept it off was found and fixed (see g_nested_rm and the BIOS
-       tick in async_inject_irq). simintrefl_off.flag turns it off for diagnosis; say so,
+       when the wedge that kept it off was found and fixed (see g_NestedRm and the BIOS
+       tick in AsyncInjectIrq). simintrefl_off.flag turns it off for diagnosis; say so,
        because a guest-owned vector then silently does nothing again. */
     g_simint_reflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
     if (!g_simint_reflect) {
@@ -32845,34 +32845,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_Irq0Pending) {
             DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD fl;
-            if (our_stub_cs_ip(cs, ip)) {   /* #206: BIOS stubs too */
+            if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-                fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));   /* main-line FLAGS the stub returns to */
+                fl = PeekWord((ss << 4) + ((sp + 4) & 0xFFFF));   /* main-line FLAGS the stub returns to */
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
                 IfvNote(1, fl);
             }
-            if (if_or_vif(fl) && Irq0CanDeliver()
+            if (IfOrVif(fl) && Irq0CanDeliver()
                 && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 InterlockedDecrement(&g_Irq0Pending);
                 Irq0Ack();                     /* in service until the guest EOIs (s70) */
                 g_Irq0Injected++;
                 g_Irq0NoteCs = cs; g_Irq0NoteIp = ip;   /* where IF re-opened */
                 Irq0DeliveredNote();          /* the guest's clock, as a timeline */
-                inject_int(tib, 0x08);
+                InjectInt(tib, 0x08);
             } else {
                 static int s_bud_skip = 6;
                 g_Irq0Skip++;                  /* IF=0 or inside our own INT 08h */
                 if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A) g_Irq0SkipStub++;
-                else if (!if_or_vif(fl)) {
+                else if (!IfOrVif(fl)) {
                     g_Irq0SkipIf++;
-                    if (our_stub_cs_ip(cs, ip)) {   /* #238: who called our stub with IF off */
+                    if (IsOurStubCsIp(cs, ip)) {   /* #238: who called our stub with IF off */
                         DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-                        SkipIfSiteNote(peekw((ss << 4) + ((sp + 2) & 0xFFFF)),
-                                         peekw((ss << 4) + (sp & 0xFFFF)), ip);
+                        SkipIfSiteNote(PeekWord((ss << 4) + ((sp + 2) & 0xFFFF)),
+                                         PeekWord((ss << 4) + (sp & 0xFFFF)), ip);
                     }
                 }
-                vdmstate_sample("irq0-skip", tib, &s_bud_skip);
+                VdmStateSample("irq0-skip", tib, &s_bud_skip);
             }
         }
         /* Deliver a pending keyboard IRQ1 as INT 09h, same IF-gating as IRQ0. The
@@ -32882,9 +32882,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_Irq1Pending > 0) {
             DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD fl;
-            if (our_stub_cs_ip(cs, ip)) {   /* #206: BIOS stubs too */
+            if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-                fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));
+                fl = PeekWord((ss << 4) + ((sp + 4) & 0xFFFF));
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
                 IfvNote(1, fl);
@@ -32895,16 +32895,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  it is not rare -- it is the normal case. There are exactly three ways
                  out of this gate, and guessing which one has already cost four rounds. */
             ++g_Irq1Checks;
-            if (!if_or_vif(fl))                                          ++g_Irq1NoIf;
+            if (!IfOrVif(fl))                                          ++g_Irq1NoIf;
             else if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)      ++g_Irq1In08;
             else if (cs == DOS_HDLR_SEG && ip >= 0x4C && ip < 0x50)      ++g_Irq1In09;
-            if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG &&
+            if (IfOrVif(fl) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
                 InterlockedDecrement(&g_Irq1Pending);   /* one INT 09h per queued scancode byte */
                 VddPicAcknowledge(&g_Pic, 1);
-                if (async_vec_is_our_stub(1)) VddPicEndOfInterrupt(&g_Pic, 1);
+                if (AsyncVectorIsOurStub(1)) VddPicEndOfInterrupt(&g_Pic, 1);
                 g_Irq1Injected++;
-                inject_int(tib, 0x09);
+                InjectInt(tib, 0x09);
                 KeyLatencyPop();               /* the guest is now IN its INT 09h */
             }
         }
@@ -33121,7 +33121,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW ||
             ev == VDM_EVENT_GPFAULT || ev == VDM_EVENT_IO_STRING) {
             int handled;
-            { static int s_bud_io = 6; vdmstate_sample("io-reflect", tib, &s_bud_io); }
+            { static int s_bud_io = 6; VdmStateSample("io-reflect", tib, &s_bud_io); }
             /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
             if (ev == VDM_EVENT_IO_STRING) {
                 HOST_LOCK();
@@ -33234,7 +33234,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             LogAppend(LOG_PATH, base, p); p = base;
             break;
         }
-        { static int s_bud_bop = 6; vdmstate_sample("bop", tib, &s_bud_bop); }
+        { static int s_bud_bop = 6; VdmStateSample("bop", tib, &s_bud_bop); }
         /* ── ★★★ WHOSE BOP IS THIS? THE NUMBER DOES NOT SAY. (s78) ──────────────────
              `C4 C4 nn` is NTVDM's call-out instruction and the number space is NTVDM's,
              not ours. Ours were assigned freely and two of them are already taken by a
@@ -33281,7 +33281,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (kact == INPUT_ACTION_PAUSE && KeyboardActionEntry(kact) < 0) VddInputPauseCancel(&g_Input);
                 HOST_UNLOCK();
                 ++g_Kb4FTranslate;
-                VDM_SET16(tib, VTIB_EAX, peekw((ss << 4) + sp));          /* pop ax */
+                VDM_SET16(tib, VTIB_EAX, PeekWord((ss << 4) + sp));          /* pop ax */
                 VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | ((sp + 2) & 0xFFFF);
                 ko = KeyboardActionEntry(kact);
                 VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (ko >= 0 ? ko : BIOS_KEYBOARD_ACTION_IRET));
@@ -33302,7 +33302,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (sc >= 0) {
                     DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF;
                     WORD  sp = (WORD)((VDM_REG(tib, VTIB_ESP) - 2) & 0xFFFF);
-                    pokew((ss << 4) + sp, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
+                    PokeWord((ss << 4) + sp, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
                     VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | sp;
                     VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (unsigned)sc));
                     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
@@ -33376,7 +33376,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      This used to set handled = 2, which `break`s the exec loop
                      and ends the whole VDM -- so a .COM child exiting the normal
                      .COM way took the host down with it. */
-                handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
+                handled = DosTerminate(&m, tib, &p, base) ? 3 : 2;
             } else if (bn == 0x27) {               /* TSR, CP/M style          */
                 /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
                      DX is a BYTE OFFSET past the PSP here, not a paragraph
@@ -33392,7 +33392,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = LogPut(p, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.TraceCursor = p; DosInt21(&m); p = m.TraceCursor;
-                handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
+                handled = DosTerminate(&m, tib, &p, base) ? 3 : 2;
             } else handled = 0;
             if (handled == 2) break;               /* terminate: the run is over  */
             if (handled == 3) continue;            /* a child exited: parent is back */
@@ -34006,7 +34006,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             else { Irq0PmUnclaim(); if (owed2) g_PmCooperativeGate[9]++; }
                         } else if (owed2) g_PmCooperativeGate[8]++;
                         g_InPmIrq = 0;
-                        g_coop_dma_polls += g_Dma.ChannelCountReads[1] - pre8;
+                        g_CooperativeDmaPolls += g_Dma.ChannelCountReads[1] - pre8;
                     }
                     /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
                          through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
@@ -34089,7 +34089,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     /* ── AND THE DEVICE LINES, WHICH HAD NO COOPERATIVE PATH EITHER. ─────
                          This is the KEYBOARD BUG ABOVE, one line number over, and it is
                          the PCM click. A device IRQ gets exactly ONE delivery attempt --
-                         the synchronous async_inject_irq() inside host_irq_sink(), made
+                         the synchronous AsyncInjectIrq() inside HostIrqSink(), made
                          from the AUDIO thread at the instant of the raise. If the CPU
                          thread happens to be inside the host rather than in guest code
                          that attempt bails at why=20 and NOTHING RETRIES: the V86 exec
@@ -34132,7 +34132,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                than spin on it forever. */
                             if (!g_PmInt[iv].Client) {
                                 InterlockedExchange(&g_IrqNPending[q], 0);
-                                ++g_pm_devirq_drop;
+                                ++g_PmDeviceIrqDrop;
                                 continue;
                             }
                             if (!VddPicCanDeliver(&g_Pic, (uint8_t)q)) continue;
@@ -34160,21 +34160,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  released at once when the vector is still our own stub. */
                             uint32_t pred = g_Dma.ChannelCountReads[1];
                             InterlockedExchange(&g_IrqNPending[q], 0);
-                            if (async_vec_is_our_stub((unsigned)q))
+                            if (AsyncVectorIsOurStub((unsigned)q))
                                 VddPicAcknowledgeAutoEoi(&g_Pic, (uint8_t)q);
                             else VddPicAcknowledge(&g_Pic, (uint8_t)q);
                             g_InPmIrq = 1;
                             if (dpmi_inject_pm_irq(&m, tib, iv, steps)) {
-                                ++g_pm_devirq_inj;
+                                ++g_PmDeviceIrqInjected;
                             } else {
                                 /* No handler ran, so nothing will EOI: hand the line back. */
                                 VddPicEndOfInterrupt(&g_Pic, (uint8_t)q);
                                 VddPicRaise(&g_Pic, (uint8_t)q);
                                 InterlockedExchange(&g_IrqNPending[q], 1);
-                                ++g_pm_devirq_fail;
+                                ++g_PmDeviceIrqFail;
                             }
                             g_InPmIrq = 0;
-                            g_coop_dma_polls_dev[q & 7] += g_Dma.ChannelCountReads[1] - pred;
+                            g_CooperativeDmaPollsDevice[q & 7] += g_Dma.ChannelCountReads[1] - pred;
                             break;                  /* one per pass: let it IRET first */
                         }
                     }
@@ -34306,7 +34306,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (steps == 0) Sleep(300);
                     /* ── TELL THE ASYNC INJECTOR THE GUEST IS RUNNING. ───────────────────
                          g_InExec means "the CPU thread is executing GUEST code, so its
-                         context is the guest's and may be rewritten"; async_inject_irq()
+                         context is the guest's and may be rewritten"; AsyncInjectIrq()
                          refuses to touch the thread without it, precisely so it cannot race
                          the host manipulating the TIB. It was set only around VdmRunGuest(), so
                          for the whole of a protected-mode session the answer was "no" and
@@ -34423,9 +34423,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         QueryPerformanceCounter(&t1);
                         {
                             DWORD us = QpcMicroseconds(t1.QuadPart - t0.QuadPart);
-                            if (us > g_pm_stretch_max_us) {
-                                g_pm_stretch_max_us = us;
-                                if (us >= PM_STRETCH_LOG_US && g_pm_stretch_logged++ < 256) {
+                            if (us > g_PmStretchMaximumMicroseconds) {
+                                g_PmStretchMaximumMicroseconds = us;
+                                if (us >= PM_STRETCH_LOG_US && g_PmStretchLogged++ < 256) {
                                     p = LogPut(p, "PMSTRETCH us="); p = LogHex(p, us);
                                     p = LogPut(p, " entry=0x"); p = LogHex(p, s_cs);
                                     p = LogPut(p, ":0x"); p = LogHex(p, s_eip);
@@ -34530,7 +34530,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                             g_InPmIrq = 0;
                           }
-                          g_coop_dma_polls += g_Dma.ChannelCountReads[1] - preb;
+                          g_CooperativeDmaPolls += g_Dma.ChannelCountReads[1] - preb;
                           { char bb[160], *bq = bb;
                             bq = LogPut(bq, "  BATCH gate="); bq = LogHex(bq, (DWORD)gate);
                             bq = LogPut(bq, " k="); bq = LogHex(bq, (DWORD)k);
@@ -34920,11 +34920,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         int   ss32 = gss32;
                                         DWORD sp   = ss32 ? feip : (DWORD)fr[6];   /* full width, see gespok */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
-                                        pokew(sb + sp, fr[5]);                    /* FLAGS      */
+                                        PokeWord(sb + sp, fr[5]);                    /* FLAGS      */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
-                                        pokew(sb + sp, fr[4]);                    /* return CS  */
+                                        PokeWord(sb + sp, fr[4]);                    /* return CS  */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
-                                        pokew(sb + sp, (WORD)(fr[3] + 2));        /* return IP  */
+                                        PokeWord(sb + sp, (WORD)(fr[3] + 2));        /* return IP  */
                                         VDM_REG(tib, VTIB_ESP) = sp;
                                         VDM_SET16(tib, VTIB_CS, g_PmInt[gvec].Selector);
                                         VDM_REG(tib, VTIB_EIP) = g_PmInt[gvec].Offset & 0xFFFF;
@@ -35385,7 +35385,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         exec_mach_restore(g_ExecDepth - 1, &p);
                         m.IsTsrPending = 0;
                     }
-                    if (dos_terminate(&m, tib, &p, base)) continue;   /* parent resumed */
+                    if (DosTerminate(&m, tib, &p, base)) continue;   /* parent resumed */
                 }
                 g_CloseForced = 0;
                 g_DpmiDone = 1;            /* PM run finished -> watchdog stands down, window persists */
@@ -36082,7 +36082,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             int ab = CriticalReturn(&m, tib, &p);
             LogAppend(LOG_PATH, base, p); p = base;
             if (ab) {                                /* ABORT: end the program, as 4Ch */
-                if (dos_terminate(&m, tib, &p, base)) continue;
+                if (DosTerminate(&m, tib, &p, base)) continue;
                 break;
             }
             continue;                                /* RETRY re-runs it; FAIL/IGNORE resume */
@@ -36096,7 +36096,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             m.CanTrampoline = 0;
             m.CanRaiseCrit = 0;
             p = m.TraceCursor;
-            if (dos_terminate(&m, tib, &p, base)) continue;
+            if (DosTerminate(&m, tib, &p, base)) continue;
             break;
         }
         m.CanTrampoline = 0;
@@ -36250,8 +36250,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never survived to
        be read -- exactly as #131's stdout line did not. Same trap, same day. */
     p = LogPut(p, "STAGE2: start mode was ");
-    p = LogPut(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
-             : g_start_mode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
+    p = LogPut(p, g_StartMode == DOS_START_UNINSTALL ? "UNINSTALL"
+             : g_StartMode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
                                                        " output, real speaker, joystick, WOW"
                                                        " shims, fullscreen)" : "normal");
     p = LogPut(p, g_Wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_Wave.IsSilent ? " [audio: no device, silent pump]"
@@ -36259,7 +36259,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = LogPut(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
     PcSpeakerClose(&g_PcSpeaker);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
-    recovery_ok();                       /* GH #132: this run ended cleanly */
+    RecoveryOk();                       /* GH #132: this run ended cleanly */
     p = LogPut(p, "STAGE2: stdout -> ");
     if (g_stdio_src[0]) { p = LogPut(p, g_stdio_src); p = LogPut(p, " -> "); }
     p = LogPut(p, g_stdio_how);
@@ -36638,7 +36638,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = LogPut(p, " irq0_skip=0x");         p = LogHex(p, g_Irq0Skip);
     p = LogPut(p, " intpend=0x");           p = LogHex(p, g_EventIntPending);
     p = LogPut(p, " iostr=0x");             p = LogHex(p, g_EventIoString);
-    p = LogPut(p, " bda_tick=0x");          p = LogHex(p, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+    p = LogPut(p, " bda_tick=0x");          p = LogHex(p, ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C));
     p = LogPut(p, "\r\n");
     { int i; p = LogPut(p, "STAGE2: unclaimed ports touched:");
       for (i = 0; i < g_UnclaimedCount; ++i) { p = LogPut(p, " 0x"); p = LogHex(p, g_Unclaimed[i]); }
@@ -37019,21 +37019,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, " w2=");                   p = LogHex(p, g_Dma.CountReadsWord);
         p = LogPut(p, " w4=");                   p = LogHex(p, g_Dma.CountReadsDword);
         /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
-        p = LogPut(p, " from_coop_isr08=");      p = LogHex(p, g_coop_dma_polls);
+        p = LogPut(p, " from_coop_isr08=");      p = LogHex(p, g_CooperativeDmaPolls);
         { unsigned dq; for (dq = 2; dq < 8; ++dq)
-            { if (!g_coop_dma_polls_dev[dq]) continue;
+            { if (!g_CooperativeDmaPollsDevice[dq]) continue;
               p = LogPut(p, " from_coop_irq"); p = LogHexByte(p, dq);
-              p = LogPut(p, "=");              p = LogHex(p, g_coop_dma_polls_dev[dq]); } }
-        p = LogPut(p, " in_async_isr=");  p = LogHex(p, g_dmapoll_in_async);
-        p = LogPut(p, " mainline=");      p = LogHex(p, g_dmapoll_mainline);
+              p = LogPut(p, "=");              p = LogHex(p, g_CooperativeDmaPollsDevice[dq]); } }
+        p = LogPut(p, " in_async_isr=");  p = LogHex(p, g_DmaPollInAsync);
+        p = LogPut(p, " mainline=");      p = LogHex(p, g_DmaPollMainline);
         p = LogPut(p, "\r\nSTAGE2: devirq async retry (one per sync): try=");
         p = LogHex(p, g_IrqNRetryTry);
         p = LogPut(p, " ok="); p = LogHex(p, g_IrqNRetryOk);
         p = LogPut(p, " (0/0 = every device IRQ landed at its raise instant)");
         p = LogPut(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
-        p = LogHex(p, g_pm_devirq_inj);
-        p = LogPut(p, " fail=");  p = LogHex(p, g_pm_devirq_fail);
-        p = LogPut(p, " dropped_unhooked="); p = LogHex(p, g_pm_devirq_drop);
+        p = LogHex(p, g_PmDeviceIrqInjected);
+        p = LogPut(p, " fail=");  p = LogHex(p, g_PmDeviceIrqFail);
+        p = LogPut(p, " dropped_unhooked="); p = LogHex(p, g_PmDeviceIrqDrop);
         p = LogPut(p, "\r\nSTAGE2: sound2: ");
         p = LogPut(p, " mpu_uart=");                p = LogHex(p, (DWORD)g_Mpu.IsUartMode);
         p = LogPut(p, " host_wave=");               p = LogPut(p, g_Wave.IsSilent ? "SILENT" : "open");
@@ -37479,9 +37479,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, " p12-bails=");   p = LogHex(p, g_P12Bails);
         p = LogPut(p, " bail="); p = LogHex(p, g_AsyncBail);
         p = LogPut(p, " nestblk="); p = LogHex(p, g_AsyncNestBlocked);
-        p = LogPut(p, " asyncsites="); p = LogHex(p, (DWORD)g_async_nsite);
-        p = LogPut(p, (g_async_site_full ? "(FULL)" : ""));
-        p = LogPut(p, " pmstretch_max_us="); p = LogHex(p, g_pm_stretch_max_us);
+        p = LogPut(p, " asyncsites="); p = LogHex(p, (DWORD)g_AsyncSiteCount);
+        p = LogPut(p, (g_AsyncSiteFull ? "(FULL)" : ""));
+        p = LogPut(p, " pmstretch_max_us="); p = LogHex(p, g_PmStretchMaximumMicroseconds);
         p = LogPut(p, "\r\n"); }
       /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
       { unsigned k4;
