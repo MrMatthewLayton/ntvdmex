@@ -1957,6 +1957,7 @@ static HCURSOR WowUserSystemResourceCursor(WORD token, PINT fell)
      token (WM_ERASEBKGND's HDC) would hand Windows a value it cannot use. Each
      message joins this list when its parameters are translated AND a run needs it. */
 #define WOWNOTIFY_USERINIT      4
+#define WOWNOTIFY_FINDCLASS     6       /* "where is the window of this class?" */
 #define WOWUSER_NOTIFY_UI_MAX_OFF       0x0e
 #define WOWUSER_NOTIFY_UI_BITS_OFF      0x12
 #define WOWUSER_NOTIFY_UI_BITS_CB       0x16
@@ -2702,6 +2703,22 @@ static const volatile BYTE *WowUserFarMemory(PCWOW32_FRAME frame, DWORD farPoint
 #define WOWDLG_CLASS_COMBOBOX      0x85
 #define WOWDLG_POINTS_PER_INCH     72
 #define WOWDLG_SAMPLE_LENGTH       52      /* "A..Za..z": the base-unit sample      */
+/* DLGTEMPLATE (Win16): style, item count, x, y, cx, cy, then the menu name. */
+#define WOWDLG_TEMPLATE_COUNT      4
+#define WOWDLG_TEMPLATE_X          5
+#define WOWDLG_TEMPLATE_Y          7
+#define WOWDLG_TEMPLATE_WIDTH      9
+#define WOWDLG_TEMPLATE_HEIGHT     11
+#define WOWDLG_TEMPLATE_MENU       13
+/* DLGITEMTEMPLATE (Win16): x, y, cx, cy, id, style, then the class. */
+#define WOWDLG_ITEM_Y              2
+#define WOWDLG_ITEM_WIDTH          4
+#define WOWDLG_ITEM_HEIGHT         6
+#define WOWDLG_ITEM_ID             8
+#define WOWDLG_ITEM_STYLE          10
+#define WOWDLG_ITEM_SIZE           14
+#define WOWDLG_UNITS_PER_BASE_X    4       /* dialog units: x*baseX/4, y*baseY/8 */
+#define WOWDLG_UNITS_PER_BASE_Y    8
 
 static WORD WowDlgTemplateWord(const volatile BYTE *bytes, INT offset)
 {
@@ -4221,6 +4238,61 @@ static HWND WowUserFindWindowByClass(PCSTR className, PCSTR windowName)
     return window ? window : FindWindowA(className, windowName);
 }
 
+/* ── The dispatcher's named values. ─────────────────────────────────────────── */
+#define WOWUSER_TEXT_SIZE              128
+/* USER's internal CreateDialog/DialogBox call: its argument block. */
+#define WOWUSER_CD_ARG_MODAL           0     /* 0 = CreateDialog, 1 = DialogBox    */
+#define WOWUSER_CD_ARG_LENGTH          2     /* the template's length              */
+#define WOWUSER_CD_ARG_PARAM           6     /* DialogBoxParam's lParam            */
+#define WOWUSER_CD_ARG_PROC            10
+#define WOWUSER_CD_ARG_PARENT          14
+#define WOWUSER_CD_ARG_TEMPLATE        16
+#define WOWUSER_CD_ARG_INSTANCE        20
+/* CREATESTRUCT (Win16), as WM_CREATE carries it -- see WowUserWantCreate. */
+#define WOWUSER_CS16_INSTANCE          4
+#define WOWUSER_CS16_MENU              6
+#define WOWUSER_CS16_PARENT            8
+#define WOWUSER_CS16_HEIGHT            10
+#define WOWUSER_CS16_WIDTH             12
+#define WOWUSER_CS16_Y                 14
+#define WOWUSER_CS16_X                 16
+#define WOWUSER_CS16_STYLE             18
+#define WOWUSER_CS16_NAME              22    /* lpszName: a far pointer, fixed up  */
+#define WOWUSER_CS16_CLASS             26    /* lpszClass: likewise                */
+#define WOWUSER_CS16_SIZE              34
+#define WOWUSER_CS16_FIXUPS            2
+/* GetWindowWord/SetWindowWord's negative indexes (Win16). */
+#define WOWUSER_GWW16_HINSTANCE        (-6)
+#define WOWUSER_GWW16_HWNDPARENT       (-8)
+#define WOWUSER_GWW16_ID               (-12)
+/* An icon/cursor resource directory: idReserved, idType, idCount, then entries. */
+#define WOWUSER_ICONDIR_COUNT          4
+#define WOWUSER_ICONDIR_HEADER_SIZE    6
+#define WOWUSER_ICONDIR_ENTRY_SIZE     14
+#define WOWUSER_ICONDIR_MAX_ENTRIES    64
+#define WOWUSER_NOTIFY_UI_BITS_MAX     0x100   /* the forward bitmap's largest size */
+#define WOWUSER_NOTIFY_FOUND           0x00010000u   /* DX non-zero: found          */
+#define WOWUSER_BYTE_INDEX_SHIFT       3     /* bit n of a bitmap: byte n >> 3     */
+#define WOWUSER_BIT_INDEX_MASK         7     /* ...bit n & 7                       */
+#define WOWUSER_TDB_HINSTANCE          0x1C  /* TDB: the task's instance           */
+#define WOWUSER_KEY_DOWN               0x8000  /* GetKeyState: the key is down     */
+#define WOWUSER_COMMAND_FROM_ACCELERATOR 0x00010000u   /* WM_COMMAND: HIWORD 1     */
+/* DIB headers, as a resource holds them. */
+#define WOWUSER_BITMAPCOREHEADER_SIZE  12
+#define WOWUSER_BCH_WIDTH              4
+#define WOWUSER_BCH_HEIGHT             6
+#define WOWUSER_BCH_BITCOUNT           10
+#define WOWUSER_BIH_WIDTH              4
+#define WOWUSER_BIH_HEIGHT             8
+#define WOWUSER_BIH_BITCOUNT           14
+#define WOWUSER_BIH_SIZEIMAGE          20
+#define WOWUSER_BIH_CLRUSED            32
+#define WOWUSER_RGBQUAD_SIZE           4
+#define WOWUSER_RGBTRIPLE_SIZE         3
+#define WOWUSER_MAX_PALETTE            256
+#define WOWUSER_MAX_PALETTE_BITS       8
+#define WOWUSER_BITMAP_MAX_SIZE        0x10000
+
 static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     g_WowUserCurrentFrame = frame;      /* s91: for WowUserDef32's 16:16 reads */
@@ -4242,12 +4314,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          per relaunch) must not exhaust the table. */
     case WOWUSER_REGISTERCLASS: {
         volatile BYTE *wndClass = Wow32ArgPointer(frame, 0);
-        CHAR className[64];
+        CHAR className[WOWUSER_NAME_SIZE];
         PWOWUSER_CLASS windowClass;
         INT count;
         if (!wndClass) { Wow32SetReturn(frame, 0); return 1; }  /* an unreadable WNDCLASS fails */
         WowUserFarString(frame, (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME)
-                          | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME + 2) << 16),
+                          | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME + WOW_WORD_BYTES) << WOW_WORD_SHIFT),
                        className, sizeof className);
         if (!className[0]) { Wow32SetReturn(frame, 0); return 1; } /* no name, no class */
         windowClass = WowUserFindClass(className);
@@ -4267,11 +4339,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (g_WowUserClassCount >= WOWUSER_MAX_CLASS) { Wow32SetReturn(frame, 0); return 1; }
             windowClass = &g_WowUserClasses[g_WowUserClassCount++];
             for (count = 0; count < (INT)sizeof windowClass->Name; ++count) windowClass->Name[count] = className[count];
-            windowClass->Atom = (WORD)(0xC000 + g_WowUserClassCount);
+            windowClass->Atom = (WORD)(MAXINTATOM + g_WowUserClassCount);
         }
         windowClass->Style    = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_STYLE);
         windowClass->WindowProcedure  = (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC)
-                    | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC + 2) << 16);
+                    | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
         windowClass->ClassExtra = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLSEXTRA);
         windowClass->WindowExtra = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDEXTRA);
         windowClass->Instance    = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_HINSTANCE);
@@ -4287,9 +4359,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              identical either way. */
         windowClass->MenuName[0] = 0;
         {   DWORD menuName = (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME)
-                     | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME + 2) << 16);
+                     | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
             windowClass->MenuOrdinal = 0;
-            if ((WORD)(menuName >> 16) == 0) windowClass->MenuOrdinal = (WORD)menuName;  /* MAKEINTRESOURCE */
+            if ((WORD)(menuName >> WOW_WORD_SHIFT) == 0) windowClass->MenuOrdinal = (WORD)menuName;  /* MAKEINTRESOURCE */
             else WowUserFarString(frame, menuName, windowClass->MenuName, sizeof windowClass->MenuName);
         }
         /* ★★★★★ AND REGISTER A REAL Win32 CLASS BEHIND IT. (session 42) A Win16
@@ -4351,7 +4423,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                   "RegisterClass FAILED for ");
             WowNotePut(note, noteCapacity, &noteLength, windowClass->Class32);
             if (windowClass->CursorOrdinal) { WowNotePut(note, noteCapacity, &noteLength, " cursor=0x");
-                             WowNoteHex(note, noteCapacity, &noteLength, windowClass->CursorOrdinal, 4); }
+                             WowNoteHex(note, noteCapacity, &noteLength, windowClass->CursorOrdinal, WOW_HEX_WORD_DIGITS); }
             else if (WowUserSystemResourceName(windowClass->Cursor16)) {
                 WowNotePut(note, noteCapacity, &noteLength, " cursor=");
                 WowNoteQuoted(note, noteCapacity, &noteLength, WowUserSystemResourceName(windowClass->Cursor16));
@@ -4359,12 +4431,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (windowClass->MenuName[0]) { WowNotePut(note, noteCapacity, &noteLength, " MENU=");
                                   WowNoteQuoted(note, noteCapacity, &noteLength, windowClass->MenuName); }
             else if (windowClass->MenuOrdinal) { WowNotePut(note, noteCapacity, &noteLength, " MENU=#");
-                                   WowNoteHex(note, noteCapacity, &noteLength, windowClass->MenuOrdinal, 4); }
+                                   WowNoteHex(note, noteCapacity, &noteLength, windowClass->MenuOrdinal, WOW_HEX_WORD_DIGITS); }
             else WowNotePut(note, noteCapacity, &noteLength, " (no menu named)");
             if (windowClass->IconOrdinal || WowUserSystemResourceName(windowClass->Icon16)) {
                 if (windowClass->IconOrdinal) {
                     WowNotePut(note, noteCapacity, &noteLength, " icon=0x");
-                    WowNoteHex(note, noteCapacity, &noteLength, windowClass->IconOrdinal, 4);
+                    WowNoteHex(note, noteCapacity, &noteLength, windowClass->IconOrdinal, WOW_HEX_WORD_DIGITS);
                 } else {
                     WowNotePut(note, noteCapacity, &noteLength, " icon=");
                     WowNoteQuoted(note, noteCapacity, &noteLength, WowUserSystemResourceName(windowClass->Icon16));
@@ -4374,14 +4446,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                             : " (the app's own -- "
                                                               "★ NOT BUILT");
                     if (windowClass->IconBits) { WowNoteHex(note, noteCapacity, &noteLength,
-                                                (DWORD)windowClass->IconBits, 2);
+                                                (DWORD)windowClass->IconBits, WOW_HEX_BYTE_DIGITS);
                                       WowNotePut(note, noteCapacity, &noteLength, " bpp)"); }
                     else WowNotePut(note, noteCapacity, &noteLength, ")");
                 }
             }
             /* s92 (#289): the brush as the guest named it -- 0, COLOR_*+1, or a token. */
             WowNotePut(note, noteCapacity, &noteLength, " hbr=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, windowClass->Background16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, windowClass->Background16, WOW_HEX_WORD_DIGITS);
             if (windowClass->IsCursorUnknown)
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO CURSOR WAS BUILT (an ordinal"
                                            " the OS does not know, or a named"
@@ -4408,13 +4480,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         /* The ONLY difference between the two calls -- see the note by the ids. */
         DWORD exStyle = (frame->Id == WOWUSER_CREATEWINDOWEX)
                       ? Wow32ArgDword(frame, WOWUSER_CWX_ARG_EXSTYLE) : 0;
-        CHAR  className[64], windowName[64];
+        CHAR  className[WOWUSER_NAME_SIZE], windowName[WOWUSER_NAME_SIZE];
         PWOWUSER_CLASS windowClass;
         PWOWUSER_WINDOW window;
         INT index, noteLength = 0;
 
         className[0] = 0;
-        if ((WORD)(classPointer >> 16) == 0)             /* an ATOM, not a string */
+        if ((WORD)(classPointer >> WOW_WORD_SHIFT) == 0)             /* an ATOM, not a string */
             windowClass = WowUserFindClassByAtom((WORD)classPointer);
         else {
             WowUserFarString(frame, classPointer, className, sizeof className);
@@ -4431,7 +4503,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, "CreateWindow: no such class ");
             if (className[0]) WowNoteQuoted(note, noteCapacity, &noteLength, className);
             else { WowNotePut(note, noteCapacity, &noteLength, "atom 0x");
-                   WowNoteHex(note, noteCapacity, &noteLength, classPointer & 0xFFFF, 4); }
+                   WowNoteHex(note, noteCapacity, &noteLength, classPointer & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS); }
             return 1;
         }
 
@@ -4532,15 +4604,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 : (frame->Id == WOWUSER_CREATEWINDOWEX ? "CreateWindowEx(ex=0) "
                                                    : "CreateWindow "));
         if (exStyle) { WowNotePut(note, noteCapacity, &noteLength, "ex=0x");
-                       WowNoteHex(note, noteCapacity, &noteLength, exStyle, 8);
+                       WowNoteHex(note, noteCapacity, &noteLength, exStyle, WOW_HEX_DWORD_DIGITS);
                        WowNotePut(note, noteCapacity, &noteLength, " "); }
         WowNoteQuoted(note, noteCapacity, &noteLength, windowClass->Name);
         WowNotePut(note, noteCapacity, &noteLength, " ");
         WowNoteQuoted(note, noteCapacity, &noteLength, window->Text);
         WowNotePut(note, noteCapacity, &noteLength, " style=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->Style, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Style, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -> hwnd=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->Window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Window16, WOW_HEX_WORD_DIGITS);
         /* A window made from a system class has no 16-bit procedure behind it, so
            it gets no WM_CREATE. Say which kind of window this is on the line that
            creates it, or the ABSENCE of the callback below reads like a defect. */
@@ -4551,9 +4623,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              them, or a failed CreateWindowEx reads as a success. */
         if (window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " HWND=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, WOW_HEX_DWORD_DIGITS);
             if (window->MenuItems) { WowNotePut(note, noteCapacity, &noteLength, " MENU=");
-                                WowNoteHex(note, noteCapacity, &noteLength, (DWORD)window->MenuItems, 2);
+                                WowNoteHex(note, noteCapacity, &noteLength, (DWORD)window->MenuItems, WOW_HEX_BYTE_DIGITS);
                                 WowNotePut(note, noteCapacity, &noteLength, " items from the guest's"
                                                            " own resource"); }
             else if (g_WowUserClasses[window->Class].MenuOrdinal)
@@ -4561,7 +4633,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                            " NONE WAS BUILT");
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO REAL WINDOW (Win32 gle=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, GetLastError(), 8);
+            WowNoteHex(note, noteCapacity, &noteLength, GetLastError(), WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
         }
         Wow32SetReturn(frame, window->Window16);
@@ -4629,20 +4701,20 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWUSER_CREATEDIALOG: {
         /* ★ ARG 0 IS THE MODAL FLAG -- 0 = CreateDialog, 1 = DialogBox. Pinned
              from USER.EXE's own two call sites; see the long note below. */
-        WORD  isModal   = Wow32ArgWord(frame, 0);
-        DWORD templatePointer     = Wow32ArgDword(frame, 16);
-        WORD  instance   = Wow32ArgWord(frame, 20);
-        WORD  parent16  = Wow32ArgWord(frame, 14);
-        DWORD dialogProcedure = Wow32ArgDword(frame, 10);
+        WORD  isModal   = Wow32ArgWord(frame, WOWUSER_CD_ARG_MODAL);
+        DWORD templatePointer     = Wow32ArgDword(frame, WOWUSER_CD_ARG_TEMPLATE);
+        WORD  instance   = Wow32ArgWord(frame, WOWUSER_CD_ARG_INSTANCE);
+        WORD  parent16  = Wow32ArgWord(frame, WOWUSER_CD_ARG_PARENT);
+        DWORD dialogProcedure = Wow32ArgDword(frame, WOWUSER_CD_ARG_PROC);
         const volatile BYTE *templateBytes = WowUserFarMemory(frame, templatePointer);
-        CHAR  className[64], caption[64], menuName[64];
+        CHAR  className[WOWUSER_NAME_SIZE], caption[WOWUSER_NAME_SIZE], menuName[WOWUSER_NAME_SIZE];
         WORD  menuOrdinal = 0, classOrdinal = 0;
         DWORD style, controlStyle;
         INT   isShowDeferred = 0;
         INT   count, positionX, positionY, width, height, pointer, index, noteLength = 0, made = 0;
         DWORD baseUnits;
         INT   baseUnitX, baseUnitY, usesDefault = 0;
-        CHAR  fontFace[64] = ""; INT fontPoints = 0; HFONT font = NULL;
+        CHAR  fontFace[WOWUSER_NAME_SIZE] = ""; INT fontPoints = 0; HFONT font = NULL;
         WORD  firstFocus = 0;          /* WM_INITDIALOG's wParam (#162) */
         PWOWUSER_CLASS windowClass;
         PWOWUSER_WINDOW window;
@@ -4650,7 +4722,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         if (!templateBytes) {
             WowNotePut(note, noteCapacity, &noteLength, "CreateDialog: template far pointer 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, templatePointer, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, templatePointer, WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " does not resolve");
             Wow32SetReturn(frame, 0);
             return 1;
@@ -4658,18 +4730,18 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         style = WowDlgTemplateDword(templateBytes, 0);
         controlStyle = style;           /* what we actually CREATE it with */
-        count = templateBytes[4];
-        positionX  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, 5);
-        positionY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, 7);
-        width = (INT)(SHORT)WowDlgTemplateWord(templateBytes, 9);
-        height = (INT)(SHORT)WowDlgTemplateWord(templateBytes, 11);
-        pointer  = 13;
+        count = templateBytes[WOWDLG_TEMPLATE_COUNT];
+        positionX  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_X);
+        positionY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_Y);
+        width = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_WIDTH);
+        height = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_HEIGHT);
+        pointer  = WOWDLG_TEMPLATE_MENU;
         pointer += WowDlgTemplateNameOrdinal(templateBytes, pointer, menuName, sizeof menuName, &menuOrdinal);
         pointer += WowDlgTemplateNameOrdinal(templateBytes, pointer, className,    sizeof className,    &classOrdinal);
         pointer += WowDlgTemplateString(templateBytes, pointer, caption, sizeof caption);
         if (style & WOWDLG_SETFONT) {
             fontPoints = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer);
-            pointer += 2;                             /* WORD point size */
+            pointer += WOW_WORD_BYTES;                /* WORD point size */
             pointer += WowDlgTemplateString(templateBytes, pointer, fontFace, sizeof fontFace);
         }
 
@@ -4708,8 +4780,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         window->DialogBaseUnitX = (WORD)baseUnitX; window->DialogBaseUnitY = (WORD)baseUnitY;
         window->IsDialog3D  = (BYTE)((style & WOWDLG_SETFONT) ? 1 : 0);
-        window->Width = MulDiv(width, baseUnitX, 4);
-        window->Height = MulDiv(height, baseUnitY, 8);
+        window->Width = MulDiv(width, baseUnitX, WOWDLG_UNITS_PER_BASE_X);
+        window->Height = MulDiv(height, baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
         /* ── ⚠ -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
              (session 55) A DLGTEMPLATE says "put this where you like" with
              0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses,
@@ -4724,8 +4796,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             window->PositionX = window->PositionY = 0;  /* our own record; the OS places it */
             usesDefault = 1;
         } else {
-            window->PositionX = MulDiv(positionX, baseUnitX, 4);
-            window->PositionY = MulDiv(positionY, baseUnitY, 8);
+            window->PositionX = MulDiv(positionX, baseUnitX, WOWDLG_UNITS_PER_BASE_X);
+            window->PositionY = MulDiv(positionY, baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
         }
 
         parent32 = parent16 ? WowUserHwnd32(parent16) : NULL;
@@ -4759,7 +4831,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                  afterwards, as DialogBox does. */
             INT   isOwnerRelative = 0;      /* s93: placed relative to the owner */
             POINT ownerPoint = { 0, 0 };
-            if (!(style & WS_CHILD16) && !(style & 0x01) && parent32 && !usesDefault) {
+            if (!(style & WS_CHILD16) && !(style & DS_ABSALIGN) && parent32 && !usesDefault) {
                 POINT origin = { 0, 0 };
                 RECT  workArea;
                 isOwnerRelative = 1;
@@ -4851,18 +4923,18 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             INT itemX, itemY, itemWidth, itemHeight;
             WORD itemId, itemTextOrdinal = 0;
             DWORD itemStyle;
-            CHAR itemClassName[64], itemText[64];
+            CHAR itemClassName[WOWUSER_NAME_SIZE], itemText[WOWUSER_NAME_SIZE];
             PCSTR prefix;
             PWOWUSER_CLASS itemClass;
             PWOWUSER_WINDOW control;
 
             itemX  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer);
-            itemY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + 2);
-            itemWidth = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + 4);
-            itemHeight = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + 6);
-            itemId = WowDlgTemplateWord(templateBytes, pointer + 8);
-            itemStyle = WowDlgTemplateDword(templateBytes, pointer + 10);
-            pointer += 14;
+            itemY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + WOWDLG_ITEM_Y);
+            itemWidth = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + WOWDLG_ITEM_WIDTH);
+            itemHeight = (INT)(SHORT)WowDlgTemplateWord(templateBytes, pointer + WOWDLG_ITEM_HEIGHT);
+            itemId = WowDlgTemplateWord(templateBytes, pointer + WOWDLG_ITEM_ID);
+            itemStyle = WowDlgTemplateDword(templateBytes, pointer + WOWDLG_ITEM_STYLE);
+            pointer += WOWDLG_ITEM_SIZE;
             prefix = WowDlgClassName(templateBytes[pointer]);
             if (prefix) {
                 INT itemCount;
@@ -4879,7 +4951,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             control = WowUserNewWindow();
             if (!control) {
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ OUT OF WINDOW SLOTS AT ITEM ");
-                WowNoteHex(note, noteCapacity, &noteLength, (DWORD)index, 2);
+                WowNoteHex(note, noteCapacity, &noteLength, (DWORD)index, WOW_HEX_BYTE_DIGITS);
                 break;
             }
             control->Class     = itemClass ? (WORD)(itemClass - g_WowUserClasses) : window->Class;
@@ -4888,10 +4960,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             control->Parent  = window->Window16;
             control->Menu    = itemId;
             control->Instance   = instance;
-            control->PositionX  = MulDiv(itemX,  baseUnitX, 4);
-            control->PositionY  = MulDiv(itemY,  baseUnitY, 8);
-            control->Width = MulDiv(itemWidth, baseUnitX, 4);
-            control->Height = MulDiv(itemHeight, baseUnitY, 8);
+            control->PositionX  = MulDiv(itemX,  baseUnitX, WOWDLG_UNITS_PER_BASE_X);
+            control->PositionY  = MulDiv(itemY,  baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
+            control->Width = MulDiv(itemWidth, baseUnitX, WOWDLG_UNITS_PER_BASE_X);
+            control->Height = MulDiv(itemHeight, baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
             {   INT itemCount;
                 for (itemCount = 0; itemCount < (INT)sizeof control->Text; ++itemCount)
                     control->Text[itemCount] = (itemCount < (INT)sizeof itemText) ? itemText[itemCount] : 0;
@@ -4909,7 +4981,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                              (HMENU)(ULONG_PTR)itemId,
                                              GetModuleHandleA(NULL), NULL);
                 if (control->Window32) { ++made; ++g_WowWinCreated;
-                    if (!firstFocus && (itemStyle & 0x00010000u)) firstFocus = control->Window16;  /* WS_TABSTOP */
+                    if (!firstFocus && (itemStyle & WS_TABSTOP)) firstFocus = control->Window16;  /* WS_TABSTOP */
                     /* #283: the template's font, as the dialog manager gives it */
                     /* ⚠ SYSTEM CONTROLS ONLY. An application class is 16-bit code:
                          the relay would hand it this raw Win32 HFONT as its 16-bit
@@ -4932,26 +5004,26 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                  see WowUserWantCreate) is followed by the text and class strings
                  it points at. A -1 answer fails the control, as on Windows. */
             if (control->Window32 && control->WindowProcedure && itemClass && !itemClass->IsSystemClass && g_WowUserSend16Blob) {
-                BYTE createStruct[34 + 64 + 64];
-                static const INT createStructFixups[2] = { 22, 26 };  /* lpszName, lpszClass */
+                BYTE createStruct[WOWUSER_CS16_SIZE + WOWUSER_NAME_SIZE + WOWUSER_NAME_SIZE];
+                static const INT createStructFixups[WOWUSER_CS16_FIXUPS] = { WOWUSER_CS16_NAME, WOWUSER_CS16_CLASS };  /* lpszName, lpszClass */
                 INT itemIndex, titleLength = 0, createLength = 0;
                 WORD result16 = 0;
                 for (itemIndex = 0; itemIndex < (INT)sizeof createStruct; ++itemIndex) createStruct[itemIndex] = 0;
-                createStruct[4]  = (BYTE)instance;  createStruct[5]  = (BYTE)(instance >> 8);  /* hInstance  */
-                createStruct[6]  = (BYTE)itemId;    createStruct[7]  = (BYTE)(itemId >> 8);  /* hMenu = id */
-                createStruct[8]  = (BYTE)window->Window16; createStruct[9] = (BYTE)(window->Window16 >> 8);  /* hwndParent */
-                createStruct[10] = (BYTE)control->Height; createStruct[11] = (BYTE)(control->Height >> 8);
-                createStruct[12] = (BYTE)control->Width; createStruct[13] = (BYTE)(control->Width >> 8);
-                createStruct[14] = (BYTE)control->PositionY;  createStruct[15] = (BYTE)(control->PositionY >> 8);
-                createStruct[16] = (BYTE)control->PositionX;  createStruct[17] = (BYTE)(control->PositionX >> 8);
-                createStruct[18] = (BYTE)itemStyle; createStruct[19] = (BYTE)(itemStyle >> 8);
-                createStruct[20] = (BYTE)(itemStyle >> 16); createStruct[21] = (BYTE)(itemStyle >> 24);
-                while (titleLength < 63 && control->Text[titleLength] && titleLength < (INT)sizeof control->Text) { createStruct[34 + titleLength] = (BYTE)control->Text[titleLength]; ++titleLength; }
-                while (createLength < 63 && itemClassName[createLength]) { createStruct[34 + 64 + createLength] = (BYTE)itemClassName[createLength]; ++createLength; }
-                createStruct[22] = 34;  createStruct[23] = 0;  /* -> fixed up to ss:sp+34 */
-                createStruct[26] = 34 + 64; createStruct[27] = 0;
+                createStruct[WOWUSER_CS16_INSTANCE]  = (BYTE)instance;  createStruct[WOWUSER_CS16_INSTANCE + 1]  = (BYTE)(instance >> WOW_BYTE_SHIFT);  /* hInstance  */
+                createStruct[WOWUSER_CS16_MENU]  = (BYTE)itemId;    createStruct[WOWUSER_CS16_MENU + 1]  = (BYTE)(itemId >> WOW_BYTE_SHIFT);  /* hMenu = id */
+                createStruct[WOWUSER_CS16_PARENT]  = (BYTE)window->Window16; createStruct[WOWUSER_CS16_PARENT + 1] = (BYTE)(window->Window16 >> WOW_BYTE_SHIFT);  /* hwndParent */
+                createStruct[WOWUSER_CS16_HEIGHT] = (BYTE)control->Height; createStruct[WOWUSER_CS16_HEIGHT + 1] = (BYTE)(control->Height >> WOW_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_WIDTH] = (BYTE)control->Width; createStruct[WOWUSER_CS16_WIDTH + 1] = (BYTE)(control->Width >> WOW_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_Y] = (BYTE)control->PositionY;  createStruct[WOWUSER_CS16_Y + 1] = (BYTE)(control->PositionY >> WOW_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_X] = (BYTE)control->PositionX;  createStruct[WOWUSER_CS16_X + 1] = (BYTE)(control->PositionX >> WOW_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_STYLE] = (BYTE)itemStyle; createStruct[WOWUSER_CS16_STYLE + 1] = (BYTE)(itemStyle >> WOW_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_STYLE + 2] = (BYTE)(itemStyle >> WOW_WORD_SHIFT); createStruct[WOWUSER_CS16_STYLE + 3] = (BYTE)(itemStyle >> WOW_HIGH_BYTE_SHIFT);
+                while (titleLength < WOWUSER_NAME_SIZE - 1 && control->Text[titleLength] && titleLength < (INT)sizeof control->Text) { createStruct[WOWUSER_CS16_SIZE + titleLength] = (BYTE)control->Text[titleLength]; ++titleLength; }
+                while (createLength < WOWUSER_NAME_SIZE - 1 && itemClassName[createLength]) { createStruct[WOWUSER_CS16_SIZE + WOWUSER_NAME_SIZE + createLength] = (BYTE)itemClassName[createLength]; ++createLength; }
+                createStruct[WOWUSER_CS16_NAME] = WOWUSER_CS16_SIZE;  createStruct[WOWUSER_CS16_NAME + 1] = 0;  /* -> fixed up to ss:sp+34 */
+                createStruct[WOWUSER_CS16_CLASS] = WOWUSER_CS16_SIZE + WOWUSER_NAME_SIZE; createStruct[WOWUSER_CS16_CLASS + 1] = 0;
                 if (g_WowUserSend16Blob(control->Window16, WM_CREATE16, 0, createStruct, (INT)sizeof createStruct,
-                                 createStructFixups, 2, &result16) && result16 == 0xFFFF) {
+                                 createStructFixups, WOWUSER_CS16_FIXUPS, &result16) && result16 == WOWUSER_MINUS_ONE16) {
                     DestroyWindow(control->Window32);
                     control->Window32 = NULL; control->Window16 = 0; --made;
                 }
@@ -5012,11 +5084,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " class=");
         WowNoteQuoted(note, noteCapacity, &noteLength, className[0] ? className : "#32770");
         WowNotePut(note, noteCapacity, &noteLength, " style=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, style, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, style, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " items=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)count, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)count, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " built=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)made, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)made, WOW_HEX_BYTE_DIGITS);
         /* ── ★★★ THE DIALOG'S OWN PROCEDURE, KEPT ON THE WINDOW. ─────────────
              For a `#32770` dialog this is the ONLY procedure there is: the class
              is the system's, so `w->wndproc` is 0 and every message we could
@@ -5066,7 +5138,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 frame->IsModalDialog = 1;
                 /* s89: the frame's +6 DWORD is DialogBoxParam's lParam (it arrives
                    as 0 for plain DialogBox). */
-                WowDlgSetInit(Wow32ArgDword(frame, 6), firstFocus);
+                WowDlgSetInit(Wow32ArgDword(frame, WOWUSER_CD_ARG_PARAM), firstFocus);
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ MODAL: the caller is PARKED here"
                                            " and does not resume until EndDialog."
                                            " Its return value is held open; the"
@@ -5074,13 +5146,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> hwnd=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->Window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Window16, WOW_HEX_WORD_DIGITS);
         if (window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " HWND=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, WOW_HEX_DWORD_DIGITS);
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO REAL WINDOW (gle=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, GetLastError(), 8);
+            WowNoteHex(note, noteCapacity, &noteLength, GetLastError(), WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
         }
         /* ── ★★ +2 IS THE TEMPLATE'S LENGTH IN BYTES, AND TWO RUNS PROVE IT.
@@ -5103,11 +5175,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              has no other procedure, so dlgproc is the ONLY way to drive one. It
              is now kept on the window. */
         WowNotePut(note, noteCapacity, &noteLength, " [tmpl_len=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgDword(frame, 2), 8);
+        WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgDword(frame, WOWUSER_CD_ARG_LENGTH), WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " dlgproc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialogProcedure, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, dialogProcedure, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " modal=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, isModal, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, isModal, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "]");
         if (usesDefault) WowNotePut(note, noteCapacity, &noteLength, " [template said -32768: the OS"
                                                " placed it]");
@@ -5136,8 +5208,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                  the old deferred path below is used unchanged. */
             if (g_WowUserSend16) {
                 g_WowUserInitDialogWindow = window->Window16; g_WowUserIsInitDialogShown = 0;
-                isSent = g_WowUserSend16(window->Window16, 0x0110 /* WM_INITDIALOG */, firstFocus,
-                                   Wow32ArgDword(frame, 6), &result16);
+                isSent = g_WowUserSend16(window->Window16, WM_INITDIALOG, firstFocus,
+                                   Wow32ArgDword(frame, WOWUSER_CD_ARG_PARAM), &result16);
                 if (isSent && !g_WowUserIsInitDialogShown && window->Window32 && IsWindow(window->Window32))
                     ShowWindow(window->Window32, SW_SHOW);
                 if (!isSent && window->Window32) ShowWindow(window->Window32, SW_SHOW);
@@ -5147,7 +5219,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 WowNotePut(note, noteCapacity, &noteLength, " + WM_INITDIALOG SENT (modeless), then shown");
             } else {
                 WowUserWantMessage(frame, window, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
-                                 0x0110 /* WM_INITDIALOG */, firstFocus, Wow32ArgDword(frame, 6),
+                                 WM_INITDIALOG, firstFocus, Wow32ArgDword(frame, WOWUSER_CD_ARG_PARAM),
                                  WOWCALL_RET_KEEP);
                 WowNotePut(note, noteCapacity, &noteLength, " + WM_INITDIALOG (modeless)");
             }
@@ -5191,17 +5263,17 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         window = WowUserFindWindow(window16);
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, "SendMessage: no such window 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " msg 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, 0);
             return 1;
         }
         if (WowUserWindowProcedureOf(window)) {
             WowNotePut(note, noteCapacity, &noteLength, "SendMessage 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " msg 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, window->WindowProcedure ? " -> its own window procedure"
                                                   : " -> its DIALOG procedure");
             /* Written so the hole is never uninitialised if the call is
@@ -5240,12 +5312,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isSet ? "SetWindowWord 0x" : "GetWindowWord 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " index ");
         if (fieldIndex < 0) { WowNotePut(note, noteCapacity, &noteLength, "-0x");
-                       WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(-fieldIndex), 2); }
+                       WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(-fieldIndex), WOW_HEX_BYTE_DIGITS); }
         else         { WowNotePut(note, noteCapacity, &noteLength, "0x");
-                       WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, 2); }
+                       WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, WOW_HEX_BYTE_DIGITS); }
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
             Wow32SetReturn(frame, 0);
@@ -5260,16 +5332,16 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              if the window has none), its parent, its id (a child's hMenu). A set
              updates the record and returns the previous value. Other negative
              indexes are still an honest 0. */
-        if (fieldIndex == -6 || fieldIndex == -8 || fieldIndex == -12) {
-            PWORD field = (fieldIndex == -6) ? &window->Instance : (fieldIndex == -8) ? &window->Parent : &window->Menu;
+        if (fieldIndex == WOWUSER_GWW16_HINSTANCE || fieldIndex == WOWUSER_GWW16_HWNDPARENT || fieldIndex == WOWUSER_GWW16_ID) {
+            PWORD field = (fieldIndex == WOWUSER_GWW16_HINSTANCE) ? &window->Instance : (fieldIndex == WOWUSER_GWW16_HWNDPARENT) ? &window->Parent : &window->Menu;
             WORD current  = *field;
-            if (fieldIndex == -6 && !current) current = g_WowUserClasses[window->Class].Instance;
+            if (fieldIndex == WOWUSER_GWW16_HINSTANCE && !current) current = g_WowUserClasses[window->Class].Instance;
             if (isSet) { *field = value; WowNotePut(note, noteCapacity, &noteLength, " (standard) <- 0x");
-                       WowNoteHex(note, noteCapacity, &noteLength, value, 4); }
-            else     { WowNotePut(note, noteCapacity, &noteLength, fieldIndex == -6 ? " GWW_HINSTANCE -> 0x"
-                                                 : fieldIndex == -8 ? " GWW_HWNDPARENT -> 0x"
+                       WowNoteHex(note, noteCapacity, &noteLength, value, WOW_HEX_WORD_DIGITS); }
+            else     { WowNotePut(note, noteCapacity, &noteLength, fieldIndex == WOWUSER_GWW16_HINSTANCE ? " GWW_HINSTANCE -> 0x"
+                                                 : fieldIndex == WOWUSER_GWW16_HWNDPARENT ? " GWW_HWNDPARENT -> 0x"
                                                              : " GWW_ID -> 0x");
-                       WowNoteHex(note, noteCapacity, &noteLength, current, 4); }
+                       WowNoteHex(note, noteCapacity, &noteLength, current, WOW_HEX_WORD_DIGITS); }
             Wow32SetReturn(frame, current);
             return 1;
         }
@@ -5280,24 +5352,24 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         {   PCWOWUSER_CLASS windowClass = &g_WowUserClasses[window->Class];
-            if (fieldIndex + 2 > (INT)windowClass->WindowExtra || fieldIndex + 2 > (INT)sizeof window->Extra) {
+            if (fieldIndex + WOW_WORD_BYTES > (INT)windowClass->WindowExtra || fieldIndex + WOW_WORD_BYTES > (INT)sizeof window->Extra) {
                 WowNotePut(note, noteCapacity, &noteLength, " -- OUT OF RANGE, class declared"
                                            " cbWndExtra=0x");
-                WowNoteHex(note, noteCapacity, &noteLength, windowClass->WindowExtra, 4);
+                WowNoteHex(note, noteCapacity, &noteLength, windowClass->WindowExtra, WOW_HEX_WORD_DIGITS);
                 Wow32SetReturn(frame, 0);
                 return 1;
             }
         }
         if (isSet) {
             WowNotePut(note, noteCapacity, &noteLength, " <- 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, value, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, value, WOW_HEX_WORD_DIGITS);
             /* Win16 returns the PREVIOUS value, so read before writing. */
-            Wow32SetReturn(frame, window->Extra[fieldIndex / 2]);
-            window->Extra[fieldIndex / 2] = value;
+            Wow32SetReturn(frame, window->Extra[fieldIndex / WOW_WORD_BYTES]);
+            window->Extra[fieldIndex / WOW_WORD_BYTES] = value;
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, window->Extra[fieldIndex / 2], 4);
-            Wow32SetReturn(frame, window->Extra[fieldIndex / 2]);
+            WowNoteHex(note, noteCapacity, &noteLength, window->Extra[fieldIndex / WOW_WORD_BYTES], WOW_HEX_WORD_DIGITS);
+            Wow32SetReturn(frame, window->Extra[fieldIndex / WOW_WORD_BYTES]);
         }
         return 1;
     }
@@ -5314,30 +5386,30 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD isIcon = Wow32ArgWord(frame, WOWUSER_LII_ARG_FICON);
         WORD width  = Wow32ArgWord(frame, WOWUSER_LII_ARG_CX), height = Wow32ArgWord(frame, WOWUSER_LII_ARG_CY);
         WORD flags  = Wow32ArgWord(frame, WOWUSER_LII_ARG_FLAGS);
-        BYTE directory[6 + 64 * 14];
+        BYTE directory[WOWUSER_ICONDIR_HEADER_SIZE + WOWUSER_ICONDIR_MAX_ENTRIES * WOWUSER_ICONDIR_ENTRY_SIZE];
         WORD count;
         UINT entryCount, index2;
         INT iconId, noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isIcon ? "LookupIconIdFromDirectoryEx (icon"
                                        : "LookupIconIdFromDirectoryEx (cursor");
-        WowNotePut(note, noteCapacity, &noteLength, ") cx=0x"); WowNoteHex(note, noteCapacity, &noteLength, width, 2);
-        WowNotePut(note, noteCapacity, &noteLength, " cy=0x");  WowNoteHex(note, noteCapacity, &noteLength, height, 2);
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, 4);
+        WowNotePut(note, noteCapacity, &noteLength, ") cx=0x"); WowNoteHex(note, noteCapacity, &noteLength, width, WOW_HEX_BYTE_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " cy=0x");  WowNoteHex(note, noteCapacity, &noteLength, height, WOW_HEX_BYTE_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_WORD_DIGITS);
         if (!directoryBytes) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO DIRECTORY; answered 0");
                   Wow32SetReturn(frame, 0); return 1; }
         /* idReserved 0, idType 1 (icon) or 2 (cursor), idCount; then 14-byte
            entries ending in the WORD id. Copied out: the OS reads it as a whole. */
-        count = (WORD)(directoryBytes[4] | (directoryBytes[5] << 8));
-        if (count == 0 || count > 64) {
-            WowNotePut(note, noteCapacity, &noteLength, " -- ★ count=0x"); WowNoteHex(note, noteCapacity, &noteLength, count, 4);
+        count = (WORD)(directoryBytes[WOWUSER_ICONDIR_COUNT] | (directoryBytes[WOWUSER_ICONDIR_COUNT + 1] << WOW_BYTE_SHIFT));
+        if (count == 0 || count > WOWUSER_ICONDIR_MAX_ENTRIES) {
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ count=0x"); WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " is not a directory; answered 0");
             Wow32SetReturn(frame, 0); return 1;
         }
-        entryCount = 6u + count * 14u;
+        entryCount = (UINT)WOWUSER_ICONDIR_HEADER_SIZE + count * (UINT)WOWUSER_ICONDIR_ENTRY_SIZE;
         for (index2 = 0; index2 < entryCount; ++index2) directory[index2] = directoryBytes[index2];
         iconId = LookupIconIdFromDirectoryEx(directory, isIcon ? TRUE : FALSE, (SHORT)width, (SHORT)height, flags);
-        WowNotePut(note, noteCapacity, &noteLength, " entries=0x"); WowNoteHex(note, noteCapacity, &noteLength, count, 2);
-        WowNotePut(note, noteCapacity, &noteLength, " -> id 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)iconId, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " entries=0x"); WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_BYTE_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " -> id 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)iconId, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)iconId);
         return 1;
     }
@@ -5352,7 +5424,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WORD bitsSize = WowUserPeek(block, WOWUSER_NOTIFY_UI_BITS_CB), top = 0;
             UINT index;
             WowNotePut(note, noteCapacity, &noteLength, "NotifyWow(USER init) DefWindowProc forward table: ");
-            if (!maximumBytes || !bitsBytes || !bitsSize || bitsSize > 0x100) {
+            if (!maximumBytes || !bitsBytes || !bitsSize || bitsSize > WOWUSER_NOTIFY_UI_BITS_MAX) {
                 WowNotePut(note, noteCapacity, &noteLength, "★ UNREADABLE BLOCK -- nothing forwarded");
                 Wow32SetReturn(frame, 0);
                 return 1;
@@ -5360,15 +5432,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             for (index = 0; index < bitsSize; ++index) bitsBytes[index] = 0;
             for (index = 0; index < sizeof g_WowUserDefWindowProcForwarded / sizeof g_WowUserDefWindowProcForwarded[0]; ++index) {
                 WORD message16 = g_WowUserDefWindowProcForwarded[index];
-                if ((UINT)(message16 >> 3) >= bitsSize) continue;
-                bitsBytes[message16 >> 3] = (BYTE)(bitsBytes[message16 >> 3] | (1u << (message16 & 7)));
+                if ((UINT)(message16 >> WOWUSER_BYTE_INDEX_SHIFT) >= bitsSize) continue;
+                bitsBytes[message16 >> WOWUSER_BYTE_INDEX_SHIFT] = (BYTE)(bitsBytes[message16 >> WOWUSER_BYTE_INDEX_SHIFT] | (1u << (message16 & WOWUSER_BIT_INDEX_MASK)));
                 if (message16 > top) top = message16;
-                WowNotePut(note, noteCapacity, &noteLength, "0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+                WowNotePut(note, noteCapacity, &noteLength, "0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " ");
             }
             Wow32PokeWord(maximumBytes, top);
-            WowNotePut(note, noteCapacity, &noteLength, "max=0x"); WowNoteHex(note, noteCapacity, &noteLength, top, 4);
-            WowNotePut(note, noteCapacity, &noteLength, " cb=0x"); WowNoteHex(note, noteCapacity, &noteLength, bitsSize, 4);
+            WowNotePut(note, noteCapacity, &noteLength, "max=0x"); WowNoteHex(note, noteCapacity, &noteLength, top, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " cb=0x"); WowNoteHex(note, noteCapacity, &noteLength, bitsSize, WOW_HEX_WORD_DIGITS);
             /* ⚠ 0, DELIBERATELY. USER keeps this answer, and a non-zero one switches
                  USER onto a different internal path at start-up (it modifies its
                  own code). Whether real WOW32 asks for that is not measured yet, and
@@ -5382,8 +5454,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              The answer is DX:AX: DX non-zero = found, and AX is the window the
              registered WM_WINHELP is then SENT to. Stepped over it answered 0, so
              Help said "Not enough memory available" with WinHelp's window open. */
-        if (kind == 6 && block) {
-            CHAR className[64];
+        if (kind == WOWNOTIFY_FINDCLASS && block) {
+            CHAR className[WOWUSER_NAME_SIZE];
             DWORD blockPointer = Wow32ArgDword(frame, WOWUSER_NOTIFY_ARG_BLOCK);
             HWND  window32 = NULL;
             WORD  window16Result = 0;
@@ -5392,22 +5464,22 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, "NotifyWow(6, find class \"");
             WowNotePut(note, noteCapacity, &noteLength, className);
             WowNotePut(note, noteCapacity, &noteLength, window16Result ? "\") -> 0x" : "\") -> not found");
-            if (window16Result) WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
-            Wow32SetReturn(frame, window16Result ? (0x00010000u | window16Result) : 0);
+            if (window16Result) WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
+            Wow32SetReturn(frame, window16Result ? (WOWUSER_NOTIFY_FOUND | window16Result) : 0);
             return 1;
         }
         if (kind != WOWNOTIFY_ACCEL || !block) return 0;
         WowNotePut(note, noteCapacity, &noteLength, "NotifyWow(RT_ACCELERATOR) hInst=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_HINSTANCE), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_HINSTANCE), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " hRes=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_HRESDATA), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_HRESDATA), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " at 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_LPRESOURCE + 2), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_LPRESOURCE + WOW_WORD_BYTES), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ":0x");
-        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_LPRESOURCE), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_LPRESOURCE), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " cb=0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE)
-                  | ((DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE + 2) << 16), 8);
+                  | ((DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE + WOW_WORD_BYTES) << WOW_WORD_SHIFT), WOW_HEX_DWORD_DIGITS);
         /* Non-zero is "noted"; the handle the application gets is the guest's
            own resource handle. 1 rather than a number that looks like a handle,
            so nothing downstream can mistake it for one. */
@@ -5451,7 +5523,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {   /* #160: a menu held back for this application's inits is opened HERE,
                  once the take has passed its marker -- see WOWMSG_MENUREPLAY. */
             INT found;
-            g_WowMsgTaker = (g_WowUserCurrentTask == 0xFFFF) ? 0 : g_WowUserCurrentTask;  /* s92 #306 */
+            g_WowMsgTaker = (g_WowUserCurrentTask == WOWUSER_TASK_NONE16) ? 0 : g_WowUserCurrentTask;  /* s92 #306 */
             found = WowMsgTake(filter16, filterMin, filterMax, (remove & PM_REMOVE16) != 0, &message);
             if (g_WowMsgIsReplayDue) {
                 WOWMSG replayed = g_WowMsgReplay;
@@ -5478,16 +5550,16 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowMsgWrite(messageBytes, &message);
             WowNotePut(note, noteCapacity, &noteLength, isPeek ? "PeekMessage -> hwnd=0x"
                                             : "GetMessage -> hwnd=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.Window, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, message.Window, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " msg=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.Message, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, message.Message, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " wParam=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.WParam, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, message.WParam, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " lParam=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, (remove & PM_REMOVE16) ? " [removed]" : " [left]");
             WowNotePut(note, noteCapacity, &noteLength, ", ");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowMsgCount, 2);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowMsgCount, WOW_HEX_BYTE_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " still queued");
             /* ⚠ WM_QUIT is delivered AND reported as the end. A loop that got a
                  non-zero for it would dispatch a message meant to stop it. */
@@ -5495,14 +5567,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
             }
         }
-        if (!isPeek && WowMsgQuitFor((g_WowUserCurrentTask == 0xFFFF) ? 0 : g_WowUserCurrentTask)) {
+        if (!isPeek && WowMsgQuitFor((g_WowUserCurrentTask == WOWUSER_TASK_NONE16) ? 0 : g_WowUserCurrentTask)) {
             WORD quitCode = WowMsgTakeQuit(
-                WowMsgQuitFor((g_WowUserCurrentTask == 0xFFFF) ? 0 : g_WowUserCurrentTask));
+                WowMsgQuitFor((g_WowUserCurrentTask == WOWUSER_TASK_NONE16) ? 0 : g_WowUserCurrentTask));
             message.Window = 0; message.Message = WM_QUIT16; message.WParam = quitCode;
             message.LParam = 0; message.Time = 0; message.PointX = message.PointY = 0;
             WowMsgWrite(messageBytes, &message);
             WowNotePut(note, noteCapacity, &noteLength, "GetMessage -> WM_QUIT (PostQuitMessage 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, quitCode, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, quitCode, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ") -- the loop ends");
             Wow32SetReturn(frame, 0);
             return 1;
@@ -5515,7 +5587,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                         ? "PeekMessage: nothing matched the filter -> 0; queued 0x"
                         : "PeekMessage: queue empty -> 0 (correct: peek does not"
                           " block); queued 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowMsgCount, 2);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowMsgCount, WOW_HEX_BYTE_DIGITS);
             Wow32SetReturn(frame, 0);
             return 1;
         }
@@ -5525,9 +5597,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "GetMessage: the queue is EMPTY and the host's"
                                    " input wait expired -- no message can arrive,"
                                    " so the application is told to quit. Posted 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgPosted, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgPosted, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " taken 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgTaken, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgTaken, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " this run");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -5548,9 +5620,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT isOk, noteLength = 0;
         isOk = WowMsgPost(window16, message16, wParam, lParam, 0, 0, 0);
         WowNotePut(note, noteCapacity, &noteLength, "PostMessage 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " msg=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> queued" : " -> ★ RING FULL, DROPPED");
         Wow32SetReturn(frame, (DWORD)isOk);
         return 1;
@@ -5562,10 +5634,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          would let it overtake messages already posted. */
     case WOWUSER_POSTQUITMESSAGE: {
         INT noteLength = 0;
-        WowMsgPostQuit((g_WowUserCurrentTask == 0xFFFF) ? 0 : g_WowUserCurrentTask,  /* s92 #306 */
+        WowMsgPostQuit((g_WowUserCurrentTask == WOWUSER_TASK_NONE16) ? 0 : g_WowUserCurrentTask,  /* s92 #306 */
                          Wow32ArgWord(frame, WOWMSG_POSTQUITMESSAGE_ARG_EXITCODE));
         WowNotePut(note, noteCapacity, &noteLength, "PostQuitMessage 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgQuitCode, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgQuitCode, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -- the next drained queue ends the loop");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -5593,28 +5665,28 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         WowMsgRead(messageBytes, &message);
         WowNotePut(note, noteCapacity, &noteLength, "DispatchMessage hwnd=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message.Window, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message.Window, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " msg=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message.Message, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message.Message, WOW_HEX_WORD_DIGITS);
         if (!message.Window && message.Message == WM_TIMER16 && message.LParam && frame->IsCallbackAllowed) {
             /* s93: a windowless timer's TIMERPROC, called (NULL, WM_TIMER, id, time);
                its DS comes from its MakeProcInstance thunk (AX), the task's own
                instance is passed for a procedure that reads DS instead. */
             WORD dataSelector = 0;
-            DWORD taskBase = (g_WowUserCurrentTask && g_WowUserCurrentTask != 0xFFFF) ? dpmi_sel_base(g_WowUserCurrentTask) : 0;
+            DWORD taskBase = (g_WowUserCurrentTask && g_WowUserCurrentTask != WOWUSER_TASK_NONE16) ? dpmi_sel_base(g_WowUserCurrentTask) : 0;
             if (taskBase) { const volatile BYTE *taskBytes = (const volatile BYTE *)(ULONG_PTR)taskBase;
-                      dataSelector = (WORD)(taskBytes[0x1c] | (taskBytes[0x1d] << 8)); }
+                      dataSelector = (WORD)(taskBytes[WOWUSER_TDB_HINSTANCE] | (taskBytes[WOWUSER_TDB_HINSTANCE + 1] << WOW_BYTE_SHIFT)); }
             WowNotePut(note, noteCapacity, &noteLength, " -> a windowless timer's TIMERPROC 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, WOW_HEX_DWORD_DIGITS);
             Wow32SetReturn(frame, 0);
             frame->CallbackProcedure   = message.LParam;
             frame->CallbackDataSelector     = dataSelector;
             frame->CallbackArguments[0] = 0;
             frame->CallbackArguments[1] = message.Message;
             frame->CallbackArguments[2] = message.WParam;
-            frame->CallbackArguments[3] = (WORD)(message.Time >> 16);
-            frame->CallbackArguments[4] = (WORD)(message.Time & 0xFFFF);
-            frame->CallbackArgumentCount   = 5;
+            frame->CallbackArguments[3] = (WORD)(message.Time >> WOW_WORD_SHIFT);
+            frame->CallbackArguments[4] = (WORD)(message.Time & WOW_WORD_MASK);
+            frame->CallbackArgumentCount   = WOWUSER_WNDPROC_ARGUMENTS;
             frame->CallbackReturnMode    = WOWCALL_RET_RESULT;
             frame->CallbackWindow   = 0;
             frame->CallbackMessage    = message.Message;
@@ -5649,7 +5721,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 return 1;
             }
             WowNotePut(note, noteCapacity, &noteLength, " -> its TIMERPROC 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, message.LParam, WOW_HEX_DWORD_DIGITS);
             Wow32SetReturn(frame, 0);
             WowUserWantMessage(frame, window, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
                              message.Message, message.WParam, message.Time, WOWCALL_RET_RESULT);
@@ -5705,11 +5777,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT scroll, clip, update;
         INT  noteLength = 0, isOk;
         WowNotePut(note, noteCapacity, &noteLength, "ScrollDC(dc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", d=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaX, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaX, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaY, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!dc) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DCs; answered FALSE");
@@ -5736,9 +5808,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowConvRect16Put((PBYTE)updateBytes, 2, (INT)update.right);
             WowConvRect16Put((PBYTE)updateBytes, 3, (INT)update.bottom);
             WowNotePut(note, noteCapacity, &noteLength, " update=");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(update.right - update.left), 4);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(update.right - update.left), WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, "x");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(update.bottom - update.top), 4);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(update.bottom - update.top), WOW_HEX_WORD_DIGITS);
         }
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> TRUE" : " -> FALSE (the OS refused)");
         Wow32SetReturn(frame, (DWORD)isOk);
@@ -5750,9 +5822,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD scrollKind = Wow32ArgWord(frame, WOWUSER_CCS_ARG_SCROLL);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CalcChildScroll(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, scrollKind, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, scrollKind, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOTHING TO RECALCULATE: our MDICLIENT"
                                    " is the OS's own system class, so its scroll"
                                    " bars are Win32's and are already current."
@@ -5794,10 +5866,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 which == WOWENUM_CHILDREN ? "EnumChildWindows" :
                                             "EnumTaskWindows");
         WowNotePut(note, noteCapacity, &noteLength, " proc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, procedure, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, procedure, WOW_HEX_DWORD_DIGITS);
         if (which == WOWENUM_CHILDREN) {
             WowNotePut(note, noteCapacity, &noteLength, " parent=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, parent16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, parent16, WOW_HEX_WORD_DIGITS);
         }
         Wow32SetReturn(frame, 1);                /* TRUE unless a callback stops it */
         if (!frame->IsCallbackAllowed) {
@@ -5835,7 +5907,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         g_WowUserEnumTask = (which == WOWENUM_TASK) ? Wow32ArgWord(frame, WOWUSER_ETW_ARG_TASK) : 0;
         if (g_WowUserEnumTask) {
             WowNotePut(note, noteCapacity, &noteLength, " task=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, g_WowUserEnumTask, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowUserEnumTask, WOW_HEX_WORD_DIGITS);
         }
         WowNotePut(note, noteCapacity, &noteLength, " -- walking this task's own top-level windows"
                                    " (a Win32 window has no 16-bit handle to"
@@ -5861,12 +5933,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         INT count = 0;
         WowNotePut(note, noteCapacity, &noteLength, "TranslateMessage msg=0x");
-        if (messageBytes) { WowMsgRead(messageBytes, &message); WowNoteHex(note, noteCapacity, &noteLength, message.Message, 4); }
+        if (messageBytes) { WowMsgRead(messageBytes, &message); WowNoteHex(note, noteCapacity, &noteLength, message.Message, WOW_HEX_WORD_DIGITS); }
         else      WowNotePut(note, noteCapacity, &noteLength, "?");
         /* s93: the characters Win32 already made for this key are HELD (wowwin.h,
            WowWinHoldChar) and released here -- the OS's own translation, with the
            keyboard state it keeps, delivered only when the program asks. */
-        if (messageBytes && message.Message == 0x0100) count = WowWinReleaseChars(message.Window, message.LParam);
+        if (messageBytes && message.Message == WM_KEYDOWN) count = WowWinReleaseChars(message.Window, message.LParam);
         WowNotePut(note, noteCapacity, &noteLength, count ? " -> 1: the OS's WM_CHAR for this key released"
                                          " into the queue"
                                        : " -> 0: no character for this key");
@@ -5889,10 +5961,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, isMdi ? "TranslateMDISysAccel hwnd=0x"
                                        : "TranslateAccelerator hwnd=0x");
         WowNoteHex(note, noteCapacity, &noteLength,
-                  Wow32ArgWord(frame, isMdi ? WOWMSG_TRANSLATEMDISYSACCEL_ARG_HWND : WOWMSG_TRANSLATEACCELERATOR_ARG_HWND), 4);
+                  Wow32ArgWord(frame, isMdi ? WOWMSG_TRANSLATEMDISYSACCEL_ARG_HWND : WOWMSG_TRANSLATEACCELERATOR_ARG_HWND), WOW_HEX_WORD_DIGITS);
         if (!isMdi) {
             WowNotePut(note, noteCapacity, &noteLength, " hAccel=0x");
-            WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, WOWMSG_TRANSLATEACCELERATOR_ARG_HACCEL), 4);
+            WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, WOWMSG_TRANSLATEACCELERATOR_ARG_HACCEL), WOW_HEX_WORD_DIGITS);
         }
         /* ── ★★★ AND NOW THERE IS ONE. (session 51) ─────────────────────────
              The user's report was "clicking the smiley does not reset the game";
@@ -5928,14 +6000,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                    ★ WM_COMMAND from an accelerator carries notify code 1 in lParam's
                      high word (0 is a menu); Win16 apps may tell the two apart. */
                 WowMsgRead(messageBytes, &message);
-                if (message.Message == WM_KEYDOWN16 || message.Message == 0x0104 /* WM_SYSKEYDOWN */
-                    || message.Message == 0x0102 /* WM_CHAR */ || message.Message == 0x0106 /* WM_SYSCHAR */) {
-                    INT isShift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
-                    INT isControl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                    INT isAlt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
-                    INT isChar = (message.Message == 0x0102 || message.Message == 0x0106);
+                if (message.Message == WM_KEYDOWN16 || message.Message == WM_SYSKEYDOWN /* WM_SYSKEYDOWN */
+                    || message.Message == WM_CHAR /* WM_CHAR */ || message.Message == WM_SYSCHAR /* WM_SYSCHAR */) {
+                    INT isShift = (GetKeyState(VK_SHIFT)   & WOWUSER_KEY_DOWN) != 0;
+                    INT isControl  = (GetKeyState(VK_CONTROL) & WOWUSER_KEY_DOWN) != 0;
+                    INT isAlt   = (GetKeyState(VK_MENU)    & WOWUSER_KEY_DOWN) != 0;
+                    INT isChar = (message.Message == WM_CHAR || message.Message == WM_SYSCHAR);
                     INT index;
-                    if (message.Message == 0x0106) isAlt = 1;
+                    if (message.Message == WM_SYSCHAR) isAlt = 1;
                     for (index = 0; index < acceleratorCount; ++index) {
                         INT isVirtualKey = (accelerators[index].Flags & WOWRES_ACCEL_VIRTKEY) != 0;
                         if (isVirtualKey == isChar) continue;   /* wrong kind of message */
@@ -5949,13 +6021,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                              jne` must see non-zero so it does NOT also translate
                              and dispatch the keystroke. */
                         WowMsgPost(Wow32ArgWord(frame, WOWMSG_TRANSLATEACCELERATOR_ARG_HWND), WM_COMMAND16,
-                                    accelerators[index].Id, 0x00010000u, GetTickCount(), 0, 0);
+                                    accelerators[index].Id, WOWUSER_COMMAND_FROM_ACCELERATOR, GetTickCount(), 0, 0);
                         WowNotePut(note, noteCapacity, &noteLength, " -> ACCELERATOR #");
-                        WowNoteHex(note, noteCapacity, &noteLength, acceleratorResource, 4);
+                        WowNoteHex(note, noteCapacity, &noteLength, acceleratorResource, WOW_HEX_WORD_DIGITS);
                         WowNotePut(note, noteCapacity, &noteLength, isVirtualKey ? " matched vk 0x" : " matched char 0x");
-                        WowNoteHex(note, noteCapacity, &noteLength, message.WParam, 4);
+                        WowNoteHex(note, noteCapacity, &noteLength, message.WParam, WOW_HEX_WORD_DIGITS);
                         WowNotePut(note, noteCapacity, &noteLength, " -> WM_COMMAND 0x");
-                        WowNoteHex(note, noteCapacity, &noteLength, accelerators[index].Id, 4);
+                        WowNoteHex(note, noteCapacity, &noteLength, accelerators[index].Id, WOW_HEX_WORD_DIGITS);
                         Wow32SetReturn(frame, 1);
                         return 1;
                     }
@@ -5996,9 +6068,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         if (window16 && window16 == g_WowUserInitDialogWindow) g_WowUserIsInitDialogShown = 1;  /* see CreateDialog */
         WowNotePut(note, noteCapacity, &noteLength, "ShowWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " nCmdShow=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, command, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, command, WOW_HEX_WORD_DIGITS);
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
             Wow32SetReturn(frame, 0);
@@ -6011,7 +6083,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         Wow32SetReturn(frame, ShowWindow(window->Window32, (INT)(SHORT)command) ? 1 : 0);
         WowNotePut(note, noteCapacity, &noteLength, " -> the OS's ShowWindow on HWND=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(ULONG_PTR)window->Window32, WOW_HEX_DWORD_DIGITS);
         return 1;
     }
 
@@ -6020,7 +6092,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "UpdateWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (window && window->Window32) { UpdateWindow(window->Window32);
                               WowNotePut(note, noteCapacity, &noteLength, " -> the OS's"); }
         else                  WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
@@ -6047,7 +6119,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWUSER_REGWINMSG:
     case WOWUSER_REGCLIPFORMAT: {
         INT isClipboard = (frame->Id == WOWUSER_REGCLIPFORMAT);
-        CHAR name[128];
+        CHAR name[WOWUSER_TEXT_SIZE];
         UINT format = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isClipboard ? "RegisterClipboardFormat "
@@ -6060,8 +6132,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteQuoted(note, noteCapacity, &noteLength, name);
         format = isClipboard ? RegisterClipboardFormatA(name) : RegisterWindowMessageA(name);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
-        if (format > 0xFFFF) {
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
+        if (format > WOW_WORD_MASK) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE OS RETURNED AN ID THAT DOES NOT"
                                        " FIT IN A WORD; answered 0 rather than a"
                                        " truncation");
@@ -6087,10 +6159,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
        ★ The handle is a GDI token, not a USER one -- the guest will hand it
          straight to SelectObject and DeleteObject. */
     case WOWUSER_LOADBITMAPRES: {
-        static BYTE header[40 + 256 * 4];     /* header + palette, our own copy */
+        static BYTE header[WOWUSER_BITMAPINFOHEADER_SIZE + WOWUSER_MAX_PALETTE * WOWUSER_RGBQUAD_SIZE];     /* header + palette, our own copy */
         DWORD size = Wow32ArgDword(frame, WOWUSER_LBM_ARG_SIZE);
         volatile BYTE *bitmapBits = Wow32ArgPointer(frame, WOWUSER_LBM_ARG_BITS);
-        CHAR name[64];
+        CHAR name[WOWUSER_NAME_SIZE];
         DWORD headerSize, paletteSize, bitsOffset, index, width = 0, height = 0;
         INT   bitCount, noteLength = 0, isCore = 0;
         HDC   dc;
@@ -6101,7 +6173,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "LoadBitmap ");
         WowNoteQuoted(note, noteCapacity, &noteLength, name);
         WowNotePut(note, noteCapacity, &noteLength, " size=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, size, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, size, WOW_HEX_WORD_DIGITS);
 
         /* ── s92 (#314): LoadBitmap(NULL, OBM_*) -- A PREDEFINED BITMAP. No resource
              bytes, and the name is an ORDINAL (selector 0). Media Player's SScrollBar
@@ -6109,27 +6181,27 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              uninitialised BITMAP and came out 9250 pixels tall. The OBM_* ids are the
              same numbers in Win32, which keeps them for exactly this; the OS's own. */
         {   DWORD nameArgument = Wow32ArgDword(frame, WOWUSER_LBM_ARG_NAME);
-            if (!size && !(nameArgument >> 16) && (nameArgument & 0xFFFF)) {
-                HBITMAP oldBitmap = LoadBitmapA(NULL, MAKEINTRESOURCEA(nameArgument & 0xFFFF));
+            if (!size && !(nameArgument >> WOW_WORD_SHIFT) && (nameArgument & WOW_WORD_MASK)) {
+                HBITMAP oldBitmap = LoadBitmapA(NULL, MAKEINTRESOURCEA(nameArgument & WOW_WORD_MASK));
                 bitmap16 = oldBitmap ? WowGdiH16((HGDIOBJ)oldBitmap, WOWGDI_KIND_OBJ) : 0;
                 WowNotePut(note, noteCapacity, &noteLength, " predefined #");
-                WowNoteHex(note, noteCapacity, &noteLength, nameArgument & 0xFFFF, 4);
+                WowNoteHex(note, noteCapacity, &noteLength, nameArgument & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
                 if (!bitmap16 && oldBitmap) DeleteObject((HGDIOBJ)oldBitmap);
                 WowNotePut(note, noteCapacity, &noteLength, bitmap16 ? " -> the OS's bitmap, token 0x"
                                                : " -- ★ the OS has no such bitmap; 0");
-                if (bitmap16) WowNoteHex(note, noteCapacity, &noteLength, bitmap16, 4);
+                if (bitmap16) WowNoteHex(note, noteCapacity, &noteLength, bitmap16, WOW_HEX_WORD_DIGITS);
                 Wow32SetReturn(frame, bitmap16);
                 return 1;
             }
         }
 
-        if (!bitmapBits || size < 12 || size > 0x10000) {
+        if (!bitmapBits || size < WOWUSER_BITMAPCOREHEADER_SIZE || size > WOWUSER_BITMAP_MAX_SIZE) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO BYTES, or a length that cannot be"
                                        " a packed DIB; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        headerSize = (DWORD)Wow32PeekWord(bitmapBits) | ((DWORD)Wow32PeekWord(bitmapBits + 2) << 16);
+        headerSize = (DWORD)Wow32PeekWord(bitmapBits) | ((DWORD)Wow32PeekWord(bitmapBits + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
 
         /* ── ★★★ TWO DIB HEADERS EXIST, AND WINDOWS 3.x RESOURCES USE THE OLD
              ONE. This used to accept only `biSize == 40` (BITMAPINFOHEADER) and
@@ -6149,24 +6221,24 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              the palette is widened a triple at a time.
            ⚠ There is no `biClrUsed` in the core header: the table is always the
              full 2^bcBitCount entries for <= 8bpp, and absent above it. */
-        if (headerSize == 40) {
-            bitCount = (INT)Wow32PeekWord(bitmapBits + 14);    /* biBitCount     */
-            paletteSize  = (DWORD)Wow32PeekWord(bitmapBits + 32)  /* biClrUsed      */
-                 | ((DWORD)Wow32PeekWord(bitmapBits + 34) << 16);
-            if (!paletteSize && bitCount <= 8) paletteSize = 1ul << bitCount;
-            width = (DWORD)Wow32PeekWord(bitmapBits + 4);
-            height = (DWORD)Wow32PeekWord(bitmapBits + 8);
-            bitsOffset = 40 + paletteSize * 4;
-        } else if (headerSize == 12) {
+        if (headerSize == WOWUSER_BITMAPINFOHEADER_SIZE) {
+            bitCount = (INT)Wow32PeekWord(bitmapBits + WOWUSER_BIH_BITCOUNT);    /* biBitCount     */
+            paletteSize  = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_CLRUSED)  /* biClrUsed      */
+                 | ((DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_CLRUSED + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+            if (!paletteSize && bitCount <= WOWUSER_MAX_PALETTE_BITS) paletteSize = 1ul << bitCount;
+            width = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_WIDTH);
+            height = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_HEIGHT);
+            bitsOffset = WOWUSER_BITMAPINFOHEADER_SIZE + paletteSize * WOWUSER_RGBQUAD_SIZE;
+        } else if (headerSize == WOWUSER_BITMAPCOREHEADER_SIZE) {
             isCore = 1;
-            width  = (DWORD)Wow32PeekWord(bitmapBits + 4);     /* bcWidth        */
-            height  = (DWORD)Wow32PeekWord(bitmapBits + 6);    /* bcHeight       */
-            bitCount = (INT)Wow32PeekWord(bitmapBits + 10);    /* bcBitCount     */
-            paletteSize  = (bitCount <= 8) ? (1ul << bitCount) : 0;
-            bitsOffset  = 12 + paletteSize * 3;
+            width  = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BCH_WIDTH);     /* bcWidth        */
+            height  = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BCH_HEIGHT);    /* bcHeight       */
+            bitCount = (INT)Wow32PeekWord(bitmapBits + WOWUSER_BCH_BITCOUNT);    /* bcBitCount     */
+            paletteSize  = (bitCount <= WOWUSER_MAX_PALETTE_BITS) ? (1ul << bitCount) : 0;
+            bitsOffset  = WOWUSER_BITMAPCOREHEADER_SIZE + paletteSize * WOWUSER_RGBTRIPLE_SIZE;
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ biSize IS 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, headerSize, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, headerSize, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ", neither 40 (BITMAPINFOHEADER) nor 12"
                                        " (BITMAPCOREHEADER). Refused rather than"
                                        " guessed at; answered 0");
@@ -6175,20 +6247,20 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
 
         WowNotePut(note, noteCapacity, &noteLength, isCore ? " CORE " : " ");
-        WowNoteHex(note, noteCapacity, &noteLength, width, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, width, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, height, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, height, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)bitCount, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)bitCount, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "bpp pal=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, paletteSize, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, paletteSize, WOW_HEX_WORD_DIGITS);
 
-        if (paletteSize > 256 || bitsOffset >= size) {
+        if (paletteSize > WOWUSER_MAX_PALETTE || bitsOffset >= size) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE HEADER DOES NOT ADD UP (pixels"
                                        " would start at 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, bitsOffset, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, bitsOffset, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " in 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, size, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, size, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " bytes); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
@@ -6196,7 +6268,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         if (!isCore) {
             for (index = 0; index < bitsOffset; ++index) header[index] = bitmapBits[index];
-            header[20] = header[21] = header[22] = header[23] = 0;  /* biSizeImage    */
+            header[WOWUSER_BIH_SIZEIMAGE] = header[WOWUSER_BIH_SIZEIMAGE + 1] = header[WOWUSER_BIH_SIZEIMAGE + 2] = header[WOWUSER_BIH_SIZEIMAGE + 3] = 0;  /* biSizeImage    */
         } else {
             /* ★ THE CONVERSION ITSELF LIVES IN wowconv.h AND IS TESTED THERE.
                  It is a pure function of bytes, so it is pinned off-VM by
@@ -6207,8 +6279,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                  on purpose: the moment it touched a `volatile` guest pointer it
                  would stop being testable without a rig, which is the whole
                  point of the file. */
-            static BYTE sourceBuffer[12 + 256 * 3];
-            DWORD needed = 12 + paletteSize * 3, index2;
+            static BYTE sourceBuffer[WOWUSER_BITMAPCOREHEADER_SIZE + WOWUSER_MAX_PALETTE * WOWUSER_RGBTRIPLE_SIZE];
+            DWORD needed = WOWUSER_BITMAPCOREHEADER_SIZE + paletteSize * WOWUSER_RGBTRIPLE_SIZE, index2;
             if (needed > sizeof sourceBuffer) needed = sizeof sourceBuffer;
             for (index2 = 0; index2 < needed; ++index2) sourceBuffer[index2] = bitmapBits[index2];
             if (!WowConvDibCoreToInfo(sourceBuffer, needed + 1, header, sizeof header, NULL)) {
@@ -6243,7 +6315,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> bitmap token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, bitmap16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, bitmap16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, bitmap16);
         return 1;
     }
@@ -6262,7 +6334,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  isCursor = (kind == WOWUSER_AD_KIND_CURSOR);
         INT noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "LoadSystemObject kind=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, kind, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, kind, WOW_HEX_WORD_DIGITS);
         /* ★ KIND 3 IS THE MODULE'S OWN RESOURCE, and it arrives with the same
              name fields at the same offsets -- the two call sites differ only in
              what they put in the middle. So an ordinal is enough to find the
@@ -6279,7 +6351,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
            token's meaning, as every resolver reads it. */
         WowNotePut(note, noteCapacity, &noteLength, isCursor ? " (cursor" : " (icon");
         if (instance) { WowNotePut(note, noteCapacity, &noteLength, " of module 0x");
-                     WowNoteHex(note, noteCapacity, &noteLength, instance, 4); }
+                     WowNoteHex(note, noteCapacity, &noteLength, instance, WOW_HEX_WORD_DIGITS); }
         else         WowNotePut(note, noteCapacity, &noteLength, ", predefined");
         WowNotePut(note, noteCapacity, &noteLength, ")");
         kind = instance ? WOWUSER_AD_KIND_MODULERES : WOWUSER_AD_KIND_PREDEFINED;
@@ -6299,7 +6371,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              fix**, so both are named here and both resolve through the same
              `WowResFindNamed`. */
         if (nameHigh) {
-            CHAR name[32];
+            CHAR name[WOWUSER_SHORT_NAME_SIZE];
             Wow32ArgString(frame, WOWUSER_AD_ARG_NAMELO, name, sizeof name);
             WowNotePut(note, noteCapacity, &noteLength, " name=");
             WowNoteQuoted(note, noteCapacity, &noteLength, name);
@@ -6313,7 +6385,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 if (g_WowUserSystemResources[index].Kind == kind
                     && WowUserIsEqualNoCase(g_WowUserSystemResources[index].Name, name)) {
                     WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-                    WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, 4);
+                    WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, WOW_HEX_WORD_DIGITS);
                     WowNotePut(note, noteCapacity, &noteLength, " (already issued)");
                     if (isCursor && instance) WowUserSystemResourcePrime(&g_WowUserSystemResources[index], frame, note, noteCapacity, &noteLength);
                     Wow32SetReturn(frame, g_WowUserSystemResources[index].Handle16);
@@ -6337,21 +6409,21 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             g_WowUserSystemResources[index].Cursor = NULL;
             if (isCursor && instance) WowUserSystemResourcePrime(&g_WowUserSystemResources[index], frame, note, noteCapacity, &noteLength);
             WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, "; the OS object is fetched when the guest"
                                        " says whether it is a cursor or an icon");
             Wow32SetReturn(frame, g_WowUserSystemResources[index].Handle16);
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " ordinal=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, nameLow, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, nameLow, WOW_HEX_WORD_DIGITS);
         /* One token per ordinal: the guest asks for IDC_ARROW in twenty classes
            and should get one answer, the way the OS gives one HCURSOR. */
         for (index = 0; index < g_WowUserSystemResourceCount; ++index)
             if (g_WowUserSystemResources[index].Ordinal == nameLow && g_WowUserSystemResources[index].Kind == kind
                 && !g_WowUserSystemResources[index].Name[0]) {
                 WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-                WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, 4);
+                WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " (already issued)");
                 if (isCursor && instance) WowUserSystemResourcePrime(&g_WowUserSystemResources[index], frame, note, noteCapacity, &noteLength);
                 Wow32SetReturn(frame, g_WowUserSystemResources[index].Handle16);
@@ -6370,7 +6442,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         g_WowUserSystemResources[index].Cursor = NULL;
         if (isCursor && instance) WowUserSystemResourcePrime(&g_WowUserSystemResources[index], frame, note, noteCapacity, &noteLength);
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowUserSystemResources[index].Handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "; the OS object is fetched when the guest says"
                                    " whether it is a cursor or an icon");
         Wow32SetReturn(frame, g_WowUserSystemResources[index].Handle16);
@@ -6384,11 +6456,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWUSER_SETWINDOWTEXT: {
         WORD window16 = Wow32ArgWord(frame, WOWUSER_SWT_ARG_HWND);
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
-        CHAR text[128];
+        CHAR text[WOWUSER_TEXT_SIZE];
         INT noteLength = 0, index;
         Wow32ArgString(frame, WOWUSER_SWT_ARG_TEXT, text, sizeof text);
         WowNotePut(note, noteCapacity, &noteLength, "SetWindowText 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ");
         WowNoteQuoted(note, noteCapacity, &noteLength, text);
         if (!window) { WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
@@ -6414,7 +6486,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {   static INT isSent = 0;
             WORD result16;
             DWORD textPointer16 = (DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT)
-                       | ((DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT + 2) << 16);
+                       | ((DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
             if (!isSent && g_WowUserSend16 && window->WindowProcedure && textPointer16) {
                 ++isSent;
                 if (g_WowUserSend16(window16, WM_SETTEXT16, 0, textPointer16, &result16))
@@ -6439,7 +6511,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetFocus 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (window16 && !window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW, focus unchanged");
             Wow32SetReturn(frame, previousFocus);
@@ -6454,7 +6526,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         ++g_WowWinSetFocusCount;                     /* s93: see WM_ACTIVATE in wowwin.h */
         g_WowWinSetFocusWindow = window ? window->Window32 : NULL;
         WowNotePut(note, noteCapacity, &noteLength, " (was 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, previousFocus, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, previousFocus, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -- keyboard messages now go here");
         Wow32SetReturn(frame, previousFocus);
         return 1;
@@ -6483,11 +6555,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "MoveWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " to ("); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ",");     WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ") ");    WowNoteHex(note, noteCapacity, &noteLength, (DWORD)width, 4);
-        WowNotePut(note, noteCapacity, &noteLength, "x");     WowNoteHex(note, noteCapacity, &noteLength, (DWORD)height, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " to ("); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ",");     WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ") ");    WowNoteHex(note, noteCapacity, &noteLength, (DWORD)width, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, "x");     WowNoteHex(note, noteCapacity, &noteLength, (DWORD)height, WOW_HEX_WORD_DIGITS);
         if (!window) { WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
                   Wow32SetReturn(frame, 0); return 1; }
         window->PositionX = positionX; window->PositionY = positionY; window->Width = width; window->Height = height;
@@ -6516,7 +6588,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         RECT rect; INT noteLength = 0, hasRect = 0;
         WowNotePut(note, noteCapacity, &noteLength, "InvalidateRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (rectBytes) {
             rect.left   = (LONG)(SHORT)Wow32PeekWord(rectBytes + 0);
             rect.top    = (LONG)(SHORT)Wow32PeekWord(rectBytes + 2);
@@ -6524,10 +6596,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             rect.bottom = (LONG)(SHORT)Wow32PeekWord(rectBytes + 6);
             hasRect = 1;
             WowNotePut(note, noteCapacity, &noteLength, " rect(");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, 4);  WowNotePut(note, noteCapacity, &noteLength, ",");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, 4);   WowNotePut(note, noteCapacity, &noteLength, ",");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.right, 4); WowNotePut(note, noteCapacity, &noteLength, ",");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.bottom, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, WOW_HEX_WORD_DIGITS);  WowNotePut(note, noteCapacity, &noteLength, ",");
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, WOW_HEX_WORD_DIGITS);   WowNotePut(note, noteCapacity, &noteLength, ",");
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.right, WOW_HEX_WORD_DIGITS); WowNotePut(note, noteCapacity, &noteLength, ",");
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.bottom, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " whole client area (lpRect NULL)");
@@ -6549,7 +6621,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         RECT rect; INT noteLength = 0, hasRect = 0;
         WowNotePut(note, noteCapacity, &noteLength, "ValidateRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (rectBytes) {
             rect.left   = (LONG)(SHORT)Wow32PeekWord(rectBytes + 0);
             rect.top    = (LONG)(SHORT)Wow32PeekWord(rectBytes + 2);
@@ -6581,9 +6653,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT regionKind = -1, noteLength = 0;
         HGDIOBJ region = region16 ? WowGdiH32(region16, &regionKind) : NULL;
         WowNotePut(note, noteCapacity, &noteLength, "InvalidateRgn 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " rgn 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, region16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, region16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, erase ? " erase" : " no erase");
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
@@ -6613,9 +6685,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (parent && child && parent->Window32 && child->Window32)
             result = IsChild(parent->Window32, child->Window32) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, "IsChild(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, parent16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, parent16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, child16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, child16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, result ? ") -> TRUE" : ") -> FALSE");
         if (!parent || !child) WowNotePut(note, noteCapacity, &noteLength, " (one of them is not one of ours)");
         Wow32SetReturn(frame, (DWORD)result);
@@ -6638,11 +6710,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (next32) result16 = WowWinHwnd16(next32);
         }
         WowNotePut(note, noteCapacity, &noteLength, "GetNextWindow(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", flag ");
-        WowNoteHex(note, noteCapacity, &noteLength, flags, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, result16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, result16, WOW_HEX_WORD_DIGITS);
         if (!result16) WowNotePut(note, noteCapacity, &noteLength, " (end of the chain, or a window"
                                              " that is not one of ours)");
         Wow32SetReturn(frame, result16);
@@ -6656,9 +6728,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, result = 0;
         WowNotePut(note, noteCapacity, &noteLength, "HiliteMenuItem(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", item ");
-        WowNoteHex(note, noteCapacity, &noteLength, item, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, item, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (window && window->Window32) {
             HMENU menu = menu16 ? (HMENU)(ULONG_PTR)menu16 : GetMenu(window->Window32);
@@ -6678,7 +6750,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         UINT blinkTime = GetCaretBlinkTime();
         WowNotePut(note, noteCapacity, &noteLength, "GetCaretBlinkTime -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)blinkTime, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)blinkTime, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ms");
         Wow32SetReturn(frame, (DWORD)(WORD)blinkTime);
         return 1;
@@ -6717,11 +6789,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (!frame->IsCallbackAllowed) return 0;
         window = WowUserFindWindow(window16);
         WowNotePut(note, noteCapacity, &noteLength, "CallWindowProc(proc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, procedure, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, procedure, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", hwnd 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", msg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!procedure) {
             /* No procedure to call. DefWindowProc is the right default only
@@ -6781,7 +6853,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 }
                 return 1;
             }
-            if ((WORD)(procedure >> 16) == frame->StubSegment)
+            if ((WORD)(procedure >> WOW_WORD_SHIFT) == frame->StubSegment)
                 WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ a USER address that is not a known"
                                            " control thunk; called as 16-bit code");
         }
@@ -6806,9 +6878,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  value   = GetSystemMetrics((INT)metric);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetSystemMetrics(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, metric, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, metric, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") = 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)value, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)value, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " (the OS's own, SM_* assumed common to Win16/32)");
         Wow32SetReturn(frame, (DWORD)(WORD)value);
         return 1;
@@ -6824,7 +6896,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, isIconic = 0;
         WowNotePut(note, noteCapacity, &noteLength, "IsIconic 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window; answered 0");
             Wow32SetReturn(frame, 0);
@@ -6857,12 +6929,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ": ");
         WowNoteQuoted(note, noteCapacity, &noteLength, text);
         WowNotePut(note, noteCapacity, &noteLength, " type=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, type, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, type, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ MODAL: the VDM stops until it is"
                                    " dismissed");
         result = MessageBoxA(window ? window->Window32 : NULL, text, caption, (UINT)type);
         WowNotePut(note, noteCapacity, &noteLength, "; answered 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
         return 1;
     }
@@ -6878,9 +6950,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT  noteLength = 0, isOk;
         WowNotePut(note, noteCapacity, &noteLength, "FillRect(dc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", brush 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, brush16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, brush16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!rectBytes || !dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO RECT, or not one of our DC"
@@ -6902,13 +6974,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         rect.right  = (INT)(SHORT)Wow32PeekWord(rectBytes + 4);
         rect.bottom = (INT)(SHORT)Wow32PeekWord(rectBytes + 6);
         WowNotePut(note, noteCapacity, &noteLength, " ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), WOW_HEX_WORD_DIGITS);
         isOk = FillRect((HDC)dc, &rect, (HBRUSH)brush) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> filled" : " -- ★ the OS refused it");
         Wow32SetReturn(frame, (DWORD)isOk);
@@ -6923,7 +6995,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         POINT point;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "ClientToScreen 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!pointBytes || !window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO WINDOW OR NO POINT; unchanged");
             Wow32SetReturn(frame, 0);
@@ -6935,9 +7007,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(pointBytes,     (WORD)(SHORT)point.x);
         Wow32PokeWord(pointBytes + 2, (WORD)(SHORT)point.y);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -6949,7 +7021,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "GetWindowRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!rectBytes) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL lpRect");
                   Wow32SetReturn(frame, 0); return 1; }
         if (!window || !window->Window32 || !GetWindowRect(window->Window32, &rect)) {
@@ -6963,13 +7035,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(rectBytes + 4, (WORD)(SHORT)rect.right);
         Wow32PokeWord(rectBytes + 6, (WORD)(SHORT)rect.bottom);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -6979,7 +7051,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = active32 ? WowWinHwnd16(active32) : 0;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetActiveWindow -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         if (active32 && !window16Result)
             WowNotePut(note, noteCapacity, &noteLength, " (active window is not the guest's)");
         Wow32SetReturn(frame, (DWORD)window16Result);
@@ -7007,7 +7079,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND previousCapture32;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetCapture 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW; answered 0");
             Wow32SetReturn(frame, 0);
@@ -7015,7 +7087,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         previousCapture32 = SetCapture(window->Window32);
         WowNotePut(note, noteCapacity, &noteLength, " -> the OS's; previous 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, previousCapture32 ? WowWinHwnd16(previousCapture32) : 0, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, previousCapture32 ? WowWinHwnd16(previousCapture32) : 0, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(previousCapture32 ? WowWinHwnd16(previousCapture32) : 0));
         return 1;
     }
@@ -7049,13 +7121,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0; UINT result;
         WowNotePut(note, noteCapacity, &noteLength, "ArrangeIconicWindows 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window; answered 0");
             Wow32SetReturn(frame, 0); return 1;
         }
         result = ArrangeIconicWindows(window->Window32);
-        WowNotePut(note, noteCapacity, &noteLength, " -> row height "); WowNoteHex(note, noteCapacity, &noteLength, result, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> row height "); WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -7066,7 +7138,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SwitchToThisWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, isAltTab ? " (alt-tab style)" : "");
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window; nothing to switch to");
@@ -7087,9 +7159,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD baseUnits = (DWORD)GetDialogBaseUnits();
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetDialogBaseUnits -> x=");
-        WowNoteHex(note, noteCapacity, &noteLength, baseUnits & 0xFFFF, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, baseUnits & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " y=");
-        WowNoteHex(note, noteCapacity, &noteLength, (baseUnits >> 16) & 0xFFFF, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (baseUnits >> WOW_WORD_SHIFT) & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, baseUnits);
         return 1;
     }
@@ -7099,7 +7171,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         SHORT state = GetAsyncKeyState((INT)virtualKey);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetAsyncKeyState vk=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, virtualKey, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, virtualKey, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, (state & 0x8000) ? " -> DOWN" : " -> up");
         Wow32SetReturn(frame, (DWORD)(WORD)state);
         return 1;
@@ -7110,7 +7182,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, isZoomed;
         WowNotePut(note, noteCapacity, &noteLength, "IsZoomed 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window; answered 0");
             Wow32SetReturn(frame, 0); return 1;
@@ -7129,9 +7201,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR  text[128];
         INT   noteLength = 0, isOk;
         WowNotePut(note, noteCapacity, &noteLength, "AppendMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " id=0x");    WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " id=0x");    WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!menu) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -7171,7 +7243,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         MSG message32;
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "IsDialogMessage 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !messageBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no window or no MSG; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -7181,10 +7253,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         message32.message = Wow32PeekWord(messageBytes + WOWMSG_FIELD_MESSAGE);
         message32.wParam  = Wow32PeekWord(messageBytes + WOWMSG_FIELD_WPARAM);
         message32.lParam  = (LPARAM)((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM)
-                             | ((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM + 2) << 16));
+                             | ((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM + 2) << WOW_WORD_SHIFT));
         message32.time    = GetTickCount();
         message32.pt.x = 0; message32.pt.y = 0;
-        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message32.message, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message32.message, WOW_HEX_WORD_DIGITS);
         /* #162: see g_WowWinInDialogMessage in wowwin.h -- a bounce is answered FALSE. */
         g_WowWinInDialogMessage = 1; g_WowWinIsDialogBounced = 0;
         g_WowWinDialogWindow = message32.hwnd; g_WowWinDialogMessage = message32.message;
@@ -7208,7 +7280,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "MapDialogRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no window or no RECT; left alone");
             Wow32SetReturn(frame, 0); return 1;
@@ -7238,9 +7310,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowConvRect16Put(rect16, 3, (INT)rect.bottom);
         for (index = 0; index < 8; ++index) rectBytes[index] = rect16[index];
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -7252,7 +7324,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                           && frame->IsCallbackAllowed && g_WowUserKernelSegment;
         INT  result = canRead && IsClipboardFormatAvailable(format) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, "IsClipboardFormatAvailable fmt=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, result ? " -> 1 (the host's clipboard has it)"
                                   : canRead ? " -> 0 (not on the host's clipboard)"
                                         : " -> 0 (the bridge cannot deliver this"
@@ -7265,7 +7337,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         HANDLE clipData;
         WowNotePut(note, noteCapacity, &noteLength, "GetClipboardData fmt=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         if (!(format == CF_TEXT16 || format == CF_OEMTEXT16) || !frame->IsCallbackAllowed || !g_WowUserKernelSegment) {
             WowNotePut(note, noteCapacity, &noteLength, " -> 0 (not a format the bridge carries)");
@@ -7286,7 +7358,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 return 1;
             }
         }
-        frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << 16) | WOWUSER_KRNL_GLOBALALLOC_OFF;
+        frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_GLOBALALLOC_OFF;
         frame->CallbackDataSelector     = frame->GuestDataSelector;
         frame->CallbackArguments[0] = GMEM_MOVEABLE_DDESHARE16;
         frame->CallbackArguments[1] = 0;                              /* dwBytes, high word */
@@ -7297,7 +7369,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         frame->CallbackAction    = WOWCALL_ACT_CLIPLOCK;
         frame->CallbackActionArgument = format;
         WowNotePut(note, noteCapacity, &noteLength, " -- 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowUserClipboardLength, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowUserClipboardLength, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " byte(s) of host text; asking KERNEL.15 GlobalAlloc"
                                    " for the guest's block");
         return 1;
@@ -7311,11 +7383,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD format  = Wow32ArgWord(frame, WOWUSER_SCD_ARG_FORMAT);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetClipboardData fmt=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " hMem=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, memory16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, memory16, WOW_HEX_WORD_DIGITS);
         if ((format == CF_TEXT16 || format == CF_OEMTEXT16) && memory16 && frame->IsCallbackAllowed && g_WowUserKernelSegment) {
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << 16) | WOWUSER_KRNL_GLOBALLOCK_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_GLOBALLOCK_OFF;
             frame->CallbackDataSelector     = frame->GuestDataSelector;
             frame->CallbackArguments[0] = memory16;
             frame->CallbackArgumentCount   = 1;
@@ -7343,13 +7415,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0; DWORD result;
         WowNotePut(note, noteCapacity, &noteLength, (frame->Id == WOWUSER_ISWINDOWENABLED)
                 ? "IsWindowEnabled 0x" : "GetWindowTextLength 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
                                 Wow32SetReturn(frame, 0); return 1; }
         result = (frame->Id == WOWUSER_ISWINDOWENABLED)
             ? (DWORD)(IsWindowEnabled(window->Window32) ? 1 : 0)
             : (DWORD)GetWindowTextLengthA(window->Window32);
-        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, result, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -7369,9 +7441,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR buffer[512];
         INT noteLength = 0, length = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "GetWindowText 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " max=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, maximum, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, maximum, WOW_HEX_WORD_DIGITS);
         if (!destination || !maximum) { WowNotePut(note, noteCapacity, &noteLength, " -- no buffer; 0");
                             Wow32SetReturn(frame, 0); return 1; }
         destination[0] = 0;
@@ -7394,7 +7466,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = capture32 ? WowWinHwnd16(capture32) : 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetCapture -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         /* ⚠ A capture held by a window that is not one of ours answers 0, which
              is what "nobody has it" looks like from inside the VDM -- the guest
              cannot be handed a handle from another address space. */
@@ -7413,9 +7485,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         window32   = WindowFromPoint(point);
         window16Result  = window32 ? WowWinHwnd16(window32) : 0;
         WowNotePut(note, noteCapacity, &noteLength, "WindowFromPoint ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, 4); WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, WOW_HEX_WORD_DIGITS); WowNotePut(note, noteCapacity, &noteLength, ",");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)window16Result);
         return 1;
     }
@@ -7430,7 +7502,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR name[256];
         INT  noteLength = 0, length = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "GetClipboardFormatName(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (destination && capacity > 0) {
             length = GetClipboardFormatNameA(format, name, capacity < (INT)sizeof name ? capacity : (INT)sizeof name);
@@ -7459,8 +7531,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR selection[128];
         INT  noteLength = 0, result, index;
         WowNotePut(note, noteCapacity, &noteLength, "DlgDirSelect(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ", id=0x"); WowNoteHex(note, noteCapacity, &noteLength, listId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ", id=0x"); WowNoteHex(note, noteCapacity, &noteLength, listId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window || !window->Window32 || !destination) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window or no buffer; 0");
@@ -7487,8 +7559,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD previousParent;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetParent(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, child16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ", 0x"); WowNoteHex(note, noteCapacity, &noteLength, newParent16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, child16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ", 0x"); WowNoteHex(note, noteCapacity, &noteLength, newParent16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!child || (newParent16 && !newParent)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; 0");
@@ -7497,7 +7569,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         previousParent = child->Parent;
         if (child->Window32) SetParent(child->Window32, newParent ? newParent->Window32 : NULL);
         child->Parent = newParent16;
-        WowNotePut(note, noteCapacity, &noteLength, " -> was 0x"); WowNoteHex(note, noteCapacity, &noteLength, previousParent, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> was 0x"); WowNoteHex(note, noteCapacity, &noteLength, previousParent, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, previousParent);
         return 1;
     }
@@ -7516,15 +7588,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         point.x = (INT)(SHORT)Wow32ArgWord(frame, WOWUSER_CWFP_ARG_X);
         point.y = (INT)(SHORT)Wow32ArgWord(frame, WOWUSER_CWFP_ARG_Y);
         WowNotePut(note, noteCapacity, &noteLength, "ChildWindowFromPoint(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, parent16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ", "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ","); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, parent16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ", "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ","); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.y, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (window && window->Window32) {
             result = ChildWindowFromPoint(window->Window32, point);
             window16Result = !result ? 0 : (result == window->Window32 ? parent16 : WowWinHwnd16(result));
         }
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, window16Result);
         return 1;
     }
@@ -7537,7 +7609,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWUSER_CALLMSGFILTER: {
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CallMsgFilter(code=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, WOWUSER_CMF16_ARG_CODE), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, WOWUSER_CMF16_ARG_CODE), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -> FALSE (no message-filter hook installed)");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -7577,9 +7649,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             ++g_WowEnumFontCount;
         }
         WowNotePut(note, noteCapacity, &noteLength, "EnumProps(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowEnumFontCount, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowEnumFontCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " propert(ies)");
         if (!g_WowEnumFontCount) { Wow32SetReturn(frame, 0); return 1; }
         Wow32SetReturn(frame, 1);             /* the walk revises it to 0 on a stop */
@@ -7627,7 +7699,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0, index;
         name[0] = 0;
         WowUserEnsureSystemClasses();
-        if (!(namePointer >> 16)) windowClass = WowUserFindClassByAtom((WORD)namePointer);
+        if (!(namePointer >> WOW_WORD_SHIFT)) windowClass = WowUserFindClassByAtom((WORD)namePointer);
         else if (Wow32ArgString(frame, WOWUSER_GCI_ARG_NAME, name, (INT)sizeof name)) windowClass = WowUserFindClass(name);
         WowNotePut(note, noteCapacity, &noteLength, "GetClassInfo(\"");
         WowNotePut(note, noteCapacity, &noteLength, windowClass ? windowClass->Name : name);
@@ -7641,15 +7713,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             WORD fields[13];
             fields[0] = windowClass->Style;
-            fields[1] = (WORD)(windowClass->WindowProcedure & 0xFFFF); fields[2] = (WORD)(windowClass->WindowProcedure >> 16);
+            fields[1] = (WORD)(windowClass->WindowProcedure & WOW_WORD_MASK); fields[2] = (WORD)(windowClass->WindowProcedure >> WOW_WORD_SHIFT);
             fields[3] = windowClass->ClassExtra; fields[4] = windowClass->WindowExtra; fields[5] = windowClass->Instance;
             fields[6] = windowClass->Icon16; fields[7] = windowClass->Cursor16; fields[8] = windowClass->Background16;
             fields[9] = 0; fields[10] = 0;             /* lpszMenuName */
-            fields[11] = (WORD)(namePointer & 0xFFFF); fields[12] = (WORD)(namePointer >> 16);
-            for (index = 0; index < 13; ++index) { wndClass[index * 2] = (BYTE)fields[index]; wndClass[index * 2 + 1] = (BYTE)(fields[index] >> 8); }
+            fields[11] = (WORD)(namePointer & WOW_WORD_MASK); fields[12] = (WORD)(namePointer >> WOW_WORD_SHIFT);
+            for (index = 0; index < 13; ++index) { wndClass[index * 2] = (BYTE)fields[index]; wndClass[index * 2 + 1] = (BYTE)(fields[index] >> WOW_BYTE_SHIFT); }
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> TRUE proc=");
-        WowNoteHex(note, noteCapacity, &noteLength, windowClass->WindowProcedure, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, windowClass->WindowProcedure, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -7660,7 +7732,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "FlashWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
                                 Wow32SetReturn(frame, 0); return 1; }
         result = FlashWindow(window->Window32, invert ? TRUE : FALSE) ? 1 : 0;
@@ -7699,12 +7771,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
     case WOWUSER_VKKEYSCAN: {
         WORD character = Wow32ArgWord(frame, WOWUSER_VKS_ARG_CHAR);
-        SHORT result = VkKeyScanA((CHAR)(character & 0xFF));
+        SHORT result = VkKeyScanA((CHAR)(character & WOW_BYTE_MASK));
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "VkKeyScan '");
-        { CHAR pair[2]; pair[0] = (CHAR)(character & 0xFF); pair[1] = 0;
+        { CHAR pair[2]; pair[0] = (CHAR)(character & WOW_BYTE_MASK); pair[1] = 0;
           WowNotePut(note, noteCapacity, &noteLength, pair); }
-        WowNotePut(note, noteCapacity, &noteLength, "' -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, (WORD)result, 4);
+        WowNotePut(note, noteCapacity, &noteLength, "' -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, (WORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
         return 1;
     }
@@ -7715,9 +7787,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT result = MapVirtualKeyA(code, type);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "MapVirtualKey code=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, code, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " type="); WowNoteHex(note, noteCapacity, &noteLength, type, 2);
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, code, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " type="); WowNoteHex(note, noteCapacity, &noteLength, type, WOW_HEX_BYTE_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -7739,7 +7811,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT noteLength = 0, hasAny, index;
         WowNotePut(note, noteCapacity, &noteLength, "GetUpdateRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; FALSE");
                                 Wow32SetReturn(frame, 0); return 1; }
         hasAny = GetUpdateRect(window->Window32, &rect, erase ? TRUE : FALSE) ? 1 : 0;
@@ -7762,12 +7834,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND next32; WORD window16Result;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetNextDlgTabItem dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
                                 Wow32SetReturn(frame, 0); return 1; }
         next32 = GetNextDlgTabItem(window->Window32, child ? child->Window32 : NULL, previousControl ? TRUE : FALSE);
         window16Result = next32 ? WowWinHwnd16(next32) : 0;
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)window16Result);
         return 1;
     }
@@ -7777,11 +7849,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, controlId;
         WowNotePut(note, noteCapacity, &noteLength, "GetDlgCtrlID 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
                                 Wow32SetReturn(frame, 0); return 1; }
         controlId = GetDlgCtrlID(window->Window32);
-        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)controlId, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)controlId, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)controlId);
         return 1;
     }
@@ -7795,7 +7867,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "DrawFocusRect dc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC) || !rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no rect");
             Wow32SetReturn(frame, 0); return 1;
@@ -7816,8 +7888,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = WowUserMenu32(menu16);
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "DeleteMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " pos="); WowNoteHex(note, noteCapacity, &noteLength, position, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " pos="); WowNoteHex(note, noteCapacity, &noteLength, position, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; FALSE");
                   Wow32SetReturn(frame, 0); return 1; }
         result = DeleteMenu(menu, position, flags) ? 1 : 0;
@@ -7836,7 +7908,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WINDOWPLACEMENT placement;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetWindowPlacement 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !bytes16) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window or no struct; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -7858,7 +7930,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(bytes16 + 18, (WORD)(SHORT)placement.rcNormalPosition.right);
         Wow32PokeWord(bytes16 + 20, (WORD)(SHORT)placement.rcNormalPosition.bottom);
         WowNotePut(note, noteCapacity, &noteLength, " -> showCmd ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)placement.showCmd, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)placement.showCmd, WOW_HEX_BYTE_DIGITS);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -7875,8 +7947,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  module16 = Wow32ArgWord(frame, WOWUSER_SWH_ARG_HMOD);
         INT   noteLength = 0, isOk = WowUserHookSet(hookId, procedure, module16);
         WowNotePut(note, noteCapacity, &noteLength, "SetWindowsHook id=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)hookId, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " proc=0x"); WowNoteHex(note, noteCapacity, &noteLength, procedure, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)hookId, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " proc=0x"); WowNoteHex(note, noteCapacity, &noteLength, procedure, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, isOk == 1 ? " -> the OS's hook of the same kind installed"
                                  : isOk == 2 ? " -> ★ a kind this host does not run; recorded only"
                                            : " -> ★ the OS refused the hook");
@@ -7898,7 +7970,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         SHORT hookId   = (SHORT)Wow32ArgWord(frame, 4);
         INT noteLength = 0, result = WowUserHookUnset(hookId, procedure);
         WowNotePut(note, noteCapacity, &noteLength, "UnhookWindowsHook id=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)hookId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)hookId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, result ? " -> removed" : " -> not one we hold; FALSE");
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
@@ -7922,7 +7994,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD winIni   = Wow32ArgWord(frame, WOWUSER_SPI_ARG_WINI);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SystemParametersInfo action=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, action, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, action, WOW_HEX_WORD_DIGITS);
         (VOID)uiParam; (VOID)parameterBytes;
         if (winIni) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ WRITES REFUSED: this is a SYSTEM-WIDE"
@@ -7994,7 +8066,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         fileSpec[0] = 0;
         Wow32ArgString(frame, WOWUSER_DDL_ARG_SPEC, fileSpec, (INT)sizeof fileSpec);
         WowNotePut(note, noteCapacity, &noteLength, "DlgDirList 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " \""); WowNotePut(note, noteCapacity, &noteLength, fileSpec);
         WowNotePut(note, noteCapacity, &noteLength, "\"");
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
@@ -8016,8 +8088,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         text[0] = 0;
         Wow32ArgString(frame, WOWUSER_CM_ARG_ITEM, text, (INT)sizeof text);
         WowNotePut(note, noteCapacity, &noteLength, "ChangeMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " change=0x"); WowNoteHex(note, noteCapacity, &noteLength, change, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " change=0x"); WowNoteHex(note, noteCapacity, &noteLength, change, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; FALSE");
                   Wow32SetReturn(frame, 0); return 1; }
         /* MF_APPEND 0x0100, MF_DELETE 0x0200, MF_CHANGE 0x0080, MF_REMOVE 0x1000;
@@ -8068,7 +8140,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR buffer[512];
         INT  noteLength = 0, index, result;
         WowNotePut(note, noteCapacity, &noteLength, "GrayString(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -8120,8 +8192,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                         : (dialog16 && dialog16 == g_WowUserGone.Window ? g_WowUserGone.DialogProcedure : 0);
         INT noteLength = 0, isSelf = 0;
         WowNotePut(note, noteCapacity, &noteLength, "DefDlgProc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         if (!window && !dialogProcedure) { WowNotePut(note, noteCapacity, &noteLength, " -- no such window; 0");
                             Wow32SetReturn(frame, 0); return 1; }
         if (!window) WowNotePut(note, noteCapacity, &noteLength, " [its record is released; its DLGPROC kept]");
@@ -8137,8 +8209,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             frame->CallbackArguments[0] = dialog16;
             frame->CallbackArguments[1] = message16;
             frame->CallbackArguments[2] = wParam16;
-            frame->CallbackArguments[3] = (WORD)(lParam32 >> 16);
-            frame->CallbackArguments[4] = (WORD)(lParam32 & 0xFFFF);
+            frame->CallbackArguments[3] = (WORD)(lParam32 >> WOW_WORD_SHIFT);
+            frame->CallbackArguments[4] = (WORD)(lParam32 & WOW_WORD_MASK);
             frame->CallbackArgumentCount   = 5;
             frame->CallbackReturnMode    = WOWCALL_RET_RESULT;
             frame->CallbackWindow   = dialog16;
@@ -8146,7 +8218,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             frame->CallbackAction    = WOWCALL_ACT_DLGDEFAULT;
             frame->CallbackActionArgument = dialog16;
             WowNotePut(note, noteCapacity, &noteLength, " -> its DLGPROC 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, dialogProcedure, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, dialogProcedure, WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " first; the default only if it answers FALSE");
             return 1;
         }
@@ -8160,7 +8232,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = owner32 ? WowWinHwnd16(owner32) : 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetClipboardOwner -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         if (owner32 && !window16Result) WowNotePut(note, noteCapacity, &noteLength, " (owned OUTSIDE this VDM; 0)");
         Wow32SetReturn(frame, (DWORD)window16Result);
         return 1;
@@ -8170,7 +8242,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT doubleClickTime = GetDoubleClickTime();
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetDoubleClickTime -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, doubleClickTime, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, doubleClickTime, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)doubleClickTime);
         return 1;
     }
@@ -8182,8 +8254,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = top32 ? WowWinHwnd16(top32) : 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetTopWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)window16Result);
         return 1;
     }
@@ -8198,8 +8270,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HICON   icon = WowUserSystemResourceIcon(icon16, NULL, 0, 0);
         INT  noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "DrawIcon(dc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ", icon=0x"); WowNoteHex(note, noteCapacity, &noteLength, icon16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ", icon=0x"); WowNoteHex(note, noteCapacity, &noteLength, icon16, WOW_HEX_WORD_DIGITS);
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -8219,7 +8291,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = menu ? WowUserMenu16(menu) : 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CreatePopupMenu -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         if (menu && !window16Result) { DestroyMenu(menu);
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ TOKEN MAP FULL; menu destroyed"); }
         Wow32SetReturn(frame, (DWORD)window16Result);
@@ -8231,7 +8303,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = WowUserMenu32(menu16);
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "DestroyMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; FALSE");
                   Wow32SetReturn(frame, 0); return 1; }
         result = DestroyMenu(menu) ? 1 : 0;
@@ -8245,7 +8317,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HICON icon = WowUserSystemResourceIcon(icon16, NULL, 0, 0);
         INT noteLength = 0, result = 0;
         WowNotePut(note, noteCapacity, &noteLength, "DestroyIcon 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, icon16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, icon16, WOW_HEX_WORD_DIGITS);
         if (icon) result = DestroyIcon(icon) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, result ? " -> destroyed"
                                      : " -- ★ NOT ONE OF OUR ICONS; FALSE");
@@ -8258,11 +8330,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = WowUserMenu32(menu16);
         INT noteLength = 0, count;
         WowNotePut(note, noteCapacity, &noteLength, "GetMenuItemCount 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; -1");
                   Wow32SetReturn(frame, 0xFFFF); return 1; }
         count = GetMenuItemCount(menu);
-        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)count, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)count, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)count);
         return 1;
     }
@@ -8273,12 +8345,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = WowUserMenu32(menu16);
         INT noteLength = 0; UINT itemId;
         WowNotePut(note, noteCapacity, &noteLength, "GetMenuItemID 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; -1");
                   Wow32SetReturn(frame, 0xFFFF); return 1; }
         itemId = GetMenuItemID(menu, (INT)(SHORT)position);
-        WowNotePut(note, noteCapacity, &noteLength, " pos="); WowNoteHex(note, noteCapacity, &noteLength, position, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " pos="); WowNoteHex(note, noteCapacity, &noteLength, position, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)itemId);
         return 1;
     }
@@ -8290,11 +8362,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = WowUserMenu32(menu16);
         INT noteLength = 0; UINT state;
         WowNotePut(note, noteCapacity, &noteLength, "GetMenuState 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; -1");
                   Wow32SetReturn(frame, 0xFFFF); return 1; }
         state = GetMenuState(menu, itemId, flags);
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, state, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, state, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)state);
         return 1;
     }
@@ -8309,7 +8381,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR buffer[256];
         INT noteLength = 0, length, index;
         WowNotePut(note, noteCapacity, &noteLength, "GetMenuString 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         if (!menu || !bufferBytes || !maximum) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS, or no buffer; 0");
             Wow32SetReturn(frame, 0); return 1;
@@ -8337,8 +8409,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         text[0] = 0;
         Wow32ArgString(frame, WOWUSER_MI2_ARG_ITEM, text, (INT)sizeof text);
         WowNotePut(note, noteCapacity, &noteLength, isInsert ? "InsertMenu 0x" : "ModifyMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENUS; FALSE");
                   Wow32SetReturn(frame, 0); return 1; }
         /* ⚠ A SEPARATOR HAS NO TEXT, and reading the pointer for one would read
@@ -8372,7 +8444,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         BYTE rect16[8];
         INT noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "ScrollWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         /* ⚠ BOTH RECTS ARE OPTIONAL AND NULL MEANS SOMETHING: a null scroll rect
@@ -8388,8 +8460,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                   clipRect = &clientRect; }
         ScrollWindow(window->Window32, deltaX, deltaY, scrollRect, clipRect);
         WowNotePut(note, noteCapacity, &noteLength, " -> scrolled ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaX, 4); WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaY, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaX, WOW_HEX_WORD_DIGITS); WowNotePut(note, noteCapacity, &noteLength, ",");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deltaY, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -8402,14 +8474,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, minimum = 0, maximum = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetScrollRange 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         GetScrollRange(window->Window32, (INT)(SHORT)bar, &minimum, &maximum);
         if (minimumBytes) Wow32PokeWord(minimumBytes, (WORD)(SHORT)minimum);
         if (maximumBytes) Wow32PokeWord(maximumBytes, (WORD)(SHORT)maximum);
-        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)minimum, 4);
-        WowNotePut(note, noteCapacity, &noteLength, ".."); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)maximum, 4);
+        WowNotePut(note, noteCapacity, &noteLength, " -> "); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)minimum, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ".."); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)maximum, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -8421,12 +8493,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0; BOOL result;
         WowNotePut(note, noteCapacity, &noteLength, "EnableScrollBar 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         result = EnableScrollBar(window->Window32, (UINT)bar, (UINT)arrows);
-        WowNotePut(note, noteCapacity, &noteLength, " bar=0x"); WowNoteHex(note, noteCapacity, &noteLength, bar, 2);
-        WowNotePut(note, noteCapacity, &noteLength, " arrows=0x"); WowNoteHex(note, noteCapacity, &noteLength, arrows, 2);
+        WowNotePut(note, noteCapacity, &noteLength, " bar=0x"); WowNoteHex(note, noteCapacity, &noteLength, bar, WOW_HEX_BYTE_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " arrows=0x"); WowNoteHex(note, noteCapacity, &noteLength, arrows, WOW_HEX_BYTE_DIGITS);
         Wow32SetReturn(frame, result ? 1 : 0);
         return 1;
     }
@@ -8438,7 +8510,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "ShowScrollBar 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         ShowScrollBar(window->Window32, (INT)(SHORT)bar, show ? TRUE : FALSE);
@@ -8472,7 +8544,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                 : "IE_BADID (no such port here)");
         } else {
             WowNotePut(note, noteCapacity, &noteLength, "comm id 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)portId, 2);
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)portId, WOW_HEX_BYTE_DIGITS);
         }
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)portId);
         return 1;
@@ -8496,7 +8568,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         got = wowcomm_read(portId, buffer, size);
         if (got > 0) for (index = 0; index < got; ++index) destination[index] = buffer[index];
         WowNotePut(note, noteCapacity, &noteLength, "ReadComm -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(got < 0 ? 0 : got), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(got < 0 ? 0 : got), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " byte(s)");
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)(got < 0 ? 0 : got));
         return 1;
@@ -8512,7 +8584,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         for (index = 0; index < size; ++index) buffer[index] = source[index];
         written = wowcomm_write(portId, buffer, size);
         WowNotePut(note, noteCapacity, &noteLength, "WriteComm -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(written < 0 ? 0 : written), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(written < 0 ? 0 : written), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " byte(s) out of the port");
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)(written < 0 ? 0 : written));
         return 1;
@@ -8536,10 +8608,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *statBytes = Wow32ArgPointer(frame, WOWUSER_GCE_ARG_STAT);
         INT inQueue = wowcomm_inqueue(portId);
         if (statBytes) { statBytes[0] = 0;
-                  statBytes[1] = (BYTE)(inQueue & 0xFF); statBytes[2] = (BYTE)((inQueue >> 8) & 0xFF);
+                  statBytes[1] = (BYTE)(inQueue & WOW_BYTE_MASK); statBytes[2] = (BYTE)((inQueue >> WOW_BYTE_SHIFT) & WOW_BYTE_MASK);
                   statBytes[3] = 0; statBytes[4] = 0; }
         WowNotePut(note, noteCapacity, &noteLength, "GetCommError -> 0 (no error), cbInQue=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)inQueue, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)inQueue, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -8571,7 +8643,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         default: break;
         }
         WowNotePut(note, noteCapacity, &noteLength, "EscapeCommFunction fn=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, function, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, function, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -> MCR");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -8587,7 +8659,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              be false in the other direction now that the port exists. */
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "COMM id=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, frame->Id, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, frame->Id, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -- accepted (the DCB is stored by the port,"
                                    " and baud paces nothing here by design)");
         Wow32SetReturn(frame, 0);
@@ -8630,7 +8702,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WINDOWPLACEMENT placement;
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "SetWindowPlacement 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !bytes16) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window or no struct; FALSE");
             Wow32SetReturn(frame, 0); return 1;
@@ -8682,8 +8754,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         LRESULT result;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isFrameProc ? "DefFrameProc 0x" : "DefMDIChildProc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
-        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; 0");
                                 Wow32SetReturn(frame, 0); return 1; }
         /* s92: the defaults DefWindowProc already takes over (see 0x6b), which both MDI
@@ -8706,14 +8778,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (message16 == 0x0019) {
             WORD brush16 = WowUserCtlColorDefault(window, window->Window32, wParam16, lParam32);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_CTLCOLOR: the default brush, token 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, brush16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, brush16, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, brush16);
             return 1;
         }
         /* The OS's own MDI defaults, on the real windows -- the same argument as
            using the real MDICLIENT rather than drawing one. */
         result = WowUserDef32(isFrameProc ? 1 : 2, window->Window32, child ? child->Window32 : NULL, message16, wParam16, lParam32);
-        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+        WowNotePut(note, noteCapacity, &noteLength, " -> 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -8734,7 +8806,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         LONG result;
         INT  noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "TabbedTextOut(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS; 0");
             Wow32SetReturn(frame, 0); return 1;
@@ -8747,7 +8819,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         for (index = 0; index < tabCount; ++index)
             tabStops[index] = tabBytes ? (INT)(SHORT)Wow32PeekWord(tabBytes + index * 2) : 0;
         result = TabbedTextOutA((HDC)dc, positionX, positionY, buffer, count, tabCount, (tabCount && tabBytes) ? tabStops : NULL, tabOrigin);
-        WowNotePut(note, noteCapacity, &noteLength, ") -> extent 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+        WowNotePut(note, noteCapacity, &noteLength, ") -> extent 0x"); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -8759,7 +8831,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT  noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, wantVisible ? "IsWindowVisible 0x" : "IsWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT A WINDOW OF OURS; FALSE");
             Wow32SetReturn(frame, 0);
@@ -8780,7 +8852,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT clientRect;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetClientRect 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL lpRect; nothing written");
             Wow32SetReturn(frame, 0);
@@ -8802,9 +8874,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(rectBytes + 4, (WORD)(SHORT)clientRect.right);
         Wow32PokeWord(rectBytes + 6, (WORD)(SHORT)clientRect.bottom);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clientRect.right, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clientRect.right, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clientRect.bottom, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clientRect.bottom, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -8819,12 +8891,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetScrollRange 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, bar == 0 ? " SB_HORZ " : bar == 1 ? " SB_VERT "
                                                                      : " SB_CTL ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)minimum, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)minimum, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "..");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)maximum, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)maximum, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW");
             Wow32SetReturn(frame, 0);
@@ -8844,10 +8916,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0, previousPosition = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetScrollPos 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, bar == 0 ? " SB_HORZ " : bar == 1 ? " SB_VERT "
                                                                      : " SB_CTL ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)position, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)position, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW");
             Wow32SetReturn(frame, 0);
@@ -8855,7 +8927,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         previousPosition = SetScrollPos(window->Window32, (INT)bar, position, redraw ? TRUE : FALSE);
         WowNotePut(note, noteCapacity, &noteLength, " -> previous ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)previousPosition, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)previousPosition, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)previousPosition);
         return 1;
     }
@@ -8869,7 +8941,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         HCURSOR cursor = NULL;
         WowNotePut(note, noteCapacity, &noteLength, "SetCursor 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, cursor16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, cursor16, WOW_HEX_WORD_DIGITS);
         if (cursor16) {
             /* s89 (#216): the same resolver RegisterClass uses -- predefined,
                the module's own by name or ordinal, or built from USER's bytes. */
@@ -8902,9 +8974,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0, shouldErase = 1, have, index;
         WowNotePut(note, noteCapacity, &noteLength, "BeginPaint 0x");
         WowNotePut(note, noteCapacity, &noteLength, " [waited 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, paintLatency, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, paintLatency, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ms]");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !paintBytes) {
             WowNotePut(note, noteCapacity, &noteLength, !paintBytes ? " -- ★ NO PAINTSTRUCT; answered 0"
                                            : " -- ★ NO SUCH WINDOW; answered 0");
@@ -8939,7 +9011,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             ValidateRect(window->Window32, NULL);
             while (WowMsgTake(window16, WM_PAINT16, WM_PAINT16, 1, &pending)) ++dropped;
             if (dropped) { WowNotePut(note, noteCapacity, &noteLength, " [queued paints absorbed 0x");
-                           WowNoteHex(note, noteCapacity, &noteLength, (DWORD)dropped, 2);
+                           WowNoteHex(note, noteCapacity, &noteLength, (DWORD)dropped, WOW_HEX_BYTE_DIGITS);
                            WowNotePut(note, noteCapacity, &noteLength, "]"); }
         }
         if (!have) {
@@ -8984,12 +9056,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(paintBytes + WOWUSER_PS16_RECT + 4, (WORD)(SHORT)rect.right);
         Wow32PokeWord(paintBytes + WOWUSER_PS16_RECT + 6, (WORD)(SHORT)rect.bottom);
         WowNotePut(note, noteCapacity, &noteLength, have ? " rect(" : " whole client rect(");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, 4);   WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, 4);    WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.right, 4);  WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.bottom, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.left, WOW_HEX_WORD_DIGITS);   WowNotePut(note, noteCapacity, &noteLength, ",");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.top, WOW_HEX_WORD_DIGITS);    WowNotePut(note, noteCapacity, &noteLength, ",");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.right, WOW_HEX_WORD_DIGITS);  WowNotePut(note, noteCapacity, &noteLength, ",");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)rect.bottom, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -> DC token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, dc16);
         /* ── #282/#162: AND BeginPaint SENDS WM_ERASEBKGND, as Win16's does, before
              it returns -- with the paint's own DC. Clock paints its face colour in
@@ -9017,9 +9089,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ dc = WowGdiH32(dc16, &dcKind);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "EndPaint 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " dc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         /* ⚠ THE DC MUST GO BACK EVEN IF THE WINDOW HAS GONE. A guest that
              destroys a window inside its own WM_PAINT is rare but legal, and a
              leaked cache DC would eventually stop the OS handing out any. */
@@ -9062,7 +9134,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD dc16;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, wantWindow ? "GetWindowDC 0x" : "GetDC 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (window16 && (!window || !window->Window32)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW; answered 0 (a guest"
                                        " reads a null DC as out of memory)");
@@ -9089,7 +9161,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> DC token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, dc16);
         return 1;
     }
@@ -9111,9 +9183,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ dc = WowGdiH32(dc16, &dcKind);
         INT noteLength = 0, isOk;
         WowNotePut(note, noteCapacity, &noteLength, "ReleaseDC dc=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " hwnd=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!dc) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR GDI TOKENS;"
                                        " answered 0");
@@ -9145,10 +9217,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD focus16 = WowWinHwnd16(GetFocus());
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetFocus -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, focus16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, focus16, WOW_HEX_WORD_DIGITS);
         if (focus16 != g_WowMsgFocus) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ the OS says this and our queue says 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgFocus, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowMsgFocus, WOW_HEX_WORD_DIGITS);
         }
         Wow32SetReturn(frame, focus16);
         return 1;
@@ -9164,7 +9236,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, enable ? "EnableWindow ENABLE 0x" : "EnableWindow DISABLE 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         Wow32SetReturn(frame, (DWORD)(EnableWindow(window->Window32, enable ? TRUE : FALSE) ? 1 : 0));
@@ -9194,12 +9266,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         WORD previousActive = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetActiveWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                Wow32SetReturn(frame, 0); return 1; }
         previousActive = WowWinHwnd16(SetActiveWindow(window->Window32));
         WowNotePut(note, noteCapacity, &noteLength, " (was 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, previousActive, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, previousActive, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         Wow32SetReturn(frame, previousActive);
         return 1;
@@ -9213,7 +9285,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD beepType = Wow32ArgWord(frame, WOWUSER_MB_ARG_TYPE);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "MessageBeep(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, beepType, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, beepType, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         MessageBeep((UINT)beepType);
         Wow32SetReturn(frame, 0);
@@ -9235,7 +9307,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0, isOk;
         isOk = OpenClipboard(window ? window->Window32 : NULL) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, "OpenClipboard owner=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> opened (the OS's own)"
                                       : " -> REFUSED (someone else has it open)");
         Wow32SetReturn(frame, (DWORD)isOk);
@@ -9258,9 +9330,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT next = EnumClipboardFormats((UINT)format);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "EnumClipboardFormats(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)next, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)next, WOW_HEX_WORD_DIGITS);
         if (!next) WowNotePut(note, noteCapacity, &noteLength, " (end)");
         Wow32SetReturn(frame, (DWORD)(WORD)next);
         return 1;
@@ -9286,11 +9358,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         DWORD previousState;
         WowNotePut(note, noteCapacity, &noteLength, isCheck ? "CheckMenuItem 0x" : "EnableMenuItem 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, (flags & 0x400) ? " byPOSITION " : " byCOMMAND ");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, flags, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_WORD_DIGITS);
         if (!menu) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENU TOKENS;"
                                        " answered -1");
@@ -9300,7 +9372,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         previousState = isCheck ? (DWORD)CheckMenuItem(menu, (UINT)itemId, (UINT)flags)
                    : (DWORD)EnableMenuItem(menu, (UINT)itemId, (UINT)flags);
         WowNotePut(note, noteCapacity, &noteLength, " -> previous state 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, previousState, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, previousState, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, previousState);
         return 1;
     }
@@ -9316,13 +9388,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD menu16 = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         menu16 = WowUserMenu16(GetMenu(window->Window32));
         WowNotePut(note, noteCapacity, &noteLength, menu16 ? " -> token 0x" : " -- NO MENU (or no token"
                                                         " left) 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, menu16);
         return 1;
     }
@@ -9334,14 +9406,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD subMenu16 = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetSubMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " pos 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, position, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, position, WOW_HEX_WORD_DIGITS);
         if (!menu) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR MENU TOKENS");
                   Wow32SetReturn(frame, 0); return 1; }
         subMenu16 = WowUserMenu16(GetSubMenu(menu, (INT)(SHORT)position));
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, subMenu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, subMenu16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, subMenu16);
         return 1;
     }
@@ -9357,14 +9429,14 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD menu16 = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetSystemMenu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, revert ? " REVERT (rebuilds the default menu)"
                                        : " (query)");
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         menu16 = WowUserMenu16(GetSystemMenu(window->Window32, revert ? TRUE : FALSE));
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, menu16);
         return 1;
     }
@@ -9385,15 +9457,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16Result = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetDlgItem dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         window16Result = WowWinHwnd16(GetDlgItem(window->Window32, (INT)(SHORT)itemId));
         WowNotePut(note, noteCapacity, &noteLength, window16Result ? " -> 0x" : " -- NOT FOUND (or not a window"
                                                     " this host made) 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16Result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16Result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, window16Result);
         return 1;
     }
@@ -9407,9 +9479,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT length = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetDlgItemText dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32 || !destination || !capacity) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no window or no buffer; answered 0");
             Wow32SetReturn(frame, 0); return 1;
@@ -9431,11 +9503,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(dialog16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetDlgItemInt dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " = 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, value, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, value, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         /* ⚠ SIGNEDNESS IS THE CALLER'S, and it changes the text: -1 or 65535.
@@ -9458,11 +9530,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD control16 = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SendDlgItemMessage dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " msg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->Window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                                 Wow32SetReturn(frame, 0); return 1; }
         /* ★ ROUTED THROUGH THIS HOST'S OWN SendMessage PATH, not straight to
@@ -9478,7 +9550,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> control 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, control16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, control16, WOW_HEX_WORD_DIGITS);
         {   PWOWUSER_WINDOW control = WowUserFindWindow(control16);
             if (!control) { WowNotePut(note, noteCapacity, &noteLength, " -- not in our table");
                        Wow32SetReturn(frame, 0); return 1; }
@@ -9518,9 +9590,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PWOWUSER_WINDOW window = WowUserFindWindow(dialog16);
         INT noteLength = 0, isOk = 0;
         WowNotePut(note, noteCapacity, &noteLength, "EndDialog 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " result 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialogResult, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialogResult, WOW_HEX_WORD_DIGITS);
         /* ── ★★★★★ AND THIS IS WHAT THE LOOP HAS BEEN WAITING FOR. (session 57)
              ⚠ IT DOES NOT UNWIND ANYTHING HERE, AND IT MUST NOT: we are several
                frames down inside the guest's own dialog procedure, which has to
@@ -9579,7 +9651,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case 0x0190: {
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, frame->Id == 0x013a ? "SignalProc code 0x" : "FinalUserInit");
-        if (frame->Id == 0x013a) WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, 6), 4);
+        if (frame->Id == 0x013a) WowNoteHex(note, noteCapacity, &noteLength, Wow32ArgWord(frame, 6), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0 (acknowledged)");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -9609,7 +9681,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         result = (result == IDCANCEL || result == IDRETRY) ? 1 : (result == IDIGNORE) ? 2 : 0;
         result = count ? indexes[result < count ? result : count - 1] : 0;
         WowNotePut(note, noteCapacity, &noteLength, " -> button 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 2);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_BYTE_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -9623,13 +9695,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT   noteLength = 0;
         LRESULT result;
         WowNotePut(note, noteCapacity, &noteLength, "DefWindowProc(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " msg=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, message16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " wParam=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, wParam, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, wParam, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " lParam=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, lParam, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, lParam, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -9649,7 +9721,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (message16 == 0x0019) {               /* see WowUserCtlColorDefault */
             WORD brush16 = WowUserCtlColorDefault(WowUserFindWindow(window16), window32, wParam, lParam);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_CTLCOLOR: the default brush, token 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, brush16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, brush16, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, brush16);
             return 1;
         }
@@ -9670,17 +9742,17 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             INT regionType = GetClipBox(eraseDc, &clipBox);
             WowNotePut(note, noteCapacity, &noteLength, dcWindow == window32 ? " [dc=this window" : " [★ dc=ANOTHER window");
             WowNotePut(note, noteCapacity, &noteLength, " clip="); WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionType, 1);
-            WowNotePut(note, noteCapacity, &noteLength, ":");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.left, 4);
-            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.top, 4);
-            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.right, 4);
-            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.bottom, 4);
+            WowNotePut(note, noteCapacity, &noteLength, ":");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.left, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.top, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.right, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, ",");      WowNoteHex(note, noteCapacity, &noteLength, (DWORD)clipBox.bottom, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " brush="); WowNoteHex(note, noteCapacity, &noteLength,
-                        (DWORD)GetClassLongPtrA(window32, GCLP_HBRBACKGROUND), 8);
+                        (DWORD)GetClassLongPtrA(window32, GCLP_HBRBACKGROUND), WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, "]");
         }
         result = DefWindowProcA(window32, message16, WowUserWParam32(message16, wParam), (LPARAM)lParam);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -9703,11 +9775,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0, fell = 0;
         HCURSOR cursor;
         WowNotePut(note, noteCapacity, &noteLength, "SetClassWord(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, value, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, value, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -9763,11 +9835,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT   noteLength = 0;
         DWORD previousValue = 0;
         WowNotePut(note, noteCapacity, &noteLength, isSet ? "SetWindowLong(0x" : "GetWindowLong(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)fieldIndex, WOW_HEX_WORD_DIGITS);
         if (isSet) { WowNotePut(note, noteCapacity, &noteLength, ", 0x");
-                     WowNoteHex(note, noteCapacity, &noteLength, value, 8); }
+                     WowNoteHex(note, noteCapacity, &noteLength, value, WOW_HEX_DWORD_DIGITS); }
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -9787,7 +9859,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                message (WowUserWindowProcedureOf). A system control: see g_WowUserSystemProcedures. */
             PCWOWUSER_SYSPROC systemProcedure = WowUserSystemProcedureOf(window);
             if (systemProcedure) {
-                DWORD thunk = ((DWORD)frame->StubSegment << 16) | systemProcedure->Offset;
+                DWORD thunk = ((DWORD)frame->StubSegment << WOW_WORD_SHIFT) | systemProcedure->Offset;
                 previousValue = window->SubclassProcedure ? window->SubclassProcedure : thunk;
                 if (isSet) {
                     PCWOWUSER_SYSPROC backProcedure = WowUserSystemProcedureAt(frame, value);
@@ -9834,10 +9906,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 }
             }
         } else if (fieldIndex >= 0 && fieldIndex + 3 < (INT)(WOWUSER_MAX_EXTRA * 2)) {
-            previousValue = (DWORD)window->Extra[fieldIndex / 2] | ((DWORD)window->Extra[fieldIndex / 2 + 1] << 16);
+            previousValue = (DWORD)window->Extra[fieldIndex / 2] | ((DWORD)window->Extra[fieldIndex / 2 + 1] << WOW_WORD_SHIFT);
             if (isSet) {
-                window->Extra[fieldIndex / 2]     = (WORD)(value & 0xFFFF);
-                window->Extra[fieldIndex / 2 + 1] = (WORD)(value >> 16);
+                window->Extra[fieldIndex / 2]     = (WORD)(value & WOW_WORD_MASK);
+                window->Extra[fieldIndex / 2 + 1] = (WORD)(value >> WOW_WORD_SHIFT);
             }
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ an index this host does not keep;"
@@ -9846,7 +9918,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, previousValue, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, previousValue, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, previousValue);
         return 1;
     }
@@ -9872,19 +9944,19 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         switch (frame->Id) {
         case WOWUSER_GETKEYSTATE:
             WowNotePut(note, noteCapacity, &noteLength, "GetKeyState(0x");
-            WowNoteHex(note, noteCapacity, &noteLength, unused, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, unused, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
             result = (DWORD)(WORD)GetKeyState((INT)(SHORT)unused);
             break;
         case WOWUSER_GETSYSCOLOR:
             WowNotePut(note, noteCapacity, &noteLength, "GetSysColor(0x");
-            WowNoteHex(note, noteCapacity, &noteLength, unused, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, unused, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
             result = (DWORD)GetSysColor((INT)(SHORT)unused);
             break;
         case WOWUSER_SHOWCURSOR:
             WowNotePut(note, noteCapacity, &noteLength, "ShowCursor(");
-            WowNoteHex(note, noteCapacity, &noteLength, unused, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, unused, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
             result = (DWORD)(WORD)(SHORT)ShowCursor(unused ? TRUE : FALSE);
             break;
@@ -9908,7 +9980,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             break;
         }
         WowNotePut(note, noteCapacity, &noteLength, " = 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, result, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -9927,7 +9999,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 frame->Id == WOWUSER_BRINGWINDOWTOTOP ? "BringWindowToTop(0x" :
                 frame->Id == WOWUSER_DRAWMENUBAR      ? "DrawMenuBar(0x" :
                 frame->Id == WOWUSER_HIDECARET        ? "HideCaret(0x" : "ShowCaret(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         /* A null hWnd is legal for the caret calls -- it means "the window that
            owns the caret" -- and is not for the other two. */
@@ -9957,11 +10029,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ brush = bitmap16 ? WowGdiH32(bitmap16, &brushKind) : NULL;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CreateCaret(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)caretWidth, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)caretWidth, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)caretHeight, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)caretHeight, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -9990,9 +10062,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT positionY = (INT)(SHORT)Wow32ArgWord(frame, 0);
         INT noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, isCaret ? "SetCaretPos(" : "SetCursorPos(");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         result = isCaret ? (SetCaretPos(positionX, positionY) ? 1 : 0) : (SetCursorPos(positionX, positionY) ? 1 : 0);
         Wow32SetReturn(frame, (DWORD)result);
@@ -10009,7 +10081,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         POINT point;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isScreenToClient ? "ScreenToClient(0x" : "GetCursorPos(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!pointBytes || (isScreenToClient && !window32)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no POINT, or not one of our windows;"
@@ -10028,9 +10100,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(pointBytes,     (WORD)(SHORT)point.x);
         Wow32PokeWord(pointBytes + 2, (WORD)(SHORT)point.y);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)point.x, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)point.x, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)point.y, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)point.y, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -10044,7 +10116,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT rect;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "InvertRect(dc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!rectBytes || !dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO RECT, or not one of our DC"
@@ -10084,12 +10156,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         } else {
             WORD atom = Wow32ArgWord(frame, 0);
             WowNotePut(note, noteCapacity, &noteLength, "GlobalDeleteAtom(0x");
-            WowNoteHex(note, noteCapacity, &noteLength, atom, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, atom, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
             result = (DWORD)GlobalDeleteAtom(atom);
         }
         WowNotePut(note, noteCapacity, &noteLength, " = 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -10111,9 +10183,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ palette = palette16 ? WowGdiH32(palette16, &paletteKind) : NULL;
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isSelect ? "SelectPalette(0x" : "RealizePalette(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         if (isSelect) { WowNotePut(note, noteCapacity, &noteLength, ", pal 0x");
-                     WowNoteHex(note, noteCapacity, &noteLength, palette16, 4); }
+                     WowNoteHex(note, noteCapacity, &noteLength, palette16, WOW_HEX_WORD_DIGITS); }
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS; answered 0");
@@ -10134,7 +10206,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                           Wow32ArgWord(frame, WOWUSER_SPL_ARG_FORCE) ? TRUE : FALSE);
             WORD previous16 = previousPalette ? WowGdiH16((HGDIOBJ)previousPalette, WOWGDI_KIND_OBJ) : 0;
             WowNotePut(note, noteCapacity, &noteLength, " -> previous 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, previous16, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, previous16, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, previous16);
         }
         return 1;
@@ -10158,19 +10230,19 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND insertAfter32 = WowUserHwnd32(insertAfter);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetWindowPos(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", after 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, insertAfter, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, insertAfter, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionX, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)width, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)width, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)height, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)height, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, flags, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -10195,7 +10267,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PCWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetParent(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -10203,7 +10275,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->Parent, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Parent, WOW_HEX_WORD_DIGITS);
         if (!window->Parent)
             WowNotePut(note, noteCapacity, &noteLength, " (a top-level window with no owner --"
                                        " which is a real answer, not a failure)");
@@ -10223,9 +10295,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         WORD result16 = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetWindow(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", cmd ");
-        WowNoteHex(note, noteCapacity, &noteLength, command, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, command, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -10255,7 +10327,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, result16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, result16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, result16);
         return 1;
     }
@@ -10273,7 +10345,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PCWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT  noteLength = 0, length = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetClassName(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window || !destination || !capacity) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS, or no"
@@ -10302,7 +10374,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PCWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetWindowTask(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -10312,7 +10384,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         /* s92 (#306): the task that CREATED it, now that there is more than one. */
         WowNotePut(note, noteCapacity, &noteLength, window->Task ? " -> its creator, task 0x"
                                            : " -> the current task 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->Task ? window->Task : g_WowUserCurrentTask, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Task ? window->Task : g_WowUserCurrentTask, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, window->Task ? window->Task : g_WowUserCurrentTask);
         return 1;
     }
@@ -10337,7 +10409,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0, index, slot = -1;
         if (!Wow32ArgString(frame, nameOffset, key, sizeof key)) {
             /* a null selector: the offset IS the atom */
-            WORD atom = (WORD)(namePointer & 0xFFFF);
+            WORD atom = (WORD)(namePointer & WOW_WORD_MASK);
             INT  index2 = 0, shift;
             key[index2++] = '#';
             for (shift = 12; shift >= 0; shift -= 4) {
@@ -10349,7 +10421,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength,
                 isSet ? "SetProp(0x" : frame->Id == WOWUSER_GETPROP ? "GetProp(0x"
                                                                 : "RemoveProp(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteQuoted(note, noteCapacity, &noteLength, key);
         WowNotePut(note, noteCapacity, &noteLength, ")");
@@ -10373,7 +10445,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
             g_WowUserProps[slot].Data = data;
             WowNotePut(note, noteCapacity, &noteLength, " = 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, data, 4);
+            WowNoteHex(note, noteCapacity, &noteLength, data, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, 1);
             return 1;
         }
@@ -10383,7 +10455,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_WowUserProps[slot].Data, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowUserProps[slot].Data, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, g_WowUserProps[slot].Data);
         if (frame->Id == WOWUSER_REMOVEPROP) {
             g_WowUserProps[slot] = g_WowUserProps[g_WowUserPropCount - 1];
@@ -10407,7 +10479,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteQuoted(note, noteCapacity, &noteLength, text);
         WowNotePut(note, noteCapacity, &noteLength, ") = 0x");
         result = (DWORD)GlobalFindAtomA(text);
-        WowNoteHex(note, noteCapacity, &noteLength, result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -10420,7 +10492,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT length;
         INT  noteLength = 0, index;
         WowNotePut(note, noteCapacity, &noteLength, "GlobalGetAtomName(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, atom, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, atom, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!destination || !capacity) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no buffer; answered 0");
@@ -10448,9 +10520,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND window32    = WowUserHwnd32(window16);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetScrollPos(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", bar ");
-        WowNoteHex(note, noteCapacity, &noteLength, bar, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, bar, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
@@ -10488,15 +10560,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT   noteLength = 0;
         UINT_PTR result;
         WowNotePut(note, noteCapacity, &noteLength, "SetTimer(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", id ");
-        WowNoteHex(note, noteCapacity, &noteLength, timerId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, timerId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, elapse, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, elapse, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "ms");
         if (procedure) {
             WowNotePut(note, noteCapacity, &noteLength, ", proc 0x");
-            WowNoteHex(note, noteCapacity, &noteLength, procedure, 8);
+            WowNoteHex(note, noteCapacity, &noteLength, procedure, WOW_HEX_DWORD_DIGITS);
         }
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window16 && procedure) {
@@ -10504,7 +10576,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             result = SetTimer(NULL, 0, (UINT)elapse, NULL);
             if (result && !WowWinThreadTimerAdd(result, procedure)) { KillTimer(NULL, result); result = 0; }
             WowNotePut(note, noteCapacity, &noteLength, result ? " -> a THREAD timer, id 0x" : " -> ★ OS REFUSED");
-            if (result) WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 4);
+            if (result) WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, result ? (DWORD)(WORD)result : 0);
             return 1;
         }
@@ -10533,9 +10605,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND window32    = WowUserHwnd32(window16);
         INT  noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "KillTimer(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", id ");
-        WowNoteHex(note, noteCapacity, &noteLength, timerId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, timerId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window16 && WowWinThreadTimerKill((UINT_PTR)timerId)) {  /* s93: a thread timer */
             result = KillTimer(NULL, (UINT_PTR)timerId) ? 1 : 0;
@@ -10559,7 +10631,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD tickCount = GetTickCount();
         INT   noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetCurrentTime -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, tickCount, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, tickCount, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, tickCount);
         return 1;
     }
@@ -10577,7 +10649,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT  rect;
         INT   noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "AdjustWindowRect(style 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, style, 8);
+        WowNoteHex(note, noteCapacity, &noteLength, style, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, hasMenu ? ", with menu)" : ", no menu)");
         if (!rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL lpRect; nothing written");
@@ -10594,9 +10666,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(rectBytes + 4, (WORD)(SHORT)rect.right);
         Wow32PokeWord(rectBytes + 6, (WORD)(SHORT)rect.bottom);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.bottom - rect.top), WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -10607,7 +10679,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         WORD result16;
         WowNotePut(note, noteCapacity, &noteLength, "GetLastActivePopup(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) {
             /* ⚠ ANSWER THE OWNER, NOT 0. The documented return for a window with
@@ -10621,7 +10693,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         result16 = WowWinHwnd16(GetLastActivePopup(window32));
         if (!result16) result16 = window16;
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, result16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, result16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result16);
         return 1;
     }
@@ -10657,7 +10729,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, result16 ? " -> 0x" : " -> not found");
-        if (result16) WowNoteHex(note, noteCapacity, &noteLength, result16, 4);
+        if (result16) WowNoteHex(note, noteCapacity, &noteLength, result16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)result16);
         return 1;
     }
@@ -10677,7 +10749,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu = NULL;
         WORD  menu16;
         WowNotePut(note, noteCapacity, &noteLength, "LoadMenu(hInst 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, instance, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, instance, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         if (!WowResOpen(WowUserResourceProgram())) {
             WowNotePut(note, noteCapacity, &noteLength, "?) -- ★ CANNOT OPEN THE PROGRAM'S OWN"
@@ -10685,11 +10757,11 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        if ((name >> 16) == 0) {
+        if ((name >> WOW_WORD_SHIFT) == 0) {
             /* MAKEINTRESOURCE: the high word is 0, so the low word is an ordinal. */
             WowNotePut(note, noteCapacity, &noteLength, "#");
-            WowNoteHex(note, noteCapacity, &noteLength, name & 0xFFFF, 4);
-            menu = WowResMenu((WORD)(name & 0xFFFF), &menuItems);
+            WowNoteHex(note, noteCapacity, &noteLength, name & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
+            menu = WowResMenu((WORD)(name & WOW_WORD_MASK), &menuItems);
         } else if (WowUserFarString(frame, name, nameBuffer, sizeof nameBuffer)) {
             WowNoteQuoted(note, noteCapacity, &noteLength, nameBuffer);
             menu = WowResMenuByName(nameBuffer, &menuItems);
@@ -10711,9 +10783,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> menu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)menuItems, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)menuItems, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " items");
         Wow32SetReturn(frame, (DWORD)menu16);
         return 1;
@@ -10726,9 +10798,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HMENU menu   = menu16 ? WowUserMenu32(menu16) : NULL;
         INT   noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "SetMenu(0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", menu 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, menu16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, menu16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!window32) { WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR WINDOWS;"
                                              " answered 0");
@@ -10751,9 +10823,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR  buffer[256];
         INT   noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetDlgItemText dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                   Wow32SetReturn(frame, 0); return 1; }
         if (!textPointer || !WowUserFarString(frame, textPointer, buffer, sizeof buffer)) buffer[0] = 0;
@@ -10801,9 +10873,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         UINT  value;
         INT   noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetDlgItemInt dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!window32) {
             /* ⚠ lpTranslated MUST BE WRITTEN FALSE, not left alone. It is the
                  caller's only way to tell "the box said 0" from "the box was not
@@ -10817,7 +10889,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         value = GetDlgItemInt(window32, (INT)(SHORT)itemId, &isOk, isSigned ? TRUE : FALSE);
         if (translatedBytes) Wow32PokeWord(translatedBytes, (WORD)(isOk ? 1 : 0));
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> 0x" : " -> NOT A NUMBER, 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)value, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)value, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)value);
         return 1;
     }
@@ -10829,9 +10901,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND window32    = WowUserHwnd32(dialog16);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CheckDlgButton dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, check ? " = CHECKED" : " = clear");
         if (!window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                   Wow32SetReturn(frame, 0); return 1; }
@@ -10848,13 +10920,13 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HWND window32     = WowUserHwnd32(dialog16);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CheckRadioButton dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " ids ");
-        WowNoteHex(note, noteCapacity, &noteLength, first, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, first, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "..");
-        WowNoteHex(note, noteCapacity, &noteLength, last, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, last, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " check ");
-        WowNoteHex(note, noteCapacity, &noteLength, check, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, check, WOW_HEX_WORD_DIGITS);
         if (!window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
                   Wow32SetReturn(frame, 0); return 1; }
         CheckRadioButton(window32, (INT)(SHORT)first, (INT)(SHORT)last,
@@ -10870,9 +10942,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         UINT result;
         WowNotePut(note, noteCapacity, &noteLength, "IsDlgButtonChecked dlg 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dialog16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " id 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, itemId, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, itemId, WOW_HEX_WORD_DIGITS);
         if (!window32) { WowNotePut(note, noteCapacity, &noteLength, " -- no real window; answered 0");
                   Wow32SetReturn(frame, 0); return 1; }
         result = IsDlgButtonChecked(window32, (INT)(SHORT)itemId);
@@ -10898,9 +10970,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT  rect;
         INT   noteLength = 0, textLength, result;
         WowNotePut(note, noteCapacity, &noteLength, "DrawText(dc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", fmt 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, format, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, format, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC) || !rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -10932,7 +11004,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " \"");
         WowNotePut(note, noteCapacity, &noteLength, buffer);
         WowNotePut(note, noteCapacity, &noteLength, "\" -> h=");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
         return 1;
     }
@@ -10947,9 +11019,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         RECT  rect;
         INT   noteLength = 0, result;
         WowNotePut(note, noteCapacity, &noteLength, "FrameRect(dc 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, dc16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", brush 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, brush16, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, brush16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         if (!dc || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC) || !rectBytes) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -10969,7 +11041,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         rect.bottom = (SHORT)Wow32PeekWord(rectBytes + 6);
         result = FrameRect((HDC)dc, &rect, (HBRUSH)brush);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
-        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, 4);
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
         return 1;
     }
