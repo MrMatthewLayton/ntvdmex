@@ -18,14 +18,14 @@
  *   Out: every general register, FLAGS, ES, DS, FS, GS. ⚠ NOT CS, IP, SS or SP -- the
  *        spec says those "are not modified", and a client is entitled to reuse one
  *        structure for a second call without re-filling its target and stack.
- *   ★ rmcs_write() therefore CANNOT write those four: it has no parameter for them.
+ *   ★ RmcsWrite() therefore CANNOT write those four: it has no parameter for them.
  *     The old 0300h retarget wrote IVT[BL] into the caller's CS:IP to borrow the 0302h
  *     arm; that is exactly the write this shape makes impossible.
  */
 #ifndef NTVDMEX_DPMI_RMCS_H
 #define NTVDMEX_DPMI_RMCS_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
 #define RMCS_EDI    0x00
 #define RMCS_ESI    0x04
@@ -47,53 +47,57 @@
 
 /* The register file a real-mode service sees and answers in. No CS:IP/SS:SP: those
    are the CALL's plumbing, not its inputs or outputs (see above). */
-typedef struct {
-    uint32_t edi, esi, ebp, ebx, edx, ecx, eax;
-    uint16_t flags, es, ds, fs, gs;
-} rmcs_regs;
+typedef struct _RMCS_REGS {
+    UINT32 Edi, Esi, Ebp, Ebx, Edx, Ecx, Eax;
+    UINT16 Flags, Es, Ds, Fs, Gs;
+} RMCS_REGS, *PRMCS_REGS; typedef const RMCS_REGS *PCRMCS_REGS;
+
+#define RMCS_BYTE1_SHIFT 8
+#define RMCS_BYTE2_SHIFT 16
+#define RMCS_BYTE3_SHIFT 24
 
 /* Byte-assembled: the structure lives wherever the client put it, at any alignment. */
-static uint32_t rmcs_rd32(const volatile uint8_t *r, unsigned o)
+static DWORD RmcsRead32(const volatile BYTE *structure, UINT offset)
 {
-    return (uint32_t)r[o] | ((uint32_t)r[o + 1] << 8)
-         | ((uint32_t)r[o + 2] << 16) | ((uint32_t)r[o + 3] << 24);
+    return (DWORD)structure[offset] | ((DWORD)structure[offset + 1] << RMCS_BYTE1_SHIFT)
+         | ((DWORD)structure[offset + 2] << RMCS_BYTE2_SHIFT) | ((DWORD)structure[offset + 3] << RMCS_BYTE3_SHIFT);
 }
-static uint16_t rmcs_rd16(const volatile uint8_t *r, unsigned o)
+static WORD RmcsRead16(const volatile BYTE *structure, UINT offset)
 {
-    return (uint16_t)(r[o] | (r[o + 1] << 8));
+    return (WORD)(structure[offset] | (structure[offset + 1] << RMCS_BYTE1_SHIFT));
 }
-static void rmcs_wr32(volatile uint8_t *r, unsigned o, uint32_t v)
+static VOID RmcsWrite32(volatile BYTE *structure, UINT offset, DWORD value)
 {
-    r[o] = (uint8_t)v; r[o + 1] = (uint8_t)(v >> 8);
-    r[o + 2] = (uint8_t)(v >> 16); r[o + 3] = (uint8_t)(v >> 24);
+    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> RMCS_BYTE1_SHIFT);
+    structure[offset + 2] = (BYTE)(value >> RMCS_BYTE2_SHIFT); structure[offset + 3] = (BYTE)(value >> RMCS_BYTE3_SHIFT);
 }
-static void rmcs_wr16(volatile uint8_t *r, unsigned o, uint16_t v)
+static VOID RmcsWrite16(volatile BYTE *structure, UINT offset, WORD value)
 {
-    r[o] = (uint8_t)v; r[o + 1] = (uint8_t)(v >> 8);
+    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> RMCS_BYTE1_SHIFT);
 }
 
-static void rmcs_read(const volatile uint8_t *r, rmcs_regs *o)
+static VOID RmcsRead(const volatile BYTE *structure, PRMCS_REGS out)
 {
-    o->edi = rmcs_rd32(r, RMCS_EDI); o->esi = rmcs_rd32(r, RMCS_ESI);
-    o->ebp = rmcs_rd32(r, RMCS_EBP); o->ebx = rmcs_rd32(r, RMCS_EBX);
-    o->edx = rmcs_rd32(r, RMCS_EDX); o->ecx = rmcs_rd32(r, RMCS_ECX);
-    o->eax = rmcs_rd32(r, RMCS_EAX);
-    o->flags = rmcs_rd16(r, RMCS_FLAGS);
-    o->es = rmcs_rd16(r, RMCS_ES); o->ds = rmcs_rd16(r, RMCS_DS);
-    o->fs = rmcs_rd16(r, RMCS_FS); o->gs = rmcs_rd16(r, RMCS_GS);
+    out->Edi = RmcsRead32(structure, RMCS_EDI); out->Esi = RmcsRead32(structure, RMCS_ESI);
+    out->Ebp = RmcsRead32(structure, RMCS_EBP); out->Ebx = RmcsRead32(structure, RMCS_EBX);
+    out->Edx = RmcsRead32(structure, RMCS_EDX); out->Ecx = RmcsRead32(structure, RMCS_ECX);
+    out->Eax = RmcsRead32(structure, RMCS_EAX);
+    out->Flags = RmcsRead16(structure, RMCS_FLAGS);
+    out->Es = RmcsRead16(structure, RMCS_ES); out->Ds = RmcsRead16(structure, RMCS_DS);
+    out->Fs = RmcsRead16(structure, RMCS_FS); out->Gs = RmcsRead16(structure, RMCS_GS);
 }
 
 /* Everything the spec returns, nothing it does not. +0C (reserved) is not touched
    either: it is the client's. */
-static void rmcs_write(volatile uint8_t *r, const rmcs_regs *i)
+static VOID RmcsWrite(volatile BYTE *structure, PCRMCS_REGS in)
 {
-    rmcs_wr32(r, RMCS_EDI, i->edi); rmcs_wr32(r, RMCS_ESI, i->esi);
-    rmcs_wr32(r, RMCS_EBP, i->ebp); rmcs_wr32(r, RMCS_EBX, i->ebx);
-    rmcs_wr32(r, RMCS_EDX, i->edx); rmcs_wr32(r, RMCS_ECX, i->ecx);
-    rmcs_wr32(r, RMCS_EAX, i->eax);
-    rmcs_wr16(r, RMCS_FLAGS, i->flags);
-    rmcs_wr16(r, RMCS_ES, i->es); rmcs_wr16(r, RMCS_DS, i->ds);
-    rmcs_wr16(r, RMCS_FS, i->fs); rmcs_wr16(r, RMCS_GS, i->gs);
+    RmcsWrite32(structure, RMCS_EDI, in->Edi); RmcsWrite32(structure, RMCS_ESI, in->Esi);
+    RmcsWrite32(structure, RMCS_EBP, in->Ebp); RmcsWrite32(structure, RMCS_EBX, in->Ebx);
+    RmcsWrite32(structure, RMCS_EDX, in->Edx); RmcsWrite32(structure, RMCS_ECX, in->Ecx);
+    RmcsWrite32(structure, RMCS_EAX, in->Eax);
+    RmcsWrite16(structure, RMCS_FLAGS, in->Flags);
+    RmcsWrite16(structure, RMCS_ES, in->Es); RmcsWrite16(structure, RMCS_DS, in->Ds);
+    RmcsWrite16(structure, RMCS_FS, in->Fs); RmcsWrite16(structure, RMCS_GS, in->Gs);
 }
 
 /* ── HOW 0300h SERVICES VECTOR `vec`, GIVEN WHAT IVT[vec] HOLDS. ───────────────────────
@@ -118,15 +122,18 @@ static void rmcs_write(volatile uint8_t *r, const rmcs_regs *i)
 #define SIMINT_FAST 1   /* host-side: dos_int21 / mouse_int33 / the video VDD          */
 #define SIMINT_RUN  2   /* run IVT[vec] in V86 with an IRET frame (the 0302h machinery) */
 #define SIMINT_NONE 3   /* not run; counted in `STAGE2: simInt (DPMI 0300) UNHANDLED`   */
+#define SIMINT_VECTOR_VIDEO 0x10
+#define SIMINT_VECTOR_DOS   0x21
+#define SIMINT_VECTOR_MOUSE 0x33
 
-static int simint_route(unsigned vec, uint16_t ivt_seg, uint16_t ivt_off,
-                        int reflect_on, uint16_t our_seg)
+static INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset,
+                           INT isReflectOn, WORD ourSegment)
 {
-    if (vec == 0x21) return SIMINT_FAST;
-    if (vec == 0x33 || vec == 0x10)
-        if (ivt_seg == our_seg || !reflect_on) return SIMINT_FAST;
-    if (!reflect_on) return SIMINT_NONE;
-    if (ivt_seg == 0 && ivt_off == 0) return SIMINT_NONE;
+    if (vector == SIMINT_VECTOR_DOS) return SIMINT_FAST;
+    if (vector == SIMINT_VECTOR_MOUSE || vector == SIMINT_VECTOR_VIDEO)
+        if (ivtSegment == ourSegment || !isReflectOn) return SIMINT_FAST;
+    if (!isReflectOn) return SIMINT_NONE;
+    if (ivtSegment == 0 && ivtOffset == 0) return SIMINT_NONE;
     return SIMINT_RUN;
 }
 
@@ -142,12 +149,14 @@ static int simint_route(unsigned vec, uint16_t ivt_seg, uint16_t ivt_off,
      call that has always worked, and one passing 30000 words is not asking for a copy
      any host could make.
    ⚠ SP = 0 IS A FULL 64 KB, not an empty stack: the first push wraps it to FFFEh. */
-static int rmcs_stack_plan(uint16_t sp, unsigned words, unsigned frame, uint16_t *sp_after)
+#define RMCS_STACK_FULL  0x10000u   /* SP = 0: all 64 KB                            */
+#define RMCS_WORD_BYTES  2u
+static INT RmcsStackPlan(WORD stackPointer, UINT words, UINT frame, PWORD stackPointerAfter)
 {
-    uint32_t avail = sp ? (uint32_t)sp : 0x10000u;
-    uint32_t need = (uint32_t)words * 2u;
-    if (need + frame > avail) { *sp_after = sp; return 0; }
-    *sp_after = (uint16_t)(avail - need);
+    DWORD available = stackPointer ? (DWORD)stackPointer : RMCS_STACK_FULL;
+    DWORD needed = (DWORD)words * RMCS_WORD_BYTES;
+    if (needed + frame > available) { *stackPointerAfter = stackPointer; return 0; }
+    *stackPointerAfter = (WORD)(available - needed);
     return 1;
 }
 

@@ -8246,7 +8246,7 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
      It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
      completion the nested V86 call never delivered. s81 fixed that, and the spec says
      0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out.
-   ► #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (simint_route
+   ► #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (RmcsSimIntRoute
      in dpmi_rmcs.h). The flag restores the pre-#247 ROUTING: 21h/33h/10h host-side,
      everything else not run. (Not the pre-#247 marshalling: the full register write-back
      and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing. */
@@ -21335,24 +21335,24 @@ static DWORD dpmi_rmcs_ptr(volatile BYTE *tib, DWORD esb)
    FLAGS is deliberately NOT moved by rmcs_to_tib: each caller decides what the live
    EFLAGS are (V86 entry state for the nested call, a carrier word for the host-side
    fast path), and passes the word to report back to tib_to_rmcs. */
-static void rmcs_to_tib(volatile BYTE *tib, const rmcs_regs *g)
+static void rmcs_to_tib(volatile BYTE *tib, const RMCS_REGS *g)
 {
-    VDM_REG(tib, VTIB_EDI) = g->edi; VDM_REG(tib, VTIB_ESI) = g->esi;
-    VDM_REG(tib, VTIB_EBP) = g->ebp; VDM_REG(tib, VTIB_EBX) = g->ebx;
-    VDM_REG(tib, VTIB_EDX) = g->edx; VDM_REG(tib, VTIB_ECX) = g->ecx;
-    VDM_REG(tib, VTIB_EAX) = g->eax;
-    VDM_REG(tib, VTIB_ES) = g->es; VDM_REG(tib, VTIB_DS) = g->ds;
-    VDM_REG(tib, VTIB_FS) = g->fs; VDM_REG(tib, VTIB_GS) = g->gs;
+    VDM_REG(tib, VTIB_EDI) = g->Edi; VDM_REG(tib, VTIB_ESI) = g->Esi;
+    VDM_REG(tib, VTIB_EBP) = g->Ebp; VDM_REG(tib, VTIB_EBX) = g->Ebx;
+    VDM_REG(tib, VTIB_EDX) = g->Edx; VDM_REG(tib, VTIB_ECX) = g->Ecx;
+    VDM_REG(tib, VTIB_EAX) = g->Eax;
+    VDM_REG(tib, VTIB_ES) = g->Es; VDM_REG(tib, VTIB_DS) = g->Ds;
+    VDM_REG(tib, VTIB_FS) = g->Fs; VDM_REG(tib, VTIB_GS) = g->Gs;
 }
-static void tib_to_rmcs(volatile BYTE *tib, rmcs_regs *g, WORD flags)
+static void tib_to_rmcs(volatile BYTE *tib, RMCS_REGS *g, WORD flags)
 {
-    g->edi = VDM_REG(tib, VTIB_EDI); g->esi = VDM_REG(tib, VTIB_ESI);
-    g->ebp = VDM_REG(tib, VTIB_EBP); g->ebx = VDM_REG(tib, VTIB_EBX);
-    g->edx = VDM_REG(tib, VTIB_EDX); g->ecx = VDM_REG(tib, VTIB_ECX);
-    g->eax = VDM_REG(tib, VTIB_EAX);
-    g->flags = flags;
-    g->es = (uint16_t)VDM_REG(tib, VTIB_ES); g->ds = (uint16_t)VDM_REG(tib, VTIB_DS);
-    g->fs = (uint16_t)VDM_REG(tib, VTIB_FS); g->gs = (uint16_t)VDM_REG(tib, VTIB_GS);
+    g->Edi = VDM_REG(tib, VTIB_EDI); g->Esi = VDM_REG(tib, VTIB_ESI);
+    g->Ebp = VDM_REG(tib, VTIB_EBP); g->Ebx = VDM_REG(tib, VTIB_EBX);
+    g->Edx = VDM_REG(tib, VTIB_EDX); g->Ecx = VDM_REG(tib, VTIB_ECX);
+    g->Eax = VDM_REG(tib, VTIB_EAX);
+    g->Flags = flags;
+    g->Es = (uint16_t)VDM_REG(tib, VTIB_ES); g->Ds = (uint16_t)VDM_REG(tib, VTIB_DS);
+    g->Fs = (uint16_t)VDM_REG(tib, VTIB_FS); g->Gs = (uint16_t)VDM_REG(tib, VTIB_GS);
 }
 
 static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD intno)
@@ -24850,7 +24850,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              just another real-mode handler and needs no special case.
                            ► The host-side 21h/33h/10h arms in `case 0x0300` stay as a FAST
                              PATH, and only where they give the same answer -- see
-                             simint_route() in dpmi_rmcs.h for exactly when, and why INT 21h
+                             RmcsSimIntRoute() in dpmi_rmcs.h for exactly when, and why INT 21h
                              is always one.
                            ⚠ THE CALLER'S RMCS CS:IP IS NO LONGER WRITTEN. The first cut of the
                              reflection borrowed 0302 by storing IVT[BL] into RMCS.CS:IP; the
@@ -24860,7 +24860,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         if (ax == 0x0300) {
                             DWORD iv = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
-                            if (simint_route(iv, hs, ho, g_simint_reflect, DOS_HDLR_SEG) == SIMINT_RUN) {
+                            if (RmcsSimIntRoute(iv, hs, ho, g_simint_reflect, DOS_HDLR_SEG) == SIMINT_RUN) {
                                 simint_vec = (int)iv; simint_cs = hs; simint_ip = ho;
                                 p = zput(p, " [simInt 0x"); p = zhexb(p, (BYTE)iv);
                                 p = zput(p, (hs == DOS_HDLR_SEG || hs == DOS_CTAB_SEG)
@@ -25974,13 +25974,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             dpmi_rmcs_probe(tib, esb, 0, intno);   /* observation only */
                             /* ── #247: ONLY TWO WAYS IN HERE NOW. The decision site above sent every
-                                 vector simint_route() calls SIMINT_RUN to the 0302 arm; what is
+                                 vector RmcsSimIntRoute() calls SIMINT_RUN to the 0302 arm; what is
                                  left is SIMINT_FAST (21h; 33h/10h while the IVT holds our stub)
                                  and SIMINT_NONE (a null vector, or simintrefl_off.flag), which
                                  runs nothing and is counted below, as every vector but three
                                  used to be. */
                             { WORD hs = peekw(intno * 4 + 2), ho = peekw(intno * 4);
-                              if (simint_route(intno, hs, ho, g_simint_reflect, DOS_HDLR_SEG) != SIMINT_FAST) {
+                              if (RmcsSimIntRoute(intno, hs, ho, g_simint_reflect, DOS_HDLR_SEG) != SIMINT_FAST) {
                                   g_simint_unhandled++;
                                   if (intno < 256) g_simint_vec[intno]++;
                                   p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
@@ -25994,7 +25994,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                   sBp=VDM_REG(tib,VTIB_EBP),sDs=VDM_REG(tib,VTIB_DS),sEs=VDM_REG(tib,VTIB_ES),
                                   sFs=VDM_REG(tib,VTIB_FS),sGs=VDM_REG(tib,VTIB_GS),
                                   sSs=VDM_REG(tib,VTIB_SS),sSp=VDM_REG(tib,VTIB_ESP),sFl=VDM_REG(tib,VTIB_EFLAGS);
-                            rmcs_regs rg;
+                            RMCS_REGS rg;
                             /* ── ★★★ #247: THE WHOLE REGISTER FILE IN, AND FLAGS WHERE THE ANSWER LANDS.
                                  This loaded the low WORD of seven registers plus ES and DS, and
                                  parked SS:SP on a "host scratch stack" at 0100:FF00 -- which is
@@ -26015,9 +26015,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  FLAGS is the caller's own, echoed -- also what the stub's IRET
                                  gives.
                                ► The full 32-bit fields, and FS/GS: see dpmi_rmcs.h. */
-                            rmcs_read(r, &rg);
+                            RmcsRead(r, &rg);
                             rmcs_to_tib(tib, &rg);
-                            VDM_REG(tib,VTIB_EFLAGS) = (sFl & 0xFFFF0000u) | rg.flags;
+                            VDM_REG(tib,VTIB_EFLAGS) = (sFl & 0xFFFF0000u) | rg.Flags;
                             /* ── 0300 SERVICED EXACTLY ONE VECTOR, AND THAT IS THE BUG. ──
                                  Everything except INT 21h loaded the real-mode register
                                  block, did NOTHING, and copied it straight back -- so the
@@ -26107,9 +26107,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  ES and BP.
                                  regs_store() was fixed for exactly this in the V86 path ("STORE
                                  EVERYTHING LOAD READS"); this was the last copy of the old shape.
-                               ⚠ CS:IP and SS:SP are NOT written -- rmcs_write() has no way to. */
+                               ⚠ CS:IP and SS:SP are NOT written -- RmcsWrite() has no way to. */
                             tib_to_rmcs(tib, &rg, (WORD)VDM_REG(tib, VTIB_EFLAGS));
-                            rmcs_write(r, &rg);
+                            RmcsWrite(r, &rg);
                             /* restore the client's PM register file */
                             VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
                             VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
@@ -26159,7 +26159,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
                             unsigned rt; int done = 0;
                             DWORD cxw = pC & 0xFFFF;   /* words of PM stack to copy (DPMI 0.9) */
-                            rmcs_regs rg;
+                            RMCS_REGS rg;
                             /* 0300h: the target is the IVT's, never the structure's. See the decision
                                site: RMCS.CS:IP is ignored on the way in and not written on the way out. */
                             if (simint_vec >= 0) { rcs = simint_cs; rip = simint_ip; }
@@ -26173,7 +26173,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             /* ── #247: CX WORDS OF THE PROTECTED-MODE STACK. All three services take
                                  them, and all three ignored them -- a real-mode procedure that reads
                                  its arguments off its stack read whatever was below our frame.
-                                 They go above the return frame, in order (rmcs_stack_plan). The
+                                 They go above the return frame, in order (RmcsStackPlan). The
                                  PM stack top is the client's SS:(E)SP exactly as it executed
                                  INT 31h: the INT is a patched BOP here, so nothing was pushed.
                                ⚠ A CX THAT DOES NOT FIT, OR A PM STACK WE CANNOT READ, COPIES
@@ -26186,7 +26186,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 DWORD poff = dpmi_sel_is32(pss) ? pSp : (pSp & 0xFFFF);
                                 const BYTE *src = (const BYTE *)(ULONG_PTR)(dpmi_sel_base(pss) + poff);
                                 p = zput(p, " copy=0x"); p = zhex(p, cxw);
-                                if (rmcs_stack_plan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
+                                if (RmcsStackPlan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
                                     && host_readable(src, cxw * 2u)) {
                                     DWORD k;
                                     for (k = 0; k < cxw * 2u; ++k)
@@ -26239,7 +26239,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  half a 386 real-mode handler may take as input) and set FS = GS =
                                  the stack segment, where the spec loads them from the structure
                                  like ES and DS. See dpmi_rmcs.h for the layout and the rule. */
-                            rmcs_read(r, &rg);
+                            RmcsRead(r, &rg);
                             rmcs_to_tib(tib, &rg);
                             /* ── 0300h: AN INTERRUPT IS ENTERED WITH THE CALLER'S STATUS FLAGS. A real
                                  `INT nn` pushes FLAGS and leaves CF/ZF/SF/OF/PF/AF/DF as they were, so
@@ -26252,7 +26252,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  SB IRQ 5 delivered INTO this nested call -- and our own stubs do
                                  not care. Clearing it is a change to make with ZAR on the rig. */
                             if (simint_vec >= 0)
-                                VDM_REG(tib,VTIB_EFLAGS) |= (DWORD)(rg.flags & 0x0CD5u);  /* CF PF AF ZF SF DF OF */
+                                VDM_REG(tib,VTIB_EFLAGS) |= (DWORD)(rg.Flags & 0x0CD5u);  /* CF PF AF ZF SF DF OF */
                             VDM_SET16(tib,VTIB_CS,rcs); VDM_REG(tib,VTIB_EIP)=rip;
                             VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
                             /* --- nested V86 run loop: run the proc until the return-BOP --- */
@@ -26339,9 +26339,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
                             /* --- copy the real-mode register file back into the RMCS ---
                                #247: all of it -- 32-bit general registers, FLAGS, ES DS FS GS -- and
-                               never CS:IP/SS:SP (rmcs_write cannot). Was: the low words, ES, DS. */
+                               never CS:IP/SS:SP (RmcsWrite cannot). Was: the low words, ES, DS. */
                             tib_to_rmcs(tib, &rg, (WORD)VDM_REG(tib, VTIB_EFLAGS));
-                            rmcs_write(r, &rg);
+                            RmcsWrite(r, &rg);
                             /* ── AND THE FLAGS, WHICH ARE THE ANSWER, NOT A DETAIL. ─────────────
                                  This block copied eight registers back and silently dropped the
                                  ninth. Every DOS service reports failure in CF, so discarding
@@ -26358,7 +26358,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  CF is not one output among many -- it is the only one it reads.
                                  The DPMI 0.9 spec is explicit that 0300/0301/0302 return the
                                  real-mode register state in the RMCS, and FLAGS is part of it.
-                                 (Written by rmcs_write above since #247.) */
+                                 (Written by RmcsWrite above since #247.) */
                             /* --- restore the client's PM CONTEXT --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
                             VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
