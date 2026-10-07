@@ -40,11 +40,11 @@
 #include <string.h>
 #include "../../src/wow/wowconv.h"
 
-static int pass, fail, skip;
-static void ok(int c, const char *what)
+static INT g_Passes, g_Failures, g_Skips;
+static VOID WowTestCheck(INT condition, PCSTR description)
 {
-    if (c) { ++pass; printf("  PASS  %s\n", what); }
-    else   { ++fail; printf("  FAIL  %s\n", what); }
+    if (condition) { ++g_Passes; printf("  PASS  %s\n", description); }
+    else   { ++g_Failures; printf("  FAIL  %s\n", description); }
 }
 
 /* ── PART 1 + 2 SHARED: the macro table scanned out of the real headers ───── */
@@ -60,11 +60,11 @@ static void ok(int c, const char *what)
      input must say so, not quietly answer about a subset. This is the same
      rule the bus applies to a refused port claim. */
 #define MAXDEF 2048
-typedef struct { char name[64]; long val; char file[32]; int line; } def_t;
-static def_t g_def[MAXDEF];
-static int   g_ndef;
+typedef struct { CHAR Name[64]; long Value; CHAR File[32]; INT Line; } WOW_TEST_DEFINITION;
+static WOW_TEST_DEFINITION g_Definitions[MAXDEF];
+static INT   g_DefinitionCount;
 
-static const char *HEADERS[] = {
+static PCSTR g_Headers[] = {
     "src/wow/wowuser.h", "src/wow/wowgdi.h", "src/wow/wow32.h",
     "src/wow/wowres.h",  "src/wow/wowcommdlg.h", "src/wow/wowshell.h",
 };
@@ -72,31 +72,31 @@ static const char *HEADERS[] = {
 /* A `#define <NAME>_ARG_<X> <number>` line, and nothing else. Deliberately
    strict: a macro defined to an expression is not an offset table entry and
    pretending otherwise would invent coverage. */
-static void scan_header(const char *root, const char *rel)
+static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
 {
-    char path[512], line[1024];
-    FILE *f;
-    int lineno = 0;
-    snprintf(path, sizeof path, "%s/%s", root, rel);
-    f = fopen(path, "r");
-    if (!f) { ++skip; printf("  SKIP  %s not found\n", rel); return; }
-    while (fgets(line, sizeof line, f)) {
-        char name[128]; long v; char *p = line, *q;
-        ++lineno;
-        while (*p == ' ' || *p == '\t') ++p;
-        if (strncmp(p, "#define", 7)) continue;
-        p += 7;
-        while (*p == ' ' || *p == '\t') ++p;
-        q = name;
-        while (*p && *p != ' ' && *p != '\t' && (q - name) < (int)sizeof name - 1)
-            *q++ = *p++;
-        *q = 0;
+    CHAR path[512], line[1024];
+    FILE *file;
+    INT lineNumber = 0;
+    snprintf(path, sizeof path, "%s/%s", root, relativePath);
+    file = fopen(path, "r");
+    if (!file) { ++g_Skips; printf("  SKIP  %s not found\n", relativePath); return; }
+    while (fgets(line, sizeof line, file)) {
+        CHAR name[128]; long value; PSTR cursor = line, nameCursor;
+        ++lineNumber;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (strncmp(cursor, "#define", 7)) continue;
+        cursor += 7;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        nameCursor = name;
+        while (*cursor && *cursor != ' ' && *cursor != '\t' && (nameCursor - name) < (INT)sizeof name - 1)
+            *nameCursor++ = *cursor++;
+        *nameCursor = 0;
         if (!strstr(name, "_ARG_")) continue;
-        while (*p == ' ' || *p == '\t') ++p;
-        if (*p == '(') continue;                 /* not a plain number */
-        {   char *end; v = strtol(p, &end, 0);
-            if (end == p) continue; }
-        if (g_ndef >= MAXDEF) {
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor == '(') continue;                 /* not a plain number */
+        {   PSTR end; value = strtol(cursor, &end, 0);
+            if (end == cursor) continue; }
+        if (g_DefinitionCount >= MAXDEF) {
             /* Not `continue`. See the MAXDEF note: dropping a macro here makes
                part 2 report it as UNDEFINED, which sends the reader to the
                header to look for something that is already there. */
@@ -105,65 +105,65 @@ static void scan_header(const char *root, const char *rel)
                             "reported as 'not defined'.\n", MAXDEF);
             exit(2);
         }
-        snprintf(g_def[g_ndef].name, sizeof g_def[g_ndef].name, "%s", name);
-        snprintf(g_def[g_ndef].file, sizeof g_def[g_ndef].file, "%s", rel);
-        g_def[g_ndef].val = v;
-        g_def[g_ndef].line = lineno;
-        ++g_ndef;
+        snprintf(g_Definitions[g_DefinitionCount].Name, sizeof g_Definitions[g_DefinitionCount].Name, "%s", name);
+        snprintf(g_Definitions[g_DefinitionCount].File, sizeof g_Definitions[g_DefinitionCount].File, "%s", relativePath);
+        g_Definitions[g_DefinitionCount].Value = value;
+        g_Definitions[g_DefinitionCount].Line = lineNumber;
+        ++g_DefinitionCount;
     }
-    fclose(f);
+    fclose(file);
 }
 
 /* -1 when absent, so a table naming a macro that does not exist FAILS rather
    than silently tiling with a zero. */
-static long defval(const char *name, int *found)
+static long WowTestDefinitionValue(PCSTR name, PINT found)
 {
-    int i;
+    INT index;
     if (found) *found = 0;
-    for (i = 0; i < g_ndef; ++i)
-        if (!strcmp(g_def[i].name, name)) {
+    for (index = 0; index < g_DefinitionCount; ++index)
+        if (!strcmp(g_Definitions[index].Name, name)) {
             if (found) *found = 1;
-            return g_def[i].val;
+            return g_Definitions[index].Value;
         }
     return -1;
 }
 
-static void part1_macro_hygiene(void)
+static VOID WowTestMacroHygiene(VOID)
 {
-    int i, j, dup = 0;
-    char what[256];
+    INT first, second, duplicateCount = 0;
+    CHAR description[256];
     printf("\n-- part 1: no `*_ARG_*` macro may be defined twice --\n");
-    for (i = 0; i < g_ndef; ++i) {
-        for (j = i + 1; j < g_ndef; ++j) {
-            if (strcmp(g_def[i].name, g_def[j].name)) continue;
-            ++dup;
-            snprintf(what, sizeof what,
+    for (first = 0; first < g_DefinitionCount; ++first) {
+        for (second = first + 1; second < g_DefinitionCount; ++second) {
+            if (strcmp(g_Definitions[first].Name, g_Definitions[second].Name)) continue;
+            ++duplicateCount;
+            snprintf(description, sizeof description,
                      "%s defined twice: %s:%d = %ld and %s:%d = %ld"
                      " -- the LAST one wins at every use below it",
-                     g_def[i].name, g_def[i].file, g_def[i].line, g_def[i].val,
-                     g_def[j].file, g_def[j].line, g_def[j].val);
-            ok(0, what);
+                     g_Definitions[first].Name, g_Definitions[first].File, g_Definitions[first].Line, g_Definitions[first].Value,
+                     g_Definitions[second].File, g_Definitions[second].Line, g_Definitions[second].Value);
+            WowTestCheck(0, description);
         }
     }
-    if (!dup) {
-        snprintf(what, sizeof what,
-                 "%d argument-offset macros, all uniquely named", g_ndef);
-        ok(1, what);
+    if (!duplicateCount) {
+        snprintf(description, sizeof description,
+                 "%d argument-offset macros, all uniquely named", g_DefinitionCount);
+        WowTestCheck(1, description);
     }
 }
 
 /* ── PART 2: the offset tables must tile their declared width ─────────────── */
-typedef struct { const char *macro; int size; } field_t;
+typedef struct { PCSTR Macro; INT Size; } WOW_TEST_FIELD;
 typedef struct {
-    const char *service;    /* what it is, for the failure message      */
-    int         width;      /* argument BYTES, from tools/ne/neneeds.py  */
-    field_t     f[14];
-} svc_t;
+    PCSTR Service;    /* what it is, for the failure message      */
+    INT         Width;      /* argument BYTES, from tools/ne/neneeds.py  */
+    WOW_TEST_FIELD     Fields[14];
+} WOW_TEST_SERVICE;
 
 /* ⚠ EVERY `width` HERE CAME OUT OF A REAL BINARY, via
      `tools/ne/neneeds.py guest/win16/<prog>.exe --todo`, which reads the
      argument-byte count off the module's own thunk. None of them is a guess. */
-static const svc_t SVC[] = {
+static const WOW_TEST_SERVICE g_Services[] = {
   /* --- the two that collided, and the reason part 1 exists --------------- */
   { "USER InvalidateRect(hWnd, lpRect, bErase)", 8,
     { {"WOWUSER_IR_ARG_ERASE",2}, {"WOWUSER_IR_ARG_RECT",4}, {"WOWUSER_IR_ARG_HWND",2}, {0,0} } },
@@ -247,109 +247,109 @@ static const svc_t SVC[] = {
       {"WOW32_GETPRIVATEPROFILEINT_ARG_APP",4}, {0,0} } },
 };
 
-static void part2_offset_tiling(void)
+static VOID WowTestOffsetTiling(VOID)
 {
-    unsigned s;
-    char what[320];
+    UINT serviceIndex;
+    CHAR description[320];
     printf("\n-- part 2: every argument offset table must tile its width --\n");
-    for (s = 0; s < sizeof SVC / sizeof SVC[0]; ++s) {
-        const svc_t *v = &SVC[s];
-        unsigned char cover[64];
-        int i, bad = 0, total = 0, missing = 0;
+    for (serviceIndex = 0; serviceIndex < sizeof g_Services / sizeof g_Services[0]; ++serviceIndex) {
+        const WOW_TEST_SERVICE *service = &g_Services[serviceIndex];
+        BYTE cover[64];
+        INT fieldIndex, isBad = 0, coveredBytes = 0, missingCount = 0;
         memset(cover, 0, sizeof cover);
-        if (v->width > (int)sizeof cover) { ++skip; continue; }
-        for (i = 0; i < 14 && v->f[i].macro; ++i) {
-            int found = 0, j;
-            long off = defval(v->f[i].macro, &found);
+        if (service->Width > (INT)sizeof cover) { ++g_Skips; continue; }
+        for (fieldIndex = 0; fieldIndex < 14 && service->Fields[fieldIndex].Macro; ++fieldIndex) {
+            INT found = 0, byteIndex;
+            long offset = WowTestDefinitionValue(service->Fields[fieldIndex].Macro, &found);
             if (!found) {
-                snprintf(what, sizeof what, "%s: macro %s is not defined",
-                         v->service, v->f[i].macro);
-                ok(0, what); ++missing; bad = 1; continue;
+                snprintf(description, sizeof description, "%s: macro %s is not defined",
+                         service->Service, service->Fields[fieldIndex].Macro);
+                WowTestCheck(0, description); ++missingCount; isBad = 1; continue;
             }
-            total += v->f[i].size;
-            for (j = 0; j < v->f[i].size; ++j) {
-                long b = off + j;
-                if (b < 0 || b >= v->width) {
-                    snprintf(what, sizeof what,
+            coveredBytes += service->Fields[fieldIndex].Size;
+            for (byteIndex = 0; byteIndex < service->Fields[fieldIndex].Size; ++byteIndex) {
+                long byteOffset = offset + byteIndex;
+                if (byteOffset < 0 || byteOffset >= service->Width) {
+                    snprintf(description, sizeof description,
                              "%s: %s = %ld puts byte %ld outside the %d-byte block",
-                             v->service, v->f[i].macro, off, b, v->width);
-                    ok(0, what); bad = 1; break;
+                             service->Service, service->Fields[fieldIndex].Macro, offset, byteOffset, service->Width);
+                    WowTestCheck(0, description); isBad = 1; break;
                 }
-                if (cover[b]) {
-                    snprintf(what, sizeof what,
+                if (cover[byteOffset]) {
+                    snprintf(description, sizeof description,
                              "%s: %s = %ld OVERLAPS an earlier field at byte %ld",
-                             v->service, v->f[i].macro, off, b);
-                    ok(0, what); bad = 1; break;
+                             service->Service, service->Fields[fieldIndex].Macro, offset, byteOffset);
+                    WowTestCheck(0, description); isBad = 1; break;
                 }
-                cover[b] = 1;
+                cover[byteOffset] = 1;
             }
         }
-        if (missing) continue;
-        if (!bad && total != v->width) {
-            snprintf(what, sizeof what,
+        if (missingCount) continue;
+        if (!isBad && coveredBytes != service->Width) {
+            snprintf(description, sizeof description,
                      "%s: fields total %d bytes but the thunk declares %d",
-                     v->service, total, v->width);
-            ok(0, what); bad = 1;
+                     service->Service, coveredBytes, service->Width);
+            WowTestCheck(0, description); isBad = 1;
         }
-        if (!bad) {
-            for (i = 0; i < v->width; ++i)
-                if (!cover[i]) {
-                    snprintf(what, sizeof what,
+        if (!isBad) {
+            for (fieldIndex = 0; fieldIndex < service->Width; ++fieldIndex)
+                if (!cover[fieldIndex]) {
+                    snprintf(description, sizeof description,
                              "%s: byte %d of %d is named by no field",
-                             v->service, i, v->width);
-                    ok(0, what); bad = 1; break;
+                             service->Service, fieldIndex, service->Width);
+                    WowTestCheck(0, description); isBad = 1; break;
                 }
         }
-        if (!bad) {
-            snprintf(what, sizeof what, "%s: %d bytes, tiled exactly",
-                     v->service, v->width);
-            ok(1, what);
+        if (!isBad) {
+            snprintf(description, sizeof description, "%s: %d bytes, tiled exactly",
+                     service->Service, service->Width);
+            WowTestCheck(1, description);
         }
     }
 }
 
 /* ── PART 3: the semantic deltas ─────────────────────────────────────────── */
-static void part3_conversions(void)
+static VOID WowTestConversions(VOID)
 {
-    unsigned char core[12 + 16 * 3 + 8], out[40 + 256 * 4];
-    unsigned pal = 0, pix;
-    unsigned char r[WOWCONV_RECT16_SIZE];
+    BYTE core[12 + 16 * 3 + 8], output[40 + 256 * 4];
+    UINT palette = 0, pixels;
+    BYTE rect[WOWCONV_RECT16_SIZE];
     printf("\n-- part 3: the Win16/Win32 semantic deltas (wowconv.h) --\n");
 
     /* NUMCOLORS. The two call sites this has to satisfy are real and read out
        of the binaries: WINMINE `cmp ax,2 / jle` (signed) and SOL `cmp ax,2 /
        jne`. Both must land on "colour" for a modern display. */
-    ok(WowConvNumColors(1)  == 2,   "NUMCOLORS: 1bpp -> 2 (a mono device really is 2)");
-    ok(WowConvNumColors(4)  == 16,  "NUMCOLORS: 4bpp -> 16");
-    ok(WowConvNumColors(8)  == 256, "NUMCOLORS: 8bpp -> 256");
-    ok(WowConvNumColors(16) == 256, "NUMCOLORS: 16bpp -> 256, never -1");
-    ok(WowConvNumColors(32) == 256, "NUMCOLORS: 32bpp -> 256, never -1");
-    ok(WowConvNumColors(32) >  2,   "  ...and WINMINE's SIGNED `jle 2` takes the COLOUR branch");
-    ok(WowConvNumColors(32) != 2,   "  ...and SOL's `cmp ax,2 / jne` skips its mono flag");
-    ok(WowConvNumColors(1)  == 2,   "  ...while a REAL mono device still reports mono");
+    WowTestCheck(WowConvNumColors(1)  == 2,   "NUMCOLORS: 1bpp -> 2 (a mono device really is 2)");
+    WowTestCheck(WowConvNumColors(4)  == 16,  "NUMCOLORS: 4bpp -> 16");
+    WowTestCheck(WowConvNumColors(8)  == 256, "NUMCOLORS: 8bpp -> 256");
+    WowTestCheck(WowConvNumColors(16) == 256, "NUMCOLORS: 16bpp -> 256, never -1");
+    WowTestCheck(WowConvNumColors(32) == 256, "NUMCOLORS: 32bpp -> 256, never -1");
+    WowTestCheck(WowConvNumColors(32) >  2,   "  ...and WINMINE's SIGNED `jle 2` takes the COLOUR branch");
+    WowTestCheck(WowConvNumColors(32) != 2,   "  ...and SOL's `cmp ax,2 / jne` skips its mono flag");
+    WowTestCheck(WowConvNumColors(1)  == 2,   "  ...while a REAL mono device still reports mono");
 
     /* hbrBackground: three cases, and 0 must stay 0. */
-    ok(WowConvBackgroundBrushKind(0) == WOWCONV_HBR_NONE,
+    WowTestCheck(WowConvBackgroundBrushKind(0) == WOWCONV_HBR_NONE,
        "hbrBackground: 0 is NO ERASE, not a default");
-    ok(WowConvBackgroundBrushKind(6) == WOWCONV_HBR_SYSCOLOR,
+    WowTestCheck(WowConvBackgroundBrushKind(6) == WOWCONV_HBR_SYSCOLOR,
        "hbrBackground: 6 is COLOR_WINDOW+1, a system colour");
-    ok(WowConvBackgroundBrushKind(21) == WOWCONV_HBR_SYSCOLOR,
+    WowTestCheck(WowConvBackgroundBrushKind(21) == WOWCONV_HBR_SYSCOLOR,
        "hbrBackground: 21 is COLOR_BTNHIGHLIGHT+1, the last Win3.1 index");
-    ok(WowConvBackgroundBrushKind(22) == WOWCONV_HBR_HANDLE,
+    WowTestCheck(WowConvBackgroundBrushKind(22) == WOWCONV_HBR_HANDLE,
        "hbrBackground: 22 is past the Win3.1 indices, so a real brush");
-    ok(WowConvBackgroundBrushKind(0x2018) == WOWCONV_HBR_HANDLE,
+    WowTestCheck(WowConvBackgroundBrushKind(0x2018) == WOWCONV_HBR_HANDLE,
        "hbrBackground: a GDI token is a real brush");
 
     /* Win16 RECT: 8 bytes, four SIGNED 16-bit ints. */
-    WowConvRect16Put(r, 0, -2);
-    WowConvRect16Put(r, 1, -48);
-    WowConvRect16Put(r, 2, 1680);
-    WowConvRect16Put(r, 3, 974);
-    ok(WowConvRect16Get(r, 0) == -2 && WowConvRect16Get(r, 1) == -48,
+    WowConvRect16Put(rect, 0, -2);
+    WowConvRect16Put(rect, 1, -48);
+    WowConvRect16Put(rect, 2, 1680);
+    WowConvRect16Put(rect, 3, 974);
+    WowTestCheck(WowConvRect16Get(rect, 0) == -2 && WowConvRect16Get(rect, 1) == -48,
        "RECT16: negative left/top survive the round trip (Minesweeper's -2,-48)");
-    ok(WowConvRect16Get(r, 2) == 1680 && WowConvRect16Get(r, 3) == 974,
+    WowTestCheck(WowConvRect16Get(rect, 2) == 1680 && WowConvRect16Get(rect, 3) == 974,
        "RECT16: 1680x974 survives the round trip");
-    ok(WOWCONV_RECT16_SIZE == 8,
+    WowTestCheck(WOWCONV_RECT16_SIZE == 8,
        "RECT16: is 8 bytes, NOT Win32's 16");
 
     /* BITMAPCOREHEADER -> BITMAPINFOHEADER, the form every SOL.EXE card uses. */
@@ -361,29 +361,29 @@ static void part3_conversions(void)
     core[10] = 4;                        /* bcBitCount = 4 -> 16 pal */
     core[12] = 0x11; core[13] = 0x22; core[14] = 0x33;   /* entry 0  */
     core[15] = 0x44; core[16] = 0x55; core[17] = 0x66;   /* entry 1  */
-    pix = WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal);
-    ok(pix == 12 + 16 * 3, "DIB core: pixels start after 16 RGBTRIPLEs (3 bytes each)");
-    ok(pal == 16,          "DIB core: 4bpp means a full 16-entry table, no biClrUsed");
-    ok(out[0] == 40,       "DIB core: biSize becomes 40");
-    ok(out[4] == 0x47 && out[5] == 0 && out[8] == 0x60 && out[9] == 0,
+    pixels = WowConvDibCoreToInfo(core, sizeof core, output, sizeof output, &palette);
+    WowTestCheck(pixels == 12 + 16 * 3, "DIB core: pixels start after 16 RGBTRIPLEs (3 bytes each)");
+    WowTestCheck(palette == 16,          "DIB core: 4bpp means a full 16-entry table, no biClrUsed");
+    WowTestCheck(output[0] == 40,       "DIB core: biSize becomes 40");
+    WowTestCheck(output[4] == 0x47 && output[5] == 0 && output[8] == 0x60 && output[9] == 0,
        "DIB core: bcWidth/bcHeight widen to 32-bit WITHOUT spanning each other");
-    ok(out[14] == 4,       "DIB core: biBitCount carried across");
-    ok(out[40] == 0x11 && out[41] == 0x22 && out[42] == 0x33 && out[43] == 0,
+    WowTestCheck(output[14] == 4,       "DIB core: biBitCount carried across");
+    WowTestCheck(output[40] == 0x11 && output[41] == 0x22 && output[42] == 0x33 && output[43] == 0,
        "DIB core: palette entry 0 widens RGBTRIPLE -> RGBQUAD");
-    ok(out[44] == 0x44 && out[45] == 0x55 && out[46] == 0x66 && out[47] == 0,
+    WowTestCheck(output[44] == 0x44 && output[45] == 0x55 && output[46] == 0x66 && output[47] == 0,
        "DIB core: entry 1 lands at the RGBQUAD stride, not the RGBTRIPLE one");
 
     /* Refusals. Guessing at a format is worse than declining it. */
     core[0] = 40;
-    ok(WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal) == 0,
+    WowTestCheck(WowConvDibCoreToInfo(core, sizeof core, output, sizeof output, &palette) == 0,
        "DIB core: a 40-byte header is REFUSED here, not silently converted");
     core[0] = 12; core[10] = 7;          /* 7bpp does not exist */
-    ok(WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal) == 0,
+    WowTestCheck(WowConvDibCoreToInfo(core, sizeof core, output, sizeof output, &palette) == 0,
        "DIB core: a bit count that cannot exist is REFUSED");
     core[10] = 4;
-    ok(WowConvDibCoreToInfo(core, 12, out, sizeof out, &pal) == 0,
+    WowTestCheck(WowConvDibCoreToInfo(core, 12, output, sizeof output, &palette) == 0,
        "DIB core: a length with no room for pixels is REFUSED");
-    ok(WowConvDibCoreToInfo(core, sizeof core, out, 8, &pal) == 0,
+    WowTestCheck(WowConvDibCoreToInfo(core, sizeof core, output, 8, &palette) == 0,
        "DIB core: an output buffer too small is REFUSED, never overrun");
 }
 
@@ -403,63 +403,63 @@ static void part3_conversions(void)
  *      must be no combination of facts for which the loop neither runs nor
  *      leaves. That is checked here by enumerating all sixteen.
  */
-static void part4_modal(void)
+static VOID WowTestModal(VOID)
 {
-    int e, a, h, x, run = 0, seen[5];
+    INT isEnded, isAlive, hasProcedure, isExpired, runCount = 0, seen[5];
     printf("\n-- part 4: the modal dialog loop (wowconv.h, src/wow/wowdlg.h) --\n");
 
     /* 1. The procedure rule. */
-    ok(WowConvWindowProcedure(0x11110000u, 0) == 0x11110000u,
+    WowTestCheck(WowConvWindowProcedure(0x11110000u, 0) == 0x11110000u,
        "winproc: a class window procedure drives its window");
-    ok(WowConvWindowProcedure(0, 0x22220000u) == 0x22220000u,
+    WowTestCheck(WowConvWindowProcedure(0, 0x22220000u) == 0x22220000u,
        "winproc: a #32770 dialog has only a DLGPROC, and it drives it");
-    ok(WowConvWindowProcedure(0x11110000u, 0x22220000u) == 0x11110000u,
+    WowTestCheck(WowConvWindowProcedure(0x11110000u, 0x22220000u) == 0x11110000u,
        "winproc: with BOTH, the class procedure wins (CALC's SciCalc dialog)");
-    ok(WowConvWindowProcedure(0, 0) == 0,
+    WowTestCheck(WowConvWindowProcedure(0, 0) == 0,
        "winproc: neither means NOTHING can be told about this window");
 
     /* 2. The exit rule, case by case. */
-    ok(WowConvModalExit(0, 1, 1, 0) == WOWCONV_MODAL_RUN,
+    WowTestCheck(WowConvModalExit(0, 1, 1, 0) == WOWCONV_MODAL_RUN,
        "modal: alive, drivable, not ended, not expired -> KEEP PUMPING");
-    ok(WowConvModalExit(1, 1, 1, 0) == WOWCONV_MODAL_END,
+    WowTestCheck(WowConvModalExit(1, 1, 1, 0) == WOWCONV_MODAL_END,
        "modal: EndDialog -> the caller gets nResult");
-    ok(WowConvModalExit(0, 0, 1, 0) == WOWCONV_MODAL_GONE,
+    WowTestCheck(WowConvModalExit(0, 0, 1, 0) == WOWCONV_MODAL_GONE,
        "modal: the window was destroyed -> DialogBox returns 0, never waits");
-    ok(WowConvModalExit(0, 1, 0, 0) == WOWCONV_MODAL_NOPROC,
+    WowTestCheck(WowConvModalExit(0, 1, 0, 0) == WOWCONV_MODAL_NOPROC,
        "modal: nothing to dispatch to -> return 0 AT ONCE (s56's behaviour)");
-    ok(WowConvModalExit(0, 1, 1, 1) == WOWCONV_MODAL_EXPIRED,
+    WowTestCheck(WowConvModalExit(0, 1, 1, 1) == WOWCONV_MODAL_EXPIRED,
        "modal: the bounded input wait ran out -> return 0, so a harness ends");
 
     /* ★ THE ORDER, WHICH IS THE ONE THING A READER WOULD GET WRONG. A dialog
          procedure that calls EndDialog and whose window is then torn down has
          ANSWERED; reporting GONE there would throw away the OK the user just
          clicked and hand back 0 instead. */
-    ok(WowConvModalExit(1, 0, 1, 0) == WOWCONV_MODAL_END,
+    WowTestCheck(WowConvModalExit(1, 0, 1, 0) == WOWCONV_MODAL_END,
        "modal: ENDED OUTRANKS a destroyed window -- the answer is not lost");
-    ok(WowConvModalExit(1, 0, 0, 1) == WOWCONV_MODAL_END,
+    WowTestCheck(WowConvModalExit(1, 0, 0, 1) == WOWCONV_MODAL_END,
        "modal: ...and outranks every other reason to stop, together");
-    ok(WowConvModalExit(0, 0, 0, 1) == WOWCONV_MODAL_GONE,
+    WowTestCheck(WowConvModalExit(0, 0, 0, 1) == WOWCONV_MODAL_GONE,
        "modal: a gone window outranks having no procedure and no input");
-    ok(WowConvModalExit(0, 1, 0, 1) == WOWCONV_MODAL_NOPROC,
+    WowTestCheck(WowConvModalExit(0, 1, 0, 1) == WOWCONV_MODAL_NOPROC,
        "modal: an undrivable dialog is refused BEFORE it can time out");
 
     /* ★★ TOTALITY. Sixteen combinations, every one of them classified, and RUN
          reachable from exactly one -- the one where the dialog is alive,
          drivable, unfinished and has not run out of time. A new fact added to
          this decision without a rule for it would show up here as a hang. */
-    for (x = 0; x < 5; ++x) seen[x] = 0;
-    for (e = 0; e < 2; ++e) for (a = 0; a < 2; ++a)
-    for (h = 0; h < 2; ++h) for (x = 0; x < 2; ++x) {
-        int v = WowConvModalExit(e, a, h, x);
-        if (v < 0 || v > 4) { ok(0, "modal: a verdict outside the five"); return; }
-        ++seen[v];
-        if (v == WOWCONV_MODAL_RUN) ++run;
+    for (isExpired = 0; isExpired < 5; ++isExpired) seen[isExpired] = 0;
+    for (isEnded = 0; isEnded < 2; ++isEnded) for (isAlive = 0; isAlive < 2; ++isAlive)
+    for (hasProcedure = 0; hasProcedure < 2; ++hasProcedure) for (isExpired = 0; isExpired < 2; ++isExpired) {
+        INT verdict = WowConvModalExit(isEnded, isAlive, hasProcedure, isExpired);
+        if (verdict < 0 || verdict > 4) { WowTestCheck(0, "modal: a verdict outside the five"); return; }
+        ++seen[verdict];
+        if (verdict == WOWCONV_MODAL_RUN) ++runCount;
     }
-    ok(run == 1, "modal: EXACTLY ONE of the 16 states keeps pumping");
-    ok(seen[WOWCONV_MODAL_END] + seen[WOWCONV_MODAL_GONE]
+    WowTestCheck(runCount == 1, "modal: EXACTLY ONE of the 16 states keeps pumping");
+    WowTestCheck(seen[WOWCONV_MODAL_END] + seen[WOWCONV_MODAL_GONE]
        + seen[WOWCONV_MODAL_NOPROC] + seen[WOWCONV_MODAL_EXPIRED] == 15,
        "modal: the other 15 all LEAVE -- the loop has no state that hangs");
-    ok(seen[WOWCONV_MODAL_END] == 8,
+    WowTestCheck(seen[WOWCONV_MODAL_END] == 8,
        "modal: ended is half of them, whatever else is true");
 }
 
@@ -471,84 +471,84 @@ static void part4_modal(void)
  * past it. The bytes below are the shape Win32 records for SelectObject(pen) +
  * Rectangle -- built by hand from the documented layout, not captured.
  */
-static void put16(unsigned char *b, int o, unsigned v) { b[o] = (unsigned char)v; b[o + 1] = (unsigned char)(v >> 8); }
-static void put32(unsigned char *b, int o, unsigned long v)
-{ put16(b, o, (unsigned)(v & 0xffff)); put16(b, o + 2, (unsigned)(v >> 16)); }
-static void part5_metafile(void)
+static VOID WowTestPut16(PBYTE bytes, INT offset, UINT value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> 8); }
+static VOID WowTestPut32(PBYTE bytes, INT offset, unsigned long value)
+{ WowTestPut16(bytes, offset, (UINT)(value & 0xffff)); WowTestPut16(bytes, offset + 2, (UINT)(value >> 16)); }
+static VOID WowTestMetafile(VOID)
 {
-    unsigned char m[128];
-    unsigned long first, end = 0, off, bytes = 0;
-    unsigned nobj = 0, fn = 0, seq[8];
-    int n = 0;
+    BYTE metafile[128];
+    unsigned long first, end = 0, offset, bytes = 0;
+    UINT objectCount = 0, function = 0, sequence[8];
+    INT count = 0;
     printf("\n-- part 5: the Windows metafile walk (wowconv.h, #295) --\n");
-    memset(m, 0, sizeof m);
+    memset(metafile, 0, sizeof metafile);
     /* header: type 1, 9 words, version 0x300, mtSize, 1 object */
-    put16(m, 0, 1); put16(m, 2, 9); put16(m, 4, 0x300);
-    put16(m, 10, 1); put32(m, 12, 8); put16(m, 16, 0);
-    off = 18;
-    put32(m, off, 8); put16(m, off + 4, 0x02FA); off += 16;   /* CreatePenIndirect */
-    put32(m, off, 4); put16(m, off + 4, 0x012D); off += 8;    /* SelectObject(0)   */
-    put32(m, off, 7); put16(m, off + 4, 0x041B); off += 14;   /* Rectangle         */
-    put32(m, off, 3); put16(m, off + 4, 0x0000); off += 6;    /* META_EOF          */
-    put32(m, 6, (unsigned long)(off / 2));                      /* mtSize, in WORDS  */
+    WowTestPut16(metafile, 0, 1); WowTestPut16(metafile, 2, 9); WowTestPut16(metafile, 4, 0x300);
+    WowTestPut16(metafile, 10, 1); WowTestPut32(metafile, 12, 8); WowTestPut16(metafile, 16, 0);
+    offset = 18;
+    WowTestPut32(metafile, offset, 8); WowTestPut16(metafile, offset + 4, 0x02FA); offset += 16;   /* CreatePenIndirect */
+    WowTestPut32(metafile, offset, 4); WowTestPut16(metafile, offset + 4, 0x012D); offset += 8;    /* SelectObject(0)   */
+    WowTestPut32(metafile, offset, 7); WowTestPut16(metafile, offset + 4, 0x041B); offset += 14;   /* Rectangle         */
+    WowTestPut32(metafile, offset, 3); WowTestPut16(metafile, offset + 4, 0x0000); offset += 6;    /* META_EOF          */
+    WowTestPut32(metafile, 6, (unsigned long)(offset / 2));                      /* mtSize, in WORDS  */
 
-    first = WowConvMetafileHeader(m, sizeof m, &nobj, &end);
-    ok(first == 18, "WMF: the first record follows the 18-byte (9-WORD) header");
-    ok(nobj == 1, "WMF: nObj is mtNoObjects -- the HANDLETABLE's length");
-    ok(end == off, "WMF: the walk is bounded by mtSize*2, not by the buffer's slack");
+    first = WowConvMetafileHeader(metafile, sizeof metafile, &objectCount, &end);
+    WowTestCheck(first == 18, "WMF: the first record follows the 18-byte (9-WORD) header");
+    WowTestCheck(objectCount == 1, "WMF: nObj is mtNoObjects -- the HANDLETABLE's length");
+    WowTestCheck(end == offset, "WMF: the walk is bounded by mtSize*2, not by the buffer's slack");
 
-    for (off = first; n < 8 && WowConvMetafileRecord(m, end, off, &bytes, &fn); off += bytes) {
-        seq[n++] = fn;
-        if (fn == 0) break;
+    for (offset = first; count < 8 && WowConvMetafileRecord(metafile, end, offset, &bytes, &function); offset += bytes) {
+        sequence[count++] = function;
+        if (function == 0) break;
     }
-    ok(n == 4 && seq[0] == 0x02FA && seq[1] == 0x012D && seq[2] == 0x041B && seq[3] == 0,
+    WowTestCheck(count == 4 && sequence[0] == 0x02FA && sequence[1] == 0x012D && sequence[2] == 0x041B && sequence[3] == 0,
        "WMF: four records in order -- rdSize is WORDS, so each step lands on a header");
-    ok(bytes == 6, "WMF: META_EOF is a 3-WORD record");
-    ok(!WowConvMetafileRecord(m, end, end, &bytes, &fn),
+    WowTestCheck(bytes == 6, "WMF: META_EOF is a 3-WORD record");
+    WowTestCheck(!WowConvMetafileRecord(metafile, end, end, &bytes, &function),
        "WMF: nothing is a record at the end of the metafile");
 
     /* Refusals: each would otherwise loop or read past the buffer. */
-    put32(m, 18, 2);
-    ok(!WowConvMetafileRecord(m, end, 18, &bytes, &fn),
+    WowTestPut32(metafile, 18, 2);
+    WowTestCheck(!WowConvMetafileRecord(metafile, end, 18, &bytes, &function),
        "WMF: rdSize < 3 is REFUSED -- it would never advance");
-    put32(m, 18, 0x40000000UL);
-    ok(!WowConvMetafileRecord(m, end, 18, &bytes, &fn),
+    WowTestPut32(metafile, 18, 0x40000000UL);
+    WowTestCheck(!WowConvMetafileRecord(metafile, end, 18, &bytes, &function),
        "WMF: a record claiming more than the metafile holds is REFUSED");
-    put32(m, 18, 8);
-    ok(!WowConvMetafileRecord(m, end, end - 4, &bytes, &fn),
+    WowTestPut32(metafile, 18, 8);
+    WowTestCheck(!WowConvMetafileRecord(metafile, end, end - 4, &bytes, &function),
        "WMF: fewer than 6 bytes left is not a record");
-    put16(m, 2, 10);
-    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
+    WowTestPut16(metafile, 2, 10);
+    WowTestCheck(WowConvMetafileHeader(metafile, sizeof metafile, &objectCount, &end) == 0,
        "WMF: a header size other than 9 WORDS is not a WMF");
-    put16(m, 2, 9); put16(m, 0, 3);
-    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
+    WowTestPut16(metafile, 2, 9); WowTestPut16(metafile, 0, 3);
+    WowTestCheck(WowConvMetafileHeader(metafile, sizeof metafile, &objectCount, &end) == 0,
        "WMF: mtType must be 1 (memory) or 2 (disk)");
-    put16(m, 0, 2); put32(m, 6, 4);
-    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
+    WowTestPut16(metafile, 0, 2); WowTestPut32(metafile, 6, 4);
+    WowTestCheck(WowConvMetafileHeader(metafile, sizeof metafile, &objectCount, &end) == 0,
        "WMF: an mtSize smaller than the header itself is REFUSED");
-    put32(m, 6, 0x1000);
-    ok(WowConvMetafileHeader(m, 40, &nobj, &end) == 18 && end == 40,
+    WowTestPut32(metafile, 6, 0x1000);
+    WowTestCheck(WowConvMetafileHeader(metafile, 40, &objectCount, &end) == 18 && end == 40,
        "WMF: an mtSize past the buffer is bounded by the buffer, never trusted");
-    ok(WowConvMetafileHeader(m, 17, &nobj, &end) == 0,
+    WowTestCheck(WowConvMetafileHeader(metafile, 17, &objectCount, &end) == 0,
        "WMF: fewer than 18 bytes has no header");
 }
 
-int main(int argc, char **argv)
+INT main(INT argc, PSTR *argv)
 {
-    const char *root = (argc > 1) ? argv[1] : "../..";
-    unsigned i;
+    PCSTR root = (argc > 1) ? argv[1] : "../..";
+    UINT index;
     printf("== WOW32 translation-layer battery (GH #128) ==\n");
-    for (i = 0; i < sizeof HEADERS / sizeof HEADERS[0]; ++i)
-        scan_header(root, HEADERS[i]);
-    if (!g_ndef) {
+    for (index = 0; index < sizeof g_Headers / sizeof g_Headers[0]; ++index)
+        WowTestScanHeader(root, g_Headers[index]);
+    if (!g_DefinitionCount) {
         printf("  FAIL  no argument-offset macros found under %s -- wrong root?\n", root);
         return 1;
     }
-    part1_macro_hygiene();
-    part2_offset_tiling();
-    part3_conversions();
-    part4_modal();
-    part5_metafile();
-    printf("\n%d checks, %d failed, %d skipped\n", pass + fail, fail, skip);
-    return fail ? 1 : 0;
+    WowTestMacroHygiene();
+    WowTestOffsetTiling();
+    WowTestConversions();
+    WowTestModal();
+    WowTestMetafile();
+    printf("\n%d checks, %d failed, %d skipped\n", g_Passes + g_Failures, g_Failures, g_Skips);
+    return g_Failures ? 1 : 0;
 }
