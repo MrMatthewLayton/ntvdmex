@@ -30827,14 +30827,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          then on the PATH. Arguments typed after the PIF follow the PIF's own. */
     if (nread && !g_wow_launch && progpath[0]) {
         int pl = lstrlenA(progpath);
-        pif_info pi;
+        PIF_INFO pi;
         if (pl > 4 && !lstrcmpiA(progpath + pl - 4, ".PIF")
-            && pif_parse(filebuf, nread, &pi)) {
+            && PifParse(filebuf, nread, &pi)) {
             char prog[MAX_PATH], dir[MAX_PATH], pifdir[MAX_PATH], cand[MAX_PATH], extra[256];
             HANDLE hp = INVALID_HANDLE_VALUE;
             int k;
-            ExpandEnvironmentStringsA(pi.prog, prog, sizeof prog);
-            ExpandEnvironmentStringsA(pi.dir, dir, sizeof dir);
+            ExpandEnvironmentStringsA(pi.Program, prog, sizeof prog);
+            ExpandEnvironmentStringsA(pi.Directory, dir, sizeof dir);
             lstrcpynA(pifdir, progpath, sizeof pifdir);
             for (k = lstrlenA(pifdir); k > 0 && pifdir[k - 1] != '\\'; --k) ;
             pifdir[k > 0 ? k - 1 : 0] = 0;
@@ -30862,8 +30862,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, "STAGE2: PIF ["); p = zput(p, progpath);
             p = zput(p, "] -> program ["); p = zput(p, prog);
             p = zput(p, "] dir=["); p = zput(p, dir);
-            p = zput(p, "] params=["); p = zput(p, pi.params);
-            p = zput(p, pi.params_from_386 ? "] (WINDOWS 386 section)" : "] (basic section)");
+            p = zput(p, "] params=["); p = zput(p, pi.Parameters);
+            p = zput(p, pi.IsParametersFrom386 ? "] (WINDOWS 386 section)" : "] (basic section)");
             if (hp == INVALID_HANDLE_VALUE) {
                 /* Not found: do NOT run the PIF's bytes. A shell is the honest answer. */
                 nread = 0; progpath[0] = 0; args[0] = 0;
@@ -30874,7 +30874,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 ReadFile(hp, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hp);
                 lstrcpynA(progpath, cand, sizeof progpath);
                 /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
-                w = zput(args, (pi.params[0] == '?' && !pi.params[1]) ? "" : pi.params);
+                w = zput(args, (pi.Parameters[0] == '?' && !pi.Parameters[1]) ? "" : pi.Parameters);
                 if (extra[0]) { if (args[0]) w = zput(w, " "); zput(w, extra); }
                 zput(g_WowCommandProgram, progpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
                 zput(g_WowCommandArguments, args);

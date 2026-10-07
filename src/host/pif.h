@@ -19,6 +19,7 @@
  */
 #ifndef NTVDMEX_PIF_H
 #define NTVDMEX_PIF_H
+#include "../ntvdmex_types.h"
 
 #define PIF_BASIC_LEN   0x171
 #define PIF_PROG_OFF    0x24
@@ -28,65 +29,76 @@
 #define PIF_PARAMS_OFF  0xA5
 #define PIF_PARAMS_LEN  64
 #define PIF_W386_PARAMS 0x28
+/* An extension header: name[16], then three words. */
+#define PIF_EXT_NAME_LENGTH   16
+#define PIF_EXT_NEXT          16    /* the next header's offset; PIF_EXT_LAST = none */
+#define PIF_EXT_DATA_OFFSET   18
+#define PIF_EXT_DATA_LENGTH   20
+#define PIF_EXT_HEADER_SIZE   22
+#define PIF_EXT_LAST          0xFFFF
+#define PIF_EXT_MAX_SECTIONS  16    /* a malformed chain cannot loop past this */
+#define PIF_BYTE_SHIFT        8
 
-typedef struct {
-    char prog[PIF_PROG_LEN + 1];
-    char dir[PIF_DIR_LEN + 1];
-    char params[PIF_PARAMS_LEN + 1];
-    int  params_from_386;          /* 1 = the WINDOWS 386 3.0 section supplied them */
-} pif_info;
+typedef struct _PIF_INFO {
+    char Program[PIF_PROG_LEN + 1];       /* char, not CHAR: the spelling moves code (#333) */
+    char Directory[PIF_DIR_LEN + 1];
+    char Parameters[PIF_PARAMS_LEN + 1];
+    INT  IsParametersFrom386;          /* 1 = the WINDOWS 386 3.0 section supplied them */
+} PIF_INFO, *PPIF_INFO;
+
+/* `unsigned`, not UINT, in this file: the spelling moved code in main.c (#333). */
 
 /* Copy a fixed field, stopping at NUL, then trim trailing (and leading) blanks. */
-static void pif_field(char *dst, const unsigned char *src, unsigned len)
+static VOID PifCopyField(PSTR destination, PCBYTE source, unsigned length)
 {
-    unsigned n = 0, s = 0;
-    while (n < len && src[n]) ++n;
-    while (s < n && (src[s] == ' ' || src[s] == '\t')) ++s;
-    while (n > s && (src[n - 1] == ' ' || src[n - 1] == '\t')) --n;
-    { unsigned i; for (i = 0; i < n - s; ++i) dst[i] = (char)src[s + i]; dst[n - s] = 0; }
+    unsigned end = 0, start = 0;
+    while (end < length && source[end]) ++end;
+    while (start < end && (source[start] == ' ' || source[start] == '\t')) ++start;
+    while (end > start && (source[end - 1] == ' ' || source[end - 1] == '\t')) --end;
+    { unsigned index; for (index = 0; index < end - start; ++index) destination[index] = (CHAR)source[start + index]; destination[end - start] = 0; }
 }
 
-static int pif_name_is(const unsigned char *b, const char *name)
+static INT PifIsSectionName(PCBYTE header, PCSTR name)
 {
-    unsigned i;
-    for (i = 0; name[i]; ++i) if (b[i] != (unsigned char)name[i]) return 0;
-    return b[i] == 0;
+    unsigned index;
+    for (index = 0; name[index]; ++index) if (header[index] != (BYTE)name[index]) return 0;
+    return header[index] == 0;
 }
 
-/* 1 if `b` looks like a PIF and `out` was filled; 0 otherwise. An MZ image, or
+/* 1 if `bytes` looks like a PIF and `out` was filled; 0 otherwise. An MZ image, or
    anything shorter than the basic section, is not a PIF. */
-static int pif_parse(const unsigned char *b, unsigned long n, pif_info *out)
+static INT PifParse(PCBYTE bytes, unsigned long length, PPIF_INFO out)
 {
-    unsigned long off;
-    int guard;
-    out->prog[0] = out->dir[0] = out->params[0] = 0;
-    out->params_from_386 = 0;
-    if (n < PIF_BASIC_LEN || (b[0] == 'M' && b[1] == 'Z')) return 0;
-    pif_field(out->prog,   b + PIF_PROG_OFF,   PIF_PROG_LEN);
-    pif_field(out->dir,    b + PIF_DIR_OFF,    PIF_DIR_LEN);
-    pif_field(out->params, b + PIF_PARAMS_OFF, PIF_PARAMS_LEN);
-    if (!out->prog[0]) return 0;
+    unsigned long offset;
+    INT guard;
+    out->Program[0] = out->Directory[0] = out->Parameters[0] = 0;
+    out->IsParametersFrom386 = 0;
+    if (length < PIF_BASIC_LEN || (bytes[0] == 'M' && bytes[1] == 'Z')) return 0;
+    PifCopyField(out->Program,    bytes + PIF_PROG_OFF,   PIF_PROG_LEN);
+    PifCopyField(out->Directory,  bytes + PIF_DIR_OFF,    PIF_DIR_LEN);
+    PifCopyField(out->Parameters, bytes + PIF_PARAMS_OFF, PIF_PARAMS_LEN);
+    if (!out->Program[0]) return 0;
     /* Extension sections, if the file has them. Bounded both by the file and by a
        count, so a malformed chain cannot loop. */
-    off = PIF_BASIC_LEN;
-    for (guard = 0; guard < 16 && off + 22 <= n; ++guard) {
-        const unsigned char *h = b + off;
-        unsigned next = (unsigned)(h[16] | (h[17] << 8));
-        unsigned doff = (unsigned)(h[18] | (h[19] << 8));
-        unsigned dlen = (unsigned)(h[20] | (h[21] << 8));
-        if (pif_name_is(h, "WINDOWS 386 3.0") && dlen >= PIF_W386_PARAMS + PIF_PARAMS_LEN
-            && (unsigned long)doff + dlen <= n) {
-            char p386[PIF_PARAMS_LEN + 1];
-            pif_field(p386, b + doff + PIF_W386_PARAMS, PIF_PARAMS_LEN);
-            if (p386[0]) {
-                unsigned i;
-                for (i = 0; p386[i]; ++i) out->params[i] = p386[i];
-                out->params[i] = 0;
-                out->params_from_386 = 1;
+    offset = PIF_BASIC_LEN;
+    for (guard = 0; guard < PIF_EXT_MAX_SECTIONS && offset + PIF_EXT_HEADER_SIZE <= length; ++guard) {
+        PCBYTE header = bytes + offset;
+        unsigned next = (unsigned)(header[PIF_EXT_NEXT] | (header[PIF_EXT_NEXT + 1] << PIF_BYTE_SHIFT));
+        unsigned dataOffset = (unsigned)(header[PIF_EXT_DATA_OFFSET] | (header[PIF_EXT_DATA_OFFSET + 1] << PIF_BYTE_SHIFT));
+        unsigned dataLength = (unsigned)(header[PIF_EXT_DATA_LENGTH] | (header[PIF_EXT_DATA_LENGTH + 1] << PIF_BYTE_SHIFT));
+        if (PifIsSectionName(header, "WINDOWS 386 3.0") && dataLength >= PIF_W386_PARAMS + PIF_PARAMS_LEN
+            && (unsigned long)dataOffset + dataLength <= length) {
+            CHAR parameters386[PIF_PARAMS_LEN + 1];
+            PifCopyField(parameters386, bytes + dataOffset + PIF_W386_PARAMS, PIF_PARAMS_LEN);
+            if (parameters386[0]) {
+                unsigned index;
+                for (index = 0; parameters386[index]; ++index) out->Parameters[index] = parameters386[index];
+                out->Parameters[index] = 0;
+                out->IsParametersFrom386 = 1;
             }
         }
-        if (next == 0xFFFF || next <= off || next >= n) break;
-        off = next;
+        if (next == PIF_EXT_LAST || next <= offset || next >= length) break;
+        offset = next;
     }
     return 1;
 }

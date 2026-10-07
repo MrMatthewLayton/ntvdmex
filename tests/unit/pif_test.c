@@ -63,42 +63,42 @@ static const unsigned char qb_pif[] = {
 
 int main(void)
 {
-    pif_info pi;
+    PIF_INFO pi;
     unsigned char buf[sizeof qb_pif];
     printf("pif battery\n");
 
-    CHECK(pif_parse(qb_pif, sizeof qb_pif, &pi), "QB.PIF parses");
-    CHECK(strcmp(pi.prog, "C:\\qb45\\QB.EXE") == 0, "program = C:\\qb45\\QB.EXE");
-    CHECK(strcmp(pi.dir, "C:\\qb45") == 0, "start directory = C:\\qb45");
-    CHECK(strcmp(pi.params, "/L") == 0, "parameters = /L");
-    CHECK(pi.params_from_386 == 1, "parameters taken from the WINDOWS 386 3.0 section");
+    CHECK(PifParse(qb_pif, sizeof qb_pif, &pi), "QB.PIF parses");
+    CHECK(strcmp(pi.Program, "C:\\qb45\\QB.EXE") == 0, "program = C:\\qb45\\QB.EXE");
+    CHECK(strcmp(pi.Directory, "C:\\qb45") == 0, "start directory = C:\\qb45");
+    CHECK(strcmp(pi.Parameters, "/L") == 0, "parameters = /L");
+    CHECK(pi.IsParametersFrom386 == 1, "parameters taken from the WINDOWS 386 3.0 section");
 
     /* The 386 section wins over the basic section's copy. */
     memcpy(buf, qb_pif, sizeof buf);
     memcpy(buf + 0x1C5, "/X", 2);
-    CHECK(pif_parse(buf, sizeof buf, &pi) && strcmp(pi.params, "/X") == 0,
+    CHECK(PifParse(buf, sizeof buf, &pi) && strcmp(pi.Parameters, "/X") == 0,
           "386-section parameters override the basic section");
 
     /* An empty 386 copy falls back to the basic section. */
     memcpy(buf, qb_pif, sizeof buf);
     memset(buf + 0x1C5, ' ', 64);
-    CHECK(pif_parse(buf, sizeof buf, &pi) && strcmp(pi.params, "/L") == 0
-          && pi.params_from_386 == 0, "blank 386 parameters -> the basic section's");
+    CHECK(PifParse(buf, sizeof buf, &pi) && strcmp(pi.Parameters, "/L") == 0
+          && pi.IsParametersFrom386 == 0, "blank 386 parameters -> the basic section's");
 
     /* Basic section only (no extensions). */
-    CHECK(pif_parse(qb_pif, PIF_BASIC_LEN, &pi) && strcmp(pi.params, "/L") == 0,
+    CHECK(PifParse(qb_pif, PIF_BASIC_LEN, &pi) && strcmp(pi.Parameters, "/L") == 0,
           "a basic-only PIF still gives its parameters");
 
     /* Not PIFs. */
-    CHECK(!pif_parse(qb_pif, 0x100, &pi), "shorter than the basic section -> not a PIF");
+    CHECK(!PifParse(qb_pif, 0x100, &pi), "shorter than the basic section -> not a PIF");
     memcpy(buf, qb_pif, sizeof buf); buf[0] = 'M'; buf[1] = 'Z';
-    CHECK(!pif_parse(buf, sizeof buf, &pi), "an MZ image -> not a PIF");
+    CHECK(!PifParse(buf, sizeof buf, &pi), "an MZ image -> not a PIF");
     memcpy(buf, qb_pif, sizeof buf); memset(buf + PIF_PROG_OFF, 0, PIF_PROG_LEN);
-    CHECK(!pif_parse(buf, sizeof buf, &pi), "no program name -> not a PIF");
+    CHECK(!PifParse(buf, sizeof buf, &pi), "no program name -> not a PIF");
 
     /* A self-referencing extension chain must not loop. */
     memcpy(buf, qb_pif, sizeof buf); buf[0x171 + 16] = 0x71; buf[0x171 + 17] = 0x01;
-    CHECK(pif_parse(buf, sizeof buf, &pi), "a looping extension chain terminates");
+    CHECK(PifParse(buf, sizeof buf, &pi), "a looping extension chain terminates");
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
