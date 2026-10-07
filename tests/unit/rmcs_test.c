@@ -24,15 +24,15 @@
 
 #include "../../src/host/dpmi_rmcs.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 #define OURS 0x0050          /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
 
-static void fill_pattern(uint8_t *b, unsigned n) { unsigned i; for (i = 0; i < n; ++i) b[i] = (uint8_t)(0x11 + i * 7); }
+static VOID RmcsTestFillPattern(PBYTE bytes, UINT count) { UINT index; for (index = 0; index < count; ++index) bytes[index] = (BYTE)(0x11 + index * 7); }
 
-int main(void)
+INT main(VOID)
 {
     printf("== DPMI real-mode call structure (GH #247) ==\n");
 
@@ -45,41 +45,41 @@ int main(void)
           && RMCS_SS == 0x30, "FLAGS ES DS FS GS IP CS SP SS at 20..30");
 
     /* ---- read: every field, full width, little-endian, any alignment ---- */
-    { uint8_t buf[RMCS_SIZE + 1]; RMCS_REGS g; uint8_t *r = buf + 1;   /* odd address */
-      fill_pattern(buf, sizeof buf);
-      RmcsRead(r, &g);
-      CHECK(g.Edi == (uint32_t)(r[0] | r[1] << 8 | r[2] << 16 | (uint32_t)r[3] << 24), "EDI read as a full dword");
-      CHECK(g.Eax == (uint32_t)(r[0x1C] | r[0x1D] << 8 | r[0x1E] << 16 | (uint32_t)r[0x1F] << 24),
+    { BYTE buffer[RMCS_SIZE + 1]; RMCS_REGS registers; PBYTE record = buffer + 1;   /* odd address */
+      RmcsTestFillPattern(buffer, sizeof buffer);
+      RmcsRead(record, &registers);
+      CHECK(registers.Edi == (UINT32)(record[0] | record[1] << 8 | record[2] << 16 | (UINT32)record[3] << 24), "EDI read as a full dword");
+      CHECK(registers.Eax == (UINT32)(record[0x1C] | record[0x1D] << 8 | record[0x1E] << 16 | (UINT32)record[0x1F] << 24),
             "EAX read as a full dword (the top half is an input on a 386)");
-      CHECK(g.Ebx != g.Edx && g.Ebx == (uint32_t)(r[0x10] | r[0x11] << 8 | r[0x12] << 16 | (uint32_t)r[0x13] << 24),
+      CHECK(registers.Ebx != registers.Edx && registers.Ebx == (UINT32)(record[0x10] | record[0x11] << 8 | record[0x12] << 16 | (UINT32)record[0x13] << 24),
             "EBX from +10, not +14");
-      CHECK(g.Es == (uint16_t)(r[0x22] | r[0x23] << 8) && g.Ds == (uint16_t)(r[0x24] | r[0x25] << 8),
+      CHECK(registers.Es == (WORD)(record[0x22] | record[0x23] << 8) && registers.Ds == (WORD)(record[0x24] | record[0x25] << 8),
             "ES from +22, DS from +24");
-      CHECK(g.Fs == (uint16_t)(r[0x26] | r[0x27] << 8) && g.Gs == (uint16_t)(r[0x28] | r[0x29] << 8),
+      CHECK(registers.Fs == (WORD)(record[0x26] | record[0x27] << 8) && registers.Gs == (WORD)(record[0x28] | record[0x29] << 8),
             "FS from +26, GS from +28 (they were never read: the 0301 arm set FS=GS=SS)");
-      CHECK(g.Flags == (uint16_t)(r[0x20] | r[0x21] << 8), "FLAGS from +20"); }
+      CHECK(registers.Flags == (WORD)(record[0x20] | record[0x21] << 8), "FLAGS from +20"); }
 
     /* ---- write: every output, and nothing that is not one ---- */
-    { uint8_t r[RMCS_SIZE], before[RMCS_SIZE]; RMCS_REGS g;
-      fill_pattern(r, sizeof r); memcpy(before, r, sizeof r);
-      g.Edi = 0xD1D2D3D4u; g.Esi = 0x51525354u; g.Ebp = 0xB1B2B3B4u; g.Ebx = 0x0B0C0D0Eu;
-      g.Edx = 0xDDCCBBAAu; g.Ecx = 0xC0C1C2C3u; g.Eax = 0xA0A1A2A3u;
-      g.Flags = 0x0247; g.Es = 0xE5E5; g.Ds = 0xD5D5; g.Fs = 0xF5F5; g.Gs = 0x6565;
-      RmcsWrite(r, &g);
-      CHECK(RmcsRead32(r, RMCS_EBP) == 0xB1B2B3B4u, "EBP written back (pre-#247 0300h dropped it)");
-      CHECK(RmcsRead16(r, RMCS_ES) == 0xE5E5 && RmcsRead16(r, RMCS_DS) == 0xD5D5,
+    { BYTE record[RMCS_SIZE], before[RMCS_SIZE]; RMCS_REGS registers;
+      RmcsTestFillPattern(record, sizeof record); memcpy(before, record, sizeof record);
+      registers.Edi = 0xD1D2D3D4u; registers.Esi = 0x51525354u; registers.Ebp = 0xB1B2B3B4u; registers.Ebx = 0x0B0C0D0Eu;
+      registers.Edx = 0xDDCCBBAAu; registers.Ecx = 0xC0C1C2C3u; registers.Eax = 0xA0A1A2A3u;
+      registers.Flags = 0x0247; registers.Es = 0xE5E5; registers.Ds = 0xD5D5; registers.Fs = 0xF5F5; registers.Gs = 0x6565;
+      RmcsWrite(record, &registers);
+      CHECK(RmcsRead32(record, RMCS_EBP) == 0xB1B2B3B4u, "EBP written back (pre-#247 0300h dropped it)");
+      CHECK(RmcsRead16(record, RMCS_ES) == 0xE5E5 && RmcsRead16(record, RMCS_DS) == 0xD5D5,
             "ES and DS written back (pre-#247 0300h dropped both -- AH=35h's ES:BX came back as the caller's ES)");
-      CHECK(RmcsRead16(r, RMCS_FS) == 0xF5F5 && RmcsRead16(r, RMCS_GS) == 0x6565, "FS and GS written back");
-      CHECK(RmcsRead32(r, RMCS_EAX) == 0xA0A1A2A3u && RmcsRead32(r, RMCS_EBX) == 0x0B0C0D0Eu
-            && RmcsRead32(r, RMCS_ECX) == 0xC0C1C2C3u && RmcsRead32(r, RMCS_EDX) == 0xDDCCBBAAu
-            && RmcsRead32(r, RMCS_ESI) == 0x51525354u && RmcsRead32(r, RMCS_EDI) == 0xD1D2D3D4u,
+      CHECK(RmcsRead16(record, RMCS_FS) == 0xF5F5 && RmcsRead16(record, RMCS_GS) == 0x6565, "FS and GS written back");
+      CHECK(RmcsRead32(record, RMCS_EAX) == 0xA0A1A2A3u && RmcsRead32(record, RMCS_EBX) == 0x0B0C0D0Eu
+            && RmcsRead32(record, RMCS_ECX) == 0xC0C1C2C3u && RmcsRead32(record, RMCS_EDX) == 0xDDCCBBAAu
+            && RmcsRead32(record, RMCS_ESI) == 0x51525354u && RmcsRead32(record, RMCS_EDI) == 0xD1D2D3D4u,
             "all seven general registers written back at full width");
-      CHECK(RmcsRead16(r, RMCS_FLAGS) == 0x0247, "FLAGS written back (CF is the DOS answer)");
-      CHECK(memcmp(r + RMCS_IP, before + RMCS_IP, 8) == 0,
+      CHECK(RmcsRead16(record, RMCS_FLAGS) == 0x0247, "FLAGS written back (CF is the DOS answer)");
+      CHECK(memcmp(record + RMCS_IP, before + RMCS_IP, 8) == 0,
             "IP, CS, SP, SS NOT modified -- the spec's rule; the old 0300 retarget wrote CS:IP");
-      CHECK(memcmp(r + 0x0C, before + 0x0C, 4) == 0, "the reserved dword at +0C is not touched");
-      { RMCS_REGS h; RmcsRead(r, &h);
-        CHECK(memcmp(&g, &h, sizeof g) == 0, "write then read is the identity"); } }
+      CHECK(memcmp(record + 0x0C, before + 0x0C, 4) == 0, "the reserved dword at +0C is not touched");
+      { RMCS_REGS readBack; RmcsRead(record, &readBack);
+        CHECK(memcmp(&registers, &readBack, sizeof registers) == 0, "write then read is the identity"); } }
 
     /* ---- 0300h routing ---- */
     CHECK(RmcsSimIntRoute(0x21, OURS, 0x0000, 1, OURS) == SIMINT_FAST, "21h, ours: host-side");
@@ -106,16 +106,16 @@ int main(void)
           "simintrefl_off.flag: 33h/10h host-side whoever owns them (pre-#247)");
 
     /* ---- CX words of stack ---- */
-    { uint16_t sp;
-      CHECK(RmcsStackPlan(0xFF00, 0, 6, &sp) && sp == 0xFF00, "CX=0: nothing copied, SP unchanged");
-      CHECK(RmcsStackPlan(0xFF00, 3, 6, &sp) && sp == 0xFEFA, "CX=3: six bytes below SP");
-      CHECK(!RmcsStackPlan(0x0100, 0x80, 6, &sp) && sp == 0x0100,
+    { WORD stackPointer;
+      CHECK(RmcsStackPlan(0xFF00, 0, 6, &stackPointer) && stackPointer == 0xFF00, "CX=0: nothing copied, SP unchanged");
+      CHECK(RmcsStackPlan(0xFF00, 3, 6, &stackPointer) && stackPointer == 0xFEFA, "CX=3: six bytes below SP");
+      CHECK(!RmcsStackPlan(0x0100, 0x80, 6, &stackPointer) && stackPointer == 0x0100,
             "CX that does not fit: refused, SP unchanged (the call runs as before #247)");
-      CHECK(RmcsStackPlan(0x0106, 0x80, 6, &sp) && sp == 0x0006, "exactly fits with the frame below");
-      CHECK(!RmcsStackPlan(0x0105, 0x80, 6, &sp), "one byte short: refused");
-      CHECK(RmcsStackPlan(0x0000, 4, 6, &sp) && sp == 0xFFF8, "SP=0 is a full 64 KB, not an empty stack");
-      CHECK(!RmcsStackPlan(0xFF00, 0xFFFF, 6, &sp), "CX=FFFFh (128 KB) is never copied"); }
+      CHECK(RmcsStackPlan(0x0106, 0x80, 6, &stackPointer) && stackPointer == 0x0006, "exactly fits with the frame below");
+      CHECK(!RmcsStackPlan(0x0105, 0x80, 6, &stackPointer), "one byte short: refused");
+      CHECK(RmcsStackPlan(0x0000, 4, 6, &stackPointer) && stackPointer == 0xFFF8, "SP=0 is a full 64 KB, not an empty stack");
+      CHECK(!RmcsStackPlan(0xFF00, 0xFFFF, 6, &stackPointer), "CX=FFFFh (128 KB) is never copied"); }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
