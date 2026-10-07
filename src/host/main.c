@@ -914,7 +914,7 @@ static INPUT_STATE  g_in;        static NTVDD_DEVICE g_in_dev;
 static SPEAKER_STATE g_spk;      static NTVDD_DEVICE g_spk_dev;
 /* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
    this drives Beep.sys. They are independent -- "Both" means both. */
-static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
+static PCSPEAKER  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
 static int    g_spk_real;
 static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
 static DMA_STATE    g_dma;       static NTVDD_DEVICE g_dma_dev;
@@ -12371,7 +12371,7 @@ static void settings_apply_devices(const ntvdmex_settings *s)
     g_spk_real = g_safe.RealSpeaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
     /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
          it: the driver keeps sounding whatever it was last told to sound. */
-    if (!g_spk_real) pcspk_set(&g_pcspk, 0);
+    if (!g_spk_real) PcSpeakerSet(&g_pcspk, 0);
     settings_apply_present(&g_pd, s);
 }
 
@@ -13356,7 +13356,7 @@ static void host_pause_set(int on)
         g_pause_ms = GetTickCount();
         ++g_pause_n;
         AudioWaveMidiSilence(&g_wave);
-        if (g_spk_real) pcspk_set(&g_pcspk, 0);
+        if (g_spk_real) PcSpeakerSet(&g_pcspk, 0);
         for (i = 0; i < 200 && g_pause_want; ++i) {
             CONTEXT cx;
             if (InterlockedCompareExchange(&g_async_ctxwr, 1, 0) != 0) { Sleep(1); continue; }
@@ -13648,7 +13648,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              writes both; the driver call happens OUTSIDE it, because a
              DeviceIoControl held across the bus lock would stall the guest and the
              audio pump behind a kernel transition. This tick is 5 ms, which is
-             finer than any tone a human hears as a separate note, and pcspk_set()
+             finer than any tone a human hears as a separate note, and PcSpeakerSet()
              sends nothing unless the tone actually changed -- so a guest that is
              not beeping costs one comparison per tick. */
         if (g_spk_real)
@@ -13736,7 +13736,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (!g_autofs_done)                   /* "Graphics only": the first graphics mode */
             host_autofs_consider(g_hwnd, g_vid.ModeKind != VIDEO_KIND_TEXT || g_vid.IsVesa);
-        if (g_spk_real && !g_pause_want) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
+        if (g_spk_real && !g_pause_want) PcSpeakerSet(&g_pcspk, g_spk_real_hz);   /* outside the lock */
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
            is verifiable off the SMB share -- VNC capture is dead on the real box. The
@@ -14463,7 +14463,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              keeps sounding after the process that started it exits -- the note
              under the cursor would outlive the host and only a reboot would clear
              it. Same failure the OPL had, on a device we do not even own. */
-        pcspk_close(&g_pcspk);
+        PcSpeakerClose(&g_pcspk);
         HOST_LOCK();
         VddOplReset(&g_opl);                    /* all voices off, registers clear */
         HOST_UNLOCK();
@@ -36257,7 +36257,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, g_wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_wave.IsSilent ? " [audio: no device, silent pump]"
                                                                           : " [audio: WinMM]");
     p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
-    pcspk_close(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
+    PcSpeakerClose(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
     recovery_ok();                       /* GH #132: this run ended cleanly */
     p = zput(p, "STAGE2: stdout -> ");
@@ -37093,12 +37093,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       }
       p = zput(p, "\r\n"); }
     p = zput(p, "STAGE2: pcspk: want=");   p = zhex(p, (DWORD)g_spk_real);
-    p = zput(p, " opened=");               p = zhex(p, (DWORD)g_pcspk.tried);
-    p = zput(p, " open_err=");             p = zhex(p, g_pcspk.open_err);
-    p = zput(p, " via=");                  p = zhex(p, (DWORD)g_pcspk.via);
-    p = zput(p, " ioctls=");               p = zhex(p, g_pcspk.sets);
-    p = zput(p, " refused=");              p = zhex(p, g_pcspk.fails);
-    p = zput(p, " last_hz=");              p = zhex(p, g_pcspk.cur_hz);
+    p = zput(p, " opened=");               p = zhex(p, (DWORD)g_pcspk.OpenState);
+    p = zput(p, " open_err=");             p = zhex(p, g_pcspk.OpenError);
+    p = zput(p, " via=");                  p = zhex(p, (DWORD)g_pcspk.OpenPath);
+    p = zput(p, " ioctls=");               p = zhex(p, g_pcspk.IoctlCount);
+    p = zput(p, " refused=");              p = zhex(p, g_pcspk.FailedCount);
+    p = zput(p, " last_hz=");              p = zhex(p, g_pcspk.CurrentHz);
     p = zput(p, "\r\n");
     p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.IsDeviceVolumeKnown);
     p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.DeviceVolume);

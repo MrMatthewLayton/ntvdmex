@@ -42,47 +42,52 @@
 
 #include <windows.h>
 
-#define PCSPK_IOCTL_BEEP_SET 0x00010000u
+#define PCSPEAKER_IOCTL_BEEP_SET 0x00010000u
 /* Beep.sys accepts 37..32767 Hz. Outside that it fails the request, so clamp
    rather than hand it something it will refuse -- a refused IOCTL and a silent
    speaker look identical from here. */
-#define PCSPK_HZ_MIN 37u
-#define PCSPK_HZ_MAX 32767u
-#define PCSPK_FOREVER 0xFFFFFFFFu
+#define PCSPEAKER_HZ_MIN 37u
+#define PCSPEAKER_HZ_MAX 32767u
+#define PCSPEAKER_FOREVER 0xFFFFFFFFu
+#define PCSPEAKER_PATHS 2
+/* OpenState: whether the device has been opened. */
+#define PCSPEAKER_NOT_TRIED  0
+#define PCSPEAKER_OPENED     1
+#define PCSPEAKER_OPEN_FAILED (-1)
 
-typedef struct pcspk {
-    HANDLE h;
-    int    tried;        /* 0 = never opened, 1 = opened, -1 = open failed     */
-    DWORD  open_err;     /* GetLastError from a failed open, for the log       */
-    DWORD  cur_hz;       /* what the DEVICE is sounding right now; 0 = silent  */
-    DWORD  sets;         /* IOCTLs issued -- 0 with a tone playing is a bug    */
-    DWORD  fails;        /* IOCTLs the driver refused                          */
-    int    via;          /* which path opened it: 0 = GLOBALROOT, 1 = \\.\      */
-} pcspk;
+typedef struct _PCSPEAKER {
+    HANDLE Handle;
+    INT    OpenState;    /* PCSPEAKER_NOT_TRIED / _OPENED / _OPEN_FAILED            */
+    DWORD  OpenError;    /* GetLastError from a failed open, for the log            */
+    DWORD  CurrentHz;    /* what the DEVICE is sounding right now; 0 = silent       */
+    DWORD  IoctlCount;   /* IOCTLs issued -- 0 with a tone playing is a bug         */
+    DWORD  FailedCount;  /* IOCTLs the driver refused                               */
+    INT    OpenPath;     /* which path opened it: 0 = GLOBALROOT, 1 = \\.\           */
+} PCSPEAKER, *PPCSPEAKER;
 
 /* One IOCTL. `hz` 0 stops the tone; anything else starts or changes it. */
-static int pcspk_ioctl(pcspk *p, DWORD hz)
+static INT PcSpeakerIoctl(PPCSPEAKER speaker, DWORD hz)
 {
-    struct { DWORD freq, dur; } bp;
-    DWORD ret = 0;
-    bp.freq = hz;
-    bp.dur  = hz ? PCSPK_FOREVER : 0;
-    if (!DeviceIoControl(p->h, PCSPK_IOCTL_BEEP_SET, &bp, sizeof bp,
-                         NULL, 0, &ret, NULL)) { p->fails++; return -1; }
-    p->sets++;
+    struct { DWORD Frequency, Duration; } beep;
+    DWORD returned = 0;
+    beep.Frequency = hz;
+    beep.Duration  = hz ? PCSPEAKER_FOREVER : 0;
+    if (!DeviceIoControl(speaker->Handle, PCSPEAKER_IOCTL_BEEP_SET, &beep, sizeof beep,
+                         NULL, 0, &returned, NULL)) { speaker->FailedCount++; return -1; }
+    speaker->IoctlCount++;
     return 0;
 }
 
 /* Sound `hz`, or stop when it is 0. Cheap and idempotent: nothing is sent to the
    driver unless the tone actually CHANGED, so a caller can poll this every frame
    without turning a five-millisecond timer into five-millisecond driver calls. */
-static void pcspk_set(pcspk *p, DWORD hz)
+static VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
 {
     if (hz) {
-        if (hz < PCSPK_HZ_MIN || hz > PCSPK_HZ_MAX) hz = 0;   /* refuse, don't alias */
+        if (hz < PCSPEAKER_HZ_MIN || hz > PCSPEAKER_HZ_MAX) hz = 0;   /* refuse, don't alias */
     }
-    if (hz == p->cur_hz) return;
-    if (!p->tried) {
+    if (hz == speaker->CurrentHz) return;
+    if (!speaker->OpenState) {
         /* ── ⚠ THERE IS NO `\\.\Beep`. MEASURED, session 53. ────────────────────
              That is the obvious spelling and it returns ERROR_FILE_NOT_FOUND on a
              box where `sc query beep` says the driver is RUNNING -- because
@@ -95,34 +100,34 @@ static void pcspk_set(pcspk *p, DWORD hz)
            The old spelling is still tried second: it costs one failed open on a
            machine where it was never going to work, and if some configuration
            does publish the symlink, that machine keeps working. */
-        static const char *const PATHS[2] = {
+        static const CHAR *const paths[PCSPEAKER_PATHS] = {
             "\\\\?\\GLOBALROOT\\Device\\Beep", "\\\\.\\Beep"
         };
-        int k;
+        INT index;
         if (!hz) return;                       /* nothing to say: stay unopened */
-        for (k = 0; k < 2; ++k) {
-            p->h = CreateFileA(PATHS[k], GENERIC_WRITE, 0, NULL,
+        for (index = 0; index < PCSPEAKER_PATHS; ++index) {
+            speaker->Handle = CreateFileA(paths[index], GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, 0, NULL);
-            if (p->h != INVALID_HANDLE_VALUE) { p->via = k; break; }
-            p->open_err = GetLastError();
+            if (speaker->Handle != INVALID_HANDLE_VALUE) { speaker->OpenPath = index; break; }
+            speaker->OpenError = GetLastError();
         }
-        if (p->h == INVALID_HANDLE_VALUE) { p->tried = -1; return; }
-        p->tried = 1;
+        if (speaker->Handle == INVALID_HANDLE_VALUE) { speaker->OpenState = PCSPEAKER_OPEN_FAILED; return; }
+        speaker->OpenState = PCSPEAKER_OPENED;
     }
-    if (p->tried != 1) return;
-    if (pcspk_ioctl(p, hz) == 0) p->cur_hz = hz;
+    if (speaker->OpenState != PCSPEAKER_OPENED) return;
+    if (PcSpeakerIoctl(speaker, hz) == 0) speaker->CurrentHz = hz;
 }
 
 /* Silence it and let go. Safe to call when it was never opened. */
-static void pcspk_close(pcspk *p)
+static VOID PcSpeakerClose(PPCSPEAKER speaker)
 {
-    if (p->tried == 1 && p->h != INVALID_HANDLE_VALUE) {
-        if (p->cur_hz) pcspk_ioctl(p, 0);      /* ⚠ or it sounds after we exit */
-        CloseHandle(p->h);
+    if (speaker->OpenState == PCSPEAKER_OPENED && speaker->Handle != INVALID_HANDLE_VALUE) {
+        if (speaker->CurrentHz) PcSpeakerIoctl(speaker, 0);      /* ⚠ or it sounds after we exit */
+        CloseHandle(speaker->Handle);
     }
-    p->h = INVALID_HANDLE_VALUE;
-    p->cur_hz = 0;
-    p->tried = 0;
+    speaker->Handle = INVALID_HANDLE_VALUE;
+    speaker->CurrentHz = 0;
+    speaker->OpenState = PCSPEAKER_NOT_TRIED;
 }
 
 #endif /* NTVDMEX_PCSPEAKER_H */
