@@ -168,6 +168,16 @@ static INT WowDlgIsSelectorAbsent(WORD sel);
  *   WOWDLG_TRACE messages of each wait are traced and the rest are counted.
  */
 #define WOWDLG_TRACE 48
+#define WOWDLG_TRACE_LINE_MAX 200
+#define WOWDLG_WAIT_LINE_MAX  192
+#define WOWDLG_BEAT_LINE_MAX  256
+#define WOWDLG_CLASS_NAME_MAX 16
+#define WOWDLG_PUMP_BUDGET    64     /* Win32 messages per pump              */
+#define WOWDLG_WAIT_SLICE_MS  50
+#define WOWDLG_FAST_BEATS     20     /* heartbeats every 2 s, then a minute  */
+#define WOWDLG_FAST_BEAT_MS   2000
+#define WOWDLG_SLOW_BEAT_MS   60000
+#define WOWDLG_PROCEDURE_ARGUMENTS 5 /* hwnd, msg, wParam, lParam (2 words)  */
 
 static INT WowDlgPump(INT budget, PINT traceBudget)
 {
@@ -175,7 +185,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
     INT count = 0;
     while (count < budget && PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
         if (traceBudget && *traceBudget > 0) {
-            CHAR traceBuffer[200], *traceCursor = traceBuffer;
+            CHAR traceBuffer[WOWDLG_TRACE_LINE_MAX], *traceCursor = traceBuffer;
             WORD window16 = wowwin_hwnd16(message.hwnd);
             --*traceBudget;
             traceCursor = zput(traceCursor, "       WOWDLG/win32: msg=0x"); traceCursor = zhex(traceCursor, message.message);
@@ -314,8 +324,8 @@ static INT WowDlgEnd(WORD window, WORD result)
 static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
 {
     volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)dialog->ReturnLinear;
-    hole[0] = (BYTE)(value & 0xFF);         hole[1] = (BYTE)((value >> 8)  & 0xFF);
-    hole[2] = (BYTE)((value >> 16) & 0xFF); hole[3] = (BYTE)((value >> 24) & 0xFF);
+    hole[0] = (BYTE)(value & WOW_BYTE_MASK);         hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & WOW_BYTE_MASK);
+    hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & WOW_BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & WOW_BYTE_MASK);
     /* GH #279: give the owner back BEFORE the dialog goes, so activation returns
        to it rather than to whatever window Windows picks next. */
     if (dialog->Owner32 && IsWindow(dialog->Owner32)) EnableWindow(dialog->Owner32, TRUE);
@@ -347,7 +357,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         wowuser_win_t  *window;
         WOWMSG message;
         DWORD procedure = 0;
-        WORD  arguments[5];
+        WORD  arguments[WOWDLG_PROCEDURE_ARGUMENTS];
         WORD  messageNumber, wParam;
         WORD  target;                      /* s93: the window the call is FOR */
         DWORD lParam;
@@ -374,13 +384,13 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         if (verdict == WOWCONV_MODAL_END) {
             ++g_WowDlgRan;
             wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " ENDED -- DialogBox returns 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Result, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Result, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " after 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Messages, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Messages, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " message(s), 0x");
-            wu_puthex(note, noteCapacity, &noteLength, GetTickCount() - dialog->StartTime, 8);
+            wu_puthex(note, noteCapacity, &noteLength, GetTickCount() - dialog->StartTime, WOW_HEX_DWORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " ms. ");
             /* The window itself is USER's to destroy and ours to stop showing:
                EndDialog's own arm already hid it when Win32 declined to end a
@@ -395,7 +405,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         if (verdict == WOWCONV_MODAL_GONE) {
             ++g_WowDlgRefused;
             wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " -- ★ ITS WINDOW IS GONE (destroyed while"
                                    " modal); DialogBox returns 0 rather than"
                                    " waiting for input that can no longer"
@@ -414,7 +424,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         if (verdict == WOWCONV_MODAL_NOPROC) {
             ++g_WowDlgRefused;
             wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " -- ★ NO DIALOG PROCEDURE AND NO CLASS WINDOW"
                                    " PROCEDURE: nothing to dispatch to, so the"
                                    " dialog could never be dismissed. Returning 0"
@@ -443,7 +453,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             dialog->IsInitialised = 1;
             messageNumber = WM_INITDIALOG16; wParam = dialog->FirstFocus; lParam = dialog->InitParameter;
             wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " -> WM_INITDIALOG ");
         } else {
             /* ── ★★★★ AND *NOW* IT APPEARS. WM_INITDIALOG has returned, so the
@@ -462,7 +472,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                 dialog->IsShowDeferred = 0;
                 ShowWindow(window->hwnd32, SW_SHOW);
                 wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
                 wu_puts(note, noteCapacity, &noteLength, " SHOWN (WM_INITDIALOG is done, so the"
                                        " dialog appears where it put itself). ");
                 /* ── s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
@@ -480,7 +490,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                             /* ⚠ NOT WM_NEXTDLGCTL: only the real DefDlgProc acts on
                                  it, and this window runs OUR procedure (see #32770
                                  in wowuser.h) -- measured, it did nothing. */
-                            CHAR className[16];
+                            CHAR className[WOWDLG_CLASS_NAME_MAX];
                             SetFocus(firstTabStop);
                             if (GetClassNameA(firstTabStop, className, sizeof className) && !lstrcmpiA(className, "Edit"))
                                 SendMessageA(firstTabStop, EM_SETSEL, 0, -1);
@@ -508,7 +518,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  main.c carries the same note for the same reason). So the line
                  goes out FIRST, and a heartbeat follows it, bounded so that a
                  dialog left up overnight cannot fill the disk. */
-            {   CHAR waitBuffer[192], *waitCursor = waitBuffer;
+            {   CHAR waitBuffer[WOWDLG_WAIT_LINE_MAX], *waitCursor = waitBuffer;
                 waitCursor = zput(waitCursor, "     WOWDLG: modal 0x"); waitCursor = zhex(waitCursor, dialog->Window);
                 waitCursor = zput(waitCursor, " is WAITING for input -- the guest is parked"
                               " inside DialogBox on purpose, ");
@@ -523,8 +533,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowMsgInWait = 1;
             while ((!running || *running) && !g_WowMsgCount
                    && (!g_WowMsgWaitMs || GetTickCount() - startTime < g_WowMsgWaitMs)) {
-                if (!WowDlgPump(64, &dialog->TraceBudget))
-                    MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
+                if (!WowDlgPump(WOWDLG_PUMP_BUDGET, &dialog->TraceBudget))
+                    MsgWaitForMultipleObjects(0, NULL, FALSE, WOWDLG_WAIT_SLICE_MS, QS_ALLINPUT);
                 /* ── ★★★ THE HEARTBEAT NAMES THE THREAD, AND THAT IS THE POINT.
                      (session 57, first run) The first cut of this loop printed a
                      running total and a queue depth, and both were FROZEN --
@@ -542,9 +552,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                      line a minute instead. A log that goes quiet while a guest is
                      parked is the exact instrument failure this file's header
                      warns about, and I shipped it anyway. */
-                {   DWORD interval = (beatCount < 20) ? 2000 : 60000;
+                {   DWORD interval = (beatCount < WOWDLG_FAST_BEATS) ? WOWDLG_FAST_BEAT_MS : WOWDLG_SLOW_BEAT_MS;
                     if (GetTickCount() - lastBeat >= interval) {
-                        CHAR beatBuffer[256], *beatCursor = beatBuffer;
+                        CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX], *beatCursor = beatBuffer;
                         lastBeat = GetTickCount(); ++beatCount;
                         beatCursor = zput(beatCursor, "     WOWDLG: modal 0x"); beatCursor = zhex(beatCursor, dialog->Window);
                         beatCursor = zput(beatCursor, " waiting 0x");   beatCursor = zhex(beatCursor, lastBeat - startTime);
@@ -593,7 +603,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                     continue;
                 ++g_WowDlgRefused;
                 wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
                 wu_puts(note, noteCapacity, &noteLength, " -- the host's input wait expired with an"
                                        " empty queue (wowidle.txt is bounded), so"
                                        " nobody is going to dismiss this dialog;"
@@ -628,11 +638,11 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                 target  = message.Window;
             }
             wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " -> hwnd=0x");
-            wu_puthex(note, noteCapacity, &noteLength, message.Window, 4);
+            wu_puthex(note, noteCapacity, &noteLength, message.Window, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " msg=0x");
-            wu_puthex(note, noteCapacity, &noteLength, messageNumber, 4);
+            wu_puthex(note, noteCapacity, &noteLength, messageNumber, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " ");
         }
 
@@ -653,8 +663,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         arguments[0] = target;
         arguments[1] = messageNumber;
         arguments[2] = wParam;
-        arguments[3] = (WORD)(lParam >> 16);
-        arguments[4] = (WORD)(lParam & 0xFFFF);
+        arguments[3] = (WORD)(lParam >> WOW_WORD_SHIFT);
+        arguments[4] = (WORD)(lParam & WOW_WORD_MASK);
 
         /* Is the procedure's code segment loaded? Not present means we must go
            in through the RETF trampoline so krnl386's own #NP handler loads it
@@ -662,10 +672,10 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
            session on CARDFILE. See WOWCALL_RETF_OFF in wowcall.h.
            ⚠ ASKED, NOT COMPUTED HERE: the LDT is the host's, and this file has
              no business reaching into it. main.c answers. */
-        isAbsent = WowDlgIsSelectorAbsent((WORD)(procedure >> 16));
+        isAbsent = WowDlgIsSelectorAbsent((WORD)(procedure >> WOW_WORD_SHIFT));
 
         if (!returnSelector || !stackBase
-            || !WowCallEnter(tib, stackBase, returnSelector, procedure, dialog->DataSelector, arguments, 5,
+            || !WowCallEnter(tib, stackBase, returnSelector, procedure, dialog->DataSelector, arguments, WOWDLG_PROCEDURE_ARGUMENTS,
                               /* returnLinear */ 0, WOWCALL_RET_KEEP, NULL,
                               target, messageNumber, NULL, 0, -1, isAbsent)) {
             /* The call could not be made -- depth, or no return selector. That
@@ -690,9 +700,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         }
         ++dialog->Messages;
         wu_puts(note, noteCapacity, &noteLength, "-> 0x");
-        wu_puthex(note, noteCapacity, &noteLength, procedure >> 16, 4);
+        wu_puthex(note, noteCapacity, &noteLength, procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, ":0x");
-        wu_puthex(note, noteCapacity, &noteLength, procedure & 0xFFFF, 4);
+        wu_puthex(note, noteCapacity, &noteLength, procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
         if (isAbsent) wu_puts(note, noteCapacity, &noteLength, " [segment not present -- via the RETF"
                                            " trampoline]");
         return 1;
