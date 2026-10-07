@@ -36,7 +36,7 @@ static LONG RecoveryTestSkipCount(DOS_SAFE_SKIPS skips)
          + skips.WowShims + skips.Fullscreen;
 }
 
-int main(void)
+INT main(VOID)
 {
     printf("== startup recovery policy (dos_recovery.h)\n");
 
