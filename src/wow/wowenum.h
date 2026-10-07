@@ -78,8 +78,6 @@ typedef struct _WOWENUM {
 #define WOWENUM_LINE_MAX_STEPS      4096
 #define WOWENUM_INSTANCE_STACK_TOP  0x0A  /* INSTANCEDATA.pStackTop        */
 #define WOWENUM_STACK_RESERVE       512
-#define WOWENUM_METAFILE_MALFORMED  0xFFFF  /* WowGdiMetafileNext's two refusals */
-#define WOWENUM_METAFILE_NO_ROOM    0xFFFE
 #define WOWENUM_HEX_RECORD_DIGITS   6
 
 
@@ -289,10 +287,10 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             if (limit < room) room = limit;
         }
         if (!WowGdiMetafileNext(room, &blobLength, &tableOffset, &function)) {
-            if (function == WOWENUM_METAFILE_MALFORMED)
+            if (function == WOWGDI_MF_MALFORMED)
                 WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
                                        " past the end) ENDS THE WALK; ");
-            else if (function == WOWENUM_METAFILE_NO_ROOM) {
+            else if (function == WOWGDI_MF_NO_ROOM) {
                 WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
                                        " REFUSED -- the caller returns FALSE; ");
                 WowEnumStopped();

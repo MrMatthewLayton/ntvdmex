@@ -846,7 +846,7 @@
    the USER side; this file is included independently, so it has its own. */
 static WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
 {
-    return (WORD)(bytes[offset] | (bytes[offset + 1] << 8));
+    return (WORD)(bytes[offset] | (bytes[offset + 1] << WOW_BYTE_SHIFT));
 }
 
 /* ── ★★ THREE KINDS, NOT TWO -- AND THE THIRD IS WHY THIS IS NOT A BOOLEAN. ──
@@ -961,9 +961,62 @@ static VOID WowGdiForget(WORD handle16)
    LOGFONT16 is LOGFONT with 16-bit ints (18 bytes + a 32-byte face); TEXTMETRIC16 is
    eight ints, nine bytes, three ints (31); NEWTEXTMETRIC16 adds ntmFlags (DWORD),
    ntmSizeEM, ntmCellHeight, ntmAvgWidth (41). */
-static VOID WowGdiPut16(PBYTE bytes, INT offset, LONG value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> 8); }
+static VOID WowGdiPut16(PBYTE bytes, INT offset, LONG value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> WOW_BYTE_SHIFT); }
 /* s90: EnumFontsA hands a LOGFONT, not an ENUMLOGFONT -- the full name and style
    past it are not ours to read, so this says not to. */
+/* The Win16 structures EnumFontFamilies and EnumObjects hand their callbacks
+   (byte-packed, as Win16's GDI declares them). */
+#define WOWGDI_LF16_HEIGHT          0
+#define WOWGDI_LF16_WIDTH           2
+#define WOWGDI_LF16_ESCAPEMENT      4
+#define WOWGDI_LF16_ORIENTATION     6
+#define WOWGDI_LF16_WEIGHT          8
+#define WOWGDI_LF16_ITALIC          10
+#define WOWGDI_LF16_UNDERLINE       11
+#define WOWGDI_LF16_STRIKEOUT       12
+#define WOWGDI_LF16_CHARSET         13
+#define WOWGDI_LF16_OUTPRECISION    14
+#define WOWGDI_LF16_CLIPPRECISION   15
+#define WOWGDI_LF16_QUALITY         16
+#define WOWGDI_LF16_PITCHANDFAMILY  17
+#define WOWGDI_LF16_FACENAME        18
+#define WOWGDI_LF16_FACESIZE        32
+#define WOWGDI_ELF16_FULLNAME       50
+#define WOWGDI_ELF16_FULLNAME_SIZE  64
+#define WOWGDI_ELF16_STYLE          114
+#define WOWGDI_ELF16_STYLE_SIZE     32
+#define WOWGDI_NTM16_HEIGHT           0
+#define WOWGDI_NTM16_ASCENT           2
+#define WOWGDI_NTM16_DESCENT          4
+#define WOWGDI_NTM16_INTERNALLEADING  6
+#define WOWGDI_NTM16_EXTERNALLEADING  8
+#define WOWGDI_NTM16_AVECHARWIDTH     10
+#define WOWGDI_NTM16_MAXCHARWIDTH     12
+#define WOWGDI_NTM16_WEIGHT           14
+#define WOWGDI_NTM16_ITALIC           16
+#define WOWGDI_NTM16_UNDERLINED       17
+#define WOWGDI_NTM16_STRUCKOUT        18
+#define WOWGDI_NTM16_FIRSTCHAR        19
+#define WOWGDI_NTM16_LASTCHAR         20
+#define WOWGDI_NTM16_DEFAULTCHAR      21
+#define WOWGDI_NTM16_BREAKCHAR        22
+#define WOWGDI_NTM16_PITCHANDFAMILY   23
+#define WOWGDI_NTM16_CHARSET          24
+#define WOWGDI_NTM16_OVERHANG         25
+#define WOWGDI_NTM16_DIGITIZEDASPECTX 27
+#define WOWGDI_NTM16_DIGITIZEDASPECTY 29
+#define WOWGDI_NTM16_FLAGS            31
+#define WOWGDI_NTM16_SIZEEM           35
+#define WOWGDI_NTM16_CELLHEIGHT       37
+#define WOWGDI_NTM16_AVGWIDTH         39
+#define WOWGDI_LP16_STYLE    0
+#define WOWGDI_LP16_WIDTH_X  2
+#define WOWGDI_LP16_WIDTH_Y  4
+#define WOWGDI_LP16_COLOR    6
+#define WOWGDI_LB16_STYLE    0
+#define WOWGDI_LB16_COLOR    2
+#define WOWGDI_LB16_HATCH    6
+#define WOWGDI_OBJECT_BLOB_CLEAR 16
 static INT g_WowGdiFontIsPlain;
 static INT CALLBACK WowGdiFontCollect(const LOGFONTA *logFont, const TEXTMETRICA *textMetric,
                                         DWORD type, LPARAM unused)
@@ -978,33 +1031,33 @@ static INT CALLBACK WowGdiFontCollect(const LOGFONTA *logFont, const TEXTMETRICA
     entry = &g_WowEnumFonts[g_WowEnumFontCount++];
     for (index = 0; index < (INT)sizeof entry->Blob; ++index) entry->Blob[index] = 0;
     blob = entry->Blob;
-    WowGdiPut16(blob, 0, logFont->lfHeight);  WowGdiPut16(blob, 2, logFont->lfWidth);
-    WowGdiPut16(blob, 4, logFont->lfEscapement); WowGdiPut16(blob, 6, logFont->lfOrientation);
-    WowGdiPut16(blob, 8, logFont->lfWeight);
-    blob[10] = logFont->lfItalic; blob[11] = logFont->lfUnderline; blob[12] = logFont->lfStrikeOut;
-    blob[13] = logFont->lfCharSet; blob[14] = logFont->lfOutPrecision; blob[15] = logFont->lfClipPrecision;
-    blob[16] = logFont->lfQuality; blob[17] = logFont->lfPitchAndFamily;
-    for (index = 0; index < 31 && logFont->lfFaceName[index]; ++index) blob[18 + index] = (BYTE)logFont->lfFaceName[index];
+    WowGdiPut16(blob, WOWGDI_LF16_HEIGHT, logFont->lfHeight);  WowGdiPut16(blob, WOWGDI_LF16_WIDTH, logFont->lfWidth);
+    WowGdiPut16(blob, WOWGDI_LF16_ESCAPEMENT, logFont->lfEscapement); WowGdiPut16(blob, WOWGDI_LF16_ORIENTATION, logFont->lfOrientation);
+    WowGdiPut16(blob, WOWGDI_LF16_WEIGHT, logFont->lfWeight);
+    blob[WOWGDI_LF16_ITALIC] = logFont->lfItalic; blob[WOWGDI_LF16_UNDERLINE] = logFont->lfUnderline; blob[WOWGDI_LF16_STRIKEOUT] = logFont->lfStrikeOut;
+    blob[WOWGDI_LF16_CHARSET] = logFont->lfCharSet; blob[WOWGDI_LF16_OUTPRECISION] = logFont->lfOutPrecision; blob[WOWGDI_LF16_CLIPPRECISION] = logFont->lfClipPrecision;
+    blob[WOWGDI_LF16_QUALITY] = logFont->lfQuality; blob[WOWGDI_LF16_PITCHANDFAMILY] = logFont->lfPitchAndFamily;
+    for (index = 0; index < WOWGDI_LF16_FACESIZE - 1 && logFont->lfFaceName[index]; ++index) blob[WOWGDI_LF16_FACENAME + index] = (BYTE)logFont->lfFaceName[index];
     if (!g_WowGdiFontIsPlain) {
-        for (index = 0; index < 63 && enumLogFont->elfFullName[index]; ++index) blob[50 + index] = enumLogFont->elfFullName[index];
-        for (index = 0; index < 31 && enumLogFont->elfStyle[index]; ++index) blob[114 + index] = enumLogFont->elfStyle[index];
+        for (index = 0; index < WOWGDI_ELF16_FULLNAME_SIZE - 1 && enumLogFont->elfFullName[index]; ++index) blob[WOWGDI_ELF16_FULLNAME + index] = enumLogFont->elfFullName[index];
+        for (index = 0; index < WOWGDI_ELF16_STYLE_SIZE - 1 && enumLogFont->elfStyle[index]; ++index) blob[WOWGDI_ELF16_STYLE + index] = enumLogFont->elfStyle[index];
     }
     metrics = blob + WOWENUM_ELF16;
-    WowGdiPut16(metrics, 0, textMetric->tmHeight);  WowGdiPut16(metrics, 2, textMetric->tmAscent);
-    WowGdiPut16(metrics, 4, textMetric->tmDescent); WowGdiPut16(metrics, 6, textMetric->tmInternalLeading);
-    WowGdiPut16(metrics, 8, textMetric->tmExternalLeading); WowGdiPut16(metrics, 10, textMetric->tmAveCharWidth);
-    WowGdiPut16(metrics, 12, textMetric->tmMaxCharWidth); WowGdiPut16(metrics, 14, textMetric->tmWeight);
-    metrics[16] = textMetric->tmItalic; metrics[17] = textMetric->tmUnderlined; metrics[18] = textMetric->tmStruckOut;
-    metrics[19] = (BYTE)textMetric->tmFirstChar; metrics[20] = (BYTE)textMetric->tmLastChar;
-    metrics[21] = (BYTE)textMetric->tmDefaultChar; metrics[22] = (BYTE)textMetric->tmBreakChar;
-    metrics[23] = textMetric->tmPitchAndFamily; metrics[24] = textMetric->tmCharSet;
-    WowGdiPut16(metrics, 25, textMetric->tmOverhang); WowGdiPut16(metrics, 27, textMetric->tmDigitizedAspectX);
-    WowGdiPut16(metrics, 29, textMetric->tmDigitizedAspectY);
+    WowGdiPut16(metrics, WOWGDI_NTM16_HEIGHT, textMetric->tmHeight);  WowGdiPut16(metrics, WOWGDI_NTM16_ASCENT, textMetric->tmAscent);
+    WowGdiPut16(metrics, WOWGDI_NTM16_DESCENT, textMetric->tmDescent); WowGdiPut16(metrics, WOWGDI_NTM16_INTERNALLEADING, textMetric->tmInternalLeading);
+    WowGdiPut16(metrics, WOWGDI_NTM16_EXTERNALLEADING, textMetric->tmExternalLeading); WowGdiPut16(metrics, WOWGDI_NTM16_AVECHARWIDTH, textMetric->tmAveCharWidth);
+    WowGdiPut16(metrics, WOWGDI_NTM16_MAXCHARWIDTH, textMetric->tmMaxCharWidth); WowGdiPut16(metrics, WOWGDI_NTM16_WEIGHT, textMetric->tmWeight);
+    metrics[WOWGDI_NTM16_ITALIC] = textMetric->tmItalic; metrics[WOWGDI_NTM16_UNDERLINED] = textMetric->tmUnderlined; metrics[WOWGDI_NTM16_STRUCKOUT] = textMetric->tmStruckOut;
+    metrics[WOWGDI_NTM16_FIRSTCHAR] = (BYTE)textMetric->tmFirstChar; metrics[WOWGDI_NTM16_LASTCHAR] = (BYTE)textMetric->tmLastChar;
+    metrics[WOWGDI_NTM16_DEFAULTCHAR] = (BYTE)textMetric->tmDefaultChar; metrics[WOWGDI_NTM16_BREAKCHAR] = (BYTE)textMetric->tmBreakChar;
+    metrics[WOWGDI_NTM16_PITCHANDFAMILY] = textMetric->tmPitchAndFamily; metrics[WOWGDI_NTM16_CHARSET] = textMetric->tmCharSet;
+    WowGdiPut16(metrics, WOWGDI_NTM16_OVERHANG, textMetric->tmOverhang); WowGdiPut16(metrics, WOWGDI_NTM16_DIGITIZEDASPECTX, textMetric->tmDigitizedAspectX);
+    WowGdiPut16(metrics, WOWGDI_NTM16_DIGITIZEDASPECTY, textMetric->tmDigitizedAspectY);
     if ((type & TRUETYPE_FONTTYPE) && !g_WowGdiFontIsPlain) { /* the NEW part: TrueType's */
-        metrics[31] = (BYTE)newTextMetric->ntmFlags; metrics[32] = (BYTE)(newTextMetric->ntmFlags >> 8);
-        metrics[33] = (BYTE)(newTextMetric->ntmFlags >> 16); metrics[34] = (BYTE)(newTextMetric->ntmFlags >> 24);
-        WowGdiPut16(metrics, 35, (LONG)newTextMetric->ntmSizeEM); WowGdiPut16(metrics, 37, (LONG)newTextMetric->ntmCellHeight);
-        WowGdiPut16(metrics, 39, (LONG)newTextMetric->ntmAvgWidth);
+        metrics[WOWGDI_NTM16_FLAGS] = (BYTE)newTextMetric->ntmFlags; metrics[WOWGDI_NTM16_FLAGS + 1] = (BYTE)(newTextMetric->ntmFlags >> WOW_BYTE_SHIFT);
+        metrics[WOWGDI_NTM16_FLAGS + 2] = (BYTE)(newTextMetric->ntmFlags >> WOW_WORD_SHIFT); metrics[WOWGDI_NTM16_FLAGS + 3] = (BYTE)(newTextMetric->ntmFlags >> WOW_HIGH_BYTE_SHIFT);
+        WowGdiPut16(metrics, WOWGDI_NTM16_SIZEEM, (LONG)newTextMetric->ntmSizeEM); WowGdiPut16(metrics, WOWGDI_NTM16_CELLHEIGHT, (LONG)newTextMetric->ntmCellHeight);
+        WowGdiPut16(metrics, WOWGDI_NTM16_AVGWIDTH, (LONG)newTextMetric->ntmAvgWidth);
     }
     entry->FontType = (WORD)type;
     return 1;
@@ -1017,19 +1070,19 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
     INT index;
     if (g_WowEnumFontCount >= WOWENUM_MAXFONT) return 0;
     blob = g_WowEnumFonts[g_WowEnumFontCount].Blob;
-    for (index = 0; index < 16; ++index) blob[index] = 0;
+    for (index = 0; index < WOWGDI_OBJECT_BLOB_CLEAR; ++index) blob[index] = 0;
     if (type == OBJ_PEN) {
         const LOGPEN *logPen = (const LOGPEN *)logObject;
-        WowGdiPut16(blob, 0, (LONG)logPen->lopnStyle);
-        WowGdiPut16(blob, 2, logPen->lopnWidth.x); WowGdiPut16(blob, 4, logPen->lopnWidth.y);
-        WowGdiPut16(blob, 6, (LONG)(logPen->lopnColor & 0xFFFF));
-        WowGdiPut16(blob, 8, (LONG)(logPen->lopnColor >> 16));
+        WowGdiPut16(blob, WOWGDI_LP16_STYLE, (LONG)logPen->lopnStyle);
+        WowGdiPut16(blob, WOWGDI_LP16_WIDTH_X, logPen->lopnWidth.x); WowGdiPut16(blob, WOWGDI_LP16_WIDTH_Y, logPen->lopnWidth.y);
+        WowGdiPut16(blob, WOWGDI_LP16_COLOR, (LONG)(logPen->lopnColor & WOW_WORD_MASK));
+        WowGdiPut16(blob, WOWGDI_LP16_COLOR + WOW_WORD_BYTES, (LONG)(logPen->lopnColor >> WOW_WORD_SHIFT));
     } else {
         const LOGBRUSH *logBrush = (const LOGBRUSH *)logObject;
-        WowGdiPut16(blob, 0, (LONG)logBrush->lbStyle);
-        WowGdiPut16(blob, 2, (LONG)(logBrush->lbColor & 0xFFFF));
-        WowGdiPut16(blob, 4, (LONG)(logBrush->lbColor >> 16));
-        WowGdiPut16(blob, 6, (LONG)logBrush->lbHatch);
+        WowGdiPut16(blob, WOWGDI_LB16_STYLE, (LONG)logBrush->lbStyle);
+        WowGdiPut16(blob, WOWGDI_LB16_COLOR, (LONG)(logBrush->lbColor & WOW_WORD_MASK));
+        WowGdiPut16(blob, WOWGDI_LB16_COLOR + WOW_WORD_BYTES, (LONG)(logBrush->lbColor >> WOW_WORD_SHIFT));
+        WowGdiPut16(blob, WOWGDI_LB16_HATCH, (LONG)logBrush->lbHatch);
     }
     g_WowEnumFonts[g_WowEnumFontCount].FontType = (WORD)type;
     ++g_WowEnumFontCount;
@@ -1093,7 +1146,11 @@ static BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
 /* One record as the guest handed it to PlayMetaFileRecord. A 16:16 pointer reaches
    at most 64 KB past its offset, so this is the largest a record can be without a
    huge pointer -- and a larger one is refused, not wrapped. */
-static BYTE        g_WowGdiMetafileRecord[0x10000];
+#define WOWGDI_MF_RECORD_MAX 0x10000
+/* WowGdiMetafileNext's two refusals, read by the walk in wowenum.h. */
+#define WOWGDI_MF_MALFORMED  0xFFFF
+#define WOWGDI_MF_NO_ROOM    0xFFFE
+static BYTE        g_WowGdiMetafileRecord[WOWGDI_MF_RECORD_MAX];
 static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
 
 /* After a callback: what the guest's table says now. Only 0 and tokens that name
@@ -1105,7 +1162,7 @@ static INT WowGdiMetafileReadBack(VOID)
     INT badCount = 0;
     if (!g_WowGdiMetafile.IsActive || !g_WowGdiMetafile.TableLinear) return 0;
     for (index = 0; index < g_WowGdiMetafile.ObjectCount; ++index) {
-        WORD token = WowGdiPeek((const volatile BYTE *)(ULONG_PTR)g_WowGdiMetafile.TableLinear, (INT)(index * 2));
+        WORD token = WowGdiPeek((const volatile BYTE *)(ULONG_PTR)g_WowGdiMetafile.TableLinear, (INT)(index * WOW_WORD_BYTES));
         INT  kind = -1;
         if (token == g_WowGdiMetafile.Tokens[index]) continue;
         if (!token || (WowGdiH32(token, &kind) && kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
@@ -1145,22 +1202,22 @@ static INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT 
 {
     unsigned long recordBytes = 0;
     UINT recordFunction = 0;
-    INT tableBytes = (INT)(g_WowGdiMetafile.ObjectCount ? g_WowGdiMetafile.ObjectCount : 1) * 2;    /* lpht always points at
+    INT tableBytes = (INT)(g_WowGdiMetafile.ObjectCount ? g_WowGdiMetafile.ObjectCount : 1) * WOW_WORD_BYTES;    /* lpht always points at
                                                            something, even nObj 0 */
     INT copyBytes, index;
     *function = 0;
     if (!g_WowGdiMetafile.IsActive || g_WowGdiMetafile.Offset >= g_WowGdiMetafile.End) return 0;
     if (!WowConvMetafileRecord(g_WowGdiMetafile.Bits, g_WowGdiMetafile.End, g_WowGdiMetafile.Offset, &recordBytes, &recordFunction)) {
-        *function = 0xFFFF;
+        *function = WOWGDI_MF_MALFORMED;
         return 0;
     }
     if (recordFunction == 0 && !WOWMF_PASS_EOF) return 0;
-    if (room < tableBytes + WOWCONV_MF_RECHDR) { *function = 0xFFFE; return 0; }
+    if (room < tableBytes + WOWCONV_MF_RECHDR) { *function = WOWGDI_MF_NO_ROOM; return 0; }
     copyBytes = (INT)recordBytes;
     g_WowGdiMetafile.IsTruncated = 0;
     if (copyBytes > room - tableBytes) { copyBytes = (room - tableBytes) & ~1; g_WowGdiMetafile.IsTruncated = 1; }
     for (index = 0; index < copyBytes; ++index) g_WowGdiMetafileBlob[index] = g_WowGdiMetafile.Bits[g_WowGdiMetafile.Offset + (DWORD)index];
-    for (index = 0; index < (INT)g_WowGdiMetafile.ObjectCount; ++index) WowGdiPut16(g_WowGdiMetafileBlob, copyBytes + index * 2, g_WowGdiMetafile.Tokens[index]);
+    for (index = 0; index < (INT)g_WowGdiMetafile.ObjectCount; ++index) WowGdiPut16(g_WowGdiMetafileBlob, copyBytes + index * WOW_WORD_BYTES, g_WowGdiMetafile.Tokens[index]);
     if (!g_WowGdiMetafile.ObjectCount) WowGdiPut16(g_WowGdiMetafileBlob, copyBytes, 0);
     g_WowGdiMetafile.RecordOffset = g_WowGdiMetafile.Offset;
     g_WowGdiMetafile.RecordBytes = (DWORD)recordBytes;
