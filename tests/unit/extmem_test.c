@@ -44,7 +44,7 @@ static VOID ExtMemTestCheck(BOOL passed, PCSTR description)
     else { printf("  FAIL  %s\n", description); g_Failures++; }
 }
 
-int main(void)
+INT main(VOID)
 {
     DOS_XMS_STATE xmsState;
     static BYTE conventional[DOS_EXTMEM_DIRECT_END];
