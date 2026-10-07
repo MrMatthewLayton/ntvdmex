@@ -172,7 +172,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
          below releases the table's objects -- a pen created by the record that
          said stop is still the enumeration's to delete. */
     if (!isFirst && g_WowEnum.Kind == WOWENUM_METAFILE && wowgdi_mf_readback()) {
-        wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ the guest wrote a non-object value into"
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ the guest wrote a non-object value into"
                                " its handle table; those entries were NOT believed. ");
     }
 
@@ -182,9 +182,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
          left there; reading it as "stop" cut a line short at the first point whose y
          happened to be 0 (tests/probes/win16/w_ldda: 1 call where stock makes 10). */
     if (!isFirst && g_WowEnum.Kind != WOWENUM_LINE && !(result & WOW_WORD_MASK)) {
-        wu_puts(note, noteCapacity, &noteLength, "ENUM stopped by the callback after 0x");
-        wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, " call(s) -- the caller returns FALSE");
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM stopped by the callback after 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " call(s) -- the caller returns FALSE");
         WowEnumStopped();
         WowEnumEnd();
         return 0;
@@ -194,9 +194,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         /* EnumFontFamProc(LPENUMLOGFONT, LPNEWTEXTMETRIC, int FontType, LPARAM) */
         PCWOWENUM_FONT entry;
         if (g_WowEnum.Index >= g_WowEnumFontCount) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM fonts complete: 0x");
-            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " font(s)");
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM fonts complete: 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " font(s)");
             WowEnumEnd();
             return 0;
         }
@@ -213,7 +213,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                               entry->Blob, (INT)sizeof entry->Blob, 0,
                               WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> WOW_WORD_SHIFT)))) {
             g_WowCallBlob2Argument = -1;
-            wu_puts(note, noteCapacity, &noteLength, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             WowEnumEnd();
             return 0;
@@ -223,11 +223,11 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_WowEnum.Calls;
-        wu_puts(note, noteCapacity, &noteLength, "ENUM font -> \"");
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM font -> \"");
         {   INT index; for (index = WOWENUM_ELF_FACE_NAME; index < WOWENUM_ELF_FACE_NAME_END && entry->Blob[index]; ++index) {
-                CHAR character[2]; character[0] = (CHAR)entry->Blob[index]; character[1] = 0; wu_puts(note, noteCapacity, &noteLength, character); } }
-        wu_puts(note, noteCapacity, &noteLength, "\" type=0x");
-        wu_puthex(note, noteCapacity, &noteLength, entry->FontType, WOW_HEX_BYTE_DIGITS);
+                CHAR character[2]; character[0] = (CHAR)entry->Blob[index]; character[1] = 0; WowNotePut(note, noteCapacity, &noteLength, character); } }
+        WowNotePut(note, noteCapacity, &noteLength, "\" type=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, entry->FontType, WOW_HEX_BYTE_DIGITS);
         return 1;
     }
 
@@ -235,9 +235,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         /* EnumObjectsProc(LPVOID lpLogObject, LPARAM) -- s90, #296 */
         PCWOWENUM_FONT entry;
         if (g_WowEnum.Index >= g_WowEnumFontCount) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM objects complete: 0x");
-            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " object(s)");
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM objects complete: 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " object(s)");
             WowEnumEnd();
             return 0;
         }
@@ -250,7 +250,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
                               entry->Blob, entry->FontType == OBJ_PEN ? WOWENUM_LOGPEN16_SIZE : WOWENUM_LOGBRUSH16_SIZE, 0,
                               WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> WOW_WORD_SHIFT)))) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             WowEnumEnd();
             return 0;
@@ -260,8 +260,8 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_WowEnum.Calls;
-        wu_puts(note, noteCapacity, &noteLength, "ENUM object -> style=0x");
-        wu_puthex(note, noteCapacity, &noteLength, (DWORD)(entry->Blob[0] | (entry->Blob[1] << WOW_BYTE_SHIFT)), WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM object -> style=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(entry->Blob[0] | (entry->Blob[1] << WOW_BYTE_SHIFT)), WOW_HEX_WORD_DIGITS);
         return 1;
     }
 
@@ -290,16 +290,16 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         }
         if (!wowgdi_mf_next(room, &blobLength, &tableOffset, &function)) {
             if (function == WOWENUM_METAFILE_MALFORMED)
-                wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
+                WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
                                        " past the end) ENDS THE WALK; ");
             else if (function == WOWENUM_METAFILE_NO_ROOM) {
-                wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
+                WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
                                        " REFUSED -- the caller returns FALSE; ");
                 WowEnumStopped();
             }
-            wu_puts(note, noteCapacity, &noteLength, "ENUM metafile complete: 0x");
-            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " record(s)");
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile complete: 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " record(s)");
             WowEnumEnd();
             return 0;
         }
@@ -318,7 +318,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowCallBlob2Argument = -1;
             /* ⚠ FALSE, unlike the window forms: the guest has not seen the whole
                  picture, and TRUE would tell it that it had. */
-            wu_puts(note, noteCapacity, &noteLength, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here and the caller returns FALSE");
             WowEnumStopped();
             WowEnumEnd();
@@ -331,12 +331,12 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_WowEnum.Calls;
-        wu_puts(note, noteCapacity, &noteLength, "ENUM metarecord fn=0x");
-        wu_puthex(note, noteCapacity, &noteLength, function, WOW_HEX_WORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, " bytes=0x");
-        wu_puthex(note, noteCapacity, &noteLength, g_wmf.rec_bytes, WOWENUM_HEX_RECORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM metarecord fn=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, function, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " bytes=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, g_wmf.rec_bytes, WOWENUM_HEX_RECORD_DIGITS);
         if (g_wmf.truncated)
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
                                    " stack blob); PlayMetaFileRecord plays the full record");
         return 1;
     }
@@ -346,9 +346,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         PCWOWENUM_FONT entry;
         INT isAtom, nameLength = 0;
         if (g_WowEnum.Index >= g_WowEnumFontCount) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM props complete: 0x");
-            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " propert(ies)");
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM props complete: 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " propert(ies)");
             WowEnumEnd();
             return 0;
         }
@@ -364,7 +364,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
                               isAtom ? NULL : entry->Blob, isAtom ? 0 : nameLength + 1, 1,
                               WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> WOW_WORD_SHIFT)))) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM props -- ★ THE CALL WAS REFUSED; the"
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM props -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             WowEnumEnd();
             return 0;
@@ -374,10 +374,10 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_WowEnum.Calls;
-        wu_puts(note, noteCapacity, &noteLength, "ENUM prop -> ");
-        if (isAtom) { wu_puts(note, noteCapacity, &noteLength, "atom 0x"); wu_puthex(note, noteCapacity, &noteLength, arguments[2], WOW_HEX_WORD_DIGITS); }
-        else { wu_puts(note, noteCapacity, &noteLength, "\""); wu_puts(note, noteCapacity, &noteLength, (PCSTR)entry->Blob);
-               wu_puts(note, noteCapacity, &noteLength, "\""); }
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM prop -> ");
+        if (isAtom) { WowNotePut(note, noteCapacity, &noteLength, "atom 0x"); WowNoteHex(note, noteCapacity, &noteLength, arguments[2], WOW_HEX_WORD_DIGITS); }
+        else { WowNotePut(note, noteCapacity, &noteLength, "\""); WowNotePut(note, noteCapacity, &noteLength, (PCSTR)entry->Blob);
+               WowNotePut(note, noteCapacity, &noteLength, "\""); }
         return 1;
     }
 
@@ -390,9 +390,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         INT deltaX = g_WowEnum.EndX - g_WowEnum.StartX, deltaY = g_WowEnum.EndY - g_WowEnum.StartY;
         INT pointX, pointY;
         if (index >= g_WowEnum.Steps) {
-            wu_puts(note, noteCapacity, &noteLength, "ENUM LineDDA complete: 0x");
-            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " point(s)");
+            WowNotePut(note, noteCapacity, &noteLength, "ENUM LineDDA complete: 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " point(s)");
             WowEnumEnd();
             return 0;
         }
@@ -408,9 +408,9 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         for (;;) {
             wowuser_win_t *window;
             if (g_WowEnum.Index >= WOWUSER_MAX_WIN) {
-                wu_puts(note, noteCapacity, &noteLength, "ENUM complete: 0x");
-                wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
-                wu_puts(note, noteCapacity, &noteLength, " window(s) -- the caller returns TRUE");
+                WowNotePut(note, noteCapacity, &noteLength, "ENUM complete: 0x");
+                WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
+                WowNotePut(note, noteCapacity, &noteLength, " window(s) -- the caller returns TRUE");
                 WowEnumEnd();
                 return 0;
             }
@@ -447,7 +447,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                           /* returnLinear */ 0, WOWCALL_RET_KEEP, NULL,
                           window16, 0, NULL, 0, -1,
                           WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> WOW_WORD_SHIFT)))) {
-        wu_puts(note, noteCapacity, &noteLength, "ENUM -- ★ THE CALL WAS REFUSED (depth, or no"
+        WowNotePut(note, noteCapacity, &noteLength, "ENUM -- ★ THE CALL WAS REFUSED (depth, or no"
                                " return selector); the enumeration ends here and"
                                " the caller keeps the TRUE it was given");
         WowEnumEnd();
@@ -458,18 +458,18 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = window16;
     }
     ++g_WowEnum.Calls;
-    wu_puts(note, noteCapacity, &noteLength, "ENUM -> 0x");
-    wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
-    wu_puts(note, noteCapacity, &noteLength, ":0x");
-    wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
-    wu_puts(note, noteCapacity, &noteLength, "(");
+    WowNotePut(note, noteCapacity, &noteLength, "ENUM -> 0x");
+    WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
+    WowNotePut(note, noteCapacity, &noteLength, ":0x");
+    WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
+    WowNotePut(note, noteCapacity, &noteLength, "(");
     {   INT index;
         for (index = 0; index < argumentCount; ++index) {
-            if (index) wu_puts(note, noteCapacity, &noteLength, " ");
-            wu_puthex(note, noteCapacity, &noteLength, arguments[index], WOW_HEX_WORD_DIGITS);
+            if (index) WowNotePut(note, noteCapacity, &noteLength, " ");
+            WowNoteHex(note, noteCapacity, &noteLength, arguments[index], WOW_HEX_WORD_DIGITS);
         }
     }
-    wu_puts(note, noteCapacity, &noteLength, ")");
+    WowNotePut(note, noteCapacity, &noteLength, ")");
     return 1;
 }
 

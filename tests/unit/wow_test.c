@@ -243,8 +243,8 @@ static const svc_t SVC[] = {
 
   /* --- krnl386 ------------------------------------------------------------ */
   { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,
-    { {"GPPI_ARG_FILE",4}, {"GPPI_ARG_DEFAULT",2}, {"GPPI_ARG_KEY",4},
-      {"GPPI_ARG_APP",4}, {0,0} } },
+    { {"WOW32_GETPRIVATEPROFILEINT_ARG_FILE",4}, {"WOW32_GETPRIVATEPROFILEINT_ARG_DEFAULT",2}, {"WOW32_GETPRIVATEPROFILEINT_ARG_KEY",4},
+      {"WOW32_GETPRIVATEPROFILEINT_ARG_APP",4}, {0,0} } },
 };
 
 static void part2_offset_tiling(void)

@@ -93,14 +93,14 @@
 
 static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 {
-    return (DWORD)wow32_peekw((volatile BYTE *)bytes + offset)
-         | ((DWORD)wow32_peekw((volatile BYTE *)bytes + offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+    return (DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset)
+         | ((DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
 }
 
 static VOID WowCdlgPokeDword(volatile BYTE *bytes, INT offset, DWORD value)
 {
-    wow32_pokew(bytes + offset,     (WORD)(value & WOW_WORD_MASK));
-    wow32_pokew(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + offset,     (WORD)(value & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
 }
 
 /* ── #294: the rest of COMMDLG's table. Ids = export ordinals (see the top). */
@@ -196,11 +196,11 @@ static DWORD g_WowCdlgError = 0;
 static VOID WowCdlgLogFont16To32(const volatile BYTE *logFont16, PLOGFONTA logFont)
 {
     INT index;
-    logFont->lfHeight      = (LONG)(SHORT)wow32_peekw((volatile BYTE *)logFont16 + WOWCDLG_LF16_HEIGHT);
-    logFont->lfWidth       = (LONG)(SHORT)wow32_peekw((volatile BYTE *)logFont16 + WOWCDLG_LF16_WIDTH);
-    logFont->lfEscapement  = (LONG)(SHORT)wow32_peekw((volatile BYTE *)logFont16 + WOWCDLG_LF16_ESCAPEMENT);
-    logFont->lfOrientation = (LONG)(SHORT)wow32_peekw((volatile BYTE *)logFont16 + WOWCDLG_LF16_ORIENTATION);
-    logFont->lfWeight      = (LONG)(SHORT)wow32_peekw((volatile BYTE *)logFont16 + WOWCDLG_LF16_WEIGHT);
+    logFont->lfHeight      = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_HEIGHT);
+    logFont->lfWidth       = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_WIDTH);
+    logFont->lfEscapement  = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_ESCAPEMENT);
+    logFont->lfOrientation = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_ORIENTATION);
+    logFont->lfWeight      = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_WEIGHT);
     logFont->lfItalic = logFont16[WOWCDLG_LF16_ITALIC]; logFont->lfUnderline = logFont16[WOWCDLG_LF16_UNDERLINE]; logFont->lfStrikeOut = logFont16[WOWCDLG_LF16_STRIKEOUT];
     logFont->lfCharSet = logFont16[WOWCDLG_LF16_CHARSET]; logFont->lfOutPrecision = logFont16[WOWCDLG_LF16_OUTPRECISION]; logFont->lfClipPrecision = logFont16[WOWCDLG_LF16_CLIPPRECISION];
     logFont->lfQuality = logFont16[WOWCDLG_LF16_QUALITY]; logFont->lfPitchAndFamily = logFont16[WOWCDLG_LF16_PITCHANDFAMILY];
@@ -211,11 +211,11 @@ static VOID WowCdlgLogFont16To32(const volatile BYTE *logFont16, PLOGFONTA logFo
 static VOID WowCdlgLogFont32To16(const LOGFONTA *logFont, volatile BYTE *logFont16)
 {
     INT index;
-    wow32_pokew(logFont16 + WOWCDLG_LF16_HEIGHT, (WORD)(SHORT)logFont->lfHeight);
-    wow32_pokew(logFont16 + WOWCDLG_LF16_WIDTH, (WORD)(SHORT)logFont->lfWidth);
-    wow32_pokew(logFont16 + WOWCDLG_LF16_ESCAPEMENT, (WORD)(SHORT)logFont->lfEscapement);
-    wow32_pokew(logFont16 + WOWCDLG_LF16_ORIENTATION, (WORD)(SHORT)logFont->lfOrientation);
-    wow32_pokew(logFont16 + WOWCDLG_LF16_WEIGHT, (WORD)(SHORT)logFont->lfWeight);
+    Wow32PokeWord(logFont16 + WOWCDLG_LF16_HEIGHT, (WORD)(SHORT)logFont->lfHeight);
+    Wow32PokeWord(logFont16 + WOWCDLG_LF16_WIDTH, (WORD)(SHORT)logFont->lfWidth);
+    Wow32PokeWord(logFont16 + WOWCDLG_LF16_ESCAPEMENT, (WORD)(SHORT)logFont->lfEscapement);
+    Wow32PokeWord(logFont16 + WOWCDLG_LF16_ORIENTATION, (WORD)(SHORT)logFont->lfOrientation);
+    Wow32PokeWord(logFont16 + WOWCDLG_LF16_WEIGHT, (WORD)(SHORT)logFont->lfWeight);
     logFont16[WOWCDLG_LF16_ITALIC] = logFont->lfItalic; logFont16[WOWCDLG_LF16_UNDERLINE] = logFont->lfUnderline; logFont16[WOWCDLG_LF16_STRIKEOUT] = logFont->lfStrikeOut;
     logFont16[WOWCDLG_LF16_CHARSET] = logFont->lfCharSet; logFont16[WOWCDLG_LF16_OUTPRECISION] = logFont->lfOutPrecision; logFont16[WOWCDLG_LF16_CLIPPRECISION] = logFont->lfClipPrecision;
     logFont16[WOWCDLG_LF16_QUALITY] = logFont->lfQuality; logFont16[WOWCDLG_LF16_PITCHANDFAMILY] = logFont->lfPitchAndFamily;
@@ -277,11 +277,11 @@ static INT WowCdlgIsDialogMessage(PMSG message)
  * ⚠ CALLED ONLY WHEN THE STUB IS COMMDLG'S. The caller checks, as it does for
  *   USER and SHELL. `0x01` is MessageBox in USER's table and GetOpenFileName here.
  */
-static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
+static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
-    if (frame->id != WOWCDLG_EXTENDEDERROR) g_WowCdlgError = 0;   /* a new call, a new answer */
-    switch (frame->id) {
+    if (frame->Id != WOWCDLG_EXTENDEDERROR) g_WowCdlgError = 0;   /* a new call, a new answer */
+    switch (frame->Id) {
 
     /* ── ★★★★★ 0x01 GetOpenFileName / 0x02 GetSaveFileName(lpOFN) ────────────
          ★ THE REAL Win32 DIALOG IS THE RIGHT ANSWER, and again it is not a
@@ -306,8 +306,8 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          every caller already handles. */
     case WOWCDLG_GETOPENFILENAME:
     case WOWCDLG_GETSAVEFILENAME: {
-        volatile BYTE *guest = wow32_argptr(frame, WOWCDLG_OPENFILENAME_ARG_LPOFN);
-        INT isSave = (frame->id == WOWCDLG_GETSAVEFILENAME);
+        volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_OPENFILENAME_ARG_LPOFN);
+        INT isSave = (frame->Id == WOWCDLG_GETSAVEFILENAME);
         OPENFILENAMEA openFileName;
         DWORD structSize, flags;
         WORD  owner16;
@@ -315,40 +315,40 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         INT noteLength = 0, isOk = 0;
         UINT byteIndex;
 
-        wu_puts(note, noteCapacity, &noteLength, isSave ? "GetSaveFileName" : "GetOpenFileName");
+        WowNotePut(note, noteCapacity, &noteLength, isSave ? "GetSaveFileName" : "GetOpenFileName");
         if (!guest) {
-            wu_puts(note, noteCapacity, &noteLength, " -- NULL lpOFN; answered 0 (cancelled)");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- NULL lpOFN; answered 0 (cancelled)");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         structSize = WowCdlgPeekDword(guest, WOWCDLG_OFN16_STRUCTSIZE);
-        wu_puts(note, noteCapacity, &noteLength, " lStructSize=0x");
-        wu_puthex(note, noteCapacity, &noteLength, structSize, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " lStructSize=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, structSize, WOW_HEX_WORD_DIGITS);
         if (structSize != WOWCDLG_OFN16_SIZE) {
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ NOT 0x48; this host's OPENFILENAME"
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT 0x48; this host's OPENFILENAME"
                                        " layout does not describe that structure."
                                        " REFUSED (reads as cancelled) rather than"
                                        " read 72 bytes of something else");
-            wow32_setret(frame, 0);
+            Wow32SetReturn(frame, 0);
             return 1;
         }
 
         for (byteIndex = 0; byteIndex < sizeof openFileName; ++byteIndex) ((PBYTE)&openFileName)[byteIndex] = 0;
         openFileName.lStructSize = sizeof openFileName;
-        owner16 = wow32_peekw(guest + WOWCDLG_OFN16_HWNDOWNER);
+        owner16 = Wow32PeekWord(guest + WOWCDLG_OFN16_HWNDOWNER);
         window = owner16 ? wowuser_findwin(owner16) : NULL;
         openFileName.hwndOwner = window ? window->hwnd32 : NULL;
         openFileName.hInstance = NULL;              /* only meaningful with a template */
 
-        openFileName.lpstrFilter       = (LPCSTR)wow32_farat(frame, guest, WOWCDLG_OFN16_FILTER);
-        openFileName.lpstrCustomFilter = (LPSTR) wow32_farat(frame, guest, WOWCDLG_OFN16_CUSTFILTER);
+        openFileName.lpstrFilter       = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_FILTER);
+        openFileName.lpstrCustomFilter = (LPSTR) Wow32FarAt(frame, guest, WOWCDLG_OFN16_CUSTFILTER);
         openFileName.nMaxCustFilter    = WowCdlgPeekDword(guest, WOWCDLG_OFN16_MAXCUSTFILTER);
         openFileName.nFilterIndex      = WowCdlgPeekDword(guest, WOWCDLG_OFN16_FILTERINDEX);
-        openFileName.lpstrFile         = (LPSTR) wow32_farat(frame, guest, WOWCDLG_OFN16_FILE);
+        openFileName.lpstrFile         = (LPSTR) Wow32FarAt(frame, guest, WOWCDLG_OFN16_FILE);
         openFileName.nMaxFile          = WowCdlgPeekDword(guest, WOWCDLG_OFN16_MAXFILE);
-        openFileName.lpstrFileTitle    = (LPSTR) wow32_farat(frame, guest, WOWCDLG_OFN16_FILETITLE);
+        openFileName.lpstrFileTitle    = (LPSTR) Wow32FarAt(frame, guest, WOWCDLG_OFN16_FILETITLE);
         openFileName.nMaxFileTitle     = WowCdlgPeekDword(guest, WOWCDLG_OFN16_MAXFILETITLE);
-        openFileName.lpstrInitialDir   = (LPCSTR)wow32_farat(frame, guest, WOWCDLG_OFN16_INITIALDIR);
+        openFileName.lpstrInitialDir   = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_INITIALDIR);
         /* s90: NULL means "the current directory" in Win16's COMMDLG -- that is where
            Windows 3.1 always opened. XP's comdlg32 instead prefers the folder last used
            by this EXECUTABLE, and every Win16 program here is ntvdmhost.exe, so Sound
@@ -360,8 +360,8 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             static CHAR currentDirectory[MAX_PATH];
             if (GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory)) openFileName.lpstrInitialDir = currentDirectory;
         }
-        openFileName.lpstrTitle        = (LPCSTR)wow32_farat(frame, guest, WOWCDLG_OFN16_TITLE);
-        openFileName.lpstrDefExt       = (LPCSTR)wow32_farat(frame, guest, WOWCDLG_OFN16_DEFEXT);
+        openFileName.lpstrTitle        = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_TITLE);
+        openFileName.lpstrDefExt       = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_DEFEXT);
 
         flags = WowCdlgPeekDword(guest, WOWCDLG_OFN16_FLAGS);
         /* ── ⚠⚠ OFN_NOCHANGEDIR IS FORCED ON, AND IT IS NOT A PREFERENCE. ─────
@@ -380,22 +380,22 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
              suppresses a side effect, not an answer. */
         openFileName.Flags = (flags & ~WOWCDLG_OFN16_HOOKBITS) | OFN_NOCHANGEDIR;
 
-        wu_puts(note, noteCapacity, &noteLength, " owner=0x");
-        wu_puthex(note, noteCapacity, &noteLength, owner16, WOW_HEX_WORD_DIGITS);
-        if (owner16 && !window) wu_puts(note, noteCapacity, &noteLength, "(NO SUCH WINDOW -- unowned)");
-        wu_puts(note, noteCapacity, &noteLength, " flags=0x");
-        wu_puthex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " owner=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, owner16, WOW_HEX_WORD_DIGITS);
+        if (owner16 && !window) WowNotePut(note, noteCapacity, &noteLength, "(NO SUCH WINDOW -- unowned)");
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_OFN16_HOOKBITS)
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ HOOK/TEMPLATE BITS STRIPPED (a 16-bit"
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ HOOK/TEMPLATE BITS STRIPPED (a 16-bit"
                                        " hook procedure is not callable from"
                                        " comdlg32)");
-        wu_puts(note, noteCapacity, &noteLength, " dir=");
-        wu_putq(note, noteCapacity, &noteLength, openFileName.lpstrInitialDir ? openFileName.lpstrInitialDir : "(null)");
-        wu_puts(note, noteCapacity, &noteLength, " nMaxFile=0x");
-        wu_puthex(note, noteCapacity, &noteLength, openFileName.nMaxFile, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " dir=");
+        WowNoteQuoted(note, noteCapacity, &noteLength, openFileName.lpstrInitialDir ? openFileName.lpstrInitialDir : "(null)");
+        WowNotePut(note, noteCapacity, &noteLength, " nMaxFile=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, openFileName.nMaxFile, WOW_HEX_WORD_DIGITS);
         if (openFileName.lpstrFile) {
-            wu_puts(note, noteCapacity, &noteLength, " file=");
-            wu_putq(note, noteCapacity, &noteLength, openFileName.lpstrFile);
+            WowNotePut(note, noteCapacity, &noteLength, " file=");
+            WowNoteQuoted(note, noteCapacity, &noteLength, openFileName.lpstrFile);
         }
 
         /* ⚠ nMaxFile is the GUEST'S claim about its own buffer and the only bound
@@ -403,8 +403,8 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
              declared 0 gets a refusal rather than a dialog whose result has
              nowhere to go. */
         if (!openFileName.lpstrFile || !openFileName.nMaxFile) {
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ NO RESULT BUFFER; refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO RESULT BUFFER; refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
 
@@ -478,7 +478,7 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                         for (position = lastSlash; openFileName.lpstrFile[position]; ++position) shortPath[cursor++] = openFileName.lpstrFile[position];
                         shortPath[cursor] = 0;
                         shortLength = cursor;
-                        wu_puts(note, noteCapacity, &noteLength, " [directory shortened, leaf kept"
+                        WowNotePut(note, noteCapacity, &noteLength, " [directory shortened, leaf kept"
                                                    " -- the file does not exist yet]");
                     }
                 }
@@ -492,28 +492,28 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                 }
                 openFileName.nFileOffset    = (WORD)fileOffset;
                 openFileName.nFileExtension = (WORD)(extensionOffset > fileOffset ? extensionOffset : 0);
-                wu_puts(note, noteCapacity, &noteLength, " -> SHORTENED for a Win16 caller: ");
-                wu_putq(note, noteCapacity, &noteLength, shortPath);
+                WowNotePut(note, noteCapacity, &noteLength, " -> SHORTENED for a Win16 caller: ");
+                WowNoteQuoted(note, noteCapacity, &noteLength, shortPath);
             } else {
-                wu_puts(note, noteCapacity, &noteLength, " -- ★ NO 8.3 NAME for this path"
+                WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO 8.3 NAME for this path"
                                            " (or it does not fit the caller's"
                                            " buffer); left LONG, and a Win16"
                                            " OpenFile will probably refuse it");
             }
             /* Only the scalars Win32 keeps in its OWN structure need carrying
                back; the strings were written straight into the guest's buffers. */
-            wow32_pokew(guest + WOWCDLG_OFN16_FILEOFFSET,    openFileName.nFileOffset);
-            wow32_pokew(guest + WOWCDLG_OFN16_FILEEXTENSION, openFileName.nFileExtension);
+            Wow32PokeWord(guest + WOWCDLG_OFN16_FILEOFFSET,    openFileName.nFileOffset);
+            Wow32PokeWord(guest + WOWCDLG_OFN16_FILEEXTENSION, openFileName.nFileExtension);
             WowCdlgPokeDword(guest, WOWCDLG_OFN16_FILTERINDEX, openFileName.nFilterIndex);
             WowCdlgPokeDword(guest, WOWCDLG_OFN16_FLAGS,
                       (openFileName.Flags & ~WOWCDLG_OFN16_HOOKBITS) | (flags & WOWCDLG_OFN16_HOOKBITS));
-            wu_puts(note, noteCapacity, &noteLength, " -> CHOSE ");
-            wu_putq(note, noteCapacity, &noteLength, openFileName.lpstrFile);
+            WowNotePut(note, noteCapacity, &noteLength, " -> CHOSE ");
+            WowNoteQuoted(note, noteCapacity, &noteLength, openFileName.lpstrFile);
         } else {
-            wu_puts(note, noteCapacity, &noteLength, " -> cancelled (or failed); the guest asks"
+            WowNotePut(note, noteCapacity, &noteLength, " -> cancelled (or failed); the guest asks"
                                        " CommDlgExtendedError next");
         }
-        wow32_setret(frame, (DWORD)(isOk ? 1 : 0));
+        Wow32SetReturn(frame, (DWORD)(isOk ? 1 : 0));
         return 1;
     }
 
@@ -551,9 +551,9 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          is not callable from comdlg32. */
     case WOWCDLG_FINDTEXT:
     case WOWCDLG_REPLACETEXT: {
-        volatile BYTE *guest = wow32_argptr(frame, WOWCDLG_ARG_LPSTRUCT);
-        DWORD guest16 = (DWORD)wow32_argw(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)wow32_argw(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
-        INT isReplace = (frame->id == WOWCDLG_REPLACETEXT);
+        volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
+        DWORD guest16 = (DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+        INT isReplace = (frame->Id == WOWCDLG_REPLACETEXT);
         PWOWCDLG_FIND slot = NULL;
         wowuser_win_t *ownerWindow, *window;
         wowuser_class_t *dialogClass;
@@ -561,20 +561,20 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         DWORD flags;
         HWND dialog;
         INT noteLength = 0, index;
-        wu_puts(note, noteCapacity, &noteLength, isReplace ? "ReplaceText" : "FindText");
+        WowNotePut(note, noteCapacity, &noteLength, isReplace ? "ReplaceText" : "FindText");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_FR16_STRUCTSIZE) != WOWCDLG_FR16_SIZE) {
-            wu_puts(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x24; refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x24; refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         for (index = 0; index < WOWCDLG_MAX_FIND; ++index) if (!g_WowCdlgFinds[index].Dialog) { slot = &g_WowCdlgFinds[index]; break; }
-        owner16 = wow32_peekw(guest + WOWCDLG_FR16_HWNDOWNER);
+        owner16 = Wow32PeekWord(guest + WOWCDLG_FR16_HWNDOWNER);
         ownerWindow = owner16 ? wowuser_findwin(owner16) : NULL;
         dialogClass  = wowuser_find("#32770");
         if (!slot || !ownerWindow || !ownerWindow->hwnd32 || !dialogClass) {
-            wu_puts(note, noteCapacity, &noteLength, !slot ? " -- all find slots in use"
+            WowNotePut(note, noteCapacity, &noteLength, !slot ? " -- all find slots in use"
                                           : " -- no owner window (FindText requires one)");
-            wow32_setret(frame, 0);
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         if (!g_WowCdlgFindMessage) g_WowCdlgFindMessage = RegisterWindowMessageA(FINDMSGSTRINGA);
@@ -583,27 +583,27 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         slot->FindReplace.lStructSize      = sizeof slot->FindReplace;
         slot->FindReplace.hwndOwner        = ownerWindow->hwnd32;
         slot->FindReplace.Flags            = flags & ~WOWCDLG_FR16_HOOKBITS;
-        slot->FindReplace.lpstrFindWhat    = (LPSTR)wow32_farat(frame, guest, WOWCDLG_FR16_FINDWHAT);
-        slot->FindReplace.lpstrReplaceWith = (LPSTR)wow32_farat(frame, guest, WOWCDLG_FR16_REPLACEWITH);
-        slot->FindReplace.wFindWhatLen     = wow32_peekw(guest + WOWCDLG_FR16_FINDWHATLEN);
-        slot->FindReplace.wReplaceWithLen  = wow32_peekw(guest + WOWCDLG_FR16_REPLACEWITHLEN);
+        slot->FindReplace.lpstrFindWhat    = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_FR16_FINDWHAT);
+        slot->FindReplace.lpstrReplaceWith = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_FR16_REPLACEWITH);
+        slot->FindReplace.wFindWhatLen     = Wow32PeekWord(guest + WOWCDLG_FR16_FINDWHATLEN);
+        slot->FindReplace.wReplaceWithLen  = Wow32PeekWord(guest + WOWCDLG_FR16_REPLACEWITHLEN);
         slot->FindReplace.lCustData        = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_FR16_CUSTDATA);
         if (!slot->FindReplace.lpstrFindWhat || !slot->FindReplace.wFindWhatLen
             || (isReplace && (!slot->FindReplace.lpstrReplaceWith || !slot->FindReplace.wReplaceWithLen))) {
-            wu_puts(note, noteCapacity, &noteLength, " -- no string buffer; refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- no string buffer; refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         window = wowuser_newwin();
-        if (!window) { wu_puts(note, noteCapacity, &noteLength, " -- OUT OF WINDOW SLOTS");
-                  wow32_setret(frame, 0); return 1; }
+        if (!window) { WowNotePut(note, noteCapacity, &noteLength, " -- OUT OF WINDOW SLOTS");
+                  Wow32SetReturn(frame, 0); return 1; }
         dialog = isReplace ? ReplaceTextA(&slot->FindReplace) : FindTextA(&slot->FindReplace);
         if (!dialog) {
             window->hwnd = 0;                               /* give the slot back */
-            wu_puts(note, noteCapacity, &noteLength, " -- comdlg32 refused (err 0x");
-            wu_puthex(note, noteCapacity, &noteLength, CommDlgExtendedError(), WOW_HEX_DWORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, ")");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- comdlg32 refused (err 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, CommDlgExtendedError(), WOW_HEX_DWORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, ")");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         window->cls = (WORD)(dialogClass - g_wu_class);
@@ -615,16 +615,16 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         window->hwnd32 = dialog;
         slot->Dialog = dialog; slot->Guest = guest; slot->Guest16 = guest16;
         slot->Owner16 = owner16; slot->Window16 = window->hwnd;
-        wu_puts(note, noteCapacity, &noteLength, " flags=0x"); wu_puthex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_FR16_HOOKBITS)
-            wu_puts(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
-        wu_puts(note, noteCapacity, &noteLength, " what=");
-        wu_putq(note, noteCapacity, &noteLength, slot->FindReplace.lpstrFindWhat);
-        wu_puts(note, noteCapacity, &noteLength, " -> MODELESS dialog hwnd16=0x");
-        wu_puthex(note, noteCapacity, &noteLength, window->hwnd, WOW_HEX_WORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, ", notifications as msg 0x");
-        wu_puthex(note, noteCapacity, &noteLength, g_WowCdlgFindMessage, WOW_HEX_WORD_DIGITS);
-        wow32_setret(frame, window->hwnd);
+            WowNotePut(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
+        WowNotePut(note, noteCapacity, &noteLength, " what=");
+        WowNoteQuoted(note, noteCapacity, &noteLength, slot->FindReplace.lpstrFindWhat);
+        WowNotePut(note, noteCapacity, &noteLength, " -> MODELESS dialog hwnd16=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, window->hwnd, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ", notifications as msg 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowCdlgFindMessage, WOW_HEX_WORD_DIGITS);
+        Wow32SetReturn(frame, window->hwnd);
         return 1;
     }
 
@@ -633,29 +633,29 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          COLORREFs, which are the same bytes in both worlds, so comdlg32 reads
          and updates them in place. rgbResult and Flags are carried back. */
     case WOWCDLG_CHOOSECOLOR: {
-        volatile BYTE *guest = wow32_argptr(frame, WOWCDLG_ARG_LPSTRUCT);
+        volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
         CHOOSECOLORA chooseColor;
         wowuser_win_t *ownerWindow;
         DWORD flags;
         INT noteLength = 0, isOk, index;
-        wu_puts(note, noteCapacity, &noteLength, "ChooseColor");
+        WowNotePut(note, noteCapacity, &noteLength, "ChooseColor");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_CC16_STRUCTSIZE) != WOWCDLG_CC16_SIZE) {
-            wu_puts(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x20; refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x20; refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         for (index = 0; index < (INT)sizeof chooseColor; ++index) ((PBYTE)&chooseColor)[index] = 0;
-        ownerWindow = wowuser_findwin(wow32_peekw(guest + WOWCDLG_CC16_HWNDOWNER));
+        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_CC16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CC16_FLAGS);
         chooseColor.lStructSize  = sizeof chooseColor;
         chooseColor.hwndOwner    = ownerWindow ? ownerWindow->hwnd32 : NULL;
         chooseColor.rgbResult    = WowCdlgPeekDword(guest, WOWCDLG_CC16_RGBRESULT);
-        chooseColor.lpCustColors = (COLORREF *)wow32_farat(frame, guest, WOWCDLG_CC16_CUSTCOLORS);
+        chooseColor.lpCustColors = (COLORREF *)Wow32FarAt(frame, guest, WOWCDLG_CC16_CUSTCOLORS);
         chooseColor.Flags        = flags & ~WOWCDLG_CC16_HOOKBITS;
         chooseColor.lCustData    = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_CC16_CUSTDATA);
         if (!chooseColor.lpCustColors) {
-            wu_puts(note, noteCapacity, &noteLength, " -- no lpCustColors (required); refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- no lpCustColors (required); refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         isOk = ChooseColorA(&chooseColor);
@@ -663,9 +663,9 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             WowCdlgPokeDword(guest, WOWCDLG_CC16_RGBRESULT, chooseColor.rgbResult);
             WowCdlgPokeDword(guest, WOWCDLG_CC16_FLAGS, (chooseColor.Flags & ~WOWCDLG_CC16_HOOKBITS) | (flags & WOWCDLG_CC16_HOOKBITS));
         }
-        wu_puts(note, noteCapacity, &noteLength, isOk ? " -> chose 0x" : " -> cancelled; rgb 0x");
-        wu_puthex(note, noteCapacity, &noteLength, chooseColor.rgbResult, WOW_HEX_DWORD_DIGITS);
-        wow32_setret(frame, (DWORD)(isOk ? 1 : 0));
+        WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> chose 0x" : " -> cancelled; rgb 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, chooseColor.rgbResult, WOW_HEX_DWORD_DIGITS);
+        Wow32SetReturn(frame, (DWORD)(isOk ? 1 : 0));
         return 1;
     }
 
@@ -679,62 +679,62 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          would show screen fonts only anyway.
        ⚠ CF_USESTYLE's lpszStyle is a guest buffer comdlg32 writes into directly. */
     case WOWCDLG_CHOOSEFONT: {
-        volatile BYTE *guest = wow32_argptr(frame, WOWCDLG_ARG_LPSTRUCT);
+        volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
         volatile BYTE *logFont16;
         CHOOSEFONTA chooseFont;
         LOGFONTA logFont;
         wowuser_win_t *ownerWindow;
         DWORD flags;
         INT noteLength = 0, isOk, index;
-        wu_puts(note, noteCapacity, &noteLength, "ChooseFont");
+        WowNotePut(note, noteCapacity, &noteLength, "ChooseFont");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_CF16_STRUCTSIZE) != WOWCDLG_CF16_SIZE) {
-            wu_puts(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x2e; refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x2e; refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
-        logFont16 = wow32_farat(frame, guest, WOWCDLG_CF16_LOGFONT);
+        logFont16 = Wow32FarAt(frame, guest, WOWCDLG_CF16_LOGFONT);
         if (!logFont16) {
-            wu_puts(note, noteCapacity, &noteLength, " -- no lpLogFont (required); refused");
-            wow32_setret(frame, 0);
+            WowNotePut(note, noteCapacity, &noteLength, " -- no lpLogFont (required); refused");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         for (index = 0; index < (INT)sizeof chooseFont; ++index) ((PBYTE)&chooseFont)[index] = 0;
         for (index = 0; index < (INT)sizeof logFont; ++index) ((PBYTE)&logFont)[index] = 0;
         WowCdlgLogFont16To32(logFont16, &logFont);
-        ownerWindow = wowuser_findwin(wow32_peekw(guest + WOWCDLG_CF16_HWNDOWNER));
+        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_CF16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CF16_FLAGS);
         chooseFont.lStructSize = sizeof chooseFont;
         chooseFont.hwndOwner   = ownerWindow ? ownerWindow->hwnd32 : NULL;
         chooseFont.lpLogFont   = &logFont;
-        chooseFont.iPointSize  = (INT)(SHORT)wow32_peekw(guest + WOWCDLG_CF16_POINTSIZE);
+        chooseFont.iPointSize  = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_POINTSIZE);
         chooseFont.Flags       = flags & ~WOWCDLG_CF16_HOOKBITS;
         if (chooseFont.Flags & CF_PRINTERFONTS) {
             chooseFont.Flags = (chooseFont.Flags & ~CF_PRINTERFONTS) | CF_SCREENFONTS;
-            wu_puts(note, noteCapacity, &noteLength, " (printer fonts -> screen fonts: no printer DC)");
+            WowNotePut(note, noteCapacity, &noteLength, " (printer fonts -> screen fonts: no printer DC)");
         }
         chooseFont.rgbColors   = WowCdlgPeekDword(guest, WOWCDLG_CF16_RGBCOLORS);
         chooseFont.lCustData   = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_CF16_CUSTDATA);
-        chooseFont.lpszStyle   = (LPSTR)wow32_farat(frame, guest, WOWCDLG_CF16_STYLE);
+        chooseFont.lpszStyle   = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_CF16_STYLE);
         if (!chooseFont.lpszStyle) chooseFont.Flags &= ~CF_USESTYLE;
-        chooseFont.nSizeMin    = (INT)(SHORT)wow32_peekw(guest + WOWCDLG_CF16_SIZEMIN);
-        chooseFont.nSizeMax    = (INT)(SHORT)wow32_peekw(guest + WOWCDLG_CF16_SIZEMAX);
-        wu_puts(note, noteCapacity, &noteLength, " flags=0x"); wu_puthex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, " face="); wu_putq(note, noteCapacity, &noteLength, logFont.lfFaceName);
+        chooseFont.nSizeMin    = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_SIZEMIN);
+        chooseFont.nSizeMax    = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_SIZEMAX);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " face="); WowNoteQuoted(note, noteCapacity, &noteLength, logFont.lfFaceName);
         isOk = ChooseFontA(&chooseFont);
         if (isOk) {
             WowCdlgLogFont32To16(&logFont, logFont16);
-            wow32_pokew(guest + WOWCDLG_CF16_POINTSIZE, (WORD)chooseFont.iPointSize);
+            Wow32PokeWord(guest + WOWCDLG_CF16_POINTSIZE, (WORD)chooseFont.iPointSize);
             WowCdlgPokeDword(guest, WOWCDLG_CF16_RGBCOLORS, chooseFont.rgbColors);
-            wow32_pokew(guest + WOWCDLG_CF16_FONTTYPE, (WORD)chooseFont.nFontType);
+            Wow32PokeWord(guest + WOWCDLG_CF16_FONTTYPE, (WORD)chooseFont.nFontType);
             WowCdlgPokeDword(guest, WOWCDLG_CF16_FLAGS, (chooseFont.Flags & ~WOWCDLG_CF16_HOOKBITS) | (flags & WOWCDLG_CF16_HOOKBITS));
-            wu_puts(note, noteCapacity, &noteLength, " -> chose ");
-            wu_putq(note, noteCapacity, &noteLength, logFont.lfFaceName);
-            wu_puts(note, noteCapacity, &noteLength, " pt10=0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)chooseFont.iPointSize, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -> chose ");
+            WowNoteQuoted(note, noteCapacity, &noteLength, logFont.lfFaceName);
+            WowNotePut(note, noteCapacity, &noteLength, " pt10=0x");
+            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)chooseFont.iPointSize, WOW_HEX_WORD_DIGITS);
         } else {
-            wu_puts(note, noteCapacity, &noteLength, " -> cancelled (or failed)");
+            WowNotePut(note, noteCapacity, &noteLength, " -> cancelled (or failed)");
         }
-        wow32_setret(frame, (DWORD)(isOk ? 1 : 0));
+        Wow32SetReturn(frame, (DWORD)(isOk ? 1 : 0));
         return 1;
     }
 
@@ -751,39 +751,39 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
        ★ w_cdlg vs stock: a wrong size -> 0 + CDERR_STRUCTSIZE; PD_RETURNDEFAULT on
          a box with no printer -> 0 + PDERR_NODEFAULTPRN, with and without RETURNIC. */
     case WOWCDLG_PRINTDLG: {
-        volatile BYTE *guest = wow32_argptr(frame, WOWCDLG_ARG_LPSTRUCT);
+        volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
         PRINTDLGA printDialog;
         wowuser_win_t *ownerWindow;
         DWORD flags;
         WORD devMode16, devNames16;
         INT noteLength = 0, isOk, index;
-        wu_puts(note, noteCapacity, &noteLength, "PrintDlg");
+        WowNotePut(note, noteCapacity, &noteLength, "PrintDlg");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_PD16_STRUCTSIZE) != WOWCDLG_PD16_SIZE) {
-            wu_puts(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x34; refused,"
+            WowNotePut(note, noteCapacity, &noteLength, " -- NULL or lStructSize != 0x34; refused,"
                                        " CDERR_STRUCTSIZE");
             g_WowCdlgError = CDERR_STRUCTSIZE;
-            wow32_setret(frame, 0);
+            Wow32SetReturn(frame, 0);
             return 1;
         }
         for (index = 0; index < (INT)sizeof printDialog; ++index) ((PBYTE)&printDialog)[index] = 0;
-        ownerWindow = wowuser_findwin(wow32_peekw(guest + WOWCDLG_PD16_HWNDOWNER));
+        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_PD16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_PD16_FLAGS);
-        devMode16 = wow32_peekw(guest + WOWCDLG_PD16_HDEVMODE);
-        devNames16 = wow32_peekw(guest + WOWCDLG_PD16_HDEVNAMES);
+        devMode16 = Wow32PeekWord(guest + WOWCDLG_PD16_HDEVMODE);
+        devNames16 = Wow32PeekWord(guest + WOWCDLG_PD16_HDEVNAMES);
         printDialog.lStructSize = sizeof printDialog;
         printDialog.hwndOwner   = ownerWindow ? ownerWindow->hwnd32 : NULL;
         printDialog.Flags       = flags & ~WOWCDLG_PD16_HOOKBITS;
-        printDialog.nFromPage   = wow32_peekw(guest + WOWCDLG_PD16_FROMPAGE);
-        printDialog.nToPage     = wow32_peekw(guest + WOWCDLG_PD16_TOPAGE);
-        printDialog.nMinPage    = wow32_peekw(guest + WOWCDLG_PD16_MINPAGE);
-        printDialog.nMaxPage    = wow32_peekw(guest + WOWCDLG_PD16_MAXPAGE);
-        printDialog.nCopies     = wow32_peekw(guest + WOWCDLG_PD16_COPIES);
+        printDialog.nFromPage   = Wow32PeekWord(guest + WOWCDLG_PD16_FROMPAGE);
+        printDialog.nToPage     = Wow32PeekWord(guest + WOWCDLG_PD16_TOPAGE);
+        printDialog.nMinPage    = Wow32PeekWord(guest + WOWCDLG_PD16_MINPAGE);
+        printDialog.nMaxPage    = Wow32PeekWord(guest + WOWCDLG_PD16_MAXPAGE);
+        printDialog.nCopies     = Wow32PeekWord(guest + WOWCDLG_PD16_COPIES);
         printDialog.lCustData   = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_PD16_CUSTDATA);
-        wu_puts(note, noteCapacity, &noteLength, " flags=0x"); wu_puthex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_PD16_HOOKBITS)
-            wu_puts(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
+            WowNotePut(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
         if (devMode16 | devNames16)
-            wu_puts(note, noteCapacity, &noteLength, " -- ⚠ the guest's hDevMode/hDevNames are NOT"
+            WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ the guest's hDevMode/hDevNames are NOT"
                                        " read (Win16 global handles); default printer");
         isOk = PrintDlgA(&printDialog);
         if (printDialog.hDevMode)  GlobalFree(printDialog.hDevMode);
@@ -794,31 +794,31 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                 token = wowgdi_h16((HGDIOBJ)printDialog.hDC, WOWGDI_KIND_DC);
                 if (!token) DeleteDC(printDialog.hDC);
             }
-            wow32_pokew(guest + WOWCDLG_PD16_HDC,      token);
-            wow32_pokew(guest + WOWCDLG_PD16_FROMPAGE, printDialog.nFromPage);
-            wow32_pokew(guest + WOWCDLG_PD16_TOPAGE,   printDialog.nToPage);
-            wow32_pokew(guest + WOWCDLG_PD16_COPIES,   printDialog.nCopies);
+            Wow32PokeWord(guest + WOWCDLG_PD16_HDC,      token);
+            Wow32PokeWord(guest + WOWCDLG_PD16_FROMPAGE, printDialog.nFromPage);
+            Wow32PokeWord(guest + WOWCDLG_PD16_TOPAGE,   printDialog.nToPage);
+            Wow32PokeWord(guest + WOWCDLG_PD16_COPIES,   printDialog.nCopies);
             WowCdlgPokeDword(guest, WOWCDLG_PD16_FLAGS, (printDialog.Flags & ~WOWCDLG_PD16_HOOKBITS) | (flags & WOWCDLG_PD16_HOOKBITS));
-            wu_puts(note, noteCapacity, &noteLength, " -> OK hDC token 0x");
-            wu_puthex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " copies=");
-            wu_puthex(note, noteCapacity, &noteLength, printDialog.nCopies, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -> OK hDC token 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " copies=");
+            WowNoteHex(note, noteCapacity, &noteLength, printDialog.nCopies, WOW_HEX_WORD_DIGITS);
         } else {
-            wu_puts(note, noteCapacity, &noteLength, " -> 0, CommDlgExtendedError 0x");
-            wu_puthex(note, noteCapacity, &noteLength, CommDlgExtendedError(), WOW_HEX_DWORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -> 0, CommDlgExtendedError 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, CommDlgExtendedError(), WOW_HEX_DWORD_DIGITS);
         }
-        wow32_setret(frame, (DWORD)(isOk ? 1 : 0));
+        Wow32SetReturn(frame, (DWORD)(isOk ? 1 : 0));
         return 1;
     }
 
     case WOWCDLG_EXTENDEDERROR: {
         DWORD error = g_WowCdlgError ? g_WowCdlgError : CommDlgExtendedError();
         INT noteLength = 0;
-        wu_puts(note, noteCapacity, &noteLength, "CommDlgExtendedError -> 0x");
-        wu_puthex(note, noteCapacity, &noteLength, error, WOW_HEX_DWORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, error ? " (the dialog FAILED)"
+        WowNotePut(note, noteCapacity, &noteLength, "CommDlgExtendedError -> 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, error, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, error ? " (the dialog FAILED)"
                                      : " (0 = the user cancelled)");
-        wow32_setret(frame, error);
+        Wow32SetReturn(frame, error);
         return 1;
     }
 

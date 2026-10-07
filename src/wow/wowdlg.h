@@ -383,15 +383,15 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         /* ── EXIT 1: THE REAL ONE. EndDialog was called for this dialog. ───── */
         if (verdict == WOWCONV_MODAL_END) {
             ++g_WowDlgRan;
-            wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " ENDED -- DialogBox returns 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Result, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " after 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Messages, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " message(s), 0x");
-            wu_puthex(note, noteCapacity, &noteLength, GetTickCount() - dialog->StartTime, WOW_HEX_DWORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " ms. ");
+            WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " ENDED -- DialogBox returns 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Result, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " after 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Messages, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " message(s), 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, GetTickCount() - dialog->StartTime, WOW_HEX_DWORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " ms. ");
             /* The window itself is USER's to destroy and ours to stop showing:
                EndDialog's own arm already hid it when Win32 declined to end a
                window that is not a real dialog. Nothing to do here but leave. */
@@ -404,9 +404,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              avoid. Real Windows answers a dialog that could not run with 0. ── */
         if (verdict == WOWCONV_MODAL_GONE) {
             ++g_WowDlgRefused;
-            wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ ITS WINDOW IS GONE (destroyed while"
+            WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ ITS WINDOW IS GONE (destroyed while"
                                    " modal); DialogBox returns 0 rather than"
                                    " waiting for input that can no longer"
                                    " arrive. ");
@@ -423,9 +423,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              exits at a modal dialog. */
         if (verdict == WOWCONV_MODAL_NOPROC) {
             ++g_WowDlgRefused;
-            wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " -- ★ NO DIALOG PROCEDURE AND NO CLASS WINDOW"
+            WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO DIALOG PROCEDURE AND NO CLASS WINDOW"
                                    " PROCEDURE: nothing to dispatch to, so the"
                                    " dialog could never be dismissed. Returning 0"
                                    " immediately (session 56's behaviour) rather"
@@ -452,9 +452,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         if (!dialog->IsInitialised) {
             dialog->IsInitialised = 1;
             messageNumber = WM_INITDIALOG16; wParam = dialog->FirstFocus; lParam = dialog->InitParameter;
-            wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " -> WM_INITDIALOG ");
+            WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -> WM_INITDIALOG ");
         } else {
             /* ── ★★★★ AND *NOW* IT APPEARS. WM_INITDIALOG has returned, so the
                  dialog has finished arranging itself -- which for TASKMAN means
@@ -471,9 +471,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             if (dialog->IsShowDeferred && window->hwnd32) {
                 dialog->IsShowDeferred = 0;
                 ShowWindow(window->hwnd32, SW_SHOW);
-                wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-                wu_puts(note, noteCapacity, &noteLength, " SHOWN (WM_INITDIALOG is done, so the"
+                WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+                WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+                WowNotePut(note, noteCapacity, &noteLength, " SHOWN (WM_INITDIALOG is done, so the"
                                        " dialog appears where it put itself). ");
                 /* ── s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
                      procedure placed it itself (it then returns FALSE, and the focus
@@ -494,7 +494,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                             SetFocus(firstTabStop);
                             if (GetClassNameA(firstTabStop, className, sizeof className) && !lstrcmpiA(className, "Edit"))
                                 SendMessageA(firstTabStop, EM_SETSEL, 0, -1);
-                            wu_puts(note, noteCapacity, &noteLength, "Focus -> its first tab stop. ");
+                            WowNotePut(note, noteCapacity, &noteLength, "Focus -> its first tab stop. ");
                         }
                     }
                 }
@@ -602,9 +602,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                         != WOWCONV_MODAL_EXPIRED)
                     continue;
                 ++g_WowDlgRefused;
-                wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-                wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-                wu_puts(note, noteCapacity, &noteLength, " -- the host's input wait expired with an"
+                WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+                WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+                WowNotePut(note, noteCapacity, &noteLength, " -- the host's input wait expired with an"
                                        " empty queue (wowidle.txt is bounded), so"
                                        " nobody is going to dismiss this dialog;"
                                        " DialogBox returns 0. ");
@@ -637,13 +637,13 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                 procedure = targetProcedure;
                 target  = message.Window;
             }
-            wu_puts(note, noteCapacity, &noteLength, "MODAL 0x");
-            wu_puthex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " -> hwnd=0x");
-            wu_puthex(note, noteCapacity, &noteLength, message.Window, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " msg=0x");
-            wu_puthex(note, noteCapacity, &noteLength, messageNumber, WOW_HEX_WORD_DIGITS);
-            wu_puts(note, noteCapacity, &noteLength, " ");
+            WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
+            WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " -> hwnd=0x");
+            WowNoteHex(note, noteCapacity, &noteLength, message.Window, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " msg=0x");
+            WowNoteHex(note, noteCapacity, &noteLength, messageNumber, WOW_HEX_WORD_DIGITS);
+            WowNotePut(note, noteCapacity, &noteLength, " ");
         }
 
         /* ── THE CALL ITSELF. Five words in declared order, the shape every
@@ -681,7 +681,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             /* The call could not be made -- depth, or no return selector. That
                is not a reason to spin: without a call there is no EndDialog. */
             ++g_WowDlgRefused;
-            wu_puts(note, noteCapacity, &noteLength, "-- ★ THE CALL WAS REFUSED (depth, or no return"
+            WowNotePut(note, noteCapacity, &noteLength, "-- ★ THE CALL WAS REFUSED (depth, or no return"
                                    " selector); DialogBox returns 0 rather than"
                                    " looping with no way to be dismissed. ");
             WowDlgUnwind(dialog, 0);
@@ -699,11 +699,11 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_wu_dlgdef[g_WowCallDepth - 1].lp = lParam;
         }
         ++dialog->Messages;
-        wu_puts(note, noteCapacity, &noteLength, "-> 0x");
-        wu_puthex(note, noteCapacity, &noteLength, procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
-        wu_puts(note, noteCapacity, &noteLength, ":0x");
-        wu_puthex(note, noteCapacity, &noteLength, procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
-        if (isAbsent) wu_puts(note, noteCapacity, &noteLength, " [segment not present -- via the RETF"
+        WowNotePut(note, noteCapacity, &noteLength, "-> 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, ":0x");
+        WowNoteHex(note, noteCapacity, &noteLength, procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
+        if (isAbsent) WowNotePut(note, noteCapacity, &noteLength, " [segment not present -- via the RETF"
                                            " trampoline]");
         return 1;
     }

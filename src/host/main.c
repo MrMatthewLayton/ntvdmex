@@ -10718,7 +10718,7 @@ static void mgr_name(char *out, HWND *show)
             }
             break;
         }
-        if (!raw[0]) src = g_wow_cmd_prog;
+        if (!raw[0]) src = g_WowCommandProgram;
     } else {
         src = g_progname;
     }
@@ -17332,7 +17332,7 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          printing plausible-looking rubbish -- an instrument that invents its own frame
          is this project's most expensive recurring mistake. */
     p = zput(p, "  last WOW32 call ENTERED: id=0x"); p = zhex(p, g_wow_last_id);
-    { const char *nm = wow32_name(g_wow_last_id);
+    { const char *nm = Wow32Name(g_wow_last_id);
       if (nm) { p = zput(p, " "); p = zput(p, nm); } }
     p = zput(p, " from=0x"); p = zhex(p, g_wow_last_from);
     p = zput(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
@@ -20687,7 +20687,7 @@ static void wow_task_dir_here(WORD task)          /* record the host's directory
     char d[MAX_PATH];
     if (GetCurrentDirectoryA(sizeof d, d)) wow_task_dir_note(task, d);
 }
-static void wow32_curdir_set(const char *dir)    /* WOW32 0x82 succeeded (wow32.h) */
+static void Wow32CurrentDirectorySet(const char *dir)    /* WOW32 0x82 succeeded (wow32.h) */
 {
     wow_task_dir_note(wowsched_curtask(), dir);
 }
@@ -21451,7 +21451,7 @@ static WORD g_wow_vendor_sel = 0;
      further because we answered N calls reads very differently from one where it
      got further having been LIED to N times by the step-over path, and a single
      total could not tell them apart. */
-static wow32_dosdata_t g_wow_dosdata;
+static WOW32_DOSDATA g_wow_dosdata;
 static DWORD g_wow32_serviced = 0, g_wow32_unimpl = 0, g_wow32_declined = 0;
 
 /* Translate a guest selector to a host linear base, for far-pointer arguments.
@@ -22690,7 +22690,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              on something it has not identified. */
                         DWORD sseg = (DWORD)(fb[4] | (fb[5] << 8));
                         int   kt   = sseg == (VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        const char *nm = kt ? wow32_name((WORD)fid) : NULL;
+                        const char *nm = kt ? Wow32Name((WORD)fid) : NULL;
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
                         if (nm) { p = zput(p, " "); p = zput(p, nm); }
                         if (kt) p = zput(p, " [krnl]");
@@ -22888,16 +22888,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                ⚠ The return value goes in a HOLE ON THE GUEST STACK, not in AX/DX
                  -- the thunk loads AX/DX from that hole after the BOP (observed:
                  anything we put in registers is overwritten before the caller
-                 sees it). wow32_setret() is the only correct way. */
+                 sees it). Wow32SetReturn() is the only correct way. */
             if (bcode == 0x51) {
                 DWORD ssb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
-                wow32_frame_t f;
-                f.bp      = (volatile BYTE *)(ULONG_PTR)
+                WOW32_FRAME f;
+                f.FrameBase      = (volatile BYTE *)(ULONG_PTR)
                             (ssb2 + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
-                f.id      = wow32_peekw(f.bp + WOW32_OFF_ID);
-                f.argb    = wow32_peekw(f.bp + WOW32_OFF_ARGB);
-                f.from    = wow32_peekw(f.bp + WOW32_OFF_FROM);
-                f.stubseg = wow32_peekw(f.bp + 4);          /* the stub's own segment */
+                f.Id      = Wow32PeekWord(f.FrameBase + WOW32_OFF_ID);
+                f.ArgumentBytes    = Wow32PeekWord(f.FrameBase + WOW32_OFF_ARGB);
+                f.CallSite    = Wow32PeekWord(f.FrameBase + WOW32_OFF_FROM);
+                f.StubSegment = Wow32PeekWord(f.FrameBase + 4);          /* the stub's own segment */
                 /* ★ WHOSE ID SPACE IS THIS? The per-function stub lives in the module
                      that owns the numbering, so resolving its segment against
                      krnl386's own segment bases answers it exactly. Everything we
@@ -22912,20 +22912,20 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      thunk (observed), so the executing CS at a BOP IS krnl386's
                      code segment -- and a stub in that same segment is krnl386's stub.
                      Exact, self-contained, and true from the first call onward. */
-                f.krnl = (f.stubseg == (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
-                f.sel2lin = wow32_host_sel2lin;
-                f.ctx     = NULL;
-                f.ret     = 0;
-                f.serviced = 0;
+                f.IsKernel = (f.StubSegment == (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                f.SelectorToLinear = wow32_host_sel2lin;
+                f.Context     = NULL;
+                f.Result     = 0;
+                f.IsServiced = 0;
                 /* A service may ASK for a 16-bit call; whether one happens is the
                    host's decision, and `cbok` is where that decision is made. */
-                f.cbok    = g_wowcall_on;
-                f.cbproc  = 0;
-                f.cbds    = 0;
-                f.cbnarg  = 0; f.cbsink = NULL;
-                f.cbhwnd  = 0; f.cbmsg = 0;
-                f.cbblobn = 0; f.cbblobarg = -1;
-                f.cbret   = WOWCALL_RET_KEEP;
+                f.IsCallbackAllowed    = g_wowcall_on;
+                f.CallbackProcedure  = 0;
+                f.CallbackDataSelector    = 0;
+                f.CallbackArgumentCount  = 0; f.CallbackSink = NULL;
+                f.CallbackWindow  = 0; f.CallbackMessage = 0;
+                f.CallbackBlobLength = 0; f.CallbackBlobArgument = -1;
+                f.CallbackReturnMode   = WOWCALL_RET_KEEP;
                 /* ⚠ AND THESE TWO, WHICH COST A RUN BY BEING LEFT OUT. `f` is a
                      stack local, so an un-set field is whatever was there before
                      -- and `cbact` is read as a DECISION about what the host does
@@ -22934,18 +22934,18 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      action, following a pointer that was never a pointer and
                      issuing a LocalUnlock against a lock nobody had taken. Every
                      field of this frame is initialised here for that reason. */
-                f.cbact   = WOWCALL_ACT_NONE; f.cbactarg = 0;
-                f.enumreq  = 0;                /* ...and this one too */
-                f.gds      = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                f.modaldlg = 0;                /* ...and this one, for the same
+                f.CallbackAction   = WOWCALL_ACT_NONE; f.CallbackActionArgument = 0;
+                f.IsEnumerationRequested  = 0;                /* ...and this one too */
+                f.GuestDataSelector      = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                f.IsModalDialog = 0;                /* ...and this one, for the same
                                                   reason: it decides whether the
                                                   guest is resumed at all */
                 /* ★ krnl386's segment 1 as a LIVE selector, for the day a
                      service needs to call a KERNEL export. The WOW32 common
                      thunk is IN that segment, so the CS at this BOP is it --
                      exact, free, and true from the first call onward. */
-                if (f.krnl) g_wu_krnl_seg = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                g_wow_last_id = (WORD)f.id; g_wow_last_from = f.from;
+                if (f.IsKernel) g_wu_krnl_seg = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                g_wow_last_id = (WORD)f.Id; g_wow_last_from = f.CallSite;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
                      the mode after the BOP whatever we do here -- a stepped-over
@@ -22953,9 +22953,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      one call this exists for (0x74, the task launch) is stepped
                      over. See WOW32_OFF_MODE in wow32.h for what the modes are and
                      why krnl386 itself never sets one. */
-                {   int md = wow32_mode_override((WORD)f.id);
+                {   int md = wow32_mode_override((WORD)f.Id);
                     if (md >= 0) {
-                        wow32_pokew(f.bp + WOW32_OFF_MODE, (WORD)md);
+                        Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, (WORD)md);
                         p = zput(p, "\n     ** wowmode.txt OVERRIDE: returning"
                                     " through epilogue mode ");
                         p = zhex(p, (DWORD)md);
@@ -22998,7 +22998,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 && g_ws_slots[fi].Task == child) fsi = fi;
                         if (fsi >= 0 && g_ws_shell && fcur != g_ws_shell
                             && g_ww_nested == 0 && !WowDlgActive() && !ws_intertask_live()) {
-                            DWORD fmode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                            DWORD fmode = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
                             WowSchedPoke(g_ws_slots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
                             WowSchedSwap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
                             g_ws_slots[fsi].IsRunnable = 1;          /* the parent, mid-work */
@@ -23012,14 +23012,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, " -- LAUNCH-FIRST at depth 0x"); p = zhex(p, (DWORD)g_WowCallDepth);
                             p = zput(p, ": the child runs to its first yield before the"
                                         " parent's call (id 0x");
-                            p = zhex(p, f.id); p = zput(p, ") is serviced (#306)\r\n");
+                            p = zhex(p, f.Id); p = zput(p, ") is serviced (#306)\r\n");
                             wowlog_flush(base, &p);
                             return 1;
                         }
                     }
                 }
-                if (g_wowsched_on && f.krnl) {
-                    DWORD modelin = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                if (g_wowsched_on && f.IsKernel) {
+                    DWORD modelin = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
                     WORD  cur     = wowsched_curtask();
                     /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
                          ⚠ MEASURED THE HARD WAY. The first cut saved this frame,
@@ -23034,8 +23034,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            is exactly what makes resuming it later sound.
                          So: park the new task at this instruction, and send the
                            creator home through epilogue mode 25. */
-                    int wsi = (f.id == 0x74) ? ws_free() : -1;
-                    if (f.id == 0x74 && wsi >= 0) {
+                    int wsi = (f.Id == 0x74) ? ws_free() : -1;
+                    if (f.Id == 0x74 && wsi >= 0) {
                         DWORD tb = dpmi_sel_base(cur);
                         WORD  hinst = 0;
                         int   fromtdb = 0;
@@ -23058,8 +23058,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         g_ws_slots[wsi].IsFresh = 1;          /* s92: not run yet (#306) */
                         g_ws_launch_child = cur;            /* the parent is the next caller */
                         wow_task_dir_here(cur);             /* #164: its launch directory */
-                        wow32_setret(&f, hinst);
-                        wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
+                        Wow32SetReturn(&f, hinst);
+                        Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
                         ++g_ws_switches;
                         p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
                         p = zput(p, " parked at its launch; creator sent home through"
@@ -23103,14 +23103,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          the yield only happens when the running one
                          has nothing to do. The other new yield is at GetMessage -- see
                          "(E)" at the USER dispatch -- for a task launched and never run. */
-                    else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
+                    else if (f.Id == WOW32_WOWWAITFORMSGANDEVENT
                              && cur != 0 && cur != 0xFFFF && !ws_intertask_live()
                              && (wsi = ws_pick(cur)) >= 0) {
                         WORD to = g_ws_slots[wsi].Task;
                         /* Written into the WAITING task's frame now; its epilogue
                            reads them whenever it is resumed, off its own stack. */
-                        wow32_setret(&f, 0);
-                        wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
+                        Wow32SetReturn(&f, 0);
+                        Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
                         int drb = ws_toplevel(&g_ws_slots[wsi]);
                         WowSchedPoke(g_ws_slots[wsi].ModeLinear, WOW32_MODE_ORDINARY);
                         WowSchedSwap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
@@ -23140,11 +23140,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      are pumped (that is where a Win16 message comes from), then up to
                      50 ms of waiting for input -- the same bound and reasoning as the
                      GetMessage wait -- and any IRQ a 32-bit component raised. */
-                if (f.krnl && f.id == WOW32_WOWWAITFORMSGANDEVENT) {
+                if (f.IsKernel && f.Id == WOW32_WOWWAITFORMSGANDEVENT) {
                     if (!g_WowMsgCount && !WowWinPump(64))
                         MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
                     if (g_ica_pending) wow_ica_deliver(g_dosm, tib, 0);
-                    wow32_setret(&f, 0);
+                    Wow32SetReturn(&f, 0);
                     ++g_wow32_serviced;
                     ++g_wow_idlewaits;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -23182,16 +23182,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                    ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. Failure is
                      0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
                      and only a real failure may return the sentinel. */
-                if (f.krnl && f.id == WOW32_FILE_READ && !wow32_may_decline(f.id, f.from)) {
-                    DWORD cnt  = (DWORD)wow32_argw(&f, 8)
-                               | ((DWORD)wow32_argw(&f, 10) << 16);
-                    DWORD boff = wow32_argw(&f, 12);
-                    WORD  bsel = wow32_argw(&f, 14);
-                    DWORD h    = wow32_argw(&f, 16);
+                if (f.IsKernel && f.Id == WOW32_FILE_READ && !Wow32MayDecline(f.Id, f.CallSite)) {
+                    DWORD cnt  = (DWORD)Wow32ArgWord(&f, 8)
+                               | ((DWORD)Wow32ArgWord(&f, 10) << 16);
+                    DWORD boff = Wow32ArgWord(&f, 12);
+                    WORD  bsel = Wow32ArgWord(&f, 14);
+                    DWORD h    = Wow32ArgWord(&f, 16);
                     DWORD bbase = dpmi_sel_base(bsel);
                     DWORD rd = 0;
                     int ok = 0;
-                    p = zput(p, "\n     WOW32 0x97 read (site 0x"); p = zhex(p, f.from);
+                    p = zput(p, "\n     WOW32 0x97 read (site 0x"); p = zhex(p, f.CallSite);
                     p = zput(p, ", may NOT decline) h="); p = zhex(p, h);
                     p = zput(p, " cnt=0x"); p = zhex(p, cnt);
                     p = zput(p, " -> 0x"); p = zhex(p, bsel);
@@ -23202,19 +23202,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ok = ReadFile(m.fh[h], (void *)(ULONG_PTR)(bbase + boff),
                                       cnt, &rd, NULL) ? 1 : 0;
                     }
-                    if (ok) { wow32_setret(&f, rd); ++g_wow32_serviced;
+                    if (ok) { Wow32SetReturn(&f, rd); ++g_wow32_serviced;
                               p = zput(p, " -> read 0x"); p = zhex(p, rd); p = zput(p, "b"); }
-                    else    { wow32_setret(&f, 0xFFFFFFFFu); ++g_wow32_unimpl;
+                    else    { Wow32SetReturn(&f, 0xFFFFFFFFu); ++g_wow32_unimpl;
                               p = zput(p, " -> FAILED (bad handle/selector/buffer)"); }
                     p = zput(p, "\r\n");
                     wowlog_flush(base, &p);
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     return 1;
                 }
-                if (f.krnl && f.id == WOW32_GETCURDIR && g_pm_xfer_seg) {
-                    DWORD gsi  = wow32_argw(&f, 0);
-                    WORD  gsel = wow32_argw(&f, 2);
-                    DWORD drv  = wow32_argw(&f, 4) & 0xFF;
+                if (f.IsKernel && f.Id == WOW32_GETCURDIR && g_pm_xfer_seg) {
+                    DWORD gsi  = Wow32ArgWord(&f, 0);
+                    WORD  gsel = Wow32ArgWord(&f, 2);
+                    DWORD drv  = Wow32ArgWord(&f, 4) & 0xFF;
                     DWORD sax = VDM_REG(tib, VTIB_EAX), sdx = VDM_REG(tib, VTIB_EDX);
                     DWORD sds = VDM_REG(tib, VTIB_DS),  ssi = VDM_REG(tib, VTIB_ESI);
                     DWORD gbase = dpmi_sel_base(gsel);
@@ -23242,13 +23242,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                         /* DX must not come back 0xFFFF -- that is this call site's
                            failure sentinel, and it is checked before AX. */
-                        wow32_setret(&f, cf ? 0x0000000Fu : 0u);
+                        Wow32SetReturn(&f, cf ? 0x0000000Fu : 0u);
                         p = zput(p, "\r\n");
                     }
                     ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, " -> SERVICED (DOS-backed), returned 0x");
-                    p = zhex(p, f.ret); p = zput(p, "\r\n");
+                    p = zhex(p, f.Result); p = zput(p, "\r\n");
                     wowlog_flush(base, &p);
                     return 1;
                 }
@@ -23278,9 +23278,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      rig's own WOWEXEC/KRNL386 were found there. It also consults
                      the current directory, which Win16 did too. Recorded as a
                      difference rather than claimed as equivalence. */
-                if (f.krnl && f.id == WOW32_RESOLVEMODULEPATH && g_wow_path_seg) {
-                    volatile BYTE *src = wow32_argptr(&f, 4);
-                    volatile BYTE *dst = wow32_argptr(&f, 0);
+                if (f.IsKernel && f.Id == WOW32_RESOLVEMODULEPATH && g_wow_path_seg) {
+                    volatile BYTE *src = Wow32ArgPointer(&f, 4);
+                    volatile BYTE *dst = Wow32ArgPointer(&f, 0);
                     char name[300], full[300];
                     int k;
                     p = zput(p, "  WOW32 0xc5 ResolveModulePath ");
@@ -23290,7 +23290,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            still be answered, and it must say so in the log rather
                            than look like a resolve that found nothing. */
                         p = zput(p, "RELEASE");
-                        wow32_setret(&f, 1);
+                        Wow32SetReturn(&f, 1);
                     } else {
                         DWORD n = 0; char *fp = 0;
                         for (k = 0; k < (int)sizeof name - 1 && src[k]; ++k)
@@ -23300,13 +23300,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         if (name[0])
                             n = SearchPathA(NULL, name, NULL, sizeof full, full, &fp);
                         if (n && n < sizeof full) {       /* krnl386 opens this via DOS: 8.3 only */
-                            wow_shorten(full, sizeof full);
+                            WowShorten(full, sizeof full);
                             for (n = 0; full[n]; ++n) ;
                         }
                         if (!n || n >= sizeof full || !dst) {
                             p = zput(p, "NOT FOUND (krnl386 will fall back to its own"
                                         " name, as it does today)");
-                            wow32_setret(&f, 0);
+                            Wow32SetReturn(&f, 0);
                         } else {
                             volatile BYTE *pb = (volatile BYTE *)(ULONG_PTR)
                                                 ((DWORD)g_wow_path_seg << 4);
@@ -23316,14 +23316,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             pb[k < 0x1FF ? k : 0x1FF] = 0;
                             if (!sel) {
                                 p = zput(p, "NO SELECTOR (LDT full)");
-                                wow32_setret(&f, 0);
+                                Wow32SetReturn(&f, 0);
                             } else {
-                                wow32_pokew(dst,     0);        /* offset  */
-                                wow32_pokew(dst + 2, sel);      /* segment */
+                                Wow32PokeWord(dst,     0);        /* offset  */
+                                Wow32PokeWord(dst + 2, sel);      /* segment */
                                 p = zput(p, "\""); p = zput(p, full);
                                 p = zput(p, "\" at 0x"); p = zhex(p, sel);
                                 p = zput(p, ":0000");
-                                wow32_setret(&f, 1);
+                                Wow32SetReturn(&f, 1);
                             }
                         }
                     }
@@ -23331,7 +23331,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, " -> SERVICED (host path search), returned 0x");
-                    p = zhex(p, f.ret); p = zput(p, "\r\n");
+                    p = zhex(p, f.Result); p = zput(p, "\r\n");
                     wowlog_flush(base, &p);
                     return 1;
                 }
@@ -23343,9 +23343,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      that has ENDED then fills the log to its 268 MB cap, and every
                      one of those bytes is after the last thing that happened.
                    ⇒ End the run where the guest ended it, and say which code. */
-                if (f.krnl && f.id == WOW32_EXITKERNELTHUNK) {
+                if (f.IsKernel && f.Id == WOW32_EXITKERNELTHUNK) {
                     p = zput(p, "\n     ★ ExitKernelThunk(0x");
-                    p = zhex(p, wow32_argw(&f, 0));
+                    p = zhex(p, Wow32ArgWord(&f, 0));
                     p = zput(p, ") -- krnl386 is shutting the VDM down; ending the run"
                                 " here rather than looping on the UD0 behind it\r\n");
                     wowlog_flush(base, &p);
@@ -23355,9 +23355,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      Same shape as USER's anchor below, and for the same reason:
                      the id space is per TABLE, so nothing here may be answered
                      until the table has identified itself. See wow_krnl2_stub. */
-                if (!f.krnl && !g_wow_krnl2_seg && f.stubseg != g_wow_user_seg
-                    && wow_krnl2_stub(f.id, wow32_peekw(f.bp + 2))) {
-                    g_wow_krnl2_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_krnl2_seg && f.StubSegment != g_wow_user_seg
+                    && wow_krnl2_stub(f.Id, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_krnl2_seg = f.StubSegment;
                     p = zput(p, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
                                 " segment 0x");
                     p = zhex(p, g_wow_krnl2_seg);
@@ -23420,9 +23420,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
                        global arena, so krnl386's owner write for it (FarSetOwner)
                        will not find an arena entry. Recorded, not hidden. */
-                if (!f.krnl && g_wow_krnl2_seg && f.stubseg == g_wow_krnl2_seg
-                    && f.id == WOW32K2_TASKENV) {
-                    WORD  pbsel = wow32_argw(&f, 4), pboff = wow32_argw(&f, 2);
+                if (!f.IsKernel && g_wow_krnl2_seg && f.StubSegment == g_wow_krnl2_seg
+                    && f.Id == WOW32K2_TASKENV) {
+                    WORD  pbsel = Wow32ArgWord(&f, 4), pboff = Wow32ArgWord(&f, 2);
                     DWORD pblin = pbsel ? dpmi_sel_base(pbsel) : 0;
                     WORD  env = 0;
                     const char *src = "";
@@ -23481,12 +23481,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, " bytes to 0x"); p = zhex(p, g_wow_env_seg);
                             p = zput(p, ":0000 as sel 0x"); p = zhex(p, sel);
                             if (sel) {
-                                wow32_setret(&f, sel);
+                                Wow32SetReturn(&f, sel);
                                 ++g_wow32_serviced;
                                 VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                                 p = zput(p, "\r\n -> SERVICED (task environment),"
                                             " returned 0x");
-                                p = zhex(p, f.ret); p = zput(p, "\r\n");
+                                p = zhex(p, f.Result); p = zput(p, "\r\n");
                                 wowlog_flush(base, &p);
                                 p = base;
                                 return 1;
@@ -23502,14 +23502,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      `0x39` is GetProfileInt in krnl386's table and RegisterClass
                      in USER's, and one switch holding both id spaces is exactly
                      how this host came to answer the second with the first. */
-                if (!f.krnl && !g_wow_user_seg
-                    && wow_user_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_user_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_user_seg
+                    && wow_user_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_user_seg = f.StubSegment;
                     p = zput(p, "\n     WOWUSER: USER's code segment is 0x");
                     p = zhex(p, g_wow_user_seg);
                     p = zput(p, " (learned from its own stub, not from the module table)");
                 }
-                if (!f.krnl && f.stubseg == g_wow_user_seg && g_wow_user_seg) {
+                if (!f.IsKernel && f.StubSegment == g_wow_user_seg && g_wow_user_seg) {
                     char note[224];
                     /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
                          They belong to this thread, so nothing about them happens
@@ -23538,7 +23538,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          how a click on one task's window wakes it while another is idle
                          in the wait below (which then comes back here). */
                     WORD ecur = wowsched_curtask();
-                    int  ecan = g_wowsched_on && f.id == WOWUSER_GETMESSAGE
+                    int  ecan = g_wowsched_on && f.Id == WOWUSER_GETMESSAGE
                                 && g_ww_nested == 0 && !WowDlgActive()
                                 && ecur && ecur != 0xFFFF && !ws_intertask_live();
                 ws_again_e:
@@ -23547,7 +23547,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         int  ysi  = ws_runnable(ycur, g_WowCallDepth);
                         if (ysi >= 0) {
                             WORD  yto = g_ws_slots[ysi].Task;
-                            DWORD ymode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                            DWORD ymode = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
                             int   yrb = ws_toplevel(&g_ws_slots[ysi]);
                             WowSchedPoke(g_ws_slots[ysi].ModeLinear, WOW32_MODE_ORDINARY);
                             WowSchedSwap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
@@ -23581,7 +23581,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
                          takes it to push a keystroke, so holding it here would
                          make the thing we are waiting for impossible. */
-                    if (f.id == WOWUSER_GETMESSAGE && !WowMsgCountFor(ecur == 0xFFFF ? 0 : ecur)
+                    if (f.Id == WOWUSER_GETMESSAGE && !WowMsgCountFor(ecur == 0xFFFF ? 0 : ecur)
                         && !WowMsgQuitFor(ecur == 0xFFFF ? 0 : ecur)) {
                         int ewoke = 0;
                         DWORD t0 = GetTickCount(), waited;
@@ -23709,7 +23709,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          afterwards. Announce it first, or a log collected while
                          the box is up stops dead at the call before it -- which
                          has already misled a reading twice this session. */
-                    if (f.id == WOWUSER_MESSAGEBOX) {
+                    if (f.Id == WOWUSER_MESSAGEBOX) {
                         p = zput(p, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
                                     " stops here until it is dismissed; the"
                                     " SERVICED line carries its TEXT and follows"
@@ -23720,7 +23720,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (USER), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         /* ── ★★★★★ AND NOW THE OTHER DIRECTION. (session 40) ────
@@ -23730,23 +23730,23 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              note in WowCallEnter. Everything after this point in
                              the run belongs to the 16-bit procedure until its
                              `retf` reaches our stub. */
-                        if (f.cbproc) {
+                        if (f.CallbackProcedure) {
                             WORD  rsel = wow_callback_selector();
                             DWORD ssb3 = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             int ai, cbabsent = 0;
                             p = zput(p, "WOWCALL: -> 0x");
-                            p = zhex(p, f.cbproc >> 16);
-                            p = zput(p, ":0x"); p = zhex(p, f.cbproc & 0xFFFF);
+                            p = zhex(p, f.CallbackProcedure >> 16);
+                            p = zput(p, ":0x"); p = zhex(p, f.CallbackProcedure & 0xFFFF);
                             p = zput(p, "(");
-                            for (ai = 0; ai < f.cbnarg; ++ai) {
+                            for (ai = 0; ai < f.CallbackArgumentCount; ++ai) {
                                 if (ai) p = zput(p, " ");
-                                p = zhex(p, f.cbarg[ai]);
+                                p = zhex(p, f.CallbackArguments[ai]);
                             }
-                            p = zput(p, ") ds=0x"); p = zhex(p, f.cbds);
-                            if (f.cbmsg) {
-                                p = zput(p, " [hwnd=0x"); p = zhex(p, f.cbhwnd);
-                                p = zput(p, " msg=0x"); p = zhex(p, f.cbmsg);
+                            p = zput(p, ") ds=0x"); p = zhex(p, f.CallbackDataSelector);
+                            if (f.CallbackMessage) {
+                                p = zput(p, " [hwnd=0x"); p = zhex(p, f.CallbackWindow);
+                                p = zput(p, " msg=0x"); p = zhex(p, f.CallbackMessage);
                                 p = zput(p, "]");
                             }
                             p = zput(p, " ss=0x");
@@ -23760,10 +23760,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  LPCREATESTRUCT and this host has never built one.
                                  Saying so on the line is what stops a later reader
                                  taking the zero for a measurement. */
-                            if (f.cbmsg == WM_CREATE16 && f.cbblobn)
+                            if (f.CallbackMessage == WM_CREATE16 && f.CallbackBlobLength)
                                 p = zput(p, " [lParam -> a CREATESTRUCT on the"
                                             " guest's own stack]");
-                            else if (f.cbmsg == WM_CREATE16)
+                            else if (f.CallbackMessage == WM_CREATE16)
                                 p = zput(p, " [lParam=0: NO CREATESTRUCT -- a"
                                             " procedure that reads it will fault]");
                             /* ── ★ IS THE PROCEDURE'S SEGMENT ACTUALLY LOADED? ──
@@ -23774,7 +23774,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  Say which one it is, because "not present" is a
                                  fact about the guest's loader and belongs in the
                                  log next to the call it changes. */
-                            { WORD pcs = (WORD)(f.cbproc >> 16);
+                            { WORD pcs = (WORD)(f.CallbackProcedure >> 16);
                               WORD pix = (WORD)(pcs >> 3);
                               cbabsent = (pix && pix < DPMI_LDT_MAX
                                           && !(g_ldt[pix].access & 0x80));
@@ -23785,14 +23785,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (!rsel)
                                 p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
-                            else if (!WowCallEnter(tib, ssb3, rsel, f.cbproc,
-                                                    f.cbds, f.cbarg, f.cbnarg,
+                            else if (!WowCallEnter(tib, ssb3, rsel, f.CallbackProcedure,
+                                                    f.CallbackDataSelector, f.CallbackArguments, f.CallbackArgumentCount,
                                                     (DWORD)(ULONG_PTR)
-                                                        (f.bp + WOW32_OFF_RET),
-                                                    f.cbret, f.cbsink,
-                                                    f.cbhwnd, f.cbmsg,
-                                                    f.cbblob, f.cbblobn,
-                                                    f.cbblobarg, cbabsent))
+                                                        (f.FrameBase + WOW32_OFF_RET),
+                                                    f.CallbackReturnMode, f.CallbackSink,
+                                                    f.CallbackWindow, f.CallbackMessage,
+                                                    f.CallbackBlob, f.CallbackBlobLength,
+                                                    f.CallbackBlobArgument, cbabsent))
                                 p = zput(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"
@@ -23803,8 +23803,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                    WowCallEnter's argument list keeps that list
                                    about the CALL and not about what follows it. */
                                 if (g_WowCallDepth > 0) {
-                                    g_WowCallFrames[g_WowCallDepth - 1].Action = f.cbact;
-                                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = f.cbactarg;
+                                    g_WowCallFrames[g_WowCallDepth - 1].Action = f.CallbackAction;
+                                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = f.CallbackActionArgument;
                                 }
                                 p = zput(p, " -- ENTERED, depth ");
                                 p = zhex(p, (DWORD)g_WowCallDepth);
@@ -23834,7 +23834,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              first message, and the first call would never
                              return. Nothing asks for both today; this is what
                              stops the day it does from being a mystery. */
-                        else if (f.enumreq) {
+                        else if (f.IsEnumerationRequested) {
                             char enote[256];
                             WORD  ersel = wow_callback_selector();
                             DWORD essb  = dpmi_sel_base(
@@ -23845,7 +23845,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, "WOWENUM: "); p = zput(p, enote);
                             p = zput(p, "\r\n");
                         }
-                        else if (f.modaldlg) {
+                        else if (f.IsModalDialog) {
                             char mnote[512];
                             WORD  mrsel = wow_callback_selector();
                             DWORD mssb  = dpmi_sel_base(
@@ -23869,16 +23869,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      ShellAbout in SHELL's, and the two must never meet. The
                      anchor and the service are the SAME call -- the table names
                      itself with the first thing we are asked to do out of it. */
-                if (!f.krnl && !g_wow_shell_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && wow_shell_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_shell_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_shell_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && wow_shell_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_shell_seg = f.StubSegment;
                     p = zput(p, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
                     p = zhex(p, g_wow_shell_seg);
                     p = zput(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.krnl && g_wow_shell_seg && f.stubseg == g_wow_shell_seg) {
+                if (!f.IsKernel && g_wow_shell_seg && f.StubSegment == g_wow_shell_seg) {
                     char note[320];
                     /* The About box runs a modal loop on this thread, so drain
                        what is already queued for the guest's windows first --
@@ -23893,7 +23893,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          completed fine. Measured, on the first run that opened
                          one. This line is written and flushed first, so the log
                          says what the host is waiting for while it waits. */
-                    if (f.id == WOWSHELL_SHELLABOUT) {
+                    if (f.Id == WOWSHELL_SHELLABOUT) {
                         p = zput(p, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
                                     " stops here until the box is dismissed; the"
                                     " SERVICED line follows when it is\r\n");
@@ -23903,7 +23903,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (SHELL), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
@@ -23914,27 +23914,27 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      The fifth table, behind the fifth check. Same shape as
                      SHELL's: the anchor and the service are the same call, so
                      nothing is answered before the table has named itself. */
-                if (!f.krnl && !g_wow_cdlg_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && f.stubseg != g_wow_shell_seg
-                    && wow_cdlg_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_cdlg_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_cdlg_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && f.StubSegment != g_wow_shell_seg
+                    && wow_cdlg_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_cdlg_seg = f.StubSegment;
                     p = zput(p, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
                     p = zhex(p, g_wow_cdlg_seg);
                     p = zput(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.krnl && g_wow_cdlg_seg && f.stubseg == g_wow_cdlg_seg) {
+                if (!f.IsKernel && g_wow_cdlg_seg && f.StubSegment == g_wow_cdlg_seg) {
                     char note[416];
                     WowWinPump(32);
                     /* ⚠ Same reason as ShellAbout: a modal service does not return
                          until a human dismisses it, and the SERVICED line is
                          written afterwards. Say it before it blocks, or the log
                          looks like a run that stopped at the call before. */
-                    if (f.id == WOWCDLG_GETOPENFILENAME
-                        || f.id == WOWCDLG_GETSAVEFILENAME
-                        || f.id == WOWCDLG_CHOOSEFONT
-                        || f.id == WOWCDLG_CHOOSECOLOR) {
+                    if (f.Id == WOWCDLG_GETOPENFILENAME
+                        || f.Id == WOWCDLG_GETSAVEFILENAME
+                        || f.Id == WOWCDLG_CHOOSEFONT
+                        || f.Id == WOWCDLG_CHOOSECOLOR) {
                         p = zput(p, "\n     WOWCOMMDLG: this common dialog is MODAL --"
                                     " the VDM stops here until it is dismissed;"
                                     " the SERVICED line follows when it is\r\n");
@@ -23944,7 +23944,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (COMMDLG), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
@@ -23954,23 +23954,23 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
                      The sixth table, behind the sixth check, same shape as the
                      two before it. */
-                if (!f.krnl && !g_wow_kbd_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
-                    && wow_kbd_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_kbd_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_kbd_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
+                    && wow_kbd_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_kbd_seg = f.StubSegment;
                     p = zput(p, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
                     p = zhex(p, g_wow_kbd_seg);
                     p = zput(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.krnl && g_wow_kbd_seg && f.stubseg == g_wow_kbd_seg) {
+                if (!f.IsKernel && g_wow_kbd_seg && f.StubSegment == g_wow_kbd_seg) {
                     char note[320];
                     if (WowKeyboardCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (KEYBOARD), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
@@ -23979,24 +23979,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 /* ── ★★ GDI.EXE'S OWN ID SPACE. See src/wow/wowgdi.h. ────────
                      The seventh table, and the one MS Paint lives behind. */
-                if (!f.krnl && !g_wow_gdi_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
-                    && f.stubseg != g_wow_kbd_seg
-                    && wow_gdi_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_gdi_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_gdi_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
+                    && f.StubSegment != g_wow_kbd_seg
+                    && wow_gdi_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_gdi_seg = f.StubSegment;
                     p = zput(p, "\n     WOWGDI: GDI.EXE's code segment is 0x");
                     p = zhex(p, g_wow_gdi_seg);
                     p = zput(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.krnl && g_wow_gdi_seg && f.stubseg == g_wow_gdi_seg) {
+                if (!f.IsKernel && g_wow_gdi_seg && f.StubSegment == g_wow_gdi_seg) {
                     char note[320];
                     if (wowgdi_call(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (GDI), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         /* ⛔ s89: AND GDI'S ENUMERATIONS RUN. This branch never acted on
@@ -24004,7 +24004,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              EnumFontFamilies armed a walk that never started: Charmap
                              got "60 fonts" and not one callback, i.e. an empty list.
                              Same first step as USER's branch. */
-                        if (f.enumreq) {
+                        if (f.IsEnumerationRequested) {
                             char enote[256];
                             WORD  ersel = wow_callback_selector();
                             DWORD essb  = dpmi_sel_base(
@@ -24019,24 +24019,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     }
                 }
                 /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
-                if (!f.krnl && !g_wow_sound_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
-                    && f.stubseg != g_wow_kbd_seg && f.stubseg != g_wow_gdi_seg
-                    && wow_sound_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_sound_seg = f.stubseg;
+                if (!f.IsKernel && !g_wow_sound_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
+                    && f.StubSegment != g_wow_kbd_seg && f.StubSegment != g_wow_gdi_seg
+                    && wow_sound_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_sound_seg = f.StubSegment;
                     p = zput(p, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
                     p = zhex(p, g_wow_sound_seg);
                     p = zput(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.krnl && g_wow_sound_seg && f.stubseg == g_wow_sound_seg) {
+                if (!f.IsKernel && g_wow_sound_seg && f.StubSegment == g_wow_sound_seg) {
                     char note[160];
                     if (WowSoundCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (SOUND), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
@@ -24044,25 +24044,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     }
                 }
                 /* ── ★ MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
-                if (!f.krnl && !g_wow_mmedia_seg
-                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
-                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
-                    && f.stubseg != g_wow_kbd_seg && f.stubseg != g_wow_gdi_seg
-                    && f.stubseg != g_wow_sound_seg
+                if (!f.IsKernel && !g_wow_mmedia_seg
+                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
+                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
+                    && f.StubSegment != g_wow_kbd_seg && f.StubSegment != g_wow_gdi_seg
+                    && f.StubSegment != g_wow_sound_seg
                     && WowAnchorHit(g_WowMmediaAnchors,
                                       (int)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
-                                      f.id, f.argb, wow32_peekw(f.bp + 2))) {
-                    g_wow_mmedia_seg = f.stubseg;
+                                      f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_wow_mmedia_seg = f.StubSegment;
                     p = zput(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
                     p = zhex(p, g_wow_mmedia_seg);
                 }
-                if (!f.krnl && g_wow_mmedia_seg && f.stubseg == g_wow_mmedia_seg) {
+                if (!f.IsKernel && g_wow_mmedia_seg && f.StubSegment == g_wow_mmedia_seg) {
                     char note[200];
                     if (WowMultimediaCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (MMSYSTEM), returned 0x");
-                        p = zhex(p, f.ret);
+                        p = zhex(p, f.Result);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
                         wowlog_flush(base, &p);
@@ -24072,33 +24072,33 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 /* Snapshot before the dispatch: the handler sets this when it
                    hands the program over, and "delivered now" and "delivered
                    earlier" are different events that must not read the same. */
-                cmd_taken_before = g_wow_cmd_taken;
-                if (wow32_call(&f, &g_wow_dosdata)) {
+                cmd_taken_before = g_WowCommandIsTaken;
+                if (Wow32Call(&f, &g_wow_dosdata)) {
                     /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
                          them. "krnl386 got further because we answered 9 calls"
                          and "because we told it 7 times to ask DOS instead" are
                          different claims about the same run, and only separate
                          counters can tell them apart afterwards. */
-                    int decl = (f.ret == WOW32_DECLINE
-                                && wow32_may_decline(f.id, f.from));
+                    int decl = (f.Result == WOW32_DECLINE
+                                && Wow32MayDecline(f.Id, f.CallSite));
                     if (decl) ++g_wow32_declined; else ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, decl ? " -> DECLINED (krnl386 will chain to real"
                                        " DOS) 0x" : " -> SERVICED, returned 0x");
-                    p = zhex(p, f.ret);
-                    if (f.id == WOW32_REGISTERDOSDATA) {
+                    p = zhex(p, f.Result);
+                    if (f.Id == WOW32_REGISTERDOSDATA) {
                         p = zput(p, " (DOS data area at 0x");
-                        p = zhex(p, g_wow_dosdata.farptr); p = zput(p, ")");
+                        p = zhex(p, g_wow_dosdata.FarPointer); p = zput(p, ")");
                     }
                     /* ★ SAY WHAT WAS HANDED OVER, not just that something was.
                          This one call decides which program the VDM runs, and a
                          line reading "returned 0x1" would leave the single most
                          important fact of the run unrecorded. */
-                    if (f.id == WOW32_WOWGETNEXTVDMCOMMAND) {
-                        if (g_wow_cmd_prog[0]) {
-                            p = zput(p, " -- LAUNCH ["); p = zput(p, g_wow_cmd_prog);
-                            if (g_wow_cmd_args[0]) {
-                                p = zput(p, "] args["); p = zput(p, g_wow_cmd_args);
+                    if (f.Id == WOW32_WOWGETNEXTVDMCOMMAND) {
+                        if (g_WowCommandProgram[0]) {
+                            p = zput(p, " -- LAUNCH ["); p = zput(p, g_WowCommandProgram);
+                            if (g_WowCommandArguments[0]) {
+                                p = zput(p, "] args["); p = zput(p, g_WowCommandArguments);
                             }
                             p = zput(p, "]");
                             if (cmd_taken_before) p = zput(p, " -- ALREADY DELIVERED,"
@@ -24115,9 +24115,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 ++g_wow32_unimpl;
                 /* Read the litter FIRST, then overwrite it -- the value that would
                    have been used is evidence, and it is gone a line later. */
-                wow_stale = wow32_peekret(&f); wow_stale_ok = 1;
-                wow_ans = wow32_ret_override(f.id);   /* wow32ret.txt, if any */
-                wow32_setret(&f, wow_ans);            /* ★ see WOW32_UNIMPL_RET */
+                wow_stale = Wow32PeekReturn(&f); wow_stale_ok = 1;
+                wow_ans = wow32_ret_override(f.Id);   /* wow32ret.txt, if any */
+                Wow32SetReturn(&f, wow_ans);            /* ★ see WOW32_UNIMPL_RET */
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
@@ -30482,7 +30482,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
              wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
              with the AppName + CmdLine the launcher queued. We ask here, before
-             krnl386 runs, so that 0x70 can answer from g_wow_cmd_prog as it already
+             krnl386 runs, so that 0x70 can answer from g_WowCommandProgram as it already
              does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
         VDM_COMMAND_INFO ci2;
         DWORD err2 = 0; BOOL ok2; int k;
@@ -30543,21 +30543,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                Measured, first cut. The image read here is discarded by wow_place_v86;
                the NAME and the byte count are what the stage keys on. */
             HANDLE hw;
-            zput(g_wow_cmd_prog, g_app2); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
+            zput(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
             /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
-            { const char *a = g_cmd2; while (*a == ' ') ++a; zput(g_wow_cmd_args, a); zput(args, a); }
-            zput(progpath, g_wow_cmd_prog);
-            hw = CreateFileA(g_wow_cmd_prog, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            { const char *a = g_cmd2; while (*a == ' ') ++a; zput(g_WowCommandArguments, a); zput(args, a); }
+            zput(progpath, g_WowCommandProgram);
+            hw = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hw != INVALID_HANDLE_VALUE) { ReadFile(hw, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hw); }
             if (g_cur2[0]) {
                 SetCurrentDirectoryA(g_cur2);
                 /* #164: WOWEXEC changes to this before LoadModule, so the task starts
                    in the folder it was launched from -- 8.3, as krnl386 sees paths. */
-                if (!GetShortPathNameA(g_cur2, g_wow_cmd_dir, sizeof g_wow_cmd_dir)
-                    || lstrlenA(g_wow_cmd_dir) >= 0x10C)
-                    g_wow_cmd_dir[0] = 0;
+                if (!GetShortPathNameA(g_cur2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
+                    || lstrlenA(g_WowCommandDirectory) >= 0x10C)
+                    g_WowCommandDirectory[0] = 0;
             }
-            p = zput(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = zput(p, g_wow_cmd_prog);
+            p = zput(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = zput(p, g_WowCommandProgram);
             p = zput(p, "] loaded 0x"); p = zhex(p, nread); p = zput(p, " (target.txt NOT consulted)\r\n");
             if (!nread) wow_cmd_from_csrss = 0;          /* unreadable: fall back as before */
         }
@@ -30619,8 +30619,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf);
             zput(progpath, g_app2);
             zput(args, g_cmd2);
-            zput(g_wow_cmd_prog, g_app2); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
-            zput(g_wow_cmd_args, g_cmd2);
+            zput(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+            zput(g_WowCommandArguments, g_cmd2);
             p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
             p = zput(p, " from "); p = zput(p, g_app2);
             p = zput(p, " args=["); p = zput(p, args); p = zput(p, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
@@ -30695,8 +30695,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      loaded just below is discarded there (see wow_place_v86), but
                      the NAME is the one thing the WOW path still needs -- Windows
                      does not put it on the VDM's command line. */
-                zput(g_wow_cmd_prog, tpath); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
-                if (a) zput(g_wow_cmd_args, a);
+                zput(g_WowCommandProgram, tpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                if (a) zput(g_WowCommandArguments, a);
                 p = zput(p, "STAGE2: target.txt loaded 0x"); p = zhex(p, nread);
                 p = zput(p, " from "); p = zput(p, tpath);
                 if (a && a[0]) { p = zput(p, " args=["); p = zput(p, a); p = zput(p, "]"); }
@@ -30876,8 +30876,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
                 w = zput(args, (pi.params[0] == '?' && !pi.params[1]) ? "" : pi.params);
                 if (extra[0]) { if (args[0]) w = zput(w, " "); zput(w, extra); }
-                zput(g_wow_cmd_prog, progpath); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
-                zput(g_wow_cmd_args, args);
+                zput(g_WowCommandProgram, progpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                zput(g_WowCommandArguments, args);
                 if (dir[0]) { lstrcpynA(g_cur, dir, sizeof g_cur); SetCurrentDirectoryA(g_cur); }
                 p = zput(p, " -- loaded 0x"); p = zhex(p, nread);
                 p = zput(p, " from ["); p = zput(p, progpath);
@@ -31306,11 +31306,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            and only the harness used that. Any user whose games live under a path with
            a space had the same broken launch.
          ▸ Shortened here, once, where argv[0] is built -- so every launch shape agrees
-           with the one that was already working. wow_shorten leaves the path alone if
+           with the one that was already working. WowShorten leaves the path alone if
            GetShortPathNameA cannot answer, so a path that has no 8.3 form is unchanged. */
       if (progpath[0]) {
           char before[768]; lstrcpynA(before, progpath, sizeof before);
-          wow_shorten(progpath, sizeof progpath);
+          WowShorten(progpath, sizeof progpath);
           if (lstrcmpA(before, progpath) != 0) {
               p = zput(p, "STAGE2: argv[0] shortened for the guest: ["); p = zput(p, before);
               p = zput(p, "] -> ["); p = zput(p, progpath); p = zput(p, "]\r\n");

@@ -409,15 +409,15 @@ static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 /* Write an 18-byte MSG through the far pointer the guest handed us. */
 static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
 {
-    wow32_pokew(bytes + WOWMSG_FIELD_HWND,    message->Window);
-    wow32_pokew(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
-    wow32_pokew(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
-    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WOW_WORD_MASK));
-    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WOW_WORD_SHIFT));
-    wow32_pokew(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WOW_WORD_MASK));
-    wow32_pokew(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WOW_WORD_SHIFT));
-    wow32_pokew(bytes + WOWMSG_FIELD_POINT,     message->PointX);
-    wow32_pokew(bytes + WOWMSG_FIELD_POINT + WOW_WORD_BYTES, message->PointY);
+    Wow32PokeWord(bytes + WOWMSG_FIELD_HWND,    message->Window);
+    Wow32PokeWord(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
+    Wow32PokeWord(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
+    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_POINT,     message->PointX);
+    Wow32PokeWord(bytes + WOWMSG_FIELD_POINT + WOW_WORD_BYTES, message->PointY);
 }
 
 #endif /* NTVDMEX_WOWMSG_H */

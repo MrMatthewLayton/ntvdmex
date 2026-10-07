@@ -38,7 +38,7 @@
 #define WOWSND_SETVOICETHRESHOLD  0x0010
 #define WOWSND_DOBEEP             0x0011
 
-static INT WowSoundCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
+static INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     static const PCSTR functionNames[] = {
         "?", "OpenSound", "CloseSound", "SetVoiceQueueSize", "SetVoiceNote",
@@ -49,7 +49,7 @@ static INT WowSoundCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     };
     INT noteLength = 0;
     if (noteCapacity) note[0] = 0;
-    switch (frame->id) {
+    switch (frame->Id) {
     case WOWSND_OPENSOUND:
     case WOWSND_CLOSESOUND:
     case WOWSND_SETVOICEQUEUESIZE:
@@ -66,17 +66,17 @@ static INT WowSoundCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     case WOWSND_GETTHRESHOLDSTATUS:
     case WOWSND_SETVOICETHRESHOLD:
     case WOWSND_DOBEEP:
-        wu_puts(note, noteCapacity, &noteLength, functionNames[frame->id]);
-        wu_puts(note, noteCapacity, &noteLength, " -- 0, as stock's WOW answers every SOUND.DRV call"
+        WowNotePut(note, noteCapacity, &noteLength, functionNames[frame->Id]);
+        WowNotePut(note, noteCapacity, &noteLength, " -- 0, as stock's WOW answers every SOUND.DRV call"
                                    " (w_sound, 23/23)");
-        wow32_setret(frame, 0);
+        Wow32SetReturn(frame, 0);
         return 1;
     /* ⚠ GetThresholdEvent returns an LPINT (DX:AX). Stock's answer for it is
          UNMEASURED -- the probe's OUT shows AX only -- so it is a NULL far pointer
          here, which is what a 0-everything WOW gives, and it is flagged. */
     case WOWSND_GETTHRESHOLDEVENT:
-        wu_puts(note, noteCapacity, &noteLength, "GetThresholdEvent -- NULL (DX not measured on stock)");
-        wow32_setret(frame, 0);
+        WowNotePut(note, noteCapacity, &noteLength, "GetThresholdEvent -- NULL (DX not measured on stock)");
+        Wow32SetReturn(frame, 0);
         return 1;
     }
     return 0;
