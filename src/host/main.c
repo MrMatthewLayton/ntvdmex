@@ -19668,7 +19668,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                        the site was never a candidate. The vote is fine; the FILTER IN FRONT
                        OF IT was the defect.
 
-                     ⇒ So test for `CD` alone and let x86_int_site_is_real() decide, which is
+                     ⇒ So test for `CD` alone and let X86IsIntSiteReal() decide, which is
                        what it exists for and what makes this safe -- it decodes forward from
                        each of the preceding 48 bytes and counts how many instruction streams
                        land here (measured separation: real sites 19-48 votes, false pairs
@@ -19693,7 +19693,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                          Doom's platform-type dispatch is a table of near pointers at
                            obj1+0x2cc6c. Three of its entries point into obj1+0x2cdXX, whose
                            little-endian bytes are `XX cd 16 04`, so the middle pair reads as
-                           `CD 16` = INT 16h -- a serviced vector -- and x86_int_site_is_real()
+                           `CD 16` = INT 16h -- a serviced vector -- and X86IsIntSiteReal()
                            passes, because a table of code pointers decodes into plausible
                            instruction streams. The table is written by the guest AFTER the
                            first scan, so the SECOND scan (DOS/4GW re-declares its code selector
@@ -19838,11 +19838,11 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            XP tore the VDM down with no VEH, no watchdog line and no last
                            log entry. Sessions 16-20 hunted that
                            as a fault in Doom. It was this line.
-                           x86_is_insn_start() decodes forward from each of the preceding
+                           X86IsInstructionStart() decodes forward from each of the preceding
                            48 bytes and asks how many streams land here; see x86len.h for
                            the measured separation (real sites 19-48 votes, false pairs
                            0-3) and why the threshold leans toward keeping. */
-                      if (!x86_int_site_is_real((const unsigned char *)(ULONG_PTR)a, i,
+                      if (!X86IsIntSiteReal((const unsigned char *)(ULONG_PTR)a, i,
                                                 rend - a, d32)) {
                           if (rej++ < 16) {
                               char rb[128], *rq = rb;
@@ -20284,7 +20284,7 @@ static void dpmi_bp_arm(void)
               continue;
           } }
         if (g_bp_mode[k] != 1 && host_readable((const void *)(ULONG_PTR)lin, 16)) {
-            unsigned ilen = x86_insn_len((const unsigned char *)(ULONG_PTR)lin, 0, 16,
+            unsigned ilen = X86InstructionLength((const unsigned char *)(ULONG_PTR)lin, 0, 16,
                                          g_DpmiIsClient32);
             if (ilen == 1) {
                 if (!g_bp_refused[k]) {
@@ -33618,7 +33618,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           if (!listed) {
                               /* Initial mode-switch selectors are 16-bit even for a 32-bit
                                  client (the RETF-on-failure proof, session 16), so d32=0. */
-                              if (!x86_int_site_is_real((const unsigned char *)(ULONG_PTR)cs,
+                              if (!X86IsIntSiteReal((const unsigned char *)(ULONG_PTR)cs,
                                                         o, 0xFFFF, 0)) continue;
                               ++nvoted;
                           }

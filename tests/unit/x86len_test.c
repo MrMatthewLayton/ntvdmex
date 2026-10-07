@@ -30,7 +30,7 @@ static int total = 0, fails = 0;
 
 static void len_is(const char *what, const unsigned char *b, unsigned n, int d32, unsigned want)
 {
-    unsigned got = x86_insn_len(b, 0, n, d32);
+    unsigned got = X86InstructionLength(b, 0, n, d32);
     if (got == want) { total++; printf("  PASS  len %-34s = %u\n", what, got); }
     else { total++; fails++; printf("  FAIL  len %-34s = %u (want %u)\n", what, got, want); }
 }
@@ -85,9 +85,9 @@ int main(void)
     /* Truncation must be reported, never guessed at: a decoder that walks past the
        end of the region is the "instrument that faults kills the run" failure. */
     { static const unsigned char b[] = { 0x81, 0xEB, 0x00 };
-      CHECK(x86_insn_len(b, 0, sizeof b, 1) == 0, "truncated imm32 -> 0"); }
+      CHECK(X86InstructionLength(b, 0, sizeof b, 1) == 0, "truncated imm32 -> 0"); }
     { static const unsigned char b[] = { 0x8B };
-      CHECK(x86_insn_len(b, 0, sizeof b, 1) == 0, "missing modrm -> 0"); }
+      CHECK(X86InstructionLength(b, 0, sizeof b, 1) == 0, "missing modrm -> 0"); }
 
     /* ---- the boundary test: the class that killed Doom ---------------------- */
     /* A loop whose back edge is `jle -51` (7e cd), followed by `xor ecx,ecx` (31 c9).
@@ -109,11 +109,11 @@ int main(void)
         0x31,0xC9,                      /* 1f xor ecx,ecx                  */
         0x8B,0x45,0xE4 };               /* 21 mov eax,[ebp-0x1c]           */
       CHECK(b[0x1E] == 0xCD && b[0x1F] == 0x31, "fixture holds the CD 31 byte pair");
-      CHECK(!x86_is_insn_start(b, 0x1E, sizeof b, 1),
+      CHECK(!X86IsInstructionStart(b, 0x1E, sizeof b, 1),
             "jle displacement followed by xor ecx,ecx is NOT an int 0x31");
-      CHECK(!x86_int_site_is_real(b, 0x1E, sizeof b, 1),
+      CHECK(!X86IsIntSiteReal(b, 0x1E, sizeof b, 1),
             "...so the patcher must REFUSE it (it is the jle's displacement)");
-      CHECK(x86_is_insn_start(b, 0x1D, sizeof b, 1),
+      CHECK(X86IsInstructionStart(b, 0x1D, sizeof b, 1),
             "...and the jle at +0x1d IS an instruction start"); }
 
     /* The `cd 10` inside a `call rel32` displacement (e8 cd 10 00 00).
@@ -147,11 +147,11 @@ int main(void)
         0xE8,0xCD,0x10,0x00,0x00,       /* 37 call rel32 (+0x10cd)         */
         0xBF,0x01,0x00,0x00,0x00 };     /* 3c mov edi,1                    */
       CHECK(b[56] == 0xCD && b[57] == 0x10, "fixture holds the CD 10 byte pair");
-      CHECK(!x86_is_insn_start(b, 56, sizeof b, 1),
+      CHECK(!X86IsInstructionStart(b, 56, sizeof b, 1),
             "call rel32 displacement is NOT an int 0x10");
-      CHECK(!x86_int_site_is_real(b, 56, sizeof b, 1),
+      CHECK(!X86IsIntSiteReal(b, 56, sizeof b, 1),
             "...so the patcher must REFUSE it (it is the call's displacement)");
-      CHECK(x86_is_insn_start(b, 55, sizeof b, 1),
+      CHECK(X86IsInstructionStart(b, 55, sizeof b, 1),
             "...and the call at +0x37 IS an instruction start"); }
 
     /* A REAL int 0x21, in the shape Watcom emits it -- `mov ah,3ch / int 21h`.
@@ -164,9 +164,9 @@ int main(void)
         0xCD,0x21,                      /* int 0x21   <-- real                */
         0xD1,0xD0 };                    /* rcl eax,1                          */
       CHECK(b[11] == 0xCD && b[12] == 0x21, "fixture holds the real CD 21");
-      CHECK(x86_is_insn_start(b, 11, sizeof b, 1),
+      CHECK(X86IsInstructionStart(b, 11, sizeof b, 1),
             "`mov ah,3ch / int 21h`: the int IS an instruction start");
-      CHECK(x86_int_site_is_real(b, 11, sizeof b, 1),
+      CHECK(X86IsIntSiteReal(b, 11, sizeof b, 1),
             "...and the patcher keeps it"); }
 
     /* ── THE FALSE NEGATIVE THAT COST A RUN.  A DOS-extender's DOS-version check sat
@@ -203,10 +203,10 @@ int main(void)
         0x3C,0x03,                      /* 3e cmp al,3                     */
         0x73,0x05 };                    /* 40 jae +5                       */
       CHECK(b[60] == 0xCD && b[61] == 0x21, "fixture holds the version-check int 21h");
-      CHECK(!x86_is_insn_start(b, 60, sizeof b, 0),
+      CHECK(!X86IsInstructionStart(b, 60, sizeof b, 0),
             "int 21h right after a `$`-terminated message: the vote alone CANNOT see it");
       /* ★★ SESSION 39: THIS ASSERTION IS INVERTED ON PURPOSE.  It used to read
-           `x86_int_site_is_real(...)` -- KEEP -- because refusing a real site left a
+           `X86IsIntSiteReal(...)` -- KEEP -- because refusing a real site left a
            raw `CD nn` in protected mode and that was fatal.  It is not fatal any
            more: since session 34 a #GP with the IDT bit set IS the interrupt, and the
            host services it and patches the site from the fault, where the CPU has
@@ -215,7 +215,7 @@ int main(void)
            x86len.h.  This site is REJECTED now, faults once, and is patched correctly.
          ⚠ Flipping this back without also removing the #GP(IDT) arm would restore
            the code corruption the next fixture pins. */
-      CHECK(!x86_int_site_is_real(b, 60, sizeof b, 0),
+      CHECK(!X86IsIntSiteReal(b, 60, sizeof b, 0),
             "...and it is now REJECTED, to be serviced from the #GP instead"); }
 
     /* ── ★★★ THE FALSE POSITIVE THAT KILLED THE WIN16 LAUNCH (session 39, GH #128).
@@ -260,9 +260,9 @@ int main(void)
         0x0B,0xC9,                      /* 3b or cx,cx                     */
         0x75,0xCF };                    /* 3d jne -49 (-> 0x0e)            */
       CHECK(b[56] == 0xCD && b[57] == 0x75, "fixture holds the CD 75 byte pair");
-      CHECK(!x86_is_insn_start(b, 56, sizeof b, 0),
+      CHECK(!X86IsInstructionStart(b, 56, sizeof b, 0),
             "cmp cl,ch followed by jne (16-bit): the vote correctly says it is no instruction start");
-      CHECK(!x86_int_site_is_real(b, 56, sizeof b, 0),
+      CHECK(!X86IsIntSiteReal(b, 56, sizeof b, 0),
             "cmp cl,ch followed by jne (16-bit): `cmp` owns it -- REJECT (was the WOWEXEC launch GP)"); }
 
     /* A `jmp short` displacement in 16-bit code: `eb cd` followed by `xor ax,ax`
@@ -284,13 +284,13 @@ int main(void)
         0x5F,                           /* 15 pop di                       */
         0x5E };                         /* 16 pop si                       */
       CHECK(b[17] == 0xCD && b[18] == 0x33, "fixture holds the CD 33 byte pair");
-      CHECK(!x86_int_site_is_real(b, 17, sizeof b, 0),
+      CHECK(!X86IsIntSiteReal(b, 17, sizeof b, 0),
             "`jmp short` displacement followed by xor ax,ax is NOT an int 0x33"); }
 
     /* Offset 0 has nothing before it to vote, and the region start is where the
        object begins -- trust it rather than reject every site in the first 48 bytes. */
     { static const unsigned char b[] = { 0xCD, 0x21, 0x90, 0x90 };
-      CHECK(x86_is_insn_start(b, 0, sizeof b, 1), "offset 0 is trusted"); }
+      CHECK(X86IsInstructionStart(b, 0, sizeof b, 1), "offset 0 is trusted"); }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

@@ -45,6 +45,7 @@
  */
 #ifndef HOST_X86LEN_H
 #define HOST_X86LEN_H
+#include "../ntvdmex_types.h"
 
 /* imm kinds. `z` = 2 bytes with a 16-bit operand size, 4 with a 32-bit one. */
 #define XL_NONE  0
@@ -60,7 +61,7 @@
 #define XL_MR    0x10   /* has a modrm byte                      */
 
 /* One-byte opcode map: XL_MR | <imm kind>. */
-static const unsigned char xl_map1[256] = {
+static const BYTE g_X86OneByteTable[256] = {
 /*00*/ 0x10,0x10,0x10,0x10,   1,   2,   0,   0,
 /*08*/ 0x10,0x10,0x10,0x10,   1,   2,   0,   0,   /* 0F is handled before the table */
 /*10*/ 0x10,0x10,0x10,0x10,   1,   2,   0,   0,
@@ -96,17 +97,17 @@ static const unsigned char xl_map1[256] = {
 };
 
 /* Is `op` a prefix?  (Segment overrides, operand/address size, lock, rep.) */
-static int xl_is_prefix(unsigned char op)
+static INT X86IsPrefix(BYTE opcode)
 {
-    return op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E
-        || op == 0x64 || op == 0x65 || op == 0x66 || op == 0x67
-        || op == 0xF0 || op == 0xF2 || op == 0xF3;
+    return opcode == 0x26 || opcode == 0x2E || opcode == 0x36 || opcode == 0x3E
+        || opcode == 0x64 || opcode == 0x65 || opcode == 0x66 || opcode == 0x67
+        || opcode == 0xF0 || opcode == 0xF2 || opcode == 0xF3;
 }
 
 /* 0F-escaped opcodes.  Most take a modrm and no immediate; these are the exceptions. */
-static unsigned xl_map2(unsigned char o2)
+static UINT X86TwoByteEntry(BYTE opcode)
 {
-    switch (o2) {
+    switch (opcode) {
     case 0x05: case 0x06: case 0x07: case 0x08: case 0x09: case 0x0B: case 0x0E:
     case 0x30: case 0x31: case 0x32: case 0x33: case 0x34: case 0x35: case 0x77:
     case 0xA0: case 0xA1: case 0xA2: case 0xA8: case 0xA9: case 0xAA:
@@ -119,93 +120,93 @@ static unsigned xl_map2(unsigned char o2)
     case 0xC2: case 0xC4: case 0xC5: case 0xC6:
         return XL_MR | XL_IB;
     default:
-        if (o2 >= 0x80 && o2 <= 0x8F) return XL_IZ;             /* jcc rel16/32  */
+        if (opcode >= 0x80 && opcode <= 0x8F) return XL_IZ;             /* jcc rel16/32  */
         return XL_MR | XL_NONE;
     }
 }
 
 /* Bytes consumed by a modrm (+sib +disp).  0 = ran off the end. */
-static unsigned xl_modrm(const unsigned char *b, unsigned i, unsigned n, int addr32)
+static UINT X86ModrmLength(const BYTE *bytes, UINT offset, UINT length, INT isAddress32)
 {
-    unsigned char m;
-    unsigned mod, rm, len = 1;
-    if (i >= n) return 0;
-    m = b[i]; mod = (unsigned)(m >> 6); rm = (unsigned)(m & 7);
-    if (mod == 3) return 1;
-    if (addr32) {
-        if (rm == 4) {                                   /* sib */
-            if (i + 1 >= n) return 0;
-            if (mod == 0 && (b[i + 1] & 7) == 5) len += 4;
-            len += 1;
-        } else if (mod == 0 && rm == 5) {
-            len += 4;
+    BYTE modrm;
+    UINT mode, registerMemory, modrmLength = 1;
+    if (offset >= length) return 0;
+    modrm = bytes[offset]; mode = (UINT)(modrm >> 6); registerMemory = (UINT)(modrm & 7);
+    if (mode == 3) return 1;
+    if (isAddress32) {
+        if (registerMemory == 4) {                                   /* sib */
+            if (offset + 1 >= length) return 0;
+            if (mode == 0 && (bytes[offset + 1] & 7) == 5) modrmLength += 4;
+            modrmLength += 1;
+        } else if (mode == 0 && registerMemory == 5) {
+            modrmLength += 4;
         }
-        if      (mod == 1) len += 1;
-        else if (mod == 2) len += 4;
+        if      (mode == 1) modrmLength += 1;
+        else if (mode == 2) modrmLength += 4;
     } else {
-        if (mod == 0 && rm == 6) len += 2;
-        if      (mod == 1) len += 1;
-        else if (mod == 2) len += 2;
+        if (mode == 0 && registerMemory == 6) modrmLength += 2;
+        if      (mode == 1) modrmLength += 1;
+        else if (mode == 2) modrmLength += 2;
     }
-    return len;
+    return modrmLength;
 }
 
 /* Length in bytes of the instruction at b[i], or 0 if it cannot be decoded / runs off
    the end.  `d32` is the code segment's D/B bit (1 = 32-bit default operand+address). */
-static unsigned x86_insn_len(const unsigned char *b, unsigned i, unsigned n, int d32)
+static UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDefault32)
 {
-    unsigned start = i, npfx = 0, ent, z;
-    int op32 = d32, ad32 = d32, reg = -1;
-    unsigned char op;
+    UINT start = offset, prefixCount = 0, entry, immediateSize;
+    INT isOperand32 = isDefault32, isAddress32 = isDefault32, registerField = -1;
+    BYTE opcode;
 
-    while (i < n && xl_is_prefix(b[i])) {
-        if      (b[i] == 0x66) op32 = !d32;
-        else if (b[i] == 0x67) ad32 = !d32;
-        ++i;
-        if (++npfx > 8) return 0;                        /* prefix soup: not code   */
+    while (offset < length && X86IsPrefix(bytes[offset])) {
+        if      (bytes[offset] == 0x66) isOperand32 = !isDefault32;
+        else if (bytes[offset] == 0x67) isAddress32 = !isDefault32;
+        ++offset;
+        if (++prefixCount > 8) return 0;                        /* prefix soup: not code   */
     }
-    if (i >= n) return 0;
-    op = b[i++];
-    if (op == 0x0F) {
-        unsigned char o2;
-        if (i >= n) return 0;
-        o2 = b[i++];
-        if (o2 == 0x38 || o2 == 0x3A) {                  /* 3-byte escapes          */
-            unsigned r;
-            if (i >= n) return 0;
-            ++i;
-            r = xl_modrm(b, i, n, ad32);
-            if (!r) return 0;
-            i += r;
-            if (o2 == 0x3A) ++i;
-            return (i <= n) ? i - start : 0;
+    if (offset >= length) return 0;
+    opcode = bytes[offset++];
+    if (opcode == 0x0F) {
+        BYTE opcode2;
+        if (offset >= length) return 0;
+        opcode2 = bytes[offset++];
+        if (opcode2 == 0x38 || opcode2 == 0x3A) {                  /* 3-byte escapes          */
+            UINT modrmLength;
+            if (offset >= length) return 0;
+            ++offset;
+            modrmLength = X86ModrmLength(bytes, offset, length, isAddress32);
+            if (!modrmLength) return 0;
+            offset += modrmLength;
+            if (opcode2 == 0x3A) ++offset;
+            return (offset <= length) ? offset - start : 0;
         }
-        ent = xl_map2(o2);
+        entry = X86TwoByteEntry(opcode2);
     } else {
-        ent = xl_map1[op];
+        entry = g_X86OneByteTable[opcode];
     }
-    if (ent & XL_MR) {
-        unsigned r;
-        if (i >= n) return 0;
-        reg = (int)((b[i] >> 3) & 7);
-        r = xl_modrm(b, i, n, ad32);
-        if (!r) return 0;
-        i += r;
+    if (entry & XL_MR) {
+        UINT modrmLength;
+        if (offset >= length) return 0;
+        registerField = (INT)((bytes[offset] >> 3) & 7);
+        modrmLength = X86ModrmLength(bytes, offset, length, isAddress32);
+        if (!modrmLength) return 0;
+        offset += modrmLength;
     }
-    z = op32 ? 4u : 2u;
-    switch (ent & 0x0F) {
+    immediateSize = isOperand32 ? 4u : 2u;
+    switch (entry & 0x0F) {
     case XL_NONE:                     break;
-    case XL_IB:    i += 1;            break;
-    case XL_IZ:    i += z;            break;
-    case XL_IW:    i += 2;            break;
-    case XL_MOFF:  i += ad32 ? 4u : 2u; break;
-    case XL_ENTER: i += 3;            break;
-    case XL_FAR:   i += z + 2;        break;
-    case XL_G3B:   if (reg >= 0 && reg < 2) i += 1; break;
-    case XL_G3Z:   if (reg >= 0 && reg < 2) i += z; break;
+    case XL_IB:    offset += 1;            break;
+    case XL_IZ:    offset += immediateSize;            break;
+    case XL_IW:    offset += 2;            break;
+    case XL_MOFF:  offset += isAddress32 ? 4u : 2u; break;
+    case XL_ENTER: offset += 3;            break;
+    case XL_FAR:   offset += immediateSize + 2;        break;
+    case XL_G3B:   if (registerField >= 0 && registerField < 2) offset += 1; break;
+    case XL_G3Z:   if (registerField >= 0 && registerField < 2) offset += immediateSize; break;
     default:       return 0;
     }
-    return (i <= n) ? i - start : 0;
+    return (offset <= length) ? offset - start : 0;
 }
 
 /* Does an instruction START at b[off]?  Decodes forward from each of the preceding
@@ -213,20 +214,20 @@ static unsigned x86_insn_len(const unsigned char *b, unsigned i, unsigned n, int
    commentary for the measured separation and why the threshold is a quarter. */
 #define X86_BOUNDARY_SPAN 48u
 
-static int x86_is_insn_start(const unsigned char *b, unsigned off, unsigned n, int d32)
+static INT X86IsInstructionStart(const BYTE *bytes, UINT offset, UINT length, INT isDefault32)
 {
-    unsigned span = (off < X86_BOUNDARY_SPAN) ? off : X86_BOUNDARY_SPAN;
-    unsigned s, tries = 0, votes = 0;
-    if (off >= n) return 0;
-    for (s = off - span; s < off; ++s) {
-        unsigned i = s;
+    UINT span = (offset < X86_BOUNDARY_SPAN) ? offset : X86_BOUNDARY_SPAN;
+    UINT streamStart, tries = 0, votes = 0;
+    if (offset >= length) return 0;
+    for (streamStart = offset - span; streamStart < offset; ++streamStart) {
+        UINT position = streamStart;
         ++tries;
-        while (i < off) {
-            unsigned len = x86_insn_len(b, i, n, d32);
-            if (!len) break;                             /* not a decodable stream  */
-            i += len;
+        while (position < offset) {
+            UINT instructionLength = X86InstructionLength(bytes, position, length, isDefault32);
+            if (!instructionLength) break;                             /* not a decodable stream  */
+            position += instructionLength;
         }
-        if (i == off) ++votes;
+        if (position == offset) ++votes;
     }
     if (!tries) return 1;                                /* at the very start: trust it */
     return votes * 4 >= tries;
@@ -283,13 +284,13 @@ static int x86_is_insn_start(const unsigned char *b, unsigned off, unsigned n, i
  *   before this change -- it makes nothing worse -- but that is the gap to close if a
  *   guest is ever seen dying on a raw INT after this.
  */
-static int x86_int_site_is_real(const unsigned char *b, unsigned off, unsigned n, int d32)
+static INT X86IsIntSiteReal(const BYTE *bytes, UINT offset, UINT length, INT isDefault32)
 {
-    unsigned j;
-    if (x86_is_insn_start(b, off, n, d32)) return 1;
-    for (j = 1; j < 16u && j <= off; ++j) {
-        unsigned len = x86_insn_len(b, off - j, n, d32);
-        if (len > j && x86_is_insn_start(b, off - j, n, d32))
+    UINT back;
+    if (X86IsInstructionStart(bytes, offset, length, isDefault32)) return 1;
+    for (back = 1; back < 16u && back <= offset; ++back) {
+        UINT instructionLength = X86InstructionLength(bytes, offset - back, length, isDefault32);
+        if (instructionLength > back && X86IsInstructionStart(bytes, offset - back, length, isDefault32))
             return 0;               /* an instruction owns it -> it is an OPERAND */
     }
     return 1;                       /* nothing owns it -> keep */
