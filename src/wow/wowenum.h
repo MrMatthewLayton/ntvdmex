@@ -1,5 +1,5 @@
-#ifndef WOWENUM_H
-#define WOWENUM_H
+#ifndef NTVDMEX_WOWENUM_H
+#define NTVDMEX_WOWENUM_H
 /*
  * wowenum.h -- ★★★ CALLING A GUEST'S CALLBACK ONCE PER ITEM. GH #128, session 57.
  *
@@ -11,7 +11,7 @@
  * earlier today -- a service cannot call the guest, because entering guest code
  * means replacing the whole context, which only the BOP handler can do and undo.
  * So the service ASKS, the handler calls, and when the call RETURNS the frame's
- * `action` says what to do next. Here, "next" is the next item.
+ * `Action` says what to do next. Here, "next" is the next item.
  *
  *     EnumWindows BOP     park the caller; answer TRUE in advance
  *       -> proc(item 0)   WowCallEnter
@@ -49,65 +49,65 @@
      them in the header that already owns the callback mechanism keeps one
      declaration rather than a forward declaration in each dispatcher. */
 
-typedef struct {
-    int   kind;
-    DWORD proc;        /* the guest's callback                                 */
-    WORD  ds;          /* the DS it must be entered with                       */
-    DWORD lparam;      /* the caller's opaque value, passed to every call      */
-    DWORD retlin;      /* the caller's return hole -- revised only on a STOP   */
-    WORD  parent;      /* WOWENUM_CHILDREN                                     */
-    int   idx;         /* cursor: the next window slot, or the next point      */
-    int   x0, y0, x1, y1, steps;     /* WOWENUM_LINE                           */
-    DWORD calls;       /* how many callbacks were made, for the log            */
-} wowenum_t;
+typedef struct _WOWENUM {
+    INT   Kind;
+    DWORD Procedure;                         /* the guest's callback                                 */
+    WORD  DataSelector;                      /* the DS it must be entered with                       */
+    DWORD LParam;                            /* the caller's opaque value, passed to every call      */
+    DWORD ReturnLinear;                      /* the caller's return hole -- revised only on a STOP   */
+    WORD  Parent;                            /* WOWENUM_CHILDREN                                     */
+    INT   Index;                             /* cursor: the next window slot, or the next point      */
+    INT   StartX, StartY, EndX, EndY, Steps; /* WOWENUM_LINE                           */
+    DWORD Calls;                             /* how many callbacks were made, for the log            */
+} WOWENUM, *PWOWENUM;
 
 
-static wowenum_t g_we;
+static WOWENUM g_WowEnum;
 
-static int wowenum_busy(void) { return g_we.kind != WOWENUM_NONE; }
+static INT WowEnumBusy(VOID) { return g_WowEnum.Kind != WOWENUM_NONE; }
 
 /* Start one. Returns 0 if another is already running (see the nesting note). */
-static int wowenum_begin(int kind, DWORD proc, WORD ds, DWORD lparam,
-                         DWORD retlin, WORD parent)
+static INT WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
+                         DWORD returnLinear, WORD parent)
 {
-    if (g_we.kind != WOWENUM_NONE) return 0;
-    if (!proc || !(proc >> 16)) return 0;
-    g_we.kind    = kind;
-    g_we.proc    = proc;
-    g_we.ds      = ds;
-    g_we.lparam  = lparam;
-    g_we.retlin  = retlin;
-    g_we.parent  = parent;
-    g_we.idx     = 0;
-    g_we.calls   = 0;
+    if (g_WowEnum.Kind != WOWENUM_NONE) return 0;
+    if (!procedure || !(procedure >> 16)) return 0;
+    g_WowEnum.Kind    = kind;
+    g_WowEnum.Procedure    = procedure;
+    g_WowEnum.DataSelector      = dataSelector;
+    g_WowEnum.LParam  = lParam;
+    g_WowEnum.ReturnLinear  = returnLinear;
+    g_WowEnum.Parent  = parent;
+    g_WowEnum.Index     = 0;
+    g_WowEnum.Calls   = 0;
     return 1;
 }
 
 /* Bresenham's own step count: LineDDA visits max(|dx|,|dy|) + 1 points, which is
    what makes it a DDA rather than a plot -- the caller draws each one itself. */
-static void wowenum_line(int x0, int y0, int x1, int y1)
+static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY)
 {
-    int dx = x1 - x0, dy = y1 - y0;
-    if (dx < 0) dx = -dx;
-    if (dy < 0) dy = -dy;
-    g_we.x0 = x0; g_we.y0 = y0; g_we.x1 = x1; g_we.y1 = y1;
+    INT deltaX = endX - startX, deltaY = endY - startY;
+    if (deltaX < 0) deltaX = -deltaX;
+    if (deltaY < 0) deltaY = -deltaY;
+    g_WowEnum.StartX = startX; g_WowEnum.StartY = startY; g_WowEnum.EndX = endX; g_WowEnum.EndY = endY;
     /* s91: THE END POINT IS EXCLUDED, as GDI's LineDDA excludes it (w_ldda vs stock:
          (0,0)-(10,4) is 10 calls ending at (9,4); a zero-length line is none). */
-    g_we.steps = (dx > dy ? dx : dy);
+    g_WowEnum.Steps = (deltaX > deltaY ? deltaX : deltaY);
     /* ⚠ AND IT IS BOUNDED. Every point is a 16-bit CALL, so a line across a large
          desktop is thousands of context switches -- correct, and slow enough to
          look like a hang. A diagonal of this display is ~2,000 points; 4,096 is
          generous and the log says when it clamps, so a guest that legitimately
          wants more is a line to grep for rather than a mystery stall. */
-    if (g_we.steps > 4096) g_we.steps = 4096;
+    if (g_WowEnum.Steps > 4096) g_WowEnum.Steps = 4096;
 }
 
 /* #295: an EnumMetaFile walk owns objects (the handle table) and a snapshot; both
    go here, so a stop, a refusal and a completion all release them. */
-static void wowenum_end(void)
+static VOID WowEnumEnd(VOID)
 {
-    if (g_we.kind == WOWENUM_METAFILE) wowgdi_mf_end();
-    g_we.kind = WOWENUM_NONE; g_we.proc = 0;
+    if (g_WowEnum.Kind == WOWENUM_METAFILE) wowgdi_mf_end();
+    g_WowEnum.Kind = WOWENUM_NONE; g_WowEnum.Procedure = 0;
 }
 
 /* ── ★ THE CALLER'S ANSWER, WHEN THE CALLBACK STOPPED IT. ────────────────────
@@ -117,12 +117,12 @@ static void wowenum_end(void)
      thing that revises it. Same four-byte write into guest memory as the modal
      loop's unwind, and for the same reason: the hole outlives the context
      switches in between. */
-static void wowenum_stopped(void)
+static VOID WowEnumStopped(VOID)
 {
-    volatile BYTE *h;
-    if (!g_we.retlin) return;
-    h = (volatile BYTE *)(ULONG_PTR)g_we.retlin;
-    h[0] = 0; h[1] = 0; h[2] = 0; h[3] = 0;
+    volatile BYTE *hole;
+    if (!g_WowEnum.ReturnLinear) return;
+    hole = (volatile BYTE *)(ULONG_PTR)g_WowEnum.ReturnLinear;
+    hole[0] = 0; hole[1] = 0; hole[2] = 0; hole[3] = 0;
 }
 
 /*
@@ -132,26 +132,26 @@ static void wowenum_stopped(void)
  * `stop` is the callback's answer to the PREVIOUS item -- 0 means "stop" -- and
  * is ignored on the first step, where there is no previous item.
  */
-static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
-                        int first, DWORD result, char *note, int cap)
+static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
+                        INT isFirst, DWORD result, PSTR note, INT noteCapacity)
 {
-    int k = 0;
+    INT noteLength = 0;
     /* ⚠ FOUR, NOT THREE. A window callback takes (hwnd, lParam) = 3 words, but
          LineDDA's takes (x, y, lpData) = FOUR -- and the lParam words are written
-         at [nargw] and [nargw+1] below, which for the line case is [2] and [3].
+         at [argumentCount] and [argumentCount+1] below, which for the line case is [2] and [3].
          Three would have written the last word off the end of this array. */
-    WORD arg[8];        /* s89: 7 for EnumFontFamilies; the window and line forms use 3-4 */
-    int  nargw = 0;
-    WORD hwnd16 = 0;
+    WORD arguments[8];        /* s89: 7 for EnumFontFamilies; the window and line forms use 3-4 */
+    INT  argumentCount = 0;
+    WORD window16 = 0;
 
-    if (g_we.kind == WOWENUM_NONE) return 0;
+    if (g_WowEnum.Kind == WOWENUM_NONE) return 0;
 
     /* #295: the previous record's callback may have changed its handle table
          (through PlayMetaFileRecord, or by hand); take it back FIRST, before a stop
          below releases the table's objects -- a pen created by the record that
          said stop is still the enumeration's to delete. */
-    if (!first && g_we.kind == WOWENUM_METAFILE && wowgdi_mf_readback()) {
-        wu_puts(note, cap, &k, "ENUM metafile: ★ the guest wrote a non-object value into"
+    if (!isFirst && g_WowEnum.Kind == WOWENUM_METAFILE && wowgdi_mf_readback()) {
+        wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ the guest wrote a non-object value into"
                                " its handle table; those entries were NOT believed. ");
     }
 
@@ -160,96 +160,96 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
     /* s91: NOT FOR LineDDA -- its callback is VOID, so AX is whatever the procedure
          left there; reading it as "stop" cut a line short at the first point whose y
          happened to be 0 (tests/probes/win16/w_ldda: 1 call where stock makes 10). */
-    if (!first && g_we.kind != WOWENUM_LINE && !(result & 0xFFFF)) {
-        wu_puts(note, cap, &k, "ENUM stopped by the callback after 0x");
-        wu_puthex(note, cap, &k, g_we.calls, 4);
-        wu_puts(note, cap, &k, " call(s) -- the caller returns FALSE");
-        wowenum_stopped();
-        wowenum_end();
+    if (!isFirst && g_WowEnum.Kind != WOWENUM_LINE && !(result & 0xFFFF)) {
+        wu_puts(note, noteCapacity, &noteLength, "ENUM stopped by the callback after 0x");
+        wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+        wu_puts(note, noteCapacity, &noteLength, " call(s) -- the caller returns FALSE");
+        WowEnumStopped();
+        WowEnumEnd();
         return 0;
     }
 
-    if (g_we.kind == WOWENUM_FONTS) {
+    if (g_WowEnum.Kind == WOWENUM_FONTS) {
         /* EnumFontFamProc(LPENUMLOGFONT, LPNEWTEXTMETRIC, int FontType, LPARAM) */
-        const WOWENUM_FONT *e;
-        if (g_we.idx >= g_WowEnumFontCount) {
-            wu_puts(note, cap, &k, "ENUM fonts complete: 0x");
-            wu_puthex(note, cap, &k, g_we.calls, 4);
-            wu_puts(note, cap, &k, " font(s)");
-            wowenum_end();
+        PCWOWENUM_FONT entry;
+        if (g_WowEnum.Index >= g_WowEnumFontCount) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM fonts complete: 0x");
+            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+            wu_puts(note, noteCapacity, &noteLength, " font(s)");
+            WowEnumEnd();
             return 0;
         }
-        e = &g_WowEnumFonts[g_we.idx++];
-        arg[0] = 0; arg[1] = 0;             /* lpelf: filled by WowCallEnter */
-        arg[2] = 0; arg[3] = 0;             /* lpntm: ditto, +146 into the blob */
-        arg[4] = e->FontType;
-        arg[5] = (WORD)(g_we.lparam >> 16);
-        arg[6] = (WORD)(g_we.lparam & 0xFFFF);
+        entry = &g_WowEnumFonts[g_WowEnum.Index++];
+        arguments[0] = 0; arguments[1] = 0;             /* lpelf: filled by WowCallEnter */
+        arguments[2] = 0; arguments[3] = 0;             /* lpntm: ditto, +146 into the blob */
+        arguments[4] = entry->FontType;
+        arguments[5] = (WORD)(g_WowEnum.LParam >> 16);
+        arguments[6] = (WORD)(g_WowEnum.LParam & 0xFFFF);
         g_WowCallBlob2Argument = 2; g_WowCallBlob2Offset = WOWENUM_ELF16;
-        if (!rsel || !ssbase
-            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 7,
+        if (!returnSelector || !stackBase
+            || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, 7,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              e->Blob, (int)sizeof e->Blob, 0,
-                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+                              entry->Blob, (INT)sizeof entry->Blob, 0,
+                              WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> 16)))) {
             g_WowCallBlob2Argument = -1;
-            wu_puts(note, cap, &k, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
+            wu_puts(note, noteCapacity, &noteLength, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
-            wowenum_end();
+            WowEnumEnd();
             return 0;
         }
         if (g_WowCallDepth > 0) {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
-        ++g_we.calls;
-        wu_puts(note, cap, &k, "ENUM font -> \"");
-        {   int i; for (i = 18; i < 50 && e->Blob[i]; ++i) {
-                char c[2]; c[0] = (char)e->Blob[i]; c[1] = 0; wu_puts(note, cap, &k, c); } }
-        wu_puts(note, cap, &k, "\" type=0x");
-        wu_puthex(note, cap, &k, e->FontType, 2);
+        ++g_WowEnum.Calls;
+        wu_puts(note, noteCapacity, &noteLength, "ENUM font -> \"");
+        {   INT index; for (index = 18; index < 50 && entry->Blob[index]; ++index) {
+                CHAR character[2]; character[0] = (CHAR)entry->Blob[index]; character[1] = 0; wu_puts(note, noteCapacity, &noteLength, character); } }
+        wu_puts(note, noteCapacity, &noteLength, "\" type=0x");
+        wu_puthex(note, noteCapacity, &noteLength, entry->FontType, 2);
         return 1;
     }
 
-    if (g_we.kind == WOWENUM_OBJECTS) {
+    if (g_WowEnum.Kind == WOWENUM_OBJECTS) {
         /* EnumObjectsProc(LPVOID lpLogObject, LPARAM) -- s90, #296 */
-        const WOWENUM_FONT *e;
-        if (g_we.idx >= g_WowEnumFontCount) {
-            wu_puts(note, cap, &k, "ENUM objects complete: 0x");
-            wu_puthex(note, cap, &k, g_we.calls, 4);
-            wu_puts(note, cap, &k, " object(s)");
-            wowenum_end();
+        PCWOWENUM_FONT entry;
+        if (g_WowEnum.Index >= g_WowEnumFontCount) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM objects complete: 0x");
+            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+            wu_puts(note, noteCapacity, &noteLength, " object(s)");
+            WowEnumEnd();
             return 0;
         }
-        e = &g_WowEnumFonts[g_we.idx++];
-        arg[0] = 0; arg[1] = 0;             /* lpLogObject: filled by WowCallEnter */
-        arg[2] = (WORD)(g_we.lparam >> 16);
-        arg[3] = (WORD)(g_we.lparam & 0xFFFF);
-        if (!rsel || !ssbase
-            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+        entry = &g_WowEnumFonts[g_WowEnum.Index++];
+        arguments[0] = 0; arguments[1] = 0;             /* lpLogObject: filled by WowCallEnter */
+        arguments[2] = (WORD)(g_WowEnum.LParam >> 16);
+        arguments[3] = (WORD)(g_WowEnum.LParam & 0xFFFF);
+        if (!returnSelector || !stackBase
+            || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, 4,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              e->Blob, e->FontType == OBJ_PEN ? 10 : 8, 0,
-                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
-            wu_puts(note, cap, &k, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
+                              entry->Blob, entry->FontType == OBJ_PEN ? 10 : 8, 0,
+                              WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> 16)))) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
-            wowenum_end();
+            WowEnumEnd();
             return 0;
         }
         if (g_WowCallDepth > 0) {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
-        ++g_we.calls;
-        wu_puts(note, cap, &k, "ENUM object -> style=0x");
-        wu_puthex(note, cap, &k, (DWORD)(e->Blob[0] | (e->Blob[1] << 8)), 4);
+        ++g_WowEnum.Calls;
+        wu_puts(note, noteCapacity, &noteLength, "ENUM object -> style=0x");
+        wu_puthex(note, noteCapacity, &noteLength, (DWORD)(entry->Blob[0] | (entry->Blob[1] << 8)), 4);
         return 1;
     }
 
-    if (g_we.kind == WOWENUM_METAFILE) {
+    if (g_WowEnum.Kind == WOWENUM_METAFILE) {
         /* EnumMetaFileProc(HDC, HANDLETABLE FAR*, METARECORD FAR*, int nObj, LPARAM)
            -- #295. One blob, two pointers: the record at +0, the table after it. */
-        int bn = 0, toff = 0, room = WOWCALL_MAX_BLOB;
-        unsigned fn = 0;
-        WORD sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+        INT blobLength = 0, tableOffset = 0, room = WOWCALL_MAX_BLOB;
+        UINT function = 0;
+        WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
         /* ⚠ THE BLOB IS ON THE GUEST'S STACK, so it must fit there. A Win16 task's
              DGROUP starts with INSTANCEDATA, whose word at +0x0A is pStackTop -- the
              lowest offset the stack may reach (what the C runtime's chkstk compares
@@ -261,195 +261,195 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
              what lies above the cut, i.e. the parked frame -- harmless to read, and
              a callback that WRITES a record's tail is not one we have seen), and
              PlayMetaFileRecord recognises it by address and plays the snapshot. */
-        if (ssbase) {
-            WORD top = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)ssbase, 0x0A);
-            int  lim = (top && top < sp) ? (int)(sp - top) : (int)sp;
-            lim -= 512;
-            if (lim < room) room = lim;
+        if (stackBase) {
+            WORD stackTop = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)stackBase, 0x0A);
+            INT  limit = (stackTop && stackTop < stackPointer) ? (INT)(stackPointer - stackTop) : (INT)stackPointer;
+            limit -= 512;
+            if (limit < room) room = limit;
         }
-        if (!wowgdi_mf_next(room, &bn, &toff, &fn)) {
-            if (fn == 0xFFFF)
-                wu_puts(note, cap, &k, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
+        if (!wowgdi_mf_next(room, &blobLength, &tableOffset, &function)) {
+            if (function == 0xFFFF)
+                wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
                                        " past the end) ENDS THE WALK; ");
-            else if (fn == 0xFFFE) {
-                wu_puts(note, cap, &k, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
+            else if (function == 0xFFFE) {
+                wu_puts(note, noteCapacity, &noteLength, "ENUM metafile: ★ NO STACK ROOM FOR THE HANDLE TABLE;"
                                        " REFUSED -- the caller returns FALSE; ");
-                wowenum_stopped();
+                WowEnumStopped();
             }
-            wu_puts(note, cap, &k, "ENUM metafile complete: 0x");
-            wu_puthex(note, cap, &k, g_we.calls, 4);
-            wu_puts(note, cap, &k, " record(s)");
-            wowenum_end();
+            wu_puts(note, noteCapacity, &noteLength, "ENUM metafile complete: 0x");
+            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+            wu_puts(note, noteCapacity, &noteLength, " record(s)");
+            WowEnumEnd();
             return 0;
         }
-        arg[0] = g_we.parent;                   /* the guest's own hdc, verbatim */
-        arg[1] = 0; arg[2] = 0;                 /* lpht: blob2, +toff            */
-        arg[3] = 0; arg[4] = 0;                 /* lpmr: the blob itself         */
-        arg[5] = (WORD)g_wmf.nobj;
-        arg[6] = (WORD)(g_we.lparam >> 16);
-        arg[7] = (WORD)(g_we.lparam & 0xFFFF);
-        g_WowCallBlob2Argument = 1; g_WowCallBlob2Offset = toff;
-        if (!rsel || !ssbase
-            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 8,
+        arguments[0] = g_WowEnum.Parent;                   /* the guest's own hdc, verbatim */
+        arguments[1] = 0; arguments[2] = 0;                 /* lpht: blob2, +toff            */
+        arguments[3] = 0; arguments[4] = 0;                 /* lpmr: the blob itself         */
+        arguments[5] = (WORD)g_wmf.nobj;
+        arguments[6] = (WORD)(g_WowEnum.LParam >> 16);
+        arguments[7] = (WORD)(g_WowEnum.LParam & 0xFFFF);
+        g_WowCallBlob2Argument = 1; g_WowCallBlob2Offset = tableOffset;
+        if (!returnSelector || !stackBase
+            || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, 8,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              g_wmf_blob, bn, 3,
-                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
+                              g_wmf_blob, blobLength, 3,
+                              WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> 16)))) {
             g_WowCallBlob2Argument = -1;
             /* ⚠ FALSE, unlike the window forms: the guest has not seen the whole
                  picture, and TRUE would tell it that it had. */
-            wu_puts(note, cap, &k, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
+            wu_puts(note, noteCapacity, &noteLength, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here and the caller returns FALSE");
-            wowenum_stopped();
-            wowenum_end();
+            WowEnumStopped();
+            WowEnumEnd();
             return 0;
         }
         g_wmf.rec_lin = g_WowCallBlobLinear;
-        g_wmf.tbl_lin = g_WowCallBlobLinear ? g_WowCallBlobLinear + (DWORD)toff : 0;
+        g_wmf.tbl_lin = g_WowCallBlobLinear ? g_WowCallBlobLinear + (DWORD)tableOffset : 0;
         if (g_WowCallDepth > 0) {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
-        ++g_we.calls;
-        wu_puts(note, cap, &k, "ENUM metarecord fn=0x");
-        wu_puthex(note, cap, &k, fn, 4);
-        wu_puts(note, cap, &k, " bytes=0x");
-        wu_puthex(note, cap, &k, g_wmf.rec_bytes, 6);
+        ++g_WowEnum.Calls;
+        wu_puts(note, noteCapacity, &noteLength, "ENUM metarecord fn=0x");
+        wu_puthex(note, noteCapacity, &noteLength, function, 4);
+        wu_puts(note, noteCapacity, &noteLength, " bytes=0x");
+        wu_puthex(note, noteCapacity, &noteLength, g_wmf.rec_bytes, 6);
         if (g_wmf.truncated)
-            wu_puts(note, cap, &k, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
+            wu_puts(note, noteCapacity, &noteLength, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
                                    " stack blob); PlayMetaFileRecord plays the full record");
         return 1;
     }
 
-    if (g_we.kind == WOWENUM_PROPS) {
+    if (g_WowEnum.Kind == WOWENUM_PROPS) {
         /* EnumPropProc(HWND, LPCSTR lpszName, HANDLE hData) -- s90, #296 */
-        const WOWENUM_FONT *e;
-        int atom, n = 0;
-        if (g_we.idx >= g_WowEnumFontCount) {
-            wu_puts(note, cap, &k, "ENUM props complete: 0x");
-            wu_puthex(note, cap, &k, g_we.calls, 4);
-            wu_puts(note, cap, &k, " propert(ies)");
-            wowenum_end();
+        PCWOWENUM_FONT entry;
+        INT isAtom, nameLength = 0;
+        if (g_WowEnum.Index >= g_WowEnumFontCount) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM props complete: 0x");
+            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+            wu_puts(note, noteCapacity, &noteLength, " propert(ies)");
+            WowEnumEnd();
             return 0;
         }
-        e = &g_WowEnumFonts[g_we.idx++];
-        atom = (e->Blob[0] == 0);
-        arg[0] = g_we.parent;
-        arg[1] = 0;
-        arg[2] = atom ? (WORD)(e->Blob[1] | (e->Blob[2] << 8)) : 0;   /* a string: filled */
-        arg[3] = e->FontType;
-        if (!atom) while (n < 31 && e->Blob[n]) ++n;
-        if (!rsel || !ssbase
-            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+        entry = &g_WowEnumFonts[g_WowEnum.Index++];
+        isAtom = (entry->Blob[0] == 0);
+        arguments[0] = g_WowEnum.Parent;
+        arguments[1] = 0;
+        arguments[2] = isAtom ? (WORD)(entry->Blob[1] | (entry->Blob[2] << 8)) : 0;   /* a string: filled */
+        arguments[3] = entry->FontType;
+        if (!isAtom) while (nameLength < 31 && entry->Blob[nameLength]) ++nameLength;
+        if (!returnSelector || !stackBase
+            || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, 4,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              atom ? NULL : e->Blob, atom ? 0 : n + 1, 1,
-                              wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
-            wu_puts(note, cap, &k, "ENUM props -- ★ THE CALL WAS REFUSED; the"
+                              isAtom ? NULL : entry->Blob, isAtom ? 0 : nameLength + 1, 1,
+                              WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> 16)))) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM props -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
-            wowenum_end();
+            WowEnumEnd();
             return 0;
         }
         if (g_WowCallDepth > 0) {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
-        ++g_we.calls;
-        wu_puts(note, cap, &k, "ENUM prop -> ");
-        if (atom) { wu_puts(note, cap, &k, "atom 0x"); wu_puthex(note, cap, &k, arg[2], 4); }
-        else { wu_puts(note, cap, &k, "\""); wu_puts(note, cap, &k, (const char *)e->Blob);
-               wu_puts(note, cap, &k, "\""); }
+        ++g_WowEnum.Calls;
+        wu_puts(note, noteCapacity, &noteLength, "ENUM prop -> ");
+        if (isAtom) { wu_puts(note, noteCapacity, &noteLength, "atom 0x"); wu_puthex(note, noteCapacity, &noteLength, arguments[2], 4); }
+        else { wu_puts(note, noteCapacity, &noteLength, "\""); wu_puts(note, noteCapacity, &noteLength, (PCSTR)entry->Blob);
+               wu_puts(note, noteCapacity, &noteLength, "\""); }
         return 1;
     }
 
-    if (g_we.kind == WOWENUM_LINE) {
+    if (g_WowEnum.Kind == WOWENUM_LINE) {
         /* LineDDA(x1, y1, x2, y2, proc, data): proc(x, y, lpData) for each point
            on the line, in order. The points are computed the way a DDA does --
            one step along the major axis -- so the caller gets the same sequence
            it would plot itself. */
-        int i = g_we.idx;
-        int dx = g_we.x1 - g_we.x0, dy = g_we.y1 - g_we.y0;
-        int x, y;
-        if (i >= g_we.steps) {
-            wu_puts(note, cap, &k, "ENUM LineDDA complete: 0x");
-            wu_puthex(note, cap, &k, g_we.calls, 4);
-            wu_puts(note, cap, &k, " point(s)");
-            wowenum_end();
+        INT index = g_WowEnum.Index;
+        INT deltaX = g_WowEnum.EndX - g_WowEnum.StartX, deltaY = g_WowEnum.EndY - g_WowEnum.StartY;
+        INT pointX, pointY;
+        if (index >= g_WowEnum.Steps) {
+            wu_puts(note, noteCapacity, &noteLength, "ENUM LineDDA complete: 0x");
+            wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+            wu_puts(note, noteCapacity, &noteLength, " point(s)");
+            WowEnumEnd();
             return 0;
         }
-        x = g_we.x0 + MulDiv(dx, i, g_we.steps);
-        y = g_we.y0 + MulDiv(dy, i, g_we.steps);
-        g_we.idx = i + 1;
-        arg[0] = (WORD)(short)x;
-        arg[1] = (WORD)(short)y;
-        nargw  = 2;                       /* lpData is appended below */
+        pointX = g_WowEnum.StartX + MulDiv(deltaX, index, g_WowEnum.Steps);
+        pointY = g_WowEnum.StartY + MulDiv(deltaY, index, g_WowEnum.Steps);
+        g_WowEnum.Index = index + 1;
+        arguments[0] = (WORD)(SHORT)pointX;
+        arguments[1] = (WORD)(SHORT)pointY;
+        argumentCount  = 2;                       /* lpData is appended below */
     } else {
         /* A window source. Walk the table from the cursor, skipping slots that
            are free, are not real windows, or do not match the filter. */
         for (;;) {
-            wowuser_win_t *w;
-            if (g_we.idx >= WOWUSER_MAX_WIN) {
-                wu_puts(note, cap, &k, "ENUM complete: 0x");
-                wu_puthex(note, cap, &k, g_we.calls, 4);
-                wu_puts(note, cap, &k, " window(s) -- the caller returns TRUE");
-                wowenum_end();
+            wowuser_win_t *window;
+            if (g_WowEnum.Index >= WOWUSER_MAX_WIN) {
+                wu_puts(note, noteCapacity, &noteLength, "ENUM complete: 0x");
+                wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Calls, 4);
+                wu_puts(note, noteCapacity, &noteLength, " window(s) -- the caller returns TRUE");
+                WowEnumEnd();
                 return 0;
             }
-            w = &g_wu_win[g_we.idx++];
-            if (!w->hwnd || !w->hwnd32 || w->foreign) continue;
-            if (g_we.kind == WOWENUM_CHILDREN) {
-                if (w->parent != g_we.parent) continue;
+            window = &g_wu_win[g_WowEnum.Index++];
+            if (!window->hwnd || !window->hwnd32 || window->foreign) continue;
+            if (g_WowEnum.Kind == WOWENUM_CHILDREN) {
+                if (window->parent != g_WowEnum.Parent) continue;
             } else {
                 /* ⚠ TOP-LEVEL ONLY, and "top level" here means "no parent we
                      issued": a control belongs to its dialog, not to the desktop.
                      EnumTaskWindows walks the same list because this host runs
                      ONE Win16 task -- so every window we have IS that task's.
                      Said here rather than left as a coincidence. */
-                if (w->parent) continue;
+                if (window->parent) continue;
                 /* s92 (#306): ...no longer ONE task -- EnumTaskWindows keeps to
                      the hTask it was given (a window of unknown task still shows). */
-                if (g_we.kind == WOWENUM_TASK && g_wu_enumtask && w->task
-                    && w->task != g_wu_enumtask) continue;
+                if (g_WowEnum.Kind == WOWENUM_TASK && g_wu_enumtask && window->task
+                    && window->task != g_wu_enumtask) continue;
             }
-            hwnd16 = w->hwnd;
+            window16 = window->hwnd;
             break;
         }
-        arg[0] = hwnd16;
-        nargw  = 1;
+        arguments[0] = window16;
+        argumentCount  = 1;
     }
 
     /* lParam / lpData: one DWORD, high word first. */
-    arg[nargw]     = (WORD)(g_we.lparam >> 16);
-    arg[nargw + 1] = (WORD)(g_we.lparam & 0xFFFF);
-    nargw += 2;
+    arguments[argumentCount]     = (WORD)(g_WowEnum.LParam >> 16);
+    arguments[argumentCount + 1] = (WORD)(g_WowEnum.LParam & 0xFFFF);
+    argumentCount += 2;
 
-    if (!rsel || !ssbase
-        || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, nargw,
-                          /* retlin */ 0, WOWCALL_RET_KEEP, NULL,
-                          hwnd16, 0, NULL, 0, -1,
-                          wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
-        wu_puts(note, cap, &k, "ENUM -- ★ THE CALL WAS REFUSED (depth, or no"
+    if (!returnSelector || !stackBase
+        || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, argumentCount,
+                          /* returnLinear */ 0, WOWCALL_RET_KEEP, NULL,
+                          window16, 0, NULL, 0, -1,
+                          WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> 16)))) {
+        wu_puts(note, noteCapacity, &noteLength, "ENUM -- ★ THE CALL WAS REFUSED (depth, or no"
                                " return selector); the enumeration ends here and"
                                " the caller keeps the TRUE it was given");
-        wowenum_end();
+        WowEnumEnd();
         return 0;
     }
     if (g_WowCallDepth > 0) {
         g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
-        g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = hwnd16;
+        g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = window16;
     }
-    ++g_we.calls;
-    wu_puts(note, cap, &k, "ENUM -> 0x");
-    wu_puthex(note, cap, &k, g_we.proc >> 16, 4);
-    wu_puts(note, cap, &k, ":0x");
-    wu_puthex(note, cap, &k, g_we.proc & 0xFFFF, 4);
-    wu_puts(note, cap, &k, "(");
-    {   int i;
-        for (i = 0; i < nargw; ++i) {
-            if (i) wu_puts(note, cap, &k, " ");
-            wu_puthex(note, cap, &k, arg[i], 4);
+    ++g_WowEnum.Calls;
+    wu_puts(note, noteCapacity, &noteLength, "ENUM -> 0x");
+    wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Procedure >> 16, 4);
+    wu_puts(note, noteCapacity, &noteLength, ":0x");
+    wu_puthex(note, noteCapacity, &noteLength, g_WowEnum.Procedure & 0xFFFF, 4);
+    wu_puts(note, noteCapacity, &noteLength, "(");
+    {   INT index;
+        for (index = 0; index < argumentCount; ++index) {
+            if (index) wu_puts(note, noteCapacity, &noteLength, " ");
+            wu_puthex(note, noteCapacity, &noteLength, arguments[index], 4);
         }
     }
-    wu_puts(note, cap, &k, ")");
+    wu_puts(note, noteCapacity, &noteLength, ")");
     return 1;
 }
 
-#endif /* WOWENUM_H */
+#endif /* NTVDMEX_WOWENUM_H */

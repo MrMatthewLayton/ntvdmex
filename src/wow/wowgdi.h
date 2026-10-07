@@ -2274,12 +2274,12 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             if (!g_WowEnumFontCount) wow32_setret(f, 0);
             return 1;
         }
-        if (wowenum_busy()) {
+        if (WowEnumBusy()) {
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             wow32_setret(f, 0);
             return 1;
         }
-        if (!wowenum_begin(WOWENUM_OBJECTS, proc, f->gds, lp,
+        if (!WowEnumBegin(WOWENUM_OBJECTS, proc, f->gds, lp,
                            (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), 0)) {
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
             wow32_setret(f, 0);
@@ -2325,11 +2325,11 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             if (!f->cbok) wu_puts(note, notecap, &k, " -- callbacks are not armed");
             return 1;
         }
-        if (wowenum_busy()) {
+        if (WowEnumBusy()) {
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             return 1;
         }
-        if (!wowenum_begin(WOWENUM_FONTS, proc, f->gds, lp,
+        if (!WowEnumBegin(WOWENUM_FONTS, proc, f->gds, lp,
                            (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), 0)) {
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
             return 1;
@@ -2362,7 +2362,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                                        " visited");
             return 1;
         }
-        if (wowenum_busy()) {
+        if (WowEnumBusy()) {
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING;"
                                        " REFUSED rather than sharing a cursor");
             return 1;
@@ -2372,14 +2372,14 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
              to take an instance from here -- so it is entered with the DS the
              guest itself is running on, which is what a MakeProcInstance thunk
              would have restored anyway. */
-        if (!wowenum_begin(WOWENUM_LINE, proc,
+        if (!WowEnumBegin(WOWENUM_LINE, proc,
                            f->gds,
                            data, 0, 0)) {
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far"
                                        " pointer");
             return 1;
         }
-        wowenum_line(x1, y1, x2, y2);
+        WowEnumLine(x1, y1, x2, y2);
         f->enumreq = 1;
         return 1;
     }
@@ -3734,7 +3734,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         if (!f->cbok) { wu_puts(note, notecap, &k, " -- callbacks are not armed; 0"); return 1; }
-        if (wowenum_busy() || g_wmf.active) {
+        if (WowEnumBusy() || g_wmf.active) {
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             return 1;
         }
@@ -3754,7 +3754,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                                               : " -- ★ MORE OBJECTS THAN WOWMF_MAXOBJ; REFUSED, 0");
             return 1;
         }
-        if (!wowenum_begin(WOWENUM_METAFILE, proc, f->gds, lp,
+        if (!WowEnumBegin(WOWENUM_METAFILE, proc, f->gds, lp,
                            (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), hdc)) {
             HeapFree(GetProcessHeap(), 0, bits);
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer; 0");

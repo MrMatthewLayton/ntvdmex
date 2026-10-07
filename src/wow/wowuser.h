@@ -2411,11 +2411,11 @@ static DWORD wowuser_winproc_of(const wowuser_win_t *w)
 /* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
      because it reads the window table above. These three are what USER's own
      DialogBox and EndDialog arms call into it. */
-static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
+static int WowDlgPush(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
                        WORD ds, int defer_show, HWND owner32);
-static int wowdlg_end(WORD hwnd, WORD result);
-static void wowdlg_set_init(DWORD initparam, WORD firstfocus);
-static int wowdlg_active(void);
+static int WowDlgEnd(WORD hwnd, WORD result);
+static void WowDlgSetInit(DWORD initparam, WORD firstfocus);
+static int WowDlgActive(void);
 
 /* ── s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
      on the grounds that GetDC(0) is the screen -- but a program that CENTRES a
@@ -4958,7 +4958,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  hang it. The line says which happened. */
             DWORD hole = (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET);
             WORD  dds  = w->hinst ? w->hinst : c->hinst;
-            if (wowdlg_active())
+            if (WowDlgActive())
                 wu_puts(note, notecap, &k, " [NESTED: a modal dialog is already"
                                            " running]");
             /* ⚠ AND IF THERE IS NO LOOP, UNDO THE DEFERRAL HERE. A dialog we
@@ -4972,7 +4972,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                            " no modal loop: we return immediately"
                                            " and a program whose WinMain ends at"
                                            " DialogBox EXITS.");
-            } else if (!wowdlg_push(w->hwnd, hole, dlgproc, w->wndproc, dds,
+            } else if (!WowDlgPush(w->hwnd, hole, dlgproc, w->wndproc, dds,
                                     defer_show, parent32)) {
                 if (defer_show && w->hwnd32) ShowWindow(w->hwnd32, SW_SHOW);
                 wu_puts(note, notecap, &k, " -- ★ MODAL, BUT THE MODAL STACK IS"
@@ -4981,7 +4981,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 f->modaldlg = 1;
                 /* s89: the frame's +6 DWORD is DialogBoxParam's lParam (it arrives
                    as 0 for plain DialogBox). */
-                wowdlg_set_init(wow32_argd(f, 6), firstfocus);
+                WowDlgSetInit(wow32_argd(f, 6), firstfocus);
                 wu_puts(note, notecap, &k, " -- ★ MODAL: the caller is PARKED here"
                                            " and does not resume until EndDialog."
                                            " Its return value is held open; the"
@@ -5725,7 +5725,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                        " nothing enumerated");
             return 1;
         }
-        if (wowenum_busy()) {
+        if (WowEnumBusy()) {
             /* See the nesting note in wowenum.h: one cursor, and a second walk
                would inherit the first one's position. */
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING;"
@@ -5734,7 +5734,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                        " two walks");
             return 1;
         }
-        if (!wowenum_begin(which, proc,
+        if (!WowEnumBegin(which, proc,
                            pw && pw->hinst ? pw->hinst : g_wu_class[0].hinst,
                            lp, hole, parent)) {
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far"
@@ -7502,12 +7502,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- callbacks are not armed");
             return 1;
         }
-        if (wowenum_busy()) {
+        if (WowEnumBusy()) {
             wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             wow32_setret(f, 0);
             return 1;
         }
-        if (!wowenum_begin(WOWENUM_PROPS, proc, f->gds, 0,
+        if (!WowEnumBegin(WOWENUM_PROPS, proc, f->gds, 0,
                            (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET), hwnd)) {
             wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far pointer");
             wow32_setret(f, 0);
@@ -9447,7 +9447,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                that call is about the real window, this is about the parked
                DialogBox, and they are two different questions. Answering only
                the first is how the loop would miss its own exit. */
-        if (wowdlg_end(hdlg, res))
+        if (WowDlgEnd(hdlg, res))
             wu_puts(note, notecap, &k, " -- ★ THIS ENDS A MODAL LOOP: DialogBox"
                                        " returns it as soon as this procedure"
                                        " does");

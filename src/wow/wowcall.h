@@ -238,13 +238,14 @@ static DWORD g_WowCallBlobLinear = 0;
 #define WOWENUM_NTM16   41
 #define WOWENUM_MAXFONT 256
 typedef struct _WOWENUM_FONT { BYTE Blob[WOWENUM_ELF16 + WOWENUM_NTM16]; WORD FontType; } WOWENUM_FONT, *PWOWENUM_FONT;
+typedef const WOWENUM_FONT *PCWOWENUM_FONT;
 static WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
 static INT g_WowEnumFontCount;
 
-static INT  wowenum_busy(VOID);
-static INT  wowenum_begin(INT kind, DWORD proc, WORD ds, DWORD lparam,
-                          DWORD retlin, WORD parent);
-static VOID wowenum_line(INT x0, INT y0, INT x1, INT y1);
+static INT  WowEnumBusy(VOID);
+static INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
+                          DWORD returnLinear, WORD parent);
+static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)

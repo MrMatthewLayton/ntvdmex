@@ -18025,7 +18025,7 @@ static WORD dpmi_seg_to_desc(WORD seg)
      writing CS -- see WOWCALL_RETF_OFF in wowcall.h and the CARDFILE run that named
      it. The same three lines the BOP handler's own callback path computes inline;
      one day both should read this. */
-static int wowdlg_sel_absent(WORD sel)
+static int WowDlgIsSelectorAbsent(WORD sel)
 {
     WORD idx = (WORD)(sel >> 3);
     return idx && idx < DPMI_LDT_MAX && !(g_ldt[idx].access & 0x80);
@@ -22417,7 +22417,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 DWORD essb  = dpmi_sel_base(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 enote[0] = 0;
-                wowenum_step(tib, essb, ersel, 0, res, enote, sizeof enote);
+                WowEnumStep(tib, essb, ersel, 0, res, enote, sizeof enote);
                 p = zput(p, " -- "); p = zput(p, enote);
             }
             if (act == WOWCALL_ACT_MODALPUMP) {
@@ -22432,13 +22432,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                    TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
                    the dialog, so the Task List showed the desktop behind it
                    (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
-                if (g_wd_dlgcall[g_WowCallDepth] && (WORD)res == 0
-                    && (g_wd_dlgmsg[g_WowCallDepth] == 0x0010
-                        || g_wd_dlgmsg[g_WowCallDepth] == 0x000F
-                        || g_wd_dlgmsg[g_WowCallDepth] == 0x0014)) {
+                if (g_WowDlgIsDialogCall[g_WowCallDepth] && (WORD)res == 0
+                    && (g_WowDlgMessage[g_WowCallDepth] == 0x0010
+                        || g_WowDlgMessage[g_WowCallDepth] == 0x000F
+                        || g_WowDlgMessage[g_WowCallDepth] == 0x0014)) {
                     char dn[200]; int dk = 0;
                     wowuser_dlg_default(wowuser_findwin(actarg), actarg,
-                                        g_wd_dlgmsg[g_WowCallDepth],
+                                        g_WowDlgMessage[g_WowCallDepth],
                                         g_wu_dlgdef[g_WowCallDepth].wp,
                                         g_wu_dlgdef[g_WowCallDepth].lp,
                                         dn, (int)sizeof dn, &dk);
@@ -22446,11 +22446,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
                     p = zput(p, dn);
                 }
-                g_wd_dlgcall[g_WowCallDepth] = 0;
+                g_WowDlgIsDialogCall[g_WowCallDepth] = 0;
                 mnote[0] = 0;
                 p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                wowdlg_step(tib, mssb, mrsel, &g_running, mnote, sizeof mnote);
+                WowDlgStep(tib, mssb, mrsel, &g_running, mnote, sizeof mnote);
                 p = zput(p, "WOWDLG: "); p = zput(p, mnote);
             }
             p = zput(p, "\r\n");
@@ -22997,7 +22997,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (g_ws_slots[fi].IsUsed && g_ws_slots[fi].IsFresh
                                 && g_ws_slots[fi].Task == child) fsi = fi;
                         if (fsi >= 0 && g_ws_shell && fcur != g_ws_shell
-                            && g_ww_nested == 0 && !wowdlg_active() && !ws_intertask_live()) {
+                            && g_ww_nested == 0 && !WowDlgActive() && !ws_intertask_live()) {
                             DWORD fmode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
                             WowSchedPoke(g_ws_slots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
                             WowSchedSwap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
@@ -23539,7 +23539,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          in the wait below (which then comes back here). */
                     WORD ecur = wowsched_curtask();
                     int  ecan = g_wowsched_on && f.id == WOWUSER_GETMESSAGE
-                                && g_ww_nested == 0 && !wowdlg_active()
+                                && g_ww_nested == 0 && !WowDlgActive()
                                 && ecur && ecur != 0xFFFF && !ws_intertask_live();
                 ws_again_e:
                     if (ecan && !WowMsgCountFor(ecur)) {
@@ -23840,7 +23840,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD essb  = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             enote[0] = 0;
-                            wowenum_step(tib, essb, ersel, 1, 0,
+                            WowEnumStep(tib, essb, ersel, 1, 0,
                                          enote, sizeof enote);
                             p = zput(p, "WOWENUM: "); p = zput(p, enote);
                             p = zput(p, "\r\n");
@@ -23854,7 +23854,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, "WOWDLG: the caller is PARKED inside"
                                         " DialogBox; the modal loop has it\r\n");
                             wowlog_flush(base, &p);
-                            wowdlg_step(tib, mssb, mrsel, &g_running,
+                            WowDlgStep(tib, mssb, mrsel, &g_running,
                                         mnote, sizeof mnote);
                             p = zput(p, "WOWDLG: "); p = zput(p, mnote);
                             p = zput(p, "\r\n");
@@ -24010,7 +24010,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD essb  = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             enote[0] = 0;
-                            wowenum_step(tib, essb, ersel, 1, 0, enote, sizeof enote);
+                            WowEnumStep(tib, essb, ersel, 1, 0, enote, sizeof enote);
                             p = zput(p, "WOWENUM: "); p = zput(p, enote);
                             p = zput(p, "\r\n");
                         }
@@ -28044,7 +28044,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     }
     if (!WowCallEnter(tib, ssb, rsel, proc, ds, args, n, 0, WOWCALL_RET_KEEP, &sink,
                        hwnd, msg, blob, blob ? blobn : 0, blob ? blobarg : -1,
-                       wowdlg_sel_absent((WORD)(proc >> 16))))
+                       WowDlgIsSelectorAbsent((WORD)(proc >> 16))))
         return 0;
     ++g_ww_nested;
     for (ph = 0; ph < 500000 && g_WowCallDepth > depth0 && g_running; ++ph) {
