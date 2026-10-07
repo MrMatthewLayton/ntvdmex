@@ -201,7 +201,7 @@ static DWORD LfnTestReadDword(PCBYTE bytes)
          | ((DWORD)bytes[LFN_TEST_BYTE3] << LFN_TEST_BYTE3_SHIFT);
 }
 
-int main(void)
+INT main(VOID)
 {
     printf("== INT 21h AH=71h long-filename API, pure half (dos_lfn.h)\n");
 
