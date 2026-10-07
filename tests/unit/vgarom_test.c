@@ -24,25 +24,25 @@
 #include <stdint.h>
 #include "vga_defaults.h"
 
-static int pass = 0, fail = 0, skip = 0;
-static void ok(int c, const char *what)
-{ if (c) { ++pass; printf("  PASS  %s\n", what); } else { ++fail; printf("  FAIL  %s\n", what); } }
-static void skipped(const char *what) { ++skip; printf("  SKIP  %s\n", what); }
+static INT g_Passes = 0, g_Failures = 0, g_Skips = 0;
+static VOID VgaRomTestCheck(INT condition, PCSTR description)
+{ if (condition) { ++g_Passes; printf("  PASS  %s\n", description); } else { ++g_Failures; printf("  FAIL  %s\n", description); } }
+static VOID VgaRomTestSkip(PCSTR description) { ++g_Skips; printf("  SKIP  %s\n", description); }
 
 /* run.sh may invoke us from the repo root or from tests/unit. */
-static uint8_t *slurp(const char *rel, long *len)
+static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
 {
-    const char *pfx[] = { "", "../../" };
-    unsigned i;
-    for (i = 0; i < 2; ++i) {
-        char p[512]; FILE *f; uint8_t *b; long n;
-        snprintf(p, sizeof p, "%s%s", pfx[i], rel);
-        f = fopen(p, "rb");
-        if (!f) continue;
-        fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
-        b = (uint8_t *)malloc((size_t)n);
-        if (!b || fread(b, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(b); return NULL; }
-        fclose(f); *len = n; return b;
+    PCSTR prefixes[] = { "", "../../" };
+    UINT index;
+    for (index = 0; index < 2; ++index) {
+        CHAR path[512]; FILE *file; PBYTE bytes; long size;
+        snprintf(path, sizeof path, "%s%s", prefixes[index], relativePath);
+        file = fopen(path, "rb");
+        if (!file) continue;
+        fseek(file, 0, SEEK_END); size = ftell(file); fseek(file, 0, SEEK_SET);
+        bytes = (PBYTE)malloc((size_t)size);
+        if (!bytes || fread(bytes, 1, (size_t)size, file) != (size_t)size) { fclose(file); free(bytes); return NULL; }
+        fclose(file); *length = size; return bytes;
     }
     return NULL;
 }
@@ -51,27 +51,27 @@ static uint8_t *slurp(const char *rel, long *len)
    "does this exact table appear anywhere in the real BIOS" is the whole question --
    no offset needs to be hardcoded, and none is, because a hardcoded offset would
    turn a ROM-layout change into a false failure. */
-static long find(const uint8_t *hay, long hn, const uint8_t *nee, long nn)
+static long VgaRomTestFind(PCBYTE haystack, long haystackLength, PCBYTE needle, long needleLength)
 {
-    long i;
-    if (nn > hn) return -1;
-    for (i = 0; i + nn <= hn; ++i) if (!memcmp(hay + i, nee, (size_t)nn)) return i;
+    long index;
+    if (needleLength > haystackLength) return -1;
+    for (index = 0; index + needleLength <= haystackLength; ++index) if (!memcmp(haystack + index, needle, (size_t)needleLength)) return index;
     return -1;
 }
 
-int main(void)
+INT main(VOID)
 {
-    long n = 0;
-    uint8_t *rom = slurp("PCem-ROMs-master/ibm_vga.bin", &n);
+    long romLength = 0;
+    PBYTE rom = VgaRomTestReadFile("PCem-ROMs-master/ibm_vga.bin", &romLength);
 
     printf("== VGA tables vs the genuine IBM VGA BIOS (oracle-gated) ==\n");
     if (!rom) {
-        skipped("ibm_vga.bin absent -- VGA font/table claims UNVERIFIED this run");
+        VgaRomTestSkip("ibm_vga.bin absent -- VGA font/table claims UNVERIFIED this run");
         printf("        (the ROM pack is licensed + gitignored; see docs, it is not a defect)\n");
-        printf("\n%d checks, %d failed, %d skipped\n", pass + fail, fail, skip);
+        printf("\n%d checks, %d failed, %d skipped\n", g_Passes + g_Failures, g_Failures, g_Skips);
         return 0;
     }
-    ok(n == 32768, "ibm_vga.bin is the expected 32KB image");
+    VgaRomTestCheck(romLength == 32768, "ibm_vga.bin is the expected 32KB image");
 
     /* ── THE THREE FONTS are no longer IBM's (#322): NTVDMEX ships no font data and
          builds the tables from the system's fonts at start-up, so there is nothing
@@ -83,29 +83,29 @@ int main(void)
        ⚠ The BIOS table stores CRTC 0x00..0x18 contiguously, which is exactly our
          row, so a whole row is findable. If a row ever stops being findable the
          likely cause is that someone "tidied" a value. */
-    {   unsigned r; int found = 0, tried = 0;
-        for (r = 0; r < 9; ++r) {
-            long off = find(rom, n, g_VgaCrtcDefaults[r], 25);
-            ++tried; if (off >= 0) ++found;
+    {   UINT row; INT found = 0, tried = 0;
+        for (row = 0; row < 9; ++row) {
+            long offset = VgaRomTestFind(rom, romLength, g_VgaCrtcDefaults[row], 25);
+            ++tried; if (offset >= 0) ++found;
         }
-        ok(found >= 7, "per-mode CRTC rows are present in the ROM's parameter table");
+        VgaRomTestCheck(found >= 7, "per-mode CRTC rows are present in the ROM's parameter table");
         printf("        (%d of %d CRTC rows located in the real BIOS)\n", found, tried);
     }
 
     /* ── THE VERTICAL TIMING WE NOW DERIVE FROM THOSE ROWS. This is the claim the
          0x3DA model rests on, so state it here in numbers rather than leaving it
          implicit in a table: 640x350 is the mode that broke the old two-case guess. */
-    {   const unsigned char *c = g_VgaCrtcDefaults[6];      /* modes 0Fh, 10h */
-        unsigned ov = c[0x07], ms = c[0x09];
-        unsigned vt  = c[0x06] | ((ov >> 0 & 1) << 8) | ((ov >> 5 & 1) << 9);
-        unsigned vde = c[0x12] | ((ov >> 1 & 1) << 8) | ((ov >> 6 & 1) << 9);
-        unsigned vbs = c[0x15] | ((ov >> 3 & 1) << 8) | ((ms >> 5 & 1) << 9);
-        ok(vt + 2 == 449, "640x350: the BIOS says 449 scanlines per frame");
-        ok(vde + 1 == 350, "640x350: the BIOS says 350 active lines, not 400");
-        ok(vbs == 355,     "640x350: blanking starts at line 355, not 400");
+    {   PCBYTE crtc = g_VgaCrtcDefaults[6];      /* modes 0Fh, 10h */
+        UINT overflow = crtc[0x07], maximumScanLine = crtc[0x09];
+        UINT verticalTotal  = crtc[0x06] | ((overflow >> 0 & 1) << 8) | ((overflow >> 5 & 1) << 9);
+        UINT verticalDisplayEnd = crtc[0x12] | ((overflow >> 1 & 1) << 8) | ((overflow >> 6 & 1) << 9);
+        UINT verticalBlankStart = crtc[0x15] | ((overflow >> 3 & 1) << 8) | ((maximumScanLine >> 5 & 1) << 9);
+        VgaRomTestCheck(verticalTotal + 2 == 449, "640x350: the BIOS says 449 scanlines per frame");
+        VgaRomTestCheck(verticalDisplayEnd + 1 == 350, "640x350: the BIOS says 350 active lines, not 400");
+        VgaRomTestCheck(verticalBlankStart == 355,     "640x350: blanking starts at line 355, not 400");
     }
 
-    printf("\n%d checks, %d failed, %d skipped\n", pass + fail, fail, skip);
+    printf("\n%d checks, %d failed, %d skipped\n", g_Passes + g_Failures, g_Failures, g_Skips);
     free(rom);
-    return fail ? 1 : 0;
+    return g_Failures ? 1 : 0;
 }
