@@ -102,7 +102,7 @@ static VOID ErrTestRow(PCSTR description, UINT code, UINT expectedBx, UINT expec
     ErrTestExpect(label, locus, expectedCh);
 }
 
-int main(void)
+INT main(VOID)
 {
     WORD classAndAction; BYTE locus;
 
