@@ -91,7 +91,7 @@ static WORD EmsTestEntryPages(PCBYTE entry)
     return MAKEWORD(entry[DOS_EMS_ENTRY_PAGES_LOW], entry[DOS_EMS_ENTRY_PAGES_HIGH]);
 }
 
-int main(void)
+INT main(VOID)
 {
     static BYTE frame[DOS_EMS_FRAME_SIZE];   /* the 64 KB page-frame window       */
     DOS_EMS_STATE state;
