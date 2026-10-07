@@ -54,7 +54,7 @@ static UINT BdaTestReadWord(DWORD linear)
     return (UINT)(g_Memory[linear] | (g_Memory[linear + 1] << BIOS_HIGH_BYTE_SHIFT));
 }
 
-int main(void)
+INT main(VOID)
 {
     WORD firstMcb;
     UINT byteIndex, dirtyBytes;
