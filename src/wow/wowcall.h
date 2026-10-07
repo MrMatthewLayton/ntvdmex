@@ -192,7 +192,7 @@
 #define WOWCALL_ACT_CLIPPUT   8
 /* s88: the guest's DLGPROC answered for DefDlgProc; if it said FALSE (0), the
    dialog manager's DEFAULT runs and its value replaces the answer. The message's
-   parameters wait in g_wu_dlgdef[] at the frame's depth -- ActionArgument is the hdlg. */
+   parameters wait in g_WowUserDlgDefaults[] at the frame's depth -- ActionArgument is the hdlg. */
 #define WOWCALL_ACT_DLGDEFAULT 9
 
 /* ── THE ENUMERATION SOURCES, DECLARED HERE FOR THE INCLUDE ORDER. ───────────

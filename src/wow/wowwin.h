@@ -22,7 +22,7 @@
  *
  * ── WHAT MAPS TO WHAT ───────────────────────────────────────────────────────
  *   RegisterClass   a real Win32 class whose lpfnWndProc is OURS (WowWinProc)
- *   CreateWindow    a real CreateWindowExA; the HWND is kept in wowuser_win_t
+ *   CreateWindow    a real CreateWindowExA; the HWND is kept in WOWUSER_WINDOW
  *   ShowWindow      the real one
  *   MDICLIENT/EDIT  the REAL Win32 system classes -- they exist, so use them
  *   input           the real window's own messages, translated into the Win16
@@ -52,7 +52,7 @@
  * ⚠ WIN32's `WM_CREATE` AND WIN16's ARE TWO DIFFERENT MESSAGES. Win32 sends one
  *   to `WowWinProc` during `CreateWindowEx`, about the real window; the guest's
  *   own `WM_CREATE`, about its object, is delivered afterwards by
- *   `wowuser_want_create` through the callback machinery. Conflating them would
+ *   `WowUserWantCreate` through the callback machinery. Conflating them would
  *   re-enter the guest from inside `CreateWindowEx`.
  */
 
@@ -117,17 +117,17 @@ static DWORD g_WowWinPumped = 0;
 
 /* Forward: the window table this proc maps through. All defined in wowuser.h,
    which owns the table and is included after this file. */
-typedef struct wowuser_win_s wowuser_win_t;
-static WORD  WowWinHwnd16(HWND h);
-static wowuser_win_t *wowuser_findwin(WORD hwnd);
-static INT   wowuser_is_mdichild(const wowuser_win_t *w);
-static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
-static HWND  wowuser_hwnd32(WORD hwnd);
-static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
+typedef struct _WOWUSER_WINDOW WOWUSER_WINDOW, *PWOWUSER_WINDOW; typedef const WOWUSER_WINDOW *PCWOWUSER_WINDOW;
+static WORD  WowWinHwnd16(HWND window);
+static PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
+static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
+static HWND  WowUserHwnd32(WORD window16);
+static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
 /* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
 static INT   WowCdlgRelay(UINT message, LPARAM lParam);
 static INT   WowCdlgIsDialogMessage(PMSG message);
-static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
+static DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
 
 /*
  * ── OUR WINDOW PROCEDURE FOR EVERY Win16 WINDOW ─────────────────────────────
@@ -411,7 +411,7 @@ static INT WowWinThreadTimerFire(const MSG *message)
     return 0;
 }
 
-static INT wowuser_is_dialog16(WORD h16);        /* wowuser.h: a dialog procedure? */
+static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
 
 /* s93: the guest's SetFocus calls, counted, and the real window of the last one --
    so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h). */
@@ -445,11 +445,11 @@ static VOID WowWinSendOrPost(WORD window16, WORD message, WORD wParam, DWORD lPa
 static LRESULT WowWinDefProc(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (window16) {
-        wowuser_win_t *record = wowuser_findwin(window16);
+        PWOWUSER_WINDOW record = WowUserFindWindow(window16);
         if (record) {
-            HWND client = wowuser_mdiclient_of(record);
+            HWND client = WowUserMdiClientOf(record);
             if (client) return DefFrameProcA(window, client, message, wParam, lParam);
-            if (wowuser_is_mdichild(record)) return DefMDIChildProcA(window, message, wParam, lParam);
+            if (WowUserIsMdiChild(record)) return DefMDIChildProcA(window, message, wParam, lParam);
         }
     }
     return DefWindowProcA(window, message, wParam, lParam);
@@ -732,7 +732,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_TIMER:
         if (window16) {
             WowMsgPost(window16, (WORD)message, (WORD)wParam,
-                        wowuser_timer_proc(window16, (WORD)wParam),
+                        WowUserTimerProcedure(window16, (WORD)wParam),
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
             return 0;
@@ -808,7 +808,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                  gives the focus to the dialog WINDOW -- so Program Manager's "Program
                  Item Properties" had its keys going to the dialog itself: the first
                  typed letters vanished and Tab only then reached a control. */
-            {   if (wowuser_is_dialog16(window16)) {
+            {   if (WowUserIsDialog16(window16)) {
                     if (LOWORD(wParam) == WA_INACTIVE) {
                         HWND focus = GetFocus();
                         if (focus && IsChild(window, focus)) SetPropA(window, "NTVDMEX16.DlgFocus", (HANDLE)focus);
@@ -900,7 +900,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                  ours did (DefWindowProc), so Program Manager's Program Item
                  Properties took the first typed letters into nothing and its Tab
                  went to IsDialogMessage with no control focused. */
-            if (message == WM_SETFOCUS && wowuser_is_dialog16(window16)) {
+            if (message == WM_SETFOCUS && WowUserIsDialog16(window16)) {
                 HWND saved = (HWND)GetPropA(window, "NTVDMEX16.DlgFocus");
                 if (!saved || !IsWindow(saved) || !IsChild(window, saved))
                     saved = GetNextDlgTabItem(window, NULL, FALSE);
@@ -956,7 +956,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_INITMENU:
     case WM_INITMENUPOPUP:
         if (window16) {
-            WORD menu16 = wowuser_menu16((HMENU)wParam);
+            WORD menu16 = WowUserMenu16((HMENU)wParam);
             WowMsgPost(window16, (WORD)message, menu16,
                         (message == WM_INITMENUPOPUP)
                             ? ((DWORD)LOWORD(lParam) | ((DWORD)HIWORD(lParam) << WOW_WORD_SHIFT))
@@ -985,11 +985,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             HMENU menuBar = GetMenu(window);
             INT index, itemCount = GetMenuItemCount(menuBar);
             DWORD time = GetTickCount();
-            WowMsgPost(window16, WM_INITMENU16, wowuser_menu16(menuBar), 0, time, pointX, pointY);
+            WowMsgPost(window16, WM_INITMENU16, WowUserMenu16(menuBar), 0, time, pointX, pointY);
             for (index = 0; index < itemCount && index < WOWWIN_MENU_POPUPS_MAX; ++index) {
                 HMENU submenu = GetSubMenu(menuBar, index);
                 if (submenu) WowMsgPost(window16, WM_INITMENUPOPUP16,
-                                     wowuser_menu16(submenu), (DWORD)index, time, pointX, pointY);
+                                     WowUserMenu16(submenu), (DWORD)index, time, pointX, pointY);
             }
             if (WowMsgPost(window16, (WORD)WOWMSG_MENUREPLAY, (WORD)wParam, (DWORD)lParam, time, pointX, pointY)) {
                 ++g_WowWinMenuDeferred;
@@ -1094,7 +1094,7 @@ static INT WowWinPump(INT budget)
    real modal menu loop here, on this thread, exactly where the pump would have. */
 static VOID WowWinMenuReplay(PCWOWMSG replay)
 {
-    HWND window = wowuser_hwnd32(replay->Window);
+    HWND window = WowUserHwnd32(replay->Window);
     if (!window || !IsWindow(window)) return;
     g_WowWinIsReplaying = 1;
     SendMessageA(window, WM_SYSCOMMAND, (WPARAM)replay->WParam, (LPARAM)replay->LParam);
@@ -1103,7 +1103,7 @@ static VOID WowWinMenuReplay(PCWOWMSG replay)
 
 /* Register a real Win32 class for a Win16 one. Returns 1 if the class is usable.
    ⚠ cbWndExtra is ZERO on purpose: the guest's window words are kept in
-     wowuser_win_t (session 40), bounded by the class's own declaration, and
+     WOWUSER_WINDOW (session 40), bounded by the class's own declaration, and
      giving Win32 a second copy would create two answers to one question.
    ★ `curord` / `icoord` are the PREDEFINED ORDINALS the guest put in its
      WNDCLASS, or 0. This is the moment the token minted by USER id 0xad becomes a

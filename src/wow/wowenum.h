@@ -404,7 +404,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         /* A window source. Walk the table from the cursor, skipping slots that
            are free, are not real windows, or do not match the filter. */
         for (;;) {
-            wowuser_win_t *window;
+            PWOWUSER_WINDOW window;
             if (g_WowEnum.Index >= WOWUSER_MAX_WIN) {
                 WowNotePut(note, noteCapacity, &noteLength, "ENUM complete: 0x");
                 WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
@@ -412,23 +412,23 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                 WowEnumEnd();
                 return 0;
             }
-            window = &g_wu_win[g_WowEnum.Index++];
-            if (!window->hwnd || !window->hwnd32 || window->foreign) continue;
+            window = &g_WowUserWindows[g_WowEnum.Index++];
+            if (!window->Window16 || !window->Window32 || window->IsForeign) continue;
             if (g_WowEnum.Kind == WOWENUM_CHILDREN) {
-                if (window->parent != g_WowEnum.Parent) continue;
+                if (window->Parent != g_WowEnum.Parent) continue;
             } else {
                 /* ⚠ TOP-LEVEL ONLY, and "top level" here means "no parent we
                      issued": a control belongs to its dialog, not to the desktop.
                      EnumTaskWindows walks the same list because this host runs
                      ONE Win16 task -- so every window we have IS that task's.
                      Said here rather than left as a coincidence. */
-                if (window->parent) continue;
+                if (window->Parent) continue;
                 /* s92 (#306): ...no longer ONE task -- EnumTaskWindows keeps to
                      the hTask it was given (a window of unknown task still shows). */
-                if (g_WowEnum.Kind == WOWENUM_TASK && g_wu_enumtask && window->task
-                    && window->task != g_wu_enumtask) continue;
+                if (g_WowEnum.Kind == WOWENUM_TASK && g_WowUserEnumTask && window->Task
+                    && window->Task != g_WowUserEnumTask) continue;
             }
-            window16 = window->hwnd;
+            window16 = window->Window16;
             break;
         }
         arguments[0] = window16;

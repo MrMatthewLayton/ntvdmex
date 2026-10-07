@@ -10708,9 +10708,9 @@ static void mgr_name(char *out, HWND *show)
                                                                   "InternalGetWindowText");
         *show = NULL;
         for (i = 0; i < WOWUSER_MAX_WIN; ++i) {
-            const wowuser_win_t *w = &g_wu_win[i];
-            HWND h = w->hwnd32;
-            if (!w->hwnd || w->parent || w->dying || w->foreign || !h || !IsWindowVisible(h)) continue;
+            const WOWUSER_WINDOW *w = &g_WowUserWindows[i];
+            HWND h = w->Window32;
+            if (!w->Window16 || w->Parent || w->IsDying || w->IsForeign || !h || !IsWindowVisible(h)) continue;
             *show = h;
             if (igwt) {
                 WCHAR wb[MGR_NAME_SIZE]; int n = igwt(h, wb, MGR_NAME_SIZE);
@@ -20742,7 +20742,7 @@ static void wowsched_setcur(WORD task)
      frame it entered (the newest such frame's saved SP; everything below is
      free). Anything else runs where it always did. 0x40 bytes are left below the
      parked SP for the frame the guest itself may still think is live. */
-static WORD ws_owner_of(WORD hwnd) { return wowuser_owner16(hwnd); }
+static WORD ws_owner_of(WORD hwnd) { return WowUserOwner16(hwnd); }
 static DWORD g_ws_intertask;
 static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
 {
@@ -22146,9 +22146,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 DWORD hole = fr->ReturnLinear; WORD dmsg = fr->Message;
                 if ((WORD)res == 0) {
                     char dn[200]; int dk = 0;
-                    LRESULT dr = wowuser_dlg_default(wowuser_findwin(actarg), actarg, dmsg,
-                                                     g_wu_dlgdef[g_WowCallDepth].wp,
-                                                     g_wu_dlgdef[g_WowCallDepth].lp,
+                    LRESULT dr = WowUserDlgDefault(WowUserFindWindow(actarg), actarg, dmsg,
+                                                     g_WowUserDlgDefaults[g_WowCallDepth].WParam,
+                                                     g_WowUserDlgDefaults[g_WowCallDepth].LParam,
                                                      dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
                     if (hole) {
@@ -22199,12 +22199,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  which is sound for exactly the reason the first one was: the guest
                  is parked at our stub with its own stack under it. */
             if (act == WOWCALL_ACT_EDITTEXT) {
-                wowuser_win_t *ew = wowuser_findwin(actarg);
+                WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
-                DWORD dgb = ew ? dpmi_sel_base(ew->hinst) : 0;
-                p = zput(p, " -- EDIT text at 0x"); p = zhex(p, ew ? ew->hinst : 0);
+                DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
+                p = zput(p, " -- EDIT text at 0x"); p = zhex(p, ew ? ew->Instance : 0);
                 p = zput(p, ":0x"); p = zhex(p, off);
-                if (!ew || !ew->hwnd32 || !dgb || !off) {
+                if (!ew || !ew->Window32 || !dgb || !off) {
                     p = zput(p, " -- ★ UNREADABLE, the control keeps no text");
                 } else {
                     static char etext[16384];
@@ -22215,24 +22215,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            && mem_readable((ULONG_PTR)(s + n), 1) && s[n])
                         { etext[n] = (char)s[n]; ++n; }
                     etext[n] = 0;
-                    SetWindowTextA(ew->hwnd32, etext);
+                    SetWindowTextA(ew->Window32, etext);
                     p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
                     p = zput(p, " bytes into the real control");
                     if (n == (int)sizeof etext - 1)
                         p = zput(p, " (★ TRUNCATED at the host's buffer)");
                 }
                 /* Release the lock we took, whatever came of the read. */
-                if (ew && ew->hmem && g_wu_krnl_seg) {
+                if (ew && ew->Memory16 && g_WowUserKernelSegment) {
                     WORD  rsel2 = wow_callback_selector();
                     DWORD ssb4  = dpmi_sel_base(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
-                    WORD  uarg  = ew->hmem;
+                    WORD  uarg  = ew->Memory16;
                     if (rsel2 && ssb4
                         && WowCallEnter(tib, ssb4, rsel2,
-                                         ((DWORD)g_wu_krnl_seg << 16)
-                                             | KRNL_LOCALUNLOCK_OFF,
-                                         ew->hinst, &uarg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         ((DWORD)g_WowUserKernelSegment << 16)
+                                             | WOWUSER_KRNL_LOCALUNLOCK_OFF,
+                                         ew->Instance, &uarg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->Window16, 0,
                                          NULL, 0, -1, 0))
                         p = zput(p, "; LocalUnlock in flight");
                     else
@@ -22247,25 +22247,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  an address to write the text at, and only the guest's KERNEL can
                  do it -- the same call, in the same DGROUP, as the load path. */
             if (act == WOWCALL_ACT_EDITLOCK) {
-                wowuser_win_t *ew = wowuser_findwin(actarg);
-                p = zput(p, " -- EDIT block 0x"); p = zhex(p, ew ? ew->hmem : 0);
-                if (!ew || !ew->hmem || !ew->hwnd32 || !g_wu_krnl_seg) {
+                WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
+                p = zput(p, " -- EDIT block 0x"); p = zhex(p, ew ? ew->Memory16 : 0);
+                if (!ew || !ew->Memory16 || !ew->Window32 || !g_WowUserKernelSegment) {
                     p = zput(p, " -- ★ NOT USABLE; the control's text is NOT saved");
                 } else {
                     WORD  rsel2 = wow_callback_selector();
                     DWORD ssb4  = dpmi_sel_base(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
-                    WORD  larg  = ew->hmem;
+                    WORD  larg  = ew->Memory16;
                     if (rsel2 && ssb4
                         && WowCallEnter(tib, ssb4, rsel2,
-                                         ((DWORD)g_wu_krnl_seg << 16)
-                                             | KRNL_LOCALLOCK_OFF,
-                                         ew->hinst, &larg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         ((DWORD)g_WowUserKernelSegment << 16)
+                                             | WOWUSER_KRNL_LOCALLOCK_OFF,
+                                         ew->Instance, &larg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->Window16, 0,
                                          NULL, 0, -1, 0)) {
                         if (g_WowCallDepth > 0) {
                             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
-                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = ew->hwnd;
+                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = ew->Window16;
                         }
                         p = zput(p, "; LocalLock in flight, then fill");
                     } else {
@@ -22285,37 +22285,37 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  allocation used, and the log says if it had to truncate.
                ⚠ AND UNLOCK. We took the lock, we owe the release. */
             if (act == WOWCALL_ACT_EDITFILL) {
-                wowuser_win_t *ew = wowuser_findwin(actarg);
+                WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
-                DWORD dgb = ew ? dpmi_sel_base(ew->hinst) : 0;
-                p = zput(p, " -- EDIT block at 0x"); p = zhex(p, ew ? ew->hinst : 0);
+                DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
+                p = zput(p, " -- EDIT block at 0x"); p = zhex(p, ew ? ew->Instance : 0);
                 p = zput(p, ":0x"); p = zhex(p, off);
-                if (!ew || !ew->hwnd32 || !dgb || !off) {
+                if (!ew || !ew->Window32 || !dgb || !off) {
                     p = zput(p, " -- ★ UNWRITABLE; the control's text is NOT saved");
                 } else {
                     static char stext[16384];
                     volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(dgb + off);
-                    int cap = GetWindowTextLengthA(ew->hwnd32) + 1;
+                    int cap = GetWindowTextLengthA(ew->Window32) + 1;
                     int n, i;
                     if (cap > (int)sizeof stext) cap = (int)sizeof stext;
-                    n = GetWindowTextA(ew->hwnd32, stext, cap);
+                    n = GetWindowTextA(ew->Window32, stext, cap);
                     for (i = 0; i <= n; ++i) d[i] = (BYTE)stext[i];
                     p = zput(p, " <- 0x"); p = zhex(p, (DWORD)n);
                     p = zput(p, " byte(s) from the real control");
                     if (n == cap - 1 && cap == (int)sizeof stext)
                         p = zput(p, " (★ TRUNCATED at the host's buffer)");
                 }
-                if (ew && ew->hmem && g_wu_krnl_seg) {
+                if (ew && ew->Memory16 && g_WowUserKernelSegment) {
                     WORD  rsel2 = wow_callback_selector();
                     DWORD ssb4  = dpmi_sel_base(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
-                    WORD  uarg  = ew->hmem;
+                    WORD  uarg  = ew->Memory16;
                     if (rsel2 && ssb4
                         && WowCallEnter(tib, ssb4, rsel2,
-                                         ((DWORD)g_wu_krnl_seg << 16)
-                                             | KRNL_LOCALUNLOCK_OFF,
-                                         ew->hinst, &uarg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         ((DWORD)g_WowUserKernelSegment << 16)
+                                             | WOWUSER_KRNL_LOCALUNLOCK_OFF,
+                                         ew->Instance, &uarg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->Window16, 0,
                                          NULL, 0, -1, 0))
                         p = zput(p, "; LocalUnlock in flight");
                     else
@@ -22341,11 +22341,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     /* GlobalAlloc was sized n+1, so the copy is bounded by what was
                        asked for; the NUL goes in with it. */
                     int i;
-                    p = zput(p, " -- CLIP fill 0x"); p = zhex(p, (DWORD)g_wu_clipn);
+                    p = zput(p, " -- CLIP fill 0x"); p = zhex(p, (DWORD)g_WowUserClipboardLength);
                     p = zput(p, " byte(s) at 0x"); p = zhex(p, res);
-                    if (fplin && mem_readable((ULONG_PTR)fplin, (DWORD)g_wu_clipn + 1)) {
+                    if (fplin && mem_readable((ULONG_PTR)fplin, (DWORD)g_WowUserClipboardLength + 1)) {
                         volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)fplin;
-                        for (i = 0; i <= g_wu_clipn; ++i) d[i] = (BYTE)g_wu_clip[i];
+                        for (i = 0; i <= g_WowUserClipboardLength; ++i) d[i] = (BYTE)g_WowUserClipboard[i];
                     } else p = zput(p, " -- ★ GlobalLock gave no usable pointer; the"
                                        " block stays EMPTY");
                 } else {
@@ -22354,20 +22354,20 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     p = zput(p, " -- CLIP put from 0x"); p = zhex(p, res);
                     if (fplin) {
                         const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)fplin;
-                        while (n < (int)sizeof g_wu_clip - 1
+                        while (n < (int)sizeof g_WowUserClipboard - 1
                                && mem_readable((ULONG_PTR)(s + n), 1) && s[n])
-                            { g_wu_clip[n] = (char)s[n]; ++n; }
+                            { g_WowUserClipboard[n] = (char)s[n]; ++n; }
                     }
-                    g_wu_clip[n] = 0;
+                    g_WowUserClipboard[n] = 0;
                     if (fplin) {
                         HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n + 1);
                         char *hp = hg ? (char *)GlobalLock(hg) : NULL;
                         int i;
                         if (hp) {
-                            for (i = 0; i <= n; ++i) hp[i] = g_wu_clip[i];
+                            for (i = 0; i <= n; ++i) hp[i] = g_WowUserClipboard[i];
                             GlobalUnlock(hg);
                         }
-                        if (hp && SetClipboardData(g_wu_clipfmt, hg)) {
+                        if (hp && SetClipboardData(g_WowUserClipboardFormat, hg)) {
                             p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
                             p = zput(p, " byte(s) on the host's clipboard");
                         } else {
@@ -22378,11 +22378,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                        " was copied");
                 }
                 /* Next link: Alloc -> Lock, and Lock -> Unlock once the bytes moved. */
-                if (harg && g_wu_krnl_seg && crsel && cssb) {
+                if (harg && g_WowUserKernelSegment && crsel && cssb) {
                     WORD a1 = harg;
-                    DWORD proc = ((DWORD)g_wu_krnl_seg << 16)
-                               | (act == WOWCALL_ACT_CLIPLOCK ? KRNL_GLOBALLOCK_OFF
-                                                              : KRNL_GLOBALUNLOCK_OFF);
+                    DWORD proc = ((DWORD)g_WowUserKernelSegment << 16)
+                               | (act == WOWCALL_ACT_CLIPLOCK ? WOWUSER_KRNL_GLOBALLOCK_OFF
+                                                              : WOWUSER_KRNL_GLOBALUNLOCK_OFF);
                     if (WowCallEnter(tib, cssb, crsel, proc, cds, &a1, 1, 0,
                                       WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, 0)) {
                         if (act == WOWCALL_ACT_CLIPLOCK && g_WowCallDepth > 0) {
@@ -22437,10 +22437,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         || g_WowDlgMessage[g_WowCallDepth] == 0x000F
                         || g_WowDlgMessage[g_WowCallDepth] == 0x0014)) {
                     char dn[200]; int dk = 0;
-                    wowuser_dlg_default(wowuser_findwin(actarg), actarg,
+                    WowUserDlgDefault(WowUserFindWindow(actarg), actarg,
                                         g_WowDlgMessage[g_WowCallDepth],
-                                        g_wu_dlgdef[g_WowCallDepth].wp,
-                                        g_wu_dlgdef[g_WowCallDepth].lp,
+                                        g_WowUserDlgDefaults[g_WowCallDepth].WParam,
+                                        g_WowUserDlgDefaults[g_WowCallDepth].LParam,
                                         dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
                     p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
@@ -22748,7 +22748,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zhex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
                                 /* ★ And keep it where USER's GetWindowTask can
                                      see it -- the same word, read once. */
-                                g_wu_curtask = (WORD)(dg[0x228] | (dg[0x229] << 8));
+                                g_WowUserCurrentTask = (WORD)(dg[0x228] | (dg[0x229] << 8));
                             }
                         }
                         /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
@@ -22944,7 +22944,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      service needs to call a KERNEL export. The WOW32 common
                      thunk is IN that segment, so the CS at this BOP is it --
                      exact, free, and true from the first call onward. */
-                if (f.IsKernel) g_wu_krnl_seg = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                if (f.IsKernel) g_WowUserKernelSegment = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 g_wow_last_id = (WORD)f.Id; g_wow_last_from = f.CallSite;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
@@ -23716,7 +23716,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     " when it is\r\n");
                         wowlog_flush(base, &p);
                     }
-                    if (wowuser_call(&f, note, sizeof note)) {
+                    if (WowUserCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (USER), returned 0x");
@@ -27588,8 +27588,8 @@ static HANDLE shim_handle32(WORD h, DWORD type)
     int kind = -1;
     if (!h) return NULL;
     switch (type) {
-    case 0: case 14: { wowuser_win_t *w = wowuser_findwin(h); return w ? (HANDLE)w->hwnd32 : NULL; }
-    case 1:  return (HANDLE)wowuser_menu32(h);
+    case 0: case 14: { WOWUSER_WINDOW *w = WowUserFindWindow(h); return w ? (HANDLE)w->Window32 : NULL; }
+    case 1:  return (HANDLE)WowUserMenu32(h);
     case 4: case 5: case 6: case 7: case 8: case 9: case 10: case 11:
         return (HANDLE)WowGdiH32(h, &kind);
     }
@@ -27665,10 +27665,10 @@ static DWORD shim_global16(int op, DWORD a, DWORD b)
     static const WORD off[6] = { 0x3ac3, 0x3adf, 0x3b10, 0x3b63, 0x3b4f, 0x3afc };
     WORD args[3], r = 0;
     int n;
-    if (op < 0 || op > 5 || !g_wu_krnl_seg || !g_tib_dbg) return 0;
+    if (op < 0 || op > 5 || !g_WowUserKernelSegment || !g_tib_dbg) return 0;
     if (op == 0) { args[0] = (WORD)a; args[1] = (WORD)(b >> 16); args[2] = (WORD)b; n = 3; }
     else         { args[0] = (WORD)a; n = 1; }
-    if (!wow_call16_sync(((DWORD)g_wu_krnl_seg << 16) | off[op],
+    if (!wow_call16_sync(((DWORD)g_WowUserKernelSegment << 16) | off[op],
                          (WORD)(VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF), args, n, 0, 0, &r))
         return 0;
     /* GlobalLock / GlobalSize / GlobalHandle answer in DX:AX; the rest in AX */
@@ -28094,8 +28094,8 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
      drawn in colours their programs chose here. */
 static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, int *handled)
 {
-    wowuser_win_t *w = wowuser_findwin(h16);
-    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WOWUSER_WINDOW *w = WowUserFindWindow(h16);
+    DWORD proc = w ? WowUserWindowProcedureOf(w) : 0;
     WORD  dtok, child, args[5], res = 0, type;
     int   kind = -1, made;
     HGDIOBJ br;
@@ -28115,7 +28115,7 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     args[2] = dtok;
     args[3] = type;                              /* lParam HIGH: the control type */
     args[4] = child;                             /* lParam LOW: the control       */
-    made = wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+    made = wow_call16_sync(proc, w->Instance ? w->Instance : g_WowUserClasses[w->Class].Instance,
                            args, 5, h16, 0x0019, &res);
     WowGdiForget(dtok);
     if (made && res) {
@@ -28128,7 +28128,7 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
          look when its template names a font -- Charmap's labels) and the WINDOW
          colour otherwise (Calc's display; Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own
          background keep Windows' default. */
-    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !w->dlg3d)) {
+    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !w->IsDialog3D)) {
         SetTextColor((HDC)wp, GetSysColor(COLOR_WINDOWTEXT));
         SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
         *handled = 1;
@@ -28156,8 +28156,8 @@ static WORD od_rw(const BYTE *b, int o) { return (WORD)(b[o] | (b[o + 1] << 8));
 
 static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, int *handled)
 {
-    wowuser_win_t *w = wowuser_findwin(h16);
-    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WOWUSER_WINDOW *w = WowUserFindWindow(h16);
+    DWORD proc = w ? WowUserWindowProcedureOf(w) : 0;
     WORD args[5], res = 0, dtok = 0;
     BYTE b[32];
     int n = 0, i, made;
@@ -28204,7 +28204,7 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
     }
     args[0] = h16; args[1] = (WORD)msg; args[2] = (WORD)wp;
     args[3] = 0; args[4] = 0;                    /* lParam: the structure's far pointer */
-    made = wow_call16_sync_ex(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+    made = wow_call16_sync_ex(proc, w->Instance ? w->Instance : g_WowUserClasses[w->Class].Instance,
                               args, 5, h16, (WORD)msg, &res, b, n, 3, NULL, 0);
     if (dtok) WowGdiForget(dtok);
     if (!made) return 0;
@@ -28220,30 +28220,30 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
 }
 
 /* s89 (#305 M10): a message SENT to a guest window, now -- its own procedure and
-   instance chosen exactly as DispatchMessage chooses them. wowuser_destroy uses it
+   instance chosen exactly as DispatchMessage chooses them. WowUserDestroy uses it
    so WM_DESTROY arrives while the window and its children still exist. */
 /* ...and with a structure as lParam (see wow_call16_sync_ex for `fix`). */
 static int wow_send16_blob(WORD h16, WORD msg, WORD wp, BYTE *blob, int n,
                            const int *fix, int nfix, WORD *res)
 {
-    wowuser_win_t *w = wowuser_findwin(h16);
-    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WOWUSER_WINDOW *w = WowUserFindWindow(h16);
+    DWORD proc = w ? WowUserWindowProcedureOf(w) : 0;
     WORD args[5];
     if (!proc) return 0;
     args[0] = h16; args[1] = msg; args[2] = wp; args[3] = 0; args[4] = 0;
-    return wow_call16_sync_ex(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+    return wow_call16_sync_ex(proc, w->Instance ? w->Instance : g_WowUserClasses[w->Class].Instance,
                               args, 5, h16, msg, res, blob, n, 3, fix, nfix);
 }
 
 static int wow_send16_now(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res)
 {
-    wowuser_win_t *w = wowuser_findwin(h16);
-    DWORD proc = w ? wowuser_winproc_of(w) : 0;
+    WOWUSER_WINDOW *w = WowUserFindWindow(h16);
+    DWORD proc = w ? WowUserWindowProcedureOf(w) : 0;
     WORD args[5];
     if (!proc) return 0;
     args[0] = h16; args[1] = msg; args[2] = wp;
     args[3] = (WORD)(lp >> 16); args[4] = (WORD)(lp & 0xFFFF);
-    return wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+    return wow_call16_sync(proc, w->Instance ? w->Instance : g_WowUserClasses[w->Class].Instance,
                            args, 5, h16, msg, res);
 }
 
@@ -31960,12 +31960,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.RtcContext = NULL;
     g_cmos.RtcSet = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
     g_WowWinCtlColor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
-    g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
+    g_WowUserSend16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
     g_WowWinSend16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
-    g_wu_call16    = wow_call16_sync;           /* s91 #308: a subclassed control's messages */
+    g_WowUserCall16    = wow_call16_sync;           /* s91 #308: a subclassed control's messages */
     g_WowWinOwnerDraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
     g_WowWinGlobal16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
-    g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
+    g_WowUserSend16Blob   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
     g_WowWinSend16Blob   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
     g_cmos.BaseKb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = VddCmosDevice(&g_cmos);

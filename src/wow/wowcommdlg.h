@@ -253,8 +253,8 @@ static INT WowCdlgRelay(UINT message, LPARAM lParam)
         WowCdlgPokeDword(slot->Guest, WOWCDLG_FR16_FLAGS, flags & ~WOWCDLG_FR16_HOOKBITS);
         WowMsgPost(slot->Owner16, (WORD)message, 0, slot->Guest16, GetTickCount(), 0, 0);
         if (flags & FR_DIALOGTERM) {
-            wowuser_win_t *window = wowuser_findwin(slot->Window16);
-            if (window && window->hwnd32 == slot->Dialog) { window->hwnd = 0; window->hwnd32 = NULL; }
+            PWOWUSER_WINDOW window = WowUserFindWindow(slot->Window16);
+            if (window && window->Window32 == slot->Dialog) { window->Window16 = 0; window->Window32 = NULL; }
             slot->Dialog = NULL;
         }
         return 1;
@@ -277,7 +277,7 @@ static INT WowCdlgIsDialogMessage(PMSG message)
  * ⚠ CALLED ONLY WHEN THE STUB IS COMMDLG'S. The caller checks, as it does for
  *   USER and SHELL. `0x01` is MessageBox in USER's table and GetOpenFileName here.
  */
-static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
+static INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     if (frame->Id != WOWCDLG_EXTENDEDERROR) g_WowCdlgError = 0;   /* a new call, a new answer */
@@ -311,7 +311,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         OPENFILENAMEA openFileName;
         DWORD structSize, flags;
         WORD  owner16;
-        wowuser_win_t *window;
+        PWOWUSER_WINDOW window;
         INT noteLength = 0, isOk = 0;
         UINT byteIndex;
 
@@ -336,8 +336,8 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         for (byteIndex = 0; byteIndex < sizeof openFileName; ++byteIndex) ((PBYTE)&openFileName)[byteIndex] = 0;
         openFileName.lStructSize = sizeof openFileName;
         owner16 = Wow32PeekWord(guest + WOWCDLG_OFN16_HWNDOWNER);
-        window = owner16 ? wowuser_findwin(owner16) : NULL;
-        openFileName.hwndOwner = window ? window->hwnd32 : NULL;
+        window = owner16 ? WowUserFindWindow(owner16) : NULL;
+        openFileName.hwndOwner = window ? window->Window32 : NULL;
         openFileName.hInstance = NULL;              /* only meaningful with a template */
 
         openFileName.lpstrFilter       = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_FILTER);
@@ -555,8 +555,8 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         DWORD guest16 = (DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
         INT isReplace = (frame->Id == WOWCDLG_REPLACETEXT);
         PWOWCDLG_FIND slot = NULL;
-        wowuser_win_t *ownerWindow, *window;
-        wowuser_class_t *dialogClass;
+        PWOWUSER_WINDOW ownerWindow, window;
+        PWOWUSER_CLASS dialogClass;
         WORD owner16;
         DWORD flags;
         HWND dialog;
@@ -569,9 +569,9 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         }
         for (index = 0; index < WOWCDLG_MAX_FIND; ++index) if (!g_WowCdlgFinds[index].Dialog) { slot = &g_WowCdlgFinds[index]; break; }
         owner16 = Wow32PeekWord(guest + WOWCDLG_FR16_HWNDOWNER);
-        ownerWindow = owner16 ? wowuser_findwin(owner16) : NULL;
-        dialogClass  = wowuser_find("#32770");
-        if (!slot || !ownerWindow || !ownerWindow->hwnd32 || !dialogClass) {
+        ownerWindow = owner16 ? WowUserFindWindow(owner16) : NULL;
+        dialogClass  = WowUserFindClass("#32770");
+        if (!slot || !ownerWindow || !ownerWindow->Window32 || !dialogClass) {
             WowNotePut(note, noteCapacity, &noteLength, !slot ? " -- all find slots in use"
                                           : " -- no owner window (FindText requires one)");
             Wow32SetReturn(frame, 0);
@@ -581,7 +581,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         for (index = 0; index < (INT)sizeof slot->FindReplace; ++index) ((PBYTE)&slot->FindReplace)[index] = 0;
         flags = WowCdlgPeekDword(guest, WOWCDLG_FR16_FLAGS);
         slot->FindReplace.lStructSize      = sizeof slot->FindReplace;
-        slot->FindReplace.hwndOwner        = ownerWindow->hwnd32;
+        slot->FindReplace.hwndOwner        = ownerWindow->Window32;
         slot->FindReplace.Flags            = flags & ~WOWCDLG_FR16_HOOKBITS;
         slot->FindReplace.lpstrFindWhat    = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_FR16_FINDWHAT);
         slot->FindReplace.lpstrReplaceWith = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_FR16_REPLACEWITH);
@@ -594,37 +594,37 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        window = wowuser_newwin();
+        window = WowUserNewWindow();
         if (!window) { WowNotePut(note, noteCapacity, &noteLength, " -- OUT OF WINDOW SLOTS");
                   Wow32SetReturn(frame, 0); return 1; }
         dialog = isReplace ? ReplaceTextA(&slot->FindReplace) : FindTextA(&slot->FindReplace);
         if (!dialog) {
-            window->hwnd = 0;                               /* give the slot back */
+            window->Window16 = 0;                           /* give the slot back */
             WowNotePut(note, noteCapacity, &noteLength, " -- comdlg32 refused (err 0x");
             WowNoteHex(note, noteCapacity, &noteLength, CommDlgExtendedError(), WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        window->cls = (WORD)(dialogClass - g_wu_class);
-        window->style = (DWORD)GetWindowLongA(dialog, GWL_STYLE);
-        window->wndproc = 0;
-        window->parent = owner16; window->menu = 0; window->hinst = 0;
-        window->text[0] = 0; window->hmem = 0; window->menuitems = 0; window->dying = 0;
-        for (index = 0; index < WOWUSER_MAX_EXTRA; ++index) window->extra[index] = 0;
-        window->hwnd32 = dialog;
+        window->Class = (WORD)(dialogClass - g_WowUserClasses);
+        window->Style = (DWORD)GetWindowLongA(dialog, GWL_STYLE);
+        window->WindowProcedure = 0;
+        window->Parent = owner16; window->Menu = 0; window->Instance = 0;
+        window->Text[0] = 0; window->Memory16 = 0; window->MenuItems = 0; window->IsDying = 0;
+        for (index = 0; index < WOWUSER_MAX_EXTRA; ++index) window->Extra[index] = 0;
+        window->Window32 = dialog;
         slot->Dialog = dialog; slot->Guest = guest; slot->Guest16 = guest16;
-        slot->Owner16 = owner16; slot->Window16 = window->hwnd;
+        slot->Owner16 = owner16; slot->Window16 = window->Window16;
         WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_FR16_HOOKBITS)
             WowNotePut(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
         WowNotePut(note, noteCapacity, &noteLength, " what=");
         WowNoteQuoted(note, noteCapacity, &noteLength, slot->FindReplace.lpstrFindWhat);
         WowNotePut(note, noteCapacity, &noteLength, " -> MODELESS dialog hwnd16=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window->hwnd, WOW_HEX_WORD_DIGITS);
+        WowNoteHex(note, noteCapacity, &noteLength, window->Window16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", notifications as msg 0x");
         WowNoteHex(note, noteCapacity, &noteLength, g_WowCdlgFindMessage, WOW_HEX_WORD_DIGITS);
-        Wow32SetReturn(frame, window->hwnd);
+        Wow32SetReturn(frame, window->Window16);
         return 1;
     }
 
@@ -635,7 +635,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     case WOWCDLG_CHOOSECOLOR: {
         volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
         CHOOSECOLORA chooseColor;
-        wowuser_win_t *ownerWindow;
+        PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
         INT noteLength = 0, isOk, index;
         WowNotePut(note, noteCapacity, &noteLength, "ChooseColor");
@@ -645,10 +645,10 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
             return 1;
         }
         for (index = 0; index < (INT)sizeof chooseColor; ++index) ((PBYTE)&chooseColor)[index] = 0;
-        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_CC16_HWNDOWNER));
+        ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_CC16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CC16_FLAGS);
         chooseColor.lStructSize  = sizeof chooseColor;
-        chooseColor.hwndOwner    = ownerWindow ? ownerWindow->hwnd32 : NULL;
+        chooseColor.hwndOwner    = ownerWindow ? ownerWindow->Window32 : NULL;
         chooseColor.rgbResult    = WowCdlgPeekDword(guest, WOWCDLG_CC16_RGBRESULT);
         chooseColor.lpCustColors = (COLORREF *)Wow32FarAt(frame, guest, WOWCDLG_CC16_CUSTCOLORS);
         chooseColor.Flags        = flags & ~WOWCDLG_CC16_HOOKBITS;
@@ -683,7 +683,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         volatile BYTE *logFont16;
         CHOOSEFONTA chooseFont;
         LOGFONTA logFont;
-        wowuser_win_t *ownerWindow;
+        PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
         INT noteLength = 0, isOk, index;
         WowNotePut(note, noteCapacity, &noteLength, "ChooseFont");
@@ -701,10 +701,10 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         for (index = 0; index < (INT)sizeof chooseFont; ++index) ((PBYTE)&chooseFont)[index] = 0;
         for (index = 0; index < (INT)sizeof logFont; ++index) ((PBYTE)&logFont)[index] = 0;
         WowCdlgLogFont16To32(logFont16, &logFont);
-        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_CF16_HWNDOWNER));
+        ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_CF16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CF16_FLAGS);
         chooseFont.lStructSize = sizeof chooseFont;
-        chooseFont.hwndOwner   = ownerWindow ? ownerWindow->hwnd32 : NULL;
+        chooseFont.hwndOwner   = ownerWindow ? ownerWindow->Window32 : NULL;
         chooseFont.lpLogFont   = &logFont;
         chooseFont.iPointSize  = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_POINTSIZE);
         chooseFont.Flags       = flags & ~WOWCDLG_CF16_HOOKBITS;
@@ -753,7 +753,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     case WOWCDLG_PRINTDLG: {
         volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
         PRINTDLGA printDialog;
-        wowuser_win_t *ownerWindow;
+        PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
         WORD devMode16, devNames16;
         INT noteLength = 0, isOk, index;
@@ -766,12 +766,12 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
             return 1;
         }
         for (index = 0; index < (INT)sizeof printDialog; ++index) ((PBYTE)&printDialog)[index] = 0;
-        ownerWindow = wowuser_findwin(Wow32PeekWord(guest + WOWCDLG_PD16_HWNDOWNER));
+        ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_PD16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_PD16_FLAGS);
         devMode16 = Wow32PeekWord(guest + WOWCDLG_PD16_HDEVMODE);
         devNames16 = Wow32PeekWord(guest + WOWCDLG_PD16_HDEVNAMES);
         printDialog.lStructSize = sizeof printDialog;
-        printDialog.hwndOwner   = ownerWindow ? ownerWindow->hwnd32 : NULL;
+        printDialog.hwndOwner   = ownerWindow ? ownerWindow->Window32 : NULL;
         printDialog.Flags       = flags & ~WOWCDLG_PD16_HOOKBITS;
         printDialog.nFromPage   = Wow32PeekWord(guest + WOWCDLG_PD16_FROMPAGE);
         printDialog.nToPage     = Wow32PeekWord(guest + WOWCDLG_PD16_TOPAGE);

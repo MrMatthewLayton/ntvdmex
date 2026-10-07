@@ -143,7 +143,7 @@ static DWORD g_WowDlgRefused = 0;   /* ...and ones the host could not drive     
 
 /* ⚠ NO FORWARD DECLARATIONS HERE, unlike wowwin.h. That file is included BEFORE
      wowuser.h and has to declare what it borrows; this one is included AFTER, so
-     the window table, `wowuser_findwin` and `wowuser_winproc_of` are already
+     the window table, `WowUserFindWindow` and `WowUserWindowProcedureOf` are already
      complete -- and re-declaring the struct would be a duplicate typedef. The
      include order in main.c is what makes that true; it is commented there. */
 
@@ -208,7 +208,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
              like a click does. Keyboard messages only, and only for the topmost modal
              dialog or one of its children. */
         if (message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST && g_WowDlgDepth > 0) {
-            HWND dialog = wowuser_hwnd32(g_WowDlgModals[g_WowDlgDepth - 1].Window);
+            HWND dialog = WowUserHwnd32(g_WowDlgModals[g_WowDlgDepth - 1].Window);
             /* ── s93: A KEY FOR THE DIALOG WINDOW ITSELF belongs to a control -- a
                  dialog with controls never holds the focus (DefDlgProc passes it on).
                  Ours could end up holding it (Program Item Properties: the first
@@ -354,7 +354,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     INT noteLength = 0;
     for (;;) {
         PWOWDLG_MODAL dialog = WowDlgTop();
-        wowuser_win_t  *window;
+        PWOWUSER_WINDOW window;
         WOWMSG message;
         DWORD procedure = 0;
         WORD  arguments[WOWDLG_PROCEDURE_ARGUMENTS];
@@ -365,7 +365,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         INT   verdict;
 
         if (!dialog) return 0;
-        window = wowuser_findwin(dialog->Window);
+        window = WowUserFindWindow(dialog->Window);
         target = dialog->Window;
 
         /* ── ★★★ THE FOUR EXITS ARE ONE DECISION, AND IT IS A TESTED FUNCTION.
@@ -377,7 +377,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              because the wait has not happened yet; the branch that runs it asks
              again with 1. */
         verdict = WowConvModalExit(dialog->IsEnded,
-                                     window && window->hwnd32 && IsWindow(window->hwnd32),
+                                     window && window->Window32 && IsWindow(window->Window32),
                                      dialog->DialogProcedure || dialog->WindowProcedure, 0);
 
         /* ── EXIT 1: THE REAL ONE. EndDialog was called for this dialog. ───── */
@@ -468,9 +468,9 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  showing through its client.
                ⚠ ONCE. `IsShowDeferred` is cleared, because ShowWindow on every turn of
                  the loop would fight a guest that hides its own dialog. */
-            if (dialog->IsShowDeferred && window->hwnd32) {
+            if (dialog->IsShowDeferred && window->Window32) {
                 dialog->IsShowDeferred = 0;
-                ShowWindow(window->hwnd32, SW_SHOW);
+                ShowWindow(window->Window32, SW_SHOW);
                 WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
                 WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " SHOWN (WM_INITDIALOG is done, so the"
@@ -484,8 +484,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                      Description. WM_NEXTDLGCTL is the dialog manager's own way in,
                      and selects an edit's text as DialogBox does. */
                 {   HWND focus = GetFocus();
-                    if (!focus || focus == window->hwnd32 || !IsChild(window->hwnd32, focus)) {
-                        HWND firstTabStop = GetNextDlgTabItem(window->hwnd32, NULL, FALSE);
+                    if (!focus || focus == window->Window32 || !IsChild(window->Window32, focus)) {
+                        HWND firstTabStop = GetNextDlgTabItem(window->Window32, NULL, FALSE);
                         if (firstTabStop) {
                             /* ⚠ NOT WM_NEXTDLGCTL: only the real DefDlgProc acts on
                                  it, and this window runs OUR procedure (see #32770
@@ -583,10 +583,10 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                      window the OS has destroyed. Either way there is nothing
                      left to wait for, and the checks at the top of the loop are
                      the ones that say so -- this just stops waiting. */
-                if (dialog->IsEnded || !IsWindow(window->hwnd32)) break;
+                if (dialog->IsEnded || !IsWindow(window->Window32)) break;
             }
             g_WowMsgInWait = 0;
-            if (dialog->IsEnded || !IsWindow(window->hwnd32)) continue;
+            if (dialog->IsEnded || !IsWindow(window->Window32)) continue;
 
             /* ── EXIT 4: THE WAIT EXPIRED. Only reachable with a bounded
                  wowidle.txt, which is the unattended-harness setting; an
@@ -628,8 +628,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                 procedure = (DWORD)WowConvWindowProcedure((UINT)dialog->WindowProcedure,
                                               (UINT)dialog->DialogProcedure);
             } else {
-                wowuser_win_t *targetWindow = message.Window ? wowuser_findwin(message.Window) : NULL;
-                DWORD targetProcedure = targetWindow ? wowuser_winproc_of(targetWindow) : 0;
+                PWOWUSER_WINDOW targetWindow = message.Window ? WowUserFindWindow(message.Window) : NULL;
+                DWORD targetProcedure = targetWindow ? WowUserWindowProcedureOf(targetWindow) : 0;
                 if (!targetProcedure) {
                     ++dialog->Messages;
                     continue;            /* nowhere to put it; take the next one */
@@ -647,7 +647,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         }
 
         /* ── THE CALL ITSELF. Five words in declared order, the shape every
-             window and dialog procedure takes -- wowuser_want_msg builds the
+             window and dialog procedure takes -- WowUserWantMessage builds the
              same block for DispatchMessage, and this is that block built by
              hand because there is no service frame here to hang it on. */
         /* ⚠ THE DIALOG'S handle for the dialog's own messages: a dialog procedure
@@ -695,8 +695,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             g_WowDlgIsDialogCall[g_WowCallDepth - 1] = (message.Window == dialog->Window && procedure == dialog->DialogProcedure
                                             && !dialog->WindowProcedure);
             g_WowDlgMessage[g_WowCallDepth - 1]  = messageNumber;
-            g_wu_dlgdef[g_WowCallDepth - 1].wp = wParam;
-            g_wu_dlgdef[g_WowCallDepth - 1].lp = lParam;
+            g_WowUserDlgDefaults[g_WowCallDepth - 1].WParam = wParam;
+            g_WowUserDlgDefaults[g_WowCallDepth - 1].LParam = lParam;
         }
         ++dialog->Messages;
         WowNotePut(note, noteCapacity, &noteLength, "-> 0x");

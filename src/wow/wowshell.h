@@ -91,7 +91,7 @@
      same three arguments and the same three answers -- an HICON, 1 for "the file
      has none", 0 for "no such file" -- so what this host has to add is only the
      handle: an HICON from ANOTHER MODULE cannot be described by the ordinal or
-     name a lazy token carries, so it is minted as AD_KIND_REALICON.
+     name a lazy token carries, so it is minted as WOWUSER_AD_KIND_REALICON.
    ⚠ nIconIndex == -1 IS A COUNT QUERY, not an extraction, and it must not mint
      anything: the answer is a number, not a handle. */
 #define WOWSHELL_EXTRACTICON  0x0022
@@ -322,7 +322,7 @@ static DWORD WowShellKey16(HKEY key)
 
 /* Write a DWORD through a 16:16 far-pointer ARGUMENT (Wow32FarPut writes
    through a pointer inside a STRUCT, which is a different thing). */
-static INT WowShellPutDword(const WOW32_FRAME *frame, INT argumentOffset, DWORD value)
+static INT WowShellPutDword(PCWOW32_FRAME frame, INT argumentOffset, DWORD value)
 {
     volatile BYTE *bytes = Wow32ArgPointer(frame, argumentOffset);
     if (!bytes) return 0;
@@ -333,7 +333,7 @@ static INT WowShellPutDword(const WOW32_FRAME *frame, INT argumentOffset, DWORD 
 
 /* The subkey argument, or NULL -- and the difference is load-bearing: every one
    of these calls gives a null lpSubKey the meaning "the key itself". */
-static PCSTR WowShellSubkey(const WOW32_FRAME *frame, INT argumentOffset,
+static PCSTR WowShellSubkey(PCWOW32_FRAME frame, INT argumentOffset,
                                 PSTR buffer, INT capacity)
 {
     return Wow32ArgString(frame, argumentOffset, buffer, capacity) && buffer[0] ? buffer : NULL;
@@ -357,7 +357,7 @@ static VOID WowShellNoteKey(PSTR note, INT noteCapacity, PINT noteLength,
  *   for USER; this file must never be reachable from another module's numbering.
  * `note` receives a short description for the caller's log line.
  */
-static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
+static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     switch (frame->Id) {
@@ -446,7 +446,7 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        token = wowuser_sysres_mint_icon(icon);
+        token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         if (!token) WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE TOKEN TABLE IS FULL, so"
@@ -489,7 +489,7 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
                 WowNotePut(note, noteCapacity, &noteLength, " [★ path TRUNCATED at MAX_PATH]");
         }
         if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & WOW_BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> WOW_BYTE_SHIFT); }
-        token = wowuser_sysres_mint_icon(icon);
+        token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
         WowNotePut(note, noteCapacity, &noteLength, " token 0x");
@@ -521,7 +521,7 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_SHELLEXECUTE: {
         WORD window16 = Wow32ArgWord(frame, WOWSHELL_SHELLEXECUTE_ARG_HWND);
         WORD showCommand = Wow32ArgWord(frame, WOWSHELL_SHELLEXECUTE_ARG_SHOW);
-        wowuser_win_t *window = wowuser_findwin(window16);
+        PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         CHAR operation[WOWSHELL_OPERATION_MAX], fileName[MAX_PATH], parameters[MAX_PATH], directory[MAX_PATH];
         INT  noteLength = 0, hasOperation, hasParameters, hasDirectory;
         DWORD result;
@@ -542,7 +542,7 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
                                     WowNoteQuoted(note, noteCapacity, &noteLength, parameters); }
         if (hasDirectory && directory[0])    { WowNotePut(note, noteCapacity, &noteLength, " in ");
                                     WowNoteQuoted(note, noteCapacity, &noteLength, directory); }
-        result = (DWORD)(ULONG_PTR)ShellExecuteA(window ? window->hwnd32 : NULL,
+        result = (DWORD)(ULONG_PTR)ShellExecuteA(window ? window->Window32 : NULL,
                                              (hasOperation && operation[0]) ? operation : NULL,
                                              fileName,
                                              (hasParameters && parameters[0]) ? parameters : NULL,
@@ -639,13 +639,13 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_SHELLABOUT: {
         WORD window16 = Wow32ArgWord(frame, WOWSHELL_SHELLABOUT_ARG_HWND);
         WORD iconToken = Wow32ArgWord(frame, WOWSHELL_SHELLABOUT_ARG_HICON);
-        wowuser_win_t *window = wowuser_findwin(window16);
+        PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         CHAR application[WOWSHELL_ABOUT_APP_MAX], otherText[WOWSHELL_ABOUT_OTHER_MAX];
         INT  noteLength = 0, bitCount = 0, result;
         /* The About box wants the full-size icon, so the size is the system's
            default -- the small-icon variant exists for the taskbar. */
-        HICON icon = wowuser_sysres_hicon(iconToken, &bitCount, 0, 0);
-        HWND  owner = window ? window->hwnd32 : NULL;
+        HICON icon = WowUserSystemResourceIcon(iconToken, &bitCount, 0, 0);
+        HWND  owner = window ? window->Window32 : NULL;
 
         Wow32ArgString(frame, WOWSHELL_SHELLABOUT_ARG_APP,   application,   sizeof application);
         Wow32ArgString(frame, WOWSHELL_SHELLABOUT_ARG_OTHER, otherText, sizeof otherText);
@@ -688,17 +688,17 @@ static INT WowShellCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_DRAGACCEPTFILES: {
         WORD window16 = Wow32ArgWord(frame, WOWSHELL_DRAGACCEPTFILES_ARG_HWND);
         WORD isAccept  = Wow32ArgWord(frame, WOWSHELL_DRAGACCEPTFILES_ARG_ACCEPT);
-        wowuser_win_t *window = wowuser_findwin(window16);
+        PWOWUSER_WINDOW window = WowUserFindWindow(window16);
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, isAccept ? "DragAcceptFiles ACCEPT 0x"
                                        : "DragAcceptFiles REFUSE 0x");
         WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
-        if (!window || !window->hwnd32) {
+        if (!window || !window->Window32) {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        DragAcceptFiles(window->hwnd32, isAccept ? TRUE : FALSE);
+        DragAcceptFiles(window->Window32, isAccept ? TRUE : FALSE);
         WowNotePut(note, noteCapacity, &noteLength, " -> the OS's (drops arrive as WM_DROPFILES, s92)");
         Wow32SetReturn(frame, 0);
         return 1;
