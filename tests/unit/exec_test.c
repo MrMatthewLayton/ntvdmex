@@ -97,7 +97,7 @@ static DWORD ExecTestMakeChild(UINT minimumAlloc, UINT maximumAlloc)
     return length;
 }
 
-int main(void)
+INT main(VOID)
 {
     UINT subsystem;
     WORD allocation; BOOL loadHigh; INT status;
