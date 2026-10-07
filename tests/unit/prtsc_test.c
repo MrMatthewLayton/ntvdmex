@@ -92,7 +92,7 @@ static INT PrintScreenTestRunJob(PBIOS_PRINT_SCREEN_JOB job, BYTE columns, BYTE 
     }
 }
 
-int main(void)
+INT main(VOID)
 {
     BIOS_PRINT_SCREEN_JOB job;
     INT result, row, column;
