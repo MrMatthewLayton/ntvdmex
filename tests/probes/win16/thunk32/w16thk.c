@@ -8,90 +8,126 @@
  * under stock (the real WOW32.DLL) and under NTVDMEX (bin\wowshim\WOW32.DLL)
  * without either loader having to resolve a static import against the other.
  *
- *   T_Cb(vpfn, p)    WOWCallback16(vpfn, p)                      -> its DX:AX
- *   T_CbEx(vpfn)     WOWCallback16Ex, PASCAL, three WORDs 1,2,3  -> its DX:AX
- *                    (the callee answers a*100+b*10+c: 123 = the order is right)
- *   T_Glob()         Alloc/Lock/write/LockSize/Unlock/Free, then AllocLock +
- *                    UnlockFree -- a bit per step that answered as documented
+ *   T_Cb(callback16, parameter)  WOWCallback16(callback16, parameter)  -> its DX:AX
+ *   T_CbEx(callback16)           WOWCallback16Ex, PASCAL, three WORDs 1,2,3  -> its DX:AX
+ *                                (the callee answers a*100+b*10+c: 123 = the order is right)
+ *   T_Glob()                     Alloc/Lock/write/LockSize/Unlock/Free, then AllocLock +
+ *                                UnlockFree -- a bit per step that answered as documented
  *
  * Build: tests/probes/win16/thunk32/build.sh  (i686-w64-mingw32, no CRT)
  */
 #include <windows.h>
 
-typedef BOOL  (WINAPI *cbex_t)(DWORD, DWORD, DWORD, PVOID, PDWORD);
-typedef DWORD (WINAPI *cb_t)(DWORD, DWORD);
-typedef WORD  (WINAPI *ga_t)(WORD, DWORD);
-typedef WORD  (WINAPI *gf_t)(WORD);
-typedef DWORD (WINAPI *gl_t)(WORD);
-typedef BOOL  (WINAPI *gu_t)(WORD);
-typedef DWORD (WINAPI *gal_t)(WORD, DWORD, WORD *);
-typedef WORD  (WINAPI *guf_t)(DWORD);
-typedef DWORD (WINAPI *gls_t)(WORD, PDWORD);
-typedef LPVOID (WINAPI *vp_t)(DWORD, DWORD, BOOL);
+typedef BOOL   (WINAPI *PWOW_CALLBACK16_EX)(DWORD, DWORD, DWORD, PVOID, PDWORD);
+typedef DWORD  (WINAPI *PWOW_CALLBACK16)(DWORD, DWORD);
+typedef WORD   (WINAPI *PWOW_GLOBAL_ALLOC16)(WORD, DWORD);
+typedef WORD   (WINAPI *PWOW_GLOBAL_FREE16)(WORD);
+typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK16)(WORD);
+typedef BOOL   (WINAPI *PWOW_GLOBAL_UNLOCK16)(WORD);
+typedef DWORD  (WINAPI *PWOW_GLOBAL_ALLOC_LOCK16)(WORD, DWORD, WORD *);
+typedef WORD   (WINAPI *PWOW_GLOBAL_UNLOCK_FREE16)(DWORD);
+typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK_SIZE16)(WORD, PDWORD);
+typedef LPVOID (WINAPI *PWOW_GET_VDM_POINTER)(DWORD, DWORD, BOOL);
 
-static FARPROC fn(const char *name)
+#define WCB16_PASCAL          0             /* wownt32.h */
+#define THUNK_NOT_FOUND       0xDEAD0001u   /* WOW32.DLL or the export is missing */
+#define THUNK_CALL_FAILED     0xDEAD0002u
+#define THUNK_ARGUMENT_COUNT  3
+#define THUNK_ARGUMENT_A      1             /* the callee answers a*100+b*10+c */
+#define THUNK_ARGUMENT_B      2
+#define THUNK_ARGUMENT_C      3
+#define THUNK_BLOCK_SIZE      100
+#define THUNK_FIXED_SIZE      32
+#define THUNK_MARK_LENGTH     2
+#define THUNK_MARK_FIRST      'O'
+#define THUNK_MARK_SECOND     'K'
+#define THUNK_NO_HANDLE       0xFFFF
+#define THUNK_LOW_BYTE        0xFF
+#define THUNK_SELECTOR_SHIFT  16            /* a 16:16 pointer's selector */
+/* T_Glob's answer: a bit per step that answered as documented... */
+#define THUNK_ALLOCATED       1
+#define THUNK_LOCKED          2
+#define THUNK_ZEROED          4
+#define THUNK_SIZED           8
+#define THUNK_WRITTEN         0x10
+#define THUNK_FREED           0x20
+#define THUNK_ALLOC_LOCKED    0x40
+#define THUNK_UNLOCK_FREED    0x80
+/* ...and, where one did not, what it said instead. */
+#define THUNK_FREE_CODE_SHIFT          8
+#define THUNK_UNLOCK_FREE_CODE_SHIFT   10
+#define THUNK_FREE_BYTE_SHIFT          16
+#define THUNK_UNLOCK_FREE_BYTE_SHIFT   24
+#define THUNK_ANSWER_ZERO      0
+#define THUNK_ANSWER_HANDLE    1
+#define THUNK_ANSWER_OTHER     2            /* GlobalFree16                       */
+#define THUNK_ANSWER_SELECTOR  2            /* GlobalUnlockFree16: the selector   */
+#define THUNK_ANSWER_UNKNOWN   3            /* GlobalUnlockFree16: anything else  */
+
+static FARPROC ThunkWow32Procedure(const char *name)
 {
-    HMODULE h = GetModuleHandleA("WOW32.DLL");
-    return h ? GetProcAddress(h, name) : NULL;
+    HMODULE wow32 = GetModuleHandleA("WOW32.DLL");
+    return wow32 ? GetProcAddress(wow32, name) : NULL;
 }
 
-__declspec(dllexport) DWORD WINAPI T_Cb(DWORD vpfn, DWORD p)
+__declspec(dllexport) DWORD WINAPI T_Cb(DWORD callback16, DWORD parameter)
 {
-    cb_t f = (cb_t)fn("WOWCallback16");
-    return f ? f(vpfn, p) : 0xDEAD0001u;
+    PWOW_CALLBACK16 callback = (PWOW_CALLBACK16)ThunkWow32Procedure("WOWCallback16");
+    return callback ? callback(callback16, parameter) : THUNK_NOT_FOUND;
 }
 
-__declspec(dllexport) DWORD WINAPI T_CbEx(DWORD vpfn)
+__declspec(dllexport) DWORD WINAPI T_CbEx(DWORD callback16)
 {
-    cbex_t f = (cbex_t)fn("WOWCallback16Ex");
-    WORD a[3];
-    DWORD r = 0;
+    PWOW_CALLBACK16_EX callback = (PWOW_CALLBACK16_EX)ThunkWow32Procedure("WOWCallback16Ex");
+    WORD arguments[THUNK_ARGUMENT_COUNT];
+    DWORD result = 0;
     /* PASCAL: the stack image, lowest address = the LAST argument */
-    a[0] = 3; a[1] = 2; a[2] = 1;
-    if (!f) return 0xDEAD0001u;
-    if (!f(vpfn, 0 /* WCB16_PASCAL */, sizeof a, a, &r)) return 0xDEAD0002u;
-    return r;
+    arguments[0] = THUNK_ARGUMENT_C; arguments[1] = THUNK_ARGUMENT_B; arguments[2] = THUNK_ARGUMENT_A;
+    if (!callback) return THUNK_NOT_FOUND;
+    if (!callback(callback16, WCB16_PASCAL, sizeof arguments, arguments, &result)) return THUNK_CALL_FAILED;
+    return result;
 }
 
 __declspec(dllexport) DWORD WINAPI T_Glob(void)
 {
-    ga_t  ga  = (ga_t)fn("WOWGlobalAlloc16");
-    gf_t  gf  = (gf_t)fn("WOWGlobalFree16");
-    gl_t  gl  = (gl_t)fn("WOWGlobalLock16");
-    gu_t  gu  = (gu_t)fn("WOWGlobalUnlock16");
-    gal_t gal = (gal_t)fn("WOWGlobalAllocLock16");
-    guf_t guf = (guf_t)fn("WOWGlobalUnlockFree16");
-    gls_t gls = (gls_t)fn("WOWGlobalLockSize16");
-    vp_t  vp  = (vp_t)fn("WOWGetVDMPointer");
-    DWORD bits = 0, p16, cb = 0;
-    WORD h, h2 = 0;
-    BYTE *p;
-    if (!ga || !gf || !gl || !gu || !gal || !guf || !gls || !vp) return 0xDEAD0001u;
-    h = ga(GMEM_MOVEABLE | GMEM_ZEROINIT, 100);
-    if (h) bits |= 1;
-    p16 = h ? gl(h) : 0;
-    if (p16) bits |= 2;
-    p = p16 ? (BYTE *)vp(p16, 100, TRUE) : NULL;
-    if (p && p[0] == 0 && p[99] == 0) bits |= 4;            /* ZEROINIT honoured */
-    if (p) { p[0] = 'O'; p[1] = 'K'; }
-    if (h && gls(h, &cb) == p16 && cb >= 100) bits |= 8;    /* same block, its size */
-    if (p && ((BYTE *)vp(gl(h), 2, TRUE))[1] == 'K') bits |= 0x10;
-    if (h) { gu(h); gu(h); gu(h); }                         /* three locks taken */
-    {   WORD r = h ? gf(h) : 0xFFFF;
-        if (r == 0) bits |= 0x20;                           /* GlobalFree: 0 = freed */
-        bits |= (DWORD)(r == 0 ? 0 : r == h ? 1 : 2) << 8;  /* what it said instead  */
-        if (r != 0 && r != h) bits |= (DWORD)(r & 0xFF) << 16;  /* ...and its low byte */
+    PWOW_GLOBAL_ALLOC16       globalAlloc      = (PWOW_GLOBAL_ALLOC16)ThunkWow32Procedure("WOWGlobalAlloc16");
+    PWOW_GLOBAL_FREE16        globalFree       = (PWOW_GLOBAL_FREE16)ThunkWow32Procedure("WOWGlobalFree16");
+    PWOW_GLOBAL_LOCK16        globalLock       = (PWOW_GLOBAL_LOCK16)ThunkWow32Procedure("WOWGlobalLock16");
+    PWOW_GLOBAL_UNLOCK16      globalUnlock     = (PWOW_GLOBAL_UNLOCK16)ThunkWow32Procedure("WOWGlobalUnlock16");
+    PWOW_GLOBAL_ALLOC_LOCK16  globalAllocLock  = (PWOW_GLOBAL_ALLOC_LOCK16)ThunkWow32Procedure("WOWGlobalAllocLock16");
+    PWOW_GLOBAL_UNLOCK_FREE16 globalUnlockFree = (PWOW_GLOBAL_UNLOCK_FREE16)ThunkWow32Procedure("WOWGlobalUnlockFree16");
+    PWOW_GLOBAL_LOCK_SIZE16   globalLockSize   = (PWOW_GLOBAL_LOCK_SIZE16)ThunkWow32Procedure("WOWGlobalLockSize16");
+    PWOW_GET_VDM_POINTER      getVdmPointer    = (PWOW_GET_VDM_POINTER)ThunkWow32Procedure("WOWGetVDMPointer");
+    DWORD answers = 0, pointer16, size = 0;
+    WORD handle, fixedHandle = 0;
+    BYTE *bytes;
+    if (!globalAlloc || !globalFree || !globalLock || !globalUnlock || !globalAllocLock || !globalUnlockFree || !globalLockSize || !getVdmPointer) return THUNK_NOT_FOUND;
+    handle = globalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, THUNK_BLOCK_SIZE);
+    if (handle) answers |= THUNK_ALLOCATED;
+    pointer16 = handle ? globalLock(handle) : 0;
+    if (pointer16) answers |= THUNK_LOCKED;
+    bytes = pointer16 ? (BYTE *)getVdmPointer(pointer16, THUNK_BLOCK_SIZE, TRUE) : NULL;
+    if (bytes && bytes[0] == 0 && bytes[THUNK_BLOCK_SIZE - 1] == 0) answers |= THUNK_ZEROED;            /* ZEROINIT honoured */
+    if (bytes) { bytes[0] = THUNK_MARK_FIRST; bytes[1] = THUNK_MARK_SECOND; }
+    if (handle && globalLockSize(handle, &size) == pointer16 && size >= THUNK_BLOCK_SIZE) answers |= THUNK_SIZED;    /* same block, its size */
+    if (bytes && ((BYTE *)getVdmPointer(globalLock(handle), THUNK_MARK_LENGTH, TRUE))[1] == THUNK_MARK_SECOND) answers |= THUNK_WRITTEN;
+    if (handle) { globalUnlock(handle); globalUnlock(handle); globalUnlock(handle); }   /* three locks taken */
+    {   WORD freeResult = handle ? globalFree(handle) : THUNK_NO_HANDLE;
+        if (freeResult == 0) answers |= THUNK_FREED;                                  /* GlobalFree: 0 = freed */
+        answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == handle ? THUNK_ANSWER_HANDLE : THUNK_ANSWER_OTHER) << THUNK_FREE_CODE_SHIFT;  /* what it said instead  */
+        if (freeResult != 0 && freeResult != handle) answers |= (DWORD)(freeResult & THUNK_LOW_BYTE) << THUNK_FREE_BYTE_SHIFT;  /* ...and its low byte */
     }
-    p16 = gal(GMEM_FIXED, 32, &h2);
-    if (p16 && h2) bits |= 0x40;
-    if (p16) {
-        WORD r = guf(p16);
-        if (r == 0) bits |= 0x80;
-        bits |= (DWORD)(r == 0 ? 0 : r == h2 ? 1 : r == (WORD)(p16 >> 16) ? 2 : 3) << 10;
-        if (r != 0 && r != h2 && r != (WORD)(p16 >> 16)) bits |= (DWORD)(r & 0xFF) << 24;
+    pointer16 = globalAllocLock(GMEM_FIXED, THUNK_FIXED_SIZE, &fixedHandle);
+    if (pointer16 && fixedHandle) answers |= THUNK_ALLOC_LOCKED;
+    if (pointer16) {
+        WORD freeResult = globalUnlockFree(pointer16);
+        if (freeResult == 0) answers |= THUNK_UNLOCK_FREED;
+        answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == fixedHandle ? THUNK_ANSWER_HANDLE
+                           : freeResult == (WORD)(pointer16 >> THUNK_SELECTOR_SHIFT) ? THUNK_ANSWER_SELECTOR : THUNK_ANSWER_UNKNOWN) << THUNK_UNLOCK_FREE_CODE_SHIFT;
+        if (freeResult != 0 && freeResult != fixedHandle && freeResult != (WORD)(pointer16 >> THUNK_SELECTOR_SHIFT)) answers |= (DWORD)(freeResult & THUNK_LOW_BYTE) << THUNK_UNLOCK_FREE_BYTE_SHIFT;
     }
-    return bits;     /* low byte: a bit per documented answer; bits 8-11: the free codes */
+    return answers;     /* low byte: a bit per documented answer; bits 8-11: the free codes */
 }
 
-BOOL WINAPI DllMainCRTStartup(HINSTANCE h, DWORD why, LPVOID r)
-{ (void)h; (void)why; (void)r; return TRUE; }
+BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved)
+{ (void)module; (void)reason; (void)reserved; return TRUE; }

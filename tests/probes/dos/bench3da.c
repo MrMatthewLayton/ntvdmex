@@ -3,7 +3,7 @@
  * ── WHY THIS EXISTS (session 67) ─────────────────────────────────────────────────
  *   0x3DA is the port a guest lives in. Lemmings reads it 73.8 MILLION times in a
  *   45-second run -- 1.6M/s -- and in its menu phase it does essentially NOTHING ELSE
- *   (measured poll-loop occupancy 101.5%). So work added inside status_in is
+ *   (measured poll-loop occupancy 101.5%). So work added inside VideoStatusIn is
  *   multiplied by a number nothing else in the system comes close to.
  *
  *   Session 67 added a correctness fix -- deriving the vertical geometry from the CRTC
@@ -13,7 +13,7 @@
  *
  *       1d1df10  16.0 ns     before
  *       12e3269  20.0 ns     +25%, and on the rig 77.0M polls/run -> 73.6M
- *       6e8fd70  16.1 ns     after caching it in crtc_vt_recompute() -- recovered
+ *       6e8fd70  16.1 ns     after caching it in VideoCrtcVerticalTimingRecompute() -- recovered
  *
  * ⚠⚠ THAT LAST NUMBER WAS 17.2 UNTIL I MEASURED IT HONESTLY. I first timed HEAD
  *   minutes after timing the baseline, with a test battery in between, and reported a
@@ -29,7 +29,7 @@
  *   benchmark aimed at this one port.
  *
  * ── USE ──────────────────────────────────────────────────────────────────────────
- *   Run it BY HAND, before and after any change to status_in. It is deliberately NOT
+ *   Run it BY HAND, before and after any change to VideoStatusIn. It is deliberately NOT
  *   in run.sh: a wall-clock measurement on a shared machine is not a pass/fail check,
  *   and a battery that fails because something else was compiling is a battery people
  *   learn to ignore.
@@ -42,44 +42,49 @@
  *   figure quoted in a commit message, because the host machine is not a constant.
  */
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include "vdd_bus.h"
 #include "vdd_video.h"
 
-static uint8_t g_vmem[VIDEO_APERTURE_SIZE];
-static uint8_t g_flat[0x100000];          /* guest memory: init writes the IVT's font vectors */
-static VIDEO_STATE vid;
-static uint64_t g_us = 0;
-static uint64_t clk(void) { return g_us; }
+#define BENCH_GUEST_MEMORY_SIZE 0x100000
+#define BENCH_POLLS             20000000L
+#define BENCH_VIDEO_INTERRUPT   0x10
+#define BENCH_MODE_0DH          0x000D      /* AH=00h set mode, AL=0Dh */
+#define BENCH_INPUT_STATUS_PORT 0x3DA
+#define BENCH_NS_PER_SECOND     1e9
+
+static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE];
+static BYTE g_GuestMemory[BENCH_GUEST_MEMORY_SIZE];   /* guest memory: init writes the IVT's font vectors */
+static VIDEO_STATE g_Video;
+static UINT64 g_TimeUs = 0;
+static UINT64 BenchClock(void) { return g_TimeUs; }
 
 int main(void)
 {
-    VDD_BUS bus; NTVDD_REGISTERS r; uint32_t v; long i;
-    const long N = 20000000;
-    struct timespec a, b; double ns;
+    VDD_BUS bus; NTVDD_REGISTERS registers; UINT32 value; long poll;
+    struct timespec start, end; double nanoseconds;
 
-    VddBusInitialize(&bus, g_flat);
-    memset(&vid, 0, sizeof vid);
-    vid.VideoMemory = g_vmem;
-    VddVideoInitialize(&bus, &vid);
+    VddBusInitialize(&bus, g_GuestMemory);
+    memset(&g_Video, 0, sizeof g_Video);
+    g_Video.VideoMemory = g_VideoMemory;
+    VddVideoInitialize(&bus, &g_Video);
 
     /* Mode 0Dh: Lemmings' gameplay mode, so the CRTC path under test is the one a
        real guest drives -- 449 total / 400 active / 406 blank start. */
-    memset(&r, 0, sizeof r); r.Eax = 0x000D;
-    VddBusDeliverInterrupt(&bus, 0x10, &r);
-    vid.TimeUs = clk;
+    memset(&registers, 0, sizeof registers); registers.Eax = BENCH_MODE_0DH;
+    VddBusDeliverInterrupt(&bus, BENCH_VIDEO_INTERRUPT, &registers);
+    g_Video.TimeUs = BenchClock;
 
     /* The clock advances a microsecond per poll, which is FASTER than a real guest
        manages (it sees no advance at all on 77% of polls) -- so this exercises the
        expensive path every time rather than flattering it. */
-    clock_gettime(CLOCK_MONOTONIC, &a);
-    for (i = 0; i < N; ++i) { g_us += 1; VddBusIo(&bus, 0x3DA, 1, 1, &v); }
-    clock_gettime(CLOCK_MONOTONIC, &b);
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (poll = 0; poll < BENCH_POLLS; ++poll) { g_TimeUs += 1; VddBusIo(&bus, BENCH_INPUT_STATUS_PORT, 1, 1, &value); }
+    clock_gettime(CLOCK_MONOTONIC, &end);
 
-    ns = ((double)(b.tv_sec - a.tv_sec) * 1e9 + (double)(b.tv_nsec - a.tv_nsec)) / (double)N;
-    printf("0x3DA poll: %.2f ns each  (%ld polls, mode 0Dh)\n", ns, N);
+    nanoseconds = ((double)(end.tv_sec - start.tv_sec) * BENCH_NS_PER_SECOND + (double)(end.tv_nsec - start.tv_nsec)) / (double)BENCH_POLLS;
+    printf("0x3DA poll: %.2f ns each  (%ld polls, mode 0Dh)\n", nanoseconds, BENCH_POLLS);
     printf("  reference: 16.0 ns at 1d1df10, 20.0 ns at 12e3269, 16.1 ns at 6e8fd70 (interleave the A/B!)\n");
     return 0;
 }

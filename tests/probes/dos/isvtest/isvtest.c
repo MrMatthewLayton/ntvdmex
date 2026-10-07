@@ -32,36 +32,48 @@ BOOL WINAPI VDDInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *, VDD_IO_HANDLERS *
 VOID WINAPI VDDDeInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *);
 PVOID WINAPI VdmMapFlat(USHORT, ULONG, ULONG);
 
-static HANDLE g_self;
-static BYTE   g_latch;
+#define VDM_V86 0                  /* vddsvc.h's VDM_MODE: a real-mode (V86) address */
 
-static VOID WINAPI io_inb(WORD port, BYTE *d) { *d = (BYTE)(0x5A ^ (port & 0xFF)); }
-static VOID WINAPI io_outb(WORD port, BYTE v) { if (port == 0x2F0) g_latch = v; }
+#define ISV_PORT_FIRST       0x2F0
+#define ISV_PORT_LAST        0x2F1
+#define ISV_PORT_RANGE_COUNT 1
+#define ISV_IN_PATTERN       0x5A   /* IN answers this XOR the port's low byte */
+#define ISV_LOW_BYTE         0xFF
+#define ISV_WORD_MASK        0xFFFF
+#define ISV_FUNCTION_COMPLEMENT 1   /* DX=1: CX = BX XOR FFFFh             */
+#define ISV_FUNCTION_LATCH      2   /* DX=2: CX = the last byte OUT        */
+#define ISV_FUNCTION_SUM        3   /* DX=3: CX = the sum of CX bytes at DS:SI */
+
+static HANDLE g_IsvModule;
+static BYTE   g_IsvLatch;
+
+static VOID WINAPI IsvPortInByte(WORD port, BYTE *data) { *data = (BYTE)(ISV_IN_PATTERN ^ (port & ISV_LOW_BYTE)); }
+static VOID WINAPI IsvPortOutByte(WORD port, BYTE value) { if (port == ISV_PORT_FIRST) g_IsvLatch = value; }
 
 __declspec(dllexport) VOID IsvInit(VOID)
 {
-    VDD_IO_PORTRANGE r = { 0x2F0, 0x2F1 };
-    VDD_IO_HANDLERS  h = { io_inb, NULL, NULL, NULL, io_outb, NULL, NULL, NULL };
-    setCF(VDDInstallIOHook(g_self, 1, &r, &h) ? 0 : 1);
+    VDD_IO_PORTRANGE range = { ISV_PORT_FIRST, ISV_PORT_LAST };
+    VDD_IO_HANDLERS  handlers = { IsvPortInByte, NULL, NULL, NULL, IsvPortOutByte, NULL, NULL, NULL };
+    setCF(VDDInstallIOHook(g_IsvModule, ISV_PORT_RANGE_COUNT, &range, &handlers) ? 0 : 1);
 }
 
 __declspec(dllexport) VOID IsvDispatch(VOID)
 {
     switch (getDX()) {
-    case 1: setCX((USHORT)(getBX() ^ 0xFFFF)); setCF(0); break;
-    case 2: setCX(g_latch); setCF(0); break;
-    case 3: {
-        BYTE *p = (BYTE *)VdmMapFlat(getDS(), getSI(), 0);
-        USHORT n = getCX(), sum = 0, i;
-        for (i = 0; p && i < n; ++i) sum = (USHORT)(sum + p[i]);
-        setCX(sum); setCF(p ? 0 : 1); break; }
+    case ISV_FUNCTION_COMPLEMENT: setCX((USHORT)(getBX() ^ ISV_WORD_MASK)); setCF(0); break;
+    case ISV_FUNCTION_LATCH: setCX(g_IsvLatch); setCF(0); break;
+    case ISV_FUNCTION_SUM: {
+        BYTE *bytes = (BYTE *)VdmMapFlat(getDS(), getSI(), VDM_V86);
+        USHORT count = getCX(), sum = 0, index;
+        for (index = 0; bytes && index < count; ++index) sum = (USHORT)(sum + bytes[index]);
+        setCX(sum); setCF(bytes ? 0 : 1); break; }
     default: setCF(1); break;
     }
 }
 
-BOOL WINAPI DllMainCRTStartup(HINSTANCE h, DWORD why, LPVOID r)
+BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved)
 {
-    (void)r;
-    if (why == DLL_PROCESS_ATTACH) g_self = h;
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) g_IsvModule = module;
     return TRUE;
 }
