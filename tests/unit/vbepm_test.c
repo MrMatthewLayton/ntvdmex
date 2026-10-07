@@ -16,28 +16,28 @@
 #include <stdint.h>
 #include "vdd_video.h"
 
-static uint8_t g_flat[0x200000];          /* guest memory: real-mode MB + room to copy into */
-static uint8_t g_vmem[VIDEO_APERTURE_SIZE];
-static VIDEO_STATE vid;
-static VDD_BUS bus;
-static uint64_t g_fake_us = 1000000;
-static uint64_t fake_clock(void) { return g_fake_us; }
+static BYTE g_GuestMemory[0x200000];          /* guest memory: real-mode MB + room to copy into */
+static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE];
+static VIDEO_STATE g_Video;
+static VDD_BUS g_Bus;
+static UINT64 g_FakeMicroseconds = 1000000;
+static UINT64 VbePmTestFakeClock(VOID) { return g_FakeMicroseconds; }
 
 /* The interpreter's host hooks: flat memory, and port I/O onto the VDD bus. Each IN
    advances the fake clock 50 us, so a retrace wait on 3DAh makes progress. */
-static uint32_t g_ins, g_outs;
-static uint8_t  Pm32HostRead8(uint32_t lin) { return lin < sizeof g_flat ? g_flat[lin] : 0xFF; }
-static void     Pm32HostWrite8(uint32_t lin, uint8_t v) { if (lin < sizeof g_flat) g_flat[lin] = v; }
-static int      Pm32HostCanAccess(uint32_t lin, int w, int wr) { (void)wr; return lin + (uint32_t)w <= sizeof g_flat; }
-static uint32_t Pm32HostIn(uint16_t port, int w)
-{ uint32_t v = 0; g_fake_us += 50; ++g_ins; VddBusIo(&bus, port, (uint8_t)w, 1, &v); return v; }
-static void     Pm32HostOut(uint16_t port, int w, uint32_t v)
-{ uint32_t x = v; ++g_outs; VddBusIo(&bus, port, (uint8_t)w, 0, &x); }
+static UINT32 g_InCount, g_OutCount;
+static BYTE  Pm32HostRead8(UINT32 linear) { return linear < sizeof g_GuestMemory ? g_GuestMemory[linear] : 0xFF; }
+static VOID     Pm32HostWrite8(UINT32 linear, BYTE value) { if (linear < sizeof g_GuestMemory) g_GuestMemory[linear] = value; }
+static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite) { (VOID)isWrite; return linear + (UINT32)width <= sizeof g_GuestMemory; }
+static UINT32 Pm32HostIn(WORD port, INT width)
+{ UINT32 value = 0; g_FakeMicroseconds += 50; ++g_InCount; VddBusIo(&g_Bus, port, (BYTE)width, 1, &value); return value; }
+static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
+{ UINT32 busValue = value; ++g_OutCount; VddBusIo(&g_Bus, port, (BYTE)width, 0, &busValue); }
 #include "../../src/host/pm32interp.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 #define COPY   0x150000u                   /* where the "client" copies the block       */
 #define STACK  0x180000u
@@ -46,144 +46,144 @@ static int total = 0, fails = 0;
 /* Near-call entry `off` of the copied block with these registers; run to the RET.
    1 = returned to RETADR with ESP balanced; 0 = the interpreter declined something
    (the code used an instruction outside its set) or it never returned. */
-static int call_pm(uint32_t off, uint32_t ebx, uint32_t ecx, uint32_t edx, uint32_t edi,
-                   uint32_t es_base, PM32_CPU *out)
+static INT VbePmTestCallPm(UINT32 offset, UINT32 ebx, UINT32 ecx, UINT32 edx, UINT32 edi,
+                   UINT32 esBase, PPM32_CPU output)
 {
-    PM32_CPU c; long n;
-    memset(&c, 0, sizeof c);
-    c.Registers[0] = 0xA5A5A5A5u; c.Registers[1] = ecx; c.Registers[2] = edx; c.Registers[3] = ebx;
-    c.Registers[5] = 0xB5B5B5B5u; c.Registers[6] = 0xC6C6C6C6u; c.Registers[7] = edi;
-    c.Registers[4] = STACK - 4; g_flat[STACK - 4] = (uint8_t)RETADR; g_flat[STACK - 3] = (uint8_t)(RETADR >> 8);
-    g_flat[STACK - 2] = (uint8_t)(RETADR >> 16); g_flat[STACK - 1] = (uint8_t)(RETADR >> 24);
-    c.Eip = COPY + off; c.Flags = 0x202;
-    c.SegmentBases[0] = es_base;                    /* ES; CS/SS/DS flat 0 */
-    for (n = 0; n < 2000000; ++n) {
-        if (c.Eip == RETADR) break;
-        if (!Pm32Step(&c)) { printf("    declined at +%#x (op %02X)\n", c.Eip - COPY, g_flat[c.Eip]); return 0; }
+    PM32_CPU cpu; long step;
+    memset(&cpu, 0, sizeof cpu);
+    cpu.Registers[0] = 0xA5A5A5A5u; cpu.Registers[1] = ecx; cpu.Registers[2] = edx; cpu.Registers[3] = ebx;
+    cpu.Registers[5] = 0xB5B5B5B5u; cpu.Registers[6] = 0xC6C6C6C6u; cpu.Registers[7] = edi;
+    cpu.Registers[4] = STACK - 4; g_GuestMemory[STACK - 4] = (BYTE)RETADR; g_GuestMemory[STACK - 3] = (BYTE)(RETADR >> 8);
+    g_GuestMemory[STACK - 2] = (BYTE)(RETADR >> 16); g_GuestMemory[STACK - 1] = (BYTE)(RETADR >> 24);
+    cpu.Eip = COPY + offset; cpu.Flags = 0x202;
+    cpu.SegmentBases[0] = esBase;                    /* ES; CS/SS/DS flat 0 */
+    for (step = 0; step < 2000000; ++step) {
+        if (cpu.Eip == RETADR) break;
+        if (!Pm32Step(&cpu)) { printf("    declined at +%#x (op %02X)\n", cpu.Eip - COPY, g_GuestMemory[cpu.Eip]); return 0; }
     }
-    if (out) *out = c;
-    return c.Eip == RETADR && c.Registers[4] == STACK;
+    if (output) *output = cpu;
+    return cpu.Eip == RETADR && cpu.Registers[4] == STACK;
 }
 
-static void int10(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx, NTVDD_REGISTERS *r)
+static VOID VbePmTestInt10(UINT32 eax, UINT32 ebx, UINT32 ecx, UINT32 edx, PNTVDD_REGISTERS registers)
 {
-    memset(r, 0, sizeof *r);
-    r->Eax = eax; r->Ebx = ebx; r->Ecx = ecx; r->Edx = edx;
-    VddBusDeliverInterrupt(&bus, 0x10, r);
+    memset(registers, 0, sizeof *registers);
+    registers->Eax = eax; registers->Ebx = ebx; registers->Ecx = ecx; registers->Edx = edx;
+    VddBusDeliverInterrupt(&g_Bus, 0x10, registers);
 }
 
-int main(void)
+INT main(VOID)
 {
-    NTVDD_DEVICE dev;
-    NTVDD_REGISTERS r;
-    PM32_CPU c;
-    uint32_t blk, len, i;
-    uint16_t win, start, pal, ports;
+    NTVDD_DEVICE device;
+    NTVDD_REGISTERS registers;
+    PM32_CPU cpu;
+    UINT32 block, length, index;
+    WORD windowEntry, startEntry, paletteEntry, portsOffset;
     printf("== VBE 4F0Ah protected-mode interface battery (#53) ==\n");
-    memset(&vid, 0, sizeof vid);
-    vid.VideoMemory = g_vmem;
-    dev = VddVideoDevice(&vid);
-    VddBusInitialize(&bus, g_flat);
-    VddBusSetSinks(&bus, 0, 0, 0, 0);
-    CHECK(VddBusAdd(&bus, &dev) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
-    vid.TimeUs = fake_clock;
+    memset(&g_Video, 0, sizeof g_Video);
+    g_Video.VideoMemory = g_VideoMemory;
+    device = VddVideoDevice(&g_Video);
+    VddBusInitialize(&g_Bus, g_GuestMemory);
+    VddBusSetSinks(&g_Bus, 0, 0, 0, 0);
+    CHECK(VddBusAdd(&g_Bus, &device) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
+    g_Video.TimeUs = VbePmTestFakeClock;
 
     /* ---- 4F0Ah BL=00h: the table ---- */
-    int10(0x4F0A, 0x0000, 0xC1C1, 0, &r);
-    CHECK((r.Eax & 0xFFFF) == 0x004F, "4F0Ah BL=00h: AX=004Fh (was 0100h, 'no such function')");
-    blk = ((uint32_t)r.Es << 4) + (r.Edi & 0xFFFF);
-    len = r.Ecx & 0xFFFF;
-    CHECK(r.Es == VDD_VBEPM_SEG && (r.Edi & 0xFFFF) == 0 && len >= 16 && len < 0x100,
+    VbePmTestInt10(0x4F0A, 0x0000, 0xC1C1, 0, &registers);
+    CHECK((registers.Eax & 0xFFFF) == 0x004F, "4F0Ah BL=00h: AX=004Fh (was 0100h, 'no such function')");
+    block = ((UINT32)registers.Es << 4) + (registers.Edi & 0xFFFF);
+    length = registers.Ecx & 0xFFFF;
+    CHECK(registers.Es == VDD_VBEPM_SEG && (registers.Edi & 0xFFFF) == 0 && length >= 16 && length < 0x100,
           "4F0Ah: ES:DI = B260:0000, CX = the block's length (code included)");
-    win   = (uint16_t)(g_flat[blk + 0] | (g_flat[blk + 1] << 8));
-    start = (uint16_t)(g_flat[blk + 2] | (g_flat[blk + 3] << 8));
-    pal   = (uint16_t)(g_flat[blk + 4] | (g_flat[blk + 5] << 8));
-    ports = (uint16_t)(g_flat[blk + 6] | (g_flat[blk + 7] << 8));
-    CHECK(win >= 8 && start >= 8 && pal >= 8 && win < len && start < len && pal < len,
+    windowEntry   = (WORD)(g_GuestMemory[block + 0] | (g_GuestMemory[block + 1] << 8));
+    startEntry = (WORD)(g_GuestMemory[block + 2] | (g_GuestMemory[block + 3] << 8));
+    paletteEntry   = (WORD)(g_GuestMemory[block + 4] | (g_GuestMemory[block + 5] << 8));
+    portsOffset = (WORD)(g_GuestMemory[block + 6] | (g_GuestMemory[block + 7] << 8));
+    CHECK(windowEntry >= 8 && startEntry >= 8 && paletteEntry >= 8 && windowEntry < length && startEntry < length && paletteEntry < length,
           "table: the three entry offsets lie inside the block, past the 4-word header");
     {   /* the port list: words, FFFFh-terminated, then an empty memory list */
-        int has1ce = 0, has1cf = 0, has3c9 = 0, has3da = 0, n = 0;
-        uint32_t p = blk + ports;
-        for (;;) { uint16_t w = (uint16_t)(g_flat[p] | (g_flat[p + 1] << 8)); p += 2;
-                   if (w == 0xFFFF || ++n > 16) break;
-                   has1ce |= w == 0x1CE; has1cf |= w == 0x1CF; has3c9 |= w == 0x3C9; has3da |= w == 0x3DA; }
-        CHECK(has1ce && has1cf && has3c9 && has3da && g_flat[p] == 0xFF && g_flat[p + 1] == 0xFF,
+        INT has1ce = 0, has1cf = 0, has3c9 = 0, has3da = 0, count = 0;
+        UINT32 listAddress = block + portsOffset;
+        for (;;) { WORD port = (WORD)(g_GuestMemory[listAddress] | (g_GuestMemory[listAddress + 1] << 8)); listAddress += 2;
+                   if (port == 0xFFFF || ++count > 16) break;
+                   has1ce |= port == 0x1CE; has1cf |= port == 0x1CF; has3c9 |= port == 0x3C9; has3da |= port == 0x3DA; }
+        CHECK(has1ce && has1cf && has3c9 && has3da && g_GuestMemory[listAddress] == 0xFF && g_GuestMemory[listAddress + 1] == 0xFF,
               "table +6: every port the code touches, FFFFh, then an empty memory list (FFFFh)");
     }
-    int10(0x4F0A, 0x0001, 0, 0, &r);
-    CHECK((r.Eax & 0xFFFF) == 0x014F, "4F0Ah BL=01h: 014Fh (the subfunction does not exist)");
+    VbePmTestInt10(0x4F0A, 0x0001, 0, 0, &registers);
+    CHECK((registers.Eax & 0xFFFF) == 0x014F, "4F0Ah BL=01h: 014Fh (the subfunction does not exist)");
 
     /* ---- the client copies the block somewhere else entirely ---- */
-    memcpy(g_flat + COPY, g_flat + blk, len);
-    memset(g_flat + blk, 0xCC, len);          /* and the original is gone: nothing may point back */
+    memcpy(g_GuestMemory + COPY, g_GuestMemory + block, length);
+    memset(g_GuestMemory + block, 0xCC, length);          /* and the original is gone: nothing may point back */
 
     /* ---- outside a VESA mode the ports refuse and change nothing ---- */
-    {   uint32_t rej = vid.VbePmRejected;
-        CHECK(call_pm(win, 0x0000, 0, 3, 0, 0, NULL) && vid.VbePmRejected == rej + 1 && vid.VesaBank == 0,
+    {   UINT32 rejectedBefore = g_Video.VbePmRejected;
+        CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 3, 0, 0, NULL) && g_Video.VbePmRejected == rejectedBefore + 1 && g_Video.VesaBank == 0,
               "SetWindow in mode 3: returns, refused, counted (vbe_pm_rej)"); }
 
     /* ---- 640x480x8 banked ---- */
-    int10(0x4F02, 0x0101, 0, 0, &r);
-    CHECK((r.Eax & 0xFFFF) == 0x004F && vid.IsVesa && !vid.IsVesaLfb, "4F02h 0101h: banked 640x480x8");
-    memset(g_vmem, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ...                */
-    CHECK(call_pm(win, 0x0000, 0, 2, 0, 0, &c), "SetWindow (copied, near-called) returns to the caller, ESP balanced");
-    CHECK(vid.VesaBank == 2 && vid.VbePmBankCount == 1, "SetWindow DX=2: window A is bank 2");
-    CHECK(vid.VesaVram[0] == 0x11 && vid.VesaVram[VIDEO_VESA_WINDOW - 1] == 0x11,
+    VbePmTestInt10(0x4F02, 0x0101, 0, 0, &registers);
+    CHECK((registers.Eax & 0xFFFF) == 0x004F && g_Video.IsVesa && !g_Video.IsVesaLfb, "4F02h 0101h: banked 640x480x8");
+    memset(g_VideoMemory, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ...                */
+    CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 2, 0, 0, &cpu), "SetWindow (copied, near-called) returns to the caller, ESP balanced");
+    CHECK(g_Video.VesaBank == 2 && g_Video.VbePmBankCount == 1, "SetWindow DX=2: window A is bank 2");
+    CHECK(g_Video.VesaVram[0] == 0x11 && g_Video.VesaVram[VIDEO_VESA_WINDOW - 1] == 0x11,
           "SetWindow: the old window was flushed into bank 0, as 4F05h does");
-    CHECK(c.Registers[0] == 0xA5A5A5A5u && c.Registers[2] == 2 && c.Registers[3] == 0 && c.Registers[5] == 0xB5B5B5B5u && c.Registers[6] == 0xC6C6C6C6u,
+    CHECK(cpu.Registers[0] == 0xA5A5A5A5u && cpu.Registers[2] == 2 && cpu.Registers[3] == 0 && cpu.Registers[5] == 0xB5B5B5B5u && cpu.Registers[6] == 0xC6C6C6C6u,
           "SetWindow: EAX/EDX/EBX/EBP/ESI preserved");
-    int10(0x4F05, 0x0100, 0, 0, &r);
-    CHECK((r.Edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
-    CHECK(call_pm(win, 0x0001, 0, 1, 0, 0, NULL) && vid.VesaBank == 2,
+    VbePmTestInt10(0x4F05, 0x0100, 0, 0, &registers);
+    CHECK((registers.Edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
+    CHECK(VbePmTestCallPm(windowEntry, 0x0001, 0, 1, 0, 0, NULL) && g_Video.VesaBank == 2,
           "SetWindow BL=01h (window B, which does not exist): no change");
-    CHECK(call_pm(win, 0x0000, 0, 0x7FFF, 0, 0, NULL) && vid.VesaBank == 2,
+    CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 0x7FFF, 0, 0, NULL) && g_Video.VesaBank == 2,
           "SetWindow past the end of VRAM: refused, bank unchanged");
-    CHECK(call_pm(win, 0x0000, 0, 0, 0, 0, NULL) && vid.VesaBank == 0 && g_vmem[0] == 0x11,
+    CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 0, 0, 0, NULL) && g_Video.VesaBank == 0 && g_VideoMemory[0] == 0x11,
           "SetWindow back to 0: bank 0's bytes come back into the window");
 
     /* ---- SetDisplayStart: CX/DX = start in DWORDs; 4F07h BL=01h reads it back ---- */
-    {   uint32_t org = 640u * 100u + 64u;     /* (64,100) */
-        CHECK(call_pm(start, 0x0000, (org / 4) & 0xFFFF, (org / 4) >> 16, 0, 0, NULL)
-              && vid.VesaOrigin == org && vid.VesaOriginLive == org && vid.VbePmStartCount == 1,
+    {   UINT32 origin = 640u * 100u + 64u;     /* (64,100) */
+        CHECK(VbePmTestCallPm(startEntry, 0x0000, (origin / 4) & 0xFFFF, (origin / 4) >> 16, 0, 0, NULL)
+              && g_Video.VesaOrigin == origin && g_Video.VesaOriginLive == origin && g_Video.VbePmStartCount == 1,
               "SetDisplayStart BL=00h: start = DX:CX * 4, shown at once");
-        int10(0x4F07, 0x0001, 0, 0, &r);
-        CHECK((r.Ecx & 0xFFFF) == 64 && (r.Edx & 0xFFFF) == 100, "4F07h BL=01h agrees: x=64, y=100");
+        VbePmTestInt10(0x4F07, 0x0001, 0, 0, &registers);
+        CHECK((registers.Ecx & 0xFFFF) == 64 && (registers.Edx & 0xFFFF) == 100, "4F07h BL=01h agrees: x=64, y=100");
     }
-    {   uint32_t org = 640u * 480u, ins = g_ins;          /* page 2 */
-        CHECK(call_pm(start, 0x0080, (org / 4) & 0xFFFF, (org / 4) >> 16, 0, 0, NULL)
-              && vid.VesaOrigin == org && g_ins > ins + 2,
+    {   UINT32 origin = 640u * 480u, insBefore = g_InCount;          /* page 2 */
+        CHECK(VbePmTestCallPm(startEntry, 0x0080, (origin / 4) & 0xFFFF, (origin / 4) >> 16, 0, 0, NULL)
+              && g_Video.VesaOrigin == origin && g_InCount > insBefore + 2,
               "SetDisplayStart BL=80h: waits on 3DAh for the retrace, then sets it");
     }
-    {   uint32_t org = vid.VesaOrigin, big = 0x3FFFFFu;     /* far past 4 MB */
-        CHECK(call_pm(start, 0x0000, big & 0xFFFF, big >> 16, 0, 0, NULL) && vid.VesaOrigin == org,
+    {   UINT32 origin = g_Video.VesaOrigin, farOrigin = 0x3FFFFFu;     /* far past 4 MB */
+        CHECK(VbePmTestCallPm(startEntry, 0x0000, farOrigin & 0xFFFF, farOrigin >> 16, 0, 0, NULL) && g_Video.VesaOrigin == origin,
               "SetDisplayStart past VRAM: refused, start unchanged");
     }
 
     /* ---- SetPalette: ES:EDI = B,G,R,pad entries; 4F09h BL=01h reads them back ---- */
-    {   static const uint8_t ent[3 * 4] = { 0x01, 0x02, 0x03, 0, 0x3F, 0x00, 0x20, 0, 0x10, 0x11, 0x12, 0 };
-        uint32_t data = 0x160000u, back = 0x9000u;      /* ES base 0x100000 + EDI 0x60000 */
-        memcpy(g_flat + data, ent, sizeof ent);
-        CHECK(call_pm(pal, 0x0000, 3, 0x40, 0x60000, 0x100000, &c), "SetPalette (ES:EDI, 3 entries at 40h) returns");
-        CHECK(c.Registers[1] == 3 && c.Registers[2] == 0x40 && c.Registers[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
-        memset(&r, 0, sizeof r);
-        r.Eax = 0x4F09; r.Ebx = 0x0001; r.Ecx = 3; r.Edx = 0x40; r.Es = (uint16_t)(back >> 4); r.Edi = 0;
-        VddBusDeliverInterrupt(&bus, 0x10, &r);
-        CHECK((r.Eax & 0xFFFF) == 0x004F && memcmp(g_flat + back, ent, sizeof ent) == 0,
+    {   static const BYTE entries[3 * 4] = { 0x01, 0x02, 0x03, 0, 0x3F, 0x00, 0x20, 0, 0x10, 0x11, 0x12, 0 };
+        UINT32 dataAddress = 0x160000u, readBackAddress = 0x9000u;      /* ES base 0x100000 + EDI 0x60000 */
+        memcpy(g_GuestMemory + dataAddress, entries, sizeof entries);
+        CHECK(VbePmTestCallPm(paletteEntry, 0x0000, 3, 0x40, 0x60000, 0x100000, &cpu), "SetPalette (ES:EDI, 3 entries at 40h) returns");
+        CHECK(cpu.Registers[1] == 3 && cpu.Registers[2] == 0x40 && cpu.Registers[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
+        memset(&registers, 0, sizeof registers);
+        registers.Eax = 0x4F09; registers.Ebx = 0x0001; registers.Ecx = 3; registers.Edx = 0x40; registers.Es = (WORD)(readBackAddress >> 4); registers.Edi = 0;
+        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
+        CHECK((registers.Eax & 0xFFFF) == 0x004F && memcmp(g_GuestMemory + readBackAddress, entries, sizeof entries) == 0,
               "4F09h BL=01h reads back exactly what SetPalette wrote (B,G,R, 6-bit)");
-        CHECK(call_pm(pal, 0x0080, 1, 0x41, 0x60004, 0x100000, NULL), "SetPalette BL=80h (retrace wait) returns");
+        CHECK(VbePmTestCallPm(paletteEntry, 0x0080, 1, 0x41, 0x60004, 0x100000, NULL), "SetPalette BL=80h (retrace wait) returns");
     }
 
     /* ---- the LFB form of the mode has no window to switch ---- */
-    int10(0x4F02, 0x4101, 0, 0, &r);
-    {   uint32_t rej = vid.VbePmRejected;
-        CHECK(call_pm(win, 0x0000, 0, 1, 0, 0, NULL) && vid.VbePmRejected == rej + 1,
+    VbePmTestInt10(0x4F02, 0x4101, 0, 0, &registers);
+    {   UINT32 rejectedBefore = g_Video.VbePmRejected;
+        CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 1, 0, 0, NULL) && g_Video.VbePmRejected == rejectedBefore + 1,
               "SetWindow in an LFB mode: refused (4F05h answers 03h there)"); }
 
     /* ---- the block in guest memory is restored by every 4F0Ah call ---- */
-    int10(0x4F0A, 0x0000, 0, 0, &r);
-    for (i = 0; i < len; ++i) if (g_flat[blk + i] != g_flat[COPY + i]) break;
-    CHECK(i == len, "4F0Ah again: the block at B260:0000 is rewritten, byte for byte");
+    VbePmTestInt10(0x4F0A, 0x0000, 0, 0, &registers);
+    for (index = 0; index < length; ++index) if (g_GuestMemory[block + index] != g_GuestMemory[COPY + index]) break;
+    CHECK(index == length, "4F0Ah again: the block at B260:0000 is rewritten, byte for byte");
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
