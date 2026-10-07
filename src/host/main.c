@@ -17729,11 +17729,11 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              click around in, and the only record went to THIS log rather than the
              main one, so `ntvdmhost.log` just stopped.
            ⇒ The host knows the difference and says so; sampling never could.
-             See g_wm_inwait in wowmsg.h. The streak is RESET rather than the
+             See g_WowMsgInWait in wowmsg.h. The streak is RESET rather than the
              sample skipped, so a guest that wakes, wedges and is not in the wait
              still gets the full 150 s from the moment it stopped advancing. */
         if (g_pause_want && frozen) frozen = 0;   /* #219: paused, not wedged */
-        if (g_wm_inwait && frozen) {
+        if (g_WowMsgInWait && frozen) {
             if (!wd_said_wait) {
                 wd_said_wait = 1;
                 q = zput(q, "  wd: the guest is PARKED IN Win16 GetMessage -- waiting"
@@ -20628,7 +20628,7 @@ static int ws_runnable(WORD cur, int depth)
         if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task != cur
             && ((g_ws_slots[i].IsRunnable && g_ws_slots[i].CallbackDepth == depth)
                 || (g_ws_slots[i].IsFresh && depth == 0)
-                || (g_ws_slots[i].IsWaitingForMessage && wowmsg_count_for(g_ws_slots[i].Task)
+                || (g_ws_slots[i].IsWaitingForMessage && WowMsgCountFor(g_ws_slots[i].Task)
                     && (g_ws_slots[i].CallbackDepth == g_ws_slots[i].BaseDepth
                         || g_ws_slots[i].CallbackDepth == depth)))) return i;
     return -1;
@@ -20736,7 +20736,7 @@ static void wowsched_setcur(WORD task)
 }
 
 /* ── s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
-     g_wc_retarget in wowcall.h. The window's owner (wowuser.h records its
+     g_WowCallRetarget in wowcall.h. The window's owner (wowuser.h records its
      creator) must not be the running task, and must be somewhere the host knows
      its free stack: parked in a run-queue slot, or blocked in a host callback
      frame it entered (the newest such frame's saved SP; everything below is
@@ -20753,8 +20753,8 @@ static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
     if (!owner || !cur || cur == 0xFFFF || owner == cur) return 0;
     for (i = 0; i < WOWSCHED_MAX; ++i)
         if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task == owner) c[n++] = g_ws_slots[i].Context;
-    for (i = g_wc_depth - 2; i >= 0; --i)         /* the newest frame is the one being built */
-        if (g_wc[i].etask == owner) c[n++] = g_wc[i].saved.Context;
+    for (i = g_WowCallDepth - 2; i >= 0; --i)         /* the newest frame is the one being built */
+        if (g_WowCallFrames[i].EnteredTask == owner) c[n++] = g_WowCallFrames[i].Saved.Context;
     /* ⚠ THE DEEPEST ONE. Calls that bounce between two tasks leave the owner's
          stack in use below its parked SP; the lowest SP known is the free edge. */
     for (i = 0; i < n; ++i) {
@@ -20781,7 +20781,7 @@ static void ws_untarget(WORD prev) { wowsched_setcur(prev); }
 static int ws_intertask_live(void)
 {
     int i;
-    for (i = 0; i < g_wc_depth; ++i) if (g_wc[i].prevtask) return 1;
+    for (i = 0; i < g_WowCallDepth; ++i) if (g_WowCallFrames[i].PreviousTask) return 1;
     return 0;
 }
 
@@ -22110,7 +22110,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
         if (bb[0] == 0xC4 && bb[1] == 0xC4 && g_wow_cbk_lin && blin == g_wow_cbk_lin) {
             DWORD res = (VDM_REG(tib, VTIB_EAX) & 0xFFFF)
                       | ((VDM_REG(tib, VTIB_EDX) & 0xFFFF) << 16);
-            wowcall_frame_t *fr = wowcall_leave(tib, res);
+            WOWCALL_FRAME *fr = WowCallLeave(tib, res);
             int  act = WOWCALL_ACT_NONE;   /* copied out of fr -- see below */
             WORD actarg = 0;
             p = zput(p, "WOWCALL: <- returned 0x"); p = zhex(p, res);
@@ -22123,11 +22123,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 return -1;
             }
             /* ── ⚠⚠ COPY THE ACTION OUT BEFORE ACTING ON IT. ──────────────────
-                 `wowcall_leave` POPS the frame and hands back a pointer to the
+                 `WowCallLeave` POPS the frame and hands back a pointer to the
                  slot it just vacated. An action that issues a follow-up call --
                  which is the whole mechanism the EDIT chain is built on --
                  pushes a new frame into THAT SAME SLOT, so setting the new
-                 frame's action through `g_wc[g_wc_depth - 1]` also rewrites
+                 frame's action through `g_WowCallFrames[g_WowCallDepth - 1]` also rewrites
                  `fr->action` underneath us. Measured: the LocalLock step armed
                  EDITFILL and the very next `if` in this function fired
                  immediately, with `res` still holding LocalAlloc's handle rather
@@ -22136,19 +22136,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  the block was left in a state LocalReAlloc then refused, which
                  Notepad reports as "the file is too large for Notepad".
                ⇒ The dispatch below reads these locals, never the frame. */
-            act    = fr->action;
-            actarg = fr->actarg;
+            act    = fr->Action;
+            actarg = fr->ActionArgument;
             /* s88: DefDlgProc's DLGPROC answered (see WOWUSER_DEFDLGPROC). FALSE means
                "not handled": the dialog manager's default runs and ITS value is what
-               the DefDlgProc caller gets. The frame's slot index is g_wc_depth now
+               the DefDlgProc caller gets. The frame's slot index is g_WowCallDepth now
                that it is popped, which is where the service parked the parameters. */
             if (act == WOWCALL_ACT_DLGDEFAULT) {
-                DWORD hole = fr->retlin; WORD dmsg = fr->msg;
+                DWORD hole = fr->ReturnLinear; WORD dmsg = fr->Message;
                 if ((WORD)res == 0) {
                     char dn[200]; int dk = 0;
                     LRESULT dr = wowuser_dlg_default(wowuser_findwin(actarg), actarg, dmsg,
-                                                     g_wu_dlgdef[g_wc_depth].wp,
-                                                     g_wu_dlgdef[g_wc_depth].lp,
+                                                     g_wu_dlgdef[g_WowCallDepth].wp,
+                                                     g_wu_dlgdef[g_WowCallDepth].lp,
                                                      dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
                     if (hole) {
@@ -22164,24 +22164,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 act = WOWCALL_ACT_NONE;
             }
-            p = zput(p, " from 0x");  p = zhex(p, fr->proc >> 16);
-            p = zput(p, ":0x");       p = zhex(p, fr->proc & 0xFFFF);
-            p = zput(p, " (hwnd=0x"); p = zhex(p, fr->hwnd);
-            p = zput(p, " msg=0x");   p = zhex(p, fr->msg);
-            p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_wc_depth);
+            p = zput(p, " from 0x");  p = zhex(p, fr->Procedure >> 16);
+            p = zput(p, ":0x");       p = zhex(p, fr->Procedure & 0xFFFF);
+            p = zput(p, " (hwnd=0x"); p = zhex(p, fr->Window);
+            p = zput(p, " msg=0x");   p = zhex(p, fr->Message);
+            p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_WowCallDepth);
             p = zput(p, ")");
-            if (fr->retmode == WOWCALL_RET_RESULT
-                || fr->retmode == WOWCALL_RET_RESULTW) {
+            if (fr->ReturnMode == WOWCALL_RET_RESULT
+                || fr->ReturnMode == WOWCALL_RET_RESULTW) {
                 p = zput(p, " -- ★ the caller returns 0x");
-                p = zhex(p, fr->written);
+                p = zhex(p, fr->Written);
                 /* ⚠ Say when DX was DISCARDED. A WORD-returning Win16 function
                      leaves DX holding whatever it happened to hold, and printing
                      the raw DX:AX made LocalAlloc's handle read as 0x00422502 --
                      a 32-bit number that was not a value. */
-                if (fr->retmode == WOWCALL_RET_RESULTW && (res >> 16))
+                if (fr->ReturnMode == WOWCALL_RET_RESULTW && (res >> 16))
                     p = zput(p, " (WORD result; DX was litter and is discarded)");
             }
-            else if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
+            else if (fr->ReturnLinear && fr->Message == WM_CREATE16 && (WORD)res == 0xFFFF)
                 p = zput(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
             /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
@@ -22228,7 +22228,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  uarg  = ew->hmem;
                     if (rsel2 && ssb4
-                        && wowcall_enter(tib, ssb4, rsel2,
+                        && WowCallEnter(tib, ssb4, rsel2,
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
@@ -22257,15 +22257,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  larg  = ew->hmem;
                     if (rsel2 && ssb4
-                        && wowcall_enter(tib, ssb4, rsel2,
+                        && WowCallEnter(tib, ssb4, rsel2,
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALLOCK_OFF,
                                          ew->hinst, &larg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
                                          NULL, 0, -1, 0)) {
-                        if (g_wc_depth > 0) {
-                            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_EDITFILL;
-                            g_wc[g_wc_depth - 1].actarg = ew->hwnd;
+                        if (g_WowCallDepth > 0) {
+                            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
+                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = ew->hwnd;
                         }
                         p = zput(p, "; LocalLock in flight, then fill");
                     } else {
@@ -22311,7 +22311,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  uarg  = ew->hmem;
                     if (rsel2 && ssb4
-                        && wowcall_enter(tib, ssb4, rsel2,
+                        && WowCallEnter(tib, ssb4, rsel2,
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
@@ -22383,11 +22383,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     DWORD proc = ((DWORD)g_wu_krnl_seg << 16)
                                | (act == WOWCALL_ACT_CLIPLOCK ? KRNL_GLOBALLOCK_OFF
                                                               : KRNL_GLOBALUNLOCK_OFF);
-                    if (wowcall_enter(tib, cssb, crsel, proc, cds, &a1, 1, 0,
+                    if (WowCallEnter(tib, cssb, crsel, proc, cds, &a1, 1, 0,
                                       WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, 0)) {
-                        if (act == WOWCALL_ACT_CLIPLOCK && g_wc_depth > 0) {
-                            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_CLIPFILL;
-                            g_wc[g_wc_depth - 1].actarg = harg;
+                        if (act == WOWCALL_ACT_CLIPLOCK && g_WowCallDepth > 0) {
+                            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_CLIPFILL;
+                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = harg;
                         }
                         p = zput(p, act == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
                                                                 : "; GlobalUnlock in flight");
@@ -22402,13 +22402,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  holding open and let the guest resume past a BOP it entered a
                  long time ago. Either way the context to run next is already in
                  the TIB and `return 1` runs it -- see src/wow/wowdlg.h.
-               ⚠ THIS RUNS AFTER wowcall_leave HAS RESTORED THE CONTEXT, which
+               ⚠ THIS RUNS AFTER WowCallLeave HAS RESTORED THE CONTEXT, which
                  is what makes the loop cost nothing: the restored context IS the
                  parked DialogBox caller, so re-entering the dialog procedure
                  simply parks it again at the same SS:SP. Nothing accumulates. */
             /* ── ★ THE NEXT ITEM. (session 57) The callback has answered; 0
                  means stop, anything else means carry on. Same restored-context
-                 property as the modal loop: what wowcall_leave put back IS the
+                 property as the modal loop: what WowCallLeave put back IS the
                  parked caller, so the next call re-parks it at the same SS:SP
                  and nothing accumulates. See src/wow/wowenum.h. */
             if (act == WOWCALL_ACT_ENUMNEXT) {
@@ -22432,21 +22432,21 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                    TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
                    the dialog, so the Task List showed the desktop behind it
                    (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
-                if (g_wd_dlgcall[g_wc_depth] && (WORD)res == 0
-                    && (g_wd_dlgmsg[g_wc_depth] == 0x0010
-                        || g_wd_dlgmsg[g_wc_depth] == 0x000F
-                        || g_wd_dlgmsg[g_wc_depth] == 0x0014)) {
+                if (g_wd_dlgcall[g_WowCallDepth] && (WORD)res == 0
+                    && (g_wd_dlgmsg[g_WowCallDepth] == 0x0010
+                        || g_wd_dlgmsg[g_WowCallDepth] == 0x000F
+                        || g_wd_dlgmsg[g_WowCallDepth] == 0x0014)) {
                     char dn[200]; int dk = 0;
                     wowuser_dlg_default(wowuser_findwin(actarg), actarg,
-                                        g_wd_dlgmsg[g_wc_depth],
-                                        g_wu_dlgdef[g_wc_depth].wp,
-                                        g_wu_dlgdef[g_wc_depth].lp,
+                                        g_wd_dlgmsg[g_WowCallDepth],
+                                        g_wu_dlgdef[g_WowCallDepth].wp,
+                                        g_wu_dlgdef[g_WowCallDepth].lp,
                                         dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
                     p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
                     p = zput(p, dn);
                 }
-                g_wd_dlgcall[g_wc_depth] = 0;
+                g_wd_dlgcall[g_WowCallDepth] = 0;
                 mnote[0] = 0;
                 p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -22969,10 +22969,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      unconditionally -- it costs nothing and the fault hook, which
                      runs where DS is anybody's, depends on having it. */
                 g_wow_dgsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                if (g_wowsched_on && !g_wc_retarget) {     /* s92 #306: inter-task calls */
-                    g_wc_curtask = wowsched_curtask;
-                    g_wc_retarget = ws_retarget;
-                    g_wc_untarget = ws_untarget;
+                if (g_wowsched_on && !g_WowCallRetarget) {     /* s92 #306: inter-task calls */
+                    g_WowCallCurrentTask = wowsched_curtask;
+                    g_WowCallRetarget = ws_retarget;
+                    g_WowCallUntarget = ws_untarget;
                 }
                 /* ── (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
                      before the new task has run to its first yield (on real WOW the task has
@@ -23002,14 +23002,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             WowSchedPoke(g_ws_slots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
                             WowSchedSwap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
                             g_ws_slots[fsi].IsRunnable = 1;          /* the parent, mid-work */
-                            g_ws_slots[fsi].CallbackDepth  = g_wc_depth;
-                            g_WowSchedCurrentBase = g_wc_depth;             /* the child's top level */
+                            g_ws_slots[fsi].CallbackDepth  = g_WowCallDepth;
+                            g_WowSchedCurrentBase = g_WowCallDepth;             /* the child's top level */
                             wowsched_setcur(child);
                             wow_task_chdir(child, &p);
                             ++g_ws_switches;
                             p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, fcur);
                             p = zput(p, " launched task 0x"); p = zhex(p, child);
-                            p = zput(p, " -- LAUNCH-FIRST at depth 0x"); p = zhex(p, (DWORD)g_wc_depth);
+                            p = zput(p, " -- LAUNCH-FIRST at depth 0x"); p = zhex(p, (DWORD)g_WowCallDepth);
                             p = zput(p, ": the child runs to its first yield before the"
                                         " parent's call (id 0x");
                             p = zhex(p, f.id); p = zput(p, ") is serviced (#306)\r\n");
@@ -23114,7 +23114,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         int drb = ws_toplevel(&g_ws_slots[wsi]);
                         WowSchedPoke(g_ws_slots[wsi].ModeLinear, WOW32_MODE_ORDINARY);
                         WowSchedSwap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
-                        if (drb) g_WowSchedCurrentBase = g_wc_depth;
+                        if (drb) g_WowSchedCurrentBase = g_WowCallDepth;
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
@@ -23141,7 +23141,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      50 ms of waiting for input -- the same bound and reasoning as the
                      GetMessage wait -- and any IRQ a 32-bit component raised. */
                 if (f.krnl && f.id == WOW32_WOWWAITFORMSGANDEVENT) {
-                    if (!g_wm_count && !wowwin_pump(64))
+                    if (!g_WowMsgCount && !wowwin_pump(64))
                         MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
                     if (g_ica_pending) wow_ica_deliver(g_dosm, tib, 0);
                     wow32_setret(&f, 0);
@@ -23532,7 +23532,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          modal loop -- a context swapped there would be resumed under a frame
                          the other task cannot unwind. */
                     /* ── s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
-                         g_wm_taker), and the task that yields here is parked WAITING FOR
+                         g_WowMsgTaker), and the task that yields here is parked WAITING FOR
                          MESSAGES: it is runnable again once one arrives for it -- which is
                          how WinHelp gets the message it posted itself while Calc ran, and
                          how a click on one task's window wakes it while another is idle
@@ -23542,9 +23542,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 && g_ww_nested == 0 && !wowdlg_active()
                                 && ecur && ecur != 0xFFFF && !ws_intertask_live();
                 ws_again_e:
-                    if (ecan && !wowmsg_count_for(ecur)) {
+                    if (ecan && !WowMsgCountFor(ecur)) {
                         WORD ycur = ecur;
-                        int  ysi  = ws_runnable(ycur, g_wc_depth);
+                        int  ysi  = ws_runnable(ycur, g_WowCallDepth);
                         if (ysi >= 0) {
                             WORD  yto = g_ws_slots[ysi].Task;
                             DWORD ymode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
@@ -23552,8 +23552,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             WowSchedPoke(g_ws_slots[ysi].ModeLinear, WOW32_MODE_ORDINARY);
                             WowSchedSwap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
                             g_ws_slots[ysi].IsWaitingForMessage = 1;          /* the one that yielded */
-                            g_ws_slots[ysi].CallbackDepth = g_wc_depth;
-                            if (yrb) g_WowSchedCurrentBase = g_wc_depth;
+                            g_ws_slots[ysi].CallbackDepth = g_WowCallDepth;
+                            if (yrb) g_WowSchedCurrentBase = g_WowCallDepth;
                             wowsched_setcur(yto);
                             wow_task_chdir(yto, &p);
                             ++g_ws_switches;
@@ -23581,8 +23581,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                        ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
                          takes it to push a keystroke, so holding it here would
                          make the thing we are waiting for impossible. */
-                    if (f.id == WOWUSER_GETMESSAGE && !wowmsg_count_for(ecur == 0xFFFF ? 0 : ecur)
-                        && !wowmsg_quit_for(ecur == 0xFFFF ? 0 : ecur)) {
+                    if (f.id == WOWUSER_GETMESSAGE && !WowMsgCountFor(ecur == 0xFFFF ? 0 : ecur)
+                        && !WowMsgQuitFor(ecur == 0xFFFF ? 0 : ecur)) {
                         int ewoke = 0;
                         DWORD t0 = GetTickCount(), waited;
                         /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
@@ -23592,11 +23592,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              task that blocks prints what it is waiting for, so
                              "the guest quit after six seconds" and "the guest is
                              waiting for you" are never the same line. */
-                        if (!g_wm_saidwait) {
+                        if (!g_WowMsgIsWaitAnnounced) {
                             char sb2[128], *sq = sb2;
-                            g_wm_saidwait = 1;
+                            g_WowMsgIsWaitAnnounced = 1;
                             sq = zput(sq, "\n     WOWMSG: a blocked GetMessage waits ");
-                            if (g_wowmsg_wait_ms) { sq = zhex(sq, g_wowmsg_wait_ms);
+                            if (g_WowMsgWaitMs) { sq = zhex(sq, g_WowMsgWaitMs);
                                                     sq = zput(sq, " ms then answers"
                                                                   " WM_QUIT"); }
                             else sq = zput(sq, "FOREVER (wowidle.txt = 0)");
@@ -23628,17 +23628,17 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD beat = t0; unsigned beats = 0;
                             DWORD pumped0 = g_ww_pumped;
                             /* ★ Tell the freeze watchdog this stall is deliberate --
-                                 see g_wm_inwait in wowmsg.h. Set BEFORE the loop and
+                                 see g_WowMsgInWait in wowmsg.h. Set BEFORE the loop and
                                  cleared after it on every exit path, because the
                                  alternative is a flag that stays set once and
                                  disables the watchdog for the rest of the run. */
-                            g_wm_inwait = 1;
-                            while (g_running && !wowmsg_count_for(ecur == 0xFFFF ? 0 : ecur)
-                                   && !wowmsg_quit_for(ecur == 0xFFFF ? 0 : ecur)
-                                   && (!g_wowmsg_wait_ms
-                                       || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
+                            g_WowMsgInWait = 1;
+                            while (g_running && !WowMsgCountFor(ecur == 0xFFFF ? 0 : ecur)
+                                   && !WowMsgQuitFor(ecur == 0xFFFF ? 0 : ecur)
+                                   && (!g_WowMsgWaitMs
+                                       || GetTickCount() - t0 < g_WowMsgWaitMs)) {
                                 /* s92 (#306): another parked task's message arrived */
-                                if (ecan && ws_runnable(ecur, g_wc_depth) >= 0) { ewoke = 1; break; }
+                                if (ecan && ws_runnable(ecur, g_WowCallDepth) >= 0) { ewoke = 1; break; }
                                 /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
                                      LATENCY FLOOR. A WM_PAINT arriving while the
                                      guest is parked here should wake the wait
@@ -23681,19 +23681,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     hq = zput(hq, " (total 0x");
                                     hq = zhex(hq, g_ww_pumped);
                                     hq = zput(hq, "), Win16 queued 0x");
-                                    hq = zhex(hq, (DWORD)g_wm_count);
+                                    hq = zhex(hq, (DWORD)g_WowMsgCount);
                                     hq = zput(hq, "\r\n");
                                     log_append(LOG_PATH, hb, hq); serial_out(hb, hq);
                                 }
                             }
-                            g_wm_inwait = 0;
+                            g_WowMsgInWait = 0;
                         }
                         waited = GetTickCount() - t0;
                         p = zput(p, "\n     WOWMSG: GetMessage with an empty queue"
                                     " -- BLOCKED for 0x");
                         p = zhex(p, waited);
                         p = zput(p, " ms; ");
-                        p = zhex(p, (DWORD)g_wm_count);
+                        p = zhex(p, (DWORD)g_WowMsgCount);
                         p = zput(p, " message(s) arrived\r\n");
                         if (ewoke) {
                             p = zput(p, "     WOWSCHED: a parked task's message arrived"
@@ -23727,7 +23727,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              The answer is already in the return hole and EIP is
                              already past the BOP, so what gets parked here is the
                              guest EXACTLY as it will be resumed -- see the ordering
-                             note in wowcall_enter. Everything after this point in
+                             note in WowCallEnter. Everything after this point in
                              the run belongs to the 16-bit procedure until its
                              `retf` reaches our stub. */
                         if (f.cbproc) {
@@ -23785,7 +23785,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (!rsel)
                                 p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
-                            else if (!wowcall_enter(tib, ssb3, rsel, f.cbproc,
+                            else if (!WowCallEnter(tib, ssb3, rsel, f.cbproc,
                                                     f.cbds, f.cbarg, f.cbnarg,
                                                     (DWORD)(ULONG_PTR)
                                                         (f.bp + WOW32_OFF_RET),
@@ -23800,19 +23800,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             else {
                                 /* The action belongs to the frame we have just
                                    pushed; setting it here rather than through
-                                   wowcall_enter's argument list keeps that list
+                                   WowCallEnter's argument list keeps that list
                                    about the CALL and not about what follows it. */
-                                if (g_wc_depth > 0) {
-                                    g_wc[g_wc_depth - 1].action = f.cbact;
-                                    g_wc[g_wc_depth - 1].actarg = f.cbactarg;
+                                if (g_WowCallDepth > 0) {
+                                    g_WowCallFrames[g_WowCallDepth - 1].Action = f.cbact;
+                                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = f.cbactarg;
                                 }
                                 p = zput(p, " -- ENTERED, depth ");
-                                p = zhex(p, (DWORD)g_wc_depth);
-                                if (g_wc_depth > 0 && g_wc[g_wc_depth - 1].prevtask) {
+                                p = zhex(p, (DWORD)g_WowCallDepth);
+                                if (g_WowCallDepth > 0 && g_WowCallFrames[g_WowCallDepth - 1].PreviousTask) {
                                     p = zput(p, " [INTER-TASK: runs as task 0x");
                                     p = zhex(p, wowsched_curtask());
                                     p = zput(p, " on its own stack, from task 0x");
-                                    p = zhex(p, g_wc[g_wc_depth - 1].prevtask);
+                                    p = zhex(p, g_WowCallFrames[g_WowCallDepth - 1].PreviousTask);
                                     p = zput(p, "]");
                                 }
                             }
@@ -27511,17 +27511,17 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
      (wowcall.h): fine for anything the guest asked us to do, impossible for a question
      WINDOWS asks mid-way through its own work -- WM_CTLCOLOR comes from inside a
      control's paint and needs a brush before the paint can go on. This runs the call
-     to completion right here: wowcall_enter parks the current context and enters the
+     to completion right here: WowCallEnter parks the current context and enters the
      procedure exactly as a deferred callback would (unloaded segments included), and
      this loop drives the guest -- servicing every BOP, USER and GDI calls included,
      the way the PM IRQ injector does -- until the procedure's return stub pops that
-     frame (wowcall_leave restores the parked context), then hands the result back.
+     frame (WowCallLeave restores the parked context), then hands the result back.
    ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
      depth limit. A run that stops without returning unwinds its frame and says so. */
 static int g_ww_nested = 0;
 /* ── s89 (#302): …and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
      stack below the arguments and its far pointer written into args[blobarg..+1]
-     (high word first, as wowcall_enter does for WM_CREATE). After the procedure
+     (high word first, as WowCallEnter does for WM_CREATE). After the procedure
      returns the same bytes are copied back into `blob`: WM_MEASUREITEM's answer is
      written INTO the structure. They are intact -- the callee's frame lives below
      the arguments, and nothing runs between the return and the read. */
@@ -27651,7 +27651,7 @@ static BOOL shim_callback16ex(DWORD vpfn, DWORD flags, DWORD cb, void *a, DWORD 
         shim_log("WOWCallback16Ex: the nested run could not make the call");
         return FALSE;
     }
-    if (ret) *ret = g_wc_lastres;
+    if (ret) *ret = g_WowCallLastResult;
     return TRUE;
 }
 
@@ -27672,7 +27672,7 @@ static DWORD shim_global16(int op, DWORD a, DWORD b)
                          (WORD)(VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF), args, n, 0, 0, &r))
         return 0;
     /* GlobalLock / GlobalSize / GlobalHandle answer in DX:AX; the rest in AX */
-    return (op == 2 || op == 4 || op == 5) ? g_wc_lastres : (DWORD)(WORD)g_wc_lastres;
+    return (op == 2 || op == 4 || op == 5) ? g_WowCallLastResult : (DWORD)(WORD)g_WowCallLastResult;
 }
 
 /* ══ THIRD-PARTY VDDs, MICROSOFT ABI (s91, #11). ════════════════════════════════════
@@ -27999,10 +27999,10 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
         if ((fr[7] >> 3) < DPMI_LDT_MAX) {
             lp = zput(lp, " ss.limit=0x"); lp = zhex(lp, g_ldt[fr[7] >> 3].limit);
         }
-        if (g_wc_depth > 0) {
-            lp = zput(lp, " call hwnd=0x"); lp = zhex(lp, g_wc[g_wc_depth - 1].hwnd);
-            lp = zput(lp, " msg=0x"); lp = zhex(lp, g_wc[g_wc_depth - 1].msg);
-            lp = zput(lp, " depth=0x"); lp = zhex(lp, (DWORD)g_wc_depth);
+        if (g_WowCallDepth > 0) {
+            lp = zput(lp, " call hwnd=0x"); lp = zhex(lp, g_WowCallFrames[g_WowCallDepth - 1].Window);
+            lp = zput(lp, " msg=0x"); lp = zhex(lp, g_WowCallFrames[g_WowCallDepth - 1].Message);
+            lp = zput(lp, " depth=0x"); lp = zhex(lp, (DWORD)g_WowCallDepth);
         }
         lp = zput(lp, " nested=0x"); lp = zhex(lp, (DWORD)g_ww_nested);
         lp = zput(lp, "\r\n");
@@ -28018,13 +28018,13 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
                               const int *fix, int nfix)
 {
     volatile BYTE *tib = g_tib_dbg;
-    int depth0 = g_wc_depth, ok;
+    int depth0 = g_WowCallDepth, ok;
     WORD sink = 0, rsel, blobsp = 0;
     DWORD ssb;
     unsigned ph;
     if (!tib || !g_dpmi_pm || !g_wow_launch || !g_dosm || !g_running) return 0;
     if (GetCurrentThreadId() != g_guest_tid) return 0;
-    if (g_wc_depth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
+    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
     rsel = wow_callback_selector();
     ssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
     if (!rsel || !ssb) return 0;
@@ -28042,12 +28042,12 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
             blob[o + 2] = (BYTE)ss; blob[o + 3] = (BYTE)(ss >> 8);
         }
     }
-    if (!wowcall_enter(tib, ssb, rsel, proc, ds, args, n, 0, WOWCALL_RET_KEEP, &sink,
+    if (!WowCallEnter(tib, ssb, rsel, proc, ds, args, n, 0, WOWCALL_RET_KEEP, &sink,
                        hwnd, msg, blob, blob ? blobn : 0, blob ? blobarg : -1,
                        wowdlg_sel_absent((WORD)(proc >> 16))))
         return 0;
     ++g_ww_nested;
-    for (ph = 0; ph < 500000 && g_wc_depth > depth0 && g_running; ++ph) {
+    for (ph = 0; ph < 500000 && g_WowCallDepth > depth0 && g_running; ++ph) {
         DWORD ev, eip, vec; int rc;
         dpmi_arm_fault_trampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
@@ -28067,10 +28067,10 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
         if (rc <= 0) break;
     }
     --g_ww_nested;
-    ok = (g_wc_depth == depth0);
+    ok = (g_WowCallDepth == depth0);
     if (!ok) {
         char b[160], *q = b;
-        while (g_wc_depth > depth0) wowcall_leave(tib, 0);
+        while (g_WowCallDepth > depth0) WowCallLeave(tib, 0);
         q = zput(q, "WOWNEST: ★ the nested call to 0x"); q = zhex(q, proc);
         q = zput(q, " (msg 0x"); q = zhex(q, msg);
         q = zput(q, ") did not return -- frame unwound, Windows' default used\r\n");
@@ -32315,7 +32315,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           if (rd && c[0] >= '0' && c[0] <= '9') {
               char wb[160], *wq = wb;
-              g_wowmsg_wait_ms = v;
+              g_WowMsgWaitMs = v;
               wq = zput(wq, "WOWMSG: GetMessage idle wait = ");
               if (v) { wq = zhex(wq, v); wq = zput(wq, " ms"); }
               else     wq = zput(wq, "FOREVER (interactive: the guest is waiting "
@@ -35006,7 +35006,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     int crb = ws_toplevel(&g_ws_slots[wsc]);
                                     if (!g_ws_shell) g_ws_shell = to;   /* s92: WOWEXEC */
                                     WowSchedRestore(&g_ws_slots[wsc], tib);
-                                    if (crb) g_WowSchedCurrentBase = g_wc_depth;
+                                    if (crb) g_WowSchedCurrentBase = g_WowCallDepth;
                                     /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
                                          The creator zeroed it on its way out; the
                                          frame we are resuming was parked when it

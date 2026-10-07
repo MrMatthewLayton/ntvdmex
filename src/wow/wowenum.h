@@ -14,7 +14,7 @@
  * `action` says what to do next. Here, "next" is the next item.
  *
  *     EnumWindows BOP     park the caller; answer TRUE in advance
- *       -> proc(item 0)   wowcall_enter
+ *       -> proc(item 0)   WowCallEnter
  *       <- returns TRUE   ACT_ENUMNEXT: more items? yes
  *       -> proc(item 1)
  *       <- returns FALSE  ★ THE CALLBACK SAID STOP. The caller's TRUE is revised
@@ -171,76 +171,76 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
 
     if (g_we.kind == WOWENUM_FONTS) {
         /* EnumFontFamProc(LPENUMLOGFONT, LPNEWTEXTMETRIC, int FontType, LPARAM) */
-        const wowenum_font_t *e;
-        if (g_we.idx >= g_we_nfont) {
+        const WOWENUM_FONT *e;
+        if (g_we.idx >= g_WowEnumFontCount) {
             wu_puts(note, cap, &k, "ENUM fonts complete: 0x");
             wu_puthex(note, cap, &k, g_we.calls, 4);
             wu_puts(note, cap, &k, " font(s)");
             wowenum_end();
             return 0;
         }
-        e = &g_we_font[g_we.idx++];
-        arg[0] = 0; arg[1] = 0;             /* lpelf: filled by wowcall_enter */
+        e = &g_WowEnumFonts[g_we.idx++];
+        arg[0] = 0; arg[1] = 0;             /* lpelf: filled by WowCallEnter */
         arg[2] = 0; arg[3] = 0;             /* lpntm: ditto, +146 into the blob */
-        arg[4] = e->type;
+        arg[4] = e->FontType;
         arg[5] = (WORD)(g_we.lparam >> 16);
         arg[6] = (WORD)(g_we.lparam & 0xFFFF);
-        g_wc_blob2_arg = 2; g_wc_blob2_off = WOWENUM_ELF16;
+        g_WowCallBlob2Argument = 2; g_WowCallBlob2Offset = WOWENUM_ELF16;
         if (!rsel || !ssbase
-            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 7,
+            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 7,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              e->b, (int)sizeof e->b, 0,
+                              e->Blob, (int)sizeof e->Blob, 0,
                               wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
-            g_wc_blob2_arg = -1;
+            g_WowCallBlob2Argument = -1;
             wu_puts(note, cap, &k, "ENUM fonts -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             wowenum_end();
             return 0;
         }
-        if (g_wc_depth > 0) {
-            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
-            g_wc[g_wc_depth - 1].actarg = 0;
+        if (g_WowCallDepth > 0) {
+            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
+            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_we.calls;
         wu_puts(note, cap, &k, "ENUM font -> \"");
-        {   int i; for (i = 18; i < 50 && e->b[i]; ++i) {
-                char c[2]; c[0] = (char)e->b[i]; c[1] = 0; wu_puts(note, cap, &k, c); } }
+        {   int i; for (i = 18; i < 50 && e->Blob[i]; ++i) {
+                char c[2]; c[0] = (char)e->Blob[i]; c[1] = 0; wu_puts(note, cap, &k, c); } }
         wu_puts(note, cap, &k, "\" type=0x");
-        wu_puthex(note, cap, &k, e->type, 2);
+        wu_puthex(note, cap, &k, e->FontType, 2);
         return 1;
     }
 
     if (g_we.kind == WOWENUM_OBJECTS) {
         /* EnumObjectsProc(LPVOID lpLogObject, LPARAM) -- s90, #296 */
-        const wowenum_font_t *e;
-        if (g_we.idx >= g_we_nfont) {
+        const WOWENUM_FONT *e;
+        if (g_we.idx >= g_WowEnumFontCount) {
             wu_puts(note, cap, &k, "ENUM objects complete: 0x");
             wu_puthex(note, cap, &k, g_we.calls, 4);
             wu_puts(note, cap, &k, " object(s)");
             wowenum_end();
             return 0;
         }
-        e = &g_we_font[g_we.idx++];
-        arg[0] = 0; arg[1] = 0;             /* lpLogObject: filled by wowcall_enter */
+        e = &g_WowEnumFonts[g_we.idx++];
+        arg[0] = 0; arg[1] = 0;             /* lpLogObject: filled by WowCallEnter */
         arg[2] = (WORD)(g_we.lparam >> 16);
         arg[3] = (WORD)(g_we.lparam & 0xFFFF);
         if (!rsel || !ssbase
-            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              e->b, e->type == OBJ_PEN ? 10 : 8, 0,
+                              e->Blob, e->FontType == OBJ_PEN ? 10 : 8, 0,
                               wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
             wu_puts(note, cap, &k, "ENUM objects -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             wowenum_end();
             return 0;
         }
-        if (g_wc_depth > 0) {
-            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
-            g_wc[g_wc_depth - 1].actarg = 0;
+        if (g_WowCallDepth > 0) {
+            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
+            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_we.calls;
         wu_puts(note, cap, &k, "ENUM object -> style=0x");
-        wu_puthex(note, cap, &k, (DWORD)(e->b[0] | (e->b[1] << 8)), 4);
+        wu_puthex(note, cap, &k, (DWORD)(e->Blob[0] | (e->Blob[1] << 8)), 4);
         return 1;
     }
 
@@ -288,13 +288,13 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         arg[5] = (WORD)g_wmf.nobj;
         arg[6] = (WORD)(g_we.lparam >> 16);
         arg[7] = (WORD)(g_we.lparam & 0xFFFF);
-        g_wc_blob2_arg = 1; g_wc_blob2_off = toff;
+        g_WowCallBlob2Argument = 1; g_WowCallBlob2Offset = toff;
         if (!rsel || !ssbase
-            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 8,
+            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 8,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
                               g_wmf_blob, bn, 3,
                               wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
-            g_wc_blob2_arg = -1;
+            g_WowCallBlob2Argument = -1;
             /* ⚠ FALSE, unlike the window forms: the guest has not seen the whole
                  picture, and TRUE would tell it that it had. */
             wu_puts(note, cap, &k, "ENUM metafile -- ★ THE CALL WAS REFUSED; the"
@@ -303,11 +303,11 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
             wowenum_end();
             return 0;
         }
-        g_wmf.rec_lin = g_wc_blob_lin;
-        g_wmf.tbl_lin = g_wc_blob_lin ? g_wc_blob_lin + (DWORD)toff : 0;
-        if (g_wc_depth > 0) {
-            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
-            g_wc[g_wc_depth - 1].actarg = 0;
+        g_wmf.rec_lin = g_WowCallBlobLinear;
+        g_wmf.tbl_lin = g_WowCallBlobLinear ? g_WowCallBlobLinear + (DWORD)toff : 0;
+        if (g_WowCallDepth > 0) {
+            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
+            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_we.calls;
         wu_puts(note, cap, &k, "ENUM metarecord fn=0x");
@@ -322,40 +322,40 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
 
     if (g_we.kind == WOWENUM_PROPS) {
         /* EnumPropProc(HWND, LPCSTR lpszName, HANDLE hData) -- s90, #296 */
-        const wowenum_font_t *e;
+        const WOWENUM_FONT *e;
         int atom, n = 0;
-        if (g_we.idx >= g_we_nfont) {
+        if (g_we.idx >= g_WowEnumFontCount) {
             wu_puts(note, cap, &k, "ENUM props complete: 0x");
             wu_puthex(note, cap, &k, g_we.calls, 4);
             wu_puts(note, cap, &k, " propert(ies)");
             wowenum_end();
             return 0;
         }
-        e = &g_we_font[g_we.idx++];
-        atom = (e->b[0] == 0);
+        e = &g_WowEnumFonts[g_we.idx++];
+        atom = (e->Blob[0] == 0);
         arg[0] = g_we.parent;
         arg[1] = 0;
-        arg[2] = atom ? (WORD)(e->b[1] | (e->b[2] << 8)) : 0;   /* a string: filled */
-        arg[3] = e->type;
-        if (!atom) while (n < 31 && e->b[n]) ++n;
+        arg[2] = atom ? (WORD)(e->Blob[1] | (e->Blob[2] << 8)) : 0;   /* a string: filled */
+        arg[3] = e->FontType;
+        if (!atom) while (n < 31 && e->Blob[n]) ++n;
         if (!rsel || !ssbase
-            || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
+            || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, 4,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              atom ? NULL : e->b, atom ? 0 : n + 1, 1,
+                              atom ? NULL : e->Blob, atom ? 0 : n + 1, 1,
                               wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
             wu_puts(note, cap, &k, "ENUM props -- ★ THE CALL WAS REFUSED; the"
                                    " enumeration ends here");
             wowenum_end();
             return 0;
         }
-        if (g_wc_depth > 0) {
-            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
-            g_wc[g_wc_depth - 1].actarg = 0;
+        if (g_WowCallDepth > 0) {
+            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
+            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
         }
         ++g_we.calls;
         wu_puts(note, cap, &k, "ENUM prop -> ");
         if (atom) { wu_puts(note, cap, &k, "atom 0x"); wu_puthex(note, cap, &k, arg[2], 4); }
-        else { wu_puts(note, cap, &k, "\""); wu_puts(note, cap, &k, (const char *)e->b);
+        else { wu_puts(note, cap, &k, "\""); wu_puts(note, cap, &k, (const char *)e->Blob);
                wu_puts(note, cap, &k, "\""); }
         return 1;
     }
@@ -422,7 +422,7 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
     nargw += 2;
 
     if (!rsel || !ssbase
-        || !wowcall_enter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, nargw,
+        || !WowCallEnter(tib, ssbase, rsel, g_we.proc, g_we.ds, arg, nargw,
                           /* retlin */ 0, WOWCALL_RET_KEEP, NULL,
                           hwnd16, 0, NULL, 0, -1,
                           wowdlg_sel_absent((WORD)(g_we.proc >> 16)))) {
@@ -432,9 +432,9 @@ static int wowenum_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         wowenum_end();
         return 0;
     }
-    if (g_wc_depth > 0) {
-        g_wc[g_wc_depth - 1].action = WOWCALL_ACT_ENUMNEXT;
-        g_wc[g_wc_depth - 1].actarg = hwnd16;
+    if (g_WowCallDepth > 0) {
+        g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
+        g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = hwnd16;
     }
     ++g_we.calls;
     wu_puts(note, cap, &k, "ENUM -> 0x");

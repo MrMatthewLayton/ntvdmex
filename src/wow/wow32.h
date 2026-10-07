@@ -167,7 +167,7 @@ typedef struct {
          allocator: the stack selector is already valid for the guest, and the
          bytes die with the call, which is exactly their lifetime.
        `cbblobarg` is the index in cbarg[] of the HIGH word of the far pointer
-         that should be made to point at it -- filled in by wowcall_enter, which
+         that should be made to point at it -- filled in by WowCallEnter, which
          is the first code that knows what SS:SP will be. -1 = no blob. */
     BYTE             cbblob[64];
     int              cbblobn;        /* bytes of cbblob to place; 0 = none      */

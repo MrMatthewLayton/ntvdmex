@@ -230,7 +230,7 @@ static int wowcdlg_relay(UINT msg, LPARAM lp)
         if (!s->dlg || (LPARAM)&s->fr != lp) continue;
         fl = s->fr.Flags;
         wcd_poked(s->o, FR16_FLAGS, fl & ~FR16_HOOKBITS);
-        wowmsg_post(s->owner16, (WORD)msg, 0, s->seg16, GetTickCount(), 0, 0);
+        WowMsgPost(s->owner16, (WORD)msg, 0, s->seg16, GetTickCount(), 0, 0);
         if (fl & FR_DIALOGTERM) {
             wowuser_win_t *w = wowuser_findwin(s->hwnd16);
             if (w && w->hwnd32 == s->dlg) { w->hwnd = 0; w->hwnd32 = NULL; }

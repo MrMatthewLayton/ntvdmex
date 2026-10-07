@@ -1,5 +1,5 @@
-#ifndef WOWMSG_H
-#define WOWMSG_H
+#ifndef NTVDMEX_WOWMSG_H
+#define NTVDMEX_WOWMSG_H
 /*
  * wowmsg.h -- ★ THE WIN16 MESSAGE QUEUE. GH #128, session 41.
  *
@@ -34,7 +34,7 @@
  *
  * They are four of the 56 ids the map could not name from the export table.
  * ⇒ So the host fills the MSG **and** dispatches it. `DispatchMessage` is
- *   `wowcall_enter` into the window's procedure, i.e. machinery session 40
+ *   `WowCallEnter` into the window's procedure, i.e. machinery session 40
  *   already built.
  *
  * ── THE MSG ─────────────────────────────────────────────────────────────────
@@ -88,13 +88,13 @@
 #define WM_TIMER16      0x0113
 
 /* MSG field offsets -- see the note above. */
-#define MSG_HWND        0x00
-#define MSG_MESSAGE     0x02
-#define MSG_WPARAM      0x04
-#define MSG_LPARAM      0x06
-#define MSG_TIME        0x0a
-#define MSG_PT          0x0e
-#define MSG_SIZE        0x12
+#define WOWMSG_FIELD_HWND    0x00
+#define WOWMSG_FIELD_MESSAGE 0x02
+#define WOWMSG_FIELD_WPARAM  0x04
+#define WOWMSG_FIELD_LPARAM  0x06
+#define WOWMSG_FIELD_TIME    0x0a
+#define WOWMSG_FIELD_POINT   0x0e
+#define WOWMSG_SIZE          0x12
 
 /* ── The argument blocks. Reversed as always (the base is the LAST push), and
      GetMessage's is confirmed against a line this host has already printed for
@@ -102,26 +102,26 @@
      0x248a 0x0a9f)`. +6/+8 is the far pointer to its stack MSG, and +4/+2/+0
      are the three zeroes. A wrong assignment does not produce a readable
      pointer. */
-#define GM_ARG_MAX      0
-#define GM_ARG_MIN      2
-#define GM_ARG_HWND     4
-#define GM_ARG_LPMSG    6
+#define WOWMSG_GETMESSAGE_ARG_MAX   0
+#define WOWMSG_GETMESSAGE_ARG_MIN   2
+#define WOWMSG_GETMESSAGE_ARG_HWND  4
+#define WOWMSG_GETMESSAGE_ARG_LPMSG 6
 
-#define PM_ARG_REMOVE   0
-#define PM_ARG_MAX      2
-#define PM_ARG_MIN      4
-#define PM_ARG_HWND     6
-#define PM_ARG_LPMSG    8
+#define WOWMSG_PEEKMESSAGE_ARG_REMOVE 0
+#define WOWMSG_PEEKMESSAGE_ARG_MAX    2
+#define WOWMSG_PEEKMESSAGE_ARG_MIN    4
+#define WOWMSG_PEEKMESSAGE_ARG_HWND   6
+#define WOWMSG_PEEKMESSAGE_ARG_LPMSG  8
 
 /* PostMessage(hWnd, msg, wParam, lParam) -- the same 10 bytes, in the same
    order, as SendMessage's block, which this host already reads. */
-#define PSM_ARG_LPARAM  0
-#define PSM_ARG_WPARAM  4
-#define PSM_ARG_MSG     6
-#define PSM_ARG_HWND    8
+#define WOWMSG_POSTMESSAGE_ARG_LPARAM 0
+#define WOWMSG_POSTMESSAGE_ARG_WPARAM 4
+#define WOWMSG_POSTMESSAGE_ARG_MSG    6
+#define WOWMSG_POSTMESSAGE_ARG_HWND   8
 
-#define PQM_ARG_EXITCODE 0
-#define SF_ARG_HWND      0
+#define WOWMSG_POSTQUITMESSAGE_ARG_EXITCODE 0
+#define WOWMSG_SETFOCUS_ARG_HWND            0
 
 /* The rest of the loop, every offset confirmed against the args this host has
    already printed for the call:
@@ -132,12 +132,12 @@
    -- 0x0a8e is the handle LoadAccelerators returned and 0x0140/0x0160 are the
    frame and MDI-client windows this host issued, so three of the four values are
    ones we can recognise. */
-#define DM_ARG_LPMSG     0
-#define TA_ARG_LPMSG     0
-#define TA_ARG_HACCEL    4
-#define TA_ARG_HWND      6
-#define TMSA_ARG_LPMSG   0
-#define TMSA_ARG_HWND    4
+#define WOWMSG_DISPATCHMESSAGE_ARG_LPMSG       0
+#define WOWMSG_TRANSLATEACCELERATOR_ARG_LPMSG  0
+#define WOWMSG_TRANSLATEACCELERATOR_ARG_HACCEL 4
+#define WOWMSG_TRANSLATEACCELERATOR_ARG_HWND   6
+#define WOWMSG_TRANSLATEMDISYSACCEL_ARG_LPMSG  0
+#define WOWMSG_TRANSLATEMDISYSACCEL_ARG_HWND   4
 
 #define PM_REMOVE16     0x0001
 
@@ -158,8 +158,8 @@
      is waiting for the user -- and quitting it after six seconds makes it
      impossible to type into. The bound stays the default so an unattended run
      still finishes. */
-static DWORD g_wowmsg_wait_ms = WOWMSG_WAIT_MS;
-static int   g_wm_saidwait    = 0;   /* the setting is announced once, at first use */
+static DWORD g_WowMsgWaitMs = WOWMSG_WAIT_MS;
+static INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once, at first use */
 
 /* ── ★★★ "THE GUEST IS PARKED HERE ON PURPOSE", FOR THE FREEZE WATCHDOG. ──────
      Non-zero while the exec thread is inside the blocking GetMessage wait.
@@ -176,83 +176,85 @@ static int   g_wm_saidwait    = 0;   /* the setting is announced once, at first 
      wait, which is exactly what a Win16 task waiting for input IS. The watchdog
      cannot tell that from a wedge by sampling, and it does not have to -- the
      host put it there and can simply say so. */
-static volatile LONG g_wm_inwait = 0;
+static volatile LONG g_WowMsgInWait = 0;
 
-typedef struct {
-    WORD  hwnd, msg, wparam;
-    DWORD lparam;
-    DWORD time;
-    WORD  ptx, pty;
-} wowmsg_t;
+typedef struct _WOWMSG {
+    WORD  Window, Message, WParam;
+    DWORD LParam;
+    DWORD Time;
+    WORD  PointX, PointY;
+} WOWMSG, *PWOWMSG;
+typedef const WOWMSG *PCWOWMSG;
 
-static wowmsg_t g_wm_ring[WOWMSG_MAX];
-static int      g_wm_head = 0;      /* next to take */
-static int      g_wm_tail = 0;      /* next to fill */
-static int      g_wm_count = 0;
-static DWORD    g_wm_posted = 0;    /* how many went in, for the run summary   */
-static DWORD    g_wm_taken  = 0;    /* ...and how many came out                */
-static DWORD    g_wm_dropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX       */
-static int      g_wm_quit = 0;      /* PostQuitMessage was called              */
-static WORD     g_wm_quitcode = 0;
+static WOWMSG g_WowMsgRing[WOWMSG_MAX];
+static INT      g_WowMsgHead = 0;      /* next to take */
+static INT      g_WowMsgTail = 0;      /* next to fill */
+static INT      g_WowMsgCount = 0;
+static DWORD    g_WowMsgPosted = 0;    /* how many went in, for the run summary   */
+static DWORD    g_WowMsgTaken  = 0;    /* ...and how many came out                */
+static DWORD    g_WowMsgDropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX       */
+static INT      g_WowMsgIsQuit = 0;      /* PostQuitMessage was called              */
+static WORD     g_WowMsgQuitCode = 0;
 /* ── s92 (#306): ONE RING, BUT EVERY TASK SEES ONLY ITS OWN MESSAGES. ─────────
      The note at the top came true: with the run queue, Calc's GetMessage took a
      message WinHelp had posted to ITS OWN window, and DispatchMessage ran WinHelp's
      window procedure on Calc's stack -- SS != DS, a near pointer to a local read
-     garbage, #GP. Win16 queues are per task, so a take is too: `g_wm_taker` is
+     garbage, #GP. Win16 queues are per task, so a take is too: `g_WowMsgTaker` is
      the task asking (0 = no filter: the modal loops and BeginPaint keep their
-     old behaviour), `g_wm_owner` names a window's task (0 = unknown, anyone's).
+     old behaviour), `g_WowMsgOwner` names a window's task (0 = unknown, anyone's).
      A thread message (hwnd 0) is anyone's too. And PostQuitMessage ends the loop
      of the task that called it, not every task's. */
-static WORD     g_wm_taker = 0;
-static WORD   (*g_wm_owner)(WORD hwnd) = 0;
+static WORD     g_WowMsgTaker = 0;
+static WORD   (*g_WowMsgOwner)(WORD window) = 0;
 /* ⚠ ONE PENDING QUIT PER TASK, CLEARED WHEN IT IS TAKEN -- Win16's queue flag. A
      single slot lost Calc's: Calc posted its quit, WinHelp (closing because Calc
      told it to) posted its own before Calc collected, WinHelp got WM_QUIT and Calc
      waited forever with the host alive (#306's own symptom). Cleared on delivery
      so a later task on the same TDB selector does not inherit it. */
 #define WOWMSG_MAXQUIT 8
-static struct { WORD task, code; } g_wm_quits[WOWMSG_MAXQUIT];
-static int      g_wm_nquit = 0;
+typedef struct _WOWMSG_QUIT { WORD Task, Code; } WOWMSG_QUIT;
+static WOWMSG_QUIT g_WowMsgQuits[WOWMSG_MAXQUIT];
+static INT      g_WowMsgQuitCount = 0;
 
-static int wowmsg_is_for(WORD hwnd, WORD task)
+static INT WowMsgIsFor(WORD window, WORD task)
 {
-    WORD o;
-    if (!task || !hwnd || !g_wm_owner) return 1;
-    o = g_wm_owner(hwnd);
-    return !o || o == task;
+    WORD owner;
+    if (!task || !window || !g_WowMsgOwner) return 1;
+    owner = g_WowMsgOwner(window);
+    return !owner || owner == task;
 }
-static void wowmsg_post_quit(WORD task, WORD code)
+static VOID WowMsgPostQuit(WORD task, WORD code)
 {
-    int i;
-    for (i = 0; i < g_wm_nquit; ++i) if (g_wm_quits[i].task == task) break;
-    if (i == g_wm_nquit) {
-        if (g_wm_nquit == WOWMSG_MAXQUIT) {          /* full: the oldest goes */
-            for (i = 1; i < g_wm_nquit; ++i) g_wm_quits[i - 1] = g_wm_quits[i];
-            --g_wm_nquit;
+    INT index;
+    for (index = 0; index < g_WowMsgQuitCount; ++index) if (g_WowMsgQuits[index].Task == task) break;
+    if (index == g_WowMsgQuitCount) {
+        if (g_WowMsgQuitCount == WOWMSG_MAXQUIT) {          /* full: the oldest goes */
+            for (index = 1; index < g_WowMsgQuitCount; ++index) g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+            --g_WowMsgQuitCount;
         }
-        i = g_wm_nquit++;
+        index = g_WowMsgQuitCount++;
     }
-    g_wm_quits[i].task = task; g_wm_quits[i].code = code;
-    g_wm_quit = 1; g_wm_quitcode = code;
+    g_WowMsgQuits[index].Task = task; g_WowMsgQuits[index].Code = code;
+    g_WowMsgIsQuit = 1; g_WowMsgQuitCode = code;
 }
 /* 1 + the index of `task`'s pending quit (a task-0 quit is anyone's), or 0. */
-static int wowmsg_quit_for(WORD task)
+static INT WowMsgQuitFor(WORD task)
 {
-    int i;
-    for (i = 0; i < g_wm_nquit; ++i)
-        if (!task || !g_wm_quits[i].task || g_wm_quits[i].task == task) return i + 1;
+    INT index;
+    for (index = 0; index < g_WowMsgQuitCount; ++index)
+        if (!task || !g_WowMsgQuits[index].Task || g_WowMsgQuits[index].Task == task) return index + 1;
     return 0;
 }
 /* Deliver it: the exit code, and the flag is cleared. */
-static WORD wowmsg_take_quit(int q)
+static WORD WowMsgTakeQuit(INT quitNumber)
 {
     WORD code;
-    int i;
-    if (q < 1 || q > g_wm_nquit) return 0;
-    code = g_wm_quits[q - 1].code;
-    for (i = q; i < g_wm_nquit; ++i) g_wm_quits[i - 1] = g_wm_quits[i];
-    --g_wm_nquit;
-    g_wm_quit = g_wm_nquit > 0;
+    INT index;
+    if (quitNumber < 1 || quitNumber > g_WowMsgQuitCount) return 0;
+    code = g_WowMsgQuits[quitNumber - 1].Code;
+    for (index = quitNumber; index < g_WowMsgQuitCount; ++index) g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+    --g_WowMsgQuitCount;
+    g_WowMsgIsQuit = g_WowMsgQuitCount > 0;
     return code;
 }
 /* ★ WHO A KEYSTROKE IS FOR. Win16 sends keyboard input to the focus window, and
@@ -260,22 +262,22 @@ static WORD wowmsg_take_quit(int q)
      focus the target is 0, and USER's own DispatchMessage `jcxz`es a null hwnd
      -- so a key with nowhere to go is discarded BY THE GUEST, correctly, and
      this host does not have to invent a destination. */
-static WORD     g_wm_focus = 0;
+static WORD     g_WowMsgFocus = 0;
 
 /* Put one message in the queue. ⚠ CALLED FROM THE UI THREAD as well as the exec
    thread (a keystroke arrives on whichever thread owns the host window), so
    every caller must hold the host lock -- there is no lock in here, on purpose,
    because this file must not know how the host serialises itself. */
-static int wowmsg_post(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
-                       DWORD time, WORD ptx, WORD pty)
+static INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
+                       DWORD time, WORD pointX, WORD pointY)
 {
-    wowmsg_t *e;
-    if (g_wm_count >= WOWMSG_MAX) { ++g_wm_dropped; return 0; }
-    e = &g_wm_ring[g_wm_tail];
-    e->hwnd = hwnd; e->msg = msg; e->wparam = wparam; e->lparam = lparam;
-    e->time = time; e->ptx = ptx; e->pty = pty;
-    g_wm_tail = (g_wm_tail + 1) % WOWMSG_MAX;
-    ++g_wm_count; ++g_wm_posted;
+    PWOWMSG entry;
+    if (g_WowMsgCount >= WOWMSG_MAX) { ++g_WowMsgDropped; return 0; }
+    entry = &g_WowMsgRing[g_WowMsgTail];
+    entry->Window = window; entry->Message = message; entry->WParam = wParam; entry->LParam = lParam;
+    entry->Time = time; entry->PointX = pointX; entry->PointY = pointY;
+    g_WowMsgTail = (g_WowMsgTail + 1) % WOWMSG_MAX;
+    ++g_WowMsgCount; ++g_WowMsgPosted;
     return 1;
 }
 
@@ -293,18 +295,18 @@ static int wowmsg_post(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
      at a position the pointer had not reached yet -- so the scan stops at the
      newest entry for that window.
    Returns 1 if it folded into an existing entry. */
-static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
-                            DWORD time, WORD ptx, WORD pty)
+static INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
+                            DWORD time, WORD pointX, WORD pointY)
 {
-    int i;
-    if (g_wm_count) {
-        i = (g_wm_tail + WOWMSG_MAX - 1) % WOWMSG_MAX;    /* the newest entry */
-        if (g_wm_ring[i].hwnd == hwnd && g_wm_ring[i].msg == msg) {
-            g_wm_ring[i].wparam = wparam;
-            g_wm_ring[i].lparam = lparam;
-            g_wm_ring[i].time = time;
-            g_wm_ring[i].ptx = ptx;
-            g_wm_ring[i].pty = pty;
+    INT newest;
+    if (g_WowMsgCount) {
+        newest = (g_WowMsgTail + WOWMSG_MAX - 1) % WOWMSG_MAX;    /* the newest entry */
+        if (g_WowMsgRing[newest].Window == window && g_WowMsgRing[newest].Message == message) {
+            g_WowMsgRing[newest].WParam = wParam;
+            g_WowMsgRing[newest].LParam = lParam;
+            g_WowMsgRing[newest].Time = time;
+            g_WowMsgRing[newest].PointX = pointX;
+            g_WowMsgRing[newest].PointY = pointY;
             return 1;
         }
     }
@@ -312,14 +314,14 @@ static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
 }
 
 /* Take the oldest message matching the filter, or return 0.
-   `hwnd` 0 means "any window", which is what every loop this host has read
-   passes. `remove` 0 is PeekMessage's look-without-taking.
+   `window` 0 means "any window", which is what every loop this host has read
+   passes. `isRemove` 0 is PeekMessage's look-without-taking.
    ⚠ THE FILTER IS FIRST-MATCH, NOT SCAN-AND-COMPACT: with a filter set and a
      non-matching message at the head, this answers "nothing", which is what a
      single-consumer queue with one producer can honestly say. A run that needs
      better will show a filtered call in the log, and there is not one yet. */
 /* ── ★★★★★ A FILTERED TAKE MUST SCAN THE WHOLE QUEUE, NOT JUST THE HEAD. ─────
-     This used to look at `g_wm_ring[g_wm_head]` ALONE and give up if it did not
+     This used to look at `g_WowMsgRing[g_WowMsgHead]` ALONE and give up if it did not
      match the filter -- which is not a slow PeekMessage, it is a DEADLOCK. A
      Win16 program that captures the mouse pumps
      `PeekMessage(hwnd, WM_MOUSEFIRST, WM_MOUSELAST)` waiting for its button-up,
@@ -331,7 +333,7 @@ static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
      pressed face, ClientToScreen twice) and then peeks for the button-up that is
      sitting in the ring behind a message it will not accept. The game never
      resets, which is what the user reported; the host looked idle and the log
-     said "queue empty" while `g_wm_count` was not zero.
+     said "queue empty" while `g_WowMsgCount` was not zero.
    ⚠ AND THAT LOG LINE WAS PART OF THE PROBLEM -- it asserted "empty" for what
      was really "nothing matched", so the one number that would have named this
      was never printed. It says both now.
@@ -347,35 +349,35 @@ static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
      the GetMessage/PeekMessage service to run (not here: the menu loop posts into
      this very ring). 0xBF7E sits in a range Win16 never allocates. */
 #define WOWMSG_MENUREPLAY 0xBF7Eu
-static int      g_wm_replay_due = 0;
-static wowmsg_t g_wm_replay;
+static INT      g_WowMsgIsReplayDue = 0;
+static WOWMSG g_WowMsgReplay;
 
-static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *out)
+static INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {
-    int n, i;
-    if (!g_wm_count) return 0;
-    for (n = 0; n < g_wm_count; ++n) {
-        wowmsg_t *e = &g_wm_ring[(g_wm_head + n) % WOWMSG_MAX];
-        if (e->msg == WOWMSG_MENUREPLAY) {
-            g_wm_replay = *e; g_wm_replay_due = 1;
-            for (i = n; i > 0; --i)
-                g_wm_ring[(g_wm_head + i) % WOWMSG_MAX] =
-                    g_wm_ring[(g_wm_head + i - 1) % WOWMSG_MAX];
-            g_wm_head = (g_wm_head + 1) % WOWMSG_MAX;
-            --g_wm_count;
-            --n;                          /* the next entry now sits at n */
+    INT position, index;
+    if (!g_WowMsgCount) return 0;
+    for (position = 0; position < g_WowMsgCount; ++position) {
+        PWOWMSG entry = &g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX];
+        if (entry->Message == WOWMSG_MENUREPLAY) {
+            g_WowMsgReplay = *entry; g_WowMsgIsReplayDue = 1;
+            for (index = position; index > 0; --index)
+                g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
+                    g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
+            g_WowMsgHead = (g_WowMsgHead + 1) % WOWMSG_MAX;
+            --g_WowMsgCount;
+            --position;                          /* the next entry now sits at n */
             continue;
         }
-        if (hwnd && e->hwnd != hwnd) continue;
-        if ((minf || maxf) && (e->msg < minf || e->msg > maxf)) continue;
-        if (!wowmsg_is_for(e->hwnd, g_wm_taker)) continue;          /* s92 #306 */
-        *out = *e;
-        if (remove) {
-            for (i = n; i > 0; --i)
-                g_wm_ring[(g_wm_head + i) % WOWMSG_MAX] =
-                    g_wm_ring[(g_wm_head + i - 1) % WOWMSG_MAX];
-            g_wm_head = (g_wm_head + 1) % WOWMSG_MAX;
-            --g_wm_count; ++g_wm_taken;
+        if (window && entry->Window != window) continue;
+        if ((filterMin || filterMax) && (entry->Message < filterMin || entry->Message > filterMax)) continue;
+        if (!WowMsgIsFor(entry->Window, g_WowMsgTaker)) continue;          /* s92 #306 */
+        *output = *entry;
+        if (isRemove) {
+            for (index = position; index > 0; --index)
+                g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
+                    g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
+            g_WowMsgHead = (g_WowMsgHead + 1) % WOWMSG_MAX;
+            --g_WowMsgCount; ++g_WowMsgTaken;
         }
         return 1;
     }
@@ -383,39 +385,39 @@ static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *ou
 }
 
 /* s92 (#306): how many queued messages are `task`'s (all of them for task 0). */
-static int wowmsg_count_for(WORD task)
+static INT WowMsgCountFor(WORD task)
 {
-    int n, c = 0;
-    for (n = 0; n < g_wm_count; ++n)
-        if (wowmsg_is_for(g_wm_ring[(g_wm_head + n) % WOWMSG_MAX].hwnd, task)) ++c;
-    return c;
+    INT position, count = 0;
+    for (position = 0; position < g_WowMsgCount; ++position)
+        if (WowMsgIsFor(g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX].Window, task)) ++count;
+    return count;
 }
 
 /* Read an 18-byte MSG back out of guest memory -- the guest owns this one; it is
    the buffer GetMessage filled and the loop then handed to DispatchMessage. Only
    the four fields a window procedure is called with are taken. */
-static void wowmsg_read(const volatile BYTE *p, wowmsg_t *m)
+static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 {
-    m->hwnd   = (WORD)(p[MSG_HWND]    | (p[MSG_HWND + 1]    << 8));
-    m->msg    = (WORD)(p[MSG_MESSAGE] | (p[MSG_MESSAGE + 1] << 8));
-    m->wparam = (WORD)(p[MSG_WPARAM]  | (p[MSG_WPARAM + 1]  << 8));
-    m->lparam = (DWORD)(p[MSG_LPARAM] | (p[MSG_LPARAM + 1] << 8))
-              | ((DWORD)(p[MSG_LPARAM + 2] | (p[MSG_LPARAM + 3] << 8)) << 16);
-    m->time   = 0; m->ptx = 0; m->pty = 0;
+    message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << 8));
+    message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << 8));
+    message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << 8));
+    message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << 8))
+              | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + 2] | (bytes[WOWMSG_FIELD_LPARAM + 3] << 8)) << 16);
+    message->Time   = 0; message->PointX = 0; message->PointY = 0;
 }
 
 /* Write an 18-byte MSG through the far pointer the guest handed us. */
-static void wowmsg_write(volatile BYTE *p, const wowmsg_t *m)
+static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
 {
-    wow32_pokew(p + MSG_HWND,    m->hwnd);
-    wow32_pokew(p + MSG_MESSAGE, m->msg);
-    wow32_pokew(p + MSG_WPARAM,  m->wparam);
-    wow32_pokew(p + MSG_LPARAM,     (WORD)(m->lparam & 0xFFFF));
-    wow32_pokew(p + MSG_LPARAM + 2, (WORD)(m->lparam >> 16));
-    wow32_pokew(p + MSG_TIME,       (WORD)(m->time & 0xFFFF));
-    wow32_pokew(p + MSG_TIME + 2,   (WORD)(m->time >> 16));
-    wow32_pokew(p + MSG_PT,     m->ptx);
-    wow32_pokew(p + MSG_PT + 2, m->pty);
+    wow32_pokew(bytes + WOWMSG_FIELD_HWND,    message->Window);
+    wow32_pokew(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
+    wow32_pokew(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
+    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & 0xFFFF));
+    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM + 2, (WORD)(message->LParam >> 16));
+    wow32_pokew(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & 0xFFFF));
+    wow32_pokew(bytes + WOWMSG_FIELD_TIME + 2,   (WORD)(message->Time >> 16));
+    wow32_pokew(bytes + WOWMSG_FIELD_POINT,     message->PointX);
+    wow32_pokew(bytes + WOWMSG_FIELD_POINT + 2, message->PointY);
 }
 
-#endif /* WOWMSG_H */
+#endif /* NTVDMEX_WOWMSG_H */

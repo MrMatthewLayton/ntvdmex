@@ -32,7 +32,7 @@
  * continuation rule:
  *
  *     DialogBox BOP           park the caller; do NOT write its return value yet
- *       -> WM_INITDIALOG      call the dialog procedure    (wowcall_enter)
+ *       -> WM_INITDIALOG      call the dialog procedure    (WowCallEnter)
  *       <- it returns         ACT_MODALPUMP: is it over? no
  *       -> wait for input     pump Win32, take a Win16 message
  *       -> WM_COMMAND         call the dialog procedure
@@ -40,7 +40,7 @@
  *       -> UNWIND             write nResult into the DialogBox return hole and
  *                             let the guest resume past its BOP at last
  *
- * ★ THE PARKED CONTEXT IS FREE, AND THAT IS THE WHOLE TRICK. `wowcall_enter`
+ * ★ THE PARKED CONTEXT IS FREE, AND THAT IS THE WHOLE TRICK. `WowCallEnter`
  *   saves the guest exactly as it will be resumed -- which, at the DialogBox
  *   BOP, is "the caller, one instruction after DialogBox". Every iteration
  *   restores that same context and re-parks it, so when the loop finally does
@@ -77,7 +77,7 @@
  * ⚠ AND THE WAIT IS THE SAME WAIT. A modal dialog sitting for four minutes while
  *   a human reads it is NOT a hang, and a timeout short enough to "catch a hang"
  *   would break the only case this feature exists for. So the bound is the knob
- *   the message loop already has, and `g_wm_inwait` is set across it for the
+ *   the message loop already has, and `g_WowMsgInWait` is set across it for the
  *   freeze watchdog -- see the long note on that flag in wowmsg.h, which exists
  *   because the watchdog once killed an idle Win16 guest at 150 seconds.
  *
@@ -345,7 +345,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
     for (;;) {
         wowdlg_modal_t *d = wowdlg_top();
         wowuser_win_t  *w;
-        wowmsg_t m;
+        WOWMSG m;
         DWORD proc = 0;
         WORD  arg[5];
         WORD  msg, wparam;
@@ -512,17 +512,17 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                 wq = zput(wq, "     WOWDLG: modal 0x"); wq = zhex(wq, d->hwnd);
                 wq = zput(wq, " is WAITING for input -- the guest is parked"
                               " inside DialogBox on purpose, ");
-                if (g_wowmsg_wait_ms) { wq = zput(wq, "for at most 0x");
-                                        wq = zhex(wq, g_wowmsg_wait_ms);
+                if (g_WowMsgWaitMs) { wq = zput(wq, "for at most 0x");
+                                        wq = zhex(wq, g_WowMsgWaitMs);
                                         wq = zput(wq, " ms"); }
                 else                    wq = zput(wq, "for as long as it takes"
                                                       " (wowidle.txt = 0)");
                 wq = zput(wq, "\r\n");
                 log_append(LOG_PATH, wb, wq);
             }
-            g_wm_inwait = 1;
-            while ((!running || *running) && !g_wm_count
-                   && (!g_wowmsg_wait_ms || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
+            g_WowMsgInWait = 1;
+            while ((!running || *running) && !g_WowMsgCount
+                   && (!g_WowMsgWaitMs || GetTickCount() - t0 < g_WowMsgWaitMs)) {
                 if (!wowdlg_pump(64, &d->trace))
                     MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
                 /* ── ★★★ THE HEARTBEAT NAMES THE THREAD, AND THAT IS THE POINT.
@@ -551,7 +551,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                         hq = zput(hq, " ms; pumped 0x"); hq = zhex(hq, g_ww_pumped);
                         hq = zput(hq, " (+0x");         hq = zhex(hq, g_ww_pumped - pumped0);
                         hq = zput(hq, " since blocking), Win16 queued 0x");
-                        hq = zhex(hq, (DWORD)g_wm_count);
+                        hq = zhex(hq, (DWORD)g_WowMsgCount);
                         hq = zput(hq, "; queue status 0x");
                         hq = zhex(hq, GetQueueStatus(QS_ALLINPUT));
                         hq = zput(hq, "; this thread 0x");
@@ -575,7 +575,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                      the ones that say so -- this just stops waiting. */
                 if (d->ended || !IsWindow(w->hwnd32)) break;
             }
-            g_wm_inwait = 0;
+            g_WowMsgInWait = 0;
             if (d->ended || !IsWindow(w->hwnd32)) continue;
 
             /* ── EXIT 4: THE WAIT EXPIRED. Only reachable with a bounded
@@ -583,7 +583,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                  interactive session waits forever and never gets here. The same
                  tested decision as the three above, asked again now that the
                  fourth fact is known. */
-            if (!wowmsg_take(0, 0, 0, 1, &m)) {
+            if (!WowMsgTake(0, 0, 0, 1, &m)) {
                 /* ⚠ AND ONLY IF NOTHING ELSE ENDED IT WHILE WE WAITED. The
                      answer for a dialog that was dismissed during the wait is
                      EndDialog's result, not 0 -- so anything but EXPIRED goes
@@ -613,24 +613,24 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                  dispatched to the dialog. Handing a stale hwnd's message to the
                  wrong procedure is the "answered by an unrelated function"
                  shape this project treats as worse than not answering. */
-            msg = m.msg; wparam = m.wparam; lparam = m.lparam;
-            if (m.hwnd == d->hwnd) {
+            msg = m.Message; wparam = m.WParam; lparam = m.LParam;
+            if (m.Window == d->hwnd) {
                 proc = (DWORD)WowConvWindowProcedure((unsigned)d->wndproc,
                                               (unsigned)d->dlgproc);
             } else {
-                wowuser_win_t *tw = m.hwnd ? wowuser_findwin(m.hwnd) : NULL;
+                wowuser_win_t *tw = m.Window ? wowuser_findwin(m.Window) : NULL;
                 DWORD tp = tw ? wowuser_winproc_of(tw) : 0;
                 if (!tp) {
                     ++d->msgs;
                     continue;            /* nowhere to put it; take the next one */
                 }
                 proc = tp;
-                tgt  = m.hwnd;
+                tgt  = m.Window;
             }
             wu_puts(note, cap, &k, "MODAL 0x");
             wu_puthex(note, cap, &k, d->hwnd, 4);
             wu_puts(note, cap, &k, " -> hwnd=0x");
-            wu_puthex(note, cap, &k, m.hwnd, 4);
+            wu_puthex(note, cap, &k, m.Window, 4);
             wu_puts(note, cap, &k, " msg=0x");
             wu_puthex(note, cap, &k, msg, 4);
             wu_puts(note, cap, &k, " ");
@@ -665,7 +665,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         absent = wowdlg_sel_absent((WORD)(proc >> 16));
 
         if (!rsel || !ssbase
-            || !wowcall_enter(tib, ssbase, rsel, proc, d->ds, arg, 5,
+            || !WowCallEnter(tib, ssbase, rsel, proc, d->ds, arg, 5,
                               /* retlin */ 0, WOWCALL_RET_KEEP, NULL,
                               tgt, msg, NULL, 0, -1, absent)) {
             /* The call could not be made -- depth, or no return selector. That
@@ -677,16 +677,16 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
             wowdlg_unwind(d, 0);
             continue;
         }
-        if (g_wc_depth > 0) {
-            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_MODALPUMP;
-            g_wc[g_wc_depth - 1].actarg = d->hwnd;
+        if (g_WowCallDepth > 0) {
+            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_MODALPUMP;
+            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = d->hwnd;
             /* s88: say whether THIS call went to the dialog's own DLGPROC, so the
                return can apply DefDlgProc's WM_CLOSE default (see main.c). */
-            g_wd_dlgcall[g_wc_depth - 1] = (m.hwnd == d->hwnd && proc == d->dlgproc
+            g_wd_dlgcall[g_WowCallDepth - 1] = (m.Window == d->hwnd && proc == d->dlgproc
                                             && !d->wndproc);
-            g_wd_dlgmsg[g_wc_depth - 1]  = msg;
-            g_wu_dlgdef[g_wc_depth - 1].wp = wparam;
-            g_wu_dlgdef[g_wc_depth - 1].lp = lparam;
+            g_wd_dlgmsg[g_WowCallDepth - 1]  = msg;
+            g_wu_dlgdef[g_WowCallDepth - 1].wp = wparam;
+            g_wu_dlgdef[g_WowCallDepth - 1].lp = lparam;
         }
         ++d->msgs;
         wu_puts(note, cap, &k, "-> 0x");

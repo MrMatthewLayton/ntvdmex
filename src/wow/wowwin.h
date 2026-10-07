@@ -108,7 +108,7 @@ static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
  *   log names anything that turns out to be missing.
  * ★ THE MOUSE IS RELAYED (session 45) and the flooding hazard above is answered
  *   the way Windows answers it: WM_MOUSEMOVE COALESCES -- only the newest
- *   pending move per window is kept (wowmsg_post_move). Leaving the mouse out
+ *   pending move per window is kept (WowMsgPostMove). Leaving the mouse out
  *   was why a paint program could be looked at but not used.
  * ★ WM_PAINT IS NOW TRANSLATED (session 45) -- this note used to say it was left
  *   to DefWindowProc "until GDI's id space is dispatched", and that day came.
@@ -166,7 +166,7 @@ static int wowwin_paint_take(WORD h16, RECT *out, int *erase)
 }
 
 /* ── ★★★★ MSG.pt IS THE CURSOR IN *SCREEN* COORDINATES, AND IT WAS ALWAYS 0,0.
-     Every wowmsg_post here passed `0, 0` for it, because nothing this host had
+     Every WowMsgPost here passed `0, 0` for it, because nothing this host had
      watched read the field -- wowmsg.h says exactly that, and says it was filled
      with the cursor position, which it was not.
    ★ MINESWEEPER'S SMILEY IS THE PROGRAM THAT READS IT. Pressing the face does
@@ -324,7 +324,7 @@ static int wowwin_release_chars(WORD h16, DWORD keylp)
                 && ((g_ww_pchar[i].lp >> 16) & 0xFF) == ((keylp >> 16) & 0xFF)
                 && (best < 0 || g_ww_pchar[i].seq < g_ww_pchar[best].seq)) best = i;
         if (best < 0) return n;
-        wowmsg_post(h16, 0x0102, g_ww_pchar[best].ch, g_ww_pchar[best].lp,
+        WowMsgPost(h16, 0x0102, g_ww_pchar[best].ch, g_ww_pchar[best].lp,
                     GetTickCount(), 0, 0);
         g_ww_pchar[best].seq = 0;
         ++n;
@@ -363,8 +363,8 @@ static int wowwin_tt_fire(const MSG *m)
     for (i = 0; i < WOWWIN_TT; ++i)
         if (g_ww_tt[i].id32 && g_ww_tt[i].id32 == m->wParam) {
             /* one pending per timer, as Windows coalesces them */
-            wowmsg_post_move(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0)
-                || wowmsg_post(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0);
+            WowMsgPostMove(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0)
+                || WowMsgPost(0, 0x0113, (WORD)m->wParam, g_ww_tt[i].proc, m->time, 0, 0);
             return 1;
         }
     return 0;
@@ -397,7 +397,7 @@ static void wowwin_send_or_post(WORD h16, WORD msg, WORD wp, DWORD lp, WORD ptx,
         --g_ww_nsending;
         if (ok) return;
     }
-    wowmsg_post(h16, msg, wp, lp, GetTickCount(), ptx, pty);
+    WowMsgPost(h16, msg, wp, lp, GetTickCount(), ptx, pty);
 }
 /* The default procedure this window needs -- frame, MDI child, or plain; see the
    note at the end of wowwin_proc. */
@@ -436,7 +436,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              inherited all three -- so the honest thing is to hand across exactly
              what the OS handed us rather than compose anything. */
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+            WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -491,7 +491,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
         }
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+            WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
         }
         break;
@@ -561,7 +561,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 log_append(LOG_PATH, pb, pq);
             }
             if (g_ww_sizemove) wowwin_send_or_post(h16, WM_PAINT16, 0, 0, ptx, pty);
-            else               wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
+            else               WowMsgPost(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -585,7 +585,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          was left out ("posting every message would fill the ring with mouse
          moves the guest never asked for and would hide the ones it did"), and
          that hazard is real. The answer is not to drop the mouse, it is to
-         COALESCE the moves the way Windows does -- see wowmsg_post_move.
+         COALESCE the moves the way Windows does -- see WowMsgPostMove.
 
        ★ RELAYED VERBATIM, like the keyboard. Win16 and Win32 agree on the
          message numbers (0x200..0x209), on wParam being the MK_* button/modifier
@@ -622,16 +622,16 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 q = zput(q, " lp=0x"); q = zhex(q, (DWORD)lp); q = zput(q, "\r\n");
                 log_append(LOG_PATH, b, q);
             }
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+            WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
         break;
     case WM_MOUSEMOVE:
         if (h16) {
-            if (!wowmsg_post_move(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
+            if (!WowMsgPostMove(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
                                   GetTickCount(), ptx, pty))
-                wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
+                WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
                             GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
@@ -641,7 +641,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+            WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -658,7 +658,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = zput(cq, h16 ? " -- posted to the guest\r\n"
                               : " -- NO Win16 window for it, falling through to DefWindowProc\r\n");
             log_append(LOG_PATH, cb, cq); }
-        if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), ptx, pty);
+        if (h16) { WowMsgPost(h16, (WORD)msg, 0, 0, GetTickCount(), ptx, pty);
                    ++g_ww_msgs; return 0; }
         break;
     /* s92 (#305 M12): a drop on a window that called DragAcceptFiles. POSTED, as the
@@ -673,7 +673,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (hd) { dq = zhex(dq, hd); dq = zput(dq, " "); }
             dq = zput(dq, why); dq = zput(dq, "\r\n");
             log_append(LOG_PATH, db, dq);
-            if (hd) { wowmsg_post(h16, 0x0233, hd, 0, GetTickCount(), ptx, pty); ++g_ww_msgs; }
+            if (hd) { WowMsgPost(h16, 0x0233, hd, 0, GetTickCount(), ptx, pty); ++g_ww_msgs; }
             return 0;
         }
         break;
@@ -690,7 +690,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          otherwise receive a pointer it never supplied. */
     case WM_TIMER:
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp,
+            WowMsgPost(h16, (WORD)msg, (WORD)wp,
                         wowuser_timer_proc(h16, (WORD)wp),
                         GetTickCount(), ptx, pty);
             ++g_ww_msgs;
@@ -839,7 +839,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_SYSCHAR:
-        if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
+        if (h16) { WowMsgPost(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
                    ++g_ww_msgs; }
         break;
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
@@ -851,7 +851,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                ShowWindow that caused it returns (w_msgs size.before.return = stock).
                Focus stays posted (the note above). */
             if (msg == WM_SIZE) wowwin_send_or_post(h16, (WORD)msg, wp16, (DWORD)lp, ptx, pty);
-            else wowmsg_post(h16, (WORD)msg, wp16, (DWORD)lp, GetTickCount(), ptx, pty);
+            else WowMsgPost(h16, (WORD)msg, wp16, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             /* ── s93: A DIALOG PASSES THE FOCUS ON, as DefDlgProc does on
                  WM_SETFOCUS -- to the control that last had it, else its first tab
@@ -916,7 +916,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_INITMENUPOPUP:
         if (h16) {
             WORD hm = wowuser_menu16((HMENU)wp);
-            wowmsg_post(h16, (WORD)msg, hm,
+            WowMsgPost(h16, (WORD)msg, hm,
                         (msg == WM_INITMENUPOPUP)
                             ? ((DWORD)LOWORD(lp) | ((DWORD)HIWORD(lp) << 16))
                             : 0,
@@ -944,13 +944,13 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HMENU bar = GetMenu(h);
             int i, nb = GetMenuItemCount(bar);
             DWORD t = GetTickCount();
-            wowmsg_post(h16, 0x0116 /* WM_INITMENU */, wowuser_menu16(bar), 0, t, ptx, pty);
+            WowMsgPost(h16, 0x0116 /* WM_INITMENU */, wowuser_menu16(bar), 0, t, ptx, pty);
             for (i = 0; i < nb && i < 32; ++i) {
                 HMENU sub = GetSubMenu(bar, i);
-                if (sub) wowmsg_post(h16, 0x0117 /* WM_INITMENUPOPUP */,
+                if (sub) WowMsgPost(h16, 0x0117 /* WM_INITMENUPOPUP */,
                                      wowuser_menu16(sub), (DWORD)i, t, ptx, pty);
             }
-            if (wowmsg_post(h16, (WORD)WOWMSG_MENUREPLAY, (WORD)wp, (DWORD)lp, t, ptx, pty)) {
+            if (WowMsgPost(h16, (WORD)WOWMSG_MENUREPLAY, (WORD)wp, (DWORD)lp, t, ptx, pty)) {
                 ++g_ww_menudefer;
                 return 0;                       /* opened later, by the replay */
             }
@@ -984,7 +984,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             WORD  r16;
             ++g_ww_msgs;
             if (g_ww_send16 && g_ww_send16(h16, (WORD)msg, code, lp16, &r16)) return 0;
-            wowmsg_post(h16, (WORD)msg, code, lp16, GetTickCount(), ptx, pty);
+            WowMsgPost(h16, (WORD)msg, code, lp16, GetTickCount(), ptx, pty);
             return 0;
         }
         break;
@@ -993,7 +993,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             WORD id     = (WORD)LOWORD(wp);
             WORD notify = (WORD)HIWORD(wp);
             WORD ctl16  = lp ? wowwin_hwnd16((HWND)(ULONG_PTR)lp) : 0;
-            wowmsg_post(h16, (WORD)WM_COMMAND16, id,
+            WowMsgPost(h16, (WORD)WM_COMMAND16, id,
                         (DWORD)ctl16 | ((DWORD)notify << 16),
                         GetTickCount(), ptx, pty);
             ++g_ww_msgs;
@@ -1051,12 +1051,12 @@ static int wowwin_pump(int budget)
 
 /* #160: open the menu a WM_SYSCOMMAND was held back for (see that case). Runs the
    real modal menu loop here, on this thread, exactly where the pump would have. */
-static void wowwin_menu_replay(const wowmsg_t *r)
+static void wowwin_menu_replay(const WOWMSG *r)
 {
-    HWND h = wowuser_hwnd32(r->hwnd);
+    HWND h = wowuser_hwnd32(r->Window);
     if (!h || !IsWindow(h)) return;
     g_ww_replaying = 1;
-    SendMessageA(h, WM_SYSCOMMAND, (WPARAM)r->wparam, (LPARAM)r->lparam);
+    SendMessageA(h, WM_SYSCOMMAND, (WPARAM)r->WParam, (LPARAM)r->LParam);
     g_ww_replaying = 0;
 }
 

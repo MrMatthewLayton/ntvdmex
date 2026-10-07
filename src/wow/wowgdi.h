@@ -970,14 +970,14 @@ static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *t
 {
     const ENUMLOGFONTA *elf = (const ENUMLOGFONTA *)lf;
     const NEWTEXTMETRICA *ntm = (const NEWTEXTMETRICA *)tm;
-    wowenum_font_t *e;
+    WOWENUM_FONT *e;
     BYTE *b, *n;
     int i;
     (void)unused;
-    if (g_we_nfont >= WOWENUM_MAXFONT) return 0;
-    e = &g_we_font[g_we_nfont++];
-    for (i = 0; i < (int)sizeof e->b; ++i) e->b[i] = 0;
-    b = e->b;
+    if (g_WowEnumFontCount >= WOWENUM_MAXFONT) return 0;
+    e = &g_WowEnumFonts[g_WowEnumFontCount++];
+    for (i = 0; i < (int)sizeof e->Blob; ++i) e->Blob[i] = 0;
+    b = e->Blob;
     wowgdi_put16(b, 0, lf->lfHeight);  wowgdi_put16(b, 2, lf->lfWidth);
     wowgdi_put16(b, 4, lf->lfEscapement); wowgdi_put16(b, 6, lf->lfOrientation);
     wowgdi_put16(b, 8, lf->lfWeight);
@@ -1006,17 +1006,17 @@ static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *t
         wowgdi_put16(n, 35, (LONG)ntm->ntmSizeEM); wowgdi_put16(n, 37, (LONG)ntm->ntmCellHeight);
         wowgdi_put16(n, 39, (LONG)ntm->ntmAvgWidth);
     }
-    e->type = (WORD)type;
+    e->FontType = (WORD)type;
     return 1;
 }
 
-/* s90: one Win32 pen/brush -> LOGPEN16 (10) / LOGBRUSH16 (8), into g_we_font[]. */
+/* s90: one Win32 pen/brush -> LOGPEN16 (10) / LOGBRUSH16 (8), into g_WowEnumFonts[]. */
 static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
 {
     BYTE *b;
     int i;
-    if (g_we_nfont >= WOWENUM_MAXFONT) return 0;
-    b = g_we_font[g_we_nfont].b;
+    if (g_WowEnumFontCount >= WOWENUM_MAXFONT) return 0;
+    b = g_WowEnumFonts[g_WowEnumFontCount].Blob;
     for (i = 0; i < 16; ++i) b[i] = 0;
     if (type == OBJ_PEN) {
         const LOGPEN *lp = (const LOGPEN *)lo;
@@ -1031,8 +1031,8 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
         wowgdi_put16(b, 4, (LONG)(lb->lbColor >> 16));
         wowgdi_put16(b, 6, (LONG)lb->lbHatch);
     }
-    g_we_font[g_we_nfont].type = (WORD)type;
-    ++g_we_nfont;
+    g_WowEnumFonts[g_WowEnumFontCount].FontType = (WORD)type;
+    ++g_WowEnumFontCount;
     return 1;
 }
 
@@ -2261,17 +2261,17 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wow32_setret(f, 1);                 /* the walk revises it to 0 on a stop */
         if (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC)) dc = (HDC)o;
         else { dc = GetDC(NULL); own = 1; }
-        g_we_nfont = 0;
+        g_WowEnumFontCount = 0;
         if (dc) {
             EnumObjects(dc, typ, (GOBJENUMPROC)wowgdi_obj_collect, (LPARAM)typ);
             if (own) ReleaseDC(NULL, dc);
         }
         wu_puts(note, notecap, &k, " -> 0x");
-        wu_puthex(note, notecap, &k, (DWORD)g_we_nfont, 4);
+        wu_puthex(note, notecap, &k, (DWORD)g_WowEnumFontCount, 4);
         wu_puts(note, notecap, &k, " object(s)");
-        if (!g_we_nfont || !f->cbok) {
+        if (!g_WowEnumFontCount || !f->cbok) {
             if (!f->cbok) wu_puts(note, notecap, &k, " -- callbacks are not armed");
-            if (!g_we_nfont) wow32_setret(f, 0);
+            if (!g_WowEnumFontCount) wow32_setret(f, 0);
             return 1;
         }
         if (wowenum_busy()) {
@@ -2309,7 +2309,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wow32_setret(f, 1);                 /* the walk revises it to 0 on a stop */
         if (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC)) dc = (HDC)o;
         else { dc = GetDC(NULL); own = 1; }
-        g_we_nfont = 0;
+        g_WowEnumFontCount = 0;
         if (dc) {
             g_wg_font_plain = plain;
             if (plain) EnumFontsA(dc, havefam ? fam : NULL,
@@ -2319,9 +2319,9 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             if (own) ReleaseDC(NULL, dc);
         }
         wu_puts(note, notecap, &k, " -> 0x");
-        wu_puthex(note, notecap, &k, (DWORD)g_we_nfont, 4);
+        wu_puthex(note, notecap, &k, (DWORD)g_WowEnumFontCount, 4);
         wu_puts(note, notecap, &k, " font(s)");
-        if (!g_we_nfont || !f->cbok) {
+        if (!g_WowEnumFontCount || !f->cbok) {
             if (!f->cbok) wu_puts(note, notecap, &k, " -- callbacks are not armed");
             return 1;
         }

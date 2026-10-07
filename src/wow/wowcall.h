@@ -1,5 +1,5 @@
-#ifndef WOWCALL_H
-#define WOWCALL_H
+#ifndef NTVDMEX_WOWCALL_H
+#define NTVDMEX_WOWCALL_H
 /*
  * wowcall.h -- ★ CALLING 16-BIT CODE FROM THE HOST. GH #128, session 40.
  *
@@ -87,7 +87,7 @@
      committing the descriptor present (access 0xfb). This host reflects that
      exception correctly and has done for sessions -- eight of them succeeded in
      the very run that found this.
-   ⚠ BUT WE NEVER LET IT HAPPEN ON OUR OWN CALLS. wowcall_enter reaches a 16-bit
+   ⚠ BUT WE NEVER LET IT HAPPEN ON OUR OWN CALLS. WowCallEnter reaches a 16-bit
      procedure by WRITING CS:EIP into the VDM TIB, and a TIB whose CS names a
      not-present selector is not a fault, it is a VDM that does not come back:
      no exception, no log line, the process simply gone. Measured on CARDFILE,
@@ -154,7 +154,7 @@
      on the frame keeps that decision with the call that asked for it, instead of
      leaving the BOP handler to guess from a sink's address what it was for. */
 #define WOWCALL_ACT_NONE     0
-#define WOWCALL_ACT_EDITTEXT 1   /* actarg = the Win16 hwnd of an EDIT control */
+#define WOWCALL_ACT_EDITTEXT 1   /* ActionArgument = the Win16 hwnd of an EDIT control */
 /* ── ★★ THE SAVE DIRECTION, AS A CHAIN. (session 44) EM_GETHANDLE has to hand
      back a block containing the control's CURRENT text, and only the guest's
      KERNEL can touch the guest's heap -- so it takes three calls, each one
@@ -162,7 +162,7 @@
        EDITLOCK: the allocator has returned a handle; LocalLock it.
        EDITFILL: the lock has returned a near offset; write the text there and
                  LocalUnlock.
-     Both carry the EDIT control's Win16 hwnd in `actarg`, as EDITTEXT does. */
+     Both carry the EDIT control's Win16 hwnd in `ActionArgument`, as EDITTEXT does. */
 #define WOWCALL_ACT_EDITLOCK 2
 #define WOWCALL_ACT_EDITFILL 3
 /* ── ★★★★★ AND THE SAME SHAPE AGAIN, AS A LOOP. (session 57) ─────────────────
@@ -171,26 +171,26 @@
      called, and if not, wait for the next message and call it again. The parked
      frame underneath the whole chain is the DialogBox call itself, which is why
      `DialogBox` can finally do the one thing that defines it -- not return.
-     `actarg` = the dialog's Win16 hwnd. See src/wow/wowdlg.h. */
+     `ActionArgument` = the dialog's Win16 hwnd. See src/wow/wowdlg.h. */
 #define WOWCALL_ACT_MODALPUMP 4
 /* ── ★ AND A FOURTH USE OF THE SAME SHAPE: ONE CALL PER ITEM. (session 57) ────
      EnumWindows / EnumChildWindows / EnumTaskWindows / LineDDA all call the
      guest's callback once per item and stop when it answers 0. The continuation
-     rule is "next item"; see src/wow/wowenum.h. `actarg` = the item's window
+     rule is "next item"; see src/wow/wowenum.h. `ActionArgument` = the item's window
      handle where it has one, for the log. */
 #define WOWCALL_ACT_ENUMNEXT  5
 /* ── THE CLIPBOARD BRIDGE (#160). Text crosses in guest GLOBAL memory, which only
      krnl386 can hand out, so each direction is a short chain of its calls:
        GetClipboardData: GlobalAlloc -> CLIPLOCK: GlobalLock -> CLIPFILL: copy the
-                         host text in, GlobalUnlock.        actarg = the handle
+                         host text in, GlobalUnlock.        ActionArgument = the handle
        SetClipboardData: GlobalLock -> CLIPPUT: copy the guest text out to the host
-                         clipboard, GlobalUnlock.           actarg = the handle */
+                         clipboard, GlobalUnlock.           ActionArgument = the handle */
 #define WOWCALL_ACT_CLIPLOCK  6
 #define WOWCALL_ACT_CLIPFILL  7
 #define WOWCALL_ACT_CLIPPUT   8
 /* s88: the guest's DLGPROC answered for DefDlgProc; if it said FALSE (0), the
    dialog manager's DEFAULT runs and its value replaces the answer. The message's
-   parameters wait in g_wu_dlgdef[] at the frame's depth -- actarg is the hdlg. */
+   parameters wait in g_wu_dlgdef[] at the frame's depth -- ActionArgument is the hdlg. */
 #define WOWCALL_ACT_DLGDEFAULT 9
 
 /* ── THE ENUMERATION SOURCES, DECLARED HERE FOR THE INCLUDE ORDER. ───────────
@@ -205,25 +205,25 @@
 #define WOWENUM_LINE      4     /* every point on a line (LineDDA)             */
 #define WOWENUM_FONTS     5     /* every font (family) -- EnumFontFamilies (s89) */
 #define WOWENUM_OBJECTS   6     /* every pen or brush -- EnumObjects (s90); the
-                                   LOGPEN16/LOGBRUSH16 blobs reuse g_we_font[]   */
+                                   LOGPEN16/LOGBRUSH16 blobs reuse g_WowEnumFonts[]   */
 #define WOWENUM_PROPS     7     /* every property of a window -- EnumProps (s90):
-                                   b[] = the name (b[0]==0: an atom in b[1..2]),
-                                   .type = the data handle                       */
+                                   Blob[] = the name (Blob[0]==0: an atom in Blob[1..2]),
+                                   .FontType = the data handle                     */
 #define WOWENUM_METAFILE  8     /* every record of a metafile -- EnumMetaFile
                                    (#295): the snapshot and the handle table live
-                                   in wowgdi.h (g_wmf), not in g_we_font[]        */
+                                   in wowgdi.h (g_wmf), not in g_WowEnumFonts[]        */
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
    this names the argument (HIGH word index) that points `off` bytes into it. Set
-   just before wowcall_enter, which consumes and clears it. -1 = none. */
-static int  g_wc_blob2_arg = -1;
-static int  g_wc_blob2_off = 0;
+   just before WowCallEnter, which consumes and clears it. -1 = none. */
+static INT  g_WowCallBlob2Argument = -1;
+static INT  g_WowCallBlob2Offset = 0;
 /* #295: where the LAST blob went, as a host linear address (ssbase + SP), 0 if the
    last call placed none. EnumMetaFile reads the guest's handle table back out of
    it after the callback returns -- see wowgdi.h's g_wmf note. */
-static DWORD g_wc_blob_lin = 0;
-/* The largest blob wowcall_enter will place on the guest stack. 256 covered every
+static DWORD g_WowCallBlobLinear = 0;
+/* The largest blob WowCallEnter will place on the guest stack. 256 covered every
    structure before #295 (the font pair is 187 bytes); a METARECORD plus its handle
    table is the first variable-sized one, and wowgdi.h bounds it by this. */
 #define WOWCALL_MAX_BLOB 1024
@@ -235,14 +235,14 @@ static DWORD g_wc_blob_lin = 0;
 #define WOWENUM_ELF16   146
 #define WOWENUM_NTM16   41
 #define WOWENUM_MAXFONT 256
-typedef struct { BYTE b[WOWENUM_ELF16 + WOWENUM_NTM16]; WORD type; } wowenum_font_t;
-static wowenum_font_t g_we_font[WOWENUM_MAXFONT];
-static int g_we_nfont;
+typedef struct _WOWENUM_FONT { BYTE Blob[WOWENUM_ELF16 + WOWENUM_NTM16]; WORD FontType; } WOWENUM_FONT, *PWOWENUM_FONT;
+static WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
+static INT g_WowEnumFontCount;
 
-static int  wowenum_busy(void);
-static int  wowenum_begin(int kind, DWORD proc, WORD ds, DWORD lparam,
+static INT  wowenum_busy(VOID);
+static INT  wowenum_begin(INT kind, DWORD proc, WORD ds, DWORD lparam,
                           DWORD retlin, WORD parent);
-static void wowenum_line(int x0, int y0, int x1, int y1);
+static VOID wowenum_line(INT x0, INT y0, INT x1, INT y1);
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
@@ -250,12 +250,12 @@ static void wowenum_line(int x0, int y0, int x1, int y1);
 #define WOWCALL_MAX_ARGW  32  /* s89: EnumFontFamilies' callback takes 7 words; s91: WOWCallback16Ex
                                  allows 64 argument bytes (WCB16_MAX_CBARGS) */
 
-typedef struct {
-    WOWSCHED_SLOT saved;   /* the interrupted context, verbatim               */
-    DWORD retlin;            /* the originating WOW32 frame's return hole, or 0 */
-    DWORD proc;              /* what we called -- for the log and the failure    */
-    WORD  hwnd, msg;         /* for the log; 0/0 when the call is not a message  */
-    int   retmode;           /* WOWCALL_RET_* -- see above                       */
+typedef struct _WOWCALL_FRAME {
+    WOWSCHED_SLOT Saved;   /* the interrupted context, verbatim               */
+    DWORD ReturnLinear;      /* the originating WOW32 frame's return hole, or 0 */
+    DWORD Procedure;         /* what we called -- for the log and the failure    */
+    WORD  Window, Message;   /* for the log; 0/0 when the call is not a message  */
+    INT   ReturnMode;        /* WOWCALL_RET_* -- see above                       */
     /* ★ WHERE THE ANSWER ALSO GOES. A call the host makes for its OWN reasons
          (LocalAlloc, to get an edit control a text handle) has a result the host
          must keep, and the result only exists when the guest returns -- long
@@ -263,13 +263,13 @@ typedef struct {
          static object it belongs to closes that gap without a completion queue.
        ⚠ It must point into storage that outlives the call. Everything it is used
          for is a static array, and it must stay that way. */
-    WORD *sink;
-    DWORD written;           /* what actually went into the hole, for the log   */
-    int   action;            /* WOWCALL_ACT_* -- see above                      */
-    WORD  actarg;            /* what the action is about                        */
-    WORD  etask;             /* s92: krnl386's current task when it was entered  */
-    WORD  prevtask;          /* s92: non-zero = an INTER-TASK call; put back on leave */
-} wowcall_frame_t;
+    PWORD Sink;
+    DWORD Written;           /* what actually went into the hole, for the log   */
+    INT   Action;            /* WOWCALL_ACT_* -- see above                      */
+    WORD  ActionArgument;    /* what the action is about                        */
+    WORD  EnteredTask;       /* s92: krnl386's current task when it was entered  */
+    WORD  PreviousTask;      /* s92: non-zero = an INTER-TASK call; put back on leave */
+} WOWCALL_FRAME, *PWOWCALL_FRAME;
 
 /* ── s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
      SendMessage across tasks is a directed yield: the receiver's procedure runs on
@@ -279,23 +279,23 @@ typedef struct {
      near pointer to a local reads garbage when SS is not the procedure's DS. The
      host knows where the receiver's stack is free -- below where it is parked --
      so main.c (ws_retarget) answers "which SS:SP, and switch the task word";
-     `untarget` switches it back when the procedure returns. */
-static WORD (*g_wc_curtask)(void) = 0;
-static int  (*g_wc_retarget)(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev) = 0;
-static void (*g_wc_untarget)(WORD prev) = 0;
+     `g_WowCallUntarget` switches it back when the procedure returns. */
+static WORD (*g_WowCallCurrentTask)(VOID) = 0;
+static INT  (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask) = 0;
+static VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
 
-static wowcall_frame_t g_wc[WOWCALL_MAX_DEPTH];
-static int             g_wc_depth  = 0;
-static DWORD           g_wc_calls  = 0;   /* how many 16-bit calls this run made */
+static WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
+static INT             g_WowCallDepth  = 0;
+static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run made */
 
 /* Push one word onto the guest stack at ssbase:*sp, growing down. */
-static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
+static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
 {
-    volatile BYTE *s;
-    *sp = (WORD)(*sp - 2);
-    s = (volatile BYTE *)(ULONG_PTR)(ssbase + *sp);
-    s[0] = (BYTE)(v & 0xFF);
-    s[1] = (BYTE)(v >> 8);
+    volatile BYTE *bytes;
+    *stackPointer = (WORD)(*stackPointer - 2);
+    bytes = (volatile BYTE *)(ULONG_PTR)(stackBase + *stackPointer);
+    bytes[0] = (BYTE)(value & 0xFF);
+    bytes[1] = (BYTE)(value >> 8);
 }
 
 /*
@@ -304,57 +304,57 @@ static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
  * when the callback returns, and a context saved on the BOP would execute it
  * a second time.
  *
- * `retlin` is the linear address of the originating call's return-value hole,
+ * `returnLinear` is the linear address of the originating call's return-value hole,
  * so that a WM_CREATE answering -1 can still fail the CreateWindow that sent
  * it. Pass 0 when there is nothing to revise.
  *
  * Returns 1 if the guest is now standing at the procedure's first instruction.
  */
-/* `absent` = the target's code selector is NOT PRESENT, so we must reach it
+/* `isAbsent` = the target's code selector is NOT PRESENT, so we must reach it
    through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF. */
-static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
-                         DWORD proc, WORD ds, const WORD *argw, int nargw,
-                         DWORD retlin, int retmode, WORD *sink,
-                         WORD hwnd, WORD msg,
-                         const BYTE *blob, int blobn, int blobarg,
-                         int absent)
+static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
+                         DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount,
+                         DWORD returnLinear, INT returnMode, PWORD sink,
+                         WORD window, WORD message,
+                         PCBYTE blob, INT blobLength, INT blobArgument,
+                         INT isAbsent)
 {
-    wowcall_frame_t *fr;
-    WORD arg[WOWCALL_MAX_ARGW];
-    WORD sp;
-    int i;
-    if (g_wc_depth >= WOWCALL_MAX_DEPTH) return 0;
-    if (!ssbase || !retsel || !(proc >> 16)) return 0;
-    if (nargw < 0 || nargw > WOWCALL_MAX_ARGW) return 0;
-    if (blobn < 0 || blobn > WOWCALL_MAX_BLOB) return 0;
-    for (i = 0; i < nargw; ++i) arg[i] = argw[i];
+    PWOWCALL_FRAME frame;
+    WORD arguments[WOWCALL_MAX_ARGW];
+    WORD stackPointer;
+    INT index;
+    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH) return 0;
+    if (!stackBase || !returnSelector || !(procedure >> 16)) return 0;
+    if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW) return 0;
+    if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB) return 0;
+    for (index = 0; index < argumentWordCount; ++index) arguments[index] = argumentWords[index];
 
-    fr = &g_wc[g_wc_depth++];
-    WowSchedSave(&fr->saved, tib, 0, 0, 0);
-    fr->retlin  = retlin;
-    fr->proc    = proc;
-    fr->hwnd    = hwnd;
-    fr->msg     = msg;
-    fr->retmode = retmode;
-    fr->sink    = sink;
-    fr->action  = WOWCALL_ACT_NONE;   /* the caller sets it after we succeed */
-    fr->actarg  = 0;
-    fr->etask   = g_wc_curtask ? g_wc_curtask() : 0;
-    fr->prevtask = 0;
-    if (hwnd && g_wc_retarget) {          /* s92 #306: see g_wc_retarget */
-        WORD nss = 0, nsp = 0; DWORD nb = 0;
-        if (g_wc_retarget(hwnd, &nss, &nsp, &nb, &fr->prevtask) && nb) {
-            VDM_SET16(tib, VTIB_SS,  nss);
-            VDM_SET16(tib, VTIB_ESP, nsp);
-            ssbase = nb;
-        } else fr->prevtask = 0;
+    frame = &g_WowCallFrames[g_WowCallDepth++];
+    WowSchedSave(&frame->Saved, tib, 0, 0, 0);
+    frame->ReturnLinear  = returnLinear;
+    frame->Procedure    = procedure;
+    frame->Window    = window;
+    frame->Message     = message;
+    frame->ReturnMode = returnMode;
+    frame->Sink    = sink;
+    frame->Action  = WOWCALL_ACT_NONE;   /* the caller sets it after we succeed */
+    frame->ActionArgument  = 0;
+    frame->EnteredTask   = g_WowCallCurrentTask ? g_WowCallCurrentTask() : 0;
+    frame->PreviousTask = 0;
+    if (window && g_WowCallRetarget) {          /* s92 #306: see g_WowCallRetarget */
+        WORD newStackSelector = 0, newStackPointer = 0; DWORD newStackBase = 0;
+        if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase) {
+            VDM_SET16(tib, VTIB_SS,  newStackSelector);
+            VDM_SET16(tib, VTIB_ESP, newStackPointer);
+            stackBase = newStackBase;
+        } else frame->PreviousTask = 0;
     }
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
        procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
        hands them in declared order and this pushes them in that order. */
-    sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+    stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
 
     /* ── ★★★ THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS. ─────────────
          A pointer argument has to point at memory the GUEST can address, and the
@@ -371,53 +371,53 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
          every push for the rest of the call and is a trap for the next reader.
        ⚠ AND IT IS THE SELECTOR, NOT THE BASE, THAT THE GUEST NEEDS: `ssbase` is
          a host linear address and means nothing to 16-bit code. */
-    g_wc_blob_lin = 0;
-    if (blob && blobn > 0 && blobarg >= 0 && blobarg + 1 < nargw) {
-        WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-        int  n  = (blobn + 1) & ~1;
-        sp = (WORD)(sp - n);
-        for (i = 0; i < blobn; ++i)
-            *(volatile BYTE *)(ULONG_PTR)(ssbase + (DWORD)(WORD)(sp + i)) = blob[i];
-        arg[blobarg]     = ss;                       /* the far pointer's HIGH */
-        arg[blobarg + 1] = sp;                       /* ... and its offset     */
-        g_wc_blob_lin    = ssbase + (DWORD)sp;
-        if (g_wc_blob2_arg >= 0 && g_wc_blob2_arg + 1 < nargw
-            && g_wc_blob2_off > 0 && g_wc_blob2_off < blobn) {
-            arg[g_wc_blob2_arg]     = ss;
-            arg[g_wc_blob2_arg + 1] = (WORD)(sp + g_wc_blob2_off);
+    g_WowCallBlobLinear = 0;
+    if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount) {
+        WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+        INT  blobBytes  = (blobLength + 1) & ~1;
+        stackPointer = (WORD)(stackPointer - blobBytes);
+        for (index = 0; index < blobLength; ++index)
+            *(volatile BYTE *)(ULONG_PTR)(stackBase + (DWORD)(WORD)(stackPointer + index)) = blob[index];
+        arguments[blobArgument]     = stackSelector;                       /* the far pointer's HIGH */
+        arguments[blobArgument + 1] = stackPointer;                       /* ... and its offset     */
+        g_WowCallBlobLinear    = stackBase + (DWORD)stackPointer;
+        if (g_WowCallBlob2Argument >= 0 && g_WowCallBlob2Argument + 1 < argumentWordCount
+            && g_WowCallBlob2Offset > 0 && g_WowCallBlob2Offset < blobLength) {
+            arguments[g_WowCallBlob2Argument]     = stackSelector;
+            arguments[g_WowCallBlob2Argument + 1] = (WORD)(stackPointer + g_WowCallBlob2Offset);
         }
     }
-    g_wc_blob2_arg = -1; g_wc_blob2_off = 0;
+    g_WowCallBlob2Argument = -1; g_WowCallBlob2Offset = 0;
 
-    for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, arg[i]);
-    wowcall_push(ssbase, &sp, retsel);       /* the far return address: CS ... */
-    wowcall_push(ssbase, &sp, 0);            /* ... then IP, at offset 0       */
+    for (index = 0; index < argumentWordCount; ++index) WowCallPush(stackBase, &stackPointer, arguments[index]);
+    WowCallPush(stackBase, &stackPointer, returnSelector);       /* the far return address: CS ... */
+    WowCallPush(stackBase, &stackPointer, 0);            /* ... then IP, at offset 0       */
     /* ★ AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
          are about to enter on pops it and faults on OUR behalf. Same order as
          the return address above: CS first, so IP ends up at [SP]. */
-    if (absent) {
-        wowcall_push(ssbase, &sp, (WORD)(proc >> 16));
-        wowcall_push(ssbase, &sp, (WORD)(proc & 0xFFFF));
+    if (isAbsent) {
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> 16));
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure & 0xFFFF));
     }
-    VDM_SET16(tib, VTIB_ESP, sp);
+    VDM_SET16(tib, VTIB_ESP, stackPointer);
 
     /* DS is the contract (see the header note); AX carries the same value so
        that a MakeProcInstance-style `mov ds,ax` prologue is satisfied too. One
        assignment cannot be right for one form and wrong for the other, because
        both forms read the same register. */
-    VDM_SET16(tib, VTIB_EAX, ds);
-    VDM_SET16(tib, VTIB_DS,  ds);
-    if (absent) {
+    VDM_SET16(tib, VTIB_EAX, dataSelector);
+    VDM_SET16(tib, VTIB_DS,  dataSelector);
+    if (isAbsent) {
         /* Enter on the RETF, which is in a segment that IS present. Its own #NP
            on the popped selector is restartable, so krnl386 loads the segment
            and the retry lands in the procedure with this identical stack. */
-        VDM_SET16(tib, VTIB_CS,  retsel);
+        VDM_SET16(tib, VTIB_CS,  returnSelector);
         VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
     } else {
-        VDM_SET16(tib, VTIB_CS,  (WORD)(proc >> 16));
-        VDM_REG(tib, VTIB_EIP) = (DWORD)(proc & 0xFFFF);
+        VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> 16));
+        VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & 0xFFFF);
     }
-    ++g_wc_calls;
+    ++g_WowCallCount;
     return 1;
 }
 
@@ -428,42 +428,42 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
  * is not a curiosity, it means something executed our return stub that we did
  * not send there, which is a fact worth printing rather than swallowing.
  */
-static DWORD g_wc_lastres;   /* the last nested call's DX:AX (sink keeps only AX) */
-static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
+static DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
+static PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
 {
-    wowcall_frame_t *fr;
-    if (g_wc_depth <= 0) return NULL;
-    fr = &g_wc[--g_wc_depth];
-    WowSchedRestore(&fr->saved, tib);
-    if (fr->prevtask && g_wc_untarget) g_wc_untarget(fr->prevtask);
-    if (fr->sink) *fr->sink = (WORD)result;
-    g_wc_lastres = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
-    fr->written = 0;
-    if (fr->retlin) {
-        volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)fr->retlin;
-        DWORD v = 0;
-        int write = 0;
+    PWOWCALL_FRAME frame;
+    if (g_WowCallDepth <= 0) return NULL;
+    frame = &g_WowCallFrames[--g_WowCallDepth];
+    WowSchedRestore(&frame->Saved, tib);
+    if (frame->PreviousTask && g_WowCallUntarget) g_WowCallUntarget(frame->PreviousTask);
+    if (frame->Sink) *frame->Sink = (WORD)result;
+    g_WowCallLastResult = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
+    frame->Written = 0;
+    if (frame->ReturnLinear) {
+        volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)frame->ReturnLinear;
+        DWORD value = 0;
+        INT isWrite = 0;
         /* ★ WM_CREATE MAY REFUSE. Returning -1 from WM_CREATE is the documented
              way for a window procedure to abort its own creation, and the host
              must honour it: the call that made the window comes back 0. The
              return hole is guest memory and outlives the context switch, so
              revising it is a four-byte write, not a special case. */
-        if (fr->retmode == WOWCALL_RET_KEEP) {
-            if (fr->msg == WM_CREATE16 && (WORD)result == 0xFFFF) write = 1;
+        if (frame->ReturnMode == WOWCALL_RET_KEEP) {
+            if (frame->Message == WM_CREATE16 && (WORD)result == 0xFFFF) isWrite = 1;
         } else {
             /* ⚠ MASK A WORD RETURN. DX is not the high half of a WORD result --
                  see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
                  proved it. */
-            v = (fr->retmode == WOWCALL_RET_RESULTW) ? (result & 0xFFFF) : result;
-            write = 1;                  /* SendMessage: the procedure's answer */
+            value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & 0xFFFF) : result;
+            isWrite = 1;                  /* SendMessage: the procedure's answer */
         }
-        if (write) {
-            fr->written = v;
-            h[0] = (BYTE)(v & 0xFF);        h[1] = (BYTE)((v >> 8)  & 0xFF);
-            h[2] = (BYTE)((v >> 16) & 0xFF); h[3] = (BYTE)((v >> 24) & 0xFF);
+        if (isWrite) {
+            frame->Written = value;
+            hole[0] = (BYTE)(value & 0xFF);        hole[1] = (BYTE)((value >> 8)  & 0xFF);
+            hole[2] = (BYTE)((value >> 16) & 0xFF); hole[3] = (BYTE)((value >> 24) & 0xFF);
         }
     }
-    return fr;
+    return frame;
 }
 
-#endif /* WOWCALL_H */
+#endif /* NTVDMEX_WOWCALL_H */
