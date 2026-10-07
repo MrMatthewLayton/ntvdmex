@@ -76,7 +76,7 @@ static VOID ClockTestDayOfWeek(PCSTR description, UINT year, UINT month, UINT da
     ClockTestExpect(description, unpacked.DayOfWeek, expectedDayOfWeek);
 }
 
-int main(void)
+INT main(VOID)
 {
     /* ── validity: p_clock clk.2b.* / clk.2d.* (AL=00 taken, AL=FF refused) ── */
     ClockTestExpect("clk.2b.19991231 taken",        DosClockIsDosDateValid(1999, 12, 31), TRUE);
