@@ -48,7 +48,7 @@ static VOID FhTestStandardTable(PVOID fileHandles[DOS_MAX_FILES], PUINT deviceMa
 /* Any non-NULL value stands for "bound to a Win32 handle". */
 static PVOID const g_Bound = (PVOID)(SIZE_T)FH_TEST_BOUND_VALUE;
 
-int main(void)
+INT main(VOID)
 {
     PVOID fileHandles[DOS_MAX_FILES];
     UINT deviceMask;
