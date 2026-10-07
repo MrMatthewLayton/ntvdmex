@@ -1662,11 +1662,11 @@ static HICON wowuser_sysres_hicon(WORD token, int *picked, int cx, int cy)
     /* ★ Already an object: hand it back. Nothing to load, nothing to guess. */
     if (kind == AD_KIND_REALICON) return wowuser_sysres_realicon(token);
     if (nm)
-        return wowres_open(wowuser_res_prog()) ? wowres_icon_named(nm, picked, cx, cy)
+        return WowResOpen(wowuser_res_prog()) ? WowResIconNamed(nm, picked, cx, cy)
                                            : NULL;
     if (!ord) return NULL;
     if (kind == AD_KIND_MODULERES)
-        return wowres_open(wowuser_res_prog()) ? wowres_icon(ord, picked, cx, cy) : NULL;
+        return WowResOpen(wowuser_res_prog()) ? WowResIcon(ord, picked, cx, cy) : NULL;
     /* ⚠ A PREDEFINED icon at an explicit size needs LoadImage, not LoadIcon --
          LoadIcon always gives SM_CXICON and the small one would be derived
          again, which is the defect this parameter exists to remove. */
@@ -1718,7 +1718,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     if (r->cur) return r->cur;                   /* built once (#216) */
     if (r->kind == AD_KIND_REALICON) return (HCURSOR)r->real;
     if (nm) {
-        c = wowres_open(wowuser_res_prog()) ? wowres_cursor_named(nm) : NULL;
+        c = WowResOpen(wowuser_res_prog()) ? WowResCursorNamed(nm) : NULL;
         r->cur = c;
         return c;
     }
@@ -1726,7 +1726,7 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     /* s89 (#216): a module's own cursor asked for BY ORDINAL is in its file,
        not in the system's set -- LoadCursorA(NULL, 2) would be a stranger's. */
     if (r->kind == AD_KIND_MODULERES) {
-        c = wowres_open(wowuser_res_prog()) ? wowres_cursor(ord) : NULL;
+        c = WowResOpen(wowuser_res_prog()) ? WowResCursor(ord) : NULL;
         r->cur = c;
         if (!c && fell) *fell = 1;
         return c;
@@ -4423,9 +4423,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             else if (!(w->style & WS_CHILD16)
                      && (cc->menuord || cc->menuname[0])) {
                 int nitems = 0;
-                if (wowres_open(wowuser_res_prog()))
-                    hm = cc->menuord ? wowres_menu(cc->menuord, &nitems)
-                                     : wowres_menu_byname(cc->menuname, &nitems);
+                if (WowResOpen(wowuser_res_prog()))
+                    hm = cc->menuord ? WowResMenu(cc->menuord, &nitems)
+                                     : WowResMenuByName(cc->menuname, &nitems);
                 w->menuitems = nitems;
             }
             if (cc->reg32) {
@@ -4653,13 +4653,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                have been a gap in this host before. */
             if (!(style & WS_CHILD16)) {
                 if (menuname[0] || menuord) {
-                    if (wowres_open(wowuser_res_prog()))
-                        hm = menuord ? wowres_menu(menuord, &nitems)
-                                     : wowres_menu_byname(menuname, &nitems);
+                    if (WowResOpen(wowuser_res_prog()))
+                        hm = menuord ? WowResMenu(menuord, &nitems)
+                                     : WowResMenuByName(menuname, &nitems);
                 } else if (c->menuord || c->menuname[0]) {
-                    if (wowres_open(wowuser_res_prog()))
-                        hm = c->menuord ? wowres_menu(c->menuord, &nitems)
-                                        : wowres_menu_byname(c->menuname, &nitems);
+                    if (WowResOpen(wowuser_res_prog()))
+                        hm = c->menuord ? WowResMenu(c->menuord, &nitems)
+                                        : WowResMenuByName(c->menuname, &nitems);
                 }
             }
             w->menuitems = nitems;
@@ -5820,14 +5820,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              OS's own (Ctrl+F4 and friends) against an MDI client, and nothing
              measured needs them. */
         if (!mdi) {
-            static wowres_accel_t acc[WOWRES_MAX_ACCEL];
+            static WOWRES_ACCEL acc[WOWRES_MAX_ACCEL];
             static int nacc = -1;            /* -1 = not looked for yet */
             static WORD accres = 0;
             volatile BYTE *lp = wow32_argptr(f, WOWMSG_TRANSLATEACCELERATOR_ARG_LPMSG);
             WOWMSG m;
             if (nacc < 0) {
-                nacc = wowres_open(wowuser_res_prog())
-                     ? wowres_accel_first(acc, WOWRES_MAX_ACCEL, &accres) : 0;
+                nacc = WowResOpen(wowuser_res_prog())
+                     ? WowResAccelFirst(acc, WOWRES_MAX_ACCEL, &accres) : 0;
             }
             if (nacc > 0 && lp) {
                 /* ── #215: TWO KINDS OF ENTRY, MATCHED AGAINST TWO KINDS OF MESSAGE. ──
@@ -5852,25 +5852,25 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                     int i;
                     if (m.Message == 0x0106) alt = 1;
                     for (i = 0; i < nacc; ++i) {
-                        int vk = (acc[i].flags & WOWRES_ACCEL_VIRTKEY) != 0;
+                        int vk = (acc[i].Flags & WOWRES_ACCEL_VIRTKEY) != 0;
                         if (vk == ischar) continue;             /* wrong kind of message */
-                        if (acc[i].key != m.WParam) continue;
+                        if (acc[i].Key != m.WParam) continue;
                         if (vk) {
-                            if (!!(acc[i].flags & WOWRES_ACCEL_SHIFT)   != shift) continue;
-                            if (!!(acc[i].flags & WOWRES_ACCEL_CONTROL) != ctrl)  continue;
+                            if (!!(acc[i].Flags & WOWRES_ACCEL_SHIFT)   != shift) continue;
+                            if (!!(acc[i].Flags & WOWRES_ACCEL_CONTROL) != ctrl)  continue;
                         }
-                        if (!!(acc[i].flags & WOWRES_ACCEL_ALT)     != alt)   continue;
+                        if (!!(acc[i].Flags & WOWRES_ACCEL_ALT)     != alt)   continue;
                         /* ★ A MATCH IS A WM_COMMAND, and the caller's `or ax,ax /
                              jne` must see non-zero so it does NOT also translate
                              and dispatch the keystroke. */
                         WowMsgPost(wow32_argw(f, WOWMSG_TRANSLATEACCELERATOR_ARG_HWND), WM_COMMAND16,
-                                    acc[i].id, 0x00010000u, GetTickCount(), 0, 0);
+                                    acc[i].Id, 0x00010000u, GetTickCount(), 0, 0);
                         wu_puts(note, notecap, &k, " -> ACCELERATOR #");
                         wu_puthex(note, notecap, &k, accres, 4);
                         wu_puts(note, notecap, &k, vk ? " matched vk 0x" : " matched char 0x");
                         wu_puthex(note, notecap, &k, m.WParam, 4);
                         wu_puts(note, notecap, &k, " -> WM_COMMAND 0x");
-                        wu_puthex(note, notecap, &k, acc[i].id, 4);
+                        wu_puthex(note, notecap, &k, acc[i].Id, 4);
                         wow32_setret(f, 1);
                         return 1;
                     }
@@ -6208,11 +6208,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              exactly what "answered 0" looks like from the desktop and does not
              look like an error anywhere.
            ⚠ THIS IS THE THIRD TIME THE SAME GAP HAS BEEN FOUND. Session 45 hit
-             it on MENUS (`MENU="PBrush2"`) and fixed `wowres_find` for menus
+             it on MENUS (`MENU="PBrush2"`) and fixed `WowResFind` for menus
              only; the icon and cursor paths kept the integer-only lookup. **A
              fix that is not carried to every lookup of the same kind is half a
              fix**, so both are named here and both resolve through the same
-             `wowres_find_named`. */
+             `WowResFindNamed`. */
         if (hi) {
             char nm[32];
             wow32_argstr(f, AD_ARG_NAMELO, nm, sizeof nm);
@@ -10594,7 +10594,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "LoadMenu(hInst 0x");
         wu_puthex(note, notecap, &k, hinst, 4);
         wu_puts(note, notecap, &k, ", ");
-        if (!wowres_open(wowuser_res_prog())) {
+        if (!WowResOpen(wowuser_res_prog())) {
             wu_puts(note, notecap, &k, "?) -- ★ CANNOT OPEN THE PROGRAM'S OWN"
                                        " FILE; answered 0");
             wow32_setret(f, 0);
@@ -10604,10 +10604,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             /* MAKEINTRESOURCE: the high word is 0, so the low word is an ordinal. */
             wu_puts(note, notecap, &k, "#");
             wu_puthex(note, notecap, &k, name & 0xFFFF, 4);
-            hm = wowres_menu((WORD)(name & 0xFFFF), &nitems);
+            hm = WowResMenu((WORD)(name & 0xFFFF), &nitems);
         } else if (wowuser_farstr(f, name, nbuf, sizeof nbuf)) {
             wu_putq(note, notecap, &k, nbuf);
-            hm = wowres_menu_byname(nbuf, &nitems);
+            hm = WowResMenuByName(nbuf, &nitems);
         } else {
             wu_puts(note, notecap, &k, "?");
         }

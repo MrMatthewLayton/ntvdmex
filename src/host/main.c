@@ -10027,8 +10027,8 @@ static WORD g_wow_shell_seg = 0;
 
 static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return wow_anchor_hit(g_shell_anchors,
-                          (int)(sizeof g_shell_anchors / sizeof g_shell_anchors[0]),
+    return WowAnchorHit(g_WowShellAnchors,
+                          (int)(sizeof g_WowShellAnchors / sizeof g_WowShellAnchors[0]),
                           id, argb, retstub);
 }
 
@@ -10049,8 +10049,8 @@ static WORD g_wow_cdlg_seg = 0;
 static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
 {
     /* s89: the whole table (wowanchors.h) -- two rows left FindText unidentified. */
-    return wow_anchor_hit(g_commdlg_anchors,
-                          (int)(sizeof g_commdlg_anchors / sizeof g_commdlg_anchors[0]),
+    return WowAnchorHit(g_WowCommdlgAnchors,
+                          (int)(sizeof g_WowCommdlgAnchors / sizeof g_WowCommdlgAnchors[0]),
                           id, argb, retstub);
 }
 
@@ -10066,8 +10066,8 @@ static WORD g_wow_kbd_seg = 0;
 static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
 {
     /* s89: the whole table (wowanchors.h), for the same reason as COMMDLG's. */
-    return wow_anchor_hit(g_keyboard_anchors,
-                          (int)(sizeof g_keyboard_anchors / sizeof g_keyboard_anchors[0]),
+    return WowAnchorHit(g_WowKeyboardAnchors,
+                          (int)(sizeof g_WowKeyboardAnchors / sizeof g_WowKeyboardAnchors[0]),
                           id, argb, retstub);
 }
 
@@ -10080,8 +10080,8 @@ static WORD g_wow_mmedia_seg = 0;   /* s90 #278: MMSYSTEM's stub segment */
 
 static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return wow_anchor_hit(g_sound_anchors,
-                          (int)(sizeof g_sound_anchors / sizeof g_sound_anchors[0]),
+    return WowAnchorHit(g_WowSoundAnchors,
+                          (int)(sizeof g_WowSoundAnchors / sizeof g_WowSoundAnchors[0]),
                           id, argb, retstub);
 }
 
@@ -10102,8 +10102,8 @@ static WORD g_wow_gdi_seg = 0;
      The table is now all 367 stubs in GDI.EXE -- see src/wow/wowanchors.h. */
 static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return wow_anchor_hit(g_gdi_anchors,
-                          (int)(sizeof g_gdi_anchors / sizeof g_gdi_anchors[0]),
+    return WowAnchorHit(g_WowGdiAnchors,
+                          (int)(sizeof g_WowGdiAnchors / sizeof g_WowGdiAnchors[0]),
                           id, argb, retstub);
 }
 
@@ -24049,8 +24049,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
                     && f.stubseg != g_wow_kbd_seg && f.stubseg != g_wow_gdi_seg
                     && f.stubseg != g_wow_sound_seg
-                    && wow_anchor_hit(g_mmedia_anchors,
-                                      (int)(sizeof g_mmedia_anchors / sizeof g_mmedia_anchors[0]),
+                    && WowAnchorHit(g_WowMmediaAnchors,
+                                      (int)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
                                       f.id, f.argb, wow32_peekw(f.bp + 2))) {
                     g_wow_mmedia_seg = f.stubseg;
                     p = zput(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
