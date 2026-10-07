@@ -1,5 +1,5 @@
-#ifndef WOWSCHED_H
-#define WOWSCHED_H
+#ifndef NTVDMEX_WOWSCHED_H
+#define NTVDMEX_WOWSCHED_H
 /*
  * wowsched.h -- a cooperative scheduler for Win16 tasks. GH #128, session 38.
  *
@@ -59,25 +59,26 @@
 #define WOWSCHED_CTX_LO   0x364      /* VTIB_GS  -- the low end of the block */
 #define WOWSCHED_CTX_LEN  0x40       /* .. through VTIB_SS inclusive         */
 
-typedef struct {
-    int   used;                      /* 1 = this slot holds a resumable task  */
-    BYTE  ctx[WOWSCHED_CTX_LEN];     /* the guest register file, verbatim     */
-    DWORD modelin;                   /* linear address of that frame's mode   */
-    WORD  task;                      /* the TDB selector it belongs to        */
-    int   fresh;                     /* s92: parked at its LAUNCH, never run yet */
-    int   runnable;                  /* s92: parked MID-WORK (it yielded to a task it
+typedef struct _WOWSCHED_SLOT {
+    INT   IsUsed;                    /* 1 = this slot holds a resumable task  */
+    BYTE  Context[WOWSCHED_CTX_LEN];     /* the guest register file, verbatim     */
+    DWORD ModeLinear;                /* linear address of that frame's mode   */
+    WORD  Task;                      /* the TDB selector it belongs to        */
+    INT   IsFresh;                   /* s92: parked at its LAUNCH, never run yet */
+    INT   IsRunnable;                /* s92: parked MID-WORK (it yielded to a task it
                                         launched), not waiting for input            */
-    int   wcdepth;                   /* s92: the callback depth it yielded at -- it is
+    INT   CallbackDepth;                /* s92: the callback depth it yielded at -- it is
                                         resumed only at that same depth (LIFO frames) */
-    int   waitmsg;                   /* s92: parked in an EMPTY GetMessage (E): runnable
+    INT   IsWaitingForMessage;                /* s92: parked in an EMPTY GetMessage (E): runnable
                                         again once its own queue is not               */
-    int   base;                      /* s92: the callback depth its top level ran at;
-                                        wcdepth == base = parked holding no host frame,
+    INT   BaseDepth;                   /* s92: the callback depth its top level ran at;
+                                        CallbackDepth == BaseDepth = parked holding no host frame,
                                         so it may resume at ANY depth (re-based there)  */
-} wowsched_slot_t;
+} WOWSCHED_SLOT, *PWOWSCHED_SLOT;
+typedef const WOWSCHED_SLOT *PCWOWSCHED_SLOT;
 
-/* The running task's base depth -- see `base`. */
-static int g_ws_curbase = 0;
+/* The running task's base depth -- see `BaseDepth`. */
+static INT g_WowSchedCurrentBase = 0;
 
 /* s92 (#306): THE RUN QUEUE. One slot was "the task that is not running" -- complete
    for two tasks and wrong for a third: Calc's WinHelp (WOWEXEC + Calc + WINHELP) was
@@ -85,33 +86,33 @@ static int g_ws_curbase = 0;
    running is parked in one of these; the running one is never in the table. */
 #define WOWSCHED_MAX 8
 
-/* Save the live guest context. `eipadj` is added to the saved EIP, which is how
+/* Save the live guest context. `eipAdjust` is added to the saved EIP, which is how
    a context saved AT a BOP resumes AFTER it -- the guest must not re-execute the
    three BOP bytes, and a context that does is an infinite loop, not a task. */
-static void wowsched_save(wowsched_slot_t *s, volatile BYTE *tib,
-                          DWORD modelin, WORD task, int eipadj)
+static VOID WowSchedSave(PWOWSCHED_SLOT slot, volatile BYTE *tib,
+                          DWORD modeLinear, WORD task, INT eipAdjust)
 {
-    unsigned k;
-    volatile BYTE *src = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
-    for (k = 0; k < WOWSCHED_CTX_LEN; ++k) s->ctx[k] = src[k];
-    *(DWORD *)(s->ctx + (0x390 - WOWSCHED_CTX_LO)) += (DWORD)eipadj;   /* VTIB_EIP */
-    s->modelin = modelin;
-    s->task    = task;
-    s->used    = 1;
-    s->fresh   = 0;                  /* the caller marks a launch-parked task fresh */
-    s->runnable = 0;                 /* ...and a mid-work one runnable              */
-    s->wcdepth  = 0;
-    s->waitmsg  = 0;
-    s->base     = g_ws_curbase;
+    UINT index;
+    volatile BYTE *source = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
+    for (index = 0; index < WOWSCHED_CTX_LEN; ++index) slot->Context[index] = source[index];
+    *(DWORD *)(slot->Context + (0x390 - WOWSCHED_CTX_LO)) += (DWORD)eipAdjust;   /* VTIB_EIP */
+    slot->ModeLinear = modeLinear;
+    slot->Task    = task;
+    slot->IsUsed    = 1;
+    slot->IsFresh   = 0;                  /* the caller marks a launch-parked task fresh */
+    slot->IsRunnable = 0;                 /* ...and a mid-work one runnable              */
+    slot->CallbackDepth  = 0;
+    slot->IsWaitingForMessage  = 0;
+    slot->BaseDepth     = g_WowSchedCurrentBase;
 }
 
-static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
+static VOID WowSchedRestore(PWOWSCHED_SLOT slot, volatile BYTE *tib)
 {
-    unsigned k;
-    volatile BYTE *dst = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
-    for (k = 0; k < WOWSCHED_CTX_LEN; ++k) dst[k] = s->ctx[k];
-    s->used = 0;
-    g_ws_curbase = s->base;          /* a top-level resume is re-based by the caller */
+    UINT index;
+    volatile BYTE *destination = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
+    for (index = 0; index < WOWSCHED_CTX_LEN; ++index) destination[index] = slot->Context[index];
+    slot->IsUsed = 0;
+    g_WowSchedCurrentBase = slot->BaseDepth;          /* a top-level resume is re-based by the caller */
 }
 
 /* ── ★★★ SWAP: PARK THE RUNNING TASK WHERE THE OTHER ONE WAS. (session 39) ────
@@ -125,24 +126,24 @@ static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
      because a Win16 task's SS is its own. That is the same property moment (A)
      relies on, and it is why the mode and return-value words can be written into
      a frame now and read by the guest's epilogue much later. */
-static void wowsched_swap(wowsched_slot_t *s, volatile BYTE *tib,
-                          DWORD modelin, WORD cur, int eipadj)
+static VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
+                          DWORD modeLinear, WORD currentTask, INT eipAdjust)
 {
-    wowsched_slot_t resume = *s;                 /* the one we are going back to */
-    wowsched_save(s, tib, modelin, cur, eipadj); /* the running one takes its place */
-    wowsched_restore(&resume, tib);
+    WOWSCHED_SLOT resumeSlot = *slot;                 /* the one we are going back to */
+    WowSchedSave(slot, tib, modeLinear, currentTask, eipAdjust); /* the running one takes its place */
+    WowSchedRestore(&resumeSlot, tib);
 }
 
 /* The two words the host writes into a saved frame before resuming it: the
    epilogue mode (bp-24) and the return-value hole (bp-16), which sit 8 bytes
    apart, so one recorded address locates both. */
-static void wowsched_poke(DWORD lin, WORD v)
+static VOID WowSchedPoke(DWORD linear, WORD value)
 {
-    volatile BYTE *p = (volatile BYTE *)(ULONG_PTR)lin;
-    p[0] = (BYTE)(v & 0xFF);
-    p[1] = (BYTE)(v >> 8);
+    volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
+    bytes[0] = (BYTE)(value & 0xFF);
+    bytes[1] = (BYTE)(value >> 8);
 }
 
 #define WOWSCHED_RETLIN(modelin) ((modelin) + (DWORD)(WOW32_OFF_RET - WOW32_OFF_MODE))
 
-#endif /* WOWSCHED_H */
+#endif /* NTVDMEX_WOWSCHED_H */

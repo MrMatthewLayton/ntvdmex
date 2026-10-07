@@ -1150,7 +1150,7 @@ static int wowgdi_mf_next(int room, int *blobn, int *tbloff, unsigned *func)
     int copy, i;
     *func = 0;
     if (!g_wmf.active || g_wmf.off >= g_wmf.end) return 0;
-    if (!wowconv_mf_record(g_wmf.bits, g_wmf.end, g_wmf.off, &rb, &fn)) {
+    if (!WowConvMetafileRecord(g_wmf.bits, g_wmf.end, g_wmf.off, &rb, &fn)) {
         *func = 0xFFFF;
         return 0;
     }
@@ -1236,7 +1236,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         if (idx == WOWGDI_CAP_NUMCOLORS && v < 0) {
             int bpp = GetDeviceCaps((HDC)o, BITSPIXEL)
                     * GetDeviceCaps((HDC)o, PLANES);
-            v = wowconv_numcolors(bpp);       /* ★ tested in wow_test.c part 3 */
+            v = WowConvNumColors(bpp);       /* ★ tested in wow_test.c part 3 */
             wu_puts(note, notecap, &k, " [NUMCOLORS -1 -> ");
             wu_puthex(note, notecap, &k, (DWORD)v, 4);
             wu_puts(note, notecap, &k, "; a Win16 caller reads -1 as MONOCHROME]");
@@ -2113,7 +2113,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                     v[0] = (long)abc[i].abcA;
                     v[1] = (long)abc[i].abcB;
                     v[2] = (long)abc[i].abcC;
-                    wowconv_abc32_to_16(v, six);
+                    WowConvAbc32To16(v, six);
                     for (b = 0; b < WOWCONV_ABC16_SIZE; ++b)
                         out[i * WOWCONV_ABC16_SIZE + b] = six[b];
                 }
@@ -3541,8 +3541,8 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0); return 1;
         }
         for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
-        r.left  = wowconv_rect16_get(r8, 0); r.top    = wowconv_rect16_get(r8, 1);
-        r.right = wowconv_rect16_get(r8, 2); r.bottom = wowconv_rect16_get(r8, 3);
+        r.left  = WowConvRect16Get(r8, 0); r.top    = WowConvRect16Get(r8, 1);
+        r.right = WowConvRect16Get(r8, 2); r.bottom = WowConvRect16Get(r8, 3);
         vis = RectVisible((HDC)o, &r) ? 1 : 0;
         wu_puts(note, notecap, &k, vis ? ") -> VISIBLE" : ") -> not visible");
         wow32_setret(f, (DWORD)vis);
@@ -3745,7 +3745,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- ★ GetMetaFileBitsEx FAILED; 0");
             return 1;
         }
-        first = wowconv_mf_header(bits, n, &nobj, &end);
+        first = WowConvMetafileHeader(bits, n, &nobj, &end);
         wu_puts(note, notecap, &k, " bytes=0x"); wu_puthex(note, notecap, &k, n, 6);
         wu_puts(note, notecap, &k, " nObj=0x"); wu_puthex(note, notecap, &k, nobj, 4);
         if (!first || nobj > WOWMF_MAXOBJ) {
@@ -3920,10 +3920,10 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         if (rp) {
             unsigned char r8[8];
             for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
-            rc.left   = wowconv_rect16_get(r8, 0);
-            rc.top    = wowconv_rect16_get(r8, 1);
-            rc.right  = wowconv_rect16_get(r8, 2);
-            rc.bottom = wowconv_rect16_get(r8, 3);
+            rc.left   = WowConvRect16Get(r8, 0);
+            rc.top    = WowConvRect16Get(r8, 1);
+            rc.right  = WowConvRect16Get(r8, 2);
+            rc.bottom = WowConvRect16Get(r8, 3);
             prc = &rc;
             wu_puts(note, notecap, &k, " rect=");
             wu_puthex(note, notecap, &k, (DWORD)rc.left, 4);

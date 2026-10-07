@@ -1,5 +1,6 @@
-#ifndef WOWCONV_H
-#define WOWCONV_H
+#ifndef NTVDMEX_WOWCONV_H
+#define NTVDMEX_WOWCONV_H
+#include "../ntvdmex_types.h"
 /*
  * wowconv.h -- ★★★★★ THE Win16/Win32 SEMANTIC DELTAS, IN ONE PLACE, TESTABLE.
  * GH #128, session 51.
@@ -53,10 +54,10 @@
    ★ <= 8bpp gives the exact count. Deeper has no colour table at all, so it
      gives 256: the largest a Windows 3.1 driver ever reported, and the largest a
      program of this era was built to read. */
-static int wowconv_numcolors(int bpp)
+static INT WowConvNumColors(INT bitsPerPixel)
 {
-    if (bpp <= 0)  return 2;          /* nonsense in, the safe floor out */
-    if (bpp <= 8)  return 1 << bpp;
+    if (bitsPerPixel <= 0)  return 2;          /* nonsense in, the safe floor out */
+    if (bitsPerPixel <= 8)  return 1 << bitsPerPixel;
     return 256;
 }
 
@@ -74,10 +75,10 @@ static int wowconv_numcolors(int bpp)
 #define WOWCONV_HBR_NONE     0
 #define WOWCONV_HBR_SYSCOLOR 1
 #define WOWCONV_HBR_HANDLE   2
-static int wowconv_hbrback_kind(unsigned v)
+static INT WowConvBackgroundBrushKind(UINT value)
 {
-    if (!v) return WOWCONV_HBR_NONE;
-    if (v <= (unsigned)WOWCONV_COLOR_MAX + 1) return WOWCONV_HBR_SYSCOLOR;
+    if (!value) return WOWCONV_HBR_NONE;
+    if (value <= (UINT)WOWCONV_COLOR_MAX + 1) return WOWCONV_HBR_SYSCOLOR;
     return WOWCONV_HBR_HANDLE;
 }
 
@@ -86,15 +87,15 @@ static int wowconv_hbrback_kind(unsigned v)
      with the sign extension explicit because a rectangle read unsigned lays a
      window out at 65488 instead of -48. */
 #define WOWCONV_RECT16_SIZE 8
-static int wowconv_rect16_get(const unsigned char *p, int i)
+static INT WowConvRect16Get(PCBYTE rect, INT index)
 {
-    int v = (int)((unsigned)p[i * 2] | ((unsigned)p[i * 2 + 1] << 8));
-    return (v & 0x8000) ? v - 0x10000 : v;
+    INT value = (INT)((UINT)rect[index * 2] | ((UINT)rect[index * 2 + 1] << 8));
+    return (value & 0x8000) ? value - 0x10000 : value;
 }
-static void wowconv_rect16_put(unsigned char *p, int i, int v)
+static VOID WowConvRect16Put(PBYTE rect, INT index, INT value)
 {
-    p[i * 2]     = (unsigned char)(v & 0xff);
-    p[i * 2 + 1] = (unsigned char)((v >> 8) & 0xff);
+    rect[index * 2]     = (BYTE)(value & 0xff);
+    rect[index * 2 + 1] = (BYTE)((value >> 8) & 0xff);
 }
 
 /* ── PACKED DIB: THE 12-BYTE CORE HEADER ─────────────────────────────────────
@@ -112,49 +113,49 @@ static void wowconv_rect16_put(unsigned char *p, int i, int v)
    ⚠ There is no biClrUsed in the core header -- the table is always the full
      2^bcBitCount entries at <= 8bpp, and absent above it.
 
-     Writes a 40-byte BITMAPINFOHEADER plus the widened palette into `out`.
+     Writes a 40-byte BITMAPINFOHEADER plus the widened palette into `output`.
      Returns the offset OF THE PIXELS within the source, or 0 if it does not add
      up (which is a refusal, not a guess). */
-static unsigned wowconv_dib_size(const unsigned char *p)
+static UINT WowConvDibHeaderSize(PCBYTE header)
 {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8)
-         | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+    return (UINT)header[0] | ((UINT)header[1] << 8)
+         | ((UINT)header[2] << 16) | ((UINT)header[3] << 24);
 }
 
-static unsigned wowconv_dib_core_to_info(const unsigned char *core, unsigned len,
-                                         unsigned char *out, unsigned cap,
-                                         unsigned *pal_out)
+static UINT WowConvDibCoreToInfo(PCBYTE core, UINT length,
+                                         PBYTE output, UINT capacity,
+                                         PUINT paletteCount)
 {
-    unsigned wid, hgt, bits, pal, srcoff, i;
-    if (!core || !out || len < 12) return 0;
-    if (wowconv_dib_size(core) != 12) return 0;
-    wid  = (unsigned)core[4]  | ((unsigned)core[5]  << 8);
-    hgt  = (unsigned)core[6]  | ((unsigned)core[7]  << 8);
-    bits = (unsigned)core[10] | ((unsigned)core[11] << 8);
-    if (bits != 1 && bits != 4 && bits != 8 && bits != 24) return 0;
-    pal    = (bits <= 8) ? (1u << bits) : 0u;
-    srcoff = 12 + pal * 3;
-    if (srcoff >= len) return 0;               /* no room for any pixels */
-    if (cap < 40 + pal * 4) return 0;
-    for (i = 0; i < 40; ++i) out[i] = 0;
-    out[0] = 40;                                            /* biSize     */
-    out[4] = (unsigned char)(wid & 0xff);
-    out[5] = (unsigned char)((wid >> 8) & 0xff);            /* biWidth    */
-    out[8] = (unsigned char)(hgt & 0xff);
-    out[9] = (unsigned char)((hgt >> 8) & 0xff);            /* biHeight   */
-    out[12] = 1;                                            /* biPlanes   */
-    out[14] = (unsigned char)(bits & 0xff);
-    out[15] = (unsigned char)((bits >> 8) & 0xff);          /* biBitCount */
+    UINT width, height, bitCount, paletteEntries, pixelOffset, index;
+    if (!core || !output || length < 12) return 0;
+    if (WowConvDibHeaderSize(core) != 12) return 0;
+    width  = (UINT)core[4]  | ((UINT)core[5]  << 8);
+    height  = (UINT)core[6]  | ((UINT)core[7]  << 8);
+    bitCount = (UINT)core[10] | ((UINT)core[11] << 8);
+    if (bitCount != 1 && bitCount != 4 && bitCount != 8 && bitCount != 24) return 0;
+    paletteEntries    = (bitCount <= 8) ? (1u << bitCount) : 0u;
+    pixelOffset = 12 + paletteEntries * 3;
+    if (pixelOffset >= length) return 0;               /* no room for any pixels */
+    if (capacity < 40 + paletteEntries * 4) return 0;
+    for (index = 0; index < 40; ++index) output[index] = 0;
+    output[0] = 40;                                            /* biSize     */
+    output[4] = (BYTE)(width & 0xff);
+    output[5] = (BYTE)((width >> 8) & 0xff);            /* biWidth    */
+    output[8] = (BYTE)(height & 0xff);
+    output[9] = (BYTE)((height >> 8) & 0xff);            /* biHeight   */
+    output[12] = 1;                                            /* biPlanes   */
+    output[14] = (BYTE)(bitCount & 0xff);
+    output[15] = (BYTE)((bitCount >> 8) & 0xff);          /* biBitCount */
     /* RGBTRIPLE -> RGBQUAD. Both are B,G,R order, so only the fourth
        (reserved) byte is new -- but the STRIDE is the whole point. */
-    for (i = 0; i < pal; ++i) {
-        out[40 + i * 4 + 0] = core[12 + i * 3 + 0];
-        out[40 + i * 4 + 1] = core[12 + i * 3 + 1];
-        out[40 + i * 4 + 2] = core[12 + i * 3 + 2];
-        out[40 + i * 4 + 3] = 0;
+    for (index = 0; index < paletteEntries; ++index) {
+        output[40 + index * 4 + 0] = core[12 + index * 3 + 0];
+        output[40 + index * 4 + 1] = core[12 + index * 3 + 1];
+        output[40 + index * 4 + 2] = core[12 + index * 3 + 2];
+        output[40 + index * 4 + 3] = 0;
     }
-    if (pal_out) *pal_out = pal;
-    return srcoff;
+    if (paletteCount) *paletteCount = paletteEntries;
+    return pixelOffset;
 }
 
 /* ── ★★ WHICH PROCEDURE DRIVES A WINDOW. (session 57) ────────────────────────
@@ -169,9 +170,9 @@ static unsigned wowconv_dib_core_to_info(const unsigned char *core, unsigned len
      three sites deciding this for themselves is how one of them comes to
      disagree. 0 means nothing can be told about the window at all, which is a
      fact its callers must handle rather than paper over. */
-static unsigned wowconv_winproc(unsigned wndproc, unsigned dlgproc)
+static UINT WowConvWindowProcedure(UINT windowProcedure, UINT dialogProcedure)
 {
-    return wndproc ? wndproc : dlgproc;
+    return windowProcedure ? windowProcedure : dialogProcedure;
 }
 
 /* ── ★★★★★ WHEN A MODAL LOOP MUST STOP. (session 57) ─────────────────────────
@@ -185,7 +186,7 @@ static unsigned wowconv_winproc(unsigned wndproc, unsigned dlgproc)
      combination returns something), and the battery pins it. The loop itself
      cannot hang unless this returns RUN forever, and this returns RUN only when
      the dialog is alive, drivable and not yet finished.
-   ⚠ THE ORDER IS LOAD-BEARING, in one place especially: `ended` OUTRANKS a
+   ⚠ THE ORDER IS LOAD-BEARING, in one place especially: `isEnded` OUTRANKS a
      destroyed window. A dialog procedure that calls EndDialog and whose window
      the OS then tears down has ANSWERED, and the caller is entitled to that
      answer -- checking liveness first would throw away the result of the dialog
@@ -195,13 +196,13 @@ static unsigned wowconv_winproc(unsigned wndproc, unsigned dlgproc)
 #define WOWCONV_MODAL_GONE    2   /* the window is destroyed: 0                */
 #define WOWCONV_MODAL_NOPROC  3   /* nothing to dispatch to: 0, immediately    */
 #define WOWCONV_MODAL_EXPIRED 4   /* the bounded input wait ran out: 0         */
-static int wowconv_modal_exit(int ended, int window_alive, int has_proc,
-                              int wait_expired)
+static INT WowConvModalExit(INT isEnded, INT isWindowAlive, INT hasProcedure,
+                              INT isWaitExpired)
 {
-    if (ended)         return WOWCONV_MODAL_END;
-    if (!window_alive) return WOWCONV_MODAL_GONE;
-    if (!has_proc)     return WOWCONV_MODAL_NOPROC;
-    if (wait_expired)  return WOWCONV_MODAL_EXPIRED;
+    if (isEnded)         return WOWCONV_MODAL_END;
+    if (!isWindowAlive) return WOWCONV_MODAL_GONE;
+    if (!hasProcedure)     return WOWCONV_MODAL_NOPROC;
+    if (isWaitExpired)  return WOWCONV_MODAL_EXPIRED;
     return WOWCONV_MODAL_RUN;
 }
 
@@ -220,24 +221,24 @@ static int wowconv_modal_exit(int ended, int window_alive, int has_proc,
      than slightly wrongly. */
 #define WOWCONV_ABC16_SIZE 6
 #define WOWCONV_ABC32_SIZE 12
-static int wowconv_clamp16(long v)
+static INT WowConvClamp16(long value)
 {
-    if (v >  32767L) return  32767;
-    if (v < -32768L) return -32768;
-    return (int)v;
+    if (value >  32767L) return  32767;
+    if (value < -32768L) return -32768;
+    return (INT)value;
 }
-static void wowconv_abc32_to_16(const long *abc32, unsigned char *out16)
+static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
 {
-    int a = wowconv_clamp16(abc32[0]);
-    long b = abc32[1] < 0 ? 0 : abc32[1];      /* a width is never negative */
-    int c = wowconv_clamp16(abc32[2]);
-    if (b > 65535L) b = 65535L;
-    out16[0] = (unsigned char)(a & 0xff);
-    out16[1] = (unsigned char)((a >> 8) & 0xff);
-    out16[2] = (unsigned char)(b & 0xff);
-    out16[3] = (unsigned char)((b >> 8) & 0xff);
-    out16[4] = (unsigned char)(c & 0xff);
-    out16[5] = (unsigned char)((c >> 8) & 0xff);
+    INT widthA = WowConvClamp16(abc32[0]);
+    long widthB = abc32[1] < 0 ? 0 : abc32[1];      /* a width is never negative */
+    INT widthC = WowConvClamp16(abc32[2]);
+    if (widthB > 65535L) widthB = 65535L;
+    abc16[0] = (BYTE)(widthA & 0xff);
+    abc16[1] = (BYTE)((widthA >> 8) & 0xff);
+    abc16[2] = (BYTE)(widthB & 0xff);
+    abc16[3] = (BYTE)((widthB >> 8) & 0xff);
+    abc16[4] = (BYTE)(widthC & 0xff);
+    abc16[5] = (BYTE)((widthC >> 8) & 0xff);
 }
 
 /* ── WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295) ───────────────
@@ -264,42 +265,42 @@ static void wowconv_abc32_to_16(const long *abc32, unsigned char *out16)
    metafile proper are not walked as records. */
 #define WOWCONV_MF_HDR    18
 #define WOWCONV_MF_RECHDR 6
-static unsigned long wowconv_le32(const unsigned char *p)
+static unsigned long WowConvRead32(PCBYTE bytes)
 {
-    return (unsigned long)p[0] | ((unsigned long)p[1] << 8)
-         | ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+    return (unsigned long)bytes[0] | ((unsigned long)bytes[1] << 8)
+         | ((unsigned long)bytes[2] << 16) | ((unsigned long)bytes[3] << 24);
 }
 /* Returns the byte offset of the first record (18), or 0 if this is not a WMF.
-   *nobj = mtNoObjects; *end = the byte length the records may occupy. */
-static unsigned long wowconv_mf_header(const unsigned char *p, unsigned long len,
-                                       unsigned *nobj, unsigned long *end)
+   *objectCount = mtNoObjects; *recordsEnd = the byte length the records may occupy. */
+static unsigned long WowConvMetafileHeader(PCBYTE bytes, unsigned long length,
+                                       PUINT objectCount, unsigned long *recordsEnd)
 {
-    unsigned type, hsz;
-    unsigned long msz;
-    if (!p || len < WOWCONV_MF_HDR) return 0;
-    type = (unsigned)(p[0] | (p[1] << 8));
-    hsz  = (unsigned)(p[2] | (p[3] << 8));
-    if ((type != 1 && type != 2) || hsz != 9) return 0;
-    msz = wowconv_le32(p + 6);
-    if (msz > 0x7fffffffUL / 2) return 0;
-    msz *= 2;
-    if (msz < WOWCONV_MF_HDR) return 0;           /* says it has no room for itself */
-    if (nobj) *nobj = (unsigned)(p[10] | (p[11] << 8));
-    if (end)  *end  = (msz < len) ? msz : len;
+    UINT type, headerWords;
+    unsigned long metafileBytes;
+    if (!bytes || length < WOWCONV_MF_HDR) return 0;
+    type = (UINT)(bytes[0] | (bytes[1] << 8));
+    headerWords  = (UINT)(bytes[2] | (bytes[3] << 8));
+    if ((type != 1 && type != 2) || headerWords != 9) return 0;
+    metafileBytes = WowConvRead32(bytes + 6);
+    if (metafileBytes > 0x7fffffffUL / 2) return 0;
+    metafileBytes *= 2;
+    if (metafileBytes < WOWCONV_MF_HDR) return 0;           /* says it has no room for itself */
+    if (objectCount) *objectCount = (UINT)(bytes[10] | (bytes[11] << 8));
+    if (recordsEnd)  *recordsEnd  = (metafileBytes < length) ? metafileBytes : length;
     return WOWCONV_MF_HDR;
 }
-/* The record at `off`: 1 and its byte length + function, or 0 if there is no
-   whole record there (off at or past `end`, rdSize < 3, or running past `end`). */
-static int wowconv_mf_record(const unsigned char *p, unsigned long end,
-                             unsigned long off, unsigned long *bytes, unsigned *func)
+/* The record at `offset`: 1 and its byte length + function, or 0 if there is no
+   whole record there (offset at or past `recordsEnd`, rdSize < 3, or running past `recordsEnd`). */
+static INT WowConvMetafileRecord(PCBYTE metafile, unsigned long recordsEnd,
+                             unsigned long offset, unsigned long *recordBytes, PUINT function)
 {
-    unsigned long w;
-    if (!p || off >= end || end - off < WOWCONV_MF_RECHDR) return 0;
-    w = wowconv_le32(p + off);
-    if (w < 3 || w > (end - off) / 2) return 0;
-    if (bytes) *bytes = w * 2;
-    if (func)  *func  = (unsigned)(p[off + 4] | (p[off + 5] << 8));
+    unsigned long recordWords;
+    if (!metafile || offset >= recordsEnd || recordsEnd - offset < WOWCONV_MF_RECHDR) return 0;
+    recordWords = WowConvRead32(metafile + offset);
+    if (recordWords < 3 || recordWords > (recordsEnd - offset) / 2) return 0;
+    if (recordBytes) *recordBytes = recordWords * 2;
+    if (function)  *function  = (UINT)(metafile[offset + 4] | (metafile[offset + 5] << 8));
     return 1;
 }
 
-#endif /* WOWCONV_H */
+#endif /* NTVDMEX_WOWCONV_H */

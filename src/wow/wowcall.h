@@ -251,7 +251,7 @@ static void wowenum_line(int x0, int y0, int x1, int y1);
                                  allows 64 argument bytes (WCB16_MAX_CBARGS) */
 
 typedef struct {
-    wowsched_slot_t saved;   /* the interrupted context, verbatim               */
+    WOWSCHED_SLOT saved;   /* the interrupted context, verbatim               */
     DWORD retlin;            /* the originating WOW32 frame's return hole, or 0 */
     DWORD proc;              /* what we called -- for the log and the failure    */
     WORD  hwnd, msg;         /* for the log; 0/0 when the call is not a message  */
@@ -330,7 +330,7 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     for (i = 0; i < nargw; ++i) arg[i] = argw[i];
 
     fr = &g_wc[g_wc_depth++];
-    wowsched_save(&fr->saved, tib, 0, 0, 0);
+    WowSchedSave(&fr->saved, tib, 0, 0, 0);
     fr->retlin  = retlin;
     fr->proc    = proc;
     fr->hwnd    = hwnd;
@@ -434,7 +434,7 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
     wowcall_frame_t *fr;
     if (g_wc_depth <= 0) return NULL;
     fr = &g_wc[--g_wc_depth];
-    wowsched_restore(&fr->saved, tib);
+    WowSchedRestore(&fr->saved, tib);
     if (fr->prevtask && g_wc_untarget) g_wc_untarget(fr->prevtask);
     if (fr->sink) *fr->sink = (WORD)result;
     g_wc_lastres = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */

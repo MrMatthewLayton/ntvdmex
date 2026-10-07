@@ -1,5 +1,5 @@
-#ifndef WOWKBD_H
-#define WOWKBD_H
+#ifndef NTVDMEX_WOWKBD_H
+#define NTVDMEX_WOWKBD_H
 /*
  * wowkbd.h -- ★ KEYBOARD.DRV's OWN ID SPACE.  GH #128, session 44.
  *
@@ -54,15 +54,15 @@
      asked. (docs/STATE.md: gate on the BOP's own CS.) */
 /* GetKeyNameText(lParam, lpszBuffer, nMaxCount) -- 4+4+2 = 10, reversed. */
 #define WOWKBD_GETKEYNAMETEXT 0x0085
-#define GKNT_ARG_COUNT   0
-#define GKNT_ARG_BUF     2               /* far */
-#define GKNT_ARG_LPARAM  6               /* DWORD */
+#define WOWKBD_GETKEYNAMETEXT_ARG_COUNT   0
+#define WOWKBD_GETKEYNAMETEXT_ARG_BUFFER     2               /* far */
+#define WOWKBD_GETKEYNAMETEXT_ARG_LPARAM  6               /* DWORD */
 
 #define WOWKBD_VKKEYSCAN     0x0081
 #define WOWKBD_MAPVIRTUALKEY 0x0083
-#define WKB_ARG_CHAR   0
-#define WKB_ARG_MVTYPE 0
-#define WKB_ARG_MVCODE 2
+#define WOWKBD_VKKEYSCAN_ARG_CHARACTER   0
+#define WOWKBD_MAPVIRTUALKEY_ARG_TYPE 0
+#define WOWKBD_MAPVIRTUALKEY_ARG_CODE 2
 
 /* s90 (#297): GetKBCodePage() -- no arguments. Win32's GetKBCodePage is the OEM
    code page (GetOEMCP), which is what Win16's answered too: 437 on a US machine. */
@@ -70,13 +70,13 @@
 #define WOWKBD_ANSITOOEM   0x0005
 #define WOWKBD_OEMTOANSI   0x0006
 
-#define A2O_ARG_DST   0
-#define A2O_ARG_SRC   4
+#define WOWKBD_CONVERT_ARG_DESTINATION   0
+#define WOWKBD_CONVERT_ARG_SOURCE   4
 
-static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
+static INT WowKeyboardCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
 {
-    if (notecap) note[0] = 0;
-    switch (f->id) {
+    if (noteCapacity) note[0] = 0;
+    switch (frame->id) {
 
     /* ── ★ 0x05 AnsiToOem / 0x06 OemToAnsi ──────────────────────────────────
          The real Win32 conversions, against the real code pages. This is not a
@@ -105,73 +105,73 @@ static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
          because a length convention off by one writes a NUL past a guest's
          buffer. */
     case WOWKBD_GETKBCODEPAGE: {
-        UINT cp = GetKBCodePage();
-        int  k = 0;
-        wu_puts(note, notecap, &k, "GetKBCodePage() -> ");
-        wu_puthex(note, notecap, &k, cp, 4);
-        wow32_setret(f, (DWORD)(WORD)cp);
+        UINT codePage = GetKBCodePage();
+        INT  noteLength = 0;
+        wu_puts(note, noteCapacity, &noteLength, "GetKBCodePage() -> ");
+        wu_puthex(note, noteCapacity, &noteLength, codePage, 4);
+        wow32_setret(frame, (DWORD)(WORD)codePage);
         return 1;
     }
     case WOWKBD_GETKEYNAMETEXT: {
-        DWORD lp  = wow32_argd(f, GKNT_ARG_LPARAM);
-        WORD  cch = wow32_argw(f, GKNT_ARG_COUNT);
-        volatile BYTE *dst = wow32_argptr(f, GKNT_ARG_BUF);
-        char name[64];
-        int k = 0, n = 0, i;
-        wu_puts(note, notecap, &k, "GetKeyNameText(lParam=0x");
-        wu_puthex(note, notecap, &k, lp, 8);
-        wu_puts(note, notecap, &k, ", cch=");
-        wu_puthex(note, notecap, &k, cch, 4);
-        wu_puts(note, notecap, &k, ")");
-        if (!dst || !cch) {
-            wu_puts(note, notecap, &k, " -- no buffer; answered 0");
-            wow32_setret(f, 0);
+        DWORD keyParameter  = wow32_argd(frame, WOWKBD_GETKEYNAMETEXT_ARG_LPARAM);
+        WORD  bufferSize = wow32_argw(frame, WOWKBD_GETKEYNAMETEXT_ARG_COUNT);
+        volatile BYTE *destination = wow32_argptr(frame, WOWKBD_GETKEYNAMETEXT_ARG_BUFFER);
+        CHAR keyName[64];
+        INT noteLength = 0, nameLength = 0, index;
+        wu_puts(note, noteCapacity, &noteLength, "GetKeyNameText(lParam=0x");
+        wu_puthex(note, noteCapacity, &noteLength, keyParameter, 8);
+        wu_puts(note, noteCapacity, &noteLength, ", cch=");
+        wu_puthex(note, noteCapacity, &noteLength, bufferSize, 4);
+        wu_puts(note, noteCapacity, &noteLength, ")");
+        if (!destination || !bufferSize) {
+            wu_puts(note, noteCapacity, &noteLength, " -- no buffer; answered 0");
+            wow32_setret(frame, 0);
             return 1;
         }
-        n = GetKeyNameTextA((LONG)lp, name, (int)(cch < sizeof name ? cch
-                                                                    : sizeof name));
-        if (n < 0) n = 0;
-        for (i = 0; i < n && i < (int)cch - 1; ++i) dst[i] = (BYTE)name[i];
-        dst[i] = 0;
-        wu_puts(note, notecap, &k, " -> ");
-        wu_putq(note, notecap, &k, name);
-        wow32_setret(f, (DWORD)i);
+        nameLength = GetKeyNameTextA((LONG)keyParameter, keyName, (INT)(bufferSize < sizeof keyName ? bufferSize
+                                                                    : sizeof keyName));
+        if (nameLength < 0) nameLength = 0;
+        for (index = 0; index < nameLength && index < (INT)bufferSize - 1; ++index) destination[index] = (BYTE)keyName[index];
+        destination[index] = 0;
+        wu_puts(note, noteCapacity, &noteLength, " -> ");
+        wu_putq(note, noteCapacity, &noteLength, keyName);
+        wow32_setret(frame, (DWORD)index);
         return 1;
     }
 
     case WOWKBD_VKKEYSCAN: {
-        WORD ch = wow32_argw(f, WKB_ARG_CHAR);
-        SHORT r = VkKeyScanA((CHAR)(ch & 0xFF));
-        wow32_setret(f, (DWORD)(WORD)r);
+        WORD character = wow32_argw(frame, WOWKBD_VKKEYSCAN_ARG_CHARACTER);
+        SHORT scan = VkKeyScanA((CHAR)(character & 0xFF));
+        wow32_setret(frame, (DWORD)(WORD)scan);
         return 1;
     }
     case WOWKBD_MAPVIRTUALKEY: {
-        WORD code = wow32_argw(f, WKB_ARG_MVCODE);
-        WORD type = wow32_argw(f, WKB_ARG_MVTYPE);
-        wow32_setret(f, (DWORD)MapVirtualKeyA(code, type));
+        WORD code = wow32_argw(frame, WOWKBD_MAPVIRTUALKEY_ARG_CODE);
+        WORD mapType = wow32_argw(frame, WOWKBD_MAPVIRTUALKEY_ARG_TYPE);
+        wow32_setret(frame, (DWORD)MapVirtualKeyA(code, mapType));
         return 1;
     }
 
     case WOWKBD_ANSITOOEM:
     case WOWKBD_OEMTOANSI: {
-        int   toOem = (f->id == WOWKBD_ANSITOOEM);
-        volatile BYTE *dst = wow32_argptr(f, A2O_ARG_DST);
-        volatile BYTE *src = wow32_argptr(f, A2O_ARG_SRC);
-        int k = 0, ok;
-        wu_puts(note, notecap, &k, toOem ? "AnsiToOem " : "OemToAnsi ");
-        if (!src || !dst) {
-            wu_puts(note, notecap, &k, "-- ★ NULL pointer (src or dst); nothing"
+        INT   isToOem = (frame->id == WOWKBD_ANSITOOEM);
+        volatile BYTE *destination = wow32_argptr(frame, WOWKBD_CONVERT_ARG_DESTINATION);
+        volatile BYTE *source = wow32_argptr(frame, WOWKBD_CONVERT_ARG_SOURCE);
+        INT noteLength = 0, isConverted;
+        wu_puts(note, noteCapacity, &noteLength, isToOem ? "AnsiToOem " : "OemToAnsi ");
+        if (!source || !destination) {
+            wu_puts(note, noteCapacity, &noteLength, "-- ★ NULL pointer (src or dst); nothing"
                                        " converted");
-            wow32_setret(f, 0);
+            wow32_setret(frame, 0);
             return 1;
         }
-        wu_putq(note, notecap, &k, (const char *)src);
-        ok = toOem ? CharToOemA((LPCSTR)src, (LPSTR)dst)
-                   : OemToCharA((LPCSTR)src, (LPSTR)dst);
-        wu_puts(note, notecap, &k, ok ? " -> " : " -- ★ CONVERSION FAILED, dst is"
+        wu_putq(note, noteCapacity, &noteLength, (PCSTR)source);
+        isConverted = isToOem ? CharToOemA((LPCSTR)source, (LPSTR)destination)
+                   : OemToCharA((LPCSTR)source, (LPSTR)destination);
+        wu_puts(note, noteCapacity, &noteLength, isConverted ? " -> " : " -- ★ CONVERSION FAILED, dst is"
                                                 " whatever it was: ");
-        wu_putq(note, notecap, &k, (const char *)dst);
-        wow32_setret(f, (DWORD)(ok ? 1 : 0));
+        wu_putq(note, noteCapacity, &noteLength, (PCSTR)destination);
+        wow32_setret(frame, (DWORD)(isConverted ? 1 : 0));
         return 1;
     }
 
@@ -180,4 +180,4 @@ static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
     }
 }
 
-#endif /* WOWKBD_H */
+#endif /* NTVDMEX_WOWKBD_H */

@@ -359,14 +359,14 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         tgt = d->hwnd;
 
         /* ── ★★★ THE FOUR EXITS ARE ONE DECISION, AND IT IS A TESTED FUNCTION.
-             `wowconv_modal_exit` in wowconv.h is total -- every combination of
+             `WowConvModalExit` in wowconv.h is total -- every combination of
              the four facts returns something -- so there is no state in which
              this loop neither runs nor leaves. That is the property that makes
              a modal loop safe to ship, and it is pinned off-VM in wow_test.c
              rather than argued for here. `wait_expired` is 0 at this point
              because the wait has not happened yet; the branch that runs it asks
              again with 1. */
-        verdict = wowconv_modal_exit(d->ended,
+        verdict = WowConvModalExit(d->ended,
                                      w && w->hwnd32 && IsWindow(w->hwnd32),
                                      d->dlgproc || d->wndproc, 0);
 
@@ -425,8 +425,8 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
         }
 
         /* Same rule as every other delivery path: the class's procedure where
-           there is one, the dialog's own otherwise. See wowconv_winproc(). */
-        proc = (DWORD)wowconv_winproc((unsigned)d->wndproc, (unsigned)d->dlgproc);
+           there is one, the dialog's own otherwise. See WowConvWindowProcedure(). */
+        proc = (DWORD)WowConvWindowProcedure((unsigned)d->wndproc, (unsigned)d->dlgproc);
 
         /* ── ★★★ WM_INITDIALOG COMES FIRST, AND IT IS WHERE THE DIALOG FILLS
              ITSELF IN. TASKMAN's task list, a Preferences page's current
@@ -588,7 +588,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                      answer for a dialog that was dismissed during the wait is
                      EndDialog's result, not 0 -- so anything but EXPIRED goes
                      back to the top of the loop, where that case is handled. */
-                if (wowconv_modal_exit(d->ended, 1, 1, 1)
+                if (WowConvModalExit(d->ended, 1, 1, 1)
                         != WOWCONV_MODAL_EXPIRED)
                     continue;
                 ++g_wd_refused;
@@ -615,7 +615,7 @@ static int wowdlg_step(volatile BYTE *tib, DWORD ssbase, WORD rsel,
                  shape this project treats as worse than not answering. */
             msg = m.msg; wparam = m.wparam; lparam = m.lparam;
             if (m.hwnd == d->hwnd) {
-                proc = (DWORD)wowconv_winproc((unsigned)d->wndproc,
+                proc = (DWORD)WowConvWindowProcedure((unsigned)d->wndproc,
                                               (unsigned)d->dlgproc);
             } else {
                 wowuser_win_t *tw = m.hwnd ? wowuser_findwin(m.hwnd) : NULL;

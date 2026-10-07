@@ -2405,7 +2405,7 @@ static DWORD wowuser_winproc_of(const wowuser_win_t *w)
     if (!w) return 0;
     /* ★ The rule itself is in wowconv.h and pinned by wow_test.c; this is the
          table lookup around it. */
-    return (DWORD)wowconv_winproc((unsigned)w->wndproc, (unsigned)w->dlgproc);
+    return (DWORD)WowConvWindowProcedure((unsigned)w->wndproc, (unsigned)w->dlgproc);
 }
 
 /* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
@@ -4239,7 +4239,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                ★ Solitaire creates a green brush and names it here; it used to be
                  read and thrown away, so its table was erased WHITE. */
             HBRUSH  hbrcls = NULL;
-            switch (wowconv_hbrback_kind(c->hbrback)) {   /* ★ tested in wow_test.c */
+            switch (WowConvBackgroundBrushKind(c->hbrback)) {   /* ★ tested in wow_test.c */
             case WOWCONV_HBR_NONE:                        /* 0 = no erase; keep 0 */
                 break;
             case WOWCONV_HBR_SYSCOLOR:
@@ -5631,25 +5631,25 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        /* ⚠ EIGHT BYTES IN, SIXTEEN OUT. wowconv_rect16_get is the same reader
+        /* ⚠ EIGHT BYTES IN, SIXTEEN OUT. WowConvRect16Get is the same reader
              the rest of this host uses, and it sign-extends -- a scroll
              rectangle with a negative top is ordinary. A NULL rectangle means
              "the whole DC" in both worlds and is passed through as NULL. */
-        if (rs) { scroll.left   = wowconv_rect16_get((const unsigned char *)rs, 0);
-                  scroll.top    = wowconv_rect16_get((const unsigned char *)rs, 1);
-                  scroll.right  = wowconv_rect16_get((const unsigned char *)rs, 2);
-                  scroll.bottom = wowconv_rect16_get((const unsigned char *)rs, 3); }
-        if (rc) { clip.left   = wowconv_rect16_get((const unsigned char *)rc, 0);
-                  clip.top    = wowconv_rect16_get((const unsigned char *)rc, 1);
-                  clip.right  = wowconv_rect16_get((const unsigned char *)rc, 2);
-                  clip.bottom = wowconv_rect16_get((const unsigned char *)rc, 3); }
+        if (rs) { scroll.left   = WowConvRect16Get((const unsigned char *)rs, 0);
+                  scroll.top    = WowConvRect16Get((const unsigned char *)rs, 1);
+                  scroll.right  = WowConvRect16Get((const unsigned char *)rs, 2);
+                  scroll.bottom = WowConvRect16Get((const unsigned char *)rs, 3); }
+        if (rc) { clip.left   = WowConvRect16Get((const unsigned char *)rc, 0);
+                  clip.top    = WowConvRect16Get((const unsigned char *)rc, 1);
+                  clip.right  = WowConvRect16Get((const unsigned char *)rc, 2);
+                  clip.bottom = WowConvRect16Get((const unsigned char *)rc, 3); }
         ok = ScrollDC(dc, dx, dy, rs ? &scroll : NULL, rc ? &clip : NULL,
                       rgn, ru ? &upd : NULL) ? 1 : 0;
         if (ok && ru) {
-            wowconv_rect16_put((unsigned char *)ru, 0, (int)upd.left);
-            wowconv_rect16_put((unsigned char *)ru, 1, (int)upd.top);
-            wowconv_rect16_put((unsigned char *)ru, 2, (int)upd.right);
-            wowconv_rect16_put((unsigned char *)ru, 3, (int)upd.bottom);
+            WowConvRect16Put((unsigned char *)ru, 0, (int)upd.left);
+            WowConvRect16Put((unsigned char *)ru, 1, (int)upd.top);
+            WowConvRect16Put((unsigned char *)ru, 2, (int)upd.right);
+            WowConvRect16Put((unsigned char *)ru, 3, (int)upd.bottom);
             wu_puts(note, notecap, &k, " update=");
             wu_puthex(note, notecap, &k, (DWORD)(upd.right - upd.left), 4);
             wu_puts(note, notecap, &k, "x");
@@ -6126,7 +6126,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             DWORD need = 12 + pal * 3, j;
             if (need > sizeof srcbuf) need = sizeof srcbuf;
             for (j = 0; j < need; ++j) srcbuf[j] = p[j];
-            if (!wowconv_dib_core_to_info(srcbuf, need + 1, hdr, sizeof hdr, NULL)) {
+            if (!WowConvDibCoreToInfo(srcbuf, need + 1, hdr, sizeof hdr, NULL)) {
                 wu_puts(note, notecap, &k, " -- ★ THE CORE HEADER DID NOT CONVERT;"
                                            " answered 0");
                 wow32_setret(f, 0);
@@ -7129,10 +7129,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0); return 1;
         }
         for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
-        r.left   = wowconv_rect16_get(r8, 0);
-        r.top    = wowconv_rect16_get(r8, 1);
-        r.right  = wowconv_rect16_get(r8, 2);
-        r.bottom = wowconv_rect16_get(r8, 3);
+        r.left   = WowConvRect16Get(r8, 0);
+        r.top    = WowConvRect16Get(r8, 1);
+        r.right  = WowConvRect16Get(r8, 2);
+        r.bottom = WowConvRect16Get(r8, 3);
         /* ── #282: NOT WIN32's MapDialogRect. That only works on a window the OS
              built as a dialog, and none of ours is one -- every Win16 dialog here
              is CreateWindowEx'd (CALC's is its own `SciCalc` class) -- so it
@@ -7147,10 +7147,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             r.right  = MulDiv(r.right,  bx, 4);
             r.top    = MulDiv(r.top,    by, 8);
             r.bottom = MulDiv(r.bottom, by, 8); }
-        wowconv_rect16_put(r8, 0, (int)r.left);
-        wowconv_rect16_put(r8, 1, (int)r.top);
-        wowconv_rect16_put(r8, 2, (int)r.right);
-        wowconv_rect16_put(r8, 3, (int)r.bottom);
+        WowConvRect16Put(r8, 0, (int)r.left);
+        WowConvRect16Put(r8, 1, (int)r.top);
+        WowConvRect16Put(r8, 2, (int)r.right);
+        WowConvRect16Put(r8, 3, (int)r.bottom);
         for (i = 0; i < 8; ++i) rp[i] = r8[i];
         wu_puts(note, notecap, &k, " -> ");
         wu_puthex(note, notecap, &k, (DWORD)(r.right - r.left), 4);
@@ -7659,8 +7659,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                 wow32_setret(f, 0); return 1; }
         any = GetUpdateRect(w->hwnd32, &r, er ? TRUE : FALSE) ? 1 : 0;
         if (rp) {
-            wowconv_rect16_put(r8, 0, (int)r.left);   wowconv_rect16_put(r8, 1, (int)r.top);
-            wowconv_rect16_put(r8, 2, (int)r.right);  wowconv_rect16_put(r8, 3, (int)r.bottom);
+            WowConvRect16Put(r8, 0, (int)r.left);   WowConvRect16Put(r8, 1, (int)r.top);
+            WowConvRect16Put(r8, 2, (int)r.right);  WowConvRect16Put(r8, 3, (int)r.bottom);
             for (i = 0; i < 8; ++i) rp[i] = r8[i];
         }
         wu_puts(note, notecap, &k, any ? " -> dirty" : " -> clean");
@@ -7716,8 +7716,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0); return 1;
         }
         for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
-        r.left   = wowconv_rect16_get(r8, 0); r.top    = wowconv_rect16_get(r8, 1);
-        r.right  = wowconv_rect16_get(r8, 2); r.bottom = wowconv_rect16_get(r8, 3);
+        r.left   = WowConvRect16Get(r8, 0); r.top    = WowConvRect16Get(r8, 1);
+        r.right  = WowConvRect16Get(r8, 2); r.bottom = WowConvRect16Get(r8, 3);
         DrawFocusRect((HDC)o, &r);
         wu_puts(note, notecap, &k, " -> drawn");
         wow32_setret(f, 1);
@@ -7884,8 +7884,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (action == 0x0030 && pv) {
             RECT wa; unsigned char r8[8]; int i;
             if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
-                wowconv_rect16_put(r8, 0, (int)wa.left);  wowconv_rect16_put(r8, 1, (int)wa.top);
-                wowconv_rect16_put(r8, 2, (int)wa.right); wowconv_rect16_put(r8, 3, (int)wa.bottom);
+                WowConvRect16Put(r8, 0, (int)wa.left);  WowConvRect16Put(r8, 1, (int)wa.top);
+                WowConvRect16Put(r8, 2, (int)wa.right); WowConvRect16Put(r8, 3, (int)wa.bottom);
                 for (i = 0; i < 8; ++i) pv[i] = r8[i];
                 wu_puts(note, notecap, &k, " -> work area written");
                 wow32_setret(f, 1);
@@ -8294,12 +8294,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              scrolls the whole client area, and a null clip rect clips to none.
              Substituting an empty RECT would scroll nothing, silently. */
         if (rp) { for (i = 0; i < 8; ++i) b8[i] = (unsigned char)rp[i];
-                  r.left = wowconv_rect16_get(b8,0); r.top = wowconv_rect16_get(b8,1);
-                  r.right = wowconv_rect16_get(b8,2); r.bottom = wowconv_rect16_get(b8,3);
+                  r.left = WowConvRect16Get(b8,0); r.top = WowConvRect16Get(b8,1);
+                  r.right = WowConvRect16Get(b8,2); r.bottom = WowConvRect16Get(b8,3);
                   pr = &r; }
         if (cp) { for (i = 0; i < 8; ++i) b8[i] = (unsigned char)cp[i];
-                  c.left = wowconv_rect16_get(b8,0); c.top = wowconv_rect16_get(b8,1);
-                  c.right = wowconv_rect16_get(b8,2); c.bottom = wowconv_rect16_get(b8,3);
+                  c.left = WowConvRect16Get(b8,0); c.top = WowConvRect16Get(b8,1);
+                  c.right = WowConvRect16Get(b8,2); c.bottom = WowConvRect16Get(b8,3);
                   pc = &c; }
         ScrollWindow(w->hwnd32, dx, dy, pr, pc);
         wu_puts(note, notecap, &k, " -> scrolled ");

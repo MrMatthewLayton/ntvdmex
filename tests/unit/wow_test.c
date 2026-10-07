@@ -319,35 +319,35 @@ static void part3_conversions(void)
     /* NUMCOLORS. The two call sites this has to satisfy are real and read out
        of the binaries: WINMINE `cmp ax,2 / jle` (signed) and SOL `cmp ax,2 /
        jne`. Both must land on "colour" for a modern display. */
-    ok(wowconv_numcolors(1)  == 2,   "NUMCOLORS: 1bpp -> 2 (a mono device really is 2)");
-    ok(wowconv_numcolors(4)  == 16,  "NUMCOLORS: 4bpp -> 16");
-    ok(wowconv_numcolors(8)  == 256, "NUMCOLORS: 8bpp -> 256");
-    ok(wowconv_numcolors(16) == 256, "NUMCOLORS: 16bpp -> 256, never -1");
-    ok(wowconv_numcolors(32) == 256, "NUMCOLORS: 32bpp -> 256, never -1");
-    ok(wowconv_numcolors(32) >  2,   "  ...and WINMINE's SIGNED `jle 2` takes the COLOUR branch");
-    ok(wowconv_numcolors(32) != 2,   "  ...and SOL's `cmp ax,2 / jne` skips its mono flag");
-    ok(wowconv_numcolors(1)  == 2,   "  ...while a REAL mono device still reports mono");
+    ok(WowConvNumColors(1)  == 2,   "NUMCOLORS: 1bpp -> 2 (a mono device really is 2)");
+    ok(WowConvNumColors(4)  == 16,  "NUMCOLORS: 4bpp -> 16");
+    ok(WowConvNumColors(8)  == 256, "NUMCOLORS: 8bpp -> 256");
+    ok(WowConvNumColors(16) == 256, "NUMCOLORS: 16bpp -> 256, never -1");
+    ok(WowConvNumColors(32) == 256, "NUMCOLORS: 32bpp -> 256, never -1");
+    ok(WowConvNumColors(32) >  2,   "  ...and WINMINE's SIGNED `jle 2` takes the COLOUR branch");
+    ok(WowConvNumColors(32) != 2,   "  ...and SOL's `cmp ax,2 / jne` skips its mono flag");
+    ok(WowConvNumColors(1)  == 2,   "  ...while a REAL mono device still reports mono");
 
     /* hbrBackground: three cases, and 0 must stay 0. */
-    ok(wowconv_hbrback_kind(0) == WOWCONV_HBR_NONE,
+    ok(WowConvBackgroundBrushKind(0) == WOWCONV_HBR_NONE,
        "hbrBackground: 0 is NO ERASE, not a default");
-    ok(wowconv_hbrback_kind(6) == WOWCONV_HBR_SYSCOLOR,
+    ok(WowConvBackgroundBrushKind(6) == WOWCONV_HBR_SYSCOLOR,
        "hbrBackground: 6 is COLOR_WINDOW+1, a system colour");
-    ok(wowconv_hbrback_kind(21) == WOWCONV_HBR_SYSCOLOR,
+    ok(WowConvBackgroundBrushKind(21) == WOWCONV_HBR_SYSCOLOR,
        "hbrBackground: 21 is COLOR_BTNHIGHLIGHT+1, the last Win3.1 index");
-    ok(wowconv_hbrback_kind(22) == WOWCONV_HBR_HANDLE,
+    ok(WowConvBackgroundBrushKind(22) == WOWCONV_HBR_HANDLE,
        "hbrBackground: 22 is past the Win3.1 indices, so a real brush");
-    ok(wowconv_hbrback_kind(0x2018) == WOWCONV_HBR_HANDLE,
+    ok(WowConvBackgroundBrushKind(0x2018) == WOWCONV_HBR_HANDLE,
        "hbrBackground: a GDI token is a real brush");
 
     /* Win16 RECT: 8 bytes, four SIGNED 16-bit ints. */
-    wowconv_rect16_put(r, 0, -2);
-    wowconv_rect16_put(r, 1, -48);
-    wowconv_rect16_put(r, 2, 1680);
-    wowconv_rect16_put(r, 3, 974);
-    ok(wowconv_rect16_get(r, 0) == -2 && wowconv_rect16_get(r, 1) == -48,
+    WowConvRect16Put(r, 0, -2);
+    WowConvRect16Put(r, 1, -48);
+    WowConvRect16Put(r, 2, 1680);
+    WowConvRect16Put(r, 3, 974);
+    ok(WowConvRect16Get(r, 0) == -2 && WowConvRect16Get(r, 1) == -48,
        "RECT16: negative left/top survive the round trip (Minesweeper's -2,-48)");
-    ok(wowconv_rect16_get(r, 2) == 1680 && wowconv_rect16_get(r, 3) == 974,
+    ok(WowConvRect16Get(r, 2) == 1680 && WowConvRect16Get(r, 3) == 974,
        "RECT16: 1680x974 survives the round trip");
     ok(WOWCONV_RECT16_SIZE == 8,
        "RECT16: is 8 bytes, NOT Win32's 16");
@@ -361,7 +361,7 @@ static void part3_conversions(void)
     core[10] = 4;                        /* bcBitCount = 4 -> 16 pal */
     core[12] = 0x11; core[13] = 0x22; core[14] = 0x33;   /* entry 0  */
     core[15] = 0x44; core[16] = 0x55; core[17] = 0x66;   /* entry 1  */
-    pix = wowconv_dib_core_to_info(core, sizeof core, out, sizeof out, &pal);
+    pix = WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal);
     ok(pix == 12 + 16 * 3, "DIB core: pixels start after 16 RGBTRIPLEs (3 bytes each)");
     ok(pal == 16,          "DIB core: 4bpp means a full 16-entry table, no biClrUsed");
     ok(out[0] == 40,       "DIB core: biSize becomes 40");
@@ -375,15 +375,15 @@ static void part3_conversions(void)
 
     /* Refusals. Guessing at a format is worse than declining it. */
     core[0] = 40;
-    ok(wowconv_dib_core_to_info(core, sizeof core, out, sizeof out, &pal) == 0,
+    ok(WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal) == 0,
        "DIB core: a 40-byte header is REFUSED here, not silently converted");
     core[0] = 12; core[10] = 7;          /* 7bpp does not exist */
-    ok(wowconv_dib_core_to_info(core, sizeof core, out, sizeof out, &pal) == 0,
+    ok(WowConvDibCoreToInfo(core, sizeof core, out, sizeof out, &pal) == 0,
        "DIB core: a bit count that cannot exist is REFUSED");
     core[10] = 4;
-    ok(wowconv_dib_core_to_info(core, 12, out, sizeof out, &pal) == 0,
+    ok(WowConvDibCoreToInfo(core, 12, out, sizeof out, &pal) == 0,
        "DIB core: a length with no room for pixels is REFUSED");
-    ok(wowconv_dib_core_to_info(core, sizeof core, out, 8, &pal) == 0,
+    ok(WowConvDibCoreToInfo(core, sizeof core, out, 8, &pal) == 0,
        "DIB core: an output buffer too small is REFUSED, never overrun");
 }
 
@@ -409,38 +409,38 @@ static void part4_modal(void)
     printf("\n-- part 4: the modal dialog loop (wowconv.h, src/wow/wowdlg.h) --\n");
 
     /* 1. The procedure rule. */
-    ok(wowconv_winproc(0x11110000u, 0) == 0x11110000u,
+    ok(WowConvWindowProcedure(0x11110000u, 0) == 0x11110000u,
        "winproc: a class window procedure drives its window");
-    ok(wowconv_winproc(0, 0x22220000u) == 0x22220000u,
+    ok(WowConvWindowProcedure(0, 0x22220000u) == 0x22220000u,
        "winproc: a #32770 dialog has only a DLGPROC, and it drives it");
-    ok(wowconv_winproc(0x11110000u, 0x22220000u) == 0x11110000u,
+    ok(WowConvWindowProcedure(0x11110000u, 0x22220000u) == 0x11110000u,
        "winproc: with BOTH, the class procedure wins (CALC's SciCalc dialog)");
-    ok(wowconv_winproc(0, 0) == 0,
+    ok(WowConvWindowProcedure(0, 0) == 0,
        "winproc: neither means NOTHING can be told about this window");
 
     /* 2. The exit rule, case by case. */
-    ok(wowconv_modal_exit(0, 1, 1, 0) == WOWCONV_MODAL_RUN,
+    ok(WowConvModalExit(0, 1, 1, 0) == WOWCONV_MODAL_RUN,
        "modal: alive, drivable, not ended, not expired -> KEEP PUMPING");
-    ok(wowconv_modal_exit(1, 1, 1, 0) == WOWCONV_MODAL_END,
+    ok(WowConvModalExit(1, 1, 1, 0) == WOWCONV_MODAL_END,
        "modal: EndDialog -> the caller gets nResult");
-    ok(wowconv_modal_exit(0, 0, 1, 0) == WOWCONV_MODAL_GONE,
+    ok(WowConvModalExit(0, 0, 1, 0) == WOWCONV_MODAL_GONE,
        "modal: the window was destroyed -> DialogBox returns 0, never waits");
-    ok(wowconv_modal_exit(0, 1, 0, 0) == WOWCONV_MODAL_NOPROC,
+    ok(WowConvModalExit(0, 1, 0, 0) == WOWCONV_MODAL_NOPROC,
        "modal: nothing to dispatch to -> return 0 AT ONCE (s56's behaviour)");
-    ok(wowconv_modal_exit(0, 1, 1, 1) == WOWCONV_MODAL_EXPIRED,
+    ok(WowConvModalExit(0, 1, 1, 1) == WOWCONV_MODAL_EXPIRED,
        "modal: the bounded input wait ran out -> return 0, so a harness ends");
 
     /* ★ THE ORDER, WHICH IS THE ONE THING A READER WOULD GET WRONG. A dialog
          procedure that calls EndDialog and whose window is then torn down has
          ANSWERED; reporting GONE there would throw away the OK the user just
          clicked and hand back 0 instead. */
-    ok(wowconv_modal_exit(1, 0, 1, 0) == WOWCONV_MODAL_END,
+    ok(WowConvModalExit(1, 0, 1, 0) == WOWCONV_MODAL_END,
        "modal: ENDED OUTRANKS a destroyed window -- the answer is not lost");
-    ok(wowconv_modal_exit(1, 0, 0, 1) == WOWCONV_MODAL_END,
+    ok(WowConvModalExit(1, 0, 0, 1) == WOWCONV_MODAL_END,
        "modal: ...and outranks every other reason to stop, together");
-    ok(wowconv_modal_exit(0, 0, 0, 1) == WOWCONV_MODAL_GONE,
+    ok(WowConvModalExit(0, 0, 0, 1) == WOWCONV_MODAL_GONE,
        "modal: a gone window outranks having no procedure and no input");
-    ok(wowconv_modal_exit(0, 1, 0, 1) == WOWCONV_MODAL_NOPROC,
+    ok(WowConvModalExit(0, 1, 0, 1) == WOWCONV_MODAL_NOPROC,
        "modal: an undrivable dialog is refused BEFORE it can time out");
 
     /* ★★ TOTALITY. Sixteen combinations, every one of them classified, and RUN
@@ -450,7 +450,7 @@ static void part4_modal(void)
     for (x = 0; x < 5; ++x) seen[x] = 0;
     for (e = 0; e < 2; ++e) for (a = 0; a < 2; ++a)
     for (h = 0; h < 2; ++h) for (x = 0; x < 2; ++x) {
-        int v = wowconv_modal_exit(e, a, h, x);
+        int v = WowConvModalExit(e, a, h, x);
         if (v < 0 || v > 4) { ok(0, "modal: a verdict outside the five"); return; }
         ++seen[v];
         if (v == WOWCONV_MODAL_RUN) ++run;
@@ -492,44 +492,44 @@ static void part5_metafile(void)
     put32(m, off, 3); put16(m, off + 4, 0x0000); off += 6;    /* META_EOF          */
     put32(m, 6, (unsigned long)(off / 2));                      /* mtSize, in WORDS  */
 
-    first = wowconv_mf_header(m, sizeof m, &nobj, &end);
+    first = WowConvMetafileHeader(m, sizeof m, &nobj, &end);
     ok(first == 18, "WMF: the first record follows the 18-byte (9-WORD) header");
     ok(nobj == 1, "WMF: nObj is mtNoObjects -- the HANDLETABLE's length");
     ok(end == off, "WMF: the walk is bounded by mtSize*2, not by the buffer's slack");
 
-    for (off = first; n < 8 && wowconv_mf_record(m, end, off, &bytes, &fn); off += bytes) {
+    for (off = first; n < 8 && WowConvMetafileRecord(m, end, off, &bytes, &fn); off += bytes) {
         seq[n++] = fn;
         if (fn == 0) break;
     }
     ok(n == 4 && seq[0] == 0x02FA && seq[1] == 0x012D && seq[2] == 0x041B && seq[3] == 0,
        "WMF: four records in order -- rdSize is WORDS, so each step lands on a header");
     ok(bytes == 6, "WMF: META_EOF is a 3-WORD record");
-    ok(!wowconv_mf_record(m, end, end, &bytes, &fn),
+    ok(!WowConvMetafileRecord(m, end, end, &bytes, &fn),
        "WMF: nothing is a record at the end of the metafile");
 
     /* Refusals: each would otherwise loop or read past the buffer. */
     put32(m, 18, 2);
-    ok(!wowconv_mf_record(m, end, 18, &bytes, &fn),
+    ok(!WowConvMetafileRecord(m, end, 18, &bytes, &fn),
        "WMF: rdSize < 3 is REFUSED -- it would never advance");
     put32(m, 18, 0x40000000UL);
-    ok(!wowconv_mf_record(m, end, 18, &bytes, &fn),
+    ok(!WowConvMetafileRecord(m, end, 18, &bytes, &fn),
        "WMF: a record claiming more than the metafile holds is REFUSED");
     put32(m, 18, 8);
-    ok(!wowconv_mf_record(m, end, end - 4, &bytes, &fn),
+    ok(!WowConvMetafileRecord(m, end, end - 4, &bytes, &fn),
        "WMF: fewer than 6 bytes left is not a record");
     put16(m, 2, 10);
-    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
        "WMF: a header size other than 9 WORDS is not a WMF");
     put16(m, 2, 9); put16(m, 0, 3);
-    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
        "WMF: mtType must be 1 (memory) or 2 (disk)");
     put16(m, 0, 2); put32(m, 6, 4);
-    ok(wowconv_mf_header(m, sizeof m, &nobj, &end) == 0,
+    ok(WowConvMetafileHeader(m, sizeof m, &nobj, &end) == 0,
        "WMF: an mtSize smaller than the header itself is REFUSED");
     put32(m, 6, 0x1000);
-    ok(wowconv_mf_header(m, 40, &nobj, &end) == 18 && end == 40,
+    ok(WowConvMetafileHeader(m, 40, &nobj, &end) == 18 && end == 40,
        "WMF: an mtSize past the buffer is bounded by the buffer, never trusted");
-    ok(wowconv_mf_header(m, 17, &nobj, &end) == 0,
+    ok(WowConvMetafileHeader(m, 17, &nobj, &end) == 0,
        "WMF: fewer than 18 bytes has no header");
 }
 

@@ -20589,14 +20589,14 @@ static void wow32_ret_load(void)
 static int   g_wowsched_on = 0;
 static WORD  g_wow_dgsel   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
 /* s92 (#306): every task that is not running, parked (wowsched.h WOWSCHED_MAX). */
-static wowsched_slot_t g_ws_slots[WOWSCHED_MAX];
+static WOWSCHED_SLOT g_ws_slots[WOWSCHED_MAX];
 static int   g_ws_rr = 0;            /* round-robin cursor for the yields            */
 static int   g_ww_nested;            /* defined with the nested run (wow_call16_sync_ex) */
 static DWORD g_ws_switches = 0;
 static int ws_free(void)
 {
     int i;
-    for (i = 0; i < WOWSCHED_MAX; ++i) if (!g_ws_slots[i].used) return i;
+    for (i = 0; i < WOWSCHED_MAX; ++i) if (!g_ws_slots[i].IsUsed) return i;
     return -1;
 }
 /* The next parked task other than `cur`, round robin; -1 if none. */
@@ -20605,7 +20605,7 @@ static int ws_pick(WORD cur)
     int i, k;
     for (k = 1; k <= WOWSCHED_MAX; ++k) {
         i = (g_ws_rr + k) % WOWSCHED_MAX;
-        if (g_ws_slots[i].used && g_ws_slots[i].task != cur) { g_ws_rr = i; return i; }
+        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task != cur) { g_ws_rr = i; return i; }
     }
     return -1;
 }
@@ -20615,7 +20615,7 @@ static int ws_fresh(WORD cur)
 {
     int i;
     for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].used && g_ws_slots[i].fresh && g_ws_slots[i].task != cur) return i;
+        if (g_ws_slots[i].IsUsed && g_ws_slots[i].IsFresh && g_ws_slots[i].Task != cur) return i;
     return -1;
 }
 /* A task that may take the CPU from one idling at callback depth `depth`: a fresh one
@@ -20625,19 +20625,19 @@ static int ws_runnable(WORD cur, int depth)
 {
     int i;
     for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].used && g_ws_slots[i].task != cur
-            && ((g_ws_slots[i].runnable && g_ws_slots[i].wcdepth == depth)
-                || (g_ws_slots[i].fresh && depth == 0)
-                || (g_ws_slots[i].waitmsg && wowmsg_count_for(g_ws_slots[i].task)
-                    && (g_ws_slots[i].wcdepth == g_ws_slots[i].base
-                        || g_ws_slots[i].wcdepth == depth)))) return i;
+        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task != cur
+            && ((g_ws_slots[i].IsRunnable && g_ws_slots[i].CallbackDepth == depth)
+                || (g_ws_slots[i].IsFresh && depth == 0)
+                || (g_ws_slots[i].IsWaitingForMessage && wowmsg_count_for(g_ws_slots[i].Task)
+                    && (g_ws_slots[i].CallbackDepth == g_ws_slots[i].BaseDepth
+                        || g_ws_slots[i].CallbackDepth == depth)))) return i;
     return -1;
 }
 /* Parked holding no host callback frame: launched and never run, or idle in its own
    top-level GetMessage. Such a task is re-based at whatever depth resumes it. */
-static int ws_toplevel(const wowsched_slot_t *s)
+static int ws_toplevel(const WOWSCHED_SLOT *s)
 {
-    return s->fresh || (s->waitmsg && s->wcdepth == s->base);
+    return s->IsFresh || (s->IsWaitingForMessage && s->CallbackDepth == s->BaseDepth);
 }
 /* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
    WOWEXEC (the first task resumed at (C)), whose launches keep the measured order. */
@@ -20752,9 +20752,9 @@ static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
     int i, n = 0;
     if (!owner || !cur || cur == 0xFFFF || owner == cur) return 0;
     for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].used && g_ws_slots[i].task == owner) c[n++] = g_ws_slots[i].ctx;
+        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task == owner) c[n++] = g_ws_slots[i].Context;
     for (i = g_wc_depth - 2; i >= 0; --i)         /* the newest frame is the one being built */
-        if (g_wc[i].etask == owner) c[n++] = g_wc[i].saved.ctx;
+        if (g_wc[i].etask == owner) c[n++] = g_wc[i].saved.Context;
     /* ⚠ THE DEEPEST ONE. Calls that bounce between two tasks leave the owner's
          stack in use below its parked SP; the lowest SP known is the free edge. */
     for (i = 0; i < n; ++i) {
@@ -22994,16 +22994,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         int  fi, fsi = -1;
                         g_ws_launch_child = 0;
                         for (fi = 0; fi < WOWSCHED_MAX; ++fi)
-                            if (g_ws_slots[fi].used && g_ws_slots[fi].fresh
-                                && g_ws_slots[fi].task == child) fsi = fi;
+                            if (g_ws_slots[fi].IsUsed && g_ws_slots[fi].IsFresh
+                                && g_ws_slots[fi].Task == child) fsi = fi;
                         if (fsi >= 0 && g_ws_shell && fcur != g_ws_shell
                             && g_ww_nested == 0 && !wowdlg_active() && !ws_intertask_live()) {
                             DWORD fmode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
-                            wowsched_poke(g_ws_slots[fsi].modelin, WOW32_MODE_ORDINARY);
-                            wowsched_swap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
-                            g_ws_slots[fsi].runnable = 1;          /* the parent, mid-work */
-                            g_ws_slots[fsi].wcdepth  = g_wc_depth;
-                            g_ws_curbase = g_wc_depth;             /* the child's top level */
+                            WowSchedPoke(g_ws_slots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
+                            WowSchedSwap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
+                            g_ws_slots[fsi].IsRunnable = 1;          /* the parent, mid-work */
+                            g_ws_slots[fsi].CallbackDepth  = g_wc_depth;
+                            g_WowSchedCurrentBase = g_wc_depth;             /* the child's top level */
                             wowsched_setcur(child);
                             wow_task_chdir(child, &p);
                             ++g_ws_switches;
@@ -23054,8 +23054,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              own task a third time. It is VERIFIED at (C) below against
                              the value krnl386 itself writes, and a mismatch is loud. */
                         if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
-                        wowsched_save(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
-                        g_ws_slots[wsi].fresh = 1;          /* s92: not run yet (#306) */
+                        WowSchedSave(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        g_ws_slots[wsi].IsFresh = 1;          /* s92: not run yet (#306) */
                         g_ws_launch_child = cur;            /* the parent is the next caller */
                         wow_task_dir_here(cur);             /* #164: its launch directory */
                         wow32_setret(&f, hinst);
@@ -23106,15 +23106,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
                              && cur != 0 && cur != 0xFFFF && !ws_intertask_live()
                              && (wsi = ws_pick(cur)) >= 0) {
-                        WORD to = g_ws_slots[wsi].task;
+                        WORD to = g_ws_slots[wsi].Task;
                         /* Written into the WAITING task's frame now; its epilogue
                            reads them whenever it is resumed, off its own stack. */
                         wow32_setret(&f, 0);
                         wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
                         int drb = ws_toplevel(&g_ws_slots[wsi]);
-                        wowsched_poke(g_ws_slots[wsi].modelin, WOW32_MODE_ORDINARY);
-                        wowsched_swap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
-                        if (drb) g_ws_curbase = g_wc_depth;
+                        WowSchedPoke(g_ws_slots[wsi].ModeLinear, WOW32_MODE_ORDINARY);
+                        WowSchedSwap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        if (drb) g_WowSchedCurrentBase = g_wc_depth;
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
@@ -23546,14 +23546,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         WORD ycur = ecur;
                         int  ysi  = ws_runnable(ycur, g_wc_depth);
                         if (ysi >= 0) {
-                            WORD  yto = g_ws_slots[ysi].task;
+                            WORD  yto = g_ws_slots[ysi].Task;
                             DWORD ymode = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
                             int   yrb = ws_toplevel(&g_ws_slots[ysi]);
-                            wowsched_poke(g_ws_slots[ysi].modelin, WOW32_MODE_ORDINARY);
-                            wowsched_swap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
-                            g_ws_slots[ysi].waitmsg = 1;          /* the one that yielded */
-                            g_ws_slots[ysi].wcdepth = g_wc_depth;
-                            if (yrb) g_ws_curbase = g_wc_depth;
+                            WowSchedPoke(g_ws_slots[ysi].ModeLinear, WOW32_MODE_ORDINARY);
+                            WowSchedSwap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
+                            g_ws_slots[ysi].IsWaitingForMessage = 1;          /* the one that yielded */
+                            g_ws_slots[ysi].CallbackDepth = g_wc_depth;
+                            if (yrb) g_WowSchedCurrentBase = g_wc_depth;
                             wowsched_setcur(yto);
                             wow_task_chdir(yto, &p);
                             ++g_ws_switches;
@@ -23966,7 +23966,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.krnl && g_wow_kbd_seg && f.stubseg == g_wow_kbd_seg) {
                     char note[320];
-                    if (wowkbd_call(&f, note, sizeof note)) {
+                    if (WowKeyboardCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (KEYBOARD), returned 0x");
@@ -24032,7 +24032,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.krnl && g_wow_sound_seg && f.stubseg == g_wow_sound_seg) {
                     char note[160];
-                    if (wowsound_call(&f, note, sizeof note)) {
+                    if (WowSoundCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (SOUND), returned 0x");
@@ -24058,7 +24058,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.krnl && g_wow_mmedia_seg && f.stubseg == g_wow_mmedia_seg) {
                     char note[200];
-                    if (wowmmedia_call(&f, note, sizeof note)) {
+                    if (WowMultimediaCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (MMSYSTEM), returned 0x");
@@ -34979,7 +34979,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             if (wsc >= 0 && wowsched_curtask() == 0) {
                                 p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
                                             "and task 0x");
-                                p = zhex(p, g_ws_slots[wsc].task);
+                                p = zhex(p, g_ws_slots[wsc].Task);
                                 p = zput(p, " is parked. Resuming it INSTEAD of reflecting this "
                                             "fault; the creator's remaining teardown is "
                                             "ABANDONED (selectors leak).\r\n");
@@ -34990,7 +34990,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      invariant, and a wrong hInstance is exactly the kind
                                      of thing that would otherwise fail three walls later
                                      with no trace back to here. */
-                                {   DWORD tb = dpmi_sel_base(g_ws_slots[wsc].task);
+                                {   DWORD tb = dpmi_sel_base(g_ws_slots[wsc].Task);
                                     if (tb) {
                                         const volatile BYTE *t =
                                             (const volatile BYTE *)(ULONG_PTR)tb;
@@ -35001,12 +35001,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     }
                                 }
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                wowsched_poke(g_ws_slots[wsc].modelin, WOW32_MODE_ORDINARY);
-                                {   WORD to = g_ws_slots[wsc].task;
+                                WowSchedPoke(g_ws_slots[wsc].ModeLinear, WOW32_MODE_ORDINARY);
+                                {   WORD to = g_ws_slots[wsc].Task;
                                     int crb = ws_toplevel(&g_ws_slots[wsc]);
                                     if (!g_ws_shell) g_ws_shell = to;   /* s92: WOWEXEC */
-                                    wowsched_restore(&g_ws_slots[wsc], tib);
-                                    if (crb) g_ws_curbase = g_wc_depth;
+                                    WowSchedRestore(&g_ws_slots[wsc], tib);
+                                    if (crb) g_WowSchedCurrentBase = g_wc_depth;
                                     /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
                                          The creator zeroed it on its way out; the
                                          frame we are resuming was parked when it

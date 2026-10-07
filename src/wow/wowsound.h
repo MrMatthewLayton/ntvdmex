@@ -1,5 +1,5 @@
-#ifndef WOWSOUND_H
-#define WOWSOUND_H
+#ifndef NTVDMEX_WOWSOUND_H
+#define NTVDMEX_WOWSOUND_H
 /*
  * wowsound.h -- ★ SOUND.DRV's OWN ID SPACE.  GH #299, session 90.
  *
@@ -38,18 +38,18 @@
 #define WOWSND_SETVOICETHRESHOLD  0x0010
 #define WOWSND_DOBEEP             0x0011
 
-static int wowsound_call(wow32_frame_t *f, char *note, int notecap)
+static INT WowSoundCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
 {
-    static const char *const names[] = {
+    static const PCSTR functionNames[] = {
         "?", "OpenSound", "CloseSound", "SetVoiceQueueSize", "SetVoiceNote",
         "SetVoiceAccent", "SetVoiceEnvelope", "SetSoundNoise", "SetVoiceSound",
         "StartSound", "StopSound", "WaitSoundState", "SyncAllVoices",
         "CountVoiceNotes", "GetThresholdEvent", "GetThresholdStatus",
         "SetVoiceThreshold", "DoBeep",
     };
-    int k = 0;
-    if (notecap) note[0] = 0;
-    switch (f->id) {
+    INT noteLength = 0;
+    if (noteCapacity) note[0] = 0;
+    switch (frame->id) {
     case WOWSND_OPENSOUND:
     case WOWSND_CLOSESOUND:
     case WOWSND_SETVOICEQUEUESIZE:
@@ -66,20 +66,20 @@ static int wowsound_call(wow32_frame_t *f, char *note, int notecap)
     case WOWSND_GETTHRESHOLDSTATUS:
     case WOWSND_SETVOICETHRESHOLD:
     case WOWSND_DOBEEP:
-        wu_puts(note, notecap, &k, names[f->id]);
-        wu_puts(note, notecap, &k, " -- 0, as stock's WOW answers every SOUND.DRV call"
+        wu_puts(note, noteCapacity, &noteLength, functionNames[frame->id]);
+        wu_puts(note, noteCapacity, &noteLength, " -- 0, as stock's WOW answers every SOUND.DRV call"
                                    " (w_sound, 23/23)");
-        wow32_setret(f, 0);
+        wow32_setret(frame, 0);
         return 1;
     /* ⚠ GetThresholdEvent returns an LPINT (DX:AX). Stock's answer for it is
          UNMEASURED -- the probe's OUT shows AX only -- so it is a NULL far pointer
          here, which is what a 0-everything WOW gives, and it is flagged. */
     case WOWSND_GETTHRESHOLDEVENT:
-        wu_puts(note, notecap, &k, "GetThresholdEvent -- NULL (DX not measured on stock)");
-        wow32_setret(f, 0);
+        wu_puts(note, noteCapacity, &noteLength, "GetThresholdEvent -- NULL (DX not measured on stock)");
+        wow32_setret(frame, 0);
         return 1;
     }
     return 0;
 }
 
-#endif /* WOWSOUND_H */
+#endif /* NTVDMEX_WOWSOUND_H */
