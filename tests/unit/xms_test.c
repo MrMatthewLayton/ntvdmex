@@ -74,7 +74,7 @@ static DWORD XmsTestFarPointer(DWORD segment, DWORD offset)
     return (segment << DOS_XMS_FAR_SEGMENT_SHIFT) | offset;
 }
 
-int main(void)
+INT main(VOID)
 {
     DOS_XMS_STATE state;
     WORD firstHandle, secondHandle, thirdHandle;
