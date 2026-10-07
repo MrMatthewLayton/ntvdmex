@@ -91,8 +91,8 @@ static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
 static HWND  wowuser_hwnd32(WORD hwnd);
 static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
 /* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
-static int   wowcdlg_relay(UINT msg, LPARAM lp);
-static int   wowcdlg_isdlgmsg(MSG *m);
+static int   WowCdlgRelay(UINT msg, LPARAM lp);
+static int   WowCdlgIsDialogMessage(MSG *m);
 static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
 
 /*
@@ -1011,7 +1011,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          non-client behaviour entirely. */
     /* #294: a Find/Replace dialog's notification ("commdlg_FindReplace") to its
          owner -- relayed with the guest's own FINDREPLACE pointer. */
-    if (h16 && msg >= 0xC000 && wowcdlg_relay(msg, lp)) return 0;
+    if (h16 && msg >= 0xC000 && WowCdlgRelay(msg, lp)) return 0;
     return wowwin_defproc(h, h16, msg, wp, lp);
 }
 
@@ -1040,7 +1040,7 @@ static int wowwin_pump(int budget)
     while (n < budget && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
         ++n; ++g_ww_pumped;
         if (wowwin_tt_fire(&m)) continue;          /* s93: a windowless Win16 timer */
-        if (wowcdlg_isdlgmsg(&m)) continue;        /* #294: Find dialog's Tab/Enter */
+        if (WowCdlgIsDialogMessage(&m)) continue;        /* #294: Find dialog's Tab/Enter */
         TranslateMessage(&m);
         DispatchMessageA(&m);
     }

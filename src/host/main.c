@@ -23940,7 +23940,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     " the SERVICED line follows when it is\r\n");
                         wowlog_flush(base, &p);
                     }
-                    if (wowcommdlg_call(&f, note, sizeof note)) {
+                    if (WowCommdlgCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (COMMDLG), returned 0x");
