@@ -24,7 +24,7 @@ static VOID TypesTestCheck(BOOL condition, PCSTR description)
     }
 }
 
-int main(void)
+INT main(VOID)
 {
     INT8  signedByte  = (INT8)TYPES_TEST_SIGNED_MINUS_ONE;
     INT32 signedDword = (INT32)TYPES_TEST_SIGNED_MINUS_ONE;
