@@ -164,7 +164,7 @@ static V86_CPU KeyboardActionTestSetup(UINT entry)
 }
 
 /* Run until home; `budget` steps max. A HLT in the handler block is a call. */
-static INT KeyboardActionTestRun(V86_CPU *cpu, INT budget, INT clearPauseAfter)
+static INT KeyboardActionTestRun(PV86_CPU cpu, INT budget, INT clearPauseAfter)
 {
     INT stepCount = 0;
     for (;;) {
@@ -192,7 +192,7 @@ static INT KeyboardActionTestRun(V86_CPU *cpu, INT budget, INT clearPauseAfter)
 }
 
 /* #244: push the interrupted code's AX (1234h) above the INT 09h frame. */
-static VOID KeyboardActionTestPushSavedAx(V86_CPU *cpu)
+static VOID KeyboardActionTestPushSavedAx(PV86_CPU cpu)
 {
     cpu->Registers[KBDACT_TEST_SP] -= KBDACT_TEST_WORD_SIZE;
     g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
@@ -201,7 +201,7 @@ static VOID KeyboardActionTestPushSavedAx(V86_CPU *cpu)
                   + cpu->Registers[KBDACT_TEST_SP] + 1] = KBDACT_TEST_SAVED_AX_HIGH;
 }
 
-int main(void)
+INT main(VOID)
 {
     V86_CPU cpu;
     printf("== kbdact_test: BIOS INT 09h side-calls (#254)\n");
