@@ -9948,7 +9948,7 @@ static int launch_is_wow(const char *cmd)
         wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
         wow_bind_modules()   -- selectors for everything, then relocate ONCE. */
 #define WOW_MAX_MOD 16       /* krnl386 + the ten siblings, with headroom */
-static ne_module g_wow_mod[WOW_MAX_MOD];
+static NE_MODULE g_wow_mod[WOW_MAX_MOD];
 static uint8_t  *g_wow_img[WOW_MAX_MOD];
 static char      g_wow_name[WOW_MAX_MOD][16];
 static int       g_wow_nmod = 0;
@@ -9963,8 +9963,8 @@ static int wow_module_of_sel(WORD sel)
     int k, i;
     if (!sel) return -1;
     for (k = 0; k < g_wow_nmod; ++k)
-        for (i = 0; i < (int)g_wow_mod[k].n_seg; ++i)
-            if (g_wow_mod[k].seg[i].seg == sel) return k;
+        for (i = 0; i < (int)g_wow_mod[k].SegmentCount; ++i)
+            if (g_wow_mod[k].Segments[i].Selector == sel) return k;
     return -1;
 }
 
@@ -10129,13 +10129,13 @@ static WORD g_wow_krnl2_seg = 0;
 
 static int wow_krnl2_stub(WORD id, WORD retstub)
 {
-    const ne_seg *s;
+    const NE_SEGMENT *s;
     const uint8_t *img;
     DWORD o;
-    if (g_wow_nmod < 1 || !g_wow_img[0] || g_wow_mod[0].n_seg < 2) return 0;
-    s = &g_wow_mod[0].seg[1];
-    if (!s->sector || retstub < 8 || (DWORD)retstub > s->length) return 0;
-    img = g_wow_img[0] + s->file_off;
+    if (g_wow_nmod < 1 || !g_wow_img[0] || g_wow_mod[0].SegmentCount < 2) return 0;
+    s = &g_wow_mod[0].Segments[1];
+    if (!s->Sector || retstub < 8 || (DWORD)retstub > s->Length) return 0;
+    img = g_wow_img[0] + s->FileOffset;
     o   = (DWORD)retstub - 8;
     return img[o] == 0x68
         && (WORD)(img[o + 1] | (img[o + 2] << 8)) == id
@@ -10318,7 +10318,7 @@ static int wow_load_one(const char *path)
     HANDLE f;
     DWORD sz = 0, got = 0;
     uint8_t *img;
-    ne_module *ne;
+    NE_MODULE *ne;
     int slot = g_wow_nmod, i;
 
     if (slot >= WOW_MAX_MOD) return -1;
@@ -10339,41 +10339,41 @@ static int wow_load_one(const char *path)
     }
     CloseHandle(f);
 
-    if (ne_parse(ne, img, sz) != 0) {
+    if (NeParse(ne, img, sz) != 0) {
         q = m; q = zput(q, "WOWTRY: ne_parse REJECTED "); q = zput(q, path);
-        q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->err);
+        q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->Error);
         q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
     }
-    if (ne_own_name(ne, g_wow_name[slot], sizeof g_wow_name[slot]) != 0)
+    if (NeOwnName(ne, g_wow_name[slot], sizeof g_wow_name[slot]) != 0)
         g_wow_name[slot][0] = 0;
 
     q = m;
     q = zput(q, "WOWTRY: "); q = zput(q, path);
     q = zput(q, "\r\n  name=");                q = zput(q, g_wow_name[slot]);
-    q = zput(q, (ne->prog_flags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
-    q = zput(q, " segs=");                     q = zhex(q, ne->n_seg);
-    q = zput(q, " imports-from=");             q = zhex(q, ne->n_mod);
-    q = zput(q, " movable=");                  q = zhex(q, ne->n_movable);
-    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne->csip >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne->csip & 0xFFFF);
-    q = zput(q, "  SS:SP=");                   q = zhex(q, ne->sssp >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne->sssp & 0xFFFF);
-    q = zput(q, "  autodata=");                q = zhex(q, ne->autodata);
-    q = zput(q, "  heap=0x");                  q = zhex(q, ne->heap);
-    q = zput(q, "  stack=0x");                 q = zhex(q, ne->stack);
+    q = zput(q, (ne->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
+    q = zput(q, " segs=");                     q = zhex(q, ne->SegmentCount);
+    q = zput(q, " imports-from=");             q = zhex(q, ne->ModuleCount);
+    q = zput(q, " movable=");                  q = zhex(q, ne->MovableCount);
+    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne->CsIp >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne->CsIp & 0xFFFF);
+    q = zput(q, "  SS:SP=");                   q = zhex(q, ne->SsSp >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne->SsSp & 0xFFFF);
+    q = zput(q, "  autodata=");                q = zhex(q, ne->AutoData);
+    q = zput(q, "  heap=0x");                  q = zhex(q, ne->Heap);
+    q = zput(q, "  stack=0x");                 q = zhex(q, ne->Stack);
     q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
 
-    for (i = 0; i < (int)ne->n_seg; ++i) {
-        ne_seg *s = &ne->seg[i];
-        uint32_t need = ne_seg_alloc_size(s), k;
-        s->mem = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
+    for (i = 0; i < (int)ne->SegmentCount; ++i) {
+        NE_SEGMENT *s = &ne->Segments[i];
+        uint32_t need = NeSegmentAllocSize(s), k;
+        s->Memory = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
                                          PAGE_READWRITE);
-        s->seg = 0;                          /* NO selector yet -- phase 2 assigns it */
-        if (!s->mem) {
+        s->Selector = 0;                          /* NO selector yet -- phase 2 assigns it */
+        if (!s->Memory) {
             q = m; q = zput(q, "WOWTRY: seg alloc failed\r\n");
             log_append(LOG_PATH, m, q); return -1;
         }
-        if (s->sector) for (k = 0; k < s->length; ++k) s->mem[k] = img[s->file_off + k];
+        if (s->Sector) for (k = 0; k < s->Length; ++k) s->Memory[k] = img[s->FileOffset + k];
     }
     g_wow_img[slot] = img;
     ++g_wow_nmod;
@@ -18262,7 +18262,7 @@ static DWORD wow_find_ldt_base(void)
     return 0;
 }
 
-static ne_registry g_wow_reg;
+static NE_REGISTRY g_wow_reg;
 
 /* ── WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. ─
      This, not the selector stage below, is how krnl386 is actually entered -- see the
@@ -18346,7 +18346,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          and it is the thing that has to be real memory; the staged image may now be
          LARGER than it (krnl386's is 0x1644 paragraphs), in which case the image wins. */
     enum { WOW_SELECTOR_PARAS = 0x1000 };        /* 64 KB -- the whole scratch selector */
-    ne_module *ne = &g_wow_mod[0];
+    NE_MODULE *ne = &g_wow_mod[0];
     uint8_t *img = g_wow_img[0];
     char m[400], *q;
     WORD sseg = 0, smax = 0;
@@ -18355,7 +18355,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
 
     if (!g_wow_nmod || !img) return -1;
 
-    imglen        = ne->img_len > ne->hdr ? ne->img_len - ne->hdr : 0;
+    imglen        = ne->ImageLength > ne->Header ? ne->ImageLength - ne->Header : 0;
     hdrimg_paras  = (WORD)((imglen + 15u) >> 4);
     window_paras  = hdrimg_paras > (WORD)WOW_SELECTOR_PARAS
                   ? hdrimg_paras : (WORD)WOW_SELECTOR_PARAS;
@@ -18504,37 +18504,37 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
-    for (i = 0; i < (int)ne->n_seg; ++i) {
-        ne_seg *s = &ne->seg[i];
-        uint32_t need = ne_seg_alloc_size(s), k;
+    for (i = 0; i < (int)ne->SegmentCount; ++i) {
+        NE_SEGMENT *s = &ne->Segments[i];
+        uint32_t need = NeSegmentAllocSize(s), k;
         WORD seg = 0, max = 0;
         volatile BYTE *dst;
         /* Room for the relocation records copied in below -- krnl386 reads them back
            out of the loaded segment, so they are part of what has to be resident. */
-        if (s->sector && (s->flags & NE_SEG_RELOCS)) {
-            uint32_t ro = s->file_off + s->length;
-            if (ro + 2 <= ne->img_len) {
+        if (s->Sector && (s->Flags & NE_SEG_RELOCS)) {
+            uint32_t ro = s->FileOffset + s->Length;
+            if (ro + 2 <= ne->ImageLength) {
                 uint32_t rb = 2 + (uint32_t)(img[ro] | (img[ro + 1] << 8)) * 8;
-                if (s->length + rb > need) need = s->length + rb;
+                if (s->Length + rb > need) need = s->Length + rb;
             }
         }
         /* ── DGROUP IS BIGGER THAN THE SEGMENT IN THE FILE. ────────────────────────
              For the automatic data segment a Win16 loader allocates the segment's
              length PLUS ne_heap PLUS ne_stack -- the local heap and stack live above
              the initialised data, and nothing in the segment table says so.
-             ne_seg_alloc_size() only knows about the segment, so the header's own
+             NeSegmentAllocSize() only knows about the segment, so the header's own
              fields have to be added here. krnl386 asks for heap 0x200 and got none,
              which left its DGROUP exactly as large as its initialised data: any local
              allocation would have run off the end of the segment. */
-        if (ne->autodata && i == (int)ne->autodata - 1) {
-            uint32_t dg = need + ne->heap + ne->stack;
+        if (ne->AutoData && i == (int)ne->AutoData - 1) {
+            uint32_t dg = need + ne->Heap + ne->Stack;
             if (dg > 0x10000u) dg = 0x10000u;
             if (dg > need) {
                 q = m;
                 q = zput(q, "WOWV86: DGROUP (seg "); q = zhex(q, (DWORD)(i + 1));
                 q = zput(q, ") 0x");        q = zhex(q, need);
-                q = zput(q, " + heap 0x");  q = zhex(q, ne->heap);
-                q = zput(q, " + stack 0x"); q = zhex(q, ne->stack);
+                q = zput(q, " + heap 0x");  q = zhex(q, ne->Heap);
+                q = zput(q, " + stack 0x"); q = zhex(q, ne->Stack);
                 q = zput(q, " = 0x");       q = zhex(q, dg);
                 q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
                 need = dg;
@@ -18548,11 +18548,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         }
         dst = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
         for (k = 0; k < need; ++k) dst[k] = 0;
-        if (s->sector) for (k = 0; k < s->length; ++k) dst[k] = img[s->file_off + k];
+        if (s->Sector) for (k = 0; k < s->Length; ++k) dst[k] = img[s->FileOffset + k];
         /* ── ★ AND THE RELOCATION RECORDS, WHICH LIVE AFTER THE SEGMENT DATA. ──────
              An NE segment with NE_SEG_RELOCS is followed in the FILE by a WORD count
              and that many 8-byte records. A conventional loader applies them and
-             throws them away -- ours does too (ne_apply_relocs reads them straight
+             throws them away -- ours does too (NeApplyRelocations reads them straight
              out of the image). But krnl386 relocates its own copy AGAIN, reading the
              count and the records from the LOADED SEGMENT in memory, just past its
              `length` bytes (observed). With only `length` bytes copied it was reading
@@ -18561,29 +18561,29 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              module that imports from nothing, so the import lookup failed and
              LoadSegment failed. Bracketed with breakpoints; see session 31 part 20.
            So copy them too, and size the block to hold them. */
-        if (s->sector && (s->flags & NE_SEG_RELOCS)) {
-            uint32_t ro = s->file_off + s->length;
-            if (ro + 2 <= ne->img_len) {
+        if (s->Sector && (s->Flags & NE_SEG_RELOCS)) {
+            uint32_t ro = s->FileOffset + s->Length;
+            if (ro + 2 <= ne->ImageLength) {
                 uint32_t nrel = (uint32_t)(img[ro] | (img[ro + 1] << 8));
                 uint32_t rb   = 2 + nrel * 8;
-                if (ro + rb <= ne->img_len && s->length + rb <= need)
-                    for (k = 0; k < rb; ++k) dst[s->length + k] = img[ro + k];
+                if (ro + rb <= ne->ImageLength && s->Length + rb <= need)
+                    for (k = 0; k < rb; ++k) dst[s->Length + k] = img[ro + k];
                 q = m;
                 q = zput(q, "WOWV86:   + "); q = zhex(q, nrel);
                 q = zput(q, " relocation records ("); q = zhex(q, rb);
-                q = zput(q, " bytes) at segment offset 0x"); q = zhex(q, s->length);
-                q = zput(q, (s->length + rb <= need) ? "\r\n"
+                q = zput(q, " bytes) at segment offset 0x"); q = zhex(q, s->Length);
+                q = zput(q, (s->Length + rb <= need) ? "\r\n"
                                                      : " -- ⚠ DOES NOT FIT\r\n");
                 log_append(LDTLOG_PATH, m, q);
             }
         }
-        s->mem = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
-        s->seg = seg;                                        /* a PARAGRAPH now     */
+        s->Memory = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
+        s->Selector = seg;                                        /* a PARAGRAPH now     */
 
         q = m;
         q = zput(q, "WOWV86: seg ");   q = zhex(q, (DWORD)(i + 1));
-        q = zput(q, (s->flags & NE_SEG_DATA) ? " DATA" : " CODE");
-        q = zput(q, " len=0x");        q = zhex(q, s->length);
+        q = zput(q, (s->Flags & NE_SEG_DATA) ? " DATA" : " CODE");
+        q = zput(q, " len=0x");        q = zhex(q, s->Length);
         q = zput(q, " alloc=0x");      q = zhex(q, need);
         q = zput(q, " -> para 0x");    q = zhex(q, seg);
         q = zput(q, " (linear 0x");    q = zhex(q, (DWORD)seg << 4);
@@ -18624,9 +18624,9 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          are handed over directly and are not fixups, so nothing in the entry path
          depends on this.
 
-       ⚠ ne_apply_relocs is UNCHANGED and still used for the selector-stage load and by
+       ⚠ NeApplyRelocations is UNCHANGED and still used for the selector-stage load and by
          all 209 NE checks; it is only this V86 entry stage that must not run it. */
-    ne->sites = 0;
+    ne->Sites = 0;
     q = m;
     q = zput(q, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
                 "LoadSegment pass, which resolves to SELECTORS (see the note here)\r\n");
@@ -18707,7 +18707,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          to the header, so the header must land at offset 0 of the selector for any of
          them to resolve. */
     {   WORD hseg = (WORD)(sseg + WOW_STACK_PARAS);      /* same block, no MCB between */
-        DWORD hlen = ne->img_len > ne->hdr ? ne->img_len - ne->hdr : 0;
+        DWORD hlen = ne->ImageLength > ne->Header ? ne->ImageLength - ne->Header : 0;
         volatile BYTE *hb = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
         DWORD k;
         /* Zero the WHOLE block, not just what the image fills: anything the image
@@ -18715,7 +18715,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
            uninitialised memory that gets parsed is a bug that reads like a guest
            fault. Then stage the file -- ALL of it; see the note on hdrimg_paras. */
         for (k = 0; k < (DWORD)window_paras * 16u; ++k) hb[k] = 0;
-        for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
+        for (k = 0; k < hlen; ++k) hb[k] = img[ne->Header + k];
 
         /* ── ⚠ DO NOT WIDEN THE SEGMENT TABLE HERE. TRIED, MEASURED, REFUTED. ──────
              krnl386's in-memory segment table has TEN-byte entries, the handle at +8 --
@@ -18744,14 +18744,14 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              this copy makes LoadSegment return success without relocating (measured)
              -- which DID clear the
              ExitKernelThunk(1) wall and is NOT the right answer; see the refutation
-             above ne_apply_relocs's call site. Recorded so it is not re-tried. */
+             above NeApplyRelocations's call site. Recorded so it is not re-tried. */
 
         q = m;
         q = zput(q, "WOWV86: NE header image at para 0x"); q = zhex(q, hseg);
         q = zput(q, " = SS 0x");  q = zhex(q, sseg);
         q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
-        q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->hdr);
-        q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->n_seg);
+        q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->Header);
+        q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->SegmentCount);
         q = zput(q, ")\r\n  staged 0x"); q = zhex(q, hlen);
         q = zput(q, " of 0x");            q = zhex(q, imglen);
         q = zput(q, " bytes = 0x");       q = zhex(q, (DWORD)window_paras);
@@ -18764,14 +18764,14 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
            truncation was INVISIBLE in the line above, which only ever printed the
            already-clamped length. A number that cannot show the fault it is there to
            catch is not an instrument. */
-        for (i = 0; i < (int)ne->n_seg; ++i) {
-            uint32_t fo = ne->seg[i].file_off;
-            int resident = fo >= ne->hdr && (DWORD)(fo - ne->hdr) < hlen;
+        for (i = 0; i < (int)ne->SegmentCount; ++i) {
+            uint32_t fo = ne->Segments[i].FileOffset;
+            int resident = fo >= ne->Header && (DWORD)(fo - ne->Header) < hlen;
             q = m;
             q = zput(q, "WOWV86:   seg "); q = zhex(q, (DWORD)(i + 1));
             q = zput(q, " file 0x");       q = zhex(q, fo);
             q = zput(q, " -> staged linear 0x");
-            q = zhex(q, ((DWORD)hseg << 4) + (fo - ne->hdr));
+            q = zhex(q, ((DWORD)hseg << 4) + (fo - ne->Header));
             q = zput(q, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
             log_append(LDTLOG_PATH, m, q);
         }
@@ -18835,14 +18835,14 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              set to the header alone, the loop's first iteration copied segment 1's image
              and called it segment 2 (measured -- `@ds:si` was seg1+0x4a). krnl386's own
              per-segment bookkeeping advances it after that. */
-        {   DWORD first = ne->n_seg > 1 ? ne->seg[1].file_off
-                                        : ne->seg[0].file_off;
-            DWORD gap   = (first > ne->hdr) ? ((first - ne->hdr) + 15u) & ~15u : 0;
+        {   DWORD first = ne->SegmentCount > 1 ? ne->Segments[1].FileOffset
+                                        : ne->Segments[0].FileOffset;
+            DWORD gap   = (first > ne->Header) ? ((first - ne->Header) + 15u) & ~15u : 0;
             DWORD full  = 0xF880u;
             g_wow_entry_cx = (WORD)(gap < full ? full - gap : full);
             q = zput(q, "WOWV86: arena gap = 0x"); q = zhex(q, gap);
             q = zput(q, " bytes (the header and tables, header+0x0 .. +0x");
-            q = zhex(q, first - ne->hdr);
+            q = zhex(q, first - ne->Header);
             q = zput(q, ") -- the first reclaim discards them so segment 1 lands at "
                         "offset 0\r\n");
             log_append(LDTLOG_PATH, m, q);
@@ -18861,7 +18861,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         log_append(LDTLOG_PATH, m, q);
     }
 
-    if (!ne->autodata || ne->autodata > ne->n_seg) {
+    if (!ne->AutoData || ne->AutoData > ne->SegmentCount) {
         q = m; q = zput(q, "WOWV86: autodata segment out of range\r\n");
         log_append(LDTLOG_PATH, m, q); return -1;
     }
@@ -18984,9 +18984,9 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
-    *ecs = ne->seg[(ne->csip >> 16) - 1].seg;
-    *eip = (WORD)(ne->csip & 0xFFFF);
-    *eds = ne->seg[ne->autodata - 1].seg;
+    *ecs = ne->Segments[(ne->CsIp >> 16) - 1].Selector;
+    *eip = (WORD)(ne->CsIp & 0xFFFF);
+    *eds = ne->Segments[ne->AutoData - 1].Selector;
     *ess = sseg;
     /* ⚠ THE VERY TOP, not top-2. `base(SS) + SP` is what krnl386 turns into its
          header selector, and it must land exactly on the header image placed in the
@@ -18996,7 +18996,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     *esp = (WORD)(WOW_STACK_PARAS << 4);
 
     q = m;
-    q = zput(q, "WOWV86: relocated to paragraphs, sites=0x"); q = zhex(q, ne->sites);
+    q = zput(q, "WOWV86: relocated to paragraphs, sites=0x"); q = zhex(q, ne->Sites);
     q = zput(q, "\r\n  ENTRY CS:IP=");  q = zhex(q, *ecs); q = zput(q, ":"); q = zhex(q, *eip);
     q = zput(q, "  DS=");               q = zhex(q, *eds);
     q = zput(q, "  SS:SP=");            q = zhex(q, *ess); q = zput(q, ":"); q = zhex(q, *esp);
@@ -19048,26 +19048,26 @@ static void wow_probe_selectors(void)
     wow_find_ldt_base();
 
     /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
-         relocation runs. ne_registry_resolve refuses a target whose selector is still
+         relocation runs. NeRegistryResolve refuses a target whose selector is still
          0, so getting this order wrong fails loudly instead of writing 0000:xxxx. */
     for (k = 0; k < g_wow_nmod; ++k) {
-        ne_module *ne = &g_wow_mod[k];
-        for (i = 0; i < (int)ne->n_seg; ++i) {
-            ne_seg *sg = &ne->seg[i];
-            int is_code = !(sg->flags & NE_SEG_DATA);
-            uint32_t need = ne_seg_alloc_size(sg);
+        NE_MODULE *ne = &g_wow_mod[k];
+        for (i = 0; i < (int)ne->SegmentCount; ++i) {
+            NE_SEGMENT *sg = &ne->Segments[i];
+            int is_code = !(sg->Flags & NE_SEG_DATA);
+            uint32_t need = NeSegmentAllocSize(sg);
             int idx;
             if (g_ldt_next >= DPMI_LDT_MAX) {
                 q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n");
                 log_append(LDTLOG_PATH, m, q); return;
             }
             idx = g_ldt_next++;
-            g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->mem;
+            g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->Memory;
             g_ldt[idx].limit  = need - 1;
             g_ldt[idx].access = (BYTE)(is_code ? 0xFA : 0xF2);
             g_ldt[idx].flags  = 0;                       /* 16-bit segments */
             dpmi_install(idx);
-            sg->seg = (WORD)((idx << 3) | 7);            /* the REAL selector now */
+            sg->Selector = (WORD)((idx << 3) | 7);            /* the REAL selector now */
 
             q = m;
             q = zput(q, "  "); q = zput(q, g_wow_name[k]);
@@ -19075,11 +19075,11 @@ static void wow_probe_selectors(void)
             q = zput(q, is_code ? " CODE" : " DATA");
             q = zput(q, " base=0x");   q = zhex(q, g_ldt[idx].base);
             q = zput(q, " limit=0x");  q = zhex(q, g_ldt[idx].limit);
-            q = zput(q, " -> sel 0x"); q = zhex(q, sg->seg);
+            q = zput(q, " -> sel 0x"); q = zhex(q, sg->Selector);
             /* Read the descriptor back through the CPU. LAR only succeeds on a
                selector the processor can actually see, so this is the hardware
                confirming the install rather than us believing our own bookkeeping. */
-            {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->seg;
+            {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->Selector;
                 __asm__ __volatile__("lar %2, %0\n\tsetz %1"
                                      : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
                 q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
@@ -19087,7 +19087,7 @@ static void wow_probe_selectors(void)
             }
             q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
         }
-        ne_registry_add(&g_wow_reg, ne);
+        NeRegistryAdd(&g_wow_reg, ne);
     }
 
     /* ── PHASE 2b: relocate ONCE, resolving imports across the registry. ──────────
@@ -19096,30 +19096,30 @@ static void wow_probe_selectors(void)
          WOWEXEC is expected to STOP at KEYBOARD, which is simply not loaded yet --
          a stop that names its module is a to-do list, not a failure. */
     for (k = 0; k < g_wow_nmod; ++k) {
-        ne_module *ne = &g_wow_mod[k];
+        NE_MODULE *ne = &g_wow_mod[k];
         int rc = 0;
-        ne->sites = 0;
-        for (i = 0; i < (int)ne->n_seg && rc == 0; ++i)
-            rc = ne_apply_relocs(ne, i, ne_registry_resolve, &g_wow_reg);
+        ne->Sites = 0;
+        for (i = 0; i < (int)ne->SegmentCount && rc == 0; ++i)
+            rc = NeApplyRelocations(ne, i, NeRegistryResolve, &g_wow_reg);
         q = m;
         q = zput(q, "  RELOC "); q = zput(q, g_wow_name[k]);
         if (rc == 0) {
-            q = zput(q, " ALL RESOLVED sites=0x"); q = zhex(q, ne->sites);
+            q = zput(q, " ALL RESOLVED sites=0x"); q = zhex(q, ne->Sites);
         } else {
-            q = zput(q, " STOPPED after 0x");     q = zhex(q, ne->sites);
-            q = zput(q, " sites, at ne.h line "); q = zhex(q, (DWORD)ne->err);
-            q = zput(q, ", needed ");             q = zput(q, g_wow_reg.fail_mod);
+            q = zput(q, " STOPPED after 0x");     q = zhex(q, ne->Sites);
+            q = zput(q, " sites, at ne.h line "); q = zhex(q, (DWORD)ne->Error);
+            q = zput(q, ", needed ");             q = zput(q, g_wow_reg.FailedModule);
             q = zput(q, ".");
-            if (g_wow_reg.fail_fn[0]) q = zput(q, g_wow_reg.fail_fn);
-            else                    { q = zput(q, "@"); q = zhex(q, g_wow_reg.fail_ord); }
+            if (g_wow_reg.FailedFunction[0]) q = zput(q, g_wow_reg.FailedFunction);
+            else                    { q = zput(q, "@"); q = zhex(q, g_wow_reg.FailedOrdinal); }
         }
         q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
     q = m;
     q = zput(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
-    q = zhex(q, g_wow_mod[0].seg[(g_wow_mod[0].csip >> 16) - 1].seg);
-    q = zput(q, ":0x"); q = zhex(q, g_wow_mod[0].csip & 0xFFFF);
+    q = zhex(q, g_wow_mod[0].Segments[(g_wow_mod[0].CsIp >> 16) - 1].Selector);
+    q = zput(q, ":0x"); q = zhex(q, g_wow_mod[0].CsIp & 0xFFFF);
     q = zput(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
     log_append(LDTLOG_PATH, m, q);
 }
@@ -19478,12 +19478,12 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
     {   const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)lin;
         if (b[0] != 0xC4 || b[1] != 0xC4) return 0;
     }
-    for (sg = 0; sg < (int)g_wow_mod[0].n_seg && sg < WOW_PMBASE_MAX; ++sg) {
-        ne_seg *s = &g_wow_mod[0].seg[sg];
-        if (!s->sector || eip + 1 >= s->length) continue;
-        if (base != g_wow_pmbase[sg] && base != ((DWORD)s->seg << 4)) continue;
-        if (s->file_off + eip + 1 >= g_wow_mod[0].img_len) continue;
-        {   const BYTE *f = g_wow_img[0] + s->file_off + eip;
+    for (sg = 0; sg < (int)g_wow_mod[0].SegmentCount && sg < WOW_PMBASE_MAX; ++sg) {
+        NE_SEGMENT *s = &g_wow_mod[0].Segments[sg];
+        if (!s->Sector || eip + 1 >= s->Length) continue;
+        if (base != g_wow_pmbase[sg] && base != ((DWORD)s->Selector << 4)) continue;
+        if (s->FileOffset + eip + 1 >= g_wow_mod[0].ImageLength) continue;
+        {   const BYTE *f = g_wow_img[0] + s->FileOffset + eip;
             if (f[0] != 0xCD) return 0;
             pmap_set(lin, f[1]);                     /* one lookup, once */
             return f[1];
@@ -22603,16 +22603,16 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
             if (g_wow_nmod && g_wow_img[0]) {
                 int mi;
                 DWORD csb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
-                for (mi = 0; mi < (int)g_wow_mod[0].n_seg; ++mi) {
-                    ne_seg *sg = &g_wow_mod[0].seg[mi];
-                    if (!sg->sector || eip + 1 >= sg->length) continue;
+                for (mi = 0; mi < (int)g_wow_mod[0].SegmentCount; ++mi) {
+                    NE_SEGMENT *sg = &g_wow_mod[0].Segments[mi];
+                    if (!sg->Sector || eip + 1 >= sg->Length) continue;
                     /* Only the segment this CS actually is: match the PM copy's base
                        against the code selector we recognised for segment 1, and the
                        V86 paragraph for the rest. */
                     if (mi == 0 && csb != g_wow_pmseg1_base &&
-                        csb != (DWORD)sg->seg << 4) continue;
-                    if (mi != 0 && csb != (DWORD)sg->seg << 4) continue;
-                    {   const BYTE *f = g_wow_img[0] + sg->file_off + eip;
+                        csb != (DWORD)sg->Selector << 4) continue;
+                    if (mi != 0 && csb != (DWORD)sg->Selector << 4) continue;
+                    {   const BYTE *f = g_wow_img[0] + sg->FileOffset + eip;
                         p = zput(p, " [file seg"); p = zhex(p, (DWORD)(mi + 1));
                         p = zput(p, "+0x"); p = zhex(p, eip);
                         p = zput(p, " = "); p = zhexb(p, f[0]);
@@ -25141,9 +25141,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                          round-up is visible rather than assumed. */
                                     if (g_wow_nmod) {
                                         int sg;
-                                        for (sg = 0; sg < (int)g_wow_mod[0].n_seg &&
+                                        for (sg = 0; sg < (int)g_wow_mod[0].SegmentCount &&
                                                      sg < WOW_PMBASE_MAX; ++sg) {
-                                            DWORD ln = g_wow_mod[0].seg[sg].length;
+                                            DWORD ln = g_wow_mod[0].Segments[sg].Length;
                                             if (!ln || g_ldt[a].limit < ln - 1 ||
                                                 g_ldt[a].limit >= ln + 0x100) continue;
                                             if (g_wow_pmbase[sg] != g_ldt[a].base) {

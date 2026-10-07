@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "../../src/wow/ne.h"
 
 static int pass, fail, skip;
@@ -195,50 +196,50 @@ static uint8_t segmem[2][0x200];
 
 int main(void)
 {
-    ne_module m;
+    NE_MODULE m;
     printf("== WOW: NE loader battery (GH #128/#4) ==\n");
 
     build(0);
-    ok(ne_parse(&m, img, sizeof img) == 0, "synthetic image parses");
-    ok(m.n_seg == 2, "2 segments");
-    ok(m.align_shift == SECSHIFT, "align shift honoured");
-    ok(m.autodata == 2, "autodata segment = 2");
-    ok((m.csip >> 16) == 1 && (m.csip & 0xFFFF) == 0x10, "CS:IP = seg1:0x0010");
-    ok(m.target_os == 2, "target OS = Windows");
-    ok(m.seg[0].file_off == 0x200, "seg1 file offset from sector<<shift");
-    ok(ne_seg_alloc_size(&m.seg[0]) == 0x80, "seg1 alloc size uses minalloc, not length");
+    ok(NeParse(&m, img, sizeof img) == 0, "synthetic image parses");
+    ok(m.SegmentCount == 2, "2 segments");
+    ok(m.AlignShift == SECSHIFT, "align shift honoured");
+    ok(m.AutoData == 2, "autodata segment = 2");
+    ok((m.CsIp >> 16) == 1 && (m.CsIp & 0xFFFF) == 0x10, "CS:IP = seg1:0x0010");
+    ok(m.TargetOs == 2, "target OS = Windows");
+    ok(m.Segments[0].FileOffset == 0x200, "seg1 file offset from sector<<shift");
+    ok(NeSegmentAllocSize(&m.Segments[0]) == 0x80, "seg1 alloc size uses minalloc, not length");
 
     /* entry table */
     {   uint16_t sn = 0, off = 0;
-        ok(ne_entry_lookup(&m, 1, &sn, &off) == 0 && sn == 2 && off == 0x1234,
+        ok(NeEntryLookup(&m, 1, &sn, &off) == 0 && sn == 2 && off == 0x1234,
            "moveable entry ordinal 1 -> seg 2:0x1234");
-        ok(ne_entry_lookup(&m, 2, &sn, &off) != 0, "ordinal past the end is rejected");
-        ok(ne_entry_lookup(&m, 0, &sn, &off) != 0, "ordinal 0 is rejected");
+        ok(NeEntryLookup(&m, 2, &sn, &off) != 0, "ordinal past the end is rejected");
+        ok(NeEntryLookup(&m, 0, &sn, &off) != 0, "ordinal 0 is rejected");
     }
 
     /* load + relocate */
-    memcpy(segmem[0], img + m.seg[0].file_off, m.seg[0].length);
-    memcpy(segmem[1], img + m.seg[1].file_off, m.seg[1].length);
-    m.seg[0].mem = segmem[0]; m.seg[0].seg = 0x1000;
-    m.seg[1].mem = segmem[1]; m.seg[1].seg = 0x2000;
+    memcpy(segmem[0], img + m.Segments[0].FileOffset, m.Segments[0].Length);
+    memcpy(segmem[1], img + m.Segments[1].FileOffset, m.Segments[1].Length);
+    m.Segments[0].Memory = segmem[0]; m.Segments[0].Selector = 0x1000;
+    m.Segments[1].Memory = segmem[1]; m.Segments[1].Selector = 0x2000;
 
-    ok(ne_apply_relocs(&m, 0, NULL, NULL) == 0, "relocations apply");
+    ok(NeApplyRelocations(&m, 0, NULL, NULL) == 0, "relocations apply");
     /* 4 records, one of which is a 2-site chain -> 5 sites. "Success" with 0 sites
        patched would otherwise be indistinguishable from success. */
-    ok(m.sites == 5, "5 sites patched (4 records, one a 2-link chain)");
-    ok(ne_rd16(segmem[0] + 0x00) == 0x2000, "chained SEGMENT: first site patched");
-    ok(ne_rd16(segmem[0] + 0x02) == 0x2000, "chained SEGMENT: SECOND site patched too");
-    ok(ne_rd16(segmem[0] + 0x10) == 0x0040 && ne_rd16(segmem[0] + 0x12) == 0x2000,
+    ok(m.Sites == 5, "5 sites patched (4 records, one a 2-link chain)");
+    ok(NeRead16(segmem[0] + 0x00) == 0x2000, "chained SEGMENT: first site patched");
+    ok(NeRead16(segmem[0] + 0x02) == 0x2000, "chained SEGMENT: SECOND site patched too");
+    ok(NeRead16(segmem[0] + 0x10) == 0x0040 && NeRead16(segmem[0] + 0x12) == 0x2000,
        "FARADDR writes off then seg");
     /* ★ 0x0030 was already at the site and 0x00AA is the fixup: ADDITIVE ADDS them.
          This expectation used to read `== 0x00AA` -- written from memory, and wrong.
          gdi.exe refuted it: 366 of its records are additive against a zero-valued
          __MOD_GDI, over sites holding a thunk's API index. */
-    ok(ne_rd16(segmem[0] + 0x20) == 0x0030 + 0x00AA,
+    ok(NeRead16(segmem[0] + 0x20) == 0x0030 + 0x00AA,
        "ADDITIVE OFFSET16 ADDS to the value at the site, it does not replace it");
-    ok(ne_rd16(segmem[0] + 0x30) == 0xBEEF,
+    ok(NeRead16(segmem[0] + 0x30) == 0xBEEF,
        "ADDITIVE record did NOT follow the value as a chain link");
-    ok(ne_rd16(segmem[0] + 0x28) == 0x1234 && ne_rd16(segmem[0] + 0x2A) == 0x2000,
+    ok(NeRead16(segmem[0] + 0x28) == 0x1234 && NeRead16(segmem[0] + 0x2A) == 0x2000,
        "moveable INTERNALREF resolved through the entry table");
 
     /* ★ RELOCATION IS NOT IDEMPOTENT, and this is the check that says so. A chained
@@ -247,120 +248,120 @@ int main(void)
          over the same memory therefore follows garbage. Anything that wants to
          relocate "again later" (against real selectors, say) must reload the segment
          bytes from the file image first. */
-    {   uint32_t first = m.sites;
-        m.sites = 0;
-        ne_apply_relocs(&m, 0, NULL, NULL);
-        ok(m.sites != first,
+    {   uint32_t first = m.Sites;
+        m.Sites = 0;
+        NeApplyRelocations(&m, 0, NULL, NULL);
+        ok(m.Sites != first,
            "re-relocating an already-patched segment does NOT reproduce the first pass");
     }
 
     /* an unresolvable import must FAIL, not quietly leave a far call to nowhere */
-    {   ne_module m2; uint8_t tmp[0x200];
+    {   NE_MODULE m2; uint8_t tmp[0x200];
         build(0);
         img[0x200 + 0x40 + 2 + 1] = NE_REL_IMPORTORD;   /* record (a) -> import */
-        ne_parse(&m2, img, sizeof img);
-        memcpy(tmp, img + m2.seg[0].file_off, m2.seg[0].length);
-        m2.seg[0].mem = tmp; m2.seg[0].seg = 0x1000;
-        m2.seg[1].mem = segmem[1]; m2.seg[1].seg = 0x2000;
-        ok(ne_apply_relocs(&m2, 0, NULL, NULL) != 0,
+        NeParse(&m2, img, sizeof img);
+        memcpy(tmp, img + m2.Segments[0].FileOffset, m2.Segments[0].Length);
+        m2.Segments[0].Memory = tmp; m2.Segments[0].Selector = 0x1000;
+        m2.Segments[1].Memory = segmem[1]; m2.Segments[1].Selector = 0x2000;
+        ok(NeApplyRelocations(&m2, 0, NULL, NULL) != 0,
            "unresolved IMPORTORDINAL is refused loudly");
-        ok(m2.err != 0, "...and records where it gave up");
+        ok(m2.Error != 0, "...and records where it gave up");
     }
 
     /* ── names, exports, and cross-module imports (synthetic) ─────────────────── */
-    {   ne_module lib, app; ne_registry reg; uint8_t appseg[2][0x200];
+    {   NE_MODULE lib, app; NE_REGISTRY reg; uint8_t appseg[2][0x200];
         uint16_t ord = 0, sn = 0, so = 0;
         char nm[NE_MAX_NAME];
 
         build_lib();
-        ok(ne_parse(&lib, limg, sizeof limg) == 0, "synthetic library parses");
-        ok((lib.prog_flags & NE_PROG_LIBRARY) != 0, "...and reports itself a LIBRARY");
-        ok(ne_own_name(&lib, nm, sizeof nm) == 0 && !strcmp(nm, "TESTLIB"),
+        ok(NeParse(&lib, limg, sizeof limg) == 0, "synthetic library parses");
+        ok((lib.ProgramFlags & NE_PROG_LIBRARY) != 0, "...and reports itself a LIBRARY");
+        ok(NeOwnName(&lib, nm, sizeof nm) == 0 && !strcmp(nm, "TESTLIB"),
            "own name comes from resident-names entry 0");
-        ok(ne_export_by_name(&lib, "FOO", &ord) == 0 && ord == 1,
+        ok(NeExportByName(&lib, "FOO", &ord) == 0 && ord == 1,
            "export by name, RESIDENT table");
-        ok(ne_export_by_name(&lib, "BAR", &ord) == 0 && ord == 2,
+        ok(NeExportByName(&lib, "BAR", &ord) == 0 && ord == 2,
            "export by name, NON-RESIDENT table (krnl386 puts 312 exports there)");
-        ok(ne_export_by_name(&lib, "bar", &ord) == 0 && ord == 2, "...case-insensitive");
-        ok(ne_export_by_name(&lib, "TESTLIB", &ord) != 0,
+        ok(NeExportByName(&lib, "bar", &ord) == 0 && ord == 2, "...case-insensitive");
+        ok(NeExportByName(&lib, "TESTLIB", &ord) != 0,
            "the module's OWN name is not an export");
-        ok(ne_export_by_name(&lib, "a description", &ord) != 0,
+        ok(NeExportByName(&lib, "a description", &ord) != 0,
            "the non-resident DESCRIPTION is not an export either");
-        ok(ne_export_by_name(&lib, "NOPE", &ord) != 0, "an absent name fails");
-        ok(ne_export_by_ordinal(&lib, 1, &sn, &so) == 0 && sn == 1 && so == 0x10,
+        ok(NeExportByName(&lib, "NOPE", &ord) != 0, "an absent name fails");
+        ok(NeExportByOrdinal(&lib, 1, &sn, &so) == 0 && sn == 1 && so == 0x10,
            "export by ordinal, FIXED entry");
-        ok(ne_export_by_ordinal(&lib, 2, &sn, &so) == 0 && sn == 1 && so == 0x20,
+        ok(NeExportByOrdinal(&lib, 2, &sn, &so) == 0 && sn == 1 && so == 0x20,
            "export by ordinal, MOVEABLE entry resolves past its INT 3Fh thunk");
-        ok(ne_export_by_ordinal(&lib, 3, &sn, &so) != 0,
+        ok(NeExportByOrdinal(&lib, 3, &sn, &so) != 0,
            "an entry WITHOUT the EXPORTED bit is refused");
-        ok(ne_export_by_ordinal(&lib, 4, &sn, &so) == 0 && sn == 0 && so == 0xA000,
+        ok(NeExportByOrdinal(&lib, 4, &sn, &so) == 0 && sn == 0 && so == 0xA000,
            "an ABSOLUTE entry (indicator 0xFE) yields seg_no 0 and its constant");
 
         /* load the library's one segment and give it a selector */
-        lib.seg[0].mem = lsegmem; lib.seg[0].seg = 0x3000;
-        memcpy(lsegmem, limg + lib.seg[0].file_off, lib.seg[0].length);
+        lib.Segments[0].Memory = lsegmem; lib.Segments[0].Selector = 0x3000;
+        memcpy(lsegmem, limg + lib.Segments[0].FileOffset, lib.Segments[0].Length);
 
         build(1);
-        ok(ne_parse(&app, img, sizeof img) == 0, "importer parses");
-        ok(app.n_mod == 1, "importer references 1 module");
-        ok(ne_ref_name(&app, 1, nm, sizeof nm) == 0 && !strcmp(nm, "TESTLIB"),
+        ok(NeParse(&app, img, sizeof img) == 0, "importer parses");
+        ok(app.ModuleCount == 1, "importer references 1 module");
+        ok(NeRefName(&app, 1, nm, sizeof nm) == 0 && !strcmp(nm, "TESTLIB"),
            "module reference 1 names TESTLIB");
-        ok(ne_ref_name(&app, 2, nm, sizeof nm) != 0, "a reference past the end fails");
-        ok(ne_imported_name(&app, 8, nm, sizeof nm) == 0 && !strcmp(nm, "BAR"),
+        ok(NeRefName(&app, 2, nm, sizeof nm) != 0, "a reference past the end fails");
+        ok(NeImportedName(&app, 8, nm, sizeof nm) == 0 && !strcmp(nm, "BAR"),
            "imported-names offset 8 reads BAR");
 
-        memcpy(appseg[0], img + app.seg[0].file_off, app.seg[0].length);
-        memcpy(appseg[1], img + app.seg[1].file_off, app.seg[1].length);
-        app.seg[0].mem = appseg[0]; app.seg[0].seg = 0x1000;
-        app.seg[1].mem = appseg[1]; app.seg[1].seg = 0x2000;
+        memcpy(appseg[0], img + app.Segments[0].FileOffset, app.Segments[0].Length);
+        memcpy(appseg[1], img + app.Segments[1].FileOffset, app.Segments[1].Length);
+        app.Segments[0].Memory = appseg[0]; app.Segments[0].Selector = 0x1000;
+        app.Segments[1].Memory = appseg[1]; app.Segments[1].Selector = 0x2000;
 
         memset(&reg, 0, sizeof reg);
-        ok(ne_registry_add(&reg, &lib) == 0, "library registers");
-        ok(ne_registry_find(&reg, "testlib") == &lib, "registry lookup is case-insensitive");
-        ok(ne_registry_find(&reg, "KERNEL") == NULL, "an unregistered module is not found");
+        ok(NeRegistryAdd(&reg, &lib) == 0, "library registers");
+        ok(NeRegistryFind(&reg, "testlib") == &lib, "registry lookup is case-insensitive");
+        ok(NeRegistryFind(&reg, "KERNEL") == NULL, "an unregistered module is not found");
 
-        ok(ne_apply_relocs(&app, 0, ne_registry_resolve, &reg) == 0,
+        ok(NeApplyRelocations(&app, 0, NeRegistryResolve, &reg) == 0,
            "imports resolve through the registry");
-        ok(ne_rd16(appseg[0] + 0x34) == 0x0010 && ne_rd16(appseg[0] + 0x36) == 0x3000,
+        ok(NeRead16(appseg[0] + 0x34) == 0x0010 && NeRead16(appseg[0] + 0x36) == 0x3000,
            "IMPORTORDINAL patched to TESTLIB's selector:offset");
-        ok(ne_rd16(appseg[0] + 0x3A) == 0x0020 && ne_rd16(appseg[0] + 0x3C) == 0x3000,
+        ok(NeRead16(appseg[0] + 0x3A) == 0x0020 && NeRead16(appseg[0] + 0x3C) == 0x3000,
            "IMPORTNAME resolved via the non-resident table and patched");
 
         /* the ordering rule, enforced rather than merely documented */
-        {   ne_module l2 = lib; ne_module a2; uint8_t tmp[2][0x200]; ne_registry r2;
-            l2.seg[0].seg = 0;                       /* selectors not assigned yet */
-            ne_parse(&a2, img, sizeof img);
-            memcpy(tmp[0], img + a2.seg[0].file_off, a2.seg[0].length);
-            memcpy(tmp[1], img + a2.seg[1].file_off, a2.seg[1].length);
-            a2.seg[0].mem = tmp[0]; a2.seg[0].seg = 0x1000;
-            a2.seg[1].mem = tmp[1]; a2.seg[1].seg = 0x2000;
+        {   NE_MODULE l2 = lib; NE_MODULE a2; uint8_t tmp[2][0x200]; NE_REGISTRY r2;
+            l2.Segments[0].Selector = 0;                       /* selectors not assigned yet */
+            NeParse(&a2, img, sizeof img);
+            memcpy(tmp[0], img + a2.Segments[0].FileOffset, a2.Segments[0].Length);
+            memcpy(tmp[1], img + a2.Segments[1].FileOffset, a2.Segments[1].Length);
+            a2.Segments[0].Memory = tmp[0]; a2.Segments[0].Selector = 0x1000;
+            a2.Segments[1].Memory = tmp[1]; a2.Segments[1].Selector = 0x2000;
             memset(&r2, 0, sizeof r2);
-            ne_registry_add(&r2, &l2);
-            ok(ne_apply_relocs(&a2, 0, ne_registry_resolve, &r2) != 0,
+            NeRegistryAdd(&r2, &l2);
+            ok(NeApplyRelocations(&a2, 0, NeRegistryResolve, &r2) != 0,
                "relocating BEFORE the target has selectors is refused, not silently 0000:xxxx");
         }
 
         /* a missing module must name itself -- "KEYBOARD" is exactly what wowexec
            will hit, and a failure that does not say which module is a dead end */
-        {   ne_module a3; uint8_t tmp[2][0x200]; ne_registry r3;
-            ne_parse(&a3, img, sizeof img);
-            memcpy(tmp[0], img + a3.seg[0].file_off, a3.seg[0].length);
-            memcpy(tmp[1], img + a3.seg[1].file_off, a3.seg[1].length);
-            a3.seg[0].mem = tmp[0]; a3.seg[0].seg = 0x1000;
-            a3.seg[1].mem = tmp[1]; a3.seg[1].seg = 0x2000;
+        {   NE_MODULE a3; uint8_t tmp[2][0x200]; NE_REGISTRY r3;
+            NeParse(&a3, img, sizeof img);
+            memcpy(tmp[0], img + a3.Segments[0].FileOffset, a3.Segments[0].Length);
+            memcpy(tmp[1], img + a3.Segments[1].FileOffset, a3.Segments[1].Length);
+            a3.Segments[0].Memory = tmp[0]; a3.Segments[0].Selector = 0x1000;
+            a3.Segments[1].Memory = tmp[1]; a3.Segments[1].Selector = 0x2000;
             memset(&r3, 0, sizeof r3);
-            ok(ne_apply_relocs(&a3, 0, ne_registry_resolve, &r3) != 0,
+            ok(NeApplyRelocations(&a3, 0, NeRegistryResolve, &r3) != 0,
                "an import from an unloaded module fails");
-            ok(!strcmp(r3.fail_mod, "TESTLIB"), "...and the registry names which module");
+            ok(!strcmp(r3.FailedModule, "TESTLIB"), "...and the registry names which module");
         }
     }
 
     /* malformed input */
-    {   ne_module bad; uint8_t junk[64];
+    {   NE_MODULE bad; uint8_t junk[64];
         memset(junk, 0, sizeof junk);
-        ok(ne_parse(&bad, junk, sizeof junk) != 0, "no MZ -> rejected");
+        ok(NeParse(&bad, junk, sizeof junk) != 0, "no MZ -> rejected");
         junk[0] = 'M'; junk[1] = 'Z';
-        ok(ne_parse(&bad, junk, sizeof junk) != 0, "MZ but no NE -> rejected");
+        ok(NeParse(&bad, junk, sizeof junk) != 0, "MZ but no NE -> rejected");
     }
 
     /* ── real binaries, if the user supplied them ─────────────────────────────────
@@ -399,9 +400,9 @@ int main(void)
             { "guest/ne/sysedit.exe",   "SYSEDIT",   6,  21, 4, NULL },
         };
         enum { NREAL = sizeof REAL / sizeof REAL[0] };
-        static ne_module r[NREAL];
+        static NE_MODULE r[NREAL];
         int present[NREAL];
-        ne_registry reg;
+        NE_REGISTRY reg;
         size_t k;
         int i;
 
@@ -427,57 +428,57 @@ int main(void)
             }
             fclose(f);
             printf("  -- %s\n", REAL[k].path);
-            ok(ne_parse(&r[k], buf, (uint32_t)n) == 0, "  parses");
-            ok(r[k].n_seg == REAL[k].segs, "  segment count matches nedump");
-            ok(r[k].n_movable == REAL[k].movable, "  moveable entry count matches nedump");
-            ok(r[k].target_os == 2, "  targets Windows");
-            ok(r[k].n_mod == REAL[k].mods, "  module reference count matches nedump");
-            ok(ne_own_name(&r[k], nm, sizeof nm) == 0 && !strcmp(nm, REAL[k].own),
+            ok(NeParse(&r[k], buf, (uint32_t)n) == 0, "  parses");
+            ok(r[k].SegmentCount == REAL[k].segs, "  segment count matches nedump");
+            ok(r[k].MovableCount == REAL[k].movable, "  moveable entry count matches nedump");
+            ok(r[k].TargetOs == 2, "  targets Windows");
+            ok(r[k].ModuleCount == REAL[k].mods, "  module reference count matches nedump");
+            ok(NeOwnName(&r[k], nm, sizeof nm) == 0 && !strcmp(nm, REAL[k].own),
                "  own name (NOT the file name)");
             /* LIBRARY vs PROGRAM decides whether its CS:IP may be jumped to at all.
                Across the whole set exactly two are PROGRAMs -- wowexec (the one WOW
                actually runs) and sysedit (an ordinary app). Everything else, the
                kernel included, is a library with SS:SP = 0:0. */
-            ok(((r[k].prog_flags & NE_PROG_LIBRARY) != 0) ==
+            ok(((r[k].ProgramFlags & NE_PROG_LIBRARY) != 0) ==
                (strcmp(REAL[k].own, "WOWEXEC") != 0 && strcmp(REAL[k].own, "SYSEDIT") != 0),
                "  LIBRARY bit agrees with the bootstrap plan");
 
-            for (i = 0; i < (int)r[k].n_seg; ++i) {
-                ne_seg *s = &r[k].seg[i];
-                uint32_t need = ne_seg_alloc_size(s);
-                s->mem = (uint8_t *)calloc(1, need);
-                if (s->sector) memcpy(s->mem, buf + s->file_off, s->length);
+            for (i = 0; i < (int)r[k].SegmentCount; ++i) {
+                NE_SEGMENT *s = &r[k].Segments[i];
+                uint32_t need = NeSegmentAllocSize(s);
+                s->Memory = (uint8_t *)calloc(1, need);
+                if (s->Sector) memcpy(s->Memory, buf + s->FileOffset, s->Length);
                 /* step 2: a selector, distinct per module and segment. Real values
                    come from the LDT on the host; only their distinctness matters. */
-                s->seg = (uint16_t)(((k + 1) << 8) | ((i + 1) << 3) | 7);
+                s->Selector = (uint16_t)(((k + 1) << 8) | ((i + 1) << 3) | 7);
             }
-            ok(ne_registry_add(&reg, &r[k]) == 0, "  registers under its own name");
+            ok(NeRegistryAdd(&reg, &r[k]) == 0, "  registers under its own name");
             present[k] = 1;
         }
 
         if (present[0]) {
             /* The measured facts that made krnl386 the cheap first milestone. */
-            ok(r[0].n_mod == 0, "krnl386 imports from NOTHING");
-            ok((r[0].csip >> 16) == 1 && (r[0].csip & 0xFFFF) == 0xc02b,
+            ok(r[0].ModuleCount == 0, "krnl386 imports from NOTHING");
+            ok((r[0].CsIp >> 16) == 1 && (r[0].CsIp & 0xFFFF) == 0xc02b,
                "krnl386 CS:IP = seg1:0xc02b");
-            ok(r[0].align_shift == 4, "krnl386 align shift 4");
+            ok(r[0].AlignShift == 4, "krnl386 align shift 4");
             /* ...and the one export every by-name lookup was built for. */
             {   uint16_t o = 0;
-                ok(ne_export_by_name(&r[0], "GETWOWCOMPATFLAGSEX", &o) == 0 && o == 521,
+                ok(NeExportByName(&r[0], "GETWOWCOMPATFLAGSEX", &o) == 0 && o == 521,
                    "KERNEL.GETWOWCOMPATFLAGSEX @521 -- and ONLY the non-resident table has it");
-                ok(ne_export_by_name(&r[0], "GLOBALALLOC", &o) == 0,
+                ok(NeExportByName(&r[0], "GLOBALALLOC", &o) == 0,
                    "KERNEL.GLOBALALLOC resolves by name");
             }
             /* The 30 absolute exports, which is what indicator 0xFE turned out to be.
                Values, not addresses -- and gdi/user import 810 sites' worth. */
             {   uint16_t o = 0, sn = 0, so = 0;
-                ok(ne_export_by_name(&r[0], "__AHINCR", &o) == 0 &&
-                   ne_export_by_ordinal(&r[0], o, &sn, &so) == 0 && sn == 0 && so == 8,
+                ok(NeExportByName(&r[0], "__AHINCR", &o) == 0 &&
+                   NeExportByOrdinal(&r[0], o, &sn, &so) == 0 && sn == 0 && so == 8,
                    "KERNEL.__AHINCR is an ABSOLUTE whose value is 8");
-                ok(ne_export_by_name(&r[0], "__A000H", &o) == 0 &&
-                   ne_export_by_ordinal(&r[0], o, &sn, &so) == 0 && sn == 0 && so == 0xA000,
+                ok(NeExportByName(&r[0], "__A000H", &o) == 0 &&
+                   NeExportByOrdinal(&r[0], o, &sn, &so) == 0 && sn == 0 && so == 0xA000,
                    "KERNEL.__A000H is an ABSOLUTE whose value is 0xA000");
-                ok(ne_export_by_name(&r[0], "__MOD_GDI", &o) == 0 && o == 574,
+                ok(NeExportByName(&r[0], "__MOD_GDI", &o) == 0 && o == 574,
                    "KERNEL.__MOD_GDI @574 -- the export that made gdi.exe fail as 'segment 254'");
             }
         }
@@ -487,13 +488,13 @@ int main(void)
             char what[128];
             int rc = 0;
             if (!present[k]) continue;
-            r[k].sites = 0;
-            for (i = 0; i < (int)r[k].n_seg && rc == 0; ++i)
-                rc = ne_apply_relocs(&r[k], i, ne_registry_resolve, &reg);
+            r[k].Sites = 0;
+            for (i = 0; i < (int)r[k].SegmentCount && rc == 0; ++i)
+                rc = NeApplyRelocations(&r[k], i, NeRegistryResolve, &reg);
             if (REAL[k].missing) {
                 snprintf(what, sizeof what, "%s: relocation stops at %s, the module we "
                          "did not load", REAL[k].own, REAL[k].missing);
-                ok(rc != 0 && !strcmp(reg.fail_mod, REAL[k].missing), what);
+                ok(rc != 0 && !strcmp(reg.FailedModule, REAL[k].missing), what);
             } else {
                 /* "Resolved everything" is indistinguishable from "did nothing"
                    unless the sites are counted -- but a module with no relocation
@@ -501,13 +502,13 @@ int main(void)
                    2 segments, no relocs, imports nothing. So ask the segments what
                    to expect rather than assuming every module has fixups. */
                 int has_relocs = 0;
-                for (i = 0; i < (int)r[k].n_seg; ++i)
-                    if ((r[k].seg[i].flags & NE_SEG_RELOCS) && r[k].seg[i].sector)
+                for (i = 0; i < (int)r[k].SegmentCount; ++i)
+                    if ((r[k].Segments[i].Flags & NE_SEG_RELOCS) && r[k].Segments[i].Sector)
                         has_relocs = 1;
                 snprintf(what, sizeof what,
-                         "%s: EVERY relocation resolved (%u sites)", REAL[k].own, r[k].sites);
+                         "%s: EVERY relocation resolved (%u sites)", REAL[k].own, r[k].Sites);
                 ok(rc == 0, what);
-                ok(has_relocs ? r[k].sites > 0 : r[k].sites == 0,
+                ok(has_relocs ? r[k].Sites > 0 : r[k].Sites == 0,
                    has_relocs ? "  ...and it patched something"
                               : "  ...and it has no relocation records, so zero is right");
             }
