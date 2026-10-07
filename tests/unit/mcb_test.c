@@ -121,7 +121,7 @@ static INT McbTestFind(PCBYTE block, INT blockSize, PCSTR name, INT nameLength) 
     return 0;
 }
 
-int main(void) {
+INT main(VOID) {
     WORD firstMcb = DosMcbInitialize(g_Memory);
     WORD segment = 0, largest = 0;
     INT status;
