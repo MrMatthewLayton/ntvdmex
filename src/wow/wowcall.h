@@ -145,6 +145,8 @@
 #define WOWCALL_RET_KEEP    0
 #define WOWCALL_RET_RESULT  1
 #define WOWCALL_RET_RESULTW 2
+/* What a window procedure answers to WM_CREATE to abandon its window (-1, as a WORD). */
+#define WOWCALL_CREATE_REFUSED 0xFFFF
 
 /* ── ★ WHAT THE HOST DOES ONCE THE ANSWER ARRIVES. (session 42) ───────────────
      A sink is enough when the result is a value to keep. It is not enough when
@@ -292,10 +294,10 @@ static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run 
 static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
 {
     volatile BYTE *bytes;
-    *stackPointer = (WORD)(*stackPointer - 2);
+    *stackPointer = (WORD)(*stackPointer - WOW_WORD_BYTES);
     bytes = (volatile BYTE *)(ULONG_PTR)(stackBase + *stackPointer);
-    bytes[0] = (BYTE)(value & 0xFF);
-    bytes[1] = (BYTE)(value >> 8);
+    bytes[0] = (BYTE)(value & WOW_BYTE_MASK);
+    bytes[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
 }
 
 /*
@@ -324,7 +326,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
     WORD stackPointer;
     INT index;
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH) return 0;
-    if (!stackBase || !returnSelector || !(procedure >> 16)) return 0;
+    if (!stackBase || !returnSelector || !(procedure >> WOW_WORD_SHIFT)) return 0;
     if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW) return 0;
     if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB) return 0;
     for (index = 0; index < argumentWordCount; ++index) arguments[index] = argumentWords[index];
@@ -354,7 +356,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
        procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
        hands them in declared order and this pushes them in that order. */
-    stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+    stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WOW_WORD_MASK);
 
     /* ── ★★★ THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS. ─────────────
          A pointer argument has to point at memory the GUEST can address, and the
@@ -373,7 +375,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
          a host linear address and means nothing to 16-bit code. */
     g_WowCallBlobLinear = 0;
     if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount) {
-        WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+        WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & WOW_WORD_MASK);
         INT  blobBytes  = (blobLength + 1) & ~1;
         stackPointer = (WORD)(stackPointer - blobBytes);
         for (index = 0; index < blobLength; ++index)
@@ -396,8 +398,8 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
          are about to enter on pops it and faults on OUR behalf. Same order as
          the return address above: CS first, so IP ends up at [SP]. */
     if (isAbsent) {
-        WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> 16));
-        WowCallPush(stackBase, &stackPointer, (WORD)(procedure & 0xFFFF));
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WOW_WORD_SHIFT));
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WOW_WORD_MASK));
     }
     VDM_SET16(tib, VTIB_ESP, stackPointer);
 
@@ -414,8 +416,8 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
         VDM_SET16(tib, VTIB_CS,  returnSelector);
         VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
     } else {
-        VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> 16));
-        VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & 0xFFFF);
+        VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WOW_WORD_SHIFT));
+        VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WOW_WORD_MASK);
     }
     ++g_WowCallCount;
     return 1;
@@ -449,18 +451,18 @@ static PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
              return hole is guest memory and outlives the context switch, so
              revising it is a four-byte write, not a special case. */
         if (frame->ReturnMode == WOWCALL_RET_KEEP) {
-            if (frame->Message == WM_CREATE16 && (WORD)result == 0xFFFF) isWrite = 1;
+            if (frame->Message == WM_CREATE16 && (WORD)result == WOWCALL_CREATE_REFUSED) isWrite = 1;
         } else {
             /* ⚠ MASK A WORD RETURN. DX is not the high half of a WORD result --
                  see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
                  proved it. */
-            value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & 0xFFFF) : result;
+            value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & WOW_WORD_MASK) : result;
             isWrite = 1;                  /* SendMessage: the procedure's answer */
         }
         if (isWrite) {
             frame->Written = value;
-            hole[0] = (BYTE)(value & 0xFF);        hole[1] = (BYTE)((value >> 8)  & 0xFF);
-            hole[2] = (BYTE)((value >> 16) & 0xFF); hole[3] = (BYTE)((value >> 24) & 0xFF);
+            hole[0] = (BYTE)(value & WOW_BYTE_MASK);        hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & WOW_BYTE_MASK);
+            hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & WOW_BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & WOW_BYTE_MASK);
         }
     }
     return frame;

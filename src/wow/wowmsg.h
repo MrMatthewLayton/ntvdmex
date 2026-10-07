@@ -398,11 +398,11 @@ static INT WowMsgCountFor(WORD task)
    the four fields a window procedure is called with are taken. */
 static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 {
-    message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << 8));
-    message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << 8));
-    message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << 8));
-    message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << 8))
-              | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + 2] | (bytes[WOWMSG_FIELD_LPARAM + 3] << 8)) << 16);
+    message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << WOW_BYTE_SHIFT));
+    message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << WOW_BYTE_SHIFT));
+    message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << WOW_BYTE_SHIFT));
+    message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << WOW_BYTE_SHIFT))
+              | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES] | (bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES + 1] << WOW_BYTE_SHIFT)) << WOW_WORD_SHIFT);
     message->Time   = 0; message->PointX = 0; message->PointY = 0;
 }
 
@@ -412,12 +412,12 @@ static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
     wow32_pokew(bytes + WOWMSG_FIELD_HWND,    message->Window);
     wow32_pokew(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
     wow32_pokew(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
-    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & 0xFFFF));
-    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM + 2, (WORD)(message->LParam >> 16));
-    wow32_pokew(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & 0xFFFF));
-    wow32_pokew(bytes + WOWMSG_FIELD_TIME + 2,   (WORD)(message->Time >> 16));
+    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WOW_WORD_MASK));
+    wow32_pokew(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WOW_WORD_SHIFT));
+    wow32_pokew(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WOW_WORD_MASK));
+    wow32_pokew(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WOW_WORD_SHIFT));
     wow32_pokew(bytes + WOWMSG_FIELD_POINT,     message->PointX);
-    wow32_pokew(bytes + WOWMSG_FIELD_POINT + 2, message->PointY);
+    wow32_pokew(bytes + WOWMSG_FIELD_POINT + WOW_WORD_BYTES, message->PointY);
 }
 
 #endif /* NTVDMEX_WOWMSG_H */

@@ -211,6 +211,13 @@ static void wu_puts(char *b, int cap, int *k, const char *s)
 #define WOW_HEX_BYTE_DIGITS  2
 #define WOW_HEX_WORD_DIGITS  4
 #define WOW_HEX_DWORD_DIGITS 8
+/* Taking WORDs and DWORDs apart, and putting them back, as every Win16 structure needs. */
+#define WOW_BYTE_SHIFT       8
+#define WOW_WORD_SHIFT       16
+#define WOW_HIGH_BYTE_SHIFT  24
+#define WOW_BYTE_MASK        0xFF
+#define WOW_WORD_MASK        0xFFFF
+#define WOW_WORD_BYTES       2
 static void wu_puthex(char *b, int cap, int *k, DWORD v, int digits)
 {
     static const char hx[] = "0123456789abcdef";
