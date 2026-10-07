@@ -15,152 +15,152 @@
 #include <string.h>
 #include "vdd_mpu.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-static uint8_t g_flat[0x10000];
-static VDD_BUS bus;
-static MPU_STATE mpu;
+static BYTE g_GuestMemory[0x10000];
+static VDD_BUS g_Bus;
+static MPU_STATE g_Mpu;
 
 #define CAP 32
-static uint32_t g_msg[CAP];
-static int      g_nmsg;
-static void sink(void *ctx, uint32_t msg)
-{ (void)ctx; if (g_nmsg < CAP) g_msg[g_nmsg++] = msg; }
+static UINT32 g_Messages[CAP];
+static INT      g_MessageCount;
+static VOID MpuTestSink(PVOID context, UINT32 message)
+{ (VOID)context; if (g_MessageCount < CAP) g_Messages[g_MessageCount++] = message; }
 
 /* #136: the SysEx sink, for an external synth. */
-static uint8_t  g_sx[MPU_SYSEX_MAX];
-static uint32_t g_sxlen;
-static int      g_nsx;
-static void sx_sink(void *ctx, const uint8_t *m, uint32_t len)
-{ (void)ctx; memcpy(g_sx, m, len); g_sxlen = len; g_nsx++; }
+static BYTE  g_SysEx[MPU_SYSEX_MAX];
+static UINT32 g_SysExLength;
+static INT      g_SysExCount;
+static VOID MpuTestSysExSink(PVOID context, PCBYTE bytes, UINT32 length)
+{ (VOID)context; memcpy(g_SysEx, bytes, length); g_SysExLength = length; g_SysExCount++; }
 
 #define BASE MPU_DEFAULT_BASE
-static void wr(uint16_t p, uint8_t v){ uint32_t x=v; VddBusIo(&bus,p,1,0,&x); }
-static uint8_t rd(uint16_t p){ uint32_t x=0; VddBusIo(&bus,p,1,1,&x); return (uint8_t)x; }
+static VOID MpuTestWrite(WORD port, BYTE byteValue){ UINT32 value=byteValue; VddBusIo(&g_Bus,port,1,0,&value); }
+static BYTE MpuTestRead(WORD port){ UINT32 value=0; VddBusIo(&g_Bus,port,1,1,&value); return (BYTE)value; }
 
-int main(void)
+INT main(VOID)
 {
     printf("== sound epic: MPU-401 MIDI battery ==\n");
 
-    memset(&mpu, 0, sizeof mpu);
-    mpu.Sink = sink;
-    VddBusInitialize(&bus, g_flat);
-    { NTVDD_DEVICE d = VddMpuDevice(&mpu); CHECK(VddBusAdd(&bus, &d) == 0, "add: mpu401 ok"); }
+    memset(&g_Mpu, 0, sizeof g_Mpu);
+    g_Mpu.Sink = MpuTestSink;
+    VddBusInitialize(&g_Bus, g_GuestMemory);
+    { NTVDD_DEVICE device = VddMpuDevice(&g_Mpu); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: mpu401 ok"); }
 
     /* T1: the handshake ----------------------------------------------------- */
-    CHECK((rd(BASE + 1) & MPU_STATUS_DSR) != 0, "status: DSR set (active low) => no data waiting");
-    wr(BASE + 1, 0xFF);                                   /* reset               */
-    CHECK((rd(BASE + 1) & MPU_STATUS_DSR) == 0, "status: DSR CLEAR once the ACK is queued");
-    CHECK(rd(BASE) == MPU_ACK, "reset: acknowledges with 0xFE");
-    wr(BASE + 1, 0x3F);                                   /* enter UART mode     */
-    CHECK(rd(BASE) == MPU_ACK, "uart: acknowledges with 0xFE");
-    CHECK(mpu.IsUartMode == 1, "uart: mode entered");
-    CHECK((rd(BASE + 1) & MPU_STATUS_DRR) == 0, "status: DRR clear => ready to accept data");
+    CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DSR) != 0, "status: DSR set (active low) => no data waiting");
+    MpuTestWrite(BASE + 1, 0xFF);                                   /* reset               */
+    CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DSR) == 0, "status: DSR CLEAR once the ACK is queued");
+    CHECK(MpuTestRead(BASE) == MPU_ACK, "reset: acknowledges with 0xFE");
+    MpuTestWrite(BASE + 1, 0x3F);                                   /* enter UART mode     */
+    CHECK(MpuTestRead(BASE) == MPU_ACK, "uart: acknowledges with 0xFE");
+    CHECK(g_Mpu.IsUartMode == 1, "uart: mode entered");
+    CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DRR) == 0, "status: DRR clear => ready to accept data");
 
     /* T2: a plain note-on --------------------------------------------------- */
-    g_nmsg = 0;
-    wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);       /* note on C4 vel 100  */
-    CHECK(g_nmsg == 1, "note-on: one complete message emitted");
-    CHECK(g_msg[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C); MpuTestWrite(BASE, 0x64);       /* note on C4 vel 100  */
+    CHECK(g_MessageCount == 1, "note-on: one complete message emitted");
+    CHECK(g_Messages[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
           "note-on: packed as status | data1<<8 | data2<<16");
 
     /* nothing is emitted until the message is complete                         */
-    g_nmsg = 0;
-    wr(BASE, 0x80); wr(BASE, 0x3C);
-    CHECK(g_nmsg == 0, "partial message: nothing emitted yet");
-    wr(BASE, 0x40);
-    CHECK(g_nmsg == 1, "partial message: emitted once complete");
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x80); MpuTestWrite(BASE, 0x3C);
+    CHECK(g_MessageCount == 0, "partial message: nothing emitted yet");
+    MpuTestWrite(BASE, 0x40);
+    CHECK(g_MessageCount == 1, "partial message: emitted once complete");
 
     /* T3: running status ---------------------------------------------------- */
-    g_nmsg = 0;
-    wr(BASE, 0x90);                                       /* status once...      */
-    wr(BASE, 0x40); wr(BASE, 0x7F);                       /* ...then note pairs  */
-    wr(BASE, 0x43); wr(BASE, 0x7F);
-    wr(BASE, 0x47); wr(BASE, 0x7F);
-    CHECK(g_nmsg == 3, "running status: three notes under one status byte");
-    CHECK((g_msg[1] & 0xFF) == 0x90 && ((g_msg[1] >> 8) & 0xFF) == 0x43,
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x90);                                       /* status once...      */
+    MpuTestWrite(BASE, 0x40); MpuTestWrite(BASE, 0x7F);                       /* ...then note pairs  */
+    MpuTestWrite(BASE, 0x43); MpuTestWrite(BASE, 0x7F);
+    MpuTestWrite(BASE, 0x47); MpuTestWrite(BASE, 0x7F);
+    CHECK(g_MessageCount == 3, "running status: three notes under one status byte");
+    CHECK((g_Messages[1] & 0xFF) == 0x90 && ((g_Messages[1] >> 8) & 0xFF) == 0x43,
           "running status: second note keeps the status byte");
 
     /* T4: one-data-byte messages -------------------------------------------- */
-    g_nmsg = 0;
-    wr(BASE, 0xC0); wr(BASE, 0x30);                       /* program change      */
-    CHECK(g_nmsg == 1, "program change: completes after ONE data byte");
-    CHECK(g_msg[0] == (0xC0u | (0x30u << 8)), "program change: second data byte is zero");
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0xC0); MpuTestWrite(BASE, 0x30);                       /* program change      */
+    CHECK(g_MessageCount == 1, "program change: completes after ONE data byte");
+    CHECK(g_Messages[0] == (0xC0u | (0x30u << 8)), "program change: second data byte is zero");
 
     /* T5: realtime bytes may interrupt a message ---------------------------- */
-    g_nmsg = 0;
-    wr(BASE, 0x90); wr(BASE, 0x3C);                       /* mid-message...      */
-    wr(BASE, 0xF8);                                       /* ...timing clock     */
-    CHECK(g_nmsg == 1 && g_msg[0] == 0xF8, "realtime: clock emitted immediately");
-    wr(BASE, 0x64);                                       /* finish the note-on  */
-    CHECK(g_nmsg == 2, "realtime: the interrupted note-on still completes");
-    CHECK(g_msg[1] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C);                       /* mid-message...      */
+    MpuTestWrite(BASE, 0xF8);                                       /* ...timing clock     */
+    CHECK(g_MessageCount == 1 && g_Messages[0] == 0xF8, "realtime: clock emitted immediately");
+    MpuTestWrite(BASE, 0x64);                                       /* finish the note-on  */
+    CHECK(g_MessageCount == 2, "realtime: the interrupted note-on still completes");
+    CHECK(g_Messages[1] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
           "realtime: interrupted message is not corrupted");
 
     /* T6: sysex is swallowed, not mistaken for channel data ----------------- */
-    g_nmsg = 0;
-    wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x10); wr(BASE, 0xF7);
-    CHECK(g_nmsg == 0, "sysex: swallowed without emitting garbage");
-    g_nmsg = 0;
-    wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
-    CHECK(g_nmsg == 1, "sysex: normal messages resume afterwards");
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0xF0); MpuTestWrite(BASE, 0x41); MpuTestWrite(BASE, 0x10); MpuTestWrite(BASE, 0xF7);
+    CHECK(g_MessageCount == 0, "sysex: swallowed without emitting garbage");
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C); MpuTestWrite(BASE, 0x64);
+    CHECK(g_MessageCount == 1, "sysex: normal messages resume afterwards");
 
     /* T6b (#136): with NO sysex sink, a status byte inside an unterminated SysEx is
        swallowed too -- the old behaviour, byte for byte. */
-    g_nmsg = 0;
-    wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
-    CHECK(g_nmsg == 0, "sysex, no sink: an embedded status byte is swallowed (unchanged)");
-    wr(BASE, 0xF7);
-    CHECK(mpu.SysExSent == 0 && mpu.SysExDropped == 0, "sysex, no sink: nothing counted");
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0xF0); MpuTestWrite(BASE, 0x41); MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C); MpuTestWrite(BASE, 0x64);
+    CHECK(g_MessageCount == 0, "sysex, no sink: an embedded status byte is swallowed (unchanged)");
+    MpuTestWrite(BASE, 0xF7);
+    CHECK(g_Mpu.SysExSent == 0 && g_Mpu.SysExDropped == 0, "sysex, no sink: nothing counted");
 
     /* T6c (#136): an attached sink gets each COMPLETE message, F0..F7 inclusive. */
-    mpu.SysExSink = sx_sink;
-    g_nsx = 0; g_nmsg = 0;
-    {   static const uint8_t DT1[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x01,
+    g_Mpu.SysExSink = MpuTestSysExSink;
+    g_SysExCount = 0; g_MessageCount = 0;
+    {   static const BYTE dt1Message[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x01,
                                        0x02, 0x6D, 0xF7 };
-        unsigned k;
-        for (k = 0; k < sizeof DT1; ++k) wr(BASE, DT1[k]);
-        CHECK(g_nsx == 1 && g_sxlen == sizeof DT1 && memcmp(g_sx, DT1, sizeof DT1) == 0,
+        UINT index;
+        for (index = 0; index < sizeof dt1Message; ++index) MpuTestWrite(BASE, dt1Message[index]);
+        CHECK(g_SysExCount == 1 && g_SysExLength == sizeof dt1Message && memcmp(g_SysEx, dt1Message, sizeof dt1Message) == 0,
               "sysex sink: one MT-32 DT1 delivered whole, F0..F7");
-        CHECK(g_nmsg == 0, "sysex sink: no short message leaks out of it");
+        CHECK(g_MessageCount == 0, "sysex sink: no short message leaks out of it");
     }
     /* realtime inside SysEx is a short message and does not break the SysEx */
-    g_nsx = 0; g_nmsg = 0;
-    wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0xF8); wr(BASE, 0x10); wr(BASE, 0xF7);
-    CHECK(g_nmsg == 1 && g_msg[0] == 0xF8, "sysex sink: realtime inside passes as a short message");
-    CHECK(g_nsx == 1 && g_sxlen == 4 && g_sx[1] == 0x41 && g_sx[2] == 0x10,
+    g_SysExCount = 0; g_MessageCount = 0;
+    MpuTestWrite(BASE, 0xF0); MpuTestWrite(BASE, 0x41); MpuTestWrite(BASE, 0xF8); MpuTestWrite(BASE, 0x10); MpuTestWrite(BASE, 0xF7);
+    CHECK(g_MessageCount == 1 && g_Messages[0] == 0xF8, "sysex sink: realtime inside passes as a short message");
+    CHECK(g_SysExCount == 1 && g_SysExLength == 4 && g_SysEx[1] == 0x41 && g_SysEx[2] == 0x10,
           "sysex sink: ...and the SysEx around it stays intact");
     /* a status byte ends an unterminated SysEx: dropped, counted, then handled */
-    g_nsx = 0; g_nmsg = 0;
-    {   uint32_t d0 = mpu.SysExDropped;
-        wr(BASE, 0xF0); wr(BASE, 0x41); wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
-        CHECK(g_nsx == 0 && mpu.SysExDropped == d0 + 1, "sysex sink: unterminated message dropped");
-        CHECK(g_nmsg == 1 && g_msg[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
+    g_SysExCount = 0; g_MessageCount = 0;
+    {   UINT32 droppedBefore = g_Mpu.SysExDropped;
+        MpuTestWrite(BASE, 0xF0); MpuTestWrite(BASE, 0x41); MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C); MpuTestWrite(BASE, 0x64);
+        CHECK(g_SysExCount == 0 && g_Mpu.SysExDropped == droppedBefore + 1, "sysex sink: unterminated message dropped");
+        CHECK(g_MessageCount == 1 && g_Messages[0] == (0x90u | (0x3Cu << 8) | (0x64u << 16)),
               "sysex sink: the status byte that ended it is a note-on");
     }
     /* longer than MPU_SYSEX_MAX: dropped whole, never truncated */
-    g_nsx = 0;
-    {   uint32_t d0 = mpu.SysExDropped; unsigned k;
-        wr(BASE, 0xF0);
-        for (k = 0; k < MPU_SYSEX_MAX + 10; ++k) wr(BASE, 0x11);
-        wr(BASE, 0xF7);
-        CHECK(g_nsx == 0 && mpu.SysExDropped == d0 + 1, "sysex sink: oversize message dropped, not cut");
-        wr(BASE, 0xF0); wr(BASE, 0x7E); wr(BASE, 0xF7);
-        CHECK(g_nsx == 1 && g_sxlen == 3, "sysex sink: the next message is fine");
+    g_SysExCount = 0;
+    {   UINT32 droppedBefore = g_Mpu.SysExDropped; UINT index;
+        MpuTestWrite(BASE, 0xF0);
+        for (index = 0; index < MPU_SYSEX_MAX + 10; ++index) MpuTestWrite(BASE, 0x11);
+        MpuTestWrite(BASE, 0xF7);
+        CHECK(g_SysExCount == 0 && g_Mpu.SysExDropped == droppedBefore + 1, "sysex sink: oversize message dropped, not cut");
+        MpuTestWrite(BASE, 0xF0); MpuTestWrite(BASE, 0x7E); MpuTestWrite(BASE, 0xF7);
+        CHECK(g_SysExCount == 1 && g_SysExLength == 3, "sysex sink: the next message is fine");
     }
     /* reset keeps the sink, like the short-message sink */
-    VddMpuReset(&mpu);
-    CHECK(mpu.SysExSink == sx_sink && mpu.Sink == sink, "reset: both sinks preserved");
-    mpu.SysExSink = NULL;
+    VddMpuReset(&g_Mpu);
+    CHECK(g_Mpu.SysExSink == MpuTestSysExSink && g_Mpu.Sink == MpuTestSink, "reset: both sinks preserved");
+    g_Mpu.SysExSink = NULL;
 
     /* T7: data before UART mode goes nowhere --------------------------------- */
-    VddMpuReset(&mpu);
-    g_nmsg = 0;
-    wr(BASE, 0x90); wr(BASE, 0x3C); wr(BASE, 0x64);
-    CHECK(g_nmsg == 0, "not in UART mode: data bytes are ignored");
+    VddMpuReset(&g_Mpu);
+    g_MessageCount = 0;
+    MpuTestWrite(BASE, 0x90); MpuTestWrite(BASE, 0x3C); MpuTestWrite(BASE, 0x64);
+    CHECK(g_MessageCount == 0, "not in UART mode: data bytes are ignored");
 
-    printf("-- %d checks, %d failures --\n", total, fails);
-    return fails ? 1 : 0;
+    printf("-- %d checks, %d failures --\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
