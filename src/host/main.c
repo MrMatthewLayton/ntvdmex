@@ -8661,7 +8661,7 @@ static DWORD         g_ms_acc_calls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2
      They were refused (AX=FFFFh) because nothing delivered them. mouse_evq_take() now
      picks, per event, between these and 0Ch's handler by the BDA shift state -- the
      one picker both delivery paths (V86 mouse_cb_try, PM dpmi_inject_pm_mousecb) use. */
-static i33_alt       g_ms_alt[I33_ALT_N];
+static I33_ALTERNATE       g_ms_alt[I33_ALT_N];
 static DWORD         g_ms_alt_calls;       /* events delivered to an alternate handler   */
 
 /* Fill the hidden buffer, then show it (see g_ms_gc_buf). Does not set g_ms_gc_defined:
@@ -8716,7 +8716,7 @@ typedef struct {
     LONG  spd_x, spd_y, spd_dbl, hot_x, hot_y, page, rate;
     LONG  gc_defined, acc_cur;
     WORD  gc_scr[I33_GC_ROWS], gc_cur[I33_GC_ROWS];
-    i33_alt alt[I33_ALT_N];
+    I33_ALTERNATE alt[I33_ALT_N];
 } i33_state;
 
 static void i33_state_save(volatile BYTE *p)
@@ -8813,7 +8813,7 @@ static void i33_reset_state(void)
        reading "everything the driver owns goes back to power-on" -- UNMEASURED. */
     InterlockedExchange(&g_ms_gc_defined, 0);
     ZeroMemory(g_ms_alt, sizeof g_ms_alt);
-    i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1;
+    I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1;
     for (i = 0; i < MS_BTNS; ++i) {
         InterlockedExchange(&g_ms_press_n[i], 0);
         InterlockedExchange(&g_ms_rel_n[i], 0);
@@ -9021,7 +9021,7 @@ static void i33_ret_ptr(volatile BYTE *tib, int src, int offreg, WORD off)
     }
 }
 static void i33_acc_ready(void)
-{ if (!g_ms_acc_ok) { i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1; } }
+{ if (!g_ms_acc_ok) { I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1; } }
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
@@ -9277,7 +9277,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
          mask; CX=0 = none (BX/DX left alone). The rules, and which of them are our
          reading rather than a measurement, are in i33_driver.h. */
     case 0x0018:
-        if (i33_alt_set(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+        if (I33AlternateSet(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                         (uint16_t)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                         (uint32_t)mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)))) {
             VDM_SET16(tib, VTIB_EAX, 0x0018);
@@ -9285,12 +9285,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
         } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
     case 0x0019: {
-        int k = i33_alt_find(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        int k = I33AlternateFind(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         if (k < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
-        VDM_SET16(tib, VTIB_ECX, g_ms_alt[k].mask);
-        VDM_SET16(tib, VTIB_EBX, g_ms_alt[k].seg);
-        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_ms_alt[k].off;
-        else VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_alt[k].off);
+        VDM_SET16(tib, VTIB_ECX, g_ms_alt[k].Mask);
+        VDM_SET16(tib, VTIB_EBX, g_ms_alt[k].Segment);
+        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_ms_alt[k].Offset;
+        else VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_alt[k].Offset);
         break; }
     /* ── 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
          wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
@@ -9391,7 +9391,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
            ES:SI -> a 144h-byte block (not read for FFFFh). */
         WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
         ++g_ms_acc_calls; i33_acc_ready();
-        if (bx == 0xFFFF) { i33_acc_defaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; }
+        if (bx == 0xFFFF) { I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; }
         else if (bx >= 1 && bx <= I33_ACC_N) {
             volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                              mouse_i33_off(tib, src, VDM_REG(tib, VTIB_ESI)),
@@ -9445,7 +9445,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
         ++g_ms_acc_calls; i33_acc_ready();
         if (!p) { ++g_ms_state_badptr; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         if (fill) {
-            i33_acc_default_names(g_ms_acc + I33_ACC_NAMES);
+            I33AccelerationDefaultNames(g_ms_acc + I33_ACC_NAMES);
             for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) p[i] = g_ms_acc[I33_ACC_NAMES + i];
         } else
             for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) g_ms_acc[I33_ACC_NAMES + i] = p[i];
@@ -9453,22 +9453,22 @@ static void mouse_int33(volatile BYTE *tib, int src)
         break; }
     case 0x0033: {                                      /* switch settings + profiles */
         /* CX = the buffer's size, ES:DX -> it. AX=0, CX = bytes written (at most 154h);
-           a short buffer gets the head of the block (i33_settings_block). A buffer we
+           a short buffer gets the head of the block (I33SettingsBlock). A buffer we
            may not write gets CX=0 -- "nothing returned" -- not a fault. */
         unsigned cap = (unsigned)(VDM_REG(tib, VTIB_ECX) & 0xFFFF), n, i;
         uint8_t blk[I33_SET_LEN];
-        i33_settings st;
+        I33_SETTINGS st;
         volatile BYTE *p = NULL;
         ++g_ms_acc_calls; i33_acc_ready();
         if (cap > I33_SET_LEN) cap = I33_SET_LEN;
         if (cap) p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                    mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)), cap, 1);
         if (!p) { if (cap) ++g_ms_state_badptr; cap = 0; }
-        st.type = 4; st.language = 0;
-        st.hsens = (uint8_t)g_ms_spd_x; st.vsens = (uint8_t)g_ms_spd_y;
-        st.dblspd = (uint8_t)g_ms_spd_dbl; st.curve = (uint8_t)g_ms_acc_cur;
-        st.rate = (uint8_t)g_ms_rate;
-        n = i33_settings_block(blk, cap, &st, g_ms_acc);
+        st.Type = 4; st.Language = 0;
+        st.HorizontalSpeed = (uint8_t)g_ms_spd_x; st.VerticalSpeed = (uint8_t)g_ms_spd_y;
+        st.DoubleSpeed = (uint8_t)g_ms_spd_dbl; st.Curve = (uint8_t)g_ms_acc_cur;
+        st.Rate = (uint8_t)g_ms_rate;
+        n = I33SettingsBlock(blk, cap, &st, g_ms_acc);
         for (i = 0; i < n; ++i) p[i] = blk[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_ECX, (WORD)n);
@@ -9527,12 +9527,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
    any 18h handler with event bits? */
 static int mouse_any_handler(void)
 {
-    return (g_ms_evt_mask && (g_ms_evt_seg | g_ms_evt_off) != 0) || i33_alt_any(g_ms_alt);
+    return (g_ms_evt_mask && (g_ms_evt_seg | g_ms_evt_off) != 0) || I33AlternateAny(g_ms_alt);
 }
 
 /* ── THE ONE PICKER BOTH DELIVERY PATHS USE (#265). ───────────────────────────────────
      Pop the oldest queued event SOMEONE asked for and say who: 0Ch's handler, or the
-     18h handler whose Shift/Ctrl/Alt combination is the one held (i33_pick). Unwanted
+     18h handler whose Shift/Ctrl/Alt combination is the one held (I33PickHandler). Unwanted
      events are skipped, as they always were. The shift state is read HERE, at delivery,
      from BDA 0040:0017 -- not at the event: the UI thread that queues events must not
      touch guest memory, and a key held for a click is still held a loop pass later.
@@ -9547,11 +9547,11 @@ static int mouse_evq_take(ms_evt_t *ev, LONG *ax, WORD *seg, DWORD *off)
         t = g_ms_evq_tail;
         *ev = g_ms_evq[t];
         g_ms_evq_tail = (t + 1) % MS_EVQ;
-        who = i33_pick(g_ms_alt, (unsigned)ev->bits, kb, main_mask, &a);
+        who = I33PickHandler(g_ms_alt, (unsigned)ev->bits, kb, main_mask, &a);
         if (who == -2) continue;
         if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
         *ax = (LONG)a;
-        if (who >= 0) { *seg = g_ms_alt[who].seg; *off = g_ms_alt[who].off; ++g_ms_alt_calls; }
+        if (who >= 0) { *seg = g_ms_alt[who].Segment; *off = g_ms_alt[who].Offset; ++g_ms_alt_calls; }
         else          { *seg = (WORD)g_ms_evt_seg; *off = (DWORD)g_ms_evt_off; }
         return 1;
     }
@@ -9574,7 +9574,7 @@ static void mouse_cb_try(volatile BYTE *tib)
         ++g_ms_cb_why[0]; return;
     }
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
-    if ((!g_ms_evt_mask && !i33_alt_any(g_ms_alt)) || g_ms_evq_head == g_ms_evq_tail)
+    if ((!g_ms_evt_mask && !I33AlternateAny(g_ms_alt)) || g_ms_evq_head == g_ms_evq_tail)
     { ++g_ms_cb_why[1]; return; }
     if (!mouse_any_handler()) { ++g_ms_cb_why[2]; return; }
     if (g_dpmi_pm) {                               /* PM client: dpmi_inject_pm_mousecb()
@@ -9758,7 +9758,7 @@ static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my
      ⚠ The frame holds what each renderer made of video memory: the 4-bit plane value
      in a 16-colour mode, the byte in 13h/mode Y/8-bpp VESA, 0/15 in CGA mode 06h -- all
      of which an XOR of 0Fh treats as the driver would -- and in CGA 4-colour the
-     PALETTE-MAPPED colour, which i33_gc_row maps back through the renderer's own table
+     PALETTE-MAPPED colour, which I33GraphicsCursorRow maps back through the renderer's own table
      first. ⚠ Mode 11h (and 0Fh) render all four planes while the attribute controller
      shows fewer; an XOR of 0Fh there sets planes the display would ignore. Cosmetic,
      unmeasured, and the renderer's question rather than the cursor's. */
@@ -9773,7 +9773,7 @@ static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
     b = (int)(g_ms_gc_buf & 1);
     if (g_vid.ModeKind == VIDEO_KIND_CGA && !g_vid.IsVesa && g_vid.CgaBpp != 1)
         map4 = VddVideoCga4Map(&g_vid);
-    i33_gc_draw(px, W, H, stride, mx, my, (int)g_ms_hot_x, (int)g_ms_hot_y,
+    I33GraphicsCursorDraw(px, W, H, stride, mx, my, (int)g_ms_hot_x, (int)g_ms_hot_y,
                 g_ms_gc_scr[b], g_ms_gc_cur[b], 0x0F, map4);
 }
 

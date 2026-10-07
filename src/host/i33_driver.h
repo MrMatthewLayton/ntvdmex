@@ -20,7 +20,7 @@
 #ifndef NTVDMEX_I33_DRIVER_H
 #define NTVDMEX_I33_DRIVER_H
 
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
 /* ══ 09h: THE GRAPHICS CURSOR ════════════════════════════════════════════════════════
      ES:DX -> 16 words of SCREEN mask then 16 words of CURSOR mask (RBIL #03168: "each
@@ -48,6 +48,13 @@
      counts mask BITS, so it is halved into pixels. Both UNMEASURED; p_mouse3's
      `i33.09.13h.hot.*` rows read where the oracle put the bitmap. */
 #define I33_GC_ROWS 16
+#define I33_GC_PIXELS         16      /* one mask word: sixteen pixels           */
+#define I33_GC_LEFT_BIT       0x8000u /* bit 15 is the leftmost pixel             */
+#define I33_GC_CGA_PIXELS     8       /* CGA 4-colour: eight 2-bit pixels a word  */
+#define I33_GC_CGA_BITS       2
+#define I33_GC_CGA_LEFT_SHIFT 14      /* the leftmost pixel's pair: bits 15-14    */
+#define I33_GC_CGA_MASK       3u
+#define I33_GC_CGA_COLOURS    4
 
 /* One row of the cursor over one row of the FRAME (palette indices, as the presenter's
    8-bpp snapshot holds them). `x0` = the frame column of the bitmap's left edge, which
@@ -58,46 +65,46 @@
      recovered through map4 first, masked, and mapped back -- the mask is applied to
      what the video memory holds, not to what the presenter shows. A frame value map4
      does not contain (nothing the CGA renderer writes) is taken as colour 0. */
-static void i33_gc_row(uint8_t *row, int w, int x0, uint16_t scr, uint16_t cur,
-                       uint8_t ones, const uint8_t *map4)
+static VOID I33GraphicsCursorRow(BYTE *row, INT width, INT left, WORD screenMask, WORD cursorMask,
+                       BYTE ones, const BYTE *colourMap)
 {
-    int i;
-    if (!map4) {
-        for (i = 0; i < 16; ++i) {
-            int x = x0 + i;
-            uint16_t bit = (uint16_t)(0x8000u >> i);
-            uint8_t v;
-            if (x < 0 || x >= w) continue;
-            v = (scr & bit) ? row[x] : 0;
-            if (cur & bit) v = (uint8_t)(v ^ ones);
-            row[x] = v;
+    INT index;
+    if (!colourMap) {
+        for (index = 0; index < I33_GC_PIXELS; ++index) {
+            INT column = left + index;
+            WORD bit = (WORD)(I33_GC_LEFT_BIT >> index);
+            BYTE value;
+            if (column < 0 || column >= width) continue;
+            value = (screenMask & bit) ? row[column] : 0;
+            if (cursorMask & bit) value = (BYTE)(value ^ ones);
+            row[column] = value;
         }
         return;
     }
-    for (i = 0; i < 8; ++i) {
-        int x = x0 + i, k;
-        unsigned sh = (unsigned)(14 - 2 * i);
-        unsigned s2 = (scr >> sh) & 3u, c2 = (cur >> sh) & 3u, v2 = 0;
-        if (x < 0 || x >= w) continue;
-        for (k = 0; k < 4; ++k) if (map4[k] == row[x]) { v2 = (unsigned)k; break; }
-        v2 = (v2 & s2) ^ c2;
-        row[x] = map4[v2 & 3u];
+    for (index = 0; index < I33_GC_CGA_PIXELS; ++index) {
+        INT column = left + index, colour;
+        UINT shift = (UINT)(I33_GC_CGA_LEFT_SHIFT - I33_GC_CGA_BITS * index);
+        UINT screenBits = (screenMask >> shift) & I33_GC_CGA_MASK, cursorBits = (cursorMask >> shift) & I33_GC_CGA_MASK, valueBits = 0;
+        if (column < 0 || column >= width) continue;
+        for (colour = 0; colour < I33_GC_CGA_COLOURS; ++colour) if (colourMap[colour] == row[column]) { valueBits = (UINT)colour; break; }
+        valueBits = (valueBits & screenBits) ^ cursorBits;
+        row[column] = colourMap[valueBits & I33_GC_CGA_MASK];
     }
 }
 
 /* The whole bitmap. (px,py) = the pointer in frame pixels, (hx,hy) = 09h's hot spot. */
-static void i33_gc_draw(uint8_t *pix, int w, int h, int stride, int px, int py,
-                        int hx, int hy, const uint16_t *scr, const uint16_t *cur,
-                        uint8_t ones, const uint8_t *map4)
+static VOID I33GraphicsCursorDraw(BYTE *pixels, INT width, INT height, INT stride, INT pointerX, INT pointerY,
+                        INT hotX, INT hotY, const WORD *screenMask, const WORD *cursorMask,
+                        BYTE ones, const BYTE *colourMap)
 {
-    int r;
-    int x0 = px - (map4 ? hx / 2 : hx);
-    int y0 = py - hy;
-    if (!pix || w <= 0 || h <= 0) return;
-    for (r = 0; r < I33_GC_ROWS; ++r) {
-        int y = y0 + r;
-        if (y < 0 || y >= h) continue;
-        i33_gc_row(pix + (long)y * stride, w, x0, scr[r], cur[r], ones, map4);
+    INT rowIndex;
+    INT left = pointerX - (colourMap ? hotX / I33_GC_CGA_BITS : hotX);
+    INT top = pointerY - hotY;
+    if (!pixels || width <= 0 || height <= 0) return;
+    for (rowIndex = 0; rowIndex < I33_GC_ROWS; ++rowIndex) {
+        INT row = top + rowIndex;
+        if (row < 0 || row >= height) continue;
+        I33GraphicsCursorRow(pixels + (long)row * stride, width, left, screenMask[rowIndex], cursorMask[rowIndex], ones, colourMap);
     }
 }
 
@@ -106,10 +113,10 @@ static void i33_gc_draw(uint8_t *pix, int w, int h, int stride, int px, int py,
    reset -- the host draws its own artwork arrow until a guest defines a shape (main.c
    MS_CURSOR) -- but it is what the test proves the mask arithmetic against, and the
    shape a guest gets if it hands back what it never set. */
-static const uint16_t I33_GC_DEF_SCR[16] = {
+static const WORD g_I33DefaultScreenMask[I33_GC_ROWS] = {
     0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF, 0x00FF, 0x007F,
     0x003F, 0x001F, 0x01FF, 0x00FF, 0x30FF, 0xF87F, 0xF87F, 0xFCFF };
-static const uint16_t I33_GC_DEF_CUR[16] = {
+static const WORD g_I33DefaultCursorMask[I33_GC_ROWS] = {
     0x0000, 0x4000, 0x6000, 0x7000, 0x7800, 0x7C00, 0x7E00, 0x7F00,
     0x7F80, 0x7C00, 0x6C00, 0x4600, 0x0600, 0x0300, 0x0300, 0x0000 };
 
@@ -138,29 +145,32 @@ static const uint16_t I33_GC_DEF_CUR[16] = {
 #define I33_ACC_NAMELEN  16
 #define I33_ACC_N        4
 #define I33_ACC_DEFAULT  1            /* active profile after a reset -- UNMEASURED */
+#define I33_ACC_ENTRIES  32           /* each profile's curve                       */
+#define I33_ACC_UNUSED_THRESHOLD 0x7F
+#define I33_ACC_FACTOR_ONE 0x10         /* 1.0                                        */
 
-static const char I33_ACC_DEFNAMES[I33_ACC_N][I33_ACC_NAMELEN + 1] = {
+static const CHAR g_I33AccelerationDefaultNames[I33_ACC_N][I33_ACC_NAMELEN + 1] = {
     "Slow            ", "Moderate        ", "Fast            ", "Unaccelerated   " };
 
-static void i33_acc_default_names(uint8_t *names64)
+static VOID I33AccelerationDefaultNames(BYTE *names)
 {
-    int p, i;
-    for (p = 0; p < I33_ACC_N; ++p)
-        for (i = 0; i < I33_ACC_NAMELEN; ++i)
-            names64[p * I33_ACC_NAMELEN + i] = (uint8_t)I33_ACC_DEFNAMES[p][i];
+    INT profile, index;
+    for (profile = 0; profile < I33_ACC_N; ++profile)
+        for (index = 0; index < I33_ACC_NAMELEN; ++index)
+            names[profile * I33_ACC_NAMELEN + index] = (BYTE)g_I33AccelerationDefaultNames[profile][index];
 }
 
-static void i33_acc_defaults(uint8_t *acc)
+static VOID I33AccelerationDefaults(BYTE *acceleration)
 {
-    int p, i;
-    for (p = 0; p < I33_ACC_N; ++p) {
-        acc[I33_ACC_LENS + p] = 1;
-        for (i = 0; i < 32; ++i) {
-            acc[I33_ACC_THRESH + p * 32 + i] = 0x7F;
-            acc[I33_ACC_FACTOR + p * 32 + i] = 0x10;
+    INT profile, index;
+    for (profile = 0; profile < I33_ACC_N; ++profile) {
+        acceleration[I33_ACC_LENS + profile] = 1;
+        for (index = 0; index < I33_ACC_ENTRIES; ++index) {
+            acceleration[I33_ACC_THRESH + profile * I33_ACC_ENTRIES + index] = I33_ACC_UNUSED_THRESHOLD;
+            acceleration[I33_ACC_FACTOR + profile * I33_ACC_ENTRIES + index] = I33_ACC_FACTOR_ONE;
         }
     }
-    i33_acc_default_names(acc + I33_ACC_NAMES);
+    I33AccelerationDefaultNames(acceleration + I33_ACC_NAMES);
 }
 
 /* RBIL #03184: 33h's buffer -- a 16-byte switch-settings header, then the profile data.
@@ -170,30 +180,37 @@ static void i33_acc_defaults(uint8_t *acc)
    rate in Hz; is 0Dh "left" 0 or 1) is UNMEASURED -- p_mouse3 dumps the oracle's. */
 #define I33_SET_HDR      0x10
 #define I33_SET_LEN      (I33_SET_HDR + I33_ACC_LEN)       /* 154h = 340 bytes */
-typedef struct {
-    uint8_t type;           /* 00h: as 24h's CH -- 4 = PS/2                         */
-    uint8_t language;       /* 01h: as 23h -- 0 = English                           */
-    uint8_t hsens, vsens;   /* 02h/03h: 1Ah's horizontal/vertical speed (0-100)     */
-    uint8_t dblspd;         /* 04h: 1Ah's double-speed threshold (0-100)            */
-    uint8_t curve;          /* 05h: the active acceleration profile (2Dh)           */
-    uint8_t rate;           /* 06h: 1Ch's code                                      */
-} i33_settings;
+#define I33_SET_TYPE             0x00
+#define I33_SET_LANGUAGE         0x01
+#define I33_SET_HORIZONTAL_SPEED 0x02
+#define I33_SET_VERTICAL_SPEED   0x03
+#define I33_SET_DOUBLE_SPEED     0x04
+#define I33_SET_CURVE            0x05
+#define I33_SET_RATE             0x06
+typedef struct _I33_SETTINGS {
+    BYTE Type;           /* 00h: as 24h's CH -- 4 = PS/2                         */
+    BYTE Language;       /* 01h: as 23h -- 0 = English                           */
+    BYTE HorizontalSpeed, VerticalSpeed;   /* 02h/03h: 1Ah's horizontal/vertical speed (0-100)     */
+    BYTE DoubleSpeed;         /* 04h: 1Ah's double-speed threshold (0-100)            */
+    BYTE Curve;          /* 05h: the active acceleration profile (2Dh)           */
+    BYTE Rate;           /* 06h: 1Ch's code                                      */
+} I33_SETTINGS, *PI33_SETTINGS; typedef const I33_SETTINGS *PCI33_SETTINGS;
 
 /* Fill `out` with at most `cap` bytes of the block; returns the count written (33h's
    CX on return). A short buffer gets the first `cap` bytes, not an error -- the call
    hands the size in and the count back, so truncation is the contract's own answer. */
-static unsigned i33_settings_block(uint8_t *out, unsigned cap, const i33_settings *s,
-                                   const uint8_t *acc)
+static UINT I33SettingsBlock(BYTE *out, UINT capacity, const I33_SETTINGS *settings,
+                                   const BYTE *acceleration)
 {
-    uint8_t b[I33_SET_LEN];
-    unsigned n = cap < I33_SET_LEN ? cap : I33_SET_LEN, i;
-    for (i = 0; i < I33_SET_HDR; ++i) b[i] = 0;
-    b[0x00] = s->type;  b[0x01] = s->language;
-    b[0x02] = s->hsens; b[0x03] = s->vsens; b[0x04] = s->dblspd;
-    b[0x05] = s->curve; b[0x06] = s->rate;
-    for (i = 0; i < I33_ACC_LEN; ++i) b[I33_SET_HDR + i] = acc[i];
-    for (i = 0; i < n; ++i) out[i] = b[i];
-    return n;
+    BYTE block[I33_SET_LEN];
+    UINT count = capacity < I33_SET_LEN ? capacity : I33_SET_LEN, index;
+    for (index = 0; index < I33_SET_HDR; ++index) block[index] = 0;
+    block[I33_SET_TYPE] = settings->Type;  block[I33_SET_LANGUAGE] = settings->Language;
+    block[I33_SET_HORIZONTAL_SPEED] = settings->HorizontalSpeed; block[I33_SET_VERTICAL_SPEED] = settings->VerticalSpeed; block[I33_SET_DOUBLE_SPEED] = settings->DoubleSpeed;
+    block[I33_SET_CURVE] = settings->Curve; block[I33_SET_RATE] = settings->Rate;
+    for (index = 0; index < I33_ACC_LEN; ++index) block[I33_SET_HDR + index] = acceleration[index];
+    for (index = 0; index < count; ++index) out[index] = block[index];
+    return count;
 }
 
 /* ══ 18h/19h: THE ALTERNATE (SHIFT-QUALIFIED) HANDLERS ═══════════════════════════════
@@ -222,67 +239,75 @@ static unsigned i33_settings_block(uint8_t *out, unsigned cap, const i33_setting
 #define I33_ALT_N        3
 #define I33_ALT_SHIFTS   0x00E0u
 #define I33_ALT_EVENTS   0x001Fu
-typedef struct { uint16_t mask; uint16_t seg; uint32_t off; } i33_alt;
+#define I33_ALT_SHIFT    0x0020u      /* the mask's shift-state bits              */
+#define I33_ALT_CTRL     0x0040u
+#define I33_ALT_ALT      0x0080u
+#define I33_KB_SHIFT     0x03         /* BDA 0040:0017: right/left Shift          */
+#define I33_KB_CTRL      0x04
+#define I33_KB_ALT       0x08
+#define I33_PICK_MAIN    (-1)         /* I33PickHandler: the 0Ch handler          */
+#define I33_PICK_NOBODY  (-2)
+typedef struct _I33_ALTERNATE { WORD Mask; WORD Segment; UINT32 Offset; } I33_ALTERNATE, *PI33_ALTERNATE; typedef const I33_ALTERNATE *PCI33_ALTERNATE;
 
-static unsigned i33_shift_bits(uint8_t kbflags)
+static UINT I33ShiftBits(BYTE keyboardFlags)
 {
-    return ((kbflags & 0x03) ? 0x20u : 0u) | ((kbflags & 0x04) ? 0x40u : 0u)
-         | ((kbflags & 0x08) ? 0x80u : 0u);
+    return ((keyboardFlags & I33_KB_SHIFT) ? I33_ALT_SHIFT : 0u) | ((keyboardFlags & I33_KB_CTRL) ? I33_ALT_CTRL : 0u)
+         | ((keyboardFlags & I33_KB_ALT) ? I33_ALT_ALT : 0u);
 }
 
 /* 18h. Returns 1 = installed (AX=0018h), 0 = refused (AX=FFFFh). */
-static int i33_alt_set(i33_alt *alt, uint16_t mask, uint16_t seg, uint32_t off)
+static INT I33AlternateSet(I33_ALTERNATE *alternates, WORD mask, WORD segment, UINT32 offset)
 {
-    int i, freei = -1;
-    unsigned sh = mask & I33_ALT_SHIFTS;
-    if (!sh) return 0;                                  /* needs one of Shift/Ctrl/Alt */
-    for (i = 0; i < I33_ALT_N; ++i) {
-        if (alt[i].mask && (alt[i].mask & I33_ALT_SHIFTS) == sh) break;
-        if (!alt[i].mask && freei < 0) freei = i;
+    INT index, freeIndex = -1;
+    UINT shifts = mask & I33_ALT_SHIFTS;
+    if (!shifts) return 0;                                  /* needs one of Shift/Ctrl/Alt */
+    for (index = 0; index < I33_ALT_N; ++index) {
+        if (alternates[index].Mask && (alternates[index].Mask & I33_ALT_SHIFTS) == shifts) break;
+        if (!alternates[index].Mask && freeIndex < 0) freeIndex = index;
     }
-    if (i == I33_ALT_N) { if (freei < 0) return 0; i = freei; }
-    alt[i].mask = mask; alt[i].seg = seg; alt[i].off = off;
+    if (index == I33_ALT_N) { if (freeIndex < 0) return 0; index = freeIndex; }
+    alternates[index].Mask = mask; alternates[index].Segment = segment; alternates[index].Offset = offset;
     return 1;
 }
 
 /* 19h. Returns the slot, or -1 (CX=0). */
-static int i33_alt_find(const i33_alt *alt, uint16_t mask)
+static INT I33AlternateFind(const I33_ALTERNATE *alternates, WORD mask)
 {
-    int i;
-    unsigned sh = mask & I33_ALT_SHIFTS;
-    if (!sh) return -1;
-    for (i = 0; i < I33_ALT_N; ++i)
-        if (alt[i].mask && (alt[i].mask & I33_ALT_SHIFTS) == sh) return i;
+    INT index;
+    UINT shifts = mask & I33_ALT_SHIFTS;
+    if (!shifts) return -1;
+    for (index = 0; index < I33_ALT_N; ++index)
+        if (alternates[index].Mask && (alternates[index].Mask & I33_ALT_SHIFTS) == shifts) return index;
     return -1;
 }
 
-static int i33_alt_any(const i33_alt *alt)
+static INT I33AlternateAny(const I33_ALTERNATE *alternates)
 {
-    int i;
-    for (i = 0; i < I33_ALT_N; ++i) if (alt[i].mask & I33_ALT_EVENTS) return 1;
+    INT index;
+    for (index = 0; index < I33_ALT_N; ++index) if (alternates[index].Mask & I33_ALT_EVENTS) return 1;
     return 0;
 }
 
 /* WHO GETS THIS EVENT. ev = the event bits (0Ch layout: bit 5/6 are the MIDDLE button
    there), main_mask = 0Ch's call mask or 0 when no 0Ch handler is installed. Returns
-   0..2 = that alternate slot, -1 = the 0Ch handler, -2 = nobody asked for it. *ax = the
+   0..2 = that alternate slot, -1 = the 0Ch handler, -2 = nobody asked for it. *conditions = the
    condition word the chosen handler is called with. */
-static int i33_pick(const i33_alt *alt, unsigned ev, uint8_t kbflags, unsigned main_mask,
-                    unsigned *ax)
+static INT I33PickHandler(const I33_ALTERNATE *alternates, UINT events, BYTE keyboardFlags, UINT mainMask,
+                    UINT *conditions)
 {
-    unsigned sh = i33_shift_bits(kbflags);
-    int i;
-    if (sh)
-        for (i = 0; i < I33_ALT_N; ++i) {
-            unsigned m = alt[i].mask;
-            if (m && (m & I33_ALT_SHIFTS) == sh && (ev & m & I33_ALT_EVENTS)) {
-                *ax = (ev & m & I33_ALT_EVENTS) | sh;
-                return i;
+    UINT shifts = I33ShiftBits(keyboardFlags);
+    INT index;
+    if (shifts)
+        for (index = 0; index < I33_ALT_N; ++index) {
+            UINT mask = alternates[index].Mask;
+            if (mask && (mask & I33_ALT_SHIFTS) == shifts && (events & mask & I33_ALT_EVENTS)) {
+                *conditions = (events & mask & I33_ALT_EVENTS) | shifts;
+                return index;
             }
         }
-    if (ev & main_mask) { *ax = ev & main_mask; return -1; }
-    *ax = 0;
-    return -2;
+    if (events & mainMask) { *conditions = events & mainMask; return I33_PICK_MAIN; }
+    *conditions = 0;
+    return I33_PICK_NOBODY;
 }
 
 #endif /* NTVDMEX_I33_DRIVER_H */
