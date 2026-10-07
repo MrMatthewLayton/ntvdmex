@@ -45,15 +45,36 @@
 #define WOWRES_RT_ACCEL   9
 #define WOWRES_MF_POPUP   0x0010
 #define WOWRES_MF_END     0x0080
+#define WOWRES_PATH_MAX   512
+
+/* The file's layout: the MZ stub's pointer to the NE header, the NE header's to the
+   resource table, and the table's records (see the note above). */
+#define WOWRES_MZ_HEADER_SIZE    0x40
+#define WOWRES_MZ_NE_OFFSET      0x3C
+#define WOWRES_NE_HEADER_SIZE    0x40
+#define WOWRES_NE_RESOURCE_TABLE 0x24
+#define WOWRES_MAX_ALIGN_SHIFT   16
+#define WOWRES_TYPEINFO_SIZE     8
+#define WOWRES_TYPEINFO_COUNT    2
+#define WOWRES_NAMEINFO_SIZE     12
+#define WOWRES_NAMEINFO_LENGTH   2
+#define WOWRES_NAMEINFO_ID       6
+#define WOWRES_INTEGER_ID        0x8000   /* the high bit: an integer, not a name offset */
+#define WOWRES_ID_MASK           0x7FFF
+#define WOWRES_LOWER_TO_UPPER    32       /* 'a' - 'A' */
+#define WOWRES_MENU_HEADER_SIZE  4        /* version, headerSize */
+#define WOWRES_MENU_HEADER_EXTRA 2        /* headerSize: the extra header bytes */
+#define WOWRES_MENU_TEXT_MAX     128
+#define WOWRES_MENU_MAX_DEPTH    8
 
 static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
 static DWORD  g_WowResLength  = 0;
-static CHAR   g_WowResPath[512];
+static CHAR   g_WowResPath[WOWRES_PATH_MAX];
 
 static WORD WowResReadWord(DWORD offset)
 {
-    if (offset + 2 > g_WowResLength) return 0;
-    return (WORD)(g_WowResImage[offset] | (g_WowResImage[offset + 1] << 8));
+    if (offset + WOW_WORD_BYTES > g_WowResLength) return 0;
+    return (WORD)(g_WowResImage[offset] | (g_WowResImage[offset + 1] << WOW_BYTE_SHIFT));
 }
 
 /* Read the application's file once. Returns 1 if there is an image to search.
@@ -61,7 +82,7 @@ static WORD WowResReadWord(DWORD offset)
    than one Win16 program, and WinHelp's menu is in WINHELP.EXE, not in the program
    on the command line; a few images are kept and the current one is selected. */
 #define WOWRES_CACHE 6
-typedef struct _WOWRES_CACHE_ENTRY { CHAR Path[512]; PBYTE Image; DWORD Length; } WOWRES_CACHE_ENTRY;
+typedef struct _WOWRES_CACHE_ENTRY { CHAR Path[WOWRES_PATH_MAX]; PBYTE Image; DWORD Length; } WOWRES_CACHE_ENTRY;
 static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
 static INT g_WowResCacheCount = 0;
 
@@ -93,7 +114,7 @@ static INT WowResOpen(PCSTR path)
     if (!image) { CloseHandle(file); return 0; }
     ReadFile(file, image, size, &bytesRead, NULL);
     CloseHandle(file);
-    if (bytesRead < 0x40 || image[0] != 'M' || image[1] != 'Z') return 0;
+    if (bytesRead < WOWRES_MZ_HEADER_SIZE || image[0] != 'M' || image[1] != 'Z') return 0;
     g_WowResCache[slot].Image = image; g_WowResCache[slot].Length = bytesRead;
     g_WowResImage = image; g_WowResLength = bytesRead;
     return 1;
@@ -122,6 +143,9 @@ static INT WowResOpen(PCSTR path)
 #define WOWRES_ACCEL_ALT      0x10
 #define WOWRES_ACCEL_LAST     0x80
 #define WOWRES_MAX_ACCEL      64
+#define WOWRES_ACCEL_ENTRY_SIZE 5
+#define WOWRES_ACCEL_FIELD_KEY  1
+#define WOWRES_ACCEL_FIELD_ID   3
 typedef struct _WOWRES_ACCEL { BYTE Flags; WORD Key, Id; } WOWRES_ACCEL, *PWOWRES_ACCEL;
 
 /* Locate a resource by integer type and integer id. 0 = not found. */
@@ -130,24 +154,24 @@ static DWORD WowResFind(WORD type, WORD id, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage) return 0;
-    header = (DWORD)(g_WowResImage[0x3C] | (g_WowResImage[0x3D] << 8)
-              | (g_WowResImage[0x3E] << 16) | ((DWORD)g_WowResImage[0x3F] << 24));
-    if (header + 0x40 > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
-    resourceTable = header + WowResReadWord(header + 0x24);
-    if (resourceTable + 2 > g_WowResLength) return 0;
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
+    resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
+    if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;
     shift = WowResReadWord(resourceTable);
-    if (shift > 16) return 0;
-    position = resourceTable + 2;
-    while (position + 8 <= g_WowResLength) {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + 2), index;
+    if (shift > WOWRES_MAX_ALIGN_SHIFT) return 0;
+    position = resourceTable + WOW_WORD_BYTES;
+    while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength) {
+        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
         if (!typeId) break;
-        position += 8;
-        for (index = 0; index < count && position + 12 <= g_WowResLength; ++index, position += 12) {
+        position += WOWRES_TYPEINFO_SIZE;
+        for (index = 0; index < count && position + WOWRES_NAMEINFO_SIZE <= g_WowResLength; ++index, position += WOWRES_NAMEINFO_SIZE) {
             /* Integer type and id both carry the high bit; a named one is an
                offset into the string pool and is not what this looks up. */
-            if (typeId == (WORD)(0x8000 | type) && WowResReadWord(position + 6) == (WORD)(0x8000 | id)) {
+            if (typeId == (WORD)(WOWRES_INTEGER_ID | type) && WowResReadWord(position + WOWRES_NAMEINFO_ID) == (WORD)(WOWRES_INTEGER_ID | id)) {
                 DWORD offset = (DWORD)WowResReadWord(position) << shift;
-                DWORD resourceLength  = (DWORD)WowResReadWord(position + 2) << shift;
+                DWORD resourceLength  = (DWORD)WowResReadWord(position + WOWRES_NAMEINFO_LENGTH) << shift;
                 if (offset + resourceLength > g_WowResLength) return 0;
                 if (length) *length = resourceLength;
                 return offset;
@@ -163,24 +187,24 @@ static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage) return 0;
-    header = (DWORD)(g_WowResImage[0x3C] | (g_WowResImage[0x3D] << 8)
-              | (g_WowResImage[0x3E] << 16) | ((DWORD)g_WowResImage[0x3F] << 24));
-    if (header + 0x40 > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
-    resourceTable = header + WowResReadWord(header + 0x24);
-    if (resourceTable + 2 > g_WowResLength) return 0;
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
+    resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
+    if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;
     shift = WowResReadWord(resourceTable);
-    if (shift > 16) return 0;
-    position = resourceTable + 2;
-    while (position + 8 <= g_WowResLength) {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + 2), index;
+    if (shift > WOWRES_MAX_ALIGN_SHIFT) return 0;
+    position = resourceTable + WOW_WORD_BYTES;
+    while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength) {
+        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
         if (!typeId) break;
-        position += 8;
-        for (index = 0; index < count && position + 12 <= g_WowResLength; ++index, position += 12) {
-            if (typeId == (WORD)(0x8000 | type)) {
+        position += WOWRES_TYPEINFO_SIZE;
+        for (index = 0; index < count && position + WOWRES_NAMEINFO_SIZE <= g_WowResLength; ++index, position += WOWRES_NAMEINFO_SIZE) {
+            if (typeId == (WORD)(WOWRES_INTEGER_ID | type)) {
                 DWORD offset = (DWORD)WowResReadWord(position) << shift;
-                DWORD resourceLength  = (DWORD)WowResReadWord(position + 2) << shift;
+                DWORD resourceLength  = (DWORD)WowResReadWord(position + WOWRES_NAMEINFO_LENGTH) << shift;
                 if (offset + resourceLength > g_WowResLength) return 0;
-                if (idOutput) *idOutput = (WORD)(WowResReadWord(position + 6) & 0x7FFF);
+                if (idOutput) *idOutput = (WORD)(WowResReadWord(position + WOWRES_NAMEINFO_ID) & WOWRES_ID_MASK);
                 if (length) *length = resourceLength;
                 return offset;
             }
@@ -195,11 +219,11 @@ static INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId
     DWORD length = 0, offset = WowResFindAny(WOWRES_RT_ACCEL, resourceId, &length);
     INT count = 0;
     if (!offset || !output) return 0;
-    while (count < capacity && (DWORD)(count * 5 + 5) <= length) {
-        PCBYTE entry = g_WowResImage + offset + count * 5;
+    while (count < capacity && (DWORD)(count * WOWRES_ACCEL_ENTRY_SIZE + WOWRES_ACCEL_ENTRY_SIZE) <= length) {
+        PCBYTE entry = g_WowResImage + offset + count * WOWRES_ACCEL_ENTRY_SIZE;
         output[count].Flags = entry[0];
-        output[count].Key   = (WORD)(entry[1] | (entry[2] << 8));
-        output[count].Id    = (WORD)(entry[3] | (entry[4] << 8));
+        output[count].Key   = (WORD)(entry[WOWRES_ACCEL_FIELD_KEY] | (entry[WOWRES_ACCEL_FIELD_KEY + 1] << WOW_BYTE_SHIFT));
+        output[count].Id    = (WORD)(entry[WOWRES_ACCEL_FIELD_ID] | (entry[WOWRES_ACCEL_FIELD_ID + 1] << WOW_BYTE_SHIFT));
         ++count;
         if (entry[0] & WOWRES_ACCEL_LAST) break;
     }
@@ -230,15 +254,15 @@ static INT WowResNameIs(DWORD resourceTable, WORD idWord, PCSTR wanted)
     DWORD stringOffset;
     BYTE  nameLength;
     INT   index;
-    if (idWord & 0x8000) return 0;                  /* an integer, not a name    */
+    if (idWord & WOWRES_INTEGER_ID) return 0;                  /* an integer, not a name    */
     stringOffset = resourceTable + idWord;
     if (stringOffset + 1 > g_WowResLength) return 0;
     nameLength = g_WowResImage[stringOffset];
     if (!nameLength || stringOffset + 1 + nameLength > g_WowResLength) return 0;
     for (index = 0; index < (INT)nameLength; ++index) {
         CHAR stored = (CHAR)g_WowResImage[stringOffset + 1 + index], expected = wanted[index];
-        if (stored >= 'a' && stored <= 'z') stored = (CHAR)(stored - 32);
-        if (expected >= 'a' && expected <= 'z') expected = (CHAR)(expected - 32);
+        if (stored >= 'a' && stored <= 'z') stored = (CHAR)(stored - WOWRES_LOWER_TO_UPPER);
+        if (expected >= 'a' && expected <= 'z') expected = (CHAR)(expected - WOWRES_LOWER_TO_UPPER);
         if (!expected || stored != expected) return 0;
     }
     return wanted[nameLength] == 0;                         /* and no trailing extra     */
@@ -251,23 +275,23 @@ static DWORD WowResFindNamed(WORD type, PCSTR name, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage || !name || !name[0]) return 0;
-    header = (DWORD)(g_WowResImage[0x3C] | (g_WowResImage[0x3D] << 8)
-              | (g_WowResImage[0x3E] << 16) | ((DWORD)g_WowResImage[0x3F] << 24));
-    if (header + 0x40 > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
-    resourceTable = header + WowResReadWord(header + 0x24);
-    if (resourceTable + 2 > g_WowResLength) return 0;
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
+    resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
+    if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;
     shift = WowResReadWord(resourceTable);
-    if (shift > 16) return 0;
-    position = resourceTable + 2;
-    while (position + 8 <= g_WowResLength) {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + 2), index;
+    if (shift > WOWRES_MAX_ALIGN_SHIFT) return 0;
+    position = resourceTable + WOW_WORD_BYTES;
+    while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength) {
+        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
         if (!typeId) break;
-        position += 8;
-        for (index = 0; index < count && position + 12 <= g_WowResLength; ++index, position += 12) {
-            if (typeId != (WORD)(0x8000 | type)) continue;
-            if (!WowResNameIs(resourceTable, WowResReadWord(position + 6), name)) continue;
+        position += WOWRES_TYPEINFO_SIZE;
+        for (index = 0; index < count && position + WOWRES_NAMEINFO_SIZE <= g_WowResLength; ++index, position += WOWRES_NAMEINFO_SIZE) {
+            if (typeId != (WORD)(WOWRES_INTEGER_ID | type)) continue;
+            if (!WowResNameIs(resourceTable, WowResReadWord(position + WOWRES_NAMEINFO_ID), name)) continue;
             {   DWORD offset = (DWORD)WowResReadWord(position) << shift;
-                DWORD resourceLength  = (DWORD)WowResReadWord(position + 2) << shift;
+                DWORD resourceLength  = (DWORD)WowResReadWord(position + WOWRES_NAMEINFO_LENGTH) << shift;
                 if (offset + resourceLength > g_WowResLength) return 0;
                 if (length) *length = resourceLength;
                 return offset;
@@ -282,19 +306,19 @@ static DWORD WowResFindNamed(WORD type, PCSTR name, PDWORD length)
    empty or unreadable menu is never attached to a window. */
 static DWORD WowResMenuLevel(HMENU menu, DWORD position, DWORD end, INT depth, PINT itemCount)
 {
-    while (position + 2 <= end) {
+    while (position + WOW_WORD_BYTES <= end) {
         WORD flags = WowResReadWord(position);
         WORD id = 0;
-        CHAR text[128];
+        CHAR text[WOWRES_MENU_TEXT_MAX];
         INT textLength = 0;
-        position += 2;
-        if (!(flags & WOWRES_MF_POPUP)) { id = WowResReadWord(position); position += 2; }
+        position += WOW_WORD_BYTES;
+        if (!(flags & WOWRES_MF_POPUP)) { id = WowResReadWord(position); position += WOW_WORD_BYTES; }
         while (position < end && g_WowResImage[position] && textLength < (INT)sizeof text - 1)
             text[textLength++] = (CHAR)g_WowResImage[position++];
         text[textLength] = 0;
         while (position < end && g_WowResImage[position]) ++position;          /* an over-long label */
         ++position;                                          /* the NUL */
-        if (depth > 8) return position;                      /* a bounded tree, always */
+        if (depth > WOWRES_MENU_MAX_DEPTH) return position;                      /* a bounded tree, always */
         if (flags & WOWRES_MF_POPUP) {
             HMENU submenu = menu ? CreatePopupMenu() : NULL;
             position = WowResMenuLevel(submenu, position, end, depth + 1, itemCount);
@@ -323,8 +347,8 @@ static HMENU WowResMenuAt(DWORD offset, DWORD length, PINT items)
     HMENU menu;
     INT itemCount = 0;
     if (items) *items = 0;
-    if (!offset || length < 4) return NULL;
-    position = offset + 4 + WowResReadWord(offset + 2);                 /* version, then headerSize */
+    if (!offset || length < WOWRES_MENU_HEADER_SIZE) return NULL;
+    position = offset + WOWRES_MENU_HEADER_SIZE + WowResReadWord(offset + WOWRES_MENU_HEADER_EXTRA);                 /* version, then headerSize */
     menu = CreateMenu();
     if (!menu) return NULL;
     WowResMenuLevel(menu, position, offset + length, 0, &itemCount);
@@ -366,6 +390,16 @@ static HMENU WowResMenuByName(PCSTR name, PINT items)
  */
 #define WOWRES_RT_ICON        3
 #define WOWRES_RT_GROUP_ICON  14
+/* A GROUP_ICON / GROUP_CURSOR directory, and the version CreateIconFromResourceEx wants. */
+#define WOWRES_GROUP_HEADER_SIZE  6
+#define WOWRES_GROUP_TYPE         2
+#define WOWRES_GROUP_COUNT        4
+#define WOWRES_GROUP_TYPE_ICON    1
+#define WOWRES_GROUP_TYPE_CURSOR  2
+#define WOWRES_GROUP_ENTRY_SIZE   14
+#define WOWRES_GROUP_ENTRY_BITS   6
+#define WOWRES_GROUP_ENTRY_ID     12
+#define WOWRES_ICON_VERSION       0x00030000
 
 /* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────
      MS Paint showed no icon at all -- Windows fell back to the generic
@@ -412,16 +446,16 @@ static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
 {
     DWORD cursorLength = 0, cursorOffset;
     WORD count, id;
-    if (!groupOffset || groupLength < 6 + 14) return NULL;
-    if (WowResReadWord(groupOffset + 2) != 2) return NULL;              /* type 2 = cursors */
-    count = WowResReadWord(groupOffset + 4);
+    if (!groupOffset || groupLength < WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_SIZE) return NULL;
+    if (WowResReadWord(groupOffset + WOWRES_GROUP_TYPE) != WOWRES_GROUP_TYPE_CURSOR) return NULL;              /* type 2 = cursors */
+    count = WowResReadWord(groupOffset + WOWRES_GROUP_COUNT);
     if (!count) return NULL;
-    id = WowResReadWord(groupOffset + 6 + 12);
+    id = WowResReadWord(groupOffset + WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_ID);
     if (!id) return NULL;
     cursorOffset = WowResFind(WOWRES_RT_CURSOR, id, &cursorLength);
     if (!cursorOffset || !cursorLength) return NULL;
     return (HCURSOR)CreateIconFromResourceEx(g_WowResImage + cursorOffset, cursorLength, FALSE,
-                                             0x00030000, 0, 0, LR_DEFAULTCOLOR);
+                                             WOWRES_ICON_VERSION, 0, 0, LR_DEFAULTCOLOR);
 }
 
 static HCURSOR WowResCursorNamed(PCSTR name)
@@ -461,22 +495,22 @@ static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT
     WORD count, index, bestId = 0;
     INT bestBits = -1;
     if (picked) *picked = 0;
-    if (!groupOffset || groupLength < 6) return NULL;
-    if (WowResReadWord(groupOffset + 2) != 1) return NULL;              /* type 1 = icons */
-    count = WowResReadWord(groupOffset + 4);
-    if (!count || 6u + 14u * count > groupLength) return NULL;
+    if (!groupOffset || groupLength < WOWRES_GROUP_HEADER_SIZE) return NULL;
+    if (WowResReadWord(groupOffset + WOWRES_GROUP_TYPE) != WOWRES_GROUP_TYPE_ICON) return NULL;              /* type 1 = icons */
+    count = WowResReadWord(groupOffset + WOWRES_GROUP_COUNT);
+    if (!count || WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_SIZE * count > groupLength) return NULL;
     /* Richest colour depth wins -- the OS scales, so the only thing worth
        choosing between these is how much colour information there is. */
     for (index = 0; index < count; ++index) {
-        DWORD entry = groupOffset + 6 + (DWORD)index * 14;
-        INT bitCount = WowResReadWord(entry + 6);
-        if (bitCount > bestBits) { bestBits = bitCount; bestId = WowResReadWord(entry + 12); }
+        DWORD entry = groupOffset + WOWRES_GROUP_HEADER_SIZE + (DWORD)index * WOWRES_GROUP_ENTRY_SIZE;
+        INT bitCount = WowResReadWord(entry + WOWRES_GROUP_ENTRY_BITS);
+        if (bitCount > bestBits) { bestBits = bitCount; bestId = WowResReadWord(entry + WOWRES_GROUP_ENTRY_ID); }
     }
     if (!bestId) return NULL;
     iconOffset = WowResFind(WOWRES_RT_ICON, bestId, &iconLength);
     if (!iconOffset || !iconLength) return NULL;
     if (picked) *picked = bestBits;
-    return CreateIconFromResourceEx(g_WowResImage + iconOffset, iconLength, TRUE, 0x00030000,
+    return CreateIconFromResourceEx(g_WowResImage + iconOffset, iconLength, TRUE, WOWRES_ICON_VERSION,
                                     width, height, LR_DEFAULTCOLOR);
 }
 
