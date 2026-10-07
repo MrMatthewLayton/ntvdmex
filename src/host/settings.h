@@ -17,7 +17,7 @@
  * Nothing in the harness had to change for these to be added.
  *
  * ── ONE TABLE, FOUR JOBS. ────────────────────────────────────────────────────────
- * Every setting is one row of SET_DEFS: registry name, dialog control, kind, default,
+ * Every setting is one row of g_SetDefinitions: registry name, dialog control, kind, default,
  * range, and (for a combo) its items. Defaults, registry load, registry save, clamp,
  * dialog fill and dialog read are all LOOPS OVER THAT TABLE. The first cut of this
  * file wrote each of those out by hand per setting; at seven settings that was fine,
@@ -46,7 +46,7 @@
 #define NTVDMEX_PATH_MAX 260
 
 /* ── THE NUMERIC SETTINGS. ───────────────────────────────────────────────────────
-     Order here must match SET_DEFS below; SET_COUNT closes the array and is what
+     Order here must match g_SetDefinitions below; SET_COUNT closes the array and is what
      sizes the value block, so a row added to one and not the other fails to build. */
 typedef enum {
     SET_DOSMAJ = 0, SET_DOSMIN, SET_PITPACE, SET_UITICK,
@@ -55,7 +55,7 @@ typedef enum {
          Turbo were live but pointless as knobs; the granularity slider and the
          core-affinity box were removed to file knobs. SpeedMode -- the optional
          speed LIMIT -- is all that survives. Removing an enum member is safe because
-         settings persist BY NAME (SET_DEFS[i].reg), so an orphaned registry value is
+         settings persist BY NAME (g_SetDefinitions[i].reg), so an orphaned registry value is
          simply never read again. */
     SET_SPEEDMODE,
     SET_CONVKB, SET_XMS, SET_EMS, SET_UMB, SET_A20,
@@ -73,7 +73,7 @@ typedef enum {
     SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image      */
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
     SET_COUNT
-} set_id;
+} SET_ID;
 
 /* ── THE STRING SETTINGS, kept separate because REG_SZ is a different call. ───── */
 typedef enum {
@@ -81,7 +81,7 @@ typedef enum {
     SET_STR_SHELL,
     SET_STR_TEXTFONT,              /* #321 */
     SET_STR_COUNT
-} set_str_id;
+} SET_STR_ID;
 
 enum { AUTOFS_ALWAYS = 0, AUTOFS_GRAPHICS = 1, AUTOFS_NEVER = 2 };
 
@@ -110,26 +110,26 @@ enum {
     SK_SLIDER       /* trackbar -> unsigned in [lo,hi]; its value label is ctl+1000 (#291) */
 };
 
-typedef struct {
-    const char *reg;    /* registry value name                                   */
-    int         ctl;    /* dialog control id (0 for SK_DERIVED)                  */
-    int         kind;   /* SK_*                                                  */
-    DWORD       dflt;   /* default value (an INDEX for SK_COMBO)                 */
-    DWORD       lo, hi; /* inclusive clamp; for SK_COMBO hi = last valid index    */
-    const char *items;  /* SK_COMBO: '|'-separated item text, else NULL          */
-} set_def;
+typedef struct _SET_DEF {
+    PCSTR       RegistryName;   /* registry value name                           */
+    INT         ControlId;      /* dialog control id (0 for SK_DERIVED)          */
+    INT         Kind;           /* SK_*                                          */
+    DWORD       Default;        /* default value (an INDEX for SK_COMBO)         */
+    DWORD       Low, High;      /* inclusive clamp; for SK_COMBO High = last valid index */
+    PCSTR       Items;          /* SK_COMBO: '|'-separated item text, else NULL  */
+} SET_DEF, *PSET_DEF; typedef const SET_DEF *PCSET_DEF;
 
-typedef struct {
-    const char *reg;
-    int         ctl;
-    const char *dflt;
-} set_str_def;
+typedef struct _SET_STR_DEF {
+    PCSTR       RegistryName;
+    INT         ControlId;
+    PCSTR       Default;
+} SET_STR_DEF;
 
 /* ⚠ SB defaults are the card we actually emulate (vdd_sb.h: base 0x220, IRQ 5,
      DMA 1/5) and the audio path really does run at 44100 (audio_wave.h). They are
      not folklore: a default that disagrees with the hardware would have the dialog
      describing a machine that does not exist. */
-static const set_def SET_DEFS[SET_COUNT] = {
+static const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /*  registry name        control            kind        dflt lo   hi    items */
 { "DosVersionMajor",   IDC_S_DOSVER,      SK_VER,        6,  1, 255, NULL },
 { "DosVersionMinor",   0,                 SK_DERIVED,   22,  0,  99, NULL },
@@ -328,7 +328,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "DisplayFit",        IDC_S_FIT,         SK_COMBO,      0,  0,   1, PRESENT_FIT_ITEMS },
 };
 
-static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
+static const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
 { "FloppyAImage", IDC_S_FLOPPYA,   "" },
 { "CdRomImage",   IDC_S_CDROM,     "" },
 { "SoundFontPath",IDC_S_SOUNDFONT, "" },
@@ -349,35 +349,35 @@ static const set_str_def SET_STR_DEFS[SET_STR_COUNT] = {
      settings_note_override in main.c. */
 enum { SETSRC_DEFAULT = 0, SETSRC_REG, SETSRC_REG_BAD };
 
-typedef struct {
-    DWORD v[SET_COUNT];
-    char  s[SET_STR_COUNT][NTVDMEX_PATH_MAX];
-    BYTE  src[SET_COUNT];                 /* SETSRC_*, as loaded at startup */
-    BYTE  src_s[SET_STR_COUNT];
-} ntvdmex_settings;
+typedef struct _NTVDMEX_SETTINGS {
+    DWORD Values[SET_COUNT];
+    char  Strings[SET_STR_COUNT][NTVDMEX_PATH_MAX];   /* char, not CHAR: the spelling moves code (#333) */
+    BYTE  Sources[SET_COUNT];             /* SETSRC_*, as loaded at startup */
+    BYTE  StringSources[SET_STR_COUNT];
+} NTVDMEX_SETTINGS, *PNTVDMEX_SETTINGS; typedef const NTVDMEX_SETTINGS *PCNTVDMEX_SETTINGS;
 
 /* ── Named access, so callers read like they used to. ───────────────────────────
-     settings_apply() says g_set.v[SET_MSENS], not g_set.v[37]. */
-#define SETV(s, id)  ((s)->v[(id)])
+     settings_apply() says g_set.Values[SET_MSENS], not g_set.Values[37]. */
+#define SETV(settings, id)  ((settings)->Values[(id)])
 
-static void settings_strcpy(char *dst, const char *src, int cap)
+static VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity)
 {
-    int i = 0;
-    while (src[i] && i < cap - 1) { dst[i] = src[i]; ++i; }
-    dst[i] = 0;
+    INT index = 0;
+    while (source[index] && index < capacity - 1) { destination[index] = source[index]; ++index; }
+    destination[index] = 0;
 }
 
 /* The defaults ARE the shipped behaviour, with one deliberate exception: the host
    cursor defaults to VISIBLE. It was hidden unconditionally long before it was a
    toggle, on the theory that it cost input lag; that was never measured, and a
    pointer you cannot see over the window is worse for every non-game guest. */
-static void settings_defaults(ntvdmex_settings *s)
+static VOID SettingsDefaults(NTVDMEX_SETTINGS *settings)
 {
-    int i;
-    for (i = 0; i < SET_COUNT; ++i) { s->v[i] = SET_DEFS[i].dflt; s->src[i] = SETSRC_DEFAULT; }
-    for (i = 0; i < SET_STR_COUNT; ++i) {
-        settings_strcpy(s->s[i], SET_STR_DEFS[i].dflt, NTVDMEX_PATH_MAX);
-        s->src_s[i] = SETSRC_DEFAULT;
+    INT index;
+    for (index = 0; index < SET_COUNT; ++index) { settings->Values[index] = g_SetDefinitions[index].Default; settings->Sources[index] = SETSRC_DEFAULT; }
+    for (index = 0; index < SET_STR_COUNT; ++index) {
+        SettingsCopyString(settings->Strings[index], g_SetStringDefinitions[index].Default, NTVDMEX_PATH_MAX);
+        settings->StringSources[index] = SETSRC_DEFAULT;
     }
 }
 
@@ -385,83 +385,83 @@ static void settings_defaults(ntvdmex_settings *s)
    for the UI tick would spin the UI thread flat out, and an out-of-range combo index
    would select nothing at all -- the control would come up blank and OK would then
    write the blank back. */
-static void settings_clamp(ntvdmex_settings *s)
+static VOID SettingsClamp(NTVDMEX_SETTINGS *settings)
 {
-    int i;
-    for (i = 0; i < SET_COUNT; ++i) {
-        const set_def *d = &SET_DEFS[i];
-        int bad = (d->kind == SK_COMBO) ? (s->v[i] > d->hi)
-                                        : (s->v[i] < d->lo || s->v[i] > d->hi);
-        if (bad) {
-            s->v[i] = d->dflt;
-            if (s->src[i] == SETSRC_REG) s->src[i] = SETSRC_REG_BAD;   /* say so */
+    INT index;
+    for (index = 0; index < SET_COUNT; ++index) {
+        const SET_DEF *definition = &g_SetDefinitions[index];
+        INT isBad = (definition->Kind == SK_COMBO) ? (settings->Values[index] > definition->High)
+                                        : (settings->Values[index] < definition->Low || settings->Values[index] > definition->High);
+        if (isBad) {
+            settings->Values[index] = definition->Default;
+            if (settings->Sources[index] == SETSRC_REG) settings->Sources[index] = SETSRC_REG_BAD;   /* say so */
         }
     }
     /* A version is a PAIR: an out-of-range major that fell back to 6 with a minor of
        00 would report "6.00", a DOS that never shipped. Reset both together. */
-    if (s->v[SET_DOSMAJ] == SET_DEFS[SET_DOSMAJ].dflt
-        && s->v[SET_DOSMIN] > SET_DEFS[SET_DOSMIN].hi) {
-        s->v[SET_DOSMIN] = SET_DEFS[SET_DOSMIN].dflt;
-        if (s->src[SET_DOSMIN] == SETSRC_REG) s->src[SET_DOSMIN] = SETSRC_REG_BAD;
+    if (settings->Values[SET_DOSMAJ] == g_SetDefinitions[SET_DOSMAJ].Default
+        && settings->Values[SET_DOSMIN] > g_SetDefinitions[SET_DOSMIN].High) {
+        settings->Values[SET_DOSMIN] = g_SetDefinitions[SET_DOSMIN].Default;
+        if (settings->Sources[SET_DOSMIN] == SETSRC_REG) settings->Sources[SET_DOSMIN] = SETSRC_REG_BAD;
     }
 }
 
-static void settings_reg_put(HKEY k, const char *name, DWORD v)
+static VOID SettingsRegistryPut(HKEY key, PCSTR name, DWORD value)
 {
-    RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v, sizeof v);
+    RegSetValueExA(key, name, 0, REG_DWORD, (const BYTE *)&value, sizeof value);
 }
 
 /* 1 = the value was there and was used. A value of the wrong TYPE is not "there". */
-static int settings_reg_try(HKEY k, const char *name, DWORD *out)
+static INT SettingsRegistryTry(HKEY key, PCSTR name, DWORD *out)
 {
-    DWORD v = 0, cb = sizeof v, type = 0;
-    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)&v, &cb) == ERROR_SUCCESS
-        && type == REG_DWORD && cb == sizeof v) { *out = v; return 1; }
+    DWORD value = 0, size = sizeof value, type = 0;
+    if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)&value, &size) == ERROR_SUCCESS
+        && type == REG_DWORD && size == sizeof value) { *out = value; return 1; }
     return 0;
 }
 
-static int settings_reg_get_sz(HKEY k, const char *name, char *out, int cap)
+static INT SettingsRegistryGetString(HKEY key, PCSTR name, PSTR out, INT capacity)
 {
-    DWORD cb = (DWORD)cap, type = 0;
-    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)out, &cb) != ERROR_SUCCESS
-        || type != REG_SZ || cb == 0)
+    DWORD size = (DWORD)capacity, type = 0;
+    if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)out, &size) != ERROR_SUCCESS
+        || type != REG_SZ || size == 0)
         return 0;                                /* leave the default in place        */
-    if ((int)cb >= cap) cb = (DWORD)cap - 1;
-    out[cb] = 0;                                 /* RegQueryValueEx may not NUL it    */
+    if ((INT)size >= capacity) size = (DWORD)capacity - 1;
+    out[size] = 0;                                 /* RegQueryValueEx may not NUL it    */
     return 1;
 }
 
 /* HKEY_CURRENT_USER, not LOCAL_MACHINE: the VDM runs as the logged-in user and must
    not need administrator rights to remember a checkbox. */
-static void settings_load(ntvdmex_settings *s)
+static VOID SettingsLoad(NTVDMEX_SETTINGS *settings)
 {
-    HKEY k; int i;
-    settings_defaults(s);
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &k) != ERROR_SUCCESS)
+    HKEY key; INT index;
+    SettingsDefaults(settings);
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
         return;                                  /* never stored yet -> defaults      */
-    for (i = 0; i < SET_COUNT; ++i)
-        if (settings_reg_try(k, SET_DEFS[i].reg, &s->v[i])) s->src[i] = SETSRC_REG;
-    for (i = 0; i < SET_STR_COUNT; ++i)
-        if (settings_reg_get_sz(k, SET_STR_DEFS[i].reg, s->s[i], NTVDMEX_PATH_MAX))
-            s->src_s[i] = SETSRC_REG;
-    RegCloseKey(k);
-    settings_clamp(s);
+    for (index = 0; index < SET_COUNT; ++index)
+        if (SettingsRegistryTry(key, g_SetDefinitions[index].RegistryName, &settings->Values[index])) settings->Sources[index] = SETSRC_REG;
+    for (index = 0; index < SET_STR_COUNT; ++index)
+        if (SettingsRegistryGetString(key, g_SetStringDefinitions[index].RegistryName, settings->Strings[index], NTVDMEX_PATH_MAX))
+            settings->StringSources[index] = SETSRC_REG;
+    RegCloseKey(key);
+    SettingsClamp(settings);
 }
 
-static void settings_save(const ntvdmex_settings *s)
+static VOID SettingsSave(const NTVDMEX_SETTINGS *settings)
 {
-    HKEY k; DWORD disp = 0; int i;
+    HKEY key; DWORD disposition = 0; INT index;
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL,
-                        REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS)
+                        REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &key, &disposition) != ERROR_SUCCESS)
         return;
-    for (i = 0; i < SET_COUNT; ++i)
-        settings_reg_put(k, SET_DEFS[i].reg, s->v[i]);
-    for (i = 0; i < SET_STR_COUNT; ++i) {
-        int n = 0; while (s->s[i][n]) ++n;
-        RegSetValueExA(k, SET_STR_DEFS[i].reg, 0, REG_SZ,
-                       (const BYTE *)s->s[i], (DWORD)n + 1);
+    for (index = 0; index < SET_COUNT; ++index)
+        SettingsRegistryPut(key, g_SetDefinitions[index].RegistryName, settings->Values[index]);
+    for (index = 0; index < SET_STR_COUNT; ++index) {
+        INT length = 0; while (settings->Strings[index][length]) ++length;
+        RegSetValueExA(key, g_SetStringDefinitions[index].RegistryName, 0, REG_SZ,
+                       (const BYTE *)settings->Strings[index], (DWORD)length + 1);
     }
-    RegCloseKey(k);
+    RegCloseKey(key);
 }
 
 /* ── THE VERSION FIELD IS "major.minor" TEXT, PARSED LENIENTLY. ──────────────────
@@ -469,47 +469,47 @@ static void settings_save(const ntvdmex_settings *s)
      6.22 is the oracle, 5.00 is what XP's own COMMAND.COM demands, and the next
      guest that refuses to run will want some third number. Accepts "5", "5.0",
      "5.00", " 6.22 ". */
-static void settings_parse_ver(const char *t, DWORD *maj, DWORD *min)
+static VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
 {
-    DWORD a = 0, b = 0; int i = 0, seen = 0;
-    while (t[i] == ' ' || t[i] == '\t') ++i;
-    while (t[i] >= '0' && t[i] <= '9') { a = a * 10 + (DWORD)(t[i] - '0'); ++i; seen = 1; }
-    if (t[i] == '.') {
-        ++i;
-        while (t[i] >= '0' && t[i] <= '9') { b = b * 10 + (DWORD)(t[i] - '0'); ++i; }
+    DWORD majorValue = 0, minorValue = 0; INT index = 0, isSeen = 0;
+    while (text[index] == ' ' || text[index] == '\t') ++index;
+    while (text[index] >= '0' && text[index] <= '9') { majorValue = majorValue * 10 + (DWORD)(text[index] - '0'); ++index; isSeen = 1; }
+    if (text[index] == '.') {
+        ++index;
+        while (text[index] >= '0' && text[index] <= '9') { minorValue = minorValue * 10 + (DWORD)(text[index] - '0'); ++index; }
     }
-    if (!seen || a < 1 || a > 255 || b > 99) return;   /* keep the previous value */
-    *maj = a; *min = b;
+    if (!isSeen || majorValue < 1 || majorValue > 255 || minorValue > 99) return;   /* keep the previous value */
+    *major = majorValue; *minor = minorValue;
 }
 
 /* Parse an unsigned decimal out of an edit box. Returns 0 on "nothing usable here",
    which the caller treats as "keep the value you already had" -- an ES_NUMBER edit
    can still be EMPTY, and an empty box must not read as zero. */
-static int settings_atou(const char *t, DWORD *out)
+static INT SettingsParseUnsigned(PCSTR text, DWORD *out)
 {
-    DWORD a = 0; int i = 0, seen = 0;
-    while (t[i] == ' ' || t[i] == '\t') ++i;
-    while (t[i] >= '0' && t[i] <= '9') {
-        a = a * 10 + (DWORD)(t[i] - '0');
-        if (a > 100000000u) return 0;                /* absurd: reject, don't wrap */
-        ++i; seen = 1;
+    DWORD value = 0; INT index = 0, isSeen = 0;
+    while (text[index] == ' ' || text[index] == '\t') ++index;
+    while (text[index] >= '0' && text[index] <= '9') {
+        value = value * 10 + (DWORD)(text[index] - '0');
+        if (value > 100000000u) return 0;                /* absurd: reject, don't wrap */
+        ++index; isSeen = 1;
     }
-    if (!seen) return 0;
-    *out = a;
+    if (!isSeen) return 0;
+    *out = value;
     return 1;
 }
 
 /* Copy item n of a '|'-separated list into out. Returns 0 when n is past the end,
    which is how the combo-filling loop knows to stop -- the table stores the text,
    not a count, so there is only one place to edit when a list gains an entry. */
-static int settings_item(const char *items, int n, char *out, int cap)
+static INT SettingsItem(PCSTR items, INT number, PSTR out, INT capacity)
 {
-    int i = 0, k = 0;
+    INT index = 0, length = 0;
     if (!items) return 0;
-    while (n > 0 && items[i]) { if (items[i] == '|') --n; ++i; }
-    if (!items[i]) return 0;
-    while (items[i] && items[i] != '|' && k < cap - 1) out[k++] = items[i++];
-    out[k] = 0;
+    while (number > 0 && items[index]) { if (items[index] == '|') --number; ++index; }
+    if (!items[index]) return 0;
+    while (items[index] && items[index] != '|' && length < capacity - 1) out[length++] = items[index++];
+    out[length] = 0;
     return 1;
 }
 

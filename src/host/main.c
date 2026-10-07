@@ -9814,7 +9814,7 @@ enum {                                       /* wired command IDs               
          range the id fell in, and the offset IS the setting's value. No per-item
          cases, and nothing to keep in step when a list gains an entry.
        ⚠ THE ITEM TEXT IS NOT DUPLICATED HERE. menu_combo() below builds each
-         submenu by walking SET_DEFS' own `items` string -- the same string the
+         submenu by walking g_SetDefinitions' own `items` string -- the same string the
          dialog fills its combo from -- so the menu and the dialog cannot disagree
          about what the options are or which index each one means. Duplicating the
          list is how a menu ends up setting Scale2x when it says Scanlines.
@@ -9856,7 +9856,7 @@ static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
 static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
 static HMENU mpop(void) { return CreatePopupMenu(); }
 
-/* A submenu built FROM THE SETTING ITSELF: one item per entry of SET_DEFS[set]'s
+/* A submenu built FROM THE SETTING ITSELF: one item per entry of g_SetDefinitions[set]'s
    own '|'-separated list, at ids base+0, base+1, ... See the note by IDM_COMBO_BASE
    for why the text is taken from there rather than written out again here. */
 static void menu_combo(HMENU parent, const char *label, int set, UINT base)
@@ -9865,7 +9865,7 @@ static void menu_combo(HMENU parent, const char *label, int set, UINT base)
     char it[64];
     int n;
     for (n = 0; n < IDM_COMBO_SPAN
-                && settings_item(SET_DEFS[set].items, n, it, (int)sizeof it); ++n)
+                && SettingsItem(g_SetDefinitions[set].Items, n, it, (int)sizeof it); ++n)
         mi(s, it, base + (UINT)n);
     msub(parent, label, s);
 }
@@ -10504,7 +10504,7 @@ static HMENU build_menu(void)
          whole point: experimenting must not silently reconfigure the machine.
        ► Renderer is GDI | DirectDraw and both are real (s81, #147): the window is
          always GDI, and DirectDraw makes FULLSCREEN the exclusive DirectDraw mode.
-         The list comes from SET_DEFS so it says exactly what the dialog says. */
+         The list comes from g_SetDefinitions so it says exactly what the dialog says. */
     m = mpop();                                                   /* View         */
     mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
     msep(m);
@@ -12036,8 +12036,8 @@ static void joy_poll_ensure(void)
      oversight: if the dialog showed the live values instead, then changing an audio
      setting and pressing OK would silently make every display experiment permanent.
      Two meanings, two copies, and the one you edit is the one you save. */
-static ntvdmex_settings g_set;
-static ntvdmex_settings g_set_disk;
+static NTVDMEX_SETTINGS g_set;
+static NTVDMEX_SETTINGS g_set_disk;
 
 /* ── EVERY SETTING SAYS ITS VALUE AND WHERE IT CAME FROM. (GH #144) ──────────────
      See knob-with-two-sources: the reported DOS version sat at 5.00 on the rig from a
@@ -12117,13 +12117,13 @@ static void settings_log_sources(void)
     int i;
     q = LogPut(q, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
     for (i = 0; i < SET_COUNT; ++i) {
-        const set_def *d = &SET_DEFS[i];
-        q = LogPut(q, "  "); q = LogPut(q, d->reg); q = LogPut(q, " = ");
-        q = LogDecimal(q, g_set.v[i]);
-        if (d->kind == SK_COMBO && settings_item(d->items, (int)g_set.v[i], item, sizeof item)) {
+        const SET_DEF *d = &g_SetDefinitions[i];
+        q = LogPut(q, "  "); q = LogPut(q, d->RegistryName); q = LogPut(q, " = ");
+        q = LogDecimal(q, g_set.Values[i]);
+        if (d->Kind == SK_COMBO && SettingsItem(d->Items, (int)g_set.Values[i], item, sizeof item)) {
             q = LogPut(q, " \""); q = LogPut(q, item); q = LogPut(q, "\"");
         }
-        q = LogPut(q, " ["); q = LogPut(q, SRC[g_set.src[i] < 3 ? g_set.src[i] : 0]); q = LogPut(q, "]");
+        q = LogPut(q, " ["); q = LogPut(q, SRC[g_set.Sources[i] < 3 ? g_set.Sources[i] : 0]); q = LogPut(q, "]");
         if (g_set_ovr[i]) {
             q = LogPut(q, " OVERRIDDEN by "); q = LogPut(q, g_set_ovr[i]);
             q = LogPut(q, " -> "); q = LogDecimal(q, g_set_ovr_v[i]);
@@ -12133,9 +12133,9 @@ static void settings_log_sources(void)
                q = LogPut(q, ", GH #136)\r\n"); }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
-        q = LogPut(q, "  "); q = LogPut(q, SET_STR_DEFS[i].reg); q = LogPut(q, " = \"");
-        q = LogPut(q, g_set.s[i]); q = LogPut(q, "\" [");
-        q = LogPut(q, SRC[g_set.src_s[i] < 3 ? g_set.src_s[i] : 0]); q = LogPut(q, "]");
+        q = LogPut(q, "  "); q = LogPut(q, g_SetStringDefinitions[i].RegistryName); q = LogPut(q, " = \"");
+        q = LogPut(q, g_set.Strings[i]); q = LogPut(q, "\" [");
+        q = LogPut(q, SRC[g_set.StringSources[i] < 3 ? g_set.StringSources[i] : 0]); q = LogPut(q, "]");
         if (i == SET_STR_SHELL && g_shell_ovr) {
             q = LogPut(q, " OVERRIDDEN by "); q = LogPut(q, g_shell_ovr);
         }
@@ -12154,7 +12154,7 @@ static void settings_log_sources(void)
 static int g_autofs_done = 0;
 static void host_autofs_consider(HWND h, int graphics)
 {
-    DWORD mode = g_set.v[SET_AUTOFS];
+    DWORD mode = g_set.Values[SET_AUTOFS];
     if (g_autofs_done || g_wow_launch || g_headless) return;
     if (mode == AUTOFS_NEVER) { g_autofs_done = 1; return; }
     if (mode == AUTOFS_GRAPHICS && !graphics) return;
@@ -12196,37 +12196,37 @@ static int g_xms_on = 1, g_ems_on = 1;
 static unsigned g_conv_kb_want = BIOS_CONV_KB_MAX;
 static uint16_t g_dos_mem_top  = (uint16_t)DOS_MEM_TOP;
 
-static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
+static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
 {
-    g_ms_sens        = (int)s->v[SET_MSENS];
+    g_ms_sens        = (int)s->Values[SET_MSENS];
     /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
        tables). Live: the next keystroke uses it. */
-    g_in.Layout      = (uint8_t)(s->v[SET_KBLAYOUT] <= 3 ? s->v[SET_KBLAYOUT] : 0);
+    g_in.Layout      = (uint8_t)(s->Values[SET_KBLAYOUT] <= 3 ? s->Values[SET_KBLAYOUT] : 0);
     /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the
          poll thread and the port trap both re-read these on every pass. */
-    g_joy.Type       = (uint8_t)(s->v[SET_JOYTYPE] <= 2 ? s->v[SET_JOYTYPE] : 0);
-    g_joy_povmap     = (int)(s->v[SET_JOYPAD] ? 1 : 0);
+    g_joy.Type       = (uint8_t)(s->Values[SET_JOYTYPE] <= 2 ? s->Values[SET_JOYTYPE] : 0);
+    g_joy_povmap     = (int)(s->Values[SET_JOYPAD] ? 1 : 0);
     joy_poll_ensure();               /* spawns the winmm poll thread ONLY if a
                                         joystick is configured -- no thread, and no
                                         timing risk, in the default (None) config */
     bios_bda_refresh_equipment();    /* #253: bit 12 (game adapter) follows the type
                                         into 0040:0010 as well as INT 11h */
-    g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
-    g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
-    g_vid.IsCursorBlink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
-    g_behave_dos622 = (s->v[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
+    g_pitpace_on     = (int)(s->Values[SET_PITPACE] ? 1 : 0);
+    g_ui_tick_min_ms = UITICK_MS[s->Values[SET_UITICK] < 5 ? s->Values[SET_UITICK] : 0];
+    g_vid.IsCursorBlink = (uint8_t)(s->Values[SET_BLINKCURSOR] ? 1 : 0);
+    g_behave_dos622 = (s->Values[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
     /* #232: OPL2 (an AdLib: bank-1 ports dead) or OPL3 (YMF262). Live -- the chip model
        reads it on every access, as a jumpered card would at power-up. */
-    g_opl.IsOpl3 = (uint8_t)(s->v[SET_OPL] == 1 ? 1 : 0);
-    g_frameskip      = (int)s->v[SET_FRAMESKIP];
-    g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
-    g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);
+    g_opl.IsOpl3 = (uint8_t)(s->Values[SET_OPL] == 1 ? 1 : 0);
+    g_frameskip      = (int)s->Values[SET_FRAMESKIP];
+    g_xms_on         = (int)(s->Values[SET_XMS] ? 1 : 0);
+    g_ems_on         = (int)(s->Values[SET_EMS] ? 1 : 0);
     /* GH #56. Live: the throttle thread re-reads the duty every millisecond and the
        interpreter re-reads the budget every slice, so changing the speed in the
        dialog bites on the next millisecond rather than at the next launch. */
-    g_cpuspd_idx     = (int)(s->v[SET_SPEEDMODE] < CPUSPEED_COUNT ? s->v[SET_SPEEDMODE] : 0);
+    g_cpuspd_idx     = (int)(s->Values[SET_SPEEDMODE] < CPUSPEED_COUNT ? s->Values[SET_SPEEDMODE] : 0);
     /* ⚠ FPU AND TURBO WERE REMOVED AS SETTINGS (session 60). g_fpu_present stays 1
          -- we run on a real x87, so advertising it is always correct, and a checkbox
          whose only other position makes a guest wrong is not worth having. Turbo was
@@ -12241,32 +12241,32 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          row is `TypematicRate`, it says nothing about the delay before the
          first repeat, and inventing a second meaning for one control is how a
          knob comes to do something its label does not say. */
-    if (s->v[SET_TYPEMATIC] >= 2)
-        g_ty_period_us = 1000000u / (uint32_t)s->v[SET_TYPEMATIC];
+    if (s->Values[SET_TYPEMATIC] >= 2)
+        g_ty_period_us = 1000000u / (uint32_t)s->Values[SET_TYPEMATIC];
     /* s84 (user): the physical drive, or a mounted image. The physical one needs no
        setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
        forced because this PC has no floppy drive) names a file here. A blank image
        path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
        only on the test rig (the harness's disk), so on a user's PC it is simply absent. */
-    g_floppy_img     = ((!s->v[SET_FLOPPYPHYS] || !host_has_floppy()) && s->s[SET_STR_FLOPPYA][0])
-                     ? s->s[SET_STR_FLOPPYA] : NULL;
-    g_hostcur_mode   = (int)s->v[SET_HOSTCURSOR];                   /* s84 */
+    g_floppy_img     = ((!s->Values[SET_FLOPPYPHYS] || !host_has_floppy()) && s->Strings[SET_STR_FLOPPYA][0])
+                     ? s->Strings[SET_STR_FLOPPYA] : NULL;
+    g_hostcur_mode   = (int)s->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_dos_mem_top. */
-    g_conv_kb_want   = BiosClampConventionalKb((unsigned)s->v[SET_CONVKB]);
+    g_conv_kb_want   = BiosClampConventionalKb((unsigned)s->Values[SET_CONVKB]);
     /* #136: seamless mouse. Turning it on while a guest holds the pointer gives the
        pointer back now (we are on the UI thread when `live`), rather than leaving a
        capture that the policy can no longer release by clicking. */
-    InterlockedExchange(&g_ms_seamless, s->v[SET_SEAMLESS] ? 1 : 0);
+    InterlockedExchange(&g_ms_seamless, s->Values[SET_SEAMLESS] ? 1 : 0);
     if (live && h && g_ms_seamless && g_captured) input_capture_set(h, 0);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
        whose registers live at completely different ports. */
-    g_sbcfg.IoBase = (uint16_t)(0x220 + 0x20 * (s->v[SET_SBADDR] & 3));
+    g_sbcfg.IoBase = (uint16_t)(0x220 + 0x20 * (s->Values[SET_SBADDR] & 3));
     { static const uint8_t IRQS[4] = { 5, 7, 10, 11 };
       static const uint8_t DMAS[3] = { 1, 3, 5 };
-      uint8_t ch = DMAS[s->v[SET_SBDMA] < 3 ? s->v[SET_SBDMA] : 0];
-      g_sbcfg.Irq = IRQS[s->v[SET_SBIRQ] & 3];
+      uint8_t ch = DMAS[s->Values[SET_SBDMA] < 3 ? s->Values[SET_SBDMA] : 0];
+      g_sbcfg.Irq = IRQS[s->Values[SET_SBIRQ] & 3];
       if (ch < 4) { g_sbcfg.Dma8Channel = ch; g_sbcfg.Dma16Channel = 0; }
       else        { g_sbcfg.Dma8Channel = SB_DEFAULT_DMA8; g_sbcfg.Dma16Channel = ch; } }
     /* ── #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
@@ -12277,7 +12277,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
              SB16     DSP 4.05   A220 I5 D1 H5 P330 T6
              AWE32    DSP 4.12   A220 I5 D1 H5 P330 T6       (E620 with #233's EMU8000)
          A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
-    {   uint8_t model = (uint8_t)(s->v[SET_SBMODEL] <= 2 ? s->v[SET_SBMODEL] : 0);
+    {   uint8_t model = (uint8_t)(s->Values[SET_SBMODEL] <= 2 ? s->Values[SET_SBMODEL] : 0);
         g_sb.Model = model;
         g_sbcfg.Emu8kBase = (model == SB_MODEL_AWE32) ? (uint16_t)(g_sbcfg.IoBase + 0x400) : 0;  /* #233 */
         if (model == SB_MODEL_SBPRO) {
@@ -12286,15 +12286,15 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
         } else {
             {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
                 g_sbcfg.Type = 6;                         /* P follows the MPU's port (#235) */
-                g_sbcfg.MpuBase = MPUB[s->v[SET_MPUADDR] <= 4 ? s->v[SET_MPUADDR] : 3]; }
+                g_sbcfg.MpuBase = MPUB[s->Values[SET_MPUADDR] <= 4 ? s->Values[SET_MPUADDR] : 3]; }
             if (!g_sbcfg.Dma16Channel) g_sbcfg.Dma16Channel = 5;
             if (!g_dspver_forced) { g_SbVersionMajor = 4; g_SbVersionMinor = model == SB_MODEL_AWE32 ? 12 : 5; }
         } }
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
        startup, so they win here too -- pushing 6.22 into a session whose shell requires
        5.00 is how its next command would say "Incorrect DOS version". */
-    if (g_dosm && !g_dosver_forced) DosInt21SetVersion(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
-                                                              (uint8_t)s->v[SET_DOSMIN]);
+    if (g_dosm && !g_dosver_forced) DosInt21SetVersion(g_dosm, (uint8_t)s->Values[SET_DOSMAJ],
+                                                              (uint8_t)s->Values[SET_DOSMIN]);
     /* ⚠ THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
          Granularity defaults to AUTO (g_cpuspd_gran_ms = 0), which is the behaviour
          that made a slow speed smooth, so it needs no control; cpugran.txt still
@@ -12338,28 +12338,28 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
      choose. */
 #define FSINT_FLAG   CFG_("fsinteger.flag")
 
-static void settings_apply_present(PRESENT_DDRAW *pd, const ntvdmex_settings *s)
+static void settings_apply_present(PRESENT_DDRAW *pd, const NTVDMEX_SETTINGS *s)
 {
-    pd->IsVsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
-    pd->Filter = (int)(s->v[SET_FILTER] <= 2 ? s->v[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
-    pd->Fit    = (int)(s->v[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
-    pd->IsOsdOff    = s->v[SET_OSD]      ? 0 : 1;      /* #217 */
-    pd->Tint       = (int)s->v[SET_TINT];             /* #229 */
-    pd->IsUnbuffered = s->v[SET_BUFFERED] ? 0 : 1;
-    pd->Aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
-    pd->Scaler = (int)s->v[SET_SCALER];
+    pd->IsVsync  = (int)(s->Values[SET_VSYNC]  ? 1 : 0);
+    pd->Filter = (int)(s->Values[SET_FILTER] <= 2 ? s->Values[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
+    pd->Fit    = (int)(s->Values[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
+    pd->IsOsdOff    = s->Values[SET_OSD]      ? 0 : 1;      /* #217 */
+    pd->Tint       = (int)s->Values[SET_TINT];             /* #229 */
+    pd->IsUnbuffered = s->Values[SET_BUFFERED] ? 0 : 1;
+    pd->Aspect = (int)s->Values[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
+    pd->Scaler = (int)s->Values[SET_SCALER];
     /* Neither of these is a user setting -- see the note in settings.h about why
        fullscreen ended up with none. Both are file knobs, both default OFF. */
     pd->IsFullscreenInteger   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
     /* Renderer = DirectDraw is the user-facing switch for the exclusive path (#147);
        the old file knob still forces it, for comparisons. */
-    pd->IsFullscreenDirectDraw = (s->v[SET_RENDERER] == 1)
+    pd->IsFullscreenDirectDraw = (s->Values[SET_RENDERER] == 1)
                     || (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 
-static void settings_apply_devices(const ntvdmex_settings *s)
+static void settings_apply_devices(const NTVDMEX_SETTINGS *s)
 {
-    VddAudioSetMaster(&g_audio, s->v[SET_VOLUME], (int)s->v[SET_MUTE]);
+    VddAudioSetMaster(&g_audio, s->Values[SET_VOLUME], (int)s->Values[SET_MUTE]);
     /* The speaker VDD stays on the bus either way: port 0x61 must keep answering
        because guests time delay loops off its refresh bit. The setting decides
        only whether anything is audible. */
@@ -12367,8 +12367,8 @@ static void settings_apply_devices(const ntvdmex_settings *s)
          CARD; Beep.sys drives the transducer on the MOTHERBOARD. "Both" is both,
          and they are genuinely independent -- a machine can have speakers plugged
          in, a case speaker, neither, or both, and only the person at it knows. */
-    VddAudioSetSpeaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
-    g_spk_real = g_safe.RealSpeaker ? 0 : SPKOUT_TO_REAL(s->v[SET_SPEAKER]);   /* #132 */
+    VddAudioSetSpeaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->Values[SET_SPEAKER]));
+    g_spk_real = g_safe.RealSpeaker ? 0 : SPKOUT_TO_REAL(s->Values[SET_SPEAKER]);   /* #132 */
     /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
          it: the driver keeps sounding whatever it was last told to sound. */
     if (!g_spk_real) PcSpeakerSet(&g_pcspk, 0);
@@ -12379,10 +12379,10 @@ static void settings_apply_devices(const ntvdmex_settings *s)
    and the waveOut device must be opened at the same rate or every sample is
    resampled to a clock nothing is running at. One function so the two callers
    cannot disagree. */
-static uint32_t settings_out_hz(const ntvdmex_settings *s)
+static uint32_t settings_out_hz(const NTVDMEX_SETTINGS *s)
 {
     static const uint32_t RATES[3] = { 22050u, 44100u, 48000u };
-    return RATES[s->v[SET_RATE] < 3 ? s->v[SET_RATE] : 1];
+    return RATES[s->Values[SET_RATE] < 3 ? s->Values[SET_RATE] : 1];
 }
 
 /* ── #325: THE WINDOW IS THE PICTURE, AT A WHOLE SCALE. ──────────────────────────────
@@ -12403,7 +12403,7 @@ static void host_picture(int k, int *pw, int *ph)
 {
     int sw, sh;
     host_frame_size(&sw, &sh);
-    PresentWindowPicture((int)g_set.v[SET_ASPECT], sw, sh, k, pw, ph);
+    PresentWindowPicture((int)g_set.Values[SET_ASPECT], sw, sh, k, pw, ph);
 }
 
 /* What the frame adds around the video: borders, caption, menu bar, status strip.
@@ -12464,14 +12464,14 @@ static void menu_view_sync(HWND h)
     if (!m) return;
     for (i = 0; i < MENU_COMBO_N; ++i) {
         UINT base = MENU_COMBOS[i].base;
-        const set_def *d = &SET_DEFS[MENU_COMBOS[i].set];
-        DWORD v = g_set.v[MENU_COMBOS[i].set];
-        if (v > d->hi) v = d->lo;
-        CheckMenuRadioItem(m, base, base + (UINT)d->hi, base + (UINT)v, MF_BYCOMMAND);
+        const SET_DEF *d = &g_SetDefinitions[MENU_COMBOS[i].set];
+        DWORD v = g_set.Values[MENU_COMBOS[i].set];
+        if (v > d->High) v = d->Low;
+        CheckMenuRadioItem(m, base, base + (UINT)d->High, base + (UINT)v, MF_BYCOMMAND);
     }
     for (i = 0; i < MENU_CHECK_N; ++i)
         CheckMenuItem(m, MENU_CHECKS[i].id, MF_BYCOMMAND
-                      | (g_set.v[MENU_CHECKS[i].set] ? MF_CHECKED : MF_UNCHECKED));
+                      | (g_set.Values[MENU_CHECKS[i].set] ? MF_CHECKED : MF_UNCHECKED));
     /* ── ★ A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
          host_apply_scale() steps down until the window fits, which is the right
          thing to DO and the wrong thing to say nothing about: picking 3x on a
@@ -12580,7 +12580,7 @@ static void host_follow_frame(HWND h)
     if (sw == g_win_frame_w && sh == g_win_frame_h) { pend_w = pend_h = 0; return; }
     if (sw != pend_w || sh != pend_h) { pend_w = sw; pend_h = sh; pend_t = GetTickCount(); return; }
     if (GetTickCount() - pend_t < 150u) return;
-    host_apply_scale(h, g_scale_want ? g_scale_want : (int)g_set.v[SET_WINSIZE] + 1);
+    host_apply_scale(h, g_scale_want ? g_scale_want : (int)g_set.Values[SET_WINSIZE] + 1);
 }
 
 /* #321: the text-mode font, live. Rebuilt only when the NAME changed -- a build draws
@@ -12589,8 +12589,8 @@ static void host_follow_frame(HWND h)
 static void settings_apply_textfont(void)
 {
     char lb[480], *lq = lb;
-    if (!lstrcmpA(g_textfont_live, g_set.s[SET_STR_TEXTFONT])) return;
-    lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
+    if (!lstrcmpA(g_textfont_live, g_set.Strings[SET_STR_TEXTFONT])) return;
+    lstrcpynA(g_textfont_live, g_set.Strings[SET_STR_TEXTFONT], sizeof g_textfont_live);
     lq = LogPut(lq, "settings: text font changed -- ");
     lq = LogPut(lq, SysFontBuild(g_textfont_live, &g_sysfont_rep));
     lq = LogPut(lq, "\r\n");
@@ -12607,9 +12607,9 @@ static void settings_apply_live(HWND h)
          while the window is 4:3-shaped and leaving it alone would show the lock as
          doing nothing until the next drag. Tracked separately from the scale so
          neither one triggers on the other's account. */
-    if (g_set.v[SET_WINSIZE] != g_winsize_live || g_set.v[SET_ASPECT] != g_aspect_live) {
-        g_winsize_live = g_set.v[SET_WINSIZE];
-        g_aspect_live  = g_set.v[SET_ASPECT];
+    if (g_set.Values[SET_WINSIZE] != g_winsize_live || g_set.Values[SET_ASPECT] != g_aspect_live) {
+        g_winsize_live = g_set.Values[SET_WINSIZE];
+        g_aspect_live  = g_set.Values[SET_ASPECT];
         host_apply_winsize(h, g_winsize_live);
     }
     menu_view_sync(h);
@@ -12619,7 +12619,7 @@ static void settings_apply_live(HWND h)
      IDD_SETTINGS is only a frame: a tab control, OK, Cancel, Restore Defaults. Each
      tab is its OWN child dialog (IDD_PAGE_*), created here and parked in the tab's
      display rectangle. Nothing below is written per-control -- every fill and every
-     read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
+     read is a loop over g_SetDefinitions in settings.h, so adding a knob is one table row and
      one line of .rc layout, not four edits in four functions that can disagree. */
 /* s84, the user's redesign: six tabs in a 640 x 480 dialog. Processor, Memory and
    Advanced became "Machine"; General is "MS-DOS"; Display is "Video". */
@@ -12652,11 +12652,11 @@ static void settings_fill_combos(void)
     char it[64]; int i, n;
     HWND c;
     for (i = 0; i < SET_COUNT; ++i) {
-        const set_def *d = &SET_DEFS[i];
-        if (d->kind != SK_COMBO || !d->ctl) continue;
-        c = settings_ctl(d->ctl);
+        const SET_DEF *d = &g_SetDefinitions[i];
+        if (d->Kind != SK_COMBO || !d->ControlId) continue;
+        c = settings_ctl(d->ControlId);
         if (!c) continue;
-        for (n = 0; settings_item(d->items, n, it, (int)sizeof it); ++n)
+        for (n = 0; SettingsItem(d->Items, n, it, (int)sizeof it); ++n)
             SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)it);
     }
     /* The version list is a convenience, not a constraint: that combo is EDITABLE
@@ -12848,47 +12848,47 @@ static void settings_textfont_draw(const DRAWITEMSTRUCT *di)
     SetDIBitsToDevice(di->hDC, x0, y0, 512, 32, 0, 0, 0, 32, px, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
 }
 
-static void settings_to_dialog(const ntvdmex_settings *s)
+static void settings_to_dialog(const NTVDMEX_SETTINGS *s)
 {
     char t[NTVDMEX_PATH_MAX]; int i;
     for (i = 0; i < SET_COUNT; ++i) {
-        const set_def *d = &SET_DEFS[i];
-        HWND c = d->ctl ? settings_ctl(d->ctl) : NULL;
+        const SET_DEF *d = &g_SetDefinitions[i];
+        HWND c = d->ControlId ? settings_ctl(d->ControlId) : NULL;
         if (!c) continue;
-        switch (d->kind) {
+        switch (d->Kind) {
         case SK_CHECK:
-            SendMessageA(c, BM_SETCHECK, s->v[i] ? BST_CHECKED : BST_UNCHECKED, 0);
+            SendMessageA(c, BM_SETCHECK, s->Values[i] ? BST_CHECKED : BST_UNCHECKED, 0);
             break;
         case SK_UINT:
-            wsprintfA(t, "%u", (unsigned)s->v[i]); SetWindowTextA(c, t);
+            wsprintfA(t, "%u", (unsigned)s->Values[i]); SetWindowTextA(c, t);
             break;
         case SK_SLIDER: {                    /* #291: a trackbar and its "N%" label */
-            HWND lbl = settings_ctl(d->ctl + 1000);
-            SendMessageA(c, TBM_SETRANGE, FALSE, MAKELPARAM(d->lo, d->hi));
+            HWND lbl = settings_ctl(d->ControlId + 1000);
+            SendMessageA(c, TBM_SETRANGE, FALSE, MAKELPARAM(d->Low, d->High));
             SendMessageA(c, TBM_SETPAGESIZE, 0, 10);
-            SendMessageA(c, TBM_SETPOS, TRUE, (LPARAM)s->v[i]);
-            if (lbl) { wsprintfA(t, "%u%%", (unsigned)s->v[i]); SetWindowTextA(lbl, t); }
+            SendMessageA(c, TBM_SETPOS, TRUE, (LPARAM)s->Values[i]);
+            if (lbl) { wsprintfA(t, "%u%%", (unsigned)s->Values[i]); SetWindowTextA(lbl, t); }
             break; }
         case SK_COMBO:
-            SendMessageA(c, CB_SETCURSEL, (WPARAM)s->v[i], 0);
+            SendMessageA(c, CB_SETCURSEL, (WPARAM)s->Values[i], 0);
             break;
         case SK_VER:
             /* "6.22", not "6.2200" -- two digits, zero-padded, as DOS says it. The
                minor is the NEXT row (SK_DERIVED); that adjacency is the contract. */
-            wsprintfA(t, "%u.%02u", (unsigned)s->v[i], (unsigned)s->v[i + 1]);
+            wsprintfA(t, "%u.%02u", (unsigned)s->Values[i], (unsigned)s->Values[i + 1]);
             SetWindowTextA(c, t);
             break;
         default: break;                      /* SK_DERIVED has no control of its own */
         }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
-        HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
-        if (c) SetWindowTextA(c, s->s[i]);
+        HWND c = settings_ctl(g_SetStringDefinitions[i].ControlId);
+        if (c) SetWindowTextA(c, s->Strings[i]);
     }
-    settings_shell_radios(s->s[SET_STR_SHELL][0] != 0);
-    settings_textfont_select(s->s[SET_STR_TEXTFONT]);                 /* #321 */
-    settings_floppy_radios(s->v[SET_FLOPPYPHYS] != 0);                /* s84 */
-    settings_cd_radios(s->v[SET_CDPHYS] != 0);
+    settings_shell_radios(s->Strings[SET_STR_SHELL][0] != 0);
+    settings_textfont_select(s->Strings[SET_STR_TEXTFONT]);                 /* #321 */
+    settings_floppy_radios(s->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
+    settings_cd_radios(s->Values[SET_CDPHYS] != 0);
     /* ── SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
          command.com but reporting 6.22, is that right?") The box holds the SETTING; a
          session can be running a different, forced number, and the dialog said nothing. */
@@ -12911,49 +12911,49 @@ static void settings_to_dialog(const ntvdmex_settings *s)
 /* Read the pages back. A field that will not parse, or is out of range, LEAVES THE
    PREVIOUS VALUE -- it does not fall back to the default. Half-typing a number and
    clicking OK should not silently reset the knob you were adjusting. */
-static void settings_from_dialog(ntvdmex_settings *n)
+static void settings_from_dialog(NTVDMEX_SETTINGS *n)
 {
     char t[NTVDMEX_PATH_MAX]; int i;
     for (i = 0; i < SET_COUNT; ++i) {
-        const set_def *d = &SET_DEFS[i];
-        HWND c = d->ctl ? settings_ctl(d->ctl) : NULL;
+        const SET_DEF *d = &g_SetDefinitions[i];
+        HWND c = d->ControlId ? settings_ctl(d->ControlId) : NULL;
         if (!c) continue;
-        switch (d->kind) {
+        switch (d->Kind) {
         case SK_CHECK:
-            n->v[i] = (SendMessageA(c, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1u : 0u;
+            n->Values[i] = (SendMessageA(c, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1u : 0u;
             break;
         case SK_UINT: {
             DWORD v;
             if (!GetWindowTextA(c, t, 32)) break;
-            if (!settings_atou(t, &v)) break;
-            if (v >= d->lo && v <= d->hi) n->v[i] = v;
+            if (!SettingsParseUnsigned(t, &v)) break;
+            if (v >= d->Low && v <= d->High) n->Values[i] = v;
             break; }
         case SK_COMBO: {
             LRESULT sel = SendMessageA(c, CB_GETCURSEL, 0, 0);
-            if (sel != CB_ERR && (DWORD)sel <= d->hi) n->v[i] = (DWORD)sel;
+            if (sel != CB_ERR && (DWORD)sel <= d->High) n->Values[i] = (DWORD)sel;
             break; }
         case SK_SLIDER: {
             LRESULT v = SendMessageA(c, TBM_GETPOS, 0, 0);
-            if ((DWORD)v >= d->lo && (DWORD)v <= d->hi) n->v[i] = (DWORD)v;
+            if ((DWORD)v >= d->Low && (DWORD)v <= d->High) n->Values[i] = (DWORD)v;
             break; }
         case SK_VER:
             if (GetWindowTextA(c, t, 32))
-                settings_parse_ver(t, &n->v[i], &n->v[i + 1]);
+                SettingsParseVersion(t, &n->Values[i], &n->Values[i + 1]);
             break;
         default: break;
         }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
-        HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
+        HWND c = settings_ctl(g_SetStringDefinitions[i].ControlId);
         if (!c) continue;
         GetWindowTextA(c, t, NTVDMEX_PATH_MAX);
-        settings_strcpy(n->s[i], t, NTVDMEX_PATH_MAX);
+        SettingsCopyString(n->Strings[i], t, NTVDMEX_PATH_MAX);
     }
     /* #321: a drop-list's text is its item; the default item stores as "". */
-    settings_textfont_get(n->s[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
+    settings_textfont_get(n->Strings[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
     /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
     {   HWND xp = settings_ctl(IDC_S_SHELL_XP);
-        if (xp && SendMessageA(xp, BM_GETCHECK, 0, 0) == BST_CHECKED) n->s[SET_STR_SHELL][0] = 0;
+        if (xp && SendMessageA(xp, BM_GETCHECK, 0, 0) == BST_CHECKED) n->Strings[SET_STR_SHELL][0] = 0;
     }
 }
 
@@ -13190,21 +13190,21 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             /* EVERY page, not just the one on screen. A "Restore Defaults" that
                silently meant "this tab only" would be the more surprising of the
                two readings, and there is no second button to offer the other. */
-            ntvdmex_settings d; settings_defaults(&d);
+            NTVDMEX_SETTINGS d; SettingsDefaults(&d);
             settings_to_dialog(&d);           /* shown, not applied -- OK commits */
             return TRUE; }
         case IDC_S_APPLY:                     /* s84: OK's commit, without closing */
         case IDOK: {
-            ntvdmex_settings n = g_set_disk;
+            NTVDMEX_SETTINGS n = g_set_disk;
             settings_from_dialog(&n);
-            settings_clamp(&n);
+            SettingsClamp(&n);
             /* Both copies: this IS the saved configuration, and it also becomes what
                is in force -- so OK deliberately drops any session-only override the
                View menu had applied. Keeping them would mean the machine no longer
                matched the dialog the user had just pressed OK on. */
             g_set_disk = n;
             g_set      = n;
-            settings_save(&g_set_disk);       /* the registry IS the store        */
+            SettingsSave(&g_set_disk);       /* the registry IS the store        */
             settings_apply_live(GetParent(dlg));
             settings_apply_devices(&g_set);   /* the mixer + the presenter exist by now */
             /* ⚠ The construction-time ones (the card's port/IRQ/DMA, the output
@@ -13866,17 +13866,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             vh = (r->bottom - r->top) - ey;
             if (vw < 1) vw = 1;
             if (vh < 1) vh = 1;
-            if (PresentIsNative((int)g_set.v[SET_ASPECT])) {
+            if (PresentIsNative((int)g_set.Values[SET_ASPECT])) {
                 /* ── #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged --
                      the nearest k to where the held edge is, never below 1x -- and that
                      k becomes the window's scale, so the next mode change keeps it. */
                 int k = (wp == WMSZ_TOP || wp == WMSZ_BOTTOM) ? (vh + sh / 2) / sh
                                                               : (vw + sw / 2) / sw;
                 if (k < 1) k = 1;
-                PresentWindowPicture((int)g_set.v[SET_ASPECT], sw, sh, k, &vw, &vh);
+                PresentWindowPicture((int)g_set.Values[SET_ASPECT], sw, sh, k, &vw, &vh);
                 g_scale_k = g_scale_want = k; g_fit_down = 0;
             } else {
-                PresentTargetRatio((int)g_set.v[SET_ASPECT], sw, sh, &n, &d);
+                PresentTargetRatio((int)g_set.Values[SET_ASPECT], sw, sh, &n, &d);
                 switch (wp) {
                 case WMSZ_LEFT: case WMSZ_RIGHT:
                     vh = (int)((long)vw * d / n); break;   /* width drives height     */
@@ -13949,8 +13949,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 UINT base = MENU_COMBOS[k].base;
                 if (id >= base && id < base + IDM_COMBO_SPAN) {
                     DWORD v = (DWORD)(id - base);
-                    if (v <= SET_DEFS[MENU_COMBOS[k].set].hi) {
-                        g_set.v[MENU_COMBOS[k].set] = v;
+                    if (v <= g_SetDefinitions[MENU_COMBOS[k].set].High) {
+                        g_set.Values[MENU_COMBOS[k].set] = v;
                         settings_apply_live(h);
                     }
                     return 0;
@@ -13958,7 +13958,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
             for (k = 0; k < MENU_CHECK_N; ++k) {
                 if (id == MENU_CHECKS[k].id) {
-                    g_set.v[MENU_CHECKS[k].set] = g_set.v[MENU_CHECKS[k].set] ? 0u : 1u;
+                    g_set.Values[MENU_CHECKS[k].set] = g_set.Values[MENU_CHECKS[k].set] ? 0u : 1u;
                     settings_apply_live(h);
                     return 0;
                 }
@@ -14491,11 +14491,11 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     if (!RegisterClassA(&wc)) return 1;
     /* The initial size. Same helper the View menu and the dialog resize through, so
        "what 2x means" has one definition rather than one per call site. */
-    {   int scale = (int)g_set.v[SET_WINSIZE] + 1, pw, ph;
-        g_winsize_live = g_set.v[SET_WINSIZE];   /* the window is now AT this size */
-        g_aspect_live  = g_set.v[SET_ASPECT];    /* ...and in this shape            */
+    {   int scale = (int)g_set.Values[SET_WINSIZE] + 1, pw, ph;
+        g_winsize_live = g_set.Values[SET_WINSIZE];   /* the window is now AT this size */
+        g_aspect_live  = g_set.Values[SET_ASPECT];    /* ...and in this shape            */
         while (scale > 1 && !win_scale_fits(scale)) --scale;
-        g_scale_k = scale; g_scale_want = (int)g_set.v[SET_WINSIZE] + 1;
+        g_scale_k = scale; g_scale_want = (int)g_set.Values[SET_WINSIZE] + 1;
         host_picture(scale, &pw, &ph);           /* #325: 720x400 text until a frame */
         rc.left = 0; rc.top = 0;
         rc.right = pw; rc.bottom = ph + PRESENT_STATUS_HEIGHT; }
@@ -14563,7 +14563,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          window resize live and 1x came back one pixel taller than it started.
        ⚠ The theme decides that height, so it is not a constant to correct; ask the
          control after it exists and size the window to the answer. */
-    host_apply_winsize(g_hwnd, g_set.v[SET_WINSIZE]);
+    host_apply_winsize(g_hwnd, g_set.Values[SET_WINSIZE]);
     /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
          is built either way (it owns the present surface, the raw input, the frame
          timer and the tray callbacks); only whether anyone sees it changes. */
@@ -29960,7 +29960,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          settings.h): the rig configures this host by writing files and re-launching,
          and a setting clicked in a dialog on that machine must never silently change
          what a headless measurement is measuring. */
-    settings_load(&g_set);
+    SettingsLoad(&g_set);
     g_set_disk = g_set;          /* nothing has overridden anything yet */
     settings_apply(NULL, &g_set, 0);
     /* Log only the LIVE settings -- the ones the settings_apply* functions actually
@@ -29968,16 +29968,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        line four times longer and every value in it would be a claim the run cannot
        support. Two lines because there are now enough of them to wrap. */
     p = LogPut(p, "STAGE0: settings hidecur=retired(#218)");
-    p = LogPut(p, " blink=");   p = LogHex(p, g_set.v[SET_BLINKCURSOR]);
-    p = LogPut(p, " msens=");   p = LogHex(p, g_set.v[SET_MSENS]);
-    p = LogPut(p, " dosver=");  p = LogHex(p, g_set.v[SET_DOSMAJ]);
-    p = LogPut(p, ".");         p = LogHex(p, g_set.v[SET_DOSMIN]);
-    p = LogPut(p, " pitpace="); p = LogHex(p, g_set.v[SET_PITPACE]);
-    p = LogPut(p, " uitick=");  p = LogHex(p, g_set.v[SET_UITICK]);
+    p = LogPut(p, " blink=");   p = LogHex(p, g_set.Values[SET_BLINKCURSOR]);
+    p = LogPut(p, " msens=");   p = LogHex(p, g_set.Values[SET_MSENS]);
+    p = LogPut(p, " dosver=");  p = LogHex(p, g_set.Values[SET_DOSMAJ]);
+    p = LogPut(p, ".");         p = LogHex(p, g_set.Values[SET_DOSMIN]);
+    p = LogPut(p, " pitpace="); p = LogHex(p, g_set.Values[SET_PITPACE]);
+    p = LogPut(p, " uitick=");  p = LogHex(p, g_set.Values[SET_UITICK]);
     p = LogPut(p, "\r\n");
-    p = LogPut(p, "STAGE0: settings vol=");  p = LogHex(p, g_set.v[SET_VOLUME]);
-    p = LogPut(p, " mute=");      p = LogHex(p, g_set.v[SET_MUTE]);
-    p = LogPut(p, " spk=");       p = LogHex(p, g_set.v[SET_SPEAKER]);
+    p = LogPut(p, "STAGE0: settings vol=");  p = LogHex(p, g_set.Values[SET_VOLUME]);
+    p = LogPut(p, " mute=");      p = LogHex(p, g_set.Values[SET_MUTE]);
+    p = LogPut(p, " spk=");       p = LogHex(p, g_set.Values[SET_SPEAKER]);
     p = LogPut(p, " outhz=");     p = LogHex(p, settings_out_hz(&g_set));
     p = LogPut(p, " sb=A");       p = LogHex(p, g_sbcfg.IoBase);
     p = LogPut(p, " I");          p = LogHex(p, g_sbcfg.Irq);
@@ -29985,12 +29985,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = LogPut(p, " H");          p = LogHex(p, g_sbcfg.Dma16Channel);
     p = LogPut(p, " xms=");       p = LogHex(p, (DWORD)g_xms_on);
     p = LogPut(p, " ems=");       p = LogHex(p, (DWORD)g_ems_on);
-    p = LogPut(p, " winsize=");   p = LogHex(p, g_set.v[SET_WINSIZE]);
-    p = LogPut(p, " scaler=");    p = LogHex(p, g_set.v[SET_SCALER]);
-    p = LogPut(p, " aspect=");    p = LogHex(p, g_set.v[SET_ASPECT]);
-    p = LogPut(p, " filter=");    p = LogHex(p, g_set.v[SET_FILTER]);
-    p = LogPut(p, " vsync=");     p = LogHex(p, g_set.v[SET_VSYNC]);
-    p = LogPut(p, " frameskip="); p = LogHex(p, g_set.v[SET_FRAMESKIP]);
+    p = LogPut(p, " winsize=");   p = LogHex(p, g_set.Values[SET_WINSIZE]);
+    p = LogPut(p, " scaler=");    p = LogHex(p, g_set.Values[SET_SCALER]);
+    p = LogPut(p, " aspect=");    p = LogHex(p, g_set.Values[SET_ASPECT]);
+    p = LogPut(p, " filter=");    p = LogHex(p, g_set.Values[SET_FILTER]);
+    p = LogPut(p, " vsync=");     p = LogHex(p, g_set.Values[SET_VSYNC]);
+    p = LogPut(p, " frameskip="); p = LogHex(p, g_set.Values[SET_FRAMESKIP]);
     p = LogPut(p, "\r\n");
     /* ── ★★★ THE TIMING LANDSCAPE, IN EVERY LOG. (s63) ──────────────────────────────
          Skyroads' frame pacing is fragile on a 2-core box and has regressed THREE
@@ -30089,16 +30089,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        built before the devices are added -- and ULTRASND= has to say what the card
        will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
        and a card nothing looked for. */
-    g_gus_on = g_set.v[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
-    if (g_set.v[SET_GUS] && !g_gus_on) settings_note_override(SET_GUS, "cfg\\nogus.flag", 0);
+    g_gus_on = g_set.Values[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
+    if (g_set.Values[SET_GUS] && !g_gus_on) settings_note_override(SET_GUS, "cfg\\nogus.flag", 0);
     if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
         settings_note_override(SET_RENDERER, "cfg\\ddrawfs.flag", 1);
     /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
     {   static const uint8_t GIRQ[7] = { 2, 3, 5, 7, 11, 12, 15 };
         static const uint8_t GDMA[5] = { 1, 3, 5, 6, 7 };
-        g_gus.BasePort   = (uint16_t)(0x210 + 0x10 * (g_set.v[SET_GUSADDR] <= 5 ? g_set.v[SET_GUSADDR] : 3));
-        g_gus.Irq    = GIRQ[g_set.v[SET_GUSIRQ] <= 6 ? g_set.v[SET_GUSIRQ] : 4];
-        g_gus.DmaChannel = GDMA[g_set.v[SET_GUSDMA] <= 4 ? g_set.v[SET_GUSDMA] : 1]; }
+        g_gus.BasePort   = (uint16_t)(0x210 + 0x10 * (g_set.Values[SET_GUSADDR] <= 5 ? g_set.Values[SET_GUSADDR] : 3));
+        g_gus.Irq    = GIRQ[g_set.Values[SET_GUSIRQ] <= 6 ? g_set.Values[SET_GUSIRQ] : 4];
+        g_gus.DmaChannel = GDMA[g_set.Values[SET_GUSDMA] <= 4 ? g_set.Values[SET_GUSDMA] : 1]; }
     /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
        one line is a machine nobody could have built. Step aside to the next period
@@ -30811,11 +30811,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 shell_cfg[--sn] = 0;
             if (sn) {
                 shell_src = "cfg\\shell.txt";
-                if (g_set.s[SET_STR_SHELL][0]) g_shell_ovr = "cfg\\shell.txt";
+                if (g_set.Strings[SET_STR_SHELL][0]) g_shell_ovr = "cfg\\shell.txt";
             }
         }
-        if (!shell_cfg[0] && g_set.s[SET_STR_SHELL][0]) {
-            lstrcpynA(shell_cfg, g_set.s[SET_STR_SHELL], sizeof shell_cfg);
+        if (!shell_cfg[0] && g_set.Strings[SET_STR_SHELL][0]) {
+            lstrcpynA(shell_cfg, g_set.Strings[SET_STR_SHELL], sizeof shell_cfg);
             shell_src = "Settings > General > DOS prompt";
         }
     }
@@ -31466,7 +31466,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
        guest's next version check with no restart. */
     g_dosm = &m;
-    DosInt21SetVersion(&m, (uint8_t)g_set.v[SET_DOSMAJ], (uint8_t)g_set.v[SET_DOSMIN]);
+    DosInt21SetVersion(&m, (uint8_t)g_set.Values[SET_DOSMAJ], (uint8_t)g_set.Values[SET_DOSMIN]);
     /* Two sources, and the second one silently wins -- see the note below the file read. */
     const char *dosver_src = "HKCU\\Software\\NTVDMEX (Settings dialog)";
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
@@ -32039,12 +32039,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        report buffer: a LogAppend here would be erased when the report is rewritten. */
     /* #321: the TextFont setting is laid over the default; g_set is loaded by now. */
     p = LogPut(p, "STAGE1: ");
-    p = LogPut(p, SysFontBuild(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
+    p = LogPut(p, SysFontBuild(g_set.Strings[SET_STR_TEXTFONT], &g_sysfont_rep));
     p = LogPut(p, "\r\n");
     if (SysFontIsDefaultDegraded(&g_sysfont_rep))
         p = LogPut(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
                     "is missing, so box drawing may show accented letters (#321)\r\n");
-    lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
+    lstrcpynA(g_textfont_live, g_set.Strings[SET_STR_TEXTFONT], sizeof g_textfont_live);
     VddVideoInstallFonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS
@@ -32165,7 +32165,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     VddBusAdd(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     g_mpu.Sink = host_midi_sink;
     {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_mpu.BasePort = MPUB[g_set.v[SET_MPUADDR] <= 4 ? g_set.v[SET_MPUADDR] : 3]; }
+        g_mpu.BasePort = MPUB[g_set.Values[SET_MPUADDR] <= 4 ? g_set.Values[SET_MPUADDR] : 3]; }
     g_mpu_dev = VddMpuDevice(&g_mpu);
     VddBusAdd(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
@@ -32179,7 +32179,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,
        E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
-    g_awe_on = (g_set.v[SET_SBMODEL] == SB_MODEL_AWE32);
+    g_awe_on = (g_set.Values[SET_SBMODEL] == SB_MODEL_AWE32);
     if (g_awe_on) {
         g_emu8k.BasePort = (uint16_t)(g_sbcfg.IoBase + 0x400);
         g_emu8k.Dram = g_emu8k_dram; g_emu8k.DramWords = EMU8K_DRAM_WORDS;
@@ -32464,9 +32464,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
-    g_wave.WantsDirectSound = (g_set.v[SET_AUDIOAPI] == 1);          /* #234 */
+    g_wave.WantsDirectSound = (g_set.Values[SET_AUDIOAPI] == 1);          /* #234 */
     g_wave.IsForcedSilent = g_safe.AudioOut;                 /* s90 #132: SAFE MODE */
-    g_wave.MidiChoice = (int)(g_set.v[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.v[SET_MIDI] : 0);  /* #136 */
+    g_wave.MidiChoice = (int)(g_set.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.Values[SET_MIDI] : 0);  /* #136 */
     AudioWaveStart(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
          Host GM (the default) opens device 0 as it always did and logs nothing new. */
@@ -36351,8 +36351,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = LogPut(p, " bufs=");       p = LogDecimal(p, (DWORD)g_pd.FlipBuffers);
       p = LogPut(p, " ourwait=");    p = LogDecimal(p, (DWORD)g_pd.IsFlipOurWait);
       p = LogPut(p, g_pd.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
-      p = LogPut(p, " winsize="); p = LogDecimal(p, g_set.v[SET_WINSIZE] + 1);
-      p = LogPut(p, "x scaler="); p = LogDecimal(p, g_set.v[SET_SCALER]);
+      p = LogPut(p, " winsize="); p = LogDecimal(p, g_set.Values[SET_WINSIZE] + 1);
+      p = LogPut(p, "x scaler="); p = LogDecimal(p, g_set.Values[SET_SCALER]);
       p = LogPut(p, "\r\nSTAGE2: pitpace=");  p = LogHex(p, (DWORD)g_pitpace_ms);
       p = LogPut(p, " calls="); p = LogHex(p, g_pitpace_calls);
       p = LogPut(p, " prio="); p = LogHex(p, (DWORD)g_pitpace_prio);
