@@ -7,11 +7,11 @@
 
 #include "../../src/host/pif.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-static const unsigned char qb_pif[] = {
+static const BYTE g_QbasicPif[] = {
       0x00, 0xc9, 0x4d, 0x69, 0x63, 0x72, 0x6f, 0x73, 0x6f, 0x66, 0x74, 0x20,
       0x51, 0x75, 0x69, 0x63, 0x6b, 0x42, 0x41, 0x53, 0x49, 0x43, 0x20, 0x20,
       0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x80, 0x00, 0x80, 0x00,
@@ -61,45 +61,45 @@ static const unsigned char qb_pif[] = {
       0x20, 0x4e, 0x54, 0x20, 0x20, 0x33, 0x2e, 0x31, 0x00
 };
 
-int main(void)
+INT main(VOID)
 {
-    PIF_INFO pi;
-    unsigned char buf[sizeof qb_pif];
+    PIF_INFO info;
+    BYTE buffer[sizeof g_QbasicPif];
     printf("pif battery\n");
 
-    CHECK(PifParse(qb_pif, sizeof qb_pif, &pi), "QB.PIF parses");
-    CHECK(strcmp(pi.Program, "C:\\qb45\\QB.EXE") == 0, "program = C:\\qb45\\QB.EXE");
-    CHECK(strcmp(pi.Directory, "C:\\qb45") == 0, "start directory = C:\\qb45");
-    CHECK(strcmp(pi.Parameters, "/L") == 0, "parameters = /L");
-    CHECK(pi.IsParametersFrom386 == 1, "parameters taken from the WINDOWS 386 3.0 section");
+    CHECK(PifParse(g_QbasicPif, sizeof g_QbasicPif, &info), "QB.PIF parses");
+    CHECK(strcmp(info.Program, "C:\\qb45\\QB.EXE") == 0, "program = C:\\qb45\\QB.EXE");
+    CHECK(strcmp(info.Directory, "C:\\qb45") == 0, "start directory = C:\\qb45");
+    CHECK(strcmp(info.Parameters, "/L") == 0, "parameters = /L");
+    CHECK(info.IsParametersFrom386 == 1, "parameters taken from the WINDOWS 386 3.0 section");
 
     /* The 386 section wins over the basic section's copy. */
-    memcpy(buf, qb_pif, sizeof buf);
-    memcpy(buf + 0x1C5, "/X", 2);
-    CHECK(PifParse(buf, sizeof buf, &pi) && strcmp(pi.Parameters, "/X") == 0,
+    memcpy(buffer, g_QbasicPif, sizeof buffer);
+    memcpy(buffer + 0x1C5, "/X", 2);
+    CHECK(PifParse(buffer, sizeof buffer, &info) && strcmp(info.Parameters, "/X") == 0,
           "386-section parameters override the basic section");
 
     /* An empty 386 copy falls back to the basic section. */
-    memcpy(buf, qb_pif, sizeof buf);
-    memset(buf + 0x1C5, ' ', 64);
-    CHECK(PifParse(buf, sizeof buf, &pi) && strcmp(pi.Parameters, "/L") == 0
-          && pi.IsParametersFrom386 == 0, "blank 386 parameters -> the basic section's");
+    memcpy(buffer, g_QbasicPif, sizeof buffer);
+    memset(buffer + 0x1C5, ' ', 64);
+    CHECK(PifParse(buffer, sizeof buffer, &info) && strcmp(info.Parameters, "/L") == 0
+          && info.IsParametersFrom386 == 0, "blank 386 parameters -> the basic section's");
 
     /* Basic section only (no extensions). */
-    CHECK(PifParse(qb_pif, PIF_BASIC_LEN, &pi) && strcmp(pi.Parameters, "/L") == 0,
+    CHECK(PifParse(g_QbasicPif, PIF_BASIC_LEN, &info) && strcmp(info.Parameters, "/L") == 0,
           "a basic-only PIF still gives its parameters");
 
     /* Not PIFs. */
-    CHECK(!PifParse(qb_pif, 0x100, &pi), "shorter than the basic section -> not a PIF");
-    memcpy(buf, qb_pif, sizeof buf); buf[0] = 'M'; buf[1] = 'Z';
-    CHECK(!PifParse(buf, sizeof buf, &pi), "an MZ image -> not a PIF");
-    memcpy(buf, qb_pif, sizeof buf); memset(buf + PIF_PROG_OFF, 0, PIF_PROG_LEN);
-    CHECK(!PifParse(buf, sizeof buf, &pi), "no program name -> not a PIF");
+    CHECK(!PifParse(g_QbasicPif, 0x100, &info), "shorter than the basic section -> not a PIF");
+    memcpy(buffer, g_QbasicPif, sizeof buffer); buffer[0] = 'M'; buffer[1] = 'Z';
+    CHECK(!PifParse(buffer, sizeof buffer, &info), "an MZ image -> not a PIF");
+    memcpy(buffer, g_QbasicPif, sizeof buffer); memset(buffer + PIF_PROG_OFF, 0, PIF_PROG_LEN);
+    CHECK(!PifParse(buffer, sizeof buffer, &info), "no program name -> not a PIF");
 
     /* A self-referencing extension chain must not loop. */
-    memcpy(buf, qb_pif, sizeof buf); buf[0x171 + 16] = 0x71; buf[0x171 + 17] = 0x01;
-    CHECK(PifParse(buf, sizeof buf, &pi), "a looping extension chain terminates");
+    memcpy(buffer, g_QbasicPif, sizeof buffer); buffer[0x171 + 16] = 0x71; buffer[0x171 + 17] = 0x01;
+    CHECK(PifParse(buffer, sizeof buffer, &info), "a looping extension chain terminates");
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
