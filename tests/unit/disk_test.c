@@ -63,7 +63,7 @@ static LONG DiskTestLbaOrRefused(PCDOS_DISK_GEOMETRY geometry, WORD cylinder, WO
            ? (LONG)logicalBlock : DISK_TEST_REFUSED;
 }
 
-int main(void)
+INT main(VOID)
 {
     BYTE bootSector[DOS_SECTOR_SIZE];
     DOS_DISK_GEOMETRY geometry;
