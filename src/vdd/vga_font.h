@@ -9,10 +9,16 @@
  * Zero until filled; the off-VM tests fill them with a synthetic pattern. */
 #ifndef VGA_FONT_H
 #define VGA_FONT_H
-#include <stdint.h>
+#include "../ntvdmex_types.h"
 
-extern uint8_t vga_font_8x8[256][8];
-extern uint8_t vga_font_8x14[256][14];
-extern uint8_t vga_font_8x16[256][16];
+/* The tables' shape. */
+#define VGA_FONT_CHARACTERS 256
+#define VGA_FONT8_HEIGHT    8
+#define VGA_FONT14_HEIGHT   14
+#define VGA_FONT16_HEIGHT   16
+
+extern BYTE g_VgaFont8x8[VGA_FONT_CHARACTERS][VGA_FONT8_HEIGHT];
+extern BYTE g_VgaFont8x14[VGA_FONT_CHARACTERS][VGA_FONT14_HEIGHT];
+extern BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 
 #endif

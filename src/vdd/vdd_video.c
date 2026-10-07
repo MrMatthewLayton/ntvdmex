@@ -4,16 +4,10 @@
 #include "vga_modedefs.h"
 #include "vga_font.h"
 
-/* The font tables' shape (vga_font.h). */
-#define VIDEO_FONT_CHARACTERS         256
-#define VIDEO_FONT8_HEIGHT            8
-#define VIDEO_FONT14_HEIGHT           14
-#define VIDEO_FONT16_HEIGHT           16
-
 /* #322: the one copy of each table -- filled at start-up (src/host/sysfont.h). */
-BYTE vga_font_8x8[VIDEO_FONT_CHARACTERS][VIDEO_FONT8_HEIGHT];
-BYTE vga_font_8x14[VIDEO_FONT_CHARACTERS][VIDEO_FONT14_HEIGHT];
-BYTE vga_font_8x16[VIDEO_FONT_CHARACTERS][VIDEO_FONT16_HEIGHT];
+BYTE g_VgaFont8x8[VGA_FONT_CHARACTERS][VGA_FONT8_HEIGHT];
+BYTE g_VgaFont8x14[VGA_FONT_CHARACTERS][VGA_FONT14_HEIGHT];
+BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #include "vga_defaults.h"
 #include "vbe_pm.h"
 
@@ -1230,8 +1224,8 @@ static UINT VideoPageSize(PCVIDEO_STATE state)
    parameter table (#266) both read it here, so they cannot disagree. */
 static BYTE VideoModeCellHeight(BYTE mode)
 {
-    return (BYTE)((mode <= VIDEO_MODE_TEXT_80 || mode == VIDEO_MODE_MDA || mode == VIDEO_MODE_VGA_MONO_480 || mode == VIDEO_MODE_VGA_480) ? VIDEO_FONT16_HEIGHT
-                   : (mode == VIDEO_MODE_EGA_MONO_350 || mode == VIDEO_MODE_EGA_350) ? VIDEO_FONT14_HEIGHT : VIDEO_FONT8_HEIGHT);
+    return (BYTE)((mode <= VIDEO_MODE_TEXT_80 || mode == VIDEO_MODE_MDA || mode == VIDEO_MODE_VGA_MONO_480 || mode == VIDEO_MODE_VGA_480) ? VGA_FONT16_HEIGHT
+                   : (mode == VIDEO_MODE_EGA_MONO_350 || mode == VIDEO_MODE_EGA_350) ? VGA_FONT14_HEIGHT : VGA_FONT8_HEIGHT);
 }
 
 /* ── #266: THE VECTORS THE VIDEO BIOS OWNS, KEPT IN THE IVT. INT 43h (the graphics
@@ -1252,7 +1246,7 @@ static VOID VideoSetVector(PVIDEO_STATE state, BYTE vector, WORD segment, WORD o
 /* INT 43h -> our ROM copy of the font a cell of `height` lines draws with. */
 static VOID VideoInt43Rom(PVIDEO_STATE state, BYTE height)
 {
-    state->Int43Segment = height == VIDEO_FONT8_HEIGHT ? VDD_FONT8X8_SEG : height == VIDEO_FONT14_HEIGHT ? VDD_FONT8X14_SEG : VDD_FONT8X16_SEG;
+    state->Int43Segment = height == VGA_FONT8_HEIGHT ? VDD_FONT8X8_SEG : height == VGA_FONT14_HEIGHT ? VDD_FONT8X14_SEG : VDD_FONT8X16_SEG;
     state->Int43Offset = 0;
     state->IsGraphicsFontUser = 0;
     VideoSetVector(state, VIDEO_VECTOR_GRAPHICS_FONT, state->Int43Segment, state->Int43Offset);
@@ -1260,7 +1254,7 @@ static VOID VideoInt43Rom(PVIDEO_STATE state, BYTE height)
 /* INT 1Fh -> the upper half of our 8x8 table (power-on; AH=11h AL=20h replaces it). */
 static VOID VideoInt1FRom(PVIDEO_STATE state)
 {
-    state->Int1FSegment = VDD_FONT8X8_SEG; state->Int1FOffset = VIDEO_FONT_HIGH_FIRST * VIDEO_FONT8_HEIGHT; state->IsInt1FUser = 0;
+    state->Int1FSegment = VDD_FONT8X8_SEG; state->Int1FOffset = VIDEO_FONT_HIGH_FIRST * VGA_FONT8_HEIGHT; state->IsInt1FUser = 0;
     VideoSetVector(state, VIDEO_VECTOR_FONT_HIGH, state->Int1FSegment, state->Int1FOffset);
 }
 
@@ -1366,19 +1360,19 @@ static const BYTE *VideoGraphicsFont(PCVIDEO_STATE state, BYTE character, INT *h
        drawn from where the vector points, as the BIOS draws: SeaVGABIOS's get_font_data
        takes INT 1Fh for characters 80h-FFh of an 8-line cell, INT 43h for the rest. The
        ROM case is unchanged -- our vectors point at copies of these same tables. */
-    if (state->Bus && (state->IsGraphicsFontUser || state->IsInt1FUser) && state->CellHeight >= 1 && state->CellHeight <= VIDEO_FONT16_HEIGHT) {
+    if (state->Bus && (state->IsGraphicsFontUser || state->IsInt1FUser) && state->CellHeight >= 1 && state->CellHeight <= VGA_FONT16_HEIGHT) {
         const BYTE *table = 0;
         *height = state->CellHeight;
-        if (*height == VIDEO_FONT8_HEIGHT && character >= VIDEO_FONT_HIGH_FIRST && state->IsInt1FUser)
+        if (*height == VGA_FONT8_HEIGHT && character >= VIDEO_FONT_HIGH_FIRST && state->IsInt1FUser)
             table = (const BYTE *)VddMapFlat(state->Bus, state->Int1FSegment,
-                                              (WORD)(state->Int1FOffset + (character - VIDEO_FONT_HIGH_FIRST) * VIDEO_FONT8_HEIGHT));
+                                              (WORD)(state->Int1FOffset + (character - VIDEO_FONT_HIGH_FIRST) * VGA_FONT8_HEIGHT));
         else if (state->IsGraphicsFontUser)
             table = (const BYTE *)VddMapFlat(state->Bus, state->Int43Segment,
                                               (WORD)(state->Int43Offset + (UINT)character * (UINT)*height));
         if (table) return table;
     }
-    *height = state->CellHeight == VIDEO_FONT14_HEIGHT ? VIDEO_FONT14_HEIGHT : state->CellHeight == VIDEO_FONT16_HEIGHT ? VIDEO_FONT16_HEIGHT : VIDEO_FONT8_HEIGHT;
-    return *height == VIDEO_FONT8_HEIGHT ? vga_font_8x8[character] : *height == VIDEO_FONT14_HEIGHT ? vga_font_8x14[character] : vga_font_8x16[character];
+    *height = state->CellHeight == VGA_FONT14_HEIGHT ? VGA_FONT14_HEIGHT : state->CellHeight == VGA_FONT16_HEIGHT ? VGA_FONT16_HEIGHT : VGA_FONT8_HEIGHT;
+    return *height == VGA_FONT8_HEIGHT ? g_VgaFont8x8[character] : *height == VGA_FONT14_HEIGHT ? g_VgaFont8x14[character] : g_VgaFont8x16[character];
 }
 
 /* One glyph row's worth of pixels at character cell (col,row) of page pg -- the
@@ -1442,7 +1436,7 @@ static VOID VideoGraphicsGlyph(PVIDEO_STATE state, INT page, INT column, INT row
    it draws with. No match = 0. */
 static BYTE VideoGraphicsReadChar(PVIDEO_STATE state, INT page, INT column, INT row)
 {
-    BYTE pattern[VIDEO_FONT16_HEIGHT];
+    BYTE pattern[VGA_FONT16_HEIGHT];
     INT height, glyphY, candidate;
     (VOID)VideoGraphicsFont(state, 0, &height);
     if (state->IsVesa || column < 0 || row < 0 || column >= state->Columns || row >= state->Rows) return 0;
@@ -1469,7 +1463,7 @@ static BYTE VideoGraphicsReadChar(PVIDEO_STATE state, INT page, INT column, INT 
         } else return 0;
         pattern[glyphY] = bits;
     }
-    for (candidate = 0; candidate < VIDEO_FONT_CHARACTERS; ++candidate) {
+    for (candidate = 0; candidate < VGA_FONT_CHARACTERS; ++candidate) {
         INT glyphHeight; const BYTE *glyph = VideoGraphicsFont(state, (BYTE)candidate, &glyphHeight);
         for (glyphY = 0; glyphY < height && glyph[glyphY] == pattern[glyphY]; ++glyphY) ;
         if (glyphY == height) return (BYTE)candidate;
@@ -1509,7 +1503,7 @@ static BYTE *VideoGraphicsRowAddress(PVIDEO_STATE state, INT plane, INT line, IN
 static VOID VideoGraphicsScroll(PVIDEO_STATE state, INT lines, INT top, INT left, INT bottom, INT right,
                        BYTE fill, INT isUp)
 {
-    INT cellHeight = state->CellHeight == VIDEO_FONT14_HEIGHT ? VIDEO_FONT14_HEIGHT : state->CellHeight == VIDEO_FONT16_HEIGHT ? VIDEO_FONT16_HEIGHT : VIDEO_FONT8_HEIGHT;
+    INT cellHeight = state->CellHeight == VGA_FONT14_HEIGHT ? VGA_FONT14_HEIGHT : state->CellHeight == VGA_FONT16_HEIGHT ? VGA_FONT16_HEIGHT : VGA_FONT8_HEIGHT;
     INT line, firstLine, lastLine, plane, planeCount = state->ModeKind == VIDEO_KIND_PLANAR ? VIDEO_PLANES : 1;
     if (state->IsVesa || (state->ModeKind == VIDEO_KIND_LINEAR8 && !state->IsChain4)) return;   /* as VideoGraphicsGlyph */
     if (right >= state->Columns) right = state->Columns - 1;
@@ -1788,8 +1782,8 @@ static VOID VideoVbePmInstall(PVIDEO_STATE state)
     if (!state || !state->Bus) return;
     block = (BYTE *)VddMapFlat(state->Bus, VDD_VBEPM_SEG, 0);
     if (!block) return;
-    for (index = 0; index < VBE_PM_LEN; ++index) block[index] = vbe_pm_block[index];
-    for (index = 0; index < VBE_RM_LEN; ++index) block[VDD_VBERM_OFF + index] = vbe_rm_winfunc[index];   /* #273 */
+    for (index = 0; index < VBE_PM_LEN; ++index) block[index] = g_VbePmBlock[index];
+    for (index = 0; index < VBE_RM_LEN; ++index) block[VDD_VBERM_OFF + index] = g_VbeRmWindowFunction[index];   /* #273 */
 }
 /* both fit their 256 bytes without overlapping (a compile error otherwise) */
 typedef char VIDEO_VBE_RM_FITS[(VBE_PM_LEN <= VDD_VBERM_OFF && VDD_VBERM_OFF + VBE_RM_LEN <= VIDEO_VBE_SEGMENT_BYTES) ? 1 : -1];
@@ -2099,7 +2093,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             /* char cell: the BIOS font the mode's line count implies -- 8x8 at 200
                lines, 8x14 at 350, 8x16 otherwise. The ET4000/W32p ROM says YCharSize=8
                for 320x200 (p_vesa vs pcem-vesa, s74b); we said 16 for everything. */
-            buffer[VIDEO_MODE_INFO_X_CHARACTER] = VIDEO_GLYPH_WIDTH; buffer[VIDEO_MODE_INFO_Y_CHARACTER] = (BYTE)(height <= VIDEO_LINES_200 ? VIDEO_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VIDEO_FONT14_HEIGHT : VIDEO_FONT16_HEIGHT);
+            buffer[VIDEO_MODE_INFO_X_CHARACTER] = VIDEO_GLYPH_WIDTH; buffer[VIDEO_MODE_INFO_Y_CHARACTER] = (BYTE)(height <= VIDEO_LINES_200 ? VGA_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VGA_FONT14_HEIGHT : VGA_FONT16_HEIGHT);
             buffer[VIDEO_MODE_INFO_PLANES] = 1; buffer[VIDEO_MODE_INFO_BITS_PER_PIXEL] = modeBitsPerPixel;              /* planes / bits per pixel       */
             /* ⚠ MEMORY MODEL IS NOT A CONSTANT. It was 4 ("packed pixel", i.e. a
                  palette index) for every mode, which is a lie for direct colour --
@@ -2296,7 +2290,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             if (!state->IsChain4) { state->IsChain4 = 1; state->Chain4Selects++;
                                if (state->YMapSelect) state->YMapSelect(state->YMapContext, -1); }
             state->GraphicsWidth = width; state->GraphicsHeight = height;
-            state->CellHeight = (BYTE)(height <= VIDEO_LINES_200 ? VIDEO_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VIDEO_FONT14_HEIGHT : VIDEO_FONT16_HEIGHT);
+            state->CellHeight = (BYTE)(height <= VIDEO_LINES_200 ? VGA_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VGA_FONT14_HEIGHT : VGA_FONT16_HEIGHT);
             state->Columns   = (BYTE)(width / VIDEO_GLYPH_WIDTH);
             state->Rows   = (BYTE)(height / state->CellHeight);
             state->CursorRow = state->CursorColumn = 0; state->Page = 0;
@@ -2731,7 +2725,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                  them -- 8x8, 8x14, 8x16. It answered "supported" and every text mode
                  came up at 400 regardless. */
             if (state->ModeKind == VIDEO_KIND_TEXT && state->Mode <= VIDEO_MODE_TEXT_80 && state->ScanSelect < VIDEO_SCAN_SELECT_400) {
-                state->CellHeight = (BYTE)(state->ScanSelect == VIDEO_SCAN_SELECT_200 ? VIDEO_FONT8_HEIGHT : VIDEO_FONT14_HEIGHT);
+                state->CellHeight = (BYTE)(state->ScanSelect == VIDEO_SCAN_SELECT_200 ? VGA_FONT8_HEIGHT : VGA_FONT14_HEIGHT);
                 state->GraphicsHeight = (WORD)(state->Rows * state->CellHeight);
             }
             /* ── #266: INT 43h FOLLOWS THE MODE. A VGA BIOS points the graphics-font
@@ -3116,17 +3110,17 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                4 = 8x8 upper (chars 128-255), 5 = 9x14 alt, 6 = 8x16, 7 = 9x16 alt. We hold
                two real tables and answer every code from the nearer of the two. */
             BYTE bh = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_LOW_BYTE_MASK);
-            WORD segment = VDD_FONT8X16_SEG, offset = 0, bytesPerCharacter = VIDEO_FONT16_HEIGHT;
+            WORD segment = VDD_FONT8X16_SEG, offset = 0, bytesPerCharacter = VGA_FONT16_HEIGHT;
             switch (bh) {
-            case VIDEO_FONT_INFO_ROM_8X8: segment = VDD_FONT8X8_SEG;  offset = 0;       bytesPerCharacter = VIDEO_FONT8_HEIGHT;  break;
+            case VIDEO_FONT_INFO_ROM_8X8: segment = VDD_FONT8X8_SEG;  offset = 0;       bytesPerCharacter = VGA_FONT8_HEIGHT;  break;
             case VIDEO_FONT_INFO_INT1F:                                        /* INT 1Fh: 8x8 upper half */
                 /* #266: what INT 1Fh holds -- ours (8x8 upper half) unless AL=20h
                    installed the caller's. */
-                if (state->IsInt1FUser) { segment = state->Int1FSegment; offset = state->Int1FOffset; bytesPerCharacter = VIDEO_FONT8_HEIGHT; break; }
+                if (state->IsInt1FUser) { segment = state->Int1FSegment; offset = state->Int1FOffset; bytesPerCharacter = VGA_FONT8_HEIGHT; break; }
                 /* fall through */
-            case VIDEO_FONT_INFO_ROM_8X8_HIGH: segment = VDD_FONT8X8_SEG;  offset = VIDEO_FONT_HIGH_FIRST * VIDEO_FONT8_HEIGHT; bytesPerCharacter = VIDEO_FONT8_HEIGHT;  break;
+            case VIDEO_FONT_INFO_ROM_8X8_HIGH: segment = VDD_FONT8X8_SEG;  offset = VIDEO_FONT_HIGH_FIRST * VGA_FONT8_HEIGHT; bytesPerCharacter = VGA_FONT8_HEIGHT;  break;
             case VIDEO_FONT_INFO_ROM_8X14:                                        /* ROM 8x14 / 9x14 alt     */
-            case VIDEO_FONT_INFO_ROM_9X14: segment = VDD_FONT8X14_SEG; offset = 0;       bytesPerCharacter = VIDEO_FONT14_HEIGHT; break;
+            case VIDEO_FONT_INFO_ROM_9X14: segment = VDD_FONT8X14_SEG; offset = 0;       bytesPerCharacter = VGA_FONT14_HEIGHT; break;
             case VIDEO_FONT_INFO_INT43:                                        /* INT 43h: the CURRENT font */
                 /* Whatever the active mode actually draws with -- 8x8 in the 200-line
                    graphics modes, 8x16 in text. We used to answer this (and 8x14) with the
@@ -3136,11 +3130,11 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 /* #266: and a caller's graphics font (AL=21h) IS the current font --
                    INT 43h points at it, so this answers with it. */
                 if (state->IsGraphicsFontUser) { segment = state->Int43Segment; offset = state->Int43Offset; bytesPerCharacter = state->CellHeight; }
-                else if (state->CellHeight == VIDEO_FONT8_HEIGHT)  { segment = VDD_FONT8X8_SEG;  offset = 0; bytesPerCharacter = VIDEO_FONT8_HEIGHT;  }
-                else if (state->CellHeight == VIDEO_FONT14_HEIGHT) { segment = VDD_FONT8X14_SEG; offset = 0; bytesPerCharacter = VIDEO_FONT14_HEIGHT; }
-                else                       { segment = VDD_FONT8X16_SEG; offset = 0; bytesPerCharacter = VIDEO_FONT16_HEIGHT; }
+                else if (state->CellHeight == VGA_FONT8_HEIGHT)  { segment = VDD_FONT8X8_SEG;  offset = 0; bytesPerCharacter = VGA_FONT8_HEIGHT;  }
+                else if (state->CellHeight == VGA_FONT14_HEIGHT) { segment = VDD_FONT8X14_SEG; offset = 0; bytesPerCharacter = VGA_FONT14_HEIGHT; }
+                else                       { segment = VDD_FONT8X16_SEG; offset = 0; bytesPerCharacter = VGA_FONT16_HEIGHT; }
                 break;
-            default:   segment = VDD_FONT8X16_SEG; offset = 0;       bytesPerCharacter = VIDEO_FONT16_HEIGHT; break;
+            default:   segment = VDD_FONT8X16_SEG; offset = 0;       bytesPerCharacter = VGA_FONT16_HEIGHT; break;
             }
             registers->Es = segment; registers->Ebp = offset;
             /* ── ★ CX IS THE ON-SCREEN FONT'S HEIGHT, NOT THE REQUESTED TABLE'S. ──
@@ -3197,11 +3191,11 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                                                       the caller does NOT supply
                                                       still draw as themselves */
                         UINT candidate;
-                        for (candidate = 0; candidate < VIDEO_FONT_CHARACTERS; ++candidate)
+                        for (candidate = 0; candidate < VGA_FONT_CHARACTERS; ++candidate)
                             for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
-                                state->UserFont[candidate * VIDEO_CELL_HEIGHT + line] = vga_font_8x16[candidate][line];
+                                state->UserFont[candidate * VIDEO_CELL_HEIGHT + line] = g_VgaFont8x16[candidate][line];
                     }
-                    for (index = 0; index < characterCount && (first + index) < VIDEO_FONT_CHARACTERS; ++index) {
+                    for (index = 0; index < characterCount && (first + index) < VGA_FONT_CHARACTERS; ++index) {
                         UINT character2 = first + index;
                         for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
                             state->UserFont[character2 * VIDEO_CELL_HEIGHT + line] =
@@ -3225,7 +3219,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                      1111h is 8x14 (28 rows) and 1114h 8x16 (25). The 0x variants only
                      change the glyphs, which is what the BIOS documents and what a
                      caller that follows 1102h with its own CRTC programming expects. */
-                BYTE height = (BYTE)(((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X8) ? VIDEO_FONT8_HEIGHT : ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X14) ? VIDEO_FONT14_HEIGHT : VIDEO_FONT16_HEIGHT);
+                BYTE height = (BYTE)(((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X8) ? VGA_FONT8_HEIGHT : ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X14) ? VGA_FONT14_HEIGHT : VGA_FONT16_HEIGHT);
                 state->IsUserFontOn = 0;              /* back to the ROM tables */
                 if ((al & VIDEO_FONT_RECALCULATE) && state->ModeKind == VIDEO_KIND_TEXT) {
                     state->CellHeight = height;
@@ -3261,14 +3255,14 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 state->Int1FSegment = registers->Es; state->Int1FOffset = (WORD)(registers->Ebp & VIDEO_WORD_MASK); state->IsInt1FUser = 1;
                 VideoSetVector(state, VIDEO_VECTOR_FONT_HIGH, state->Int1FSegment, state->Int1FOffset);
             } else {
-                BYTE height = al == VIDEO_FONT_GRAPHICS_USER ? (BYTE)(VddGetCx(registers) & VIDEO_LOW_BYTE_MASK) : al == VIDEO_FONT_GRAPHICS_8X14 ? VIDEO_FONT14_HEIGHT : al == VIDEO_FONT_GRAPHICS_8X8 ? VIDEO_FONT8_HEIGHT : VIDEO_FONT16_HEIGHT;
+                BYTE height = al == VIDEO_FONT_GRAPHICS_USER ? (BYTE)(VddGetCx(registers) & VIDEO_LOW_BYTE_MASK) : al == VIDEO_FONT_GRAPHICS_8X14 ? VGA_FONT14_HEIGHT : al == VIDEO_FONT_GRAPHICS_8X8 ? VGA_FONT8_HEIGHT : VGA_FONT16_HEIGHT;
                 BYTE rows = VddGraphicsFontRows((BYTE)(VddGetBx(registers) & VIDEO_LOW_BYTE_MASK), (BYTE)(VddGetDx(registers) & VIDEO_LOW_BYTE_MASK));
                 if (al == VIDEO_FONT_GRAPHICS_USER) {
                     state->Int43Segment = registers->Es; state->Int43Offset = (WORD)(registers->Ebp & VIDEO_WORD_MASK); state->IsGraphicsFontUser = 1;
                     VideoSetVector(state, VIDEO_VECTOR_GRAPHICS_FONT, state->Int43Segment, state->Int43Offset);
                 } else VideoInt43Rom(state, height);
                 if (state->ModeKind != VIDEO_KIND_TEXT && !state->IsVesa) {
-                    if (height >= 1 && height <= VIDEO_FONT16_HEIGHT && rows) { state->CellHeight = height; state->Rows = rows; }
+                    if (height >= 1 && height <= VGA_FONT16_HEIGHT && rows) { state->CellHeight = height; state->Rows = rows; }
                     else VIDEO_UNIMPLEMENTED_SET(state->UnimplementedFunctions, VIDEO_FUNCTION_FONT);
                 }
             }
@@ -3337,7 +3331,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         buffer[VIDEO_STATE_INFO_MODE] = (BYTE)state->Mode;                      /* current mode            */
         VideoWrite16(buffer + VIDEO_STATE_INFO_COLUMNS, state->Columns);                         /* columns on screen       */
         buffer[VIDEO_STATE_INFO_ROWS] = (BYTE)(state->Rows ? state->Rows : VIDEO_TEXT_DEFAULT_ROWS); /* character rows          */
-        VideoWrite16(buffer + VIDEO_STATE_INFO_CHARACTER_HEIGHT, state->CellHeight ? state->CellHeight : VIDEO_FONT16_HEIGHT);  /* bytes per character     */
+        VideoWrite16(buffer + VIDEO_STATE_INFO_CHARACTER_HEIGHT, state->CellHeight ? state->CellHeight : VGA_FONT16_HEIGHT);  /* bytes per character     */
         buffer[VIDEO_STATE_INFO_ACTIVE_DCC] = VIDEO_DCC_VGA_COLOUR;                                /* active DCC = VGA colour */
         VideoWrite16(buffer + VIDEO_STATE_INFO_COLOURS, NTVDD_PALETTE_ENTRIES);                           /* number of colours       */
         buffer[VIDEO_STATE_INFO_PAGES] = VIDEO_PAGES;                                   /* number of pages         */
@@ -4724,10 +4718,10 @@ INT VddVideoRefreshFonts(PVIDEO_STATE state)
     font8  = (BYTE *)VddMapFlat(state->Bus, VDD_FONT8X8_SEG, 0);
     font14 = (BYTE *)VddMapFlat(state->Bus, VDD_FONT8X14_SEG, 0);
     if (!font16 || !font8 || !font14) return 0;
-    for (character = 0; character < VIDEO_FONT_CHARACTERS; ++character) {
-        for (line = 0; line < VIDEO_FONT16_HEIGHT; ++line) font16[character * VIDEO_FONT16_HEIGHT + line] = vga_font_8x16[character][line];
-        for (line = 0; line < VIDEO_FONT8_HEIGHT;  ++line) font8 [character * VIDEO_FONT8_HEIGHT  + line] = vga_font_8x8 [character][line];
-        for (line = 0; line < VIDEO_FONT14_HEIGHT; ++line) font14[character * VIDEO_FONT14_HEIGHT + line] = vga_font_8x14[character][line];
+    for (character = 0; character < VGA_FONT_CHARACTERS; ++character) {
+        for (line = 0; line < VGA_FONT16_HEIGHT; ++line) font16[character * VGA_FONT16_HEIGHT + line] = g_VgaFont8x16[character][line];
+        for (line = 0; line < VGA_FONT8_HEIGHT;  ++line) font8 [character * VGA_FONT8_HEIGHT  + line] = g_VgaFont8x8 [character][line];
+        for (line = 0; line < VGA_FONT14_HEIGHT; ++line) font14[character * VGA_FONT14_HEIGHT + line] = g_VgaFont8x14[character][line];
     }
     state->IsDirty = 1;
     return 1;
@@ -4795,9 +4789,9 @@ static VOID VideoWrite(PVOID context, UINT32 offset, BYTE value)
 static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
 {
     if (state->IsUserFontOn)  return &state->UserFont[character * VIDEO_CELL_HEIGHT];
-    if (state->CellHeight == VIDEO_FONT8_HEIGHT)   return vga_font_8x8[character];
-    if (state->CellHeight == VIDEO_FONT14_HEIGHT)  return vga_font_8x14[character];
-    return vga_font_8x16[character];
+    if (state->CellHeight == VGA_FONT8_HEIGHT)   return g_VgaFont8x8[character];
+    if (state->CellHeight == VGA_FONT14_HEIGHT)  return g_VgaFont8x14[character];
+    return g_VgaFont8x16[character];
 }
 
 /* ── ONE CELL. The attribute byte's top bit is BLINK OR BRIGHT BACKGROUND, and the

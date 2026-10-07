@@ -427,7 +427,7 @@ static const char *sysfont_build_into(const char *face, sysfont_tables_t *t, sys
    wrong in silence. */
 static int sysfont_default_degraded(const sysfont_report_t *r) { return r->degraded; }
 
-/* Build into the LIVE tables (vga_font_8x8/8x14/8x16). Staged first and copied in one
+/* Build into the LIVE tables (g_VgaFont8x8/8x14/8x16). Staged first and copied in one
    pass, so a frame drawn mid-build never mixes two fonts for long. */
 static const char *sysfont_build(const char *face, sysfont_report_t *r)
 {
@@ -435,9 +435,9 @@ static const char *sysfont_build(const char *face, sysfont_report_t *r)
     unsigned c, y;
     sysfont_build_into(face, &stage, r);
     for (c = 0; c < 256; ++c) {
-        for (y = 0; y < 8;  ++y) vga_font_8x8[c][y]  = stage.t8[c][y];
-        for (y = 0; y < 14; ++y) vga_font_8x14[c][y] = stage.t14[c][y];
-        for (y = 0; y < 16; ++y) vga_font_8x16[c][y] = stage.t16[c][y];
+        for (y = 0; y < 8;  ++y) g_VgaFont8x8[c][y]  = stage.t8[c][y];
+        for (y = 0; y < 14; ++y) g_VgaFont8x14[c][y] = stage.t14[c][y];
+        for (y = 0; y < 16; ++y) g_VgaFont8x16[c][y] = stage.t16[c][y];
     }
     return r->line;
 }

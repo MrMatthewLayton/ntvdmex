@@ -25,9 +25,9 @@ static void fill_test_fonts(void)
            font allows */
 #define TEST_ROW(y, k) (uint8_t)(0x20 | (((y) == 0 ? (c & 0x0F) : (y) == 1 ? (c >> 4) \
                                          : ((c * (k) + (y) * 11) >> 1)) & 0x0F) << 1)
-        for (y = 0; y < 16; ++y) vga_font_8x16[c][y] = blank ? 0 : TEST_ROW(y, 37);
-        for (y = 0; y < 14; ++y) vga_font_8x14[c][y] = blank ? 0 : TEST_ROW(y, 29);
-        for (y = 0; y < 8;  ++y) vga_font_8x8 [c][y] = blank ? 0 : TEST_ROW(y, 23);
+        for (y = 0; y < 16; ++y) g_VgaFont8x16[c][y] = blank ? 0 : TEST_ROW(y, 37);
+        for (y = 0; y < 14; ++y) g_VgaFont8x14[c][y] = blank ? 0 : TEST_ROW(y, 29);
+        for (y = 0; y < 8;  ++y) g_VgaFont8x8 [c][y] = blank ? 0 : TEST_ROW(y, 23);
 #undef TEST_ROW
     }
 }
@@ -134,7 +134,7 @@ int main(void)
     memset(&r,0,sizeof r); VddSetAh(&r,0x09); VddSetAl(&r,'A'); VddSetBx(&r,0x0F); VddSetCx(&r,1); VddBusDeliverInterrupt(&bus,0x10,&r);
     memset(&r,0,sizeof r); VddSetAh(&r,0x02); VddSetDx(&r,(uint16_t)((24<<8)|79)); VddBusDeliverInterrupt(&bus,0x10,&r);
     VddVideoRender(&vid);
-    { int gy,gx,mism=0; const uint8_t *gl=vga_font_8x16['A'];
+    { int gy,gx,mism=0; const uint8_t *gl=g_VgaFont8x16['A'];
       for(gy=0;gy<VIDEO_CELL_HEIGHT;++gy)for(gx=0;gx<VIDEO_CELL_WIDTH;++gx){
           uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if(vid.FrameBuffer[gy*TXW+gx]!=e)mism++; }
       CHECK(mism==0, "render: text cell matches font glyph 'A'");
@@ -183,7 +183,7 @@ int main(void)
       VddBusDeliverInterrupt(&bus,0x10,&r);
       VddVideoRender(&vid);
       CHECK(cchar(0,1)=='B', "int10/09: 'B' landed at row 0 col 1");
-      { int mism2=0; const uint8_t *gl2=vga_font_8x16['B'];
+      { int mism2=0; const uint8_t *gl2=g_VgaFont8x16['B'];
         for(gy=0;gy<VIDEO_CELL_HEIGHT;++gy)for(gx=0;gx<VIDEO_CELL_WIDTH;++gx){
             uint8_t e=(gl2[gy]&(0x80>>gx))?15:0;
             if(vid.FrameBuffer[gy*TXW + 9 + gx]!=e) mism2++; }
@@ -195,7 +195,7 @@ int main(void)
       VddBusDeliverInterrupt(&bus,0x10,&r);
       CHECK(vid.IsUserFontOn == 0, "int10/11/02: a ROM-font select clears the override");
       VddVideoRender(&vid);
-      { int mism3=0; const uint8_t *gl3=vga_font_8x16['A'];
+      { int mism3=0; const uint8_t *gl3=g_VgaFont8x16['A'];
         for(gy=0;gy<VIDEO_CELL_HEIGHT;++gy)for(gx=0;gx<VIDEO_CELL_WIDTH;++gx){
             uint8_t e=(gl3[gy]&(0x80>>gx))?15:0;
             if(vid.FrameBuffer[gy*TXW+gx]!=e) mism3++; }
@@ -1611,7 +1611,7 @@ int main(void)
         txt(0,0)[0]='A'; txt(0,0)[1]=0x87;                /* blinking grey on black */
         vid.TimeUs = fake_clock;
         g_fake_us = 100000; VddVideoRender(&vid);
-        { const uint8_t *gl = vga_font_8x16['A']; int lit = 0;
+        { const uint8_t *gl = g_VgaFont8x16['A']; int lit = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx)
               if ((gl[gy]&(0x80>>gx)) && vid.FrameBuffer[gy*TXW+gx]==7) lit++;
           CHECK(lit > 0, "blink: in the on phase the glyph is drawn"); }
@@ -1629,7 +1629,7 @@ int main(void)
         CHECK(vid.Frame.Width==720 && vid.Frame.Height==400, "frame(50-line): still 720x400");
         txt(49,0)[0]='A'; txt(49,0)[1]=0x0F;
         VddVideoRender(&vid);
-        { const uint8_t *gl = vga_font_8x8['A']; int mism = 0;
+        { const uint8_t *gl = g_VgaFont8x8['A']; int mism = 0;
           for (gy=0;gy<8;++gy) for (gx=0;gx<8;++gx) {
               uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.FrameBuffer[(392+gy)*TXW+gx]!=e) mism++; }
           CHECK(mism==0, "render(50-line): row 49 is an 8x8 ROM glyph at scan line 392"); }
@@ -1663,7 +1663,7 @@ int main(void)
         txt(2,3)[0]='X'; txt(2,3)[1]=0x1F;                /* white on blue          */
         VddVideoRender(&vid);
         VddVideoTextCursor(&vid, 3, 2, 0x77FF, 0x7700); /* the driver's defaults  */
-        { const uint8_t *gl = vga_font_8x16['X']; int mism = 0;
+        { const uint8_t *gl = g_VgaFont8x16['X']; int mism = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
               uint8_t e=(gl[gy]&(0x80>>gx))?0:6; if (vid.FrameBuffer[(2*16+gy)*TXW+3*9+gx]!=e) mism++; }
           CHECK(mism==0, "int33 text cursor: cell (3,2) redrawn with (1F & 77) ^ 77 = 60h: black on brown"); }
@@ -1680,7 +1680,7 @@ int main(void)
         memset(&r,0,sizeof r); VddSetAh(&r,0x02); VddSetDx(&r,(uint16_t)((24<<8)|39)); VddBusDeliverInterrupt(&bus,0x10,&r);
         txt(1,0)[0]='A'; txt(1,0)[1]=0x0F;
         VddVideoRender(&vid);
-        { const uint8_t *gl = vga_font_8x16['A']; int mism = 0;
+        { const uint8_t *gl = g_VgaFont8x16['A']; int mism = 0;
           for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
               uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.FrameBuffer[(16+gy)*360+gx]!=e) mism++; }
           CHECK(mism==0, "render(40-col): row 1 is at stride 360 -- 40 nine-dot cells (#324)"); }
@@ -1826,7 +1826,7 @@ int main(void)
         I10(0x0941, 0x000E, 1, 0);
         for (ok = 1, y = 0; y < 8; ++y) { int x;
             for (x = 0; x < 8; ++x)
-                if (g_vmem[y * 320 + x] != ((vga_font_8x8['A'][y] & (0x80 >> x)) ? 0x0E : 0x00)) ok = 0; }
+                if (g_vmem[y * 320 + x] != ((g_VgaFont8x8['A'][y] & (0x80 >> x)) ? 0x0E : 0x00)) ok = 0; }
         CHECK(ok, "#252 13h: AH=09h draws the 8x8 glyph at A000:0, background 00h (was (char,attr) at B800:0)");
         CHECK(g_vmem[VIDEO_TEXT_OFFSET] != 'A' || g_vmem[VIDEO_TEXT_OFFSET + 1] != 0x0E,
               "#252 13h: ...and nothing is written to B800:0 as a text cell");
@@ -1834,7 +1834,7 @@ int main(void)
         CHECK(g_vmem[2] == 0x8E && g_vmem[0] == 0x00, "#252 13h: BL=8Eh is the colour 8Eh (no XOR in 256 colours -- PCem)");
         I10(0x0200, 0, 0, 0x0001);
         I10(0x0E42, 0x000C, 0, 0);
-        CHECK(g_vmem[8 + 0] == ((vga_font_8x8['B'][0] & 0x80) ? 0x0C : 0) && vid.CursorColumn == 2,
+        CHECK(g_vmem[8 + 0] == ((g_VgaFont8x8['B'][0] & 0x80) ? 0x0C : 0) && vid.CursorColumn == 2,
               "#252 13h: AH=0Eh draws 'B' at column 1 in BL and advances the cursor to 2");
         I10(0x0200, 0, 0, 0x0001);
         I10(0x0800, 0, 0, 0);
@@ -1844,7 +1844,7 @@ int main(void)
         I10(0x0200, 0, 0, 0x0100);
         I10(0x0958, 0x000F, 1, 0);
         I10(0x0601, 0x0700, 0, 0x0127);
-        CHECK(g_vmem[1] == ((vga_font_8x8['X'][0] & 0x40) ? 0x0F : 0) && g_vmem[8 * 320] == 0x07
+        CHECK(g_vmem[1] == ((g_VgaFont8x8['X'][0] & 0x40) ? 0x0F : 0) && g_vmem[8 * 320] == 0x07
               && g_vmem[8 * 320 + 319] == 0x07,
               "#252 13h: AH=06h scrolls pixels by a character row and fills with BH");
         /* mode 04h: two bits a pixel across the interleaved banks */
@@ -1853,7 +1853,7 @@ int main(void)
         for (ok = 1, y = 0; y < 8; ++y) {
             uint32_t off = VIDEO_TEXT_OFFSET + ((y & 1) ? 0x2000u : 0u) + (uint32_t)(y >> 1) * 80u;
             uint16_t w = 0; int k;
-            for (k = 0; k < 8; ++k) if (vga_font_8x8['A'][y] & (0x80 >> k)) w |= (uint16_t)(3u << (14 - 2 * k));
+            for (k = 0; k < 8; ++k) if (g_VgaFont8x8['A'][y] & (0x80 >> k)) w |= (uint16_t)(3u << (14 - 2 * k));
             if (g_vmem[off] != (uint8_t)(w >> 8) || g_vmem[off + 1] != (uint8_t)w) ok = 0;
         }
         CHECK(ok, "#252 04h: AH=09h draws 'A' two bits a pixel, even lines at B800:0, odd at B800:2000");
@@ -1869,8 +1869,8 @@ int main(void)
         I10(0x0941, 0x001E, 1, 0);
         for (ok = 1, y = 0; y < 8; ++y) {
             if (vid.Planes[0][y * 40 + 1] != 0) ok = 0;
-            if (vid.Planes[1][y * 40 + 1] != vga_font_8x8['A'][y]) ok = 0;
-            if (vid.Planes[3][y * 40 + 1] != vga_font_8x8['A'][y]) ok = 0;
+            if (vid.Planes[1][y * 40 + 1] != g_VgaFont8x8['A'][y]) ok = 0;
+            if (vid.Planes[3][y * 40 + 1] != g_VgaFont8x8['A'][y]) ok = 0;
         }
         CHECK(ok, "#252 0Dh: 'A' in colour Eh at 40 bytes a line, 8 lines; plane 0 stays 0 (BL bit 4 is not a background)");
         /* 05h: page 1 of 0Dh = CRTC start 2000h, and a write to page 1 lands there */
@@ -1883,7 +1883,7 @@ int main(void)
         I10(0x0200, 0, 0, 0x0101);
         I10(0x0941, 0x000E, 1, 0);
         for (ok = 1, y = 0; y < 14; ++y)
-            if (vid.Planes[1][(14 + y) * 80 + 1] != vga_font_8x14['A'][y]) ok = 0;
+            if (vid.Planes[1][(14 + y) * 80 + 1] != g_VgaFont8x14['A'][y]) ok = 0;
         CHECK(ok, "#252 10h: 'A' is the 8x14 glyph at row 1 (line 14), 80 bytes a line (was 8x16 at 640/8 of 480)");
         /* mode 3 pages */
         I10(0x0003, 0, 0, 0);
@@ -1904,7 +1904,7 @@ int main(void)
         VddVideoRender(&vid);
         for (ok = 1, y = 0; y < 16; ++y) { int x;
             for (x = 0; x < 8; ++x)
-                if (vid.FrameBuffer[(2 * 16 + y) * TXW + 3 * 9 + x] != ((vga_font_8x16['Q'][y] & (0x80 >> x)) ? 0x0F : 0x01)) ok = 0; }
+                if (vid.FrameBuffer[(2 * 16 + y) * TXW + 3 * 9 + x] != ((g_VgaFont8x16['Q'][y] & (0x80 >> x)) ? 0x0F : 0x01)) ok = 0; }
         CHECK(ok, "#252 03h: the renderer SHOWS page 1 (from the CRTC start) -- 'Q' in 1Fh at row 2, column 3");
         I10(0x0500, 0, 0, 0);
         /* AH=12h */
