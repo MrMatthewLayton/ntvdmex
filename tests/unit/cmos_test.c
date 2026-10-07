@@ -15,106 +15,106 @@
 #include <string.h>
 #include "vdd_cmos.h"
 
-static int total = 0, fails = 0;
-#define CHECK(cond, msg) do {                                  \
-        total++;                                               \
-        if (cond) { printf("  PASS  %s\n", (msg)); }           \
-        else      { printf("  FAIL  %s\n", (msg)); fails++; }  \
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition, message) do {                                  \
+        g_Total++;                                               \
+        if (condition) { printf("  PASS  %s\n", (message)); }           \
+        else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
 
 /* A fixed instant, so every expectation is exact: 2026-09-23, 14:07:42. */
-static void fake_rtc(void *ctx, PIT_RTC_READING *out)
+static VOID CmosTestFakeRtc(PVOID context, PPIT_RTC_READING output)
 {
-    (void)ctx;
-    out->Century = 20; out->Year = 26; out->Month = 9; out->Day = 23;
-    out->Hour = 14; out->Minute = 7;   out->Second = 42; out->DayOfWeek = 4;   /* 2026-09-23 was a Wednesday */
+    (VOID)context;
+    output->Century = 20; output->Year = 26; output->Month = 9; output->Day = 23;
+    output->Hour = 14; output->Minute = 7;   output->Second = 42; output->DayOfWeek = 4;   /* 2026-09-23 was a Wednesday */
 }
 
 /* GH #261: the host's side of a clock write, recorded rather than applied. */
-static PIT_RTC_READING g_set[4];
-static int g_set_what[4], g_nset;
-static int fake_set(void *ctx, const PIT_RTC_READING *in, int what)
+static PIT_RTC_READING g_SetReadings[4];
+static INT g_SetFields[4], g_SetCount;
+static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
 {
-    (void)ctx;
-    if (g_nset < 4) { g_set[g_nset] = *in; g_set_what[g_nset] = what; }
-    g_nset++;
+    (VOID)context;
+    if (g_SetCount < 4) { g_SetReadings[g_SetCount] = *input; g_SetFields[g_SetCount] = fields; }
+    g_SetCount++;
     return 1;
 }
 
-static uint8_t g_flat[0x1000];
-static int g_irq8;
-static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 8) g_irq8++; }
+static BYTE g_GuestMemory[0x1000];
+static INT g_Irq8Count;
+static VOID CmosTestIrqSink(PVOID context, BYTE irq) { (VOID)context; if (irq == 8) g_Irq8Count++; }
 
-static uint8_t rd(VDD_BUS *bus, uint8_t reg)
+static BYTE CmosTestRead(PVDD_BUS bus, BYTE registerIndex)
 {
-    uint32_t v = reg; VddBusIo(bus, 0x70, 1, 0, &v);
-    v = 0;            VddBusIo(bus, 0x71, 1, 1, &v);
-    return (uint8_t)v;
+    UINT32 value = registerIndex; VddBusIo(bus, 0x70, 1, 0, &value);
+    value = 0;            VddBusIo(bus, 0x71, 1, 1, &value);
+    return (BYTE)value;
 }
-static void wr(VDD_BUS *bus, uint8_t reg, uint8_t val)
+static VOID CmosTestWrite(PVDD_BUS bus, BYTE registerIndex, BYTE byteValue)
 {
-    uint32_t v = reg; VddBusIo(bus, 0x70, 1, 0, &v);
-    v = val;          VddBusIo(bus, 0x71, 1, 0, &v);
+    UINT32 value = registerIndex; VddBusIo(bus, 0x70, 1, 0, &value);
+    value = byteValue;          VddBusIo(bus, 0x71, 1, 0, &value);
 }
 
-int main(void)
+INT main(VOID)
 {
     VDD_BUS bus;
-    static CMOS_STATE cm;
-    NTVDD_DEVICE dev;
-    uint32_t v;
+    static CMOS_STATE cmos;
+    NTVDD_DEVICE device;
+    UINT32 value;
 
-    memset(&cm, 0, sizeof cm);
-    cm.RtcNow = fake_rtc;
-    dev = VddCmosDevice(&cm);
-    VddBusInitialize(&bus, g_flat);
-    VddBusSetSinks(&bus, irq_sink, 0, 0, 0);
+    memset(&cmos, 0, sizeof cmos);
+    cmos.RtcNow = CmosTestFakeRtc;
+    device = VddCmosDevice(&cmos);
+    VddBusInitialize(&bus, g_GuestMemory);
+    VddBusSetSinks(&bus, CmosTestIrqSink, 0, 0, 0);
 
     printf("-- MC146818 RTC + CMOS --\n");
-    CHECK(VddBusAdd(&bus, &dev) == 0, "add: cmos init ok");
+    CHECK(VddBusAdd(&bus, &device) == 0, "add: cmos init ok");
 
     /* THE CLOCK, IN BCD AND 24-HOUR -- which is what Status B says a PC leaves,
        and what every program reading this chip by hand assumes. 0x14 in the
        hours register is two in the afternoon, not twenty. */
-    CHECK(rd(&bus, CMOS_SECONDS)   == 0x42, "clock: seconds are BCD");
-    CHECK(rd(&bus, CMOS_MINUTES)   == 0x07, "clock: minutes are BCD");
-    CHECK(rd(&bus, CMOS_HOURS)  == 0x14, "clock: 14:07 reads 0x14, not 0x0E");
-    CHECK(rd(&bus, CMOS_DAY_OF_MONTH)   == 0x23, "clock: day of month is BCD");
-    CHECK(rd(&bus, CMOS_MONTH) == 0x09, "clock: month is BCD");
-    CHECK(rd(&bus, CMOS_YEAR)  == 0x26, "clock: year is BCD");
-    CHECK(rd(&bus, CMOS_CENTURY) == 0x20, "clock: the century lives in CMOS 32h");
+    CHECK(CmosTestRead(&bus, CMOS_SECONDS)   == 0x42, "clock: seconds are BCD");
+    CHECK(CmosTestRead(&bus, CMOS_MINUTES)   == 0x07, "clock: minutes are BCD");
+    CHECK(CmosTestRead(&bus, CMOS_HOURS)  == 0x14, "clock: 14:07 reads 0x14, not 0x0E");
+    CHECK(CmosTestRead(&bus, CMOS_DAY_OF_MONTH)   == 0x23, "clock: day of month is BCD");
+    CHECK(CmosTestRead(&bus, CMOS_MONTH) == 0x09, "clock: month is BCD");
+    CHECK(CmosTestRead(&bus, CMOS_YEAR)  == 0x26, "clock: year is BCD");
+    CHECK(CmosTestRead(&bus, CMOS_CENTURY) == 0x20, "clock: the century lives in CMOS 32h");
     /* #182: the weekday is the host's (1 = Sunday), and the extended-memory bytes
        agree with INT 15h AH=88h's 15 MB. */
-    CHECK(rd(&bus, CMOS_DAY_OF_WEEK) == 0x04, "clock: day of week from the host (Wednesday = 4)");
-    CHECK(rd(&bus, 0x17) == 0x00 && rd(&bus, 0x18) == 0x3C, "ext mem: 17h/18h = 0x3C00 KB");
-    CHECK(rd(&bus, 0x30) == 0x00 && rd(&bus, 0x31) == 0x3C, "ext mem: 30h/31h = 0x3C00 KB");
+    CHECK(CmosTestRead(&bus, CMOS_DAY_OF_WEEK) == 0x04, "clock: day of week from the host (Wednesday = 4)");
+    CHECK(CmosTestRead(&bus, 0x17) == 0x00 && CmosTestRead(&bus, 0x18) == 0x3C, "ext mem: 17h/18h = 0x3C00 KB");
+    CHECK(CmosTestRead(&bus, 0x30) == 0x00 && CmosTestRead(&bus, 0x31) == 0x3C, "ext mem: 30h/31h = 0x3C00 KB");
 
     /* ⛔ THE BIT THE HANG WAS ABOUT. UIP must be CLEAR: with 0xFF coming back
        from an unclaimed port it was set for ever, and the canonical
        "poll until UIP clears" loop never exited. */
-    CHECK((rd(&bus, CMOS_STATUS_A) & 0x80) == 0,
+    CHECK((CmosTestRead(&bus, CMOS_STATUS_A) & 0x80) == 0,
           "status A: UIP is CLEAR -- the poll-then-read loop terminates");
 
     /* ★ MEASURED 0x02 on 6.22-under-QEMU and on PCem's real AMI BIOS. */
-    CHECK(rd(&bus, CMOS_STATUS_B) == 0x02, "status B: BCD (DM=0) and 24-hour");
-    CHECK((rd(&bus, CMOS_STATUS_D) & 0x80) != 0,
+    CHECK(CmosTestRead(&bus, CMOS_STATUS_B) == 0x02, "status B: BCD (DM=0) and 24-hour");
+    CHECK((CmosTestRead(&bus, CMOS_STATUS_D) & 0x80) != 0,
           "status D: VRT set -- the CMOS is not claimed to be garbage");
 
     /* STATUS C IS CLEARED BY BEING READ. That is how IRQ8 is acknowledged at
        the chip; a handler that does not read it gets one interrupt and silence. */
-    cm.StatusC = 0x90;                      /* IRQF + UF, as an update would set */
-    CHECK(rd(&bus, CMOS_STATUS_C) == 0x90, "status C: the latched flags read out");
-    CHECK(rd(&bus, CMOS_STATUS_C) == 0x00, "status C: ...and the READ cleared them");
+    cmos.StatusC = 0x90;                      /* IRQF + UF, as an update would set */
+    CHECK(CmosTestRead(&bus, CMOS_STATUS_C) == 0x90, "status C: the latched flags read out");
+    CHECK(CmosTestRead(&bus, CMOS_STATUS_C) == 0x00, "status C: ...and the READ cleared them");
 
     /* CMOS RAM IS RAM. Above 0x0D it takes what it is given. */
-    wr(&bus, 0x40, 0xA5);
-    CHECK(rd(&bus, 0x40) == 0xA5, "ram: a byte above 0x0D is storage");
+    CmosTestWrite(&bus, 0x40, 0xA5);
+    CHECK(CmosTestRead(&bus, 0x40) == 0xA5, "ram: a byte above 0x0D is storage");
 
     /* ...AND THE CLOCK IS NOT WRITEABLE. We cannot move the host's clock, and
        accepting the write while changing nothing is the "runs but lies" shape.
        Same reasoning as INT 1Ah AH=03h/05h, deliberately not answered. */
-    wr(&bus, CMOS_HOURS, 0x09);
-    CHECK(rd(&bus, CMOS_HOURS) == 0x14, "clock: a write to the hours register is refused");
+    CmosTestWrite(&bus, CMOS_HOURS, 0x09);
+    CHECK(CmosTestRead(&bus, CMOS_HOURS) == 0x14, "clock: a write to the hours register is refused");
 
     /* ⚠ THIS CHECK USED TO READ "status B: read-only here" AND IT WAS WRONG THE
          MOMENT THE PERIODIC INTERRUPT LANDED. Status B carries PIE, AIE, UIE,
@@ -128,47 +128,47 @@ int main(void)
          hour in binary 12-hour format and failed for a reason that had nothing
          to do with what it was testing. A test that leaves state behind
          misattributes the next failure. */
-    wr(&bus, CMOS_STATUS_B, 0x42);
-    CHECK(rd(&bus, CMOS_STATUS_B) == 0x42, "status B: PIE and the mode bits are writable");
-    wr(&bus, CMOS_STATUS_B, 0x02);                 /* ...and put it back */
-    CHECK(rd(&bus, CMOS_STATUS_B) == 0x02, "status B: back to the BIOS default");
+    CmosTestWrite(&bus, CMOS_STATUS_B, 0x42);
+    CHECK(CmosTestRead(&bus, CMOS_STATUS_B) == 0x42, "status B: PIE and the mode bits are writable");
+    CmosTestWrite(&bus, CMOS_STATUS_B, 0x02);                 /* ...and put it back */
+    CHECK(CmosTestRead(&bus, CMOS_STATUS_B) == 0x02, "status B: back to the BIOS default");
 
     /* ⛔ BIT 7 OF PORT 0x70 IS THE NMI MASK, NOT PART OF THE REGISTER NUMBER.
        Software sets it constantly -- masking NMI across a CMOS access is
        standard BIOS practice -- so a model that takes the whole byte as an index
        looks up register 0x8A and finds nothing. */
-    v = (uint32_t)(0x80 | CMOS_HOURS); VddBusIo(&bus, 0x70, 1, 0, &v);
-    v = 0;                            VddBusIo(&bus, 0x71, 1, 1, &v);
-    CHECK(v == 0x14, "index: bit 7 is the NMI mask and does not change the register");
-    CHECK(cm.IsNmiDisabled == 1 && cm.NmiMaskWrites == 1,
+    value = (UINT32)(0x80 | CMOS_HOURS); VddBusIo(&bus, 0x70, 1, 0, &value);
+    value = 0;                            VddBusIo(&bus, 0x71, 1, 1, &value);
+    CHECK(value == 0x14, "index: bit 7 is the NMI mask and does not change the register");
+    CHECK(cmos.IsNmiDisabled == 1 && cmos.NmiMaskWrites == 1,
           "index: ...and the NMI mask is recorded rather than acted on");
 
     /* Port 0x70 is WRITE-ONLY on the part; a read is undefined. Answer
        consistently rather than plausibly. */
-    v = 0; VddBusIo(&bus, 0x70, 1, 1, &v);
-    CHECK(v == 0xFF, "index: port 70h reads 0xFF -- write-only on the part");
+    value = 0; VddBusIo(&bus, 0x70, 1, 1, &value);
+    CHECK(value == 0xFF, "index: port 70h reads 0xFF -- write-only on the part");
 
     /* POST leaves a machine's CMOS populated; a guest that reads the equipment
        byte on a machine DOS is running on does not get zero.
        ⚠ Its low nibble is NOT adjudicable across hosts -- it describes the
          MACHINE (video type, coprocessor) and p_rtc measured three different
          answers on three oracles. What is pinned here is that it is populated. */
-    CHECK(rd(&bus, CMOS_EQUIPMENT) != 0x00, "post: the equipment byte is not zero");
-    CHECK(rd(&bus, 0x15) == 0x80 && rd(&bus, 0x16) == 0x02,
+    CHECK(CmosTestRead(&bus, CMOS_EQUIPMENT) != 0x00, "post: the equipment byte is not zero");
+    CHECK(CmosTestRead(&bus, 0x15) == 0x80 && CmosTestRead(&bus, 0x16) == 0x02,
           "post: base memory reads 640 KB");
     /* #136: Settings > Conventional Memory sets what is FITTED; it survives reset (it is
        how the board is populated) and the checksum over 10h-2Dh covers it. */
-    {   unsigned i, sum = 0;
-        cm.BaseKb = 512;
-        VddCmosReset(&cm);
-        CHECK(cm.BaseKb == 512 && cm.Ram[0x15] == 0x00 && cm.Ram[0x16] == 0x02,
+    {   UINT index, sum = 0;
+        cmos.BaseKb = 512;
+        VddCmosReset(&cmos);
+        CHECK(cmos.BaseKb == 512 && cmos.Ram[0x15] == 0x00 && cmos.Ram[0x16] == 0x02,
               "base_kb 512: 15h/16h = 0200h, and the field survives reset");
-        for (i = 0x10; i <= 0x2D; ++i) sum += cm.Ram[i];
-        CHECK(cm.Ram[0x2E] == (uint8_t)(sum >> 8) && cm.Ram[0x2F] == (uint8_t)sum,
+        for (index = 0x10; index <= 0x2D; ++index) sum += cmos.Ram[index];
+        CHECK(cmos.Ram[0x2E] == (BYTE)(sum >> 8) && cmos.Ram[0x2F] == (BYTE)sum,
               "base_kb 512: checksum 2Eh/2Fh still matches 10h-2Dh");
-        cm.BaseKb = 0;
-        VddCmosReset(&cm);
-        CHECK(cm.Ram[0x15] == 0x80 && cm.Ram[0x16] == 0x02, "base_kb 0: 640 KB, as before");
+        cmos.BaseKb = 0;
+        VddCmosReset(&cmos);
+        CHECK(cmos.Ram[0x15] == 0x80 && cmos.Ram[0x16] == 0x02, "base_kb 0: 640 KB, as before");
     }
 
     /* ── THE PERIODIC INTERRUPT. docs/ref/rtc.md 4. ───────────────────────────
@@ -178,54 +178,54 @@ int main(void)
          raised unless the guest sets PIE *and* a non-zero rate, and even then
          nothing reaches it until IRQ8 is unmasked on the PIC. */
     {
-        g_irq8 = 0;
-        VddCmosReset(&cm);
-        cm.RtcNow = fake_rtc;
+        g_Irq8Count = 0;
+        VddCmosReset(&cmos);
+        cmos.RtcNow = CmosTestFakeRtc;
 
         /* The rate table. 1 and 2 are special cases; from 3 up it is
            32768 >> (RS-1), so RS=6 is the 1024 Hz a PC BIOS leaves. */
-        cm.StatusA = 0x20; CHECK(VddCmosPeriodicHz(&cm) == 0, "periodic: RS=0 is no rate");
-        cm.StatusA = 0x21; CHECK(VddCmosPeriodicHz(&cm) == 256,  "periodic: RS=1 is 256 Hz");
-        cm.StatusA = 0x22; CHECK(VddCmosPeriodicHz(&cm) == 128,  "periodic: RS=2 is 128 Hz");
-        cm.StatusA = 0x23; CHECK(VddCmosPeriodicHz(&cm) == 8192, "periodic: RS=3 is 8192 Hz");
-        cm.StatusA = 0x26; CHECK(VddCmosPeriodicHz(&cm) == 1024, "periodic: RS=6 is 1024 Hz");
-        cm.StatusA = 0x2F; CHECK(VddCmosPeriodicHz(&cm) == 2,    "periodic: RS=15 is 2 Hz");
+        cmos.StatusA = 0x20; CHECK(VddCmosPeriodicHz(&cmos) == 0, "periodic: RS=0 is no rate");
+        cmos.StatusA = 0x21; CHECK(VddCmosPeriodicHz(&cmos) == 256,  "periodic: RS=1 is 256 Hz");
+        cmos.StatusA = 0x22; CHECK(VddCmosPeriodicHz(&cmos) == 128,  "periodic: RS=2 is 128 Hz");
+        cmos.StatusA = 0x23; CHECK(VddCmosPeriodicHz(&cmos) == 8192, "periodic: RS=3 is 8192 Hz");
+        cmos.StatusA = 0x26; CHECK(VddCmosPeriodicHz(&cmos) == 1024, "periodic: RS=6 is 1024 Hz");
+        cmos.StatusA = 0x2F; CHECK(VddCmosPeriodicHz(&cmos) == 2,    "periodic: RS=15 is 2 Hz");
 
         /* ⛔ DORMANT UNTIL ASKED. A second of clocks with PIE clear must raise
            nothing at all -- this is the check that says adding the device cannot
            disturb a guest that never programs it. */
-        cm.StatusA = 0x26;
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(g_irq8 == 0, "periodic: PIE clear -> not one interrupt in a whole second");
-        CHECK(cm.StatusC == 0, "periodic: ...and no flag set either");
+        cmos.StatusA = 0x26;
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(g_Irq8Count == 0, "periodic: PIE clear -> not one interrupt in a whole second");
+        CHECK(cmos.StatusC == 0, "periodic: ...and no flag set either");
 
         /* Now enable it: 1024 Hz for one second is 1024 interrupts. */
-        wr(&bus, CMOS_STATUS_B, 0x42);          /* PIE | 24-hour */
-        CHECK((rd(&bus, CMOS_STATUS_B) & 0x40) != 0, "periodic: PIE is writable");
-        g_irq8 = 0;
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(g_irq8 == 1024, "periodic: 1024 Hz for one second is 1024 interrupts");
-        CHECK(cm.PeriodicRaised == 1024, "periodic: ...and the run can say so");
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x42);          /* PIE | 24-hour */
+        CHECK((CmosTestRead(&bus, CMOS_STATUS_B) & 0x40) != 0, "periodic: PIE is writable");
+        g_Irq8Count = 0;
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(g_Irq8Count == 1024, "periodic: 1024 Hz for one second is 1024 interrupts");
+        CHECK(cmos.PeriodicRaised == 1024, "periodic: ...and the run can say so");
 
         /* The flags a handler sees, and the acknowledge that clears them. */
-        CHECK((rd(&bus, CMOS_STATUS_C) & 0xC0) == 0xC0, "periodic: PF and IRQF are set");
-        CHECK(rd(&bus, CMOS_STATUS_C) == 0x00, "periodic: ...and the read cleared them");
+        CHECK((CmosTestRead(&bus, CMOS_STATUS_C) & 0xC0) == 0xC0, "periodic: PF and IRQF are set");
+        CHECK(CmosTestRead(&bus, CMOS_STATUS_C) == 0x00, "periodic: ...and the read cleared them");
 
         /* Turning PIE off drops the part-accumulated tick, so turning it back on
            starts from now instead of firing immediately off a stale remainder. */
-        wr(&bus, CMOS_STATUS_B, 0x02);
-        VddCmosAddClocks(&cm, 1000);
-        CHECK(cm.PeriodicAccumulator == 0, "periodic: disabling PIE drops the partial tick");
-        g_irq8 = 0;
-        wr(&bus, CMOS_STATUS_B, 0x42);
-        VddCmosAddClocks(&cm, 1);
-        CHECK(g_irq8 == 0, "periodic: re-enabling starts from now, not from a backlog");
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x02);
+        VddCmosAddClocks(&cmos, 1000);
+        CHECK(cmos.PeriodicAccumulator == 0, "periodic: disabling PIE drops the partial tick");
+        g_Irq8Count = 0;
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x42);
+        VddCmosAddClocks(&cmos, 1);
+        CHECK(g_Irq8Count == 0, "periodic: re-enabling starts from now, not from a backlog");
 
         /* UIP is READ-ONLY: it is the chip telling software when it may read,
            never software telling the chip anything. */
-        wr(&bus, CMOS_STATUS_A, 0xFF);
-        CHECK((rd(&bus, CMOS_STATUS_A) & 0x80) == 0, "status A: UIP cannot be written");
-        CHECK(VddCmosPeriodicHz(&cm) == 2, "status A: ...but the rate select can");
+        CmosTestWrite(&bus, CMOS_STATUS_A, 0xFF);
+        CHECK((CmosTestRead(&bus, CMOS_STATUS_A) & 0x80) == 0, "status A: UIP cannot be written");
+        CHECK(VddCmosPeriodicHz(&cmos) == 2, "status A: ...but the rate select can");
     }
 
     /* ── DATA MODE AND 12-HOUR MODE ARE HONOURED, NOT IGNORED. ───────────────
@@ -233,17 +233,17 @@ int main(void)
        model that ignores the bits hands a guest that DID set binary mode a BCD
        byte, and tells a 12-hour guest that 14:00 is 2 AM. */
     {
-        VddCmosReset(&cm);
-        cm.RtcNow = fake_rtc;                   /* 14:07:42 */
-        wr(&bus, CMOS_STATUS_B, 0x06);           /* DM=1 (binary), 24-hour */
-        CHECK(rd(&bus, CMOS_SECONDS) == 42, "data mode: binary seconds are 42, not 0x42");
-        CHECK(rd(&bus, CMOS_HOURS) == 14, "data mode: binary hours are 14");
+        VddCmosReset(&cmos);
+        cmos.RtcNow = CmosTestFakeRtc;                   /* 14:07:42 */
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x06);           /* DM=1 (binary), 24-hour */
+        CHECK(CmosTestRead(&bus, CMOS_SECONDS) == 42, "data mode: binary seconds are 42, not 0x42");
+        CHECK(CmosTestRead(&bus, CMOS_HOURS) == 14, "data mode: binary hours are 14");
 
-        wr(&bus, CMOS_STATUS_B, 0x00);           /* BCD, 12-hour */
-        CHECK(rd(&bus, CMOS_HOURS) == 0x82,
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x00);           /* BCD, 12-hour */
+        CHECK(CmosTestRead(&bus, CMOS_HOURS) == 0x82,
               "12-hour: 14:00 is 2 PM -- 0x02 with bit 7 set, not 0x02 alone");
-        cm.StatusB = 0x00;
-        CHECK(rd(&bus, CMOS_MINUTES) == 0x07, "12-hour: the other fields are unaffected");
+        cmos.StatusB = 0x00;
+        CHECK(CmosTestRead(&bus, CMOS_MINUTES) == 0x07, "12-hour: the other fields are unaffected");
     }
 
     /* ── THE ALARM AND UPDATE-ENDED INTERRUPTS. docs/ref/rtc.md 4. ────────────
@@ -255,55 +255,55 @@ int main(void)
          not to a comparison value the guest owns. Exactly the same shape as
          refusing Status B and making the periodic interrupt unreachable. */
     {
-        VddCmosReset(&cm);
-        cm.RtcNow = fake_rtc;                     /* 14:07:42 */
-        g_irq8 = 0;
+        VddCmosReset(&cmos);
+        cmos.RtcNow = CmosTestFakeRtc;                     /* 14:07:42 */
+        g_Irq8Count = 0;
 
-        wr(&bus, 0x01, 0x42);
-        CHECK(rd(&bus, 0x01) == 0x42, "alarm: the seconds alarm register is writable");
-        wr(&bus, 0x03, 0x07);
-        wr(&bus, 0x05, 0x14);
-        CHECK(rd(&bus, 0x05) == 0x14, "alarm: ...and the hours alarm too");
+        CmosTestWrite(&bus, 0x01, 0x42);
+        CHECK(CmosTestRead(&bus, 0x01) == 0x42, "alarm: the seconds alarm register is writable");
+        CmosTestWrite(&bus, 0x03, 0x07);
+        CmosTestWrite(&bus, 0x05, 0x14);
+        CHECK(CmosTestRead(&bus, 0x05) == 0x14, "alarm: ...and the hours alarm too");
 
         /* UPDATE ENDED: once a second, if UIE is set. */
-        wr(&bus, CMOS_STATUS_B, 0x12);             /* UIE | 24-hour */
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(cm.UpdateEndedRaised == 1, "update: one second is one update-ended flag");
-        CHECK(g_irq8 == 1, "update: ...and one IRQ8");
-        CHECK((rd(&bus, CMOS_STATUS_C) & 0x90) == 0x90, "update: UF and IRQF are set");
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x12);             /* UIE | 24-hour */
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(cmos.UpdateEndedRaised == 1, "update: one second is one update-ended flag");
+        CHECK(g_Irq8Count == 1, "update: ...and one IRQ8");
+        CHECK((CmosTestRead(&bus, CMOS_STATUS_C) & 0x90) == 0x90, "update: UF and IRQF are set");
 
         /* THE ALARM FIRES WHEN THE CLOCK MATCHES -- 14:07:42, which is what the
            three registers above were set to. */
-        VddCmosReset(&cm); cm.RtcNow = fake_rtc; g_irq8 = 0;
-        wr(&bus, 0x01, 0x42); wr(&bus, 0x03, 0x07); wr(&bus, 0x05, 0x14);
-        wr(&bus, CMOS_STATUS_B, 0x22);             /* AIE | 24-hour */
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(cm.AlarmRaised == 1, "alarm: it fires when the clock matches");
-        CHECK((rd(&bus, CMOS_STATUS_C) & 0x20) != 0, "alarm: AF is set");
+        VddCmosReset(&cmos); cmos.RtcNow = CmosTestFakeRtc; g_Irq8Count = 0;
+        CmosTestWrite(&bus, 0x01, 0x42); CmosTestWrite(&bus, 0x03, 0x07); CmosTestWrite(&bus, 0x05, 0x14);
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x22);             /* AIE | 24-hour */
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(cmos.AlarmRaised == 1, "alarm: it fires when the clock matches");
+        CHECK((CmosTestRead(&bus, CMOS_STATUS_C) & 0x20) != 0, "alarm: AF is set");
 
         /* ...and NOT when it does not. */
-        VddCmosReset(&cm); cm.RtcNow = fake_rtc; g_irq8 = 0;
-        wr(&bus, 0x01, 0x11); wr(&bus, 0x03, 0x22); wr(&bus, 0x05, 0x09);
-        wr(&bus, CMOS_STATUS_B, 0x22);
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(cm.AlarmRaised == 0, "alarm: a different time does not fire it");
-        CHECK(g_irq8 == 0, "alarm: ...and raises no interrupt");
+        VddCmosReset(&cmos); cmos.RtcNow = CmosTestFakeRtc; g_Irq8Count = 0;
+        CmosTestWrite(&bus, 0x01, 0x11); CmosTestWrite(&bus, 0x03, 0x22); CmosTestWrite(&bus, 0x05, 0x09);
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x22);
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(cmos.AlarmRaised == 0, "alarm: a different time does not fire it");
+        CHECK(g_Irq8Count == 0, "alarm: ...and raises no interrupt");
 
         /* ⚠ THE MATCH RULE IS NOT "EQUAL". An alarm byte with its top two bits
            set is a DON'T CARE -- that is how "every minute at 42 seconds" is
            programmed, and a model that only compares for equality cannot
            express it at all. */
-        VddCmosReset(&cm); cm.RtcNow = fake_rtc; g_irq8 = 0;
-        wr(&bus, 0x01, 0x42); wr(&bus, 0x03, 0xFF); wr(&bus, 0x05, 0xFF);
-        wr(&bus, CMOS_STATUS_B, 0x22);
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ);
-        CHECK(cm.AlarmRaised == 1, "alarm: don't-care fields (>= 0xC0) match anything");
+        VddCmosReset(&cmos); cmos.RtcNow = CmosTestFakeRtc; g_Irq8Count = 0;
+        CmosTestWrite(&bus, 0x01, 0x42); CmosTestWrite(&bus, 0x03, 0xFF); CmosTestWrite(&bus, 0x05, 0xFF);
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x22);
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ);
+        CHECK(cmos.AlarmRaised == 1, "alarm: don't-care fields (>= 0xC0) match anything");
 
         /* Both disabled: the second accumulator is dropped, so enabling later
            starts from now rather than firing off a stale remainder. */
-        VddCmosReset(&cm); cm.RtcNow = fake_rtc; g_irq8 = 0;
-        VddCmosAddClocks(&cm, PIT_INPUT_HZ * 3);
-        CHECK(g_irq8 == 0 && cm.SecondAccumulator == 0,
+        VddCmosReset(&cmos); cmos.RtcNow = CmosTestFakeRtc; g_Irq8Count = 0;
+        VddCmosAddClocks(&cmos, PIT_INPUT_HZ * 3);
+        CHECK(g_Irq8Count == 0 && cmos.SecondAccumulator == 0,
               "update/alarm: dormant with UIE and AIE clear");
     }
 
@@ -311,10 +311,10 @@ int main(void)
        tells anything that checks that our CMOS is corrupt -- the same wrong
        answer Status D's VRT bit used to give. */
     {
-        unsigned i, sum = 0;
-        VddCmosReset(&cm);
-        for (i = 0x10; i <= 0x2D; ++i) sum += rd(&bus, (uint8_t)i);
-        CHECK(rd(&bus, 0x2E) == ((sum >> 8) & 0xFF) && rd(&bus, 0x2F) == (sum & 0xFF),
+        UINT index, sum = 0;
+        VddCmosReset(&cmos);
+        for (index = 0x10; index <= 0x2D; ++index) sum += CmosTestRead(&bus, (BYTE)index);
+        CHECK(CmosTestRead(&bus, 0x2E) == ((sum >> 8) & 0xFF) && CmosTestRead(&bus, 0x2F) == (sum & 0xFF),
               "cmos: the checksum at 2Eh/2Fh covers 10h-2Dh");
     }
 
@@ -323,51 +323,51 @@ int main(void)
          outside SET goes to the host at once; with SET held, reads are frozen,
          writes collect, and releasing SET commits date then time in one step. */
     {
-        VddCmosReset(&cm); cm.RtcNow = fake_rtc; cm.RtcSet = fake_set; g_nset = 0;
-        wr(&bus, CMOS_HOURS, 0x09);
-        CHECK(g_nset == 1 && g_set_what[0] == 0 && g_set[0].Hour == 9
-              && g_set[0].Minute == 7 && g_set[0].Second == 42,
+        VddCmosReset(&cmos); cmos.RtcNow = CmosTestFakeRtc; cmos.RtcSet = CmosTestFakeSet; g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_HOURS, 0x09);
+        CHECK(g_SetCount == 1 && g_SetFields[0] == 0 && g_SetReadings[0].Hour == 9
+              && g_SetReadings[0].Minute == 7 && g_SetReadings[0].Second == 42,
               "clock write: hours 0x09 BCD -> host time 09:07:42, outside SET");
-        wr(&bus, CMOS_DAY_OF_WEEK, 0x02);
-        CHECK(g_nset == 1, "clock write: the day of week stays refused");
+        CmosTestWrite(&bus, CMOS_DAY_OF_WEEK, 0x02);
+        CHECK(g_SetCount == 1, "clock write: the day of week stays refused");
 
-        g_nset = 0;
-        wr(&bus, CMOS_STATUS_B, 0x92);          /* SET + UIE + 24h */
-        CHECK(rd(&bus, CMOS_STATUS_B) == 0x82, "SET: going high clears UIE (datasheet)");
-        wr(&bus, CMOS_HOURS, 0x12); wr(&bus, CMOS_MINUTES, 0x34); wr(&bus, CMOS_SECONDS, 0x56);
-        CHECK(g_nset == 0, "SET held: writes are not committed yet");
-        CHECK(rd(&bus, CMOS_HOURS) == 0x12 && rd(&bus, CMOS_MINUTES) == 0x34
-              && rd(&bus, CMOS_SECONDS) == 0x56, "SET held: reads show the frozen, written copy");
-        wr(&bus, CMOS_DAY_OF_MONTH, 0x15); wr(&bus, CMOS_MONTH, 0x06);
-        wr(&bus, CMOS_YEAR, 0x99); wr(&bus, CMOS_CENTURY, 0x19);
-        wr(&bus, CMOS_STATUS_B, 0x02);
-        CHECK(g_nset == 2 && g_set_what[0] == 1 && g_set_what[1] == 0,
+        g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x92);          /* SET + UIE + 24h */
+        CHECK(CmosTestRead(&bus, CMOS_STATUS_B) == 0x82, "SET: going high clears UIE (datasheet)");
+        CmosTestWrite(&bus, CMOS_HOURS, 0x12); CmosTestWrite(&bus, CMOS_MINUTES, 0x34); CmosTestWrite(&bus, CMOS_SECONDS, 0x56);
+        CHECK(g_SetCount == 0, "SET held: writes are not committed yet");
+        CHECK(CmosTestRead(&bus, CMOS_HOURS) == 0x12 && CmosTestRead(&bus, CMOS_MINUTES) == 0x34
+              && CmosTestRead(&bus, CMOS_SECONDS) == 0x56, "SET held: reads show the frozen, written copy");
+        CmosTestWrite(&bus, CMOS_DAY_OF_MONTH, 0x15); CmosTestWrite(&bus, CMOS_MONTH, 0x06);
+        CmosTestWrite(&bus, CMOS_YEAR, 0x99); CmosTestWrite(&bus, CMOS_CENTURY, 0x19);
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x02);
+        CHECK(g_SetCount == 2 && g_SetFields[0] == 1 && g_SetFields[1] == 0,
               "SET released: one date commit, then one time commit");
-        CHECK(g_set[0].Century == 19 && g_set[0].Year == 99 && g_set[0].Month == 6
-              && g_set[0].Day == 15 && g_set[1].Hour == 12 && g_set[1].Minute == 34
-              && g_set[1].Second == 56, "SET released: 1999-06-15 12:34:56 committed");
-        CHECK(rd(&bus, CMOS_HOURS) == 0x14, "SET released: reads follow the host clock again");
+        CHECK(g_SetReadings[0].Century == 19 && g_SetReadings[0].Year == 99 && g_SetReadings[0].Month == 6
+              && g_SetReadings[0].Day == 15 && g_SetReadings[1].Hour == 12 && g_SetReadings[1].Minute == 34
+              && g_SetReadings[1].Second == 56, "SET released: 1999-06-15 12:34:56 committed");
+        CHECK(CmosTestRead(&bus, CMOS_HOURS) == 0x14, "SET released: reads follow the host clock again");
 
-        g_nset = 0;
-        wr(&bus, CMOS_STATUS_B, 0x06);          /* binary, 24h */
-        wr(&bus, CMOS_MINUTES, 45);
-        CHECK(g_nset == 1 && g_set[0].Minute == 45, "DM binary: 45 is forty-five, not 0x45");
-        g_nset = 0;
-        wr(&bus, CMOS_STATUS_B, 0x00);          /* BCD, 12-hour */
-        wr(&bus, CMOS_HOURS, 0x83);
-        CHECK(g_nset == 1 && g_set[0].Hour == 15, "12-hour: 0x83 is 3 PM = 15:00");
-        g_nset = 0;
-        wr(&bus, CMOS_HOURS, 0x92);
-        CHECK(g_nset == 1 && g_set[0].Hour == 12, "12-hour: 0x92 is 12 PM = noon");
-        g_nset = 0;
-        wr(&bus, CMOS_HOURS, 0x12);
-        CHECK(g_nset == 1 && g_set[0].Hour == 0, "12-hour: 0x12 is 12 AM = midnight");
-        VddCmosReset(&cm);
-        CHECK(cm.RtcSet == fake_set && cm.RtcNow == fake_rtc,
+        g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x06);          /* binary, 24h */
+        CmosTestWrite(&bus, CMOS_MINUTES, 45);
+        CHECK(g_SetCount == 1 && g_SetReadings[0].Minute == 45, "DM binary: 45 is forty-five, not 0x45");
+        g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_STATUS_B, 0x00);          /* BCD, 12-hour */
+        CmosTestWrite(&bus, CMOS_HOURS, 0x83);
+        CHECK(g_SetCount == 1 && g_SetReadings[0].Hour == 15, "12-hour: 0x83 is 3 PM = 15:00");
+        g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_HOURS, 0x92);
+        CHECK(g_SetCount == 1 && g_SetReadings[0].Hour == 12, "12-hour: 0x92 is 12 PM = noon");
+        g_SetCount = 0;
+        CmosTestWrite(&bus, CMOS_HOURS, 0x12);
+        CHECK(g_SetCount == 1 && g_SetReadings[0].Hour == 0, "12-hour: 0x12 is 12 AM = midnight");
+        VddCmosReset(&cmos);
+        CHECK(cmos.RtcSet == CmosTestFakeSet && cmos.RtcNow == CmosTestFakeRtc,
               "reset keeps both host hooks");
-        cm.RtcSet = 0;
+        cmos.RtcSet = 0;
     }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
