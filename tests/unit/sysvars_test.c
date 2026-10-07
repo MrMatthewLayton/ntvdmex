@@ -161,7 +161,7 @@ static UINT SysVarsTestWordAt(PCBYTE bytes)
 }
 static UINT SysVarsTestWord(INT offset) { return SysVarsTestWordAt(&SYSVARS_TEST_BYTE(offset)); }
 
-int main(void)
+INT main(VOID)
 {
     BYTE buffer[SYSVARS_TEST_BUFFER_SIZE];
     printf("== INT 21h AH=52h List of Lists (dos_sysvars.h) -- decoded from 6.22\n");
