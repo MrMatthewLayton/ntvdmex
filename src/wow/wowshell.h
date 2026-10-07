@@ -225,6 +225,22 @@
 #define WOWSHELL_ERR_OUTOFMEMORY 6
 #define WOWSHELL_ERR_INVALID     7
 
+/* ShellExecute/FindExecutable: SE_ERR_FNF, and the highest value that is an error
+   rather than an instance handle (anything above 32 succeeded). */
+#define WOWSHELL_SE_ERR_FNF       2
+#define WOWSHELL_SE_ERR_LAST      32
+#define WOWSHELL_OPERATION_MAX    64
+#define WOWSHELL_ENV_BUFFER       (MAX_PATH * 2)
+#define WOWSHELL_ABOUT_APP_MAX    160
+#define WOWSHELL_ABOUT_OTHER_MAX  320
+#define WOWSHELL_SUBKEY_MAX       256
+#define WOWSHELL_VALUE_MAX        512
+#define WOWSHELL_LOG_NAME_MAX     64
+/* A Win16 HDROP: a word offset to the first name, then NUL-terminated names. */
+#define WOWSHELL_DROP_MAX_OFFSET  0x0800
+#define WOWSHELL_DROP_MAX_FILES   512
+#define WOWSHELL_DRAGQUERYFILE_COUNT 0xFFFF   /* iFile -1: how many files */
+
 /*
  * ── ★★★ WHERE THE WIN16 REGISTRATION DATABASE ACTUALLY LIVES ────────────────
  * Under `HKEY_CURRENT_USER\Software\NTVDMEX\Win16Reg`, and NOT under the real
@@ -310,8 +326,8 @@ static INT WowShellPutDword(const wow32_frame_t *frame, INT argumentOffset, DWOR
 {
     volatile BYTE *bytes = wow32_argptr(frame, argumentOffset);
     if (!bytes) return 0;
-    wow32_pokew(bytes,     (WORD)(value & 0xFFFF));
-    wow32_pokew(bytes + 2, (WORD)(value >> 16));
+    wow32_pokew(bytes,     (WORD)(value & WOW_WORD_MASK));
+    wow32_pokew(bytes + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
     return 1;
 }
 
@@ -329,7 +345,7 @@ static VOID WowShellNoteKey(PSTR note, INT noteCapacity, PINT noteLength,
 {
     wu_puts(note, noteCapacity, noteLength, name);
     wu_puts(note, noteCapacity, noteLength, " key=0x");
-    wu_puthex(note, noteCapacity, noteLength, key16, 8);
+    wu_puthex(note, noteCapacity, noteLength, key16, WOW_HEX_DWORD_DIGITS);
     if (key16 == WOWSHELL_HKCR16 || key16 == WOWSHELL_HKCR32)
         wu_puts(note, noteCapacity, noteLength, "(HKEY_CLASSES_ROOT)");
     wu_puts(note, noteCapacity, noteLength, " sub=");
@@ -407,15 +423,15 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         }
         wu_putq(note, noteCapacity, &noteLength, fileName);
         wu_puts(note, noteCapacity, &noteLength, " index ");
-        wu_puthex(note, noteCapacity, &noteLength, (DWORD)itemIndex, 4);
+        wu_puthex(note, noteCapacity, &noteLength, (DWORD)itemIndex, WOW_HEX_WORD_DIGITS);
         if (itemIndex == -1) {
             /* A COUNT QUERY. Win32 answers it the same way and it mints
                nothing -- the value is a number of icons, not a handle. */
             UINT count = (UINT)(ULONG_PTR)ExtractIconA(GetModuleHandleA(NULL), fileName,
                                                    (UINT)-1);
             wu_puts(note, noteCapacity, &noteLength, " -- a COUNT query -> ");
-            wu_puthex(note, noteCapacity, &noteLength, count, 4);
-            wow32_setret(frame, (DWORD)(count & 0xFFFF));
+            wu_puthex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
+            wow32_setret(frame, (DWORD)(count & WOW_WORD_MASK));
             return 1;
         }
         icon = ExtractIconA(GetModuleHandleA(NULL), fileName, (UINT)itemIndex);
@@ -432,7 +448,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         }
         token = wowuser_sysres_mint_icon(icon);
         wu_puts(note, noteCapacity, &noteLength, " -> token 0x");
-        wu_puthex(note, noteCapacity, &noteLength, token, 4);
+        wu_puthex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         if (!token) wu_puts(note, noteCapacity, &noteLength, " -- ★ THE TOKEN TABLE IS FULL, so"
                                              " the icon exists and the guest"
                                              " cannot be given it");
@@ -453,10 +469,10 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             wow32_setret(frame, 0);
             return 1;
         }
-        if (indexPointer) itemIndex = (WORD)(indexPointer[0] | (indexPointer[1] << 8));
+        if (indexPointer) itemIndex = (WORD)(indexPointer[0] | (indexPointer[1] << WOW_BYTE_SHIFT));
         wu_putq(note, noteCapacity, &noteLength, path);
         wu_puts(note, noteCapacity, &noteLength, " index ");
-        wu_puthex(note, noteCapacity, &noteLength, itemIndex, 4);
+        wu_puthex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         icon = ExtractAssociatedIconA(GetModuleHandleA(NULL), path, &itemIndex);
         if (!icon) {
             wu_puts(note, noteCapacity, &noteLength, " -- nothing associated -> 0");
@@ -472,12 +488,12 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             if (index == MAX_PATH - 1)
                 wu_puts(note, noteCapacity, &noteLength, " [★ path TRUNCATED at MAX_PATH]");
         }
-        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & 0xFF); indexPointer[1] = (BYTE)(itemIndex >> 8); }
+        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & WOW_BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> WOW_BYTE_SHIFT); }
         token = wowuser_sysres_mint_icon(icon);
         wu_puts(note, noteCapacity, &noteLength, " -> ");
         wu_putq(note, noteCapacity, &noteLength, path);
         wu_puts(note, noteCapacity, &noteLength, " token 0x");
-        wu_puthex(note, noteCapacity, &noteLength, token, 4);
+        wu_puthex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         wow32_setret(frame, token);
         return 1;
     }
@@ -487,9 +503,9 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         WORD action  = wow32_argw(frame, WOWSHELL_REGISTERSHELLHOOK_ARG_ACTION);
         INT  noteLength = 0;
         wu_puts(note, noteCapacity, &noteLength, "RegisterShellHook(hwnd 0x");
-        wu_puthex(note, noteCapacity, &noteLength, window16, 4);
+        wu_puthex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, ", action ");
-        wu_puthex(note, noteCapacity, &noteLength, action, 4);
+        wu_puthex(note, noteCapacity, &noteLength, action, WOW_HEX_WORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, ") -> registered."
                                    " ★ AND NO SHELL HOOK MESSAGE WILL EVER BE"
                                    " POSTED, said here rather than discovered:"
@@ -506,7 +522,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         WORD window16 = wow32_argw(frame, WOWSHELL_SHELLEXECUTE_ARG_HWND);
         WORD showCommand = wow32_argw(frame, WOWSHELL_SHELLEXECUTE_ARG_SHOW);
         wowuser_win_t *window = wowuser_findwin(window16);
-        CHAR operation[64], fileName[MAX_PATH], parameters[MAX_PATH], directory[MAX_PATH];
+        CHAR operation[WOWSHELL_OPERATION_MAX], fileName[MAX_PATH], parameters[MAX_PATH], directory[MAX_PATH];
         INT  noteLength = 0, hasOperation, hasParameters, hasDirectory;
         DWORD result;
         hasOperation  = wow32_argstr(frame, WOWSHELL_SHELLEXECUTE_ARG_OP,     operation,     sizeof operation);
@@ -515,7 +531,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         if (!wow32_argstr(frame, WOWSHELL_SHELLEXECUTE_ARG_FILE, fileName, sizeof fileName) || !fileName[0]) {
             wu_puts(note, noteCapacity, &noteLength, "ShellExecute -- ★ no lpFile; answered "
                                        "SE_ERR_FNF (2)");
-            wow32_setret(frame, 2);
+            wow32_setret(frame, WOWSHELL_SE_ERR_FNF);
             return 1;
         }
         wu_puts(note, noteCapacity, &noteLength, "ShellExecute ");
@@ -533,12 +549,12 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                                              (hasDirectory && directory[0]) ? directory : NULL,
                                              (INT)(SHORT)showCommand);
         wu_puts(note, noteCapacity, &noteLength, " -> ");
-        wu_puthex(note, noteCapacity, &noteLength, result, 4);
-        wu_puts(note, noteCapacity, &noteLength, result > 32 ? " (started)" : " (SE_ERR_*)");
+        wu_puthex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
+        wu_puts(note, noteCapacity, &noteLength, result > WOWSHELL_SE_ERR_LAST ? " (started)" : " (SE_ERR_*)");
         /* ⚠ TRUNCATED TO 16 BITS DELIBERATELY: the guest's variable is an
              HINSTANCE, which is a WORD here. A success value above 0xFFFF would
              wrap to something <= 32 and read as an error, so clamp instead. */
-        if (result > 0xFFFF) result = 0xFFFF;
+        if (result > WOW_WORD_MASK) result = WOW_WORD_MASK;
         wow32_setret(frame, result);
         return 1;
     }
@@ -555,7 +571,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         if (!wow32_argstr(frame, WOWSHELL_FINDEXECUTABLE_ARG_FILE, fileName, sizeof fileName) || !fileName[0] || !resultPointer) {
             wu_puts(note, noteCapacity, &noteLength, "FindExecutable -- ★ no lpFile or no "
                                        "result buffer; answered SE_ERR_FNF (2)");
-            wow32_setret(frame, 2);
+            wow32_setret(frame, WOWSHELL_SE_ERR_FNF);
             return 1;
         }
         result = (DWORD)(ULONG_PTR)FindExecutableA(fileName,
@@ -563,7 +579,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                                                output);
         wu_puts(note, noteCapacity, &noteLength, "FindExecutable ");
         wu_putq(note, noteCapacity, &noteLength, fileName);
-        if (result > 32) {
+        if (result > WOWSHELL_SE_ERR_LAST) {
             for (index = 0; index < (INT)sizeof output && output[index]; ++index) resultPointer[index] = (BYTE)output[index];
             resultPointer[index] = 0;
             wu_puts(note, noteCapacity, &noteLength, " -> ");
@@ -571,10 +587,10 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         } else {
             resultPointer[0] = 0;
             wu_puts(note, noteCapacity, &noteLength, " -> none (SE_ERR_ ");
-            wu_puthex(note, noteCapacity, &noteLength, result, 4);
+            wu_puthex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, ")");
         }
-        if (result > 0xFFFF) result = 0xFFFF;
+        if (result > WOW_WORD_MASK) result = WOW_WORD_MASK;
         wow32_setret(frame, result);
         return 1;
     }
@@ -588,7 +604,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_DOENVSUBST: {
         volatile BYTE *string = wow32_argptr(frame, WOWSHELL_DOENVSUBST_ARG_STR);
         WORD byteCount = wow32_argw(frame, WOWSHELL_DOENVSUBST_ARG_CB);
-        CHAR input[MAX_PATH * 2], output[MAX_PATH * 2];
+        CHAR input[WOWSHELL_ENV_BUFFER], output[WOWSHELL_ENV_BUFFER];
         INT noteLength = 0, index, count;
         DWORD expandedLength;
         if (!string || !byteCount) {
@@ -607,7 +623,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             string[index] = 0;
             wu_puts(note, noteCapacity, &noteLength, " -> ");
             wu_putq(note, noteCapacity, &noteLength, output);
-            wow32_setret(frame, ((DWORD)(WORD)index << 16) | (DWORD)byteCount);
+            wow32_setret(frame, ((DWORD)(WORD)index << WOW_WORD_SHIFT) | (DWORD)byteCount);
         } else {
             /* Too long, or nothing to do: leave the guest's buffer alone and
                report the original length. Truncating in place would hand the
@@ -615,7 +631,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             wu_puts(note, noteCapacity, &noteLength, expandedLength ? " -- ★ result does not fit; buffer"
                                              " left UNCHANGED"
                                            : " -- no substitution");
-            wow32_setret(frame, ((DWORD)(WORD)count << 16) | (DWORD)byteCount);
+            wow32_setret(frame, ((DWORD)(WORD)count << WOW_WORD_SHIFT) | (DWORD)byteCount);
         }
         return 1;
     }
@@ -624,7 +640,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         WORD window16 = wow32_argw(frame, WOWSHELL_SHELLABOUT_ARG_HWND);
         WORD iconToken = wow32_argw(frame, WOWSHELL_SHELLABOUT_ARG_HICON);
         wowuser_win_t *window = wowuser_findwin(window16);
-        CHAR application[160], otherText[320];
+        CHAR application[WOWSHELL_ABOUT_APP_MAX], otherText[WOWSHELL_ABOUT_OTHER_MAX];
         INT  noteLength = 0, bitCount = 0, result;
         /* The About box wants the full-size icon, so the size is the system's
            default -- the small-icon variant exists for the taskbar. */
@@ -639,16 +655,16 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         wu_puts(note, noteCapacity, &noteLength, " / ");
         wu_putq(note, noteCapacity, &noteLength, otherText);
         wu_puts(note, noteCapacity, &noteLength, " owner=0x");
-        wu_puthex(note, noteCapacity, &noteLength, window16, 4);
+        wu_puthex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window)          wu_puts(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW; the box"
                                                     " comes up UNOWNED");
         else if (!owner) wu_puts(note, noteCapacity, &noteLength, " -- no real window behind it;"
                                                     " the box comes up UNOWNED");
         wu_puts(note, noteCapacity, &noteLength, " icon=0x");
-        wu_puthex(note, noteCapacity, &noteLength, iconToken, 4);
+        wu_puthex(note, noteCapacity, &noteLength, iconToken, WOW_HEX_WORD_DIGITS);
         if (icon) {
             wu_puts(note, noteCapacity, &noteLength, " -> the app's own (");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)bitCount, 2);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)bitCount, WOW_HEX_BYTE_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " bpp)");
         } else {
             wu_puts(note, noteCapacity, &noteLength, " -- NOT RESOLVED; the system icon is used");
@@ -657,7 +673,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                                    " dismissed");
         result = ShellAboutA(owner, application, otherText, icon);
         wu_puts(note, noteCapacity, &noteLength, "; dismissed, rc=0x");
-        wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, 4);
+        wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         wow32_setret(frame, (DWORD)result);
         return 1;
     }
@@ -676,7 +692,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         wu_puts(note, noteCapacity, &noteLength, isAccept ? "DragAcceptFiles ACCEPT 0x"
                                        : "DragAcceptFiles REFUSE 0x");
-        wu_puthex(note, noteCapacity, &noteLength, window16, 4);
+        wu_puthex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
         if (!window || !window->hwnd32) {
             wu_puts(note, noteCapacity, &noteLength, " -- no real window");
             wow32_setret(frame, 0);
@@ -701,26 +717,26 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         WORD itemIndex   = wow32_argw(frame, WOWSHELL_DRAGQUERYFILE_ARG_INDEX);
         WORD bufferSize   = wow32_argw(frame, WOWSHELL_DRAGQUERYFILE_ARG_CCH);
         volatile BYTE *output = wow32_argptr(frame, WOWSHELL_DRAGQUERYFILE_ARG_BUF);
-        DWORD farPointer = g_ww_global16 ? g_ww_global16(2, drop16, 0) : 0;
-        DWORD segmentBase = (farPointer >> 16) ? dpmi_sel_base((WORD)(farPointer >> 16)) : 0;
-        volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & 0xFFFF)) : NULL;
+        DWORD farPointer = g_ww_global16 ? g_ww_global16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
+        DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
+        volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WOW_WORD_MASK)) : NULL;
         DWORD result = 0;
         INT noteLength = 0;
         wu_puts(note, noteCapacity, &noteLength, "DragQueryFile drop 0x");
-        wu_puthex(note, noteCapacity, &noteLength, drop16, 4);
+        wu_puthex(note, noteCapacity, &noteLength, drop16, WOW_HEX_WORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, " index 0x");
-        wu_puthex(note, noteCapacity, &noteLength, itemIndex, 4);
+        wu_puthex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         if (!dropBytes) {
             wu_puts(note, noteCapacity, &noteLength, " -- ★ the handle does not lock; 0");
             wow32_setret(frame, 0);
             return 1;
         }
-        {   WORD offset = (WORD)(dropBytes[0] | (dropBytes[1] << 8)), count = 0;
+        {   WORD offset = (WORD)(dropBytes[0] | (dropBytes[1] << WOW_BYTE_SHIFT)), count = 0;
             INT  guard = 0;
-            while (offset < 0x0800 && dropBytes[offset] && guard++ < 512) {       /* walk to entry idx */
+            while (offset < WOWSHELL_DROP_MAX_OFFSET && dropBytes[offset] && guard++ < WOWSHELL_DROP_MAX_FILES) {       /* walk to entry idx */
                 WORD length = 0;
-                while (length < 260 && dropBytes[offset + length]) ++length;
-                if (itemIndex != 0xFFFF && count == itemIndex) {
+                while (length < MAX_PATH && dropBytes[offset + length]) ++length;
+                if (itemIndex != WOWSHELL_DRAGQUERYFILE_COUNT && count == itemIndex) {
                     if (!output) result = length;
                     else if (bufferSize) {
                         WORD copied = (WORD)(length < bufferSize ? length : bufferSize - 1), cursor;
@@ -728,8 +744,8 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                         output[copied] = 0;
                         result = copied;
                         wu_puts(note, noteCapacity, &noteLength, " -> \"");
-                        {   CHAR name[64]; WORD nameIndex;
-                            for (nameIndex = 0; nameIndex < copied && nameIndex < 63; ++nameIndex) name[nameIndex] = (CHAR)output[nameIndex];
+                        {   CHAR name[WOWSHELL_LOG_NAME_MAX]; WORD nameIndex;
+                            for (nameIndex = 0; nameIndex < copied && nameIndex < WOWSHELL_LOG_NAME_MAX - 1; ++nameIndex) name[nameIndex] = (CHAR)output[nameIndex];
                             name[nameIndex] = 0; wu_puts(note, noteCapacity, &noteLength, name); }
                         wu_puts(note, noteCapacity, &noteLength, "\"");
                     }
@@ -738,11 +754,11 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                 ++count;
                 offset = (WORD)(offset + length + 1);
             }
-            if (itemIndex == 0xFFFF) result = count;
+            if (itemIndex == WOWSHELL_DRAGQUERYFILE_COUNT) result = count;
         }
-        g_ww_global16(3, drop16, 0);
+        g_ww_global16(WOWWIN_GLOBAL16_UNLOCK, drop16, 0);
         wu_puts(note, noteCapacity, &noteLength, " = 0x");
-        wu_puthex(note, noteCapacity, &noteLength, result, 4);
+        wu_puthex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         wow32_setret(frame, result);
         return 1;
     }
@@ -767,7 +783,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_REGCREATEKEY: {
         INT   isCreate = (frame->id == WOWSHELL_REGCREATEKEY);
         DWORD key16 = wow32_argd(frame, WOWSHELL_REGOPENKEY_ARG_HKEY);
-        CHAR  subkeyBuffer[256];
+        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGOPENKEY_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16), output = NULL;
         DWORD token;
@@ -786,7 +802,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
                     : RegOpenKeyA(parent, subkey, &output);
         if (result != ERROR_SUCCESS || !output) {
             wu_puts(note, noteCapacity, &noteLength, " -- the registry refused it, rc=0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
             WowShellPutDword(frame, WOWSHELL_REGOPENKEY_ARG_RESULT, 0);
             wow32_setret(frame, isCreate ? WOWSHELL_ERR_CANTWRITE
                                    : WOWSHELL_ERR_CANTOPEN);
@@ -803,7 +819,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             return 1;
         }
         wu_puts(note, noteCapacity, &noteLength, " -> key token 0x");
-        wu_puthex(note, noteCapacity, &noteLength, token, 8);
+        wu_puthex(note, noteCapacity, &noteLength, token, WOW_HEX_DWORD_DIGITS);
         if (!WowShellPutDword(frame, WOWSHELL_REGOPENKEY_ARG_RESULT, token))
             wu_puts(note, noteCapacity, &noteLength, " -- ⚠ BUT phkResult WAS NOT WRITABLE");
         wow32_setret(frame, 0);
@@ -818,7 +834,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         DWORD key16 = wow32_argd(frame, WOWSHELL_REGCLOSEKEY_ARG_HKEY);
         INT   noteLength = 0;
         wu_puts(note, noteCapacity, &noteLength, "RegCloseKey 0x");
-        wu_puthex(note, noteCapacity, &noteLength, key16, 8);
+        wu_puthex(note, noteCapacity, &noteLength, key16, WOW_HEX_DWORD_DIGITS);
         if (key16 == WOWSHELL_HKCR16 || key16 == WOWSHELL_HKCR32) {
             wu_puts(note, noteCapacity, &noteLength, " (HKEY_CLASSES_ROOT -- kept open)");
             wow32_setret(frame, 0);
@@ -848,7 +864,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          registry on a guess is not a thing to do quietly. */
     case WOWSHELL_REGDELETEKEY: {
         DWORD key16 = wow32_argd(frame, WOWSHELL_REGDELETEKEY_ARG_HKEY);
-        CHAR  subkeyBuffer[256];
+        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGDELETEKEY_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16);
         LONG  result;
@@ -864,7 +880,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         result = RegDeleteKeyA(parent, subkey);
         if (result != ERROR_SUCCESS) {
             wu_puts(note, noteCapacity, &noteLength, " -- refused, rc=0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " (⚠ Win32 will not delete a key that"
                                        " still has subkeys; Win16 would)");
             wow32_setret(frame, WOWSHELL_ERR_CANTWRITE);
@@ -892,7 +908,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     case WOWSHELL_REGSETVALUE: {
         DWORD key16 = wow32_argd(frame, WOWSHELL_REGSETVALUE_ARG_HKEY);
         DWORD type = wow32_argd(frame, WOWSHELL_REGSETVALUE_ARG_TYPE);
-        CHAR  subkeyBuffer[256], dataBuffer[512];
+        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX], dataBuffer[WOWSHELL_VALUE_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGSETVALUE_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16);
         LONG  result;
@@ -909,7 +925,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         }
         if (type != REG_SZ) {
             wu_puts(note, noteCapacity, &noteLength, " -- ★ TYPE IS NOT REG_SZ (0x");
-            wu_puthex(note, noteCapacity, &noteLength, type, 8);
+            wu_puthex(note, noteCapacity, &noteLength, type, WOW_HEX_DWORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, "); Win16 RegSetValue has no other type,"
                                        " so this is refused rather than stored"
                                        " unreadably");
@@ -919,7 +935,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         result = RegSetValueA(parent, subkey, REG_SZ, dataBuffer, 0);
         if (result != ERROR_SUCCESS) {
             wu_puts(note, noteCapacity, &noteLength, " -- the registry refused it, rc=0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
             wow32_setret(frame, WOWSHELL_ERR_CANTWRITE);
             return 1;
         }
@@ -944,7 +960,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          is supposed to fail -- that failure is what makes it register. */
     case WOWSHELL_REGQUERYVALUE: {
         DWORD key16 = wow32_argd(frame, WOWSHELL_REGQUERYVALUE_ARG_HKEY);
-        CHAR  subkeyBuffer[256], valueBuffer[512];
+        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX], valueBuffer[WOWSHELL_VALUE_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGQUERYVALUE_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16);
         volatile BYTE *byteCountPointer = wow32_argptr(frame, WOWSHELL_REGQUERYVALUE_ARG_CBVALUE);
@@ -965,11 +981,11 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             wow32_setret(frame, WOWSHELL_ERR_INVALID);
             return 1;
         }
-        capacity = (LONG)((DWORD)wow32_peekw(byteCountPointer) | ((DWORD)wow32_peekw(byteCountPointer + 2) << 16));
+        capacity = (LONG)((DWORD)wow32_peekw(byteCountPointer) | ((DWORD)wow32_peekw(byteCountPointer + WOW_WORD_BYTES) << WOW_WORD_SHIFT));
         result = RegQueryValueA(parent, subkey, valueBuffer, &byteCount);
         if (result != ERROR_SUCCESS) {
             wu_puts(note, noteCapacity, &noteLength, " -- ★ NOT PRESENT (rc=0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, 8);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_DWORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, "); ERROR_BADKEY -- which for a guest's"
                                        " FIRST lookup is the correct answer and"
                                        " is what makes it register");
@@ -982,7 +998,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         wu_putq(note, noteCapacity, &noteLength, valueBuffer);
         if (capacity <= index) {
             wu_puts(note, noteCapacity, &noteLength, " -- ★ BUT THE GUEST'S BUFFER IS 0x");
-            wu_puthex(note, noteCapacity, &noteLength, (DWORD)capacity, 4);
+            wu_puthex(note, noteCapacity, &noteLength, (DWORD)capacity, WOW_HEX_WORD_DIGITS);
             wu_puts(note, noteCapacity, &noteLength, " BYTES AND THAT NEEDS MORE; nothing was"
                                        " written (ERROR_CANTREAD)");
             WowShellPutDword(frame, WOWSHELL_REGQUERYVALUE_ARG_CBVALUE, (DWORD)(index + 1));
@@ -1008,13 +1024,13 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         DWORD capacity  = wow32_argd(frame, WOWSHELL_REGENUMKEY_ARG_CBBUF);
         HKEY  parent = WowShellKey32(key16);
         volatile BYTE *destination = wow32_argptr(frame, WOWSHELL_REGENUMKEY_ARG_BUF);
-        CHAR  nameBuffer[256];
+        CHAR  nameBuffer[WOWSHELL_SUBKEY_MAX];
         LONG  result;
         INT   noteLength = 0, index, cursor;
         wu_puts(note, noteCapacity, &noteLength, "RegEnumKey key=0x");
-        wu_puthex(note, noteCapacity, &noteLength, key16, 8);
+        wu_puthex(note, noteCapacity, &noteLength, key16, WOW_HEX_DWORD_DIGITS);
         wu_puts(note, noteCapacity, &noteLength, " index=0x");
-        wu_puthex(note, noteCapacity, &noteLength, itemIndex, 4);
+        wu_puthex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         if (!parent || !destination || !capacity) {
             wu_puts(note, noteCapacity, &noteLength, " -- ★ no key or no buffer; ERROR_BADKEY");
             wow32_setret(frame, WOWSHELL_ERR_BADKEY);

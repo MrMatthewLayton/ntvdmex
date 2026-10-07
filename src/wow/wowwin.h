@@ -216,6 +216,10 @@ static unsigned g_ww_mmlog;   /* s90: first MM notifications logged */
    shim_global16 -- 0 GlobalAlloc(flags, cb) 1 GlobalFree 2 GlobalLock -> 16:16
    3 GlobalUnlock). NULL until main.c wires it. */
 static DWORD (*g_ww_global16)(int op, DWORD a, DWORD b);
+#define WOWWIN_GLOBAL16_ALLOC  0
+#define WOWWIN_GLOBAL16_FREE   1
+#define WOWWIN_GLOBAL16_LOCK   2
+#define WOWWIN_GLOBAL16_UNLOCK 3
 static DWORD dpmi_sel_base(WORD sel);            /* main.c: a selector's linear base */
 
 /* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
