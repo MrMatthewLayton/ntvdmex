@@ -900,7 +900,7 @@ static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW s
    so everything the program printed was thrown away in exactly the case where it matters
    most. Doom prints its whole startup and then hangs; without this the log proved it had
    run but could not show what it said. */
-static dos_machine_t *g_mach = NULL;
+static DOS_MACHINE *g_mach = NULL;
 
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static VDD_BUS      g_bus;
@@ -1134,7 +1134,7 @@ static volatile LONG g_ica_pending = 0;
 static DWORD g_ica_raised = 0, g_ica_delivered = 0, g_ica_nohandler = 0;
 static DWORD g_wow_idlewaits = 0;              /* #306: krnl386 idle waits that blocked */
 static DWORD g_shim_state[2], g_shim_err[2];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
-static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned steps);
+static void wow_ica_deliver(DOS_MACHINE *mp, volatile BYTE *tib, unsigned steps);
 /* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
      Separate from g_irq0_pending, which SATURATES AT FOUR on purpose (see above) and so
      cannot answer the question. The PM catch-up batch needs a true count, and without
@@ -2167,7 +2167,7 @@ static BYTE g_bios_unimpl[256];   /* GH #27: BIOS services a run actually wanted
  * the instruction after its INT 21h with the child's exit code retrievable via
  * AH=4Dh.  That is what turns COMMAND.COM from a prompt into a shell.
  *
- * The work is split: dos_int21 only RECORDS the request, because the loader, the
+ * The work is split: DosInt21 only RECORDS the request, because the loader, the
  * file I/O and the guest's register frame all live out here.
  *
  * HOW THE RETURN WORKS, which is the part worth understanding.  The parent
@@ -2226,16 +2226,16 @@ static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's
    Returns 1 if Windows took it (EXEC succeeds, child rc in m->child_rc); 0 if it
    would not -- e.g. a "PE" that is a DOS extender's 32-bit image Windows refuses --
    and the caller then runs the MZ stub, which is what DOS would have done. */
-static int exec_windows(dos_machine_t *m, int kind, unsigned subsys, char **pp)
+static int exec_windows(DOS_MACHINE *m, int kind, unsigned subsys, char **pp)
 {
     char cmd[MAX_PATH + 160];
     STARTUPINFOA si; PROCESS_INFORMATION pi;
     const volatile BYTE *tail = (const volatile BYTE *)
-        (((DWORD)m->exec_tail_seg << 4) + m->exec_tail_off);
+        (((DWORD)m->ExecTailSegment << 4) + m->ExecTailOffset);
     int n = tail[0] > 126 ? 126 : tail[0], k, wait = (kind == DOS_EXE_PE && subsys == 3);
     char *q = cmd;
     DWORD rc = 0;
-    *q++ = '"'; q = zput(q, m->exec_path); *q++ = '"';
+    *q++ = '"'; q = zput(q, m->ExecPath); *q++ = '"';
     for (k = 0; k < n && tail[1 + k] != 0x0D; ++k) *q++ = (char)tail[1 + k];
     *q = 0;
     for (k = 0; k < (int)sizeof si; ++k) ((char *)&si)[k] = 0;
@@ -2257,12 +2257,12 @@ static int exec_windows(dos_machine_t *m, int kind, unsigned subsys, char **pp)
         *pp = zput(*pp, "  EXEC: it exited, rc=0x"); *pp = zhex(*pp, rc); *pp = zput(*pp, "\r\n");
     }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    m->child_rc = (uint16_t)(rc & 0xFF);                 /* AH=4Dh: AH=0 normal end */
+    m->ChildReturnCode = (uint16_t)(rc & 0xFF);                 /* AH=4Dh: AH=0 normal end */
     return 1;
 }
 
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
-static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
+static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
 {
     HANDLE hf;
     DWORD nread = 0;
@@ -2274,7 +2274,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
            + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
 
-    p = zput(p, "  EXEC: \""); p = zput(p, m->exec_path); p = zput(p, "\"\r\n");
+    p = zput(p, "  EXEC: \""); p = zput(p, m->ExecPath); p = zput(p, "\"\r\n");
 
     if (d >= EXEC_MAX_DEPTH) {
         p = zput(p, "  EXEC: nesting limit reached\r\n");
@@ -2282,7 +2282,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
     }
-    hf = CreateFileA(m->exec_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+    hf = CreateFileA(m->ExecPath, GENERIC_READ, FILE_SHARE_READ, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hf == INVALID_HANDLE_VALUE) {
         p = zput(p, "  EXEC: file not found\r\n");
@@ -2296,7 +2296,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     /* GH #255: a Windows program is Windows's to run (see exec_windows). Load-and-go
        only: AL=01 asks for an IMAGE in memory and AL=03 for an overlay, and for those
        the MZ part is the only thing DOS could give. */
-    if (m->exec_mode == 0x00) {
+    if (m->ExecMode == 0x00) {
         unsigned sub = 0;
         int kind = DosExeKind(exec_filebuf, nread, &sub);
         if (kind != DOS_EXE_DOS && exec_windows(m, kind, sub, &p)) {
@@ -2312,11 +2312,11 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          owns the buffer and only wants the image put in it and relocated by the
          factor IT supplies. Running it through the code below would allocate a
          block and hand the child the CPU, which is a different function. (#50) */
-    if (m->exec_mode == 0x03) {
+    if (m->ExecMode == 0x03) {
         uint32_t n = DosLoadOverlay(NULL, exec_filebuf, nread,
-                                      m->exec_ovl_seg, m->exec_ovl_reloc);
-        p = zput(p, "  EXEC: AL=03 overlay -> seg=0x"); p = zhex(p, m->exec_ovl_seg);
-        p = zput(p, " reloc=0x"); p = zhex(p, m->exec_ovl_reloc);
+                                      m->ExecOverlaySegment, m->ExecOverlayRelocation);
+        p = zput(p, "  EXEC: AL=03 overlay -> seg=0x"); p = zhex(p, m->ExecOverlaySegment);
+        p = zput(p, " reloc=0x"); p = zhex(p, m->ExecOverlayRelocation);
         p = zput(p, " bytes=0x"); p = zhex(p, n); p = zput(p, "\r\n");
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         *pfl &= (WORD)~1;
@@ -2343,16 +2343,16 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          SETMAIN.EXE (bound DOS/4G) with a Watcom-built environment that has no name
          slot; DOS/4G read its own path out of the tail, got "", and died with
          "DOS/16M error: [8] cannot open file ''". */
-    envseg = m->exec_env;
+    envseg = m->ExecEnvironment;
     {
-        const volatile BYTE *ppsp = (const volatile BYTE *)((DWORD)m->psp_seg << 4);
+        const volatile BYTE *ppsp = (const volatile BYTE *)((DWORD)m->PspSegment << 4);
         WORD penv = envseg ? envseg : (WORD)(ppsp[0x2C] | (ppsp[0x2D] << 8));
         const volatile BYTE *pe = (const volatile BYTE *)((DWORD)penv << 4);
         DWORD slen, nlen = 0, total, k;
         volatile BYTE *ce;
         if (pe[0] == 0) slen = 1;                   /* empty: one NUL ends the list */
         else { for (slen = 0; slen < 0x7FFE && !(pe[slen] == 0 && pe[slen + 1] == 0); ++slen) ; slen += 2; }
-        const char *ename = m->exec_name;
+        const char *ename = m->ExecName;
         /* ── ★ THE 64-BYTE argv[0] RULE, AT EXEC TOO. (s81, #208) ─────────────────
              DOS/4GW 1.97 copies its own path into a 64-byte buffer (see the start-up
              copy of this rule, "argv[0] MUST BE 8.3"). That rule only guarded a program
@@ -2362,7 +2362,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
              ...DUKE3D.E>". The same answer here: when the name reaches 64 and the program
              is in the current directory, the bare file name -- which the guest resolves
              against that directory exactly as DOS would. */
-        while (ename[nlen] && nlen < sizeof(m->exec_name) - 1) ++nlen;
+        while (ename[nlen] && nlen < sizeof(m->ExecName) - 1) ++nlen;
         if (nlen >= 64) {
             char cwd[MAX_PATH], scwd[MAX_PATH]; DWORD cl, sl2;
             const char *bs = ename, *q;
@@ -2379,7 +2379,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
             }
         }
         total = slen + 2 + nlen + 1;
-        if (DosMcbAllocate(NULL, m->first_mcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
+        if (DosMcbAllocate(NULL, m->FirstMcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
             p = zput(p, "  EXEC: no memory for the environment copy\r\n");
             VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
             *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
@@ -2404,14 +2404,14 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          its TOP. DosExecSize has the measurements. Every child used to get the
          whole block, so a program linked to leave memory for its own children found
          none, and one that could not fit was loaded anyway. */
-    if (DosMcbAllocate(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
+    if (DosMcbAllocate(NULL, m->FirstMcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
     want = 0;
     if (maxpara && DosExecSize(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
         p = zput(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = zhex(p, maxpara);
         p = zput(p, " paras -> error 8, not loaded\r\n");
         want = 0;
     }
-    if (!want || DosMcbAllocate(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
+    if (!want || DosMcbAllocate(NULL, m->FirstMcb, want, &child, &maxpara) != 0) {
         p = zput(p, "  EXEC: no memory\r\n");
         if (envblk) DosMcbFree(NULL, envblk);
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
@@ -2435,50 +2435,50 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     g_exec[d].eip = VDM_REG(tib, VTIB_EIP); g_exec[d].efl = VDM_REG(tib, VTIB_EFLAGS);
     g_exec[d].cs  = (WORD)VDM_REG(tib, VTIB_CS); g_exec[d].ss = (WORD)VDM_REG(tib, VTIB_SS);
     g_exec[d].ds  = (WORD)VDM_REG(tib, VTIB_DS); g_exec[d].es = (WORD)VDM_REG(tib, VTIB_ES);
-    g_exec[d].psp = m->psp_seg;
-    g_exec[d].dta_seg = m->dta_seg; g_exec[d].dta_off = m->dta_off;
+    g_exec[d].psp = m->PspSegment;
+    g_exec[d].dta_seg = m->DtaSegment; g_exec[d].dta_off = m->DtaOffset;
     g_exec[d].child_seg = child;
     g_exec[d].env_seg   = envblk;
 
     /* Build the child's PSP and copy in its command tail, then load the image. */
     DosPspBuild(NULL, child, envseg, (uint16_t)(child + want));
-    DosMcbSetOwnerName(NULL, child, m->exec_path);        /* DOS 4+: MEM /C and /D read it */
+    DosMcbSetOwnerName(NULL, child, m->ExecPath);        /* DOS 4+: MEM /C and /D read it */
     /* #208: a SECOND XP shell (the user typed `command`) is told 5.00 as the first one
        is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
     {   DWORD k, nb = 0;
         for (k = 0; k + 3 < nread; ++k)
             if (exec_filebuf[k] == 0xC4 && exec_filebuf[k+1] == 0xC4 && exec_filebuf[k+2] == 0x54) ++nb;
-        if (nb >= 8) dos_int21_shell_psp(m, child, 1); }
+        if (nb >= 8) DosInt21SetShellPsp(m, child, 1); }
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
        "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
        EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
        exactly that. This is SETVER's own job: a per-PROGRAM version, not a per-session
        one. Compared on the directory, long or 8.3 form. */
     {   char sd[MAX_PATH], ssd[MAX_PATH]; DWORD n1, n2 = 0, dl = 0; const char *q;
-        for (q = m->exec_path; *q; ++q) if (*q == '\\') dl = (DWORD)(q - m->exec_path);
+        for (q = m->ExecPath; *q; ++q) if (*q == '\\') dl = (DWORD)(q - m->ExecPath);
         n1 = GetSystemDirectoryA(sd, sizeof sd);
         if (n1 && n1 < sizeof sd) n2 = GetShortPathNameA(sd, ssd, sizeof ssd);
         if (dl && ((n1 && n1 < sizeof sd && dl == n1
                     && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
-                                      m->exec_path, (int)dl, sd, (int)n1) == CSTR_EQUAL)
+                                      m->ExecPath, (int)dl, sd, (int)n1) == CSTR_EQUAL)
                    || (n2 && n2 < sizeof ssd && dl == n2
                     && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
-                                      m->exec_path, (int)dl, ssd, (int)n2) == CSTR_EQUAL))) {
-            dos_int21_shell_psp(m, child, 1);
+                                      m->ExecPath, (int)dl, ssd, (int)n2) == CSTR_EQUAL))) {
+            DosInt21SetShellPsp(m, child, 1);
             p = zput(p, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
         } }
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */
-    DosPspSaveVectors(NULL, child, m->psp_seg);
+    DosPspSaveVectors(NULL, child, m->PspSegment);
     { volatile BYTE *dpsp = (volatile BYTE *)(child << 4);
       const volatile BYTE *tail = (const volatile BYTE *)
-          ((m->exec_tail_seg << 4) + m->exec_tail_off);
+          ((m->ExecTailSegment << 4) + m->ExecTailOffset);
       int k, n = tail[0] > 126 ? 126 : tail[0];
       for (k = 0; k <= n; ++k) dpsp[0x80 + k] = tail[k];
       dpsp[0x81 + n] = 0x0D;
-      dpsp[0x16] = (BYTE)(m->psp_seg & 0xFF);       /* parent PSP */
-      dpsp[0x17] = (BYTE)(m->psp_seg >> 8); }
+      dpsp[0x16] = (BYTE)(m->PspSegment & 0xFF);       /* parent PSP */
+      dpsp[0x17] = (BYTE)(m->PspSegment >> 8); }
 
     /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
     img = DosLoadImageAt(NULL, exec_filebuf, nread, child,
@@ -2486,7 +2486,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     if (load_high) { p = zput(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
                      p = zhex(p, img.CodeSegment); p = zput(p, "\r\n"); }
 
-    if (m->exec_mode == 0x01) {
+    if (m->ExecMode == 0x01) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
              ANSWERS THROUGH THE PARAMETER BLOCK instead of transferring control:
              +0x0E gets the initial SS:SP and +0x12 the entry CS:IP. The memory
@@ -2501,7 +2501,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
              would confirm the rule rather than the instance. Recorded as a
              single-point measurement rather than dressed up as a law. */
         volatile BYTE *pbo = (volatile BYTE *)
-            (((DWORD)m->exec_pb_seg << 4) + m->exec_pb_off);
+            (((DWORD)m->ExecBlockSegment << 4) + m->ExecBlockOffset);
         WORD sp01 = (WORD)(img.StackPointer - 2);
         pbo[0x0E] = (BYTE)(sp01 & 0xFF);       pbo[0x0F] = (BYTE)(sp01 >> 8);
         pbo[0x10] = (BYTE)(img.StackSegment & 0xFF);     pbo[0x11] = (BYTE)(img.StackSegment >> 8);
@@ -2515,7 +2515,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
            4B01h, AH=62h returns the child's PSP on 6.22, DOSBox-X and PCem alike --
            which is why a loader puts its own back with AH=50h, and why 4B05h then
            leaves it alone. We kept the loader's. */
-        m->psp_seg = child;
+        m->PspSegment = child;
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
@@ -2527,16 +2527,16 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          first -- which is the shell whenever a game is started from a prompt or by
          double-click through it. Save the parent's name with this level; dos_terminate
          puts it back (a Close Program ends through there too). */
-    {   const char *bn = m->exec_path, *q; int k = 0;
+    {   const char *bn = m->ExecPath, *q; int k = 0;
         for (k = 0; k < 63 && g_progname[k]; ++k) g_exec_mach[d].progname[k] = g_progname[k];
         g_exec_mach[d].progname[k] = 0;
-        for (q = m->exec_path; *q; ++q) if (*q == '\\' || *q == '/' || *q == ':') bn = q + 1;
+        for (q = m->ExecPath; *q; ++q) if (*q == '\\' || *q == '/' || *q == ':') bn = q + 1;
         if (*bn) { for (k = 0; bn[k] && k < 63; ++k) g_progname[k] = bn[k]; g_progname[k] = 0; } }
-    dos_handles_push(m);                            /* s81: the child works on a copy */
-    dos_jft_exec(m, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
+    DosHandlesPush(m);                            /* s81: the child works on a copy */
+    DosJftExec(m, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
     ++g_exec_depth;
-    m->psp_seg = child;
-    m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
+    m->PspSegment = child;
+    m->DtaSegment = child; m->DtaOffset = 0x0080;        /* DOS resets the DTA to PSP:80 */
     VDM_REG(tib, VTIB_CS)  = img.CodeSegment; VDM_REG(tib, VTIB_EIP) = img.InstructionPointer;
     VDM_REG(tib, VTIB_SS)  = img.StackSegment; VDM_REG(tib, VTIB_ESP) = img.StackPointer;
     VDM_REG(tib, VTIB_DS)  = child;  VDM_REG(tib, VTIB_ES)  = child;
@@ -2567,7 +2567,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
      itself. Nothing of it existed: the error went straight back to the caller.
    ► HOW: INT 21h is serviced here, host-side, so the call into the guest is made by
      redirecting the guest. crit_snapshot keeps the INT 21h call's INPUT registers;
-     dos_int21 sets m->crit_pending instead of finishing; crit_raise points CS:IP at
+     DosInt21 sets m->crit_pending instead of finishing; crit_raise points CS:IP at
      DOS_CRIT_RAISE (`int 24h / bop 20h`) with the handler's registers loaded; the
      handler IRETs onto the BOP and crit_return puts the inputs back and acts:
        RETRY  -> CS:IP back ON the INT 21h BOP, so the whole call is made again;
@@ -2580,7 +2580,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
    ⚠ MAIN V86 LOOP ONLY (m.crit_raise_ok, #275). A DPMI client's INT 21h is serviced
      with the client in protected mode, and the nested real-mode loops cannot redirect
      the guest the way this does; there a 3Fh/40h hardware error is answered as FAIL
-     and a path call keeps the raw code (see the tail of dos_int21). And never while
+     and a path call keeps the raw code (see the tail of DosInt21). And never while
      a handler is already running: DOS does not nest INT 24h. */
 static struct {
     DWORD eax, ebx, ecx, edx, esi, edi, ebp, eip;
@@ -2599,19 +2599,19 @@ static void crit_snapshot(volatile BYTE *tib)
     g_crit.ds  = (WORD)VDM_REG(tib, VTIB_DS); g_crit.es = (WORD)VDM_REG(tib, VTIB_ES);
 }
 
-static void crit_raise(dos_machine_t *m, volatile BYTE *tib, char **pp)
+static void crit_raise(DOS_MACHINE *m, volatile BYTE *tib, char **pp)
 {
     volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
-    g_crit.ah = m->crit_ah;
+    g_crit.ah = m->CritAh;
     g_crit.fn = (BYTE)(g_crit.eax >> 8);
     *pp = zput(*pp, "  INT24 raised: fn=0x"); *pp = zhexb(*pp, g_crit.fn);
-    *pp = zput(*pp, " AH=0x"); *pp = zhexb(*pp, m->crit_ah);
-    *pp = zput(*pp, " drive="); **pp = (char)('A' + m->crit_al); ++*pp;
-    *pp = zput(*pp, ": DI=0x"); *pp = zhexb(*pp, m->crit_code);
+    *pp = zput(*pp, " AH=0x"); *pp = zhexb(*pp, m->CritAh);
+    *pp = zput(*pp, " drive="); **pp = (char)('A' + m->CritAl); ++*pp;
+    *pp = zput(*pp, ": DI=0x"); *pp = zhexb(*pp, m->CritCode);
     *pp = zput(*pp, " -> the guest's handler at 0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4 + 2));
     *pp = zput(*pp, ":0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4)); *pp = zput(*pp, "\r\n");
-    VDM_SET16(tib, VTIB_EAX, ((WORD)m->crit_ah << 8) | m->crit_al);
-    VDM_SET16(tib, VTIB_EDI, m->crit_code);
+    VDM_SET16(tib, VTIB_EAX, ((WORD)m->CritAh << 8) | m->CritAl);
+    VDM_SET16(tib, VTIB_EDI, m->CritCode);
     /* BP:SI = the device header -- the one our DPBs name, which since #48 is the BLOCK
        driver (DOS_DEV_SEG, attribute bit 15 clear), as 6.22's floppy DPB names its own at
        0070:006B. It was NUL, a CHARACTER device, which tells a handler that tests bit 15
@@ -2621,18 +2621,18 @@ static void crit_raise(dos_machine_t *m, volatile BYTE *tib, char **pp)
     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
     VDM_SET16(tib, VTIB_EIP, DOS_CRIT_RAISE);
     sda[0] = 1;                                          /* SDA+0: in a critical error   */
-    m->crit_pending = 0;
-    m->crit_active = 1;
+    m->IsCritPending = 0;
+    m->IsCritActive = 1;
 }
 
 /* Returns 1 for ABORT (the caller terminates the program), 0 to resume the guest. */
-static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
+static int crit_return(DOS_MACHINE *m, volatile BYTE *tib, char **pp)
 {
     volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
     BYTE act = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF), said = act, ah = g_crit.ah;
     volatile WORD *pfl;
     sda[0] = 0;
-    m->crit_active = 0;
+    m->IsCritActive = 0;
     if (act > 3) act = 3;
     if (act == 0 && !(ah & 0x20)) act = 3;               /* ignore not allowed -> fail */
     if (act == 1 && !(ah & 0x10)) act = 3;               /* retry not allowed  -> fail */
@@ -2650,8 +2650,8 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
     VDM_SET16(tib, VTIB_DS, g_crit.ds); VDM_SET16(tib, VTIB_ES, g_crit.es);
     if (act == 1) return 0;                              /* RETRY: the BOP runs again */
     if (act == 2) {                                      /* ABORT */
-        m->exit_code = DOS_CRIT_ABORT_RETURN_CODE;
-        m->term_type = 2;
+        m->ExitCode = DOS_CRIT_ABORT_RETURN_CODE;
+        m->TermType = 2;
         return 1;
     }
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
@@ -2664,8 +2664,8 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
          read leaves in the buffer is what was there. See DosCritIgnoreCount.
        ⚠ Spec-derived, unmeasured on 6.22: p_crit2 crit2.h3f.ignore / crit2.h40.ignore. */
     if (act == 0 && (g_crit.fn == 0x3F || g_crit.fn == 0x40)
-        && (g_crit.ebx & 0xFFFF) < DOS_MAX_FILES && m->fh[g_crit.ebx & 0xFFFF]) {
-        HANDLE fh = m->fh[g_crit.ebx & 0xFFFF];
+        && (g_crit.ebx & 0xFFFF) < DOS_MAX_FILES && m->FileHandles[g_crit.ebx & 0xFFFF]) {
+        HANDLE fh = m->FileHandles[g_crit.ebx & 0xFFFF];
         DWORD pos = SetFilePointer(fh, 0, NULL, FILE_CURRENT);
         DWORD size = GetFileSize(fh, NULL);
         WORD n = DosCritIgnoreCount(g_crit.fn, (WORD)(g_crit.ecx & 0xFFFF), pos, size,
@@ -2679,27 +2679,27 @@ static int crit_return(dos_machine_t *m, volatile BYTE *tib, char **pp)
         return 0;
     }
     /* FAIL (and an IGNORE with no handle left to ignore on): the call returns an error. */
-    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(g_crit.fn, m->crit_code));
+    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(g_crit.fn, m->CritCode));
     *pfl |= 1;
-    m->last_err = DOS_ERR_FAIL_I24;
+    m->LastError = DOS_ERR_FAIL_I24;
     VDM_REG(tib, VTIB_EIP) += 3;                         /* past the BOP -> the IRET */
     return 0;
 }
 
 /* ── #275: THE DPMI TRANSLATOR's OWN 3Fh/40h (dpmi INT 21h, direct-translated through
      the client's selectors) never looked at ReadFile/WriteFile either. A hardware
-     failure (19-31) there is answered the way dos_int21 answers it for a protected-
+     failure (19-31) there is answered the way DosInt21 answers it for a protected-
      mode caller -- as if INT 24h had said FAIL: CF=1, AX=0005, 59h=53h -- because
-     INT 24h is not reflected to DPMI clients (see the tail of dos_int21 for why, and
+     INT 24h is not reflected to DPMI clients (see the tail of DosInt21 for why, and
      what doing it properly needs). Returns 1 if it answered; 0 = not a hardware
      error, the caller keeps its old answer. `we` = GetLastError(), 0 = it did not fail. */
-static int pm_rw_hw_fail(dos_machine_t *m, volatile BYTE *tib, BYTE fn, DWORD we, char **pp)
+static int pm_rw_hw_fail(DOS_MACHINE *m, volatile BYTE *tib, BYTE fn, DWORD we, char **pp)
 {
     unsigned short de = 0;
     if (!we || !DosErrFromWin32((unsigned long)we, &de) || !DosCritIsHardwareError(de)) return 0;
     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
     VDM_SET16(tib, VTIB_EAX, DosCritFailAx(fn, (BYTE)(de - 19)));
-    m->last_err = DOS_ERR_FAIL_I24;
+    m->LastError = DOS_ERR_FAIL_I24;
     *pp = zput(*pp, "  INT24 not raised (DPMI client): AH=0x"); *pp = zhexb(*pp, fn);
     *pp = zput(*pp, " error 0x"); *pp = zhexb(*pp, de);
     *pp = zput(*pp, " answered as FAIL -> AX=0x"); *pp = zhex(*pp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
@@ -4619,7 +4619,7 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
      AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
      whether that ends the RUN or merely returns a child to its parent.
    ★ IT IS A FUNCTION BECAUSE IT USED TO BE INLINE IN THE INT 21h BRANCH ONLY.
-     The BIOS stubs for INT 20h and INT 27h called dos_int21, threw away its
+     The BIOS stubs for INT 20h and INT 27h called DosInt21, threw away its
      "stop" answer and took their own `break` -- so a .COM child exiting through
      INT 20h, which is THE classic .COM exit, tore down the whole VDM instead of
      returning to whatever EXEC'd it. Measured: tests/probes/dos/p_curdir.asm's
@@ -4628,7 +4628,7 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
 static void mouse_child_exited(void);          /* fwd: see g_ms_want_release */
-static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
+static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
 {
     char *p = *pp;
     (void)p;
@@ -4638,15 +4638,15 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         int d = --g_exec_depth;
         volatile WORD *pfl2;
         /* AH = how it ended (#34): 0 normally, 2 when its INT 24h answered ABORT. */
-        m->child_rc = (WORD)(((WORD)m->term_type << 8) | (m->exit_code & 0xFF));
-        m->term_type = 0;
+        m->ChildReturnCode = (WORD)(((WORD)m->TermType << 8) | (m->ExitCode & 0xFF));
+        m->TermType = 0;
         if (g_exec_mach[d].progname[0])             /* the strip names the parent again */
             zput(g_progname, g_exec_mach[d].progname);
         /* s81: the parent's handle table back, the child's leftover files closed (not
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
-        dos_handles_pop(m, m->tsr_pending);
-        if (g_exec[d].child_seg && !m->tsr_pending)
-            dos_int21_shell_psp(m, g_exec[d].child_seg, 0);   /* #208: its PSP is gone */
+        DosHandlesPop(m, m->IsTsrPending);
+        if (g_exec[d].child_seg && !m->IsTsrPending)
+            DosInt21SetShellPsp(m, g_exec[d].child_seg, 0);   /* #208: its PSP is gone */
         mouse_child_exited();          /* s81: the shell does not own the mouse */
         /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
            left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
@@ -4655,7 +4655,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
            the host synth, and every OPL voice keyed off -- pitch kept, so each one
            releases through its own envelope instead of clicking off. A TSR is still
            running, so it is left alone. */
-        if (!m->tsr_pending) {
+        if (!m->IsTsrPending) {
             unsigned ch;
             AudioWaveMidiSilence(&g_wave);
             HOST_LOCK();
@@ -4663,7 +4663,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
             VddOplAllNotesOff(&g_opl);              /* both banks, and the rhythm drums (#232) */
             HOST_UNLOCK();
         }
-        if (m->tsr_pending) {
+        if (m->IsTsrPending) {
             /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
                  The block is RESIZED, not freed, and the vectors are
                  deliberately NOT unwound -- the whole point of a TSR is
@@ -4673,14 +4673,14 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
                DX counted paragraphs from the PSP; a request for less
                than a PSP is nonsense, so floor it at 16 rather than
                hand back a block that does not contain its own header. */
-            WORD keep = m->tsr_keep < 0x10 ? 0x10 : m->tsr_keep, tmax = 0;
+            WORD keep = m->TsrKeep < 0x10 ? 0x10 : m->TsrKeep, tmax = 0;
             int rrc = DosMcbResize(NULL, g_exec[d].child_seg, keep, &tmax);
             *pp = zput(*pp, "  TSR: seg=0x"); *pp = zhex(*pp, g_exec[d].child_seg);
             *pp = zput(*pp, " stays resident, 0x"); *pp = zhex(*pp, keep);
             *pp = zput(*pp, " paras");
             if (rrc) *pp = zput(*pp, " -- RESIZE FAILED, block kept whole");
             *pp = zput(*pp, ", vectors left installed\r\n");
-            m->tsr_pending = 0; m->tsr_keep = 0;
+            m->IsTsrPending = 0; m->TsrKeep = 0;
         } else {
         /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
              The other half of the PSP contract: INT 22h/23h/24h go back
@@ -4701,7 +4701,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
             /* ⚠ Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
                  0x40 and stopped, leaving the rest owned by a PSP that no longer exists. */
             for (pass = 0; pass < 4096; ++pass) {
-                uint16_t mm = m->first_mcb, hit = 0; int guard = 0;
+                uint16_t mm = m->FirstMcb, hit = 0; int guard = 0;
                 for (;;) {
                     volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
                     if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 1024) break;
@@ -4719,7 +4719,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         }
         /* The chain as the parent will find it: what a child LEFT is exactly what the
            next program cannot have, and a leak is invisible in any one line above. */
-        {   uint16_t mm = m->first_mcb; int guard = 0;
+        {   uint16_t mm = m->FirstMcb; int guard = 0;
             *pp = zput(*pp, "  EXEC: chain after exit:");
             for (;;) {
                 volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
@@ -4746,8 +4746,8 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         VDM_REG(tib, VTIB_EIP) = g_exec[d].eip; VDM_REG(tib, VTIB_EFLAGS) = g_exec[d].efl;
         VDM_REG(tib, VTIB_CS)  = g_exec[d].cs;  VDM_REG(tib, VTIB_SS) = g_exec[d].ss;
         VDM_REG(tib, VTIB_DS)  = g_exec[d].ds;  VDM_REG(tib, VTIB_ES) = g_exec[d].es;
-        m->psp_seg = g_exec[d].psp;
-        m->dta_seg = g_exec[d].dta_seg; m->dta_off = g_exec[d].dta_off;
+        m->PspSegment = g_exec[d].psp;
+        m->DtaSegment = g_exec[d].dta_seg; m->DtaOffset = g_exec[d].dta_off;
         /* EXEC succeeded, so clear the carry the parent's IRET will
            restore, and set AX=0 as DOS does. */
         pfl2 = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
@@ -4755,8 +4755,8 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         *pfl2 &= (WORD)~1;
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
-        m->exit_code = 0;
-        *pp = zput(*pp, "  EXEC: child exited rc=0x"); *pp = zhexb(*pp, m->child_rc);
+        m->ExitCode = 0;
+        *pp = zput(*pp, "  EXEC: child exited rc=0x"); *pp = zhexb(*pp, m->ChildReturnCode);
         *pp = zput(*pp, ", parent resumed (depth="); *pp = zhexb(*pp, (unsigned)g_exec_depth);
         *pp = zput(*pp, ")\r\n");
         log_append(LOG_PATH, base, *pp); *pp = base;
@@ -8942,20 +8942,20 @@ static void exec_mach_restore(int d, char **pp)
 
 /* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
    started with was ended, so the run is over. */
-static int close_prog_now(dos_machine_t *m, void *tib, char **pp, char *base)
+static int close_prog_now(DOS_MACHINE *m, void *tib, char **pp, char *base)
 {
     if (g_exec_depth > 0) {
         *pp = zput(*pp, "CLOSEPROG: ending the program at depth ");
         *pp = zhexb(*pp, (unsigned)g_exec_depth); *pp = zput(*pp, " (File > Close Program)\r\n");
         exec_mach_restore(g_exec_depth - 1, pp);
         if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
-        m->tsr_pending = 0;
-        m->exit_code = 0;
+        m->IsTsrPending = 0;
+        m->ExitCode = 0;
         return dos_terminate(m, tib, pp, base);
     }
     *pp = zput(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
     log_append(LOG_PATH, base, *pp); *pp = base;
-    m->exit_code = 0;
+    m->ExitCode = 0;
     return 0;
 }
 
@@ -11533,7 +11533,7 @@ static void bg_prio_tick(HWND h)
 static int open_at_prompt(void)
 {
     return g_running && !g_wound_down && !g_wow_launch && !g_dpmi_done
-        && g_exec_depth == 0 && g_top_is_shell && g_mach && g_mach->line_active;
+        && g_exec_depth == 0 && g_top_is_shell && g_mach && g_mach->IsLineActive;
 }
 
 /* A DOS image: .COM or .BAT by name, or an MZ .EXE without an NE/PE header. */
@@ -11593,7 +11593,7 @@ static void open_program(HWND h, const char *path)
     if (g_captured) input_capture_set(h, 0);
     sl = GetShortPathNameA(path, sp, sizeof sp);
     if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
-        && open_prompt_line(sp, g_mach->line_n, line, (int)sizeof line)
+        && open_prompt_line(sp, g_mach->LineLength, line, (int)sizeof line)
         && typein_push(line)) {
         char lb[MAX_PATH + 64], *lq = zput(lb, "OPEN: typed at the prompt [");
         lq = zput(lq, sp); lq = zput(lq, "]\r\n");
@@ -12161,7 +12161,7 @@ static void host_autofs_consider(HWND h, int graphics)
     g_autofs_done = 1;
     if (!g_pd.IsFullscreen) host_fullscreen_toggle(h);
 }
-static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
+static DOS_MACHINE   *g_dosm;          /* so the DOS version can be changed live */
 
 /* Frames the presenter drops between the ones it shows. 0 = every frame, which is
    what this host has always done. Read on the UI thread's timer tick. */
@@ -12293,7 +12293,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
        startup, so they win here too -- pushing 6.22 into a session whose shell requires
        5.00 is how its next command would say "Incorrect DOS version". */
-    if (g_dosm && !g_dosver_forced) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
+    if (g_dosm && !g_dosver_forced) DosInt21SetVersion(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
                                                               (uint8_t)s->v[SET_DOSMIN]);
     /* ⚠ THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
          Granularity defaults to AUTO (g_cpuspd_gran_ms = 0), which is the behaviour
@@ -12901,7 +12901,7 @@ static void settings_to_dialog(const ntvdmex_settings *s)
     {   HWND cn = settings_ctl(IDC_S_DOSVER_NOW);
         if (cn && g_dosm) {
             wsprintfA(t, "The current session is reporting: MS-DOS %u.%02u",
-                      (unsigned)g_dosm->ver_major, (unsigned)g_dosm->ver_minor);
+                      (unsigned)g_dosm->VersionMajor, (unsigned)g_dosm->VersionMinor);
             if (g_dosver_forced && g_dosver_why) lstrcatA(t, " (set by cfg\\dosver.txt)");
             SetWindowTextA(cn, t);
         }
@@ -14775,7 +14775,7 @@ static void host_rtc_now(void *ctx, PIT_RTC_READING *out)
 {
     DOS_CLOCK_TIME g;
     (void)ctx;
-    dos_clock_read(g_DosClock.RtcOffset, &g);
+    DosClockRead(g_DosClock.RtcOffset, &g);
     out->Century  = g.Year / 100u;
     out->Year  = g.Year % 100u;
     out->Month = g.Month;
@@ -14794,7 +14794,7 @@ static int host_rtc_set(void *ctx, const PIT_RTC_READING *in, int what)
 {
     DOS_CLOCK_TIME host;
     (void)ctx;
-    dos_clock_host_now(&host);
+    DosClockHostNow(&host);
     if (what == 0) {
         if (!DosClockIsTimeValid(in->Hour, in->Minute, in->Second, 0)) return 0;
         DosClockSetTime(&host, &g_DosClock.RtcOffset, in->Hour, in->Minute, in->Second, 0);
@@ -14835,7 +14835,7 @@ static void host_ticks_set(void *ctx, uint32_t ticks)
     uint32_t t = ticks, w = 0, s = 0;
     (void)ctx;
     if (!host_tick_take(&t, &w, &s)) { t = ticks; w = 0; s = 0; }
-    dos_clock_follow(t, w, s);
+    DosClockFollow(t, w, s);
 }
 
 /* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
@@ -17886,14 +17886,14 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     /* ► FLUSH WHAT THE PROGRAM PRINTED BEFORE KILLING IT. Same text the clean
          wind-down emits, in the one path that used to lose it. Written in bounded
          slices because the accumulator is far larger than this thread's buffer. */
-    if (g_mach && g_mach->out_len > 0) {
-        DWORD off = 0, total = (DWORD)g_mach->out_len;
+    if (g_mach && g_mach->OutputLength > 0) {
+        DWORD off = 0, total = (DWORD)g_mach->OutputLength;
         q = wb; q = zput(q, "  ==> DOS OUTPUT (wedged): [\r\n");
         log_append(WDLOG_PATH, wb, q);
         while (off < total) {
             DWORD n2 = total - off; char sl[257];
             if (n2 > 256) n2 = 256;
-            { DWORD k; for (k = 0; k < n2; ++k) sl[k] = g_mach->out[off + k]; }
+            { DWORD k; for (k = 0; k < n2; ++k) sl[k] = g_mach->Output[off + k]; }
             log_append(WDLOG_PATH, sl, sl + n2);
             off += n2;
         }
@@ -18279,7 +18279,7 @@ static NE_REGISTRY g_wow_reg;
 
    Returns 0 and fills the entry registers. krnl386 imports from nothing, so no
    importer callback is needed here; user/gdi come later and will need one. */
-static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
+static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                          WORD *eds, WORD *ess, WORD *esp)
 {
     /* krnl386 is a LIBRARY: SS:SP = 0:0 and stack = 0 in the header, so nothing tells
@@ -18394,7 +18394,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          in the middle of krnl386's scratch and was read back as an NE header. Host
          memory belongs below the guest's, not in the middle of it. */
     {   WORD hseg = 0, hmax = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
+        if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
             g_wow_pool_seg = hseg;
         q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
         q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
@@ -18435,7 +18435,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         log_append(LDTLOG_PATH, m, q);
     }
     {   WORD xseg = 0, xmax = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, 0x400, &xseg, &xmax) == 0 && xseg) {
+        if (DosMcbAllocate(NULL, mp->FirstMcb, 0x400, &xseg, &xmax) == 0 && xseg) {
             g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
         }
         q = m;
@@ -18452,7 +18452,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          that the very next call overwrites, and the corruption would surface as
          a wrong filename somewhere far from here. One paragraph, one purpose. */
     {   WORD pseg = 0, pmax = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, 0x20, &pseg, &pmax) == 0 && pseg)
+        if (DosMcbAllocate(NULL, mp->FirstMcb, 0x20, &pseg, &pmax) == 0 && pseg)
             g_wow_path_seg = pseg;
         q = m;
         q = zput(q, "WOWV86: module-path scratch at para 0x"); q = zhex(q, g_wow_path_seg);
@@ -18465,7 +18465,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          wow_host_alloc. Separate again: this one is held by the child for its
          whole life, and both buffers above are reused on the very next call. */
     {   WORD eseg = 0, emax = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
+        if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
             g_wow_env_seg = eseg;
         q = m;
         q = zput(q, "WOWV86: task-environment block at para 0x"); q = zhex(q, g_wow_env_seg);
@@ -18485,7 +18485,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          code descriptor over it is only useful once there is an LDT to put it
          in, so it is built at the first callback and cached. */
     {   WORD cseg = 0, cmax = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, 1, &cseg, &cmax) == 0 && cseg) {
+        if (DosMcbAllocate(NULL, mp->FirstMcb, 1, &cseg, &cmax) == 0 && cseg) {
             volatile BYTE *cb = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
             g_wow_cbk_seg = cseg;
             g_wow_cbk_lin = (DWORD)cseg << 4;
@@ -18540,7 +18540,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                 need = dg;
             }
         }
-        if (DosMcbAllocate(NULL, mp->first_mcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
+        if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
             q = m; q = zput(q, "WOWV86: no conventional memory for seg ");
             q = zhex(q, (DWORD)(i + 1)); q = zput(q, ", largest free 0x"); q = zhex(q, max);
             q = zput(q, " paras\r\n"); log_append(LDTLOG_PATH, m, q);
@@ -18656,21 +18656,21 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          filler that leaves exactly this block's worth at the top, allocate, free the
          filler. The PSP block below then takes the freed region, as before. */
     {   WORD fseg = 0, fmax = 0, want;
-        (void)DosMcbAllocate(NULL, mp->first_mcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
+        (void)DosMcbAllocate(NULL, mp->FirstMcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
         want = (WORD)(WOW_STACK_PARAS + window_paras);
         if (fmax > want + 2) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
                it the filler eats the paragraph the stack+window block needs and the
                allocation fails outright ("no memory for the stack + header image"). */
             WORD fill = (WORD)(fmax - want - 1);
-            if (DosMcbAllocate(NULL, mp->first_mcb, fill, &fseg, &fmax) == 0 && fseg) {
+            if (DosMcbAllocate(NULL, mp->FirstMcb, fill, &fseg, &fmax) == 0 && fseg) {
                 q = m; q = zput(q, "WOWV86: filler 0x"); q = zhex(q, fill);
                 q = zput(q, " paras at 0x"); q = zhex(q, fseg);
                 q = zput(q, " so the stack+window lands HIGH (freed again below)\r\n");
                 log_append(LDTLOG_PATH, m, q);
             } else fseg = 0;
         } else fseg = 0;
-        if (DosMcbAllocate(NULL, mp->first_mcb, (WORD)(WOW_STACK_PARAS + window_paras),
+        if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)(WOW_STACK_PARAS + window_paras),
                       &sseg, &smax) || !sseg) sseg = 0;
         if (fseg) DosMcbFree(NULL, fseg);          /* give the low region back */
     }
@@ -18889,8 +18889,8 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
        ⚠ It must be a REAL PSP, not a bare block: krnl386 writes PSP+0x42 and reads
          PSP+0x02 (top of memory) during bring-up. DosPspBuild fills both. */
     {   WORD pseg = 0, pmax = 0;
-        (void)DosMcbAllocate(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
-        if (!pmax || DosMcbAllocate(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
+        (void)DosMcbAllocate(NULL, mp->FirstMcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
+        if (!pmax || DosMcbAllocate(NULL, mp->FirstMcb, pmax, &pseg, &pmax) || !pseg) {
             q = m; q = zput(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
             log_append(LDTLOG_PATH, m, q); return -1;
         }
@@ -19126,7 +19126,7 @@ static void wow_probe_selectors(void)
 
 /* Plant the default PM interrupt handlers and point every vector at them. See the
    note on g_pm_defsel. Called once, at the mode switch, before the client runs. */
-static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
+static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
 {
     uint16_t seg = 0, max = 0;
     volatile BYTE *stub;
@@ -19159,7 +19159,7 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
          function that installs 256 interrupt vectors is not a small omission. */
     seg = wow_host_alloc(0x40);
     g_pm_def_from_dos = !seg;
-    if (!seg && (DosMcbAllocate(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) {
+    if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 0x40, &seg, &max) || !seg)) {
         q = zput(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
                     "read back 0000:0000\r\n");
@@ -20871,7 +20871,7 @@ static void wowcall_load(void)
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
-static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
+static int dpmi_service_pm_int(DOS_MACHINE *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
@@ -20879,7 +20879,7 @@ static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher inst
    PM handler with the real-mode register state marshalled into its RMCS, then resume
    V86 at the far-call's return address. The inverse of 0301's PM->V86 direction.
    On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
-static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
+static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
 {
     char lb[256]; char *lp = lb;
     WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
@@ -21045,7 +21045,7 @@ static BYTE  g_pm_disp_logged[256][256];    /* always-loud lines emitted for (ve
 static DWORD g_pm_disp_count[256][256];     /* every dispatch, logged or not */
 static DWORD g_pm_disp_ms[256][256];        /* GetTickCount of the last line for the pair */
 
-static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
+static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
                                        DWORD vec, unsigned steps)
 {
     /* ── ⚠⚠ 256 WAS NINE BYTES OF HEADROOM, AND ADDING ONE FIELD BLEW IT. ────────────
@@ -21613,7 +21613,7 @@ static WORD wow_shadow_selector(void)
     return g_wow_shadow_sel;
 }
 
-static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
+static int wow_vendor_api_entry(DOS_MACHINE *mp, WORD *sel, WORD *off)
 {
     /* The DPMI vendor-specific API entry krnl386 asks for (INT 2Fh AX=168Ah). Its
        contract, as stock answers it: AX=0 -> AX=0x0100; AX=0x0100 -> AX=a selector;
@@ -21649,7 +21649,7 @@ static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
        only succeed on a non-WOW path -- and failing here is not cosmetic: krnl386
        treats a missing vendor API as "Inadequate DPMI Server" and exits. */
     seg = wow_host_alloc(1);
-    if (!seg && (DosMcbAllocate(NULL, mp->first_mcb, 1, &seg, &max) || !seg)) return -1;
+    if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 1, &seg, &max) || !seg)) return -1;
     b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
     for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
     b[0x10] = (BYTE)shadow; b[0x11] = (BYTE)(shadow >> 8);   /* the returned selector */
@@ -21721,7 +21721,7 @@ static DWORD pm_xfer_strlen(WORD sel, DWORD off, DWORD cap)
 
 /* Service one pointer-taking INT 21h call made from protected mode. Returns the log
    cursor. EIP is advanced by the caller, as for every other arm. */
-static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char *p)
+static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *p)
 {
 #define m (*mp)
     WORD  dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
@@ -21779,7 +21779,7 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
     /* Point the DOS layer at the buffer, in the terms it understands. */
     VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
     VDM_SET16(tib, VTIB_EDX, 0);
-    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+    m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
     VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_EDX) = sav_dx;
 
     /* Results back out. A short read is what AX says, not what CX asked for. */
@@ -21841,7 +21841,7 @@ static DWORD pm_lfn_outlen(DWORD xoff, int kind, DWORD len)
     return (n < len) ? n + 1 : len;
 }
 
-static char *pm_int21_lfn(dos_machine_t *mp, volatile BYTE *tib, char *p)
+static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
 {
 #define m (*mp)
     DWORD al = VDM_REG(tib, VTIB_EAX) & 0xFF;
@@ -21900,7 +21900,7 @@ static char *pm_int21_lfn(dos_machine_t *mp, volatile BYTE *tib, char *p)
     if (dx_k) VDM_SET16(tib, VTIB_EDX, 0x000);
     if (si_k) VDM_SET16(tib, VTIB_ESI, 0x400);
     if (di_k) VDM_SET16(tib, VTIB_EDI, 0x800);
-    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+    m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
     /* Restore what we re-pointed -- except a register the call ANSWERS in: 71A0h returns
        the maximum path in DX, 7143h BL=2 the size's high word. */
     VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_ES) = sav_es;
@@ -21944,7 +21944,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base);
    ⚠ Its own stack, below 0301's default one (the code segment at FF00), so a reflection
      can never land on a frame that call is using. */
 static DWORD g_pm_irq_rm_reflects = 0, g_pm_irq_rm_fail = 0;
-static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigned vec)
+static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned vec)
 {
     char lb[256], *lp = lb;
     DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
@@ -21978,7 +21978,7 @@ static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigne
         info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
         if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
         if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
-            char db[2048]; mp->tp = db; dos_int21(mp);        /* its log text is dropped */
+            char db[2048]; mp->TraceCursor = db; DosInt21(mp);        /* its log text is dropped */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }
@@ -22016,7 +22016,7 @@ static int dpmi_reflect_irq_to_rm(dos_machine_t *mp, volatile BYTE *tib, unsigne
     return done;
 }
 
-static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
+static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD vec,
                                     unsigned steps)
 {
 #define m (*mp)
@@ -23197,9 +23197,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     p = zput(p, " -> 0x"); p = zhex(p, bsel);
                     p = zput(p, ":0x"); p = zhex(p, boff);
                     p = zput(p, " lin=0x"); p = zhex(p, bbase + boff);
-                    if (h < DOS_MAX_FILES && m.fh[h] && bbase
+                    if (h < DOS_MAX_FILES && m.FileHandles[h] && bbase
                         && host_writable((void *)(ULONG_PTR)(bbase + boff), cnt)) {
-                        ok = ReadFile(m.fh[h], (void *)(ULONG_PTR)(bbase + boff),
+                        ok = ReadFile(m.FileHandles[h], (void *)(ULONG_PTR)(bbase + boff),
                                       cnt, &rd, NULL) ? 1 : 0;
                     }
                     if (ok) { Wow32SetReturn(&f, rd); ++g_wow32_serviced;
@@ -23226,7 +23226,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     VDM_SET16(tib, VTIB_EDX, (WORD)drv);
                     VDM_SET16(tib, VTIB_DS,  g_pm_xfer_seg);
                     VDM_SET16(tib, VTIB_ESI, 0);
-                    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                    m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                     {   DWORD cf = VDM_REG(tib, VTIB_EFLAGS) & 1u;
                         VDM_REG(tib, VTIB_EAX) = sax; VDM_REG(tib, VTIB_EDX) = sdx;
                         VDM_REG(tib, VTIB_DS)  = sds; VDM_REG(tib, VTIB_ESI) = ssi;
@@ -25195,7 +25195,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             break; }
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
-                            int err = DosMcbAllocate(NULL, m.first_mcb, want, &seg, &max);
+                            int err = DosMcbAllocate(NULL, m.FirstMcb, want, &seg, &max);
                             int idx = err ? -1 : dpmi_ldt_take();   /* #248: free list first */
                             if (!err && idx < 0) {                 /* no descriptor: give the block back */
                                 DosMcbFree(NULL, seg);
@@ -25216,7 +25216,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      block's owner and size; a free tail that is not being
                                      coalesced looks completely different from a guest
                                      that really did take everything. */
-                                {   uint16_t mm = m.first_mcb; int guard2 = 0;
+                                {   uint16_t mm = m.FirstMcb; int guard2 = 0;
                                     p = zput(p, " chain:");
                                     for (;;) {
                                         volatile BYTE *mc = (volatile BYTE *)((DWORD)mm << 4);
@@ -25999,7 +25999,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  This loaded the low WORD of seven registers plus ES and DS, and
                                  parked SS:SP on a "host scratch stack" at 0100:FF00 -- which is
                                  DOS_PSP_SEG, the FIRST PROGRAM'S OWN SEGMENT, not ours.
-                               ⛔ AND THAT IS WHERE EVERY INT 21h ERROR WENT. dos_int21() returns
+                               ⛔ AND THAT IS WHERE EVERY INT 21h ERROR WENT. DosInt21() returns
                                  CF/ZF by editing the FLAGS word of the caller's IRET frame at
                                  SS:SP+4 -- so each 0300h INT 21h OR'd its carry into linear
                                  0x10F04, inside the guest's image, and the RMCS got the CLIENT'S
@@ -26007,7 +26007,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  INT 31h dispatcher. 0300h INT 21h has never once reported a DOS
                                  error. Same shape as the 0301 FLAGS bug below, one level deeper.
                                ► Serve the call the way the dispatcher serves a PM client's own
-                                 INT 21h: dos_int21_set_pm(1) points dos_int21's CF/ZF at the live
+                                 INT 21h: DosInt21SetProtectedMode(1) points DosInt21's CF/ZF at the live
                                  VTIB_EFLAGS, which is loaded with RMCS.FLAGS first -- so FLAGS comes
                                  back exactly as an IRET from the stub would return it (the
                                  caller's flags, with CF/ZF as DOS set them), and no stack is
@@ -26064,7 +26064,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             if (intno == 0x21) {
                                 /* CF/ZF into VTIB_EFLAGS, not into an IRET frame there is none of --
                                    see the #247 note above. */
-                                m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                                m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             }
                             else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
                             else if (intno == 0x10) {
@@ -26283,11 +26283,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     done = 1; break;                /* proc RETF'd -> finished */
                                 }
                                 if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
-                                    m.tp = p; m.v86_tramp_ok = 1; dos_int21(&m); m.v86_tramp_ok = 0; p = m.tp;
-                                    if (m.v86_tramp) {               /* #251: AUX/PRN driver code; its */
+                                    m.TraceCursor = p; m.CanTrampoline = 1; DosInt21(&m); m.CanTrampoline = 0; p = m.TraceCursor;
+                                    if (m.Trampoline) {               /* #251: AUX/PRN driver code; its */
                                         VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);   /* INT 14h/17h are */
-                                        VDM_REG(tib, VTIB_EIP) = m.v86_tramp;    /* served below    */
-                                        m.v86_tramp = 0;
+                                        VDM_REG(tib, VTIB_EIP) = m.Trampoline;    /* served below    */
+                                        m.Trampoline = 0;
                                     } else
                                     VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -26453,13 +26453,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
                                 BYTE sc = *s;
                                 if (sc >= 0x20) *op++ = (char)sc;   /* printable -> serial echo */
-                                if (m.fh[1]) {                      /* #256: redirected stdout */
-                                    DWORD w9 = 0; WriteFile(m.fh[1], &sc, 1, &w9, NULL);
+                                if (m.FileHandles[1]) {                      /* #256: redirected stdout */
+                                    DWORD w9 = 0; WriteFile(m.FileHandles[1], &sc, 1, &w9, NULL);
                                     continue;
                                 }
-                                if (m.conout) m.conout(m.conctx, sc);  /* -> the Luna console */
-                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)sc;
-                                else m.out_trunc = 1;
+                                if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, sc);  /* -> the Luna console */
+                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)sc;
+                                else m.IsOutputTruncated = 1;
                             }
                             op = zput(op, "\"\r\n");
                             log_append(LOG_PATH, ob, op); serial_out(ob, op);
@@ -26471,11 +26471,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
                             /* #256: standard output, so a redirected handle 1 gets it --
                                as the V86 OUTC does. */
-                            if (m.fh[1]) { DWORD w1 = 0; WriteFile(m.fh[1], &ch, 1, &w1, NULL); }
+                            if (m.FileHandles[1]) { DWORD w1 = 0; WriteFile(m.FileHandles[1], &ch, 1, &w1, NULL); }
                             else {
-                                if (m.conout) m.conout(m.conctx, ch);
-                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
-                                else m.out_trunc = 1;
+                                if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, ch);
+                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)ch;
+                                else m.IsOutputTruncated = 1;
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_REG(tib, VTIB_EIP) += 2;
@@ -26493,8 +26493,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  AH=40h). The same two rules as there: a bound slot is a file;
                                  an unbound open device slot is the console, except 3/4,
                                  which are AUX and PRN (#251). */
-                            int bound = (bh < DOS_MAX_FILES && m.fh[bh] != 0);
-                            int dev   = (!bound && bh < 32 && ((m.std_open >> bh) & 1u));
+                            int bound = (bh < DOS_MAX_FILES && m.FileHandles[bh] != 0);
+                            int dev   = (!bound && bh < 32 && ((m.StdOpen >> bh) & 1u));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             if (dev && (bh == 3 || bh == 4)) {     /* AUX / PRN */
                                 DWORD k;
@@ -26508,19 +26508,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 op = zput(op, "INT21h AH=40 write: \"");
                                 for (k = 0; k < cnt && k < 250; ++k) {
                                     if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
-                                    if (m.conout) m.conout(m.conctx, b[k]);
-                                    if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)b[k];
-                                    else m.out_trunc = 1;
+                                    if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, b[k]);
+                                    if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)b[k];
+                                    else m.IsOutputTruncated = 1;
                                 }
                                 op = zput(op, "\"\r\n");
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
                             } else if (bound) {                     /* file handle */
                                 DWORD w = 0, we = 0;
-                                if (!WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL)) we = GetLastError();
+                                if (!WriteFile(m.FileHandles[bh], (const void *)b, cnt, &w, NULL)) we = GetLastError();
                                 if (!pm_rw_hw_fail(&m, tib, 0x40, we, &p)) {   /* #275 */
                                     VDM_SET16(tib, VTIB_EAX, w);
-                                    dos_stamp_vdm_now(m.fh[bh]);   /* #263, as the V86 AH=40h */
+                                    DosStampVdmNow(m.FileHandles[bh]);   /* #263, as the V86 AH=40h */
                                 }
                                 p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -26592,9 +26592,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                        (gle == ERROR_FILE_EXISTS ||
                                         gle == ERROR_ALREADY_EXISTS)     ? 0x50 :
                                        (gle == ERROR_TOO_MANY_OPEN_FILES)? 4 : 2); }
-                            else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.fh[slot]; ++slot) {}
-                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot);
-                                                    if (ah == 0x3C || ah == 0x5B) dos_stamp_vdm_now(f); /* #263 */ }
+                            else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.FileHandles[slot]; ++slot) {}
+                                   if (slot < 24) { m.FileHandles[slot] = f; VDM_SET16(tib, VTIB_EAX, slot);
+                                                    if (ah == 0x3C || ah == 0x5B) DosStampVdmNow(f); /* #263 */ }
                                    else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
                             /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
                                  This printed AX and nothing else, so a failed open reading
@@ -26614,8 +26614,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                         if (ah == 0x3E) {                          /* close: BX=handle */
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
-                            int was = (h < DOS_MAX_FILES && m.fh[h]) ? 1 : 0;
-                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) dos_handle_release(&m, h);   /* s81: a parent may hold it */
+                            int was = (h < DOS_MAX_FILES && m.FileHandles[h]) ? 1 : 0;
+                            if (h >= 5 && h < DOS_MAX_FILES && m.FileHandles[h]) DosHandleRelease(&m, h);   /* s81: a parent may hold it */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             /* Silent until session 37, which needed to know whether a handle
                                was still open when the NEXT open of the same file failed --
@@ -26631,9 +26631,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h < DOS_MAX_FILES && m.fh[h]) {
+                            if (h < DOS_MAX_FILES && m.FileHandles[h]) {
                                 DWORD we = 0;
-                                if (!ReadFile(m.fh[h], b, cnt, &rd, NULL)) we = GetLastError();
+                                if (!ReadFile(m.FileHandles[h], b, cnt, &rd, NULL)) we = GetLastError();
                                 if (!pm_rw_hw_fail(&m, tib, 0x3F, we, &p))   /* #275 */
                                     VDM_SET16(tib, VTIB_EAX, rd);
                             }
@@ -26665,8 +26665,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             p = zput(p, " lin=0x"); p = zhex(p, (DWORD)(ULONG_PTR)b);
                             p = zput(p, " pos=0x");
-                            p = zhex(p, (h < DOS_MAX_FILES && m.fh[h])
-                                        ? SetFilePointer(m.fh[h], 0, NULL, FILE_CURRENT) : 0);
+                            p = zhex(p, (h < DOS_MAX_FILES && m.FileHandles[h])
+                                        ? SetFilePointer(m.FileHandles[h], 0, NULL, FILE_CURRENT) : 0);
                             p = zput(p, " first=");
                             if (rd && host_readable(b, 8)) p = zdump(p, b, 8);
                             else                           p = zput(p, "-");
@@ -26678,8 +26678,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, meth = ax & 0xFF;
                             LONG dist = (LONG)(((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) {
-                                DWORD np = SetFilePointer(m.fh[h], dist, NULL, meth);
+                            if (h >= 5 && h < DOS_MAX_FILES && m.FileHandles[h]) {
+                                DWORD np = SetFilePointer(m.FileHandles[h], dist, NULL, meth);
                                 VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
                                 p = zput(p, "INT21h AH=42 seek h="); p = zhex(p, h);
                                 p = zput(p, " org="); p = zhex(p, meth);
@@ -26697,7 +26697,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
-                           dos_int21() reads and writes the same VDM_TIB register fields the PM
+                           DosInt21() reads and writes the same VDM_TIB register fields the PM
                            client left behind, so a service that takes NO pointer argument needs
                            no thunking at all -- there is nothing to translate.
                            ► THE WHITELIST IS DELIBERATE, NOT LAZINESS. A service that takes a
@@ -26714,7 +26714,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              DID (twice), so 49h is hand-rolled below, resolving ES through the
                              LDT. 4Ah is still unevidenced and still stays loud.
                            ► 33h (Ctrl-Break / true version) joined the whitelist on the same
-                             evidence: Doom calls it twice, and every subfunction dos_int21
+                             evidence: Doom calls it twice, and every subfunction DosInt21
                              implements (AL=00/01/05/06) reads and writes GPRs only. Leaving it
                              unhandled was NOT neutral -- the TODO arm returned with AX still
                              0x33xx and CF untouched, and the caller's very next instructions are
@@ -26731,7 +26731,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                VDM. That segment load IS the specification here, the same way
                                DOS/4GW clearing D/B itself settled the
                                initial-selector width.
-                               So: do the real DOS allocation (dos_int21 owns the MCB chain),
+                               So: do the real DOS allocation (DosInt21 owns the MCB chain),
                                then hand back a descriptor covering it, IN AX ONLY.
 
                                ► DO NOT ALSO PUT IT IN DX. Session 16 did, reasoning that it
@@ -26758,7 +26758,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  leaves alone is not a harmless bonus, it is a silent
                                  corruption of the caller's state. Return what DOS returns. */
                             DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
-                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             p = zput(p, "INT21h AH=48 (PM) alloc 0x"); p = zhex(p, want);
                             if (VDM_REG(tib, VTIB_EFLAGS) & 1u) {
                                 p = zput(p, " -> FAILED, largest 0x");
@@ -26831,7 +26831,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             /* ── SET/GET INTERRUPT VECTOR FROM PROTECTED MODE ───────────────
                                These operate on the PROTECTED-MODE vector, i.e. they are
                                INT 31h 0205/0204 wearing a DOS hat, and must never reach
-                               dos_int21() -- which writes DS:DX straight into the real-mode
+                               DosInt21() -- which writes DS:DX straight into the real-mode
                                IVT at linear (AL*4). In PM that would store a SELECTOR where
                                a segment belongs, in the first kilobyte of guest memory.
 
@@ -26966,7 +26966,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = wow_psp_env_check(p, "a PM INT 21h");
                         /* #210: the long-filename API -- pm_int21_lfn says how and why. */
                         if (ah == 0x71) {
-                            if (g_pm_xfer_seg) { m.tp = p; p = pm_int21_lfn(&m, tib, p); }
+                            if (g_pm_xfer_seg) { m.TraceCursor = p; p = pm_int21_lfn(&m, tib, p); }
                             else {
                                 VDM_SET16(tib, VTIB_EAX, 0x7100);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
@@ -26980,7 +26980,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
-                            m.tp = p; p = pm_int21_xfer(&m, tib, ah, p);
+                            m.TraceCursor = p; p = pm_int21_xfer(&m, tib, ah, p);
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
@@ -27002,7 +27002,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              segment becomes a selector over the same linear address. */
                         if (ah == 0x34 || ah == 0x52) {
                             WORD sel34;
-                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             sel34 = dpmi_seg_to_desc((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM) far pointer at V86 0x");
@@ -27043,7 +27043,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             ah == 0x36 || ah == 0x37 || ah == 0x4D || ah == 0x54 ||
                             ah == 0x5C || ah == 0x66 || ah == 0x67 || ah == 0x68 ||
                             ah == 0x6A) {
-                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
                             p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
@@ -27190,14 +27190,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                               SERVICE: CF=1. ──────────────────────────────────────────
                            This arm used to return with the flags exactly as the client
                            left them, which in practice means CF=0 -- it told the client
-                           its request SUCCEEDED. dos_int21()'s unhandled arm sets CF=1
+                           its request SUCCEEDED. DosInt21()'s unhandled arm sets CF=1
                            and says why: "a quiet success would tell the program its
                            request worked when nothing happened". The protected-mode path
                            has no business disagreeing with the real-mode path about that.
                            It matters here: DOS/4GW routes these through a generic register-
                            block thunk, so whatever it is probing for, a false success sends
                            it down the branch for a feature we do not have. AX is left alone,
-                           same as ERRCF() in dos_int21 -- CF is the answer, not a code we
+                           same as ERRCF() in DosInt21 -- CF is the answer, not a code we
                            would be inventing. */
                         VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -27350,7 +27350,7 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
 /* The service, and then the one thing it cannot say in a register. Kept as a wrapper
    rather than repeated at the ~90 `return 1` sites above, because a rule enforced in
    one place is a rule and a rule repeated ninety times is a lottery. */
-static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
+static int dpmi_service_pm_int(DOS_MACHINE *mp, volatile BYTE *tib, DWORD vec,
                                unsigned steps)
 {
     int rc;
@@ -28247,7 +28247,7 @@ static int wow_send16_now(WORD h16, WORD msg, WORD wp, DWORD lp, WORD *res)
                            args, 5, h16, msg, res);
 }
 
-static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
+static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
 {
     char lb[256], *lp = lb;
     if (g_pm_client_exited) return 0;              /* nothing left to interrupt */
@@ -28473,7 +28473,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
      parked in GetMessage, and on real hardware IRQ 10 would interrupt that idle task,
      MMSYSTEM's handler would post MM_WOM_DONE, and GetMessage would return it -- so
      the wait must deliver too, or the callback arrives never. */
-static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned steps)
+static void wow_ica_deliver(DOS_MACHINE *mp, volatile BYTE *tib, unsigned steps)
 {
     LONG bits;
     unsigned li;
@@ -28504,7 +28504,7 @@ static void wow_ica_deliver(dos_machine_t *mp, volatile BYTE *tib, unsigned step
      the client is), on its own stack, a far-return frame onto the PM-return catcher,
      the same phase loop, the interrupted context restored verbatim. The frame is a
      RETF frame (CS:EIP, no FLAGS) because that is what the handler pops. */
-static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigned steps)
+static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned steps)
 {
     if (g_pm_client_exited) return 0;          /* nothing left to call into */
     DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
@@ -28791,7 +28791,7 @@ static void dpmi_icpu_store(icpu *c, volatile BYTE *tib)
 
 /* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
    unserviceable opcode (already logged). Never touches the kernel PM path. */
-static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
+static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
 {
     icpu c; long guard = 0; char rb[256]; char *r;
     g_seg2lin = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
@@ -29684,7 +29684,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     volatile BYTE *tib, *hdlr;
     DWORD nread = 0, err = 0, ev; LONG st;
     DOS_IMAGE img;
-    dos_machine_t m;
+    DOS_MACHINE m;
     char dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
     char progpath[768]; char args[256];
     unsigned i; int guard;
@@ -31417,7 +31417,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
     {   uint16_t first_mcb = DosMcbInitializeWithTop(NULL, g_dos_mem_top);   /* #136 */
-        dos_int21_init(&m, first_mcb);
+        DosInt21Initialize(&m, first_mcb);
         /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
            DosMcbInitialize, which lays the chain and clears the name byte. */
         DosMcbSetOwnerName(NULL, DOS_PSP_SEG, progpath);
@@ -31466,7 +31466,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
        guest's next version check with no restart. */
     g_dosm = &m;
-    dos_int21_set_version(&m, (uint8_t)g_set.v[SET_DOSMAJ], (uint8_t)g_set.v[SET_DOSMIN]);
+    DosInt21SetVersion(&m, (uint8_t)g_set.v[SET_DOSMAJ], (uint8_t)g_set.v[SET_DOSMIN]);
     /* Two sources, and the second one silently wins -- see the note below the file read. */
     const char *dosver_src = "HKCU\\Software\\NTVDMEX (Settings dialog)";
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
@@ -31487,9 +31487,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
          started from Windows now runs UNDER this shell, so forcing the whole session to
          5.00 would have changed the version every program sees. Only the SHELL'S OWN
-         PROCESS is told 5.00 (dos_int21_shell_psp); what it runs gets the setting. */
+         PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
     if (g_guest_ntaware) {
-        dos_int21_shell_psp(&m, DOS_PSP_SEG, 1);
+        DosInt21SetShellPsp(&m, DOS_PSP_SEG, 1);
         dosver_src = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
         g_dosver_shell = 1;
     } else if (g_guest_ntvdm_bops >= 8 && g_top_is_shell) {
@@ -31500,7 +31500,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              runs/s91/chain18b). Same image test and same per-process 5.00 as the
              EXEC path gives a second XP shell; the name check is the second factor
              that keeps an innocent guest from being told DOS 5. */
-        dos_int21_shell_psp(&m, DOS_PSP_SEG, 1);
+        DosInt21SetShellPsp(&m, DOS_PSP_SEG, 1);
         dosver_src = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
         g_dosver_shell = 1;
     }
@@ -31516,7 +31516,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               while (i < rd && c[i] >= '0' && c[i] <= '9') { mn = mn*10 + (unsigned)(c[i]-'0'); ++i; }
           }
           if (mj && mj < 256 && mn < 256) {
-              dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
+              DosInt21SetVersion(&m, (uint8_t)mj, (uint8_t)mn);
               settings_note_override(SET_DOSMAJ, "cfg\\dosver.txt", mj);
               settings_note_override(SET_DOSMIN, "cfg\\dosver.txt", mn);
               dosver_src = "cfg\\dosver.txt";
@@ -31542,9 +31542,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
          different DOS versions. */
     p = zput(p, "STAGE2: DOS version reported = ");
-    p = zdec(p, m.ver_major); p = zput(p, ".");
-    if (m.ver_minor < 10) p = zput(p, "0");
-    p = zdec(p, m.ver_minor);
+    p = zdec(p, m.VersionMajor); p = zput(p, ".");
+    if (m.VersionMinor < 10) p = zput(p, "0");
+    p = zdec(p, m.VersionMinor);
     p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
     /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
          XP's COMMAND.COM asks AH=53h with AL as a selector, and AL=5's answer decides
@@ -31577,13 +31577,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            asked for the AL=0 answer this branch gives it. Kept as the model until
            that can be measured. It is marked here so it cannot quietly become folklore. */
       if (g_guest_ntaware) {
-          g_dos_int53[0x02].ax = 0x5300; g_dos_int53[0x02].cf = 1;   /* top of its main loop */
+          g_DosInt53Answers[0x02].Ax = 0x5300; g_DosInt53Answers[0x02].IsCarry = 1;   /* top of its main loop */
           /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends
              its loop to BOP 54 sub 01 ("what next?") instead of the prompt -- so when the
              program ends the shell ASKS, and we decide: done (close the window) or, after
              Close Program, the prompt. See the sub 01 arm. */
-          if (g_routed) g_dos_int53[0x02].cf = 0;
-          g_dos_int53[0x05].ax = 0x5300; g_dos_int53[0x05].cf = 0;   /* -> [0x327] = 0       */
+          if (g_routed) g_DosInt53Answers[0x02].IsCarry = 0;
+          g_DosInt53Answers[0x05].Ax = 0x5300; g_DosInt53Answers[0x05].IsCarry = 0;   /* -> [0x327] = 0       */
           i53_src = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
       }
       h = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -31610,9 +31610,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   if (!got) break;
                   v[nf++] = val;
               }
-              if (nf == 3 && v[0] < DOS_INT53_N) {
-                  g_dos_int53[v[0]].ax = (uint16_t)v[1];
-                  g_dos_int53[v[0]].cf = (uint8_t)(v[2] ? 1 : 0);
+              if (nf == 3 && v[0] < DOS_INT53_COUNT) {
+                  g_DosInt53Answers[v[0]].Ax = (uint16_t)v[1];
+                  g_DosInt53Answers[v[0]].IsCarry = (uint8_t)(v[2] ? 1 : 0);
                   i53_src = "cfg\\int53.txt";
               }
               while (i < rd && c[i] != '\n') ++i;
@@ -31622,10 +31622,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "STAGE2: INT 21h AH=53h answers (source: ");
       p = zput(p, i53_src); p = zput(p, ")");
       { unsigned k;
-        for (k = 0; k < DOS_INT53_N; ++k) {
+        for (k = 0; k < DOS_INT53_COUNT; ++k) {
             p = zput(p, " "); p = zhexb(p, (BYTE)k); p = zput(p, "=");
-            p = zhex(p, g_dos_int53[k].ax);
-            p = zput(p, g_dos_int53[k].cf ? "/C" : "/c");
+            p = zhex(p, g_DosInt53Answers[k].Ax);
+            p = zput(p, g_DosInt53Answers[k].IsCarry ? "/C" : "/c");
         } }
       p = zput(p, "\r\n"); }
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
@@ -31674,18 +31674,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          limit was a symptom of it sharing DOS_HDLR_SEG. */
     volatile BYTE *svs = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << 4);
     { int k; for (k = -2; k < DOS_SYSVARS_LEN; ++k) svs[DOS_SYSVARS_OFF + k] = 0; }
-    *(volatile WORD *)(svs + DOS_SYSVARS_OFF - 2) = m.first_mcb;
+    *(volatile WORD *)(svs + DOS_SYSVARS_OFF - 2) = m.FirstMcb;
     /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
          also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
          on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
          chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
          does on 6.22 and PCem (p_sysvar). */
     *(volatile WORD *)(svs + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
-    *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x68) = m.first_mcb;
+    *(volatile WORD *)(svs + DOS_SYSVARS_OFF + 0x68) = m.FirstMcb;
     svs[DOS_SYSVARS_OFF + 0x20] = 1;                      /* block devices       */
     svs[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;          /* LASTDRIVE           */
-    m.sysvars_seg = DOS_SYSVARS_SEG;
-    m.sysvars_off = DOS_SYSVARS_OFF;
+    m.SysvarsSegment = DOS_SYSVARS_SEG;
+    m.SysvarsOffset = DOS_SYSVARS_OFF;
     /* ── ★ THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) ────────────
          Until now everything above +0x20 was deliberately zero, and that choice was
          right while there was nothing truthful to put there: a walker that follows
@@ -31848,7 +31848,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + 2) = 0xFFFF;
         }
         /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
-               INT 21h layer can really open (dos_machine_t::fh[]). Same shape the
+               INT 21h layer can really open (DOS_MACHINE::fh[]). Same shape the
                WOW path plants -- see the reserve above for why a DOS guest needs
                one and why 0000:0000 was worse than useless. The entries are left
                zeroed, which is not a stub: that is what a free SFT entry looks
@@ -31873,7 +31873,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
         q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
         q = zput(q, " (terminated), NUL inline -> CON..COM4 at 0x"); q = zhex(q, DOS_DEV_SEG);
-        q = zput(q, ":0 (terminated), first MCB 0x"); q = zhex(q, m.first_mcb);
+        q = zput(q, ":0 (terminated), first MCB 0x"); q = zhex(q, m.FirstMcb);
         q = zput(q, " above SysVars 0x"); q = zhex(q, DOS_SYSVARS_SEG);
         q = zput(q, " (#207), "); q = zhex(q, DOS_LASTDRIVE);
         q = zput(q, " CDS entries at 0x"); q = zhex(q, g_cds_seg);
@@ -31933,7 +31933,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit.RtcContext = NULL;
     g_pit.RtcSet = host_rtc_set;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
     g_pit.TicksSet = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
-    g_dos_tick_take = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
+    g_DosTickTake = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     VddBusInitialize(&g_bus, NULL);
@@ -32499,11 +32499,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
         p = zdec(p, g_wave.SampleHz); p = zput(p, " Hz\r\n");
     }
-    m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
-    m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
+    m.ConsoleOut = host_conout; m.ConsoleOutContext = NULL;    /* DOS console out -> video      */
+    m.ConsoleIn  = host_conin;  m.ConsoleInContext = NULL;    /* DOS console in  <- keyboard   */
     /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
-       default. See the trace at the top of dos_int21(). */
-    m.trace_all = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
+       default. See the trace at the top of DosInt21(). */
+    m.IsTraceAll = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     /* DPMI 0300 reflects to the guest's own real-mode handler -- ON by default since s81,
        when the wedge that kept it off was found and fixed (see g_nested_rm and the BIOS
        tick in async_inject_irq). simintrefl_off.flag turns it off for diagnosis; say so,
@@ -32516,12 +32516,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       "simint_route().\r\n");
         log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
-    m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
-    m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
-    m.set_ticks = host_set_ticks;               /* AH=2Dh reloads 0040:006C (#250) */
-    m.ticks_ctx = NULL;
-    m.prnout  = dos_prnout;                     /* #251: PRN/AUX when not in V86 */
-    m.auxout  = dos_auxout;  m.devctx = NULL;
+    m.ConsoleInNoWait = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
+    m.ConsolePeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
+    m.SetTicks = host_set_ticks;               /* AH=2Dh reloads 0040:006C (#250) */
+    m.TicksContext = NULL;
+    m.PrinterOut  = dos_prnout;                     /* #251: PRN/AUX when not in V86 */
+    m.AuxOut  = dos_auxout;  m.DeviceContext = NULL;
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */
@@ -32790,7 +32790,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Service loop: run V86 until a BOP, dispatch INT 21h, step past the BOP, re-enter.
        Runs until the guest terminates, a hard stop, or the window closes (g_running);
        no iteration cap so interactive/animated programs keep going. */
-    m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0; m.out_trunc = 0;
+    m.Tib = tib; m.Output = dosout; m.OutputCapacity = sizeof(dosout); m.OutputLength = 0; m.IsOutputTruncated = 0;
     g_mach = &m;              /* the watchdog flushes this if the run wedges */
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
@@ -33371,7 +33371,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    rather than leaving an IRET means a program that exits this
                    way actually exits, instead of returning into itself. */
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
-                m.tp = p; dos_int21(&m); p = m.tp;   /* AH=00 -> terminate       */
+                m.TraceCursor = p; DosInt21(&m); p = m.TraceCursor;   /* AH=00 -> terminate       */
                 /* ★ AND IF THIS WAS A CHILD, GO BACK TO ITS PARENT. (GH #134)
                      This used to set handled = 2, which `break`s the exec loop
                      and ends the whole VDM -- so a .COM child exiting the normal
@@ -33385,13 +33385,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      the last partial one is kept rather than cut off.
                      CS is the resident program's PSP for an INT 27h caller. */
                 DWORD dx27 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-                m.tsr_keep = (WORD)((dx27 + 15) >> 4);
-                m.tsr_pending = 1;
-                p = zput(p, "  INT27 TSR: keep 0x"); p = zhex(p, m.tsr_keep);
+                m.TsrKeep = (WORD)((dx27 + 15) >> 4);
+                m.IsTsrPending = 1;
+                p = zput(p, "  INT27 TSR: keep 0x"); p = zhex(p, m.TsrKeep);
                 p = zput(p, " paras (DX=0x"); p = zhex(p, dx27);
                 p = zput(p, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
-                m.tp = p; dos_int21(&m); p = m.tp;
+                m.TraceCursor = p; DosInt21(&m); p = m.TraceCursor;
                 handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
             } else handled = 0;
             if (handled == 2) break;               /* terminate: the run is over  */
@@ -33469,7 +33469,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    our DOS layer reads PSP+0x2C -- dos_psp.h writes it once at load and no
                    reader exists (checked). If one is ever added, it must not assume a
                    segment after a DPMI switch. */
-                { WORD psp = m.psp_seg;
+                { WORD psp = m.PspSegment;
                   DWORD pspbase = (DWORD)psp << 4;
                   WORD psp_sel = 0, env_sel = 0;
                   if (g_ldt_next < DPMI_LDT_MAX) {
@@ -35374,7 +35374,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     dpmi_client_teardown();
                     *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
                     VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
-                    m.exit_code = g_pm_exit_code;
+                    m.ExitCode = g_pm_exit_code;
                     p = zput(p, "DPMI: client exited with a parent waiting (depth=");
                     p = zhexb(p, (unsigned)g_exec_depth);
                     p = zput(p, ") -- back to real mode, terminating the child there\r\n");
@@ -35383,7 +35383,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         g_close_forced = 0;
                         if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
                         exec_mach_restore(g_exec_depth - 1, &p);
-                        m.tsr_pending = 0;
+                        m.IsTsrPending = 0;
                     }
                     if (dos_terminate(&m, tib, &p, base)) continue;   /* parent resumed */
                 }
@@ -35595,7 +35595,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      shell's NEXT sub 01 is then an ordinary EXIT. */
                 if (g_guest_ntaware && g_back_to_prompt && g_shell_getnext_n >= 1) {
                     g_back_to_prompt = 0;
-                    g_dos_int53[0x02].cf = 1;
+                    g_DosInt53Answers[0x02].IsCarry = 1;
                     p = zput(p, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 } else
@@ -35604,7 +35604,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 " -- ending the VDM, rc=0x");
                     p = zhex(p, *(volatile WORD *)(b + 0x0E)); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                    m.exit_code = *(volatile WORD *)(b + 0x0E) & 0xFF;
+                    m.ExitCode = *(volatile WORD *)(b + 0x0E) & 0xFF;
                     break;
                 }
                 #define BW(o, v) (*(volatile WORD *)(b + (o)) = (WORD)(v))
@@ -36038,7 +36038,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (bn == NTVDM_BOP_CMD && sub == 0x00) {
                 p = zput(p, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                m.exit_code = 0;
+                m.ExitCode = 0;
                 break;
             }
             if (bn == NTVDM_BOP_CMD && sub == 0x0E) {
@@ -36071,7 +36071,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
                killed by an unimplemented call and reported as a clean exit 0; reusing 0
                here would leave the lie in place with better logging on top of it. */
-            m.exit_code = 0xBD;
+            m.ExitCode = 0xBD;
             break;
         }
         /* ── #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
@@ -36087,35 +36087,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             continue;                                /* RETRY re-runs it; FAIL/IGNORE resume */
         }
-        if (!m.crit_active) crit_snapshot(tib);      /* #34: the call's INPUT registers (not the handler's own calls) */
-        m.tp = p;
-        m.retry = 0;
-        m.v86_tramp_ok = 1;                         /* #251: we can resume elsewhere */
-        m.crit_raise_ok = 1;                        /* #275: ...and raise INT 24h (below) */
-        if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
-            m.v86_tramp_ok = 0;
-            m.crit_raise_ok = 0;
-            p = m.tp;
+        if (!m.IsCritActive) crit_snapshot(tib);      /* #34: the call's INPUT registers (not the handler's own calls) */
+        m.TraceCursor = p;
+        m.IsRetry = 0;
+        m.CanTrampoline = 1;                         /* #251: we can resume elsewhere */
+        m.CanRaiseCrit = 1;                        /* #275: ...and raise INT 24h (below) */
+        if (!DosInt21(&m)) {                       /* AH=4Ch -> terminate */
+            m.CanTrampoline = 0;
+            m.CanRaiseCrit = 0;
+            p = m.TraceCursor;
             if (dos_terminate(&m, tib, &p, base)) continue;
             break;
         }
-        m.v86_tramp_ok = 0;
-        m.crit_raise_ok = 0;
-        p = m.tp;
-        if (m.v86_tramp) {                          /* #251: into DOS's AUX/PRN driver code */
+        m.CanTrampoline = 0;
+        m.CanRaiseCrit = 0;
+        p = m.TraceCursor;
+        if (m.Trampoline) {                          /* #251: into DOS's AUX/PRN driver code */
             VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
-            VDM_REG(tib, VTIB_EIP) = m.v86_tramp;
-            m.v86_tramp = 0;
+            VDM_REG(tib, VTIB_EIP) = m.Trampoline;
+            m.Trampoline = 0;
             log_append(LOG_PATH, base, p); p = base;
             continue;
         }
-        if (m.crit_pending) {                       /* #34: call the guest's INT 24h */
+        if (m.IsCritPending) {                       /* #34: call the guest's INT 24h */
             crit_raise(&m, tib, &p);
             log_append(LOG_PATH, base, p); p = base;
             continue;                               /* CS:IP is now the INT 24h site */
         }
-        if (m.exec_pending) {                       /* GH #30: AH=4Bh */
-            m.exec_pending = 0;
+        if (m.IsExecPending) {                       /* GH #30: AH=4Bh */
+            m.IsExecPending = 0;
             p = exec_begin(&m, tib, p);
             log_append(LOG_PATH, base, p); p = base;
             continue;                               /* CS:IP now points at the child */
@@ -36123,7 +36123,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
            re-executes the INT and keeps running -- and keeps taking timer interrupts, so
            its music and animation carry on while it waits for a key, as on real hardware. */
-        if (!m.retry) VDM_REG(tib, VTIB_EIP) += 3;  /* past the 3-byte BOP -> the IRET */
+        if (!m.IsRetry) VDM_REG(tib, VTIB_EIP) += 3;  /* past the 3-byte BOP -> the IRET */
         log_append(LOG_PATH, base, p); p = base;
     }
     }   /* storm-state block */
@@ -36137,7 +36137,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        way so it does not force-exit us mid-flush and lose the DOS output. */
     InterlockedExchange(&g_wound_down, 1);
 
-    g_ci.ExitCode = (ULONG)m.exit_code;
+    g_ci.ExitCode = (ULONG)m.ExitCode;
     /* Flush captured DOS output to the console + the log.
      ► IF WE STREAMED IT LIVE, DO NOT PRINT IT AGAIN. g_stdio carries the output
        as the guest produces it now (GH #131), so the historical bulk write to
@@ -36158,10 +36158,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          DOS program typed into the same window was queued to a host that had gone). */
     if (g_fetch2_ok) {
         HANDLE th; DWORD tid = 0, w;
-        p = zput(p, "STAGE2: task done -> reporting exit code 0x"); p = zhex(p, (DWORD)m.exit_code);
+        p = zput(p, "STAGE2: task done -> reporting exit code 0x"); p = zhex(p, (DWORD)m.ExitCode);
         p = zput(p, " to CSRSS (helper thread)...\r\n");
         log_append(LOG_PATH, base, p); p = base;
-        th = CreateThread(NULL, 0, csrss_report_thread, (LPVOID)(ULONG_PTR)m.exit_code, 0, &tid);
+        th = CreateThread(NULL, 0, csrss_report_thread, (LPVOID)(ULONG_PTR)m.ExitCode, 0, &tid);
         /* A short grace so the report's LPC is processed (launcher released) before
            ExitVDM's is. The wait normally times out: the call is blocked for the
            console's next command, which is stock ntvdm's idle state, not ours. */
@@ -36270,11 +36270,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                           OPEN_EXISTING, 0, NULL)
             : INVALID_HANDLE_VALUE;
-        if (m.out_len > 0) {
-            m.out[m.out_len] = 0;
-            if (hcon != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(hcon, m.out, m.out_len, &w, NULL); }
-            p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, m.out);
-            if (m.out_trunc) p = zput(p, "\r\n<<<OUTPUT TRUNCATED>>>");
+        if (m.OutputLength > 0) {
+            m.Output[m.OutputLength] = 0;
+            if (hcon != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(hcon, m.Output, m.OutputLength, &w, NULL); }
+            p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, m.Output);
+            if (m.IsOutputTruncated) p = zput(p, "\r\n<<<OUTPUT TRUNCATED>>>");
             p = zput(p, "]\r\n");
         }
         if (hcon != INVALID_HANDLE_VALUE) CloseHandle(hcon);
@@ -36650,12 +36650,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { int i, n;
       p = zput(p, "STAGE2: INT21 unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
-          if ((m.unimpl21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+          if ((m.Unimplemented[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
       for (i = 0, n = 0; i < 256; ++i)
-          if ((m.noop21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+          if ((m.Undefined[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: BIOS partial/unimplemented:");

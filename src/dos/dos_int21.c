@@ -14,49 +14,49 @@
 /* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
    mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
    FLAGS frame that does not exist there. See the pfl assignment below. */
-int g_dos_int21_pm = 0;
-void dos_int21_set_pm(int on) { g_dos_int21_pm = on ? 1 : 0; }
+INT g_DosInt21IsProtectedMode = 0;
+VOID DosInt21SetProtectedMode(INT isOn) { g_DosInt21IsProtectedMode = isOn ? 1 : 0; }
 
 /* ── THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
      time, moved only by a guest's own set calls. */
 DOS_CLOCK_STATE g_DosClock;
 
-void dos_clock_host_now(DOS_CLOCK_TIME *t)
+VOID DosClockHostNow(PDOS_CLOCK_TIME time)
 {
-    SYSTEMTIME lt;
-    GetLocalTime(&lt);
-    t->Year = lt.wYear; t->Month = lt.wMonth; t->Day = lt.wDay;
-    t->Hour = lt.wHour; t->Minute = lt.wMinute; t->Second = lt.wSecond;
-    t->Hundredths = (unsigned)(lt.wMilliseconds / 10); t->DayOfWeek = lt.wDayOfWeek;
+    SYSTEMTIME localTime;
+    GetLocalTime(&localTime);
+    time->Year = localTime.wYear; time->Month = localTime.wMonth; time->Day = localTime.wDay;
+    time->Hour = localTime.wHour; time->Minute = localTime.wMinute; time->Second = localTime.wSecond;
+    time->Hundredths = (UINT)(localTime.wMilliseconds / 10); time->DayOfWeek = localTime.wDayOfWeek;
 }
 
-void dos_clock_read(int64_t off, DOS_CLOCK_TIME *out)
+VOID DosClockRead(INT64 offset, PDOS_CLOCK_TIME out)
 {
     DOS_CLOCK_TIME host;
-    dos_clock_host_now(&host);
-    if (off == 0) { *out = host; return; }      /* the common case, exactly as before */
-    DosClockApplyOffset(&host, off, out);
+    DosClockHostNow(&host);
+    if (offset == 0) { *out = host; return; }   /* the common case, exactly as before */
+    DosClockApplyOffset(&host, offset, out);
 }
 
 /* ── GH #262: DOS'S CLOCK FOLLOWS THE TICK COUNT WHEN SOMEONE ELSE SET IT. ─────────
-     The host wires g_dos_tick_take to the PIT's witness (vdd_pit_tick_take, under the
-     PIT's lock); NULL off-VM. dos_clock_sync is called before DOS's clock is read or
+     The host wires g_DosTickTake to the PIT's witness (vdd_pit_tick_take, under the
+     PIT's lock); NULL off-VM. DosClockSync is called before DOS's clock is read or
      set -- AH=2Ah/2Bh/2Ch/2Dh and every file stamp -- so a raw store to 0040:006C is
      seen by the next thing that asks DOS the time, as CLOCK$ would see it. With no
      store pending it is one compare under the lock and nothing else. */
-int (*g_dos_tick_take)(uint32_t *ticks, uint32_t *wraps, uint32_t *since) = 0;
+INT (*g_DosTickTake)(UINT32 *ticks, UINT32 *wraps, UINT32 *since) = 0;
 
-void dos_clock_follow(uint32_t ticks, uint32_t wraps, uint32_t since)
+VOID DosClockFollow(UINT32 ticks, UINT32 wraps, UINT32 since)
 {
     DOS_CLOCK_TIME host;
-    dos_clock_host_now(&host);
+    DosClockHostNow(&host);
     DosClockFollowTicks(&host, &g_DosClock.DosOffset, ticks, wraps, since);
 }
 
-void dos_clock_sync(void)
+VOID DosClockSync(VOID)
 {
-    uint32_t t, w, s;
-    if (g_dos_tick_take && g_dos_tick_take(&t, &w, &s)) dos_clock_follow(t, w, s);
+    UINT32 ticks, wraps, since;
+    if (g_DosTickTake && g_DosTickTake(&ticks, &wraps, &since)) DosClockFollow(ticks, wraps, since);
 }
 
 /* ── GH #263: A FILE CARRIES DOS'S DATE, NOT THE HOST'S. ─────────────────────────
@@ -75,18 +75,18 @@ void dos_clock_sync(void)
      after its last write -- 2-second resolution in the entry, UNMEASURED against 6.22
      for a file held open across a second boundary. NTFS keeps an explicitly-set write
      time for the rest of the handle's life, so the close does not overwrite it. */
-void dos_stamp_vdm_now(HANDLE f)
+VOID DosStampVdmNow(HANDLE file)
 {
-    DOS_CLOCK_TIME g; SYSTEMTIME st; FILETIME lf, ft;
-    if (!f || f == INVALID_HANDLE_VALUE) return;
-    dos_clock_sync();                           /* #262: a raw 006C store moves it too */
+    DOS_CLOCK_TIME clock; SYSTEMTIME systemTime; FILETIME localTime, fileTime;
+    if (!file || file == INVALID_HANDLE_VALUE) return;
+    DosClockSync();                             /* #262: a raw 006C store moves it too */
     if (!g_DosClock.DosOffset) return;
-    dos_clock_read(g_DosClock.DosOffset, &g);
-    st.wYear = (WORD)g.Year; st.wMonth = (WORD)g.Month; st.wDayOfWeek = (WORD)g.DayOfWeek;
-    st.wDay = (WORD)g.Day;   st.wHour = (WORD)g.Hour;   st.wMinute = (WORD)g.Minute;
-    st.wSecond = (WORD)g.Second; st.wMilliseconds = (WORD)(g.Hundredths * 10u);
-    if (SystemTimeToFileTime(&st, &lf) && LocalFileTimeToFileTime(&lf, &ft))
-        SetFileTime(f, NULL, NULL, &ft);
+    DosClockRead(g_DosClock.DosOffset, &clock);
+    systemTime.wYear = (WORD)clock.Year; systemTime.wMonth = (WORD)clock.Month; systemTime.wDayOfWeek = (WORD)clock.DayOfWeek;
+    systemTime.wDay = (WORD)clock.Day;   systemTime.wHour = (WORD)clock.Hour;   systemTime.wMinute = (WORD)clock.Minute;
+    systemTime.wSecond = (WORD)clock.Second; systemTime.wMilliseconds = (WORD)(clock.Hundredths * 10u);
+    if (SystemTimeToFileTime(&systemTime, &localTime) && LocalFileTimeToFileTime(&localTime, &fileTime))
+        SetFileTime(file, NULL, NULL, &fileTime);
 }
 
 /* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
@@ -94,7 +94,7 @@ void dos_stamp_vdm_now(HANDLE f)
    ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
    ⚠ CHANGING A DEFAULT HERE IS A BEHAVIOUR CHANGE FOR EVERY GUEST -- the knob exists
      so an experiment does not have to be one. */
-dos_int53_ans_t g_dos_int53[DOS_INT53_N] = {
+DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT] = {
     /* AL=00 */ { 0x0005, 0 },   /* documented form, asked with SI=BP=0             */
     /* AL=01 */ { 0x0001, 1 },   /* genuinely unsupported: DOS "invalid function"   */
     /* AL=02 */ { 0x5300, 0 },   /* top of COMMAND.COM's main loop -- CF is the gate */
@@ -129,10 +129,10 @@ dos_int53_ans_t g_dos_int53[DOS_INT53_N] = {
  * leaves AX alone while writing CX and DX.  The signature that actually works is
  * EVERY output register still poisoned.
  */
-static int dos622_defines(uint8_t ah)
+static INT DosIsDefinedBy622(BYTE function)
 {
-    if (ah > 0x6C) return 0;
-    switch (ah) {
+    if (function > 0x6C) return 0;
+    switch (function) {
     case 0x18: case 0x1D: case 0x1E: case 0x20:   /* internal null functions */
     case 0x61:                                    /* reserved                */
     case 0x6B:                                    /* null function (DOS 5+)  */
@@ -151,12 +151,12 @@ static int dos622_defines(uint8_t ah)
      and fall back to the plain request where it is refused (a read-only medium or
      share) -- the open must never be lost for the sake of the stamp. Attribute
      rights are not subject to sharing, so this changes no share-mode outcome. */
-static HANDLE dos_open_stampable(const char *fn, DWORD acc, DWORD shr, DWORD disp, DWORD attr)
+static HANDLE DosOpenStampable(PCSTR fileName, DWORD access, DWORD share, DWORD disposition, DWORD attributes)
 {
-    HANDLE f = CreateFileA(fn, acc | FILE_WRITE_ATTRIBUTES, shr, NULL, disp, attr, NULL);
-    if (f == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
-        f = CreateFileA(fn, acc, shr, NULL, disp, attr, NULL);
-    return f;
+    HANDLE file = CreateFileA(fileName, access | FILE_WRITE_ATTRIBUTES, share, NULL, disposition, attributes, NULL);
+    if (file == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
+        file = CreateFileA(fileName, access, share, NULL, disposition, attributes, NULL);
+    return file;
 }
 
 /* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
@@ -176,7 +176,7 @@ static HANDLE dos_open_stampable(const char *fn, DWORD acc, DWORD shr, DWORD dis
  * alone. The commonly quoted "34-byte block" would have had us zeroing 10 bytes
  * of the caller's memory that DOS never touches.
  */
-static const uint8_t ctry_us[24] = {
+static const BYTE g_DosCountryUs[24] = {
     0x00, 0x00,
     0x24, 0x00, 0x00, 0x00, 0x00,
     0x2C, 0x00,   0x2E, 0x00,   0x2D, 0x00,   0x3A, 0x00,
@@ -207,36 +207,36 @@ static const uint8_t ctry_us[24] = {
  */
 #define DOS_FIND_MAGIC 0x4E
 
-static int dta_match(DWORD attr, uint16_t mask)
+static INT DosDtaMatchesAttributes(DWORD attributes, WORD mask)
 {
     /* DOS's rule is "normal files always match; these extras only if asked". */
-    if ((attr & FILE_ATTRIBUTE_DIRECTORY) && !(mask & 0x10)) return 0;
-    if ((attr & FILE_ATTRIBUTE_HIDDEN)    && !(mask & 0x02)) return 0;
-    if ((attr & FILE_ATTRIBUTE_SYSTEM)    && !(mask & 0x04)) return 0;
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) && !(mask & 0x10)) return 0;
+    if ((attributes & FILE_ATTRIBUTE_HIDDEN)    && !(mask & 0x02)) return 0;
+    if ((attributes & FILE_ATTRIBUTE_SYSTEM)    && !(mask & 0x04)) return 0;
     return 1;
 }
 
-static void dta_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd)
+static VOID DosDtaFill(volatile BYTE *dta, const WIN32_FIND_DATAA *findData)
 {
-    FILETIME lf;
-    WORD fdate = 0, ftime = 0;
-    const char *nm = fd->cAlternateFileName[0] ? fd->cAlternateFileName : fd->cFileName;
-    int k;
-    if (FileTimeToLocalFileTime(&fd->ftLastWriteTime, &lf))
-        FileTimeToDosDateTime(&lf, &fdate, &ftime);   /* DOS times are LOCAL */
-    d[21] = (BYTE)(fd->dwFileAttributes & 0x3F);
-    d[22] = (BYTE)(ftime & 0xFF);  d[23] = (BYTE)(ftime >> 8);
-    d[24] = (BYTE)(fdate & 0xFF);  d[25] = (BYTE)(fdate >> 8);
-    d[26] = (BYTE)( fd->nFileSizeLow        & 0xFF);
-    d[27] = (BYTE)((fd->nFileSizeLow >> 8)  & 0xFF);
-    d[28] = (BYTE)((fd->nFileSizeLow >> 16) & 0xFF);
-    d[29] = (BYTE)((fd->nFileSizeLow >> 24) & 0xFF);
-    for (k = 0; k < 12 && nm[k]; ++k) {
-        char ch = nm[k];
-        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);   /* DOS reports 8.3 upper */
-        d[30 + k] = (BYTE)ch;
+    FILETIME localTime;
+    WORD fileDate = 0, fileTime = 0;
+    PCSTR name = findData->cAlternateFileName[0] ? findData->cAlternateFileName : findData->cFileName;
+    INT index;
+    if (FileTimeToLocalFileTime(&findData->ftLastWriteTime, &localTime))
+        FileTimeToDosDateTime(&localTime, &fileDate, &fileTime);  /* DOS times are LOCAL */
+    dta[21] = (BYTE)(findData->dwFileAttributes & 0x3F);
+    dta[22] = (BYTE)(fileTime & 0xFF);  dta[23] = (BYTE)(fileTime >> 8);
+    dta[24] = (BYTE)(fileDate & 0xFF);  dta[25] = (BYTE)(fileDate >> 8);
+    dta[26] = (BYTE)( findData->nFileSizeLow        & 0xFF);
+    dta[27] = (BYTE)((findData->nFileSizeLow >> 8)  & 0xFF);
+    dta[28] = (BYTE)((findData->nFileSizeLow >> 16) & 0xFF);
+    dta[29] = (BYTE)((findData->nFileSizeLow >> 24) & 0xFF);
+    for (index = 0; index < 12 && name[index]; ++index) {
+        CHAR character = name[index];
+        if (character >= 'a' && character <= 'z') character = (CHAR)(character - 32);  /* DOS reports 8.3 upper */
+        dta[30 + index] = (BYTE)character;
     }
-    d[30 + k] = 0;
+    dta[30 + index] = 0;
 }
 
 /* ---- The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36. ----------------------
@@ -261,25 +261,25 @@ static void dta_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd)
  *   [0] drive  [1-11] name+ext  [12] attribute  [13-22] reserved
  *   [23-24] time  [25-26] date  [27-28] starting cluster  [29-32] size
  */
-#define FCB_MAGIC 0x46
+#define DOS_FCB_MAGIC 0x46
 
-static volatile BYTE *fcb_at(DWORD seg, DWORD off)
+static volatile BYTE *DosFcbAt(DWORD segment, DWORD offset)
 {
-    volatile BYTE *f = (volatile BYTE *)((seg << 4) + (off & 0xFFFF));
-    return (f[0] == 0xFF) ? f + 7 : f;      /* skip an extended FCB's prefix */
+    volatile BYTE *fcb = (volatile BYTE *)((segment << 4) + (offset & 0xFFFF));
+    return (fcb[0] == 0xFF) ? fcb + 7 : fcb;  /* skip an extended FCB's prefix */
 }
 
 /* Build "D:NAME.EXT" from an FCB's drive/name/extension fields. */
-static void fcb_name(const volatile BYTE *f, char *out)
+static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
 {
-    int i, n = 0;
-    if (f[0]) { out[n++] = (char)('A' + f[0] - 1); out[n++] = ':'; }
-    for (i = 1; i <= 8 && f[i] != ' '; ++i) out[n++] = (char)f[i];
-    if (f[9] != ' ') {
-        out[n++] = '.';
-        for (i = 9; i <= 11 && f[i] != ' '; ++i) out[n++] = (char)f[i];
+    INT index, length = 0;
+    if (fcb[0]) { out[length++] = (CHAR)('A' + fcb[0] - 1); out[length++] = ':'; }
+    for (index = 1; index <= 8 && fcb[index] != ' '; ++index) out[length++] = (CHAR)fcb[index];
+    if (fcb[9] != ' ') {
+        out[length++] = '.';
+        for (index = 9; index <= 11 && fcb[index] != ' '; ++index) out[length++] = (CHAR)fcb[index];
     }
-    out[n] = 0;
+    out[length] = 0;
 }
 
 /* ── A DOS FILENAME ENDS AT A TERMINATOR, NOT ONLY AT A NUL. ─────────────────────
@@ -294,26 +294,26 @@ static void fcb_name(const volatile BYTE *f, char *out)
      missed, while `ver ` parsed to "VER \r   " and hit purely because the user had
      typed the blank we should have supplied. That is why every internal command was
      "Bad command or file name" until you put a space after it. */
-static int fcb_name_ends(unsigned char c)
+static INT DosFcbIsNameEnd(BYTE character)
 {
-    if (c <= 0x20) return 1;                    /* NUL, CR, TAB, space, any control */
-    return c == '"' || c == '/' || c == '\\' || c == '[' || c == ']' || c == ':'
-        || c == '|' || c == '<'  || c == '>'  || c == '+' || c == '=' || c == ';'
-        || c == ',';
+    if (character <= 0x20) return 1;            /* NUL, CR, TAB, space, any control */
+    return character == '"' || character == '/' || character == '\\' || character == '[' || character == ']' || character == ':'
+        || character == '|' || character == '<'  || character == '>'  || character == '+' || character == '=' || character == ';'
+        || character == ',';
 }
 
-static void fcb_put_name(volatile BYTE *d, const char *nm)
+static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
 {
-    int i = 0, k;
-    for (k = 0; k < 11; ++k) d[k] = ' ';
+    INT source = 0, index;
+    for (index = 0; index < 11; ++index) destination[index] = ' ';
     /* "." AND ".." ARE NAMES, NOT EXTENSIONS. The rule below ends the name at the
        first '.', which for these two directory entries ends it at character zero and
        leaves eleven blanks -- DIR then printed an empty column where the oracle
        shows "." and "..". DOS stores them literally in the name field. */
-    if (nm[0] == '.') {
-        d[0] = '.';
-        if (nm[1] == '.' && (nm[2] == 0 || nm[2] == '.')) d[1] = '.';
-        if (nm[1] == 0 || nm[1] == '.') return;
+    if (name[0] == '.') {
+        destination[0] = '.';
+        if (name[1] == '.' && (name[2] == 0 || name[2] == '.')) destination[1] = '.';
+        if (name[1] == 0 || name[1] == '.') return;
     }
     /* ── ★ `*` IS EXPANDED INTO `?`s, IT IS NOT STORED. ─────────────────────────
          An FCB name field has no room for a star and no meaning for one: the only
@@ -327,15 +327,15 @@ static void fcb_put_name(volatile BYTE *d, const char *nm)
          beside it, which is not pattern-filtered, was perfectly correct. The
          symptom pointed at the search, the directory entries and the renderer; the
          cause was in the parser none of them go through. */
-    for (k = 0; k < 8 && !fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.'; ++k, ++i) {
-        if (nm[i] == '*') { while (k < 8) d[k++] = '?'; break; }
-        d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+    for (index = 0; index < 8 && !DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.'; ++index, ++source) {
+        if (name[source] == '*') { while (index < 8) destination[index++] = '?'; break; }
+        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - 32 : name[source]);
     }
-    while (!fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.') ++i;
-    if (nm[i] == '.') ++i;
-    for (k = 8; k < 11 && !fcb_name_ends((unsigned char)nm[i]); ++k, ++i) {
-        if (nm[i] == '*') { while (k < 11) d[k++] = '?'; break; }
-        d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+    while (!DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.') ++source;
+    if (name[source] == '.') ++source;
+    for (index = 8; index < 11 && !DosFcbIsNameEnd((BYTE)name[source]); ++index, ++source) {
+        if (name[source] == '*') { while (index < 11) destination[index++] = '?'; break; }
+        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - 32 : name[source]);
     }
 }
 
@@ -349,67 +349,67 @@ static void fcb_put_name(volatile BYTE *d, const char *nm)
      (the short alias, or the long name when that is already a legal 8.3 name -- and
      no name at all otherwise: such a file is invisible to DOS, as it is on NTVDM),
      laid out as 11 bytes, matched position by position, `?` matching anything. */
-static int dos_83_of(const WIN32_FIND_DATAA *fd, BYTE out[11])
+static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[11])
 {
-    const char *bn = fd->cAlternateFileName[0] ? fd->cAlternateFileName : fd->cFileName;
-    if (!fd->cAlternateFileName[0] && bn[0] != '.') {       /* the long name must BE 8.3 */
-        int b = 0, e = -1, i;
-        for (i = 0; bn[i]; ++i) {
-            if (bn[i] == '.') { if (e >= 0) return 0; e = 0; continue; }
-            if (bn[i] == ' ' || fcb_name_ends((unsigned char)bn[i])) return 0;
-            if (e >= 0) { if (++e > 3) return 0; } else if (++b > 8) return 0;
+    PCSTR baseName = findData->cAlternateFileName[0] ? findData->cAlternateFileName : findData->cFileName;
+    if (!findData->cAlternateFileName[0] && baseName[0] != '.') {  /* the long name must BE 8.3 */
+        INT baseLength = 0, extensionLength = -1, index;
+        for (index = 0; baseName[index]; ++index) {
+            if (baseName[index] == '.') { if (extensionLength >= 0) return 0; extensionLength = 0; continue; }
+            if (baseName[index] == ' ' || DosFcbIsNameEnd((BYTE)baseName[index])) return 0;
+            if (extensionLength >= 0) { if (++extensionLength > 3) return 0; } else if (++baseLength > 8) return 0;
         }
-        if (!b) return 0;
+        if (!baseLength) return 0;
     }
-    fcb_put_name((volatile BYTE *)out, bn);
+    DosFcbPutName((volatile BYTE *)out, baseName);
     return 1;
 }
-static int dos_tmpl_match(const BYTE t[11], const BYTE n[11])
+static INT DosTemplateMatches(const BYTE nameTemplate[11], const BYTE name[11])
 {
-    int k;
-    for (k = 0; k < 11; ++k) {
-        BYTE c = t[k];
-        if (c == '?') continue;
-        if (c >= 'a' && c <= 'z') c = (BYTE)(c - 32);
-        if (c != n[k]) return 0;
+    INT index;
+    for (index = 0; index < 11; ++index) {
+        BYTE character = nameTemplate[index];
+        if (character == '?') continue;
+        if (character >= 'a' && character <= 'z') character = (BYTE)(character - 32);
+        if (character != name[index]) return 0;
     }
     return 1;
 }
-static int dos_find_match(const WIN32_FIND_DATAA *fd, const BYTE t[11], uint16_t mask)
+static INT DosFindMatches(const WIN32_FIND_DATAA *findData, const BYTE nameTemplate[11], WORD mask)
 {
-    BYTE n[11];
-    return dta_match(fd->dwFileAttributes, mask) && dos_83_of(fd, n) && dos_tmpl_match(t, n);
+    BYTE name[11];
+    return DosDtaMatchesAttributes(findData->dwFileAttributes, mask) && DosShortNameOf(findData, name) && DosTemplateMatches(nameTemplate, name);
 }
 /* Split a host path pattern into "directory\*" (for FindFirstFileA) and the final
    component's 11-byte template. */
-static void dos_find_split(const char *pat, char *all, int allsz, BYTE t[11])
+static VOID DosFindSplit(PCSTR pattern, PSTR directoryPattern, INT directoryPatternSize, BYTE nameTemplate[11])
 {
-    int i, cut = 0;
-    for (i = 0; pat[i]; ++i) if (pat[i] == '\\' || pat[i] == '/' || pat[i] == ':') cut = i + 1;
-    for (i = 0; i < cut && i < allsz - 2; ++i) all[i] = pat[i];
-    all[i++] = '*'; all[i] = 0;
-    fcb_put_name((volatile BYTE *)t, pat + cut);
+    INT index, cut = 0;
+    for (index = 0; pattern[index]; ++index) if (pattern[index] == '\\' || pattern[index] == '/' || pattern[index] == ':') cut = index + 1;
+    for (index = 0; index < cut && index < directoryPatternSize - 2; ++index) directoryPattern[index] = pattern[index];
+    directoryPattern[index++] = '*'; directoryPattern[index] = 0;
+    DosFcbPutName((volatile BYTE *)nameTemplate, pattern + cut);
 }
 /* FindFirstFileA + skip to the first DOS match; INVALID_HANDLE_VALUE if none (the
    handle is closed then, and *nodir says whether the DIRECTORY itself was missing). */
 /* #34: the Win32 error of the last FindFirstFileA that failed outright, so a drive
    that is NOT READY (21) can be told from "no such file" -- the first is a critical
    error and goes to INT 24h, the second is an ordinary answer. 0 = it did not fail. */
-static DWORD s_find_w32;
-static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
-                             WIN32_FIND_DATAA *fd, int *nodir)
+static DWORD g_DosFindWin32Error;
+static HANDLE DosFindFirst(PCSTR directoryPattern, const BYTE nameTemplate[11], WORD mask,
+                             WIN32_FIND_DATAA *findData, PINT isNoDirectory)
 {
-    HANDLE h = FindFirstFileA(all, fd);
-    *nodir = 0;
-    s_find_w32 = 0;
-    if (h == INVALID_HANDLE_VALUE) {
-        s_find_w32 = GetLastError();
-        *nodir = (s_find_w32 == ERROR_PATH_NOT_FOUND);
-        return h;
+    HANDLE find = FindFirstFileA(directoryPattern, findData);
+    *isNoDirectory = 0;
+    g_DosFindWin32Error = 0;
+    if (find == INVALID_HANDLE_VALUE) {
+        g_DosFindWin32Error = GetLastError();
+        *isNoDirectory = (g_DosFindWin32Error == ERROR_PATH_NOT_FOUND);
+        return find;
     }
-    while (!dos_find_match(fd, t, mask))
-        if (!FindNextFileA(h, fd)) { FindClose(h); return INVALID_HANDLE_VALUE; }
-    return h;
+    while (!DosFindMatches(findData, nameTemplate, mask))
+        if (!FindNextFileA(find, findData)) { FindClose(find); return INVALID_HANDLE_VALUE; }
+    return find;
 }
 /* ── #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure. ──
      We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
@@ -420,78 +420,78 @@ static HANDLE dos_find_first(const char *all, const BYTE t[11], uint16_t mask,
    ⚠ Only ever called on a DISK file whose ReadFile/WriteFile just failed with a
      hardware error -- never on a pipe, where a name query can block.
    -1 = could not tell (the caller keeps the current drive, as #34 did). */
-typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } dos_ustr_t;
-typedef LONG (WINAPI *dos_ntqo_t)(HANDLE, int, PVOID, ULONG, PULONG);
-static int dos_handle_drive(HANDLE fh)
+typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } DOS_UNICODE_STRING;
+typedef LONG (WINAPI *DOS_NT_QUERY_OBJECT)(HANDLE, INT, PVOID, ULONG, PULONG);
+static INT DosHandleDrive(HANDLE file)
 {
-    static dos_ntqo_t ntqo;
-    union { dos_ustr_t u; BYTE raw[1024]; } oni;
-    char name[600], devbuf[26][80];
-    const char *dev[26];
-    ULONG got = 0;
+    static DOS_NT_QUERY_OBJECT queryObject;
+    union { DOS_UNICODE_STRING String; BYTE Raw[1024]; } objectName;
+    CHAR name[600], deviceBuffers[26][80];
+    PCSTR devices[26];
+    ULONG returned = 0;
     DWORD drives = GetLogicalDrives();
-    int k, n;
-    if (!ntqo) {
-        HMODULE nt = GetModuleHandleA("ntdll.dll");
-        if (nt) ntqo = (dos_ntqo_t)GetProcAddress(nt, "NtQueryObject");
-        if (!ntqo) return -1;
+    INT drive, length;
+    if (!queryObject) {
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (ntdll) queryObject = (DOS_NT_QUERY_OBJECT)GetProcAddress(ntdll, "NtQueryObject");
+        if (!queryObject) return -1;
     }
-    if (ntqo(fh, 1 /* ObjectNameInformation */, &oni, sizeof(oni) - 2, &got) < 0
-        || !oni.u.Buffer || !oni.u.Length) return -1;
-    n = WideCharToMultiByte(CP_ACP, 0, oni.u.Buffer, oni.u.Length / 2, name, sizeof(name) - 1, NULL, NULL);
-    if (n <= 0) return -1;
-    name[n] = 0;
-    for (k = 0; k < 26; ++k) {
-        char root[3] = { (char)('A' + k), ':', 0 };
-        dev[k] = NULL;
-        if (!(drives & (1u << k))) continue;
-        if (QueryDosDeviceA(root, devbuf[k], sizeof(devbuf[k]))) dev[k] = devbuf[k];
+    if (queryObject(file, 1 /* ObjectNameInformation */, &objectName, sizeof(objectName) - 2, &returned) < 0
+        || !objectName.String.Buffer || !objectName.String.Length) return -1;
+    length = WideCharToMultiByte(CP_ACP, 0, objectName.String.Buffer, objectName.String.Length / 2, name, sizeof(name) - 1, NULL, NULL);
+    if (length <= 0) return -1;
+    name[length] = 0;
+    for (drive = 0; drive < 26; ++drive) {
+        CHAR root[3] = { (CHAR)('A' + drive), ':', 0 };
+        devices[drive] = NULL;
+        if (!(drives & (1u << drive))) continue;
+        if (QueryDosDeviceA(root, deviceBuffers[drive], sizeof(deviceBuffers[drive]))) devices[drive] = deviceBuffers[drive];
     }
-    return DosCritDriveFromNtName(name, dev);
+    return DosCritDriveFromNtName(name, devices);
 }
-/* The drive dos_handle_drive found for THIS call's failed 3Fh/40h; -1 = none. Read by
-   the INT 24h tail of dos_int21, reset at its entry (the s_find_w32 pattern). */
-static int s_rw_drive = -1;
+/* The drive DosHandleDrive found for THIS call's failed 3Fh/40h; -1 = none. Read by
+   the INT 24h tail of DosInt21, reset at its entry (the g_DosFindWin32Error pattern). */
+static INT g_DosReadWriteDrive = -1;
 
-static int dos_find_next(HANDLE h, const BYTE t[11], uint16_t mask, WIN32_FIND_DATAA *fd)
+static INT DosFindNext(HANDLE find, const BYTE nameTemplate[11], WORD mask, WIN32_FIND_DATAA *findData)
 {
-    do { if (!FindNextFileA(h, fd)) return 0; } while (!dos_find_match(fd, t, mask));
+    do { if (!FindNextFileA(find, findData)) return 0; } while (!DosFindMatches(findData, nameTemplate, mask));
     return 1;
 }
 
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
-static void v86_str(DWORD seg, DWORD off, char *dst, int max)
+static VOID DosGuestString(DWORD segment, DWORD offset, PSTR destination, INT capacity)
 {
-    const volatile BYTE *s = (const volatile BYTE *)((seg << 4) + (off & 0xFFFF));
-    int i;
-    for (i = 0; i < max - 1 && s[i]; ++i) dst[i] = (char)s[i];
-    dst[i] = 0;
+    const volatile BYTE *source = (const volatile BYTE *)((segment << 4) + (offset & 0xFFFF));
+    INT index;
+    for (index = 0; index < capacity - 1 && source[index]; ++index) destination[index] = (CHAR)source[index];
+    destination[index] = 0;
 }
 
 /* The current drive, 0 = A:. The process current directory's, unless AH=0Eh
    selected a drive Win32 could not enter (m->vdrive, see the header). */
-static uint8_t dos_cur_drive(const dos_machine_t *m)
+static BYTE DosCurrentDrive(PCDOS_MACHINE machine)
 {
-    char cw[300];
-    DWORD n;
-    if (m->vdrive >= 0) return (uint8_t)m->vdrive;
-    n = GetCurrentDirectoryA(sizeof(cw), cw);
-    return (n >= 2 && cw[1] == ':') ? (uint8_t)((cw[0] | 0x20) - 'a') : DOS_CURRENT_DRIVE;
+    CHAR directory[300];
+    DWORD length;
+    if (machine->VirtualDrive >= 0) return (BYTE)machine->VirtualDrive;
+    length = GetCurrentDirectoryA(sizeof(directory), directory);
+    return (length >= 2 && directory[1] == ':') ? (BYTE)((directory[0] | 0x20) - 'a') : DOS_CURRENT_DRIVE;
 }
 
 /* See the header: the host needs this for the NTVDM BOP 0x54 sub 01 reply, and must
    not re-derive it -- a second copy of the rule would drop `vdrive`. */
-uint8_t dos_int21_cur_drive(const dos_machine_t *m) { return dos_cur_drive(m); }
+BYTE DosInt21CurrentDrive(PCDOS_MACHINE machine) { return DosCurrentDrive(machine); }
 
 /* #165: 6901h's serial, label and file-system type, per drive, for this session only
    (see the 6901h arm). 23 bytes = the 6900h/6901h block from offset 2. */
-static uint8_t g_dos_serial_set[26];
-static uint8_t g_dos_serial_info[26][23];
+static BYTE g_DosSerialIsSet[26];
+static BYTE g_DosSerialInfo[26][23];
 /* BL as 69h takes it: 0 = the default drive, 1 = A:, ... -> 0-based, 26 if invalid. */
-static uint8_t dos_serial_drive(const dos_machine_t *m, uint8_t bl)
+static BYTE DosSerialDrive(PCDOS_MACHINE machine, BYTE driveNumber)
 {
-    if (bl == 0) return dos_cur_drive(m);
-    return (uint8_t)(bl <= 26 ? bl - 1 : 26);
+    if (driveNumber == 0) return DosCurrentDrive(machine);
+    return (BYTE)(driveNumber <= 26 ? driveNumber - 1 : 26);
 }
 
 /* Keep Win32's per-drive current directory in step. GetFullPathNameA("X:") and
@@ -500,232 +500,232 @@ static uint8_t dos_serial_drive(const dos_machine_t *m, uint8_t bl)
    without this, C: -> D: -> C: came back to C:'s ROOT, where DOS returns to the
    directory it left. The guest never sees the process environment (its block is
    built separately), so these variables cost it nothing. */
-static void dos_note_drive_dir(const char *full)
+static VOID DosNoteDriveDirectory(PCSTR fullPath)
 {
-    char var[5];
-    if (!full || !full[0] || full[1] != ':') return;
-    var[0] = '='; var[1] = (char)(full[0] & ~0x20); var[2] = ':'; var[3] = 0;
-    SetEnvironmentVariableA(var, full);
+    CHAR variable[5];
+    if (!fullPath || !fullPath[0] || fullPath[1] != ':') return;
+    variable[0] = '='; variable[1] = (CHAR)(fullPath[0] & ~0x20); variable[2] = ':'; variable[3] = 0;
+    SetEnvironmentVariableA(variable, fullPath);
 }
 
-/* A guest path, as Win32 should see it: v86_str, then -- only while the current
+/* A guest path, as Win32 should see it: DosGuestString, then -- only while the current
    drive is one Win32 cannot stand on -- a relative path is prefixed with that
    drive so it resolves (and fails) THERE. "X:..." and "\\server" are left alone.
    A device name survives the prefix: Win32 reads "A:CON" as CON, as DOS does. */
-static void v86_path(const dos_machine_t *m, DWORD seg, DWORD off, char *dst, int max)
+static VOID DosGuestPath(PCDOS_MACHINE machine, DWORD segment, DWORD offset, PSTR destination, INT capacity)
 {
-    char tmp[300];
-    int k = 0, i;
-    v86_str(seg, off, tmp, sizeof(tmp));
-    if (m->vdrive >= 0 && tmp[0] && tmp[1] != ':' && !(tmp[0] == '\\' && tmp[1] == '\\')
-        && max > 3) {
-        dst[k++] = (char)('A' + m->vdrive); dst[k++] = ':';
+    CHAR guestPath[300];
+    INT length = 0, index;
+    DosGuestString(segment, offset, guestPath, sizeof(guestPath));
+    if (machine->VirtualDrive >= 0 && guestPath[0] && guestPath[1] != ':' && !(guestPath[0] == '\\' && guestPath[1] == '\\')
+        && capacity > 3) {
+        destination[length++] = (CHAR)('A' + machine->VirtualDrive); destination[length++] = ':';
     }
-    for (i = 0; tmp[i] && k < max - 1; ++i) dst[k++] = tmp[i];
-    dst[k] = 0;
+    for (index = 0; guestPath[index] && length < capacity - 1; ++index) destination[length++] = guestPath[index];
+    destination[length] = 0;
 }
 
-void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
+VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
 {
-    int i;
-    for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = 0;
-    for (i = 0; i < 8; ++i) m->find_h[i] = 0;
-    m->last_err = 0;
-    m->verify = 0;
-    m->child_rc = 0;
-    m->fcb_find = 0;
-    m->switch_char = '/';   /* oracle-confirmed 6.22 default */
-    m->hdepth = 0;          /* no EXEC in progress: nothing saved */
-    m->set_ticks = 0; m->ticks_ctx = 0;   /* the host wires these after init (#250) */
-    m->crit_pending = 0; m->crit_active = 0; m->term_type = 0;   /* #34 */
-    m->crit_raise_ok = 0;                                         /* #275 */
-    { int k; for (k = 0; k < DOS_V5_PSPS; ++k) m->v5_psp[k] = 0; }
-    m->shell_ver_major = 5; m->shell_ver_minor = 0;   /* what XP's COMMAND.COM demands */
-    m->break_on = 0;        /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
+    INT index;
+    for (index = 0; index < DOS_MAX_FILES; ++index) machine->FileHandles[index] = 0;
+    for (index = 0; index < 8; ++index) machine->FindHandles[index] = 0;
+    machine->LastError = 0;
+    machine->IsVerifyOn = 0;
+    machine->ChildReturnCode = 0;
+    machine->FcbFind = 0;
+    machine->SwitchChar = '/';  /* oracle-confirmed 6.22 default */
+    machine->HandleDepth = 0;  /* no EXEC in progress: nothing saved */
+    machine->SetTicks = 0; machine->TicksContext = 0;  /* the host wires these after init (#250) */
+    machine->IsCritPending = 0; machine->IsCritActive = 0; machine->TermType = 0;  /* #34 */
+    machine->CanRaiseCrit = 0;                                    /* #275 */
+    { INT index2; for (index2 = 0; index2 < DOS_SHELL_PSP_SLOTS; ++index2) machine->ShellPsps[index2] = 0; }
+    machine->ShellVersionMajor = 5; machine->ShellVersionMinor = 0;  /* what XP's COMMAND.COM demands */
+    machine->IsBreakOn = 0;  /* BREAK=OFF, DOS's default. ⚠ m is a stack local and this
                                function sets fields one by one -- nothing zeroes it */
-    m->vdrive = -1;         /* the current drive is the process current directory's */
-    m->psp_seg = DOS_PSP_SEG;
-    {   int k;               /* s91: the JFT a fresh PSP carries (DosPspBuild) */
-        static const uint8_t jft0[5] = { 1, 1, 1, 0, 2 };
-        for (k = 0; k < 20; ++k) m->jft_known[k] = k < 5 ? jft0[k] : 0xFF;
-        for (k = 0; k < 256; ++k) m->sft_host[k] = 0; }
-    m->exec_pending = 0;
-    m->tsr_pending = 0; m->tsr_keep = 0;
-    m->first_mcb = first_mcb;
-    m->dta_seg = DOS_PSP_SEG;
-    m->dta_off = 0x0080;
-    m->out_len = 0; m->out_trunc = 0;
-    m->line_active = 0; m->line_n = 0; m->line_seg = 0; m->line_off = 0;
-    m->trace_n = 0;
-    m->std_open = 0x1F;                     /* stdin/stdout/stderr/aux/prn all open */
-    { int _i; for (_i = 0; _i < 32; ++_i) { m->unimpl21[_i] = 0; m->noop21[_i] = 0; } }
-    m->exit_code = 0;
+    machine->VirtualDrive = -1;  /* the current drive is the process current directory's */
+    machine->PspSegment = DOS_PSP_SEG;
+    {   INT index2;          /* s91: the JFT a fresh PSP carries (DosPspBuild) */
+        static const BYTE initialJft[5] = { 1, 1, 1, 0, 2 };
+        for (index2 = 0; index2 < 20; ++index2) machine->JftKnown[index2] = index2 < 5 ? initialJft[index2] : 0xFF;
+        for (index2 = 0; index2 < 256; ++index2) machine->SftHost[index2] = 0; }
+    machine->IsExecPending = 0;
+    machine->IsTsrPending = 0; machine->TsrKeep = 0;
+    machine->FirstMcb = firstMcb;
+    machine->DtaSegment = DOS_PSP_SEG;
+    machine->DtaOffset = 0x0080;
+    machine->OutputLength = 0; machine->IsOutputTruncated = 0;
+    machine->IsLineActive = 0; machine->LineLength = 0; machine->LineSegment = 0; machine->LineOffset = 0;
+    machine->TraceCount = 0;
+    machine->StdOpen = 0x1F;                /* stdin/stdout/stderr/aux/prn all open */
+    { INT index3; for (index3 = 0; index3 < 32; ++index3) { machine->Unimplemented[index3] = 0; machine->Undefined[index3] = 0; } }
+    machine->ExitCode = 0;
     /* GH #28: default to 6.22 so we match the oracle. It is also the friendlier
        lie -- most version checks are floor checks, and real 6.22 tools refuse to
        run at all under a lower number ("Incorrect DOS version" from MEM.EXE was
        the first thing the evidence pass hit). */
-    m->ver_major = 6; m->ver_minor = 22;
+    machine->VersionMajor = 6; machine->VersionMinor = 22;
     /* Oracle-confirmed 6.22 defaults: 5800h -> AX=0000 (first fit),
        5802h -> AL=00 (UMBs not linked). */
-    m->alloc_strat = 0; m->umb_link = 0;
-    m->sysvars_seg = 0; m->sysvars_off = 0;
-    m->conout = 0;
-    m->conctx = 0;
-    m->conin = 0;
-    m->cinctx = 0;
-    m->coninnb = 0;
-    m->conpeek = 0;
+    machine->AllocationStrategy = 0; machine->UmbLink = 0;
+    machine->SysvarsSegment = 0; machine->SysvarsOffset = 0;
+    machine->ConsoleOut = 0;
+    machine->ConsoleOutContext = 0;
+    machine->ConsoleIn = 0;
+    machine->ConsoleInContext = 0;
+    machine->ConsoleInNoWait = 0;
+    machine->ConsolePeek = 0;
 }
 
 /* See the header. The comment at AH=30h has promised this function since GH #28;
    COMMAND.COM is what finally needed it. */
-/* ── PER-PROCESS HANDLE TABLES. (s81) See dos_machine_t::hsave for why. ────────── */
+/* ── PER-PROCESS HANDLE TABLES. (s81) See DOS_MACHINE::hsave for why. ────────── */
 /* Does any SAVED (i.e. parent's) table still hold this Win32 handle? Then a child
    closing or overwriting it must not CloseHandle it -- the parent gets it back. */
-static int dos_handle_held_by_parent(const dos_machine_t *m, HANDLE h)
+static INT DosHandleIsHeldByParent(PCDOS_MACHINE machine, HANDLE handle)
 {
-    int d, i;
-    if (!h) return 0;
-    for (d = 0; d < m->hdepth && d < DOS_HSTACK; ++d)
-        for (i = 0; i < DOS_MAX_FILES; ++i)
-            if (m->hsave[d].fh[i] == h) return 1;
+    INT depth, index;
+    if (!handle) return 0;
+    for (depth = 0; depth < machine->HandleDepth && depth < DOS_HANDLE_STACK_DEPTH; ++depth)
+        for (index = 0; index < DOS_MAX_FILES; ++index)
+            if (machine->HandleStack[depth].FileHandles[index] == handle) return 1;
     return 0;
 }
 
 /* Take a Win32 handle out of the current table: closed for real only if no parent
    still holds it. Every site that used to CloseHandle(m->fh[x]) comes through here. */
-void dos_handle_release(dos_machine_t *m, unsigned slot)
+VOID DosHandleRelease(PDOS_MACHINE machine, UINT slot)
 {
-    if (slot >= DOS_MAX_FILES || !m->fh[slot]) return;
-    if (!dos_handle_held_by_parent(m, m->fh[slot])) CloseHandle(m->fh[slot]);
-    m->fh[slot] = 0;
+    if (slot >= DOS_MAX_FILES || !machine->FileHandles[slot]) return;
+    if (!DosHandleIsHeldByParent(machine, machine->FileHandles[slot])) CloseHandle(machine->FileHandles[slot]);
+    machine->FileHandles[slot] = 0;
 }
 
-void dos_handles_push(dos_machine_t *m)
+VOID DosHandlesPush(PDOS_MACHINE machine)
 {
-    int i;
-    if (m->hdepth >= DOS_HSTACK) { ++m->hdepth; return; }   /* too deep: counted, not saved */
-    for (i = 0; i < DOS_MAX_FILES; ++i) m->hsave[m->hdepth].fh[i] = m->fh[i];
-    m->hsave[m->hdepth].std_open = m->std_open;
-    for (i = 0; i < 20; ++i) m->hsave[m->hdepth].jft_known[i] = m->jft_known[i];
-    ++m->hdepth;
+    INT index;
+    if (machine->HandleDepth >= DOS_HANDLE_STACK_DEPTH) { ++machine->HandleDepth; return; }  /* too deep: counted, not saved */
+    for (index = 0; index < DOS_MAX_FILES; ++index) machine->HandleStack[machine->HandleDepth].FileHandles[index] = machine->FileHandles[index];
+    machine->HandleStack[machine->HandleDepth].StdOpen = machine->StdOpen;
+    for (index = 0; index < 20; ++index) machine->HandleStack[machine->HandleDepth].JftKnown[index] = machine->JftKnown[index];
+    ++machine->HandleDepth;
 }
 
 /* ── s91: THE JFT (see jft_known in dos_int21.h). ─────────────────────────────────── */
-static volatile uint8_t *dos_jft_of(uint16_t psp, unsigned *n)
+static volatile BYTE *DosJftOf(WORD psp, UINT *count)
 {
-    volatile uint8_t *p = (volatile uint8_t *)(ULONG_PTR)((DWORD)psp << 4);
-    unsigned cnt, off, seg;
-    *n = 0;
+    volatile BYTE *pspBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)psp << 4);
+    UINT jftSize, jftOffset, jftSegment;
+    *count = 0;
     if (!psp) return NULL;
-    cnt = (unsigned)(p[0x32] | (p[0x33] << 8));
-    off = (unsigned)(p[0x34] | (p[0x35] << 8));
-    seg = (unsigned)(p[0x36] | (p[0x37] << 8));
-    if (!seg || !cnt) return NULL;
-    *n = cnt > 20 ? 20 : cnt;
-    return (volatile uint8_t *)(ULONG_PTR)(((DWORD)seg << 4) + off);
+    jftSize = (UINT)(pspBytes[0x32] | (pspBytes[0x33] << 8));
+    jftOffset = (UINT)(pspBytes[0x34] | (pspBytes[0x35] << 8));
+    jftSegment = (UINT)(pspBytes[0x36] | (pspBytes[0x37] << 8));
+    if (!jftSegment || !jftSize) return NULL;
+    *count = jftSize > 20 ? 20 : jftSize;
+    return (volatile BYTE *)(ULONG_PTR)(((DWORD)jftSegment << 4) + jftOffset);
 }
 /* The pseudo SFT index for what handle h is bound to now. */
-static uint8_t dos_sft_val(dos_machine_t *m, unsigned h)
+static BYTE DosSftValue(PDOS_MACHINE machine, UINT handle)
 {
-    unsigned v, freev = 0;
-    if (h < DOS_MAX_FILES && m->fh[h]) {
-        for (v = 3; v < 255; ++v) {
-            if (m->sft_host[v] == m->fh[h]) return (uint8_t)v;
-            if (!m->sft_host[v] && !freev) freev = v;
+    UINT value, freeValue = 0;
+    if (handle < DOS_MAX_FILES && machine->FileHandles[handle]) {
+        for (value = 3; value < 255; ++value) {
+            if (machine->SftHost[value] == machine->FileHandles[handle]) return (BYTE)value;
+            if (!machine->SftHost[value] && !freeValue) freeValue = value;
         }
-        if (!freev) {                       /* table full: forget the stale entries */
-            for (v = 3; v < 255; ++v) m->sft_host[v] = 0;
-            freev = 3;
+        if (!freeValue) {                   /* table full: forget the stale entries */
+            for (value = 3; value < 255; ++value) machine->SftHost[value] = 0;
+            freeValue = 3;
         }
-        m->sft_host[freev] = m->fh[h];
-        return (uint8_t)freev;
+        machine->SftHost[freeValue] = machine->FileHandles[handle];
+        return (BYTE)freeValue;
     }
-    if (h < 32 && (m->std_open & (1u << h))) return (uint8_t)(h == 3 ? 0 : h == 4 ? 2 : 1);
+    if (handle < 32 && (machine->StdOpen & (1u << handle))) return (BYTE)(handle == 3 ? 0 : handle == 4 ? 2 : 1);
     return 0xFF;
 }
-static void dos_jft_put(dos_machine_t *m, unsigned h, uint8_t v)
+static VOID DosJftPut(PDOS_MACHINE machine, UINT handle, BYTE value)
 {
-    unsigned n;
-    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n);
-    if (j && h < n) { j[h] = v; m->jft_known[h] = v; }
+    UINT count;
+    volatile BYTE *jft = DosJftOf(machine->PspSegment, &count);
+    if (jft && handle < count) { jft[handle] = value; machine->JftKnown[handle] = value; }
 }
-void dos_jft_reset(dos_machine_t *m)
+VOID DosJftReset(PDOS_MACHINE machine)
 {
-    unsigned n, h;
-    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n);
-    for (h = 0; h < 20; ++h) m->jft_known[h] = (j && h < n) ? j[h] : 0xFF;
+    UINT count, handle;
+    volatile BYTE *jft = DosJftOf(machine->PspSegment, &count);
+    for (handle = 0; handle < 20; ++handle) machine->JftKnown[handle] = (jft && handle < count) ? jft[handle] : 0xFF;
 }
-void dos_jft_exec(dos_machine_t *m, uint16_t child)
+VOID DosJftExec(PDOS_MACHINE machine, WORD childPsp)
 {
-    unsigned n, cn, h;
-    volatile uint8_t *j = dos_jft_of(m->psp_seg, &n), *cj = dos_jft_of(child, &cn);
-    if (!j) return;
+    UINT count, childCount, handle;
+    volatile BYTE *jft = DosJftOf(machine->PspSegment, &count), *childJft = DosJftOf(childPsp, &childCount);
+    if (!jft) return;
     /* Only the five STANDARD handles: shell redirection is all this is for, and the
        final s91 regression run showed a Win16 task's file create coming back as handle
        18h instead of 6 once higher slots were re-bound from a JFT we do not own. */
-    for (h = 0; h < n && h < 5; ++h) {
-        uint8_t v = j[h];
-        if (v == m->jft_known[h]) continue;          /* ours: fh[] already says so */
-        if (v == 0xFF) {
-            m->fh[h] = 0;
-            if (h < 32) m->std_open &= ~(1u << h);
-        } else if (v <= 2) {
-            m->fh[h] = 0;
-            if (h < 32) m->std_open |= (1u << h);
-        } else if (m->sft_host[v]) {
-            m->fh[h] = m->sft_host[v];
+    for (handle = 0; handle < count && handle < 5; ++handle) {
+        BYTE value = jft[handle];
+        if (value == machine->JftKnown[handle]) continue;  /* ours: fh[] already says so */
+        if (value == 0xFF) {
+            machine->FileHandles[handle] = 0;
+            if (handle < 32) machine->StdOpen &= ~(1u << handle);
+        } else if (value <= 2) {
+            machine->FileHandles[handle] = 0;
+            if (handle < 32) machine->StdOpen |= (1u << handle);
+        } else if (machine->SftHost[value]) {
+            machine->FileHandles[handle] = machine->SftHost[value];
         }
     }
-    for (h = 0; h < n && cj && h < cn; ++h) cj[h] = j[h];       /* DOS copies the JFT */
-    for (h = 0; h < 20; ++h) m->jft_known[h] = (cj && h < cn) ? cj[h] : 0xFF;
+    for (handle = 0; handle < count && childJft && handle < childCount; ++handle) childJft[handle] = jft[handle];  /* DOS copies the JFT */
+    for (handle = 0; handle < 20; ++handle) machine->JftKnown[handle] = (childJft && handle < childCount) ? childJft[handle] : 0xFF;
 }
 
-void dos_handles_pop(dos_machine_t *m, int tsr)
+VOID DosHandlesPop(PDOS_MACHINE machine, INT isTsr)
 {
-    int i, d;
-    if (m->hdepth <= 0) return;
-    d = --m->hdepth;
-    if (d >= DOS_HSTACK) return;                             /* matched an unsaved push */
+    INT index, depth;
+    if (machine->HandleDepth <= 0) return;
+    depth = --machine->HandleDepth;
+    if (depth >= DOS_HANDLE_STACK_DEPTH) return;             /* matched an unsaved push */
     /* What the child still has open and the parent never had: DOS closes those at
        terminate. Checked against the parent table being restored, and against every
        older one, so nothing a caller further up holds is touched. A TSR keeps its. */
-    if (!tsr)
-        for (i = 0; i < DOS_MAX_FILES; ++i) {
-            HANDLE h = m->fh[i];
-            int k, dup = 0;
-            if (!h || dos_handle_held_by_parent(m, h)) continue;
-            for (k = 0; k < DOS_MAX_FILES; ++k)
-                if (m->hsave[d].fh[k] == h) { dup = 1; break; }
-            for (k = 0; k < i && !dup; ++k) if (m->fh[k] == h) dup = 1;  /* closed already */
-            if (!dup) CloseHandle(h);
+    if (!isTsr)
+        for (index = 0; index < DOS_MAX_FILES; ++index) {
+            HANDLE handle = machine->FileHandles[index];
+            INT index2, isDuplicate = 0;
+            if (!handle || DosHandleIsHeldByParent(machine, handle)) continue;
+            for (index2 = 0; index2 < DOS_MAX_FILES; ++index2)
+                if (machine->HandleStack[depth].FileHandles[index2] == handle) { isDuplicate = 1; break; }
+            for (index2 = 0; index2 < index && !isDuplicate; ++index2) if (machine->FileHandles[index2] == handle) isDuplicate = 1;  /* closed already */
+            if (!isDuplicate) CloseHandle(handle);
         }
-    for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = m->hsave[d].fh[i];
-    m->std_open = m->hsave[d].std_open;
-    for (i = 0; i < 20; ++i) m->jft_known[i] = m->hsave[d].jft_known[i];
+    for (index = 0; index < DOS_MAX_FILES; ++index) machine->FileHandles[index] = machine->HandleStack[depth].FileHandles[index];
+    machine->StdOpen = machine->HandleStack[depth].StdOpen;
+    for (index = 0; index < 20; ++index) machine->JftKnown[index] = machine->HandleStack[depth].JftKnown[index];
 }
 
-void dos_int21_shell_psp(dos_machine_t *m, uint16_t psp, int on)
+VOID DosInt21SetShellPsp(PDOS_MACHINE machine, WORD psp, INT isOn)
 {
-    int k;
-    for (k = 0; k < DOS_V5_PSPS; ++k) if (m->v5_psp[k] == psp) m->v5_psp[k] = 0;
-    if (on) for (k = 0; k < DOS_V5_PSPS; ++k) if (!m->v5_psp[k]) { m->v5_psp[k] = psp; break; }
+    INT index;
+    for (index = 0; index < DOS_SHELL_PSP_SLOTS; ++index) if (machine->ShellPsps[index] == psp) machine->ShellPsps[index] = 0;
+    if (isOn) for (index = 0; index < DOS_SHELL_PSP_SLOTS; ++index) if (!machine->ShellPsps[index]) { machine->ShellPsps[index] = psp; break; }
 }
 
-/* The version THIS process is told -- see dos_machine_t::v5_psp. */
-static uint16_t dos_version_word(const dos_machine_t *m)
+/* The version THIS process is told -- see DOS_MACHINE::v5_psp. */
+static WORD DosVersionWord(PCDOS_MACHINE machine)
 {
-    int k;
-    for (k = 0; k < DOS_V5_PSPS; ++k)
-        if (m->v5_psp[k] && m->v5_psp[k] == m->psp_seg)
-            return (uint16_t)((m->shell_ver_minor << 8) | m->shell_ver_major);
-    return (uint16_t)((m->ver_minor << 8) | m->ver_major);
+    INT index;
+    for (index = 0; index < DOS_SHELL_PSP_SLOTS; ++index)
+        if (machine->ShellPsps[index] && machine->ShellPsps[index] == machine->PspSegment)
+            return (WORD)((machine->ShellVersionMinor << 8) | machine->ShellVersionMajor);
+    return (WORD)((machine->VersionMinor << 8) | machine->VersionMajor);
 }
 
-void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
+VOID DosInt21SetVersion(PDOS_MACHINE machine, BYTE major, BYTE minor)
 {
-    if (!m || !major) return;                   /* major 0 is not a DOS version */
-    m->ver_major = major; m->ver_minor = minor;
+    if (!machine || !major) return;             /* major 0 is not a DOS version */
+    machine->VersionMajor = major; machine->VersionMinor = minor;
 }
 
 /* ── #210: THE LONG-FILENAME API'S WIN32 HALF -- helpers for the AH=71h arm. ─────────
@@ -742,60 +742,60 @@ void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
 
    ► THE SEARCH TABLE. 714Eh hands the caller a HANDLE (AX) that it passes back to 714Fh
      and closes with 71A1h -- unlike 4Eh, whose state rides in the DTA. Kept here, one
-     per VDM like g_dos_serial_info; AX = slot + 1 so a handle is never 0.
+     per VDM like g_DosSerialInfo; AX = slot + 1 so a handle is never 0.
    ⚠ A program that never calls 71A1h leaks its slot until the table wraps: the 17th
      live search recycles the oldest (round robin), as 4Eh recycles its eighth. Windows
      95 closes them when the PSP terminates; we have no per-PSP owner record yet.
    ⚠ The handle VALUE is ours. Stock's numbering is not measured and p_lfn does not
      compare AX on 714Eh -- a program that treats the handle as opaque cannot tell. */
-#define DOS_LFN_FINDS 16
-static HANDLE  s_lfn_find[DOS_LFN_FINDS];
-static uint8_t s_lfn_allow[DOS_LFN_FINDS], s_lfn_need[DOS_LFN_FINDS];
-static unsigned s_lfn_next;
+#define DOS_LFN_FIND_SLOTS 16
+static HANDLE  g_DosLfnFinds[DOS_LFN_FIND_SLOTS];
+static BYTE g_DosLfnAllow[DOS_LFN_FIND_SLOTS], g_DosLfnNeed[DOS_LFN_FIND_SLOTS];
+static UINT g_DosLfnNext;
 
-static uint64_t dos_ft64(const FILETIME *f)
+static UINT64 DosFileTime64(const FILETIME *fileTime)
 {
-    return ((uint64_t)f->dwHighDateTime << 32) | f->dwLowDateTime;
+    return ((UINT64)fileTime->dwHighDateTime << 32) | fileTime->dwLowDateTime;
 }
 
 /* Local time for a DOS-format answer (SI=1), as every DOS time this host reports is
-   local (dta_fill, 5700h). A FILETIME answer (SI=0) is Win32's own, i.e. UTC. */
-static uint64_t dos_ft_zone(const FILETIME *f, int local)
+   local (DosDtaFill, 5700h). A FILETIME answer (SI=0) is Win32's own, i.e. UTC. */
+static UINT64 DosFileTimeZoned(const FILETIME *fileTime, INT isLocal)
 {
-    FILETIME lf;
-    if (local && (f->dwLowDateTime || f->dwHighDateTime) && FileTimeToLocalFileTime(f, &lf))
-        return dos_ft64(&lf);
-    return dos_ft64(f);
+    FILETIME localTime;
+    if (isLocal && (fileTime->dwLowDateTime || fileTime->dwHighDateTime) && FileTimeToLocalFileTime(fileTime, &localTime))
+        return DosFileTime64(&localTime);
+    return DosFileTime64(fileTime);
 }
 
-static void dos_lfn_find_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd, int dos_fmt)
+static VOID DosLfnFindFill(volatile BYTE *destination, const WIN32_FIND_DATAA *findData, INT isDosFormat)
 {
-    uint8_t rec[DOS_LFN_FIND_RECORD_SIZE];
-    DOS_LFN_FIND_ENTRY f;
-    int k;
-    f.Attributes = fd->dwFileAttributes;
-    f.CreationTime = dos_ft_zone(&fd->ftCreationTime, dos_fmt);
-    f.LastAccessTime = dos_ft_zone(&fd->ftLastAccessTime, dos_fmt);
-    f.LastWriteTime = dos_ft_zone(&fd->ftLastWriteTime, dos_fmt);
-    f.SizeHigh = fd->nFileSizeHigh; f.SizeLow = fd->nFileSizeLow;
-    f.LongName = fd->cFileName; f.ShortName = fd->cAlternateFileName;
-    DosLfnFindPack(rec, &f, dos_fmt);
-    for (k = 0; k < DOS_LFN_FIND_RECORD_SIZE; ++k) d[k] = rec[k];
+    BYTE record[DOS_LFN_FIND_RECORD_SIZE];
+    DOS_LFN_FIND_ENTRY entry;
+    INT index;
+    entry.Attributes = findData->dwFileAttributes;
+    entry.CreationTime = DosFileTimeZoned(&findData->ftCreationTime, isDosFormat);
+    entry.LastAccessTime = DosFileTimeZoned(&findData->ftLastAccessTime, isDosFormat);
+    entry.LastWriteTime = DosFileTimeZoned(&findData->ftLastWriteTime, isDosFormat);
+    entry.SizeHigh = findData->nFileSizeHigh; entry.SizeLow = findData->nFileSizeLow;
+    entry.LongName = findData->cFileName; entry.ShortName = findData->cAlternateFileName;
+    DosLfnFindPack(record, &entry, isDosFormat);
+    for (index = 0; index < DOS_LFN_FIND_RECORD_SIZE; ++index) destination[index] = record[index];
 }
 
 /* The DOS error for a failed LFN call, from the Win32 one (dos_lfn.h). */
-static uint16_t dos_lfn_err(DWORD we)
+static WORD DosLfnError(DWORD win32Error)
 {
-    unsigned short de = 2;
-    (void)DosLfnErrFromWin32((unsigned long)we, &de);
-    return de;
+    WORD dosError = 2;
+    (VOID)DosLfnErrFromWin32((unsigned long)win32Error, &dosError);
+    return dosError;
 }
 
 /* Open a file OR a directory just to set its times (7143h BL=3/5/7). Directories need
    FILE_FLAG_BACKUP_SEMANTICS; sharing is everything, as 3Dh's is. */
-static HANDLE dos_lfn_open_attr(const char *fn)
+static HANDLE DosLfnOpenAttributes(PCSTR fileName)
 {
-    return CreateFileA(fn, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    return CreateFileA(fileName, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 }
 
@@ -808,34 +808,34 @@ static HANDLE dos_lfn_open_attr(const char *fn)
      upstream of it.
    ⚠ 24 bytes before the site and 8 after. Disassemble with `ndisasm -b 16 -o <addr>`.
    ⚠ Clamped at the segment base: a low return offset must not read below zero. */
-static char *dos_int21_callsite(char *tp, int ok, DWORD seg, DWORD off)
+static PSTR DosInt21CallSite(PSTR trace, INT isFramed, DWORD segment, DWORD offset)
 {
-    DWORD base, site, lo, n, i;
-    const volatile BYTE *q;
-    if (!ok) return zput(tp, " from=<PM: no pushed frame>");
-    tp = zput(tp, " from=0x"); tp = zhex(tp, seg);
-    tp = zput(tp, ":0x");      tp = zhex(tp, off);
-    site = (off >= 2) ? off - 2 : 0;            /* the CD 21 itself */
-    tp = zput(tp, " site=0x");  tp = zhex(tp, site);
-    base = (seg & 0xFFFF) << 4;
-    lo   = (site >= 24) ? site - 24 : 0;
-    q    = (const volatile BYTE *)(ULONG_PTR)(base + lo);
-    n    = (site - lo) + 10;
-    tp = zput(tp, " bytes@0x"); tp = zhex(tp, lo); tp = zput(tp, "=");
-    for (i = 0; i < n && i < 48; ++i) { tp = zhexb(tp, q[i]); tp = zput(tp, " "); }
-    return tp;
+    DWORD base, site, low, count, index;
+    const volatile BYTE *bytes;
+    if (!isFramed) return zput(trace, " from=<PM: no pushed frame>");
+    trace = zput(trace, " from=0x"); trace = zhex(trace, segment);
+    trace = zput(trace, ":0x");      trace = zhex(trace, offset);
+    site = (offset >= 2) ? offset - 2 : 0;      /* the CD 21 itself */
+    trace = zput(trace, " site=0x");  trace = zhex(trace, site);
+    base = (segment & 0xFFFF) << 4;
+    low   = (site >= 24) ? site - 24 : 0;
+    bytes    = (const volatile BYTE *)(ULONG_PTR)(base + low);
+    count    = (site - low) + 10;
+    trace = zput(trace, " bytes@0x"); trace = zhex(trace, low); trace = zput(trace, "=");
+    for (index = 0; index < count && index < 48; ++index) { trace = zhexb(trace, bytes[index]); trace = zput(trace, " "); }
+    return trace;
 }
 
-int dos_int21(dos_machine_t *m)
+INT DosInt21(PDOS_MACHINE m)
 {
-    volatile BYTE *tib = m->tib;
-    char *tp = m->tp;
+    volatile BYTE *tib = m->Tib;
+    PSTR tp = m->TraceCursor;
     volatile WORD *pfl;
     DWORD ah;
-    int cont = 1;
+    INT cont = 1;
     DWORD cl_seg = 0, cl_off = 0;               /* the guest's own call site -- below */
-    int   cl_ok  = 0;
-    uint8_t lfn_alias = 0;                      /* #210: the AL of a 71xxh served by xxh */
+    INT   cl_ok  = 0;
+    BYTE lfn_alias = 0;                         /* #210: the AL of a 71xxh served by xxh */
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -864,12 +864,12 @@ int dos_int21(dos_machine_t *m)
          goes near AH=40h.
          A bound handle 1 is a file (see the note there); an unbound one is the
          console, which is the ordinary case and behaves exactly as before. */
-    #define OUTC(c)     do { uint8_t _ch = (uint8_t)(c); \
-        if (m->fh[1]) { DWORD _w = 0; WriteFile(m->fh[1], &_ch, 1, &_w, NULL); } \
+    #define OUTC(c)     do { BYTE _ch = (BYTE)(c); \
+        if (m->FileHandles[1]) { DWORD _w = 0; WriteFile(m->FileHandles[1], &_ch, 1, &_w, NULL); } \
         else { \
-            if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
-            else m->out_trunc = 1; \
-            if (m->conout) m->conout(m->conctx, _ch); \
+            if (m->OutputLength < m->OutputCapacity - 1) m->Output[m->OutputLength++] = (CHAR)_ch; \
+            else m->IsOutputTruncated = 1; \
+            if (m->ConsoleOut) m->ConsoleOut(m->ConsoleOutContext, _ch); \
         } } while (0)
 
     /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4): the
@@ -880,18 +880,18 @@ int dos_int21(dos_machine_t *m)
          on low memory. There is no pushed-FLAGS frame to honour there either: the PM
          dispatcher resumes the client by advancing EIP past the BOP, so the live
          VTIB_EFLAGS *is* what the client sees. Point at its low word, which carries
-         CF/ZF. Set by the PM caller via dos_int21_set_pm(). */
-    pfl = g_dos_int21_pm
+         CF/ZF. Set by the PM caller via DosInt21SetProtectedMode(). */
+    pfl = g_DosInt21IsProtectedMode
         ? (volatile WORD *)(tib + VTIB_EFLAGS)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
-    m->v86_tramp = 0;
+    m->Trampoline = 0;
     /* #251: resume the V86 guest in the AUX/PRN driver code -- see dos_auxprn.asm. */
-    #define AUXPRN_TRAMP(e) (m->v86_tramp = (uint16_t)(DOS_AUXPRN_OFF + (e)))
-    #define AUXPRN_V86      (m->v86_tramp_ok && !g_dos_int21_pm)
-    m->crit_pending = 0;      /* #34: only ever about THIS call; see the tail */
-    s_rw_drive = -1;          /* #275: likewise */
+    #define AUXPRN_TRAMP(e) (m->Trampoline = (WORD)(DOS_AUXPRN_OFF + (e)))
+    #define AUXPRN_V86      (m->CanTrampoline && !g_DosInt21IsProtectedMode)
+    m->IsCritPending = 0;     /* #34: only ever about THIS call; see the tail */
+    g_DosReadWriteDrive = -1;  /* #275: likewise */
 
     /* ── ★★ WHO CALLED, OFF THE GUEST STACK. ───────────────────────────────────
          VTIB_CS:EIP is where the HANDLER is, not where the guest is. Last session
@@ -906,7 +906,7 @@ int dos_int21(dos_machine_t *m)
        ⚠ REAL MODE ONLY. In PM the dispatcher advances EIP past the BOP -- there is
          no pushed frame, and SS is a selector, so SS<<4 is not the stack at all
          (the same trap the pfl note above exists to warn about). */
-    if (!g_dos_int21_pm) {
+    if (!g_DosInt21IsProtectedMode) {
         DWORD sb = (VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4;
         DWORD sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
         const volatile BYTE *fr = (const volatile BYTE *)(ULONG_PTR)(sb + sp);
@@ -934,18 +934,18 @@ int dos_int21(dos_machine_t *m)
        ⇒ 4000 lines, then one line saying it stopped and how many it has seen. A trace
          whose size depends on the guest's loop rate cannot be read either way, and the
          first 4000 calls are where the answer is. */
-    if (m->trace_all && ah != 0x0A && m->trace_n <= DOS_TRACE_MAX) {
-        if (++m->trace_n > DOS_TRACE_MAX) {
+    if (m->IsTraceAll && ah != 0x0A && m->TraceCount <= DOS_TRACE_MAX) {
+        if (++m->TraceCount > DOS_TRACE_MAX) {
             tp = zput(tp, "  21: ... TRACE CAPPED at ");
             tp = zhex(tp, DOS_TRACE_MAX);
             tp = zput(tp, " calls -- the guest is looping; totals are in the summary\r\n");
         } else {
-        tp = zput(tp, "  21:"); tp = zhexb(tp, (unsigned)ah);
-        tp = zput(tp, "/");     tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
-        tp = zput(tp, " bx="); tp = zhexb(tp, (unsigned)((R_BX >> 8) & 0xFF));
-        tp = zhexb(tp, (unsigned)(R_BX & 0xFF));
-        tp = zput(tp, " dx="); tp = zhexb(tp, (unsigned)((R_DX >> 8) & 0xFF));
-        tp = zhexb(tp, (unsigned)(R_DX & 0xFF));
+        tp = zput(tp, "  21:"); tp = zhexb(tp, (UINT)ah);
+        tp = zput(tp, "/");     tp = zhexb(tp, (UINT)(R_AX & 0xFF));
+        tp = zput(tp, " bx="); tp = zhexb(tp, (UINT)((R_BX >> 8) & 0xFF));
+        tp = zhexb(tp, (UINT)(R_BX & 0xFF));
+        tp = zput(tp, " dx="); tp = zhexb(tp, (UINT)((R_DX >> 8) & 0xFF));
+        tp = zhexb(tp, (UINT)(R_DX & 0xFF));
         /* The call site, so a trace of 31 calls says WHERE the guest is, not only
            what it wanted. Two calls from the same offset are a loop; a run of
            rising offsets is start-up walking forward. */
@@ -969,7 +969,7 @@ int dos_int21(dos_machine_t *m)
          open, a global handle on Windows 95) is an ordinary 716Ch here: there is one
          process and one handle table. Everything else in AH=71h is the arm further down. */
     if (ah == 0x71) {
-        uint8_t al71 = (uint8_t)(R_AX & 0xFF);
+        BYTE al71 = (BYTE)(R_AX & 0xFF);
         if (al71 == 0x39 || al71 == 0x3A || al71 == 0x3B || al71 == 0x56 || al71 == 0x6C
             || al71 == 0xA9) {
             lfn_alias = al71;
@@ -978,10 +978,10 @@ int dos_int21(dos_machine_t *m)
     }
 
     if (ah == 0x4C) {                           /* terminate */
-        m->exit_code = (int)(R_AX & 0xFF);      /* DOS errorlevel */
+        m->ExitCode = (INT)(R_AX & 0xFF);       /* DOS errorlevel */
         tp = zput(tp, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
         tp = zhex(tp, R_AX & 0xFF);
-        tp = dos_int21_callsite(tp, cl_ok, cl_seg, cl_off);
+        tp = DosInt21CallSite(tp, cl_ok, cl_seg, cl_off);
         tp = zput(tp, "\r\n");
         cont = 0;
     } else if (ah == 0x00) {                    /* terminate (CP/M style, = INT 20h) */
@@ -990,7 +990,7 @@ int dos_int21(dos_machine_t *m)
            an exit code of 0. Logging the call site because WHY a game terminates is the
            question, and the CS tells you whether it was the program or something we
            vectored it into. */
-        m->exit_code = 0;
+        m->ExitCode = 0;
         tp = zput(tp, "  ==> DOS terminate (AH=00h) from CS:IP=0x");
         tp = zhex(tp, VDM_REG(tib, VTIB_CS) & 0xFFFF); tp = zput(tp, ":0x");
         tp = zhex(tp, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
@@ -1009,15 +1009,15 @@ int dos_int21(dos_machine_t *m)
              VTIB_CS:EIP -- the HANDLER's address. That produced `C4 C4 54`, read
              as a BOP marker, and two conclusions that were both retracted a
              session later. The guest's own call site is the pushed return address
-             on its stack; dos_int21_callsite() dumps around that. */
-        tp = dos_int21_callsite(tp, cl_ok, cl_seg, cl_off);
+             on its stack; DosInt21CallSite() dumps around that. */
+        tp = DosInt21CallSite(tp, cl_ok, cl_seg, cl_off);
         tp = zput(tp, "\r\n");
         cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
         OUTC(R_DX & 0xFF); OKCF();
     } else if ((ah == 0x01 || ah == 0x07 || ah == 0x08 || ah == 0x0B
                 || (ah == 0x06 && (R_DX & 0xFF) == 0xFF))
-               && DosHandleIsFile((void *const *)m->fh, 0)) {
+               && DosHandleIsFile((PVOID const *)m->FileHandles, 0)) {
         /* ── stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
              shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
              read HANDLE 0 -- these read the keyboard whatever handle 0 was, so a
@@ -1030,7 +1030,7 @@ int dos_int21(dos_machine_t *m)
                06h DL=FFh   the next byte, ZF clear; at EOF AL=00h and ZF SET
                0Bh          FFh while bytes remain, 00h at EOF
              (3Fh on handle 0 already reads the file: 0 bytes, CF clear, at EOF.) */
-        HANDLE fh0 = (HANDLE)m->fh[0];
+        HANDLE fh0 = (HANDLE)m->FileHandles[0];
         BYTE ch = 0; DWORD got = 0;
         if (ah == 0x0B) {
             DWORD pos = SetFilePointer(fh0, 0, NULL, FILE_CURRENT);
@@ -1039,7 +1039,7 @@ int dos_int21(dos_machine_t *m)
             OKCF();
         } else if (!ReadFile(fh0, &ch, 1, &got, NULL) || got == 0) {
             if (ah == 0x06) { SETAX(R_AX & 0xFF00); SETZF(); OKCF(); }
-            else m->retry = 1;                  /* EOF: block, as DOS does */
+            else m->IsRetry = 1;                /* EOF: block, as DOS does */
         } else {
             if (ah == 0x01) OUTC(ch);
             SETAX((R_AX & 0xFF00) | ch);
@@ -1049,28 +1049,28 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x01 || ah == 0x07 || ah == 0x08) {   /* read char (01 echoes) */
         /* Poll, do not block. If no key is waiting we ask the host to re-run this INT
            rather than parking the exec thread -- see `retry` in dos_int21.h. */
-        int c = m->coninnb ? m->coninnb(m->cinctx) : -1;
-        if (c < 0) { m->retry = 1; }
+        INT c = m->ConsoleInNoWait ? m->ConsoleInNoWait(m->ConsoleInContext) : -1;
+        if (c < 0) { m->IsRetry = 1; }
         else {
             if (ah == 0x01) OUTC(c);            /* AH=01: echo                     */
             SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
         }
-    } else if (ah == 0x0A && DosHandleIsFile((void *const *)m->fh, 0)) {
+    } else if (ah == 0x0A && DosHandleIsFile((PVOID const *)m->FileHandles, 0)) {
         /* stdio (s91): the line from a FILE on handle 0 -- bytes up to the CR, the
            LF a text file puts after it skipped at the start of the next line, each
            echoed as the keyboard form echoes them. At EOF with nothing read it
            blocks, as 08h does (p_stdin: PCem + stock). */
         volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-        int maxn = buf[0], n = 0;
+        INT maxn = buf[0], n = 0;
         BYTE ch; DWORD got;
-        HANDLE fh0 = (HANDLE)m->fh[0];
+        HANDLE fh0 = (HANDLE)m->FileHandles[0];
         for (;;) {
             if (!ReadFile(fh0, &ch, 1, &got, NULL) || got == 0) break;
             if (ch == 0x0A && n == 0) continue;
             if (ch == 0x0D) break;
             if (n < maxn - 1) { buf[2 + n++] = ch; OUTC(ch); }
         }
-        if (n == 0 && got == 0) m->retry = 1;
+        if (n == 0 && got == 0) m->IsRetry = 1;
         else {
             buf[1] = (BYTE)n; buf[2 + n] = 0x0D;
             OUTC(0x0D); OUTC(0x0A);
@@ -1098,56 +1098,56 @@ int dos_int21(dos_machine_t *m)
              run its ISRs in between -- which is what a real DOS does, since the BIOS
              spins in the guest with interrupts enabled. */
         volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-        int maxn = buf[0], c;
-        if (!m->line_active || m->line_seg != (uint16_t)(R_DS & 0xFFFF)
-                            || m->line_off != (uint16_t)(R_DX & 0xFFFF)) {
-            m->line_active = 1; m->line_n = 0;
-            m->line_seg = (uint16_t)(R_DS & 0xFFFF);
-            m->line_off = (uint16_t)(R_DX & 0xFFFF);
+        INT maxn = buf[0], c;
+        if (!m->IsLineActive || m->LineSegment != (WORD)(R_DS & 0xFFFF)
+                            || m->LineOffset != (WORD)(R_DX & 0xFFFF)) {
+            m->IsLineActive = 1; m->LineLength = 0;
+            m->LineSegment = (WORD)(R_DS & 0xFFFF);
+            m->LineOffset = (WORD)(R_DX & 0xFFFF);
         }
         for (;;) {
-            if (m->line_n >= maxn - 1) break;           /* buffer full -> take it as a line */
-            c = m->coninnb ? m->coninnb(m->cinctx) : 0x0D;
-            if (c < 0) { m->retry = 1; break; }         /* nothing yet -> let the guest run */
+            if (m->LineLength >= maxn - 1) break;       /* buffer full -> take it as a line */
+            c = m->ConsoleInNoWait ? m->ConsoleInNoWait(m->ConsoleInContext) : 0x0D;
+            if (c < 0) { m->IsRetry = 1; break; }       /* nothing yet -> let the guest run */
             /* s91: a LF at the START of a line is the tail of the previous line's
                CR LF in a redirected file (`command < script`, cmd's `<` lands on the
                host stdin this reads). Every line after the first began with it and
                6.22's COMMAND.COM answered "Bad command or file name" to each. */
-            if (c == 0x0A && m->line_n == 0) continue;
-            if (c == 0x0D) { m->line_active = 0; break; }
+            if (c == 0x0A && m->LineLength == 0) continue;
+            if (c == 0x0D) { m->IsLineActive = 0; break; }
             if (c == 0x08) {                            /* backspace: rub it out on screen */
-                if (m->line_n > 0) { --m->line_n; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+                if (m->LineLength > 0) { --m->LineLength; OUTC(0x08); OUTC(' '); OUTC(0x08); }
                 continue;
             }
             if (c == 0x00) continue;                    /* extended key: no ASCII, ignore  */
-            buf[2 + m->line_n++] = (BYTE)c; OUTC(c);
+            buf[2 + m->LineLength++] = (BYTE)c; OUTC(c);
         }
-        if (!m->retry) {
-            buf[1] = (BYTE)m->line_n; buf[2 + m->line_n] = 0x0D;
+        if (!m->IsRetry) {
+            buf[1] = (BYTE)m->LineLength; buf[2 + m->LineLength] = 0x0D;
             OUTC(0x0D); OUTC(0x0A);
-            m->line_active = 0;
+            m->IsLineActive = 0;
             /* WHAT THE SHELL ACTUALLY RECEIVES. `echo hi` works while a bare `ver`
                comes back "Bad command or file name" -- and the difference between
                them is a SPACE, i.e. whether the command word ends at a delimiter or
                at our terminator. That points straight at these bytes, so print them
                rather than reason about them. */
-            if (m->trace_all) { int k;
-              tp = zput(tp, "  INT21 AH=0A line max="); tp = zhexb(tp, (unsigned)maxn);
-              tp = zput(tp, " n="); tp = zhexb(tp, (unsigned)m->line_n);
+            if (m->IsTraceAll) { INT k;
+              tp = zput(tp, "  INT21 AH=0A line max="); tp = zhexb(tp, (UINT)maxn);
+              tp = zput(tp, " n="); tp = zhexb(tp, (UINT)m->LineLength);
               tp = zput(tp, " [");
-              for (k = 0; k < m->line_n + 1 && k < 64; ++k) {
+              for (k = 0; k < m->LineLength + 1 && k < 64; ++k) {
                   tp = zhexb(tp, buf[2 + k]); tp = zput(tp, " ");
               }
               tp = zput(tp, "]\r\n"); }
             OKCF();
         }
     } else if (ah == 0x0B) {                    /* check input status */
-        int ready = m->conpeek ? m->conpeek(m->cinctx) : 0;
+        INT ready = m->ConsolePeek ? m->ConsolePeek(m->ConsoleInContext) : 0;
         SETAX((R_AX & 0xFF00) | (ready ? 0xFF : 0x00));   /* FFh = char waiting */
         OKCF();
     } else if (ah == 0x06) {                    /* direct console I/O (DL=FF -> read) */
         if ((R_DX & 0xFF) == 0xFF) {            /* input: non-blocking, ZF=1 if none */
-            int c = m->coninnb ? m->coninnb(m->cinctx) : -1;
+            INT c = m->ConsoleInNoWait ? m->ConsoleInNoWait(m->ConsoleInContext) : -1;
             if (c >= 0) { SETAX((R_AX & 0xFF00) | (c & 0xFF)); CLRZF(); }
             else        { SETAX(R_AX & 0xFF00); SETZF(); }
         } else {                                /* output: write DL, AL=DL */
@@ -1156,11 +1156,11 @@ int dos_int21(dos_machine_t *m)
         OKCF();
     } else if (ah == 0x09) {                    /* print $-string DS:DX */
         const volatile BYTE *s = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-        int k; for (k = 0; k < 1024 && *s != '$'; ++k, ++s) OUTC(*s);
+        INT k; for (k = 0; k < 1024 && *s != '$'; ++k, ++s) OUTC(*s);
         OKCF();
     } else if (ah == 0x40) {                    /* write: BX=handle CX=cnt DS:DX=buf */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF;
-        const char *b = (const char *)((R_DS << 4) + (R_DX & 0xFFFF));
+        PCSTR b = (PCSTR)((R_DS << 4) + (R_DX & 0xFFFF));
         /* ── HANDLES 0-4 ARE TABLE ENTRIES, NOT A SPECIAL CASE. ──────────────────
              DOS pre-opens stdin/stdout/stderr/aux/prn as ordinary slots in the same
              handle table as everything else, and that is precisely WHY redirection
@@ -1181,31 +1181,31 @@ int dos_int21(dos_machine_t *m)
            ⚠ ANY OTHER FAILURE KEEPS THE OLD ANSWER, deliberately: disk full is CF=0
              with a short count on DOS too, and the rest (access denied on a read-only
              handle = DOS 5) is a separate, unmeasured question. */
-        if (DosHandleIsFile((void *const *)m->fh, h)) {
-            DWORD w = 0, we = 0; unsigned short de = 0;
-            if (!WriteFile(m->fh[h], b, cnt, &w, NULL)) we = GetLastError();
+        if (DosHandleIsFile((PVOID const *)m->FileHandles, h)) {
+            DWORD w = 0, we = 0; WORD de = 0;
+            if (!WriteFile(m->FileHandles[h], b, cnt, &w, NULL)) we = GetLastError();
             if (we && DosErrFromWin32((unsigned long)we, &de) && DosCritIsHardwareError(de)) {
-                s_rw_drive = dos_handle_drive(m->fh[h]);
+                g_DosReadWriteDrive = DosHandleDrive(m->FileHandles[h]);
                 SETAX(de); ERRCF();
                 tp = zput(tp, "  INT21 AH=40 h="); tp = zhex(tp, h);
                 tp = zput(tp, " cnt=0x"); tp = zhex(tp, cnt);
                 tp = zput(tp, " FAILED win32=0x"); tp = zhex(tp, we);
                 tp = zput(tp, " (hardware) drive=");
-                if (s_rw_drive >= 0) { char dl[3] = { (char)('A' + s_rw_drive), ':', 0 }; tp = zput(tp, dl); }
+                if (g_DosReadWriteDrive >= 0) { CHAR dl[3] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; tp = zput(tp, dl); }
                 else tp = zput(tp, "?");
                 tp = zput(tp, "\r\n");
-            } else { SETAX(w); OKCF(); dos_stamp_vdm_now(m->fh[h]); /* #263 */ }
+            } else { SETAX(w); OKCF(); DosStampVdmNow(m->FileHandles[h]); /* #263 */ }
         }
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
              (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
              with error 6 here, after AH=04h/05h had thrown their bytes away. */
-        else if ((h == 3 || h == 4) && DosHandleIsDevice((void *const *)m->fh, m->std_open, h)) {
+        else if ((h == 3 || h == 4) && DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, h)) {
             if (AUXPRN_V86) AUXPRN_TRAMP(h == 4 ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else {
                 DWORD k;
                 for (k = 0; k < cnt; ++k) {
-                    if (h == 4) { if (m->prnout) (void)m->prnout(m->devctx, (uint8_t)b[k]); }
-                    else if (m->auxout) m->auxout(m->devctx, (uint8_t)b[k]);
+                    if (h == 4) { if (m->PrinterOut) (VOID)m->PrinterOut(m->DeviceContext, (BYTE)b[k]); }
+                    else if (m->AuxOut) m->AuxOut(m->DeviceContext, (BYTE)b[k]);
                 }
                 SETAX(cnt); OKCF();
             }
@@ -1214,7 +1214,7 @@ int dos_int21(dos_machine_t *m)
              sitting in slot 5. A duplicate loses which device it was, so a dup of
              AUX would print here; nothing does that, and the alternative is a
              per-slot identity byte we have no caller for. */
-        else if (DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
+        else if (DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, h))
              { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
@@ -1235,9 +1235,9 @@ int dos_int21(dos_machine_t *m)
              looking for a file that is there. The protected-mode twin of this call cost
              the GDI.EXE wall exactly that way. Share everything; the access mode below
              still comes from the guest. */
-        char fn[300]; DWORD slot; HANDLE f;
+        CHAR fn[300]; DWORD slot; HANDLE f;
         DWORD shr = FILE_SHARE_READ | FILE_SHARE_WRITE;
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x3C)
             f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, shr,
                             NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1245,18 +1245,18 @@ int dos_int21(dos_machine_t *m)
             DWORD mode = R_AX & 7;
             DWORD acc = (mode == 1) ? GENERIC_WRITE
                       : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
-            f = dos_open_stampable(fn, acc, shr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
+            f = DosOpenStampable(fn, acc, shr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
-                                        if (ah == 0x3C) dos_stamp_vdm_now(f); /* #263 */ }
+            slot = DosHandleAllocate((PVOID const *)m->FileHandles, m->StdOpen);
+            if (slot < DOS_MAX_FILES) { m->FileHandles[slot] = f; SETAX(slot); OKCF();
+                                        if (ah == 0x3C) DosStampVdmNow(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else {
             /* ── ASK WHY IT FAILED. It used to answer 2 for every cause; see
                  DosErrFromWin32() for the two oracle rows that names wrong. */
-            DWORD we = GetLastError(); unsigned short de;
-            int mapped = DosErrFromWin32((unsigned long)we, &de);
+            DWORD we = GetLastError(); WORD de;
+            INT mapped = DosErrFromWin32((unsigned long)we, &de);
             SETAX(de); ERRCF();
             tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
             tp = zput(tp, " ["); tp = zput(tp, fn); tp = zput(tp, "] FAILED win32=0x");
@@ -1271,31 +1271,31 @@ int dos_int21(dos_machine_t *m)
         DWORD h = R_BX & 0xFFFF;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
-        if (DosHandleIsFile((void *const *)m->fh, h)) dos_handle_release(m, h);
-        else DosHandleSetDevice(&m->std_open, h, 0);         /* free the device slot */
+        if (DosHandleIsFile((PVOID const *)m->FileHandles, h)) DosHandleRelease(m, h);
+        else DosHandleSetDevice(&m->StdOpen, h, 0);          /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
-        void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (DosHandleIsFile((void *const *)m->fh, h)) {      /* bound -> a file, even if low */
+        PVOID b = (VOID *)((R_DS << 4) + (R_DX & 0xFFFF));
+        if (DosHandleIsFile((PVOID const *)m->FileHandles, h)) {  /* bound -> a file, even if low */
             /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
                  loading an executable is doing nothing but seek+read, so if the image it
                  ends up with is wrong, the first question is whether WE handed it the
                  right bytes -- and that is answerable offline by comparing these lines
                  against the file. Without the position a short or misplaced read is
                  indistinguishable from a correct one. */
-            DWORD pos = SetFilePointer(m->fh[h], 0, NULL, FILE_CURRENT);
+            DWORD pos = SetFilePointer(m->FileHandles[h], 0, NULL, FILE_CURRENT);
             /* #275: and a read that FAILS for a hardware reason is a critical error --
                see AH=40h; same rule, same reasons for leaving every other failure
                alone (it used to answer them all as CF=0 with what Win32 read). */
-            DWORD we = 0; unsigned short de = 0;
-            if (!ReadFile(m->fh[h], b, cnt, &rd, NULL)) we = GetLastError();
+            DWORD we = 0; WORD de = 0;
+            if (!ReadFile(m->FileHandles[h], b, cnt, &rd, NULL)) we = GetLastError();
             if (we && DosErrFromWin32((unsigned long)we, &de) && DosCritIsHardwareError(de)) {
-                s_rw_drive = dos_handle_drive(m->fh[h]);
+                g_DosReadWriteDrive = DosHandleDrive(m->FileHandles[h]);
                 SETAX(de); ERRCF();
                 tp = zput(tp, "  INT21 AH=3F FAILED win32=0x"); tp = zhex(tp, we);
                 tp = zput(tp, " (hardware) drive=");
-                if (s_rw_drive >= 0) { char dl[3] = { (char)('A' + s_rw_drive), ':', 0 }; tp = zput(tp, dl); }
+                if (g_DosReadWriteDrive >= 0) { CHAR dl[3] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; tp = zput(tp, dl); }
                 else tp = zput(tp, "?");
                 tp = zput(tp, "\r\n");
             } else { SETAX(rd); OKCF(); }
@@ -1304,10 +1304,10 @@ int dos_int21(dos_machine_t *m)
             tp = zput(tp, " cnt=0x"); tp = zhex(tp, cnt);
             tp = zput(tp, " got=0x"); tp = zhex(tp, rd);
             tp = zput(tp, " -> 0x"); tp = zhex(tp, (DWORD)(ULONG_PTR)b);
-            tp = zput(tp, " first="); tp = zdump(tp, (const BYTE *)b, (rd >= 8) ? 8 : 0);
+            tp = zput(tp, " first="); tp = zdump(tp, (PCBYTE)b, (rd >= 8) ? 8 : 0);
             tp = zput(tp, "\r\n");
         }
-        else if (h == 0 && DosHandleIsDevice((void *const *)m->fh, m->std_open, h)) {
+        else if (h == 0 && DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, h)) {
             /* ── #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT. ──────────
                  This answered 0 bytes -- end of file -- so any program reading its
                  input through handle 0 (C's gets/scanf/fgets do) saw an empty stream
@@ -1317,34 +1317,34 @@ int dos_int21(dos_machine_t *m)
                  Collected across retries like AH=0Ah, so the guest keeps running
                  (and taking its interrupts) while it waits for keys. */
             volatile BYTE *bv = (volatile BYTE *)b;
-            int c;
+            INT c;
             DWORD n = 0;
-            if (m->con_pos >= m->con_len) {             /* nothing pending: collect a line */
-                if (!m->con_collecting) { m->con_collecting = 1; m->con_n = 0; }
+            if (m->ConsolePosition >= m->ConsoleLength) {  /* nothing pending: collect a line */
+                if (!m->IsConsoleCollecting) { m->IsConsoleCollecting = 1; m->ConsoleTyped = 0; }
                 for (;;) {
-                    c = m->coninnb ? m->coninnb(m->cinctx) : 0x0D;
-                    if (c < 0) { m->retry = 1; break; }
+                    c = m->ConsoleInNoWait ? m->ConsoleInNoWait(m->ConsoleInContext) : 0x0D;
+                    if (c < 0) { m->IsRetry = 1; break; }
                     if (c == 0x0D) break;
                     if (c == 0x08) {
-                        if (m->con_n > 0) { --m->con_n; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+                        if (m->ConsoleTyped > 0) { --m->ConsoleTyped; OUTC(0x08); OUTC(' '); OUTC(0x08); }
                         continue;
                     }
                     if (c == 0x00) continue;            /* extended key: no ASCII */
-                    if (m->con_n >= 127) continue;      /* full: only Enter ends it */
-                    m->con_line[m->con_n++] = (BYTE)c; OUTC(c);
+                    if (m->ConsoleTyped >= 127) continue;  /* full: only Enter ends it */
+                    m->ConsoleLine[m->ConsoleTyped++] = (BYTE)c; OUTC(c);
                 }
-                if (m->retry) goto read_done;
-                m->con_line[m->con_n] = 0x0D; m->con_line[m->con_n + 1] = 0x0A;
-                m->con_len = m->con_n + 2; m->con_pos = 0; m->con_collecting = 0;
+                if (m->IsRetry) goto read_done;
+                m->ConsoleLine[m->ConsoleTyped] = 0x0D; m->ConsoleLine[m->ConsoleTyped + 1] = 0x0A;
+                m->ConsoleLength = m->ConsoleTyped + 2; m->ConsolePosition = 0; m->IsConsoleCollecting = 0;
                 OUTC(0x0D); OUTC(0x0A);
             }
-            while (n < cnt && m->con_pos < m->con_len) bv[n++] = m->con_line[m->con_pos++];
+            while (n < cnt && m->ConsolePosition < m->ConsoleLength) bv[n++] = m->ConsoleLine[m->ConsolePosition++];
             SETAX(n); OKCF();
         read_done: ;
         }
-        else if (h == 3 && AUXPRN_V86 && DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
+        else if (h == 3 && AUXPRN_V86 && DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, h))
              AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
-        else if (DosHandleIsDevice((void *const *)m->fh, m->std_open, h))
+        else if (DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, h))
              { SETAX(0); OKCF(); }              /* PRN, a dup, or AUX in PM: EOF */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
@@ -1360,8 +1360,8 @@ int dos_int21(dos_machine_t *m)
              Oracle, tests/probes/dos/p_redir.asm on MS-DOS 6.22:
                CASE=int21.42.end.on.h1 SIG=AX,DX,CF AX=0004 DX=0000 CF=0
              i.e. real DOS seeks handle 1 to the end and reports 4 bytes. */
-        if (DosHandleIsFile((void *const *)m->fh, h)) {
-            DWORD np = SetFilePointer(m->fh[h], dist, NULL, meth);
+        if (DosHandleIsFile((PVOID const *)m->FileHandles, h)) {
+            DWORD np = SetFilePointer(m->FileHandles[h], dist, NULL, meth);
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
         } else { SETAX(6); ERRCF(); }
@@ -1370,28 +1370,28 @@ int dos_int21(dos_machine_t *m)
            BX and CX were never written before, so a caller saw whatever it had
            left in them and read that as our OEM number and serial.  Values
            confirmed against the 6.22 oracle: BH=0xFF (generic MS-DOS), serial 0.
-           The version itself is configurable -- see dos_int21_set_version(). */
-        SETAX(dos_version_word(m));             /* per process: see v5_psp (#208) */
+           The version itself is configurable -- see DosInt21SetVersion(). */
+        SETAX(DosVersionWord(m));               /* per process: see v5_psp (#208) */
         SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
         SET16(R_CX, 0x0000);                    /* serial low                  */
         OKCF();
     } else if (ah == 0x4E || ah == 0x4F) {      /* find first / find next */
-        volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+        volatile BYTE *d = (volatile BYTE *)((m->DtaSegment << 4) + m->DtaOffset);
         WIN32_FIND_DATAA fd;
-        uint16_t mask;
-        int slot = -1, ok = 0;
+        WORD mask;
+        INT slot = -1, ok = 0;
         if (ah == 0x4E) {
-            char pat[300];
-            v86_path(m, R_DS, R_DX, pat, sizeof(pat));
-            mask = (uint16_t)(R_CX & 0xFFFF);
-            for (slot = 0; slot < 8 && m->find_h[slot]; ++slot) {}
+            CHAR pat[300];
+            DosGuestPath(m, R_DS, R_DX, pat, sizeof(pat));
+            mask = (WORD)(R_CX & 0xFFFF);
+            for (slot = 0; slot < 8 && m->FindHandles[slot]; ++slot) {}
             if (slot >= 8) { slot = 0;                       /* recycle the oldest */
-                             FindClose(m->find_h[0]); m->find_h[0] = 0; }
-            { char all[300]; BYTE tm[11]; int nodir;
+                             FindClose(m->FindHandles[0]); m->FindHandles[0] = 0; }
+            { CHAR all[300]; BYTE tm[11]; INT nodir;
               HANDLE hf;
-              dos_find_split(pat, all, sizeof all, tm);          /* DOS matching: see dos_find_match */
-              hf = dos_find_first(all, tm, mask, &fd, &nodir);
-              if (m->trace_all) { tp = zput(tp, "  INT21 AH=4E ["); tp = zput(tp, pat);
+              DosFindSplit(pat, all, sizeof all, tm);            /* DOS matching: see DosFindMatches */
+              hf = DosFindFirst(all, tm, mask, &fd, &nodir);
+              if (m->IsTraceAll) { tp = zput(tp, "  INT21 AH=4E ["); tp = zput(tp, pat);
                                   tp = zput(tp, "] attr=0x"); tp = zhex(tp, mask);
                                   tp = zput(tp, hf == INVALID_HANDLE_VALUE ? " -> none" : " -> found");
                                   tp = zput(tp, nodir ? " (no such directory)\r\n" : "\r\n"); }
@@ -1404,10 +1404,10 @@ int dos_int21(dos_machine_t *m)
                   /* #34: a HARDWARE failure (not ready, write-protected, ...) is its
                      own DOS code -- Win32 kept DOS's numbers for 19-31 -- and the
                      dispatcher's tail turns it into an INT 24h. */
-                  if (s_find_w32 >= 19 && s_find_w32 <= 31) SETAX(s_find_w32);
+                  if (g_DosFindWin32Error >= 19 && g_DosFindWin32Error <= 31) SETAX(g_DosFindWin32Error);
                   ERRCF();
               } else {
-                  m->find_h[slot] = hf;
+                  m->FindHandles[slot] = hf;
                   ok = 1;
                   /* Fill DOS's private search area deterministically.  It is
                      DOS-private, but leaving the caller's bytes lying in it
@@ -1415,7 +1415,7 @@ int dos_int21(dos_machine_t *m)
                      puts the EXPANDED 11-byte search template there (a "*.*"
                      search reads back as eleven '?'), so do the same. */
                   /* The template, exactly as matched -- 4Fh reads it back from here. */
-                  { int bi; for (bi = 0; bi < 11; ++bi) d[1 + bi] = tm[bi]; }
+                  { INT bi; for (bi = 0; bi < 11; ++bi) d[1 + bi] = tm[bi]; }
                   d[0] = 3;                                  /* drive C:        */
                   d[12] = (BYTE)(mask & 0xFF);
                   d[13] = 0; d[14] = 0; d[15] = 0; d[16] = 0;
@@ -1425,45 +1425,45 @@ int dos_int21(dos_machine_t *m)
               }
             }
         } else {                                             /* 4Fh: continue   */
-            mask = (uint16_t)d[12];
-            if (d[19] == DOS_FIND_MAGIC && d[20] < 8 && m->find_h[d[20]]) {
-                BYTE tm[11]; int k;
+            mask = (WORD)d[12];
+            if (d[19] == DOS_FIND_MAGIC && d[20] < 8 && m->FindHandles[d[20]]) {
+                BYTE tm[11]; INT k;
                 slot = d[20];
                 for (k = 0; k < 11; ++k) tm[k] = d[1 + k];   /* the template 4Eh stored */
-                ok = dos_find_next(m->find_h[slot], tm, mask, &fd);
+                ok = DosFindNext(m->FindHandles[slot], tm, mask, &fd);
             } else {
                 SETAX(18); ERRCF();                          /* no search live  */
             }
         }
         if (slot >= 0 && ok) {
-            dta_fill(d, &fd);
+            DosDtaFill(d, &fd);
             /* DIR renders blank names, one impossible size repeated, and a 1980-ish
                date -- i.e. it is reading fields we did not put where it looks. Print
                the DTA we hand back, whole, and let the bytes settle it. */
-            if (m->trace_all) { int q;
-              tp = zput(tp, "  INT21 AH=4E/4F dta="); tp = zhexb(tp, (unsigned)((m->dta_seg >> 8) & 0xFF));
-              tp = zhexb(tp, (unsigned)(m->dta_seg & 0xFF)); tp = zput(tp, ":");
-              tp = zhexb(tp, (unsigned)((m->dta_off >> 8) & 0xFF));
-              tp = zhexb(tp, (unsigned)(m->dta_off & 0xFF));
+            if (m->IsTraceAll) { INT q;
+              tp = zput(tp, "  INT21 AH=4E/4F dta="); tp = zhexb(tp, (UINT)((m->DtaSegment >> 8) & 0xFF));
+              tp = zhexb(tp, (UINT)(m->DtaSegment & 0xFF)); tp = zput(tp, ":");
+              tp = zhexb(tp, (UINT)((m->DtaOffset >> 8) & 0xFF));
+              tp = zhexb(tp, (UINT)(m->DtaOffset & 0xFF));
               tp = zput(tp, " [");
-              for (q = 0; q < 44; ++q) { tp = zhexb(tp, (unsigned)d[q]); tp = zput(tp, " "); }
+              for (q = 0; q < 44; ++q) { tp = zhexb(tp, (UINT)d[q]); tp = zput(tp, " "); }
               tp = zput(tp, "]\r\n"); }
             SETAX(0); OKCF();                                /* oracle: AX=0000 */
-        } else if (slot >= 0 && m->find_h[slot] && !ok) {
-            FindClose(m->find_h[slot]); m->find_h[slot] = 0;
+        } else if (slot >= 0 && m->FindHandles[slot] && !ok) {
+            FindClose(m->FindHandles[slot]); m->FindHandles[slot] = 0;
             d[19] = 0;
             SETAX(18); ERRCF();                              /* no more files   */
         }
     } else if ((ah >= 0x0F && ah <= 0x17) || (ah >= 0x21 && ah <= 0x24)
                || (ah >= 0x27 && ah <= 0x29)) {  /* ---- the FCB interface ---- */
-        volatile BYTE *f = fcb_at(R_DS, R_DX);
-        char nm[300];
+        volatile BYTE *f = DosFcbAt(R_DS, R_DX);
+        CHAR nm[300];
         #define FCB_OK()   SETAX((R_AX & 0xFF00) | 0x00)
         #define FCB_FAIL() SETAX((R_AX & 0xFF00) | 0xFF)
         /* CF is undefined for these on real DOS; leave it as the guest set it. */
         if (ah == 0x0F || ah == 0x16) {         /* open / create */
             HANDLE fh2; DWORD slot;
-            fcb_name(f, nm);
+            DosFcbName(f, nm);
             fh2 = CreateFileA(nm, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                               (ah == 0x16) ? CREATE_ALWAYS : OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1471,11 +1471,11 @@ int dos_int21(dos_machine_t *m)
             else {
                 FILETIME ft, lf; WORD fdt = 0, ftm = 0;
                 DWORD sz = GetFileSize(fh2, NULL);
-                slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
+                slot = DosHandleAllocate((PVOID const *)m->FileHandles, m->StdOpen);
                 if (slot >= DOS_MAX_FILES) { CloseHandle(fh2); FCB_FAIL(); }
                 else {
-                    m->fh[slot] = fh2;
-                    if (ah == 0x16) dos_stamp_vdm_now(fh2);   /* #263, before the FCB reads it */
+                    m->FileHandles[slot] = fh2;
+                    if (ah == 0x16) DosStampVdmNow(fh2);      /* #263, before the FCB reads it */
                     if (GetFileTime(fh2, NULL, NULL, &ft)
                         && FileTimeToLocalFileTime(&ft, &lf))
                         FileTimeToDosDateTime(&lf, &fdt, &ftm);
@@ -1489,26 +1489,26 @@ int dos_int21(dos_machine_t *m)
                        actually resolved -- measured: the oracle returns 01 when
                        run from A:, DOSBox 03 from C:. We were leaving the
                        caller's 0 in place. */
-                    if (!f[0]) f[0] = (BYTE)(dos_cur_drive(m) + 1);
-                    f[24] = FCB_MAGIC; f[25] = (BYTE)slot;
+                    if (!f[0]) f[0] = (BYTE)(DosCurrentDrive(m) + 1);
+                    f[24] = DOS_FCB_MAGIC; f[25] = (BYTE)slot;
                     FCB_OK();
                 }
             }
         } else if (ah == 0x10) {                /* close */
-            if (f[24] == FCB_MAGIC && f[25] < DOS_MAX_FILES && m->fh[f[25]]) {
-                dos_handle_release(m, f[25]); f[24] = 0; FCB_OK();
+            if (f[24] == DOS_FCB_MAGIC && f[25] < DOS_MAX_FILES && m->FileHandles[f[25]]) {
+                DosHandleRelease(m, f[25]); f[24] = 0; FCB_OK();
             } else FCB_FAIL();
         } else if (ah == 0x11 || ah == 0x12) {  /* find first / find next */
-            volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+            volatile BYTE *d = (volatile BYTE *)((m->DtaSegment << 4) + m->DtaOffset);
             WIN32_FIND_DATAA fd;
-            int got = 0;
+            INT got = 0;
             /* An extended FCB carries its search attribute in the byte just
-               before the part fcb_at() returns; a normal one asks for ordinary
+               before the part DosFcbAt() returns; a normal one asks for ordinary
                files only.  WITHOUT THIS FILTER the search returns "." first --
                measured: our DTA came back with a blank name where the oracle had
                COMMAND.COM, because "." has no 8.3 name to put in the field. */
-            uint16_t fmask = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF)))
-                           ? (uint16_t)f[-1] : 0;
+            WORD fmask = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF)))
+                           ? (WORD)f[-1] : 0;
             /* ── A VOLUME-LABEL SEARCH IS NOT A FILE SEARCH. ────────────────────
                  Attribute 08h means "return the volume label and nothing else", and
                  it is how DIR fills in its header line. There is no file on disk to
@@ -1517,56 +1517,56 @@ int dos_int21(dos_machine_t *m)
                  announced `Volume in drive C is COMMAND COM`, the first file in the
                  directory wearing the label's clothes.
                  The label is 11 bytes in the name+ext field, NOT an 8.3 name, so it
-                 is padded raw rather than through fcb_put_name. */
+                 is padded raw rather than through DosFcbPutName. */
             if (fmask == 0x08) {
                 if (ah == 0x11) {
-                    char vol[128]; int vi;
+                    CHAR vol[128]; INT vi;
                     volatile BYTE *e;
-                    int ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
+                    INT ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
                     vol[0] = 0;
                     if (!GetVolumeInformationA("C:\\", vol, sizeof vol,
                                                NULL, NULL, NULL, NULL, 0) || !vol[0]) {
-                        if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
-                        m->last_err = 18;
+                        if (m->FcbFind) { FindClose(m->FcbFind); m->FcbFind = 0; }
+                        m->LastError = 18;
                         FCB_FAIL();                       /* no label: DIR says so   */
                         goto fcb_done;
                     }
                     e = d + ext;
-                    if (ext) { int q; d[0] = 0xFF; for (q = 1; q <= 5; ++q) d[q] = 0; d[6] = 0x08; }
+                    if (ext) { INT q; d[0] = 0xFF; for (q = 1; q <= 5; ++q) d[q] = 0; d[6] = 0x08; }
                     e[0] = 3;                             /* drive C:                */
                     for (vi = 0; vi < 11; ++vi) {
-                        char ch = vol[vi] ? vol[vi] : ' ';
+                        CHAR ch = vol[vi] ? vol[vi] : ' ';
                         if (!vol[vi]) { e[1 + vi] = ' '; continue; }
                         e[1 + vi] = (BYTE)(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
                     }
                     e[12] = 0x08;                         /* attribute: volume label */
-                    { int q; for (q = 13; q <= 32; ++q) e[q] = 0; }
-                    if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
+                    { INT q; for (q = 13; q <= 32; ++q) e[q] = 0; }
+                    if (m->FcbFind) { FindClose(m->FcbFind); m->FcbFind = 0; }
                     FCB_OK();
-                } else { m->last_err = 18; FCB_FAIL(); }  /* 12h: only ever one label */
+                } else { m->LastError = 18; FCB_FAIL(); }  /* 12h: only ever one label */
                 goto fcb_done;
             }
             if (ah == 0x11) {
                 /* The FCB's own 11 bytes ARE the template (`????????.???` for DIR), matched
-                   against each entry's 8.3 name -- see dos_find_match. The drive byte
+                   against each entry's 8.3 name -- see DosFindMatches. The drive byte
                    picks the directory: "X:*" is that drive's current directory. */
-                HANDLE hf; char all[8]; int k, nodir, n = 0;
-                if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
-                for (k = 0; k < 11; ++k) m->fcb_tmpl[k] = f[1 + k];
-                if (f[0]) { all[n++] = (char)('A' + f[0] - 1); all[n++] = ':'; }
+                HANDLE hf; CHAR all[8]; INT k, nodir, n = 0;
+                if (m->FcbFind) { FindClose(m->FcbFind); m->FcbFind = 0; }
+                for (k = 0; k < 11; ++k) m->FcbTemplate[k] = f[1 + k];
+                if (f[0]) { all[n++] = (CHAR)('A' + f[0] - 1); all[n++] = ':'; }
                 all[n++] = '*'; all[n] = 0;
-                hf = dos_find_first(all, m->fcb_tmpl, fmask, &fd, &nodir);
-                if (hf != INVALID_HANDLE_VALUE) { m->fcb_find = hf; got = 1; }
-                if (m->trace_all) { char cwd[260]; int q;
+                hf = DosFindFirst(all, m->FcbTemplate, fmask, &fd, &nodir);
+                if (hf != INVALID_HANDLE_VALUE) { m->FcbFind = hf; got = 1; }
+                if (m->IsTraceAll) { CHAR cwd[260]; INT q;
                     GetCurrentDirectoryA(sizeof cwd, cwd);
                     tp = zput(tp, "  INT21 AH=11 ["); tp = zput(tp, all);
                     tp = zput(tp, "] in ["); tp = zput(tp, cwd); tp = zput(tp, "] tmpl=[");
-                    for (q = 0; q < 11; ++q) { char c1[2]; c1[0] = (char)m->fcb_tmpl[q]; c1[1] = 0; tp = zput(tp, c1); }
+                    for (q = 0; q < 11; ++q) { CHAR c1[2]; c1[0] = (CHAR)m->FcbTemplate[q]; c1[1] = 0; tp = zput(tp, c1); }
                     tp = zput(tp, "] mask=0x"); tp = zhex(tp, fmask);
                     tp = zput(tp, got ? " -> found\r\n" : " -> none\r\n"); }
-            } else if (m->fcb_find) {
-                got = dos_find_next(m->fcb_find, m->fcb_tmpl, fmask, &fd);
-                if (!got) { FindClose(m->fcb_find); m->fcb_find = 0; }
+            } else if (m->FcbFind) {
+                got = DosFindNext(m->FcbFind, m->FcbTemplate, fmask, &fd);
+                if (!got) { FindClose(m->FcbFind); m->FcbFind = 0; }
             }
             /* ── A FAILED SEARCH MUST SAY WHY, OR THE LAST FAILURE SPEAKS FOR IT. ──
                  The extended error (AH=59h) is only recorded where CF comes back set,
@@ -1578,14 +1578,14 @@ int dos_int21(dos_machine_t *m)
                  memory", and prints exactly that instead of its summary line. The
                  listing was RIGHT and the epitaph was three commands stale.
                  18 = "no more files", which is what DOS reports here. */
-            if (!got) { m->last_err = 18; FCB_FAIL(); }
+            if (!got) { m->LastError = 18; FCB_FAIL(); }
             else {
-                const char *bn = fd.cAlternateFileName[0] ? fd.cAlternateFileName
+                PCSTR bn = fd.cAlternateFileName[0] ? fd.cAlternateFileName
                                                           : fd.cFileName;
                 FILETIME lf; WORD fdt = 0, ftm = 0;
-                int k;
+                INT k;
                 /* ── AN EXTENDED SEARCH RETURNS AN EXTENDED RESULT. ──────────────
-                     We already skip the 7-byte prefix on the way IN (fcb_at), and
+                     We already skip the 7-byte prefix on the way IN (DosFcbAt), and
                      then wrote the answer back in the SHORT layout regardless -- so
                      a caller that searched with an extended FCB read every field
                      seven bytes early. DIR does exactly that (it must, to see
@@ -1595,7 +1595,7 @@ int dos_int21(dos_machine_t *m)
                      read as an 11-byte label.
                      The prefix is FFh, five reserved bytes, then the attribute of
                      the file found; the ordinary result follows it unchanged. */
-                int ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
+                INT ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
                 volatile BYTE *e = d + ext;
                 if (FileTimeToLocalFileTime(&fd.ftLastWriteTime, &lf))
                     FileTimeToDosDateTime(&lf, &fdt, &ftm);
@@ -1605,7 +1605,7 @@ int dos_int21(dos_machine_t *m)
                     d[6] = (BYTE)(fd.dwFileAttributes & 0x3F);
                 }
                 e[0] = 3;                                 /* drive C:          */
-                fcb_put_name(e + 1, bn);
+                DosFcbPutName(e + 1, bn);
                 e[12] = (BYTE)(fd.dwFileAttributes & 0x3F);
                 for (k = 13; k <= 22; ++k) e[k] = 0;
                 e[23] = (BYTE)(ftm & 0xFF); e[24] = (BYTE)(ftm >> 8);
@@ -1619,8 +1619,8 @@ int dos_int21(dos_machine_t *m)
             }
             fcb_done: ;
         } else if (ah == 0x13) {                /* delete (wildcards allowed) */
-            WIN32_FIND_DATAA fd; HANDLE hf; int any = 0;
-            fcb_name(f, nm);
+            WIN32_FIND_DATAA fd; HANDLE hf; INT any = 0;
+            DosFcbName(f, nm);
             hf = FindFirstFileA(nm, &fd);
             if (hf != INVALID_HANDLE_VALUE) {
                 do {
@@ -1631,18 +1631,18 @@ int dos_int21(dos_machine_t *m)
             }
             if (any) FCB_OK(); else FCB_FAIL();
         } else if (ah == 0x17) {                /* rename: new name at f[17..27] */
-            char to[300];
-            char save[16]; int k;
-            fcb_name(f, nm);
-            for (k = 0; k < 12; ++k) save[k] = (char)f[k];
+            CHAR to[300];
+            CHAR save[16]; INT k;
+            DosFcbName(f, nm);
+            for (k = 0; k < 12; ++k) save[k] = (CHAR)f[k];
             { volatile BYTE tmp[12]; tmp[0] = f[0];
               for (k = 1; k < 12; ++k) tmp[k] = f[16 + k];
-              fcb_name(tmp, to); }
+              DosFcbName(tmp, to); }
             if (MoveFileA(nm, to)) FCB_OK(); else FCB_FAIL();
-            (void)save;
+            (VOID)save;
         } else if (ah == 0x14 || ah == 0x15 || ah == 0x21 || ah == 0x22
                    || ah == 0x27 || ah == 0x28) {         /* record I/O */
-            volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+            volatile BYTE *d = (volatile BYTE *)((m->DtaSegment << 4) + m->DtaOffset);
             DWORD recsz = (DWORD)f[14] | ((DWORD)f[15] << 8);
             DWORD blk   = (DWORD)f[12] | ((DWORD)f[13] << 8);
             DWORD rec, count = 1, done = 0, k;
@@ -1653,9 +1653,9 @@ int dos_int21(dos_machine_t *m)
             else rec = (DWORD)f[33] | ((DWORD)f[34] << 8)
                      | ((DWORD)f[35] << 16) | ((DWORD)f[36] << 24);
             if (ah == 0x27 || ah == 0x28) count = R_CX & 0xFFFF;
-            if (f[24] != FCB_MAGIC || f[25] >= DOS_MAX_FILES || !m->fh[f[25]]) SETAX((R_AX & 0xFF00) | 1);
+            if (f[24] != DOS_FCB_MAGIC || f[25] >= DOS_MAX_FILES || !m->FileHandles[f[25]]) SETAX((R_AX & 0xFF00) | 1);
             else {
-                HANDLE hh = m->fh[f[25]];
+                HANDLE hh = m->FileHandles[f[25]];
                 DWORD n = 0;
                 SetFilePointer(hh, (LONG)(rec * recsz), NULL, FILE_BEGIN);
                 for (k = 0; k < count; ++k) {
@@ -1673,9 +1673,9 @@ int dos_int21(dos_machine_t *m)
                         ++done;
                     }
                 }
-                if (ah == 0x27 || ah == 0x28) SET16(R_CX, (uint16_t)done);
+                if (ah == 0x27 || ah == 0x28) SET16(R_CX, (WORD)done);
                 if (done && !(ah == 0x14 || ah == 0x21 || ah == 0x27))
-                    dos_stamp_vdm_now(hh);              /* #263: an FCB write */
+                    DosStampVdmNow(hh);                 /* #263: an FCB write */
                 /* AL: 0 = all done, 1 = end of file / nothing transferred,
                    3 = a partial final record. */
                 if (done == count) SETAX((R_AX & 0xFF00) | 0);
@@ -1693,7 +1693,7 @@ int dos_int21(dos_machine_t *m)
             }
         } else if (ah == 0x23) {                /* get file size, in records */
             HANDLE fh3;
-            fcb_name(f, nm);
+            DosFcbName(f, nm);
             fh3 = CreateFileA(nm, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
             if (fh3 == INVALID_HANDLE_VALUE) FCB_FAIL();
@@ -1714,9 +1714,9 @@ int dos_int21(dos_machine_t *m)
             f[35] = (BYTE)((nr >> 16) & 0xFF); f[36] = (BYTE)((nr >> 24) & 0xFF);
             OKCF();
         } else if (ah == 0x29) {                /* parse a filename into an FCB */
-            char in[300];
+            CHAR in[300];
             volatile BYTE *dst = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            int i2 = 0, wild = 0, k;
+            INT i2 = 0, wild = 0, k;
             /* ── ★ AL's CONTROL BITS SAY WHAT A MISSING PART LEAVES ALONE. (s81 sweep) ──
                  bit 1: no drive given -> keep the FCB's drive (else 0 = default)
                  bit 2: no name given  -> keep the FCB's name
@@ -1726,66 +1726,66 @@ int dos_int21(dos_machine_t *m)
                  FCB as ??????????? and parses "*" with AL=0Eh; blanking the extension
                  regardless made the template ????????+3 spaces and DIR listed only
                  `.` and `..` -- the user's sweep finding. */
-            uint8_t al29 = (uint8_t)(R_AX & 0xFF);
-            BYTE keep[12]; int j, has_name, has_ext;
+            BYTE al29 = (BYTE)(R_AX & 0xFF);
+            BYTE keep[12]; INT j, has_name, has_ext;
             for (k = 0; k < 12; ++k) keep[k] = dst[k];
-            v86_str(R_DS, R_SI, in, sizeof(in));
+            DosGuestString(R_DS, R_SI, in, sizeof(in));
             while (in[i2] == ' ' || in[i2] == 9) ++i2;
             dst[0] = 0;
             if (in[i2] && in[i2 + 1] == ':') {
-                char dch = in[i2];
+                CHAR dch = in[i2];
                 dst[0] = (BYTE)((dch >= 'a' ? dch - 32 : dch) - 'A' + 1);
                 i2 += 2;
             } else if (al29 & 0x02) dst[0] = keep[0];
-            for (j = i2; !fcb_name_ends((unsigned char)in[j]) && in[j] != '.'; ++j) {}
+            for (j = i2; !DosFcbIsNameEnd((BYTE)in[j]) && in[j] != '.'; ++j) {}
             has_name = (j > i2);
             has_ext  = (in[j] == '.');
-            fcb_put_name(dst + 1, in + i2);
+            DosFcbPutName(dst + 1, in + i2);
             if (!has_name && (al29 & 0x04)) for (k = 1; k <= 8;  ++k) dst[k] = keep[k];
             if (!has_ext  && (al29 & 0x08)) for (k = 9; k <= 11; ++k) dst[k] = keep[k];
             for (k = 1; k <= 11; ++k) if (dst[k] == '?' || dst[k] == '*') wild = 1;
             for (k = 12; k <= 15; ++k) dst[k] = 0;
             SETAX((R_AX & 0xFF00) | (wild ? 1 : 0));
-            SET16(R_SI, (uint16_t)((R_SI & 0xFFFF) + i2));
+            SET16(R_SI, (WORD)((R_SI & 0xFFFF) + i2));
             OKCF();
             /* THE CALL COMMAND.COM'S DISPATCH TURNS ON. `ver ` runs and `ver` does
                not, and the traces diverge on the instruction after the third of
                these -- so print what went in and what came out, both. Reasoning
                about it from the handler's source has already produced two wrong
                models this session. */
-            if (m->trace_all) { int q;
-              tp = zput(tp, "  INT21 AH=29 al="); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
-              tp = zput(tp, " ds:si="); tp = zhexb(tp, (unsigned)((R_DS >> 8) & 0xFF));
-              tp = zhexb(tp, (unsigned)(R_DS & 0xFF)); tp = zput(tp, ":");
-              tp = zhexb(tp, (unsigned)(((R_SI & 0xFFFF) >> 8) & 0xFF));
-              tp = zhexb(tp, (unsigned)(R_SI & 0xFF));
+            if (m->IsTraceAll) { INT q;
+              tp = zput(tp, "  INT21 AH=29 al="); tp = zhexb(tp, (UINT)(R_AX & 0xFF));
+              tp = zput(tp, " ds:si="); tp = zhexb(tp, (UINT)((R_DS >> 8) & 0xFF));
+              tp = zhexb(tp, (UINT)(R_DS & 0xFF)); tp = zput(tp, ":");
+              tp = zhexb(tp, (UINT)(((R_SI & 0xFFFF) >> 8) & 0xFF));
+              tp = zhexb(tp, (UINT)(R_SI & 0xFF));
               tp = zput(tp, " in=[");
-              for (q = 0; q < 12 && in[q]; ++q) tp = zhexb(tp, (unsigned)(BYTE)in[q]), tp = zput(tp, " ");
+              for (q = 0; q < 12 && in[q]; ++q) tp = zhexb(tp, (UINT)(BYTE)in[q]), tp = zput(tp, " ");
               tp = zput(tp, "] fcb=[");
-              for (q = 0; q < 12; ++q) tp = zhexb(tp, (unsigned)dst[q]), tp = zput(tp, " ");
+              for (q = 0; q < 12; ++q) tp = zhexb(tp, (UINT)dst[q]), tp = zput(tp, " ");
               tp = zput(tp, "]\r\n"); }
         } else FCB_FAIL();
         #undef FCB_OK
         #undef FCB_FAIL
     } else if (ah == 0x4B) {                    /* EXEC: load and run a program */
-        uint8_t al4b = (uint8_t)(R_AX & 0xFF);
+        BYTE al4b = (BYTE)(R_AX & 0xFF);
         if (al4b == 0x00 || al4b == 0x01) {
             const volatile BYTE *pb =
                 (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
             /* AL=01 answers THROUGH this block, so remember where it is. */
-            m->exec_pb_seg = (uint16_t)(R_ES & 0xFFFF);
-            m->exec_pb_off = (uint16_t)(R_BX & 0xFFFF);
-            v86_path(m, R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
-            v86_str(R_DS, R_DX, m->exec_name, sizeof(m->exec_name));
-            m->exec_env      = (uint16_t)(pb[0] | (pb[1] << 8));
-            m->exec_tail_off = (uint16_t)(pb[2] | (pb[3] << 8));
-            m->exec_tail_seg = (uint16_t)(pb[4] | (pb[5] << 8));
-            m->exec_fcb1_off = (uint16_t)(pb[6] | (pb[7] << 8));
-            m->exec_fcb1_seg = (uint16_t)(pb[8] | (pb[9] << 8));
-            m->exec_fcb2_off = (uint16_t)(pb[10] | (pb[11] << 8));
-            m->exec_fcb2_seg = (uint16_t)(pb[12] | (pb[13] << 8));
-            m->exec_mode = al4b;
-            m->exec_pending = 1;                /* the host does the rest */
+            m->ExecBlockSegment = (WORD)(R_ES & 0xFFFF);
+            m->ExecBlockOffset = (WORD)(R_BX & 0xFFFF);
+            DosGuestPath(m, R_DS, R_DX, m->ExecPath, sizeof(m->ExecPath));
+            DosGuestString(R_DS, R_DX, m->ExecName, sizeof(m->ExecName));
+            m->ExecEnvironment      = (WORD)(pb[0] | (pb[1] << 8));
+            m->ExecTailOffset = (WORD)(pb[2] | (pb[3] << 8));
+            m->ExecTailSegment = (WORD)(pb[4] | (pb[5] << 8));
+            m->ExecFcb1Offset = (WORD)(pb[6] | (pb[7] << 8));
+            m->ExecFcb1Segment = (WORD)(pb[8] | (pb[9] << 8));
+            m->ExecFcb2Offset = (WORD)(pb[10] | (pb[11] << 8));
+            m->ExecFcb2Segment = (WORD)(pb[12] | (pb[13] << 8));
+            m->ExecMode = al4b;
+            m->IsExecPending = 1;               /* the host does the rest */
             OKCF();
         } else if (al4b == 0x03) {
             /* ── THE OVERLAY. Two words of parameter block and nothing else:
@@ -1796,11 +1796,11 @@ int dos_int21(dos_machine_t *m)
                  path is wrong for it and it branches early. (GH #50) */
             const volatile BYTE *pb =
                 (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
-            v86_path(m, R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
-            m->exec_ovl_seg   = (uint16_t)(pb[0] | (pb[1] << 8));
-            m->exec_ovl_reloc = (uint16_t)(pb[2] | (pb[3] << 8));
-            m->exec_mode = 0x03;
-            m->exec_pending = 1;
+            DosGuestPath(m, R_DS, R_DX, m->ExecPath, sizeof(m->ExecPath));
+            m->ExecOverlaySegment   = (WORD)(pb[0] | (pb[1] << 8));
+            m->ExecOverlayRelocation = (WORD)(pb[2] | (pb[3] << 8));
+            m->ExecMode = 0x03;
+            m->IsExecPending = 1;
             OKCF();
         } else if (al4b == 0x05) {
             /* ── SET EXECUTION STATE (#165). The second half of a loader's own EXEC:
@@ -1817,7 +1817,7 @@ int dos_int21(dos_machine_t *m)
             /* AL=02/04 are not DOS 6.22 functions we have measured. */
             tp = zput(tp, "  INT21 AH=4B AL=0x"); tp = zhexb(tp, al4b);
             tp = zput(tp, " UNIMPLEMENTED (overlay load)\r\n");
-            m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
+            m->Unimplemented[0x4B >> 3] |= (BYTE)(1u << (0x4B & 7));
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x1B || ah == 0x1C) {      /* allocation info for a drive */
@@ -1826,27 +1826,27 @@ int dos_int21(dos_machine_t *m)
            NOTE this call RETURNS A SEGMENT IN DS -- which is what broke the
            probe's own output until probe_capture learned to restore it. */
         DWORD spc = 0, bps = 0, freec = 0, totc = 0;
-        char root[4]; char *rp = 0;
-        uint8_t dl1b = (ah == 0x1C) ? (uint8_t)(R_DX & 0xFF) : 0;   /* 1Bh: default drive */
-        if (!dl1b && m->vdrive >= 0) dl1b = (uint8_t)(m->vdrive + 1);
-        if (dl1b) { root[0] = (char)('A' + dl1b - 1); root[1] = ':';
+        CHAR root[4]; PSTR rp = 0;
+        BYTE dl1b = (ah == 0x1C) ? (BYTE)(R_DX & 0xFF) : 0;         /* 1Bh: default drive */
+        if (!dl1b && m->VirtualDrive >= 0) dl1b = (BYTE)(m->VirtualDrive + 1);
+        if (dl1b) { root[0] = (CHAR)('A' + dl1b - 1); root[1] = ':';
                     root[2] = '\\'; root[3] = 0; rp = root; }
         if (GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
             volatile BYTE *md = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_MEDIA_OFF);
             *md = 0xF8;                          /* fixed disk */
             SETAX((R_AX & 0xFF00) | (spc & 0xFF));
             SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_MEDIA_OFF);
-            SET16(R_CX, (uint16_t)bps);
+            SET16(R_CX, (WORD)bps);
             SET16(R_DX, totc > 0xFFFF ? 0xFFFF : totc);
             OKCF();
         } else { SETAX((R_AX & 0xFF00) | 0xFF); ERRCF(); }
     } else if (ah == 0x1F || ah == 0x32) {      /* get drive parameter block */
         /* DPB contents are disk geometry and its address is host-specific; AL is
            the comparable part -- 00 for a valid drive, FF otherwise (measured). */
-        uint8_t dl32 = (ah == 0x1F) ? 0 : (uint8_t)(R_DX & 0xFF);
+        BYTE dl32 = (ah == 0x1F) ? 0 : (BYTE)(R_DX & 0xFF);
         DWORD spc = 0, bps = 0, freec = 0, totc = 0;
-        char root[4]; char *rp = 0;
-        if (dl32) { root[0] = (char)('A' + dl32 - 1); root[1] = ':';
+        CHAR root[4]; PSTR rp = 0;
+        if (dl32) { root[0] = (CHAR)('A' + dl32 - 1); root[1] = ':';
                     root[2] = '\\'; root[3] = 0; rp = root; }
         if (dl32 > 26 || !GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
             SETAX((R_AX & 0xFF00) | 0xFF);
@@ -1862,10 +1862,10 @@ int dos_int21(dos_machine_t *m)
                  chain (6.22 returns the chain's own DPB); that is a pointer change for a
                  later pass, and the probe compares only AL here. */
             volatile BYTE *d = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_DPB_OFF);
-            unsigned char dp[DOS_DPB_LEN];
-            unsigned drv = dl32 ? (unsigned)(dl32 - 1) : 2u;     /* 0-based drive */
-            char rt[4]; int k, rem;
-            rt[0] = (char)('A' + drv); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
+            BYTE dp[DOS_DPB_LEN];
+            UINT drv = dl32 ? (UINT)(dl32 - 1) : 2u;             /* 0-based drive */
+            CHAR rt[4]; INT k, rem;
+            rt[0] = (CHAR)('A' + drv); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
             rem = (GetDriveTypeA(rt) == DRIVE_REMOVABLE);      /* 6.22's floppy: 224, F0h */
             DosDpbBuild(dp, drv, bps ? bps : 512, spc ? spc : 1, rem ? 224 : 512,
                           (totc > 0xFFFE) ? 0xFFFE : totc + 1, rem ? 0xF0 : 0xF8,
@@ -1876,16 +1876,16 @@ int dos_int21(dos_machine_t *m)
         }
         OKCF();
     } else if (ah == 0x37) {                    /* get/set the SWITCH character */
-        uint8_t al37 = (uint8_t)(R_AX & 0xFF);
+        BYTE al37 = (BYTE)(R_AX & 0xFF);
         if (al37 == 0x00) {                     /* oracle: DL = '/' */
-            SET16(R_DX, (uint16_t)((R_DX & 0xFF00) | m->switch_char));
+            SET16(R_DX, (WORD)((R_DX & 0xFF00) | m->SwitchChar));
             SETAX(R_AX & 0xFF00); OKCF();
         } else if (al37 == 0x01) {
-            m->switch_char = (uint8_t)(R_DX & 0xFF);
+            m->SwitchChar = (BYTE)(R_DX & 0xFF);
             SETAX(R_AX & 0xFF00); OKCF();
         } else { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
     } else if (ah == 0x66) {                    /* get/set global code page */
-        uint8_t al66 = (uint8_t)(R_AX & 0xFF);
+        BYTE al66 = (BYTE)(R_AX & 0xFF);
         if (al66 == 0x01) {                     /* oracle: BX=DX=437 */
             SET16(R_BX, 437); SET16(R_DX, 437); OKCF();
         } else if (al66 == 0x02) {
@@ -1896,7 +1896,7 @@ int dos_int21(dos_machine_t *m)
            differ. 55h additionally takes the child's memory top in SI. */
         volatile BYTE *src = (volatile BYTE *)(DOS_PSP_SEG << 4);
         volatile BYTE *dst = (volatile BYTE *)((R_DX & 0xFFFF) << 4);
-        int k;
+        INT k;
         for (k = 0; k < 256; ++k) dst[k] = src[k];
         dst[0x16] = (BYTE)(DOS_PSP_SEG & 0xFF);       /* parent PSP segment */
         dst[0x17] = (BYTE)(DOS_PSP_SEG >> 8);
@@ -1917,11 +1917,11 @@ int dos_int21(dos_machine_t *m)
              but say which, because "resident" and "exited" look identical in a
              log and a TSR that believes it installed and did not is exactly the
              silent failure #27 exists to remove. */
-        m->tsr_keep = (uint16_t)(R_DX & 0xFFFF);
-        m->tsr_pending = 1;
-        tp = zput(tp, "  INT21 AH=31 TSR: keep 0x"); tp = zhex(tp, m->tsr_keep);
+        m->TsrKeep = (WORD)(R_DX & 0xFFFF);
+        m->IsTsrPending = 1;
+        tp = zput(tp, "  INT21 AH=31 TSR: keep 0x"); tp = zhex(tp, m->TsrKeep);
         tp = zput(tp, " paragraphs, vectors LEFT INSTALLED\r\n");
-        m->exit_code = (int)(R_AX & 0xFF);
+        m->ExitCode = (INT)(R_AX & 0xFF);
         cont = 0;
     } else if (ah == 0x53) {                    /* translate a BPB into a DPB */
         /* ⚠ TESTED AS THE CAUSE OF THE COMMAND.COM EXIT, AND REFUTED. XP's own
@@ -1940,11 +1940,11 @@ int dos_int21(dos_machine_t *m)
              COMMAND.COM re-runs its init forever while `sub 01` answers "no command",
              and this note alone was 2,713 lines in the last 200 KB of a 42 MB log.
              Say it once; `unimpl21[]` already carries the fact for the summary. */
-        { static int said53 = 0;
+        { static INT said53 = 0;
           if (!said53) { said53 = 1;
               tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                             "block drivers) -- said once per run\r\n"); } }
-        m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));
+        m->Unimplemented[0x53 >> 3] |= (BYTE)(1u << (0x53 & 7));
         /* ── ★★★ MEASURED AGAINST STOCK NTVDM, 2026-09-25. ───────────────────
              Documented AH=53h is BPB->DPB and takes DS:SI / ES:BP with NO AL
              sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
@@ -1991,17 +1991,17 @@ int dos_int21(dos_machine_t *m)
            ⚠ AL=00's row was measured with SI=0 and BP=0, as COMMAND.COM issues it. It
              is NOT a claim about the documented BPB->DPB call given a real BPB, which we
              still do not implement. */
-        { uint8_t al53 = (uint8_t)(R_AX & 0xFF);
-          if (al53 < DOS_INT53_N) {
-              SETAX(g_dos_int53[al53].ax);
-              if (g_dos_int53[al53].cf) ERRCF(); else OKCF();
+        { BYTE al53 = (BYTE)(R_AX & 0xFF);
+          if (al53 < DOS_INT53_COUNT) {
+              SETAX(g_DosInt53Answers[al53].Ax);
+              if (g_DosInt53Answers[al53].IsCarry) ERRCF(); else OKCF();
           } else { SETAX(0x0001); ERRCF(); }
         }
     } else if (ah == 0x5E) {                    /* network machine name / printer */
-        uint8_t al5e = (uint8_t)(R_AX & 0xFF);
+        BYTE al5e = (BYTE)(R_AX & 0xFF);
         if (al5e == 0x00) {                     /* oracle: AX=0, CF=0 */
             volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-            int k; for (k = 0; k < 16; ++k) d[k] = 0;
+            INT k; for (k = 0; k < 16; ++k) d[k] = 0;
             SETAX(0); SET16(R_CX, 0); OKCF();
         } else { SETAX(1); ERRCF(); }
     } else if (ah == 0x5F) {                    /* network redirection list */
@@ -2022,26 +2022,26 @@ int dos_int21(dos_machine_t *m)
             SETAX((R_AX & 0xFF00) | 0x1A);
             OKCF();
         } else {
-            uint8_t c = (uint8_t)(R_DX & 0xFF);
-            if (ah == 0x05) { if (m->prnout) (void)m->prnout(m->devctx, c); }
-            else if (m->auxout) m->auxout(m->devctx, c);
+            BYTE c = (BYTE)(R_DX & 0xFF);
+            if (ah == 0x05) { if (m->PrinterOut) (VOID)m->PrinterOut(m->DeviceContext, c); }
+            else if (m->AuxOut) m->AuxOut(m->DeviceContext, c);
             SETAX((R_AX & 0xFF00) | c);         /* oracle: AL = the byte sent */
             OKCF();
         }
     } else if (ah == 0x0C) {                    /* flush input, then run AL     */
         /* AL names the input function to perform after flushing. Anything else
            is just a flush. Re-dispatching is the whole point of the call. */
-        uint8_t fn = (uint8_t)(R_AX & 0xFF);
-        while (m->conpeek && m->conpeek(m->cinctx) && m->coninnb)
-            (void)m->coninnb(m->cinctx);
+        BYTE fn = (BYTE)(R_AX & 0xFF);
+        while (m->ConsolePeek && m->ConsolePeek(m->ConsoleInContext) && m->ConsoleInNoWait)
+            (VOID)m->ConsoleInNoWait(m->ConsoleInContext);
         if (fn == 0x01 || fn == 0x06 || fn == 0x07 || fn == 0x08 || fn == 0x0A) {
-            SETAX((uint16_t)(fn << 8));
-            m->retry = 1;                       /* re-enter with AH = that fn  */
+            SETAX((WORD)(fn << 8));
+            m->IsRetry = 1;                     /* re-enter with AH = that fn  */
         } else OKCF();
     } else if (ah == 0x2E) {                    /* set verify flag */
-        m->verify = (uint8_t)(R_AX & 0xFF); OKCF();
+        m->IsVerifyOn = (BYTE)(R_AX & 0xFF); OKCF();
     } else if (ah == 0x54) {                    /* get verify flag */
-        SETAX((R_AX & 0xFF00) | m->verify); OKCF();
+        SETAX((R_AX & 0xFF00) | m->IsVerifyOn); OKCF();
     } else if (ah == 0x34) {                    /* get InDOS flag -> ES:BX */
         SET16(R_ES, DOS_SDA_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
     } else if (ah == 0x5D && ((R_AX & 0xFF) == 0x08 || (R_AX & 0xFF) == 0x09)) {
@@ -2056,11 +2056,11 @@ int dos_int21(dos_machine_t *m)
         tp = zput(tp, "  INT21 AH=5D06 SDA (minimal: crit-err + InDOS only)\r\n");
         OKCF();
     } else if (ah == 0x39 || ah == 0x3A) {      /* mkdir / rmdir */
-        char fn[300];
-        int ok2;
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
-        ok2 = (ah == 0x39) ? (int)CreateDirectoryA(fn, NULL)
-                           : (int)RemoveDirectoryA(fn);
+        CHAR fn[300];
+        INT ok2;
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
+        ok2 = (ah == 0x39) ? (INT)CreateDirectoryA(fn, NULL)
+                           : (INT)RemoveDirectoryA(fn);
         /* s91: A SEARCH THE GUEST NEVER FINISHED KEEPS THE DIRECTORY OPEN. DOS has no
              FindClose, so an AH=4Eh/11h search that stopped before "no more files"
              leaves our FindFirstFile handle alive -- and Windows will not remove a
@@ -2069,35 +2069,35 @@ int dos_int21(dos_machine_t *m)
              with "Invalid path, not directory, or directory not empty" (runs/s91,
              chain11b). Close the guest's unfinished searches and try once more. */
         if (!ok2 && ah == 0x3A) {
-            int fk;
+            INT fk;
             for (fk = 0; fk < 8; ++fk)
-                if (m->find_h[fk]) { FindClose(m->find_h[fk]); m->find_h[fk] = 0; }
-            if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
-            ok2 = (int)RemoveDirectoryA(fn);
+                if (m->FindHandles[fk]) { FindClose(m->FindHandles[fk]); m->FindHandles[fk] = 0; }
+            if (m->FcbFind) { FindClose(m->FcbFind); m->FcbFind = 0; }
+            ok2 = (INT)RemoveDirectoryA(fn);
         }
         if (ok2) OKCF();
         else {
             /* Oracle: mkdir over an existing name is 5 (access denied); rmdir of
                something absent is 3 (path not found). */
             DWORD e = GetLastError();
-            SETAX((uint16_t)(e == ERROR_ALREADY_EXISTS ? 5
+            SETAX((WORD)(e == ERROR_ALREADY_EXISTS ? 5
                            : e == ERROR_PATH_NOT_FOUND ? 3
                            : e == ERROR_FILE_NOT_FOUND ? 3 : 5));
             ERRCF();
         }
     } else if (ah == 0x41) {                    /* delete file */
-        char fn[300];
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        CHAR fn[300];
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
         if (DeleteFileA(fn)) OKCF();
         else { SETAX(2); ERRCF(); }             /* oracle: absent -> AX=2 */
     } else if (ah == 0x43) {                    /* get/set file attributes */
-        char fn[300];
-        uint8_t al43 = (uint8_t)(R_AX & 0xFF);
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        CHAR fn[300];
+        BYTE al43 = (BYTE)(R_AX & 0xFF);
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
         if (al43 == 0x00) {
             DWORD a = GetFileAttributesA(fn);
             if (a == 0xFFFFFFFFu) { SETAX(2); ERRCF(); }
-            else { SET16(R_CX, (uint16_t)(a & 0x3F)); SETAX((uint16_t)(a & 0x3F)); OKCF(); }
+            else { SET16(R_CX, (WORD)(a & 0x3F)); SETAX((WORD)(a & 0x3F)); OKCF(); }
         } else if (al43 == 0x01) {
             DWORD a = (DWORD)(R_CX & 0x3F);
             if (!a) a = FILE_ATTRIBUTE_NORMAL;
@@ -2125,56 +2125,56 @@ int dos_int21(dos_machine_t *m)
            Duplicating a device produces another handle ON THAT DEVICE -- no
            Win32 handle exists to duplicate, so the copy is a device slot too. */
         DWORD src = R_BX & 0xFFFF, dst;
-        int src_dev = DosHandleIsDevice((void *const *)m->fh, m->std_open, src);
-        if (!src_dev && !DosHandleIsFile((void *const *)m->fh, src)) { SETAX(6); ERRCF(); }
+        INT src_dev = DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, src);
+        if (!src_dev && !DosHandleIsFile((PVOID const *)m->FileHandles, src)) { SETAX(6); ERRCF(); }
         else {
             HANDLE nh = 0;
             if (!src_dev
-                && !DuplicateHandle(GetCurrentProcess(), m->fh[src],
+                && !DuplicateHandle(GetCurrentProcess(), m->FileHandles[src],
                                     GetCurrentProcess(), &nh, 0, FALSE,
                                     DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
             else if (ah == 0x45) {
-                dst = DosHandleAllocate((void *const *)m->fh, m->std_open);
+                dst = DosHandleAllocate((PVOID const *)m->FileHandles, m->StdOpen);
                 if (dst >= DOS_MAX_FILES) {
                     if (nh) CloseHandle(nh); SETAX(4); ERRCF();
-                } else if (src_dev && !DosHandleSetDevice(&m->std_open, dst, 1)) {
+                } else if (src_dev && !DosHandleSetDevice(&m->StdOpen, dst, 1)) {
                     /* Past the device mask. Refuse LOUDLY rather than hand back a
                        slot that would read as a file -- see DOS_DEV_SLOTS. */
                     tp = zput(tp, "  INT21 AH=45 device dup past slot 0x");
                     tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
                     SETAX(4); ERRCF();
-                } else { m->fh[dst] = nh; SETAX(dst); OKCF(); }
+                } else { m->FileHandles[dst] = nh; SETAX(dst); OKCF(); }
             } else {
                 dst = R_CX & 0xFFFF;
                 if (dst >= DOS_MAX_FILES) { if (nh) CloseHandle(nh); SETAX(6); ERRCF(); }
-                else if (src_dev && !DosHandleSetDevice(&m->std_open, dst, 1)) {
+                else if (src_dev && !DosHandleSetDevice(&m->StdOpen, dst, 1)) {
                     tp = zput(tp, "  INT21 AH=46 device dup2 past slot 0x");
                     tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
                     SETAX(4); ERRCF();
                 }
-                else { dos_handle_release(m, dst);
-                       m->fh[dst] = nh;                 /* 0 when src is a device */
-                       if (!src_dev) DosHandleSetDevice(&m->std_open, dst, 0);
+                else { DosHandleRelease(m, dst);
+                       m->FileHandles[dst] = nh;        /* 0 when src is a device */
+                       if (!src_dev) DosHandleSetDevice(&m->StdOpen, dst, 0);
                        OKCF(); }
             }
         }
     } else if (ah == 0x4D) {                    /* get child return code */
-        SETAX(m->child_rc); m->child_rc = 0;    /* DOS clears it after reading */
+        SETAX(m->ChildReturnCode); m->ChildReturnCode = 0;  /* DOS clears it after reading */
         OKCF();
     } else if (ah == 0x56) {                    /* rename: DS:DX -> ES:DI */
-        char from[300], to[300];
-        v86_path(m, R_DS, R_DX, from, sizeof(from));
-        v86_path(m, R_ES, R_DI, to,   sizeof(to));
+        CHAR from[300], to[300];
+        DosGuestPath(m, R_DS, R_DX, from, sizeof(from));
+        DosGuestPath(m, R_ES, R_DI, to,   sizeof(to));
         if (MoveFileA(from, to)) OKCF();
         else { DWORD e = GetLastError();
-               SETAX((uint16_t)(e == ERROR_ALREADY_EXISTS ? 5 : 2)); ERRCF(); }
+               SETAX((WORD)(e == ERROR_ALREADY_EXISTS ? 5 : 2)); ERRCF(); }
     } else if (ah == 0x57) {                    /* get/set file date and time */
         DWORD h57 = R_BX & 0xFFFF;
-        uint8_t al57 = (uint8_t)(R_AX & 0xFF);
-        if (!DosHandleIsFile((void *const *)m->fh, h57)) { SETAX(6); ERRCF(); }
+        BYTE al57 = (BYTE)(R_AX & 0xFF);
+        if (!DosHandleIsFile((PVOID const *)m->FileHandles, h57)) { SETAX(6); ERRCF(); }
         else if (al57 == 0x00) {
             FILETIME ft, lf; WORD fdate = 0, ftime = 0;
-            if (GetFileTime(m->fh[h57], NULL, NULL, &ft)
+            if (GetFileTime(m->FileHandles[h57], NULL, NULL, &ft)
                 && FileTimeToLocalFileTime(&ft, &lf)
                 && FileTimeToDosDateTime(&lf, &fdate, &ftime)) {
                 SET16(R_CX, ftime); SET16(R_DX, fdate); OKCF();
@@ -2183,24 +2183,24 @@ int dos_int21(dos_machine_t *m)
             FILETIME ft, lf;
             if (DosDateTimeToFileTime((WORD)(R_DX & 0xFFFF), (WORD)(R_CX & 0xFFFF), &lf)
                 && LocalFileTimeToFileTime(&lf, &ft)
-                && SetFileTime(m->fh[h57], NULL, NULL, &ft)) OKCF();
+                && SetFileTime(m->FileHandles[h57], NULL, NULL, &ft)) OKCF();
             else { SETAX(6); ERRCF(); }
         } else { SETAX(1); ERRCF(); }
     } else if (ah == 0x5A || ah == 0x5B) {      /* create temp / create new */
-        char fn[300]; HANDLE f; DWORD slot;
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        CHAR fn[300]; HANDLE f; DWORD slot;
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x5A) {                       /* DS:DX is a DIRECTORY path;
                                                    DOS appends a generated name
                                                    and hands it back in place. */
-            int k = 0; static unsigned seq = 0;
-            const char *hexd = "0123456789ABCDEF";
+            INT k = 0; static UINT seq = 0;
+            PCSTR hexd = "0123456789ABCDEF";
             while (fn[k] && k < 280) ++k;
             if (k && fn[k-1] != '\\' && fn[k-1] != '/') fn[k++] = '\\';
-            { unsigned v = (unsigned)(GetTickCount() + (seq++ * 0x1234u));
-              int j; for (j = 0; j < 8; ++j) fn[k + j] = hexd[(v >> (28 - j*4)) & 0xF]; }
+            { UINT v = (UINT)(GetTickCount() + (seq++ * 0x1234u));
+              INT j; for (j = 0; j < 8; ++j) fn[k + j] = hexd[(v >> (28 - j*4)) & 0xF]; }
             fn[k + 8] = 0;
             { volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-              int j = 0; while (fn[j]) { d[j] = (BYTE)fn[j]; ++j; } d[j] = 0; }
+              INT j = 0; while (fn[j]) { d[j] = (BYTE)fn[j]; ++j; } d[j] = 0; }
         }
         f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                         CREATE_NEW, (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
@@ -2209,23 +2209,23 @@ int dos_int21(dos_machine_t *m)
             /* Oracle: create-new over an existing file is error 80 (file exists),
                not 5 -- measured, and not the obvious guess. */
             DWORD e = GetLastError();
-            SETAX((uint16_t)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
+            SETAX((WORD)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
             ERRCF();
         } else {
-            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF();
-                                        dos_stamp_vdm_now(f); /* #263 */ }
+            slot = DosHandleAllocate((PVOID const *)m->FileHandles, m->StdOpen);
+            if (slot < DOS_MAX_FILES) { m->FileHandles[slot] = f; SETAX(slot); OKCF();
+                                        DosStampVdmNow(f); /* #263 */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x5C) {                    /* lock / unlock a byte range */
         DWORD h5c = R_BX & 0xFFFF;
         DWORD off = ((DWORD)(R_CX & 0xFFFF) << 16) | (DWORD)(R_DX & 0xFFFF);
         DWORD len = ((DWORD)(R_SI & 0xFFFF) << 16) | (DWORD)(R_DI & 0xFFFF);
-        if (!DosHandleIsFile((void *const *)m->fh, h5c)) { SETAX(6); ERRCF(); }
+        if (!DosHandleIsFile((PVOID const *)m->FileHandles, h5c)) { SETAX(6); ERRCF(); }
         else {
             BOOL ok5 = ((R_AX & 0xFF) == 0)
-                     ? LockFile(m->fh[h5c], off, 0, len, 0)
-                     : UnlockFile(m->fh[h5c], off, 0, len, 0);
+                     ? LockFile(m->FileHandles[h5c], off, 0, len, 0)
+                     : UnlockFile(m->FileHandles[h5c], off, 0, len, 0);
             if (ok5) OKCF(); else { SETAX(0x21); ERRCF(); }   /* 33 = lock violation */
         }
     } else if (ah == 0x67) {                    /* set maximum handle count */
@@ -2238,8 +2238,8 @@ int dos_int21(dos_machine_t *m)
         else { SETAX(8); ERRCF(); }
     } else if (ah == 0x68 || ah == 0x6A) {      /* commit file (flush) */
         DWORD h68 = R_BX & 0xFFFF;
-        if (!DosHandleIsFile((void *const *)m->fh, h68)) { SETAX(6); ERRCF(); }
-        else { FlushFileBuffers(m->fh[h68]); OKCF(); }
+        if (!DosHandleIsFile((PVOID const *)m->FileHandles, h68)) { SETAX(6); ERRCF(); }
+        else { FlushFileBuffers(m->FileHandles[h68]); OKCF(); }
     } else if (ah == 0x6C) {                    /* extended open/create */
         /* BX=mode, CX=attributes, DX=action, DS:SI=name.
            action: bits 0-3 if it exists (0 fail, 1 open, 2 truncate),
@@ -2254,21 +2254,21 @@ int dos_int21(dos_machine_t *m)
              where it said 3 (replaced) for every CREATE_ALWAYS -- RBIL's table, and the
              probe's first 716Ch is exactly that call. ⚠ Unmeasured on 6.22 for 6Ch:
              p_file's three 6Ch rows (open / exists / missing) do not reach it. */
-        char fn[300]; HANDLE f; DWORD slot, disp;
-        DWORD acc = (DWORD)DosExtOpenAccess((unsigned)(R_BX & 0xFFFF));
-        disp = DosExtOpenDisposition((unsigned)(R_DX & 0xFFFF));   /* Win32's own numbers */
-        v86_path(m, R_DS, R_SI, fn, sizeof(fn));
+        CHAR fn[300]; HANDLE f; DWORD slot, disp;
+        DWORD acc = (DWORD)DosExtOpenAccess((UINT)(R_BX & 0xFFFF));
+        disp = DosExtOpenDisposition((UINT)(R_DX & 0xFFFF));       /* Win32's own numbers */
+        DosGuestPath(m, R_DS, R_SI, fn, sizeof(fn));
         /* FILE_SHARE_WRITE too: we do not emulate SHARE.EXE, so a second open of a
            file this VDM holds must not fail -- the rule AH=3Dh learned in session 37
            and this twin had not (#168). */
         SetLastError(0);
-        f = dos_open_stampable(fn, acc, FILE_SHARE_READ | FILE_SHARE_WRITE, disp,
+        f = DosOpenStampable(fn, acc, FILE_SHARE_READ | FILE_SHARE_WRITE, disp,
                                (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
                                                     : FILE_ATTRIBUTE_NORMAL);
         if (f == INVALID_HANDLE_VALUE) {
             /* Same collapse as AH=3Dh had, same fix -- see DosErrFromWin32(). */
-            DWORD we = GetLastError(); unsigned short de;
-            int mapped = DosErrFromWin32((unsigned long)we, &de);
+            DWORD we = GetLastError(); WORD de;
+            INT mapped = DosErrFromWin32((unsigned long)we, &de);
             SETAX(de); ERRCF();
             tp = zput(tp, lfn_alias ? "  INT21 AX=71" : "  INT21 AH=6C");
             if (lfn_alias) tp = zhexb(tp, lfn_alias);
@@ -2278,12 +2278,12 @@ int dos_int21(dos_machine_t *m)
             tp = zhex(tp, de); tp = zput(tp, "\r\n");
         }
         else {
-            uint16_t res = (uint16_t)DosExtOpenActionTaken((unsigned)disp,
+            WORD res = (WORD)DosExtOpenActionTaken((UINT)disp,
                                                         GetLastError() == ERROR_ALREADY_EXISTS,
                                                         lfn_alias != 0);
-            slot = DosHandleAllocate((void *const *)m->fh, m->std_open);
-            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
-                                        if (res != 1) dos_stamp_vdm_now(f); /* #263: created/truncated */ }
+            slot = DosHandleAllocate((PVOID const *)m->FileHandles, m->StdOpen);
+            if (slot < DOS_MAX_FILES) { m->FileHandles[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF();
+                                        if (res != 1) DosStampVdmNow(f); /* #263: created/truncated */ }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x59) {                    /* get extended error */
@@ -2294,8 +2294,8 @@ int dos_int21(dos_machine_t *m)
              code  6         -> BX=0704, CH=01   (bad handle)
            CL is left ALONE -- the oracle returns it still holding the caller's
            value, so writing it would be an invention. */
-        uint16_t e = m->last_err, bx59 = 0;
-        uint8_t ch59 = 0;
+        WORD e = m->LastError, bx59 = 0;
+        BYTE ch59 = 0;
         /* The table moved to src/dos/dos_err.h so the off-VM battery can pin it
            (tests/unit/err_test.c) and so there is exactly one place a row can
            be added. Rows 5 (access denied) and 0x50 (file exists) were provoked
@@ -2312,45 +2312,45 @@ int dos_int21(dos_machine_t *m)
         R_CX = (R_CX & 0xFFFF00FFu) | (((DWORD)ch59 & 0xFF) << 8);
         OKCF();
     } else if (ah == 0x60) {                    /* truename: DS:SI -> ES:DI */
-        char in[300], out[300];
+        CHAR in[300], out[300];
         DWORD n;
-        v86_path(m, R_DS, R_SI, in, sizeof(in));
+        DosGuestPath(m, R_DS, R_SI, in, sizeof(in));
         n = GetFullPathNameA(in, sizeof(out), out, NULL);
         if (n == 0 || n >= sizeof(out)) { SETAX(3); ERRCF(); }
         else {
             volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            int k = 0;
+            INT k = 0;
             /* Oracle: a RELATIVE name resolves against the current directory and
                comes back fully qualified and UPPER CASE, and existence is not
                required -- "SUB\\FILE.TXT" became "C:\\SUB\\FILE.TXT" with no such dir. */
             while (out[k] && k < 127) {
-                char ch = out[k];
-                if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+                CHAR ch = out[k];
+                if (ch >= 'a' && ch <= 'z') ch = (CHAR)(ch - 32);
                 d[k] = (BYTE)ch; ++k;
             }
             d[k] = 0;
             OKCF();
         }
     } else if (ah == 0x65) {                    /* get extended country info */
-        uint8_t al65 = (uint8_t)(R_AX & 0xFF);
+        BYTE al65 = (BYTE)(R_AX & 0xFF);
         if (al65 == 0x01) {
             /* Oracle layout: [0]=1 id, [1-2]=size 0x26, [3-4]=country,
                [5-6]=code page, [7-40]=34-byte country block.  41 bytes total.
                NOTE the block here is the 34-byte form (24 meaningful + 10 zero),
                where AH=38h writes only 24 -- measured, not assumed. */
             volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            uint16_t cap = (uint16_t)(R_CX & 0xFFFF), k;
-            uint8_t blk[41];
-            int j;
+            WORD cap = (WORD)(R_CX & 0xFFFF), k;
+            BYTE blk[41];
+            INT j;
             for (j = 0; j < 41; ++j) blk[j] = 0;
             blk[0] = 0x01; blk[1] = 0x26; blk[2] = 0x00;
             blk[3] = 0x01; blk[4] = 0x00;                /* country 1  */
             blk[5] = 0xB5; blk[6] = 0x01;                /* code page 437 */
-            for (j = 0; j < 24; ++j) blk[7 + j] = ctry_us[j];
-            blk[7 + 18] = (uint8_t)(DOS_CASEMAP_OFF & 0xFF);
-            blk[7 + 19] = (uint8_t)(DOS_CASEMAP_OFF >> 8);
-            blk[7 + 20] = (uint8_t)(DOS_HDLR_SEG & 0xFF);
-            blk[7 + 21] = (uint8_t)(DOS_HDLR_SEG >> 8);
+            for (j = 0; j < 24; ++j) blk[7 + j] = g_DosCountryUs[j];
+            blk[7 + 18] = (BYTE)(DOS_CASEMAP_OFF & 0xFF);
+            blk[7 + 19] = (BYTE)(DOS_CASEMAP_OFF >> 8);
+            blk[7 + 20] = (BYTE)(DOS_HDLR_SEG & 0xFF);
+            blk[7 + 21] = (BYTE)(DOS_HDLR_SEG >> 8);
             for (k = 0; k < 41 && k < cap; ++k) d[k] = blk[k];
             SETAX(0x01B5); OKCF();                       /* oracle: AX = code page */
         } else if (al65 >= 0x02 && al65 <= 0x07) {
@@ -2360,7 +2360,7 @@ int dos_int21(dos_machine_t *m)
                not enough. Offsets from dos_layout.h; contents in dos_ctab.h,
                dumped from the oracle rather than synthesised. */
             volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            uint16_t off = 0;
+            WORD off = 0;
             switch (al65) {
             case 0x02: off = DOS_CTAB_UPPER;   break;
             case 0x04: off = DOS_CTAB_FNUPPER; break;
@@ -2379,10 +2379,10 @@ int dos_int21(dos_machine_t *m)
                  from 6.22), so a program that capitalises through DOS and one that
                  reads the table agree. Measured: 'a'->'A', 81h->9Ah, digits kept. */
             if (al65 == 0x20) {
-                SET16(R_DX, (R_DX & 0xFF00) | DosCtabUpcase437((uint8_t)(R_DX & 0xFF)));
+                SET16(R_DX, (R_DX & 0xFF00) | DosCtabUpcase437((BYTE)(R_DX & 0xFF)));
             } else {
                 volatile BYTE *s = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-                uint32_t k, n = (al65 == 0x21) ? (uint32_t)(R_CX & 0xFFFF) : 0x10000u;
+                UINT32 k, n = (al65 == 0x21) ? (UINT32)(R_CX & 0xFFFF) : 0x10000u;
                 for (k = 0; k < n; ++k) {
                     if (al65 == 0x22 && s[k] == 0) break;
                     s[k] = DosCtabUpcase437(s[k]);
@@ -2392,7 +2392,7 @@ int dos_int21(dos_machine_t *m)
         } else if (al65 == 0x23) {
             /* YES/NO for the country: AX = 0 no, 1 yes, 2 neither. Country 1 only,
                like everything else here. Measured: 'y'->1, 'N'->0, 'q'->2. */
-            uint8_t c = DosCtabUpcase437((uint8_t)(R_DX & 0xFF));
+            BYTE c = DosCtabUpcase437((BYTE)(R_DX & 0xFF));
             SETAX(c == 'Y' ? 1 : c == 'N' ? 0 : 2); OKCF();
         } else {
             tp = zput(tp, "  INT21 AH=65 AL=0x"); tp = zhex(tp, al65);
@@ -2401,19 +2401,19 @@ int dos_int21(dos_machine_t *m)
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x69) {                    /* get/set volume serial number */
-        uint8_t al69 = (uint8_t)(R_AX & 0xFF);
+        BYTE al69 = (BYTE)(R_AX & 0xFF);
         if (al69 == 0x00) {
             /* Oracle layout: [0-1] NOT WRITTEN (came back poisoned), [2-5]
                serial dword, [6-16] 11-byte label, [17-24] 8-byte fs type. */
             volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-            char label[64], fstype[32];
+            CHAR label[64], fstype[32];
             DWORD serial = 0, maxc = 0, flags = 0;
-            int k;
+            INT k;
             for (k = 0; k < 64; ++k) label[k] = 0;
             for (k = 0; k < 32; ++k) fstype[k] = 0;
-            uint8_t drv = dos_serial_drive(m, (uint8_t)(R_BX & 0xFF));
-            if (drv < 26 && g_dos_serial_set[drv]) {         /* #165: set this session */
-                for (k = 0; k < 23; ++k) d[2 + k] = g_dos_serial_info[drv][k];
+            BYTE drv = DosSerialDrive(m, (BYTE)(R_BX & 0xFF));
+            if (drv < 26 && g_DosSerialIsSet[drv]) {         /* #165: set this session */
+                for (k = 0; k < 23; ++k) d[2 + k] = g_DosSerialInfo[drv][k];
                 OKCF();
             } else if (GetVolumeInformationA(NULL, label, sizeof(label), &serial,
                                       &maxc, &flags, fstype, sizeof(fstype))) {
@@ -2433,18 +2433,18 @@ int dos_int21(dos_machine_t *m)
                  remembered per drive, answered by 6900h until this VDM ends, and
                  nothing is written to the host disk. Same 25-byte layout as 6900h. */
             const volatile BYTE *sb = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-            uint8_t drv = dos_serial_drive(m, (uint8_t)(R_BX & 0xFF));
-            int k;
+            BYTE drv = DosSerialDrive(m, (BYTE)(R_BX & 0xFF));
+            INT k;
             if (drv < 26) {
-                for (k = 0; k < 23; ++k) g_dos_serial_info[drv][k] = sb[2 + k];
-                g_dos_serial_set[drv] = 1;
+                for (k = 0; k < 23; ++k) g_DosSerialInfo[drv][k] = sb[2 + k];
+                g_DosSerialIsSet[drv] = 1;
                 tp = zput(tp, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
                 OKCF();
             } else { SETAX(0x0F); ERRCF(); }
         } else {
             tp = zput(tp, "  INT21 AH=69 AL=0x"); tp = zhex(tp, al69);
             tp = zput(tp, " UNIMPLEMENTED\r\n");
-            m->unimpl21[0x69 >> 3] |= (uint8_t)(1u << (0x69 & 7));
+            m->Unimplemented[0x69 >> 3] |= (BYTE)(1u << (0x69 & 7));
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x47) {                    /* get current directory -> DS:SI */
@@ -2454,12 +2454,12 @@ int dos_int21(dos_machine_t *m)
            untouched, so we must not pad it.
            Wanted by four of the five real 6.22 tools we ran (TREE, ATTRIB,
            XCOPY, COMMAND.COM), which is why it came first.  GH #32. */
-        char cwd[300];
+        CHAR cwd[300];
         DWORD n;
-        uint8_t dl47 = (uint8_t)(R_DX & 0xFF);
-        uint8_t curdrv = (uint8_t)(dos_cur_drive(m) + 1);
-        if (m->vdrive >= 0) {                 /* a drive Win32 cannot stand on: its =X: or root */
-            char spec[3]; spec[0] = (char)('A' + m->vdrive); spec[1] = ':'; spec[2] = 0;
+        BYTE dl47 = (BYTE)(R_DX & 0xFF);
+        BYTE curdrv = (BYTE)(DosCurrentDrive(m) + 1);
+        if (m->VirtualDrive >= 0) {           /* a drive Win32 cannot stand on: its =X: or root */
+            CHAR spec[3]; spec[0] = (CHAR)('A' + m->VirtualDrive); spec[1] = ':'; spec[2] = 0;
             n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
         } else n = GetCurrentDirectoryA(sizeof(cwd), cwd);
         /* ── ★ 0xF0 IS krnl386 TALKING TO ntvdm, AND WE ARE ntvdm. (#128, s37) ──
@@ -2487,7 +2487,7 @@ int dos_int21(dos_machine_t *m)
              error DOS itself returns. GH #32. */
         if (n && dl47 && dl47 != curdrv && dl47 <= 26) {
             if (GetLogicalDrives() & (1u << (dl47 - 1))) {
-                char spec[4]; spec[0] = (char)('A' + dl47 - 1); spec[1] = ':';
+                CHAR spec[4]; spec[0] = (CHAR)('A' + dl47 - 1); spec[1] = ':';
                 spec[2] = 0;
                 n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
             } else n = 0;
@@ -2498,20 +2498,20 @@ int dos_int21(dos_machine_t *m)
             SETAX(0x0F); ERRCF();
         } else {
             volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
-            const char *p47 = cwd;
-            int k = 0;
+            PCSTR p47 = cwd;
+            INT k = 0;
             /* ── #164: SHORT AND UPPER CASE, AS DOS KEEPS IT. (s85) ─────────────────
                  The host hands back whatever case and length the directory was
                  entered with ("...\ntvdmex\demo\win16"). DOS's CDS holds an upper-case
                  8.3 path, and stock NTVDM answers exactly that -- measured beside
                  ours by tests/probes/win16/w_cwd on the rig: ours `...\ntvdmex\demo\...`,
                  stock `...\NTVDMEX\DEMO\...`. */
-            {   char sp47[300];
+            {   CHAR sp47[300];
                 DWORD sn = GetShortPathNameA(cwd, sp47, sizeof sp47);
-                int u;
+                INT u;
                 if (sn && sn < sizeof sp47) lstrcpynA(cwd, sp47, sizeof cwd);
                 for (u = 0; cwd[u]; ++u)
-                    if (cwd[u] >= 'a' && cwd[u] <= 'z') cwd[u] = (char)(cwd[u] - 32);
+                    if (cwd[u] >= 'a' && cwd[u] <= 'z') cwd[u] = (CHAR)(cwd[u] - 32);
             }
             if (cwd[1] == ':') p47 += 2;              /* drop "C:"            */
             if (*p47 == '\\' || *p47 == '/') ++p47;   /* drop the separator   */
@@ -2528,27 +2528,27 @@ int dos_int21(dos_machine_t *m)
              that drive's =X: variable (which is what "X:" resolves through); the
              process current directory changes only for the drive we are on.
              Also measured: a bare "C:" is path-not-found (AX=3), not a no-op. */
-        char fn[300], full[300];
+        CHAR fn[300], full[300];
         DWORD n;
-        uint8_t tgt;
-        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        BYTE tgt;
+        DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
         tp = zput(tp, "  INT21 AH=3B chdir ["); tp = zput(tp, fn); tp = zput(tp, "]");
         if (fn[0] && fn[1] == ':' && !fn[2]) { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (drive only)\r\n"); }
         else if ((n = GetFullPathNameA(fn, sizeof(full), full, NULL)) == 0 || n >= sizeof(full)
                  || full[1] != ':') { SETAX(3); ERRCF(); tp = zput(tp, " -> 3\r\n"); }
         else {
-            tgt = (uint8_t)((full[0] | 0x20) - 'a');
-            if (tgt == dos_cur_drive(m)) {
+            tgt = (BYTE)((full[0] | 0x20) - 'a');
+            if (tgt == DosCurrentDrive(m)) {
                 if (SetCurrentDirectoryA(full)) {
-                    m->vdrive = -1;             /* it can be stood on after all */
-                    dos_note_drive_dir(full);
+                    m->VirtualDrive = -1;       /* it can be stood on after all */
+                    DosNoteDriveDirectory(full);
                     OKCF(); tp = zput(tp, " -> ok\r\n");
                 } else { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (0x"); tp = zhex(tp, GetLastError());
                          tp = zput(tp, ")\r\n"); }   /* oracle: AX=0003, CF=1 */
             } else {
                 DWORD a = GetFileAttributesA(full);
                 if (a != 0xFFFFFFFFu && (a & FILE_ATTRIBUTE_DIRECTORY)) {
-                    dos_note_drive_dir(full);
+                    DosNoteDriveDirectory(full);
                     OKCF(); tp = zput(tp, " -> ok (another drive's directory; current drive unchanged)\r\n");
                 } else { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (other drive, 0x"); tp = zhex(tp, GetLastError());
                          tp = zput(tp, ")\r\n"); }
@@ -2559,25 +2559,25 @@ int dos_int21(dos_machine_t *m)
            AN INVALID DRIVE RETURNS AX=FFFF WITH CARRY CLEAR -- oracle-confirmed,
            and easy to get wrong: it is not a CF error.  Counts are 16-bit in the
            DOS interface, so a large volume has to be clamped rather than wrapped. */
-        uint8_t dl36 = (uint8_t)(R_DX & 0xFF);
+        BYTE dl36 = (BYTE)(R_DX & 0xFF);
         DWORD spc = 0, bps = 0, freec = 0, totc = 0;
-        char root[4]; char *rp = 0;
-        if (!dl36 && m->vdrive >= 0) dl36 = (uint8_t)(m->vdrive + 1);
-        if (dl36) { root[0] = (char)('A' + dl36 - 1); root[1] = ':'; root[2] = '\\';
+        CHAR root[4]; PSTR rp = 0;
+        if (!dl36 && m->VirtualDrive >= 0) dl36 = (BYTE)(m->VirtualDrive + 1);
+        if (dl36) { root[0] = (CHAR)('A' + dl36 - 1); root[1] = ':'; root[2] = '\\';
                     root[3] = 0; rp = root; }
         if (dl36 <= 26 && GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
-            SETAX((uint16_t)spc);
+            SETAX((WORD)spc);
             SET16(R_BX, freec > 0xFFFF ? 0xFFFF : freec);
-            SET16(R_CX, (uint16_t)bps);
+            SET16(R_CX, (WORD)bps);
             SET16(R_DX, totc  > 0xFFFF ? 0xFFFF : totc);
             OKCF();
         } else {
             SETAX(0xFFFF); OKCF();
         }
     } else if (ah == 0x38) {                    /* get/set country information */
-        uint8_t al38 = (uint8_t)(R_AX & 0xFF);
-        uint16_t want = (al38 == 0xFF) ? (uint16_t)(R_BX & 0xFFFF)
-                                       : (uint16_t)(al38 ? al38 : 1);
+        BYTE al38 = (BYTE)(R_AX & 0xFF);
+        WORD want = (al38 == 0xFF) ? (WORD)(R_BX & 0xFFFF)
+                                       : (WORD)(al38 ? al38 : 1);
         if ((R_DX & 0xFFFF) == 0xFFFF) {        /* DX=FFFF selects SET, not GET */
             /* ── MEASURED, 6.22 AND PCem, NO COUNTRY.SYS (p_subfn): setting the
                  CURRENT country succeeds (AX=1 CF=0); any other fails AX=1 CF=1,
@@ -2592,8 +2592,8 @@ int dos_int21(dos_machine_t *m)
             }
         } else if (want == 1) {                 /* USA -- the only block we have */
             volatile BYTE *b = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-            int k;
-            for (k = 0; k < 24; ++k) b[k] = ctry_us[k];
+            INT k;
+            for (k = 0; k < 24; ++k) b[k] = g_DosCountryUs[k];
             b[18] = (BYTE)(DOS_CASEMAP_OFF & 0xFF);
             b[19] = (BYTE)(DOS_CASEMAP_OFF >> 8);
             b[20] = (BYTE)(DOS_HDLR_SEG & 0xFF);
@@ -2610,12 +2610,12 @@ int dos_int21(dos_machine_t *m)
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x58) {                    /* get/set memory allocation strategy */
-        uint8_t al58 = (uint8_t)(R_AX & 0xFF);
-        if (al58 == 0x00)      { SETAX(m->alloc_strat); OKCF(); }
-        else if (al58 == 0x01) { m->alloc_strat = (uint8_t)(R_BX & 0xFF); OKCF(); }
+        BYTE al58 = (BYTE)(R_AX & 0xFF);
+        if (al58 == 0x00)      { SETAX(m->AllocationStrategy); OKCF(); }
+        else if (al58 == 0x01) { m->AllocationStrategy = (BYTE)(R_BX & 0xFF); OKCF(); }
         /* Oracle: AL=02 returns the state in AL and LEAVES AH ALONE -- 6.22
            answered AX=5800 to a call made with AX=5802. */
-        else if (al58 == 0x02) { SETAX((R_AX & 0xFF00) | m->umb_link); OKCF(); }
+        else if (al58 == 0x02) { SETAX((R_AX & 0xFF00) | m->UmbLink); OKCF(); }
         else if (al58 == 0x03) {
             /* ── ★ YOU CANNOT LINK A UMB CHAIN THAT DOES NOT EXIST. (GH #47) ───
                  This accepted the call and stored the flag, and that is why
@@ -2650,14 +2650,14 @@ int dos_int21(dos_machine_t *m)
            than left as whatever was in memory: a walker that follows a garbage
            DPB or SFT pointer wanders off into nonsense, which is the silent
            failure #27 exists to remove, whereas a null pointer stops it. */
-        if (m->sysvars_seg) {
-            SET16(R_ES, m->sysvars_seg);
-            SET16(R_BX, m->sysvars_off);
+        if (m->SysvarsSegment) {
+            SET16(R_ES, m->SysvarsSegment);
+            SET16(R_BX, m->SysvarsOffset);
             tp = zput(tp, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
             OKCF();
         } else {
             tp = zput(tp, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
-            m->unimpl21[0x52 >> 3] |= (uint8_t)(1u << (0x52 & 7));
+            m->Unimplemented[0x52 >> 3] |= (BYTE)(1u << (0x52 & 7));
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x44) {                    /* IOCTL (C-runtime isatty etc.) */
@@ -2668,7 +2668,7 @@ int dos_int21(dos_machine_t *m)
              PRN A0C0h (bit 13, output-until-busy) -- measured, p_auxprn. */
         if (al == 0x00) {
             WORD w = (bx < 5) ? 0x80D3 : 0x0002;
-            if ((bx == 3 || bx == 4) && DosHandleIsDevice((void *const *)m->fh, m->std_open, bx))
+            if ((bx == 3 || bx == 4) && DosHandleIsDevice((PVOID const *)m->FileHandles, m->StdOpen, bx))
                 w = (bx == 3) ? 0x80C0 : 0xA0C0;
             SET16(R_DX, w); SETAX(w); OKCF();
         }
@@ -2694,9 +2694,9 @@ int dos_int21(dos_machine_t *m)
         else if (al == 0x08 || al == 0x09 || al == 0x0E) {
             BYTE drv = (BYTE)(bx & 0xFF);            /* 0 = default drive           */
             UINT ty = 0;
-            if (!drv) drv = (BYTE)(dos_cur_drive(m) + 1);
+            if (!drv) drv = (BYTE)(DosCurrentDrive(m) + 1);
             if (drv >= 1 && drv <= 26 && (GetLogicalDrives() & (1u << (drv - 1)))) {
-                char root[4]; root[0] = (char)('A' + drv - 1); root[1] = ':';
+                CHAR root[4]; root[0] = (CHAR)('A' + drv - 1); root[1] = ':';
                 root[2] = '\\'; root[3] = 0;
                 ty = GetDriveTypeA(root);
             }
@@ -2751,8 +2751,8 @@ int dos_int21(dos_machine_t *m)
         SET16(R_ES, *(volatile WORD *)(v + 2));
         OKCF();
     } else if (ah == 0x48) {                    /* allocate BX paras -> AX=seg (err: BX=max) */
-        uint16_t want = (uint16_t)(R_BX & 0xFFFF), seg = 0, max = 0;
-        int err = DosMcbAllocate(NULL, m->first_mcb, want, &seg, &max);
+        WORD want = (WORD)(R_BX & 0xFFFF), seg = 0, max = 0;
+        INT err = DosMcbAllocate(NULL, m->FirstMcb, want, &seg, &max);
         if (err) { SET16(R_AX, err); SET16(R_BX, max); ERRCF(); }
         else     { SET16(R_AX, seg); OKCF(); }
         /* ── THE BLOCK BELONGS TO THE PROGRAM THAT ASKED. (s80) ───────────────────
@@ -2762,44 +2762,44 @@ int dos_int21(dos_machine_t *m)
              PSP is DOS_PSP_SEG) and wrong for every child -- so nothing a child
              allocated was ever given back. Measured: DOS/4GW's five real-mode blocks
              outlived Doom, and the next `doom` loaded 85 KB higher. */
-        if (!err && seg && m->psp_seg)
-            DosMcbWriteWord(DosMcbSegmentAddress(NULL, (uint16_t)(seg - 1)) + 1, m->psp_seg);
+        if (!err && seg && m->PspSegment)
+            DosMcbWriteWord(DosMcbSegmentAddress(NULL, (WORD)(seg - 1)) + 1, m->PspSegment);
         tp = zput(tp, "  INT21 AH=48 alloc 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " -> err max=0x" : " -> seg=0x");
         tp = zhex(tp, (*pfl & 1) ? max : (R_AX & 0xFFFF)); tp = zput(tp, "\r\n");
     } else if (ah == 0x49) {                    /* free block: ES=segment */
-        int err = DosMcbFree(NULL, (uint16_t)(R_ES & 0xFFFF));
+        INT err = DosMcbFree(NULL, (WORD)(R_ES & 0xFFFF));
         /* ── #258: AND A SUCCESSFUL FREE LEAVES AX = THE BLOCK'S MCB. ────────────────
              Undocumented, measured (tests/probes/dos/p_memax): MS-DOS 6.22 and PCem's
              MS-DOS both return AX = ES-1; dosbox-x leaves AX alone. The Microsoft
              kernel is the authority. We left AX as the caller's 49xx. */
         if (err) { SET16(R_AX, err); ERRCF(); }
-        else { SET16(R_AX, (uint16_t)((R_ES & 0xFFFF) - 1)); OKCF(); }
+        else { SET16(R_AX, (WORD)((R_ES & 0xFFFF) - 1)); OKCF(); }
         tp = zput(tp, "  INT21 AH=49 free seg=0x"); tp = zhex(tp, R_ES & 0xFFFF);
         tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
         /* A refused free names a block the caller believes in and we do not: show
            what is actually at seg-1, and the chain, so the two can be compared. */
         if (err) {
             const volatile BYTE *mb = (const volatile BYTE *)(((R_ES & 0xFFFF) - 1u) << 4);
-            uint16_t s;
-            int k, n = 0;
+            WORD s;
+            INT k, n = 0;
             tp = zput(tp, "    at seg-1: ");
             for (k = 0; k < 16; ++k) { tp = zhexb(tp, mb[k]); tp = zput(tp, " "); }
             tp = zput(tp, "\r\n    chain:");
-            s = m->first_mcb;
+            s = m->FirstMcb;
             while (s && n++ < 40) {
                 const volatile BYTE *mc = (const volatile BYTE *)((DWORD)s << 4);
-                uint16_t own = (uint16_t)(mc[1] | (mc[2] << 8)), sz = (uint16_t)(mc[3] | (mc[4] << 8));
+                WORD own = (WORD)(mc[1] | (mc[2] << 8)), sz = (WORD)(mc[3] | (mc[4] << 8));
                 tp = zput(tp, " "); tp = zhex(tp, s); tp = zput(tp, mc[0] == 'Z' ? "Z" : mc[0] == 'M' ? "M" : "?");
                 tp = zput(tp, "/"); tp = zhex(tp, own); tp = zput(tp, "/"); tp = zhex(tp, sz);
                 if (mc[0] != 'M') break;
-                s = (uint16_t)(s + 1 + sz);
+                s = (WORD)(s + 1 + sz);
             }
             tp = zput(tp, "\r\n");
         }
     } else if (ah == 0x4A) {                    /* resize: ES=block BX=new paras */
-        uint16_t want = (uint16_t)(R_BX & 0xFFFF), max = 0;
-        int err = DosMcbResize(NULL, (uint16_t)(R_ES & 0xFFFF), want, &max);
+        WORD want = (WORD)(R_BX & 0xFFFF), max = 0;
+        INT err = DosMcbResize(NULL, (WORD)(R_ES & 0xFFFF), want, &max);
         /* ── #258: A SUCCESSFUL RESIZE LEAVES AX = THE BLOCK'S SEGMENT. ──────────────
              Undocumented, and QuickBASIC 4.5 depends on it: its Quick Library loader
              takes AX after shrinking a top-of-memory block as the block's segment.
@@ -2809,25 +2809,25 @@ int dos_int21(dos_machine_t *m)
              Measured (tests/probes/dos/p_memax): MS-DOS 6.22, dosbox-x and PCem all
              return AX = ES for a shrink, a grow and a same-size resize. */
         if (err) { SET16(R_AX, err); if (err == 8) SET16(R_BX, max); ERRCF(); }
-        else { SET16(R_AX, (uint16_t)(R_ES & 0xFFFF)); OKCF(); }
+        else { SET16(R_AX, (WORD)(R_ES & 0xFFFF)); OKCF(); }
         tp = zput(tp, "  INT21 AH=4A resize seg=0x"); tp = zhex(tp, R_ES & 0xFFFF);
         tp = zput(tp, " -> 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
     } else if (ah == 0x51 || ah == 0x62) {      /* get current PSP -> BX */
-        SET16(R_BX, m->psp_seg); OKCF();
+        SET16(R_BX, m->PspSegment); OKCF();
     } else if (ah == 0x50) {                    /* set current PSP */
-        m->psp_seg = (uint16_t)(R_BX & 0xFFFF); OKCF();
+        m->PspSegment = (WORD)(R_BX & 0xFFFF); OKCF();
     } else if (ah == 0x1A) {                    /* set DTA = DS:DX */
-        m->dta_seg = (WORD)(R_DS & 0xFFFF); m->dta_off = (WORD)(R_DX & 0xFFFF); OKCF();
+        m->DtaSegment = (WORD)(R_DS & 0xFFFF); m->DtaOffset = (WORD)(R_DX & 0xFFFF); OKCF();
     } else if (ah == 0x2F) {                    /* get DTA -> ES:BX */
-        SET16(R_ES, m->dta_seg); SET16(R_BX, m->dta_off); OKCF();
+        SET16(R_ES, m->DtaSegment); SET16(R_BX, m->DtaOffset); OKCF();
     } else if (ah == 0x19) {                    /* get current drive -> AL (C: = 2) */
         /* ── THE CURRENT DRIVE IS THE HOST CURRENT DIRECTORY'S, LIKE AH=47h's. ─────
              This returned a constant while AH=0Eh below was accepted and ignored, so
              a program probing drives the classic way -- select X, read back, compare
              -- found only C:. QB.EXE's file dialog does exactly that (39BCCh..39BE4h)
              and listed one drive on a machine with four. */
-        SETAX((R_AX & 0xFF00) | dos_cur_drive(m)); OKCF();
+        SETAX((R_AX & 0xFF00) | DosCurrentDrive(m)); OKCF();
     } else if (ah == 0x0E) {                    /* select drive -> AL = LASTDRIVE  */
         /* Win32 keeps a current directory per drive (the hidden =X: variables), and
            "X:" as a path means that directory -- so selecting a drive is one call,
@@ -2842,20 +2842,20 @@ int dos_int21(dos_machine_t *m)
              to chdir onto an empty floppy or CD-ROM (NOT READY), and this used to
              leave the guest on C: -- so QB.EXE's select/read-back probe found ONE
              drive on a machine with four. Now the selection is held in m->vdrive
-             and every relative path goes to that drive (v86_path), where the access
+             and every relative path goes to that drive (DosGuestPath), where the access
              fails as DOS's would. */
-        uint8_t dl = (uint8_t)(R_DX & 0xFF);
+        BYTE dl = (BYTE)(R_DX & 0xFF);
         if (dl < 26 && (GetLogicalDrives() & (1u << dl))) {
-            char spec[3], cw[300];
-            spec[0] = (char)('A' + dl); spec[1] = ':'; spec[2] = 0;
+            CHAR spec[3], cw[300];
+            spec[0] = (CHAR)('A' + dl); spec[1] = ':'; spec[2] = 0;
             /* remember the directory we are leaving; "X:" resolves through =X: */
-            if (m->vdrive < 0 && GetCurrentDirectoryA(sizeof(cw), cw)) dos_note_drive_dir(cw);
-            if (SetCurrentDirectoryA(spec)) m->vdrive = -1;
+            if (m->VirtualDrive < 0 && GetCurrentDirectoryA(sizeof(cw), cw)) DosNoteDriveDirectory(cw);
+            if (SetCurrentDirectoryA(spec)) m->VirtualDrive = -1;
             else {                                       /* e.g. no media: try the root */
-                char root[4]; root[0] = spec[0]; root[1] = ':'; root[2] = '\\'; root[3] = 0;
-                if (SetCurrentDirectoryA(root)) m->vdrive = -1;
+                CHAR root[4]; root[0] = spec[0]; root[1] = ':'; root[2] = '\\'; root[3] = 0;
+                if (SetCurrentDirectoryA(root)) m->VirtualDrive = -1;
                 else {
-                    m->vdrive = dl;
+                    m->VirtualDrive = dl;
                     tp = zput(tp, "  INT21 AH=0E drive "); *tp++ = spec[0];
                     tp = zput(tp, ": exists but is not ready (Win32 error 0x");
                     tp = zhex(tp, GetLastError());
@@ -2867,17 +2867,17 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x0D) {                    /* disk reset (flush) -> nop */
         OKCF();
     } else if (ah == 0x33) {                    /* get/set Ctrl-Break, get true version */
-        uint8_t al33 = (uint8_t)(R_AX & 0xFF);
+        BYTE al33 = (BYTE)(R_AX & 0xFF);
         /* ── THE FLAG IS STATE, NOT A CONSTANT. (GH #165) ──────────────────────
              Get used to answer "off" and set accepted a value and dropped it, so a
              program that turned checking on read back off. Measured, 6.22 and PCem
              (tests/probes/dos/p_subfn.asm): 3301 DL=1 then 3300 -> DL=1; 3302 swaps
              and returns the OLD state in DL. DH is left alone -- 6.22 does. */
-        if (al33 == 0x00) { SET16(R_DX, (R_DX & 0xFF00) | m->break_on); OKCF(); }
-        else if (al33 == 0x01) { m->break_on = (uint8_t)((R_DX & 0xFF) ? 1 : 0); OKCF(); }
+        if (al33 == 0x00) { SET16(R_DX, (R_DX & 0xFF00) | m->IsBreakOn); OKCF(); }
+        else if (al33 == 0x01) { m->IsBreakOn = (BYTE)((R_DX & 0xFF) ? 1 : 0); OKCF(); }
         else if (al33 == 0x02) {
-            uint8_t old = m->break_on;
-            m->break_on = (uint8_t)((R_DX & 0xFF) ? 1 : 0);
+            BYTE old = m->IsBreakOn;
+            m->IsBreakOn = (BYTE)((R_DX & 0xFF) ? 1 : 0);
             SET16(R_DX, (R_DX & 0xFF00) | old); OKCF();
         }
         else if (al33 == 0x05) { SET16(R_DX, 3); OKCF(); }     /* boot drive = C: */
@@ -2890,7 +2890,7 @@ int dos_int21(dos_machine_t *m)
             /* ⚠ Real SETVER leaves the TRUE version alone. Ours follows the same
                  per-process rule anyway: whether XP's shell checks 3306h as well is not
                  measured, and a shell that refuses to start is the costlier mistake. */
-            SET16(R_BX, dos_version_word(m));
+            SET16(R_BX, DosVersionWord(m));
             SET16(R_DX, 0x0000);
             OKCF();
         } else {                                               /* not a 6.22 subfn */
@@ -2905,7 +2905,7 @@ int dos_int21(dos_machine_t *m)
            dos_clock.h. With nothing set the offset is 0 and this is GetLocalTime.
            #262: a tick count the BIOS did not write is followed first, date included
            (its midnight rollovers are DOS's day number moving). */
-        DOS_CLOCK_TIME g; dos_clock_sync(); dos_clock_read(g_DosClock.DosOffset, &g);
+        DOS_CLOCK_TIME g; DosClockSync(); DosClockRead(g_DosClock.DosOffset, &g);
         SET16(R_CX, g.Year);
         SET16(R_DX, ((g.Month & 0xFF) << 8) | (g.Day & 0xFF));
         SETAX((R_AX & 0xFF00) | (g.DayOfWeek & 0xFF));
@@ -2913,7 +2913,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x2C) {                    /* get time: CH=hr CL=min DH=sec DL=cs */
         /* #262: CLOCK$ reads 0040:006C, so a raw store there moves this (p_tick2c
            tick2c.after.store) -- followed here, once, then host-now + offset again. */
-        DOS_CLOCK_TIME g; dos_clock_sync(); dos_clock_read(g_DosClock.DosOffset, &g);
+        DOS_CLOCK_TIME g; DosClockSync(); DosClockRead(g_DosClock.DosOffset, &g);
         SET16(R_CX, ((g.Hour & 0xFF) << 8) | (g.Minute & 0xFF));
         SET16(R_DX, ((g.Second & 0xFF) << 8) | (g.Hundredths & 0xFF));
         OKCF();
@@ -2929,24 +2929,24 @@ int dos_int21(dos_machine_t *m)
              to the new reading, and on a time set the BIOS tick count at 0040:006C is
              reloaded with the ticks since midnight (p_clock clk.1a02.after.2d,
              clk.1a00.after.2d, clk.1a04.after.2b). */
-        DOS_CLOCK_TIME host; int ok;
-        dos_clock_sync();               /* #262: 2Bh keeps the time of day the COUNT says */
-        dos_clock_host_now(&host);
+        DOS_CLOCK_TIME host; INT ok;
+        DosClockSync();                 /* #262: 2Bh keeps the time of day the COUNT says */
+        DosClockHostNow(&host);
         if (ah == 0x2B) {
-            unsigned y = R_CX & 0xFFFF, mo = (R_DX >> 8) & 0xFF, d = R_DX & 0xFF;
+            UINT y = R_CX & 0xFFFF, mo = (R_DX >> 8) & 0xFF, d = R_DX & 0xFF;
             ok = DosClockIsDosDateValid(y, mo, d);
             if (ok) DosClockSetDate(&host, &g_DosClock.DosOffset, y, mo, d);
         } else {
-            unsigned h = (R_CX >> 8) & 0xFF, mi = R_CX & 0xFF;
-            unsigned s = (R_DX >> 8) & 0xFF, cs = R_DX & 0xFF;
+            UINT h = (R_CX >> 8) & 0xFF, mi = R_CX & 0xFF;
+            UINT s = (R_DX >> 8) & 0xFF, cs = R_DX & 0xFF;
             ok = DosClockIsTimeValid(h, mi, s, cs);
             if (ok) {
                 DosClockSetTime(&host, &g_DosClock.DosOffset, h, mi, s, cs);
-                if (m->set_ticks) m->set_ticks(m->ticks_ctx, DosClockTicksFromTime(h, mi, s, cs));
+                if (m->SetTicks) m->SetTicks(m->TicksContext, DosClockTicksFromTime(h, mi, s, cs));
             }
         }
         if (ok) g_DosClock.RtcOffset = g_DosClock.DosOffset;
-        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (unsigned)ah);
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (UINT)ah);
         tp = zput(tp, ok ? " VDM clock set (host clock untouched)\r\n"
                          : " refused: invalid -> AL=FF, clock unchanged\r\n");
         SETAX((R_AX & 0xFF00) | (ok ? 0x00 : 0xFF));
@@ -2970,51 +2970,51 @@ int dos_int21(dos_machine_t *m)
              stock writes on success (does 71A0h touch AX? does 7143h BL=0 copy CX into AX
              as 4300h does on 6.22?) is what tests/probes/dos/p_lfn.asm prints; the arms
              below write only the outputs RBIL names and leave AX alone on success. */
-        uint8_t al71 = (uint8_t)(R_AX & 0xFF);
+        BYTE al71 = (BYTE)(R_AX & 0xFF);
         if (al71 == 0x41) {              /* delete: DS:DX, SI=wildcards, CL/CH */
-            char fn[300];
-            uint16_t si41 = (uint16_t)(R_SI & 0xFFFF);
-            v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+            CHAR fn[300];
+            WORD si41 = (WORD)(R_SI & 0xFFFF);
+            DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
             if (si41 == 0) {
                 /* SI=0: one file, no wildcards -- 41h with an LFN-shaped error code. */
                 if (DeleteFileA(fn)) OKCF();
-                else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                else { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             } else {
                 /* SI=1: every match of the pattern whose attributes pass CL (allowed) and
                    CH (required); directories are never deleted. Success if any went. */
-                WIN32_FIND_DATAA fd; HANDLE hf; int any = 0, cut = 0, i;
+                WIN32_FIND_DATAA fd; HANDLE hf; INT any = 0, cut = 0, i;
                 DWORD we = ERROR_FILE_NOT_FOUND;
-                char full[300];
+                CHAR full[300];
                 for (i = 0; fn[i]; ++i) if (fn[i] == '\\' || fn[i] == '/' || fn[i] == ':') cut = i + 1;
                 hf = FindFirstFileA(fn, &fd);
                 if (hf == INVALID_HANDLE_VALUE) we = GetLastError();
                 else {
                     do {
                         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                        if (!DosLfnAttributesOk(fd.dwFileAttributes, (uint8_t)(R_CX & 0xFF),
-                                             (uint8_t)((R_CX >> 8) & 0xFF))) continue;
-                        if (cut + lstrlenA(fd.cFileName) >= (int)sizeof(full)) continue;
+                        if (!DosLfnAttributesOk(fd.dwFileAttributes, (BYTE)(R_CX & 0xFF),
+                                             (BYTE)((R_CX >> 8) & 0xFF))) continue;
+                        if (cut + lstrlenA(fd.cFileName) >= (INT)sizeof(full)) continue;
                         for (i = 0; i < cut; ++i) full[i] = fn[i];
                         lstrcpynA(full + cut, fd.cFileName, sizeof(full) - cut);
                         if (DeleteFileA(full)) any = 1; else we = GetLastError();
                     } while (FindNextFileA(hf, &fd));
                     FindClose(hf);
                 }
-                if (any) OKCF(); else { SETAX(dos_lfn_err(we)); ERRCF(); }
+                if (any) OKCF(); else { SETAX(DosLfnError(we)); ERRCF(); }
             }
         } else if (al71 == 0x43) {              /* attributes and times: DS:DX, BL */
-            char fn[300];
-            uint8_t bl43 = (uint8_t)(R_BX & 0xFF);
+            CHAR fn[300];
+            BYTE bl43 = (BYTE)(R_BX & 0xFF);
             WIN32_FILE_ATTRIBUTE_DATA ad;
-            v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+            DosGuestPath(m, R_DS, R_DX, fn, sizeof(fn));
             if (bl43 == 0x00 || bl43 == 0x02 || bl43 == 0x04 || bl43 == 0x06 || bl43 == 0x08) {
                 if (!GetFileAttributesExA(fn, GetFileExInfoStandard, &ad)) {
-                    SETAX(dos_lfn_err(GetLastError())); ERRCF();
+                    SETAX(DosLfnError(GetLastError())); ERRCF();
                 } else if (bl43 == 0x00) {
                     /* CX = the attributes. ⚠ Masked to DOS's six bits as 4300h is (a file
                        with none set reads 0, not Win32's 80h NORMAL); unmeasured on stock. */
-                    SET16(R_CX, (uint16_t)(ad.dwFileAttributes & 0x3F));
-                    SETAX((uint16_t)(ad.dwFileAttributes & 0x3F));   /* stock: AX = CX too (p_lfn) */
+                    SET16(R_CX, (WORD)(ad.dwFileAttributes & 0x3F));
+                    SETAX((WORD)(ad.dwFileAttributes & 0x3F));       /* stock: AX = CX too (p_lfn) */
                     OKCF();
                 } else if (bl43 == 0x02) {
                     /* DX:AX = the size the file occupies (compressed). */
@@ -3022,7 +3022,7 @@ int dos_int21(dos_machine_t *m)
                     SetLastError(NO_ERROR);
                     lo = GetCompressedFileSizeA(fn, &hi);
                     if (lo == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) {
-                        SETAX(dos_lfn_err(GetLastError())); ERRCF();
+                        SETAX(DosLfnError(GetLastError())); ERRCF();
                     } else { SETAX(lo & 0xFFFF); SET16(R_DX, (lo >> 16) & 0xFFFF); OKCF(); }
                 } else {
                     /* 4: last write -> CX time, DI date. 6: last access -> DI date.
@@ -3031,8 +3031,8 @@ int dos_int21(dos_machine_t *m)
                     const FILETIME *ft = (bl43 == 0x04) ? &ad.ftLastWriteTime
                                        : (bl43 == 0x06) ? &ad.ftLastAccessTime
                                                         : &ad.ftCreationTime;
-                    uint16_t dd = 0, dt = 0; uint8_t cs = 0;
-                    if (!DosLfnFileTimeToDos(dos_ft_zone(ft, 1), &dd, &dt, &cs)) { dd = 0; dt = 0; cs = 0; }
+                    WORD dd = 0, dt = 0; BYTE cs = 0;
+                    if (!DosLfnFileTimeToDos(DosFileTimeZoned(ft, 1), &dd, &dt, &cs)) { dd = 0; dt = 0; cs = 0; }
                     SET16(R_DI, dd);
                     if (bl43 != 0x06) SET16(R_CX, dt);
                     if (bl43 == 0x08) SET16(R_SI, cs);
@@ -3042,19 +3042,19 @@ int dos_int21(dos_machine_t *m)
                 DWORD a = (DWORD)(R_CX & 0x3F);
                 if (!a) a = FILE_ATTRIBUTE_NORMAL;
                 if (SetFileAttributesA(fn, a)) OKCF();
-                else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                else { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             } else if (bl43 == 0x03 || bl43 == 0x05 || bl43 == 0x07) {
                 /* 3: last write = DI date, CX time. 5: last access = DI date (midnight).
                    7: creation = DI date, CX time, SI 10 ms units. Local in, UTC to Win32. */
-                uint16_t dd = (uint16_t)(R_DI & 0xFFFF);
-                uint16_t dt = (bl43 == 0x05) ? 0 : (uint16_t)(R_CX & 0xFFFF);
-                uint8_t  cs = (bl43 == 0x07) ? (uint8_t)(R_SI & 0xFF) : 0;
-                uint64_t v; FILETIME lf, ft; HANDLE hf;
+                WORD dd = (WORD)(R_DI & 0xFFFF);
+                WORD dt = (bl43 == 0x05) ? 0 : (WORD)(R_CX & 0xFFFF);
+                BYTE  cs = (bl43 == 0x07) ? (BYTE)(R_SI & 0xFF) : 0;
+                UINT64 v; FILETIME lf, ft; HANDLE hf;
                 if (!DosLfnDosToFileTime(dd, dt, cs, &v)) { SETAX(0x0D); ERRCF(); }   /* invalid data */
                 else {
                     lf.dwLowDateTime = (DWORD)v; lf.dwHighDateTime = (DWORD)(v >> 32);
-                    hf = dos_lfn_open_attr(fn);
-                    if (hf == INVALID_HANDLE_VALUE) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                    hf = DosLfnOpenAttributes(fn);
+                    if (hf == INVALID_HANDLE_VALUE) { SETAX(DosLfnError(GetLastError())); ERRCF(); }
                     else {
                         BOOL ok43 = LocalFileTimeToFileTime(&lf, &ft)
                                  && SetFileTime(hf, bl43 == 0x07 ? &ft : NULL,
@@ -3062,7 +3062,7 @@ int dos_int21(dos_machine_t *m)
                                                     bl43 == 0x03 ? &ft : NULL);
                         DWORD we = ok43 ? 0 : GetLastError();
                         CloseHandle(hf);
-                        if (ok43) OKCF(); else { SETAX(dos_lfn_err(we)); ERRCF(); }
+                        if (ok43) OKCF(); else { SETAX(DosLfnError(we)); ERRCF(); }
                     }
                 }
             } else { SETAX(1); ERRCF(); }       /* BL beyond 8: invalid function */
@@ -3072,23 +3072,23 @@ int dos_int21(dos_machine_t *m)
                short upper-case CDS form (#164), this hands back what GetLongPathNameA
                makes of it, case as the directories were created. No drive letter, no
                leading backslash, ASCIIZ (RBIL: buffer of 261 bytes). */
-            char cwd[300], lp[300];
+            CHAR cwd[300], lp[300];
             DWORD n = 0;
-            uint8_t dl = (uint8_t)(R_DX & 0xFF), cur = (uint8_t)(dos_cur_drive(m) + 1);
+            BYTE dl = (BYTE)(R_DX & 0xFF), cur = (BYTE)(DosCurrentDrive(m) + 1);
             if (dl == 0 || dl == cur) {
-                if (m->vdrive >= 0) {
-                    char spec[3]; spec[0] = (char)('A' + m->vdrive); spec[1] = ':'; spec[2] = 0;
+                if (m->VirtualDrive >= 0) {
+                    CHAR spec[3]; spec[0] = (CHAR)('A' + m->VirtualDrive); spec[1] = ':'; spec[2] = 0;
                     n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
                 } else n = GetCurrentDirectoryA(sizeof(cwd), cwd);
             } else if (dl <= 26 && (GetLogicalDrives() & (1u << (dl - 1)))) {
-                char spec[3]; spec[0] = (char)('A' + dl - 1); spec[1] = ':'; spec[2] = 0;
+                CHAR spec[3]; spec[0] = (CHAR)('A' + dl - 1); spec[1] = ':'; spec[2] = 0;
                 n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
             }
             if (n == 0 || n >= sizeof(cwd)) { SETAX(0x0F); ERRCF(); }
             else {
                 volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
-                const char *q = cwd;
-                int k = 0;
+                PCSTR q = cwd;
+                INT k = 0;
                 DWORD ln = GetLongPathNameA(cwd, lp, sizeof(lp));
                 if (ln && ln < sizeof(lp)) q = lp;
                 if (q[0] && q[1] == ':') q += 2;
@@ -3099,63 +3099,63 @@ int dos_int21(dos_machine_t *m)
             }
         } else if (al71 == 0x4E || al71 == 0x4F) {   /* find first / next -> ES:DI */
             volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            int dosfmt = (R_SI & 0xFFFF) == 1;
+            INT dosfmt = (R_SI & 0xFFFF) == 1;
             WIN32_FIND_DATAA fd;
             if (al71 == 0x4E) {
                 /* DS:DX pattern, matched against long AND short names (Win32's rule, and
                    the LFN API's); CL allowed / CH required attributes; SI time format. */
-                char pat[300]; HANDLE hf; unsigned slot;
-                uint8_t allow = (uint8_t)(R_CX & 0xFF), need = (uint8_t)((R_CX >> 8) & 0xFF);
-                v86_path(m, R_DS, R_DX, pat, sizeof(pat));
+                CHAR pat[300]; HANDLE hf; UINT slot;
+                BYTE allow = (BYTE)(R_CX & 0xFF), need = (BYTE)((R_CX >> 8) & 0xFF);
+                DosGuestPath(m, R_DS, R_DX, pat, sizeof(pat));
                 hf = FindFirstFileA(pat, &fd);
-                if (hf == INVALID_HANDLE_VALUE) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                if (hf == INVALID_HANDLE_VALUE) { SETAX(DosLfnError(GetLastError())); ERRCF(); }
                 else {
-                    int ok = 1;
+                    INT ok = 1;
                     while (!DosLfnAttributesOk(fd.dwFileAttributes, allow, need))
                         if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
                     if (!ok) { FindClose(hf); SETAX(18); ERRCF(); }   /* nothing passed CL/CH */
                     else {
-                        for (slot = 0; slot < DOS_LFN_FINDS && s_lfn_find[slot]; ++slot) {}
-                        if (slot >= DOS_LFN_FINDS) {                 /* full: recycle, round robin */
-                            slot = s_lfn_next++ % DOS_LFN_FINDS;
-                            FindClose(s_lfn_find[slot]);
+                        for (slot = 0; slot < DOS_LFN_FIND_SLOTS && g_DosLfnFinds[slot]; ++slot) {}
+                        if (slot >= DOS_LFN_FIND_SLOTS) {            /* full: recycle, round robin */
+                            slot = g_DosLfnNext++ % DOS_LFN_FIND_SLOTS;
+                            FindClose(g_DosLfnFinds[slot]);
                             tp = zput(tp, "  INT21 AX=714E search table full -- recycled handle 0x");
                             tp = zhex(tp, slot + 1); tp = zput(tp, "\r\n");
                         }
-                        s_lfn_find[slot] = hf; s_lfn_allow[slot] = allow; s_lfn_need[slot] = need;
-                        dos_lfn_find_fill(d, &fd, dosfmt);
+                        g_DosLfnFinds[slot] = hf; g_DosLfnAllow[slot] = allow; g_DosLfnNeed[slot] = need;
+                        DosLfnFindFill(d, &fd, dosfmt);
                         SETAX(slot + 1); SET16(R_CX, 0);              /* CX: no lossy names */
                         OKCF();
                     }
                 }
-                if (m->trace_all) { tp = zput(tp, "  INT21 AX=714E ["); tp = zput(tp, pat);
+                if (m->IsTraceAll) { tp = zput(tp, "  INT21 AX=714E ["); tp = zput(tp, pat);
                                     tp = zput(tp, (*pfl & 1) ? "] -> none\r\n" : "] -> found\r\n"); }
             } else {
-                unsigned slot = (unsigned)(R_BX & 0xFFFF) - 1u;
-                if (slot >= DOS_LFN_FINDS || !s_lfn_find[slot]) { SETAX(6); ERRCF(); }
+                UINT slot = (UINT)(R_BX & 0xFFFF) - 1u;
+                if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(6); ERRCF(); }
                 else {
-                    int ok = 0;
-                    while (FindNextFileA(s_lfn_find[slot], &fd))
-                        if (DosLfnAttributesOk(fd.dwFileAttributes, s_lfn_allow[slot], s_lfn_need[slot])) { ok = 1; break; }
+                    INT ok = 0;
+                    while (FindNextFileA(g_DosLfnFinds[slot], &fd))
+                        if (DosLfnAttributesOk(fd.dwFileAttributes, g_DosLfnAllow[slot], g_DosLfnNeed[slot])) { ok = 1; break; }
                     /* "No more files" leaves the handle OPEN: the program closes it, 71A1h. */
                     if (!ok) { SETAX(18); ERRCF(); }
-                    else { dos_lfn_find_fill(d, &fd, dosfmt); SET16(R_CX, 0); OKCF(); }
+                    else { DosLfnFindFill(d, &fd, dosfmt); SET16(R_CX, 0); OKCF(); }
                 }
             }
         } else if (al71 == 0xA1) {              /* find close: BX */
-            unsigned slot = (unsigned)(R_BX & 0xFFFF) - 1u;
-            if (slot >= DOS_LFN_FINDS || !s_lfn_find[slot]) { SETAX(6); ERRCF(); }
-            else { FindClose(s_lfn_find[slot]); s_lfn_find[slot] = 0; OKCF(); }
+            UINT slot = (UINT)(R_BX & 0xFFFF) - 1u;
+            if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(6); ERRCF(); }
+            else { FindClose(g_DosLfnFinds[slot]); g_DosLfnFinds[slot] = 0; OKCF(); }
         } else if (al71 == 0x60) {              /* truename: DS:SI -> ES:DI, CL form */
             /* CL=0 the full path (case kept -- 60h upper-cases, this does not: unmeasured),
                1 its SHORT form, 2 its LONG form. 1 and 2 ask the file system, so the
                path must exist; 0 does not (as 60h: "SUB\FILE.TXT" resolves anyway).
                CH (SUBST expansion) is not looked at: we create no SUBST of our own
                that a path would need unwrapping from. */
-            char in[300], full[300], out[300];
-            uint8_t cl = (uint8_t)(R_CX & 0xFF);
+            CHAR in[300], full[300], out[300];
+            BYTE cl = (BYTE)(R_CX & 0xFF);
             DWORD n;
-            v86_path(m, R_DS, R_SI, in, sizeof(in));
+            DosGuestPath(m, R_DS, R_SI, in, sizeof(in));
             n = GetFullPathNameA(in, sizeof(full), full, NULL);
             if (n == 0 || n >= sizeof(full)) { SETAX(3); ERRCF(); }
             else if (cl > 2) { SETAX(1); ERRCF(); }
@@ -3163,10 +3163,10 @@ int dos_int21(dos_machine_t *m)
                 if (cl == 0) { lstrcpynA(out, full, sizeof(out)); n = 1; }
                 else if (cl == 1) n = GetShortPathNameA(full, out, sizeof(out));
                 else              n = GetLongPathNameA(full, out, sizeof(out));
-                if (n == 0 || n >= sizeof(out)) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                if (n == 0 || n >= sizeof(out)) { SETAX(DosLfnError(GetLastError())); ERRCF(); }
                 else {
                     volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-                    int k = 0;
+                    INT k = 0;
                     while (out[k] && k < 260) { dd[k] = (BYTE)out[k]; ++k; }
                     dd[k] = 0;
                     SETAX(0);                           /* stock: AX=0000 (p_lfn) */
@@ -3180,20 +3180,20 @@ int dos_int21(dos_machine_t *m)
                CX = the longest component (255), DX = the longest path, MAX_PATH = 260.
                ES:DI gets the file-system name ("NTFS", "FAT") within CX bytes.
              ⚠ DX = 260 is RBIL's "usually"; stock may compute it. AX is left alone. */
-            char root[300], fs[64];
+            CHAR root[300], fs[64];
             DWORD maxc = 0, fl = 0;
-            v86_str(R_DS, R_DX, root, sizeof(root));
+            DosGuestString(R_DS, R_DX, root, sizeof(root));
             if (root[0] && root[1] == ':' && !root[2]) { root[2] = '\\'; root[3] = 0; }  /* Win32 wants "C:\" */
             fs[0] = 0;
             if (!GetVolumeInformationA(root[0] ? root : NULL, NULL, 0, NULL, &maxc, &fl, fs, sizeof(fs))) {
-                SETAX(dos_lfn_err(GetLastError())); ERRCF();
+                SETAX(DosLfnError(GetLastError())); ERRCF();
             } else {
                 volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-                unsigned cap = (unsigned)(R_CX & 0xFFFF), k;
+                UINT cap = (UINT)(R_CX & 0xFFFF), k;
                 for (k = 0; cap && k < cap - 1 && fs[k]; ++k) dd[k] = (BYTE)fs[k];
                 if (cap) dd[k] = 0;
-                SET16(R_BX, (uint16_t)((fl & 0x0007) | (fl & 0x8000) | 0x4000));
-                SET16(R_CX, (uint16_t)(maxc ? maxc : 255));
+                SET16(R_BX, (WORD)((fl & 0x0007) | (fl & 0x8000) | 0x4000));
+                SET16(R_CX, (WORD)(maxc ? maxc : 255));
                 SET16(R_DX, 260);
                 OKCF();
             }
@@ -3205,17 +3205,17 @@ int dos_int21(dos_machine_t *m)
                UTC, as a FILETIME is). */
             DWORD h = R_BX & 0xFFFF;
             BY_HANDLE_FILE_INFORMATION bi;
-            if (!DosHandleIsFile((void *const *)m->fh, h)) { SETAX(6); ERRCF(); }
-            else if (!GetFileInformationByHandle(m->fh[h], &bi)) { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+            if (!DosHandleIsFile((PVOID const *)m->FileHandles, h)) { SETAX(6); ERRCF(); }
+            else if (!GetFileInformationByHandle(m->FileHandles[h], &bi)) { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             else {
                 volatile BYTE *dd = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-                const BYTE *sb = (const BYTE *)&bi;
-                unsigned k;
+                PCBYTE sb = (PCBYTE)&bi;
+                UINT k;
                 for (k = 0; k < sizeof(bi) && k < 52; ++k) dd[k] = sb[k];
                 OKCF();
             }
         } else if (al71 == 0xA7) {              /* time conversion, BL */
-            uint8_t bla7 = (uint8_t)(R_BX & 0xFF);
+            BYTE bla7 = (BYTE)(R_BX & 0xFF);
             /* ⚠ THE ZONE IS A CHOICE, NOT A MEASUREMENT: a FILETIME here is taken as UTC
                  (what 714Eh SI=0 and 71A6h hand out) and the DOS side as LOCAL (what every
                  DOS time this host reports is), so FILETIME -> DOS converts to local time
@@ -3224,25 +3224,25 @@ int dos_int21(dos_machine_t *m)
                  differs by the offset if this is wrong. */
             if (bla7 == 0x00) {                 /* DS:SI -> QWORD FILETIME -> CX time, DX date, BH */
                 const volatile BYTE *q = (const volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
-                FILETIME ft; uint16_t dd, dt; uint8_t cs;
+                FILETIME ft; WORD dd, dt; BYTE cs;
                 ft.dwLowDateTime  = (DWORD)q[0] | ((DWORD)q[1] << 8) | ((DWORD)q[2] << 16) | ((DWORD)q[3] << 24);
                 ft.dwHighDateTime = (DWORD)q[4] | ((DWORD)q[5] << 8) | ((DWORD)q[6] << 16) | ((DWORD)q[7] << 24);
-                if (!DosLfnFileTimeToDos(dos_ft_zone(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
+                if (!DosLfnFileTimeToDos(DosFileTimeZoned(&ft, 1), &dd, &dt, &cs)) { SETAX(0x0D); ERRCF(); }
                 else {
                     SET16(R_CX, dt); SET16(R_DX, dd);
                     /* ⚠ INTENDED DIVERGENCE (s92): for an exact even second stock answers
                          BH=C7h (199) -- p_lfn lfn.71A7.ft2dos, one measurement -- where the
                          spec's 10-ms remainder is 0. The spec outranks one oracle reading. */
-                    SET16(R_BX, (uint16_t)((R_BX & 0xFF) | ((uint16_t)cs << 8)));
+                    SET16(R_BX, (WORD)((R_BX & 0xFF) | ((WORD)cs << 8)));
                     OKCF();
                 }
             } else if (bla7 == 0x01) {          /* CX time, DX date, BH -> ES:DI QWORD */
-                uint64_t v; FILETIME lf, ft;
-                if (!DosLfnDosToFileTime((uint16_t)(R_DX & 0xFFFF), (uint16_t)(R_CX & 0xFFFF),
-                                       (uint8_t)((R_BX >> 8) & 0xFF), &v)) { SETAX(0x0D); ERRCF(); }
+                UINT64 v; FILETIME lf, ft;
+                if (!DosLfnDosToFileTime((WORD)(R_DX & 0xFFFF), (WORD)(R_CX & 0xFFFF),
+                                       (BYTE)((R_BX >> 8) & 0xFF), &v)) { SETAX(0x0D); ERRCF(); }
                 else {
                     volatile BYTE *q = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-                    int k;
+                    INT k;
                     lf.dwLowDateTime = (DWORD)v; lf.dwHighDateTime = (DWORD)(v >> 32);
                     if (!LocalFileTimeToFileTime(&lf, &ft)) ft = lf;
                     for (k = 0; k < 4; ++k) {
@@ -3255,10 +3255,10 @@ int dos_int21(dos_machine_t *m)
         } else if (al71 == 0xA8) {              /* generate short name: DS:SI -> ES:DI, DH */
             /* DH=0: 11 bytes, FCB style; DH=1: "NAME.EXT" ASCIIZ. DL's character-set
                nibbles are not looked at -- see the code-page note at the helpers. */
-            char ln[300], s83[13], f11[11];
+            CHAR ln[300], s83[13], f11[11];
             volatile BYTE *dd = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
-            int k;
-            v86_str(R_DS, R_SI, ln, sizeof(ln));
+            INT k;
+            DosGuestString(R_DS, R_SI, ln, sizeof(ln));
             DosLfnShortName(ln, s83, f11);
             if (((R_DX >> 8) & 0xFF) == 0) for (k = 0; k < 11; ++k) dd[k] = (BYTE)f11[k];
             else { for (k = 0; s83[k]; ++k) dd[k] = (BYTE)s83[k]; dd[k] = 0; }
@@ -3269,16 +3269,16 @@ int dos_int21(dos_machine_t *m)
                created here is visible to the user's session until terminated or logoff.
              ⚠ TERMINATE ONLY UNDOES A SUBST -- a letter whose NT target is "\??\..." --
                never a real disk or a network mapping; anything else is 0Fh. */
-            uint8_t bh = (uint8_t)((R_BX >> 8) & 0xFF), bl = (uint8_t)(R_BX & 0xFF);
-            char spec[3], tgt[300];
-            uint8_t drv = (uint8_t)(bl ? bl - 1 : dos_cur_drive(m));
-            spec[0] = (char)('A' + (drv < 26 ? drv : 0)); spec[1] = ':'; spec[2] = 0;
+            BYTE bh = (BYTE)((R_BX >> 8) & 0xFF), bl = (BYTE)(R_BX & 0xFF);
+            CHAR spec[3], tgt[300];
+            BYTE drv = (BYTE)(bl ? bl - 1 : DosCurrentDrive(m));
+            spec[0] = (CHAR)('A' + (drv < 26 ? drv : 0)); spec[1] = ':'; spec[2] = 0;
             tgt[0] = 0;
             if (drv >= 26 || bh > 2) { SETAX(bh > 2 ? 1 : 0x0F); ERRCF(); }
             else if (bh == 0) {
-                char in[300], full[300];
+                CHAR in[300], full[300];
                 DWORD n;
-                v86_path(m, R_DS, R_DX, in, sizeof(in));
+                DosGuestPath(m, R_DS, R_DX, in, sizeof(in));
                 n = GetFullPathNameA(in, sizeof(full), full, NULL);
                 if (GetLogicalDrives() & (1u << drv)) { SETAX(0x0F); ERRCF(); }     /* letter in use */
                 else if (n == 0 || n >= sizeof(full)) { SETAX(3); ERRCF(); }
@@ -3286,17 +3286,17 @@ int dos_int21(dos_machine_t *m)
                     OKCF();
                     tp = zput(tp, "  INT21 AX=71AA SUBST "); tp = zput(tp, spec);
                     tp = zput(tp, " = "); tp = zput(tp, full); tp = zput(tp, " (a host drive)\r\n");
-                } else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                } else { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             } else {
                 DWORD n = QueryDosDeviceA(spec, tgt, sizeof(tgt));
-                int is_subst = n > 4 && tgt[0] == '\\' && tgt[1] == '?' && tgt[2] == '?' && tgt[3] == '\\';
+                INT is_subst = n > 4 && tgt[0] == '\\' && tgt[1] == '?' && tgt[2] == '?' && tgt[3] == '\\';
                 if (!is_subst) { SETAX(bh == 2 ? 0x89 : 0x0F); ERRCF(); }   /* stock query: 89h (p_lfn) */
                 else if (bh == 1) {
                     if (DefineDosDeviceA(DDD_REMOVE_DEFINITION, spec, NULL)) OKCF();
-                    else { SETAX(dos_lfn_err(GetLastError())); ERRCF(); }
+                    else { SETAX(DosLfnError(GetLastError())); ERRCF(); }
                 } else {
                     volatile BYTE *dd = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-                    int k = 0;
+                    INT k = 0;
                     while (tgt[4 + k] && k < 260) { dd[k] = (BYTE)tgt[4 + k]; ++k; }
                     dd[k] = 0;
                     OKCF();
@@ -3311,12 +3311,12 @@ int dos_int21(dos_machine_t *m)
             SETAX(0x0001);
             ERRCF();
         }
-        if (m->trace_all) {
+        if (m->IsTraceAll) {
             tp = zput(tp, "  INT21 AX=71"); tp = zhexb(tp, al71);
             tp = zput(tp, " -> AX=0x"); tp = zhex(tp, R_AX & 0xFFFF);
             tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
         }
-    } else if (!dos622_defines(ah)) {
+    } else if (!DosIsDefinedBy622(ah)) {
         /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
            return with AL cleared and CF clear, touching nothing else.  Measured on
            the oracle (tests/probes/dos/p_defs.asm) -- AH=6Dh..E0h, plus the
@@ -3333,7 +3333,7 @@ int dos_int21(dos_machine_t *m)
         SETAX(R_AX & 0xFF00);
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
         tp = zput(tp, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
-        m->noop21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
+        m->Undefined[(ah & 0xFF) >> 3] |= (BYTE)(1u << (ah & 7));
         OKCF();
     } else {                                    /* unhandled service */
         /* GH #27. Recorded as well as logged, so the STAGE2 block can list every
@@ -3342,10 +3342,10 @@ int dos_int21(dos_machine_t *m)
            not written it yet.  CF=1 is right for that: a quiet "success" would
            tell the program its request worked when nothing happened.  Functions
            DOS does not define are handled above and stay silent, matching DOS. */
-        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (unsigned)ah);
-        tp = zput(tp, " AL=0x"); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (UINT)ah);
+        tp = zput(tp, " AL=0x"); tp = zhexb(tp, (UINT)(R_AX & 0xFF));
         tp = zput(tp, " UNIMPLEMENTED\r\n");
-        m->unimpl21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
+        m->Unimplemented[(ah & 0xFF) >> 3] |= (BYTE)(1u << (ah & 7));
         ERRCF();
     }
 
@@ -3353,7 +3353,7 @@ int dos_int21(dos_machine_t *m)
        than at each of the ~20 error sites -- CF and AX are already exactly what
        the guest is about to see. 59h itself is excluded so reading the error
        does not overwrite it. */
-    if (ah != 0x59 && (*pfl & 1)) m->last_err = (uint16_t)(R_AX & 0xFFFF);
+    if (ah != 0x59 && (*pfl & 1)) m->LastError = (WORD)(R_AX & 0xFFFF);
 
     /* ── #34: A HARDWARE ERROR IS A CRITICAL ERROR. Codes 19-31 (not ready, write-
          protected, ...) go to the program's INT 24h before the call returns; the host
@@ -3371,18 +3371,18 @@ int dos_int21(dos_machine_t *m)
        3Bh/3Ah -- whose code serves them -- say 3. */
     if (lfn_alias && (lfn_alias == 0x3A || lfn_alias == 0x3B) && (*pfl & 1)
         && (R_AX & 0xFFFF) == 3) SETAX(2);
-    if ((*pfl & 1) && m->crit_raise_ok && !g_dos_int21_pm && !m->crit_active
-        && DosCritIsHardwareError((unsigned short)(R_AX & 0xFFFF))) {
+    if ((*pfl & 1) && m->CanRaiseCrit && !g_DosInt21IsProtectedMode && !m->IsCritActive
+        && DosCritIsHardwareError((WORD)(R_AX & 0xFFFF))) {
         const volatile BYTE *pn = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-        int pathcall = (ah == 0x3C || ah == 0x3D || ah == 0x4E || ah == 0x39 || ah == 0x3A
+        INT pathcall = (ah == 0x3C || ah == 0x3D || ah == 0x4E || ah == 0x39 || ah == 0x3A
                         || ah == 0x3B || ah == 0x41 || ah == 0x43 || ah == 0x5A || ah == 0x5B);
-        uint8_t drv = dos_cur_drive(m);
-        if (pathcall && pn[1] == ':') drv = (uint8_t)((pn[0] | 0x20) - 'a');
-        if ((ah == 0x3F || ah == 0x40) && s_rw_drive >= 0) drv = (uint8_t)s_rw_drive;
-        m->crit_pending = 1;
-        m->crit_al = drv;
-        m->crit_ah = DosCritInt24Ah((unsigned char)ah);
-        m->crit_code = (uint8_t)((R_AX & 0xFF) - 19);
+        BYTE drv = DosCurrentDrive(m);
+        if (pathcall && pn[1] == ':') drv = (BYTE)((pn[0] | 0x20) - 'a');
+        if ((ah == 0x3F || ah == 0x40) && g_DosReadWriteDrive >= 0) drv = (BYTE)g_DosReadWriteDrive;
+        m->IsCritPending = 1;
+        m->CritAl = drv;
+        m->CritAh = DosCritInt24Ah((BYTE)ah);
+        m->CritCode = (BYTE)((R_AX & 0xFF) - 19);
     }
     /* ── #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
          FAIL. Three such places: (1) inside the program's own INT 24h handler -- DOS
@@ -3405,29 +3405,29 @@ int dos_int21(dos_machine_t *m)
          for or measured. 3Fh/40h had no previous answer worth keeping (it was a false
          success). */
     else if ((*pfl & 1) && (ah == 0x3F || ah == 0x40)
-             && DosCritIsHardwareError((unsigned short)(R_AX & 0xFFFF))) {
-        uint16_t code = (uint16_t)(R_AX & 0xFFFF);
-        SETAX(DosCritFailAx((unsigned char)ah, (unsigned char)(code - 19)));
-        m->last_err = DOS_ERR_FAIL_I24;
+             && DosCritIsHardwareError((WORD)(R_AX & 0xFFFF))) {
+        WORD code = (WORD)(R_AX & 0xFFFF);
+        SETAX(DosCritFailAx((BYTE)ah, (BYTE)(code - 19)));
+        m->LastError = DOS_ERR_FAIL_I24;
         tp = zput(tp, "  INT24 not raised (");
-        tp = zput(tp, m->crit_active ? "inside the handler" : g_dos_int21_pm ? "DPMI client"
+        tp = zput(tp, m->IsCritActive ? "inside the handler" : g_DosInt21IsProtectedMode ? "DPMI client"
                                      : "nested real-mode call");
-        tp = zput(tp, "): error 0x"); tp = zhexb(tp, (unsigned)code);
+        tp = zput(tp, "): error 0x"); tp = zhexb(tp, (UINT)code);
         tp = zput(tp, " answered as FAIL -> AX=0x"); tp = zhex(tp, R_AX & 0xFFFF);
         tp = zput(tp, ", 59h=53h\r\n");
     }
 
     /* ── s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode
          the flags are not on a V86 stack and a DPMI client's JFT is not ours to show. */
-    if (!g_dos_int21_pm && !(*pfl & 1)) {
+    if (!g_DosInt21IsProtectedMode && !(*pfl & 1)) {
         if (ah == 0x3C || ah == 0x3D || ah == 0x5A || ah == 0x5B || ah == 0x6C)
-            dos_jft_put(m, (unsigned)(R_AX & 0xFFFF), dos_sft_val(m, (unsigned)(R_AX & 0xFFFF)));
+            DosJftPut(m, (UINT)(R_AX & 0xFFFF), DosSftValue(m, (UINT)(R_AX & 0xFFFF)));
         else if (ah == 0x45 || ah == 0x46) {
-            unsigned src = (unsigned)(R_BX & 0xFFFF);
-            unsigned dst = (ah == 0x45) ? (unsigned)(R_AX & 0xFFFF) : (unsigned)(R_CX & 0xFFFF);
-            dos_jft_put(m, dst, dos_sft_val(m, src));
+            UINT src = (UINT)(R_BX & 0xFFFF);
+            UINT dst = (ah == 0x45) ? (UINT)(R_AX & 0xFFFF) : (UINT)(R_CX & 0xFFFF);
+            DosJftPut(m, dst, DosSftValue(m, src));
         } else if (ah == 0x3E)
-            dos_jft_put(m, (unsigned)(R_BX & 0xFFFF), 0xFF);
+            DosJftPut(m, (UINT)(R_BX & 0xFFFF), 0xFF);
     }
 
     /* ── AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING. ──────────────
@@ -3440,14 +3440,14 @@ int dos_int21(dos_machine_t *m)
          one-to-one and a reader can line `21:xx/yy` up with the `->` under it. The cap
          has to be shared: capping only the inbound half would leave a file of orphaned
          results, which is worse than either. */
-    if (m->trace_all && ah != 0x0A && m->trace_n <= DOS_TRACE_MAX) {
-        tp = zput(tp, "     -> ax="); tp = zhexb(tp, (unsigned)((R_AX >> 8) & 0xFF));
-        tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
-        tp = zput(tp, " cf="); tp = zhexb(tp, (unsigned)(*pfl & 1));
+    if (m->IsTraceAll && ah != 0x0A && m->TraceCount <= DOS_TRACE_MAX) {
+        tp = zput(tp, "     -> ax="); tp = zhexb(tp, (UINT)((R_AX >> 8) & 0xFF));
+        tp = zhexb(tp, (UINT)(R_AX & 0xFF));
+        tp = zput(tp, " cf="); tp = zhexb(tp, (UINT)(*pfl & 1));
         tp = zput(tp, "\r\n");
     }
 
-    m->tp = tp;
+    m->TraceCursor = tp;
     #undef R_AX
     #undef R_BX
     #undef R_CX
