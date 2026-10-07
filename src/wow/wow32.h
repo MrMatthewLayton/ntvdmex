@@ -108,6 +108,10 @@
 
 typedef DWORD (*PWOW32_SELECTOR_TO_LINEAR)(WORD selector, PVOID context);
 
+/* What a service may ask the host to push for a 16-bit callback (see below). */
+#define WOW32_CALLBACK_MAX_ARGUMENTS 6
+#define WOW32_CALLBACK_BLOB_MAX      64
+
 typedef struct _WOW32_FRAME {
     volatile BYTE *FrameBase;                       /* linear address of SS:BP inside the thunk */
     WORD             Id;
@@ -150,7 +154,7 @@ typedef struct _WOW32_FRAME {
     INT              IsCallbackAllowed;               /* 1 = the host can call 16-bit code now   */
     DWORD            CallbackProcedure;               /* 16:16 procedure to call; 0 = none asked */
     WORD             CallbackDataSelector;            /* the DS it must be entered with          */
-    WORD             CallbackArguments[6];            /* words to push, in DECLARED order        */
+    WORD             CallbackArguments[WOW32_CALLBACK_MAX_ARGUMENTS];            /* words to push, in DECLARED order        */
     INT              CallbackArgumentCount;
     INT              CallbackReturnMode;              /* WOWCALL_RET_KEEP / _RESULT -- whose
                                         answer the caller's return value is    */
@@ -169,7 +173,7 @@ typedef struct _WOW32_FRAME {
        `CallbackBlobArgument` is the index in CallbackArguments[] of the HIGH word of the far pointer
          that should be made to point at it -- filled in by WowCallEnter, which
          is the first code that knows what SS:SP will be. -1 = no blob. */
-    BYTE             CallbackBlob[64];
+    BYTE             CallbackBlob[WOW32_CALLBACK_BLOB_MAX];
     INT              CallbackBlobLength;              /* bytes of CallbackBlob to place; 0 = none      */
     INT              CallbackBlobArgument;            /* CallbackArguments[] index to receive SEG:OFF, or -1  */
     /* ── ★★★ "DO NOT RETURN TO THE CALLER AT ALL." (session 57) ────────────────
@@ -212,6 +216,8 @@ static VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 #define WOW_HEX_BYTE_DIGITS  2
 #define WOW_HEX_WORD_DIGITS  4
 #define WOW_HEX_DWORD_DIGITS 8
+#define WOW_HEX_DIGIT_BITS   4
+#define WOW_HEX_DIGIT_MASK   0xF
 /* Taking WORDs and DWORDs apart, and putting them back, as every Win16 structure needs. */
 #define WOW_BYTE_SHIFT       8
 #define WOW_WORD_SHIFT       16
@@ -225,7 +231,7 @@ static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT 
     INT index;
     for (index = digits - 1; index >= 0; --index) {
         if (*length >= capacity - 1) break;
-        buffer[(*length)++] = hexDigits[(value >> (index * 4)) & 0xF];
+        buffer[(*length)++] = hexDigits[(value >> (index * WOW_HEX_DIGIT_BITS)) & WOW_HEX_DIGIT_MASK];
     }
     buffer[*length] = 0;
 }
@@ -242,26 +248,26 @@ static VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text)
 
 static WORD Wow32PeekWord(volatile BYTE *bytes)
 {
-    return (WORD)(bytes[0] | (bytes[1] << 8));
+    return (WORD)(bytes[0] | (bytes[1] << WOW_BYTE_SHIFT));
 }
 
 static VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
 {
-    bytes[0] = (BYTE)(value & 0xFF);
-    bytes[1] = (BYTE)(value >> 8);
+    bytes[0] = (BYTE)(value & WOW_BYTE_MASK);
+    bytes[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
 }
 
 /* Argument WORD at byte offset `off` into the argument block. */
 static WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset)
 {
-    if (offset < 0 || offset + 2 > (INT)frame->ArgumentBytes) return 0;
+    if (offset < 0 || offset + WOW_WORD_BYTES > (INT)frame->ArgumentBytes) return 0;
     return Wow32PeekWord(frame->FrameBase + WOW32_OFF_ARGS + offset);
 }
 
 /* Argument DWORD at byte offset `off`. */
 static DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset)
 {
-    return (DWORD)Wow32ArgWord(frame, offset) | ((DWORD)Wow32ArgWord(frame, offset + 2) << 16);
+    return (DWORD)Wow32ArgWord(frame, offset) | ((DWORD)Wow32ArgWord(frame, offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
 }
 
 /* A 16:16 far pointer argument, resolved to a host linear address.
@@ -270,12 +276,12 @@ static DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset)
 static volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
 {
     DWORD farPointer = Wow32ArgDword(frame, offset);
-    WORD  selector = (WORD)(farPointer >> 16);
+    WORD  selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
     if (!base) return NULL;
-    return (volatile BYTE *)(ULONG_PTR)(base + (farPointer & 0xFFFF));
+    return (volatile BYTE *)(ULONG_PTR)(base + (farPointer & WOW_WORD_MASK));
 }
 
 /* Copy a NUL-terminated guest string at a far-pointer argument into a host buffer.
@@ -301,13 +307,13 @@ static INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capa
 static volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset)
 {
     DWORD farPointer  = (DWORD)Wow32PeekWord(base + offset)
-              | ((DWORD)Wow32PeekWord(base + offset + 2) << 16);
-    WORD  selector = (WORD)(farPointer >> 16);
+              | ((DWORD)Wow32PeekWord(base + offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+    WORD  selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
     DWORD linear;
     if (!selector || !frame->SelectorToLinear) return NULL;
     linear = frame->SelectorToLinear(selector, frame->Context);
     if (!linear) return NULL;
-    return (volatile BYTE *)(ULONG_PTR)(linear + (farPointer & 0xFFFF));
+    return (volatile BYTE *)(ULONG_PTR)(linear + (farPointer & WOW_WORD_MASK));
 }
 
 /* Copy a host string into a guest buffer described by a POINTER/CAPACITY PAIR,
@@ -333,8 +339,8 @@ static INT Wow32FarPut(PCWOW32_FRAME frame, volatile BYTE *base,
 /* ★ The return value goes in the stack hole, NOT in AX/DX -- see the header note. */
 static VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
 {
-    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET,     (WORD)(value & 0xFFFF));
-    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET + 2, (WORD)(value >> 16));
+    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET,     (WORD)(value & WOW_WORD_MASK));
+    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
     frame->Result = value;
 }
 
@@ -350,7 +356,7 @@ static VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
 static DWORD Wow32PeekReturn(PCWOW32_FRAME frame)
 {
     return (DWORD)Wow32PeekWord(frame->FrameBase + WOW32_OFF_RET)
-         | ((DWORD)Wow32PeekWord(frame->FrameBase + WOW32_OFF_RET + 2) << 16);
+         | ((DWORD)Wow32PeekWord(frame->FrameBase + WOW32_OFF_RET + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
 }
 
 /* ── ★★ WHAT AN UNIMPLEMENTED CALL ANSWERS. (GH #128, session 36) ─────────────
@@ -560,8 +566,11 @@ typedef struct _WOW32_DOSDATA {
      comes from target.txt, which is the harness's channel for the same fact.
    ★ EMPTY IS A LEGITIMATE STATE and it has a correct answer: "no command", which
      is NOT the same as an error. See the 0x70 case. */
-static CHAR g_WowCommandProgram[512] = { 0 };   /* full path of the Win16 program   */
-static CHAR g_WowCommandArguments[192] = { 0 };   /* its arguments, without a leading space */
+#define WOW32_COMMAND_PROGRAM_MAX   512
+#define WOW32_COMMAND_ARGUMENTS_MAX 192
+#define WOW32_SHORT_PATH_BUFFER     (MAX_PATH + 16)
+static CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program   */
+static CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
 static CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
 static VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 static INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
@@ -575,7 +584,7 @@ static INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver o
      here. A path with no short form (the API returns 0) is passed as given. */
 static VOID WowShorten(PSTR path, UINT capacity)
 {
-    CHAR shortPath[MAX_PATH + 16]; DWORD length = 0;
+    CHAR shortPath[WOW32_SHORT_PATH_BUFFER]; DWORD length = 0;
     if (path[0]) length = GetShortPathNameA(path, shortPath, sizeof shortPath);
     if (length && length < sizeof shortPath && length < capacity) { UINT index; for (index = 0; index <= length; ++index) path[index] = shortPath[index]; }
 }
@@ -720,23 +729,24 @@ static INT Wow32MayDecline(WORD id, WORD callSite)
    ⚠ The mask's bit order is taken from the probe run against stock
      (tests/probes/win16/w_gthunk, 16/16), not from the documentation. */
 #define WOW_GT_MAX_PARAMETERS 32
+#define WOW32_RAW_ARGUMENTS_MAX 0x200   /* the furthest a raw argument read may reach */
 static WORD Wow32RawArgWord(PCWOW32_FRAME frame, INT offset)
 {
-    if (offset < 0 || offset > 0x200) return 0;
+    if (offset < 0 || offset > WOW32_RAW_ARGUMENTS_MAX) return 0;
     return Wow32PeekWord(frame->FrameBase + WOW32_OFF_ARGS + offset);
 }
 static DWORD Wow32RawArgDword(PCWOW32_FRAME frame, INT offset)
 {
-    return (DWORD)Wow32RawArgWord(frame, offset) | ((DWORD)Wow32RawArgWord(frame, offset + 2) << 16);
+    return (DWORD)Wow32RawArgWord(frame, offset) | ((DWORD)Wow32RawArgWord(frame, offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
 }
 /* A protected-mode 16:16 far pointer -> the host address it names (0 for NULL). */
 static DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
 {
-    WORD selector = (WORD)(farPointer >> 16);
+    WORD selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return 0;
     base = frame->SelectorToLinear(selector, frame->Context);
-    return base ? base + (farPointer & 0xFFFF) : 0;
+    return base ? base + (farPointer & WOW_WORD_MASK) : 0;
 }
 /* Call a 32-bit function with n DWORDs, a[0] first. ESP is restored by hand, so a
    STDCALL target (which pops) and a CDECL one (which does not) both come back
