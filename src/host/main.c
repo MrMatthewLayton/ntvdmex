@@ -423,7 +423,7 @@ static DOS_SAFE_SKIPS g_safe;           /* s90 #132: all zero unless SAFE MODE (
      construction -- a faster box presents more. Measured by cpubench.asm; absent =
      CPUSPEED_REF_MHZ_DEFAULT. A knob, so re-calibrating is a run rather than a build. */
 #define CPUREF_PATH      CFG_("cpuref.txt")
-/* Decimal index into CPUSPEED_MHZ, overriding the registry for one run. This is how
+/* Decimal index into g_CpuSpeedMhz, overriding the registry for one run. This is how
    the rig sweeps every speed in a single batch without touching HKCU. */
 #define CPUSPD_PATH      CFG_("cpuspd.txt")
 /* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
@@ -6633,9 +6633,9 @@ static void cpuspd_tl_dump(const char *tag)
    the file knob cannot each arrive at a different answer. */
 static void cpuspd_recompute(void)
 {
-    LONG bp = (LONG)cpuspeed_duty_bp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz);
+    LONG bp = (LONG)CpuSpeedDutyBp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz);
     InterlockedExchange(&g_cpuspd_duty, bp);
-    InterlockedExchange(&g_cpuspd_duty_rm, (LONG)cpuspeed_duty_rm_bp((unsigned)bp));   /* #225 */
+    InterlockedExchange(&g_cpuspd_duty_rm, (LONG)CpuSpeedRealModeDutyBp((unsigned)bp));   /* #225 */
     /* Pay for the per-trap timestamping only while it is actually being used. */
     InterlockedExchange(&g_exec_timing_on, bp < 10000 ? 1 : 0);
     /* #225: a held guest must still see every vertical retrace (see vbl_owe_on). */
@@ -6699,12 +6699,12 @@ static void cpuaff_apply(void)
 #define CPUSPD_RUN_MIN_US 100ul   /* #225: shortest spun run slice */
 static DWORD WINAPI cpuspeed_thread(LPVOID param)
 {
-    /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is cpuspeed_step (the
+    /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
          long note in cpuspeed.h); this loop only FEEDS it two measured numbers and
          applies the hold it returns. It replaced ~150 lines of debt bookkeeping
          (owed_us + hold_us + pay_ms + two baselines that fell out of step and leaked
          TWICE) with one invariant: guest EXECUTION time E held to `duty` of WALL time
-         T. A deterministic test drives the identical cpuspeed_step against a
+         T. A deterministic test drives the identical CpuSpeedStep against a
          simulated clock (tests/unit/cpuspeed_test.c), so the accuracy is proven
          off-hardware rather than argued from a rig number that reads the guest's own
          throttled clock.
@@ -6715,7 +6715,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
          honest delivered speed -- the port-trap ceiling is not a special case, it is
          E naturally landing below T.
        ► T IS WINDOWED and rebaselines only when the guest is at or ahead of target
-         (cpuspeed_step's *reset), which banks no credit for having run slow, absorbs
+         (CpuSpeedStep's *reset), which banks no credit for having run slow, absorbs
          a stall, and keeps the 64-bit totals small. */
     LARGE_INTEGER w_win;                 /* wall origin of the current window         */
     LARGE_INTEGER w_run0;                /* wall clock at the last resume (run start)  */
@@ -6735,7 +6735,7 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
     w_run0 = w_win;
     e_run0 = exec_us_now();
     while (g_running) {
-        /* #225: a real-mode program has its own share -- see cpuspeed_duty_rm_bp. g_dpmi_pm
+        /* #225: a real-mode program has its own share -- see CpuSpeedRealModeDutyBp. g_dpmi_pm
            is set for the whole life of a protected-mode client, so this does not flip at
            every reflected real-mode interrupt (a flip would rebaseline the window). */
         unsigned duty = (unsigned)InterlockedCompareExchange(g_dpmi_pm ? &g_cpuspd_duty
@@ -6885,8 +6885,8 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                     if (!clock_set) { g_start_ms = GetTickCount(); clock_set = 1; }
                     E += (unsigned long long)dexec;
                     T = qpc_us64(now.QuadPart - w_win.QuadPart);  /* window wall, holds in */
-                    hold_us = cpuspeed_step(E, T, duty, CAP_US, &reset);
-                    {   unsigned long long raw = cpuspeed_hold_for(E, T, duty);
+                    hold_us = CpuSpeedStep(E, T, duty, CAP_US, &reset);
+                    {   unsigned long long raw = CpuSpeedHoldFor(E, T, duty);
                         if (raw > g_cpuspd_debt_max_us) g_cpuspd_debt_max_us = raw > 0xFFFFFFFFull ? 0xFFFFFFFFu : (DWORD)raw;
                         if (hold_us > g_cpuspd_hold_max_us) g_cpuspd_hold_max_us = (DWORD)hold_us; }
                     g_cpuspd_ran_us   = dexec;
@@ -10574,7 +10574,7 @@ static HMENU build_menu(void)
     menu_combo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     {   unsigned n;                                  /* #224: faster than this PC -> grey */
         for (n = 1; n < CPUSPEED_COUNT; ++n)
-            if (!cpuspeed_available(n, host_cpu_mhz()))
+            if (!CpuSpeedIsAvailable(n, host_cpu_mhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + n, MF_BYCOMMAND | MF_GRAYED); }
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
@@ -10930,7 +10930,7 @@ static void status_set_parts(const char *const *txt, int n)
 /* The CPU speed as the strip shows it: the clock only, no CPU name (user, s84). */
 static void status_speed_text(char *out)
 {
-    unsigned mhz = ((unsigned)g_cpuspd_idx < CPUSPEED_COUNT) ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u;
+    unsigned mhz = ((unsigned)g_cpuspd_idx < CPUSPEED_COUNT) ? g_CpuSpeedMhz[g_cpuspd_idx] : 0u;
     char *q = out;
     if (!mhz) { LogPut(out, "Unlimited"); return; }
     if (mhz >= 1000u && mhz % 1000u == 0u) { q = LogDecimal(q, mhz / 1000u); LogPut(q, " GHz"); }
@@ -13032,7 +13032,7 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
         DRAWITEMSTRUCT *di = (DRAWITEMSTRUCT *)lp;
         char t[96];
         int sel = (di->itemState & ODS_SELECTED) != 0;
-        int ok  = (int)di->itemID < 0 || cpuspeed_available((unsigned)di->itemID, host_cpu_mhz());
+        int ok  = (int)di->itemID < 0 || CpuSpeedIsAvailable((unsigned)di->itemID, host_cpu_mhz());
         FillRect(di->hDC, &di->rcItem, GetSysColorBrush(sel && ok ? COLOR_HIGHLIGHT : COLOR_WINDOW));
         if ((int)di->itemID >= 0) {
             SendMessageA(di->hwndItem, CB_GETLBTEXT, di->itemID, (LPARAM)t);
@@ -13057,7 +13057,7 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
     if (msg == WM_COMMAND && LOWORD(wp) == IDC_S_SPEEDMODE && HIWORD(wp) == CBN_SELCHANGE) {
         static LRESULT last_ok = 0;
         LRESULT s = SendMessageA((HWND)lp, CB_GETCURSEL, 0, 0);
-        if (s != CB_ERR && !cpuspeed_available((unsigned)s, host_cpu_mhz()))
+        if (s != CB_ERR && !CpuSpeedIsAvailable((unsigned)s, host_cpu_mhz()))
             SendMessageA((HWND)lp, CB_SETCURSEL, (WPARAM)last_ok, 0);
         else if (s != CB_ERR) last_ok = s;
         return TRUE;
@@ -14427,7 +14427,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = LogPut(cq, " duty_bp=");     cq = LogHex(cq, (DWORD)g_cpuspd_duty);
             cq = LogPut(cq, " duty_rm_bp=");  cq = LogHex(cq, (DWORD)g_cpuspd_duty_rm);
             cq = LogPut(cq, " pm=");          cq = LogHex(cq, (DWORD)g_dpmi_pm);
-            cq = LogPut(cq, " delivered_bp="); cq = LogHex(cq, cpuspeed_delivered_bp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
+            cq = LogPut(cq, " delivered_bp="); cq = LogHex(cq, CpuSpeedDeliveredBp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
             cq = LogPut(cq, " exec_ms=");     cq = LogHex(cq, g_cpuspd_run_ms);
             cq = LogPut(cq, " held_ms=");     cq = LogHex(cq, g_cpuspd_held_ms);
             cq = LogPut(cq, " periods=");     cq = LogHex(cq, g_cpuspd_periods);
@@ -17178,8 +17178,8 @@ static long host_interp(volatile BYTE *tib, long cap)
      waits and the audio pump is untouched. */
 static long host_interp_paced(volatile BYTE *tib, long cap)
 {
-    static cpuspeed_pace s_pace;              /* exec thread only -- no lock needed */
-    unsigned long ips = cpuspeed_ips((unsigned)g_cpuspd_idx);
+    static CPUSPEED_PACE s_pace;              /* exec thread only -- no lock needed */
+    unsigned long ips = CpuSpeedInstructionsPerSecond((unsigned)g_cpuspd_idx);
     LARGE_INTEGER a, b;
     long ran;
     int ms;
@@ -17188,7 +17188,7 @@ static long host_interp_paced(volatile BYTE *tib, long cap)
     ran = host_interp(tib, cap);
     QueryPerformanceCounter(&b);
     if (ran <= 0) return ran;
-    ms = cpuspeed_charge(&s_pace, (unsigned long)ran, ips,
+    ms = CpuSpeedCharge(&s_pace, (unsigned long)ran, ips,
                          (long long)qpc_us(b.QuadPart - a.QuadPart));
     if (ms > 0) { g_cpuspd_held_ms += (DWORD)ms; Sleep((DWORD)ms); }
     return ran;
@@ -36399,7 +36399,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = LogPut(p, "\r\nSTAGE2: host cpu ~MHz="); p = LogDecimal(p, host_cpu_mhz());   /* #224 */
       p = LogPut(p, "\r\nSTAGE2: cpuspeed idx="); p = LogHex(p, (DWORD)g_cpuspd_idx);
       p = LogPut(p, " mhz="); p = LogHex(p, g_cpuspd_idx < CPUSPEED_COUNT
-                                        ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u);
+                                        ? g_CpuSpeedMhz[g_cpuspd_idx] : 0u);
       p = LogPut(p, " ref_mhz="); p = LogHex(p, g_cpuspd_ref_mhz);
       /* ── ★ REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
            The throttle's contract is that guest execution is `duty` of wall time.
@@ -36407,7 +36407,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            EXECUTION over lifetime WALL -- and it equals `duty_bp` whenever the
            setting is reachable (below the port-trap ceiling and inside the hold cap),
            disagreeing in the open when it is not. The control law that ties them
-           together is cpuspeed_step, proven by a DETERMINISTIC test off-hardware
+           together is CpuSpeedStep, proven by a DETERMINISTIC test off-hardware
            (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
            through the guest's own throttled clock.
          ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
@@ -36419,7 +36419,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { DWORD wall_ms = GetTickCount() - g_start_ms;
         /* Units cancel in the ratio, so ms goes straight in. */
         p = LogPut(p, " delivered_bp=");
-        p = LogHex(p, cpuspeed_delivered_bp(g_cpuspd_run_ms, wall_ms));
+        p = LogHex(p, CpuSpeedDeliveredBp(g_cpuspd_run_ms, wall_ms));
         p = LogPut(p, " exec_ms="); p = LogHex(p, g_cpuspd_run_ms);
         p = LogPut(p, " wall_ms="); p = LogHex(p, wall_ms); }
       p = LogPut(p, " held_ms="); p = LogHex(p, g_cpuspd_held_ms);

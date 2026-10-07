@@ -20,7 +20,7 @@
 static unsigned idx_of(unsigned mhz)
 {
     unsigned i;
-    for (i = 0; i < CPUSPEED_COUNT; ++i) if (CPUSPEED_MHZ[i] == mhz) return i;
+    for (i = 0; i < CPUSPEED_COUNT; ++i) if (g_CpuSpeedMhz[i] == mhz) return i;
     return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
 
@@ -29,7 +29,7 @@ static int total = 0, fails = 0;
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
 /* ── ★★★ THE DETERMINISTIC HEART OF THE THROTTLE. ─────────────────────────────────
- *  cpuspeed_step (cpuspeed.h) IS the whole control law, and here it is driven against
+ *  CpuSpeedStep (cpuspeed.h) IS the whole control law, and here it is driven against
  *  a SIMULATED clock -- no threads, no Sleep, no hardware -- so the result is
  *  bit-for-bit repeatable. That is the point the user asked for: the rig could only
  *  measure apparent MHz through the guest's own BIOS tick, which the throttle
@@ -47,7 +47,7 @@ static unsigned sim_delivered_bp(unsigned duty_bp, unsigned long long cap_us,
                                  unsigned long long total_us)
 {
     unsigned long long E = 0, T = 0;       /* monotonic simulated totals */
-    unsigned long long e0 = 0, t0 = 0;     /* the window baseline cpuspeed_step tracks */
+    unsigned long long e0 = 0, t0 = 0;     /* the window baseline CpuSpeedStep tracks */
     int w = 0;
     while (T < total_us) {
         unsigned long long dWall = wall[w % nwall];
@@ -56,11 +56,11 @@ static unsigned sim_delivered_bp(unsigned duty_bp, unsigned long long cap_us,
         unsigned long long hold;
         ++w;
         E += dE; T += dWall;               /* the run slice */
-        hold = cpuspeed_step(E - e0, T - t0, duty_bp, cap_us, &reset);
+        hold = CpuSpeedStep(E - e0, T - t0, duty_bp, cap_us, &reset);
         T += hold;                         /* the guest is held */
         if (reset) { e0 = E; t0 = T; }     /* rebaseline at the real post-hold clock */
     }
-    return cpuspeed_delivered_bp(E, T);     /* the same ratio the host reports */
+    return CpuSpeedDeliveredBp(E, T);     /* the same ratio the host reports */
 }
 /* Within `tol` basis points of `want`. */
 static int near_bp(unsigned got, unsigned want, unsigned tol)
@@ -76,17 +76,17 @@ int main(void)
          whose index 0 also meant "do nothing", so every value already sitting in
          somebody's registry keeps its meaning across the upgrade. If this ever
          fails, an existing installation silently acquires a throttle. */
-    CHECK(CPUSPEED_MHZ[0] == 0, "index 0 is Unlimited, so old SpeedMode=0 still means no throttle");
-    CHECK(strcmp(CPUSPEED_NAMES[0], "Host (Unlimited)") == 0, "...and it says so (#224)");
-    CHECK(cpuspeed_available(0, 500), "#224: Host is always available");
-    CHECK(!cpuspeed_available(2, 500) && cpuspeed_available(3, 500),
+    CHECK(g_CpuSpeedMhz[0] == 0, "index 0 is Unlimited, so old SpeedMode=0 still means no throttle");
+    CHECK(strcmp(g_CpuSpeedNames[0], "Host (Unlimited)") == 0, "...and it says so (#224)");
+    CHECK(CpuSpeedIsAvailable(0, 500), "#224: Host is always available");
+    CHECK(!CpuSpeedIsAvailable(2, 500) && CpuSpeedIsAvailable(3, 500),
           "#224: a 500 MHz host greys Pentium III 600 and offers Pentium II 300");
-    CHECK(cpuspeed_available(1, 0), "#224: an unknown host speed offers everything");
+    CHECK(CpuSpeedIsAvailable(1, 0), "#224: an unknown host speed offers everything");
 
     /* Fastest first: the old "Maximum" (1) lands on the fastest throttled speed. */
     {   int desc = 1;
         for (i = 2; i < CPUSPEED_COUNT; ++i)
-            if (CPUSPEED_MHZ[i] >= CPUSPEED_MHZ[i - 1]) desc = 0;
+            if (g_CpuSpeedMhz[i] >= g_CpuSpeedMhz[i - 1]) desc = 0;
         CHECK(desc, "speeds run fastest-first, which is what makes the migration sane"); }
 
     /* The '|' string and the name table are two spellings of one list. They are
@@ -95,8 +95,8 @@ int main(void)
        the dropdown while every value behind it stayed correct. */
     {   const char *p = CPUSPEED_ITEMS; int n = 0, ok = 1;
         for (i = 0; i < CPUSPEED_COUNT; ++i) {
-            size_t len = strlen(CPUSPEED_NAMES[i]);
-            if (strncmp(p, CPUSPEED_NAMES[i], len) != 0) { ok = 0; break; }
+            size_t len = strlen(g_CpuSpeedNames[i]);
+            if (strncmp(p, g_CpuSpeedNames[i], len) != 0) { ok = 0; break; }
             p += len; ++n;
             if (i + 1 < CPUSPEED_COUNT) { if (*p != '|') { ok = 0; break; } ++p; }
         }
@@ -105,18 +105,18 @@ int main(void)
 
     printf("== CPU speed: the duty cycle ==\n");
 
-    CHECK(cpuspeed_duty_bp(0, 700) == 10000, "Unlimited runs flat out");
-    CHECK(cpuspeed_duty_bp(99, 700) == 10000, "an index off the end runs flat out, not at zero");
-    CHECK(cpuspeed_duty_bp(idx_of(33), 0) == 10000, "a zero reference cannot throttle (never divide by it)");
+    CHECK(CpuSpeedDutyBp(0, 700) == 10000, "Unlimited runs flat out");
+    CHECK(CpuSpeedDutyBp(99, 700) == 10000, "an index off the end runs flat out, not at zero");
+    CHECK(CpuSpeedDutyBp(idx_of(33), 0) == 10000, "a zero reference cannot throttle (never divide by it)");
 
     /* #225: a rung's share is its real machine's Doom rate over this host's ceiling
        (66.4 fps per 1000 ref-MHz). The rig (ref 3704 -> 246 fps): 486DX2-66 = 33.1 fps
        -> 13.5%; measured 1.8% before this, which could not finish demo3. */
-    {   unsigned bp = cpuspeed_duty_bp(idx_of(66), 3704);
+    {   unsigned bp = CpuSpeedDutyBp(idx_of(66), 3704);
         CHECK(bp >= 1210 && bp <= 1240, "#225: 486DX2-66 on the rig is ~12.2% (was 1.8%)"); }
-    {   unsigned bp = cpuspeed_duty_bp(idx_of(133), 3704);
+    {   unsigned bp = CpuSpeedDutyBp(idx_of(133), 3704);
         CHECK(bp >= 2950 && bp <= 2980, "#225: Pentium 133 on the rig is ~29.7%"); }
-    CHECK(cpuspeed_duty_bp(idx_of(600), 700) == 10000,
+    CHECK(CpuSpeedDutyBp(idx_of(600), 700) == 10000,
           "#225: a rung above a slow host's Doom ceiling (46 fps at ref 700) runs flat out");
 
     /* ⚠ MONOTONIC ONLY BELOW THE REFERENCE, and the exception is the point. Every
@@ -127,8 +127,8 @@ int main(void)
          because the session-60 ladder tops out at 100 MHz.) */
     {   int mono = 1, ties = 0;
         for (i = 2; i < CPUSPEED_COUNT; ++i) {
-            unsigned a = cpuspeed_duty_bp(i - 1, 50), b = cpuspeed_duty_bp(i, 50);
-            if (CPUSPEED_MHZ[i - 1] >= 50u) { if (a != 10000u) mono = 0; ties++; continue; }
+            unsigned a = CpuSpeedDutyBp(i - 1, 50), b = CpuSpeedDutyBp(i, 50);
+            if (g_CpuSpeedMhz[i - 1] >= 50u) { if (a != 10000u) mono = 0; ties++; continue; }
             if (b >= a) mono = 0;
         }
         CHECK(mono, "below the reference a slower setting is always a smaller duty");
@@ -137,24 +137,24 @@ int main(void)
     /* ⚠ THE ROUND-TO-ZERO TRAP. On a very fast host the slowest setting divides to
          under half a basis point. Truncating that to 0 would HOLD THE GUEST FOREVER
          -- a hang wearing a setting's clothes -- so it must clamp to 1. */
-    CHECK(cpuspeed_duty_bp(idx_of(16), 4000000u) >= 1, "an absurd reference still leaves the guest some time");
+    CHECK(CpuSpeedDutyBp(idx_of(16), 4000000u) >= 1, "an absurd reference still leaves the guest some time");
 
     /* A target at or above the reference is a ceiling, not a boost: we cannot make
        the host faster and must not pretend by handing back more than 100%. */
-    CHECK(cpuspeed_duty_bp(idx_of(100), 66) == 10000,
+    CHECK(CpuSpeedDutyBp(idx_of(100), 66) == 10000,
           "a speed above the reference clamps to flat out -- a ceiling, never a boost");
 
     /* #225: a real-mode program's share is the protected-mode share x CPUSPEED_RM_PCT,
        clamped to flat out, and Unlimited stays Unlimited. */
-    {   unsigned d66 = cpuspeed_duty_bp(idx_of(66), CPUSPEED_REF_MHZ_DEFAULT);
-        CHECK(cpuspeed_duty_rm_bp(d66) == d66 * CPUSPEED_RM_PCT / 100u,
+    {   unsigned d66 = CpuSpeedDutyBp(idx_of(66), CPUSPEED_REF_MHZ_DEFAULT);
+        CHECK(CpuSpeedRealModeDutyBp(d66) == d66 * CPUSPEED_RM_PCT / 100u,
               "#225: real mode at 486DX2-66 gets the protected-mode share x CPUSPEED_RM_PCT");
-        CHECK(cpuspeed_duty_rm_bp(10000u) == 10000u, "#225: Unlimited is Unlimited in real mode too");
-        CHECK(cpuspeed_duty_rm_bp(9000u) == 10000u, "#225: a scaled share past 100% clamps to flat out");
+        CHECK(CpuSpeedRealModeDutyBp(10000u) == 10000u, "#225: Unlimited is Unlimited in real mode too");
+        CHECK(CpuSpeedRealModeDutyBp(9000u) == 10000u, "#225: a scaled share past 100% clamps to flat out");
         {   int mono = 1;
             for (i = 2; i < CPUSPEED_COUNT; ++i)
-                if (cpuspeed_duty_rm_bp(cpuspeed_duty_bp(i, CPUSPEED_REF_MHZ_DEFAULT)) >
-                    cpuspeed_duty_rm_bp(cpuspeed_duty_bp(i - 1, CPUSPEED_REF_MHZ_DEFAULT))) mono = 0;
+                if (CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(i, CPUSPEED_REF_MHZ_DEFAULT)) >
+                    CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(i - 1, CPUSPEED_REF_MHZ_DEFAULT))) mono = 0;
             CHECK(mono, "#225: the real-mode ladder still gets slower rung by rung"); } }
 
     printf("== CPU speed: the throttle delivers the requested duty (deterministic) ==\n");
@@ -174,7 +174,7 @@ int main(void)
              Every duty on the trimmed ladder, against the shipped reference. */
         {   int ok = 1; unsigned bad = 0;
             for (i = 1; i < CPUSPEED_COUNT; ++i) {
-                unsigned d   = cpuspeed_duty_bp(i, CPUSPEED_REF_MHZ_DEFAULT);
+                unsigned d   = CpuSpeedDutyBp(i, CPUSPEED_REF_MHZ_DEFAULT);
                 unsigned got = sim_delivered_bp(d, CAP, steady, 1, 1, 1, RUN);
                 /* Reachable at 2 ms slices iff one slice's hold fits the cap. */
                 if ((unsigned long long)2000 * 10000ull / d - 2000ull > CAP) continue;
@@ -186,7 +186,7 @@ int main(void)
         /* ── 2. THE OUTLIER, ABSORBED. A 19 ms descheduled slice among 2 ms ones was
              what made the debt carry non-monotonic. The closed loop prices each slice
              against the running total, so the average is still the duty exactly. */
-        {   unsigned d = cpuspeed_duty_bp(idx_of(33), CPUSPEED_REF_MHZ_DEFAULT);
+        {   unsigned d = CpuSpeedDutyBp(idx_of(33), CPUSPEED_REF_MHZ_DEFAULT);
             unsigned smooth = sim_delivered_bp(d, CAP, steady, 1, 1, 1, RUN);
             unsigned rough  = sim_delivered_bp(d, CAP, jitter, 5, 1, 1, RUN);
             CHECK(near_bp(rough, d, 3), "a descheduled 19 ms outlier does not move the delivered speed");
@@ -216,59 +216,59 @@ int main(void)
 
         /* ── 5. A HOLD IS BOUNDED, so an absurd setting cannot freeze the guest: even
              at a 1 bp duty the single hold never exceeds the cap. */
-        {   int reset; unsigned long long h = cpuspeed_step(2000, 0, 1, CAP, &reset);
+        {   int reset; unsigned long long h = CpuSpeedStep(2000, 0, 1, CAP, &reset);
             CHECK(h <= CAP, "one hold is capped, so an unreachable setting slows but never freezes");
             CHECK(!reset, "...and a capped hold is carried, not forgiven"); }
 
         /* ── 6. UNLIMITED NEVER HOLDS, whatever the totals. */
         {   int reset;
-            CHECK(cpuspeed_step(999999, 0, 10000, CAP, &reset) == 0 && reset,
+            CHECK(CpuSpeedStep(999999, 0, 10000, CAP, &reset) == 0 && reset,
                   "Unlimited holds for nothing and keeps no window"); }
         (void)jitter; (void)fine;
     }
 
     printf("== CPU speed: the interpreter's instruction budget ==\n");
 
-    CHECK(cpuspeed_ips(0) == 0ul, "Unlimited sets no instruction budget at all");
-    {   unsigned long ips = cpuspeed_ips(idx_of(33));
+    CHECK(CpuSpeedInstructionsPerSecond(0) == 0ul, "Unlimited sets no instruction budget at all");
+    {   unsigned long ips = CpuSpeedInstructionsPerSecond(idx_of(33));
         CHECK(ips == 33000000ul / CPUSPEED_CPI, "33 MHz budgets 33e6/CPI instructions a second"); }
 
     /* A slice that ran FASTER than the budget owes time. 1,000,000 instructions at
        11M/s should take ~90.9 ms; if it really took 5 ms we owe ~86 ms of sleep. */
-    {   cpuspeed_pace p; int ms;
+    {   CPUSPEED_PACE p; int ms;
         memset(&p, 0, sizeof p);
-        ms = cpuspeed_charge(&p, 1000000ul, cpuspeed_ips(idx_of(33)), 5000ll);
+        ms = CpuSpeedCharge(&p, 1000000ul, CpuSpeedInstructionsPerSecond(idx_of(33)), 5000ll);
         CHECK(ms >= 84 && ms <= 88, "a slice that outran its budget sleeps the difference"); }
 
     /* ⚠ THE SUB-MILLISECOND DEBT IS THE ONE THAT MATTERS. Small slices each owe a
          few hundred microseconds; discard that and the throttle is a no-op exactly
          where slices are smallest, which is the fast settings. Accumulated, ten
          slices owing 300us each must produce 3 ms of sleep. */
-    {   cpuspeed_pace p; int k, ms, tot = 0;
+    {   CPUSPEED_PACE p; int k, ms, tot = 0;
         memset(&p, 0, sizeof p);
         for (k = 0; k < 10; ++k) {
             /* 3300 instructions at 11M/s = 300us of budget, executed in 0us. */
-            ms = cpuspeed_charge(&p, 3300ul, cpuspeed_ips(idx_of(33)), 0ll);
+            ms = CpuSpeedCharge(&p, 3300ul, CpuSpeedInstructionsPerSecond(idx_of(33)), 0ll);
             tot += ms;
         }
         CHECK(tot == 3, "ten 300us debts accumulate into 3 ms, rather than rounding to nothing"); }
 
     /* Running SLOWER than the setting must not bank credit: a guest that stalled for
        a second cannot then be handed a second of unthrottled burst. */
-    {   cpuspeed_pace p; int ms;
+    {   CPUSPEED_PACE p; int ms;
         memset(&p, 0, sizeof p);
-        ms = cpuspeed_charge(&p, 100ul, cpuspeed_ips(idx_of(33)), 500000ll);
-        CHECK(ms == 0 && p.owed_us == 0, "a slice slower than its budget sleeps 0 and banks nothing");
-        ms = cpuspeed_charge(&p, 1000000ul, cpuspeed_ips(idx_of(33)), 0ll);
+        ms = CpuSpeedCharge(&p, 100ul, CpuSpeedInstructionsPerSecond(idx_of(33)), 500000ll);
+        CHECK(ms == 0 && p.OwedUs == 0, "a slice slower than its budget sleeps 0 and banks nothing");
+        ms = CpuSpeedCharge(&p, 1000000ul, CpuSpeedInstructionsPerSecond(idx_of(33)), 0ll);
         CHECK(ms >= 89 && ms <= 91, "...and the NEXT slice is throttled in full, not offset"); }
 
     /* One slice can never sleep more than the ceiling, however wild the arithmetic. */
-    {   cpuspeed_pace p; int ms;
+    {   CPUSPEED_PACE p; int ms;
         memset(&p, 0, sizeof p);
-        ms = cpuspeed_charge(&p, 100000000ul, cpuspeed_ips(idx_of(16)), 0ll);
+        ms = CpuSpeedCharge(&p, 100000000ul, CpuSpeedInstructionsPerSecond(idx_of(16)), 0ll);
         CHECK(ms <= 100, "one slice's debt is capped, so a stall cannot become a freeze"); }
 
-    CHECK(cpuspeed_charge(&(cpuspeed_pace){0}, 1000000ul, 0ul, 0ll) == 0,
+    CHECK(CpuSpeedCharge(&(CPUSPEED_PACE){0}, 1000000ul, 0ul, 0ll) == 0,
           "no budget means no sleep, whatever the slice did");
 
     printf("\n%s: %d/%d\n", fails ? "FAILURES" : "ALL PASS", total - fails, total);
