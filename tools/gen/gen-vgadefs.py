@@ -135,9 +135,10 @@ def main():
     w.append("   the single-table version got index 6 wrong. */")
     w.append("#ifndef NTVDMEX_VGA_DEFAULTS_H")
     w.append("#define NTVDMEX_VGA_DEFAULTS_H")
+    w.append("#include \"../ntvdmex_types.h\"")
     w.append("")
     w.append("/* The sixteen Attribute Controller palette registers, per mode. */")
-    w.append("static const unsigned char VGA_AC_DEFAULT[%d][16] = {" % len(ac_tabs))
+    w.append("static const BYTE g_VgaAttributeDefaults[%d][16] = {" % len(ac_tabs))
     for i, a in enumerate(ac_tabs):
         ms = [m for m in order if tuple(modes[m]["ac"]) == a]
         w.append("    /* %d: modes %s */" % (i, ", ".join("%02Xh" % m for m in ms)))
@@ -145,7 +146,7 @@ def main():
     w.append("};")
     w.append("")
     w.append("/* The 256 DAC entries, per mode, as 0x00RRGGBB. */")
-    w.append("static const unsigned long VGA_DAC_DEFAULT[%d][256] = {" % len(dac_tabs))
+    w.append("static const unsigned long g_VgaDacDefaults[%d][256] = {   /* unsigned long: the off-VM width (#333) */" % len(dac_tabs))
     for i, d in enumerate(dac_tabs):
         ms = [m for m in order if tuple(modes[m]["dac"]) == d]
         w.append("    /* %d: modes %s */" % (i, ", ".join("%02Xh" % m for m in ms)))
@@ -166,7 +167,7 @@ def main():
     w.append("#define VGA_CRTC_OFFSET 0x13")
     w.append("#define VGA_CRTC_START_HI 0x0C")
     w.append("#define VGA_CRTC_START_LO 0x0D")
-    w.append("static const unsigned char VGA_CRTC_DEFAULT[%d][25] = {" % len(crtc_tabs))
+    w.append("static const BYTE g_VgaCrtcDefaults[%d][25] = {" % len(crtc_tabs))
     for i, c in enumerate(crtc_tabs):
         ms = [m for m in order if tuple(modes[m]["crtc"]) == c]
         w.append("    /* %d: modes %s -- offset=0x%02X */"
@@ -175,8 +176,8 @@ def main():
     w.append("};")
     w.append("")
     w.append("/* mode -> (AC table, DAC table, CRTC table). A mode that is not listed is")
-    w.append("   not one the BIOS has an opinion about; vga_defaults_for() picks a fallback. */")
-    w.append("static const unsigned char VGA_DEFAULT_BY_MODE[4][%d] = {" % len(order))
+    w.append("   not one the BIOS has an opinion about; VideoDefaultsFor() picks a fallback. */")
+    w.append("static const BYTE g_VgaDefaultsByMode[4][%d] = {" % len(order))
     w.append("    { " + ", ".join("0x%02X" % m for m in order) + " },")
     w.append("    { " + ", ".join("%d" % ac_of[tuple(modes[m]["ac"])] for m in order) + " },")
     w.append("    { " + ", ".join("%d" % dac_of[tuple(modes[m]["dac"])] for m in order) + " },")

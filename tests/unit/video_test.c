@@ -884,7 +884,7 @@ int main(void)
      *   than half. ⚠ 640x350 is Lemmings' MENU screen -- its gameplay is mode 0Dh,
      *   320x200, measured from the BDA of a dump of the real game.
      *
-     * ⚠ EVERY NUMBER BELOW IS DECODED FROM VGA_CRTC_DEFAULT in vga_defaults.h, which
+     * ⚠ EVERY NUMBER BELOW IS DECODED FROM g_VgaCrtcDefaults in vga_defaults.h, which
      *   was read back off a real card by tests/probes/dos/vgadefs.asm. None of it is
      *   written from memory, and none of it is this implementation's own opinion --
      *   that is the whole point, and it is what caught the bug.

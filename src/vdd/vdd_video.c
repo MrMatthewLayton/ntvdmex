@@ -39,7 +39,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_GREY_GREEN              59
 #define VIDEO_GREY_BLUE               11
 #define VIDEO_PERCENT                 100
-/* vga_defaults.h: VGA_DEFAULT_BY_MODE's rows. */
+/* vga_defaults.h: g_VgaDefaultsByMode's rows. */
 #define VIDEO_DEFAULTS_MODE_ROW       0
 #define VIDEO_DEFAULTS_DAC_ROW        2
 #define VIDEO_DEFAULTS_CRTC_ROW       3
@@ -810,21 +810,21 @@ static INT VideoDefaultsRow(BYTE mode)
 {
     UINT index;
     for (index = 0; index < VGA_DEFAULT_MODES; ++index)
-        if (VGA_DEFAULT_BY_MODE[0][index] == mode) return (INT)index;
+        if (g_VgaDefaultsByMode[0][index] == mode) return (INT)index;
     /* A mode the BIOS has no table for: a VESA mode, or one nobody defines. Above
        13h means 256 colours, so 13h's defaults; below it, mode 3's. st->ModeKind is
        not set yet at the point this runs, so the mode number is all there is. */
     for (index = 0; index < VGA_DEFAULT_MODES; ++index)
-        if (VGA_DEFAULT_BY_MODE[VIDEO_DEFAULTS_MODE_ROW][index] == (mode >= VIDEO_MODE_VGA_256 ? VIDEO_MODE_VGA_256 : VIDEO_MODE_TEXT_80)) return (INT)index;
+        if (g_VgaDefaultsByMode[VIDEO_DEFAULTS_MODE_ROW][index] == (mode >= VIDEO_MODE_VGA_256 ? VIDEO_MODE_VGA_256 : VIDEO_MODE_TEXT_80)) return (INT)index;
     return 0;
 }
 
 static VOID VideoDefaultsFor(BYTE mode,
-                             const BYTE **attributes, const unsigned long **dacTable)   /* the generated VGA_DAC_DEFAULT type: ULONG is 32 bits off-VM */
+                             const BYTE **attributes, const unsigned long **dacTable)   /* the generated g_VgaDacDefaults type: ULONG is 32 bits off-VM */
 {
     INT index = VideoDefaultsRow(mode);
-    *attributes  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][index]];
-    *dacTable = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[VIDEO_DEFAULTS_DAC_ROW][index]];
+    *attributes  = g_VgaAttributeDefaults [g_VgaDefaultsByMode[1][index]];
+    *dacTable = g_VgaDacDefaults[g_VgaDefaultsByMode[VIDEO_DEFAULTS_DAC_ROW][index]];
 }
 
 /* ── ★ A MODE SET REPROGRAMS THE CRTC, and not doing so lets one screen inherit the
@@ -850,7 +850,7 @@ static INT VideoBeam(PCVIDEO_STATE state, UINT64 *now, UINT32 *frameUs,
                     UINT32 *frameNumber, UINT32 *line);
 static VOID VideoLoadDefaultCrtc(PVIDEO_STATE state)
 {
-    const BYTE *crtc = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[VIDEO_DEFAULTS_CRTC_ROW][VideoDefaultsRow(state->Mode)]];
+    const BYTE *crtc = g_VgaCrtcDefaults[g_VgaDefaultsByMode[VIDEO_DEFAULTS_CRTC_ROW][VideoDefaultsRow(state->Mode)]];
     state->CrtcIndex = 0;
     state->CrtcOffset = crtc[VGA_CRTC_OFFSET];
     state->CrtcStart = (UINT32)(((UINT)crtc[VGA_CRTC_START_HI] << VIDEO_BYTE_SHIFT) | crtc[VGA_CRTC_START_LO]);

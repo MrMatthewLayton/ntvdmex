@@ -85,7 +85,7 @@ int main(void)
          likely cause is that someone "tidied" a value. */
     {   unsigned r; int found = 0, tried = 0;
         for (r = 0; r < 9; ++r) {
-            long off = find(rom, n, VGA_CRTC_DEFAULT[r], 25);
+            long off = find(rom, n, g_VgaCrtcDefaults[r], 25);
             ++tried; if (off >= 0) ++found;
         }
         ok(found >= 7, "per-mode CRTC rows are present in the ROM's parameter table");
@@ -95,7 +95,7 @@ int main(void)
     /* ── THE VERTICAL TIMING WE NOW DERIVE FROM THOSE ROWS. This is the claim the
          0x3DA model rests on, so state it here in numbers rather than leaving it
          implicit in a table: 640x350 is the mode that broke the old two-case guess. */
-    {   const unsigned char *c = VGA_CRTC_DEFAULT[6];      /* modes 0Fh, 10h */
+    {   const unsigned char *c = g_VgaCrtcDefaults[6];      /* modes 0Fh, 10h */
         unsigned ov = c[0x07], ms = c[0x09];
         unsigned vt  = c[0x06] | ((ov >> 0 & 1) << 8) | ((ov >> 5 & 1) << 9);
         unsigned vde = c[0x12] | ((ov >> 1 & 1) << 8) | ((ov >> 6 & 1) << 9);

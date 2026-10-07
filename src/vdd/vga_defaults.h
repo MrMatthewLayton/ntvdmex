@@ -5,9 +5,10 @@
    the single-table version got index 6 wrong. */
 #ifndef NTVDMEX_VGA_DEFAULTS_H
 #define NTVDMEX_VGA_DEFAULTS_H
+#include "../ntvdmex_types.h"
 
 /* The sixteen Attribute Controller palette registers, per mode. */
-static const unsigned char VGA_AC_DEFAULT[8][16] = {
+static const BYTE g_VgaAttributeDefaults[8][16] = {
     /* 0: modes 00h, 01h, 02h, 03h, 10h, 12h */
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F },
     /* 1: modes 04h, 05h */
@@ -27,7 +28,7 @@ static const unsigned char VGA_AC_DEFAULT[8][16] = {
 };
 
 /* The 256 DAC entries, per mode, as 0x00RRGGBB. */
-static const unsigned long VGA_DAC_DEFAULT[4][256] = {
+static const unsigned long g_VgaDacDefaults[4][256] = {   /* unsigned long: the off-VM width (#333) */
     /* 0: modes 00h, 01h, 02h, 03h, 10h, 11h, 12h */
     {
     0x000000uL, 0x0000AAuL, 0x00AA00uL, 0x00AAAAuL,
@@ -306,7 +307,7 @@ static const unsigned long VGA_DAC_DEFAULT[4][256] = {
 #define VGA_CRTC_OFFSET 0x13
 #define VGA_CRTC_START_HI 0x0C
 #define VGA_CRTC_START_LO 0x0D
-static const unsigned char VGA_CRTC_DEFAULT[9][25] = {
+static const BYTE g_VgaCrtcDefaults[9][25] = {
     /* 0: modes 00h, 01h -- offset=0x14 */
     { 0x2D, 0x27, 0x28, 0x90, 0x2B, 0xA0, 0xBF, 0x1F, 0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x8E, 0x8F, 0x14, 0x1F, 0x96, 0xB9, 0xA3, 0xFF },
     /* 1: modes 02h, 03h, 07h -- offset=0x28 */
@@ -328,8 +329,8 @@ static const unsigned char VGA_CRTC_DEFAULT[9][25] = {
 };
 
 /* mode -> (AC table, DAC table, CRTC table). A mode that is not listed is
-   not one the BIOS has an opinion about; vga_defaults_for() picks a fallback. */
-static const unsigned char VGA_DEFAULT_BY_MODE[4][15] = {
+   not one the BIOS has an opinion about; VideoDefaultsFor() picks a fallback. */
+static const BYTE g_VgaDefaultsByMode[4][15] = {
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13 },
     { 0, 0, 0, 0, 1, 1, 2, 3, 4, 4, 5, 0, 6, 0, 7 },
     { 0, 0, 0, 0, 1, 1, 1, 2, 1, 1, 2, 0, 0, 0, 3 },
