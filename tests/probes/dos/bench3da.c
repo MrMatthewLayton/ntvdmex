@@ -49,6 +49,7 @@
 #include "vdd_video.h"
 
 static uint8_t g_vmem[VIDEO_APERTURE_SIZE];
+static uint8_t g_flat[0x100000];          /* guest memory: init writes the IVT's font vectors */
 static VIDEO_STATE vid;
 static uint64_t g_us = 0;
 static uint64_t clk(void) { return g_us; }
@@ -59,7 +60,7 @@ int main(void)
     const long N = 20000000;
     struct timespec a, b; double ns;
 
-    memset(&bus, 0, sizeof bus);
+    VddBusInitialize(&bus, g_flat);
     memset(&vid, 0, sizeof vid);
     vid.VideoMemory = g_vmem;
     VddVideoInitialize(&bus, &vid);
