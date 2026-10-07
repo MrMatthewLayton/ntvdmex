@@ -30,17 +30,17 @@ static void fx(uint64_t v)
 static uint32_t g_ulin[UNDO_MAX]; static BYTE g_uold[UNDO_MAX];
 static uint32_t g_un; static int g_uon, g_uover;
 
-static uint8_t imem_r8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0xFF; }
-static void imem_w8(uint32_t lin, uint8_t v)
+static uint8_t V86HostRead8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0xFF; }
+static void V86HostWrite8(uint32_t lin, uint8_t v)
 {
     fx(((uint64_t)lin << 8) | v);
     if (lin >= sizeof MEM) return;
     if (g_uon) { if (g_un < UNDO_MAX) { g_ulin[g_un] = lin; g_uold[g_un] = MEM[lin]; ++g_un; } else g_uover = 1; }
     MEM[lin] = v;
 }
-static uint32_t iio_in(uint16_t port, int width)
+static uint32_t V86HostIn(uint16_t port, int width)
 { fx(0x1000000ULL | port | ((uint64_t)width << 16)); return (uint32_t)port * 2654435761u; }
-static void iio_out(uint16_t port, int width, uint32_t val)
+static void V86HostOut(uint16_t port, int width, uint32_t val)
 { fx(0x2000000ULL | port | ((uint64_t)width << 16) | ((uint64_t)val << 32)); }
 
 #ifndef INTERP_H
@@ -65,8 +65,8 @@ static int fake_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
 void FN(init)(const uint8_t *img, int pm)
 {
     memcpy(MEM, img, sizeof MEM);
-    g_seg2lin  = pm ? fake_seg2lin : 0;
-    g_sel_desc = pm ? fake_sel_desc : 0;
+    g_V86SegmentToLinear  = pm ? fake_seg2lin : 0;
+    g_V86SelectorDescriptor = pm ? fake_sel_desc : 0;
 }
 void FN(poke)(uint32_t lin, uint8_t v) { if (lin < sizeof MEM) MEM[lin] = v; }
 const uint8_t *FN(mem)(void) { return MEM; }
@@ -74,15 +74,15 @@ void FN(sync)(const uint8_t *img) { memcpy(MEM, img, sizeof MEM); }
 
 int FN(step)(xcpu *x, uint64_t *effects)
 {
-    icpu c; int ok, i;
-    for (i = 0; i < 8; ++i) c.r[i] = x->r[i];
-    for (i = 0; i < 6; ++i) c.seg[i] = x->seg[i];
-    c.ip = x->ip; c.flags = x->flags;
+    V86_CPU c; int ok, i;
+    for (i = 0; i < 8; ++i) c.Registers[i] = x->r[i];
+    for (i = 0; i < 6; ++i) c.Segments[i] = x->seg[i];
+    c.Ip = x->ip; c.Flags = x->flags;
     g_fx = 1469598103934665603ULL;
-    ok = istep(&c);
-    for (i = 0; i < 8; ++i) x->r[i] = c.r[i];
-    for (i = 0; i < 6; ++i) x->seg[i] = c.seg[i];
-    x->ip = c.ip; x->flags = c.flags;
+    ok = V86Step(&c);
+    for (i = 0; i < 8; ++i) x->r[i] = c.Registers[i];
+    for (i = 0; i < 6; ++i) x->seg[i] = c.Segments[i];
+    x->ip = c.Ip; x->flags = c.Flags;
     *effects = g_fx;
     return ok;
 }

@@ -30,17 +30,17 @@ static uint64_t g_h = 1469598103934665603ULL;           /* FNV-1a over everythin
 static void hmix(uint64_t v) { int i; for (i = 0; i < 8; ++i) { g_h ^= (BYTE)(v >> (i * 8)); g_h *= 1099511628211ULL; } }
 
 static int g_hash_writes = 1;
-static uint8_t imem_r8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0xFF; }
-static void    imem_w8(uint32_t lin, uint8_t v)
+static uint8_t V86HostRead8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0xFF; }
+static void    V86HostWrite8(uint32_t lin, uint8_t v)
 { if (g_hash_writes) hmix(((uint64_t)lin << 8) | v); if (lin < sizeof MEM) MEM[lin] = v; }
-static uint32_t iio_in(uint16_t port, int width) { hmix(0x1000000ULL | port | ((uint64_t)width << 16)); return (uint32_t)port * 2654435761u; }
-static void iio_out(uint16_t port, int width, uint32_t val)
+static uint32_t V86HostIn(uint16_t port, int width) { hmix(0x1000000ULL | port | ((uint64_t)width << 16)); return (uint32_t)port * 2654435761u; }
+static void V86HostOut(uint16_t port, int width, uint32_t val)
 { hmix(0x2000000ULL | port | ((uint64_t)width << 16) | ((uint64_t)val << 32)); }
 
 /* #183 (s87): the code-pointer fetch path. Half the address space answers NULL so both
-   paths (pointer and imem_r8) run in every fuzz; an older header ignores the hook. */
+   paths (pointer and V86HostRead8) run in every fuzz; an older header ignores the hook. */
 #define V86I_CODE_PTR 1
-static const volatile BYTE *imem_code_ptr(uint32_t lin)
+static const volatile BYTE *V86HostCodePointer(uint32_t lin)
 { return (lin + 16 <= sizeof MEM && !(lin & 0x100)) ? (const volatile BYTE *)&MEM[lin] : 0; }
 
 #ifndef INTERP_H
@@ -51,12 +51,12 @@ static const volatile BYTE *imem_code_ptr(uint32_t lin)
 static uint64_t g_rng;
 static uint32_t rnd(void) { g_rng ^= g_rng << 13; g_rng ^= g_rng >> 7; g_rng ^= g_rng << 17; return (uint32_t)(g_rng >> 11); }
 
-static void hstate(const icpu *c, int ok)
+static void hstate(const V86_CPU *c, int ok)
 {
     int i;
-    for (i = 0; i < 8; ++i) hmix(c->r[i]);
-    for (i = 0; i < 6; ++i) hmix(c->seg[i]);
-    hmix(c->ip); hmix(c->flags & 0x0FD5u); hmix((uint64_t)ok);
+    for (i = 0; i < 8; ++i) hmix(c->Registers[i]);
+    for (i = 0; i < 6; ++i) hmix(c->Segments[i]);
+    hmix(c->Ip); hmix(c->Flags & 0x0FD5u); hmix((uint64_t)ok);
 }
 
 int main(int argc, char **argv)
@@ -73,19 +73,19 @@ int main(int argc, char **argv)
     g_rng = seed ? seed : 1;
     for (i = 0; i < sizeof MEM; ++i) MEM[i] = (BYTE)rnd();
     for (p = 0; p < progs; ++p) {
-        icpu c; int s;
+        V86_CPU c; int s;
         memset(&c, 0, sizeof c);
-        for (s = 0; s < 8; ++s) c.r[s] = (rnd() & 3) ? (rnd() & 0xFFFF) : rnd();
-        for (s = 0; s < 6; ++s) c.seg[s] = (uint16_t)(rnd() & 0xFFFF);
-        c.r[1] &= 0xFFFF;                                /* REP counts CX; see the REP fix */
-        c.seg[1] = (uint16_t)(rnd() % 0xF000);          /* keep CS:IP in plain RAM */
-        c.ip = (uint16_t)rnd();
-        c.flags = 0x0002 | (rnd() & 0x0ED5u);
+        for (s = 0; s < 8; ++s) c.Registers[s] = (rnd() & 3) ? (rnd() & 0xFFFF) : rnd();
+        for (s = 0; s < 6; ++s) c.Segments[s] = (uint16_t)(rnd() & 0xFFFF);
+        c.Registers[1] &= 0xFFFF;                                /* REP counts CX; see the REP fix */
+        c.Segments[1] = (uint16_t)(rnd() % 0xF000);          /* keep CS:IP in plain RAM */
+        c.Ip = (uint16_t)rnd();
+        c.Flags = 0x0002 | (rnd() & 0x0ED5u);
         /* Re-seed a window of code so every program starts on fresh random bytes. */
-        { uint32_t lin = ((uint32_t)c.seg[1] << 4) + c.ip, k;
+        { uint32_t lin = ((uint32_t)c.Segments[1] << 4) + c.Ip, k;
           for (k = 0; k < 64 && lin + k < sizeof MEM; ++k) MEM[lin + k] = (BYTE)rnd(); }
         for (s = 0; s < steps; ++s) {
-            int ok = istep(&c);
+            int ok = V86Step(&c);
             hstate(&c, ok);
             if (!ok) { ++bails; break; }
             ++executed;
@@ -110,17 +110,17 @@ int main(int argc, char **argv)
             0x49,                   /* dec cx            */
             0x75, 0xE9              /* jnz loop          */
         };
-        icpu c; long n = 0;
+        V86_CPU c; long n = 0;
         memset(&c, 0, sizeof c);
         memcpy(MEM + 0x10000, loop, sizeof loop);
-        c.seg[1] = 0x1000; c.seg[0] = 0x3000; c.seg[2] = 0x4000; c.seg[3] = 0x5000;
-        c.flags = 0x0202; c.r[5] = 0x100; c.r[3] = 3;
+        c.Segments[1] = 0x1000; c.Segments[0] = 0x3000; c.Segments[2] = 0x4000; c.Segments[3] = 0x5000;
+        c.Flags = 0x0202; c.Registers[5] = 0x100; c.Registers[3] = 3;
         g_hash_writes = 0;
         t0 = clock();
         while (n < bench) {
-            c.ip = 0; c.r[1] = 1000;
-            while (istep(&c)) { if (++n >= bench) break; if (c.ip == 0) break; }
-            if (c.ip != 0 && c.r[1] != 0 && n < bench) { printf("bench: bailed at ip %04x\n", c.ip); return 1; }
+            c.Ip = 0; c.Registers[1] = 1000;
+            while (V86Step(&c)) { if (++n >= bench) break; if (c.Ip == 0) break; }
+            if (c.Ip != 0 && c.Registers[1] != 0 && n < bench) { printf("bench: bailed at ip %04x\n", c.Ip); return 1; }
         }
         t1 = clock();
         printf("bench: %ld instructions in %.3f s = %.1f M/s\n", n,

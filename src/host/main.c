@@ -1882,7 +1882,7 @@ static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT
 static DWORD          g_pit_reload_log = 0;
 static DWORD          g_pitlatch_dumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
 static DWORD          g_hb_ds = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
-static int imem_page_ok(uint32_t lin);        /* fwd: page-validity guard, defined with imem_r8 */
+static int imem_page_ok(uint32_t lin);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irq1_inj      = 0;  /* INT 09h injections (should track scancodes) */
@@ -15072,7 +15072,7 @@ static void pit_latch_note(uint8_t cmd)
     uint32_t n, cnt, i0, base, i, col = 0;
     char b[1200], *q = b;
     /* ⚠ The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
-         LogAppend calls issued from iio_out, i.e. FILE I/O UNDER g_lock from inside
+         LogAppend calls issued from V86HostOut, i.e. FILE I/O UNDER g_lock from inside
          the planar interpreter. Fine for a debugging run, not for a build a person
          plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h. */
     if (!g_vid.IsPort3DaRingOn) return;
@@ -15131,7 +15131,7 @@ static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
         }
     }
     /* Reached from BOTH port paths (this reflected one and the interpreter's
-       iio_out); Lemmings' calibration latches from whichever the guest is in. */
+       V86HostOut); Lemmings' calibration latches from whichever the guest is in. */
     if (port == 0x43 && !is_in) pit_latch_note((uint8_t)eax);
     if (is_in) {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
@@ -16555,7 +16555,7 @@ static void a000_protect(int on)
  *
  * So do not protect the page. Instead, while a planar mode is current, run the
  * guest in the HOST INTERPRETER, whose A0000 accesses go through the planar write
- * engine by construction (imem_r8/imem_w8). The interpreter is the CPU for as long
+ * engine by construction (V86HostRead8/V86HostWrite8). The interpreter is the CPU for as long
  * as mode 12h is set; it yields whenever an IRQ is pending, and any opcode it does
  * not model drops that one instruction back to V86.                              */
 static int g_p12_interp = 0;    /* planar mode is current -> interpret the guest  */
@@ -16662,7 +16662,7 @@ static int imem_page_ok(uint32_t lin)
    engine (a read loads the latches), everything else is the directly-mapped
    V86 address space. These are the host hooks v86interp.h requires. */
 /* #183 (s87): inline, with everything but "a known-good page of plain RAM" out of line.
-   The interpreter fetches every code byte through imem_r8, and it was a real cdecl call
+   The interpreter fetches every code byte through V86HostRead8, and it was a real cdecl call
    per byte. g_pagemap[pg]==1 is exactly the old imem_page_ok() answer for a page already
    probed below 1 MB; anything else (the aperture, HMA, an unprobed or bad page) takes
    the slow path, which is the old function unchanged. */
@@ -16674,19 +16674,19 @@ static __attribute__((noinline)) void imem_w8_slow(uint32_t lin, uint8_t v)
 { if (lin >= A000_LO && lin < A000_HI) { VddVideoPlanarWrite(&g_vid, lin - A000_LO, v); return; }
   if (!imem_page_ok(lin)) { g_imem_bad_writes++; imem_bad_note(lin, 1); return; }
   *(volatile BYTE *)lin = v; }
-static inline __attribute__((always_inline)) uint8_t imem_r8(uint32_t lin)
+static inline __attribute__((always_inline)) uint8_t V86HostRead8(uint32_t lin)
 { if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
       return *(volatile BYTE *)lin;
   return imem_r8_slow(lin); }
-static inline __attribute__((always_inline)) void imem_w8(uint32_t lin, uint8_t v)
+static inline __attribute__((always_inline)) void V86HostWrite8(uint32_t lin, uint8_t v)
 { if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
       { *(volatile BYTE *)lin = v; return; }
   imem_w8_slow(lin, v); }
 /* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
    bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
-   aperture -- exactly the bytes imem_r8's fast path would have read one at a time. */
+   aperture -- exactly the bytes V86HostRead8's fast path would have read one at a time. */
 #define V86I_CODE_PTR 1
-static inline __attribute__((always_inline)) const volatile BYTE *imem_code_ptr(uint32_t lin)
+static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(uint32_t lin)
 { if (lin < 0x100000u && (lin & 0xFFFu) <= 0xFF0u && g_pagemap[lin >> 12] == 1
       && (lin < A000_LO || lin >= A000_HI))
       return (const volatile BYTE *)(ULONG_PTR)lin;
@@ -16704,11 +16704,11 @@ static inline __attribute__((always_inline)) const volatile BYTE *imem_code_ptr(
      row where it switches palettes -- landed anywhere from row 153 to 165. Generate
      only: delivery takes g_lock by TRY and the interpreter already holds it. */
 static void host_pit_generate(void);
-static uint32_t iio_in(uint16_t port, int width)
+static uint32_t V86HostIn(uint16_t port, int width)
 { uint32_t v = 0;
   if (port >= 0x40 && port <= 0x43) host_pit_generate();
   VddBusIo(&g_bus, port, (uint8_t)width, 1, &v); return v; }
-static void iio_out(uint16_t port, int width, uint32_t val)
+static void V86HostOut(uint16_t port, int width, uint32_t val)
 { uint32_t v = val;
   if (port >= 0x40 && port <= 0x43) host_pit_generate();
   VddBusIo(&g_bus, port, (uint8_t)width, 0, &v);
@@ -16760,8 +16760,8 @@ static int Pm32HostCanAccess(uint32_t lin, int w, int wr)
     if (!p32_page_ok(lin >> 12, wr)) return 0;
     return ((end >> 12) == (lin >> 12)) || p32_page_ok(end >> 12, wr);
 }
-static uint32_t Pm32HostIn(uint16_t port, int w)             { return iio_in(port, w); }
-static void     Pm32HostOut(uint16_t port, int w, uint32_t v) { iio_out(port, w, v); }
+static uint32_t Pm32HostIn(uint16_t port, int w)             { return V86HostIn(port, w); }
+static void     Pm32HostOut(uint16_t port, int w, uint32_t v) { V86HostOut(port, w, v); }
 
 #include "pm32interp.h"
 
@@ -16868,7 +16868,7 @@ static void modey_pm_run(volatile BYTE *tib)
    crash or a stray access inside istep (s69) leaves the VDM context a whole slice
    stale; this is the es/di the effective address was actually built from. NULL when
    the interpreter is not running. */
-static const icpu *g_interp_c;
+static const V86_CPU *g_interp_c;
 
 /* Name the FIRST few out-of-range accesses: the guest cs:ip, and the interpreter's
    live es/di/ds -- which is what says whether a bad address is a wrong SEGMENT or an
@@ -16879,19 +16879,19 @@ static void imem_bad_note(uint32_t lin, int write)
     if (g_imem_bad_logged >= 12) return;
     g_imem_bad_logged++;
     q = LogPut(q, "IMEM-OOR "); q = LogPut(q, write ? "W" : "R"); q = LogPut(q, " lin=0x"); q = LogHex(q, lin);
-    q = LogPut(q, " guest cs:ip=0x"); q = LogHex(q, g_ipc);
-    if (g_interp_c) { const icpu *ic = g_interp_c;
-        q = LogPut(q, " es=0x"); q = LogHex(q, ic->seg[0]);
-        q = LogPut(q, " ds=0x"); q = LogHex(q, ic->seg[3]);
-        q = LogPut(q, " di=0x"); q = LogHex(q, ic->r[7]);
-        q = LogPut(q, " si=0x"); q = LogHex(q, ic->r[6]); }
+    q = LogPut(q, " guest cs:ip=0x"); q = LogHex(q, g_V86InstructionPointer);
+    if (g_interp_c) { const V86_CPU *ic = g_interp_c;
+        q = LogPut(q, " es=0x"); q = LogHex(q, ic->Segments[0]);
+        q = LogPut(q, " ds=0x"); q = LogHex(q, ic->Segments[3]);
+        q = LogPut(q, " di=0x"); q = LogHex(q, ic->Registers[7]);
+        q = LogPut(q, " si=0x"); q = LogHex(q, ic->Registers[6]); }
     q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q);
 }
 
 /* Where the guest was at the last interpreted instruction. Every planar VRAM write
-   arrives through imem_w8 above, i.e. from the interpreter, so this is exact at the
+   arrives through V86HostWrite8 above, i.e. from the interpreter, so this is exact at the
    moment the video VDD's watchpoint fires. */
-static uint32_t host_guest_pc(void) { return g_ipc; }
+static uint32_t host_guest_pc(void) { return g_V86InstructionPointer; }
 
 /* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
    each VGA access (memory OR port) is emulated one-at-a-time as a device access
@@ -17043,7 +17043,7 @@ static void hostprof_dump(void)
 
 static long host_interp(volatile BYTE *tib, long cap)
 {
-    icpu c; long iters; int my;
+    V86_CPU c; long iters; int my;
 
     /* ── ★★ THE FULL 32-BIT REGISTERS, IN AND OUT. (s80) ──────────────────────────────
          This loaded and stored 16 bits, so the high half of every register was ZEROED
@@ -17052,21 +17052,21 @@ static long host_interp(volatile BYTE *tib, long cap)
          FixedByFrac runs `mov eax,[bp+6]` (interpreted, 0x66) then `cdq / idiv dword`
          (declined -> the real CPU) -- which divided a truncated EAX, overflowed, took
          INT 0, and the IRET chain ended at 0000:0078 with the game dead. The
-         interpreter's own 8/16-bit writes (s8/s16) preserve the high halves, so
+         interpreter's own 8/16-bit writes (V86Set8/V86Set16) preserve the high halves, so
          carrying all 32 bits is transparent to 16-bit code and correct for 386 code.
          ESP keeps its own high word: V86 addresses the stack through SP only. */
-    c.r[0] = VDM_REG(tib, VTIB_EAX); c.r[1] = VDM_REG(tib, VTIB_ECX);
-    c.r[2] = VDM_REG(tib, VTIB_EDX); c.r[3] = VDM_REG(tib, VTIB_EBX);
-    c.r[4] = (uint16_t)VDM_REG(tib, VTIB_ESP); c.r[5] = VDM_REG(tib, VTIB_EBP);
-    c.r[6] = VDM_REG(tib, VTIB_ESI); c.r[7] = VDM_REG(tib, VTIB_EDI);
-    c.seg[0] = (uint16_t)VDM_REG(tib, VTIB_ES); c.seg[1] = (uint16_t)VDM_REG(tib, VTIB_CS);
-    c.seg[2] = (uint16_t)VDM_REG(tib, VTIB_SS); c.seg[3] = (uint16_t)VDM_REG(tib, VTIB_DS);
-    c.seg[4] = (uint16_t)VDM_REG(tib, VTIB_FS); c.seg[5] = (uint16_t)VDM_REG(tib, VTIB_GS);
-    c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
+    c.Registers[0] = VDM_REG(tib, VTIB_EAX); c.Registers[1] = VDM_REG(tib, VTIB_ECX);
+    c.Registers[2] = VDM_REG(tib, VTIB_EDX); c.Registers[3] = VDM_REG(tib, VTIB_EBX);
+    c.Registers[4] = (uint16_t)VDM_REG(tib, VTIB_ESP); c.Registers[5] = VDM_REG(tib, VTIB_EBP);
+    c.Registers[6] = VDM_REG(tib, VTIB_ESI); c.Registers[7] = VDM_REG(tib, VTIB_EDI);
+    c.Segments[0] = (uint16_t)VDM_REG(tib, VTIB_ES); c.Segments[1] = (uint16_t)VDM_REG(tib, VTIB_CS);
+    c.Segments[2] = (uint16_t)VDM_REG(tib, VTIB_SS); c.Segments[3] = (uint16_t)VDM_REG(tib, VTIB_DS);
+    c.Segments[4] = (uint16_t)VDM_REG(tib, VTIB_FS); c.Segments[5] = (uint16_t)VDM_REG(tib, VTIB_GS);
+    c.Ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.Flags = VDM_REG(tib, VTIB_EFLAGS);
     /* Mode Y (s80): the guest's interrupt flag is IF OR VIF -- a native STI under VME sets
        only VIF -- so give the interpreter the same answer the gate uses. See the
        write-back, which carries the interpreted flag back into both. */
-    if (g_my_interp && (c.flags & EFLAGS_VIF_BIT)) c.flags |= 0x200u;
+    if (g_my_interp && (c.Flags & EFLAGS_VIF_BIT)) c.Flags |= 0x200u;
 
     HOST_LOCK();
     g_interp_c = &c;
@@ -17080,7 +17080,7 @@ static long host_interp(volatile BYTE *tib, long cap)
            throughput (interleaved A/B against the confirmed build), and that path is
            user-confirmed as it stands. */
         for (iters = 0; iters < cap; ++iters) {
-            if (!istep(&c)) break;
+            if (!V86Step(&c)) break;
             /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
                middle of a loop; the interpreter is standing in for that CPU and must
                do the same, or a guest whose loop can only END when an interrupt
@@ -17109,19 +17109,19 @@ static long host_interp(volatile BYTE *tib, long cap)
         for (iters = 0; iters < cap; ++iters) {
             if (ring) {
                 unsigned i = g_my_ring_pos++ % MY_RING, j;
-                const volatile BYTE *ib = (const volatile BYTE *)(((uint32_t)c.seg[1] << 4) + c.ip);
-                g_my_ring[i].cs = c.seg[1]; g_my_ring[i].ip = c.ip;
-                g_my_ring[i].ss = c.seg[2]; g_my_ring[i].sp = (WORD)c.r[4];
+                const volatile BYTE *ib = (const volatile BYTE *)(((uint32_t)c.Segments[1] << 4) + c.Ip);
+                g_my_ring[i].cs = c.Segments[1]; g_my_ring[i].ip = c.Ip;
+                g_my_ring[i].ss = c.Segments[2]; g_my_ring[i].sp = (WORD)c.Registers[4];
                 for (j = 0; j < 6; ++j) g_my_ring[i].b[j] = ib[j];
             }
-            if (!istep(&c)) break;
-            if (c.seg[1] == 0 && c.ip < 0x400) { ++iters; my_ring_dump("interpreter reached CS=0"); break; }
+            if (!V86Step(&c)) break;
+            if (c.Segments[1] == 0 && c.Ip < 0x400) { ++iters; my_ring_dump("interpreter reached CS=0"); break; }
             if ((iters & 0xFF) == 0xFF) {
                 int q, pend = (g_irq0_pending != 0);
                 for (q = 0; !pend && q < 16; ++q) pend = (g_irqn_pending[q] != 0);
                 /* Only when the guest could TAKE it: yielding inside a CLI region hands
                    the loop a chance to inject there (see the write-back below). */
-                if (pend && (c.flags & 0x200)) { ++iters; break; }
+                if (pend && (c.Flags & 0x200)) { ++iters; break; }
                 /* The window has closed (single-plane mask / write mode 0 again): hand
                    the CPU back. Staying would still be CORRECT, only slower. */
                 if (!modey_needs_interp()) { ++iters; break; }
@@ -17133,22 +17133,22 @@ static long host_interp(volatile BYTE *tib, long cap)
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
 
-    VDM_REG(tib, VTIB_EAX) = c.r[0]; VDM_REG(tib, VTIB_ECX) = c.r[1];
-    VDM_REG(tib, VTIB_EDX) = c.r[2]; VDM_REG(tib, VTIB_EBX) = c.r[3];
-    VDM_SET16(tib, VTIB_ESP, c.r[4]); VDM_REG(tib, VTIB_EBP) = c.r[5];
-    VDM_REG(tib, VTIB_ESI) = c.r[6]; VDM_REG(tib, VTIB_EDI) = c.r[7];
-    VDM_SET16(tib, VTIB_EIP, c.ip);
+    VDM_REG(tib, VTIB_EAX) = c.Registers[0]; VDM_REG(tib, VTIB_ECX) = c.Registers[1];
+    VDM_REG(tib, VTIB_EDX) = c.Registers[2]; VDM_REG(tib, VTIB_EBX) = c.Registers[3];
+    VDM_SET16(tib, VTIB_ESP, c.Registers[4]); VDM_REG(tib, VTIB_EBP) = c.Registers[5];
+    VDM_REG(tib, VTIB_ESI) = c.Registers[6]; VDM_REG(tib, VTIB_EDI) = c.Registers[7];
+    VDM_SET16(tib, VTIB_EIP, c.Ip);
     /* SEGMENTS TOO. They were loaded but never stored, so every segment load the
        interpreter modelled (POP ES / MOV DS,AX / far CALL / INT / IRET) was thrown
        away the moment we returned to V86 -- the guest carried on with the SEGMENT
        it had before the batch and the OFFSET the batch had reached. Harmless while
        batching was confined to a fill loop that never reloads a segment; fatal for
        continuous interpretation, where CS changes on every interrupt. */
-    VDM_REG(tib, VTIB_ES) = c.seg[0]; VDM_REG(tib, VTIB_CS) = c.seg[1];
-    VDM_REG(tib, VTIB_SS) = c.seg[2]; VDM_REG(tib, VTIB_DS) = c.seg[3];
-    VDM_REG(tib, VTIB_FS) = c.seg[4]; VDM_REG(tib, VTIB_GS) = c.seg[5];
+    VDM_REG(tib, VTIB_ES) = c.Segments[0]; VDM_REG(tib, VTIB_CS) = c.Segments[1];
+    VDM_REG(tib, VTIB_SS) = c.Segments[2]; VDM_REG(tib, VTIB_DS) = c.Segments[3];
+    VDM_REG(tib, VTIB_FS) = c.Segments[4]; VDM_REG(tib, VTIB_GS) = c.Segments[5];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
-    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.flags & 0xFFFFu);
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.Flags & 0xFFFFu);
     /* ── ★ AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
          VIF is set (guest_if_enabled), because under VME a native STI sets VIF. An
          interpreted CLI clears only IF here -- VIF stayed set, the gate saw "enabled",
@@ -17157,7 +17157,7 @@ static long host_interp(volatile BYTE *tib, long cap)
          0000:0078. Keep the two in step so the interpreter's answer is the answer.
        ⚠ Mode Y only: the mode-12h path (Lemmings) is user-confirmed as it stands. */
     if (g_my_interp) {
-        if (c.flags & 0x200) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF_BIT;
+        if (c.Flags & 0x200) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF_BIT;
         else                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
     }
     return iters;
@@ -17302,13 +17302,13 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          the effective address was actually built from. es_base+ea that lands in an
          unmapped hole names the bug: a wrong SEGMENT vs an unmasked OFFSET. */
     if (g_interp_c) {
-        const icpu *ic = g_interp_c;
-        p = LogPut(p, "\r\n  interp cs:ip=0x"); p = LogHex(p, ic->seg[1]); p = LogPut(p, ":0x"); p = LogHex(p, ic->ip);
-        p = LogPut(p, " es=0x"); p = LogHex(p, ic->seg[0]); p = LogPut(p, " ds=0x"); p = LogHex(p, ic->seg[3]);
-        p = LogPut(p, " ss=0x"); p = LogHex(p, ic->seg[2]);
-        p = LogPut(p, "\r\n  interp di=0x"); p = LogHex(p, ic->r[7]); p = LogPut(p, " si=0x"); p = LogHex(p, ic->r[6]);
-        p = LogPut(p, " bx=0x"); p = LogHex(p, ic->r[3]); p = LogPut(p, " bp=0x"); p = LogHex(p, ic->r[5]);
-        p = LogPut(p, " ax=0x"); p = LogHex(p, ic->r[0]); p = LogPut(p, " cx=0x"); p = LogHex(p, ic->r[1]);
+        const V86_CPU *ic = g_interp_c;
+        p = LogPut(p, "\r\n  interp cs:ip=0x"); p = LogHex(p, ic->Segments[1]); p = LogPut(p, ":0x"); p = LogHex(p, ic->Ip);
+        p = LogPut(p, " es=0x"); p = LogHex(p, ic->Segments[0]); p = LogPut(p, " ds=0x"); p = LogHex(p, ic->Segments[3]);
+        p = LogPut(p, " ss=0x"); p = LogHex(p, ic->Segments[2]);
+        p = LogPut(p, "\r\n  interp di=0x"); p = LogHex(p, ic->Registers[7]); p = LogPut(p, " si=0x"); p = LogHex(p, ic->Registers[6]);
+        p = LogPut(p, " bx=0x"); p = LogHex(p, ic->Registers[3]); p = LogPut(p, " bp=0x"); p = LogHex(p, ic->Registers[5]);
+        p = LogPut(p, " ax=0x"); p = LogHex(p, ic->Registers[0]); p = LogPut(p, " cx=0x"); p = LogHex(p, ic->Registers[1]);
         p = LogPut(p, "\r\n");
     }
     /* Where the GUEST was when the host died. For a real-mode crash this is the
@@ -28744,7 +28744,7 @@ static void dpmi_client_teardown(void)
  *                                                                                    *
  *  Run 52 proved the kernel DEADLOCKS (not skip-resumes) on a plain-instruction PM  *
  *  #GP, so we cannot let the kernel execute risky PM code. Instead run 16-bit PM in  *
- *  the v86interp core (already proven on the mode-12h fill loops) with g_seg2lin set *
+ *  the v86interp core (already proven on the mode-12h fill loops) with g_V86SegmentToLinear set *
  *  to an LDT-base resolver, so the SAME interpreter walks PM code -- descriptor      *
  *  bases instead of paragraph shifts -- and NEVER hands a faulting instruction to    *
  *  the kernel. An interpreter enforces no descriptor type, so the code-typed-SS      *
@@ -28764,48 +28764,48 @@ static int g_dpmi_use_interp = 0;             /* run 53 toggle (1 = interp fallb
 
 static uint32_t dpmi_seg2lin(uint16_t sel) { return dpmi_sel_base(sel); }
 
-static void dpmi_icpu_load(icpu *c, volatile BYTE *tib)
+static void dpmi_icpu_load(V86_CPU *c, volatile BYTE *tib)
 {
-    c->r[0]=(uint16_t)VDM_REG(tib,VTIB_EAX); c->r[1]=(uint16_t)VDM_REG(tib,VTIB_ECX);
-    c->r[2]=(uint16_t)VDM_REG(tib,VTIB_EDX); c->r[3]=(uint16_t)VDM_REG(tib,VTIB_EBX);
-    c->r[4]=(uint16_t)VDM_REG(tib,VTIB_ESP); c->r[5]=(uint16_t)VDM_REG(tib,VTIB_EBP);
-    c->r[6]=(uint16_t)VDM_REG(tib,VTIB_ESI); c->r[7]=(uint16_t)VDM_REG(tib,VTIB_EDI);
-    c->seg[0]=(uint16_t)VDM_REG(tib,VTIB_ES); c->seg[1]=(uint16_t)VDM_REG(tib,VTIB_CS);
-    c->seg[2]=(uint16_t)VDM_REG(tib,VTIB_SS); c->seg[3]=(uint16_t)VDM_REG(tib,VTIB_DS);
-    c->seg[4]=(uint16_t)VDM_REG(tib,VTIB_FS); c->seg[5]=(uint16_t)VDM_REG(tib,VTIB_GS);
-    c->ip=(uint16_t)VDM_REG(tib,VTIB_EIP);
-    c->flags=VDM_REG(tib,VTIB_EFLAGS);
+    c->Registers[0]=(uint16_t)VDM_REG(tib,VTIB_EAX); c->Registers[1]=(uint16_t)VDM_REG(tib,VTIB_ECX);
+    c->Registers[2]=(uint16_t)VDM_REG(tib,VTIB_EDX); c->Registers[3]=(uint16_t)VDM_REG(tib,VTIB_EBX);
+    c->Registers[4]=(uint16_t)VDM_REG(tib,VTIB_ESP); c->Registers[5]=(uint16_t)VDM_REG(tib,VTIB_EBP);
+    c->Registers[6]=(uint16_t)VDM_REG(tib,VTIB_ESI); c->Registers[7]=(uint16_t)VDM_REG(tib,VTIB_EDI);
+    c->Segments[0]=(uint16_t)VDM_REG(tib,VTIB_ES); c->Segments[1]=(uint16_t)VDM_REG(tib,VTIB_CS);
+    c->Segments[2]=(uint16_t)VDM_REG(tib,VTIB_SS); c->Segments[3]=(uint16_t)VDM_REG(tib,VTIB_DS);
+    c->Segments[4]=(uint16_t)VDM_REG(tib,VTIB_FS); c->Segments[5]=(uint16_t)VDM_REG(tib,VTIB_GS);
+    c->Ip=(uint16_t)VDM_REG(tib,VTIB_EIP);
+    c->Flags=VDM_REG(tib,VTIB_EFLAGS);
 }
-static void dpmi_icpu_store(icpu *c, volatile BYTE *tib)
+static void dpmi_icpu_store(V86_CPU *c, volatile BYTE *tib)
 {
-    VDM_SET16(tib,VTIB_EAX,c->r[0]); VDM_SET16(tib,VTIB_ECX,c->r[1]);
-    VDM_SET16(tib,VTIB_EDX,c->r[2]); VDM_SET16(tib,VTIB_EBX,c->r[3]);
-    VDM_SET16(tib,VTIB_ESP,c->r[4]); VDM_SET16(tib,VTIB_EBP,c->r[5]);
-    VDM_SET16(tib,VTIB_ESI,c->r[6]); VDM_SET16(tib,VTIB_EDI,c->r[7]);
-    VDM_SET16(tib,VTIB_ES,c->seg[0]); VDM_SET16(tib,VTIB_CS,c->seg[1]);
-    VDM_SET16(tib,VTIB_SS,c->seg[2]); VDM_SET16(tib,VTIB_DS,c->seg[3]);
-    VDM_SET16(tib,VTIB_FS,c->seg[4]); VDM_SET16(tib,VTIB_GS,c->seg[5]);
-    VDM_SET16(tib,VTIB_EIP,c->ip);
-    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & 0xFFFF0000u) | (c->flags & 0xFFFFu);
+    VDM_SET16(tib,VTIB_EAX,c->Registers[0]); VDM_SET16(tib,VTIB_ECX,c->Registers[1]);
+    VDM_SET16(tib,VTIB_EDX,c->Registers[2]); VDM_SET16(tib,VTIB_EBX,c->Registers[3]);
+    VDM_SET16(tib,VTIB_ESP,c->Registers[4]); VDM_SET16(tib,VTIB_EBP,c->Registers[5]);
+    VDM_SET16(tib,VTIB_ESI,c->Registers[6]); VDM_SET16(tib,VTIB_EDI,c->Registers[7]);
+    VDM_SET16(tib,VTIB_ES,c->Segments[0]); VDM_SET16(tib,VTIB_CS,c->Segments[1]);
+    VDM_SET16(tib,VTIB_SS,c->Segments[2]); VDM_SET16(tib,VTIB_DS,c->Segments[3]);
+    VDM_SET16(tib,VTIB_FS,c->Segments[4]); VDM_SET16(tib,VTIB_GS,c->Segments[5]);
+    VDM_SET16(tib,VTIB_EIP,c->Ip);
+    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & 0xFFFF0000u) | (c->Flags & 0xFFFFu);
 }
 
 /* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
    unserviceable opcode (already logged). Never touches the kernel PM path. */
 static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
 {
-    icpu c; long guard = 0; char rb[256]; char *r;
-    g_seg2lin = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
-    g_sel_desc = dpmi_sel_desc;               /* ...and answers LAR/LSL from g_ldt[] (run 55) */
+    V86_CPU c; long guard = 0; char rb[256]; char *r;
+    g_V86SegmentToLinear = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
+    g_V86SelectorDescriptor = dpmi_sel_desc;               /* ...and answers LAR/LSL from g_ldt[] (run 55) */
     dpmi_icpu_load(&c, tib);
     r = rb;
-    r = LogPut(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = LogHex(r, c.seg[1]);
-    r = LogPut(r, ":0x"); r = LogHex(r, c.ip);
-    r = LogPut(r, " DS=0x"); r = LogHex(r, c.seg[3]); r = LogPut(r, " SS=0x"); r = LogHex(r, c.seg[2]);
+    r = LogPut(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = LogHex(r, c.Segments[1]);
+    r = LogPut(r, ":0x"); r = LogHex(r, c.Ip);
+    r = LogPut(r, " DS=0x"); r = LogHex(r, c.Segments[3]); r = LogPut(r, " SS=0x"); r = LogHex(r, c.Segments[2]);
     r = LogPut(r, "\r\n"); LogAppend(LOG_PATH, rb, r); serial_out(rb, r);
     for (;;) {
-        if (istep(&c)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
-        { uint32_t site = seg_base(c.seg[1]) + c.ip;
-          uint8_t op = imem_r8(site), op1 = imem_r8(site+1);
+        if (V86Step(&c)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
+        { uint32_t site = V86SegmentBase(c.Segments[1]) + c.Ip;
+          uint8_t op = V86HostRead8(site), op1 = V86HostRead8(site+1);
           if (op == 0xCD) {                   /* INT nn -> shared DPMI/DOS dispatch */
               int rc;
               dpmi_icpu_store(&c, tib);
@@ -28816,8 +28816,8 @@ static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
               continue;
           }
           r = rb;                             /* the spike's to-do signal */
-          r = LogPut(r, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); r = LogHex(r, c.seg[1]);
-          r = LogPut(r, ":0x"); r = LogHex(r, c.ip);
+          r = LogPut(r, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); r = LogHex(r, c.Segments[1]);
+          r = LogPut(r, ":0x"); r = LogHex(r, c.Ip);
           r = LogPut(r, " bytes="); r = LogDump(r, (const BYTE*)(ULONG_PTR)site, 8);
           r = LogPut(r, " (steps=0x"); r = LogHex(r, (unsigned)guard); r = LogPut(r, ")\r\n");
           LogAppend(LOG_PATH, rb, r); serial_out(rb, r);
