@@ -30,6 +30,7 @@
  */
 #ifndef NTVDMEX_INSTALL_H
 #define NTVDMEX_INSTALL_H
+#include "../ntvdmex_types.h"
 
 /* The IFEO value we own. One definition, because a typo in either half of this is
    an install that appears to succeed and routes nothing. */
@@ -41,109 +42,113 @@
    somebody else's key is how you leave litter that outlives the uninstall. */
 #define INSTALL_PREV_VAL "PreviousDebugger"
 
-typedef enum {
+typedef enum _INSTALL_STATE {
     INSTALL_ABSENT = 0,   /* no Debugger value: the machine uses its own ntvdm  */
     INSTALL_OURS,         /* it points at this exe -- we are the VDM            */
     INSTALL_OTHER         /* it points at something else -- NOT ours to delete  */
-} install_state;
+} INSTALL_STATE;
+
+/* The name an ntvdmex host goes by, in any folder (InstallNamesNtvdmex). */
+#define INSTALL_HOST_NAME        "ntvdmhost.exe"
+#define INSTALL_HOST_NAME_LENGTH 13
 
 /* ── PATH COMPARISON, THE WAY THE REGISTRY ACTUALLY HOLDS THEM. ──────────────────
      Windows paths are case-insensitive, the value may or may not be quoted, and a
      hand-written one usually has a stray space. Compare on those terms or the
      answer is wrong for the most common way this value gets set: by a person. */
-static int install_path_eq(const char *a, const char *b)
+static INT InstallIsSamePath(PCSTR first, PCSTR second)
 {
-    int ai = 0, bi = 0, ae, be;
-    if (!a || !b) return 0;
-    while (a[ai] == ' ' || a[ai] == '\t' || a[ai] == '"') ++ai;
-    while (b[bi] == ' ' || b[bi] == '\t' || b[bi] == '"') ++bi;
-    ae = ai; while (a[ae]) ++ae;
-    be = bi; while (b[be]) ++be;
-    while (ae > ai && (a[ae-1] == ' ' || a[ae-1] == '\t' || a[ae-1] == '"')) --ae;
-    while (be > bi && (b[be-1] == ' ' || b[be-1] == '\t' || b[be-1] == '"')) --be;
-    if (ae - ai != be - bi) return 0;
-    while (ai < ae) {
-        char ca = a[ai], cb = b[bi];
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+    INT firstIndex = 0, secondIndex = 0, firstEnd, secondEnd;
+    if (!first || !second) return 0;
+    while (first[firstIndex] == ' ' || first[firstIndex] == '\t' || first[firstIndex] == '"') ++firstIndex;
+    while (second[secondIndex] == ' ' || second[secondIndex] == '\t' || second[secondIndex] == '"') ++secondIndex;
+    firstEnd = firstIndex; while (first[firstEnd]) ++firstEnd;
+    secondEnd = secondIndex; while (second[secondEnd]) ++secondEnd;
+    while (firstEnd > firstIndex && (first[firstEnd-1] == ' ' || first[firstEnd-1] == '\t' || first[firstEnd-1] == '"')) --firstEnd;
+    while (secondEnd > secondIndex && (second[secondEnd-1] == ' ' || second[secondEnd-1] == '\t' || second[secondEnd-1] == '"')) --secondEnd;
+    if (firstEnd - firstIndex != secondEnd - secondIndex) return 0;
+    while (firstIndex < firstEnd) {
+        CHAR firstChar = first[firstIndex], secondChar = second[secondIndex];
+        if (firstChar >= 'A' && firstChar <= 'Z') firstChar = (CHAR)(firstChar - 'A' + 'a');
+        if (secondChar >= 'A' && secondChar <= 'Z') secondChar = (CHAR)(secondChar - 'A' + 'a');
         /* A forward slash is a legal separator in a Win32 path and a person who
            types one has still named the same file. */
-        if (ca == '/') ca = '\\';
-        if (cb == '/') cb = '\\';
-        if (ca != cb) return 0;
-        ++ai; ++bi;
+        if (firstChar == '/') firstChar = '\\';
+        if (secondChar == '/') secondChar = '\\';
+        if (firstChar != secondChar) return 0;
+        ++firstIndex; ++secondIndex;
     }
     return 1;
 }
 
-/* `cur` is the Debugger value as read (NULL or "" when there is none); `self` is
+/* `current` is the Debugger value as read (NULL or "" when there is none); `self` is
    this executable's full path. */
-static install_state install_classify(const char *cur, const char *self)
+static INSTALL_STATE InstallClassify(PCSTR current, PCSTR self)
 {
-    int i = 0;
-    if (!cur) return INSTALL_ABSENT;
-    while (cur[i] == ' ' || cur[i] == '\t' || cur[i] == '"') ++i;
-    if (!cur[i]) return INSTALL_ABSENT;      /* present but empty is not installed */
-    return install_path_eq(cur, self) ? INSTALL_OURS : INSTALL_OTHER;
+    INT index = 0;
+    if (!current) return INSTALL_ABSENT;
+    while (current[index] == ' ' || current[index] == '\t' || current[index] == '"') ++index;
+    if (!current[index]) return INSTALL_ABSENT;      /* present but empty is not installed */
+    return InstallIsSamePath(current, self) ? INSTALL_OURS : INSTALL_OTHER;
 }
 
 /* What an install would DO from here -- so the caller reports the same thing it is
    about to perform, rather than the two being decided in different places. */
-typedef enum {
+typedef enum _INSTALL_ACTION {
     INSTALL_ACT_NOTHING = 0,  /* already in the requested state             */
     INSTALL_ACT_WRITE,        /* write our path (saving anything displaced) */
     INSTALL_ACT_RESTORE,      /* put the previous value back                */
     INSTALL_ACT_DELETE,       /* remove the value entirely                  */
     INSTALL_ACT_REFUSE        /* somebody else's value -- not ours to touch */
-} install_action;
+} INSTALL_ACTION;
 
-static install_action install_plan(install_state st, int want_installed, int have_prev);
+static INSTALL_ACTION InstallPlan(INSTALL_STATE state, INT isWantInstalled, INT hasPrevious);
 
 /* ── IS THE VALUE ANOTHER COPY OF US? (s81, #195) A Debugger value naming some OTHER
      ntvdmhost.exe -- installed from an extracted zip, then uninstalling from bin\ -- was
      classified as a stranger's and refused, which locked the user out of uninstalling
      with the copy they had. The file name is the test: `ntvdmhost.exe`, any folder. */
-static int install_names_ntvdmex(const char *cur)
+static INT InstallNamesNtvdmex(PCSTR current)
 {
-    static const char want[] = "ntvdmhost.exe";
-    const char *s, *b; int i, n = 0;
-    if (!cur) return 0;
-    while (*cur == ' ' || *cur == '\t' || *cur == '"') ++cur;
-    for (s = cur; *s && *s != '"'; ++s) {           /* up to a closing quote */
-        n = (int)(s - cur) + 1;
-        if (n >= 13) {                              /* ends in "ntvdmhost.exe"? */
-            for (i = 0, b = s - 12; i < 13; ++i) {
-                char c = b[i]; if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-                if (c != want[i]) break;
+    static const CHAR wanted[] = INSTALL_HOST_NAME;
+    PCSTR scan, nameStart; INT index, length = 0;
+    if (!current) return 0;
+    while (*current == ' ' || *current == '\t' || *current == '"') ++current;
+    for (scan = current; *scan && *scan != '"'; ++scan) {           /* up to a closing quote */
+        length = (INT)(scan - current) + 1;
+        if (length >= INSTALL_HOST_NAME_LENGTH) {                    /* ends in "ntvdmhost.exe"? */
+            for (index = 0, nameStart = scan - (INSTALL_HOST_NAME_LENGTH - 1); index < INSTALL_HOST_NAME_LENGTH; ++index) {
+                CHAR character = nameStart[index]; if (character >= 'A' && character <= 'Z') character = (CHAR)(character - 'A' + 'a');
+                if (character != wanted[index]) break;
             }
-            if (i == 13 && (b == cur || b[-1] == '\\' || b[-1] == '/')
-                && (s[1] == 0 || s[1] == '"' || s[1] == ' ' || s[1] == '\t')) return 1;
+            if (index == INSTALL_HOST_NAME_LENGTH && (nameStart == current || nameStart[-1] == '\\' || nameStart[-1] == '/')
+                && (scan[1] == 0 || scan[1] == '"' || scan[1] == ' ' || scan[1] == '\t')) return 1;
         }
     }
     return 0;
 }
 
-/* The full decision. `other_is_us`: an INSTALL_OTHER value names an ntvdmhost.exe.
-   `force`: /uninstall /force -- remove whatever is there (the message names it). */
-static install_action install_plan_ex(install_state st, int want_installed, int have_prev,
-                                      int other_is_us, int force)
+/* The full decision. `isOtherUs`: an INSTALL_OTHER value names an ntvdmhost.exe.
+   `isForce`: /uninstall /force -- remove whatever is there (the message names it). */
+static INSTALL_ACTION InstallPlanEx(INSTALL_STATE state, INT isWantInstalled, INT hasPrevious,
+                                    INT isOtherUs, INT isForce)
 {
-    if (!want_installed && st == INSTALL_OTHER && (other_is_us || force))
-        return have_prev ? INSTALL_ACT_RESTORE : INSTALL_ACT_DELETE;
-    return install_plan(st, want_installed, have_prev);
+    if (!isWantInstalled && state == INSTALL_OTHER && (isOtherUs || isForce))
+        return hasPrevious ? INSTALL_ACT_RESTORE : INSTALL_ACT_DELETE;
+    return InstallPlan(state, isWantInstalled, hasPrevious);
 }
 
-static install_action install_plan(install_state st, int want_installed, int have_prev)
+static INSTALL_ACTION InstallPlan(INSTALL_STATE state, INT isWantInstalled, INT hasPrevious)
 {
-    if (want_installed)
-        return (st == INSTALL_OURS) ? INSTALL_ACT_NOTHING : INSTALL_ACT_WRITE;
+    if (isWantInstalled)
+        return (state == INSTALL_OURS) ? INSTALL_ACT_NOTHING : INSTALL_ACT_WRITE;
     /* ⚠ UNINSTALLING SOMEBODY ELSE'S VALUE IS REFUSED, NOT SILENTLY DONE. If the
          Debugger points at another program we never installed, deleting it would
          break whatever that is and we would have no way to tell the user what we
          removed. Absent is already the goal, so that is NOTHING, not an error. */
-    if (st == INSTALL_ABSENT) return INSTALL_ACT_NOTHING;
-    if (st == INSTALL_OTHER)  return INSTALL_ACT_REFUSE;
-    return have_prev ? INSTALL_ACT_RESTORE : INSTALL_ACT_DELETE;
+    if (state == INSTALL_ABSENT) return INSTALL_ACT_NOTHING;
+    if (state == INSTALL_OTHER)  return INSTALL_ACT_REFUSE;
+    return hasPrevious ? INSTALL_ACT_RESTORE : INSTALL_ACT_DELETE;
 }
 
 #endif /* NTVDMEX_INSTALL_H */

@@ -5004,8 +5004,8 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
     char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
     char cur0[NTVDMEX_PATH_MAX];
     char *p = msg;
-    install_state st, st0;
-    install_action act;
+    INSTALL_STATE st, st0;
+    INSTALL_ACTION act;
     LONG rc = ERROR_SUCCESS;
     int have_prev;
     (void)cap;
@@ -5017,10 +5017,10 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
        value to restore", so uninstalling from A "restored" A itself and then failed its
        own read-back. A saved value that is another NTVDMEX is not somebody else's
        setting to give back -- ignore it (and never save one, below). */
-    if (have_prev && install_names_ntvdmex(prev)) have_prev = 0;
-    st  = install_classify(cur[0] ? cur : NULL, self);
+    if (have_prev && InstallNamesNtvdmex(prev)) have_prev = 0;
+    st  = InstallClassify(cur[0] ? cur : NULL, self);
     st0 = st; zput(cur0, cur);                      /* what was there, for the report */
-    act = install_plan_ex(st, want, have_prev, install_names_ntvdmex(cur), force);
+    act = InstallPlanEx(st, want, have_prev, InstallNamesNtvdmex(cur), force);
 
     switch (act) {
     case INSTALL_ACT_NOTHING:
@@ -5038,7 +5038,7 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
         /* Save what we are about to displace, so uninstall can put it back. Only
            when it is somebody else's -- overwriting our own path with our own path
            must not record US as the thing to restore. */
-        if (st == INSTALL_OTHER && !install_names_ntvdmex(cur)) install_prev_write(cur);
+        if (st == INSTALL_OTHER && !InstallNamesNtvdmex(cur)) install_prev_write(cur);
         rc = install_write(self);
         break;
     case INSTALL_ACT_RESTORE:
@@ -5063,7 +5063,7 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
 
     /* ── THE READ-BACK. */
     install_read(cur, sizeof cur);
-    st = install_classify(cur[0] ? cur : NULL, self);
+    st = InstallClassify(cur[0] ? cur : NULL, self);
     if (want && st != INSTALL_OURS) {
         p = zput(p, "FAILED: the value was written but does not read back as ours.\r\n");
         return 0;
@@ -5085,7 +5085,7 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
         if (act == INSTALL_ACT_RESTORE) { p = zput(p, cur); p = zput(p, "\r\n"); }
         if (st0 == INSTALL_OTHER) {                 /* #195: say what we removed */
             p = zput(p, "Removed a Debugger value that named ");
-            p = zput(p, install_names_ntvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
+            p = zput(p, InstallNamesNtvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
                                                     : "another program (/force):\r\n    ");
             p = zput(p, cur0); p = zput(p, "\r\n");
         }
@@ -5099,15 +5099,15 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
    "installed as this machine", a sentence only /install ever prints -- so it
    declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
    layers that have to agree about a string, don't. (s72, found by hand on the rig.) */
-static install_state install_status_text(char *msg, DWORD cap)
+static INSTALL_STATE install_status_text(char *msg, DWORD cap)
 {
     char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX];
     char *p = msg;
-    install_state st;
+    INSTALL_STATE st;
     (void)cap;
     install_self_path(self, sizeof self);
     install_read(cur, sizeof cur);
-    st = install_classify(cur[0] ? cur : NULL, self);
+    st = InstallClassify(cur[0] ? cur : NULL, self);
     p = zput(p, "This executable:\r\n    "); p = zput(p, self); p = zput(p, "\r\n\r\n");
     switch (st) {
     case INSTALL_OURS:
@@ -5198,7 +5198,7 @@ static int launch_shell_vdm(void)
     HANDLE h;
     STARTUPINFOA si; PROCESS_INFORMATION pi;
 
-    {   install_state st = install_status_text(msg, sizeof msg);
+    {   INSTALL_STATE st = install_status_text(msg, sizeof msg);
         if (st != INSTALL_OURS) {
             /* The status text says WHICH of the two it is; add what to do about it. */
             zput(msg + lstrlenA(msg),
@@ -29743,7 +29743,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      program is. A script can branch on that without matching a
                      sentence -- which is exactly what package/smoke.bat was doing
                      wrongly, grepping for text only /install ever prints. */
-                install_state st2 = install_status_text(vmsg, sizeof vmsg);
+                INSTALL_STATE st2 = install_status_text(vmsg, sizeof vmsg);
                 install_report(vmsg, 1);
                 return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
             }
