@@ -346,7 +346,7 @@ static VOID Emu8kTestNoteKill(INT channel)
     Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, EMU8K_TEST_FULL_TARGET);
 }
 
-int main(void)
+INT main(VOID)
 {
     DWORD wordIndex;
     INT channel;
