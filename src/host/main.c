@@ -4242,15 +4242,15 @@ static int AsyncInjectIrq(unsigned irq)
        is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_AsyncInjected + g_AsyncBail <= 4) {
-        char lineBuffer[256], *lineCursor = lineBuffer; int vector;
+        char lineBuffer[256], *lineCursor = lineBuffer; int logVector;
         lineCursor = LogPut(lineCursor, "ASYNC-INJ vec=0x");  lineCursor = LogHex(lineCursor, (DWORD)VddPicVector(&g_Pic, (uint8_t)irq));
         lineCursor = LogPut(lineCursor, " ok=0x");            lineCursor = LogHex(lineCursor, (DWORD)isOk);
         lineCursor = LogPut(lineCursor, " from=0x");          lineCursor = LogHex(lineCursor, cs);
         lineCursor = LogPut(lineCursor, ":0x");               lineCursor = LogHex(lineCursor, ip);
         lineCursor = LogPut(lineCursor, " ivt[0B..0F]=");
-        for (vector = 0x0B; vector <= 0x0F; ++vector) {
-            lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(vector * 4 + 2));
-            lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(vector * 4));
+        for (logVector = 0x0B; logVector <= 0x0F; ++logVector) {
+            lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(logVector * 4 + 2));
+            lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(logVector * 4));
             lineCursor = LogPut(lineCursor, " ");
         }
         lineCursor = LogPut(lineCursor, "\r\n");
@@ -4915,24 +4915,24 @@ static void MruAdd(const char *path)
 
 /* Set (v non-NULL) or delete (v NULL) the IFEO Debugger value. Returns a Win32
    error code; ERROR_SUCCESS means the machine now says what we asked it to. */
-static LONG install_write(const char *v)
+static LONG InstallWrite(const char *value)
 {
-    HKEY k; DWORD disp; LONG rc;
-    rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, NULL, 0,
-                         KEY_SET_VALUE, NULL, &k, &disp);
-    if (rc != ERROR_SUCCESS) return rc;
-    if (v) { DWORD n = 0; while (v[n]) ++n;
-             rc = RegSetValueExA(k, INSTALL_VAL, 0, REG_SZ, (const BYTE *)v, n + 1); }
-    else   { rc = RegDeleteValueA(k, INSTALL_VAL);
-             if (rc == ERROR_FILE_NOT_FOUND) rc = ERROR_SUCCESS; }
-    RegCloseKey(k);
-    return rc;
+    HKEY key; DWORD disp; LONG status;
+    status = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, NULL, 0,
+                         KEY_SET_VALUE, NULL, &key, &disp);
+    if (status != ERROR_SUCCESS) return status;
+    if (value) { DWORD length = 0; while (value[length]) ++length;
+             status = RegSetValueExA(key, INSTALL_VAL, 0, REG_SZ, (const BYTE *)value, length + 1); }
+    else   { status = RegDeleteValueA(key, INSTALL_VAL);
+             if (status == ERROR_FILE_NOT_FOUND) status = ERROR_SUCCESS; }
+    RegCloseKey(key);
+    return status;
 }
 
 /* Our own full path, which is what the value has to contain. */
-static void install_self_path(char *buf, DWORD cap)
+static void InstallSelfPath(char *buffer, DWORD cap)
 {
-    if (!GetModuleFileNameA(NULL, buf, cap)) buf[0] = 0;
+    if (!GetModuleFileNameA(NULL, buffer, cap)) buffer[0] = 0;
 }
 
 /* ── HOW MANY OF WINDOWS' OWN ntvdm.exe ARE RUNNING RIGHT NOW. ──────────────────────
@@ -4950,45 +4950,45 @@ static void install_self_path(char *buf, DWORD cap)
    Counts by image name from the process list; our own host is ntvdmhost.exe, so it
    is never mistaken for one. -1 when the list cannot be read at all, so the caller
    can say "could not tell" rather than "none". */
-static int install_resident_vdms(void)
+static int InstallResidentVdms(void)
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32 pe;
-    int n = 0;
+    PROCESSENTRY32 entry;
+    int count = 0;
     if (snap == INVALID_HANDLE_VALUE) return -1;
-    pe.dwSize = sizeof pe;
-    if (Process32First(snap, &pe)) {
+    entry.dwSize = sizeof entry;
+    if (Process32First(snap, &entry)) {
         do {
             static const char want[] = "ntvdm.exe";
-            int i;
-            for (i = 0; want[i]; ++i) {
-                char c = pe.szExeFile[i];
-                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-                if (c != want[i]) break;
+            int index;
+            for (index = 0; want[index]; ++index) {
+                char character = entry.szExeFile[index];
+                if (character >= 'A' && character <= 'Z') character = (char)(character - 'A' + 'a');
+                if (character != want[index]) break;
             }
-            if (!want[i] && !pe.szExeFile[i]) ++n;
-        } while (Process32Next(snap, &pe));
+            if (!want[index] && !entry.szExeFile[index]) ++count;
+        } while (Process32Next(snap, &entry));
     }
     CloseHandle(snap);
-    return n;
+    return count;
 }
 
 /* The sentence that goes with a non-zero count, for /install and /status alike. */
-static char *install_resident_text(char *p, int n)
+static char *InstallResidentText(char *cursor, int count)
 {
-    if (n == 0) return p;
-    if (n < 0) return LogPut(p, "(Could not read the process list, so whether one of "
+    if (count == 0) return cursor;
+    if (count < 0) return LogPut(cursor, "(Could not read the process list, so whether one of "
                               "Windows' own ntvdm.exe is still running is unknown.)\r\n");
-    p = LogPut(p, "\r\n!! ");
-    p = LogDecimal(p, (unsigned)n);
-    p = LogPut(p, n == 1 ? " copy of Windows' own ntvdm.exe is still running."
+    cursor = LogPut(cursor, "\r\n!! ");
+    cursor = LogDecimal(cursor, (unsigned)count);
+    cursor = LogPut(cursor, count == 1 ? " copy of Windows' own ntvdm.exe is still running."
                        : " copies of Windows' own ntvdm.exe are still running.");
-    p = LogPut(p, "\r\n   Programs that are already running, and 16-bit Windows programs "
+    cursor = LogPut(cursor, "\r\n   Programs that are already running, and 16-bit Windows programs "
                 "started\r\n   from now on, keep using it: Windows only asks for NTVDMEX "
                 "when it starts a\r\n   NEW ntvdm.exe. Close every MS-DOS and 16-bit "
                 "Windows program (or reboot),\r\n   then run status.bat -- it should "
                 "no longer print this.\r\n");
-    return p;
+    return cursor;
 }
 
 /* ── DO IT, AND REPORT WHAT ACTUALLY HAPPENED. ───────────────────────────────────
@@ -4999,95 +4999,95 @@ static char *install_resident_text(char *p, int n)
      registry value that reads correctly and does not route, and by a write that
      silently did nothing; reporting success on the strength of a return code alone
      is the same class of claim. Read it again and classify it again. */
-static int install_perform(int want, int force, char *msg, DWORD cap)
+static int InstallPerform(int want, int force, char *message, DWORD cap)
 {
-    char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
+    char self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
     char cur0[NTVDMEX_PATH_MAX];
-    char *p = msg;
-    INSTALL_STATE st, st0;
+    char *cursor = message;
+    INSTALL_STATE state, oldState;
     INSTALL_ACTION act;
-    LONG rc = ERROR_SUCCESS;
-    int have_prev;
+    LONG status = ERROR_SUCCESS;
+    int havePrevious;
     (void)cap;
 
-    install_self_path(self, sizeof self);
-    InstallRead(cur, sizeof cur);
-    have_prev = InstallPreviousRead(prev, sizeof prev);
+    InstallSelfPath(self, sizeof self);
+    InstallRead(current, sizeof current);
+    havePrevious = InstallPreviousRead(prev, sizeof prev);
     /* #195, measured on the rig: installing from copy B saved copy A (bin\) as "the
        value to restore", so uninstalling from A "restored" A itself and then failed its
        own read-back. A saved value that is another NTVDMEX is not somebody else's
        setting to give back -- ignore it (and never save one, below). */
-    if (have_prev && InstallNamesNtvdmex(prev)) have_prev = 0;
-    st  = InstallClassify(cur[0] ? cur : NULL, self);
-    st0 = st; LogPut(cur0, cur);                      /* what was there, for the report */
-    act = InstallPlanEx(st, want, have_prev, InstallNamesNtvdmex(cur), force);
+    if (havePrevious && InstallNamesNtvdmex(prev)) havePrevious = 0;
+    state  = InstallClassify(current[0] ? current : NULL, self);
+    oldState = state; LogPut(cur0, current);                      /* what was there, for the report */
+    act = InstallPlanEx(state, want, havePrevious, InstallNamesNtvdmex(current), force);
 
     switch (act) {
     case INSTALL_ACT_NOTHING:
-        p = LogPut(p, want ? "NTVDMEX is already installed as this machine's VDM.\r\n"
+        cursor = LogPut(cursor, want ? "NTVDMEX is already installed as this machine's VDM.\r\n"
                          : "NTVDMEX is not installed; nothing to remove.\r\n");
         break;
     case INSTALL_ACT_REFUSE:
-        p = LogPut(p, "REFUSED: the ntvdm.exe Debugger value points at another "
+        cursor = LogPut(cursor, "REFUSED: the ntvdm.exe Debugger value points at another "
                     "program, not at NTVDMEX:\r\n    ");
-        p = LogPut(p, cur);
-        p = LogPut(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n"
+        cursor = LogPut(cursor, current);
+        cursor = LogPut(cursor, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n"
                     "If you are sure it should go, run:  ntvdmhost.exe /uninstall /force\r\n");
         return 0;
     case INSTALL_ACT_WRITE:
         /* Save what we are about to displace, so uninstall can put it back. Only
            when it is somebody else's -- overwriting our own path with our own path
            must not record US as the thing to restore. */
-        if (st == INSTALL_OTHER && !InstallNamesNtvdmex(cur)) InstallPreviousWrite(cur);
-        rc = install_write(self);
+        if (state == INSTALL_OTHER && !InstallNamesNtvdmex(current)) InstallPreviousWrite(current);
+        status = InstallWrite(self);
         break;
     case INSTALL_ACT_RESTORE:
-        rc = install_write(prev);
-        if (rc == ERROR_SUCCESS) InstallPreviousWrite(NULL);
+        status = InstallWrite(prev);
+        if (status == ERROR_SUCCESS) InstallPreviousWrite(NULL);
         break;
     case INSTALL_ACT_DELETE:
-        rc = install_write(NULL);
+        status = InstallWrite(NULL);
         break;
     }
 
-    if (rc != ERROR_SUCCESS) {
-        p = LogPut(p, rc == ERROR_ACCESS_DENIED
+    if (status != ERROR_SUCCESS) {
+        cursor = LogPut(cursor, status == ERROR_ACCESS_DENIED
             ? "FAILED: access denied writing HKEY_LOCAL_MACHINE.\r\n"
               "Installing changes a machine-wide setting, so it needs an "
               "Administrator account.\r\n"
             : "FAILED: could not write the registry (error 0x");
-        if (rc != ERROR_ACCESS_DENIED) { p = LogHex(p, (DWORD)rc); p = LogPut(p, ").\r\n"); }
+        if (status != ERROR_ACCESS_DENIED) { cursor = LogHex(cursor, (DWORD)status); cursor = LogPut(cursor, ").\r\n"); }
         return 0;
     }
     if (act == INSTALL_ACT_NOTHING) return 1;
 
     /* ── THE READ-BACK. */
-    InstallRead(cur, sizeof cur);
-    st = InstallClassify(cur[0] ? cur : NULL, self);
-    if (want && st != INSTALL_OURS) {
-        p = LogPut(p, "FAILED: the value was written but does not read back as ours.\r\n");
+    InstallRead(current, sizeof current);
+    state = InstallClassify(current[0] ? current : NULL, self);
+    if (want && state != INSTALL_OURS) {
+        cursor = LogPut(cursor, "FAILED: the value was written but does not read back as ours.\r\n");
         return 0;
     }
-    if (!want && st == INSTALL_OURS) {
-        p = LogPut(p, "FAILED: the value was removed but still reads back as ours.\r\n");
+    if (!want && state == INSTALL_OURS) {
+        cursor = LogPut(cursor, "FAILED: the value was removed but still reads back as ours.\r\n");
         return 0;
     }
     if (want) {
-        p = LogPut(p, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
+        cursor = LogPut(cursor, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
                     "machine now runs through NTVDMEX:\r\n    ");
-        p = LogPut(p, self);
-        p = LogPut(p, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
-        p = install_resident_text(p, install_resident_vdms());
+        cursor = LogPut(cursor, self);
+        cursor = LogPut(cursor, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
+        cursor = InstallResidentText(cursor, InstallResidentVdms());
     } else {
-        p = LogPut(p, act == INSTALL_ACT_RESTORE
+        cursor = LogPut(cursor, act == INSTALL_ACT_RESTORE
             ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
             : "UNINSTALLED. This machine uses its own ntvdm.exe again.\r\n");
-        if (act == INSTALL_ACT_RESTORE) { p = LogPut(p, cur); p = LogPut(p, "\r\n"); }
-        if (st0 == INSTALL_OTHER) {                 /* #195: say what we removed */
-            p = LogPut(p, "Removed a Debugger value that named ");
-            p = LogPut(p, InstallNamesNtvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
+        if (act == INSTALL_ACT_RESTORE) { cursor = LogPut(cursor, current); cursor = LogPut(cursor, "\r\n"); }
+        if (oldState == INSTALL_OTHER) {                 /* #195: say what we removed */
+            cursor = LogPut(cursor, "Removed a Debugger value that named ");
+            cursor = LogPut(cursor, InstallNamesNtvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
                                                     : "another program (/force):\r\n    ");
-            p = LogPut(p, cur0); p = LogPut(p, "\r\n");
+            cursor = LogPut(cursor, cur0); cursor = LogPut(cursor, "\r\n");
         }
     }
     return 1;
@@ -5099,84 +5099,84 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
    "installed as this machine", a sentence only /install ever prints -- so it
    declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
    layers that have to agree about a string, don't. (s72, found by hand on the rig.) */
-static INSTALL_STATE install_status_text(char *msg, DWORD cap)
+static INSTALL_STATE InstallStatusText(char *message, DWORD cap)
 {
-    char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX];
-    char *p = msg;
-    INSTALL_STATE st;
+    char self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX];
+    char *cursor = message;
+    INSTALL_STATE state;
     (void)cap;
-    install_self_path(self, sizeof self);
-    InstallRead(cur, sizeof cur);
-    st = InstallClassify(cur[0] ? cur : NULL, self);
-    p = LogPut(p, "This executable:\r\n    "); p = LogPut(p, self); p = LogPut(p, "\r\n\r\n");
-    switch (st) {
+    InstallSelfPath(self, sizeof self);
+    InstallRead(current, sizeof current);
+    state = InstallClassify(current[0] ? current : NULL, self);
+    cursor = LogPut(cursor, "This executable:\r\n    "); cursor = LogPut(cursor, self); cursor = LogPut(cursor, "\r\n\r\n");
+    switch (state) {
     case INSTALL_OURS:
-        p = LogPut(p, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
+        cursor = LogPut(cursor, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
                     "run through NTVDMEX.\r\n");
-        p = install_resident_text(p, install_resident_vdms());
+        cursor = InstallResidentText(cursor, InstallResidentVdms());
         break;
     case INSTALL_OTHER:
-        p = LogPut(p, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
+        cursor = LogPut(cursor, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
                     "another program:\r\n    ");
-        p = LogPut(p, cur); p = LogPut(p, "\r\n"); break;
+        cursor = LogPut(cursor, current); cursor = LogPut(cursor, "\r\n"); break;
     default:
-        p = LogPut(p, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
+        cursor = LogPut(cursor, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
     }
-    return st;
+    return state;
 }
 
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
    2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
-static int install_verb(const char *cmd)
+static int InstallVerb(const char *command)
 {
-    static const char *const V[3] = { "install", "uninstall", "status" };
-    int i, k;
-    if (!cmd) return -1;
+    static const char *const verbs[3] = { "install", "uninstall", "status" };
+    int index, characterIndex;
+    if (!command) return -1;
     /* Step over argv[0], quoted or not. */
-    if (*cmd == '"') { ++cmd; while (*cmd && *cmd != '"') ++cmd; if (*cmd) ++cmd; }
-    else             { while (*cmd && *cmd != ' ' && *cmd != '\t') ++cmd; }
-    while (*cmd == ' ' || *cmd == '\t') ++cmd;
-    if (*cmd != '/' && *cmd != '-') return -1;
-    while (*cmd == '/' || *cmd == '-') ++cmd;
-    for (i = 0; i < 3; ++i) {
-        for (k = 0; V[i][k]; ++k) {
-            char c = cmd[k];
-            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-            if (c != V[i][k]) break;
+    if (*command == '"') { ++command; while (*command && *command != '"') ++command; if (*command) ++command; }
+    else             { while (*command && *command != ' ' && *command != '\t') ++command; }
+    while (*command == ' ' || *command == '\t') ++command;
+    if (*command != '/' && *command != '-') return -1;
+    while (*command == '/' || *command == '-') ++command;
+    for (index = 0; index < 3; ++index) {
+        for (characterIndex = 0; verbs[index][characterIndex]; ++characterIndex) {
+            char character = command[characterIndex];
+            if (character >= 'A' && character <= 'Z') character = (char)(character - 'A' + 'a');
+            if (character != verbs[index][characterIndex]) break;
         }
-        if (!V[i][k] && (!cmd[k] || cmd[k] == ' ' || cmd[k] == '\t')) return i;
+        if (!verbs[index][characterIndex] && (!command[characterIndex] || command[characterIndex] == ' ' || command[characterIndex] == '\t')) return index;
     }
     return -1;
 }
 
 /* `/force` anywhere after the verb (#195): /uninstall /force removes a value that names
    another program. Deliberately only a command-line switch, never a menu item. */
-static int cmdline_has_force(const char *cmd)
+static int CommandLineHasForce(const char *command)
 {
-    const char *s;
-    if (!cmd) return 0;
-    for (s = cmd; *s; ++s)
-        if ((*s == '/' || *s == '-') && (s[1]|0x20) == 'f' && (s[2]|0x20) == 'o'
-            && (s[3]|0x20) == 'r' && (s[4]|0x20) == 'c' && (s[5]|0x20) == 'e'
-            && (!s[6] || s[6] == ' ' || s[6] == '\t' || s[6] == '"')) return 1;
+    const char *cursor;
+    if (!command) return 0;
+    for (cursor = command; *cursor; ++cursor)
+        if ((*cursor == '/' || *cursor == '-') && (cursor[1]|0x20) == 'f' && (cursor[2]|0x20) == 'o'
+            && (cursor[3]|0x20) == 'r' && (cursor[4]|0x20) == 'c' && (cursor[5]|0x20) == 'e'
+            && (!cursor[6] || cursor[6] == ' ' || cursor[6] == '\t' || cursor[6] == '"')) return 1;
     return 0;
 }
 
 /* Does this command line carry NOTHING after argv[0]? That is the double-click / Start
    menu shape, and it is safe to test for: Windows hands an IFEO-substituted VDM the
    ORIGINAL command line, whose first argument is always the path to ntvdm.exe, so a
-   real VDM launch always has arguments. Same reasoning install_verb() already relies on. */
-static int cmdline_bare(const char *cmd)
+   real VDM launch always has arguments. Same reasoning InstallVerb() already relies on. */
+static int CommandLineBare(const char *command)
 {
-    if (!cmd) return 0;
-    if (*cmd == '"') { ++cmd; while (*cmd && *cmd != '"') ++cmd; if (*cmd) ++cmd; }
-    else             { while (*cmd && *cmd != ' ' && *cmd != '\t') ++cmd; }
-    while (*cmd == ' ' || *cmd == '\t') ++cmd;
-    return *cmd == 0;
+    if (!command) return 0;
+    if (*command == '"') { ++command; while (*command && *command != '"') ++command; if (*command) ++command; }
+    else             { while (*command && *command != ' ' && *command != '\t') ++command; }
+    while (*command == ' ' || *command == '\t') ++command;
+    return *command == 0;
 }
 
 /* stdout if we have one, a message box if we do not. */
-static void install_report(const char *msg, int ok);
+static void InstallReport(const char *message, int isOk);
 
 /* ── ★★★ "I WANT TO OPEN NTVDMEX AND SEE IT." ────────────────────────────────────────
      Write the four-byte DOS stub and run it, so CSRSS builds a VDM that the IFEO key
@@ -5186,100 +5186,100 @@ static void install_report(const char *msg, int ok);
    ⚠ REFUSE LOUDLY IF WE ARE NOT INSTALLED. Without the IFEO key the stub runs under
      STOCK ntvdm and the user gets *a* DOS box -- someone else's -- which is the most
      confusing possible outcome: it looks like it worked. Checking first costs one
-     registry read. `install_status_text` is the same check `/status` reports.
+     registry read. `InstallStatusText` is the same check `/status` reports.
    ⚠ %TEMP%, not the install directory: a per-user path we can always write, on a
      product that may be installed read-only under Program Files. Rewritten every time,
      so a truncated or tampered stub cannot persist.
    Returns a process exit code. */
-static int launch_shell_vdm(void)
+static int LaunchShellVdm(void)
 {
-    char stub[MAX_PATH + 32], msg[1024];
-    DWORD n, w = 0;
-    HANDLE h;
-    STARTUPINFOA si; PROCESS_INFORMATION pi;
+    char stub[MAX_PATH + 32], message[1024];
+    DWORD length, bytesWritten = 0;
+    HANDLE handle;
+    STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
 
-    {   INSTALL_STATE st = install_status_text(msg, sizeof msg);
-        if (st != INSTALL_OURS) {
+    {   INSTALL_STATE state = InstallStatusText(message, sizeof message);
+        if (state != INSTALL_OURS) {
             /* The status text says WHICH of the two it is; add what to do about it. */
-            LogPut(msg + lstrlenA(msg),
+            LogPut(message + lstrlenA(message),
                  "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a "
                  "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n"
                  "(as an administrator), then try again.");
-            install_report(msg, 0);
+            InstallReport(message, 0);
             return 1;
         } }
 
-    n = GetTempPathA(MAX_PATH, stub);
-    if (!n || n > MAX_PATH) { LogPut(stub, "C:\\"); n = 3; }
-    if (stub[n - 1] != '\\') { stub[n++] = '\\'; stub[n] = 0; }
-    LogPut(stub + n, LAUNCH_STUB_NAME);
+    length = GetTempPathA(MAX_PATH, stub);
+    if (!length || length > MAX_PATH) { LogPut(stub, "C:\\"); length = 3; }
+    if (stub[length - 1] != '\\') { stub[length++] = '\\'; stub[length] = 0; }
+    LogPut(stub + length, LAUNCH_STUB_NAME);
 
-    h = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+    handle = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) {
-        LogPut(msg, "NTVDMEX could not write its launch stub to:\r\n\r\n");
-        LogPut(msg + lstrlenA(msg), stub);
-        install_report(msg, 0);
+    if (handle == INVALID_HANDLE_VALUE) {
+        LogPut(message, "NTVDMEX could not write its launch stub to:\r\n\r\n");
+        LogPut(message + lstrlenA(message), stub);
+        InstallReport(message, 0);
         return 1;
     }
-    {   static const BYTE s4[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
-        BOOL wok = WriteFile(h, s4, sizeof s4, &w, NULL);
-        CloseHandle(h);
+    {   static const BYTE exitStub[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
+        BOOL isWritten = WriteFile(handle, exitStub, sizeof exitStub, &bytesWritten, NULL);
+        CloseHandle(handle);
         /* ⚠ A SHORT WRITE IS NOT A SUCCESS. A truncated stub is not a DOS image and
              CreateProcess would report something unrelated to the real cause. */
-        if (!wok || w != sizeof s4) {
-            LogPut(msg, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
-            LogPut(msg + lstrlenA(msg), stub);
-            install_report(msg, 0);
+        if (!isWritten || bytesWritten != sizeof exitStub) {
+            LogPut(message, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
+            LogPut(message + lstrlenA(message), stub);
+            InstallReport(message, 0);
             return 1;
         } }
 
-    { int i; for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0; }
-    si.cb = sizeof si;
-    if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        LogPut(msg, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
-        LogPut(msg + lstrlenA(msg), stub);
-        LogPut(msg + lstrlenA(msg), "\r\nfailed with error 0x");
-        { char *e = msg + lstrlenA(msg); e = LogHex(e, GetLastError()); *e = 0; }
-        install_report(msg, 0);
+    { int index; for (index = 0; index < (int)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0; }
+    startupInfo.cb = sizeof startupInfo;
+    if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
+        LogPut(message, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
+        LogPut(message + lstrlenA(message), stub);
+        LogPut(message + lstrlenA(message), "\r\nfailed with error 0x");
+        { char *end = message + lstrlenA(message); end = LogHex(end, GetLastError()); *end = 0; }
+        InstallReport(message, 0);
         return 1;
     }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
     /* ⚠ We exit immediately and deliberately. The VDM is a SEPARATE process and owns
          the window; waiting here would leave a pointless second process alive for the
          whole session and make the launcher look like the thing that hung. */
     return 0;
 }
 
-static void install_report(const char *msg, int ok)
+static void InstallReport(const char *message, int isOk)
 {
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD ty = (h && h != INVALID_HANDLE_VALUE) ? GetFileType(h) : FILE_TYPE_UNKNOWN;
-    if (ty != FILE_TYPE_UNKNOWN) {
-        DWORD n = 0, w;
-        while (msg[n]) ++n;
-        WriteFile(h, msg, n, &w, NULL);
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
+    if (valueType != FILE_TYPE_UNKNOWN) {
+        DWORD length = 0, bytesWritten;
+        while (message[length]) ++length;
+        WriteFile(handle, message, length, &bytesWritten, NULL);
         return;
     }
-    MessageBoxA(NULL, msg, "NTVDMEX",
-                MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+    MessageBoxA(NULL, message, "NTVDMEX",
+                MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
 }
 
 /* Take ourselves out of the launch path. Needs the privilege the installer had;
    if it fails, SAY SO -- a recovery step that silently does nothing is worse
    than none, because the next start believes it was handled. */
-static void recovery_uninstall(char **pp)
+static void RecoveryUninstall(char **logCursor)
 {
-    HKEY k; LONG rc;
-    rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+    HKEY key; LONG status;
+    status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
         "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
-        "Execution Options\\ntvdm.exe", 0, KEY_SET_VALUE, &k);
-    if (rc == ERROR_SUCCESS) {
-        rc = RegDeleteValueA(k, "Debugger");
-        RegCloseKey(k);
+        "Execution Options\\ntvdm.exe", 0, KEY_SET_VALUE, &key);
+    if (status == ERROR_SUCCESS) {
+        status = RegDeleteValueA(key, "Debugger");
+        RegCloseKey(key);
     }
-    *pp = LogPut(*pp, rc == ERROR_SUCCESS
+    *logCursor = LogPut(*logCursor, status == ERROR_SUCCESS
         ? "STAGE0: RECOVERY -- IFEO Debugger REMOVED, the machine's own ntvdm "
           "takes over. Re-install when the fault is fixed. (GH #132)\r\n"
         : "STAGE0: RECOVERY -- could NOT remove the IFEO Debugger value (no "
@@ -5306,85 +5306,85 @@ static void recovery_uninstall(char **pp)
        machine where nothing had changed. */
 /* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
    runtime-derived now; a settings value points this INTO g_set as before. */
-static const char   *g_floppy_img = NULL;
-static const char   *floppy_img_path(void) { return g_floppy_img ? g_floppy_img : FLOPPY_IMG_PATH; }
+static const char   *g_FloppyImage = NULL;
+static const char   *FloppyImagePath(void) { return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH; }
 /* ── s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL? ──────────────────────
      GetDriveType reads the drive's TYPE, never its media, so it cannot raise an
      "insert a disk" prompt or spin a drive up. With no physical drive the Drives tab
      greys the choice and the host treats the setting as "mounted image". */
-static int host_has_floppy(void)
+static int HostHasFloppy(void)
 {
     return GetDriveTypeA("A:\\") == DRIVE_REMOVABLE || GetDriveTypeA("B:\\") == DRIVE_REMOVABLE;
 }
-static int host_has_cdrom(void)
+static int HostHasCdrom(void)
 {
-    DWORD m = GetLogicalDrives(); char r[4] = "C:\\"; int d;
-    for (d = 2; d < 26; ++d) {
-        if (!(m & (1u << d))) continue;
-        r[0] = (char)('A' + d);
-        if (GetDriveTypeA(r) == DRIVE_CDROM) return 1;
+    DWORD drives = GetLogicalDrives(); char root[4] = "C:\\"; int drive;
+    for (drive = 2; drive < 26; ++drive) {
+        if (!(drives & (1u << drive))) continue;
+        root[0] = (char)('A' + drive);
+        if (GetDriveTypeA(root) == DRIVE_CDROM) return 1;
     }
     return 0;
 }
-static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
-static DOS_DISK_GEOMETRY g_disk_g[1];
-static int           g_disk_tried[1];
-static unsigned      g_disk_count = 1;   /* AH=08h's DL: how many floppy drives */
-static unsigned      g_disk_status;      /* AH=01h's last-status byte           */
+static HANDLE        g_DiskHandle[1] = { INVALID_HANDLE_VALUE };
+static DOS_DISK_GEOMETRY g_DiskGeometry[1];
+static int           g_DiskTried[1];
+static unsigned      g_DiskCount = 1;   /* AH=08h's DL: how many floppy drives */
+static unsigned      g_DiskStatus;      /* AH=01h's last-status byte           */
 
-static PDOS_DISK_GEOMETRY disk_for(unsigned drive)
+static PDOS_DISK_GEOMETRY DiskFor(unsigned drive)
 {
     BYTE boot[512];
-    DWORD got = 0, sz;
-    UINT om;
+    DWORD got = 0, size;
+    UINT oldErrorMode;
     if (drive != 0) return NULL;                 /* only A: is backed today     */
-    if (g_disk_g[0].IsValid) return &g_disk_g[0];
-    if (g_disk_tried[0]) return NULL;
-    g_disk_tried[0] = 1;
-    om = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    g_disk_h[0] = CreateFileA(floppy_img_path(), GENERIC_READ | GENERIC_WRITE,
+    if (g_DiskGeometry[0].IsValid) return &g_DiskGeometry[0];
+    if (g_DiskTried[0]) return NULL;
+    g_DiskTried[0] = 1;
+    oldErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
-    SetErrorMode(om);
-    if (g_disk_h[0] == INVALID_HANDLE_VALUE) return NULL;
-    sz = GetFileSize(g_disk_h[0], NULL);
-    if (!ReadFile(g_disk_h[0], boot, 512, &got, NULL) || got != 512
-        || !DosDiskGeometryFromBpb(boot, sz, &g_disk_g[0])) {
+    SetErrorMode(oldErrorMode);
+    if (g_DiskHandle[0] == INVALID_HANDLE_VALUE) return NULL;
+    size = GetFileSize(g_DiskHandle[0], NULL);
+    if (!ReadFile(g_DiskHandle[0], boot, 512, &got, NULL) || got != 512
+        || !DosDiskGeometryFromBpb(boot, size, &g_DiskGeometry[0])) {
         /* An image we cannot read the geometry of is treated as ABSENT. A
            guessed cylinder count returns the WRONG SECTOR and reports success,
            which is strictly worse than no drive. */
-        char db[160], *dq = db;
-        dq = LogPut(dq, "  INT13 image present but its BPB is not usable -- "
+        char lineBuffer[160], *lineCursor = lineBuffer;
+        lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
                       "treating drive 0 as ABSENT (GH #44)\r\n");
-        LogAppend(LOG_PATH, db, dq); SerialOut(db, dq);
-        CloseHandle(g_disk_h[0]); g_disk_h[0] = INVALID_HANDLE_VALUE;
+        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+        CloseHandle(g_DiskHandle[0]); g_DiskHandle[0] = INVALID_HANDLE_VALUE;
         return NULL;
     }
-    { char db[200], *dq = db;
-      dq = LogPut(dq, "  INT13 drive 0 = "); dq = LogPut(dq, floppy_img_path()); dq = LogPut(dq, ", ");
-      dq = LogHex(dq, g_disk_g[0].Cylinders); dq = LogPut(dq, " cyl x ");
-      dq = LogHex(dq, g_disk_g[0].Heads);     dq = LogPut(dq, " head x ");
-      dq = LogHex(dq, g_disk_g[0].SectorsPerTrack);   dq = LogPut(dq, " sec, type 0x");
-      dq = LogHexByte(dq, g_disk_g[0].DriveType); dq = LogPut(dq, "\r\n");
-      LogAppend(LOG_PATH, db, dq); SerialOut(db, dq); }
-    return &g_disk_g[0];
+    { char lineBuffer[200], *lineCursor = lineBuffer;
+      lineCursor = LogPut(lineCursor, "  INT13 drive 0 = "); lineCursor = LogPut(lineCursor, FloppyImagePath()); lineCursor = LogPut(lineCursor, ", ");
+      lineCursor = LogHex(lineCursor, g_DiskGeometry[0].Cylinders); lineCursor = LogPut(lineCursor, " cyl x ");
+      lineCursor = LogHex(lineCursor, g_DiskGeometry[0].Heads);     lineCursor = LogPut(lineCursor, " head x ");
+      lineCursor = LogHex(lineCursor, g_DiskGeometry[0].SectorsPerTrack);   lineCursor = LogPut(lineCursor, " sec, type 0x");
+      lineCursor = LogHexByte(lineCursor, g_DiskGeometry[0].DriveType); lineCursor = LogPut(lineCursor, "\r\n");
+      LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); }
+    return &g_DiskGeometry[0];
 }
 
 /* Move `count` sectors between the image and guest memory. Returns 1 on a FULL
    transfer only: a short read is a failure, not a partial success, because the
    caller reports sectors-transferred in AL and a guest trusts it. */
-static int disk_io(unsigned drive, uint32_t lba, unsigned count,
+static int DiskIo(unsigned drive, uint32_t lba, unsigned count,
                    BYTE *guest, int write)
 {
     DWORD moved = 0, want = count * 512u;
-    if (drive != 0 || g_disk_h[0] == INVALID_HANDLE_VALUE || !count) return 0;
-    if (SetFilePointer(g_disk_h[0], (LONG)(lba * 512u), NULL, FILE_BEGIN)
+    if (drive != 0 || g_DiskHandle[0] == INVALID_HANDLE_VALUE || !count) return 0;
+    if (SetFilePointer(g_DiskHandle[0], (LONG)(lba * 512u), NULL, FILE_BEGIN)
         == INVALID_SET_FILE_POINTER) return 0;
     if (write) {
-        if (!WriteFile(g_disk_h[0], guest, want, &moved, NULL)) return 0;
-        FlushFileBuffers(g_disk_h[0]);
+        if (!WriteFile(g_DiskHandle[0], guest, want, &moved, NULL)) return 0;
+        FlushFileBuffers(g_DiskHandle[0]);
     } else {
-        if (!ReadFile(g_disk_h[0], guest, want, &moved, NULL)) return 0;
+        if (!ReadFile(g_DiskHandle[0], guest, want, &moved, NULL)) return 0;
     }
     return moved == want;
 }
@@ -5444,22 +5444,22 @@ static int disk_io(unsigned drive, uint32_t lba, unsigned count,
      The code below stays: it costs nothing, it upgrades if a handle ever does
      arrive, and the raw-handle line it prints at STAGE1 is the instrument that
      turned four sessions of hypotheses into one located bug. */
-static HANDLE g_stdio = INVALID_HANDLE_VALUE;
+static HANDLE g_Stdio = INVALID_HANDLE_VALUE;
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
    before a later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
-static const char *g_stdio_how = "(not initialised)";
-static const char *g_stdio_src = "";   /* which channel it came down, if any */
-static DWORD g_stdio_ppid;   /* GH #131: whose child we turned out to be */
-static char   g_stdio_buf[512];
-static unsigned g_stdio_n = 0;
+static const char *g_StdioHow = "(not initialised)";
+static const char *g_StdioSource = "";   /* which channel it came down, if any */
+static DWORD g_StdioParentProcessId;   /* GH #131: whose child we turned out to be */
+static char   g_StdioBuffer[512];
+static unsigned g_StdioLength = 0;
 
-static void stdio_flush(void)
+static void StdioFlush(void)
 {
-    DWORD w = 0;
-    if (g_stdio != INVALID_HANDLE_VALUE && g_stdio_n)
-        WriteFile(g_stdio, g_stdio_buf, g_stdio_n, &w, NULL);
-    g_stdio_n = 0;
+    DWORD bytesWritten = 0;
+    if (g_Stdio != INVALID_HANDLE_VALUE && g_StdioLength)
+        WriteFile(g_Stdio, g_StdioBuffer, g_StdioLength, &bytesWritten, NULL);
+    g_StdioLength = 0;
 }
 
 /* ── THE UNDOCUMENTED PAIR OF OFFSETS THIS ROUTE RESTS ON (x86). ────────────
@@ -5467,13 +5467,13 @@ static void stdio_flush(void)
      RTL_USER_PROCESS_PARAMETERS  +0x18  StandardInput
                                   +0x1c  StandardOutput
                                   +0x20  StandardError
-   ⚠ NOT TRUSTED, CHECKED. stdio_peb_stdout() below reads them out of THIS
+   ⚠ NOT TRUSTED, CHECKED. StdioPebStdout() below reads them out of THIS
      process and compares with GetStdHandle before they are used on another. */
 #define PEB_OFF_PROCESSPARAMS 0x10
 #define RUPP_OFF_STDIN        0x18
 #define RUPP_OFF_STDOUT       0x1c
 
-typedef LONG (WINAPI *PFN_NtQueryInformationProcess)(HANDLE, ULONG, PVOID,
+typedef LONG (WINAPI *PFN_NT_QUERY_INFORMATION_PROCESS)(HANDLE, ULONG, PVOID,
                                                      ULONG, PULONG);
 
 /* ── ★★ THE INPUT SIDE, AND IT IS THE SAME DEFECT. (GH #131, session 57) ────
@@ -5485,48 +5485,48 @@ typedef LONG (WINAPI *PFN_NtQueryInformationProcess)(HANDLE, ULONG, PVOID,
    ⚠ AND AT END OF FILE, DOS SAYS Ctrl-Z. A redirected read that runs out does
      not block and does not fail: it returns 0x1A, which is what every DOS
      program written since 1981 tests for. */
-static HANDLE g_stdin_h = NULL;
-static int    g_stdin_eof = 0;
-static DWORD  g_stdin_bytes = 0;
+static HANDLE g_StdinHandle = NULL;
+static int    g_StdinEof = 0;
+static DWORD  g_StdinBytes = 0;
 
 /* One byte from the redirected input, or -1 if there is none to be had. */
-static int stdin_read_byte(void)
+static int StdinReadByte(void)
 {
-    BYTE b; DWORD got = 0;
-    if (!g_stdin_h) return -1;
-    if (g_stdin_eof) return 0x1A;
-    if (!ReadFile(g_stdin_h, &b, 1, &got, NULL) || got != 1) {
-        g_stdin_eof = 1;
+    BYTE byteValue; DWORD got = 0;
+    if (!g_StdinHandle) return -1;
+    if (g_StdinEof) return 0x1A;
+    if (!ReadFile(g_StdinHandle, &byteValue, 1, &got, NULL) || got != 1) {
+        g_StdinEof = 1;
         return 0x1A;
     }
-    ++g_stdin_bytes;
-    return b;
+    ++g_StdinBytes;
+    return byteValue;
 }
 
 /* A handle VALUE out of `proc`'s process parameters at `off`, or 0. The value is
    meaningful only in that process's handle table. */
-static HANDLE stdio_peb_handle(HANDLE proc, unsigned off);
+static HANDLE StdioPebHandle(HANDLE proc, unsigned offset);
 
-static HANDLE stdio_peb_stdout(HANDLE proc)
+static HANDLE StdioPebStdout(HANDLE proc)
 {
-    static PFN_NtQueryInformationProcess qip;
-    struct { LONG State; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
+    static PFN_NT_QUERY_INFORMATION_PROCESS queryInformationProcess;
+    struct { LONG State; PVOID PebBase; ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId; } basicInfo;
     ULONG got = 0;
     ULONG_PTR params = 0;
     HANDLE out = NULL;
-    SIZE_T rd = 0;
-    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+    SIZE_T bytesRead = 0;
+    if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
-    if (!qip || !proc) return NULL;
-    if (qip(proc, 0 /* ProcessBasicInformation */, &pbi, sizeof pbi, &got) < 0)
+    if (!queryInformationProcess || !proc) return NULL;
+    if (queryInformationProcess(proc, 0 /* ProcessBasicInformation */, &basicInfo, sizeof basicInfo, &got) < 0)
         return NULL;
-    if (!pbi.peb) return NULL;
-    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
-                           &params, sizeof params, &rd) || rd != sizeof params)
+    if (!basicInfo.PebBase) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &bytesRead) || bytesRead != sizeof params)
         return NULL;
     if (!params) return NULL;
     if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_STDOUT,
-                           &out, sizeof out, &rd) || rd != sizeof out)
+                           &out, sizeof out, &bytesRead) || bytesRead != sizeof out)
         return NULL;
     return out;
 }
@@ -5535,22 +5535,22 @@ static HANDLE stdio_peb_stdout(HANDLE proc)
    Kept as a separate entry point rather than a parameter on the one above so the
    OUTPUT path, which is the one under test against the stock oracle, cannot be
    changed by an edit meant for the input path. */
-static HANDLE stdio_peb_handle(HANDLE proc, unsigned off)
+static HANDLE StdioPebHandle(HANDLE proc, unsigned offset)
 {
-    static PFN_NtQueryInformationProcess qip;
-    struct { LONG State; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
+    static PFN_NT_QUERY_INFORMATION_PROCESS queryInformationProcess;
+    struct { LONG State; PVOID PebBase; ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId; } basicInfo;
     ULONG got = 0;
     ULONG_PTR params = 0;
     HANDLE out = NULL;
-    SIZE_T rd = 0;
-    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+    SIZE_T bytesRead = 0;
+    if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
-    if (!qip || !proc) return NULL;
-    if (qip(proc, 0, &pbi, sizeof pbi, &got) < 0 || !pbi.peb) return NULL;
-    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
-                           &params, sizeof params, &rd) || !params) return NULL;
-    if (!ReadProcessMemory(proc, (BYTE *)params + off, &out, sizeof out, &rd)
-        || rd != sizeof out) return NULL;
+    if (!queryInformationProcess || !proc) return NULL;
+    if (queryInformationProcess(proc, 0, &basicInfo, sizeof basicInfo, &got) < 0 || !basicInfo.PebBase) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &bytesRead) || !params) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)params + offset, &out, sizeof out, &bytesRead)
+        || bytesRead != sizeof out) return NULL;
     return out;
 }
 
@@ -5560,10 +5560,10 @@ static HANDLE stdio_peb_handle(HANDLE proc, unsigned off)
      Windows. ⚠ A process with no stdout at all (which is exactly our case) has
      0 in both places, and 0 == 0 would "prove" nothing -- so that is reported as
      UNPROVEN rather than as agreement. */
-static int stdio_peb_layout_ok(int *sawnull)
+static int StdioPebLayoutOk(int *sawnull)
 {
     HANDLE mine = GetStdHandle(STD_OUTPUT_HANDLE);
-    HANDLE peb  = stdio_peb_stdout(GetCurrentProcess());
+    HANDLE peb  = StdioPebStdout(GetCurrentProcess());
     if (sawnull) *sawnull = (!mine && !peb);
     if (!mine && !peb) return 0;              /* nothing to compare -- unproven */
     return mine == peb;
@@ -5590,92 +5590,92 @@ static int stdio_peb_layout_ok(int *sawnull)
      is the same defect wearing different clothes. */
 #define RUPP_OFF_IMAGEPATH 0x38          /* UNICODE_STRING; Buffer at +4 */
 
-static int stdio_parent_is(HANDLE proc, DWORD ppid)
+static int StdioParentIs(HANDLE proc, DWORD ppid)
 {
-    struct { USHORT len, max; PVOID buf; } us;
+    struct { USHORT Length, Maximum; PVOID Buffer; } imagePath;
     ULONG_PTR params = 0;
-    struct { LONG State; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
-    static PFN_NtQueryInformationProcess qip;
+    struct { LONG State; PVOID PebBase; ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId; } basicInfo;
+    static PFN_NT_QUERY_INFORMATION_PROCESS queryInformationProcess;
     ULONG got = 0;
-    SIZE_T rd = 0;
+    SIZE_T bytesRead = 0;
     WCHAR path[MAX_PATH];
     char  narrow[MAX_PATH], want[MAX_PATH];
-    int i, n;
+    int index, length;
     HANDLE snap;
     want[0] = 0;
-    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+    if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
-    if (!qip) return 0;
+    if (!queryInformationProcess) return 0;
     /* What the process list says this pid is. */
     snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 pe; pe.dwSize = sizeof pe;
-        if (Process32First(snap, &pe)) {
-            do { if (pe.th32ProcessID == ppid) {
-                     for (i = 0; i < MAX_PATH - 1 && pe.szExeFile[i]; ++i)
-                         want[i] = pe.szExeFile[i];
-                     want[i] = 0; break; }
-            } while (Process32Next(snap, &pe));
+        PROCESSENTRY32 entry; entry.dwSize = sizeof entry;
+        if (Process32First(snap, &entry)) {
+            do { if (entry.th32ProcessID == ppid) {
+                     for (index = 0; index < MAX_PATH - 1 && entry.szExeFile[index]; ++index)
+                         want[index] = entry.szExeFile[index];
+                     want[index] = 0; break; }
+            } while (Process32Next(snap, &entry));
         }
         CloseHandle(snap);
     }
     if (!want[0]) return 0;
-    if (qip(proc, 0, &pbi, sizeof pbi, &got) < 0 || !pbi.peb) return 0;
-    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
-                           &params, sizeof params, &rd) || !params) return 0;
+    if (queryInformationProcess(proc, 0, &basicInfo, sizeof basicInfo, &got) < 0 || !basicInfo.PebBase) return 0;
+    if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &bytesRead) || !params) return 0;
     if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_IMAGEPATH,
-                           &us, sizeof us, &rd) || rd != sizeof us) return 0;
-    if (!us.buf || !us.len || us.len >= sizeof path) return 0;
-    if (!ReadProcessMemory(proc, us.buf, path, us.len, &rd) || rd != us.len)
+                           &imagePath, sizeof imagePath, &bytesRead) || bytesRead != sizeof imagePath) return 0;
+    if (!imagePath.Buffer || !imagePath.Length || imagePath.Length >= sizeof path) return 0;
+    if (!ReadProcessMemory(proc, imagePath.Buffer, path, imagePath.Length, &bytesRead) || bytesRead != imagePath.Length)
         return 0;
-    n = (int)(us.len / sizeof(WCHAR));
-    if (n >= MAX_PATH) n = MAX_PATH - 1;
-    for (i = 0; i < n; ++i)
-        narrow[i] = (path[i] < 0x80) ? (char)path[i] : '?';
-    narrow[n] = 0;
+    length = (int)(imagePath.Length / sizeof(WCHAR));
+    if (length >= MAX_PATH) length = MAX_PATH - 1;
+    for (index = 0; index < length; ++index)
+        narrow[index] = (path[index] < 0x80) ? (char)path[index] : '?';
+    narrow[length] = 0;
     /* Compare the FILE NAME, case-insensitively: the list gives a name, the PEB
        gives a full path, and it is the tail that has to agree. */
     /* ⚠ NO CRT IN THIS LINK (see docs: the host links -nostdlib), so the length
          is counted here rather than borrowed from a library that is not there. */
-    {   int wl = 0, nl = n;
-        while (want[wl]) ++wl;
+    {   int wantLength = 0, nameLength = length;
+        while (want[wantLength]) ++wantLength;
         {
-        const char *tail = narrow + (nl > wl ? nl - wl : 0);
-        if (nl < wl) return 0;
-        for (i = 0; i < wl; ++i) {
-            char a = tail[i], b = want[i];
-            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-            if (a != b) return 0;
+        const char *tail = narrow + (nameLength > wantLength ? nameLength - wantLength : 0);
+        if (nameLength < wantLength) return 0;
+        for (index = 0; index < wantLength; ++index) {
+            char tailCharacter = tail[index], wantCharacter = want[index];
+            if (tailCharacter >= 'A' && tailCharacter <= 'Z') tailCharacter = (char)(tailCharacter + 32);
+            if (wantCharacter >= 'A' && wantCharacter <= 'Z') wantCharacter = (char)(wantCharacter + 32);
+            if (tailCharacter != wantCharacter) return 0;
         }
         }
     }
     return 1;
 }
 
-static const char *stdio_from_parent(DWORD ppid)
+static const char *StdioFromParent(DWORD ppid)
 {
     HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
                               | PROCESS_DUP_HANDLE, FALSE, ppid);
     HANDLE remote, dup = NULL;
-    DWORD ty;
+    DWORD valueType;
     if (!proc) return "none (no console, no redirect)";
-    if (!stdio_parent_is(proc, ppid)) {         /* the offsets did not check out */
+    if (!StdioParentIs(proc, ppid)) {         /* the offsets did not check out */
         CloseHandle(proc);
         return "none (no console, no redirect)";
     }
     /* ── THE INPUT HANDLE, TAKEN IN THE SAME BREATH. Only a FILE or a PIPE:
-         see the note on g_stdin_h. Failure here is silent on purpose -- it must
+         see the note on g_StdinHandle. Failure here is silent on purpose -- it must
          never cost the output handle, which is the one being measured. */
-    {   HANDLE rin = stdio_peb_handle(proc, RUPP_OFF_STDIN), din = NULL;
+    {   HANDLE rin = StdioPebHandle(proc, RUPP_OFF_STDIN), din = NULL;
         if (rin && DuplicateHandle(proc, rin, GetCurrentProcess(), &din, 0, FALSE,
                                    DUPLICATE_SAME_ACCESS)) {
-            DWORD it = GetFileType(din);
-            if (it == FILE_TYPE_DISK || it == FILE_TYPE_PIPE) g_stdin_h = din;
+            DWORD inputType = GetFileType(din);
+            if (inputType == FILE_TYPE_DISK || inputType == FILE_TYPE_PIPE) g_StdinHandle = din;
             else CloseHandle(din);
         }
     }
-    remote = stdio_peb_stdout(proc);
+    remote = StdioPebStdout(proc);
     if (!remote) { CloseHandle(proc); return "none (no console, no redirect)"; }
     if (!DuplicateHandle(proc, remote, GetCurrentProcess(), &dup, 0, FALSE,
                          DUPLICATE_SAME_ACCESS)) {
@@ -5683,32 +5683,32 @@ static const char *stdio_from_parent(DWORD ppid)
         return "none (no console, no redirect)";
     }
     CloseHandle(proc);
-    ty = GetFileType(dup);
-    if (ty == FILE_TYPE_DISK || ty == FILE_TYPE_PIPE) {
-        g_stdio = dup;
+    valueType = GetFileType(dup);
+    if (valueType == FILE_TYPE_DISK || valueType == FILE_TYPE_PIPE) {
+        g_Stdio = dup;
         return "duplicated from the parent (REDIRECTED)";
     }
-    if (ty == FILE_TYPE_CHAR) {
-        g_stdio = dup;
+    if (valueType == FILE_TYPE_CHAR) {
+        g_Stdio = dup;
         return "duplicated from the parent (its console)";
     }
     CloseHandle(dup);
     return "none (no console, no redirect)";
 }
 
-static const char *stdio_init(void)
+static const char *StdioInitialize(void)
 {
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD ty = (h && h != INVALID_HANDLE_VALUE) ? GetFileType(h) : FILE_TYPE_UNKNOWN;
-    if (ty == FILE_TYPE_DISK || ty == FILE_TYPE_PIPE) {
-        g_stdio = h;                       /* redirected: write straight to it  */
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
+    if (valueType == FILE_TYPE_DISK || valueType == FILE_TYPE_PIPE) {
+        g_Stdio = handle;                       /* redirected: write straight to it  */
         return "inherited (redirected)";
     }
-    if (ty == FILE_TYPE_CHAR) { g_stdio = h; return "inherited console"; }
+    if (valueType == FILE_TYPE_CHAR) { g_Stdio = handle; return "inherited console"; }
     if (OsCompatAttachConsole(ATTACH_PARENT_PROCESS)) {
-        g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+        g_Stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                               OPEN_EXISTING, 0, NULL);
-        if (g_stdio != INVALID_HANDLE_VALUE) return "attached parent console";
+        if (g_Stdio != INVALID_HANDLE_VALUE) return "attached parent console";
     }
     /* ── ATTACH_PARENT_PROCESS FAILED. FIND THE PARENT OURSELVES. (GH #131) ───
          That constant asks the kernel for "the process that created me", and an
@@ -5718,21 +5718,21 @@ static const char *stdio_init(void)
          pid explicitly. If the answer is the same, this fails the same way and
          we have eliminated a second route rather than assumed one. */
     {   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        DWORD me = GetCurrentProcessId(), ppid = 0;
+        DWORD threadId = GetCurrentProcessId(), ppid = 0;
         if (snap != INVALID_HANDLE_VALUE) {
-            PROCESSENTRY32 pe; pe.dwSize = sizeof(pe);
-            if (Process32First(snap, &pe)) {
-                do { if (pe.th32ProcessID == me) { ppid = pe.th32ParentProcessID; break; } }
-                while (Process32Next(snap, &pe));
+            PROCESSENTRY32 entry; entry.dwSize = sizeof(entry);
+            if (Process32First(snap, &entry)) {
+                do { if (entry.th32ProcessID == threadId) { ppid = entry.th32ParentProcessID; break; } }
+                while (Process32Next(snap, &entry));
             }
             CloseHandle(snap);
         }
         if (ppid && OsCompatAttachConsole(ppid)) {
-            g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+            g_Stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                   OPEN_EXISTING, 0, NULL);
-            if (g_stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
+            if (g_Stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
         }
-        g_stdio_ppid = ppid;              /* reported at exit either way */
+        g_StdioParentProcessId = ppid;              /* reported at exit either way */
 
         /* ── ★★★★★ ROUTE SIX: TAKE IT OUT OF THE PARENT. (GH #131, session 57)
              Five routes have failed and the oracle says the handle EXISTS: run
@@ -5765,8 +5765,8 @@ static const char *stdio_init(void)
              costs a log line instead of a duplicated handle to something else
              entirely. */
         if (ppid) {
-            const char *why = stdio_from_parent(ppid);
-            if (g_stdio != INVALID_HANDLE_VALUE && g_stdio) return why;
+            const char *why = StdioFromParent(ppid);
+            if (g_Stdio != INVALID_HANDLE_VALUE && g_Stdio) return why;
         }
     }
     return "none (no console, no redirect)";
@@ -5774,7 +5774,7 @@ static const char *stdio_init(void)
 
 /* ── THE FIFTH ROUTE: THE HANDLES CSRSS HANDS THE VDM. (GH #131) ─────────────
      Runs after GetNextVDMCommand, because that is what fills the fields. Only
-     ever UPGRADES: if stdio_init() already found something at startup we keep
+     ever UPGRADES: if StdioInitialize() already found something at startup we keep
      it, because an inherited redirect is the user's own and outranks anything
      we go looking for.
    ► TWO SOURCES, IN THE ORDER STOCK ntvdm READS THEM:
@@ -5798,7 +5798,7 @@ static const char *stdio_adopt(HANDLE h)
     if (!h || h == INVALID_HANDLE_VALUE) return NULL;
     ty = GetFileType(h) & ~FILE_TYPE_REMOTE;
     if (ty == FILE_TYPE_UNKNOWN) return NULL;
-    g_stdio = h;
+    g_Stdio = h;
     return (ty == FILE_TYPE_DISK) ? "redirected to a file"
          : (ty == FILE_TYPE_PIPE) ? "a pipe"
                                   : "the console";
@@ -5807,14 +5807,14 @@ static const char *stdio_adopt(HANDLE h)
 static const char *stdio_init_vdm(void)
 {
     const char *what;
-    if (g_stdio != INVALID_HANDLE_VALUE) return g_stdio_how;   /* never downgrade */
+    if (g_Stdio != INVALID_HANDLE_VALUE) return g_StdioHow;   /* never downgrade */
     if ((what = stdio_adopt(g_CommandInfo.StdOut)) != NULL) {
-        g_stdio_src = "CSRSS VDM StdOut"; return what;
+        g_StdioSource = "CSRSS VDM StdOut"; return what;
     }
     if ((what = stdio_adopt(g_CommandInfo.StartupInfo.hStdOutput)) != NULL) {
-        g_stdio_src = "CSRSS StartupInfo"; return what;
+        g_StdioSource = "CSRSS StartupInfo"; return what;
     }
-    return g_stdio_how;
+    return g_StdioHow;
 }
 
 /* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype, AND the
@@ -5828,9 +5828,9 @@ static void host_conout(void *ctx, uint8_t ch)
     (void)ctx;
     HOST_LOCK();
     VddVideoPutChar(&g_Video, ch);
-    if (g_stdio != INVALID_HANDLE_VALUE) {
-        if (g_stdio_n < sizeof(g_stdio_buf)) g_stdio_buf[g_stdio_n++] = (char)ch;
-        if (ch == '\n' || g_stdio_n >= sizeof(g_stdio_buf)) stdio_flush();
+    if (g_Stdio != INVALID_HANDLE_VALUE) {
+        if (g_StdioLength < sizeof(g_StdioBuffer)) g_StdioBuffer[g_StdioLength++] = (char)ch;
+        if (ch == '\n' || g_StdioLength >= sizeof(g_StdioBuffer)) StdioFlush();
     }
     HOST_UNLOCK();
 }
@@ -5854,8 +5854,8 @@ static int host_conin(void *ctx)
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
     /* ★ A REDIRECTED STDIN OUTRANKS THE KEYBOARD, and must: a program run as
          `prog < file` is not waiting for a human, and blocking on the key event
-         would hang a batch that has no console at all. See g_stdin_h. */
-    if (g_stdin_h) return stdin_read_byte();
+         would hang a batch that has no console at all. See g_StdinHandle. */
+    if (g_StdinHandle) return StdinReadByte();
     for (;;) {
         HOST_LOCK();
         got = VddInputPop(&g_Input, &k);
@@ -7882,7 +7882,7 @@ static int host_coninnb(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
-    if (g_stdin_h) return stdin_read_byte();   /* a file is always ready */
+    if (g_StdinHandle) return StdinReadByte();   /* a file is always ready */
     HOST_LOCK();
     { int c = typein_pop(); if (c >= 0) { HOST_UNLOCK(); return c; } }
     got = VddInputPop(&g_Input, &k);
@@ -7905,7 +7905,7 @@ static int host_conpeek(void *ctx)
          read that follows returns Ctrl-Z immediately. Answering "not ready"
          there would park a polling program forever on a file that has nothing
          left to give, which is the hang this whole route exists to remove. */
-    if (g_stdin_h) return 1;
+    if (g_StdinHandle) return 1;
     HOST_LOCK();
     if (g_typein_head != g_typein_tail) { HOST_UNLOCK(); return 1; }
     got = VddInputPeek(&g_Input, &k);
@@ -12248,7 +12248,7 @@ static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
        forced because this PC has no floppy drive) names a file here. A blank image
        path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
        only on the test rig (the harness's disk), so on a user's PC it is simply absent. */
-    g_floppy_img     = ((!s->Values[SET_FLOPPYPHYS] || !host_has_floppy()) && s->Strings[SET_STR_FLOPPYA][0])
+    g_FloppyImage     = ((!s->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && s->Strings[SET_STR_FLOPPYA][0])
                      ? s->Strings[SET_STR_FLOPPYA] : NULL;
     g_hostcur_mode   = (int)s->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_dos_mem_top. */
@@ -12729,12 +12729,12 @@ static void settings_drive_radios(int phys_id, int img_id, int edit_id, int brow
 static void settings_floppy_radios(int phys)
 {
     settings_drive_radios(IDC_S_FLOPPY_PHYS, IDC_S_FLOPPY_IMG, IDC_S_FLOPPYA,
-                          IDC_S_FLOPPY_BROWSE, host_has_floppy(), phys);
+                          IDC_S_FLOPPY_BROWSE, HostHasFloppy(), phys);
 }
 static void settings_cd_radios(int phys)
 {
     settings_drive_radios(IDC_S_CD_PHYS, IDC_S_CD_IMG, IDC_S_CDROM,
-                          IDC_S_CD_BROWSE, host_has_cdrom(), phys);
+                          IDC_S_CD_BROWSE, HostHasCdrom(), phys);
 }
 
 /* ── #321: THE TEXT-MODE FONT ROW. ───────────────────────────────────────────────────
@@ -14017,14 +14017,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     "NTVDMEX", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
                 return 0;
             msg[0] = 0;
-            ok = install_perform(want, 0, msg, sizeof msg);
+            ok = InstallPerform(want, 0, msg, sizeof msg);
             MessageBoxA(h, msg, "NTVDMEX",
                         MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
         case IDM_FILE_STATUS: {
             char msg[2048];
             msg[0] = 0;
-            install_status_text(msg, sizeof msg);
+            InstallStatusText(msg, sizeof msg);
             MessageBoxA(h, msg, "NTVDMEX", MB_OK | MB_ICONINFORMATION);
             return 0; }
         case IDM_FILE_SETTINGS:
@@ -29413,16 +29413,16 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         } else if (bn == 0x13) {               /* disk services  GH #44   */
             unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
             unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
-            PDOS_DISK_GEOMETRY g13 = disk_for(dl13);
-            if (ah13 == 0x00) { BSETAX(0); g_disk_status = 0; BCF_CLR(); }
-            else if (ah13 == 0x01) { BSETAX((WORD)(g_disk_status << 8)); BCF_CLR(); }
+            PDOS_DISK_GEOMETRY g13 = DiskFor(dl13);
+            if (ah13 == 0x00) { BSETAX(0); g_DiskStatus = 0; BCF_CLR(); }
+            else if (ah13 == 0x01) { BSETAX((WORD)(g_DiskStatus << 8)); BCF_CLR(); }
             else if (!g13) {
                 /* No image behind this drive letter. AH=80 is "drive not
                    ready", which is what a real machine says for a floppy
                    bay with nothing in it -- and is distinguishable from
                    AH=01 "bad command", which would mean the SERVICE does
                    not exist. Those are different answers to a guest. */
-                BSETAX(0x8000); g_disk_status = 0x80; BCF_SET();
+                BSETAX(0x8000); g_DiskStatus = 0x80; BCF_SET();
                 g_BiosUnimplemented[0x13] = 1;
             } else if (ah13 == 0x08) {          /* get drive parameters    */
                 /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
@@ -29431,8 +29431,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 VDM_SET16(tib, VTIB_EBX, (WORD)g13->DriveType);
                 VDM_SET16(tib, VTIB_ECX, DosDiskPackCx(g13));
                 VDM_SET16(tib, VTIB_EDX,
-                          (WORD)(((g13->Heads - 1) << 8) | g_disk_count));
-                BSETAX(0); g_disk_status = 0; BCF_CLR();
+                          (WORD)(((g13->Heads - 1) << 8) | g_DiskCount));
+                BSETAX(0); g_DiskStatus = 0; BCF_CLR();
             } else if (ah13 == 0x15) {          /* get disk type           */
                 /* AH=01: floppy WITHOUT change-line support, which is what
                    6.22 answered (AX=0100) and is the truthful claim -- we
@@ -29447,17 +29447,17 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 DWORD    lba = 0;
                 if (!DosDiskChsToLba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
                     || lba + nsec > g13->TotalSectors) {
-                    BSETAX(0x0400); g_disk_status = 0x04;  /* sector not found */
+                    BSETAX(0x0400); g_DiskStatus = 0x04;  /* sector not found */
                     BCF_SET();
                 } else if (ah13 == 0x04) {      /* verify: bounds only     */
-                    BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR();
+                    BSETAX((WORD)nsec); g_DiskStatus = 0; BCF_CLR();
                 } else {
                     DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
                               + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                    int ok = disk_io(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
+                    int ok = DiskIo(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
                                      ah13 == 0x03);
-                    if (ok) { BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR(); }
-                    else    { BSETAX(0x0400); g_disk_status = 0x04; BCF_SET(); }
+                    if (ok) { BSETAX((WORD)nsec); g_DiskStatus = 0; BCF_CLR(); }
+                    else    { BSETAX(0x0400); g_DiskStatus = 0x04; BCF_SET(); }
                 }
             } else {
                 BSETAX(0x0100); BCF_SET();      /* bad command             */
@@ -29478,12 +29478,12 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
             unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
             uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-            PDOS_DISK_GEOMETRY g25 = disk_for(drv);
+            PDOS_DISK_GEOMETRY g25 = DiskFor(drv);
             DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
                       + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
             if (!g25) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bn] = 1; }
             else if (sec + cnt > g25->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
-            else if (disk_io(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
+            else if (DiskIo(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
                  { BSETAX(0); BCF_CLR(); }
             else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
         } else handled = 0;
@@ -29728,7 +29728,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          by double-clicking. Reporting into a console nobody can see is how an
          installer becomes "it did nothing". */
     {   char vmsg[2048];
-        int verb = install_verb(GetCommandLineA());
+        int verb = InstallVerb(GetCommandLineA());
         if (verb >= 0) {
             /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
                  makes INSTALL and UNINSTALL both ask to be installed -- and it
@@ -29743,12 +29743,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      program is. A script can branch on that without matching a
                      sentence -- which is exactly what package/smoke.bat was doing
                      wrongly, grepping for text only /install ever prints. */
-                INSTALL_STATE st2 = install_status_text(vmsg, sizeof vmsg);
-                install_report(vmsg, 1);
+                INSTALL_STATE st2 = InstallStatusText(vmsg, sizeof vmsg);
+                InstallReport(vmsg, 1);
                 return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
             }
-            ok = install_perform(want, cmdline_has_force(GetCommandLineA()), vmsg, sizeof vmsg);
-            install_report(vmsg, ok);
+            ok = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), vmsg, sizeof vmsg);
+            InstallReport(vmsg, ok);
             return ok ? 0 : 1;
         } }
 
@@ -29758,7 +29758,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
          vanished without a window or a message -- the worst possible answer to "open it
          and see". */
-    if (cmdline_bare(GetCommandLineA())) return launch_shell_vdm();
+    if (CommandLineBare(GetCommandLineA())) return LaunchShellVdm();
 
     /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
          Nothing stopped a second instance, and two of them fight over things that
@@ -29891,7 +29891,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = LogPut(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
     LogWrite(LOG_PATH, report, p);
     SerialInitialize();                                      /* DPMI harness: COM1 log sink */
-    g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
+    g_StdioHow = StdioInitialize();                         /* GH #131; reported at exit */
     {   unsigned fails = RecoveryRead();               /* GH #132 */
         g_StartMode = DosRecoveryDecideStartMode(fails);
         RecoveryWrite(fails + 1);                      /* cleared only on a clean exit */
@@ -29899,7 +29899,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, g_StartMode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
                   : g_StartMode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
                                                         : " -> normal\r\n");
-        if (g_StartMode == DOS_START_UNINSTALL) recovery_uninstall(&p);
+        if (g_StartMode == DOS_START_UNINSTALL) RecoveryUninstall(&p);
         g_Safe = DosRecoveryGetSafeSkips(g_StartMode);
         if (g_StartMode == DOS_START_SAFE)
             p = LogPut(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
@@ -30418,10 +30418,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             p = LogPut(p, " sf=0x"); p = LogHex(p, g_CommandInfo.StartupInfo.dwFlags);
             p = LogPut(p, "\r\n"); }
-        g_stdio_how = stdio_init_vdm();
+        g_StdioHow = stdio_init_vdm();
         p = LogPut(p, "STAGE1: stdout -> ");
-        if (g_stdio_src[0]) { p = LogPut(p, g_stdio_src); p = LogPut(p, " -> "); }
-        p = LogPut(p, g_stdio_how);
+        if (g_StdioSource[0]) { p = LogPut(p, g_StdioSource); p = LogPut(p, " -> "); }
+        p = LogPut(p, g_StdioHow);
         p = LogPut(p, "\r\n");
     } else {
         p = LogPut(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = LogHex(p, err); p = LogPut(p, "\r\n");
@@ -36139,13 +36139,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     g_CommandInfo.ExitCode = (ULONG)m.ExitCode;
     /* Flush captured DOS output to the console + the log.
-     ► IF WE STREAMED IT LIVE, DO NOT PRINT IT AGAIN. g_stdio carries the output
+     ► IF WE STREAMED IT LIVE, DO NOT PRINT IT AGAIN. g_Stdio carries the output
        as the guest produces it now (GH #131), so the historical bulk write to
        CONOUT$ would DOUBLE every line -- and would do it into the redirect
        target, where it is not merely ugly but wrong. Flush whatever is still in
        the line buffer instead. The log copy below is unconditional either way:
        it is a different sink and the one the rig harness reads. */
-    stdio_flush();
+    StdioFlush();
     /* ── ★ REPORT THE ERRORLEVEL TO CSRSS AND LEAVE THE CONSOLE. (s72) ──────────────
          Only when CSRSS queued this task to us (the harness stub / target.txt shapes
          and a WOW launch are untouched). AFTER the flush, so the launcher -- released
@@ -36201,7 +36201,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (g_OnceMutex) { ReleaseMutex(g_OnceMutex); CloseHandle(g_OnceMutex); g_OnceMutex = NULL; }
             /* ── AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
                  report call as handles CSRSS placed in THIS process (the launcher's
-                 `LINK > file`). The child's stdio_init takes an inherited disk/pipe
+                 `LINK > file`). The child's StdioInitialize takes an inherited disk/pipe
                  standard handle first, so hand them over inheritable; a console handle
                  is left alone (the child finds its console the way it always has).
                  Measured before this: the relaunched LINK's log said "stdout -> none". */
@@ -36218,7 +36218,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     /* ⚠ STARTUPINFO NEVER REACHES THE CHILD: a DOS .EXE goes through
                        BaseSrv, which creates the ntvdm (us again, via IFEO) itself.
                        What the child DOES read is its PARENT'S PEB standard handles
-                       (stdio_from_parent, GH #131) -- and its parent is this process.
+                       (StdioFromParent, GH #131) -- and its parent is this process.
                        SetStdHandle writes exactly those PEB fields. Measured: with
                        STARTUPINFO alone the child still said "stdout -> none". */
                     if (hs[0]) SetStdHandle(STD_INPUT_HANDLE,  hs[0]);
@@ -36261,12 +36261,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                             and Beep.sys outlives the process */
     RecoveryOk();                       /* GH #132: this run ended cleanly */
     p = LogPut(p, "STAGE2: stdout -> ");
-    if (g_stdio_src[0]) { p = LogPut(p, g_stdio_src); p = LogPut(p, " -> "); }
-    p = LogPut(p, g_stdio_how);
-    p = LogPut(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
-    p = LogPut(p, " ppid=0x"); p = LogHex(p, g_stdio_ppid); p = LogPut(p, "\r\n");
+    if (g_StdioSource[0]) { p = LogPut(p, g_StdioSource); p = LogPut(p, " -> "); }
+    p = LogPut(p, g_StdioHow);
+    p = LogPut(p, g_Stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
+    p = LogPut(p, " ppid=0x"); p = LogHex(p, g_StdioParentProcessId); p = LogPut(p, "\r\n");
     {
-        HANDLE hcon = (g_stdio == INVALID_HANDLE_VALUE)
+        HANDLE hcon = (g_Stdio == INVALID_HANDLE_VALUE)
             ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                           OPEN_EXISTING, 0, NULL)
             : INVALID_HANDLE_VALUE;
