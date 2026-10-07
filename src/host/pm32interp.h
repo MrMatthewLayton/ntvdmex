@@ -13,22 +13,23 @@
  * compiler (Watcom) and id's drawer assembly emit. Everything else -- FPU, far control
  * transfers, segment loads, INT/IRET, CLI/STI, privileged instructions -- DECLINES.
  *
- * DECLINE IS EXACT. p32_step() either executes one whole instruction and returns 1, or
+ * DECLINE IS EXACT. Pm32Step() either executes one whole instruction and returns 1, or
  * returns 0 having changed NOTHING (registers, flags, EIP, memory), so the caller can hand
  * the instruction to the real CPU. Memory writes are therefore deferred until the
  * instruction is known to complete (the few instructions that write memory write it last).
  *
  * The includer MUST provide, before #include'ing this header:
  *   - fixed-width int types (uint8_t .. uint64_t, int8_t .. int64_t)
- *   - uint8_t  p32_rd8(uint32_t lin);            guest byte read  (A0000 -> the VGA engine)
- *   - void     p32_wr8(uint32_t lin, uint8_t v); guest byte write (A0000 -> the VGA engine)
- *   - int      p32_ok(uint32_t lin, int w, int wr);  may this access proceed? (0 = decline)
- *   - uint32_t p32_in(uint16_t port, int w);
- *   - void     p32_out(uint16_t port, int w, uint32_t v);
+ *   - uint8_t  Pm32HostRead8(uint32_t lin);            guest byte read  (A0000 -> the VGA engine)
+ *   - void     Pm32HostWrite8(uint32_t lin, uint8_t v); guest byte write (A0000 -> the VGA engine)
+ *   - int      Pm32HostCanAccess(uint32_t lin, int w, int wr);  may this access proceed? (0 = decline)
+ *   - uint32_t Pm32HostIn(uint16_t port, int w);
+ *   - void     Pm32HostOut(uint16_t port, int w, uint32_t v);
  * Kept host-agnostic so it is unit-tested off-VM (tests/unit/pm32interp_test.c).
  */
 #ifndef PM32INTERP_H
 #define PM32INTERP_H
+#include "../ntvdmex_types.h"
 
 #define P32_CF 0x0001u
 #define P32_PF 0x0004u
@@ -39,657 +40,657 @@
 #define P32_OF 0x0800u
 #define P32_ARITH (P32_CF | P32_PF | P32_AF | P32_ZF | P32_SF | P32_OF)
 
-typedef struct {
-    uint32_t r[8];        /* EAX ECX EDX EBX ESP EBP ESI EDI                            */
-    uint32_t eip;         /* offset in CS                                               */
-    uint32_t flags;
-    uint32_t base[6];     /* segment BASES, x86 sreg order: ES CS SS DS FS GS            */
-} p32cpu;
+typedef struct _PM32_CPU {
+    UINT32 Registers[8];        /* EAX ECX EDX EBX ESP EBP ESI EDI                            */
+    UINT32 Eip;         /* offset in CS                                               */
+    UINT32 Flags;
+    UINT32 SegmentBases[6];     /* segment BASES, x86 sreg order: ES CS SS DS FS GS            */
+} PM32_CPU, *PPM32_CPU; typedef const PM32_CPU *PCPM32_CPU;
 
 /* ---- register views ------------------------------------------------------------- */
-static uint32_t p32_msk(int w) { return w == 1 ? 0xFFu : w == 2 ? 0xFFFFu : 0xFFFFFFFFu; }
-static uint32_t p32_sgn(int w) { return w == 1 ? 0x80u : w == 2 ? 0x8000u : 0x80000000u; }
-static uint32_t p32_greg(const p32cpu *c, int e, int w)
+static UINT32 Pm32Mask(INT width) { return width == 1 ? 0xFFu : width == 2 ? 0xFFFFu : 0xFFFFFFFFu; }
+static UINT32 Pm32SignBit(INT width) { return width == 1 ? 0x80u : width == 2 ? 0x8000u : 0x80000000u; }
+static UINT32 Pm32GetRegister(const PM32_CPU *cpu, INT registerIndex, INT width)
 {
-    if (w == 1) return (e < 4) ? (c->r[e] & 0xFF) : ((c->r[e - 4] >> 8) & 0xFF);
-    return c->r[e & 7] & p32_msk(w);
+    if (width == 1) return (registerIndex < 4) ? (cpu->Registers[registerIndex] & 0xFF) : ((cpu->Registers[registerIndex - 4] >> 8) & 0xFF);
+    return cpu->Registers[registerIndex & 7] & Pm32Mask(width);
 }
-static void p32_sreg(p32cpu *c, int e, int w, uint32_t v)
+static VOID Pm32SetRegister(PM32_CPU *cpu, INT registerIndex, INT width, UINT32 value)
 {
-    if (w == 1) {
-        if (e < 4) c->r[e] = (c->r[e] & 0xFFFFFF00u) | (v & 0xFF);
-        else       c->r[e - 4] = (c->r[e - 4] & 0xFFFF00FFu) | ((v & 0xFF) << 8);
-    } else if (w == 2) c->r[e & 7] = (c->r[e & 7] & 0xFFFF0000u) | (v & 0xFFFF);
-    else c->r[e & 7] = v;
+    if (width == 1) {
+        if (registerIndex < 4) cpu->Registers[registerIndex] = (cpu->Registers[registerIndex] & 0xFFFFFF00u) | (value & 0xFF);
+        else       cpu->Registers[registerIndex - 4] = (cpu->Registers[registerIndex - 4] & 0xFFFF00FFu) | ((value & 0xFF) << 8);
+    } else if (width == 2) cpu->Registers[registerIndex & 7] = (cpu->Registers[registerIndex & 7] & 0xFFFF0000u) | (value & 0xFFFF);
+    else cpu->Registers[registerIndex & 7] = value;
 }
 
 /* ---- memory --------------------------------------------------------------------- */
-static uint32_t p32_rdm(uint32_t lin, int w)
+static UINT32 Pm32ReadMemory(UINT32 linear, INT width)
 {
-    uint32_t v = p32_rd8(lin);
-    if (w >= 2) v |= (uint32_t)p32_rd8(lin + 1) << 8;
-    if (w == 4) { v |= (uint32_t)p32_rd8(lin + 2) << 16; v |= (uint32_t)p32_rd8(lin + 3) << 24; }
-    return v;
+    UINT32 value = Pm32HostRead8(linear);
+    if (width >= 2) value |= (UINT32)Pm32HostRead8(linear + 1) << 8;
+    if (width == 4) { value |= (UINT32)Pm32HostRead8(linear + 2) << 16; value |= (UINT32)Pm32HostRead8(linear + 3) << 24; }
+    return value;
 }
-static void p32_wrm(uint32_t lin, int w, uint32_t v)
+static VOID Pm32WriteMemory(UINT32 linear, INT width, UINT32 value)
 {
-    p32_wr8(lin, (uint8_t)v);
-    if (w >= 2) p32_wr8(lin + 1, (uint8_t)(v >> 8));
-    if (w == 4) { p32_wr8(lin + 2, (uint8_t)(v >> 16)); p32_wr8(lin + 3, (uint8_t)(v >> 24)); }
+    Pm32HostWrite8(linear, (BYTE)value);
+    if (width >= 2) Pm32HostWrite8(linear + 1, (BYTE)(value >> 8));
+    if (width == 4) { Pm32HostWrite8(linear + 2, (BYTE)(value >> 16)); Pm32HostWrite8(linear + 3, (BYTE)(value >> 24)); }
 }
 
 /* ---- flags ---------------------------------------------------------------------- */
-static int p32_par(uint32_t v) { v &= 0xFF; v ^= v >> 4; v ^= v >> 2; v ^= v >> 1; return !(v & 1); }
-static uint32_t p32_szp(uint32_t r, int w)
+static INT Pm32Parity(UINT32 value) { value &= 0xFF; value ^= value >> 4; value ^= value >> 2; value ^= value >> 1; return !(value & 1); }
+static UINT32 Pm32SzpFlags(UINT32 result, INT width)
 {
-    uint32_t f = 0;
-    r &= p32_msk(w);
-    if (!r) f |= P32_ZF;
-    if (r & p32_sgn(w)) f |= P32_SF;
-    if (p32_par(r)) f |= P32_PF;
-    return f;
+    UINT32 flags = 0;
+    result &= Pm32Mask(width);
+    if (!result) flags |= P32_ZF;
+    if (result & Pm32SignBit(width)) flags |= P32_SF;
+    if (Pm32Parity(result)) flags |= P32_PF;
+    return flags;
 }
 /* ADD/ADC and SUB/SBB/CMP: result + the six arithmetic flags. */
-static uint32_t p32_add(uint32_t *fl, uint32_t a, uint32_t b, uint32_t ci, int w)
+static UINT32 Pm32Add(UINT32 *flags, UINT32 first, UINT32 second, UINT32 carryIn, INT width)
 {
-    uint32_t m = p32_msk(w), s = p32_sgn(w);
-    uint64_t full = (uint64_t)(a & m) + (uint64_t)(b & m) + ci;
-    uint32_t r = (uint32_t)full & m, f = p32_szp(r, w);
-    if (full >> (w * 8)) f |= P32_CF;
-    if (((a ^ b ^ r) & 0x10)) f |= P32_AF;
-    if ((~(a ^ b) & (a ^ r)) & s) f |= P32_OF;
-    *fl = (*fl & ~P32_ARITH) | f;
-    return r;
+    UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width);
+    UINT64 full = (UINT64)(first & mask) + (UINT64)(second & mask) + carryIn;
+    UINT32 result = (UINT32)full & mask, newFlags = Pm32SzpFlags(result, width);
+    if (full >> (width * 8)) newFlags |= P32_CF;
+    if (((first ^ second ^ result) & 0x10)) newFlags |= P32_AF;
+    if ((~(first ^ second) & (first ^ result)) & signBit) newFlags |= P32_OF;
+    *flags = (*flags & ~P32_ARITH) | newFlags;
+    return result;
 }
-static uint32_t p32_sub(uint32_t *fl, uint32_t a, uint32_t b, uint32_t bi, int w)
+static UINT32 Pm32Subtract(UINT32 *flags, UINT32 first, UINT32 second, UINT32 borrowIn, INT width)
 {
-    uint32_t m = p32_msk(w), s = p32_sgn(w);
-    uint32_t r = (a - b - bi) & m, f = p32_szp(r, w);
-    if ((uint64_t)(a & m) < (uint64_t)(b & m) + bi) f |= P32_CF;
-    if (((a ^ b ^ r) & 0x10)) f |= P32_AF;
-    if (((a ^ b) & (a ^ r)) & s) f |= P32_OF;
-    *fl = (*fl & ~P32_ARITH) | f;
-    return r;
+    UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width);
+    UINT32 result = (first - second - borrowIn) & mask, newFlags = Pm32SzpFlags(result, width);
+    if ((UINT64)(first & mask) < (UINT64)(second & mask) + borrowIn) newFlags |= P32_CF;
+    if (((first ^ second ^ result) & 0x10)) newFlags |= P32_AF;
+    if (((first ^ second) & (first ^ result)) & signBit) newFlags |= P32_OF;
+    *flags = (*flags & ~P32_ARITH) | newFlags;
+    return result;
 }
-static uint32_t p32_logic(uint32_t *fl, uint32_t r, int w)
+static UINT32 Pm32Logic(UINT32 *flags, UINT32 result, INT width)
 {   /* AND/OR/XOR/TEST: CF=OF=0, AF undefined (left clear, as hardware does in practice) */
-    r &= p32_msk(w);
-    *fl = (*fl & ~P32_ARITH) | p32_szp(r, w);
-    return r;
+    result &= Pm32Mask(width);
+    *flags = (*flags & ~P32_ARITH) | Pm32SzpFlags(result, width);
+    return result;
 }
 /* group-1 op: 0 ADD 1 OR 2 ADC 3 SBB 4 AND 5 SUB 6 XOR 7 CMP. Returns the result; *store
    says whether it is written back (CMP is not). */
-static uint32_t p32_alu(uint32_t *fl, int op, uint32_t a, uint32_t b, int w, int *store)
+static UINT32 Pm32Alu(UINT32 *flags, INT operation, UINT32 first, UINT32 second, INT width, INT *isStore)
 {
-    uint32_t cf = *fl & P32_CF;
-    *store = (op != 7);
-    switch (op) {
-    case 0: return p32_add(fl, a, b, 0, w);
-    case 1: return p32_logic(fl, a | b, w);
-    case 2: return p32_add(fl, a, b, cf, w);
-    case 3: return p32_sub(fl, a, b, cf, w);
-    case 4: return p32_logic(fl, a & b, w);
-    case 5: return p32_sub(fl, a, b, 0, w);
-    case 6: return p32_logic(fl, a ^ b, w);
-    default: return p32_sub(fl, a, b, 0, w);
+    UINT32 carry = *flags & P32_CF;
+    *isStore = (operation != 7);
+    switch (operation) {
+    case 0: return Pm32Add(flags, first, second, 0, width);
+    case 1: return Pm32Logic(flags, first | second, width);
+    case 2: return Pm32Add(flags, first, second, carry, width);
+    case 3: return Pm32Subtract(flags, first, second, carry, width);
+    case 4: return Pm32Logic(flags, first & second, width);
+    case 5: return Pm32Subtract(flags, first, second, 0, width);
+    case 6: return Pm32Logic(flags, first ^ second, width);
+    default: return Pm32Subtract(flags, first, second, 0, width);
     }
 }
-static int p32_cond(uint32_t f, int cc)
+static INT Pm32Condition(UINT32 flags, INT condition)
 {
-    int r;
-    switch (cc >> 1) {
-    case 0: r = (f & P32_OF) != 0; break;                              /* O  */
-    case 1: r = (f & P32_CF) != 0; break;                              /* B  */
-    case 2: r = (f & P32_ZF) != 0; break;                              /* Z  */
-    case 3: r = (f & (P32_CF | P32_ZF)) != 0; break;                   /* BE */
-    case 4: r = (f & P32_SF) != 0; break;                              /* S  */
-    case 5: r = (f & P32_PF) != 0; break;                              /* P  */
-    case 6: r = ((f & P32_SF) != 0) != ((f & P32_OF) != 0); break;     /* L  */
-    default: r = (f & P32_ZF) || (((f & P32_SF) != 0) != ((f & P32_OF) != 0)); /* LE */
+    INT isTrue;
+    switch (condition >> 1) {
+    case 0: isTrue = (flags & P32_OF) != 0; break;                              /* O  */
+    case 1: isTrue = (flags & P32_CF) != 0; break;                              /* B  */
+    case 2: isTrue = (flags & P32_ZF) != 0; break;                              /* Z  */
+    case 3: isTrue = (flags & (P32_CF | P32_ZF)) != 0; break;                   /* BE */
+    case 4: isTrue = (flags & P32_SF) != 0; break;                              /* S  */
+    case 5: isTrue = (flags & P32_PF) != 0; break;                              /* P  */
+    case 6: isTrue = ((flags & P32_SF) != 0) != ((flags & P32_OF) != 0); break;     /* L  */
+    default: isTrue = (flags & P32_ZF) || (((flags & P32_SF) != 0) != ((flags & P32_OF) != 0)); /* LE */
     }
-    return (cc & 1) ? !r : r;
+    return (condition & 1) ? !isTrue : isTrue;
 }
 
 /* ---- decode ---------------------------------------------------------------------- */
-typedef struct {
-    int      is_mem;     /* 1 = memory operand at lin                                  */
-    uint32_t lin;
-    int      reg;        /* the /r field                                               */
-    int      rm;         /* register number when !is_mem                               */
-    int      len;        /* bytes consumed by ModRM + SIB + displacement              */
-} p32_modrm;
+typedef struct _PM32_MODRM {
+    INT      IsMemory;     /* 1 = memory operand at Linear                               */
+    UINT32 Linear;
+    INT      Register;        /* the /r field                                               */
+    INT      RegisterMemory;         /* register number when !IsMemory                            */
+    INT      Length;        /* bytes consumed by ModRM + SIB + displacement              */
+} PM32_MODRM;
 
 /* Code fetch: CS base + EIP + i. */
-static uint8_t p32_cb(const p32cpu *c, uint32_t i) { return p32_rd8(c->base[1] + c->eip + i); }
-static uint32_t p32_ci(const p32cpu *c, uint32_t i, int w)
+static BYTE Pm32CodeByte(const PM32_CPU *cpu, UINT32 offset) { return Pm32HostRead8(cpu->SegmentBases[1] + cpu->Eip + offset); }
+static UINT32 Pm32CodeImmediate(const PM32_CPU *cpu, UINT32 offset, INT width)
 {
-    uint32_t v = p32_cb(c, i);
-    if (w >= 2) v |= (uint32_t)p32_cb(c, i + 1) << 8;
-    if (w == 4) { v |= (uint32_t)p32_cb(c, i + 2) << 16; v |= (uint32_t)p32_cb(c, i + 3) << 24; }
-    return v;
+    UINT32 value = Pm32CodeByte(cpu, offset);
+    if (width >= 2) value |= (UINT32)Pm32CodeByte(cpu, offset + 1) << 8;
+    if (width == 4) { value |= (UINT32)Pm32CodeByte(cpu, offset + 2) << 16; value |= (UINT32)Pm32CodeByte(cpu, offset + 3) << 24; }
+    return value;
 }
 
 /* 32-bit ModRM/SIB. `seg` is an override (0..5) or -1: default DS, or SS for an EBP/ESP base. */
-static void p32_decode(const p32cpu *c, uint32_t at, int seg, p32_modrm *m)
+static VOID Pm32Decode(const PM32_CPU *cpu, UINT32 offset, INT segmentOverride, PM32_MODRM *modrm)
 {
-    uint8_t mr = p32_cb(c, at);
-    int mod = mr >> 6, rm = mr & 7, n = 1, s = 3;
-    uint32_t ea = 0;
-    m->reg = (mr >> 3) & 7;
-    if (mod == 3) { m->is_mem = 0; m->rm = rm; m->len = 1; return; }
-    m->is_mem = 1;
-    if (rm == 4) {                                  /* SIB */
-        uint8_t sib = p32_cb(c, at + 1);
-        int sc = sib >> 6, ix = (sib >> 3) & 7, bs = sib & 7;
-        n = 2;
-        if (bs == 5 && mod == 0) { ea = p32_ci(c, at + n, 4); n += 4; }
-        else { ea = c->r[bs]; if (bs == 4 || bs == 5) s = 2; }
-        if (ix != 4) ea += c->r[ix] << sc;
-    } else if (rm == 5 && mod == 0) {               /* disp32 */
-        ea = p32_ci(c, at + 1, 4); n = 5;
+    BYTE modrmByte = Pm32CodeByte(cpu, offset);
+    INT mode = modrmByte >> 6, registerMemory = modrmByte & 7, length = 1, defaultSegment = 3;
+    UINT32 effectiveAddress = 0;
+    modrm->Register = (modrmByte >> 3) & 7;
+    if (mode == 3) { modrm->IsMemory = 0; modrm->RegisterMemory = registerMemory; modrm->Length = 1; return; }
+    modrm->IsMemory = 1;
+    if (registerMemory == 4) {                                  /* SIB */
+        BYTE sib = Pm32CodeByte(cpu, offset + 1);
+        INT scale = sib >> 6, indexRegister = (sib >> 3) & 7, baseRegister = sib & 7;
+        length = 2;
+        if (baseRegister == 5 && mode == 0) { effectiveAddress = Pm32CodeImmediate(cpu, offset + length, 4); length += 4; }
+        else { effectiveAddress = cpu->Registers[baseRegister]; if (baseRegister == 4 || baseRegister == 5) defaultSegment = 2; }
+        if (indexRegister != 4) effectiveAddress += cpu->Registers[indexRegister] << scale;
+    } else if (registerMemory == 5 && mode == 0) {               /* disp32 */
+        effectiveAddress = Pm32CodeImmediate(cpu, offset + 1, 4); length = 5;
     } else {
-        ea = c->r[rm];
-        if (rm == 5) s = 2;                         /* [EBP+d] defaults to SS */
+        effectiveAddress = cpu->Registers[registerMemory];
+        if (registerMemory == 5) defaultSegment = 2;                         /* [EBP+d] defaults to SS */
     }
-    if (mod == 1) { ea += (uint32_t)(int32_t)(int8_t)p32_cb(c, at + n); n += 1; }
-    else if (mod == 2) { ea += p32_ci(c, at + n, 4); n += 4; }
-    m->lin = c->base[seg >= 0 ? seg : s] + ea;
-    m->len = n;
+    if (mode == 1) { effectiveAddress += (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset + length); length += 1; }
+    else if (mode == 2) { effectiveAddress += Pm32CodeImmediate(cpu, offset + length, 4); length += 4; }
+    modrm->Linear = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : defaultSegment] + effectiveAddress;
+    modrm->Length = length;
 }
-static uint32_t p32_rmv(const p32cpu *c, const p32_modrm *m, int w)
-{ return m->is_mem ? p32_rdm(m->lin, w) : p32_greg(c, m->rm, w); }
+static UINT32 Pm32ReadRm(const PM32_CPU *cpu, const PM32_MODRM *modrm, INT width)
+{ return modrm->IsMemory ? Pm32ReadMemory(modrm->Linear, width) : Pm32GetRegister(cpu, modrm->RegisterMemory, width); }
 
 /* ---- stack (32-bit) ---------------------------------------------------------------- */
-static int p32_push_ok(const p32cpu *c, int w) { return p32_ok(c->base[2] + c->r[4] - (uint32_t)w, w, 1); }
-static void p32_push(p32cpu *c, uint32_t v, int w) { c->r[4] -= (uint32_t)w; p32_wrm(c->base[2] + c->r[4], w, v); }
-static uint32_t p32_pop(p32cpu *c, int w) { uint32_t v = p32_rdm(c->base[2] + c->r[4], w); c->r[4] += (uint32_t)w; return v; }
+static INT Pm32CanPush(const PM32_CPU *cpu, INT width) { return Pm32HostCanAccess(cpu->SegmentBases[2] + cpu->Registers[4] - (UINT32)width, width, 1); }
+static VOID Pm32Push(PM32_CPU *cpu, UINT32 value, INT width) { cpu->Registers[4] -= (UINT32)width; Pm32WriteMemory(cpu->SegmentBases[2] + cpu->Registers[4], width, value); }
+static UINT32 Pm32Pop(PM32_CPU *cpu, INT width) { UINT32 value = Pm32ReadMemory(cpu->SegmentBases[2] + cpu->Registers[4], width); cpu->Registers[4] += (UINT32)width; return value; }
 
 /* ---- shifts (C0/C1/D0-D3). Returns 0 to decline (RCL/RCR). ------------------------ */
-static int p32_shift(uint32_t *fl, int op, uint32_t v, unsigned n, int w, uint32_t *out)
+static INT Pm32Shift(UINT32 *flags, INT operation, UINT32 value, UINT count, INT width, UINT32 *out)
 {
-    uint32_t m = p32_msk(w), s = p32_sgn(w), r = v & m, f;
-    unsigned bits = (unsigned)w * 8;
-    n &= 0x1F;
-    if (!n) { *out = r; return 1; }                 /* count 0: nothing, flags untouched */
-    f = *fl;
-    switch (op) {
+    UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width), result = value & mask, newFlags;
+    UINT bits = (UINT)width * 8;
+    count &= 0x1F;
+    if (!count) { *out = result; return 1; }                 /* count 0: nothing, flags untouched */
+    newFlags = *flags;
+    switch (operation) {
     case 0: case 1: {                               /* ROL / ROR */
-        unsigned k = n % bits;
-        if (k) r = (op == 0) ? ((r << k) | (r >> (bits - k))) & m : ((r >> k) | (r << (bits - k))) & m;
-        f &= ~(P32_CF | P32_OF);
-        if (op == 0) { if (r & 1) f |= P32_CF; if (((r & s) != 0) != ((f & P32_CF) != 0)) f |= P32_OF; }
-        else { if (r & s) f |= P32_CF; if (((r & s) != 0) != ((r & (s >> 1)) != 0)) f |= P32_OF; }
-        *fl = f; *out = r; return 1; }
+        UINT rotate = count % bits;
+        if (rotate) result = (operation == 0) ? ((result << rotate) | (result >> (bits - rotate))) & mask : ((result >> rotate) | (result << (bits - rotate))) & mask;
+        newFlags &= ~(P32_CF | P32_OF);
+        if (operation == 0) { if (result & 1) newFlags |= P32_CF; if (((result & signBit) != 0) != ((newFlags & P32_CF) != 0)) newFlags |= P32_OF; }
+        else { if (result & signBit) newFlags |= P32_CF; if (((result & signBit) != 0) != ((result & (signBit >> 1)) != 0)) newFlags |= P32_OF; }
+        *flags = newFlags; *out = result; return 1; }
     case 2: case 3: return 0;                       /* RCL / RCR: decline */
     case 4: case 6: {                               /* SHL / SAL */
-        uint32_t cf = (n <= bits) ? ((r >> (bits - n)) & 1) : 0;
-        r = (n < 32) ? (r << n) & m : 0;
-        f = (f & ~P32_ARITH) | p32_szp(r, w);
-        if (cf) f |= P32_CF;
-        if (((r & s) != 0) != (cf != 0)) f |= P32_OF;
-        *fl = f; *out = r; return 1; }
+        UINT32 carry = (count <= bits) ? ((result >> (bits - count)) & 1) : 0;
+        result = (count < 32) ? (result << count) & mask : 0;
+        newFlags = (newFlags & ~P32_ARITH) | Pm32SzpFlags(result, width);
+        if (carry) newFlags |= P32_CF;
+        if (((result & signBit) != 0) != (carry != 0)) newFlags |= P32_OF;
+        *flags = newFlags; *out = result; return 1; }
     case 5: {                                       /* SHR */
-        uint32_t cf = (r >> (n - 1)) & 1;
-        uint32_t o = (r & s) != 0;
-        r = (n < 32) ? r >> n : 0;
-        f = (f & ~P32_ARITH) | p32_szp(r, w);
-        if (cf) f |= P32_CF;
-        if (o) f |= P32_OF;
-        *fl = f; *out = r; return 1; }
+        UINT32 carry = (result >> (count - 1)) & 1;
+        UINT32 isSignSet = (result & signBit) != 0;
+        result = (count < 32) ? result >> count : 0;
+        newFlags = (newFlags & ~P32_ARITH) | Pm32SzpFlags(result, width);
+        if (carry) newFlags |= P32_CF;
+        if (isSignSet) newFlags |= P32_OF;
+        *flags = newFlags; *out = result; return 1; }
     default: {                                      /* SAR */
-        int32_t sv = (w == 1) ? (int8_t)r : (w == 2) ? (int16_t)r : (int32_t)r;
-        uint32_t cf = (uint32_t)(sv >> (n - 1)) & 1;
-        r = (uint32_t)(sv >> (n > 31 ? 31 : n)) & m;
-        f = (f & ~P32_ARITH) | p32_szp(r, w);
-        if (cf) f |= P32_CF;
-        *fl = f; *out = r; return 1; }
+        INT32 signedValue = (width == 1) ? (INT8)result : (width == 2) ? (INT16)result : (INT32)result;
+        UINT32 carry = (UINT32)(signedValue >> (count - 1)) & 1;
+        result = (UINT32)(signedValue >> (count > 31 ? 31 : count)) & mask;
+        newFlags = (newFlags & ~P32_ARITH) | Pm32SzpFlags(result, width);
+        if (carry) newFlags |= P32_CF;
+        *flags = newFlags; *out = result; return 1; }
     }
 }
 
 /* ---- one instruction ---------------------------------------------------------------- */
 /* Returns 1 = executed, 0 = declined with no state changed. */
-static int p32_step(p32cpu *c)
+static INT Pm32Step(PM32_CPU *cpu)
 {
-    uint32_t i = 0;                 /* bytes consumed so far                                */
-    int seg = -1, osz = 0, rep = 0;
-    uint8_t op;
-    int W;
+    UINT32 offset = 0;                 /* bytes consumed so far                                */
+    INT segmentOverride = -1, isOperand16 = 0, repeat = 0;
+    BYTE opcode;
+    INT operandSize;
     for (;;) {                      /* prefixes */
-        op = p32_cb(c, i);
-        if (op == 0x66) { osz = 1; ++i; }
-        else if (op == 0x26) { seg = 0; ++i; } else if (op == 0x2E) { seg = 1; ++i; }
-        else if (op == 0x36) { seg = 2; ++i; } else if (op == 0x3E) { seg = 3; ++i; }
-        else if (op == 0x64) { seg = 4; ++i; } else if (op == 0x65) { seg = 5; ++i; }
-        else if (op == 0xF3) { rep = 1; ++i; } else if (op == 0xF2) { rep = 2; ++i; }
-        else if (op == 0x67 || op == 0xF0) return 0;      /* 16-bit addressing / LOCK */
+        opcode = Pm32CodeByte(cpu, offset);
+        if (opcode == 0x66) { isOperand16 = 1; ++offset; }
+        else if (opcode == 0x26) { segmentOverride = 0; ++offset; } else if (opcode == 0x2E) { segmentOverride = 1; ++offset; }
+        else if (opcode == 0x36) { segmentOverride = 2; ++offset; } else if (opcode == 0x3E) { segmentOverride = 3; ++offset; }
+        else if (opcode == 0x64) { segmentOverride = 4; ++offset; } else if (opcode == 0x65) { segmentOverride = 5; ++offset; }
+        else if (opcode == 0xF3) { repeat = 1; ++offset; } else if (opcode == 0xF2) { repeat = 2; ++offset; }
+        else if (opcode == 0x67 || opcode == 0xF0) return 0;      /* 16-bit addressing / LOCK */
         else break;
-        if (i > 4) return 0;
+        if (offset > 4) return 0;
     }
-    ++i;
-    W = osz ? 2 : 4;
+    ++offset;
+    operandSize = isOperand16 ? 2 : 4;
 
-#define P32_DONE(n) do { c->eip += (uint32_t)(n); return 1; } while (0)
+#define PM32_DONE(next) do { cpu->Eip += (UINT32)(next); return 1; } while (0)
 
     /* ---- ALU r/m,r / r,r/m / acc,imm : 00-3F except the segment/BCD holes ---- */
-    if (op < 0x40 && (op & 7) < 6) {
-        int alu = op >> 3, form = op & 7, w = (form & 1) ? W : 1, store;
-        uint32_t r;
+    if (opcode < 0x40 && (opcode & 7) < 6) {
+        INT aluOperation = opcode >> 3, form = opcode & 7, width = (form & 1) ? operandSize : 1, isStore;
+        UINT32 result;
         if (form == 4 || form == 5) {                        /* AL/eAX, imm */
-            uint32_t b = p32_ci(c, i, w), fl = c->flags;
-            r = p32_alu(&fl, alu, p32_greg(c, 0, w), b, w, &store);
-            if (store) p32_sreg(c, 0, w, r);
-            c->flags = fl;
-            P32_DONE(i + (uint32_t)w);
+            UINT32 second = Pm32CodeImmediate(cpu, offset, width), flags = cpu->Flags;
+            result = Pm32Alu(&flags, aluOperation, Pm32GetRegister(cpu, 0, width), second, width, &isStore);
+            if (isStore) Pm32SetRegister(cpu, 0, width, result);
+            cpu->Flags = flags;
+            PM32_DONE(offset + (UINT32)width);
         } else {
-            p32_modrm m; uint32_t a, b, fl = c->flags;
-            p32_decode(c, i, seg, &m);
-            if (m.is_mem && !p32_ok(m.lin, w, form < 2 && alu != 7)) return 0;
-            if (form < 2) { a = p32_rmv(c, &m, w); b = p32_greg(c, m.reg, w); }
-            else          { a = p32_greg(c, m.reg, w); b = p32_rmv(c, &m, w); }
-            r = p32_alu(&fl, alu, a, b, w, &store);
-            if (store) {
-                if (form < 2) { if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r); }
-                else p32_sreg(c, m.reg, w, r);
+            PM32_MODRM modrm; UINT32 first, second, flags = cpu->Flags;
+            Pm32Decode(cpu, offset, segmentOverride, &modrm);
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, form < 2 && aluOperation != 7)) return 0;
+            if (form < 2) { first = Pm32ReadRm(cpu, &modrm, width); second = Pm32GetRegister(cpu, modrm.Register, width); }
+            else          { first = Pm32GetRegister(cpu, modrm.Register, width); second = Pm32ReadRm(cpu, &modrm, width); }
+            result = Pm32Alu(&flags, aluOperation, first, second, width, &isStore);
+            if (isStore) {
+                if (form < 2) { if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); }
+                else Pm32SetRegister(cpu, modrm.Register, width, result);
             }
-            c->flags = fl;
-            P32_DONE(i + (uint32_t)m.len);
+            cpu->Flags = flags;
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
     }
     /* ---- INC/DEC r32 (40-4F): CF preserved ---- */
-    if (op >= 0x40 && op <= 0x4F) {
-        int e = op & 7; uint32_t cf = c->flags & P32_CF, fl = c->flags, r;
-        r = (op < 0x48) ? p32_add(&fl, p32_greg(c, e, W), 1, 0, W) : p32_sub(&fl, p32_greg(c, e, W), 1, 0, W);
-        c->flags = (fl & ~P32_CF) | cf;
-        p32_sreg(c, e, W, r);
-        P32_DONE(i);
+    if (opcode >= 0x40 && opcode <= 0x4F) {
+        INT registerIndex = opcode & 7; UINT32 carry = cpu->Flags & P32_CF, flags = cpu->Flags, result;
+        result = (opcode < 0x48) ? Pm32Add(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize) : Pm32Subtract(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize);
+        cpu->Flags = (flags & ~P32_CF) | carry;
+        Pm32SetRegister(cpu, registerIndex, operandSize, result);
+        PM32_DONE(offset);
     }
     /* ---- PUSH/POP r (50-5F) ---- */
-    if (op >= 0x50 && op <= 0x57) {
-        uint32_t v = p32_greg(c, op & 7, W);
-        if (!p32_push_ok(c, W)) return 0;
-        p32_push(c, v, W); P32_DONE(i);
+    if (opcode >= 0x50 && opcode <= 0x57) {
+        UINT32 value = Pm32GetRegister(cpu, opcode & 7, operandSize);
+        if (!Pm32CanPush(cpu, operandSize)) return 0;
+        Pm32Push(cpu, value, operandSize); PM32_DONE(offset);
     }
-    if (op >= 0x58 && op <= 0x5F) {
-        uint32_t v;
-        if (!p32_ok(c->base[2] + c->r[4], W, 0)) return 0;
-        v = p32_pop(c, W);
-        p32_sreg(c, op & 7, W, v);
-        P32_DONE(i);
+    if (opcode >= 0x58 && opcode <= 0x5F) {
+        UINT32 value;
+        if (!Pm32HostCanAccess(cpu->SegmentBases[2] + cpu->Registers[4], operandSize, 0)) return 0;
+        value = Pm32Pop(cpu, operandSize);
+        Pm32SetRegister(cpu, opcode & 7, operandSize, value);
+        PM32_DONE(offset);
     }
     /* ---- PUSHAD / POPAD (60/61) ---- */
-    if (op == 0x60) {
-        uint32_t sp0 = c->r[4]; int k;
-        if (osz || !p32_ok(c->base[2] + c->r[4] - 32, 32, 1)) return 0;
-        for (k = 0; k < 8; ++k) p32_push(c, k == 4 ? sp0 : c->r[k], 4);
-        P32_DONE(i);
+    if (opcode == 0x60) {
+        UINT32 originalEsp = cpu->Registers[4]; INT index;
+        if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[2] + cpu->Registers[4] - 32, 32, 1)) return 0;
+        for (index = 0; index < 8; ++index) Pm32Push(cpu, index == 4 ? originalEsp : cpu->Registers[index], 4);
+        PM32_DONE(offset);
     }
-    if (op == 0x61) {
-        int k; uint32_t v[8];
-        if (osz || !p32_ok(c->base[2] + c->r[4], 32, 0)) return 0;
-        for (k = 7; k >= 0; --k) v[k] = p32_pop(c, 4);
-        for (k = 0; k < 8; ++k) if (k != 4) c->r[k] = v[k];   /* the saved ESP is discarded */
-        P32_DONE(i);
+    if (opcode == 0x61) {
+        INT index; UINT32 saved[8];
+        if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[2] + cpu->Registers[4], 32, 0)) return 0;
+        for (index = 7; index >= 0; --index) saved[index] = Pm32Pop(cpu, 4);
+        for (index = 0; index < 8; ++index) if (index != 4) cpu->Registers[index] = saved[index];   /* the saved ESP is discarded */
+        PM32_DONE(offset);
     }
     /* ---- PUSH imm (68/6A) ---- */
-    if (op == 0x68 || op == 0x6A) {
-        uint32_t v = (op == 0x68) ? p32_ci(c, i, W) : (uint32_t)(int32_t)(int8_t)p32_cb(c, i);
-        if (!p32_push_ok(c, W)) return 0;
-        p32_push(c, v, W);
-        P32_DONE(i + (op == 0x68 ? (uint32_t)W : 1u));
+    if (opcode == 0x68 || opcode == 0x6A) {
+        UINT32 value = (opcode == 0x68) ? Pm32CodeImmediate(cpu, offset, operandSize) : (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset);
+        if (!Pm32CanPush(cpu, operandSize)) return 0;
+        Pm32Push(cpu, value, operandSize);
+        PM32_DONE(offset + (opcode == 0x68 ? (UINT32)operandSize : 1u));
     }
     /* ---- IMUL r, r/m, imm (69/6B) ---- */
-    if (op == 0x69 || op == 0x6B) {
-        p32_modrm m; int64_t a, b, prod; uint32_t r, n;
-        p32_decode(c, i, seg, &m);
-        if (m.is_mem && !p32_ok(m.lin, W, 0)) return 0;
-        a = (W == 4) ? (int64_t)(int32_t)p32_rmv(c, &m, 4) : (int64_t)(int16_t)p32_rmv(c, &m, 2);
-        n = i + (uint32_t)m.len;
-        if (op == 0x6B) { b = (int8_t)p32_cb(c, n); n += 1; }
-        else { uint32_t iv = p32_ci(c, n, W); n += (uint32_t)W; b = (W == 4) ? (int64_t)(int32_t)iv : (int64_t)(int16_t)iv; }
-        prod = a * b; r = (uint32_t)prod & p32_msk(W);
-        p32_sreg(c, m.reg, W, r);
-        c->flags &= ~(P32_CF | P32_OF);
-        if (prod != ((W == 4) ? (int64_t)(int32_t)r : (int64_t)(int16_t)r)) c->flags |= P32_CF | P32_OF;
-        P32_DONE(n);
+    if (opcode == 0x69 || opcode == 0x6B) {
+        PM32_MODRM modrm; INT64 first, second, product; UINT32 result, next;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 0)) return 0;
+        first = (operandSize == 4) ? (INT64)(INT32)Pm32ReadRm(cpu, &modrm, 4) : (INT64)(INT16)Pm32ReadRm(cpu, &modrm, 2);
+        next = offset + (UINT32)modrm.Length;
+        if (opcode == 0x6B) { second = (INT8)Pm32CodeByte(cpu, next); next += 1; }
+        else { UINT32 immediate = Pm32CodeImmediate(cpu, next, operandSize); next += (UINT32)operandSize; second = (operandSize == 4) ? (INT64)(INT32)immediate : (INT64)(INT16)immediate; }
+        product = first * second; result = (UINT32)product & Pm32Mask(operandSize);
+        Pm32SetRegister(cpu, modrm.Register, operandSize, result);
+        cpu->Flags &= ~(P32_CF | P32_OF);
+        if (product != ((operandSize == 4) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= P32_CF | P32_OF;
+        PM32_DONE(next);
     }
     /* ---- Jcc rel8 (70-7F) ---- */
-    if (op >= 0x70 && op <= 0x7F) {
-        int32_t d = (int8_t)p32_cb(c, i);
-        c->eip += i + 1;
-        if (p32_cond(c->flags, op & 0x0F)) c->eip += (uint32_t)d;
+    if (opcode >= 0x70 && opcode <= 0x7F) {
+        INT32 displacement = (INT8)Pm32CodeByte(cpu, offset);
+        cpu->Eip += offset + 1;
+        if (Pm32Condition(cpu->Flags, opcode & 0x0F)) cpu->Eip += (UINT32)displacement;
         return 1;
     }
     /* ---- group 1 (80/81/83) ---- */
-    if (op == 0x80 || op == 0x81 || op == 0x83) {
-        int w = (op == 0x80) ? 1 : W, store; p32_modrm m; uint32_t a, b, r, n, fl = c->flags;
-        p32_decode(c, i, seg, &m);
-        n = i + (uint32_t)m.len;
-        if (op == 0x81) { b = p32_ci(c, n, w); n += (uint32_t)w; }
-        else { b = (uint32_t)(int32_t)(int8_t)p32_cb(c, n); n += 1; }
-        if (m.is_mem && !p32_ok(m.lin, w, m.reg != 7)) return 0;
-        a = p32_rmv(c, &m, w);
-        r = p32_alu(&fl, m.reg, a, b, w, &store);
-        if (store) { if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r); }
-        c->flags = fl;
-        P32_DONE(n);
+    if (opcode == 0x80 || opcode == 0x81 || opcode == 0x83) {
+        INT width = (opcode == 0x80) ? 1 : operandSize, isStore; PM32_MODRM modrm; UINT32 first, second, result, next, flags = cpu->Flags;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        next = offset + (UINT32)modrm.Length;
+        if (opcode == 0x81) { second = Pm32CodeImmediate(cpu, next, width); next += (UINT32)width; }
+        else { second = (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, next); next += 1; }
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register != 7)) return 0;
+        first = Pm32ReadRm(cpu, &modrm, width);
+        result = Pm32Alu(&flags, modrm.Register, first, second, width, &isStore);
+        if (isStore) { if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); }
+        cpu->Flags = flags;
+        PM32_DONE(next);
     }
     /* ---- TEST r/m,r (84/85) ---- */
-    if (op == 0x84 || op == 0x85) {
-        int w = (op & 1) ? W : 1; p32_modrm m;
-        p32_decode(c, i, seg, &m);
-        if (m.is_mem && !p32_ok(m.lin, w, 0)) return 0;
-        p32_logic(&c->flags, p32_rmv(c, &m, w) & p32_greg(c, m.reg, w), w);
-        P32_DONE(i + (uint32_t)m.len);
+    if (opcode == 0x84 || opcode == 0x85) {
+        INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 0)) return 0;
+        Pm32Logic(&cpu->Flags, Pm32ReadRm(cpu, &modrm, width) & Pm32GetRegister(cpu, modrm.Register, width), width);
+        PM32_DONE(offset + (UINT32)modrm.Length);
     }
     /* ---- XCHG r/m,r (86/87) ---- */
-    if (op == 0x86 || op == 0x87) {
-        int w = (op & 1) ? W : 1; p32_modrm m; uint32_t a, b;
-        p32_decode(c, i, seg, &m);
-        if (m.is_mem && !p32_ok(m.lin, w, 1)) return 0;
-        a = p32_rmv(c, &m, w); b = p32_greg(c, m.reg, w);
-        if (m.is_mem) p32_wrm(m.lin, w, b); else p32_sreg(c, m.rm, w, b);
-        p32_sreg(c, m.reg, w, a);
-        P32_DONE(i + (uint32_t)m.len);
+    if (opcode == 0x86 || opcode == 0x87) {
+        INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm; UINT32 first, second;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
+        first = Pm32ReadRm(cpu, &modrm, width); second = Pm32GetRegister(cpu, modrm.Register, width);
+        if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, second); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, second);
+        Pm32SetRegister(cpu, modrm.Register, width, first);
+        PM32_DONE(offset + (UINT32)modrm.Length);
     }
     /* ---- MOV (88-8B) ---- */
-    if (op >= 0x88 && op <= 0x8B) {
-        int w = (op & 1) ? W : 1; p32_modrm m;
-        p32_decode(c, i, seg, &m);
-        if (m.is_mem && !p32_ok(m.lin, w, op < 0x8A)) return 0;
-        if (op < 0x8A) { uint32_t v = p32_greg(c, m.reg, w);
-                         if (m.is_mem) p32_wrm(m.lin, w, v); else p32_sreg(c, m.rm, w, v); }
-        else p32_sreg(c, m.reg, w, p32_rmv(c, &m, w));
-        P32_DONE(i + (uint32_t)m.len);
+    if (opcode >= 0x88 && opcode <= 0x8B) {
+        INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, opcode < 0x8A)) return 0;
+        if (opcode < 0x8A) { UINT32 value = Pm32GetRegister(cpu, modrm.Register, width);
+                         if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, value); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, value); }
+        else Pm32SetRegister(cpu, modrm.Register, width, Pm32ReadRm(cpu, &modrm, width));
+        PM32_DONE(offset + (UINT32)modrm.Length);
     }
     /* ---- LEA (8D): the offset, not the linear address ---- */
-    if (op == 0x8D) {
-        p32_modrm m; uint32_t sb;
-        p32_decode(c, i, -1, &m);
-        if (!m.is_mem) return 0;
-        /* p32_decode added a segment base; LEA wants the effective address alone. The
+    if (opcode == 0x8D) {
+        PM32_MODRM modrm; UINT32 segmentBase;
+        Pm32Decode(cpu, offset, -1, &modrm);
+        if (!modrm.IsMemory) return 0;
+        /* Pm32Decode added a segment base; LEA wants the effective address alone. The
            default segment for the form is DS or SS; subtract the one it used. */
-        sb = c->base[3];
-        { uint8_t mr = p32_cb(c, i); int mod = mr >> 6, rm = mr & 7;
-          if (rm == 5 && mod != 0) sb = c->base[2];
-          if (rm == 4) { uint8_t sib = p32_cb(c, i + 1); int bs = sib & 7;
-                         if (bs == 4 || (bs == 5 && mod != 0)) sb = c->base[2]; } }
-        p32_sreg(c, m.reg, W, m.lin - sb);
-        P32_DONE(i + (uint32_t)m.len);
+        segmentBase = cpu->SegmentBases[3];
+        { BYTE modrmByte = Pm32CodeByte(cpu, offset); INT mode = modrmByte >> 6, registerMemory = modrmByte & 7;
+          if (registerMemory == 5 && mode != 0) segmentBase = cpu->SegmentBases[2];
+          if (registerMemory == 4) { BYTE sib = Pm32CodeByte(cpu, offset + 1); INT baseRegister = sib & 7;
+                         if (baseRegister == 4 || (baseRegister == 5 && mode != 0)) segmentBase = cpu->SegmentBases[2]; } }
+        Pm32SetRegister(cpu, modrm.Register, operandSize, modrm.Linear - segmentBase);
+        PM32_DONE(offset + (UINT32)modrm.Length);
     }
     /* ---- NOP / XCHG eAX,r (90-97) ---- */
-    if (op == 0x90) { if (rep) return 0; P32_DONE(i); }               /* F3 90 = PAUSE: decline */
-    if (op > 0x90 && op <= 0x97) {
-        uint32_t a = p32_greg(c, 0, W), b = p32_greg(c, op & 7, W);
-        p32_sreg(c, 0, W, b); p32_sreg(c, op & 7, W, a); P32_DONE(i);
+    if (opcode == 0x90) { if (repeat) return 0; PM32_DONE(offset); }               /* F3 90 = PAUSE: decline */
+    if (opcode > 0x90 && opcode <= 0x97) {
+        UINT32 first = Pm32GetRegister(cpu, 0, operandSize), second = Pm32GetRegister(cpu, opcode & 7, operandSize);
+        Pm32SetRegister(cpu, 0, operandSize, second); Pm32SetRegister(cpu, opcode & 7, operandSize, first); PM32_DONE(offset);
     }
     /* ---- CWDE/CBW (98), CDQ/CWD (99) ---- */
-    if (op == 0x98) {
-        if (W == 4) c->r[0] = (uint32_t)(int32_t)(int16_t)(c->r[0] & 0xFFFF);
-        else p32_sreg(c, 0, 2, (uint32_t)(int16_t)(int8_t)(c->r[0] & 0xFF));
-        P32_DONE(i);
+    if (opcode == 0x98) {
+        if (operandSize == 4) cpu->Registers[0] = (UINT32)(INT32)(INT16)(cpu->Registers[0] & 0xFFFF);
+        else Pm32SetRegister(cpu, 0, 2, (UINT32)(INT16)(INT8)(cpu->Registers[0] & 0xFF));
+        PM32_DONE(offset);
     }
-    if (op == 0x99) {
-        if (W == 4) c->r[2] = (c->r[0] & 0x80000000u) ? 0xFFFFFFFFu : 0;
-        else p32_sreg(c, 2, 2, (c->r[0] & 0x8000u) ? 0xFFFFu : 0);
-        P32_DONE(i);
+    if (opcode == 0x99) {
+        if (operandSize == 4) cpu->Registers[2] = (cpu->Registers[0] & 0x80000000u) ? 0xFFFFFFFFu : 0;
+        else Pm32SetRegister(cpu, 2, 2, (cpu->Registers[0] & 0x8000u) ? 0xFFFFu : 0);
+        PM32_DONE(offset);
     }
     /* ---- MOV moffs (A0-A3) ---- */
-    if (op >= 0xA0 && op <= 0xA3) {
-        int w = (op & 1) ? W : 1; uint32_t lin = c->base[seg >= 0 ? seg : 3] + p32_ci(c, i, 4);
-        if (!p32_ok(lin, w, op >= 0xA2)) return 0;
-        if (op < 0xA2) p32_sreg(c, 0, w, p32_rdm(lin, w)); else p32_wrm(lin, w, p32_greg(c, 0, w));
-        P32_DONE(i + 4);
+    if (opcode >= 0xA0 && opcode <= 0xA3) {
+        INT width = (opcode & 1) ? operandSize : 1; UINT32 linear = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : 3] + Pm32CodeImmediate(cpu, offset, 4);
+        if (!Pm32HostCanAccess(linear, width, opcode >= 0xA2)) return 0;
+        if (opcode < 0xA2) Pm32SetRegister(cpu, 0, width, Pm32ReadMemory(linear, width)); else Pm32WriteMemory(linear, width, Pm32GetRegister(cpu, 0, width));
+        PM32_DONE(offset + 4);
     }
     /* ---- TEST acc,imm (A8/A9) ---- */
-    if (op == 0xA8 || op == 0xA9) {
-        int w = (op & 1) ? W : 1;
-        p32_logic(&c->flags, p32_greg(c, 0, w) & p32_ci(c, i, w), w);
-        P32_DONE(i + (uint32_t)w);
+    if (opcode == 0xA8 || opcode == 0xA9) {
+        INT width = (opcode & 1) ? operandSize : 1;
+        Pm32Logic(&cpu->Flags, Pm32GetRegister(cpu, 0, width) & Pm32CodeImmediate(cpu, offset, width), width);
+        PM32_DONE(offset + (UINT32)width);
     }
     /* ---- string ops: MOVS (A4/A5), STOS (AA/AB), LODS (AC/AD), with REP ---- */
-    if (op == 0xA4 || op == 0xA5 || op == 0xAA || op == 0xAB || op == 0xAC || op == 0xAD) {
-        int w = (op & 1) ? W : 1;
-        int32_t d = (c->flags & P32_DF) ? -w : w;
-        uint32_t n = rep ? c->r[1] : 1, k;
-        uint32_t sbase = c->base[seg >= 0 ? seg : 3], dbase = c->base[0];
-        if (rep == 2) return 0;                                  /* REPNE on MOVS/STOS: odd */
-        if (n > 0x10000u) return 0;                              /* bounded; the CPU can have it */
-        for (k = 0; k < n; ++k) {                                /* probe the whole range first */
-            uint32_t so = c->r[6] + (uint32_t)(d * (int32_t)k), dof = c->r[7] + (uint32_t)(d * (int32_t)k);
-            if (op <= 0xA5 || op >= 0xAC) if (!p32_ok(sbase + so, w, 0)) return 0;
-            if (op <= 0xAB)               if (!p32_ok(dbase + dof, w, 1)) return 0;
+    if (opcode == 0xA4 || opcode == 0xA5 || opcode == 0xAA || opcode == 0xAB || opcode == 0xAC || opcode == 0xAD) {
+        INT width = (opcode & 1) ? operandSize : 1;
+        INT32 delta = (cpu->Flags & P32_DF) ? -width : width;
+        UINT32 count = repeat ? cpu->Registers[1] : 1, index;
+        UINT32 sourceBase = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : 3], destinationBase = cpu->SegmentBases[0];
+        if (repeat == 2) return 0;                                  /* REPNE on MOVS/STOS: odd */
+        if (count > 0x10000u) return 0;                              /* bounded; the CPU can have it */
+        for (index = 0; index < count; ++index) {                                /* probe the whole range first */
+            UINT32 sourceOffset = cpu->Registers[6] + (UINT32)(delta * (INT32)index), destinationOffset = cpu->Registers[7] + (UINT32)(delta * (INT32)index);
+            if (opcode <= 0xA5 || opcode >= 0xAC) if (!Pm32HostCanAccess(sourceBase + sourceOffset, width, 0)) return 0;
+            if (opcode <= 0xAB)               if (!Pm32HostCanAccess(destinationBase + destinationOffset, width, 1)) return 0;
         }
-        for (k = 0; k < n; ++k) {
-            if (op == 0xA4 || op == 0xA5) p32_wrm(dbase + c->r[7], w, p32_rdm(sbase + c->r[6], w));
-            else if (op == 0xAA || op == 0xAB) p32_wrm(dbase + c->r[7], w, p32_greg(c, 0, w));
-            else p32_sreg(c, 0, w, p32_rdm(sbase + c->r[6], w));
-            if (op <= 0xA5 || op >= 0xAC) c->r[6] += (uint32_t)d;
-            if (op <= 0xAB) c->r[7] += (uint32_t)d;
+        for (index = 0; index < count; ++index) {
+            if (opcode == 0xA4 || opcode == 0xA5) Pm32WriteMemory(destinationBase + cpu->Registers[7], width, Pm32ReadMemory(sourceBase + cpu->Registers[6], width));
+            else if (opcode == 0xAA || opcode == 0xAB) Pm32WriteMemory(destinationBase + cpu->Registers[7], width, Pm32GetRegister(cpu, 0, width));
+            else Pm32SetRegister(cpu, 0, width, Pm32ReadMemory(sourceBase + cpu->Registers[6], width));
+            if (opcode <= 0xA5 || opcode >= 0xAC) cpu->Registers[6] += (UINT32)delta;
+            if (opcode <= 0xAB) cpu->Registers[7] += (UINT32)delta;
         }
-        if (rep) c->r[1] = 0;
-        P32_DONE(i);
+        if (repeat) cpu->Registers[1] = 0;
+        PM32_DONE(offset);
     }
     /* ---- MOV r,imm (B0-BF) ---- */
-    if (op >= 0xB0 && op <= 0xB7) { p32_sreg(c, op & 7, 1, p32_cb(c, i)); P32_DONE(i + 1); }
-    if (op >= 0xB8 && op <= 0xBF) { p32_sreg(c, op & 7, W, p32_ci(c, i, W)); P32_DONE(i + (uint32_t)W); }
+    if (opcode >= 0xB0 && opcode <= 0xB7) { Pm32SetRegister(cpu, opcode & 7, 1, Pm32CodeByte(cpu, offset)); PM32_DONE(offset + 1); }
+    if (opcode >= 0xB8 && opcode <= 0xBF) { Pm32SetRegister(cpu, opcode & 7, operandSize, Pm32CodeImmediate(cpu, offset, operandSize)); PM32_DONE(offset + (UINT32)operandSize); }
     /* ---- shifts: C0/C1 imm8, D0/D1 by 1, D2/D3 by CL ---- */
-    if (op == 0xC0 || op == 0xC1 || (op >= 0xD0 && op <= 0xD3)) {
-        int w = (op & 1) ? W : 1; p32_modrm m; uint32_t n, cnt, r, fl = c->flags;
-        p32_decode(c, i, seg, &m);
-        n = i + (uint32_t)m.len;
-        if (op <= 0xC1) { cnt = p32_cb(c, n); n += 1; }
-        else cnt = (op <= 0xD1) ? 1 : (c->r[1] & 0xFF);
-        if (m.is_mem && !p32_ok(m.lin, w, 1)) return 0;
-        if (!p32_shift(&fl, m.reg, p32_rmv(c, &m, w), cnt, w, &r)) return 0;
-        if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r);
-        c->flags = fl;
-        P32_DONE(n);
+    if (opcode == 0xC0 || opcode == 0xC1 || (opcode >= 0xD0 && opcode <= 0xD3)) {
+        INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm; UINT32 next, count, result, flags = cpu->Flags;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        next = offset + (UINT32)modrm.Length;
+        if (opcode <= 0xC1) { count = Pm32CodeByte(cpu, next); next += 1; }
+        else count = (opcode <= 0xD1) ? 1 : (cpu->Registers[1] & 0xFF);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
+        if (!Pm32Shift(&flags, modrm.Register, Pm32ReadRm(cpu, &modrm, width), count, width, &result)) return 0;
+        if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
+        cpu->Flags = flags;
+        PM32_DONE(next);
     }
     /* ---- RET / RET imm16 (C3/C2) ---- */
-    if (op == 0xC3 || op == 0xC2) {
-        uint32_t t, extra = (op == 0xC2) ? (p32_cb(c, i) | ((uint32_t)p32_cb(c, i + 1) << 8)) : 0;
-        if (osz || !p32_ok(c->base[2] + c->r[4], 4, 0)) return 0;
-        t = p32_pop(c, 4);
-        c->r[4] += extra;
-        c->eip = t;
+    if (opcode == 0xC3 || opcode == 0xC2) {
+        UINT32 target, extraPop = (opcode == 0xC2) ? (Pm32CodeByte(cpu, offset) | ((UINT32)Pm32CodeByte(cpu, offset + 1) << 8)) : 0;
+        if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[2] + cpu->Registers[4], 4, 0)) return 0;
+        target = Pm32Pop(cpu, 4);
+        cpu->Registers[4] += extraPop;
+        cpu->Eip = target;
         return 1;
     }
     /* ---- MOV r/m,imm (C6/C7) ---- */
-    if (op == 0xC6 || op == 0xC7) {
-        int w = (op & 1) ? W : 1; p32_modrm m; uint32_t v;
-        p32_decode(c, i, seg, &m);
-        if (m.reg != 0) return 0;
-        v = p32_ci(c, i + (uint32_t)m.len, w);
-        if (m.is_mem && !p32_ok(m.lin, w, 1)) return 0;
-        if (m.is_mem) p32_wrm(m.lin, w, v); else p32_sreg(c, m.rm, w, v);
-        P32_DONE(i + (uint32_t)m.len + (uint32_t)w);
+    if (opcode == 0xC6 || opcode == 0xC7) {
+        INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm; UINT32 value;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.Register != 0) return 0;
+        value = Pm32CodeImmediate(cpu, offset + (UINT32)modrm.Length, width);
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
+        if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, value); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, value);
+        PM32_DONE(offset + (UINT32)modrm.Length + (UINT32)width);
     }
     /* ---- IN/OUT (E4-E7 imm8, EC-EF DX) ---- */
-    if ((op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF)) {
-        int w = (op & 1) ? W : 1, isout = (op & 2) != 0;
-        uint16_t port = (op >= 0xEC) ? (uint16_t)(c->r[2] & 0xFFFF) : (uint16_t)p32_cb(c, i);
-        uint32_t n = (op >= 0xEC) ? i : i + 1;
-        if (isout) p32_out(port, w, p32_greg(c, 0, w));
-        else p32_sreg(c, 0, w, p32_in(port, w));
-        P32_DONE(n);
+    if ((opcode >= 0xE4 && opcode <= 0xE7) || (opcode >= 0xEC && opcode <= 0xEF)) {
+        INT width = (opcode & 1) ? operandSize : 1, isOut = (opcode & 2) != 0;
+        WORD port = (opcode >= 0xEC) ? (WORD)(cpu->Registers[2] & 0xFFFF) : (WORD)Pm32CodeByte(cpu, offset);
+        UINT32 next = (opcode >= 0xEC) ? offset : offset + 1;
+        if (isOut) Pm32HostOut(port, width, Pm32GetRegister(cpu, 0, width));
+        else Pm32SetRegister(cpu, 0, width, Pm32HostIn(port, width));
+        PM32_DONE(next);
     }
     /* ---- CALL rel32 (E8), JMP rel32 (E9), JMP rel8 (EB) ---- */
-    if (op == 0xE8) {
-        uint32_t d = p32_ci(c, i, 4);
-        if (osz || !p32_push_ok(c, 4)) return 0;
-        p32_push(c, c->eip + i + 4, 4);
-        c->eip += i + 4 + d; return 1;
+    if (opcode == 0xE8) {
+        UINT32 displacement = Pm32CodeImmediate(cpu, offset, 4);
+        if (isOperand16 || !Pm32CanPush(cpu, 4)) return 0;
+        Pm32Push(cpu, cpu->Eip + offset + 4, 4);
+        cpu->Eip += offset + 4 + displacement; return 1;
     }
-    if (op == 0xE9) { if (osz) return 0; c->eip += i + 4 + p32_ci(c, i, 4); return 1; }
-    if (op == 0xEB) { c->eip += i + 1 + (uint32_t)(int32_t)(int8_t)p32_cb(c, i); return 1; }
+    if (opcode == 0xE9) { if (isOperand16) return 0; cpu->Eip += offset + 4 + Pm32CodeImmediate(cpu, offset, 4); return 1; }
+    if (opcode == 0xEB) { cpu->Eip += offset + 1 + (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset); return 1; }
     /* ---- flag ops ---- */
-    if (op == 0xF5) { c->flags ^= P32_CF; P32_DONE(i); }
-    if (op == 0xF8) { c->flags &= ~P32_CF; P32_DONE(i); }
-    if (op == 0xF9) { c->flags |= P32_CF; P32_DONE(i); }
-    if (op == 0xFC) { c->flags &= ~P32_DF; P32_DONE(i); }
-    if (op == 0xFD) { c->flags |= P32_DF; P32_DONE(i); }
+    if (opcode == 0xF5) { cpu->Flags ^= P32_CF; PM32_DONE(offset); }
+    if (opcode == 0xF8) { cpu->Flags &= ~P32_CF; PM32_DONE(offset); }
+    if (opcode == 0xF9) { cpu->Flags |= P32_CF; PM32_DONE(offset); }
+    if (opcode == 0xFC) { cpu->Flags &= ~P32_DF; PM32_DONE(offset); }
+    if (opcode == 0xFD) { cpu->Flags |= P32_DF; PM32_DONE(offset); }
     /* ---- group 3 (F6/F7) ---- */
-    if (op == 0xF6 || op == 0xF7) {
-        int w = (op == 0xF6) ? 1 : W; p32_modrm m; uint32_t e, n;
-        p32_decode(c, i, seg, &m);
-        n = i + (uint32_t)m.len;
-        if (m.is_mem && !p32_ok(m.lin, w, m.reg == 2 || m.reg == 3)) return 0;
-        e = p32_rmv(c, &m, w);
-        switch (m.reg) {
-        case 0: case 1: p32_logic(&c->flags, e & p32_ci(c, n, w), w); n += (uint32_t)w; break;
-        case 2: { uint32_t r = ~e & p32_msk(w); if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r); break; }
-        case 3: { uint32_t fl = c->flags, r = p32_sub(&fl, 0, e, 0, w);
-                  if (e & p32_msk(w)) fl |= P32_CF; else fl &= ~P32_CF;
-                  if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r);
-                  c->flags = fl; break; }
+    if (opcode == 0xF6 || opcode == 0xF7) {
+        INT width = (opcode == 0xF6) ? 1 : operandSize; PM32_MODRM modrm; UINT32 operand, next;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        next = offset + (UINT32)modrm.Length;
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register == 2 || modrm.Register == 3)) return 0;
+        operand = Pm32ReadRm(cpu, &modrm, width);
+        switch (modrm.Register) {
+        case 0: case 1: Pm32Logic(&cpu->Flags, operand & Pm32CodeImmediate(cpu, next, width), width); next += (UINT32)width; break;
+        case 2: { UINT32 result = ~operand & Pm32Mask(width); if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); break; }
+        case 3: { UINT32 flags = cpu->Flags, result = Pm32Subtract(&flags, 0, operand, 0, width);
+                  if (operand & Pm32Mask(width)) flags |= P32_CF; else flags &= ~P32_CF;
+                  if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
+                  cpu->Flags = flags; break; }
         case 4: case 5: {                                        /* MUL / IMUL acc */
-            int ovf;
-            if (w == 1) {
-                uint32_t p = (m.reg == 4) ? (c->r[0] & 0xFF) * e
-                                          : (uint32_t)((int32_t)(int8_t)c->r[0] * (int32_t)(int8_t)e) & 0xFFFF;
-                p32_sreg(c, 0, 2, p);
-                ovf = (m.reg == 4) ? (p >> 8) != 0 : (int16_t)p != (int8_t)p;
-            } else if (w == 2) {
-                uint32_t p = (m.reg == 4) ? (c->r[0] & 0xFFFF) * e
-                                          : (uint32_t)((int32_t)(int16_t)c->r[0] * (int32_t)(int16_t)e);
-                p32_sreg(c, 0, 2, p); p32_sreg(c, 2, 2, p >> 16);
-                ovf = (m.reg == 4) ? (p >> 16) != 0 : (int32_t)p != (int16_t)p;
+            INT isOverflow;
+            if (width == 1) {
+                UINT32 product = (modrm.Register == 4) ? (cpu->Registers[0] & 0xFF) * operand
+                                          : (UINT32)((INT32)(INT8)cpu->Registers[0] * (INT32)(INT8)operand) & 0xFFFF;
+                Pm32SetRegister(cpu, 0, 2, product);
+                isOverflow = (modrm.Register == 4) ? (product >> 8) != 0 : (INT16)product != (INT8)product;
+            } else if (width == 2) {
+                UINT32 product = (modrm.Register == 4) ? (cpu->Registers[0] & 0xFFFF) * operand
+                                          : (UINT32)((INT32)(INT16)cpu->Registers[0] * (INT32)(INT16)operand);
+                Pm32SetRegister(cpu, 0, 2, product); Pm32SetRegister(cpu, 2, 2, product >> 16);
+                isOverflow = (modrm.Register == 4) ? (product >> 16) != 0 : (INT32)product != (INT16)product;
             } else {
-                uint64_t p = (m.reg == 4) ? (uint64_t)c->r[0] * e
-                                          : (uint64_t)((int64_t)(int32_t)c->r[0] * (int64_t)(int32_t)e);
-                c->r[0] = (uint32_t)p; c->r[2] = (uint32_t)(p >> 32);
-                ovf = (m.reg == 4) ? (p >> 32) != 0 : (int64_t)p != (int32_t)p;
+                UINT64 product = (modrm.Register == 4) ? (UINT64)cpu->Registers[0] * operand
+                                          : (UINT64)((INT64)(INT32)cpu->Registers[0] * (INT64)(INT32)operand);
+                cpu->Registers[0] = (UINT32)product; cpu->Registers[2] = (UINT32)(product >> 32);
+                isOverflow = (modrm.Register == 4) ? (product >> 32) != 0 : (INT64)product != (INT32)product;
             }
-            c->flags &= ~(P32_CF | P32_OF);
-            if (ovf) c->flags |= P32_CF | P32_OF;
+            cpu->Flags &= ~(P32_CF | P32_OF);
+            if (isOverflow) cpu->Flags |= P32_CF | P32_OF;
             break; }
         default: {                                               /* DIV / IDIV: #DE declines */
-            if (!(e & p32_msk(w))) return 0;
-            if (w == 1) {
-                uint32_t dv = c->r[0] & 0xFFFF;
-                if (m.reg == 6) { uint32_t q = dv / e, r = dv % e; if (q > 0xFF) return 0;
-                                  p32_sreg(c, 0, 2, q | (r << 8)); }
-                else { int32_t sd = (int16_t)dv, d = (int8_t)e, q = sd / d, r = sd % d;
-                       if (q > 127 || q < -128) return 0; p32_sreg(c, 0, 2, (q & 0xFF) | ((r & 0xFF) << 8)); }
-            } else if (w == 2) {
-                uint32_t dv = ((c->r[2] & 0xFFFF) << 16) | (c->r[0] & 0xFFFF);
-                if (m.reg == 6) { uint32_t q = dv / e, r = dv % e; if (q > 0xFFFF) return 0;
-                                  p32_sreg(c, 0, 2, q); p32_sreg(c, 2, 2, r); }
-                else { int32_t sd = (int32_t)dv, d = (int16_t)e, q = sd / d, r = sd % d;
-                       if (q > 32767 || q < -32768) return 0; p32_sreg(c, 0, 2, (uint32_t)q); p32_sreg(c, 2, 2, (uint32_t)r); }
+            if (!(operand & Pm32Mask(width))) return 0;
+            if (width == 1) {
+                UINT32 dividend = cpu->Registers[0] & 0xFFFF;
+                if (modrm.Register == 6) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > 0xFF) return 0;
+                                  Pm32SetRegister(cpu, 0, 2, quotient | (remainder << 8)); }
+                else { INT32 signedDividend = (INT16)dividend, divisor = (INT8)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
+                       if (quotient > 127 || quotient < -128) return 0; Pm32SetRegister(cpu, 0, 2, (quotient & 0xFF) | ((remainder & 0xFF) << 8)); }
+            } else if (width == 2) {
+                UINT32 dividend = ((cpu->Registers[2] & 0xFFFF) << 16) | (cpu->Registers[0] & 0xFFFF);
+                if (modrm.Register == 6) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > 0xFFFF) return 0;
+                                  Pm32SetRegister(cpu, 0, 2, quotient); Pm32SetRegister(cpu, 2, 2, remainder); }
+                else { INT32 signedDividend = (INT32)dividend, divisor = (INT16)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
+                       if (quotient > 32767 || quotient < -32768) return 0; Pm32SetRegister(cpu, 0, 2, (UINT32)quotient); Pm32SetRegister(cpu, 2, 2, (UINT32)remainder); }
             } else {
-                uint64_t dv = ((uint64_t)c->r[2] << 32) | c->r[0];
-                if (m.reg == 6) { uint64_t q = dv / e, r = dv % e; if (q > 0xFFFFFFFFu) return 0;
-                                  c->r[0] = (uint32_t)q; c->r[2] = (uint32_t)r; }
-                else { int64_t sd = (int64_t)dv, d = (int32_t)e, q, r;
-                       if (d == -1 && sd == (int64_t)0x8000000000000000ULL) return 0;
-                       q = sd / d; r = sd % d;
-                       if (q > 2147483647LL || q < -2147483648LL) return 0;
-                       c->r[0] = (uint32_t)q; c->r[2] = (uint32_t)r; }
+                UINT64 dividend = ((UINT64)cpu->Registers[2] << 32) | cpu->Registers[0];
+                if (modrm.Register == 6) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > 0xFFFFFFFFu) return 0;
+                                  cpu->Registers[0] = (UINT32)quotient; cpu->Registers[2] = (UINT32)remainder; }
+                else { INT64 signedDividend = (INT64)dividend, divisor = (INT32)operand, quotient, remainder;
+                       if (divisor == -1 && signedDividend == (INT64)0x8000000000000000ULL) return 0;
+                       quotient = signedDividend / divisor; remainder = signedDividend % divisor;
+                       if (quotient > 2147483647LL || quotient < -2147483648LL) return 0;
+                       cpu->Registers[0] = (UINT32)quotient; cpu->Registers[2] = (UINT32)remainder; }
             }
             break; }
         }
-        P32_DONE(n);
+        PM32_DONE(next);
     }
     /* ---- group 4/5 (FE/FF): INC/DEC r/m; FF: CALL/JMP near r/m, PUSH r/m ---- */
-    if (op == 0xFE || op == 0xFF) {
-        int w = (op == 0xFE) ? 1 : W; p32_modrm m;
-        p32_decode(c, i, seg, &m);
-        if (m.reg <= 1) {
-            uint32_t fl = c->flags, cf = c->flags & P32_CF, r;
-            if (m.is_mem && !p32_ok(m.lin, w, 1)) return 0;
-            r = (m.reg == 0) ? p32_add(&fl, p32_rmv(c, &m, w), 1, 0, w) : p32_sub(&fl, p32_rmv(c, &m, w), 1, 0, w);
-            if (m.is_mem) p32_wrm(m.lin, w, r); else p32_sreg(c, m.rm, w, r);
-            c->flags = (fl & ~P32_CF) | cf;
-            P32_DONE(i + (uint32_t)m.len);
+    if (opcode == 0xFE || opcode == 0xFF) {
+        INT width = (opcode == 0xFE) ? 1 : operandSize; PM32_MODRM modrm;
+        Pm32Decode(cpu, offset, segmentOverride, &modrm);
+        if (modrm.Register <= 1) {
+            UINT32 flags = cpu->Flags, carry = cpu->Flags & P32_CF, result;
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
+            result = (modrm.Register == 0) ? Pm32Add(&flags, Pm32ReadRm(cpu, &modrm, width), 1, 0, width) : Pm32Subtract(&flags, Pm32ReadRm(cpu, &modrm, width), 1, 0, width);
+            if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
+            cpu->Flags = (flags & ~P32_CF) | carry;
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (op == 0xFF && (m.reg == 2 || m.reg == 4) && !osz) {
-            uint32_t t;
-            if (m.is_mem && !p32_ok(m.lin, 4, 0)) return 0;
-            t = p32_rmv(c, &m, 4);
-            if (m.reg == 2) { if (!p32_push_ok(c, 4)) return 0; p32_push(c, c->eip + i + (uint32_t)m.len, 4); }
-            c->eip = t; return 1;
+        if (opcode == 0xFF && (modrm.Register == 2 || modrm.Register == 4) && !isOperand16) {
+            UINT32 target;
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, 4, 0)) return 0;
+            target = Pm32ReadRm(cpu, &modrm, 4);
+            if (modrm.Register == 2) { if (!Pm32CanPush(cpu, 4)) return 0; Pm32Push(cpu, cpu->Eip + offset + (UINT32)modrm.Length, 4); }
+            cpu->Eip = target; return 1;
         }
-        if (op == 0xFF && m.reg == 6) {
-            uint32_t v;
-            if (m.is_mem && !p32_ok(m.lin, W, 0)) return 0;
-            if (!p32_push_ok(c, W)) return 0;
-            v = p32_rmv(c, &m, W);
-            p32_push(c, v, W);
-            P32_DONE(i + (uint32_t)m.len);
+        if (opcode == 0xFF && modrm.Register == 6) {
+            UINT32 value;
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 0)) return 0;
+            if (!Pm32CanPush(cpu, operandSize)) return 0;
+            value = Pm32ReadRm(cpu, &modrm, operandSize);
+            Pm32Push(cpu, value, operandSize);
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
         return 0;
     }
     /* ---- 0F xx ---- */
-    if (op == 0x0F) {
-        uint8_t o2 = p32_cb(c, i);
-        ++i;
-        if (o2 >= 0x80 && o2 <= 0x8F) {                          /* Jcc rel32 */
-            uint32_t d = p32_ci(c, i, 4);
-            if (osz) return 0;
-            c->eip += i + 4;
-            if (p32_cond(c->flags, o2 & 0x0F)) c->eip += d;
+    if (opcode == 0x0F) {
+        BYTE opcode2 = Pm32CodeByte(cpu, offset);
+        ++offset;
+        if (opcode2 >= 0x80 && opcode2 <= 0x8F) {                          /* Jcc rel32 */
+            UINT32 displacement = Pm32CodeImmediate(cpu, offset, 4);
+            if (isOperand16) return 0;
+            cpu->Eip += offset + 4;
+            if (Pm32Condition(cpu->Flags, opcode2 & 0x0F)) cpu->Eip += displacement;
             return 1;
         }
-        if (o2 >= 0x90 && o2 <= 0x9F) {                          /* SETcc r/m8 */
-            p32_modrm m; uint32_t v = (uint32_t)p32_cond(c->flags, o2 & 0x0F);
-            p32_decode(c, i, seg, &m);
-            if (m.is_mem && !p32_ok(m.lin, 1, 1)) return 0;
-            if (m.is_mem) p32_wrm(m.lin, 1, v); else p32_sreg(c, m.rm, 1, v);
-            P32_DONE(i + (uint32_t)m.len);
+        if (opcode2 >= 0x90 && opcode2 <= 0x9F) {                          /* SETcc r/m8 */
+            PM32_MODRM modrm; UINT32 value = (UINT32)Pm32Condition(cpu->Flags, opcode2 & 0x0F);
+            Pm32Decode(cpu, offset, segmentOverride, &modrm);
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, 1, 1)) return 0;
+            if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, 1, value); else Pm32SetRegister(cpu, modrm.RegisterMemory, 1, value);
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (o2 == 0xB6 || o2 == 0xB7 || o2 == 0xBE || o2 == 0xBF) {  /* MOVZX / MOVSX */
-            int sw = (o2 & 1) ? 2 : 1; p32_modrm m; uint32_t v;
-            p32_decode(c, i, seg, &m);
-            if (m.is_mem && !p32_ok(m.lin, sw, 0)) return 0;
-            v = p32_rmv(c, &m, sw);
-            if (o2 >= 0xBE) v = (sw == 1) ? (uint32_t)(int32_t)(int8_t)v : (uint32_t)(int32_t)(int16_t)v;
-            p32_sreg(c, m.reg, W, v);
-            P32_DONE(i + (uint32_t)m.len);
+        if (opcode2 == 0xB6 || opcode2 == 0xB7 || opcode2 == 0xBE || opcode2 == 0xBF) {  /* MOVZX / MOVSX */
+            INT sourceWidth = (opcode2 & 1) ? 2 : 1; PM32_MODRM modrm; UINT32 value;
+            Pm32Decode(cpu, offset, segmentOverride, &modrm);
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, sourceWidth, 0)) return 0;
+            value = Pm32ReadRm(cpu, &modrm, sourceWidth);
+            if (opcode2 >= 0xBE) value = (sourceWidth == 1) ? (UINT32)(INT32)(INT8)value : (UINT32)(INT32)(INT16)value;
+            Pm32SetRegister(cpu, modrm.Register, operandSize, value);
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (o2 == 0xAF) {                                        /* IMUL r, r/m */
-            p32_modrm m; int64_t prod; uint32_t r;
-            p32_decode(c, i, seg, &m);
-            if (m.is_mem && !p32_ok(m.lin, W, 0)) return 0;
-            if (W == 4) prod = (int64_t)(int32_t)c->r[m.reg] * (int64_t)(int32_t)p32_rmv(c, &m, 4);
-            else        prod = (int64_t)(int16_t)c->r[m.reg] * (int64_t)(int16_t)p32_rmv(c, &m, 2);
-            r = (uint32_t)prod & p32_msk(W);
-            p32_sreg(c, m.reg, W, r);
-            c->flags &= ~(P32_CF | P32_OF);
-            if (prod != ((W == 4) ? (int64_t)(int32_t)r : (int64_t)(int16_t)r)) c->flags |= P32_CF | P32_OF;
-            P32_DONE(i + (uint32_t)m.len);
+        if (opcode2 == 0xAF) {                                        /* IMUL r, r/m */
+            PM32_MODRM modrm; INT64 product; UINT32 result;
+            Pm32Decode(cpu, offset, segmentOverride, &modrm);
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 0)) return 0;
+            if (operandSize == 4) product = (INT64)(INT32)cpu->Registers[modrm.Register] * (INT64)(INT32)Pm32ReadRm(cpu, &modrm, 4);
+            else        product = (INT64)(INT16)cpu->Registers[modrm.Register] * (INT64)(INT16)Pm32ReadRm(cpu, &modrm, 2);
+            result = (UINT32)product & Pm32Mask(operandSize);
+            Pm32SetRegister(cpu, modrm.Register, operandSize, result);
+            cpu->Flags &= ~(P32_CF | P32_OF);
+            if (product != ((operandSize == 4) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= P32_CF | P32_OF;
+            PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (o2 == 0xA4 || o2 == 0xA5 || o2 == 0xAC || o2 == 0xAD) {  /* SHLD / SHRD */
-            p32_modrm m; uint32_t n, cnt, dst, src, r, fl, bits = (uint32_t)W * 8, msk = p32_msk(W);
-            p32_decode(c, i, seg, &m);
-            n = i + (uint32_t)m.len;
-            if (o2 == 0xA4 || o2 == 0xAC) { cnt = p32_cb(c, n); n += 1; } else cnt = c->r[1] & 0xFF;
-            cnt &= 0x1F;
-            if (m.is_mem && !p32_ok(m.lin, W, 1)) return 0;
-            if (!cnt) P32_DONE(n);
-            if (cnt > bits) return 0;                            /* undefined: let the CPU */
-            dst = p32_rmv(c, &m, W); src = p32_greg(c, m.reg, W);
-            fl = c->flags;
-            if (o2 <= 0xA5) {                                    /* SHLD */
-                uint64_t cat = ((uint64_t)dst << bits) | src;
-                r = (uint32_t)((cat << cnt) >> bits) & msk;
-                fl = (fl & ~P32_ARITH) | p32_szp(r, W);
-                if ((dst >> (bits - cnt)) & 1) fl |= P32_CF;
-                if (((r ^ dst) & p32_sgn(W))) fl |= P32_OF;
+        if (opcode2 == 0xA4 || opcode2 == 0xA5 || opcode2 == 0xAC || opcode2 == 0xAD) {  /* SHLD / SHRD */
+            PM32_MODRM modrm; UINT32 next, count, destinationValue, sourceValue, result, flags, bits = (UINT32)operandSize * 8, mask = Pm32Mask(operandSize);
+            Pm32Decode(cpu, offset, segmentOverride, &modrm);
+            next = offset + (UINT32)modrm.Length;
+            if (opcode2 == 0xA4 || opcode2 == 0xAC) { count = Pm32CodeByte(cpu, next); next += 1; } else count = cpu->Registers[1] & 0xFF;
+            count &= 0x1F;
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 1)) return 0;
+            if (!count) PM32_DONE(next);
+            if (count > bits) return 0;                            /* undefined: let the CPU */
+            destinationValue = Pm32ReadRm(cpu, &modrm, operandSize); sourceValue = Pm32GetRegister(cpu, modrm.Register, operandSize);
+            flags = cpu->Flags;
+            if (opcode2 <= 0xA5) {                                    /* SHLD */
+                UINT64 concatenated = ((UINT64)destinationValue << bits) | sourceValue;
+                result = (UINT32)((concatenated << count) >> bits) & mask;
+                flags = (flags & ~P32_ARITH) | Pm32SzpFlags(result, operandSize);
+                if ((destinationValue >> (bits - count)) & 1) flags |= P32_CF;
+                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= P32_OF;
             } else {                                             /* SHRD */
-                uint64_t cat = ((uint64_t)src << bits) | dst;
-                r = (uint32_t)(cat >> cnt) & msk;
-                fl = (fl & ~P32_ARITH) | p32_szp(r, W);
-                if ((dst >> (cnt - 1)) & 1) fl |= P32_CF;
-                if (((r ^ dst) & p32_sgn(W))) fl |= P32_OF;
+                UINT64 concatenated = ((UINT64)sourceValue << bits) | destinationValue;
+                result = (UINT32)(concatenated >> count) & mask;
+                flags = (flags & ~P32_ARITH) | Pm32SzpFlags(result, operandSize);
+                if ((destinationValue >> (count - 1)) & 1) flags |= P32_CF;
+                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= P32_OF;
             }
-            if (m.is_mem) p32_wrm(m.lin, W, r); else p32_sreg(c, m.rm, W, r);
-            c->flags = fl;
-            P32_DONE(n);
+            if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, operandSize, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, operandSize, result);
+            cpu->Flags = flags;
+            PM32_DONE(next);
         }
         return 0;
     }
-#undef P32_DONE
+#undef PM32_DONE
     return 0;
 }
 

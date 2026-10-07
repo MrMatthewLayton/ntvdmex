@@ -26,12 +26,12 @@ static uint64_t fake_clock(void) { return g_fake_us; }
 /* The interpreter's host hooks: flat memory, and port I/O onto the VDD bus. Each IN
    advances the fake clock 50 us, so a retrace wait on 3DAh makes progress. */
 static uint32_t g_ins, g_outs;
-static uint8_t  p32_rd8(uint32_t lin) { return lin < sizeof g_flat ? g_flat[lin] : 0xFF; }
-static void     p32_wr8(uint32_t lin, uint8_t v) { if (lin < sizeof g_flat) g_flat[lin] = v; }
-static int      p32_ok(uint32_t lin, int w, int wr) { (void)wr; return lin + (uint32_t)w <= sizeof g_flat; }
-static uint32_t p32_in(uint16_t port, int w)
+static uint8_t  Pm32HostRead8(uint32_t lin) { return lin < sizeof g_flat ? g_flat[lin] : 0xFF; }
+static void     Pm32HostWrite8(uint32_t lin, uint8_t v) { if (lin < sizeof g_flat) g_flat[lin] = v; }
+static int      Pm32HostCanAccess(uint32_t lin, int w, int wr) { (void)wr; return lin + (uint32_t)w <= sizeof g_flat; }
+static uint32_t Pm32HostIn(uint16_t port, int w)
 { uint32_t v = 0; g_fake_us += 50; ++g_ins; VddBusIo(&bus, port, (uint8_t)w, 1, &v); return v; }
-static void     p32_out(uint16_t port, int w, uint32_t v)
+static void     Pm32HostOut(uint16_t port, int w, uint32_t v)
 { uint32_t x = v; ++g_outs; VddBusIo(&bus, port, (uint8_t)w, 0, &x); }
 #include "../../src/host/pm32interp.h"
 
@@ -47,22 +47,22 @@ static int total = 0, fails = 0;
    1 = returned to RETADR with ESP balanced; 0 = the interpreter declined something
    (the code used an instruction outside its set) or it never returned. */
 static int call_pm(uint32_t off, uint32_t ebx, uint32_t ecx, uint32_t edx, uint32_t edi,
-                   uint32_t es_base, p32cpu *out)
+                   uint32_t es_base, PM32_CPU *out)
 {
-    p32cpu c; long n;
+    PM32_CPU c; long n;
     memset(&c, 0, sizeof c);
-    c.r[0] = 0xA5A5A5A5u; c.r[1] = ecx; c.r[2] = edx; c.r[3] = ebx;
-    c.r[5] = 0xB5B5B5B5u; c.r[6] = 0xC6C6C6C6u; c.r[7] = edi;
-    c.r[4] = STACK - 4; g_flat[STACK - 4] = (uint8_t)RETADR; g_flat[STACK - 3] = (uint8_t)(RETADR >> 8);
+    c.Registers[0] = 0xA5A5A5A5u; c.Registers[1] = ecx; c.Registers[2] = edx; c.Registers[3] = ebx;
+    c.Registers[5] = 0xB5B5B5B5u; c.Registers[6] = 0xC6C6C6C6u; c.Registers[7] = edi;
+    c.Registers[4] = STACK - 4; g_flat[STACK - 4] = (uint8_t)RETADR; g_flat[STACK - 3] = (uint8_t)(RETADR >> 8);
     g_flat[STACK - 2] = (uint8_t)(RETADR >> 16); g_flat[STACK - 1] = (uint8_t)(RETADR >> 24);
-    c.eip = COPY + off; c.flags = 0x202;
-    c.base[0] = es_base;                    /* ES; CS/SS/DS flat 0 */
+    c.Eip = COPY + off; c.Flags = 0x202;
+    c.SegmentBases[0] = es_base;                    /* ES; CS/SS/DS flat 0 */
     for (n = 0; n < 2000000; ++n) {
-        if (c.eip == RETADR) break;
-        if (!p32_step(&c)) { printf("    declined at +%#x (op %02X)\n", c.eip - COPY, g_flat[c.eip]); return 0; }
+        if (c.Eip == RETADR) break;
+        if (!Pm32Step(&c)) { printf("    declined at +%#x (op %02X)\n", c.Eip - COPY, g_flat[c.Eip]); return 0; }
     }
     if (out) *out = c;
-    return c.eip == RETADR && c.r[4] == STACK;
+    return c.Eip == RETADR && c.Registers[4] == STACK;
 }
 
 static void int10(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx, NTVDD_REGISTERS *r)
@@ -76,7 +76,7 @@ int main(void)
 {
     NTVDD_DEVICE dev;
     NTVDD_REGISTERS r;
-    p32cpu c;
+    PM32_CPU c;
     uint32_t blk, len, i;
     uint16_t win, start, pal, ports;
     printf("== VBE 4F0Ah protected-mode interface battery (#53) ==\n");
@@ -130,7 +130,7 @@ int main(void)
     CHECK(vid.VesaBank == 2 && vid.VbePmBankCount == 1, "SetWindow DX=2: window A is bank 2");
     CHECK(vid.VesaVram[0] == 0x11 && vid.VesaVram[VIDEO_VESA_WINDOW - 1] == 0x11,
           "SetWindow: the old window was flushed into bank 0, as 4F05h does");
-    CHECK(c.r[0] == 0xA5A5A5A5u && c.r[2] == 2 && c.r[3] == 0 && c.r[5] == 0xB5B5B5B5u && c.r[6] == 0xC6C6C6C6u,
+    CHECK(c.Registers[0] == 0xA5A5A5A5u && c.Registers[2] == 2 && c.Registers[3] == 0 && c.Registers[5] == 0xB5B5B5B5u && c.Registers[6] == 0xC6C6C6C6u,
           "SetWindow: EAX/EDX/EBX/EBP/ESI preserved");
     int10(0x4F05, 0x0100, 0, 0, &r);
     CHECK((r.Edx & 0xFFFF) == 2, "4F05h BH=01h (get) agrees: bank 2");
@@ -164,7 +164,7 @@ int main(void)
         uint32_t data = 0x160000u, back = 0x9000u;      /* ES base 0x100000 + EDI 0x60000 */
         memcpy(g_flat + data, ent, sizeof ent);
         CHECK(call_pm(pal, 0x0000, 3, 0x40, 0x60000, 0x100000, &c), "SetPalette (ES:EDI, 3 entries at 40h) returns");
-        CHECK(c.r[1] == 3 && c.r[2] == 0x40 && c.r[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
+        CHECK(c.Registers[1] == 3 && c.Registers[2] == 0x40 && c.Registers[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
         memset(&r, 0, sizeof r);
         r.Eax = 0x4F09; r.Ebx = 0x0001; r.Ecx = 3; r.Edx = 0x40; r.Es = (uint16_t)(back >> 4); r.Edi = 0;
         VddBusDeliverInterrupt(&bus, 0x10, &r);

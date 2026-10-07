@@ -16720,7 +16720,7 @@ static void iio_out(uint16_t port, int width, uint32_t val)
 /* ── THE FLAT 32-BIT INTERPRETER'S HOST HOOKS (north star 1, Doom). ───────────────────
      Same division as imem_*: A0000-AFFFF goes through the VGA engine (a read loads the
      latches, a write reaches every plane the map mask selects), everything else is flat
-     host memory -- a DOS/4GW client's linear addresses ARE host VAs. p32_ok() is the
+     host memory -- a DOS/4GW client's linear addresses ARE host VAs. Pm32HostCanAccess() is the
      guard that turns a stray pointer into a DECLINE instead of a host access violation:
      a small page cache over VirtualQuery, so the syscall happens once per page. */
 #define P32_PGC 256
@@ -16741,17 +16741,17 @@ static int p32_page_ok(DWORD pg, int wr)
     return wr ? (g_p32_pgc[h].ok & 2) != 0 : (g_p32_pgc[h].ok & 1) != 0;
 }
 static DWORD g_p32_vga_n = 0;      /* aperture accesses by the interpreter (modey_pm_run) */
-static uint8_t p32_rd8(uint32_t lin)
+static uint8_t Pm32HostRead8(uint32_t lin)
 {
     if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; return VddVideoPlanarRead(&g_vid, lin - A000_LO); }
     return *(volatile BYTE *)(ULONG_PTR)lin;
 }
-static void p32_wr8(uint32_t lin, uint8_t v)
+static void Pm32HostWrite8(uint32_t lin, uint8_t v)
 {
     if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; VddVideoPlanarWrite(&g_vid, lin - A000_LO, v); return; }
     *(volatile BYTE *)(ULONG_PTR)lin = v;
 }
-static int p32_ok(uint32_t lin, int w, int wr)
+static int Pm32HostCanAccess(uint32_t lin, int w, int wr)
 {
     uint32_t end = lin + (uint32_t)w - 1;
     if (end < lin) return 0;
@@ -16760,8 +16760,8 @@ static int p32_ok(uint32_t lin, int w, int wr)
     if (!p32_page_ok(lin >> 12, wr)) return 0;
     return ((end >> 12) == (lin >> 12)) || p32_page_ok(end >> 12, wr);
 }
-static uint32_t p32_in(uint16_t port, int w)             { return iio_in(port, w); }
-static void     p32_out(uint16_t port, int w, uint32_t v) { iio_out(port, w, v); }
+static uint32_t Pm32HostIn(uint16_t port, int w)             { return iio_in(port, w); }
+static void     Pm32HostOut(uint16_t port, int w, uint32_t v) { iio_out(port, w, v); }
 
 #include "pm32interp.h"
 
@@ -16813,7 +16813,7 @@ static int modey_pm_irq_waiting(void)
 }
 static void modey_pm_run(volatile BYTE *tib)
 {
-    p32cpu c; long n = 0, idle_from = 0; uint32_t esp0; int why;
+    PM32_CPU c; long n = 0, idle_from = 0; uint32_t esp0; int why;
     DWORD vga_seen;
     WORD sel[6];
     int k;
@@ -16822,23 +16822,23 @@ static void modey_pm_run(volatile BYTE *tib)
     sel[0] = (WORD)VDM_REG(tib, VTIB_ES); sel[1] = cs; sel[2] = ss;
     sel[3] = (WORD)VDM_REG(tib, VTIB_DS); sel[4] = (WORD)VDM_REG(tib, VTIB_FS);
     sel[5] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (k = 0; k < 6; ++k) c.base[k] = (sel[k] & 0xFFFC) ? dpmi_sel_base(sel[k]) : 0;
-    c.r[0] = VDM_REG(tib, VTIB_EAX); c.r[1] = VDM_REG(tib, VTIB_ECX);
-    c.r[2] = VDM_REG(tib, VTIB_EDX); c.r[3] = VDM_REG(tib, VTIB_EBX);
-    c.r[4] = VDM_REG(tib, VTIB_ESP); c.r[5] = VDM_REG(tib, VTIB_EBP);
-    c.r[6] = VDM_REG(tib, VTIB_ESI); c.r[7] = VDM_REG(tib, VTIB_EDI);
-    c.eip = VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
-    esp0 = c.r[4];
+    for (k = 0; k < 6; ++k) c.SegmentBases[k] = (sel[k] & 0xFFFC) ? dpmi_sel_base(sel[k]) : 0;
+    c.Registers[0] = VDM_REG(tib, VTIB_EAX); c.Registers[1] = VDM_REG(tib, VTIB_ECX);
+    c.Registers[2] = VDM_REG(tib, VTIB_EDX); c.Registers[3] = VDM_REG(tib, VTIB_EBX);
+    c.Registers[4] = VDM_REG(tib, VTIB_ESP); c.Registers[5] = VDM_REG(tib, VTIB_EBP);
+    c.Registers[6] = VDM_REG(tib, VTIB_ESI); c.Registers[7] = VDM_REG(tib, VTIB_EDI);
+    c.Eip = VDM_REG(tib, VTIB_EIP); c.Flags = VDM_REG(tib, VTIB_EFLAGS);
+    esp0 = c.Registers[4];
     { DWORD vga0 = g_p32_vga_n;
     vga_seen = vga0;
     HOST_LOCK();
     for (;;) {
-        uint8_t op0 = p32_rd8(c.base[1] + c.eip);
+        uint8_t op0 = Pm32HostRead8(c.SegmentBases[1] + c.Eip);
         int was_ret = (op0 == 0xC3 || op0 == 0xC2);
         if (n >= MYPM_CAP) { why = 3; break; }
-        if (!p32_step(&c)) { why = 2; break; }
+        if (!Pm32Step(&c)) { why = 2; break; }
         ++n;
-        if (was_ret && c.r[4] > esp0 && g_p32_vga_n != vga0) { why = 0; break; }
+        if (was_ret && c.Registers[4] > esp0 && g_p32_vga_n != vga0) { why = 0; break; }
         if ((n & 0x3F) == 0) {
             if (!modey_pm_needs_interp()) { why = 1; break; }
             if (g_p32_vga_n != vga_seen) { vga_seen = g_p32_vga_n; idle_from = n; }
@@ -16852,16 +16852,16 @@ static void modey_pm_run(volatile BYTE *tib)
         uint8_t mm = (uint8_t)(g_vid.MapMask & 0x0F);
         g_mypm_bails++;
         if (mm & (uint8_t)(mm - 1)) g_mypm_bail_mp++;
-        modey_bail_note(cs, c.eip, (const volatile BYTE *)(ULONG_PTR)(c.base[1] + c.eip));
+        modey_bail_note(cs, c.Eip, (const volatile BYTE *)(ULONG_PTR)(c.SegmentBases[1] + c.Eip));
     }
     if (!n) return;
-    VDM_REG(tib, VTIB_EAX) = c.r[0]; VDM_REG(tib, VTIB_ECX) = c.r[1];
-    VDM_REG(tib, VTIB_EDX) = c.r[2]; VDM_REG(tib, VTIB_EBX) = c.r[3];
-    VDM_REG(tib, VTIB_ESP) = c.r[4]; VDM_REG(tib, VTIB_EBP) = c.r[5];
-    VDM_REG(tib, VTIB_ESI) = c.r[6]; VDM_REG(tib, VTIB_EDI) = c.r[7];
-    VDM_REG(tib, VTIB_EIP) = c.eip;
+    VDM_REG(tib, VTIB_EAX) = c.Registers[0]; VDM_REG(tib, VTIB_ECX) = c.Registers[1];
+    VDM_REG(tib, VTIB_EDX) = c.Registers[2]; VDM_REG(tib, VTIB_EBX) = c.Registers[3];
+    VDM_REG(tib, VTIB_ESP) = c.Registers[4]; VDM_REG(tib, VTIB_EBP) = c.Registers[5];
+    VDM_REG(tib, VTIB_ESI) = c.Registers[6]; VDM_REG(tib, VTIB_EDI) = c.Registers[7];
+    VDM_REG(tib, VTIB_EIP) = c.Eip;
     /* the arithmetic flags and DF only: IF, IOPL, VM and the rest are the monitor's */
-    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x0CD5u) | (c.flags & 0x0CD5u);
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x0CD5u) | (c.Flags & 0x0CD5u);
 }
 
 /* The interpreter's live register file, for the fatal dump and the OOR logger. A
