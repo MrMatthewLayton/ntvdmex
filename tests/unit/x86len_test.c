@@ -24,70 +24,70 @@
 
 #include "../../src/host/x86len.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-static void len_is(const char *what, const unsigned char *b, unsigned n, int d32, unsigned want)
+static VOID X86LenTestLengthIs(PCSTR description, PCBYTE bytes, UINT count, INT isDefault32, UINT expected)
 {
-    unsigned got = X86InstructionLength(b, 0, n, d32);
-    if (got == want) { total++; printf("  PASS  len %-34s = %u\n", what, got); }
-    else { total++; fails++; printf("  FAIL  len %-34s = %u (want %u)\n", what, got, want); }
+    UINT actual = X86InstructionLength(bytes, 0, count, isDefault32);
+    if (actual == expected) { g_Total++; printf("  PASS  len %-34s = %u\n", description, actual); }
+    else { g_Total++; g_Failures++; printf("  FAIL  len %-34s = %u (want %u)\n", description, actual, expected); }
 }
 
-int main(void)
+INT main(VOID)
 {
     printf("x86len battery\n");
 
     /* ---- lengths, 32-bit code ------------------------------------------------ */
-    { static const unsigned char b[] = { 0x31, 0xC9 };                  len_is("xor ecx,ecx", b, sizeof b, 1, 2); }
-    { static const unsigned char b[] = { 0x7E, 0xCD };                  len_is("jle rel8", b, sizeof b, 1, 2); }
-    { static const unsigned char b[] = { 0xCD, 0x21 };                  len_is("int 0x21", b, sizeof b, 1, 2); }
-    { static const unsigned char b[] = { 0xE8, 0xCD, 0x10, 0x00, 0x00 };len_is("call rel32", b, sizeof b, 1, 5); }
-    { static const unsigned char b[] = { 0x8B, 0x3D, 0x0C, 0x23, 0x03, 0x00 };
-      len_is("mov edi,[disp32]", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0x8B, 0xB8, 0xE4, 0x4F, 0x03, 0x00 };
-      len_is("mov edi,[eax+disp32]", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0x89, 0x99, 0x1C, 0x90, 0x03, 0x00 };
-      len_is("mov [ecx+disp32],ebx", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0x81, 0xEB, 0x00, 0x00, 0x00, 0x40 };
-      len_is("sub ebx,imm32", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0x83, 0xC0, 0x04 };            len_is("add eax,imm8", b, sizeof b, 1, 3); }
-    { static const unsigned char b[] = { 0xC1, 0xE3, 0x13 };            len_is("shl ebx,imm8", b, sizeof b, 1, 3); }
-    { static const unsigned char b[] = { 0xF7, 0xEB };                  len_is("imul ebx (grp3 /5, no imm)", b, sizeof b, 1, 2); }
-    { static const unsigned char b[] = { 0xF7, 0xC3, 0x01, 0x00, 0x00, 0x00 };
-      len_is("test ebx,imm32 (grp3 /0)", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0xF6, 0xC3, 0x01 };            len_is("test bl,imm8 (grp3 /0)", b, sizeof b, 1, 3); }
-    { static const unsigned char b[] = { 0x0F, 0xAC, 0xD0, 0x10 };      len_is("shrd eax,edx,imm8", b, sizeof b, 1, 4); }
-    { static const unsigned char b[] = { 0x0F, 0xA0 };                  len_is("push fs", b, sizeof b, 1, 2); }
-    { static const unsigned char b[] = { 0x0F, 0x84, 0x10, 0x00, 0x00, 0x00 };
-      len_is("jz rel32", b, sizeof b, 1, 6); }
-    { static const unsigned char b[] = { 0x0F, 0xB6, 0x04, 0x18 };      len_is("movzx eax,[eax+ebx] (sib)", b, sizeof b, 1, 4); }
-    { static const unsigned char b[] = { 0x8B, 0x04, 0x8D, 0x00, 0x10, 0x00, 0x00 };
-      len_is("mov eax,[ecx*4+disp32] (sib/no base)", b, sizeof b, 1, 7); }
-    { static const unsigned char b[] = { 0x66, 0xB8, 0x34, 0x12 };      len_is("mov ax,imm16 (66 in 32-bit)", b, sizeof b, 1, 4); }
-    { static const unsigned char b[] = { 0xA1, 0x00, 0x10, 0x00, 0x00 };len_is("mov eax,moffs32", b, sizeof b, 1, 5); }
-    { static const unsigned char b[] = { 0xC8, 0x10, 0x00, 0x00 };      len_is("enter imm16,imm8", b, sizeof b, 1, 4); }
-    { static const unsigned char b[] = { 0xC2, 0x08, 0x00 };            len_is("ret imm16", b, sizeof b, 1, 3); }
-    { static const unsigned char b[] = { 0x9A, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x00 };
-      len_is("lcall ptr16:32", b, sizeof b, 1, 7); }
-    { static const unsigned char b[] = { 0xF3, 0xA5 };                  len_is("rep movsd", b, sizeof b, 1, 2); }
+    { static const BYTE bytes[] = { 0x31, 0xC9 };                  X86LenTestLengthIs("xor ecx,ecx", bytes, sizeof bytes, 1, 2); }
+    { static const BYTE bytes[] = { 0x7E, 0xCD };                  X86LenTestLengthIs("jle rel8", bytes, sizeof bytes, 1, 2); }
+    { static const BYTE bytes[] = { 0xCD, 0x21 };                  X86LenTestLengthIs("int 0x21", bytes, sizeof bytes, 1, 2); }
+    { static const BYTE bytes[] = { 0xE8, 0xCD, 0x10, 0x00, 0x00 };X86LenTestLengthIs("call rel32", bytes, sizeof bytes, 1, 5); }
+    { static const BYTE bytes[] = { 0x8B, 0x3D, 0x0C, 0x23, 0x03, 0x00 };
+      X86LenTestLengthIs("mov edi,[disp32]", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0x8B, 0xB8, 0xE4, 0x4F, 0x03, 0x00 };
+      X86LenTestLengthIs("mov edi,[eax+disp32]", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0x89, 0x99, 0x1C, 0x90, 0x03, 0x00 };
+      X86LenTestLengthIs("mov [ecx+disp32],ebx", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0x81, 0xEB, 0x00, 0x00, 0x00, 0x40 };
+      X86LenTestLengthIs("sub ebx,imm32", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0x83, 0xC0, 0x04 };            X86LenTestLengthIs("add eax,imm8", bytes, sizeof bytes, 1, 3); }
+    { static const BYTE bytes[] = { 0xC1, 0xE3, 0x13 };            X86LenTestLengthIs("shl ebx,imm8", bytes, sizeof bytes, 1, 3); }
+    { static const BYTE bytes[] = { 0xF7, 0xEB };                  X86LenTestLengthIs("imul ebx (grp3 /5, no imm)", bytes, sizeof bytes, 1, 2); }
+    { static const BYTE bytes[] = { 0xF7, 0xC3, 0x01, 0x00, 0x00, 0x00 };
+      X86LenTestLengthIs("test ebx,imm32 (grp3 /0)", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0xF6, 0xC3, 0x01 };            X86LenTestLengthIs("test bl,imm8 (grp3 /0)", bytes, sizeof bytes, 1, 3); }
+    { static const BYTE bytes[] = { 0x0F, 0xAC, 0xD0, 0x10 };      X86LenTestLengthIs("shrd eax,edx,imm8", bytes, sizeof bytes, 1, 4); }
+    { static const BYTE bytes[] = { 0x0F, 0xA0 };                  X86LenTestLengthIs("push fs", bytes, sizeof bytes, 1, 2); }
+    { static const BYTE bytes[] = { 0x0F, 0x84, 0x10, 0x00, 0x00, 0x00 };
+      X86LenTestLengthIs("jz rel32", bytes, sizeof bytes, 1, 6); }
+    { static const BYTE bytes[] = { 0x0F, 0xB6, 0x04, 0x18 };      X86LenTestLengthIs("movzx eax,[eax+ebx] (sib)", bytes, sizeof bytes, 1, 4); }
+    { static const BYTE bytes[] = { 0x8B, 0x04, 0x8D, 0x00, 0x10, 0x00, 0x00 };
+      X86LenTestLengthIs("mov eax,[ecx*4+disp32] (sib/no base)", bytes, sizeof bytes, 1, 7); }
+    { static const BYTE bytes[] = { 0x66, 0xB8, 0x34, 0x12 };      X86LenTestLengthIs("mov ax,imm16 (66 in 32-bit)", bytes, sizeof bytes, 1, 4); }
+    { static const BYTE bytes[] = { 0xA1, 0x00, 0x10, 0x00, 0x00 };X86LenTestLengthIs("mov eax,moffs32", bytes, sizeof bytes, 1, 5); }
+    { static const BYTE bytes[] = { 0xC8, 0x10, 0x00, 0x00 };      X86LenTestLengthIs("enter imm16,imm8", bytes, sizeof bytes, 1, 4); }
+    { static const BYTE bytes[] = { 0xC2, 0x08, 0x00 };            X86LenTestLengthIs("ret imm16", bytes, sizeof bytes, 1, 3); }
+    { static const BYTE bytes[] = { 0x9A, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x00 };
+      X86LenTestLengthIs("lcall ptr16:32", bytes, sizeof bytes, 1, 7); }
+    { static const BYTE bytes[] = { 0xF3, 0xA5 };                  X86LenTestLengthIs("rep movsd", bytes, sizeof bytes, 1, 2); }
 
     /* ---- lengths, 16-bit code (DOS-extender style) ---------------------------- */
-    { static const unsigned char b[] = { 0xB8, 0x34, 0x12 };            len_is("mov ax,imm16 (16-bit)", b, sizeof b, 0, 3); }
-    { static const unsigned char b[] = { 0x66, 0xB8, 0x78, 0x56, 0x34, 0x12 };
-      len_is("mov eax,imm32 (66 in 16-bit)", b, sizeof b, 0, 6); }
-    { static const unsigned char b[] = { 0x8B, 0x86, 0x04, 0x00 };      len_is("mov ax,[bp+disp16]", b, sizeof b, 0, 4); }
-    { static const unsigned char b[] = { 0x8B, 0x1E, 0x00, 0x10 };      len_is("mov bx,[disp16]", b, sizeof b, 0, 4); }
-    { static const unsigned char b[] = { 0xEA, 0x00, 0x00, 0x0F, 0x00 };len_is("ljmp ptr16:16", b, sizeof b, 0, 5); }
-    { static const unsigned char b[] = { 0xE8, 0x00, 0x10 };            len_is("call rel16", b, sizeof b, 0, 3); }
+    { static const BYTE bytes[] = { 0xB8, 0x34, 0x12 };            X86LenTestLengthIs("mov ax,imm16 (16-bit)", bytes, sizeof bytes, 0, 3); }
+    { static const BYTE bytes[] = { 0x66, 0xB8, 0x78, 0x56, 0x34, 0x12 };
+      X86LenTestLengthIs("mov eax,imm32 (66 in 16-bit)", bytes, sizeof bytes, 0, 6); }
+    { static const BYTE bytes[] = { 0x8B, 0x86, 0x04, 0x00 };      X86LenTestLengthIs("mov ax,[bp+disp16]", bytes, sizeof bytes, 0, 4); }
+    { static const BYTE bytes[] = { 0x8B, 0x1E, 0x00, 0x10 };      X86LenTestLengthIs("mov bx,[disp16]", bytes, sizeof bytes, 0, 4); }
+    { static const BYTE bytes[] = { 0xEA, 0x00, 0x00, 0x0F, 0x00 };X86LenTestLengthIs("ljmp ptr16:16", bytes, sizeof bytes, 0, 5); }
+    { static const BYTE bytes[] = { 0xE8, 0x00, 0x10 };            X86LenTestLengthIs("call rel16", bytes, sizeof bytes, 0, 3); }
 
     /* Truncation must be reported, never guessed at: a decoder that walks past the
        end of the region is the "instrument that faults kills the run" failure. */
-    { static const unsigned char b[] = { 0x81, 0xEB, 0x00 };
-      CHECK(X86InstructionLength(b, 0, sizeof b, 1) == 0, "truncated imm32 -> 0"); }
-    { static const unsigned char b[] = { 0x8B };
-      CHECK(X86InstructionLength(b, 0, sizeof b, 1) == 0, "missing modrm -> 0"); }
+    { static const BYTE bytes[] = { 0x81, 0xEB, 0x00 };
+      CHECK(X86InstructionLength(bytes, 0, sizeof bytes, 1) == 0, "truncated imm32 -> 0"); }
+    { static const BYTE bytes[] = { 0x8B };
+      CHECK(X86InstructionLength(bytes, 0, sizeof bytes, 1) == 0, "missing modrm -> 0"); }
 
     /* ---- the boundary test: the class that killed Doom ---------------------- */
     /* A loop whose back edge is `jle -51` (7e cd), followed by `xor ecx,ecx` (31 c9).
@@ -95,7 +95,7 @@ int main(void)
        `int 0x31`.  This exact pattern, in a real game image, was patched into
        `7e c4 c4 c9` and killed Doom for five sessions.  (The loop head is above
        the fixture; the vote only needs the bytes leading up to the branch.) */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x8B,0x75,0xF0,                 /* 00 mov esi,[ebp-0x10]           */
         0x8B,0x04,0x9E,                 /* 03 mov eax,[esi+ebx*4]          */
         0x03,0x45,0xEC,                 /* 06 add eax,[ebp-0x14]           */
@@ -108,12 +108,12 @@ int main(void)
         0x7E,0xCD,                      /* 1d jle -51 (back to loop head)  */
         0x31,0xC9,                      /* 1f xor ecx,ecx                  */
         0x8B,0x45,0xE4 };               /* 21 mov eax,[ebp-0x1c]           */
-      CHECK(b[0x1E] == 0xCD && b[0x1F] == 0x31, "fixture holds the CD 31 byte pair");
-      CHECK(!X86IsInstructionStart(b, 0x1E, sizeof b, 1),
+      CHECK(bytes[0x1E] == 0xCD && bytes[0x1F] == 0x31, "fixture holds the CD 31 byte pair");
+      CHECK(!X86IsInstructionStart(bytes, 0x1E, sizeof bytes, 1),
             "jle displacement followed by xor ecx,ecx is NOT an int 0x31");
-      CHECK(!X86IsIntSiteReal(b, 0x1E, sizeof b, 1),
+      CHECK(!X86IsIntSiteReal(bytes, 0x1E, sizeof bytes, 1),
             "...so the patcher must REFUSE it (it is the jle's displacement)");
-      CHECK(X86IsInstructionStart(b, 0x1D, sizeof b, 1),
+      CHECK(X86IsInstructionStart(bytes, 0x1D, sizeof bytes, 1),
             "...and the jle at +0x1d IS an instruction start"); }
 
     /* The `cd 10` inside a `call rel32` displacement (e8 cd 10 00 00).
@@ -126,7 +126,7 @@ int main(void)
          on the true boundaries first, and the site scores the same 3 -- now 3 of
          48, a minority.  A boundary test cannot be unit-tested on fragments
          shorter than its own window. */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x55,                           /* 00 push ebp                     */
         0x89,0xE5,                      /* 01 mov ebp,esp                  */
         0x53,                           /* 03 push ebx                     */
@@ -146,27 +146,27 @@ int main(void)
         0x89,0x0D,0x4C,0x21,0x03,0x00,  /* 31 mov [0x3214c],ecx            */
         0xE8,0xCD,0x10,0x00,0x00,       /* 37 call rel32 (+0x10cd)         */
         0xBF,0x01,0x00,0x00,0x00 };     /* 3c mov edi,1                    */
-      CHECK(b[56] == 0xCD && b[57] == 0x10, "fixture holds the CD 10 byte pair");
-      CHECK(!X86IsInstructionStart(b, 56, sizeof b, 1),
+      CHECK(bytes[56] == 0xCD && bytes[57] == 0x10, "fixture holds the CD 10 byte pair");
+      CHECK(!X86IsInstructionStart(bytes, 56, sizeof bytes, 1),
             "call rel32 displacement is NOT an int 0x10");
-      CHECK(!X86IsIntSiteReal(b, 56, sizeof b, 1),
+      CHECK(!X86IsIntSiteReal(bytes, 56, sizeof bytes, 1),
             "...so the patcher must REFUSE it (it is the call's displacement)");
-      CHECK(X86IsInstructionStart(b, 55, sizeof b, 1),
+      CHECK(X86IsInstructionStart(bytes, 55, sizeof bytes, 1),
             "...and the call at +0x37 IS an instruction start"); }
 
     /* A REAL int 0x21, in the shape Watcom emits it -- `mov ah,3ch / int 21h`.
        This is the case a naive "is the previous byte a 1-byte-immediate opcode?"
        filter gets wrong, which is why the boundary test is a vote and not a peek. */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x55,0x8B,0xEC,0x83,0xEC,0x08,  /* push ebp / mov ebp,esp / sub esp,8 */
         0x8B,0x55,0x08,                 /* mov edx,[ebp+8]                    */
         0xB4,0x3C,                      /* mov ah,0x3c                        */
         0xCD,0x21,                      /* int 0x21   <-- real                */
         0xD1,0xD0 };                    /* rcl eax,1                          */
-      CHECK(b[11] == 0xCD && b[12] == 0x21, "fixture holds the real CD 21");
-      CHECK(X86IsInstructionStart(b, 11, sizeof b, 1),
+      CHECK(bytes[11] == 0xCD && bytes[12] == 0x21, "fixture holds the real CD 21");
+      CHECK(X86IsInstructionStart(bytes, 11, sizeof bytes, 1),
             "`mov ah,3ch / int 21h`: the int IS an instruction start");
-      CHECK(X86IsIntSiteReal(b, 11, sizeof b, 1),
+      CHECK(X86IsIntSiteReal(bytes, 11, sizeof bytes, 1),
             "...and the patcher keeps it"); }
 
     /* ── THE FALSE NEGATIVE THAT COST A RUN.  A DOS-extender's DOS-version check sat
@@ -179,7 +179,7 @@ int main(void)
          ASCII streams converge on the `30` (47 of 48) and step straight over the `cd`.
          (A message ending "\r\n$" would NOT reproduce it: `0d 0a 24` is `or ax,imm16`
          and re-synchronises on the `b4`.) */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x55,                           /* 00 push bp                      */
         0x8B,0xEC,                      /* 01 mov bp,sp                    */
         0x83,0xEC,0x08,                 /* 03 sub sp,8                     */
@@ -202,8 +202,8 @@ int main(void)
         0xCD,0x21,                      /* 3c int 21h   <-- real           */
         0x3C,0x03,                      /* 3e cmp al,3                     */
         0x73,0x05 };                    /* 40 jae +5                       */
-      CHECK(b[60] == 0xCD && b[61] == 0x21, "fixture holds the version-check int 21h");
-      CHECK(!X86IsInstructionStart(b, 60, sizeof b, 0),
+      CHECK(bytes[60] == 0xCD && bytes[61] == 0x21, "fixture holds the version-check int 21h");
+      CHECK(!X86IsInstructionStart(bytes, 60, sizeof bytes, 0),
             "int 21h right after a `$`-terminated message: the vote alone CANNOT see it");
       /* ★★ SESSION 39: THIS ASSERTION IS INVERTED ON PURPOSE.  It used to read
            `X86IsIntSiteReal(...)` -- KEEP -- because refusing a real site left a
@@ -215,7 +215,7 @@ int main(void)
            x86len.h.  This site is REJECTED now, faults once, and is patched correctly.
          ⚠ Flipping this back without also removing the #GP(IDT) arm would restore
            the code corruption the next fixture pins. */
-      CHECK(!X86IsIntSiteReal(b, 60, sizeof b, 0),
+      CHECK(!X86IsIntSiteReal(bytes, 60, sizeof bytes, 0),
             "...and it is now REJECTED, to be serviced from the #GP instead"); }
 
     /* ── ★★★ THE FALSE POSITIVE THAT KILLED THE WIN16 LAUNCH (session 39, GH #128).
@@ -230,7 +230,7 @@ int main(void)
          instruction class does not.  The fixture is a full window (55 bytes of
          16-bit string-scanning code) so the vote at the `cd` -- 0 of 48 -- and at
          the `cmp` -- 48 of 48 -- are measured over the stream the scan really sees. */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x56,                           /* 00 push si                      */
         0x57,                           /* 01 push di                      */
         0x8B,0x76,0x04,                 /* 02 mov si,[bp+4]                */
@@ -259,16 +259,16 @@ int main(void)
         0x75,0x2E,                      /* 39 jne rel8                     */
         0x0B,0xC9,                      /* 3b or cx,cx                     */
         0x75,0xCF };                    /* 3d jne -49 (-> 0x0e)            */
-      CHECK(b[56] == 0xCD && b[57] == 0x75, "fixture holds the CD 75 byte pair");
-      CHECK(!X86IsInstructionStart(b, 56, sizeof b, 0),
+      CHECK(bytes[56] == 0xCD && bytes[57] == 0x75, "fixture holds the CD 75 byte pair");
+      CHECK(!X86IsInstructionStart(bytes, 56, sizeof bytes, 0),
             "cmp cl,ch followed by jne (16-bit): the vote correctly says it is no instruction start");
-      CHECK(!X86IsIntSiteReal(b, 56, sizeof b, 0),
+      CHECK(!X86IsIntSiteReal(bytes, 56, sizeof bytes, 0),
             "cmp cl,ch followed by jne (16-bit): `cmp` owns it -- REJECT (was the WOWEXEC launch GP)"); }
 
     /* A `jmp short` displacement in 16-bit code: `eb cd` followed by `xor ax,ax`
        (33 c0) reads as a `cd 33` byte pair.  Same class as the jle above, different
        branch, 16-bit code -- found in a DOS extender's own 16-bit modules. */
-    { static const unsigned char b[] = {
+    { static const BYTE bytes[] = {
         0x8B,0x4E,0x06,                 /* 00 mov cx,[bp+6]                */
         0xE3,0x0D,                      /* 03 jcxz +13 (-> 0x12)           */
         0xAC,                           /* 05 lodsb                        */
@@ -283,15 +283,15 @@ int main(void)
         0xAA,                           /* 14 stosb                        */
         0x5F,                           /* 15 pop di                       */
         0x5E };                         /* 16 pop si                       */
-      CHECK(b[17] == 0xCD && b[18] == 0x33, "fixture holds the CD 33 byte pair");
-      CHECK(!X86IsIntSiteReal(b, 17, sizeof b, 0),
+      CHECK(bytes[17] == 0xCD && bytes[18] == 0x33, "fixture holds the CD 33 byte pair");
+      CHECK(!X86IsIntSiteReal(bytes, 17, sizeof bytes, 0),
             "`jmp short` displacement followed by xor ax,ax is NOT an int 0x33"); }
 
     /* Offset 0 has nothing before it to vote, and the region start is where the
        object begins -- trust it rather than reject every site in the first 48 bytes. */
-    { static const unsigned char b[] = { 0xCD, 0x21, 0x90, 0x90 };
-      CHECK(X86IsInstructionStart(b, 0, sizeof b, 1), "offset 0 is trusted"); }
+    { static const BYTE bytes[] = { 0xCD, 0x21, 0x90, 0x90 };
+      CHECK(X86IsInstructionStart(bytes, 0, sizeof bytes, 1), "offset 0 is trusted"); }
 
-    printf("\n%d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("\n%d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
