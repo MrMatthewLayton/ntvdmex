@@ -41,16 +41,23 @@
 #ifndef NTVDMEX_VGA_MODEDEFS_H
 #define NTVDMEX_VGA_MODEDEFS_H
 
-typedef struct {
-    unsigned char mode;      /* INT 10h mode number                     */
-    unsigned char misc;      /* Miscellaneous Output (3C2)              */
-    unsigned char seq[5];    /* SR0..SR4                                */
-    unsigned char crtc[25];  /* CR00..CR18                              */
-    unsigned char gc[9];     /* GR0..GR8                                */
-    unsigned char attr[21];  /* AR00..AR14                              */
-} vga_modedef;
+#include "../ntvdmex_types.h"
 
-static const vga_modedef VGA_MODEDEFS[] = {
+#define VGA_MODEDEF_SEQUENCER 5     /* SR0..SR4  */
+#define VGA_MODEDEF_CRTC      25    /* CR00..CR18 */
+#define VGA_MODEDEF_GC        9     /* GR0..GR8  */
+#define VGA_MODEDEF_ATTRIBUTE 21    /* AR00..AR14 */
+
+typedef struct _VGA_MODEDEF {
+    BYTE Mode;                                     /* INT 10h mode number        */
+    BYTE MiscOutput;                               /* Miscellaneous Output (3C2) */
+    BYTE Sequencer[VGA_MODEDEF_SEQUENCER];
+    BYTE Crtc[VGA_MODEDEF_CRTC];
+    BYTE Graphics[VGA_MODEDEF_GC];
+    BYTE Attribute[VGA_MODEDEF_ATTRIBUTE];
+} VGA_MODEDEF, *PVGA_MODEDEF; typedef const VGA_MODEDEF *PCVGA_MODEDEF;
+
+static const VGA_MODEDEF g_VgaModeDefinitions[] = {
     /* vga.mode03 */
     { 0x03, 0x67,
       { 0x03, 0x00, 0x03, 0x00, 0x03 },
@@ -165,6 +172,6 @@ static const vga_modedef VGA_MODEDEFS[] = {
           0x01, 0x00, 0x03, 0x00, 0x00 } },
 };
 
-#define VGA_MODEDEFS_N ((int)(sizeof VGA_MODEDEFS / sizeof VGA_MODEDEFS[0]))
+#define VGA_MODEDEF_COUNT ((INT)(sizeof g_VgaModeDefinitions / sizeof g_VgaModeDefinitions[0]))
 
 #endif /* NTVDMEX_VGA_MODEDEFS_H */

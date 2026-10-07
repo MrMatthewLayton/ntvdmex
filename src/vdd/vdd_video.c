@@ -1,7 +1,7 @@
 /* vdd_video.c -- see vdd_video.h.  Text mode 3 + graphics mode 13h over the
  * shared video aperture (vmem), with the DAC palette, on the VDD bus.  Pure C. */
 #include "vdd_video.h"
-#include "vga_modedefs.h"
+#include "VGA_MODEDEFs.h"
 #include "vga_font.h"
 
 /* #322: the one copy of each table -- filled at start-up (src/host/sysfont.h). */
@@ -602,11 +602,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_CR11_PROTECT            0x80
 #define VIDEO_START_GAP_LAST          4u
 
-/* The register file VGA_MODEDEFS carries, and the parameter table built from it. */
-#define VIDEO_MODEDEF_SEQUENCER       5
-#define VIDEO_MODEDEF_CRTC            25
-#define VIDEO_MODEDEF_GC              9
-#define VIDEO_MODEDEF_ATTRIBUTE       21
+/* The register file g_VgaModeDefinitions carries, and the parameter table built from it. */
 #define VIDEO_PARAMETER_ENTRY_BYTES   64
 #define VIDEO_PARAMETER_COLUMNS       0x00
 #define VIDEO_PARAMETER_ROWS          0x01
@@ -1265,7 +1261,7 @@ static VOID VideoInt1FRom(PVIDEO_STATE state)
      and turns it into attribute-controller values (vdd_video.h). The arithmetic is the
      one DOSBox's INT10_SetBackgroundBorder/SetColorSelect carry; what pins it is that
      it reproduces the MEASURED mode 04h table from the mode set's own 0066 = 30h:
-     AR01-03 = 13h/15h/17h (vga_modedefs.h, PCem's IBM ROM). */
+     AR01-03 = 13h/15h/17h (VGA_MODEDEFs.h, PCem's IBM ROM). */
 BYTE VddCgaColourSelect(BYTE current66, BYTE bh, BYTE bl)
 {
     if (bh == 0) return (BYTE)((current66 & VIDEO_CGA_SELECT_KEEP) | (bl & VIDEO_CGA_SELECT_BACKGROUND));
@@ -2625,7 +2621,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         state->VesaDacWidth = VIDEO_DAC_WIDTH_6;                        /* §4.11: any mode set -> 6 bits */
         state->CursorRow = state->CursorColumn = 0; state->Page = 0;
         {   INT page; for (page = 0; page < VIDEO_PAGES; ++page) state->PageRow[page] = state->PageColumn[page] = 0; }   /* #252 */
-        /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
+        /* These three are the FALLBACK for a mode g_VgaModeDefinitions does not cover:
            VideoLoadModeDefinition below overrides all of them from the measured table for
            every mode it knows, which is where 0x0D0E rather than this 8-line
            0x0607 comes from. A mode nobody measured still gets a sane cursor and
@@ -3748,7 +3744,7 @@ static VOID VideoIndexData(BYTE *index, BYTE width, UINT32 value,
      (mkind, gw/gh, chain4, CrtcOffset, MapMask ...) is still computed exactly as
      before and remains the authority for rendering. Moving the authority here is the
      NEXT step and is a separate commit, because it touches every rendering path.
-   ⚠ ONLY MEASURED MODES. A mode absent from VGA_MODEDEFS is left exactly as it was
+   ⚠ ONLY MEASURED MODES. A mode absent from g_VgaModeDefinitions is left exactly as it was
      rather than filled with a guess -- extend p_vgareg.asm and regenerate.
    ⚠ THE WRITE COUNTS ARE NOT TOUCHED. `*_w[i]` means "the GUEST wrote this index",
      and it is the evidence the inventory is built from; a BIOS load must not forge it.
@@ -3757,15 +3753,15 @@ static VOID VideoIndexData(BYTE *index, BYTE width, UINT32 value,
 static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
 {
     INT index, definitionIndex;
-    for (definitionIndex = 0; definitionIndex < VGA_MODEDEFS_N; ++definitionIndex) {
-        const vga_modedef *definition = &VGA_MODEDEFS[definitionIndex];
-        if (definition->mode != mode) continue;
+    for (definitionIndex = 0; definitionIndex < VGA_MODEDEF_COUNT; ++definitionIndex) {
+        PCVGA_MODEDEF definition = &g_VgaModeDefinitions[definitionIndex];
+        if (definition->Mode != mode) continue;
         state->IsGeometryRegistersOk = 1;                      /* #325: the file IS this mode */
-        state->MiscOutput = definition->misc;
-        for (index = 0; index < VIDEO_MODEDEF_SEQUENCER;  ++index) state->SequencerRegisters[index]  = definition->seq[index];
-        for (index = 0; index < VIDEO_MODEDEF_CRTC; ++index) state->CrtcRegisters[index] = definition->crtc[index];
-        for (index = 0; index < VIDEO_MODEDEF_GC;  ++index) state->GcRegisters[index]   = definition->gc[index];
-        for (index = 0; index < VIDEO_MODEDEF_ATTRIBUTE; ++index) state->AttributeRegisters[index] = definition->attr[index];
+        state->MiscOutput = definition->MiscOutput;
+        for (index = 0; index < VGA_MODEDEF_SEQUENCER;  ++index) state->SequencerRegisters[index]  = definition->Sequencer[index];
+        for (index = 0; index < VGA_MODEDEF_CRTC; ++index) state->CrtcRegisters[index] = definition->Crtc[index];
+        for (index = 0; index < VGA_MODEDEF_GC;  ++index) state->GcRegisters[index]   = definition->Graphics[index];
+        for (index = 0; index < VGA_MODEDEF_ATTRIBUTE; ++index) state->AttributeRegisters[index] = definition->Attribute[index];
         /* ── ★★★★ AND THE LIVE SHADOWS, OR THE FILE AND THE AUTHORITY DISAGREE. ─────
              Loading the register FILE above is only half a mode set. Six of these
              registers are not read back from `*_reg[]` at all -- the read paths
@@ -3783,19 +3779,19 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
              answer: both say 0x0F in the graphics modes, and in the text/CGA modes
              QEMU says 0x0F where PCem's real IBM VGA says 0x00. Taking the table
              rather than a constant is what keeps that distinction. */
-        state->MapMask     = (BYTE)(definition->seq[VIDEO_SR_MAP_MASK] & VIDEO_ALL_PLANES);
+        state->MapMask     = (BYTE)(definition->Sequencer[VIDEO_SR_MAP_MASK] & VIDEO_ALL_PLANES);
         state->YMask       = state->MapMask;
         /* CR0A/CR0B ARE the cursor shape; `CursorShape` is that pair, not a copy of
            it. The BIOS leaves 0x0D0E for an 8x16 cell, and the 0x0607 set above is
            the 8-line CGA shape -- which VddCursorLines then RESCALES to lines
            14-15. So this moves the drawn cursor by one scan line, and stops
            AH=03h reporting a shape the card does not hold. */
-        state->CursorShape    = (WORD)(((WORD)definition->crtc[VIDEO_CR_CURSOR_START] << VIDEO_BYTE_SHIFT) | definition->crtc[VIDEO_CR_CURSOR_END]);
-        state->WriteMode   = (BYTE)(definition->gc[VIDEO_GR_MODE] & VIDEO_GC_WRITE_MODE_MASK);
-        state->ReadMode    = (BYTE)((definition->gc[VIDEO_GR_MODE] >> VIDEO_GR5_READ_MODE_SHIFT) & 1);
-        state->ColorDontCare = (BYTE)(definition->gc[VIDEO_GR_COLOR_DONT_CARE] & VIDEO_ALL_PLANES);
-        state->AttributeMode    = definition->attr[VIDEO_AR_MODE];
-        state->IsBlink        = (BYTE)((definition->attr[VIDEO_AR_MODE] >> VIDEO_AR_BLINK_SHIFT) & 1);
+        state->CursorShape    = (WORD)(((WORD)definition->Crtc[VIDEO_CR_CURSOR_START] << VIDEO_BYTE_SHIFT) | definition->Crtc[VIDEO_CR_CURSOR_END]);
+        state->WriteMode   = (BYTE)(definition->Graphics[VIDEO_GR_MODE] & VIDEO_GC_WRITE_MODE_MASK);
+        state->ReadMode    = (BYTE)((definition->Graphics[VIDEO_GR_MODE] >> VIDEO_GR5_READ_MODE_SHIFT) & 1);
+        state->ColorDontCare = (BYTE)(definition->Graphics[VIDEO_GR_COLOR_DONT_CARE] & VIDEO_ALL_PLANES);
+        state->AttributeMode    = definition->Attribute[VIDEO_AR_MODE];
+        state->IsBlink        = (BYTE)((definition->Attribute[VIDEO_AR_MODE] >> VIDEO_AR_BLINK_SHIFT) & 1);
         return;
     }
 }
@@ -3804,7 +3800,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
      LOADS. A VGA BIOS programs a mode FROM this table, and publishes it through
      0040:00A8 -> Save Pointer table -> first far pointer; text utilities and mode
      switchers read the register values out of it rather than out of the card. So
-     each entry here is built from VGA_MODEDEFS -- the bytes VideoLoadModeDefinition puts in
+     each entry here is built from g_VgaModeDefinitions -- the bytes VideoLoadModeDefinition puts in
      the register file -- and can never disagree with what the mode set leaves.
      The 29 slots are IBM's (RBIL "Video Parameter Table"): 00h-03h modes 0-3 at 200
      lines, 04h-07h, 08h-0Ch PCjr/reserved, 0Dh/0Eh, 0Fh/10h modes 0Fh/10h on a 64 KB
@@ -3827,9 +3823,9 @@ INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYT
     BYTE mode;
     for (index = 0; index < VIDEO_PARAMETER_ENTRY_BYTES; ++index) entry[index] = 0;
     if (tableIndex >= VDD_VPARAM_N || !(mode = VideoParameterMode[tableIndex])) return 0;
-    for (definitionIndex = 0; definitionIndex < VGA_MODEDEFS_N; ++definitionIndex) {
-        const vga_modedef *definition = &VGA_MODEDEFS[definitionIndex];
-        if (definition->mode != mode) continue;
+    for (definitionIndex = 0; definitionIndex < VGA_MODEDEF_COUNT; ++definitionIndex) {
+        PCVGA_MODEDEF definition = &g_VgaModeDefinitions[definitionIndex];
+        if (definition->Mode != mode) continue;
         for (modeIndex = 0; modeIndex < sizeof(g_VideoModes)/sizeof(g_VideoModes[0]); ++modeIndex)
             if (g_VideoModes[modeIndex].Mode == mode) break;
         if (modeIndex == sizeof(g_VideoModes)/sizeof(g_VideoModes[0])) return 0;
@@ -3839,11 +3835,11 @@ INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYT
             entry[VIDEO_PARAMETER_ROWS] = (BYTE)(g_VideoModes[modeIndex].Rows - 1);
             entry[VIDEO_PARAMETER_CHARACTER_HEIGHT] = VideoModeCellHeight(mode);
             entry[VIDEO_PARAMETER_PAGE_SIZE] = (BYTE)pageSize; entry[VIDEO_PARAMETER_PAGE_SIZE + 1] = (BYTE)(pageSize >> VIDEO_BYTE_SHIFT); }
-        for (index = 0; index < VIDEO_PARAMETER_SEQUENCER_COUNT;  ++index) entry[VIDEO_PARAMETER_SEQUENCER + index] = definition->seq[1 + index];     /* SR1-SR4 */
-        entry[VIDEO_PARAMETER_MISC] = definition->misc;
-        for (index = 0; index < VIDEO_MODEDEF_CRTC; ++index) entry[VIDEO_PARAMETER_CRTC + index] = definition->crtc[index];
-        for (index = 0; index < VIDEO_PARAMETER_ATTRIBUTE_COUNT; ++index) entry[VIDEO_PARAMETER_ATTRIBUTE + index] = definition->attr[index];        /* AR00-AR13 */
-        for (index = 0; index < VIDEO_MODEDEF_GC;  ++index) entry[VIDEO_PARAMETER_GC + index] = definition->gc[index];
+        for (index = 0; index < VIDEO_PARAMETER_SEQUENCER_COUNT;  ++index) entry[VIDEO_PARAMETER_SEQUENCER + index] = definition->Sequencer[1 + index];     /* SR1-SR4 */
+        entry[VIDEO_PARAMETER_MISC] = definition->MiscOutput;
+        for (index = 0; index < VGA_MODEDEF_CRTC; ++index) entry[VIDEO_PARAMETER_CRTC + index] = definition->Crtc[index];
+        for (index = 0; index < VIDEO_PARAMETER_ATTRIBUTE_COUNT; ++index) entry[VIDEO_PARAMETER_ATTRIBUTE + index] = definition->Attribute[index];        /* AR00-AR13 */
+        for (index = 0; index < VGA_MODEDEF_GC;  ++index) entry[VIDEO_PARAMETER_GC + index] = definition->Graphics[index];
         return 1;
     }
     return 0;
