@@ -126,7 +126,7 @@ static PCSTR g_ReceiveScript;
 static INT g_ReceiveIndex;
 
 /* Run from the driver entry until the caller's return HLT, answering the BIOS. */
-static INT AuxPrnTestRunEntry(V86_CPU *cpu, UINT entry, WORD callerFlags)
+static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
 {
     DWORD stackTop = ((DWORD)AUXPRN_TEST_STACK_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT)
                      + AUXPRN_TEST_STACK_TOP;
@@ -229,7 +229,7 @@ static BOOL AuxPrnTestCallIs(INT callIndex, INT vector, WORD ax, WORD dx)
 #define AUXPRN_TEST_FLAGS_CF_CLEAR   0x0002
 #define AUXPRN_TEST_CR               0x0D
 
-int main(void)
+INT main(VOID)
 {
     V86_CPU cpu;
     DWORD dataBase = (DWORD)AUXPRN_TEST_DATA_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT;
