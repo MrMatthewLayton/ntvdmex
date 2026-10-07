@@ -992,13 +992,13 @@ static WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put
      would give it. */
 /* Provided by the host (main.c) over vdd_comm -- DECLARATIONS ONLY, because this
    header must not see host internals. See the note beside them. */
-INT  wowcomm_open(PCSTR dev);
-INT  wowcomm_close(INT id);
-INT  wowcomm_read(INT id, PBYTE buf, INT n);
-INT  wowcomm_write(INT id, PCBYTE buf, INT n);
-INT  wowcomm_inqueue(INT id);
-VOID wowcomm_dtr(INT id, INT on);
-VOID wowcomm_rts(INT id, INT on);
+INT  WowCommOpen(PCSTR dev);
+INT  WowCommClose(INT id);
+INT  WowCommRead(INT id, PBYTE buf, INT n);
+INT  WowCommWrite(INT id, PCBYTE buf, INT n);
+INT  WowCommInqueue(INT id);
+VOID WowCommDtr(INT id, INT on);
+VOID WowCommRts(INT id, INT on);
 
 #define WOWUSER_OPENCOMM       0x00c8
 /* Pascal order: base = the LAST argument pushed. OpenComm(dev, cbIn, cbOut). */
@@ -4324,7 +4324,7 @@ static HWND WowUserFindWindowByClass(PCSTR className, PCSTR windowName)
 #define WOWUSER_WP16_SIZE              22
 /* The comm services: what wowcomm_* and the Win16 answers carry. */
 #define WOWUSER_COMM_BUFFER_SIZE       512
-#define WOWUSER_COMM_ALREADY_OPEN      (-5)  /* wowcomm_open: the port is open      */
+#define WOWUSER_COMM_ALREADY_OPEN      (-5)  /* WowCommOpen: the port is open      */
 #define WOWUSER_COMM_FAILED            (-2)  /* the answer these arms give on error */
 #define WOWUSER_COMSTAT16_INQUEUE      1     /* COMSTAT (Win16): cbInQue            */
 #define WOWUSER_COMSTAT16_OUTQUEUE     3     /* ...cbOutQue                         */
@@ -8590,7 +8590,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR device[WOWUSER_SHORT_NAME_SIZE];
         INT noteLength = 0, portId;
         if (!Wow32ArgString(frame, WOWUSER_OC_ARG_DEV, device, sizeof device)) device[0] = 0;
-        portId = wowcomm_open(device[0] ? device : NULL);
+        portId = WowCommOpen(device[0] ? device : NULL);
         WowNotePut(note, noteCapacity, &noteLength, "OpenComm \"");
         WowNotePut(note, noteCapacity, &noteLength, device);
         WowNotePut(note, noteCapacity, &noteLength, "\" -> ");
@@ -8606,7 +8606,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     }
     case WOWUSER_CLOSECOMM: {
         INT noteLength = 0, portId = (SHORT)Wow32ArgWord(frame, WOWUSER_CC_ARG_ID);
-        INT result = wowcomm_close(portId);
+        INT result = WowCommClose(portId);
         WowNotePut(note, noteCapacity, &noteLength, "CloseComm -> ");
         WowNotePut(note, noteCapacity, &noteLength, result == 0 ? "closed" : "IE_BADID");
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)result);
@@ -8620,7 +8620,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT index;
         if (!destination || size <= 0) { Wow32SetReturn(frame, 0); return 1; }
         if (size > (INT)sizeof buffer) size = (INT)sizeof buffer;
-        got = wowcomm_read(portId, buffer, size);
+        got = WowCommRead(portId, buffer, size);
         if (got > 0) for (index = 0; index < got; ++index) destination[index] = buffer[index];
         WowNotePut(note, noteCapacity, &noteLength, "ReadComm -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(got < 0 ? 0 : got), WOW_HEX_WORD_DIGITS);
@@ -8637,7 +8637,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (!source || size <= 0) { Wow32SetReturn(frame, 0); return 1; }
         if (size > (INT)sizeof buffer) size = (INT)sizeof buffer;
         for (index = 0; index < size; ++index) buffer[index] = source[index];
-        written = wowcomm_write(portId, buffer, size);
+        written = WowCommWrite(portId, buffer, size);
         WowNotePut(note, noteCapacity, &noteLength, "WriteComm -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(written < 0 ? 0 : written), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " byte(s) out of the port");
@@ -8647,7 +8647,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWUSER_TRANSMITCHAR: {
         INT noteLength = 0, portId = (SHORT)Wow32ArgWord(frame, WOWUSER_TC_ARG_ID);
         BYTE character = (BYTE)Wow32ArgWord(frame, WOWUSER_TC_ARG_CH);
-        INT result = wowcomm_write(portId, &character, 1);
+        INT result = WowCommWrite(portId, &character, 1);
         WowNotePut(note, noteCapacity, &noteLength, "TransmitCommChar -> ");
         WowNotePut(note, noteCapacity, &noteLength, result == 1 ? "sent" : "IE_BADID");
         Wow32SetReturn(frame, (DWORD)(WORD)(SHORT)(result == 1 ? 0 : WOWUSER_COMM_FAILED));
@@ -8661,7 +8661,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
            transmitter never holds a byte (see the vdd_comm header). */
         INT noteLength = 0, portId = (SHORT)Wow32ArgWord(frame, WOWUSER_GCE_ARG_ID);
         volatile BYTE *statBytes = Wow32ArgPointer(frame, WOWUSER_GCE_ARG_STAT);
-        INT inQueue = wowcomm_inqueue(portId);
+        INT inQueue = WowCommInqueue(portId);
         if (statBytes) { statBytes[0] = 0;
                   statBytes[WOWUSER_COMSTAT16_INQUEUE] = (BYTE)(inQueue & WOW_BYTE_MASK); statBytes[WOWUSER_COMSTAT16_INQUEUE + 1] = (BYTE)((inQueue >> WOW_BYTE_SHIFT) & WOW_BYTE_MASK);
                   statBytes[WOWUSER_COMSTAT16_OUTQUEUE] = 0; statBytes[WOWUSER_COMSTAT16_OUTQUEUE + 1] = 0; }
@@ -8691,10 +8691,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
            where they go on real hardware, so a guest that asserts DTR and reads
            MSR back in loopback sees DSR exactly as the port test does. */
         switch (function) {
-        case SETDTR: wowcomm_dtr(portId, 1); break;  /* SETDTR */
-        case CLRDTR: wowcomm_dtr(portId, 0); break;  /* CLRDTR */
-        case SETRTS: wowcomm_rts(portId, 1); break;  /* SETRTS */
-        case CLRRTS: wowcomm_rts(portId, 0); break;  /* CLRRTS */
+        case SETDTR: WowCommDtr(portId, 1); break;  /* SETDTR */
+        case CLRDTR: WowCommDtr(portId, 0); break;  /* CLRDTR */
+        case SETRTS: WowCommRts(portId, 1); break;  /* SETRTS */
+        case CLRRTS: WowCommRts(portId, 0); break;  /* CLRRTS */
         default: break;
         }
         WowNotePut(note, noteCapacity, &noteLength, "EscapeCommFunction fn=0x");
