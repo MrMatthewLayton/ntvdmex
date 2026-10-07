@@ -51,7 +51,7 @@ static void ok(int c, const char *what)
 /* ⚠⚠ THIS CAP SILENTLY FAILED 27 CHECKS FOR A WHOLE SESSION. (session 56)
      The scanner's overflow arm was `continue`, so once the headers held more
      than MAXDEF `*_ARG_*` macros every one found after the cap was DROPPED --
-     and part 2 then reported them as `macro CDIB_ARG_HDC is not defined`, for
+     and part 2 then reported them as `macro WOWGDI_CDIB_ARG_HDC is not defined`, for
      macros that are defined, in a file the scanner reads, at line 695. Session
      55 added 13 services and crossed the line; the battery has been reporting
      27 failures ever since and they were read as a known-bad tail rather than
@@ -214,32 +214,32 @@ static const svc_t SVC[] = {
 
   /* --- GDI ---------------------------------------------------------------- */
   { "GDI CreateDIBitmap(hDC, lpbmih, dwInit, lpbInit, lpbmi, wUsage)", 20,
-    { {"CDIB_ARG_USAGE",2}, {"CDIB_ARG_BMI",4}, {"CDIB_ARG_BITS",4},
-      {"CDIB_ARG_INIT",4}, {"CDIB_ARG_BMIH",4}, {"CDIB_ARG_HDC",2}, {0,0} } },
+    { {"WOWGDI_CDIB_ARG_USAGE",2}, {"WOWGDI_CDIB_ARG_BMI",4}, {"WOWGDI_CDIB_ARG_BITS",4},
+      {"WOWGDI_CDIB_ARG_INIT",4}, {"WOWGDI_CDIB_ARG_BMIH",4}, {"WOWGDI_CDIB_ARG_HDC",2}, {0,0} } },
   { "GDI SetDIBitsToDevice(...12 args...)", 28,
-    { {"SDD_ARG_USAGE",2}, {"SDD_ARG_BMI",4}, {"SDD_ARG_BITS",4},
-      {"SDD_ARG_NSCANS",2}, {"SDD_ARG_START",2}, {"SDD_ARG_SRCY",2},
-      {"SDD_ARG_SRCX",2}, {"SDD_ARG_H",2}, {"SDD_ARG_W",2},
-      {"SDD_ARG_DSTY",2}, {"SDD_ARG_DSTX",2}, {"SDD_ARG_HDC",2} } },
+    { {"WOWGDI_SDD_ARG_USAGE",2}, {"WOWGDI_SDD_ARG_BMI",4}, {"WOWGDI_SDD_ARG_BITS",4},
+      {"WOWGDI_SDD_ARG_NSCANS",2}, {"WOWGDI_SDD_ARG_START",2}, {"WOWGDI_SDD_ARG_SRCY",2},
+      {"WOWGDI_SDD_ARG_SRCX",2}, {"WOWGDI_SDD_ARG_H",2}, {"WOWGDI_SDD_ARG_W",2},
+      {"WOWGDI_SDD_ARG_DSTY",2}, {"WOWGDI_SDD_ARG_DSTX",2}, {"WOWGDI_SDD_ARG_HDC",2} } },
   { "GDI SetDIBits/GetDIBits(hDC, hBM, start, lines, bits, bmi, usage)", 18,
-    { {"DIB_ARG_USAGE",2}, {"DIB_ARG_BMI",4}, {"DIB_ARG_BITS",4},
-      {"DIB_ARG_LINES",2}, {"DIB_ARG_START",2}, {"DIB_ARG_HBM",2},
-      {"DIB_ARG_HDC",2}, {0,0} } },
+    { {"WOWGDI_DIB_ARG_USAGE",2}, {"WOWGDI_DIB_ARG_BMI",4}, {"WOWGDI_DIB_ARG_BITS",4},
+      {"WOWGDI_DIB_ARG_LINES",2}, {"WOWGDI_DIB_ARG_START",2}, {"WOWGDI_DIB_ARG_HBM",2},
+      {"WOWGDI_DIB_ARG_HDC",2}, {0,0} } },
   { "GDI StretchDIBits(...)", 32,
-    { {"SDI_ARG_ROP",4}, {"SDI_ARG_USAGE",2}, {"SDI_ARG_BMI",4},
-      {"SDI_ARG_BITS",4}, {"SDI_ARG_SRCH",2}, {"SDI_ARG_SRCW",2},
-      {"SDI_ARG_SRCY",2}, {"SDI_ARG_SRCX",2}, {"SDI_ARG_DSTH",2},
-      {"SDI_ARG_DSTW",2}, {"SDI_ARG_DSTY",2}, {"SDI_ARG_DSTX",2},
-      {"SDI_ARG_HDC",2} } },
+    { {"WOWGDI_SDI_ARG_ROP",4}, {"WOWGDI_SDI_ARG_USAGE",2}, {"WOWGDI_SDI_ARG_BMI",4},
+      {"WOWGDI_SDI_ARG_BITS",4}, {"WOWGDI_SDI_ARG_SRCH",2}, {"WOWGDI_SDI_ARG_SRCW",2},
+      {"WOWGDI_SDI_ARG_SRCY",2}, {"WOWGDI_SDI_ARG_SRCX",2}, {"WOWGDI_SDI_ARG_DSTH",2},
+      {"WOWGDI_SDI_ARG_DSTW",2}, {"WOWGDI_SDI_ARG_DSTY",2}, {"WOWGDI_SDI_ARG_DSTX",2},
+      {"WOWGDI_SDI_ARG_HDC",2} } },
 
   /* --- #295: the metafile enumerator and its record player (12 bytes each, the
          thunk width in docs/inventory/win16-surface.md) ---------------------- */
   { "GDI EnumMetaFile(hdc, hmf, lpfn, lParam)", 12,
-    { {"EMF_ARG_LPARAM",4}, {"EMF_ARG_PROC",4}, {"EMF_ARG_HMF",2},
-      {"EMF_ARG_HDC",2}, {0,0} } },
+    { {"WOWGDI_EMF_ARG_LPARAM",4}, {"WOWGDI_EMF_ARG_PROC",4}, {"WOWGDI_EMF_ARG_HMF",2},
+      {"WOWGDI_EMF_ARG_HDC",2}, {0,0} } },
   { "GDI PlayMetaFileRecord(hdc, lpht, lpmr, nHandles)", 12,
-    { {"PMFR_ARG_NHANDLES",2}, {"PMFR_ARG_MR",4}, {"PMFR_ARG_HT",4},
-      {"PMFR_ARG_HDC",2}, {0,0} } },
+    { {"WOWGDI_PMFR_ARG_NHANDLES",2}, {"WOWGDI_PMFR_ARG_MR",4}, {"WOWGDI_PMFR_ARG_HT",4},
+      {"WOWGDI_PMFR_ARG_HDC",2}, {0,0} } },
 
   /* --- krnl386 ------------------------------------------------------------ */
   { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,

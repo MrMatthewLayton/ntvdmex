@@ -791,7 +791,7 @@ static INT WowCommdlgCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         if (isOk) {
             WORD token = 0;
             if (printDialog.hDC) {
-                token = wowgdi_h16((HGDIOBJ)printDialog.hDC, WOWGDI_KIND_DC);
+                token = WowGdiH16((HGDIOBJ)printDialog.hDC, WOWGDI_KIND_DC);
                 if (!token) DeleteDC(printDialog.hDC);
             }
             Wow32PokeWord(guest + WOWCDLG_PD16_HDC,      token);

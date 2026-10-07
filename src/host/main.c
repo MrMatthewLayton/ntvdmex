@@ -23992,7 +23992,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.IsKernel && g_wow_gdi_seg && f.StubSegment == g_wow_gdi_seg) {
                     char note[320];
-                    if (wowgdi_call(&f, note, sizeof note)) {
+                    if (WowGdiCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (GDI), returned 0x");
@@ -27591,7 +27591,7 @@ static HANDLE shim_handle32(WORD h, DWORD type)
     case 0: case 14: { wowuser_win_t *w = wowuser_findwin(h); return w ? (HANDLE)w->hwnd32 : NULL; }
     case 1:  return (HANDLE)wowuser_menu32(h);
     case 4: case 5: case 6: case 7: case 8: case 9: case 10: case 11:
-        return (HANDLE)wowgdi_h32(h, &kind);
+        return (HANDLE)WowGdiH32(h, &kind);
     }
     shim_log("WOWHandle32: a handle type this host does not map -- 0");
     return NULL;
@@ -27601,9 +27601,9 @@ static WORD shim_handle16(HANDLE h, DWORD type)
     if (!h) return 0;
     switch (type) {
     case 0: case 14: return WowWinHwnd16((HWND)h);
-    case 4: return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_DC);
+    case 4: return WowGdiH16((HGDIOBJ)h, WOWGDI_KIND_DC);
     case 5: case 6: case 7: case 8: case 9: case 10: case 11:
-        return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_OBJ);
+        return WowGdiH16((HGDIOBJ)h, WOWGDI_KIND_OBJ);
     }
     shim_log("WOWHandle16: a handle type this host does not map -- 0");
     return 0;
@@ -28102,7 +28102,7 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     *handled = 0;
     if (!proc) return 0;
     child = WowWinHwnd16((HWND)lp);
-    dtok  = wowgdi_h16((HGDIOBJ)wp, WOWGDI_KIND_DC);
+    dtok  = WowGdiH16((HGDIOBJ)wp, WOWGDI_KIND_DC);
     if (!dtok) return 0;
     /* A Win32 read-only edit reports WM_CTLCOLORSTATIC; a Win16 edit is always
        CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour. */
@@ -28117,9 +28117,9 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     args[4] = child;                             /* lParam LOW: the control       */
     made = wow_call16_sync(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
                            args, 5, h16, 0x0019, &res);
-    wowgdi_forget(dtok);
+    WowGdiForget(dtok);
     if (made && res) {
-        br = wowgdi_h32(res, &kind);
+        br = WowGdiH32(res, &kind);
         if (br && kind == WOWGDI_KIND_OBJ) { *handled = 1; return (LRESULT)br; }
     }
     /* ── THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
@@ -28167,7 +28167,7 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
     switch (msg) {
     case WM_DRAWITEM: {
         const DRAWITEMSTRUCT *d = (const DRAWITEMSTRUCT *)lp;
-        dtok = wowgdi_h16((HGDIOBJ)d->hDC, WOWGDI_KIND_DC);
+        dtok = WowGdiH16((HGDIOBJ)d->hDC, WOWGDI_KIND_DC);
         if (!dtok) return 0;
         od_w(b, 0, (WORD)d->CtlType); od_w(b, 2, (WORD)d->CtlID);
         od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, (WORD)d->itemAction);
@@ -28206,7 +28206,7 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
     args[3] = 0; args[4] = 0;                    /* lParam: the structure's far pointer */
     made = wow_call16_sync_ex(proc, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
                               args, 5, h16, (WORD)msg, &res, b, n, 3, NULL, 0);
-    if (dtok) wowgdi_forget(dtok);
+    if (dtok) WowGdiForget(dtok);
     if (!made) return 0;
     *handled = 1;
     if (msg == WM_MEASUREITEM) {

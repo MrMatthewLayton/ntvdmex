@@ -3764,7 +3764,7 @@ static LONG wowuser_defproc(WOW32_FRAME *f, wowuser_win_t *w, WORD msg,
             && (msg == WM_SETFONT || msg == WM_GETFONT)) {
             if (msg == WM_SETFONT) {
                 int kind = -1;
-                HGDIOBJ hf = wparam ? wowgdi_h32(wparam, &kind) : NULL;
+                HGDIOBJ hf = wparam ? WowGdiH32(wparam, &kind) : NULL;
                 SendMessageA(w->hwnd32, WM_SETFONT, (WPARAM)hf, (LPARAM)(lparam & 0xFFFF));
                 WowNotePut(note, notecap, &k, "WM_SETFONT token 0x");
                 WowNoteHex(note, notecap, &k, wparam, 4);
@@ -3775,11 +3775,11 @@ static LONG wowuser_defproc(WOW32_FRAME *f, wowuser_win_t *w, WORD msg,
                 HGDIOBJ hf = (HGDIOBJ)SendMessageA(w->hwnd32, WM_GETFONT, 0, 0);
                 WORD tok = 0;
                 int i;
-                for (i = 0; hf && i < g_wg_nobj; ++i)
-                    if (g_wg_obj[i].o == hf && g_wg_obj[i].h
-                        && (g_wg_obj[i].kind == WOWGDI_KIND_OBJ
-                            || g_wg_obj[i].kind == WOWGDI_KIND_STOCK)) { tok = g_wg_obj[i].h; break; }
-                if (hf && !tok) tok = wowgdi_h16(hf, WOWGDI_KIND_STOCK);
+                for (i = 0; hf && i < g_WowGdiObjectCount; ++i)
+                    if (g_WowGdiObjects[i].Object == hf && g_WowGdiObjects[i].Handle16
+                        && (g_WowGdiObjects[i].Kind == WOWGDI_KIND_OBJ
+                            || g_WowGdiObjects[i].Kind == WOWGDI_KIND_STOCK)) { tok = g_WowGdiObjects[i].Handle16; break; }
+                if (hf && !tok) tok = WowGdiH16(hf, WOWGDI_KIND_STOCK);
                 WowNotePut(note, notecap, &k, "WM_GETFONT -> token 0x");
                 WowNoteHex(note, notecap, &k, tok, 4);
                 return (LONG)tok;
@@ -3968,7 +3968,7 @@ static WPARAM wowuser_wp32(WORD msg, WORD wp16)
 {
     if (msg == 0x0014) {
         int kind = -1;
-        HGDIOBJ o = wowgdi_h32(wp16, &kind);
+        HGDIOBJ o = WowGdiH32(wp16, &kind);
         return (o && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC))
                ? (WPARAM)o : 0;
     }
@@ -3986,7 +3986,7 @@ static WPARAM wowuser_wp32(WORD msg, WORD wp16)
 static WORD wowuser_ctlcolor_default(wowuser_win_t *w, HWND h, WORD dc16, DWORD lp16)
 {
     int  kind = -1;
-    HDC  dc = (HDC)wowgdi_h32(dc16, &kind);
+    HDC  dc = (HDC)WowGdiH32(dc16, &kind);
     WORD type = HIWORD(lp16);
     HBRUSH br;
     if (!dc || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || type > 6) return 0;
@@ -3998,7 +3998,7 @@ static WORD wowuser_ctlcolor_default(wowuser_win_t *w, HWND h, WORD dc16, DWORD 
         br = (HBRUSH)DefWindowProcA(h, WM_CTLCOLORMSGBOX + type, (WPARAM)dc,
                                     (LPARAM)wowuser_hwnd32(LOWORD(lp16)));
     }
-    return br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+    return br ? WowGdiH16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
 }
 
 /* s89: DefWindowProc's / DefDlgProc's WM_PAINT. Win16's does BeginPaint/EndPaint,
@@ -4247,7 +4247,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
                 break;
             default: {
                 int bkind = -1;
-                HGDIOBJ bo = wowgdi_h32(c->hbrback, &bkind);
+                HGDIOBJ bo = WowGdiH32(c->hbrback, &bkind);
                 if (bo && bkind == WOWGDI_KIND_OBJ) hbrcls = (HBRUSH)bo;
                 break; }
             }
@@ -5615,8 +5615,8 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         const volatile BYTE *rc = Wow32ArgPointer(f, SCRDC_ARG_LPRCCLIP);
         volatile BYTE *ru = Wow32ArgPointer(f, SCRDC_ARG_LPRCUPDATE);
         WORD hrgn = Wow32ArgWord(f, SCRDC_ARG_HRGNUPDATE);
-        HDC  dc   = (HDC)wowgdi_h32(hdc, NULL);
-        HRGN rgn  = (HRGN)wowgdi_h32(hrgn, NULL);
+        HDC  dc   = (HDC)WowGdiH32(hdc, NULL);
+        HRGN rgn  = (HRGN)WowGdiH32(hrgn, NULL);
         RECT scroll, clip, upd;
         int  k = 0, ok;
         WowNotePut(note, notecap, &k, "ScrollDC(dc 0x");
@@ -6026,7 +6026,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         {   DWORD nm = Wow32ArgDword(f, LBM_ARG_NAME);
             if (!size && !(nm >> 16) && (nm & 0xFFFF)) {
                 HBITMAP ob = LoadBitmapA(NULL, MAKEINTRESOURCEA(nm & 0xFFFF));
-                tok = ob ? wowgdi_h16((HGDIOBJ)ob, WOWGDI_KIND_OBJ) : 0;
+                tok = ob ? WowGdiH16((HGDIOBJ)ob, WOWGDI_KIND_OBJ) : 0;
                 WowNotePut(note, notecap, &k, " predefined #");
                 WowNoteHex(note, notecap, &k, nm & 0xFFFF, 4);
                 if (!tok && ob) DeleteObject((HGDIOBJ)ob);
@@ -6147,7 +6147,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
                             (const void *)(const BYTE *)(p + off),
                             (const BITMAPINFO *)hdr, DIB_RGB_COLORS);
         ReleaseDC(NULL, dc);
-        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+        tok = bm ? WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (bm) DeleteObject((HGDIOBJ)bm);
             WowNotePut(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
@@ -6494,7 +6494,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD er   = Wow32ArgWord(f, IRG_ARG_ERASE);
         wowuser_win_t *w = wowuser_findwin(hwnd);
         int rkind = -1, k = 0;
-        HGDIOBJ r = hrgn ? wowgdi_h32(hrgn, &rkind) : NULL;
+        HGDIOBJ r = hrgn ? WowGdiH32(hrgn, &rkind) : NULL;
         WowNotePut(note, notecap, &k, "InvalidateRgn 0x");
         WowNoteHex(note, notecap, &k, hwnd, 4);
         WowNotePut(note, notecap, &k, " rgn 0x");
@@ -6788,8 +6788,8 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD hbr = Wow32ArgWord(f, FR_ARG_BRUSH);
         volatile BYTE *p = Wow32ArgPointer(f, FR_ARG_RECT);
         int  dk = -1, bk = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dk);
-        HGDIOBJ b = wowgdi_h32(hbr, &bk);
+        HGDIOBJ d = WowGdiH32(hdc, &dk);
+        HGDIOBJ b = WowGdiH32(hbr, &bk);
         RECT r;
         int  k = 0, ok;
         WowNotePut(note, notecap, &k, "FillRect(dc 0x");
@@ -7705,7 +7705,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD tok = Wow32ArgWord(f, DFR_ARG_HDC);
         volatile BYTE *rp = Wow32ArgPointer(f, DFR_ARG_RECT);
         int kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         unsigned char r8[8];
         RECT r;
         int k = 0, i;
@@ -7978,8 +7978,8 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         int  cx = (int)(short)Wow32ArgWord(f, GS_ARG_WIDTH);
         int  cy = (int)(short)Wow32ArgWord(f, GS_ARG_HEIGHT);
         int  dk = -1, bk = -1;
-        HGDIOBJ d = wowgdi_h32(dtok, &dk);
-        HGDIOBJ b = btok ? wowgdi_h32(btok, &bk) : NULL;
+        HGDIOBJ d = WowGdiH32(dtok, &dk);
+        HGDIOBJ b = btok ? WowGdiH32(btok, &bk) : NULL;
         char buf[512];
         int  k = 0, i, r;
         WowNotePut(note, notecap, &k, "GrayString(0x");
@@ -8109,7 +8109,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         int  y    = (int)(short)Wow32ArgWord(f, DI2_ARG_Y);
         WORD hic  = Wow32ArgWord(f, DI2_ARG_HICON);
         int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         HICON   ic = wowuser_sysres_hicon(hic, NULL, 0, 0);
         int  k = 0, r;
         WowNotePut(note, notecap, &k, "DrawIcon(dc=0x");
@@ -8643,7 +8643,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         volatile BYTE *sp = Wow32ArgPointer(f, TTO_ARG_STR);
         volatile BYTE *tp = Wow32ArgPointer(f, TTO_ARG_TABPOS);
         int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         char buf[512];
         INT  tabs[64];
         LONG r;
@@ -8879,7 +8879,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
              -- so an uncovered corner turned the whole calculator white. What this
              reports as rcPaint is exactly what the guest may draw on. */
         if (dc) IntersectClipRect(dc, r.left, r.top, r.right, r.bottom);
-        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
+        tok = dc ? WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
         if (!tok) {
             if (dc) ReleaseDC(w->hwnd32, dc);
             WowNotePut(note, notecap, &k, " -- ★ NO DC (or the token map is full);"
@@ -8929,7 +8929,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         wowuser_win_t *w = wowuser_findwin(hwnd);
         WORD tok = ps ? Wow32PeekWord(ps + WOW16_PS_HDC) : 0;
         int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         int  k = 0;
         WowNotePut(note, notecap, &k, "EndPaint 0x");
         WowNoteHex(note, notecap, &k, hwnd, 4);
@@ -8940,7 +8940,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
              leaked cache DC would eventually stop the OS handing out any. */
         if (o && kind == WOWGDI_KIND_WINDC) {
             ReleaseDC(w ? w->hwnd32 : NULL, (HDC)o);
-            wowgdi_forget(tok);
+            WowGdiForget(tok);
             WowNotePut(note, notecap, &k, " -> released");
         } else {
             WowNotePut(note, notecap, &k, " -- ★ THAT IS NOT A DC THIS BeginPaint"
@@ -8992,7 +8992,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        tok = wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC);
+        tok = WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_WINDC);
         if (!tok) {
             /* ⚠ Do not hand back a DC we cannot name later: it could never be
                  released, which is the leak this map exists to prevent.
@@ -9023,7 +9023,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD hwnd = Wow32ArgWord(f, RDC_ARG_HWND);
         wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
         int kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         int k = 0, ok;
         WowNotePut(note, notecap, &k, "ReleaseDC dc=0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -9043,7 +9043,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         ok = ReleaseDC(w ? w->hwnd32 : NULL, (HDC)o) ? 1 : 0;
-        if (ok) wowgdi_forget(hdc);
+        if (ok) WowGdiForget(hdc);
         WowNotePut(note, notecap, &k, ok ? " -> released, token freed"
                                       : " -- ★ the OS refused the release");
         Wow32SetReturn(f, (DWORD)ok);
@@ -9869,7 +9869,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         int  ch   = (int)(short)Wow32ArgWord(f, CC_ARG_HEIGHT);
         HWND h    = wowuser_hwnd32(hwnd);
         int  bk = -1;
-        HGDIOBJ b = hbm ? wowgdi_h32(hbm, &bk) : NULL;
+        HGDIOBJ b = hbm ? WowGdiH32(hbm, &bk) : NULL;
         int  k = 0;
         WowNotePut(note, notecap, &k, "CreateCaret(0x");
         WowNoteHex(note, notecap, &k, hwnd, 4);
@@ -9955,7 +9955,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD hdc = Wow32ArgWord(f, INVR_ARG_HDC);
         volatile BYTE *p = Wow32ArgPointer(f, INVR_ARG_RECT);
         int  dk = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dk);
+        HGDIOBJ d = WowGdiH32(hdc, &dk);
         RECT r;
         int  k = 0;
         WowNotePut(note, notecap, &k, "InvertRect(dc 0x");
@@ -10022,8 +10022,8 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         WORD hdc = Wow32ArgWord(f, issel ? SPL_ARG_HDC : 0);
         WORD hp  = issel ? Wow32ArgWord(f, SPL_ARG_PAL) : 0;
         int  dk = -1, pk = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dk);
-        HGDIOBJ p = hp ? wowgdi_h32(hp, &pk) : NULL;
+        HGDIOBJ d = WowGdiH32(hdc, &dk);
+        HGDIOBJ p = hp ? WowGdiH32(hp, &pk) : NULL;
         int  k = 0;
         WowNotePut(note, notecap, &k, issel ? "SelectPalette(0x" : "RealizePalette(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -10047,7 +10047,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         }
         {   HPALETTE prev = SelectPalette((HDC)d, (HPALETTE)p,
                                           Wow32ArgWord(f, SPL_ARG_FORCE) ? TRUE : FALSE);
-            WORD tok = prev ? wowgdi_h16((HGDIOBJ)prev, WOWGDI_KIND_OBJ) : 0;
+            WORD tok = prev ? WowGdiH16((HGDIOBJ)prev, WOWGDI_KIND_OBJ) : 0;
             WowNotePut(note, notecap, &k, " -> previous 0x");
             WowNoteHex(note, notecap, &k, tok, 4);
             Wow32SetReturn(f, tok);
@@ -10798,7 +10798,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── DrawText and FrameRect: USER calls that take a GDI DC. ───────────────
          ⚠ THE DC TOKEN IS GDI'S ID SPACE, NOT USER'S, and this is the seam where
-           that matters: the handle arrives in a USER call and only wowgdi_h32
+           that matters: the handle arrives in a USER call and only WowGdiH32
            can resolve it. Solitaire draws its status line with DrawText and its
            drag outline with FrameRect. */
     case WOWUSER_DRAWTEXT: {
@@ -10808,7 +10808,7 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         volatile BYTE *rp = Wow32ArgPointer(f, DT_ARG_RECT);
         WORD  fmt   = Wow32ArgWord(f, DT_ARG_FORMAT);
         int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         char  buf[512];
         RECT  r;
         int   k = 0, n, res;
@@ -10857,8 +10857,8 @@ static int wowuser_call(WOW32_FRAME *f, char *note, int notecap)
         volatile BYTE *rp = Wow32ArgPointer(f, FRAMER_ARG_RECT);
         WORD  hbr = Wow32ArgWord(f, FRAMER_ARG_BRUSH);
         int   dk = -1, bk = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &dk);
-        HGDIOBJ b = wowgdi_h32(hbr, &bk);
+        HGDIOBJ o = WowGdiH32(hdc, &dk);
+        HGDIOBJ b = WowGdiH32(hbr, &bk);
         RECT  r;
         int   k = 0, res;
         WowNotePut(note, notecap, &k, "FrameRect(dc 0x");

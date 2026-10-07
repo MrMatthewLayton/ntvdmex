@@ -78,7 +78,7 @@ typedef struct _WOWENUM {
 #define WOWENUM_LINE_MAX_STEPS      4096
 #define WOWENUM_INSTANCE_STACK_TOP  0x0A  /* INSTANCEDATA.pStackTop        */
 #define WOWENUM_STACK_RESERVE       512
-#define WOWENUM_METAFILE_MALFORMED  0xFFFF  /* wowgdi_mf_next's two refusals */
+#define WOWENUM_METAFILE_MALFORMED  0xFFFF  /* WowGdiMetafileNext's two refusals */
 #define WOWENUM_METAFILE_NO_ROOM    0xFFFE
 #define WOWENUM_HEX_RECORD_DIGITS   6
 
@@ -127,7 +127,7 @@ static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY)
    go here, so a stop, a refusal and a completion all release them. */
 static VOID WowEnumEnd(VOID)
 {
-    if (g_WowEnum.Kind == WOWENUM_METAFILE) wowgdi_mf_end();
+    if (g_WowEnum.Kind == WOWENUM_METAFILE) WowGdiMetafileEnd();
     g_WowEnum.Kind = WOWENUM_NONE; g_WowEnum.Procedure = 0;
 }
 
@@ -171,7 +171,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
          (through PlayMetaFileRecord, or by hand); take it back FIRST, before a stop
          below releases the table's objects -- a pen created by the record that
          said stop is still the enumeration's to delete. */
-    if (!isFirst && g_WowEnum.Kind == WOWENUM_METAFILE && wowgdi_mf_readback()) {
+    if (!isFirst && g_WowEnum.Kind == WOWENUM_METAFILE && WowGdiMetafileReadBack()) {
         WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ the guest wrote a non-object value into"
                                " its handle table; those entries were NOT believed. ");
     }
@@ -283,12 +283,12 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              a callback that WRITES a record's tail is not one we have seen), and
              PlayMetaFileRecord recognises it by address and plays the snapshot. */
         if (stackBase) {
-            WORD stackTop = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)stackBase, WOWENUM_INSTANCE_STACK_TOP);
+            WORD stackTop = WowGdiPeek((const volatile BYTE *)(ULONG_PTR)stackBase, WOWENUM_INSTANCE_STACK_TOP);
             INT  limit = (stackTop && stackTop < stackPointer) ? (INT)(stackPointer - stackTop) : (INT)stackPointer;
             limit -= WOWENUM_STACK_RESERVE;
             if (limit < room) room = limit;
         }
-        if (!wowgdi_mf_next(room, &blobLength, &tableOffset, &function)) {
+        if (!WowGdiMetafileNext(room, &blobLength, &tableOffset, &function)) {
             if (function == WOWENUM_METAFILE_MALFORMED)
                 WowNotePut(note, noteCapacity, &noteLength, "ENUM metafile: ★ A MALFORMED RECORD (rdSize < 3 or"
                                        " past the end) ENDS THE WALK; ");
@@ -306,14 +306,14 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         arguments[0] = g_WowEnum.Parent;                   /* the guest's own hdc, verbatim */
         arguments[1] = 0; arguments[2] = 0;                 /* lpht: blob2, +toff            */
         arguments[3] = 0; arguments[4] = 0;                 /* lpmr: the blob itself         */
-        arguments[5] = (WORD)g_wmf.nobj;
+        arguments[5] = (WORD)g_WowGdiMetafile.ObjectCount;
         arguments[6] = (WORD)(g_WowEnum.LParam >> WOW_WORD_SHIFT);
         arguments[7] = (WORD)(g_WowEnum.LParam & WOW_WORD_MASK);
         g_WowCallBlob2Argument = 1; g_WowCallBlob2Offset = tableOffset;
         if (!returnSelector || !stackBase
             || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, WOWENUM_METAFILE_ARGUMENTS,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
-                              g_wmf_blob, blobLength, WOWENUM_METAFILE_ARG_RECORD,
+                              g_WowGdiMetafileBlob, blobLength, WOWENUM_METAFILE_ARG_RECORD,
                               WowDlgIsSelectorAbsent((WORD)(g_WowEnum.Procedure >> WOW_WORD_SHIFT)))) {
             g_WowCallBlob2Argument = -1;
             /* ⚠ FALSE, unlike the window forms: the guest has not seen the whole
@@ -324,8 +324,8 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             WowEnumEnd();
             return 0;
         }
-        g_wmf.rec_lin = g_WowCallBlobLinear;
-        g_wmf.tbl_lin = g_WowCallBlobLinear ? g_WowCallBlobLinear + (DWORD)tableOffset : 0;
+        g_WowGdiMetafile.RecordLinear = g_WowCallBlobLinear;
+        g_WowGdiMetafile.TableLinear = g_WowCallBlobLinear ? g_WowCallBlobLinear + (DWORD)tableOffset : 0;
         if (g_WowCallDepth > 0) {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_ENUMNEXT;
             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = 0;
@@ -334,8 +334,8 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         WowNotePut(note, noteCapacity, &noteLength, "ENUM metarecord fn=0x");
         WowNoteHex(note, noteCapacity, &noteLength, function, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " bytes=0x");
-        WowNoteHex(note, noteCapacity, &noteLength, g_wmf.rec_bytes, WOWENUM_HEX_RECORD_DIGITS);
-        if (g_wmf.truncated)
+        WowNoteHex(note, noteCapacity, &noteLength, g_WowGdiMetafile.RecordBytes, WOWENUM_HEX_RECORD_DIGITS);
+        if (g_WowGdiMetafile.IsTruncated)
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ TRUNCATED IN THE CALLBACK'S COPY (too big for the"
                                    " stack blob); PlayMetaFileRecord plays the full record");
         return 1;

@@ -213,7 +213,7 @@
                                    .FontType = the data handle                     */
 #define WOWENUM_METAFILE  8     /* every record of a metafile -- EnumMetaFile
                                    (#295): the snapshot and the handle table live
-                                   in wowgdi.h (g_wmf), not in g_WowEnumFonts[]        */
+                                   in wowgdi.h (g_WowGdiMetafile), not in g_WowEnumFonts[]        */
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
@@ -223,7 +223,7 @@ static INT  g_WowCallBlob2Argument = -1;
 static INT  g_WowCallBlob2Offset = 0;
 /* #295: where the LAST blob went, as a host linear address (ssbase + SP), 0 if the
    last call placed none. EnumMetaFile reads the guest's handle table back out of
-   it after the callback returns -- see wowgdi.h's g_wmf note. */
+   it after the callback returns -- see wowgdi.h's g_WowGdiMetafile note. */
 static DWORD g_WowCallBlobLinear = 0;
 /* The largest blob WowCallEnter will place on the guest stack. 256 covered every
    structure before #295 (the font pair is 187 bytes); a METARECORD plus its handle

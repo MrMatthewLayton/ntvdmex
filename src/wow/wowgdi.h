@@ -1,5 +1,5 @@
-#ifndef WOWGDI_H
-#define WOWGDI_H
+#ifndef NTVDMEX_WOWGDI_H
+#define NTVDMEX_WOWGDI_H
 #include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tests/unit/wow_test.c */
 /*
  * wowgdi.h -- ★★ GDI.EXE's OWN ID SPACE.  GH #128, session 44.
@@ -46,13 +46,13 @@
 #define WOWGDI_DELETEOBJECT   0x0045
 #define WOWGDI_GETDEVICECAPS  0x0050
 
-#define GDC_ARG_INDEX   0
-#define GDC_ARG_HDC     2
+#define WOWGDI_GDC_ARG_INDEX   0
+#define WOWGDI_GDC_ARG_HDC     2
 /* The capability index Win32 inherited from Win16 unchanged -- "how many entries
    in this device's colour table". It is the one index whose Win32 answer a Win16
    caller cannot read; see the handler. */
 #define WOWGDI_CAP_NUMCOLORS  24
-#define DOBJ_ARG_HANDLE 0
+#define WOWGDI_DOBJ_ARG_HANDLE 0
 
 /* ── ★★★ THE PRODUCERS -- WHAT MS PAINT ASKS FOR ONCE IT HAS A WINDOW. ───────
      With `GetDC` in place (it is USER's call, not GDI's -- see wowuser.h) Paint
@@ -114,31 +114,31 @@
      the signed 16-bit coordinates need work. */
 #define WOWGDI_SETBKCOLOR       0x0001
 #define WOWGDI_SETTEXTCOLOR     0x0009
-#define COL_ARG_COLOR   0
-#define COL_ARG_HDC     4
+#define WOWGDI_COL_ARG_COLOR   0
+#define WOWGDI_COL_ARG_HDC     4
 
 #define WOWGDI_SETROP2          0x0004
 #define WOWGDI_SETSTRETCHMODE   0x0007
-#define MODE_ARG_MODE   0
-#define MODE_ARG_HDC    2
+#define WOWGDI_MODE_ARG_MODE   0
+#define WOWGDI_MODE_ARG_HDC    2
 
 #define WOWGDI_SETWINDOWORG     0x000b
-#define ORG_ARG_Y       0
-#define ORG_ARG_X       2
-#define ORG_ARG_HDC     4
+#define WOWGDI_ORG_ARG_Y       0
+#define WOWGDI_ORG_ARG_X       2
+#define WOWGDI_ORG_ARG_HDC     4
 
 #define WOWGDI_RECTANGLE        0x001b
-#define RC_ARG_BOTTOM   0
-#define RC_ARG_RIGHT    2
-#define RC_ARG_TOP      4
-#define RC_ARG_LEFT     6
-#define RC_ARG_HDC      8
+#define WOWGDI_RC_ARG_BOTTOM   0
+#define WOWGDI_RC_ARG_RIGHT    2
+#define WOWGDI_RC_ARG_TOP      4
+#define WOWGDI_RC_ARG_LEFT     6
+#define WOWGDI_RC_ARG_HDC      8
 
 #define WOWGDI_SAVEDC           0x001e
-#define SDC_ARG_HDC     0
+#define WOWGDI_SDC_ARG_HDC     0
 #define WOWGDI_RESTOREDC        0x0027
-#define RDC2_ARG_LEVEL  0
-#define RDC2_ARG_HDC    2
+#define WOWGDI_RDC2_ARG_LEVEL  0
+#define WOWGDI_RDC2_ARG_HDC    2
 
 /* ── ★★★★★ 0x23 StretchBlt -- THE TOOL ICONS THEMSELVES. ────────────────────
      GDI ordinal 35, a direct export, 24 argument bytes, and its own call names
@@ -153,28 +153,28 @@
      against stock. Two numbers this session already knew independently, both
      turning up in one argument block. */
 #define WOWGDI_STRETCHBLT       0x0023
-#define SB_ARG_ROP      0        /* DWORD */
-#define SB_ARG_SRCH     4
-#define SB_ARG_SRCW     6
-#define SB_ARG_SRCY     8
-#define SB_ARG_SRCX    10
-#define SB_ARG_SRCDC   12
-#define SB_ARG_DSTH    14
-#define SB_ARG_DSTW    16
-#define SB_ARG_DSTY    18
-#define SB_ARG_DSTX    20
-#define SB_ARG_DSTDC   22
+#define WOWGDI_SB_ARG_ROP      0        /* DWORD */
+#define WOWGDI_SB_ARG_SRCH     4
+#define WOWGDI_SB_ARG_SRCW     6
+#define WOWGDI_SB_ARG_SRCY     8
+#define WOWGDI_SB_ARG_SRCX    10
+#define WOWGDI_SB_ARG_SRCDC   12
+#define WOWGDI_SB_ARG_DSTH    14
+#define WOWGDI_SB_ARG_DSTW    16
+#define WOWGDI_SB_ARG_DSTY    18
+#define WOWGDI_SB_ARG_DSTX    20
+#define WOWGDI_SB_ARG_DSTDC   22
 
 #define WOWGDI_BITBLT           0x0022
-#define BB_ARG_ROP      0        /* DWORD */
-#define BB_ARG_SRCY     4
-#define BB_ARG_SRCX     6
-#define BB_ARG_SRCDC    8
-#define BB_ARG_HEIGHT  10
-#define BB_ARG_WIDTH   12
-#define BB_ARG_Y       14
-#define BB_ARG_X       16
-#define BB_ARG_DSTDC   18
+#define WOWGDI_BB_ARG_ROP      0        /* DWORD */
+#define WOWGDI_BB_ARG_SRCY     4
+#define WOWGDI_BB_ARG_SRCX     6
+#define WOWGDI_BB_ARG_SRCDC    8
+#define WOWGDI_BB_ARG_HEIGHT  10
+#define WOWGDI_BB_ARG_WIDTH   12
+#define WOWGDI_BB_ARG_Y       14
+#define WOWGDI_BB_ARG_X       16
+#define WOWGDI_BB_ARG_DSTDC   18
 
 /* ── ★★★★ THE STROKE LOOP. ──────────────────────────────────────────────────
      Named from the run in which the mouse first reached MS Paint: a single drag
@@ -200,12 +200,12 @@
 #define WOWGDI_GETDCORG         0x004f
 #define WOWGDI_GETBRUSHORG      0x0095
 #define WOWGDI_UNREALIZEOBJ     0x0096
-#define ONE_ARG_HANDLE  0
+#define WOWGDI_ONE_ARG_HANDLE  0
 
 #define WOWGDI_PTVISIBLE        0x0067
-#define PV_ARG_Y        0
-#define PV_ARG_X        2
-#define PV_ARG_HDC      4
+#define WOWGDI_PV_ARG_Y        0
+#define WOWGDI_PV_ARG_X        2
+#define WOWGDI_PV_ARG_HDC      4
 
 /* ★ 0x24 Polygon(hDC, lpPoints, nCount) -- GDI ordinal 36, native16, so the id
      came from the run: `(0006 | 38fa 09c6 | 20d8)` is six points, a far LPPOINT
@@ -216,30 +216,30 @@
 #define WOWGDI_POLYGON          0x0024
 
 #define WOWGDI_LPTODP           0x0063
-#define LDP_ARG_COUNT   0
-#define LDP_ARG_POINTS  2
-#define LDP_ARG_HDC     6
+#define WOWGDI_LDP_ARG_COUNT   0
+#define WOWGDI_LDP_ARG_POINTS  2
+#define WOWGDI_LDP_ARG_HDC     6
 
 #define WOWGDI_CREATEDISCARDBM  0x009c
 #define WOWGDI_SETBRUSHORG      0x0094
 
 #define WOWGDI_LINETO           0x0013
 #define WOWGDI_MOVETO           0x0014
-#define XY_ARG_Y        0
-#define XY_ARG_X        2
-#define XY_ARG_HDC      4
+#define WOWGDI_XY_ARG_Y        0
+#define WOWGDI_XY_ARG_X        2
+#define WOWGDI_XY_ARG_HDC      4
 
 #define WOWGDI_PATBLT           0x001d
-#define PB_ARG_ROP      0
-#define PB_ARG_HEIGHT   4
-#define PB_ARG_WIDTH    6
-#define PB_ARG_Y        8
-#define PB_ARG_X       10
-#define PB_ARG_HDC     12
+#define WOWGDI_PB_ARG_ROP      0
+#define WOWGDI_PB_ARG_HEIGHT   4
+#define WOWGDI_PB_ARG_WIDTH    6
+#define WOWGDI_PB_ARG_Y        8
+#define WOWGDI_PB_ARG_X       10
+#define WOWGDI_PB_ARG_HDC     12
 
 #define WOWGDI_SELECTOBJECT     0x002d
-#define SEL_ARG_OBJ     0
-#define SEL_ARG_HDC     2
+#define WOWGDI_SEL_ARG_OBJ     0
+#define WOWGDI_SEL_ARG_HDC     2
 
 /* ── ★★★ 0x30 CreateBitmap, named from the call it actually made ────────────
      GDI ordinal 48 `CREATEBITMAP` is `native16`, so -- as with `CreateDC` and
@@ -258,25 +258,25 @@
    ⚠ Which is NOT a rule to lean on: `CreateDC` is ordinal 53 and id 0x99. Name
      each internal stub from its own call, never from arithmetic. */
 #define WOWGDI_CREATEBITMAP     0x0030
-#define CBM_ARG_BITS    0        /* const void FAR* -- NULL = uninitialised */
-#define CBM_ARG_BPP     4
-#define CBM_ARG_PLANES  6
-#define CBM_ARG_HEIGHT  8
-#define CBM_ARG_WIDTH  10
+#define WOWGDI_CBM_ARG_BITS    0        /* const void FAR* -- NULL = uninitialised */
+#define WOWGDI_CBM_ARG_BPP     4
+#define WOWGDI_CBM_ARG_PLANES  6
+#define WOWGDI_CBM_ARG_HEIGHT  8
+#define WOWGDI_CBM_ARG_WIDTH  10
 
 #define WOWGDI_CREATECOMPATBM   0x0033
-#define CCB_ARG_HEIGHT  0
-#define CCB_ARG_WIDTH   2
-#define CCB_ARG_HDC     4
+#define WOWGDI_CCB_ARG_HEIGHT  0
+#define WOWGDI_CCB_ARG_WIDTH   2
+#define WOWGDI_CCB_ARG_HDC     4
 
 #define WOWGDI_CREATECOMPATDC   0x0034
-#define CCD_ARG_HDC     0
+#define WOWGDI_CCD_ARG_HDC     0
 
 #define WOWGDI_CREATESOLIDBRUSH 0x0042
-#define CSB_ARG_COLOR   0
+#define WOWGDI_CSB_ARG_COLOR   0
 
 #define WOWGDI_GETSTOCKOBJECT   0x0057
-#define GSO_ARG_INDEX   0
+#define WOWGDI_GSO_ARG_INDEX   0
 
 /* ── ★★★ 0x52 GetObject(hObject, nCount, lpObject) ──────────────────────────
      GDI ordinal 82, `native16`, so the id came from the run again:
@@ -306,14 +306,14 @@
      the same size arithmetic and are marked in the log as they go, so the first
      run that exercises one says so rather than passing silently. */
 #define WOWGDI_GETOBJECT        0x0052
-#define GOB_ARG_BUF     0
-#define GOB_ARG_COUNT   4
-#define GOB_ARG_HANDLE  6
+#define WOWGDI_GOB_ARG_BUF     0
+#define WOWGDI_GOB_ARG_COUNT   4
+#define WOWGDI_GOB_ARG_HANDLE  6
 
-#define WOW16_BITMAP_CB    14
-#define WOW16_LOGFONT_CB   50
-#define WOW16_LOGPEN_CB    10
-#define WOW16_LOGBRUSH_CB   8
+#define WOWGDI_BITMAP16_SIZE    14
+#define WOWGDI_LOGFONT16_SIZE   50
+#define WOWGDI_LOGPEN16_SIZE    10
+#define WOWGDI_LOGBRUSH16_SIZE   8
 
 /* ── ★★★ 0x99 -- AND IT IS `CreateIC`, NOT `CreateDC`. ──────────────────────
    ⚠⚠⚠ **THIS BLOCK'S ORIGINAL CONCLUSION WAS WRONG AND IS CORRECTED IN PLACE**
@@ -343,10 +343,10 @@
    ★ AND THE ARGUMENT BLOCK IS SHARED, which is why one case answers both: an IC
      and a DC take the same four far pointers in the same order. */
 #define WOWGDI_CREATEDC         0x0099   /* ← ord 153 CreateIC (see above)        */
-#define CDC_ARG_INITDATA 0
-#define CDC_ARG_OUTPUT   4
-#define CDC_ARG_DEVICE   8
-#define CDC_ARG_DRIVER  12
+#define WOWGDI_CDC_ARG_INITDATA 0
+#define WOWGDI_CDC_ARG_OUTPUT   4
+#define WOWGDI_CDC_ARG_DEVICE   8
+#define WOWGDI_CDC_ARG_DRIVER  12
 
 /* ── ★★★★★ THE TOOLS THAT DID NOT WORK -- ENUMERATED, NOT GUESSED. ───────────
      "Some drawing functions work, others (like fill) do not" is not a mystery
@@ -368,20 +368,20 @@
 #define WOWGDI_EXCLUDECLIPRECT  0x0015   /* ord 21, 10 args -- RC_ARG_* layout */
 
 #define WOWGDI_ROUNDRECT        0x001c   /* ord 28, 14 args                    */
-#define RR_ARG_EH       0
-#define RR_ARG_EW       2
-#define RR_ARG_BOTTOM   4
-#define RR_ARG_RIGHT    6
-#define RR_ARG_TOP      8
-#define RR_ARG_LEFT    10
-#define RR_ARG_HDC     12
+#define WOWGDI_RR_ARG_EH       0
+#define WOWGDI_RR_ARG_EW       2
+#define WOWGDI_RR_ARG_BOTTOM   4
+#define WOWGDI_RR_ARG_RIGHT    6
+#define WOWGDI_RR_ARG_TOP      8
+#define WOWGDI_RR_ARG_LEFT    10
+#define WOWGDI_RR_ARG_HDC     12
 
 #define WOWGDI_EXTFLOODFILL     0x0174   /* ord 372, 12 args -- ★ THE FILL     */
-#define FF_ARG_TYPE     0
-#define FF_ARG_COLOR    2                /* DWORD                              */
-#define FF_ARG_Y        6
-#define FF_ARG_X        8
-#define FF_ARG_HDC     10
+#define WOWGDI_FF_ARG_TYPE     0
+#define WOWGDI_FF_ARG_COLOR    2                /* DWORD                              */
+#define WOWGDI_FF_ARG_Y        6
+#define WOWGDI_FF_ARG_X        8
+#define WOWGDI_FF_ARG_HDC     10
 
 #define WOWGDI_CREATEPATTERNBRUSH 0x003c /* ord 60,  2 args (HBITMAP)          */
 #define WOWGDI_GETPIXEL         0x0053   /* ord 83,  6 args -- XY_ARG_* layout */
@@ -398,14 +398,14 @@
 #define WOWGDI_GETTEXTCOLOR     0x005a   /* ord 90, a DWORD COLORREF            */
 
 #define WOWGDI_CREATERECTRGN    0x0040   /* ord 64,  8 args                    */
-#define RGN_ARG_BOTTOM  0
-#define RGN_ARG_RIGHT   2
-#define RGN_ARG_TOP     4
-#define RGN_ARG_LEFT    6
+#define WOWGDI_RGN_ARG_BOTTOM  0
+#define WOWGDI_RGN_ARG_RIGHT   2
+#define WOWGDI_RGN_ARG_TOP     4
+#define WOWGDI_RGN_ARG_LEFT    6
 
 #define WOWGDI_SELECTCLIPRGN    0x002c   /* ord 44,  4 args                    */
-#define SCR_ARG_RGN     0
-#define SCR_ARG_HDC     2
+#define WOWGDI_SCR_ARG_RGN     0
+#define WOWGDI_SCR_ARG_HDC     2
 
 /* ── THE REST OF THE REGION API, AND THE TWO TEXT CALLS THAT GO WITH IT.
      (session 55) Every one of these is a Win32 function of the same name and
@@ -415,39 +415,39 @@
      parameter sits at the HIGHEST offset, because the block is the pushed
      arguments and the base is the last push. */
 #define WOWGDI_COMBINERGN       0x002f   /* ord 47,  8 args                    */
-#define CBR_ARG_MODE    0
-#define CBR_ARG_SRC2    2
-#define CBR_ARG_SRC1    4
-#define CBR_ARG_DEST    6
+#define WOWGDI_CBR_ARG_MODE    0
+#define WOWGDI_CBR_ARG_SRC2    2
+#define WOWGDI_CBR_ARG_SRC1    4
+#define WOWGDI_CBR_ARG_DEST    6
 
 #define WOWGDI_CREATERECTRGNIND 0x0041   /* ord 65,  4 args                    */
-#define CRRI_ARG_RECT   0                /* far pointer to a Win16 RECT        */
+#define WOWGDI_CRRI_ARG_RECT   0                /* far pointer to a Win16 RECT        */
 
 #define WOWGDI_SETRECTRGN       0x00ac   /* ord 172, 10 args                   */
-#define SRR_ARG_BOTTOM  0
-#define SRR_ARG_RIGHT   2
-#define SRR_ARG_TOP     4
-#define SRR_ARG_LEFT    6
-#define SRR_ARG_RGN     8
+#define WOWGDI_SRR_ARG_BOTTOM  0
+#define WOWGDI_SRR_ARG_RIGHT   2
+#define WOWGDI_SRR_ARG_TOP     4
+#define WOWGDI_SRR_ARG_LEFT    6
+#define WOWGDI_SRR_ARG_RGN     8
 
 #define WOWGDI_CREATEPOLYGONRGN 0x003f   /* ord 63,  8 args                    */
-#define CPR_ARG_MODE    0
-#define CPR_ARG_COUNT   2
-#define CPR_ARG_POINTS  4                /* far pointer to an array of POINT16 */
+#define WOWGDI_CPR_ARG_MODE    0
+#define WOWGDI_CPR_ARG_COUNT   2
+#define WOWGDI_CPR_ARG_POINTS  4                /* far pointer to an array of POINT16 */
 
 #define WOWGDI_GETCLIPBOX       0x004d   /* ord 77,  6 args                    */
-#define GCX_ARG_RECT    0                /* far pointer, written back          */
-#define GCX_ARG_HDC     4
+#define WOWGDI_GCX_ARG_RECT    0                /* far pointer, written back          */
+#define WOWGDI_GCX_ARG_HDC     4
 
 #define WOWGDI_GETTEXTFACE      0x005c   /* ord 92,  8 args                    */
-#define GTF_ARG_BUF     0                /* far pointer, written back          */
-#define GTF_ARG_COUNT   4
-#define GTF_ARG_HDC     6
+#define WOWGDI_GTF_ARG_BUF     0                /* far pointer, written back          */
+#define WOWGDI_GTF_ARG_COUNT   4
+#define WOWGDI_GTF_ARG_HDC     6
 
 #define WOWGDI_SETTEXTJUST      0x000a   /* ord 10,  6 args                    */
-#define STJ_ARG_COUNT   0
-#define STJ_ARG_EXTRA   2
-#define STJ_ARG_HDC     4
+#define WOWGDI_STJ_ARG_COUNT   0
+#define WOWGDI_STJ_ARG_EXTRA   2
+#define WOWGDI_STJ_ARG_HDC     4
 
 /* The three mapping-mode setters. All 6 args, all the same (hDC, x, y) block as
    SetWindowOrg, and all returning the PREVIOUS pair packed y:x in a DWORD. */
@@ -486,23 +486,23 @@
      follow. That is the `native16` trap again: **the run finds
      them, the static list does not.** */
 #define WOWGDI_CREATEPEN        0x003d   /* ord 61,  8 args (style, width, colour) */
-#define CP_ARG_COLOR    0                /* DWORD                                  */
-#define CP_ARG_WIDTH    4
-#define CP_ARG_STYLE    6
+#define WOWGDI_CP_ARG_COLOR    0                /* DWORD                                  */
+#define WOWGDI_CP_ARG_WIDTH    4
+#define WOWGDI_CP_ARG_STYLE    6
 
 #define WOWGDI_CREATEHATCHBRUSH 0x003a   /* ord 58,  6 args (index, colour)         */
-#define CH_ARG_COLOR    0                /* DWORD                                  */
-#define CH_ARG_INDEX    4
+#define WOWGDI_CH_ARG_COLOR    0                /* DWORD                                  */
+#define WOWGDI_CH_ARG_INDEX    4
 
 #define WOWGDI_SETBKMODE        0x0002   /* ord 2,   4 args -- MODE_ARG_* layout    */
 #define WOWGDI_SETMAPMODE       0x0003   /* ord 3,   4 args                         */
 #define WOWGDI_SETPOLYFILLMODE  0x0006   /* ord 6,   4 args                         */
 
 #define WOWGDI_SETPIXEL         0x001f   /* ord 31, 10 args                         */
-#define SP_ARG_COLOR    0                /* DWORD                                  */
-#define SP_ARG_Y        4
-#define SP_ARG_X        6
-#define SP_ARG_HDC      8
+#define WOWGDI_SP_ARG_COLOR    0                /* DWORD                                  */
+#define WOWGDI_SP_ARG_Y        4
+#define WOWGDI_SP_ARG_X        6
+#define WOWGDI_SP_ARG_HDC      8
 
 #define WOWGDI_POLYLINE         0x0025   /* ord 37,  8 args -- LDP_ARG_* layout     */
 
@@ -523,43 +523,43 @@
 
 /* ── ★★ THE SHELF, BATCH TWO: what MPLAYER and CHARMAP still want from GDI. ── */
 #define WOWGDI_INTERSECTCLIPRECT 0x0016
-#define ICR_ARG_BOTTOM   0
-#define ICR_ARG_RIGHT    2
-#define ICR_ARG_TOP      4
-#define ICR_ARG_LEFT     6
-#define ICR_ARG_HDC      8
+#define WOWGDI_ICR_ARG_BOTTOM   0
+#define WOWGDI_ICR_ARG_RIGHT    2
+#define WOWGDI_ICR_ARG_TOP      4
+#define WOWGDI_ICR_ARG_LEFT     6
+#define WOWGDI_ICR_ARG_HDC      8
 
 #define WOWGDI_RECTVISIBLE       0x0068
-#define RV_ARG_RECT      0
-#define RV_ARG_HDC       4
+#define WOWGDI_RV_ARG_RECT      0
+#define WOWGDI_RV_ARG_HDC       4
 
 /* CreateFont's fourteen parameters, LAST push first. CHARMAP's whole job is
    showing one face at a large size, so this is the call it lives or dies on. */
 #define WOWGDI_CREATEFONT        0x0038
-#define CF_ARG_FACE      0
-#define CF_ARG_PITCH     4
-#define CF_ARG_QUALITY   6
-#define CF_ARG_CLIPPREC  8
-#define CF_ARG_OUTPREC  10
-#define CF_ARG_CHARSET  12
-#define CF_ARG_STRIKE   14
-#define CF_ARG_UNDER    16
-#define CF_ARG_ITALIC   18
-#define CF_ARG_WEIGHT   20
-#define CF_ARG_ORIENT   22
-#define CF_ARG_ESCAPE   24
-#define CF_ARG_WIDTH    26
-#define CF_ARG_HEIGHT   28
+#define WOWGDI_CF_ARG_FACE      0
+#define WOWGDI_CF_ARG_PITCH     4
+#define WOWGDI_CF_ARG_QUALITY   6
+#define WOWGDI_CF_ARG_CLIPPREC  8
+#define WOWGDI_CF_ARG_OUTPREC  10
+#define WOWGDI_CF_ARG_CHARSET  12
+#define WOWGDI_CF_ARG_STRIKE   14
+#define WOWGDI_CF_ARG_UNDER    16
+#define WOWGDI_CF_ARG_ITALIC   18
+#define WOWGDI_CF_ARG_WEIGHT   20
+#define WOWGDI_CF_ARG_ORIENT   22
+#define WOWGDI_CF_ARG_ESCAPE   24
+#define WOWGDI_CF_ARG_WIDTH    26
+#define WOWGDI_CF_ARG_HEIGHT   28
 
 /* ⚠ GetCharWidth writes ONE WORD PER CHARACTER into the guest's buffer. Win32's
      writes an INT each; converting is not optional -- handing back 32-bit values
      would overrun the guest's array by a factor of two, silently, into whatever
      it declared next. */
 #define WOWGDI_GETCHARWIDTH      0x015e
-#define GCW_ARG_BUF      0
-#define GCW_ARG_LAST     4
-#define GCW_ARG_FIRST    6
-#define GCW_ARG_HDC      8
+#define WOWGDI_GCW_ARG_BUF      0
+#define WOWGDI_GCW_ARG_LAST     4
+#define WOWGDI_GCW_ARG_FIRST    6
+#define WOWGDI_GCW_ARG_HDC      8
 
 /* ── ★★ METAFILES: SOUNDREC's last three, and PACKAGER wants them too. ───────
      A metafile DC is a recording, not a surface: CreateMetaFile hands back a DC
@@ -573,32 +573,32 @@
      the common case, and passing "" instead would try to create a file called
      nothing in the current directory. */
 #define WOWGDI_CREATEMETAFILE   0x007d
-#define CMF_ARG_FILE     0
+#define WOWGDI_CMF_ARG_FILE     0
 #define WOWGDI_CLOSEMETAFILE    0x007e
 #define WOWGDI_DELETEMETAFILE   0x007f
 #define WOWGDI_COPYMETAFILE     0x0097
 /* s90 (#295): PlayMetaFile(hdc, hmf), GDI.123, 4 bytes reversed: +0 hmf, +2 hdc. */
 #define WOWGDI_PLAYMETAFILE     0x007b
-#define PMF_ARG_HMF      0
-#define PMF_ARG_HDC      2
+#define WOWGDI_PMF_ARG_HMF      0
+#define WOWGDI_PMF_ARG_HDC      2
 /* #295: EnumMetaFile(hdc, hmf, lpfn, lParam), GDI.175, 12 bytes (the inventory's
    thunk width), reversed: +0 lParam, +4 lpfn, +8 hmf, +10 hdc. A CALLBACK:
    int FAR PASCAL proc(HDC, HANDLETABLE FAR*, METARECORD FAR*, int nObj, LPARAM). */
 #define WOWGDI_ENUMMETAFILE     0x00af
-#define EMF_ARG_LPARAM   0
-#define EMF_ARG_PROC     4
-#define EMF_ARG_HMF      8
-#define EMF_ARG_HDC      10
+#define WOWGDI_EMF_ARG_LPARAM   0
+#define WOWGDI_EMF_ARG_PROC     4
+#define WOWGDI_EMF_ARG_HMF      8
+#define WOWGDI_EMF_ARG_HDC      10
 /* #295: PlayMetaFileRecord(hdc, lpht, lpmr, nHandles), GDI.176, 12 bytes,
    reversed: +0 nHandles, +2 lpmr, +6 lpht, +10 hdc. */
 #define WOWGDI_PLAYMETAFILEREC  0x00b0
-#define PMFR_ARG_NHANDLES 0
-#define PMFR_ARG_MR       2
-#define PMFR_ARG_HT       6
-#define PMFR_ARG_HDC      10
-#define MF1_ARG_H        0
-#define CPMF_ARG_FILE    0
-#define CPMF_ARG_HMF     4
+#define WOWGDI_PMFR_ARG_NHANDLES 0
+#define WOWGDI_PMFR_ARG_MR       2
+#define WOWGDI_PMFR_ARG_HT       6
+#define WOWGDI_PMFR_ARG_HDC      10
+#define WOWGDI_MF1_ARG_H        0
+#define WOWGDI_CPMF_ARG_FILE    0
+#define WOWGDI_CPMF_ARG_HMF     4
 
 #define WOWGDI_TEXTOUT          0x0021   /* ord 33,  12 args */
 /* ── ★★ ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
@@ -614,24 +614,24 @@
      Fabricating even spacing would be inventing a layout the program did not ask
      for; NULL means "use the font's own", which is what Win32 does too. */
 #define WOWGDI_EXTTEXTOUT       0x015f
-#define ETO_ARG_DX       0
-#define ETO_ARG_COUNT    4
-#define ETO_ARG_STR      6
-#define ETO_ARG_RECT    10
-#define ETO_ARG_OPTS    14
-#define ETO_ARG_Y       16
-#define ETO_ARG_X       18
-#define ETO_ARG_HDC     20
-#define TO_ARG_COUNT    0
-#define TO_ARG_STR      2                /* far */
-#define TO_ARG_Y        6
-#define TO_ARG_X        8
-#define TO_ARG_HDC     10
+#define WOWGDI_ETO_ARG_DX       0
+#define WOWGDI_ETO_ARG_COUNT    4
+#define WOWGDI_ETO_ARG_STR      6
+#define WOWGDI_ETO_ARG_RECT    10
+#define WOWGDI_ETO_ARG_OPTS    14
+#define WOWGDI_ETO_ARG_Y       16
+#define WOWGDI_ETO_ARG_X       18
+#define WOWGDI_ETO_ARG_HDC     20
+#define WOWGDI_TO_ARG_COUNT    0
+#define WOWGDI_TO_ARG_STR      2                /* far */
+#define WOWGDI_TO_ARG_Y        6
+#define WOWGDI_TO_ARG_X        8
+#define WOWGDI_TO_ARG_HDC     10
 
 #define WOWGDI_GETTEXTEXTENT    0x005b   /* ord 91,   8 args */
-#define TE_ARG_COUNT    0
-#define TE_ARG_STR      2                /* far */
-#define TE_ARG_HDC      6
+#define WOWGDI_TE_ARG_COUNT    0
+#define WOWGDI_TE_ARG_STR      2                /* far */
+#define WOWGDI_TE_ARG_HDC      6
 
 /* ── ★ 0x5d GetTextMetrics, and the Win16 TEXTMETRIC, CHECKED ON NOTEPAD. ─────
      Its fields are `short` where Win32's are `LONG`, in the same order (the
@@ -641,9 +641,9 @@
      wrong on screen if either offset were. That pins the first six fields and
      therefore the whole `short` prefix. Two independent uses, one layout. */
 #define WOWGDI_GETTEXTMETRICS   0x005d   /* ord 93,   6 args */
-#define TM_ARG_BUF      0                /* far */
-#define TM_ARG_HDC      4
-#define WOW16_TEXTMETRIC_CB  31
+#define WOWGDI_TM_ARG_BUF      0                /* far */
+#define WOWGDI_TM_ARG_HDC      4
+#define WOWGDI_TEXTMETRIC16_SIZE  31
 
 #define WOWGDI_SETTEXTALIGN     0x015a   /* ord 346,  4 args -- MODE_ARG_* layout */
 #define WOWGDI_CREATEFONTIND    0x0039   /* ord 57,   4 args (far LOGFONT)        */
@@ -657,9 +657,9 @@
      which is why they are the only thing it still needed. */
 #define WOWGDI_GETBITMAPBITS    0x004a
 #define WOWGDI_SETBITMAPBITS    0x006a
-#define BB2_ARG_BITS    0                /* far */
-#define BB2_ARG_COUNT   4                /* DWORD */
-#define BB2_ARG_HBM     8
+#define WOWGDI_BB2_ARG_BITS    0                /* far */
+#define WOWGDI_BB2_ARG_COUNT   4                /* DWORD */
+#define WOWGDI_BB2_ARG_HBM     8
 
 /* ── ★★★★★ THE DIB TRIO -- WHAT `File > Save As` DIES ON. ───────────────────
      A `BITMAPINFOHEADER` is 40 bytes and byte-identical in both worlds, and the
@@ -670,28 +670,28 @@
      SetDIBits/GetDIBits declare 18 bytes = 2+2+2+2+4+4+2 and StretchDIBits 32. */
 #define WOWGDI_SETDIBITS        0x01b8   /* ord 440, 18 args */
 #define WOWGDI_GETDIBITS        0x01b9   /* ord 441, 18 args */
-#define DIB_ARG_USAGE   0
-#define DIB_ARG_BMI     2                /* far */
-#define DIB_ARG_BITS    6                /* far */
-#define DIB_ARG_LINES  10
-#define DIB_ARG_START  12
-#define DIB_ARG_HBM    14
-#define DIB_ARG_HDC    16
+#define WOWGDI_DIB_ARG_USAGE   0
+#define WOWGDI_DIB_ARG_BMI     2                /* far */
+#define WOWGDI_DIB_ARG_BITS    6                /* far */
+#define WOWGDI_DIB_ARG_LINES  10
+#define WOWGDI_DIB_ARG_START  12
+#define WOWGDI_DIB_ARG_HBM    14
+#define WOWGDI_DIB_ARG_HDC    16
 
 #define WOWGDI_STRETCHDIBITS    0x01b7   /* ord 439, 32 args */
-#define SDI_ARG_ROP     0                /* DWORD */
-#define SDI_ARG_USAGE   4
-#define SDI_ARG_BMI     6                /* far */
-#define SDI_ARG_BITS   10                /* far */
-#define SDI_ARG_SRCH   14
-#define SDI_ARG_SRCW   16
-#define SDI_ARG_SRCY   18
-#define SDI_ARG_SRCX   20
-#define SDI_ARG_DSTH   22
-#define SDI_ARG_DSTW   24
-#define SDI_ARG_DSTY   26
-#define SDI_ARG_DSTX   28
-#define SDI_ARG_HDC    30
+#define WOWGDI_SDI_ARG_ROP     0                /* DWORD */
+#define WOWGDI_SDI_ARG_USAGE   4
+#define WOWGDI_SDI_ARG_BMI     6                /* far */
+#define WOWGDI_SDI_ARG_BITS   10                /* far */
+#define WOWGDI_SDI_ARG_SRCH   14
+#define WOWGDI_SDI_ARG_SRCW   16
+#define WOWGDI_SDI_ARG_SRCY   18
+#define WOWGDI_SDI_ARG_SRCX   20
+#define WOWGDI_SDI_ARG_DSTH   22
+#define WOWGDI_SDI_ARG_DSTW   24
+#define WOWGDI_SDI_ARG_DSTY   26
+#define WOWGDI_SDI_ARG_DSTX   28
+#define WOWGDI_SDI_ARG_HDC    30
 
 /* ── ★ MINESWEEPER'S TWO. It keeps its digits, mines and smiley faces as DIBs in
      its own resources and puts them on screen with these; nothing else it draws
@@ -699,29 +699,29 @@
    HBITMAP CreateDIBitmap(HDC, LPBITMAPINFOHEADER, DWORD dwInit, LPSTR lpbInit,
                           LPBITMAPINFO, UINT wUsage)                     = 20 */
 #define WOWGDI_CREATEDIBITMAP   0x01ba   /* ord 442, 20 args */
-#define CDIB_ARG_USAGE   0
-#define CDIB_ARG_BMI     2               /* far */
-#define CDIB_ARG_BITS    6               /* far */
-#define CDIB_ARG_INIT   10               /* DWORD */
-#define CDIB_ARG_BMIH   14               /* far */
-#define CDIB_ARG_HDC    18
+#define WOWGDI_CDIB_ARG_USAGE   0
+#define WOWGDI_CDIB_ARG_BMI     2               /* far */
+#define WOWGDI_CDIB_ARG_BITS    6               /* far */
+#define WOWGDI_CDIB_ARG_INIT   10               /* DWORD */
+#define WOWGDI_CDIB_ARG_BMIH   14               /* far */
+#define WOWGDI_CDIB_ARG_HDC    18
 
 /* int SetDIBitsToDevice(HDC, int xDest, int yDest, WORD wWidth, WORD wHeight,
                          int XSrc, int YSrc, UINT nStartScan, UINT nNumScans,
                          LPSTR lpBits, LPBITMAPINFO, UINT wUsage)        = 28 */
 #define WOWGDI_SETDIBITSTODEV   0x01bb   /* ord 443, 28 args */
-#define SDD_ARG_USAGE    0
-#define SDD_ARG_BMI      2               /* far */
-#define SDD_ARG_BITS     6               /* far */
-#define SDD_ARG_NSCANS  10
-#define SDD_ARG_START   12
-#define SDD_ARG_SRCY    14
-#define SDD_ARG_SRCX    16
-#define SDD_ARG_H       18
-#define SDD_ARG_W       20
-#define SDD_ARG_DSTY    22
-#define SDD_ARG_DSTX    24
-#define SDD_ARG_HDC     26
+#define WOWGDI_SDD_ARG_USAGE    0
+#define WOWGDI_SDD_ARG_BMI      2               /* far */
+#define WOWGDI_SDD_ARG_BITS     6               /* far */
+#define WOWGDI_SDD_ARG_NSCANS  10
+#define WOWGDI_SDD_ARG_START   12
+#define WOWGDI_SDD_ARG_SRCY    14
+#define WOWGDI_SDD_ARG_SRCX    16
+#define WOWGDI_SDD_ARG_H       18
+#define WOWGDI_SDD_ARG_W       20
+#define WOWGDI_SDD_ARG_DSTY    22
+#define WOWGDI_SDD_ARG_DSTX    24
+#define WOWGDI_SDD_ARG_HDC     26
 
 /* ── ★ int Escape(HDC, int nEscape, int nCount, LPSTR lpInData, LPSTR lpOut) = 14
      The device-driver back door, and on a SCREEN DC the honest answer to almost
@@ -733,12 +733,12 @@
      procedure that calls back into 16-bit code). This host has no printer DC to
      start one on, so what is NOT done is named here rather than half-built. */
 #define WOWGDI_ESCAPE           0x0026   /* ord 38, 14 args */
-#define ESC_ARG_OUT      0               /* far */
-#define ESC_ARG_IN       4               /* far */
-#define ESC_ARG_COUNT    8
-#define ESC_ARG_ESCAPE  10
-#define ESC_ARG_HDC     12
-#define ESC_QUERYESCSUPPORT 8            /* the one escape we can answer fully */
+#define WOWGDI_ESC_ARG_OUT      0               /* far */
+#define WOWGDI_ESC_ARG_IN       4               /* far */
+#define WOWGDI_ESC_ARG_COUNT    8
+#define WOWGDI_ESC_ARG_ESCAPE  10
+#define WOWGDI_ESC_ARG_HDC     12
+#define WOWGDI_ESC_QUERYESCSUPPORT 8            /* the one escape we can answer fully */
 
 /* ── HBITMAP CreateBitmapIndirect(LPBITMAP) = 4 ──────────────────────────────
      CreateBitmap's arguments, in a structure, and the structure is a Win16 one:
@@ -750,7 +750,7 @@
      read field by field rather than cast -- the same rule as every other shared
      structure in this host. */
 #define WOWGDI_CREATEBITMAPINDIRECT 0x0031   /* ord 49, 4 args */
-#define CBI_ARG_BITMAP   0               /* far */
+#define WOWGDI_CBI_ARG_BITMAP   0               /* far */
 #define CBI_OFF_WIDTH    2
 #define CBI_OFF_HEIGHT   4
 #define CBI_OFF_WBYTES   6
@@ -767,10 +767,10 @@
      two before the first character was measured. Converted per glyph in
      wowconv.h, where the battery can pin it. */
 #define WOWGDI_GETCHARABCWIDTHS 0x0133   /* ord 307, 10 args */
-#define ABCW_ARG_ABC     0               /* far */
-#define ABCW_ARG_LAST    4
-#define ABCW_ARG_FIRST   6
-#define ABCW_ARG_HDC     8
+#define WOWGDI_ABCW_ARG_ABC     0               /* far */
+#define WOWGDI_ABCW_ARG_LAST    4
+#define WOWGDI_ABCW_ARG_FIRST   6
+#define WOWGDI_ABCW_ARG_HDC     8
 
 /* ── UINT GetPaletteEntries(HPALETTE, UINT start, UINT n, LPPALETTEENTRY) = 10
      ★ PALETTEENTRY IS FOUR BYTES IN BOTH -- peRed, peGreen, peBlue, peFlags --
@@ -784,10 +784,10 @@
 #define WOWGDI_GETWINDOWEXT      0x0060  /* ord 96  */
 #define WOWGDI_GETBITMAPDIMENSION 0x00a2 /* ord 162 */
 #define WOWGDI_GETPALETTEENTRIES 0x016b  /* ord 363, 10 args */
-#define GPE_ARG_ENTRIES  0               /* far */
-#define GPE_ARG_COUNT    4
-#define GPE_ARG_START    6
-#define GPE_ARG_HPAL     8
+#define WOWGDI_GPE_ARG_ENTRIES  0               /* far */
+#define WOWGDI_GPE_ARG_COUNT    4
+#define WOWGDI_GPE_ARG_START    6
+#define WOWGDI_GPE_ARG_HPAL     8
 
 /* ── ★ void LineDDA(int x1, int y1, int x2, int y2, FARPROC, LPARAM) = 16 ────
      The only enumeration in GDI whose callback takes NO STRUCTURE: it is called
@@ -815,20 +815,20 @@
    LOGBRUSH {UINT style; COLORREF color; int hatch} = 8 -- UINT/int/POINT being
    16-bit is the whole difference from Win32's. */
 #define WOWGDI_ENUMOBJECTS      0x0047
-#define EOB_ARG_LPARAM  0
-#define EOB_ARG_PROC    4
-#define EOB_ARG_TYPE    8
-#define EOB_ARG_HDC     10
-#define EFF_ARG_LPARAM  0
-#define EFF_ARG_PROC    4
-#define EFF_ARG_FAMILY  8
-#define EFF_ARG_HDC     12
-#define LDDA_ARG_DATA    0               /* DWORD */
-#define LDDA_ARG_PROC    4               /* far   */
-#define LDDA_ARG_Y2      8
-#define LDDA_ARG_X2     10
-#define LDDA_ARG_Y1     12
-#define LDDA_ARG_X1     14
+#define WOWGDI_EOB_ARG_LPARAM  0
+#define WOWGDI_EOB_ARG_PROC    4
+#define WOWGDI_EOB_ARG_TYPE    8
+#define WOWGDI_EOB_ARG_HDC     10
+#define WOWGDI_EFF_ARG_LPARAM  0
+#define WOWGDI_EFF_ARG_PROC    4
+#define WOWGDI_EFF_ARG_FAMILY  8
+#define WOWGDI_EFF_ARG_HDC     12
+#define WOWGDI_LDDA_ARG_DATA    0               /* DWORD */
+#define WOWGDI_LDDA_ARG_PROC    4               /* far   */
+#define WOWGDI_LDDA_ARG_Y2      8
+#define WOWGDI_LDDA_ARG_X2     10
+#define WOWGDI_LDDA_ARG_Y1     12
+#define WOWGDI_LDDA_ARG_X1     14
 
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
@@ -844,9 +844,9 @@
 
 /* A little-endian WORD out of guest memory. wowuser.h has the same helper for
    the USER side; this file is included independently, so it has its own. */
-static WORD wowgdi_peek(const volatile BYTE *p, int off)
+static WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
 {
-    return (WORD)(p[off] | (p[off + 1] << 8));
+    return (WORD)(bytes[offset] | (bytes[offset + 1] << 8));
 }
 
 /* ── ★★ THREE KINDS, NOT TWO -- AND THE THIRD IS WHY THIS IS NOT A BOOLEAN. ──
@@ -871,21 +871,21 @@ static WORD wowgdi_peek(const volatile BYTE *p, int off)
    still worth seeing, and it costs one value in this enum to be able to say so. */
 #define WOWGDI_KIND_STOCK  3
 
-typedef struct { WORD h; HGDIOBJ o; int kind; } wowgdi_obj_t;
-static wowgdi_obj_t g_wg_obj[WOWGDI_MAX];
-static int          g_wg_nobj = 0;
+typedef struct _WOWGDI_OBJECT { WORD Handle16; HGDIOBJ Object; INT Kind; } WOWGDI_OBJECT;
+static WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
+static INT          g_WowGdiObjectCount = 0;
 
 /* One token per object. `kind` is kept because DeleteDC, DeleteObject and
    ReleaseDC are three different calls with three different rules, and handing an
    object to the wrong one is a defect this map can catch instead of passing on
    to Win32. */
-static WORD wowgdi_h16(HGDIOBJ o, int kind)
+static WORD WowGdiH16(HGDIOBJ object, INT kind)
 {
-    int i;
-    if (!o) return 0;
-    for (i = 0; i < g_wg_nobj; ++i)
-        if (g_wg_obj[i].o == o) {
-            if (g_wg_obj[i].kind == kind) return g_wg_obj[i].h;
+    INT index;
+    if (!object) return 0;
+    for (index = 0; index < g_WowGdiObjectCount; ++index)
+        if (g_WowGdiObjects[index].Object == object) {
+            if (g_WowGdiObjects[index].Kind == kind) return g_WowGdiObjects[index].Handle16;
             /* ── ★★★★★ SAME ADDRESS, DIFFERENT KIND: THE ENTRY IS STALE, AND
                  THIS WAS SOLITAIRE'S BLACK CARDS. Win32 RECYCLES HGDIOBJ VALUES.
                  A memory DC is deleted, a bitmap is created, and the OS hands
@@ -906,30 +906,30 @@ static WORD wowgdi_h16(HGDIOBJ o, int kind)
                ⚠ The kind is not decoration: it is the only thing that can tell a
                  recycled handle from the object that used to live there. Retire
                  the dead entry and mint a fresh token below. */
-            g_wg_obj[i].o = NULL;
-            g_wg_obj[i].h = 0;
+            g_WowGdiObjects[index].Object = NULL;
+            g_WowGdiObjects[index].Handle16 = 0;
         }
-    for (i = 0; i < g_wg_nobj; ++i)                    /* reuse a freed slot */
-        if (!g_wg_obj[i].h && !g_wg_obj[i].o) break;
-    if (i == g_wg_nobj) {
-        if (g_wg_nobj >= WOWGDI_MAX) return 0;
-        i = g_wg_nobj++;
+    for (index = 0; index < g_WowGdiObjectCount; ++index)                    /* reuse a freed slot */
+        if (!g_WowGdiObjects[index].Handle16 && !g_WowGdiObjects[index].Object) break;
+    if (index == g_WowGdiObjectCount) {
+        if (g_WowGdiObjectCount >= WOWGDI_MAX) return 0;
+        index = g_WowGdiObjectCount++;
     }
-    g_wg_obj[i].o = o;
-    g_wg_obj[i].kind = kind;
-    g_wg_obj[i].h = (WORD)(WOWGDI_BASE + i * WOWGDI_STEP);
-    return g_wg_obj[i].h;
+    g_WowGdiObjects[index].Object = object;
+    g_WowGdiObjects[index].Kind = kind;
+    g_WowGdiObjects[index].Handle16 = (WORD)(WOWGDI_BASE + index * WOWGDI_STEP);
+    return g_WowGdiObjects[index].Handle16;
 }
 
-static HGDIOBJ wowgdi_h32(WORD h, int *kind)
+static HGDIOBJ WowGdiH32(WORD handle16, PINT kind)
 {
-    int i;
+    INT index;
     if (kind) *kind = -1;
-    if (!h) return NULL;
-    for (i = 0; i < g_wg_nobj; ++i)
-        if (g_wg_obj[i].h == h) {
-            if (kind) *kind = g_wg_obj[i].kind;
-            return g_wg_obj[i].o;
+    if (!handle16) return NULL;
+    for (index = 0; index < g_WowGdiObjectCount; ++index)
+        if (g_WowGdiObjects[index].Handle16 == handle16) {
+            if (kind) *kind = g_WowGdiObjects[index].Kind;
+            return g_WowGdiObjects[index].Object;
         }
     return NULL;
 }
@@ -945,11 +945,11 @@ static HGDIOBJ wowgdi_h32(WORD h, int *kind)
    after a reuse, name a DIFFERENT object instead of failing. That is exactly
    what Win32 does with its own handles, so a guest that does it is already
    broken on real Windows. */
-static void wowgdi_forget(WORD h)
+static VOID WowGdiForget(WORD handle16)
 {
-    int i;
-    for (i = 0; i < g_wg_nobj; ++i)
-        if (g_wg_obj[i].h == h) { g_wg_obj[i].o = NULL; g_wg_obj[i].h = 0; return; }
+    INT index;
+    for (index = 0; index < g_WowGdiObjectCount; ++index)
+        if (g_WowGdiObjects[index].Handle16 == handle16) { g_WowGdiObjects[index].Object = NULL; g_WowGdiObjects[index].Handle16 = 0; return; }
 }
 
 /*
@@ -961,75 +961,75 @@ static void wowgdi_forget(WORD h)
    LOGFONT16 is LOGFONT with 16-bit ints (18 bytes + a 32-byte face); TEXTMETRIC16 is
    eight ints, nine bytes, three ints (31); NEWTEXTMETRIC16 adds ntmFlags (DWORD),
    ntmSizeEM, ntmCellHeight, ntmAvgWidth (41). */
-static void wowgdi_put16(BYTE *b, int off, LONG v) { b[off] = (BYTE)v; b[off + 1] = (BYTE)(v >> 8); }
+static VOID WowGdiPut16(PBYTE bytes, INT offset, LONG value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> 8); }
 /* s90: EnumFontsA hands a LOGFONT, not an ENUMLOGFONT -- the full name and style
    past it are not ours to read, so this says not to. */
-static int g_wg_font_plain;
-static int CALLBACK wowgdi_font_collect(const LOGFONTA *lf, const TEXTMETRICA *tm,
+static INT g_WowGdiFontIsPlain;
+static INT CALLBACK WowGdiFontCollect(const LOGFONTA *logFont, const TEXTMETRICA *textMetric,
                                         DWORD type, LPARAM unused)
 {
-    const ENUMLOGFONTA *elf = (const ENUMLOGFONTA *)lf;
-    const NEWTEXTMETRICA *ntm = (const NEWTEXTMETRICA *)tm;
-    WOWENUM_FONT *e;
-    BYTE *b, *n;
-    int i;
-    (void)unused;
+    const ENUMLOGFONTA *enumLogFont = (const ENUMLOGFONTA *)logFont;
+    const NEWTEXTMETRICA *newTextMetric = (const NEWTEXTMETRICA *)textMetric;
+    PWOWENUM_FONT entry;
+    PBYTE blob, metrics;
+    INT index;
+    (VOID)unused;
     if (g_WowEnumFontCount >= WOWENUM_MAXFONT) return 0;
-    e = &g_WowEnumFonts[g_WowEnumFontCount++];
-    for (i = 0; i < (int)sizeof e->Blob; ++i) e->Blob[i] = 0;
-    b = e->Blob;
-    wowgdi_put16(b, 0, lf->lfHeight);  wowgdi_put16(b, 2, lf->lfWidth);
-    wowgdi_put16(b, 4, lf->lfEscapement); wowgdi_put16(b, 6, lf->lfOrientation);
-    wowgdi_put16(b, 8, lf->lfWeight);
-    b[10] = lf->lfItalic; b[11] = lf->lfUnderline; b[12] = lf->lfStrikeOut;
-    b[13] = lf->lfCharSet; b[14] = lf->lfOutPrecision; b[15] = lf->lfClipPrecision;
-    b[16] = lf->lfQuality; b[17] = lf->lfPitchAndFamily;
-    for (i = 0; i < 31 && lf->lfFaceName[i]; ++i) b[18 + i] = (BYTE)lf->lfFaceName[i];
-    if (!g_wg_font_plain) {
-        for (i = 0; i < 63 && elf->elfFullName[i]; ++i) b[50 + i] = elf->elfFullName[i];
-        for (i = 0; i < 31 && elf->elfStyle[i]; ++i) b[114 + i] = elf->elfStyle[i];
+    entry = &g_WowEnumFonts[g_WowEnumFontCount++];
+    for (index = 0; index < (INT)sizeof entry->Blob; ++index) entry->Blob[index] = 0;
+    blob = entry->Blob;
+    WowGdiPut16(blob, 0, logFont->lfHeight);  WowGdiPut16(blob, 2, logFont->lfWidth);
+    WowGdiPut16(blob, 4, logFont->lfEscapement); WowGdiPut16(blob, 6, logFont->lfOrientation);
+    WowGdiPut16(blob, 8, logFont->lfWeight);
+    blob[10] = logFont->lfItalic; blob[11] = logFont->lfUnderline; blob[12] = logFont->lfStrikeOut;
+    blob[13] = logFont->lfCharSet; blob[14] = logFont->lfOutPrecision; blob[15] = logFont->lfClipPrecision;
+    blob[16] = logFont->lfQuality; blob[17] = logFont->lfPitchAndFamily;
+    for (index = 0; index < 31 && logFont->lfFaceName[index]; ++index) blob[18 + index] = (BYTE)logFont->lfFaceName[index];
+    if (!g_WowGdiFontIsPlain) {
+        for (index = 0; index < 63 && enumLogFont->elfFullName[index]; ++index) blob[50 + index] = enumLogFont->elfFullName[index];
+        for (index = 0; index < 31 && enumLogFont->elfStyle[index]; ++index) blob[114 + index] = enumLogFont->elfStyle[index];
     }
-    n = b + WOWENUM_ELF16;
-    wowgdi_put16(n, 0, tm->tmHeight);  wowgdi_put16(n, 2, tm->tmAscent);
-    wowgdi_put16(n, 4, tm->tmDescent); wowgdi_put16(n, 6, tm->tmInternalLeading);
-    wowgdi_put16(n, 8, tm->tmExternalLeading); wowgdi_put16(n, 10, tm->tmAveCharWidth);
-    wowgdi_put16(n, 12, tm->tmMaxCharWidth); wowgdi_put16(n, 14, tm->tmWeight);
-    n[16] = tm->tmItalic; n[17] = tm->tmUnderlined; n[18] = tm->tmStruckOut;
-    n[19] = (BYTE)tm->tmFirstChar; n[20] = (BYTE)tm->tmLastChar;
-    n[21] = (BYTE)tm->tmDefaultChar; n[22] = (BYTE)tm->tmBreakChar;
-    n[23] = tm->tmPitchAndFamily; n[24] = tm->tmCharSet;
-    wowgdi_put16(n, 25, tm->tmOverhang); wowgdi_put16(n, 27, tm->tmDigitizedAspectX);
-    wowgdi_put16(n, 29, tm->tmDigitizedAspectY);
-    if ((type & TRUETYPE_FONTTYPE) && !g_wg_font_plain) { /* the NEW part: TrueType's */
-        n[31] = (BYTE)ntm->ntmFlags; n[32] = (BYTE)(ntm->ntmFlags >> 8);
-        n[33] = (BYTE)(ntm->ntmFlags >> 16); n[34] = (BYTE)(ntm->ntmFlags >> 24);
-        wowgdi_put16(n, 35, (LONG)ntm->ntmSizeEM); wowgdi_put16(n, 37, (LONG)ntm->ntmCellHeight);
-        wowgdi_put16(n, 39, (LONG)ntm->ntmAvgWidth);
+    metrics = blob + WOWENUM_ELF16;
+    WowGdiPut16(metrics, 0, textMetric->tmHeight);  WowGdiPut16(metrics, 2, textMetric->tmAscent);
+    WowGdiPut16(metrics, 4, textMetric->tmDescent); WowGdiPut16(metrics, 6, textMetric->tmInternalLeading);
+    WowGdiPut16(metrics, 8, textMetric->tmExternalLeading); WowGdiPut16(metrics, 10, textMetric->tmAveCharWidth);
+    WowGdiPut16(metrics, 12, textMetric->tmMaxCharWidth); WowGdiPut16(metrics, 14, textMetric->tmWeight);
+    metrics[16] = textMetric->tmItalic; metrics[17] = textMetric->tmUnderlined; metrics[18] = textMetric->tmStruckOut;
+    metrics[19] = (BYTE)textMetric->tmFirstChar; metrics[20] = (BYTE)textMetric->tmLastChar;
+    metrics[21] = (BYTE)textMetric->tmDefaultChar; metrics[22] = (BYTE)textMetric->tmBreakChar;
+    metrics[23] = textMetric->tmPitchAndFamily; metrics[24] = textMetric->tmCharSet;
+    WowGdiPut16(metrics, 25, textMetric->tmOverhang); WowGdiPut16(metrics, 27, textMetric->tmDigitizedAspectX);
+    WowGdiPut16(metrics, 29, textMetric->tmDigitizedAspectY);
+    if ((type & TRUETYPE_FONTTYPE) && !g_WowGdiFontIsPlain) { /* the NEW part: TrueType's */
+        metrics[31] = (BYTE)newTextMetric->ntmFlags; metrics[32] = (BYTE)(newTextMetric->ntmFlags >> 8);
+        metrics[33] = (BYTE)(newTextMetric->ntmFlags >> 16); metrics[34] = (BYTE)(newTextMetric->ntmFlags >> 24);
+        WowGdiPut16(metrics, 35, (LONG)newTextMetric->ntmSizeEM); WowGdiPut16(metrics, 37, (LONG)newTextMetric->ntmCellHeight);
+        WowGdiPut16(metrics, 39, (LONG)newTextMetric->ntmAvgWidth);
     }
-    e->FontType = (WORD)type;
+    entry->FontType = (WORD)type;
     return 1;
 }
 
 /* s90: one Win32 pen/brush -> LOGPEN16 (10) / LOGBRUSH16 (8), into g_WowEnumFonts[]. */
-static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
+static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
 {
-    BYTE *b;
-    int i;
+    PBYTE blob;
+    INT index;
     if (g_WowEnumFontCount >= WOWENUM_MAXFONT) return 0;
-    b = g_WowEnumFonts[g_WowEnumFontCount].Blob;
-    for (i = 0; i < 16; ++i) b[i] = 0;
+    blob = g_WowEnumFonts[g_WowEnumFontCount].Blob;
+    for (index = 0; index < 16; ++index) blob[index] = 0;
     if (type == OBJ_PEN) {
-        const LOGPEN *lp = (const LOGPEN *)lo;
-        wowgdi_put16(b, 0, (LONG)lp->lopnStyle);
-        wowgdi_put16(b, 2, lp->lopnWidth.x); wowgdi_put16(b, 4, lp->lopnWidth.y);
-        wowgdi_put16(b, 6, (LONG)(lp->lopnColor & 0xFFFF));
-        wowgdi_put16(b, 8, (LONG)(lp->lopnColor >> 16));
+        const LOGPEN *logPen = (const LOGPEN *)logObject;
+        WowGdiPut16(blob, 0, (LONG)logPen->lopnStyle);
+        WowGdiPut16(blob, 2, logPen->lopnWidth.x); WowGdiPut16(blob, 4, logPen->lopnWidth.y);
+        WowGdiPut16(blob, 6, (LONG)(logPen->lopnColor & 0xFFFF));
+        WowGdiPut16(blob, 8, (LONG)(logPen->lopnColor >> 16));
     } else {
-        const LOGBRUSH *lb = (const LOGBRUSH *)lo;
-        wowgdi_put16(b, 0, (LONG)lb->lbStyle);
-        wowgdi_put16(b, 2, (LONG)(lb->lbColor & 0xFFFF));
-        wowgdi_put16(b, 4, (LONG)(lb->lbColor >> 16));
-        wowgdi_put16(b, 6, (LONG)lb->lbHatch);
+        const LOGBRUSH *logBrush = (const LOGBRUSH *)logObject;
+        WowGdiPut16(blob, 0, (LONG)logBrush->lbStyle);
+        WowGdiPut16(blob, 2, (LONG)(logBrush->lbColor & 0xFFFF));
+        WowGdiPut16(blob, 4, (LONG)(logBrush->lbColor >> 16));
+        WowGdiPut16(blob, 6, (LONG)logBrush->lbHatch);
     }
     g_WowEnumFonts[g_WowEnumFontCount].FontType = (WORD)type;
     ++g_WowEnumFontCount;
@@ -1047,7 +1047,7 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
        blob   = [ the record, maybe truncated ][ WORD token[nObj] ]
        lpmr   -> the record,   lpht -> the table (a second pointer into the blob)
        after the callback returns, the table is READ BACK out of the guest stack
-       into g_wmf.tok[] -- before anything else runs on that stack -- and the next
+       into g_WowGdiMetafile.tok[] -- before anything else runs on that stack -- and the next
        record's blob starts from it.
      So whatever wrote the table -- our PlayMetaFileRecord, or the guest itself --
      is what the next record sees, which is what one persistent block gives.
@@ -1074,105 +1074,105 @@ static int CALLBACK wowgdi_obj_collect(LPVOID lo, LPARAM type)
      makes 5 calls for a 5-record metafile, the last one 041B (Rectangle); ours made 6
      with 0000 last. Wine had it right. */
 #define WOWMF_PASS_EOF 0
-typedef struct {
-    int     active;
-    BYTE   *bits;               /* GetMetaFileBitsEx snapshot, HeapAlloc'd       */
-    DWORD   len, end, off;      /* bytes; the walk's bound; the next record       */
-    unsigned nobj;              /* mtNoObjects = the callback's nObj              */
-    WORD    tok[WOWMF_MAXOBJ];  /* the persistent HANDLETABLE, as tokens          */
-    WORD    hdc16;
-    HDC     dc;                 /* NULL when the guest's hdc is not one of ours   */
-    HGDIOBJ pen0, brush0, font0;/* re-selected before the table is deleted        */
-    DWORD   tbl_lin, rec_lin;   /* where the last callback's copies are (host lin)*/
-    DWORD   rec_off, rec_bytes; /* the record in flight, in `bits`               */
-    int     truncated;          /* ...and whether its stack copy is cut short     */
-    DWORD   records;
-} wowgdi_mf_t;
-static wowgdi_mf_t g_wmf;
-static BYTE        g_wmf_blob[WOWCALL_MAX_BLOB];
+typedef struct _WOWGDI_METAFILE {
+    INT     IsActive;
+    PBYTE Bits;               /* GetMetaFileBitsEx snapshot, HeapAlloc'd       */
+    DWORD   Length, End, Offset;      /* bytes; the walk's bound; the next record       */
+    UINT ObjectCount;              /* mtNoObjects = the callback's nObj              */
+    WORD    Tokens[WOWMF_MAXOBJ];  /* the persistent HANDLETABLE, as tokens          */
+    WORD    Dc16;
+    HDC     Dc;                 /* NULL when the guest's hdc is not one of ours   */
+    HGDIOBJ OriginalPen, OriginalBrush, OriginalFont;/* re-selected before the table is deleted        */
+    DWORD   TableLinear, RecordLinear;   /* where the last callback's copies are (host lin)*/
+    DWORD   RecordOffset, RecordBytes; /* the record in flight, in `Bits`               */
+    INT     IsTruncated;          /* ...and whether its stack copy is cut short     */
+    DWORD   Records;
+} WOWGDI_METAFILE, *PWOWGDI_METAFILE;
+static WOWGDI_METAFILE g_WowGdiMetafile;
+static BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
 /* One record as the guest handed it to PlayMetaFileRecord. A 16:16 pointer reaches
    at most 64 KB past its offset, so this is the largest a record can be without a
    huge pointer -- and a larger one is refused, not wrapped. */
-static BYTE        g_wmf_rec[0x10000];
-static HGDIOBJ     g_wmf_ht[WOWMF_MAXOBJ];
+static BYTE        g_WowGdiMetafileRecord[0x10000];
+static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
 
 /* After a callback: what the guest's table says now. Only 0 and tokens that name
    an object (not a DC) are believed; anything else keeps the previous entry and is
    counted, so the caller can say so. */
-static int wowgdi_mf_readback(void)
+static INT WowGdiMetafileReadBack(VOID)
 {
-    unsigned i;
-    int bad = 0;
-    if (!g_wmf.active || !g_wmf.tbl_lin) return 0;
-    for (i = 0; i < g_wmf.nobj; ++i) {
-        WORD t = wowgdi_peek((const volatile BYTE *)(ULONG_PTR)g_wmf.tbl_lin, (int)(i * 2));
-        int  kd = -1;
-        if (t == g_wmf.tok[i]) continue;
-        if (!t || (wowgdi_h32(t, &kd) && kd != WOWGDI_KIND_DC && kd != WOWGDI_KIND_WINDC))
-            g_wmf.tok[i] = t;
-        else ++bad;
+    UINT index;
+    INT badCount = 0;
+    if (!g_WowGdiMetafile.IsActive || !g_WowGdiMetafile.TableLinear) return 0;
+    for (index = 0; index < g_WowGdiMetafile.ObjectCount; ++index) {
+        WORD token = WowGdiPeek((const volatile BYTE *)(ULONG_PTR)g_WowGdiMetafile.TableLinear, (INT)(index * 2));
+        INT  kind = -1;
+        if (token == g_WowGdiMetafile.Tokens[index]) continue;
+        if (!token || (WowGdiH32(token, &kind) && kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
+            g_WowGdiMetafile.Tokens[index] = token;
+        else ++badCount;
     }
-    g_wmf.tbl_lin = 0;
-    return bad;
+    g_WowGdiMetafile.TableLinear = 0;
+    return badCount;
 }
 
 /* The end of an enumeration, however it ended (complete, stopped, refused). */
-static void wowgdi_mf_end(void)
+static VOID WowGdiMetafileEnd(VOID)
 {
-    unsigned i;
-    if (!g_wmf.active) return;
-    if (g_wmf.dc) {
-        if (g_wmf.pen0)   SelectObject(g_wmf.dc, g_wmf.pen0);
-        if (g_wmf.brush0) SelectObject(g_wmf.dc, g_wmf.brush0);
-        if (g_wmf.font0)  SelectObject(g_wmf.dc, g_wmf.font0);
+    UINT index;
+    if (!g_WowGdiMetafile.IsActive) return;
+    if (g_WowGdiMetafile.Dc) {
+        if (g_WowGdiMetafile.OriginalPen)   SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalPen);
+        if (g_WowGdiMetafile.OriginalBrush) SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalBrush);
+        if (g_WowGdiMetafile.OriginalFont)  SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalFont);
     }
-    for (i = 0; i < g_wmf.nobj; ++i) {
-        int kd = -1;
-        HGDIOBJ o = g_wmf.tok[i] ? wowgdi_h32(g_wmf.tok[i], &kd) : NULL;
-        if (o && kd == WOWGDI_KIND_OBJ) { DeleteObject(o); wowgdi_forget(g_wmf.tok[i]); }
-        g_wmf.tok[i] = 0;
+    for (index = 0; index < g_WowGdiMetafile.ObjectCount; ++index) {
+        INT kind = -1;
+        HGDIOBJ object = g_WowGdiMetafile.Tokens[index] ? WowGdiH32(g_WowGdiMetafile.Tokens[index], &kind) : NULL;
+        if (object && kind == WOWGDI_KIND_OBJ) { DeleteObject(object); WowGdiForget(g_WowGdiMetafile.Tokens[index]); }
+        g_WowGdiMetafile.Tokens[index] = 0;
     }
-    if (g_wmf.bits) HeapFree(GetProcessHeap(), 0, g_wmf.bits);
-    g_wmf.bits = NULL;
-    g_wmf.active = 0;
-    g_wmf.tbl_lin = g_wmf.rec_lin = 0;
+    if (g_WowGdiMetafile.Bits) HeapFree(GetProcessHeap(), 0, g_WowGdiMetafile.Bits);
+    g_WowGdiMetafile.Bits = NULL;
+    g_WowGdiMetafile.IsActive = 0;
+    g_WowGdiMetafile.TableLinear = g_WowGdiMetafile.RecordLinear = 0;
 }
 
 /* The next record's blob, at most `room` bytes. Returns 0 at the end of the walk
    (or at a malformed record, which ends it the same way -- logged by the caller
    from *func == 0xFFFF). *tbloff = where the table starts in the blob. */
-static int wowgdi_mf_next(int room, int *blobn, int *tbloff, unsigned *func)
+static INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *function)
 {
-    unsigned long rb = 0;
-    unsigned fn = 0;
-    int tb = (int)(g_wmf.nobj ? g_wmf.nobj : 1) * 2;    /* lpht always points at
+    unsigned long recordBytes = 0;
+    UINT recordFunction = 0;
+    INT tableBytes = (INT)(g_WowGdiMetafile.ObjectCount ? g_WowGdiMetafile.ObjectCount : 1) * 2;    /* lpht always points at
                                                            something, even nObj 0 */
-    int copy, i;
-    *func = 0;
-    if (!g_wmf.active || g_wmf.off >= g_wmf.end) return 0;
-    if (!WowConvMetafileRecord(g_wmf.bits, g_wmf.end, g_wmf.off, &rb, &fn)) {
-        *func = 0xFFFF;
+    INT copyBytes, index;
+    *function = 0;
+    if (!g_WowGdiMetafile.IsActive || g_WowGdiMetafile.Offset >= g_WowGdiMetafile.End) return 0;
+    if (!WowConvMetafileRecord(g_WowGdiMetafile.Bits, g_WowGdiMetafile.End, g_WowGdiMetafile.Offset, &recordBytes, &recordFunction)) {
+        *function = 0xFFFF;
         return 0;
     }
-    if (fn == 0 && !WOWMF_PASS_EOF) return 0;
-    if (room < tb + WOWCONV_MF_RECHDR) { *func = 0xFFFE; return 0; }
-    copy = (int)rb;
-    g_wmf.truncated = 0;
-    if (copy > room - tb) { copy = (room - tb) & ~1; g_wmf.truncated = 1; }
-    for (i = 0; i < copy; ++i) g_wmf_blob[i] = g_wmf.bits[g_wmf.off + (DWORD)i];
-    for (i = 0; i < (int)g_wmf.nobj; ++i) wowgdi_put16(g_wmf_blob, copy + i * 2, g_wmf.tok[i]);
-    if (!g_wmf.nobj) wowgdi_put16(g_wmf_blob, copy, 0);
-    g_wmf.rec_off = g_wmf.off;
-    g_wmf.rec_bytes = (DWORD)rb;
-    g_wmf.off = (fn == 0) ? g_wmf.end : g_wmf.off + (DWORD)rb;    /* EOF is last */
-    ++g_wmf.records;
-    *blobn = copy + tb;
-    *tbloff = copy;
-    *func = fn;
+    if (recordFunction == 0 && !WOWMF_PASS_EOF) return 0;
+    if (room < tableBytes + WOWCONV_MF_RECHDR) { *function = 0xFFFE; return 0; }
+    copyBytes = (INT)recordBytes;
+    g_WowGdiMetafile.IsTruncated = 0;
+    if (copyBytes > room - tableBytes) { copyBytes = (room - tableBytes) & ~1; g_WowGdiMetafile.IsTruncated = 1; }
+    for (index = 0; index < copyBytes; ++index) g_WowGdiMetafileBlob[index] = g_WowGdiMetafile.Bits[g_WowGdiMetafile.Offset + (DWORD)index];
+    for (index = 0; index < (INT)g_WowGdiMetafile.ObjectCount; ++index) WowGdiPut16(g_WowGdiMetafileBlob, copyBytes + index * 2, g_WowGdiMetafile.Tokens[index]);
+    if (!g_WowGdiMetafile.ObjectCount) WowGdiPut16(g_WowGdiMetafileBlob, copyBytes, 0);
+    g_WowGdiMetafile.RecordOffset = g_WowGdiMetafile.Offset;
+    g_WowGdiMetafile.RecordBytes = (DWORD)recordBytes;
+    g_WowGdiMetafile.Offset = (recordFunction == 0) ? g_WowGdiMetafile.End : g_WowGdiMetafile.Offset + (DWORD)recordBytes;    /* EOF is last */
+    ++g_WowGdiMetafile.Records;
+    *blobLength = copyBytes + tableBytes;
+    *tableOffset = copyBytes;
+    *function = recordFunction;
     return 1;
 }
 
-static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
+static INT WowGdiCall(PWOW32_FRAME f, PSTR note, INT notecap)
 {
     if (notecap) note[0] = 0;
     switch (f->Id) {
@@ -1185,12 +1185,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          are logged on every call, and a guest whose arithmetic looks wrong can be
          checked against what it was actually told. */
     case WOWGDI_GETDEVICECAPS: {
-        WORD hdc = Wow32ArgWord(f, GDC_ARG_HDC);
-        WORD idx = Wow32ArgWord(f, GDC_ARG_INDEX);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int k = 0, v;
-        int isdc = (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_GDC_ARG_HDC);
+        WORD idx = Wow32ArgWord(f, WOWGDI_GDC_ARG_INDEX);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT k = 0, v;
+        INT isdc = (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC);
         WowNotePut(note, notecap, &k, "GetDeviceCaps(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", 0x");
@@ -1203,7 +1203,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        v = GetDeviceCaps((HDC)o, (int)idx);
+        v = GetDeviceCaps((HDC)o, (INT)idx);
 
         /* ── ★★★★★ NUMCOLORS: -1 IS A Win32 SENTINEL AND NO Win16 PROGRAM HAS
              EVER SEEN ONE. (session 51 -- MINESWEEPER RENDERED IN BLACK AND
@@ -1234,7 +1234,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
              16-bit caller. What was refuted was a hypothesis about Paint, not
              the value. ⇒ Re-run Paint after touching this. */
         if (idx == WOWGDI_CAP_NUMCOLORS && v < 0) {
-            int bpp = GetDeviceCaps((HDC)o, BITSPIXEL)
+            INT bpp = GetDeviceCaps((HDC)o, BITSPIXEL)
                     * GetDeviceCaps((HDC)o, PLANES);
             v = WowConvNumColors(bpp);       /* ★ tested in wow_test.c part 3 */
             WowNotePut(note, notecap, &k, " [NUMCOLORS -1 -> ");
@@ -1257,19 +1257,19 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          blit could not work before the producers went in: the source is almost
          always a memory DC with the toolbox bitmap selected into it. */
     case WOWGDI_BITBLT: {
-        WORD hdst = Wow32ArgWord(f, BB_ARG_DSTDC);
-        WORD hsrc = Wow32ArgWord(f, BB_ARG_SRCDC);
-        int  x  = (int)(short)Wow32ArgWord(f, BB_ARG_X);
-        int  y  = (int)(short)Wow32ArgWord(f, BB_ARG_Y);
-        int  cx = (int)(short)Wow32ArgWord(f, BB_ARG_WIDTH);
-        int  cy = (int)(short)Wow32ArgWord(f, BB_ARG_HEIGHT);
-        int  sx = (int)(short)Wow32ArgWord(f, BB_ARG_SRCX);
-        int  sy = (int)(short)Wow32ArgWord(f, BB_ARG_SRCY);
-        DWORD rop = Wow32ArgDword(f, BB_ARG_ROP);
-        int  dk = -1, sk = -1;
-        HGDIOBJ d = wowgdi_h32(hdst, &dk);
-        HGDIOBJ s = wowgdi_h32(hsrc, &sk);
-        int  k = 0, ok;
+        WORD hdst = Wow32ArgWord(f, WOWGDI_BB_ARG_DSTDC);
+        WORD hsrc = Wow32ArgWord(f, WOWGDI_BB_ARG_SRCDC);
+        INT  x  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_X);
+        INT  y  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_Y);
+        INT  cx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_WIDTH);
+        INT  cy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_HEIGHT);
+        INT  sx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_SRCX);
+        INT  sy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_BB_ARG_SRCY);
+        DWORD rop = Wow32ArgDword(f, WOWGDI_BB_ARG_ROP);
+        INT  dk = -1, sk = -1;
+        HGDIOBJ d = WowGdiH32(hdst, &dk);
+        HGDIOBJ s = WowGdiH32(hsrc, &sk);
+        INT  k = 0, ok;
         WowNotePut(note, notecap, &k, "BitBlt dst 0x");
         WowNoteHex(note, notecap, &k, hdst, 4);
         WowNotePut(note, notecap, &k, " (");
@@ -1316,21 +1316,21 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          COLORONCOLOR) before getting here -- which is why that call had to go in
          with this one rather than after it. */
     case WOWGDI_STRETCHBLT: {
-        WORD hdst = Wow32ArgWord(f, SB_ARG_DSTDC);
-        WORD hsrc = Wow32ArgWord(f, SB_ARG_SRCDC);
-        int  x  = (int)(short)Wow32ArgWord(f, SB_ARG_DSTX);
-        int  y  = (int)(short)Wow32ArgWord(f, SB_ARG_DSTY);
-        int  cx = (int)(short)Wow32ArgWord(f, SB_ARG_DSTW);
-        int  cy = (int)(short)Wow32ArgWord(f, SB_ARG_DSTH);
-        int  sx = (int)(short)Wow32ArgWord(f, SB_ARG_SRCX);
-        int  sy = (int)(short)Wow32ArgWord(f, SB_ARG_SRCY);
-        int  sw = (int)(short)Wow32ArgWord(f, SB_ARG_SRCW);
-        int  sh = (int)(short)Wow32ArgWord(f, SB_ARG_SRCH);
-        DWORD rop = Wow32ArgDword(f, SB_ARG_ROP);
-        int  dk = -1, sk = -1;
-        HGDIOBJ d = wowgdi_h32(hdst, &dk);
-        HGDIOBJ s = wowgdi_h32(hsrc, &sk);
-        int  k = 0, ok;
+        WORD hdst = Wow32ArgWord(f, WOWGDI_SB_ARG_DSTDC);
+        WORD hsrc = Wow32ArgWord(f, WOWGDI_SB_ARG_SRCDC);
+        INT  x  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_DSTX);
+        INT  y  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_DSTY);
+        INT  cx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_DSTW);
+        INT  cy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_DSTH);
+        INT  sx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_SRCX);
+        INT  sy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_SRCY);
+        INT  sw = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_SRCW);
+        INT  sh = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SB_ARG_SRCH);
+        DWORD rop = Wow32ArgDword(f, WOWGDI_SB_ARG_ROP);
+        INT  dk = -1, sk = -1;
+        HGDIOBJ d = WowGdiH32(hdst, &dk);
+        HGDIOBJ s = WowGdiH32(hsrc, &sk);
+        INT  k = 0, ok;
         WowNotePut(note, notecap, &k, "StretchBlt dst 0x");
         WowNoteHex(note, notecap, &k, hdst, 4);
         WowNotePut(note, notecap, &k, " (");
@@ -1373,11 +1373,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_GETDCORG:
     case WOWGDI_GETBRUSHORG:
     case WOWGDI_UNREALIZEOBJ: {
-        WORD h = Wow32ArgWord(f, ONE_ARG_HANDLE);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
-        int  isdc = (f->Id != WOWGDI_UNREALIZEOBJ);
-        int  k = 0;
+        WORD h = Wow32ArgWord(f, WOWGDI_ONE_ARG_HANDLE);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(h, &kind);
+        INT  isdc = (f->Id != WOWGDI_UNREALIZEOBJ);
+        INT  k = 0;
         POINT pt;
         WowNotePut(note, notecap, &k,
                 f->Id == WOWGDI_GETDCORG    ? "GetDCOrg(0x" :
@@ -1397,7 +1397,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         if (f->Id == WOWGDI_UNREALIZEOBJ) {
-            int r = UnrealizeObject(o) ? 1 : 0;
+            INT r = UnrealizeObject(o) ? 1 : 0;
             WowNotePut(note, notecap, &k, r ? " -> unrealized" : " -- ★ refused");
             Wow32SetReturn(f, (DWORD)r);
             return 1;
@@ -1409,19 +1409,19 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         WowNoteHex(note, notecap, &k, (DWORD)pt.x, 4);
         WowNotePut(note, notecap, &k, ",");
         WowNoteHex(note, notecap, &k, (DWORD)pt.y, 4);
-        Wow32SetReturn(f, ((DWORD)(WORD)(short)pt.y << 16)
-                        | (DWORD)(WORD)(short)pt.x);
+        Wow32SetReturn(f, ((DWORD)(WORD)(SHORT)pt.y << 16)
+                        | (DWORD)(WORD)(SHORT)pt.x);
         return 1;
     }
 
     /* ── ★ 0x67 PtVisible(hDC, x, y) ────────────────────────────────────────*/
     case WOWGDI_PTVISIBLE: {
-        WORD hdc = Wow32ArgWord(f, PV_ARG_HDC);
-        int  x = (int)(short)Wow32ArgWord(f, PV_ARG_X);
-        int  y = (int)(short)Wow32ArgWord(f, PV_ARG_Y);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0, r;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_PV_ARG_HDC);
+        INT  x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PV_ARG_X);
+        INT  y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PV_ARG_Y);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0, r;
         WowNotePut(note, notecap, &k, "PtVisible(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -1446,15 +1446,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_POLYLINE:
     case WOWGDI_DPTOLP:
     case WOWGDI_LPTODP: {
-        WORD hdc = Wow32ArgWord(f, LDP_ARG_HDC);
-        WORD n   = Wow32ArgWord(f, LDP_ARG_COUNT);
-        volatile BYTE *p = Wow32ArgPointer(f, LDP_ARG_POINTS);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_LDP_ARG_HDC);
+        WORD n   = Wow32ArgWord(f, WOWGDI_LDP_ARG_COUNT);
+        volatile BYTE *p = Wow32ArgPointer(f, WOWGDI_LDP_ARG_POINTS);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         POINT pt[64];
-        int  k = 0, i, cnt = (int)n;
-        int isline = (f->Id == WOWGDI_POLYLINE);
-        int ispoly = (f->Id == WOWGDI_POLYGON) || isline;
+        INT  k = 0, i, cnt = (INT)n;
+        INT isline = (f->Id == WOWGDI_POLYLINE);
+        INT ispoly = (f->Id == WOWGDI_POLYGON) || isline;
         WowNotePut(note, notecap, &k,
                 isline ? "Polyline(0x" : ispoly ? "Polygon(0x"
                 : f->Id == WOWGDI_DPTOLP ? "DPtoLP(0x" : "LPtoDP(0x");
@@ -1470,20 +1470,20 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         /* ⚠ BOUNDED. The count comes from the guest and the scratch array does
              not grow; a longer run is refused rather than overrunning. */
-        if (cnt <= 0 || cnt > (int)(sizeof pt / sizeof pt[0])) {
+        if (cnt <= 0 || cnt > (INT)(sizeof pt / sizeof pt[0])) {
             WowNotePut(note, notecap, &k, " -- ★ COUNT OUT OF RANGE; answered 0");
             Wow32SetReturn(f, 0);
             return 1;
         }
         for (i = 0; i < cnt; ++i) {
-            pt[i].x = (int)(short)Wow32PeekWord(p + i * 4);
-            pt[i].y = (int)(short)Wow32PeekWord(p + i * 4 + 2);
+            pt[i].x = (INT)(SHORT)Wow32PeekWord(p + i * 4);
+            pt[i].y = (INT)(SHORT)Wow32PeekWord(p + i * 4 + 2);
         }
         /* ★ Polygon DRAWS and writes nothing back; LPtoDP TRANSFORMS IN PLACE.
              Same block, opposite data flow -- so they share the read and part
              company here. */
         if (ispoly) {
-            int r = (isline ? Polyline((HDC)o, pt, cnt)
+            INT r = (isline ? Polyline((HDC)o, pt, cnt)
                             : Polygon((HDC)o, pt, cnt)) ? 1 : 0;
             WowNotePut(note, notecap, &k, r ? " -> drawn" : " -- ★ the OS refused it");
             Wow32SetReturn(f, (DWORD)r);
@@ -1498,8 +1498,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         for (i = 0; i < cnt; ++i) {
-            Wow32PokeWord(p + i * 4,     (WORD)(short)pt[i].x);
-            Wow32PokeWord(p + i * 4 + 2, (WORD)(short)pt[i].y);
+            Wow32PokeWord(p + i * 4,     (WORD)(SHORT)pt[i].x);
+            Wow32PokeWord(p + i * 4 + 2, (WORD)(SHORT)pt[i].y);
         }
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)pt[0].x, 4);
@@ -1515,13 +1515,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          bitmap and the hint had no observable semantics to preserve. */
     case WOWGDI_CREATEDISCARDBM:
     case WOWGDI_SETBRUSHORG: {
-        int  isbm = (f->Id == WOWGDI_CREATEDISCARDBM);
-        WORD hdc = Wow32ArgWord(f, CCB_ARG_HDC);      /* same block shape as   */
-        int  a = (int)(short)Wow32ArgWord(f, CCB_ARG_WIDTH);   /* CreateCompat- */
-        int  b = (int)(short)Wow32ArgWord(f, CCB_ARG_HEIGHT);  /* ibleBitmap    */
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        INT  isbm = (f->Id == WOWGDI_CREATEDISCARDBM);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_CCB_ARG_HDC);      /* same block shape as   */
+        INT  a = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CCB_ARG_WIDTH);   /* CreateCompat- */
+        INT  b = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CCB_ARG_HEIGHT);  /* ibleBitmap    */
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k, isbm ? "CreateDiscardableBitmap(0x"
                                         : "SetBrushOrg(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -1540,8 +1540,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             POINT prev;
             prev.x = prev.y = 0;
             SetBrushOrgEx((HDC)o, a, b, &prev);
-            Wow32SetReturn(f, ((DWORD)(WORD)(short)prev.y << 16)
-                            | (DWORD)(WORD)(short)prev.x);
+            Wow32SetReturn(f, ((DWORD)(WORD)(SHORT)prev.y << 16)
+                            | (DWORD)(WORD)(SHORT)prev.x);
             return 1;
         }
         {   HBITMAP bm;
@@ -1553,7 +1553,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
                 return 1;
             }
             bm = CreateDiscardableBitmap((HDC)o, a, b);
-            tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+            tok = bm ? WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
             if (!tok) {
                 if (bm) DeleteObject((HGDIOBJ)bm);
                 WowNotePut(note, notecap, &k, " -- ★ refused, or the token map is"
@@ -1570,14 +1570,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── ★★ 0x1b Rectangle(hDC, left, top, right, bottom) ───────────────────*/
     case WOWGDI_RECTANGLE: {
-        WORD hdc = Wow32ArgWord(f, RC_ARG_HDC);
-        int  l = (int)(short)Wow32ArgWord(f, RC_ARG_LEFT);
-        int  t = (int)(short)Wow32ArgWord(f, RC_ARG_TOP);
-        int  r = (int)(short)Wow32ArgWord(f, RC_ARG_RIGHT);
-        int  b = (int)(short)Wow32ArgWord(f, RC_ARG_BOTTOM);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_RC_ARG_HDC);
+        INT  l = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_LEFT);
+        INT  t = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_TOP);
+        INT  r = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_RIGHT);
+        INT  b = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_BOTTOM);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k, "Rectangle(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -1604,12 +1604,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          one of the calls where the 32-bit return really is 32 bits. */
     case WOWGDI_SETBKCOLOR:
     case WOWGDI_SETTEXTCOLOR: {
-        int  istext = (f->Id == WOWGDI_SETTEXTCOLOR);
-        WORD hdc = Wow32ArgWord(f, COL_ARG_HDC);
-        DWORD col = Wow32ArgDword(f, COL_ARG_COLOR);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        INT  istext = (f->Id == WOWGDI_SETTEXTCOLOR);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_COL_ARG_HDC);
+        DWORD col = Wow32ArgDword(f, WOWGDI_COL_ARG_COLOR);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         COLORREF prev;
         WowNotePut(note, notecap, &k, istext ? "SetTextColor(0x" : "SetBkColor(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -1641,11 +1641,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_SETMAPMODE:
     case WOWGDI_SETTEXTALIGN:
     case WOWGDI_SETPOLYFILLMODE: {
-        WORD hdc  = Wow32ArgWord(f, MODE_ARG_HDC);
-        int  mode = (int)(short)Wow32ArgWord(f, MODE_ARG_MODE);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0, prev;
+        WORD hdc  = Wow32ArgWord(f, WOWGDI_MODE_ARG_HDC);
+        INT  mode = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_MODE_ARG_MODE);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0, prev;
         WowNotePut(note, notecap, &k,
                 f->Id == WOWGDI_SETROP2         ? "SetROP2(0x" :
                 f->Id == WOWGDI_SETSTRETCHMODE  ? "SetStretchBltMode(0x" :
@@ -1667,7 +1667,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
              : f->Id == WOWGDI_SETSTRETCHMODE ? SetStretchBltMode((HDC)o, mode)
              : f->Id == WOWGDI_SETBKMODE      ? SetBkMode((HDC)o, mode)
              : f->Id == WOWGDI_SETMAPMODE     ? SetMapMode((HDC)o, mode)
-             : f->Id == WOWGDI_SETTEXTALIGN   ? (int)SetTextAlign((HDC)o, (UINT)mode)
+             : f->Id == WOWGDI_SETTEXTALIGN   ? (INT)SetTextAlign((HDC)o, (UINT)mode)
                                               : SetPolyFillMode((HDC)o, mode);
         Wow32SetReturn(f, (DWORD)(WORD)prev);
         return 1;
@@ -1675,12 +1675,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── ★ 0x0b SetWindowOrg(hDC, x, y) ─────────────────────────────────────*/
     case WOWGDI_SETWINDOWORG: {
-        WORD hdc = Wow32ArgWord(f, ORG_ARG_HDC);
-        int  x = (int)(short)Wow32ArgWord(f, ORG_ARG_X);
-        int  y = (int)(short)Wow32ArgWord(f, ORG_ARG_Y);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_ORG_ARG_HDC);
+        INT  x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ORG_ARG_X);
+        INT  y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ORG_ARG_Y);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         POINT prev;
         WowNotePut(note, notecap, &k, "SetWindowOrg(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -1697,8 +1697,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         prev.x = prev.y = 0;
         SetWindowOrgEx((HDC)o, x, y, &prev);
-        Wow32SetReturn(f, ((DWORD)(WORD)(short)prev.y << 16)
-                        | (DWORD)(WORD)(short)prev.x);
+        Wow32SetReturn(f, ((DWORD)(WORD)(SHORT)prev.y << 16)
+                        | (DWORD)(WORD)(SHORT)prev.x);
         return 1;
     }
 
@@ -1709,13 +1709,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          the level it hands back is meaningful without translation. */
     case WOWGDI_SAVEDC:
     case WOWGDI_RESTOREDC: {
-        int  issave = (f->Id == WOWGDI_SAVEDC);
-        WORD hdc = issave ? Wow32ArgWord(f, SDC_ARG_HDC)
-                          : Wow32ArgWord(f, RDC2_ARG_HDC);
-        int  lvl = issave ? 0 : (int)(short)Wow32ArgWord(f, RDC2_ARG_LEVEL);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0, r;
+        INT  issave = (f->Id == WOWGDI_SAVEDC);
+        WORD hdc = issave ? Wow32ArgWord(f, WOWGDI_SDC_ARG_HDC)
+                          : Wow32ArgWord(f, WOWGDI_RDC2_ARG_HDC);
+        INT  lvl = issave ? 0 : (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RDC2_ARG_LEVEL);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0, r;
         WowNotePut(note, notecap, &k, issave ? "SaveDC(0x" : "RestoreDC(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         if (!issave) {
@@ -1739,13 +1739,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     /* ── ★★★★ 0x13 LineTo / 0x14 MoveTo -- see the note above. ──────────────*/
     case WOWGDI_LINETO:
     case WOWGDI_MOVETO: {
-        int  isline = (f->Id == WOWGDI_LINETO);
-        WORD hdc = Wow32ArgWord(f, XY_ARG_HDC);
-        int  x = (int)(short)Wow32ArgWord(f, XY_ARG_X);
-        int  y = (int)(short)Wow32ArgWord(f, XY_ARG_Y);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        INT  isline = (f->Id == WOWGDI_LINETO);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_XY_ARG_HDC);
+        INT  x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_XY_ARG_X);
+        INT  y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_XY_ARG_Y);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         POINT prev;
         WowNotePut(note, notecap, &k, isline ? "LineTo(0x" : "MoveTo(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -1767,8 +1767,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         prev.x = prev.y = 0;
         MoveToEx((HDC)o, x, y, &prev);
         /* ★ y in the HIGH word, x in the LOW -- Win16's MAKELONG order. */
-        Wow32SetReturn(f, ((DWORD)(WORD)(short)prev.y << 16)
-                        | (DWORD)(WORD)(short)prev.x);
+        Wow32SetReturn(f, ((DWORD)(WORD)(SHORT)prev.y << 16)
+                        | (DWORD)(WORD)(SHORT)prev.x);
         return 1;
     }
 
@@ -1776,15 +1776,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          The raster ops are the same numbers in both worlds (PATCOPY, PATINVERT,
          DSTINVERT, BLACKNESS, WHITENESS), so the rop travels unchanged. */
     case WOWGDI_PATBLT: {
-        WORD  hdc = Wow32ArgWord(f, PB_ARG_HDC);
-        int   x = (int)(short)Wow32ArgWord(f, PB_ARG_X);
-        int   y = (int)(short)Wow32ArgWord(f, PB_ARG_Y);
-        int   cx = (int)(short)Wow32ArgWord(f, PB_ARG_WIDTH);
-        int   cy = (int)(short)Wow32ArgWord(f, PB_ARG_HEIGHT);
-        DWORD rop = Wow32ArgDword(f, PB_ARG_ROP);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int   k = 0;
+        WORD  hdc = Wow32ArgWord(f, WOWGDI_PB_ARG_HDC);
+        INT   x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PB_ARG_X);
+        INT   y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PB_ARG_Y);
+        INT   cx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PB_ARG_WIDTH);
+        INT   cy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_PB_ARG_HEIGHT);
+        DWORD rop = Wow32ArgDword(f, WOWGDI_PB_ARG_ROP);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT   k = 0;
         WowNotePut(note, notecap, &k, "PatBlt(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -1820,10 +1820,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
        ★ The map de-duplicates by object, so the same stock object always comes
          back as the same token -- which matters, because guests compare them. */
     case WOWGDI_GETSTOCKOBJECT: {
-        WORD idx = Wow32ArgWord(f, GSO_ARG_INDEX);
+        WORD idx = Wow32ArgWord(f, WOWGDI_GSO_ARG_INDEX);
         HGDIOBJ o;
         WORD tok;
-        int k = 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "GetStockObject(0x");
         WowNoteHex(note, notecap, &k, idx, 4);
         WowNotePut(note, notecap, &k, ")");
@@ -1833,7 +1833,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        o = GetStockObject((int)idx);
+        o = GetStockObject((INT)idx);
         /* ⚠ "NO SUCH OBJECT" AND "NO ROOM" ARE DIFFERENT FACTS, and the first
              cut of this printed the second for both -- so a run reported "THE
              GDI TOKEN MAP IS FULL" with nine of 256 slots used, because index 9
@@ -1847,7 +1847,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        tok = wowgdi_h16(o, WOWGDI_KIND_STOCK);
+        tok = WowGdiH16(o, WOWGDI_KIND_STOCK);
         if (!tok) {
             WowNotePut(note, notecap, &k, " -- ★ THE GDI TOKEN MAP IS FULL;"
                                        " answered 0");
@@ -1875,22 +1875,22 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          honoured changes what gets drawn. */
     case WOWGDI_CREATEDC:
     case WOWGDI_CREATEDC2: {
-        char drv[64], dev[64];
+        CHAR drv[64], dev[64];
         HDC dc;
         WORD tok;
-        int  k = 0, isdisp, i;
-        int  isic = (f->Id == WOWGDI_CREATEDC);
-        DWORD init = Wow32ArgDword(f, CDC_ARG_INITDATA);
-        Wow32ArgString(f, CDC_ARG_DRIVER, drv, sizeof drv);
-        Wow32ArgString(f, CDC_ARG_DEVICE, dev, sizeof dev);
+        INT  k = 0, isdisp, i;
+        INT  isic = (f->Id == WOWGDI_CREATEDC);
+        DWORD init = Wow32ArgDword(f, WOWGDI_CDC_ARG_INITDATA);
+        Wow32ArgString(f, WOWGDI_CDC_ARG_DRIVER, drv, sizeof drv);
+        Wow32ArgString(f, WOWGDI_CDC_ARG_DEVICE, dev, sizeof dev);
         WowNotePut(note, notecap, &k, isic ? "CreateIC driver=" : "CreateDC driver=");
         WowNoteQuoted(note, notecap, &k, drv);
         if (dev[0]) { WowNotePut(note, notecap, &k, " device="); WowNoteQuoted(note, notecap, &k, dev); }
         /* Case-insensitively "DISPLAY" -- the guest writes it lower case. */
         isdisp = 1;
         for (i = 0; i < 7; ++i) {
-            char c = drv[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            CHAR c = drv[i];
+            if (c >= 'a' && c <= 'z') c = (CHAR)(c - 32);
             if (c != "DISPLAY"[i]) { isdisp = 0; break; }
         }
         if (isdisp && drv[7]) isdisp = 0;
@@ -1912,7 +1912,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
              rather than flattened into CreateDC. */
         dc = isic ? CreateICA("DISPLAY", NULL, NULL, NULL)
                   : CreateDCA("DISPLAY", NULL, NULL, NULL);
-        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+        tok = dc ? WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
         if (!tok) {
             if (dc) DeleteDC(dc);
             WowNotePut(note, notecap, &k, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
@@ -1935,12 +1935,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          through DeleteDC. That distinction is the whole reason the map records a
          kind (see the header). */
     case WOWGDI_CREATECOMPATDC: {
-        WORD src = Wow32ArgWord(f, CCD_ARG_HDC);
-        int  kind = -1;
-        HGDIOBJ o = src ? wowgdi_h32(src, &kind) : NULL;
+        WORD src = Wow32ArgWord(f, WOWGDI_CCD_ARG_HDC);
+        INT  kind = -1;
+        HGDIOBJ o = src ? WowGdiH32(src, &kind) : NULL;
         HDC dc;
         WORD tok;
-        int k = 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "CreateCompatibleDC(0x");
         WowNoteHex(note, notecap, &k, src, 4);
         WowNotePut(note, notecap, &k, ")");
@@ -1952,7 +1952,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         if (!src) WowNotePut(note, notecap, &k, " (compatible with the SCREEN)");
         dc = CreateCompatibleDC(src ? (HDC)o : NULL);
-        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+        tok = dc ? WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
         if (!tok) {
             if (dc) DeleteDC(dc);         /* never issue a DC we cannot name */
             WowNotePut(note, notecap, &k, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
@@ -1989,11 +1989,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          `an unimplemented call still answers` rule, applied to a call whose
          answer is legitimately 0. */
     case WOWGDI_ESCAPE: {
-        WORD hdc  = Wow32ArgWord(f, ESC_ARG_HDC);
-        int  esc  = (int)(short)Wow32ArgWord(f, ESC_ARG_ESCAPE);
-        int  cnt  = (int)(short)Wow32ArgWord(f, ESC_ARG_COUNT);
-        volatile BYTE *in = Wow32ArgPointer(f, ESC_ARG_IN);
-        int  k = 0, want = 0;
+        WORD hdc  = Wow32ArgWord(f, WOWGDI_ESC_ARG_HDC);
+        INT  esc  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ESC_ARG_ESCAPE);
+        INT  cnt  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ESC_ARG_COUNT);
+        volatile BYTE *in = Wow32ArgPointer(f, WOWGDI_ESC_ARG_IN);
+        INT  k = 0, want = 0;
         WowNotePut(note, notecap, &k, "Escape(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", nEscape=");
@@ -2001,15 +2001,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         WowNotePut(note, notecap, &k, ", count=");
         WowNoteHex(note, notecap, &k, (DWORD)cnt, 4);
         WowNotePut(note, notecap, &k, ")");
-        if (esc == ESC_QUERYESCSUPPORT) {
+        if (esc == WOWGDI_ESC_QUERYESCSUPPORT) {
             /* lpInData points at the escape number being asked about. */
-            if (in) want = (int)(WORD)(in[0] | (in[1] << 8));
+            if (in) want = (INT)(WORD)(in[0] | (in[1] << 8));
             WowNotePut(note, notecap, &k, " -- QUERYESCSUPPORT for ");
             WowNoteHex(note, notecap, &k, (DWORD)want, 4);
             WowNotePut(note, notecap, &k, ": this DC supports QUERYESCSUPPORT and"
                                        " nothing else, so the caller is told NO"
                                        " before it tries");
-            Wow32SetReturn(f, (DWORD)(want == ESC_QUERYESCSUPPORT ? 1 : 0));
+            Wow32SetReturn(f, (DWORD)(want == WOWGDI_ESC_QUERYESCSUPPORT ? 1 : 0));
             return 1;
         }
         WowNotePut(note, notecap, &k, " -- ★ NOT IMPLEMENTED BY THIS DRIVER, which"
@@ -2027,8 +2027,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          of on the stack. Read field by field: Win32's BITMAP is 24 bytes with
          LONGs, so a cast would take bmWidth from the wrong half of bmType. */
     case WOWGDI_CREATEBITMAPINDIRECT: {
-        const volatile BYTE *bp = Wow32ArgPointer(f, CBI_ARG_BITMAP);
-        int  k = 0, w, h;
+        const volatile BYTE *bp = Wow32ArgPointer(f, WOWGDI_CBI_ARG_BITMAP);
+        INT  k = 0, w, h;
         WORD pl, bpp, tok;
         DWORD bits;
         HBITMAP bm;
@@ -2039,12 +2039,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        w   = (int)(short)wowgdi_peek(bp, CBI_OFF_WIDTH);
-        h   = (int)(short)wowgdi_peek(bp, CBI_OFF_HEIGHT);
+        w   = (INT)(SHORT)WowGdiPeek(bp, CBI_OFF_WIDTH);
+        h   = (INT)(SHORT)WowGdiPeek(bp, CBI_OFF_HEIGHT);
         pl  = bp[CBI_OFF_PLANES];
         bpp = bp[CBI_OFF_BPP];
-        bits = (DWORD)wowgdi_peek(bp, CBI_OFF_BITS)
-             | ((DWORD)wowgdi_peek(bp, CBI_OFF_BITS + 2) << 16);
+        bits = (DWORD)WowGdiPeek(bp, CBI_OFF_BITS)
+             | ((DWORD)WowGdiPeek(bp, CBI_OFF_BITS + 2) << 16);
         WowNoteHex(note, notecap, &k, (DWORD)w, 4);
         WowNotePut(note, notecap, &k, "x");
         WowNoteHex(note, notecap, &k, (DWORD)h, 4);
@@ -2067,7 +2067,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
                                              " being read -- the bitmap comes"
                                              " back UNINITIALISED]");
         bm = CreateBitmap(w, h, pl, bpp, NULL);
-        tok = wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
+        tok = WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
         WowNotePut(note, notecap, &k, " -> 0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         Wow32SetReturn(f, tok);
@@ -2082,12 +2082,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          font, and FALSE is the right answer to pass on -- a caller that gets it
          falls back to GetTextExtent, which this host implements. */
     case WOWGDI_GETCHARABCWIDTHS: {
-        WORD hdc   = Wow32ArgWord(f, ABCW_ARG_HDC);
-        WORD first = Wow32ArgWord(f, ABCW_ARG_FIRST);
-        WORD last  = Wow32ArgWord(f, ABCW_ARG_LAST);
-        volatile BYTE *out = Wow32ArgPointer(f, ABCW_ARG_ABC);
-        HDC dc = (HDC)wowgdi_h32(hdc, NULL);
-        int k = 0, n, i, ok = 0;
+        WORD hdc   = Wow32ArgWord(f, WOWGDI_ABCW_ARG_HDC);
+        WORD first = Wow32ArgWord(f, WOWGDI_ABCW_ARG_FIRST);
+        WORD last  = Wow32ArgWord(f, WOWGDI_ABCW_ARG_LAST);
+        volatile BYTE *out = Wow32ArgPointer(f, WOWGDI_ABCW_ARG_ABC);
+        HDC dc = (HDC)WowGdiH32(hdc, NULL);
+        INT k = 0, n, i, ok = 0;
         WowNotePut(note, notecap, &k, "GetCharABCWidths(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -2095,7 +2095,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         WowNotePut(note, notecap, &k, "..");
         WowNoteHex(note, notecap, &k, last, 4);
         WowNotePut(note, notecap, &k, ")");
-        n = (int)last - (int)first + 1;
+        n = (INT)last - (INT)first + 1;
         if (!dc || !out || n <= 0 || n > 1024) {
             WowNotePut(note, notecap, &k, " -- ★ no DC, no buffer, or a range this"
                                        " host will not size a temporary for;"
@@ -2108,8 +2108,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             if (ok) {
                 for (i = 0; i < n; ++i) {
                     long v[3];
-                    unsigned char six[WOWCONV_ABC16_SIZE];
-                    int b;
+                    BYTE six[WOWCONV_ABC16_SIZE];
+                    INT b;
                     v[0] = (long)abc[i].abcA;
                     v[1] = (long)abc[i].abcB;
                     v[2] = (long)abc[i].abcC;
@@ -2135,13 +2135,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          knowing WHICH structures are identical is worth as much as knowing which
          are not (see wowconv.h). */
     case WOWGDI_SETPALETTEENTRIES: {
-        WORD hpal  = Wow32ArgWord(f, GPE_ARG_HPAL);
-        WORD start = Wow32ArgWord(f, GPE_ARG_START);
-        WORD cnt   = Wow32ArgWord(f, GPE_ARG_COUNT);
-        volatile BYTE *in = Wow32ArgPointer(f, GPE_ARG_ENTRIES);
-        HPALETTE pal = (HPALETTE)wowgdi_h32(hpal, NULL);
+        WORD hpal  = Wow32ArgWord(f, WOWGDI_GPE_ARG_HPAL);
+        WORD start = Wow32ArgWord(f, WOWGDI_GPE_ARG_START);
+        WORD cnt   = Wow32ArgWord(f, WOWGDI_GPE_ARG_COUNT);
+        volatile BYTE *in = Wow32ArgPointer(f, WOWGDI_GPE_ARG_ENTRIES);
+        HPALETTE pal = (HPALETTE)WowGdiH32(hpal, NULL);
         static PALETTEENTRY pe[256];
-        int  k = 0, i;
+        INT  k = 0, i;
         UINT got = 0;
         WowNotePut(note, notecap, &k, "SetPaletteEntries(0x");
         WowNoteHex(note, notecap, &k, hpal, 4);
@@ -2167,10 +2167,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_GETWINDOWEXT:
     case WOWGDI_GETBITMAPDIMENSION: {
         WORD h = Wow32ArgWord(f, 0);
-        int  kind = -1, k = 0, ok = 0;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
+        INT  kind = -1, k = 0, ok = 0;
+        HGDIOBJ o = WowGdiH32(h, &kind);
         SIZE sz;
-        const char *nm = f->Id == WOWGDI_GETVIEWPORTEXT ? "GetViewportExt(0x"
+        PCSTR nm = f->Id == WOWGDI_GETVIEWPORTEXT ? "GetViewportExt(0x"
                        : f->Id == WOWGDI_GETWINDOWEXT   ? "GetWindowExt(0x"
                        : "GetBitmapDimension(0x";
         sz.cx = sz.cy = 0;
@@ -2190,12 +2190,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_GETPALETTEENTRIES: {
-        WORD hpal  = Wow32ArgWord(f, GPE_ARG_HPAL);
-        WORD start = Wow32ArgWord(f, GPE_ARG_START);
-        WORD cnt   = Wow32ArgWord(f, GPE_ARG_COUNT);
-        volatile BYTE *out = Wow32ArgPointer(f, GPE_ARG_ENTRIES);
-        HPALETTE pal = (HPALETTE)wowgdi_h32(hpal, NULL);
-        int k = 0;
+        WORD hpal  = Wow32ArgWord(f, WOWGDI_GPE_ARG_HPAL);
+        WORD start = Wow32ArgWord(f, WOWGDI_GPE_ARG_START);
+        WORD cnt   = Wow32ArgWord(f, WOWGDI_GPE_ARG_COUNT);
+        volatile BYTE *out = Wow32ArgPointer(f, WOWGDI_GPE_ARG_ENTRIES);
+        HPALETTE pal = (HPALETTE)WowGdiH32(hpal, NULL);
+        INT k = 0;
         UINT got = 0;
         WowNotePut(note, notecap, &k, "GetPaletteEntries(0x");
         WowNoteHex(note, notecap, &k, hpal, 4);
@@ -2237,14 +2237,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_ENUMOBJECTS: {
-        WORD  hdc  = Wow32ArgWord(f, EOB_ARG_HDC);
-        WORD  typ  = Wow32ArgWord(f, EOB_ARG_TYPE);
-        DWORD proc = Wow32ArgDword(f, EOB_ARG_PROC);
-        DWORD lp   = Wow32ArgDword(f, EOB_ARG_LPARAM);
-        int   kind = -1, k = 0;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        WORD  hdc  = Wow32ArgWord(f, WOWGDI_EOB_ARG_HDC);
+        WORD  typ  = Wow32ArgWord(f, WOWGDI_EOB_ARG_TYPE);
+        DWORD proc = Wow32ArgDword(f, WOWGDI_EOB_ARG_PROC);
+        DWORD lp   = Wow32ArgDword(f, WOWGDI_EOB_ARG_LPARAM);
+        INT   kind = -1, k = 0;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         HDC   dc;
-        int   own = 0;
+        INT   own = 0;
         WowNotePut(note, notecap, &k, "EnumObjects(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, typ == OBJ_PEN ? ", OBJ_PEN" :
@@ -2263,7 +2263,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         else { dc = GetDC(NULL); own = 1; }
         g_WowEnumFontCount = 0;
         if (dc) {
-            EnumObjects(dc, typ, (GOBJENUMPROC)wowgdi_obj_collect, (LPARAM)typ);
+            EnumObjects(dc, typ, (GOBJENUMPROC)WowGdiObjectCollect, (LPARAM)typ);
             if (own) ReleaseDC(NULL, dc);
         }
         WowNotePut(note, notecap, &k, " -> 0x");
@@ -2291,16 +2291,16 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     case WOWGDI_ENUMFONTS:
     case WOWGDI_ENUMFONTFAMILIES: {
-        int   plain = (f->Id == WOWGDI_ENUMFONTS);
-        WORD  hdc  = Wow32ArgWord(f, EFF_ARG_HDC);
-        DWORD proc = Wow32ArgDword(f, EFF_ARG_PROC);
-        DWORD lp   = Wow32ArgDword(f, EFF_ARG_LPARAM);
-        char  fam[64];
-        int   havefam = Wow32ArgString(f, EFF_ARG_FAMILY, fam, sizeof fam) && fam[0];
-        int   kind = -1, k = 0;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        INT   plain = (f->Id == WOWGDI_ENUMFONTS);
+        WORD  hdc  = Wow32ArgWord(f, WOWGDI_EFF_ARG_HDC);
+        DWORD proc = Wow32ArgDword(f, WOWGDI_EFF_ARG_PROC);
+        DWORD lp   = Wow32ArgDword(f, WOWGDI_EFF_ARG_LPARAM);
+        CHAR  fam[64];
+        INT   havefam = Wow32ArgString(f, WOWGDI_EFF_ARG_FAMILY, fam, sizeof fam) && fam[0];
+        INT   kind = -1, k = 0;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         HDC   dc;
-        int   own = 0;
+        INT   own = 0;
         WowNotePut(note, notecap, &k, plain ? "EnumFonts(0x" : "EnumFontFamilies(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, havefam ? ", \"" : ", NULL");
@@ -2311,11 +2311,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         else { dc = GetDC(NULL); own = 1; }
         g_WowEnumFontCount = 0;
         if (dc) {
-            g_wg_font_plain = plain;
+            g_WowGdiFontIsPlain = plain;
             if (plain) EnumFontsA(dc, havefam ? fam : NULL,
-                                  (FONTENUMPROCA)wowgdi_font_collect, 0);
-            else EnumFontFamiliesA(dc, havefam ? fam : NULL, wowgdi_font_collect, 0);
-            g_wg_font_plain = 0;
+                                  (FONTENUMPROCA)WowGdiFontCollect, 0);
+            else EnumFontFamiliesA(dc, havefam ? fam : NULL, WowGdiFontCollect, 0);
+            g_WowGdiFontIsPlain = 0;
             if (own) ReleaseDC(NULL, dc);
         }
         WowNotePut(note, notecap, &k, " -> 0x");
@@ -2339,13 +2339,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_LINEDDA: {
-        int x1 = (int)(short)Wow32ArgWord(f, LDDA_ARG_X1);
-        int y1 = (int)(short)Wow32ArgWord(f, LDDA_ARG_Y1);
-        int x2 = (int)(short)Wow32ArgWord(f, LDDA_ARG_X2);
-        int y2 = (int)(short)Wow32ArgWord(f, LDDA_ARG_Y2);
-        DWORD proc = Wow32ArgDword(f, LDDA_ARG_PROC);
-        DWORD data = Wow32ArgDword(f, LDDA_ARG_DATA);
-        int k = 0;
+        INT x1 = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_LDDA_ARG_X1);
+        INT y1 = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_LDDA_ARG_Y1);
+        INT x2 = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_LDDA_ARG_X2);
+        INT y2 = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_LDDA_ARG_Y2);
+        DWORD proc = Wow32ArgDword(f, WOWGDI_LDDA_ARG_PROC);
+        DWORD data = Wow32ArgDword(f, WOWGDI_LDDA_ARG_DATA);
+        INT k = 0;
         WowNotePut(note, notecap, &k, "LineDDA (");
         WowNoteHex(note, notecap, &k, (DWORD)x1, 4);
         WowNotePut(note, notecap, &k, ",");
@@ -2385,14 +2385,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_CREATEBITMAP: {
-        int  w  = (int)(short)Wow32ArgWord(f, CBM_ARG_WIDTH);
-        int  h  = (int)(short)Wow32ArgWord(f, CBM_ARG_HEIGHT);
-        WORD pl = Wow32ArgWord(f, CBM_ARG_PLANES);
-        WORD bp = Wow32ArgWord(f, CBM_ARG_BPP);
-        volatile BYTE *bits = Wow32ArgPointer(f, CBM_ARG_BITS);
+        INT  w  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CBM_ARG_WIDTH);
+        INT  h  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CBM_ARG_HEIGHT);
+        WORD pl = Wow32ArgWord(f, WOWGDI_CBM_ARG_PLANES);
+        WORD bp = Wow32ArgWord(f, WOWGDI_CBM_ARG_BPP);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_CBM_ARG_BITS);
         HBITMAP bm;
         WORD tok;
-        int  k = 0;
+        INT  k = 0;
         WowNotePut(note, notecap, &k, "CreateBitmap ");
         WowNoteHex(note, notecap, &k, (DWORD)w, 4);
         WowNotePut(note, notecap, &k, "x");
@@ -2419,8 +2419,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             }
         }
         bm = CreateBitmap(w, h, (UINT)pl, (UINT)bp,
-                          bits ? (const void *)(const BYTE *)bits : NULL);
-        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+                          bits ? (const VOID *)(PCBYTE )bits : NULL);
+        tok = bm ? WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (bm) DeleteObject((HGDIOBJ)bm);
             WowNotePut(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
@@ -2447,14 +2447,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          into it would get a black-and-white canvas and no explanation. So a null
          or unknown DC is refused. */
     case WOWGDI_CREATECOMPATBM: {
-        WORD hdc = Wow32ArgWord(f, CCB_ARG_HDC);
-        int  w   = (int)(short)Wow32ArgWord(f, CCB_ARG_WIDTH);
-        int  h   = (int)(short)Wow32ArgWord(f, CCB_ARG_HEIGHT);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_CCB_ARG_HDC);
+        INT  w   = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CCB_ARG_WIDTH);
+        INT  h   = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CCB_ARG_HEIGHT);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         HBITMAP bm;
         WORD tok;
-        int k = 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "CreateCompatibleBitmap(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -2476,7 +2476,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         bm = CreateCompatibleBitmap((HDC)o, w, h);
-        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+        tok = bm ? WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (bm) DeleteObject((HGDIOBJ)bm);
             WowNotePut(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
@@ -2494,10 +2494,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     /* ── ★ 0x42 CreateSolidBrush(crColor) ───────────────────────────────────
          A COLORREF is a DWORD and means the same thing in both worlds. */
     case WOWGDI_CREATESOLIDBRUSH: {
-        DWORD col = Wow32ArgDword(f, CSB_ARG_COLOR);
+        DWORD col = Wow32ArgDword(f, WOWGDI_CSB_ARG_COLOR);
         HBRUSH br = CreateSolidBrush((COLORREF)col);
-        WORD tok = br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
-        int k = 0;
+        WORD tok = br ? WowGdiH16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "CreateSolidBrush(0x");
         WowNoteHex(note, notecap, &k, col, 8);
         WowNotePut(note, notecap, &k, ")");
@@ -2527,14 +2527,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          object. That is correct: from the guest's side it is simply a handle to
          give back, and the map now knows it if it returns. */
     case WOWGDI_SELECTOBJECT: {
-        WORD hdc = Wow32ArgWord(f, SEL_ARG_HDC);
-        WORD hob = Wow32ArgWord(f, SEL_ARG_OBJ);
-        int  dkind = -1, okind = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
-        HGDIOBJ o = wowgdi_h32(hob, &okind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_SEL_ARG_HDC);
+        WORD hob = Wow32ArgWord(f, WOWGDI_SEL_ARG_OBJ);
+        INT  dkind = -1, okind = -1;
+        HGDIOBJ d = WowGdiH32(hdc, &dkind);
+        HGDIOBJ o = WowGdiH32(hob, &okind);
         HGDIOBJ prev;
         WORD tok;
-        int k = 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "SelectObject(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", obj 0x");
@@ -2565,7 +2565,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        tok = wowgdi_h16(prev, WOWGDI_KIND_OBJ);
+        tok = WowGdiH16(prev, WOWGDI_KIND_OBJ);
         WowNotePut(note, notecap, &k, " -> previous 0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (!tok)
@@ -2577,15 +2577,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── ★★★ 0x52 GetObject -- see the long note above. ─────────────────────*/
     case WOWGDI_GETOBJECT: {
-        WORD h    = Wow32ArgWord(f, GOB_ARG_HANDLE);
-        WORD want = Wow32ArgWord(f, GOB_ARG_COUNT);
-        volatile BYTE *dst = Wow32ArgPointer(f, GOB_ARG_BUF);
-        int kind = -1;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
-        BYTE b[WOW16_LOGFONT_CB];
+        WORD h    = Wow32ArgWord(f, WOWGDI_GOB_ARG_HANDLE);
+        WORD want = Wow32ArgWord(f, WOWGDI_GOB_ARG_COUNT);
+        volatile BYTE *dst = Wow32ArgPointer(f, WOWGDI_GOB_ARG_BUF);
+        INT kind = -1;
+        HGDIOBJ o = WowGdiH32(h, &kind);
+        BYTE b[WOWGDI_LOGFONT16_SIZE];
         DWORD type;
-        int n = 0, k = 0, i;
-        const char *what = "?";
+        INT n = 0, k = 0, i;
+        PCSTR what = "?";
 
         WowNotePut(note, notecap, &k, "GetObject 0x");
         WowNoteHex(note, notecap, &k, h, 4);
@@ -2597,18 +2597,18 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        for (i = 0; i < (int)sizeof b; ++i) b[i] = 0;
+        for (i = 0; i < (INT)sizeof b; ++i) b[i] = 0;
         type = GetObjectType(o);
         if (type == OBJ_BITMAP) {
             BITMAP bm;
-            if (!GetObject(o, (int)sizeof bm, &bm)) type = 0;
+            if (!GetObject(o, (INT)sizeof bm, &bm)) type = 0;
             else {
                 what = "BITMAP";
-                n = WOW16_BITMAP_CB;
-                Wow32PokeWord(b + 0,  (WORD)(short)bm.bmType);
-                Wow32PokeWord(b + 2,  (WORD)(short)bm.bmWidth);
-                Wow32PokeWord(b + 4,  (WORD)(short)bm.bmHeight);
-                Wow32PokeWord(b + 6,  (WORD)(short)bm.bmWidthBytes);
+                n = WOWGDI_BITMAP16_SIZE;
+                Wow32PokeWord(b + 0,  (WORD)(SHORT)bm.bmType);
+                Wow32PokeWord(b + 2,  (WORD)(SHORT)bm.bmWidth);
+                Wow32PokeWord(b + 4,  (WORD)(SHORT)bm.bmHeight);
+                Wow32PokeWord(b + 6,  (WORD)(SHORT)bm.bmWidthBytes);
                 b[8]  = (BYTE)bm.bmPlanes;
                 /* ⚠ REFUTED, session 45. We report bmBitsPixel as the OS
                      gives it -- 0x20 on this rig -- and 32bpp is a depth Win16
@@ -2639,15 +2639,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             }
         } else if (type == OBJ_FONT) {
             LOGFONTA lf;
-            if (!GetObjectA(o, (int)sizeof lf, &lf)) type = 0;
+            if (!GetObjectA(o, (INT)sizeof lf, &lf)) type = 0;
             else {
                 what = "LOGFONT";
-                n = WOW16_LOGFONT_CB;
-                Wow32PokeWord(b + 0,  (WORD)(short)lf.lfHeight);
-                Wow32PokeWord(b + 2,  (WORD)(short)lf.lfWidth);
-                Wow32PokeWord(b + 4,  (WORD)(short)lf.lfEscapement);
-                Wow32PokeWord(b + 6,  (WORD)(short)lf.lfOrientation);
-                Wow32PokeWord(b + 8,  (WORD)(short)lf.lfWeight);
+                n = WOWGDI_LOGFONT16_SIZE;
+                Wow32PokeWord(b + 0,  (WORD)(SHORT)lf.lfHeight);
+                Wow32PokeWord(b + 2,  (WORD)(SHORT)lf.lfWidth);
+                Wow32PokeWord(b + 4,  (WORD)(SHORT)lf.lfEscapement);
+                Wow32PokeWord(b + 6,  (WORD)(SHORT)lf.lfOrientation);
+                Wow32PokeWord(b + 8,  (WORD)(SHORT)lf.lfWeight);
                 b[10] = lf.lfItalic;        b[11] = lf.lfUnderline;
                 b[12] = lf.lfStrikeOut;     b[13] = lf.lfCharSet;
                 b[14] = lf.lfOutPrecision;  b[15] = lf.lfClipPrecision;
@@ -2658,36 +2658,36 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
                      toolbox from the system font's metrics, so lfHeight is
                      load-bearing geometry and a log that only says "LOGFONT"
                      cannot be compared against an oracle. */
-                {   int j = 0;
+                {   INT j = 0;
                     for (j = 0; j < 32 && lf.lfFaceName[j]; ++j) { }
                     WowNotePut(note, notecap, &k, " h=");
-                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfHeight, 4);
+                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)lf.lfHeight, 4);
                     WowNotePut(note, notecap, &k, " w=");
-                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfWidth, 4);
+                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)lf.lfWidth, 4);
                     WowNotePut(note, notecap, &k, " wt=");
-                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfWeight, 4);
+                    WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)lf.lfWeight, 4);
                     WowNotePut(note, notecap, &k, " ");
                     WowNoteQuoted(note, notecap, &k, lf.lfFaceName);
                 }
             }
         } else if (type == OBJ_PEN || type == OBJ_EXTPEN) {
             LOGPEN lp;
-            if (!GetObject(o, (int)sizeof lp, &lp)) type = 0;
+            if (!GetObject(o, (INT)sizeof lp, &lp)) type = 0;
             else {
                 what = "LOGPEN";
-                n = WOW16_LOGPEN_CB;
+                n = WOWGDI_LOGPEN16_SIZE;
                 Wow32PokeWord(b + 0, (WORD)lp.lopnStyle);
-                Wow32PokeWord(b + 2, (WORD)(short)lp.lopnWidth.x);
-                Wow32PokeWord(b + 4, (WORD)(short)lp.lopnWidth.y);
+                Wow32PokeWord(b + 2, (WORD)(SHORT)lp.lopnWidth.x);
+                Wow32PokeWord(b + 4, (WORD)(SHORT)lp.lopnWidth.y);
                 Wow32PokeWord(b + 6, (WORD)(lp.lopnColor & 0xFFFF));
                 Wow32PokeWord(b + 8, (WORD)(lp.lopnColor >> 16));
             }
         } else if (type == OBJ_BRUSH) {
             LOGBRUSH lb;
-            if (!GetObject(o, (int)sizeof lb, &lb)) type = 0;
+            if (!GetObject(o, (INT)sizeof lb, &lb)) type = 0;
             else {
                 what = "LOGBRUSH";
-                n = WOW16_LOGBRUSH_CB;
+                n = WOWGDI_LOGBRUSH16_SIZE;
                 Wow32PokeWord(b + 0, (WORD)lb.lbStyle);
                 Wow32PokeWord(b + 2, (WORD)(lb.lbColor & 0xFFFF));
                 Wow32PokeWord(b + 4, (WORD)(lb.lbColor >> 16));
@@ -2715,8 +2715,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, (DWORD)n);
             return 1;
         }
-        if ((int)want < n) {
-            n = (int)want;                 /* a partial read is allowed */
+        if ((INT)want < n) {
+            n = (INT)want;                 /* a partial read is allowed */
             WowNotePut(note, notecap, &k, " -- PARTIAL, the guest asked for less");
         }
         for (i = 0; i < n; ++i) dst[i] = b[i];
@@ -2734,12 +2734,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          says so rather than passing the mistake to Win32. */
     case WOWGDI_DELETEDC:
     case WOWGDI_DELETEOBJECT: {
-        int  wantdc = (f->Id == WOWGDI_DELETEDC);
-        WORD h = Wow32ArgWord(f, DOBJ_ARG_HANDLE);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
-        int k = 0, ok;
-        int want = wantdc ? WOWGDI_KIND_DC : WOWGDI_KIND_OBJ;
+        INT  wantdc = (f->Id == WOWGDI_DELETEDC);
+        WORD h = Wow32ArgWord(f, WOWGDI_DOBJ_ARG_HANDLE);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(h, &kind);
+        INT k = 0, ok;
+        INT want = wantdc ? WOWGDI_KIND_DC : WOWGDI_KIND_OBJ;
         WowNotePut(note, notecap, &k, wantdc ? "DeleteDC 0x" : "DeleteObject 0x");
         WowNoteHex(note, notecap, &k, h, 4);
         if (!o) {
@@ -2776,7 +2776,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         ok = wantdc ? (DeleteDC((HDC)o) ? 1 : 0) : (DeleteObject(o) ? 1 : 0);
-        if (ok) wowgdi_forget(h);
+        if (ok) WowGdiForget(h);
         WowNotePut(note, notecap, &k, ok ? " -> deleted, token released"
                                       : " -- ★ the OS refused the delete");
         Wow32SetReturn(f, (DWORD)ok);
@@ -2791,15 +2791,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          code (NULLREGION/SIMPLEREGION/COMPLEXREGION), not a boolean. */
     case WOWGDI_ELLIPSE:
     case WOWGDI_EXCLUDECLIPRECT: {
-        int  isell = (f->Id == WOWGDI_ELLIPSE);
-        WORD hdc = Wow32ArgWord(f, RC_ARG_HDC);
-        int  l = (int)(short)Wow32ArgWord(f, RC_ARG_LEFT);
-        int  t = (int)(short)Wow32ArgWord(f, RC_ARG_TOP);
-        int  r = (int)(short)Wow32ArgWord(f, RC_ARG_RIGHT);
-        int  b = (int)(short)Wow32ArgWord(f, RC_ARG_BOTTOM);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        INT  isell = (f->Id == WOWGDI_ELLIPSE);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_RC_ARG_HDC);
+        INT  l = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_LEFT);
+        INT  t = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_TOP);
+        INT  r = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_RIGHT);
+        INT  b = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RC_ARG_BOTTOM);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k, isell ? "Ellipse(0x" : "ExcludeClipRect(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -2820,7 +2820,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         if (isell) {
             Wow32SetReturn(f, (DWORD)(Ellipse((HDC)o, l, t, r, b) ? 1 : 0));
         } else {
-            int rc = ExcludeClipRect((HDC)o, l, t, r, b);
+            INT rc = ExcludeClipRect((HDC)o, l, t, r, b);
             WowNotePut(note, notecap, &k, " -> region complexity ");
             WowNoteHex(note, notecap, &k, (DWORD)rc, 4);
             Wow32SetReturn(f, (DWORD)(WORD)rc);
@@ -2830,16 +2830,16 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── ★ 0x1c RoundRect(hDC, l, t, r, b, ellipseW, ellipseH) -- 14 bytes. ──*/
     case WOWGDI_ROUNDRECT: {
-        WORD hdc = Wow32ArgWord(f, RR_ARG_HDC);
-        int  l  = (int)(short)Wow32ArgWord(f, RR_ARG_LEFT);
-        int  t  = (int)(short)Wow32ArgWord(f, RR_ARG_TOP);
-        int  r  = (int)(short)Wow32ArgWord(f, RR_ARG_RIGHT);
-        int  b  = (int)(short)Wow32ArgWord(f, RR_ARG_BOTTOM);
-        int  ew = (int)(short)Wow32ArgWord(f, RR_ARG_EW);
-        int  eh = (int)(short)Wow32ArgWord(f, RR_ARG_EH);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_RR_ARG_HDC);
+        INT  l  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_LEFT);
+        INT  t  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_TOP);
+        INT  r  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_RIGHT);
+        INT  b  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_BOTTOM);
+        INT  ew = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_EW);
+        INT  eh = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RR_ARG_EH);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k, "RoundRect(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -2875,14 +2875,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          with a pattern brush from `CreatePatternBrush`, which is
          how a Win16 program fills with one of the palette's patterns. */
     case WOWGDI_EXTFLOODFILL: {
-        WORD  hdc  = Wow32ArgWord(f, FF_ARG_HDC);
-        int   x    = (int)(short)Wow32ArgWord(f, FF_ARG_X);
-        int   y    = (int)(short)Wow32ArgWord(f, FF_ARG_Y);
-        DWORD col  = Wow32ArgDword(f, FF_ARG_COLOR);
-        WORD  type = Wow32ArgWord(f, FF_ARG_TYPE);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int   k = 0, ok;
+        WORD  hdc  = Wow32ArgWord(f, WOWGDI_FF_ARG_HDC);
+        INT   x    = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_FF_ARG_X);
+        INT   y    = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_FF_ARG_Y);
+        DWORD col  = Wow32ArgDword(f, WOWGDI_FF_ARG_COLOR);
+        WORD  type = Wow32ArgWord(f, WOWGDI_FF_ARG_TYPE);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT   k = 0, ok;
         WowNotePut(note, notecap, &k, "ExtFloodFill(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -2916,11 +2916,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          indices (HS_HORIZONTAL..HS_DIAGCROSS), same COLORREF. */
     case WOWGDI_CREATEPEN:
     case WOWGDI_CREATEHATCHBRUSH: {
-        int   ispen = (f->Id == WOWGDI_CREATEPEN);
-        DWORD col   = Wow32ArgDword(f, ispen ? CP_ARG_COLOR : CH_ARG_COLOR);
-        int   a     = (int)(short)Wow32ArgWord(f, ispen ? CP_ARG_WIDTH : CH_ARG_INDEX);
-        int   style = ispen ? (int)(short)Wow32ArgWord(f, CP_ARG_STYLE) : 0;
-        int   k = 0;
+        INT   ispen = (f->Id == WOWGDI_CREATEPEN);
+        DWORD col   = Wow32ArgDword(f, ispen ? WOWGDI_CP_ARG_COLOR : WOWGDI_CH_ARG_COLOR);
+        INT   a     = (INT)(SHORT)Wow32ArgWord(f, ispen ? WOWGDI_CP_ARG_WIDTH : WOWGDI_CH_ARG_INDEX);
+        INT   style = ispen ? (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CP_ARG_STYLE) : 0;
+        INT   k = 0;
         HGDIOBJ obj;
         WORD tok;
         WowNotePut(note, notecap, &k, ispen ? "CreatePen(style " : "CreateHatchBrush(index ");
@@ -2934,7 +2934,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         WowNotePut(note, notecap, &k, ")");
         obj = ispen ? (HGDIOBJ)CreatePen(style, a, (COLORREF)col)
                     : (HGDIOBJ)CreateHatchBrush(a, (COLORREF)col);
-        tok = obj ? wowgdi_h16(obj, WOWGDI_KIND_OBJ) : 0;
+        tok = obj ? WowGdiH16(obj, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (obj) DeleteObject(obj);
             WowNotePut(note, notecap, &k, " -- ★ the OS refused it (or the token map"
@@ -2953,13 +2953,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          represent the request is not the colour asked for -- so it is returned
          as the OS gives it rather than echoed. */
     case WOWGDI_SETPIXEL: {
-        WORD  hdc = Wow32ArgWord(f, SP_ARG_HDC);
-        int   x = (int)(short)Wow32ArgWord(f, SP_ARG_X);
-        int   y = (int)(short)Wow32ArgWord(f, SP_ARG_Y);
-        DWORD col = Wow32ArgDword(f, SP_ARG_COLOR);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int   k = 0;
+        WORD  hdc = Wow32ArgWord(f, WOWGDI_SP_ARG_HDC);
+        INT   x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SP_ARG_X);
+        INT   y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SP_ARG_Y);
+        DWORD col = Wow32ArgDword(f, WOWGDI_SP_ARG_COLOR);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT   k = 0;
         COLORREF got;
         WowNotePut(note, notecap, &k, "SetPixel(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -2983,10 +2983,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── ★ 0x3c CreatePatternBrush(hBitmap) -- one of OUR bitmap tokens. ─────*/
     case WOWGDI_CREATEPATTERNBRUSH: {
-        WORD hbm = Wow32ArgWord(f, ONE_ARG_HANDLE);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hbm, &kind);
-        int  k = 0;
+        WORD hbm = Wow32ArgWord(f, WOWGDI_ONE_ARG_HANDLE);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hbm, &kind);
+        INT  k = 0;
         HBRUSH br;
         WORD tok;
         WowNotePut(note, notecap, &k, "CreatePatternBrush(0x");
@@ -2999,7 +2999,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         br = CreatePatternBrush((HBITMAP)o);
-        tok = br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+        tok = br ? WowGdiH16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (br) DeleteObject((HGDIOBJ)br);
             WowNotePut(note, notecap, &k, " -- ★ no brush (or the token map is"
@@ -3018,12 +3018,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          MISREAD AS A COLOUR -- Win16 uses the same value for the same reason, so
          a point outside the clip region travels through unchanged. */
     case WOWGDI_GETPIXEL: {
-        WORD hdc = Wow32ArgWord(f, XY_ARG_HDC);
-        int  x = (int)(short)Wow32ArgWord(f, XY_ARG_X);
-        int  y = (int)(short)Wow32ArgWord(f, XY_ARG_Y);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_XY_ARG_HDC);
+        INT  x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_XY_ARG_X);
+        INT  y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_XY_ARG_Y);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         COLORREF c;
         WowNotePut(note, notecap, &k, "GetPixel(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -3056,10 +3056,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_GETPOLYFILLMODE:
     case WOWGDI_GETSTRETCHBLTMODE:
     case WOWGDI_GETTEXTCOLOR: {
-        WORD hdc = Wow32ArgWord(f, ONE_ARG_HANDLE);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int  k = 0;
+        WORD hdc = Wow32ArgWord(f, WOWGDI_ONE_ARG_HANDLE);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k,
                 f->Id == WOWGDI_GETBKCOLOR ? "GetBkColor(0x" :
                 f->Id == WOWGDI_GETROP2    ? "GetROP2(0x" :
@@ -3084,7 +3084,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             WowNoteHex(note, notecap, &k, (DWORD)c, 8);
             Wow32SetReturn(f, (DWORD)c);
         } else if (f->Id != WOWGDI_UPDATECOLORS) {
-            int v = f->Id == WOWGDI_GETROP2     ? GetROP2((HDC)o) :
+            INT v = f->Id == WOWGDI_GETROP2     ? GetROP2((HDC)o) :
                     f->Id == WOWGDI_GETBKMODE   ? GetBkMode((HDC)o) :
                     f->Id == WOWGDI_GETMAPMODE  ? GetMapMode((HDC)o) :
                     f->Id == WOWGDI_GETPOLYFILLMODE ? GetPolyFillMode((HDC)o)
@@ -3106,13 +3106,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          doing its other job, and passing our "not one of our tokens" refusal for
          it would leave a guest permanently clipped. */
     case WOWGDI_CREATERECTRGN: {
-        int  l = (int)(short)Wow32ArgWord(f, RGN_ARG_LEFT);
-        int  t = (int)(short)Wow32ArgWord(f, RGN_ARG_TOP);
-        int  r = (int)(short)Wow32ArgWord(f, RGN_ARG_RIGHT);
-        int  b = (int)(short)Wow32ArgWord(f, RGN_ARG_BOTTOM);
-        int  k = 0;
+        INT  l = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RGN_ARG_LEFT);
+        INT  t = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RGN_ARG_TOP);
+        INT  r = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RGN_ARG_RIGHT);
+        INT  b = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_RGN_ARG_BOTTOM);
+        INT  k = 0;
         HRGN rgn = CreateRectRgn(l, t, r, b);
-        WORD tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        WORD tok = rgn ? WowGdiH16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, notecap, &k, "CreateRectRgn(");
         WowNoteHex(note, notecap, &k, (DWORD)l, 4);
         WowNotePut(note, notecap, &k, ",");
@@ -3136,12 +3136,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_SELECTCLIPRGN: {
-        WORD hdc  = Wow32ArgWord(f, SCR_ARG_HDC);
-        WORD hrgn = Wow32ArgWord(f, SCR_ARG_RGN);
-        int  dkind = -1, rkind = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
-        HGDIOBJ r = wowgdi_h32(hrgn, &rkind);
-        int  k = 0, rc;
+        WORD hdc  = Wow32ArgWord(f, WOWGDI_SCR_ARG_HDC);
+        WORD hrgn = Wow32ArgWord(f, WOWGDI_SCR_ARG_RGN);
+        INT  dkind = -1, rkind = -1;
+        HGDIOBJ d = WowGdiH32(hdc, &dkind);
+        HGDIOBJ r = WowGdiH32(hrgn, &rkind);
+        INT  k = 0, rc;
         WowNotePut(note, notecap, &k, "SelectClipRgn(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", 0x");
@@ -3173,11 +3173,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          only an error when the mode actually needs one. Refusing it outright
          would break the idiomatic "copy this region" call. */
     case WOWGDI_COMBINERGN: {
-        WORD hd = Wow32ArgWord(f, CBR_ARG_DEST), h1 = Wow32ArgWord(f, CBR_ARG_SRC1);
-        WORD h2 = Wow32ArgWord(f, CBR_ARG_SRC2), md = Wow32ArgWord(f, CBR_ARG_MODE);
-        int kd = -1, k1 = -1, k2 = -1, k = 0, rc;
-        HGDIOBJ d = wowgdi_h32(hd, &kd), s1 = wowgdi_h32(h1, &k1),
-                s2 = wowgdi_h32(h2, &k2);
+        WORD hd = Wow32ArgWord(f, WOWGDI_CBR_ARG_DEST), h1 = Wow32ArgWord(f, WOWGDI_CBR_ARG_SRC1);
+        WORD h2 = Wow32ArgWord(f, WOWGDI_CBR_ARG_SRC2), md = Wow32ArgWord(f, WOWGDI_CBR_ARG_MODE);
+        INT kd = -1, k1 = -1, k2 = -1, k = 0, rc;
+        HGDIOBJ d = WowGdiH32(hd, &kd), s1 = WowGdiH32(h1, &k1),
+                s2 = WowGdiH32(h2, &k2);
         WowNotePut(note, notecap, &k, "CombineRgn(0x");
         WowNoteHex(note, notecap, &k, hd, 4);
         WowNotePut(note, notecap, &k, ", 0x"); WowNoteHex(note, notecap, &k, h1, 4);
@@ -3190,7 +3190,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);                       /* ERROR */
             return 1;
         }
-        rc = CombineRgn((HRGN)d, (HRGN)s1, (HRGN)s2, (int)(short)md);
+        rc = CombineRgn((HRGN)d, (HRGN)s1, (HRGN)s2, (INT)(SHORT)md);
         WowNotePut(note, notecap, &k, " -> complexity ");
         WowNoteHex(note, notecap, &k, (DWORD)rc, 4);
         Wow32SetReturn(f, (DWORD)(WORD)rc);
@@ -3200,8 +3200,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     /* ── 0x41 CreateRectRgnIndirect(lpRect) -- CreateRectRgn with the four
          numbers in a struct instead of on the stack. */
     case WOWGDI_CREATERECTRGNIND: {
-        volatile BYTE *rp = Wow32ArgPointer(f, CRRI_ARG_RECT);
-        int k = 0;
+        volatile BYTE *rp = Wow32ArgPointer(f, WOWGDI_CRRI_ARG_RECT);
+        INT k = 0;
         HRGN rgn;
         WORD tok;
         WowNotePut(note, notecap, &k, "CreateRectRgnIndirect");
@@ -3210,11 +3210,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        rgn = CreateRectRgn((int)(short)wowgdi_peek(rp, 0),
-                            (int)(short)wowgdi_peek(rp, 2),
-                            (int)(short)wowgdi_peek(rp, 4),
-                            (int)(short)wowgdi_peek(rp, 6));
-        tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        rgn = CreateRectRgn((INT)(SHORT)WowGdiPeek(rp, 0),
+                            (INT)(SHORT)WowGdiPeek(rp, 2),
+                            (INT)(SHORT)WowGdiPeek(rp, 4),
+                            (INT)(SHORT)WowGdiPeek(rp, 6));
+        tok = rgn ? WowGdiH16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (rgn) DeleteObject((HGDIOBJ)rgn);
             WowNotePut(note, notecap, &k, " -- ★ no region (or the token map is"
@@ -3232,9 +3232,9 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
        ★ The point of it is that it does not allocate, so a guest animating a
          clip does not churn the token map. */
     case WOWGDI_SETRECTRGN: {
-        WORD hrgn = Wow32ArgWord(f, SRR_ARG_RGN);
-        int  kk = -1, k = 0;
-        HGDIOBJ r = wowgdi_h32(hrgn, &kk);
+        WORD hrgn = Wow32ArgWord(f, WOWGDI_SRR_ARG_RGN);
+        INT  kk = -1, k = 0;
+        HGDIOBJ r = WowGdiH32(hrgn, &kk);
         WowNotePut(note, notecap, &k, "SetRectRgn(0x");
         WowNoteHex(note, notecap, &k, hrgn, 4);
         WowNotePut(note, notecap, &k, ")");
@@ -3245,10 +3245,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         SetRectRgn((HRGN)r,
-                   (int)(short)Wow32ArgWord(f, SRR_ARG_LEFT),
-                   (int)(short)Wow32ArgWord(f, SRR_ARG_TOP),
-                   (int)(short)Wow32ArgWord(f, SRR_ARG_RIGHT),
-                   (int)(short)Wow32ArgWord(f, SRR_ARG_BOTTOM));
+                   (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SRR_ARG_LEFT),
+                   (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SRR_ARG_TOP),
+                   (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SRR_ARG_RIGHT),
+                   (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SRR_ARG_BOTTOM));
         Wow32SetReturn(f, 1);
         return 1;
     }
@@ -3261,10 +3261,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
        ⚠ AND THE COUNT IS BOUNDED before it is trusted: it is a guest number
          used as an allocation size. */
     case WOWGDI_CREATEPOLYGONRGN: {
-        volatile BYTE *pp = Wow32ArgPointer(f, CPR_ARG_POINTS);
-        WORD n  = Wow32ArgWord(f, CPR_ARG_COUNT);
-        WORD md = Wow32ArgWord(f, CPR_ARG_MODE);
-        int  k = 0, i;
+        volatile BYTE *pp = Wow32ArgPointer(f, WOWGDI_CPR_ARG_POINTS);
+        WORD n  = Wow32ArgWord(f, WOWGDI_CPR_ARG_COUNT);
+        WORD md = Wow32ArgWord(f, WOWGDI_CPR_ARG_MODE);
+        INT  k = 0, i;
         POINT pts[WOWGDI_MAX_POLYPTS];
         HRGN rgn;
         WORD tok;
@@ -3280,12 +3280,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        for (i = 0; i < (int)n; ++i) {
-            pts[i].x = (LONG)(short)wowgdi_peek(pp, i * 4 + 0);
-            pts[i].y = (LONG)(short)wowgdi_peek(pp, i * 4 + 2);
+        for (i = 0; i < (INT)n; ++i) {
+            pts[i].x = (LONG)(SHORT)WowGdiPeek(pp, i * 4 + 0);
+            pts[i].y = (LONG)(SHORT)WowGdiPeek(pp, i * 4 + 2);
         }
-        rgn = CreatePolygonRgn(pts, (int)n, (int)(short)md);
-        tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        rgn = CreatePolygonRgn(pts, (INT)n, (INT)(SHORT)md);
+        tok = rgn ? WowGdiH16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (rgn) DeleteObject((HGDIOBJ)rgn);
             WowNotePut(note, notecap, &k, " -- ★ no region; answered 0");
@@ -3300,10 +3300,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     /* ── 0x4d GetClipBox(hDC, lpRect) -- the bounding box of the clip region. */
     case WOWGDI_GETCLIPBOX: {
-        WORD hdc = Wow32ArgWord(f, GCX_ARG_HDC);
-        volatile BYTE *rp = Wow32ArgPointer(f, GCX_ARG_RECT);
-        int dkind = -1, k = 0, rc;
-        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_GCX_ARG_HDC);
+        volatile BYTE *rp = Wow32ArgPointer(f, WOWGDI_GCX_ARG_RECT);
+        INT dkind = -1, k = 0, rc;
+        HGDIOBJ d = WowGdiH32(hdc, &dkind);
         RECT rc32;
         WowNotePut(note, notecap, &k, "GetClipBox(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -3314,7 +3314,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         if (!d || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
-            int i;
+            INT i;
             /* Zero it rather than leave the caller's litter -- same reasoning as
                GetClientRect, and for the same reason: a guest that clips to
                stack litter draws nothing and looks like a paint bug. */
@@ -3324,10 +3324,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         rc = GetClipBox((HDC)d, &rc32);
-        Wow32PokeWord(rp + 0, (WORD)(short)rc32.left);
-        Wow32PokeWord(rp + 2, (WORD)(short)rc32.top);
-        Wow32PokeWord(rp + 4, (WORD)(short)rc32.right);
-        Wow32PokeWord(rp + 6, (WORD)(short)rc32.bottom);
+        Wow32PokeWord(rp + 0, (WORD)(SHORT)rc32.left);
+        Wow32PokeWord(rp + 2, (WORD)(SHORT)rc32.top);
+        Wow32PokeWord(rp + 4, (WORD)(SHORT)rc32.right);
+        Wow32PokeWord(rp + 6, (WORD)(SHORT)rc32.bottom);
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)rc32.right, 4);
         WowNotePut(note, notecap, &k, "x");
@@ -3343,12 +3343,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
        ⚠ nCount IS A BUFFER SIZE FROM THE GUEST and bounds the copy; Win32's own
          call is given the smaller of it and our stack buffer. */
     case WOWGDI_GETTEXTFACE: {
-        WORD hdc = Wow32ArgWord(f, GTF_ARG_HDC);
-        WORD cnt = Wow32ArgWord(f, GTF_ARG_COUNT);
-        volatile BYTE *bp = Wow32ArgPointer(f, GTF_ARG_BUF);
-        int dkind = -1, k = 0, got, i;
-        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
-        char face[LF_FACESIZE + 1];
+        WORD hdc = Wow32ArgWord(f, WOWGDI_GTF_ARG_HDC);
+        WORD cnt = Wow32ArgWord(f, WOWGDI_GTF_ARG_COUNT);
+        volatile BYTE *bp = Wow32ArgPointer(f, WOWGDI_GTF_ARG_BUF);
+        INT dkind = -1, k = 0, got, i;
+        HGDIOBJ d = WowGdiH32(hdc, &dkind);
+        CHAR face[LF_FACESIZE + 1];
         WowNotePut(note, notecap, &k, "GetTextFace(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", ");
@@ -3361,9 +3361,9 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        got = (int)GetTextFaceA((HDC)d, (int)sizeof face, face);
+        got = (INT)GetTextFaceA((HDC)d, (INT)sizeof face, face);
         if (got <= 0) { face[0] = 0; got = 0; }
-        if (got > (int)cnt - 1) got = (int)cnt - 1;
+        if (got > (INT)cnt - 1) got = (INT)cnt - 1;
         for (i = 0; i < got; ++i) bp[i] = (BYTE)face[i];
         bp[got] = 0;
         WowNotePut(note, notecap, &k, " -> ");
@@ -3375,11 +3375,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     /* ── 0x0a SetTextJustification(hDC, nBreakExtra, nBreakCount) -- how WRITE
          justifies a line: spread nBreakExtra units over nBreakCount breaks. */
     case WOWGDI_SETTEXTJUST: {
-        WORD hdc = Wow32ArgWord(f, STJ_ARG_HDC);
-        int  ex  = (int)(short)Wow32ArgWord(f, STJ_ARG_EXTRA);
-        int  ct  = (int)(short)Wow32ArgWord(f, STJ_ARG_COUNT);
-        int  dkind = -1, k = 0, rc;
-        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_STJ_ARG_HDC);
+        INT  ex  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_STJ_ARG_EXTRA);
+        INT  ct  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_STJ_ARG_COUNT);
+        INT  dkind = -1, k = 0, rc;
+        HGDIOBJ d = WowGdiH32(hdc, &dkind);
         WowNotePut(note, notecap, &k, "SetTextJustification(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", extra ");
@@ -3410,13 +3410,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_SETVIEWPORTORG:
     case WOWGDI_SETVIEWPORTEXT:
     case WOWGDI_SETBITMAPDIM: {
-        WORD h = Wow32ArgWord(f, ORG_ARG_HDC);
-        int  x = (int)(short)Wow32ArgWord(f, ORG_ARG_X);
-        int  y = (int)(short)Wow32ArgWord(f, ORG_ARG_Y);
-        int  isbm = (f->Id == WOWGDI_SETBITMAPDIM);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
-        int  k = 0;
+        WORD h = Wow32ArgWord(f, WOWGDI_ORG_ARG_HDC);
+        INT  x = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ORG_ARG_X);
+        INT  y = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ORG_ARG_Y);
+        INT  isbm = (f->Id == WOWGDI_SETBITMAPDIM);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(h, &kind);
+        INT  k = 0;
         SIZE sz; POINT pt;
         WowNotePut(note, notecap, &k,
                 f->Id == WOWGDI_SETWINDOWEXT   ? "SetWindowExt(0x" :
@@ -3446,8 +3446,8 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         } else {
             SetBitmapDimensionEx((HBITMAP)o, x, y, &sz);
         }
-        Wow32SetReturn(f, ((DWORD)(WORD)(short)sz.cy << 16)
-                        | (DWORD)(WORD)(short)sz.cx);
+        Wow32SetReturn(f, ((DWORD)(WORD)(SHORT)sz.cy << 16)
+                        | (DWORD)(WORD)(SHORT)sz.cx);
         return 1;
     }
 
@@ -3459,12 +3459,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          tell afterwards that it was invented. */
     case WOWGDI_GETNEARESTCOLOR:
     case WOWGDI_GETNEARESTPALIDX: {
-        int   isidx = (f->Id == WOWGDI_GETNEARESTPALIDX);
-        WORD  h   = Wow32ArgWord(f, COL_ARG_HDC);
-        DWORD col = Wow32ArgDword(f, COL_ARG_COLOR);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(h, &kind);
-        int   k = 0;
+        INT   isidx = (f->Id == WOWGDI_GETNEARESTPALIDX);
+        WORD  h   = Wow32ArgWord(f, WOWGDI_COL_ARG_HDC);
+        DWORD col = Wow32ArgDword(f, WOWGDI_COL_ARG_COLOR);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(h, &kind);
+        INT   k = 0;
         WowNotePut(note, notecap, &k, isidx ? "GetNearestPaletteIndex(0x"
                                          : "GetNearestColor(0x");
         WowNoteHex(note, notecap, &k, h, 4);
@@ -3505,14 +3505,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          so this must NOT stop at a NUL the way `Wow32ArgString` does -- it copies
          exactly the count it was given, bounded by the scratch buffer. */
     case WOWGDI_INTERSECTCLIPRECT: {
-        WORD tok = Wow32ArgWord(f, ICR_ARG_HDC);
-        int  l = (int)(short)Wow32ArgWord(f, ICR_ARG_LEFT);
-        int  t = (int)(short)Wow32ArgWord(f, ICR_ARG_TOP);
-        int  r = (int)(short)Wow32ArgWord(f, ICR_ARG_RIGHT);
-        int  b = (int)(short)Wow32ArgWord(f, ICR_ARG_BOTTOM);
-        int  kind = -1, rc;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
-        int  k = 0;
+        WORD tok = Wow32ArgWord(f, WOWGDI_ICR_ARG_HDC);
+        INT  l = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ICR_ARG_LEFT);
+        INT  t = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ICR_ARG_TOP);
+        INT  r = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ICR_ARG_RIGHT);
+        INT  b = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ICR_ARG_BOTTOM);
+        INT  kind = -1, rc;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
+        INT  k = 0;
         WowNotePut(note, notecap, &k, "IntersectClipRect(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
@@ -3527,20 +3527,20 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_RECTVISIBLE: {
-        WORD tok = Wow32ArgWord(f, RV_ARG_HDC);
-        volatile BYTE *rp = Wow32ArgPointer(f, RV_ARG_RECT);
-        int kind = -1, i, vis;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
-        unsigned char r8[8];
+        WORD tok = Wow32ArgWord(f, WOWGDI_RV_ARG_HDC);
+        volatile BYTE *rp = Wow32ArgPointer(f, WOWGDI_RV_ARG_RECT);
+        INT kind = -1, i, vis;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
+        BYTE r8[8];
         RECT r;
-        int k = 0;
+        INT k = 0;
         WowNotePut(note, notecap, &k, "RectVisible(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !rp) {
             WowNotePut(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS, or no rect; 0");
             Wow32SetReturn(f, 0); return 1;
         }
-        for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+        for (i = 0; i < 8; ++i) r8[i] = (BYTE)rp[i];
         r.left  = WowConvRect16Get(r8, 0); r.top    = WowConvRect16Get(r8, 1);
         r.right = WowConvRect16Get(r8, 2); r.bottom = WowConvRect16Get(r8, 3);
         vis = RectVisible((HDC)o, &r) ? 1 : 0;
@@ -3550,28 +3550,28 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_CREATEFONT: {
-        char face[LF_FACESIZE];
+        CHAR face[LF_FACESIZE];
         HFONT hf;
         WORD  tok;
-        int   k = 0;
-        int   h  = (int)(short)Wow32ArgWord(f, CF_ARG_HEIGHT);
-        int   wd = (int)(short)Wow32ArgWord(f, CF_ARG_WIDTH);
+        INT   k = 0;
+        INT   h  = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CF_ARG_HEIGHT);
+        INT   wd = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CF_ARG_WIDTH);
         face[0] = 0;
-        Wow32ArgString(f, CF_ARG_FACE, face, (int)sizeof face);
+        Wow32ArgString(f, WOWGDI_CF_ARG_FACE, face, (INT)sizeof face);
         hf = CreateFontA(h, wd,
-                         (int)(short)Wow32ArgWord(f, CF_ARG_ESCAPE),
-                         (int)(short)Wow32ArgWord(f, CF_ARG_ORIENT),
-                         (int)(short)Wow32ArgWord(f, CF_ARG_WEIGHT),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_ITALIC) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_UNDER)  & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_STRIKE) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_CHARSET) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_OUTPREC) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_CLIPPREC) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_QUALITY) & 0xFF),
-                         (DWORD)(Wow32ArgWord(f, CF_ARG_PITCH) & 0xFF),
+                         (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CF_ARG_ESCAPE),
+                         (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CF_ARG_ORIENT),
+                         (INT)(SHORT)Wow32ArgWord(f, WOWGDI_CF_ARG_WEIGHT),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_ITALIC) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_UNDER)  & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_STRIKE) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_CHARSET) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_OUTPREC) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_CLIPPREC) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_QUALITY) & 0xFF),
+                         (DWORD)(Wow32ArgWord(f, WOWGDI_CF_ARG_PITCH) & 0xFF),
                          face[0] ? face : NULL);
-        tok = hf ? wowgdi_h16((HGDIOBJ)hf, WOWGDI_KIND_OBJ) : 0;
+        tok = hf ? WowGdiH16((HGDIOBJ)hf, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, notecap, &k, "CreateFont h=");
         WowNoteHex(note, notecap, &k, (DWORD)h, 4);
         WowNotePut(note, notecap, &k, " \"");
@@ -3585,31 +3585,31 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_GETCHARWIDTH: {
-        WORD tok   = Wow32ArgWord(f, GCW_ARG_HDC);
-        WORD first = Wow32ArgWord(f, GCW_ARG_FIRST);
-        WORD last  = Wow32ArgWord(f, GCW_ARG_LAST);
-        volatile BYTE *bp = Wow32ArgPointer(f, GCW_ARG_BUF);
-        int kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        WORD tok   = Wow32ArgWord(f, WOWGDI_GCW_ARG_HDC);
+        WORD first = Wow32ArgWord(f, WOWGDI_GCW_ARG_FIRST);
+        WORD last  = Wow32ArgWord(f, WOWGDI_GCW_ARG_LAST);
+        volatile BYTE *bp = Wow32ArgPointer(f, WOWGDI_GCW_ARG_BUF);
+        INT kind = -1;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         INT w32[256];
-        int k = 0, n, i, ok;
+        INT k = 0, n, i, ok;
         WowNotePut(note, notecap, &k, "GetCharWidth(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         WowNotePut(note, notecap, &k, ", "); WowNoteHex(note, notecap, &k, first, 2);
         WowNotePut(note, notecap, &k, "..");  WowNoteHex(note, notecap, &k, last, 2);
         if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !bp
-            || last < first || (int)(last - first) >= 256) {
+            || last < first || (INT)(last - first) >= 256) {
             WowNotePut(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS, no buffer, "
                                        "or a range past 256; 0");
             Wow32SetReturn(f, 0); return 1;
         }
-        n  = (int)(last - first) + 1;
+        n  = (INT)(last - first) + 1;
         ok = GetCharWidth32A((HDC)o, first, last, w32) ? 1 : 0;
         if (!ok) ok = GetCharWidthA((HDC)o, first, last, w32) ? 1 : 0;
         if (!ok) { WowNotePut(note, notecap, &k, ") -- GDI refused; nothing written");
                    Wow32SetReturn(f, 0); return 1; }
         /* ⚠ ONE WORD PER CHARACTER. See the note by the ids. */
-        for (i = 0; i < n; ++i) Wow32PokeWord(bp + i * 2, (WORD)(short)w32[i]);
+        for (i = 0; i < n; ++i) Wow32PokeWord(bp + i * 2, (WORD)(SHORT)w32[i]);
         WowNotePut(note, notecap, &k, ") -> "); WowNoteHex(note, notecap, &k, (DWORD)n, 4);
         WowNotePut(note, notecap, &k, " widths, one WORD each");
         Wow32SetReturn(f, 1);
@@ -3617,14 +3617,14 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_CREATEMETAFILE: {
-        char path[260];
+        CHAR path[260];
         HDC  mdc;
         WORD tok;
-        int  k = 0, named;
+        INT  k = 0, named;
         path[0] = 0;
-        named = Wow32ArgString(f, CMF_ARG_FILE, path, (int)sizeof path);
+        named = Wow32ArgString(f, WOWGDI_CMF_ARG_FILE, path, (INT)sizeof path);
         mdc = CreateMetaFileA(named && path[0] ? path : NULL);
-        tok = mdc ? wowgdi_h16((HGDIOBJ)mdc, WOWGDI_KIND_DC) : 0;
+        tok = mdc ? WowGdiH16((HGDIOBJ)mdc, WOWGDI_KIND_DC) : 0;
         WowNotePut(note, notecap, &k, "CreateMetaFile(");
         WowNotePut(note, notecap, &k, (named && path[0]) ? path : "in memory");
         WowNotePut(note, notecap, &k, ") -> DC token 0x");
@@ -3634,12 +3634,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_CLOSEMETAFILE: {
-        WORD tok = Wow32ArgWord(f, MF1_ARG_H);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        WORD tok = Wow32ArgWord(f, WOWGDI_MF1_ARG_H);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
         HMETAFILE mf;
         WORD out;
-        int  k = 0;
+        INT  k = 0;
         WowNotePut(note, notecap, &k, "CloseMetaFile(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (!o || kind != WOWGDI_KIND_DC) {
@@ -3647,10 +3647,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0); return 1;
         }
         mf = CloseMetaFile((HDC)o);
-        wowgdi_forget(tok);              /* the DC is gone whatever happened */
+        WowGdiForget(tok);              /* the DC is gone whatever happened */
         /* ⚠ A METAFILE IS NOT A DC. It gets an OBJ token so that a guest which
              passes it to a DC call is refused rather than obeyed. */
-        out = mf ? wowgdi_h16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
+        out = mf ? WowGdiH16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, notecap, &k, ") -> metafile token 0x");
         WowNoteHex(note, notecap, &k, out, 4);
         Wow32SetReturn(f, (DWORD)out);
@@ -3658,15 +3658,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_DELETEMETAFILE: {
-        WORD tok = Wow32ArgWord(f, MF1_ARG_H);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
-        int  k = 0, r = 0;
+        WORD tok = Wow32ArgWord(f, WOWGDI_MF1_ARG_H);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
+        INT  k = 0, r = 0;
         WowNotePut(note, notecap, &k, "DeleteMetaFile(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (o && kind == WOWGDI_KIND_OBJ) {
             r = DeleteMetaFile((HMETAFILE)o) ? 1 : 0;
-            wowgdi_forget(tok);
+            WowGdiForget(tok);
         }
         WowNotePut(note, notecap, &k, r ? ") -> deleted"
                                      : ") -- ★ NOT ONE OF OUR METAFILE TOKENS; FALSE");
@@ -3680,11 +3680,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          metafile by the OS's own GetObjectType, not by token kind alone -- a pen
          is an OBJ token too. */
     case WOWGDI_PLAYMETAFILE: {
-        WORD hdc = Wow32ArgWord(f, PMF_ARG_HDC);
-        WORD tok = Wow32ArgWord(f, PMF_ARG_HMF);
-        int  kd = -1, km = -1, k = 0, r = 0;
-        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
-        HGDIOBJ mf = wowgdi_h32(tok, &km);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_PMF_ARG_HDC);
+        WORD tok = Wow32ArgWord(f, WOWGDI_PMF_ARG_HMF);
+        INT  kd = -1, km = -1, k = 0, r = 0;
+        HGDIOBJ dc = WowGdiH32(hdc, &kd);
+        HGDIOBJ mf = WowGdiH32(tok, &km);
         WowNotePut(note, notecap, &k, "PlayMetaFile(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", 0x");
@@ -3705,19 +3705,19 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     /* ── ★ 0xaf EnumMetaFile(hdc, hmf, lpfn, lParam) ── #295. CARDFILE, PACKAGER
          and WRITE import it (through OLECLI). The metafile is snapshot ONCE, as
          bytes (GetMetaFileBitsEx), and walked by wowconv.h's pure parser; each
-         record is one callback on the wowenum.h chain -- see g_wmf above for the
+         record is one callback on the wowenum.h chain -- see g_WowGdiMetafile above for the
          handle table. The answer is 1 up front and revised to 0 by a stop. */
     case WOWGDI_ENUMMETAFILE: {
-        WORD  hdc  = Wow32ArgWord(f, EMF_ARG_HDC);
-        WORD  tok  = Wow32ArgWord(f, EMF_ARG_HMF);
-        DWORD proc = Wow32ArgDword(f, EMF_ARG_PROC);
-        DWORD lp   = Wow32ArgDword(f, EMF_ARG_LPARAM);
-        int   kd = -1, km = -1, k = 0;
-        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
-        HGDIOBJ mf = wowgdi_h32(tok, &km);
+        WORD  hdc  = Wow32ArgWord(f, WOWGDI_EMF_ARG_HDC);
+        WORD  tok  = Wow32ArgWord(f, WOWGDI_EMF_ARG_HMF);
+        DWORD proc = Wow32ArgDword(f, WOWGDI_EMF_ARG_PROC);
+        DWORD lp   = Wow32ArgDword(f, WOWGDI_EMF_ARG_LPARAM);
+        INT   kd = -1, km = -1, k = 0;
+        HGDIOBJ dc = WowGdiH32(hdc, &kd);
+        HGDIOBJ mf = WowGdiH32(tok, &km);
         UINT  n;
-        BYTE *bits;
-        unsigned nobj = 0;
+        PBYTE bits;
+        UINT nobj = 0;
         unsigned long first, end = 0;
         WowNotePut(note, notecap, &k, "EnumMetaFile(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -3734,12 +3734,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         if (!f->IsCallbackAllowed) { WowNotePut(note, notecap, &k, " -- callbacks are not armed; 0"); return 1; }
-        if (WowEnumBusy() || g_wmf.active) {
+        if (WowEnumBusy() || g_WowGdiMetafile.IsActive) {
             WowNotePut(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             return 1;
         }
         n = GetMetaFileBitsEx((HMETAFILE)mf, 0, NULL);
-        bits = n ? (BYTE *)HeapAlloc(GetProcessHeap(), 0, n) : NULL;
+        bits = n ? (PBYTE)HeapAlloc(GetProcessHeap(), 0, n) : NULL;
         if (!bits || GetMetaFileBitsEx((HMETAFILE)mf, n, bits) != n) {
             if (bits) HeapFree(GetProcessHeap(), 0, bits);
             WowNotePut(note, notecap, &k, " -- ★ GetMetaFileBitsEx FAILED; 0");
@@ -3760,18 +3760,18 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             WowNotePut(note, notecap, &k, " -- ★ the callback is not a usable far pointer; 0");
             return 1;
         }
-        memset(&g_wmf, 0, sizeof g_wmf);
-        g_wmf.active = 1;
-        g_wmf.bits = bits; g_wmf.len = n; g_wmf.end = end; g_wmf.off = first;
-        g_wmf.nobj = nobj;
-        g_wmf.hdc16 = hdc;
+        memset(&g_WowGdiMetafile, 0, sizeof g_WowGdiMetafile);
+        g_WowGdiMetafile.IsActive = 1;
+        g_WowGdiMetafile.Bits = bits; g_WowGdiMetafile.Length = n; g_WowGdiMetafile.End = end; g_WowGdiMetafile.Offset = first;
+        g_WowGdiMetafile.ObjectCount = nobj;
+        g_WowGdiMetafile.Dc16 = hdc;
         /* The guest's hdc is passed to every callback verbatim; it only has to be
            one of ours for the objects to be put back at the end. */
         if (dc && (kd == WOWGDI_KIND_DC || kd == WOWGDI_KIND_WINDC)) {
-            g_wmf.dc = (HDC)dc;
-            g_wmf.pen0   = GetCurrentObject((HDC)dc, OBJ_PEN);
-            g_wmf.brush0 = GetCurrentObject((HDC)dc, OBJ_BRUSH);
-            g_wmf.font0  = GetCurrentObject((HDC)dc, OBJ_FONT);
+            g_WowGdiMetafile.Dc = (HDC)dc;
+            g_WowGdiMetafile.OriginalPen   = GetCurrentObject((HDC)dc, OBJ_PEN);
+            g_WowGdiMetafile.OriginalBrush = GetCurrentObject((HDC)dc, OBJ_BRUSH);
+            g_WowGdiMetafile.OriginalFont  = GetCurrentObject((HDC)dc, OBJ_FONT);
         }
         Wow32SetReturn(f, 1);
         f->IsEnumerationRequested = 1;
@@ -3785,15 +3785,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          forgotten. ⚠ Win16 declares this VOID (3.1 SDK, Wine's gdi.exe.spec); the
          BOOL written to the return hole is Win32's and is unmeasured against stock. */
     case WOWGDI_PLAYMETAFILEREC: {
-        WORD  hdc = Wow32ArgWord(f, PMFR_ARG_HDC);
-        WORD  nh  = Wow32ArgWord(f, PMFR_ARG_NHANDLES);
-        DWORD mfp = Wow32ArgDword(f, PMFR_ARG_MR);
-        volatile BYTE *mr = Wow32ArgPointer(f, PMFR_ARG_MR);
-        volatile BYTE *ht = Wow32ArgPointer(f, PMFR_ARG_HT);
-        int   kd = -1, k = 0, r = 0, i, made = 0, gone = 0, full = 0;
-        HGDIOBJ dc = wowgdi_h32(hdc, &kd);
+        WORD  hdc = Wow32ArgWord(f, WOWGDI_PMFR_ARG_HDC);
+        WORD  nh  = Wow32ArgWord(f, WOWGDI_PMFR_ARG_NHANDLES);
+        DWORD mfp = Wow32ArgDword(f, WOWGDI_PMFR_ARG_MR);
+        volatile BYTE *mr = Wow32ArgPointer(f, WOWGDI_PMFR_ARG_MR);
+        volatile BYTE *ht = Wow32ArgPointer(f, WOWGDI_PMFR_ARG_HT);
+        INT   kd = -1, k = 0, r = 0, i, made = 0, gone = 0, full = 0;
+        HGDIOBJ dc = WowGdiH32(hdc, &kd);
         DWORD w = 0, bytes;
-        const BYTE *rec;
+        PCBYTE rec;
         WORD  tk[WOWMF_MAXOBJ];
         HGDIOBJ before[WOWMF_MAXOBJ];
         WowNotePut(note, notecap, &k, "PlayMetaFileRecord(0x");
@@ -3810,16 +3810,16 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
                 : ") -- ★ A NULL RECORD OR TABLE POINTER; FALSE");
             return 1;
         }
-        w = (DWORD)wowgdi_peek(mr, 0) | ((DWORD)wowgdi_peek(mr, 2) << 16);
-        WowNotePut(note, notecap, &k, ", fn=0x"); WowNoteHex(note, notecap, &k, wowgdi_peek(mr, 4), 4);
+        w = (DWORD)WowGdiPeek(mr, 0) | ((DWORD)WowGdiPeek(mr, 2) << 16);
+        WowNotePut(note, notecap, &k, ", fn=0x"); WowNoteHex(note, notecap, &k, WowGdiPeek(mr, 4), 4);
         WowNotePut(note, notecap, &k, " size=0x"); WowNoteHex(note, notecap, &k, w, 6);
         WowNotePut(note, notecap, &k, ")");
         if (w < 3) { WowNotePut(note, notecap, &k, " -- ★ rdSize < 3; FALSE"); return 1; }
         /* ★ A RECORD WHOSE CALLBACK COPY WAS CUT SHORT is played from the snapshot,
              recognised by ADDRESS: it is the record the enumeration is in. */
-        if (g_wmf.active && g_wmf.truncated && g_wmf.rec_lin
-            && (DWORD)(ULONG_PTR)mr == g_wmf.rec_lin && w * 2 == g_wmf.rec_bytes) {
-            rec = g_wmf.bits + g_wmf.rec_off;
+        if (g_WowGdiMetafile.IsActive && g_WowGdiMetafile.IsTruncated && g_WowGdiMetafile.RecordLinear
+            && (DWORD)(ULONG_PTR)mr == g_WowGdiMetafile.RecordLinear && w * 2 == g_WowGdiMetafile.RecordBytes) {
+            rec = g_WowGdiMetafile.Bits + g_WowGdiMetafile.RecordOffset;
             WowNotePut(note, notecap, &k, " [the truncated record, played from the snapshot]");
         } else {
             if (w > 0x8000 || (mfp & 0xFFFF) + w * 2 > 0x10000) {
@@ -3828,28 +3828,28 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
                 return 1;
             }
             bytes = w * 2;
-            for (i = 0; i < (int)bytes; ++i) g_wmf_rec[i] = mr[i];
-            rec = g_wmf_rec;
+            for (i = 0; i < (INT)bytes; ++i) g_WowGdiMetafileRecord[i] = mr[i];
+            rec = g_WowGdiMetafileRecord;
         }
-        for (i = 0; i < (int)nh; ++i) {
-            int kk = -1;
+        for (i = 0; i < (INT)nh; ++i) {
+            INT kk = -1;
             HGDIOBJ o;
-            tk[i] = wowgdi_peek(ht, i * 2);
-            o = tk[i] ? wowgdi_h32(tk[i], &kk) : NULL;
+            tk[i] = WowGdiPeek(ht, i * 2);
+            o = tk[i] ? WowGdiH32(tk[i], &kk) : NULL;
             if (o && (kk == WOWGDI_KIND_DC || kk == WOWGDI_KIND_WINDC)) o = NULL;
-            g_wmf_ht[i] = before[i] = o;
+            g_WowGdiMetafileHandles[i] = before[i] = o;
         }
-        r = PlayMetaFileRecord((HDC)dc, (HANDLETABLE *)g_wmf_ht,
-                               (METARECORD *)(void *)rec, nh) ? 1 : 0;
-        for (i = 0; i < (int)nh; ++i) {
-            if (g_wmf_ht[i] == before[i]) continue;
-            if (g_wmf_ht[i]) {
-                WORD t = wowgdi_h16(g_wmf_ht[i], WOWGDI_KIND_OBJ);
+        r = PlayMetaFileRecord((HDC)dc, (HANDLETABLE *)g_WowGdiMetafileHandles,
+                               (METARECORD *)(VOID *)rec, nh) ? 1 : 0;
+        for (i = 0; i < (INT)nh; ++i) {
+            if (g_WowGdiMetafileHandles[i] == before[i]) continue;
+            if (g_WowGdiMetafileHandles[i]) {
+                WORD t = WowGdiH16(g_WowGdiMetafileHandles[i], WOWGDI_KIND_OBJ);
                 if (!t) ++full;
                 Wow32PokeWord(ht + i * 2, t);
                 ++made;
             } else {
-                if (tk[i]) wowgdi_forget(tk[i]);
+                if (tk[i]) WowGdiForget(tk[i]);
                 Wow32PokeWord(ht + i * 2, 0);
                 ++gone;
             }
@@ -3866,15 +3866,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_COPYMETAFILE: {
-        WORD tok = Wow32ArgWord(f, CPMF_ARG_HMF);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(tok, &kind);
-        char path[260];
+        WORD tok = Wow32ArgWord(f, WOWGDI_CPMF_ARG_HMF);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(tok, &kind);
+        CHAR path[260];
         HMETAFILE mf;
         WORD out;
-        int  k = 0, named;
+        INT  k = 0, named;
         path[0] = 0;
-        named = Wow32ArgString(f, CPMF_ARG_FILE, path, (int)sizeof path);
+        named = Wow32ArgString(f, WOWGDI_CPMF_ARG_FILE, path, (INT)sizeof path);
         WowNotePut(note, notecap, &k, "CopyMetaFile(0x");
         WowNoteHex(note, notecap, &k, tok, 4);
         if (!o || kind != WOWGDI_KIND_OBJ) {
@@ -3882,27 +3882,27 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0); return 1;
         }
         mf  = CopyMetaFileA((HMETAFILE)o, (named && path[0]) ? path : NULL);
-        out = mf ? wowgdi_h16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
+        out = mf ? WowGdiH16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, notecap, &k, ") -> 0x"); WowNoteHex(note, notecap, &k, out, 4);
         Wow32SetReturn(f, (DWORD)out);
         return 1;
     }
 
     case WOWGDI_EXTTEXTOUT: {
-        WORD hdc  = Wow32ArgWord(f, ETO_ARG_HDC);
-        int  x    = (int)(short)Wow32ArgWord(f, ETO_ARG_X);
-        int  y    = (int)(short)Wow32ArgWord(f, ETO_ARG_Y);
-        WORD opts = Wow32ArgWord(f, ETO_ARG_OPTS);
-        WORD n    = Wow32ArgWord(f, ETO_ARG_COUNT);
-        volatile BYTE *sp = Wow32ArgPointer(f, ETO_ARG_STR);
-        volatile BYTE *rp = Wow32ArgPointer(f, ETO_ARG_RECT);
-        volatile BYTE *dp = Wow32ArgPointer(f, ETO_ARG_DX);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        char buf[512];
+        WORD hdc  = Wow32ArgWord(f, WOWGDI_ETO_ARG_HDC);
+        INT  x    = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ETO_ARG_X);
+        INT  y    = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_ETO_ARG_Y);
+        WORD opts = Wow32ArgWord(f, WOWGDI_ETO_ARG_OPTS);
+        WORD n    = Wow32ArgWord(f, WOWGDI_ETO_ARG_COUNT);
+        volatile BYTE *sp = Wow32ArgPointer(f, WOWGDI_ETO_ARG_STR);
+        volatile BYTE *rp = Wow32ArgPointer(f, WOWGDI_ETO_ARG_RECT);
+        volatile BYTE *dp = Wow32ArgPointer(f, WOWGDI_ETO_ARG_DX);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        CHAR buf[512];
         INT  dx[512];
         RECT rc, *prc = NULL;
-        int  k = 0, i, cnt = (int)n, ok;
+        INT  k = 0, i, cnt = (INT)n, ok;
         WowNotePut(note, notecap, &k, "ExtTextOut(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", "); WowNoteHex(note, notecap, &k, (DWORD)x, 4);
@@ -3915,11 +3915,11 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         if (cnt < 0) cnt = 0;
-        if (cnt > (int)sizeof buf) cnt = (int)sizeof buf;
-        for (i = 0; i < cnt; ++i) buf[i] = sp ? (char)sp[i] : ' ';
+        if (cnt > (INT)sizeof buf) cnt = (INT)sizeof buf;
+        for (i = 0; i < cnt; ++i) buf[i] = sp ? (CHAR)sp[i] : ' ';
         if (rp) {
-            unsigned char r8[8];
-            for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+            BYTE r8[8];
+            for (i = 0; i < 8; ++i) r8[i] = (BYTE)rp[i];
             rc.left   = WowConvRect16Get(r8, 0);
             rc.top    = WowConvRect16Get(r8, 1);
             rc.right  = WowConvRect16Get(r8, 2);
@@ -3936,7 +3936,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         if (dp && cnt) {
             for (i = 0; i < cnt; ++i)
-                dx[i] = (int)(short)((WORD)dp[i * 2] | ((WORD)dp[i * 2 + 1] << 8));
+                dx[i] = (INT)(SHORT)((WORD)dp[i * 2] | ((WORD)dp[i * 2 + 1] << 8));
             WowNotePut(note, notecap, &k, " +spacing");
         }
         ok = ExtTextOutA((HDC)o, x, y, (UINT)opts, prc,
@@ -3949,16 +3949,16 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
 
     case WOWGDI_TEXTOUT:
     case WOWGDI_GETTEXTEXTENT: {
-        int  isout = (f->Id == WOWGDI_TEXTOUT);
-        WORD hdc = Wow32ArgWord(f, isout ? TO_ARG_HDC   : TE_ARG_HDC);
-        WORD n   = Wow32ArgWord(f, isout ? TO_ARG_COUNT : TE_ARG_COUNT);
-        volatile BYTE *s = Wow32ArgPointer(f, isout ? TO_ARG_STR : TE_ARG_STR);
-        int  x = isout ? (int)(short)Wow32ArgWord(f, TO_ARG_X) : 0;
-        int  y = isout ? (int)(short)Wow32ArgWord(f, TO_ARG_Y) : 0;
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        char buf[512];
-        int  k = 0, i, cnt = (int)n;
+        INT  isout = (f->Id == WOWGDI_TEXTOUT);
+        WORD hdc = Wow32ArgWord(f, isout ? WOWGDI_TO_ARG_HDC   : WOWGDI_TE_ARG_HDC);
+        WORD n   = Wow32ArgWord(f, isout ? WOWGDI_TO_ARG_COUNT : WOWGDI_TE_ARG_COUNT);
+        volatile BYTE *s = Wow32ArgPointer(f, isout ? WOWGDI_TO_ARG_STR : WOWGDI_TE_ARG_STR);
+        INT  x = isout ? (INT)(SHORT)Wow32ArgWord(f, WOWGDI_TO_ARG_X) : 0;
+        INT  y = isout ? (INT)(SHORT)Wow32ArgWord(f, WOWGDI_TO_ARG_Y) : 0;
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        CHAR buf[512];
+        INT  k = 0, i, cnt = (INT)n;
         SIZE sz;
         WowNotePut(note, notecap, &k, isout ? "TextOut(0x" : "GetTextExtent(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
@@ -3978,10 +3978,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         if (cnt < 0) cnt = 0;
-        if (cnt > (int)sizeof buf) cnt = (int)sizeof buf;
-        for (i = 0; i < cnt; ++i) buf[i] = (char)s[i];
+        if (cnt > (INT)sizeof buf) cnt = (INT)sizeof buf;
+        for (i = 0; i < cnt; ++i) buf[i] = (CHAR)s[i];
         if (isout) {
-            int r = TextOutA((HDC)o, x, y, buf, cnt) ? 1 : 0;
+            INT r = TextOutA((HDC)o, x, y, buf, cnt) ? 1 : 0;
             WowNotePut(note, notecap, &k, r ? " -> drawn" : " -- ★ the OS refused it");
             Wow32SetReturn(f, (DWORD)r);
             return 1;
@@ -4002,13 +4002,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          READ. A guest that finds a stale byte at tmPitchAndFamily picks a font
          for reasons nothing in the log explains. */
     case WOWGDI_GETTEXTMETRICS: {
-        WORD hdc = Wow32ArgWord(f, TM_ARG_HDC);
-        volatile BYTE *dst = Wow32ArgPointer(f, TM_ARG_BUF);
-        int  kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        WORD hdc = Wow32ArgWord(f, WOWGDI_TM_ARG_HDC);
+        volatile BYTE *dst = Wow32ArgPointer(f, WOWGDI_TM_ARG_BUF);
+        INT  kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         TEXTMETRICA tm;
-        int k = 0, i;
-        BYTE b[WOW16_TEXTMETRIC_CB];
+        INT k = 0, i;
+        BYTE b[WOWGDI_TEXTMETRIC16_SIZE];
         WowNotePut(note, notecap, &k, "GetTextMetrics(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ")");
@@ -4023,15 +4023,15 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        for (i = 0; i < (int)sizeof b; ++i) b[i] = 0;
-        Wow32PokeWord(b +  0, (WORD)(short)tm.tmHeight);
-        Wow32PokeWord(b +  2, (WORD)(short)tm.tmAscent);
-        Wow32PokeWord(b +  4, (WORD)(short)tm.tmDescent);
-        Wow32PokeWord(b +  6, (WORD)(short)tm.tmInternalLeading);
-        Wow32PokeWord(b +  8, (WORD)(short)tm.tmExternalLeading);
-        Wow32PokeWord(b + 10, (WORD)(short)tm.tmAveCharWidth);
-        Wow32PokeWord(b + 12, (WORD)(short)tm.tmMaxCharWidth);
-        Wow32PokeWord(b + 14, (WORD)(short)tm.tmWeight);
+        for (i = 0; i < (INT)sizeof b; ++i) b[i] = 0;
+        Wow32PokeWord(b +  0, (WORD)(SHORT)tm.tmHeight);
+        Wow32PokeWord(b +  2, (WORD)(SHORT)tm.tmAscent);
+        Wow32PokeWord(b +  4, (WORD)(SHORT)tm.tmDescent);
+        Wow32PokeWord(b +  6, (WORD)(SHORT)tm.tmInternalLeading);
+        Wow32PokeWord(b +  8, (WORD)(SHORT)tm.tmExternalLeading);
+        Wow32PokeWord(b + 10, (WORD)(SHORT)tm.tmAveCharWidth);
+        Wow32PokeWord(b + 12, (WORD)(SHORT)tm.tmMaxCharWidth);
+        Wow32PokeWord(b + 14, (WORD)(SHORT)tm.tmWeight);
         /* s91: THE WINDOWS 3.1 ORDER from +16 on -- the BYTE fields come before the
              last three shorts, exactly as EnumFonts' NEWTEXTMETRIC16 (wowgdi_font_blob,
              = stock in w_genum) lays them out. This wrote a Win32-like order (Overhang
@@ -4042,16 +4042,16 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         b[20] = (BYTE)tm.tmLastChar;  b[21] = (BYTE)tm.tmDefaultChar;
         b[22] = (BYTE)tm.tmBreakChar; b[23] = tm.tmPitchAndFamily;
         b[24] = tm.tmCharSet;
-        Wow32PokeWord(b + 25, (WORD)(short)tm.tmOverhang);
-        Wow32PokeWord(b + 27, (WORD)(short)tm.tmDigitizedAspectX);
-        Wow32PokeWord(b + 29, (WORD)(short)tm.tmDigitizedAspectY);
-        for (i = 0; i < (int)sizeof b; ++i) dst[i] = b[i];
+        Wow32PokeWord(b + 25, (WORD)(SHORT)tm.tmOverhang);
+        Wow32PokeWord(b + 27, (WORD)(SHORT)tm.tmDigitizedAspectX);
+        Wow32PokeWord(b + 29, (WORD)(SHORT)tm.tmDigitizedAspectY);
+        for (i = 0; i < (INT)sizeof b; ++i) dst[i] = b[i];
         WowNotePut(note, notecap, &k, " h=");
-        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmHeight, 4);
+        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)tm.tmHeight, 4);
         WowNotePut(note, notecap, &k, " extlead=");
-        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmExternalLeading, 4);
+        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)tm.tmExternalLeading, 4);
         WowNotePut(note, notecap, &k, " avew=");
-        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmAveCharWidth, 4);
+        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)tm.tmAveCharWidth, 4);
         Wow32SetReturn(f, 1);
         return 1;
     }
@@ -4063,7 +4063,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     case WOWGDI_CREATEFONTIND: {
         volatile BYTE *p = Wow32ArgPointer(f, 0);
         LOGFONTA lf;
-        int k = 0, i;
+        INT k = 0, i;
         HFONT fn;
         WORD tok;
         WowNotePut(note, notecap, &k, "CreateFontIndirect(");
@@ -4072,12 +4072,12 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        for (i = 0; i < (int)sizeof lf; ++i) ((BYTE *)&lf)[i] = 0;
-        lf.lfHeight     = (LONG)(short)Wow32PeekWord(p + 0);
-        lf.lfWidth      = (LONG)(short)Wow32PeekWord(p + 2);
-        lf.lfEscapement = (LONG)(short)Wow32PeekWord(p + 4);
-        lf.lfOrientation= (LONG)(short)Wow32PeekWord(p + 6);
-        lf.lfWeight     = (LONG)(short)Wow32PeekWord(p + 8);
+        for (i = 0; i < (INT)sizeof lf; ++i) ((PBYTE)&lf)[i] = 0;
+        lf.lfHeight     = (LONG)(SHORT)Wow32PeekWord(p + 0);
+        lf.lfWidth      = (LONG)(SHORT)Wow32PeekWord(p + 2);
+        lf.lfEscapement = (LONG)(SHORT)Wow32PeekWord(p + 4);
+        lf.lfOrientation= (LONG)(SHORT)Wow32PeekWord(p + 6);
+        lf.lfWeight     = (LONG)(SHORT)Wow32PeekWord(p + 8);
         lf.lfItalic     = p[10]; lf.lfUnderline     = p[11];
         lf.lfStrikeOut  = p[12]; lf.lfCharSet       = p[13];
         lf.lfOutPrecision = p[14]; lf.lfClipPrecision = p[15];
@@ -4090,10 +4090,10 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         lf.lfFaceName[31] = 0;
         WowNoteQuoted(note, notecap, &k, lf.lfFaceName);
         WowNotePut(note, notecap, &k, " h=");
-        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfHeight, 4);
+        WowNoteHex(note, notecap, &k, (DWORD)(WORD)(SHORT)lf.lfHeight, 4);
         WowNotePut(note, notecap, &k, ")");
         fn = CreateFontIndirectA(&lf);
-        tok = fn ? wowgdi_h16((HGDIOBJ)fn, WOWGDI_KIND_OBJ) : 0;
+        tok = fn ? WowGdiH16((HGDIOBJ)fn, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (fn) DeleteObject((HGDIOBJ)fn);
             WowNotePut(note, notecap, &k, " -- ★ no font (or the token map is full);"
@@ -4115,13 +4115,13 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          problem rather than the guest's. */
     case WOWGDI_GETBITMAPBITS:
     case WOWGDI_SETBITMAPBITS: {
-        int   isget = (f->Id == WOWGDI_GETBITMAPBITS);
-        WORD  hbm   = Wow32ArgWord(f, BB2_ARG_HBM);
-        DWORD cnt   = Wow32ArgDword(f, BB2_ARG_COUNT);
-        volatile BYTE *bits = Wow32ArgPointer(f, BB2_ARG_BITS);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hbm, &kind);
-        int   k = 0;
+        INT   isget = (f->Id == WOWGDI_GETBITMAPBITS);
+        WORD  hbm   = Wow32ArgWord(f, WOWGDI_BB2_ARG_HBM);
+        DWORD cnt   = Wow32ArgDword(f, WOWGDI_BB2_ARG_COUNT);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_BB2_ARG_BITS);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hbm, &kind);
+        INT   k = 0;
         LONG  got;
         WowNotePut(note, notecap, &k, isget ? "GetBitmapBits(0x" : "SetBitmapBits(0x");
         WowNoteHex(note, notecap, &k, hbm, 4);
@@ -4135,7 +4135,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         got = isget ? GetBitmapBits((HBITMAP)o, (LONG)cnt, (LPVOID)(ULONG_PTR)bits)
-                    : SetBitmapBits((HBITMAP)o, (DWORD)cnt, (const void *)(ULONG_PTR)bits);
+                    : SetBitmapBits((HBITMAP)o, (DWORD)cnt, (const VOID *)(ULONG_PTR)bits);
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)got, 8);
         Wow32SetReturn(f, (DWORD)got);
@@ -4159,18 +4159,18 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          the one that matters. */
     case WOWGDI_SETDIBITS:
     case WOWGDI_GETDIBITS: {
-        int   isget = (f->Id == WOWGDI_GETDIBITS);
-        WORD  hdc   = Wow32ArgWord(f, DIB_ARG_HDC);
-        WORD  hbm   = Wow32ArgWord(f, DIB_ARG_HBM);
-        WORD  start = Wow32ArgWord(f, DIB_ARG_START);
-        WORD  lines = Wow32ArgWord(f, DIB_ARG_LINES);
-        WORD  usage = Wow32ArgWord(f, DIB_ARG_USAGE);
-        volatile BYTE *bits = Wow32ArgPointer(f, DIB_ARG_BITS);
-        volatile BYTE *bmi  = Wow32ArgPointer(f, DIB_ARG_BMI);
-        int   dk = -1, bk = -1;
-        HGDIOBJ d = wowgdi_h32(hdc, &dk);
-        HGDIOBJ b = wowgdi_h32(hbm, &bk);
-        int   k = 0, r;
+        INT   isget = (f->Id == WOWGDI_GETDIBITS);
+        WORD  hdc   = Wow32ArgWord(f, WOWGDI_DIB_ARG_HDC);
+        WORD  hbm   = Wow32ArgWord(f, WOWGDI_DIB_ARG_HBM);
+        WORD  start = Wow32ArgWord(f, WOWGDI_DIB_ARG_START);
+        WORD  lines = Wow32ArgWord(f, WOWGDI_DIB_ARG_LINES);
+        WORD  usage = Wow32ArgWord(f, WOWGDI_DIB_ARG_USAGE);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_DIB_ARG_BITS);
+        volatile BYTE *bmi  = Wow32ArgPointer(f, WOWGDI_DIB_ARG_BMI);
+        INT   dk = -1, bk = -1;
+        HGDIOBJ d = WowGdiH32(hdc, &dk);
+        HGDIOBJ b = WowGdiH32(hbm, &bk);
+        INT   k = 0, r;
         WowNotePut(note, notecap, &k, isget ? "GetDIBits(dc 0x" : "SetDIBits(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", bm 0x");
@@ -4191,7 +4191,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             ? GetDIBits((HDC)d, (HBITMAP)b, start, lines,
                         (LPVOID)(ULONG_PTR)bits, (BITMAPINFO *)(ULONG_PTR)bmi, usage)
             : SetDIBits((HDC)d, (HBITMAP)b, start, lines,
-                        (const void *)(ULONG_PTR)bits, (const BITMAPINFO *)(ULONG_PTR)bmi,
+                        (const VOID *)(ULONG_PTR)bits, (const BITMAPINFO *)(ULONG_PTR)bmi,
                         usage);
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)r, 4);
@@ -4210,7 +4210,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          consumers. */
     case WOWGDI_CREATEPALETTE: {
         volatile BYTE *p = Wow32ArgPointer(f, 0);
-        int k = 0;
+        INT k = 0;
         HPALETTE pal;
         WORD tok;
         WowNotePut(note, notecap, &k, "CreatePalette(");
@@ -4222,7 +4222,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         WowNoteHex(note, notecap, &k, (DWORD)Wow32PeekWord(p + 2), 4);
         WowNotePut(note, notecap, &k, " entries)");
         pal = CreatePalette((const LOGPALETTE *)(ULONG_PTR)p);
-        tok = pal ? wowgdi_h16((HGDIOBJ)pal, WOWGDI_KIND_OBJ) : 0;
+        tok = pal ? WowGdiH16((HGDIOBJ)pal, WOWGDI_KIND_OBJ) : 0;
         if (!tok) {
             if (pal) DeleteObject((HGDIOBJ)pal);
             WowNotePut(note, notecap, &k, " -- ★ the OS refused it (or the token map"
@@ -4237,22 +4237,22 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_STRETCHDIBITS: {
-        WORD  hdc = Wow32ArgWord(f, SDI_ARG_HDC);
-        int   dx = (int)(short)Wow32ArgWord(f, SDI_ARG_DSTX);
-        int   dy = (int)(short)Wow32ArgWord(f, SDI_ARG_DSTY);
-        int   dw = (int)(short)Wow32ArgWord(f, SDI_ARG_DSTW);
-        int   dh = (int)(short)Wow32ArgWord(f, SDI_ARG_DSTH);
-        int   sx = (int)(short)Wow32ArgWord(f, SDI_ARG_SRCX);
-        int   sy = (int)(short)Wow32ArgWord(f, SDI_ARG_SRCY);
-        int   sw = (int)(short)Wow32ArgWord(f, SDI_ARG_SRCW);
-        int   sh = (int)(short)Wow32ArgWord(f, SDI_ARG_SRCH);
-        WORD  usage = Wow32ArgWord(f, SDI_ARG_USAGE);
-        DWORD rop = Wow32ArgDword(f, SDI_ARG_ROP);
-        volatile BYTE *bits = Wow32ArgPointer(f, SDI_ARG_BITS);
-        volatile BYTE *bmi  = Wow32ArgPointer(f, SDI_ARG_BMI);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int   k = 0, r;
+        WORD  hdc = Wow32ArgWord(f, WOWGDI_SDI_ARG_HDC);
+        INT   dx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_DSTX);
+        INT   dy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_DSTY);
+        INT   dw = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_DSTW);
+        INT   dh = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_DSTH);
+        INT   sx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_SRCX);
+        INT   sy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_SRCY);
+        INT   sw = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_SRCW);
+        INT   sh = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDI_ARG_SRCH);
+        WORD  usage = Wow32ArgWord(f, WOWGDI_SDI_ARG_USAGE);
+        DWORD rop = Wow32ArgDword(f, WOWGDI_SDI_ARG_ROP);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_SDI_ARG_BITS);
+        volatile BYTE *bmi  = Wow32ArgPointer(f, WOWGDI_SDI_ARG_BMI);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT   k = 0, r;
         WowNotePut(note, notecap, &k, "StretchDIBits(0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, " dst(");
@@ -4278,7 +4278,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             return 1;
         }
         r = StretchDIBits((HDC)o, dx, dy, dw, dh, sx, sy, sw, sh,
-                          (const void *)(ULONG_PTR)bits,
+                          (const VOID *)(ULONG_PTR)bits,
                           (const BITMAPINFO *)(ULONG_PTR)bmi, usage, rop);
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)r, 4);
@@ -4296,17 +4296,17 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
          flag is how a caller ends up with an uninitialised bitmap that looks
          initialised. */
     case WOWGDI_CREATEDIBITMAP: {
-        WORD  hdc   = Wow32ArgWord(f, CDIB_ARG_HDC);
-        volatile BYTE *bmih = Wow32ArgPointer(f, CDIB_ARG_BMIH);
-        DWORD init  = Wow32ArgDword(f, CDIB_ARG_INIT);
-        volatile BYTE *bits = Wow32ArgPointer(f, CDIB_ARG_BITS);
-        volatile BYTE *bmi  = Wow32ArgPointer(f, CDIB_ARG_BMI);
-        WORD  usage = Wow32ArgWord(f, CDIB_ARG_USAGE);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        WORD  hdc   = Wow32ArgWord(f, WOWGDI_CDIB_ARG_HDC);
+        volatile BYTE *bmih = Wow32ArgPointer(f, WOWGDI_CDIB_ARG_BMIH);
+        DWORD init  = Wow32ArgDword(f, WOWGDI_CDIB_ARG_INIT);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_CDIB_ARG_BITS);
+        volatile BYTE *bmi  = Wow32ArgPointer(f, WOWGDI_CDIB_ARG_BMI);
+        WORD  usage = Wow32ArgWord(f, WOWGDI_CDIB_ARG_USAGE);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
         HBITMAP bm;
         WORD  tok;
-        int   k = 0;
+        INT   k = 0;
         WowNotePut(note, notecap, &k, "CreateDIBitmap(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, ", init 0x");
@@ -4320,7 +4320,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         bm = CreateDIBitmap((HDC)o,
                             (const BITMAPINFOHEADER *)(ULONG_PTR)bmih, init,
-                            (init && bits) ? (const void *)(ULONG_PTR)bits : NULL,
+                            (init && bits) ? (const VOID *)(ULONG_PTR)bits : NULL,
                             (init && bmi)  ? (const BITMAPINFO *)(ULONG_PTR)bmi : NULL,
                             usage);
         if (!bm) {
@@ -4328,7 +4328,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
             Wow32SetReturn(f, 0);
             return 1;
         }
-        tok = wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
+        tok = WowGdiH16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
         if (!tok) {
             /* ⚠ NO TOKEN LEFT MEANS THE BITMAP LEAKS IF WE JUST RETURN 0 -- the
                  guest never learns of it, so nobody will ever DeleteObject it.
@@ -4346,25 +4346,25 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 
     case WOWGDI_SETDIBITSTODEV: {
-        WORD  hdc = Wow32ArgWord(f, SDD_ARG_HDC);
-        int   dx = (int)(short)Wow32ArgWord(f, SDD_ARG_DSTX);
-        int   dy = (int)(short)Wow32ArgWord(f, SDD_ARG_DSTY);
+        WORD  hdc = Wow32ArgWord(f, WOWGDI_SDD_ARG_HDC);
+        INT   dx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDD_ARG_DSTX);
+        INT   dy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDD_ARG_DSTY);
         /* ⚠ w/h ARE `WORD`s IN THE Win16 PROTOTYPE, not ints -- a bitmap is never
              negative-width, and sign-extending one over 32767 would turn a blit
              into a negative and draw nothing. Widened UNSIGNED, unlike the
              coordinates either side of them, which are genuinely signed. */
-        DWORD w  = (DWORD)Wow32ArgWord(f, SDD_ARG_W);
-        DWORD h  = (DWORD)Wow32ArgWord(f, SDD_ARG_H);
-        int   sx = (int)(short)Wow32ArgWord(f, SDD_ARG_SRCX);
-        int   sy = (int)(short)Wow32ArgWord(f, SDD_ARG_SRCY);
-        WORD  start  = Wow32ArgWord(f, SDD_ARG_START);
-        WORD  nscans = Wow32ArgWord(f, SDD_ARG_NSCANS);
-        volatile BYTE *bits = Wow32ArgPointer(f, SDD_ARG_BITS);
-        volatile BYTE *bmi  = Wow32ArgPointer(f, SDD_ARG_BMI);
-        WORD  usage = Wow32ArgWord(f, SDD_ARG_USAGE);
-        int   kind = -1;
-        HGDIOBJ o = wowgdi_h32(hdc, &kind);
-        int   k = 0, r;
+        DWORD w  = (DWORD)Wow32ArgWord(f, WOWGDI_SDD_ARG_W);
+        DWORD h  = (DWORD)Wow32ArgWord(f, WOWGDI_SDD_ARG_H);
+        INT   sx = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDD_ARG_SRCX);
+        INT   sy = (INT)(SHORT)Wow32ArgWord(f, WOWGDI_SDD_ARG_SRCY);
+        WORD  start  = Wow32ArgWord(f, WOWGDI_SDD_ARG_START);
+        WORD  nscans = Wow32ArgWord(f, WOWGDI_SDD_ARG_NSCANS);
+        volatile BYTE *bits = Wow32ArgPointer(f, WOWGDI_SDD_ARG_BITS);
+        volatile BYTE *bmi  = Wow32ArgPointer(f, WOWGDI_SDD_ARG_BMI);
+        WORD  usage = Wow32ArgWord(f, WOWGDI_SDD_ARG_USAGE);
+        INT   kind = -1;
+        HGDIOBJ o = WowGdiH32(hdc, &kind);
+        INT   k = 0, r;
         WowNotePut(note, notecap, &k, "SetDIBitsToDevice(dc 0x");
         WowNoteHex(note, notecap, &k, hdc, 4);
         WowNotePut(note, notecap, &k, " dst(");
@@ -4385,7 +4385,7 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
         }
         r = SetDIBitsToDevice((HDC)o, dx, dy, w, h,
                               sx, sy, start, nscans,
-                              (const void *)(ULONG_PTR)bits,
+                              (const VOID *)(ULONG_PTR)bits,
                               (const BITMAPINFO *)(ULONG_PTR)bmi, usage);
         WowNotePut(note, notecap, &k, " -> ");
         WowNoteHex(note, notecap, &k, (DWORD)r, 4);
@@ -4398,4 +4398,4 @@ static int wowgdi_call(WOW32_FRAME *f, char *note, int notecap)
     }
 }
 
-#endif /* WOWGDI_H */
+#endif /* NTVDMEX_WOWGDI_H */
