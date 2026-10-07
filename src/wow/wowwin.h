@@ -66,6 +66,40 @@
 #define CW_USEDEFAULT16     0x8000
 #define CW_USEDEFAULT32     ((INT)0x80000000)
 
+/* Win16 message numbers relayed here (Win16 and Win32 agree on each). */
+#define WM_CHAR16             0x0102
+#define WM_INITMENU16         0x0116
+#define WM_INITMENUPOPUP16    0x0117
+#define WM_DROPFILES16        0x0233
+#define WOWWIN_REGISTERED_MESSAGE_FIRST 0xC000   /* RegisterWindowMessage's range */
+#define WOWWIN_SC_MASK        0xFFF0             /* WM_SYSCOMMAND: the low four bits are the system's */
+#define WOWWIN_SCAN_CODE_SHIFT 16                /* a key message's lParam: bits 16..23 */
+#define WOWWIN_SCAN_CODE_MASK  0xFF
+#define WOWWIN_MAX_SENDING    8
+#define WOWWIN_SIZE_REENTRY   2                  /* WM_SIZE may nest once (see WowWinSendOrPost) */
+#define WOWWIN_MENU_POPUPS_MAX 32
+#define WOWWIN_LOG_LINE_MAX   160
+#define WOWWIN_REASON_MAX     96
+#define WOWWIN_DROP_LOG_MAX   200
+#define WOWWIN_PAINT_LOG_MAX  600
+#define WOWWIN_MM_LOG_MAX     12
+
+/* A Win16 DROPFILES block (krnl386 global memory): pFiles, pt, fNC, then the names. */
+#define WOWWIN_DROP_BUFFER        2048
+#define WOWWIN_DROPFILES_HEADER   8
+#define WOWWIN_DROPFILES_POINT_X  2
+#define WOWWIN_DROPFILES_POINT_Y  4
+#define WOWWIN_DROPFILES_NONCLIENT 6
+#define WOWWIN_DROP_TERMINATORS   2      /* the name's NUL and the list's */
+#define WOWWIN_DRAGQUERY_COUNT    0xFFFFFFFFu
+#define WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT 0x2042
+
+/* A Win16 MINMAXINFO: five 16-bit POINTs, the first reserved. */
+#define WOWWIN_MINMAXINFO16_SIZE  20
+#define WOWWIN_MINMAXINFO_POINTS  5
+#define WOWWIN_POINT16_SIZE       4
+#define WOWWIN_POINT16_Y          2
+
 /* Set once the exec thread has a window: the thread id that owns them all, so a
    pump on the wrong thread can be refused rather than silently doing nothing. */
 static DWORD g_WowWinThread = 0;
@@ -235,15 +269,15 @@ static DWORD dpmi_sel_base(WORD sel);            /* main.c: a selector's linear 
      Returns the 16-bit handle, or 0 (nothing posted). */
 static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
 {
-    BYTE buffer[2048];
-    UINT count, index, offset = 8;
+    BYTE buffer[WOWWIN_DROP_BUFFER];
+    UINT count, index, offset = WOWWIN_DROPFILES_HEADER;
     POINT point;
     BOOL isInside;
     WORD handle16;
     DWORD farPointer;
     volatile BYTE *bytes;
     if (!g_WowWinGlobal16) { lstrcpynA(reason, "no 16-bit heap entry", reasonCapacity); return 0; }
-    count = DragQueryFileA(drop, 0xFFFFFFFFu, NULL, 0);
+    count = DragQueryFileA(drop, WOWWIN_DRAGQUERY_COUNT, NULL, 0);
     isInside = DragQueryPoint(drop, &point);
     for (index = 0; index < count; ++index) {
         CHAR longPath[MAX_PATH], shortPath[MAX_PATH];
@@ -251,26 +285,26 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
         if (!DragQueryFileA(drop, index, longPath, sizeof longPath)) continue;
         if (!GetShortPathNameA(longPath, shortPath, sizeof shortPath)) lstrcpynA(shortPath, longPath, sizeof shortPath);
         length = lstrlenA(shortPath);
-        if (offset + (UINT)length + 2 > sizeof buffer) break;       /* a 2 KB list; the rest dropped */
+        if (offset + (UINT)length + WOWWIN_DROP_TERMINATORS > sizeof buffer) break;       /* a 2 KB list; the rest dropped */
         CopyMemory(buffer + offset, shortPath, (SIZE_T)length + 1);
         offset += (UINT)length + 1;
     }
     buffer[offset++] = 0;
-    buffer[0] = 8; buffer[1] = 0;
-    buffer[2] = (BYTE)point.x; buffer[3] = (BYTE)((WORD)point.x >> 8);
-    buffer[4] = (BYTE)point.y; buffer[5] = (BYTE)((WORD)point.y >> 8);
-    buffer[6] = (BYTE)(isInside ? 0 : 1); buffer[7] = 0;
-    handle16 = (WORD)g_WowWinGlobal16(0, 0x2042 /* GMEM_SHARE|GMEM_MOVEABLE|GMEM_ZEROINIT */, offset);
+    buffer[0] = WOWWIN_DROPFILES_HEADER; buffer[1] = 0;
+    buffer[WOWWIN_DROPFILES_POINT_X] = (BYTE)point.x; buffer[WOWWIN_DROPFILES_POINT_X + 1] = (BYTE)((WORD)point.x >> WOW_BYTE_SHIFT);
+    buffer[WOWWIN_DROPFILES_POINT_Y] = (BYTE)point.y; buffer[WOWWIN_DROPFILES_POINT_Y + 1] = (BYTE)((WORD)point.y >> WOW_BYTE_SHIFT);
+    buffer[WOWWIN_DROPFILES_NONCLIENT] = (BYTE)(isInside ? 0 : 1); buffer[WOWWIN_DROPFILES_NONCLIENT + 1] = 0;
+    handle16 = (WORD)g_WowWinGlobal16(WOWWIN_GLOBAL16_ALLOC, WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT, offset);
     if (!handle16) { lstrcpynA(reason, "GlobalAlloc refused", reasonCapacity); return 0; }
-    farPointer = g_WowWinGlobal16(2, handle16, 0);
-    bytes = (farPointer >> 16) ? (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)(farPointer >> 16)) + (farPointer & 0xFFFF)) : NULL;
-    if (!bytes || !(farPointer >> 16) || !dpmi_sel_base((WORD)(farPointer >> 16))) {
-        g_WowWinGlobal16(1, handle16, 0);
+    farPointer = g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, handle16, 0);
+    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WOW_WORD_MASK)) : NULL;
+    if (!bytes || !(farPointer >> WOW_WORD_SHIFT) || !dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT))) {
+        g_WowWinGlobal16(WOWWIN_GLOBAL16_FREE, handle16, 0);
         lstrcpynA(reason, "GlobalLock refused", reasonCapacity);
         return 0;
     }
     for (index = 0; index < offset; ++index) bytes[index] = buffer[index];
-    g_WowWinGlobal16(3, handle16, 0);
+    g_WowWinGlobal16(WOWWIN_GLOBAL16_UNLOCK, handle16, 0);
     wsprintfA(reason, "%u file(s), %u bytes, pt=(%d,%d)%s", count, offset, (INT)point.x, (INT)point.y,
               isInside ? "" : " non-client");
     return handle16;
@@ -286,7 +320,7 @@ static INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE
      same window and message -- w_mdi stopped dead at WM_MDIMAXIMIZE. A message already
      being sent to a window is POSTED instead, as before s91. */
 typedef struct _WOWWIN_SENDING { WORD Window16, Message; } WOWWIN_SENDING;
-static WOWWIN_SENDING g_WowWinSending[8];
+static WOWWIN_SENDING g_WowWinSending[WOWWIN_MAX_SENDING];
 static INT g_WowWinSendingCount;
 /* s92 (#289): inside USER32's move/size loop (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE).
    The guest cannot run there, so a POSTED WM_PAINT waits for the mouse to come up
@@ -327,10 +361,10 @@ static INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
         INT index, best = -1;
         for (index = 0; index < WOWWIN_MAX_HELD_CHARS; ++index)
             if (g_WowWinHeldChars[index].Sequence && g_WowWinHeldChars[index].Window16 == window16
-                && ((g_WowWinHeldChars[index].LParam >> 16) & 0xFF) == ((keyLParam >> 16) & 0xFF)
+                && ((g_WowWinHeldChars[index].LParam >> WOWWIN_SCAN_CODE_SHIFT) & WOWWIN_SCAN_CODE_MASK) == ((keyLParam >> WOWWIN_SCAN_CODE_SHIFT) & WOWWIN_SCAN_CODE_MASK)
                 && (best < 0 || g_WowWinHeldChars[index].Sequence < g_WowWinHeldChars[best].Sequence)) best = index;
         if (best < 0) return count;
-        WowMsgPost(window16, 0x0102, g_WowWinHeldChars[best].Character, g_WowWinHeldChars[best].LParam,
+        WowMsgPost(window16, WM_CHAR16, g_WowWinHeldChars[best].Character, g_WowWinHeldChars[best].LParam,
                     GetTickCount(), 0, 0);
         g_WowWinHeldChars[best].Sequence = 0;
         ++count;
@@ -370,8 +404,8 @@ static INT WowWinThreadTimerFire(const MSG *message)
     for (index = 0; index < WOWWIN_MAX_THREAD_TIMERS; ++index)
         if (g_WowWinThreadTimers[index].Id32 && g_WowWinThreadTimers[index].Id32 == message->wParam) {
             /* one pending per timer, as Windows coalesces them */
-            WowMsgPostMove(0, 0x0113, (WORD)message->wParam, g_WowWinThreadTimers[index].Procedure, message->time, 0, 0)
-                || WowMsgPost(0, 0x0113, (WORD)message->wParam, g_WowWinThreadTimers[index].Procedure, message->time, 0, 0);
+            WowMsgPostMove(0, WM_TIMER16, (WORD)message->wParam, g_WowWinThreadTimers[index].Procedure, message->time, 0, 0)
+                || WowMsgPost(0, WM_TIMER16, (WORD)message->wParam, g_WowWinThreadTimers[index].Procedure, message->time, 0, 0);
             return 1;
         }
     return 0;
@@ -393,10 +427,10 @@ static VOID WowWinSendOrPost(WORD window16, WORD message, WORD wParam, DWORD lPa
        Windows sends WM_SIZE again, nested. Posted, it arrived after the first paint and
        the card was laid out twice -- the first card's header stayed on screen. A
        second level is allowed; deeper is the MDI loop above, and is still posted. */
-    INT limit = (message == WM_SIZE) ? 2 : 1;
+    INT limit = (message == WM_SIZE) ? WOWWIN_SIZE_REENTRY : 1;
     for (index = 0; index < g_WowWinSendingCount; ++index)
         if (g_WowWinSending[index].Window16 == window16 && g_WowWinSending[index].Message == message) ++busyCount;
-    if (busyCount < limit && g_WowWinSend16 && g_WowWinSendingCount < 8) {
+    if (busyCount < limit && g_WowWinSend16 && g_WowWinSendingCount < WOWWIN_MAX_SENDING) {
         INT isSent;
         g_WowWinSending[g_WowWinSendingCount].Window16 = window16; g_WowWinSending[g_WowWinSendingCount].Message = message;
         ++g_WowWinSendingCount;
@@ -555,8 +589,8 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 g_WowWinPaintMs = GetTickCount();
                 EndPaint(window, &paint);
             }
-            if (g_WowWinPaintsLogged < 600) {     /* s92: what the OS reported, and how it went */
-                CHAR paintLog[160], *paintCursor = paintLog;
+            if (g_WowWinPaintsLogged < WOWWIN_PAINT_LOG_MAX) {     /* s92: what the OS reported, and how it went */
+                CHAR paintLog[WOWWIN_LOG_LINE_MAX], *paintCursor = paintLog;
                 ++g_WowWinPaintsLogged;
                 paintCursor = zput(paintCursor, "WOWWIN: WM_PAINT h16=0x"); paintCursor = zhex(paintCursor, window16);
                 paintCursor = zput(paintCursor, " rc="); paintCursor = zhex(paintCursor, (DWORD)paint.rcPaint.left);
@@ -620,8 +654,8 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case 0x3BF: case 0x3C0: case 0x3C1: case 0x3C2: case 0x3C3: case 0x3C4:
     case 0x3C5: case 0x3C6: case 0x3C7: case 0x3C8: case 0x3C9:
         if (window16) {
-            if (g_WowWinMultimediaLogged < 12) {
-                CHAR buffer[160], *bufferCursor = buffer;
+            if (g_WowWinMultimediaLogged < WOWWIN_MM_LOG_MAX) {
+                CHAR buffer[WOWWIN_LOG_LINE_MAX], *bufferCursor = buffer;
                 ++g_WowWinMultimediaLogged;
                 bufferCursor = zput(bufferCursor, "WOWWIN: MM notification 0x"); bufferCursor = zhex(bufferCursor, message);
                 bufferCursor = zput(bufferCursor, " -> hwnd16 0x"); bufferCursor = zhex(bufferCursor, window16);
@@ -659,7 +693,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
              WM_TIMER, but msg 0x0010 never reaches it, and NOTHING in the log said
              whether this case ran at all or whether h16 resolved. An absence in the
              report means nothing; say which branch was taken. */
-        {   CHAR closeLog[160], *closeCursor = closeLog;
+        {   CHAR closeLog[WOWWIN_LOG_LINE_MAX], *closeCursor = closeLog;
             closeCursor = zput(closeCursor, "WOWWIN: WM_CLOSE on hwnd=0x"); closeCursor = zhex(closeCursor, (DWORD)(ULONG_PTR)window);
             closeCursor = zput(closeCursor, " -> h16=0x"); closeCursor = zhex(closeCursor, window16);
             closeCursor = zput(closeCursor, window16 ? " -- posted to the guest\r\n"
@@ -672,7 +706,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
        shell posts it, with a Win16 HDROP built by WowWinDrop16 (see there). */
     case WM_DROPFILES:
         if (window16) {
-            CHAR reason[96], dropLog[200], *dropCursor = dropLog;
+            CHAR reason[WOWWIN_REASON_MAX], dropLog[WOWWIN_DROP_LOG_MAX], *dropCursor = dropLog;
             WORD drop16 = WowWinDrop16((HDROP)wParam, reason, sizeof reason);
             DragFinish((HDROP)wParam);
             dropCursor = zput(dropCursor, "WOWWIN: WM_DROPFILES on h16=0x"); dropCursor = zhex(dropCursor, window16);
@@ -680,7 +714,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             if (drop16) { dropCursor = zhex(dropCursor, drop16); dropCursor = zput(dropCursor, " "); }
             dropCursor = zput(dropCursor, reason); dropCursor = zput(dropCursor, "\r\n");
             log_append(LOG_PATH, dropLog, dropCursor);
-            if (drop16) { WowMsgPost(window16, 0x0233, drop16, 0, GetTickCount(), pointX, pointY); ++g_WowWinMessages; }
+            if (drop16) { WowMsgPost(window16, WM_DROPFILES16, drop16, 0, GetTickCount(), pointX, pointY); ++g_WowWinMessages; }
             return 0;
         }
         break;
@@ -752,7 +786,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         if (window16) {
             UINT setFocusCountBefore = g_WowWinSetFocusCount;
             WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam),
-                                ((DWORD)(HIWORD(wParam) ? 1 : 0) << 16)
+                                ((DWORD)(HIWORD(wParam) ? 1 : 0) << WOW_WORD_SHIFT)
                                 | WowWinHwnd16((HWND)lParam), pointX, pointY);
             /* ── s93: A PROGRAM THAT PLACES THE FOCUS ITSELF KEEPS IT. Win32's
                  DefWindowProc gives an activated window the focus -- after WRITE's
@@ -810,7 +844,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD gaining = lParam ? WowWinHwnd16((HWND)lParam) : 0;
             WORD losing = wParam ? WowWinHwnd16((HWND)wParam) : 0;
             WowWinSendOrPost(window16, (WORD)message, (WORD)((HWND)lParam == window ? 1 : 0),
-                                ((DWORD)losing << 16) | gaining, pointX, pointY);
+                                ((DWORD)losing << WOW_WORD_SHIFT) | gaining, pointX, pointY);
         }
         break;
     case WM_MENUSELECT:
@@ -818,15 +852,15 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                                      (DWORD)HIWORD(wParam), pointX, pointY);
         break;
     case WM_GETMINMAXINFO:
-        if (window16 && g_WowWinSend16Blob && lParam && g_WowWinSendingCount < 8) {
+        if (window16 && g_WowWinSend16Blob && lParam && g_WowWinSendingCount < WOWWIN_MAX_SENDING) {
             PMINMAXINFO minMaxInfo = (PMINMAXINFO)lParam;
             PPOINT points = &minMaxInfo->ptReserved;
-            BYTE buffer[20];
+            BYTE buffer[WOWWIN_MINMAXINFO16_SIZE];
             WORD result;
             INT index;
-            for (index = 0; index < 5; ++index) {
-                buffer[index * 4 + 0] = (BYTE)points[index].x; buffer[index * 4 + 1] = (BYTE)(points[index].x >> 8);
-                buffer[index * 4 + 2] = (BYTE)points[index].y; buffer[index * 4 + 3] = (BYTE)(points[index].y >> 8);
+            for (index = 0; index < WOWWIN_MINMAXINFO_POINTS; ++index) {
+                buffer[index * WOWWIN_POINT16_SIZE] = (BYTE)points[index].x; buffer[index * WOWWIN_POINT16_SIZE + 1] = (BYTE)(points[index].x >> WOW_BYTE_SHIFT);
+                buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] = (BYTE)points[index].y; buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] = (BYTE)(points[index].y >> WOW_BYTE_SHIFT);
             }
             INT isSent, slot, isBusy = 0;
             for (slot = 0; slot < g_WowWinSendingCount; ++slot)
@@ -834,12 +868,12 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             if (isBusy) break;
             g_WowWinSending[g_WowWinSendingCount].Window16 = window16; g_WowWinSending[g_WowWinSendingCount].Message = (WORD)message;
             ++g_WowWinSendingCount;
-            isSent = g_WowWinSend16Blob(window16, (WORD)message, 0, buffer, 20, NULL, 0, &result);
+            isSent = g_WowWinSend16Blob(window16, (WORD)message, 0, buffer, WOWWIN_MINMAXINFO16_SIZE, NULL, 0, &result);
             --g_WowWinSendingCount;
             if (isSent) {
-                for (index = 1; index < 5; ++index) {   /* ptReserved is not the guest's to set */
-                    points[index].x = (LONG)(SHORT)(buffer[index * 4 + 0] | (buffer[index * 4 + 1] << 8));
-                    points[index].y = (LONG)(SHORT)(buffer[index * 4 + 2] | (buffer[index * 4 + 3] << 8));
+                for (index = 1; index < WOWWIN_MINMAXINFO_POINTS; ++index) {   /* ptReserved is not the guest's to set */
+                    points[index].x = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE] | (buffer[index * WOWWIN_POINT16_SIZE + 1] << WOW_BYTE_SHIFT));
+                    points[index].y = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] | (buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] << WOW_BYTE_SHIFT));
                 }
                 return 0;
             }
@@ -925,7 +959,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD menu16 = wowuser_menu16((HMENU)wParam);
             WowMsgPost(window16, (WORD)message, menu16,
                         (message == WM_INITMENUPOPUP)
-                            ? ((DWORD)LOWORD(lParam) | ((DWORD)HIWORD(lParam) << 16))
+                            ? ((DWORD)LOWORD(lParam) | ((DWORD)HIWORD(lParam) << WOW_WORD_SHIFT))
                             : 0,
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
@@ -946,15 +980,15 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
          before; handled afterwards, they set the state the menu already has. */
     case WM_SYSCOMMAND:
         if (window16 && !g_WowWinIsReplaying
-            && ((wParam & 0xFFF0) == SC_KEYMENU || (wParam & 0xFFF0) == SC_MOUSEMENU)
+            && ((wParam & WOWWIN_SC_MASK) == SC_KEYMENU || (wParam & WOWWIN_SC_MASK) == SC_MOUSEMENU)
             && GetMenu(window)) {
             HMENU menuBar = GetMenu(window);
             INT index, itemCount = GetMenuItemCount(menuBar);
             DWORD time = GetTickCount();
-            WowMsgPost(window16, 0x0116 /* WM_INITMENU */, wowuser_menu16(menuBar), 0, time, pointX, pointY);
-            for (index = 0; index < itemCount && index < 32; ++index) {
+            WowMsgPost(window16, WM_INITMENU16, wowuser_menu16(menuBar), 0, time, pointX, pointY);
+            for (index = 0; index < itemCount && index < WOWWIN_MENU_POPUPS_MAX; ++index) {
                 HMENU submenu = GetSubMenu(menuBar, index);
-                if (submenu) WowMsgPost(window16, 0x0117 /* WM_INITMENUPOPUP */,
+                if (submenu) WowMsgPost(window16, WM_INITMENUPOPUP16,
                                      wowuser_menu16(submenu), (DWORD)index, time, pointX, pointY);
             }
             if (WowMsgPost(window16, (WORD)WOWMSG_MENUREPLAY, (WORD)wParam, (DWORD)lParam, time, pointX, pointY)) {
@@ -987,7 +1021,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD code  = (WORD)LOWORD(wParam);
             WORD position   = (WORD)HIWORD(wParam);
             WORD control16 = lParam ? WowWinHwnd16((HWND)(ULONG_PTR)lParam) : 0;
-            DWORD lParam16 = (DWORD)position | ((DWORD)control16 << 16);
+            DWORD lParam16 = (DWORD)position | ((DWORD)control16 << WOW_WORD_SHIFT);
             WORD  result16;
             ++g_WowWinMessages;
             if (g_WowWinSend16 && g_WowWinSend16(window16, (WORD)message, code, lParam16, &result16)) return 0;
@@ -1001,7 +1035,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD notifyCode = (WORD)HIWORD(wParam);
             WORD control16  = lParam ? WowWinHwnd16((HWND)(ULONG_PTR)lParam) : 0;
             WowMsgPost(window16, (WORD)WM_COMMAND16, id,
-                        (DWORD)control16 | ((DWORD)notifyCode << 16),
+                        (DWORD)control16 | ((DWORD)notifyCode << WOW_WORD_SHIFT),
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
         }
@@ -1018,7 +1052,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
          non-client behaviour entirely. */
     /* #294: a Find/Replace dialog's notification ("commdlg_FindReplace") to its
          owner -- relayed with the guest's own FINDREPLACE pointer. */
-    if (window16 && message >= 0xC000 && WowCdlgRelay(message, lParam)) return 0;
+    if (window16 && message >= WOWWIN_REGISTERED_MESSAGE_FIRST && WowCdlgRelay(message, lParam)) return 0;
     return WowWinDefProc(window, window16, message, wParam, lParam);
 }
 
