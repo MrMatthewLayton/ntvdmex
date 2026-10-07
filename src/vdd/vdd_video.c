@@ -214,6 +214,118 @@ BYTE vga_font_8x16[VIDEO_FONT_CHARACTERS][VIDEO_FONT16_HEIGHT];
 #define VIDEO_VBE_INDEX_START_HIGH    0x11
 #define VIDEO_VBE_START_UNIT          4u
 
+/* VESA BIOS Extension functions (INT 10h AH=4Fh, AL = the function) and their answers. */
+#define VIDEO_VBE_CONTROLLER_INFO     0x00
+#define VIDEO_VBE_MODE_INFO           0x01
+#define VIDEO_VBE_GET_MODE            0x03
+#define VIDEO_VBE_STATE               0x04
+#define VIDEO_VBE_SCAN_LENGTH         0x06
+#define VIDEO_VBE_DISPLAY_START       0x07
+#define VIDEO_VBE_FUNCTION_COUNT      0x16
+#define VIDEO_VBE_OK                  0x004F
+#define VIDEO_VBE_FAILED              0x014F
+#define VIDEO_VBE_NOT_SUPPORTED       0x024F
+#define VIDEO_VBE_INVALID_IN_MODE     0x034F
+#define VIDEO_VESA_TALLY_BL_LIMIT     15
+#define VIDEO_VESA_TALLY_BL_80        0x80
+#define VIDEO_VESA_TALLY_BIT_80       0x8000u
+
+/* 4F00h: the VbeInfoBlock (VBE 2.0 section 4.3). */
+#define VIDEO_VBE_INFO_BYTES          256u
+#define VIDEO_VBE_INFO_BYTES_V2       512u
+#define VIDEO_VBE_INFO_VERSION        4
+#define VIDEO_VBE_INFO_OEM_STRING     6
+#define VIDEO_VBE_INFO_CAPABILITIES   10
+#define VIDEO_VBE_INFO_MODE_LIST      14
+#define VIDEO_VBE_INFO_TOTAL_MEMORY   18
+#define VIDEO_VBE_INFO_OEM_SOFTWARE_REVISION 20
+#define VIDEO_VBE_INFO_OEM_VENDOR     22
+#define VIDEO_VBE_INFO_OEM_PRODUCT    26
+#define VIDEO_VBE_INFO_OEM_PRODUCT_REVISION 30
+#define VIDEO_VBE_INFO_OEM_DATA       0x100
+#define VIDEO_VBE_VERSION_2           0x0200
+#define VIDEO_VBE_CAPABILITY_DAC_SWITCHABLE 1
+#define VIDEO_VBE_MEMORY_UNIT         0x10000
+#define VIDEO_VBE_OEM_STRINGS         4
+#define VIDEO_VBE_OEM_REVISION_1_00   0x0100
+#define VIDEO_VBE_MODE_NUMBER_BYTES   2
+#define VIDEO_VBE_MODE_LIST_END       0xFFFF
+
+/* 4F01h: the ModeInfoBlock (VBE 2.0 section 4.4). */
+#define VIDEO_MODE_INFO_BYTES         256
+#define VIDEO_MODE_INFO_ATTRIBUTES    0
+#define VIDEO_MODE_INFO_WINDOW_A_ATTRIBUTES 2
+#define VIDEO_MODE_INFO_WINDOW_B_ATTRIBUTES 3
+#define VIDEO_MODE_INFO_GRANULARITY   4
+#define VIDEO_MODE_INFO_WINDOW_SIZE   6
+#define VIDEO_MODE_INFO_WINDOW_A_SEGMENT 8
+#define VIDEO_MODE_INFO_WINDOW_B_SEGMENT 10
+#define VIDEO_MODE_INFO_WINDOW_FUNCTION 12
+#define VIDEO_MODE_INFO_BYTES_PER_LINE 16
+#define VIDEO_MODE_INFO_X_RESOLUTION  18
+#define VIDEO_MODE_INFO_Y_RESOLUTION  20
+#define VIDEO_MODE_INFO_X_CHARACTER   22
+#define VIDEO_MODE_INFO_Y_CHARACTER   23
+#define VIDEO_MODE_INFO_PLANES        24
+#define VIDEO_MODE_INFO_BITS_PER_PIXEL 25
+#define VIDEO_MODE_INFO_BANKS         26
+#define VIDEO_MODE_INFO_MEMORY_MODEL  27
+#define VIDEO_MODE_INFO_BANK_SIZE     28
+#define VIDEO_MODE_INFO_IMAGE_PAGES   29
+#define VIDEO_MODE_INFO_RESERVED      30
+#define VIDEO_MODE_INFO_RED_SIZE      31
+#define VIDEO_MODE_INFO_RED_POSITION  32
+#define VIDEO_MODE_INFO_GREEN_SIZE    33
+#define VIDEO_MODE_INFO_GREEN_POSITION 34
+#define VIDEO_MODE_INFO_BLUE_SIZE     35
+#define VIDEO_MODE_INFO_BLUE_POSITION 36
+#define VIDEO_MODE_INFO_RESERVED_SIZE 37
+#define VIDEO_MODE_INFO_RESERVED_POSITION 38
+#define VIDEO_MODE_INFO_DIRECT_COLOUR_INFO 39
+#define VIDEO_MODE_INFO_PHYSICAL_BASE 40
+#define VIDEO_MODE_INFO_LINEAR_BYTES_PER_LINE 50
+#define VIDEO_MODE_INFO_BANKED_IMAGE_PAGES 52
+#define VIDEO_MODE_INFO_LINEAR_IMAGE_PAGES 53
+#define VIDEO_MODE_INFO_LINEAR_RED_SIZE 54
+#define VIDEO_MODE_INFO_LINEAR_RED_POSITION 55
+#define VIDEO_MODE_INFO_LINEAR_GREEN_SIZE 56
+#define VIDEO_MODE_INFO_LINEAR_GREEN_POSITION 57
+#define VIDEO_MODE_INFO_LINEAR_BLUE_SIZE 58
+#define VIDEO_MODE_INFO_LINEAR_BLUE_POSITION 59
+#define VIDEO_MODE_INFO_LINEAR_RESERVED_SIZE 60
+#define VIDEO_MODE_INFO_LINEAR_RESERVED_POSITION 61
+#define VIDEO_MODE_ATTRIBUTES_TEXT    0x000F   /* supported, info, BIOS output, colour */
+#define VIDEO_MODE_ATTRIBUTES_GRAPHICS 0x009B  /* D0|D1|D3|D4|D7 */
+#define VIDEO_WINDOW_READ_WRITE       0x07
+#define VIDEO_TEXT_WINDOW_KB          32
+#define VIDEO_TEXT_WINDOW_BYTES       0x8000u
+#define VIDEO_GRAPHICS_WINDOW_KB      64
+#define VIDEO_SEGMENT_COLOUR_TEXT     0xB800
+#define VIDEO_SEGMENT_GRAPHICS        0xA000
+#define VIDEO_TEXT_ATTRIBUTE_BITS     4
+#define VIDEO_MEMORY_MODEL_TEXT       0
+#define VIDEO_MEMORY_MODEL_PACKED     4
+#define VIDEO_MEMORY_MODEL_DIRECT     6
+#define VIDEO_VBE_MAX_IMAGE_PAGES     256u
+#define VIDEO_DIRECT_RESERVED_USABLE  0x02
+
+/* 4F02h, 4F04h, 4F06h and 4F07h subfunctions. */
+#define VIDEO_MODE_NOT_STANDARD       0xFF
+#define VIDEO_ALL_PLANES              0x0F
+#define VIDEO_DAC_WIDTH_6             6
+#define VIDEO_VBE_STATE_SIZE          0x00
+#define VIDEO_VBE_STATE_SAVE          0x01
+#define VIDEO_VBE_STATE_RESTORE       0x02
+#define VIDEO_SCAN_SET_PIXELS         0x00
+#define VIDEO_SCAN_GET                0x01
+#define VIDEO_SCAN_SET_BYTES          0x02
+#define VIDEO_SCAN_GET_MAXIMUM        0x03
+#define VIDEO_START_SET               0x00
+#define VIDEO_START_GET               0x01
+#define VIDEO_START_SCHEDULE          0x02
+#define VIDEO_START_FLIP_STATUS       0x04
+#define VIDEO_START_WAIT_RETRACE      0x80
+
 static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode);
 
 /* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE, and so is the ega64_rgb() that replaced
@@ -1468,13 +1580,13 @@ static INT VideoStateLoad(PVIDEO_STATE state, const BYTE *buffer)
 static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 {
     BYTE al = VddGetAl(registers); UINT index;
-    if (al < 0x16) {                              /* inventory: see VesaCalls[]   */
-        BYTE bl = (BYTE)(VddGetBx(registers) & 0xFF);
+    if (al < VIDEO_VBE_FUNCTION_COUNT) {                              /* inventory: see VesaCalls[]   */
+        BYTE bl = (BYTE)(VddGetBx(registers) & VIDEO_LOW_BYTE_MASK);
         state->VesaCalls[al]++;
-        state->VesaBl[al] |= (WORD)(bl == 0x80 ? 0x8000u : bl < 15 ? (1u << bl) : 0u);
+        state->VesaBl[al] |= (WORD)(bl == VIDEO_VESA_TALLY_BL_80 ? VIDEO_VESA_TALLY_BIT_80 : bl < VIDEO_VESA_TALLY_BL_LIMIT ? (1u << bl) : 0u);
     }
     switch (al) {
-    case 0x00: {                                  /* return controller info       */
+    case VIDEO_VBE_CONTROLLER_INFO: {                                  /* return controller info       */
         /* ⚠ THE CALLER'S BLOCK IS 256 BYTES UNLESS IT PRESET "VBE2". (s74) VBE 2.0
              §4.3: a VbeInfoBlock is 256 bytes for a VBE 1.x caller and 512 only when
              the caller wrote "VBE2" into the signature first; the OEM string and mode
@@ -1488,17 +1600,17 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)(WORD)registers->Edi);
         INT isVbe2 = (buffer[0]=='V' && buffer[1]=='B' && buffer[2]=='E' && buffer[3]=='2');
         const UINT OEM = 0x22, MODES = 0x40;  /* both inside the reserved area */
-        for (index = 0; index < (isVbe2 ? 512u : 256u); ++index) buffer[index] = 0;
+        for (index = 0; index < (isVbe2 ? VIDEO_VBE_INFO_BYTES_V2 : VIDEO_VBE_INFO_BYTES); ++index) buffer[index] = 0;
         buffer[0]='V'; buffer[1]='E'; buffer[2]='S'; buffer[3]='A';
-        VideoWrite16(buffer + 4, 0x0200);                      /* VBE 2.0                      */
-        VideoWrite32(buffer + 6, ((UINT32)registers->Es << 16) | (((WORD)registers->Edi + OEM) & 0xFFFF));    /* OEM string */
+        VideoWrite16(buffer + VIDEO_VBE_INFO_VERSION, VIDEO_VBE_VERSION_2);                      /* VBE 2.0                      */
+        VideoWrite32(buffer + VIDEO_VBE_INFO_OEM_STRING, ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + OEM) & VIDEO_WORD_MASK));    /* OEM string */
         /* Capabilities D0 = "DAC width is switchable to 8 bits per primary" (§4.3).
            We answer 4F08 BH=8 with 8 -- and advertised 0 here, so a guest that
            follows the spec's own advice ("query capabilities before 4F08") never
            asked. Found by p_vesa against QEMU's VBE (s74b), the first oracle row. */
-        VideoWrite32(buffer + 10, 1);                          /* capabilities: D0 DAC switchable */
-        VideoWrite32(buffer + 14, ((UINT32)registers->Es << 16) | (((WORD)registers->Edi + MODES) & 0xFFFF));  /* mode list  */
-        VideoWrite16(buffer + 18, VIDEO_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
+        VideoWrite32(buffer + VIDEO_VBE_INFO_CAPABILITIES, VIDEO_VBE_CAPABILITY_DAC_SWITCHABLE);                          /* capabilities: D0 DAC switchable */
+        VideoWrite32(buffer + VIDEO_VBE_INFO_MODE_LIST, ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + MODES) & VIDEO_WORD_MASK));  /* mode list  */
+        VideoWrite16(buffer + VIDEO_VBE_INFO_TOTAL_MEMORY, VIDEO_VESA_VRAM / VIDEO_VBE_MEMORY_UNIT);    /* total memory in 64KB units   */
         { const char *oemString = "NTVDMEX VESA"; for (index = 0; oemString[index]; ++index) buffer[OEM + index] = (BYTE)oemString[index]; buffer[OEM+index]=0; }
         if (isVbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
             /* ── THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). §4.3: "VBE
@@ -1511,55 +1623,55 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  but in the Reserved area §4.3 keeps for the mode list, and three of
                  them named the wrong thing. A 1.x caller (no 'VBE2', 256 bytes) keeps
                  the +22h string: it has no OemData, and +100h is not its memory. */
-            static const char *const strings[4] = { "NTVDMEX VESA", "NTVDMEX", "NTVDMEX VBE", "1.00" };
-            static const UINT pointerOffsets[4] = { 6, 22, 26, 30 };   /* OemString, Vendor, Product, Rev */
-            UINT stringOffset = 0x100, byteIndex;
-            VideoWrite16(buffer + 20, 0x0100);                 /* OEM software rev 1.00        */
-            for (byteIndex = 0; byteIndex < 4; ++byteIndex) {
-                VideoWrite32(buffer + pointerOffsets[byteIndex], ((UINT32)registers->Es << 16) | (((WORD)registers->Edi + stringOffset) & 0xFFFF));
+            static const char *const strings[VIDEO_VBE_OEM_STRINGS] = { "NTVDMEX VESA", "NTVDMEX", "NTVDMEX VBE", "1.00" };
+            static const UINT pointerOffsets[VIDEO_VBE_OEM_STRINGS] = { VIDEO_VBE_INFO_OEM_STRING, VIDEO_VBE_INFO_OEM_VENDOR, VIDEO_VBE_INFO_OEM_PRODUCT, VIDEO_VBE_INFO_OEM_PRODUCT_REVISION };   /* OemString, Vendor, Product, Rev */
+            UINT stringOffset = VIDEO_VBE_INFO_OEM_DATA, byteIndex;
+            VideoWrite16(buffer + VIDEO_VBE_INFO_OEM_SOFTWARE_REVISION, VIDEO_VBE_OEM_REVISION_1_00);                 /* OEM software rev 1.00        */
+            for (byteIndex = 0; byteIndex < VIDEO_VBE_OEM_STRINGS; ++byteIndex) {
+                VideoWrite32(buffer + pointerOffsets[byteIndex], ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + stringOffset) & VIDEO_WORD_MASK));
                 for (index = 0; strings[byteIndex][index]; ++index) buffer[stringOffset++] = (BYTE)strings[byteIndex][index];
                 buffer[stringOffset++] = 0;
             }
         }
         for (index = 0; index < sizeof(g_VideoVesaModes)/sizeof(g_VideoVesaModes[0]); ++index)
-            VideoWrite16(buffer + MODES + index*2, g_VideoVesaModes[index].Number);
+            VideoWrite16(buffer + MODES + index*VIDEO_VBE_MODE_NUMBER_BYTES, g_VideoVesaModes[index].Number);
         { UINT textMode;
           for (textMode = 0; textMode < sizeof(g_VideoVesaTextModes)/sizeof(g_VideoVesaTextModes[0]); ++textMode, ++index)
-              VideoWrite16(buffer + MODES + index*2, g_VideoVesaTextModes[textMode].Number); }
-        VideoWrite16(buffer + MODES + index*2, 0xFFFF);            /* mode-list terminator         */
-        VddSetAx(registers, 0x004F);
+              VideoWrite16(buffer + MODES + index*VIDEO_VBE_MODE_NUMBER_BYTES, g_VideoVesaTextModes[textMode].Number); }
+        VideoWrite16(buffer + MODES + index*VIDEO_VBE_MODE_NUMBER_BYTES, VIDEO_VBE_MODE_LIST_END);            /* mode-list terminator         */
+        VddSetAx(registers, VIDEO_VBE_OK);
         break; }
-    case 0x01: {                                  /* return mode info             */
-        WORD width, height; BYTE modeBitsPerPixel = 8;
+    case VIDEO_VBE_MODE_INFO: {                                  /* return mode info             */
+        WORD width, height; BYTE modeBitsPerPixel = VIDEO_BPP_INDEXED;
         { BYTE textColumns, textRows, textCellHeight;
           if (VideoVesaFindText(VddGetCx(registers), &textColumns, &textRows, &textCellHeight)) {   /* a TEXT mode: answer in characters */
               BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Edi);
-              UINT textPageBytes = (UINT)textColumns * textRows * 2u;
-              VideoVesaNote(state, 0x01, VddGetCx(registers), 1);
-              for (index = 0; index < 256; ++index) buffer[index] = 0;
-              VideoWrite16(buffer + 0, 0x000F);              /* supported|opt info|BIOS output|colour; bit 4 clear = TEXT */
-              buffer[2] = 0x07; buffer[3] = 0x00;         /* WinA r/w/exists; WinB none    */
-              VideoWrite16(buffer + 4, 32); VideoWrite16(buffer + 6, 32); /* the 32 KB colour-text window  */
-              VideoWrite16(buffer + 8, 0xB800); VideoWrite16(buffer + 10, 0);
-              VideoWrite32(buffer + 12, 0);
-              VideoWrite16(buffer + 16, (WORD)(textColumns * 2u)); /* bytes per character row       */
-              VideoWrite16(buffer + 18, textColumns); VideoWrite16(buffer + 20, textRows); /* X/Y resolution IN CHARACTERS  */
-              buffer[22] = 8; buffer[23] = textCellHeight;            /* char cell                     */
-              buffer[24] = 1;                        /* planes                        */
-              buffer[25] = 4;                        /* bits per pixel (attribute)    */
-              buffer[26] = 1;                        /* NumberOfBanks                 */
-              buffer[27] = 0;                        /* MemoryModel 0 = text          */
-              buffer[28] = 0;                        /* BankSize                      */
-              buffer[29] = (BYTE)(textPageBytes ? (0x8000u / textPageBytes) - 1u : 0u);   /* image pages */
-              buffer[30] = 1;                        /* Reserved = 1                  */
-              VddSetAx(registers, 0x004F);
+              UINT textPageBytes = (UINT)textColumns * textRows * VIDEO_CELL_BYTES;
+              VideoVesaNote(state, VIDEO_VBE_MODE_INFO, VddGetCx(registers), 1);
+              for (index = 0; index < VIDEO_MODE_INFO_BYTES; ++index) buffer[index] = 0;
+              VideoWrite16(buffer + VIDEO_MODE_INFO_ATTRIBUTES, VIDEO_MODE_ATTRIBUTES_TEXT);              /* supported|opt info|BIOS output|colour; bit 4 clear = TEXT */
+              buffer[VIDEO_MODE_INFO_WINDOW_A_ATTRIBUTES] = VIDEO_WINDOW_READ_WRITE; buffer[VIDEO_MODE_INFO_WINDOW_B_ATTRIBUTES] = 0x00;         /* WinA r/w/exists; WinB none    */
+              VideoWrite16(buffer + VIDEO_MODE_INFO_GRANULARITY, VIDEO_TEXT_WINDOW_KB); VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_SIZE, VIDEO_TEXT_WINDOW_KB); /* the 32 KB colour-text window  */
+              VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_A_SEGMENT, VIDEO_SEGMENT_COLOUR_TEXT); VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_B_SEGMENT, 0);
+              VideoWrite32(buffer + VIDEO_MODE_INFO_WINDOW_FUNCTION, 0);
+              VideoWrite16(buffer + VIDEO_MODE_INFO_BYTES_PER_LINE, (WORD)(textColumns * VIDEO_CELL_BYTES)); /* bytes per character row       */
+              VideoWrite16(buffer + VIDEO_MODE_INFO_X_RESOLUTION, textColumns); VideoWrite16(buffer + VIDEO_MODE_INFO_Y_RESOLUTION, textRows); /* X/Y resolution IN CHARACTERS  */
+              buffer[VIDEO_MODE_INFO_X_CHARACTER] = VIDEO_GLYPH_WIDTH; buffer[VIDEO_MODE_INFO_Y_CHARACTER] = textCellHeight;            /* char cell                     */
+              buffer[VIDEO_MODE_INFO_PLANES] = 1;                        /* planes                        */
+              buffer[VIDEO_MODE_INFO_BITS_PER_PIXEL] = VIDEO_TEXT_ATTRIBUTE_BITS;                        /* bits per pixel (attribute)    */
+              buffer[VIDEO_MODE_INFO_BANKS] = 1;                        /* NumberOfBanks                 */
+              buffer[VIDEO_MODE_INFO_MEMORY_MODEL] = VIDEO_MEMORY_MODEL_TEXT;                        /* MemoryModel 0 = text          */
+              buffer[VIDEO_MODE_INFO_BANK_SIZE] = 0;                        /* BankSize                      */
+              buffer[VIDEO_MODE_INFO_IMAGE_PAGES] = (BYTE)(textPageBytes ? (VIDEO_TEXT_WINDOW_BYTES / textPageBytes) - 1u : 0u);   /* image pages */
+              buffer[VIDEO_MODE_INFO_RESERVED] = 1;                        /* Reserved = 1                  */
+              VddSetAx(registers, VIDEO_VBE_OK);
               break;
           } }
-        VideoVesaNote(state, 0x01, VddGetCx(registers), VideoVesaFind(VddGetCx(registers), &width, &height, &modeBitsPerPixel));
+        VideoVesaNote(state, VIDEO_VBE_MODE_INFO, VddGetCx(registers), VideoVesaFind(VddGetCx(registers), &width, &height, &modeBitsPerPixel));
         if (VideoVesaFind(VddGetCx(registers), &width, &height, &modeBitsPerPixel)) {
             BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)(WORD)registers->Edi);
             UINT32 bytesPerPixel = VideoVesaBytesPerPixel(modeBitsPerPixel), pitch = (UINT32)width * bytesPerPixel;
-            for (index = 0; index < 256; ++index) buffer[index] = 0;
+            for (index = 0; index < VIDEO_MODE_INFO_BYTES; ++index) buffer[index] = 0;
             /* ⛔ D5 STAYS CLEAR (s84, a user-found regression). #226 set it (0xBB, "not
                  VGA compatible", as QEMU's SeaVGABIOS does) and ZARMMX stopped seeing VESA
                  at all: its VESA 1 renderer draws through the banked window at A0000, which
@@ -1568,27 +1680,27 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  Our window DOES work -- 4F05 banking drove ZAR's VESA 1 in s74c -- so for
                  the window D5 clear is the true answer, and it is what the period card
                  says too (Tseng ET4000 under PCem: 1Fh/1Bh, D5 clear). */
-            VideoWrite16(buffer + 0, 0x009B);                  /* attrs: supported|color|graphics */
-            buffer[2] = 0x07; buffer[3] = 0x00;             /* WinA r/w/exists; WinB none    */
-            VideoWrite16(buffer + 4, 64); VideoWrite16(buffer + 6, 64);     /* granularity / size (KB)       */
-            VideoWrite16(buffer + 8, 0xA000); VideoWrite16(buffer + 10, 0); /* WinA seg / WinB seg           */
+            VideoWrite16(buffer + VIDEO_MODE_INFO_ATTRIBUTES, VIDEO_MODE_ATTRIBUTES_GRAPHICS);                  /* attrs: supported|color|graphics */
+            buffer[VIDEO_MODE_INFO_WINDOW_A_ATTRIBUTES] = VIDEO_WINDOW_READ_WRITE; buffer[VIDEO_MODE_INFO_WINDOW_B_ATTRIBUTES] = 0x00;             /* WinA r/w/exists; WinB none    */
+            VideoWrite16(buffer + VIDEO_MODE_INFO_GRANULARITY, VIDEO_GRAPHICS_WINDOW_KB); VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_SIZE, VIDEO_GRAPHICS_WINDOW_KB);     /* granularity / size (KB)       */
+            VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_A_SEGMENT, VIDEO_SEGMENT_GRAPHICS); VideoWrite16(buffer + VIDEO_MODE_INFO_WINDOW_B_SEGMENT, 0); /* WinA seg / WinB seg           */
             /* #273: WinFuncPtr -> the real-mode stub beside the 4F0Ah block (vbe_rm.asm).
                  It was NULL ("use 4F05h"), legal, but a VBE 1.x program that far-calls it
                  without checking ran 0000:0000. Re-planted on every 4F01h, like 4F0Ah's. */
             VideoVbePmInstall(state);
-            VideoWrite32(buffer + 12, ((UINT32)VDD_VBEPM_SEG << 16) | VDD_VBERM_OFF);
-            VideoWrite16(buffer + 16, (WORD)pitch);        /* bytes per scan line           */
-            VideoWrite16(buffer + 18, width); VideoWrite16(buffer + 20, height);     /* X / Y resolution              */
+            VideoWrite32(buffer + VIDEO_MODE_INFO_WINDOW_FUNCTION, ((UINT32)VDD_VBEPM_SEG << VIDEO_WORD_SHIFT) | VDD_VBERM_OFF);
+            VideoWrite16(buffer + VIDEO_MODE_INFO_BYTES_PER_LINE, (WORD)pitch);        /* bytes per scan line           */
+            VideoWrite16(buffer + VIDEO_MODE_INFO_X_RESOLUTION, width); VideoWrite16(buffer + VIDEO_MODE_INFO_Y_RESOLUTION, height);     /* X / Y resolution              */
             /* char cell: the BIOS font the mode's line count implies -- 8x8 at 200
                lines, 8x14 at 350, 8x16 otherwise. The ET4000/W32p ROM says YCharSize=8
                for 320x200 (p_vesa vs pcem-vesa, s74b); we said 16 for everything. */
-            buffer[22] = 8; buffer[23] = (BYTE)(height <= 200 ? 8 : height <= 350 ? 14 : 16);
-            buffer[24] = 1; buffer[25] = modeBitsPerPixel;              /* planes / bits per pixel       */
+            buffer[VIDEO_MODE_INFO_X_CHARACTER] = VIDEO_GLYPH_WIDTH; buffer[VIDEO_MODE_INFO_Y_CHARACTER] = (BYTE)(height <= VIDEO_LINES_200 ? VIDEO_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VIDEO_FONT14_HEIGHT : VIDEO_FONT16_HEIGHT);
+            buffer[VIDEO_MODE_INFO_PLANES] = 1; buffer[VIDEO_MODE_INFO_BITS_PER_PIXEL] = modeBitsPerPixel;              /* planes / bits per pixel       */
             /* ⚠ MEMORY MODEL IS NOT A CONSTANT. It was 4 ("packed pixel", i.e. a
                  palette index) for every mode, which is a lie for direct colour --
                  a guest reads this byte to decide whether the bytes it writes are
                  indices or channels. VBE 2.0 §4.4: 04h packed pixel, 06h direct colour. */
-            buffer[27] = (BYTE)(modeBitsPerPixel > 8 ? 6 : 4);
+            buffer[VIDEO_MODE_INFO_MEMORY_MODEL] = (BYTE)(modeBitsPerPixel > VIDEO_BPP_INDEXED ? VIDEO_MEMORY_MODEL_DIRECT : VIDEO_MEMORY_MODEL_PACKED);
             /* ⚠⚠ NumberOfBanks IS **NOT** "how many 64KB windows the mode needs".
                  I wrote that from memory and it is the wrong CONCEPT, not just a wrong
                  number -- it computed 22 for 640x480x24. VBE 2.0 §4.4: banks are the
@@ -1596,7 +1708,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  and "for modes that don't have scanline banks (such as VGA modes
                  0Dh-13h), this field should be set to 1". BankSize likewise 0.
                  Caught by reading the spec, not by any guest -- heaven7 never looks. */
-            buffer[26] = 1;                            /* +26 NumberOfBanks: no scanline banks */
+            buffer[VIDEO_MODE_INFO_BANKS] = 1;                            /* +26 NumberOfBanks: no scanline banks */
             /* ⚠⚠⚠ AND THE OFFSETS FROM HERE WERE OFF BY ONE, ALSO FROM MEMORY. The
                  VBE 2.0 ModeInfoBlock runs +26 NumberOfBanks, +27 MemoryModel,
                  +28 BankSize, +29 NumberOfImagePages, +30 Reserved(=1). I had written
@@ -1606,30 +1718,39 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  pages of a mode we have one page of VRAM for), and Reserved at +30 was
                  left 0 when the spec says it is always 1 in this version.
                  Three fields wrong, none of which any guest we have would have caught. */
-            buffer[28] = 0;                            /* +28 BankSize: no scanline banks   */
+            buffer[VIDEO_MODE_INFO_BANK_SIZE] = 0;                            /* +28 BankSize: no scanline banks   */
             /* +29 NumberOfImagePages = pages VRAM holds MINUS ONE. The s74 audit put
                this field at the right offset and left a 0 in it, which told every
                page-flipping guest there was a single page. QEMU's VBE says 50 for
                640x480x8 in 16 MB; with 4 MB we say 12. Found by p_vesa (s74b). */
             { UINT32 pageBytes = (UINT32)pitch * height;
               UINT32 pageCount = pageBytes ? VIDEO_VESA_VRAM / pageBytes : 1u;
-              buffer[29] = (BYTE)(pageCount ? (pageCount > 256u ? 255u : pageCount - 1u) : 0u); }
-            buffer[30] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
+              buffer[VIDEO_MODE_INFO_IMAGE_PAGES] = (BYTE)(pageCount ? (pageCount > VIDEO_VBE_MAX_IMAGE_PAGES ? VIDEO_VBE_MAX_IMAGE_PAGES - 1u : pageCount - 1u) : 0u); }
+            buffer[VIDEO_MODE_INFO_RESERVED] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
             /* ── DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
                  pixel without these, and it will not trust a mode that leaves them
                  zero. 15bpp is 5:5:5 with one byte unused, 16bpp is 5:6:5, 24bpp is
                  8:8:8 -- all little-endian, blue in the low bits, which is what every
                  PC VBE implementation does. */
-            if (modeBitsPerPixel == 15)      { buffer[31]=5; buffer[32]=10; buffer[33]=5; buffer[34]=5; buffer[35]=5; buffer[36]=0;
-                                   buffer[37]=1; buffer[38]=15; }
-            else if (modeBitsPerPixel == 16) { buffer[31]=5; buffer[32]=11; buffer[33]=6; buffer[34]=5; buffer[35]=5; buffer[36]=0;
-                                   buffer[37]=0; buffer[38]=0; }
-            else if (modeBitsPerPixel == 24) { buffer[31]=8; buffer[32]=16; buffer[33]=8; buffer[34]=8;  buffer[35]=8; buffer[36]=0;
-                                   buffer[37]=0; buffer[38]=0; }
+            if (modeBitsPerPixel == VIDEO_BPP_15) {
+                buffer[VIDEO_MODE_INFO_RED_SIZE]=5; buffer[VIDEO_MODE_INFO_RED_POSITION]=10;
+                buffer[VIDEO_MODE_INFO_GREEN_SIZE]=5; buffer[VIDEO_MODE_INFO_GREEN_POSITION]=5;
+                buffer[VIDEO_MODE_INFO_BLUE_SIZE]=5; buffer[VIDEO_MODE_INFO_BLUE_POSITION]=0;
+                buffer[VIDEO_MODE_INFO_RESERVED_SIZE]=1; buffer[VIDEO_MODE_INFO_RESERVED_POSITION]=15; }
+            else if (modeBitsPerPixel == VIDEO_BPP_16) {
+                buffer[VIDEO_MODE_INFO_RED_SIZE]=5; buffer[VIDEO_MODE_INFO_RED_POSITION]=11;
+                buffer[VIDEO_MODE_INFO_GREEN_SIZE]=6; buffer[VIDEO_MODE_INFO_GREEN_POSITION]=5;
+                buffer[VIDEO_MODE_INFO_BLUE_SIZE]=5; buffer[VIDEO_MODE_INFO_BLUE_POSITION]=0;
+                buffer[VIDEO_MODE_INFO_RESERVED_SIZE]=0; buffer[VIDEO_MODE_INFO_RESERVED_POSITION]=0; }
+            else if (modeBitsPerPixel == VIDEO_BPP_24) {
+                buffer[VIDEO_MODE_INFO_RED_SIZE]=8; buffer[VIDEO_MODE_INFO_RED_POSITION]=16;
+                buffer[VIDEO_MODE_INFO_GREEN_SIZE]=8; buffer[VIDEO_MODE_INFO_GREEN_POSITION]=8;
+                buffer[VIDEO_MODE_INFO_BLUE_SIZE]=8; buffer[VIDEO_MODE_INFO_BLUE_POSITION]=0;
+                buffer[VIDEO_MODE_INFO_RESERVED_SIZE]=0; buffer[VIDEO_MODE_INFO_RESERVED_POSITION]=0; }
             /* DirectColorModeInfo: D0 colour ramp programmable (no), D1 "bits in the
                Rsvd field are usable by the application" -- yes for 5:5:5, whose spare
                bit nothing reads (the ET4000/W32p ROM says 02 there; p_vesa, s74b). */
-            buffer[39] = (BYTE)(modeBitsPerPixel == 15 ? 0x02 : 0x00);
+            buffer[VIDEO_MODE_INFO_DIRECT_COLOUR_INFO] = (BYTE)(modeBitsPerPixel == VIDEO_BPP_15 ? VIDEO_DIRECT_RESERVED_USABLE : 0x00);
             /* ── ★★★ LINEAR FRAMEBUFFER. (s74) Attribute bit 7 says a mode HAS one and
                  PhysBasePtr says where; with them 0 the whole mode list reads as
                  "banked only". heaven7 enumerated all twelve modes we published,
@@ -1641,19 +1762,22 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  the claim was wrong. What was actually missing was PhysBasePtr, which
                  D7 is worthless without. VBE 2.0 §4.4 D7/D6 table: D7=1,D6=0 means
                  "both windowed and linear", which is exactly what we now provide. */
-            VideoWrite32(buffer + 40, VIDEO_VESA_LFB_PHYSICAL);            /* PhysBasePtr              */
+            VideoWrite32(buffer + VIDEO_MODE_INFO_PHYSICAL_BASE, VIDEO_VESA_LFB_PHYSICAL);            /* PhysBasePtr              */
             /* VBE 2.0 adds the linear-mode geometry at +50; a guest that drives the
                LFB reads these rather than the banked ones. Same numbers here because
                our pitch does not change between the two. */
-            VideoWrite16(buffer + 50, (WORD)pitch);              /* LinBytesPerScanLine      */
-            buffer[52] = buffer[29]; buffer[53] = buffer[29];               /* Lin/Bnk NumberOfImagePages = +29 */
-            if (modeBitsPerPixel > 8) { buffer[54]=buffer[31]; buffer[55]=buffer[32]; buffer[56]=buffer[33]; buffer[57]=buffer[34];
-                            buffer[58]=buffer[35]; buffer[59]=buffer[36]; buffer[60]=buffer[37]; buffer[61]=buffer[38]; }
-            VddSetAx(registers, 0x004F);
-        } else VddSetAx(registers, 0x014F);
+            VideoWrite16(buffer + VIDEO_MODE_INFO_LINEAR_BYTES_PER_LINE, (WORD)pitch);              /* LinBytesPerScanLine      */
+            buffer[VIDEO_MODE_INFO_BANKED_IMAGE_PAGES] = buffer[VIDEO_MODE_INFO_IMAGE_PAGES]; buffer[VIDEO_MODE_INFO_LINEAR_IMAGE_PAGES] = buffer[VIDEO_MODE_INFO_IMAGE_PAGES];               /* Lin/Bnk NumberOfImagePages = +29 */
+            if (modeBitsPerPixel > VIDEO_BPP_INDEXED) {
+                buffer[VIDEO_MODE_INFO_LINEAR_RED_SIZE]=buffer[VIDEO_MODE_INFO_RED_SIZE]; buffer[VIDEO_MODE_INFO_LINEAR_RED_POSITION]=buffer[VIDEO_MODE_INFO_RED_POSITION];
+                buffer[VIDEO_MODE_INFO_LINEAR_GREEN_SIZE]=buffer[VIDEO_MODE_INFO_GREEN_SIZE]; buffer[VIDEO_MODE_INFO_LINEAR_GREEN_POSITION]=buffer[VIDEO_MODE_INFO_GREEN_POSITION];
+                buffer[VIDEO_MODE_INFO_LINEAR_BLUE_SIZE]=buffer[VIDEO_MODE_INFO_BLUE_SIZE]; buffer[VIDEO_MODE_INFO_LINEAR_BLUE_POSITION]=buffer[VIDEO_MODE_INFO_BLUE_POSITION];
+                buffer[VIDEO_MODE_INFO_LINEAR_RESERVED_SIZE]=buffer[VIDEO_MODE_INFO_RESERVED_SIZE]; buffer[VIDEO_MODE_INFO_LINEAR_RESERVED_POSITION]=buffer[VIDEO_MODE_INFO_RESERVED_POSITION]; }
+            VddSetAx(registers, VIDEO_VBE_OK);
+        } else VddSetAx(registers, VIDEO_VBE_FAILED);
         break; }
-    case 0x02: {                                  /* set VBE mode                 */
-        WORD width, height; BYTE modeBitsPerPixel = 8;
+    case VIDEO_VBE_SET_MODE: {                                  /* set VBE mode                 */
+        WORD width, height; BYTE modeBitsPerPixel = VIDEO_BPP_INDEXED;
         { BYTE textColumns, textRows, textCellHeight;
           if (VideoVesaFindText(VddGetBx(registers), &textColumns, &textRows, &textCellHeight)) {
               /* A VESA text mode = mode 3 with a different geometry. Go through the
@@ -1666,40 +1790,40 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
               /* §4.5: "If D14 is set, and a linear frame buffer model is not available
                  then the call will fail." A text mode has none (its ModeInfoBlock says
                  D7 = 0), so fail before anything changes (#226; we used to accept it). */
-              if (VddGetBx(registers) & 0x4000) {
-                  VideoVesaNote(state, 0x02, VddGetBx(registers), 0);
+              if (VddGetBx(registers) & VIDEO_VBE_MODE_LFB) {
+                  VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), 0);
                   state->VesaSetBx = VddGetBx(registers); state->IsVesaSetSeen = 1; state->IsVesaSetOk = 0;
-                  VddSetAx(registers, 0x014F);
+                  VddSetAx(registers, VIDEO_VBE_FAILED);
                   break;
               }
-              VideoVesaNote(state, 0x02, VddGetBx(registers), 1);
+              VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), 1);
               state->VesaSetBx = VddGetBx(registers); state->IsVesaSetSeen = 1; state->IsVesaSetOk = 1;
-              VddSetAh(&modeRegisters, 0x00); VddSetAl(&modeRegisters, (BYTE)(0x03 | ((VddGetBx(registers) & 0x8000) ? 0x80 : 0x00)));
+              VddSetAh(&modeRegisters, VIDEO_FUNCTION_SET_MODE); VddSetAl(&modeRegisters, (BYTE)(VIDEO_MODE_TEXT_80 | ((VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR) ? VIDEO_MODE_NO_CLEAR : 0x00)));
               VideoInt10(state, &modeRegisters);
               state->Columns = textColumns; state->Rows = textRows; state->CellHeight = textCellHeight;
               state->GraphicsWidth = (WORD)(textColumns * VIDEO_CELL_WIDTH); state->GraphicsHeight = (WORD)(textRows * textCellHeight);
-              if (!(VddGetBx(registers) & 0x8000)) VideoClearText(state, 0x07);
-              state->VesaTextMode = (WORD)(VddGetBx(registers) & 0x3FFF);
-              state->VesaModeFlags = (WORD)(VddGetBx(registers) & 0x8000);   /* 4F03 D15 (#226) */
-              state->IsDirty = 1; VddSetAx(registers, 0x004F);
+              if (!(VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR)) VideoClearText(state, VIDEO_ATTRIBUTE_NORMAL);
+              state->VesaTextMode = (WORD)(VddGetBx(registers) & VIDEO_VBE_MODE_NUMBER_MASK);
+              state->VesaModeFlags = (WORD)(VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR);   /* 4F03 D15 (#226) */
+              state->IsDirty = 1; VddSetAx(registers, VIDEO_VBE_OK);
               break;
           } }
-        VideoVesaNote(state, 0x02, VddGetBx(registers), VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel));
+        VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel));
         state->VesaSetBx = VddGetBx(registers); state->IsVesaSetSeen = 1;
         state->IsVesaSetOk = (BYTE)(VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel) ? 1 : 0);
         if (VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel)) {
             UINT32 count;
-            state->IsVesa = 1; state->VesaMode = VddGetBx(registers) & 0x3FFF; state->VesaWidth = width; state->VesaHeight = height;
+            state->IsVesa = 1; state->VesaMode = VddGetBx(registers) & VIDEO_VBE_MODE_NUMBER_MASK; state->VesaWidth = width; state->VesaHeight = height;
             /* Bit 14 of the mode = "use the linear framebuffer". It matters beyond
                bookkeeping: an LFB guest never touches A0000, so VideoVesaSync must stop
                copying that window over the picture (see VideoVesaSync). */
-            state->IsVesaLfb = (BYTE)((VddGetBx(registers) & 0x4000) ? 1 : 0);
+            state->IsVesaLfb = (BYTE)((VddGetBx(registers) & VIDEO_VBE_MODE_LFB) ? 1 : 0);
             state->VesaBpp = modeBitsPerPixel;
             state->VesaStride = (UINT32)width * VideoVesaBytesPerPixel(modeBitsPerPixel);
             state->VesaStartX = state->VesaStartY = 0;   /* a mode set shows page 1 */
             state->VesaOrigin = state->VesaOriginVs = state->VesaOriginLive = 0;   /* ...on every stage */
             state->Vesa07Vbl = 0; state->Int10WaitUntil = 0;
-            state->VesaDacWidth = 6;                     /* §4.11: any mode set -> 6 bits */
+            state->VesaDacWidth = VIDEO_DAC_WIDTH_6;                     /* §4.11: any mode set -> 6 bits */
             state->VesaBank = 0;
             /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
                  We cleared unconditionally. This is the SAME defect as the standard
@@ -1708,7 +1832,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  same way it should have been the first time: by reading the spec.
                  A guest that sets a mode to change geometry while keeping its picture
                  gets a black screen from us otherwise. */
-            if (!(VddGetBx(registers) & 0x8000)) {
+            if (!(VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR)) {
                 for (count = 0; count < VIDEO_VESA_VRAM; ++count) state->VesaVram[count] = 0;
                 for (count = 0; count < VIDEO_VESA_WINDOW; ++count) state->VideoMemory[count] = 0;
             }
@@ -1721,8 +1845,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  `& 3FFFh`, so a guest that saves 4F03 and re-sets it with 4F02 came back
                  BANKED -- and VideoVesaSync then painted the stale A0000 window over the LFB
                  it was still drawing into, every frame. */
-            state->VesaModeFlags = (WORD)(VddGetBx(registers) & 0xC000);
-            state->IsModeSetNoClear = (BYTE)((VddGetBx(registers) & 0x8000) ? 1 : 0);
+            state->VesaModeFlags = (WORD)(VddGetBx(registers) & (VIDEO_VBE_MODE_LFB | VIDEO_VBE_MODE_NO_CLEAR));
+            state->IsModeSetNoClear = (BYTE)((VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR) ? 1 : 0);
             /* ── ★★ THE VGA LAYER UNDER A VESA MODE (#226). ─────────────────────────────
                  4F02h used to set the VESA fields and nothing else: `mkind`, the
                  sequencer/GC shadows, gw/gh, the text geometry and 40:49h all kept
@@ -1758,45 +1882,45 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  mode (0Dh) colour 15 drew grey -- seen on the rig as a grey VESA
                  checkerboard. AH=12h BL=31h (palette loading off) is still honoured
                  inside VideoLoadDefaultPalette. */
-            state->Mode   = 0x13;
+            state->Mode   = VIDEO_MODE_VGA_256;
             VideoLoadDefaultPalette(state);
-            state->Mode   = 0xFF;
-            VideoLoadModeDefinition(state, 0x13);               /* the chained 256-colour register file */
+            state->Mode   = VIDEO_MODE_NOT_STANDARD;
+            VideoLoadModeDefinition(state, VIDEO_MODE_VGA_256);               /* the chained 256-colour register file */
             state->ModeKind  = VIDEO_KIND_LINEAR8;
-            state->MapMask = 0x0F; state->YMask = 0x0F;
+            state->MapMask = VIDEO_ALL_PLANES; state->YMask = VIDEO_ALL_PLANES;
             if (!state->IsChain4) { state->IsChain4 = 1; state->Chain4Selects++;
                                if (state->YMapSelect) state->YMapSelect(state->YMapContext, -1); }
             state->GraphicsWidth = width; state->GraphicsHeight = height;
-            state->CellHeight = (BYTE)(height <= 200 ? 8 : height <= 350 ? 14 : 16);
-            state->Columns   = (BYTE)(width / 8u);
+            state->CellHeight = (BYTE)(height <= VIDEO_LINES_200 ? VIDEO_FONT8_HEIGHT : height <= VIDEO_LINES_350 ? VIDEO_FONT14_HEIGHT : VIDEO_FONT16_HEIGHT);
+            state->Columns   = (BYTE)(width / VIDEO_GLYPH_WIDTH);
             state->Rows   = (BYTE)(height / state->CellHeight);
             state->CursorRow = state->CursorColumn = 0; state->Page = 0;
             state->VesaTextMode = 0;
             VideoPaletteRefresh(state);                           /* identity DAC path, see VideoPaletteRefresh */
-            state->IsDirty = 1; VddSetAx(registers, 0x004F);
-        } else VddSetAx(registers, 0x014F);
+            state->IsDirty = 1; VddSetAx(registers, VIDEO_VBE_OK);
+        } else VddSetAx(registers, VIDEO_VBE_FAILED);
         break; }
-    case 0x04: {                                  /* save/restore state (§4.7)     */
-        BYTE dl = (BYTE)(VddGetDx(registers) & 0xFF);
-        if (dl == 0x00) { VddSetBx(registers, VIDEO_STATE_BLOCKS); VddSetAx(registers, 0x004F); break; }
-        if (dl == 0x01 || dl == 0x02) {
+    case VIDEO_VBE_STATE: {                                  /* save/restore state (§4.7)     */
+        BYTE dl = (BYTE)(VddGetDx(registers) & VIDEO_LOW_BYTE_MASK);
+        if (dl == VIDEO_VBE_STATE_SIZE) { VddSetBx(registers, VIDEO_STATE_BLOCKS); VddSetAx(registers, VIDEO_VBE_OK); break; }
+        if (dl == VIDEO_VBE_STATE_SAVE || dl == VIDEO_VBE_STATE_RESTORE) {
             BYTE *stateBuffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Ebx);
-            if (dl == 0x01) { VideoStateSave(state, stateBuffer, VddGetCx(registers)); VddSetAx(registers, 0x004F); }
-            else VddSetAx(registers, VideoStateLoad(state, stateBuffer) ? 0x004F : 0x024F);
+            if (dl == VIDEO_VBE_STATE_SAVE) { VideoStateSave(state, stateBuffer, VddGetCx(registers)); VddSetAx(registers, VIDEO_VBE_OK); }
+            else VddSetAx(registers, VideoStateLoad(state, stateBuffer) ? VIDEO_VBE_OK : VIDEO_VBE_NOT_SUPPORTED);
             break;
         }
-        VddSetAx(registers, 0x014F);
+        VddSetAx(registers, VIDEO_VBE_FAILED);
         break; }
-    case 0x03:                                    /* get the current VBE mode      */
+    case VIDEO_VBE_GET_MODE:                                    /* get the current VBE mode      */
         /* D0-D13 the mode, D14 linear, D15 not cleared -- as the last mode set left
            them (#226, §4.6; see 4F02). A standard mode reports its number and D15 from
            AL bit 7, which is what SeaVGABIOS's 4F03h does (it returns the word its
            vga_set_mode() stored for EVERY mode set, flags included); §4.6 itself only
            promises an accurate answer after a 4F02h. */
         if (state->IsVesa)             VddSetBx(registers, (WORD)(state->VesaMode | state->VesaModeFlags));
-        else if (state->VesaTextMode) VddSetBx(registers, (WORD)(state->VesaTextMode | (state->VesaModeFlags & 0x8000u)));
-        else                         VddSetBx(registers, (WORD)(state->Mode | (state->IsModeSetNoClear ? 0x8000u : 0u)));
-        VddSetAx(registers, 0x004F);
+        else if (state->VesaTextMode) VddSetBx(registers, (WORD)(state->VesaTextMode | (state->VesaModeFlags & VIDEO_VBE_MODE_NO_CLEAR)));
+        else                         VddSetBx(registers, (WORD)(state->Mode | (state->IsModeSetNoClear ? VIDEO_VBE_MODE_NO_CLEAR : 0u)));
+        VddSetAx(registers, VIDEO_VBE_OK);
         break;
     /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
          VBE 2.0 §4.9/§4.10. Both of these used to be accepted and IGNORED: 4F06 kept a
@@ -1809,18 +1933,18 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
        ► Failure codes are the spec's: AH=02 for a length or start that does not fit,
          AH=03 outside a VESA mode ("invalid in current video mode"). "Fail and make no
          changes" -- §4.10 -- so nothing is written until the request has been checked. */
-    case 0x06: {                                  /* get/set logical scan length   */
-        BYTE  bl   = (BYTE)(VddGetBx(registers) & 0xFF);
+    case VIDEO_VBE_SCAN_LENGTH: {                                  /* get/set logical scan length   */
+        BYTE  bl   = (BYTE)(VddGetBx(registers) & VIDEO_LOW_BYTE_MASK);
         UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
         UINT32 minBank = (UINT32)state->VesaWidth * bytesPerPixel;                 /* the mode's own pitch */
         UINT32 maxBank = state->VesaHeight ? VIDEO_VESA_VRAM / state->VesaHeight : 0; /* longest line that still holds h rows */
         maxBank -= maxBank % bytesPerPixel;                                         /* whole pixels          */
-        if (!state->IsVesa || !minBank || !maxBank) { VddSetAx(registers, 0x034F); break; }
-        if (bl == 0x00 || bl == 0x02) {
+        if (!state->IsVesa || !minBank || !maxBank) { VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE); break; }
+        if (bl == VIDEO_SCAN_SET_PIXELS || bl == VIDEO_SCAN_SET_BYTES) {
             UINT32 wanted = VddGetCx(registers);
-            if (bl == 0x00) wanted *= bytesPerPixel;                            /* pixels -> bytes       */
+            if (bl == VIDEO_SCAN_SET_PIXELS) wanted *= bytesPerPixel;                            /* pixels -> bytes       */
             wanted = (wanted + bytesPerPixel - 1) / bytesPerPixel * bytesPerPixel;                  /* "next larger value"   */
-            if (wanted < minBank || wanted > maxBank) { VddSetAx(registers, 0x024F); break; }
+            if (wanted < minBank || wanted > maxBank) { VddSetAx(registers, VIDEO_VBE_NOT_SUPPORTED); break; }
             state->VesaStride = wanted;
             /* a start that no longer leaves a full page at the new pitch is reset,
                which is what a BIOS that re-latches its CRTC offset does in effect.
@@ -1831,19 +1955,19 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             state->VesaOrigin = state->VesaOriginVs = state->VesaOriginLive =
                 VideoVesaXyOrigin(state, state->VesaStartX, state->VesaStartY);
             state->IsDirty = 1;
-        } else if (bl == 0x03) {                  /* get maximum                   */
+        } else if (bl == VIDEO_SCAN_GET_MAXIMUM) {                  /* get maximum                   */
             VddSetBx(registers, (WORD)maxBank); VddSetCx(registers, (WORD)(maxBank / bytesPerPixel));
-            VddSetDx(registers, (WORD)(VIDEO_VESA_VRAM / maxBank)); VddSetAx(registers, 0x004F);
+            VddSetDx(registers, (WORD)(VIDEO_VESA_VRAM / maxBank)); VddSetAx(registers, VIDEO_VBE_OK);
             break;
-        } else if (bl != 0x01) { VddSetAx(registers, 0x014F); break; }
+        } else if (bl != VIDEO_SCAN_GET) { VddSetAx(registers, VIDEO_VBE_FAILED); break; }
         VddSetBx(registers, (WORD)state->VesaStride);
         VddSetCx(registers, (WORD)(state->VesaStride / bytesPerPixel));
         VddSetDx(registers, (WORD)(VIDEO_VESA_VRAM / state->VesaStride));
-        VddSetAx(registers, 0x004F);
+        VddSetAx(registers, VIDEO_VBE_OK);
         break; }
-    case 0x07: {                                  /* get/set display start         */
-        BYTE bl = (BYTE)(VddGetBx(registers) & 0xFF);
-        if (!state->IsVesa) { VddSetAx(registers, 0x034F); break; }
+    case VIDEO_VBE_DISPLAY_START: {                                  /* get/set display start         */
+        BYTE bl = (BYTE)(VddGetBx(registers) & VIDEO_LOW_BYTE_MASK);
+        if (!state->IsVesa) { VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE); break; }
         /* ── #226: THE START ON THE RETRACE'S SCHEDULE, AND 80h WAITS FOR IT. ────────
              BL=00h  set now: register, retrace load and display all take it at once --
                      the behaviour this call has always had, kept deliberately (a guest
@@ -1860,16 +1984,16 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              BL=03h/83h/05h/06h  stereo: no such hardware (ModeAttributes D11/D12 = 0,
                      Capabilities D3 = 0), so 014Fh -- which 3.0's implementation note
                      prescribes for a card without it. */
-        if (bl == 0x01) {                         /* get                           */
+        if (bl == VIDEO_START_GET) {                         /* get                           */
             VddSetCx(registers, state->VesaStartX); VddSetDx(registers, state->VesaStartY); VddSetBx(registers, 0);
-            VddSetAx(registers, 0x004F);
-        } else if (bl == 0x04) {                  /* 3.0: scheduled flip status    */
+            VddSetAx(registers, VIDEO_VBE_OK);
+        } else if (bl == VIDEO_START_FLIP_STATUS) {                  /* 3.0: scheduled flip status    */
             VideoLatch(state, 0);                     /* bring the schedule up to now  */
             VddSetCx(registers, (WORD)(state->VesaOriginVs == state->VesaOrigin ? 1 : 0));
-            VddSetAx(registers, 0x004F);
-        } else if (bl == 0x00 || bl == 0x80 || bl == 0x02 || bl == 0x82) {
+            VddSetAx(registers, VIDEO_VBE_OK);
+        } else if (bl == VIDEO_START_SET || bl == (VIDEO_START_SET | VIDEO_START_WAIT_RETRACE) || bl == VIDEO_START_SCHEDULE || bl == (VIDEO_START_SCHEDULE | VIDEO_START_WAIT_RETRACE)) {
             UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp), origin, column, line;
-            if (bl == 0x02 || bl == 0x82) {       /* ECX = byte address (3.0)      */
+            if (bl == VIDEO_START_SCHEDULE || bl == (VIDEO_START_SCHEDULE | VIDEO_START_WAIT_RETRACE)) {       /* ECX = byte address (3.0)      */
                 origin = registers->Ecx;
                 line = state->VesaStride ? origin / state->VesaStride : 0;
                 column = state->VesaStride ? (origin % state->VesaStride) / bytesPerPixel : 0;
@@ -1877,17 +2001,17 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                 column = VddGetCx(registers); line = VddGetDx(registers);
                 origin = VideoVesaXyOrigin(state, column, line);
             }
-            if (column > state->Vesa07MaxX) state->Vesa07MaxX = (WORD)(column > 0xFFFFu ? 0xFFFFu : column);   /* inventory */
-            if (line > state->Vesa07MaxY) state->Vesa07MaxY = (WORD)(line > 0xFFFFu ? 0xFFFFu : line);
+            if (column > state->Vesa07MaxX) state->Vesa07MaxX = (WORD)(column > VIDEO_WORD_MASK ? VIDEO_WORD_MASK : column);   /* inventory */
+            if (line > state->Vesa07MaxY) state->Vesa07MaxY = (WORD)(line > VIDEO_WORD_MASK ? VIDEO_WORD_MASK : line);
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
-            if (!VideoVesaOriginFits(state, origin)) { state->Vesa07Rejected++; VddSetAx(registers, 0x024F); break; }
+            if (!VideoVesaOriginFits(state, origin)) { state->Vesa07Rejected++; VddSetAx(registers, VIDEO_VBE_NOT_SUPPORTED); break; }
             VideoLatch(state, 0);                     /* boundaries already passed keep the old start */
             state->VesaStartX = (WORD)column; state->VesaStartY = (WORD)line;
             state->VesaOrigin = origin;
-            if (bl == 0x00) {
+            if (bl == VIDEO_START_SET) {
                 state->VesaOriginVs = state->VesaOriginLive = origin;          /* at once, as always */
-            } else if (bl & 0x80) {
+            } else if (bl & VIDEO_START_WAIT_RETRACE) {
                 INT isInVbl = 0;
                 UINT64 until = VideoVesaVblRelease(state, &isInVbl);
                 if (isInVbl) state->VesaOriginVs = origin;  /* this retrace loads it: next picture */
@@ -1899,8 +2023,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                 }
             }                                     /* 02h: the latch takes it at the retrace */
             state->IsDirty = 1;
-            VddSetAx(registers, 0x004F);
-        } else VddSetAx(registers, 0x014F);                   /* 03h/83h/05h/06h stereo, unknown BL */
+            VddSetAx(registers, VIDEO_VBE_OK);
+        } else VddSetAx(registers, VIDEO_VBE_FAILED);                   /* 03h/83h/05h/06h stereo, unknown BL */
         break; }
     case 0x08: {                                  /* get/set DAC palette width     */
         /* VBE 2.0 §4.11: BL=00 set (BH = wanted bits), BL=01 get; BH out = current.
