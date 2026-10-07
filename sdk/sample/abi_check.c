@@ -37,21 +37,21 @@ ABI_OFF(ds,  Ds);  ABI_OFF(es,  Es);  ABI_OFF(cf,  CarryFlag);
      sizeof cannot see a parameter list, so the real proof is ASSIGNMENT: each
      line below only compiles if the two declarations are compatible, and the
      compiler checks both directions. */
-static void probe_in (void *s, uint16_t p, uint8_t w, uint32_t *v)
-{ (void)s; (void)p; (void)w; (void)v; }
-static void probe_out(void *s, uint16_t p, uint8_t w, uint32_t v)
-{ (void)s; (void)p; (void)w; (void)v; }
-static uint8_t probe_rd(void *s, uint32_t o) { (void)s; (void)o; return 0; }
-static void probe_wr(void *s, uint32_t o, uint8_t v) { (void)s; (void)o; (void)v; }
-static void probe_frame(void *s) { (void)s; }
+static void AbiProbeIn(void *self, uint16_t port, uint8_t width, uint32_t *value)
+{ (void)self; (void)port; (void)width; (void)value; }
+static void AbiProbeOut(void *self, uint16_t port, uint8_t width, uint32_t value)
+{ (void)self; (void)port; (void)width; (void)value; }
+static uint8_t AbiProbeRead(void *self, uint32_t offset) { (void)self; (void)offset; return 0; }
+static void AbiProbeWrite(void *self, uint32_t offset, uint8_t value) { (void)self; (void)offset; (void)value; }
+static void AbiProbeFrame(void *self) { (void)self; }
 
-int ntvdmex_abi_check(void);
-int ntvdmex_abi_check(void)
+int NtvdmexAbiCheck(void);
+int NtvdmexAbiCheck(void)
 {
-    PVDD_PORT_IN_ROUTINE  a1 = probe_in;    ntvdmex_in_fn    b1 = probe_in;
-    PVDD_PORT_OUT_ROUTINE  a2 = probe_out;   ntvdmex_out_fn   b2 = probe_out;
-    PVDD_MEMORY_READ_ROUTINE  a3 = probe_rd;    ntvdmex_rd_fn    b3 = probe_rd;
-    PVDD_MEMORY_WRITE_ROUTINE  a4 = probe_wr;    ntvdmex_wr_fn    b4 = probe_wr;
-    PVDD_FRAME_ROUTINE  a5 = probe_frame; ntvdmex_frame_fn b5 = probe_frame;
-    return (a1 && b1 && a2 && b2 && a3 && b3 && a4 && b4 && a5 && b5) ? 0 : 1;
+    PVDD_PORT_IN_ROUTINE      treeIn    = AbiProbeIn;    ntvdmex_in_fn    sdkIn    = AbiProbeIn;
+    PVDD_PORT_OUT_ROUTINE     treeOut   = AbiProbeOut;   ntvdmex_out_fn   sdkOut   = AbiProbeOut;
+    PVDD_MEMORY_READ_ROUTINE  treeRead  = AbiProbeRead;  ntvdmex_rd_fn    sdkRead  = AbiProbeRead;
+    PVDD_MEMORY_WRITE_ROUTINE treeWrite = AbiProbeWrite; ntvdmex_wr_fn    sdkWrite = AbiProbeWrite;
+    PVDD_FRAME_ROUTINE        treeFrame = AbiProbeFrame; ntvdmex_frame_fn sdkFrame = AbiProbeFrame;
+    return (treeIn && sdkIn && treeOut && sdkOut && treeRead && sdkRead && treeWrite && sdkWrite && treeFrame && sdkFrame) ? 0 : 1;
 }

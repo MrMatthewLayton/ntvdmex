@@ -16,37 +16,45 @@
  */
 #include "ntvdmex-vdd.h"
 
-#define INTECHO_VEC 0x61
+#define INTECHO_VECTOR         0x61
+#define INTECHO_FUNCTION_SHIFT 8          /* AH: the function number        */
+#define INTECHO_BYTE_MASK      0xFF
+#define INTECHO_PRESENCE       0x00       /* AH=00h                         */
+#define INTECHO_SUM            0x01       /* AH=01h                         */
+#define INTECHO_SIGNATURE      0x4E58u    /* 'NX'                           */
+#define INTECHO_HIGH_WORD      0xFFFF0000u
+#define INTECHO_LOW_WORD       0xFFFFu
+#define INTECHO_COUNT_MASK     0xFFFF     /* CX                             */
 
-static const ntvdmex_vdd_api *g_api;
-static ntvdmex_vdd_bus       *g_bus;
+static const ntvdmex_vdd_api *g_IntEchoApi;
+static ntvdmex_vdd_bus       *g_IntEchoBus;
 
-static void ie_int(void *self, ntvdmex_regs *r)
+static void IntEchoInterrupt(void *self, ntvdmex_regs *registers)
 {
-    unsigned ah = (r->eax >> 8) & 0xFF;
+    unsigned function = (registers->eax >> INTECHO_FUNCTION_SHIFT) & INTECHO_BYTE_MASK;
     (void)self;
-    if (ah == 0x00) {
-        r->eax = (r->eax & 0xFFFF0000u) | 0x4E58u;
-        r->ebx = (r->ebx & 0xFFFF0000u) | (g_api->version & 0xFFFFu);
-        r->cf = 0;
-    } else if (ah == 0x01) {
-        const uint8_t *p = (const uint8_t *)g_api->map_flat(g_bus, r->ds, (uint16_t)r->esi);
-        uint32_t n = r->ecx & 0xFFFF, i;
+    if (function == INTECHO_PRESENCE) {
+        registers->eax = (registers->eax & INTECHO_HIGH_WORD) | INTECHO_SIGNATURE;
+        registers->ebx = (registers->ebx & INTECHO_HIGH_WORD) | (g_IntEchoApi->version & INTECHO_LOW_WORD);
+        registers->cf = 0;
+    } else if (function == INTECHO_SUM) {
+        const uint8_t *bytes = (const uint8_t *)g_IntEchoApi->map_flat(g_IntEchoBus, registers->ds, (uint16_t)registers->esi);
+        uint32_t count = registers->ecx & INTECHO_COUNT_MASK, index;
         uint16_t sum = 0;
-        if (!p) { r->cf = 1; return; }
-        for (i = 0; i < n; ++i) sum = (uint16_t)(sum + p[i]);
-        r->ecx = (r->ecx & 0xFFFF0000u) | sum;
-        r->cf = 0;
+        if (!bytes) { registers->cf = 1; return; }
+        for (index = 0; index < count; ++index) sum = (uint16_t)(sum + bytes[index]);
+        registers->ecx = (registers->ecx & INTECHO_HIGH_WORD) | sum;
+        registers->cf = 0;
     } else {
-        r->cf = 1;
+        registers->cf = 1;
     }
 }
 
 NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api, ntvdmex_vdd_bus *bus)
 {
     if (!api || api->version != NTVDMEX_VDD_ABI_VERSION || api->size < sizeof *api) return -1;
-    g_api = api; g_bus = bus;
-    if (api->claim_int(bus, INTECHO_VEC, ie_int, 0) != 0) {
+    g_IntEchoApi = api; g_IntEchoBus = bus;
+    if (api->claim_int(bus, INTECHO_VECTOR, IntEchoInterrupt, 0) != 0) {
         api->log("intecho: claim_int(61h) REFUSED -- already claimed");
         return -1;
     }

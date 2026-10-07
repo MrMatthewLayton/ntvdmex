@@ -22,62 +22,69 @@
  */
 #include "ntvdmex-vdd.h"
 
-#define PORTECHO_BASE 0x2E0
-#define PORTECHO_ID   0x4E              /* 'N' */
+#define PORTECHO_BASE          0x2E0
+#define PORTECHO_ID            0x4E       /* 'N' */
+#define PORTECHO_PORTS         8
+#define PORTECHO_ID_REGISTER         0    /* R: PORTECHO_ID; W: the data latch */
+#define PORTECHO_COMPLEMENT_REGISTER 1
+#define PORTECHO_COUNT_REGISTER      2
+#define PORTECHO_VERSION_REGISTER    3
+#define PORTECHO_LOW_BYTE      0xFF
+#define PORTECHO_EMPTY_SLOT    0xFF       /* what an empty ISA slot reads */
 
-typedef struct {
-    const ntvdmex_vdd_api *api;
-    uint8_t  latch;
-    uint32_t writes;
-    uint32_t version;
-} portecho_state;
+typedef struct _PORTECHO_STATE {
+    const ntvdmex_vdd_api *Api;
+    uint8_t  Latch;
+    uint32_t Writes;
+    uint32_t Version;
+} PORTECHO_STATE, *PPORTECHO_STATE;
 
-static portecho_state g_pe;
+static PORTECHO_STATE g_PortEcho;
 
-static void pe_in(void *self, uint16_t port, uint8_t width, uint32_t *val)
+static void PortEchoIn(void *self, uint16_t port, uint8_t width, uint32_t *value)
 {
-    portecho_state *st = (portecho_state *)self;
+    PPORTECHO_STATE state = (PPORTECHO_STATE)self;
     (void)width;
     switch (port - PORTECHO_BASE) {
-    case 0: *val = PORTECHO_ID;                     break;
-    case 1: *val = (uint8_t)~st->latch;             break;
-    case 2: *val = (uint8_t)(st->writes & 0xFF);    break;
-    case 3: *val = (uint8_t)st->version;            break;
+    case PORTECHO_ID_REGISTER:         *value = PORTECHO_ID;                                 break;
+    case PORTECHO_COMPLEMENT_REGISTER: *value = (uint8_t)~state->Latch;                      break;
+    case PORTECHO_COUNT_REGISTER:      *value = (uint8_t)(state->Writes & PORTECHO_LOW_BYTE); break;
+    case PORTECHO_VERSION_REGISTER:    *value = (uint8_t)state->Version;                     break;
     /* ⚠ AN UNCLAIMED REGISTER READS 0xFF, WHICH IS WHAT AN EMPTY ISA SLOT DOES.
          Answering 0 instead would make a detection routine that probes for
          "anything at all" think the card is present and broken. */
-    default: *val = 0xFF;                           break;
+    default: *value = PORTECHO_EMPTY_SLOT;                                                   break;
     }
 }
 
-static void pe_out(void *self, uint16_t port, uint8_t width, uint32_t val)
+static void PortEchoOut(void *self, uint16_t port, uint8_t width, uint32_t value)
 {
-    portecho_state *st = (portecho_state *)self;
+    PPORTECHO_STATE state = (PPORTECHO_STATE)self;
     (void)width;
-    if ((port - PORTECHO_BASE) == 0) { st->latch = (uint8_t)val; ++st->writes; }
+    if ((port - PORTECHO_BASE) == PORTECHO_ID_REGISTER) { state->Latch = (uint8_t)value; ++state->Writes; }
 }
 
 NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api,
                                       ntvdmex_vdd_bus *bus)
 {
-    int rc;
+    int status;
     /* ⚠ VERSION FIRST, AND REFUSE RATHER THAN HOPE. A driver that runs against
          an ABI it does not understand is how a plugin model earns its
          reputation; the host reports the refusal and carries on without us. */
     if (!api || api->version != NTVDMEX_VDD_ABI_VERSION) return -1;
     if (api->size < sizeof *api) return -1;
 
-    g_pe.api     = api;
-    g_pe.latch   = 0;
-    g_pe.writes  = 0;
-    g_pe.version = api->version;
+    g_PortEcho.Api     = api;
+    g_PortEcho.Latch   = 0;
+    g_PortEcho.Writes  = 0;
+    g_PortEcho.Version = api->version;
 
-    rc = api->claim_ports(bus, PORTECHO_BASE, PORTECHO_BASE + 7,
-                          pe_in, pe_out, &g_pe);
+    status = api->claim_ports(bus, PORTECHO_BASE, PORTECHO_BASE + PORTECHO_PORTS - 1,
+                              PortEchoIn, PortEchoOut, &g_PortEcho);
     /* READ THE STATUS. See the note on claim_* in the header: a refused claim is
        a device the guest can never reach, and saying so here is the difference
        between a five-minute fix and an afternoon. */
-    if (rc != 0) {
+    if (status != 0) {
         api->log("portecho: claim_ports REFUSED -- the host's port table is full;"
                  " this device is NOT on the bus");
         return -1;

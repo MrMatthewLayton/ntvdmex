@@ -21,14 +21,14 @@
  *
  * ── WHAT A VDD LOOKS LIKE ───────────────────────────────────────────────────
  *     #include <ntvdmex-vdd.h>
- *     static void my_in (void *self, uint16_t port, uint8_t w, uint32_t *val);
- *     static void my_out(void *self, uint16_t port, uint8_t w, uint32_t  val);
+ *     static void MyPortIn (void *self, uint16_t port, uint8_t width, uint32_t *value);
+ *     static void MyPortOut(void *self, uint16_t port, uint8_t width, uint32_t  value);
  *
  *     NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api,
  *                                           ntvdmex_vdd_bus *bus)
  *     {
  *         if (api->version != NTVDMEX_VDD_ABI_VERSION) return -1;
- *         return api->claim_ports(bus, 0x2E0, 0x2E7, my_in, my_out, &my_state);
+ *         return api->claim_ports(bus, 0x2E0, 0x2E7, MyPortIn, MyPortOut, &g_MyState);
  *     }
  *
  * See sdk/sample/portecho.c for a complete one, and docs/sdk/vdd-sdk.md for the
