@@ -14,15 +14,22 @@
 #include "ntvdm.h"
 #include "dos_layout.h"   /* DOS_MAX_FILES -- the capacity fh[] must match */
 #include "dos_clock.h"    /* the VDM's own clock -- GH #250 */
+#include "dos_psp.h"      /* DOS_PSP_JFT_HANDLES -- a JFT's size */
 
 
 /* A trace is opt-in via cfg\dostrace.flag, which says who PAYS for it and nothing
    about how big it gets. XP's COMMAND.COM in a command loop wrote 2,166,824 lines
    and 268 MB before this existed. Opt-in is not the same as bounded. */
 #define DOS_TRACE_MAX 4000
+#define DOS_FIND_SLOTS        8      /* AH=4Eh/4Fh searches live at once            */
+#define DOS_EXEC_NAME_SIZE    128
+#define DOS_SERVICE_BITS      32     /* one bit per AH: 256 services                */
+#define DOS_CONSOLE_LINE_SIZE 130    /* 127 characters + CR LF + room               */
+#define DOS_SFT_INDEXES       256    /* a JFT entry is a byte                       */
+#define DOS_FCB_NAME_SIZE     11     /* 8.3, blank-padded, no dot                   */
 
 /* One saved handle table -- see DOS_MACHINE::HandleStack. */
-typedef struct _DOS_HANDLE_FRAME { HANDLE FileHandles[DOS_MAX_FILES]; UINT32 StdOpen; BYTE JftKnown[20]; } DOS_HANDLE_FRAME;
+typedef struct _DOS_HANDLE_FRAME { HANDLE FileHandles[DOS_MAX_FILES]; UINT32 StdOpen; BYTE JftKnown[DOS_PSP_JFT_HANDLES]; } DOS_HANDLE_FRAME;
 
 /* DOS-machine state the INT 21h surface owns. */
 typedef struct _DOS_MACHINE {
@@ -44,7 +51,7 @@ typedef struct _DOS_MACHINE {
     BYTE  UmbLink;         /* AH=58h UMB link state (0 = not linked)           */
     BYTE  IsBreakOn;         /* AH=33h extended Ctrl-Break checking (BREAK=)     */
     WORD SysvarsSegment, SysvarsOffset;  /* AH=52h list of lists, planted by the host */
-    HANDLE   FindHandles[8];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
+    HANDLE   FindHandles[DOS_FIND_SLOTS];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
     WORD LastError;         /* AH=59h extended error -- last failing call's AX   */
     BYTE  IsVerifyOn;           /* AH=2Eh/54h verify-after-write flag                */
     WORD ChildReturnCode;         /* AH=4Dh return code of the last child              */
@@ -69,19 +76,19 @@ typedef struct _DOS_MACHINE {
        factor out of it. (GH #50) */
     WORD ExecBlockSegment, ExecBlockOffset;
     WORD ExecOverlaySegment, ExecOverlayRelocation;
-    char     ExecPath[128];
+    char     ExecPath[DOS_EXEC_NAME_SIZE];
     /* The name EXACTLY as the caller passed it in DS:DX. DOS 6.22 appends this,
        verbatim -- not qualified, not upcased -- to the child's environment copy
        after the 00 01 00; measured by p_exec/p_child (child.env.namekind). */
-    char     ExecName[128];
+    char     ExecName[DOS_EXEC_NAME_SIZE];
     WORD ExecEnvironment;         /* 0 = inherit the parent's environment (a COPY)      */
     WORD ExecTailSegment, ExecTailOffset;
     WORD ExecFcb1Segment, ExecFcb1Offset;
     WORD ExecFcb2Segment, ExecFcb2Offset;
     char    *Output; INT OutputCapacity; INT OutputLength;  /* captured console output (02/09/40) */
     INT      IsOutputTruncated;        /* set when output was dropped -- see OUTC()        */
-    BYTE  Unimplemented[32];     /* GH #27: DOS-defined services we have not written  */
-    BYTE  Undefined[32];       /* GH #27: services 6.22 does not define either       */
+    BYTE  Unimplemented[DOS_SERVICE_BITS];     /* GH #27: DOS-defined services we have not written  */
+    BYTE  Undefined[DOS_SERVICE_BITS];       /* GH #27: services 6.22 does not define either       */
     char    *TraceCursor;               /* current trace cursor (caller resets + flushes)   */
     INT      ExitCode;        /* AH=4Ch AL -- DOS errorlevel (read after the loop) */
     VOID   (*ConsoleOut)(PVOID context, BYTE character);  /* optional sink for console output  */
@@ -119,7 +126,7 @@ typedef struct _DOS_MACHINE {
        line lives on DOS's side: it is read whole (127 characters + CR LF) and handed
        out across as many reads as the caller makes. ConsoleTyped counts what is typed while
        collecting; ConsoleLength/ConsolePosition are what is left to hand out. */
-    BYTE     ConsoleLine[130];
+    BYTE     ConsoleLine[DOS_CONSOLE_LINE_SIZE];
     INT      ConsoleTyped, ConsoleLength, ConsolePosition, IsConsoleCollecting;
     INT      IsTraceAll;        /* log EVERY INT 21h call -- see the trace at entry */
     DWORD    TraceCount;          /* how many have been printed; capped at DOS_TRACE_MAX */
@@ -162,12 +169,12 @@ typedef struct _DOS_MACHINE {
          SFT index (0 AUX, 1 CON, 2 PRN, 3..FEh a host handle in SftHost[]), JftKnown
          remembers what we wrote, and at EXEC an entry that differs was edited by the
          program and is applied to the child's table (DosJftExec). */
-    BYTE  JftKnown[20];
-    HANDLE   SftHost[256];
+    BYTE  JftKnown[DOS_PSP_JFT_HANDLES];
+    HANDLE   SftHost[DOS_SFT_INDEXES];
     INT      HandleDepth;
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
        see DosFindMatches in dos_int21.c. */
-    BYTE  FcbTemplate[11];
+    BYTE  FcbTemplate[DOS_FCB_NAME_SIZE];
     /* GH #250: AH=2Dh reloads the BIOS tick count (0040:006C) the way DOS's CLOCK$
        does. A hook rather than a store, because the pacer thread increments that
        dword under the PIT's own lock and a bare write could be lost between its read
