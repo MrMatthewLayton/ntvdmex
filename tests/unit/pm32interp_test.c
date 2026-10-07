@@ -41,35 +41,35 @@ int main(void)
     { uint8_t p[] = { 0x01, 0xD8 };                         /* add eax,ebx */
       PM32_CPU c = mk(p, 2); c.Registers[0] = 0x7FFFFFFF; c.Registers[3] = 1;
       CHECK(Pm32Step(&c) && c.Registers[0] == 0x80000000u && c.Eip == CODE + 2, "add eax,ebx: 7FFFFFFF+1");
-      CHECK((c.Flags & P32_OF) && (c.Flags & P32_SF) && !(c.Flags & P32_CF) && !(c.Flags & P32_ZF),
+      CHECK((c.Flags & PM32_OF) && (c.Flags & PM32_SF) && !(c.Flags & PM32_CF) && !(c.Flags & PM32_ZF),
             "add: signed overflow sets OF+SF, not CF/ZF"); }
     { uint8_t p[] = { 0x2B, 0xC5 };                         /* sub eax,ebp */
       PM32_CPU c = mk(p, 2); c.Registers[0] = 1; c.Registers[5] = 2; Pm32Step(&c);
-      CHECK(c.Registers[0] == 0xFFFFFFFFu && (c.Flags & P32_CF) && (c.Flags & P32_SF), "sub eax,ebp: 1-2 borrows"); }
+      CHECK(c.Registers[0] == 0xFFFFFFFFu && (c.Flags & PM32_CF) && (c.Flags & PM32_SF), "sub eax,ebp: 1-2 borrows"); }
     { uint8_t p[] = { 0x3B, 0x05, 0x10, 0x20, 0x00, 0x00 }; /* cmp eax,[2010h] */
       PM32_CPU c = mk(p, 6); c.Registers[0] = 5; MEM[0x2010] = 5; Pm32Step(&c);
-      CHECK((c.Flags & P32_ZF) && c.Registers[0] == 5 && c.Eip == CODE + 6, "cmp eax,[disp32]: equal -> ZF, no store"); }
+      CHECK((c.Flags & PM32_ZF) && c.Registers[0] == 5 && c.Eip == CODE + 6, "cmp eax,[disp32]: equal -> ZF, no store"); }
     { uint8_t p[] = { 0x83, 0xE1, 0x01 };                   /* and ecx,1 */
-      PM32_CPU c = mk(p, 3); c.Registers[1] = 0x12345677; c.Flags |= P32_CF | P32_OF; Pm32Step(&c);
-      CHECK(c.Registers[1] == 1 && !(c.Flags & (P32_CF | P32_OF | P32_ZF)), "and ecx,1: CF=OF=0"); }
+      PM32_CPU c = mk(p, 3); c.Registers[1] = 0x12345677; c.Flags |= PM32_CF | PM32_OF; Pm32Step(&c);
+      CHECK(c.Registers[1] == 1 && !(c.Flags & (PM32_CF | PM32_OF | PM32_ZF)), "and ecx,1: CF=OF=0"); }
     { uint8_t p[] = { 0x81, 0xE3, 0x00, 0x00, 0xFF, 0xFF }; /* and ebx,FFFF0000h */
       PM32_CPU c = mk(p, 6); c.Registers[3] = 0x12345678; Pm32Step(&c);
       CHECK(c.Registers[3] == 0x12340000u && c.Eip == CODE + 6, "and ebx,imm32"); }
     { uint8_t p[] = { 0x48 };                               /* dec eax: CF preserved */
-      PM32_CPU c = mk(p, 1); c.Registers[0] = 1; c.Flags |= P32_CF; Pm32Step(&c);
-      CHECK(c.Registers[0] == 0 && (c.Flags & P32_ZF) && (c.Flags & P32_CF), "dec eax: 1->0 sets ZF, keeps CF"); }
+      PM32_CPU c = mk(p, 1); c.Registers[0] = 1; c.Flags |= PM32_CF; Pm32Step(&c);
+      CHECK(c.Registers[0] == 0 && (c.Flags & PM32_ZF) && (c.Flags & PM32_CF), "dec eax: 1->0 sets ZF, keeps CF"); }
     { uint8_t p[] = { 0xFF, 0x0D, 0x58, 0x1A, 0x00, 0x00 }; /* dec dword [1A58h] */
       PM32_CPU c = mk(p, 6); MEM[0x1A58] = 1; MEM[0x1A59] = 0; MEM[0x1A5A] = 0; MEM[0x1A5B] = 0; Pm32Step(&c);
-      CHECK(MEM[0x1A58] == 0 && (c.Flags & P32_ZF) && c.Eip == CODE + 6, "dec dword [disp32]: -> 0, ZF"); }
+      CHECK(MEM[0x1A58] == 0 && (c.Flags & PM32_ZF) && c.Eip == CODE + 6, "dec dword [disp32]: -> 0, ZF"); }
     { uint8_t p[] = { 0xF7, 0x05, 0x5C, 0x1A, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF };  /* test dword [1A5Ch],FFFFFFFEh */
       PM32_CPU c = mk(p, 10); MEM[0x1A5C] = 1; MEM[0x1A5D] = MEM[0x1A5E] = MEM[0x1A5F] = 0; Pm32Step(&c);
-      CHECK((c.Flags & P32_ZF) && c.Eip == CODE + 10, "test dword [disp32],imm32: 1 & FFFFFFFE = 0 -> ZF"); }
+      CHECK((c.Flags & PM32_ZF) && c.Eip == CODE + 10, "test dword [disp32],imm32: 1 & FFFFFFFE = 0 -> ZF"); }
     { uint8_t p[] = { 0xF7, 0xE9 };                         /* imul ecx */
       PM32_CPU c = mk(p, 2); c.Registers[0] = 0xFFFFFFFE; c.Registers[1] = 3; Pm32Step(&c);
-      CHECK(c.Registers[0] == 0xFFFFFFFAu && c.Registers[2] == 0xFFFFFFFFu && !(c.Flags & P32_CF), "imul ecx: -2*3 = -6 in EDX:EAX"); }
+      CHECK(c.Registers[0] == 0xFFFFFFFAu && c.Registers[2] == 0xFFFFFFFFu && !(c.Flags & PM32_CF), "imul ecx: -2*3 = -6 in EDX:EAX"); }
     { uint8_t p[] = { 0x0F, 0xAF, 0xC3 };                   /* imul eax,ebx */
       PM32_CPU c = mk(p, 3); c.Registers[0] = 0x10000; c.Registers[3] = 0x10000; Pm32Step(&c);
-      CHECK(c.Registers[0] == 0 && (c.Flags & P32_CF) && (c.Flags & P32_OF), "imul eax,ebx: overflow -> CF=OF=1"); }
+      CHECK(c.Registers[0] == 0 && (c.Flags & PM32_CF) && (c.Flags & PM32_OF), "imul eax,ebx: overflow -> CF=OF=1"); }
     { uint8_t p[] = { 0x99, 0xF7, 0x7E, 0x0A };             /* cdq ; idiv dword [esi+0Ah] */
       PM32_CPU c = mk(p, 4); c.Registers[0] = (uint32_t)-100; c.Registers[6] = 0x3000;
       MEM[0x300A] = 7; MEM[0x300B] = MEM[0x300C] = MEM[0x300D] = 0;
@@ -82,13 +82,13 @@ int main(void)
     /* ---- shifts ---- */
     { uint8_t p[] = { 0xC1, 0xEB, 0x02 };                   /* shr ebx,2 */
       PM32_CPU c = mk(p, 3); c.Registers[3] = 0x0B; Pm32Step(&c);
-      CHECK(c.Registers[3] == 2 && (c.Flags & P32_CF), "shr ebx,2: 0Bh -> 2, CF = last bit out (1)"); }
+      CHECK(c.Registers[3] == 2 && (c.Flags & PM32_CF), "shr ebx,2: 0Bh -> 2, CF = last bit out (1)"); }
     { uint8_t p[] = { 0xD3, 0xE0 };                         /* shl eax,cl */
       PM32_CPU c = mk(p, 2); c.Registers[0] = 3; c.Registers[1] = 2; Pm32Step(&c);
       CHECK(c.Registers[0] == 0x0C, "shl eax,cl: 3<<2 = 0Ch (Doom's two-plane mask)"); }
     { uint8_t p[] = { 0xD1, 0xE8 };                         /* shr eax,1 */
       PM32_CPU c = mk(p, 2); c.Registers[0] = 1; Pm32Step(&c);
-      CHECK(c.Registers[0] == 0 && (c.Flags & P32_ZF) && (c.Flags & P32_CF), "shr eax,1: 1 -> 0, ZF+CF"); }
+      CHECK(c.Registers[0] == 0 && (c.Flags & PM32_ZF) && (c.Flags & PM32_CF), "shr eax,1: 1 -> 0, ZF+CF"); }
     { uint8_t p[] = { 0x0F, 0xA4, 0xE9, 0x16 };             /* shld ecx,ebp,16h */
       PM32_CPU c = mk(p, 4); c.Registers[1] = 0; c.Registers[5] = 0xABCD1234u; Pm32Step(&c);
       CHECK(c.Registers[1] == (0xABCD1234u >> 10) && c.Eip == CODE + 4, "shld ecx,ebp,22: brings in ebp's top 22 bits"); }
